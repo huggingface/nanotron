@@ -1,0 +1,74 @@
+repos:
+  - repo: https://github.com/psf/black
+    rev: 22.12.0
+    hooks:
+      - id: black
+        language_version: python3
+        args:
+          - --line-length=119
+          - --check
+  - repo: https://github.com/charliermarsh/ruff-pre-commit
+    # Ruff version.
+    rev: 'v0.0.271'
+    hooks:
+      - id: ruff
+        args:
+          - --no-fix
+  - repo: local
+    hooks:
+      - id: pylint-brrr
+        name: pylint brrr core
+        entry: pylint --init-hook='import sys; sys.path.append(".")'
+        exclude: ^examples/.*$ # ignore examples as for each example we need to go in and look
+        language: system
+        types: [ python ]
+        args:
+          - --errors-only
+      - id: pylint-example-dataloading
+        name: pylint example dataloading
+        entry: pylint --init-hook='import sys; sys.path.append(".")'
+        files: ^examples/dataloading/.*$
+        language: system
+        types: [ python ]
+        args:
+          - --errors-only
+      - id: pylint-example-gpt2-mqa
+        name: pylint example gpt2_mqa
+        entry: pylint --init-hook='import sys; sys.path.append(".")'
+        files: ^examples/gpt2_mqa/.*$
+        language: system
+        types: [ python ]
+        args:
+          - --errors-only
+      - id: pylint-example-gpt2
+        name: pylint example gpt2
+        entry: pylint --init-hook='import sys; sys.path.append(".")'
+        files: ^examples/gpt2/.*$
+        language: system
+        types: [ python ]
+        args:
+          - --errors-only
+      - id: pylint-example-llama
+        name: pylint example llama
+        entry: pylint --init-hook='import sys; sys.path.append(".")'
+        files: ^examples/llama/.*$
+        language: system
+        types: [ python ]
+        args:
+          - --errors-only
+      - id: pylint-example-p2p
+        name: pylint example p2p
+        entry: pylint --init-hook='import sys; sys.path.append(".")'
+        files: ^examples/p2p/.*$
+        language: system
+        types: [ python ]
+        args:
+          - --errors-only
+      - id: pylint-example-t5
+        name: pylint example t5
+        entry: pylint --init-hook='import sys; sys.path.append(".")'
+        files: ^examples/t5/.*$
+        language: system
+        types: [ python ]
+        args:
+          - --errors-only

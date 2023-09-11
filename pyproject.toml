@@ -1,0 +1,67 @@
+[project]
+name = "nanotron"
+version = "0.1.0"
+description = "Minimalistic Large Language Model Training and Finetuning"
+authors = [
+    {name = "Nouamane Tazi", email="nouamane@huggingface.co"},
+    {name = "Thomas Wang", email="thomas.wang@huggingface.co"},
+    {name = "Kunhao Zheng", email="kunhao@huggingface.co"},
+    {name = "Thomas Wolf", email="thomas@huggingface.co"},
+]
+readme = "README.md"
+requires-python = "~=3.10"
+classifiers = [
+    "Topic :: Software Development"
+]
+dependencies = [
+    "torch>=1.13.1",
+    "numpy",
+    "packaging",
+    "safetensors",
+    "dacite"
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]  # list of folders that contain the packages (["."] by default)
+
+[tool.ruff]
+line-length = 119
+ignore = ["C901","E501"] # E501 ignores length violation handled by black
+select = ["C","E","F","I","W"]
+ignore-init-module-imports = true
+
+[project.optional-dependencies]
+dev = [
+    "pre-commit",
+    "pylint"
+]
+
+test = [
+    "pytest",
+    "pytest-xdist"
+]
+
+s3 = [
+    "s3fs"
+]
+
+tb-logger = [
+    "tensorboardX"
+]
+
+hf-logger = [
+    "huggingface_hub>=0.16.2"
+]
+
+fast-modeling = [
+    "flash-attn>=2.0",
+    "apex"
+]
+
+[build-system]
+requires = [
+    "setuptools",
+]
+
+[pytest]
+norecursedirs="tests/helpers"

@@ -1,0 +1,17 @@
+[MASTER]
+# Use multiprocessing for pylint
+jobs=0
+
+# List of members which are set dynamically and missed by Pylint inference
+# system, and so shouldn't trigger E1101 when accessed.
+ignore-paths=
+
+load-plugins=linter.pylint.ban_rank,
+
+[MESSAGES CONTROL]
+# Disable list of rules
+disable=
+    no-member,                  # E1101: Module 'torch' has no 'allclose' member (no-member)
+    no-name-in-module,          # E0611: No name 'HFTensorBoardLogger' in module 'huggingface_hub' (no-name-in-module)
+    import-error,               # E0401: Unable to import 'tensorboardX' (import-error)
+    relative-beyond-top-level   # E0402: Attempted relative import beyond top-level package (relative-beyond-top-level)
