@@ -10,7 +10,7 @@ profile: #
   # profiler_export_path: profile
 
 checkpoints:
-  checkpoints_path: /fsx/nouamane/checkpoints/brrr/test
+  checkpoints_path: /fsx/nouamane/checkpoints/nanotron/test
   load_from_specific_checkpoint: null
   checkpoint_interval: 1000000
 
@@ -32,8 +32,8 @@ model:
   make_vocab_size_divisible_by: 1
   init_method:
     std: 0.015625 # Basically 1/sqrt(N)
-    # path: /fsx/nouamane/projects/brrr/pretrained/llama-v2-7b-the-pile
-    # path: /fsx/nouamane/projects/brrr/pretrained/llama-2-7b
+    # path: /fsx/nouamane/projects/nanotron/pretrained/llama-v2-7b-the-pile
+    # path: /fsx/nouamane/projects/nanotron/pretrained/llama-2-7b
   dtype: bfloat16
   seed: 42
 
