@@ -16,7 +16,7 @@ from nanotron.core.optimizer.optimizer_from_gradient_accumulator import (
     OptimizerFromGradientAccumulator,
 )
 from nanotron.core.parallelism.model import initial_sync
-from nanotron.core.parallelism.parameters import BRRRParameter, sanity_check
+from nanotron.core.parallelism.parameters import NanotronParameter, sanity_check
 from nanotron.core.parallelism.pipeline_parallelism.engine import (
     AllForwardAllBackwardPipelineEngine,
     OneForwardOneBackwardPipelineEngine,
@@ -36,8 +36,8 @@ from nanotron.core.utils import ContextManagers, assert_tensor_synced_across_pg,
 def test_gradient_promoting_in_fp32(half_precision: torch.dtype):
     model = nn.Linear(3, 2, bias=False, dtype=half_precision, device="cuda")
 
-    # Create BRRR Parameter
-    model.weight = BRRRParameter(model.weight)
+    # Create Nanotron Parameter
+    model.weight = NanotronParameter(model.weight)
 
     # Add gradient accumulator
     accumulator = FP32GradientAccumulator(model.named_parameters())
@@ -63,8 +63,8 @@ def test_gradient_accumulated_in_fp32(half_precision: torch.dtype):
     with torch.inference_mode():
         ref_model.weight.copy_(model.weight)
 
-    # Create BRRR Parameter
-    model.weight = BRRRParameter(model.weight)
+    # Create Nanotron Parameter
+    model.weight = NanotronParameter(model.weight)
 
     # Add gradient accumulator
     accumulator = FP32GradientAccumulator(model.named_parameters())
@@ -94,8 +94,8 @@ def test_optimizer_can_step_gradient_in_fp32(half_precision: torch.dtype):
     model = nn.Linear(3, 2, bias=False, dtype=half_precision, device="cuda")
     original_weight = model.weight.detach().clone()
 
-    # Create BRRR Parameter
-    model.weight = BRRRParameter(model.weight)
+    # Create Nanotron Parameter
+    model.weight = NanotronParameter(model.weight)
 
     # Add optimizer
     optimizer = OptimizerFromGradientAccumulator(
@@ -166,13 +166,13 @@ def _test_ddp_with_grad_accum_in_fp32(
     )
     model_hook = copy.deepcopy(model)
 
-    # Create BRRR Parameters
+    # Create Nanotron Parameters
     for module in model.modules():
         if isinstance(module, nn.Linear):
-            setattr(module, "weight", BRRRParameter(module.weight))
+            setattr(module, "weight", NanotronParameter(module.weight))
     for module in model_hook.modules():
         if isinstance(module, nn.Linear):
-            setattr(module, "weight", BRRRParameter(module.weight))
+            setattr(module, "weight", NanotronParameter(module.weight))
 
     # Needed in order to obtain smaller gradient buckets when using `DistributedDataParallel`
     model_ddp = torch.nn.parallel.DistributedDataParallel(
@@ -346,7 +346,7 @@ def _test_tied_weights_sync_with_grad_accum_in_fp32(
 
         for name, module in mdl.named_modules():
             if isinstance(module, nn.Linear):
-                module.bias = BRRRParameter(module.bias)
+                module.bias = NanotronParameter(module.bias)
 
         # Sync DP and tied weights: basic assumption
         initial_sync(model=mdl, dpg=dpg)
@@ -498,7 +498,7 @@ def _test_tied_weights_sync_with_grad_accum_in_fp32(
         get_tied_id_to_param(parameters=model_ddp.parameters(), root_module=model_ddp.module).items(),
         key=lambda x: x[0],
     ):
-        if not (isinstance(param, BRRRParameter) and param.is_tied):
+        if not (isinstance(param, NanotronParameter) and param.is_tied):
             continue
 
         group = dpg.world_ranks_to_pg[group_ranks]

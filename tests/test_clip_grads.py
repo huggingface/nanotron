@@ -13,7 +13,7 @@ from nanotron.core.gradient_accumulator import (
     FP32GradientAccumulator,
 )
 from nanotron.core.parallelism.model import initial_sync
-from nanotron.core.parallelism.parameters import BRRRParameter, sanity_check
+from nanotron.core.parallelism.parameters import NanotronParameter, sanity_check
 from nanotron.core.parallelism.pipeline_parallelism.engine import (
     AllForwardAllBackwardPipelineEngine,
 )
@@ -66,8 +66,8 @@ def _test_clip_grads_with_pp(dpg: DistributedProcessGroups, norm_type: float):
 
     for module in model.modules():
         if isinstance(module, nn.Linear):
-            setattr(module, "weight", BRRRParameter(module.weight))
-            setattr(module, "bias", BRRRParameter(module.bias))
+            setattr(module, "weight", NanotronParameter(module.weight))
+            setattr(module, "bias", NanotronParameter(module.bias))
 
     # synchronize weights
     if has_reference_model:
@@ -371,10 +371,10 @@ def _test_clip_grads_tied_weights(dpg: DistributedProcessGroups, norm_type: floa
         weight = model.dense1.weight
         bias = model.dense1.bias
 
-    # Make sure that weight/bias are BRRRParameter and that they are tied
-    assert isinstance(weight, BRRRParameter)
+    # Make sure that weight/bias are NanotronParameter and that they are tied
+    assert isinstance(weight, NanotronParameter)
     assert weight.is_tied
-    assert isinstance(bias, BRRRParameter)
+    assert isinstance(bias, NanotronParameter)
     assert bias.is_tied
 
     # Sync tied weights: basic assumption
@@ -462,8 +462,8 @@ def _test_clip_grads_fp32_accumulator(dpg: DistributedProcessGroups, norm_type: 
 
     for module in model.modules():
         if isinstance(module, nn.Linear):
-            setattr(module, "weight", BRRRParameter(module.weight))
-            setattr(module, "bias", BRRRParameter(module.bias))
+            setattr(module, "weight", NanotronParameter(module.weight))
+            setattr(module, "bias", NanotronParameter(module.bias))
 
     # model goes to half precision
     model = model.to(half_precision)

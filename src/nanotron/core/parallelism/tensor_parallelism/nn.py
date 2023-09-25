@@ -19,7 +19,7 @@ from torch import nn
 
 from nanotron.core import distributed as dist
 from nanotron.core.distributed import get_global_rank
-from nanotron.core.parallelism.parameters import BRRRParameter
+from nanotron.core.parallelism.parameters import NanotronParameter
 from nanotron.core.parallelism.sharded_parameters import (
     SplitConfig,
     create_sharded_parameter_from_config,
@@ -144,7 +144,7 @@ class TensorParallelRowLinear(nn.Linear):
         for name, param in list(self.named_parameters()):
             if name == "bias":
                 # `bias` only exists in rank 0 because it's not sharded
-                new_param = BRRRParameter(tensor=param)
+                new_param = NanotronParameter(tensor=param)
             else:
                 new_param = create_sharded_parameter_from_config(
                     parameter=param,

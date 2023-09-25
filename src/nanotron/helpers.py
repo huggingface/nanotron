@@ -92,7 +92,7 @@ def set_logger_verbosity(logging_level: str, dpg: DistributedProcessGroups):
     handler.setFormatter(formatter)
     root_logger.addHandler(handler)
 
-    # Brrr
+    # Nanotron
     logging.set_verbosity(log_level)
     logging.set_formatter(formatter=formatter)
 

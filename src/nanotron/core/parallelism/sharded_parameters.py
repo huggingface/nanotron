@@ -5,7 +5,7 @@ import numpy as np
 from torch import nn
 
 from nanotron.core import distributed as dist
-from nanotron.core.parallelism.parameters import BRRRParameter, SlicesPair
+from nanotron.core.parallelism.parameters import NanotronParameter, SlicesPair
 
 
 @dataclasses.dataclass
@@ -22,9 +22,9 @@ def create_sharded_parameter(
     global_ranks: Tuple[int, ...],
     local_global_slices_pairs: Tuple[SlicesPair, ...],
     unsharded_shape: Tuple[int, ...],
-) -> BRRRParameter:
-    if not isinstance(parameter, BRRRParameter):
-        parameter = BRRRParameter(tensor=parameter)
+) -> NanotronParameter:
+    if not isinstance(parameter, NanotronParameter):
+        parameter = NanotronParameter(tensor=parameter)
     parameter.mark_as_sharded(
         global_ranks=global_ranks,
         local_global_slices_pairs=local_global_slices_pairs,
@@ -37,7 +37,7 @@ def create_sharded_parameter_from_config(
     parameter: nn.Parameter,
     pg: dist.ProcessGroup,
     split_config: SplitConfig,
-) -> BRRRParameter:
+) -> NanotronParameter:
     current_rank = dist.get_rank(pg)
     param_num_dims = len(parameter.shape)
     global_ranks = tuple(sorted((dist.get_global_rank(pg, i) for i in range(pg.size()))))

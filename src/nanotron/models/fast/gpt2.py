@@ -31,7 +31,7 @@ from nanotron.config import ModelArgs, ParallelismArgs, RecomputeGranularity
 from nanotron.core import distributed as dist
 from nanotron.core.dataclass import RandomStates
 from nanotron.core.distributed import get_global_rank
-from nanotron.core.parallelism.parameters import BRRRParameter
+from nanotron.core.parallelism.parameters import NanotronParameter
 from nanotron.core.parallelism.pipeline_parallelism.block import PipelineBlock
 from nanotron.core.parallelism.pipeline_parallelism.p2p import P2P
 from nanotron.core.parallelism.pipeline_parallelism.tensor_pointer import TensorPointer
@@ -47,7 +47,7 @@ from nanotron.core.parallelism.tied_parameters import create_tied_parameter
 from nanotron.core.process_groups_initializer import DistributedProcessGroups
 from nanotron.core.random import branch_random_state
 from nanotron.core.utils import checkpoint_method
-from nanotron.models import BRRRModel
+from nanotron.models import NanotronModel
 from nanotron.store import AttachableStore
 
 
@@ -167,7 +167,7 @@ class CoreMQA(nn.Module):
 def get_sliced_parameter(coalesced_tensor: torch.Tensor, slice_object: slice):
     with torch.no_grad():
         # This allows us to create a leaf tensor, despite sharing the underlying storage
-        result = BRRRParameter(tensor=coalesced_tensor[slice_object])
+        result = NanotronParameter(tensor=coalesced_tensor[slice_object])
 
     # We need sliced tensor to also get the gradient in order to run optimizer on them
     # TODO @thomasw21: It's really had to make sure that our sliced view keeps the same memory space as the original gradient
@@ -932,7 +932,7 @@ class Loss(nn.Module):
         return {"loss": loss}
 
 
-class GPTForTraining(BRRRModel):
+class GPTForTraining(NanotronModel):
     def __init__(
         self,
         config: GPTBigCodeConfig,
@@ -999,7 +999,7 @@ class GPTForTraining(BRRRModel):
                         name for name, _ in module.named_parameters()
                     }
                     for param_name, param in module.named_parameters():
-                        assert isinstance(param, BRRRParameter)
+                        assert isinstance(param, NanotronParameter)
                         if param.is_tied:
                             tied_info = param.get_tied_info()
                             full_param_name = tied_info.get_full_name_from_module_id_to_prefix(
@@ -1032,7 +1032,7 @@ class GPTForTraining(BRRRModel):
                         name for name, _ in module.named_parameters()
                     }
                     for param_name, param in module.named_parameters():
-                        assert isinstance(param, BRRRParameter)
+                        assert isinstance(param, NanotronParameter)
                         if param.is_tied:
                             tied_info = param.get_tied_info()
                             full_param_name = tied_info.get_full_name_from_module_id_to_prefix(
@@ -1057,7 +1057,7 @@ class GPTForTraining(BRRRModel):
                 elif isinstance(module, LayerNorm):
                     assert {"weight", "bias"} == {name for name, _ in module.named_parameters()}
                     for param_name, param in module.named_parameters():
-                        assert isinstance(param, BRRRParameter)
+                        assert isinstance(param, NanotronParameter)
                         if param.is_tied:
                             tied_info = param.get_tied_info()
                             full_param_name = tied_info.get_full_name_from_module_id_to_prefix(
@@ -1093,7 +1093,7 @@ class GPTForTraining(BRRRModel):
                         name for name, _ in module.named_parameters()
                     }
                     for param_name, param in module.named_parameters():
-                        assert isinstance(param, BRRRParameter)
+                        assert isinstance(param, NanotronParameter)
                         if param.is_tied:
                             tied_info = param.get_tied_info()
                             full_param_name = tied_info.get_full_name_from_module_id_to_prefix(
@@ -1125,7 +1125,7 @@ class GPTForTraining(BRRRModel):
                     # Instead I'm lazy and just going to run init_method, since they are scalar independent
                     assert {"weight"} == {name for name, _ in module.named_parameters()}
 
-                    assert isinstance(module.weight, BRRRParameter)
+                    assert isinstance(module.weight, NanotronParameter)
                     if module.weight.is_tied:
                         tied_info = module.weight.get_tied_info()
                         full_param_name = tied_info.get_full_name_from_module_id_to_prefix(

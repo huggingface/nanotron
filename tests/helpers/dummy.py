@@ -10,7 +10,7 @@ from nanotron.core.dataclass import DistributedProcessGroups
 from nanotron.core.optimizer.base import BaseOptimizer
 from nanotron.core.optimizer.named_optimizer import NamedOptimizer
 from nanotron.core.parallelism.model import initial_sync
-from nanotron.core.parallelism.parameters import BRRRParameter
+from nanotron.core.parallelism.parameters import NanotronParameter
 from nanotron.core.parallelism.pipeline_parallelism.block import PipelineBlock
 from nanotron.core.parallelism.pipeline_parallelism.p2p import P2P
 from nanotron.core.parallelism.pipeline_parallelism.tensor_pointer import TensorPointer
@@ -79,7 +79,7 @@ def init_dummy_model(dpg: DistributedProcessGroups, dtype: torch.dtype = torch.f
 
     # Sync all parameters that have the same name and that are not sharded across TP.
     for name, param in model.named_parameters():
-        if isinstance(param, BRRRParameter) and param.is_sharded:
+        if isinstance(param, NanotronParameter) and param.is_sharded:
             continue
         shared_weights = [
             (

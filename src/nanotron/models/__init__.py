@@ -1,3 +1,3 @@
-from nanotron.models.base_model import BRRRModel
+from nanotron.models.base_model import NanotronModel
 
-__all__ = ["BRRRModel"]
+__all__ = ["NanotronModel"]
