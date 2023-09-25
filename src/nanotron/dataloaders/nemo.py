@@ -1,10 +1,10 @@
 from torch.utils.data import DataLoader
 
-from brrr.config import PretrainNemoArgs
-from brrr.core import distributed as dist
-from brrr.core import logging
-from brrr.core.logging import log_rank
-from brrr.core.process_groups_initializer import DistributedProcessGroups
+from nanotron.config import PretrainNemoArgs
+from nanotron.core import distributed as dist
+from nanotron.core import logging
+from nanotron.core.logging import log_rank
+from nanotron.core.process_groups_initializer import DistributedProcessGroups
 
 from .dataloader import DataCollatorForCLM, EmptyInfiniteDataset, get_dataloader_worker_init
 from .nemo_dataset import GPTDataset, build_train_valid_test_datasets

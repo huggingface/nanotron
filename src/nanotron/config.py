@@ -9,12 +9,12 @@ from dacite import from_dict
 from datasets.download.streaming_download_manager import xPath
 from yaml.loader import SafeLoader
 
-from brrr.core.parallelism.pipeline_parallelism.engine import (
+from nanotron.core.parallelism.pipeline_parallelism.engine import (
     AllForwardAllBackwardPipelineEngine,
     OneForwardOneBackwardPipelineEngine,
     PipelineEngine,
 )
-from brrr.core.parallelism.tensor_parallelism.nn import TensorParallelLinearMode
+from nanotron.core.parallelism.tensor_parallelism.nn import TensorParallelLinearMode
 
 
 class RecomputeGranularity(Enum):

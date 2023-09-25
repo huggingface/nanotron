@@ -5,16 +5,16 @@ import torch
 from torch import nn as torch_nn
 from torch.nn.parallel import DistributedDataParallel
 
-from brrr.core import distributed as dist
-from brrr.core import logging
-from brrr.core.distributed import ProcessGroup
-from brrr.core.gradient_accumulator import GradientAccumulator
-from brrr.core.logging import log_rank
-from brrr.core.parallelism.data_parallelism.utils import ddp_trigger_sync_in_bwd
-from brrr.core.parallelism.pipeline_parallelism.context_manager import attach_pipeline_state_to_model
-from brrr.core.parallelism.pipeline_parallelism.state import PipelineTrainBatchState
-from brrr.core.parallelism.pipeline_parallelism.tensor_pointer import TensorPointer
-from brrr.core.utils import ContextManagers
+from nanotron.core import distributed as dist
+from nanotron.core import logging
+from nanotron.core.distributed import ProcessGroup
+from nanotron.core.gradient_accumulator import GradientAccumulator
+from nanotron.core.logging import log_rank
+from nanotron.core.parallelism.data_parallelism.utils import ddp_trigger_sync_in_bwd
+from nanotron.core.parallelism.pipeline_parallelism.context_manager import attach_pipeline_state_to_model
+from nanotron.core.parallelism.pipeline_parallelism.state import PipelineTrainBatchState
+from nanotron.core.parallelism.pipeline_parallelism.tensor_pointer import TensorPointer
+from nanotron.core.utils import ContextManagers
 
 logger = logging.get_logger(__name__)
 

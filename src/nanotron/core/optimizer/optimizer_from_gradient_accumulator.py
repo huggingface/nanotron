@@ -3,10 +3,10 @@ from typing import Any, Callable, Dict, Iterable, Optional, Set, Tuple, Union
 
 import torch
 
-from brrr.core.gradient_accumulator import GradientAccumulator
-from brrr.core.optimizer.base import BaseOptimizer
-from brrr.core.optimizer.inherit_from_other_optimizer import InheritFromOtherOptimizer
-from brrr.core.parallelism.parameters import BRRRParameter
+from nanotron.core.gradient_accumulator import GradientAccumulator
+from nanotron.core.optimizer.base import BaseOptimizer
+from nanotron.core.optimizer.inherit_from_other_optimizer import InheritFromOtherOptimizer
+from nanotron.core.parallelism.parameters import BRRRParameter
 
 
 class OptimizerFromGradientAccumulator(InheritFromOtherOptimizer):

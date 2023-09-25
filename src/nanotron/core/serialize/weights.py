@@ -6,21 +6,21 @@ import torch
 from packaging.version import Version
 from torch import nn
 
-from brrr.core import distributed as dist
-from brrr.core import logging
-from brrr.core.dataclass import DistributedProcessGroups
-from brrr.core.distributed import get_global_rank
-from brrr.core.logging import log_rank
-from brrr.core.parallelism.parameters import BRRRParameter, ShardedInfo, SlicesPair
-from brrr.core.serialize.constants import CHECKPOINT_VERSION
-from brrr.core.serialize.meta import CheckpointMetadata, TensorMetadata, TensorMetadataV2, load_meta
-from brrr.core.serialize.path import (
+from nanotron.core import distributed as dist
+from nanotron.core import logging
+from nanotron.core.dataclass import DistributedProcessGroups
+from nanotron.core.distributed import get_global_rank
+from nanotron.core.logging import log_rank
+from nanotron.core.parallelism.parameters import BRRRParameter, ShardedInfo, SlicesPair
+from nanotron.core.serialize.constants import CHECKPOINT_VERSION
+from nanotron.core.serialize.meta import CheckpointMetadata, TensorMetadata, TensorMetadataV2, load_meta
+from nanotron.core.serialize.path import (
     ObjectType,
     check_path_is_local,
     get_path,
     get_tp_and_pp_rank_and_size_from,
 )
-from brrr.core.serialize.serialize import safe_open, save_file
+from nanotron.core.serialize.serialize import safe_open, save_file
 
 logger = logging.get_logger(__name__)
 

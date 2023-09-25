@@ -16,8 +16,8 @@ repos:
           - --no-fix
   - repo: local
     hooks:
-      - id: pylint-brrr
-        name: pylint brrr core
+      - id: pylint-nanotron
+        name: pylint nanotron core
         entry: pylint --init-hook='import sys; sys.path.append(".")'
         exclude: ^examples/.*$ # ignore examples as for each example we need to go in and look
         language: system

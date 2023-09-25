@@ -11,7 +11,7 @@ from safetensors.torch import save as safetensors_save
 from safetensors.torch import save_file as safetensors_save_file
 from torch.serialization import MAP_LOCATION
 
-from brrr.core.serialize.path import fs_open, get_filesystem_and_path
+from nanotron.core.serialize.path import fs_open, get_filesystem_and_path
 
 
 def save_file(

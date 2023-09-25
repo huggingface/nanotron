@@ -4,9 +4,9 @@ import random
 import numpy as np
 import torch
 
-from brrr.core import distributed as dist
-from brrr.core.dataclass import RandomState, RandomStates
-from brrr.core.distributed import ProcessGroup
+from nanotron.core import distributed as dist
+from nanotron.core.dataclass import RandomState, RandomStates
+from nanotron.core.distributed import ProcessGroup
 
 
 def set_random_seed(seed: int):

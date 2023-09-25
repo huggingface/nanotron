@@ -4,8 +4,8 @@ from typing import Optional
 import torch
 from torch import nn
 
-from brrr.core import distributed as dist
-from brrr.core.gradient_accumulator import GradientAccumulator
+from nanotron.core import distributed as dist
+from nanotron.core.gradient_accumulator import GradientAccumulator
 
 
 @contextmanager

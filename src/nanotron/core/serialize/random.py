@@ -1,9 +1,9 @@
 from pathlib import Path
 
-from brrr.core import distributed as dist
-from brrr.core.dataclass import DistributedProcessGroups, RandomStates
-from brrr.core.serialize.path import check_path_is_local
-from brrr.core.serialize.serialize import torch_load, torch_save
+from nanotron.core import distributed as dist
+from nanotron.core.dataclass import DistributedProcessGroups, RandomStates
+from nanotron.core.serialize.path import check_path_is_local
+from nanotron.core.serialize.serialize import torch_load, torch_save
 
 
 def save_random_states(

@@ -7,11 +7,11 @@ from typing import Callable, Dict, Iterator, Optional, Tuple
 import torch
 from torch.distributed import GradBucket
 
-import brrr.core.distributed as dist
-from brrr.core import logging
-from brrr.core.parallelism.parameters import BRRRParameter
-from brrr.core.tensor_init import tensor_from_untyped_storage
-from brrr.core.utils import get_untyped_storage
+import nanotron.core.distributed as dist
+from nanotron.core import logging
+from nanotron.core.parallelism.parameters import BRRRParameter
+from nanotron.core.tensor_init import tensor_from_untyped_storage
+from nanotron.core.utils import get_untyped_storage
 
 logger = logging.get_logger(__name__)
 

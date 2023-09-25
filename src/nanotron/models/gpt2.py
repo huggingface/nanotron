@@ -24,32 +24,32 @@ from torch.nn import LayerNorm
 from transformers import GPTBigCodeConfig
 from transformers.activations import ACT2FN
 
-from brrr.config import ParallelismArgs, RecomputeGranularity
-from brrr.core import distributed as dist
-from brrr.core.dataclass import RandomStates
-from brrr.core.distributed import get_global_rank
-from brrr.core.parallelism.parameters import BRRRParameter
-from brrr.core.parallelism.pipeline_parallelism.block import PipelineBlock
-from brrr.core.parallelism.pipeline_parallelism.p2p import P2P
-from brrr.core.parallelism.pipeline_parallelism.tensor_pointer import TensorPointer
-from brrr.core.parallelism.sharded_parameters import SplitConfig, mark_all_parameters_in_module_as_sharded
-from brrr.core.parallelism.tensor_parallelism.distributed_differentiable_primitives import (
+from nanotron.config import ParallelismArgs, RecomputeGranularity
+from nanotron.core import distributed as dist
+from nanotron.core.dataclass import RandomStates
+from nanotron.core.distributed import get_global_rank
+from nanotron.core.parallelism.parameters import BRRRParameter
+from nanotron.core.parallelism.pipeline_parallelism.block import PipelineBlock
+from nanotron.core.parallelism.pipeline_parallelism.p2p import P2P
+from nanotron.core.parallelism.pipeline_parallelism.tensor_pointer import TensorPointer
+from nanotron.core.parallelism.sharded_parameters import SplitConfig, mark_all_parameters_in_module_as_sharded
+from nanotron.core.parallelism.tensor_parallelism.distributed_differentiable_primitives import (
     differentiable_all_gather,
     differentiable_identity,
 )
-from brrr.core.parallelism.tensor_parallelism.functional import sharded_cross_entropy
-from brrr.core.parallelism.tensor_parallelism.nn import (
+from nanotron.core.parallelism.tensor_parallelism.functional import sharded_cross_entropy
+from nanotron.core.parallelism.tensor_parallelism.nn import (
     TensorParallelColumnLinear,
     TensorParallelEmbedding,
     TensorParallelLinearMode,
     TensorParallelRowLinear,
 )
-from brrr.core.parallelism.tied_parameters import create_tied_parameter
-from brrr.core.process_groups_initializer import DistributedProcessGroups
-from brrr.core.random import branch_random_state
-from brrr.core.utils import checkpoint_method
-from brrr.models import BRRRModel
-from brrr.store import AttachableStore
+from nanotron.core.parallelism.tied_parameters import create_tied_parameter
+from nanotron.core.process_groups_initializer import DistributedProcessGroups
+from nanotron.core.random import branch_random_state
+from nanotron.core.utils import checkpoint_method
+from nanotron.models import BRRRModel
+from nanotron.store import AttachableStore
 
 
 class MLP(nn.Module):

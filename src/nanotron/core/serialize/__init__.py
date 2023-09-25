@@ -4,17 +4,17 @@ import torch
 from torch import nn
 from torch.nn.parallel import DistributedDataParallel
 
-from brrr.core import distributed as dist
-from brrr.core import optimizer as optim
-from brrr.core.dataclass import DistributedProcessGroups
-from brrr.core.distributed import get_global_rank
-from brrr.core.parallelism.parameters import BRRRParameter
-from brrr.core.serialize.meta import CheckpointMetadata, load_meta, save_meta
-from brrr.core.serialize.optimizer import load_lr_scheduler, load_optimizer, save_lr_scheduler, save_optimizer
-from brrr.core.serialize.path import fs_open, get_filesystem_and_path
-from brrr.core.serialize.random import load_random_states, save_random_states
-from brrr.core.serialize.weights import load_weights, save_weights
-from brrr.core.utils import assert_tensor_synced_across_pg
+from nanotron.core import distributed as dist
+from nanotron.core import optimizer as optim
+from nanotron.core.dataclass import DistributedProcessGroups
+from nanotron.core.distributed import get_global_rank
+from nanotron.core.parallelism.parameters import BRRRParameter
+from nanotron.core.serialize.meta import CheckpointMetadata, load_meta, save_meta
+from nanotron.core.serialize.optimizer import load_lr_scheduler, load_optimizer, save_lr_scheduler, save_optimizer
+from nanotron.core.serialize.path import fs_open, get_filesystem_and_path
+from nanotron.core.serialize.random import load_random_states, save_random_states
+from nanotron.core.serialize.weights import load_weights, save_weights
+from nanotron.core.utils import assert_tensor_synced_across_pg
 
 """
 We're going to use safetensors. The reason is that loading segments is going to be much easier

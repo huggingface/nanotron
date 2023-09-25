@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import List
 
-from brrr.logger import LogItem
+from nanotron.logger import LogItem
 
 
 class BaseLogger(ABC):

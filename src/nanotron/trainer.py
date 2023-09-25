@@ -14,8 +14,8 @@ from datasets.download.streaming_download_manager import xPath
 from torch.nn.parallel import DistributedDataParallel
 from transformers import AutoConfig
 
-from brrr.clip_grads import clip_grad_norm
-from brrr.config import (
+from nanotron.clip_grads import clip_grad_norm
+from nanotron.config import (
     Config,
     ExistingCheckpointInit,
     HubLoggerConfig,
@@ -24,33 +24,33 @@ from brrr.config import (
     TensorboardLoggerConfig,
     get_args_from_path,
 )
-from brrr.core import distributed as dist
-from brrr.core import logging
-from brrr.core.logging import log_rank
-from brrr.core.optimizer.zero import ZeroDistributedOptimizer
-from brrr.core.parallelism.data_parallelism.utils import sync_gradients_across_dp
-from brrr.core.parallelism.parameters import BRRRParameter, sanity_check
-from brrr.core.parallelism.pipeline_parallelism.block import PipelineBlock
-from brrr.core.parallelism.pipeline_parallelism.engine import (
+from nanotron.core import distributed as dist
+from nanotron.core import logging
+from nanotron.core.logging import log_rank
+from nanotron.core.optimizer.zero import ZeroDistributedOptimizer
+from nanotron.core.parallelism.data_parallelism.utils import sync_gradients_across_dp
+from nanotron.core.parallelism.parameters import BRRRParameter, sanity_check
+from nanotron.core.parallelism.pipeline_parallelism.block import PipelineBlock
+from nanotron.core.parallelism.pipeline_parallelism.engine import (
     PipelineEngine,
 )
-from brrr.core.parallelism.pipeline_parallelism.tensor_pointer import TensorPointer
-from brrr.core.parallelism.pipeline_parallelism.utils import get_pp_rank_of
-from brrr.core.parallelism.tensor_parallelism.nn import (
+from nanotron.core.parallelism.pipeline_parallelism.tensor_pointer import TensorPointer
+from nanotron.core.parallelism.pipeline_parallelism.utils import get_pp_rank_of
+from nanotron.core.parallelism.tensor_parallelism.nn import (
     TensorParallelLinearMode,
     TensorParallelRowLinear,
 )
-from brrr.core.parallelism.tied_parameters import (
+from nanotron.core.parallelism.tied_parameters import (
     create_pg_for_tied_weights,
     get_tied_id_to_param,
     sync_tied_weights_gradients,
     tie_parameters,
 )
-from brrr.core.process_groups_initializer import DistributedProcessGroups, get_process_groups
-from brrr.core.random import (
+from nanotron.core.process_groups_initializer import DistributedProcessGroups, get_process_groups
+from nanotron.core.random import (
     set_random_seed,
 )
-from brrr.core.serialize import (
+from nanotron.core.serialize import (
     load_lr_scheduler,
     load_meta,
     load_optimizer,
@@ -58,15 +58,15 @@ from brrr.core.serialize import (
     save,
     save_random_states,
 )
-from brrr.core.serialize.path import check_path_is_local, parse_ckpt_path
-from brrr.core.serialize.serialize import fs_open
-from brrr.core.tensor_init import init_method_normal, scaled_init_method_normal
-from brrr.core.utils import (
+from nanotron.core.serialize.path import check_path_is_local, parse_ckpt_path
+from nanotron.core.serialize.serialize import fs_open
+from nanotron.core.tensor_init import init_method_normal, scaled_init_method_normal
+from nanotron.core.utils import (
     assert_tensor_synced_across_pg,
     init_on_device_and_dtype,
 )
-from brrr.dataloaders.dataloader import sanity_check_dataloader
-from brrr.helpers import (
+from nanotron.dataloaders.dataloader import sanity_check_dataloader
+from nanotron.helpers import (
     _vocab_size_with_padding,
     get_profiler,
     init_optimizer_and_grad_accumulator,
@@ -74,31 +74,31 @@ from brrr.helpers import (
     lr_scheduler_builder,
     set_logger_verbosity,
 )
-from brrr.logger import LoggerWriter, LogItem
-from brrr.models import BRRRModel
+from nanotron.logger import LoggerWriter, LogItem
+from nanotron.models import BRRRModel
 
 if int(os.environ.get("USE_FAST", 0)) == 1:
     # We import the fast versions
-    from brrr.models.fast.falcon import FalconForTraining
-    from brrr.models.fast.gpt2 import GPTForTraining
-    from brrr.models.fast.llama import LlamaForTraining, RotaryEmbedding
+    from nanotron.models.fast.falcon import FalconForTraining
+    from nanotron.models.fast.gpt2 import GPTForTraining
+    from nanotron.models.fast.llama import LlamaForTraining, RotaryEmbedding
 else:
-    from brrr.models.falcon import FalconForTraining
-    from brrr.models.gpt2 import GPTForTraining
-    from brrr.models.llama import LlamaForTraining, RotaryEmbedding
+    from nanotron.models.falcon import FalconForTraining
+    from nanotron.models.gpt2 import GPTForTraining
+    from nanotron.models.llama import LlamaForTraining, RotaryEmbedding
 
 
 logger = logging.get_logger(__name__)
 
 try:
-    from brrr.logger import BatchSummaryWriter
+    from nanotron.logger import BatchSummaryWriter
 
     tb_logger_available = True
 except ImportError:
     tb_logger_available = False
 
 try:
-    from brrr.logger import HubSummaryWriter
+    from nanotron.logger import HubSummaryWriter
 
     hub_logger_available = True
 except ImportError:
@@ -477,7 +477,7 @@ class DistributedTrainer:
         pipeline_blocks = [module for name, module in model.named_modules() if isinstance(module, PipelineBlock)]
         # "cuda" is already defaulted for each process to it's own cuda device
         with init_on_device_and_dtype(device=device, dtype=dtype):
-            # TODO: https://github.com/huggingface/brrr/issues/65
+            # TODO: https://github.com/huggingface/nanotron/issues/65
 
             # Balance compute across PP blocks
             block_compute_costs = model.get_block_compute_costs()
@@ -650,7 +650,7 @@ class DistributedTrainer:
                 if isinstance(config.logging.tensorboard_logger, HubLoggerConfig):
                     assert (
                         hub_logger_available
-                    ), 'Hub Tensorboard Logger is not available. Please install brrr with `pip install -e ".[hf-logger]"` or modify your config file'
+                    ), 'Hub Tensorboard Logger is not available. Please install nanotron with `pip install -e ".[hf-logger]"` or modify your config file'
                     tb_context = HubSummaryWriter(
                         logdir=logdir,
                         repo_id=config.logging.tensorboard_logger.repo_id,
@@ -660,7 +660,7 @@ class DistributedTrainer:
                 elif isinstance(config.logging.tensorboard_logger, TensorboardLoggerConfig):
                     assert (
                         tb_logger_available
-                    ), 'Tensorboard Logger is not available. Please install brrr with `pip install -e ".[tb-logger]"` or modify your config file'
+                    ), 'Tensorboard Logger is not available. Please install nanotron with `pip install -e ".[tb-logger]"` or modify your config file'
                     tb_context = BatchSummaryWriter(logdir=logdir)
                 else:
                     raise ValueError(

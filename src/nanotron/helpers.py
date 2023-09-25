@@ -13,34 +13,34 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
 from torch.profiler import ProfilerActivity, profile, tensorboard_trace_handler
 
-from brrr.config import (
+from nanotron.config import (
     Config,
     LRSchedulerArgs,
     OptimizerArgs,
     ParallelismArgs,
 )
-from brrr.core import distributed as dist
-from brrr.core import logging
-from brrr.core.dataclass import RandomStates
-from brrr.core.distributed import ProcessGroup
-from brrr.core.gradient_accumulator import (
+from nanotron.core import distributed as dist
+from nanotron.core import logging
+from nanotron.core.dataclass import RandomStates
+from nanotron.core.distributed import ProcessGroup
+from nanotron.core.gradient_accumulator import (
     FP32GradBucketManager,
     FP32GradientAccumulator,
     GradientAccumulator,
     get_fp32_accum_hook,
 )
-from brrr.core.logging import log_rank
-from brrr.core.optimizer.base import BaseOptimizer, Optimizer
-from brrr.core.optimizer.named_optimizer import NamedOptimizer
-from brrr.core.optimizer.optimizer_from_gradient_accumulator import (
+from nanotron.core.logging import log_rank
+from nanotron.core.optimizer.base import BaseOptimizer, Optimizer
+from nanotron.core.optimizer.named_optimizer import NamedOptimizer
+from nanotron.core.optimizer.optimizer_from_gradient_accumulator import (
     OptimizerFromGradientAccumulator,
 )
-from brrr.core.optimizer.zero import ZeroDistributedOptimizer
-from brrr.core.parallelism.tensor_parallelism.nn import (
+from nanotron.core.optimizer.zero import ZeroDistributedOptimizer
+from nanotron.core.parallelism.tensor_parallelism.nn import (
     TensorParallelLinearMode,
 )
-from brrr.core.process_groups_initializer import DistributedProcessGroups
-from brrr.core.random import (
+from nanotron.core.process_groups_initializer import DistributedProcessGroups
+from nanotron.core.random import (
     get_current_random_state,
     get_synced_random_state,
 )

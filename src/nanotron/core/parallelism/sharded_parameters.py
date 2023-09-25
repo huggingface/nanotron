@@ -4,8 +4,8 @@ from typing import List, Optional, Tuple
 import numpy as np
 from torch import nn
 
-from brrr.core import distributed as dist
-from brrr.core.parallelism.parameters import BRRRParameter, SlicesPair
+from nanotron.core import distributed as dist
+from nanotron.core.parallelism.parameters import BRRRParameter, SlicesPair
 
 
 @dataclasses.dataclass

@@ -5,13 +5,13 @@ import numpy as np
 import torch.optim
 from functorch.dim import tree_map
 
-from brrr.core import distributed as dist
-from brrr.core import logging
-from brrr.core.distributed import ProcessGroup
-from brrr.core.logging import log_rank, warn_once
-from brrr.core.optimizer.base import BaseOptimizer
-from brrr.core.optimizer.inherit_from_other_optimizer import InheritFromOtherOptimizer
-from brrr.core.parallelism.parameters import BRRRParameter
+from nanotron.core import distributed as dist
+from nanotron.core import logging
+from nanotron.core.distributed import ProcessGroup
+from nanotron.core.logging import log_rank, warn_once
+from nanotron.core.optimizer.base import BaseOptimizer
+from nanotron.core.optimizer.inherit_from_other_optimizer import InheritFromOtherOptimizer
+from nanotron.core.parallelism.parameters import BRRRParameter
 
 logger = logging.get_logger(__name__)
 

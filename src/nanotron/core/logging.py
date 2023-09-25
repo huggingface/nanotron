@@ -31,7 +31,7 @@ from typing import Optional
 
 from torch import distributed as torch_dist
 
-from brrr.core import distributed as dist
+from nanotron.core import distributed as dist
 
 log_levels = {
     "debug": DEBUG,
@@ -105,7 +105,7 @@ def get_logger(name: Optional[str] = None) -> Logger:
         # if name is None we return root logger
         return logger
 
-    # If the logger is in a `brrr` module then we remove the capability to propagate
+    # If the logger is in a `nanotron` module then we remove the capability to propagate
     if LIBRARY_NAME == name.split(".", 1)[0]:
         if LEVEL is not None:
             logger.setLevel(LEVEL)
@@ -127,11 +127,11 @@ def get_verbosity() -> int:
         :obj:`int`: The logging level.
     .. note::
         BRRR has following logging levels:
-        - 50: ``brrr.logging.CRITICAL`` or ``brrr.logging.FATAL``
-        - 40: ``brrr.logging.ERROR``
-        - 30: ``brrr.logging.WARNING`` or ``brrr.logging.WARN``
-        - 20: ``brrr.logging.INFO``
-        - 10: ``brrr.logging.DEBUG``
+        - 50: ``nanotron.logging.CRITICAL`` or ``nanotron.logging.FATAL``
+        - 40: ``nanotron.logging.ERROR``
+        - 30: ``nanotron.logging.WARNING`` or ``nanotron.logging.WARN``
+        - 20: ``nanotron.logging.INFO``
+        - 10: ``nanotron.logging.DEBUG``
     """
 
     return get_library_root_logger().getEffectiveLevel()
@@ -142,23 +142,23 @@ LEVEL = None
 
 def set_verbosity(verbosity: int) -> None:
     """
-    Set the verbosity level for the all `brrr` loggers.
+    Set the verbosity level for the all `nanotron` loggers.
 
     Args:
         verbosity (:obj:`int`):
             Logging level, e.g., one of:
-            - ``brrr.logging.CRITICAL`` or ``brrr.logging.FATAL``
-            - ``brrr.logging.ERROR``
-            - ``brrr.logging.WARNING`` or ``brrr.logging.WARN``
-            - ``brrr.logging.INFO``
-            - ``brrr.logging.DEBUG``
+            - ``nanotron.logging.CRITICAL`` or ``nanotron.logging.FATAL``
+            - ``nanotron.logging.ERROR``
+            - ``nanotron.logging.WARNING`` or ``nanotron.logging.WARN``
+            - ``nanotron.logging.INFO``
+            - ``nanotron.logging.DEBUG``
     """
-    all_brrr_loggers = {
+    all_nanotron_loggers = {
         name: logger
         for name, logger in logging.root.manager.loggerDict.items()
         if isinstance(logger, Logger) and (name.startswith(f"{LIBRARY_NAME}.") or name == LIBRARY_NAME)
     }
-    for name, logger in all_brrr_loggers.items():
+    for name, logger in all_nanotron_loggers.items():
         logger.setLevel(verbosity)
 
         # We update all handles to be at the current verbosity as well.
@@ -185,12 +185,12 @@ def set_formatter(formatter: logging.Formatter) -> None:
     handler.setLevel(get_verbosity())
     handler.flush = sys.stderr.flush
 
-    all_brrr_loggers = {
+    all_nanotron_loggers = {
         name: logger
         for name, logger in logging.root.manager.loggerDict.items()
         if isinstance(logger, Logger) and (name.startswith(f"{LIBRARY_NAME}.") or name == LIBRARY_NAME)
     }
-    for name, logger in all_brrr_loggers.items():
+    for name, logger in all_nanotron_loggers.items():
         # We keep only a single handler
         logger.handlers.clear()
         logger.addHandler(handler)

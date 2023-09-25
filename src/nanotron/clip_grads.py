@@ -2,9 +2,9 @@ from typing import Iterable, Optional, Tuple
 
 import torch
 
-import brrr.core.distributed as dist
-from brrr.core.gradient_accumulator import GradientAccumulator
-from brrr.core.parallelism.parameters import BRRRParameter
+import nanotron.core.distributed as dist
+from nanotron.core.gradient_accumulator import GradientAccumulator
+from nanotron.core.parallelism.parameters import BRRRParameter
 
 
 def clip_grad_norm(

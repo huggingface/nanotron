@@ -3,14 +3,14 @@ from typing import Any, Callable, Dict, Optional, Set, Tuple, Union
 import torch
 from torch import nn
 
-from brrr.core import distributed as dist
-from brrr.core.parallelism.pipeline_parallelism.functional import (
+from nanotron.core import distributed as dist
+from nanotron.core.parallelism.pipeline_parallelism.functional import (
     recv_from_pipeline_state_buffer,
     send_to_pipeline_state_buffer,
 )
-from brrr.core.parallelism.pipeline_parallelism.p2p import P2P, BatchTensorSendRecvState
-from brrr.core.parallelism.pipeline_parallelism.state import PipelineBatchState, PipelineTrainBatchState
-from brrr.core.parallelism.pipeline_parallelism.tensor_pointer import TensorPointer
+from nanotron.core.parallelism.pipeline_parallelism.p2p import P2P, BatchTensorSendRecvState
+from nanotron.core.parallelism.pipeline_parallelism.state import PipelineBatchState, PipelineTrainBatchState
+from nanotron.core.parallelism.pipeline_parallelism.tensor_pointer import TensorPointer
 
 
 class PipelineBlock(nn.Module):

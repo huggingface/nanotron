@@ -4,8 +4,8 @@ from typing import Any, Dict, Optional, Tuple
 import torch
 from torch import nn
 
-from brrr.core import distributed as dist
-from brrr.core import logging
+from nanotron.core import distributed as dist
+from nanotron.core import logging
 
 logger = logging.get_logger(__name__)
 
@@ -95,7 +95,7 @@ class BRRRParameter(nn.Parameter):
         - Even if some weights don't need their grads to be reduced, it's still useful for them to be marked as tied. For example, current serialization format requires to mark them correctly.
     """
 
-    BRRR_PARAMETER_METADATA_ATTRIBUTE_NAME = "__brrr_metadata__"
+    BRRR_PARAMETER_METADATA_ATTRIBUTE_NAME = "__nanotron_metadata__"
     BRRR_PARAMETER_METADATA_TIED_KEY = "tied"
     BRRR_PARAMETER_METADATA_SHARDED_KEY = "sharded"
 

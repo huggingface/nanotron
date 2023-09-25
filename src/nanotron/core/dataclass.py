@@ -4,7 +4,7 @@ from typing import Dict, MutableMapping, Optional, Tuple
 import numpy as np
 import torch
 
-from brrr.core import distributed as dist
+from nanotron.core import distributed as dist
 
 
 @dataclasses.dataclass
@@ -41,7 +41,7 @@ class RandomStates(MutableMapping[str, RandomState]):
         if not isinstance(key, str):
             raise ValueError(f"Expected key to be of type str. Got {type(key)}")
         if not isinstance(value, RandomState):
-            raise ValueError(f"Expected value to be of type `brrr.dataclass.RandomState`. Got {type(value)}")
+            raise ValueError(f"Expected value to be of type `nanotron.dataclass.RandomState`. Got {type(value)}")
 
     def __getitem__(self, item):
         return self._dict[item]

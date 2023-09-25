@@ -20,12 +20,12 @@ import time
 import numpy as np
 from torch.utils.data import Dataset
 
-from brrr.config import PretrainNemoArgs
-from brrr.core import distributed as dist
-from brrr.core import logging
-from brrr.core.logging import log_rank
-from brrr.core.process_groups_initializer import DistributedProcessGroups
-from brrr.core.utils import main_rank_first
+from nanotron.config import PretrainNemoArgs
+from nanotron.core import distributed as dist
+from nanotron.core import logging
+from nanotron.core.logging import log_rank
+from nanotron.core.process_groups_initializer import DistributedProcessGroups
+from nanotron.core.utils import main_rank_first
 
 from .blendable_dataset import BlendableDataset
 from .dataset_utils import (

@@ -8,12 +8,12 @@ import torch
 from dacite import from_dict
 from packaging.version import Version
 
-from brrr.core import distributed as dist
-from brrr.core.dataclass import DistributedProcessGroups
-from brrr.core.parallelism.parameters import SlicesPair
-from brrr.core.serialize.constants import CHECKPOINT_VERSION
-from brrr.core.serialize.path import check_path_is_local
-from brrr.core.serialize.serialize import fs_open
+from nanotron.core import distributed as dist
+from nanotron.core.dataclass import DistributedProcessGroups
+from nanotron.core.parallelism.parameters import SlicesPair
+from nanotron.core.serialize.constants import CHECKPOINT_VERSION
+from nanotron.core.serialize.path import check_path_is_local
+from nanotron.core.serialize.serialize import fs_open
 
 
 @dataclasses.dataclass
@@ -145,5 +145,5 @@ def load_meta(dpg: DistributedProcessGroups, root_folder: Path) -> CheckpointMet
         # Assume that we're always backward compatible, we only increment CHECKPOINT_VERSION when there's a breaking change.
         assert (
             checkpoint_metadata.version <= CHECKPOINT_VERSION
-        ), f"Checkpoint is of version {checkpoint_metadata.version}, Current `brrr` checkpoint version is {CHECKPOINT_VERSION}"
+        ), f"Checkpoint is of version {checkpoint_metadata.version}, Current `nanotron` checkpoint version is {CHECKPOINT_VERSION}"
     return checkpoint_metadata

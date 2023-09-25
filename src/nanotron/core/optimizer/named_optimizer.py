@@ -2,7 +2,7 @@ from typing import Any, Callable, Dict, Iterable, Tuple, Union
 
 import torch
 
-from brrr.core.optimizer.inherit_from_other_optimizer import InheritFromOtherOptimizer
+from nanotron.core.optimizer.inherit_from_other_optimizer import InheritFromOtherOptimizer
 
 
 class NamedOptimizer(InheritFromOtherOptimizer):
