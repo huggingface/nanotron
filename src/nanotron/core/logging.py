@@ -64,16 +64,16 @@ LIBRARY_NAME = __name__.split(".")[0]
 
 def _get_default_logging_level():
     """
-    If BRRR_LOGGING_LEVEL env var is set to one of the valid choices return that as the new default level. If it is
+    If NANOTRON_LOGGING_LEVEL env var is set to one of the valid choices return that as the new default level. If it is
     not - fall back to ``_default_log_level``
     """
-    env_level_str = os.getenv("BRRR_LOGGING_LEVEL", None)
+    env_level_str = os.getenv("NANOTRON_LOGGING_LEVEL", None)
     if env_level_str:
         if env_level_str in log_levels:
             return log_levels[env_level_str]
         else:
             logging.getLogger().warning(
-                f"Unknown option BRRR_LOGGING_LEVEL={env_level_str}, "
+                f"Unknown option NANOTRON_LOGGING_LEVEL={env_level_str}, "
                 f"has to be one of: { ', '.join(log_levels.keys()) }"
             )
     return DEFAULT_LOG_LEVEL
@@ -122,11 +122,11 @@ def get_logger(name: Optional[str] = None) -> Logger:
 
 def get_verbosity() -> int:
     """
-    Return the current level for the BRRR root logger as an int.
+    Return the current level for the Nanotron root logger as an int.
     Returns:
         :obj:`int`: The logging level.
     .. note::
-        BRRR has following logging levels:
+        Nanotron has following logging levels:
         - 50: ``nanotron.logging.CRITICAL`` or ``nanotron.logging.FATAL``
         - 40: ``nanotron.logging.ERROR``
         - 30: ``nanotron.logging.WARNING`` or ``nanotron.logging.WARN``

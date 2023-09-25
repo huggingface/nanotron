@@ -13,8 +13,8 @@ from nanotron.core.process_groups_initializer import DistributedProcessGroups
 logger = logging.get_logger(__name__)
 
 
-class BRRRModel(nn.Module, metaclass=ABCMeta):
-    """Abstract class for BRRR models
+class NanotronModel(nn.Module, metaclass=ABCMeta):
+    """Abstract class for Nanotron models
     We make the following assumptions:
     - When building PP blocks, we assume that the modules order are in the same order as the forward pass."""
 
@@ -32,7 +32,7 @@ class BRRRModel(nn.Module, metaclass=ABCMeta):
         ...
 
     def log_modules(self, level: int = logging.DEBUG, group: Optional[ProcessGroup] = None, rank: int = 0):
-        assert hasattr(self, "dpg"), "`BRRRModel` needs to have a `dpg` attribute"
+        assert hasattr(self, "dpg"), "`NanotronModel` needs to have a `dpg` attribute"
 
         for name, module in self.named_modules():
             if not isinstance(module, PipelineBlock):

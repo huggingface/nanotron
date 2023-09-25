@@ -14,7 +14,7 @@ from nanotron.core.dataclass import DistributedProcessGroups, RandomStates
 from nanotron.core.optimizer import NamedOptimizer, ZeroDistributedOptimizer
 from nanotron.core.optimizer.zero import SlicedFlatTensor
 from nanotron.core.parallelism.data_parallelism.utils import sync_gradients_across_dp
-from nanotron.core.parallelism.parameters import BRRRParameter
+from nanotron.core.parallelism.parameters import NanotronParameter
 from nanotron.core.parallelism.pipeline_parallelism.engine import AllForwardAllBackwardPipelineEngine
 from nanotron.core.parallelism.pipeline_parallelism.tensor_pointer import TensorPointer
 from nanotron.core.parallelism.tensor_parallelism import nn
@@ -269,7 +269,7 @@ def _test_zero_optimizer_with_tp(
     )
     for module in reference_model.modules():
         for name, param in module.named_parameters(recurse=False):
-            setattr(module, name, BRRRParameter(param))
+            setattr(module, name, NanotronParameter(param))
 
     reference_optimizer = torch.optim.AdamW(reference_model.parameters())
     # TODO @thomasw21: This is a hack to obtain `AdamW` index in it's state.
@@ -282,7 +282,7 @@ def _test_zero_optimizer_with_tp(
 
         for (name, param), (ref_name, ref_param) in zip(model.named_parameters(), reference_model.named_parameters()):
             assert name == ref_name
-            assert isinstance(param, BRRRParameter)
+            assert isinstance(param, NanotronParameter)
 
             if param.is_sharded:
                 sharded_info = param.get_sharded_info()
@@ -506,7 +506,7 @@ def _test_zero_optimizer_with_tp(
             offsets = optimizer.param_name_to_dp_rank_offsets[name][dist.get_rank(dpg.dp_pg)]
 
             assert set(optim_state) == set(ref_optim_state)
-            assert isinstance(param, BRRRParameter)
+            assert isinstance(param, NanotronParameter)
             for key in ["exp_avg", "exp_avg_sq"]:
                 value = optim_state[key]
                 ref_value = ref_optim_state[key]

@@ -9,7 +9,7 @@ from torch.distributed import GradBucket
 
 from nanotron.core import distributed as dist
 from nanotron.core.parallelism.data_parallelism.utils import ddp_trigger_sync_in_bwd
-from nanotron.core.parallelism.parameters import BRRRParameter
+from nanotron.core.parallelism.parameters import NanotronParameter
 from nanotron.core.process_groups_initializer import DistributedProcessGroups
 from nanotron.core.utils import assert_tensor_synced_across_pg
 
@@ -38,8 +38,8 @@ def _test_ddp_with_afab(dpg: DistributedProcessGroups, accumulation_steps: int):
 
     model_hook = nn.Linear(3, 2, bias=False, dtype=half_precision, device="cuda")
 
-    # Create BRRR Parameter
-    model_hook.weight = BRRRParameter(model_hook.weight)
+    # Create Nanotron Parameter
+    model_hook.weight = NanotronParameter(model_hook.weight)
 
     model_ddp_hook = torch.nn.parallel.DistributedDataParallel(
         model_hook,

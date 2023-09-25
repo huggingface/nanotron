@@ -6,13 +6,13 @@ import torch
 from nanotron.core.gradient_accumulator import GradientAccumulator
 from nanotron.core.optimizer.base import BaseOptimizer
 from nanotron.core.optimizer.inherit_from_other_optimizer import InheritFromOtherOptimizer
-from nanotron.core.parallelism.parameters import BRRRParameter
+from nanotron.core.parallelism.parameters import NanotronParameter
 
 
 class OptimizerFromGradientAccumulator(InheritFromOtherOptimizer):
     def __init__(
         self,
-        gradient_accumulator_builder: Callable[[Iterable[Tuple[str, BRRRParameter]]], GradientAccumulator],
+        gradient_accumulator_builder: Callable[[Iterable[Tuple[str, NanotronParameter]]], GradientAccumulator],
         named_params_or_groups: Iterable[Union[Tuple[str, torch.Tensor], Dict[str, Any]]],
         optimizer_builder: Callable[[Iterable[Dict[str, Any]]], BaseOptimizer],
     ):

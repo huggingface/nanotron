@@ -2,13 +2,13 @@ import torch
 from helpers.exception import assert_fail_with
 from torch import nn
 
-from nanotron.core.parallelism.parameters import BRRRParameter
+from nanotron.core.parallelism.parameters import NanotronParameter
 from nanotron.core.utils import DTypeInvariantTensor, init_on_device_and_dtype
 
 
 def test_nanotron_parameter_does_not_override_some_parameter_variable():
     param = nn.Parameter(torch.empty(3))
-    assert not hasattr(param, BRRRParameter.BRRR_PARAMETER_METADATA_ATTRIBUTE_NAME)
+    assert not hasattr(param, NanotronParameter.NANOTRON_PARAMETER_METADATA_ATTRIBUTE_NAME)
 
 
 def test_uncastable_tensor():

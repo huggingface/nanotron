@@ -8,7 +8,7 @@ from nanotron.core import distributed as dist
 from nanotron.core import optimizer as optim
 from nanotron.core.dataclass import DistributedProcessGroups
 from nanotron.core.distributed import get_global_rank
-from nanotron.core.parallelism.parameters import BRRRParameter
+from nanotron.core.parallelism.parameters import NanotronParameter
 from nanotron.core.serialize.meta import CheckpointMetadata, load_meta, save_meta
 from nanotron.core.serialize.optimizer import load_lr_scheduler, load_optimizer, save_lr_scheduler, save_optimizer
 from nanotron.core.serialize.path import fs_open, get_filesystem_and_path
@@ -89,7 +89,7 @@ def save(
             param
             for parameters_group in optimizer.param_groups
             for param in parameters_group["params"]
-            if param.requires_grad and isinstance(param, BRRRParameter) and param.is_tied
+            if param.requires_grad and isinstance(param, NanotronParameter) and param.is_tied
         ),
         key=lambda param: param.get_tied_info().name,
     )
@@ -129,7 +129,7 @@ def save(
     current_state_dict = optimizer.state_dict()
     for index, optim_state in sorted(current_state_dict["state"].items(), key=lambda x: x[0]):
         param = index_to_param[index]
-        if not isinstance(param, BRRRParameter):
+        if not isinstance(param, NanotronParameter):
             continue
         if not param.is_tied:
             # If it's not shared, we don't need to check it's synced

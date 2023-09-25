@@ -4,12 +4,12 @@ import torch
 
 import nanotron.core.distributed as dist
 from nanotron.core.gradient_accumulator import GradientAccumulator
-from nanotron.core.parallelism.parameters import BRRRParameter
+from nanotron.core.parallelism.parameters import NanotronParameter
 
 
 def clip_grad_norm(
     mp_pg: dist.ProcessGroup,
-    named_parameters: Iterable[Tuple[str, BRRRParameter]],
+    named_parameters: Iterable[Tuple[str, NanotronParameter]],
     max_norm: float,
     grad_accumulator: Optional[GradientAccumulator],
     norm_type: float = 2.0,

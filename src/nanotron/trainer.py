@@ -29,7 +29,7 @@ from nanotron.core import logging
 from nanotron.core.logging import log_rank
 from nanotron.core.optimizer.zero import ZeroDistributedOptimizer
 from nanotron.core.parallelism.data_parallelism.utils import sync_gradients_across_dp
-from nanotron.core.parallelism.parameters import BRRRParameter, sanity_check
+from nanotron.core.parallelism.parameters import NanotronParameter, sanity_check
 from nanotron.core.parallelism.pipeline_parallelism.block import PipelineBlock
 from nanotron.core.parallelism.pipeline_parallelism.engine import (
     PipelineEngine,
@@ -75,7 +75,7 @@ from nanotron.helpers import (
     set_logger_verbosity,
 )
 from nanotron.logger import LoggerWriter, LogItem
-from nanotron.models import BRRRModel
+from nanotron.models import NanotronModel
 
 if int(os.environ.get("USE_FAST", 0)) == 1:
     # We import the fast versions
@@ -457,14 +457,14 @@ class DistributedTrainer:
     @staticmethod
     def build_model(
         model_config: AutoConfig,
-        model_builder: Callable[[], BRRRModel],
+        model_builder: Callable[[], NanotronModel],
         dpg: DistributedProcessGroups,
         dtype: torch.dtype,
         target_pp_ranks: Optional[List[int]] = None,
         device: Optional[torch.device] = torch.device("cuda"),
-    ) -> BRRRModel:
+    ) -> NanotronModel:
         # TODO: classes dont take same args
-        model: BRRRModel = model_builder()
+        model: NanotronModel = model_builder()
 
         # If no target pp ranks are specified, we assume that we want to use all pp ranks
         if target_pp_ranks is None:
@@ -572,9 +572,9 @@ class DistributedTrainer:
     def _init_model(
         self,
         model_config: AutoConfig,
-        model_builder: Callable[[], BRRRModel],
+        model_builder: Callable[[], NanotronModel],
         target_pp_ranks: Optional[List[int]] = None,
-    ) -> Tuple[BRRRModel]:
+    ) -> Tuple[NanotronModel]:
         config = self.config
         dpg = self.dpg
 
@@ -624,7 +624,7 @@ class DistributedTrainer:
             # TODO @thomasw21: DDP doesn't support broadcasting complex buffers (and we don't really need that broadcasting anyway)
             model = DistributedDataParallel(model, process_group=dpg.dp_pg, broadcast_buffers=False)
 
-        # Sanity check the model, all parameters must be BRRRParameter (either tied or sharded)
+        # Sanity check the model, all parameters must be NanotronParameter (either tied or sharded)
         sanity_check(root_module=model)
 
         return model
@@ -871,7 +871,7 @@ class DistributedTrainer:
 
 
 def mark_tied_parameters(
-    model: BRRRModel, dpg: DistributedProcessGroups, parallel_config: Optional[ParallelismArgs] = None
+    model: NanotronModel, dpg: DistributedProcessGroups, parallel_config: Optional[ParallelismArgs] = None
 ):
     if isinstance(model, GPTForTraining):
         # Tie embeddings
@@ -920,7 +920,7 @@ def mark_tied_parameters(
                 # kv is deliberately skipped as it's tied in model init (_mark_kv_parameters_in_module_as_tied)
                 continue
 
-            if isinstance(param, BRRRParameter) and param.is_sharded:
+            if isinstance(param, NanotronParameter) and param.is_sharded:
                 continue
 
             if isinstance(module, TensorParallelRowLinear) and "bias" == param_name:

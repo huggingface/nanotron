@@ -6,7 +6,7 @@ from torch import nn
 
 from nanotron.core import distributed as dist
 from nanotron.core.dataclass import DistributedProcessGroups
-from nanotron.core.parallelism.parameters import BRRRParameter
+from nanotron.core.parallelism.parameters import NanotronParameter
 from nanotron.core.parallelism.tied_parameters import (
     get_tied_id_to_param,
     sync_tied_weights_gradients,
@@ -81,10 +81,10 @@ def _test_tie_weight_in_different_device(dpg: DistributedProcessGroups):
         weight = model.dense1.weight
         bias = model.dense1.bias
 
-    # Make sure that weight/bias are BRRRParameter and that they are tied
-    assert isinstance(weight, BRRRParameter)
+    # Make sure that weight/bias are NanotronParameter and that they are tied
+    assert isinstance(weight, NanotronParameter)
     assert weight.is_tied
-    assert isinstance(bias, BRRRParameter)
+    assert isinstance(bias, NanotronParameter)
     assert bias.is_tied
 
     # Weights/bias are not synced yet
@@ -181,10 +181,10 @@ def _test_tie_weight_in_different_device_have_gradients_synchronized(dpg: Distri
         weight = model.dense1.weight
         bias = model.dense1.bias
 
-    # Make sure that weight/bias are BRRRParameter and that they are tied
-    assert isinstance(weight, BRRRParameter)
+    # Make sure that weight/bias are NanotronParameter and that they are tied
+    assert isinstance(weight, NanotronParameter)
     assert weight.is_tied
-    assert isinstance(bias, BRRRParameter)
+    assert isinstance(bias, NanotronParameter)
     assert bias.is_tied
 
     # Weights/bias are not synced yet
