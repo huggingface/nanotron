@@ -18,9 +18,11 @@ TRAIN_SCRIPT = "scripts/train.py"
 NUM_GPUS = 8
 CHECK_ITERATION = 100
 
+
 def exit_with_children():
     """Kill all children processes when this process exits"""
     os.killpg(0, signal.SIGKILL)
+
 
 def extract_loss(line):
     """Extract loss value from the line"""
@@ -30,12 +32,13 @@ def extract_loss(line):
     except AttributeError:
         raise ValueError(f"Could not extract loss value from line: {line}")
 
+
 if __name__ == "__main__":
     cmd = f"USE_FAST=1 CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node={NUM_GPUS} {TRAIN_SCRIPT} --config-file {CONFIG_FILE}"
     start_time = time.time()
 
     os.setpgrp()  # create new process group, become its leader
-    atexit.register(exit_with_children) # kill all children processes when this process exits
+    atexit.register(exit_with_children)  # kill all children processes when this process exits
 
     # read logs in streaming fashion
     for line in subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT).stdout:

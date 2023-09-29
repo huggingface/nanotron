@@ -10,9 +10,6 @@ import argparse
 from typing import Dict, Iterator, Union
 
 import torch
-from torch.nn.parallel import DistributedDataParallel
-from transformers import AutoTokenizer
-
 from nanotron.config import (
     Config,
     PretrainDatasetsArgs,
@@ -33,6 +30,8 @@ from nanotron.dataloaders.dataloader import (
 )
 from nanotron.dataloaders.nemo import get_nemo_dataloader, get_nemo_datasets
 from nanotron.trainer import DistributedTrainer
+from torch.nn.parallel import DistributedDataParallel
+from transformers import AutoTokenizer
 
 logger = logging.get_logger(__name__)
 

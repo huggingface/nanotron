@@ -268,10 +268,7 @@ def init_optimizer_and_grad_accumulator(
             state=FP32GradBucketManager(
                 dp_pg=dpg.dp_pg,
                 accumulator=grad_accumulator,
-                param_id_to_name={
-                    id(param): name
-                    for name, param in named_parameters
-                },
+                param_id_to_name={id(param): name for name, param in named_parameters},
             ),
             hook=get_fp32_accum_hook(
                 reduce_scatter=optimizer.inherit_from(ZeroDistributedOptimizer), reduce_op=dist.ReduceOp.AVG

@@ -1,9 +1,8 @@
 import torch
 from helpers.exception import assert_fail_with
-from torch import nn
-
 from nanotron.core.parallelism.parameters import NanotronParameter
 from nanotron.core.utils import DTypeInvariantTensor, init_on_device_and_dtype
+from torch import nn
 
 
 def test_nanotron_parameter_does_not_override_some_parameter_variable():

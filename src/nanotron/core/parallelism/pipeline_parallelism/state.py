@@ -4,7 +4,6 @@ from abc import ABC, abstractmethod
 from typing import List
 
 import torch
-
 from nanotron.core import distributed as dist
 from nanotron.core import logging
 from nanotron.core.logging import log_rank

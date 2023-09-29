@@ -1,5 +1,5 @@
 from functools import cache
-from typing import Any, Callable, Dict, Iterable, Optional, Set, Tuple, Union, Iterator
+from typing import Any, Callable, Dict, Iterable, Iterator, Optional, Set, Tuple, Union
 
 import torch
 

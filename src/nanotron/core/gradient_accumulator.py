@@ -2,7 +2,7 @@ import dataclasses
 from abc import ABC, abstractmethod
 from collections import OrderedDict
 from contextlib import contextmanager
-from typing import Callable, Dict, Iterator, Optional, Tuple, Iterable
+from typing import Callable, Dict, Iterable, Iterator, Optional, Tuple
 
 import torch
 from torch.distributed import GradBucket

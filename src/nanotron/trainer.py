@@ -6,7 +6,7 @@ import os
 import sys
 import time
 from pprint import pformat
-from typing import Callable, Dict, Iterable, Iterator, List, Optional, Tuple, Union
+from typing import Callable, Dict, Iterable, Iterator, List, Optional, Union
 
 import numpy as np
 import torch

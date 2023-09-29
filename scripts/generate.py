@@ -6,8 +6,6 @@ import argparse
 from pathlib import Path
 
 import torch
-from transformers import AutoConfig, AutoTokenizer
-
 from nanotron.config import ParallelismArgs
 from nanotron.core import distributed as dist
 from nanotron.core import logging
@@ -27,6 +25,7 @@ from nanotron.core.serialize import (
 )
 from nanotron.generation import GenerationConfig, GenerationInput, TokenizerConfig, greedy_search
 from nanotron.trainer import CONFIG_TO_MODEL_CLASS, DistributedTrainer, mark_tied_parameters
+from transformers import AutoConfig, AutoTokenizer
 
 logger = logging.get_logger(__name__)
 
