@@ -111,7 +111,6 @@ CONFIG_TO_MODEL_CLASS = {
     "RWConfig": FalconForTraining,
 }
 
-
 # TODO @nouamane: add abstract class
 class DistributedTrainer:
     def __init__(self, config: Config):
@@ -126,17 +125,7 @@ class DistributedTrainer:
         )
 
         # Do a first NCCL sync to warmup and try to avoid Timeout after model/data loading
-        test_tensor = torch.tensor([dist.get_rank(self.dpg.world_pg)], device=torch.device("cuda"))
-        test_tensor_list = [torch.zeros_like(test_tensor) for _ in range(self.dpg.world_pg.size())]
-        dist.all_gather(test_tensor_list, test_tensor, group=self.dpg.world_pg, async_op=False)
-        dist.barrier()
-        log_rank(
-            f"Test NCCL sync for ranks {[t.item() for t in test_tensor_list]}",
-            logger=logger,
-            level=logging.INFO,
-            group=self.dpg.dp_pg,
-            rank=0,
-        )
+        self.run_nccl_test()
 
         # Set random states
         set_random_seed(self.config.model.seed)
@@ -477,8 +466,6 @@ class DistributedTrainer:
         pipeline_blocks = [module for name, module in model.named_modules() if isinstance(module, PipelineBlock)]
         # "cuda" is already defaulted for each process to it's own cuda device
         with init_on_device_and_dtype(device=device, dtype=dtype):
-            # TODO: https://github.com/huggingface/nanotron/issues/65
-
             # Balance compute across PP blocks
             block_compute_costs = model.get_block_compute_costs()
             block_cumulative_costs = np.cumsum(
@@ -868,6 +855,20 @@ class DistributedTrainer:
                         logger=logger,
                         level=logging.ERROR,
                     )
+
+    def run_nccl_test(self) -> None:
+        """NCCL sanity check"""
+        test_tensor = torch.tensor([dist.get_rank(self.dpg.world_pg)], device=torch.device("cuda"))
+        test_tensor_list = [torch.zeros_like(test_tensor) for _ in range(self.dpg.world_pg.size())]
+        dist.all_gather(test_tensor_list, test_tensor, group=self.dpg.world_pg, async_op=False)
+        dist.barrier()
+        log_rank(
+            f"Test NCCL sync for ranks {[t.item() for t in test_tensor_list]}",
+            logger=logger,
+            level=logging.INFO,
+            group=self.dpg.dp_pg,
+            rank=0,
+        )
 
 
 def mark_tied_parameters(
