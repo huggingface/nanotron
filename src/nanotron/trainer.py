@@ -111,6 +111,7 @@ CONFIG_TO_MODEL_CLASS = {
     "RWConfig": FalconForTraining,
 }
 
+
 # TODO @nouamane: add abstract class
 class DistributedTrainer:
     def __init__(self, config: Config):
@@ -231,7 +232,6 @@ class DistributedTrainer:
         self.module_id_to_prefix = {
             id(module): f"{module_name}." for module_name, module in self.unwrapped_model.named_modules()
         }
-        # Fix the root_model
         self.module_id_to_prefix[id(self.unwrapped_model)] = ""
 
         prof = get_profiler(config=self.config)
@@ -871,7 +871,7 @@ class DistributedTrainer:
         )
 
 
-#TODO @nouamane: move to NanotronModel like tflops because it depends on the model
+# TODO @nouamane: move to NanotronModel like tflops because it depends on the model
 def mark_tied_parameters(
     model: NanotronModel, dpg: DistributedProcessGroups, parallel_config: Optional[ParallelismArgs] = None
 ):
