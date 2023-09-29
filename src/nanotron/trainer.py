@@ -227,12 +227,12 @@ class DistributedTrainer:
 
         # TODO @nouamanetazi: refactor this
         # Useful mapping
-        self.normalized_model = self.model.module if isinstance(self.model, DistributedDataParallel) else self.model
+        self.unwrapped_model = self.model.module if isinstance(self.model, DistributedDataParallel) else self.model
         self.module_id_to_prefix = {
-            id(module): f"{module_name}." for module_name, module in self.normalized_model.named_modules()
+            id(module): f"{module_name}." for module_name, module in self.unwrapped_model.named_modules()
         }
         # Fix the root_model
-        self.module_id_to_prefix[id(self.normalized_model)] = ""
+        self.module_id_to_prefix[id(self.unwrapped_model)] = ""
 
         prof = get_profiler(config=self.config)
         with self.tb_context as tb_writer:
@@ -307,7 +307,7 @@ class DistributedTrainer:
         # Sync tied weights
         # TODO @nouamane: Put this in hooks so we can overlap communication with gradient computation on the last backward pass.
         sync_tied_weights_gradients(
-            module=self.normalized_model,
+            module=self.unwrapped_model,
             dpg=self.dpg,
             grad_accumulator=self.grad_accumulator,
         )
@@ -334,7 +334,7 @@ class DistributedTrainer:
                     else name,
                     param,
                 )
-                for name, param in self.normalized_model.named_parameters()
+                for name, param in self.unwrapped_model.named_parameters()
                 if param.requires_grad
             ]
             # TODO @nouamane: we need to split `world_rank_matrix` along PP axis, to separate ref from active model
@@ -561,7 +561,7 @@ class DistributedTrainer:
         model_config: AutoConfig,
         model_builder: Callable[[], NanotronModel],
         target_pp_ranks: Optional[List[int]] = None,
-    ) -> Tuple[NanotronModel]:
+    ) -> NanotronModel:
         config = self.config
         dpg = self.dpg
 
@@ -718,8 +718,8 @@ class DistributedTrainer:
             # SANITY CHECK: Tied weights are synchronized
             tied_params_list = sorted(
                 get_tied_id_to_param(
-                    parameters=self.normalized_model.parameters(),
-                    root_module=self.normalized_model,
+                    parameters=self.unwrapped_model.parameters(),
+                    root_module=self.unwrapped_model,
                 ).items(),
                 key=lambda x: x[0],
             )
@@ -748,7 +748,7 @@ class DistributedTrainer:
             # SANITY CHECK: Check that gradient flow on the entire model
             # SANITY CHECK: Check that all parameters that required gradients, have actually a gradient
             # SANITY CHECK: Check for nan/inf
-            for name, param in self.normalized_model.named_parameters():
+            for name, param in self.unwrapped_model.named_parameters():
                 if not param.requires_grad:
                     continue
 
@@ -777,7 +777,7 @@ class DistributedTrainer:
             # SANITY CHECK: Test tied weights gradients are synchronized
             for (name, group_ranks), param in sorted(
                 get_tied_id_to_param(
-                    parameters=self.normalized_model.parameters(), root_module=self.normalized_model
+                    parameters=self.unwrapped_model.parameters(), root_module=self.unwrapped_model
                 ).items(),
                 key=lambda x: x[0],
             ):
@@ -798,7 +798,7 @@ class DistributedTrainer:
                 )
 
             # SANITY CHECK: Test gradients are synchronized across DP
-            for name, param in sorted(self.normalized_model.named_parameters(), key=lambda x: x[0]):
+            for name, param in sorted(self.unwrapped_model.named_parameters(), key=lambda x: x[0]):
                 if not param.requires_grad:
                     continue
 
@@ -829,7 +829,7 @@ class DistributedTrainer:
             # SANITY CHECK: Tied weights are synchronized
             tied_params_list = sorted(
                 get_tied_id_to_param(
-                    parameters=self.normalized_model.parameters(), root_module=self.normalized_model
+                    parameters=self.unwrapped_model.parameters(), root_module=self.unwrapped_model
                 ).items(),
                 key=lambda x: x[0],
             )
@@ -871,6 +871,7 @@ class DistributedTrainer:
         )
 
 
+#TODO @nouamane: move to NanotronModel like tflops because it depends on the model
 def mark_tied_parameters(
     model: NanotronModel, dpg: DistributedProcessGroups, parallel_config: Optional[ParallelismArgs] = None
 ):

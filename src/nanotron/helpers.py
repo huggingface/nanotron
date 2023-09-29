@@ -185,11 +185,11 @@ def init_optimizer_and_grad_accumulator(
     model: nn.Module, optimizer_args: OptimizerArgs, dpg: DistributedProcessGroups
 ) -> Tuple[BaseOptimizer, GradientAccumulator]:
     # Normalize DDP
-    normalized_model = model.module if isinstance(model, DistributedDataParallel) else model
+    unwrapped_model = model.module if isinstance(model, DistributedDataParallel) else model
 
-    module_id_to_prefix = {id(module): f"{module_name}." for module_name, module in normalized_model.named_modules()}
+    module_id_to_prefix = {id(module): f"{module_name}." for module_name, module in unwrapped_model.named_modules()}
     # Fix the root_model
-    root_model_id = id(normalized_model)
+    root_model_id = id(unwrapped_model)
     module_id_to_prefix[root_model_id] = ""
 
     # named parameters
@@ -200,7 +200,7 @@ def init_optimizer_and_grad_accumulator(
             else name,
             param,
         )
-        for name, param in normalized_model.named_parameters()
+        for name, param in unwrapped_model.named_parameters()
     ]
 
     # Basic optimizer builder
@@ -289,7 +289,7 @@ def init_optimizer_and_grad_accumulator(
                     )
                     if param.is_tied
                     else name
-                    for name, param in normalized_model.named_parameters()
+                    for name, param in unwrapped_model.named_parameters()
                 },
             ),
             hook=get_fp32_accum_hook(
