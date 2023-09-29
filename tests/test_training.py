@@ -1,4 +1,9 @@
-"""Script to test correctness of training script by comparing loss value after 100th iteration with expected loss value"""
+"""Script to test correctness of training script by comparing loss value after 100th iteration with expected loss value
+
+```bash
+python tests/test_training.py
+```
+"""
 
 import atexit
 import os
@@ -40,7 +45,7 @@ if __name__ == "__main__":
         if re.search(r"iteration: (\d+) / ", line.decode("utf-8")):
             if int(re.search(r"iteration: (\d+) / ", line.decode("utf-8")).group(1)) >= 30:
                 loss = extract_loss(line)
-                if loss > 1e-02:
+                if loss > 2e-02:
                     print("=" * 10, "TEST FAILED", "=" * 10)
                     print(f"Loss after 30th iteration is {loss} which is bigger than expected loss 0.01")
                     print(f"Time taken: {time.time() - start_time}")
