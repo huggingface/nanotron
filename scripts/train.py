@@ -3,6 +3,7 @@
 You can run using command:
 ```
 USE_FAST=1 CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node=8 scripts/train.py --config-file configs/config.yaml
+USE_FAST=1 CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node=8 scripts/train.py --config-file configs/config_correctness.yaml
 ```
 """
 import argparse

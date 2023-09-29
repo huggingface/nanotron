@@ -1,0 +1,109 @@
+# USE_FAST=1 CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node=8 scripts/train.py --config-file configs/config_correctness.yaml
+general:
+  name: test-llama
+  ignore_sanity_checks: false
+  kill_switch_path: ./kill_switch_nouamane
+
+profile: #
+  # profiler_export_path: profile
+
+checkpoints:
+  checkpoints_path: /fsx/nouamane/checkpoints/nanotron/test
+  load_from_specific_checkpoint: null
+  checkpoint_interval: 1000000
+
+parallelism:
+  dp: 2
+  pp: 2
+  tp: 2
+  pp_engine: 1f1b
+  tp_mode: REDUCE_SCATTER
+  tp_linear_async_communication: true
+  recompute_granularity: selective
+
+model:
+  # hf_model_name: HuggingFaceBR4/llama-v2-7b-the-pile
+  # hf_model_name: huggyllama/llama-7b
+  hf_model_name: meta-llama/Llama-2-7b-hf
+  remote_code:
+    trust_remote_code: true
+  make_vocab_size_divisible_by: 1
+  init_method:
+    # std: 0.015625 # Basically 1/sqrt(N)
+    # path: /fsx/nouamane/projects/nanotron/pretrained/llama-v2-7b-the-pile
+    path: /fsx/nouamane/projects/brrr/pretrained/llama-2-7b
+  dtype: bfloat16
+  seed: 42
+
+tokens:
+  sequence_length: 4096
+  train_steps: 300 # GBS = 1024 -> Train steps = 111998 / 512 = 160
+  micro_batch_size: 2
+  batch_accumulation_per_replica: 3
+  val_check_interval: 20
+  limit_val_batches: 2
+
+optimizer:
+  zero_stage: 1
+  weight_decay: 0.1
+  clip_grad: 0.4
+
+  accumulate_grad_in_fp32: true
+
+  adam_eps: 1.0e-8
+  adam_beta1: 0.9
+  adam_beta2: 0.95 # Copied from LLaMa
+  torch_adam_is_fused: true
+
+  learning_rate: 4.0e-4
+
+learning_rate_scheduler:
+  lr_warmup_steps: 1500
+  lr_warmup_style: linear
+  lr_decay_steps: null
+  lr_decay_style: linear
+  min_decay_lr: 4.0e-5
+
+logging:
+  # 'debug', 'info', 'warning', 'error', 'critical' and 'passive'
+  log_level: 'info'
+  log_level_replica: 'info'
+  iteration_step_info_interval: 1
+  tensorboard_logger:
+    # tensorboard_dir: /fsx/nouamane/projects/nanotron/tb_logs
+    # # flush_secs: 20
+    # repo_id: HuggingFaceBR4/nouamane-llama-2-finetuning-clean
+    # push_to_hub_interval: 20
+    # repo_public: False
+
+data:
+  seed: 1234
+  num_loading_workers: 1
+  dataset:
+    # hf_dataset_mixer:
+    #   # HuggingFaceH4/oasst1_h4: 1.0 # 20504 -> 20k
+    #   HuggingFaceH4/anthropic_helpful: 1.0 # 111998 -> 20k
+    #   # HuggingFaceH4/shp: 0 # 82836 -> 20k
+    #   # HuggingFaceH4/learn_to_summarize: 0.527 # 37962 -> 20k
+    #   # HuggingFaceH4/scale_helpful_1: 1.0 # 800
+    # hf_dataset_splits:
+    #   - train_ift
+    #   # - train_rm
+    #   # - test_rm # # TODO @nouamane: support evaluation
+    # hf_dataset_config_name: null
+    # dataset_processing_num_proc_per_process: 12
+    # dataset_overwrite_cache: false
+    # text_column_name: chosen
+
+    data_prefix:
+      - 1
+      - /fsx/nouamane/data/llama-samantha/llama-samantha_result_document
+    index_mapping_dir: null # path to save index mapping .npy files, by default will save in the same location as data_prefix
+    splits_string: 0.969,0.03,0.001 # train, val, test (we normalize by sum)
+    # rm /fsx/shared-falcon-180B/data/tokenized_stack_no_pii/code/python/*.npy to reset cache
+    skip_warmup: true
+    dataloader_type: single # cyclic
+    validation_drop_last: true # Set to false if the last partial validation samples is to be consumed
+    eod_mask_loss: false # Mask loss for the end of document tokens
+    no_seqlen_plus_one_input_tokens: false # Set to true to disable fetching (sequence length + 1) input tokens, instead get (sequence length) input tokens and mask the last token
+    pad_samples_to_global_batch_size: false # Set to true if you want to pad the last partial batch with -1's to equal global batch size
