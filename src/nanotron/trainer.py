@@ -229,10 +229,6 @@ class DistributedTrainer:
         # TODO @nouamanetazi: refactor this
         # Useful mapping
         self.unwrapped_model = self.model.module if isinstance(self.model, DistributedDataParallel) else self.model
-        self.module_id_to_prefix = {
-            id(module): f"{module_name}." for module_name, module in self.unwrapped_model.named_modules()
-        }
-        self.module_id_to_prefix[id(self.unwrapped_model)] = ""
 
         prof = get_profiler(config=self.config)
         with self.tb_context as tb_writer:
@@ -326,15 +322,8 @@ class DistributedTrainer:
         if self.config.optimizer.clip_grad is not None:
             # Normalize DDP
             named_parameters = [
-                (
-                    param.get_tied_info().get_full_name_from_module_id_to_prefix(
-                        module_id_to_prefix=self.module_id_to_prefix
-                    )
-                    if param.is_tied
-                    else name,
-                    param,
-                )
-                for name, param in self.unwrapped_model.named_parameters()
+                (name, param)
+                for name, param in self.unwrapped_model.get_named_params_with_tied()
                 if param.requires_grad
             ]
             # TODO @nouamane: we need to split `world_rank_matrix` along PP axis, to separate ref from active model
@@ -755,7 +744,7 @@ class DistributedTrainer:
                 if param.is_tied:
                     tied_info = param.get_tied_info()
                     name = tied_info.get_full_name_from_module_id_to_prefix(
-                        module_id_to_prefix=self.module_id_to_prefix
+                        module_id_to_prefix=self.unwrapped_model.module_id_to_prefix
                     )
 
                 if self.grad_accumulator is not None:
@@ -805,7 +794,7 @@ class DistributedTrainer:
                 if param.is_tied:
                     tied_info = param.get_tied_info()
                     name = tied_info.get_full_name_from_module_id_to_prefix(
-                        module_id_to_prefix=self.module_id_to_prefix
+                        module_id_to_prefix=self.unwrapped_model.module_id_to_prefix
                     )
 
                 if self.grad_accumulator is not None:

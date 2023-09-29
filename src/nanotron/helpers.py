@@ -44,6 +44,7 @@ from nanotron.core.random import (
     get_current_random_state,
     get_synced_random_state,
 )
+from nanotron.models import NanotronModel
 
 logger = logging.get_logger(__name__)
 
@@ -184,21 +185,8 @@ def lr_scheduler_builder(optimizer: Optimizer, learning_rate: float, lr_schedule
 def init_optimizer_and_grad_accumulator(
     model: nn.Module, optimizer_args: OptimizerArgs, dpg: DistributedProcessGroups
 ) -> Tuple[BaseOptimizer, GradientAccumulator]:
-    # Normalize DDP
-    unwrapped_model = model.module if isinstance(model, DistributedDataParallel) else model
-    module_id_to_prefix = {id(module): f"{module_name}." for module_name, module in unwrapped_model.named_modules()}
-    module_id_to_prefix[id(unwrapped_model)] = ""
-
-    # named parameters
-    named_parameters = [
-        (
-            param.get_tied_info().get_full_name_from_module_id_to_prefix(module_id_to_prefix=module_id_to_prefix)
-            if param.is_tied
-            else name,
-            param,
-        )
-        for name, param in unwrapped_model.named_parameters()
-    ]
+    unwrapped_model: NanotronModel = model.module if isinstance(model, DistributedDataParallel) else model
+    named_parameters = unwrapped_model.get_named_params_with_tied()
 
     # Basic optimizer builder
     def basic_optimizer_builder(named_param_groups):
@@ -281,12 +269,8 @@ def init_optimizer_and_grad_accumulator(
                 dp_pg=dpg.dp_pg,
                 accumulator=grad_accumulator,
                 param_id_to_name={
-                    id(param): param.get_tied_info().get_full_name_from_module_id_to_prefix(
-                        module_id_to_prefix=module_id_to_prefix
-                    )
-                    if param.is_tied
-                    else name
-                    for name, param in unwrapped_model.named_parameters()
+                    id(param): name
+                    for name, param in named_parameters
                 },
             ),
             hook=get_fp32_accum_hook(
