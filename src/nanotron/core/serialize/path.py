@@ -7,10 +7,10 @@ import fsspec
 from datasets.download.streaming_download_manager import xPath
 from fsspec.implementations import local
 
-from brrr.config import Config
-from brrr.core import logging
-from brrr.core.dataclass import DistributedProcessGroups
-from brrr.core.logging import log_rank
+from nanotron.config import Config
+from nanotron.core import logging
+from nanotron.core.dataclass import DistributedProcessGroups
+from nanotron.core.logging import log_rank
 
 logger = logging.get_logger(__name__)
 

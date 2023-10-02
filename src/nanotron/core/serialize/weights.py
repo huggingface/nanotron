@@ -6,21 +6,21 @@ import torch
 from packaging.version import Version
 from torch import nn
 
-from brrr.core import distributed as dist
-from brrr.core import logging
-from brrr.core.dataclass import DistributedProcessGroups
-from brrr.core.distributed import get_global_rank
-from brrr.core.logging import log_rank
-from brrr.core.parallelism.parameters import BRRRParameter, ShardedInfo, SlicesPair
-from brrr.core.serialize.constants import CHECKPOINT_VERSION
-from brrr.core.serialize.meta import CheckpointMetadata, TensorMetadata, TensorMetadataV2, load_meta
-from brrr.core.serialize.path import (
+from nanotron.core import distributed as dist
+from nanotron.core import logging
+from nanotron.core.dataclass import DistributedProcessGroups
+from nanotron.core.distributed import get_global_rank
+from nanotron.core.logging import log_rank
+from nanotron.core.parallelism.parameters import NanotronParameter, ShardedInfo, SlicesPair
+from nanotron.core.serialize.constants import CHECKPOINT_VERSION
+from nanotron.core.serialize.meta import CheckpointMetadata, TensorMetadata, TensorMetadataV2, load_meta
+from nanotron.core.serialize.path import (
     ObjectType,
     check_path_is_local,
     get_path,
     get_tp_and_pp_rank_and_size_from,
 )
-from brrr.core.serialize.serialize import safe_open, save_file
+from nanotron.core.serialize.serialize import safe_open, save_file
 
 logger = logging.get_logger(__name__)
 
@@ -47,7 +47,7 @@ def save_weights(model: nn.Module, dpg: DistributedProcessGroups, root_folder: P
             # TODO @thomasw21: Handle buffers
             param = None
 
-        if isinstance(param, BRRRParameter):
+        if isinstance(param, NanotronParameter):
             metadata = {}
             if param.is_tied:
                 tied_info = param.get_tied_info()
@@ -87,7 +87,7 @@ def save_weights(model: nn.Module, dpg: DistributedProcessGroups, root_folder: P
                 path.parent.mkdir(exist_ok=True, parents=True)
             save_file(tensors={"data": param_or_buffer}, filename=path, metadata=metadata)
         else:
-            raise NotImplementedError("Parameters are required to be BRRRParameter")
+            raise NotImplementedError("Parameters are required to be NanotronParameter")
 
 
 class CheckpointVersionFromShardFileException(Exception):
@@ -232,7 +232,7 @@ def load_weights(
         except AttributeError:
             param = None
 
-        if isinstance(param, BRRRParameter):
+        if isinstance(param, NanotronParameter):
             if param.is_tied:
                 tied_info = param.get_tied_info()
                 base_name = tied_info.get_full_name_from_module_id_to_prefix(module_id_to_prefix=module_id_to_prefix)
@@ -312,4 +312,4 @@ def load_weights(
                     raise ValueError(f"Unsupported checkpoint version {checkpoint_version}")
 
         else:
-            raise NotImplementedError(f"Parameters {param} should be a BRRRParameter")
+            raise NotImplementedError(f"Parameters {param} should be a NanotronParameter")

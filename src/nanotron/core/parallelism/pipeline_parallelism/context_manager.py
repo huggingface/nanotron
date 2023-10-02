@@ -2,8 +2,8 @@ from contextlib import contextmanager
 
 from torch import nn as torch_nn
 
-from brrr.core.parallelism.pipeline_parallelism.block import PipelineBlock
-from brrr.core.parallelism.pipeline_parallelism.state import PipelineBatchState
+from nanotron.core.parallelism.pipeline_parallelism.block import PipelineBlock
+from nanotron.core.parallelism.pipeline_parallelism.state import PipelineBatchState
 
 
 @contextmanager

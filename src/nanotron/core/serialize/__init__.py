@@ -4,17 +4,17 @@ import torch
 from torch import nn
 from torch.nn.parallel import DistributedDataParallel
 
-from brrr.core import distributed as dist
-from brrr.core import optimizer as optim
-from brrr.core.dataclass import DistributedProcessGroups
-from brrr.core.distributed import get_global_rank
-from brrr.core.parallelism.parameters import BRRRParameter
-from brrr.core.serialize.meta import CheckpointMetadata, load_meta, save_meta
-from brrr.core.serialize.optimizer import load_lr_scheduler, load_optimizer, save_lr_scheduler, save_optimizer
-from brrr.core.serialize.path import fs_open, get_filesystem_and_path
-from brrr.core.serialize.random import load_random_states, save_random_states
-from brrr.core.serialize.weights import load_weights, save_weights
-from brrr.core.utils import assert_tensor_synced_across_pg
+from nanotron.core import distributed as dist
+from nanotron.core import optimizer as optim
+from nanotron.core.dataclass import DistributedProcessGroups
+from nanotron.core.distributed import get_global_rank
+from nanotron.core.parallelism.parameters import NanotronParameter
+from nanotron.core.serialize.meta import CheckpointMetadata, load_meta, save_meta
+from nanotron.core.serialize.optimizer import load_lr_scheduler, load_optimizer, save_lr_scheduler, save_optimizer
+from nanotron.core.serialize.path import fs_open, get_filesystem_and_path
+from nanotron.core.serialize.random import load_random_states, save_random_states
+from nanotron.core.serialize.weights import load_weights, save_weights
+from nanotron.core.utils import assert_tensor_synced_across_pg
 
 """
 We're going to use safetensors. The reason is that loading segments is going to be much easier
@@ -89,7 +89,7 @@ def save(
             param
             for parameters_group in optimizer.param_groups
             for param in parameters_group["params"]
-            if param.requires_grad and isinstance(param, BRRRParameter) and param.is_tied
+            if param.requires_grad and isinstance(param, NanotronParameter) and param.is_tied
         ),
         key=lambda param: param.get_tied_info().name,
     )
@@ -129,7 +129,7 @@ def save(
     current_state_dict = optimizer.state_dict()
     for index, optim_state in sorted(current_state_dict["state"].items(), key=lambda x: x[0]):
         param = index_to_param[index]
-        if not isinstance(param, BRRRParameter):
+        if not isinstance(param, NanotronParameter):
             continue
         if not param.is_tied:
             # If it's not shared, we don't need to check it's synced

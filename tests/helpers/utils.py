@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import torch.cuda
 from torch.distributed.launcher import elastic_launch
 
-from brrr.core.process_groups_initializer import get_process_groups
+from nanotron.core.process_groups_initializer import get_process_groups
 
 
 def available_gpus():
@@ -87,7 +87,7 @@ class init_process_and_run_func:
 
 def init_distributed(tp: int, dp: int, pp: int):
     def _init_distributed(func):
-        """Wrapper to help initialize distributed brrr.
+        """Wrapper to help initialize distributed nanotron.
 
         :param func: parallel function that runs on all the process, it requires one of its keyword argument to be "dpg"
         """

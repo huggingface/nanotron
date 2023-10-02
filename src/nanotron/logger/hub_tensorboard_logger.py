@@ -3,8 +3,8 @@ from typing import List
 from huggingface_hub import HFSummaryWriter
 from huggingface_hub.utils import disable_progress_bars
 
-from brrr.logger import LogItem
-from brrr.logger.interface import BaseLogger
+from nanotron.logger import LogItem
+from nanotron.logger.interface import BaseLogger
 
 disable_progress_bars()
 

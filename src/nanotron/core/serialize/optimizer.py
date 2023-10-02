@@ -2,11 +2,11 @@ import json
 from pathlib import Path
 from typing import Optional
 
-from brrr.core import distributed as dist
-from brrr.core import optimizer as optim
-from brrr.core.dataclass import DistributedProcessGroups
-from brrr.core.serialize.path import ObjectType, check_path_is_local
-from brrr.core.serialize.serialize import fs_open, torch_load, torch_save
+from nanotron.core import distributed as dist
+from nanotron.core import optimizer as optim
+from nanotron.core.dataclass import DistributedProcessGroups
+from nanotron.core.serialize.path import ObjectType, check_path_is_local
+from nanotron.core.serialize.serialize import fs_open, torch_load, torch_save
 
 
 def optimizer_filename(dpg: DistributedProcessGroups, is_zero: bool):

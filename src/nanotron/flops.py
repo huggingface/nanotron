@@ -1,5 +1,5 @@
 # counts flops in an decoder-only model
-from brrr.config import RecomputeGranularity
+from nanotron.config import RecomputeGranularity
 
 
 def get_flops(

@@ -4,8 +4,8 @@ import numpy as np
 import torch
 from torch import distributed as torch_dist
 
-import brrr.core.distributed as dist
-from brrr.core.dataclass import DistributedProcessGroups
+import nanotron.core.distributed as dist
+from nanotron.core.dataclass import DistributedProcessGroups
 
 
 def get_process_groups(

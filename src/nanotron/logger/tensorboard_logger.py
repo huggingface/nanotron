@@ -2,8 +2,8 @@ from typing import List
 
 from tensorboardX import SummaryWriter
 
-from brrr.logger import LogItem
-from brrr.logger.interface import BaseLogger
+from nanotron.logger import LogItem
+from nanotron.logger.interface import BaseLogger
 
 
 class BatchSummaryWriter(BaseLogger, SummaryWriter):

@@ -1,10 +1,10 @@
 from dataclasses import dataclass
 from typing import List, Union
 
-from brrr.core import logging
-from brrr.core.logging import log_rank
-from brrr.logger import LogItem
-from brrr.logger.interface import BaseLogger
+from nanotron.core import logging
+from nanotron.core.logging import log_rank
+from nanotron.logger import LogItem
+from nanotron.logger.interface import BaseLogger
 
 logger = logging.get_logger(__name__)
 

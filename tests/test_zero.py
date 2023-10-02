@@ -9,18 +9,18 @@ from helpers.utils import available_gpus, init_distributed
 from torch import nn as torch_nn
 from torch.nn.parallel import DistributedDataParallel
 
-from brrr.core import distributed as dist
-from brrr.core.dataclass import DistributedProcessGroups, RandomStates
-from brrr.core.optimizer import NamedOptimizer, ZeroDistributedOptimizer
-from brrr.core.optimizer.zero import SlicedFlatTensor
-from brrr.core.parallelism.data_parallelism.utils import sync_gradients_across_dp
-from brrr.core.parallelism.parameters import BRRRParameter
-from brrr.core.parallelism.pipeline_parallelism.engine import AllForwardAllBackwardPipelineEngine
-from brrr.core.parallelism.pipeline_parallelism.tensor_pointer import TensorPointer
-from brrr.core.parallelism.tensor_parallelism import nn
-from brrr.core.parallelism.tensor_parallelism.enum import TensorParallelLinearMode
-from brrr.core.parallelism.tied_parameters import sync_tied_weights_gradients
-from brrr.core.random import branch_random_state, get_current_random_state, get_synced_random_state
+from nanotron.core import distributed as dist
+from nanotron.core.dataclass import DistributedProcessGroups, RandomStates
+from nanotron.core.optimizer import NamedOptimizer, ZeroDistributedOptimizer
+from nanotron.core.optimizer.zero import SlicedFlatTensor
+from nanotron.core.parallelism.data_parallelism.utils import sync_gradients_across_dp
+from nanotron.core.parallelism.parameters import NanotronParameter
+from nanotron.core.parallelism.pipeline_parallelism.engine import AllForwardAllBackwardPipelineEngine
+from nanotron.core.parallelism.pipeline_parallelism.tensor_pointer import TensorPointer
+from nanotron.core.parallelism.tensor_parallelism import nn
+from nanotron.core.parallelism.tensor_parallelism.enum import TensorParallelLinearMode
+from nanotron.core.parallelism.tied_parameters import sync_tied_weights_gradients
+from nanotron.core.random import branch_random_state, get_current_random_state, get_synced_random_state
 
 
 @pytest.mark.parametrize("tp,dp,pp", [pytest.param(1, i, 1) for i in range(1, available_gpus() + 1)])
@@ -269,7 +269,7 @@ def _test_zero_optimizer_with_tp(
     )
     for module in reference_model.modules():
         for name, param in module.named_parameters(recurse=False):
-            setattr(module, name, BRRRParameter(param))
+            setattr(module, name, NanotronParameter(param))
 
     reference_optimizer = torch.optim.AdamW(reference_model.parameters())
     # TODO @thomasw21: This is a hack to obtain `AdamW` index in it's state.
@@ -282,7 +282,7 @@ def _test_zero_optimizer_with_tp(
 
         for (name, param), (ref_name, ref_param) in zip(model.named_parameters(), reference_model.named_parameters()):
             assert name == ref_name
-            assert isinstance(param, BRRRParameter)
+            assert isinstance(param, NanotronParameter)
 
             if param.is_sharded:
                 sharded_info = param.get_sharded_info()
@@ -506,7 +506,7 @@ def _test_zero_optimizer_with_tp(
             offsets = optimizer.param_name_to_dp_rank_offsets[name][dist.get_rank(dpg.dp_pg)]
 
             assert set(optim_state) == set(ref_optim_state)
-            assert isinstance(param, BRRRParameter)
+            assert isinstance(param, NanotronParameter)
             for key in ["exp_avg", "exp_avg_sq"]:
                 value = optim_state[key]
                 ref_value = ref_optim_state[key]

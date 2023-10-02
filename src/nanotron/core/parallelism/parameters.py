@@ -4,8 +4,8 @@ from typing import Any, Dict, Optional, Tuple
 import torch
 from torch import nn
 
-from brrr.core import distributed as dist
-from brrr.core import logging
+from nanotron.core import distributed as dist
+from nanotron.core import logging
 
 logger = logging.get_logger(__name__)
 
@@ -80,10 +80,10 @@ class ShardedInfo:
     unsharded_shape: Tuple[int, ...]
 
 
-class BRRRParameter(nn.Parameter):
-    """Base class for all parameters in BRRR models
+class NanotronParameter(nn.Parameter):
+    """Base class for all parameters in Nanotron models
 
-    A BRRRParameter can have specific properties:
+    A NanotronParameter can have specific properties:
      - sharded: the parameter is considered to be `sharded` across multiple devices
      - tied: the parameter is considered to be `tied` with other parameters. We sum gradients over those.
 
@@ -95,29 +95,29 @@ class BRRRParameter(nn.Parameter):
         - Even if some weights don't need their grads to be reduced, it's still useful for them to be marked as tied. For example, current serialization format requires to mark them correctly.
     """
 
-    BRRR_PARAMETER_METADATA_ATTRIBUTE_NAME = "__brrr_metadata__"
-    BRRR_PARAMETER_METADATA_TIED_KEY = "tied"
-    BRRR_PARAMETER_METADATA_SHARDED_KEY = "sharded"
+    NANOTRON_PARAMETER_METADATA_ATTRIBUTE_NAME = "__nanotron_metadata__"
+    NANOTRON_PARAMETER_METADATA_TIED_KEY = "tied"
+    NANOTRON_PARAMETER_METADATA_SHARDED_KEY = "sharded"
 
     def __new__(cls, tensor: torch.Tensor, requires_grad: bool = True):
         param = super().__new__(cls, data=tensor.data.detach(), requires_grad=requires_grad)
 
-        if isinstance(tensor, BRRRParameter):
+        if isinstance(tensor, NanotronParameter):
             # Check that we don't inherit a weird class
             # We copy in order not to make in-place operation
-            assert type(tensor) == BRRRParameter
+            assert type(tensor) == NanotronParameter
             setattr(
                 param,
-                cls.BRRR_PARAMETER_METADATA_ATTRIBUTE_NAME,
-                getattr(tensor, cls.BRRR_PARAMETER_METADATA_ATTRIBUTE_NAME).copy(),
+                cls.NANOTRON_PARAMETER_METADATA_ATTRIBUTE_NAME,
+                getattr(tensor, cls.NANOTRON_PARAMETER_METADATA_ATTRIBUTE_NAME).copy(),
             )
         else:
-            setattr(param, cls.BRRR_PARAMETER_METADATA_ATTRIBUTE_NAME, {})
+            setattr(param, cls.NANOTRON_PARAMETER_METADATA_ATTRIBUTE_NAME, {})
 
         return param
 
     def _set_metadata(self, key: str, value: Any):
-        metadata = getattr(self, self.BRRR_PARAMETER_METADATA_ATTRIBUTE_NAME)
+        metadata = getattr(self, self.NANOTRON_PARAMETER_METADATA_ATTRIBUTE_NAME)
 
         if key in metadata:
             raise ValueError(
@@ -130,16 +130,16 @@ class BRRRParameter(nn.Parameter):
         self, name: str, global_ranks: Tuple[int, ...], reduce_op: Optional[dist.ReduceOp], root_module: nn.Module
     ):
         self._set_metadata(
-            self.BRRR_PARAMETER_METADATA_TIED_KEY,
+            self.NANOTRON_PARAMETER_METADATA_TIED_KEY,
             TiedInfo(name=name, global_ranks=global_ranks, reduce_op=reduce_op, root_module=root_module),
         )
 
     def get_tied_info(self) -> TiedInfo:
-        return getattr(self, self.BRRR_PARAMETER_METADATA_ATTRIBUTE_NAME)[self.BRRR_PARAMETER_METADATA_TIED_KEY]
+        return getattr(self, self.NANOTRON_PARAMETER_METADATA_ATTRIBUTE_NAME)[self.NANOTRON_PARAMETER_METADATA_TIED_KEY]
 
     @property
     def is_tied(self) -> bool:
-        return self.BRRR_PARAMETER_METADATA_TIED_KEY in getattr(self, self.BRRR_PARAMETER_METADATA_ATTRIBUTE_NAME)
+        return self.NANOTRON_PARAMETER_METADATA_TIED_KEY in getattr(self, self.NANOTRON_PARAMETER_METADATA_ATTRIBUTE_NAME)
 
     def mark_as_sharded(
         self,
@@ -148,7 +148,7 @@ class BRRRParameter(nn.Parameter):
         unsharded_shape: Tuple[int, ...],
     ):
         self._set_metadata(
-            self.BRRR_PARAMETER_METADATA_SHARDED_KEY,
+            self.NANOTRON_PARAMETER_METADATA_SHARDED_KEY,
             ShardedInfo(
                 global_ranks=global_ranks,
                 local_global_slices_pairs=local_global_slices_pairs,
@@ -157,21 +157,21 @@ class BRRRParameter(nn.Parameter):
         )
 
     def get_sharded_info(self) -> ShardedInfo:
-        return getattr(self, self.BRRR_PARAMETER_METADATA_ATTRIBUTE_NAME)[self.BRRR_PARAMETER_METADATA_SHARDED_KEY]
+        return getattr(self, self.NANOTRON_PARAMETER_METADATA_ATTRIBUTE_NAME)[self.NANOTRON_PARAMETER_METADATA_SHARDED_KEY]
 
     @property
     def is_sharded(self) -> bool:
-        return self.BRRR_PARAMETER_METADATA_SHARDED_KEY in getattr(self, self.BRRR_PARAMETER_METADATA_ATTRIBUTE_NAME)
+        return self.NANOTRON_PARAMETER_METADATA_SHARDED_KEY in getattr(self, self.NANOTRON_PARAMETER_METADATA_ATTRIBUTE_NAME)
 
 
 def sanity_check(root_module: nn.Module):
-    """Makes sure that the module is in BRRR format
+    """Makes sure that the module is in Nanotron format
 
     Format:
-     - all parameters are `BRRRParameter`, this allows us to add metadata to a parameter.
+     - all parameters are `NanotronParameter`, this allows us to add metadata to a parameter.
     """
     for name, param in root_module.named_parameters():
-        if not isinstance(param, BRRRParameter):
+        if not isinstance(param, NanotronParameter):
             raise ValueError(
-                f"BRRR requires model to be in BRRR format, ie all parameters are required to be a BRRRParameter. {name} isn't."
+                f"Nanotron requires model to be in Nanotron format, ie all parameters are required to be a NanotronParameter. {name} isn't."
             )

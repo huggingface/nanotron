@@ -7,18 +7,18 @@ from typing import Callable, Dict, Iterator, Optional, Tuple
 import torch
 from torch.distributed import GradBucket
 
-import brrr.core.distributed as dist
-from brrr.core import logging
-from brrr.core.parallelism.parameters import BRRRParameter
-from brrr.core.tensor_init import tensor_from_untyped_storage
-from brrr.core.utils import get_untyped_storage
+import nanotron.core.distributed as dist
+from nanotron.core import logging
+from nanotron.core.parallelism.parameters import NanotronParameter
+from nanotron.core.tensor_init import tensor_from_untyped_storage
+from nanotron.core.utils import get_untyped_storage
 
 logger = logging.get_logger(__name__)
 
 
 class GradientAccumulator(ABC):
     @abstractmethod
-    def __init__(self, named_parameters: Iterator[Tuple[str, BRRRParameter]]):
+    def __init__(self, named_parameters: Iterator[Tuple[str, NanotronParameter]]):
         ...
 
     @abstractmethod
@@ -38,7 +38,7 @@ class GradientAccumulator(ABC):
         ...
 
     @abstractmethod
-    def get_parameter_for_optimizer(self, name: str) -> BRRRParameter:
+    def get_parameter_for_optimizer(self, name: str) -> NanotronParameter:
         ...
 
     @abstractmethod
@@ -57,8 +57,8 @@ class GradientAccumulator(ABC):
 class FP32GradientAccumulator(GradientAccumulator):
     def __init__(
         self,
-        named_parameters: Iterator[Tuple[str, BRRRParameter]],
-        grad_buckets_named_params: Optional[Iterator[Tuple[str, BRRRParameter]]] = None,
+        named_parameters: Iterator[Tuple[str, NanotronParameter]],
+        grad_buckets_named_params: Optional[Iterator[Tuple[str, NanotronParameter]]] = None,
     ):
         """Create a gradient accumulator that will accumulate gradients in fp32.
 
@@ -153,7 +153,7 @@ class FP32GradientAccumulator(GradientAccumulator):
 
     @staticmethod
     def build_grad_buffers(
-        named_parameters: Iterator[Tuple[str, BRRRParameter]],
+        named_parameters: Iterator[Tuple[str, NanotronParameter]],
     ) -> Tuple[Dict[str, Dict], torch.Tensor]:
         """Builds grad buffers for all model's parameters, independently of ZeRO sharding
 
@@ -206,7 +206,7 @@ class FP32GradientAccumulator(GradientAccumulator):
 
         return result
 
-    def _accumulate_grad(self, name: str, half_param: BRRRParameter) -> None:
+    def _accumulate_grad(self, name: str, half_param: NanotronParameter) -> None:
         """Accumulate grad in fp32 and set the fp32 grad to the fp32 grad buffer, so that optimizer can update fp32 weights afterwards"""
         assert half_param.grad is not None, f"Expected param {name} to have gradient."
         fp32_grad = self.get_grad_buffer(name=name)
@@ -279,7 +279,7 @@ class FP32GradientAccumulator(GradientAccumulator):
         # in case where self.parameters and self.fp32_grad_buffers are not the same (e.g we want to accumulate all DPs grads, and only sync at sync step)
         self._contiguous_fp32_grad_buffer.zero_()
 
-    def get_parameter_for_optimizer(self, name: str) -> BRRRParameter:
+    def get_parameter_for_optimizer(self, name: str) -> NanotronParameter:
         return self.parameters[name]["fp32"]
 
     def get_grad_buffer(self, name: str) -> torch.Tensor:

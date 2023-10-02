@@ -10,21 +10,21 @@ from helpers.utils import (
 )
 from torch.nn.parallel import DistributedDataParallel
 
-from brrr.core import distributed as dist
-from brrr.core.dataclass import DistributedProcessGroups, RandomStates
-from brrr.core.gradient_accumulator import FP32GradientAccumulator
-from brrr.core.optimizer.named_optimizer import NamedOptimizer
-from brrr.core.optimizer.optimizer_from_gradient_accumulator import (
+from nanotron.core import distributed as dist
+from nanotron.core.dataclass import DistributedProcessGroups, RandomStates
+from nanotron.core.gradient_accumulator import FP32GradientAccumulator
+from nanotron.core.optimizer.named_optimizer import NamedOptimizer
+from nanotron.core.optimizer.optimizer_from_gradient_accumulator import (
     OptimizerFromGradientAccumulator,
 )
-from brrr.core.optimizer.zero import ZeroDistributedOptimizer
-from brrr.core.parallelism.pipeline_parallelism.engine import (
+from nanotron.core.optimizer.zero import ZeroDistributedOptimizer
+from nanotron.core.parallelism.pipeline_parallelism.engine import (
     AllForwardAllBackwardPipelineEngine,
 )
-from brrr.core.parallelism.sharded_parameters import SplitConfig, create_sharded_parameter_from_config
-from brrr.core.parallelism.tied_parameters import sync_tied_weights_gradients
-from brrr.core.random import get_current_random_state, get_synced_random_state
-from brrr.core.serialize import (
+from nanotron.core.parallelism.sharded_parameters import SplitConfig, create_sharded_parameter_from_config
+from nanotron.core.parallelism.tied_parameters import sync_tied_weights_gradients
+from nanotron.core.random import get_current_random_state, get_synced_random_state
+from nanotron.core.serialize import (
     load_optimizer,
     load_random_states,
     load_weights,
@@ -32,8 +32,8 @@ from brrr.core.serialize import (
     save_random_states,
     save_weights,
 )
-from brrr.core.serialize.constants import CHECKPOINT_VERSION
-from brrr.core.serialize.meta import TensorMetadataV2
+from nanotron.core.serialize.constants import CHECKPOINT_VERSION
+from nanotron.core.serialize.meta import TensorMetadataV2
 
 
 def test_save_and_load_with_changed_topolgy():

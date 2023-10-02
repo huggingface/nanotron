@@ -1,6 +1,6 @@
 from torch import nn
 
-from brrr.core.parallelism.pipeline_parallelism.block import PipelineBlock
+from nanotron.core.parallelism.pipeline_parallelism.block import PipelineBlock
 
 
 def get_pp_rank_of(target: str, module: nn.Module):

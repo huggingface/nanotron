@@ -3,13 +3,13 @@ from typing import Dict, List, Optional, Tuple
 
 from torch import nn
 
-from brrr.core import distributed as dist
-from brrr.core import logging
-from brrr.core.dataclass import DistributedProcessGroups
-from brrr.core.gradient_accumulator import GradientAccumulator
-from brrr.core.logging import log_rank
-from brrr.core.parallelism.parameters import BRRRParameter
-from brrr.core.utils import get_parameter_and_parent_module
+from nanotron.core import distributed as dist
+from nanotron.core import logging
+from nanotron.core.dataclass import DistributedProcessGroups
+from nanotron.core.gradient_accumulator import GradientAccumulator
+from nanotron.core.logging import log_rank
+from nanotron.core.parallelism.parameters import NanotronParameter
+from nanotron.core.utils import get_parameter_and_parent_module
 
 logger = logging.get_logger(__name__)
 
@@ -20,9 +20,9 @@ def create_tied_parameter(
     global_ranks: Tuple[int, ...],
     reduce_op: Optional[dist.ReduceOp],
     root_module: nn.Module,
-) -> BRRRParameter:
-    if not isinstance(parameter, BRRRParameter):
-        parameter = BRRRParameter(tensor=parameter)
+) -> NanotronParameter:
+    if not isinstance(parameter, NanotronParameter):
+        parameter = NanotronParameter(tensor=parameter)
     parameter.mark_as_tied(name=name, global_ranks=global_ranks, reduce_op=reduce_op, root_module=root_module)
     return parameter
 
@@ -82,7 +82,7 @@ def create_pg_for_tied_weights(root_module: nn.Module, dpg: DistributedProcessGr
     group_ranks = {
         param.get_tied_info().global_ranks
         for name, param in root_module.named_parameters()
-        if isinstance(param, BRRRParameter) and param.is_tied
+        if isinstance(param, NanotronParameter) and param.is_tied
     }
 
     world_group_ranks = [None] * dpg.world_pg.size()
@@ -97,8 +97,8 @@ def create_pg_for_tied_weights(root_module: nn.Module, dpg: DistributedProcessGr
 
 
 def get_tied_id_to_param(
-    parameters: List[BRRRParameter], root_module: nn.Module
-) -> Dict[Tuple[str, Tuple[int, ...]], BRRRParameter]:
+    parameters: List[NanotronParameter], root_module: nn.Module
+) -> Dict[Tuple[str, Tuple[int, ...]], NanotronParameter]:
     module_id_to_prefix = {id(module): f"{module_name}." for module_name, module in root_module.named_modules()}
     # Fix the root_model
     module_id_to_prefix[id(root_module)] = ""

@@ -9,12 +9,12 @@ from dacite import from_dict
 from datasets.download.streaming_download_manager import xPath
 from yaml.loader import SafeLoader
 
-from brrr.core.parallelism.pipeline_parallelism.engine import (
+from nanotron.core.parallelism.pipeline_parallelism.engine import (
     AllForwardAllBackwardPipelineEngine,
     OneForwardOneBackwardPipelineEngine,
     PipelineEngine,
 )
-from brrr.core.parallelism.tensor_parallelism.nn import TensorParallelLinearMode
+from nanotron.core.parallelism.tensor_parallelism.nn import TensorParallelLinearMode
 
 
 class RecomputeGranularity(Enum):
@@ -229,7 +229,7 @@ class DPOPretrainDatasetsArgs:
     hf_dataset_name: str
     hf_dataset_split: str
 
-    # TODO @nouamane: this gives unclear error: https://github.com/huggingface/brrr/issues/515
+    # TODO @nouamane: this gives unclear error: https://github.com/huggingface/nanotron/issues/515
     # def __post_init__(self):
     #     if self.hf_dataset_name not in ["Anthropic/hh-rlhf"]:
     #         raise ValueError(

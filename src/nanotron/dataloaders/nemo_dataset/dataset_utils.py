@@ -15,8 +15,8 @@ import math
 import os
 import subprocess
 
-from brrr.core import logging
-from brrr.core.logging import log_rank
+from nanotron.core import logging
+from nanotron.core.logging import log_rank
 
 logger = logging.get_logger(__name__)
 

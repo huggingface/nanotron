@@ -12,13 +12,13 @@ from transformers import (
 )
 from transformers.trainer_pt_utils import DistributedSamplerWithLoop
 
-from brrr.config import Config
-from brrr.core import distributed as dist
-from brrr.core import logging
-from brrr.core.parallelism.pipeline_parallelism.tensor_pointer import TensorPointer
-from brrr.core.process_groups_initializer import DistributedProcessGroups
-from brrr.core.random import set_random_seed
-from brrr.core.utils import (
+from nanotron.config import Config
+from nanotron.core import distributed as dist
+from nanotron.core import logging
+from nanotron.core.parallelism.pipeline_parallelism.tensor_pointer import TensorPointer
+from nanotron.core.process_groups_initializer import DistributedProcessGroups
+from nanotron.core.random import set_random_seed
+from nanotron.core.utils import (
     assert_fail_except_rank_with,
     assert_tensor_synced_across_pg,
 )

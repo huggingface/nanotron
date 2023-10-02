@@ -3,7 +3,7 @@ from typing import Sequence
 
 import torch
 
-from brrr.core import distributed as dist
+from nanotron.core import distributed as dist
 
 
 def all_gather_batches(in_tensor: torch.Tensor, in_split: Sequence[int], group: dist.ProcessGroup) -> torch.Tensor:

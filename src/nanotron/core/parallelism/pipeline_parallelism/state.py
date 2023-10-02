@@ -5,10 +5,10 @@ from typing import List
 
 import torch
 
-from brrr.core import distributed as dist
-from brrr.core import logging
-from brrr.core.logging import log_rank
-from brrr.core.parallelism.pipeline_parallelism.p2p import P2P
+from nanotron.core import distributed as dist
+from nanotron.core import logging
+from nanotron.core.logging import log_rank
+from nanotron.core.parallelism.pipeline_parallelism.p2p import P2P
 
 logger = logging.get_logger(__name__)
 

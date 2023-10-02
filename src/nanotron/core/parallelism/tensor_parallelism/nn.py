@@ -17,26 +17,26 @@ from typing import Optional, Tuple
 import torch
 from torch import nn
 
-from brrr.core import distributed as dist
-from brrr.core.distributed import get_global_rank
-from brrr.core.parallelism.parameters import BRRRParameter
-from brrr.core.parallelism.sharded_parameters import (
+from nanotron.core import distributed as dist
+from nanotron.core.distributed import get_global_rank
+from nanotron.core.parallelism.parameters import NanotronParameter
+from nanotron.core.parallelism.sharded_parameters import (
     SplitConfig,
     create_sharded_parameter_from_config,
     mark_all_parameters_in_module_as_sharded,
 )
-from brrr.core.parallelism.tensor_parallelism.distributed_differentiable_primitives import (
+from nanotron.core.parallelism.tensor_parallelism.distributed_differentiable_primitives import (
     differentiable_all_gather,
     differentiable_all_reduce_sum,
     differentiable_identity,
     differentiable_reduce_scatter_sum,
 )
-from brrr.core.parallelism.tensor_parallelism.enum import TensorParallelLinearMode
-from brrr.core.parallelism.tensor_parallelism.functional import (
+from nanotron.core.parallelism.tensor_parallelism.enum import TensorParallelLinearMode
+from nanotron.core.parallelism.tensor_parallelism.functional import (
     column_linear,
     row_linear,
 )
-from brrr.core.parallelism.tied_parameters import create_tied_parameter
+from nanotron.core.parallelism.tied_parameters import create_tied_parameter
 
 
 class TensorParallelColumnLinear(nn.Linear):
@@ -144,7 +144,7 @@ class TensorParallelRowLinear(nn.Linear):
         for name, param in list(self.named_parameters()):
             if name == "bias":
                 # `bias` only exists in rank 0 because it's not sharded
-                new_param = BRRRParameter(tensor=param)
+                new_param = NanotronParameter(tensor=param)
             else:
                 new_param = create_sharded_parameter_from_config(
                     parameter=param,

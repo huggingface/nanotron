@@ -18,15 +18,15 @@ from typing import Optional
 import torch
 from torch.nn import functional as F
 
-import brrr.core.distributed as dist
-from brrr.core.parallelism.tensor_parallelism.distributed_differentiable_primitives import (
+import nanotron.core.distributed as dist
+from nanotron.core.parallelism.tensor_parallelism.distributed_differentiable_primitives import (
     differentiable_all_gather,
     differentiable_all_reduce_sum,
     differentiable_identity,
     differentiable_reduce_scatter_sum,
 )
-from brrr.core.parallelism.tensor_parallelism.enum import TensorParallelLinearMode
-from brrr.core.parallelism.utils import assert_cuda_max_connections_set_to_1
+from nanotron.core.parallelism.tensor_parallelism.enum import TensorParallelLinearMode
+from nanotron.core.parallelism.utils import assert_cuda_max_connections_set_to_1
 
 
 class _ShardedCrossEntropy(torch.autograd.Function):

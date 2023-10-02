@@ -7,27 +7,27 @@ from helpers.dummy import DummyModel, dummy_infinite_data_loader
 from helpers.utils import available_gpus, init_distributed
 from torch import nn
 
-from brrr.clip_grads import clip_grad_norm
-from brrr.core import distributed as dist
-from brrr.core.gradient_accumulator import (
+from nanotron.clip_grads import clip_grad_norm
+from nanotron.core import distributed as dist
+from nanotron.core.gradient_accumulator import (
     FP32GradientAccumulator,
 )
-from brrr.core.parallelism.model import initial_sync
-from brrr.core.parallelism.parameters import BRRRParameter, sanity_check
-from brrr.core.parallelism.pipeline_parallelism.engine import (
+from nanotron.core.parallelism.model import initial_sync
+from nanotron.core.parallelism.parameters import NanotronParameter, sanity_check
+from nanotron.core.parallelism.pipeline_parallelism.engine import (
     AllForwardAllBackwardPipelineEngine,
 )
-from brrr.core.parallelism.pipeline_parallelism.p2p import P2P
-from brrr.core.parallelism.tensor_parallelism.enum import TensorParallelLinearMode
-from brrr.core.parallelism.tensor_parallelism.nn import (
+from nanotron.core.parallelism.pipeline_parallelism.p2p import P2P
+from nanotron.core.parallelism.tensor_parallelism.enum import TensorParallelLinearMode
+from nanotron.core.parallelism.tensor_parallelism.nn import (
     TensorParallelColumnLinear,
 )
-from brrr.core.parallelism.tied_parameters import (
+from nanotron.core.parallelism.tied_parameters import (
     sync_tied_weights_gradients,
     tie_parameters,
 )
-from brrr.core.process_groups_initializer import DistributedProcessGroups
-from brrr.core.utils import assert_tensor_synced_across_pg, init_on_device_and_dtype
+from nanotron.core.process_groups_initializer import DistributedProcessGroups
+from nanotron.core.utils import assert_tensor_synced_across_pg, init_on_device_and_dtype
 
 
 @pytest.mark.skipif(available_gpus() < 2, reason="test_clip_grads_with_pp requires at least 2 gpus")
@@ -66,8 +66,8 @@ def _test_clip_grads_with_pp(dpg: DistributedProcessGroups, norm_type: float):
 
     for module in model.modules():
         if isinstance(module, nn.Linear):
-            setattr(module, "weight", BRRRParameter(module.weight))
-            setattr(module, "bias", BRRRParameter(module.bias))
+            setattr(module, "weight", NanotronParameter(module.weight))
+            setattr(module, "bias", NanotronParameter(module.bias))
 
     # synchronize weights
     if has_reference_model:
@@ -371,10 +371,10 @@ def _test_clip_grads_tied_weights(dpg: DistributedProcessGroups, norm_type: floa
         weight = model.dense1.weight
         bias = model.dense1.bias
 
-    # Make sure that weight/bias are BRRRParameter and that they are tied
-    assert isinstance(weight, BRRRParameter)
+    # Make sure that weight/bias are NanotronParameter and that they are tied
+    assert isinstance(weight, NanotronParameter)
     assert weight.is_tied
-    assert isinstance(bias, BRRRParameter)
+    assert isinstance(bias, NanotronParameter)
     assert bias.is_tied
 
     # Sync tied weights: basic assumption
@@ -462,8 +462,8 @@ def _test_clip_grads_fp32_accumulator(dpg: DistributedProcessGroups, norm_type: 
 
     for module in model.modules():
         if isinstance(module, nn.Linear):
-            setattr(module, "weight", BRRRParameter(module.weight))
-            setattr(module, "bias", BRRRParameter(module.bias))
+            setattr(module, "weight", NanotronParameter(module.weight))
+            setattr(module, "bias", NanotronParameter(module.bias))
 
     # model goes to half precision
     model = model.to(half_precision)

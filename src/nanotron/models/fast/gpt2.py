@@ -27,28 +27,28 @@ from torch.nn import init
 from transformers import GPTBigCodeConfig
 from transformers.activations import ACT2FN
 
-from brrr.config import ModelArgs, ParallelismArgs, RecomputeGranularity
-from brrr.core import distributed as dist
-from brrr.core.dataclass import RandomStates
-from brrr.core.distributed import get_global_rank
-from brrr.core.parallelism.parameters import BRRRParameter
-from brrr.core.parallelism.pipeline_parallelism.block import PipelineBlock
-from brrr.core.parallelism.pipeline_parallelism.p2p import P2P
-from brrr.core.parallelism.pipeline_parallelism.tensor_pointer import TensorPointer
-from brrr.core.parallelism.sharded_parameters import SplitConfig, mark_all_parameters_in_module_as_sharded
-from brrr.core.parallelism.tensor_parallelism.enum import TensorParallelLinearMode
-from brrr.core.parallelism.tensor_parallelism.functional import column_linear, sharded_cross_entropy
-from brrr.core.parallelism.tensor_parallelism.nn import (
+from nanotron.config import ModelArgs, ParallelismArgs, RecomputeGranularity
+from nanotron.core import distributed as dist
+from nanotron.core.dataclass import RandomStates
+from nanotron.core.distributed import get_global_rank
+from nanotron.core.parallelism.parameters import NanotronParameter
+from nanotron.core.parallelism.pipeline_parallelism.block import PipelineBlock
+from nanotron.core.parallelism.pipeline_parallelism.p2p import P2P
+from nanotron.core.parallelism.pipeline_parallelism.tensor_pointer import TensorPointer
+from nanotron.core.parallelism.sharded_parameters import SplitConfig, mark_all_parameters_in_module_as_sharded
+from nanotron.core.parallelism.tensor_parallelism.enum import TensorParallelLinearMode
+from nanotron.core.parallelism.tensor_parallelism.functional import column_linear, sharded_cross_entropy
+from nanotron.core.parallelism.tensor_parallelism.nn import (
     TensorParallelColumnLinear,
     TensorParallelEmbedding,
     TensorParallelRowLinear,
 )
-from brrr.core.parallelism.tied_parameters import create_tied_parameter
-from brrr.core.process_groups_initializer import DistributedProcessGroups
-from brrr.core.random import branch_random_state
-from brrr.core.utils import checkpoint_method
-from brrr.models import BRRRModel
-from brrr.store import AttachableStore
+from nanotron.core.parallelism.tied_parameters import create_tied_parameter
+from nanotron.core.process_groups_initializer import DistributedProcessGroups
+from nanotron.core.random import branch_random_state
+from nanotron.core.utils import checkpoint_method
+from nanotron.models import NanotronModel
+from nanotron.store import AttachableStore
 
 
 class MLP(nn.Module):
@@ -167,7 +167,7 @@ class CoreMQA(nn.Module):
 def get_sliced_parameter(coalesced_tensor: torch.Tensor, slice_object: slice):
     with torch.no_grad():
         # This allows us to create a leaf tensor, despite sharing the underlying storage
-        result = BRRRParameter(tensor=coalesced_tensor[slice_object])
+        result = NanotronParameter(tensor=coalesced_tensor[slice_object])
 
     # We need sliced tensor to also get the gradient in order to run optimizer on them
     # TODO @thomasw21: It's really had to make sure that our sliced view keeps the same memory space as the original gradient
@@ -932,7 +932,7 @@ class Loss(nn.Module):
         return {"loss": loss}
 
 
-class GPTForTraining(BRRRModel):
+class GPTForTraining(NanotronModel):
     def __init__(
         self,
         config: GPTBigCodeConfig,
@@ -999,7 +999,7 @@ class GPTForTraining(BRRRModel):
                         name for name, _ in module.named_parameters()
                     }
                     for param_name, param in module.named_parameters():
-                        assert isinstance(param, BRRRParameter)
+                        assert isinstance(param, NanotronParameter)
                         if param.is_tied:
                             tied_info = param.get_tied_info()
                             full_param_name = tied_info.get_full_name_from_module_id_to_prefix(
@@ -1032,7 +1032,7 @@ class GPTForTraining(BRRRModel):
                         name for name, _ in module.named_parameters()
                     }
                     for param_name, param in module.named_parameters():
-                        assert isinstance(param, BRRRParameter)
+                        assert isinstance(param, NanotronParameter)
                         if param.is_tied:
                             tied_info = param.get_tied_info()
                             full_param_name = tied_info.get_full_name_from_module_id_to_prefix(
@@ -1057,7 +1057,7 @@ class GPTForTraining(BRRRModel):
                 elif isinstance(module, LayerNorm):
                     assert {"weight", "bias"} == {name for name, _ in module.named_parameters()}
                     for param_name, param in module.named_parameters():
-                        assert isinstance(param, BRRRParameter)
+                        assert isinstance(param, NanotronParameter)
                         if param.is_tied:
                             tied_info = param.get_tied_info()
                             full_param_name = tied_info.get_full_name_from_module_id_to_prefix(
@@ -1093,7 +1093,7 @@ class GPTForTraining(BRRRModel):
                         name for name, _ in module.named_parameters()
                     }
                     for param_name, param in module.named_parameters():
-                        assert isinstance(param, BRRRParameter)
+                        assert isinstance(param, NanotronParameter)
                         if param.is_tied:
                             tied_info = param.get_tied_info()
                             full_param_name = tied_info.get_full_name_from_module_id_to_prefix(
@@ -1125,7 +1125,7 @@ class GPTForTraining(BRRRModel):
                     # Instead I'm lazy and just going to run init_method, since they are scalar independent
                     assert {"weight"} == {name for name, _ in module.named_parameters()}
 
-                    assert isinstance(module.weight, BRRRParameter)
+                    assert isinstance(module.weight, NanotronParameter)
                     if module.weight.is_tied:
                         tied_info = module.weight.get_tied_info()
                         full_param_name = tied_info.get_full_name_from_module_id_to_prefix(

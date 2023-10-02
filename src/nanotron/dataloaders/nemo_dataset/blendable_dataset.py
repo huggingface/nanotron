@@ -19,10 +19,10 @@ import time
 import numpy as np
 import torch
 
-from brrr.core import distributed as dist
-from brrr.core import logging
-from brrr.core.logging import log_rank
-from brrr.core.process_groups_initializer import DistributedProcessGroups
+from nanotron.core import distributed as dist
+from nanotron.core import logging
+from nanotron.core.logging import log_rank
+from nanotron.core.process_groups_initializer import DistributedProcessGroups
 
 from .dataset_utils import compile_helper
 

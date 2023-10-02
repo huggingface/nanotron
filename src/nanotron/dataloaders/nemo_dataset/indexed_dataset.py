@@ -36,9 +36,9 @@ from itertools import accumulate
 import numpy as np
 import torch
 
-from brrr.core import logging
-from brrr.core.logging import log_rank
-from brrr.core.serialize.path import get_filesystem_and_path
+from nanotron.core import logging
+from nanotron.core.logging import log_rank
+from nanotron.core.serialize.path import get_filesystem_and_path
 
 logger = logging.get_logger(__name__)
 # logging.getLogger('botocore').setLevel(logging.WARNING)

@@ -5,22 +5,22 @@ from typing import Generator, Iterable, List, Optional, Tuple, Union
 import torch
 from transformers import LlamaTokenizer
 
-from brrr.core import distributed as dist
-from brrr.core.dataclass import DistributedProcessGroups
-from brrr.core.distributed import ProcessGroup, get_global_rank
-from brrr.core.parallelism.pipeline_parallelism.block import get_min_max_rank
-from brrr.core.parallelism.pipeline_parallelism.context_manager import attach_pipeline_state_to_model
-from brrr.core.parallelism.pipeline_parallelism.p2p import (
+from nanotron.core import distributed as dist
+from nanotron.core.dataclass import DistributedProcessGroups
+from nanotron.core.distributed import ProcessGroup, get_global_rank
+from nanotron.core.parallelism.pipeline_parallelism.block import get_min_max_rank
+from nanotron.core.parallelism.pipeline_parallelism.context_manager import attach_pipeline_state_to_model
+from nanotron.core.parallelism.pipeline_parallelism.p2p import (
     P2P,
     TensorMetaData,
     view_as_contiguous,
 )
-from brrr.core.parallelism.pipeline_parallelism.state import PipelineEvalBatchState
-from brrr.core.parallelism.pipeline_parallelism.tensor_pointer import TensorPointer
-from brrr.core.utils import get_untyped_storage
-from brrr.models.llama import LlamaModel
-from brrr.sampler import BasicSampler
-from brrr.store import Store, attach_store
+from nanotron.core.parallelism.pipeline_parallelism.state import PipelineEvalBatchState
+from nanotron.core.parallelism.pipeline_parallelism.tensor_pointer import TensorPointer
+from nanotron.core.utils import get_untyped_storage
+from nanotron.models.llama import LlamaModel
+from nanotron.sampler import BasicSampler
+from nanotron.store import Store, attach_store
 
 
 @dataclasses.dataclass

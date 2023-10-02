@@ -24,28 +24,28 @@ from torch.nn.parallel import DistributedDataParallel
 from transformers import LlamaConfig
 from transformers.activations import ACT2FN
 
-from brrr.config import ParallelismArgs, RecomputeGranularity
-from brrr.core import distributed as dist
-from brrr.core import logging
-from brrr.core.dataclass import RandomStates
-from brrr.core.logging import log_rank
-from brrr.core.parallelism.parameters import BRRRParameter
-from brrr.core.parallelism.pipeline_parallelism.block import PipelineBlock, TensorPointer
-from brrr.core.parallelism.pipeline_parallelism.p2p import P2P
-from brrr.core.parallelism.tensor_parallelism.functional import sharded_cross_entropy
-from brrr.core.parallelism.tensor_parallelism.nn import (
+from nanotron.config import ParallelismArgs, RecomputeGranularity
+from nanotron.core import distributed as dist
+from nanotron.core import logging
+from nanotron.core.dataclass import RandomStates
+from nanotron.core.logging import log_rank
+from nanotron.core.parallelism.parameters import NanotronParameter
+from nanotron.core.parallelism.pipeline_parallelism.block import PipelineBlock, TensorPointer
+from nanotron.core.parallelism.pipeline_parallelism.p2p import P2P
+from nanotron.core.parallelism.tensor_parallelism.functional import sharded_cross_entropy
+from nanotron.core.parallelism.tensor_parallelism.nn import (
     TensorParallelColumnLinear,
     TensorParallelEmbedding,
     TensorParallelLinearMode,
     TensorParallelRowLinear,
 )
-from brrr.core.parallelism.tied_parameters import (
+from nanotron.core.parallelism.tied_parameters import (
     get_tied_id_to_param,
 )
-from brrr.core.process_groups_initializer import DistributedProcessGroups
-from brrr.core.utils import checkpoint_method
-from brrr.models import BRRRModel
-from brrr.store import AttachableStore
+from nanotron.core.process_groups_initializer import DistributedProcessGroups
+from nanotron.core.utils import checkpoint_method
+from nanotron.models import NanotronModel
+from nanotron.store import AttachableStore
 
 logger = logging.get_logger(__name__)
 
@@ -673,7 +673,7 @@ class Loss(nn.Module):
         return {"loss": loss}
 
 
-class LlamaForTraining(BRRRModel):
+class LlamaForTraining(NanotronModel):
     def __init__(
         self,
         config: LlamaConfig,
@@ -745,7 +745,7 @@ class LlamaForTraining(BRRRModel):
                     name for name, _ in module.named_parameters()
                 }
                 for param_name, param in module.named_parameters():
-                    assert isinstance(param, BRRRParameter)
+                    assert isinstance(param, NanotronParameter)
                     if param.is_tied:
                         tied_info = param.get_tied_info()
                         full_param_name = tied_info.get_full_name_from_module_id_to_prefix(
@@ -778,7 +778,7 @@ class LlamaForTraining(BRRRModel):
                     name for name, _ in module.named_parameters()
                 }
                 for param_name, param in module.named_parameters():
-                    assert isinstance(param, BRRRParameter)
+                    assert isinstance(param, NanotronParameter)
                     if param.is_tied:
                         tied_info = param.get_tied_info()
                         full_param_name = tied_info.get_full_name_from_module_id_to_prefix(
@@ -803,7 +803,7 @@ class LlamaForTraining(BRRRModel):
             elif isinstance(module, RMSNorm):
                 assert {"weight"} == {name for name, _ in module.named_parameters()}
                 for param_name, param in module.named_parameters():
-                    assert isinstance(param, BRRRParameter)
+                    assert isinstance(param, NanotronParameter)
                     if param.is_tied:
                         tied_info = param.get_tied_info()
                         full_param_name = tied_info.get_full_name_from_module_id_to_prefix(
@@ -836,7 +836,7 @@ class LlamaForTraining(BRRRModel):
                 # Instead I'm lazy and just going to run init_method, since they are scalar independent
                 assert {"weight"} == {name for name, _ in module.named_parameters()}
 
-                assert isinstance(module.weight, BRRRParameter)
+                assert isinstance(module.weight, NanotronParameter)
                 if module.weight.is_tied:
                     tied_info = module.weight.get_tied_info()
                     full_param_name = tied_info.get_full_name_from_module_id_to_prefix(
