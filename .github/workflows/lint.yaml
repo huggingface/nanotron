@@ -1,0 +1,43 @@
+name: lint
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check_code_quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Python
+        id: setup_python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"
+      - name: Load cached virtual environment
+        uses: actions/cache@v3
+        id: cache-venv
+        with:
+          path: |
+            ~/.venv/
+            ~/.cache/pre-commit/
+            .git/hooks/pre-commit
+          key: ${{ runner.os }}-${{ steps.setup_python.outputs.python-version }}-venv-${{ hashFiles('pyproject.toml') }}
+      - name: Install dependencies
+        run: |
+          python -m venv ~/.venv
+          source ~/.venv/bin/activate
+          python -m pip install -e .[dev]
+          pre-commit install
+        if: steps.cache-venv.outputs.cache-hit != 'true'
+      - name: Check quality
+        run: |
+          source ~/.venv/bin/activate
+          python -m pip install --no-deps -e .[dev]
+          pre-commit run --config .pre-commit-config-check.yaml --all-files

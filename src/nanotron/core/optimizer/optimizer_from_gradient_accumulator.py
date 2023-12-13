@@ -1,5 +1,5 @@
 from functools import cache
-from typing import Any, Callable, Dict, Iterable, Optional, Set, Tuple, Union
+from typing import Any, Callable, Dict, Iterable, Iterator, Optional, Set, Tuple, Union
 
 import torch
 
@@ -12,8 +12,8 @@ from nanotron.core.parallelism.parameters import NanotronParameter
 class OptimizerFromGradientAccumulator(InheritFromOtherOptimizer):
     def __init__(
         self,
-        gradient_accumulator_builder: Callable[[Iterable[Tuple[str, NanotronParameter]]], GradientAccumulator],
-        named_params_or_groups: Iterable[Union[Tuple[str, torch.Tensor], Dict[str, Any]]],
+        gradient_accumulator_builder: Callable[[Iterator[Tuple[str, NanotronParameter]]], GradientAccumulator],
+        named_params_or_groups: Iterator[Union[Tuple[str, torch.Tensor], Dict[str, Any]]],
         optimizer_builder: Callable[[Iterable[Dict[str, Any]]], BaseOptimizer],
     ):
         named_param_groups = list(named_params_or_groups)

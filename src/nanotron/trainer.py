@@ -6,7 +6,7 @@ import os
 import sys
 import time
 from pprint import pformat
-from typing import Callable, Dict, Iterable, Iterator, List, Optional, Tuple, Union
+from typing import Callable, Dict, Iterable, Iterator, List, Optional, Union
 
 import numpy as np
 import torch
@@ -126,17 +126,7 @@ class DistributedTrainer:
         )
 
         # Do a first NCCL sync to warmup and try to avoid Timeout after model/data loading
-        test_tensor = torch.tensor([dist.get_rank(self.dpg.world_pg)], device=torch.device("cuda"))
-        test_tensor_list = [torch.zeros_like(test_tensor) for _ in range(self.dpg.world_pg.size())]
-        dist.all_gather(test_tensor_list, test_tensor, group=self.dpg.world_pg, async_op=False)
-        dist.barrier()
-        log_rank(
-            f"Test NCCL sync for ranks {[t.item() for t in test_tensor_list]}",
-            logger=logger,
-            level=logging.INFO,
-            group=self.dpg.dp_pg,
-            rank=0,
-        )
+        self.run_nccl_test()
 
         # Set random states
         set_random_seed(self.config.model.seed)
@@ -238,12 +228,7 @@ class DistributedTrainer:
 
         # TODO @nouamanetazi: refactor this
         # Useful mapping
-        self.normalized_model = self.model.module if isinstance(self.model, DistributedDataParallel) else self.model
-        self.module_id_to_prefix = {
-            id(module): f"{module_name}." for module_name, module in self.normalized_model.named_modules()
-        }
-        # Fix the root_model
-        self.module_id_to_prefix[id(self.normalized_model)] = ""
+        self.unwrapped_model = self.model.module if isinstance(self.model, DistributedDataParallel) else self.model
 
         prof = get_profiler(config=self.config)
         with self.tb_context as tb_writer:
@@ -318,7 +303,7 @@ class DistributedTrainer:
         # Sync tied weights
         # TODO @nouamane: Put this in hooks so we can overlap communication with gradient computation on the last backward pass.
         sync_tied_weights_gradients(
-            module=self.normalized_model,
+            module=self.unwrapped_model,
             dpg=self.dpg,
             grad_accumulator=self.grad_accumulator,
         )
@@ -337,15 +322,8 @@ class DistributedTrainer:
         if self.config.optimizer.clip_grad is not None:
             # Normalize DDP
             named_parameters = [
-                (
-                    param.get_tied_info().get_full_name_from_module_id_to_prefix(
-                        module_id_to_prefix=self.module_id_to_prefix
-                    )
-                    if param.is_tied
-                    else name,
-                    param,
-                )
-                for name, param in self.normalized_model.named_parameters()
+                (name, param)
+                for name, param in self.unwrapped_model.get_named_params_with_tied()
                 if param.requires_grad
             ]
             # TODO @nouamane: we need to split `world_rank_matrix` along PP axis, to separate ref from active model
@@ -477,8 +455,6 @@ class DistributedTrainer:
         pipeline_blocks = [module for name, module in model.named_modules() if isinstance(module, PipelineBlock)]
         # "cuda" is already defaulted for each process to it's own cuda device
         with init_on_device_and_dtype(device=device, dtype=dtype):
-            # TODO: https://github.com/huggingface/nanotron/issues/65
-
             # Balance compute across PP blocks
             block_compute_costs = model.get_block_compute_costs()
             block_cumulative_costs = np.cumsum(
@@ -574,7 +550,7 @@ class DistributedTrainer:
         model_config: AutoConfig,
         model_builder: Callable[[], NanotronModel],
         target_pp_ranks: Optional[List[int]] = None,
-    ) -> Tuple[NanotronModel]:
+    ) -> NanotronModel:
         config = self.config
         dpg = self.dpg
 
@@ -731,8 +707,8 @@ class DistributedTrainer:
             # SANITY CHECK: Tied weights are synchronized
             tied_params_list = sorted(
                 get_tied_id_to_param(
-                    parameters=self.normalized_model.parameters(),
-                    root_module=self.normalized_model,
+                    parameters=self.unwrapped_model.parameters(),
+                    root_module=self.unwrapped_model,
                 ).items(),
                 key=lambda x: x[0],
             )
@@ -761,14 +737,14 @@ class DistributedTrainer:
             # SANITY CHECK: Check that gradient flow on the entire model
             # SANITY CHECK: Check that all parameters that required gradients, have actually a gradient
             # SANITY CHECK: Check for nan/inf
-            for name, param in self.normalized_model.named_parameters():
+            for name, param in self.unwrapped_model.named_parameters():
                 if not param.requires_grad:
                     continue
 
                 if param.is_tied:
                     tied_info = param.get_tied_info()
                     name = tied_info.get_full_name_from_module_id_to_prefix(
-                        module_id_to_prefix=self.module_id_to_prefix
+                        module_id_to_prefix=self.unwrapped_model.module_id_to_prefix
                     )
 
                 if self.grad_accumulator is not None:
@@ -790,7 +766,7 @@ class DistributedTrainer:
             # SANITY CHECK: Test tied weights gradients are synchronized
             for (name, group_ranks), param in sorted(
                 get_tied_id_to_param(
-                    parameters=self.normalized_model.parameters(), root_module=self.normalized_model
+                    parameters=self.unwrapped_model.parameters(), root_module=self.unwrapped_model
                 ).items(),
                 key=lambda x: x[0],
             ):
@@ -811,14 +787,14 @@ class DistributedTrainer:
                 )
 
             # SANITY CHECK: Test gradients are synchronized across DP
-            for name, param in sorted(self.normalized_model.named_parameters(), key=lambda x: x[0]):
+            for name, param in sorted(self.unwrapped_model.named_parameters(), key=lambda x: x[0]):
                 if not param.requires_grad:
                     continue
 
                 if param.is_tied:
                     tied_info = param.get_tied_info()
                     name = tied_info.get_full_name_from_module_id_to_prefix(
-                        module_id_to_prefix=self.module_id_to_prefix
+                        module_id_to_prefix=self.unwrapped_model.module_id_to_prefix
                     )
 
                 if self.grad_accumulator is not None:
@@ -842,7 +818,7 @@ class DistributedTrainer:
             # SANITY CHECK: Tied weights are synchronized
             tied_params_list = sorted(
                 get_tied_id_to_param(
-                    parameters=self.normalized_model.parameters(), root_module=self.normalized_model
+                    parameters=self.unwrapped_model.parameters(), root_module=self.unwrapped_model
                 ).items(),
                 key=lambda x: x[0],
             )
@@ -869,7 +845,22 @@ class DistributedTrainer:
                         level=logging.ERROR,
                     )
 
+    def run_nccl_test(self) -> None:
+        """NCCL sanity check"""
+        test_tensor = torch.tensor([dist.get_rank(self.dpg.world_pg)], device=torch.device("cuda"))
+        test_tensor_list = [torch.zeros_like(test_tensor) for _ in range(self.dpg.world_pg.size())]
+        dist.all_gather(test_tensor_list, test_tensor, group=self.dpg.world_pg, async_op=False)
+        dist.barrier()
+        log_rank(
+            f"Test NCCL sync for ranks {[t.item() for t in test_tensor_list]}",
+            logger=logger,
+            level=logging.INFO,
+            group=self.dpg.dp_pg,
+            rank=0,
+        )
 
+
+# TODO @nouamane: move to NanotronModel like tflops because it depends on the model
 def mark_tied_parameters(
     model: NanotronModel, dpg: DistributedProcessGroups, parallel_config: Optional[ParallelismArgs] = None
 ):
