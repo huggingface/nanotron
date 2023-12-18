@@ -1,32 +1,27 @@
-# Copyright (c) 2022, NVIDIA CORPORATION. All rights reserved.
-
-"""
-This code is copied fron NVIDIA apex:
-https://github.com/NVIDIA/apex
-with some changes.
-"""
+# Copyright (c) 2020, NVIDIA CORPORATION.  All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Modified by nanotron team.
 
 import importlib
 import numbers
+from typing import List, Union
 
 import torch
+import torch.nn as nn
 from torch.nn import init
 from torch.nn.parameter import Parameter
-
-# try:
-#     from apex.contrib.layer_norm.layer_norm import FastLayerNormFN
-
-#     HAVE_PERSIST_LAYER_NORM = True
-# except:
-#     HAVE_PERSIST_LAYER_NORM = False
-
-# try:
-#     from apex.normalization.fused_layer_norm import FusedLayerNormAffineFunction
-# except:
-#     FusedLayerNormAffineFunction = None
-
-global fused_layer_norm_cuda
-fused_layer_norm_cuda = None
 
 
 def _is_fast_layer_norm_available() -> bool:
@@ -58,7 +53,7 @@ def _kernel_make_viewless_tensor(inp, requires_grad):
     return out
 
 
-class MakeViewlessTensor(torch.autograd.Function):
+class _MakeViewlessTensor(torch.autograd.Function):
     """
     Autograd function to make a viewless tensor.
 
@@ -77,7 +72,7 @@ class MakeViewlessTensor(torch.autograd.Function):
         return grad_output, None
 
 
-def make_viewless_tensor(inp, requires_grad, keep_graph):
+def _make_viewless_tensor(inp, requires_grad, keep_graph):
     """
     Entry-point for creating viewless tensors.
 
@@ -93,27 +88,25 @@ def make_viewless_tensor(inp, requires_grad, keep_graph):
 
     # create viewless tensor
     if keep_graph:
-        return MakeViewlessTensor.apply(inp, requires_grad)
+        return _MakeViewlessTensor.apply(inp, requires_grad)
     else:
         return _kernel_make_viewless_tensor(inp, requires_grad)
 
 
-class MixedFusedLayerNorm(torch.nn.Module):
-    """MixedFusedLayerNorm ported from Megatron-LM.
+class FusedLayerNorm(nn.Module):
+    """This is MixedFusedLayerNorm ported from Megatron-LM.
     https://github.com/NVIDIA/Megatron-LM/blob/fab0bd693ec5be55b32c4f12a1ea44766ec63448/megatron/model/fused_layer_norm.py#L30
     """
 
     def __init__(
-        self, normalized_shape, eps=1e-5, no_persist_layer_norm=True, sequence_parallel=False, apply_layernorm_1p=False
+        self,
+        normalized_shape: Union[int, List[int], torch.Tensor],
+        eps: float = 1e-5,
+        no_persist_layer_norm: bool = True,
+        apply_layernorm_1p: bool = False,
     ):
-        super(MixedFusedLayerNorm, self).__init__()
-
-        self.apply_layernorm_1p = apply_layernorm_1p
-
-        global fused_layer_norm_cuda
-        fused_layer_norm_cuda = importlib.import_module("fused_layer_norm_cuda")
-
-        # List of hiddens sizes supported in the persistent layer norm kernel
+        super(FusedLayerNorm, self).__init__()
+        # List of hiddens sizes supported in the persistentlayer norm kernel
         # If the hidden size is not supported, fall back to the non-persistent
         # kernel.
         persist_ln_hidden_sizes = [
@@ -143,21 +136,21 @@ class MixedFusedLayerNorm(torch.nn.Module):
             65536,
         ]
         if normalized_shape not in persist_ln_hidden_sizes or not _is_fast_layer_norm_available():
+            assert (
+                _is_fused_layer_norm_available() is True
+            ), "FusedLayerNormAffineFunction is not available, please install apex from https://github.com/NVIDIA/apex"
             no_persist_layer_norm = True
 
         if isinstance(normalized_shape, numbers.Integral):
             normalized_shape = (normalized_shape,)
+
+        self.apply_layernorm_1p = apply_layernorm_1p
         self.normalized_shape = torch.Size(normalized_shape)
         self.eps = eps
         self.weight = Parameter(torch.Tensor(*normalized_shape))
         self.bias = Parameter(torch.Tensor(*normalized_shape))
-        self.reset_parameters()
         self.no_persist_layer_norm = no_persist_layer_norm
-        self.sequence_parallel = sequence_parallel
-
-        # set sequence parallelism flag on weight and bias parameters
-        setattr(self.weight, "sequence_parallel", self.sequence_parallel)
-        setattr(self.bias, "sequence_parallel", self.sequence_parallel)
+        self.reset_parameters()
 
     def reset_parameters(self):
         if self.apply_layernorm_1p:
@@ -167,19 +160,17 @@ class MixedFusedLayerNorm(torch.nn.Module):
             init.ones_(self.weight)
             init.zeros_(self.bias)
 
-    def forward(self, input):
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
         weight = self.weight + 1 if self.apply_layernorm_1p else self.weight
 
         if self.no_persist_layer_norm:
-            assert (
-                _is_fused_layer_norm_available() is not None
-            ), "FusedLayerNormAffineFunction is not available, please install apex from https://github.com/NVIDIA/apex"
-            # NOTE: memory_efficient from https://github.com/NVIDIA/apex/blob/ccffcc43489f2d3556eab2cff1953e4962fba5b4/apex/normalization/fused_layer_norm.py#L34
-            memory_efficient = True
             from apex.normalization.fused_layer_norm import FusedLayerNormAffineFunction
 
+            # NOTE: apex version from https://github.com/NVIDIA/apex/commit/2386a912164b0c5cfcd8be7a2b890fbac5607c82
+            # is required for memory_efficien
+            MEMORY_EFFICIENT = True
             return FusedLayerNormAffineFunction.apply(
-                input, weight, self.bias, self.normalized_shape, self.eps, memory_efficient
+                input, weight, self.bias, self.normalized_shape, self.eps, MEMORY_EFFICIENT
             )
         else:
             from apex.contrib.layer_norm.layer_norm import FastLayerNormFN
@@ -190,6 +181,6 @@ class MixedFusedLayerNorm(torch.nn.Module):
             # a populated '_base' field). This will result in schedule.py's
             # deallocate_output_tensor() throwing an error, so a viewless tensor is
             # created to prevent this.
-            output = make_viewless_tensor(inp=output, requires_grad=input.requires_grad, keep_graph=True)
+            output = _make_viewless_tensor(inp=output, requires_grad=input.requires_grad, keep_graph=True)
 
             return output
