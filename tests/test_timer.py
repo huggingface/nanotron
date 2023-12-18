@@ -1,3 +1,5 @@
+import logging
+
 import pytest
 import torch
 from helpers.utils import available_gpus
@@ -11,7 +13,7 @@ def hardcore_function():
 
 
 @pytest.mark.skipif(available_gpus() < 1, reason="Need at least 1 GPU to run this test")
-@pytest.mark.parametrize("stream", ["default", "non_default"])
+@pytest.mark.parametrize("stream", [None, "default", "non_default"])
 def test_record_time(stream):
     stream = torch.cuda.default_stream() if stream == "default" else torch.cuda.Stream()
     EVENT_NAME = "test_timing"
@@ -26,3 +28,18 @@ def test_record_time(stream):
 
     elapsed_time = timer.elapsed(EVENT_NAME, stream=stream)
     assert elapsed_time > 0
+
+
+def test_logging_in_time_recorder(caplog):
+    EVENT_NAME = "test_timing"
+    timer = TimeRecorder()
+
+    with caplog.at_level(logging.INFO):
+        timer.start(EVENT_NAME)
+        hardcore_function()
+        timer.end(EVENT_NAME)
+
+        assert "[TimeRecorder]" in caplog.text
+
+    assert len(caplog.records) == 1
+    assert caplog.records[0].levelno == logging.INFO

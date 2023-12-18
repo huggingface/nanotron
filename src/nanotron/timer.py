@@ -1,15 +1,39 @@
-from typing import Dict, Tuple
+import logging
+from typing import Dict, Literal, Tuple
 
 import torch
+
+from nanotron.constants import TIME_RECORDER_MESSAGE
 
 
 class TimeRecorder:
     """Record time between two events on a given CUDA stream."""
 
-    def __init__(self):
+    LOG_LEVELS = ["INFO", "DEBUG", "WARNING", "ERROR"]
+
+    def __init__(
+        self,
+        is_logging: bool = True,
+        save_log: bool = True,
+        log_level: Literal["INFO", "DEBUG", "WARNING", "ERROR"] = "INFO",
+    ):
+        self.is_logging = is_logging
+        self.save_log = save_log
+        self.log_level = getattr(logging, log_level)
+
         self._start_events: Dict[Tuple[str, torch.cuda.Stream], torch.cuda.Event] = {}
         self._end_events: Dict[Tuple[str, torch.cuda.Stream], torch.cuda.Event] = {}
         self._streams: Dict[Tuple[str, torch.cuda.Stream], torch.cuda.Stream] = {}
+
+        self._setup_logger()
+
+    def _setup_logger(self):
+        formatter = logging.Formatter("nanotron - %(name)s - %(levelname)s: %(message)s")
+        handler = logging.StreamHandler()
+        handler.setFormatter(formatter)
+
+        self._logger = logging.getLogger(__name__)
+        self._logger.addHandler(handler)
 
     def start(self, name: str, stream: torch.cuda.Stream = None):
         """Start recording time in a given stream.
@@ -39,6 +63,11 @@ class TimeRecorder:
         self._sanity_check(name, stream)
         self._end_events[(name, stream)].record(stream)
 
+        if self.is_logging:
+            self._logger.log(
+                self.log_level, TIME_RECORDER_MESSAGE.format(name=name, elapsed_time=self.elapsed(name, stream))
+            )
+
     def elapsed(self, name: str, stream: torch.cuda.Stream = None) -> float:
         """Return elapsed time in a given stream.
 
@@ -46,7 +75,9 @@ class TimeRecorder:
             name: Name of the event.
             stream: CUDA stream to record the event on.
         """
+        stream = stream or torch.cuda.current_stream()
         self._sanity_check(name, stream)
+
         end_event = self._end_events[(name, stream)]
         end_event.synchronize()
         return self._start_events[(name, stream)].elapsed_time(end_event)
