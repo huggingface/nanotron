@@ -15,8 +15,9 @@
 """ PyTorch LLaMa model.
 """
 from functools import lru_cache
-from typing import Dict, Optional, Union
+from typing import Dict, Optional, Union, Tuple
 
+from einops import rearrange
 import torch
 from torch import nn
 from transformers.activations import ACT2FN
@@ -42,7 +43,6 @@ from nanotron.models import AttachableStore, NanotronModel
 
 logger = logging.get_logger(__name__)
 
-
 class RMSNorm(nn.Module):
     def __init__(self, normalized_shape, eps=1e-6):
         """
@@ -63,69 +63,208 @@ class RMSNorm(nn.Module):
 
         return self.weight * input
 
+# Begin RoPE
+def apply_rotary_emb(
+    x: torch.FloatTensor,
+    cos: torch.FloatTensor,
+    sin: torch.FloatTensor,
+) -> torch.FloatTensor:
+    _, seqlen, _, head_dim = x.shape
+    rotary_seqlen, rotary_dim = cos.shape
+    rotary_dim *= 2
+
+    assert rotary_dim <= head_dim
+    assert seqlen <= rotary_seqlen
+    assert cos.shape == sin.shape == (rotary_seqlen, rotary_dim // 2)
+
+    x_rot = x[:, :, :, :rotary_dim]
+    x_pass = x[:, :, :, rotary_dim:]
+
+    x1, x2 = x_rot.chunk(2, dim=-1)
+    c, s = rearrange(cos[:seqlen], "s d -> s 1 d"), rearrange(sin[:seqlen], "s d -> s 1 d")
+    x1, x2, c, s = [t.to(dtype=torch.float32) for t in [x1, x2, c, s]]
+
+    x_rot = torch.cat([x1 * c - x2 * s, x1 * s + x2 * c], axis=-1).to(x.dtype)
+
+    return torch.cat([x_rot, x_pass], axis=-1)
+
+def apply_rotary_emb_qkv(
+    qkv: torch.FloatTensor,
+    cos: torch.FloatTensor,
+    sin: torch.FloatTensor,
+    cos_k: Optional[torch.FloatTensor] = None,
+    sin_k: Optional[torch.FloatTensor] = None,
+) -> torch.FloatTensor:
+    _, seqlen, three, _, head_dim = qkv.shape
+    assert three == 3
+
+    rotary_seqlen, rotary_dim = cos.shape
+    rotary_dim *= 2
+    assert rotary_dim <= head_dim
+    assert seqlen <= rotary_seqlen
+    assert cos.shape == sin.shape == (rotary_seqlen, rotary_dim // 2)
+    
+    q = apply_rotary_emb(qkv[:, :, 0, :, :], cos[:seqlen], sin[:seqlen])
+    k = apply_rotary_emb(qkv[:, :, 1, :, :], cos[:seqlen], sin[:seqlen])
+    v = qkv[:, :, 2, :, :]
+
+    return torch.cat(
+        [
+            q.unsqueeze(2),
+            k.unsqueeze(2),
+            v.unsqueeze(2),
+        ],
+        axis=2,
+    )
+
+def apply_rotary_emb_kv(
+    kv: torch.FloatTensor,
+    cos: torch.FloatTensor,
+    sin: torch.FloatTensor,
+    cos_k: Optional[torch.FloatTensor] = None,
+    sin_k: Optional[torch.FloatTensor] = None,
+) -> torch.FloatTensor:
+    """
+    KV cache version
+    """    
+    _, seqlen, two, _, head_dim = kv.shape
+    assert two == 2
+
+    rotary_seqlen, rotary_dim = cos.shape
+    rotary_dim *= 2
+    assert rotary_dim <= head_dim
+    assert seqlen <= rotary_seqlen
+    assert cos.shape == sin.shape == (rotary_seqlen, rotary_dim // 2)
+
+    k = apply_rotary_emb(kv[:, :, 0, :, :], cos[:seqlen], sin[:seqlen])
+    v = kv[:, :, 1, :, :]
+
+    return torch.cat(
+        [
+            k.unsqueeze(2),
+            v.unsqueeze(2),
+        ],
+        axis=2,
+    )
 
 class RotaryEmbedding(nn.Module):
-    def __init__(self, dim: int, end: int, theta: float = 10000.0):
+    """Rotary positional embedding (RoPE).
+    Reference:
+        RoFormer: Enhanced Transformer with Rotary Position Embedding.
+        https://arxiv.org/pdf/2104.09864.pdf.
+    """
+
+    def __init__(
+        self,
+        dim: int,
+        base: int = 10000,
+        scale_base: Optional[float] = None,
+        pos_idx_in_fp32: bool = True,
+        device: Optional[str] = None,
+        **kwargs,
+    ) -> None:
+        """
+        If scale_base is not None, this implements XPos (Sun et al., https://arxiv.org/abs/2212.10554).
+        A recommended value for scale_base is 512: https://github.com/HazyResearch/flash-attention/issues/96
+        Reference: https://github.com/sunyt32/torchscale/blob/main/torchscale/component/xpos_relative_position.py
+        """
         super().__init__()
-        assert dim % 2 == 0
+
+        if scale_base is not None:
+            raise NotImplementedError("XPos version is not implemented yet.")
+
         self.dim = dim
-        self.end = end
-        self.theta = theta
-        # TODO @nouamane: Figure out why we can't set `DTypeInvariantTensor` ...
-        # TODO @thomasw21: Complex buffers break DDP, instead we store float and view them as complex
-        self.freqs_cis: torch.Tensor
-        self.register_buffer(
-            "freqs_cis",
-            torch.empty(self.end, self.dim // 2, 2, dtype=torch.float),
-            persistent=False,
-        )
-        self._initialized_buffer = False
+        self.base = float(base)
+        self.scale_base = scale_base
+        self.pos_idx_in_fp32 = pos_idx_in_fp32
+        self.device = device
 
-    def init_rotary_embeddings(self):
-        if self._initialized_buffer is True:
-            # Buffer if already initialized
-            return
+        # Generate and save the inverse frequency buffer (non-trainable)
+        inv_freq = self._compute_inv_freq(device)
+        self.register_buffer("inv_freq", inv_freq, persistent=False)
 
-        assert self.freqs_cis.device.type == "cuda"
-        # TODO @nouamane: One we figure out how to do the DTypeInvariantTensor, this can be removed and changed to an assert
-        if self.freqs_cis.dtype != torch.float:
-            self.freqs_cis = self.freqs_cis.to(torch.float)
-        assert self.freqs_cis.dtype == torch.float
-        freqs = 1.0 / (
-            self.theta
-            ** (torch.arange(0, self.dim, 2, dtype=torch.float, device="cuda")[: (self.dim // 2)] / self.dim)
+        # Generate and save the scale buffer (non-trainable)
+        scale = (
+            (torch.arange(0, dim, 2, device=device, dtype=torch.float32) + 0.4 * dim) / (1.4 * dim)
+            if scale_base is not None
+            else None
         )
-        t = torch.arange(self.end, device="cuda")
-        freqs = torch.outer(t, freqs).float()
-        complex_freqs = torch.polar(torch.ones_like(freqs), freqs)
-        freqs = torch.view_as_real(complex_freqs)
-        self.freqs_cis.copy_(freqs)
-        self._initialized_buffer = True
+        self.register_buffer("scale", scale, persistent=False)
+
+        self._seq_len_cached = 0
+        self._cos_cached = None
+        self._sin_cached = None
+        self._cos_k_cached = None
+        self._sin_k_cached = None
+
+    def _compute_inv_freq(self, device: Optional[str] = None) -> torch.FloatTensor:
+        return 1.0 / (self.base ** (torch.arange(0, self.dim, 2, device=device, dtype=torch.float32) / self.dim))
+
+    def _update_cos_sin_cache(
+        self, seqlen: int, device: Optional[str] = None, dtype: Optional[torch.dtype] = None
+    ) -> None:
+        # Reset the tables if sequence length has been chaned, if we are on a
+        # new device or if we are switching from inference mode to training
+        if (
+            seqlen > self._seq_len_cached
+            or self._cos_cached is None
+            or self._cos_cached.device != device
+            or self._cos_cached.dtype != dtype
+            or (self.training and self._cos_cached.is_inference())
+        ):
+            self._seq_len_cached = seqlen
+
+            # fp32 is preferred since the output of `torch.arange` can be quite large
+            # and bf16 would lose a lot of precision
+            if self.pos_idx_in_fp32:
+                t = torch.arange(seqlen, device=device, dtype=torch.float32)
+                if self.inv_freq.dtype != torch.float32:
+                    inv_freq = self._compute_inv_freq(device=device)
+                else:
+                    inv_freq = self.inv_freq
+            else:
+                t = torch.arange(seqlen, device=device, dtype=self.inv_freq.dtype)
+                inv_freq = self.inv_freq
+
+            # `torch.outer` is preferred since `torch.einsum` converts from fp32 to fp16 if used with AMP
+            freqs = torch.outer(t, inv_freq)
+            if self.scale is None:
+                self._cos_cached = torch.cos(freqs).to(dtype)
+                self._sin_cached = torch.sin(freqs).to(dtype)
+            else:
+                power = (
+                    torch.arange(seqlen, dtype=self.scale.dtype, device=self.scale.device) - seqlen // 2
+                ) / self.scale_base
+                scale = self.scale.to(device=power.device) ** rearrange(power, "s -> s 1")
+
+                # Force the scale multiplication to happen in fp32
+                self._cos_cached = (torch.cos(freqs) * scale).to(dtype)
+                self._sin_cached = (torch.sin(freqs) * scale).to(dtype)
+                self._cos_k_cached = (torch.cos(freqs) / scale).to(dtype)
+                self._sin_k_cached = (torch.sin(freqs) / scale).to(dtype)
 
     def forward(
         self,
-        x: torch.Tensor,  # [batch_size, num_heads, seq_length, inner_dim]
-        position_ids: Optional[torch.LongTensor],  # [batch_size, seq_length]
-    ):
-        if self._initialized_buffer is False:
-            self.init_rotary_embeddings()
-        batch_size, num_heads, seq_length, inner_dim = x.shape
-        dtype = x.dtype
-        assert inner_dim % 2 == 0
-        x = x.view(
-            batch_size, num_heads, seq_length, inner_dim // 2, 2
-        )  # [batch_size, num_heads, q_length, inner_dim]
-        if x.dtype == torch.bfloat16:
-            x = x.float()
-        complex_x = torch.view_as_complex(x)
-        if position_ids is None:
-            freqs_cis = self.freqs_cis[None, None, :seq_length, :]
-        else:
-            freqs_cis = self.freqs_cis[position_ids][:, None, :, :]
-        complex_freqs = torch.view_as_complex(freqs_cis)
-        x_out = torch.view_as_real(complex_x * complex_freqs).view(batch_size, num_heads, seq_length, inner_dim)
-        return x_out.type(dtype)
+        qkv: torch.Tensor,
+        kv: Optional[torch.Tensor] = None,
+        seqlen_offset: int = 0,
+        max_seqlen: Optional[int] = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        seqlen = qkv.shape[1]
 
+        if max_seqlen is not None:
+            self._update_cos_sin_cache(max_seqlen, device=qkv.device, dtype=qkv.dtype)
+        else:
+            self._update_cos_sin_cache(seqlen + seqlen_offset, device=qkv.device, dtype=qkv.dtype)
+
+        if kv is None:
+            return apply_rotary_emb_qkv(qkv, self._cos_cached[seqlen_offset:], self._sin_cached[seqlen_offset:])
+        else:
+            q = apply_rotary_emb(qkv, self._cos_cached[seqlen_offset:], self._sin_cached[seqlen_offset:])
+            kv = apply_rotary_emb_kv(kv, self._cos_cached[seqlen_offset:], self._sin_cached[seqlen_offset:])
+
+            return q, kv
+# End RoPE
 
 class MLP(nn.Module):
     def __init__(
