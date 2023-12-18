@@ -16,12 +16,14 @@
 
 import pytest
 import torch
+from helpers.utils import available_gpus
 from nanotron.kernels.layer_norm import FusedLayerNorm
 from torch.nn import LayerNorm
 from transformers import BertTokenizer
 from transformers.models.bert.modeling_bert import BertModel
 
 
+@pytest.mark.skipif(available_gpus() < 1, reason="Testing test_fused_layer_norm requires at least 1 gpus")
 @pytest.mark.parametrize("no_persist_layer_norm", [True, False])
 def test_fused_layer_norm(no_persist_layer_norm):
     bert = BertModel.from_pretrained("bert-base-cased").cuda().half()
