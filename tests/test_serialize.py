@@ -8,8 +8,6 @@ from helpers.utils import (
     init_distributed,
     is_dict_equal,
 )
-from torch.nn.parallel import DistributedDataParallel
-
 from nanotron.core import distributed as dist
 from nanotron.core.dataclass import DistributedProcessGroups, RandomStates
 from nanotron.core.gradient_accumulator import FP32GradientAccumulator
@@ -34,6 +32,7 @@ from nanotron.core.serialize import (
 )
 from nanotron.core.serialize.constants import CHECKPOINT_VERSION
 from nanotron.core.serialize.meta import TensorMetadataV2
+from torch.nn.parallel import DistributedDataParallel
 
 
 def test_save_and_load_with_changed_topolgy():
@@ -362,11 +361,11 @@ def _test_save_optimizer_with_additional_state_dict_keys(dpg: DistributedProcess
 
     if isinstance(model, DistributedDataParallel):
         # Remove the annoying "module." prefix
-        normalized_model = model.module
+        unwrapped_model = model.module
     else:
-        normalized_model = model
+        unwrapped_model = model
 
-    named_parameters = list(normalized_model.named_parameters())
+    named_parameters = list(unwrapped_model.named_parameters())
 
     optimizer = OptimizerFromGradientAccumulator(
         gradient_accumulator_builder=lambda named_params: FP32GradientAccumulator(named_parameters=named_params),
@@ -390,7 +389,7 @@ def _test_save_optimizer_with_additional_state_dict_keys(dpg: DistributedProcess
             model=model, pg=dpg.pp_pg, batch=[minibatch], grad_accumulator=grad_accumulator
         )
         # Manually sync tied parameters
-        sync_tied_weights_gradients(module=normalized_model, dpg=dpg, grad_accumulator=grad_accumulator)
+        sync_tied_weights_gradients(module=unwrapped_model, dpg=dpg, grad_accumulator=grad_accumulator)
         # Optimizer steps
         optimizer.step()
         optimizer.zero_grad()

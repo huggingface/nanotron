@@ -5,8 +5,6 @@ import pytest
 import torch
 from helpers.dummy import DummyModel, dummy_infinite_data_loader
 from helpers.utils import available_gpus, init_distributed
-from torch import nn
-
 from nanotron.clip_grads import clip_grad_norm
 from nanotron.core import distributed as dist
 from nanotron.core.gradient_accumulator import (
@@ -28,6 +26,7 @@ from nanotron.core.parallelism.tied_parameters import (
 )
 from nanotron.core.process_groups_initializer import DistributedProcessGroups
 from nanotron.core.utils import assert_tensor_synced_across_pg, init_on_device_and_dtype
+from torch import nn
 
 
 @pytest.mark.skipif(available_gpus() < 2, reason="test_clip_grads_with_pp requires at least 2 gpus")

@@ -2,7 +2,7 @@ import dataclasses
 from abc import ABC, abstractmethod
 from collections import OrderedDict
 from contextlib import contextmanager
-from typing import Callable, Dict, Iterator, Optional, Tuple
+from typing import Callable, Dict, Iterable, Iterator, Optional, Tuple
 
 import torch
 from torch.distributed import GradBucket
@@ -58,7 +58,7 @@ class FP32GradientAccumulator(GradientAccumulator):
     def __init__(
         self,
         named_parameters: Iterator[Tuple[str, NanotronParameter]],
-        grad_buckets_named_params: Optional[Iterator[Tuple[str, NanotronParameter]]] = None,
+        grad_buckets_named_params: Optional[Iterable[Tuple[str, NanotronParameter]]] = None,
     ):
         """Create a gradient accumulator that will accumulate gradients in fp32.
 

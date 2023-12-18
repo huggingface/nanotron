@@ -1,13 +1,11 @@
 import copy
 
+import nanotron.core.distributed as dist
 import pytest
 import torch
 from helpers.dummy import DummyModel, dummy_infinite_data_loader
 from helpers.exception import assert_fail_except_rank_with, timeout_after
 from helpers.utils import available_gpus, init_distributed
-from torch import nn
-
-import nanotron.core.distributed as dist
 from nanotron.core.dataclass import DistributedProcessGroups
 from nanotron.core.gradient_accumulator import FP32GradBucketManager, FP32GradientAccumulator, get_fp32_accum_hook
 from nanotron.core.optimizer import ZeroDistributedOptimizer
@@ -30,6 +28,7 @@ from nanotron.core.parallelism.tied_parameters import (
     tie_parameters,
 )
 from nanotron.core.utils import ContextManagers, assert_tensor_synced_across_pg, init_on_device_and_dtype
+from torch import nn
 
 
 @pytest.mark.parametrize("half_precision", [torch.float16, torch.bfloat16])

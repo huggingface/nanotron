@@ -2,9 +2,6 @@ from abc import ABC, abstractmethod
 from typing import Dict, Iterable, Optional, Union
 
 import torch
-from torch import nn as torch_nn
-from torch.nn.parallel import DistributedDataParallel
-
 from nanotron.core import distributed as dist
 from nanotron.core import logging
 from nanotron.core.distributed import ProcessGroup
@@ -15,6 +12,8 @@ from nanotron.core.parallelism.pipeline_parallelism.context_manager import attac
 from nanotron.core.parallelism.pipeline_parallelism.state import PipelineTrainBatchState
 from nanotron.core.parallelism.pipeline_parallelism.tensor_pointer import TensorPointer
 from nanotron.core.utils import ContextManagers
+from torch import nn as torch_nn
+from torch.nn.parallel import DistributedDataParallel
 
 logger = logging.get_logger(__name__)
 
