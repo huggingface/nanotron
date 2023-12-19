@@ -1,0 +1,87 @@
+general:
+  name: brrr_example_tiny_llama
+  ignore_sanity_checks: false
+  kill_switch_path: ./kill_tiny_llama
+
+profile: null
+
+checkpoints:
+  checkpoints_path: ./checkpoints
+  checkpoint_interval: 1500
+
+parallelism:
+  dp: 4
+  pp: 1
+  tp: 1
+  pp_engine: 1f1b
+  tp_mode: REDUCE_SCATTER
+  tp_linear_async_communication: false
+  recompute_granularity: selective
+
+model:
+  model_name: "tiny-random-llama-2"
+  make_vocab_size_divisible_by: 128
+  init_method:
+    std: 0.03608 # Basically 1/sqrt(N)
+  dtype: bfloat16
+  seed: 42
+
+
+logging:
+  # 'debug', 'info', 'warning', 'error', 'critical' and 'passive'
+  log_level: 'info'
+  log_level_replica: 'info'
+  iteration_step_info_interval: 10
+  tensorboard_logger:
+    tensorboard_dir: ./tensorboard
+    repo_id: 3outeille/my-brrr
+    push_to_hub_interval: 100
+
+tokens:
+  sequence_length: 256
+  train_steps: 15000  # Chinchilla scaling laws: 3B tokens ~= 15000 steps
+  micro_batch_size: 4
+  batch_accumulation_per_replica: 8
+  val_check_interval: 100
+  limit_val_batches: 50
+
+optimizer:
+  zero_stage: 1
+  weight_decay: 0.01
+  clip_grad: 1.0
+  accumulate_grad_in_fp32: true
+  adam_eps: 1.0e-8
+  adam_beta1: 0.9
+  adam_beta2: 0.98
+  torch_adam_is_fused: true
+  learning_rate: 5.0e-4
+
+learning_rate_scheduler:
+  lr_warmup_steps: 2000
+  lr_warmup_style: linear
+  lr_decay_steps: null
+  lr_decay_style: cosine
+  min_decay_lr: 0.0
+
+data: 
+  seed: 1234
+  num_loading_workers: 2
+  dataset: null
+  #   # Path to data must be specified by the user as an alternate list of weight/source
+  #   # see example below:
+  #   # data_prefix:
+  #   #   - .5
+  #   #   - /raid/data/pile/my-gpt3_00_text_document
+  #   #   - .5
+  #   #   - /raid/data/pile/my-gpt3_01_text_document
+  #   data_prefix:
+  #     - 1
+  #     - "/fsx/kunhao/data/oscar/oscar-dedup-25"  # "/fsx/kunhao/data/oscar/oscar-dedup-25"
+  #   index_mapping_dir: null # path to save index mapping .npy files, by default will save in the same location as data_prefix
+  #   splits_string: 900,50,50
+  #   skip_warmup: true
+  #   dataloader_type: single # cyclic
+  #   validation_drop_last: true # Set to false if the last partial validation samples is to be consumed
+  #   eod_mask_loss: false # Mask loss for the end of document tokens
+  #   no_seqlen_plus_one_input_tokens: false # Set to true to disable fetching (sequence length + 1) input tokens, instead get (sequence length) input tokens and mask the last token
+  #   pad_samples_to_global_batch_size: false # Set to true if you want to pad the last partial batch with -1's to equal global batch size
