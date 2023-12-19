@@ -16,40 +16,43 @@
 
 import os
 import time
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 from torch.utils.data import Dataset
+from transformers import PreTrainedTokenizerBase
 
 from nanotron.config import PretrainNemoArgs
-from nanotron.core import distributed as dist
-from nanotron.core import logging
-from nanotron.core.logging import log_rank
-from nanotron.core.process_groups_initializer import DistributedProcessGroups
-from nanotron.core.utils import main_rank_first
+from nanotron.nn import distributed as dist
+from nanotron import logging
+from nanotron.logging import log_rank
+from nanotron.nn.process_groups import DistributedProcessGroups
+from nanotron.nn.utils import main_rank_first
 
 from .blendable_dataset import BlendableDataset
 from .dataset_utils import (
-    compile_helper,
     get_datasets_weights_and_num_samples,
     get_train_valid_test_split_,
 )
-from .indexed_dataset import make_indexed_dataset
+from .indexed_dataset import MMapIndexedDataset, make_indexed_dataset
 
 logger = logging.get_logger(__name__)
 
 
 def build_dataset(
     cfg: PretrainNemoArgs,
-    data_prefix,
-    num_samples,
-    seq_length,
-    seed,
-    skip_warmup,
-    name,
+    tokenizer: PreTrainedTokenizerBase,
+    data_prefix: List[str],
+    num_samples: int,
+    seq_length: int,
+    seed: Any,
+    skip_warmup: bool,
+    name: str,
     dpg: DistributedProcessGroups,
-):
-    def _build_dataset(current_data_prefix, current_num_samples):
-        indexed_dataset = get_indexed_dataset_(current_data_prefix, skip_warmup)
+) -> Union["GPTDataset", BlendableDataset]:
+    def _build_dataset(current_data_prefix: str, current_num_samples: int) -> "GPTDataset":
+        indexed_dataset = get_indexed_dataset(current_data_prefix, skip_warmup)
         total_num_of_documents = indexed_dataset.sizes.shape[0]
         # Print stats about the splits.
 
@@ -65,6 +68,7 @@ def build_dataset(
             drop_last = cfg.validation_drop_last
         dataset = GPTDataset(
             cfg,
+            tokenizer,
             name,
             current_data_prefix,
             np.arange(start=0, stop=total_num_of_documents, step=1, dtype=np.int32),
@@ -92,14 +96,19 @@ def build_dataset(
 
 def build_train_valid_test_datasets(
     cfg: PretrainNemoArgs,
-    data_prefix,
-    splits_string,
-    train_valid_test_num_samples,
-    seq_length,
-    seed,
+    tokenizer: PreTrainedTokenizerBase,
+    data_prefix: Union[Dict, List],
+    splits_string: str,
+    train_valid_test_num_samples: Tuple[int, int, int],
+    seq_length: int,
+    seed: Any,
     dpg: DistributedProcessGroups,
-    skip_warmup,
-):
+    skip_warmup: bool,
+) -> Tuple[
+    Union["GPTDataset", "BlendableDataset", None],
+    Union["GPTDataset", "BlendableDataset", None],
+    Union["GPTDataset", "BlendableDataset", None],
+]:
     if isinstance(data_prefix, dict):
         assert (
             data_prefix.get("train") is not None
@@ -115,6 +124,7 @@ def build_train_valid_test_datasets(
             )
         train_ds = build_dataset(
             cfg,
+            tokenizer,
             data_prefix["train"],
             int(train_valid_test_num_samples[0]),
             seq_length,
@@ -125,6 +135,7 @@ def build_train_valid_test_datasets(
         )
         validation_ds = build_dataset(
             cfg,
+            tokenizer,
             data_prefix["validation"],
             int(train_valid_test_num_samples[1]),
             seq_length,
@@ -135,6 +146,7 @@ def build_train_valid_test_datasets(
         )
         test_ds = build_dataset(
             cfg,
+            tokenizer,
             data_prefix["test"],
             int(train_valid_test_num_samples[2]),
             seq_length,
@@ -148,11 +160,12 @@ def build_train_valid_test_datasets(
     else:
         # No data
         if len(data_prefix) == 0:
-            return (None, None, None)
+            return (None, None, None), []
         # Single dataset.
         if len(data_prefix) == 1:
             return _build_train_valid_test_datasets(
                 cfg,
+                tokenizer,
                 data_prefix[0],
                 splits_string,
                 train_valid_test_num_samples,
@@ -168,12 +181,13 @@ def build_train_valid_test_datasets(
         prefixes, weights, datasets_train_valid_test_num_samples = output
 
         # Build individual datasets.
-        train_datasets = []
-        valid_datasets = []
-        test_datasets = []
+        train_datasets: List["GPTDataset"] = []
+        valid_datasets: List["GPTDataset"] = []
+        test_datasets: List["GPTDataset"] = []
         for i in range(len(prefixes)):
             train_ds, valid_ds, test_ds = _build_train_valid_test_datasets(
                 cfg,
+                tokenizer,
                 prefixes[i],
                 splits_string,
                 datasets_train_valid_test_num_samples[i],
@@ -207,18 +221,19 @@ def build_train_valid_test_datasets(
 
 def _build_train_valid_test_datasets(
     cfg: PretrainNemoArgs,
-    data_prefix,
-    splits_string,
-    train_valid_test_num_samples,
-    seq_length,
-    seed,
+    tokenizer: PreTrainedTokenizerBase,
+    data_prefix: str,
+    splits_string: str,
+    train_valid_test_num_samples: int,
+    seq_length: int,
+    seed: Any,
     dpg: DistributedProcessGroups,
-    skip_warmup,
-):
+    skip_warmup: bool,
+) -> Tuple["GPTDataset", Optional["GPTDataset"], Optional["GPTDataset"]]:
     """Build train, valid, and test datasets."""
 
     # Indexed dataset.
-    indexed_dataset = get_indexed_dataset_(data_prefix, skip_warmup)
+    indexed_dataset = get_indexed_dataset(data_prefix, skip_warmup)
 
     total_num_of_documents = indexed_dataset.sizes.shape[0]
     splits = get_train_valid_test_split_(splits_string, total_num_of_documents)
@@ -240,7 +255,7 @@ def _build_train_valid_test_datasets(
     print_split_stats("validation", 1)
     print_split_stats("test", 2)
 
-    def build_dataset(index, name):
+    def build_dataset(index: int, name: str) -> GPTDataset:
         dataset = None
         if splits[index + 1] > splits[index]:
             documents = np.arange(start=splits[index], stop=splits[index + 1], step=1, dtype=np.int32)
@@ -249,6 +264,7 @@ def _build_train_valid_test_datasets(
                 drop_last = cfg.validation_drop_last
             dataset = GPTDataset(
                 cfg,
+                tokenizer,
                 name,
                 data_prefix,
                 documents,
@@ -268,7 +284,7 @@ def _build_train_valid_test_datasets(
     return (train_dataset, valid_dataset, test_dataset)
 
 
-def get_indexed_dataset_(data_prefix, skip_warmup):
+def get_indexed_dataset(data_prefix: str, skip_warmup: bool) -> MMapIndexedDataset:
     """Build indexed dataset."""
     log_rank(" > building dataset index ...", logger=logger, level=logging.INFO, rank=0)
 
@@ -287,19 +303,27 @@ def get_indexed_dataset_(data_prefix, skip_warmup):
     return indexed_dataset
 
 
+FIM_PREFIX = "<fim_prefix>"
+FIM_MIDDLE = "<fim_middle>"
+FIM_SUFFIX = "<fim_suffix>"
+FIM_PAD = "<fim_pad>"
+EOD = "<|endoftext|>"
+
+
 class GPTDataset(Dataset):
     def __init__(
         self,
         cfg: PretrainNemoArgs,
+        tokenizer: PreTrainedTokenizerBase,
         name: str,
         data_prefix: str,
-        documents: np.array,
-        indexed_dataset,
+        documents: np.ndarray,
+        indexed_dataset: MMapIndexedDataset,
         num_samples: int,
         seq_length: int,
         seed: int,
         dpg: DistributedProcessGroups,
-        drop_last=True,
+        drop_last: bool = True,
     ):
         super().__init__()
         self.name = name
@@ -320,6 +344,24 @@ class GPTDataset(Dataset):
         # save index mappings to a configurable dir
         self.index_mapping_dir = cfg.index_mapping_dir
 
+        # For FIM
+        self.fim_rate = cfg.fim_rate
+        self.fim_spm_rate = cfg.fim_spm_rate
+        if self.fim_rate > 1 or self.fim_rate < 0:
+            raise ValueError("FIM rate must be a probability 0 <= rate <= 1")
+        if self.fim_spm_rate > 1 or self.fim_spm_rate < 0:
+            raise ValueError("SPM rate must be a probability 0 <= rate <= 1")
+        self.tokenizer = tokenizer
+        self.suffix_tok_id, self.prefix_tok_id, self.middle_tok_id, self.pad_tok_id, self.eod_tok_id = (
+            self.tokenizer.vocab[tok] for tok in [FIM_SUFFIX, FIM_PREFIX, FIM_MIDDLE, FIM_PAD, EOD]
+        )
+        self.fim_split_sample = (
+            self.tokenizer.vocab[cfg.fim_split_sample] if cfg.fim_split_sample is not None else None
+        )
+        self.fragment_fim_rate = cfg.fragment_fim_rate
+        self.no_fim_prefix = cfg.no_fim_prefix
+        self.np_rng = np.random.RandomState(seed=seed)  # rng state for FIM
+
         # create index_mapping_dir on rank 0
         if dist.is_available() and dist.is_initialized():
             with main_rank_first(dpg.world_pg):
@@ -327,7 +369,7 @@ class GPTDataset(Dataset):
                     os.makedirs(self.index_mapping_dir)
 
         # Build index mappings.
-        self.doc_idx, self.sample_idx, self.shuffle_idx = _build_index_mappings(
+        arrays, subset_log = _build_index_mappings(
             self.name,
             data_prefix,
             documents,
@@ -340,7 +382,10 @@ class GPTDataset(Dataset):
             drop_last=drop_last,
             add_extra_token=self.add_extra_token,
         )
+        self.doc_idx, self.sample_idx, self.shuffle_idx = arrays
         self.indexed_dataset.deallocate_indexed_dataset_memory()
+
+        self.subset_log = subset_log
 
     def __len__(self):
         # -1 is due to data structure used to retieve the index:
@@ -348,7 +393,6 @@ class GPTDataset(Dataset):
         return self.sample_idx.shape[0] - 1
 
     def _get_text(self, idx: int) -> np.ndarray:
-
         # Get the shuffled index.
         idx = self.shuffle_idx[idx]
         # Start and end documents and offsets.
@@ -384,26 +428,128 @@ class GPTDataset(Dataset):
             sample = np.pad(
                 sample, (0, self.seq_length + self.add_extra_token - len(sample)), mode="constant", constant_values=-1
             )
+
+        if self.fim_rate == 0:
+            return sample.astype(np.int64)
+
+        # Code from: https://github.com/EleutherAI/gpt-neox/blob/FIM-clean/megatron/data/gpt2_dataset.py#L109
+        # TODO(Hailey): can merge the code below this line with code above this line.
+        # TODO(Hailey), cont: above already iterates through loop, so just add the permuting in there?
+        sample = np.array(sample, dtype=np.int64)
+        sample_len = sample.shape[0]
+        # # print(sample, sample.shape)
+        # # do FIM here, if enabled
+        # TODO: Do we handle the following point from FIM paper?
+        # To transform data in the character space for context-level FIM, the tokenized documents have to be decoded back into strings before FIM augmentation. Depending on the vocabulary, some care has to be given to ensure decoding does not introduce any spurious characters into training. For example, utf-8 characters are encoded as multiple tokens with a BPE vocabulary; they can result in fragments from chunking and fail to decode. To prevent unforeseen errors midway through training, we encourage checking for these fragments at the beginning or end of a context and removing them.
+
+        segment_breaks = np.argwhere(sample == self.eod_tok_id)  # split sample by document
+
+        def fim_permute_sequence(sequence, rate):
+            return permute(
+                sequence,
+                self.np_rng,
+                rate,
+                self.fim_spm_rate,
+                self.tokenizer,
+                truncate_or_pad=False,
+                suffix_tok_id=self.suffix_tok_id,
+                prefix_tok_id=self.prefix_tok_id,
+                middle_tok_id=self.middle_tok_id,
+                pad_tok_id=self.pad_tok_id,
+                no_fim_prefix=self.no_fim_prefix,
+            )
+
+        def fim_split_and_permute_sequence(sequence):
+            """
+            If self.fim_split_sample is not None, split the sequence.
+            Then apply FIM on the fragments, or the whole sequence if self.fim_split_sample is None.
+            """
+            if self.fim_split_sample is None:
+                return fim_permute_sequence(sequence, self.fim_rate)
+            # fim_split_sample is set: split the sample on this token and permute each fragment separately.
+            # Typically, if each sample is a repository, then we split again on the file level.
+            # Each fragment is a file, and we permute the files.
+            fragment_breaks = np.argwhere(sequence == self.fim_split_sample)
+            if fragment_breaks.shape == (0, 1):
+                # no split token in this sample
+                return fim_permute_sequence(sequence, self.fim_rate)
+            if not self.np_rng.binomial(1, self.fim_rate):
+                # don't do FIM preproc
+                return sequence
+            # Do FIM on each fragment
+            curr_start_position = 0
+            new_samples = []
+            for loc in np.nditer(fragment_breaks):
+                if loc - curr_start_position > 0:
+                    permuted = fim_permute_sequence(sequence[curr_start_position:loc], self.fragment_fim_rate)
+                    new_samples += [permuted, [self.fim_split_sample]]
+                curr_start_position = loc + 1  # Jump over the split token
+            # Permute the segment after the last split token
+            permuted = fim_permute_sequence(sequence[curr_start_position:], self.fragment_fim_rate)
+            new_samples.append(permuted)
+            return np.concatenate(new_samples)
+
+        if segment_breaks.shape != (0, 1):  # then there is an EOD token in this example
+            curr_start_position = 0
+            new_samples = []
+            for loc in np.nditer(segment_breaks):
+                # Only permute non-empty segments.
+                if loc - curr_start_position > 0:
+                    # permute {prefix, suffix, middle} or {suffix, prefix, middle}
+                    permuted = fim_split_and_permute_sequence(sample[curr_start_position:loc])
+                    new_samples += [permuted, [self.eod_tok_id]]
+
+                curr_start_position = loc + 1  # jump over the EOD token
+            # Permute the segment after the last EOD
+            permuted = fim_split_and_permute_sequence(sample[curr_start_position:])
+            new_samples.append(permuted)
+
+            sample = np.concatenate(new_samples)
+        else:
+            sample = fim_split_and_permute_sequence(sample)
+
+        # Truncate or pad sequence to max-length
+        diff = sample.shape[0] - sample_len
+        if diff > 0:  # too long
+            sample = sample[:sample_len]
+        elif diff < 0:  # too short
+            sample = np.concatenate([sample, np.full((-1 * diff), self.pad_tok_id)])
+
+        assert sample.shape[0] == sample_len
+        # end FIM-specific code
         return sample.astype(np.int64)
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int) -> Dict[str, np.ndarray]:
         text = self._get_text(idx)
         return {"input_ids": text}
 
 
+@dataclass
+class SubsetSplitLog:
+    name: str
+    data_prefix: str
+    doc_idx_filename: str
+    sample_idx_filename: str
+    shuffle_idx_filename: str
+    tokens_per_epoch: int
+    num_epochs: int
+    num_samples: int
+    seq_length: int
+
+
 def _build_index_mappings(
-    name,
-    data_prefix,
-    documents,
-    sizes,
-    num_samples,
-    seq_length,
-    seed,
+    name: str,
+    data_prefix: str,
+    documents: np.ndarray,
+    sizes: np.ndarray,
+    num_samples: int,
+    seq_length: int,
+    seed: Any,
     dpg: DistributedProcessGroups,
     index_mapping_dir: str = None,
     drop_last: bool = True,
     add_extra_token: int = 1,
-):
+) -> Tuple[Tuple[np.ndarray, np.ndarray, np.ndarray], SubsetSplitLog]:
     """Build doc-idx, sample-idx, and shuffle-idx.
     doc-idx: is an array (ordered) of documents to be used in training.
     sample-idx: is the start document index and document offset for each
@@ -413,6 +559,7 @@ def _build_index_mappings(
     # Number of tokens in each epoch and number of required epochs.
     tokens_per_epoch = _num_tokens(documents, sizes)
     num_epochs = _num_epochs(tokens_per_epoch, seq_length, num_samples, add_extra_token)
+
     # rng state
     np_rng = np.random.RandomState(seed=seed)
 
@@ -436,7 +583,6 @@ def _build_index_mappings(
             or (not os.path.isfile(sample_idx_filename))
             or (not os.path.isfile(shuffle_idx_filename))
         ):
-
             log_rank(
                 " > WARNING: could not find index map files, building " "the indices on rank 0 ...",
                 logger=logger,
@@ -514,14 +660,19 @@ def _build_index_mappings(
             # First compile and then import.
             assert doc_idx.dtype == np.int32
             assert sizes.dtype == np.int32
-            try:
-                compile_helper()
 
+            try:
                 from . import helpers
             except ImportError:
-                raise ImportError(
-                    "Could not compile megatron dataset C++ helper functions and therefore cannot import helpers python file."
-                )
+                try:
+                    from .dataset_utils import compile_helper
+
+                    compile_helper()
+                    from . import helpers
+                except ImportError:
+                    raise ImportError(
+                        "Could not compile megatron dataset C++ helper functions and therefore cannot import helpers python file."
+                    )
 
             sample_idx = helpers.build_sample_idx(
                 sizes, doc_idx, seq_length, num_epochs, tokens_per_epoch, drop_last, add_extra_token
@@ -565,18 +716,18 @@ def _build_index_mappings(
     # Load mappings.
     start_time = time.time()
     log_rank(" > loading doc-idx mapping from {}".format(doc_idx_filename), logger=logger, level=logging.INFO, rank=0)
-    doc_idx = np.load(doc_idx_filename, allow_pickle=True, mmap_mode="r")
+    doc_idx: np.ndarray = np.load(doc_idx_filename, allow_pickle=True, mmap_mode="r")
     log_rank(
         " > loading sample-idx mapping from {}".format(sample_idx_filename), logger=logger, level=logging.INFO, rank=0
     )
-    sample_idx = np.load(sample_idx_filename, allow_pickle=True, mmap_mode="r")
+    sample_idx: np.ndarray = np.load(sample_idx_filename, allow_pickle=True, mmap_mode="r")
     log_rank(
         " > loading shuffle-idx mapping from {}".format(shuffle_idx_filename),
         logger=logger,
         level=logging.INFO,
         rank=0,
     )
-    shuffle_idx = np.load(shuffle_idx_filename, allow_pickle=True, mmap_mode="r")
+    shuffle_idx: np.ndarray = np.load(shuffle_idx_filename, allow_pickle=True, mmap_mode="r")
     log_rank(
         "    loaded indexed file in {:3.3f} seconds".format(time.time() - start_time),
         logger=logger,
@@ -586,15 +737,27 @@ def _build_index_mappings(
     log_rank("    total number of samples: {}".format(sample_idx.shape[0]), logger=logger, level=logging.INFO, rank=0)
     log_rank("    total number of epochs: {}".format(num_epochs), logger=logger, level=logging.INFO, rank=0)
 
-    return doc_idx, sample_idx, shuffle_idx
+    subset_log = SubsetSplitLog(
+        name=name,
+        data_prefix=data_prefix,
+        doc_idx_filename=doc_idx_filename,
+        sample_idx_filename=sample_idx_filename,
+        shuffle_idx_filename=shuffle_idx_filename,
+        tokens_per_epoch=tokens_per_epoch,
+        num_epochs=num_epochs,
+        num_samples=sample_idx.shape[0],
+        seq_length=seq_length,
+    )
+
+    return (doc_idx, sample_idx, shuffle_idx), subset_log
 
 
-def _num_tokens(documents, sizes):
+def _num_tokens(documents: np.ndarray, sizes: np.ndarray) -> int:
     """Total number of tokens in the dataset."""
     return np.sum(sizes[documents])
 
 
-def _num_epochs(tokens_per_epoch, seq_length, num_samples, add_extra_token=1):
+def _num_epochs(tokens_per_epoch: int, seq_length: int, num_samples: int, add_extra_token: int = 1) -> int:
     """Based on number of samples and sequence lenght, calculate how many
     epochs will be needed."""
     num_epochs = 0
@@ -609,7 +772,7 @@ def _num_epochs(tokens_per_epoch, seq_length, num_samples, add_extra_token=1):
             return num_epochs
 
 
-def _build_doc_idx(documents, num_epochs, np_rng, separate_last_epoch):
+def _build_doc_idx(documents: np.ndarray, num_epochs: int, np_rng: Any, separate_last_epoch: bool) -> np.ndarray:
     """Build an array with length = number-of-epochs * number-of-dcuments.
     Each index is mapped to a corresponding document."""
     if not separate_last_epoch or num_epochs == 1:
@@ -682,7 +845,7 @@ def _build_sample_idx(sizes, doc_idx, seq_length, num_epochs, tokens_per_epoch, 
     return sample_idx
 
 
-def _build_shuffle_idx(num_samples, total_size, np_rng):
+def _build_shuffle_idx(num_samples: int, total_size: int, np_rng: Any) -> np.ndarray:
     """Build the range [0, size) and shuffle."""
     logger.info(
         " > building shuffle index with split [0, {}) and [{}, {}) "
@@ -702,3 +865,77 @@ def _build_shuffle_idx(num_samples, total_size, np_rng):
     np_rng.shuffle(shuffle_idx_last)
 
     return np.concatenate((shuffle_idx_first, shuffle_idx_last))
+
+
+# From https://github.com/EleutherAI/gpt-neox/blob/FIM-clean/megatron/data/gpt2_dataset.py#L339
+def permute(
+    sample: np.ndarray,
+    np_rng: np.random.Generator,
+    fim_rate: float,
+    fim_spm_rate: float,
+    tokenizer: PreTrainedTokenizerBase,
+    truncate_or_pad: bool = True,
+    suffix_tok_id: int = None,
+    prefix_tok_id: int = None,
+    middle_tok_id: int = None,
+    pad_tok_id: int = None,
+    no_fim_prefix: str = None,
+):
+    """
+    Take in a sample (np array w/ size (0,chunklength)) and perform a FIM transformation on it.
+    Maintain the same sample length (if transform creates a few extra tokens, drop them).
+    """
+    if np_rng.binomial(1, fim_rate):  # sample bernoulli dist
+        contents = tokenizer.decode(sample)
+
+        # Do not apply FIM if the sample starts with no_fim_prefix
+        if no_fim_prefix is not None and contents.startswith(no_fim_prefix):
+            return sample
+
+        try:
+            # A boundary can be =0 (prefix will be empty)
+            # a boundary can be =len(contents) (suffix will be empty)
+            # The two boundaries can be equal (middle will be empty)
+            boundaries = list(np_rng.randint(low=0, high=len(contents) + 1, size=2))
+            boundaries.sort()
+        except ValueError as e:
+            print(len(contents), contents)
+            print(e)
+            raise e
+
+        prefix = contents[: boundaries[0]]
+        middle = contents[boundaries[0] : boundaries[1]]
+        suffix = contents[boundaries[1] :]
+
+        prefix = tokenizer.encode(prefix, return_tensors="np").squeeze(axis=0)
+        middle = tokenizer.encode(middle, return_tensors="np").squeeze(axis=0)
+        suffix = tokenizer.encode(suffix, return_tensors="np").squeeze(axis=0)
+
+        # here we truncate each given segment to fit the same length as it was before
+        # A consequence is that we never reach the end of a file?
+        # we should rather truncate at the context-level
+        if truncate_or_pad:
+            # need to make same length as the input. Take the 3 sentinel tokens into account
+            new_length = suffix.shape[0] + prefix.shape[0] + middle.shape[0] + 3
+            diff = new_length - sample.shape[0]
+            if diff > 0:  # too long
+                if (
+                    suffix.shape[0] <= diff
+                ):  # if there's no space to truncate the suffix: stop and report it. atm i should have stopped this from happening
+                    return sample, np_rng
+                suffix = suffix[: suffix.shape[0] - diff]
+            elif diff < 0:  # too short
+                suffix = np.concatenate([suffix, np.full((-1 * diff), pad_tok_id)])
+
+        if np_rng.binomial(1, fim_spm_rate):
+            # SPM (variant 2 from FIM paper)
+            new_sample = np.concatenate([[prefix_tok_id, suffix_tok_id], suffix, [middle_tok_id], prefix, middle])
+        else:
+            # PSM
+            new_sample = np.concatenate([[prefix_tok_id], prefix, [suffix_tok_id], suffix, [middle_tok_id], middle])
+
+    else:
+        # don't do FIM preproc
+        new_sample = sample
+
+    return new_sample

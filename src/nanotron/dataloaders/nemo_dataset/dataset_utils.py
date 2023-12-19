@@ -14,9 +14,10 @@
 import math
 import os
 import subprocess
+from typing import List, Tuple, Union
 
-from nanotron.core import logging
-from nanotron.core.logging import log_rank
+from nanotron import logging
+from nanotron.logging import log_rank
 
 logger = logging.get_logger(__name__)
 
@@ -34,11 +35,18 @@ def compile_helper():
         sys.exit(1)
 
 
-def get_datasets_weights_and_num_samples(data_prefix, num_samples):
-
-    # The data prefix should be in the format of:
-    #   weight-1, data-prefix-1, weight-2, data-prefix-2, ..
-    assert len(data_prefix) % 2 == 0
+def get_datasets_weights_and_num_samples(
+    data_prefix: List[str], num_samples: Union[int, List[int]]
+) -> Tuple[List[str], List[float], List[int]]:
+    """Return tuple of:
+    - list of prefixes
+    - list of associated normalized weigths
+    - list of associated number of samples from the total num_samples
+    """
+    if len(data_prefix) % 2 != 0:
+        raise ValueError(
+            "The data prefix should be in the format of: weight-1, data-prefix-1, weight-2, data-prefix-2, .."
+        )
     num_datasets = len(data_prefix) // 2
     weights = [0] * num_datasets
     prefixes = [0] * num_datasets
@@ -49,7 +57,8 @@ def get_datasets_weights_and_num_samples(data_prefix, num_samples):
     weight_sum = 0.0
     for weight in weights:
         weight_sum += weight
-    assert weight_sum > 0.0
+    if weight_sum <= 0.0:
+        raise ValueError("Total sum of the weights should be > 0")
     weights = [weight / weight_sum for weight in weights]
 
     # Add 0.5% (the 1.005 factor) so in case the bleding dataset does
@@ -67,7 +76,7 @@ def get_datasets_weights_and_num_samples(data_prefix, num_samples):
     return prefixes, weights, datasets_train_valid_test_num_samples
 
 
-def get_train_valid_test_split_(splits_string, size):
+def get_train_valid_test_split_(splits_string: str, size: int) -> Tuple[int]:
     """Get dataset splits from comma or '/' separated string list."""
 
     splits = []

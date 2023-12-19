@@ -2,9 +2,9 @@ import pytest
 import torch
 from helpers.utils import available_gpus, init_distributed
 
-from nanotron.core import distributed as dist
-from nanotron.core.dataclass import DistributedProcessGroups, RandomStates
-from nanotron.core.random import (
+from nanotron.nn import distributed as dist
+from nanotron.nn.dataclass import DistributedProcessGroups, RandomStates
+from nanotron.nn.random import (
     branch_random_state,
     get_current_random_state,
     get_synced_random_state,

@@ -7,27 +7,27 @@ from helpers.dummy import DummyModel, dummy_infinite_data_loader
 from helpers.utils import available_gpus, init_distributed
 from torch import nn
 
-from nanotron.clip_grads import clip_grad_norm
-from nanotron.core import distributed as dist
-from nanotron.core.gradient_accumulator import (
+from nanotron.nn.clip_grads import clip_grad_norm
+from nanotron.nn import distributed as dist
+from nanotron.nn.gradient_accumulator import (
     FP32GradientAccumulator,
 )
-from nanotron.core.parallelism.model import initial_sync
-from nanotron.core.parallelism.parameters import NanotronParameter, sanity_check
-from nanotron.core.parallelism.pipeline_parallelism.engine import (
+from nanotron.nn.parallel.model import initial_sync
+from nanotron.nn.parallel.parameters import NanotronParameter, sanity_check
+from nanotron.nn.parallel.pipeline_parallelism.engine import (
     AllForwardAllBackwardPipelineEngine,
 )
-from nanotron.core.parallelism.pipeline_parallelism.p2p import P2P
-from nanotron.core.parallelism.tensor_parallelism.enum import TensorParallelLinearMode
-from nanotron.core.parallelism.tensor_parallelism.nn import (
+from nanotron.nn.parallel.pipeline_parallelism.p2p import P2P
+from nanotron.nn.parallel.tensor_parallelism.enum import TensorParallelLinearMode
+from nanotron.nn.parallel.tensor_parallelism.nn import (
     TensorParallelColumnLinear,
 )
-from nanotron.core.parallelism.tied_parameters import (
+from nanotron.nn.parallel.tied_parameters import (
     sync_tied_weights_gradients,
     tie_parameters,
 )
-from nanotron.core.process_groups_initializer import DistributedProcessGroups
-from nanotron.core.utils import assert_tensor_synced_across_pg, init_on_device_and_dtype
+from nanotron.nn.process_groups import DistributedProcessGroups
+from nanotron.nn.utils import assert_tensor_synced_across_pg, init_on_device_and_dtype
 
 
 @pytest.mark.skipif(available_gpus() < 2, reason="test_clip_grads_with_pp requires at least 2 gpus")

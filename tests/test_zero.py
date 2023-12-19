@@ -9,18 +9,18 @@ from helpers.utils import available_gpus, init_distributed
 from torch import nn as torch_nn
 from torch.nn.parallel import DistributedDataParallel
 
-from nanotron.core import distributed as dist
-from nanotron.core.dataclass import DistributedProcessGroups, RandomStates
-from nanotron.core.optimizer import NamedOptimizer, ZeroDistributedOptimizer
-from nanotron.core.optimizer.zero import SlicedFlatTensor
-from nanotron.core.parallelism.data_parallelism.utils import sync_gradients_across_dp
-from nanotron.core.parallelism.parameters import NanotronParameter
-from nanotron.core.parallelism.pipeline_parallelism.engine import AllForwardAllBackwardPipelineEngine
-from nanotron.core.parallelism.pipeline_parallelism.tensor_pointer import TensorPointer
-from nanotron.core.parallelism.tensor_parallelism import nn
-from nanotron.core.parallelism.tensor_parallelism.enum import TensorParallelLinearMode
-from nanotron.core.parallelism.tied_parameters import sync_tied_weights_gradients
-from nanotron.core.random import branch_random_state, get_current_random_state, get_synced_random_state
+from nanotron.nn import distributed as dist
+from nanotron.nn.dataclass import DistributedProcessGroups, RandomStates
+from nanotron.nn.optim import NamedOptimizer, ZeroDistributedOptimizer
+from nanotron.nn.optim.zero import SlicedFlatTensor
+from nanotron.nn.parallel.data_parallelism.utils import sync_gradients_across_dp
+from nanotron.nn.parallel.parameters import NanotronParameter
+from nanotron.nn.parallel.pipeline_parallelism.engine import AllForwardAllBackwardPipelineEngine
+from nanotron.nn.parallel.pipeline_parallelism.tensor_pointer import TensorPointer
+from nanotron.nn.parallel.tensor_parallelism import nn
+from nanotron.nn.parallel.tensor_parallelism.enum import TensorParallelLinearMode
+from nanotron.nn.parallel.tied_parameters import sync_tied_weights_gradients
+from nanotron.nn.random import branch_random_state, get_current_random_state, get_synced_random_state
 
 
 @pytest.mark.parametrize("tp,dp,pp", [pytest.param(1, i, 1) for i in range(1, available_gpus() + 1)])

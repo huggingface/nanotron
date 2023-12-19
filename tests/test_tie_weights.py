@@ -4,10 +4,10 @@ from helpers.exception import assert_fail_with
 from helpers.utils import init_distributed
 from torch import nn
 
-from nanotron.core import distributed as dist
-from nanotron.core.dataclass import DistributedProcessGroups
-from nanotron.core.parallelism.parameters import NanotronParameter
-from nanotron.core.parallelism.tied_parameters import (
+from nanotron.nn import distributed as dist
+from nanotron.nn.dataclass import DistributedProcessGroups
+from nanotron.nn.parallel.parameters import NanotronParameter
+from nanotron.nn.parallel.tied_parameters import (
     get_tied_id_to_param,
     sync_tied_weights_gradients,
     tie_parameters,

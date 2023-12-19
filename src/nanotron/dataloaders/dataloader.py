@@ -13,18 +13,17 @@ from transformers import (
 from transformers.trainer_pt_utils import DistributedSamplerWithLoop
 
 from nanotron.config import Config
-from nanotron.core import distributed as dist
-from nanotron.core import logging
-from nanotron.core.parallelism.pipeline_parallelism.tensor_pointer import TensorPointer
-from nanotron.core.process_groups_initializer import DistributedProcessGroups
-from nanotron.core.random import set_random_seed
-from nanotron.core.utils import (
+from nanotron.nn import distributed as dist
+from nanotron import logging
+from nanotron.nn.parallel.pipeline_parallelism.tensor_pointer import TensorPointer
+from nanotron.nn.process_groups import DistributedProcessGroups
+from nanotron.nn.random import set_random_seed
+from nanotron.nn.utils import (
     assert_fail_except_rank_with,
     assert_tensor_synced_across_pg,
 )
 
 try:
-
     tb_logger_available = True
 except ImportError:
     tb_logger_available = False
@@ -89,17 +88,17 @@ def get_datasets(
         DatasetDict: DatasetDict object containing the dataset of the appropriate section with test + train parts.
     """
 
-    if type(splits) is str:
+    if isinstance(splits, str):
         splits = [splits]
 
-    if type(dataset_mixer) is dict:
+    if isinstance(dataset_mixer, dict):
         # Structure of the config to read the datasets and their mix
         # datasets_mixer:
         #     - 'dataset1': 0.5
         #     - 'dataset2': 0.3
         #     - 'dataset3': 0.2
         raw_datasets = _get_dataset_mix(dataset_mixer, splits=splits)
-    elif type(dataset_mixer) is str:
+    elif isinstance(dataset_mixer, str):
         # e.g. Dataset = "HuggingFaceH4/testing_alpaca_small"
         # Note this returns things other than just train/test, which may not be intended
         raw_datasets = DatasetDict()
@@ -275,7 +274,7 @@ def clm_process(
     """Concatenate all texts from raw_dataset and generate chunks of `sequence_length + 1`, where chunks overlap by a single token."""
     # Adapted from https://github.com/huggingface/transformers/blob/47e1676255e5dd86b9541f734cd4f4bdcbb50f4a/examples/pytorch/language-modeling/run_clm.py#L391-L439
 
-    def group_texts(examples: Dict[str, List[np.array]]) -> Dict[str, List[np.array]]:
+    def group_texts(examples: Dict[str, List[np.ndarray]]) -> Dict[str, List[np.ndarray]]:
         # Concatenate all texts.
         concatenated_examples = {k: np.concatenate(v) for k, v in examples.items()}
         total_length = len(concatenated_examples[next(iter(examples.keys()))])
@@ -292,7 +291,7 @@ def clm_process(
         }
         return result
 
-    def _tokenize_and_group_texts(texts: List[str]) -> Dict[str, List[np.array]]:
+    def _tokenize_and_group_texts(texts: List[str]) -> Dict[str, List[np.ndarray]]:
         tokenized_batch = tokenizer.batch_encode_plus(texts, return_attention_mask=False, return_token_type_ids=False)
         tokenized_batch = {k: [np.array(tokenized_texts) for tokenized_texts in v] for k, v in tokenized_batch.items()}
         return group_texts(tokenized_batch)
@@ -325,7 +324,7 @@ class DataCollatorForCLM:
     output_pp_rank: int
     dpg: DistributedProcessGroups
 
-    def __call__(self, examples: List[Dict[str, List[np.array]]]) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
+    def __call__(self, examples: List[Dict[str, List[np.ndarray]]]) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
         # Process the case when "input_ids" doesn't exist
         current_pp_rank = dist.get_rank(self.dpg.pp_pg)
         if current_pp_rank not in [
@@ -347,7 +346,7 @@ class DataCollatorForCLM:
         input_ids = np.vstack([examples[i]["input_ids"] for i in range(len(examples))])  # (b, s)
         batch_size, expanded_input_length = input_ids.shape
 
-        result: Dict[str, Union[np.array, TensorPointer]] = {}
+        result: Dict[str, Union[np.ndarray, TensorPointer]] = {}
 
         result["input_ids"] = TensorPointer(group_rank=self.input_pp_rank)
         result["input_mask"] = TensorPointer(group_rank=self.input_pp_rank)

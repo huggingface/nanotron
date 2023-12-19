@@ -32,13 +32,14 @@ import shutil
 import struct
 from functools import lru_cache
 from itertools import accumulate
+from typing import Tuple
 
 import numpy as np
 import torch
 
-from nanotron.core import logging
-from nanotron.core.logging import log_rank
-from nanotron.core.serialize.path import get_filesystem_and_path
+from nanotron import logging
+from nanotron.logging import log_rank
+from nanotron.nn.serialize.path import get_filesystem_and_path
 
 logger = logging.get_logger(__name__)
 # logging.getLogger('botocore').setLevel(logging.WARNING)
@@ -65,7 +66,7 @@ def deallocate_indexed_dataset_memory(indexed_dataset):
         indexed_dataset.doc_idx = None
 
 
-def make_indexed_dataset(path, skip_warmup=False, impl_kwargs={}):
+def make_indexed_dataset(path: str, skip_warmup: bool = False):
     # now handle bin memap
     if not MMapIndexedDataset.exists(path):
         raise ValueError(
@@ -87,15 +88,15 @@ def code(dtype):
     raise ValueError(dtype)
 
 
-def index_file_path(prefix_path):
+def index_file_path(prefix_path: str) -> str:
     return prefix_path + ".idx"
 
 
-def data_file_path(prefix_path):
+def data_file_path(prefix_path: str) -> str:
     return prefix_path + ".bin"
 
 
-def _warmup_mmap_file(path):
+def _warmup_mmap_file(path: str):
     with open(path, "rb") as stream:
         while stream.read(100 * 1024 * 1024):
             pass
@@ -151,7 +152,7 @@ class MMapIndexedDataset(torch.utils.data.Dataset):
 
             return _Writer()
 
-        def __init__(self, path, skip_warmup=False):
+        def __init__(self, path: str, skip_warmup: bool = False):
             self.fs, fs_path = get_filesystem_and_path(path)
 
             stream = io.BytesIO(self.fs.read_block(fs_path, offset=0, length=34))
@@ -209,13 +210,13 @@ class MMapIndexedDataset(torch.utils.data.Dataset):
             return self._doc_idx
 
         @lru_cache(maxsize=8)
-        def __getitem__(self, i):
+        def __getitem__(self, i: int) -> Tuple[int, int]:
             return self._pointers[i], self._sizes[i]
 
         def __len__(self):
             return self._len
 
-    def __init__(self, path, skip_warmup=False):
+    def __init__(self, path: str, skip_warmup: bool = False):
         super().__init__()
 
         self._path = None
@@ -230,7 +231,7 @@ class MMapIndexedDataset(torch.utils.data.Dataset):
     # def __setstate__(self, state):
     #     self._do_init(state)
 
-    def _do_init(self, path, skip_warmup):
+    def _do_init(self, path: str, skip_warmup: bool):
         self._path = path
         self._index = self.Index(index_file_path(self._path), skip_warmup)
 

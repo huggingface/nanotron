@@ -1,12 +1,17 @@
 from dataclasses import dataclass
-from typing import List, Union
+from typing import List, Union, Optional
 
-from nanotron.core import logging
-from nanotron.core.logging import log_rank
-from nanotron.logger import LogItem
+from nanotron import logging
+from nanotron.logging import log_rank, human_format
 from nanotron.logger.interface import BaseLogger
 
 logger = logging.get_logger(__name__)
+
+@dataclass
+class LogItem:
+    tag: str
+    scalar_value: Union[float, int]
+    log_format: Optional[str] = None
 
 
 @dataclass
@@ -14,7 +19,10 @@ class LoggerWriter(BaseLogger):
     global_step: int
 
     def add_scalar(self, tag: str, scalar_value: Union[float, int], log_format=None) -> str:
-        log_str = f"{tag}: {scalar_value:{log_format}}" if log_format is not None else f"{tag}: {scalar_value}"
+        if log_format == "human_format":
+            log_str = f"{tag}: {human_format(scalar_value)}"
+        else:
+            log_str = f"{tag}: {scalar_value:{log_format}}" if log_format is not None else f"{tag}: {scalar_value}"
         return log_str
 
     def add_scalars_from_list(self, log_entries: List[LogItem], iteration_step: int):

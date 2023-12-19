@@ -27,26 +27,26 @@ from torch.nn import init
 from transformers import GPTBigCodeConfig
 from transformers.activations import ACT2FN
 
-from nanotron.config import ModelArgs, ParallelismArgs, RecomputeGranularity
-from nanotron.core import distributed as dist
-from nanotron.core.dataclass import RandomStates
-from nanotron.core.distributed import get_global_rank
-from nanotron.core.parallelism.parameters import NanotronParameter
-from nanotron.core.parallelism.pipeline_parallelism.block import PipelineBlock
-from nanotron.core.parallelism.pipeline_parallelism.p2p import P2P
-from nanotron.core.parallelism.pipeline_parallelism.tensor_pointer import TensorPointer
-from nanotron.core.parallelism.sharded_parameters import SplitConfig, mark_all_parameters_in_module_as_sharded
-from nanotron.core.parallelism.tensor_parallelism.enum import TensorParallelLinearMode
-from nanotron.core.parallelism.tensor_parallelism.functional import column_linear, sharded_cross_entropy
-from nanotron.core.parallelism.tensor_parallelism.nn import (
+from nanotron.config.config import ModelArgs, ParallelismArgs, RecomputeGranularity
+from nanotron.nn import distributed as dist
+from nanotron.nn.dataclass import RandomStates
+from nanotron.nn.distributed import get_global_rank
+from nanotron.nn.parallel.parameters import NanotronParameter
+from nanotron.nn.parallel.pipeline_parallelism.block import PipelineBlock
+from nanotron.nn.parallel.pipeline_parallelism.p2p import P2P
+from nanotron.nn.parallel.pipeline_parallelism.tensor_pointer import TensorPointer
+from nanotron.nn.parallel.sharded_parameters import SplitConfig, mark_all_parameters_in_module_as_sharded
+from nanotron.nn.parallel.tensor_parallelism.enum import TensorParallelLinearMode
+from nanotron.nn.parallel.tensor_parallelism.functional import column_linear, sharded_cross_entropy
+from nanotron.nn.parallel.tensor_parallelism.nn import (
     TensorParallelColumnLinear,
     TensorParallelEmbedding,
     TensorParallelRowLinear,
 )
-from nanotron.core.parallelism.tied_parameters import create_tied_parameter
-from nanotron.core.process_groups_initializer import DistributedProcessGroups
-from nanotron.core.random import branch_random_state
-from nanotron.core.utils import checkpoint_method
+from nanotron.nn.parallel.tied_parameters import create_tied_parameter
+from nanotron.nn.process_groups import DistributedProcessGroups
+from nanotron.nn.random import branch_random_state
+from nanotron.nn.utils import checkpoint_method
 from nanotron.models import NanotronModel
 from nanotron.store import AttachableStore
 

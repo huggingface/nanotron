@@ -26,25 +26,25 @@ from torch.nn import functional as F
 from torch.nn.parallel import DistributedDataParallel
 from transformers import FalconConfig
 
-from nanotron.config import ParallelismArgs, RecomputeGranularity
-from nanotron.core import distributed as dist
-from nanotron.core import logging
-from nanotron.core.dataclass import RandomStates
-from nanotron.core.parallelism.parameters import NanotronParameter
-from nanotron.core.parallelism.pipeline_parallelism.block import PipelineBlock, TensorPointer
-from nanotron.core.parallelism.pipeline_parallelism.p2p import P2P
-from nanotron.core.parallelism.tensor_parallelism.functional import sharded_cross_entropy
-from nanotron.core.parallelism.tensor_parallelism.nn import (
+from nanotron.config.config import ParallelismArgs, RecomputeGranularity
+from nanotron.nn import distributed as dist
+from nanotron import logging
+from nanotron.nn.dataclass import RandomStates
+from nanotron.nn.parallel.parameters import NanotronParameter
+from nanotron.nn.parallel.pipeline_parallelism.block import PipelineBlock, TensorPointer
+from nanotron.nn.parallel.pipeline_parallelism.p2p import P2P
+from nanotron.nn.parallel.tensor_parallelism.functional import sharded_cross_entropy
+from nanotron.nn.parallel.tensor_parallelism.nn import (
     TensorParallelColumnLinear,
     TensorParallelEmbedding,
     TensorParallelLinearMode,
     TensorParallelRowLinear,
 )
-from nanotron.core.parallelism.tied_parameters import (
+from nanotron.nn.parallel.tied_parameters import (
     get_tied_id_to_param,
 )
-from nanotron.core.process_groups_initializer import DistributedProcessGroups
-from nanotron.core.utils import checkpoint_method
+from nanotron.nn.process_groups import DistributedProcessGroups
+from nanotron.nn.utils import checkpoint_method
 from nanotron.models import NanotronModel
 from nanotron.store import AttachableStore
 

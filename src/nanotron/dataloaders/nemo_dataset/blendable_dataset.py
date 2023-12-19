@@ -15,23 +15,32 @@
 """Blendable dataset."""
 
 import time
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, List
 
 import numpy as np
 import torch
 
-from nanotron.core import distributed as dist
-from nanotron.core import logging
-from nanotron.core.logging import log_rank
-from nanotron.core.process_groups_initializer import DistributedProcessGroups
+from nanotron import logging
+from nanotron.logging import log_rank
+from nanotron.nn.process_groups import DistributedProcessGroups
+from nanotron.nn.utils import main_rank_first
 
-from .dataset_utils import compile_helper
+if TYPE_CHECKING:
+    from . import GPTDataset, SubsetSplitLog
 
 logger = logging.get_logger(__name__)
 
 
-class BlendableDataset(torch.utils.data.Dataset):
-    def __init__(self, datasets, weights, size, dpg: DistributedProcessGroups):
+@dataclass
+class BlendedSubsetSplitLog:
+    blended_total_num_samples: int
+    blended_per_subset_samples: List[int]
+    blended_subset: List["SubsetSplitLog"]
 
+
+class BlendableDataset(torch.utils.data.Dataset):
+    def __init__(self, datasets: List["GPTDataset"], weights: List[float], size: int, dpg: DistributedProcessGroups):
         self.datasets = datasets
         num_datasets = len(datasets)
         assert num_datasets == len(weights)
@@ -46,22 +55,30 @@ class BlendableDataset(torch.utils.data.Dataset):
 
         # Build indecies.
         start_time = time.time()
-        assert num_datasets < 255
-        self.dataset_index = np.zeros(self.size, dtype=np.uint8)
+        # from https://github.com/NVIDIA/Megatron-LM/commit/c6e65b2e96e8376ccc84225dd1a9b60dd242fc48
+        assert num_datasets < 32767
+        self.dataset_index = np.zeros(self.size, dtype=np.int16)
         self.dataset_sample_index = np.zeros(self.size, dtype=np.int64)
-        try:
-            if dist.get_rank(dpg.dp_pg) == 0:
-                compile_helper()
-            torch.distributed.barrier()
-            from . import helpers
-        except ImportError:
-            raise ImportError(
-                "Could not compile megatron dataset C++ helper functions and therefore cannot import helpers python file."
-            )
+        self.dataset_num_samples = np.zeros(num_datasets, dtype=np.int64)
+
+        with main_rank_first(dpg.world_pg):
+            try:
+                from . import helpers
+            except ImportError:
+                try:
+                    from .dataset_utils import compile_helper
+
+                    compile_helper()
+                    from . import helpers
+                except ImportError:
+                    raise ImportError(
+                        "Could not compile megatron dataset C++ helper functions and therefore cannot import helpers python file."
+                    )
 
         helpers.build_blending_indices(
             self.dataset_index,
             self.dataset_sample_index,
+            self.dataset_num_samples,
             weights,
             num_datasets,
             self.size,
@@ -73,6 +90,12 @@ class BlendableDataset(torch.utils.data.Dataset):
             logger=logger,
             level=logging.INFO,
             rank=0,
+        )
+
+        self.subset_log = BlendedSubsetSplitLog(
+            blended_total_num_samples=self.size,
+            blended_per_subset_samples=self.dataset_num_samples.tolist(),
+            blended_subset=[d.subset_log for d in self.datasets],
         )
 
     def __len__(self):
