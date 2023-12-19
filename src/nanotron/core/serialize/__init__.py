@@ -4,6 +4,7 @@ import torch
 from torch import nn
 from torch.nn.parallel import DistributedDataParallel
 
+from nanotron.config import Config
 from nanotron.core import distributed as dist
 from nanotron.core import optimizer as optim
 from nanotron.core.dataclass import DistributedProcessGroups
@@ -50,28 +51,50 @@ __all__ = [
 
 
 def save(
+    config: Config,
     model: nn.Module,
     optimizer: optim.BaseOptimizer,
-    lr_scheduler,
+    lr_scheduler: torch.optim.lr_scheduler.LRScheduler,
     dpg: DistributedProcessGroups,
     root_folder: Path,
+    should_save_config: bool = True,
+    should_save_model: bool = True,
+    should_save_optimizer: bool = True,
+    should_save_lr_scheduler: bool = True,
     checkpoint_metadata: dict = None,
 ) -> None:
     if checkpoint_metadata is None:
         checkpoint_metadata = {}
 
     try:
-        save_weights(model=model, dpg=dpg, root_folder=root_folder)
-        save_optimizer(optimizer=optimizer, dpg=dpg, root_folder=root_folder)
-        save_lr_scheduler(
-            lr_scheduler=lr_scheduler,
-            dpg=dpg,
-            root_folder=root_folder,
-            is_zero=optimizer.inherit_from(optim.ZeroDistributedOptimizer),
-        )
+        if should_save_config:
+            config.save_as_yaml(root_folder / "config.yaml")
     except Exception as e:
         # TODO @nouamane: catch full disk error
-        print(f"Error while saving checkpoint: {e}")
+        print(f"Error while saving config: {e}")
+        raise e
+    try:
+        if should_save_model:
+            save_weights(model=model, dpg=dpg, root_folder=root_folder)
+    except Exception as e:
+        print(f"Error while saving weights checkpoint: {e}")
+        raise e
+    try:
+        if should_save_optimizer:
+            save_optimizer(optimizer=optimizer, dpg=dpg, root_folder=root_folder)
+    except Exception as e:
+        print(f"Error while saving optimizer checkpoint: {e}")
+        raise e
+    try:
+        if should_save_lr_scheduler:
+            save_lr_scheduler(
+                lr_scheduler=lr_scheduler,
+                dpg=dpg,
+                root_folder=root_folder,
+            )
+    except Exception as e:
+        print(f"Error while saving lr_scheduler checkpoint: {e}")
+        raise e
 
     save_meta(root_folder=root_folder, dpg=dpg, checkpoint_metadata=checkpoint_metadata)
 
@@ -158,7 +181,7 @@ def save(
                 reference_tensor,
                 atol=0,
                 rtol=0,
-                msg=lambda msg: f"tensor at {current_state_dict['names'][index]} doesn't match with our {id_} reference. Optimizer key: {name}\nCur: {tensor}\nRef: {reference_tensor}\n{msg}",
+                msg=lambda msg: f"tensor at {current_state_dict['names'][index]} doesn't match with our reference. Optimizer key: {name}\nCur: {tensor}\nRef: {reference_tensor}\n{msg}",
             )
     ###
 
@@ -197,8 +220,6 @@ def load(
     load_optimizer(optimizer=optimizer, dpg=dpg, root_folder=root_folder)
     load_lr_scheduler(
         lr_scheduler=lr_scheduler,
-        dpg=dpg,
         root_folder=root_folder,
-        is_zero=optimizer.inherit_from(optim.ZeroDistributedOptimizer),
     )
     return checkpoint_metadata
