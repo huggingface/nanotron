@@ -16,11 +16,9 @@ def optimizer_filename(dpg: DistributedProcessGroups, is_zero: bool):
         return f"{ObjectType.OPTIMIZER.value}_pp-{dist.get_rank(dpg.pp_pg)}-of-{dpg.pp_pg.size()}_tp-{dist.get_rank(dpg.tp_pg)}-of-{dpg.tp_pg.size()}.pt"
 
 
-def lr_scheduler_filename(dpg: DistributedProcessGroups, is_zero: bool):
-    if is_zero is True:
-        return f"{ObjectType.LR_SCHEDULER.value}_pp-{dist.get_rank(dpg.pp_pg)}-of-{dpg.pp_pg.size()}_dp-{dist.get_rank(dpg.dp_pg)}-of-{dpg.dp_pg.size()}_tp-{dist.get_rank(dpg.tp_pg)}-of-{dpg.tp_pg.size()}.pt"
-    else:
-        return f"{ObjectType.LR_SCHEDULER.value}_pp-{dist.get_rank(dpg.pp_pg)}-of-{dpg.pp_pg.size()}_tp-{dist.get_rank(dpg.tp_pg)}-of-{dpg.tp_pg.size()}.pt"
+def lr_scheduler_filename():
+    """The lr_scheduler is the same for all processes."""
+    return f"{ObjectType.LR_SCHEDULER.value}.pt"
 
 
 def save_optimizer(
@@ -57,21 +55,20 @@ def save_lr_scheduler(
     lr_scheduler,
     dpg: DistributedProcessGroups,
     root_folder: Path,
-    is_zero: bool,
 ):
     """Saves lr scheduler states"""
+    if dist.get_rank(dpg.world_pg) > 0:
+        # Only WORLD-RANK 0 saves the lr scheduler state
+        return
+
     root_folder = root_folder / "lr_scheduler"
     if check_path_is_local(path=root_folder):
         root_folder.mkdir(exist_ok=True, parents=True)
 
-    if (not is_zero) and dist.get_rank(dpg.dp_pg) > 0:
-        # Only DP-0 saves the lr scheduler state
-        return
-
     # We dump the optimizer state using `torch.save`
     torch_save(
         lr_scheduler.state_dict(),
-        root_folder / lr_scheduler_filename(dpg, is_zero=is_zero),
+        root_folder / lr_scheduler_filename(),
     )
 
 
@@ -82,9 +79,10 @@ def load_optimizer(
     map_location: Optional[str] = None,
 ):
     root_folder = root_folder / "optimizer"
+    # `load_state_dict` copies the state dict which can be very large in case of Zero-0 so we load to cpu and then move to the right device
+    map_location = "cpu" if not optimizer.inherit_from(optim.ZeroDistributedOptimizer) else map_location
 
     # TODO @thomasw21: Load optimizer type and check that it's compatible otherwise we might be be loading something else completely
-
     state_dict = torch_load(
         root_folder / optimizer_filename(dpg, is_zero=optimizer.inherit_from(optim.ZeroDistributedOptimizer)),
         map_location=map_location,
@@ -94,11 +92,9 @@ def load_optimizer(
 
 def load_lr_scheduler(
     lr_scheduler,
-    dpg: DistributedProcessGroups,
     root_folder: Path,
-    is_zero: bool,
 ):
     root_folder = root_folder / "lr_scheduler"
 
-    state_dict = torch_load(root_folder / lr_scheduler_filename(dpg, is_zero=is_zero))
+    state_dict = torch_load(root_folder / lr_scheduler_filename())
     lr_scheduler.load_state_dict(state_dict)
