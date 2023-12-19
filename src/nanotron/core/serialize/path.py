@@ -1,4 +1,5 @@
 import contextlib
+import os
 from enum import Enum
 from pathlib import Path
 from typing import List, Optional, Tuple, Union
@@ -21,24 +22,49 @@ class ObjectType(Enum):
     LR_SCHEDULER = "lr_scheduler"
 
 
-def parse_ckpt_path(config: Config):
-    load_from_candidate = config.checkpoints.load_from_specific_checkpoint
+def parse_ckpt_path(config: Config, dpg: DistributedProcessGroups) -> Optional[xPath]:
+    """Parse checkpoint path from config and download checkpoint from S3 if needed.
+
+    Args:
+        config: Config object.
+        dpg: DistributedProcessGroups object.
+
+    Returns:
+        Path to checkpoint or None if no checkpoint.
+    """
+    load_from_candidate = config.checkpoints.resume_checkpoint_path
     if load_from_candidate is None:
-        latest_meta_path: xPath = config.checkpoints.checkpoints_path / "latest.txt"
+        return None
+
+    if check_path_is_local(load_from_candidate):
+        latest_meta_path: xPath = config.checkpoints.resume_checkpoint_path / "latest.txt"
         if latest_meta_path.exists():
-            with fs_open(config.checkpoints.checkpoints_path / "latest.txt", mode="r") as fi:
+            with fs_open(config.checkpoints.resume_checkpoint_path / "latest.txt", mode="r") as fi:
                 # TODO @thomasw21: make a better structure system so that we get typing correct
                 load_from_candidate = int(fi.read())
+            checkpoint_path = config.checkpoints.resume_checkpoint_path / str(load_from_candidate)
+
+        elif (config.checkpoints.resume_checkpoint_path / "model_config.json").exists():
+            # we assume that the checkpoint path is a path to a checkpoint
+            checkpoint_path = config.checkpoints.resume_checkpoint_path
+
         else:
+            log_rank(
+                f"No previous checkpoint found in: {latest_meta_path}",
+                logger=logger,
+                level=logging.INFO,
+                rank=0,
+            )
             return None
 
-    checkpoint_path = config.checkpoints.checkpoints_path / str(load_from_candidate)
-    log_rank(
-        f"Loading checkpoint from {checkpoint_path}:",
-        logger=logger,
-        level=logging.INFO,
-        rank=0,
-    )
+        log_rank(
+            f"Loading checkpoint from {checkpoint_path}",
+            logger=logger,
+            level=logging.INFO,
+            rank=0,
+        )
+    else:
+        raise NotImplementedError("Only local checkpoint loading is supported for now.")
     return checkpoint_path
 
 
@@ -88,6 +114,15 @@ def fs_open(
     fs, path = get_filesystem_and_path(file)
     with fs.open(path, mode=mode) as f:
         yield f
+
+
+def fs_copy(
+    input_file: Union[str, Path],
+    output_file: Union[str, Path],
+):
+    """Copy file from input to output (possibly on s3/other fs)"""
+    with fs_open(input_file, mode="rb") as fi, fs_open(output_file, mode="wb") as fo:
+        fo.write(fi.read())
 
 
 def check_path_is_local(path: Path, storage_options=None) -> bool:

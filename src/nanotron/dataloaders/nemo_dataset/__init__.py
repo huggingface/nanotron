@@ -18,6 +18,7 @@ import os
 import time
 
 import numpy as np
+from dataclasses import dataclass
 from torch.utils.data import Dataset
 
 from nanotron.config import PretrainNemoArgs
@@ -36,6 +37,18 @@ from .dataset_utils import (
 from .indexed_dataset import make_indexed_dataset
 
 logger = logging.get_logger(__name__)
+
+@dataclass
+class SubsetSplitLog:
+    name: str
+    data_prefix: str
+    doc_idx_filename: str
+    sample_idx_filename: str
+    shuffle_idx_filename: str
+    tokens_per_epoch: int
+    num_epochs: int
+    num_samples: int
+    seq_length: int
 
 
 def build_dataset(

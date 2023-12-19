@@ -15,7 +15,7 @@ from nanotron.core.serialize.optimizer import load_lr_scheduler, load_optimizer,
 from nanotron.core.serialize.path import fs_open, get_filesystem_and_path
 from nanotron.core.serialize.random import load_random_states, save_random_states
 from nanotron.core.serialize.weights import load_weights, save_weights
-from nanotron.core.utils import assert_tensor_synced_across_pg
+from nanotron.core.utils import assert_tensor_synced_across_pg, human_format
 
 """
 We're going to use safetensors. The reason is that loading segments is going to be much easier
@@ -47,6 +47,7 @@ __all__ = [
     "save_meta",
     "fs_open",
     "get_filesystem_and_path",
+    "human_format"
 ]
 
 

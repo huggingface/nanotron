@@ -7,7 +7,7 @@ if [ "$1" = "debug" ]; then
                 --rdzv_endpoint=localhost:6000 \
                 --use_env \
                 --tee=3 \
-                main.py \
+                use_trainer.py \
                 --config-file=config_tiny.yaml
                 # --tp=2 \
                 # --dp=2 \
@@ -37,6 +37,6 @@ else
                 --rdzv_endpoint=localhost:6000 \
                 --use_env \
                 --tee=3 \
-                main.py \
+                use_trainer.py \
                 --config-file=config_tiny.yaml
 fi

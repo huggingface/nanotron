@@ -1,3 +1,5 @@
+import os
+import warnings
 import functools
 import inspect
 from contextlib import ExitStack, contextmanager
@@ -11,6 +13,16 @@ from torch.utils.checkpoint import checkpoint
 from nanotron.core import distributed as dist
 from nanotron.core.distributed import get_global_rank
 
+def check_env():
+    if os.environ.get("CUDA_LAUNCH_BLOCKING", None) == "1":
+        raise RuntimeError("CUDA_LAUNCH_BLOCKING is set to 1. " "This will make distributed NCCL hang.")
+    if os.environ.get("USE_FAST", None) != "1":
+        warnings.warn(
+            "USE_FAST is not set. This will use the slow version of the code. "
+            "Set USE_FAST=1 to use the fast version of the code."
+        )
+    if os.environ.get("FI_PROVIDER", None) != "efa":
+        warnings.warn("FI_PROVIDER is not set to efa. This will not use EFA for communication.")
 
 class ContextManagers:
     """
@@ -263,3 +275,16 @@ def get_untyped_storage(tensor: torch.Tensor) -> torch.UntypedStorage:
         return tensor.untyped_storage()
     else:
         return tensor.storage().untyped()
+
+def human_format(num: float, billions: bool = False, divide_by_1024: bool = False) -> str:
+    if abs(num) < 1:
+        return "{:.3g}".format(num)
+    SIZES = ["", "K", "M", "G", "T", "P", "E"]
+    num = float("{:.3g}".format(num))
+    magnitude = 0
+    i = 0
+    while abs(num) >= 1000 and i < len(SIZES) - 1:
+        magnitude += 1
+        num /= 1000.0 if not divide_by_1024 else 1024.0
+        i += 1
+    return "{}{}".format("{:f}".format(num).rstrip("0").rstrip("."), SIZES[magnitude])

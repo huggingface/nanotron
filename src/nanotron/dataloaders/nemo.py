@@ -1,3 +1,5 @@
+from typing import Union
+from dataclasses import dataclass
 from torch.utils.data import DataLoader
 
 from nanotron.config import PretrainNemoArgs
@@ -7,8 +9,9 @@ from nanotron.core.logging import log_rank
 from nanotron.core.process_groups_initializer import DistributedProcessGroups
 
 from .dataloader import DataCollatorForCLM, EmptyInfiniteDataset, get_dataloader_worker_init
-from .nemo_dataset import GPTDataset, build_train_valid_test_datasets
+from .nemo_dataset import GPTDataset, SubsetSplitLog, build_train_valid_test_datasets
 from .nemo_dataset.data_samplers import MegatronPretrainingRandomSampler, MegatronPretrainingSampler
+from .nemo_dataset.blendable_dataset import BlendedSubsetSplitLog
 
 try:
 
@@ -17,6 +20,19 @@ except ImportError:
     tb_logger_available = False
 
 logger = logging.get_logger(__name__)
+
+@dataclass
+class TrainDataLog:
+    global_batch_size: int
+    sequence_length: int
+    total_training_tokens: int
+    human_total_train_tokens: str
+    train_num_samples: int
+    eval_num_samples: int
+    test_num_samples: int
+    train_subset: Union[SubsetSplitLog, BlendedSubsetSplitLog]
+    eval_subset: Union[SubsetSplitLog, BlendedSubsetSplitLog]
+    test_subset: Union[SubsetSplitLog, BlendedSubsetSplitLog]
 
 
 def get_nemo_datasets(

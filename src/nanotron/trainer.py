@@ -17,8 +17,8 @@ from datasets.download.streaming_download_manager import xPath
 from torch.nn.parallel import DistributedDataParallel
 from transformers import AutoConfig
 
-from brrr.clip_grads import clip_grad_norm
-from brrr.config import (
+from nanotron.clip_grads import clip_grad_norm
+from nanotron.config import (
     Config,
     ExistingCheckpointInit,
     HubLoggerConfig,
@@ -29,33 +29,32 @@ from brrr.config import (
     get_all_trainer_configs,
     get_config_from_file,
 )
-from brrr.core import distributed as dist
-from brrr.core import logging
-from brrr.core.logging import log_rank
-from brrr.core.parallelism.data_parallelism.utils import sync_gradients_across_dp
-from brrr.core.parallelism.parameters import BRRRParameter, sanity_check
-from brrr.core.parallelism.pipeline_parallelism.block import PipelineBlock
-from brrr.core.parallelism.pipeline_parallelism.engine import (
+from nanotron.core import distributed as dist
+from nanotron.core import logging
+from nanotron.core.logging import log_rank
+from nanotron.core.parallelism.data_parallelism.utils import sync_gradients_across_dp
+from nanotron.core.parallelism.parameters import NanotronParameter, sanity_check
+from nanotron.core.parallelism.pipeline_parallelism.block import PipelineBlock
+from nanotron.core.parallelism.pipeline_parallelism.engine import (
     PipelineEngine,
 )
-from brrr.core.parallelism.pipeline_parallelism.tensor_pointer import TensorPointer
-from brrr.core.parallelism.pipeline_parallelism.utils import get_pp_rank_of
-from brrr.core.parallelism.tensor_parallelism.nn import (
+from nanotron.core.parallelism.pipeline_parallelism.tensor_pointer import TensorPointer
+from nanotron.core.parallelism.pipeline_parallelism.utils import get_pp_rank_of
+from nanotron.core.parallelism.tensor_parallelism.nn import (
     TensorParallelLinearMode,
     TensorParallelRowLinear,
 )
-from brrr.core.parallelism.tied_parameters import (
+from nanotron.core.parallelism.tied_parameters import (
     create_pg_for_tied_weights,
     get_tied_id_to_param,
     sync_tied_weights_gradients,
     tie_parameters,
 )
-from brrr.core.process_groups_initializer import DistributedProcessGroups, get_process_groups
-from brrr.core.random import (
+from nanotron.core.process_groups_initializer import DistributedProcessGroups, get_process_groups
+from nanotron.core.random import (
     set_random_seed,
 )
-from brrr.core.serialize import (
-    S3Mover,
+from nanotron.core.serialize import (
     human_format,
     load_lr_scheduler,
     load_meta,
@@ -64,17 +63,17 @@ from brrr.core.serialize import (
     save,
     save_random_states,
 )
-from brrr.core.serialize.path import check_path_is_local, parse_ckpt_path
-from brrr.core.serialize.serialize import fs_open
-from brrr.core.tensor_init import init_method_normal, scaled_init_method_normal
-from brrr.core.utils import (
+from nanotron.core.serialize.path import check_path_is_local, parse_ckpt_path
+from nanotron.core.serialize.serialize import fs_open
+from nanotron.core.tensor_init import init_method_normal, scaled_init_method_normal
+from nanotron.core.utils import (
     assert_tensor_synced_across_pg,
     check_env,
     init_on_device_and_dtype,
 )
-from brrr.dataloaders.dataloader import sanity_check_dataloader
-from brrr.dataloaders.nemo import TrainDataLog
-from brrr.helpers import (
+from nanotron.dataloaders.dataloader import sanity_check_dataloader
+from nanotron.dataloaders.nemo import TrainDataLog
+from nanotron.helpers import (
     _vocab_size_with_padding,
     get_profiler,
     init_optimizer_and_grad_accumulator,
@@ -83,21 +82,18 @@ from brrr.helpers import (
     lr_scheduler_builder,
     set_logger_verbosity_format,
 )
-from brrr.lighteval.runner import LightEvalRunner
-from brrr.logger import LoggerWriter, LogItem, obj_to_markdown
-from brrr.models import BRRRModel
+from nanotron.logger import LoggerWriter, LogItem, obj_to_markdown
+from nanotron.models import NanotronModel
 
 if int(os.environ.get("USE_FAST", 0)) == 1:
     # We import the fast versions
-    from brrr.models.fast.falcon import FalconForTraining
-    from brrr.models.fast.gpt2 import GPTForTraining
-    from brrr.models.fast.llama import LlamaForTraining, RotaryEmbedding
-    from brrr.models.fast.starcoder2 import Starcoder2ForTraining
+    from nanotron.models.fast.falcon import FalconForTraining
+    from nanotron.models.fast.gpt2 import GPTForTraining
+    from nanotron.models.fast.llama import LlamaForTraining, RotaryEmbedding
 else:
-    from brrr.models.falcon import FalconForTraining
-    from brrr.models.fast.starcoder2 import Starcoder2ForTraining
-    from brrr.models.gpt2 import GPTForTraining
-    from brrr.models.llama import LlamaForTraining, RotaryEmbedding
+    from nanotron.models.falcon import FalconForTraining
+    from nanotron.models.gpt2 import GPTForTraining
+    from nanotron.models.llama import LlamaForTraining, RotaryEmbedding
 
 logger = logging.get_logger(__name__)
 
@@ -106,14 +102,14 @@ dist_logger = logging.get_logger(dist.dist.__name__)
 dist_logger.setLevel(logging.WARNING)
 
 try:
-    from brrr.logger import BatchSummaryWriter
+    from nanotron.logger import BatchSummaryWriter
 
     tb_logger_available = True
 except ImportError:
     tb_logger_available = False
 
 try:
-    from brrr.logger import HubSummaryWriter
+    from nanotron.logger import HubSummaryWriter
 
     hub_logger_available = True
 except ImportError:
@@ -124,7 +120,6 @@ CONFIG_TO_MODEL_CLASS = {
     "GPTBigCodeConfig": GPTForTraining,
     "FalconConfig": FalconForTraining,
     "RWConfig": FalconForTraining,
-    "Starcoder2Config": Starcoder2ForTraining,
 }
 
 MIN_GPU_MEM_THRESHOLD = 0  # 80GB
@@ -142,10 +137,6 @@ class DistributedTrainer:
             all_configs.config,
             all_configs.model_config,
         )
-
-        ########################################
-        ## We start with setting up loggers and process groups
-        ########################################
 
         ########################################
         ## We start with setting up loggers and process groups
@@ -219,7 +210,7 @@ class DistributedTrainer:
         torch.cuda.reset_peak_memory_stats()
 
         # Log benchmark info
-        if os.environ.get("BRRR_BENCHMARK", "0") == "1":
+        if os.environ.get("Nanotron_BENCHMARK", "0") == "1":
             log_throughput(self.config, self.dpg)
 
         ########################################
@@ -284,46 +275,6 @@ class DistributedTrainer:
             model_config_dict = asdict(self.model_config)
         self.log_object(model_config_dict, "model_config")
 
-        # Log environment variables
-        self.log_object(os.environ, "environment_variables")
-        if os.environ.get("SLURM_JOB_ID", None) is not None:
-            keys = [
-                "JobId",
-                "Name",
-                "Command",
-                "STDOUT",
-                "STDERR",
-                "NumNodes",
-                "NodeList",
-                "GroupID",
-                "OverSubscribe",
-                "Partition",
-                "cpus-per-task",
-                "UserName",
-                "SubmitTime",
-            ]
-            format_str = ",".join(f"{k}:1000" for k in keys)
-            output = subprocess.check_output(
-                [f'squeue --Format="{format_str}" -j {os.environ.get("SLURM_JOB_ID", None)} --noheader'],
-                universal_newlines=True,
-                stderr=subprocess.STDOUT,
-                shell=True,
-            )
-            slurm_dict = {k: output[i * 1000 : (i + 1) * 1000].strip() for i, k in enumerate(keys)}
-            slurm_job_name = slurm_dict["Name"]
-            slurm_job_id = slurm_dict["JobId"]
-            for key, value in os.environ.items():
-                if key.startswith("SLURM") or key.startswith("SRUN"):
-                    slurm_dict[key] = value
-            slurm_dict = {
-                k: o.replace("%x", slurm_job_name).replace("%j", slurm_job_id).replace("%n", "0").replace("%t", "0")
-                for k, o in slurm_dict.items()
-            }
-            for key, value in os.environ.items():
-                if key.startswith("SLURM") or key.startswith("SRUN"):
-                    slurm_dict[key] = value
-            self.log_object(slurm_dict, "slurm")
-
         # Do a first NCCL sync to warmup and try to avoid Timeout after model/data loading
         test_tensor = torch.tensor([dist.get_rank(self.dpg.world_pg)], device=torch.device("cuda"))
         test_tensor_list = [torch.zeros_like(test_tensor) for _ in range(self.dpg.world_pg.size())]
@@ -348,29 +299,6 @@ class DistributedTrainer:
         self.sequence_length = self.config.tokens.sequence_length
         self.iteration_step = self.start_iteration_step
         self.limit_val_batches = self.config.tokens.limit_val_batches
-
-        # S3 Mover and save initial state
-        if self.config.checkpoints.s3 is not None:
-            # Only local rank 0 should upload
-            dummy = bool(int(os.environ.get("LOCAL_RANK", None)) != 0)
-            self.s3_mover = S3Mover(
-                local_path=self.config.checkpoints.checkpoints_path,
-                s3_path=self.config.checkpoints.s3.upload_s3_path,
-                # duplicate_checkpoint_path=self.config.checkpoints.resume_checkpoint_path,
-                remove_after_upload=self.config.checkpoints.s3.remove_after_upload,
-                s5cmd_numworkers=self.config.checkpoints.s3.s5cmd_numworkers,
-                s5cmd_concurrency=self.config.checkpoints.s3.s5cmd_concurrency,
-                s5cmd_path=self.config.checkpoints.s3.s5cmd_path,
-                dummy=dummy,
-            )
-        else:
-            self.s3_mover = None
-        if self.config.checkpoints.lighteval is not None and dist.get_rank(self.dpg.world_pg) == 0:
-            # We only start evaluation runs on the first node
-            if self.s3_mover is None:
-                raise ValueError("lighteval requires s3 upload of checkpoints to be enabled")
-            self.lighteval_runner = LightEvalRunner(config=self.config, dpg=self.dpg)
-            self.s3_mover.post_upload_callback = self.lighteval_runner.eval_single_checkpoint
 
         if self.config.checkpoints.save_initial_state and checkpoint_path is None:
             self.save_checkpoint()
@@ -455,10 +383,6 @@ class DistributedTrainer:
                     if self.iteration_step % self.config.checkpoints.checkpoint_interval == 0:
                         self.save_checkpoint()
 
-                    # Update our background upload/removal of checkpoints
-                    if self.s3_mover is not None:
-                        self.s3_mover.update()
-
                     # Validation #TODO: fix validation
                     # if (
                     #     valid_dataloader is not None
@@ -480,9 +404,6 @@ class DistributedTrainer:
                         )
                         # it is a future that queues to avoid concurrent push
                         self.tb_context.scheduler.trigger()
-
-        if self.s3_mover is not None:
-            self.s3_mover.distributed_wait_for_completion(group=self.dpg.world_pg)
 
     def training_step(
         self, dataloader: Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]]
@@ -673,8 +594,8 @@ class DistributedTrainer:
 
             self.loggerwriter.add_scalars_from_list(log_entries, self.iteration_step)
 
-        # BRRR Benchmark mode: we log the throughput and exit
-        if os.environ.get("BRRR_BENCHMARK", "0") == "1" and self.iteration_step == 3:
+        # Nanotron Benchmark mode: we log the throughput and exit
+        if os.environ.get("Nanotron_BENCHMARK", "0") == "1" and self.iteration_step == 3:
             log_throughput(
                 self.config,
                 self.dpg,
@@ -691,16 +612,16 @@ class DistributedTrainer:
     @staticmethod
     def build_model(
         model_config: AutoConfig,
-        model_builder: Callable[[], BRRRModel],
+        model_builder: Callable[[], NanotronModel],
         dpg: DistributedProcessGroups,
         dtype: torch.dtype,
         target_pp_ranks: Optional[List[int]] = None,
         device: Optional[torch.device] = torch.device("cuda"),
-    ) -> BRRRModel:
+    ) -> NanotronModel:
         """Build the model and set the pp ranks for each pipeline block."""
         # TODO: classes dont take same args
         log_rank("Building model..", logger=logger, level=logging.INFO, rank=0, group=dpg.world_pg)
-        model: BRRRModel = model_builder()
+        model: NanotronModel = model_builder()
 
         # If no target pp ranks are specified, we assume that we want to use all pp ranks
         if target_pp_ranks is None:
@@ -714,7 +635,7 @@ class DistributedTrainer:
         pipeline_blocks = [module for name, module in model.named_modules() if isinstance(module, PipelineBlock)]
         # "cuda" is already defaulted for each process to it's own cuda device
         with init_on_device_and_dtype(device=device, dtype=dtype):
-            # TODO: https://github.com/huggingface/brrr/issues/65
+            # TODO: https://github.com/huggingface/Nanotron/issues/65
 
             # Balance compute across PP blocks
             block_compute_costs = model.get_block_compute_costs()
@@ -740,7 +661,7 @@ class DistributedTrainer:
 
         return model
 
-    def init_model(self) -> Tuple[BRRRModel, Optional[str]]:
+    def init_model(self) -> Tuple[NanotronModel, Optional[str]]:
         """Initialize the model and load weights from checkpoint if needed."""
         # TODO: add max_position_embeddings
         self.model_config.vocab_size = _vocab_size_with_padding(
@@ -833,9 +754,9 @@ class DistributedTrainer:
     def _init_model(
         self,
         model_config: AutoConfig,
-        model_builder: Callable[[], BRRRModel],
+        model_builder: Callable[[], NanotronModel],
         target_pp_ranks: Optional[List[int]] = None,
-    ) -> BRRRModel:
+    ) -> NanotronModel:
         config = self.config
         dpg = self.dpg
 
@@ -852,10 +773,10 @@ class DistributedTrainer:
         )
 
         # Initialize rotary embeddings
-        for module in model.modules():
-            if not isinstance(module, RotaryEmbedding):
-                continue
-            module.init_rotary_embeddings()
+        # for module in model.modules():
+        #     if not isinstance(module, RotaryEmbedding):
+        #         continue
+        #     module.init_rotary_embeddings()
 
         # Mark some parameters as tied
         mark_tied_parameters(model=model, dpg=dpg, parallel_config=parallel_config)
@@ -902,7 +823,7 @@ class DistributedTrainer:
                 model, process_group=dpg.dp_pg, broadcast_buffers=False, bucket_cap_mb=config.model.ddp_bucket_cap_mb
             )
 
-        # Sanity check the model, all parameters must be BRRRParameter (either tied or sharded)
+        # Sanity check the model, all parameters must be NanotronParameter (either tied or sharded)
         sanity_check(root_module=model)
 
         return model
@@ -926,7 +847,7 @@ class DistributedTrainer:
                 if isinstance(self.config.logging.tensorboard_logger, HubLoggerConfig):
                     assert (
                         hub_logger_available
-                    ), 'Hub Tensorboard Logger is not available. Please install brrr with `pip install -e ".[hf-logger]"` or modify your config file'
+                    ), 'Hub Tensorboard Logger is not available. Please install Nanotron with `pip install -e ".[hf-logger]"` or modify your config file'
                     tb_context = HubSummaryWriter(
                         logdir=logdir,
                         repo_id=self.config.logging.tensorboard_logger.repo_id,
@@ -936,7 +857,7 @@ class DistributedTrainer:
                 elif isinstance(self.config.logging.tensorboard_logger, TensorboardLoggerConfig):
                     assert (
                         tb_logger_available
-                    ), 'Tensorboard Logger is not available. Please install brrr with `pip install -e ".[tb-logger]"` or modify your config file'
+                    ), 'Tensorboard Logger is not available. Please install Nanotron with `pip install -e ".[tb-logger]"` or modify your config file'
 
                     if isinstance(self.config.logging.tensorboard_logger, WandbLoggerConfig):
                         try:
@@ -984,12 +905,6 @@ class DistributedTrainer:
             sys.exit(0)
 
     def save_checkpoint(self) -> xPath:
-        if self.s3_mover is not None:
-            self.s3_mover.distributed_wait_for_completion(self.dpg.world_pg)
-            if self.s3_mover.post_upload_callback_outputs is not None:
-                slurm_job_id, slurm_log = self.s3_mover.post_upload_callback_outputs
-                self.log_object({"job_id": slurm_job_id, "log": slurm_log}, "slurm_eval")
-
         checkpoints_path = self.config.checkpoints.checkpoints_path
         checkpoint_path = checkpoints_path / f"{self.iteration_step}"
         if check_path_is_local(checkpoint_path):
@@ -1039,10 +954,6 @@ class DistributedTrainer:
         else:
             with fs_open(checkpoint_path / "model_config.json", mode="w") as fo:
                 fo.write(json.dumps(asdict(self.model_config)))
-
-        # Upload to S3
-        if self.s3_mover is not None:
-            self.s3_mover.start_uploading()
 
         return checkpoint_path
 
@@ -1209,7 +1120,7 @@ class DistributedTrainer:
 
 
 def mark_tied_parameters(
-    model: BRRRModel, dpg: DistributedProcessGroups, parallel_config: Optional[ParallelismArgs] = None
+    model: NanotronModel, dpg: DistributedProcessGroups, parallel_config: Optional[ParallelismArgs] = None
 ):
     # Tie embeddings
     embeddings_lm_head_tied_names = model.get_embeddings_lm_head_tied_names()
@@ -1233,12 +1144,12 @@ def mark_tied_parameters(
         for param_name, param in module.named_parameters(recurse=False):
             name = f"{module_name}.{param_name}"
 
-            if (isinstance(model, GPTForTraining) or isinstance(model, Starcoder2ForTraining)) and ".qkv.kv." in name:
+            if isinstance(model, GPTForTraining) and ".qkv.kv." in name:
                 assert param.is_tied, f"Expected {name} to already be synced"
                 # kv is deliberately skipped as it's tied in model init (_mark_kv_parameters_in_module_as_tied)
                 continue
 
-            if isinstance(param, BRRRParameter) and param.is_sharded:
+            if isinstance(param, NanotronParameter) and param.is_sharded:
                 continue
 
             if isinstance(module, TensorParallelRowLinear) and "bias" == param_name:
@@ -1263,3 +1174,81 @@ def mark_tied_parameters(
             tie_parameters(root_module=model, ties=shared_weights, dpg=dpg, reduce_op=reduce_op)
 
     create_pg_for_tied_weights(root_module=model, dpg=dpg)
+
+# def mark_tied_parameters(
+#     model: NanotronModel, dpg: DistributedProcessGroups, parallel_config: Optional[ParallelismArgs] = None
+# ):
+#     # Use https://github.com/huggingface/nanotron/blob/main/src/nanotron/trainer.py#L873
+#     if isinstance(model, GPTForTraining):
+#         # Tie embeddings
+#         shared_embeddings = [
+#             (
+#                 target,
+#                 (
+#                     dpg.world_rank_matrix[
+#                         get_pp_rank_of(target, module=model), dist.get_rank(dpg.dp_pg), dist.get_rank(dpg.tp_pg)
+#                     ],
+#                 ),
+#             )
+#             for target in [
+#                 "model.token_position_embeddings.pp_block.token_embedding.weight",
+#                 "model.lm_head.pp_block.weight",
+#             ]
+#         ]
+#         tie_parameters(root_module=model, ties=shared_embeddings, dpg=dpg, reduce_op=dist.ReduceOp.SUM)
+
+#     # TODO @nouamane: refactor tying parameters
+#     if isinstance(model, FalconForTraining):
+#         # Tie embeddings
+#         shared_embeddings = [
+#             (
+#                 target,
+#                 (
+#                     dpg.world_rank_matrix[
+#                         get_pp_rank_of(target, module=model), dist.get_rank(dpg.dp_pg), dist.get_rank(dpg.tp_pg)
+#                     ],
+#                 ),
+#             )
+#             for target in [
+#                 "transformer.word_embeddings.pp_block.token_embedding.weight",
+#                 "transformer.lm_head.pp_block.weight",
+#             ]
+#         ]
+#         tie_parameters(root_module=model, ties=shared_embeddings, dpg=dpg, reduce_op=dist.ReduceOp.SUM)
+
+#     # Sync all parameters that have the same name and that are not sharded
+#     for module_name, module in model.named_modules():
+#         for param_name, param in module.named_parameters(recurse=False):
+#             name = f"{module_name}.{param_name}"
+
+#             if isinstance(model, GPTForTraining) and ".qkv.kv." in name:
+#                 assert param.is_tied, f"Expected {name} to already be synced"
+#                 # kv is deliberately skipped as it's tied in model init (_mark_kv_parameters_in_module_as_tied)
+#                 continue
+
+#             if isinstance(param, NanotronParameter) and param.is_sharded:
+#                 continue
+
+#             if isinstance(module, TensorParallelRowLinear) and "bias" == param_name:
+#                 # bias for TensorParallelRowLinear only exists on TP=0 so we don't need to tie it
+#                 continue
+
+#             shared_weights = [
+#                 (
+#                     name,
+#                     # This adds all the tp_ranks in one go
+#                     tuple(sorted(dpg.world_rank_matrix[dist.get_rank(dpg.pp_pg), dist.get_rank(dpg.dp_pg), :])),
+#                 )
+#             ]
+
+#             # TODO @thomasw21: Somehow declaring tied weights at local level doesn't work correctly.
+#             if parallel_config is None or parallel_config.tp_mode is TensorParallelLinearMode.ALL_REDUCE:
+#                 # We add `reduce_op=None` in order to signal that the weight are synced by design without needing to reduce
+#                 # when TP=2 we have LN that is duplicated across TP, so by design it's tied
+#                 reduce_op = None
+#             else:
+#                 reduce_op = dist.ReduceOp.SUM
+
+#             tie_parameters(root_module=model, ties=shared_weights, dpg=dpg, reduce_op=reduce_op)
+
+#     create_pg_for_tied_weights(root_module=model, dpg=dpg)

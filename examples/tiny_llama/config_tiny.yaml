@@ -1,5 +1,5 @@
 general:
-  name: brrr_example_tiny_llama
+  project: brrr_example_tiny_llama
   ignore_sanity_checks: false
   kill_switch_path: ./kill_tiny_llama
 
@@ -7,7 +7,7 @@ profile: null
 
 checkpoints:
   checkpoints_path: ./checkpoints
-  checkpoint_interval: 1500
+  checkpoint_interval: 50
 
 parallelism:
   dp: 4
@@ -19,7 +19,7 @@ parallelism:
   recompute_granularity: selective
 
 model:
-  model_name: "tiny-random-llama-2"
+  hf_model_name: "tiny-random-llama-2"
   make_vocab_size_divisible_by: 128
   init_method:
     std: 0.03608 # Basically 1/sqrt(N)
@@ -39,7 +39,7 @@ logging:
 
 tokens:
   sequence_length: 256
-  train_steps: 15000  # Chinchilla scaling laws: 3B tokens ~= 15000 steps
+  train_steps: 150  # Chinchilla scaling laws: 3B tokens ~= 15000 steps
   micro_batch_size: 4
   batch_accumulation_per_replica: 8
   val_check_interval: 100

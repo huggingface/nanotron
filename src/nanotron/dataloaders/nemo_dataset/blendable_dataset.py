@@ -15,9 +15,10 @@
 """Blendable dataset."""
 
 import time
-
+from dataclasses import dataclass
 import numpy as np
 import torch
+from typing import TYPE_CHECKING, List
 
 from nanotron.core import distributed as dist
 from nanotron.core import logging
@@ -26,8 +27,17 @@ from nanotron.core.process_groups_initializer import DistributedProcessGroups
 
 from .dataset_utils import compile_helper
 
+
+if TYPE_CHECKING:
+    from . import GPTDataset, SubsetSplitLog
+
 logger = logging.get_logger(__name__)
 
+@dataclass
+class BlendedSubsetSplitLog:
+    blended_total_num_samples: int
+    blended_per_subset_samples: List[int]
+    blended_subset: List["SubsetSplitLog"]
 
 class BlendableDataset(torch.utils.data.Dataset):
     def __init__(self, datasets, weights, size, dpg: DistributedProcessGroups):
