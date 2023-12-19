@@ -46,7 +46,7 @@ class PipelineEngine(ABC):
 
         # We make `output` a dict
         if not isinstance(output, dict):
-            output["loss"] = output
+            output = {"loss": output}
 
         # We normalize our loss
         if not isinstance(output["loss"], TensorPointer):
@@ -121,26 +121,22 @@ class PipelineEngine(ABC):
         model: torch_nn.Module,
         pg: ProcessGroup,
         batch: Iterable[Dict[str, Union[torch.Tensor, TensorPointer]]],
+        nb_microbatches: int,
         grad_accumulator: Optional[GradientAccumulator],
     ) -> Iterable[Dict[str, Union[torch.Tensor, TensorPointer]]]:
         """If model returns tensor, we use it as a loss to backpropagate. If model returns a dict, we assume that the key "loss" is the loss to backpropagate."""
         ...
 
-
-class AllForwardAllBackwardPipelineEngine(PipelineEngine):
-    def __init__(self):
-        super().__init__()
-
-    def train_batch_iter(
+    @torch.inference_mode()
+    def validate_batch_iter(
         self,
         model: torch_nn.Module,
-        pg: ProcessGroup,
         batch: Iterable[Dict[str, Union[torch.Tensor, TensorPointer]]],
-        grad_accumulator: Optional[GradientAccumulator],
+        nb_microbatches: int,
     ) -> Iterable[Dict[str, Union[torch.Tensor, TensorPointer]]]:
         # Assign a new state for the current batch
-        state = PipelineTrainBatchState()
-        assert self.nb_microbatches is not None, "you must set self.nb_microbatches before training"
+        state = PipelineTrainBatchState()  # TODO: do i need state?
+        self.nb_microbatches = nb_microbatches
 
         outputs = []
 
@@ -157,7 +153,48 @@ class AllForwardAllBackwardPipelineEngine(PipelineEngine):
 
                 # We make `output` a dict
                 if not isinstance(output, dict):
-                    output["loss"] = output
+                    output = {"loss": output}
+
+                # Store the loss for each microbatch
+                if not isinstance(output["loss"], TensorPointer):
+                    output = {k: v.detach() for k, v in output.items()}
+                outputs.append(output)
+
+        return outputs
+
+
+class AllForwardAllBackwardPipelineEngine(PipelineEngine):
+    def __init__(self):
+        super().__init__()
+
+    def train_batch_iter(
+        self,
+        model: torch_nn.Module,
+        pg: ProcessGroup,
+        batch: Iterable[Dict[str, Union[torch.Tensor, TensorPointer]]],
+        nb_microbatches: int,
+        grad_accumulator: Optional[GradientAccumulator],
+    ) -> Iterable[Dict[str, Union[torch.Tensor, TensorPointer]]]:
+        # Assign a new state for the current batch
+        state = PipelineTrainBatchState()
+        self.nb_microbatches = nb_microbatches
+
+        outputs = []
+
+        with attach_pipeline_state_to_model(model=model, pipeline_state=state):
+            # All forward
+            for micro_batch in batch:
+                context = self._get_fwd_context(model=model)
+                output = self.forward(context=context, state=state, micro_batch=micro_batch, model=model)
+                # TODO @thomasw21: Somehow this needs to be done somewhere else to support interleaving. Somewhere right after a "stage"
+                for _ in range(len(state.microbatches_activations_to_send)):
+                    send_activation = state.microbatches_activations_to_send.popleft()
+                    # Execute
+                    send_activation()
+
+                # We make `output` a dict
+                if not isinstance(output, dict):
+                    output = {"loss": output}
 
                 # Store the loss for each microbatch
                 if not isinstance(output["loss"], TensorPointer):
@@ -192,10 +229,11 @@ class OneForwardOneBackwardPipelineEngine(PipelineEngine):
         model: torch_nn.Module,
         pg: ProcessGroup,
         batch: Iterable[Dict[str, Union[torch.Tensor, TensorPointer]]],
+        nb_microbatches: int,
         grad_accumulator: Optional[GradientAccumulator],
     ) -> Iterable[Dict[str, Union[torch.Tensor, TensorPointer]]]:
         """Check https://arxiv.org/abs/2104.04473 for diagrams for the pipeline engine"""
-        assert self.nb_microbatches is not None, "you must set self.nb_microbatches before training"
+        self.nb_microbatches = nb_microbatches
         assert (
             self.nb_microbatches >= pg.size() - 1
         ), f"Number of microbatches ({self.nb_microbatches}) must be at least PP_SIZE-1={pg.size() - 1} when using the OneForwardOneBackwardPipelineEngine"
@@ -222,7 +260,7 @@ class OneForwardOneBackwardPipelineEngine(PipelineEngine):
 
                 # We make `output` a dict
                 if not isinstance(output, dict):
-                    output["loss"] = output
+                    output = {"loss": output}
 
                 # Send tensors
                 # TODO @thomasw21: Somehow this needs to be done somewhere else to support interleaving. Somewhere right after a "stage"
@@ -242,7 +280,7 @@ class OneForwardOneBackwardPipelineEngine(PipelineEngine):
 
                 # We make `output` a dict
                 if not isinstance(output, dict):
-                    output["loss"] = output
+                    output = {"loss": output}
 
                 # Store the loss for each microbatch
                 if not isinstance(output["loss"], TensorPointer):
