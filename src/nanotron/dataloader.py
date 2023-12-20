@@ -12,9 +12,9 @@ from transformers import (
 )
 from transformers.trainer_pt_utils import DistributedSamplerWithLoop
 
+from nanotron import logging
 from nanotron.config import Config
 from nanotron.core import distributed as dist
-from nanotron import logging
 from nanotron.core.parallel.pipeline_parallelism.tensor_pointer import TensorPointer
 from nanotron.core.process_groups import DistributedProcessGroups
 from nanotron.core.random import set_random_seed

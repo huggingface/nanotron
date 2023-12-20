@@ -1,26 +1,25 @@
 from enum import Enum
-from typing import List, Optional, Tuple
-
-from nanotron.config.config import Config
-from nanotron import logging
-from nanotron.core.process_groups import DistributedProcessGroups
-from nanotron.logging import log_rank
-
 from pathlib import Path
+from typing import TYPE_CHECKING, List, Optional, Tuple
 
 import torch
 from torch import nn
 from torch.nn.parallel import DistributedDataParallel
 
+from nanotron import logging
 from nanotron.core import distributed as dist
 from nanotron.core import optim as optim
-from nanotron.core.process_groups import DistributedProcessGroups
 from nanotron.core.distributed import get_global_rank
 from nanotron.core.parallel.parameters import NanotronParameter
+from nanotron.core.process_groups import DistributedProcessGroups
+from nanotron.core.utils import assert_tensor_synced_across_pg
+from nanotron.logging import log_rank
 from nanotron.serialize.metadata import CheckpointMetadata, load_meta, save_meta
 from nanotron.serialize.optimizer import load_lr_scheduler, load_optimizer, save_lr_scheduler, save_optimizer
 from nanotron.serialize.weights import load_weights, save_weights
-from nanotron.core.utils import assert_tensor_synced_across_pg
+
+if TYPE_CHECKING:
+    from nanotron.config.config import Config
 
 """
 We're going to use safetensors. The reason is that loading segments is going to be much easier
@@ -40,8 +39,9 @@ Version 1:
 
 logger = logging.get_logger(__name__)
 
+
 def save(
-    config: Config,
+    config: "Config",
     model: nn.Module,
     optimizer: optim.BaseOptimizer,
     lr_scheduler: torch.optim.lr_scheduler.LRScheduler,
@@ -213,7 +213,6 @@ def load(
         root_folder=root_folder,
     )
     return checkpoint_metadata
-
 
 
 class ObjectType(Enum):

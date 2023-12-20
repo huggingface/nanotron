@@ -9,22 +9,17 @@ import argparse
 from typing import Optional
 
 from huggingface_hub import __version__ as hf_hub_version
-from torch.nn.parallel import DistributedDataParallel
-from transformers import AutoTokenizer
-from transformers import __version__ as tf_version
-
+from nanotron import logging
 from nanotron.config import (
     PretrainDatasetsArgs,
     PretrainNemoArgs,
     TokenizedBytesDatasetArgs,
 )
 from nanotron.core import distributed as dist
-from nanotron import logging
-from nanotron.logging import log_rank
 from nanotron.core.utils import (
     main_rank_first,
 )
-from nanotron.dataloaders.dataloader import (
+from nanotron.dataloader import (
     clm_process,
     dummy_infinite_data_generator,
     get_datasets,
@@ -32,16 +27,18 @@ from nanotron.dataloaders.dataloader import (
 )
 from nanotron.dataloaders.nemo import get_nemo_dataloader, get_nemo_datasets
 from nanotron.dataloaders.tokenized_bytes import get_s3_dataloader, get_s3_datasets
+from nanotron.logging import log_rank
 from nanotron.trainer import DistributedTrainer
+from torch.nn.parallel import DistributedDataParallel
+from transformers import AutoTokenizer
+from transformers import __version__ as tf_version
 
 logger = logging.get_logger(__name__)
 
 
 def get_dataloader(trainer: DistributedTrainer, sanity_check_dataloader_interval: Optional[int] = None):
     # Prepare dataloader
-    tokenizer_path = (
-        trainer.config.model.tokenizer_name_or_path
-    )
+    tokenizer_path = trainer.config.model.tokenizer_name_or_path
     log_rank(
         f"Loading tokenizer from {tokenizer_path} and transformers/hf_hub versions {tf_version, hf_hub_version}",
         logger=logger,

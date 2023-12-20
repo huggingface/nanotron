@@ -4,8 +4,8 @@ from typing import Any, Dict, Optional, Tuple
 import torch
 from torch import nn
 
-from nanotron.core import distributed as dist
 from nanotron import logging
+from nanotron.core import distributed as dist
 
 logger = logging.get_logger(__name__)
 
@@ -135,11 +135,15 @@ class NanotronParameter(nn.Parameter):
         )
 
     def get_tied_info(self) -> TiedInfo:
-        return getattr(self, self.NANOTRON_PARAMETER_METADATA_ATTRIBUTE_NAME)[self.NANOTRON_PARAMETER_METADATA_TIED_KEY]
+        return getattr(self, self.NANOTRON_PARAMETER_METADATA_ATTRIBUTE_NAME)[
+            self.NANOTRON_PARAMETER_METADATA_TIED_KEY
+        ]
 
     @property
     def is_tied(self) -> bool:
-        return self.NANOTRON_PARAMETER_METADATA_TIED_KEY in getattr(self, self.NANOTRON_PARAMETER_METADATA_ATTRIBUTE_NAME)
+        return self.NANOTRON_PARAMETER_METADATA_TIED_KEY in getattr(
+            self, self.NANOTRON_PARAMETER_METADATA_ATTRIBUTE_NAME
+        )
 
     def mark_as_sharded(
         self,
@@ -157,11 +161,15 @@ class NanotronParameter(nn.Parameter):
         )
 
     def get_sharded_info(self) -> ShardedInfo:
-        return getattr(self, self.NANOTRON_PARAMETER_METADATA_ATTRIBUTE_NAME)[self.NANOTRON_PARAMETER_METADATA_SHARDED_KEY]
+        return getattr(self, self.NANOTRON_PARAMETER_METADATA_ATTRIBUTE_NAME)[
+            self.NANOTRON_PARAMETER_METADATA_SHARDED_KEY
+        ]
 
     @property
     def is_sharded(self) -> bool:
-        return self.NANOTRON_PARAMETER_METADATA_SHARDED_KEY in getattr(self, self.NANOTRON_PARAMETER_METADATA_ATTRIBUTE_NAME)
+        return self.NANOTRON_PARAMETER_METADATA_SHARDED_KEY in getattr(
+            self, self.NANOTRON_PARAMETER_METADATA_ATTRIBUTE_NAME
+        )
 
 
 def sanity_check(root_module: nn.Module):

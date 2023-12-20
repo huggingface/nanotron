@@ -4,9 +4,8 @@ import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
 import torch.cuda
-from torch.distributed.launcher import elastic_launch
-
 from nanotron.core.process_groups import get_process_groups
+from torch.distributed.launcher import elastic_launch
 
 
 def available_gpus():

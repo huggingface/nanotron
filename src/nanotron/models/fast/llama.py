@@ -24,11 +24,10 @@ from torch.nn.parallel import DistributedDataParallel
 from transformers import LlamaConfig
 from transformers.activations import ACT2FN
 
+from nanotron import logging
 from nanotron.config.config import ParallelismArgs, RecomputeGranularity
 from nanotron.core import distributed as dist
-from nanotron import logging
 from nanotron.core.dataclass import RandomStates
-from nanotron.logging import log_rank
 from nanotron.core.parallel.parameters import NanotronParameter
 from nanotron.core.parallel.pipeline_parallelism.block import PipelineBlock, TensorPointer
 from nanotron.core.parallel.pipeline_parallelism.p2p import P2P
@@ -44,6 +43,7 @@ from nanotron.core.parallel.tied_parameters import (
 )
 from nanotron.core.process_groups import DistributedProcessGroups
 from nanotron.core.utils import checkpoint_method
+from nanotron.logging import log_rank
 from nanotron.models import NanotronModel
 from nanotron.store import AttachableStore
 

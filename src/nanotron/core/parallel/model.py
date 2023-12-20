@@ -1,8 +1,8 @@
 from torch import nn
 
 from nanotron.core import distributed as dist
-from nanotron.core.process_groups import DistributedProcessGroups
 from nanotron.core.parallel.tied_parameters import get_tied_id_to_param
+from nanotron.core.process_groups import DistributedProcessGroups
 
 
 def initial_sync(model: nn.Module, dpg: DistributedProcessGroups):

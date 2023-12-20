@@ -8,13 +8,13 @@ from transformers import LlamaTokenizer
 
 from nanotron.config import GenerationArgs
 from nanotron.core import distributed as dist
-from nanotron.core.process_groups import DistributedProcessGroups
 from nanotron.core.distributed import ProcessGroup, get_global_rank
 from nanotron.core.parallel.pipeline_parallelism.block import get_min_max_rank
 from nanotron.core.parallel.pipeline_parallelism.context_manager import attach_pipeline_state_to_model
 from nanotron.core.parallel.pipeline_parallelism.p2p import P2P, TensorMetaData, view_as_contiguous
 from nanotron.core.parallel.pipeline_parallelism.state import PipelineEvalBatchState
 from nanotron.core.parallel.pipeline_parallelism.tensor_pointer import TensorPointer
+from nanotron.core.process_groups import DistributedProcessGroups
 from nanotron.core.utils import get_untyped_storage
 from nanotron.generate.sampler import BasicSampler, GreedySampler, SamplerType, TopKSampler, TopPSampler
 from nanotron.models.generate_store import Store, attach_store

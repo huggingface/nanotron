@@ -7,8 +7,8 @@ USE_FAST=1 CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node=4 examples/ru
 """
 import argparse
 
-from nanotron.config import get_lighteval_config_from_file
 from nanotron import logging
+from nanotron.config import get_lighteval_config_from_file
 from nanotron.lighteval.runner import LightEvalRunner
 
 logger = logging.get_logger(__name__)

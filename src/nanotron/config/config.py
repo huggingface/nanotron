@@ -1,34 +1,112 @@
 import datetime
-import importlib
 import os
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional, TypeVar, Union
+from pathlib import Path
+from typing import Optional, Union
 
 import dacite
 import torch
 import yaml
 from dacite import from_dict
-from pathlib import Path
 from transformers import AutoConfig
 from yaml.loader import SafeLoader
 
-from nanotron.logging import get_logger
+from nanotron.config.models_config import NanotronConfigs
+from nanotron.config.utils_config import (
+    RecomputeGranularity,
+    cast_str_to_pipeline_engine,
+    cast_str_to_torch_dtype,
+    serialize,
+)
 from nanotron.core.parallel.pipeline_parallelism.engine import (
     AllForwardAllBackwardPipelineEngine,
     PipelineEngine,
 )
-from nanotron.config.checkpoints_config import CheckpointsArgs
-from nanotron.config.data_config import DataArgs
-from nanotron.config.logging_config import LoggingArgs
-from nanotron.config.lighteval_config import LightEvalConfig, LightEvalSlurmArgs
-from nanotron.config.models_config import NanotronConfigs
-from nanotron.config.utils_config import cast_str_to_pipeline_engine, cast_str_to_torch_dtype, RecomputeGranularity, serialize
 from nanotron.core.parallel.tensor_parallelism.nn import TensorParallelLinearMode
 from nanotron.generate.sampler import SamplerType
+from nanotron.logging import get_logger
 
 logger = get_logger(__name__)
 
+
+@dataclass
+class LoggingArgs:
+    """Arguments related to logging"""
+
+    log_level: str
+    log_level_replica: str
+    iteration_step_info_interval: int
+    extensions = None
+
+    def __post_init__(self):
+        if self.log_level not in [
+            "debug",
+            "info",
+            "warning",
+            "error",
+            "critical",
+            "passive",
+        ]:
+            raise ValueError(
+                f"log_level should be a string selected in ['debug', 'info', 'warning', 'error', 'critical', 'passive'] and not {self.log_level}"
+            )
+        if self.log_level_replica not in [
+            "debug",
+            "info",
+            "warning",
+            "error",
+            "critical",
+            "passive",
+        ]:
+            raise ValueError(
+                f"log_level_replica should be a string selected in ['debug', 'info', 'warning', 'error', 'critical', 'passive'] and not {self.log_level_replica}"
+            )
+
+
+@dataclass
+class PretrainDatasetsArgs:
+    hf_dataset_mixer: Union[str, list, dict]
+    hf_dataset_config_name: Optional[str]
+    hf_dataset_splits: Union[str, list]
+    dataset_processing_num_proc_per_process: int
+    dataset_overwrite_cache: Optional[bool]
+    text_column_name: Optional[str]
+
+
+@dataclass
+class DataArgs:
+    """Arguments related to the data and data files processing"""
+
+    seed: Optional[int]
+    num_loading_workers: int
+    dataset: Optional[
+        PretrainDatasetsArgs,
+    ]
+
+
+@dataclass
+class CheckpointsArgs:
+    """Arguments related to checkpoints:
+    checkpoints_path: where to save the checkpoints
+    checkpoint_interval: how often to save the checkpoints
+    resume_checkpoint_path: if you want to load from a specific checkpoint path
+    s3: if you want to upload the checkpoints on s3
+
+    """
+
+    checkpoints_path: Path
+    checkpoint_interval: int
+    save_initial_state: Optional[bool] = False
+    resume_checkpoint_path: Optional[Path] = None
+    checkpoints_path_is_shared_file_system: Optional[bool] = True
+    extensions = None
+
+    def __post_init__(self):
+        if isinstance(self.checkpoints_path, str):
+            self.checkpoints_path = Path(self.checkpoints_path)
+        if isinstance(self.resume_checkpoint_path, str):
+            self.resume_checkpoint_path = Path(self.resume_checkpoint_path)
 
 
 @dataclass
@@ -224,7 +302,6 @@ class OptimizerArgs:
     learning_rate_scheduler: LRSchedulerArgs
 
 
-
 @dataclass
 class GenerationArgs:
     sampler: Optional[Union[str, SamplerType]] = None
@@ -248,7 +325,7 @@ class Config:
     profiler: Optional[ProfilerArgs]
     checkpoints: CheckpointsArgs
     parallelism: ParallelismArgs
-    model: ModelArgs 
+    model: ModelArgs
     tokenizer: TokenizerArgs
     logging: LoggingArgs
     tokens: TokensArgs
@@ -286,7 +363,6 @@ class Config:
         return serialize(self)
 
 
-
 class ConfigTypes(Enum):
     """Enum class for the different types of config files
     Name is the name of the class
@@ -298,11 +374,7 @@ class ConfigTypes(Enum):
     LightEvalSlurmArgs = "slurm"
 
 
-# All the config types in ConfigTypes as a type
-ConfigTypesClasses = TypeVar("ConfigTypesClasses", LightEvalConfig, Config, LightEvalSlurmArgs)
-
-
-def get_config_from_file(config_path: str, config_type: Union[ConfigTypes, str, None] = None) -> ConfigTypesClasses:
+def get_config_from_file(config_path: str, config_type: Union[ConfigTypes, str, None] = None) -> Config:
     """Get a config objet from a file (python or YAML)
 
     Args:
@@ -367,5 +439,3 @@ def get_all_trainer_configs(config_or_config_file: Union[Config, str]) -> AllTra
         model_config = config.model.model_config
 
     return AllTrainerConfigs(config=config, model_config=model_config)
-
-

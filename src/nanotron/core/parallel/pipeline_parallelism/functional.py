@@ -1,5 +1,4 @@
 import torch
-
 from nanotron import logging
 from nanotron.core.parallel.pipeline_parallelism.p2p import P2P
 from nanotron.core.parallel.pipeline_parallelism.state import PipelineBatchState

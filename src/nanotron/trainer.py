@@ -8,15 +8,15 @@ import subprocess
 import sys
 import time
 from dataclasses import asdict
+from pathlib import Path
 from pprint import pformat
 from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
-from pathlib import Path
 from torch.nn.parallel import DistributedDataParallel
 
-from nanotron.core.clip_grads import clip_grad_norm
+from nanotron import logging
 from nanotron.config import (
     Config,
     ExistingCheckpointInit,
@@ -29,8 +29,7 @@ from nanotron.config import (
     get_config_from_file,
 )
 from nanotron.core import distributed as dist
-from nanotron import logging
-from nanotron.logging import log_rank
+from nanotron.core.clip_grads import clip_grad_norm
 from nanotron.core.parallel.data_parallelism.utils import sync_gradients_across_dp
 from nanotron.core.parallel.parameters import NanotronParameter, sanity_check
 from nanotron.core.parallel.pipeline_parallelism.block import PipelineBlock
@@ -53,24 +52,13 @@ from nanotron.core.process_groups import DistributedProcessGroups, get_process_g
 from nanotron.core.random import (
     set_random_seed,
 )
-from nanotron.serialize import (
-    S3Mover,
-    human_format,
-    load_lr_scheduler,
-    load_meta,
-    load_optimizer,
-    load_weights,
-    save,
-    save_random_states,
-)
-from nanotron.serialize.main import parse_ckpt_path
 from nanotron.core.tensor_init import init_method_normal, scaled_init_method_normal
 from nanotron.core.utils import (
     assert_tensor_synced_across_pg,
     check_env,
     init_on_device_and_dtype,
 )
-from nanotron.dataloaders.dataloader import sanity_check_dataloader
+from nanotron.dataloader import sanity_check_dataloader
 from nanotron.dataloaders.nemo import TrainDataLog
 from nanotron.helpers import (
     _vocab_size_with_padding,
@@ -83,7 +71,19 @@ from nanotron.helpers import (
 )
 from nanotron.lighteval.runner import LightEvalRunner
 from nanotron.logger import LoggerWriter, LogItem, obj_to_markdown
+from nanotron.logging import log_rank
 from nanotron.models import NanotronModel
+from nanotron.serialize import (
+    S3Mover,
+    human_format,
+    load_lr_scheduler,
+    load_meta,
+    load_optimizer,
+    load_weights,
+    save,
+    save_random_states,
+)
+from nanotron.serialize.main import parse_ckpt_path
 
 if int(os.environ.get("USE_FAST", 0)) == 1:
     # We import the fast versions

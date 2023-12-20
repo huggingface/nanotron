@@ -17,6 +17,7 @@ from torch.nn.parallel import DistributedDataParallel
 from torch.optim.lr_scheduler import LambdaLR
 from torch.profiler import ProfilerActivity, profile, tensorboard_trace_handler
 
+from nanotron import logging
 from nanotron.config import (
     Config,
     LRSchedulerArgs,
@@ -24,8 +25,6 @@ from nanotron.config import (
     ParallelismArgs,
 )
 from nanotron.core import distributed as dist
-from nanotron import logging
-from nanotron.core.random import RandomStates
 from nanotron.core.distributed import ProcessGroup
 from nanotron.core.gradient_accumulator import (
     FP32GradBucketManager,
@@ -33,7 +32,6 @@ from nanotron.core.gradient_accumulator import (
     GradientAccumulator,
     get_fp32_accum_hook,
 )
-from nanotron.logging import log_rank, warn_once
 from nanotron.core.optim.base import BaseOptimizer, Optimizer
 from nanotron.core.optim.named_optimizer import NamedOptimizer
 from nanotron.core.optim.optimizer_from_gradient_accumulator import (
@@ -45,10 +43,12 @@ from nanotron.core.parallel.tensor_parallelism.nn import (
 )
 from nanotron.core.process_groups import DistributedProcessGroups
 from nanotron.core.random import (
+    RandomStates,
     get_current_random_state,
     get_synced_random_state,
 )
 from nanotron.logger import LogItem
+from nanotron.logging import log_rank, warn_once
 
 logger = logging.get_logger(__name__)
 

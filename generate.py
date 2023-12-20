@@ -18,13 +18,9 @@ from pathlib import Path
 from pprint import pprint
 
 import torch
-from transformers import AutoConfig, AutoTokenizer
-
+from nanotron import logging
 from nanotron.config import GenerationArgs, ParallelismArgs, get_all_trainer_configs
 from nanotron.core import distributed as dist
-from nanotron import logging
-from nanotron.core.random import RandomStates
-from nanotron.logging import log_rank
 from nanotron.core.parallel.parameters import sanity_check
 from nanotron.core.parallel.pipeline_parallelism.engine import (
     OneForwardOneBackwardPipelineEngine,
@@ -33,19 +29,22 @@ from nanotron.core.parallel.pipeline_parallelism.tensor_pointer import TensorPoi
 from nanotron.core.parallel.tensor_parallelism.enum import TensorParallelLinearMode
 from nanotron.core.process_groups import get_process_groups
 from nanotron.core.random import (
+    RandomStates,
     get_current_random_state,
     get_synced_random_state,
     set_random_seed,
-)
-from nanotron.serialize import (
-    load_weights,
 )
 from nanotron.generate.generation import (
     GenerationInput,
     TokenizerConfig,
     greedy_search_text,
 )
+from nanotron.logging import log_rank
+from nanotron.serialize import (
+    load_weights,
+)
 from nanotron.trainer import CONFIG_TO_MODEL_CLASS, DistributedTrainer, mark_tied_parameters
+from transformers import AutoConfig, AutoTokenizer
 
 logger = logging.get_logger(__name__)
 

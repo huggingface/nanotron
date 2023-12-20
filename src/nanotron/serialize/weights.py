@@ -4,23 +4,23 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import dacite
 import torch
 from packaging.version import Version
+from safetensors.torch import safe_open, save_file
 from torch import nn
 from tqdm import tqdm
 
-from nanotron.core import distributed as dist
 from nanotron import logging
-from nanotron.core.process_groups import DistributedProcessGroups
-from nanotron.core.distributed import get_global_rank
-from nanotron.logging import log_rank
-from nanotron.core.parallel.parameters import NanotronParameter, ShardedInfo, SlicesPair
 from nanotron.constants import CHECKPOINT_VERSION
-from nanotron.serialize.metadata import CheckpointMetadata, TensorMetadata, TensorMetadataV2, load_meta
+from nanotron.core import distributed as dist
+from nanotron.core.distributed import get_global_rank
+from nanotron.core.parallel.parameters import NanotronParameter, ShardedInfo, SlicesPair
+from nanotron.core.process_groups import DistributedProcessGroups
+from nanotron.logging import log_rank
 from nanotron.serialize.main import (
     ObjectType,
     get_path,
     get_tp_and_pp_rank_and_size_from,
 )
-from safetensors.torch import save_file, safe_open
+from nanotron.serialize.metadata import CheckpointMetadata, TensorMetadata, TensorMetadataV2, load_meta
 
 logger = logging.get_logger(__name__)
 

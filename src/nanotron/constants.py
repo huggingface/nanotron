@@ -1,10 +1,10 @@
-import platform
-import warnings
 import importlib
 import importlib.metadata as importlib_metadata
+import platform
+import warnings
+from typing import Tuple, Union
 
 from packaging.version import Version, parse
-from typing import Tuple, Union 
 
 CHECKPOINT_VERSION = Version("1.2")
 
@@ -41,6 +41,7 @@ def _can_import_from_module(module: str, name: str) -> bool:
     except Exception as e:
         warnings.warn(f"Unable to import {name} from {module}: {e}")
         return False
+
 
 TENSORBOARDX_AVAILABLE = _is_package_available("tensorboardX")
 HUGGINGFACE_HUB_AVAILABLE = _is_package_available("huggingface_hub")

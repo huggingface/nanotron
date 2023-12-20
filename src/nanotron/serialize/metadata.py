@@ -8,10 +8,10 @@ import torch
 from dacite import from_dict
 from packaging.version import Version
 
-from nanotron.core import distributed as dist
-from nanotron.core.process_groups import DistributedProcessGroups
-from nanotron.core.parallel.parameters import SlicesPair
 from nanotron.constants import CHECKPOINT_VERSION
+from nanotron.core import distributed as dist
+from nanotron.core.parallel.parameters import SlicesPair
+from nanotron.core.process_groups import DistributedProcessGroups
 
 
 @dataclasses.dataclass

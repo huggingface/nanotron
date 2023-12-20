@@ -1,7 +1,8 @@
 import os
 from dataclasses import dataclass, field
-import numpy as np
 from typing import Dict, Tuple
+
+import numpy as np
 import torch
 from torch import distributed as torch_dist
 

@@ -1,7 +1,8 @@
 import json
-import torch
 from pathlib import Path
 from typing import Optional
+
+import torch
 
 from nanotron.core import distributed as dist
 from nanotron.core import optim as optim

@@ -1,15 +1,9 @@
 from dataclasses import fields
-from typing import Any, Dict, List, Optional, Union
 from enum import Enum, auto
-import re
-import os
-from urllib.parse import urlparse
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 import torch
 
-from pathlib import Path
-from nanotron.logging import get_logger
 from nanotron.core.parallel.pipeline_parallelism.engine import (
     AllForwardAllBackwardPipelineEngine,
     OneForwardOneBackwardPipelineEngine,
@@ -17,6 +11,7 @@ from nanotron.core.parallel.pipeline_parallelism.engine import (
 )
 from nanotron.core.parallel.tensor_parallelism.nn import TensorParallelLinearMode
 from nanotron.generate.sampler import SamplerType
+
 
 class RecomputeGranularity(Enum):
     SELECTIVE = auto()
@@ -114,4 +109,3 @@ def cast_pipeline_engine_to_str(pp_engine: PipelineEngine) -> str:
         raise ValueError(
             f"pp_engine should be aan instance of AllForwardAllBackwardPipelineEngine or OneForwardOneBackwardPipelineEngine, not {type(pp_engine)}"
         )
-

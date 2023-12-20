@@ -6,9 +6,6 @@ from helpers.distributed_tensor import assert_tensor_equal_over_group
 from helpers.dummy import dummy_infinite_data_loader, init_dummy_model
 from helpers.exception import assert_fail_with
 from helpers.utils import available_gpus, init_distributed
-from torch import nn as torch_nn
-from torch.nn.parallel import DistributedDataParallel
-
 from nanotron.core import distributed as dist
 from nanotron.core.dataclass import DistributedProcessGroups, RandomStates
 from nanotron.core.optim import NamedOptimizer, ZeroDistributedOptimizer
@@ -21,6 +18,8 @@ from nanotron.core.parallel.tensor_parallelism import nn
 from nanotron.core.parallel.tensor_parallelism.enum import TensorParallelLinearMode
 from nanotron.core.parallel.tied_parameters import sync_tied_weights_gradients
 from nanotron.core.random import branch_random_state, get_current_random_state, get_synced_random_state
+from torch import nn as torch_nn
+from torch.nn.parallel import DistributedDataParallel
 
 
 @pytest.mark.parametrize("tp,dp,pp", [pytest.param(1, i, 1) for i in range(1, available_gpus() + 1)])

@@ -1,6 +1,6 @@
-
 from dataclasses import dataclass, field
 from typing import List, Optional, Union
+
 
 @dataclass
 class LlamaConfig:
@@ -157,4 +157,3 @@ class Starcoder2Config(GPTBigCodeConfig):
 
 
 NanotronConfigs = Union[FalconConfig, LlamaConfig, GPTBigCodeConfig, Starcoder2Config]
-

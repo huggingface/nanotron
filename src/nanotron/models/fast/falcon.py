@@ -26,9 +26,9 @@ from torch.nn import functional as F
 from torch.nn.parallel import DistributedDataParallel
 from transformers import FalconConfig
 
+from nanotron import logging
 from nanotron.config.config import ParallelismArgs, RecomputeGranularity
 from nanotron.core import distributed as dist
-from nanotron import logging
 from nanotron.core.dataclass import RandomStates
 from nanotron.core.parallel.parameters import NanotronParameter
 from nanotron.core.parallel.pipeline_parallelism.block import PipelineBlock, TensorPointer

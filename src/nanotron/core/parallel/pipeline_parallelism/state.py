@@ -4,11 +4,10 @@ from abc import ABC, abstractmethod
 from typing import List
 
 import torch
-
-from nanotron.core import distributed as dist
 from nanotron import logging
-from nanotron.logging import log_rank
+from nanotron.core import distributed as dist
 from nanotron.core.parallel.pipeline_parallelism.p2p import P2P
+from nanotron.logging import log_rank
 
 logger = logging.get_logger(__name__)
 
