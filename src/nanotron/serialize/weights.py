@@ -7,12 +7,12 @@ from packaging.version import Version
 from torch import nn
 from tqdm import tqdm
 
-from nanotron.nn import distributed as dist
+from nanotron.core import distributed as dist
 from nanotron import logging
-from nanotron.nn.process_groups import DistributedProcessGroups
-from nanotron.nn.distributed import get_global_rank
+from nanotron.core.process_groups import DistributedProcessGroups
+from nanotron.core.distributed import get_global_rank
 from nanotron.logging import log_rank
-from nanotron.nn.parallel.parameters import NanotronParameter, ShardedInfo, SlicesPair
+from nanotron.core.parallel.parameters import NanotronParameter, ShardedInfo, SlicesPair
 from nanotron.constants import CHECKPOINT_VERSION
 from nanotron.serialize.metadata import CheckpointMetadata, TensorMetadata, TensorMetadataV2, load_meta
 from nanotron.serialize.main import (
@@ -20,8 +20,7 @@ from nanotron.serialize.main import (
     get_path,
     get_tp_and_pp_rank_and_size_from,
 )
-from nanotron.serialize.serialize import safe_open, save_file
-from nanotron.serialize.xpath import is_local_path
+from safetensors.torch import save_file, safe_open
 
 logger = logging.get_logger(__name__)
 
@@ -84,8 +83,7 @@ def save_weights(model: nn.Module, dpg: DistributedProcessGroups, root_folder: P
                     tp_and_pp_rank_and_size=tp_and_pp_rank_and_size,
                 )
             )
-            if is_local_path(path):
-                path.parent.mkdir(exist_ok=True, parents=True)
+            path.parent.mkdir(exist_ok=True, parents=True)
             try:
                 save_file(tensors={"data": param_or_buffer}, filename=path, metadata=metadata)
             except Exception as e:

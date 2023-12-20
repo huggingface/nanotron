@@ -3,9 +3,8 @@ from typing import List, Optional, Tuple
 
 from nanotron.config.config import Config
 from nanotron import logging
-from nanotron.nn.process_groups import DistributedProcessGroups
+from nanotron.core.process_groups import DistributedProcessGroups
 from nanotron.logging import log_rank
-from nanotron.serialize.xpath import xPath
 
 from pathlib import Path
 
@@ -13,17 +12,15 @@ import torch
 from torch import nn
 from torch.nn.parallel import DistributedDataParallel
 
-from nanotron.nn import distributed as dist
-from nanotron.nn import optim as optim
-from nanotron.nn.process_groups import DistributedProcessGroups
-from nanotron.nn.distributed import get_global_rank
-from nanotron.nn.parallel.parameters import NanotronParameter
+from nanotron.core import distributed as dist
+from nanotron.core import optim as optim
+from nanotron.core.process_groups import DistributedProcessGroups
+from nanotron.core.distributed import get_global_rank
+from nanotron.core.parallel.parameters import NanotronParameter
 from nanotron.serialize.metadata import CheckpointMetadata, load_meta, save_meta
 from nanotron.serialize.optimizer import load_lr_scheduler, load_optimizer, save_lr_scheduler, save_optimizer
-from nanotron.serialize.xpath import fs_open, get_filesystem_and_path
-from nanotron.serialize.random import load_random_states, save_random_states
 from nanotron.serialize.weights import load_weights, save_weights
-from nanotron.nn.utils import assert_tensor_synced_across_pg
+from nanotron.core.utils import assert_tensor_synced_across_pg
 
 """
 We're going to use safetensors. The reason is that loading segments is going to be much easier
@@ -228,9 +225,9 @@ class ObjectType(Enum):
 def parse_ckpt_path(config: Config):
     load_from_candidate = config.checkpoints.load_from_specific_checkpoint
     if load_from_candidate is None:
-        latest_meta_path: xPath = config.checkpoints.checkpoints_path / "latest.txt"
+        latest_meta_path: Path = config.checkpoints.checkpoints_path / "latest.txt"
         if latest_meta_path.exists():
-            with fs_open(config.checkpoints.checkpoints_path / "latest.txt", mode="r") as fi:
+            with open(config.checkpoints.checkpoints_path / "latest.txt", mode="r") as fi:
                 # TODO @thomasw21: make a better structure system so that we get typing correct
                 load_from_candidate = int(fi.read())
         else:

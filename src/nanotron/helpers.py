@@ -23,32 +23,31 @@ from nanotron.config import (
     OptimizerArgs,
     ParallelismArgs,
 )
-from nanotron.nn import distributed as dist
+from nanotron.core import distributed as dist
 from nanotron import logging
-from nanotron.nn.random import RandomStates
-from nanotron.nn.distributed import ProcessGroup
-from nanotron.nn.gradient_accumulator import (
+from nanotron.core.random import RandomStates
+from nanotron.core.distributed import ProcessGroup
+from nanotron.core.gradient_accumulator import (
     FP32GradBucketManager,
     FP32GradientAccumulator,
     GradientAccumulator,
     get_fp32_accum_hook,
 )
 from nanotron.logging import log_rank, warn_once
-from nanotron.nn.optim.base import BaseOptimizer, Optimizer
-from nanotron.nn.optim.named_optimizer import NamedOptimizer
-from nanotron.nn.optim.optimizer_from_gradient_accumulator import (
+from nanotron.core.optim.base import BaseOptimizer, Optimizer
+from nanotron.core.optim.named_optimizer import NamedOptimizer
+from nanotron.core.optim.optimizer_from_gradient_accumulator import (
     OptimizerFromGradientAccumulator,
 )
-from nanotron.nn.optim.zero import ZeroDistributedOptimizer
-from nanotron.nn.parallel.tensor_parallelism.nn import (
+from nanotron.core.optim.zero import ZeroDistributedOptimizer
+from nanotron.core.parallel.tensor_parallelism.nn import (
     TensorParallelLinearMode,
 )
-from nanotron.nn.process_groups import DistributedProcessGroups
-from nanotron.nn.random import (
+from nanotron.core.process_groups import DistributedProcessGroups
+from nanotron.core.random import (
     get_current_random_state,
     get_synced_random_state,
 )
-from nanotron.serialize.xpath import fs_open
 from nanotron.logger import LogItem
 
 logger = logging.get_logger(__name__)
@@ -505,15 +504,15 @@ def log_throughput(
 
     if dist.get_rank(dpg.world_pg) == 0:
         if not os.path.exists(csv_filename):
-            with fs_open(csv_filename, mode="w") as fo:
+            with open(csv_filename, mode="w") as fo:
                 writer = csv.writer(fo)
                 writer.writerow([item.tag for item in table_log])
                 writer.writerow([f"{item.scalar_value:{item.log_format}}" for item in table_log])
         elif model_tflops > 0:
             # replace line with same job_id
-            with fs_open(csv_filename, mode="r") as fi:
+            with open(csv_filename, mode="r") as fi:
                 lines = fi.readlines()
-            with fs_open(csv_filename, mode="w") as fo:
+            with open(csv_filename, mode="w") as fo:
                 writer = csv.writer(fo)
                 for line in lines:
                     if line.startswith(slurm_job_id):
@@ -521,6 +520,6 @@ def log_throughput(
                     else:
                         fo.write(line)
         else:
-            with fs_open(csv_filename, mode="a") as fo:
+            with open(csv_filename, mode="a") as fo:
                 writer = csv.writer(fo)
                 writer.writerow([f"{item.scalar_value:{item.log_format}}" for item in table_log])

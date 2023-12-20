@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import torch.cuda
 from torch.distributed.launcher import elastic_launch
 
-from nanotron.nn.process_groups import get_process_groups
+from nanotron.core.process_groups import get_process_groups
 
 
 def available_gpus():

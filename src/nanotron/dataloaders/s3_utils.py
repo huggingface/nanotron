@@ -5,7 +5,7 @@ from fnmatch import fnmatch
 from re import Pattern
 from typing import Union
 
-from nanotron.serialize.xpath import xPath
+from pathlib import Path
 
 try:
     import boto3
@@ -18,13 +18,13 @@ except ImportError:
 # mostly borrowed from datatrove: https://github.com/huggingface/datatrove/blob/main/src/datatrove/io/cloud/s3.py
 
 
-def _get_s3_path_components(s3_path: Union[str, xPath]):
+def _get_s3_path_components(s3_path: Union[str, Path]):
     s3_path = str(s3_path)
     bucket_name, _, prefix = s3_path[len("s3://") :].replace("//", "/").partition(os.sep)
     return bucket_name, prefix
 
 
-def _get_s3_object(s3_path: Union[str, xPath]):
+def _get_s3_object(s3_path: Union[str, Path]):
     s3_path = str(s3_path)
     bucket_name, prefix = _get_s3_path_components(s3_path)
     s3_resource = boto3.resource("s3")
@@ -32,7 +32,7 @@ def _get_s3_object(s3_path: Union[str, xPath]):
     return s3_object
 
 
-def _stream_s3_file(s3_path: Union[str, xPath], chunk_size, offset):
+def _stream_s3_file(s3_path: Union[str, Path], chunk_size, offset):
     s3_path = str(s3_path)
     s3_object = _get_s3_object(s3_path)
     return s3_object.get(Range=f"bytes={chunk_size * offset}-")["Body"].iter_chunks(chunk_size)
@@ -48,7 +48,7 @@ def _match_prefix(base_prefix, prefix, match_pattern=None):
 
 
 def _get_s3_file_list(
-    s3_path: Union[str, xPath], pattern: Union[str, Pattern] = None, recursive: bool = True, max_recursion: int = -1
+    s3_path: Union[str, Path], pattern: Union[str, Pattern] = None, recursive: bool = True, max_recursion: int = -1
 ):
     """Get list of relative paths to files in a cloud folder with a given (optional) pattern
 

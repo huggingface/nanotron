@@ -14,7 +14,7 @@ from transformers import AutoConfig
 from yaml.loader import SafeLoader
 
 from nanotron.logging import get_logger
-from nanotron.nn.parallel.pipeline_parallelism.engine import (
+from nanotron.core.parallel.pipeline_parallelism.engine import (
     AllForwardAllBackwardPipelineEngine,
     PipelineEngine,
 )
@@ -24,7 +24,7 @@ from nanotron.config.logging_config import LoggingArgs
 from nanotron.config.lighteval_config import LightEvalConfig, LightEvalSlurmArgs
 from nanotron.config.models_config import NanotronConfigs
 from nanotron.config.utils_config import cast_str_to_pipeline_engine, cast_str_to_torch_dtype, RecomputeGranularity, serialize
-from nanotron.nn.parallel.tensor_parallelism.nn import TensorParallelLinearMode
+from nanotron.core.parallel.tensor_parallelism.nn import TensorParallelLinearMode
 from nanotron.generate.sampler import SamplerType
 
 logger = get_logger(__name__)

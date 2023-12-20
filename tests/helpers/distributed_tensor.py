@@ -1,7 +1,7 @@
 import torch
 
-from nanotron.nn import distributed as dist
-from nanotron.nn.distributed import ProcessGroup, get_global_rank
+from nanotron.core import distributed as dist
+from nanotron.core.distributed import ProcessGroup, get_global_rank
 
 
 def assert_tensor_equal_over_group(tensor: torch.Tensor, group: ProcessGroup, assert_: bool = True) -> bool:

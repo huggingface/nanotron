@@ -7,11 +7,11 @@ from helpers.utils import available_gpus, init_distributed
 from torch import nn
 from torch.distributed import GradBucket
 
-from nanotron.nn import distributed as dist
-from nanotron.nn.parallel.data_parallelism.utils import ddp_trigger_sync_in_bwd
-from nanotron.nn.parallel.parameters import NanotronParameter
-from nanotron.nn.process_groups import DistributedProcessGroups
-from nanotron.nn.utils import assert_tensor_synced_across_pg
+from nanotron.core import distributed as dist
+from nanotron.core.parallel.data_parallelism.utils import ddp_trigger_sync_in_bwd
+from nanotron.core.parallel.parameters import NanotronParameter
+from nanotron.core.process_groups import DistributedProcessGroups
+from nanotron.core.utils import assert_tensor_synced_across_pg
 
 
 @pytest.mark.skipif(available_gpus() < 2, reason="Testing test_ddp_with_afab requires at least 2 gpus")

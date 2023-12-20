@@ -8,14 +8,14 @@ from pathlib import Path, PurePosixPath
 
 import torch
 
-from nanotron.serialize.xpath import xPath
+from pathlib import Path
 from nanotron.logging import get_logger
-from nanotron.nn.parallel.pipeline_parallelism.engine import (
+from nanotron.core.parallel.pipeline_parallelism.engine import (
     AllForwardAllBackwardPipelineEngine,
     OneForwardOneBackwardPipelineEngine,
     PipelineEngine,
 )
-from nanotron.nn.parallel.tensor_parallelism.nn import TensorParallelLinearMode
+from nanotron.core.parallel.tensor_parallelism.nn import TensorParallelLinearMode
 from nanotron.generate.sampler import SamplerType
 
 class RecomputeGranularity(Enum):
@@ -36,7 +36,7 @@ def serialize(data) -> dict:
         value = getattr(data, field.name)
         if hasattr(value, "__dataclass_fields__"):
             result[field.name] = serialize(value)
-        elif isinstance(value, xPath):
+        elif isinstance(value, Path):
             result[field.name] = str(value)
         elif isinstance(value, PipelineEngine):
             result[field.name] = cast_pipeline_engine_to_str(value)

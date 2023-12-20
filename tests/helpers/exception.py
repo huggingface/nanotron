@@ -2,7 +2,7 @@ import contextlib
 import signal
 from typing import Optional
 
-from nanotron.nn import distributed as dist
+from nanotron.core import distributed as dist
 
 
 @contextlib.contextmanager

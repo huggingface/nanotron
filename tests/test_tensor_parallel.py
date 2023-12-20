@@ -7,15 +7,15 @@ import torch
 from helpers.utils import available_gpus, init_distributed
 from torch import nn as torch_nn
 
-from nanotron.nn import distributed as dist
-from nanotron.nn.distributed import get_global_rank
-from nanotron.nn.parallel.tensor_parallelism.enum import TensorParallelLinearMode
-from nanotron.nn.parallel.tensor_parallelism.nn import (
+from nanotron.core import distributed as dist
+from nanotron.core.distributed import get_global_rank
+from nanotron.core.parallel.tensor_parallelism.enum import TensorParallelLinearMode
+from nanotron.core.parallel.tensor_parallelism.nn import (
     TensorParallelColumnLinear,
     TensorParallelEmbedding,
     TensorParallelRowLinear,
 )
-from nanotron.nn.process_groups import DistributedProcessGroups
+from nanotron.core.process_groups import DistributedProcessGroups
 
 
 @pytest.mark.parametrize("tp,dp,pp", [pytest.param(i, 1, 1) for i in range(1, available_gpus() + 1)])

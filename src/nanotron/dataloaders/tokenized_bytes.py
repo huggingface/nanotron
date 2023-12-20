@@ -10,11 +10,11 @@ import torch
 from torch.utils.data import DataLoader, Dataset
 
 from nanotron.config import TokenizedBytesDatasetArgs, TokenizedBytesDatasetFileArgs, TokenizedBytesDatasetFolderArgs
-from nanotron.nn import distributed as dist
+from nanotron.core import distributed as dist
 from nanotron import logging
-from nanotron.nn.dataclass import DistributedProcessGroups
+from nanotron.core.dataclass import DistributedProcessGroups
 from nanotron.logging import log_rank
-from nanotron.nn.utils import human_format
+from nanotron.core.utils import human_format
 from nanotron.dataloaders.data_samplers import MegatronPretrainingSampler
 from nanotron.dataloaders.dataloader import DataCollatorForCLM, EmptyInfiniteDataset, get_dataloader_worker_init
 from nanotron.dataloaders.nemo_dataset import BlendableDataset

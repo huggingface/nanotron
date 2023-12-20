@@ -24,25 +24,25 @@ from transformers import LlamaConfig
 from transformers.activations import ACT2FN
 
 from nanotron.config.config import ParallelismArgs, RecomputeGranularity
-from nanotron.nn import distributed as dist
+from nanotron.core import distributed as dist
 from nanotron import logging
-from nanotron.nn.dataclass import RandomStates
+from nanotron.core.dataclass import RandomStates
 from nanotron.logging import log_rank
-from nanotron.nn.parallel.parameters import NanotronParameter
-from nanotron.nn.parallel.pipeline_parallelism.block import PipelineBlock, TensorPointer
-from nanotron.nn.parallel.pipeline_parallelism.p2p import P2P
-from nanotron.nn.parallel.tensor_parallelism.functional import sharded_cross_entropy
-from nanotron.nn.parallel.tensor_parallelism.nn import (
+from nanotron.core.parallel.parameters import NanotronParameter
+from nanotron.core.parallel.pipeline_parallelism.block import PipelineBlock, TensorPointer
+from nanotron.core.parallel.pipeline_parallelism.p2p import P2P
+from nanotron.core.parallel.tensor_parallelism.functional import sharded_cross_entropy
+from nanotron.core.parallel.tensor_parallelism.nn import (
     TensorParallelColumnLinear,
     TensorParallelEmbedding,
     TensorParallelLinearMode,
     TensorParallelRowLinear,
 )
-from nanotron.nn.parallel.tied_parameters import (
+from nanotron.core.parallel.tied_parameters import (
     get_tied_id_to_param,
 )
-from nanotron.nn.process_groups import DistributedProcessGroups
-from nanotron.nn.utils import checkpoint_method
+from nanotron.core.process_groups import DistributedProcessGroups
+from nanotron.core.utils import checkpoint_method
 from nanotron.models import NanotronModel
 from nanotron.store import AttachableStore
 

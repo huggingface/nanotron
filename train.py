@@ -18,10 +18,10 @@ from nanotron.config import (
     PretrainNemoArgs,
     TokenizedBytesDatasetArgs,
 )
-from nanotron.nn import distributed as dist
-from nanotron.nn import logging
+from nanotron.core import distributed as dist
+from nanotron import logging
 from nanotron.logging import log_rank
-from nanotron.nn.utils import (
+from nanotron.core.utils import (
     main_rank_first,
 )
 from nanotron.dataloaders.dataloader import (
@@ -40,9 +40,7 @@ logger = logging.get_logger(__name__)
 def get_dataloader(trainer: DistributedTrainer, sanity_check_dataloader_interval: Optional[int] = None):
     # Prepare dataloader
     tokenizer_path = (
-        trainer.config.model.hf_model_name
-        if trainer.config.model.hf_model_name is not None
-        else trainer.config.model.tokenizer_name_or_path
+        trainer.config.model.tokenizer_name_or_path
     )
     log_rank(
         f"Loading tokenizer from {tokenizer_path} and transformers/hf_hub versions {tf_version, hf_hub_version}",

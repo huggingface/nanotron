@@ -1,13 +1,12 @@
 import json
+import torch
 from pathlib import Path
 from typing import Optional
 
-from nanotron.nn import distributed as dist
-from nanotron.nn import optim as optim
-from nanotron.nn.process_groups import DistributedProcessGroups
+from nanotron.core import distributed as dist
+from nanotron.core import optim as optim
+from nanotron.core.process_groups import DistributedProcessGroups
 from nanotron.serialize.main import ObjectType
-from nanotron.serialize.serialize import torch_load, torch_save
-from nanotron.serialize.xpath import is_local_path, fs_open
 
 
 def optimizer_filename(dpg: DistributedProcessGroups, is_zero: bool):
@@ -34,11 +33,10 @@ def save_optimizer(
     # TODO @thomasw21: Figure out if I need to save param groups. Right now I'm assuming no as we only store what's trainable
     # TODO @thomasw21: We can probably "rotate" so that every process stores something (maybe doesn't matter if we're I/O bound)
     root_folder = root_folder / "optimizer"
-    if is_local_path(path=root_folder):
-        root_folder.mkdir(exist_ok=True, parents=True)
+    root_folder.mkdir(exist_ok=True, parents=True)
 
     if dist.get_rank(dpg.world_pg) == 0:
-        with fs_open(root_folder / "optimizer_config.json", "w") as fo:
+        with open(root_folder / "optimizer_config.json", "w") as fo:
             json.dump({"type": optimizer.__class__.__name__}, fo)
 
     if (not optimizer.inherit_from(optim.ZeroDistributedOptimizer)) and dist.get_rank(dpg.dp_pg) > 0:
@@ -46,7 +44,7 @@ def save_optimizer(
         return
 
     # We dump the optimizer state using `torch.save`
-    torch_save(
+    torch.save(
         optimizer.state_dict(),
         root_folder / optimizer_filename(dpg, is_zero=optimizer.inherit_from(optim.ZeroDistributedOptimizer)),
     )
@@ -63,11 +61,10 @@ def save_lr_scheduler(
         return
 
     root_folder = root_folder / "lr_scheduler"
-    if is_local_path(path=root_folder):
-        root_folder.mkdir(exist_ok=True, parents=True)
+    root_folder.mkdir(exist_ok=True, parents=True)
 
     # We dump the optimizer state using `torch.save`
-    torch_save(
+    torch.save(
         lr_scheduler.state_dict(),
         root_folder / lr_scheduler_filename(),
     )
@@ -84,7 +81,7 @@ def load_optimizer(
     map_location = "cpu" if not optimizer.inherit_from(optim.ZeroDistributedOptimizer) else map_location
 
     # TODO @thomasw21: Load optimizer type and check that it's compatible otherwise we might be be loading something else completely
-    state_dict = torch_load(
+    state_dict = torch.load(
         root_folder / optimizer_filename(dpg, is_zero=optimizer.inherit_from(optim.ZeroDistributedOptimizer)),
         map_location=map_location,
     )
@@ -97,5 +94,5 @@ def load_lr_scheduler(
 ):
     root_folder = root_folder / "lr_scheduler"
 
-    state_dict = torch_load(root_folder / lr_scheduler_filename())
+    state_dict = torch.load(root_folder / lr_scheduler_filename())
     lr_scheduler.load_state_dict(state_dict)

@@ -24,11 +24,11 @@ from torch.utils.data import Dataset
 from transformers import PreTrainedTokenizerBase
 
 from nanotron.config import PretrainNemoArgs
-from nanotron.nn import distributed as dist
+from nanotron.core import distributed as dist
 from nanotron import logging
 from nanotron.logging import log_rank
-from nanotron.nn.process_groups import DistributedProcessGroups
-from nanotron.nn.utils import main_rank_first
+from nanotron.core.process_groups import DistributedProcessGroups
+from nanotron.core.utils import main_rank_first
 
 from .blendable_dataset import BlendableDataset
 from .dataset_utils import (

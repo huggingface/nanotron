@@ -5,10 +5,10 @@ from torch import nn
 from transformers import AutoConfig
 
 from nanotron import logging
-from nanotron.nn.distributed import ProcessGroup
+from nanotron.core.distributed import ProcessGroup
 from nanotron.logging import log_rank
-from nanotron.nn.parallel.pipeline_parallelism.block import PipelineBlock
-from nanotron.nn.process_groups import DistributedProcessGroups
+from nanotron.core.parallel.pipeline_parallelism.block import PipelineBlock
+from nanotron.core.process_groups import DistributedProcessGroups
 
 logger = logging.get_logger(__name__)
 

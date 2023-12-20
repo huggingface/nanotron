@@ -13,12 +13,12 @@ from transformers import (
 from transformers.trainer_pt_utils import DistributedSamplerWithLoop
 
 from nanotron.config import Config
-from nanotron.nn import distributed as dist
+from nanotron.core import distributed as dist
 from nanotron import logging
-from nanotron.nn.parallel.pipeline_parallelism.tensor_pointer import TensorPointer
-from nanotron.nn.process_groups import DistributedProcessGroups
-from nanotron.nn.random import set_random_seed
-from nanotron.nn.utils import (
+from nanotron.core.parallel.pipeline_parallelism.tensor_pointer import TensorPointer
+from nanotron.core.process_groups import DistributedProcessGroups
+from nanotron.core.random import set_random_seed
+from nanotron.core.utils import (
     assert_fail_except_rank_with,
     assert_tensor_synced_across_pg,
 )

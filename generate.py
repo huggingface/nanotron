@@ -21,18 +21,18 @@ import torch
 from transformers import AutoConfig, AutoTokenizer
 
 from nanotron.config import GenerationArgs, ParallelismArgs, get_all_trainer_configs
-from nanotron.nn import distributed as dist
-from nanotron.nn import logging
-from nanotron.nn.random import RandomStates
+from nanotron.core import distributed as dist
+from nanotron import logging
+from nanotron.core.random import RandomStates
 from nanotron.logging import log_rank
-from nanotron.nn.parallel.parameters import sanity_check
-from nanotron.nn.parallel.pipeline_parallelism.engine import (
+from nanotron.core.parallel.parameters import sanity_check
+from nanotron.core.parallel.pipeline_parallelism.engine import (
     OneForwardOneBackwardPipelineEngine,
 )
-from nanotron.nn.parallel.pipeline_parallelism.tensor_pointer import TensorPointer
-from nanotron.nn.parallel.tensor_parallelism.enum import TensorParallelLinearMode
-from nanotron.nn.process_groups import get_process_groups
-from nanotron.nn.random import (
+from nanotron.core.parallel.pipeline_parallelism.tensor_pointer import TensorPointer
+from nanotron.core.parallel.tensor_parallelism.enum import TensorParallelLinearMode
+from nanotron.core.process_groups import get_process_groups
+from nanotron.core.random import (
     get_current_random_state,
     get_synced_random_state,
     set_random_seed,

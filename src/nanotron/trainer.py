@@ -16,7 +16,7 @@ import torch
 from pathlib import Path
 from torch.nn.parallel import DistributedDataParallel
 
-from nanotron.nn.clip_grads import clip_grad_norm
+from nanotron.core.clip_grads import clip_grad_norm
 from nanotron.config import (
     Config,
     ExistingCheckpointInit,
@@ -28,29 +28,29 @@ from nanotron.config import (
     get_all_trainer_configs,
     get_config_from_file,
 )
-from nanotron.nn import distributed as dist
+from nanotron.core import distributed as dist
 from nanotron import logging
 from nanotron.logging import log_rank
-from nanotron.nn.parallel.data_parallelism.utils import sync_gradients_across_dp
-from nanotron.nn.parallel.parameters import NanotronParameter, sanity_check
-from nanotron.nn.parallel.pipeline_parallelism.block import PipelineBlock
-from nanotron.nn.parallel.pipeline_parallelism.engine import (
+from nanotron.core.parallel.data_parallelism.utils import sync_gradients_across_dp
+from nanotron.core.parallel.parameters import NanotronParameter, sanity_check
+from nanotron.core.parallel.pipeline_parallelism.block import PipelineBlock
+from nanotron.core.parallel.pipeline_parallelism.engine import (
     PipelineEngine,
 )
-from nanotron.nn.parallel.pipeline_parallelism.tensor_pointer import TensorPointer
-from nanotron.nn.parallel.pipeline_parallelism.utils import get_pp_rank_of
-from nanotron.nn.parallel.tensor_parallelism.nn import (
+from nanotron.core.parallel.pipeline_parallelism.tensor_pointer import TensorPointer
+from nanotron.core.parallel.pipeline_parallelism.utils import get_pp_rank_of
+from nanotron.core.parallel.tensor_parallelism.nn import (
     TensorParallelLinearMode,
     TensorParallelRowLinear,
 )
-from nanotron.nn.parallel.tied_parameters import (
+from nanotron.core.parallel.tied_parameters import (
     create_pg_for_tied_weights,
     get_tied_id_to_param,
     sync_tied_weights_gradients,
     tie_parameters,
 )
-from nanotron.nn.process_groups import DistributedProcessGroups, get_process_groups
-from nanotron.nn.random import (
+from nanotron.core.process_groups import DistributedProcessGroups, get_process_groups
+from nanotron.core.random import (
     set_random_seed,
 )
 from nanotron.serialize import (
@@ -64,9 +64,8 @@ from nanotron.serialize import (
     save_random_states,
 )
 from nanotron.serialize.main import parse_ckpt_path
-from nanotron.serialize.xpath import fs_open, is_local_path
-from nanotron.nn.tensor_init import init_method_normal, scaled_init_method_normal
-from nanotron.nn.utils import (
+from nanotron.core.tensor_init import init_method_normal, scaled_init_method_normal
+from nanotron.core.utils import (
     assert_tensor_synced_across_pg,
     check_env,
     init_on_device_and_dtype,
@@ -996,14 +995,13 @@ class DistributedTrainer:
 
         checkpoints_path = self.config.checkpoints.checkpoints_path
         checkpoint_path = checkpoints_path / f"{self.iteration_step}"
-        if is_local_path(checkpoint_path):
-            if self.config.checkpoints.checkpoints_path_is_shared_file_system:
-                should_mkdir = dist.get_rank(self.dpg.world_pg) == 0
-            else:
-                should_mkdir = bool(int(os.environ.get("LOCAL_RANK", None)) == 0)
-            if should_mkdir:
-                checkpoint_path.mkdir(parents=True, exist_ok=True)
-            dist.barrier(self.dpg.world_pg)
+        if self.config.checkpoints.checkpoints_path_is_shared_file_system:
+            should_mkdir = dist.get_rank(self.dpg.world_pg) == 0
+        else:
+            should_mkdir = bool(int(os.environ.get("LOCAL_RANK", None)) == 0)
+        if should_mkdir:
+            checkpoint_path.mkdir(parents=True, exist_ok=True)
+        dist.barrier(self.dpg.world_pg)
 
         log_rank(f"Saving checkpoint at {checkpoint_path}", logger=logger, level=logging.WARNING, rank=0)
         checkpoint_metadata = {
@@ -1032,16 +1030,16 @@ class DistributedTrainer:
             config=self.config,
         )
         save_random_states(random_states=self.random_states, dpg=self.dpg, root_folder=checkpoint_path)
-        with fs_open(checkpoints_path / "latest.txt", mode="w") as fo:
+        with open(checkpoints_path / "latest.txt", mode="w") as fo:
             fo.write(f"{self.iteration_step}")
-        with fs_open(checkpoint_path / "config.txt", mode="w") as fo:
+        with open(checkpoint_path / "config.txt", mode="w") as fo:
             # TODO @nouamane: save as yaml
             fo.write(pformat(self.config))
 
         if hasattr(self.model_config, "to_json_file"):
             self.model_config.to_json_file(checkpoint_path / "model_config.json")
         else:
-            with fs_open(checkpoint_path / "model_config.json", mode="w") as fo:
+            with open(checkpoint_path / "model_config.json", mode="w") as fo:
                 fo.write(json.dumps(asdict(self.model_config)))
 
         # Upload to S3

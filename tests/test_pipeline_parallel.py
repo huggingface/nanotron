@@ -7,17 +7,17 @@ from helpers.utils import available_gpus, init_distributed
 from torch import nn
 from torch.nn import functional as F
 
-from nanotron.nn import distributed as dist
-from nanotron.nn.parallel.pipeline_parallelism.block import PipelineBlock
-from nanotron.nn.parallel.pipeline_parallelism.engine import (
+from nanotron.core import distributed as dist
+from nanotron.core.parallel.pipeline_parallelism.block import PipelineBlock
+from nanotron.core.parallel.pipeline_parallelism.engine import (
     AllForwardAllBackwardPipelineEngine,
     OneForwardOneBackwardPipelineEngine,
     PipelineEngine,
 )
-from nanotron.nn.parallel.pipeline_parallelism.p2p import P2P
-from nanotron.nn.parallel.pipeline_parallelism.tensor_pointer import TensorPointer
-from nanotron.nn.process_groups import DistributedProcessGroups
-from nanotron.nn.utils import init_on_device_and_dtype
+from nanotron.core.parallel.pipeline_parallelism.p2p import P2P
+from nanotron.core.parallel.pipeline_parallelism.tensor_pointer import TensorPointer
+from nanotron.core.process_groups import DistributedProcessGroups
+from nanotron.core.utils import init_on_device_and_dtype
 
 
 @pytest.mark.skipif(available_gpus() < 2, reason="Testing build_and_set_rank requires at least 2 gpus")

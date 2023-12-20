@@ -27,7 +27,6 @@
 # Added document index to index file and made it accessible.
 #    An empty sentence no longer separates documents.
 
-import io
 import shutil
 import struct
 from functools import lru_cache
@@ -35,11 +34,10 @@ from itertools import accumulate
 from typing import Tuple
 
 import numpy as np
-import torch
+import os
 
 from nanotron import logging
 from nanotron.logging import log_rank
-from nanotron.nn.serialize.path import get_filesystem_and_path
 
 logger = logging.get_logger(__name__)
 # logging.getLogger('botocore').setLevel(logging.WARNING)
@@ -102,7 +100,7 @@ def _warmup_mmap_file(path: str):
             pass
 
 
-class MMapIndexedDataset(torch.utils.data.Dataset):
+class .(torch.utils.data.Dataset):
     class Index(object):
         _HDR_MAGIC = b"MMIDIDX\x00\x00"
 
@@ -153,23 +151,21 @@ class MMapIndexedDataset(torch.utils.data.Dataset):
             return _Writer()
 
         def __init__(self, path: str, skip_warmup: bool = False):
-            self.fs, fs_path = get_filesystem_and_path(path)
+            with open(path, "rb") as stream:
+                magic_test = stream.read(9)
+                assert self._HDR_MAGIC == magic_test, (
+                    "Index file doesn't match expected format. " "Make sure that --dataset-impl is configured properly."
+                )
+                version = struct.unpack("<Q", stream.read(8))
+                assert (1,) == version
 
-            stream = io.BytesIO(self.fs.read_block(fs_path, offset=0, length=34))
-            magic_test = stream.read(9)
-            assert self._HDR_MAGIC == magic_test, (
-                "Index file doesn't match expected format. " "Make sure that --dataset-impl is configured properly."
-            )
-            version = struct.unpack("<Q", stream.read(8))
-            assert (1,) == version
+                (dtype_code,) = struct.unpack("<B", stream.read(1))
+                self._dtype = dtypes[dtype_code]
+                self._dtype_size = self._dtype().itemsize
 
-            (dtype_code,) = struct.unpack("<B", stream.read(1))
-            self._dtype = dtypes[dtype_code]
-            self._dtype_size = self._dtype().itemsize
-
-            self._len = struct.unpack("<Q", stream.read(8))[0]
-            self._doc_count = struct.unpack("<Q", stream.read(8))[0]
-            offset = stream.tell()
+                self._len = struct.unpack("<Q", stream.read(8))[0]
+                self._doc_count = struct.unpack("<Q", stream.read(8))[0]
+                offset = stream.tell()
 
             if not skip_warmup:
                 log_rank("    warming up index mmap file...", logger=logger, level=logging.INFO, rank=0)
@@ -302,12 +298,11 @@ class MMapIndexedDataset(torch.utils.data.Dataset):
         return False
 
     @staticmethod
-    def exists(path):
-        fs, data_path = get_filesystem_and_path(path)
+    def exists(data_path):
         logger.debug(
-            f"Checking file path: {path}, data_path: {data_path}, index_file_path: {index_file_path(data_path)}, data_file_path: {data_file_path(data_path)}"
+            f"Checking file path: {data_path}, index_file_path: {index_file_path(data_path)}, data_file_path: {data_file_path(data_path)}"
         )
-        return fs.exists(index_file_path(data_path)) and fs.exists(data_file_path(data_path))
+        return os.path.exists(index_file_path(data_path)) and os.path.exists(data_file_path(data_path))
 
     def deallocate_indexed_dataset_memory(self):
         """Deallocate memory of an IndexedDataset."""

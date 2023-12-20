@@ -7,29 +7,29 @@ from helpers.exception import assert_fail_except_rank_with, timeout_after
 from helpers.utils import available_gpus, init_distributed
 from torch import nn
 
-import nanotron.nn.distributed as dist
-from nanotron.nn.dataclass import DistributedProcessGroups
-from nanotron.nn.gradient_accumulator import FP32GradBucketManager, FP32GradientAccumulator, get_fp32_accum_hook
-from nanotron.nn.optim import ZeroDistributedOptimizer
-from nanotron.nn.optim.named_optimizer import NamedOptimizer
-from nanotron.nn.optim.optimizer_from_gradient_accumulator import (
+import nanotron.core.distributed as dist
+from nanotron.core.dataclass import DistributedProcessGroups
+from nanotron.core.gradient_accumulator import FP32GradBucketManager, FP32GradientAccumulator, get_fp32_accum_hook
+from nanotron.core.optim import ZeroDistributedOptimizer
+from nanotron.core.optim.named_optimizer import NamedOptimizer
+from nanotron.core.optim.optimizer_from_gradient_accumulator import (
     OptimizerFromGradientAccumulator,
 )
-from nanotron.nn.parallel.model import initial_sync
-from nanotron.nn.parallel.parameters import NanotronParameter, sanity_check
-from nanotron.nn.parallel.pipeline_parallelism.engine import (
+from nanotron.core.parallel.model import initial_sync
+from nanotron.core.parallel.parameters import NanotronParameter, sanity_check
+from nanotron.core.parallel.pipeline_parallelism.engine import (
     AllForwardAllBackwardPipelineEngine,
     OneForwardOneBackwardPipelineEngine,
     PipelineEngine,
 )
-from nanotron.nn.parallel.pipeline_parallelism.p2p import P2P
-from nanotron.nn.parallel.pipeline_parallelism.utils import get_pp_rank_of
-from nanotron.nn.parallel.tied_parameters import (
+from nanotron.core.parallel.pipeline_parallelism.p2p import P2P
+from nanotron.core.parallel.pipeline_parallelism.utils import get_pp_rank_of
+from nanotron.core.parallel.tied_parameters import (
     get_tied_id_to_param,
     sync_tied_weights_gradients,
     tie_parameters,
 )
-from nanotron.nn.utils import ContextManagers, assert_tensor_synced_across_pg, init_on_device_and_dtype
+from nanotron.core.utils import ContextManagers, assert_tensor_synced_across_pg, init_on_device_and_dtype
 
 
 @pytest.mark.parametrize("half_precision", [torch.float16, torch.bfloat16])

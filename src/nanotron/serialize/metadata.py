@@ -8,11 +8,10 @@ import torch
 from dacite import from_dict
 from packaging.version import Version
 
-from nanotron.nn import distributed as dist
-from nanotron.nn.process_groups import DistributedProcessGroups
-from nanotron.nn.parallel.parameters import SlicesPair
+from nanotron.core import distributed as dist
+from nanotron.core.process_groups import DistributedProcessGroups
+from nanotron.core.parallel.parameters import SlicesPair
 from nanotron.constants import CHECKPOINT_VERSION
-from nanotron.serialize.xpath import is_local_path, fs_open
 
 
 @dataclasses.dataclass
@@ -118,8 +117,7 @@ def save_meta(dpg: DistributedProcessGroups, root_folder: Path, checkpoint_metad
     if dist.get_rank(dpg.world_pg) != 0:
         return
 
-    if is_local_path(root_folder):
-        root_folder.mkdir(exist_ok=True, parents=True)
+    root_folder.mkdir(exist_ok=True, parents=True)
     checkpoint_metadata = CheckpointMetadata(
         version=CHECKPOINT_VERSION, tp=dpg.tp_pg.size(), dp=dpg.dp_pg.size(), metas=checkpoint_metadata
     )
@@ -127,12 +125,12 @@ def save_meta(dpg: DistributedProcessGroups, root_folder: Path, checkpoint_metad
     # There are some types that require manual casting in order to work correctly.
     processed_metadata = process_type(dataclasses.asdict(checkpoint_metadata), type_hooks={Version: lambda x: str(x)})
 
-    with fs_open(root_folder / "checkpoint_metadata.json", mode="w") as fo:
+    with open(root_folder / "checkpoint_metadata.json", mode="w") as fo:
         json.dump(processed_metadata, fo, indent=2, sort_keys=True)
 
 
 def load_meta(dpg: DistributedProcessGroups, root_folder: Path) -> CheckpointMetadata:
-    with fs_open(root_folder / "checkpoint_metadata.json", mode="r") as fi:
+    with open(root_folder / "checkpoint_metadata.json", mode="r") as fi:
         checkpoint_metadata = json.load(fi)
         checkpoint_metadata = from_dict(
             data_class=CheckpointMetadata,

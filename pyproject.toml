@@ -41,18 +41,6 @@ test = [
     "pytest-xdist"
 ]
 
-s3 = [
-    "s3fs"
-]
-
-tb-logger = [
-    "tensorboardX"
-]
-
-hf-logger = [
-    "huggingface_hub>=0.16.2"
-]
-
 fast-modeling = [
     "flash-attn>=2.0",
     "apex"

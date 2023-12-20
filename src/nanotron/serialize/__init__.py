@@ -13,9 +13,6 @@ __all__ = [
     "save_random_states",
     "load_meta",
     "save_meta",
-    "fs_open",
-    "get_filesystem_and_path",
     "get_checkpoint_paths_list",
-    "S3Mover",
     "human_format",
 ]
