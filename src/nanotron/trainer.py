@@ -953,9 +953,6 @@ class DistributedTrainer:
         save_random_states(random_states=self.random_states, dpg=self.dpg, root_folder=checkpoint_path)
         with open(checkpoints_path / "latest.txt", mode="w") as fo:
             fo.write(f"{self.iteration_step}")
-        with open(checkpoint_path / "config.txt", mode="w") as fo:
-            # TODO @nouamane: save as yaml
-            fo.write(pformat(self.config))
 
         if hasattr(self.model_config, "to_json_file"):
             self.model_config.to_json_file(checkpoint_path / "model_config.json")
