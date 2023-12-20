@@ -7,7 +7,7 @@ import torch
 from nanotron.core import distributed as dist
 from nanotron.core import optim as optim
 from nanotron.core.process_groups import DistributedProcessGroups
-from nanotron.serialize.main import ObjectType
+from nanotron.serialize.utils import ObjectType
 
 
 def optimizer_filename(dpg: DistributedProcessGroups, is_zero: bool):

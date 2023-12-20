@@ -19,7 +19,7 @@ from pprint import pprint
 
 import torch
 from nanotron import logging
-from nanotron.config import GenerationArgs, ParallelismArgs, get_all_trainer_configs
+from nanotron.config import GenerationArgs, ParallelismArgs, get_config_from_file
 from nanotron.core import distributed as dist
 from nanotron.core.parallel.parameters import sanity_check
 from nanotron.core.parallel.pipeline_parallelism.engine import (
@@ -88,17 +88,10 @@ def main():
     if (args.ckpt_path / "config.yaml").exists():
         config_path = args.ckpt_path / "config.yaml"
         # parse config
-        all_configs = get_all_trainer_configs(config_path.as_posix())
-        config, model_config = (
-            all_configs.config,
-            all_configs.model_config,
-        )
-        if args.model_name is None:
-            tokenizer_path = (
-                config.model.hf_model_name
-                if config.model.hf_model_name is not None
-                else config.model.tokenizer_name_or_path
-            )
+        config = get_config_from_file(config_path.as_posix())
+        model_config = config.model.model_config
+
+        tokenizer_path = config.tokenizer.tokenizer_name_or_path
     elif (args.ckpt_path / "model_config.json").exists():
         model_config = AutoConfig.from_pretrained(args.ckpt_path / "model_config.json")
         if args.model_name is None:

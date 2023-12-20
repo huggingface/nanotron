@@ -15,12 +15,12 @@ from nanotron.core.distributed import get_global_rank
 from nanotron.core.parallel.parameters import NanotronParameter, ShardedInfo, SlicesPair
 from nanotron.core.process_groups import DistributedProcessGroups
 from nanotron.logging import log_rank
-from nanotron.serialize.main import (
+from nanotron.serialize.metadata import CheckpointMetadata, TensorMetadata, TensorMetadataV2, load_meta
+from nanotron.serialize.utils import (
     ObjectType,
     get_path,
     get_tp_and_pp_rank_and_size_from,
 )
-from nanotron.serialize.metadata import CheckpointMetadata, TensorMetadata, TensorMetadataV2, load_meta
 
 logger = logging.get_logger(__name__)
 

@@ -16,6 +16,7 @@
 import logging
 import os
 import sys
+from dataclasses import dataclass
 from functools import lru_cache
 from logging import (
     CRITICAL,
@@ -27,7 +28,7 @@ from logging import (
     WARNING,
     Logger,
 )
-from typing import Optional
+from typing import List, Optional, Union
 
 from torch import distributed as torch_dist
 
@@ -42,20 +43,6 @@ log_levels = {
     "fatal": FATAL,
     "notset": NOTSET,
 }
-
-
-def human_format(num: float, billions: bool = False, divide_by_1024: bool = False) -> str:
-    if abs(num) < 1:
-        return "{:.3g}".format(num)
-    SIZES = ["", "K", "M", "G", "T", "P", "E"]
-    num = float("{:.3g}".format(num))
-    magnitude = 0
-    i = 0
-    while abs(num) >= 1000 and i < len(SIZES) - 1:
-        magnitude += 1
-        num /= 1000.0 if not divide_by_1024 else 1024.0
-        i += 1
-    return "{}{}".format("{:f}".format(num).rstrip("0").rstrip("."), SIZES[magnitude])
 
 
 class NewLineStreamHandler(logging.StreamHandler):
@@ -238,6 +225,47 @@ def warn_once(
     logger: Logger, msg: str, group: Optional[dist.ProcessGroup] = None, rank: Optional[int] = None, **kwargs
 ):
     log_rank(msg=msg, logger=logger, level=logging.WARNING, group=group, rank=rank, **kwargs)
+
+
+def human_format(num: float, billions: bool = False, divide_by_1024: bool = False) -> str:
+    if abs(num) < 1:
+        return "{:.3g}".format(num)
+    SIZES = ["", "K", "M", "G", "T", "P", "E"]
+    num = float("{:.3g}".format(num))
+    magnitude = 0
+    i = 0
+    while abs(num) >= 1000 and i < len(SIZES) - 1:
+        magnitude += 1
+        num /= 1000.0 if not divide_by_1024 else 1024.0
+        i += 1
+    return "{}{}".format("{:f}".format(num).rstrip("0").rstrip("."), SIZES[magnitude])
+
+
+@dataclass
+class LogItem:
+    tag: str
+    scalar_value: Union[float, int, str]
+    log_format: Optional[str] = None
+
+
+@dataclass
+class LoggerWriter:
+    global_step: int
+
+    def add_scalar(self, tag: str, scalar_value: Union[float, int], log_format=None) -> str:
+        if log_format == "human_format":
+            log_str = f"{tag}: {human_format(scalar_value)}"
+        else:
+            log_str = f"{tag}: {scalar_value:{log_format}}" if log_format is not None else f"{tag}: {scalar_value}"
+        return log_str
+
+    def add_scalars_from_list(self, log_entries: List[LogItem], iteration_step: int):
+        log_strs = [f"iteration: {iteration_step} / {self.global_step}"]
+        log_strs += [
+            self.add_scalar(log_item.tag, log_item.scalar_value, log_item.log_format) for log_item in log_entries
+        ]
+        log_str = " | ".join(log_strs)
+        log_rank(log_str, logger=get_logger(__name__), level=logging.INFO)
 
 
 _configure_library_root_logger()

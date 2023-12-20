@@ -1,4 +1,3 @@
-import contextlib
 import datetime
 import gc
 import json
@@ -10,7 +9,7 @@ import time
 from dataclasses import asdict
 from pathlib import Path
 from pprint import pformat
-from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Tuple, Union
+from typing import Callable, Dict, Iterable, Iterator, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -20,12 +19,8 @@ from nanotron import logging
 from nanotron.config import (
     Config,
     ExistingCheckpointInit,
-    HubLoggerConfig,
     ParallelismArgs,
     RandomInit,
-    TensorboardLoggerConfig,
-    WandbLoggerConfig,
-    get_all_trainer_configs,
     get_config_from_file,
 )
 from nanotron.core import distributed as dist
@@ -59,7 +54,6 @@ from nanotron.core.utils import (
     init_on_device_and_dtype,
 )
 from nanotron.dataloader import sanity_check_dataloader
-from nanotron.dataloaders.nemo import TrainDataLog
 from nanotron.helpers import (
     _vocab_size_with_padding,
     get_profiler,
@@ -69,33 +63,31 @@ from nanotron.helpers import (
     lr_scheduler_builder,
     set_logger_verbosity_format,
 )
-from nanotron.lighteval.runner import LightEvalRunner
-from nanotron.logger import LoggerWriter, LogItem, obj_to_markdown
-from nanotron.logging import log_rank
+from nanotron.logging import LoggerWriter, LogItem, human_format, log_rank
 from nanotron.models import NanotronModel
 from nanotron.serialize import (
-    S3Mover,
-    human_format,
     load_lr_scheduler,
     load_meta,
     load_optimizer,
     load_weights,
+    parse_ckpt_path,
     save,
     save_random_states,
 )
-from nanotron.serialize.main import parse_ckpt_path
 
 if int(os.environ.get("USE_FAST", 0)) == 1:
     # We import the fast versions
     from nanotron.models.fast.falcon import FalconForTraining
     from nanotron.models.fast.gpt2 import GPTForTraining
     from nanotron.models.fast.llama import LlamaForTraining, RotaryEmbedding
-    from nanotron.models.fast.starcoder2 import Starcoder2ForTraining
+
+    # from nanotron.models.fast.starcoder2 import Starcoder2ForTraining
 else:
     from nanotron.models.falcon import FalconForTraining
-    from nanotron.models.fast.starcoder2 import Starcoder2ForTraining
     from nanotron.models.gpt2 import GPTForTraining
     from nanotron.models.llama import LlamaForTraining, RotaryEmbedding
+
+    # from nanotron.models.fast.starcoder2 import Starcoder2ForTraining
 
 logger = logging.get_logger(__name__)
 
@@ -103,26 +95,12 @@ logger = logging.get_logger(__name__)
 dist_logger = logging.get_logger(dist.dist.__name__)
 dist_logger.setLevel(logging.WARNING)
 
-try:
-    from nanotron.logger import BatchSummaryWriter
-
-    tb_logger_available = True
-except ImportError:
-    tb_logger_available = False
-
-try:
-    from nanotron.logger import HubSummaryWriter
-
-    hub_logger_available = True
-except ImportError:
-    hub_logger_available = False
-
 CONFIG_TO_MODEL_CLASS = {
     "LlamaConfig": LlamaForTraining,
     "GPTBigCodeConfig": GPTForTraining,
     "FalconConfig": FalconForTraining,
     "RWConfig": FalconForTraining,
-    "Starcoder2Config": Starcoder2ForTraining,
+    # "Starcoder2Config": Starcoder2ForTraining,
 }
 
 MIN_GPU_MEM_THRESHOLD = 8e10  # 80GB
@@ -135,15 +113,8 @@ class DistributedTrainer:
     def __init__(self, config_or_config_file: Union[Config, str]):
         super().__init__()
         check_env()
-        all_configs = get_all_trainer_configs(config_or_config_file)
-        self.config, self.model_config = (
-            all_configs.config,
-            all_configs.model_config,
-        )
-
-        ########################################
-        ## We start with setting up loggers and process groups
-        ########################################
+        self.config = get_config_from_file(config_or_config_file)
+        self.model_config = self.config.model.model_config
 
         ########################################
         ## We start with setting up loggers and process groups
@@ -269,7 +240,7 @@ class DistributedTrainer:
 
         # Setup tensorboard write and log writers on output rank
         self.logger_ranks = self.dpg.world_rank_matrix[self.normalized_model.output_pp_rank, 0, 0].flatten()
-        self.tb_context, self.loggerwriter = self.setup_log_writers()
+        self.loggerwriter = self.setup_log_writers()
 
         # Log where each module is instantiated
         self.normalized_model.log_modules(level=logging.DEBUG, group=self.dpg.world_pg, rank=0)
@@ -347,43 +318,43 @@ class DistributedTrainer:
         self.iteration_step = self.start_iteration_step
         self.limit_val_batches = self.config.tokens.limit_val_batches
 
-        # S3 Mover and save initial state
-        if self.config.checkpoints.s3 is not None:
-            # Only local rank 0 should upload
-            dummy = bool(int(os.environ.get("LOCAL_RANK", None)) != 0)
-            self.s3_mover = S3Mover(
-                local_path=self.config.checkpoints.checkpoints_path,
-                s3_path=self.config.checkpoints.s3.upload_s3_path,
-                # duplicate_checkpoint_path=self.config.checkpoints.resume_checkpoint_path,
-                remove_after_upload=self.config.checkpoints.s3.remove_after_upload,
-                s5cmd_numworkers=self.config.checkpoints.s3.s5cmd_numworkers,
-                s5cmd_concurrency=self.config.checkpoints.s3.s5cmd_concurrency,
-                s5cmd_path=self.config.checkpoints.s3.s5cmd_path,
-                dummy=dummy,
-            )
-        else:
-            self.s3_mover = None
-        if self.config.checkpoints.lighteval is not None and dist.get_rank(self.dpg.world_pg) == 0:
-            # We only start evaluation runs on the first node
-            if self.s3_mover is None:
-                raise ValueError("lighteval requires s3 upload of checkpoints to be enabled")
-            self.lighteval_runner = LightEvalRunner(config=self.config, dpg=self.dpg)
-            self.s3_mover.post_upload_callback = self.lighteval_runner.eval_single_checkpoint
+        # # S3 Mover and save initial state
+        # if self.config.checkpoints.s3 is not None:
+        #     # Only local rank 0 should upload
+        #     dummy = bool(int(os.environ.get("LOCAL_RANK", None)) != 0)
+        #     self.s3_mover = S3Mover(
+        #         local_path=self.config.checkpoints.checkpoints_path,
+        #         s3_path=self.config.checkpoints.s3.upload_s3_path,
+        #         # duplicate_checkpoint_path=self.config.checkpoints.resume_checkpoint_path,
+        #         remove_after_upload=self.config.checkpoints.s3.remove_after_upload,
+        #         s5cmd_numworkers=self.config.checkpoints.s3.s5cmd_numworkers,
+        #         s5cmd_concurrency=self.config.checkpoints.s3.s5cmd_concurrency,
+        #         s5cmd_path=self.config.checkpoints.s3.s5cmd_path,
+        #         dummy=dummy,
+        #     )
+        # else:
+        #     self.s3_mover = None
+        # if self.config.checkpoints.lighteval is not None and dist.get_rank(self.dpg.world_pg) == 0:
+        #     # We only start evaluation runs on the first node
+        #     if self.s3_mover is None:
+        #         raise ValueError("lighteval requires s3 upload of checkpoints to be enabled")
+        #     self.lighteval_runner = LightEvalRunner(config=self.config, dpg=self.dpg)
+        #     self.s3_mover.post_upload_callback = self.lighteval_runner.eval_single_checkpoint
 
         if self.config.checkpoints.save_initial_state and checkpoint_path is None:
             self.save_checkpoint()
 
-    def log_object(self, dataclass_object: Any, name: str):
-        if not dataclass_object or isinstance(self.tb_context, contextlib.nullcontext):
-            return
+    # def log_object(self, dataclass_object: Any, name: str):
+    #     if not dataclass_object or isinstance(self.tb_context, contextlib.nullcontext):
+    #         return
 
-        self.tb_context.add_text(name, obj_to_markdown(dataclass_object), global_step=1)
+    #     self.tb_context.add_text(name, obj_to_markdown(dataclass_object), global_step=1)
 
-        # Dataclass objects are usually configs so we push then already now
-        self.tb_context.flush()
+    #     # Dataclass objects are usually configs so we push then already now
+    #     self.tb_context.flush()
 
-        if isinstance(self.tb_context, HubSummaryWriter):
-            self.tb_context.scheduler.trigger()
+    #     if isinstance(self.tb_context, HubSummaryWriter):
+    #         self.tb_context.scheduler.trigger()
 
     @classmethod
     def from_config_file(cls, config_file: str):
@@ -393,7 +364,7 @@ class DistributedTrainer:
     def train(
         self,
         dataloader_or_dls: Union[Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]], Tuple[Iterator, ...]],
-        data_config_log: Optional[TrainDataLog] = None,
+        # data_config_log: Optional[TrainDataLog] = None,
     ) -> None:
         if isinstance(dataloader_or_dls, tuple):
             dataloader_or_dls[1] if len(dataloader_or_dls) > 1 else None
@@ -404,7 +375,7 @@ class DistributedTrainer:
         dataloader = sanity_check_dataloader(dataloader=dataloader, dpg=self.dpg, config=self.config)
 
         # Log data config
-        self.log_object(data_config_log, name="data_config")
+        # self.log_object(data_config_log, name="data_config")
 
         self.pipeline_engine: PipelineEngine = self.config.parallelism.pp_engine
 
@@ -430,60 +401,56 @@ class DistributedTrainer:
 
         prof = get_profiler(config=self.config)
         torch.cuda.empty_cache()
-        with self.tb_context:
-            with prof:
-                for self.iteration_step in range(self.start_iteration_step + 1, self.config.tokens.train_steps + 1):
-                    if isinstance(prof, torch.profiler.profile):
-                        prof.step()
-                    self.iteration_start_time = time.time()
+        with prof:
+            for self.iteration_step in range(self.start_iteration_step + 1, self.config.tokens.train_steps + 1):
+                if isinstance(prof, torch.profiler.profile):
+                    prof.step()
+                self.iteration_start_time = time.time()
 
-                    # Training step
-                    outputs, loss_avg = self.training_step(dataloader=dataloader)
+                # Training step
+                outputs, loss_avg = self.training_step(dataloader=dataloader)
 
-                    # Training Logs
-                    self.consumed_train_samples += self.global_batch_size
+                # Training Logs
+                self.consumed_train_samples += self.global_batch_size
 
-                    if (self.iteration_step - 1) % self.config.logging.iteration_step_info_interval == 0:
-                        self.train_step_logs(tb_writer=self.tb_context, outputs=outputs, loss_avg=loss_avg)
+                if (self.iteration_step - 1) % self.config.logging.iteration_step_info_interval == 0:
+                    self.train_step_logs(outputs=outputs, loss_avg=loss_avg)
 
-                    # Kill switch
-                    self.check_kill_switch(save_ckpt=True)
+                # Kill switch
+                self.check_kill_switch(save_ckpt=True)
 
-                    # Pause switch
-                    self.check_pause_switch()
+                # Checkpoint
+                if self.iteration_step % self.config.checkpoints.checkpoint_interval == 0:
+                    self.save_checkpoint()
 
-                    # Checkpoint
-                    if self.iteration_step % self.config.checkpoints.checkpoint_interval == 0:
-                        self.save_checkpoint()
+                # Update our background upload/removal of checkpoints
+                # if self.s3_mover is not None:
+                #     self.s3_mover.update()
 
-                    # Update our background upload/removal of checkpoints
-                    if self.s3_mover is not None:
-                        self.s3_mover.update()
+                # Validation #TODO: fix validation
+                # if (
+                #     valid_dataloader is not None
+                #     and self.iteration_step % self.config.tokens.val_check_interval == 0
+                # ):
+                #     self.validation_step(dataloader=valid_dataloader)
 
-                    # Validation #TODO: fix validation
-                    # if (
-                    #     valid_dataloader is not None
-                    #     and self.iteration_step % self.config.tokens.val_check_interval == 0
-                    # ):
-                    #     self.validation_step(dataloader=valid_dataloader)
+                # Push to Hub
+                # if (
+                #     isinstance(self.tb_context, HubSummaryWriter)
+                #     and (self.iteration_step - 1) % self.config.logging.tensorboard_logger.push_to_hub_interval
+                #     == 0
+                # ):
+                #     # tb_writer only exists on a single rank
+                #     log_rank(
+                #         f"Push Tensorboard logging to Hub at iteration {self.iteration_step} to https://huggingface.co/{self.config.logging.tensorboard_logger.repo_id}/tensorboard",
+                #         logger=logger,
+                #         level=logging.INFO,
+                #     )
+                #     # it is a future that queues to avoid concurrent push
+                #     self.tb_context.scheduler.trigger()
 
-                    # Push to Hub
-                    if (
-                        isinstance(self.tb_context, HubSummaryWriter)
-                        and (self.iteration_step - 1) % self.config.logging.tensorboard_logger.push_to_hub_interval
-                        == 0
-                    ):
-                        # tb_writer only exists on a single rank
-                        log_rank(
-                            f"Push Tensorboard logging to Hub at iteration {self.iteration_step} to https://huggingface.co/{self.config.logging.tensorboard_logger.repo_id}/tensorboard",
-                            logger=logger,
-                            level=logging.INFO,
-                        )
-                        # it is a future that queues to avoid concurrent push
-                        self.tb_context.scheduler.trigger()
-
-        if self.s3_mover is not None:
-            self.s3_mover.distributed_wait_for_completion(group=self.dpg.world_pg)
+        # if self.s3_mover is not None:
+        #     self.s3_mover.distributed_wait_for_completion(group=self.dpg.world_pg)
 
     def training_step(
         self, dataloader: Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]]
@@ -610,7 +577,6 @@ class DistributedTrainer:
 
     def train_step_logs(
         self,
-        tb_writer: Union[contextlib.nullcontext, "HubSummaryWriter", "BatchSummaryWriter"],
         outputs: Iterable[Dict[str, Union[torch.Tensor, TensorPointer]]],
         loss_avg: Optional[torch.Tensor],
     ) -> None:
@@ -652,10 +618,10 @@ class DistributedTrainer:
             if self.config.optimizer.clip_grad is not None:
                 log_entries.append(LogItem("grad_norm", self.grad_norm_unclipped.item(), "human_format"))  # , ".3f"))
 
-            if not self.s3_mover.dummy:
-                log_entries.append(
-                    LogItem("s3_mover_busy", self.s3_mover.get_state_as_int(), "human_format")
-                )  # , ".3f"))
+            # if not self.s3_mover.dummy:
+            #     log_entries.append(
+            #         LogItem("s3_mover_busy", self.s3_mover.get_state_as_int(), "human_format")
+            #     )  # , ".3f"))
 
             # Log not too often the memory
             if self.iteration_step < 5 or (self.iteration_step - 1) % self.config.checkpoints.checkpoint_interval == 0:
@@ -674,8 +640,8 @@ class DistributedTrainer:
                     ]
                 )
 
-            if not isinstance(tb_writer, contextlib.nullcontext):
-                tb_writer.add_scalars_from_list(log_entries, self.iteration_step)
+            # if not isinstance(tb_writer, contextlib.nullcontext):
+            #     tb_writer.add_scalars_from_list(log_entries, self.iteration_step)
 
             self.loggerwriter.add_scalars_from_list(log_entries, self.iteration_step)
 
@@ -912,7 +878,7 @@ class DistributedTrainer:
 
     def setup_log_writers(
         self,
-    ) -> Tuple[Union[contextlib.nullcontext, HubSummaryWriter, "BatchSummaryWriter"], Optional[LoggerWriter]]:
+    ) -> Optional[LoggerWriter]:
         """Setup all log writers on the appropriate ranks
 
         Args:
@@ -921,55 +887,11 @@ class DistributedTrainer:
             dpg (DistributedProcessGroups): The distributed process groups
         """
         if dist.get_rank(self.dpg.world_pg) in self.logger_ranks:
-            if self.config.logging.tensorboard_logger is None:
-                tb_context = contextlib.nullcontext()
-            else:
-                logdir = str(self.config.logging.tensorboard_logger.tensorboard_dir / self.config.general.run)
-
-                if isinstance(self.config.logging.tensorboard_logger, HubLoggerConfig):
-                    assert (
-                        hub_logger_available
-                    ), 'Hub Tensorboard Logger is not available. Please install nanotron with `pip install -e ".[hf-logger]"` or modify your config file'
-                    tb_context = HubSummaryWriter(
-                        logdir=logdir,
-                        repo_id=self.config.logging.tensorboard_logger.repo_id,
-                        repo_private=not self.config.logging.tensorboard_logger.repo_public,
-                        path_in_repo="tb",
-                    )
-                elif isinstance(self.config.logging.tensorboard_logger, TensorboardLoggerConfig):
-                    assert (
-                        tb_logger_available
-                    ), 'Tensorboard Logger is not available. Please install nanotron with `pip install -e ".[tb-logger]"` or modify your config file'
-
-                    if isinstance(self.config.logging.tensorboard_logger, WandbLoggerConfig):
-                        try:
-                            import wandb
-
-                            wandb.init(
-                                project=self.config.logging.tensorboard_logger.wandb_project,
-                                entity=self.config.logging.tensorboard_logger.wandb_entity,
-                                name=self.config.general.run,
-                                config=self.config.as_dict(),
-                                sync_tensorboard=True,
-                            )
-                        except ImportError:
-                            raise ImportError("Please install wandb to use the WandbLoggerConfig")
-
-                    tb_context = BatchSummaryWriter(
-                        logdir=logdir,
-                        flush_secs=self.config.logging.tensorboard_logger.flush_secs,
-                    )
-                else:
-                    raise ValueError(
-                        f"Unsupported value for `config.logging.tensorboard_logger`, got {self.config.logging.tensorboard_logger}"
-                    )
-
             loggerwriter = LoggerWriter(global_step=self.config.tokens.train_steps)
         else:
-            tb_context = contextlib.nullcontext()
             loggerwriter = None
 
-        return tb_context, loggerwriter
+        return loggerwriter
 
     def check_kill_switch(self, save_ckpt: bool):
         if self.config.general.kill_switch_path and self.config.general.kill_switch_path.exists():
@@ -987,11 +909,11 @@ class DistributedTrainer:
             sys.exit(0)
 
     def save_checkpoint(self) -> Path:
-        if self.s3_mover is not None:
-            self.s3_mover.distributed_wait_for_completion(self.dpg.world_pg)
-            if self.s3_mover.post_upload_callback_outputs is not None:
-                slurm_job_id, slurm_log = self.s3_mover.post_upload_callback_outputs
-                self.log_object({"job_id": slurm_job_id, "log": slurm_log}, "slurm_eval")
+        # if self.s3_mover is not None:
+        #     self.s3_mover.distributed_wait_for_completion(self.dpg.world_pg)
+        #     if self.s3_mover.post_upload_callback_outputs is not None:
+        #         slurm_job_id, slurm_log = self.s3_mover.post_upload_callback_outputs
+        #         self.log_object({"job_id": slurm_job_id, "log": slurm_log}, "slurm_eval")
 
         checkpoints_path = self.config.checkpoints.checkpoints_path
         checkpoint_path = checkpoints_path / f"{self.iteration_step}"
@@ -1043,8 +965,8 @@ class DistributedTrainer:
                 fo.write(json.dumps(asdict(self.model_config)))
 
         # Upload to S3
-        if self.s3_mover is not None:
-            self.s3_mover.start_uploading()
+        # if self.s3_mover is not None:
+        #     self.s3_mover.start_uploading()
 
         return checkpoint_path
 
@@ -1235,10 +1157,15 @@ def mark_tied_parameters(
         for param_name, param in module.named_parameters(recurse=False):
             name = f"{module_name}.{param_name}"
 
-            if (isinstance(model, GPTForTraining) or isinstance(model, Starcoder2ForTraining)) and ".qkv.kv." in name:
+            if isinstance(model, GPTForTraining) and ".qkv.kv." in name:
                 assert param.is_tied, f"Expected {name} to already be synced"
                 # kv is deliberately skipped as it's tied in model init (_mark_kv_parameters_in_module_as_tied)
                 continue
+
+            # if isinstance(model, Starcoder2ForTraining) and ".qkv.kv." in name
+            #     assert param.is_tied, f"Expected {name} to already be synced"
+            #     # kv is deliberately skipped as it's tied in model init (_mark_kv_parameters_in_module_as_tied)
+            #     continue
 
             if isinstance(param, NanotronParameter) and param.is_sharded:
                 continue

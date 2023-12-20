@@ -1,7 +1,6 @@
 import datetime
 import os
 from dataclasses import dataclass
-from enum import Enum
 from pathlib import Path
 from typing import Optional, Union
 
@@ -9,7 +8,6 @@ import dacite
 import torch
 import yaml
 from dacite import from_dict
-from transformers import AutoConfig
 from yaml.loader import SafeLoader
 
 from nanotron.config.models_config import NanotronConfigs
@@ -34,12 +32,14 @@ logger = get_logger(__name__)
 class LoggingArgs:
     """Arguments related to logging"""
 
-    log_level: str
-    log_level_replica: str
-    iteration_step_info_interval: int
+    log_level: Optional[str] = None
+    log_level_replica: Optional[str] = None
+    iteration_step_info_interval: Optional[int] = 1
     extensions = None
 
     def __post_init__(self):
+        if self.log_level is None:
+            self.log_level = "info"
         if self.log_level not in [
             "debug",
             "info",
@@ -51,6 +51,8 @@ class LoggingArgs:
             raise ValueError(
                 f"log_level should be a string selected in ['debug', 'info', 'warning', 'error', 'critical', 'passive'] and not {self.log_level}"
             )
+        if self.log_level_replica is None:
+            self.log_level_replica = "info"
         if self.log_level_replica not in [
             "debug",
             "info",
@@ -66,23 +68,25 @@ class LoggingArgs:
 
 @dataclass
 class PretrainDatasetsArgs:
-    hf_dataset_mixer: Union[str, list, dict]
-    hf_dataset_config_name: Optional[str]
-    hf_dataset_splits: Union[str, list]
-    dataset_processing_num_proc_per_process: int
-    dataset_overwrite_cache: Optional[bool]
-    text_column_name: Optional[str]
+    hf_dataset_or_datasets: Union[str, list, dict]
+    hf_dataset_splits: Optional[Union[str, list]] = None
+    hf_dataset_config_name: Optional[str] = None
+    dataset_processing_num_proc_per_process: Optional[int] = 1
+    dataset_overwrite_cache: Optional[bool] = False
+    text_column_name: Optional[str] = None
+
+    def __post_init__(self):
+        if self.text_column_name is None:
+            self.text_column_name = "text"
 
 
 @dataclass
 class DataArgs:
     """Arguments related to the data and data files processing"""
 
-    seed: Optional[int]
-    num_loading_workers: int
-    dataset: Optional[
-        PretrainDatasetsArgs,
-    ]
+    dataset: PretrainDatasetsArgs
+    seed: int
+    num_loading_workers: Optional[int] = 1
 
 
 @dataclass
@@ -200,6 +204,7 @@ class ParallelismArgs:
 @dataclass
 class RandomInit:
     std: float
+    seed: int
 
 
 @dataclass
@@ -217,20 +222,20 @@ class ExistingCheckpointInit:
 class ModelArgs:
     """Arguments related to model architecture"""
 
-    dtype: torch.dtype
+    model_config: NanotronConfigs
     init_method: Union[RandomInit, ExistingCheckpointInit]
-    seed: Optional[int]
-    model_config: Optional[NanotronConfigs] = None
-    make_vocab_size_divisible_by: int
+    dtype: Optional[torch.dtype] = None
+    make_vocab_size_divisible_by: int = 1
     ddp_bucket_cap_mb: int = 25
 
     def __post_init__(self):
+        if self.dtype is None:
+            self.dtype = torch.bfloat16
         if isinstance(self.dtype, str):
             self.dtype = cast_str_to_torch_dtype(self.dtype)
 
-        if self.model_config is not None:
-            if self.model_config.max_position_embeddings is None:
-                self.model_config.max_position_embeddings = 0
+        # if self.model_config.max_position_embeddings is None:
+        #     self.model_config.max_position_embeddings = 0
 
 
 @dataclass
@@ -268,10 +273,10 @@ class LRSchedulerArgs:
     """
 
     learning_rate: float
-    lr_warmup_steps: int
-    lr_warmup_style: str
-    lr_decay_style: str
-    min_decay_lr: float
+    lr_warmup_steps: int = 0
+    lr_warmup_style: str = None
+    lr_decay_style: str = None
+    min_decay_lr: float = None
     lr_decay_steps: Optional[int] = None
 
     def __post_init__(self):
@@ -279,10 +284,16 @@ class LRSchedulerArgs:
             raise ValueError(
                 f"lr_warmup_style should be a string selected in ['linear', 'constant'] and not {self.lr_warmup_style}"
             )
+        if self.lr_warmup_style is None:
+            self.lr_warmup_style = "linear"
+        if self.lr_decay_style is None:
+            self.lr_decay_style = "linear"
         if self.lr_decay_style not in ["linear", "cosine"]:
             raise ValueError(
                 f"lr_decay_style should be a string selected in ['linear', 'cosine'] and not {self.lr_decay_style}"
             )
+        if self.min_decay_lr is None:
+            self.min_decay_lr = self.learning_rate
 
 
 @dataclass
@@ -322,7 +333,6 @@ class Config:
     """Main configuration class"""
 
     general: GeneralArgs
-    profiler: Optional[ProfilerArgs]
     checkpoints: CheckpointsArgs
     parallelism: ParallelismArgs
     model: ModelArgs
@@ -331,20 +341,21 @@ class Config:
     tokens: TokensArgs
     optimizer: OptimizerArgs
     data: DataArgs
+    profiler: Optional[ProfilerArgs] = None
 
     def __post_init__(self):
         # Some final sanity checks across separate arguments sections:
         if self.profiler is not None and self.profiler.profiler_export_path is not None:
             assert self.tokens.train_steps < 10
 
-        if self.learning_rate_scheduler.lr_decay_steps is None:
-            self.learning_rate_scheduler.lr_decay_steps = (
-                self.tokens.train_steps - self.learning_rate_scheduler.lr_warmup_steps
+        if self.optimizer.learning_rate_scheduler.lr_decay_steps is None:
+            self.optimizer.learning_rate_scheduler.lr_decay_steps = (
+                self.tokens.train_steps - self.optimizer.learning_rate_scheduler.lr_warmup_steps
             )
 
-        # if lighteval, we need tokenizer to be defined
-        if self.checkpoints.lighteval is not None:
-            assert self.model.tokenizer_name_or_path is not None
+        # # if lighteval, we need tokenizer to be defined
+        # if self.checkpoints.lighteval is not None:
+        #     assert self.model.tokenizer_name_or_path is not None
 
     @property
     def global_batch_size(self):
@@ -363,18 +374,7 @@ class Config:
         return serialize(self)
 
 
-class ConfigTypes(Enum):
-    """Enum class for the different types of config files
-    Name is the name of the class
-    Value is the name of the object
-    """
-
-    LightEvalConfig = "lighteval"
-    Config = "config"
-    LightEvalSlurmArgs = "slurm"
-
-
-def get_config_from_file(config_path: str, config_type: Union[ConfigTypes, str, None] = None) -> Config:
+def get_config_from_file(config_path: str) -> Config:
     """Get a config objet from a file (python or YAML)
 
     Args:
@@ -383,11 +383,6 @@ def get_config_from_file(config_path: str, config_type: Union[ConfigTypes, str, 
             ConfigTypes (Config, LightevalConfig, LightevalSlurm) or str
             if None, will default to Config
     """
-    if config_type is None:
-        config_type = ConfigTypes.Config
-    if isinstance(config_type, str):
-        config_type = ConfigTypes(config_type)
-
     # Open the file and load the file
     with open(config_path) as f:
         args = yaml.load(f, Loader=SafeLoader)
@@ -395,7 +390,7 @@ def get_config_from_file(config_path: str, config_type: Union[ConfigTypes, str, 
     # Make a nice dataclass from our yaml
     try:
         config = from_dict(
-            data_class=globals()[config_type.name],
+            data_class=Config,
             data=args,
             config=dacite.Config(
                 cast=[Path],
@@ -414,28 +409,3 @@ def get_config_from_file(config_path: str, config_type: Union[ConfigTypes, str, 
         raise ValueError(f"Error parsing config file {config_path}: {e}")
 
     return config
-
-
-@dataclass
-class AllTrainerConfigs:
-    config: Config
-    model_config: Union[NanotronConfigs, AutoConfig]
-
-
-def get_all_trainer_configs(config_or_config_file: Union[Config, str]) -> AllTrainerConfigs:
-    """Get the config and the config file path from either a config object or a config file path."""
-    if isinstance(config_or_config_file, str):
-        config: Config = get_config_from_file(config_or_config_file)
-    else:
-        config = config_or_config_file
-
-    if config.model.hf_model_name:
-        trust_remote_code = (
-            config.model.remote_code.trust_remote_code if hasattr(config.model, "remote_code") else None
-        )
-        model_config = AutoConfig.from_pretrained(config.model.hf_model_name, trust_remote_code=trust_remote_code)
-    else:
-        assert config.model.model_config is not None, "Either model.hf_model_name or model.model_config must be set"
-        model_config = config.model.model_config
-
-    return AllTrainerConfigs(config=config, model_config=model_config)

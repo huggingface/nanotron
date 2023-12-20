@@ -12,8 +12,6 @@ from huggingface_hub import __version__ as hf_hub_version
 from nanotron import logging
 from nanotron.config import (
     PretrainDatasetsArgs,
-    PretrainNemoArgs,
-    TokenizedBytesDatasetArgs,
 )
 from nanotron.core import distributed as dist
 from nanotron.core.utils import (
@@ -25,8 +23,6 @@ from nanotron.dataloader import (
     get_datasets,
     get_train_dataloader,
 )
-from nanotron.dataloaders.nemo import get_nemo_dataloader, get_nemo_datasets
-from nanotron.dataloaders.tokenized_bytes import get_s3_dataloader, get_s3_datasets
 from nanotron.logging import log_rank
 from nanotron.trainer import DistributedTrainer
 from torch.nn.parallel import DistributedDataParallel
@@ -63,58 +59,6 @@ def get_dataloader(trainer: DistributedTrainer, sanity_check_dataloader_interval
             seed=trainer.config.data.seed,
             dpg=trainer.dpg,
         )()
-    elif isinstance(trainer.config.data.dataset, PretrainNemoArgs):
-        log_rank("Using Nemo Dataloader", logger=logger, level=logging.INFO, rank=0)
-        assert tokenizer_path is not None, "Must provide tokenizer path for Nemo dataset with FIM"
-        tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, revision=trainer.config.model.tokenizer_revision)
-        assert (
-            tokenizer.vocab_size == trainer.model_config.vocab_size
-        ), f"Tokenizer vocab size ({tokenizer.vocab_size}) does not match model config vocab size ({trainer.model_config.vocab_size}). "
-
-        (train_dataset, valid_dataset, test_datasets), data_log = get_nemo_datasets(
-            config=trainer.config.data.dataset,
-            tokenizer=tokenizer,
-            global_batch_size=trainer.global_batch_size,
-            sequence_length=trainer.config.tokens.sequence_length,
-            train_steps=trainer.config.tokens.train_steps,
-            limit_val_batches=trainer.config.tokens.limit_val_batches,
-            val_check_interval=trainer.config.tokens.val_check_interval,
-            test_iters=trainer.config.tokens.limit_test_batches,
-            seed=trainer.config.data.seed,
-            dpg=trainer.dpg,
-        )
-        consumed_samples = trainer.consumed_train_samples
-        # gbs_stage_1 = 128
-        # stage_1_consumed_samples = 50000 * gbs_stage_1
-        # # assert trainer.consumed_train_samples == stage_1_consumed_samples + 64 * ...
-        # consumed_samples = trainer.consumed_train_samples - stage_1_consumed_samples + stage_1_consumed_samples // 4
-        dataloader = get_nemo_dataloader(
-            dataset=train_dataset,
-            sequence_length=trainer.sequence_length,
-            micro_batch_size=trainer.micro_batch_size,
-            global_batch_size=trainer.global_batch_size,
-            num_workers=trainer.config.data.num_loading_workers,
-            cfg=trainer.config.data.dataset,
-            consumed_samples=consumed_samples,  # TODO: case of staged training
-            dpg=trainer.dpg,
-            input_pp_rank=input_pp_rank,
-            output_pp_rank=output_pp_rank,
-            dataloader_drop_last=True,
-        )
-        valid_dataloader = get_nemo_dataloader(
-            dataset=valid_dataset,
-            sequence_length=trainer.sequence_length,
-            micro_batch_size=trainer.micro_batch_size,  # TODO: eval_micro_batch_size?
-            global_batch_size=trainer.global_batch_size,  # TODO: since no bwd, we can do len(dataset)?
-            num_workers=trainer.config.data.num_loading_workers,
-            cfg=trainer.config.data.dataset,
-            consumed_samples=consumed_samples,  # TODO: eval_consumed_samples?
-            dpg=trainer.dpg,
-            input_pp_rank=input_pp_rank,
-            output_pp_rank=output_pp_rank,
-            dataloader_drop_last=True,
-        )
-
     elif isinstance(trainer.config.data.dataset, PretrainDatasetsArgs):
         log_rank("Using `datasets` library", logger=logger, level=logging.INFO, rank=0)
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
@@ -129,7 +73,7 @@ def get_dataloader(trainer: DistributedTrainer, sanity_check_dataloader_interval
                 dataset_mixer=trainer.config.data.dataset.hf_dataset_mixer,
                 splits=trainer.config.data.dataset.hf_dataset_splits,
             )["train"]
-            tokenizer = AutoTokenizer.from_pretrained(trainer.config.model.hf_model_name)
+            tokenizer = AutoTokenizer.from_pretrained(trainer.config.tokenizer.tokenizer_name_or_path)
 
             train_dataset = clm_process(
                 raw_dataset=raw_dataset,
@@ -158,34 +102,7 @@ def get_dataloader(trainer: DistributedTrainer, sanity_check_dataloader_interval
                 f"Dataset is too small for steps ({len(dataloader)} < {(trainer.config.tokens.train_steps - trainer.start_iteration_step) * trainer.global_batch_size // trainer.dpg.dp_pg.size()}), "
                 f"Try train_steps<={len(dataloader) * trainer.dpg.dp_pg.size() // trainer.global_batch_size + trainer.start_iteration_step}"
             )
-    elif isinstance(trainer.config.data.dataset, TokenizedBytesDatasetArgs):
-        log_rank("Using TokenizedBytes Dataloader", logger=logger, level=logging.INFO, rank=0)
-        tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
-        tokenizer.pad_token = tokenizer.eos_token
-        tokenizer.padding_side = "left"
-
-        train_dataset, data_log = get_s3_datasets(
-            config=trainer.config.data.dataset,
-            global_batch_size=trainer.global_batch_size,
-            sequence_length=trainer.sequence_length,
-            train_steps=trainer.config.tokens.train_steps,
-            dpg=trainer.dpg,
-        )
-        dataloader = get_s3_dataloader(
-            dataset=train_dataset,
-            sequence_length=trainer.sequence_length,
-            micro_batch_size=trainer.micro_batch_size,
-            global_batch_size=trainer.global_batch_size,
-            num_workers=trainer.config.data.num_loading_workers,
-            cfg=trainer.config.data.dataset,
-            consumed_samples=trainer.consumed_train_samples,
-            num_samples=trainer.config.tokens.train_steps * trainer.global_batch_size,
-            dpg=trainer.dpg,
-            input_pp_rank=input_pp_rank,
-            output_pp_rank=output_pp_rank,
-            dataloader_drop_last=True,
-        )
-    else:  # TODO: other datasets
+    else:
         raise ValueError(f"Unhandled case of `self.config.data.dataset`. Got: {trainer.config.data.dataset}")
 
     # SANITY dataloder first samples

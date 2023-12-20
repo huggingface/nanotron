@@ -1,16 +1,11 @@
 import dataclasses
+import warnings
 from typing import Dict, Generator, Iterator, List, Optional, Union
 
-import datasets
 import numpy as np
 import torch
-from datasets import Dataset, DatasetDict, Features, Sequence, Value, concatenate_datasets, load_dataset
 from torch.utils.data import BatchSampler, DataLoader
 from torch.utils.data.distributed import DistributedSampler
-from transformers import (
-    PreTrainedTokenizerBase,
-)
-from transformers.trainer_pt_utils import DistributedSamplerWithLoop
 
 from nanotron import logging
 from nanotron.config import Config
@@ -24,9 +19,15 @@ from nanotron.core.utils import (
 )
 
 try:
-    tb_logger_available = True
+    import datasets
+    from datasets import Dataset, DatasetDict, Features, Sequence, Value, concatenate_datasets, load_dataset
+    from transformers import (
+        PreTrainedTokenizerBase,
+    )
+    from transformers.trainer_pt_utils import DistributedSamplerWithLoop
 except ImportError:
-    tb_logger_available = False
+    warnings.warn("Datasets and/or Transformers not installed, you'll be unable to use the dataloader.")
+
 
 logger = logging.get_logger(__name__)
 
@@ -73,14 +74,14 @@ def sanity_check_dataloader(
 
 # Adapted from h4/src/h4/data/loading.py
 def get_datasets(
-    dataset_mixer: Union[dict, str],
+    hf_dataset_or_datasets: Union[dict, str],
     splits: Optional[Union[List[str], str]] = ["train", "test"],
 ) -> DatasetDict:
     """
     Function to load dataset directly from DataArguments.
 
     Args:
-        dataset_mixer (Union[dict, str]): dict or string. When all probabilities are 1, we concatenate the datasets instead of sampling from them.
+        hf_dataset_or_datasets (Union[dict, str]): dict or string. When all probabilities are 1, we concatenate the datasets instead of sampling from them.
         splits (Optional[List[str]], optional): Section of the dataset to load, defaults to "train", "test"
             Can be one of `train_ift`, `test_rl`, or `..._rm` etc. H4 datasets are divided into 6 subsets for training / testing.
 
@@ -91,24 +92,24 @@ def get_datasets(
     if isinstance(splits, str):
         splits = [splits]
 
-    if isinstance(dataset_mixer, dict):
+    if isinstance(hf_dataset_or_datasets, dict):
         # Structure of the config to read the datasets and their mix
         # datasets_mixer:
         #     - 'dataset1': 0.5
         #     - 'dataset2': 0.3
         #     - 'dataset3': 0.2
-        raw_datasets = _get_dataset_mix(dataset_mixer, splits=splits)
-    elif isinstance(dataset_mixer, str):
+        raw_datasets = _get_dataset_mix(hf_dataset_or_datasets, splits=splits)
+    elif isinstance(hf_dataset_or_datasets, str):
         # e.g. Dataset = "HuggingFaceH4/testing_alpaca_small"
         # Note this returns things other than just train/test, which may not be intended
         raw_datasets = DatasetDict()
         for split in splits:
             raw_datasets[split] = load_dataset(
-                dataset_mixer,
+                hf_dataset_or_datasets,
                 split=split,
             )
     else:
-        raise ValueError(f"dataset_mixer must be a dict or string but is {type(dataset_mixer)}")
+        raise ValueError(f"hf_dataset_or_datasets must be a dict or string but is {type(hf_dataset_or_datasets)}")
 
     return raw_datasets
 

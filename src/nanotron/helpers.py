@@ -47,8 +47,7 @@ from nanotron.core.random import (
     get_current_random_state,
     get_synced_random_state,
 )
-from nanotron.logger import LogItem
-from nanotron.logging import log_rank, warn_once
+from nanotron.logging import LogItem, log_rank, warn_once
 
 logger = logging.get_logger(__name__)
 

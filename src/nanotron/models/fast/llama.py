@@ -27,7 +27,6 @@ from transformers.activations import ACT2FN
 from nanotron import logging
 from nanotron.config.config import ParallelismArgs, RecomputeGranularity
 from nanotron.core import distributed as dist
-from nanotron.core.dataclass import RandomStates
 from nanotron.core.parallel.parameters import NanotronParameter
 from nanotron.core.parallel.pipeline_parallelism.block import PipelineBlock, TensorPointer
 from nanotron.core.parallel.pipeline_parallelism.p2p import P2P
@@ -42,10 +41,10 @@ from nanotron.core.parallel.tied_parameters import (
     get_tied_id_to_param,
 )
 from nanotron.core.process_groups import DistributedProcessGroups
+from nanotron.core.random import RandomStates
 from nanotron.core.utils import checkpoint_method
 from nanotron.logging import log_rank
-from nanotron.models import NanotronModel
-from nanotron.store import AttachableStore
+from nanotron.models import AttachableStore, NanotronModel
 
 logger = logging.get_logger(__name__)
 
