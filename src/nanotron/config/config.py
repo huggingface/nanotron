@@ -78,6 +78,8 @@ class PretrainDatasetsArgs:
     def __post_init__(self):
         if self.text_column_name is None:
             self.text_column_name = "text"
+        if self.hf_dataset_splits is None:
+            self.hf_dataset_splits = "train"
 
 
 @dataclass
@@ -357,7 +359,7 @@ class Config:
 
         # # if lighteval, we need tokenizer to be defined
         # if self.checkpoints.lighteval is not None:
-        #     assert self.model.tokenizer_name_or_path is not None
+        #     assert self.tokenizer.tokenizer_name_or_path is not None
 
     @property
     def global_batch_size(self):

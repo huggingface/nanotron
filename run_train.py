@@ -34,7 +34,7 @@ logger = logging.get_logger(__name__)
 
 def get_dataloader(trainer: DistributedTrainer, sanity_check_dataloader_interval: Optional[int] = None):
     # Prepare dataloader
-    tokenizer_path = trainer.config.model.tokenizer_name_or_path
+    tokenizer_path = trainer.config.tokenizer.tokenizer_name_or_path
     log_rank(
         f"Loading tokenizer from {tokenizer_path} and transformers/hf_hub versions {tf_version, hf_hub_version}",
         logger=logger,
@@ -48,7 +48,6 @@ def get_dataloader(trainer: DistributedTrainer, sanity_check_dataloader_interval
         input_pp_rank = trainer.model.input_pp_rank
         output_pp_rank = trainer.model.output_pp_rank
 
-    data_log, valid_dataloader = None, None
     if trainer.config.data.dataset is None:
         dataloader = dummy_infinite_data_generator(
             micro_batch_size=trainer.micro_batch_size,
@@ -70,7 +69,7 @@ def get_dataloader(trainer: DistributedTrainer, sanity_check_dataloader_interval
             # TODO @nouamanetazi: this may timeout before 1st device finishes processing dataset. Can we have a ctxmanager to modify timeout?
             # TODO: generalise to include  for validation/test splits
             raw_dataset = get_datasets(
-                dataset_mixer=trainer.config.data.dataset.hf_dataset_mixer,
+                hf_dataset_or_datasets=trainer.config.data.dataset.hf_dataset_or_datasets,
                 splits=trainer.config.data.dataset.hf_dataset_splits,
             )["train"]
             tokenizer = AutoTokenizer.from_pretrained(trainer.config.tokenizer.tokenizer_name_or_path)
@@ -142,7 +141,7 @@ def get_dataloader(trainer: DistributedTrainer, sanity_check_dataloader_interval
                         break
             assert False
         dist.barrier()
-    return (dataloader, valid_dataloader), data_log
+    return dataloader
 
 
 def get_args():
@@ -164,7 +163,7 @@ if __name__ == "__main__":
 
     # Load trainer and data
     trainer = DistributedTrainer(config_file)
-    dataloader, data_log = get_dataloader(trainer, args.sanity_check_dataloader_interval)
+    dataloader = get_dataloader(trainer, args.sanity_check_dataloader_interval)
 
     # Train
-    trainer.train(dataloader, data_config_log=data_log)
+    trainer.train(dataloader)

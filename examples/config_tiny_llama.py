@@ -80,7 +80,7 @@ config = Config(
     tokenizer=TokenizerArgs("gpt2"),
     optimizer=optimizer,
     logging=LoggingArgs(),
-    tokens=TokensArgs(sequence_length=256, train_steps=100, micro_batch_size=4, batch_accumulation_per_replica=1),
+    tokens=TokensArgs(sequence_length=32, train_steps=20, micro_batch_size=2, batch_accumulation_per_replica=1),
     data=DataArgs(dataset=dataset, seed=seed),
 )
 

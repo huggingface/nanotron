@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Optional
 
 import torch
 from torch import nn
@@ -211,20 +212,41 @@ def load(
     return checkpoint_metadata
 
 
-def parse_ckpt_path(config: Config):
-    load_from_candidate = config.checkpoints.load_from_specific_checkpoint
-    if load_from_candidate is None:
-        latest_meta_path: Path = config.checkpoints.checkpoints_path / "latest.txt"
-        if latest_meta_path.exists():
-            with open(config.checkpoints.checkpoints_path / "latest.txt", mode="r") as fi:
-                # TODO @thomasw21: make a better structure system so that we get typing correct
-                load_from_candidate = int(fi.read())
-        else:
-            return None
+def parse_ckpt_path(config: Config) -> Optional[Path]:
+    """Parse checkpoint path from config and download checkpoint from S3 if needed.
 
-    checkpoint_path = config.checkpoints.checkpoints_path / str(load_from_candidate)
+    Args:
+        config: Config object.
+
+    Returns:
+        Path to checkpoint or None if no checkpoint.
+    """
+    load_from_candidate = config.checkpoints.resume_checkpoint_path
+    if load_from_candidate is None:
+        return None
+
+    latest_meta_path: Path = config.checkpoints.resume_checkpoint_path / "latest.txt"
+    if latest_meta_path.exists():
+        with open(config.checkpoints.resume_checkpoint_path / "latest.txt", mode="r") as fi:
+            # TODO @thomasw21: make a better structure system so that we get typing correct
+            load_from_candidate = int(fi.read())
+        checkpoint_path = config.checkpoints.resume_checkpoint_path / str(load_from_candidate)
+
+    elif (config.checkpoints.resume_checkpoint_path / "model_config.json").exists():
+        # we assume that the checkpoint path is a path to a checkpoint
+        checkpoint_path = config.checkpoints.resume_checkpoint_path
+
+    else:
+        log_rank(
+            f"No previous checkpoint found in: {latest_meta_path}",
+            logger=logger,
+            level=logging.INFO,
+            rank=0,
+        )
+        return None
+
     log_rank(
-        f"Loading checkpoint from {checkpoint_path}:",
+        f"Loading checkpoint from {checkpoint_path}",
         logger=logger,
         level=logging.INFO,
         rank=0,

@@ -3,7 +3,6 @@ import gc
 import json
 import os
 import shutil
-import subprocess
 import sys
 import time
 from dataclasses import asdict
@@ -213,8 +212,7 @@ class DistributedTrainer:
         # Init learning rate scheduler
         self.lr_scheduler = lr_scheduler_builder(
             optimizer=self.optimizer,
-            learning_rate=self.config.optimizer.learning_rate,
-            lr_scheduler_args=self.config.learning_rate_scheduler,
+            lr_scheduler_args=self.config.optimizer.learning_rate_scheduler,
             total_training_steps=self.config.tokens.train_steps,
         )
         if checkpoint_path is not None:
@@ -246,52 +244,52 @@ class DistributedTrainer:
         self.normalized_model.log_modules(level=logging.DEBUG, group=self.dpg.world_pg, rank=0)
 
         # Log config and model config
-        self.log_object(self.config, "config")
-        if hasattr(self.model_config, "to_json_string"):
-            model_config_dict = json.loads(self.model_config.to_json_string())
-        else:
-            model_config_dict = asdict(self.model_config)
-        self.log_object(model_config_dict, "model_config")
+        # self.log_object(self.config, "config")
+        # if hasattr(self.model_config, "to_json_string"):
+        #     model_config_dict = json.loads(self.model_config.to_json_string())
+        # else:
+        #     model_config_dict = asdict(self.model_config)
+        # self.log_object(model_config_dict, "model_config")
 
         # Log environment variables
-        self.log_object(os.environ, "environment_variables")
-        if os.environ.get("SLURM_JOB_ID", None) is not None:
-            keys = [
-                "JobId",
-                "Name",
-                "Command",
-                "STDOUT",
-                "STDERR",
-                "NumNodes",
-                "NodeList",
-                "GroupID",
-                "OverSubscribe",
-                "Partition",
-                "cpus-per-task",
-                "UserName",
-                "SubmitTime",
-            ]
-            format_str = ",".join(f"{k}:1000" for k in keys)
-            output = subprocess.check_output(
-                [f'squeue --Format="{format_str}" -j {os.environ.get("SLURM_JOB_ID", None)} --noheader'],
-                universal_newlines=True,
-                stderr=subprocess.STDOUT,
-                shell=True,
-            )
-            slurm_dict = {k: output[i * 1000 : (i + 1) * 1000].strip() for i, k in enumerate(keys)}
-            slurm_job_name = slurm_dict["Name"]
-            slurm_job_id = slurm_dict["JobId"]
-            for key, value in os.environ.items():
-                if key.startswith("SLURM") or key.startswith("SRUN"):
-                    slurm_dict[key] = value
-            slurm_dict = {
-                k: o.replace("%x", slurm_job_name).replace("%j", slurm_job_id).replace("%n", "0").replace("%t", "0")
-                for k, o in slurm_dict.items()
-            }
-            for key, value in os.environ.items():
-                if key.startswith("SLURM") or key.startswith("SRUN"):
-                    slurm_dict[key] = value
-            self.log_object(slurm_dict, "slurm")
+        # self.log_object(os.environ, "environment_variables")
+        # if os.environ.get("SLURM_JOB_ID", None) is not None:
+        #     keys = [
+        #         "JobId",
+        #         "Name",
+        #         "Command",
+        #         "STDOUT",
+        #         "STDERR",
+        #         "NumNodes",
+        #         "NodeList",
+        #         "GroupID",
+        #         "OverSubscribe",
+        #         "Partition",
+        #         "cpus-per-task",
+        #         "UserName",
+        #         "SubmitTime",
+        #     ]
+        #     format_str = ",".join(f"{k}:1000" for k in keys)
+        #     output = subprocess.check_output(
+        #         [f'squeue --Format="{format_str}" -j {os.environ.get("SLURM_JOB_ID", None)} --noheader'],
+        #         universal_newlines=True,
+        #         stderr=subprocess.STDOUT,
+        #         shell=True,
+        #     )
+        #     slurm_dict = {k: output[i * 1000 : (i + 1) * 1000].strip() for i, k in enumerate(keys)}
+        #     slurm_job_name = slurm_dict["Name"]
+        #     slurm_job_id = slurm_dict["JobId"]
+        #     for key, value in os.environ.items():
+        #         if key.startswith("SLURM") or key.startswith("SRUN"):
+        #             slurm_dict[key] = value
+        #     slurm_dict = {
+        #         k: o.replace("%x", slurm_job_name).replace("%j", slurm_job_id).replace("%n", "0").replace("%t", "0")
+        #         for k, o in slurm_dict.items()
+        #     }
+        #     for key, value in os.environ.items():
+        #         if key.startswith("SLURM") or key.startswith("SRUN"):
+        #             slurm_dict[key] = value
+        #     self.log_object(slurm_dict, "slurm")
 
         # Do a first NCCL sync to warmup and try to avoid Timeout after model/data loading
         test_tensor = torch.tensor([dist.get_rank(self.dpg.world_pg)], device=torch.device("cuda"))
@@ -760,7 +758,7 @@ class DistributedTrainer:
         normalized_model = model.module if isinstance(model, DistributedDataParallel) else model
 
         # Load or initialize model weights
-        checkpoint_path = parse_ckpt_path(config=self.config, dpg=self.dpg)
+        checkpoint_path = parse_ckpt_path(config=self.config)
         reloaded_from_checkpoint = False
         if checkpoint_path is not None:
             # Reload from a training checkpoint

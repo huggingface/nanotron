@@ -118,9 +118,7 @@ def init_random_states(parallel_config: ParallelismArgs, tp_pg: ProcessGroup):
     return random_states
 
 
-def lr_scheduler_builder(
-    optimizer: Optimizer, learning_rate: float, lr_scheduler_args: LRSchedulerArgs, total_training_steps: int
-):
+def lr_scheduler_builder(optimizer: Optimizer, lr_scheduler_args: LRSchedulerArgs, total_training_steps: int):
     if lr_scheduler_args.lr_decay_steps is None:
         lr_decay_steps = (
             total_training_steps - lr_scheduler_args.lr_warmup_steps
@@ -134,14 +132,14 @@ def lr_scheduler_builder(
         """LR Scheduling function, it has 3 phases: warmup, decay, then constant. Warmup starts at lr=0 and ends at `lr=lr`, then it decays until `min_decay_lr` and then stays constant."""
         # No warmup or decay
         if lr_scheduler_args.lr_warmup_steps == 0 and lr_decay_steps == 0:
-            return learning_rate
+            return lr_scheduler_args.learning_rate
 
         # Warmup phase
         elif lr_scheduler_args.lr_warmup_style is not None and current_step <= lr_scheduler_args.lr_warmup_steps:
             if lr_scheduler_args.lr_warmup_style == "linear":
-                lmbda = learning_rate * current_step / max(lr_scheduler_args.lr_warmup_steps, 1)
+                lmbda = lr_scheduler_args.learning_rate * current_step / max(lr_scheduler_args.lr_warmup_steps, 1)
             elif lr_scheduler_args.lr_warmup_style == "constant":
-                lmbda = learning_rate
+                lmbda = lr_scheduler_args.learning_rate
             else:
                 raise ValueError(f"Unknown warmup style {lr_scheduler_args.lr_warmup_style}")
 
@@ -153,14 +151,14 @@ def lr_scheduler_builder(
             if lr_scheduler_args.lr_decay_style == "cosine":
                 lmbda = (
                     lr_scheduler_args.min_decay_lr
-                    + (learning_rate - lr_scheduler_args.min_decay_lr)
+                    + (lr_scheduler_args.learning_rate - lr_scheduler_args.min_decay_lr)
                     * (1 + math.cos(math.pi * (current_step - lr_scheduler_args.lr_warmup_steps) / lr_decay_steps))
                     / 2
                 )
             elif lr_scheduler_args.lr_decay_style == "linear":
                 lmbda = (
                     lr_scheduler_args.min_decay_lr
-                    + (learning_rate - lr_scheduler_args.min_decay_lr)
+                    + (lr_scheduler_args.learning_rate - lr_scheduler_args.min_decay_lr)
                     * (lr_decay_steps - (current_step - lr_scheduler_args.lr_warmup_steps))
                     / lr_decay_steps
                 )
@@ -171,7 +169,7 @@ def lr_scheduler_builder(
         else:
             lmbda = lr_scheduler_args.min_decay_lr
 
-        lmbda /= learning_rate
+        lmbda /= lr_scheduler_args.learning_rate
         return lmbda
 
     lr_scheduler = LambdaLR(optimizer.get_base_optimizer(), lr_lambda=lr_lambda)
@@ -207,7 +205,7 @@ def init_optimizer_and_grad_accumulator(
                 named_params_or_groups=named_param_groups,
                 optimizer_builder=lambda param_groups: FusedAdam(
                     param_groups,
-                    lr=optimizer_args.learning_rate,
+                    lr=optimizer_args.learning_rate_scheduler.learning_rate,
                     weight_decay=optimizer_args.weight_decay,
                     eps=optimizer_args.adam_eps,
                     betas=(optimizer_args.adam_beta1, optimizer_args.adam_beta2),
@@ -223,7 +221,7 @@ def init_optimizer_and_grad_accumulator(
                 named_params_or_groups=named_param_groups,
                 optimizer_builder=lambda param_groups: AdamW(  # pylint: disable=E0601
                     param_groups,
-                    lr=optimizer_args.learning_rate,
+                    lr=optimizer_args.learning_rate_scheduler.learning_rate,
                     weight_decay=optimizer_args.weight_decay,
                     eps=optimizer_args.adam_eps,
                     betas=(optimizer_args.adam_beta1, optimizer_args.adam_beta2),
@@ -345,10 +343,10 @@ def test_equal_dict(first: Dict, second: Dict, sub_paths: Optional[List[str]] = 
 
 
 def get_profiler(config: Config):
-    if config.profile is not None:
-        if config.profile.profiler_export_path is not None:
+    if config.profiler is not None:
+        if config.profiler.profiler_export_path is not None:
             on_trace_ready = tensorboard_trace_handler(
-                config.profile.profiler_export_path / datetime.now().strftime("%Y%m%d-%H%M%S")
+                config.profiler.profiler_export_path / datetime.now().strftime("%Y%m%d-%H%M%S")
             )
         else:
             on_trace_ready = None
