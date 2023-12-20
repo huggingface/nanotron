@@ -178,7 +178,6 @@ class TiedLinear(nn.Linear):
         device=None,
         dtype=None,
     ):
-
         self.pg = pg
         self.world_size = pg.size()
         self.mode = mode

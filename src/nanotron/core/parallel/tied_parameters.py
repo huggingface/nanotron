@@ -3,13 +3,13 @@ from typing import Dict, List, Optional, Tuple
 
 from torch import nn
 
-from nanotron import logging
 from nanotron.core import distributed as dist
+from nanotron.core import logging
+from nanotron.core.dataclass import DistributedProcessGroups
 from nanotron.core.gradient_accumulator import GradientAccumulator
+from nanotron.core.logging import log_rank
 from nanotron.core.parallel.parameters import NanotronParameter
-from nanotron.core.process_groups import DistributedProcessGroups
 from nanotron.core.utils import get_parameter_and_parent_module
-from nanotron.logging import log_rank
 
 logger = logging.get_logger(__name__)
 

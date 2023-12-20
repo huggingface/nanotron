@@ -4,8 +4,8 @@ from typing import Any, Dict, Optional, Tuple
 import torch
 from torch import nn
 
-from nanotron import logging
 from nanotron.core import distributed as dist
+from nanotron.core import logging
 
 logger = logging.get_logger(__name__)
 
@@ -81,7 +81,7 @@ class ShardedInfo:
 
 
 class NanotronParameter(nn.Parameter):
-    """Base class for all parameters in Nanotron models
+    """Base class for all parameters in Nanotronmodels
 
     A NanotronParameter can have specific properties:
      - sharded: the parameter is considered to be `sharded` across multiple devices
@@ -100,7 +100,7 @@ class NanotronParameter(nn.Parameter):
     NANOTRON_PARAMETER_METADATA_SHARDED_KEY = "sharded"
 
     def __new__(cls, tensor: torch.Tensor, requires_grad: bool = True):
-        param = super().__new__(cls, data=tensor.data.detach(), requires_grad=requires_grad)
+        param = nn.Parameter.__new__(cls, data=tensor.data.detach(), requires_grad=requires_grad)
 
         if isinstance(tensor, NanotronParameter):
             # Check that we don't inherit a weird class
@@ -173,7 +173,7 @@ class NanotronParameter(nn.Parameter):
 
 
 def sanity_check(root_module: nn.Module):
-    """Makes sure that the module is in Nanotron format
+    """Makes sure that the module is in Nanotronformat
 
     Format:
      - all parameters are `NanotronParameter`, this allows us to add metadata to a parameter.
@@ -181,5 +181,5 @@ def sanity_check(root_module: nn.Module):
     for name, param in root_module.named_parameters():
         if not isinstance(param, NanotronParameter):
             raise ValueError(
-                f"Nanotron requires model to be in Nanotron format, ie all parameters are required to be a NanotronParameter. {name} isn't."
+                f"Nanotronrequires model to be in Nanotronformat, ie all parameters are required to be a NanotronParameter. {name} isn't."
             )

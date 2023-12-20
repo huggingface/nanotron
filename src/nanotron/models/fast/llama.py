@@ -32,14 +32,14 @@ from nanotron.core import distributed as dist
 from nanotron.core import logging
 from nanotron.core.dataclass import RandomStates
 from nanotron.core.logging import log_rank
-from nanotron.core.parallelism.parameters import NanotronParameter
-from nanotron.core.parallelism.pipeline_parallelism.block import (
+from nanotron.core.parallel.parameters import NanotronParameter
+from nanotron.core.parallel.pipeline_parallelism.block import (
     PipelineBlock,
     TensorPointer,
 )
-from nanotron.core.parallelism.pipeline_parallelism.p2p import P2P
-from nanotron.core.parallelism.tensor_parallelism.functional import sharded_cross_entropy
-from nanotron.core.parallelism.tensor_parallelism.nn import (
+from nanotron.core.parallel.pipeline_parallelism.p2p import P2P
+from nanotron.core.parallel.tensor_parallelism.functional import sharded_cross_entropy
+from nanotron.core.parallel.tensor_parallelism.nn import (
     TensorParallelColumnLinear,
     TensorParallelEmbedding,
     TensorParallelLinearMode,
