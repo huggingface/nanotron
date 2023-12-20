@@ -1,6 +1,6 @@
 checkpoints:
   checkpoint_interval: 10
-  checkpoints_path: /Users/thomwolf/Documents/Github/nanotron/checkpoints
+  checkpoints_path: /fsx/thomwolf/github/nanotron/checkpoints
   checkpoints_path_is_shared_file_system: true
   resume_checkpoint_path: null
   save_initial_state: false
@@ -21,6 +21,7 @@ general:
   kill_switch_path: null
   project: debug
   run: tiny_llama
+  seed: 42
   step: null
 logging:
   iteration_step_info_interval: 1
@@ -30,7 +31,6 @@ model:
   ddp_bucket_cap_mb: 25
   dtype: bfloat16
   init_method:
-    seed: 42
     std: 0.025
   make_vocab_size_divisible_by: 1
   model_config:

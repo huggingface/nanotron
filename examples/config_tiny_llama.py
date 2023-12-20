@@ -73,10 +73,10 @@ checkpoints_path = os.path.dirname(os.path.dirname(__file__)) + "/checkpoints"
 os.makedirs(checkpoints_path, exist_ok=True)
 
 config = Config(
-    general=GeneralArgs("debug", "tiny_llama"),
+    general=GeneralArgs(project="debug", run="tiny_llama", seed=seed),
     checkpoints=CheckpointsArgs(checkpoints_path=checkpoints_path, checkpoint_interval=10),
     parallelism=ParallelismArgs(1, 1, 1),
-    model=ModelArgs(init_method=RandomInit(std=0.025, seed=seed), model_config=model_config),
+    model=ModelArgs(init_method=RandomInit(std=0.025), model_config=model_config),
     tokenizer=TokenizerArgs("gpt2"),
     optimizer=optimizer,
     logging=LoggingArgs(),

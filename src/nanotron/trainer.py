@@ -196,7 +196,7 @@ class DistributedTrainer:
         ########################################
 
         # Set random states
-        set_random_seed(self.config.model.seed)
+        set_random_seed(self.config.general.seed)
 
         # Init model and build on pp ranks
         self.random_states = init_random_states(parallel_config=self.config.parallelism, tp_pg=self.dpg.tp_pg)
@@ -750,7 +750,6 @@ class DistributedTrainer:
         ), f"Unsupported model config {model_config_cls}. Only {CONFIG_TO_MODEL_CLASS.keys()} are supported"
 
         model = self._init_model(
-            model_config=self.model_config,
             model_builder=lambda: CONFIG_TO_MODEL_CLASS[model_config_cls](
                 config=self.model_config,
                 dpg=self.dpg,

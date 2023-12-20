@@ -128,6 +128,7 @@ class GeneralArgs:
 
     project: str
     run: Optional[str] = None
+    seed: Optional[int] = None
     step: Optional[int] = None
     consumed_train_samples: Optional[int] = None
     # If you want to signal the training script to stop, you just need to touch the following file
@@ -138,6 +139,8 @@ class GeneralArgs:
     ignore_sanity_checks: bool = False
 
     def __post_init__(self):
+        if self.seed is None:
+            self.seed = 42
         if isinstance(self.kill_switch_path, str):
             self.kill_switch_path = Path(self.kill_switch_path)
         if self.benchmark_csv_path is not None:
@@ -204,7 +207,6 @@ class ParallelismArgs:
 @dataclass
 class RandomInit:
     std: float
-    seed: int
 
 
 @dataclass
