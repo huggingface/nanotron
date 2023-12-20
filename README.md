@@ -19,12 +19,12 @@ We support the following:
 # Examples
 
 In the `/examples` directory, we provide a set of **self-sufficient** examples for different workloads, which you can use to quickly get started.
-* [Train a GPT2 model](https://github.com/huggingface/brrr/tree/main/examples/gpt2)
-* [Train a GPT2 model with Multi-Headed Attention](https://github.com/huggingface/brrr/tree/main/examples/gpt2_mqa)
-* [Train a T5 model](https://github.com/huggingface/brrr/tree/main/examples/t5)
-* [Train a LLaMa model](https://github.com/huggingface/brrr/tree/main/examples/llama)
-* [RLHF Training (Includes SFT/Reward Modeling/DPO/PPO)](https://github.com/huggingface/brrr/tree/main/examples/llama)
-* [Benchmark throughput](./benchmarks/brrr/README.md)
+* [Train a GPT2 model](https://github.com/huggingface/nanotron/tree/main/examples/gpt2)
+* [Train a GPT2 model with Multi-Headed Attention](https://github.com/huggingface/nanotron/tree/main/examples/gpt2_mqa)
+* [Train a T5 model](https://github.com/huggingface/nanotron/tree/main/examples/t5)
+* [Train a LLaMa model](https://github.com/huggingface/nanotron/tree/main/examples/llama)
+* [RLHF Training (Includes SFT/Reward Modeling/DPO/PPO)](https://github.com/huggingface/nanotron/tree/main/examples/llama)
+* [Benchmark throughput](./benchmarks/nanotron/README.md)
 
 > Note: Most examples include a slow modeling (No dependencies, only Pytorch), and a fast modeling (Flash Attention, apex, ...). Make sure to install the dependencies if you want to run the fast modeling, then set the env `export USE_FAST=1`
 
@@ -36,8 +36,8 @@ Requirements:
 
 To install:
 ```bash
-git clone git@github.com:huggingface/brrr.git
-cd brrr
+git clone git@github.com:huggingface/nanotron.git
+cd nanotron
 pip install -e .
 ```
 
@@ -48,7 +48,7 @@ pre-commit run --config .pre-commit-config.yaml --all-files
 ```
 
 We also support a set of flavors that you can install using `pip install -e [$FLAVOR]`:
- - `dev`: Used is you are developping in `brrr`. It installs in particular our linter mechanism. On top of that you have to run `pre-commit install` afterwards.
+ - `dev`: Used is you are developping in `nanotron`. It installs in particular our linter mechanism. On top of that you have to run `pre-commit install` afterwards.
  - `test`: We use `pytest` in order to run out testing suite. In order to run tests in parallel, it will install `pytest-xdist`, which you can leverage by running `pytest -n 12 tests` (12 is the number of parallel test)
  - `s3fs`: Used if you want to save/load checkpoints directly from s3. It uses `s3fs` and consequently might be slow. We are working on an improve mechanism
 
@@ -79,7 +79,7 @@ Let's go through some key concepts.
 
 `DistributedProcessGroups` is the base class referencing all the process groups you might need when running parallel workloads. You can initialize it using the following:
 ```python
-from brrr.core.process_groups_initializer import get_process_groups
+from nanotron.core.process_groups_initializer import get_process_groups
 
 dp, tp, pp = ... # Predefine your topology
 dpg: DistributedProcessGroups = get_process_groups(data_parallel_size=dp, tensor_parallel_size=tp, pipeline_parallel_size=pp)
@@ -93,7 +93,7 @@ From this dataclass you can access multiple process groups:
  - `world_rank_matrix`: This allows one to compute the world rank knowing the 3D ranks of a given process, or inversely when using `get_3d_ranks`.
  - `world_ranks_to_pg`: This is a more generic patterns that allows you to store custom set of ProcessGroups, and querying it via a list of world ranks.
 
-## BRRRParameter
+## NanotronParameter
 
 Given a specific computation workload, we can freely define how we distribute workloads. For example:
 
@@ -130,7 +130,7 @@ output = module(input) # Duplicate workload
 ```
 Distributed workloads have the tendency to generate tradeoffs between duplicated computation and extra communication. There's multiple ways to run the same computation, what we can optimize is the amount of communication we do, as well as duplicated work. Sometime it's worth duplicating work in order to reduce communication significantly.
 
-As seen in previous example, sometimes the parameters are sharded across multiple devices, and sometimes they are duplicated. In `brrr`, we decided to add those additional metadatas to `nn.Parameter`. We call our new datastructure: `BRRRParameter`
+As seen in previous example, sometimes the parameters are sharded across multiple devices, and sometimes they are duplicated. In `nanotron`, we decided to add those additional metadatas to `nn.Parameter`. We call our new datastructure: `NanotronParameter`
 
 ## Sharded parameter
 
@@ -318,7 +318,7 @@ As of now, we currently only support `stage 1`.
 
 ## Recomputation utilities
 
-Activation recomputation, also known as "activation checkpointing" is a memory saving technique. Pytorch automatically stores a set activation during the forward pass required for backward computation. However with large workloads, it might be worth recomputing specific activation in order to save memory. In `brrr` we provide a decorator to implement this feature:
+Activation recomputation, also known as "activation checkpointing" is a memory saving technique. Pytorch automatically stores a set activation during the forward pass required for backward computation. However with large workloads, it might be worth recomputing specific activation in order to save memory. In `nanotron` we provide a decorator to implement this feature:
 
 ```python
 class MyFancyModule(nn.Module):
@@ -456,7 +456,7 @@ Some observations:
 
 # Development guidelines
 
-If you plan on developping on `brrr`, we suggest you install the `dev` flavor: `pip install -e ".[dev]"`
+If you plan on developping on `nanotron`, we suggest you install the `dev` flavor: `pip install -e ".[dev]"`
 
 We use pre-commit to run a bunch of callbacks on each commit, mostly normalization code in order for the codebase to stay consistent. Please do run `pre-commit install`.
 

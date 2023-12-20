@@ -4,11 +4,11 @@ from typing import Optional
 from torch import nn
 from transformers import AutoConfig
 
-from nanotron import logging
+from nanotron.core import logging
 from nanotron.core.distributed import ProcessGroup
+from nanotron.core.logging import log_rank
 from nanotron.core.parallel.pipeline_parallelism.block import PipelineBlock
 from nanotron.core.process_groups import DistributedProcessGroups
-from nanotron.logging import log_rank
 
 logger = logging.get_logger(__name__)
 
@@ -30,6 +30,26 @@ class NanotronModel(nn.Module, metaclass=ABCMeta):
     @abstractmethod
     def init_model_randomly(self, init_method, scaled_init_method):
         ...
+
+    @staticmethod
+    def get_embeddings_lm_head_tied_names() -> list[str]:
+        """Returns the names of the embeddings and lm_head weights that are tied together. Returns empty list if not tied.
+
+        Example for GPT2 model: ["model.token_position_embeddings.pp_block.token_embedding.weight", "model.lm_head.pp_block.weight"]
+        """
+        return []
+
+    def before_tbi_sanity_checks(self) -> None:
+        pass
+
+    def after_tbi_sanity_checks(self) -> None:
+        pass
+
+    def before_optim_step_sanity_checks(self) -> None:
+        pass
+
+    def after_optim_step_sanity_checks(self) -> None:
+        pass
 
     def log_modules(self, level: int = logging.DEBUG, group: Optional[ProcessGroup] = None, rank: int = 0):
         assert hasattr(self, "dpg"), "`NanotronModel` needs to have a `dpg` attribute"

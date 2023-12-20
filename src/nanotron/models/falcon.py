@@ -23,12 +23,10 @@ from typing import Dict, Optional, Union
 import torch
 from torch import nn
 from torch.nn import functional as F
-from torch.nn.parallel import DistributedDataParallel
-from transformers import FalconConfig
 
-from nanotron import logging
-from nanotron.config.config import ParallelismArgs, RecomputeGranularity
+from nanotron.config import FalconConfig, ParallelismArgs, RecomputeGranularity
 from nanotron.core import distributed as dist
+from nanotron.core import logging
 from nanotron.core.parallel.parameters import NanotronParameter
 from nanotron.core.parallel.pipeline_parallelism.block import PipelineBlock, TensorPointer
 from nanotron.core.parallel.pipeline_parallelism.p2p import P2P
@@ -38,9 +36,6 @@ from nanotron.core.parallel.tensor_parallelism.nn import (
     TensorParallelEmbedding,
     TensorParallelLinearMode,
     TensorParallelRowLinear,
-)
-from nanotron.core.parallel.tied_parameters import (
-    get_tied_id_to_param,
 )
 from nanotron.core.process_groups import DistributedProcessGroups
 from nanotron.core.random import RandomStates
@@ -92,8 +87,8 @@ class FalconRotaryEmbedding(nn.Module):
             torch.empty(head_dim // 2, dtype=torch.float),
             persistent=False,
         )
-        self.cos_cached: torch.Tensor | None = None
-        self.sin_cached: torch.Tensor | None = None
+        self.cos_cached: Optional[torch.Tensor] = None
+        self.sin_cached: Optional[torch.Tensor] = None
         self._initialized_buffer = False
 
     def init_rotary_embeddings(self):
@@ -147,7 +142,7 @@ class FalconMLP(nn.Module):
     def __init__(
         self,
         config: FalconConfig,
-        parallel_config: Optional[ParallelismArgs],
+        parallel_config: Optional["ParallelismArgs"],
         tp_pg: dist.ProcessGroup,
     ):
         super().__init__()
@@ -184,7 +179,7 @@ class FalconMLP(nn.Module):
 
 
 class CoreAttention(nn.Module):
-    def __init__(self, config: FalconConfig, parallel_config: Optional[ParallelismArgs], layer_idx: int):
+    def __init__(self, config: FalconConfig, parallel_config: Optional["ParallelismArgs"], layer_idx: int):
         super().__init__()
         self.head_dim = config.hidden_size // config.num_attention_heads
         assert (
@@ -270,7 +265,7 @@ class FalconAttention(nn.Module, AttachableStore):
     def __init__(
         self,
         config: FalconConfig,
-        parallel_config: Optional[ParallelismArgs],
+        parallel_config: Optional["ParallelismArgs"],
         tp_pg: dist.ProcessGroup,
         layer_idx: int,
     ):
@@ -453,7 +448,7 @@ class FalconDecoderLayer(nn.Module):
     def __init__(
         self,
         config: FalconConfig,
-        parallel_config: Optional[ParallelismArgs],
+        parallel_config: Optional["ParallelismArgs"],
         tp_pg: dist.ProcessGroup,
         layer_idx: int,
     ):
@@ -518,7 +513,7 @@ def _make_causal_mask(
 
 
 class Embedding(nn.Module, AttachableStore):
-    def __init__(self, tp_pg: dist.ProcessGroup, config: FalconConfig, parallel_config: Optional[ParallelismArgs]):
+    def __init__(self, tp_pg: dist.ProcessGroup, config: FalconConfig, parallel_config: Optional["ParallelismArgs"]):
         super().__init__()
         self.token_embedding = TensorParallelEmbedding(
             num_embeddings=config.vocab_size,
@@ -554,7 +549,7 @@ class FalconModel(nn.Module):
         self,
         config: FalconConfig,
         dpg: DistributedProcessGroups,
-        parallel_config: Optional[ParallelismArgs],
+        parallel_config: Optional["ParallelismArgs"],
     ):
         super().__init__()
 
@@ -731,7 +726,7 @@ class FalconForTraining(NanotronModel):
         self,
         config: FalconConfig,
         dpg: DistributedProcessGroups,
-        parallel_config: Optional[ParallelismArgs],
+        parallel_config: Optional["ParallelismArgs"],
         random_states: Optional[RandomStates] = None,
     ):
         super().__init__()
@@ -918,20 +913,12 @@ class FalconForTraining(NanotronModel):
             for name, param in model.named_parameters()
         }, f"Somehow the initialized set of parameters don't match:\n - Expected: { {name for name, _ in model.named_parameters()} }\n - Got: {initialized_parameters}"
 
-        # Synchronize parameters so that the model is consistent
-        for name, param in sorted(model.named_parameters(), key=lambda x: x[0]):
-            # sync across dp
-            dist.all_reduce(param, op=dist.ReduceOp.AVG, group=self.dpg.dp_pg)
-
-        for (_, group_ranks), param in sorted(
-            get_tied_id_to_param(
-                parameters=model.parameters(),
-                root_module=model.module if isinstance(model, DistributedDataParallel) else model,
-            ).items(),
-            key=lambda x: x[0],
-        ):
-            group = self.dpg.world_ranks_to_pg[group_ranks]
-            dist.all_reduce(param, op=dist.ReduceOp.AVG, group=group)
+    @staticmethod
+    def get_embeddings_lm_head_tied_names():
+        return [
+            "transformer.word_embeddings.pp_block.token_embedding.weight",
+            "transformer.lm_head.pp_block.weight",
+        ]
 
     def get_block_compute_costs(self):
         """Computes the compute cost of each block in the model so that we can do a better job of load balancing."""

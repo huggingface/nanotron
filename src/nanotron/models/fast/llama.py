@@ -18,32 +18,35 @@ from typing import Dict, Optional, Union
 
 import torch
 from apex.normalization import FusedRMSNorm as RMSNorm
-from flash_attn.flash_attn_interface import flash_attn_varlen_func
+from flash_attn import bert_padding
+from flash_attn.flash_attn_interface import (
+    flash_attn_varlen_func,
+    flash_attn_with_kvcache,
+)
 from torch import nn
-from torch.nn.parallel import DistributedDataParallel
 from transformers import LlamaConfig
 from transformers.activations import ACT2FN
 
-from nanotron import logging
-from nanotron.config.config import ParallelismArgs, RecomputeGranularity
+from nanotron.config import ParallelismArgs, RecomputeGranularity
 from nanotron.core import distributed as dist
-from nanotron.core.parallel.parameters import NanotronParameter
-from nanotron.core.parallel.pipeline_parallelism.block import PipelineBlock, TensorPointer
-from nanotron.core.parallel.pipeline_parallelism.p2p import P2P
-from nanotron.core.parallel.tensor_parallelism.functional import sharded_cross_entropy
-from nanotron.core.parallel.tensor_parallelism.nn import (
+from nanotron.core import logging
+from nanotron.core.dataclass import RandomStates
+from nanotron.core.logging import log_rank
+from nanotron.core.parallelism.parameters import NanotronParameter
+from nanotron.core.parallelism.pipeline_parallelism.block import (
+    PipelineBlock,
+    TensorPointer,
+)
+from nanotron.core.parallelism.pipeline_parallelism.p2p import P2P
+from nanotron.core.parallelism.tensor_parallelism.functional import sharded_cross_entropy
+from nanotron.core.parallelism.tensor_parallelism.nn import (
     TensorParallelColumnLinear,
     TensorParallelEmbedding,
     TensorParallelLinearMode,
     TensorParallelRowLinear,
 )
-from nanotron.core.parallel.tied_parameters import (
-    get_tied_id_to_param,
-)
-from nanotron.core.process_groups import DistributedProcessGroups
-from nanotron.core.random import RandomStates
+from nanotron.core.process_groups_initializer import DistributedProcessGroups
 from nanotron.core.utils import checkpoint_method
-from nanotron.logging import log_rank
 from nanotron.models import AttachableStore, NanotronModel
 
 logger = logging.get_logger(__name__)
@@ -107,6 +110,10 @@ class RotaryEmbedding(nn.Module):
             freqs_cis = self.freqs_cis[None, :seq_length, None, :]
         else:
             # TODO(kunhao): Should None follow the num_heads dimension?
+            if position_ids[-1, -1] < 0 or position_ids[-1, -1] >= self.end:  # Quick test hopefully
+                raise ValueError(
+                    f"Position ids must be in the range [0, {self.end}), but got {position_ids.min()} and {position_ids.max()}"
+                )
             freqs_cis = self.freqs_cis[position_ids][:, :, None, :]
         complex_freqs = torch.view_as_complex(freqs_cis)
         x_out = torch.view_as_real(complex_x * complex_freqs).view(batch_size, seq_length, num_heads, inner_dim)
@@ -178,9 +185,7 @@ class CoreAttention(nn.Module):
         self.d_qk = config.hidden_size // config.num_attention_heads
         self.d_v = config.hidden_size // config.num_attention_heads
 
-        self.checkpoint_attention = (
-            parallel_config is not None and parallel_config.recompute_granularity is RecomputeGranularity.SELECTIVE
-        )
+        self.checkpoint_attention = False  # Because flash_attn already does checkpointing
 
     @checkpoint_method(attr_name="checkpoint_attention")
     def forward(
@@ -215,6 +220,34 @@ class CoreAttention(nn.Module):
         )
 
         return attn_output
+
+
+def pad_to_right(tensor, mask, new_tensor=None):
+    """Transform a left-padded tensor into a right-padded tensor. (Useful for prefilling key/value states)
+    Args:
+        tensor: (batch_size, seqlen, d1, d2)
+        mask: (batch_size, seqlen)
+        new_tensor: (batch_size, new_tensor_seqlen, d1, d2)
+    Returns:
+        new_tensor: (batch_size, new_tensor_seqlen, d1, d2)
+        right_padded_mask: (batch_size, seqlen)
+    """
+    # First, we need to find the number of padding for each row
+    unpad_seqlens = mask.sum(1)
+    # Then, we need to find the maximum length of the tensor
+    max_seqlen = mask.shape[1]
+    # We can then create the indices to select the padded values
+    # The indices are the same for each row
+    indices = torch.arange(max_seqlen, device=mask.device)
+    # We can then create the mask for the padded values
+    right_padded_mask = indices < unpad_seqlens[:, None]
+    # We select the useful values
+    useful_values = tensor[mask]
+    # We create the new tensor (if not provided)
+    new_tensor = torch.zeros_like(tensor) if new_tensor is None else new_tensor
+    # We fill the new tensor with the useful values
+    new_tensor[:, : right_padded_mask.shape[1], :, :][right_padded_mask] = useful_values
+    return new_tensor, right_padded_mask
 
 
 class CausalSelfAttention(nn.Module, AttachableStore):
@@ -297,6 +330,10 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             layer_idx=layer_idx,
         )
 
+        self.prefill_kv_len = (
+            config.max_position_embeddings
+        )  # TODO @nouamane: compute based on free memory, because in rope we can surpass max_position_embeddings
+
     def forward(
         self,
         hidden_states,  # [seq_length, batch_size, hidden_size]
@@ -334,9 +371,8 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                 .contiguous()
             )
 
-        # Get cached key/values from store if available
         store = self.get_local_store()
-        if store is not None:
+        if store is not None:  # Inference case
             # Double check that we use store only at inference time
             assert key_states.requires_grad is False
             assert value_states.requires_grad is False
@@ -344,67 +380,139 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                 old_position_offsets = store["position_offsets"]
                 position_ids = old_position_offsets[:, None] + sequence_mask
             else:
-                position_ids = torch.cumsum(sequence_mask, dim=-1) - 1
+                position_ids = torch.cumsum(sequence_mask, dim=-1, dtype=torch.int32) - 1
+            position_offsets = position_ids[:, -1]
 
             # Compute rotary embeddings
-            position_ids.masked_fill_(~sequence_mask, 0)
             query_states = self.rotary_embedding(query_states, position_ids=position_ids)
             key_states = self.rotary_embedding(key_states, position_ids=position_ids)
 
-            # Pull pre-computed key/value states
-            if "key" in store:
-                # We assume that "key"/"value"/"sequence_mask" are all added once initialized
-                old_key = store["key"]
-                old_value = store["value"]
-                old_kv_sequence_mask = store["kv_sequence_mask"]
+            if "key" not in store:
+                # First inference iteration (Prefill)
+                # TODO @nouamane: support custom masking
+                # assert that [ False, False, False, False,  True,  True,  True,  True,  True,  True] is accepted
+                # but [ False, False, False, False,  True,  True,  False,  False,  True,  True] is not (can't mask in the middle of sequence)
+                assert ~(
+                    sequence_mask[:, :-1] & (~sequence_mask[:, 1:])  # True is never followed by False
+                ).any(), f"Can't mask in the middle of sequence, please use USE_FAST=0 instead.\nGot sequence_mask: {sequence_mask}"
 
-                # Concatenate with new key/value along seq_length dimension
-                key_states = torch.concat([old_key, key_states], dim=1)
-                value_states = torch.concat([old_value, value_states], dim=1)
-                kv_sequence_mask = torch.concat([old_kv_sequence_mask, sequence_mask], dim=-1)
-                q_sequence_mask = sequence_mask
+                # preallocate k_cache, v_cache to self.prefill_kv_len
+                k_cache = torch.zeros(
+                    (
+                        batch_size,
+                        self.prefill_kv_len,
+                        self.n_local_kv_heads,
+                        self.d_qk,
+                    ),
+                    dtype=query_states.dtype,
+                    device=query_states.device,
+                )
+                v_cache = torch.zeros(
+                    (batch_size, self.prefill_kv_len, self.n_local_kv_heads, self.d_v),
+                    dtype=query_states.dtype,
+                    device=query_states.device,
+                )
+                # Remove pad tokens from key_states and concatenate samples in key_unpad
+                # cu_seqlens_k is the cumulative sequence lengths of key_states
+                (query_unpad, indices_q, cu_seqlens_q, max_seqlen_q) = bert_padding.unpad_input(
+                    query_states,
+                    sequence_mask,
+                )
+                (key_unpad, indices_k, cu_seqlens_k, max_seqlen_k) = bert_padding.unpad_input(
+                    key_states, sequence_mask
+                )
+                (value_unpad, _, _, _) = bert_padding.unpad_input(value_states, sequence_mask)
+
+                output_unpad = flash_attn_varlen_func(
+                    q=query_unpad,  # (total_q, n_local_q_heads, d_qk)
+                    k=key_unpad,  # (total_kv, n_local_kv_heads, d_qk)
+                    v=value_unpad,  # (total_kv, n_local_kv_heads, d_v)
+                    cu_seqlens_q=cu_seqlens_q,
+                    cu_seqlens_k=cu_seqlens_k,
+                    max_seqlen_q=max_seqlen_q,
+                    max_seqlen_k=max_seqlen_k,
+                    dropout_p=0.0,
+                    softmax_scale=None,
+                    causal=True,  # True in prefill phase, False in subsequent phases
+                    return_attn_probs=False,
+                )  # (total_unpadded, n_local_q_heads, d_v)
+
+                attention_output = bert_padding.pad_input(
+                    output_unpad, indices_q, batch_size, q_length
+                )  # (batch_size, q_length, n_local_q_heads, d_v)
+
+                pad_to_right(key_states, sequence_mask, new_tensor=k_cache)
+                pad_to_right(value_states, sequence_mask, new_tensor=v_cache)
+
             else:
-                q_sequence_mask = sequence_mask
-                kv_sequence_mask = sequence_mask
+                # Pull pre-computed key/value states
+                # Subsequent inference iterations (q_length=1)
+                k_cache = store["key"]
+                v_cache = store["value"]
 
-            # Store new key/value in store
-            position_offsets = position_ids[:, -1]
+                # [batch_size, seq_length, num_heads, d_qk]
+                query_states = query_states.view(
+                    batch_size, q_length, self.n_local_q_heads, self.d_qk
+                )  # [batch_size, q_length, self.n_heads, d_qk]
+                kv_length = key_states.shape[1]
+                key_states = key_states.view(
+                    batch_size, kv_length, self.n_local_kv_heads, self.d_qk
+                )  # [batch_size, kv_length, self.n_heads, d_qk]
+                value_states = value_states.view(
+                    batch_size, kv_length, self.n_local_kv_heads, self.d_v
+                )  # [batch_size, kv_length, self.n_heads, d_v]
+
+                attention_output = flash_attn_with_kvcache(
+                    query_states,
+                    k_cache,
+                    v_cache,
+                    key_states,
+                    value_states,
+                    rotary_cos=None,
+                    rotary_sin=None,
+                    # TODO @nouamane: seems like this doesnt help to indicate padding in (for first iteration it's just 0)
+                    cache_seqlens=position_offsets.contiguous(),
+                    softmax_scale=None,
+                    causal=True,
+                    rotary_interleaved=False,  # GPT-NeoX style
+                )
+
             store.update(
                 {
-                    "key": key_states,
-                    "value": value_states,
-                    "kv_sequence_mask": kv_sequence_mask,
+                    "key": k_cache,  # flash-attn has updated with new key_states using cache_seqlens
+                    "value": v_cache,
                     "position_offsets": position_offsets,
                 }
             )
-        else:
+
+        else:  # Training case
             # Apply rotary embeddings to query/key states
             query_states = self.rotary_embedding(query_states, position_ids=None)
             key_states = self.rotary_embedding(key_states, position_ids=None)
             q_sequence_mask = sequence_mask
             kv_sequence_mask = sequence_mask
 
-        kv_length = key_states.shape[1]
-        # [batch_size, seq_length, num_heads, d_qk]
-        # Shaping for use in `flash-attn` version of flash-attn: `flash_attn_unpadded_func`
-        query_states = query_states.view(
-            batch_size * q_length, self.n_local_q_heads, self.d_qk
-        )  # [batch_size * q_length, self.n_heads, d_qk]
+            kv_length = key_states.shape[1]
+            # [batch_size, seq_length, num_heads, d_qk]
+            # Shaping for use in `flash-attn` version of flash-attn: `flash_attn_unpadded_func`
+            query_states = query_states.view(
+                batch_size * q_length, self.n_local_q_heads, self.d_qk
+            )  # [batch_size * q_length, self.n_heads, d_qk]
 
-        key_states = key_states.view(
-            batch_size * kv_length, self.n_local_kv_heads, self.d_qk
-        )  # [batch_size * kv_length, self.n_heads, d_qk]
-        value_states = value_states.view(
-            batch_size * kv_length, self.n_local_kv_heads, self.d_v
-        )  # [batch_size * kv_length, self.n_heads, d_v]
+            key_states = key_states.view(
+                batch_size * kv_length, self.n_local_kv_heads, self.d_qk
+            )  # [batch_size * kv_length, self.n_heads, d_qk]
+            value_states = value_states.view(
+                batch_size * kv_length, self.n_local_kv_heads, self.d_v
+            )  # [batch_size * kv_length, self.n_heads, d_v]
 
-        attention_output = self.attention(
-            query_states=query_states,
-            key_states=key_states,
-            value_states=value_states,
-            q_sequence_mask=q_sequence_mask,
-            kv_sequence_mask=kv_sequence_mask,
-        )
+            attention_output = self.attention(
+                query_states=query_states,
+                key_states=key_states,
+                value_states=value_states,
+                q_sequence_mask=q_sequence_mask,
+                kv_sequence_mask=kv_sequence_mask,
+            )
 
         attention_output = attention_output.view(batch_size, q_length, self.n_local_q_heads * self.d_v).transpose(0, 1)
         output = self.o_proj(attention_output)
@@ -574,10 +682,6 @@ class LlamaModel(nn.Module):
         input_ids: Union[torch.Tensor, TensorPointer],  # [batch_size, seq_length]
         input_mask: Union[torch.Tensor, TensorPointer],  # [batch_size, seq_length]
     ):
-        # TODO @nouamane: support input_mask with USE_FAST=1
-        if isinstance(input_ids, torch.Tensor) and not torch.all(input_mask):
-            raise NotImplementedError("Input mask is not supported yet with flash attention. Please use `USE_FAST=0`")
-
         return self.forward_with_hidden_states(input_ids=input_ids, input_mask=input_mask)[0]
 
     def forward_with_hidden_states(
@@ -858,21 +962,6 @@ class LlamaForTraining(NanotronModel):
             else name
             for name, param in model.named_parameters()
         }, f"Somehow the initialized set of parameters don't match:\n - Expected: { {name for name, _ in model.named_parameters()} }\n - Got: {initialized_parameters}"
-
-        # Synchronize parameters so that the model is consistent
-        for name, param in sorted(model.named_parameters(), key=lambda x: x[0]):
-            # sync across dp
-            dist.all_reduce(param, op=dist.ReduceOp.AVG, group=self.dpg.dp_pg)
-
-        for (_, group_ranks), param in sorted(
-            get_tied_id_to_param(
-                parameters=model.parameters(),
-                root_module=model.module if isinstance(model, DistributedDataParallel) else model,
-            ).items(),
-            key=lambda x: x[0],
-        ):
-            group = self.dpg.world_ranks_to_pg[group_ranks]
-            dist.all_reduce(param, op=dist.ReduceOp.AVG, group=group)
 
     def get_block_compute_costs(self):
         """Computes the compute cost of each block in the model so that we can do a better job of load balancing."""
