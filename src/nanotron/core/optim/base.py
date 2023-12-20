@@ -21,7 +21,7 @@ class BaseOptimizer(ABC):
         ...
 
     @abstractmethod
-    def zero_grad(self, set_to_none: bool = False):
+    def zero_grad(self):
         ...
 
     @abstractmethod

@@ -23,12 +23,11 @@ from torch.nn.parallel import DistributedDataParallel
 
 
 @pytest.mark.parametrize("tp,dp,pp", [pytest.param(1, i, 1) for i in range(1, available_gpus() + 1)])
-@pytest.mark.parametrize("set_to_none", [True, False])
-def test_zero_optimizer(tp: int, dp: int, pp: int, set_to_none: bool):
-    init_distributed(pp=pp, dp=dp, tp=tp)(_test_zero_optimizer)(set_to_none=set_to_none)
+def test_zero_optimizer(tp: int, dp: int, pp: int):
+    init_distributed(pp=pp, dp=dp, tp=tp)(_test_zero_optimizer)()
 
 
-def _test_zero_optimizer(dpg: DistributedProcessGroups, set_to_none: bool):
+def _test_zero_optimizer(dpg: DistributedProcessGroups):
     model = init_dummy_model(dpg=dpg)
     optimizer = ZeroDistributedOptimizer(
         named_params_or_groups=model.named_parameters(),
@@ -135,49 +134,22 @@ def _test_zero_optimizer(dpg: DistributedProcessGroups, set_to_none: bool):
 
         # Optimizer steps
         optimizer.step()
-        optimizer.zero_grad(set_to_none=set_to_none)
+        optimizer.zero_grad()
         reference_optimizer.step()
-        reference_optimizer.zero_grad(set_to_none=set_to_none)
+        reference_optimizer.zero_grad()
 
         # Check that params are synced across DP
         for name, param in model.named_parameters():
             assert_tensor_equal_over_group(param, group=dpg.dp_pg)
-            if set_to_none:
-                assert param.grad is None
-            else:
-                torch.testing.assert_close(
-                    param.grad,
-                    torch.zeros((1,), device=param.device, dtype=param.dtype).expand_as(param),
-                    atol=0,
-                    rtol=0,
-                    msg=lambda msg: f"At iteration {i}, {msg}",
-                )
+            assert param.grad is None
 
         # Check that gradients are reset
         for ref_name, ref_param in reference_model.named_parameters():
             assert_tensor_equal_over_group(ref_param, group=dpg.dp_pg)
-            if set_to_none:
-                assert ref_param.grad is None
-            else:
-                torch.testing.assert_close(
-                    ref_param.grad,
-                    torch.zeros((1,), device=ref_param.device, dtype=ref_param.dtype).expand_as(ref_param),
-                    atol=0,
-                    rtol=0,
-                    msg=lambda msg: f"At iteration {i}, {msg}",
-                )
+            assert ref_param.grad is None
         for param_group in optimizer.param_groups:
             for param in param_group["params"]:
-                if set_to_none:
-                    assert param.grad is None
-                else:
-                    torch.testing.assert_close(
-                        param.grad,
-                        torch.zeros((1,), device=param.device, dtype=param.dtype).expand_as(param),
-                        atol=0,
-                        rtol=0,
-                        msg=lambda msg: f"At iteration {i}, {msg}",
-                    )
+                assert param.grad is None
 
         # Check params are the same with reference_model
         for (name, param), (ref_name, ref_param) in zip(model.named_parameters(), reference_model.named_parameters()):
@@ -220,17 +192,16 @@ def _test_zero_optimizer(dpg: DistributedProcessGroups, set_to_none: bool):
 @pytest.mark.parametrize("tp,dp,pp", [pytest.param(2, i, 1) for i in range(1, available_gpus() // 2 + 1)])
 @pytest.mark.parametrize("tp_mode", list(TensorParallelLinearMode))
 @pytest.mark.parametrize("async_communication", [False, True])
-@pytest.mark.parametrize("set_to_none", [True, False])
 def test_zero_optimizer_with_tp(
-    tp: int, dp: int, pp: int, tp_mode: TensorParallelLinearMode, async_communication: bool, set_to_none: bool
+    tp: int, dp: int, pp: int, tp_mode: TensorParallelLinearMode, async_communication: bool
 ):
     init_distributed(pp=pp, dp=dp, tp=tp)(_test_zero_optimizer_with_tp)(
-        tp_mode=tp_mode, async_communication=async_communication, set_to_none=set_to_none
+        tp_mode=tp_mode, async_communication=async_communication
     )
 
 
 def _test_zero_optimizer_with_tp(
-    dpg: DistributedProcessGroups, tp_mode: TensorParallelLinearMode, async_communication: bool, set_to_none: bool
+    dpg: DistributedProcessGroups, tp_mode: TensorParallelLinearMode, async_communication: bool
 ):
     if async_communication:
         os.environ["CUDA_DEVICE_MAX_CONNECTIONS"] = "1"
@@ -417,49 +388,22 @@ def _test_zero_optimizer_with_tp(
 
         # Optimizer steps
         optimizer.step()
-        optimizer.zero_grad(set_to_none=set_to_none)
+        optimizer.zero_grad()
         reference_optimizer.step()
-        reference_optimizer.zero_grad(set_to_none=set_to_none)
+        reference_optimizer.zero_grad()
 
         # Check that params are synced across DP
         for name, param in model.named_parameters():
             assert_tensor_equal_over_group(param, group=dpg.dp_pg)
-            if set_to_none is True:
-                assert param.grad is None
-            else:
-                torch.testing.assert_close(
-                    param.grad,
-                    torch.zeros((1,), device=param.device, dtype=param.dtype).expand_as(param),
-                    atol=0,
-                    rtol=0,
-                    msg=lambda msg: f"At iteration {i}, {msg}",
-                )
+            assert param.grad is None
 
         # Check that gradients are reset
         for ref_name, ref_param in reference_model.named_parameters():
             assert_tensor_equal_over_group(ref_param, group=dpg.dp_pg)
-            if set_to_none:
-                assert ref_param.grad is None
-            else:
-                torch.testing.assert_close(
-                    ref_param.grad,
-                    torch.zeros((1,), device=ref_param.device, dtype=ref_param.dtype).expand_as(ref_param),
-                    atol=0,
-                    rtol=0,
-                    msg=lambda msg: f"At iteration {i}, {msg}",
-                )
+            assert ref_param.grad is None
         for param_group in optimizer.param_groups:
             for param in param_group["params"]:
-                if set_to_none:
-                    assert param.grad is None
-                else:
-                    torch.testing.assert_close(
-                        param.grad,
-                        torch.zeros((1,), device=param.device, dtype=param.dtype).expand_as(param),
-                        atol=0,
-                        rtol=0,
-                        msg=lambda msg: f"At iteration {i}, {msg}",
-                    )
+                assert param.grad is None
 
         # Check params are the same with reference_model
         for (name, param), (ref_name, ref_param) in zip(model.named_parameters(), reference_model.named_parameters()):

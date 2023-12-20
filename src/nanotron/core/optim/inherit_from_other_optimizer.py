@@ -20,8 +20,8 @@ class InheritFromOtherOptimizer(BaseOptimizer):
     def __repr__(self):
         return f"{self.__class__.__name__}({self.optimizer.__repr__()})"
 
-    def zero_grad(self, set_to_none: bool = False):
-        return self.optimizer.zero_grad(set_to_none=set_to_none)
+    def zero_grad(self):
+        return self.optimizer.zero_grad()
 
     @cache
     def state_dict_additional_keys(self) -> Set[str]:

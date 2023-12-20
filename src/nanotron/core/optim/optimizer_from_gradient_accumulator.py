@@ -52,9 +52,9 @@ class OptimizerFromGradientAccumulator(InheritFromOtherOptimizer):
         self.gradient_accumulator.step()
         return loss
 
-    def zero_grad(self, set_to_none: bool = False):
-        super().zero_grad(set_to_none=set_to_none)
-        return self.gradient_accumulator.zero_grad(set_to_none=set_to_none)
+    def zero_grad(self):
+        super().zero_grad()
+        return self.gradient_accumulator.zero_grad()
 
     @cache
     def state_dict_additional_keys(self) -> Set[str]:

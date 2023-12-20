@@ -5,13 +5,14 @@ import numpy as np
 import torch.optim
 from functorch.dim import tree_map
 
-from nanotron import logging
 from nanotron.core import distributed as dist
+from nanotron.core import logging
 from nanotron.core.distributed import ProcessGroup
+from nanotron.core.logging import log_rank, warn_once
 from nanotron.core.optim.base import BaseOptimizer
 from nanotron.core.optim.inherit_from_other_optimizer import InheritFromOtherOptimizer
 from nanotron.core.parallel.parameters import NanotronParameter
-from nanotron.logging import log_rank, warn_once
+from nanotron.logging import human_format
 
 logger = logging.get_logger(__name__)
 
@@ -113,10 +114,10 @@ class ZeroDistributedOptimizer(InheritFromOtherOptimizer):
         self._all_gather_params()
         return loss
 
-    def zero_grad(self, set_to_none: bool = False):
+    def zero_grad(self):
         """Copied from `torch.optim.optimizer.zero_grad` with the only change of using `self.param_groups` instead of `self.optimizer.param_groups`
         because we want to zero out the gradients of all model params (not just the params in the current rank)"""
-        super().zero_grad(set_to_none=set_to_none)
+        super().zero_grad()
 
         # TODO @thomasw21: This is a call to torch internal API, we need to fix this
         foreach = False  # self.optimizer.defaults.get("foreach", False)
@@ -135,19 +136,7 @@ class ZeroDistributedOptimizer(InheritFromOtherOptimizer):
         for named_param_group in self.zero_named_param_groups:
             for _, p in named_param_group["named_params"]:
                 if p.grad is not None:
-                    if set_to_none:
-                        p.grad = None
-                    else:
-                        if p.grad.grad_fn is not None:
-                            p.grad.detach_()
-                        else:
-                            p.grad.requires_grad_(False)
-                        if not foreach or p.grad.is_sparse:
-                            p.grad.zero_()
-                        else:
-                            per_device_and_dtype_grads[p.grad.device][  # pylint: disable=used-before-assignment
-                                p.grad.dtype
-                            ].append(p.grad)
+                    p.grad = None
         if foreach:
             for _, per_dtype_grads in per_device_and_dtype_grads.items():
                 for grads in per_dtype_grads.values():
@@ -191,23 +180,23 @@ class ZeroDistributedOptimizer(InheritFromOtherOptimizer):
                 if start_offsets[dp_rank] < end_offsets[dp_rank]  # Only if the slice is not empty.
             }
 
-        log_rank("[ZeRO sharding] Size of optimizer params per rank:", logger=logger, level=logging.DEBUG, rank=0)
-        all_memory = sum(
+        log_rank("[ZeRO sharding] Size of optimizer params per rank:", logger=logger, level=logging.INFO, rank=0)
+        all_numel = sum(
             param_name_to_dp_rank_offsets[name][dp_rank][1] - param_name_to_dp_rank_offsets[name][dp_rank][0]
             for name, param in named_params
             for dp_rank in range(self.dp_pg.size())
             if dp_rank in param_name_to_dp_rank_offsets[name]
         )
         for dp_rank in range(self.dp_pg.size()):
-            acc_memory = sum(
+            acc_numel = sum(
                 value[dp_rank][1] - value[dp_rank][0]
                 for value in param_name_to_dp_rank_offsets.values()
                 if dp_rank in value
             )
             log_rank(
-                f"[ZeRO sharding] Rank {dp_rank} has {all_memory / 1024 ** 2:.2f} MB out of {acc_memory / 1024 ** 2:.2f} MB ({0 if all_memory == 0 else acc_memory / all_memory * 100:.2f}%) optimizer params",
+                f"[ZeRO sharding] DP Rank {dp_rank} has {human_format(acc_numel)} out of {human_format(all_numel)} ({0 if all_numel == 0 else acc_numel / all_numel * 100:.2f}%) params' optimizer states",
                 logger=logger,
-                level=logging.DEBUG,
+                level=logging.INFO,
                 rank=0,
             )
 
