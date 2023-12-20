@@ -6,7 +6,6 @@ import torch
 from helpers.dummy import DummyModel, dummy_infinite_data_loader
 from helpers.exception import assert_fail_except_rank_with, timeout_after
 from helpers.utils import available_gpus, init_distributed
-from nanotron.core.dataclass import DistributedProcessGroups
 from nanotron.core.gradient_accumulator import FP32GradBucketManager, FP32GradientAccumulator, get_fp32_accum_hook
 from nanotron.core.optim import ZeroDistributedOptimizer
 from nanotron.core.optim.named_optimizer import NamedOptimizer
@@ -27,6 +26,7 @@ from nanotron.core.parallel.tied_parameters import (
     sync_tied_weights_gradients,
     tie_parameters,
 )
+from nanotron.core.process_groups import DistributedProcessGroups
 from nanotron.core.utils import ContextManagers, assert_tensor_synced_across_pg, init_on_device_and_dtype
 from torch import nn
 

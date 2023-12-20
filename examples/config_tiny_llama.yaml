@@ -51,7 +51,7 @@ model:
     rope_scaling: null
     tie_word_embeddings: true
     use_cache: true
-    vocab_size: 2048
+    vocab_size: 50272
 optimizer:
   accumulate_grad_in_fp32: true
   adam_beta1: 0.9
@@ -60,22 +60,22 @@ optimizer:
   clip_grad: 1.0
   learning_rate_scheduler:
     learning_rate: 0.0003
-    lr_decay_steps: 10
+    lr_decay_steps: 8
     lr_decay_style: cosine
-    lr_warmup_steps: 10
+    lr_warmup_steps: 2
     lr_warmup_style: linear
     min_decay_lr: 1.0e-05
   torch_adam_is_fused: true
   weight_decay: 0.01
   zero_stage: 0
 parallelism:
-  dp: 1
+  dp: 2
   pp: 1
-  pp_engine: afab
-  recompute_granularity: null
+  pp_engine: 1f1b
+  recompute_granularity: SELECTIVE
   tp: 1
-  tp_linear_async_communication: false
-  tp_mode: ALL_REDUCE
+  tp_linear_async_communication: true
+  tp_mode: REDUCE_SCATTER
 profiler: null
 tokenizer:
   tokenizer_max_length: null
@@ -87,5 +87,5 @@ tokens:
   limit_val_batches: 0
   micro_batch_size: 2
   sequence_length: 32
-  train_steps: 20
+  train_steps: 10
   val_check_interval: -1

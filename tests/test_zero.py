@@ -7,7 +7,6 @@ from helpers.dummy import dummy_infinite_data_loader, init_dummy_model
 from helpers.exception import assert_fail_with
 from helpers.utils import available_gpus, init_distributed
 from nanotron.core import distributed as dist
-from nanotron.core.dataclass import DistributedProcessGroups, RandomStates
 from nanotron.core.optim import NamedOptimizer, ZeroDistributedOptimizer
 from nanotron.core.optim.zero import SlicedFlatTensor
 from nanotron.core.parallel.data_parallelism.utils import sync_gradients_across_dp
@@ -17,6 +16,7 @@ from nanotron.core.parallel.pipeline_parallelism.tensor_pointer import TensorPoi
 from nanotron.core.parallel.tensor_parallelism import nn
 from nanotron.core.parallel.tensor_parallelism.enum import TensorParallelLinearMode
 from nanotron.core.parallel.tied_parameters import sync_tied_weights_gradients
+from nanotron.core.process_groups import DistributedProcessGroups, RandomStates
 from nanotron.core.random import branch_random_state, get_current_random_state, get_synced_random_state
 from torch import nn as torch_nn
 from torch.nn.parallel import DistributedDataParallel

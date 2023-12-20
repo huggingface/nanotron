@@ -30,7 +30,6 @@ from transformers.activations import ACT2FN
 from nanotron.config import ParallelismArgs, RecomputeGranularity
 from nanotron.core import distributed as dist
 from nanotron.core import logging
-from nanotron.core.dataclass import RandomStates
 from nanotron.core.logging import log_rank
 from nanotron.core.parallel.parameters import NanotronParameter
 from nanotron.core.parallel.pipeline_parallelism.block import (
@@ -46,6 +45,7 @@ from nanotron.core.parallel.tensor_parallelism.nn import (
     TensorParallelRowLinear,
 )
 from nanotron.core.process_groups_initializer import DistributedProcessGroups
+from nanotron.core.random import RandomStates
 from nanotron.core.utils import checkpoint_method
 from nanotron.models import AttachableStore, NanotronModel
 

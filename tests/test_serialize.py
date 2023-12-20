@@ -9,7 +9,6 @@ from helpers.utils import (
     is_dict_equal,
 )
 from nanotron.core import distributed as dist
-from nanotron.core.dataclass import DistributedProcessGroups, RandomStates
 from nanotron.core.gradient_accumulator import FP32GradientAccumulator
 from nanotron.core.optim.named_optimizer import NamedOptimizer
 from nanotron.core.optim.optimizer_from_gradient_accumulator import (
@@ -21,6 +20,7 @@ from nanotron.core.parallel.pipeline_parallelism.engine import (
 )
 from nanotron.core.parallel.sharded_parameters import SplitConfig, create_sharded_parameter_from_config
 from nanotron.core.parallel.tied_parameters import sync_tied_weights_gradients
+from nanotron.core.process_groups import DistributedProcessGroups, RandomStates
 from nanotron.core.random import get_current_random_state, get_synced_random_state
 from nanotron.core.serialize import (
     load_optimizer,

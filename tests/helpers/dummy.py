@@ -3,7 +3,6 @@ from typing import Union
 
 import torch
 from nanotron.core import distributed as dist
-from nanotron.core.dataclass import DistributedProcessGroups
 from nanotron.core.optim.base import BaseOptimizer
 from nanotron.core.optim.named_optimizer import NamedOptimizer
 from nanotron.core.parallel.model import initial_sync
@@ -12,6 +11,7 @@ from nanotron.core.parallel.pipeline_parallelism.block import PipelineBlock
 from nanotron.core.parallel.pipeline_parallelism.p2p import P2P
 from nanotron.core.parallel.pipeline_parallelism.tensor_pointer import TensorPointer
 from nanotron.core.parallel.tied_parameters import tie_parameters
+from nanotron.core.process_groups import DistributedProcessGroups
 from nanotron.core.utils import init_on_device_and_dtype
 from torch import nn
 from torch.nn.parallel import DistributedDataParallel

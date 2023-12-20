@@ -491,7 +491,9 @@ class DistributedTrainer:
 
         if isinstance(self.model, DistributedDataParallel) and self.grad_accumulator is not None:
             # Wait for fp32 grads allreduce to finish to make sure grads are synced across DP
-            assert self.grad_accumulator.fp32_grads_allreduce_handle is not None
+            assert (
+                self.grad_accumulator.fp32_grads_allreduce_handle is not None
+            ), "No fp32_grads_allreduce_handle maybe you're using only a single training process"
             self.grad_accumulator.fp32_grads_allreduce_handle.wait()
 
         # Sync tied weights

@@ -19,7 +19,7 @@ from nanotron.config import (
 from nanotron.logging import human_format
 
 model_config = LlamaConfig(
-    # Config for a tiny model model
+    # Config for a tiny model model with 1.62M parameters
     bos_token_id=1,
     eos_token_id=2,
     hidden_act="silu",
@@ -35,7 +35,7 @@ model_config = LlamaConfig(
     rope_scaling=None,
     tie_word_embeddings=True,
     use_cache=True,
-    vocab_size=2048,
+    vocab_size=50272,  # GPT2 tokenizer rounded to next multiple of 8
 )
 
 num_params = human_format(
@@ -47,10 +47,12 @@ num_params = human_format(
     )
 ).replace(".", "p")
 
+print(f"Model has {num_params} parameters")
+
 seed = 42
 
 learning_rate = LRSchedulerArgs(
-    learning_rate=3e-4, lr_warmup_steps=10, lr_warmup_style="linear", lr_decay_style="cosine", min_decay_lr=1e-5
+    learning_rate=3e-4, lr_warmup_steps=2, lr_warmup_style="linear", lr_decay_style="cosine", min_decay_lr=1e-5
 )
 
 optimizer = OptimizerArgs(
@@ -65,6 +67,18 @@ optimizer = OptimizerArgs(
     learning_rate_scheduler=learning_rate,
 )
 
+parallelism = ParallelismArgs(
+    dp=2,
+    pp=1,
+    tp=1,
+    pp_engine="1f1b",
+    tp_mode="REDUCE_SCATTER",
+    tp_linear_async_communication=True,
+    recompute_granularity="selective",
+)
+
+tokens = TokensArgs(sequence_length=32, train_steps=10, micro_batch_size=2, batch_accumulation_per_replica=1)
+
 dataset = PretrainDatasetsArgs(
     hf_dataset_or_datasets="HuggingFaceH4/testing_alpaca_small", text_column_name="completion"
 )
@@ -75,12 +89,12 @@ os.makedirs(checkpoints_path, exist_ok=True)
 config = Config(
     general=GeneralArgs(project="debug", run="tiny_llama", seed=seed),
     checkpoints=CheckpointsArgs(checkpoints_path=checkpoints_path, checkpoint_interval=10),
-    parallelism=ParallelismArgs(1, 1, 1),
+    parallelism=parallelism,
     model=ModelArgs(init_method=RandomInit(std=0.025), model_config=model_config),
     tokenizer=TokenizerArgs("gpt2"),
     optimizer=optimizer,
     logging=LoggingArgs(),
-    tokens=TokensArgs(sequence_length=32, train_steps=20, micro_batch_size=2, batch_accumulation_per_replica=1),
+    tokens=tokens,
     data=DataArgs(dataset=dataset, seed=seed),
 )
 
