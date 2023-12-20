@@ -14,6 +14,7 @@ python $EXAMPLE_PATH/config_tiny_llama.py
 
 export CUDA_DEVICE_MAX_CONNECTIONS=1
 export FI_PROVIDER="efa"
+export USE_FAST=1
 
 python -u -m torch.distributed.run \
     --nproc_per_node 2 \

@@ -79,7 +79,7 @@ Let's go through some key concepts.
 
 `DistributedProcessGroups` is the base class referencing all the process groups you might need when running parallel workloads. You can initialize it using the following:
 ```python
-from nanotron.core.process_groups_initializer import get_process_groups
+from nanotron.core.process_groups import get_process_groups
 
 dp, tp, pp = ... # Predefine your topology
 dpg: DistributedProcessGroups = get_process_groups(data_parallel_size=dp, tensor_parallel_size=tp, pipeline_parallel_size=pp)

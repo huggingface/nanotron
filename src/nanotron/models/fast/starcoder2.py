@@ -53,7 +53,7 @@ from nanotron.core.parallel.tensor_parallelism.nn import (
     TensorParallelRowLinear,
 )
 from nanotron.core.parallel.tied_parameters import create_tied_parameter
-from nanotron.core.process_groups_initializer import DistributedProcessGroups
+from nanotron.core.process_groups import DistributedProcessGroups
 from nanotron.core.random import RandomStates, branch_random_state
 from nanotron.core.utils import checkpoint_method
 from nanotron.models import AttachableStore, NanotronModel

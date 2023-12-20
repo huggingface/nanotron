@@ -44,7 +44,7 @@ from nanotron.core.parallel.tensor_parallelism.nn import (
     TensorParallelLinearMode,
     TensorParallelRowLinear,
 )
-from nanotron.core.process_groups_initializer import DistributedProcessGroups
+from nanotron.core.process_groups import DistributedProcessGroups
 from nanotron.core.random import RandomStates
 from nanotron.core.utils import checkpoint_method
 from nanotron.models import AttachableStore, NanotronModel
@@ -514,7 +514,9 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                 kv_sequence_mask=kv_sequence_mask,
             )
 
-        attention_output = attention_output.view(batch_size, q_length, self.n_local_q_heads * self.d_v).transpose(0, 1)
+        attention_output = (
+            attention_output.contiguous().view(batch_size, q_length, self.n_local_q_heads * self.d_v).transpose(0, 1)
+        )
         output = self.o_proj(attention_output)
 
         return {"hidden_states": output, "sequence_mask": sequence_mask}
