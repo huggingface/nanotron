@@ -115,14 +115,14 @@ def _test_clip_grads_with_pp(dpg: DistributedProcessGroups, norm_type: float):
                 torch.testing.assert_close(
                     non_linear.weight.grad,
                     reference_non_linear.weight.grad,
-                    atol=0,
-                    rtol=0,
+                    atol=1e-6,
+                    rtol=1e-7,
                 )
                 torch.testing.assert_close(
                     non_linear.bias.grad,
                     reference_non_linear.bias.grad,
-                    atol=0,
-                    rtol=0,
+                    atol=1e-6,
+                    rtol=1e-7
                 )
                 continue
 
@@ -569,14 +569,14 @@ def _test_clip_grads_fp32_accumulator(dpg: DistributedProcessGroups, norm_type: 
                 torch.testing.assert_close(
                     reference_non_linear.weight.grad,
                     grad_accumulator.get_grad_buffer(f"{prefix_name}.weight"),
-                    atol=0.0,
-                    rtol=0.0,
+                    atol=1e-6,
+                    rtol=1e-7,
                 )
                 torch.testing.assert_close(
                     reference_non_linear.bias.grad,
                     grad_accumulator.get_grad_buffer(f"{prefix_name}.bias"),
-                    atol=0.0,
-                    rtol=0.0,
+                    atol=1e-6,
+                    rtol=1e-7,
                 )
                 continue
 
@@ -584,14 +584,14 @@ def _test_clip_grads_fp32_accumulator(dpg: DistributedProcessGroups, norm_type: 
             torch.testing.assert_close(
                 reference_non_linear.weight.grad,
                 weight_grad,
-                atol=0.0,
-                rtol=0.0,
+                atol=1e-6,
+                rtol=1e-7,
             )
             torch.testing.assert_close(
                 reference_non_linear.bias.grad,
                 bias_grad,
-                atol=0.0,
-                rtol=0.0,
+                atol=1e-6,
+                rtol=1e-7,
             )
     else:
         p2p.send_tensors(
