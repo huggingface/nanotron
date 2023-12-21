@@ -26,30 +26,28 @@ from transformers.activations import ACT2FN
 
 from nanotron.config import ParallelismArgs, RecomputeGranularity
 from nanotron.core import distributed as dist
-from nanotron.core.dataclass import RandomStates
 from nanotron.core.distributed import get_global_rank
-from nanotron.core.parallelism.parameters import NanotronParameter
-from nanotron.core.parallelism.pipeline_parallelism.block import PipelineBlock
-from nanotron.core.parallelism.pipeline_parallelism.p2p import P2P
-from nanotron.core.parallelism.pipeline_parallelism.tensor_pointer import TensorPointer
-from nanotron.core.parallelism.sharded_parameters import SplitConfig, mark_all_parameters_in_module_as_sharded
-from nanotron.core.parallelism.tensor_parallelism.distributed_differentiable_primitives import (
+from nanotron.core.parallel.parameters import NanotronParameter
+from nanotron.core.parallel.pipeline_parallelism.block import PipelineBlock
+from nanotron.core.parallel.pipeline_parallelism.p2p import P2P
+from nanotron.core.parallel.pipeline_parallelism.tensor_pointer import TensorPointer
+from nanotron.core.parallel.sharded_parameters import SplitConfig, mark_all_parameters_in_module_as_sharded
+from nanotron.core.parallel.tensor_parallelism.distributed_differentiable_primitives import (
     differentiable_all_gather,
     differentiable_identity,
 )
-from nanotron.core.parallelism.tensor_parallelism.functional import sharded_cross_entropy
-from nanotron.core.parallelism.tensor_parallelism.nn import (
+from nanotron.core.parallel.tensor_parallelism.functional import sharded_cross_entropy
+from nanotron.core.parallel.tensor_parallelism.nn import (
     TensorParallelColumnLinear,
     TensorParallelEmbedding,
     TensorParallelLinearMode,
     TensorParallelRowLinear,
 )
-from nanotron.core.parallelism.tied_parameters import create_tied_parameter
-from nanotron.core.process_groups_initializer import DistributedProcessGroups
-from nanotron.core.random import branch_random_state
+from nanotron.core.parallel.tied_parameters import create_tied_parameter
+from nanotron.core.process_groups import DistributedProcessGroups
+from nanotron.core.random import RandomStates, branch_random_state
 from nanotron.core.utils import checkpoint_method
-from nanotron.models import NanotronModel
-from nanotron.store import AttachableStore
+from nanotron.models import AttachableStore, NanotronModel
 
 
 class MLP(nn.Module):
@@ -541,7 +539,7 @@ class GPTModel(nn.Module):
                     module_input_keys={"hidden_states", "sequence_mask"},
                     module_output_keys={"hidden_states", "sequence_mask"},
                 )
-                for layer_idx in range(config.n_layer)
+                for layer_idx in range(config.num_hidden_layers)
             ]
         )
 
@@ -840,6 +838,13 @@ class GPTForTraining(NanotronModel):
                     assert full_param_name not in initialized_parameters
                     initialized_parameters.add(full_param_name)
 
+    @staticmethod
+    def get_embeddings_lm_head_tied_names():
+        return [
+            "model.token_position_embeddings.pp_block.token_embedding.weight",
+            "model.lm_head.pp_block.weight",
+        ]
+
     def get_block_compute_costs(self):
         """Computes the compute cost of each block in the model so that we can do a better job of load balancing."""
         model_config = self.config
@@ -862,7 +867,7 @@ class GPTForTraining(NanotronModel):
             hidden_size=self.config.hidden_size,
             num_heads=self.config.num_attention_heads,
             vocab_size=self.config.vocab_size,
-            ffn_hidden_size=self.config.n_inner,
+            ffn_hidden_size=self.config.n_inner if self.config.n_inner is not None else 4 * self.config.hidden_size,
             seq_len=sequence_length,
             batch_size=global_batch_size,
             recompute_granularity=self.parallel_config.recompute_granularity,

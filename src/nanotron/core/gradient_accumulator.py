@@ -8,8 +8,8 @@ import torch
 from torch.distributed import GradBucket
 
 import nanotron.core.distributed as dist
-from nanotron.core import logging
-from nanotron.core.parallelism.parameters import NanotronParameter
+from nanotron import logging
+from nanotron.core.parallel.parameters import NanotronParameter
 from nanotron.core.tensor_init import tensor_from_untyped_storage
 from nanotron.core.utils import get_untyped_storage
 
@@ -17,6 +17,8 @@ logger = logging.get_logger(__name__)
 
 
 class GradientAccumulator(ABC):
+    fp32_grads_allreduce_handle: Optional[torch.futures.Future]
+
     @abstractmethod
     def __init__(self, named_parameters: Iterator[Tuple[str, NanotronParameter]]):
         ...
@@ -34,7 +36,7 @@ class GradientAccumulator(ABC):
         ...
 
     @abstractmethod
-    def zero_grad(self, set_to_none: bool = False):
+    def zero_grad(self):
         ...
 
     @abstractmethod
@@ -115,6 +117,8 @@ class FP32GradientAccumulator(GradientAccumulator):
                 fp32_param.requires_grad = True
 
         self._is_accumulation_sync_step = False
+        # We need the last allreduce handle to make sure it finishes before the optimizer step
+        self.fp32_grads_allreduce_handle: Optional[torch.futures.Future] = None
 
     def assign_param_offsets(self, param_name_to_offsets: Dict[str, Dict[int, Tuple[int, int]]], dp_rank: int):
         """To use only when you use with ZeRODistributedOptimizer"""
@@ -255,11 +259,11 @@ class FP32GradientAccumulator(GradientAccumulator):
         for name in self.parameters.keys():
             fp32_param = self.parameters[name]["fp32"]
             half_param = self.parameters[name]["half"]
-
+            # TODO @nouamane: should we use a fused kernel to copy?
             # Copy weights from full precision to half precision
             half_param.copy_(fp32_param)
 
-    def zero_grad(self, set_to_none=False):
+    def zero_grad(self):
         # Full precision gradients are reset to zero/none after the underlying `optimiser.step`, so no need to reset.
         for elt in self.fp32_grad_buffers.values():
             half_param = elt["half"]
@@ -267,14 +271,7 @@ class FP32GradientAccumulator(GradientAccumulator):
             if half_param.grad is None:
                 continue
 
-            if set_to_none:
-                half_param.grad = None
-            else:
-                if half_param.grad.grad_fn is not None:
-                    half_param.grad.detach_()
-                else:
-                    half_param.grad.requires_grad_(False)
-                half_param.grad.zero_()
+            half_param.grad = None
 
         # in case where self.parameters and self.fp32_grad_buffers are not the same (e.g we want to accumulate all DPs grads, and only sync at sync step)
         self._contiguous_fp32_grad_buffer.zero_()
@@ -327,17 +324,18 @@ def get_fp32_accum_hook(
     Args:
         reduce_op: The reduction operation to perform.
     """
+    # s = torch.cuda.Stream()
 
     def fp32_accum_hook(state: FP32GradBucketManager, bucket: GradBucket) -> torch.futures.Future[torch.Tensor]:
+        # nonlocal s
         # DDP groups grads in GradBuckets. This hook is called throughout the bwd pass, once each bucket is ready to overlap communication with computation.
         # See https://pytorch.org/docs/stable/ddp_comm_hooks.html#what-does-a-communication-hook-operate-on for more details.
         dp_pg = state.dp_pg
         accumulator = state.accumulator
         param_id_to_name = state.param_id_to_name
 
-        half_grad_bucket = bucket.buffer()
-
         # Add new incoming gradient
+        # with torch.cuda.stream(s):
         for param, grad in zip(bucket.parameters(), bucket.gradients()):
             name = param_id_to_name[id(param)]
             fp32_grad_buffer = accumulator.get_grad_buffer(name)
@@ -346,7 +344,7 @@ def get_fp32_accum_hook(
         # sync across dp
         if dp_pg.size() == 1:
             fut = torch.futures.Future()
-            fut.set_result(half_grad_bucket)
+            fut.set_result(bucket.buffer())
             return fut
 
         if reduce_scatter:
@@ -366,7 +364,7 @@ def get_fp32_accum_hook(
                 torch.split(grad_buffer, split_size_or_sections=len(grad_buffer) // dp_pg.size())
                 for grad_buffer in grad_buffer_tensor_list
             ]
-            future = dist.reduce_scatter_coalesced(
+            dist.reduce_scatter_coalesced(
                 output_tensor_list=output_tensor_list,
                 input_tensor_lists=input_tensor_lists,
                 op=reduce_op,
@@ -377,10 +375,15 @@ def get_fp32_accum_hook(
             grad_buffer_tensor_list = [
                 accumulator.get_grad_buffer(param_id_to_name[id(param)]).view(-1) for param in bucket.parameters()
             ]
-            future = dist.all_reduce_coalesced(grad_buffer_tensor_list, group=dp_pg, async_op=True, op=reduce_op)
+            accumulator.fp32_grads_allreduce_handle = dist.all_reduce_coalesced(
+                grad_buffer_tensor_list, group=dp_pg, async_op=True, op=reduce_op
+            )
+            # we shouldn't wait for this future for the rest of the backward
 
-        return future.then(
-            lambda fut: half_grad_bucket
-        )  # We don't care about the new half grad values, so we return the old ones
+        # with torch.cuda.stream(s):
+        fut: torch.futures.Future[torch.Tensor] = torch.futures.Future()
+        half_grad_bucket = bucket.buffer()
+        fut.set_result(half_grad_bucket)
+        return fut  # We don't care about the new half grad values, so we return the old ones
 
     return fp32_accum_hook

@@ -1,12 +1,74 @@
 import contextlib
 import random
+from dataclasses import dataclass
+from typing import MutableMapping, Optional, Tuple
 
 import numpy as np
 import torch
 
 from nanotron.core import distributed as dist
-from nanotron.core.dataclass import RandomState, RandomStates
 from nanotron.core.distributed import ProcessGroup
+
+
+@dataclass
+class RandomState:
+    random: Tuple[int, Tuple[int, ...], None]
+    numpy: Tuple[str, np.ndarray, int, int, float]
+    torch_cpu: torch.Tensor
+    torch_cuda: Optional[torch.Tensor]
+
+    def __eq__(self, other):
+        return (
+            isinstance(other, RandomState)
+            and all(v1 == v2 for v1, v2 in zip(self.random, other.random))
+            and all(
+                np.array_equal(v1, v2) if isinstance(v1, np.ndarray) else v1 == v2
+                for v1, v2 in zip(self.numpy, other.numpy)
+            )
+            and torch.equal(self.torch_cpu, other.torch_cpu)
+            and (
+                other.torch_cuda is None if self.torch_cuda is None else torch.equal(self.torch_cuda, other.torch_cuda)
+            )
+        )
+
+
+class RandomStates(MutableMapping[str, RandomState]):
+    def __init__(self, dict: dict):
+        for key, value in dict.items():
+            self.check_type(key, value)
+        # TODO @thomasw21: We make a copy for safety measure.
+        self._dict = dict.copy()
+
+    @staticmethod
+    def check_type(key, value):
+        if not isinstance(key, str):
+            raise ValueError(f"Expected key to be of type str. Got {type(key)}")
+        if not isinstance(value, RandomState):
+            raise ValueError(f"Expected value to be of type `nanotron.dataclass.RandomState`. Got {type(value)}")
+
+    def __getitem__(self, item):
+        return self._dict[item]
+
+    def __iter__(self):
+        return self._dict.__iter__()
+
+    def __len__(self):
+        return len(self._dict)
+
+    def __delitem__(self, key):
+        raise ValueError("Can't delete a random states key")
+
+    def __setitem__(self, key, value):
+        if key not in self._dict:
+            raise ValueError("Can't add a new random states after initialisation")
+        self.check_type(key, value)
+        return self._dict.__setitem__(key, value)
+
+    def __eq__(self, other):
+        if not isinstance(other, RandomStates):
+            return False
+
+        return self._dict == other._dict
 
 
 def set_random_seed(seed: int):

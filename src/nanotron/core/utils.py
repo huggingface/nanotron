@@ -1,5 +1,7 @@
 import functools
 import inspect
+import os
+import warnings
 from contextlib import ExitStack, contextmanager
 from typing import Callable, ContextManager, List, Optional
 
@@ -10,6 +12,18 @@ from torch.utils.checkpoint import checkpoint
 
 from nanotron.core import distributed as dist
 from nanotron.core.distributed import get_global_rank
+
+
+def check_env():
+    if os.environ.get("CUDA_LAUNCH_BLOCKING", None) == "1":
+        raise RuntimeError("CUDA_LAUNCH_BLOCKING is set to 1. " "This will make distributed NCCL hang.")
+    if os.environ.get("USE_FAST", None) != "1":
+        warnings.warn(
+            "USE_FAST is not set. This will use the slow version of the code. "
+            "Set USE_FAST=1 to use the fast version of the code."
+        )
+    if os.environ.get("FI_PROVIDER", None) != "efa":
+        warnings.warn("FI_PROVIDER is not set to efa. This will not use EFA for communication.")
 
 
 class ContextManagers:
@@ -157,7 +171,23 @@ class DTypeInvariantTensor(torch.Tensor):
 
 @contextmanager
 def main_rank_first(group: dist.ProcessGroup):
+    """Context manager that executes the code in the context with the rank zero of the group going first."""
     is_main = dist.get_rank(group) == 0
+    if is_main:
+        yield
+
+    dist.barrier(group)
+
+    if not is_main:
+        yield
+
+
+@contextmanager
+def local_ranks_zero_first(group: Optional[dist.ProcessGroup] = None):
+    """Context manager that executes the code in the context with all the local rank zero of the group going first.
+    Usefull to run only once per node first (e.g. to create local files, etc)
+    """
+    is_main = int(os.environ.get("LOCAL_RANK", 0)) == 0
     if is_main:
         yield
 

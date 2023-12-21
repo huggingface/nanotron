@@ -1,5 +1,4 @@
 import torch
-
 from nanotron.core import distributed as dist
 from nanotron.core.distributed import ProcessGroup, get_global_rank
 

@@ -12,7 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" PyTorch GPT model with Multi-Query Attention."""
+""" PyTorch Starcoder (GPT with Multi-Query Attention)."""
 
 import math
 import os
@@ -27,34 +27,32 @@ from torch.nn import init
 from transformers import GPTBigCodeConfig
 from transformers.activations import ACT2FN
 
-from nanotron.config import ModelArgs, ParallelismArgs, RecomputeGranularity
+from nanotron.config import ParallelismArgs, RecomputeGranularity
 from nanotron.core import distributed as dist
-from nanotron.core.dataclass import RandomStates
 from nanotron.core.distributed import get_global_rank
-from nanotron.core.parallelism.parameters import NanotronParameter
-from nanotron.core.parallelism.pipeline_parallelism.block import PipelineBlock
-from nanotron.core.parallelism.pipeline_parallelism.p2p import P2P
-from nanotron.core.parallelism.pipeline_parallelism.tensor_pointer import TensorPointer
-from nanotron.core.parallelism.sharded_parameters import SplitConfig, mark_all_parameters_in_module_as_sharded
-from nanotron.core.parallelism.tensor_parallelism.enum import TensorParallelLinearMode
-from nanotron.core.parallelism.tensor_parallelism.functional import column_linear, sharded_cross_entropy
-from nanotron.core.parallelism.tensor_parallelism.nn import (
+from nanotron.core.parallel.parameters import NanotronParameter
+from nanotron.core.parallel.pipeline_parallelism.block import PipelineBlock
+from nanotron.core.parallel.pipeline_parallelism.p2p import P2P
+from nanotron.core.parallel.pipeline_parallelism.tensor_pointer import TensorPointer
+from nanotron.core.parallel.sharded_parameters import SplitConfig, mark_all_parameters_in_module_as_sharded
+from nanotron.core.parallel.tensor_parallelism.enum import TensorParallelLinearMode
+from nanotron.core.parallel.tensor_parallelism.functional import column_linear, sharded_cross_entropy
+from nanotron.core.parallel.tensor_parallelism.nn import (
     TensorParallelColumnLinear,
     TensorParallelEmbedding,
     TensorParallelRowLinear,
 )
-from nanotron.core.parallelism.tied_parameters import create_tied_parameter
-from nanotron.core.process_groups_initializer import DistributedProcessGroups
-from nanotron.core.random import branch_random_state
+from nanotron.core.parallel.tied_parameters import create_tied_parameter
+from nanotron.core.process_groups import DistributedProcessGroups
+from nanotron.core.random import RandomStates, branch_random_state
 from nanotron.core.utils import checkpoint_method
-from nanotron.models import NanotronModel
-from nanotron.store import AttachableStore
+from nanotron.models import AttachableStore, NanotronModel
 
 
 class MLP(nn.Module):
     def __init__(
         self,
-        config: ModelArgs,
+        config: GPTBigCodeConfig,
         parallel_config: Optional[ParallelismArgs],
         tp_pg: dist.ProcessGroup,
     ):
@@ -66,7 +64,7 @@ class MLP(nn.Module):
             parallel_config.tp_linear_async_communication if parallel_config is not None else False
         )
 
-        d_ff = config.ffn_hidden_size
+        d_ff = config.n_inner if config.n_inner is not None else 4 * config.hidden_size
         self.c_fc = TensorParallelColumnLinear(
             config.hidden_size,
             d_ff,
@@ -97,7 +95,7 @@ class CoreMQA(nn.Module):
     Attention module similar to CoreAttention where only the query is multi-headed.
     """
 
-    def __init__(self, config: ModelArgs, parallel_config: Optional[ParallelismArgs], layer_idx: int):
+    def __init__(self, config: GPTBigCodeConfig, parallel_config: Optional[ParallelismArgs], layer_idx: int):
         super().__init__()
         assert (
             config.hidden_size % config.num_attention_heads == 0
@@ -112,9 +110,7 @@ class CoreMQA(nn.Module):
         # if config.scale_attn_weights:
         #     self.scale_factor = self.scale_factor / (self.d_qk**0.5)
 
-        self.checkpoint_attention = (
-            parallel_config is not None and parallel_config.recompute_granularity is RecomputeGranularity.SELECTIVE
-        )
+        self.checkpoint_attention = False  # Because flash_attn already does checkpointing
 
     @checkpoint_method(attr_name="checkpoint_attention")
     def forward(
@@ -504,7 +500,7 @@ class MQAColumnLinears(nn.Module):
 class CausalSelfMQA(nn.Module, AttachableStore):
     def __init__(
         self,
-        config: ModelArgs,
+        config: GPTBigCodeConfig,
         parallel_config: Optional[ParallelismArgs],
         tp_pg: dist.ProcessGroup,
         layer_idx: int,
@@ -681,7 +677,7 @@ def dropout_add_fused_train(x: torch.Tensor, residual: torch.Tensor, prob: float
 class GPTBlock(nn.Module):
     def __init__(
         self,
-        config: ModelArgs,
+        config: GPTBigCodeConfig,
         parallel_config: Optional[ParallelismArgs],
         tp_pg: dist.ProcessGroup,
         random_states: RandomStates,
@@ -743,7 +739,7 @@ class GPTBlock(nn.Module):
 
 
 class Embedding(nn.Module, AttachableStore):
-    def __init__(self, tp_pg: dist.ProcessGroup, config: ModelArgs, parallel_config: Optional[ParallelismArgs]):
+    def __init__(self, tp_pg: dist.ProcessGroup, config: GPTBigCodeConfig, parallel_config: Optional[ParallelismArgs]):
         super().__init__()
         self.token_embedding = TensorParallelEmbedding(
             num_embeddings=config.vocab_size,
@@ -790,7 +786,7 @@ class GPTModel(nn.Module):
 
     def __init__(
         self,
-        config: ModelArgs,
+        config: GPTBigCodeConfig,
         dpg: DistributedProcessGroups,
         parallel_config: Optional[ParallelismArgs],
         random_states: RandomStates,
@@ -837,7 +833,7 @@ class GPTModel(nn.Module):
                     module_input_keys={"hidden_states", "sequence_mask"},
                     module_output_keys={"hidden_states", "sequence_mask"},
                 )
-                for layer_idx in range(config.num_layers)
+                for layer_idx in range(config.num_hidden_layers)
             ]
         )
 
@@ -953,7 +949,7 @@ class GPTForTraining(NanotronModel):
             },
             module_output_keys={"loss"},
         )
-        self.config = config
+        self.config: GPTBigCodeConfig = config
         self.parallel_config = parallel_config
         self.dpg = dpg
 
@@ -1142,6 +1138,19 @@ class GPTForTraining(NanotronModel):
                     assert full_param_name not in initialized_parameters
                     initialized_parameters.add(full_param_name)
 
+    @staticmethod
+    def get_embeddings_lm_head_tied_names():
+        return [
+            "model.token_position_embeddings.pp_block.token_embedding.weight",
+            "model.lm_head.pp_block.weight",
+        ]
+
+    def before_tbi_sanity_checks(self):
+        # SANITY CHECK: Check ".qkv.kv." params are tied
+        for name, kv_param in self.named_parameters():
+            if ".qkv.kv." in name:
+                assert kv_param.is_tied, f"{name} is not tied (kv weights/biases should be tied in GPTBigcode)"
+
     def get_block_compute_costs(self):
         """Computes the compute cost of each block in the model so that we can do a better job of load balancing."""
         model_config = self.config
@@ -1164,7 +1173,7 @@ class GPTForTraining(NanotronModel):
             hidden_size=self.config.hidden_size,
             num_heads=self.config.num_attention_heads,
             vocab_size=self.config.vocab_size,
-            ffn_hidden_size=self.config.n_inner,
+            ffn_hidden_size=self.config.n_inner if self.config.n_inner is not None else 4 * self.config.hidden_size,
             seq_len=sequence_length,
             batch_size=global_batch_size,
             recompute_granularity=self.parallel_config.recompute_granularity,

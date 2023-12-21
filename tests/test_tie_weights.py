@@ -2,16 +2,15 @@ import torch
 from helpers.distributed_tensor import assert_tensor_equal_over_group
 from helpers.exception import assert_fail_with
 from helpers.utils import init_distributed
-from torch import nn
-
 from nanotron.core import distributed as dist
-from nanotron.core.dataclass import DistributedProcessGroups
-from nanotron.core.parallelism.parameters import NanotronParameter
-from nanotron.core.parallelism.tied_parameters import (
+from nanotron.core.parallel.parameters import NanotronParameter
+from nanotron.core.parallel.tied_parameters import (
     get_tied_id_to_param,
     sync_tied_weights_gradients,
     tie_parameters,
 )
+from nanotron.core.process_groups import DistributedProcessGroups
+from torch import nn
 
 
 def test_tie_weight_in_same_device():

@@ -23,30 +23,25 @@ import torch
 from flash_attn.flash_attn_interface import flash_attn_varlen_func
 from torch import nn
 from torch.nn import functional as F
-from torch.nn.parallel import DistributedDataParallel
 from transformers import FalconConfig
 
 from nanotron.config import ParallelismArgs, RecomputeGranularity
 from nanotron.core import distributed as dist
 from nanotron.core import logging
-from nanotron.core.dataclass import RandomStates
-from nanotron.core.parallelism.parameters import NanotronParameter
-from nanotron.core.parallelism.pipeline_parallelism.block import PipelineBlock, TensorPointer
-from nanotron.core.parallelism.pipeline_parallelism.p2p import P2P
-from nanotron.core.parallelism.tensor_parallelism.functional import sharded_cross_entropy
-from nanotron.core.parallelism.tensor_parallelism.nn import (
+from nanotron.core.parallel.parameters import NanotronParameter
+from nanotron.core.parallel.pipeline_parallelism.block import PipelineBlock, TensorPointer
+from nanotron.core.parallel.pipeline_parallelism.p2p import P2P
+from nanotron.core.parallel.tensor_parallelism.functional import sharded_cross_entropy
+from nanotron.core.parallel.tensor_parallelism.nn import (
     TensorParallelColumnLinear,
     TensorParallelEmbedding,
     TensorParallelLinearMode,
     TensorParallelRowLinear,
 )
-from nanotron.core.parallelism.tied_parameters import (
-    get_tied_id_to_param,
-)
-from nanotron.core.process_groups_initializer import DistributedProcessGroups
+from nanotron.core.process_groups import DistributedProcessGroups
+from nanotron.core.random import RandomStates
 from nanotron.core.utils import checkpoint_method
-from nanotron.models import NanotronModel
-from nanotron.store import AttachableStore
+from nanotron.models import AttachableStore, NanotronModel
 
 logger = logging.get_logger(__name__)
 
@@ -93,8 +88,8 @@ class FalconRotaryEmbedding(nn.Module):
             torch.empty(head_dim // 2, dtype=torch.float),
             persistent=False,
         )
-        self.cos_cached: torch.Tensor | None = None
-        self.sin_cached: torch.Tensor | None = None
+        self.cos_cached: Optional[torch.Tensor] = None
+        self.sin_cached: Optional[torch.Tensor] = None
         self._initialized_buffer = False
 
     def init_rotary_embeddings(self):
@@ -120,7 +115,7 @@ class FalconRotaryEmbedding(nn.Module):
             self.seq_len_cached = total_length
             t = torch.arange(total_length, device=device, dtype=self.inv_freq.dtype)
             freqs = torch.einsum("i,j->ij", t, self.inv_freq)
-            emb = torch.cat((freqs, freqs), dim=-1)
+            emb = torch.cat((freqs, freqs), dim=-1)  # [seq_len, head_dim]
 
             if dtype in [torch.float16, torch.bfloat16]:
                 emb = emb.float()
@@ -137,10 +132,22 @@ class FalconRotaryEmbedding(nn.Module):
         )
 
     def forward(self, query, key, past_key_values_length=0):
+        """
+        Args:
+            query: [batch_size, seq_len, num_heads, head_dim]
+            key: [batch_size, seq_len, num_heads, head_dim]
+            past_key_values_length: int
+
+        Returns:
+            query: [batch_size, seq_len, num_heads, head_dim]
+            key: [batch_size, seq_len, num_heads, head_dim]
+        """
         if self._initialized_buffer is False:
             self.init_rotary_embeddings()
         seq_len = query.shape[1]
-        cos, sin = self.cos_sin(seq_len, past_key_values_length, query.device, query.dtype)
+        cos, sin = self.cos_sin(
+            seq_len, past_key_values_length, query.device, query.dtype
+        )  # [1, seq_len, 1, head_dim]
         return (query * cos) + (rotate_half(query) * sin), (key * cos) + (rotate_half(key) * sin)
 
 
@@ -194,16 +201,14 @@ class CoreAttention(nn.Module):
         self.d_qk = config.hidden_size // config.num_attention_heads
         self.d_v = config.hidden_size // config.num_attention_heads
 
-        self.checkpoint_attention = (
-            parallel_config is not None and parallel_config.recompute_granularity is RecomputeGranularity.SELECTIVE
-        )
+        self.checkpoint_attention = False  # Because flash_attn already does checkpointing
 
     @checkpoint_method(attr_name="checkpoint_attention")
     def forward(
         self,
-        query_states: torch.Tensor,  # [batch_size, num_heads, q_length, inner_dim]
-        key_states: torch.Tensor,  # [batch_size, num_heads, kv_length, inner_dim]
-        value_states: torch.Tensor,  # [batch_size, num_heads, kv_length, inner_dim]
+        query_states: torch.Tensor,  # [batch_size*q_length, num_heads, head_dim]
+        key_states: torch.Tensor,  # [batch_size*kv_length, num_kv_heads, head_dim]
+        value_states: torch.Tensor,  # [batch_size*kv_length, num_kv_heads, head_dim]
         q_sequence_mask: torch.Tensor,  # torch.BoolTensor [batch_size, q_length] (can be broadcasted to that size)
         kv_sequence_mask: torch.Tensor,  # torch.BoolTensor [batch_size, kv_length] (can be broadcasted to that size)
     ):
@@ -323,16 +328,11 @@ class FalconAttention(nn.Module, AttachableStore):
         )  # [seq_length, batch_size, n_local_q_heads * head_dim + 2 * n_local_kv_heads * head_dim]
         q_length, batch_size, _ = fused_qkv.size()
 
-        qkv = fused_qkv.view(q_length, batch_size, -1, self.num_heads // self.num_kv_heads + 2, self.head_dim)
-        query = qkv[:, :, :, :-2]
-        key = qkv[:, :, :, [-2]]
-        value = qkv[:, :, :, [-1]]
-        key = torch.broadcast_to(key, query.shape)  # TODO: can we expand after store?
-        value = torch.broadcast_to(value, query.shape)
-        query, key, value = [x.flatten(2, 3) for x in (query, key, value)]
+        qkv = fused_qkv.view(q_length, batch_size, self.n_local_kv_heads, self.n_repeats + 2, self.head_dim)
+        query, key, value = torch.split(qkv, [self.n_repeats, 1, 1], dim=3)
         query_states = query.transpose(0, 1).reshape(batch_size, q_length, self.n_local_q_heads, self.head_dim)
-        key_states = key.transpose(0, 1).reshape(batch_size, q_length, self.n_local_q_heads, self.head_dim)
-        value_states = value.transpose(0, 1).reshape(batch_size, q_length, self.n_local_q_heads, self.head_dim)
+        key_states = key.transpose(0, 1).reshape(batch_size, q_length, self.n_local_kv_heads, self.head_dim)
+        value_states = value.transpose(0, 1).reshape(batch_size, q_length, self.n_local_kv_heads, self.head_dim)
 
         # Get cached key/values from store if available
         store = self.get_local_store()
@@ -382,29 +382,29 @@ class FalconAttention(nn.Module, AttachableStore):
             kv_sequence_mask = sequence_mask
 
         kv_length = key_states.shape[1]
-        # [batch_size, seq_length, num_heads, d_qk]
+        # [batch_size, seq_length, num_heads, head_dim]
         # Shaping for use in `flash-attn` version of flash-attn: `flash_attn_unpadded_func`
         query_states = query_states.reshape(
             batch_size * q_length, self.n_local_q_heads, self.head_dim
-        )  # [batch_size * q_length, self.n_heads, d_qk]
+        )  # [batch_size * q_length, self.n_local_q_heads, head_dim]
 
         key_states = key_states.reshape(
-            batch_size * kv_length, self.n_local_q_heads, self.head_dim
-        )  # [batch_size * kv_length, self.n_heads, d_qk]
+            batch_size * kv_length, self.n_local_kv_heads, self.head_dim
+        )  # [batch_size * kv_length, self.n_local_kv_heads, head_dim]
         value_states = value_states.reshape(
-            batch_size * kv_length, self.n_local_q_heads, self.head_dim
-        )  # [batch_size * kv_length, self.n_heads, d_v]
+            batch_size * kv_length, self.n_local_kv_heads, self.head_dim
+        )  # [batch_size * kv_length, self.n_local_kv_heads, head_dim]
         attention_output = self.attention(
             query_states=query_states,
             key_states=key_states,
             value_states=value_states,
             q_sequence_mask=q_sequence_mask,
             kv_sequence_mask=kv_sequence_mask,
-        )
+        )  # [batch_size * seq_length, self.n_local_q_heads, head_dim]
 
-        attention_output = attention_output.reshape(
-            batch_size, q_length, self.n_local_q_heads * self.head_dim
-        ).transpose(0, 1)
+        attention_output = attention_output.view(batch_size, q_length, self.n_local_q_heads * self.head_dim).transpose(
+            0, 1
+        )
         output = self.dense(attention_output)
 
         return {"hidden_states": output, "sequence_mask": sequence_mask}
@@ -855,20 +855,12 @@ class FalconForTraining(NanotronModel):
             for name, param in model.named_parameters()
         }, f"Somehow the initialized set of parameters don't match:\n - Expected: { {name for name, _ in model.named_parameters()} }\n - Got: {initialized_parameters}"
 
-        # Synchronize parameters so that the model is consistent
-        for name, param in sorted(model.named_parameters(), key=lambda x: x[0]):
-            # sync across dp
-            dist.all_reduce(param, op=dist.ReduceOp.AVG, group=self.dpg.dp_pg)
-
-        for (_, group_ranks), param in sorted(
-            get_tied_id_to_param(
-                parameters=model.parameters(),
-                root_module=model.module if isinstance(model, DistributedDataParallel) else model,
-            ).items(),
-            key=lambda x: x[0],
-        ):
-            group = self.dpg.world_ranks_to_pg[group_ranks]
-            dist.all_reduce(param, op=dist.ReduceOp.AVG, group=group)
+    @staticmethod
+    def get_embeddings_lm_head_tied_names():
+        return [
+            "transformer.word_embeddings.pp_block.token_embedding.weight",
+            "transformer.lm_head.pp_block.weight",
+        ]
 
     def get_block_compute_costs(self):
         """Computes the compute cost of each block in the model so that we can do a better job of load balancing."""
