@@ -126,7 +126,9 @@ def _test_pipeline_engine(dpg: DistributedProcessGroups, pipeline_engine: Pipeli
     n_micro_batches_per_batch = dpg.pp_pg.size() + 5
 
     batch = [next(data_iterator) for _ in range(n_micro_batches_per_batch)]
-    losses = pipeline_engine.train_batch_iter(model, pg=dpg.pp_pg, batch=batch, grad_accumulator=None)
+    losses = pipeline_engine.train_batch_iter(
+        model, pg=dpg.pp_pg, batch=batch, nb_microbatches=n_micro_batches_per_batch, grad_accumulator=None
+    )
 
     # Equivalent on the reference model
     if has_reference_model:
@@ -357,8 +359,9 @@ def _test_pipeline_engine_with_tensor_that_does_not_require_grad(
     n_micro_batches_per_batch = dpg.pp_pg.size() + 5
 
     batch = [next(data_iterator) for _ in range(n_micro_batches_per_batch)]
-    losses = pipeline_engine.train_batch_iter(model, pg=dpg.pp_pg, batch=batch, grad_accumulator=None)
-
+    losses = pipeline_engine.train_batch_iter(
+        model, pg=dpg.pp_pg, batch=batch, nb_microbatches=n_micro_batches_per_batch, grad_accumulator=None
+    )
     # Equivalent on the reference model
     if has_reference_model:
         reference_losses = []
@@ -770,8 +773,10 @@ def _test_pipeline_engine_diamond(dpg: DistributedProcessGroups, pipeline_engine
     n_micro_batches_per_batch = dpg.pp_pg.size() + 5
 
     batch = [next(data_iterator) for _ in range(n_micro_batches_per_batch)]
-    losses = pipeline_engine.train_batch_iter(model, pg=dpg.pp_pg, batch=batch, grad_accumulator=None)
-
+    losses = pipeline_engine.train_batch_iter(
+        model, pg=dpg.pp_pg, batch=batch, nb_microbatches=n_micro_batches_per_batch, grad_accumulator=None
+    )
+    
     # Equivalent on the reference model
     if has_reference_model:
         reference_losses = []

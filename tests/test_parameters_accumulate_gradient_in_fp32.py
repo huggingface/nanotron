@@ -425,7 +425,9 @@ def _test_tied_weights_sync_with_grad_accum_in_fp32(
 
     ## Reference model iteration step
     def forward_backward_reference(mdl, micro_batch):
-        pipeline_engine.train_batch_iter(mdl, pg=dpg.pp_pg, batch=[micro_batch], grad_accumulator=None)
+        pipeline_engine.train_batch_iter(
+            mdl, pg=dpg.pp_pg, batch=[micro_batch], nb_microbatches=1, grad_accumulator=None
+        )
 
     for accum_step in range(n_micro_batches_per_batch - 1):
         # Forward-Backward
@@ -459,8 +461,9 @@ def _test_tied_weights_sync_with_grad_accum_in_fp32(
         dist.all_reduce(reference_model_accum_ref[name], group=dpg.dp_pg, op=dist.ReduceOp.AVG)
 
     ## Model iteration step
-    pipeline_engine.train_batch_iter(model_ddp, pg=dpg.pp_pg, batch=batch, grad_accumulator=accumulator)
-
+    pipeline_engine.train_batch_iter(
+        model_ddp, pg=dpg.pp_pg, batch=batch, nb_microbatches=n_micro_batches_per_batch, grad_accumulator=accumulator
+    )
     for name, param in model_ddp.module.named_parameters():
         if param.is_tied:
             tied_info = param.get_tied_info()
