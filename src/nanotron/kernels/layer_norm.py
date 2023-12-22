@@ -171,12 +171,8 @@ class FusedLayerNorm(nn.Module):
 
         if self.no_persist_layer_norm:
             from apex.normalization.fused_layer_norm import FusedLayerNormAffineFunction
-
-            # NOTE: memory_efficient is required for
-            # apex version https://github.com/NVIDIA/apex/commit/2386a912164b0c5cfcd8be7a2b890fbac5607c82
-            MEMORY_EFFICIENT = True
             return FusedLayerNormAffineFunction.apply(
-                input, weight, self.bias, self.normalized_shape, self.eps, MEMORY_EFFICIENT
+                input, weight, self.bias, self.normalized_shape, self.eps
             )
         else:
             from apex.contrib.layer_norm.layer_norm import FastLayerNormFN
