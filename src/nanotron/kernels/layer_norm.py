@@ -25,13 +25,19 @@ from torch.nn.parameter import Parameter
 
 
 def _is_fast_layer_norm_available() -> bool:
-    fast_layer_norm_module = importlib.util.find_spec("apex.contrib.layer_norm.layer_norm")
-    return fast_layer_norm_module is not None
+    try:
+        fast_layer_norm_module = importlib.util.find_spec("apex.contrib.layer_norm.layer_norm")
+        return fast_layer_norm_module is not None
+    except:
+        return False
 
 
 def _is_fused_layer_norm_available() -> bool:
-    fused_layer_norm_module = importlib.util.find_spec("apex.normalization.fused_layer_norm")
-    return fused_layer_norm_module is not None
+    try:
+        fused_layer_norm_module = importlib.util.find_spec("apex.normalization.fused_layer_norm")
+        return fused_layer_norm_module is not None
+    except:
+        return False
 
 
 def _kernel_make_viewless_tensor(inp, requires_grad):
@@ -105,7 +111,7 @@ class FusedLayerNorm(nn.Module):
         no_persist_layer_norm: bool = True,
         apply_layernorm_1p: bool = False,
     ):
-        super(FusedLayerNorm, self).__init__()
+        super().__init__()
         # List of hiddens sizes supported in the persistentlayer norm kernel
         # If the hidden size is not supported, fall back to the non-persistent
         # kernel.
@@ -182,5 +188,4 @@ class FusedLayerNorm(nn.Module):
             # deallocate_output_tensor() throwing an error, so a viewless tensor is
             # created to prevent this.
             output = _make_viewless_tensor(inp=output, requires_grad=input.requires_grad, keep_graph=True)
-
             return output

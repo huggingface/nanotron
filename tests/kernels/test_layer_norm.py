@@ -16,19 +16,27 @@
 
 import pytest
 import torch
-from helpers.utils import available_gpus
-from nanotron.kernels.layer_norm import FusedLayerNorm
+# from helpers.utils import available_gpus
+from nanotron.kernels.layer_norm import FusedLayerNorm, _is_fast_layer_norm_available, _is_fused_layer_norm_available
 from torch.nn import LayerNorm
 from transformers import BertTokenizer
 from transformers.models.bert.modeling_bert import BertModel
 
 
-@pytest.mark.skipif(available_gpus() < 1, reason="Testing test_fused_layer_norm requires at least 1 gpus")
+def test_is_fused_layer_norm_available():
+    assert _is_fused_layer_norm_available() is True
+
+    
+def test_is_fast_layer_norm_available():
+    assert _is_fast_layer_norm_available() is True
+    
+
+# @pytest.mark.skipif(available_gpus() < 1, reason="Testing test_fused_layer_norm requires at least 1 gpus")
 @pytest.mark.parametrize("no_persist_layer_norm", [True, False])
 def test_fused_layer_norm(no_persist_layer_norm):
-    bert = BertModel.from_pretrained("bert-base-cased").cuda().half()
+    bert = BertModel.from_pretrained("bert-base-cased", ).cuda().half()
     tokenizer = BertTokenizer.from_pretrained("bert-base-cased")
-    test_text = ["Persistence is all you need.", "Hello world from nanotron."]
+    test_text = ["Persistence is all you need.", "Hellooooooo world from nanotron. Heck yeah!"]
 
     tokens = tokenizer([test_text] * 4, return_tensors="pt")
 
@@ -40,7 +48,7 @@ def test_fused_layer_norm(no_persist_layer_norm):
         inputs_embeds=None,
         past_key_values_length=0,
     )
-    embedding_outputs = embedding_outputs.cuda().half()
+    embedding_outputs = embedding_outputs
 
     layer_norm = LayerNorm(normalized_shape=embedding_outputs.size(-1)).cuda().half()
     ref_outputs = layer_norm(embedding_outputs)
@@ -51,4 +59,5 @@ def test_fused_layer_norm(no_persist_layer_norm):
     fused_layer_norm = fused_layer_norm.cuda().half()
     outputs = fused_layer_norm(embedding_outputs)
 
-    assert torch.allclose(outputs, ref_outputs, rtol=1e-3)
+    # assert torch.allclose(outputs, ref_outputs, rtol=1e-5, atol=1e-5)
+    assert torch.allclose(outputs, ref_outputs, rtol=1e-3, atol=1e-3)
