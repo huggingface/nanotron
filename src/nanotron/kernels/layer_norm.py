@@ -49,8 +49,8 @@ class FusedLayerNorm(nn.Module):
         eps: float = 1e-5,
         no_persist_layer_norm: bool = True,
         apply_layernorm_1p: bool = False,
-        device: torch.device = torch.device("cpu"),
-        dtype: Optional[torch.dtype] = torch.float32,
+        device: torch.device = torch.device("cuda:0"),
+        dtype: Optional[torch.dtype] = torch.float16,
     ):
         super().__init__()
         # NOTE: List of hiddens sizes supported in the persistentlayer norm kernel
