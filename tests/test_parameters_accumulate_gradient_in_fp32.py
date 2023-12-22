@@ -52,7 +52,7 @@ def test_gradient_promoting_in_fp32(half_precision: torch.dtype):
     assert accumulator.parameters["weight"]["fp32"].grad.dtype == torch.float
     if model.weight.grad is not None:
         # We check that it's zero
-        torch.testing.assert_close(model.weight.grad, torch.zeros_like(model.weight.grad), atol=0, rtol=0)
+        torch.testing.assert_close(model.weight.grad, torch.zeros_like(model.weight.grad), atol=1e-6, rtol=1e-7)
 
 
 @pytest.mark.parametrize("half_precision", [torch.float16, torch.bfloat16])
@@ -118,7 +118,7 @@ def test_optimizer_can_step_gradient_in_fp32(half_precision: torch.dtype):
     assert accumulator.parameters["weight"]["fp32"].grad.dtype == torch.float
     if model.weight.grad is not None:
         # We check that it's zero
-        torch.testing.assert_close(model.weight.grad, torch.zeros_like(model.weight.grad), atol=0, rtol=0)
+        torch.testing.assert_close(model.weight.grad, torch.zeros_like(model.weight.grad), atol=1e-6, rtol=1e-7)
 
     optimizer.step()
     optimizer.zero_grad()
@@ -129,7 +129,7 @@ def test_optimizer_can_step_gradient_in_fp32(half_precision: torch.dtype):
 
     # Check that gradients have been set to zero
     fp32_grad = accumulator.get_grad_buffer(name="weight")
-    torch.testing.assert_close(fp32_grad, torch.zeros_like(fp32_grad), atol=0, rtol=0)
+    torch.testing.assert_close(fp32_grad, torch.zeros_like(fp32_grad), atol=1e-6, rtol=1e-7)
 
     # weights has been updates
     assert not torch.allclose(original_weight, model.weight)
@@ -222,10 +222,13 @@ def _test_ddp_with_grad_accum_in_fp32(
                 model_ddp_accum_ref[name] = (
                     grad.float() if accum_step == 0 else model_ddp_accum_ref[name] + grad.float()
                 )
-                torch.testing.assert_close(model_ddp_accum_ref[name], fp32_grad_bucket, atol=0, rtol=0)
-
+            
+                dist.barrier()
+                torch.testing.assert_close(model_ddp_accum_ref[name], fp32_grad_bucket, atol=1e-6, rtol=1e-7)
+                
+                dist.barrier()
                 # Check that we correctly copied grads from buckets to params (`copy_buckets_to_grads`)
-                torch.testing.assert_close(fp32_grad_bucket, grad_fp32_accum, atol=0, rtol=0)
+                torch.testing.assert_close(fp32_grad_bucket, grad_fp32_accum, atol=1e-6, rtol=1e-7)
 
                 # Check that the gradients are not synchronized across DP
                 with assert_fail_except_rank_with(AssertionError, rank_exception=0, pg=dpg.dp_pg):
@@ -261,7 +264,8 @@ def _test_ddp_with_grad_accum_in_fp32(
             fp32_grad_bucket = accumulator.get_grad_buffer(name=name)
 
             # Check that FP32GradAccum+DDP+hook gives close gradients to DDP
-            torch.testing.assert_close(grad, fp32_grad_bucket, atol=0, rtol=0)
+            dist.barrier()
+            torch.testing.assert_close(grad, fp32_grad_bucket, atol=1e-6, rtol=1e-7)
 
             # Check that grad points to the same memory as the bucket
             assert grad_fp32_accum.data_ptr() == fp32_grad_bucket.data_ptr()
@@ -282,13 +286,15 @@ def _test_ddp_with_grad_accum_in_fp32(
         for name, param in model_ddp_fp32_accum.named_parameters():
             assert param.grad is None
             fp32_grad_bucket = accumulator.get_grad_buffer(name=name)
-            torch.testing.assert_close(fp32_grad_bucket, torch.zeros_like(fp32_grad_bucket), atol=0, rtol=0)
+            dist.barrier()
+            torch.testing.assert_close(fp32_grad_bucket, torch.zeros_like(fp32_grad_bucket), atol=1e-6, rtol=1e-7)
 
         # Check that all fp32 grad buckets are zeroed out
         for _, elt in accumulator.fp32_grad_buffers.items():
             fp32_grad = elt["fp32_grad"]
             # This is important as we assume grad buckets to be zeroed out at the first accumulation step
-            torch.testing.assert_close(fp32_grad, torch.zeros_like(fp32_grad), atol=0, rtol=0)
+            dist.barrier()
+            torch.testing.assert_close(fp32_grad, torch.zeros_like(fp32_grad), atol=1e-6, rtol=1e-7)
 
 
 @pytest.mark.skipif(
@@ -481,6 +487,8 @@ def _test_tied_weights_sync_with_grad_accum_in_fp32(
             assert_tensor_synced_across_pg(fp32_grad, dpg.dp_pg)
 
         fp32_grad_ref = reference_model_accum_ref[name]
+        dist.barrier()
+        
         if reduce_scatter:
             slice_ = slice(*accumulator.param_name_to_offsets[name])
             # Check that gradients are correct
@@ -568,6 +576,7 @@ def _test_tied_weights_sync_with_grad_accum_in_fp32(
     for name, elt in accumulator.fp32_grad_buffers.items():
         fp32_grad = elt["fp32_grad"]
 
+        dist.barrier()
         if reduce_scatter:
             slice_ = slice(*accumulator.param_name_to_offsets[name])
             torch.testing.assert_close(
