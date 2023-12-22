@@ -14,11 +14,9 @@ class TimeRecorder:
     def __init__(
         self,
         is_logging: bool = True,
-        save_log: bool = True,
         log_level: Literal["INFO", "DEBUG", "WARNING", "ERROR"] = "INFO",
     ):
         self.is_logging = is_logging
-        self.save_log = save_log
         self.log_level = getattr(logging, log_level)
 
         self._start_events: Dict[Tuple[str, torch.cuda.Stream], torch.cuda.Event] = {}
@@ -52,8 +50,8 @@ class TimeRecorder:
 
         start_event.record(stream)
 
-    def end(self, name: str, stream: torch.cuda.Stream = None):
-        """End recording time in a given stream.
+    def stop(self, name: str, stream: torch.cuda.Stream = None):
+        """Stop recording time in a given stream.
 
         Args:
             name: Name of the event.

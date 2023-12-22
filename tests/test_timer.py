@@ -24,7 +24,7 @@ def test_record_time(stream):
     with torch.cuda.stream(stream):
         hardcore_function()
 
-    timer.end(EVENT_NAME, stream=stream)
+    timer.stop(EVENT_NAME, stream=stream)
 
     elapsed_time = timer.elapsed(EVENT_NAME, stream=stream)
     assert elapsed_time > 0
@@ -37,7 +37,7 @@ def test_logging_in_time_recorder(caplog):
     with caplog.at_level(logging.INFO):
         timer.start(EVENT_NAME)
         hardcore_function()
-        timer.end(EVENT_NAME)
+        timer.stop(EVENT_NAME)
 
         assert "[TimeRecorder]" in caplog.text
 
