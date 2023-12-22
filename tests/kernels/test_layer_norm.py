@@ -32,23 +32,15 @@ def test_is_fast_layer_norm_available():
     
 
 # @pytest.mark.skipif(available_gpus() < 1, reason="Testing test_fused_layer_norm requires at least 1 gpus")
+@pytest.mark.parametrize("hidden_size", [
+    1024, # fused layer norm supports this hidden size
+    1025  # fused layer norm does not support this hidden size
+])
 @pytest.mark.parametrize("no_persist_layer_norm", [True, False])
-def test_fused_layer_norm(no_persist_layer_norm):
-    bert = BertModel.from_pretrained("bert-base-cased", ).cuda().half()
-    tokenizer = BertTokenizer.from_pretrained("bert-base-cased")
-    test_text = ["Persistence is all you need.", "Hellooooooo world from nanotron. Heck yeah!"]
-
-    tokens = tokenizer([test_text] * 4, return_tensors="pt")
-
-    # NOTE: [bsz, seq_len, d_model]
-    embedding_outputs = bert.embeddings(
-        input_ids=tokens["input_ids"].cuda(),
-        position_ids=None,
-        token_type_ids=tokens["token_type_ids"].cuda(),
-        inputs_embeds=None,
-        past_key_values_length=0,
-    )
-    embedding_outputs = embedding_outputs
+def test_fused_layer_norm(hidden_size, no_persist_layer_norm):
+    BATCH_SIZE = 5
+    SEQ_LEN = 128
+    embedding_outputs = torch.rand(BATCH_SIZE, SEQ_LEN, hidden_size).cuda().half()
 
     layer_norm = LayerNorm(normalized_shape=embedding_outputs.size(-1)).cuda().half()
     ref_outputs = layer_norm(embedding_outputs)
@@ -59,5 +51,13 @@ def test_fused_layer_norm(no_persist_layer_norm):
     fused_layer_norm = fused_layer_norm.cuda().half()
     outputs = fused_layer_norm(embedding_outputs)
 
-    # assert torch.allclose(outputs, ref_outputs, rtol=1e-5, atol=1e-5)
     assert torch.allclose(outputs, ref_outputs, rtol=1e-3, atol=1e-3)
+    
+    loss = outputs.sum()
+    ref_loss = ref_outputs.sum()
+    
+    loss.backward()
+    ref_loss.backward()
+    
+    assert torch.allclose(fused_layer_norm.weight.grad, layer_norm.weight.grad, rtol=1e-3)
+    assert torch.allclose(fused_layer_norm.bias.grad, layer_norm.bias.grad, rtol=1e-3)
