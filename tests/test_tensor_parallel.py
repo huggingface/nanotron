@@ -147,7 +147,7 @@ def _test_column_linear(dpg: DistributedProcessGroups, tp_mode: TensorParallelLi
         pytest.param(TensorParallelLinearMode.ALL_REDUCE, False, does_not_raise()),
         pytest.param(TensorParallelLinearMode.REDUCE_SCATTER, False, does_not_raise()),
         pytest.param(TensorParallelLinearMode.REDUCE_SCATTER, True, does_not_raise()),
-        pytest.param(TensorParallelLinearMode.ALL_REDUCE, True, pytest.raises(AssertionError)),
+        pytest.param(TensorParallelLinearMode.ALL_REDUCE, True, pytest.raises(AssertionError, match=r"Cf this: https://github.com/huggingface/nanotron/blob/bf82cded9eef1ba77864b48e65bffefad4076339/src/nanotron/core/parallel/tensor_parallelism/nn.py#L132")),
     ],
 )
 def test_row_linear(
