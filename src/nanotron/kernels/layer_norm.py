@@ -16,19 +16,17 @@
 
 import importlib
 import numbers
-from typing import List, Union
+from typing import List, Optional, Union
 
 import torch
 import torch.nn as nn
-from torch.nn import init
-from torch.nn.parameter import Parameter
 
 
 def _is_fast_layer_norm_available() -> bool:
     try:
         fast_layer_norm_module = importlib.util.find_spec("apex.contrib.layer_norm.layer_norm")
         return fast_layer_norm_module is not None
-    except:
+    except ImportError:
         return False
 
 
@@ -36,67 +34,8 @@ def _is_fused_layer_norm_available() -> bool:
     try:
         fused_layer_norm_module = importlib.util.find_spec("apex.normalization.fused_layer_norm")
         return fused_layer_norm_module is not None
-    except:
+    except ImportError:
         return False
-
-
-def _kernel_make_viewless_tensor(inp, requires_grad):
-    """Make a viewless tensor.
-
-    View tensors have the undesirable side-affect of retaining a reference
-    to the originally-viewed tensor, even after manually setting the '.data'
-    field. This method creates a new tensor that links to the old tensor's
-    data, without linking the viewed tensor, referenced via the '._base'
-    field.
-    """
-    out = torch.empty(
-        (1,),
-        dtype=inp.dtype,
-        device=inp.device,
-        requires_grad=requires_grad,
-    )
-    out.data = inp.data
-    return out
-
-
-class _MakeViewlessTensor(torch.autograd.Function):
-    """
-    Autograd function to make a viewless tensor.
-
-    This function should be used in cases where the computation graph needs
-    to be propagated, but we only want a viewless tensor (e.g.,
-    ParallelTransformer's hidden_states). Call this function by passing
-    'keep_graph = True' to 'make_viewless_tensor()'.
-    """
-
-    @staticmethod
-    def forward(ctx, inp, requires_grad):
-        return _kernel_make_viewless_tensor(inp, requires_grad)
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        return grad_output, None
-
-
-def _make_viewless_tensor(inp, requires_grad, keep_graph):
-    """
-    Entry-point for creating viewless tensors.
-
-    This method should be used, rather than calling 'MakeViewlessTensor'
-    or '_kernel_make_viewless_tensor' directly. This method acts as a
-    switch for determining if an autograd function or a regular method
-    should be used to create the tensor.
-    """
-
-    # return tensor as-is, if not a 'view'
-    if inp._base is None:
-        return inp
-
-    # create viewless tensor
-    if keep_graph:
-        return _MakeViewlessTensor.apply(inp, requires_grad)
-    else:
-        return _kernel_make_viewless_tensor(inp, requires_grad)
 
 
 class FusedLayerNorm(nn.Module):
@@ -110,11 +49,13 @@ class FusedLayerNorm(nn.Module):
         eps: float = 1e-5,
         no_persist_layer_norm: bool = True,
         apply_layernorm_1p: bool = False,
+        device: torch.device = torch.device("cpu"),
+        dtype: Optional[torch.dtype] = torch.float32,
     ):
         super().__init__()
-        # List of hiddens sizes supported in the persistentlayer norm kernel
-        # If the hidden size is not supported, fall back to the non-persistent
-        # kernel.
+        # NOTE: List of hiddens sizes supported in the persistentlayer norm kernel
+        # If the hidden size is not supported, fall back to
+        # the non-persistent kernel.
         persist_ln_hidden_sizes = [
             1024,
             1536,
@@ -153,35 +94,18 @@ class FusedLayerNorm(nn.Module):
         self.apply_layernorm_1p = apply_layernorm_1p
         self.normalized_shape = torch.Size(normalized_shape)
         self.eps = eps
-        self.weight = Parameter(torch.Tensor(*normalized_shape))
-        self.bias = Parameter(torch.Tensor(*normalized_shape))
+        self.weight = nn.Parameter(torch.ones(*normalized_shape, device=device, dtype=dtype))
+        self.bias = nn.Parameter(torch.zeros(*normalized_shape, device=device, dtype=dtype))
         self.no_persist_layer_norm = no_persist_layer_norm
-        self.reset_parameters()
-
-    def reset_parameters(self):
-        if self.apply_layernorm_1p:
-            init.zeros_(self.weight)
-            init.zeros_(self.bias)
-        else:
-            init.ones_(self.weight)
-            init.zeros_(self.bias)
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         weight = self.weight + 1 if self.apply_layernorm_1p else self.weight
 
         if self.no_persist_layer_norm:
             from apex.normalization.fused_layer_norm import FusedLayerNormAffineFunction
-            return FusedLayerNormAffineFunction.apply(
-                input, weight, self.bias, self.normalized_shape, self.eps
-            )
+
+            return FusedLayerNormAffineFunction.apply(input, weight, self.bias, self.normalized_shape, self.eps)
         else:
             from apex.contrib.layer_norm.layer_norm import FastLayerNormFN
 
-            output = FastLayerNormFN.apply(input, weight, self.bias, self.eps)
-
-            # Apex's fast layer norm function outputs a 'view' tensor (i.e., has
-            # a populated '_base' field). This will result in schedule.py's
-            # deallocate_output_tensor() throwing an error, so a viewless tensor is
-            # created to prevent this.
-            output = _make_viewless_tensor(inp=output, requires_grad=input.requires_grad, keep_graph=True)
-            return output
+            return FastLayerNormFN.apply(input, weight, self.bias, self.eps)
