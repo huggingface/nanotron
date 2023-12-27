@@ -16,8 +16,8 @@
 
 import pytest
 import torch
+from brrr.kernels.layer_norm import FusedLayerNorm, _is_fast_layer_norm_available, _is_fused_layer_norm_available
 from helpers.utils import available_gpus
-from nanotron.kernels.layer_norm import FusedLayerNorm, _is_fast_layer_norm_available, _is_fused_layer_norm_available
 from torch.nn import LayerNorm
 
 
@@ -39,26 +39,23 @@ def test_fused_layer_norm(hidden_size, no_persist_layer_norm):
     BATCH_SIZE = 5
     SEQ_LEN = 128
     DEVICE, DTYPE = torch.device("cuda:0"), torch.float16
-    embedding_outputs = torch.rand(BATCH_SIZE, SEQ_LEN, hidden_size, device=DEVICE, dtype=DTYPE)
+    inputs = torch.rand(BATCH_SIZE, SEQ_LEN, hidden_size, device=DEVICE, dtype=DTYPE)
 
-    layer_norm = LayerNorm(normalized_shape=embedding_outputs.size(-1), device=DEVICE, dtype=DTYPE)
-    ref_outputs = layer_norm(embedding_outputs)
+    layer_norm = LayerNorm(normalized_shape=inputs.size(-1), device=DEVICE, dtype=DTYPE)
+    ref_outputs = layer_norm(inputs)
 
     fused_layer_norm = FusedLayerNorm(
-        normalized_shape=embedding_outputs.size(-1),
+        normalized_shape=inputs.size(-1),
         no_persist_layer_norm=no_persist_layer_norm,
         device=DEVICE,
         dtype=DTYPE,
     )
-    fused_layer_norm = fused_layer_norm.cuda().half()
-    outputs = fused_layer_norm(embedding_outputs)
+    outputs = fused_layer_norm(inputs)
 
     assert torch.allclose(outputs, ref_outputs, rtol=1e-3, atol=1e-3)
 
-    loss = outputs.sum()
-    ref_loss = ref_outputs.sum()
-    loss.backward()
-    ref_loss.backward()
+    outputs.sum().backward()
+    ref_outputs.sum().backward()
 
     assert torch.allclose(fused_layer_norm.weight.grad, layer_norm.weight.grad, rtol=1e-3)
     assert torch.allclose(fused_layer_norm.bias.grad, layer_norm.bias.grad, rtol=1e-3)
