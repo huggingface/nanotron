@@ -16,8 +16,8 @@ from nanotron.core.parallel.pipeline_parallelism.tensor_pointer import TensorPoi
 from nanotron.core.parallel.tensor_parallelism import nn
 from nanotron.core.parallel.tensor_parallelism.enum import TensorParallelLinearMode
 from nanotron.core.parallel.tied_parameters import sync_tied_weights_gradients
-from nanotron.core.process_groups import DistributedProcessGroups, RandomStates
-from nanotron.core.random import branch_random_state, get_current_random_state, get_synced_random_state
+from nanotron.core.process_groups import DistributedProcessGroups
+from nanotron.core.random import branch_random_state, get_current_random_state, get_synced_random_state, RandomStates
 from torch import nn as torch_nn
 from torch.nn.parallel import DistributedDataParallel
 
