@@ -61,9 +61,9 @@ def _test_zero_optimizer(dpg: DistributedProcessGroups):
         old_named_params = {name: param.detach().clone() for name, param in model.named_parameters()}
 
         # Run forward/backward
-        losses = pipeline_engine.train_batch_iter(model=model, pg=dpg.pp_pg, batch=batch, grad_accumulator=None)
+        losses = pipeline_engine.train_batch_iter(model=model, pg=dpg.pp_pg, batch=batch, nb_microbatches=1, grad_accumulator=None)
         ref_losses = pipeline_engine.train_batch_iter(
-            model=reference_model, pg=dpg.pp_pg, batch=batch, grad_accumulator=None
+            model=reference_model, pg=dpg.pp_pg, batch=batch, nb_microbatches=1, grad_accumulator=None
         )
 
         # Check loss match
