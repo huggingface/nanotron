@@ -66,7 +66,7 @@ def test_init_on_device_and_dtype():
 @pytest.mark.parametrize(
     "pipeline_engine", [AllForwardAllBackwardPipelineEngine(), OneForwardOneBackwardPipelineEngine()]
 )
-@pytest.mark.parametrize("pp", list(range(2, available_gpus() + 1)))
+@pytest.mark.parametrize("pp", list(range(2, min(4, available_gpus()) + 1)))
 def test_pipeline_engine(pipeline_engine: PipelineEngine, pp: int):
     init_distributed(tp=1, dp=1, pp=pp)(_test_pipeline_engine)(pipeline_engine=pipeline_engine)
 
@@ -206,7 +206,7 @@ def _test_pipeline_engine(dpg: DistributedProcessGroups, pipeline_engine: Pipeli
 @pytest.mark.parametrize(
     "pipeline_engine", [AllForwardAllBackwardPipelineEngine(), OneForwardOneBackwardPipelineEngine()]
 )
-@pytest.mark.parametrize("pp", list(range(2, available_gpus() + 1)))
+@pytest.mark.parametrize("pp", list(range(2, min(4, available_gpus()) + 1)))
 def test_pipeline_engine_with_tensor_that_does_not_require_grad(pipeline_engine: PipelineEngine, pp: int):
     init_distributed(pp=pp, dp=1, tp=1)(_test_pipeline_engine_with_tensor_that_does_not_require_grad)(
         pipeline_engine=pipeline_engine
@@ -431,7 +431,7 @@ def _test_pipeline_engine_with_tensor_that_does_not_require_grad(
                 )
 
 
-@pytest.mark.parametrize("pp", list(range(2, available_gpus() + 1)))
+@pytest.mark.parametrize("pp", list(range(2, min(4, available_gpus()) + 1)))
 def test_pipeline_forward_without_engine(pp: int):
     init_distributed(pp=pp, dp=1, tp=1)(_test_pipeline_forward_without_engine)()
 

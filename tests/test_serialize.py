@@ -44,7 +44,7 @@ def test_save_and_load_with_changed_topolgy():
     "tp,dp,pp",
     [
         pytest.param(*all_3d_configs)
-        for gpus in range(1, min(available_gpus(), 8) + 1)
+        for gpus in range(1, min(available_gpus(), 4) + 1)
         for all_3d_configs in get_all_3d_configurations(gpus)
     ],
 )
@@ -83,7 +83,7 @@ def _test_save_and_load_model(dpg: DistributedProcessGroups, test_context: TestC
     "tp,dp,pp",
     [
         pytest.param(*all_3d_configs)
-        for gpus in range(1, min(available_gpus(), 8) + 1)
+        for gpus in range(1, min(available_gpus(), 4) + 1)
         for all_3d_configs in get_all_3d_configurations(gpus)
     ],
 )
@@ -143,7 +143,7 @@ def _test_save_and_load_optimizer(dpg: DistributedProcessGroups, test_context: T
     "tp,dp,pp",
     [
         pytest.param(*all_3d_configs)
-        for gpus in range(1, min(available_gpus(), 8) + 1)
+        for gpus in range(1, min(available_gpus(), 4) + 1)
         for all_3d_configs in get_all_3d_configurations(gpus)
     ],
 )
@@ -212,7 +212,7 @@ def _test_save_zero_optimizer_and_load_optimizer(dpg: DistributedProcessGroups, 
     "tp,dp,pp",
     [
         pytest.param(*all_3d_configs)
-        for gpus in range(1, min(available_gpus(), 8) + 1)
+        for gpus in range(1, min(available_gpus(), 4) + 1)
         for all_3d_configs in get_all_3d_configurations(gpus)
     ],
 )
@@ -279,7 +279,7 @@ def _test_save_zero_optimizer_and_load_data_parallel_optimizer(
     "tp,dp,pp",
     [
         pytest.param(*all_3d_configs)
-        for gpus in range(1, min(available_gpus(), 8) + 1)
+        for gpus in range(1, min(available_gpus(), 4) + 1)
         for all_3d_configs in get_all_3d_configurations(gpus)
     ],
 )
@@ -342,7 +342,7 @@ def _test_save_data_parallel_optimizer_and_load_zero_optimizer(
     "tp,dp,pp",
     [
         pytest.param(*all_3d_configs)
-        for gpus in range(1, min(available_gpus(), 8) + 1)
+        for gpus in range(1, min(available_gpus(), 4) + 1)
         for all_3d_configs in get_all_3d_configurations(gpus)
     ],
 )

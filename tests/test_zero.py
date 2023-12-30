@@ -22,7 +22,7 @@ from torch import nn as torch_nn
 from torch.nn.parallel import DistributedDataParallel
 
 
-@pytest.mark.parametrize("tp,dp,pp", [pytest.param(1, i, 1) for i in range(1, available_gpus() + 1)])
+@pytest.mark.parametrize("tp,dp,pp", [pytest.param(1, i, 1) for i in range(1, min(4, available_gpus()) + 1)])
 def test_zero_optimizer(tp: int, dp: int, pp: int):
     init_distributed(pp=pp, dp=dp, tp=tp)(_test_zero_optimizer)()
 

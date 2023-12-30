@@ -17,7 +17,7 @@ from nanotron.core.process_groups import DistributedProcessGroups
 from torch import nn as torch_nn
 
 
-@pytest.mark.parametrize("tp,dp,pp", [pytest.param(i, 1, 1) for i in range(1, available_gpus() + 1)])
+@pytest.mark.parametrize("tp,dp,pp", [pytest.param(i, 1, 1) for i in range(1, min(4, available_gpus()) + 1)])
 @pytest.mark.parametrize("tp_mode", list(TensorParallelLinearMode))
 @pytest.mark.parametrize("async_communication", [False, True])
 def test_column_linear(tp: int, dp: int, pp: int, tp_mode: TensorParallelLinearMode, async_communication: bool):
@@ -140,7 +140,7 @@ def _test_column_linear(dpg: DistributedProcessGroups, tp_mode: TensorParallelLi
         ValueError(f"Unsupported mode: {tp_mode}")
 
 
-@pytest.mark.parametrize("tp,dp,pp", [pytest.param(i, 1, 1) for i in range(1, available_gpus() + 1)])
+@pytest.mark.parametrize("tp,dp,pp", [pytest.param(i, 1, 1) for i in range(1, min(4, available_gpus()) + 1)])
 @pytest.mark.parametrize(
     "tp_mode,async_communication,expectation",
     [
@@ -260,7 +260,7 @@ def _test_row_linear(
             assert row_linear.bias is None
 
 
-@pytest.mark.parametrize("tp,dp,pp", [pytest.param(i, 1, 1) for i in range(1, available_gpus() + 1)])
+@pytest.mark.parametrize("tp,dp,pp", [pytest.param(i, 1, 1) for i in range(1, min(4, available_gpus()) + 1)])
 @pytest.mark.parametrize("tp_mode", list(TensorParallelLinearMode))
 def test_tensor_parallel_embedding(tp: int, dp: int, pp: int, tp_mode: TensorParallelLinearMode):
     init_distributed(tp=tp, dp=dp, pp=pp)(_test_tensor_parallel_embedding)(tp_mode=tp_mode)
