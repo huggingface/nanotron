@@ -71,9 +71,9 @@ def _test_zero_optimizer(dpg: DistributedProcessGroups):
         ref_losses = list(ref_losses)
         assert len(losses) == len(ref_losses)
         for loss, ref_loss in zip(losses, ref_losses):
-            assert isinstance(loss, torch.Tensor)
-            assert isinstance(ref_loss, torch.Tensor)
-            torch.testing.assert_close(loss, ref_loss, atol=0, rtol=0, msg=lambda msg: f"At iteration {i}, {msg}")
+            assert isinstance(loss["loss"], torch.Tensor)
+            assert isinstance(ref_loss["loss"], torch.Tensor)
+            torch.testing.assert_close(loss["loss"], ref_loss["loss"], atol=0, rtol=0, msg=lambda msg: f"At iteration {i}, {msg}")
 
         # Manually sync tied parameters' gradients
         sync_tied_weights_gradients(module=model, dpg=dpg, grad_accumulator=None)
