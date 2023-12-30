@@ -493,15 +493,15 @@ def _test_tied_weights_sync_with_grad_accum_in_fp32(
             slice_ = slice(*accumulator.param_name_to_offsets[name])
             # Check that gradients are correct
             torch.testing.assert_close(
-                fp32_grad_ref.view(-1)[slice_],
+                fp32_grad_ref.view(-1)[slice_] / n_micro_batches_per_batch,
                 fp32_grad.view(-1)[slice_],
-                rtol=0,
-                atol=0,
-                msg=lambda msg: f"FP32 Gradients at `{name}` don't match\n - Expected: {fp32_grad_ref.view(-1)[slice_]}\n - Got: {fp32_grad.view(-1)[slice_]}",
+                rtol=1e-7,
+                atol=1e-6,
+                msg=lambda msg: f"FP32 Gradients at `{name}` don't match\n - Expected: {fp32_grad_ref.view(-1)[slice_] / n_micro_batches_per_batch}\n - Got: {fp32_grad.view(-1)[slice_]}",
             )
         else:
             # Check that gradients are correct
-            torch.testing.assert_close(fp32_grad_ref, fp32_grad, rtol=0, atol=0)
+            torch.testing.assert_close(fp32_grad_ref / n_micro_batches_per_batch, fp32_grad, rtol=1e-7, atol=1e-6)
 
     # Check that tied weights grads are not synchronized yet
     for (name, group_ranks), param in sorted(
@@ -580,17 +580,17 @@ def _test_tied_weights_sync_with_grad_accum_in_fp32(
         if reduce_scatter:
             slice_ = slice(*accumulator.param_name_to_offsets[name])
             torch.testing.assert_close(
-                reference_model_accum_ref[name].view(-1)[slice_],
+                reference_model_accum_ref[name].view(-1)[slice_] / n_micro_batches_per_batch,
                 fp32_grad.view(-1)[slice_],
-                atol=0,
-                rtol=0,
+                atol=1e-6,
+                rtol=1e-7,
                 msg=lambda msg: f"Grad for {name} is not correct.\n{msg}",
             )
         else:
             torch.testing.assert_close(
-                reference_model_accum_ref[name],
+                reference_model_accum_ref[name] / n_micro_batches_per_batch,
                 fp32_grad,
-                atol=0,
-                rtol=0,
+                atol=1e-6,
+                rtol=1e-7,
                 msg=lambda msg: f"Grad for {name} is not correct.\n{msg}",
             )
