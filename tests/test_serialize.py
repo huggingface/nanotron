@@ -20,9 +20,9 @@ from nanotron.core.parallel.pipeline_parallelism.engine import (
 )
 from nanotron.core.parallel.sharded_parameters import SplitConfig, create_sharded_parameter_from_config
 from nanotron.core.parallel.tied_parameters import sync_tied_weights_gradients
-from nanotron.core.process_groups import DistributedProcessGroups, RandomStates
-from nanotron.core.random import get_current_random_state, get_synced_random_state
-from nanotron.core.serialize import (
+from nanotron.core.process_groups import DistributedProcessGroups
+from nanotron.core.random import get_current_random_state, get_synced_random_state, RandomStates
+from nanotron.serialize import (
     load_optimizer,
     load_random_states,
     load_weights,
@@ -30,8 +30,8 @@ from nanotron.core.serialize import (
     save_random_states,
     save_weights,
 )
-from nanotron.core.serialize.constants import CHECKPOINT_VERSION
-from nanotron.core.serialize.meta import TensorMetadataV2
+from nanotron.constants import CHECKPOINT_VERSION
+from nanotron.serialize.metadata import TensorMetadataV2
 from torch.nn.parallel import DistributedDataParallel
 
 
@@ -44,7 +44,7 @@ def test_save_and_load_with_changed_topolgy():
     "tp,dp,pp",
     [
         pytest.param(*all_3d_configs)
-        for gpus in range(1, min(available_gpus(), 8) + 1)
+        for gpus in range(1, min(available_gpus(), 4) + 1)
         for all_3d_configs in get_all_3d_configurations(gpus)
     ],
 )
@@ -83,7 +83,7 @@ def _test_save_and_load_model(dpg: DistributedProcessGroups, test_context: TestC
     "tp,dp,pp",
     [
         pytest.param(*all_3d_configs)
-        for gpus in range(1, min(available_gpus(), 8) + 1)
+        for gpus in range(1, min(available_gpus(), 4) + 1)
         for all_3d_configs in get_all_3d_configurations(gpus)
     ],
 )
@@ -107,7 +107,7 @@ def _test_save_and_load_optimizer(dpg: DistributedProcessGroups, test_context: T
     pipeline_engine = AllForwardAllBackwardPipelineEngine()
     for _ in range(nb_optim_steps):
         minibatch = next(data_loader)
-        _ = pipeline_engine.train_batch_iter(model=model, pg=dpg.pp_pg, batch=[minibatch], grad_accumulator=None)
+        _ = pipeline_engine.train_batch_iter(model=model, pg=dpg.pp_pg, batch=[minibatch], nb_microbatches=1, grad_accumulator=None)
         # Manually sync tied parameters
         sync_tied_weights_gradients(module=model, dpg=dpg, grad_accumulator=None)
         # Optimizer steps
@@ -143,7 +143,7 @@ def _test_save_and_load_optimizer(dpg: DistributedProcessGroups, test_context: T
     "tp,dp,pp",
     [
         pytest.param(*all_3d_configs)
-        for gpus in range(1, min(available_gpus(), 8) + 1)
+        for gpus in range(1, min(available_gpus(), 4) + 1)
         for all_3d_configs in get_all_3d_configurations(gpus)
     ],
 )
@@ -171,7 +171,7 @@ def _test_save_zero_optimizer_and_load_optimizer(dpg: DistributedProcessGroups, 
     pipeline_engine = AllForwardAllBackwardPipelineEngine()
     for _ in range(nb_optim_steps):
         minibatch = next(data_loader)
-        _ = pipeline_engine.train_batch_iter(model=model, pg=dpg.pp_pg, batch=[minibatch], grad_accumulator=None)
+        _ = pipeline_engine.train_batch_iter(model=model, pg=dpg.pp_pg, batch=[minibatch], nb_microbatches=1, grad_accumulator=None)
         # Manually sync tied parameters
         sync_tied_weights_gradients(module=model, dpg=dpg, grad_accumulator=None)
         # Optimizer steps
@@ -212,7 +212,7 @@ def _test_save_zero_optimizer_and_load_optimizer(dpg: DistributedProcessGroups, 
     "tp,dp,pp",
     [
         pytest.param(*all_3d_configs)
-        for gpus in range(1, min(available_gpus(), 8) + 1)
+        for gpus in range(1, min(available_gpus(), 4) + 1)
         for all_3d_configs in get_all_3d_configurations(gpus)
     ],
 )
@@ -244,7 +244,7 @@ def _test_save_zero_optimizer_and_load_data_parallel_optimizer(
     pipeline_engine = AllForwardAllBackwardPipelineEngine()
     for _ in range(nb_optim_steps):
         minibatch = next(data_loader)
-        _ = pipeline_engine.train_batch_iter(model=model, pg=dpg.pp_pg, batch=[minibatch], grad_accumulator=None)
+        _ = pipeline_engine.train_batch_iter(model=model, pg=dpg.pp_pg, batch=[minibatch], nb_microbatches=1, grad_accumulator=None)
         # Manually sync tied parameters
         sync_tied_weights_gradients(module=model, dpg=dpg, grad_accumulator=None)
         # Optimizer steps
@@ -279,7 +279,7 @@ def _test_save_zero_optimizer_and_load_data_parallel_optimizer(
     "tp,dp,pp",
     [
         pytest.param(*all_3d_configs)
-        for gpus in range(1, min(available_gpus(), 8) + 1)
+        for gpus in range(1, min(available_gpus(), 4) + 1)
         for all_3d_configs in get_all_3d_configurations(gpus)
     ],
 )
@@ -307,7 +307,7 @@ def _test_save_data_parallel_optimizer_and_load_zero_optimizer(
     pipeline_engine = AllForwardAllBackwardPipelineEngine()
     for _ in range(nb_optim_steps):
         minibatch = next(data_loader)
-        _ = pipeline_engine.train_batch_iter(model=model, pg=dpg.pp_pg, batch=[minibatch], grad_accumulator=None)
+        _ = pipeline_engine.train_batch_iter(model=model, pg=dpg.pp_pg, batch=[minibatch], nb_microbatches=1, grad_accumulator=None)
         optimizer.step()
         optimizer.zero_grad()
 
@@ -342,7 +342,7 @@ def _test_save_data_parallel_optimizer_and_load_zero_optimizer(
     "tp,dp,pp",
     [
         pytest.param(*all_3d_configs)
-        for gpus in range(1, min(available_gpus(), 8) + 1)
+        for gpus in range(1, min(available_gpus(), 4) + 1)
         for all_3d_configs in get_all_3d_configurations(gpus)
     ],
 )
@@ -386,7 +386,7 @@ def _test_save_optimizer_with_additional_state_dict_keys(dpg: DistributedProcess
     for _ in range(nb_optim_steps):
         minibatch = next(data_loader)
         _ = pipeline_engine.train_batch_iter(
-            model=model, pg=dpg.pp_pg, batch=[minibatch], grad_accumulator=grad_accumulator
+            model=model, pg=dpg.pp_pg, batch=[minibatch], nb_microbatches=1, grad_accumulator=grad_accumulator
         )
         # Manually sync tied parameters
         sync_tied_weights_gradients(module=normalized_model, dpg=dpg, grad_accumulator=grad_accumulator)

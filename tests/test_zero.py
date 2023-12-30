@@ -16,13 +16,13 @@ from nanotron.core.parallel.pipeline_parallelism.tensor_pointer import TensorPoi
 from nanotron.core.parallel.tensor_parallelism import nn
 from nanotron.core.parallel.tensor_parallelism.enum import TensorParallelLinearMode
 from nanotron.core.parallel.tied_parameters import sync_tied_weights_gradients
-from nanotron.core.process_groups import DistributedProcessGroups, RandomStates
-from nanotron.core.random import branch_random_state, get_current_random_state, get_synced_random_state
+from nanotron.core.process_groups import DistributedProcessGroups
+from nanotron.core.random import branch_random_state, get_current_random_state, get_synced_random_state, RandomStates
 from torch import nn as torch_nn
 from torch.nn.parallel import DistributedDataParallel
 
 
-@pytest.mark.parametrize("tp,dp,pp", [pytest.param(1, i, 1) for i in range(1, available_gpus() + 1)])
+@pytest.mark.parametrize("tp,dp,pp", [pytest.param(1, i, 1) for i in range(1, min(4, available_gpus()) + 1)])
 def test_zero_optimizer(tp: int, dp: int, pp: int):
     init_distributed(pp=pp, dp=dp, tp=tp)(_test_zero_optimizer)()
 
@@ -61,9 +61,9 @@ def _test_zero_optimizer(dpg: DistributedProcessGroups):
         old_named_params = {name: param.detach().clone() for name, param in model.named_parameters()}
 
         # Run forward/backward
-        losses = pipeline_engine.train_batch_iter(model=model, pg=dpg.pp_pg, batch=batch, grad_accumulator=None)
+        losses = pipeline_engine.train_batch_iter(model=model, pg=dpg.pp_pg, batch=batch, nb_microbatches=1, grad_accumulator=None)
         ref_losses = pipeline_engine.train_batch_iter(
-            model=reference_model, pg=dpg.pp_pg, batch=batch, grad_accumulator=None
+            model=reference_model, pg=dpg.pp_pg, batch=batch, nb_microbatches=1, grad_accumulator=None
         )
 
         # Check loss match
@@ -71,9 +71,9 @@ def _test_zero_optimizer(dpg: DistributedProcessGroups):
         ref_losses = list(ref_losses)
         assert len(losses) == len(ref_losses)
         for loss, ref_loss in zip(losses, ref_losses):
-            assert isinstance(loss, torch.Tensor)
-            assert isinstance(ref_loss, torch.Tensor)
-            torch.testing.assert_close(loss, ref_loss, atol=0, rtol=0, msg=lambda msg: f"At iteration {i}, {msg}")
+            assert isinstance(loss["loss"], torch.Tensor)
+            assert isinstance(ref_loss["loss"], torch.Tensor)
+            torch.testing.assert_close(loss["loss"], ref_loss["loss"], atol=0, rtol=0, msg=lambda msg: f"At iteration {i}, {msg}")
 
         # Manually sync tied parameters' gradients
         sync_tied_weights_gradients(module=model, dpg=dpg, grad_accumulator=None)

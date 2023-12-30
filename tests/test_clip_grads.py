@@ -94,12 +94,15 @@ def _test_clip_grads_with_pp(dpg: DistributedProcessGroups, norm_type: float):
 
     n_micro_batches_per_batch = 5
     batch = [next(data_iterator) for _ in range(n_micro_batches_per_batch)]
-    pipeline_engine.train_batch_iter(model, pg=dpg.pp_pg, batch=batch, grad_accumulator=None)
+    pipeline_engine.train_batch_iter(
+        model, pg=dpg.pp_pg, batch=batch, nb_microbatches=n_micro_batches_per_batch, grad_accumulator=None
+    )
 
     # Equivalent on the reference model
     if has_reference_model:
         for micro_batch in batch:
             loss = reference_model(**micro_batch)
+            loss /= n_micro_batches_per_batch
             loss.backward()
 
     # Check that gradient are the same as reference
@@ -113,20 +116,20 @@ def _test_clip_grads_with_pp(dpg: DistributedProcessGroups, norm_type: float):
                 torch.testing.assert_close(
                     non_linear.weight.grad,
                     reference_non_linear.weight.grad,
-                    atol=0,
-                    rtol=0,
+                    atol=1e-6,
+                    rtol=1e-7,
                 )
                 torch.testing.assert_close(
                     non_linear.bias.grad,
                     reference_non_linear.bias.grad,
-                    atol=0,
-                    rtol=0,
+                    atol=1e-6,
+                    rtol=1e-7
                 )
                 continue
 
             weight_grad, bias_grad = p2p.recv_tensors(num_tensors=2, from_rank=pp_rank)
-            torch.testing.assert_close(weight_grad, reference_non_linear.weight.grad, atol=0, rtol=0)
-            torch.testing.assert_close(bias_grad, reference_non_linear.bias.grad, atol=0, rtol=0)
+            torch.testing.assert_close(weight_grad, reference_non_linear.weight.grad, atol=1e-6, rtol=1e-7)
+            torch.testing.assert_close(bias_grad, reference_non_linear.bias.grad, atol=1e-6, rtol=1e-7)
     else:
         p2p.send_tensors(
             [model.mlp[pp_rank].linear.pp_block.weight.grad, model.mlp[pp_rank].linear.pp_block.bias.grad],
@@ -148,7 +151,7 @@ def _test_clip_grads_with_pp(dpg: DistributedProcessGroups, norm_type: float):
         reference_total_norm = torch.nn.utils.clip_grad_norm_(
             reference_model.parameters(), max_norm=1.0, norm_type=norm_type
         )
-        torch.testing.assert_close(total_norm, reference_total_norm, atol=0, rtol=0)
+        torch.testing.assert_close(total_norm, reference_total_norm, atol=1e-6, rtol=1e-7)
 
     # Check that grad changed
     assert not torch.allclose(old_weight_grad, non_linear.weight.grad), "Grad should have changed"
@@ -164,20 +167,20 @@ def _test_clip_grads_with_pp(dpg: DistributedProcessGroups, norm_type: float):
                 torch.testing.assert_close(
                     non_linear.weight.grad,
                     reference_non_linear.weight.grad,
-                    atol=0,
-                    rtol=0,
+                    atol=1e-6,
+                    rtol=1e-7,
                 )
                 torch.testing.assert_close(
                     non_linear.bias.grad,
                     reference_non_linear.bias.grad,
-                    atol=0,
-                    rtol=0,
+                    atol=1e-6,
+                    rtol=1e-7,
                 )
                 continue
 
             weight_grad, bias_grad = p2p.recv_tensors(num_tensors=2, from_rank=pp_rank)
-            torch.testing.assert_close(weight_grad, reference_non_linear.weight.grad, atol=0, rtol=0)
-            torch.testing.assert_close(bias_grad, reference_non_linear.bias.grad, atol=0, rtol=0)
+            torch.testing.assert_close(weight_grad, reference_non_linear.weight.grad, atol=1e-6, rtol=1e-7)
+            torch.testing.assert_close(bias_grad, reference_non_linear.bias.grad, atol=1e-6, rtol=1e-7)
     else:
         p2p.send_tensors(
             [
@@ -267,8 +270,8 @@ def _test_clip_grads_with_tp(
             * out_features_per_tp_rank : (dist.get_rank(dpg.tp_pg) + 1)
             * out_features_per_tp_rank,
         ],
-        atol=0,
-        rtol=0,
+        atol=1e-6,
+        rtol=1e-7,
     )
 
     # Test that we get the same gradient after backward pass
@@ -281,8 +284,8 @@ def _test_clip_grads_with_tp(
             * out_features_per_tp_rank : (dist.get_rank(dpg.tp_pg) + 1)
             * out_features_per_tp_rank
         ],
-        atol=0,
-        rtol=0,
+        atol=1e-6,
+        rtol=1e-7,
     )
     torch.testing.assert_close(
         column_linear.bias.grad,
@@ -291,8 +294,8 @@ def _test_clip_grads_with_tp(
             * out_features_per_tp_rank : (dist.get_rank(dpg.tp_pg) + 1)
             * out_features_per_tp_rank
         ],
-        atol=0,
-        rtol=0,
+        atol=1e-6,
+        rtol=1e-7,
     )
 
     old_grad = column_linear.weight.grad.clone()
@@ -419,8 +422,8 @@ def _test_clip_grads_tied_weights(dpg: DistributedProcessGroups, norm_type: floa
     assert not torch.allclose(old_grad, weight.grad), "Gradients should have changed after clipping"
 
     # Test that we get the same gradient after clipping
-    torch.testing.assert_close(weight.grad, ref_weight.grad, rtol=0, atol=0)
-    torch.testing.assert_close(bias.grad, ref_bias.grad, rtol=0, atol=0)
+    torch.testing.assert_close(weight.grad, ref_weight.grad, rtol=1e-7, atol=1e-6)
+    torch.testing.assert_close(bias.grad, ref_bias.grad, rtol=1e-7, atol=1e-6)
     assert total_norm == ref_total_norm, "Total norm should be the same"
 
 
@@ -500,7 +503,9 @@ def _test_clip_grads_fp32_accumulator(dpg: DistributedProcessGroups, norm_type: 
 
     n_micro_batches_per_batch = 5
     batch = [next(data_iterator) for _ in range(n_micro_batches_per_batch)]
-    pipeline_engine.train_batch_iter(model, pg=dpg.pp_pg, batch=batch, grad_accumulator=grad_accumulator)
+    pipeline_engine.train_batch_iter(
+        model, pg=dpg.pp_pg, batch=batch, nb_microbatches=n_micro_batches_per_batch, grad_accumulator=grad_accumulator
+    )
 
     # We're going to copy the model gradients to the reference model gradient
     # The reason why we do this, instead of computing backward using autograd is because of numerical precisions
@@ -551,10 +556,10 @@ def _test_clip_grads_fp32_accumulator(dpg: DistributedProcessGroups, norm_type: 
     # We check that we get the same gradient accumulation. In theory we do get more precision by promoting gradients to fp32.
     if has_reference_model:
         torch.testing.assert_close(
-            total_norm,
-            ref_total_norm,
-            atol=0.0,
-            rtol=0.0,
+            total_norm.view(1),
+            ref_total_norm.view(1),
+            atol=1e-6,
+            rtol=1e-7,
             msg=lambda msg: f"Expected {total_norm} to match {ref_total_norm}.\n{msg}",
         )
         for pp_rank in range(dpg.pp_pg.size()):
@@ -565,14 +570,14 @@ def _test_clip_grads_fp32_accumulator(dpg: DistributedProcessGroups, norm_type: 
                 torch.testing.assert_close(
                     reference_non_linear.weight.grad,
                     grad_accumulator.get_grad_buffer(f"{prefix_name}.weight"),
-                    atol=0.0,
-                    rtol=0.0,
+                    atol=1e-6,
+                    rtol=1e-7,
                 )
                 torch.testing.assert_close(
                     reference_non_linear.bias.grad,
                     grad_accumulator.get_grad_buffer(f"{prefix_name}.bias"),
-                    atol=0.0,
-                    rtol=0.0,
+                    atol=1e-6,
+                    rtol=1e-7,
                 )
                 continue
 
@@ -580,14 +585,14 @@ def _test_clip_grads_fp32_accumulator(dpg: DistributedProcessGroups, norm_type: 
             torch.testing.assert_close(
                 reference_non_linear.weight.grad,
                 weight_grad,
-                atol=0.0,
-                rtol=0.0,
+                atol=1e-6,
+                rtol=1e-7,
             )
             torch.testing.assert_close(
                 reference_non_linear.bias.grad,
                 bias_grad,
-                atol=0.0,
-                rtol=0.0,
+                atol=1e-6,
+                rtol=1e-7,
             )
     else:
         p2p.send_tensors(

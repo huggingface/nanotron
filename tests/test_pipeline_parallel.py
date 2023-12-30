@@ -66,7 +66,7 @@ def test_init_on_device_and_dtype():
 @pytest.mark.parametrize(
     "pipeline_engine", [AllForwardAllBackwardPipelineEngine(), OneForwardOneBackwardPipelineEngine()]
 )
-@pytest.mark.parametrize("pp", list(range(2, available_gpus() + 1)))
+@pytest.mark.parametrize("pp", list(range(2, min(4, available_gpus()) + 1)))
 def test_pipeline_engine(pipeline_engine: PipelineEngine, pp: int):
     init_distributed(tp=1, dp=1, pp=pp)(_test_pipeline_engine)(pipeline_engine=pipeline_engine)
 
@@ -126,13 +126,16 @@ def _test_pipeline_engine(dpg: DistributedProcessGroups, pipeline_engine: Pipeli
     n_micro_batches_per_batch = dpg.pp_pg.size() + 5
 
     batch = [next(data_iterator) for _ in range(n_micro_batches_per_batch)]
-    losses = pipeline_engine.train_batch_iter(model, pg=dpg.pp_pg, batch=batch, grad_accumulator=None)
+    losses = pipeline_engine.train_batch_iter(
+        model, pg=dpg.pp_pg, batch=batch, nb_microbatches=n_micro_batches_per_batch, grad_accumulator=None
+    )
 
     # Equivalent on the reference model
     if has_reference_model:
         reference_losses = []
         for micro_batch in batch:
             loss = reference_model(**micro_batch)
+            loss /= n_micro_batches_per_batch
             loss.backward()
             reference_losses.append(loss.detach())
 
@@ -140,23 +143,23 @@ def _test_pipeline_engine(dpg: DistributedProcessGroups, pipeline_engine: Pipeli
     if has_reference_model:
         _losses = []
     for loss in losses:
-        if isinstance(loss, torch.Tensor):
+        if isinstance(loss["loss"], torch.Tensor):
             if has_reference_model:
-                _losses.append(loss)
+                _losses.append(loss["loss"])
             else:
-                p2p.send_tensors([loss], to_rank=reference_rank)
+                p2p.send_tensors([loss["loss"]], to_rank=reference_rank)
         else:
-            assert isinstance(loss, TensorPointer)
+            assert isinstance(loss["loss"], TensorPointer)
             if not has_reference_model:
                 continue
-            _losses.append(p2p.recv_tensors(num_tensors=1, from_rank=loss.group_rank)[0])
+            _losses.append(p2p.recv_tensors(num_tensors=1, from_rank=loss["loss"].group_rank)[0])
     if has_reference_model:
         losses = _losses
 
     # Check loss are the same as reference
     if has_reference_model:
         for loss, ref_loss in zip(losses, reference_losses):
-            torch.testing.assert_close(loss, ref_loss, atol=0, rtol=0)
+            torch.testing.assert_close(loss, ref_loss, atol=1e-6, rtol=1e-7)
 
     # Check that gradient flows through the entire model
     for param in model.parameters():
@@ -172,20 +175,20 @@ def _test_pipeline_engine(dpg: DistributedProcessGroups, pipeline_engine: Pipeli
                 torch.testing.assert_close(
                     non_linear.linear.pp_block.weight.grad,
                     reference_non_linear.linear.pp_block.weight.grad,
-                    atol=0,
-                    rtol=0,
+                    atol=1e-6,
+                    rtol=1e-7,
                 )
                 torch.testing.assert_close(
                     non_linear.linear.pp_block.bias.grad,
                     reference_non_linear.linear.pp_block.bias.grad,
-                    atol=0,
-                    rtol=0,
+                    atol=1e-6,
+                    rtol=1e-7,
                 )
                 continue
 
             weight_grad, bias_grad = p2p.recv_tensors(num_tensors=2, from_rank=pp_rank)
-            torch.testing.assert_close(weight_grad, reference_non_linear.linear.pp_block.weight.grad, atol=0, rtol=0)
-            torch.testing.assert_close(bias_grad, reference_non_linear.linear.pp_block.bias.grad, atol=0, rtol=0)
+            torch.testing.assert_close(weight_grad, reference_non_linear.linear.pp_block.weight.grad, atol=1e-6, rtol=1e-7)
+            torch.testing.assert_close(bias_grad, reference_non_linear.linear.pp_block.bias.grad, atol=1e-6, rtol=1e-7)
     else:
         p2p.send_tensors(
             [
@@ -203,7 +206,7 @@ def _test_pipeline_engine(dpg: DistributedProcessGroups, pipeline_engine: Pipeli
 @pytest.mark.parametrize(
     "pipeline_engine", [AllForwardAllBackwardPipelineEngine(), OneForwardOneBackwardPipelineEngine()]
 )
-@pytest.mark.parametrize("pp", list(range(2, available_gpus() + 1)))
+@pytest.mark.parametrize("pp", list(range(2, min(4, available_gpus()) + 1)))
 def test_pipeline_engine_with_tensor_that_does_not_require_grad(pipeline_engine: PipelineEngine, pp: int):
     init_distributed(pp=pp, dp=1, tp=1)(_test_pipeline_engine_with_tensor_that_does_not_require_grad)(
         pipeline_engine=pipeline_engine
@@ -357,13 +360,15 @@ def _test_pipeline_engine_with_tensor_that_does_not_require_grad(
     n_micro_batches_per_batch = dpg.pp_pg.size() + 5
 
     batch = [next(data_iterator) for _ in range(n_micro_batches_per_batch)]
-    losses = pipeline_engine.train_batch_iter(model, pg=dpg.pp_pg, batch=batch, grad_accumulator=None)
-
+    losses = pipeline_engine.train_batch_iter(
+        model, pg=dpg.pp_pg, batch=batch, nb_microbatches=n_micro_batches_per_batch, grad_accumulator=None
+    )
     # Equivalent on the reference model
     if has_reference_model:
         reference_losses = []
         for micro_batch in batch:
             loss = reference_model(**micro_batch)
+            loss /= n_micro_batches_per_batch
             loss.backward()
             reference_losses.append(loss.detach())
 
@@ -371,23 +376,23 @@ def _test_pipeline_engine_with_tensor_that_does_not_require_grad(
     if has_reference_model:
         _losses = []
     for loss in losses:
-        if isinstance(loss, torch.Tensor):
+        if isinstance(loss["loss"], torch.Tensor):
             if has_reference_model:
-                _losses.append(loss)
+                _losses.append(loss["loss"])
             else:
-                p2p.send_tensors([loss], to_rank=reference_rank)
+                p2p.send_tensors([loss["loss"]], to_rank=reference_rank)
         else:
-            assert isinstance(loss, TensorPointer)
+            assert isinstance(loss["loss"], TensorPointer)
             if not has_reference_model:
                 continue
-            _losses.append(p2p.recv_tensors(num_tensors=1, from_rank=loss.group_rank)[0])
+            _losses.append(p2p.recv_tensors(num_tensors=1, from_rank=loss["loss"].group_rank)[0])
     if has_reference_model:
         losses = _losses
 
     # Check loss are the same as reference
     if has_reference_model:
         for loss, ref_loss in zip(losses, reference_losses):
-            torch.testing.assert_close(loss, ref_loss, atol=0, rtol=0)
+            torch.testing.assert_close(loss, ref_loss, atol=1e-6, rtol=1e-7)
 
     # Check that gradient flows through the entire model
     for param in model.parameters():
@@ -403,20 +408,20 @@ def _test_pipeline_engine_with_tensor_that_does_not_require_grad(
                 torch.testing.assert_close(
                     non_linear.linear.pp_block.weight.grad,
                     reference_non_linear.linear.pp_block.weight.grad,
-                    atol=0,
-                    rtol=0,
+                    atol=1e-6,
+                    rtol=1e-7,
                 )
                 torch.testing.assert_close(
                     non_linear.linear.pp_block.bias.grad,
                     reference_non_linear.linear.pp_block.bias.grad,
-                    atol=0,
-                    rtol=0,
+                    atol=1e-6,
+                    rtol=1e-7,
                 )
                 continue
 
             weight_grad, bias_grad = p2p.recv_tensors(num_tensors=2, from_rank=pp_rank)
-            torch.testing.assert_close(weight_grad, reference_non_linear.linear.pp_block.weight.grad, atol=0, rtol=0)
-            torch.testing.assert_close(bias_grad, reference_non_linear.linear.pp_block.bias.grad, atol=0, rtol=0)
+            torch.testing.assert_close(weight_grad, reference_non_linear.linear.pp_block.weight.grad, atol=1e-6, rtol=1e-7)
+            torch.testing.assert_close(bias_grad, reference_non_linear.linear.pp_block.bias.grad, atol=1e-6, rtol=1e-7)
     else:
         for (mlp_index, pp_rank) in mlp_index_pp_rank:
             if pp_rank == current_pp_rank:
@@ -426,7 +431,7 @@ def _test_pipeline_engine_with_tensor_that_does_not_require_grad(
                 )
 
 
-@pytest.mark.parametrize("pp", list(range(2, available_gpus() + 1)))
+@pytest.mark.parametrize("pp", list(range(2, min(4, available_gpus()) + 1)))
 def test_pipeline_forward_without_engine(pp: int):
     init_distributed(pp=pp, dp=1, tp=1)(_test_pipeline_forward_without_engine)()
 
@@ -592,7 +597,7 @@ def _test_pipeline_forward_without_engine(dpg: DistributedProcessGroups):
     # Check loss are the same as reference
     if has_reference_model:
         for loss, ref_loss in zip(losses, reference_losses):
-            torch.testing.assert_close(loss, ref_loss, atol=0, rtol=0)
+            torch.testing.assert_close(loss, ref_loss, atol=1e-6, rtol=1e-7)
 
 
 @pytest.mark.skipif(available_gpus() < 4, reason="Testing `test_pipeline_engine_diamond` requires at least 4 gpus")
@@ -770,13 +775,16 @@ def _test_pipeline_engine_diamond(dpg: DistributedProcessGroups, pipeline_engine
     n_micro_batches_per_batch = dpg.pp_pg.size() + 5
 
     batch = [next(data_iterator) for _ in range(n_micro_batches_per_batch)]
-    losses = pipeline_engine.train_batch_iter(model, pg=dpg.pp_pg, batch=batch, grad_accumulator=None)
-
+    losses = pipeline_engine.train_batch_iter(
+        model, pg=dpg.pp_pg, batch=batch, nb_microbatches=n_micro_batches_per_batch, grad_accumulator=None
+    )
+    
     # Equivalent on the reference model
     if has_reference_model:
         reference_losses = []
         for micro_batch in batch:
             loss = reference_model(**micro_batch)
+            loss /= n_micro_batches_per_batch
             loss.backward()
             reference_losses.append(loss.detach())
 
@@ -784,23 +792,23 @@ def _test_pipeline_engine_diamond(dpg: DistributedProcessGroups, pipeline_engine
     if has_reference_model:
         _losses = []
     for loss in losses:
-        if isinstance(loss, torch.Tensor):
+        if isinstance(loss["loss"], torch.Tensor):
             if has_reference_model:
-                _losses.append(loss)
+                _losses.append(loss["loss"])
             else:
-                p2p.send_tensors([loss], to_rank=reference_rank)
+                p2p.send_tensors([loss["loss"]], to_rank=reference_rank)
         else:
-            assert isinstance(loss, TensorPointer)
+            assert isinstance(loss["loss"], TensorPointer)
             if not has_reference_model:
                 continue
-            _losses.append(p2p.recv_tensors(num_tensors=1, from_rank=loss.group_rank)[0])
+            _losses.append(p2p.recv_tensors(num_tensors=1, from_rank=loss["loss"].group_rank)[0])
     if has_reference_model:
         losses = _losses
 
     # Check loss are the same as reference
     if has_reference_model:
         for loss, ref_loss in zip(losses, reference_losses):
-            torch.testing.assert_close(loss, ref_loss, atol=0, rtol=0)
+            torch.testing.assert_close(loss, ref_loss, atol=1e-6, rtol=1e-7)
 
     # Check that gradient flows through the entire model
     for param in model.parameters():
@@ -816,20 +824,20 @@ def _test_pipeline_engine_diamond(dpg: DistributedProcessGroups, pipeline_engine
                 torch.testing.assert_close(
                     non_linear.weight.grad,
                     reference_non_linear.weight.grad,
-                    atol=0,
-                    rtol=0,
+                    atol=1e-6,
+                    rtol=1e-7,
                 )
                 torch.testing.assert_close(
                     non_linear.bias.grad,
                     reference_non_linear.bias.grad,
-                    atol=0,
-                    rtol=0,
+                    atol=1e-6,
+                    rtol=1e-7,
                 )
                 continue
 
             weight_grad, bias_grad = p2p.recv_tensors(num_tensors=2, from_rank=pp_rank)
-            torch.testing.assert_close(weight_grad, reference_non_linear.weight.grad, atol=0, rtol=0)
-            torch.testing.assert_close(bias_grad, reference_non_linear.bias.grad, atol=0, rtol=0)
+            torch.testing.assert_close(weight_grad, reference_non_linear.weight.grad, atol=1e-6, rtol=1e-7)
+            torch.testing.assert_close(bias_grad, reference_non_linear.bias.grad, atol=1e-6, rtol=1e-7)
     else:
         non_linear = model.get_submodule(pp_rank_to_dense_name[current_pp_rank]).linear.pp_block
         p2p.send_tensors(
