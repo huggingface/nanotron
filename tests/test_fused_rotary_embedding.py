@@ -1,18 +1,16 @@
-import math
-
 import pytest
 import torch
 from flash_attn.layers.rotary import RotaryEmbedding as FlashRotaryEmbedding
-from src.nanotron.models.llama import RotaryEmbedding
+from nanotron.models.llama import RotaryEmbedding
+from nanotron.core.random import set_random_seed
 
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32])
 @pytest.mark.parametrize("seqlen_offset", [0, 711])
 @pytest.mark.parametrize("rotary_emb_fraction", [0.5, 1.0])
-def test_rotary(rotary_emb_fraction, seqlen_offset):
+def test_rotary(rotary_emb_fraction, seqlen_offset, dtype):
     device = "cuda"
-    dtype = torch.float16
-    rtol, atol = (1e-3, 5e-3)
-    # set seed
-    torch.random.manual_seed(0)
+    rtol, atol = (1e-7, 1e-6)
+    set_random_seed(42)
     batch_size = 8
     seqlen_total = 2048
     seqlen = seqlen_total - seqlen_offset
@@ -32,10 +30,9 @@ def test_rotary(rotary_emb_fraction, seqlen_offset):
     out = rotary(qkv, seqlen_offset=seqlen_offset)
     out_flash = flash_rotary(qkv_flash, seqlen_offset=seqlen_offset)
 
-    assert torch.allclose(rotary._cos_cached, flash_rotary._cos_cached, rtol=rtol, atol=atol)
-    assert torch.allclose(rotary._sin_cached, flash_rotary._sin_cached, rtol=rtol, atol=atol)
-    assert torch.allclose(out, out_flash, rtol=rtol, atol=atol)
-    assert torch.equal(out, out_flash)
+    torch.testing.assert_close(rotary._cos_cached, flash_rotary._cos_cached, rtol=rtol, atol=atol)
+    torch.testing.assert_close(rotary._sin_cached, flash_rotary._sin_cached, rtol=rtol, atol=atol)
+    torch.testing.assert_close(out, out_flash, rtol=rtol, atol=atol)
 
     g = torch.randn_like(out)
     g_flash = g.clone()
@@ -43,17 +40,15 @@ def test_rotary(rotary_emb_fraction, seqlen_offset):
     out.backward(g)
     out_flash.backward(g_flash)
 
-    assert torch.allclose(qkv.grad, qkv_flash.grad, rtol=rtol, atol=atol)
-    assert torch.equal(qkv.grad, qkv_flash.grad)
+    torch.testing.assert_close(qkv.grad, qkv_flash.grad, rtol=rtol, atol=atol)
 
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32])
 @pytest.mark.parametrize("seqlen_offset", [0, 711])
 @pytest.mark.parametrize("rotary_emb_fraction", [0.5, 1.0])
-def test_rotary_kv_cache(rotary_emb_fraction, seqlen_offset):
+def test_rotary_kv_cache(rotary_emb_fraction, seqlen_offset, dtype):
     device = "cuda"
-    dtype = torch.float16
-    rtol, atol = (1e-3, 5e-3)
-    # set seed
-    torch.random.manual_seed(0)
+    rtol, atol = (1e-7, 1e-6)
+    set_random_seed(42)
     batch_size = 8
     seqlen_total = 2048
     seqlen = seqlen_total - seqlen_offset
@@ -73,12 +68,10 @@ def test_rotary_kv_cache(rotary_emb_fraction, seqlen_offset):
     out_q, out_kv = rotary(qkv=qkv[:, :, 0, ...], kv=qkv[:, :, 1:, ...], seqlen_offset=seqlen_offset)
     out_q_flash, out_kv_flash = flash_rotary(qkv=qkv_flash[:, :, 0, ...], kv=qkv_flash[:, :, 1:, ...], seqlen_offset=seqlen_offset)
 
-    assert torch.allclose(rotary._cos_cached, flash_rotary._cos_cached, rtol=rtol, atol=atol)
-    assert torch.allclose(rotary._sin_cached, flash_rotary._sin_cached, rtol=rtol, atol=atol)
-    assert torch.allclose(out_q, out_q_flash, rtol=rtol, atol=atol)
-    assert torch.allclose(out_kv, out_kv_flash, rtol=rtol, atol=atol)
-    assert torch.equal(out_q, out_q_flash)
-    assert torch.equal(out_kv, out_kv_flash)
+    torch.testing.assert_close(rotary._cos_cached, flash_rotary._cos_cached, rtol=rtol, atol=atol)
+    torch.testing.assert_close(rotary._sin_cached, flash_rotary._sin_cached, rtol=rtol, atol=atol)
+    torch.testing.assert_close(out_q, out_q_flash, rtol=rtol, atol=atol)
+    torch.testing.assert_close(out_kv, out_kv_flash, rtol=rtol, atol=atol)
 
     g_q = torch.randn_like(out_q)
     g_kv = torch.randn_like(out_kv)
@@ -90,5 +83,4 @@ def test_rotary_kv_cache(rotary_emb_fraction, seqlen_offset):
     out_q_flash.backward(g_q_flash)
     out_kv_flash.backward(g_kv_flash)
 
-    assert torch.allclose(qkv.grad, qkv_flash.grad, rtol=rtol, atol=atol)
-    assert torch.equal(qkv.grad, qkv_flash.grad)
+    torch.testing.assert_close(qkv.grad, qkv_flash.grad, rtol=rtol, atol=atol)
