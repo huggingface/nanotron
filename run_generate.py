@@ -1,5 +1,4 @@
 """ Example of generation with a pretrained model.
-
 - llama:
 USE_FAST=1 CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node=2 examples/generate.py --pp 2 --tp 1 --model_name huggyllama/llama-7b --ckpt-path pretrained/llama-7b
 USE_FAST=1 CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node=2 examples/generate.py --pp 2 --tp 1 --model_name codellama/CodeLlama-7b-hf --ckpt-path pretrained/CodeLlama-7b-hf
@@ -12,14 +11,16 @@ USE_FAST=1 CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node=4 examples/ge
 USE_FAST=1 CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node=4 examples/generate.py --pp 2 --tp 2 --model_name bigcode/starcoder --ckpt-path pretrained/starcoder
 USE_FAST=1 CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node=4 examples/generate.py --pp 2 --tp 2 --model_name bigcode/starcoder --ckpt-path /fsx/nouamane/checkpoints/nanotron/starcoder_s64k_sw4k_dp16_gbs1M/10000
 USE_FAST=1 CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node=1 examples/generate.py --pp 1 --tp 1 --ckpt-path /fsx/nouamane/checkpoints/nanotron/test/12
+- Benchmark:
+USE_BENCH=1 USE_FAST=1 CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node=2 run_benchmark2.py --pp 2 --tp 1 --dp 1 --model_name huggyllama/llama-7b --ckpt-path /admin/home/ferdinand_mom/.cache/huggingface/hub/models--HuggingFaceBR4--llama-7b-orig/snapshots/2160b3d0134a99d365851a7e95864b21e873e1c3
 """
+import os
 import argparse
 from pathlib import Path
-from pprint import pprint
 
 import torch
 from nanotron import logging
-from nanotron.config import GenerationArgs, ParallelismArgs, get_config_from_file
+from nanotron.config import GenerationArgs, ParallelismArgs, LoggingArgs, get_config_from_file
 from nanotron.core import distributed as dist
 from nanotron.core.parallel.parameters import sanity_check
 from nanotron.core.parallel.pipeline_parallelism.engine import (
@@ -39,6 +40,8 @@ from nanotron.generate.generation import (
     TokenizerConfig,
     greedy_search_text,
 )
+
+from nanotron.helpers import set_logger_verbosity_format
 from nanotron.logging import log_rank
 from nanotron.serialize import (
     load_weights,
@@ -48,6 +51,8 @@ from transformers import AutoConfig, AutoTokenizer
 
 logger = logging.get_logger(__name__)
 
+os.environ["USE_BENCH"] = "0"
+os.environ["USE_FAST"] = "0"
 
 def get_args():
     parser = argparse.ArgumentParser()
@@ -71,6 +76,12 @@ def main():
         recompute_granularity=None,
         tp_linear_async_communication=True,
     )
+    
+    logging_config = LoggingArgs(
+        log_level="info",
+        log_level_replica="info",
+    )
+    
     dtype = torch.bfloat16
 
     # Set random states
@@ -82,6 +93,15 @@ def main():
         pipeline_parallel_size=parallel_config.pp,
         tensor_parallel_size=parallel_config.tp,
     )
+
+    # Set log levels
+    if dist.get_rank(dpg.world_pg) == 0:
+        if logging_config.log_level is not None:
+            set_logger_verbosity_format(logging_config.log_level, dpg=dpg)
+    else:
+        if logging_config.log_level_replica is not None:
+            set_logger_verbosity_format(logging_config.log_level_replica, dpg=dpg)
+
 
     tokenizer_path = args.model_name
     # if config.yaml in checkpoint path we use it
@@ -125,7 +145,6 @@ def main():
             parallel_config=parallel_config,
             random_states=random_states,
         ),
-        model_config=model_config,
         dtype=dtype,
         dpg=dpg,
     )
@@ -162,11 +181,11 @@ def main():
     tokenizer.padding_side = "left"
     tokenizer.truncation_side = "left"  # TODO @nouamane: do we want this?
     dummy_inputs = [
-        # "Passage: Daniel went back to the garden. Mary travelled to the kitchen. Sandra journeyed to the kitchen. Sandra went to the hallway. John went to the bedroom. Mary went back to the garden. Where is Mary?\nAnswer:",
+        "Passage: Daniel went back to the garden. Mary travelled to the kitchen. Sandra journeyed to the kitchen. Sandra went to the hallway. John went to the bedroom. Mary went back to the garden. Where is Mary?\nAnswer:",
         "def fib(n)",
-        # "This film was probably inspired by Godzilla",
+        "This film was probably inspired by Godzilla",
     ]
-
+    
     outputs = greedy_search_text(
         input_iter=(GenerationInput(text=text) for text in dummy_inputs),
         tokenizer=tokenizer,
@@ -182,9 +201,11 @@ def main():
         # tokenizer_config=TokenizerConfig(max_input_length=1024), #TODO @nouamane: fix padding for starcoder
         tokenizer_config=TokenizerConfig(max_input_length=None),
         # tokenizer_config=TokenizerConfig(max_input_length=model.config.max_position_embeddings - args.max_new_tokens),
+        is_bench=True if (os.environ["USE_BENCH"] == "1") else False,
     )
 
     dist.barrier()
+    
     for output in outputs:
         input_ids = output.input_ids
         generated_ids = output.generation_ids
@@ -192,17 +213,27 @@ def main():
             assert isinstance(generated_ids, TensorPointer)
             continue
         assert isinstance(generated_ids, torch.Tensor)
-        if dist.get_rank() == 0:
-            pprint(
-                {
-                    "input_truncated": tokenizer.decode(input_ids, clean_up_tokenization_spaces=False)[:1000],
-                    "generation": tokenizer.decode(
-                        generated_ids[len(input_ids) :], clean_up_tokenization_spaces=False
-                    ),
-                    "generation_ids": generated_ids[len(input_ids) :],
-                }
-            )
-
+        
+        log_rank(
+            f"input: {tokenizer.decode(input_ids, clean_up_tokenization_spaces=False)[:1000]}",
+            logger=logger,
+            level=logging.INFO,
+            rank=0,
+        )
+        
+        log_rank(
+            f"generation: {tokenizer.decode(generated_ids[len(input_ids) :], clean_up_tokenization_spaces=False)}",
+            logger=logger,
+            level=logging.INFO,
+            rank=0,
+        )
+        
+        log_rank(
+            "--------------------------------------------------",
+            logger=logger,
+            level=logging.INFO,
+            rank=0,
+        )
 
 if __name__ == "__main__":
     main()

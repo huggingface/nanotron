@@ -27,6 +27,13 @@ from nanotron.logging import get_logger
 
 logger = get_logger(__name__)
 
+@dataclass
+class BenchArgs:
+    model_name: str
+    sequence_length: int
+    micro_batch_size: int
+    batch_accumulation_per_replica: int
+    benchmark_csv_path: str 
 
 @dataclass
 class LoggingArgs:
