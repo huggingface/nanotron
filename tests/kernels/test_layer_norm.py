@@ -16,23 +16,16 @@
 
 import pytest
 import torch
-from brrr.kernels.layer_norm import FusedLayerNorm, _is_fast_layer_norm_available, _is_fused_layer_norm_available
-from helpers.utils import available_gpus
+from nanotron.kernels.layer_norm import FusedLayerNorm
+
+# from helpers.utils import available_gpus
 from torch.nn import LayerNorm
 
 
-def test_is_fused_layer_norm_available():
-    assert _is_fused_layer_norm_available() is True
-
-
-def test_is_fast_layer_norm_available():
-    assert _is_fast_layer_norm_available() is True
-
-
-@pytest.mark.skipif(available_gpus() < 1, reason="Testing test_fused_layer_norm requires at least 1 gpus")
+# @pytest.mark.skipif(available_gpus() < 1, reason="Testing test_fused_layer_norm requires at least 1 gpus")
 @pytest.mark.parametrize(
     "hidden_size",
-    [1024, 1025],  # fused layer norm supports this hidden size  # fused layer norm does not support this hidden size
+    [1024, 1025],  # fused layer norm supports 1024 as hidden size but not 1025
 )
 @pytest.mark.parametrize("no_persist_layer_norm", [True, False])
 def test_fused_layer_norm(hidden_size, no_persist_layer_norm):
