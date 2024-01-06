@@ -42,7 +42,7 @@ from nanotron.core.parallel.tied_parameters import (
     sync_tied_weights_gradients,
     tie_parameters,
 )
-from nanotron.core.process_groups import DistributedProcessGroups, get_process_groups
+from nanotron.core.process_groups import DistributedProcessGroups
 from nanotron.core.random import (
     set_random_seed,
 )
@@ -53,6 +53,7 @@ from nanotron.core.utils import (
     init_on_device_and_dtype,
 )
 from nanotron.dataloader import sanity_check_dataloader
+from nanotron.distributed import ParallelContext, ParallelMode
 from nanotron.helpers import (
     _vocab_size_with_padding,
     get_profiler,
@@ -120,14 +121,19 @@ class DistributedTrainer:
         ########################################
 
         # Initialise all process groups
-        self.dpg = get_process_groups(
-            data_parallel_size=self.config.parallelism.dp,
-            pipeline_parallel_size=self.config.parallelism.pp,
+        # self.dpg = get_process_groups(
+        #     data_parallel_size=self.config.parallelism.dp,
+        #     pipeline_parallel_size=self.config.parallelism.pp,
+        #     tensor_parallel_size=self.config.parallelism.tp,
+        # )
+        self.parallel_context = ParallelContext.from_torch(
             tensor_parallel_size=self.config.parallelism.tp,
+            pipeline_parallel_size=self.config.parallelism.pp,
+            data_parallel_size=self.config.parallelism.dp,
         )
 
         # Set log levels
-        if dist.get_rank(self.dpg.world_pg) == 0:
+        if self.parallel_context.get_global_rank() == 0:
             if self.config.logging.log_level is not None:
                 set_logger_verbosity_format(self.config.logging.log_level, dpg=self.dpg)
         else:
@@ -140,21 +146,25 @@ class DistributedTrainer:
 
         # Do a first NCCL sync to warmup and try to avoid Timeout after model/data loading
         log_rank(
-            f"[TEST] Running NCCL sync for ranks {list(range(self.dpg.world_pg.size()))}",
+            f"[TEST] Running NCCL sync for ranks {list(range(self.parallel_context.get_world_size(ParallelMode.GLOBAL)))}",
             logger=logger,
             level=logging.WARNING,
-            group=self.dpg.dp_pg,
+            group=self.parallel_context.get_group(ParallelMode.DATA),
             rank=0,
         )
-        test_tensor = torch.tensor([dist.get_rank(self.dpg.world_pg)], device=torch.device("cuda"))
-        test_tensor_list = [torch.zeros_like(test_tensor) for _ in range(self.dpg.world_pg.size())]
-        dist.all_gather(test_tensor_list, test_tensor, group=self.dpg.world_pg, async_op=False)
+        test_tensor = torch.tensor([self.parallel_context.get_global_rank()], device=torch.device("cuda"))
+        test_tensor_list = [
+            torch.zeros_like(test_tensor) for _ in range(self.parallel_context.get_world_size(ParallelMode.GLOBAL))
+        ]
+        dist.all_gather(
+            test_tensor_list, test_tensor, group=self.parallel_context.get_group(ParallelMode.GLOBAL), async_op=False
+        )
         dist.barrier()
         log_rank(
             f"[TEST] NCCL sync for ranks {[t.item() for t in test_tensor_list]}",
             logger=logger,
             level=logging.WARNING,
-            group=self.dpg.dp_pg,
+            group=self.parallel_context.get_group(ParallelMode.DATA),
             rank=0,
         )
 
@@ -166,7 +176,7 @@ class DistributedTrainer:
             f"[TEST] free memory free_mem: {human_format(free_mem)}, total_mem: {human_format(total_mem)}",
             logger=logger,
             level=logging.WARNING,
-            group=self.dpg.world_pg,
+            group=self.parallel_context.get_group(ParallelMode.GLOBAL),
             rank=None,
         )
         if free_mem < MIN_GPU_MEM_THRESHOLD:
@@ -178,7 +188,7 @@ class DistributedTrainer:
             f"[TEST] Allocated a tensor of size {human_format(test_tensor_size)} (90% of free memory)",
             logger=logger,
             level=logging.WARNING,
-            group=self.dpg.world_pg,
+            group=self.parallel_context.get_group(ParallelMode.GLOBAL),
             rank=None,
         )
         del test_tensor
@@ -198,7 +208,10 @@ class DistributedTrainer:
         set_random_seed(self.config.general.seed)
 
         # Init model and build on pp ranks
-        self.random_states = init_random_states(parallel_config=self.config.parallelism, tp_pg=self.dpg.tp_pg)
+        # TODO(xrsrke): add parallel_context to init_model_states
+        self.random_states = init_random_states(
+            parallel_config=self.config.parallelism, tp_pg=self.parallel_context.get_group(ParallelMode.TENSOR)
+        )
         self.model, checkpoint_path = self.init_model()  # Defines self.model
         self.normalized_model = self.model.module if isinstance(self.model, DistributedDataParallel) else self.model
 
@@ -241,7 +254,9 @@ class DistributedTrainer:
         self.loggerwriter = self.setup_log_writers()
 
         # Log where each module is instantiated
-        self.normalized_model.log_modules(level=logging.DEBUG, group=self.dpg.world_pg, rank=0)
+        self.normalized_model.log_modules(
+            level=logging.DEBUG, group=self.parallel_context.get_group(ParallelMode.GLOBAL), rank=0
+        )
 
         # Log config and model config
         # self.log_object(self.config, "config")
@@ -292,26 +307,41 @@ class DistributedTrainer:
         #     self.log_object(slurm_dict, "slurm")
 
         # Do a first NCCL sync to warmup and try to avoid Timeout after model/data loading
-        test_tensor = torch.tensor([dist.get_rank(self.dpg.world_pg)], device=torch.device("cuda"))
-        test_tensor_list = [torch.zeros_like(test_tensor) for _ in range(self.dpg.world_pg.size())]
-        dist.all_gather(test_tensor_list, test_tensor, group=self.dpg.world_pg, async_op=False)
+        test_tensor = torch.tensor([self.parallel_context.get_global_rank()], device=torch.device("cuda"))
+        test_tensor_list = [
+            torch.zeros_like(test_tensor) for _ in range(self.parallel_context.get_world_size(ParallelMode.GLOBAL))
+        ]
+        dist.all_gather(
+            test_tensor_list, test_tensor, group=self.parallel_context.get_group(ParallelMode.GLOBAL), async_op=False
+        )
         dist.barrier()
         log_rank(
             f"[SECOND TEST] NCCL sync for ranks {[t.item() for t in test_tensor_list]}",
             logger=logger,
             level=logging.WARNING,
-            group=self.dpg.dp_pg,
+            group=self.parallel_context.get_group(ParallelMode.DATA),
             rank=0,
         )
+
+        global_rank = self.parallel_context.get_global_rank()
+        world_size = self.parallel_context.get_world_size()
+        local_pp_rank = self.parallel_context.get_local_rank(ParallelMode.PIPELINE)
+        pp_world_size = self.parallel_context.get_world_size(ParallelMode.PIPELINE)
+        self.parallel_context.get_local_rank(ParallelMode.DATA)
+
         log_rank(
-            f"Global rank: { dist.get_rank(self.dpg.world_pg)}/{self.dpg.world_pg.size()} | PP: {dist.get_rank(self.dpg.pp_pg)}/{self.dpg.pp_pg.size()} | DP: {dist.get_rank(self.dpg.dp_pg)}/{self.dpg.dp_pg.size()} | TP: {dist.get_rank(self.dpg.tp_pg)}/{self.dpg.tp_pg.size()}",
+            f"Global rank: {global_rank}/{world_size} | PP: {local_pp_rank}/{pp_world_size} | DP: {self.parallel_context.get_local_rank(ParallelMode.DATA)}/{self.parallel_context.get_world_size(ParallelMode.DATA)} | TP: {self.parallel_context.get_local_rank(ParallelMode.TENSOR)}/{self.parallel_context.get_world_size(ParallelMode.TENSOR)}",
             logger=logger,
             level=logging.INFO,
         )
 
         self.micro_batch_size = self.config.tokens.micro_batch_size
         self.n_micro_batches_per_batch = self.config.tokens.batch_accumulation_per_replica
-        self.global_batch_size = self.micro_batch_size * self.n_micro_batches_per_batch * self.dpg.dp_pg.size()
+        self.global_batch_size = (
+            self.micro_batch_size
+            * self.n_micro_batches_per_batch
+            * self.parallel_context.get_world_size(ParallelMode.DATA)
+        )
         self.sequence_length = self.config.tokens.sequence_length
         self.iteration_step = self.start_iteration_step
         self.limit_val_batches = self.config.tokens.limit_val_batches
@@ -332,7 +362,7 @@ class DistributedTrainer:
         #     )
         # else:
         #     self.s3_mover = None
-        # if self.config.checkpoints.lighteval is not None and dist.get_rank(self.dpg.world_pg) == 0:
+        # if self.config.checkpoints.lighteval is not None and self.parallel_context.get_global_rank() == 0:
         #     # We only start evaluation runs on the first node
         #     if self.s3_mover is None:
         #         raise ValueError("lighteval requires s3 upload of checkpoints to be enabled")
@@ -448,7 +478,7 @@ class DistributedTrainer:
                 #     self.tb_context.scheduler.trigger()
 
         # if self.s3_mover is not None:
-        #     self.s3_mover.distributed_wait_for_completion(group=self.dpg.world_pg)
+        #     self.s3_mover.distributed_wait_for_completion(group=self.parallel_context.get_group(ParallelMode.GLOBAL))
 
     def training_step(
         self, dataloader: Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]]
@@ -462,7 +492,7 @@ class DistributedTrainer:
                 f" Peak reserved: {torch.cuda.max_memory_reserved() / 1024**2:.2f}MiB",
                 logger=logger,
                 level=logging.INFO,
-                group=self.dpg.world_pg,
+                group=self.parallel_context.get_group(ParallelMode.GLOBAL),
                 rank=0,
             )
             torch.cuda.reset_peak_memory_stats()
@@ -482,7 +512,7 @@ class DistributedTrainer:
                 f" Peak reserved: {torch.cuda.max_memory_reserved() / 1024**2:.2f}MiB",
                 logger=logger,
                 level=logging.INFO,
-                group=self.dpg.world_pg,
+                group=self.parallel_context.get_group(ParallelMode.GLOBAL),
                 rank=0,
             )
             torch.cuda.reset_peak_memory_stats()
@@ -501,7 +531,7 @@ class DistributedTrainer:
             # Manually sync across DP if it's not handled by DDP
             sync_gradients_across_dp(
                 module=self.model,
-                dp_pg=self.dpg.dp_pg,
+                dp_pg=self.parallel_context.get_group(ParallelMode.DATA),
                 reduce_op=dist.ReduceOp.AVG,
                 # TODO @thomasw21: This is too memory hungry, instead we run all_reduce
                 reduce_scatter=False,  # optimizer.inherit_from(ZeroDistributedOptimizer),
@@ -533,7 +563,13 @@ class DistributedTrainer:
             # TODO @nouamane: we need to split `world_rank_matrix` along PP axis, to separate ref from active model
             self.grad_norm_unclipped = clip_grad_norm(
                 mp_pg=self.dpg.world_ranks_to_pg[
-                    tuple(sorted(self.dpg.world_rank_matrix[:, dist.get_rank(self.dpg.dp_pg), :].reshape(-1)))
+                    tuple(
+                        sorted(
+                            self.dpg.world_rank_matrix[
+                                :, self.parallel_context.get_local_rank(ParallelMode.DATA), :
+                            ].reshape(-1)
+                        )
+                    )
                 ],
                 named_parameters=named_parameters,
                 grad_accumulator=self.grad_accumulator,
@@ -549,7 +585,9 @@ class DistributedTrainer:
                 [output["loss"] for output in outputs]
             ).sum()  # already divided by n_micro_batches_per_batch
             # sync loss across DP
-            handle = dist.all_reduce(loss_avg, group=self.dpg.dp_pg, async_op=True, op=dist.ReduceOp.AVG)
+            handle = dist.all_reduce(
+                loss_avg, group=self.parallel_context.get_group(ParallelMode.DATA), async_op=True, op=dist.ReduceOp.AVG
+            )
         else:
             loss_avg = None
             handle = None
@@ -593,7 +631,7 @@ class DistributedTrainer:
             global_batch_size=self.global_batch_size,
         )
 
-        if dist.get_rank(self.dpg.world_pg) in self.logger_ranks:
+        if self.parallel_context.get_global_rank() in self.logger_ranks:
             assert self.loggerwriter is not None, "loggerwriter should be defined on logger ranks"
 
             lr = self.lr_scheduler.get_last_lr()[0]
@@ -606,7 +644,9 @@ class DistributedTrainer:
                 LogItem("elapsed_time_per_iteration_ms", elapsed_time_per_iteration_ms, "human_format"),  # , ".1f"),
                 LogItem("tokens_per_sec", tokens_per_sec, "human_format"),  # , "1.6E"),
                 LogItem(
-                    "tokens_per_sec_per_gpu", tokens_per_sec / self.dpg.world_pg.size(), "human_format"
+                    "tokens_per_sec_per_gpu",
+                    tokens_per_sec / self.parallel_context.get_world_size(ParallelMode.GLOBAL),
+                    "human_format",
                 ),  # , "1.6E"),
                 LogItem("global_batch_size", self.global_batch_size, "human_format"),  # , "5d"),
                 LogItem("lm_loss", loss_avg.item(), "human_format"),  # , "1.6E"),
@@ -716,7 +756,7 @@ class DistributedTrainer:
         # TODO: add max_position_embeddings
         self.model_config.vocab_size = _vocab_size_with_padding(
             self.model_config.vocab_size,
-            pg_size=self.dpg.tp_pg.size(),
+            pg_size=self.parallel_context.get_world_size(ParallelMode.TENSOR),
             make_vocab_size_divisible_by=self.config.model.make_vocab_size_divisible_by,
         )
 
@@ -783,7 +823,9 @@ class DistributedTrainer:
                 # Synchronize parameters so that the model is consistent
                 # sync all params across dp
                 for name, param in sorted(model.named_parameters(), key=lambda x: x[0]):
-                    dist.all_reduce(param, op=dist.ReduceOp.AVG, group=self.dpg.dp_pg)
+                    dist.all_reduce(
+                        param, op=dist.ReduceOp.AVG, group=self.parallel_context.get_group(ParallelMode.DATA)
+                    )
 
                 # sync tied params across tied groups
                 for (_, group_ranks), param in sorted(
@@ -885,7 +927,7 @@ class DistributedTrainer:
             logger_ranks (Iterable[int]): The ranks that should log
             dpg (DistributedProcessGroups): The distributed process groups
         """
-        if dist.get_rank(self.dpg.world_pg) in self.logger_ranks:
+        if self.parallel_context.get_global_rank() in self.logger_ranks:
             loggerwriter = LoggerWriter(global_step=self.config.tokens.train_steps)
         else:
             loggerwriter = None
@@ -909,7 +951,7 @@ class DistributedTrainer:
 
     def save_checkpoint(self) -> Path:
         # if self.s3_mover is not None:
-        #     self.s3_mover.distributed_wait_for_completion(self.dpg.world_pg)
+        #     self.s3_mover.distributed_wait_for_completion(self.parallel_context.get_group(ParallelMode.GLOBAL))
         #     if self.s3_mover.post_upload_callback_outputs is not None:
         #         slurm_job_id, slurm_log = self.s3_mover.post_upload_callback_outputs
         #         self.log_object({"job_id": slurm_job_id, "log": slurm_log}, "slurm_eval")
@@ -917,12 +959,12 @@ class DistributedTrainer:
         checkpoints_path = self.config.checkpoints.checkpoints_path
         checkpoint_path = checkpoints_path / f"{self.iteration_step}"
         if self.config.checkpoints.checkpoints_path_is_shared_file_system:
-            should_mkdir = dist.get_rank(self.dpg.world_pg) == 0
+            should_mkdir = self.parallel_context.get_global_rank() == 0
         else:
             should_mkdir = bool(int(os.environ.get("LOCAL_RANK", None)) == 0)
         if should_mkdir:
             checkpoint_path.mkdir(parents=True, exist_ok=True)
-        dist.barrier(self.dpg.world_pg)
+        dist.barrier(self.parallel_context.get_group(ParallelMode.GLOBAL))
 
         log_rank(f"Saving checkpoint at {checkpoint_path}", logger=logger, level=logging.WARNING, rank=0)
         checkpoint_metadata = {
@@ -939,12 +981,16 @@ class DistributedTrainer:
             model=self.normalized_model,
             optimizer=self.optimizer,
             lr_scheduler=self.lr_scheduler,
-            should_save_model=bool(dist.get_rank(self.dpg.dp_pg) == 0),  # We only save the weights on DP==0
+            should_save_model=bool(
+                self.parallel_context.get_local_rank(ParallelMode.DATA) == 0
+            ),  # We only save the weights on DP==0
             should_save_optimizer=True,
             should_save_lr_scheduler=bool(
-                dist.get_rank(self.dpg.world_pg) == 0
+                self.parallel_context.get_global_rank() == 0
             ),  # We only save the lr_scheduler on world_rank==0
-            should_save_config=bool(dist.get_rank(self.dpg.world_pg) == 0),  # We only save the config on world_rank==0
+            should_save_config=bool(
+                self.parallel_context.get_global_rank() == 0
+            ),  # We only save the config on world_rank==0
             dpg=self.dpg,
             root_folder=checkpoint_path,
             checkpoint_metadata=checkpoint_metadata,
@@ -971,7 +1017,9 @@ class DistributedTrainer:
             # SANITY CHECK: Check that the model params are synchronized across dp
             for name, param in sorted(self.model.named_parameters(), key=lambda x: x[0]):
                 assert_tensor_synced_across_pg(
-                    tensor=param, pg=self.dpg.dp_pg, msg=lambda err: f"{name} are not synchronized across DP {err}"
+                    tensor=param,
+                    pg=self.parallel_context.get_group(ParallelMode.DATA),
+                    msg=lambda err: f"{name} are not synchronized across DP {err}",
                 )
 
             # SANITY CHECK: Tied weights are synchronized
@@ -1029,7 +1077,7 @@ class DistributedTrainer:
                     raise ValueError("Gradient is nan or inf")
                 if grad is None:
                     log_rank(
-                        f"Process rank { dist.get_rank(self.dpg.world_pg)}/{self.dpg.world_pg.size()}: {name} is missing gradient",
+                        f"Process rank { self.parallel_context.get_global_rank()}/{self.parallel_context.get_world_size(ParallelMode.GLOBAL)}: {name} is missing gradient",
                         logger=logger,
                         level=logging.ERROR,
                     )
@@ -1081,14 +1129,16 @@ class DistributedTrainer:
                 assert grad is not None, f"Grad is None for {name}"
                 assert_tensor_synced_across_pg(
                     tensor=grad,
-                    pg=self.dpg.dp_pg,
+                    pg=self.parallel_context.get_group(ParallelMode.DATA),
                     msg=lambda err: f"[Before optimizer step] weights grads for {name} are not synchronized across DP. {err}",
                 )
 
             # SANITY CHECK: Check that the model params are synchronized across dp
             for name, param in sorted(self.model.named_parameters(), key=lambda x: x[0]):
                 assert_tensor_synced_across_pg(
-                    tensor=param, pg=self.dpg.dp_pg, msg=lambda err: f"{name} are not synchronized across DP {err}"
+                    tensor=param,
+                    pg=self.parallel_context.get_group(ParallelMode.DATA),
+                    msg=lambda err: f"{name} are not synchronized across DP {err}",
                 )
 
             # SANITY CHECK: Tied weights are synchronized
@@ -1119,7 +1169,7 @@ class DistributedTrainer:
 
                 if param.grad is not None:
                     log_rank(
-                        f"Process rank { dist.get_rank(self.dpg.world_pg)}/{self.dpg.world_pg.size()}: {name} still has gradient despite having ran the optimizer",
+                        f"Process rank { self.parallel_context.get_global_rank()}/{self.parallel_context.get_world_size(ParallelMode.GLOBAL)}: {name} still has gradient despite having ran the optimizer",
                         logger=logger,
                         level=logging.ERROR,
                     )
