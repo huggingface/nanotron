@@ -21,6 +21,7 @@ from einops import rearrange
 import torch
 from torch import nn
 from transformers.activations import ACT2FN
+from flash_attn.layers.rotary import RotaryEmbedding as FlashRotaryEmbedding
 
 from nanotron.config import LlamaConfig, ParallelismArgs, RecomputeGranularity
 from nanotron.core import distributed as dist
@@ -43,6 +44,8 @@ from nanotron.models import AttachableStore, NanotronModel
 
 logger = logging.get_logger(__name__)
 
+import os
+
 class RMSNorm(nn.Module):
     def __init__(self, normalized_shape, eps=1e-6):
         """
@@ -63,11 +66,76 @@ class RMSNorm(nn.Module):
 
         return self.weight * input
 
+class RotaryEmbedding(nn.Module):
+    def __init__(self, dim: int, end: int, theta: float = 10000.0):
+        super().__init__()
+        assert dim % 2 == 0
+        self.dim = dim
+        self.end = end
+        self.theta = theta
+        # TODO @nouamane: Figure out why we can't set `DTypeInvariantTensor` ...
+        # TODO @thomasw21: Complex buffers break DDP, instead we store float and view them as complex
+        self.freqs_cis: torch.Tensor
+        self.register_buffer(
+            "freqs_cis",
+            torch.empty(self.end, self.dim // 2, 2, dtype=torch.float),
+            persistent=False,
+        )
+        self._initialized_buffer = False
+
+    def init_rotary_embeddings(self):
+        if self._initialized_buffer is True:
+            # Buffer if already initialized
+            return
+
+        assert self.freqs_cis.device.type == "cuda"
+        # TODO @nouamane: One we figure out how to do the DTypeInvariantTensor, this can be removed and changed to an assert
+        if self.freqs_cis.dtype != torch.float:
+            self.freqs_cis = self.freqs_cis.to(torch.float)
+        assert self.freqs_cis.dtype == torch.float
+        freqs = 1.0 / (
+            self.theta
+            ** (torch.arange(0, self.dim, 2, dtype=torch.float, device="cuda")[: (self.dim // 2)] / self.dim)
+        )
+        t = torch.arange(self.end, device="cuda")
+        freqs = torch.outer(t, freqs).float()
+        complex_freqs = torch.polar(torch.ones_like(freqs), freqs)
+        freqs = torch.view_as_real(complex_freqs)
+        self.freqs_cis.copy_(freqs)
+        self._initialized_buffer = True
+
+    def forward(
+        self,
+        x: torch.Tensor,  # [batch_size, num_heads, seq_length, inner_dim]
+        position_ids: Optional[torch.LongTensor],  # [batch_size, seq_length]
+    ):
+        if self._initialized_buffer is False:
+            self.init_rotary_embeddings()
+        batch_size, num_heads, seq_length, inner_dim = x.shape
+        dtype = x.dtype
+        assert inner_dim % 2 == 0
+        x = x.view(
+            batch_size, num_heads, seq_length, inner_dim // 2, 2
+        )  # [batch_size, num_heads, q_length, inner_dim]
+        if x.dtype == torch.bfloat16:
+            x = x.float()
+        complex_x = torch.view_as_complex(x)
+        if position_ids is None:
+            freqs_cis = self.freqs_cis[None, None, :seq_length, :]
+        else:
+            freqs_cis = self.freqs_cis[position_ids][:, None, :, :]
+        complex_freqs = torch.view_as_complex(freqs_cis)
+        x_out = torch.view_as_real(complex_x * complex_freqs).view(batch_size, num_heads, seq_length, inner_dim)
+        return x_out.type(dtype)
+
+
+
 # Begin RoPE
 def apply_rotary_emb(
     x: torch.FloatTensor,
     cos: torch.FloatTensor,
     sin: torch.FloatTensor,
+    interleaved: bool,
 ) -> torch.FloatTensor:
     _, seqlen, _, head_dim = x.shape
     rotary_seqlen, rotary_dim = cos.shape
@@ -79,19 +147,31 @@ def apply_rotary_emb(
 
     x_rot = x[:, :, :, :rotary_dim]
     x_pass = x[:, :, :, rotary_dim:]
-
-    x1, x2 = x_rot.chunk(2, dim=-1)
-    c, s = rearrange(cos[:seqlen], "s d -> s 1 d"), rearrange(sin[:seqlen], "s d -> s 1 d")
+    
+    if x_pass.shape[-1] != 0:
+        raise Exception("x_pass should be rotated as well (full rotation ROPE)")
+    
+    if not interleaved:
+        x1, x2 = x_rot.chunk(2, dim=-1)
+    else:
+        x1 = x_rot[..., ::2]  # Even indices
+        x2 = x_rot[..., 1::2] # Odd indices
+    
+    c, s = cos[:seqlen].unsqueeze(1), sin[:seqlen].unsqueeze(1)
     x1, x2, c, s = [t.to(dtype=torch.float32) for t in [x1, x2, c, s]]
-
     x_rot = torch.cat([x1 * c - x2 * s, x1 * s + x2 * c], axis=-1).to(x.dtype)
 
-    return torch.cat([x_rot, x_pass], axis=-1)
+    # Rotate as well the pass (to match the original implementation)
+    # x1, x2 = x_pass.chunk(2, dim=-1)
+    # x_pass = torch.cat([x1 * c - x2 * s, x1 * s + x2 * c], axis=-1).to(x.dtype)
 
+    return torch.cat([x_rot, x_pass], axis=-1)
+    
 def apply_rotary_emb_qkv(
     qkv: torch.FloatTensor,
     cos: torch.FloatTensor,
     sin: torch.FloatTensor,
+    interleaved: bool,
     cos_k: Optional[torch.FloatTensor] = None,
     sin_k: Optional[torch.FloatTensor] = None,
 ) -> torch.FloatTensor:
@@ -104,8 +184,8 @@ def apply_rotary_emb_qkv(
     assert seqlen <= rotary_seqlen
     assert cos.shape == sin.shape == (rotary_seqlen, rotary_dim // 2)
     
-    q = apply_rotary_emb(qkv[:, :, 0, :, :], cos[:seqlen], sin[:seqlen])
-    k = apply_rotary_emb(qkv[:, :, 1, :, :], cos[:seqlen], sin[:seqlen])
+    q = apply_rotary_emb(qkv[:, :, 0, :, :], cos[:seqlen], sin[:seqlen], interleaved)
+    k = apply_rotary_emb(qkv[:, :, 1, :, :], cos[:seqlen], sin[:seqlen], interleaved)
     v = qkv[:, :, 2, :, :]
 
     return torch.cat(
@@ -121,6 +201,7 @@ def apply_rotary_emb_kv(
     kv: torch.FloatTensor,
     cos: torch.FloatTensor,
     sin: torch.FloatTensor,
+    interleaved: bool,
     cos_k: Optional[torch.FloatTensor] = None,
     sin_k: Optional[torch.FloatTensor] = None,
 ) -> torch.FloatTensor:
@@ -136,7 +217,7 @@ def apply_rotary_emb_kv(
     assert seqlen <= rotary_seqlen
     assert cos.shape == sin.shape == (rotary_seqlen, rotary_dim // 2)
 
-    k = apply_rotary_emb(kv[:, :, 0, :, :], cos[:seqlen], sin[:seqlen])
+    k = apply_rotary_emb(kv[:, :, 0, :, :], cos[:seqlen], sin[:seqlen], interleaved)
     v = kv[:, :, 1, :, :]
 
     return torch.cat(
@@ -147,7 +228,7 @@ def apply_rotary_emb_kv(
         axis=2,
     )
 
-class RotaryEmbedding(nn.Module):
+class MyFlashRotaryEmbedding(nn.Module):
     """Rotary positional embedding (RoPE).
     Reference:
         RoFormer: Enhanced Transformer with Rotary Position Embedding.
@@ -161,6 +242,7 @@ class RotaryEmbedding(nn.Module):
         scale_base: Optional[float] = None,
         pos_idx_in_fp32: bool = True,
         device: Optional[str] = None,
+        interleaved: bool = False,
         **kwargs,
     ) -> None:
         """
@@ -178,6 +260,7 @@ class RotaryEmbedding(nn.Module):
         self.scale_base = scale_base
         self.pos_idx_in_fp32 = pos_idx_in_fp32
         self.device = device
+        self.interleaved = interleaved
 
         # Generate and save the inverse frequency buffer (non-trainable)
         inv_freq = self._compute_inv_freq(device)
@@ -225,9 +308,10 @@ class RotaryEmbedding(nn.Module):
             else:
                 t = torch.arange(seqlen, device=device, dtype=self.inv_freq.dtype)
                 inv_freq = self.inv_freq
-
             # `torch.outer` is preferred since `torch.einsum` converts from fp32 to fp16 if used with AMP
             freqs = torch.outer(t, inv_freq)
+            assert freqs.dtype == torch.float32
+            
             if self.scale is None:
                 self._cos_cached = torch.cos(freqs).to(dtype)
                 self._sin_cached = torch.sin(freqs).to(dtype)
@@ -235,7 +319,7 @@ class RotaryEmbedding(nn.Module):
                 power = (
                     torch.arange(seqlen, dtype=self.scale.dtype, device=self.scale.device) - seqlen // 2
                 ) / self.scale_base
-                scale = self.scale.to(device=power.device) ** rearrange(power, "s -> s 1")
+                scale = self.scale.to(device=power.device) ** power.unsqueeze(1)
 
                 # Force the scale multiplication to happen in fp32
                 self._cos_cached = (torch.cos(freqs) * scale).to(dtype)
@@ -258,10 +342,10 @@ class RotaryEmbedding(nn.Module):
             self._update_cos_sin_cache(seqlen + seqlen_offset, device=qkv.device, dtype=qkv.dtype)
 
         if kv is None:
-            return apply_rotary_emb_qkv(qkv, self._cos_cached[seqlen_offset:], self._sin_cached[seqlen_offset:])
+            return apply_rotary_emb_qkv(qkv, self._cos_cached[seqlen_offset:], self._sin_cached[seqlen_offset:], interleaved=self.interleaved)
         else:
-            q = apply_rotary_emb(qkv, self._cos_cached[seqlen_offset:], self._sin_cached[seqlen_offset:])
-            kv = apply_rotary_emb_kv(kv, self._cos_cached[seqlen_offset:], self._sin_cached[seqlen_offset:])
+            q = apply_rotary_emb(qkv, self._cos_cached[seqlen_offset:], self._sin_cached[seqlen_offset:], interleaved=self.interleaved)
+            kv = apply_rotary_emb_kv(kv, self._cos_cached[seqlen_offset:], self._sin_cached[seqlen_offset:], interleaved=self.interleaved)
 
             return q, kv
 # End RoPE
@@ -451,10 +535,21 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             async_communication=tp_linear_async_communication,
             contiguous_chunks=qkv_contiguous_chunks,
         )
-        self.rotary_embedding = RotaryEmbedding(
-            dim=self.d_qk,
-            end=config.max_position_embeddings,
-        )
+        
+        if os.environ.get("USE_REF_ROTARY", "0") != "0":
+            self.rotary_embedding = RotaryEmbedding(
+                dim=self.d_qk,
+                end=config.max_position_embeddings
+            )
+        else:
+            # self.rotary_embedding = MyFlashRotaryEmbedding(
+            #     dim=self.d_qk 
+            # )
+
+            self.rotary_embedding = FlashRotaryEmbedding(
+                dim=self.d_qk,
+                interleaved=True,
+            )
 
         self.o_proj = TensorParallelRowLinear(
             config.num_attention_heads * self.d_qk,
@@ -482,6 +577,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         q_length, batch_size, _ = qkv_states.size()
 
         if self.is_gqa:
+            raise NotImplementedError("Not implemented")
             query_states, key_states, value_states = torch.split(
                 qkv_states,
                 [
@@ -517,13 +613,16 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                 .permute(2, 1, 3, 0, 4)
                 .contiguous()
             )  # [3, batch_size, n_local_q_heads, seq_length, d_qk]
-
+        
         # Get cached key/values from store if available
         store = self.get_local_store()
         if store is not None:
+            raise Exception("Not implemented")
             # Double check that we use store only at inference time
             assert key_states.requires_grad is False
             assert value_states.requires_grad is False
+            
+            #TODO: @fmom position_ids can be use for seqlen_offset ?
             if "position_offsets" in store:
                 old_position_offsets = store["position_offsets"]
                 position_ids = old_position_offsets[:, None] + sequence_mask
@@ -532,9 +631,34 @@ class CausalSelfAttention(nn.Module, AttachableStore):
 
             # Compute rotary embeddings
             position_ids.masked_fill_(~sequence_mask, 0)
-            query_states = self.rotary_embedding(query_states, position_ids=position_ids)
-            key_states = self.rotary_embedding(key_states, position_ids=position_ids)
+            # ========= Ref ============
+            # query_states = self.rotary_embedding(query_states, position_ids=position_ids)
+            # key_states = self.rotary_embedding(key_states, position_ids=position_ids)
 
+            # ====== Mine ==========
+            ref_key_states = key_states.clone()
+            ref_value_states = value_states.clone()
+            ref_query_states = query_states.clone()
+
+            key_value_states = torch.cat([key_states.unsqueeze(0), value_states.unsqueeze(0)], dim=0)
+            # permute to make it compatible with FlashRotaryEmbedding
+            # [2, batch_size, n_local_q_heads, seq_length, d_qk] => [batch_size, seq_length, key, n_local_q_heads, d_qk]
+            key_value_states = key_value_states.permute(1, 3, 0, 2, 4).contiguous()
+            query_states = query_states.permute(0, 2, 1, 3).contiguous()
+            # ===Flash rotary embedding===        
+            # qkv = torch.randn(batch_size, seqlen, 3, nheads, headdim)
+            # batch_size, seqlen, two, nheads, head_dim = kv.shape
+            query_states, key_value_states = self.rotary_embedding(query_states, kv=key_value_states)#, seqlen_offset=position_ids[0][-1].item())
+            # undo permute
+            query_states = query_states.permute(0, 2, 1, 3).contiguous()
+            key_value_states = key_value_states.permute(2, 0, 3, 1, 4).contiguous()
+            key_states, value_states = torch.split(key_value_states, 1, dim=0)
+            key_states, value_states = key_states.squeeze(0), value_states.squeeze(0)
+
+            assert ref_key_states.shape == key_states.shape
+            assert ref_value_states.shape == value_states.shape
+            assert ref_query_states.shape == query_states.shape
+            
             # Pull pre-computed key/value states
             if "key" in store:
                 # We assume that "key"/"value"/"sequence_mask" are all added once initialized
@@ -568,15 +692,62 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                 }
             )
         else:
+            # work on tinier query
+            #  [batch_size, n_local_q_heads, seq_length, d_qk]
             # Apply rotary embeddings to query/key states
-            query_states = self.rotary_embedding(query_states, position_ids=None)
-            key_states = self.rotary_embedding(key_states, position_ids=None)
+            
+            # [1, 1, 6, 4]
+            # query_states = query_states[:, :1, :, :4]
+            # query_states = torch.arange(24).reshape(1, 1, 6, 4).to(dtype=query_states.dtype, device=query_states.device)
+            # key_states = key_states[:, :1, :, :4]
+            # value_states = value_states[:, :1, :, :4]
+            
+            ref_query_states = query_states
+            ref_key_states = key_states
+            ref_value_states = value_states
+            
+            # ========= Ref ============
+            # Apply rotary embeddings to query/key states
+            # query_states = self.rotary_embedding(query_states, position_ids=None)
+            # key_states = self.rotary_embedding(key_states, position_ids=None)
+            
+            # [batch_size, num_heads, seq_length, inner_dim]
+            if os.environ.get("USE_REF_ROTARY", "0") != "0":    
+                query_states = self.rotary_embedding(query_states.clone(), position_ids=None)
+                key_states = self.rotary_embedding(key_states.clone(), position_ids=None)
+            else:            
+                # ======== Mine =============
+                # [3, batch_size, num_heads, seq_length, inner_dim]
+                qkv_states_tmp = torch.cat([query_states.unsqueeze(0), key_states.unsqueeze(0), value_states.unsqueeze(0)], dim=0)
+                # [batch_size, seq_length, 3, num_heads, inner_dim]
+                qkv_states_tmp = qkv_states_tmp.permute(1, 3, 0, 2, 4).contiguous()
+                
+                qkv_states_tmp = self.rotary_embedding(qkv_states_tmp)
+                
+                # [3, batch_size, seq_length, num_heads, inner_dim]            
+                qkv_states_tmp = qkv_states_tmp.permute(2, 0, 1, 3, 4).contiguous()
+                # [1, batch_size, seq_length, num_heads, inner_dim]
+                query_states, key_states, value_states = torch.split(qkv_states_tmp, 1, dim=0)
+                
+                # [batch_size, seq_length, num_heads, inner_dim]
+                query_states, key_states, value_states = query_states.squeeze(0), key_states.squeeze(0), value_states.squeeze(0)
+
+                # [batch_size, num_heads, seq_length, inner_dim]
+                key_states = key_states.permute(0, 2, 1, 3).contiguous()
+                value_states = value_states.permute(0, 2, 1, 3).contiguous()
+                query_states = query_states.permute(0, 2, 1, 3).contiguous()
+                
+            assert ref_key_states.shape == key_states.shape
+            assert ref_value_states.shape == value_states.shape
+            assert ref_query_states.shape == query_states.shape
+           
             attention_mask = _prepare_causal_attention_mask(
                 q_sequence_mask=sequence_mask,
                 k_sequence_mask=sequence_mask,
             )  # (batch_size, 1, query_length, key_length) (True upper)
-
+        
         if self.is_gqa:
+            raise NotImplementedError("Not implemented")
             kv_length = key_states.shape[-2]
             key_states = (
                 key_states[:, :, None, :, :]
@@ -590,7 +761,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                 .contiguous()
                 .view(batch_size, self.n_local_q_heads, kv_length, self.d_qk)
             )
-
+        
         attention_output = self.attention(
             query_states=query_states,
             key_states=key_states,

@@ -62,6 +62,7 @@ def get_args():
     parser.add_argument("--pp", type=int, default=2)
     parser.add_argument("--tp", type=int, default=1)
     parser.add_argument("--max-new-tokens", type=int, default=128)
+    parser.add_argument("--compare-with-no-cache", action="store_true")
     return parser.parse_args()
 
 
@@ -106,6 +107,7 @@ def main():
     tokenizer_path = args.model_name
     # if config.yaml in checkpoint path we use it
     if (args.ckpt_path / "config.yaml").exists():
+    # if (args.ckpt_path / "config.yaml").exists():
         config_path = args.ckpt_path / "config.yaml"
         # parse config
         config = get_config_from_file(config_path.as_posix())
@@ -120,6 +122,7 @@ def main():
         assert args.model_name is not None, "model_name must be provided or config.yaml must be in checkpoint path"
         model_name = args.model_name
         model_config: AutoConfig = AutoConfig.from_pretrained(model_name)
+  
     # model_config.num_hidden_layers = 1
     log_rank(f"model_config: {model_config}", logger=logger, level=logging.INFO, rank=0)
 
@@ -181,59 +184,115 @@ def main():
     tokenizer.padding_side = "left"
     tokenizer.truncation_side = "left"  # TODO @nouamane: do we want this?
     dummy_inputs = [
-        "Passage: Daniel went back to the garden. Mary travelled to the kitchen. Sandra journeyed to the kitchen. Sandra went to the hallway. John went to the bedroom. Mary went back to the garden. Where is Mary?\nAnswer:",
+        # "Passage: Daniel went back to the garden. Mary travelled to the kitchen. Sandra journeyed to the kitchen. Sandra went to the hallway. John went to the bedroom. Mary went back to the garden. Where is Mary?\nAnswer:",
         "def fib(n)",
-        "This film was probably inspired by Godzilla",
+        # "This film was probably inspired by Godzilla",
     ]
     
-    outputs = greedy_search_text(
-        input_iter=(GenerationInput(text=text) for text in dummy_inputs),
-        tokenizer=tokenizer,
-        # TODO @thomasw21: From ModelWithLoss extract the model.
-        model=model.model,
-        # TODO @thomasw21: Figure out how to pass p2p.
-        p2p=model.model.p2p,
-        dpg=dpg,
-        max_new_tokens=args.max_new_tokens,
-        max_micro_batch_size=2,
-        generation_config=GenerationArgs(sampler="greedy"),
-        # tokenizer_config=TokenizerConfig(max_input_length=8),
-        # tokenizer_config=TokenizerConfig(max_input_length=1024), #TODO @nouamane: fix padding for starcoder
-        tokenizer_config=TokenizerConfig(max_input_length=None),
-        # tokenizer_config=TokenizerConfig(max_input_length=model.config.max_position_embeddings - args.max_new_tokens),
-        is_bench=True if (os.environ["USE_BENCH"] == "1") else False,
-    )
+    # outputs = greedy_search_text(
+    #     input_iter=(GenerationInput(text=text) for text in dummy_inputs),
+    #     tokenizer=tokenizer,
+    #     # TODO @thomasw21: From ModelWithLoss extract the model.
+    #     model=model.model,
+    #     # TODO @thomasw21: Figure out how to pass p2p.
+    #     p2p=model.model.p2p,
+    #     dpg=dpg,
+    #     max_new_tokens=args.max_new_tokens,
+    #     max_micro_batch_size=2,
+    #     generation_config=GenerationArgs(sampler="greedy", no_cache=False),
+    #     # tokenizer_config=TokenizerConfig(max_input_length=8),
+    #     # tokenizer_config=TokenizerConfig(max_input_length=1024), #TODO @nouamane: fix padding for starcoder
+    #     tokenizer_config=TokenizerConfig(max_input_length=None),
+    #     # tokenizer_config=TokenizerConfig(max_input_length=model.config.max_position_embeddings - args.max_new_tokens),
+    #     is_bench=True if (os.environ["USE_BENCH"] == "1") else False,
+    #     no_cache=True,
+    # )
 
-    dist.barrier()
+    # dist.barrier()
     
-    for output in outputs:
-        input_ids = output.input_ids
-        generated_ids = output.generation_ids
-        if isinstance(input_ids, TensorPointer):
-            assert isinstance(generated_ids, TensorPointer)
-            continue
-        assert isinstance(generated_ids, torch.Tensor)
+    # for output in outputs:
+    #     input_ids = output.input_ids
+    #     generated_ids = output.generation_ids
+    #     if isinstance(input_ids, TensorPointer):
+    #         assert isinstance(generated_ids, TensorPointer)
+    #         continue
+    #     assert isinstance(generated_ids, torch.Tensor)
         
-        log_rank(
-            f"input: {tokenizer.decode(input_ids, clean_up_tokenization_spaces=False)[:1000]}",
-            logger=logger,
-            level=logging.INFO,
-            rank=0,
-        )
+    #     log_rank(
+    #         f"input: {tokenizer.decode(input_ids, clean_up_tokenization_spaces=False)[:1000]}",
+    #         logger=logger,
+    #         level=logging.INFO,
+    #         rank=0,
+    #     )
         
-        log_rank(
-            f"generation: {tokenizer.decode(generated_ids[len(input_ids) :], clean_up_tokenization_spaces=False)}",
-            logger=logger,
-            level=logging.INFO,
-            rank=0,
-        )
+    #     log_rank(
+    #         f"generation: {tokenizer.decode(generated_ids[len(input_ids) :], clean_up_tokenization_spaces=False)}",
+    #         logger=logger,
+    #         level=logging.INFO,
+    #         rank=0,
+    #     )
         
-        log_rank(
-            "--------------------------------------------------",
-            logger=logger,
-            level=logging.INFO,
-            rank=0,
+    #     log_rank(
+    #         "--------------------------------------------------",
+    #         logger=logger,
+    #         level=logging.INFO,
+    #         rank=0,
+    #     )
+        
+    # if dist.get_rank(dpg.world_pg) == 0:
+    #     print(model)
+        
+    if args.compare_with_no_cache:
+
+        outputs = greedy_search_text(
+            input_iter=(GenerationInput(text=text) for text in dummy_inputs),
+            tokenizer=tokenizer,
+            # TODO @thomasw21: From ModelWithLoss extract the model.
+            model=model.model,
+            # TODO @thomasw21: Figure out how to pass p2p.
+            p2p=model.model.p2p,
+            dpg=dpg,
+            max_new_tokens=args.max_new_tokens,
+            max_micro_batch_size=2,
+            generation_config=GenerationArgs(sampler="greedy", no_cache=True),
+            # tokenizer_config=TokenizerConfig(max_input_length=8),
+            # tokenizer_config=TokenizerConfig(max_input_length=1024), #TODO @nouamane: fix padding for starcoder
+            tokenizer_config=TokenizerConfig(max_input_length=None),
+            # tokenizer_config=TokenizerConfig(max_input_length=model.config.max_position_embeddings - args.max_new_tokens),
+            is_bench=True if (os.environ["USE_BENCH"] == "1") else False,
+            no_cache=True,
         )
+
+        dist.barrier()
+        
+        for output in outputs:
+            input_ids = output.input_ids
+            generated_ids = output.generation_ids
+            if isinstance(input_ids, TensorPointer):
+                assert isinstance(generated_ids, TensorPointer)
+                continue
+            assert isinstance(generated_ids, torch.Tensor)
+            
+            log_rank(
+                f"input: {tokenizer.decode(input_ids, clean_up_tokenization_spaces=False)[:1000]}",
+                logger=logger,
+                level=logging.INFO,
+                rank=0,
+            )
+            
+            log_rank(
+                f"generation: {tokenizer.decode(generated_ids[len(input_ids) :], clean_up_tokenization_spaces=False)}",
+                logger=logger,
+                level=logging.INFO,
+                rank=0,
+            )
+            
+            log_rank(
+                "--------------------------------------------------",
+                logger=logger,
+                level=logging.INFO,
+                rank=0,
+            )
 
 if __name__ == "__main__":
     main()

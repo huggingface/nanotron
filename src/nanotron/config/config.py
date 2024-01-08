@@ -333,6 +333,7 @@ class GenerationArgs:
     n_samples: Optional[int] = None
     eos: Optional[str] = None
     seed: Optional[int] = None
+    no_cache: Optional[bool] = False
 
     def __post_init__(self):
         if isinstance(self.sampler, str):

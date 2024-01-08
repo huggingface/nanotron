@@ -159,6 +159,7 @@ def greedy_search_text(
     max_micro_batch_size: int,
     max_new_tokens: int,
     is_bench: bool = False,
+    no_cache: Optional[bool] = False
 ) -> Generator[GenerationOutput, None, None]:
     """We assume the following:
     - Everyone receives ALL the input text. # TODO @thomasw21: technically only specific ranks need to receive input.
@@ -236,15 +237,27 @@ def greedy_search_text(
                 for state_id, state in enumerate(decoder_states):
                     new_decoder_states.append(state)
                     # Get the new logits
-                    with attach_store(model=model, store=state.store):
-                        # transpose: [sequence_length, batch_size, vocab_size] -> [batch_size, sequence_length, vocab_size]
+                    if not generation_config.no_cache:
+                        with attach_store(model=model, store=state.store):
+                            # transpose: [sequence_length, batch_size, vocab_size] -> [batch_size, sequence_length, vocab_size]
+                            sharded_logits = model(
+                                input_ids=state.new_input_ids,
+                                input_mask=state.new_input_mask,
+                            )
+                    else:
+                        if isinstance(state.new_input_ids, torch.Tensor):
+                            batch_generated_ids = torch.cat(state.generation_ids, dim=-1)
+                            batch_generated_mask = torch.cat(state.generation_mask, dim=-1)
+                        else:
+                            batch_generated_ids = state.new_input_ids
+                            batch_generated_mask = state.new_input_mask
                         sharded_logits = model(
-                            input_ids=state.new_input_ids,
-                            input_mask=state.new_input_mask,
+                            input_ids=batch_generated_ids,
+                            input_mask=batch_generated_mask,
                         )
-                        if isinstance(sharded_logits, torch.Tensor):
-                            sharded_logits = sharded_logits.transpose(0, 1)
 
+                    if isinstance(sharded_logits, torch.Tensor):
+                        sharded_logits = sharded_logits.transpose(0, 1)
                     # Communicate
                     # TODO @thomasw21: Make a diagram to show how this works
                     nb_send: int = 0
