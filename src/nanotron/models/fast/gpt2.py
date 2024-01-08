@@ -19,7 +19,8 @@ import os
 from typing import Dict, Optional, Tuple, Union
 
 import torch
-from apex.normalization import FusedLayerNorm as LayerNorm
+from torch.nn import LayerNorm
+from nanotron.fused.layer_norm import TritonLayerNorm
 from flash_attn.flash_attn_interface import flash_attn_varlen_func
 from torch import nn
 from torch.nn import functional as F
@@ -684,7 +685,7 @@ class GPTBlock(nn.Module):
         layer_idx: int,
     ):
         super(GPTBlock, self).__init__()
-        self.ln_1 = LayerNorm(config.hidden_size, eps=config.layer_norm_epsilon)
+        self.ln_1 = TritonLayerNorm(config.hidden_size, eps=config.layer_norm_epsilon)
         self.attn = CausalSelfMQA(
             config=config,
             parallel_config=parallel_config,
@@ -693,7 +694,7 @@ class GPTBlock(nn.Module):
         )
         self.attn_dropout = config.attn_pdrop
 
-        self.ln_2 = LayerNorm(config.hidden_size, eps=config.layer_norm_epsilon)
+        self.ln_2 = TritonLayerNorm(config.hidden_size, eps=config.layer_norm_epsilon)
         self.ff = MLP(config=config, parallel_config=parallel_config, tp_pg=tp_pg)
         self.ff_dropout = config.resid_pdrop
 
@@ -839,7 +840,7 @@ class GPTModel(nn.Module):
 
         self.final_layer_norm = PipelineBlock(
             p2p=self.p2p,
-            module_builder=LayerNorm,
+            module_builder=TritonLayerNorm,
             module_kwargs={"normalized_shape": config.hidden_size, "eps": config.layer_norm_epsilon},
             module_input_keys={"input"},
             module_output_keys={"hidden_states"},
