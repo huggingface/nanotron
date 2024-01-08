@@ -13,6 +13,7 @@ from nanotron.core.distributed import get_global_rank
 from nanotron.core.parallel.parameters import NanotronParameter
 from nanotron.core.process_groups import DistributedProcessGroups
 from nanotron.core.utils import assert_tensor_synced_across_pg
+from nanotron.distributed import ParallelContext, ParallelMode
 from nanotron.logging import log_rank
 from nanotron.serialize.metadata import CheckpointMetadata, load_meta, save_meta
 from nanotron.serialize.optimizer import load_lr_scheduler, load_optimizer, save_lr_scheduler, save_optimizer
@@ -42,7 +43,7 @@ def save(
     model: nn.Module,
     optimizer: optim.BaseOptimizer,
     lr_scheduler: torch.optim.lr_scheduler.LRScheduler,
-    dpg: DistributedProcessGroups,
+    parallel_context: ParallelContext,
     root_folder: Path,
     should_save_config: bool = True,
     should_save_model: bool = True,
@@ -62,13 +63,13 @@ def save(
         raise e
     try:
         if should_save_model:
-            save_weights(model=model, dpg=dpg, root_folder=root_folder)
+            save_weights(model=model, parallel_context=parallel_context, root_folder=root_folder)
     except Exception as e:
         print(f"Error while saving weights checkpoint: {e}")
         raise e
     try:
         if should_save_optimizer:
-            save_optimizer(optimizer=optimizer, dpg=dpg, root_folder=root_folder)
+            save_optimizer(optimizer=optimizer, parallel_context=parallel_context, root_folder=root_folder)
     except Exception as e:
         print(f"Error while saving optimizer checkpoint: {e}")
         raise e
@@ -76,21 +77,24 @@ def save(
         if should_save_lr_scheduler:
             save_lr_scheduler(
                 lr_scheduler=lr_scheduler,
-                dpg=dpg,
+                parallel_context=parallel_context,
                 root_folder=root_folder,
             )
     except Exception as e:
         print(f"Error while saving lr_scheduler checkpoint: {e}")
         raise e
 
-    save_meta(root_folder=root_folder, dpg=dpg, checkpoint_metadata=checkpoint_metadata)
+    save_meta(root_folder=root_folder, parallel_context=parallel_context, checkpoint_metadata=checkpoint_metadata)
 
     # TODO @thomas21: sanity check, not sure whether that needs to happen at testing or now (depends how much it costs)
     ###
     # SANITY CHECK: Check that the model params are synchronized across `dpg.dp_pg`
     for name, param_or_buffer in sorted(model.state_dict().items(), key=lambda x: x[0]):
+        # TODO(xrsrke): make assert_tensor_synced_across_pg uses parallel_context
         assert_tensor_synced_across_pg(
-            tensor=param_or_buffer, pg=dpg.dp_pg, msg=lambda err: f"{name} are not synced across DP {err}"
+            tensor=param_or_buffer,
+            pg=parallel_context.get_group(ParallelMode.DATA),
+            msg=lambda err: f"{name} are not synced across DP {err}",
         )
 
     # SANITY CHECK: Check that the tied parameters are synchronized
@@ -106,7 +110,7 @@ def save(
     for tied_param in sorted_tied_parameters:
         tied_info = tied_param.get_tied_info()
         group_ranks = tied_info.global_ranks
-        group = dpg.world_ranks_to_pg[group_ranks]
+        group = parallel_context.world_ranks_to_pg[group_ranks]
         assert_tensor_synced_across_pg(
             tensor=tied_param, pg=group, msg=lambda err: f"Tied {tied_info.name} are not synced {err}"
         )
@@ -120,7 +124,9 @@ def save(
                     tensor = tensor.to("cuda")
 
                 assert_tensor_synced_across_pg(
-                    tensor=tensor, pg=dpg.dp_pg, msg=lambda err: f"{name} are not synced across DP {err}"
+                    tensor=tensor,
+                    pg=parallel_context.get_group(ParallelMode.DATA),
+                    msg=lambda err: f"{name} are not synced across DP {err}",
                 )
 
     # SANITY CHECK: tied parameters have their optimizer states synchronized
@@ -146,7 +152,7 @@ def save(
             continue
         tied_info = param.get_tied_info()
         group_ranks = tied_info.global_ranks
-        group = dpg.world_ranks_to_pg[group_ranks]
+        group = parallel_context.world_ranks_to_pg[group_ranks]
         reference_rank = 0
         current_rank = dist.get_rank(group)
 
@@ -172,7 +178,7 @@ def save(
             )
     ###
 
-    dist.barrier(dpg.world_pg)
+    dist.barrier(parallel_context.get_group(ParallelMode.GLOBAL))
 
 
 def load(

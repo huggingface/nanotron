@@ -134,3 +134,42 @@ def test_init_parallel_context(tensor_parallel_size, pipeline_parallel_size, dat
 #         pipeline_parallel_size=PIPELINE_PARALLEL_SIZE,
 #         data_parallel_size=DATA_PARALLEL_SIZE,
 #     )
+
+
+def compare_with_dpg(
+    rank, world_size, seed, backend, port, tensor_parallel_size, pipeline_parallel_size, data_parallel_size
+):
+    ParallelContext(
+        rank=rank,
+        local_rank=rank,
+        world_size=world_size,
+        local_world_size=world_size,
+        # TODO(xrsrke): get host from env
+        host="localhost",
+        port=port,
+        seed=seed,
+        backend=backend,
+        tensor_parallel_size=tensor_parallel_size,
+        pipeline_parallel_size=pipeline_parallel_size,
+        data_parallel_size=data_parallel_size,
+    )
+
+
+@skip_if_no_cuda
+@pytest.mark.parametrize("tensor_parallel_size", (2,))
+@pytest.mark.parametrize("pipeline_parallel_size", (2,))
+@pytest.mark.parametrize("data_parallel_size", (2,))
+def test_with_dpg(tensor_parallel_size, pipeline_parallel_size, data_parallel_size):
+    SEED = 69
+    BACKEND = "nccl"
+    WORLD_SIZE = tensor_parallel_size * pipeline_parallel_size * data_parallel_size
+
+    spawn(
+        compare_with_dpg,
+        world_size=WORLD_SIZE,
+        seed=SEED,
+        backend=BACKEND,
+        tensor_parallel_size=tensor_parallel_size,
+        pipeline_parallel_size=pipeline_parallel_size,
+        data_parallel_size=data_parallel_size,
+    )

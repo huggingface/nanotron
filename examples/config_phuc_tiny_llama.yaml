@@ -8,7 +8,8 @@ data:
     dataset_overwrite_cache: false
     dataset_processing_num_proc_per_process: 1
     hf_dataset_config_name: null
-    hf_dataset_or_datasets: HuggingFaceH4/scale_prompts_098236
+    # hf_dataset_or_datasets: HuggingFaceH4/scale_prompts_098236
+    hf_dataset_or_datasets: HuggingFaceH4/testing_alpaca_small
     hf_dataset_splits: train
     text_column_name: prompt
   num_loading_workers: 1
@@ -72,7 +73,7 @@ parallelism:
   pp: 1
   pp_engine: 1f1b
   recompute_granularity: SELECTIVE
-  tp: 1
+  tp: 2
   tp_linear_async_communication: true
   tp_mode: REDUCE_SCATTER
 profiler: null
@@ -86,5 +87,6 @@ tokens:
   limit_val_batches: 0
   micro_batch_size: 2
   sequence_length: 32
-  train_steps: 1000
+  # train_steps: 1000
+  train_steps: 5
   val_check_interval: -1

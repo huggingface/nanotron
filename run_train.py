@@ -23,6 +23,7 @@ from nanotron.dataloader import (
     get_datasets,
     get_train_dataloader,
 )
+from nanotron.distributed import ParallelMode
 from nanotron.logging import log_rank
 from nanotron.trainer import DistributedTrainer
 from torch.nn.parallel import DistributedDataParallel
@@ -32,9 +33,12 @@ from transformers import __version__ as tf_version
 logger = logging.get_logger(__name__)
 
 
+# TODO(xrsrke): decouple trainer from get_dataloader, pass parallel_context only
 def get_dataloader(trainer: DistributedTrainer, sanity_check_dataloader_interval: Optional[int] = None):
     # Prepare dataloader
     tokenizer_path = trainer.config.tokenizer.tokenizer_name_or_path
+    parallel_context = trainer.parallel_context
+
     log_rank(
         f"Loading tokenizer from {tokenizer_path} and transformers/hf_hub versions {tf_version, hf_hub_version}",
         logger=logger,
@@ -63,8 +67,9 @@ def get_dataloader(trainer: DistributedTrainer, sanity_check_dataloader_interval
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
         tokenizer.pad_token = tokenizer.eos_token
         tokenizer.padding_side = "left"
+        global_group = parallel_context.get_group(ParallelMode.GLOBAL)
 
-        with main_rank_first(trainer.dpg.world_pg):
+        with main_rank_first(global_group):
             # 1st device processes dataset and cache it, then other devices load from cache
             # TODO @nouamanetazi: this may timeout before 1st device finishes processing dataset. Can we have a ctxmanager to modify timeout?
             # TODO: generalise to include  for validation/test splits
@@ -85,7 +90,7 @@ def get_dataloader(trainer: DistributedTrainer, sanity_check_dataloader_interval
             dataloader = get_train_dataloader(
                 train_dataset=train_dataset,
                 sequence_length=trainer.sequence_length,
-                dpg=trainer.dpg,
+                parallel_context=parallel_context,
                 input_pp_rank=input_pp_rank,
                 output_pp_rank=output_pp_rank,
                 micro_batch_size=trainer.micro_batch_size,
@@ -95,11 +100,12 @@ def get_dataloader(trainer: DistributedTrainer, sanity_check_dataloader_interval
                 dataloader_drop_last=True,
             )
             # Check if we have enough samples for train_steps
+            dp_world_size = parallel_context.get_world_size(ParallelMode.DATA)
             assert (
                 trainer.config.tokens.train_steps - trainer.start_iteration_step
-            ) * trainer.global_batch_size // trainer.dpg.dp_pg.size() < len(dataloader), (
-                f"Dataset is too small for steps ({len(dataloader)} < {(trainer.config.tokens.train_steps - trainer.start_iteration_step) * trainer.global_batch_size // trainer.dpg.dp_pg.size()}), "
-                f"Try train_steps<={len(dataloader) * trainer.dpg.dp_pg.size() // trainer.global_batch_size + trainer.start_iteration_step}"
+            ) * trainer.global_batch_size // dp_world_size < len(dataloader), (
+                f"Dataset is too small for steps ({len(dataloader)} < {(trainer.config.tokens.train_steps - trainer.start_iteration_step) * trainer.global_batch_size // dp_world_size}), "
+                f"Try train_steps<={len(dataloader) * dp_world_size // trainer.global_batch_size + trainer.start_iteration_step}"
             )
     else:
         raise ValueError(f"Unhandled case of `self.config.data.dataset`. Got: {trainer.config.data.dataset}")

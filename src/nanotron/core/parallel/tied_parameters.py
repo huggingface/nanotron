@@ -8,8 +8,8 @@ from nanotron.core import logging
 from nanotron.core.gradient_accumulator import GradientAccumulator
 from nanotron.core.logging import log_rank
 from nanotron.core.parallel.parameters import NanotronParameter
-from nanotron.core.process_groups import DistributedProcessGroups
 from nanotron.core.utils import get_parameter_and_parent_module
+from nanotron.distributed import ParallelContext, ParallelMode
 
 logger = logging.get_logger(__name__)
 
@@ -30,8 +30,8 @@ def create_tied_parameter(
 def tie_parameters(
     root_module: nn.Module,
     ties: List[Tuple[str, Tuple[int, ...]]],
-    dpg: DistributedProcessGroups,
     reduce_op: Optional[dist.ReduceOp],
+    parallel_context: ParallelContext,
 ):
     """
     Tie parameters.
@@ -47,9 +47,14 @@ def tie_parameters(
         raise ValueError("Can't tie nothing")
 
     # TODO @thomasw21: When we support Zero3 this isn't true anymore
+    # TODO(xrsrke): use parallel_context.get_local_rank if this gets local_rank
     dp_ranks = tuple(
         sorted(
-            {dpg.get_3d_ranks(world_rank=global_rank)[1] for _, global_ranks in ties for global_rank in global_ranks}
+            {
+                parallel_context.get_3d_ranks(local_rank=global_rank, parallel_mode=ParallelMode.GLOBAL)[1]
+                for _, global_ranks in ties
+                for global_rank in global_ranks
+            }
         )
     )
     assert (
@@ -60,9 +65,9 @@ def tie_parameters(
     global_ranks = tuple(sorted(set().union(*(tie[1] for tie in ties))))
 
     new_param = None
-    world_rank = dist.get_rank(dpg.world_pg)
+    rank = parallel_context.get_global_rank()
     for tie_target, tie_model_ranks in ties:
-        if world_rank not in tie_model_ranks:
+        if rank not in tie_model_ranks:
             continue
 
         param, parent_module, param_name = get_parameter_and_parent_module(target=tie_target, root_module=root_module)
@@ -77,7 +82,7 @@ def tie_parameters(
         setattr(parent_module, param_name, new_param)
 
 
-def create_pg_for_tied_weights(root_module: nn.Module, dpg: DistributedProcessGroups):
+def create_pg_for_tied_weights(root_module: nn.Module, parallel_context: ParallelContext):
     """Tied weights are tied across specific set of global ranks, we use this method to create process groups for each difference set of global ranks"""
     group_ranks = {
         param.get_tied_info().global_ranks
@@ -85,15 +90,15 @@ def create_pg_for_tied_weights(root_module: nn.Module, dpg: DistributedProcessGr
         if isinstance(param, NanotronParameter) and param.is_tied
     }
 
-    world_group_ranks = [None] * dpg.world_pg.size()
-    dist.all_gather_object(world_group_ranks, group_ranks, group=dpg.world_pg)
+    world_group_ranks = [None] * parallel_context.get_world_size(ParallelMode.GLOBAL)
+    dist.all_gather_object(world_group_ranks, group_ranks, group=parallel_context.get_group(ParallelMode.GLOBAL))
     all_group_ranks = sorted(
         set().union(*world_group_ranks),
     )
 
     for global_ranks in all_group_ranks:
-        if global_ranks not in dpg.world_ranks_to_pg:
-            dpg.world_ranks_to_pg[global_ranks] = dist.new_group(global_ranks)
+        if global_ranks not in parallel_context.world_ranks_to_pg:
+            parallel_context.world_ranks_to_pg[global_ranks] = dist.new_group(global_ranks)
 
 
 def get_tied_id_to_param(
@@ -113,9 +118,7 @@ def get_tied_id_to_param(
 
 
 def sync_tied_weights_gradients(
-    module: nn.Module,
-    dpg: DistributedProcessGroups,
-    grad_accumulator: Optional[GradientAccumulator],
+    module: nn.Module, grad_accumulator: Optional[GradientAccumulator], parallel_context: ParallelContext
 ):
     tied_id_to_param = get_tied_id_to_param(
         parameters=[param for param in module.parameters() if param.requires_grad], root_module=module
@@ -138,7 +141,7 @@ def sync_tied_weights_gradients(
             f"Syncing tied weights {name} across ranks {group_ranks} ...",
             logger=logger,
             level=logging.DEBUG,
-            group=dpg.world_ranks_to_pg[group_ranks],
+            group=parallel_context.world_ranks_to_pg[group_ranks],
             rank=0,
         )
         key = (group_ranks, tied_info.reduce_op)
@@ -148,4 +151,4 @@ def sync_tied_weights_gradients(
             group_ranks_and_reduce_op_to_tensors_to_reduce[(group_ranks, tied_info.reduce_op)] = [tied_grad]
 
     for (group_ranks, reduce_op), tensors in group_ranks_and_reduce_op_to_tensors_to_reduce.items():
-        dist.all_reduce_coalesced(tensors=tensors, op=reduce_op, group=dpg.world_ranks_to_pg[group_ranks])
+        dist.all_reduce_coalesced(tensors=tensors, op=reduce_op, group=parallel_context.world_ranks_to_pg[group_ranks])

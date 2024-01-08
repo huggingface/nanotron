@@ -16,7 +16,6 @@
 
 
 import os
-import random
 from typing import Dict, List, Literal, Tuple
 
 import numpy as np
@@ -46,7 +45,7 @@ class ParallelContext:
         pipeline_parallel_size: int,
         data_parallel_size: int,
         seed: int = SEED,
-        backend: DistributedBackend = "gloo",
+        backend: DistributedBackend = "nccl",
     ):
         """Initialize parallel context based on the environment variables defined by torchrun."""
         rank = int(os.environ["RANK"])
@@ -100,6 +99,9 @@ class ParallelContext:
             "must be equal to the world size.",
         )
 
+        if not dist.is_available():
+            raise ValueError("`torch.distributed is not available as a package, please install it.")
+
         self.tensor_parallel_size = tensor_parallel_size
         self.pipeline_parallel_size = pipeline_parallel_size
         self.data_parallel_size = data_parallel_size
@@ -115,7 +117,10 @@ class ParallelContext:
         self.local_world_size = local_world_size
 
         self.set_device()
-        self.init_global_dist(rank, world_size, backend, host, port)
+
+        if not dist.is_initialized():
+            self.init_global_dist(rank, world_size, backend, host, port)
+
         self.init_parallel_groups()
         # self.map_rank_to_device()
         dist.barrier()
@@ -142,12 +147,11 @@ class ParallelContext:
             host (str): communication host
             port (int): communication port
         """
+        assert backend == "nccl", "Only nccl backend is supported for now."
+
         init_method = f"tcp://{host}:{port}"
         dist.init_process_group(
-            rank=rank,
-            world_size=world_size,
-            backend=backend,
-            init_method=init_method,
+            rank=rank, world_size=world_size, backend=backend, init_method=init_method, timeout=dist.default_pg_timeout
         )
         ranks = list(range(world_size))
         process_group = dist.new_group(
@@ -286,15 +290,15 @@ class ParallelContext:
         device_id = local_rank
         torch.cuda.set_device(torch.cuda.device(device_id))
 
-    def set_seed(self, seed: int):
-        """Set seed for reproducibility."""
-        random.seed(seed)
-        np.random.seed(seed)
-        torch.manual_seed(seed)
+    # def set_seed(self, seed: int):
+    #     """Set seed for reproducibility."""
+    #     random.seed(seed)
+    #     np.random.seed(seed)
+    #     torch.manual_seed(seed)
 
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed(seed)
-            torch.cuda.manual_seed_all(seed)
+    #     if torch.cuda.is_available():
+    #         torch.cuda.manual_seed(seed)
+    #         torch.cuda.manual_seed_all(seed)
 
     def map_rank_to_device(self):
         """Map global rank to device."""

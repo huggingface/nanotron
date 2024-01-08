@@ -47,6 +47,7 @@ from nanotron.core.parallel.tensor_parallelism.nn import (
 from nanotron.core.process_groups import DistributedProcessGroups
 from nanotron.core.random import RandomStates
 from nanotron.core.utils import checkpoint_method
+from nanotron.distributed import ParallelContext, ParallelMode
 from nanotron.models import AttachableStore, NanotronModel
 
 logger = logging.get_logger(__name__)
@@ -601,26 +602,27 @@ class LlamaModel(nn.Module):
     def __init__(
         self,
         config: LlamaConfig,
-        dpg: DistributedProcessGroups,
+        parallel_context: ParallelContext,
         parallel_config: Optional[ParallelismArgs],
     ):
         super().__init__()
 
         # Declare all the nodes
-        self.p2p = P2P(dpg.pp_pg, device=torch.device("cuda"))
+        self.p2p = P2P(parallel_context.get_group(ParallelMode.PIPELINE), device=torch.device("cuda"))
         self.config = config
         self.parallel_config = parallel_config
-        self.dpg = dpg
+        self.parallel_context = parallel_context
         self.tp_mode = parallel_config.tp_mode if parallel_config is not None else TensorParallelLinearMode.ALL_REDUCE
         tp_linear_async_communication = (
             parallel_config.tp_linear_async_communication if parallel_config is not None else False
         )
+        tp_group = parallel_context.get_group(ParallelMode.TENSOR)
 
         self.token_position_embeddings = PipelineBlock(
             p2p=self.p2p,
             module_builder=Embedding,
             module_kwargs={
-                "tp_pg": dpg.tp_pg,
+                "tp_pg": tp_group,
                 "config": config,
                 "parallel_config": parallel_config,
             },
@@ -636,7 +638,7 @@ class LlamaModel(nn.Module):
                     module_kwargs={
                         "config": config,
                         "parallel_config": parallel_config,
-                        "tp_pg": dpg.tp_pg,
+                        "tp_pg": tp_group,
                         "layer_idx": layer_idx,
                     },
                     module_input_keys={"hidden_states", "sequence_mask"},
@@ -657,11 +659,12 @@ class LlamaModel(nn.Module):
         self.lm_head = PipelineBlock(
             p2p=self.p2p,
             # Understand that this means that we return sharded logits that are going to need to be gathered
+            # TODO(xrsrke): make TensorParallelColumnLinear take parallel_context
             module_builder=TensorParallelColumnLinear,
             module_kwargs={
                 "in_features": config.hidden_size,
                 "out_features": config.vocab_size,
-                "pg": dpg.tp_pg,
+                "pg": tp_group,
                 "bias": False,
                 # TODO @thomasw21: refactor so that we store that default in a single place.
                 "mode": self.tp_mode,
@@ -726,7 +729,7 @@ class LlamaModel(nn.Module):
 
     def get_flops_per_sec(self, iteration_time_in_sec, sequence_length, global_batch_size):
         """Get flops per second for a given model"""
-        world_size = self.dpg.world_pg.size()
+        world_size = self.parallel_context.get_world_size(ParallelMode.GLOBAL)
         try:
             num_key_values_heads = self.config.num_key_value_heads
         except AttributeError:
@@ -782,16 +785,18 @@ class LlamaForTraining(NanotronModel):
     def __init__(
         self,
         config: LlamaConfig,
-        dpg: DistributedProcessGroups,
+        parallel_context: DistributedProcessGroups,
         parallel_config: Optional[ParallelismArgs],
         random_states: Optional[RandomStates] = None,
     ):
         super().__init__()
-        self.model = LlamaModel(config=config, dpg=dpg, parallel_config=parallel_config)
+        # TODO(xrsrke): move parallel_context argument to the end of LlamaModel
+        self.model = LlamaModel(config=config, parallel_context=parallel_context, parallel_config=parallel_config)
         self.loss = PipelineBlock(
             p2p=self.model.p2p,
             module_builder=Loss,
-            module_kwargs={"tp_pg": dpg.tp_pg},
+            # TODO(xrsrke): use parallel_context
+            module_kwargs={"tp_pg": parallel_context.get_group(ParallelMode.TENSOR)},
             module_input_keys={
                 "sharded_logits",
                 "label_ids",
@@ -799,7 +804,7 @@ class LlamaForTraining(NanotronModel):
             },
             module_output_keys={"loss"},
         )
-        self.dpg = dpg
+        self.parallel_context = parallel_context
         self.config = config
         self.parallel_config = parallel_config
 

@@ -2,7 +2,6 @@ from abc import ABC, abstractmethod
 from typing import Dict, Iterable, Optional, Union
 
 import torch
-from nanotron.core import distributed as dist
 from nanotron.core import logging
 from nanotron.core.distributed import ProcessGroup
 from nanotron.core.gradient_accumulator import GradientAccumulator
@@ -12,6 +11,7 @@ from nanotron.core.parallel.pipeline_parallelism.context_manager import attach_p
 from nanotron.core.parallel.pipeline_parallelism.state import PipelineTrainBatchState
 from nanotron.core.parallel.pipeline_parallelism.tensor_pointer import TensorPointer
 from nanotron.core.utils import ContextManagers
+from nanotron.distributed import ParallelContext, ParallelMode
 from torch import nn as torch_nn
 from torch.nn.parallel import DistributedDataParallel
 
@@ -226,27 +226,28 @@ class OneForwardOneBackwardPipelineEngine(PipelineEngine):
     def train_batch_iter(
         self,
         model: torch_nn.Module,
-        pg: ProcessGroup,
+        parallel_context: ParallelContext,
         batch: Iterable[Dict[str, Union[torch.Tensor, TensorPointer]]],
         nb_microbatches: int,
         grad_accumulator: Optional[GradientAccumulator],
     ) -> Iterable[Dict[str, Union[torch.Tensor, TensorPointer]]]:
         """Check https://arxiv.org/abs/2104.04473 for diagrams for the pipeline engine"""
         self.nb_microbatches = nb_microbatches
+        pp_world_size = parallel_context.get_world_size(ParallelMode.PIPELINE)
         assert (
-            self.nb_microbatches >= pg.size() - 1
-        ), f"Number of microbatches ({self.nb_microbatches}) must be at least PP_SIZE-1={pg.size() - 1} when using the OneForwardOneBackwardPipelineEngine"
+            self.nb_microbatches >= pp_world_size - 1
+        ), f"Number of microbatches ({self.nb_microbatches}) must be at least PP_SIZE-1={pp_world_size - 1} when using the OneForwardOneBackwardPipelineEngine"
 
         state = PipelineTrainBatchState()
 
         outputs = []
         batch = iter(batch)
 
-        current_pp_rank = dist.get_rank(pg)
+        current_pp_rank = parallel_context.get_local_rank(ParallelMode.PIPELINE)
 
         with attach_pipeline_state_to_model(model=model, pipeline_state=state):
             # Init
-            for _ in range(pg.size() - current_pp_rank - 1):
+            for _ in range(pp_world_size - current_pp_rank - 1):
                 micro_batch = next(batch)
                 context = self._get_fwd_context(model=model)
                 output = self.forward(context=context, state=state, micro_batch=micro_batch, model=model)
@@ -295,7 +296,7 @@ class OneForwardOneBackwardPipelineEngine(PipelineEngine):
                 self.backward(context=context, state=state, grad_accumulator=grad_accumulator)
 
             # Check figure in paper: The remain blocks are all backward and there is only `pg.size() - current_pp_rank - 1` blocks left
-            assert len(state.microbatches_activations_requiring_backward) == pg.size() - current_pp_rank - 1
+            assert len(state.microbatches_activations_requiring_backward) == pp_world_size - current_pp_rank - 1
             # No more activation to send/recv
             assert (
                 len(state.microbatches_activations_to_send) == 0

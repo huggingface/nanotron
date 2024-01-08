@@ -47,6 +47,7 @@ from nanotron.core.random import (
     get_current_random_state,
     get_synced_random_state,
 )
+from nanotron.distributed import ParallelContext, ParallelMode
 from nanotron.logging import LogItem, log_rank, warn_once
 
 logger = logging.get_logger(__name__)
@@ -67,11 +68,15 @@ def get_args():
     return parser.parse_args()
 
 
-def set_logger_verbosity_format(logging_level: str, dpg: DistributedProcessGroups):
+def set_logger_verbosity_format(logging_level: str, parallel_context: ParallelContext):
     node_name = os.environ.get("SLURMD_NODENAME")
+    dp_rank = parallel_context.get_local_rank(ParallelMode.DATA)
+    pp_rank = parallel_context.get_local_rank(ParallelMode.PIPELINE)
+    tp_rank = parallel_context.get_local_rank(ParallelMode.TENSOR)
+
     formatter = lg.Formatter(
-        fmt=f"%(asctime)s [%(levelname)s|DP={dist.get_rank(dpg.dp_pg)}|PP={dist.get_rank(dpg.pp_pg)}|"
-        f"TP={dist.get_rank(dpg.tp_pg)}{'|' + node_name if node_name else ''}]: %(message)s",
+        fmt=f"%(asctime)s [%(levelname)s|DP={dp_rank}|PP={pp_rank}|"
+        f"TP={tp_rank}{'|' + node_name if node_name else ''}]: %(message)s",
         datefmt="%m/%d/%Y %H:%M:%S",
     )
     # TODO @thomasw21: `logging.log_levels` returns valid lg log levels
@@ -177,7 +182,7 @@ def lr_scheduler_builder(optimizer: Optimizer, lr_scheduler_args: LRSchedulerArg
 
 
 def init_optimizer_and_grad_accumulator(
-    model: nn.Module, optimizer_args: OptimizerArgs, dpg: DistributedProcessGroups
+    model: nn.Module, optimizer_args: OptimizerArgs, parallel_context: ParallelContext
 ) -> Tuple[BaseOptimizer, GradientAccumulator]:
     # Normalize DDP
     normalized_model = model.module if isinstance(model, DistributedDataParallel) else model
@@ -259,7 +264,7 @@ def init_optimizer_and_grad_accumulator(
             named_params_or_groups=named_parameters,
             # TODO @thomasw21: We need a better API for gradient accumulation/zero etc ...
             optimizer_builder=optimizer_builder,
-            dp_pg=dpg.dp_pg,
+            parallel_context=parallel_context,
         )
 
         # SANITY CHECK: assert that optimizer's named_params point to model's params (check only the first one)
@@ -284,7 +289,7 @@ def init_optimizer_and_grad_accumulator(
 
         assert isinstance(grad_accumulator, FP32GradientAccumulator)
         grad_accumulator.assign_param_offsets(
-            dp_rank=dist.get_rank(dpg.dp_pg),
+            dp_rank=parallel_context.get_local_rank(ParallelMode.DATA),
             param_name_to_offsets=param_name_to_dp_rank_offsets,
         )
 
@@ -293,7 +298,7 @@ def init_optimizer_and_grad_accumulator(
         assert isinstance(grad_accumulator, FP32GradientAccumulator)
         model.register_comm_hook(
             state=FP32GradBucketManager(
-                dp_pg=dpg.dp_pg,
+                dp_pg=parallel_context.get_group(ParallelMode.DATA),
                 accumulator=grad_accumulator,
                 param_id_to_name={
                     id(param): param.get_tied_info().get_full_name_from_module_id_to_prefix(
@@ -461,31 +466,38 @@ def test_all_pair_to_pair(
 
 def log_throughput(
     config: Config,
-    dpg: DistributedProcessGroups,
+    parallel_context: ParallelContext,
     model_tflops=0,
     hardware_tflops=0,
     tokens_per_sec=0,
 ):
+    global_world_size = parallel_context.get_world_size(ParallelMode.GLOBAL)
+    data_world_size = parallel_context.get_world_size(ParallelMode.DATA)
+    tensor_world_size = parallel_context.get_world_size(ParallelMode.TENSOR)
+    pipeline_world_size = parallel_context.get_world_size(ParallelMode.PIPELINE)
+
     micro_batch_size = config.tokens.micro_batch_size
     n_micro_batches_per_batch = config.tokens.batch_accumulation_per_replica
-    global_batch_size = micro_batch_size * n_micro_batches_per_batch * dpg.dp_pg.size()
+    global_batch_size = micro_batch_size * n_micro_batches_per_batch * data_world_size
     sequence_length = config.tokens.sequence_length
     slurm_job_id = os.environ.get("SLURM_JOB_ID", "N/A")
     csv_filename = config.general.benchmark_csv_path
+
     table_log = [
         LogItem("job_id", slurm_job_id, "s"),
         LogItem("model_name", config.general.run, "s"),
-        LogItem("nodes", math.ceil(dpg.world_pg.size() / 8), "d"),
-        LogItem("DP", dpg.dp_pg.size(), "d"),
-        LogItem("TP", dpg.tp_pg.size(), "d"),
-        LogItem("PP", dpg.pp_pg.size(), "d"),
+        # TODO(xrsrke): make the number of gpus per node configurable
+        LogItem("nodes", math.ceil(global_world_size / 8), "d"),
+        LogItem("DP", data_world_size, "d"),
+        LogItem("TP", tensor_world_size, "d"),
+        LogItem("PP", pipeline_world_size, "d"),
         LogItem("seq_len", (sequence_length), "d"),
         LogItem("mbs", micro_batch_size, "d"),
         LogItem("batch_accum", n_micro_batches_per_batch, "d"),
         LogItem("gbs", global_batch_size, "d"),
         LogItem("mTFLOPs", model_tflops, ".2f"),
         LogItem("hTFLOPs", hardware_tflops, ".2f"),
-        LogItem("tok/s/gpu", tokens_per_sec / dpg.world_pg.size(), ".2f"),
+        LogItem("tok/s/gpu", tokens_per_sec / global_world_size, ".2f"),
         LogItem("Mem Alloc (GB)", torch.cuda.max_memory_allocated() / 1024**3, ".2f"),
         LogItem("Mem Res (GB)", torch.cuda.max_memory_reserved() / 1024**3, ".2f"),
     ]
@@ -499,7 +511,7 @@ def log_throughput(
     )
     import csv
 
-    if dist.get_rank(dpg.world_pg) == 0:
+    if parallel_context.get_global_rank() == 0:
         if not os.path.exists(csv_filename):
             with open(csv_filename, mode="w") as fo:
                 writer = csv.writer(fo)

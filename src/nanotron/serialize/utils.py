@@ -1,7 +1,7 @@
 from enum import Enum
 from typing import List, Optional, Tuple
 
-from nanotron.core.process_groups import DistributedProcessGroups
+from nanotron.distributed import ParallelContext, ParallelMode
 
 
 class ObjectType(Enum):
@@ -11,10 +11,13 @@ class ObjectType(Enum):
 
 
 def get_tp_and_pp_rank_and_size_from(
-    world_rank: int, dpg: DistributedProcessGroups
+    world_rank: int, parallel_context: ParallelContext
 ) -> Tuple[Tuple[int, int], Tuple[int, int]]:
-    result = dpg.get_3d_ranks(world_rank=world_rank)
-    return (result[2], dpg.tp_pg.size()), (result[0], dpg.pp_pg.size())
+    result = parallel_context.get_3d_ranks(world_rank=world_rank)
+    tp_rank = parallel_context.get_world_size(ParallelMode.TENSOR)
+    pp_rank = parallel_context.get_world_size(ParallelMode.PIPELINE)
+
+    return (result[2], tp_rank), (result[0], pp_rank)
 
 
 def get_path(

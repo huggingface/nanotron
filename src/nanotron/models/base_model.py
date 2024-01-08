@@ -9,6 +9,7 @@ from nanotron.core.distributed import ProcessGroup
 from nanotron.core.logging import log_rank
 from nanotron.core.parallel.pipeline_parallelism.block import PipelineBlock
 from nanotron.core.process_groups import DistributedProcessGroups
+from nanotron.distributed import ParallelMode
 
 logger = logging.get_logger(__name__)
 
@@ -52,13 +53,14 @@ class NanotronModel(nn.Module, metaclass=ABCMeta):
         pass
 
     def log_modules(self, level: int = logging.DEBUG, group: Optional[ProcessGroup] = None, rank: int = 0):
-        assert hasattr(self, "dpg"), "`NanotronModel` needs to have a `dpg` attribute"
+        assert hasattr(self, "parallel_context"), "`NanotronModel` needs to have a `parallel_context` attribute"
+        pp_world_size = self.parallel_context.get_world_size(ParallelMode.PIPELINE)
 
         for name, module in self.named_modules():
             if not isinstance(module, PipelineBlock):
                 continue
             log_rank(
-                f"module_name: {name} | PP: {module.rank}/{self.dpg.pp_pg.size()}",
+                f"module_name: {name} | PP: {module.rank}/{pp_world_size}",
                 logger=logger,
                 level=level,
                 group=group,

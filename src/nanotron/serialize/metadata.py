@@ -9,9 +9,8 @@ from dacite import from_dict
 from packaging.version import Version
 
 from nanotron.constants import CHECKPOINT_VERSION
-from nanotron.core import distributed as dist
 from nanotron.core.parallel.parameters import SlicesPair
-from nanotron.core.process_groups import DistributedProcessGroups
+from nanotron.distributed import ParallelContext, ParallelMode
 
 
 @dataclasses.dataclass
@@ -113,13 +112,17 @@ def to_list(list_: Union[List, Tuple], type_hooks: Dict[Type, Callable[[Any], An
     return list_.__class__((process_type(elt, type_hooks=type_hooks) for elt in list_))
 
 
-def save_meta(dpg: DistributedProcessGroups, root_folder: Path, checkpoint_metadata: dict):
-    if dist.get_rank(dpg.world_pg) != 0:
+# TODO(xrsrke): move parallel_context argument to the end of the function
+def save_meta(parallel_context: ParallelContext, root_folder: Path, checkpoint_metadata: dict):
+    if parallel_context.get_global_rank() != 0:
         return
 
     root_folder.mkdir(exist_ok=True, parents=True)
+
+    tp_world_size = parallel_context.get_world_size(ParallelMode.TENSOR)
+    dp_world_size = parallel_context.get_world_size(ParallelMode.DATA)
     checkpoint_metadata = CheckpointMetadata(
-        version=CHECKPOINT_VERSION, tp=dpg.tp_pg.size(), dp=dpg.dp_pg.size(), metas=checkpoint_metadata
+        version=CHECKPOINT_VERSION, tp=tp_world_size, dp=dp_world_size, metas=checkpoint_metadata
     )
 
     # There are some types that require manual casting in order to work correctly.
@@ -129,7 +132,8 @@ def save_meta(dpg: DistributedProcessGroups, root_folder: Path, checkpoint_metad
         json.dump(processed_metadata, fo, indent=2, sort_keys=True)
 
 
-def load_meta(dpg: DistributedProcessGroups, root_folder: Path) -> CheckpointMetadata:
+def load_meta(root_folder: Path, parallel_context: ParallelContext) -> CheckpointMetadata:
+    # TODO(xrsrke): remove parallel_context/dpg since it's not used
     with open(root_folder / "checkpoint_metadata.json", mode="r") as fi:
         checkpoint_metadata = json.load(fi)
         checkpoint_metadata = from_dict(

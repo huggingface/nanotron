@@ -17,6 +17,7 @@ from nanotron.core.utils import (
     assert_fail_except_rank_with,
     assert_tensor_synced_across_pg,
 )
+from nanotron.distributed import ParallelContext, ParallelMode
 
 try:
     import datasets
@@ -33,7 +34,9 @@ logger = logging.get_logger(__name__)
 
 
 def sanity_check_dataloader(
-    dataloader: Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]], dpg: DistributedProcessGroups, config: Config
+    dataloader: Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]],
+    parallel_context: ParallelContext,
+    config: Config,
 ) -> Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]]:
     for batch in dataloader:
         micro_batch = {
@@ -51,8 +54,10 @@ def sanity_check_dataloader(
                     # It's fine if mask is the same across DP
                     continue
 
-                with assert_fail_except_rank_with(AssertionError, rank_exception=0, pg=dpg.dp_pg):
-                    assert_tensor_synced_across_pg(tensor=value, pg=dpg.dp_pg, msg=lambda err: f"{key} {err}")
+                dp_group = parallel_context.get_group(ParallelMode.DATA)
+                with assert_fail_except_rank_with(AssertionError, rank_exception=0, pg=dp_group):
+                    # TODO(xrsrke): make assert_tensor_synced_across_pg uses parallel_context
+                    assert_tensor_synced_across_pg(tensor=value, pg=dp_group, msg=lambda err: f"{key} {err}")
 
             # SANITY CHECK: Check input are synchronized throughout TP
             for key, value in sorted(micro_batch.items(), key=lambda x: x[0]):
@@ -60,7 +65,7 @@ def sanity_check_dataloader(
                     continue
                 assert_tensor_synced_across_pg(
                     tensor=value,
-                    pg=dpg.tp_pg,
+                    pg=parallel_context.get_group(ParallelMode.TENSOR),
                     msg=lambda err: f"{key} are not synchronized throughout TP {err}",
                 )
 
@@ -323,11 +328,11 @@ class DataCollatorForCLM:
     sequence_length: int
     input_pp_rank: int
     output_pp_rank: int
-    dpg: DistributedProcessGroups
+    parallel_context: ParallelContext
 
     def __call__(self, examples: List[Dict[str, List[np.ndarray]]]) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
         # Process the case when "input_ids" doesn't exist
-        current_pp_rank = dist.get_rank(self.dpg.pp_pg)
+        current_pp_rank = self.parallel_context.get_local_rank(ParallelMode.PIPELINE)
         if current_pp_rank not in [
             self.input_pp_rank,
             self.output_pp_rank,
@@ -424,7 +429,7 @@ def _get_train_sampler(
 def get_train_dataloader(
     train_dataset: Dataset,
     sequence_length: int,
-    dpg: DistributedProcessGroups,
+    parallel_context: ParallelContext,
     input_pp_rank: int,
     output_pp_rank: int,
     micro_batch_size: int,
@@ -439,7 +444,8 @@ def get_train_dataloader(
         raise ValueError(f"training requires a datasets.Dataset, but got {type(train_dataset)}")
 
     # Only some rank require to run the dataloader.
-    if dist.get_rank(dpg.pp_pg) not in [
+    pp_rank = parallel_context.get_local_rank(ParallelMode.PIPELINE)
+    if pp_rank not in [
         input_pp_rank,
         output_pp_rank,
     ]:
@@ -461,15 +467,16 @@ def get_train_dataloader(
         sequence_length=sequence_length,
         input_pp_rank=input_pp_rank,
         output_pp_rank=output_pp_rank,
-        dpg=dpg,
+        parallel_context=parallel_context,
     )
 
     # TODO @nouamanetazi: Remove unused columns: https://github.com/huggingface/transformers/blob/47e1676255e5dd86b9541f734cd4f4bdcbb50f4a/src/transformers/trainer.py#L852
     # TODO @nouamanetazi: Support torch.utils.data.IterableDataset: https://github.com/huggingface/transformers/blob/47e1676255e5dd86b9541f734cd4f4bdcbb50f4a/src/transformers/trainer.py#L855-L872
-
+    dp_world_size = parallel_context.get_world_size(ParallelMode.DATA)
+    dp_rank = parallel_context.get_local_rank(ParallelMode.DATA)
     train_sampler = _get_train_sampler(
-        dp_size=dpg.dp_pg.size(),
-        dp_rank=dist.get_rank(dpg.dp_pg),
+        dp_size=dp_world_size,
+        dp_rank=dp_rank,
         train_dataset=train_dataset,
         seed=seed_worker,
         use_loop_to_round_batch_size=use_loop_to_round_batch_size,
@@ -486,7 +493,7 @@ def get_train_dataloader(
         drop_last=dataloader_drop_last,  # we also drop_last in `clm_process()`
         num_workers=dataloader_num_workers,
         pin_memory=dataloader_pin_memory,
-        worker_init_fn=get_dataloader_worker_init(dp_rank=dist.get_rank(dpg.dp_pg)),
+        worker_init_fn=get_dataloader_worker_init(dp_rank=dp_rank),
         # TODO @thomasw21: I'm not sure but this doesn't seem to work at all.
         # pin_memory_device="cuda",
     )
