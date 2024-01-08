@@ -53,7 +53,7 @@ We also support a set of flavors that you can install using `pip install -e [$FL
  - `s3fs`: Used if you want to save/load checkpoints directly from s3. It uses `s3fs` and consequently might be slow. We are working on an improve mechanism
 
 Install also:
-- Flash Attention: `pip install packaging; pip install flash-attn>=2.0  --no-build-isolation`
+- Flash Attention: `pip install packaging; pip install flash-attn>=2.4.2  --no-build-isolation`
 - Apex: see the [Github repo](https://github.com/NVIDIA/apex#linux) (if master errors out, try checking out release 23.08)
 - Also good to have `s3fs` `transformers` `datasets` `python-etcd` `tensorboardX` `boto3`: `pip install s3fs transformers datasets python-etcd tensorboardX boto3`
 - finally install `s5cmd`:
