@@ -28,7 +28,6 @@ from transformers import LlamaConfig
 from transformers.activations import ACT2FN
 
 from nanotron.config import ParallelismArgs, RecomputeGranularity
-from nanotron.core import distributed as dist
 from nanotron.core import logging
 from nanotron.core.logging import log_rank
 from nanotron.core.parallel.parameters import NanotronParameter
@@ -136,7 +135,7 @@ class MLP(nn.Module):
         self,
         config: LlamaConfig,
         parallel_config: Optional[ParallelismArgs],
-        tp_pg: dist.ProcessGroup,
+        parallel_context: ParallelContext,
     ):
         super().__init__()
 
@@ -153,7 +152,7 @@ class MLP(nn.Module):
         self.gate_up_proj = TensorParallelColumnLinear(
             config.hidden_size,
             2 * config.intermediate_size,
-            pg=tp_pg,
+            parallel_context=parallel_context,
             mode=tp_mode,
             bias=False,
             async_communication=tp_linear_async_communication,
@@ -163,7 +162,7 @@ class MLP(nn.Module):
         self.down_proj = TensorParallelRowLinear(
             config.intermediate_size,
             config.hidden_size,
-            pg=tp_pg,
+            parallel_context=parallel_context,
             mode=tp_mode,
             bias=False,
             async_communication=tp_linear_async_communication and tp_mode is TensorParallelLinearMode.REDUCE_SCATTER,
@@ -256,18 +255,19 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         self,
         config: LlamaConfig,
         parallel_config: Optional[ParallelismArgs],
-        tp_pg: dist.ProcessGroup,
+        parallel_context: ParallelContext,
         layer_idx: int,
     ):
         super().__init__()
         # Tensor parallel considerations: We split tensors along head dimension
+        tp_world_size = parallel_context.get_world_size(ParallelMode.TENSOR)
         assert (
-            config.num_attention_heads % tp_pg.size() == 0
-        ), f"Number of attention heads ({config.num_attention_heads}) must be divisible by TP size ({tp_pg.size()})."
+            config.num_attention_heads % tp_world_size == 0
+        ), f"Number of attention heads ({config.num_attention_heads}) must be divisible by TP size ({tp_world_size})."
         try:
             assert (
-                config.num_key_value_heads % tp_pg.size() == 0
-            ), f"Number of key/value heads ({config.num_key_value_heads}) must be divisible by TP size ({tp_pg.size()})."
+                config.num_key_value_heads % tp_world_size == 0
+            ), f"Number of key/value heads ({config.num_key_value_heads}) must be divisible by TP size ({tp_world_size})."
         except AttributeError:
             log_rank(
                 "WARNING: num_key_value_heads not defined, assuming it is equal to num_attention_heads",
@@ -280,8 +280,8 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         assert (
             config.num_attention_heads % config.num_key_value_heads == 0
         ), f"Number of attention heads ({config.num_attention_heads}) must be divisible by number of key/value heads ({config.num_key_value_heads})."
-        self.n_local_q_heads = config.num_attention_heads // tp_pg.size()
-        self.n_local_kv_heads = config.num_key_value_heads // tp_pg.size()
+        self.n_local_q_heads = config.num_attention_heads // tp_world_size
+        self.n_local_kv_heads = config.num_key_value_heads // tp_world_size
         self.n_repeats = config.num_attention_heads // config.num_key_value_heads
         self.is_gqa = config.num_attention_heads != config.num_key_value_heads  # Whether we are using GQA or not
         self.d_qk = config.hidden_size // config.num_attention_heads
@@ -304,7 +304,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         self.qkv_proj = TensorParallelColumnLinear(
             self.d_model,
             config.num_attention_heads * self.d_qk + 2 * config.num_key_value_heads * self.d_qk,
-            pg=tp_pg,
+            parallel_context=parallel_context,
             mode=tp_mode,
             bias=False,
             async_communication=tp_linear_async_communication,
@@ -319,7 +319,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         self.o_proj = TensorParallelRowLinear(
             config.num_attention_heads * self.d_qk,
             self.d_model,
-            pg=tp_pg,
+            parallel_context=parallel_context,
             mode=tp_mode,
             bias=False,
             async_communication=tp_linear_async_communication,
@@ -528,7 +528,7 @@ class LlamaDecoderLayer(nn.Module):
         self,
         config: LlamaConfig,
         parallel_config: Optional[ParallelismArgs],
-        tp_pg: dist.ProcessGroup,
+        parallel_context: ParallelContext,
         layer_idx: int,
     ):
         super().__init__()
@@ -536,12 +536,12 @@ class LlamaDecoderLayer(nn.Module):
         self.attn = CausalSelfAttention(
             config=config,
             parallel_config=parallel_config,
-            tp_pg=tp_pg,
+            parallel_context=parallel_context,
             layer_idx=layer_idx,
         )
 
         self.post_attention_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.mlp = MLP(config=config, parallel_config=parallel_config, tp_pg=tp_pg)
+        self.mlp = MLP(config=config, parallel_config=parallel_config, parallel_context=parallel_context)
 
     def forward(
         self,
@@ -567,16 +567,18 @@ class LlamaDecoderLayer(nn.Module):
 
 
 class Embedding(nn.Module, AttachableStore):
-    def __init__(self, tp_pg: dist.ProcessGroup, config: LlamaConfig, parallel_config: Optional[ParallelismArgs]):
+    def __init__(
+        self, parallel_context: ParallelContext, config: LlamaConfig, parallel_config: Optional[ParallelismArgs]
+    ):
         super().__init__()
         self.token_embedding = TensorParallelEmbedding(
             num_embeddings=config.vocab_size,
             embedding_dim=config.hidden_size,
             padding_idx=config.pad_token_id,
-            pg=tp_pg,
+            parallel_context=parallel_context,
             mode=parallel_config.tp_mode if parallel_config is not None else TensorParallelLinearMode.ALL_REDUCE,
         )
-        self.pg = tp_pg
+        self.pg = parallel_context.get_group(ParallelMode.TENSOR)
 
     def forward(self, input_ids: torch.Tensor, input_mask: torch.Tensor):  # [batch_size, seq_length]
         store = self.get_local_store()
@@ -616,13 +618,12 @@ class LlamaModel(nn.Module):
         tp_linear_async_communication = (
             parallel_config.tp_linear_async_communication if parallel_config is not None else False
         )
-        tp_group = parallel_context.get_group(ParallelMode.TENSOR)
 
         self.token_position_embeddings = PipelineBlock(
             p2p=self.p2p,
             module_builder=Embedding,
             module_kwargs={
-                "tp_pg": tp_group,
+                "parallel_context": parallel_context,
                 "config": config,
                 "parallel_config": parallel_config,
             },
@@ -638,7 +639,7 @@ class LlamaModel(nn.Module):
                     module_kwargs={
                         "config": config,
                         "parallel_config": parallel_config,
-                        "tp_pg": tp_group,
+                        "parallel_context": parallel_context,
                         "layer_idx": layer_idx,
                     },
                     module_input_keys={"hidden_states", "sequence_mask"},
@@ -664,7 +665,7 @@ class LlamaModel(nn.Module):
             module_kwargs={
                 "in_features": config.hidden_size,
                 "out_features": config.vocab_size,
-                "pg": tp_group,
+                "parallel_context": parallel_context,
                 "bias": False,
                 # TODO @thomasw21: refactor so that we store that default in a single place.
                 "mode": self.tp_mode,
@@ -759,9 +760,9 @@ def masked_mean(loss, label_mask, dtype):
 
 
 class Loss(nn.Module):
-    def __init__(self, tp_pg: dist.ProcessGroup):
+    def __init__(self, parallel_context: ParallelContext):
         super().__init__()
-        self.tp_pg = tp_pg
+        self.parallel_context = parallel_context
 
     def forward(
         self,
@@ -771,8 +772,9 @@ class Loss(nn.Module):
     ) -> Dict[str, torch.Tensor]:
         # Megatron by defaults cast everything in fp32. `--f16-lm-cross-entropy` is an option you can use to keep current precision.
         # https://github.com/NVIDIA/Megatron-LM/blob/f267e6186eae1d6e2055b412b00e2e545a8e896a/megatron/model/gpt_model.py#L38
+        tp_group = self.parallel_context.get_group(ParallelMode.TENSOR)
         loss = sharded_cross_entropy(
-            sharded_logits, label_ids.transpose(0, 1).contiguous(), group=self.tp_pg, dtype=torch.float
+            sharded_logits, label_ids.transpose(0, 1).contiguous(), group=tp_group, dtype=torch.float
         ).transpose(0, 1)
         # TODO @thomasw21: It's unclear what kind of normalization we want to do.
         loss = masked_mean(loss, label_mask, dtype=torch.float)
@@ -796,7 +798,7 @@ class LlamaForTraining(NanotronModel):
             p2p=self.model.p2p,
             module_builder=Loss,
             # TODO(xrsrke): use parallel_context
-            module_kwargs={"tp_pg": parallel_context.get_group(ParallelMode.TENSOR)},
+            module_kwargs={"parallel_context": parallel_context},
             module_input_keys={
                 "sharded_logits",
                 "label_ids",

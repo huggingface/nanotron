@@ -132,7 +132,7 @@ class MLP(nn.Module):
         self,
         config: LlamaConfig,
         parallel_config: Optional["ParallelismArgs"],
-        tp_pg: dist.ProcessGroup,
+        parallel_context: ParallelContext,
     ):
         super().__init__()
 
@@ -149,7 +149,7 @@ class MLP(nn.Module):
         self.gate_up_proj = TensorParallelColumnLinear(
             config.hidden_size,
             2 * config.intermediate_size,
-            pg=tp_pg,
+            parallel_context=parallel_context,
             mode=tp_mode,
             bias=False,
             async_communication=tp_linear_async_communication,
@@ -159,7 +159,7 @@ class MLP(nn.Module):
         self.down_proj = TensorParallelRowLinear(
             config.intermediate_size,
             config.hidden_size,
-            pg=tp_pg,
+            parallel_context=parallel_context,
             mode=tp_mode,
             bias=False,
             async_communication=tp_linear_async_communication and tp_mode is TensorParallelLinearMode.REDUCE_SCATTER,
@@ -474,7 +474,7 @@ class LlamaDecoderLayer(nn.Module):
         self,
         config: LlamaConfig,
         parallel_config: Optional["ParallelismArgs"],
-        tp_pg: dist.ProcessGroup,
+        parallel_context: ParallelContext,
         layer_idx: int,
     ):
         super().__init__()
@@ -482,12 +482,12 @@ class LlamaDecoderLayer(nn.Module):
         self.attn = CausalSelfAttention(
             config=config,
             parallel_config=parallel_config,
-            tp_pg=tp_pg,
+            tp_pg=parallel_context.get_group(ParallelMode.TENSOR),
             layer_idx=layer_idx,
         )
 
         self.post_attention_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.mlp = MLP(config=config, parallel_config=parallel_config, tp_pg=tp_pg)
+        self.mlp = MLP(config=config, parallel_config=parallel_config, parallel_context=parallel_context)
 
     def forward(
         self,
@@ -537,16 +537,19 @@ def _make_causal_mask(
 
 
 class Embedding(nn.Module, AttachableStore):
-    def __init__(self, tp_pg: dist.ProcessGroup, config: LlamaConfig, parallel_config: Optional["ParallelismArgs"]):
+    def __init__(
+        self, parallel_context: ParallelContext, config: LlamaConfig, parallel_config: Optional["ParallelismArgs"]
+    ):
         super().__init__()
         self.token_embedding = TensorParallelEmbedding(
             num_embeddings=config.vocab_size,
             embedding_dim=config.hidden_size,
             padding_idx=config.pad_token_id,
-            pg=tp_pg,
+            parallel_context=parallel_context,
             mode=parallel_config.tp_mode if parallel_config is not None else TensorParallelLinearMode.ALL_REDUCE,
         )
-        self.pg = tp_pg
+        # TODO(xrsrke): does save pg necessary?
+        self.pg = parallel_context.get_group(ParallelMode.TENSOR)
 
     def forward(self, input_ids: torch.Tensor, input_mask: torch.Tensor):  # [batch_size, seq_length]
         store = self.get_local_store()
@@ -592,7 +595,7 @@ class LlamaModel(nn.Module):
             p2p=self.p2p,
             module_builder=Embedding,
             module_kwargs={
-                "tp_pg": parallel_context.get_group(ParallelMode.TENSOR),
+                "parallel_context": parallel_context,
                 "config": config,
                 "parallel_config": parallel_config,
             },
@@ -728,9 +731,9 @@ def masked_mean(loss, label_mask, dtype):
 
 
 class Loss(nn.Module):
-    def __init__(self, tp_pg: dist.ProcessGroup):
+    def __init__(self, parallel_context: ParallelContext):
         super().__init__()
-        self.tp_pg = tp_pg
+        self.parallel_context = parallel_context
 
     def forward(
         self,
@@ -740,8 +743,9 @@ class Loss(nn.Module):
     ) -> Dict[str, torch.Tensor]:
         # Megatron by defaults cast everything in fp32. `--f16-lm-cross-entropy` is an option you can use to keep current precision.
         # https://github.com/NVIDIA/Megatron-LM/blob/f267e6186eae1d6e2055b412b00e2e545a8e896a/megatron/model/gpt_model.py#L38
+        tp_group = self.parallel_context.get_group(ParallelMode.TENSOR)
         loss = sharded_cross_entropy(
-            sharded_logits, label_ids.transpose(0, 1).contiguous(), group=self.tp_pg, dtype=torch.float
+            sharded_logits, label_ids.transpose(0, 1).contiguous(), group=tp_group, dtype=torch.float
         ).transpose(0, 1)
         # TODO @thomasw21: It's unclear what kind of normalization we want to do.
         loss = masked_mean(loss, label_mask, dtype=torch.float)
@@ -763,7 +767,7 @@ class LlamaForTraining(NanotronModel):
         self.loss = PipelineBlock(
             p2p=self.model.p2p,
             module_builder=Loss,
-            module_kwargs={"tp_pg": parallel_context.get_group(ParallelMode.TENSOR)},
+            module_kwargs={"parallel_context": parallel_context},
             module_input_keys={
                 "sharded_logits",
                 "label_ids",

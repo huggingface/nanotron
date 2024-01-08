@@ -37,6 +37,7 @@ from nanotron.core.parallel.tensor_parallelism.functional import (
     row_linear,
 )
 from nanotron.core.parallel.tied_parameters import create_tied_parameter
+from nanotron.distributed import ParallelContext, ParallelMode
 
 
 class TensorParallelColumnLinear(nn.Linear):
@@ -44,7 +45,7 @@ class TensorParallelColumnLinear(nn.Linear):
         self,
         in_features,
         out_features,
-        pg: dist.ProcessGroup,
+        parallel_context: ParallelContext,
         mode: TensorParallelLinearMode,
         bias=True,
         device=None,
@@ -52,8 +53,8 @@ class TensorParallelColumnLinear(nn.Linear):
         async_communication: bool = False,
         contiguous_chunks: Optional[Tuple[int, ...]] = None,
     ):
-        self.pg = pg
-        self.world_size = pg.size()
+        self.parallel_context = parallel_context
+        self.world_size = parallel_context.get_world_size(ParallelMode.TENSOR)
 
         assert out_features % self.world_size == 0
 
@@ -79,7 +80,7 @@ class TensorParallelColumnLinear(nn.Linear):
 
         mark_all_parameters_in_module_as_sharded(
             self,
-            pg=self.pg,
+            pg=parallel_context.get_group(ParallelMode.TENSOR),
             split_config=split_config,
         )
 
@@ -88,13 +89,16 @@ class TensorParallelColumnLinear(nn.Linear):
             input=x,
             weight=self.weight,
             bias=self.bias,
-            group=self.pg,
+            group=self.parallel_context.get_group(ParallelMode.TENSOR),
             tp_mode=self.mode,
             async_communication=self.async_communication,
         )
 
     def extra_repr(self) -> str:
-        return f"tp_rank={dist.get_rank(self.pg)}, {super().extra_repr()}, unsharded_out_features={self.out_features * self.world_size}"
+        tp_rank = self.parallel_context.get_local_rank(ParallelMode.TENSOR)
+        return (
+            f"tp_rank={tp_rank}, {super().extra_repr()}, unsharded_out_features={self.out_features * self.world_size}"
+        )
 
 
 class TensorParallelRowLinear(nn.Linear):
@@ -102,7 +106,7 @@ class TensorParallelRowLinear(nn.Linear):
         self,
         in_features,
         out_features,
-        pg: dist.ProcessGroup,
+        parallel_context: ParallelContext,
         mode: TensorParallelLinearMode,
         bias=True,
         device=None,
@@ -110,8 +114,8 @@ class TensorParallelRowLinear(nn.Linear):
         async_communication: bool = False,
         contiguous_chunks: Optional[Tuple[int, ...]] = None,
     ):
-        self.pg = pg
-        self.world_size = pg.size()
+        self.parallel_context = parallel_context
+        self.world_size = parallel_context.get_world_size(ParallelMode.TENSOR)
 
         assert in_features % self.world_size == 0
 
@@ -119,7 +123,7 @@ class TensorParallelRowLinear(nn.Linear):
         self.out_features = out_features
 
         # No need to shard the bias term, only rank 0 would have it
-        bias = dist.get_rank(self.pg) == 0 and bias
+        bias = parallel_context.get_local_rank(ParallelMode.TENSOR) == 0 and bias
 
         super().__init__(
             in_features=self.in_features,
@@ -148,7 +152,7 @@ class TensorParallelRowLinear(nn.Linear):
             else:
                 new_param = create_sharded_parameter_from_config(
                     parameter=param,
-                    pg=self.pg,
+                    pg=self.parallel_context.get_group(ParallelMode.TENSOR),
                     split_config=split_config,
                 )
             setattr(self, name, new_param)
@@ -158,13 +162,14 @@ class TensorParallelRowLinear(nn.Linear):
             input=x,
             weight=self.weight,
             bias=self.bias,
-            group=self.pg,
+            group=self.parallel_context.get_group(ParallelMode.TENSOR),
             tp_mode=self.mode,
             async_communication=self.async_communication,
         )
 
     def extra_repr(self) -> str:
-        return f"tp_rank={dist.get_rank(self.pg)}, {super().extra_repr()}, unsharded_in_features={self.in_features * self.world_size}"
+        tp_rank = self.parallel_context.get_local_rank(ParallelMode.TENSOR)
+        return f"tp_rank={tp_rank}, {super().extra_repr()}, unsharded_in_features={self.in_features * self.world_size}"
 
 
 class TiedLinear(nn.Linear):
@@ -220,7 +225,7 @@ class TensorParallelEmbedding(nn.Embedding):
         self,
         num_embeddings,
         embedding_dim,
-        pg: dist.ProcessGroup,
+        parallel_context: ParallelContext,
         mode: TensorParallelLinearMode,
         padding_idx=None,
         max_norm=None,
@@ -232,18 +237,17 @@ class TensorParallelEmbedding(nn.Embedding):
         dtype=None,
         contiguous_chunks: Optional[Tuple[int, ...]] = None,
     ):
-        self.pg = pg
-        self.rank = dist.get_rank(self.pg)
-        self.world_size = pg.size()
-
+        self.parallel_context = parallel_context
         self.original_num_embeddings = num_embeddings
+        world_size = parallel_context.get_world_size(ParallelMode.TENSOR)
+        tp_rank = parallel_context.get_local_rank(ParallelMode.TENSOR)
 
         # TODO @thomasw21: Fix and remove that constraint. Typically there's no reason to have such a constraint.
-        assert num_embeddings % self.world_size == 0
-        block_size = num_embeddings // self.world_size
+        assert num_embeddings % world_size == 0
+        block_size = num_embeddings // world_size
         # inputs in `[min_id, max_id[` are handled by `self` to get embeddings
-        self.min_id = self.rank * block_size
-        self.max_id = (self.rank + 1) * block_size
+        self.min_id = tp_rank * block_size
+        self.max_id = (tp_rank + 1) * block_size
 
         super().__init__(
             block_size,
@@ -267,10 +271,15 @@ class TensorParallelEmbedding(nn.Embedding):
 
         split_config = SplitConfig(split_dim=0, contiguous_chunks=contiguous_chunks)
 
-        mark_all_parameters_in_module_as_sharded(self, pg=self.pg, split_config=split_config)
+        mark_all_parameters_in_module_as_sharded(
+            self, pg=parallel_context.get_group(ParallelMode.TENSOR), split_config=split_config
+        )
 
     def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
-        if self.pg.size() > 1:
+        tp_world_size = self.parallel_context.get_world_size(ParallelMode.TENSOR)
+        tp_group = self.parallel_context.get_group(ParallelMode.TENSOR)
+
+        if tp_world_size > 1:
             # `0` if input is in the correct interval, else `1`
             input_mask = torch.logical_or(self.min_id > input_ids, input_ids >= self.max_id)
             # translate for [0, self.max_id - self.min_id[
@@ -281,17 +290,18 @@ class TensorParallelEmbedding(nn.Embedding):
             masked_input = input_ids
         out = super().forward(masked_input)
 
-        if self.pg.size() > 1:
+        if tp_world_size > 1:
             out = out * (~input_mask[..., None])
 
         if self.mode is TensorParallelLinearMode.ALL_REDUCE:
-            out = differentiable_all_reduce_sum(out, group=self.pg)
+            out = differentiable_all_reduce_sum(out, group=tp_group)
         elif self.mode is TensorParallelLinearMode.REDUCE_SCATTER:
-            out = differentiable_reduce_scatter_sum(out, group=self.pg)
+            out = differentiable_reduce_scatter_sum(out, group=tp_group)
         else:
             raise ValueError(f"Got unexpected mode: {self.mode}.")
 
         return out
 
     def extra_repr(self) -> str:
-        return f"tp_rank={dist.get_rank(self.pg)}, {super().extra_repr()}, unsharded_num_embeddings={self.original_num_embeddings}"
+        tp_rank = self.parallel_context.get_local_rank(ParallelMode.TENSOR)
+        return f"tp_rank={tp_rank}, {super().extra_repr()}, unsharded_num_embeddings={self.original_num_embeddings}"
