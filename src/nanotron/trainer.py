@@ -1,5 +1,4 @@
 import datetime
-import gc
 import json
 import os
 import shutil
@@ -102,7 +101,6 @@ CONFIG_TO_MODEL_CLASS = {
     # "Starcoder2Config": Starcoder2ForTraining,
 }
 
-MIN_GPU_MEM_THRESHOLD = 8e10  # 80GB
 NUM_THROUGHPUT_ITERS = 5
 THROUGHPUT_TENSOR_SIZE = 8e9  # 8GB
 
@@ -134,58 +132,6 @@ class DistributedTrainer:
             if self.config.logging.log_level_replica is not None:
                 set_logger_verbosity_format(self.config.logging.log_level_replica, dpg=self.dpg)
 
-        ########################################
-        ## Do a couple of NCCL and CUDA tests to catch faulty nodes
-        ########################################
-
-        # Do a first NCCL sync to warmup and try to avoid Timeout after model/data loading
-        log_rank(
-            f"[TEST] Running NCCL sync for ranks {list(range(self.dpg.world_pg.size()))}",
-            logger=logger,
-            level=logging.WARNING,
-            group=self.dpg.dp_pg,
-            rank=0,
-        )
-        test_tensor = torch.tensor([dist.get_rank(self.dpg.world_pg)], device=torch.device("cuda"))
-        test_tensor_list = [torch.zeros_like(test_tensor) for _ in range(self.dpg.world_pg.size())]
-        dist.all_gather(test_tensor_list, test_tensor, group=self.dpg.world_pg, async_op=False)
-        dist.barrier()
-        log_rank(
-            f"[TEST] NCCL sync for ranks {[t.item() for t in test_tensor_list]}",
-            logger=logger,
-            level=logging.WARNING,
-            group=self.dpg.dp_pg,
-            rank=0,
-        )
-
-        # Test to allocate a large tensor to test memory
-        gc.collect()
-        torch.cuda.empty_cache()
-        free_mem, total_mem = torch.cuda.mem_get_info()
-        log_rank(
-            f"[TEST] free memory free_mem: {human_format(free_mem)}, total_mem: {human_format(total_mem)}",
-            logger=logger,
-            level=logging.WARNING,
-            group=self.dpg.world_pg,
-            rank=None,
-        )
-        if free_mem < MIN_GPU_MEM_THRESHOLD:
-            raise RuntimeError(f"Not enough memory to train the model on node {os.environ.get('SLURMD_NODENAME')}")
-        # Try to allocate all the memory
-        test_tensor_size = int(free_mem * 0.9)
-        test_tensor = torch.zeros((test_tensor_size,), dtype=torch.uint8, device=torch.device("cuda"))
-        log_rank(
-            f"[TEST] Allocated a tensor of size {human_format(test_tensor_size)} (90% of free memory)",
-            logger=logger,
-            level=logging.WARNING,
-            group=self.dpg.world_pg,
-            rank=None,
-        )
-        del test_tensor
-        gc.collect()
-        torch.cuda.empty_cache()
-        torch.cuda.reset_peak_memory_stats()
-
         # Log benchmark info
         if os.environ.get("NANOTRON_BENCHMARK", "0") == "1":
             log_throughput(self.config, self.dpg)
@@ -199,15 +145,15 @@ class DistributedTrainer:
 
         # Init model and build on pp ranks
         self.random_states = init_random_states(parallel_config=self.config.parallelism, tp_pg=self.dpg.tp_pg)
-        self.model, checkpoint_path = self.init_model()  # Defines self.model
+        self.model, self.init_checkpoint_path = self.init_model()  # Defines self.model
         self.normalized_model = self.model.module if isinstance(self.model, DistributedDataParallel) else self.model
 
         # Init optimizer
         self.optimizer, self.grad_accumulator = init_optimizer_and_grad_accumulator(
             model=self.model, optimizer_args=self.config.optimizer, dpg=self.dpg
         )
-        if checkpoint_path is not None:
-            load_optimizer(optimizer=self.optimizer, dpg=self.dpg, root_folder=checkpoint_path)
+        if self.init_checkpoint_path is not None:
+            load_optimizer(optimizer=self.optimizer, dpg=self.dpg, root_folder=self.init_checkpoint_path)
 
         # Init learning rate scheduler
         self.lr_scheduler = lr_scheduler_builder(
@@ -215,17 +161,17 @@ class DistributedTrainer:
             lr_scheduler_args=self.config.optimizer.learning_rate_scheduler,
             total_training_steps=self.config.tokens.train_steps,
         )
-        if checkpoint_path is not None:
+        if self.init_checkpoint_path is not None:
             load_lr_scheduler(
                 lr_scheduler=self.lr_scheduler,
-                root_folder=checkpoint_path,
+                root_folder=self.init_checkpoint_path,
             )
 
         # Define iteration start state
         self.start_iteration_step: int
         self.consumed_train_samples: int
-        if checkpoint_path is not None:
-            checkpoint_metadata = load_meta(dpg=self.dpg, root_folder=checkpoint_path)
+        if self.init_checkpoint_path is not None:
+            checkpoint_metadata = load_meta(dpg=self.dpg, root_folder=self.init_checkpoint_path)
             log_rank(str(checkpoint_metadata), logger=logger, level=logging.INFO, rank=0)
             self.start_iteration_step = checkpoint_metadata.metas["last_train_step"]
             self.consumed_train_samples = checkpoint_metadata.metas["consumed_train_samples"]
@@ -242,54 +188,6 @@ class DistributedTrainer:
 
         # Log where each module is instantiated
         self.normalized_model.log_modules(level=logging.DEBUG, group=self.dpg.world_pg, rank=0)
-
-        # Log config and model config
-        # self.log_object(self.config, "config")
-        # if hasattr(self.model_config, "to_json_string"):
-        #     model_config_dict = json.loads(self.model_config.to_json_string())
-        # else:
-        #     model_config_dict = asdict(self.model_config)
-        # self.log_object(model_config_dict, "model_config")
-
-        # Log environment variables
-        # self.log_object(os.environ, "environment_variables")
-        # if os.environ.get("SLURM_JOB_ID", None) is not None:
-        #     keys = [
-        #         "JobId",
-        #         "Name",
-        #         "Command",
-        #         "STDOUT",
-        #         "STDERR",
-        #         "NumNodes",
-        #         "NodeList",
-        #         "GroupID",
-        #         "OverSubscribe",
-        #         "Partition",
-        #         "cpus-per-task",
-        #         "UserName",
-        #         "SubmitTime",
-        #     ]
-        #     format_str = ",".join(f"{k}:1000" for k in keys)
-        #     output = subprocess.check_output(
-        #         [f'squeue --Format="{format_str}" -j {os.environ.get("SLURM_JOB_ID", None)} --noheader'],
-        #         universal_newlines=True,
-        #         stderr=subprocess.STDOUT,
-        #         shell=True,
-        #     )
-        #     slurm_dict = {k: output[i * 1000 : (i + 1) * 1000].strip() for i, k in enumerate(keys)}
-        #     slurm_job_name = slurm_dict["Name"]
-        #     slurm_job_id = slurm_dict["JobId"]
-        #     for key, value in os.environ.items():
-        #         if key.startswith("SLURM") or key.startswith("SRUN"):
-        #             slurm_dict[key] = value
-        #     slurm_dict = {
-        #         k: o.replace("%x", slurm_job_name).replace("%j", slurm_job_id).replace("%n", "0").replace("%t", "0")
-        #         for k, o in slurm_dict.items()
-        #     }
-        #     for key, value in os.environ.items():
-        #         if key.startswith("SLURM") or key.startswith("SRUN"):
-        #             slurm_dict[key] = value
-        #     self.log_object(slurm_dict, "slurm")
 
         # Do a first NCCL sync to warmup and try to avoid Timeout after model/data loading
         test_tensor = torch.tensor([dist.get_rank(self.dpg.world_pg)], device=torch.device("cuda"))
@@ -316,43 +214,19 @@ class DistributedTrainer:
         self.iteration_step = self.start_iteration_step
         self.limit_val_batches = self.config.tokens.limit_val_batches
 
-        # # S3 Mover and save initial state
-        # if self.config.checkpoints.s3 is not None:
-        #     # Only local rank 0 should upload
-        #     dummy = bool(int(os.environ.get("LOCAL_RANK", None)) != 0)
-        #     self.s3_mover = S3Mover(
-        #         local_path=self.config.checkpoints.checkpoints_path,
-        #         s3_path=self.config.checkpoints.s3.upload_s3_path,
-        #         # duplicate_checkpoint_path=self.config.checkpoints.resume_checkpoint_path,
-        #         remove_after_upload=self.config.checkpoints.s3.remove_after_upload,
-        #         s5cmd_numworkers=self.config.checkpoints.s3.s5cmd_numworkers,
-        #         s5cmd_concurrency=self.config.checkpoints.s3.s5cmd_concurrency,
-        #         s5cmd_path=self.config.checkpoints.s3.s5cmd_path,
-        #         dummy=dummy,
-        #     )
-        # else:
-        #     self.s3_mover = None
-        # if self.config.checkpoints.lighteval is not None and dist.get_rank(self.dpg.world_pg) == 0:
-        #     # We only start evaluation runs on the first node
-        #     if self.s3_mover is None:
-        #         raise ValueError("lighteval requires s3 upload of checkpoints to be enabled")
-        #     self.lighteval_runner = LightEvalRunner(config=self.config, dpg=self.dpg)
-        #     self.s3_mover.post_upload_callback = self.lighteval_runner.eval_single_checkpoint
+        self.post_init()
 
-        if self.config.checkpoints.save_initial_state and checkpoint_path is None:
-            self.save_checkpoint()
+    def post_init(self):
+        pass
 
-    # def log_object(self, dataclass_object: Any, name: str):
-    #     if not dataclass_object or isinstance(self.tb_context, contextlib.nullcontext):
-    #         return
+    def pre_training(self, *args, **kwargs):
+        pass
 
-    #     self.tb_context.add_text(name, obj_to_markdown(dataclass_object), global_step=1)
+    def post_train_step(self):
+        pass
 
-    #     # Dataclass objects are usually configs so we push then already now
-    #     self.tb_context.flush()
-
-    #     if isinstance(self.tb_context, HubSummaryWriter):
-    #         self.tb_context.scheduler.trigger()
+    def post_training(self):
+        pass
 
     @classmethod
     def from_config_file(cls, config_file: str):
@@ -362,8 +236,13 @@ class DistributedTrainer:
     def train(
         self,
         dataloader_or_dls: Union[Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]], Tuple[Iterator, ...]],
-        # data_config_log: Optional[TrainDataLog] = None,
+        **kwargs,
     ) -> None:
+        self.pre_training(**kwargs)
+
+        if self.config.checkpoints.save_initial_state and self.init_checkpoint_path is None:
+            self.save_checkpoint()
+
         if isinstance(dataloader_or_dls, tuple):
             dataloader_or_dls[1] if len(dataloader_or_dls) > 1 else None
             dataloader_or_dls[2] if len(dataloader_or_dls) > 2 else None
@@ -371,9 +250,6 @@ class DistributedTrainer:
         else:
             dataloader = dataloader_or_dls
         dataloader = sanity_check_dataloader(dataloader=dataloader, dpg=self.dpg, config=self.config)
-
-        # Log data config
-        # self.log_object(data_config_log, name="data_config")
 
         self.pipeline_engine: PipelineEngine = self.config.parallelism.pp_engine
 
@@ -421,34 +297,9 @@ class DistributedTrainer:
                 if self.iteration_step % self.config.checkpoints.checkpoint_interval == 0:
                     self.save_checkpoint()
 
-                # Update our background upload/removal of checkpoints
-                # if self.s3_mover is not None:
-                #     self.s3_mover.update()
+                self.post_train_step()
 
-                # Validation #TODO: fix validation
-                # if (
-                #     valid_dataloader is not None
-                #     and self.iteration_step % self.config.tokens.val_check_interval == 0
-                # ):
-                #     self.validation_step(dataloader=valid_dataloader)
-
-                # Push to Hub
-                # if (
-                #     isinstance(self.tb_context, HubSummaryWriter)
-                #     and (self.iteration_step - 1) % self.config.logging.tensorboard_logger.push_to_hub_interval
-                #     == 0
-                # ):
-                #     # tb_writer only exists on a single rank
-                #     log_rank(
-                #         f"Push Tensorboard logging to Hub at iteration {self.iteration_step} to https://huggingface.co/{self.config.logging.tensorboard_logger.repo_id}/tensorboard",
-                #         logger=logger,
-                #         level=logging.INFO,
-                #     )
-                #     # it is a future that queues to avoid concurrent push
-                #     self.tb_context.scheduler.trigger()
-
-        # if self.s3_mover is not None:
-        #     self.s3_mover.distributed_wait_for_completion(group=self.dpg.world_pg)
+        self.post_training()
 
     def training_step(
         self, dataloader: Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]]
@@ -760,12 +611,12 @@ class DistributedTrainer:
         normalized_model = model.module if isinstance(model, DistributedDataParallel) else model
 
         # Load or initialize model weights
-        checkpoint_path = parse_ckpt_path(config=self.config)
+        init_checkpoint_path = parse_ckpt_path(config=self.config)
         reloaded_from_checkpoint = False
-        if checkpoint_path is not None:
+        if init_checkpoint_path is not None:
             # Reload from a training checkpoint
-            log_rank(f"Loading weights from {checkpoint_path}", logger=logger, level=logging.INFO, rank=0)
-            load_weights(model=normalized_model, dpg=self.dpg, root_folder=checkpoint_path)
+            log_rank(f"Loading weights from {init_checkpoint_path}", logger=logger, level=logging.INFO, rank=0)
+            load_weights(model=normalized_model, dpg=self.dpg, root_folder=init_checkpoint_path)
             reloaded_from_checkpoint = True
         if not reloaded_from_checkpoint:
             log_rank("No checkpoint path provided.", logger=logger, level=logging.INFO)
@@ -798,7 +649,7 @@ class DistributedTrainer:
             else:
                 raise ValueError(f"Unsupported {self.config.model.init_method}")
 
-        return model, checkpoint_path
+        return model, init_checkpoint_path
 
     def _init_model(
         self,
@@ -907,12 +758,14 @@ class DistributedTrainer:
             dist.barrier()
             sys.exit(0)
 
+    def pre_save_checkpoint(self):
+        pass
+
+    def post_save_checkpoint(self):
+        pass
+
     def save_checkpoint(self) -> Path:
-        # if self.s3_mover is not None:
-        #     self.s3_mover.distributed_wait_for_completion(self.dpg.world_pg)
-        #     if self.s3_mover.post_upload_callback_outputs is not None:
-        #         slurm_job_id, slurm_log = self.s3_mover.post_upload_callback_outputs
-        #         self.log_object({"job_id": slurm_job_id, "log": slurm_log}, "slurm_eval")
+        self.pre_save_checkpoint()
 
         checkpoints_path = self.config.checkpoints.checkpoints_path
         checkpoint_path = checkpoints_path / f"{self.iteration_step}"
@@ -960,9 +813,7 @@ class DistributedTrainer:
             with open(checkpoint_path / "model_config.json", mode="w") as fo:
                 fo.write(json.dumps(asdict(self.model_config)))
 
-        # Upload to S3
-        # if self.s3_mover is not None:
-        #     self.s3_mover.start_uploading()
+        self.post_save_checkpoint()
 
         return checkpoint_path
 
