@@ -46,3 +46,5 @@ def _can_import_from_module(module: str, name: str) -> bool:
 TENSORBOARDX_AVAILABLE = _is_package_available("tensorboardX")
 HUGGINGFACE_HUB_AVAILABLE = _is_package_available("huggingface_hub")
 HF_TENSORBOARD_LOGGER_AVAILABLE = _can_import_from_module("huggingface_hub", "HFSummaryWriter")
+
+SEED = 69
