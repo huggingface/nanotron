@@ -10,7 +10,7 @@ import yaml
 from dacite import from_dict
 from yaml.loader import SafeLoader
 
-from nanotron.config.models_config import NanotronConfigs
+from nanotron.config.models_config import ExistingCheckpointInit, NanotronConfigs, RandomInit
 from nanotron.config.utils_config import (
     RecomputeGranularity,
     cast_str_to_pipeline_engine,
@@ -35,7 +35,6 @@ class LoggingArgs:
     log_level: Optional[str] = None
     log_level_replica: Optional[str] = None
     iteration_step_info_interval: Optional[int] = 1
-    extensions = None
 
     def __post_init__(self):
         if self.log_level is None:
@@ -106,7 +105,6 @@ class CheckpointsArgs:
     save_initial_state: Optional[bool] = False
     resume_checkpoint_path: Optional[Path] = None
     checkpoints_path_is_shared_file_system: Optional[bool] = True
-    extensions = None
 
     def __post_init__(self):
         if isinstance(self.checkpoints_path, str):
@@ -204,22 +202,6 @@ class ParallelismArgs:
             self.tp_mode = TensorParallelLinearMode[self.tp_mode.upper()]
         if isinstance(self.recompute_granularity, str):
             self.recompute_granularity = RecomputeGranularity[self.recompute_granularity.upper()]
-
-
-@dataclass
-class RandomInit:
-    std: float
-
-
-@dataclass
-class ExistingCheckpointInit:
-    """This is used to initialize from an already existing model (without optimizer, lr_scheduler...)"""
-
-    path: Path
-
-    def __post_init__(self):
-        if isinstance(self.path, str):
-            self.path = Path(self.path)
 
 
 @dataclass

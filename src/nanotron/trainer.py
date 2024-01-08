@@ -48,7 +48,6 @@ from nanotron.core.random import (
 from nanotron.core.tensor_init import init_method_normal, scaled_init_method_normal
 from nanotron.core.utils import (
     assert_tensor_synced_across_pg,
-    check_env,
     init_on_device_and_dtype,
 )
 from nanotron.dataloader import sanity_check_dataloader
@@ -109,7 +108,6 @@ THROUGHPUT_TENSOR_SIZE = 8e9  # 8GB
 class DistributedTrainer:
     def __init__(self, config_or_config_file: Union[Config, str]):
         super().__init__()
-        check_env()
         self.config = get_config_from_file(config_or_config_file)
         self.model_config = self.config.model.model_config
 

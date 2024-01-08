@@ -1,7 +1,6 @@
 import functools
 import inspect
 import os
-import warnings
 from contextlib import ExitStack, contextmanager
 from typing import Callable, ContextManager, List, Optional
 
@@ -12,18 +11,6 @@ from torch.utils.checkpoint import checkpoint
 
 from nanotron.core import distributed as dist
 from nanotron.core.distributed import get_global_rank
-
-
-def check_env():
-    if os.environ.get("CUDA_LAUNCH_BLOCKING", None) == "1":
-        raise RuntimeError("CUDA_LAUNCH_BLOCKING is set to 1. " "This will make distributed NCCL hang.")
-    if os.environ.get("USE_FAST", None) != "1":
-        warnings.warn(
-            "USE_FAST is not set. This will use the slow version of the code. "
-            "Set USE_FAST=1 to use the fast version of the code."
-        )
-    if os.environ.get("FI_PROVIDER", None) != "efa":
-        warnings.warn("FI_PROVIDER is not set to efa. This will not use EFA for communication.")
 
 
 class ContextManagers:
