@@ -51,13 +51,7 @@ from nanotron.logging import LogItem, log_rank, warn_once
 
 logger = logging.get_logger(__name__)
 
-try:
-    from apex.optimizers import FusedAdam
-
-    _apex_available = True
-except ImportError:
-    _apex_available = False
-    from torch.optim import AdamW
+from torch.optim import AdamW
 
 
 def get_args():
@@ -200,34 +194,17 @@ def init_optimizer_and_grad_accumulator(
 
     # Basic optimizer builder
     def basic_optimizer_builder(named_param_groups):
-        if _apex_available:
-            return NamedOptimizer(
-                named_params_or_groups=named_param_groups,
-                optimizer_builder=lambda param_groups: FusedAdam(
-                    param_groups,
-                    lr=optimizer_args.learning_rate_scheduler.learning_rate,
-                    weight_decay=optimizer_args.weight_decay,
-                    eps=optimizer_args.adam_eps,
-                    betas=(optimizer_args.adam_beta1, optimizer_args.adam_beta2),
-                ),
-            )
-        else:
-            warn_once(
-                logger=logger,
-                msg="Apex is not installed. Using PyTorch AdamW instead.",
-                rank=0,
-            )
-            return NamedOptimizer(
-                named_params_or_groups=named_param_groups,
-                optimizer_builder=lambda param_groups: AdamW(  # pylint: disable=E0601
-                    param_groups,
-                    lr=optimizer_args.learning_rate_scheduler.learning_rate,
-                    weight_decay=optimizer_args.weight_decay,
-                    eps=optimizer_args.adam_eps,
-                    betas=(optimizer_args.adam_beta1, optimizer_args.adam_beta2),
-                    fused=optimizer_args.torch_adam_is_fused,
-                ),
-            )
+        return NamedOptimizer(
+            named_params_or_groups=named_param_groups,
+            optimizer_builder=lambda param_groups: AdamW(  # pylint: disable=E0601
+                param_groups,
+                lr=optimizer_args.learning_rate_scheduler.learning_rate,
+                weight_decay=optimizer_args.weight_decay,
+                eps=optimizer_args.adam_eps,
+                betas=(optimizer_args.adam_beta1, optimizer_args.adam_beta2),
+                fused=optimizer_args.torch_adam_is_fused,
+            ),
+        )
 
     optimizer_builder = basic_optimizer_builder
 
