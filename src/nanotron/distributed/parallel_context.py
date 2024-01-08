@@ -1,20 +1,3 @@
-# Copyright 2023 EleutherAI Inc.
-
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-
-#     http://www.apache.org/licenses/LICENSE-2.0
-
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-#
-# Modified by pipegoose team
-
-
 import os
 from typing import Dict, List, Literal, Tuple
 
@@ -27,9 +10,6 @@ from nanotron.distributed.parallel_mode import ParallelMode
 
 DistributedBackend = Literal["gloo", "mpi", "nccl"]
 RanksToDevice = Dict[ParallelMode, int]
-
-
-_PARALLEL_CONTEXT = None
 
 
 class ParallelContext:
@@ -122,20 +102,9 @@ class ParallelContext:
             self.init_global_dist(rank, world_size, backend, host, port)
 
         self.init_parallel_groups()
-        # self.map_rank_to_device()
         dist.barrier()
 
         # self.set_seed(seed)
-        # self._set_context()
-
-    # def _set_context(self):
-    #     global _PARALLEL_CONTEXT
-    #     _PARALLEL_CONTEXT = self
-
-    @staticmethod
-    def get_context() -> "ParallelContext":
-        "Return the initialized parallel context."
-        return _PARALLEL_CONTEXT
 
     def init_global_dist(self, rank: int, world_size: int, backend: DistributedBackend, host: str, port: int):
         """Initialize the global distributed group.
@@ -169,23 +138,6 @@ class ParallelContext:
         # NOTE: ensure all processes have joined the global group
         # before creating other groups
         dist.barrier(group=self.get_group(ParallelMode.GLOBAL))
-
-        # params = {
-        #     "rank": rank,
-        #     "world_size": world_size,
-        #     "tensor_parallel_size": self.tensor_parallel_size,
-        #     "pipeline_parallel_size": self.pipeline_parallel_size,
-        #     "data_parallel_size": self.data_parallel_size,
-        # }
-
-        # results = [
-        #     TensorParallelGroupInitializer(**params).init_dist_group(),
-        #     PipelineParallelGroupInitializer(**params).init_dist_group(),
-        #     DataParallelGroupInitializer(**params).init_dist_group(),
-        # ]
-
-        # for result in results:
-        #     self._register_dist(**result)
 
         rank = self.get_global_rank()
         ranks = np.arange(0, world_size).reshape(
@@ -302,42 +254,13 @@ class ParallelContext:
 
     def map_rank_to_device(self):
         """Map global rank to device."""
-        # rank_tensor = torch.zeros(len(self._local_ranks), dtype=torch.long)
-
-        # for idx, local_rank in enumerate(self._local_ranks.values()):
-        #     rank_tensor[idx] = local_rank
-
-        # rank_tensor_list = [
-        #     torch.zeros(rank_tensor.size(), dtype=torch.long) for _ in range(self.get_world_size(ParallelMode.GLOBAL))
-        # ]
-
-        # dist.all_gather(tensor_list=rank_tensor_list, tensor=rank_tensor)
-
-        # for _rank, _rank_tensor in enumerate(rank_tensor_list):
-        #     # NOTE: In 3D parallelism for MoE, the gpu assignment only depends on
-        #     # tensor parallelism, pipeline parallelism and data parallelism.
-        #     # according to the paper: Pipeline MoE: A Flexible MoE Implementatio
-        #     # with Pipeline Parallelism by Xin Chen et al
-        #     # https://arxiv.org/abs/2304.11414
-        #     modes_and_ranks = {
-        #         mode: rank
-        #         for mode, rank in zip(self._local_ranks.keys(), _rank_tensor.tolist())
-        #         if mode != ParallelMode.EXPERT_DATA
-        #     }
-        #     self._ranks_to_device[tuple(modes_and_ranks.items())] = _rank
-
         local_rank = int(os.getenv("LOCAL_RANK", "0"))
 
-        # Set the device id.
+        # NOTE: Set the device id.
         # `torch.cuda.device_count` should return the number of device on a single node.
         # We assume the nodes to be homogeneous (same number of gpus per node)
         device_id = local_rank
         torch.cuda.set_device(torch.cuda.device(device_id))
-
-    def ranks2device(self, ranks: RanksToDevice) -> int:
-        """Return the global device id from ranks."""
-        assert ranks in self._ranks_to_device, f"{ranks} not in {self._ranks_to_device}"
-        return self._ranks_to_device[ranks]
 
     def is_initialized(self, parallel_mode: ParallelMode) -> bool:
         """Check if the parallel mode is initialized.
@@ -397,22 +320,6 @@ class ParallelContext:
         """A list of global ranks in a given parallel mode of the local process."""
         return self._ranks_in_group[parallel_mode]
 
-    def get_next_global_rank(self, parallel_mode: ParallelMode) -> int:
-        """Get the next global rank in a given parallel mode."""
-        rank = self.get_global_rank()
-        next_local_rank = self.get_next_local_rank(rank, parallel_mode)
-        ranks_in_group = self.get_ranks_in_group(parallel_mode)
-        next_global_rank = ranks_in_group[next_local_rank]
-        return next_global_rank
-
-    def get_prev_global_rank(self, parallel_mode: ParallelMode) -> int:
-        """Get the previous global rank in a given parallel mode."""
-        rank = self.get_global_rank()
-        prev_local_rank = self.get_prev_local_rank(rank, parallel_mode)
-        ranks_in_group = self.get_ranks_in_group(parallel_mode)
-        prev_global_rank = ranks_in_group[prev_local_rank]
-        return prev_global_rank
-
     def get_next_local_rank(self, rank, parallel_mode: ParallelMode) -> int:
         """Get the next local rank in a given parallel mode."""
         world_size = self.get_world_size(parallel_mode)
@@ -431,11 +338,6 @@ class ParallelContext:
         local_rank = self.get_local_rank(parallel_mode)
         world_size = self.get_world_size(parallel_mode)
         return local_rank == world_size - 1
-
-    def get_worker_name(self, rank: int) -> str:
-        """Return the worker name of a given rank in distributed RPC."""
-        worker_name = self.rpc_worker_map[rank]
-        return worker_name
 
     def get_3d_ranks(self, local_rank: int, parallel_mode: ParallelMode = ParallelMode.GLOBAL) -> Tuple[int, int, int]:
         rank = self.get_global_rank_from_local_rank(local_rank, parallel_mode)
@@ -461,8 +363,5 @@ class ParallelContext:
 
         dist.barrier()
         dist.destroy_process_group()
-
-        # if self.get_world_size(ParallelMode.GLOBAL) > 1:
-        #     rpc.shutdown()
 
         self._groups.clear()
