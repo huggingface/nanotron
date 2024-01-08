@@ -44,7 +44,6 @@ test = [
 
 fast-modeling = [
     "flash-attn>=2.4.2",
-    "apex"
 ]
 
 [build-system]
