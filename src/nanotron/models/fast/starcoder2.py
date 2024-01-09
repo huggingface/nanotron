@@ -611,13 +611,14 @@ class MQAColumnLinears(nn.Module):
             setattr(self.kv, name, new_param)
 
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        tp_group = self.parallel_context.get_group(ParallelMode.TENSOR)
         if self.use_MQAColumnLinearReduceScatterAsyncCommunication:
             assert self._qkv_weight.requires_grad is False
             assert self._qkv_bias is None or self._qkv_bias.requires_grad is False
             return _MQAColumnLinearReduceScatterAsyncCommunication.apply(
-                x, self.q.weight, self.q.bias, self.kv.weight, self.kv.bias, self._qkv_weight, tp_group
+                x, self.q.weight, self.q.bias, self.kv.weight, self.kv.bias, self._qkv_weight, self.parallel_context
             )
+
+        tp_group = self.parallel_context.get_group(ParallelMode.TENSOR)
         qkv = column_linear(
             input=x,
             weight=self._qkv_weight,

@@ -44,9 +44,9 @@ from nanotron.core.parallel.tensor_parallelism.nn import (
     TensorParallelRowLinear,
 )
 from nanotron.core.parallel.tied_parameters import create_tied_parameter
-from nanotron.core.process_groups import DistributedProcessGroups
 from nanotron.core.random import RandomStates, branch_random_state
 from nanotron.core.utils import checkpoint_method
+from nanotron.distributed import ParallelContext, ParallelMode
 from nanotron.models import AttachableStore, NanotronModel
 
 
@@ -55,7 +55,7 @@ class MLP(nn.Module):
         self,
         config: GPTBigCodeConfig,
         parallel_config: Optional[ParallelismArgs],
-        tp_pg: dist.ProcessGroup,
+        parallel_context: ParallelContext,
     ):
         super().__init__()
 
@@ -69,7 +69,7 @@ class MLP(nn.Module):
         self.c_fc = TensorParallelColumnLinear(
             config.hidden_size,
             d_ff,
-            pg=tp_pg,
+            parallel_context=parallel_context,
             mode=tp_mode,
             bias=True,
             async_communication=tp_linear_async_communication,
@@ -78,7 +78,7 @@ class MLP(nn.Module):
         self.c_proj = TensorParallelRowLinear(
             d_ff,
             config.hidden_size,
-            pg=tp_pg,
+            parallel_context=parallel_context,
             mode=tp_mode,
             bias=True,
             async_communication=tp_linear_async_communication and tp_mode is TensorParallelLinearMode.REDUCE_SCATTER,
@@ -167,20 +167,20 @@ class MQAColumnLinears(nn.Module):
         in_features: int,
         q_out_features: int,
         kv_out_features: int,
-        pg: dist.ProcessGroup,
+        parallel_context: ParallelContext,
         mode: TensorParallelLinearMode,
         bias=True,
         device=None,
         dtype=None,
     ):
         super().__init__()
-        self.pg = pg
-        self.world_size = pg.size()
+        self.parallel_context = parallel_context
+        tp_world_size = parallel_context.get_world_size(ParallelMode.TENSOR)
 
-        assert in_features % self.world_size == 0
+        assert in_features % tp_world_size == 0
 
         self.in_features = in_features
-        self.q_out_features = q_out_features // self.world_size
+        self.q_out_features = q_out_features // tp_world_size
         self.kv_out_features = kv_out_features
 
         # torch modules
@@ -191,15 +191,19 @@ class MQAColumnLinears(nn.Module):
         self.mode = mode
 
         # Marking as tied/sharded
-        mark_all_parameters_in_module_as_sharded(self.q, pg=self.pg, split_config=SplitConfig(split_dim=0))
+        tp_group = parallel_context.get_group(ParallelMode.TENSOR)
+        mark_all_parameters_in_module_as_sharded(self.q, pg=tp_group, split_config=SplitConfig(split_dim=0))
         self._mark_kv_parameters_in_module_as_tied()
 
     def _mark_kv_parameters_in_module_as_tied(self):
+        tp_group = self.parallel_context.get_group(ParallelMode.TENSOR)
+        tp_world_size = self.parallel_context.get_world_size(ParallelMode.TENSOR)
+
         for name, param in list(self.kv.named_parameters()):
             new_param = create_tied_parameter(
                 parameter=param,
                 name=name,
-                global_ranks=tuple(sorted((get_global_rank(self.pg, i) for i in range(self.pg.size())))),
+                global_ranks=tuple(sorted((get_global_rank(tp_group, i) for i in range(tp_world_size)))),
                 # Always has to be ReduceOp SUM as now this is always duplicated regardless of tp mode
                 reduce_op=dist.ReduceOp.SUM,
                 root_module=self.kv,
@@ -207,10 +211,11 @@ class MQAColumnLinears(nn.Module):
             setattr(self.kv, name, new_param)
 
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        tp_group = self.parallel_context.get_group(ParallelMode.TENSOR)
         if self.mode is TensorParallelLinearMode.ALL_REDUCE:
-            x = differentiable_identity(x, group=self.pg)
+            x = differentiable_identity(x, group=tp_group)
         elif self.mode is TensorParallelLinearMode.REDUCE_SCATTER:
-            x = differentiable_all_gather(x, group=self.pg)
+            x = differentiable_all_gather(x, group=tp_group)
         else:
             raise ValueError(f"Got unexpected mode: {self.mode}.")
 
@@ -222,16 +227,17 @@ class CausalSelfMQA(nn.Module, AttachableStore):
         self,
         config: GPTBigCodeConfig,
         parallel_config: Optional[ParallelismArgs],
-        tp_pg: dist.ProcessGroup,
+        parallel_context: ParallelContext,
         layer_idx: int,
     ):
         super().__init__()
+        tp_world_size = parallel_context.get_world_size(ParallelMode.TENSOR)
         # Tensor parallel considerations: We split tensors along head dimension
         assert (
-            config.num_attention_heads % tp_pg.size() == 0
-        ), f"Number of attention heads ({config.num_attention_heads}) must be divisible by TP size ({tp_pg.size()})."
-        self.tp_pg_size = tp_pg.size()
-        self.n_heads = config.num_attention_heads // tp_pg.size()
+            config.num_attention_heads % tp_world_size == 0
+        ), f"Number of attention heads ({config.num_attention_heads}) must be divisible by TP size ({tp_world_size})."
+        self.tp_pg_size = tp_world_size
+        self.n_heads = config.num_attention_heads // tp_world_size
         self.d_qk = config.hidden_size // config.num_attention_heads
         self.d_v = config.hidden_size // config.num_attention_heads
         self.d_model = config.hidden_size
@@ -243,14 +249,16 @@ class CausalSelfMQA(nn.Module, AttachableStore):
         )
 
         self.mode = tp_mode
-        self.pg = tp_pg
+        # TODO(xrsrke): remove self.pg?
+        self.pg = parallel_context.get_group(ParallelMode.TENSOR)
+        self.parallel_context = parallel_context
 
         # only Q_size is parallelized
         self.qkv = MQAColumnLinears(
             in_features=self.d_model,
             q_out_features=config.num_attention_heads * self.d_qk,
             kv_out_features=self.d_qk + self.d_v,
-            pg=tp_pg,
+            parallel_context=parallel_context,
             mode=tp_mode,
             bias=True,
         )
@@ -258,7 +266,7 @@ class CausalSelfMQA(nn.Module, AttachableStore):
         self.o = TensorParallelRowLinear(
             config.num_attention_heads * self.d_v,
             self.d_model,
-            pg=tp_pg,
+            parallel_context=parallel_context,
             mode=tp_mode,
             bias=True,
             async_communication=tp_linear_async_communication and tp_mode is TensorParallelLinearMode.REDUCE_SCATTER,
@@ -338,7 +346,7 @@ class GPTBlock(nn.Module):
         self,
         config: GPTBigCodeConfig,
         parallel_config: Optional[ParallelismArgs],
-        tp_pg: dist.ProcessGroup,
+        parallel_context: ParallelContext,
         random_states: RandomStates,
         layer_idx: int,
     ):
@@ -347,13 +355,13 @@ class GPTBlock(nn.Module):
         self.attn = CausalSelfMQA(
             config=config,
             parallel_config=parallel_config,
-            tp_pg=tp_pg,
+            parallel_context=parallel_context,
             layer_idx=layer_idx,
         )
         self.attn_dropout = nn.Dropout(config.resid_pdrop)
 
         self.ln_2 = LayerNorm(config.hidden_size, eps=config.layer_norm_epsilon)
-        self.ff = MLP(config=config, parallel_config=parallel_config, tp_pg=tp_pg)
+        self.ff = MLP(config=config, parallel_config=parallel_config, parallel_context=parallel_context)
         self.ff_dropout = nn.Dropout(config.resid_pdrop)
 
         self.random_states = random_states
@@ -445,18 +453,20 @@ def _prepare_causal_attention_mask(q_sequence_mask: torch.Tensor, k_sequence_mas
 
 
 class Embedding(nn.Module, AttachableStore):
-    def __init__(self, tp_pg: dist.ProcessGroup, config: GPTBigCodeConfig, parallel_config: Optional[ParallelismArgs]):
+    def __init__(
+        self, parallel_context: ParallelContext, config: GPTBigCodeConfig, parallel_config: Optional[ParallelismArgs]
+    ):
         super().__init__()
         self.token_embedding = TensorParallelEmbedding(
             num_embeddings=config.vocab_size,
             embedding_dim=config.hidden_size,
-            pg=tp_pg,
+            parallel_context=parallel_context,
             mode=parallel_config.tp_mode if parallel_config is not None else TensorParallelLinearMode.ALL_REDUCE,
         )
         self.position_embedding = TensorParallelEmbedding(
             num_embeddings=config.max_position_embeddings,
             embedding_dim=config.hidden_size,
-            pg=tp_pg,
+            parallel_context=parallel_context,
             mode=parallel_config.tp_mode if parallel_config is not None else TensorParallelLinearMode.ALL_REDUCE,
         )
 
@@ -493,14 +503,14 @@ class GPTModel(nn.Module):
     def __init__(
         self,
         config: GPTBigCodeConfig,
-        dpg: DistributedProcessGroups,
+        parallel_context: ParallelContext,
         parallel_config: Optional[ParallelismArgs],
         random_states: RandomStates,
     ):
         super().__init__()
 
         # Declare all the nodes
-        self.p2p = P2P(dpg.pp_pg, device=torch.device("cuda"))
+        self.p2p = P2P(parallel_context.get_group(ParallelMode.PIPELINE), device=torch.device("cuda"))
         self.random_states = random_states
         self.tp_mode = parallel_config.tp_mode if parallel_config is not None else TensorParallelLinearMode.ALL_REDUCE
 
@@ -508,7 +518,7 @@ class GPTModel(nn.Module):
             p2p=self.p2p,
             module_builder=Embedding,
             module_kwargs={
-                "tp_pg": dpg.tp_pg,
+                "parallel_context": parallel_context,
                 "config": config,
                 "parallel_config": parallel_config,
             },
@@ -532,7 +542,7 @@ class GPTModel(nn.Module):
                     module_kwargs={
                         "config": config,
                         "parallel_config": parallel_config,
-                        "tp_pg": dpg.tp_pg,
+                        "parallel_context": parallel_context,
                         "random_states": random_states,
                         "layer_idx": layer_idx,
                     },
@@ -558,7 +568,7 @@ class GPTModel(nn.Module):
             module_kwargs={
                 "in_features": config.hidden_size,
                 "out_features": config.vocab_size,
-                "pg": dpg.tp_pg,
+                "parallel_context": parallel_context,
                 "bias": False,
                 # TODO @thomasw21: refactor so that we store that default in a single place.
                 "mode": self.tp_mode,
@@ -606,9 +616,9 @@ class GPTModel(nn.Module):
 
 
 class Loss(nn.Module):
-    def __init__(self, tp_pg: dist.ProcessGroup):
+    def __init__(self, parallel_context: ParallelContext):
         super().__init__()
-        self.tp_pg = tp_pg
+        self.parallel_context = parallel_context
 
     def forward(
         self,
@@ -618,8 +628,9 @@ class Loss(nn.Module):
     ) -> Dict[str, torch.Tensor]:
         # Megatron by defaults cast everything in fp32. `--f16-lm-cross-entropy` is an option you can use to keep current precision.
         # https://github.com/NVIDIA/Megatron-LM/blob/f267e6186eae1d6e2055b412b00e2e545a8e896a/megatron/model/gpt_model.py#L38
+        tp_group = self.parallel_context.get_group(ParallelMode.TENSOR)
         loss = sharded_cross_entropy(
-            sharded_logits, label_ids.transpose(0, 1).contiguous(), group=self.tp_pg, dtype=torch.float
+            sharded_logits, label_ids.transpose(0, 1).contiguous(), group=tp_group, dtype=torch.float
         ).transpose(0, 1)
         # TODO @thomasw21: It's unclear what kind of normalization we want to do.
         loss = (loss * label_mask).sum(dtype=torch.float) / label_mask.sum()
@@ -632,16 +643,21 @@ class GPTForTraining(NanotronModel):
     def __init__(
         self,
         config: GPTBigCodeConfig,
-        dpg: DistributedProcessGroups,
-        parallel_config: Optional[ParallelismArgs],
+        parallel_context: ParallelContext,
+        parallel_config: ParallelContext,
         random_states: RandomStates,
     ):
         super().__init__()
-        self.model = GPTModel(config=config, dpg=dpg, parallel_config=parallel_config, random_states=random_states)
+        self.model = GPTModel(
+            config=config,
+            parallel_context=parallel_context,
+            parallel_config=parallel_config,
+            random_states=random_states,
+        )
         self.loss = PipelineBlock(
             p2p=self.model.p2p,
             module_builder=Loss,
-            module_kwargs={"tp_pg": dpg.tp_pg},
+            module_kwargs={"parallel_context": parallel_context},
             module_input_keys={
                 "sharded_logits",
                 "label_ids",
@@ -651,7 +667,7 @@ class GPTForTraining(NanotronModel):
         )
         self.config = config
         self.parallel_config = parallel_config
-        self.dpg = dpg
+        self.parallel_context = parallel_context
 
     def forward(
         self,
@@ -861,7 +877,7 @@ class GPTForTraining(NanotronModel):
 
     def get_flops_per_sec(self, iteration_time_in_sec, sequence_length, global_batch_size):
         """Get flops per second for a given model"""
-        world_size = self.dpg.world_pg.size()
+        world_size = self.parallel_context.get_world_size(ParallelMode.GLOBAL)
         model_flops, hardware_flops = get_flops(
             num_layers=self.config.num_hidden_layers,
             hidden_size=self.config.hidden_size,
