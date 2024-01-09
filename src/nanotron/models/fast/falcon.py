@@ -26,7 +26,6 @@ from torch.nn import functional as F
 from transformers import FalconConfig
 
 from nanotron.config import ParallelismArgs, RecomputeGranularity
-from nanotron.core import distributed as dist
 from nanotron.core import logging
 from nanotron.core.parallel.parameters import NanotronParameter
 from nanotron.core.parallel.pipeline_parallelism.block import PipelineBlock, TensorPointer
@@ -38,9 +37,9 @@ from nanotron.core.parallel.tensor_parallelism.nn import (
     TensorParallelLinearMode,
     TensorParallelRowLinear,
 )
-from nanotron.core.process_groups import DistributedProcessGroups
 from nanotron.core.random import RandomStates
 from nanotron.core.utils import checkpoint_method
+from nanotron.distributed import ParallelContext, ParallelMode
 from nanotron.models import AttachableStore, NanotronModel
 
 logger = logging.get_logger(__name__)
@@ -156,7 +155,7 @@ class FalconMLP(nn.Module):
         self,
         config: FalconConfig,
         parallel_config: Optional[ParallelismArgs],
-        tp_pg: dist.ProcessGroup,
+        parallel_context: ParallelContext,
     ):
         super().__init__()
 
@@ -169,7 +168,7 @@ class FalconMLP(nn.Module):
         self.dense_h_to_4h = TensorParallelColumnLinear(
             config.hidden_size,
             4 * config.hidden_size,
-            pg=tp_pg,
+            parallel_context=parallel_context,
             mode=tp_mode,
             bias=config.bias,
             async_communication=tp_linear_async_communication,
@@ -178,7 +177,7 @@ class FalconMLP(nn.Module):
         self.dense_4h_to_h = TensorParallelRowLinear(
             4 * config.hidden_size,
             config.hidden_size,
-            pg=tp_pg,
+            parallel_context=parallel_context,
             mode=tp_mode,
             bias=config.bias,
             async_communication=tp_linear_async_communication and tp_mode is TensorParallelLinearMode.REDUCE_SCATTER,
@@ -243,7 +242,7 @@ class FalconAttention(nn.Module, AttachableStore):
         self,
         config: FalconConfig,
         parallel_config: Optional[ParallelismArgs],
-        tp_pg: dist.ProcessGroup,
+        parallel_context: ParallelContext,
         layer_idx: int,
     ):
         super().__init__()
@@ -259,6 +258,7 @@ class FalconAttention(nn.Module, AttachableStore):
         tp_linear_async_communication = (
             parallel_config.tp_linear_async_communication if parallel_config is not None else False
         )
+        tp_world_size = parallel_context.get_world_size(ParallelMode.TENSOR)
 
         if self.head_dim * self.num_heads != self.hidden_size:
             raise ValueError(
@@ -266,8 +266,8 @@ class FalconAttention(nn.Module, AttachableStore):
                 f" {self.num_heads})."
             )
         assert (
-            config.num_attention_heads % tp_pg.size() == 0
-        ), f"Number of attention heads ({config.num_attention_heads}) must be divisible by TP size ({tp_pg.size()})."
+            config.num_attention_heads % tp_world_size == 0
+        ), f"Number of attention heads ({config.num_attention_heads}) must be divisible by TP size ({tp_world_size})."
 
         self.maybe_rotary = FalconRotaryEmbedding(head_dim=self.head_dim) if config.rotary else lambda q, k, t: (q, k)
 
@@ -276,8 +276,8 @@ class FalconAttention(nn.Module, AttachableStore):
         self.beta = self.inv_norm_factor
 
         self.num_kv_heads = config.num_kv_heads if (config.new_decoder_architecture or not config.multi_query) else 1
-        self.n_local_q_heads = self.num_heads // tp_pg.size()
-        self.n_local_kv_heads = config.num_kv_heads // tp_pg.size()
+        self.n_local_q_heads = self.num_heads // tp_world_size
+        self.n_local_kv_heads = config.num_kv_heads // tp_world_size
         self.n_repeats = self.n_local_q_heads // self.n_local_kv_heads
 
         # build the slice config for self.qkv for save/load
@@ -296,7 +296,7 @@ class FalconAttention(nn.Module, AttachableStore):
         self.query_key_value = TensorParallelColumnLinear(
             self.hidden_size,
             self.num_heads * self.head_dim + 2 * self.num_kv_heads * self.head_dim,
-            pg=tp_pg,
+            parallel_context=parallel_context,
             mode=tp_mode,
             bias=config.bias,
             async_communication=tp_linear_async_communication,
@@ -305,7 +305,7 @@ class FalconAttention(nn.Module, AttachableStore):
         self.dense = TensorParallelRowLinear(
             self.hidden_size,
             self.hidden_size,
-            pg=tp_pg,
+            parallel_context=parallel_context,
             mode=tp_mode,
             bias=config.bias,
             async_communication=tp_linear_async_communication and tp_mode is TensorParallelLinearMode.REDUCE_SCATTER,
@@ -415,7 +415,7 @@ class FalconDecoderLayer(nn.Module):
         self,
         config: FalconConfig,
         parallel_config: Optional[ParallelismArgs],
-        tp_pg: dist.ProcessGroup,
+        parallel_context: ParallelContext,
         layer_idx: int,
     ):
         super().__init__()
@@ -424,12 +424,12 @@ class FalconDecoderLayer(nn.Module):
         self.self_attention = FalconAttention(
             config=config,
             parallel_config=parallel_config,
-            tp_pg=tp_pg,
+            parallel_context=parallel_context,
             layer_idx=layer_idx,
         )
 
         self.ln_mlp = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_epsilon)
-        self.mlp = FalconMLP(config=config, parallel_config=parallel_config, tp_pg=tp_pg)
+        self.mlp = FalconMLP(config=config, parallel_config=parallel_config, parallel_context=parallel_context)
 
     def forward(
         self,
@@ -455,16 +455,18 @@ class FalconDecoderLayer(nn.Module):
 
 
 class Embedding(nn.Module, AttachableStore):
-    def __init__(self, tp_pg: dist.ProcessGroup, config: FalconConfig, parallel_config: Optional[ParallelismArgs]):
+    def __init__(
+        self, parallel_context: ParallelContext, config: FalconConfig, parallel_config: Optional[ParallelismArgs]
+    ):
         super().__init__()
         self.token_embedding = TensorParallelEmbedding(
             num_embeddings=config.vocab_size,
             embedding_dim=config.hidden_size,
             padding_idx=config.pad_token_id,
-            pg=tp_pg,
+            parallel_context=parallel_context,
             mode=parallel_config.tp_mode if parallel_config is not None else TensorParallelLinearMode.ALL_REDUCE,
         )
-        self.pg = tp_pg
+        self.parallel_context = parallel_context
 
     def forward(self, input_ids: torch.Tensor, input_mask: torch.Tensor):  # [batch_size, seq_length]
         store = self.get_local_store()
@@ -490,16 +492,16 @@ class FalconModel(nn.Module):
     def __init__(
         self,
         config: FalconConfig,
-        dpg: DistributedProcessGroups,
+        parallel_context: ParallelContext,
         parallel_config: Optional[ParallelismArgs],
     ):
         super().__init__()
 
         # Declare all the nodes
-        self.p2p = P2P(dpg.pp_pg, device=torch.device("cuda"))
+        self.p2p = P2P(parallel_context.get_group(ParallelMode.PIPELINE), device=torch.device("cuda"))
         self.config = config
         self.parallel_config = parallel_config
-        self.dpg = dpg
+        self.parallel_context = parallel_context
         self.tp_mode = parallel_config.tp_mode if parallel_config is not None else TensorParallelLinearMode.ALL_REDUCE
         tp_linear_async_communication = (
             parallel_config.tp_linear_async_communication if parallel_config is not None else False
@@ -509,7 +511,7 @@ class FalconModel(nn.Module):
             p2p=self.p2p,
             module_builder=Embedding,
             module_kwargs={
-                "tp_pg": dpg.tp_pg,
+                "parallel_context": parallel_context,
                 "config": config,
                 "parallel_config": parallel_config,
             },
@@ -525,7 +527,7 @@ class FalconModel(nn.Module):
                     module_kwargs={
                         "config": config,
                         "parallel_config": parallel_config,
-                        "tp_pg": dpg.tp_pg,
+                        "parallel_context": parallel_context,
                         "layer_idx": layer_idx,
                     },
                     module_input_keys={"hidden_states", "sequence_mask"},
@@ -550,7 +552,7 @@ class FalconModel(nn.Module):
             module_kwargs={
                 "in_features": config.hidden_size,
                 "out_features": config.vocab_size,
-                "pg": dpg.tp_pg,
+                "parallel_context": parallel_context,
                 "bias": False,
                 # TODO @thomasw21: refactor so that we store that default in a single place.
                 "mode": self.tp_mode,
@@ -615,7 +617,7 @@ class FalconModel(nn.Module):
 
     def get_flops_per_sec(self, iteration_time_in_sec, sequence_length, global_batch_size):
         """Get flops per second for a given model"""
-        world_size = self.dpg.world_pg.size()
+        world_size = self.parallel_context.get_world_size(ParallelMode.GLOBAL)
         model_flops, hardware_flops = get_flops(
             num_layers=self.config.num_hidden_layers,
             hidden_size=self.config.hidden_size,
@@ -641,9 +643,9 @@ def masked_mean(loss, label_mask, dtype):
 
 # TODO @thomasw21: It's a bit weird that our loss needs to be wrapped inside a `nn.Module`. The issue is that PipelineBlock essentially defines where the compute happens
 class Loss(nn.Module):
-    def __init__(self, tp_pg: dist.ProcessGroup):
+    def __init__(self, parallel_context: ParallelContext):
         super().__init__()
-        self.tp_pg = tp_pg
+        self.parallel_context = parallel_context
 
     def forward(
         self,
@@ -653,8 +655,9 @@ class Loss(nn.Module):
     ) -> Dict[str, torch.Tensor]:
         # Megatron by defaults cast everything in fp32. `--f16-lm-cross-entropy` is an option you can use to keep current precision.
         # https://github.com/NVIDIA/Megatron-LM/blob/f267e6186eae1d6e2055b412b00e2e545a8e896a/megatron/model/gpt_model.py#L38
+        tp_group = self.parallel_context.get_group(ParallelMode.TENSOR)
         loss = sharded_cross_entropy(
-            sharded_logits, label_ids.transpose(0, 1).contiguous(), group=self.tp_pg, dtype=torch.float
+            sharded_logits, label_ids.transpose(0, 1).contiguous(), group=tp_group, dtype=torch.float
         ).transpose(0, 1)
         # TODO @thomasw21: It's unclear what kind of normalization we want to do.
         loss = masked_mean(loss, label_mask, dtype=torch.float)
@@ -667,17 +670,19 @@ class FalconForTraining(NanotronModel):
     def __init__(
         self,
         config: FalconConfig,
-        dpg: DistributedProcessGroups,
+        parallel_context: ParallelContext,
         parallel_config: Optional[ParallelismArgs],
         random_states: Optional[RandomStates] = None,
     ):
         super().__init__()
 
-        self.transformer = FalconModel(config=config, dpg=dpg, parallel_config=parallel_config)
+        self.transformer = FalconModel(
+            config=config, parallel_context=parallel_context, parallel_config=parallel_config
+        )
         self.loss = PipelineBlock(
             p2p=self.transformer.p2p,
             module_builder=Loss,
-            module_kwargs={"tp_pg": dpg.tp_pg},
+            module_kwargs={"parallel_context": parallel_context},
             module_input_keys={
                 "sharded_logits",
                 "label_ids",
@@ -685,7 +690,7 @@ class FalconForTraining(NanotronModel):
             },
             module_output_keys={"loss"},
         )
-        self.dpg = dpg
+        self.parallel_context = parallel_context
         self.config = config
         self.parallel_config = parallel_config
 
