@@ -6,7 +6,7 @@ from helpers.exception import assert_fail_with
 from helpers.utils import available_gpus, init_distributed
 from nanotron.core import distributed as dist
 from nanotron.core.parallel.pipeline_parallelism.p2p import P2P
-from nanotron.core.process_groups import DistributedProcessGroups
+from nanotron.distributed import ParallelContext, ParallelMode
 
 
 @pytest.mark.skipif(available_gpus() < 2, reason="Testing test_ddp_with_afab requires at least 2 gpus")
@@ -16,9 +16,12 @@ def test_check_send_recv_tensor(send_contiguous: bool, full: bool):
     init_distributed(tp=1, dp=1, pp=2)(_test_check_send_recv_tensor)(send_contiguous=send_contiguous, full=full)
 
 
-def _test_check_send_recv_tensor(dpg: DistributedProcessGroups, send_contiguous: bool, full: bool):
-    p2p = P2P(pg=dpg.pp_pg, device=torch.device("cuda"))
-    if dist.get_rank(p2p.pg) == 0:
+def _test_check_send_recv_tensor(parallel_context: ParallelContext, send_contiguous: bool, full: bool):
+    pp_group = parallel_context.get_group(ParallelMode.PIPELINE)
+    pp_rank = parallel_context.get_local_rank(ParallelMode.PIPELINE)
+    p2p = P2P(pg=pp_group, device=torch.device("cuda"))
+
+    if pp_rank == 0:
         tensor_to_send = torch.randn(3, 5, dtype=torch.float, device=torch.device("cuda"))
         if send_contiguous is True:
             assert tensor_to_send.is_contiguous()
@@ -42,7 +45,7 @@ def _test_check_send_recv_tensor(dpg: DistributedProcessGroups, send_contiguous:
         fail_at_first_send = False
 
     # Send tensor back and forth through p2p protocol and check that we get the same thing.
-    if dist.get_rank(p2p.pg) == 0:
+    if pp_rank == 0:
         with send_first_context:
             handles = p2p.isend_tensors([tensor_to_send], to_rank=1)
         if fail_at_first_send is True:
@@ -52,7 +55,7 @@ def _test_check_send_recv_tensor(dpg: DistributedProcessGroups, send_contiguous:
             handle.wait()
         tensor_travelled_back_and_forth = p2p.recv_tensors(1, from_rank=1)[0]
         torch.testing.assert_close(tensor_to_send, tensor_travelled_back_and_forth, atol=0, rtol=0)
-    elif dist.get_rank(p2p.pg) == 1:
+    elif pp_rank == 1:
         #  Instead of letting first rank hang since sending won't be possible, we early return
         tensors, handles = p2p.irecv_tensors(1, from_rank=0)
         if fail_at_first_send is True:
