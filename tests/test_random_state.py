@@ -2,13 +2,13 @@ import pytest
 import torch
 from helpers.utils import available_gpus, init_distributed
 from nanotron.core import distributed as dist
-from nanotron.core.process_groups import DistributedProcessGroups
 from nanotron.core.random import (
     RandomStates,
     branch_random_state,
     get_current_random_state,
     get_synced_random_state,
 )
+from nanotron.distributed import ParallelContext, ParallelMode
 
 
 @pytest.mark.skipif(available_gpus() < 2, reason="Testing test_random_state_sync requires at least 2 gpus")
@@ -18,10 +18,13 @@ def test_random_state_sync(tp: int, dp: int, pp: int):
     init_distributed(tp=tp, dp=dp, pp=pp)(_test_random_state_sync)()
 
 
-def _test_random_state_sync(dpg: DistributedProcessGroups):
+def _test_random_state_sync(parallel_context: ParallelContext):
+    tp_group = parallel_context.get_group(ParallelMode.TENSOR)
+    dp_group = parallel_context.get_group(ParallelMode.DATA)
+    pp_group = parallel_context.get_group(ParallelMode.PIPELINE)
     current_random_state = get_current_random_state()
     reference_rank = 0
-    pg = next((pg for pg in [dpg.tp_pg, dpg.dp_pg, dpg.pp_pg] if pg.size() == 2))
+    pg = next((pg for pg in [tp_group, dp_group, pp_group] if pg.size() == 2))
 
     # Check that they are not equal across process group
     if dist.get_rank(pg) == reference_rank:
