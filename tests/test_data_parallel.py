@@ -7,8 +7,8 @@ from helpers.utils import available_gpus, init_distributed
 from nanotron.core import distributed as dist
 from nanotron.core.parallel.data_parallelism.utils import ddp_trigger_sync_in_bwd
 from nanotron.core.parallel.parameters import NanotronParameter
-from nanotron.core.process_groups import DistributedProcessGroups
 from nanotron.core.utils import assert_tensor_synced_across_pg
+from nanotron.distributed import ParallelContext, ParallelMode
 from torch import nn
 from torch.distributed import GradBucket
 
@@ -19,15 +19,15 @@ def test_ddp_with_afab(accumulation_steps):
     init_distributed(tp=1, dp=2, pp=1)(_test_ddp_with_afab)(accumulation_steps=accumulation_steps)
 
 
-def _test_ddp_with_afab(dpg: DistributedProcessGroups, accumulation_steps: int):
-    dist.get_rank(dpg.dp_pg)
+def _test_ddp_with_afab(parallel_context: ParallelContext, accumulation_steps: int):
     half_precision = torch.float16
 
     def allreduce_hook(process_group: dist.ProcessGroup, bucket: GradBucket):
         # DDP groups grads in GradBuckets. This hook is called throughout the bwd pass, once each bucket is ready to overlap communication with computation.
         # See https://pytorch.org/docs/stable/ddp_comm_hooks.html#what-does-a-communication-hook-operate-on for more details.
         half_flat_bucket_buffer = bucket.buffer()
-        group_to_use = process_group if process_group is not None else dpg.dp_pg
+        dp_group = parallel_context.get_group(ParallelMode.DATA)
+        group_to_use = process_group if process_group is not None else dp_group
 
         return (
             dist.all_reduce(half_flat_bucket_buffer, group=group_to_use, async_op=True, op=dist.ReduceOp.AVG)
@@ -40,9 +40,10 @@ def _test_ddp_with_afab(dpg: DistributedProcessGroups, accumulation_steps: int):
     # Create Nanotron Parameter
     model_hook.weight = NanotronParameter(model_hook.weight)
 
+    dp_group = parallel_context.get_group(ParallelMode.DATA)
     model_ddp_hook = torch.nn.parallel.DistributedDataParallel(
         model_hook,
-        process_group=dpg.dp_pg,
+        process_group=dp_group,
     )
 
     # Register DDP hook
@@ -71,7 +72,7 @@ def _test_ddp_with_afab(dpg: DistributedProcessGroups, accumulation_steps: int):
 
         # Check that the gradients are synchronized across DP
         if i == accumulation_steps - 1:
-            assert_tensor_synced_across_pg(grad_hook, dpg.dp_pg)
+            assert_tensor_synced_across_pg(grad_hook, dp_group)
         else:
-            with assert_fail_except_rank_with(AssertionError, rank_exception=0, pg=dpg.dp_pg):
-                assert_tensor_synced_across_pg(grad_hook, dpg.dp_pg)
+            with assert_fail_except_rank_with(AssertionError, rank_exception=0, pg=dp_group):
+                assert_tensor_synced_across_pg(grad_hook, dp_group)

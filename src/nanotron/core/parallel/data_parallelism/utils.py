@@ -4,6 +4,7 @@ from typing import Optional
 import torch
 from nanotron.core import distributed as dist
 from nanotron.core.gradient_accumulator import GradientAccumulator
+from nanotron.distributed import ParallelContext, ParallelMode
 from torch import nn
 
 
@@ -27,7 +28,7 @@ def ddp_trigger_sync_in_bwd(model_ddp):
 
 def sync_gradients_across_dp(
     module: nn.Module,
-    dp_pg: dist.ProcessGroup,
+    parallel_context: ParallelContext,
     reduce_op: dist.ReduceOp,
     grad_accumulator: Optional[GradientAccumulator],
     **sync_options,
@@ -41,11 +42,12 @@ def sync_gradients_across_dp(
         grad_accumulator: The gradient accumulator to use.
         sync_options: Additional options given when using `grad_accumulator`. Please look at `GradientAccumulator.sync_gradients_across_dp` for documentation
     """
+    dp_group = parallel_context.get_group(ParallelMode.DATA)
     if grad_accumulator is not None:
         # This is an optimized path that
-        grad_accumulator.sync_gradients_across_dp(dp_pg=dp_pg, reduce_op=reduce_op, **sync_options)
+        grad_accumulator.sync_gradients_across_dp(dp_pg=dp_group, reduce_op=reduce_op, **sync_options)
         return
 
     # Sync gradients
     for name, param in module.named_parameters():
-        dist.all_reduce(param.grad, op=reduce_op, group=dp_pg)
+        dist.all_reduce(param.grad, op=reduce_op, group=dp_group)
