@@ -6,7 +6,7 @@ from typing import Generator, Iterable, List, Optional, Tuple, Union
 import torch
 from transformers import LlamaTokenizer
 
-from nanotron.config import GenerationArgs
+from nanotron.config import GenerationArgs, BenchArgs
 from nanotron.core import distributed as dist
 from nanotron.core.distributed import ProcessGroup, get_global_rank
 from nanotron.core.parallel.pipeline_parallelism.block import get_min_max_rank
@@ -19,7 +19,10 @@ from nanotron.core.utils import get_untyped_storage
 from nanotron.generate.sampler import BasicSampler, GreedySampler, SamplerType, TopKSampler, TopPSampler
 from nanotron.models.generate_store import Store, attach_store
 from nanotron.models.llama import LlamaModel
+from nanotron import logging
+from nanotron.helpers import log_throughput
 
+logger = logging.get_logger(__name__)
 
 @dataclasses.dataclass
 class GenerationInput:
@@ -144,7 +147,6 @@ def micro_splitter(
                 input_ids=TensorPointer(group_rank=input_rank), input_masks=TensorPointer(group_rank=input_rank)
             )
 
-
 @torch.inference_mode()
 def greedy_search_text(
     input_iter: Iterable[GenerationInput],
@@ -156,6 +158,7 @@ def greedy_search_text(
     tokenizer_config: Optional[TokenizerConfig],
     max_micro_batch_size: int,
     max_new_tokens: int,
+    is_bench: bool = False,
 ) -> Generator[GenerationOutput, None, None]:
     """We assume the following:
     - Everyone receives ALL the input text. # TODO @thomasw21: technically only specific ranks need to receive input.
@@ -217,11 +220,15 @@ def greedy_search_text(
                 for batch in batches
             )
 
-            start_time, elapsed_time_first_iteration = time.time(), 0
+            if is_bench:
+                start_time, elapsed_time_first_iteration = time.perf_counter(), 0
+                
             for generation_iter in range(max_new_tokens):
-                if generation_iter == 1:
+                
+                if is_bench and generation_iter == 0:
                     torch.cuda.synchronize()
-                    elapsed_time_first_iteration = start_time - time.time()
+                    elapsed_time_first_iteration = start_time - time.perf_counter()
+                    
                 all_new_decoder_input_ids_and_mask_same_rank: List[
                     Tuple[Union[torch.LongTensor, TensorPointer], Union[torch.BoolTensor, TensorPointer]]
                 ] = []
@@ -229,15 +236,27 @@ def greedy_search_text(
                 for state_id, state in enumerate(decoder_states):
                     new_decoder_states.append(state)
                     # Get the new logits
-                    with attach_store(model=model, store=state.store):
-                        # transpose: [sequence_length, batch_size, vocab_size] -> [batch_size, sequence_length, vocab_size]
+                    if not generation_config.use_cache:
+                        with attach_store(model=model, store=state.store):
+                            # transpose: [sequence_length, batch_size, vocab_size] -> [batch_size, sequence_length, vocab_size]
+                            sharded_logits = model(
+                                input_ids=state.new_input_ids,
+                                input_mask=state.new_input_mask,
+                            )
+                    else:
+                        if isinstance(state.new_input_ids, torch.Tensor):
+                            batch_generated_ids = torch.cat(state.generation_ids, dim=-1)
+                            batch_generated_mask = torch.cat(state.generation_mask, dim=-1)
+                        else:
+                            batch_generated_ids = state.new_input_ids
+                            batch_generated_mask = state.new_input_mask
                         sharded_logits = model(
-                            input_ids=state.new_input_ids,
-                            input_mask=state.new_input_mask,
+                            input_ids=batch_generated_ids,
+                            input_mask=batch_generated_mask,
                         )
-                        if isinstance(sharded_logits, torch.Tensor):
-                            sharded_logits = sharded_logits.transpose(0, 1)
 
+                    if isinstance(sharded_logits, torch.Tensor):
+                        sharded_logits = sharded_logits.transpose(0, 1)
                     # Communicate
                     # TODO @thomasw21: Make a diagram to show how this works
                     nb_send: int = 0
@@ -356,16 +375,40 @@ def greedy_search_text(
                         new_decoder_states, all_new_decoder_input_ids_and_mask
                     )
                 )
+            
+            if is_bench:    
+                # Compute throughput (tok/s/gpu). Note that the first generation is done with full seq_len, so we don't count it.
+                torch.cuda.synchronize()
+                total_time_sec = time.perf_counter() - start_time - elapsed_time_first_iteration
+                # We generate 1 token per iteration per batch (batch=microbatch)
+                # Number of tokens generated every iteration: gbs/iteration_time
+                global_batch_size = len(batches) * dpg.dp_pg.size() 
+                tokens_per_sec = global_batch_size * max_new_tokens / total_time_sec
 
-            # Compute throughput (tok/s/gpu). Note that the first generation is done with full seq_len, so we don't count it.
-            torch.cuda.synchronize()
-            total_time_ms = (time.time() - start_time - elapsed_time_first_iteration) * 1000
-            # We generate 1 token per iteration per batch (batch=microbatch)
-            elapsed_time_per_iteration_ms = total_time_ms / (max_new_tokens - 1)
-            # Number of tokens generated every iteration: gbs/iteration_time
-            tokens_per_sec = len(batches) * dpg.dp_pg.size() / (elapsed_time_per_iteration_ms / 1000)
-            tokens_per_sec_per_gpu = tokens_per_sec / dpg.world_pg.size()
-            print("Throughput: {:.2f} tok/s/gpu".format(tokens_per_sec_per_gpu))
+                model_tflops, hardware_tflops = model.get_flops_per_sec(
+                    iteration_time_in_sec=total_time_sec,
+                    sequence_length=max_new_tokens,
+                    global_batch_size=global_batch_size,
+                )
+
+                bench_config = BenchArgs(
+                    model_name=model.config._name_or_path,
+                    sequence_length=max_new_tokens,
+                    micro_batch_size=max_micro_batch_size,
+                    batch_accumulation_per_replica=1,
+                    benchmark_csv_path="benchmark.csv"
+                )
+                                
+                model_size = sum([p.numel() * p.data.element_size() for p in chain(model.parameters(), model.buffers())])
+
+                log_throughput(
+                    bench_config,
+                    dpg,
+                    model_tflops,
+                    hardware_tflops,
+                    tokens_per_sec,
+                    bandwidth = model_size * tokens_per_sec / 1e9
+                )
 
             # Flush communication
             for _ in range(

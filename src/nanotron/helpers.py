@@ -465,20 +465,17 @@ def log_throughput(
     model_tflops=0,
     hardware_tflops=0,
     tokens_per_sec=0,
+    bandwidth=0,
 ):
-    micro_batch_size = config.tokens.micro_batch_size
-    n_micro_batches_per_batch = config.tokens.batch_accumulation_per_replica
+    micro_batch_size = config.micro_batch_size
+    n_micro_batches_per_batch = config.batch_accumulation_per_replica
     global_batch_size = micro_batch_size * n_micro_batches_per_batch * dpg.dp_pg.size()
-    sequence_length = config.tokens.sequence_length
+    sequence_length = config.sequence_length
     slurm_job_id = os.environ.get("SLURM_JOB_ID", "N/A")
-    csv_filename = config.general.benchmark_csv_path
+    csv_filename = config.benchmark_csv_path
     table_log = [
-        LogItem("job_id", slurm_job_id, "s"),
-        LogItem("model_name", config.general.run, "s"),
+        LogItem("model_name", config.model_name, "s"),
         LogItem("nodes", math.ceil(dpg.world_pg.size() / 8), "d"),
-        LogItem("DP", dpg.dp_pg.size(), "d"),
-        LogItem("TP", dpg.tp_pg.size(), "d"),
-        LogItem("PP", dpg.pp_pg.size(), "d"),
         LogItem("seq_len", (sequence_length), "d"),
         LogItem("mbs", micro_batch_size, "d"),
         LogItem("batch_accum", n_micro_batches_per_batch, "d"),
@@ -486,17 +483,24 @@ def log_throughput(
         LogItem("mTFLOPs", model_tflops, ".2f"),
         LogItem("hTFLOPs", hardware_tflops, ".2f"),
         LogItem("tok/s/gpu", tokens_per_sec / dpg.world_pg.size(), ".2f"),
+        LogItem("Bandwidth (GB/s)", bandwidth, ".2f"),
         LogItem("Mem Alloc (GB)", torch.cuda.max_memory_allocated() / 1024**3, ".2f"),
         LogItem("Mem Res (GB)", torch.cuda.max_memory_reserved() / 1024**3, ".2f"),
     ]
+    
+    column_widths = [max(len(item.tag), len(f"{item.scalar_value:{item.log_format}}")) for item in table_log]
+    header_row = "| " + " | ".join([item.tag.ljust(width) for item, width in zip(table_log, column_widths)]) + " |"
+    separator_row = "| " + " | ".join(['-' * width for width in column_widths]) + " |"
+    data_row = "| " + " | ".join([f"{item.scalar_value:{item.log_format}}".ljust(width) for item, width in zip(table_log, column_widths)]) + " |"
+    table_output = f"{header_row}\n{separator_row}\n{data_row}"
+
     log_rank(
-        f"| {' | '.join([item.tag for item in table_log])} |"
-        f"\n| {' | '.join(['-' * len(item.tag) for item in table_log])} |"
-        "\n| " + " | ".join([f"{item.scalar_value:{item.log_format}}" for item in table_log]) + " |",
+        table_output,
         logger=logger,
         level=logging.INFO,
         rank=0,
     )
+    
     import csv
 
     if dist.get_rank(dpg.world_pg) == 0:
