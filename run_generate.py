@@ -77,12 +77,6 @@ def main():
     set_random_seed(42)
 
     # Initialise all process groups
-    # dpg = get_process_groups(
-    #     data_parallel_size=parallel_config.dp,
-    #     pipeline_parallel_size=parallel_config.pp,
-    #     tensor_parallel_size=parallel_config.tp,
-    # )
-
     parallel_context = ParallelContext.from_torch(
         tensor_parallel_size=parallel_config.tp,
         pipeline_parallel_size=parallel_config.pp,
