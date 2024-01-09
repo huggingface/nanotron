@@ -104,8 +104,6 @@ class ParallelContext:
         self.init_parallel_groups()
         dist.barrier()
 
-        # self.set_seed(seed)
-
     def init_global_dist(self, rank: int, world_size: int, backend: DistributedBackend, host: str, port: int):
         """Initialize the global distributed group.
 
@@ -243,16 +241,6 @@ class ParallelContext:
         device_id = local_rank
         torch.cuda.set_device(torch.cuda.device(device_id))
 
-    # def set_seed(self, seed: int):
-    #     """Set seed for reproducibility."""
-    #     random.seed(seed)
-    #     np.random.seed(seed)
-    #     torch.manual_seed(seed)
-
-    #     if torch.cuda.is_available():
-    #         torch.cuda.manual_seed(seed)
-    #         torch.cuda.manual_seed_all(seed)
-
     def map_rank_to_device(self):
         """Map global rank to device."""
         local_rank = int(os.getenv("LOCAL_RANK", "0"))
@@ -354,13 +342,14 @@ class ParallelContext:
     def destroy(self):
         assert self.is_initialized(ParallelMode.GLOBAL), "Global group must be initialized before destroying."
         for mode, group in self._groups.items():
-            assert self.is_initialized(mode), f"{mode} group must be initialized before destroying."
+            # NOTE: we destroy the global group last
             if mode is not ParallelMode.GLOBAL:
-                # NOTE: only ranks in the parallel group need to synchronize
-                # before destroying the group
-                process_group = self.get_group(mode)
-                dist.barrier(group=process_group)
-                dist.destroy_process_group(group)
+                if self.is_initialized(mode) and self.get_world_size(mode) > 1:
+                    # NOTE: only ranks in the parallel group need to synchronize
+                    # before destroying the group
+                    group = self.get_group(mode)
+                    dist.barrier(group=group)
+                    dist.destroy_process_group(group)
 
         dist.barrier()
         dist.destroy_process_group()
