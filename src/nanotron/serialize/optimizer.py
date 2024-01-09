@@ -10,18 +10,18 @@ from nanotron.serialize.utils import ObjectType
 
 
 def optimizer_filename(parallel_context: ParallelContext, is_zero: bool):
-    dp_rank = parallel_context.get_local_rank(ParallelMode.DATA)
+    tp_rank = parallel_context.get_local_rank(ParallelMode.TENSOR)
     pp_rank = parallel_context.get_local_rank(ParallelMode.PIPELINE)
 
-    dp_world_size = parallel_context.get_world_size(ParallelMode.DATA)
     pp_world_size = parallel_context.get_world_size(ParallelMode.PIPELINE)
+    tp_world_size = parallel_context.get_world_size(ParallelMode.TENSOR)
 
     if is_zero is True:
-        tp_rank = parallel_context.get_local_rank(ParallelMode.TENSOR)
-        tp_world_size = parallel_context.get_world_size(ParallelMode.TENSOR)
+        dp_rank = parallel_context.get_local_rank(ParallelMode.DATA)
+        dp_world_size = parallel_context.get_world_size(ParallelMode.DATA)
         return f"{ObjectType.OPTIMIZER.value}_pp-{pp_rank}-of-{pp_world_size}_dp-{dp_rank}-of-{dp_world_size}_tp-{tp_rank}-of-{tp_world_size}.pt"
     else:
-        return f"{ObjectType.OPTIMIZER.value}_pp-{pp_rank}-of-{pp_world_size}_tp-{dp_rank}-of-{dp_world_size}.pt"
+        return f"{ObjectType.OPTIMIZER.value}_pp-{pp_rank}-of-{pp_world_size}_tp-{tp_rank}-of-{tp_world_size}.pt"
 
 
 def lr_scheduler_filename():

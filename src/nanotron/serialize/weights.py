@@ -14,7 +14,7 @@ from nanotron.core import distributed as dist
 from nanotron.core.distributed import get_global_rank
 from nanotron.core.parallel.parameters import NanotronParameter, ShardedInfo, SlicesPair
 from nanotron.core.process_groups import DistributedProcessGroups
-from nanotron.distributed import ParallelContext
+from nanotron.distributed import ParallelContext, ParallelMode
 from nanotron.logging import log_rank
 from nanotron.serialize.metadata import CheckpointMetadata, TensorMetadata, TensorMetadataV2, load_meta
 from nanotron.serialize.utils import (
@@ -31,7 +31,7 @@ def save_weights(model: nn.Module, parallel_context: ParallelContext, root_folde
 
     # We save only `dist.get_rank(dpg.dp_pg) == 0`
     # TODO @thomasw21: Figure how this works with Zero-3
-    if parallel_context.get_global_rank() != 0:
+    if parallel_context.get_local_rank(ParallelMode.DATA) != 0:
         return
 
     module_id_to_prefix = {id(module): f"{module_name}." for module_name, module in model.named_modules()}

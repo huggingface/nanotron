@@ -13,6 +13,7 @@ from nanotron.core.parallel.pipeline_parallelism.tensor_pointer import TensorPoi
 from nanotron.core.parallel.tied_parameters import tie_parameters
 from nanotron.core.process_groups import DistributedProcessGroups
 from nanotron.core.utils import init_on_device_and_dtype
+from nanotron.distributed import ParallelContext, ParallelMode
 from torch import nn
 from torch.nn.parallel import DistributedDataParallel
 
@@ -64,19 +65,23 @@ class DummyModel(nn.Module):
         return x
 
 
-def init_dummy_model(dpg: DistributedProcessGroups, dtype: torch.dtype = torch.float) -> DummyModel:
-    p2p = P2P(pg=dpg.pp_pg, device=torch.device("cuda"))
+def init_dummy_model(parallel_context: ParallelContext, dtype: torch.dtype = torch.float) -> DummyModel:
+    p2p = P2P(pg=parallel_context.get_group(ParallelMode.PIPELINE), device=torch.device("cuda"))
     model = DummyModel(p2p=p2p)
 
     # Build model using contiguous segments
     pipeline_blocks = [module for name, module in model.named_modules() if isinstance(module, PipelineBlock)]
+    pp_world_size = parallel_context.get_world_size(ParallelMode.PIPELINE)
     with init_on_device_and_dtype(device=torch.device("cuda"), dtype=dtype):
-        contiguous_size = ceil(len(pipeline_blocks) / dpg.pp_pg.size())
+        contiguous_size = ceil(len(pipeline_blocks) / pp_world_size)
         for i, block in enumerate(pipeline_blocks):
             rank = i // contiguous_size
             block.build_and_set_rank(rank)
 
     # Sync all parameters that have the same name and that are not sharded across TP.
+    pp_rank = parallel_context.get_local_rank(ParallelMode.PIPELINE)
+    dp_rank = parallel_context.get_local_rank(ParallelMode.DATA)
+
     for name, param in model.named_parameters():
         if isinstance(param, NanotronParameter) and param.is_sharded:
             continue
@@ -84,15 +89,18 @@ def init_dummy_model(dpg: DistributedProcessGroups, dtype: torch.dtype = torch.f
             (
                 name,
                 # This adds all the tp_ranks in one go
-                set(dpg.world_rank_matrix[dist.get_rank(dpg.pp_pg), dist.get_rank(dpg.dp_pg), :]),
+                set(parallel_context.world_rank_matrix[pp_rank, dp_rank, :]),
             )
         ]
-        tie_parameters(root_module=model, ties=shared_weights, dpg=dpg, reduce_op=dist.ReduceOp.SUM)
+        tie_parameters(
+            root_module=model, ties=shared_weights, parallel_context=parallel_context, reduce_op=dist.ReduceOp.SUM
+        )
 
-    initial_sync(model=model, dpg=dpg)
+    initial_sync(model=model, parallel_context=parallel_context)
 
     if len(list(model.named_parameters())) > 0:
-        model = DistributedDataParallel(model, process_group=dpg.dp_pg)
+        dp_group = parallel_context.get_group(ParallelMode.DATA)
+        model = DistributedDataParallel(model, process_group=dp_group)
     else:
         # No parameters, so no need to use DDP to sync parameters gradients
         model = model
@@ -110,10 +118,10 @@ def init_dummy_optimizer(model: nn.Module, dpg: DistributedProcessGroups) -> Bas
     return optimizer
 
 
-def dummy_infinite_data_loader(pp_pg: dist.ProcessGroup, dtype=torch.float, input_pp_rank=0):
+def dummy_infinite_data_loader(parallel_context: ParallelContext, dtype=torch.float, input_pp_rank=0):
     micro_batch_size = 3
     # We assume the first linear is always built on the first rank.
-    current_pp_rank = dist.get_rank(pp_pg)
+    current_pp_rank = parallel_context.get_local_rank(ParallelMode.PIPELINE)
     while True:
         yield {
             "x": torch.randn(micro_batch_size, 10, dtype=dtype, device="cuda")
