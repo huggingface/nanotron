@@ -43,12 +43,11 @@ from nanotron.core.parallel.tensor_parallelism.nn import (
 from nanotron.core.process_groups import DistributedProcessGroups
 from nanotron.core.random import RandomStates
 from nanotron.core.utils import checkpoint_method
+from nanotron.fused.layer_norm import TritonRMSNorm
 from nanotron.models import AttachableStore, NanotronModel
 from torch import nn
 from transformers import LlamaConfig
 from transformers.activations import ACT2FN
-
-from apex.normalization import FusedRMSNorm as RMSNorm
 
 logger = logging.get_logger(__name__)
 
@@ -543,7 +542,7 @@ class LlamaDecoderLayer(nn.Module):
         layer_idx: int,
     ):
         super().__init__()
-        self.input_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.input_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.attn = CausalSelfAttention(
             config=config,
             parallel_config=parallel_config,
@@ -551,7 +550,7 @@ class LlamaDecoderLayer(nn.Module):
             layer_idx=layer_idx,
         )
 
-        self.post_attention_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.post_attention_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.mlp = MLP(config=config, parallel_config=parallel_config, tp_pg=tp_pg)
 
     def forward(
@@ -660,8 +659,8 @@ class LlamaModel(nn.Module):
 
         self.final_layer_norm = PipelineBlock(
             p2p=self.p2p,
-            module_builder=RMSNorm,
-            module_kwargs={"normalized_shape": config.hidden_size, "eps": config.rms_norm_eps},
+            module_builder=TritonRMSNorm,
+            module_kwargs={"hidden_size": config.hidden_size, "eps": config.rms_norm_eps},
             module_input_keys={"input"},
             module_output_keys={"hidden_states"},
         )  # TODO
@@ -917,7 +916,7 @@ class LlamaForTraining(NanotronModel):
 
                     assert full_param_name not in initialized_parameters
                     initialized_parameters.add(full_param_name)
-            elif isinstance(module, RMSNorm):
+            elif isinstance(module, TritonRMSNorm):
                 assert {"weight"} == {name for name, _ in module.named_parameters()}
                 for param_name, param in module.named_parameters():
                     assert isinstance(param, NanotronParameter)

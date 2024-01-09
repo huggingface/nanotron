@@ -12,11 +12,6 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
-from torch import nn
-from torch.nn.parallel import DistributedDataParallel
-from torch.optim.lr_scheduler import LambdaLR
-from torch.profiler import ProfilerActivity, profile, tensorboard_trace_handler
-
 from nanotron import logging
 from nanotron.config import (
     Config,
@@ -47,17 +42,14 @@ from nanotron.core.random import (
     get_current_random_state,
     get_synced_random_state,
 )
-from nanotron.logging import LogItem, log_rank, warn_once
+from nanotron.logging import LogItem, log_rank
+from torch import nn
+from torch.nn.parallel import DistributedDataParallel
+from torch.optim import AdamW
+from torch.optim.lr_scheduler import LambdaLR
+from torch.profiler import ProfilerActivity, profile, tensorboard_trace_handler
 
 logger = logging.get_logger(__name__)
-
-try:
-    from apex.optimizers import FusedAdam
-
-    _apex_available = True
-except ImportError:
-    _apex_available = False
-    from torch.optim import AdamW
 
 
 def get_args():
@@ -200,34 +192,17 @@ def init_optimizer_and_grad_accumulator(
 
     # Basic optimizer builder
     def basic_optimizer_builder(named_param_groups):
-        if _apex_available:
-            return NamedOptimizer(
-                named_params_or_groups=named_param_groups,
-                optimizer_builder=lambda param_groups: FusedAdam(
-                    param_groups,
-                    lr=optimizer_args.learning_rate_scheduler.learning_rate,
-                    weight_decay=optimizer_args.weight_decay,
-                    eps=optimizer_args.adam_eps,
-                    betas=(optimizer_args.adam_beta1, optimizer_args.adam_beta2),
-                ),
-            )
-        else:
-            warn_once(
-                logger=logger,
-                msg="Apex is not installed. Using PyTorch AdamW instead.",
-                rank=0,
-            )
-            return NamedOptimizer(
-                named_params_or_groups=named_param_groups,
-                optimizer_builder=lambda param_groups: AdamW(  # pylint: disable=E0601
-                    param_groups,
-                    lr=optimizer_args.learning_rate_scheduler.learning_rate,
-                    weight_decay=optimizer_args.weight_decay,
-                    eps=optimizer_args.adam_eps,
-                    betas=(optimizer_args.adam_beta1, optimizer_args.adam_beta2),
-                    fused=optimizer_args.torch_adam_is_fused,
-                ),
-            )
+        return NamedOptimizer(
+            named_params_or_groups=named_param_groups,
+            optimizer_builder=lambda param_groups: AdamW(  # pylint: disable=E0601
+                param_groups,
+                lr=optimizer_args.learning_rate_scheduler.learning_rate,
+                weight_decay=optimizer_args.weight_decay,
+                eps=optimizer_args.adam_eps,
+                betas=(optimizer_args.adam_beta1, optimizer_args.adam_beta2),
+                fused=optimizer_args.torch_adam_is_fused,
+            ),
+        )
 
     optimizer_builder = basic_optimizer_builder
 
@@ -487,11 +462,17 @@ def log_throughput(
         LogItem("Mem Alloc (GB)", torch.cuda.max_memory_allocated() / 1024**3, ".2f"),
         LogItem("Mem Res (GB)", torch.cuda.max_memory_reserved() / 1024**3, ".2f"),
     ]
-    
+
     column_widths = [max(len(item.tag), len(f"{item.scalar_value:{item.log_format}}")) for item in table_log]
     header_row = "| " + " | ".join([item.tag.ljust(width) for item, width in zip(table_log, column_widths)]) + " |"
-    separator_row = "| " + " | ".join(['-' * width for width in column_widths]) + " |"
-    data_row = "| " + " | ".join([f"{item.scalar_value:{item.log_format}}".ljust(width) for item, width in zip(table_log, column_widths)]) + " |"
+    separator_row = "| " + " | ".join(["-" * width for width in column_widths]) + " |"
+    data_row = (
+        "| "
+        + " | ".join(
+            [f"{item.scalar_value:{item.log_format}}".ljust(width) for item, width in zip(table_log, column_widths)]
+        )
+        + " |"
+    )
     table_output = f"{header_row}\n{separator_row}\n{data_row}"
 
     log_rank(
@@ -500,7 +481,7 @@ def log_throughput(
         level=logging.INFO,
         rank=0,
     )
-    
+
     import csv
 
     if dist.get_rank(dpg.world_pg) == 0:

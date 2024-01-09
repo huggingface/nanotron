@@ -15,9 +15,8 @@
 """ PyTorch Starcoder (GPT with Multi-Query Attention, RoPe, SWA and GQA).
 
 Some dependencies to update before using:
- - install `apex`
  - install `torch>=2.0`
- - install `flash-attn>=2.3.3`
+ - install `flash-attn>=2.4.2`
  """
 
 import inspect
@@ -26,15 +25,14 @@ import os
 from typing import Dict, List, Optional, Tuple, Union
 
 import torch
-from apex.normalization import FusedLayerNorm as LayerNorm
 from flash_attn import bert_padding
 from flash_attn.flash_attn_interface import (
     flash_attn_varlen_func,
     flash_attn_with_kvcache,
 )
 from torch import nn
+from torch.nn import LayerNorm, init
 from torch.nn import functional as F
-from torch.nn import init
 from transformers.activations import ACT2FN
 
 from nanotron.config import ParallelismArgs, RecomputeGranularity, Starcoder2Config
@@ -56,6 +54,7 @@ from nanotron.core.parallel.tied_parameters import create_tied_parameter
 from nanotron.core.process_groups import DistributedProcessGroups
 from nanotron.core.random import RandomStates, branch_random_state
 from nanotron.core.utils import checkpoint_method
+from nanotron.fused.layer_norm import TritonLayerNorm
 from nanotron.models import AttachableStore, NanotronModel
 
 _flash_supports_window_size = "window_size" in list(inspect.signature(flash_attn_varlen_func).parameters)
@@ -1159,7 +1158,7 @@ class GPTBlock(nn.Module):
         layer_idx: int,
     ):
         super(GPTBlock, self).__init__()
-        self.ln_1 = LayerNorm(config.hidden_size, eps=config.layer_norm_epsilon)
+        self.ln_1 = TritonLayerNorm(config.hidden_size, eps=config.layer_norm_epsilon)
         if config.multi_query is True:
             self.attn = CausalSelfMQA(
                 config=config,
@@ -1178,7 +1177,7 @@ class GPTBlock(nn.Module):
             raise ValueError("Either `multi_query` or `grouped_query` must be True")  # TODO: @nouamane not necessarily
         self.attn_dropout = config.attn_pdrop
 
-        self.ln_2 = LayerNorm(config.hidden_size, eps=config.layer_norm_epsilon)
+        self.ln_2 = TritonLayerNorm(config.hidden_size, eps=config.layer_norm_epsilon)
         self.ff = MLP(config=config, parallel_config=parallel_config, tp_pg=tp_pg)
         self.ff_dropout = config.resid_pdrop
 
@@ -1310,7 +1309,7 @@ class GPTModel(nn.Module):
 
         self.final_layer_norm = PipelineBlock(
             p2p=self.p2p,
-            module_builder=LayerNorm,
+            module_builder=TritonLayerNorm,
             module_kwargs={"normalized_shape": config.hidden_size, "eps": config.layer_norm_epsilon},
             module_input_keys={"input"},
             module_output_keys={"hidden_states"},
@@ -1448,7 +1447,7 @@ class Starcoder2ForTraining(NanotronModel):
     @torch.no_grad()
     def init_model_randomly(self, init_method, scaled_init_method):
         model = self
-        # Set to 0: layernorm bias / all bias
+        # Set to 0: LayerNorm bias / all bias
         initialized_parameters = set()
         # Handle tensor parallelism
         with torch.no_grad():
