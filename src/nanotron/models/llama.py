@@ -22,7 +22,6 @@ from torch import nn
 from transformers.activations import ACT2FN
 
 from nanotron.config import LlamaConfig, ParallelismArgs, RecomputeGranularity
-from nanotron.core import distributed as dist
 from nanotron.core import logging
 from nanotron.core.logging import log_rank
 from nanotron.core.parallel.parameters import NanotronParameter
@@ -258,18 +257,19 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         self,
         config: LlamaConfig,
         parallel_config: Optional["ParallelismArgs"],
-        tp_pg: dist.ProcessGroup,
+        parallel_context: ParallelContext,
         layer_idx: int,
     ):
         super().__init__()
         # Tensor parallel considerations: We split tensors along head dimension
+        tp_world_size = parallel_context.get_world_size(ParallelMode.TENSOR)
         assert (
-            config.num_attention_heads % tp_pg.size() == 0
-        ), f"Number of attention heads ({config.num_attention_heads}) must be divisible by TP size ({tp_pg.size()})."
+            config.num_attention_heads % tp_world_size == 0
+        ), f"Number of attention heads ({config.num_attention_heads}) must be divisible by TP size ({tp_world_size})."
         try:
             assert (
-                config.num_key_value_heads % tp_pg.size() == 0
-            ), f"Number of key/value heads ({config.num_key_value_heads}) must be divisible by TP size ({tp_pg.size()})."
+                config.num_key_value_heads % tp_world_size == 0
+            ), f"Number of key/value heads ({config.num_key_value_heads}) must be divisible by TP size ({tp_world_size})."
         except AttributeError:
             log_rank(
                 "WARNING: num_key_value_heads not defined, assuming it is equal to num_attention_heads",
@@ -282,8 +282,8 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         assert (
             config.num_attention_heads % config.num_key_value_heads == 0
         ), f"Number of attention heads ({config.num_attention_heads}) must be divisible by number of key/value heads ({config.num_key_value_heads})."
-        self.n_local_q_heads = config.num_attention_heads // tp_pg.size()
-        self.n_local_kv_heads = config.num_key_value_heads // tp_pg.size()
+        self.n_local_q_heads = config.num_attention_heads // tp_world_size
+        self.n_local_kv_heads = config.num_key_value_heads // tp_world_size
         self.n_repeats = config.num_attention_heads // config.num_key_value_heads
         self.is_gqa = config.num_attention_heads != config.num_key_value_heads  # Whether we are using GQA or not
         self.d_qk = config.hidden_size // config.num_attention_heads
@@ -306,7 +306,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         self.qkv_proj = TensorParallelColumnLinear(
             self.d_model,
             config.num_attention_heads * self.d_qk + 2 * config.num_key_value_heads * self.d_qk,
-            pg=tp_pg,
+            parallel_context=parallel_context,
             mode=tp_mode,
             bias=False,
             async_communication=tp_linear_async_communication,
@@ -320,7 +320,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         self.o_proj = TensorParallelRowLinear(
             config.num_attention_heads * self.d_qk,
             self.d_model,
-            pg=tp_pg,
+            parallel_context=parallel_context,
             mode=tp_mode,
             bias=False,
             async_communication=tp_linear_async_communication and tp_mode is TensorParallelLinearMode.REDUCE_SCATTER,
@@ -482,7 +482,7 @@ class LlamaDecoderLayer(nn.Module):
         self.attn = CausalSelfAttention(
             config=config,
             parallel_config=parallel_config,
-            tp_pg=parallel_context.get_group(ParallelMode.TENSOR),
+            parallel_context=parallel_context,
             layer_idx=layer_idx,
         )
 
@@ -611,7 +611,7 @@ class LlamaModel(nn.Module):
                     module_kwargs={
                         "config": config,
                         "parallel_config": parallel_config,
-                        "tp_pg": parallel_context.get_group(ParallelMode.TENSOR),
+                        "parallel_context": parallel_context,
                         "layer_idx": layer_idx,
                     },
                     module_input_keys={"hidden_states", "sequence_mask"},
@@ -636,7 +636,7 @@ class LlamaModel(nn.Module):
             module_kwargs={
                 "in_features": config.hidden_size,
                 "out_features": config.vocab_size,
-                "pg": parallel_context.get_group(ParallelMode.TENSOR),
+                "parallel_context": parallel_context,
                 "bias": False,
                 # TODO @thomasw21: refactor so that we store that default in a single place.
                 "mode": self.tp_mode,
