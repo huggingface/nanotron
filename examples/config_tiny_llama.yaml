@@ -1,6 +1,6 @@
 checkpoints:
   checkpoint_interval: 10
-  checkpoints_path: /fsx/phuc/testing/nanotron-ref/checkpoints
+  checkpoints_path: /fsx/thomwolf/github/nanotron/checkpoints
   checkpoints_path_is_shared_file_system: true
   resume_checkpoint_path: null
   save_initial_state: false
@@ -70,10 +70,10 @@ optimizer:
   zero_stage: 0
 parallelism:
   dp: 2
-  pp: 2
+  pp: 1
   pp_engine: 1f1b
   recompute_granularity: SELECTIVE
-  tp: 2
+  tp: 1
   tp_linear_async_communication: true
   tp_mode: REDUCE_SCATTER
 profiler: null

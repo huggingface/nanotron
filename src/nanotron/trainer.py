@@ -42,7 +42,6 @@ from nanotron.core.parallel.tied_parameters import (
     sync_tied_weights_gradients,
     tie_parameters,
 )
-from nanotron.core.process_groups import DistributedProcessGroups
 from nanotron.core.random import (
     set_random_seed,
 )
@@ -121,17 +120,11 @@ class DistributedTrainer:
         ########################################
 
         # Initialise all process groups
-        # self.dpg = get_process_groups(
-        #     data_parallel_size=self.config.parallelism.dp,
-        #     pipeline_parallel_size=self.config.parallelism.pp,
-        #     tensor_parallel_size=self.config.parallelism.tp,
-        # )
         self.parallel_context = ParallelContext.from_torch(
             tensor_parallel_size=self.config.parallelism.tp,
             pipeline_parallel_size=self.config.parallelism.pp,
             data_parallel_size=self.config.parallelism.dp,
         )
-        self._logging_data = []
 
         # Set log levels
         if self.parallel_context.get_global_rank() == 0:
@@ -377,9 +370,6 @@ class DistributedTrainer:
         if self.config.checkpoints.save_initial_state and checkpoint_path is None:
             self.save_checkpoint()
 
-        if self.parallel_context.get_global_rank() in self.logger_ranks:
-            torch.save(self._logging_data, "./logging/refactor_loss.pt")
-
     # def log_object(self, dataclass_object: Any, name: str):
     #     if not dataclass_object or isinstance(self.tb_context, contextlib.nullcontext):
     #         return
@@ -509,7 +499,7 @@ class DistributedTrainer:
 
         outputs = self.pipeline_engine.train_batch_iter(
             model=self.model,
-            parallel_context=self.parallel_context,
+            pg=self.parallel_context.get_group(ParallelMode.PIPELINE),
             batch=(next(dataloader) for _ in range(self.n_micro_batches_per_batch)),
             nb_microbatches=self.n_micro_batches_per_batch,
             grad_accumulator=self.grad_accumulator,
@@ -693,9 +683,6 @@ class DistributedTrainer:
             # if not isinstance(tb_writer, contextlib.nullcontext):
             #     tb_writer.add_scalars_from_list(log_entries, self.iteration_step)
 
-            if self.parallel_context.get_global_rank() in self.logger_ranks:
-                self._logging_data.append(loss_avg.item())
-
             self.loggerwriter.add_scalars_from_list(log_entries, self.iteration_step)
 
         # Nanotron Benchmark mode: we log the throughput and exit
@@ -716,7 +703,7 @@ class DistributedTrainer:
     @staticmethod
     def build_model(
         model_builder: Callable[[], NanotronModel],
-        parallel_context: DistributedProcessGroups,
+        parallel_context: ParallelContext,
         dtype: torch.dtype,
         target_pp_ranks: Optional[List[int]] = None,
         device: Optional[torch.device] = torch.device("cuda"),

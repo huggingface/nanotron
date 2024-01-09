@@ -75,23 +75,34 @@ We showcase usage in the `examples` directory.
 
 Let's go through some key concepts.
 
-## DistributedProcessGroups
+## ParallelContext
 
-`DistributedProcessGroups` is the base class referencing all the process groups you might need when running parallel workloads. You can initialize it using the following:
+`ParallelContext` is the base class that contains all information like process groups, ranks, world sizes when running 3D parallelism workloads. You can initialize it using the following:
+
 ```python
-from nanotron.core.process_groups import get_process_groups
+from nanotron.distributed import ParallelContext
 
-dp, tp, pp = ... # Predefine your topology
-dpg: DistributedProcessGroups = get_process_groups(data_parallel_size=dp, tensor_parallel_size=tp, pipeline_parallel_size=pp)
+parallel_context = ParallelContext.from_torch(
+    tensor_parallel_size=2,
+    data_parallel_size=2,
+    pipeline_parallel_size=2
+)
 ```
 
-`ProcessGroups` is a mechanism in order to run distributed collectives (`all-reduce`, `all-gather`, ...) on a subgroup of all the ranks. It provides the granularity needed for 3D parallelism.
+`ParallelMode` is an enum for accessing specific information like local rank, local world size, etc., about a specific parallelism dimension (TP, PP, DP).
 
-From this dataclass you can access multiple process groups:
- - `dp_pg`/`tp_pg`/`pp_pg`: This produces your typical process groups linked to 3D parallelism
- - `world_pg`: ProcessGroup including all the processes.
- - `world_rank_matrix`: This allows one to compute the world rank knowing the 3D ranks of a given process, or inversely when using `get_3d_ranks`.
- - `world_ranks_to_pg`: This is a more generic patterns that allows you to store custom set of ProcessGroups, and querying it via a list of world ranks.
+For example, if you want to get the local rank of the current process in tensor parallelism, you can do:
+
+```python
+local_rank = parallel_context.get_local_rank(ParallelMode.TENSOR) # and the same for other parallelisms
+```
+
+In PyTorch, you can issue a collective communication (all-reduce, all-gather, ...) on a subgroup of all the ranks. It provides the granularity needed for 3D parallelism. You can access the process group of a parallelism dimension of a process as:
+
+- `parallel_context.get_group(ParallelMode.GLOBAL)` or `parallel_context.get_group(ParallelMode.TENSOR)` # similar for other parallelisms
+- `parallel_context.world_rank_matrix`: This allows one to compute the world rank knowing the 3D ranks of a given process, or inversely when using get_3d_ranks.
+- `parallel_context.world_ranks_to_pg`: This is a more generic pattern that allows you to store a custom set of ProcessGroups, and query it via a list of world ranks.
+
 
 ## NanotronParameter
 
