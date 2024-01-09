@@ -53,9 +53,9 @@ from nanotron.core.parallel.tensor_parallelism.nn import (
     TensorParallelRowLinear,
 )
 from nanotron.core.parallel.tied_parameters import create_tied_parameter
-from nanotron.core.process_groups import DistributedProcessGroups
 from nanotron.core.random import RandomStates, branch_random_state
 from nanotron.core.utils import checkpoint_method
+from nanotron.distributed import ParallelContext, ParallelMode
 from nanotron.models import AttachableStore, NanotronModel
 
 _flash_supports_window_size = "window_size" in list(inspect.signature(flash_attn_varlen_func).parameters)
@@ -180,7 +180,7 @@ class MLP(nn.Module):
         self,
         config: Starcoder2Config,
         parallel_config: Optional[ParallelismArgs],
-        tp_pg: dist.ProcessGroup,
+        parallel_context: ParallelContext,
     ):
         super().__init__()
 
@@ -194,7 +194,7 @@ class MLP(nn.Module):
         self.c_fc = TensorParallelColumnLinear(
             config.hidden_size,
             d_ff,
-            pg=tp_pg,
+            parallel_context=parallel_context,
             mode=tp_mode,
             bias=True,
             async_communication=tp_linear_async_communication,
@@ -203,7 +203,7 @@ class MLP(nn.Module):
         self.c_proj = TensorParallelRowLinear(
             d_ff,
             config.hidden_size,
-            pg=tp_pg,
+            parallel_context=parallel_context,
             mode=tp_mode,
             bias=True,
             async_communication=tp_linear_async_communication and tp_mode is TensorParallelLinearMode.REDUCE_SCATTER,
@@ -334,9 +334,9 @@ class _MQAColumnLinearReduceScatterAsyncCommunication(torch.autograd.Function):
         kv_bias: Optional[torch.Tensor],
         # Basically we assume that `qkv_weight` is already the concatenated version of `q.weight` and `kv.weight`
         qkv_weight: torch.Tensor,
-        tp_pg: dist.ProcessGroup,
+        parallel_context: ParallelContext,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        ctx.tp_pg = tp_pg
+        ctx.parallel_context = parallel_context
         ctx.use_q_bias = q_bias is not None
         ctx.use_kv_bias = kv_bias is not None
         ctx.split_q_and_kv_id = q_weight.shape[0]
@@ -344,13 +344,16 @@ class _MQAColumnLinearReduceScatterAsyncCommunication(torch.autograd.Function):
         # All gather x if needed
         gathered_x: torch.Tensor
         gather_x_handle: Optional[dist.Work] = None
-        if tp_pg.size() == 1:
+        tp_world_size = parallel_context.get_world_size(ParallelMode.TENSOR)
+        tp_group = parallel_context.get_group(ParallelMode.TENSOR)
+
+        if tp_world_size == 1:
             gathered_x = x
         else:
             first_dim = x.shape[0]
             last_dims = x.shape[1:]
 
-            unsharded_first_dim = first_dim * tp_pg.size()
+            unsharded_first_dim = first_dim * tp_world_size
 
             gathered_x = torch.empty(
                 unsharded_first_dim,
@@ -364,7 +367,7 @@ class _MQAColumnLinearReduceScatterAsyncCommunication(torch.autograd.Function):
             # https://cs.github.com/pytorch/pytorch/blob/2b267fa7f28e18ca6ea1de4201d2541a40411457/torch/distributed/nn/functional.py#L317
             x = x.contiguous()
 
-            gather_x_handle = dist.all_gather_into_tensor(gathered_x, x, group=tp_pg, async_op=True)
+            gather_x_handle = dist.all_gather_into_tensor(gathered_x, x, group=tp_group, async_op=True)
 
         # Compute kv (we assume that kv is duplicated across TP)
         kv_out = F.linear(x, kv_weight, kv_bias)
@@ -376,13 +379,13 @@ class _MQAColumnLinearReduceScatterAsyncCommunication(torch.autograd.Function):
         # All gather `kv` output
         gathered_kv_out: torch.Tensor
         gather_kv_out_handle: Optional[dist.Work] = None
-        if tp_pg.size() == 1:
+        if tp_world_size == 1:
             gathered_kv_out = kv_out
         else:
             first_dim = kv_out.shape[0]
             last_dims = kv_out.shape[1:]
 
-            unsharded_first_dim = first_dim * tp_pg.size()
+            unsharded_first_dim = first_dim * tp_world_size
 
             gathered_kv_out = torch.empty(
                 unsharded_first_dim,
@@ -392,7 +395,7 @@ class _MQAColumnLinearReduceScatterAsyncCommunication(torch.autograd.Function):
                 requires_grad=x.requires_grad,
             )
 
-            gather_kv_out_handle = dist.all_gather_into_tensor(gathered_kv_out, kv_out, group=tp_pg, async_op=True)
+            gather_kv_out_handle = dist.all_gather_into_tensor(gathered_kv_out, kv_out, group=tp_group, async_op=True)
 
         # Compute q
         q_out = F.linear(gathered_x, q_weight, q_bias)
@@ -409,7 +412,7 @@ class _MQAColumnLinearReduceScatterAsyncCommunication(torch.autograd.Function):
     def backward(
         ctx, grad_q: torch.Tensor, grad_kv: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor], torch.Tensor, Optional[torch.Tensor], None, None]:
-        tp_pg = ctx.tp_pg
+        parallel_context = ctx.parallel_context
         split_q_and_kv_id = ctx.split_q_and_kv_id
         use_q_bias = ctx.use_q_bias
         use_kv_bias = ctx.use_kv_bias
@@ -419,12 +422,14 @@ class _MQAColumnLinearReduceScatterAsyncCommunication(torch.autograd.Function):
         # Gather `x`
         gathered_x: torch.Tensor
         gather_x_handle: Optional[dist.Work] = None
-        if tp_pg.size() == 1:
+        tp_world_size = parallel_context.get_world_size(ParallelMode.TENSOR)
+        tp_group = parallel_context.get_group(ParallelMode.TENSOR)
+        if tp_world_size == 1:
             gathered_x = x
         else:
             first_dim = x.shape[0]
             last_dims = x.shape[1:]
-            unsharded_batch_size = first_dim * tp_pg.size()
+            unsharded_batch_size = first_dim * tp_world_size
 
             gathered_x = torch.empty(
                 unsharded_batch_size,
@@ -433,7 +438,7 @@ class _MQAColumnLinearReduceScatterAsyncCommunication(torch.autograd.Function):
                 dtype=x.dtype,
                 requires_grad=False,
             )
-            gather_x_handle = dist.all_gather_into_tensor(gathered_x, x, group=tp_pg, async_op=True)
+            gather_x_handle = dist.all_gather_into_tensor(gathered_x, x, group=tp_group, async_op=True)
 
         # Backward computation on `kv` and `q` with regards to input
         grad_qkv = torch.concat([grad_q, grad_kv], dim=-1)
@@ -446,7 +451,7 @@ class _MQAColumnLinearReduceScatterAsyncCommunication(torch.autograd.Function):
         # Reduce scatter gradients with regards to input
         sub_gradient_tensor: torch.Tensor
         sub_gradient_tensor_handle: Optional[dist.Work] = None
-        if tp_pg.size() == 1:
+        if tp_world_size == 1:
             sub_gradient_tensor = grad_tensor
         else:
             sub_gradient_tensor = torch.empty(
@@ -454,7 +459,7 @@ class _MQAColumnLinearReduceScatterAsyncCommunication(torch.autograd.Function):
             )
             # reduce_scatter
             sub_gradient_tensor_handle = dist.reduce_scatter_tensor(
-                sub_gradient_tensor, grad_tensor, group=tp_pg, async_op=True
+                sub_gradient_tensor, grad_tensor, group=tp_group, async_op=True
             )
 
         # Backward computation for `q` and `kv` with regards to
@@ -504,7 +509,7 @@ class MQAColumnLinears(nn.Module):
         in_features: int,
         q_out_features: int,
         kv_out_features: int,
-        pg: dist.ProcessGroup,
+        parallel_context: ParallelContext,
         mode: TensorParallelLinearMode,
         bias=True,
         device=None,
@@ -512,14 +517,14 @@ class MQAColumnLinears(nn.Module):
         async_communication: bool = False,
     ):
         super().__init__()
-        self.pg = pg
-        self.world_size = pg.size()
+        world_size = parallel_context.get_world_size(ParallelMode.TENSOR)
 
-        assert in_features % self.world_size == 0
+        assert in_features % world_size == 0
 
         self.in_features = in_features
-        self.q_out_features = q_out_features // self.world_size
+        self.q_out_features = q_out_features // world_size
         self.kv_out_features = kv_out_features
+        self.parallel_context = parallel_context
 
         # Tp mode
         self.mode = mode
@@ -570,7 +575,9 @@ class MQAColumnLinears(nn.Module):
         self.kv = nn.ParameterDict(kv_param_dict)
 
         # Marking as tied/sharded
-        mark_all_parameters_in_module_as_sharded(self.q, pg=self.pg, split_config=SplitConfig(split_dim=0))
+        tp_group = parallel_context.get_group(ParallelMode.TENSOR)
+        # TODO(xrsrke): make mark_all_parameters_in_module_as_sharded takes parallel_context
+        mark_all_parameters_in_module_as_sharded(self.q, pg=tp_group, split_config=SplitConfig(split_dim=0))
         self._mark_kv_parameters_in_module_as_tied()
 
         # Init
@@ -588,11 +595,15 @@ class MQAColumnLinears(nn.Module):
             init.uniform_(self._qkv_bias, -bound, bound)
 
     def _mark_kv_parameters_in_module_as_tied(self):
+        tp_group = self.parallel_context.get_group(ParallelMode.TENSOR)
+        tp_world_size = self.parallel_context.get_world_size(ParallelMode.TENSOR)
+
         for name, param in list(self.kv.named_parameters()):
             new_param = create_tied_parameter(
                 parameter=param,
                 name=name,
-                global_ranks=tuple(sorted((get_global_rank(self.pg, i) for i in range(self.pg.size())))),
+                # TODO(xrsrke): refactor or remove get_global_rank
+                global_ranks=tuple(sorted((get_global_rank(tp_group, i) for i in range(tp_world_size)))),
                 # Always has to be ReduceOp SUM as now this is always duplicated regardless of tp mode
                 reduce_op=dist.ReduceOp.SUM,
                 root_module=self.kv,
@@ -600,17 +611,18 @@ class MQAColumnLinears(nn.Module):
             setattr(self.kv, name, new_param)
 
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        tp_group = self.parallel_context.get_group(ParallelMode.TENSOR)
         if self.use_MQAColumnLinearReduceScatterAsyncCommunication:
             assert self._qkv_weight.requires_grad is False
             assert self._qkv_bias is None or self._qkv_bias.requires_grad is False
             return _MQAColumnLinearReduceScatterAsyncCommunication.apply(
-                x, self.q.weight, self.q.bias, self.kv.weight, self.kv.bias, self._qkv_weight, self.pg
+                x, self.q.weight, self.q.bias, self.kv.weight, self.kv.bias, self._qkv_weight, tp_group
             )
         qkv = column_linear(
             input=x,
             weight=self._qkv_weight,
             bias=self._qkv_bias,
-            group=self.pg,
+            group=tp_group,
             tp_mode=self.mode,
             async_communication=self.async_communication,
         )
@@ -623,16 +635,17 @@ class CausalSelfMQA(nn.Module, AttachableStore):
         self,
         config: Starcoder2Config,
         parallel_config: Optional[ParallelismArgs],
-        tp_pg: dist.ProcessGroup,
+        parallel_context: ParallelContext,
         layer_idx: int,
     ):
         super().__init__()
         # Tensor parallel considerations: We split tensors along head dimension
+        tp_world_size = parallel_context.get_world_size(ParallelMode.TENSOR)
         assert (
-            config.num_attention_heads % tp_pg.size() == 0
-        ), f"Number of attention heads ({config.num_attention_heads}) must be divisible by TP size ({tp_pg.size()})."
-        self.tp_pg_size = tp_pg.size()
-        self.n_heads = config.num_attention_heads // tp_pg.size()
+            config.num_attention_heads % tp_world_size == 0
+        ), f"Number of attention heads ({config.num_attention_heads}) must be divisible by TP size ({tp_world_size})."
+        self.tp_pg_size = tp_world_size
+        self.n_heads = config.num_attention_heads // tp_world_size
         self.d_qk = config.hidden_size // config.num_attention_heads
         self.d_v = config.hidden_size // config.num_attention_heads
         self.d_model = config.hidden_size
@@ -644,14 +657,14 @@ class CausalSelfMQA(nn.Module, AttachableStore):
         )
 
         self.mode = tp_mode
-        self.pg = tp_pg
+        self.pg = parallel_context.get_group(ParallelMode.TENSOR)
 
         # only Q_size is parallelized
         self.qkv = MQAColumnLinears(
             in_features=self.d_model,
             q_out_features=config.num_attention_heads * self.d_qk,
             kv_out_features=self.d_qk + self.d_v,
-            pg=tp_pg,
+            parallel_context=parallel_context,
             mode=tp_mode,
             bias=True,
             async_communication=tp_linear_async_communication,
@@ -666,7 +679,7 @@ class CausalSelfMQA(nn.Module, AttachableStore):
         self.o = TensorParallelRowLinear(
             config.num_attention_heads * self.d_v,
             self.d_model,
-            pg=tp_pg,
+            parallel_context=parallel_context,
             mode=tp_mode,
             bias=True,
             async_communication=tp_linear_async_communication and tp_mode is TensorParallelLinearMode.REDUCE_SCATTER,
@@ -890,7 +903,7 @@ class CausalSelfGQA(nn.Module, AttachableStore):
         self,
         config: Starcoder2Config,
         parallel_config: Optional[ParallelismArgs],
-        tp_pg: dist.ProcessGroup,
+        parallel_context: ParallelContext,
         layer_idx: int,
     ):
         super().__init__()
@@ -910,9 +923,10 @@ class CausalSelfGQA(nn.Module, AttachableStore):
                 f"`hidden_size` must be divisible by num_heads (got `hidden_size`: {self.hidden_size} and `num_heads`:"
                 f" {self.num_heads})."
             )
+        tp_world_size = parallel_context.get_world_size(ParallelMode.TENSOR)
         assert (
-            config.num_attention_heads % tp_pg.size() == 0
-        ), f"Number of attention heads ({config.num_attention_heads}) must be divisible by TP size ({tp_pg.size()})."
+            config.num_attention_heads % tp_world_size == 0
+        ), f"Number of attention heads ({config.num_attention_heads}) must be divisible by TP size ({tp_world_size})."
 
         self.maybe_rotary = (
             StarcoderRotaryEmbedding(head_dim=self.head_dim, base=config.rope_theta)
@@ -921,11 +935,11 @@ class CausalSelfGQA(nn.Module, AttachableStore):
         )
 
         self.num_kv_heads = config.num_kv_heads if (not config.multi_query) else 1
-        self.n_local_q_heads = self.num_heads // tp_pg.size()
-        self.n_local_kv_heads = config.num_kv_heads // tp_pg.size()
+        self.n_local_q_heads = self.num_heads // tp_world_size
+        self.n_local_kv_heads = config.num_kv_heads // tp_world_size
         assert (
-            config.num_kv_heads >= tp_pg.size()
-        ), f"Number of kv heads ({config.num_kv_heads}) must be >= TP size ({tp_pg.size()})."
+            config.num_kv_heads >= tp_world_size
+        ), f"Number of kv heads ({config.num_kv_heads}) must be >= TP size ({tp_world_size})."
         self.n_repeats = self.n_local_q_heads // self.n_local_kv_heads
 
         qkv_contiguous_chunks = None
@@ -933,7 +947,7 @@ class CausalSelfGQA(nn.Module, AttachableStore):
         self.query_key_value = TensorParallelColumnLinear(
             self.hidden_size,
             self.num_heads * self.head_dim + 2 * self.num_kv_heads * self.head_dim,
-            pg=tp_pg,
+            parallel_context=parallel_context,
             mode=tp_mode,
             bias=True,
             async_communication=tp_linear_async_communication,
@@ -942,7 +956,7 @@ class CausalSelfGQA(nn.Module, AttachableStore):
         self.dense = TensorParallelRowLinear(
             self.hidden_size,
             self.hidden_size,
-            pg=tp_pg,
+            parallel_context=parallel_context,
             mode=tp_mode,
             bias=True,
             async_communication=tp_linear_async_communication and tp_mode is TensorParallelLinearMode.REDUCE_SCATTER,
@@ -1154,7 +1168,7 @@ class GPTBlock(nn.Module):
         self,
         config: Starcoder2Config,
         parallel_config: Optional[ParallelismArgs],
-        tp_pg: dist.ProcessGroup,
+        parallel_context: ParallelContext,
         random_states: RandomStates,
         layer_idx: int,
     ):
@@ -1164,14 +1178,14 @@ class GPTBlock(nn.Module):
             self.attn = CausalSelfMQA(
                 config=config,
                 parallel_config=parallel_config,
-                tp_pg=tp_pg,
+                parallel_context=parallel_context,
                 layer_idx=layer_idx,
             )
         elif config.grouped_query is True:
             self.attn = CausalSelfGQA(
                 config=config,
                 parallel_config=parallel_config,
-                tp_pg=tp_pg,
+                parallel_context=parallel_context,
                 layer_idx=layer_idx,
             )
         else:
@@ -1179,7 +1193,7 @@ class GPTBlock(nn.Module):
         self.attn_dropout = config.attn_pdrop
 
         self.ln_2 = LayerNorm(config.hidden_size, eps=config.layer_norm_epsilon)
-        self.ff = MLP(config=config, parallel_config=parallel_config, tp_pg=tp_pg)
+        self.ff = MLP(config=config, parallel_config=parallel_config, parallel_context=parallel_context)
         self.ff_dropout = config.resid_pdrop
 
         self.random_states = random_states
@@ -1224,15 +1238,17 @@ class GPTBlock(nn.Module):
 
 
 class Embedding(nn.Module, AttachableStore):
-    def __init__(self, tp_pg: dist.ProcessGroup, config: Starcoder2Config, parallel_config: Optional[ParallelismArgs]):
+    def __init__(
+        self, parallel_context: ParallelContext, config: Starcoder2Config, parallel_config: Optional[ParallelismArgs]
+    ):
         super().__init__()
         self.token_embedding = TensorParallelEmbedding(
             num_embeddings=config.vocab_size,
             embedding_dim=config.hidden_size,
-            pg=tp_pg,
+            parallel_context=parallel_context,
             mode=parallel_config.tp_mode if parallel_config is not None else TensorParallelLinearMode.ALL_REDUCE,
         )
-        self.pg = tp_pg
+        self.parallel_context = parallel_context
 
     def forward(self, input_ids: torch.Tensor, input_mask: torch.Tensor):  # [batch_size, seq_length]
         # store = self.get_local_store()
@@ -1258,14 +1274,14 @@ class GPTModel(nn.Module):
     def __init__(
         self,
         config: Starcoder2Config,
-        dpg: DistributedProcessGroups,
+        parallel_context: ParallelContext,
         parallel_config: Optional[ParallelismArgs],
         random_states: RandomStates,
     ):
         super().__init__()
 
         # Declare all the nodes
-        self.p2p = P2P(dpg.pp_pg, device=torch.device("cuda"))
+        self.p2p = P2P(parallel_context.get_group(ParallelMode.PIPELINE), device=torch.device("cuda"))
         self.random_states = random_states
         self.tp_mode = parallel_config.tp_mode if parallel_config is not None else TensorParallelLinearMode.ALL_REDUCE
 
@@ -1273,7 +1289,7 @@ class GPTModel(nn.Module):
             p2p=self.p2p,
             module_builder=Embedding,
             module_kwargs={
-                "tp_pg": dpg.tp_pg,
+                "parallel_context": parallel_context,
                 "config": config,
                 "parallel_config": parallel_config,
             },
@@ -1297,7 +1313,7 @@ class GPTModel(nn.Module):
                     module_kwargs={
                         "config": config,
                         "parallel_config": parallel_config,
-                        "tp_pg": dpg.tp_pg,
+                        "parallel_context": parallel_context,
                         "random_states": random_states,
                         "layer_idx": layer_idx,
                     },
@@ -1323,7 +1339,7 @@ class GPTModel(nn.Module):
             module_kwargs={
                 "in_features": config.hidden_size,
                 "out_features": config.vocab_size,
-                "pg": dpg.tp_pg,
+                "parallel_context": parallel_context,
                 "bias": False,
                 # TODO @thomasw21: refactor so that we store that default in a single place.
                 "mode": self.tp_mode,
@@ -1377,9 +1393,9 @@ def masked_mean(loss, label_mask, dtype):
 
 
 class Loss(nn.Module):
-    def __init__(self, tp_pg: dist.ProcessGroup):
+    def __init__(self, parallel_context: ParallelContext):
         super().__init__()
-        self.tp_pg = tp_pg
+        self.parallel_context = parallel_context
 
     def forward(
         self,
@@ -1389,8 +1405,9 @@ class Loss(nn.Module):
     ) -> Dict[str, torch.Tensor]:
         # Megatron by defaults cast everything in fp32. `--f16-lm-cross-entropy` is an option you can use to keep current precision.
         # https://github.com/NVIDIA/Megatron-LM/blob/f267e6186eae1d6e2055b412b00e2e545a8e896a/megatron/model/gpt_model.py#L38
+        tp_group = self.parallel_context.get_group(ParallelMode.PIPELINE)
         loss = sharded_cross_entropy(
-            sharded_logits, label_ids.transpose(0, 1).contiguous(), group=self.tp_pg, dtype=torch.float
+            sharded_logits, label_ids.transpose(0, 1).contiguous(), group=tp_group, dtype=torch.float
         ).transpose(
             0, 1
         )  # TODO @nouamane: case where TP=1 should be simpler
@@ -1405,16 +1422,21 @@ class Starcoder2ForTraining(NanotronModel):
     def __init__(
         self,
         config: Starcoder2Config,
-        dpg: DistributedProcessGroups,
+        parallel_context: ParallelContext,
         parallel_config: Optional[ParallelismArgs],
         random_states: RandomStates,
     ):
         super().__init__()
-        self.model = GPTModel(config=config, dpg=dpg, parallel_config=parallel_config, random_states=random_states)
+        self.model = GPTModel(
+            config=config,
+            parallel_context=parallel_context,
+            parallel_config=parallel_config,
+            random_states=random_states,
+        )
         self.loss = PipelineBlock(
             p2p=self.model.p2p,
             module_builder=Loss,
-            module_kwargs={"tp_pg": dpg.tp_pg},
+            module_kwargs={"parallel_context": parallel_context},
             module_input_keys={
                 "sharded_logits",
                 "label_ids",
@@ -1424,7 +1446,7 @@ class Starcoder2ForTraining(NanotronModel):
         )
         self.config: Starcoder2Config = config
         self.parallel_config = parallel_config
-        self.dpg = dpg
+        self.parallel_context = parallel_context
 
     def forward(
         self,
@@ -1640,7 +1662,7 @@ class Starcoder2ForTraining(NanotronModel):
 
     def get_flops_per_sec(self, iteration_time_in_sec, sequence_length, global_batch_size):
         """Get flops per second for a given model"""
-        world_size = self.dpg.world_pg.size()
+        world_size = self.parallel_context.get_world_size(ParallelMode.GLOBAL)
         model_flops, hardware_flops = get_flops(
             num_layers=self.config.num_hidden_layers,
             hidden_size=self.config.hidden_size,
