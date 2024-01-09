@@ -14,10 +14,10 @@ def get_tp_and_pp_rank_and_size_from(
     world_rank: int, parallel_context: ParallelContext
 ) -> Tuple[Tuple[int, int], Tuple[int, int]]:
     result = parallel_context.get_3d_ranks(local_rank=world_rank, parallel_mode=ParallelMode.GLOBAL)
-    tp_rank = parallel_context.get_world_size(ParallelMode.TENSOR)
-    pp_rank = parallel_context.get_world_size(ParallelMode.PIPELINE)
+    tp_world_size = parallel_context.get_world_size(ParallelMode.TENSOR)
+    pp_world_size = parallel_context.get_world_size(ParallelMode.PIPELINE)
 
-    return (result[2], tp_rank), (result[0], pp_rank)
+    return (result[2], tp_world_size), (result[0], pp_world_size)
 
 
 def get_path(
