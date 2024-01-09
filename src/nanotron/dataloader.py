@@ -11,7 +11,6 @@ from nanotron import logging
 from nanotron.config import Config
 from nanotron.core import distributed as dist
 from nanotron.core.parallel.pipeline_parallelism.tensor_pointer import TensorPointer
-from nanotron.core.process_groups import DistributedProcessGroups
 from nanotron.core.random import set_random_seed
 from nanotron.core.utils import (
     assert_fail_except_rank_with,
@@ -182,13 +181,15 @@ def dummy_infinite_data_generator(
     output_pp_rank: int,
     vocab_size: int,
     seed: int,
-    dpg: DistributedProcessGroups,
+    parallel_context: ParallelContext,
 ):
     def dummy_infinite_data_generator() -> Generator[Dict[str, Union[torch.Tensor, TensorPointer]], None, None]:
         # Random generator
         generator = torch.Generator(device="cuda")
+        dp_rank = parallel_context.get_local_rank(ParallelMode.DATA)
+        pp_rank = parallel_context.get_local_rank(ParallelMode.PIPELINE)
         # Make sure that TP are synced always
-        generator.manual_seed(seed * (1 + dist.get_rank(dpg.dp_pg)) * (1 + dist.get_rank(dpg.pp_pg)))
+        generator.manual_seed(seed * (1 + dp_rank) * (1 + pp_rank))
 
         while True:
             yield {
@@ -200,7 +201,7 @@ def dummy_infinite_data_generator(
                     device="cuda",
                     generator=generator,
                 )
-                if dist.get_rank(dpg.pp_pg) == input_pp_rank
+                if pp_rank == input_pp_rank
                 else TensorPointer(group_rank=input_pp_rank),
                 "input_mask": torch.ones(
                     micro_batch_size,
@@ -208,7 +209,7 @@ def dummy_infinite_data_generator(
                     dtype=torch.bool,
                     device="cuda",
                 )
-                if dist.get_rank(dpg.pp_pg) == input_pp_rank
+                if pp_rank == input_pp_rank
                 else TensorPointer(group_rank=input_pp_rank),
                 "label_ids": torch.randint(
                     0,
@@ -218,7 +219,7 @@ def dummy_infinite_data_generator(
                     device="cuda",
                     generator=generator,
                 )
-                if dist.get_rank(dpg.pp_pg) == output_pp_rank
+                if pp_rank == output_pp_rank
                 else TensorPointer(group_rank=output_pp_rank),
                 "label_mask": torch.ones(
                     micro_batch_size,
@@ -226,7 +227,7 @@ def dummy_infinite_data_generator(
                     dtype=torch.bool,
                     device="cuda",
                 )
-                if dist.get_rank(dpg.pp_pg) == output_pp_rank
+                if pp_rank == output_pp_rank
                 else TensorPointer(group_rank=output_pp_rank),
             }
 
@@ -237,7 +238,7 @@ def dummy_infinite_data_generator(
 class SkipBatchSampler(BatchSampler):
     """
     A `torch.utils.data.BatchSampler` that skips the first `n` batches of another `torch.utils.data.BatchSampler`.
-    Note that in case of DDP, we skip batches on each rank, so a total of `skip_batches * dpg.dp_pg.size()` batches
+    Note that in case of DDP, we skip batches on each rank, so a total of `skip_batches * dp_world_size)` batches
     """
 
     def __init__(self, batch_sampler: BatchSampler, skip_batches: int, dp_size: int):

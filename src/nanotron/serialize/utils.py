@@ -13,7 +13,7 @@ class ObjectType(Enum):
 def get_tp_and_pp_rank_and_size_from(
     world_rank: int, parallel_context: ParallelContext
 ) -> Tuple[Tuple[int, int], Tuple[int, int]]:
-    result = parallel_context.get_3d_ranks(world_rank=world_rank)
+    result = parallel_context.get_3d_ranks(local_rank=world_rank, parallel_mode=ParallelMode.GLOBAL)
     tp_rank = parallel_context.get_world_size(ParallelMode.TENSOR)
     pp_rank = parallel_context.get_world_size(ParallelMode.PIPELINE)
 

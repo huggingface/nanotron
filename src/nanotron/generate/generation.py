@@ -16,6 +16,7 @@ from nanotron.core.parallel.pipeline_parallelism.state import PipelineEvalBatchS
 from nanotron.core.parallel.pipeline_parallelism.tensor_pointer import TensorPointer
 from nanotron.core.process_groups import DistributedProcessGroups
 from nanotron.core.utils import get_untyped_storage
+from nanotron.distributed import ParallelContext, ParallelMode
 from nanotron.generate.sampler import BasicSampler, GreedySampler, SamplerType, TopKSampler, TopPSampler
 from nanotron.models.generate_store import Store, attach_store
 from nanotron.models.llama import LlamaModel
@@ -70,7 +71,7 @@ def micro_batcher(
     tokenizer: LlamaTokenizer,
     max_micro_batch_size: int,
     tokenizer_config: TokenizerConfig,
-    dpg: DistributedProcessGroups,
+    parallel_context: ParallelContext,
     input_rank: int,
 ) -> Generator[GenerationInputs, None, None]:
     """
@@ -88,11 +89,14 @@ def micro_batcher(
             # Empty micro batches don't matter
             return
 
-        if micro_batch_id % dpg.dp_pg.size() != dist.get_rank(dpg.dp_pg):
+        dp_world_size = parallel_context.get_world_size(ParallelMode.DATA)
+        dp_rank = parallel_context.get_local_rank(ParallelMode.DATA)
+        if micro_batch_id % dp_world_size != dp_rank:
             # Each dp is responsible for its own micro batches
             continue
 
-        if dist.get_rank(dpg.pp_pg) == input_rank:
+        pp_rank = parallel_context.get_local_rank(ParallelMode.PIPELINE)
+        if pp_rank == input_rank:
             encodings = tokenizer(
                 [elt.text for elt in micro_batch],
                 return_tensors="pt",
@@ -151,7 +155,7 @@ def greedy_search_text(
     tokenizer: LlamaTokenizer,
     model: LlamaModel,
     p2p: P2P,
-    dpg: DistributedProcessGroups,
+    parallel_context: ParallelContext,
     generation_config: GenerationArgs,
     tokenizer_config: Optional[TokenizerConfig],
     max_micro_batch_size: int,
@@ -173,8 +177,9 @@ def greedy_search_text(
         sampler_type = SamplerType.GREEDY
 
     # Compute flag
-    is_decoder_input_rank = dist.get_rank(dpg.pp_pg) == decoder_input_rank
-    is_decoder_logit_rank = dist.get_rank(dpg.pp_pg) == decoder_logit_rank
+    pp_rank = parallel_context.get_local_rank(ParallelMode.PIPELINE)
+    is_decoder_input_rank = pp_rank == decoder_input_rank
+    is_decoder_logit_rank = pp_rank == decoder_logit_rank
     max_nb_microbatches = decoder_logit_rank - decoder_input_rank + 1
 
     # TODO @thomasw21: Fix this as we shouldn't get P2P like that
@@ -191,7 +196,7 @@ def greedy_search_text(
                 max_micro_batch_size=max_micro_batch_size,
                 tokenizer_config=tokenizer_config,
                 input_rank=decoder_input_rank,
-                dpg=dpg,
+                parallel_context=parallel_context,
             ),
             chunk_size=max_nb_microbatches,
         ):
@@ -270,15 +275,16 @@ def greedy_search_text(
                     if is_decoder_logit_rank:
                         assert isinstance(sharded_logits, torch.Tensor)
 
+                        tp_group = parallel_context.get_group(ParallelMode.TENSOR)
                         # run a logit chooser.
                         if sampler_type == SamplerType.GREEDY:
-                            sampler = GreedySampler(pg=dpg.tp_pg)
+                            sampler = GreedySampler(pg=tp_group)
                         elif sampler_type == SamplerType.TOP_K:
-                            sampler = TopKSampler(pg=dpg.tp_pg)
+                            sampler = TopKSampler(pg=tp_group)
                         elif sampler_type == SamplerType.TOP_P:
-                            sampler = TopPSampler(pg=dpg.tp_pg)
+                            sampler = TopPSampler(pg=tp_group)
                         elif sampler_type == SamplerType.BASIC:
-                            sampler = BasicSampler(pg=dpg.tp_pg)
+                            sampler = BasicSampler(pg=tp_group)
                         else:
                             raise NotImplementedError(f"Sampler type {sampler_type} is not implemented")
 
@@ -363,8 +369,12 @@ def greedy_search_text(
             # We generate 1 token per iteration per batch (batch=microbatch)
             elapsed_time_per_iteration_ms = total_time_ms / (max_new_tokens - 1)
             # Number of tokens generated every iteration: gbs/iteration_time
-            tokens_per_sec = len(batches) * dpg.dp_pg.size() / (elapsed_time_per_iteration_ms / 1000)
-            tokens_per_sec_per_gpu = tokens_per_sec / dpg.world_pg.size()
+            tokens_per_sec = (
+                len(batches)
+                * parallel_context.get_world_size(ParallelMode.DATA)
+                / (elapsed_time_per_iteration_ms / 1000)
+            )
+            tokens_per_sec_per_gpu = tokens_per_sec / parallel_context.get_world_size(ParallelMode.GLOBAL)
             print("Throughput: {:.2f} tok/s/gpu".format(tokens_per_sec_per_gpu))
 
             # Flush communication
@@ -391,18 +401,19 @@ def greedy_search_text(
                     batch_generated_mask = TensorPointer(group_rank=decoder_input_rank)
 
                 # Broadcast all data
+                pp_group = parallel_context.get_group(ParallelMode.PIPELINE)
                 batch_generated_ids, batch_generated_mask = broadcast_tensors(
-                    [batch_generated_ids, batch_generated_mask], group_src=decoder_input_rank, group=dpg.pp_pg
+                    [batch_generated_ids, batch_generated_mask], group_src=decoder_input_rank, group=pp_group
                 )
                 batch.input_ids, batch.input_masks = broadcast_tensors(
-                    [batch.input_ids, batch.input_masks], group_src=decoder_input_rank, group=dpg.pp_pg
+                    [batch.input_ids, batch.input_masks], group_src=decoder_input_rank, group=pp_group
                 )
 
                 # Flush the store to release memory
                 state.store.flush()
                 assert len(state.store) == 0
 
-                if dist.get_rank(dpg.pp_pg) == decoder_input_rank:
+                if pp_rank == decoder_input_rank:
                     assert (
                         batch_generated_ids.shape[0] == batch.input_ids.shape[0]
                     ), f"Batch size needs to match {batch_generated_ids.shape[0]} != {batch.input_ids.shape[0]}"
@@ -415,7 +426,7 @@ def greedy_search_text(
 
                 for i, (generated_ids, generated_mask) in enumerate(zip(batch_generated_ids, batch_generated_mask)):
                     # TODO @thomasw21: We could actually have all ranks return the output, since it's been already broadcasted
-                    if dist.get_rank(dpg.pp_pg) == decoder_input_rank:
+                    if pp_rank == decoder_input_rank:
                         input_ids = batch.input_ids[i]
                         input_mask = batch.input_masks[i]
                         yield GenerationOutput(

@@ -27,13 +27,13 @@ from nanotron.core.parallel.pipeline_parallelism.engine import (
 )
 from nanotron.core.parallel.pipeline_parallelism.tensor_pointer import TensorPointer
 from nanotron.core.parallel.tensor_parallelism.enum import TensorParallelLinearMode
-from nanotron.core.process_groups import get_process_groups
 from nanotron.core.random import (
     RandomStates,
     get_current_random_state,
     get_synced_random_state,
     set_random_seed,
 )
+from nanotron.distributed import ParallelContext, ParallelMode
 from nanotron.generate.generation import (
     GenerationInput,
     TokenizerConfig,
@@ -77,10 +77,16 @@ def main():
     set_random_seed(42)
 
     # Initialise all process groups
-    dpg = get_process_groups(
-        data_parallel_size=parallel_config.dp,
-        pipeline_parallel_size=parallel_config.pp,
+    # dpg = get_process_groups(
+    #     data_parallel_size=parallel_config.dp,
+    #     pipeline_parallel_size=parallel_config.pp,
+    #     tensor_parallel_size=parallel_config.tp,
+    # )
+
+    parallel_context = ParallelContext.from_torch(
         tensor_parallel_size=parallel_config.tp,
+        pipeline_parallel_size=parallel_config.pp,
+        data_parallel_size=parallel_config.dp,
     )
 
     tokenizer_path = args.model_name
@@ -111,8 +117,9 @@ def main():
 
     # Get synchronized random states
     if parallel_config.tp_mode is TensorParallelLinearMode.ALL_REDUCE:
+        tp_group = parallel_context.get_group(ParallelMode.TENSOR)
         random_states = RandomStates(
-            {"tp_synced": get_synced_random_state(random_state=get_current_random_state(), pg=dpg.tp_pg)}
+            {"tp_synced": get_synced_random_state(random_state=get_current_random_state(), pg=tp_group)}
         )
     else:
         # We don't need to sync across TP when using sequence parallel (REDUCE_SCATTER)
@@ -121,18 +128,18 @@ def main():
     model = DistributedTrainer.build_model(
         model_builder=lambda: CONFIG_TO_MODEL_CLASS[model_config_cls](
             config=model_config,
-            dpg=dpg,
+            parallel_context=parallel_context,
             parallel_config=parallel_config,
             random_states=random_states,
         ),
-        model_config=model_config,
+        # model_config=model_config,
         dtype=dtype,
-        dpg=dpg,
+        parallel_context=parallel_context,
     )
 
     # Mark some parameters as tied
     # TODO @nouamane: this is only needed for training, can we just mark params as NanotronParameter instead?
-    mark_tied_parameters(model=model, dpg=dpg, parallel_config=parallel_config)
+    mark_tied_parameters(model=model, parallel_context=parallel_context, parallel_config=parallel_config)
 
     # Sanity check model
     sanity_check(root_module=model)
@@ -145,7 +152,7 @@ def main():
         level=logging.INFO,
         rank=0,
     )
-    load_weights(model=model, dpg=dpg, root_folder=checkpoint_path)
+    load_weights(model=model, parallel_context=parallel_context, root_folder=checkpoint_path)
 
     model.eval()
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
@@ -174,7 +181,7 @@ def main():
         model=model.model,
         # TODO @thomasw21: Figure out how to pass p2p.
         p2p=model.model.p2p,
-        dpg=dpg,
+        parallel_context=parallel_context,
         max_new_tokens=args.max_new_tokens,
         max_micro_batch_size=2,
         generation_config=GenerationArgs(sampler="greedy"),

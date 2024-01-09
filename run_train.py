@@ -60,7 +60,7 @@ def get_dataloader(trainer: DistributedTrainer, sanity_check_dataloader_interval
             output_pp_rank=output_pp_rank,
             vocab_size=trainer.model_config.vocab_size,
             seed=trainer.config.data.seed,
-            dpg=trainer.dpg,
+            parallel_context=parallel_context,
         )()
     elif isinstance(trainer.config.data.dataset, PretrainDatasetsArgs):
         log_rank("Using `datasets` library", logger=logger, level=logging.INFO, rank=0)

@@ -131,6 +131,7 @@ class DistributedTrainer:
             pipeline_parallel_size=self.config.parallelism.pp,
             data_parallel_size=self.config.parallelism.dp,
         )
+        self._logging_data = []
 
         # Set log levels
         if self.parallel_context.get_global_rank() == 0:
@@ -375,6 +376,9 @@ class DistributedTrainer:
 
         if self.config.checkpoints.save_initial_state and checkpoint_path is None:
             self.save_checkpoint()
+
+        if self.parallel_context.get_global_rank() in self.logger_ranks:
+            torch.save(self._logging_data, "./logging/refactor_loss.pt")
 
     # def log_object(self, dataclass_object: Any, name: str):
     #     if not dataclass_object or isinstance(self.tb_context, contextlib.nullcontext):
@@ -688,6 +692,9 @@ class DistributedTrainer:
 
             # if not isinstance(tb_writer, contextlib.nullcontext):
             #     tb_writer.add_scalars_from_list(log_entries, self.iteration_step)
+
+            if self.parallel_context.get_global_rank() in self.logger_ranks:
+                self._logging_data.append(loss_avg.item())
 
             self.loggerwriter.add_scalars_from_list(log_entries, self.iteration_step)
 
