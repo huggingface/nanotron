@@ -17,16 +17,12 @@
 from typing import Dict, Optional, Union
 
 import torch
-from nanotron.fused.layer_norm import TritonRMSNorm
 from flash_attn import bert_padding
 from flash_attn.flash_attn_interface import (
     flash_attn_varlen_func,
     flash_attn_with_kvcache,
 )
-from torch import nn
-from transformers import LlamaConfig
-from transformers.activations import ACT2FN
-
+from flash_attn.layers.rotary import RotaryEmbedding as FlashRotaryEmbedding
 from nanotron.config import ParallelismArgs, RecomputeGranularity
 from nanotron.core import distributed as dist
 from nanotron.core import logging
@@ -47,7 +43,11 @@ from nanotron.core.parallel.tensor_parallelism.nn import (
 from nanotron.core.process_groups import DistributedProcessGroups
 from nanotron.core.random import RandomStates
 from nanotron.core.utils import checkpoint_method
+from nanotron.fused.layer_norm import TritonRMSNorm
 from nanotron.models import AttachableStore, NanotronModel
+from torch import nn
+from transformers import LlamaConfig
+from transformers.activations import ACT2FN
 
 logger = logging.get_logger(__name__)
 
@@ -315,6 +315,9 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             end=config.max_position_embeddings,
         )
 
+        # NOTE: Only supported for training (TODO(fmom): position_ids not supported yet)
+        self.flash_rotary_embedding = FlashRotaryEmbedding(dim=self.d_qk, interleaved=True)
+
         self.o_proj = TensorParallelRowLinear(
             config.num_attention_heads * self.d_qk,
             self.d_model,
@@ -369,7 +372,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                 qkv_states.view(q_length, batch_size, 3, self.n_local_q_heads, self.d_qk)
                 .permute(2, 1, 0, 3, 4)
                 .contiguous()
-            )
+            )  # [3, batch_size, seq_length, n_local_q_heads, d_qk]
 
         store = self.get_local_store()
         if store is not None:  # Inference case
@@ -487,8 +490,16 @@ class CausalSelfAttention(nn.Module, AttachableStore):
 
         else:  # Training case
             # Apply rotary embeddings to query/key states
-            query_states = self.rotary_embedding(query_states, position_ids=None)
-            key_states = self.rotary_embedding(key_states, position_ids=None)
+            # NOTE: The layout is different from models/llama.py which is [batch_size, num_heads, seq_length, d_qk]
+            # Here it is, [batch_size, seq_length, num_heads, d_qk]
+            # [2, batch_size, seq_length, num_heads, d_qk]
+            key_value_states = torch.cat([key_states.unsqueeze(0), value_states.unsqueeze(0)], dim=0)
+            # [batch_size, seq_length, 2, num_heads, d_qk]
+            key_value_states = key_value_states.permute(1, 2, 0, 3, 4).contiguous()
+            query_states, key_value_states = self.flash_rotary_embedding(query_states, kv=key_value_states)
+            # [batch_size, seq_length, num_heads, d_qk]
+            key_states, value_states = torch.split(key_value_states, 1, dim=2)
+
             q_sequence_mask = sequence_mask
             kv_sequence_mask = sequence_mask
 
