@@ -13,7 +13,7 @@ from nanotron.core.parallel.tensor_parallelism.nn import (
     TensorParallelEmbedding,
     TensorParallelRowLinear,
 )
-from nanotron.core.process_groups import DistributedProcessGroups
+from nanotron.distributed import ParallelContext, ParallelMode
 from torch import nn as torch_nn
 
 
@@ -26,18 +26,21 @@ def test_column_linear(tp: int, dp: int, pp: int, tp_mode: TensorParallelLinearM
     )
 
 
-def _test_column_linear(dpg: DistributedProcessGroups, tp_mode: TensorParallelLinearMode, async_communication: bool):
+def _test_column_linear(
+    parallel_context: ParallelContext, tp_mode: TensorParallelLinearMode, async_communication: bool
+):
     if async_communication:
         os.environ["CUDA_DEVICE_MAX_CONNECTIONS"] = "1"
     in_features = 2
     out_features_per_tp_rank = 3
-    out_features = dpg.tp_pg.size() * out_features_per_tp_rank
+    tp_world_size = parallel_context.get_world_size(ParallelMode.TENSOR)
+    out_features = tp_world_size * out_features_per_tp_rank
 
     # Sharded
     column_linear = TensorParallelColumnLinear(
         in_features=in_features,
         out_features=out_features,
-        pg=dpg.tp_pg,
+        parallel_context=parallel_context,
         mode=tp_mode,
         device="cuda",
         async_communication=async_communication,
@@ -45,18 +48,19 @@ def _test_column_linear(dpg: DistributedProcessGroups, tp_mode: TensorParallelLi
 
     # Un-sharded
     reference_linear = torch_nn.Linear(in_features=in_features, out_features=out_features, device="cuda")
+    tp_group = parallel_context.get_group(ParallelMode.TENSOR)
 
     # Copy weights/bias from sharded to un-sharded
     with torch.inference_mode():
         dist.all_gather(
             tensor_list=list(reference_linear.weight.split(out_features_per_tp_rank, dim=0)),
             tensor=column_linear.weight,
-            group=dpg.tp_pg,
+            group=tp_group,
         )
         dist.all_gather(
             tensor_list=list(reference_linear.bias.split(out_features_per_tp_rank, dim=0)),
             tensor=column_linear.bias,
-            group=dpg.tp_pg,
+            group=tp_group,
         )
 
     # Generate random input
@@ -66,19 +70,19 @@ def _test_column_linear(dpg: DistributedProcessGroups, tp_mode: TensorParallelLi
         batch_size = 5
         random_input = torch.randn(batch_size, in_features, device="cuda")
         # synchronize random_input across tp
-        dist.all_reduce(random_input, op=dist.ReduceOp.AVG, group=dpg.tp_pg)
+        dist.all_reduce(random_input, op=dist.ReduceOp.AVG, group=tp_group)
         sharded_random_input = random_input
     elif tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
         sharded_batch_size = 5
         sharded_random_input = torch.randn(sharded_batch_size, in_features, device="cuda")
-        if dpg.tp_pg.size() > 1:
+        if tp_world_size > 1:
             random_input = torch.empty(
-                sharded_batch_size * dpg.tp_pg.size(),
+                sharded_batch_size * tp_world_size,
                 *(sharded_random_input.shape[1:]),
                 device=sharded_random_input.device,
                 dtype=sharded_random_input.dtype,
             )
-            dist.all_gather_into_tensor(random_input, sharded_random_input, group=dpg.tp_pg)
+            dist.all_gather_into_tensor(random_input, sharded_random_input, group=tp_group)
         else:
             random_input = sharded_random_input
     else:
@@ -93,28 +97,25 @@ def _test_column_linear(dpg: DistributedProcessGroups, tp_mode: TensorParallelLi
     reference_output = reference_linear(random_input)
     # TODO @thomasw21: Tune tolerance
     try:
+        tp_rank = parallel_context.get_local_rank(ParallelMode.TENSOR)
         torch.testing.assert_close(
             sharded_output,
             reference_output[
                 :,
-                dist.get_rank(dpg.tp_pg)
-                * out_features_per_tp_rank : (dist.get_rank(dpg.tp_pg) + 1)
-                * out_features_per_tp_rank,
+                tp_rank * out_features_per_tp_rank : (tp_rank + 1) * out_features_per_tp_rank,
             ],
         )
     except BaseException as e:
-        print(f"Rank {dist.get_rank(dpg.tp_pg)}: FAIL.")
+        print(f"Rank {tp_rank}: FAIL.")
         dist.barrier()
         raise e
-    print(f"Rank {dist.get_rank(dpg.tp_pg)}: SUCCESS.")
+    print(f"Rank {tp_rank}: SUCCESS.")
     dist.barrier()
 
     # Test that we get the same gradient after backward pass
     sharded_output.sum().backward()
     reference_output.sum().backward()
-    hidden_dim_slice = slice(
-        dist.get_rank(dpg.tp_pg) * out_features_per_tp_rank, (dist.get_rank(dpg.tp_pg) + 1) * out_features_per_tp_rank
-    )
+    hidden_dim_slice = slice(tp_rank * out_features_per_tp_rank, (tp_rank + 1) * out_features_per_tp_rank)
     torch.testing.assert_close(
         column_linear.weight.grad,
         reference_linear.weight.grad[hidden_dim_slice],
@@ -129,9 +130,7 @@ def _test_column_linear(dpg: DistributedProcessGroups, tp_mode: TensorParallelLi
             random_input.grad,
         )
     elif tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
-        batch_dim_slice = slice(
-            dist.get_rank(dpg.tp_pg) * sharded_batch_size, (dist.get_rank(dpg.tp_pg) + 1) * sharded_batch_size
-        )
+        batch_dim_slice = slice(tp_rank * sharded_batch_size, (tp_rank + 1) * sharded_batch_size)
         torch.testing.assert_close(
             sharded_random_input.grad,
             random_input.grad[batch_dim_slice],
@@ -147,7 +146,14 @@ def _test_column_linear(dpg: DistributedProcessGroups, tp_mode: TensorParallelLi
         pytest.param(TensorParallelLinearMode.ALL_REDUCE, False, does_not_raise()),
         pytest.param(TensorParallelLinearMode.REDUCE_SCATTER, False, does_not_raise()),
         pytest.param(TensorParallelLinearMode.REDUCE_SCATTER, True, does_not_raise()),
-        pytest.param(TensorParallelLinearMode.ALL_REDUCE, True, pytest.raises(AssertionError, match=r"Cf this: https://github.com/huggingface/nanotron/blob/bf82cded9eef1ba77864b48e65bffefad4076339/src/nanotron/core/parallel/tensor_parallelism/nn.py#L132")),
+        pytest.param(
+            TensorParallelLinearMode.ALL_REDUCE,
+            True,
+            pytest.raises(
+                AssertionError,
+                match=r"Cf this: https://github.com/huggingface/nanotron/blob/bf82cded9eef1ba77864b48e65bffefad4076339/src/nanotron/core/parallel/tensor_parallelism/nn.py#L132",
+            ),
+        ),
     ],
 )
 def test_row_linear(
@@ -159,19 +165,20 @@ def test_row_linear(
 
 
 def _test_row_linear(
-    dpg: DistributedProcessGroups, tp_mode: TensorParallelLinearMode, async_communication: bool, expectation: Any
+    parallel_context: ParallelContext, tp_mode: TensorParallelLinearMode, async_communication: bool, expectation: Any
 ):
     if async_communication:
         os.environ["CUDA_DEVICE_MAX_CONNECTIONS"] = "1"
     out_features = 3
     in_features_per_rank = 2
-    in_features = dpg.tp_pg.size() * in_features_per_rank
+    tp_world_size = parallel_context.get_world_size(ParallelMode.TENSOR)
+    in_features = tp_world_size * in_features_per_rank
 
     # Sharded
     row_linear = TensorParallelRowLinear(
         in_features=in_features,
         out_features=out_features,
-        pg=dpg.tp_pg,
+        parallel_context=parallel_context,
         mode=tp_mode,
         device="cuda",
         async_communication=async_communication,
@@ -181,40 +188,39 @@ def _test_row_linear(
     reference_linear = torch_nn.Linear(in_features=in_features, out_features=out_features, device="cuda")
 
     # Copy weights/bias from sharded to un-sharded
+    tp_rank = parallel_context.get_local_rank(ParallelMode.TENSOR)
+    tp_group = parallel_context.get_group(ParallelMode.TENSOR)
+
     with torch.inference_mode():
-        dist.all_reduce(tensor=reference_linear.weight, op=dist.ReduceOp.SUM, group=dpg.tp_pg)
+        dist.all_reduce(tensor=reference_linear.weight, op=dist.ReduceOp.SUM, group=tp_group)
         row_linear.weight.copy_(
             reference_linear.weight[
                 :,
-                dist.get_rank(dpg.tp_pg)
-                * in_features_per_rank : (dist.get_rank(dpg.tp_pg) + 1)
-                * in_features_per_rank,
+                tp_rank * in_features_per_rank : (tp_rank + 1) * in_features_per_rank,
             ]
         )
         # broadcast bias from rank 0, and the other don't have bias
-        if dist.get_rank(dpg.tp_pg) == 0:
+        if tp_rank == 0:
             row_linear.bias.copy_(reference_linear.bias)
         dist.broadcast(
             tensor=reference_linear.bias,
-            src=get_global_rank(group=dpg.tp_pg, group_rank=0),
-            group=dpg.tp_pg,
+            src=get_global_rank(group=tp_group, group_rank=0),
+            group=tp_group,
         )
 
     # Generate random input
     if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
         batch_size = 5
     elif tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
-        batch_size = 5 * dpg.tp_pg.size()
+        batch_size = 5 * tp_world_size
     else:
         raise ValueError()
     random_input = torch.randn(batch_size, in_features, device="cuda")
     # synchronize random_input across tp
-    dist.all_reduce(random_input, op=dist.ReduceOp.AVG, group=dpg.tp_pg)
+    dist.all_reduce(random_input, op=dist.ReduceOp.AVG, group=tp_group)
 
     # Row linear receives as input sharded input
-    random_sharded_input = random_input[
-        :, dist.get_rank(dpg.tp_pg) * in_features_per_rank : (dist.get_rank(dpg.tp_pg) + 1) * in_features_per_rank
-    ]
+    random_sharded_input = random_input[:, tp_rank * in_features_per_rank : (tp_rank + 1) * in_features_per_rank]
 
     # Test that we get the same output after forward pass
     # TODO @kunhao: We may want to have our custom error type
@@ -225,10 +231,11 @@ def _test_row_linear(
         if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
             sharded_reference_output = reference_output
         elif tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
-            assert batch_size % dpg.tp_pg.size() == 0
-            sharded_batch_size = batch_size // dpg.tp_pg.size()
+            tp_world_size = parallel_context.get_world_size(ParallelMode.TENSOR)
+            assert batch_size % tp_world_size == 0
+            sharded_batch_size = batch_size // tp_world_size
             sharded_reference_output = reference_output[
-                dist.get_rank(dpg.tp_pg) * sharded_batch_size : (dist.get_rank(dpg.tp_pg) + 1) * sharded_batch_size
+                tp_rank * sharded_batch_size : (tp_rank + 1) * sharded_batch_size
             ]
         else:
             raise ValueError(f"Unsupported mode: {tp_mode}")
@@ -246,12 +253,10 @@ def _test_row_linear(
             row_linear.weight.grad,
             reference_linear.weight.grad[
                 :,
-                dist.get_rank(dpg.tp_pg)
-                * in_features_per_rank : (dist.get_rank(dpg.tp_pg) + 1)
-                * in_features_per_rank,
+                tp_rank * in_features_per_rank : (tp_rank + 1) * in_features_per_rank,
             ],
         )
-        if dist.get_rank(dpg.tp_pg) == 0:
+        if tp_rank == 0:
             torch.testing.assert_close(
                 row_linear.bias.grad,
                 reference_linear.bias.grad,
@@ -266,27 +271,32 @@ def test_tensor_parallel_embedding(tp: int, dp: int, pp: int, tp_mode: TensorPar
     init_distributed(tp=tp, dp=dp, pp=pp)(_test_tensor_parallel_embedding)(tp_mode=tp_mode)
 
 
-def _test_tensor_parallel_embedding(dpg: DistributedProcessGroups, tp_mode: TensorParallelLinearMode):
+def _test_tensor_parallel_embedding(parallel_context: ParallelContext, tp_mode: TensorParallelLinearMode):
     num_embeddings_per_rank = 100
     embedding_dim = 3
-    num_embeddings = dpg.tp_pg.size() * num_embeddings_per_rank
+    tp_world_size = parallel_context.get_world_size(ParallelMode.TENSOR)
+    num_embeddings = tp_world_size * num_embeddings_per_rank
 
     # Sharded
     sharded_embedding = TensorParallelEmbedding(
-        num_embeddings=num_embeddings, embedding_dim=embedding_dim, pg=dpg.tp_pg, mode=tp_mode, device="cuda"
+        num_embeddings=num_embeddings,
+        embedding_dim=embedding_dim,
+        parallel_context=parallel_context,
+        mode=tp_mode,
+        device="cuda",
     )
 
     # Un-sharded
     reference_embedding = torch_nn.Embedding(num_embeddings=num_embeddings, embedding_dim=embedding_dim, device="cuda")
 
     # Copy weights/bias from sharded to un-sharded
+    tp_rank = parallel_context.get_local_rank(ParallelMode.TENSOR)
+    tp_group = parallel_context.get_group(ParallelMode.TENSOR)
     with torch.inference_mode():
-        dist.all_reduce(tensor=reference_embedding.weight, op=dist.ReduceOp.SUM, group=dpg.tp_pg)
+        dist.all_reduce(tensor=reference_embedding.weight, op=dist.ReduceOp.SUM, group=tp_group)
         sharded_embedding.weight.copy_(
             reference_embedding.weight[
-                dist.get_rank(dpg.tp_pg)
-                * num_embeddings_per_rank : (dist.get_rank(dpg.tp_pg) + 1)
-                * num_embeddings_per_rank,
+                tp_rank * num_embeddings_per_rank : (tp_rank + 1) * num_embeddings_per_rank,
                 :,
             ]
         )
@@ -296,11 +306,11 @@ def _test_tensor_parallel_embedding(dpg: DistributedProcessGroups, tp_mode: Tens
     if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
         batch_size = 5
     elif tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
-        batch_size = 5 * dpg.tp_pg.size()
+        batch_size = 5 * tp_world_size
     else:
         raise ValueError(f"Unsupported mode: {tp_mode}")
     random_input = torch.randint(low=0, high=num_embeddings, size=(batch_size,), device="cuda")
-    dist.all_reduce(random_input, op=dist.ReduceOp.AVG, group=dpg.tp_pg)
+    dist.all_reduce(random_input, op=dist.ReduceOp.AVG, group=tp_group)
 
     # Test that we get the same output after forward pass
     sharded_output = sharded_embedding(random_input)
@@ -311,14 +321,10 @@ def _test_tensor_parallel_embedding(dpg: DistributedProcessGroups, tp_mode: Tens
         sharded_reference_output = reference_output
         sharded_weights = weights
     elif tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
-        assert batch_size % dpg.tp_pg.size() == 0
-        sharded_batch_size = batch_size // dpg.tp_pg.size()
-        sharded_reference_output = reference_output[
-            dist.get_rank(dpg.tp_pg) * sharded_batch_size : (dist.get_rank(dpg.tp_pg) + 1) * sharded_batch_size
-        ]
-        sharded_weights = weights[
-            dist.get_rank(dpg.tp_pg) * sharded_batch_size : (dist.get_rank(dpg.tp_pg) + 1) * sharded_batch_size
-        ]
+        assert batch_size % tp_world_size == 0
+        sharded_batch_size = batch_size // tp_world_size
+        sharded_reference_output = reference_output[tp_rank * sharded_batch_size : (tp_rank + 1) * sharded_batch_size]
+        sharded_weights = weights[tp_rank * sharded_batch_size : (tp_rank + 1) * sharded_batch_size]
     else:
         raise ValueError(f"Unsupported mode: {tp_mode}")
 
@@ -331,9 +337,7 @@ def _test_tensor_parallel_embedding(dpg: DistributedProcessGroups, tp_mode: Tens
     torch.testing.assert_close(
         sharded_embedding.weight.grad,
         reference_embedding.weight.grad[
-            dist.get_rank(dpg.tp_pg)
-            * num_embeddings_per_rank : (dist.get_rank(dpg.tp_pg) + 1)
-            * num_embeddings_per_rank,
+            tp_rank * num_embeddings_per_rank : (tp_rank + 1) * num_embeddings_per_rank,
             :,
         ],
         atol=0,

@@ -4,7 +4,7 @@ import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
 import torch.cuda
-from nanotron.core.process_groups import get_process_groups
+from nanotron.distributed import ParallelContext
 from torch.distributed.launcher import elastic_launch
 
 
@@ -72,14 +72,20 @@ class init_process_and_run_func:
 
     def __call__(self):
         with mock_os_environ(update_key_values={"WORLD_SIZE": f"{self.tp * self.dp * self.pp}"}):
-            dpg = get_process_groups(
+            # TODO(xrsrke): clean this
+            # dpg = get_process_groups(
+            #     data_parallel_size=self.dp,
+            #     pipeline_parallel_size=self.pp,
+            #     tensor_parallel_size=self.tp,
+            # )
+            parallel_context = ParallelContext.from_torch(
                 data_parallel_size=self.dp,
                 pipeline_parallel_size=self.pp,
                 tensor_parallel_size=self.tp,
             )
 
-            assert "dpg" not in self.kwargs
-            self.kwargs["dpg"] = dpg
+            assert "parallel_context" not in self.kwargs
+            self.kwargs["parallel_context"] = parallel_context
 
             self.func(*self.args, **self.kwargs)
 
