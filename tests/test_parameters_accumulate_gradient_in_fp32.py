@@ -349,7 +349,7 @@ def _test_tied_weights_sync_with_grad_accum_in_fp32(
                     f"mlp.{pp_rank}.linear.pp_block.weight" for pp_rank in range(parallel_context.pp_pg.size())
                 ]
             ],
-            dpg=parallel_context,
+            parallel_context=parallel_context,
             reduce_op=dist.ReduceOp.SUM,
         )
 
@@ -358,7 +358,7 @@ def _test_tied_weights_sync_with_grad_accum_in_fp32(
                 module.bias = NanotronParameter(module.bias)
 
         # Sync DP and tied weights: basic assumption
-        initial_sync(model=mdl, dpg=parallel_context)
+        initial_sync(model=mdl, parallel_context=parallel_context)
 
     # Sync params between `model` and `reference_model`
     with torch.no_grad():
@@ -532,7 +532,9 @@ def _test_tied_weights_sync_with_grad_accum_in_fp32(
     # - Translate tied ranks along DP axis to find the DP rank that has the tied weights
     # - accumulator keeps grads for all DPs, so we can just sync the grads
     with timeout_after():
-        sync_tied_weights_gradients(module=model_ddp.module, dpg=parallel_context, grad_accumulator=accumulator)
+        sync_tied_weights_gradients(
+            module=model_ddp.module, parallel_context=parallel_context, grad_accumulator=accumulator
+        )
 
     tied_infos_dict = {
         (

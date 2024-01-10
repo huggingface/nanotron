@@ -355,13 +355,13 @@ def _test_clip_grads_tied_weights(parallel_context: ParallelContext, norm_type: 
     tie_parameters(
         root_module=model,
         ties=[("dense0.weight", (0,)), ("dense1.weight", (1,))],
-        dpg=parallel_context,
+        parallel_context=parallel_context,
         reduce_op=dist.ReduceOp.SUM,
     )
     tie_parameters(
         root_module=model,
         ties=[("dense0.bias", (0,)), ("dense1.bias", (1,))],
-        dpg=parallel_context,
+        parallel_context=parallel_context,
         reduce_op=dist.ReduceOp.SUM,
     )
 
@@ -382,7 +382,7 @@ def _test_clip_grads_tied_weights(parallel_context: ParallelContext, norm_type: 
     assert bias.is_tied
 
     # Sync tied weights: basic assumption
-    initial_sync(model=model, dpg=parallel_context)
+    initial_sync(model=model, parallel_context=parallel_context)
 
     # Check that weights are now synced
     assert_tensor_synced_across_pg(weight, group)
@@ -397,7 +397,7 @@ def _test_clip_grads_tied_weights(parallel_context: ParallelContext, norm_type: 
     out.sum().backward()
 
     # sync gradients
-    sync_tied_weights_gradients(model, dpg=parallel_context, grad_accumulator=None)
+    sync_tied_weights_gradients(model, parallel_context=parallel_context, grad_accumulator=None)
 
     # We check that we both gradients are synchronized
     assert_tensor_synced_across_pg(weight.grad, group)

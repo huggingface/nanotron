@@ -24,13 +24,13 @@ def _test_tie_weight_in_same_device(parallel_context: ParallelContext):
     tie_parameters(
         root_module=model,
         ties=[("dense0.weight", (0,)), ("dense1.weight", (0,))],
-        dpg=parallel_context,
+        parallel_context=parallel_context,
         reduce_op=dist.ReduceOp.SUM,
     )
     tie_parameters(
         root_module=model,
         ties=[("dense0.bias", (0,)), ("dense1.bias", (0,))],
-        dpg=parallel_context,
+        parallel_context=parallel_context,
         reduce_op=dist.ReduceOp.SUM,
     )
 
@@ -66,13 +66,13 @@ def _test_tie_weight_in_different_device(parallel_context: ParallelContext):
     tie_parameters(
         root_module=model,
         ties=[("dense0.weight", (0,)), ("dense1.weight", (1,))],
-        dpg=parallel_context,
+        parallel_context=parallel_context,
         reduce_op=dist.ReduceOp.SUM,
     )
     tie_parameters(
         root_module=model,
         ties=[("dense0.bias", (0,)), ("dense1.bias", (1,))],
-        dpg=parallel_context,
+        parallel_context=parallel_context,
         reduce_op=dist.ReduceOp.SUM,
     )
 
@@ -135,14 +135,14 @@ def _test_tie_weight_across_dp_is_impossible(parallel_context: ParallelContext):
         tie_parameters(
             root_module=model,
             ties=[("dense0.weight", (0,)), ("dense1.weight", (1,))],
-            dpg=parallel_context,
+            parallel_context=parallel_context,
             reduce_op=dist.ReduceOp.SUM,
         )
     with assert_fail_with(AssertionError):
         tie_parameters(
             root_module=model,
             ties=[("dense0.bias", (0,)), ("dense1.bias", (1,))],
-            dpg=parallel_context,
+            parallel_context=parallel_context,
             reduce_op=dist.ReduceOp.SUM,
         )
 
@@ -169,13 +169,13 @@ def _test_tie_weight_in_different_device_have_gradients_synchronized(parallel_co
     tie_parameters(
         root_module=model,
         ties=[("dense0.weight", (0,)), ("dense1.weight", (1,))],
-        dpg=parallel_context,
+        parallel_context=parallel_context,
         reduce_op=dist.ReduceOp.SUM,
     )
     tie_parameters(
         root_module=model,
         ties=[("dense0.bias", (0,)), ("dense1.bias", (1,))],
-        dpg=parallel_context,
+        parallel_context=parallel_context,
         reduce_op=dist.ReduceOp.SUM,
     )
 
@@ -209,7 +209,7 @@ def _test_tie_weight_in_different_device_have_gradients_synchronized(parallel_co
 
     # sync gradients
     # TODO @thomasw21: This should be done in hooks
-    sync_tied_weights_gradients(model, dpg=parallel_context, grad_accumulator=None)
+    sync_tied_weights_gradients(model, parallel_context=parallel_context, grad_accumulator=None)
 
     # Check that we have gradient
     assert weight.grad is not None

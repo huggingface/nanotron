@@ -28,7 +28,7 @@ def test_zero_optimizer(tp: int, dp: int, pp: int):
 
 
 def _test_zero_optimizer(parallel_context: ParallelContext):
-    model = init_dummy_model(dpg=parallel_context)
+    model = init_dummy_model(parallel_context=parallel_context)
     optimizer = ZeroDistributedOptimizer(
         named_params_or_groups=model.named_parameters(),
         optimizer_builder=lambda named_param_groups: NamedOptimizer(
@@ -40,7 +40,7 @@ def _test_zero_optimizer(parallel_context: ParallelContext):
     index_to_name = [name for name, _ in model.named_parameters()]
 
     # reference model
-    reference_model = init_dummy_model(dpg=parallel_context)
+    reference_model = init_dummy_model(parallel_context=parallel_context)
     reference_optimizer = torch.optim.AdamW(reference_model.parameters())
 
     # sync weights between reference_model and model
@@ -80,8 +80,8 @@ def _test_zero_optimizer(parallel_context: ParallelContext):
             )
 
         # Manually sync tied parameters' gradients
-        sync_tied_weights_gradients(module=model, dpg=parallel_context, grad_accumulator=None)
-        sync_tied_weights_gradients(module=reference_model, dpg=parallel_context, grad_accumulator=None)
+        sync_tied_weights_gradients(module=model, parallel_context=parallel_context, grad_accumulator=None)
+        sync_tied_weights_gradients(module=reference_model, parallel_context=parallel_context, grad_accumulator=None)
 
         # We rely on DDP to synchronize gradients across DP. We only need to manually synchronize them if we don't use DDP.
         if not isinstance(model, DistributedDataParallel):
@@ -332,8 +332,8 @@ def _test_zero_optimizer_with_tp(
             torch.testing.assert_close(loss, ref_loss, msg=lambda msg: f"At iteration {i}, {msg}")
 
         # Manually sync tied parameters
-        sync_tied_weights_gradients(module=model, dpg=parallel_context, grad_accumulator=None)
-        sync_tied_weights_gradients(module=reference_model, dpg=parallel_context, grad_accumulator=None)
+        sync_tied_weights_gradients(module=model, parallel_context=parallel_context, grad_accumulator=None)
+        sync_tied_weights_gradients(module=reference_model, parallel_context=parallel_context, grad_accumulator=None)
 
         # We rely on DDP to synchronize gradients across DP. We only need to manually synchronize them if we don't use DDP.
         if not isinstance(model, DistributedDataParallel):

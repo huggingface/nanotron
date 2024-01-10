@@ -55,14 +55,14 @@ def test_save_and_load_model(tp: int, dp: int, pp: int):
 
 
 def _test_save_and_load_model(parallel_context: ParallelContext, test_context: TestContext):
-    model = init_dummy_model(dpg=parallel_context)
+    model = init_dummy_model(parallel_context=parallel_context)
     store_folder = test_context.get_auto_remove_tmp_dir()
 
     # Save
-    save_weights(model=model, dpg=parallel_context, root_folder=store_folder)
+    save_weights(model=model, parallel_context=parallel_context, root_folder=store_folder)
 
     # Load
-    new_model = init_dummy_model(dpg=parallel_context)
+    new_model = init_dummy_model(parallel_context=parallel_context)
 
     # Check that the newly initialised model isn't the same.
     match, msg = is_dict_equal(new_model.state_dict(), model.state_dict())
@@ -72,7 +72,7 @@ def _test_save_and_load_model(parallel_context: ParallelContext, test_context: T
     else:
         assert not match, "Newly initialised model should not match."
 
-    load_weights(model=new_model, dpg=parallel_context, root_folder=store_folder)
+    load_weights(model=new_model, parallel_context=parallel_context, root_folder=store_folder)
 
     # Assert the weights are exactly the same after loading
     match, msg = is_dict_equal(new_model.state_dict(), model.state_dict())
@@ -95,7 +95,7 @@ def test_save_and_load_optimizer(tp: int, dp: int, pp: int):
 
 def _test_save_and_load_optimizer(parallel_context: ParallelContext, test_context: TestContext):
     store_folder = test_context.get_auto_remove_tmp_dir()
-    model = init_dummy_model(dpg=parallel_context)
+    model = init_dummy_model(parallel_context=parallel_context)
     optimizer = NamedOptimizer(
         named_params_or_groups=model.named_parameters(),
         optimizer_builder=lambda params: torch.optim.AdamW(params),
@@ -111,13 +111,13 @@ def _test_save_and_load_optimizer(parallel_context: ParallelContext, test_contex
             model=model, pg=parallel_context.pp_pg, batch=[minibatch], nb_microbatches=1, grad_accumulator=None
         )
         # Manually sync tied parameters
-        sync_tied_weights_gradients(module=model, dpg=parallel_context, grad_accumulator=None)
+        sync_tied_weights_gradients(module=model, parallel_context=parallel_context, grad_accumulator=None)
         # Optimizer steps
         optimizer.step()
         optimizer.zero_grad()
 
     # Save optimizer
-    save_optimizer(optimizer=optimizer, dpg=parallel_context, root_folder=store_folder)
+    save_optimizer(optimizer=optimizer, parallel_context=parallel_context, root_folder=store_folder)
     dist.barrier(parallel_context.world_pg)
 
     # Generate a new optimizer
@@ -134,7 +134,7 @@ def _test_save_and_load_optimizer(parallel_context: ParallelContext, test_contex
     else:
         assert not match, "Newly initialised optimizer should not match."
 
-    load_optimizer(optimizer=new_optimizer, dpg=parallel_context, root_folder=store_folder)
+    load_optimizer(optimizer=new_optimizer, parallel_context=parallel_context, root_folder=store_folder)
 
     # Assert the optimizer states are exactly the same after loading.
     match, msg = is_dict_equal(optimizer.state_dict(), new_optimizer.state_dict())
@@ -157,7 +157,7 @@ def test_save_zero_optimizer_and_load_optimizer(tp: int, dp: int, pp: int):
 
 def _test_save_zero_optimizer_and_load_optimizer(parallel_context: ParallelContext, test_context: TestContext):
     store_folder = test_context.get_auto_remove_tmp_dir()
-    model = init_dummy_model(dpg=parallel_context)
+    model = init_dummy_model(parallel_context=parallel_context)
     optimizer = ZeroDistributedOptimizer(
         named_params_or_groups=model.named_parameters(),
         optimizer_builder=lambda named_param_groups: NamedOptimizer(
@@ -177,13 +177,13 @@ def _test_save_zero_optimizer_and_load_optimizer(parallel_context: ParallelConte
             model=model, pg=parallel_context.pp_pg, batch=[minibatch], nb_microbatches=1, grad_accumulator=None
         )
         # Manually sync tied parameters
-        sync_tied_weights_gradients(module=model, dpg=parallel_context, grad_accumulator=None)
+        sync_tied_weights_gradients(module=model, parallel_context=parallel_context, grad_accumulator=None)
         # Optimizer steps
         optimizer.step()
         optimizer.zero_grad()
 
     # Save optimizer
-    save_optimizer(optimizer=optimizer, dpg=parallel_context, root_folder=store_folder)
+    save_optimizer(optimizer=optimizer, parallel_context=parallel_context, root_folder=store_folder)
     dist.barrier(parallel_context.world_pg)
 
     # Generate a new optimizer
@@ -204,7 +204,7 @@ def _test_save_zero_optimizer_and_load_optimizer(parallel_context: ParallelConte
     else:
         assert not match, "Newly initialised optimizer should not match."
 
-    load_optimizer(optimizer=new_optimizer, dpg=parallel_context, root_folder=store_folder)
+    load_optimizer(optimizer=new_optimizer, parallel_context=parallel_context, root_folder=store_folder)
 
     # Assert the optimizer states are exactly the same after loading.
     match, msg = is_dict_equal(optimizer.state_dict(), new_optimizer.state_dict())
@@ -232,7 +232,7 @@ def _test_save_zero_optimizer_and_load_data_parallel_optimizer(
     parallel_context: ParallelContext, test_context: TestContext
 ):
     store_folder = test_context.get_auto_remove_tmp_dir()
-    model = init_dummy_model(dpg=parallel_context)
+    model = init_dummy_model(parallel_context=parallel_context)
     optimizer = ZeroDistributedOptimizer(
         named_params_or_groups=model.named_parameters(),
         optimizer_builder=lambda named_param_groups: NamedOptimizer(
@@ -252,13 +252,13 @@ def _test_save_zero_optimizer_and_load_data_parallel_optimizer(
             model=model, pg=parallel_context.pp_pg, batch=[minibatch], nb_microbatches=1, grad_accumulator=None
         )
         # Manually sync tied parameters
-        sync_tied_weights_gradients(module=model, dpg=parallel_context, grad_accumulator=None)
+        sync_tied_weights_gradients(module=model, parallel_context=parallel_context, grad_accumulator=None)
         # Optimizer steps
         optimizer.step()
         optimizer.zero_grad()
 
     # Save optimizer
-    save_optimizer(optimizer=optimizer, dpg=parallel_context, root_folder=store_folder)
+    save_optimizer(optimizer=optimizer, parallel_context=parallel_context, root_folder=store_folder)
     dist.barrier(parallel_context.world_pg)
 
     # Generate a new optimizer
@@ -275,7 +275,7 @@ def _test_save_zero_optimizer_and_load_data_parallel_optimizer(
     else:
         assert not match, "Newly initialised optimizer should not match."
 
-    load_optimizer(optimizer=new_optimizer, dpg=parallel_context, root_folder=store_folder)
+    load_optimizer(optimizer=new_optimizer, parallel_context=parallel_context, root_folder=store_folder)
 
     # TODO @thomasw21: Compare zero optimizer with non zero
 
@@ -301,7 +301,7 @@ def _test_save_data_parallel_optimizer_and_load_zero_optimizer(
     parallel_context: ParallelContext, test_context: TestContext
 ):
     store_folder = test_context.get_auto_remove_tmp_dir()
-    model = init_dummy_model(dpg=parallel_context)
+    model = init_dummy_model(parallel_context=parallel_context)
     optimizer = NamedOptimizer(
         named_params_or_groups=model.named_parameters(),
         optimizer_builder=lambda params: torch.optim.AdamW(params),
@@ -320,7 +320,7 @@ def _test_save_data_parallel_optimizer_and_load_zero_optimizer(
         optimizer.zero_grad()
 
     # Save optimizer
-    save_optimizer(optimizer=optimizer, dpg=parallel_context, root_folder=store_folder)
+    save_optimizer(optimizer=optimizer, parallel_context=parallel_context, root_folder=store_folder)
     dist.barrier(parallel_context.world_pg)
 
     # Generate a new optimizer
@@ -341,7 +341,7 @@ def _test_save_data_parallel_optimizer_and_load_zero_optimizer(
     else:
         assert not match, "Newly initialised optimizer should not match."
 
-    load_optimizer(optimizer=new_optimizer, dpg=parallel_context, root_folder=store_folder)
+    load_optimizer(optimizer=new_optimizer, parallel_context=parallel_context, root_folder=store_folder)
 
     # TODO @thomasw21: Compare zero optimizer with non zero
 
@@ -365,7 +365,7 @@ def test_save_optimizer_with_additional_state_dict_keys(tp: int, dp: int, pp: in
 def _test_save_optimizer_with_additional_state_dict_keys(parallel_context: ParallelContext, test_context: TestContext):
     dtype = torch.float16
     store_folder = test_context.get_auto_remove_tmp_dir()
-    model = init_dummy_model(dpg=parallel_context, dtype=dtype)
+    model = init_dummy_model(parallel_context=parallel_context, dtype=dtype)
 
     if isinstance(model, DistributedDataParallel):
         # Remove the annoying "module." prefix
@@ -401,13 +401,15 @@ def _test_save_optimizer_with_additional_state_dict_keys(parallel_context: Paral
             grad_accumulator=grad_accumulator,
         )
         # Manually sync tied parameters
-        sync_tied_weights_gradients(module=normalized_model, dpg=parallel_context, grad_accumulator=grad_accumulator)
+        sync_tied_weights_gradients(
+            module=normalized_model, parallel_context=parallel_context, grad_accumulator=grad_accumulator
+        )
         # Optimizer steps
         optimizer.step()
         optimizer.zero_grad()
 
     # Save optimizer
-    save_optimizer(optimizer=optimizer, dpg=parallel_context, root_folder=store_folder)
+    save_optimizer(optimizer=optimizer, parallel_context=parallel_context, root_folder=store_folder)
     dist.barrier(parallel_context.world_pg)
 
     # Generate a new optimizer
@@ -428,7 +430,7 @@ def _test_save_optimizer_with_additional_state_dict_keys(parallel_context: Paral
         match, msg = is_dict_equal(optimizer.state_dict(), new_optimizer.state_dict())
         assert not match, "Newly initialised optimizer should not match."
 
-    load_optimizer(optimizer=new_optimizer, dpg=parallel_context, root_folder=store_folder)
+    load_optimizer(optimizer=new_optimizer, parallel_context=parallel_context, root_folder=store_folder)
 
     # Assert the optimizer states are exactly the same after loading.
     match, msg = is_dict_equal(optimizer.state_dict()["state"], new_optimizer.state_dict()["state"])
@@ -486,10 +488,10 @@ def _test_save_and_load_random_states(parallel_context: ParallelContext, test_co
         assert random_states != random_statess[0]
 
     # save
-    save_random_states(random_states=random_states, dpg=parallel_context, root_folder=store_folder)
+    save_random_states(random_states=random_states, parallel_context=parallel_context, root_folder=store_folder)
 
     # load
-    new_random_states = load_random_states(dpg=parallel_context, root_folder=store_folder)
+    new_random_states = load_random_states(parallel_context=parallel_context, root_folder=store_folder)
     # Each rank has restored it's own random state
     assert random_states == new_random_states
 

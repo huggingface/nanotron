@@ -6,12 +6,11 @@ from typing import Any, Callable, ClassVar, Dict, List, Tuple, Type, Union
 import dacite
 import torch
 from dacite import from_dict
-from packaging.version import Version
-
 from nanotron.constants import CHECKPOINT_VERSION
 from nanotron.core import distributed as dist
 from nanotron.core.parallel.parameters import SlicesPair
-from nanotron.core.process_groups import DistributedProcessGroups
+from nanotron.distributed import ParallelContext
+from packaging.version import Version
 
 
 @dataclasses.dataclass
@@ -113,13 +112,16 @@ def to_list(list_: Union[List, Tuple], type_hooks: Dict[Type, Callable[[Any], An
     return list_.__class__((process_type(elt, type_hooks=type_hooks) for elt in list_))
 
 
-def save_meta(dpg: DistributedProcessGroups, root_folder: Path, checkpoint_metadata: dict):
-    if dist.get_rank(dpg.world_pg) != 0:
+def save_meta(parallel_context: ParallelContext, root_folder: Path, checkpoint_metadata: dict):
+    if dist.get_rank(parallel_context.world_pg) != 0:
         return
 
     root_folder.mkdir(exist_ok=True, parents=True)
     checkpoint_metadata = CheckpointMetadata(
-        version=CHECKPOINT_VERSION, tp=dpg.tp_pg.size(), dp=dpg.dp_pg.size(), metas=checkpoint_metadata
+        version=CHECKPOINT_VERSION,
+        tp=parallel_context.tp_pg.size(),
+        dp=parallel_context.dp_pg.size(),
+        metas=checkpoint_metadata,
     )
 
     # There are some types that require manual casting in order to work correctly.
@@ -129,7 +131,7 @@ def save_meta(dpg: DistributedProcessGroups, root_folder: Path, checkpoint_metad
         json.dump(processed_metadata, fo, indent=2, sort_keys=True)
 
 
-def load_meta(dpg: DistributedProcessGroups, root_folder: Path) -> CheckpointMetadata:
+def load_meta(parallel_context: ParallelContext, root_folder: Path) -> CheckpointMetadata:
     with open(root_folder / "checkpoint_metadata.json", mode="r") as fi:
         checkpoint_metadata = json.load(fi)
         checkpoint_metadata = from_dict(

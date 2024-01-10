@@ -72,7 +72,7 @@ class init_process_and_run_func:
 
     def __call__(self):
         with mock_os_environ(update_key_values={"WORLD_SIZE": f"{self.tp * self.dp * self.pp}"}):
-            # dpg = get_process_groups(
+            # parallel_context = get_process_groups(
             #     data_parallel_size=self.dp,
             #     pipeline_parallel_size=self.pp,
             #     tensor_parallel_size=self.tp,
@@ -94,7 +94,7 @@ def init_distributed(tp: int, dp: int, pp: int):
     def _init_distributed(func):
         """Wrapper to help initialize distributed nanotron.
 
-        :param func: parallel function that runs on all the process, it requires one of its keyword argument to be "dpg"
+        :param func: parallel function that runs on all the process, it requires one of its keyword argument to be "parallel_context"
         """
         nb_gpus = tp * dp * pp
         run_id = uuid.uuid4()
