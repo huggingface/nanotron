@@ -327,15 +327,18 @@ class ParallelContext:
     #     world_size = self.get_world_size(parallel_mode)
     #     return local_rank == world_size - 1
 
-    def get_3d_ranks(self, local_rank: int, parallel_mode: ParallelMode = ParallelMode.GLOBAL) -> Tuple[int, int, int]:
-        rank = self.get_global_rank_from_local_rank(local_rank, parallel_mode)
-        tp_world_size = self.get_world_size(ParallelMode.TENSOR)
-        dp_world_size = self.get_world_size(ParallelMode.DATA)
-        pp_world_size = self.get_world_size(ParallelMode.PIPELINE)
+    def get_3d_ranks(self, world_rank: int) -> Tuple[int, int, int]:
+        # tp_world_size = self.get_world_size(ParallelMode.TENSOR)
+        # dp_world_size = self.get_world_size(ParallelMode.DATA)
+        # pp_world_size = self.get_world_size(ParallelMode.PIPELINE)
 
-        pp_rank = (rank // (tp_world_size * dp_world_size)) % pp_world_size
-        dp_rank = (rank // tp_world_size) % dp_world_size
-        tp_rank = rank % tp_world_size
+        # pp_rank = (world_rank // (tp_world_size * dp_world_size)) % pp_world_size
+        # dp_rank = (world_rank // tp_world_size) % dp_world_size
+        # tp_rank = world_rank % tp_world_size
+        # return (pp_rank, dp_rank, tp_rank)
+        pp_rank = (world_rank // (self.tp_pg.size() * self.dp_pg.size())) % self.pp_pg.size()
+        dp_rank = (world_rank // self.tp_pg.size()) % self.dp_pg.size()
+        tp_rank = world_rank % self.tp_pg.size()
         return (pp_rank, dp_rank, tp_rank)
 
     def destroy(self):

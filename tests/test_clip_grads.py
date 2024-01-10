@@ -24,8 +24,8 @@ from nanotron.core.parallel.tied_parameters import (
     sync_tied_weights_gradients,
     tie_parameters,
 )
-from nanotron.core.process_groups import DistributedProcessGroups
 from nanotron.core.utils import assert_tensor_synced_across_pg, init_on_device_and_dtype
+from nanotron.distributed import ParallelContext
 from torch import nn
 
 
@@ -35,13 +35,13 @@ def test_clip_grads_with_pp(norm_type: float):
     init_distributed(tp=1, dp=1, pp=2)(_test_clip_grads_with_pp)(norm_type=norm_type)
 
 
-def _test_clip_grads_with_pp(dpg: DistributedProcessGroups, norm_type: float):
+def _test_clip_grads_with_pp(parallel_context: ParallelContext, norm_type: float):
     device = torch.device("cuda")
-    p2p = P2P(dpg.pp_pg, device=device)
+    p2p = P2P(parallel_context.pp_pg, device=device)
     reference_rank = 0
-    has_reference_model = dist.get_rank(dpg.pp_pg) == reference_rank
+    has_reference_model = dist.get_rank(parallel_context.pp_pg) == reference_rank
     pipeline_engine = AllForwardAllBackwardPipelineEngine()
-    current_pp_rank = dist.get_rank(dpg.pp_pg)
+    current_pp_rank = dist.get_rank(parallel_context.pp_pg)
 
     # spawn model
     model = DummyModel(p2p=p2p)
@@ -49,12 +49,12 @@ def _test_clip_grads_with_pp(dpg: DistributedProcessGroups, norm_type: float):
         reference_model = DummyModel(p2p=p2p)
 
     # Set the ranks
-    assert len(model.mlp) == dpg.pp_pg.size()
+    assert len(model.mlp) == parallel_context.pp_pg.size()
     with init_on_device_and_dtype(device):
-        for pp_rank, non_linear in zip(range(dpg.pp_pg.size()), model.mlp):
+        for pp_rank, non_linear in zip(range(parallel_context.pp_pg.size()), model.mlp):
             non_linear.linear.build_and_set_rank(pp_rank=pp_rank)
             non_linear.activation.build_and_set_rank(pp_rank=pp_rank)
-        model.loss.build_and_set_rank(pp_rank=dpg.pp_pg.size() - 1)
+        model.loss.build_and_set_rank(pp_rank=parallel_context.pp_pg.size() - 1)
 
         # build reference model
         if has_reference_model:
@@ -71,7 +71,7 @@ def _test_clip_grads_with_pp(dpg: DistributedProcessGroups, norm_type: float):
     # synchronize weights
     if has_reference_model:
         with torch.inference_mode():
-            for pp_rank in range(dpg.pp_pg.size()):
+            for pp_rank in range(parallel_context.pp_pg.size()):
                 reference_non_linear = reference_model.mlp[pp_rank].linear.pp_block
                 if pp_rank == current_pp_rank:
                     # We already have the weights locally
@@ -90,12 +90,12 @@ def _test_clip_grads_with_pp(dpg: DistributedProcessGroups, norm_type: float):
         )
 
     # Get infinite dummy data iterator
-    data_iterator = dummy_infinite_data_loader(pp_pg=dpg.pp_pg)  # First rank receives data
+    data_iterator = dummy_infinite_data_loader(pp_pg=parallel_context.pp_pg)  # First rank receives data
 
     n_micro_batches_per_batch = 5
     batch = [next(data_iterator) for _ in range(n_micro_batches_per_batch)]
     pipeline_engine.train_batch_iter(
-        model, pg=dpg.pp_pg, batch=batch, nb_microbatches=n_micro_batches_per_batch, grad_accumulator=None
+        model, pg=parallel_context.pp_pg, batch=batch, nb_microbatches=n_micro_batches_per_batch, grad_accumulator=None
     )
 
     # Equivalent on the reference model
@@ -106,9 +106,9 @@ def _test_clip_grads_with_pp(dpg: DistributedProcessGroups, norm_type: float):
             loss.backward()
 
     # Check that gradient are the same as reference
-    pp_rank = dist.get_rank(dpg.pp_pg)
+    pp_rank = dist.get_rank(parallel_context.pp_pg)
     if has_reference_model:
-        for pp_rank in range(dpg.pp_pg.size()):
+        for pp_rank in range(parallel_context.pp_pg.size()):
             reference_non_linear = reference_model.mlp[pp_rank].linear.pp_block
             if pp_rank == current_pp_rank:
                 # We already have the gradients locally
@@ -119,12 +119,7 @@ def _test_clip_grads_with_pp(dpg: DistributedProcessGroups, norm_type: float):
                     atol=1e-6,
                     rtol=1e-7,
                 )
-                torch.testing.assert_close(
-                    non_linear.bias.grad,
-                    reference_non_linear.bias.grad,
-                    atol=1e-6,
-                    rtol=1e-7
-                )
+                torch.testing.assert_close(non_linear.bias.grad, reference_non_linear.bias.grad, atol=1e-6, rtol=1e-7)
                 continue
 
             weight_grad, bias_grad = p2p.recv_tensors(num_tensors=2, from_rank=pp_rank)
@@ -141,7 +136,9 @@ def _test_clip_grads_with_pp(dpg: DistributedProcessGroups, norm_type: float):
     old_bias_grad = non_linear.bias.grad.clone()
     # Clip grads
     total_norm = clip_grad_norm(
-        mp_pg=dpg.world_ranks_to_pg[tuple(sorted(dpg.world_rank_matrix[:, dist.get_rank(dpg.dp_pg), :].reshape(-1)))],
+        mp_pg=parallel_context.world_ranks_to_pg[
+            tuple(sorted(parallel_context.world_rank_matrix[:, dist.get_rank(parallel_context.dp_pg), :].reshape(-1)))
+        ],
         named_parameters=model.named_parameters(),
         grad_accumulator=None,
         max_norm=1.0,
@@ -159,7 +156,7 @@ def _test_clip_grads_with_pp(dpg: DistributedProcessGroups, norm_type: float):
 
     # Check that gradient are the same as reference
     if has_reference_model:
-        for pp_rank in range(dpg.pp_pg.size()):
+        for pp_rank in range(parallel_context.pp_pg.size()):
             reference_non_linear = reference_model.mlp[pp_rank].linear.pp_block
             if pp_rank == current_pp_rank:
                 # We already have the gradients locally
@@ -202,19 +199,19 @@ def test_clip_grads_with_tp(tp_mode: TensorParallelLinearMode, async_communicati
 
 
 def _test_clip_grads_with_tp(
-    dpg: DistributedProcessGroups, tp_mode: TensorParallelLinearMode, async_communication: bool, norm_type: float
+    parallel_context: ParallelContext, tp_mode: TensorParallelLinearMode, async_communication: bool, norm_type: float
 ):
     if async_communication:
         os.environ["CUDA_DEVICE_MAX_CONNECTIONS"] = "1"
     in_features = 2
     out_features_per_tp_rank = 3
-    out_features = dpg.tp_pg.size() * out_features_per_tp_rank
+    out_features = parallel_context.tp_pg.size() * out_features_per_tp_rank
 
     # Sharded
     column_linear = TensorParallelColumnLinear(
         in_features=in_features,
         out_features=out_features,
-        pg=dpg.tp_pg,
+        pg=parallel_context.tp_pg,
         mode=tp_mode,
         device="cuda",
         async_communication=async_communication,
@@ -228,12 +225,12 @@ def _test_clip_grads_with_tp(
         dist.all_gather(
             tensor_list=list(reference_linear.weight.split(out_features_per_tp_rank, dim=0)),
             tensor=column_linear.weight,
-            group=dpg.tp_pg,
+            group=parallel_context.tp_pg,
         )
         dist.all_gather(
             tensor_list=list(reference_linear.bias.split(out_features_per_tp_rank, dim=0)),
             tensor=column_linear.bias,
-            group=dpg.tp_pg,
+            group=parallel_context.tp_pg,
         )
 
     # Generate random input
@@ -243,18 +240,18 @@ def _test_clip_grads_with_tp(
         batch_size = 5
         random_input = torch.randn(batch_size, in_features, device="cuda")
         # synchronize random_input across tp
-        dist.all_reduce(random_input, op=dist.ReduceOp.AVG, group=dpg.tp_pg)
+        dist.all_reduce(random_input, op=dist.ReduceOp.AVG, group=parallel_context.tp_pg)
         sharded_random_input = random_input
     elif tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
         sharded_batch_size = 5
         sharded_random_input = torch.randn(sharded_batch_size, in_features, device="cuda")
         random_input = torch.empty(
-            sharded_batch_size * dpg.tp_pg.size(),
+            sharded_batch_size * parallel_context.tp_pg.size(),
             *(sharded_random_input.shape[1:]),
             device=sharded_random_input.device,
             dtype=sharded_random_input.dtype,
         )
-        dist.all_gather_into_tensor(random_input, sharded_random_input, group=dpg.tp_pg)
+        dist.all_gather_into_tensor(random_input, sharded_random_input, group=parallel_context.tp_pg)
     else:
         ValueError(f"Unsupported mode: {tp_mode}")
 
@@ -266,8 +263,8 @@ def _test_clip_grads_with_tp(
         sharded_output,
         reference_output[
             :,
-            dist.get_rank(dpg.tp_pg)
-            * out_features_per_tp_rank : (dist.get_rank(dpg.tp_pg) + 1)
+            dist.get_rank(parallel_context.tp_pg)
+            * out_features_per_tp_rank : (dist.get_rank(parallel_context.tp_pg) + 1)
             * out_features_per_tp_rank,
         ],
         atol=1e-6,
@@ -280,8 +277,8 @@ def _test_clip_grads_with_tp(
     torch.testing.assert_close(
         column_linear.weight.grad,
         reference_linear.weight.grad[
-            dist.get_rank(dpg.tp_pg)
-            * out_features_per_tp_rank : (dist.get_rank(dpg.tp_pg) + 1)
+            dist.get_rank(parallel_context.tp_pg)
+            * out_features_per_tp_rank : (dist.get_rank(parallel_context.tp_pg) + 1)
             * out_features_per_tp_rank
         ],
         atol=1e-6,
@@ -290,8 +287,8 @@ def _test_clip_grads_with_tp(
     torch.testing.assert_close(
         column_linear.bias.grad,
         reference_linear.bias.grad[
-            dist.get_rank(dpg.tp_pg)
-            * out_features_per_tp_rank : (dist.get_rank(dpg.tp_pg) + 1)
+            dist.get_rank(parallel_context.tp_pg)
+            * out_features_per_tp_rank : (dist.get_rank(parallel_context.tp_pg) + 1)
             * out_features_per_tp_rank
         ],
         atol=1e-6,
@@ -301,7 +298,9 @@ def _test_clip_grads_with_tp(
     old_grad = column_linear.weight.grad.clone()
     # Clip grads
     total_norm = clip_grad_norm(
-        mp_pg=dpg.world_ranks_to_pg[tuple(sorted(dpg.world_rank_matrix[:, dist.get_rank(dpg.dp_pg), :].reshape(-1)))],
+        mp_pg=parallel_context.world_ranks_to_pg[
+            tuple(sorted(parallel_context.world_rank_matrix[:, dist.get_rank(parallel_context.dp_pg), :].reshape(-1)))
+        ],
         named_parameters=column_linear.named_parameters(),
         grad_accumulator=None,
         max_norm=1.0,
@@ -316,16 +315,16 @@ def _test_clip_grads_with_tp(
     torch.testing.assert_close(
         column_linear.weight.grad,
         reference_linear.weight.grad[
-            dist.get_rank(dpg.tp_pg)
-            * out_features_per_tp_rank : (dist.get_rank(dpg.tp_pg) + 1)
+            dist.get_rank(parallel_context.tp_pg)
+            * out_features_per_tp_rank : (dist.get_rank(parallel_context.tp_pg) + 1)
             * out_features_per_tp_rank
         ],
     )
     torch.testing.assert_close(
         column_linear.bias.grad,
         reference_linear.bias.grad[
-            dist.get_rank(dpg.tp_pg)
-            * out_features_per_tp_rank : (dist.get_rank(dpg.tp_pg) + 1)
+            dist.get_rank(parallel_context.tp_pg)
+            * out_features_per_tp_rank : (dist.get_rank(parallel_context.tp_pg) + 1)
             * out_features_per_tp_rank
         ],
     )
@@ -338,8 +337,8 @@ def test_clip_grads_tied_weights(norm_type: float):
     init_distributed(tp=1, dp=1, pp=2)(_test_clip_grads_tied_weights)(norm_type=norm_type)
 
 
-def _test_clip_grads_tied_weights(dpg: DistributedProcessGroups, norm_type: float):
-    if dist.get_rank(dpg.pp_pg) == 0:
+def _test_clip_grads_tied_weights(parallel_context: ParallelContext, norm_type: float):
+    if dist.get_rank(parallel_context.pp_pg) == 0:
         model = nn.ModuleDict(
             {
                 "dense0": nn.Linear(10, 10, device="cuda"),
@@ -356,17 +355,20 @@ def _test_clip_grads_tied_weights(dpg: DistributedProcessGroups, norm_type: floa
     tie_parameters(
         root_module=model,
         ties=[("dense0.weight", (0,)), ("dense1.weight", (1,))],
-        dpg=dpg,
+        dpg=parallel_context,
         reduce_op=dist.ReduceOp.SUM,
     )
     tie_parameters(
-        root_module=model, ties=[("dense0.bias", (0,)), ("dense1.bias", (1,))], dpg=dpg, reduce_op=dist.ReduceOp.SUM
+        root_module=model,
+        ties=[("dense0.bias", (0,)), ("dense1.bias", (1,))],
+        dpg=parallel_context,
+        reduce_op=dist.ReduceOp.SUM,
     )
 
-    group = dpg.world_ranks_to_pg[(0, 1)]
+    group = parallel_context.world_ranks_to_pg[(0, 1)]
 
     # Check that model weights are not in fact synchronized
-    if dist.get_rank(dpg.pp_pg) == 0:
+    if dist.get_rank(parallel_context.pp_pg) == 0:
         weight = model.dense0.weight
         bias = model.dense0.bias
     else:
@@ -380,7 +382,7 @@ def _test_clip_grads_tied_weights(dpg: DistributedProcessGroups, norm_type: floa
     assert bias.is_tied
 
     # Sync tied weights: basic assumption
-    initial_sync(model=model, dpg=dpg)
+    initial_sync(model=model, dpg=parallel_context)
 
     # Check that weights are now synced
     assert_tensor_synced_across_pg(weight, group)
@@ -388,14 +390,14 @@ def _test_clip_grads_tied_weights(dpg: DistributedProcessGroups, norm_type: floa
 
     # Compute gradient
     input_ = torch.randn(13, 10, device="cuda")
-    if dist.get_rank(dpg.pp_pg) == 0:
+    if dist.get_rank(parallel_context.pp_pg) == 0:
         out = model.dense0(input_)
     else:
         out = model.dense1(input_)
     out.sum().backward()
 
     # sync gradients
-    sync_tied_weights_gradients(model, dpg=dpg, grad_accumulator=None)
+    sync_tied_weights_gradients(model, dpg=parallel_context, grad_accumulator=None)
 
     # We check that we both gradients are synchronized
     assert_tensor_synced_across_pg(weight.grad, group)
@@ -410,7 +412,9 @@ def _test_clip_grads_tied_weights(dpg: DistributedProcessGroups, norm_type: floa
     old_grad = weight.grad.clone()
     # Clip grads
     total_norm = clip_grad_norm(
-        mp_pg=dpg.world_ranks_to_pg[tuple(sorted(dpg.world_rank_matrix[:, dist.get_rank(dpg.dp_pg), :].reshape(-1)))],
+        mp_pg=parallel_context.world_ranks_to_pg[
+            tuple(sorted(parallel_context.world_rank_matrix[:, dist.get_rank(parallel_context.dp_pg), :].reshape(-1)))
+        ],
         named_parameters=model.named_parameters(),
         grad_accumulator=None,
         max_norm=1.0,
@@ -435,13 +439,15 @@ def test_clip_grads_fp32_accumulator(norm_type: float, half_precision: torch.dty
     )
 
 
-def _test_clip_grads_fp32_accumulator(dpg: DistributedProcessGroups, norm_type: float, half_precision: torch.dtype):
+def _test_clip_grads_fp32_accumulator(
+    parallel_context: ParallelContext, norm_type: float, half_precision: torch.dtype
+):
     device = torch.device("cuda")
-    p2p = P2P(dpg.pp_pg, device=device)
+    p2p = P2P(parallel_context.pp_pg, device=device)
     reference_rank = 0
-    has_reference_model = dist.get_rank(dpg.pp_pg) == reference_rank
+    has_reference_model = dist.get_rank(parallel_context.pp_pg) == reference_rank
     pipeline_engine = AllForwardAllBackwardPipelineEngine()
-    current_pp_rank = dist.get_rank(dpg.pp_pg)
+    current_pp_rank = dist.get_rank(parallel_context.pp_pg)
 
     # spawn model
     model = DummyModel(p2p=p2p)
@@ -449,12 +455,12 @@ def _test_clip_grads_fp32_accumulator(dpg: DistributedProcessGroups, norm_type: 
         reference_model = DummyModel(p2p=p2p).to(torch.float)
 
     # Set the ranks
-    assert len(model.mlp) == dpg.pp_pg.size()
+    assert len(model.mlp) == parallel_context.pp_pg.size()
     with init_on_device_and_dtype(device):
-        for pp_rank, non_linear in zip(range(dpg.pp_pg.size()), model.mlp):
+        for pp_rank, non_linear in zip(range(parallel_context.pp_pg.size()), model.mlp):
             non_linear.linear.build_and_set_rank(pp_rank=pp_rank)
             non_linear.activation.build_and_set_rank(pp_rank=pp_rank)
-        model.loss.build_and_set_rank(pp_rank=dpg.pp_pg.size() - 1)
+        model.loss.build_and_set_rank(pp_rank=parallel_context.pp_pg.size() - 1)
 
         if has_reference_model:
             for non_linear in reference_model.mlp:
@@ -473,7 +479,7 @@ def _test_clip_grads_fp32_accumulator(dpg: DistributedProcessGroups, norm_type: 
     # synchronize weights
     if has_reference_model:
         with torch.inference_mode():
-            for pp_rank in range(dpg.pp_pg.size()):
+            for pp_rank in range(parallel_context.pp_pg.size()):
                 reference_non_linear = reference_model.mlp[pp_rank].linear.pp_block
                 if pp_rank == current_pp_rank:
                     # We already have the weights locally
@@ -499,18 +505,24 @@ def _test_clip_grads_fp32_accumulator(dpg: DistributedProcessGroups, norm_type: 
 
     # Compute backward
     # Get infinite dummy data iterator
-    data_iterator = dummy_infinite_data_loader(pp_pg=dpg.pp_pg, dtype=half_precision)  # First rank receives data
+    data_iterator = dummy_infinite_data_loader(
+        pp_pg=parallel_context.pp_pg, dtype=half_precision
+    )  # First rank receives data
 
     n_micro_batches_per_batch = 5
     batch = [next(data_iterator) for _ in range(n_micro_batches_per_batch)]
     pipeline_engine.train_batch_iter(
-        model, pg=dpg.pp_pg, batch=batch, nb_microbatches=n_micro_batches_per_batch, grad_accumulator=grad_accumulator
+        model,
+        pg=parallel_context.pp_pg,
+        batch=batch,
+        nb_microbatches=n_micro_batches_per_batch,
+        grad_accumulator=grad_accumulator,
     )
 
     # We're going to copy the model gradients to the reference model gradient
     # The reason why we do this, instead of computing backward using autograd is because of numerical precisions
     if has_reference_model:
-        for pp_rank in range(dpg.pp_pg.size()):
+        for pp_rank in range(parallel_context.pp_pg.size()):
             reference_non_linear = reference_model.mlp[pp_rank].linear.pp_block
             prefix_name = f"mlp.{pp_rank}.linear.pp_block"
             if pp_rank == current_pp_rank:
@@ -537,7 +549,9 @@ def _test_clip_grads_fp32_accumulator(dpg: DistributedProcessGroups, norm_type: 
 
     # Clip grads
     total_norm = clip_grad_norm(
-        mp_pg=dpg.world_ranks_to_pg[tuple(sorted(dpg.world_rank_matrix[:, dist.get_rank(dpg.dp_pg), :].reshape(-1)))],
+        mp_pg=parallel_context.world_ranks_to_pg[
+            tuple(sorted(parallel_context.world_rank_matrix[:, dist.get_rank(parallel_context.dp_pg), :].reshape(-1)))
+        ],
         named_parameters=model.named_parameters(),
         grad_accumulator=grad_accumulator,
         max_norm=1.0,
@@ -562,7 +576,7 @@ def _test_clip_grads_fp32_accumulator(dpg: DistributedProcessGroups, norm_type: 
             rtol=1e-7,
             msg=lambda msg: f"Expected {total_norm} to match {ref_total_norm}.\n{msg}",
         )
-        for pp_rank in range(dpg.pp_pg.size()):
+        for pp_rank in range(parallel_context.pp_pg.size()):
             reference_non_linear = reference_model.mlp[pp_rank].linear.pp_block
             prefix_name = f"mlp.{pp_rank}.linear.pp_block"
             if pp_rank == current_pp_rank:

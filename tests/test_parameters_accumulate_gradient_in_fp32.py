@@ -26,8 +26,8 @@ from nanotron.core.parallel.tied_parameters import (
     sync_tied_weights_gradients,
     tie_parameters,
 )
-from nanotron.core.process_groups import DistributedProcessGroups
 from nanotron.core.utils import ContextManagers, assert_tensor_synced_across_pg, init_on_device_and_dtype
+from nanotron.distributed import ParallelContext
 from torch import nn
 
 
@@ -148,7 +148,7 @@ def test_ddp_with_grad_accum_in_fp32(half_precision: torch.dtype, accumulation_s
 
 
 def _test_ddp_with_grad_accum_in_fp32(
-    dpg: DistributedProcessGroups,
+    parallel_context: ParallelContext,
     half_precision: torch.dtype,
     accumulation_steps: int,
     train_iterations: int,
@@ -176,12 +176,12 @@ def _test_ddp_with_grad_accum_in_fp32(
     # Needed in order to obtain smaller gradient buckets when using `DistributedDataParallel`
     model_ddp = torch.nn.parallel.DistributedDataParallel(
         model,
-        process_group=dpg.dp_pg,
+        process_group=parallel_context.dp_pg,
     )  # we won't actually use DDP anywhere, it's just to have same module names
     model_ddp_accum_ref = {}
     model_ddp_fp32_accum = torch.nn.parallel.DistributedDataParallel(
         model_hook,
-        process_group=dpg.dp_pg,
+        process_group=parallel_context.dp_pg,
     )
 
     # Add gradient accumulator
@@ -189,7 +189,7 @@ def _test_ddp_with_grad_accum_in_fp32(
 
     # Register DDP hook
     state = FP32GradBucketManager(
-        dp_pg=dpg.dp_pg,
+        dp_pg=parallel_context.dp_pg,
         accumulator=accumulator,
         param_id_to_name={id(param): name for name, param in model_ddp_fp32_accum.named_parameters()},
     )
@@ -222,19 +222,19 @@ def _test_ddp_with_grad_accum_in_fp32(
                 model_ddp_accum_ref[name] = (
                     grad.float() if accum_step == 0 else model_ddp_accum_ref[name] + grad.float()
                 )
-            
+
                 dist.barrier()
                 torch.testing.assert_close(model_ddp_accum_ref[name], fp32_grad_bucket, atol=1e-6, rtol=1e-7)
-                
+
                 dist.barrier()
                 # Check that we correctly copied grads from buckets to params (`copy_buckets_to_grads`)
                 torch.testing.assert_close(fp32_grad_bucket, grad_fp32_accum, atol=1e-6, rtol=1e-7)
 
                 # Check that the gradients are not synchronized across DP
-                with assert_fail_except_rank_with(AssertionError, rank_exception=0, pg=dpg.dp_pg):
-                    assert_tensor_synced_across_pg(grad, dpg.dp_pg)
-                with assert_fail_except_rank_with(AssertionError, rank_exception=0, pg=dpg.dp_pg):
-                    assert_tensor_synced_across_pg(fp32_grad_bucket, dpg.dp_pg)
+                with assert_fail_except_rank_with(AssertionError, rank_exception=0, pg=parallel_context.dp_pg):
+                    assert_tensor_synced_across_pg(grad, parallel_context.dp_pg)
+                with assert_fail_except_rank_with(AssertionError, rank_exception=0, pg=parallel_context.dp_pg):
+                    assert_tensor_synced_across_pg(fp32_grad_bucket, parallel_context.dp_pg)
 
             # We zero out half grads for `model_ddp` because we're accumulating grads manually in `model_ddp_accum_ref`
             model_ddp.zero_grad()
@@ -249,7 +249,7 @@ def _test_ddp_with_grad_accum_in_fp32(
             model_ddp_accum_ref[name] = (
                 model_ddp_accum_ref[name] + grad.float() if name in model_ddp_accum_ref else grad.float()
             )
-            dist.all_reduce(model_ddp_accum_ref[name], group=dpg.dp_pg, op=dist.ReduceOp.AVG)
+            dist.all_reduce(model_ddp_accum_ref[name], group=parallel_context.dp_pg, op=dist.ReduceOp.AVG)
 
         loss_fp32_accum = model_ddp_fp32_accum(input).sum()
         accumulator.backward(loss_fp32_accum)
@@ -271,8 +271,8 @@ def _test_ddp_with_grad_accum_in_fp32(
             assert grad_fp32_accum.data_ptr() == fp32_grad_bucket.data_ptr()
 
             # Check that the gradients are synchronized across DP
-            assert_tensor_synced_across_pg(grad, dpg.dp_pg)
-            assert_tensor_synced_across_pg(grad_fp32_accum, dpg.dp_pg)
+            assert_tensor_synced_across_pg(grad, parallel_context.dp_pg)
+            assert_tensor_synced_across_pg(grad_fp32_accum, parallel_context.dp_pg)
 
         # Zero out gradients (Usually it's the optimizer that does this)
         model_ddp.zero_grad()
@@ -311,12 +311,12 @@ def test_tied_weights_sync_with_grad_accum_in_fp32(pipeline_engine: PipelineEngi
 
 
 def _test_tied_weights_sync_with_grad_accum_in_fp32(
-    dpg: DistributedProcessGroups, pipeline_engine: PipelineEngine, reduce_scatter: bool
+    parallel_context: ParallelContext, pipeline_engine: PipelineEngine, reduce_scatter: bool
 ):
     # We init two replicas of 2 denses. Each dense is on a device.
     dtype = torch.float16
     device = torch.device("cuda")
-    p2p = P2P(pg=dpg.pp_pg, device=device)
+    p2p = P2P(pg=parallel_context.pp_pg, device=device)
 
     model = DummyModel(p2p=p2p)
     reference_model = DummyModel(p2p=p2p)
@@ -325,11 +325,11 @@ def _test_tied_weights_sync_with_grad_accum_in_fp32(
     for mdl in [model, reference_model]:
         # Set the ranks
         with init_on_device_and_dtype(device, dtype):
-            assert dpg.pp_pg.size() == len(mdl.mlp)
-            for pp_rank, non_linear in zip(range(dpg.pp_pg.size()), mdl.mlp):
+            assert parallel_context.pp_pg.size() == len(mdl.mlp)
+            for pp_rank, non_linear in zip(range(parallel_context.pp_pg.size()), mdl.mlp):
                 non_linear.linear.build_and_set_rank(pp_rank=pp_rank)
                 non_linear.activation.build_and_set_rank(pp_rank=pp_rank)
-            mdl.loss.build_and_set_rank(pp_rank=dpg.pp_pg.size() - 1)
+            mdl.loss.build_and_set_rank(pp_rank=parallel_context.pp_pg.size() - 1)
 
         # Tie all dense weights across PP
         tie_parameters(
@@ -338,14 +338,18 @@ def _test_tied_weights_sync_with_grad_accum_in_fp32(
                 (
                     target,
                     (
-                        dpg.world_rank_matrix[
-                            get_pp_rank_of(target, module=mdl), dist.get_rank(dpg.dp_pg), dist.get_rank(dpg.tp_pg)
+                        parallel_context.world_rank_matrix[
+                            get_pp_rank_of(target, module=mdl),
+                            dist.get_rank(parallel_context.dp_pg),
+                            dist.get_rank(parallel_context.tp_pg),
                         ],
                     ),
                 )
-                for target in [f"mlp.{pp_rank}.linear.pp_block.weight" for pp_rank in range(dpg.pp_pg.size())]
+                for target in [
+                    f"mlp.{pp_rank}.linear.pp_block.weight" for pp_rank in range(parallel_context.pp_pg.size())
+                ]
             ],
-            dpg=dpg,
+            dpg=parallel_context,
             reduce_op=dist.ReduceOp.SUM,
         )
 
@@ -354,7 +358,7 @@ def _test_tied_weights_sync_with_grad_accum_in_fp32(
                 module.bias = NanotronParameter(module.bias)
 
         # Sync DP and tied weights: basic assumption
-        initial_sync(model=mdl, dpg=dpg)
+        initial_sync(model=mdl, dpg=parallel_context)
 
     # Sync params between `model` and `reference_model`
     with torch.no_grad():
@@ -362,7 +366,7 @@ def _test_tied_weights_sync_with_grad_accum_in_fp32(
             param.copy_(reference_model.get_parameter(name))
 
     # DDP
-    model_ddp = torch.nn.parallel.DistributedDataParallel(model, process_group=dpg.dp_pg)
+    model_ddp = torch.nn.parallel.DistributedDataParallel(model, process_group=parallel_context.dp_pg)
     module_id_to_prefix = {id(module): f"{module_name}." for module_name, module in model.named_modules()}
     reference_module_id_to_prefix = {
         id(module): f"{module_name}." for module_name, module in reference_model.named_modules()
@@ -384,7 +388,7 @@ def _test_tied_weights_sync_with_grad_accum_in_fp32(
 
     # Optimizer: We don't actually run the optimizer, we just use it to build the gradient accumulator
     optimizer = ZeroDistributedOptimizer(
-        dp_pg=dpg.dp_pg,
+        dp_pg=parallel_context.dp_pg,
         named_params_or_groups=named_parameters,
         optimizer_builder=lambda named_param_groups_1: OptimizerFromGradientAccumulator(
             gradient_accumulator_builder=lambda named_params: FP32GradientAccumulator(
@@ -411,12 +415,12 @@ def _test_tied_weights_sync_with_grad_accum_in_fp32(
     # We use `model_ddp.module` in order ta have the parameter names without the `module.` prefix
     accumulator = optimizer.optimizer.gradient_accumulator
     accumulator.assign_param_offsets(
-        dp_rank=dist.get_rank(dpg.dp_pg),
+        dp_rank=dist.get_rank(parallel_context.dp_pg),
         param_name_to_offsets=optimizer.param_name_to_dp_rank_offsets,
     )
     model_ddp.register_comm_hook(
         state=FP32GradBucketManager(
-            dp_pg=dpg.dp_pg,
+            dp_pg=parallel_context.dp_pg,
             accumulator=accumulator,
             param_id_to_name=param_id_to_name,
         ),
@@ -424,7 +428,7 @@ def _test_tied_weights_sync_with_grad_accum_in_fp32(
     )
 
     # Get infinite dummy data iterator
-    data_iterator = dummy_infinite_data_loader(pp_pg=dpg.pp_pg, dtype=dtype)  # First rank receives data
+    data_iterator = dummy_infinite_data_loader(pp_pg=parallel_context.pp_pg, dtype=dtype)  # First rank receives data
 
     n_micro_batches_per_batch = 2
     batch = [next(data_iterator) for _ in range(n_micro_batches_per_batch)]
@@ -432,7 +436,7 @@ def _test_tied_weights_sync_with_grad_accum_in_fp32(
     ## Reference model iteration step
     def forward_backward_reference(mdl, micro_batch):
         pipeline_engine.train_batch_iter(
-            mdl, pg=dpg.pp_pg, batch=[micro_batch], nb_microbatches=1, grad_accumulator=None
+            mdl, pg=parallel_context.pp_pg, batch=[micro_batch], nb_microbatches=1, grad_accumulator=None
         )
 
     for accum_step in range(n_micro_batches_per_batch - 1):
@@ -464,11 +468,15 @@ def _test_tied_weights_sync_with_grad_accum_in_fp32(
         reference_model_accum_ref[name] = (
             reference_model_accum_ref[name] + grad.float() if name in reference_model_accum_ref else grad.float()
         )
-        dist.all_reduce(reference_model_accum_ref[name], group=dpg.dp_pg, op=dist.ReduceOp.AVG)
+        dist.all_reduce(reference_model_accum_ref[name], group=parallel_context.dp_pg, op=dist.ReduceOp.AVG)
 
     ## Model iteration step
     pipeline_engine.train_batch_iter(
-        model_ddp, pg=dpg.pp_pg, batch=batch, nb_microbatches=n_micro_batches_per_batch, grad_accumulator=accumulator
+        model_ddp,
+        pg=parallel_context.pp_pg,
+        batch=batch,
+        nb_microbatches=n_micro_batches_per_batch,
+        grad_accumulator=accumulator,
     )
     for name, param in model_ddp.module.named_parameters():
         if param.is_tied:
@@ -484,11 +492,11 @@ def _test_tied_weights_sync_with_grad_accum_in_fp32(
 
         if not reduce_scatter:
             # Check that the gradients are synchronized across DP
-            assert_tensor_synced_across_pg(fp32_grad, dpg.dp_pg)
+            assert_tensor_synced_across_pg(fp32_grad, parallel_context.dp_pg)
 
         fp32_grad_ref = reference_model_accum_ref[name]
         dist.barrier()
-        
+
         if reduce_scatter:
             slice_ = slice(*accumulator.param_name_to_offsets[name])
             # Check that gradients are correct
@@ -511,7 +519,7 @@ def _test_tied_weights_sync_with_grad_accum_in_fp32(
         if not (isinstance(param, NanotronParameter) and param.is_tied):
             continue
 
-        group = dpg.world_ranks_to_pg[group_ranks]
+        group = parallel_context.world_ranks_to_pg[group_ranks]
         fp32_grad = accumulator.get_grad_buffer(name=name)
 
         with assert_fail_except_rank_with(AssertionError, rank_exception=0, pg=group):
@@ -524,7 +532,7 @@ def _test_tied_weights_sync_with_grad_accum_in_fp32(
     # - Translate tied ranks along DP axis to find the DP rank that has the tied weights
     # - accumulator keeps grads for all DPs, so we can just sync the grads
     with timeout_after():
-        sync_tied_weights_gradients(module=model_ddp.module, dpg=dpg, grad_accumulator=accumulator)
+        sync_tied_weights_gradients(module=model_ddp.module, dpg=parallel_context, grad_accumulator=accumulator)
 
     tied_infos_dict = {
         (
@@ -552,7 +560,7 @@ def _test_tied_weights_sync_with_grad_accum_in_fp32(
             dp_slice_fp_32_grad_buffer.data_ptr() == fp32_grad.data_ptr()
         ), "dp_slice_fp_32_grad_buffer and fp32_grad should point to the same memory"
 
-        group = dpg.world_ranks_to_pg[group_ranks]
+        group = parallel_context.world_ranks_to_pg[group_ranks]
 
         # Check that fp32 grads for tied weights are synced (Used in optimizer step)
         # Since we use `reduce_scatter = False` the entire gradient buffer is all reduced, causing it to be synced
