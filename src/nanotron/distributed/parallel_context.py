@@ -159,16 +159,6 @@ class ParallelContext:
         device_id = local_rank
         torch.cuda.set_device(torch.cuda.device(device_id))
 
-    def map_rank_to_device(self):
-        """Map global rank to device."""
-        local_rank = int(os.getenv("LOCAL_RANK", "0"))
-
-        # NOTE: Set the device id.
-        # `torch.cuda.device_count` should return the number of device on a single node.
-        # We assume the nodes to be homogeneous (same number of gpus per node)
-        device_id = local_rank
-        torch.cuda.set_device(torch.cuda.device(device_id))
-
     def get_3d_ranks(self, world_rank: int) -> Tuple[int, int, int]:
         pp_rank = (world_rank // (self.tp_pg.size() * self.dp_pg.size())) % self.pp_pg.size()
         dp_rank = (world_rank // self.tp_pg.size()) % self.dp_pg.size()
