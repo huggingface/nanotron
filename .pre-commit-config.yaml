@@ -19,3 +19,4 @@ repos:
         args:
           - --fix
           - --exit-non-zero-on-fix
+        exclude: ^src/nanotron/distributed/__init__.py$
