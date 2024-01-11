@@ -140,7 +140,8 @@ def get_dataloader(trainer: DistributedTrainer, sanity_check_dataloader_interval
                 dataloader_drop_last=True,
             )
 
-            batch = next(iter(dataloader))
+            for batch in dataloader:
+                assert 1 == 1
 
             assert 1 == 1
             # Check if we have enough samples for train_steps

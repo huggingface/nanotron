@@ -1,23 +1,20 @@
+import csv
+import random
+import warnings
+from dataclasses import dataclass, field
+from typing import List, Optional
+
+import numpy as np
+import torch
+from datasets import load_dataset
+
+# from arguments import DataTrainingArguments
+from torch.nn import CrossEntropyLoss
 from torch.utils.data import IterableDataset
+from tqdm import tqdm
 
 # from torch.optim.lr_scheduler import LRScheduler
 from transformers import PreTrainedTokenizer
-from typing import List
-from tqdm import tqdm
-import numpy as np
-import warnings
-import random
-import torch
-import csv
-import os
-
-from datasets import load_dataset
-# from arguments import DataTrainingArguments
-from torch.nn import CrossEntropyLoss
-
-from transformers import TrainingArguments, MODEL_WITH_LM_HEAD_MAPPING
-from dataclasses import dataclass, field
-from typing import Optional
 
 
 @dataclass
@@ -27,26 +24,30 @@ class DataTrainingArguments:
     """
 
     dataset_name_or_path: str = field(
-        default='bigcode/the-stack-dedup', metadata={"help": "Name or path of the dataset. The dataset can be on the hub or locally."}
+        default="bigcode/the-stack-dedup",
+        metadata={"help": "Name or path of the dataset. The dataset can be on the hub or locally."},
     )
     split_file: str = field(
-        default=".", metadata={"help": "Path to the file containing the name of the different splits of the dataset. It is useful for the argument data_dir of load_dataset and can be used \
-                               to directly run the datasets from files."}
+        default=".",
+        metadata={
+            "help": "Path to the file containing the name of the different splits of the dataset. It is useful for the argument data_dir of load_dataset and can be used \
+                               to directly run the datasets from files."
+        },
     )
-    streaming: bool = field(
-        default=True, metadata={"help": "Do we load the datasets in streaming mode."}
-    )
-    dataset_seed: int = field(
-        default=42, metadata={"help": "Seed parameter"}
-    )
-    validation_dataset_path : str = field(
+    streaming: bool = field(default=True, metadata={"help": "Do we load the datasets in streaming mode."})
+    dataset_seed: int = field(default=42, metadata={"help": "Seed parameter"})
+    validation_dataset_path: str = field(
         default=None, metadata={"help": "Path to the validation set if it is local. "}
     )
     valid_set_size: float = field(
-        default=0.05, metadata={"help": " Size of the test split If float, should be between 0.0 and 1.0 and represent the proportion of the dataset to include in the test split."}
+        default=0.05,
+        metadata={
+            "help": " Size of the test split If float, should be between 0.0 and 1.0 and represent the proportion of the dataset to include in the test split."
+        },
     )
-    number_of_domains : int = field(
-        default=None, metadata={"help": " For debugging purposes or quicker training, truncate the number of domains to considers."}
+    number_of_domains: int = field(
+        default=None,
+        metadata={"help": " For debugging purposes or quicker training, truncate the number of domains to considers."},
     )
     max_train_samples: Optional[int] = field(
         default=None,
@@ -68,31 +69,18 @@ class DataTrainingArguments:
     )
     max_length: int = field(
         default=1024,
-        metadata={
-            "help": (
-                "Input sequence length after tokenization. "
-            )
-        },
+        metadata={"help": ("Input sequence length after tokenization. ")},
     )
-    packing: bool = field(
-        default=True,
-        metadata = {"help": "Whether to use packing or not."}
-    )
+    packing: bool = field(default=True, metadata={"help": "Whether to use packing or not."})
     num_workers: Optional[int] = field(
         default=None,
         metadata={"help": "The number of processes to use for the preprocessing."},
     )
-    shuffle: bool = field(
-        default=True, metadata={"help": "Shuffle the training data on the fly"}
-    )
-    input_column_name: str = field(
-        default="content", metadata={"help": "The column to consider for the training."}
-    )
-    num_of_sequences: int = field(
-        default=1024, metadata={"help": "Number of token sequences to keep in buffer."}
-    )
-    
-    
+    shuffle: bool = field(default=True, metadata={"help": "Shuffle the training data on the fly"})
+    input_column_name: str = field(default="content", metadata={"help": "The column to consider for the training."})
+    num_of_sequences: int = field(default=1024, metadata={"help": "Number of token sequences to keep in buffer."})
+
+
 def chars_token_ratio(dataset, tokenizer, input_column_name="content", nb_examples=400):
     """
     Estimate the average number of characters per token in the dataset.
@@ -135,11 +123,7 @@ class ConstantLengthDataset(IterableDataset):
         dataset_index=None,
     ):
         self.tokenizer = tokenizer
-        self.concat_token_id = (
-            tokenizer.eos_token_id
-            if tokenizer.eos_token_id is not None
-            else eos_token_id
-        )
+        self.concat_token_id = tokenizer.eos_token_id if tokenizer.eos_token_id is not None else eos_token_id
         self.dataset = dataset
         self.seq_length = seq_length
         self.infinite = infinite
@@ -270,9 +254,10 @@ def merge(dico1, dico2):
 
 
 from copy import deepcopy
-from typing import List, Optional, Iterator
-from typing_extensions import Literal
+from typing import Iterator, List, Optional
+
 from torch.utils.data import IterableDataset
+from typing_extensions import Literal
 
 
 class _HasNextIterator(Iterator):
@@ -317,9 +302,7 @@ class RandomlyCyclicChainDataset(IterableDataset):
         datasets,
         generator: np.random.Generator,
         probabilities: Optional[List[float]] = None,
-        stopping_strategy: Literal[
-            "first_exhausted", "all_exhausted"
-        ] = "first_exhausted",
+        stopping_strategy: Literal["first_exhausted", "all_exhausted"] = "first_exhausted",
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -330,9 +313,7 @@ class RandomlyCyclicChainDataset(IterableDataset):
 
         # if undersampling ("first_exhausted"), we stop as soon as one dataset is exhausted
         # if oversampling ("all_exhausted"), we stop as soons as every dataset is exhausted, i.e as soon as every samples of every dataset has been visited at least once
-        self.bool_strategy_func = (
-            np.all if (stopping_strategy == "all_exhausted") else np.any
-        )
+        self.bool_strategy_func = np.all if (stopping_strategy == "all_exhausted") else np.any
         # TODO(QL): implement iter_arrow
 
     @staticmethod
@@ -345,14 +326,10 @@ class RandomlyCyclicChainDataset(IterableDataset):
         """Get an infinite iterator that randomly samples the index of the source to pick examples from."""
         if p is None:
             while True:
-                yield from (
-                    int(i) for i in rng.integers(0, num_sources, size=random_batch_size)
-                )
+                yield from (int(i) for i in rng.integers(0, num_sources, size=random_batch_size))
         else:
             while True:
-                yield from (
-                    int(i) for i in rng.choice(num_sources, size=random_batch_size, p=p)
-                )
+                yield from (int(i) for i in rng.choice(num_sources, size=random_batch_size, p=p))
 
     def _get_indices_iterator(self):
         rng = deepcopy(self.generator)
@@ -389,9 +366,6 @@ class RandomlyCyclicChainDataset(IterableDataset):
                     break
 
 
-from datasets import load_from_disk
-
-
 def get_dataset(
     args: DataTrainingArguments,
     tokenizer: PreTrainedTokenizer,
@@ -423,8 +397,9 @@ def get_dataset(
         datasets = []
         for data_dir in data_dirs:
             import datasets as hf_db
+
             hf_db.config.DOWNLOADED_DATASETS_PATH = "/fsx/phuc/.cache"
-            
+
             dataset = load_dataset(
                 args.dataset_name_or_path,
                 data_dir=data_dir,
@@ -465,8 +440,7 @@ def get_dataset(
         )
         dataset_sizes = [len(dataset) for dataset in datasets]
         dataset_proportion = [
-            (dataset_size * args.valid_set_size) / sum(dataset_sizes)
-            for dataset_size in dataset_sizes
+            (dataset_size * args.valid_set_size) / sum(dataset_sizes) for dataset_size in dataset_sizes
         ]
 
         train_datasets = []
@@ -490,12 +464,8 @@ def get_dataset(
             train = train.select(np.arange(min(args.max_train_samples, len(train))))
 
         if args.packing:
-            chars_per_token_train = chars_token_ratio(
-                train, tokenizer, args.input_column_name
-            )
-            chars_per_token_val = chars_token_ratio(
-                val, tokenizer, args.input_column_name
-            )
+            chars_per_token_train = chars_token_ratio(train, tokenizer, args.input_column_name)
+            chars_per_token_val = chars_token_ratio(val, tokenizer, args.input_column_name)
             train = ConstantLengthDataset(
                 tokenizer=tokenizer,
                 dataset=train,
@@ -578,6 +548,7 @@ def get_dataset(
 
 
 from dataclasses import dataclass
+
 from transformers.modeling_outputs import CausalLMOutputWithCrossAttentions
 
 
@@ -646,10 +617,11 @@ if __name__ == "__main__":
         # run_name="DoReMi-pile",
         # report_to="wandb"
     )
-    
+
     from transformers import AutoTokenizer
+
     tokenizer = AutoTokenizer.from_pretrained("stas/tiny-random-llama-2")
     probabilities = None
     train_dataset, valid_dataset = get_dataset(args, tokenizer, probabilities)
-    
+
     assert 1 == 1
