@@ -8,6 +8,11 @@ USE_FAST=1 CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node=4 examples/do
 import argparse
 from typing import Optional
 
+from dataloader import (
+    clm_process,
+    get_datasets,
+    get_train_dataloader,
+)
 from huggingface_hub import __version__ as hf_hub_version
 from nanotron import logging
 from nanotron.config import (
@@ -16,11 +21,6 @@ from nanotron.config import (
 from nanotron.core import distributed as dist
 from nanotron.core.utils import (
     main_rank_first,
-)
-from nanotron.dataloader import (
-    clm_process,
-    get_datasets,
-    get_train_dataloader,
 )
 from nanotron.logging import log_rank
 from nanotron.trainer import DistributedTrainer
