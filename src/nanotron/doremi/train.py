@@ -8,6 +8,7 @@ from torch.utils.data import DataLoader
 
 
 def train(model, dataset):
+    device = next(model.parameters()).device
     STEP_SIZE = 0.1
     NUM_EPOCHS = 1
     ref_model = deepcopy(model)
@@ -15,7 +16,7 @@ def train(model, dataset):
     NUM_DOMAINS = len(dataset)
 
     model.train()
-    domain_weights = torch.ones(NUM_DOMAINS, requires_grad=False) / NUM_DOMAINS
+    domain_weights = torch.ones(NUM_DOMAINS, requires_grad=False, device=device) / NUM_DOMAINS
     with torch.no_grad():
         accumulted_domain_weights = domain_weights.clone().detach()
 
@@ -40,7 +41,7 @@ def train(model, dataset):
         # NOTE: sum the excess losses within each domain
         per_domain_excess_losses = {domain_id: torch.stack(excess_losses[domain_id]).sum() for domain_id in dataset}
         per_domain_excess_losses = [per_domain_excess_losses[domain_id] for domain_id in dataset]
-        per_domain_excess_losses = torch.stack(per_domain_excess_losses, dim=0)
+        per_domain_excess_losses = torch.stack(per_domain_excess_losses, dim=0).to(device)
 
         with torch.no_grad():
             # update weight

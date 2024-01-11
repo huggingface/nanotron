@@ -37,6 +37,6 @@ def normalize_domain_weights(weights: torch.Tensor, smoothing_param: float = 1e-
     Algorithm 1 DoReMi domain reweighting (Step 2).
     """
     NUM_DOMAINS = weights.shape[0]
-    uniform_weights = torch.ones(NUM_DOMAINS) / NUM_DOMAINS
+    uniform_weights = torch.ones(NUM_DOMAINS, device=weights.device) / NUM_DOMAINS
     normalized_weight = (1 - smoothing_param) * weights / weights.sum() + (smoothing_param * uniform_weights)
     return normalized_weight
