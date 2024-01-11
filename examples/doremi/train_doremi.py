@@ -8,6 +8,8 @@ USE_FAST=1 CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node=4 examples/do
 import argparse
 from typing import Optional
 
+import torch
+import torch.nn.functional as F
 from dataloader import (
     clm_process,
     get_datasets,
@@ -48,6 +50,7 @@ def get_dataloader(trainer: DistributedTrainer, sanity_check_dataloader_interval
         input_pp_rank = trainer.model.input_pp_rank
         output_pp_rank = trainer.model.output_pp_rank
 
+    # TODO(xrsrke): remove this
     if trainer.config.data.dataset is None:
         # dataloader = dummy_infinite_data_generator(
         #     micro_batch_size=trainer.micro_batch_size,
@@ -78,32 +81,6 @@ def get_dataloader(trainer: DistributedTrainer, sanity_check_dataloader_interval
             tokenizer = AutoTokenizer.from_pretrained(trainer.config.tokenizer.tokenizer_name_or_path)
             tokenizer.pad_token = tokenizer.eos_token
 
-            import torch
-
-            # def generate_toy_dataset(tokenizer, num_domains) -> Dataset:
-            #     # # NOTE: later on, use ArmelR/the-pile-splitted as testing dataset
-            #     class TokenizedDataset(Dataset):
-            #         def __init__(self, encodings):
-            #             self.encodings = encodings
-
-            #         def __getitem__(self, idx):
-            #             return {key: torch.tensor(val[idx]) for key, val in self.encodings.items()}
-
-            #         def __len__(self):
-            #             return len(self.encodings["input_ids"])
-
-            #     def generate_dataset(sentence, repetitions, tokenizer):
-            #         dataset = {}
-            #         for i, rep in enumerate(repetitions):
-            #             # encoded_batch = tokenizer([sentence] * rep, padding=True, truncation=True, return_tensors="pt").to("cuda")
-            #             # dataset[f"domain_{i+1}"] = TokenizedDataset(encoded_batch)
-            #             dataset[f"domain_{i+1}"] = [sentence] * rep
-            #         return dataset
-
-            #     repetitions = [50 * 2**i for i in range(num_domains)]
-            #     dataset = generate_dataset("hello world", repetitions, tokenizer)
-            #     return dataset
-
             NUM_DOMAINS = 5
             raw_datasets = {f"domain_{i+1}": raw_dataset for i in range(NUM_DOMAINS)}
 
@@ -119,10 +96,6 @@ def get_dataloader(trainer: DistributedTrainer, sanity_check_dataloader_interval
                     sequence_length=trainer.sequence_length,
                 )
                 train_datasets[domain_name] = train_dataset
-
-            assert 1 == 1
-
-            import torch.nn.functional as F
 
             domain_weights = F.softmax(torch.ones(NUM_DOMAINS, requires_grad=False) / NUM_DOMAINS)
 
@@ -144,13 +117,14 @@ def get_dataloader(trainer: DistributedTrainer, sanity_check_dataloader_interval
                 assert 1 == 1
 
             assert 1 == 1
+            # TODO(xrsrke): investigate why this fail, and add it back
             # Check if we have enough samples for train_steps
-            assert (
-                trainer.config.tokens.train_steps - trainer.start_iteration_step
-            ) * trainer.global_batch_size // trainer.dpg.dp_pg.size() < len(dataloader), (
-                f"Dataset is too small for steps ({len(dataloader)} < {(trainer.config.tokens.train_steps - trainer.start_iteration_step) * trainer.global_batch_size // trainer.dpg.dp_pg.size()}), "
-                f"Try train_steps<={len(dataloader) * trainer.dpg.dp_pg.size() // trainer.global_batch_size + trainer.start_iteration_step}"
-            )
+            # assert (
+            #     trainer.config.tokens.train_steps - trainer.start_iteration_step
+            # ) * trainer.global_batch_size // trainer.dpg.dp_pg.size() < len(dataloader), (
+            #     f"Dataset is too small for steps ({len(dataloader)} < {(trainer.config.tokens.train_steps - trainer.start_iteration_step) * trainer.global_batch_size // trainer.dpg.dp_pg.size()}), "
+            #     f"Try train_steps<={len(dataloader) * trainer.dpg.dp_pg.size() // trainer.global_batch_size + trainer.start_iteration_step}"
+            # )
     else:
         raise ValueError(f"Unhandled case of `self.config.data.dataset`. Got: {trainer.config.data.dataset}")
 

@@ -1,4 +1,5 @@
 import dataclasses
+import math
 import warnings
 from typing import Dict, Generator, Iterator, List, Optional, Union
 
@@ -14,12 +15,11 @@ from nanotron.core.utils import (
     assert_fail_except_rank_with,
     assert_tensor_synced_across_pg,
 )
-from torch.utils.data import BatchSampler, DataLoader
+from torch.utils.data import BatchSampler, DataLoader, Dataset
 from torch.utils.data.distributed import DistributedSampler
 
 try:
-    import datasets
-    from datasets import Dataset, DatasetDict, Features, Sequence, Value, concatenate_datasets, load_dataset
+    from datasets import DatasetDict, Features, Sequence, Value, concatenate_datasets, load_dataset
     from transformers import (
         PreTrainedTokenizerBase,
     )
@@ -413,62 +413,16 @@ def _get_train_sampler(
             drop_last=drop_last,
         )
     else:
-        # NOTE: this the one that doremi use
-        import math
-
-        # class DistributedSamplerForDoReMi(DistributedSampler):
-        #     def __init__(self, domain_weights: torch.Tensor, datasets: List[Dataset], batch_size: int, **kwargs):
-        #         # Assuming datasets is a list of PyTorch Dataset objects for each domain
-        #         # domain_weights is a tensor where each element is the weight of the corresponding domain
-        #         super().__init__(datasets, **kwargs)
-        #         self.datasets = datasets
-        #         self.batch_size = batch_size
-        #         self.domain_weights = domain_weights / domain_weights.sum()  # Normalize domain weights
-        #         self.total_size = self.calculate_total_size()
-
-        #     def calculate_total_size(self):
-        #         # Calculate total size of the sampler considering all domains
-        #         total_samples = sum(len(d) for d in self.datasets)
-        #         return math.ceil(total_samples / self.batch_size) * self.batch_size
-
-        #     def __iter__(self):
-        #         # Generate indices for each domain
-        #         domain_indices = []
-
-        #         lengths = [len(d) for d in self.datasets]
-        #         offsets = np.cumsum([0] + lengths[:-1])
-
-        #         for i, dataset in enumerate(self.datasets):
-        #             # number of samples
-        #             num_samples = int(len(dataset) * self.domain_weights[i].item())
-        #             # num_samples = int(self.batch_size * self.domain_weights[i].item())
-        #             local_indices = np.random.choice(len(dataset), num_samples, replace=False)
-        #             # NOTE: align the indicies across the combined dataset
-        #             global_indices = local_indices + offsets[i]
-        #             # NOTE: add offsets
-        #             domain_indices.extend(global_indices)
-
-        #         # Ensure we have the right total size
-        #         np.random.shuffle(domain_indices)
-        #         domain_indices = domain_indices[: self.total_size]
-        #         # yield domain_indices
-
-        #         # Yield indices in batches
-        #         for i in range(0, len(domain_indices), self.batch_size):
-        #             yield domain_indices[i : i + self.batch_size]
 
         class DistributedSamplerForDoReMi(DistributedSampler):
             def __init__(self, domain_weights: torch.Tensor, datasets: List[Dataset], batch_size: int, **kwargs):
-                # Assuming datasets is a list of PyTorch Dataset objects for each domain
-                # domain_weights is a tensor where each element is the weight of the corresponding domain
                 super().__init__(datasets, **kwargs)
                 self.datasets = datasets
                 self.batch_size = batch_size
                 self.domain_weights = domain_weights / domain_weights.sum()  # Normalize domain weights
-                self.total_size = self.calculate_total_size()
+                self.total_size = self._calculate_total_size()
 
-            def calculate_total_size(self):
-                # Calculate total size of the sampler considering all domains
+            def _calculate_total_size(self):
                 total_samples = sum(len(d) for d in self.datasets)
                 return math.ceil(total_samples / self.batch_size) * self.batch_size
 
@@ -507,7 +461,6 @@ def _get_train_sampler(
             seed=seed,
             drop_last=drop_last,
         )
-        # sampler = DistributedSampler(train_dataset, num_replicas=dp_size, rank=dp_rank, seed=seed, drop_last=drop_last)
 
     if consumed_train_samples > 0:
         sampler = SkipBatchSampler(sampler, skip_batches=consumed_train_samples, dp_size=dp_size)
@@ -584,32 +537,6 @@ def get_train_dataloader(
         consumed_train_samples=consumed_train_samples,
     )
 
-    from torch.utils.data import Dataset
-
-    # class CombinedDataset(Dataset):
-    #     def __init__(self, datasets: List[Dataset]):
-    #         self.datasets = datasets
-    #         self.lengths = [len(d) for d in datasets]
-    #         self.offsets = np.cumsum([0] + self.lengths[:-1])
-
-    #     def __len__(self):
-    #         return sum(self.lengths)
-
-    #     def __getitem__(self, idx):
-    #         # for i, offset in enumerate(self.offsets):
-    #         #     if idx < offset + self.lengths[i]:
-    #         #         return self.datasets[i][idx - offset]
-    #         # raise IndexError("Index out of range")
-    #         # Map the global index to the corresponding domain and local index
-    #         for i, offset in enumerate(self.offsets):
-    #             if idx < offset + self.lengths[i]:
-    #                 # Calculate the local index within the domain
-    #                 local_idx = idx - offset
-    #                 # Get the dataset for the corresponding domain
-    #                 domain_dataset = self.datasets[i]
-    #                 # Use the sampler's indices to retrieve the sample
-    #                 return domain_dataset[local_idx]
-
     class CombinedDataset(Dataset):
         def __init__(self, datasets: List[Dataset]):
             self.datasets = datasets
@@ -623,7 +550,10 @@ def get_train_dataloader(
         def __getitem__(self, global_indices):
             # Handle a list of global indices
             if isinstance(global_indices, list):
-                return [self.get_sample(global_idx) for global_idx in global_indices]
+                output = [self.get_sample(global_idx) for global_idx in global_indices]
+                # TODO(xrsrke): refactor this, make it fast
+                output = {key: [d[key] for d in output] for key in output[0]}
+                return output
             else:
                 # If a single index is provided, process it directly
                 return self.get_sample(global_indices)
@@ -635,7 +565,9 @@ def get_train_dataloader(
             # if (not isinstance(dataset_idx, int)) or (not isinstance(local_idx, int)):
             #     assert 1 == 1
             # TODO(xrsrke): don't fix the name
-            return self.datasets[dataset_idx]["input_ids"][local_idx]
+            # return self.datasets[dataset_idx]["input_ids"][local_idx]
+            dataset = self.datasets[dataset_idx]
+            return {key: dataset[key][local_idx] for key in dataset.features}
 
         def get_dataset_and_local_index(self, global_idx):
             # Find the dataset index and local index for the given global index
