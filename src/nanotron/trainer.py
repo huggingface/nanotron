@@ -12,8 +12,6 @@ from typing import Callable, Dict, Iterable, Iterator, List, Optional, Tuple, Un
 
 import numpy as np
 import torch
-from torch.nn.parallel import DistributedDataParallel
-
 from nanotron import logging
 from nanotron.config import (
     Config,
@@ -25,7 +23,7 @@ from nanotron.config import (
 from nanotron.core import distributed as dist
 from nanotron.core.clip_grads import clip_grad_norm
 from nanotron.core.parallel.data_parallelism.utils import sync_gradients_across_dp
-from nanotron.core.parallel.parameters import NanotronParameter, sanity_check
+from nanotron.core.parallel.parameters import NanotronParameter, check_model_has_grad, sanity_check
 from nanotron.core.parallel.pipeline_parallelism.block import PipelineBlock
 from nanotron.core.parallel.pipeline_parallelism.engine import (
     PipelineEngine,
@@ -73,6 +71,7 @@ from nanotron.serialize import (
     save,
     save_random_states,
 )
+from torch.nn.parallel import DistributedDataParallel
 
 if int(os.environ.get("USE_FAST", 0)) == 1:
     # We import the fast versions
@@ -865,6 +864,8 @@ class DistributedTrainer:
 
         # Model make it DDP
         if make_ddp is True:
+            # Check that the model has at least one grad. Necessary for DDP
+            check_model_has_grad(model=model, dpg=dpg)
             # TODO @thomasw21: DDP doesn't support broadcasting complex buffers (and we don't really need that broadcasting anyway)
             model = DistributedDataParallel(
                 model, process_group=dpg.dp_pg, broadcast_buffers=False, bucket_cap_mb=config.model.ddp_bucket_cap_mb
