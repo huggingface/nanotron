@@ -12,8 +12,6 @@ from typing import Callable, Dict, Iterable, Iterator, List, Optional, Tuple, Un
 
 import numpy as np
 import torch
-from torch.nn.parallel import DistributedDataParallel
-
 from nanotron import logging
 from nanotron.config import (
     Config,
@@ -73,6 +71,7 @@ from nanotron.serialize import (
     save,
     save_random_states,
 )
+from torch.nn.parallel import DistributedDataParallel
 
 if int(os.environ.get("USE_FAST", 0)) == 1:
     # We import the fast versions
@@ -169,8 +168,9 @@ class DistributedTrainer:
             group=self.dpg.world_pg,
             rank=None,
         )
-        if free_mem < MIN_GPU_MEM_THRESHOLD:
-            raise RuntimeError(f"Not enough memory to train the model on node {os.environ.get('SLURMD_NODENAME')}")
+        # TODO(xrsrke): why?
+        # if free_mem < MIN_GPU_MEM_THRESHOLD:
+        #     raise RuntimeError(f"Not enough memory to train the model on node {os.environ.get('SLURMD_NODENAME')}")
         # Try to allocate all the memory
         test_tensor_size = int(free_mem * 0.9)
         test_tensor = torch.zeros((test_tensor_size,), dtype=torch.uint8, device=torch.device("cuda"))

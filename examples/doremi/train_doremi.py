@@ -70,22 +70,65 @@ def get_dataloader(trainer: DistributedTrainer, sanity_check_dataloader_interval
             # 1st device processes dataset and cache it, then other devices load from cache
             # TODO @nouamanetazi: this may timeout before 1st device finishes processing dataset. Can we have a ctxmanager to modify timeout?
             # TODO: generalise to include  for validation/test splits
+
             raw_dataset = get_datasets(
                 hf_dataset_or_datasets=trainer.config.data.dataset.hf_dataset_or_datasets,
                 splits=trainer.config.data.dataset.hf_dataset_splits,
             )["train"]
             tokenizer = AutoTokenizer.from_pretrained(trainer.config.tokenizer.tokenizer_name_or_path)
+            tokenizer.pad_token = tokenizer.eos_token
 
-            train_dataset = clm_process(
-                raw_dataset=raw_dataset,
-                tokenizer=tokenizer,
-                text_column_name=trainer.config.data.dataset.text_column_name,
-                dataset_processing_num_proc_per_process=trainer.config.data.dataset.dataset_processing_num_proc_per_process,
-                dataset_overwrite_cache=trainer.config.data.dataset.dataset_overwrite_cache,
-                sequence_length=trainer.sequence_length,
-            )
+            import torch
+
+            # def generate_toy_dataset(tokenizer, num_domains) -> Dataset:
+            #     # # NOTE: later on, use ArmelR/the-pile-splitted as testing dataset
+            #     class TokenizedDataset(Dataset):
+            #         def __init__(self, encodings):
+            #             self.encodings = encodings
+
+            #         def __getitem__(self, idx):
+            #             return {key: torch.tensor(val[idx]) for key, val in self.encodings.items()}
+
+            #         def __len__(self):
+            #             return len(self.encodings["input_ids"])
+
+            #     def generate_dataset(sentence, repetitions, tokenizer):
+            #         dataset = {}
+            #         for i, rep in enumerate(repetitions):
+            #             # encoded_batch = tokenizer([sentence] * rep, padding=True, truncation=True, return_tensors="pt").to("cuda")
+            #             # dataset[f"domain_{i+1}"] = TokenizedDataset(encoded_batch)
+            #             dataset[f"domain_{i+1}"] = [sentence] * rep
+            #         return dataset
+
+            #     repetitions = [50 * 2**i for i in range(num_domains)]
+            #     dataset = generate_dataset("hello world", repetitions, tokenizer)
+            #     return dataset
+
+            NUM_DOMAINS = 5
+            raw_datasets = {f"domain_{i+1}": raw_dataset for i in range(NUM_DOMAINS)}
+
+            train_datasets = {}
+            # TODO(xrsrke): parallelize this
+            for domain_name, raw_dataset in raw_datasets.items():
+                train_dataset = clm_process(
+                    raw_dataset=raw_dataset,
+                    tokenizer=tokenizer,
+                    text_column_name=trainer.config.data.dataset.text_column_name,
+                    dataset_processing_num_proc_per_process=trainer.config.data.dataset.dataset_processing_num_proc_per_process,
+                    dataset_overwrite_cache=trainer.config.data.dataset.dataset_overwrite_cache,
+                    sequence_length=trainer.sequence_length,
+                )
+                train_datasets[domain_name] = train_dataset
+
+            assert 1 == 1
+
+            import torch.nn.functional as F
+
+            domain_weights = F.softmax(torch.ones(NUM_DOMAINS, requires_grad=False) / NUM_DOMAINS)
+
             dataloader = get_train_dataloader(
-                train_dataset=train_dataset,
+                domain_weights=domain_weights,
+                train_datasets=train_datasets,
                 sequence_length=trainer.sequence_length,
                 dpg=trainer.dpg,
                 input_pp_rank=input_pp_rank,
@@ -96,6 +139,10 @@ def get_dataloader(trainer: DistributedTrainer, sanity_check_dataloader_interval
                 seed_worker=trainer.config.data.seed,
                 dataloader_drop_last=True,
             )
+
+            batch = next(iter(dataloader))
+
+            assert 1 == 1
             # Check if we have enough samples for train_steps
             assert (
                 trainer.config.tokens.train_steps - trainer.start_iteration_step
