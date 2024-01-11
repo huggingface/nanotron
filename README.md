@@ -81,7 +81,7 @@ Let's go through some key concepts.
 from nanotron.distributed import ParallelContext
 
 # define your topology
-parallel_context = ParallelContext.from_torch(
+parallel_context = ParallelContext(
     tensor_parallel_size=2,
     data_parallel_size=2,
     pipeline_parallel_size=2

@@ -170,8 +170,8 @@ class DistributedTrainer:
             group=self.parallel_context.world_pg,
             rank=None,
         )
-        if free_mem < MIN_GPU_MEM_THRESHOLD:
-            raise RuntimeError(f"Not enough memory to train the model on node {os.environ.get('SLURMD_NODENAME')}")
+        # if free_mem < MIN_GPU_MEM_THRESHOLD:
+        #     raise RuntimeError(f"Not enough memory to train the model on node {os.environ.get('SLURMD_NODENAME')}")
         # Try to allocate all the memory
         test_tensor_size = int(free_mem * 0.9)
         test_tensor = torch.zeros((test_tensor_size,), dtype=torch.uint8, device=torch.device("cuda"))

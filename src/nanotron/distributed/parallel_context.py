@@ -50,8 +50,7 @@ class ParallelContext:
             port = int(os.environ["MASTER_PORT"])
             self.init_global_dist(rank, world_size, backend, host, port)
 
-        self.init_parallel_groups()
-        dist.barrier()
+        self._init_parallel_groups()
 
     def init_global_dist(self, rank: int, world_size: int, backend: DistributedBackend, host: str, port: int):
         """Initialize the global distributed group.
@@ -76,7 +75,7 @@ class ParallelContext:
         )
         self.world_pg = process_group
 
-    def init_parallel_groups(self):
+    def _init_parallel_groups(self):
         """Initialize 3D parallelism's all process groups."""
         # NOTE: ensure all processes have joined the global group
         # before creating other groups

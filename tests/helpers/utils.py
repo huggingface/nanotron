@@ -72,12 +72,6 @@ class init_process_and_run_func:
 
     def __call__(self):
         with mock_os_environ(update_key_values={"WORLD_SIZE": f"{self.tp * self.dp * self.pp}"}):
-            # parallel_context = get_process_groups(
-            #     data_parallel_size=self.dp,
-            #     pipeline_parallel_size=self.pp,
-            #     tensor_parallel_size=self.tp,
-            # )
-
             parallel_context = ParallelContext(
                 data_parallel_size=self.dp,
                 pipeline_parallel_size=self.pp,
