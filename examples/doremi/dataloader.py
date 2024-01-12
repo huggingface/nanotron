@@ -471,7 +471,7 @@ def _get_train_sampler(
 # Adapted from https://github.com/huggingface/transformers/blob/47e1676255e5dd86b9541f734cd4f4bdcbb50f4a/src/transformers/trainer.py#L837
 def get_train_dataloader(
     domain_weights: torch.Tensor,
-    train_datasets: Dataset,
+    train_datasets: List[Dataset],
     sequence_length: int,
     dpg: DistributedProcessGroups,
     input_pp_rank: int,
@@ -495,7 +495,7 @@ def get_train_dataloader(
     ]:
         # dataset has to have a single column, with `input_ids` as the column name
         # TODO: use a single name
-        train_datasets = train_datasets["domain_0"]
+        train_datasets = train_datasets[0]
         assert train_datasets.column_names == ["input_ids"]
         dataset_length = len(train_datasets)
         train_datasets = train_datasets.remove_columns(column_names="input_ids")
@@ -510,8 +510,7 @@ def get_train_dataloader(
         # train_dataset = train_dataset.with_format(type="numpy", columns=["input_ids"], output_all_columns=True)
         # TODO(xrsrke): parallelize this
         train_datasets = [
-            train_datasets[domain_name].with_format(type="numpy", columns=["input_ids"], output_all_columns=True)
-            for domain_name in train_datasets
+            d.with_format(type="numpy", columns=["input_ids"], output_all_columns=True) for d in train_datasets
         ]
 
     data_collator = DataCollatorForCLM(
@@ -524,7 +523,7 @@ def get_train_dataloader(
     # TODO @nouamanetazi: Remove unused columns: https://github.com/huggingface/transformers/blob/47e1676255e5dd86b9541f734cd4f4bdcbb50f4a/src/transformers/trainer.py#L852
     # TODO @nouamanetazi: Support torch.utils.data.IterableDataset: https://github.com/huggingface/transformers/blob/47e1676255e5dd86b9541f734cd4f4bdcbb50f4a/src/transformers/trainer.py#L855-L872
 
-    train_datasets = [d for d in train_datasets if len(d) > 0]
+    # train_datasets = [d for d in train_datasets if len(d) > 0]
     train_sampler = _get_train_sampler(
         domain_weights=domain_weights,
         dp_size=dpg.dp_pg.size(),

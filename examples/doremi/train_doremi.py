@@ -33,6 +33,10 @@ from transformers import __version__ as tf_version
 logger = logging.get_logger(__name__)
 
 
+# TODO(xrsrke): make this configurable
+NUM_DOMAINS = 5
+
+
 def get_dataloader(trainer: DistributedTrainer, sanity_check_dataloader_interval: Optional[int] = None):
     # Prepare dataloader
     tokenizer_path = trainer.config.tokenizer.tokenizer_name_or_path
@@ -74,6 +78,7 @@ def get_dataloader(trainer: DistributedTrainer, sanity_check_dataloader_interval
             # TODO @nouamanetazi: this may timeout before 1st device finishes processing dataset. Can we have a ctxmanager to modify timeout?
             # TODO: generalise to include  for validation/test splits
 
+            # TODO(xrsrke): support load a generic doremi dataset
             raw_dataset = get_datasets(
                 hf_dataset_or_datasets=trainer.config.data.dataset.hf_dataset_or_datasets,
                 splits=trainer.config.data.dataset.hf_dataset_splits,
@@ -81,12 +86,13 @@ def get_dataloader(trainer: DistributedTrainer, sanity_check_dataloader_interval
             tokenizer = AutoTokenizer.from_pretrained(trainer.config.tokenizer.tokenizer_name_or_path)
             tokenizer.pad_token = tokenizer.eos_token
 
-            NUM_DOMAINS = 5
-            raw_datasets = {f"domain_{i+1}": raw_dataset for i in range(NUM_DOMAINS)}
+            # NUM_DOMAINS = trainer.config.doremi.num_domains
+            # raw_datasets = {f"domain_{i+1}": raw_dataset for i in range(NUM_DOMAINS)}
+            raw_datasets = [raw_dataset for i in range(NUM_DOMAINS)]
 
-            train_datasets = {}
+            train_datasets = []
             # TODO(xrsrke): parallelize this
-            for domain_name, raw_dataset in raw_datasets.items():
+            for raw_dataset in raw_datasets:
                 train_dataset = clm_process(
                     raw_dataset=raw_dataset,
                     tokenizer=tokenizer,
@@ -95,9 +101,9 @@ def get_dataloader(trainer: DistributedTrainer, sanity_check_dataloader_interval
                     dataset_overwrite_cache=trainer.config.data.dataset.dataset_overwrite_cache,
                     sequence_length=trainer.sequence_length,
                 )
-                train_datasets[domain_name] = train_dataset
+                train_datasets.append(train_dataset)
 
-            domain_weights = F.softmax(torch.ones(NUM_DOMAINS, requires_grad=False) / NUM_DOMAINS)
+            domain_weights = F.softmax(torch.ones(NUM_DOMAINS, requires_grad=False), dim=-1)
 
             dataloader = get_train_dataloader(
                 domain_weights=domain_weights,
@@ -190,4 +196,104 @@ if __name__ == "__main__":
     dataloader = get_dataloader(trainer, args.sanity_check_dataloader_interval)
 
     # Train
-    trainer.train(dataloader)
+    # trainer.train(dataloader)
+
+    if isinstance(dataloader, tuple):
+        dataloader[1] if len(dataloader) > 1 else None
+        dataloader[2] if len(dataloader) > 2 else None
+        dataloader = dataloader[0]
+    else:
+        dataloader = dataloader
+
+    from nanotron.dataloader import sanity_check_dataloader
+
+    dataloader = sanity_check_dataloader(dataloader=dataloader, dpg=trainer.dpg, config=trainer.config)
+
+    # Log data config
+    # self.log_object(data_config_log, name="data_config")
+
+    trainer.pipeline_engine = trainer.config.parallelism.pp_engine
+
+    trainer.pipeline_engine.nb_microbatches = trainer.n_micro_batches_per_batch
+
+    import datetime
+
+    log_rank(
+        f"[Start training] datetime: {datetime.datetime.now()} | mbs: {trainer.micro_batch_size} | grad_accum: {trainer.n_micro_batches_per_batch} | global_batch_size: {trainer.global_batch_size} | sequence_length: {trainer.sequence_length} | train_steps: {trainer.config.tokens.train_steps} | start_iteration_step: {trainer.start_iteration_step} | consumed_train_samples: {trainer.consumed_train_samples}",  # noqa
+        logger=logger,
+        level=logging.INFO,
+        rank=0,
+    )
+    # Kill switch
+    trainer.check_kill_switch(save_ckpt=False)
+
+    # TODO @nouamanetazi: refactor this
+    # Useful mapping
+    trainer.normalized_model = (
+        trainer.model.module if isinstance(trainer.model, DistributedDataParallel) else trainer.model
+    )
+    trainer.module_id_to_prefix = {
+        id(module): f"{module_name}." for module_name, module in trainer.normalized_model.named_modules()
+    }
+    # Fix the root_model
+    trainer.module_id_to_prefix[id(trainer.normalized_model)] = ""
+
+    # iteration_step = 10
+
+    import time
+
+    from nanotron.helpers import get_profiler
+
+    prof = get_profiler(config=trainer.config)
+    torch.cuda.empty_cache()
+
+    with prof:
+        for trainer.iteration_step in range(trainer.start_iteration_step + 1, trainer.config.tokens.train_steps + 1):
+            if isinstance(prof, torch.profiler.profile):
+                prof.step()
+            trainer.iteration_start_time = time.time()
+
+            # Training step
+            outputs, loss_avg = trainer.training_step(dataloader=dataloader)
+
+            # Training Logs
+            trainer.consumed_train_samples += trainer.global_batch_size
+
+            if (trainer.iteration_step - 1) % trainer.config.logging.iteration_step_info_interval == 0:
+                trainer.train_step_logs(outputs=outputs, loss_avg=loss_avg)
+
+            # Kill switch
+            trainer.check_kill_switch(save_ckpt=True)
+
+            # Checkpoint
+            if trainer.iteration_step % trainer.config.checkpoints.checkpoint_interval == 0:
+                trainer.save_checkpoint()
+
+            # Update our background upload/removal of checkpoints
+            # if self.s3_mover is not None:
+            #     self.s3_mover.update()
+
+            # Validation #TODO: fix validation
+            # if (
+            #     valid_dataloader is not None
+            #     and self.iteration_step % self.config.tokens.val_check_interval == 0
+            # ):
+            #     self.validation_step(dataloader=valid_dataloader)
+
+            # Push to Hub
+            # if (
+            #     isinstance(self.tb_context, HubSummaryWriter)
+            #     and (self.iteration_step - 1) % self.config.logging.tensorboard_logger.push_to_hub_interval
+            #     == 0
+            # ):
+            #     # tb_writer only exists on a single rank
+            #     log_rank(
+            #         f"Push Tensorboard logging to Hub at iteration {self.iteration_step} to https://huggingface.co/{self.config.logging.tensorboard_logger.repo_id}/tensorboard",
+            #         logger=logger,
+            #         level=logging.INFO,
+            #     )
+            #     # it is a future that queues to avoid concurrent push
+            #     self.tb_context.scheduler.trigger()
+
+    # if self.s3_mover is not None:
+    #     self.s3_mover.distributed_wait_for_completion(group=self.dpg.world_pg)
