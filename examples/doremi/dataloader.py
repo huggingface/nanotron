@@ -5,6 +5,7 @@ from typing import Dict, Iterator, List, Optional, Union
 
 import numpy as np
 import torch
+from llama import LlamaForDoReMiTraining
 from nanotron import logging
 from nanotron.config import Config
 from nanotron.core import distributed as dist
@@ -503,6 +504,7 @@ def _get_train_sampler(
 # Adapted from https://github.com/huggingface/transformers/blob/47e1676255e5dd86b9541f734cd4f4bdcbb50f4a/src/transformers/trainer.py#L837
 def get_train_dataloader(
     domain_weights: torch.Tensor,
+    model: LlamaForDoReMiTraining,
     ref_model: LlamaModel,
     train_datasets: List[Dataset],
     sequence_length: int,
@@ -582,71 +584,75 @@ def get_train_dataloader(
         # TODO @thomasw21: I'm not sure but this doesn't seem to work at all.
         # pin_memory_device="cuda",
     )
-    return dataloader
 
-    # p2p = model.model.p2p  # uses dpg.pp_pg
+    # p2p = ref_model.p2p  # uses dpg.pp_pg
+    # ref_model_input_pp_rank = ref_model.module.model.token_position_embeddings.rank
+    # ref_model_output_pp_rank = ref_model.module.model.cast_to_fp32.rank
+    # p2p = model.module.model.p2p  # uses dpg.pp_pg
 
-    # def _data_generator() -> Generator[Dict[str, Union[torch.Tensor, TensorPointer]], None, None]:
-    #     for batch in dataloader:
-    #         concatenated_batch = concatenated_inputs(batch)
-    #         concatenated_batch["concatenated_attention_mask"] = concatenated_batch["concatenated_attention_mask"].to(
-    #             torch.bool
-    #         )
+    # Generator[Dict[str, Union[torch.Tensor, TensorPointer]], None, None]
+    def _data_generator():
+        # for batch in dataloader:
+        #     # concatenated_batch = concatenated_inputs(batch)
+        #     # concatenated_batch["concatenated_attention_mask"] = concatenated_batch["concatenated_attention_mask"].to(
+        #     #     torch.bool
+        #     # )
 
-    #         # Compute reference logprobs
-    #         if ref_model_input_pp_rank <= dist.get_rank(dpg.pp_pg) <= ref_model_output_pp_rank:
-    #             with torch.no_grad():
-    #                 ref_logits = ref_model(
-    #                     concatenated_batch["concatenated_input_ids"],  # (chosen_bsz + rejected_bsz, sequence_length)
-    #                     concatenated_batch["concatenated_attention_mask"],
-    #                 ).to(
-    #                     torch.float32
-    #                 )  # (sequence_length, chosen_bsz + rejected_bsz, vocab_size)
-    #                 # ref_logits = ref_logits.transpose(
-    #                 #     0, 1
-    #                 # ).contiguous()  # [chosen_bsz + rejected_bsz, seq_length, vocab_size]
-    #                 # ref_logprobs = -sharded_cross_entropy(
-    #                 #     ref_logits,
-    #                 #     concatenated_batch["concatenated_labels"].contiguous(),
-    #                 #     group=dpg.tp_pg,
-    #                 #     dtype=torch.float,
-    #                 # )  # (chosen_bsz + rejected_bsz, sequence_length)
-    #                 # labels_mask = (
-    #                 #     concatenated_batch["concatenated_labels"] != -100
-    #                 # )  # [chosen_bsz + rejected_bsz, seq_length]
-    #                 # ref_logprobs = (ref_logprobs * labels_mask).sum(-1)  # [chosen_bsz + rejected_bsz]
+        #     # Compute reference logprobs
+        #     if ref_model_input_pp_rank <= dist.get_rank(dpg.pp_pg) <= ref_model_output_pp_rank:
+        #         with torch.no_grad():
+        #             ref_logits = ref_model(**batch)  # (sequence_length, chosen_bsz + rejected_bsz, vocab_size)
+        #             assert 1 == 1
+        #             # ref_logits = ref_logits.transpose(
+        #             #     0, 1
+        #             # ).contiguous()  # [chosen_bsz + rejected_bsz, seq_length, vocab_size]
+        #             # ref_logprobs = -sharded_cross_entropy(
+        #             #     ref_logits,
+        #             #     concatenated_batch["concatenated_labels"].contiguous(),
+        #             #     group=dpg.tp_pg,
+        #             #     dtype=torch.float,
+        #             # )  # (chosen_bsz + rejected_bsz, sequence_length)
+        #             # labels_mask = (
+        #             #     concatenated_batch["concatenated_labels"] != -100
+        #             # )  # [chosen_bsz + rejected_bsz, seq_length]
+        #             # ref_logprobs = (ref_logprobs * labels_mask).sum(-1)  # [chosen_bsz + rejected_bsz]
 
-    #                 # p2p.send_tensors(tensors=[ref_logprobs], to_rank=model.loss.rank)
-    #         # elif dist.get_rank(dpg.pp_pg) == model.loss.rank:
-    #         #     ref_logprobs = p2p.recv_tensors(num_tensors=1, from_rank=ref_model_output_pp_rank)[0]
+        #             # p2p.send_tensors(tensors=[ref_logprobs], to_rank=model.loss.rank)
+        #     elif dist.get_rank(dpg.pp_pg) == model.loss.rank:
+        #         ref_logprobs = p2p.recv_tensors(num_tensors=1, from_rank=ref_model_output_pp_rank)[0]
 
-    #         # # Index which separates chosen from rejected samples
-    #         # chosen_rejected_sep_idx = torch.tensor(batch["chosen_input_ids"].shape[0], device="cuda")
+        #     # # Index which separates chosen from rejected samples
+        #     # chosen_rejected_sep_idx = torch.tensor(batch["chosen_input_ids"].shape[0], device="cuda")
 
-    #         # o = {
-    #         #     "concatenated_input_ids": concatenated_batch[
-    #         #         "concatenated_input_ids"
-    #         #     ]  # [chosen_bsz + rejected_bsz, seq_length]
-    #         #     if dist.get_rank(dpg.pp_pg) == model_input_pp_rank
-    #         #     else TensorPointer(group_rank=model_input_pp_rank),
-    #         #     "concatenated_attention_mask": concatenated_batch[
-    #         #         "concatenated_attention_mask"
-    #         #     ]  # [chosen_bsz + rejected_bsz, seq_length]
-    #         #     if dist.get_rank(dpg.pp_pg) == model_input_pp_rank
-    #         #     else TensorPointer(group_rank=model_input_pp_rank),
-    #         #     "concatenated_labels": concatenated_batch[
-    #         #         "concatenated_labels"
-    #         #     ]  # [chosen_bsz + rejected_bsz, seq_length]
-    #         #     if dist.get_rank(dpg.pp_pg) == model_output_pp_rank
-    #         #     else TensorPointer(group_rank=model_output_pp_rank),
-    #         #     "ref_logprobs": ref_logprobs  # [chosen_bsz + rejected_bsz]
-    #         #     if dist.get_rank(dpg.pp_pg) == model.loss.rank
-    #         #     else TensorPointer(group_rank=model.loss.rank),
-    #         #     "chosen_rejected_sep_idx": chosen_rejected_sep_idx  # [1]
-    #         #     if dist.get_rank(dpg.pp_pg) == model.loss.rank
-    #         #     else TensorPointer(group_rank=model.loss.rank),
-    #         # }
-    #         # yield o
+        #     # o = {
+        #     #     "concatenated_input_ids": concatenated_batch[
+        #     #         "concatenated_input_ids"
+        #     #     ]  # [chosen_bsz + rejected_bsz, seq_length]
+        #     #     if dist.get_rank(dpg.pp_pg) == model_input_pp_rank
+        #     #     else TensorPointer(group_rank=model_input_pp_rank),
+        #     #     "concatenated_attention_mask": concatenated_batch[
+        #     #         "concatenated_attention_mask"
+        #     #     ]  # [chosen_bsz + rejected_bsz, seq_length]
+        #     #     if dist.get_rank(dpg.pp_pg) == model_input_pp_rank
+        #     #     else TensorPointer(group_rank=model_input_pp_rank),
+        #     #     "concatenated_labels": concatenated_batch[
+        #     #         "concatenated_labels"
+        #     #     ]  # [chosen_bsz + rejected_bsz, seq_length]
+        #     #     if dist.get_rank(dpg.pp_pg) == model_output_pp_rank
+        #     #     else TensorPointer(group_rank=model_output_pp_rank),
+        #     #     "ref_logprobs": ref_logprobs  # [chosen_bsz + rejected_bsz]
+        #     #     if dist.get_rank(dpg.pp_pg) == model.loss.rank
+        #     #     else TensorPointer(group_rank=model.loss.rank),
+        #     #     "chosen_rejected_sep_idx": chosen_rejected_sep_idx  # [1]
+        #     #     if dist.get_rank(dpg.pp_pg) == model.loss.rank
+        #     #     else TensorPointer(group_rank=model.loss.rank),
+        #     # }
+        #     # yield o
+        for batch in dataloader:
+            ref_model(**batch)
+            assert 1 == 1
+
+    return _data_generator
 
 
 def get_dataloader_worker_init(dp_rank: int):

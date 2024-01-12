@@ -1,7 +1,8 @@
 from pprint import pformat
 from typing import Optional, Tuple
 
-from llama import LlamaForDoReMiTraining
+# from nanotron.models.fast.llama import LlamaModel
+from llama import LlamaForDoReMiTraining, LlamaModelWithoutPP
 from nanotron.config import (
     ExistingCheckpointInit,
     RandomInit,
@@ -90,14 +91,19 @@ class DoReMiTrainer(DistributedTrainer):
         )
         normalized_model = model.module if isinstance(model, DistributedDataParallel) else model
 
-        ref_model = self._init_model(
-            model_builder=lambda: LlamaForDoReMiTraining(
-                config=self.model_config,
-                dpg=self.dpg,
-                parallel_config=self.config.parallelism,
-                random_states=self.random_states,
-                # random_states=self.random_states,
-            ),
+        # ref_model = self._init_model(
+        #     model_builder=lambda: LLaMaForInference(
+        #         config=self.model_config,
+        #         dpg=self.dpg,
+        #         parallel_config=self.config.parallelism,
+        #         # random_states=self.random_states,
+        #         # random_states=self.random_states,
+        #     ),
+        # )
+        ref_model = LlamaModelWithoutPP(
+            config=self.model_config,
+            dpg=self.dpg,
+            parallel_config=self.config.parallelism,
         )
         ref_model.eval()
         for _, param in ref_model.named_parameters():
