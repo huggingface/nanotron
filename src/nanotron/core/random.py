@@ -5,7 +5,6 @@ from typing import MutableMapping, Optional, Tuple
 
 import numpy as np
 import torch
-
 from nanotron.core import distributed as dist
 from nanotron.core.distributed import ProcessGroup
 
@@ -119,7 +118,7 @@ def branch_random_state(random_states: RandomStates, key: str, enabled: bool):
     try:
         yield
     finally:
-        # Update state from dpg with the newest state
+        # Update state from parallel_context with the newest state
         new_random_state = get_current_random_state()
         random_states[key] = new_random_state
 

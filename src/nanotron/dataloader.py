@@ -4,19 +4,18 @@ from typing import Dict, Generator, Iterator, List, Optional, Union
 
 import numpy as np
 import torch
-from torch.utils.data import BatchSampler, DataLoader
-from torch.utils.data.distributed import DistributedSampler
-
 from nanotron import logging
 from nanotron.config import Config
 from nanotron.core import distributed as dist
 from nanotron.core.parallel.pipeline_parallelism.tensor_pointer import TensorPointer
-from nanotron.core.process_groups import DistributedProcessGroups
 from nanotron.core.random import set_random_seed
 from nanotron.core.utils import (
     assert_fail_except_rank_with,
     assert_tensor_synced_across_pg,
 )
+from nanotron.distributed import ParallelContext
+from torch.utils.data import BatchSampler, DataLoader
+from torch.utils.data.distributed import DistributedSampler
 
 try:
     import datasets
@@ -33,7 +32,9 @@ logger = logging.get_logger(__name__)
 
 
 def sanity_check_dataloader(
-    dataloader: Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]], dpg: DistributedProcessGroups, config: Config
+    dataloader: Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]],
+    parallel_context: ParallelContext,
+    config: Config,
 ) -> Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]]:
     for batch in dataloader:
         micro_batch = {
@@ -51,8 +52,10 @@ def sanity_check_dataloader(
                     # It's fine if mask is the same across DP
                     continue
 
-                with assert_fail_except_rank_with(AssertionError, rank_exception=0, pg=dpg.dp_pg):
-                    assert_tensor_synced_across_pg(tensor=value, pg=dpg.dp_pg, msg=lambda err: f"{key} {err}")
+                with assert_fail_except_rank_with(AssertionError, rank_exception=0, pg=parallel_context.dp_pg):
+                    assert_tensor_synced_across_pg(
+                        tensor=value, pg=parallel_context.dp_pg, msg=lambda err: f"{key} {err}"
+                    )
 
             # SANITY CHECK: Check input are synchronized throughout TP
             for key, value in sorted(micro_batch.items(), key=lambda x: x[0]):
@@ -60,7 +63,7 @@ def sanity_check_dataloader(
                     continue
                 assert_tensor_synced_across_pg(
                     tensor=value,
-                    pg=dpg.tp_pg,
+                    pg=parallel_context.tp_pg,
                     msg=lambda err: f"{key} are not synchronized throughout TP {err}",
                 )
 
@@ -177,13 +180,15 @@ def dummy_infinite_data_generator(
     output_pp_rank: int,
     vocab_size: int,
     seed: int,
-    dpg: DistributedProcessGroups,
+    parallel_context: ParallelContext,
 ):
     def dummy_infinite_data_generator() -> Generator[Dict[str, Union[torch.Tensor, TensorPointer]], None, None]:
         # Random generator
         generator = torch.Generator(device="cuda")
         # Make sure that TP are synced always
-        generator.manual_seed(seed * (1 + dist.get_rank(dpg.dp_pg)) * (1 + dist.get_rank(dpg.pp_pg)))
+        generator.manual_seed(
+            seed * (1 + dist.get_rank(parallel_context.dp_pg)) * (1 + dist.get_rank(parallel_context.pp_pg))
+        )
 
         while True:
             yield {
@@ -195,7 +200,7 @@ def dummy_infinite_data_generator(
                     device="cuda",
                     generator=generator,
                 )
-                if dist.get_rank(dpg.pp_pg) == input_pp_rank
+                if dist.get_rank(parallel_context.pp_pg) == input_pp_rank
                 else TensorPointer(group_rank=input_pp_rank),
                 "input_mask": torch.ones(
                     micro_batch_size,
@@ -203,7 +208,7 @@ def dummy_infinite_data_generator(
                     dtype=torch.bool,
                     device="cuda",
                 )
-                if dist.get_rank(dpg.pp_pg) == input_pp_rank
+                if dist.get_rank(parallel_context.pp_pg) == input_pp_rank
                 else TensorPointer(group_rank=input_pp_rank),
                 "label_ids": torch.randint(
                     0,
@@ -213,7 +218,7 @@ def dummy_infinite_data_generator(
                     device="cuda",
                     generator=generator,
                 )
-                if dist.get_rank(dpg.pp_pg) == output_pp_rank
+                if dist.get_rank(parallel_context.pp_pg) == output_pp_rank
                 else TensorPointer(group_rank=output_pp_rank),
                 "label_mask": torch.ones(
                     micro_batch_size,
@@ -221,7 +226,7 @@ def dummy_infinite_data_generator(
                     dtype=torch.bool,
                     device="cuda",
                 )
-                if dist.get_rank(dpg.pp_pg) == output_pp_rank
+                if dist.get_rank(parallel_context.pp_pg) == output_pp_rank
                 else TensorPointer(group_rank=output_pp_rank),
             }
 
@@ -232,12 +237,12 @@ def dummy_infinite_data_generator(
 class SkipBatchSampler(BatchSampler):
     """
     A `torch.utils.data.BatchSampler` that skips the first `n` batches of another `torch.utils.data.BatchSampler`.
-    Note that in case of DDP, we skip batches on each rank, so a total of `skip_batches * dpg.dp_pg.size()` batches
+    Note that in case of DDP, we skip batches on each rank, so a total of `skip_batches * parallel_context.dp_pg.size()` batches
     """
 
     def __init__(self, batch_sampler: BatchSampler, skip_batches: int, dp_size: int):
         self.batch_sampler = batch_sampler
-        # In case of DDP, we skip batches on each rank, so a total of `skip_batches * dpg.dp_pg.size()` batches
+        # In case of DDP, we skip batches on each rank, so a total of `skip_batches * parallel_context.dp_pg.size()` batches
         self.skip_batches = skip_batches // dp_size
 
     def __iter__(self):
@@ -323,11 +328,11 @@ class DataCollatorForCLM:
     sequence_length: int
     input_pp_rank: int
     output_pp_rank: int
-    dpg: DistributedProcessGroups
+    parallel_context: ParallelContext
 
     def __call__(self, examples: List[Dict[str, List[np.ndarray]]]) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
         # Process the case when "input_ids" doesn't exist
-        current_pp_rank = dist.get_rank(self.dpg.pp_pg)
+        current_pp_rank = dist.get_rank(self.parallel_context.pp_pg)
         if current_pp_rank not in [
             self.input_pp_rank,
             self.output_pp_rank,
@@ -424,7 +429,7 @@ def _get_train_sampler(
 def get_train_dataloader(
     train_dataset: Dataset,
     sequence_length: int,
-    dpg: DistributedProcessGroups,
+    parallel_context: ParallelContext,
     input_pp_rank: int,
     output_pp_rank: int,
     micro_batch_size: int,
@@ -439,7 +444,7 @@ def get_train_dataloader(
         raise ValueError(f"training requires a datasets.Dataset, but got {type(train_dataset)}")
 
     # Only some rank require to run the dataloader.
-    if dist.get_rank(dpg.pp_pg) not in [
+    if dist.get_rank(parallel_context.pp_pg) not in [
         input_pp_rank,
         output_pp_rank,
     ]:
@@ -461,15 +466,15 @@ def get_train_dataloader(
         sequence_length=sequence_length,
         input_pp_rank=input_pp_rank,
         output_pp_rank=output_pp_rank,
-        dpg=dpg,
+        parallel_context=parallel_context,
     )
 
     # TODO @nouamanetazi: Remove unused columns: https://github.com/huggingface/transformers/blob/47e1676255e5dd86b9541f734cd4f4bdcbb50f4a/src/transformers/trainer.py#L852
     # TODO @nouamanetazi: Support torch.utils.data.IterableDataset: https://github.com/huggingface/transformers/blob/47e1676255e5dd86b9541f734cd4f4bdcbb50f4a/src/transformers/trainer.py#L855-L872
 
     train_sampler = _get_train_sampler(
-        dp_size=dpg.dp_pg.size(),
-        dp_rank=dist.get_rank(dpg.dp_pg),
+        dp_size=parallel_context.dp_pg.size(),
+        dp_rank=dist.get_rank(parallel_context.dp_pg),
         train_dataset=train_dataset,
         seed=seed_worker,
         use_loop_to_round_batch_size=use_loop_to_round_batch_size,
@@ -486,7 +491,7 @@ def get_train_dataloader(
         drop_last=dataloader_drop_last,  # we also drop_last in `clm_process()`
         num_workers=dataloader_num_workers,
         pin_memory=dataloader_pin_memory,
-        worker_init_fn=get_dataloader_worker_init(dp_rank=dist.get_rank(dpg.dp_pg)),
+        worker_init_fn=get_dataloader_worker_init(dp_rank=dist.get_rank(parallel_context.dp_pg)),
         # TODO @thomasw21: I'm not sure but this doesn't seem to work at all.
         # pin_memory_device="cuda",
     )

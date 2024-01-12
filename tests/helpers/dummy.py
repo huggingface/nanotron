@@ -11,8 +11,8 @@ from nanotron.core.parallel.pipeline_parallelism.block import PipelineBlock
 from nanotron.core.parallel.pipeline_parallelism.p2p import P2P
 from nanotron.core.parallel.pipeline_parallelism.tensor_pointer import TensorPointer
 from nanotron.core.parallel.tied_parameters import tie_parameters
-from nanotron.core.process_groups import DistributedProcessGroups
 from nanotron.core.utils import init_on_device_and_dtype
+from nanotron.distributed import ParallelContext
 from torch import nn
 from torch.nn.parallel import DistributedDataParallel
 
@@ -64,14 +64,14 @@ class DummyModel(nn.Module):
         return x
 
 
-def init_dummy_model(dpg: DistributedProcessGroups, dtype: torch.dtype = torch.float) -> DummyModel:
-    p2p = P2P(pg=dpg.pp_pg, device=torch.device("cuda"))
+def init_dummy_model(parallel_context: ParallelContext, dtype: torch.dtype = torch.float) -> DummyModel:
+    p2p = P2P(pg=parallel_context.pp_pg, device=torch.device("cuda"))
     model = DummyModel(p2p=p2p)
 
     # Build model using contiguous segments
     pipeline_blocks = [module for name, module in model.named_modules() if isinstance(module, PipelineBlock)]
     with init_on_device_and_dtype(device=torch.device("cuda"), dtype=dtype):
-        contiguous_size = ceil(len(pipeline_blocks) / dpg.pp_pg.size())
+        contiguous_size = ceil(len(pipeline_blocks) / parallel_context.pp_pg.size())
         for i, block in enumerate(pipeline_blocks):
             rank = i // contiguous_size
             block.build_and_set_rank(rank)
@@ -84,15 +84,21 @@ def init_dummy_model(dpg: DistributedProcessGroups, dtype: torch.dtype = torch.f
             (
                 name,
                 # This adds all the tp_ranks in one go
-                set(dpg.world_rank_matrix[dist.get_rank(dpg.pp_pg), dist.get_rank(dpg.dp_pg), :]),
+                set(
+                    parallel_context.world_rank_matrix[
+                        dist.get_rank(parallel_context.pp_pg), dist.get_rank(parallel_context.dp_pg), :
+                    ]
+                ),
             )
         ]
-        tie_parameters(root_module=model, ties=shared_weights, dpg=dpg, reduce_op=dist.ReduceOp.SUM)
+        tie_parameters(
+            root_module=model, ties=shared_weights, parallel_context=parallel_context, reduce_op=dist.ReduceOp.SUM
+        )
 
-    initial_sync(model=model, dpg=dpg)
+    initial_sync(model=model, parallel_context=parallel_context)
 
     if len(list(model.named_parameters())) > 0:
-        model = DistributedDataParallel(model, process_group=dpg.dp_pg)
+        model = DistributedDataParallel(model, process_group=parallel_context.dp_pg)
     else:
         # No parameters, so no need to use DDP to sync parameters gradients
         model = model
@@ -100,7 +106,7 @@ def init_dummy_model(dpg: DistributedProcessGroups, dtype: torch.dtype = torch.f
     return model
 
 
-def init_dummy_optimizer(model: nn.Module, dpg: DistributedProcessGroups) -> BaseOptimizer:
+def init_dummy_optimizer(model: nn.Module, parallel_context: ParallelContext) -> BaseOptimizer:
     optimizer = NamedOptimizer(
         named_params_or_groups=model.named_parameters(), optimizer_builder=lambda params: torch.optim.AdamW(params)
     )

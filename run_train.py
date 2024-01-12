@@ -56,7 +56,7 @@ def get_dataloader(trainer: DistributedTrainer, sanity_check_dataloader_interval
             output_pp_rank=output_pp_rank,
             vocab_size=trainer.model_config.vocab_size,
             seed=trainer.config.data.seed,
-            dpg=trainer.dpg,
+            parallel_context=trainer.parallel_context,
         )()
     elif isinstance(trainer.config.data.dataset, PretrainDatasetsArgs):
         log_rank("Using `datasets` library", logger=logger, level=logging.INFO, rank=0)
@@ -64,7 +64,7 @@ def get_dataloader(trainer: DistributedTrainer, sanity_check_dataloader_interval
         tokenizer.pad_token = tokenizer.eos_token
         tokenizer.padding_side = "left"
 
-        with main_rank_first(trainer.dpg.world_pg):
+        with main_rank_first(trainer.parallel_context.world_pg):
             # 1st device processes dataset and cache it, then other devices load from cache
             # TODO @nouamanetazi: this may timeout before 1st device finishes processing dataset. Can we have a ctxmanager to modify timeout?
             # TODO: generalise to include  for validation/test splits
@@ -85,7 +85,7 @@ def get_dataloader(trainer: DistributedTrainer, sanity_check_dataloader_interval
             dataloader = get_train_dataloader(
                 train_dataset=train_dataset,
                 sequence_length=trainer.sequence_length,
-                dpg=trainer.dpg,
+                parallel_context=trainer.parallel_context,
                 input_pp_rank=input_pp_rank,
                 output_pp_rank=output_pp_rank,
                 micro_batch_size=trainer.micro_batch_size,
@@ -97,9 +97,9 @@ def get_dataloader(trainer: DistributedTrainer, sanity_check_dataloader_interval
             # Check if we have enough samples for train_steps
             assert (
                 trainer.config.tokens.train_steps - trainer.start_iteration_step
-            ) * trainer.global_batch_size // trainer.dpg.dp_pg.size() < len(dataloader), (
-                f"Dataset is too small for steps ({len(dataloader)} < {(trainer.config.tokens.train_steps - trainer.start_iteration_step) * trainer.global_batch_size // trainer.dpg.dp_pg.size()}), "
-                f"Try train_steps<={len(dataloader) * trainer.dpg.dp_pg.size() // trainer.global_batch_size + trainer.start_iteration_step}"
+            ) * trainer.global_batch_size // trainer.parallel_context.dp_pg.size() < len(dataloader), (
+                f"Dataset is too small for steps ({len(dataloader)} < {(trainer.config.tokens.train_steps - trainer.start_iteration_step) * trainer.global_batch_size // trainer.parallel_context.dp_pg.size()}), "
+                f"Try train_steps<={len(dataloader) * trainer.parallel_context.dp_pg.size() // trainer.global_batch_size + trainer.start_iteration_step}"
             )
     else:
         raise ValueError(f"Unhandled case of `self.config.data.dataset`. Got: {trainer.config.data.dataset}")

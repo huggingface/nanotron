@@ -8,6 +8,7 @@ from helpers.utils import (
     init_distributed,
     is_dict_equal,
 )
+from nanotron.constants import CHECKPOINT_VERSION
 from nanotron.core import distributed as dist
 from nanotron.core.gradient_accumulator import FP32GradientAccumulator
 from nanotron.core.optim.named_optimizer import NamedOptimizer
@@ -20,8 +21,8 @@ from nanotron.core.parallel.pipeline_parallelism.engine import (
 )
 from nanotron.core.parallel.sharded_parameters import SplitConfig, create_sharded_parameter_from_config
 from nanotron.core.parallel.tied_parameters import sync_tied_weights_gradients
-from nanotron.core.process_groups import DistributedProcessGroups
-from nanotron.core.random import get_current_random_state, get_synced_random_state, RandomStates
+from nanotron.core.random import RandomStates, get_current_random_state, get_synced_random_state
+from nanotron.distributed import ParallelContext
 from nanotron.serialize import (
     load_optimizer,
     load_random_states,
@@ -30,7 +31,6 @@ from nanotron.serialize import (
     save_random_states,
     save_weights,
 )
-from nanotron.constants import CHECKPOINT_VERSION
 from nanotron.serialize.metadata import TensorMetadataV2
 from torch.nn.parallel import DistributedDataParallel
 
@@ -54,15 +54,15 @@ def test_save_and_load_model(tp: int, dp: int, pp: int):
     init_distributed(tp=tp, dp=dp, pp=pp)(_test_save_and_load_model)(test_context=test_context)
 
 
-def _test_save_and_load_model(dpg: DistributedProcessGroups, test_context: TestContext):
-    model = init_dummy_model(dpg=dpg)
+def _test_save_and_load_model(parallel_context: ParallelContext, test_context: TestContext):
+    model = init_dummy_model(parallel_context=parallel_context)
     store_folder = test_context.get_auto_remove_tmp_dir()
 
     # Save
-    save_weights(model=model, dpg=dpg, root_folder=store_folder)
+    save_weights(model=model, parallel_context=parallel_context, root_folder=store_folder)
 
     # Load
-    new_model = init_dummy_model(dpg=dpg)
+    new_model = init_dummy_model(parallel_context=parallel_context)
 
     # Check that the newly initialised model isn't the same.
     match, msg = is_dict_equal(new_model.state_dict(), model.state_dict())
@@ -72,7 +72,7 @@ def _test_save_and_load_model(dpg: DistributedProcessGroups, test_context: TestC
     else:
         assert not match, "Newly initialised model should not match."
 
-    load_weights(model=new_model, dpg=dpg, root_folder=store_folder)
+    load_weights(model=new_model, parallel_context=parallel_context, root_folder=store_folder)
 
     # Assert the weights are exactly the same after loading
     match, msg = is_dict_equal(new_model.state_dict(), model.state_dict())
@@ -93,30 +93,32 @@ def test_save_and_load_optimizer(tp: int, dp: int, pp: int):
     init_distributed(tp=tp, dp=dp, pp=pp)(_test_save_and_load_optimizer)(test_context=test_context)
 
 
-def _test_save_and_load_optimizer(dpg: DistributedProcessGroups, test_context: TestContext):
+def _test_save_and_load_optimizer(parallel_context: ParallelContext, test_context: TestContext):
     store_folder = test_context.get_auto_remove_tmp_dir()
-    model = init_dummy_model(dpg=dpg)
+    model = init_dummy_model(parallel_context=parallel_context)
     optimizer = NamedOptimizer(
         named_params_or_groups=model.named_parameters(),
         optimizer_builder=lambda params: torch.optim.AdamW(params),
     )
 
     # Train in order to update the optimizer step a few times
-    data_loader = iter(dummy_infinite_data_loader(pp_pg=dpg.pp_pg))
+    data_loader = iter(dummy_infinite_data_loader(pp_pg=parallel_context.pp_pg))
     nb_optim_steps = 3
     pipeline_engine = AllForwardAllBackwardPipelineEngine()
     for _ in range(nb_optim_steps):
         minibatch = next(data_loader)
-        _ = pipeline_engine.train_batch_iter(model=model, pg=dpg.pp_pg, batch=[minibatch], nb_microbatches=1, grad_accumulator=None)
+        _ = pipeline_engine.train_batch_iter(
+            model=model, pg=parallel_context.pp_pg, batch=[minibatch], nb_microbatches=1, grad_accumulator=None
+        )
         # Manually sync tied parameters
-        sync_tied_weights_gradients(module=model, dpg=dpg, grad_accumulator=None)
+        sync_tied_weights_gradients(module=model, parallel_context=parallel_context, grad_accumulator=None)
         # Optimizer steps
         optimizer.step()
         optimizer.zero_grad()
 
     # Save optimizer
-    save_optimizer(optimizer=optimizer, dpg=dpg, root_folder=store_folder)
-    dist.barrier(dpg.world_pg)
+    save_optimizer(optimizer=optimizer, parallel_context=parallel_context, root_folder=store_folder)
+    dist.barrier(parallel_context.world_pg)
 
     # Generate a new optimizer
     new_optimizer = NamedOptimizer(
@@ -132,7 +134,7 @@ def _test_save_and_load_optimizer(dpg: DistributedProcessGroups, test_context: T
     else:
         assert not match, "Newly initialised optimizer should not match."
 
-    load_optimizer(optimizer=new_optimizer, dpg=dpg, root_folder=store_folder)
+    load_optimizer(optimizer=new_optimizer, parallel_context=parallel_context, root_folder=store_folder)
 
     # Assert the optimizer states are exactly the same after loading.
     match, msg = is_dict_equal(optimizer.state_dict(), new_optimizer.state_dict())
@@ -153,34 +155,36 @@ def test_save_zero_optimizer_and_load_optimizer(tp: int, dp: int, pp: int):
     init_distributed(tp=tp, dp=dp, pp=pp)(_test_save_zero_optimizer_and_load_optimizer)(test_context=test_context)
 
 
-def _test_save_zero_optimizer_and_load_optimizer(dpg: DistributedProcessGroups, test_context: TestContext):
+def _test_save_zero_optimizer_and_load_optimizer(parallel_context: ParallelContext, test_context: TestContext):
     store_folder = test_context.get_auto_remove_tmp_dir()
-    model = init_dummy_model(dpg=dpg)
+    model = init_dummy_model(parallel_context=parallel_context)
     optimizer = ZeroDistributedOptimizer(
         named_params_or_groups=model.named_parameters(),
         optimizer_builder=lambda named_param_groups: NamedOptimizer(
             named_params_or_groups=named_param_groups,
             optimizer_builder=lambda param_groups: torch.optim.AdamW(param_groups),
         ),
-        dp_pg=dpg.dp_pg,
+        dp_pg=parallel_context.dp_pg,
     )
 
     # Train in order to update the optimizer step a few times
-    data_loader = iter(dummy_infinite_data_loader(pp_pg=dpg.pp_pg))
+    data_loader = iter(dummy_infinite_data_loader(pp_pg=parallel_context.pp_pg))
     nb_optim_steps = 3
     pipeline_engine = AllForwardAllBackwardPipelineEngine()
     for _ in range(nb_optim_steps):
         minibatch = next(data_loader)
-        _ = pipeline_engine.train_batch_iter(model=model, pg=dpg.pp_pg, batch=[minibatch], nb_microbatches=1, grad_accumulator=None)
+        _ = pipeline_engine.train_batch_iter(
+            model=model, pg=parallel_context.pp_pg, batch=[minibatch], nb_microbatches=1, grad_accumulator=None
+        )
         # Manually sync tied parameters
-        sync_tied_weights_gradients(module=model, dpg=dpg, grad_accumulator=None)
+        sync_tied_weights_gradients(module=model, parallel_context=parallel_context, grad_accumulator=None)
         # Optimizer steps
         optimizer.step()
         optimizer.zero_grad()
 
     # Save optimizer
-    save_optimizer(optimizer=optimizer, dpg=dpg, root_folder=store_folder)
-    dist.barrier(dpg.world_pg)
+    save_optimizer(optimizer=optimizer, parallel_context=parallel_context, root_folder=store_folder)
+    dist.barrier(parallel_context.world_pg)
 
     # Generate a new optimizer
     new_optimizer = ZeroDistributedOptimizer(
@@ -189,7 +193,7 @@ def _test_save_zero_optimizer_and_load_optimizer(dpg: DistributedProcessGroups, 
             named_params_or_groups=named_param_groups,
             optimizer_builder=lambda param_groups: torch.optim.AdamW(param_groups),
         ),
-        dp_pg=dpg.dp_pg,
+        dp_pg=parallel_context.dp_pg,
     )
 
     # Check that the newly initialised optimizer isn't the same.
@@ -200,7 +204,7 @@ def _test_save_zero_optimizer_and_load_optimizer(dpg: DistributedProcessGroups, 
     else:
         assert not match, "Newly initialised optimizer should not match."
 
-    load_optimizer(optimizer=new_optimizer, dpg=dpg, root_folder=store_folder)
+    load_optimizer(optimizer=new_optimizer, parallel_context=parallel_context, root_folder=store_folder)
 
     # Assert the optimizer states are exactly the same after loading.
     match, msg = is_dict_equal(optimizer.state_dict(), new_optimizer.state_dict())
@@ -225,35 +229,37 @@ def test_save_zero_optimizer_and_load_data_parallel_optimizer(tp: int, dp: int, 
 
 
 def _test_save_zero_optimizer_and_load_data_parallel_optimizer(
-    dpg: DistributedProcessGroups, test_context: TestContext
+    parallel_context: ParallelContext, test_context: TestContext
 ):
     store_folder = test_context.get_auto_remove_tmp_dir()
-    model = init_dummy_model(dpg=dpg)
+    model = init_dummy_model(parallel_context=parallel_context)
     optimizer = ZeroDistributedOptimizer(
         named_params_or_groups=model.named_parameters(),
         optimizer_builder=lambda named_param_groups: NamedOptimizer(
             named_params_or_groups=named_param_groups,
             optimizer_builder=lambda param_groups: torch.optim.AdamW(param_groups),
         ),
-        dp_pg=dpg.dp_pg,
+        dp_pg=parallel_context.dp_pg,
     )
 
     # Train in order to update the optimizer step a few times
-    data_loader = iter(dummy_infinite_data_loader(pp_pg=dpg.pp_pg))
+    data_loader = iter(dummy_infinite_data_loader(pp_pg=parallel_context.pp_pg))
     nb_optim_steps = 3
     pipeline_engine = AllForwardAllBackwardPipelineEngine()
     for _ in range(nb_optim_steps):
         minibatch = next(data_loader)
-        _ = pipeline_engine.train_batch_iter(model=model, pg=dpg.pp_pg, batch=[minibatch], nb_microbatches=1, grad_accumulator=None)
+        _ = pipeline_engine.train_batch_iter(
+            model=model, pg=parallel_context.pp_pg, batch=[minibatch], nb_microbatches=1, grad_accumulator=None
+        )
         # Manually sync tied parameters
-        sync_tied_weights_gradients(module=model, dpg=dpg, grad_accumulator=None)
+        sync_tied_weights_gradients(module=model, parallel_context=parallel_context, grad_accumulator=None)
         # Optimizer steps
         optimizer.step()
         optimizer.zero_grad()
 
     # Save optimizer
-    save_optimizer(optimizer=optimizer, dpg=dpg, root_folder=store_folder)
-    dist.barrier(dpg.world_pg)
+    save_optimizer(optimizer=optimizer, parallel_context=parallel_context, root_folder=store_folder)
+    dist.barrier(parallel_context.world_pg)
 
     # Generate a new optimizer
     new_optimizer = NamedOptimizer(
@@ -269,7 +275,7 @@ def _test_save_zero_optimizer_and_load_data_parallel_optimizer(
     else:
         assert not match, "Newly initialised optimizer should not match."
 
-    load_optimizer(optimizer=new_optimizer, dpg=dpg, root_folder=store_folder)
+    load_optimizer(optimizer=new_optimizer, parallel_context=parallel_context, root_folder=store_folder)
 
     # TODO @thomasw21: Compare zero optimizer with non zero
 
@@ -292,28 +298,30 @@ def test_save_data_parallel_optimizer_and_load_zero_optimizer(tp: int, dp: int, 
 
 
 def _test_save_data_parallel_optimizer_and_load_zero_optimizer(
-    dpg: DistributedProcessGroups, test_context: TestContext
+    parallel_context: ParallelContext, test_context: TestContext
 ):
     store_folder = test_context.get_auto_remove_tmp_dir()
-    model = init_dummy_model(dpg=dpg)
+    model = init_dummy_model(parallel_context=parallel_context)
     optimizer = NamedOptimizer(
         named_params_or_groups=model.named_parameters(),
         optimizer_builder=lambda params: torch.optim.AdamW(params),
     )
 
     # Train in order to update the optimizer step a few times
-    data_loader = iter(dummy_infinite_data_loader(pp_pg=dpg.pp_pg))
+    data_loader = iter(dummy_infinite_data_loader(pp_pg=parallel_context.pp_pg))
     nb_optim_steps = 3
     pipeline_engine = AllForwardAllBackwardPipelineEngine()
     for _ in range(nb_optim_steps):
         minibatch = next(data_loader)
-        _ = pipeline_engine.train_batch_iter(model=model, pg=dpg.pp_pg, batch=[minibatch], nb_microbatches=1, grad_accumulator=None)
+        _ = pipeline_engine.train_batch_iter(
+            model=model, pg=parallel_context.pp_pg, batch=[minibatch], nb_microbatches=1, grad_accumulator=None
+        )
         optimizer.step()
         optimizer.zero_grad()
 
     # Save optimizer
-    save_optimizer(optimizer=optimizer, dpg=dpg, root_folder=store_folder)
-    dist.barrier(dpg.world_pg)
+    save_optimizer(optimizer=optimizer, parallel_context=parallel_context, root_folder=store_folder)
+    dist.barrier(parallel_context.world_pg)
 
     # Generate a new optimizer
     new_optimizer = ZeroDistributedOptimizer(
@@ -322,7 +330,7 @@ def _test_save_data_parallel_optimizer_and_load_zero_optimizer(
             named_params_or_groups=named_param_groups,
             optimizer_builder=lambda param_groups: torch.optim.AdamW(param_groups),
         ),
-        dp_pg=dpg.dp_pg,
+        dp_pg=parallel_context.dp_pg,
     )
 
     # Check that the newly initialised optimizer isn't the same.
@@ -333,7 +341,7 @@ def _test_save_data_parallel_optimizer_and_load_zero_optimizer(
     else:
         assert not match, "Newly initialised optimizer should not match."
 
-    load_optimizer(optimizer=new_optimizer, dpg=dpg, root_folder=store_folder)
+    load_optimizer(optimizer=new_optimizer, parallel_context=parallel_context, root_folder=store_folder)
 
     # TODO @thomasw21: Compare zero optimizer with non zero
 
@@ -354,10 +362,10 @@ def test_save_optimizer_with_additional_state_dict_keys(tp: int, dp: int, pp: in
     )
 
 
-def _test_save_optimizer_with_additional_state_dict_keys(dpg: DistributedProcessGroups, test_context: TestContext):
+def _test_save_optimizer_with_additional_state_dict_keys(parallel_context: ParallelContext, test_context: TestContext):
     dtype = torch.float16
     store_folder = test_context.get_auto_remove_tmp_dir()
-    model = init_dummy_model(dpg=dpg, dtype=dtype)
+    model = init_dummy_model(parallel_context=parallel_context, dtype=dtype)
 
     if isinstance(model, DistributedDataParallel):
         # Remove the annoying "module." prefix
@@ -380,23 +388,29 @@ def _test_save_optimizer_with_additional_state_dict_keys(dpg: DistributedProcess
     assert len(optimizer.state_dict_additional_keys()) > 0
 
     # Train in order to update the optimizer step a few times
-    data_loader = iter(dummy_infinite_data_loader(pp_pg=dpg.pp_pg, dtype=dtype))
+    data_loader = iter(dummy_infinite_data_loader(pp_pg=parallel_context.pp_pg, dtype=dtype))
     nb_optim_steps = 3
     pipeline_engine = AllForwardAllBackwardPipelineEngine()
     for _ in range(nb_optim_steps):
         minibatch = next(data_loader)
         _ = pipeline_engine.train_batch_iter(
-            model=model, pg=dpg.pp_pg, batch=[minibatch], nb_microbatches=1, grad_accumulator=grad_accumulator
+            model=model,
+            pg=parallel_context.pp_pg,
+            batch=[minibatch],
+            nb_microbatches=1,
+            grad_accumulator=grad_accumulator,
         )
         # Manually sync tied parameters
-        sync_tied_weights_gradients(module=normalized_model, dpg=dpg, grad_accumulator=grad_accumulator)
+        sync_tied_weights_gradients(
+            module=normalized_model, parallel_context=parallel_context, grad_accumulator=grad_accumulator
+        )
         # Optimizer steps
         optimizer.step()
         optimizer.zero_grad()
 
     # Save optimizer
-    save_optimizer(optimizer=optimizer, dpg=dpg, root_folder=store_folder)
-    dist.barrier(dpg.world_pg)
+    save_optimizer(optimizer=optimizer, parallel_context=parallel_context, root_folder=store_folder)
+    dist.barrier(parallel_context.world_pg)
 
     # Generate a new optimizer
     new_optimizer = OptimizerFromGradientAccumulator(
@@ -416,7 +430,7 @@ def _test_save_optimizer_with_additional_state_dict_keys(dpg: DistributedProcess
         match, msg = is_dict_equal(optimizer.state_dict(), new_optimizer.state_dict())
         assert not match, "Newly initialised optimizer should not match."
 
-    load_optimizer(optimizer=new_optimizer, dpg=dpg, root_folder=store_folder)
+    load_optimizer(optimizer=new_optimizer, parallel_context=parallel_context, root_folder=store_folder)
 
     # Assert the optimizer states are exactly the same after loading.
     match, msg = is_dict_equal(optimizer.state_dict()["state"], new_optimizer.state_dict()["state"])
@@ -451,8 +465,10 @@ def test_save_and_load_random_states():
     init_distributed(tp=2, dp=1, pp=1)(_test_save_and_load_random_states)(test_context=test_context)
 
 
-def _test_save_and_load_random_states(dpg: DistributedProcessGroups, test_context: TestContext):
-    pg = next((pg for pg in [dpg.tp_pg, dpg.dp_pg, dpg.pp_pg] if pg.size() == 2))
+def _test_save_and_load_random_states(parallel_context: ParallelContext, test_context: TestContext):
+    pg = next(
+        (pg for pg in [parallel_context.tp_pg, parallel_context.dp_pg, parallel_context.pp_pg] if pg.size() == 2)
+    )
     random_states = RandomStates(
         {
             "my_synced_random_state": get_synced_random_state(random_state=get_current_random_state(), pg=pg),
@@ -472,10 +488,10 @@ def _test_save_and_load_random_states(dpg: DistributedProcessGroups, test_contex
         assert random_states != random_statess[0]
 
     # save
-    save_random_states(random_states=random_states, dpg=dpg, root_folder=store_folder)
+    save_random_states(random_states=random_states, parallel_context=parallel_context, root_folder=store_folder)
 
     # load
-    new_random_states = load_random_states(dpg=dpg, root_folder=store_folder)
+    new_random_states = load_random_states(parallel_context=parallel_context, root_folder=store_folder)
     # Each rank has restored it's own random state
     assert random_states == new_random_states
 
@@ -485,13 +501,13 @@ def test_serialize_deserialize_tensormetadata():
     init_distributed(tp=2, dp=1, pp=1)(_test_serialize_deserialize_tensormetadata)(test_context=test_context)
 
 
-def _test_serialize_deserialize_tensormetadata(dpg: DistributedProcessGroups, test_context: TestContext):
+def _test_serialize_deserialize_tensormetadata(parallel_context: ParallelContext, test_context: TestContext):
     param = torch.nn.Parameter(torch.randn(16, 64))
     split_config = SplitConfig(
         split_dim=0,
         contiguous_chunks=(8, 8),
     )
-    param = create_sharded_parameter_from_config(parameter=param, pg=dpg.tp_pg, split_config=split_config)
+    param = create_sharded_parameter_from_config(parameter=param, pg=parallel_context.tp_pg, split_config=split_config)
     sharded_info = param.get_sharded_info()
     metadata = TensorMetadataV2(
         version=CHECKPOINT_VERSION,

@@ -6,7 +6,7 @@ from helpers.exception import assert_fail_with
 from helpers.utils import available_gpus, init_distributed
 from nanotron.core import distributed as dist
 from nanotron.core.parallel.pipeline_parallelism.p2p import P2P
-from nanotron.core.process_groups import DistributedProcessGroups
+from nanotron.distributed import ParallelContext
 
 
 @pytest.mark.skipif(available_gpus() < 2, reason="Testing test_ddp_with_afab requires at least 2 gpus")
@@ -16,8 +16,8 @@ def test_check_send_recv_tensor(send_contiguous: bool, full: bool):
     init_distributed(tp=1, dp=1, pp=2)(_test_check_send_recv_tensor)(send_contiguous=send_contiguous, full=full)
 
 
-def _test_check_send_recv_tensor(dpg: DistributedProcessGroups, send_contiguous: bool, full: bool):
-    p2p = P2P(pg=dpg.pp_pg, device=torch.device("cuda"))
+def _test_check_send_recv_tensor(parallel_context: ParallelContext, send_contiguous: bool, full: bool):
+    p2p = P2P(pg=parallel_context.pp_pg, device=torch.device("cuda"))
     if dist.get_rank(p2p.pg) == 0:
         tensor_to_send = torch.randn(3, 5, dtype=torch.float, device=torch.device("cuda"))
         if send_contiguous is True:

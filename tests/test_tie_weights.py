@@ -9,7 +9,7 @@ from nanotron.core.parallel.tied_parameters import (
     sync_tied_weights_gradients,
     tie_parameters,
 )
-from nanotron.core.process_groups import DistributedProcessGroups
+from nanotron.distributed import ParallelContext
 from torch import nn
 
 
@@ -17,18 +17,21 @@ def test_tie_weight_in_same_device():
     init_distributed(tp=1, dp=1, pp=1)(_test_tie_weight_in_same_device)()
 
 
-def _test_tie_weight_in_same_device(dpg: DistributedProcessGroups):
+def _test_tie_weight_in_same_device(parallel_context: ParallelContext):
     model = nn.ModuleDict({"dense0": nn.Linear(10, 10, device="cuda"), "dense1": nn.Linear(10, 10, device="cuda")})
 
     # Tie weights/bias
     tie_parameters(
         root_module=model,
         ties=[("dense0.weight", (0,)), ("dense1.weight", (0,))],
-        dpg=dpg,
+        parallel_context=parallel_context,
         reduce_op=dist.ReduceOp.SUM,
     )
     tie_parameters(
-        root_module=model, ties=[("dense0.bias", (0,)), ("dense1.bias", (0,))], dpg=dpg, reduce_op=dist.ReduceOp.SUM
+        root_module=model,
+        ties=[("dense0.bias", (0,)), ("dense1.bias", (0,))],
+        parallel_context=parallel_context,
+        reduce_op=dist.ReduceOp.SUM,
     )
 
     weight0 = model.get_parameter("dense0.weight")
@@ -45,8 +48,8 @@ def test_tie_weight_in_different_device():
     init_distributed(tp=1, dp=1, pp=2)(_test_tie_weight_in_different_device)()
 
 
-def _test_tie_weight_in_different_device(dpg: DistributedProcessGroups):
-    if dist.get_rank(dpg.pp_pg) == 0:
+def _test_tie_weight_in_different_device(parallel_context: ParallelContext):
+    if dist.get_rank(parallel_context.pp_pg) == 0:
         model = nn.ModuleDict(
             {
                 "dense0": nn.Linear(10, 10, device="cuda"),
@@ -63,17 +66,20 @@ def _test_tie_weight_in_different_device(dpg: DistributedProcessGroups):
     tie_parameters(
         root_module=model,
         ties=[("dense0.weight", (0,)), ("dense1.weight", (1,))],
-        dpg=dpg,
+        parallel_context=parallel_context,
         reduce_op=dist.ReduceOp.SUM,
     )
     tie_parameters(
-        root_module=model, ties=[("dense0.bias", (0,)), ("dense1.bias", (1,))], dpg=dpg, reduce_op=dist.ReduceOp.SUM
+        root_module=model,
+        ties=[("dense0.bias", (0,)), ("dense1.bias", (1,))],
+        parallel_context=parallel_context,
+        reduce_op=dist.ReduceOp.SUM,
     )
 
-    group = dpg.world_ranks_to_pg[(0, 1)]
+    group = parallel_context.world_ranks_to_pg[(0, 1)]
 
     # Check that model weights are not in fact synchronized
-    if dist.get_rank(dpg.pp_pg) == 0:
+    if dist.get_rank(parallel_context.pp_pg) == 0:
         weight = model.dense0.weight
         bias = model.dense0.bias
     else:
@@ -98,7 +104,7 @@ def _test_tie_weight_in_different_device(dpg: DistributedProcessGroups):
         ).items(),
         key=lambda x: x[0],
     ):
-        group = dpg.world_ranks_to_pg[group_ranks]
+        group = parallel_context.world_ranks_to_pg[group_ranks]
         dist.all_reduce(param, op=dist.ReduceOp.AVG, group=group)
 
     # We check that we use the same parameter for both linear layers
@@ -110,8 +116,8 @@ def test_tie_weight_across_dp_is_impossible():
     init_distributed(tp=1, dp=2, pp=1)(_test_tie_weight_across_dp_is_impossible)()
 
 
-def _test_tie_weight_across_dp_is_impossible(dpg: DistributedProcessGroups):
-    if dist.get_rank(dpg.dp_pg) == 0:
+def _test_tie_weight_across_dp_is_impossible(parallel_context: ParallelContext):
+    if dist.get_rank(parallel_context.dp_pg) == 0:
         model = nn.ModuleDict(
             {
                 "dense0": nn.Linear(10, 10, device="cuda"),
@@ -129,14 +135,14 @@ def _test_tie_weight_across_dp_is_impossible(dpg: DistributedProcessGroups):
         tie_parameters(
             root_module=model,
             ties=[("dense0.weight", (0,)), ("dense1.weight", (1,))],
-            dpg=dpg,
+            parallel_context=parallel_context,
             reduce_op=dist.ReduceOp.SUM,
         )
     with assert_fail_with(AssertionError):
         tie_parameters(
             root_module=model,
             ties=[("dense0.bias", (0,)), ("dense1.bias", (1,))],
-            dpg=dpg,
+            parallel_context=parallel_context,
             reduce_op=dist.ReduceOp.SUM,
         )
 
@@ -145,8 +151,8 @@ def test_tie_weight_in_different_device_have_gradients_synchronized():
     init_distributed(tp=1, dp=1, pp=2)(_test_tie_weight_in_different_device_have_gradients_synchronized)()
 
 
-def _test_tie_weight_in_different_device_have_gradients_synchronized(dpg: DistributedProcessGroups):
-    if dist.get_rank(dpg.pp_pg) == 0:
+def _test_tie_weight_in_different_device_have_gradients_synchronized(parallel_context: ParallelContext):
+    if dist.get_rank(parallel_context.pp_pg) == 0:
         model = nn.ModuleDict(
             {
                 "dense0": nn.Linear(10, 10, device="cuda"),
@@ -163,17 +169,20 @@ def _test_tie_weight_in_different_device_have_gradients_synchronized(dpg: Distri
     tie_parameters(
         root_module=model,
         ties=[("dense0.weight", (0,)), ("dense1.weight", (1,))],
-        dpg=dpg,
+        parallel_context=parallel_context,
         reduce_op=dist.ReduceOp.SUM,
     )
     tie_parameters(
-        root_module=model, ties=[("dense0.bias", (0,)), ("dense1.bias", (1,))], dpg=dpg, reduce_op=dist.ReduceOp.SUM
+        root_module=model,
+        ties=[("dense0.bias", (0,)), ("dense1.bias", (1,))],
+        parallel_context=parallel_context,
+        reduce_op=dist.ReduceOp.SUM,
     )
 
-    group = dpg.world_ranks_to_pg[(0, 1)]
+    group = parallel_context.world_ranks_to_pg[(0, 1)]
 
     # Check that model weights are not in fact synchronized
-    if dist.get_rank(dpg.pp_pg) == 0:
+    if dist.get_rank(parallel_context.pp_pg) == 0:
         weight = model.dense0.weight
         bias = model.dense0.bias
     else:
@@ -192,7 +201,7 @@ def _test_tie_weight_in_different_device_have_gradients_synchronized(dpg: Distri
 
     # Compute gradient
     input_ = torch.randn(13, 10, device="cuda")
-    if dist.get_rank(dpg.pp_pg) == 0:
+    if dist.get_rank(parallel_context.pp_pg) == 0:
         out = model.dense0(input_)
     else:
         out = model.dense1(input_)
@@ -200,7 +209,7 @@ def _test_tie_weight_in_different_device_have_gradients_synchronized(dpg: Distri
 
     # sync gradients
     # TODO @thomasw21: This should be done in hooks
-    sync_tied_weights_gradients(model, dpg=dpg, grad_accumulator=None)
+    sync_tied_weights_gradients(model, parallel_context=parallel_context, grad_accumulator=None)
 
     # Check that we have gradient
     assert weight.grad is not None

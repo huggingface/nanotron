@@ -4,7 +4,7 @@ import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
 import torch.cuda
-from nanotron.core.process_groups import get_process_groups
+from nanotron.distributed import ParallelContext
 from torch.distributed.launcher import elastic_launch
 
 
@@ -72,14 +72,14 @@ class init_process_and_run_func:
 
     def __call__(self):
         with mock_os_environ(update_key_values={"WORLD_SIZE": f"{self.tp * self.dp * self.pp}"}):
-            dpg = get_process_groups(
+            parallel_context = ParallelContext(
                 data_parallel_size=self.dp,
                 pipeline_parallel_size=self.pp,
                 tensor_parallel_size=self.tp,
             )
 
-            assert "dpg" not in self.kwargs
-            self.kwargs["dpg"] = dpg
+            assert "parallel_context" not in self.kwargs
+            self.kwargs["parallel_context"] = parallel_context
 
             self.func(*self.args, **self.kwargs)
 
@@ -88,7 +88,7 @@ def init_distributed(tp: int, dp: int, pp: int):
     def _init_distributed(func):
         """Wrapper to help initialize distributed nanotron.
 
-        :param func: parallel function that runs on all the process, it requires one of its keyword argument to be "dpg"
+        :param func: parallel function that runs on all the process, it requires one of its keyword argument to be "parallel_context"
         """
         nb_gpus = tp * dp * pp
         run_id = uuid.uuid4()
