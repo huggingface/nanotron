@@ -1,7 +1,7 @@
 import dataclasses
 import math
 import warnings
-from typing import Dict, Generator, Iterator, List, Optional, Union
+from typing import Dict, Iterator, List, Optional, Union
 
 import numpy as np
 import torch
@@ -15,6 +15,7 @@ from nanotron.core.utils import (
     assert_fail_except_rank_with,
     assert_tensor_synced_across_pg,
 )
+from nanotron.models.fast.llama import LlamaModel
 from torch.utils.data import BatchSampler, DataLoader, Dataset
 from torch.utils.data.distributed import DistributedSampler
 
@@ -29,6 +30,76 @@ except ImportError:
 
 
 logger = logging.get_logger(__name__)
+
+
+class CombinedDataset(Dataset):
+    def __init__(self, datasets: List[Dataset]):
+        self.datasets = datasets
+        # Pdb().set_trace()
+        self.lengths = [len(d) for d in datasets]
+        self.offsets = np.cumsum([0] + self.lengths[:-1])
+
+    def __len__(self):
+        return sum(self.lengths)
+
+    def __getitem__(self, global_indices):
+        if isinstance(global_indices, list):
+            output = [self.get_sample(global_idx) for global_idx in global_indices]
+            # TODO(xrsrke): refactor this, make it fast
+            output = {key: [d[key] for d in output] for key in output[0]}
+            return output
+        else:
+            return self.get_sample(global_indices)
+
+    def get_sample(self, global_idx):
+        dataset_idx, local_idx = self.get_dataset_and_local_index(global_idx)
+        dataset = self.datasets[dataset_idx]
+        return {key: dataset[key][local_idx] for key in dataset.features}
+
+    def get_dataset_and_local_index(self, global_idx):
+        for i, offset in enumerate(self.offsets):
+            if global_idx < offset + self.lengths[i]:
+                return i, global_idx - offset
+
+        raise IndexError(f"Index out of range, global_idx={global_idx}")
+
+
+class DistributedSamplerForDoReMi(DistributedSampler):
+    def __init__(self, domain_weights: torch.Tensor, datasets: List[Dataset], batch_size: int, **kwargs):
+        super().__init__(datasets, **kwargs)
+        self.datasets = datasets
+        self.batch_size = batch_size
+        self.domain_weights = domain_weights / domain_weights.sum()  # Normalize domain weights
+        self.total_size = self._calculate_total_size()
+
+    def _calculate_total_size(self):
+        total_samples = sum(len(d) for d in self.datasets)
+        return math.ceil(total_samples / self.batch_size) * self.batch_size
+
+    def __iter__(self):
+        domain_indices = []
+
+        lengths = [len(d) for d in self.datasets]
+        offsets = np.cumsum([0] + lengths[:-1])
+
+        for i, dataset in enumerate(self.datasets):
+            dataset_partition_size = len(dataset) // self.num_replicas
+            dataset_partition_offsets = self.rank * dataset_partition_size
+            num_samples = int(dataset_partition_size * self.domain_weights[i].item())
+
+            local_indices = (
+                np.random.choice(dataset_partition_size, num_samples, replace=False) + dataset_partition_offsets
+            )
+            # NOTE: align the indicies across the combined dataset
+            global_indices = local_indices + offsets[i]
+            domain_indices.extend(global_indices)
+
+        np.random.shuffle(domain_indices)
+        domain_indices = domain_indices[: self.total_size]
+
+        # Yield indices in batches
+        for i in range(0, len(domain_indices), self.batch_size):
+            yield domain_indices[i : i + self.batch_size]
 
 
 def sanity_check_dataloader(
@@ -169,62 +240,62 @@ def _get_dataset_mix(dataset_dict: dict, splits: List[str] = None, seed=42) -> D
     return raw_datasets
 
 
-def dummy_infinite_data_generator(
-    micro_batch_size: int,
-    sequence_length: int,
-    input_pp_rank: int,
-    output_pp_rank: int,
-    vocab_size: int,
-    seed: int,
-    dpg: DistributedProcessGroups,
-):
-    def dummy_infinite_data_generator() -> Generator[Dict[str, Union[torch.Tensor, TensorPointer]], None, None]:
-        # Random generator
-        generator = torch.Generator(device="cuda")
-        # Make sure that TP are synced always
-        generator.manual_seed(seed * (1 + dist.get_rank(dpg.dp_pg)) * (1 + dist.get_rank(dpg.pp_pg)))
+# def dummy_infinite_data_generator(
+#     micro_batch_size: int,
+#     sequence_length: int,
+#     input_pp_rank: int,
+#     output_pp_rank: int,
+#     vocab_size: int,
+#     seed: int,
+#     dpg: DistributedProcessGroups,
+# ):
+#     def dummy_infinite_data_generator() -> Generator[Dict[str, Union[torch.Tensor, TensorPointer]], None, None]:
+#         # Random generator
+#         generator = torch.Generator(device="cuda")
+#         # Make sure that TP are synced always
+#         generator.manual_seed(seed * (1 + dist.get_rank(dpg.dp_pg)) * (1 + dist.get_rank(dpg.pp_pg)))
 
-        while True:
-            yield {
-                "input_ids": torch.randint(
-                    0,
-                    vocab_size,
-                    (micro_batch_size, sequence_length),
-                    dtype=torch.long,
-                    device="cuda",
-                    generator=generator,
-                )
-                if dist.get_rank(dpg.pp_pg) == input_pp_rank
-                else TensorPointer(group_rank=input_pp_rank),
-                "input_mask": torch.ones(
-                    micro_batch_size,
-                    sequence_length,
-                    dtype=torch.bool,
-                    device="cuda",
-                )
-                if dist.get_rank(dpg.pp_pg) == input_pp_rank
-                else TensorPointer(group_rank=input_pp_rank),
-                "label_ids": torch.randint(
-                    0,
-                    vocab_size,
-                    (micro_batch_size, sequence_length),
-                    dtype=torch.long,
-                    device="cuda",
-                    generator=generator,
-                )
-                if dist.get_rank(dpg.pp_pg) == output_pp_rank
-                else TensorPointer(group_rank=output_pp_rank),
-                "label_mask": torch.ones(
-                    micro_batch_size,
-                    sequence_length,
-                    dtype=torch.bool,
-                    device="cuda",
-                )
-                if dist.get_rank(dpg.pp_pg) == output_pp_rank
-                else TensorPointer(group_rank=output_pp_rank),
-            }
+#         while True:
+#             yield {
+#                 "input_ids": torch.randint(
+#                     0,
+#                     vocab_size,
+#                     (micro_batch_size, sequence_length),
+#                     dtype=torch.long,
+#                     device="cuda",
+#                     generator=generator,
+#                 )
+#                 if dist.get_rank(dpg.pp_pg) == input_pp_rank
+#                 else TensorPointer(group_rank=input_pp_rank),
+#                 "input_mask": torch.ones(
+#                     micro_batch_size,
+#                     sequence_length,
+#                     dtype=torch.bool,
+#                     device="cuda",
+#                 )
+#                 if dist.get_rank(dpg.pp_pg) == input_pp_rank
+#                 else TensorPointer(group_rank=input_pp_rank),
+#                 "label_ids": torch.randint(
+#                     0,
+#                     vocab_size,
+#                     (micro_batch_size, sequence_length),
+#                     dtype=torch.long,
+#                     device="cuda",
+#                     generator=generator,
+#                 )
+#                 if dist.get_rank(dpg.pp_pg) == output_pp_rank
+#                 else TensorPointer(group_rank=output_pp_rank),
+#                 "label_mask": torch.ones(
+#                     micro_batch_size,
+#                     sequence_length,
+#                     dtype=torch.bool,
+#                     device="cuda",
+#                 )
+#                 if dist.get_rank(dpg.pp_pg) == output_pp_rank
+#                 else TensorPointer(group_rank=output_pp_rank),
+#             }
 
-    return dummy_infinite_data_generator
+#     return dummy_infinite_data_generator
 
 
 # Adapted from https://github.com/huggingface/accelerate/blob/a73898027a211c3f6dc4460351b0ec246aa824aa/src/accelerate/data_loader.py#L781C1-L824C28
@@ -413,45 +484,6 @@ def _get_train_sampler(
             drop_last=drop_last,
         )
     else:
-
-        class DistributedSamplerForDoReMi(DistributedSampler):
-            def __init__(self, domain_weights: torch.Tensor, datasets: List[Dataset], batch_size: int, **kwargs):
-                super().__init__(datasets, **kwargs)
-                self.datasets = datasets
-                self.batch_size = batch_size
-                self.domain_weights = domain_weights / domain_weights.sum()  # Normalize domain weights
-                self.total_size = self._calculate_total_size()
-
-            def _calculate_total_size(self):
-                total_samples = sum(len(d) for d in self.datasets)
-                return math.ceil(total_samples / self.batch_size) * self.batch_size
-
-            def __iter__(self):
-                domain_indices = []
-
-                lengths = [len(d) for d in self.datasets]
-                offsets = np.cumsum([0] + lengths[:-1])
-
-                for i, dataset in enumerate(self.datasets):
-                    dataset_partition_size = len(dataset) // self.num_replicas
-                    dataset_partition_offsets = self.rank * dataset_partition_size
-                    num_samples = int(dataset_partition_size * self.domain_weights[i].item())
-
-                    local_indices = (
-                        np.random.choice(dataset_partition_size, num_samples, replace=False)
-                        + dataset_partition_offsets
-                    )
-                    # NOTE: align the indicies across the combined dataset
-                    global_indices = local_indices + offsets[i]
-                    domain_indices.extend(global_indices)
-
-                np.random.shuffle(domain_indices)
-                domain_indices = domain_indices[: self.total_size]
-
-                # Yield indices in batches
-                for i in range(0, len(domain_indices), self.batch_size):
-                    yield domain_indices[i : i + self.batch_size]
-
         sampler = DistributedSamplerForDoReMi(
             domain_weights,
             train_datasets,
@@ -471,6 +503,7 @@ def _get_train_sampler(
 # Adapted from https://github.com/huggingface/transformers/blob/47e1676255e5dd86b9541f734cd4f4bdcbb50f4a/src/transformers/trainer.py#L837
 def get_train_dataloader(
     domain_weights: torch.Tensor,
+    ref_model: LlamaModel,
     train_datasets: List[Dataset],
     sequence_length: int,
     dpg: DistributedProcessGroups,
@@ -536,57 +569,8 @@ def get_train_dataloader(
         consumed_train_samples=consumed_train_samples,
     )
 
-    class CombinedDataset(Dataset):
-        def __init__(self, datasets: List[Dataset]):
-            self.datasets = datasets
-            # Pdb().set_trace()
-            self.lengths = [len(d) for d in datasets]
-            self.offsets = np.cumsum([0] + self.lengths[:-1])
-
-        def __len__(self):
-            return sum(self.lengths)
-
-        def __getitem__(self, global_indices):
-            # Handle a list of global indices
-            if isinstance(global_indices, list):
-                output = [self.get_sample(global_idx) for global_idx in global_indices]
-                # TODO(xrsrke): refactor this, make it fast
-                output = {key: [d[key] for d in output] for key in output[0]}
-                return output
-            else:
-                # If a single index is provided, process it directly
-                return self.get_sample(global_indices)
-
-        def get_sample(self, global_idx):
-            # Identify the dataset corresponding to the global_idx and return the sample
-            # Pdb().set_trace()
-            dataset_idx, local_idx = self.get_dataset_and_local_index(global_idx)
-            # if (not isinstance(dataset_idx, int)) or (not isinstance(local_idx, int)):
-            #     assert 1 == 1
-            # TODO(xrsrke): don't fix the name
-            # return self.datasets[dataset_idx]["input_ids"][local_idx]
-            dataset = self.datasets[dataset_idx]
-            return {key: dataset[key][local_idx] for key in dataset.features}
-
-        def get_dataset_and_local_index(self, global_idx):
-            # Find the dataset index and local index for the given global index
-            for i, offset in enumerate(self.offsets):
-                if global_idx < offset + self.lengths[i]:
-                    return i, global_idx - offset
-
-            raise IndexError(f"Index out of range, global_idx={global_idx}")
-
     comebined_dataset = CombinedDataset(train_datasets)
-
-    # class DataLoaderForDoReMi(DataLoader):
-    #     def __init__(self, dataset, **kwargs):
-    #         super().__init__(dataset, **kwargs)
-    #         self.dataset = dataset
-
-    #     def __iter__(self):
-    #         # take t
-
-    return DataLoader(
+    dataloader = DataLoader(
         comebined_dataset,
         batch_size=micro_batch_size,
         sampler=train_sampler,
@@ -598,6 +582,71 @@ def get_train_dataloader(
         # TODO @thomasw21: I'm not sure but this doesn't seem to work at all.
         # pin_memory_device="cuda",
     )
+    return dataloader
+
+    # p2p = model.model.p2p  # uses dpg.pp_pg
+
+    # def _data_generator() -> Generator[Dict[str, Union[torch.Tensor, TensorPointer]], None, None]:
+    #     for batch in dataloader:
+    #         concatenated_batch = concatenated_inputs(batch)
+    #         concatenated_batch["concatenated_attention_mask"] = concatenated_batch["concatenated_attention_mask"].to(
+    #             torch.bool
+    #         )
+
+    #         # Compute reference logprobs
+    #         if ref_model_input_pp_rank <= dist.get_rank(dpg.pp_pg) <= ref_model_output_pp_rank:
+    #             with torch.no_grad():
+    #                 ref_logits = ref_model(
+    #                     concatenated_batch["concatenated_input_ids"],  # (chosen_bsz + rejected_bsz, sequence_length)
+    #                     concatenated_batch["concatenated_attention_mask"],
+    #                 ).to(
+    #                     torch.float32
+    #                 )  # (sequence_length, chosen_bsz + rejected_bsz, vocab_size)
+    #                 # ref_logits = ref_logits.transpose(
+    #                 #     0, 1
+    #                 # ).contiguous()  # [chosen_bsz + rejected_bsz, seq_length, vocab_size]
+    #                 # ref_logprobs = -sharded_cross_entropy(
+    #                 #     ref_logits,
+    #                 #     concatenated_batch["concatenated_labels"].contiguous(),
+    #                 #     group=dpg.tp_pg,
+    #                 #     dtype=torch.float,
+    #                 # )  # (chosen_bsz + rejected_bsz, sequence_length)
+    #                 # labels_mask = (
+    #                 #     concatenated_batch["concatenated_labels"] != -100
+    #                 # )  # [chosen_bsz + rejected_bsz, seq_length]
+    #                 # ref_logprobs = (ref_logprobs * labels_mask).sum(-1)  # [chosen_bsz + rejected_bsz]
+
+    #                 # p2p.send_tensors(tensors=[ref_logprobs], to_rank=model.loss.rank)
+    #         # elif dist.get_rank(dpg.pp_pg) == model.loss.rank:
+    #         #     ref_logprobs = p2p.recv_tensors(num_tensors=1, from_rank=ref_model_output_pp_rank)[0]
+
+    #         # # Index which separates chosen from rejected samples
+    #         # chosen_rejected_sep_idx = torch.tensor(batch["chosen_input_ids"].shape[0], device="cuda")
+
+    #         # o = {
+    #         #     "concatenated_input_ids": concatenated_batch[
+    #         #         "concatenated_input_ids"
+    #         #     ]  # [chosen_bsz + rejected_bsz, seq_length]
+    #         #     if dist.get_rank(dpg.pp_pg) == model_input_pp_rank
+    #         #     else TensorPointer(group_rank=model_input_pp_rank),
+    #         #     "concatenated_attention_mask": concatenated_batch[
+    #         #         "concatenated_attention_mask"
+    #         #     ]  # [chosen_bsz + rejected_bsz, seq_length]
+    #         #     if dist.get_rank(dpg.pp_pg) == model_input_pp_rank
+    #         #     else TensorPointer(group_rank=model_input_pp_rank),
+    #         #     "concatenated_labels": concatenated_batch[
+    #         #         "concatenated_labels"
+    #         #     ]  # [chosen_bsz + rejected_bsz, seq_length]
+    #         #     if dist.get_rank(dpg.pp_pg) == model_output_pp_rank
+    #         #     else TensorPointer(group_rank=model_output_pp_rank),
+    #         #     "ref_logprobs": ref_logprobs  # [chosen_bsz + rejected_bsz]
+    #         #     if dist.get_rank(dpg.pp_pg) == model.loss.rank
+    #         #     else TensorPointer(group_rank=model.loss.rank),
+    #         #     "chosen_rejected_sep_idx": chosen_rejected_sep_idx  # [1]
+    #         #     if dist.get_rank(dpg.pp_pg) == model.loss.rank
+    #         #     else TensorPointer(group_rank=model.loss.rank),
+    #         # }
+    #         # yield o
 
 
 def get_dataloader_worker_init(dp_rank: int):
