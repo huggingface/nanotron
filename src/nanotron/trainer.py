@@ -889,7 +889,7 @@ class DistributedTrainer:
         # Model make it DDP
         if make_ddp is True:
             # Check that the model has at least one grad. Necessary for DDP
-            check_model_has_grad(model=model, dpg=dpg)
+            check_model_has_grad(model=model, parallel_context=parallel_context)
             # TODO @thomasw21: DDP doesn't support broadcasting complex buffers (and we don't really need that broadcasting anyway)
             model = DistributedDataParallel(
                 model,
