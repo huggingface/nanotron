@@ -4,7 +4,7 @@ from typing import Any, Dict, Optional, Tuple
 import torch
 from nanotron.core import distributed as dist
 from nanotron.core import logging
-from nanotron.core.process_groups import DistributedProcessGroups
+from nanotron.distributed import ParallelContext
 from nanotron.models.base_model import NanotronModel
 from torch import nn
 
@@ -173,13 +173,13 @@ class NanotronParameter(nn.Parameter):
         )
 
 
-def check_model_has_grad(model: NanotronModel, dpg: DistributedProcessGroups):
+def check_model_has_grad(model: NanotronModel, parallel_context: ParallelContext):
     """Check that there's at least a parameter in current PP rank that has a gradient."""
     for param in model.parameters():
         if param.grad is not None:
             return True
     raise ValueError(
-        f"Can't use DDP because model in PP={dist.get_rank(dpg.pp_pg)} has no gradient. Consider increasing the number of layers of your model, or put a smaller PP size.\n"
+        f"Can't use DDP because model in PP={dist.get_rank(parallel_context.pp_pg)} has no gradient. Consider increasing the number of layers of your model, or put a smaller PP size.\n"
         f"Model: {model}"
     )
 
