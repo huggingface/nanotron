@@ -2,7 +2,7 @@ import datetime
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Union
+from typing import Optional, Union, Type
 
 import dacite
 import torch
@@ -96,7 +96,6 @@ class CheckpointsArgs:
     checkpoints_path: where to save the checkpoints
     checkpoint_interval: how often to save the checkpoints
     resume_checkpoint_path: if you want to load from a specific checkpoint path
-    s3: if you want to upload the checkpoints on s3
 
     """
 
@@ -104,7 +103,7 @@ class CheckpointsArgs:
     checkpoint_interval: int
     save_initial_state: Optional[bool] = False
     resume_checkpoint_path: Optional[Path] = None
-    checkpoints_path_is_shared_file_system: Optional[bool] = True
+    checkpoints_path_is_shared_file_system: Optional[bool] = False
 
     def __post_init__(self):
         if isinstance(self.checkpoints_path, str):
@@ -327,7 +326,7 @@ class Config:
     tokens: TokensArgs
     optimizer: OptimizerArgs
     data: DataArgs
-    profiler: Optional[ProfilerArgs] = None
+    profiler: Optional[ProfilerArgs]
 
     def __post_init__(self):
         # Some final sanity checks across separate arguments sections:
@@ -354,13 +353,13 @@ class Config:
             yaml.dump(config_dict, f)
 
         # Sanity test config can be reloaded
-        _ = get_config_from_file(file_path)
+        _ = get_config_from_file(file_path, config_class=self.__class__)
 
     def as_dict(self) -> dict:
         return serialize(self)
 
 
-def get_config_from_file(config_path: str) -> Config:
+def get_config_from_file(config_path: str, config_class: Optional[Type[Config]] = Config) -> Config:
     """Get a config objet from a file (python or YAML)
 
     Args:
@@ -376,7 +375,7 @@ def get_config_from_file(config_path: str) -> Config:
     # Make a nice dataclass from our yaml
     try:
         config = from_dict(
-            data_class=Config,
+            data_class=config_class,
             data=args,
             config=dacite.Config(
                 cast=[Path],
