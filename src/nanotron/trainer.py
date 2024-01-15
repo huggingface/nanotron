@@ -7,7 +7,7 @@ import time
 from dataclasses import asdict
 from pathlib import Path
 from pprint import pformat
-from typing import Callable, Dict, Iterable, Iterator, List, Optional, Tuple, Union
+from typing import Callable, Dict, Iterable, Iterator, List, Optional, Tuple, Union, Type
 
 import numpy as np
 import torch
@@ -106,9 +106,9 @@ THROUGHPUT_TENSOR_SIZE = 8e9  # 8GB
 
 # TODO @nouamane: add abstract class
 class DistributedTrainer:
-    def __init__(self, config_or_config_file: Union[Config, str]):
+    def __init__(self, config_or_config_file: Union[Config, str], config_class: Type[Config] = Config):
         super().__init__()
-        self.config = get_config_from_file(config_or_config_file)
+        self.config = get_config_from_file(config_or_config_file, config_class=config_class)
         self.model_config = self.config.model.model_config
 
         ########################################
