@@ -23,7 +23,7 @@ from nanotron.config import (
 from nanotron.core import distributed as dist
 from nanotron.core.clip_grads import clip_grad_norm
 from nanotron.core.parallel.data_parallelism.utils import sync_gradients_across_dp
-from nanotron.core.parallel.parameters import NanotronParameter, check_model_has_grad, sanity_check
+from nanotron.core.parallel.parameters import NanotronParameter, sanity_check
 from nanotron.core.parallel.pipeline_parallelism.block import PipelineBlock
 from nanotron.core.parallel.pipeline_parallelism.engine import (
     PipelineEngine,
@@ -65,7 +65,7 @@ from nanotron.models import NanotronModel
 from nanotron.serialize import (
     load_lr_scheduler,
     load_meta,
-    load_optimizer,
+    load_optimizer_topology_agnostic,
     load_weights,
     parse_ckpt_path,
     save,
@@ -210,8 +210,15 @@ class DistributedTrainer:
             model=self.model, optimizer_args=self.config.optimizer, parallel_context=self.parallel_context
         )
         if checkpoint_path is not None:
-            load_optimizer(
-                optimizer=self.optimizer, parallel_context=self.parallel_context, root_folder=checkpoint_path
+            # load_optimizer(
+            #     optimizer=self.optimizer, parallel_context=self.parallel_context, root_folder=checkpoint_path
+            # )
+            load_optimizer_topology_agnostic(
+                param_shard_metadata=self.param_shard_metadata,
+                model=self.model,
+                optimizer=self.optimizer,
+                parallel_context=self.parallel_context,
+                root_folder=checkpoint_path,
             )
 
         # Init learning rate scheduler
@@ -784,13 +791,16 @@ class DistributedTrainer:
         if checkpoint_path is not None:
             # Reload from a training checkpoint
             log_rank(f"Loading weights from {checkpoint_path}", logger=logger, level=logging.INFO, rank=0)
-            load_weights(model=normalized_model, parallel_context=self.parallel_context, root_folder=checkpoint_path)
+            # TODO(xrsrke): decouple load_weights, and load_optimizer
+            self.param_shard_metadata = load_weights(
+                model=normalized_model, parallel_context=self.parallel_context, root_folder=checkpoint_path
+            )
             reloaded_from_checkpoint = True
         if not reloaded_from_checkpoint:
             log_rank("No checkpoint path provided.", logger=logger, level=logging.INFO)
             if isinstance(self.config.model.init_method, ExistingCheckpointInit):
                 # Initialize model from an pretrained model checkpoint
-                load_weights(
+                self.param_shard_metadata = load_weights(
                     model=normalized_model,
                     parallel_context=self.parallel_context,
                     root_folder=self.config.model.init_method.path,
@@ -889,7 +899,7 @@ class DistributedTrainer:
         # Model make it DDP
         if make_ddp is True:
             # Check that the model has at least one grad. Necessary for DDP
-            check_model_has_grad(model=model, parallel_context=parallel_context)
+            # check_model_has_grad(model=model, parallel_context=parallel_context)
             # TODO @thomasw21: DDP doesn't support broadcasting complex buffers (and we don't really need that broadcasting anyway)
             model = DistributedDataParallel(
                 model,

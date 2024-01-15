@@ -13,6 +13,7 @@ from nanotron.logging import log_rank
 from nanotron.serialize.metadata import CheckpointMetadata, TensorMetadata, TensorMetadataV2, load_meta
 from nanotron.serialize.utils import (
     ObjectType,
+    extract_tp_pp_rank_from_shard_path,
     get_path,
     get_tp_and_pp_rank_and_size_from,
 )
@@ -37,6 +38,7 @@ def save_weights(model: nn.Module, parallel_context: ParallelContext, root_folde
     module_id_to_prefix[id(model)] = ""
 
     # We chunk everything by `tp_world_size` in order to make sure that we gather all the weights into a single device before saving it
+    # param_shard_metadata = {}
     for name, param_or_buffer in tqdm(model.state_dict().items(), desc="Saving weights"):
         # `state_dict` doesn't return a Param or a buffer, just a tensors which loses some metadata
         try:
@@ -72,6 +74,10 @@ def save_weights(model: nn.Module, parallel_context: ParallelContext, root_folde
                     local_global_slices_pairs=sharded_info.local_global_slices_pairs,
                     unsharded_shape=sharded_info.unsharded_shape,
                 ).to_str_dict()
+                # TODO(xrsrke): maybe decouple how we save weights from how we save optimizer states?
+                # we do this so that we don't have to load parameters again to get the metadata
+                # when do topology-agnostic optimizer states loading
+                # param_shard_metadata[name] = metadata
 
             else:
                 tp_and_pp_rank_and_size = None
@@ -91,6 +97,9 @@ def save_weights(model: nn.Module, parallel_context: ParallelContext, root_folde
                 raise e
         else:
             raise NotImplementedError("Parameters are required to be NanotronParameter")
+
+    # TODO(xrsrke): don't hardcode the optimizer path
+    # torch.save(param_shard_metadata, root_folder.parent / "optimizer/param_shard_metadata.pt")
 
 
 class CheckpointVersionFromShardFileException(Exception):
@@ -159,15 +168,23 @@ def load_sharded_param_w_metadataclass(
     param_or_buffer: torch.Tensor,
     sharded_info: ShardedInfo,
     shards_path: List[Path],
+    param_shard_metadata,
 ):
     checkpoint_unsharded_shape = None
     shards_and_slices_maps: List[Tuple[torch.Tensor, Tuple[SlicesPair, ...]]] = []
+
     for shard_path in shards_path:
         with safe_open(shard_path, framework="pt", device=str(param_or_buffer.device)) as fi:
             # TODO @thomasw21: Choose only a slice if we switch the TP topology
             param_metadata = fi.metadata()
             param_metadata = meta_dataclass.from_str_dict(param_metadata)
             shards_and_slices_maps.append((fi.get_tensor("data"), param_metadata.local_global_slices_pairs))
+
+            # NOTE: for optimizer state loading
+            # TODO(xrsrke): save tp rank, and pp rank along with metadata
+            pp_rank, tp_rank = extract_tp_pp_rank_from_shard_path(shard_path)
+            param_shard_metadata[(pp_rank, tp_rank)] = param_metadata
+
             if checkpoint_unsharded_shape is None:
                 checkpoint_unsharded_shape = param_metadata.unsharded_shape
             else:
@@ -198,12 +215,15 @@ def load_sharded_param_v1_1(param_or_buffer: torch.Tensor, sharded_info: Sharded
     )
 
 
-def load_sharded_param_latest(param_or_buffer: torch.Tensor, sharded_info: ShardedInfo, shards_path: List[Path]):
+def load_sharded_param_latest(
+    param_or_buffer: torch.Tensor, sharded_info: ShardedInfo, shards_path: List[Path], param_shard_metadata
+):
     load_sharded_param_w_metadataclass(
         meta_dataclass=TensorMetadataV2,
         param_or_buffer=param_or_buffer,
         sharded_info=sharded_info,
         shards_path=shards_path,
+        param_shard_metadata=param_shard_metadata,
     )
 
 
@@ -230,9 +250,11 @@ def load_weights(
     checkpoint_version: Optional[Version] = None
 
     filtered_state_dict = filtered_state_dict if filtered_state_dict is not None else model.state_dict()
+    param_shard_metadata = {}
     for name, param_or_buffer in tqdm(
         filtered_state_dict.items(), disable=dist.get_rank(parallel_context.world_pg) != 0, desc="Loading weights"
     ):
+        param_shard_metadata[name] = {}
         # `state_dict` doesn't return a Param or a buffer, just a tensors which loses some metadata
         try:
             param = model.get_parameter(name)
@@ -323,13 +345,18 @@ def load_weights(
                     )
                 elif checkpoint_version <= CHECKPOINT_VERSION:
                     load_sharded_param_latest(
-                        param_or_buffer=param_or_buffer, sharded_info=sharded_info, shards_path=shards_path
+                        param_or_buffer=param_or_buffer,
+                        sharded_info=sharded_info,
+                        shards_path=shards_path,
+                        param_shard_metadata=param_shard_metadata[name],
                     )
                 else:
                     raise ValueError(f"Unsupported checkpoint version {checkpoint_version}")
 
         else:
             raise NotImplementedError(f"Parameters {param} should be a NanotronParameter")
+
+    return param_shard_metadata
 
 
 def get_checkpoint_paths_list(

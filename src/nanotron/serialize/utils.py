@@ -1,4 +1,5 @@
 from enum import Enum
+from pathlib import Path
 from typing import List, Optional, Tuple
 
 from nanotron.distributed import ParallelContext
@@ -37,3 +38,12 @@ def get_path(
 
     suffix_path.append(suffix_name)
     return suffix_path
+
+
+def extract_tp_pp_rank_from_shard_path(shard_path: Path):
+    import re
+
+    pattern = r"pp-rank-(\d+)-of-\d+_tp-rank-(\d+)-of-\d+"
+    match = re.search(pattern, str(shard_path))
+    pp_rank, tp_rank = match.groups()
+    return pp_rank, tp_rank

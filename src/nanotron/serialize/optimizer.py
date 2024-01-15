@@ -6,9 +6,13 @@ import torch
 from nanotron.core import distributed as dist
 from nanotron.core import optim as optim
 from nanotron.distributed import ParallelContext
+from nanotron.serialize.metadata import load_meta
 from nanotron.serialize.utils import ObjectType
+from torch import nn
+from tqdm import tqdm
 
 
+# TODO(xrsrke): take rank instead of parallel_context
 def optimizer_filename(parallel_context: ParallelContext, is_zero: bool):
     if is_zero is True:
         return f"{ObjectType.OPTIMIZER.value}_pp-{dist.get_rank(parallel_context.pp_pg)}-of-{parallel_context.pp_pg.size()}_dp-{dist.get_rank(parallel_context.dp_pg)}-of-{parallel_context.dp_pg.size()}_tp-{dist.get_rank(parallel_context.tp_pg)}-of-{parallel_context.tp_pg.size()}.pt"
@@ -87,6 +91,191 @@ def load_optimizer(
         / optimizer_filename(parallel_context, is_zero=optimizer.inherit_from(optim.ZeroDistributedOptimizer)),
         map_location=map_location,
     )
+    optimizer.load_state_dict(state_dict)
+
+
+def load_optimizer_topology_agnostic(
+    # TODO(xrsrke): add typing
+    param_shard_metadata,
+    model: nn.Module,
+    optimizer: optim.BaseOptimizer,
+    parallel_context: ParallelContext,
+    root_folder: Path,
+    map_location: Optional[str] = None,
+):
+    checkpoint_metadata = load_meta(parallel_context=parallel_context, root_folder=root_folder)
+    root_folder = root_folder / "optimizer"
+    # `load_state_dict` copies the state dict which can be very large in case of Zero-0 so we load to cpu and then move to the right device
+    map_location = "cpu" if not optimizer.inherit_from(optim.ZeroDistributedOptimizer) else map_location
+
+    # NOTE: for OptimizerFromGradientAccumulator only
+    if checkpoint_metadata.tp == parallel_context.tp_pg.size():
+        # TODO @thomasw21: Load optimizer type and check that it's compatible otherwise we might be be loading something else completely
+        state_dict = torch.load(
+            root_folder
+            / optimizer_filename(parallel_context, is_zero=optimizer.inherit_from(optim.ZeroDistributedOptimizer)),
+            map_location=map_location,
+        )
+    else:
+        from nanotron.core.parallel.parameters import NanotronParameter
+
+        # tp_rank = dist.get_rank(parallel_context.tp_pg)
+        # pp_rank = dist.get_rank(parallel_context.pp_pg)
+        # pp_size = parallel_context.pp_pg.size()
+        # tp_size = parallel_context.tp_pg.size()
+
+        # checkpoint_name = f"{ObjectType.OPTIMIZER.value}_pp-{pp_rank}-of-{pp_size}_tp-{tp_rank}-of-{tp_size}.pt"
+        # state_dict = torch.load(
+        #     root_folder
+        #     / checkpoint_name,
+        #     map_location=map_location,
+        # )
+
+        # param_shard_metadata = torch.load(root_folder / "param_shard_metadata.pt", map_location=map_location)
+        # def get_shard_metadata_of_params(param_name):
+        #     # for shard_path in shards_path:
+        #     #     with safe_open(shard_path, framework="pt", device=str(param_or_buffer.device)) as fi:
+        #     #         # TODO @thomasw21: Choose only a slice if we switch the TP topology
+        #     #         param_metadata = fi.metadata()
+        #     #         param_metadata = meta_dataclass.from_str_dict(param_metadata)
+        #     #         shards_and_slices_maps.append((fi.get_tensor("data"), param_metadata.local_global_slices_pairs))
+        #     #         if checkpoint_unsharded_shape is None:
+        #     #             checkpoint_unsharded_shape = param_metadata.unsharded_shape
+        #     #         else:
+        #     #             assert checkpoint_unsharded_shape == param_metadata.unsharded_shape
+        #     return param_shard_metadata[param_name]
+
+        # assert 1 == 1
+
+        # # TODO(xrsrke): remove this
+        # def get_optimizer_checkpoint_filename(tp_rank: int, tp_world_size: int, pp_rank: int, pp_world_size: int, is_zero: bool):
+        #     # TODO(xrsrke): support zero-1
+        #     return f"{ObjectType.OPTIMIZER.value}_pp-{pp_rank}-of-{pp_world_size}_tp-{tp_rank}-of-{tp_world_size}.pt"
+
+        # optim_state_dict = torch.load(
+        #     root_folder
+        #     / get_optimizer_checkpoint_filename(parallel_context, is_zero=optimizer.inherit_from(optim.ZeroDistributedOptimizer)),
+        #     map_location=map_location,
+        # )
+
+        new_optim_state_dict = optimizer.state_dict()
+
+        # TODO(xrsrke): make seria always save pp size even it's 1
+        checkpoint_pp_size = getattr(checkpoint_metadata, "pp", 1)
+        checkpoint_tp_size = checkpoint_metadata.tp
+        shard_paths = list(
+            root_folder.glob(
+                f"{ObjectType.OPTIMIZER.value}_pp-*-of-{checkpoint_pp_size}_tp-*-of-{checkpoint_tp_size}.pt"
+            )
+        )
+
+        assert 1 == 1
+        # unsharded_optim_states = torch.empty(checkpoint_unsharded_shape, device=param_or_buffer.device)
+
+        # NOTE: load checkpoint from a different tensor parallel size
+        # NOTE: gather the full optimizer states for each parameter
+        # and take the local
+        def extract_tp_pp_rank_from_shard_path(shard_path: Path):
+            import re
+
+            # TODO(xrsrke): use the same pattern as weight checkpoints
+            # in weight checkpoints, we do pp-rank-.... but here we only do pp-...
+            pattern = r"pp-(\d+)-of-\d+_tp-(\d+)-of-\d+"
+            match = re.search(pattern, str(shard_path))
+            pp_rank, tp_rank = match.groups()
+            return pp_rank, tp_rank
+
+        ckp_sharded_optim_states = {}
+        for shard_path in shard_paths:
+            pp_rank, tp_rank = extract_tp_pp_rank_from_shard_path(shard_path)
+            ckp_sharded_optim_states[(pp_rank, tp_rank)] = torch.load(shard_path, map_location=map_location)
+
+        def find_optim_index_from_param_name(param_name):
+            param_name = param_name.replace("module.", "")
+            OPTIM_STATE_INDEX_TO_PARAM_NAME = ckp_sharded_optim_states[("0", "0")]["names"]
+            return next((k for k, v in OPTIM_STATE_INDEX_TO_PARAM_NAME.items() if v == param_name), None)
+
+        def get_shared_optim_state(param_name):
+            pass
+
+        model_state_dict = model.state_dict()
+        for name, param_or_buffer in tqdm(
+            model_state_dict.items(),
+            disable=dist.get_rank(parallel_context.world_pg) != 0,
+            desc="Merging and sharding optimizer states",
+        ):
+            try:
+                param = model.get_parameter(name)
+            except AttributeError:
+                param = None
+
+            def get_checkpoint_state_metadata(param_name, pp_rank, tp_rank):
+                return param_shard_metadata[param_name.replace("module.", "")][(str(pp_rank), str(tp_rank))]
+
+            if isinstance(param, NanotronParameter):
+                if param.is_sharded:
+                    # NOTE: optimizer states's shape is equal to the parameter's shape
+                    # NOTE: sometines an unsharded parameter's shape differ
+                    # from an unsharded optimizer state's shape
+                    sharded_info = param.get_sharded_info()
+                    unshared_shape = sharded_info.unsharded_shape
+
+                    # NOTE: merging optimizer states
+                    for (pp_rank, tp_rank), ckp_optim_state in ckp_sharded_optim_states.items():
+                        optim_state_index = find_optim_index_from_param_name(name)
+                        new_optim_state_dict["state"][optim_state_index] = {}
+                        state_keys = ["exp_avg", "exp_avg_sq"]
+
+                        for state_key in state_keys:
+                            print(f"param_name: {name}, state_key: {state_key}")
+                            unsharded_state = torch.empty(unshared_shape, device=param_or_buffer.device)
+                            new_optim_state_dict["state"][optim_state_index][state_key] = torch.empty_like(param)
+
+                            ckp_data = ckp_optim_state["state"][optim_state_index][state_key]
+                            # TODO(xrsrke): convert pp_rank, tp_rank to ingeter when saving
+                            # these metadata
+                            # NOTE: find how does this state initially sharded
+                            # shard_metadata = param_shard_metadata[name.replace("module.", "")][(str(pp_rank), str(tp_rank))]
+                            ckp_shard_metadata = get_checkpoint_state_metadata(name, pp_rank, tp_rank)
+                            # TODO(xrsrke): we don't extract global_slice based on tp_rank?
+                            ckp_shard_metadata.local_global_slices_pairs[0].global_slices[0]
+
+                            # if name == "module.model.decoder.0.pp_block.attn.qkv_proj.weight":
+                            #     # NOTE: unshared_shape=(48, 16)
+                            #     assert 1 == 1
+                            #     for slices_pair in ckp_shard_metadata.local_global_slices_pairs:
+                            #         local_slices = slices_pair.local_slices
+                            #         global_slices = slices_pair.global_slices
+                            #         unsharded_state[global_slices] = ckp_data[local_slices]
+
+                            #     assert 1 == 1
+
+                            # unsharded_state[checkpoint_global_slice] = ckp_data
+                            for slices_pair in ckp_shard_metadata.local_global_slices_pairs:
+                                local_slices = slices_pair.local_slices
+                                global_slices = slices_pair.global_slices
+                                unsharded_state[global_slices] = ckp_data[local_slices]
+
+                            # NOTE: assign the new sharded optimizer states
+                            assert 1 == 1
+                            # new_slice = sharded_info.local_global_slices_pairs[0].global_slices[0]
+                            # new_optim_state_dict["state"][optim_state_index][state_key] = unsharded_state[new_slice]
+                            for slices_pair in sharded_info.local_global_slices_pairs:
+                                local_slices = slices_pair.local_slices
+                                global_slices = slices_pair.global_slices
+                                new_optim_state_dict["state"][optim_state_index][state_key] = unsharded_state[
+                                    global_slices
+                                ]
+
+                    # create an buffer for unshared optimizer states
+                    # load all optimizer states of this parameter
+                    # gather all optimizer states of this parameter
+                    # shard the gathered optimizer states
+
+        assert 1 == 1
+
+    # TODO(xrsrke): For ZeRO-1
+
     optimizer.load_state_dict(state_dict)
 
 
