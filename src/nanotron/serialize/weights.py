@@ -74,10 +74,6 @@ def save_weights(model: nn.Module, parallel_context: ParallelContext, root_folde
                     local_global_slices_pairs=sharded_info.local_global_slices_pairs,
                     unsharded_shape=sharded_info.unsharded_shape,
                 ).to_str_dict()
-                # TODO(xrsrke): maybe decouple how we save weights from how we save optimizer states?
-                # we do this so that we don't have to load parameters again to get the metadata
-                # when do topology-agnostic optimizer states loading
-                # param_shard_metadata[name] = metadata
 
             else:
                 tp_and_pp_rank_and_size = None
@@ -97,9 +93,6 @@ def save_weights(model: nn.Module, parallel_context: ParallelContext, root_folde
                 raise e
         else:
             raise NotImplementedError("Parameters are required to be NanotronParameter")
-
-    # TODO(xrsrke): don't hardcode the optimizer path
-    # torch.save(param_shard_metadata, root_folder.parent / "optimizer/param_shard_metadata.pt")
 
 
 class CheckpointVersionFromShardFileException(Exception):
