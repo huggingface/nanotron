@@ -32,7 +32,7 @@ from typing import List, Optional, Union
 
 from torch import distributed as torch_dist
 
-from nanotron.core import distributed as dist
+from nanotron import distributed as dist
 
 log_levels = {
     "debug": DEBUG,

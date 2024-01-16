@@ -2,7 +2,7 @@ from typing import Iterable, Optional, Tuple
 
 import torch
 
-import nanotron.core.distributed as dist
+import nanotron.distributed as dist
 from nanotron import logging
 from nanotron.core.gradient_accumulator import GradientAccumulator
 from nanotron.core.parallel.parameters import NanotronParameter

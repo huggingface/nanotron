@@ -21,8 +21,8 @@ from typing import Dict, Optional, Tuple, Union
 import torch
 from flash_attn.flash_attn_interface import flash_attn_varlen_func
 from nanotron.config import ParallelismArgs, RecomputeGranularity
-from nanotron.core import distributed as dist
-from nanotron.core.distributed import get_global_rank
+from nanotron import distributed as dist
+from nanotron.distributed import get_global_rank
 from nanotron.core.parallel.parameters import NanotronParameter
 from nanotron.core.parallel.pipeline_parallelism.block import PipelineBlock
 from nanotron.core.parallel.pipeline_parallelism.p2p import P2P
@@ -39,7 +39,7 @@ from nanotron.core.parallel.tied_parameters import create_tied_parameter
 from nanotron.core.random import RandomStates, branch_random_state
 from nanotron.core.utils import checkpoint_method
 from nanotron.distributed import ParallelContext
-from nanotron.fused.layer_norm import TritonLayerNorm
+from nanotron.core.fused.layer_norm import TritonLayerNorm
 from nanotron.models import AttachableStore, NanotronModel
 from torch import nn
 from torch.nn import LayerNorm, init

@@ -24,9 +24,9 @@ from flash_attn.flash_attn_interface import (
 )
 from flash_attn.layers.rotary import RotaryEmbedding as FlashRotaryEmbedding
 from nanotron.config import ParallelismArgs, RecomputeGranularity
-from nanotron.core import distributed as dist
-from nanotron.core import logging
-from nanotron.core.logging import log_rank
+from nanotron import distributed as dist
+from nanotron import logging
+from nanotron.logging import log_rank
 from nanotron.core.parallel.parameters import NanotronParameter
 from nanotron.core.parallel.pipeline_parallelism.block import (
     PipelineBlock,
@@ -43,7 +43,7 @@ from nanotron.core.parallel.tensor_parallelism.nn import (
 from nanotron.core.random import RandomStates
 from nanotron.core.utils import checkpoint_method
 from nanotron.distributed import ParallelContext
-from nanotron.fused.layer_norm import TritonRMSNorm
+from nanotron.core.fused.layer_norm import TritonRMSNorm
 from nanotron.models import AttachableStore, NanotronModel
 from torch import nn
 from transformers import LlamaConfig

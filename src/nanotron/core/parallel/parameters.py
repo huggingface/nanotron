@@ -2,8 +2,8 @@ import dataclasses
 from typing import Any, Dict, Optional, Tuple
 
 import torch
-from nanotron.core import distributed as dist
-from nanotron.core import logging
+from nanotron import distributed as dist
+from nanotron import logging
 from nanotron.distributed import ParallelContext
 from nanotron.models.base_model import NanotronModel
 from torch import nn

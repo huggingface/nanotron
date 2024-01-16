@@ -6,8 +6,8 @@ from typing import Generator, Iterable, List, Optional, Tuple, Union
 import torch
 from nanotron import logging
 from nanotron.config import BenchArgs, GenerationArgs
-from nanotron.core import distributed as dist
-from nanotron.core.distributed import ProcessGroup, get_global_rank
+from nanotron import distributed as dist
+from nanotron.distributed import ProcessGroup, get_global_rank
 from nanotron.core.parallel.pipeline_parallelism.block import get_min_max_rank
 from nanotron.core.parallel.pipeline_parallelism.context_manager import attach_pipeline_state_to_model
 from nanotron.core.parallel.pipeline_parallelism.p2p import P2P, TensorMetaData, view_as_contiguous

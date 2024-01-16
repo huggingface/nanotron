@@ -9,8 +9,8 @@ from packaging import version
 from torch import nn
 from torch.utils.checkpoint import checkpoint
 
-from nanotron.core import distributed as dist
-from nanotron.core.distributed import get_global_rank
+from nanotron import distributed as dist
+from nanotron.distributed import get_global_rank
 
 
 class ContextManagers:

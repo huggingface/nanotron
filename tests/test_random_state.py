@@ -1,7 +1,7 @@
 import pytest
 import torch
 from helpers.utils import available_gpus, init_distributed
-from nanotron.core import distributed as dist
+from nanotron import distributed as dist
 from nanotron.core.random import (
     RandomStates,
     branch_random_state,

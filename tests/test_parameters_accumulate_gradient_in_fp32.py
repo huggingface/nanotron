@@ -1,6 +1,6 @@
 import copy
 
-import nanotron.core.distributed as dist
+import nanotron.distributed as dist
 import pytest
 import torch
 from helpers.dummy import DummyModel, dummy_infinite_data_loader

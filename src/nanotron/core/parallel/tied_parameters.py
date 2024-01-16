@@ -1,10 +1,10 @@
 from collections import OrderedDict
 from typing import Dict, List, Optional, Tuple
 
-from nanotron.core import distributed as dist
-from nanotron.core import logging
+from nanotron import logging
+from nanotron.logging import log_rank
+from nanotron import distributed as dist
 from nanotron.core.gradient_accumulator import GradientAccumulator
-from nanotron.core.logging import log_rank
 from nanotron.core.parallel.parameters import NanotronParameter
 from nanotron.core.utils import get_parameter_and_parent_module
 from nanotron.distributed import ParallelContext

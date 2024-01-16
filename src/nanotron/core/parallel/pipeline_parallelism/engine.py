@@ -2,11 +2,11 @@ from abc import ABC, abstractmethod
 from typing import Dict, Iterable, Optional, Union
 
 import torch
-from nanotron.core import distributed as dist
-from nanotron.core import logging
-from nanotron.core.distributed import ProcessGroup
+from nanotron import distributed as dist
+from nanotron import logging
+from nanotron.distributed import ProcessGroup
 from nanotron.core.gradient_accumulator import GradientAccumulator
-from nanotron.core.logging import log_rank
+from nanotron.logging import log_rank
 from nanotron.core.parallel.data_parallelism.utils import ddp_trigger_sync_in_bwd
 from nanotron.core.parallel.pipeline_parallelism.context_manager import attach_pipeline_state_to_model
 from nanotron.core.parallel.pipeline_parallelism.state import PipelineTrainBatchState

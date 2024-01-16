@@ -13,7 +13,7 @@ from nanotron import logging
 from nanotron.config import (
     PretrainDatasetsArgs,
 )
-from nanotron.core import distributed as dist
+from nanotron import distributed as dist
 from nanotron.core.utils import (
     main_rank_first,
 )

@@ -4,7 +4,7 @@ from typing import List, Optional, Tuple
 import numpy as np
 from torch import nn
 
-from nanotron.core import distributed as dist
+from nanotron import distributed as dist
 from nanotron.core.parallel.parameters import NanotronParameter, SlicesPair
 
 

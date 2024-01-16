@@ -1,7 +1,7 @@
 from typing import Any, Callable, Dict, Optional, Set, Tuple, Union
 
 import torch
-from nanotron.core import distributed as dist
+from nanotron import distributed as dist
 from nanotron.core.parallel.pipeline_parallelism.functional import (
     recv_from_pipeline_state_buffer,
     send_to_pipeline_state_buffer,

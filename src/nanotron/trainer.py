@@ -19,7 +19,7 @@ from nanotron.config import (
     RandomInit,
     get_config_from_file,
 )
-from nanotron.core import distributed as dist
+from nanotron import distributed as dist
 from nanotron.core.clip_grads import clip_grad_norm
 from nanotron.core.parallel.data_parallelism.utils import sync_gradients_across_dp
 from nanotron.core.parallel.parameters import NanotronParameter, check_model_has_grad, sanity_check

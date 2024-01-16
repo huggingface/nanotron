@@ -20,8 +20,8 @@ from pathlib import Path
 
 import torch
 from nanotron import logging
+from nanotron import distributed as dist
 from nanotron.config import GenerationArgs, LoggingArgs, ParallelismArgs, get_config_from_file
-from nanotron.core import distributed as dist
 from nanotron.core.parallel.parameters import sanity_check
 from nanotron.core.parallel.pipeline_parallelism.engine import (
     OneForwardOneBackwardPipelineEngine,

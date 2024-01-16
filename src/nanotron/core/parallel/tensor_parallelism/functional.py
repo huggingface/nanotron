@@ -18,7 +18,7 @@ from typing import Optional
 import torch
 from torch.nn import functional as F
 
-import nanotron.core.distributed as dist
+import nanotron.distributed as dist
 from nanotron.core.parallel.tensor_parallelism.distributed_differentiable_primitives import (
     differentiable_all_gather,
     differentiable_all_reduce_sum,

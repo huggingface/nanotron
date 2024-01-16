@@ -6,7 +6,7 @@ from helpers.distributed_tensor import assert_tensor_equal_over_group
 from helpers.dummy import dummy_infinite_data_loader, init_dummy_model
 from helpers.exception import assert_fail_with
 from helpers.utils import available_gpus, init_distributed
-from nanotron.core import distributed as dist
+from nanotron import distributed as dist
 from nanotron.core.optim import NamedOptimizer, ZeroDistributedOptimizer
 from nanotron.core.optim.zero import SlicedFlatTensor
 from nanotron.core.parallel.data_parallelism.utils import sync_gradients_across_dp

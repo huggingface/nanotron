@@ -17,8 +17,8 @@ from typing import Optional
 import torch
 from torch import distributed as torch_dist
 
-from nanotron.core import distributed as dist
-from nanotron.core.distributed import ProcessGroup
+from nanotron import distributed as dist
+from nanotron.distributed import ProcessGroup
 
 
 class DifferentiableIdentity(torch.autograd.Function):

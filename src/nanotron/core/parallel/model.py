@@ -1,4 +1,4 @@
-from nanotron.core import distributed as dist
+from nanotron import distributed as dist
 from nanotron.core.parallel.tied_parameters import get_tied_id_to_param
 from nanotron.distributed import ParallelContext
 from torch import nn

@@ -1,9 +1,9 @@
 from abc import ABCMeta, abstractmethod
 from typing import Optional
 
-from nanotron.core import logging
-from nanotron.core.distributed import ProcessGroup
-from nanotron.core.logging import log_rank
+from nanotron import logging
+from nanotron.distributed import ProcessGroup
+from nanotron.logging import log_rank
 from nanotron.core.parallel.pipeline_parallelism.block import PipelineBlock
 from nanotron.distributed import ParallelContext
 from torch import nn

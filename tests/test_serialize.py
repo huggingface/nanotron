@@ -9,7 +9,7 @@ from helpers.utils import (
     is_dict_equal,
 )
 from nanotron.constants import CHECKPOINT_VERSION
-from nanotron.core import distributed as dist
+from nanotron import distributed as dist
 from nanotron.core.gradient_accumulator import FP32GradientAccumulator
 from nanotron.core.optim.named_optimizer import NamedOptimizer
 from nanotron.core.optim.optimizer_from_gradient_accumulator import (

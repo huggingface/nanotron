@@ -5,8 +5,8 @@ from typing import MutableMapping, Optional, Tuple
 
 import numpy as np
 import torch
-from nanotron.core import distributed as dist
-from nanotron.core.distributed import ProcessGroup
+from nanotron import distributed as dist
+from nanotron.distributed import ProcessGroup
 
 
 @dataclass

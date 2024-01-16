@@ -5,10 +5,10 @@ import numpy as np
 import torch.optim
 from functorch.dim import tree_map
 
-from nanotron.core import distributed as dist
-from nanotron.core import logging
-from nanotron.core.distributed import ProcessGroup
-from nanotron.core.logging import log_rank, warn_once
+from nanotron import distributed as dist
+from nanotron import logging
+from nanotron.distributed import ProcessGroup
+from nanotron.logging import log_rank, warn_once
 from nanotron.core.optim.base import BaseOptimizer
 from nanotron.core.optim.inherit_from_other_optimizer import InheritFromOtherOptimizer
 from nanotron.core.parallel.parameters import NanotronParameter

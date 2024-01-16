@@ -19,8 +19,8 @@ from nanotron.config import (
     OptimizerArgs,
     ParallelismArgs,
 )
-from nanotron.core import distributed as dist
-from nanotron.core.distributed import ProcessGroup
+from nanotron import distributed as dist
+from nanotron.distributed import ProcessGroup
 from nanotron.core.gradient_accumulator import (
     FP32GradBucketManager,
     FP32GradientAccumulator,

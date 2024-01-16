@@ -22,8 +22,8 @@ from typing import Dict, Optional, Union
 
 import torch
 from nanotron.config import FalconConfig, ParallelismArgs, RecomputeGranularity
-from nanotron.core import distributed as dist
-from nanotron.core import logging
+from nanotron import distributed as dist
+from nanotron import logging
 from nanotron.core.parallel.parameters import NanotronParameter
 from nanotron.core.parallel.pipeline_parallelism.block import PipelineBlock, TensorPointer
 from nanotron.core.parallel.pipeline_parallelism.p2p import P2P

@@ -2,7 +2,7 @@ from math import ceil
 from typing import Union
 
 import torch
-from nanotron.core import distributed as dist
+from nanotron import distributed as dist
 from nanotron.core.optim.base import BaseOptimizer
 from nanotron.core.optim.named_optimizer import NamedOptimizer
 from nanotron.core.parallel.model import initial_sync

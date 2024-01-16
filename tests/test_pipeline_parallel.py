@@ -4,7 +4,7 @@ import pytest
 import torch
 from helpers.dummy import DummyModel, dummy_infinite_data_loader
 from helpers.utils import available_gpus, init_distributed
-from nanotron.core import distributed as dist
+from nanotron import distributed as dist
 from nanotron.core.parallel.pipeline_parallelism.block import PipelineBlock
 from nanotron.core.parallel.pipeline_parallelism.engine import (
     AllForwardAllBackwardPipelineEngine,

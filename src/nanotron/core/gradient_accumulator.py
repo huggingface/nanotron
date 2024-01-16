@@ -7,7 +7,7 @@ from typing import Callable, Dict, Iterator, Optional, Tuple
 import torch
 from torch.distributed import GradBucket
 
-import nanotron.core.distributed as dist
+import nanotron.distributed as dist
 from nanotron import logging
 from nanotron.core.parallel.parameters import NanotronParameter
 from nanotron.core.tensor_init import tensor_from_untyped_storage

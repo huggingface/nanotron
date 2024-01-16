@@ -20,8 +20,8 @@ from typing import Dict, Optional, Tuple, Union
 
 import torch
 from nanotron.config import ParallelismArgs, RecomputeGranularity
-from nanotron.core import distributed as dist
-from nanotron.core.distributed import get_global_rank
+from nanotron import distributed as dist
+from nanotron.distributed import get_global_rank
 from nanotron.core.parallel.parameters import NanotronParameter
 from nanotron.core.parallel.pipeline_parallelism.block import PipelineBlock
 from nanotron.core.parallel.pipeline_parallelism.p2p import P2P

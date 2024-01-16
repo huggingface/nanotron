@@ -17,8 +17,8 @@ from typing import Optional, Tuple
 import torch
 from torch import nn
 
-from nanotron.core import distributed as dist
-from nanotron.core.distributed import get_global_rank
+from nanotron import distributed as dist
+from nanotron.distributed import get_global_rank
 from nanotron.core.parallel.parameters import NanotronParameter
 from nanotron.core.parallel.sharded_parameters import (
     SplitConfig,
