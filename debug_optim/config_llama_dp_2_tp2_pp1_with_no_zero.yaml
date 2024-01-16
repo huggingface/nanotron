@@ -2,7 +2,7 @@ checkpoints:
   checkpoint_interval: 10
   checkpoints_path: /fsx/phuc/checkpoints/nanotron-optim-loading/no_zero1_dp_2_tp2_pp1
   checkpoints_path_is_shared_file_system: true
-  resume_checkpoint_path: /fsx/phuc/checkpoints/nanotron-optim-loading/no_zero1_dp_2_tp4_pp1
+  resume_checkpoint_path: /fsx/phuc/checkpoints/nanotron-optim-loading/no_zero1_dp2_tp2_pp2
 
 data:
   dataset:
@@ -40,16 +40,33 @@ model:
     std: 0.025
   make_vocab_size_divisible_by: 1
   model_config:
+    # # is_starcoder2_config: true
+    # max_position_embeddings: 4096
+    # # sliding_window_size: 4096
+    # # GQA vs MQA
+    # grouped_query: true
+    # num_kv_heads: 4
+    # hidden_size: 4608
+    # num_attention_heads: 36
+    # num_hidden_layers: 32
+    # vocab_size: 49152
+    # rope_theta: 100000
+    # layer_norm_epsilon: 0.00001
+    # scale_attn_weights: true
+    # activation_function: gelu
+    # resid_pdrop: 0
+    # attn_pdrop: 0
+    # embd_pdrop: 0
     bos_token_id: 1
     eos_token_id: 2
     hidden_act: silu
-    hidden_size: 16
+    hidden_size: 4608
     initializer_range: 0.02
     intermediate_size: 64
     is_llama_config: true
     max_position_embeddings: 256
-    num_attention_heads: 4
-    num_hidden_layers: 2
+    num_attention_heads: 36
+    num_hidden_layers: 32
     num_key_value_heads: 4
     pad_token_id: null
     pretraining_tp: 1
@@ -94,6 +111,6 @@ tokens:
   micro_batch_size: 10
   sequence_length: 32
   # train_steps: 1000
-  train_steps: 4000
+  train_steps: 20
   # train_steps: 2
   val_check_interval: -1

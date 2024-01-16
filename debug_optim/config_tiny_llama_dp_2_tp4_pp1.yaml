@@ -93,6 +93,6 @@ tokens:
   micro_batch_size: 10
   sequence_length: 32
   # train_steps: 1000
-  train_steps: 20
+  train_steps: 4000
   # train_steps: 2
   val_check_interval: -1

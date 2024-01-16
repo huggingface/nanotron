@@ -258,6 +258,9 @@ class DistributedTrainer:
         # Log where each module is instantiated
         self.normalized_model.log_modules(level=logging.DEBUG, group=self.parallel_context.world_pg, rank=0)
 
+        if dist.get_rank(self.parallel_context.world_pg) == 0:
+            self._logging_losses = []
+
         # Log config and model config
         # self.log_object(self.config, "config")
         # if hasattr(self.model_config, "to_json_string"):
@@ -469,6 +472,12 @@ class DistributedTrainer:
         # if self.s3_mover is not None:
         #     self.s3_mover.distributed_wait_for_completion(group=self.parallel_context.world_pg)
 
+        if dist.get_rank(self.parallel_context.world_pg) == 0:
+            dp_size = self.parallel_context.dp_pg.size()
+            pp_size = self.parallel_context.pp_pg.size()
+            tp_size = self.parallel_context.tp_pg.size()
+            torch.save(torch.tensor(self._logging_losses), f"./losses_tp{tp_size}_pp{pp_size}_dp{dp_size}.pt")
+
     def training_step(
         self, dataloader: Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]]
     ) -> Tuple[Iterable[Dict], Optional[torch.Tensor]]:
@@ -667,6 +676,9 @@ class DistributedTrainer:
 
             # if not isinstance(tb_writer, contextlib.nullcontext):
             #     tb_writer.add_scalars_from_list(log_entries, self.iteration_step)
+
+            if dist.get_rank(self.parallel_context.world_pg) == 0:
+                self._logging_losses.append(loss_avg.item())
 
             self.loggerwriter.add_scalars_from_list(log_entries, self.iteration_step)
 
