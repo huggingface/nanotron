@@ -79,12 +79,12 @@ def save_lr_scheduler(
 
 @torch.no_grad()
 def load_optimizer(
-    model: nn.Module,
     optimizer: optim.BaseOptimizer,
     parallel_context: ParallelContext,
     root_folder: Path,
     map_location: Optional[str] = None,
     param_shard_metadata=None,
+    model: Optional[nn.Module] = None,
 ):
     checkpoint_metadata = load_meta(parallel_context=parallel_context, root_folder=root_folder)
     root_folder = root_folder / "optimizer"
