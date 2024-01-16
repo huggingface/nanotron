@@ -26,7 +26,7 @@ In the `/examples` directory, we provide a set of **self-sufficient** examples f
 * [RLHF Training (Includes SFT/Reward Modeling/DPO/PPO)](https://github.com/huggingface/nanotron/tree/main/examples/llama)
 * [Benchmark throughput](./benchmarks/nanotron/README.md)
 
-> Note: Most examples include a slow modeling (No dependencies, only Pytorch), and a fast modeling (Flash Attention, apex, ...). Make sure to install the dependencies if you want to run the fast modeling, then set the env `export USE_FAST=1`
+> Note: Most examples include a slow modeling (No dependencies, only Pytorch), and a fast modeling (Flash Attention, ...). Make sure to install the dependencies if you want to run the fast modeling, then set the env `export USE_FAST=1`
 
 # Installation
 
@@ -53,8 +53,7 @@ We also support a set of flavors that you can install using `pip install -e [$FL
  - `s3fs`: Used if you want to save/load checkpoints directly from s3. It uses `s3fs` and consequently might be slow. We are working on an improve mechanism
 
 Install also:
-- Flash Attention: `pip install packaging; pip install flash-attn>=2.0  --no-build-isolation`
-- Apex: see the [Github repo](https://github.com/NVIDIA/apex#linux) (if master errors out, try checking out release 23.08)
+- Flash Attention: `pip install packaging; pip install flash-attn>=2.4.2  --no-build-isolation`
 - Also good to have `s3fs` `transformers` `datasets` `python-etcd` `tensorboardX` `boto3`: `pip install s3fs transformers datasets python-etcd tensorboardX boto3`
 - finally install `s5cmd`:
 ```
@@ -75,14 +74,18 @@ We showcase usage in the `examples` directory.
 
 Let's go through some key concepts.
 
-## DistributedProcessGroups
+## ParallelContext
 
-`DistributedProcessGroups` is the base class referencing all the process groups you might need when running parallel workloads. You can initialize it using the following:
+`ParallelContext` is the base class referencing all the process groups you might need when running parallel workloads. You can initialize it using the following:
 ```python
-from nanotron.core.process_groups import get_process_groups
+from nanotron.distributed import ParallelContext
 
-dp, tp, pp = ... # Predefine your topology
-dpg: DistributedProcessGroups = get_process_groups(data_parallel_size=dp, tensor_parallel_size=tp, pipeline_parallel_size=pp)
+# define your topology
+parallel_context = ParallelContext(
+    tensor_parallel_size=2,
+    data_parallel_size=2,
+    pipeline_parallel_size=2
+)
 ```
 
 `ProcessGroups` is a mechanism in order to run distributed collectives (`all-reduce`, `all-gather`, ...) on a subgroup of all the ranks. It provides the granularity needed for 3D parallelism.

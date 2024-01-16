@@ -15,9 +15,8 @@
 """ PyTorch Starcoder (GPT with Multi-Query Attention, RoPe, SWA and GQA).
 
 Some dependencies to update before using:
- - install `apex`
  - install `torch>=2.0`
- - install `flash-attn>=2.3.3`
+ - install `flash-attn>=2.4.2`
  """
 
 import inspect
@@ -26,17 +25,11 @@ import os
 from typing import Dict, List, Optional, Tuple, Union
 
 import torch
-from apex.normalization import FusedLayerNorm as LayerNorm
 from flash_attn import bert_padding
 from flash_attn.flash_attn_interface import (
     flash_attn_varlen_func,
     flash_attn_with_kvcache,
 )
-from torch import nn
-from torch.nn import functional as F
-from torch.nn import init
-from transformers.activations import ACT2FN
-
 from nanotron.config import ParallelismArgs, RecomputeGranularity, Starcoder2Config
 from nanotron.core import distributed as dist
 from nanotron.core.distributed import get_global_rank
@@ -53,10 +46,15 @@ from nanotron.core.parallel.tensor_parallelism.nn import (
     TensorParallelRowLinear,
 )
 from nanotron.core.parallel.tied_parameters import create_tied_parameter
-from nanotron.core.process_groups import DistributedProcessGroups
 from nanotron.core.random import RandomStates, branch_random_state
 from nanotron.core.utils import checkpoint_method
+from nanotron.distributed import ParallelContext
+from nanotron.fused.layer_norm import TritonLayerNorm
 from nanotron.models import AttachableStore, NanotronModel
+from torch import nn
+from torch.nn import LayerNorm, init
+from torch.nn import functional as F
+from transformers.activations import ACT2FN
 
 _flash_supports_window_size = "window_size" in list(inspect.signature(flash_attn_varlen_func).parameters)
 
@@ -1159,7 +1157,7 @@ class GPTBlock(nn.Module):
         layer_idx: int,
     ):
         super(GPTBlock, self).__init__()
-        self.ln_1 = LayerNorm(config.hidden_size, eps=config.layer_norm_epsilon)
+        self.ln_1 = TritonLayerNorm(config.hidden_size, eps=config.layer_norm_epsilon)
         if config.multi_query is True:
             self.attn = CausalSelfMQA(
                 config=config,
@@ -1178,7 +1176,7 @@ class GPTBlock(nn.Module):
             raise ValueError("Either `multi_query` or `grouped_query` must be True")  # TODO: @nouamane not necessarily
         self.attn_dropout = config.attn_pdrop
 
-        self.ln_2 = LayerNorm(config.hidden_size, eps=config.layer_norm_epsilon)
+        self.ln_2 = TritonLayerNorm(config.hidden_size, eps=config.layer_norm_epsilon)
         self.ff = MLP(config=config, parallel_config=parallel_config, tp_pg=tp_pg)
         self.ff_dropout = config.resid_pdrop
 
@@ -1258,14 +1256,14 @@ class GPTModel(nn.Module):
     def __init__(
         self,
         config: Starcoder2Config,
-        dpg: DistributedProcessGroups,
+        parallel_context: ParallelContext,
         parallel_config: Optional[ParallelismArgs],
         random_states: RandomStates,
     ):
         super().__init__()
 
         # Declare all the nodes
-        self.p2p = P2P(dpg.pp_pg, device=torch.device("cuda"))
+        self.p2p = P2P(parallel_context.pp_pg, device=torch.device("cuda"))
         self.random_states = random_states
         self.tp_mode = parallel_config.tp_mode if parallel_config is not None else TensorParallelLinearMode.ALL_REDUCE
 
@@ -1273,7 +1271,7 @@ class GPTModel(nn.Module):
             p2p=self.p2p,
             module_builder=Embedding,
             module_kwargs={
-                "tp_pg": dpg.tp_pg,
+                "tp_pg": parallel_context.tp_pg,
                 "config": config,
                 "parallel_config": parallel_config,
             },
@@ -1297,7 +1295,7 @@ class GPTModel(nn.Module):
                     module_kwargs={
                         "config": config,
                         "parallel_config": parallel_config,
-                        "tp_pg": dpg.tp_pg,
+                        "tp_pg": parallel_context.tp_pg,
                         "random_states": random_states,
                         "layer_idx": layer_idx,
                     },
@@ -1310,7 +1308,7 @@ class GPTModel(nn.Module):
 
         self.final_layer_norm = PipelineBlock(
             p2p=self.p2p,
-            module_builder=LayerNorm,
+            module_builder=TritonLayerNorm,
             module_kwargs={"normalized_shape": config.hidden_size, "eps": config.layer_norm_epsilon},
             module_input_keys={"input"},
             module_output_keys={"hidden_states"},
@@ -1323,7 +1321,7 @@ class GPTModel(nn.Module):
             module_kwargs={
                 "in_features": config.hidden_size,
                 "out_features": config.vocab_size,
-                "pg": dpg.tp_pg,
+                "pg": parallel_context.tp_pg,
                 "bias": False,
                 # TODO @thomasw21: refactor so that we store that default in a single place.
                 "mode": self.tp_mode,
@@ -1405,16 +1403,21 @@ class Starcoder2ForTraining(NanotronModel):
     def __init__(
         self,
         config: Starcoder2Config,
-        dpg: DistributedProcessGroups,
+        parallel_context: ParallelContext,
         parallel_config: Optional[ParallelismArgs],
         random_states: RandomStates,
     ):
         super().__init__()
-        self.model = GPTModel(config=config, dpg=dpg, parallel_config=parallel_config, random_states=random_states)
+        self.model = GPTModel(
+            config=config,
+            parallel_context=parallel_context,
+            parallel_config=parallel_config,
+            random_states=random_states,
+        )
         self.loss = PipelineBlock(
             p2p=self.model.p2p,
             module_builder=Loss,
-            module_kwargs={"tp_pg": dpg.tp_pg},
+            module_kwargs={"tp_pg": parallel_context.tp_pg},
             module_input_keys={
                 "sharded_logits",
                 "label_ids",
@@ -1424,7 +1427,7 @@ class Starcoder2ForTraining(NanotronModel):
         )
         self.config: Starcoder2Config = config
         self.parallel_config = parallel_config
-        self.dpg = dpg
+        self.parallel_context = parallel_context
 
     def forward(
         self,
@@ -1448,7 +1451,7 @@ class Starcoder2ForTraining(NanotronModel):
     @torch.no_grad()
     def init_model_randomly(self, init_method, scaled_init_method):
         model = self
-        # Set to 0: layernorm bias / all bias
+        # Set to 0: LayerNorm bias / all bias
         initialized_parameters = set()
         # Handle tensor parallelism
         with torch.no_grad():
@@ -1640,7 +1643,7 @@ class Starcoder2ForTraining(NanotronModel):
 
     def get_flops_per_sec(self, iteration_time_in_sec, sequence_length, global_batch_size):
         """Get flops per second for a given model"""
-        world_size = self.dpg.world_pg.size()
+        world_size = self.parallel_context.world_pg.size()
         model_flops, hardware_flops = get_flops(
             num_layers=self.config.num_hidden_layers,
             hidden_size=self.config.hidden_size,

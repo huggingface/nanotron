@@ -13,8 +13,8 @@ from nanotron.core.parallel.pipeline_parallelism.engine import (
 )
 from nanotron.core.parallel.pipeline_parallelism.p2p import P2P
 from nanotron.core.parallel.pipeline_parallelism.tensor_pointer import TensorPointer
-from nanotron.core.process_groups import DistributedProcessGroups
 from nanotron.core.utils import init_on_device_and_dtype
+from nanotron.distributed import ParallelContext
 from torch import nn
 from torch.nn import functional as F
 
@@ -24,26 +24,26 @@ def test_build_and_set_rank():
     init_distributed(tp=1, dp=1, pp=2)(_test_build_and_set_rank)()
 
 
-def _test_build_and_set_rank(dpg: DistributedProcessGroups):
+def _test_build_and_set_rank(parallel_context: ParallelContext):
     device = torch.device("cuda")
-    p2p = P2P(pg=dpg.pp_pg, device=device)
+    p2p = P2P(pg=parallel_context.pp_pg, device=device)
     model = DummyModel(p2p=p2p)
 
     # Set the ranks
-    assert len(model.mlp) == dpg.pp_pg.size()
+    assert len(model.mlp) == parallel_context.pp_pg.size()
     with init_on_device_and_dtype(device):
-        for pp_rank, non_linear in zip(range(dpg.pp_pg.size()), model.mlp):
+        for pp_rank, non_linear in zip(range(parallel_context.pp_pg.size()), model.mlp):
             non_linear.linear.build_and_set_rank(pp_rank=pp_rank)
             non_linear.activation.build_and_set_rank(pp_rank=pp_rank)
-        model.loss.build_and_set_rank(pp_rank=dpg.pp_pg.size() - 1)
+        model.loss.build_and_set_rank(pp_rank=parallel_context.pp_pg.size() - 1)
 
     # Check that the ranks are set correctly
-    current_pp_rank = dist.get_rank(dpg.pp_pg)
+    current_pp_rank = dist.get_rank(parallel_context.pp_pg)
     assert model.mlp[current_pp_rank].linear.rank == current_pp_rank
     assert model.mlp[current_pp_rank].activation.rank == current_pp_rank
 
     # Check that blocks were built on the correct ranks
-    for pp_rank, non_linear in zip(range(dpg.pp_pg.size()), model.mlp):
+    for pp_rank, non_linear in zip(range(parallel_context.pp_pg.size()), model.mlp):
         if pp_rank == current_pp_rank:
             assert hasattr(non_linear.linear, "pp_block")
             assert hasattr(non_linear.activation, "pp_block")
@@ -71,12 +71,12 @@ def test_pipeline_engine(pipeline_engine: PipelineEngine, pp: int):
     init_distributed(tp=1, dp=1, pp=pp)(_test_pipeline_engine)(pipeline_engine=pipeline_engine)
 
 
-def _test_pipeline_engine(dpg: DistributedProcessGroups, pipeline_engine: PipelineEngine):
+def _test_pipeline_engine(parallel_context: ParallelContext, pipeline_engine: PipelineEngine):
     device = torch.device("cuda")
-    p2p = P2P(dpg.pp_pg, device=device)
+    p2p = P2P(parallel_context.pp_pg, device=device)
     reference_rank = 0
-    has_reference_model = dist.get_rank(dpg.pp_pg) == reference_rank
-    current_pp_rank = dist.get_rank(dpg.pp_pg)
+    has_reference_model = dist.get_rank(parallel_context.pp_pg) == reference_rank
+    current_pp_rank = dist.get_rank(parallel_context.pp_pg)
 
     # spawn model
     model = DummyModel(p2p=p2p)
@@ -84,12 +84,12 @@ def _test_pipeline_engine(dpg: DistributedProcessGroups, pipeline_engine: Pipeli
         reference_model = DummyModel(p2p=p2p)
 
     # Set the ranks
-    assert len(model.mlp) == dpg.pp_pg.size()
+    assert len(model.mlp) == parallel_context.pp_pg.size()
     with init_on_device_and_dtype(device):
-        for pp_rank, non_linear in zip(range(dpg.pp_pg.size()), model.mlp):
+        for pp_rank, non_linear in zip(range(parallel_context.pp_pg.size()), model.mlp):
             non_linear.linear.build_and_set_rank(pp_rank=pp_rank)
             non_linear.activation.build_and_set_rank(pp_rank=pp_rank)
-        model.loss.build_and_set_rank(pp_rank=dpg.pp_pg.size() - 1)
+        model.loss.build_and_set_rank(pp_rank=parallel_context.pp_pg.size() - 1)
 
         # build reference model
         if has_reference_model:
@@ -101,7 +101,7 @@ def _test_pipeline_engine(dpg: DistributedProcessGroups, pipeline_engine: Pipeli
     # synchronize weights
     if has_reference_model:
         with torch.inference_mode():
-            for pp_rank in range(dpg.pp_pg.size()):
+            for pp_rank in range(parallel_context.pp_pg.size()):
                 non_linear = model.mlp[pp_rank]
                 reference_non_linear = reference_model.mlp[pp_rank]
                 if pp_rank == current_pp_rank:
@@ -120,14 +120,14 @@ def _test_pipeline_engine(dpg: DistributedProcessGroups, pipeline_engine: Pipeli
         )
 
     # Get infinite dummy data iterator
-    data_iterator = dummy_infinite_data_loader(pp_pg=dpg.pp_pg)  # First rank receives data
+    data_iterator = dummy_infinite_data_loader(pp_pg=parallel_context.pp_pg)  # First rank receives data
 
     # Have at least as many microbatches as PP size.
-    n_micro_batches_per_batch = dpg.pp_pg.size() + 5
+    n_micro_batches_per_batch = parallel_context.pp_pg.size() + 5
 
     batch = [next(data_iterator) for _ in range(n_micro_batches_per_batch)]
     losses = pipeline_engine.train_batch_iter(
-        model, pg=dpg.pp_pg, batch=batch, nb_microbatches=n_micro_batches_per_batch, grad_accumulator=None
+        model, pg=parallel_context.pp_pg, batch=batch, nb_microbatches=n_micro_batches_per_batch, grad_accumulator=None
     )
 
     # Equivalent on the reference model
@@ -167,7 +167,7 @@ def _test_pipeline_engine(dpg: DistributedProcessGroups, pipeline_engine: Pipeli
 
     # Check that gradient are the same as reference
     if has_reference_model:
-        for pp_rank in range(dpg.pp_pg.size()):
+        for pp_rank in range(parallel_context.pp_pg.size()):
             non_linear = model.mlp[pp_rank]
             reference_non_linear = reference_model.mlp[pp_rank]
             if pp_rank == current_pp_rank:
@@ -187,7 +187,9 @@ def _test_pipeline_engine(dpg: DistributedProcessGroups, pipeline_engine: Pipeli
                 continue
 
             weight_grad, bias_grad = p2p.recv_tensors(num_tensors=2, from_rank=pp_rank)
-            torch.testing.assert_close(weight_grad, reference_non_linear.linear.pp_block.weight.grad, atol=1e-6, rtol=1e-7)
+            torch.testing.assert_close(
+                weight_grad, reference_non_linear.linear.pp_block.weight.grad, atol=1e-6, rtol=1e-7
+            )
             torch.testing.assert_close(bias_grad, reference_non_linear.linear.pp_block.bias.grad, atol=1e-6, rtol=1e-7)
     else:
         p2p.send_tensors(
@@ -215,7 +217,7 @@ def test_pipeline_engine_with_tensor_that_does_not_require_grad(pipeline_engine:
 
 
 def _test_pipeline_engine_with_tensor_that_does_not_require_grad(
-    dpg: DistributedProcessGroups, pipeline_engine: PipelineEngine
+    parallel_context: ParallelContext, pipeline_engine: PipelineEngine
 ):
     def activation(x: torch.Tensor, y: torch.Tensor):
         return {"output": F.sigmoid(x) * y, "y": y}
@@ -285,9 +287,9 @@ def _test_pipeline_engine_with_tensor_that_does_not_require_grad(
             return differentiable_tensor
 
     device = torch.device("cuda")
-    p2p = P2P(dpg.pp_pg, device=device)
+    p2p = P2P(parallel_context.pp_pg, device=device)
     reference_rank = 0
-    current_pp_rank = dist.get_rank(dpg.pp_pg)
+    current_pp_rank = dist.get_rank(parallel_context.pp_pg)
     has_reference_model = current_pp_rank == reference_rank
 
     # spawn model
@@ -296,15 +298,17 @@ def _test_pipeline_engine_with_tensor_that_does_not_require_grad(
         reference_model = DummyModelPassingNonDifferentiableTensor(p2p=p2p)
 
     # Set the ranks
-    assert len(model.mlp) == dpg.pp_pg.size() + 1
+    assert len(model.mlp) == parallel_context.pp_pg.size() + 1
     # An additional mlp is in the end
-    mlp_index_pp_rank = [(i, i) for i in range(dpg.pp_pg.size())] + [(dpg.pp_pg.size(), dpg.pp_pg.size() - 1)]
+    mlp_index_pp_rank = [(i, i) for i in range(parallel_context.pp_pg.size())] + [
+        (parallel_context.pp_pg.size(), parallel_context.pp_pg.size() - 1)
+    ]
 
     with init_on_device_and_dtype(device):
         for (mlp_index, pp_rank), non_linear in zip(mlp_index_pp_rank, model.mlp):
             non_linear.linear.build_and_set_rank(pp_rank=pp_rank)
             non_linear.activation.build_and_set_rank(pp_rank=pp_rank)
-        model.loss.build_and_set_rank(pp_rank=dpg.pp_pg.size() - 1)
+        model.loss.build_and_set_rank(pp_rank=parallel_context.pp_pg.size() - 1)
 
         # build reference model
         if has_reference_model:
@@ -353,15 +357,15 @@ def _test_pipeline_engine_with_tensor_that_does_not_require_grad(
             }
 
     data_iterator = dummy_infinite_data_loader_with_non_differentiable_tensor(
-        pp_pg=dpg.pp_pg
+        pp_pg=parallel_context.pp_pg
     )  # First rank receives data
 
     # Have at least as many microbatches as PP size.
-    n_micro_batches_per_batch = dpg.pp_pg.size() + 5
+    n_micro_batches_per_batch = parallel_context.pp_pg.size() + 5
 
     batch = [next(data_iterator) for _ in range(n_micro_batches_per_batch)]
     losses = pipeline_engine.train_batch_iter(
-        model, pg=dpg.pp_pg, batch=batch, nb_microbatches=n_micro_batches_per_batch, grad_accumulator=None
+        model, pg=parallel_context.pp_pg, batch=batch, nb_microbatches=n_micro_batches_per_batch, grad_accumulator=None
     )
     # Equivalent on the reference model
     if has_reference_model:
@@ -420,7 +424,9 @@ def _test_pipeline_engine_with_tensor_that_does_not_require_grad(
                 continue
 
             weight_grad, bias_grad = p2p.recv_tensors(num_tensors=2, from_rank=pp_rank)
-            torch.testing.assert_close(weight_grad, reference_non_linear.linear.pp_block.weight.grad, atol=1e-6, rtol=1e-7)
+            torch.testing.assert_close(
+                weight_grad, reference_non_linear.linear.pp_block.weight.grad, atol=1e-6, rtol=1e-7
+            )
             torch.testing.assert_close(bias_grad, reference_non_linear.linear.pp_block.bias.grad, atol=1e-6, rtol=1e-7)
     else:
         for (mlp_index, pp_rank) in mlp_index_pp_rank:
@@ -436,7 +442,7 @@ def test_pipeline_forward_without_engine(pp: int):
     init_distributed(pp=pp, dp=1, tp=1)(_test_pipeline_forward_without_engine)()
 
 
-def _test_pipeline_forward_without_engine(dpg: DistributedProcessGroups):
+def _test_pipeline_forward_without_engine(parallel_context: ParallelContext):
     def activation(x: torch.Tensor, y: torch.Tensor):
         return {"output": F.sigmoid(x) * y, "y": y}
 
@@ -492,9 +498,9 @@ def _test_pipeline_forward_without_engine(dpg: DistributedProcessGroups):
             return differentiable_tensor
 
     device = torch.device("cuda")
-    p2p = P2P(dpg.pp_pg, device=device)
+    p2p = P2P(parallel_context.pp_pg, device=device)
     reference_rank = 0
-    current_pp_rank = dist.get_rank(dpg.pp_pg)
+    current_pp_rank = dist.get_rank(parallel_context.pp_pg)
     has_reference_model = current_pp_rank == reference_rank
 
     # spawn model
@@ -503,12 +509,12 @@ def _test_pipeline_forward_without_engine(dpg: DistributedProcessGroups):
         reference_model = DummyModel(p2p=p2p)
 
     # Set the ranks
-    assert len(model.mlp) == dpg.pp_pg.size()
+    assert len(model.mlp) == parallel_context.pp_pg.size()
     with init_on_device_and_dtype(device):
-        for pp_rank, non_linear in zip(range(dpg.pp_pg.size()), model.mlp):
+        for pp_rank, non_linear in zip(range(parallel_context.pp_pg.size()), model.mlp):
             non_linear.linear.build_and_set_rank(pp_rank=pp_rank)
             non_linear.activation.build_and_set_rank(pp_rank=pp_rank)
-        model.loss.build_and_set_rank(pp_rank=dpg.pp_pg.size() - 1)
+        model.loss.build_and_set_rank(pp_rank=parallel_context.pp_pg.size() - 1)
 
         # build reference model
         if has_reference_model:
@@ -520,7 +526,7 @@ def _test_pipeline_forward_without_engine(dpg: DistributedProcessGroups):
     # synchronize weights
     if has_reference_model:
         with torch.inference_mode():
-            for pp_rank in range(dpg.pp_pg.size()):
+            for pp_rank in range(parallel_context.pp_pg.size()):
                 non_linear = model.mlp[pp_rank]
                 reference_non_linear = reference_model.mlp[pp_rank]
                 if pp_rank == current_pp_rank:
@@ -555,11 +561,11 @@ def _test_pipeline_forward_without_engine(dpg: DistributedProcessGroups):
             }
 
     data_iterator = dummy_infinite_data_loader_with_non_differentiable_tensor(
-        pp_pg=dpg.pp_pg
+        pp_pg=parallel_context.pp_pg
     )  # First rank receives data
 
     # Have at least as many microbatches as PP size.
-    n_micro_batches_per_batch = dpg.pp_pg.size() + 5
+    n_micro_batches_per_batch = parallel_context.pp_pg.size() + 5
 
     batch = [next(data_iterator) for _ in range(n_micro_batches_per_batch)]
 
@@ -609,7 +615,7 @@ def test_pipeline_engine_diamond(pipeline_engine: PipelineEngine):
     pass
 
 
-def _test_pipeline_engine_diamond(dpg: DistributedProcessGroups, pipeline_engine: PipelineEngine):
+def _test_pipeline_engine_diamond(parallel_context: ParallelContext, pipeline_engine: PipelineEngine):
     class DiamondModel(nn.Module):
         def __init__(self, p2p: P2P):
             super().__init__()
@@ -703,9 +709,9 @@ def _test_pipeline_engine_diamond(dpg: DistributedProcessGroups, pipeline_engine
             return self.loss(x=out)["output"]
 
     device = torch.device("cuda")
-    p2p = P2P(dpg.pp_pg, device=device)
+    p2p = P2P(parallel_context.pp_pg, device=device)
     reference_rank = 0
-    current_pp_rank = dist.get_rank(dpg.pp_pg)
+    current_pp_rank = dist.get_rank(parallel_context.pp_pg)
     has_reference_model = current_pp_rank == reference_rank
 
     # spawn model
@@ -714,15 +720,17 @@ def _test_pipeline_engine_diamond(dpg: DistributedProcessGroups, pipeline_engine
         reference_model = DiamondModel(p2p=p2p)
 
     # Set the ranks
-    assert dpg.pp_pg.size() == len([model.dense_bottom, model.dense_left, model.dense_right, model.dense_top])
-    assert dpg.pp_pg.size() == 4
+    assert parallel_context.pp_pg.size() == len(
+        [model.dense_bottom, model.dense_left, model.dense_right, model.dense_top]
+    )
+    assert parallel_context.pp_pg.size() == 4
     pp_rank_to_dense_name = ["dense_bottom", "dense_left", "dense_right", "dense_top"]
     with init_on_device_and_dtype(device):
         for pp_rank, module_name in enumerate(pp_rank_to_dense_name):
             non_linear = model.get_submodule(module_name)
             non_linear.linear.build_and_set_rank(pp_rank=pp_rank)
             non_linear.activation.build_and_set_rank(pp_rank=pp_rank)
-        model.loss.build_and_set_rank(pp_rank=dpg.pp_pg.size() - 1)
+        model.loss.build_and_set_rank(pp_rank=parallel_context.pp_pg.size() - 1)
 
         # build reference model
         if has_reference_model:
@@ -768,17 +776,17 @@ def _test_pipeline_engine_diamond(dpg: DistributedProcessGroups, pipeline_engine
             }
 
     data_iterator = dummy_infinite_data_loader_with_non_differentiable_tensor(
-        pp_pg=dpg.pp_pg
+        pp_pg=parallel_context.pp_pg
     )  # First rank receives data
 
     # Have at least as many microbatches as PP size.
-    n_micro_batches_per_batch = dpg.pp_pg.size() + 5
+    n_micro_batches_per_batch = parallel_context.pp_pg.size() + 5
 
     batch = [next(data_iterator) for _ in range(n_micro_batches_per_batch)]
     losses = pipeline_engine.train_batch_iter(
-        model, pg=dpg.pp_pg, batch=batch, nb_microbatches=n_micro_batches_per_batch, grad_accumulator=None
+        model, pg=parallel_context.pp_pg, batch=batch, nb_microbatches=n_micro_batches_per_batch, grad_accumulator=None
     )
-    
+
     # Equivalent on the reference model
     if has_reference_model:
         reference_losses = []

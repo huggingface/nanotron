@@ -3,18 +3,17 @@ from pathlib import Path
 from typing import Optional
 
 import torch
-
 from nanotron.core import distributed as dist
 from nanotron.core import optim as optim
-from nanotron.core.process_groups import DistributedProcessGroups
+from nanotron.distributed import ParallelContext
 from nanotron.serialize.utils import ObjectType
 
 
-def optimizer_filename(dpg: DistributedProcessGroups, is_zero: bool):
+def optimizer_filename(parallel_context: ParallelContext, is_zero: bool):
     if is_zero is True:
-        return f"{ObjectType.OPTIMIZER.value}_pp-{dist.get_rank(dpg.pp_pg)}-of-{dpg.pp_pg.size()}_dp-{dist.get_rank(dpg.dp_pg)}-of-{dpg.dp_pg.size()}_tp-{dist.get_rank(dpg.tp_pg)}-of-{dpg.tp_pg.size()}.pt"
+        return f"{ObjectType.OPTIMIZER.value}_pp-{dist.get_rank(parallel_context.pp_pg)}-of-{parallel_context.pp_pg.size()}_dp-{dist.get_rank(parallel_context.dp_pg)}-of-{parallel_context.dp_pg.size()}_tp-{dist.get_rank(parallel_context.tp_pg)}-of-{parallel_context.tp_pg.size()}.pt"
     else:
-        return f"{ObjectType.OPTIMIZER.value}_pp-{dist.get_rank(dpg.pp_pg)}-of-{dpg.pp_pg.size()}_tp-{dist.get_rank(dpg.tp_pg)}-of-{dpg.tp_pg.size()}.pt"
+        return f"{ObjectType.OPTIMIZER.value}_pp-{dist.get_rank(parallel_context.pp_pg)}-of-{parallel_context.pp_pg.size()}_tp-{dist.get_rank(parallel_context.tp_pg)}-of-{parallel_context.tp_pg.size()}.pt"
 
 
 def lr_scheduler_filename():
@@ -24,7 +23,7 @@ def lr_scheduler_filename():
 
 def save_optimizer(
     optimizer: optim.BaseOptimizer,
-    dpg: DistributedProcessGroups,
+    parallel_context: ParallelContext,
     root_folder: Path,
 ):
     """Saves optimizer states
@@ -36,28 +35,29 @@ def save_optimizer(
     root_folder = root_folder / "optimizer"
     root_folder.mkdir(exist_ok=True, parents=True)
 
-    if dist.get_rank(dpg.world_pg) == 0:
+    if dist.get_rank(parallel_context.world_pg) == 0:
         with open(root_folder / "optimizer_config.json", "w") as fo:
             json.dump({"type": optimizer.__class__.__name__}, fo)
 
-    if (not optimizer.inherit_from(optim.ZeroDistributedOptimizer)) and dist.get_rank(dpg.dp_pg) > 0:
+    if (not optimizer.inherit_from(optim.ZeroDistributedOptimizer)) and dist.get_rank(parallel_context.dp_pg) > 0:
         # this is Zero-0, so only DP-0 saves the optimizer states
         return
 
     # We dump the optimizer state using `torch.save`
     torch.save(
         optimizer.state_dict(),
-        root_folder / optimizer_filename(dpg, is_zero=optimizer.inherit_from(optim.ZeroDistributedOptimizer)),
+        root_folder
+        / optimizer_filename(parallel_context, is_zero=optimizer.inherit_from(optim.ZeroDistributedOptimizer)),
     )
 
 
 def save_lr_scheduler(
     lr_scheduler,
-    dpg: DistributedProcessGroups,
+    parallel_context: ParallelContext,
     root_folder: Path,
 ):
     """Saves lr scheduler states"""
-    if dist.get_rank(dpg.world_pg) > 0:
+    if dist.get_rank(parallel_context.world_pg) > 0:
         # Only WORLD-RANK 0 saves the lr scheduler state
         return
 
@@ -73,7 +73,7 @@ def save_lr_scheduler(
 
 def load_optimizer(
     optimizer: optim.BaseOptimizer,
-    dpg: DistributedProcessGroups,
+    parallel_context: ParallelContext,
     root_folder: Path,
     map_location: Optional[str] = None,
 ):
@@ -83,7 +83,8 @@ def load_optimizer(
 
     # TODO @thomasw21: Load optimizer type and check that it's compatible otherwise we might be be loading something else completely
     state_dict = torch.load(
-        root_folder / optimizer_filename(dpg, is_zero=optimizer.inherit_from(optim.ZeroDistributedOptimizer)),
+        root_folder
+        / optimizer_filename(parallel_context, is_zero=optimizer.inherit_from(optim.ZeroDistributedOptimizer)),
         map_location=map_location,
     )
     optimizer.load_state_dict(state_dict)

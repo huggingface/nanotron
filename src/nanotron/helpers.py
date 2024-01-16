@@ -12,11 +12,6 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
-from torch import nn
-from torch.nn.parallel import DistributedDataParallel
-from torch.optim.lr_scheduler import LambdaLR
-from torch.profiler import ProfilerActivity, profile, tensorboard_trace_handler
-
 from nanotron import logging
 from nanotron.config import (
     Config,
@@ -41,23 +36,20 @@ from nanotron.core.optim.zero import ZeroDistributedOptimizer
 from nanotron.core.parallel.tensor_parallelism.nn import (
     TensorParallelLinearMode,
 )
-from nanotron.core.process_groups import DistributedProcessGroups
 from nanotron.core.random import (
     RandomStates,
     get_current_random_state,
     get_synced_random_state,
 )
-from nanotron.logging import LogItem, log_rank, warn_once
+from nanotron.distributed import ParallelContext
+from nanotron.logging import LogItem, log_rank
+from torch import nn
+from torch.nn.parallel import DistributedDataParallel
+from torch.optim import AdamW
+from torch.optim.lr_scheduler import LambdaLR
+from torch.profiler import ProfilerActivity, profile, tensorboard_trace_handler
 
 logger = logging.get_logger(__name__)
-
-try:
-    from apex.optimizers import FusedAdam
-
-    _apex_available = True
-except ImportError:
-    _apex_available = False
-    from torch.optim import AdamW
 
 
 def get_args():
@@ -67,11 +59,11 @@ def get_args():
     return parser.parse_args()
 
 
-def set_logger_verbosity_format(logging_level: str, dpg: DistributedProcessGroups):
+def set_logger_verbosity_format(logging_level: str, parallel_context: ParallelContext):
     node_name = os.environ.get("SLURMD_NODENAME")
     formatter = lg.Formatter(
-        fmt=f"%(asctime)s [%(levelname)s|DP={dist.get_rank(dpg.dp_pg)}|PP={dist.get_rank(dpg.pp_pg)}|"
-        f"TP={dist.get_rank(dpg.tp_pg)}{'|' + node_name if node_name else ''}]: %(message)s",
+        fmt=f"%(asctime)s [%(levelname)s|DP={dist.get_rank(parallel_context.dp_pg)}|PP={dist.get_rank(parallel_context.pp_pg)}|"
+        f"TP={dist.get_rank(parallel_context.tp_pg)}{'|' + node_name if node_name else ''}]: %(message)s",
         datefmt="%m/%d/%Y %H:%M:%S",
     )
     # TODO @thomasw21: `logging.log_levels` returns valid lg log levels
@@ -177,7 +169,7 @@ def lr_scheduler_builder(optimizer: Optimizer, lr_scheduler_args: LRSchedulerArg
 
 
 def init_optimizer_and_grad_accumulator(
-    model: nn.Module, optimizer_args: OptimizerArgs, dpg: DistributedProcessGroups
+    model: nn.Module, optimizer_args: OptimizerArgs, parallel_context: ParallelContext
 ) -> Tuple[BaseOptimizer, GradientAccumulator]:
     # Normalize DDP
     normalized_model = model.module if isinstance(model, DistributedDataParallel) else model
@@ -200,34 +192,17 @@ def init_optimizer_and_grad_accumulator(
 
     # Basic optimizer builder
     def basic_optimizer_builder(named_param_groups):
-        if _apex_available:
-            return NamedOptimizer(
-                named_params_or_groups=named_param_groups,
-                optimizer_builder=lambda param_groups: FusedAdam(
-                    param_groups,
-                    lr=optimizer_args.learning_rate_scheduler.learning_rate,
-                    weight_decay=optimizer_args.weight_decay,
-                    eps=optimizer_args.adam_eps,
-                    betas=(optimizer_args.adam_beta1, optimizer_args.adam_beta2),
-                ),
-            )
-        else:
-            warn_once(
-                logger=logger,
-                msg="Apex is not installed. Using PyTorch AdamW instead.",
-                rank=0,
-            )
-            return NamedOptimizer(
-                named_params_or_groups=named_param_groups,
-                optimizer_builder=lambda param_groups: AdamW(  # pylint: disable=E0601
-                    param_groups,
-                    lr=optimizer_args.learning_rate_scheduler.learning_rate,
-                    weight_decay=optimizer_args.weight_decay,
-                    eps=optimizer_args.adam_eps,
-                    betas=(optimizer_args.adam_beta1, optimizer_args.adam_beta2),
-                    fused=optimizer_args.torch_adam_is_fused,
-                ),
-            )
+        return NamedOptimizer(
+            named_params_or_groups=named_param_groups,
+            optimizer_builder=lambda param_groups: AdamW(  # pylint: disable=E0601
+                param_groups,
+                lr=optimizer_args.learning_rate_scheduler.learning_rate,
+                weight_decay=optimizer_args.weight_decay,
+                eps=optimizer_args.adam_eps,
+                betas=(optimizer_args.adam_beta1, optimizer_args.adam_beta2),
+                fused=optimizer_args.torch_adam_is_fused,
+            ),
+        )
 
     optimizer_builder = basic_optimizer_builder
 
@@ -259,7 +234,7 @@ def init_optimizer_and_grad_accumulator(
             named_params_or_groups=named_parameters,
             # TODO @thomasw21: We need a better API for gradient accumulation/zero etc ...
             optimizer_builder=optimizer_builder,
-            dp_pg=dpg.dp_pg,
+            dp_pg=parallel_context.dp_pg,
         )
 
         # SANITY CHECK: assert that optimizer's named_params point to model's params (check only the first one)
@@ -284,7 +259,7 @@ def init_optimizer_and_grad_accumulator(
 
         assert isinstance(grad_accumulator, FP32GradientAccumulator)
         grad_accumulator.assign_param_offsets(
-            dp_rank=dist.get_rank(dpg.dp_pg),
+            dp_rank=dist.get_rank(parallel_context.dp_pg),
             param_name_to_offsets=param_name_to_dp_rank_offsets,
         )
 
@@ -293,7 +268,7 @@ def init_optimizer_and_grad_accumulator(
         assert isinstance(grad_accumulator, FP32GradientAccumulator)
         model.register_comm_hook(
             state=FP32GradBucketManager(
-                dp_pg=dpg.dp_pg,
+                dp_pg=parallel_context.dp_pg,
                 accumulator=grad_accumulator,
                 param_id_to_name={
                     id(param): param.get_tied_info().get_full_name_from_module_id_to_prefix(
@@ -401,29 +376,29 @@ def get_all_comps(n: int) -> List[List[List[int]]]:
 
 
 def test_all_pair_to_pair(
-    dpg: DistributedProcessGroups, throughput_size: int, throughput_iters: int, only_node_to_node: bool = True
+    parallel_context: ParallelContext, throughput_size: int, throughput_iters: int, only_node_to_node: bool = True
 ):
     """Test all pair-to-pair GPUs throughput
 
     Args:
-        dpg: DistributedProcessGroups
+        parallel_context: ParallelContext
         throughput_size: size of the tensor to send
         throughput_iters: number of warm-up iterations before testing the throughput
         only_node_to_node: if True, only test node-to-node throughput
     """
-    comparisons = get_all_comps(dpg.world_pg.size())
-    wr = dist.get_rank(dpg.world_pg)
+    comparisons = get_all_comps(parallel_context.world_pg.size())
+    wr = dist.get_rank(parallel_context.world_pg)
     log_rank(
         f"[TEST] Testing throughput between {comparisons}",
         logger=logger,
         level=logging.WARNING,
-        group=dpg.world_pg,
+        group=parallel_context.world_pg,
         rank=0,
     )
     for j, comp in enumerate(comparisons):
-        dist.barrier(group=dpg.world_pg)
+        dist.barrier(group=parallel_context.world_pg)
         for i, (a, b) in enumerate(comp):
-            dist.barrier(group=dpg.world_pg)
+            dist.barrier(group=parallel_context.world_pg)
             if wr not in [a, b]:
                 continue
             if only_node_to_node and (a % 8 != 0 or b % 8 != 0):
@@ -434,9 +409,9 @@ def test_all_pair_to_pair(
                 pre = time.perf_counter()
                 torch.cuda.synchronize()
                 if wr == a:
-                    dist.send(test_tensor, b, group=dpg.world_pg, tag=i + k)
+                    dist.send(test_tensor, b, group=parallel_context.world_pg, tag=i + k)
                 elif wr == b:
-                    dist.recv(test_tensor, a, group=dpg.world_pg, tag=i + k)
+                    dist.recv(test_tensor, a, group=parallel_context.world_pg, tag=i + k)
                 torch.cuda.synchronize()
                 duration = time.perf_counter() - pre
             del test_tensor
@@ -447,21 +422,21 @@ def test_all_pair_to_pair(
                 f"[TEST] {j, i, wr} Results throughput from {a} to {b}: {tput/1e9:.4f} Gbps",
                 logger=logger,
                 level=logging.WARNING,
-                group=dpg.world_pg,
+                group=parallel_context.world_pg,
                 rank=None,
             )
     log_rank(
         "[TEST] All comparisons done",
         logger=logger,
         level=logging.WARNING,
-        group=dpg.world_pg,
+        group=parallel_context.world_pg,
         rank=0,
     )
 
 
 def log_throughput(
     config: Config,
-    dpg: DistributedProcessGroups,
+    parallel_context: ParallelContext,
     model_tflops=0,
     hardware_tflops=0,
     tokens_per_sec=0,
@@ -469,29 +444,35 @@ def log_throughput(
 ):
     micro_batch_size = config.micro_batch_size
     n_micro_batches_per_batch = config.batch_accumulation_per_replica
-    global_batch_size = micro_batch_size * n_micro_batches_per_batch * dpg.dp_pg.size()
+    global_batch_size = micro_batch_size * n_micro_batches_per_batch * parallel_context.dp_pg.size()
     sequence_length = config.sequence_length
     slurm_job_id = os.environ.get("SLURM_JOB_ID", "N/A")
     csv_filename = config.benchmark_csv_path
     table_log = [
         LogItem("model_name", config.model_name, "s"),
-        LogItem("nodes", math.ceil(dpg.world_pg.size() / 8), "d"),
+        LogItem("nodes", math.ceil(parallel_context.world_pg.size() / 8), "d"),
         LogItem("seq_len", (sequence_length), "d"),
         LogItem("mbs", micro_batch_size, "d"),
         LogItem("batch_accum", n_micro_batches_per_batch, "d"),
         LogItem("gbs", global_batch_size, "d"),
         LogItem("mTFLOPs", model_tflops, ".2f"),
         LogItem("hTFLOPs", hardware_tflops, ".2f"),
-        LogItem("tok/s/gpu", tokens_per_sec / dpg.world_pg.size(), ".2f"),
+        LogItem("tok/s/gpu", tokens_per_sec / parallel_context.world_pg.size(), ".2f"),
         LogItem("Bandwidth (GB/s)", bandwidth, ".2f"),
         LogItem("Mem Alloc (GB)", torch.cuda.max_memory_allocated() / 1024**3, ".2f"),
         LogItem("Mem Res (GB)", torch.cuda.max_memory_reserved() / 1024**3, ".2f"),
     ]
-    
+
     column_widths = [max(len(item.tag), len(f"{item.scalar_value:{item.log_format}}")) for item in table_log]
     header_row = "| " + " | ".join([item.tag.ljust(width) for item, width in zip(table_log, column_widths)]) + " |"
-    separator_row = "| " + " | ".join(['-' * width for width in column_widths]) + " |"
-    data_row = "| " + " | ".join([f"{item.scalar_value:{item.log_format}}".ljust(width) for item, width in zip(table_log, column_widths)]) + " |"
+    separator_row = "| " + " | ".join(["-" * width for width in column_widths]) + " |"
+    data_row = (
+        "| "
+        + " | ".join(
+            [f"{item.scalar_value:{item.log_format}}".ljust(width) for item, width in zip(table_log, column_widths)]
+        )
+        + " |"
+    )
     table_output = f"{header_row}\n{separator_row}\n{data_row}"
 
     log_rank(
@@ -500,10 +481,10 @@ def log_throughput(
         level=logging.INFO,
         rank=0,
     )
-    
+
     import csv
 
-    if dist.get_rank(dpg.world_pg) == 0:
+    if dist.get_rank(parallel_context.world_pg) == 0:
         if not os.path.exists(csv_filename):
             with open(csv_filename, mode="w") as fo:
                 writer = csv.writer(fo)

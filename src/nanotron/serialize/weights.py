@@ -3,17 +3,12 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import dacite
 import torch
-from packaging.version import Version
-from safetensors.torch import safe_open, save_file
-from torch import nn
-from tqdm import tqdm
-
 from nanotron import logging
 from nanotron.constants import CHECKPOINT_VERSION
 from nanotron.core import distributed as dist
 from nanotron.core.distributed import get_global_rank
 from nanotron.core.parallel.parameters import NanotronParameter, ShardedInfo, SlicesPair
-from nanotron.core.process_groups import DistributedProcessGroups
+from nanotron.distributed import ParallelContext
 from nanotron.logging import log_rank
 from nanotron.serialize.metadata import CheckpointMetadata, TensorMetadata, TensorMetadataV2, load_meta
 from nanotron.serialize.utils import (
@@ -21,16 +16,20 @@ from nanotron.serialize.utils import (
     get_path,
     get_tp_and_pp_rank_and_size_from,
 )
+from packaging.version import Version
+from safetensors.torch import safe_open, save_file
+from torch import nn
+from tqdm import tqdm
 
 logger = logging.get_logger(__name__)
 
 
-def save_weights(model: nn.Module, dpg: DistributedProcessGroups, root_folder: Path):
+def save_weights(model: nn.Module, parallel_context: ParallelContext, root_folder: Path):
     root_folder = root_folder / "model"
 
-    # We save only `dist.get_rank(dpg.dp_pg) == 0`
+    # We save only `dist.get_rank(parallel_context.dp_pg) == 0`
     # TODO @thomasw21: Figure how this works with Zero-3
-    if dist.get_rank(dpg.dp_pg) != 0:
+    if dist.get_rank(parallel_context.dp_pg) != 0:
         return
 
     module_id_to_prefix = {id(module): f"{module_name}." for module_name, module in model.named_modules()}
@@ -53,7 +52,7 @@ def save_weights(model: nn.Module, dpg: DistributedProcessGroups, root_folder: P
                 tied_info = param.get_tied_info()
                 base_name = tied_info.get_full_name_from_module_id_to_prefix(module_id_to_prefix=module_id_to_prefix)
                 group_ranks = tied_info.global_ranks
-                group = dpg.world_ranks_to_pg[group_ranks]
+                group = parallel_context.world_ranks_to_pg[group_ranks]
                 # Only the first rank of the group of the tied weights saves weights
                 # TODO @thomasw21: We could rotate in order to balance the load.
                 if dist.get_rank(group) != 0:
@@ -63,9 +62,10 @@ def save_weights(model: nn.Module, dpg: DistributedProcessGroups, root_folder: P
 
             if param.is_sharded:
                 sharded_info = param.get_sharded_info()
-                group = dpg.world_ranks_to_pg[sharded_info.global_ranks]
+                group = parallel_context.world_ranks_to_pg[sharded_info.global_ranks]
                 tp_and_pp_rank_and_size = get_tp_and_pp_rank_and_size_from(
-                    world_rank=get_global_rank(group=group, group_rank=dist.get_rank(group)), dpg=dpg
+                    world_rank=get_global_rank(group=group, group_rank=dist.get_rank(group)),
+                    parallel_context=parallel_context,
                 )
                 metadata = TensorMetadataV2(
                     version=CHECKPOINT_VERSION,
@@ -108,13 +108,13 @@ def read_checkpoint_version_from_shard_file(param_save_path: Path) -> Version:
     return checkpoint_version
 
 
-def read_checkpoint_version_from_meta(dpg: DistributedProcessGroups, root_folder: Path) -> Version:
-    checkpoint_metadata: CheckpointMetadata = load_meta(dpg=dpg, root_folder=root_folder)
+def read_checkpoint_version_from_meta(parallel_context: ParallelContext, root_folder: Path) -> Version:
+    checkpoint_metadata: CheckpointMetadata = load_meta(parallel_context=parallel_context, root_folder=root_folder)
     checkpoint_version = checkpoint_metadata.version
     return checkpoint_version
 
 
-def get_checkpoint_version(dpg, root_folder, param_save_path: Path) -> Version:
+def get_checkpoint_version(parallel_context, root_folder, param_save_path: Path) -> Version:
     try:
         checkpoint_version = read_checkpoint_version_from_shard_file(param_save_path=param_save_path)
     except CheckpointVersionFromShardFileException:
@@ -124,7 +124,9 @@ def get_checkpoint_version(dpg, root_folder, param_save_path: Path) -> Version:
             level=logging.ERROR,
             rank=0,
         )
-        checkpoint_version = read_checkpoint_version_from_meta(dpg=dpg, root_folder=root_folder)
+        checkpoint_version = read_checkpoint_version_from_meta(
+            parallel_context=parallel_context, root_folder=root_folder
+        )
     return checkpoint_version
 
 
@@ -207,7 +209,7 @@ def load_sharded_param_latest(param_or_buffer: torch.Tensor, sharded_info: Shard
 
 def load_weights(
     model: nn.Module,
-    dpg: DistributedProcessGroups,
+    parallel_context: ParallelContext,
     root_folder: Path,
     filtered_state_dict: Optional[Dict[str, Any]] = None,
 ):
@@ -215,7 +217,7 @@ def load_weights(
 
     Args:
         model: model to load weights into
-        dpg: distributed process groups
+        parallel_context: distributed process groups
         root_folder: root folder of the checkpoint
         filtered_state_dict: state dict to load from (overrides model.state_dict()). if None, load from model.state_dict()
     """
@@ -229,7 +231,7 @@ def load_weights(
 
     filtered_state_dict = filtered_state_dict if filtered_state_dict is not None else model.state_dict()
     for name, param_or_buffer in tqdm(
-        filtered_state_dict.items(), disable=dist.get_rank(dpg.world_pg) != 0, desc="Loading weights"
+        filtered_state_dict.items(), disable=dist.get_rank(parallel_context.world_pg) != 0, desc="Loading weights"
     ):
         # `state_dict` doesn't return a Param or a buffer, just a tensors which loses some metadata
         try:
@@ -249,14 +251,14 @@ def load_weights(
 
                 if param.is_tied:
                     # When params are tied only the first rank of tied param group stores weights (see save_weights)
-                    group = dpg.world_ranks_to_pg[tied_info.global_ranks]
+                    group = parallel_context.world_ranks_to_pg[tied_info.global_ranks]
                     group_rank = 0
                 else:
-                    group = dpg.world_ranks_to_pg[sharded_info.global_ranks]
+                    group = parallel_context.world_ranks_to_pg[sharded_info.global_ranks]
                     group_rank = dist.get_rank(group)
 
                 tp_and_pp_rank_and_size = get_tp_and_pp_rank_and_size_from(
-                    world_rank=get_global_rank(group=group, group_rank=group_rank), dpg=dpg
+                    world_rank=get_global_rank(group=group, group_rank=group_rank), parallel_context=parallel_context
                 )
             else:
                 tp_and_pp_rank_and_size = None
@@ -294,7 +296,9 @@ def load_weights(
                     raise ValueError(f"Could not find any shards in {path.parent}")
 
                 if checkpoint_version is None:
-                    checkpoint_version = get_checkpoint_version(dpg, root_folder, param_save_path=shards_path[0])
+                    checkpoint_version = get_checkpoint_version(
+                        parallel_context, root_folder, param_save_path=shards_path[0]
+                    )
                 else:
                     current_checkpoint_version = None
                     try:
@@ -330,7 +334,7 @@ def load_weights(
 
 def get_checkpoint_paths_list(
     model: nn.Module,
-    dpg: DistributedProcessGroups,
+    parallel_context: ParallelContext,
     root_folder: Path,
     only_list_folders: bool = False,
     only_list_current_process: bool = True,
@@ -340,7 +344,7 @@ def get_checkpoint_paths_list(
 
     Args:
         model: model to load weights into
-        dpg: distributed process groups
+        parallel_context: distributed process groups
         root_folder: root folder of the checkpoint
         filtered_state_dict: state dict to load from (overrides model.state_dict()). if None, load from model.state_dict()
     """
@@ -354,7 +358,9 @@ def get_checkpoint_paths_list(
 
     filtered_state_dict = filtered_state_dict if filtered_state_dict is not None else model.state_dict()
     for name in tqdm(
-        filtered_state_dict.values(), disable=dist.get_rank(dpg.world_pg) != 0, desc="Listing checkpoint paths"
+        filtered_state_dict.values(),
+        disable=dist.get_rank(parallel_context.world_pg) != 0,
+        desc="Listing checkpoint paths",
     ):
         # `state_dict` doesn't return a Param or a buffer, just a tensors which loses some metadata
         try:
@@ -374,14 +380,14 @@ def get_checkpoint_paths_list(
 
                 if param.is_tied:
                     # When params are tied only the first rank of tied param group stores weights (see save_weights)
-                    group = dpg.world_ranks_to_pg[tied_info.global_ranks]
+                    group = parallel_context.world_ranks_to_pg[tied_info.global_ranks]
                     group_rank = 0
                 else:
-                    group = dpg.world_ranks_to_pg[sharded_info.global_ranks]
+                    group = parallel_context.world_ranks_to_pg[sharded_info.global_ranks]
                     group_rank = dist.get_rank(group)
 
                 tp_and_pp_rank_and_size = get_tp_and_pp_rank_and_size_from(
-                    world_rank=get_global_rank(group=group, group_rank=group_rank), dpg=dpg
+                    world_rank=get_global_rank(group=group, group_rank=group_rank), parallel_context=parallel_context
                 )
             else:
                 tp_and_pp_rank_and_size = None

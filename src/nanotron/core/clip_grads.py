@@ -6,15 +6,6 @@ import nanotron.core.distributed as dist
 from nanotron import logging
 from nanotron.core.gradient_accumulator import GradientAccumulator
 from nanotron.core.parallel.parameters import NanotronParameter
-from nanotron.logging import warn_once
-
-try:
-    import amp_C
-    from apex.multi_tensor_apply import multi_tensor_applier
-
-    _apex_available = True
-except ImportError:
-    _apex_available = False
 
 logger = logging.get_logger(__name__)
 
@@ -70,29 +61,14 @@ def clip_grad_norm(
 
     else:
         if len(grads) > 0:
-            if _apex_available:
-                dummy_overflow_buf = torch.zeros(1, dtype=torch.int, device=torch.device("cuda"))
-                # Use apex's multi-tensor applier for efficiency reasons.
-                # Multi-tensor applier takes a function and a list of list
-                # and performs the operation on that list all in one kernel.
-                grad_norm, _ = multi_tensor_applier(
-                    amp_C.multi_tensor_l2norm, dummy_overflow_buf, [grads], False  # no per-parameter norm
-                )
-                total_norm = grad_norm.pow(norm_type)
-            else:
-                warn_once(
-                    logger=logger,
-                    msg="Apex is not installed. Falling back to torch.linalg.vector_norm for gradient clipping which is slower than apex's multi_tensor_l2norm.",
-                    rank=0,
-                )
-                # TODO @nouamanetazi: Check if we should calculate norm per parameter (remove .pow(norm_type)
-                total_norm = torch.linalg.vector_norm(
-                    torch.stack(
-                        [torch.linalg.vector_norm(g.detach(), ord=norm_type, dtype=torch.float) for g in grads]
-                    ),
-                    ord=norm_type,
-                    dtype=torch.float,
-                ).pow(norm_type)
+            # TODO @nouamanetazi: Check if we should calculate norm per parameter (remove .pow(norm_type)
+            total_norm = torch.linalg.vector_norm(
+                torch.stack(
+                    [torch.linalg.vector_norm(g.detach(), ord=norm_type, dtype=torch.float) for g in grads]
+                ),
+                ord=norm_type,
+                dtype=torch.float,
+            ).pow(norm_type)
         else:
             total_norm = torch.zeros(1, dtype=torch.float, device=torch.device("cuda"))
         dist.all_reduce(total_norm, group=mp_pg, op=dist.ReduceOp.SUM)
@@ -105,36 +81,18 @@ def clip_grad_norm(
     # when the gradients do not reside in CPU memory.
     clip_coef_clamped = torch.clamp(clip_coef, max=1.0)
 
-    if _apex_available:
-        if grad_accumulator is None:
-            grads_including_tied = [p.grad for _, p in named_parameters]
-        else:
-            grads_including_tied = [grad_accumulator.get_grad_buffer(name) for name, p in named_parameters]
-        dummy_overflow_buf = torch.zeros(1, dtype=torch.int, device=torch.device("cuda"))
-        multi_tensor_applier(
-            amp_C.multi_tensor_scale,
-            dummy_overflow_buf,
-            [grads_including_tied, grads_including_tied],
-            clip_coef_clamped,
-        )
-    else:
-        warn_once(
-            logger=logger,
-            msg="Apex is not installed. Falling back to manual gradient scaling which is slower than apex's multi_tensor_scale.",
-            rank=0,
-        )
-        devices = {
-            param.grad.device if grad_accumulator is None else grad_accumulator.get_grad_buffer(name).device
-            for name, param in named_parameters
-        }
-        device_to_clip_coef_clamped = {device: clip_coef_clamped.to(device) for device in devices}
+    devices = {
+        param.grad.device if grad_accumulator is None else grad_accumulator.get_grad_buffer(name).device
+        for name, param in named_parameters
+    }
+    device_to_clip_coef_clamped = {device: clip_coef_clamped.to(device) for device in devices}
 
-        for name, param in named_parameters:
-            if grad_accumulator is None:
-                param.grad.detach().mul_(device_to_clip_coef_clamped[param.grad.device])
-            else:
-                grad_accumulator.get_grad_buffer(name).detach().mul_(
-                    device_to_clip_coef_clamped[grad_accumulator.get_grad_buffer(name).device]
-                )
+    for name, param in named_parameters:
+        if grad_accumulator is None:
+            param.grad.detach().mul_(device_to_clip_coef_clamped[param.grad.device])
+        else:
+            grad_accumulator.get_grad_buffer(name).detach().mul_(
+                device_to_clip_coef_clamped[grad_accumulator.get_grad_buffer(name).device]
+            )
 
     return total_norm
