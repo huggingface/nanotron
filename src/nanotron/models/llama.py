@@ -18,9 +18,6 @@ from functools import lru_cache
 from typing import Dict, Optional, Union
 
 import torch
-from torch import nn
-from transformers.activations import ACT2FN
-
 from nanotron.config import LlamaConfig, ParallelismArgs, RecomputeGranularity
 from nanotron.core import distributed as dist
 from nanotron.core import logging
@@ -39,6 +36,8 @@ from nanotron.core.process_groups import DistributedProcessGroups
 from nanotron.core.random import RandomStates
 from nanotron.core.utils import checkpoint_method
 from nanotron.models import AttachableStore, NanotronModel
+from torch import nn
+from transformers.activations import ACT2FN
 
 logger = logging.get_logger(__name__)
 
@@ -312,10 +311,8 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             async_communication=tp_linear_async_communication,
             contiguous_chunks=qkv_contiguous_chunks,
         )
-        self.rotary_embedding = RotaryEmbedding(
-            dim=self.d_qk,
-            end=config.max_position_embeddings,
-        )
+
+        self.rotary_embedding = RotaryEmbedding(dim=self.d_qk, end=config.max_position_embeddings)
 
         self.o_proj = TensorParallelRowLinear(
             config.num_attention_heads * self.d_qk,
@@ -385,6 +382,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             # Double check that we use store only at inference time
             assert key_states.requires_grad is False
             assert value_states.requires_grad is False
+
             if "position_offsets" in store:
                 old_position_offsets = store["position_offsets"]
                 position_ids = old_position_offsets[:, None] + sequence_mask
@@ -432,6 +430,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             # Apply rotary embeddings to query/key states
             query_states = self.rotary_embedding(query_states, position_ids=None)
             key_states = self.rotary_embedding(key_states, position_ids=None)
+
             attention_mask = _prepare_causal_attention_mask(
                 q_sequence_mask=sequence_mask,
                 k_sequence_mask=sequence_mask,
