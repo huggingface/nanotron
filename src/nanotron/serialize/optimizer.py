@@ -77,34 +77,14 @@ def save_lr_scheduler(
     )
 
 
-def load_optimizer(
-    optimizer: optim.BaseOptimizer,
-    parallel_context: ParallelContext,
-    root_folder: Path,
-    map_location: Optional[str] = None,
-):
-    root_folder = root_folder / "optimizer"
-    # `load_state_dict` copies the state dict which can be very large in case of Zero-0 so we load to cpu and then move to the right device
-    map_location = "cpu" if not optimizer.inherit_from(optim.ZeroDistributedOptimizer) else map_location
-
-    # TODO @thomasw21: Load optimizer type and check that it's compatible otherwise we might be be loading something else completely
-    state_dict = torch.load(
-        root_folder
-        / optimizer_filename(parallel_context, is_zero=optimizer.inherit_from(optim.ZeroDistributedOptimizer)),
-        map_location=map_location,
-    )
-    optimizer.load_state_dict(state_dict)
-
-
 @torch.no_grad()
-def load_optimizer_topology_agnostic(
-    # TODO(xrsrke): add typing
-    param_shard_metadata,
+def load_optimizer(
     model: nn.Module,
     optimizer: optim.BaseOptimizer,
     parallel_context: ParallelContext,
     root_folder: Path,
     map_location: Optional[str] = None,
+    param_shard_metadata=None,
 ):
     checkpoint_metadata = load_meta(parallel_context=parallel_context, root_folder=root_folder)
     root_folder = root_folder / "optimizer"
@@ -120,6 +100,9 @@ def load_optimizer_topology_agnostic(
             map_location=map_location,
         )
     else:
+        assert (
+            param_shard_metadata is not None
+        ), "You have to pass how the original parameters are sharded in order to resume in a different tensor parallel size"
         # NOTE: load checkpoint from a different tensor parallel size
         from nanotron.core.parallel.parameters import NanotronParameter
 

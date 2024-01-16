@@ -65,7 +65,7 @@ from nanotron.models import NanotronModel
 from nanotron.serialize import (
     load_lr_scheduler,
     load_meta,
-    load_optimizer_topology_agnostic,
+    load_optimizer,
     load_weights,
     parse_ckpt_path,
     save,
@@ -170,9 +170,8 @@ class DistributedTrainer:
             group=self.parallel_context.world_pg,
             rank=None,
         )
-        # TODO(xrsrke): add it back after debugging
-        # if free_mem < MIN_GPU_MEM_THRESHOLD:
-        #     raise RuntimeError(f"Not enough memory to train the model on node {os.environ.get('SLURMD_NODENAME')}")
+        if free_mem < MIN_GPU_MEM_THRESHOLD:
+            raise RuntimeError(f"Not enough memory to train the model on node {os.environ.get('SLURMD_NODENAME')}")
         # Try to allocate all the memory
         test_tensor_size = int(free_mem * 0.9)
         test_tensor = torch.zeros((test_tensor_size,), dtype=torch.uint8, device=torch.device("cuda"))
@@ -211,10 +210,7 @@ class DistributedTrainer:
             model=self.model, optimizer_args=self.config.optimizer, parallel_context=self.parallel_context
         )
         if checkpoint_path is not None:
-            # load_optimizer(
-            #     optimizer=self.optimizer, parallel_context=self.parallel_context, root_folder=checkpoint_path
-            # )
-            load_optimizer_topology_agnostic(
+            load_optimizer(
                 param_shard_metadata=self.param_shard_metadata,
                 model=self.model,
                 optimizer=self.optimizer,
@@ -257,9 +253,6 @@ class DistributedTrainer:
 
         # Log where each module is instantiated
         self.normalized_model.log_modules(level=logging.DEBUG, group=self.parallel_context.world_pg, rank=0)
-
-        if dist.get_rank(self.parallel_context.world_pg) == 0:
-            self._logging_losses = []
 
         # Log config and model config
         # self.log_object(self.config, "config")
@@ -472,12 +465,6 @@ class DistributedTrainer:
         # if self.s3_mover is not None:
         #     self.s3_mover.distributed_wait_for_completion(group=self.parallel_context.world_pg)
 
-        if dist.get_rank(self.parallel_context.world_pg) == 0:
-            dp_size = self.parallel_context.dp_pg.size()
-            pp_size = self.parallel_context.pp_pg.size()
-            tp_size = self.parallel_context.tp_pg.size()
-            torch.save(torch.tensor(self._logging_losses), f"./losses_tp{tp_size}_pp{pp_size}_dp{dp_size}.pt")
-
     def training_step(
         self, dataloader: Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]]
     ) -> Tuple[Iterable[Dict], Optional[torch.Tensor]]:
@@ -676,9 +663,6 @@ class DistributedTrainer:
 
             # if not isinstance(tb_writer, contextlib.nullcontext):
             #     tb_writer.add_scalars_from_list(log_entries, self.iteration_step)
-
-            if dist.get_rank(self.parallel_context.world_pg) == 0:
-                self._logging_losses.append(loss_avg.item())
 
             self.loggerwriter.add_scalars_from_list(log_entries, self.iteration_step)
 
@@ -1027,9 +1011,6 @@ class DistributedTrainer:
         if not self.config.general.ignore_sanity_checks:
             # SANITY CHECK: Check that the model params are synchronized across dp
             for name, param in sorted(self.model.named_parameters(), key=lambda x: x[0]):
-                if name == "module.model.decoder.0.pp_block.attn.o_proj.weight":
-                    assert 1 == 1
-
                 assert_tensor_synced_across_pg(
                     tensor=param,
                     pg=self.parallel_context.dp_pg,
