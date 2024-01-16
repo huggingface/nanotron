@@ -94,6 +94,7 @@ def load_optimizer(
     optimizer.load_state_dict(state_dict)
 
 
+@torch.no_grad()
 def load_optimizer_topology_agnostic(
     # TODO(xrsrke): add typing
     param_shard_metadata,
@@ -165,7 +166,7 @@ def load_optimizer_topology_agnostic(
             for slices_pair in current_shard_metadata.local_global_slices_pairs:
                 local_slices = slices_pair.local_slices
                 global_slices = slices_pair.global_slices
-                buffer = unsharded[global_slices]
+                buffer[local_slices] = unsharded[global_slices]
 
             return buffer
 
@@ -188,8 +189,8 @@ def load_optimizer_topology_agnostic(
                     # NOTE: optimizer states's shape is equal to the parameter's shape
                     # NOTE: sometines an unsharded parameter's shape differ
                     # from an unsharded optimizer state's shape
-                    sharded_info = param.get_sharded_info()
-                    unshared_shape = sharded_info.unsharded_shape
+                    new_shard_metadata = param.get_sharded_info()
+                    new_unshared_shape = new_shard_metadata.unsharded_shape
 
                     # TODO(xrsrke): find a better name than "dict_key"
                     for key_dict in ["state", "gradient_accumulator"]:
@@ -204,7 +205,7 @@ def load_optimizer_topology_agnostic(
                                 for state_key in state_keys:
                                     # TODO(xrsrke): free the memory of the shards that isn't
                                     # corresponding to the current rank
-                                    unsharded_state = torch.empty(unshared_shape, device=param_or_buffer.device)
+                                    unsharded_state = torch.empty(new_unshared_shape, device=param_or_buffer.device)
                                     new_optim_state_dict[key_dict][optim_state_index][state_key] = torch.empty_like(
                                         param
                                     )
@@ -227,7 +228,7 @@ def load_optimizer_topology_agnostic(
                                     new_optim_state_dict[key_dict][optim_state_index][state_key] = merge_and_shard(
                                         new_optim_state_dict[key_dict][optim_state_index][state_key],
                                         unsharded_state,
-                                        sharded_info,
+                                        new_shard_metadata,
                                         ckp_shard_metadata,
                                     )
 
@@ -235,16 +236,21 @@ def load_optimizer_topology_agnostic(
                                     optim_state_index
                                 ]["step"]
                             elif key_dict == "gradient_accumulator":
-                                unsharded_state = torch.empty(unshared_shape, device=param_or_buffer.device)
-                                new_optim_state_dict[key_dict][optim_state_index] = unsharded_state
+                                assert 1 == 1
+                                unsharded_state = torch.empty(new_unshared_shape, device=param_or_buffer.device)
+                                # new_optim_state_dict[key_dict][optim_state_index] = unsharded_state
+
+                                if param_name == "module.model.decoder.0.pp_block.attn.qkv_proj.weight":
+                                    # NOTE: unsharded.shape = (48, 16)
+                                    assert 1 == 1
+
                                 new_optim_state_dict[key_dict][optim_state_index] = merge_and_shard(
                                     new_optim_state_dict[key_dict][optim_state_index],
                                     unsharded_state,
-                                    sharded_info,
+                                    new_shard_metadata,
                                     ckp_shard_metadata,
                                 )
 
-        assert 1 == 1
         new_optim_state_dict["names"] = ckp_sharded_optim_states[("0", "0")]["names"]
         state_dict = new_optim_state_dict
 

@@ -1,6 +1,6 @@
 checkpoints:
   checkpoint_interval: 10
-  checkpoints_path: /fsx/phuc/checkpoints/nanotron-optim-loading/dp_4
+  checkpoints_path: /fsx/phuc/checkpoints/nanotron-optim-loading/no_zero1_dp_2_tp2_pp1
   checkpoints_path_is_shared_file_system: true
   resume_checkpoint_path: /fsx/phuc/checkpoints/nanotron-optim-loading/no_zero1_dp_2_tp4_pp1
 
@@ -94,6 +94,6 @@ tokens:
   micro_batch_size: 10
   sequence_length: 32
   # train_steps: 1000
-  train_steps: 20
+  train_steps: 40
   # train_steps: 2
   val_check_interval: -1
