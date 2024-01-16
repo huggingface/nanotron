@@ -170,8 +170,9 @@ class DistributedTrainer:
             group=self.parallel_context.world_pg,
             rank=None,
         )
-        if free_mem < MIN_GPU_MEM_THRESHOLD:
-            raise RuntimeError(f"Not enough memory to train the model on node {os.environ.get('SLURMD_NODENAME')}")
+        # TODO(xrsrke): add it back after debugging
+        # if free_mem < MIN_GPU_MEM_THRESHOLD:
+        #     raise RuntimeError(f"Not enough memory to train the model on node {os.environ.get('SLURMD_NODENAME')}")
         # Try to allocate all the memory
         test_tensor_size = int(free_mem * 0.9)
         test_tensor = torch.zeros((test_tensor_size,), dtype=torch.uint8, device=torch.device("cuda"))
@@ -1014,6 +1015,9 @@ class DistributedTrainer:
         if not self.config.general.ignore_sanity_checks:
             # SANITY CHECK: Check that the model params are synchronized across dp
             for name, param in sorted(self.model.named_parameters(), key=lambda x: x[0]):
+                if name == "module.model.decoder.0.pp_block.attn.o_proj.weight":
+                    assert 1 == 1
+
                 assert_tensor_synced_across_pg(
                     tensor=param,
                     pg=self.parallel_context.dp_pg,

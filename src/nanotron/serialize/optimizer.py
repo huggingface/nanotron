@@ -157,22 +157,28 @@ def load_optimizer_topology_agnostic(
             else:
                 return param_name
 
-        def merge_and_shard(buffer, unsharded, current_shard_metadata, ckp_shard_metadata):
+        def merge_and_shard(buffer, unsharded_buffer, ckp_shard_data, current_shard_metadata, ckp_shard_metadata):
             for slices_pair in ckp_shard_metadata.local_global_slices_pairs:
                 local_slices = slices_pair.local_slices
                 global_slices = slices_pair.global_slices
-                unsharded[global_slices] = ckp_data[local_slices]
+                unsharded_buffer[global_slices] = ckp_shard_data[local_slices]
 
             for slices_pair in current_shard_metadata.local_global_slices_pairs:
                 local_slices = slices_pair.local_slices
                 global_slices = slices_pair.global_slices
-                buffer[local_slices] = unsharded[global_slices]
+                buffer[local_slices] = unsharded_buffer[global_slices]
 
             return buffer
 
         model_state_dict = model.state_dict()
+        # for param_name, param_or_buffer in tqdm(
+        #     model_state_dict.items(),
+        #     disable=dist.get_rank(parallel_context.world_pg) != 0,
+        #     desc="Merging and sharding optimizer states",
+        # ):
+        assert 1 == 1
         for param_name, param_or_buffer in tqdm(
-            model_state_dict.items(),
+            sorted(model_state_dict.items(), key=lambda x: x[0]),
             disable=dist.get_rank(parallel_context.world_pg) != 0,
             desc="Merging and sharding optimizer states",
         ):
@@ -180,8 +186,10 @@ def load_optimizer_topology_agnostic(
                 param = model.get_parameter(param_name)
             except AttributeError:
                 param = None
+                raise ValueError(f"Parameter {param_name} is not found in the model")
 
             def get_checkpoint_state_metadata(param_name, pp_rank, tp_rank):
+                # TODO(xrsrke): convert pp_rank, tp_rank to ingeter when saving
                 return param_shard_metadata[param_name.replace("module.", "")][(str(pp_rank), str(tp_rank))]
 
             if isinstance(param, NanotronParameter):
@@ -195,58 +203,50 @@ def load_optimizer_topology_agnostic(
                     # TODO(xrsrke): find a better name than "dict_key"
                     for key_dict in ["state", "gradient_accumulator"]:
                         # NOTE: merging optimizer states
-                        for (pp_rank, tp_rank), ckp_optim_state in ckp_sharded_optim_states.items():
-                            optim_state_index = find_optim_index_from_param_name(key_dict, param_name)
-                            ckp_shard_metadata = get_checkpoint_state_metadata(param_name, pp_rank, tp_rank)
+                        optim_state_index = find_optim_index_from_param_name(key_dict, param_name)
 
-                            if key_dict == "state":
-                                state_keys = ["exp_avg", "exp_avg_sq"]
-                                new_optim_state_dict[key_dict][optim_state_index] = {}
-                                for state_key in state_keys:
-                                    # TODO(xrsrke): free the memory of the shards that isn't
-                                    # corresponding to the current rank
-                                    unsharded_state = torch.empty(new_unshared_shape, device=param_or_buffer.device)
-                                    new_optim_state_dict[key_dict][optim_state_index][state_key] = torch.empty_like(
-                                        param
-                                    )
+                        if key_dict == "state":
+                            state_keys = ["exp_avg", "exp_avg_sq"]
+                            new_optim_state_dict[key_dict][optim_state_index] = {}
+                            for state_key in state_keys:
+                                # TODO(xrsrke): free the memory of the shards that isn't
+                                # corresponding to the current rank
+                                unsharded_buffer = torch.empty(new_unshared_shape, device=param.device)
+                                buffer = torch.zeros_like(param)
 
-                                    ckp_data = ckp_optim_state[key_dict][optim_state_index][state_key]
-                                    # TODO(xrsrke): convert pp_rank, tp_rank to ingeter when saving
-
-                                    # for slices_pair in ckp_shard_metadata.local_global_slices_pairs:
-                                    #     local_slices = slices_pair.local_slices
-                                    #     global_slices = slices_pair.global_slices
-                                    #     unsharded_state[global_slices] = ckp_data[local_slices]
-
-                                    # for slices_pair in sharded_info.local_global_slices_pairs:
-                                    #     local_slices = slices_pair.local_slices
-                                    #     global_slices = slices_pair.global_slices
-                                    #     new_optim_state_dict[key_dict][optim_state_index][state_key] = unsharded_state[
-                                    #         global_slices
-                                    #     ]
-
+                                for (pp_rank, tp_rank), ckp_optim_state in ckp_sharded_optim_states.items():
+                                    ckp_shard_metadata = get_checkpoint_state_metadata(param_name, pp_rank, tp_rank)
+                                    ckp_shard_data = ckp_optim_state[key_dict][optim_state_index][state_key]
                                     new_optim_state_dict[key_dict][optim_state_index][state_key] = merge_and_shard(
-                                        new_optim_state_dict[key_dict][optim_state_index][state_key],
-                                        unsharded_state,
+                                        buffer,
+                                        unsharded_buffer,
+                                        ckp_shard_data,
                                         new_shard_metadata,
                                         ckp_shard_metadata,
                                     )
 
-                                new_optim_state_dict[key_dict][optim_state_index]["step"] = ckp_optim_state[key_dict][
-                                    optim_state_index
-                                ]["step"]
-                            elif key_dict == "gradient_accumulator":
-                                assert 1 == 1
-                                unsharded_state = torch.empty(new_unshared_shape, device=param_or_buffer.device)
-                                # new_optim_state_dict[key_dict][optim_state_index] = unsharded_state
+                            new_optim_state_dict[key_dict][optim_state_index]["step"] = ckp_optim_state[key_dict][
+                                optim_state_index
+                            ]["step"]
+                        elif key_dict == "gradient_accumulator":
+                            buffer = new_optim_state_dict[key_dict][optim_state_index]
+                            unsharded_buffer = torch.empty(new_unshared_shape, device=param_or_buffer.device)
 
-                                if param_name == "module.model.decoder.0.pp_block.attn.qkv_proj.weight":
-                                    # NOTE: unsharded.shape = (48, 16)
-                                    assert 1 == 1
-
-                                new_optim_state_dict[key_dict][optim_state_index] = merge_and_shard(
-                                    new_optim_state_dict[key_dict][optim_state_index],
-                                    unsharded_state,
+                            for (pp_rank, tp_rank), ckp_optim_state in ckp_sharded_optim_states.items():
+                                ckp_shard_metadata = get_checkpoint_state_metadata(param_name, pp_rank, tp_rank)
+                                # ckp_shard_data = ckp_optim_state[key_dict][optim_state_index][state_key]
+                                # new_optim_state_dict[key_dict][optim_state_index][state_key] = merge_and_shard(
+                                #     buffer,
+                                #     unsharded_buffer,
+                                #     ckp_shard_data,
+                                #     new_shard_metadata,
+                                #     ckp_shard_metadata,
+                                # )
+                                ckp_shard_data = ckp_optim_state[key_dict][optim_state_index]
+                                merge_and_shard(
+                                    buffer,
+                                    unsharded_buffer,
+                                    ckp_shard_data,
                                     new_shard_metadata,
                                     ckp_shard_metadata,
                                 )
