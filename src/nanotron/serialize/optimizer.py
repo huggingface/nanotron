@@ -8,7 +8,6 @@ from nanotron.core import optim as optim
 from nanotron.core.optim.optimizer_from_gradient_accumulator import OptimizerFromGradientAccumulator
 from nanotron.core.optim.zero import ZeroDistributedOptimizer
 from nanotron.distributed import ParallelContext
-from nanotron.serialize.metadata import load_meta
 from nanotron.serialize.utils import ObjectType
 from torch import nn
 from tqdm import tqdm
@@ -43,7 +42,20 @@ def save_optimizer(
 
     if dist.get_rank(parallel_context.world_pg) == 0:
         with open(root_folder / "optimizer_config.json", "w") as fo:
-            json.dump({"type": optimizer.__class__.__name__}, fo)
+            tp_size = parallel_context.tp_pg.size()
+            pp_size = parallel_context.pp_pg.size()
+            dp_size = parallel_context.dp_pg.size()
+            json.dump(
+                {
+                    "type": optimizer.__class__.__name__,
+                    "parallelism": {
+                        "tp_size": tp_size,
+                        "dp_size": pp_size,
+                        "pp_size": dp_size,
+                    },
+                },
+                fo,
+            )
 
     if (not optimizer.inherit_from(optim.ZeroDistributedOptimizer)) and dist.get_rank(parallel_context.dp_pg) > 0:
         # this is Zero-0, so only DP-0 saves the optimizer states
@@ -86,13 +98,15 @@ def load_optimizer(
     param_shard_metadata=None,
     model: Optional[nn.Module] = None,
 ):
-    checkpoint_metadata = load_meta(parallel_context=parallel_context, root_folder=root_folder)
     root_folder = root_folder / "optimizer"
     # `load_state_dict` copies the state dict which can be very large in case of Zero-0 so we load to cpu and then move to the right device
     map_location = "cpu" if not optimizer.inherit_from(optim.ZeroDistributedOptimizer) else map_location
+    # checkpoint_metadata = load_meta(parallel_context=parallel_context, root_folder=root_folder)
+    ckp_optimizer_config_path = root_folder / "optimizer_config.json"
+    ckp_optimizer_config = json.load(ckp_optimizer_config_path.open("r"))
 
     # NOTE: for OptimizerFromGradientAccumulator only
-    if checkpoint_metadata.tp == parallel_context.tp_pg.size():
+    if ckp_optimizer_config["parallelism"]["tp_size"] == parallel_context.tp_pg.size():
         # TODO @thomasw21: Load optimizer type and check that it's compatible otherwise we might be be loading something else completely
         state_dict = torch.load(
             root_folder
@@ -142,16 +156,12 @@ def load_optimizer(
         def get_checkpoint_state_metadata(param_name, pp_rank, tp_rank):
             return param_shard_metadata[param_name.replace("module.", "")][(str(pp_rank), str(tp_rank))]
 
-        ckp_optimizer_config_path = root_folder / "optimizer_config.json"
-        ckp_optimizer_config = json.load(ckp_optimizer_config_path.open("r"))
         ckp_optim_type = ckp_optimizer_config["type"]
-
         if ckp_optim_type == OptimizerFromGradientAccumulator.__name__:
             new_optim_state_dict = optimizer.state_dict()
 
-            # TODO(xrsrke): make seria always save pp size even it's 1
-            checkpoint_pp_size = getattr(checkpoint_metadata, "pp", 1)
-            checkpoint_tp_size = checkpoint_metadata.tp
+            checkpoint_pp_size = ckp_optimizer_config["parallelism"]["pp_size"]
+            checkpoint_tp_size = ckp_optimizer_config["parallelism"]["tp_size"]
             shard_paths = list(
                 root_folder.glob(
                     f"{ObjectType.OPTIMIZER.value}_pp-*-of-{checkpoint_pp_size}_tp-*-of-{checkpoint_tp_size}.pt"
