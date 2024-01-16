@@ -122,6 +122,8 @@ class DistributedTrainer:
             tensor_parallel_size=self.config.parallelism.tp,
         )
 
+        self.pre_init()
+
         # Set log levels
         if dist.get_rank(self.dpg.world_pg) == 0:
             if self.config.logging.log_level is not None:
@@ -213,6 +215,9 @@ class DistributedTrainer:
         self.limit_val_batches = self.config.tokens.limit_val_batches
 
         self.post_init()
+
+    def pre_init(self):
+        pass
 
     def post_init(self):
         pass
