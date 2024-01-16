@@ -33,6 +33,7 @@ In the `/examples` directory, we provide a set of **self-sufficient** examples f
 Requirements:
  - Python >= 3.10
  - PyTorch >= 2.0.0
+ - Flash-Attention >= 2.4.2
 
 To install:
 ```bash

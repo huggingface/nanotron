@@ -148,16 +148,16 @@ class DistributedTrainer:
         self.random_states = init_random_states(
             parallel_config=self.config.parallelism, tp_pg=self.parallel_context.tp_pg
         )
-        self.model, checkpoint_path = self.init_model()  # Defines self.model
+        self.model = self.init_model()  # Defines self.model
         self.normalized_model = self.model.module if isinstance(self.model, DistributedDataParallel) else self.model
 
         # Init optimizer
         self.optimizer, self.grad_accumulator = init_optimizer_and_grad_accumulator(
             model=self.model, optimizer_args=self.config.optimizer, parallel_context=self.parallel_context
         )
-        if checkpoint_path is not None:
+        if self.init_checkpoint_path is not None:
             load_optimizer(
-                optimizer=self.optimizer, parallel_context=self.parallel_context, root_folder=checkpoint_path
+                optimizer=self.optimizer, parallel_context=self.parallel_context, root_folder=self.init_checkpoint_path
             )
 
         # Init learning rate scheduler
@@ -175,8 +175,8 @@ class DistributedTrainer:
         # Define iteration start state
         self.start_iteration_step: int
         self.consumed_train_samples: int
-        if checkpoint_path is not None:
-            checkpoint_metadata = load_meta(parallel_context=self.parallel_context, root_folder=checkpoint_path)
+        if self.init_checkpoint_path is not None:
+            checkpoint_metadata = load_meta(parallel_context=self.parallel_context, root_folder=self.init_checkpoint_path)
             log_rank(str(checkpoint_metadata), logger=logger, level=logging.INFO, rank=0)
             self.start_iteration_step = checkpoint_metadata.metas["last_train_step"]
             self.consumed_train_samples = checkpoint_metadata.metas["consumed_train_samples"]
@@ -684,12 +684,12 @@ class DistributedTrainer:
         normalized_model = model.module if isinstance(model, DistributedDataParallel) else model
 
         # Load or initialize model weights
-        init_checkpoint_path = parse_ckpt_path(config=self.config)
+        self.init_checkpoint_path = parse_ckpt_path(config=self.config)
         reloaded_from_checkpoint = False
-        if init_checkpoint_path is not None:
+        if self.init_checkpoint_path is not None:
             # Reload from a training checkpoint
-            log_rank(f"Loading weights from {checkpoint_path}", logger=logger, level=logging.INFO, rank=0)
-            load_weights(model=normalized_model, parallel_context=self.parallel_context, root_folder=checkpoint_path)
+            log_rank(f"Loading weights from {self.init_checkpoint_path}", logger=logger, level=logging.INFO, rank=0)
+            load_weights(model=normalized_model, parallel_context=self.parallel_context, root_folder=self.init_checkpoint_path)
             reloaded_from_checkpoint = True
         if not reloaded_from_checkpoint:
             log_rank("No checkpoint path provided.", logger=logger, level=logging.INFO)
@@ -726,7 +726,7 @@ class DistributedTrainer:
             else:
                 raise ValueError(f"Unsupported {self.config.model.init_method}")
 
-        return model, init_checkpoint_path
+        return model
 
     def _init_model(
         self,
