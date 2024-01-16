@@ -123,6 +123,16 @@ def load_optimizer_topology_agnostic(
         # NOTE: load checkpoint from a different tensor parallel size
         from nanotron.core.parallel.parameters import NanotronParameter
 
+        def extract_tp_pp_rank_from_shard_path(shard_path: Path):
+            import re
+
+            # TODO(xrsrke): use the same pattern as weight checkpoints
+            # in weight checkpoints, we do pp-rank-.... but here we only do pp-...
+            pattern = r"pp-(\d+)-of-\d+_tp-(\d+)-of-\d+"
+            match = re.search(pattern, str(shard_path))
+            pp_rank, tp_rank = match.groups()
+            return int(pp_rank), int(tp_rank)
+
         def find_optim_index_from_param_name(key_dict, param_name, ckp_sharded_optim_states):
             param_name = param_name.replace("module.", "")
             if key_dict == "state":
@@ -149,16 +159,6 @@ def load_optimizer_topology_agnostic(
         def get_checkpoint_state_metadata(param_name, pp_rank, tp_rank):
             return param_shard_metadata[param_name.replace("module.", "")][(str(pp_rank), str(tp_rank))]
 
-        def extract_tp_pp_rank_from_shard_path(shard_path: Path):
-            import re
-
-            # TODO(xrsrke): use the same pattern as weight checkpoints
-            # in weight checkpoints, we do pp-rank-.... but here we only do pp-...
-            pattern = r"pp-(\d+)-of-\d+_tp-(\d+)-of-\d+"
-            match = re.search(pattern, str(shard_path))
-            pp_rank, tp_rank = match.groups()
-            return int(pp_rank), int(tp_rank)
-
         ckp_optimizer_config_path = root_folder / "optimizer_config.json"
         ckp_optimizer_config = json.load(ckp_optimizer_config_path.open("r"))
         ckp_optim_type = ckp_optimizer_config["type"]
@@ -184,7 +184,7 @@ def load_optimizer_topology_agnostic(
             for param_name, param_or_buffer in tqdm(
                 sorted(model_state_dict.items(), key=lambda x: x[0]),
                 disable=dist.get_rank(parallel_context.world_pg) != 0,
-                desc="Merging and sharding optimizer states",
+                desc="Topology-agnostic optimizer loading",
             ):
                 try:
                     param = model.get_parameter(param_name)
@@ -245,6 +245,8 @@ def load_optimizer_topology_agnostic(
                                         new_shard_metadata,
                                         ckp_shard_metadata,
                                     )
+                else:
+                    raise NotImplementedError("Parameters are required to be NanotronParameter")
 
             # NOTE: since all shards have the same optim state names
             # so we take the first shard
