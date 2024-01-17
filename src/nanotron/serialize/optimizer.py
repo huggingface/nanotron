@@ -130,7 +130,6 @@ def find_optim_index_from_param_name(key_dict, param_name, ckp_sharded_optim_sta
 
 def _merge_dp_shard_in_zero1_optimizer(
     model,
-    optimizer,
     optimizer_config,
     shard_paths,
     parallel_context: ParallelContext,
@@ -192,13 +191,16 @@ def _merge_dp_shard_in_zero1_optimizer(
         # NOTE: now merge the shards across data parallel dimension
         # for each parameter, we need to merge all shards across data parallel dimension
         merged_dp_shards_optim_states = {}
-        device = next(model.parameters()).device
+        next(model.parameters()).device
 
+        # TODO(xrsrke): detect if we need to merge gradient_accumulator states at all
         # TODO(xrsrke): find a better name than "key_dict"
         for key_dict in ["state", "gradient_accumulator"]:
             merged_dp_shards_optim_states[key_dict] = {}
+
             if key_dict == "state":
                 for param_name in param_names:
+                    unshard_dp_size = get_numel_of_unsharded_dp_param(param_name)
                     optim_state_index = find_optim_index_from_param_name(
                         key_dict=key_dict,
                         param_name=param_name,
@@ -206,13 +208,9 @@ def _merge_dp_shard_in_zero1_optimizer(
                         is_zero1_checkpoint=True,
                     )
                     merged_dp_shards_optim_states[key_dict][optim_state_index] = {}
-                    unshard_dp_size = get_numel_of_unsharded_dp_param(param_name)
-
-                    # TODO(xrsrke): detect if we need to merge gradient_accumulator states
-
                     # TODO(xrsrke): don't hardcore optimizer states
                     for state_name in ["exp_avg", "exp_avg_sq"]:
-                        unsharded_dp_buffer = torch.zeros(unshard_dp_size, device=device)
+                        unsharded_dp_buffer = torch.zeros(unshard_dp_size, device="cuda")
                         # NOTE: now merge all the params across data parallel dimension
                         for dp_rank, ckp_optim_state in filtered_ckp_sharded_optim_states.items():
                             # NOTE: extract the optimizer state of the current parameter
@@ -227,7 +225,8 @@ def _merge_dp_shard_in_zero1_optimizer(
                         merged_dp_shards_optim_states[key_dict][optim_state_index]["step"] = ckp_optim_state["step"]
             else:
                 for param_name in param_names:
-                    unsharded_dp_buffer = torch.zeros(unshard_dp_size, device=device)
+                    unshard_dp_size = get_numel_of_unsharded_dp_param(param_name)
+                    unsharded_dp_buffer = torch.zeros(unshard_dp_size, device="cuda")
                     for dp_rank, ckp_optim_state in filtered_ckp_sharded_optim_states.items():
                         # NOTE: extract the optimizer state of the current parameter
                         optim_state_index = find_optim_index_from_param_name(
@@ -303,7 +302,10 @@ def load_optimizer(
             pp_rank, tp_rank = match.groups()
             return int(pp_rank), int(tp_rank)
 
-        def merge_and_shard(buffer, unsharded_buffer, ckp_shard_data, current_shard_metadata, ckp_shard_metadata):
+        # TODO(xrsrke): remove param_name
+        def merge_and_shard(
+            param_name, buffer, unsharded_buffer, ckp_shard_data, current_shard_metadata, ckp_shard_metadata
+        ):
             for slices_pair in ckp_shard_metadata.local_global_slices_pairs:
                 local_slices = slices_pair.local_slices
                 global_slices = slices_pair.global_slices
@@ -335,7 +337,7 @@ def load_optimizer(
                 )
             )
             ckp_sharded_optim_states = _merge_dp_shard_in_zero1_optimizer(
-                model, optimizer, ckp_optimizer_config, shard_paths, parallel_context, map_location
+                model, ckp_optimizer_config, shard_paths, parallel_context, map_location
             )
         else:
             # NOTE: if the checkpoint is from a Zero-0 optimizer, then we don't need to merge the shards
@@ -386,8 +388,8 @@ def load_optimizer(
                         for state_key in state_keys:
                             # TODO(xrsrke): free the memory of the shards that isn't
                             # corresponding to the current rank
-                            unsharded_buffer = torch.empty(new_unshared_shape, device=param.device)
-                            buffer = torch.zeros_like(param)
+                            buffer = torch.zeros_like(param, device="cuda")
+                            unsharded_buffer = torch.empty(new_unshared_shape, device="cuda")
 
                             for (pp_rank, tp_rank), ckp_optim_state in ckp_sharded_optim_states.items():
                                 ckp_shard_metadata = get_checkpoint_state_metadata(param_name, pp_rank, tp_rank)
@@ -402,6 +404,7 @@ def load_optimizer(
                                     ckp_shard_data = ckp_shard_data.view(orig_shape)
 
                                 new_optim_state_dict[key_dict][optim_state_index][state_key] = merge_and_shard(
+                                    param_name,
                                     buffer,
                                     unsharded_buffer,
                                     ckp_shard_data,
@@ -414,22 +417,39 @@ def load_optimizer(
                         ]["step"]
                     elif key_dict == "gradient_accumulator":
                         buffer = new_optim_state_dict[key_dict][optim_state_index]
-                        unsharded_buffer = torch.empty(new_unshared_shape, device=param_or_buffer.device)
+                        unsharded_buffer = torch.zeros(new_unshared_shape, device="cuda", dtype=buffer.dtype)
 
                         for (pp_rank, tp_rank), ckp_optim_state in ckp_sharded_optim_states.items():
                             ckp_shard_metadata = get_checkpoint_state_metadata(param_name, pp_rank, tp_rank)
                             ckp_shard_data = ckp_optim_state[key_dict][optim_state_index]
-                            orig_shape = ckp_optimizer_config["configs"]["orig_param_shapes"][param_name]
-                            orig_shape = [int(dim) for dim in orig_shape]
-                            ckp_shard_data = ckp_shard_data.view(orig_shape)
 
-                            merge_and_shard(
-                                buffer,
-                                unsharded_buffer,
-                                ckp_shard_data,
-                                new_shard_metadata,
-                                ckp_shard_metadata,
-                            )
+                            if ckp_optim_type == ZeroDistributedOptimizer.__name__:
+                                # NOTE: if the checkpoint is from a Zero-1 optimizer,
+                                # so it's flattened, so we need to reshape it
+                                orig_shape = ckp_optimizer_config["configs"]["orig_param_shapes"][param_name]
+                                orig_shape = [int(dim) for dim in orig_shape]
+                                ckp_shard_data = ckp_shard_data.view(orig_shape)
+                                try:
+                                    buffer = buffer.view(orig_shape)
+                                except RuntimeError:
+                                    assert 1 == 1
+                                    # raise ValueError("buffer is not viewable")
+
+                            if param_name == "model.decoder.0.pp_block.attn.o_proj.weight":
+                                assert 1 == 1
+
+                            try:
+                                merge_and_shard(
+                                    param_name,
+                                    buffer,
+                                    unsharded_buffer,
+                                    ckp_shard_data,
+                                    new_shard_metadata,
+                                    ckp_shard_metadata,
+                                )
+                            except RuntimeError:
+                                assert 1 == 1
+                                # raise ValueError("merge_and_shard failed")
 
         # NOTE: since all shards have the same optim state names
         # so we take the first shard
