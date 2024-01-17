@@ -176,7 +176,7 @@ class NanotronParameter(nn.Parameter):
 def check_model_has_grad(model: NanotronModel, parallel_context: ParallelContext):
     """Check that there's at least a parameter in current PP rank that has a gradient."""
     for param in model.parameters():
-        if param.grad is not None:
+        if param.requires_grad:
             return True
     raise ValueError(
         f"Can't use DDP because model in PP={dist.get_rank(parallel_context.pp_pg)} has no gradient. Consider increasing the number of layers of your model, or put a smaller PP size.\n"

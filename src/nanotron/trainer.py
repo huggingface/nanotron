@@ -171,7 +171,9 @@ class DistributedTrainer:
             rank=None,
         )
         if free_mem < MIN_GPU_MEM_THRESHOLD:
-            raise RuntimeError(f"Not enough memory to train the model on node {os.environ.get('SLURMD_NODENAME')}")
+            raise RuntimeError(
+                f"Not enough memory to train the model on node {os.environ.get('SLURMD_NODENAME')}. Got {human_format(free_mem)} but need at least {human_format(MIN_GPU_MEM_THRESHOLD)}"
+            )  # noqa
         # Try to allocate all the memory
         test_tensor_size = int(free_mem * 0.9)
         test_tensor = torch.zeros((test_tensor_size,), dtype=torch.uint8, device=torch.device("cuda"))
@@ -727,7 +729,6 @@ class DistributedTrainer:
 
             model.input_pp_rank = target_pp_ranks[0]
             model.output_pp_rank = target_pp_ranks[target_pp_rank_idx]
-
         return model
 
     def init_model(self) -> Tuple[NanotronModel, Optional[str]]:
