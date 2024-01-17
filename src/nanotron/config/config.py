@@ -367,7 +367,7 @@ class Config:
         return serialize(self)
 
 
-def get_config_from_file(config_path: str, config_class: Optional[Type[Config]] = Config) -> Config:
+def get_config_from_file(config_path: str, config_class: Type[Config] = Config) -> Config:
     """Get a config objet from a file (python or YAML)
 
     Args:
