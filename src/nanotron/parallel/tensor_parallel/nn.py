@@ -25,14 +25,14 @@ from nanotron.parallel.sharded_parameters import (
     create_sharded_parameter_from_config,
     mark_all_parameters_in_module_as_sharded,
 )
-from nanotron.parallel.tensor_parallelism.distributed_differentiable_primitives import (
+from nanotron.parallel.tensor_parallel.distributed_differentiable_primitives import (
     differentiable_all_gather,
     differentiable_all_reduce_sum,
     differentiable_identity,
     differentiable_reduce_scatter_sum,
 )
-from nanotron.parallel.tensor_parallelism.enum import TensorParallelLinearMode
-from nanotron.parallel.tensor_parallelism.functional import (
+from nanotron.parallel.tensor_parallel.enum import TensorParallelLinearMode
+from nanotron.parallel.tensor_parallel.functional import (
     column_linear,
     row_linear,
 )

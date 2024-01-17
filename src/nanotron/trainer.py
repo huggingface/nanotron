@@ -21,15 +21,15 @@ from nanotron.config import (
 )
 from nanotron import distributed as dist
 from nanotron.optim.clip_grads import clip_grad_norm
-from nanotron.parallel.data_parallelism.utils import sync_gradients_across_dp
+from nanotron.parallel.data_parallel.utils import sync_gradients_across_dp
 from nanotron.parallel.parameters import NanotronParameter, check_model_has_grad, sanity_check
-from nanotron.parallel.pipeline_parallelism.block import PipelineBlock
-from nanotron.parallel.pipeline_parallelism.engine import (
+from nanotron.parallel.pipeline_parallel.block import PipelineBlock
+from nanotron.parallel.pipeline_parallel.engine import (
     PipelineEngine,
 )
-from nanotron.parallel.pipeline_parallelism.tensor_pointer import TensorPointer
-from nanotron.parallel.pipeline_parallelism.utils import get_pp_rank_of
-from nanotron.parallel.tensor_parallelism.nn import (
+from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
+from nanotron.parallel.pipeline_parallel.utils import get_pp_rank_of
+from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelLinearMode,
     TensorParallelRowLinear,
 )

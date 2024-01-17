@@ -34,13 +34,13 @@ from nanotron.config import ParallelismArgs, RecomputeGranularity, Starcoder2Con
 from nanotron import distributed as dist
 from nanotron.distributed import get_global_rank
 from nanotron.parallel.parameters import NanotronParameter
-from nanotron.parallel.pipeline_parallelism.block import PipelineBlock
-from nanotron.parallel.pipeline_parallelism.p2p import P2P
-from nanotron.parallel.pipeline_parallelism.tensor_pointer import TensorPointer
+from nanotron.parallel.pipeline_parallel.block import PipelineBlock
+from nanotron.parallel.pipeline_parallel.p2p import P2P
+from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
 from nanotron.parallel.sharded_parameters import SplitConfig, mark_all_parameters_in_module_as_sharded
-from nanotron.parallel.tensor_parallelism.enum import TensorParallelLinearMode
-from nanotron.parallel.tensor_parallelism.functional import column_linear, sharded_cross_entropy
-from nanotron.parallel.tensor_parallelism.nn import (
+from nanotron.parallel.tensor_parallel.enum import TensorParallelLinearMode
+from nanotron.parallel.tensor_parallel.functional import column_linear, sharded_cross_entropy
+from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelColumnLinear,
     TensorParallelEmbedding,
     TensorParallelRowLinear,

@@ -12,12 +12,12 @@ from nanotron.optim.gradient_accumulator import (
 )
 from nanotron.parallel.model import initial_sync
 from nanotron.parallel.parameters import NanotronParameter, sanity_check
-from nanotron.parallel.pipeline_parallelism.engine import (
+from nanotron.parallel.pipeline_parallel.engine import (
     AllForwardAllBackwardPipelineEngine,
 )
-from nanotron.parallel.pipeline_parallelism.p2p import P2P
-from nanotron.parallel.tensor_parallelism.enum import TensorParallelLinearMode
-from nanotron.parallel.tensor_parallelism.nn import (
+from nanotron.parallel.pipeline_parallel.p2p import P2P
+from nanotron.parallel.tensor_parallel.enum import TensorParallelLinearMode
+from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelColumnLinear,
 )
 from nanotron.parallel.tied_parameters import (

@@ -17,12 +17,12 @@ from nanotron.config.utils_config import (
     cast_str_to_torch_dtype,
     serialize,
 )
-from nanotron.parallel.pipeline_parallelism.engine import (
+from nanotron.parallel.pipeline_parallel.engine import (
     AllForwardAllBackwardPipelineEngine,
     PipelineEngine,
 )
-from nanotron.parallel.tensor_parallelism.nn import TensorParallelLinearMode
-from nanotron.generate.sampler import SamplerType
+from nanotron.parallel.tensor_parallel.nn import TensorParallelLinearMode
+from nanotron.generation.sampler import SamplerType
 from nanotron.logging import get_logger
 
 logger = get_logger(__name__)

@@ -16,7 +16,7 @@ from nanotron.optim.optimizer_from_gradient_accumulator import (
     OptimizerFromGradientAccumulator,
 )
 from nanotron.optim.zero import ZeroDistributedOptimizer
-from nanotron.parallel.pipeline_parallelism.engine import (
+from nanotron.parallel.pipeline_parallel.engine import (
     AllForwardAllBackwardPipelineEngine,
 )
 from nanotron.parallel.sharded_parameters import SplitConfig, create_sharded_parameter_from_config

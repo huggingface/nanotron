@@ -191,7 +191,7 @@ Usually the go-to solution when models can't fit within a device. The basic idea
  - Distributed samplers for generation
 
 [Megatron-LM: Training Multi-Billion Parameter Language Models Using Model Parallelism](https://arxiv.org/abs/1909.08053) introduces that notion upon implementing one of the first large scale transformers:
-![Tensor parallelism in transformer model](assets/tensor_parallelism_in_transformer.png)
+![Tensor parallelism in transformer model](assets/tensor_parallel_in_transformer.png)
 (Source: [link](https://arxiv.org/abs/1909.08053))
 
 ## Pipeline parallelism

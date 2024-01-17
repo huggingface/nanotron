@@ -37,7 +37,7 @@ def test_fused_layer_norm(hidden_size, no_persist_layer_norm):
     layer_norm = LayerNorm(normalized_shape=inputs.size(-1), device=DEVICE, dtype=DTYPE)
     ref_outputs = layer_norm(inputs)
 
-    fused_layer_norm = FusedLayerNorm(
+    fused_layer_norm = TritonLayerNorm(
         normalized_shape=inputs.size(-1),
         no_persist_layer_norm=no_persist_layer_norm,
         device=DEVICE,

@@ -7,7 +7,7 @@ import torch
 from nanotron import logging
 from nanotron.config import Config
 from nanotron import distributed as dist
-from nanotron.parallel.pipeline_parallelism.tensor_pointer import TensorPointer
+from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
 from nanotron.random import set_random_seed
 from nanotron.utils import (
     assert_fail_except_rank_with,

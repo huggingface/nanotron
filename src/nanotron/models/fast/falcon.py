@@ -25,10 +25,10 @@ from nanotron.config import ParallelismArgs, RecomputeGranularity
 from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.parallel.parameters import NanotronParameter
-from nanotron.parallel.pipeline_parallelism.block import PipelineBlock, TensorPointer
-from nanotron.parallel.pipeline_parallelism.p2p import P2P
-from nanotron.parallel.tensor_parallelism.functional import sharded_cross_entropy
-from nanotron.parallel.tensor_parallelism.nn import (
+from nanotron.parallel.pipeline_parallel.block import PipelineBlock, TensorPointer
+from nanotron.parallel.pipeline_parallel.p2p import P2P
+from nanotron.parallel.tensor_parallel.functional import sharded_cross_entropy
+from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelColumnLinear,
     TensorParallelEmbedding,
     TensorParallelLinearMode,

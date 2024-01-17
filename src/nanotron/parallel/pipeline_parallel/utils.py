@@ -1,4 +1,4 @@
-from nanotron.parallel.pipeline_parallelism.block import PipelineBlock
+from nanotron.parallel.pipeline_parallel.block import PipelineBlock
 from torch import nn
 
 

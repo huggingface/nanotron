@@ -9,12 +9,12 @@ from helpers.utils import available_gpus, init_distributed
 from nanotron import distributed as dist
 from nanotron.optim import NamedOptimizer, ZeroDistributedOptimizer
 from nanotron.optim.zero import SlicedFlatTensor
-from nanotron.parallel.data_parallelism.utils import sync_gradients_across_dp
+from nanotron.parallel.data_parallel.utils import sync_gradients_across_dp
 from nanotron.parallel.parameters import NanotronParameter
-from nanotron.parallel.pipeline_parallelism.engine import AllForwardAllBackwardPipelineEngine
-from nanotron.parallel.pipeline_parallelism.tensor_pointer import TensorPointer
-from nanotron.parallel.tensor_parallelism import nn
-from nanotron.parallel.tensor_parallelism.enum import TensorParallelLinearMode
+from nanotron.parallel.pipeline_parallel.engine import AllForwardAllBackwardPipelineEngine
+from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
+from nanotron.parallel.tensor_parallel import nn
+from nanotron.parallel.tensor_parallel.enum import TensorParallelLinearMode
 from nanotron.parallel.tied_parameters import sync_tied_weights_gradients
 from nanotron.random import RandomStates, branch_random_state, get_current_random_state, get_synced_random_state
 from nanotron.distributed import ParallelContext

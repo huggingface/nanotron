@@ -30,7 +30,7 @@ from nanotron.optim.optimizer_from_gradient_accumulator import (
     OptimizerFromGradientAccumulator,
 )
 from nanotron.optim.zero import ZeroDistributedOptimizer
-from nanotron.parallel.tensor_parallelism.nn import (
+from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelLinearMode,
 )
 from nanotron.random import (

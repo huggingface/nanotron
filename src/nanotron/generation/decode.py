@@ -8,14 +8,14 @@ from nanotron import logging
 from nanotron.config import BenchArgs, GenerationArgs
 from nanotron import distributed as dist
 from nanotron.distributed import ProcessGroup, get_global_rank
-from nanotron.parallel.pipeline_parallelism.block import get_min_max_rank
-from nanotron.parallel.pipeline_parallelism.context_manager import attach_pipeline_state_to_model
-from nanotron.parallel.pipeline_parallelism.p2p import P2P, TensorMetaData, view_as_contiguous
-from nanotron.parallel.pipeline_parallelism.state import PipelineEvalBatchState
-from nanotron.parallel.pipeline_parallelism.tensor_pointer import TensorPointer
+from nanotron.parallel.pipeline_parallel.block import get_min_max_rank
+from nanotron.parallel.pipeline_parallel.context_manager import attach_pipeline_state_to_model
+from nanotron.parallel.pipeline_parallel.p2p import P2P, TensorMetaData, view_as_contiguous
+from nanotron.parallel.pipeline_parallel.state import PipelineEvalBatchState
+from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
 from nanotron.utils import get_untyped_storage
 from nanotron.distributed import ParallelContext
-from nanotron.generate.sampler import BasicSampler, GreedySampler, SamplerType, TopKSampler, TopPSampler
+from nanotron.generation.sampler import BasicSampler, GreedySampler, SamplerType, TopKSampler, TopPSampler
 from nanotron.helpers import log_throughput
 from nanotron.models.generate_store import Store, attach_store
 from nanotron.models.llama import LlamaModel
@@ -149,7 +149,7 @@ def micro_splitter(
 
 
 @torch.inference_mode()
-def greedy_search_text(
+def decode_text(
     input_iter: Iterable[GenerationInput],
     tokenizer: LlamaTokenizer,
     model: LlamaModel,
@@ -478,7 +478,7 @@ def greedy_search_text(
 
 
 @torch.inference_mode()
-def greedy_search_tokenized(
+def decode_tokenized(
     input_ids: torch.Tensor,
     input_mask: torch.Tensor,
     model: LlamaModel,

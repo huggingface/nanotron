@@ -14,13 +14,13 @@ from nanotron.optim.optimizer_from_gradient_accumulator import (
 )
 from nanotron.parallel.model import initial_sync
 from nanotron.parallel.parameters import NanotronParameter, sanity_check
-from nanotron.parallel.pipeline_parallelism.engine import (
+from nanotron.parallel.pipeline_parallel.engine import (
     AllForwardAllBackwardPipelineEngine,
     OneForwardOneBackwardPipelineEngine,
     PipelineEngine,
 )
-from nanotron.parallel.pipeline_parallelism.p2p import P2P
-from nanotron.parallel.pipeline_parallelism.utils import get_pp_rank_of
+from nanotron.parallel.pipeline_parallel.p2p import P2P
+from nanotron.parallel.pipeline_parallel.utils import get_pp_rank_of
 from nanotron.parallel.tied_parameters import (
     get_tied_id_to_param,
     sync_tied_weights_gradients,
