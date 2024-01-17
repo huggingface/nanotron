@@ -3,7 +3,7 @@ from typing import Optional
 
 import torch
 from nanotron import distributed as dist
-from nanotron.core.gradient_accumulator import GradientAccumulator
+from nanotron.optim.gradient_accumulator import GradientAccumulator
 from torch import nn
 
 

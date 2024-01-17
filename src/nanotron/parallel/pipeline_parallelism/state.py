@@ -7,7 +7,7 @@ import torch
 from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.logging import log_rank
-from nanotron.core.parallel.pipeline_parallelism.p2p import P2P
+from nanotron.parallel.pipeline_parallelism.p2p import P2P
 
 logger = logging.get_logger(__name__)
 

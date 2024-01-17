@@ -22,13 +22,13 @@ import torch
 from nanotron import logging
 from nanotron import distributed as dist
 from nanotron.config import GenerationArgs, LoggingArgs, ParallelismArgs, get_config_from_file
-from nanotron.core.parallel.parameters import sanity_check
-from nanotron.core.parallel.pipeline_parallelism.engine import (
+from nanotron.parallel.parameters import sanity_check
+from nanotron.parallel.pipeline_parallelism.engine import (
     OneForwardOneBackwardPipelineEngine,
 )
-from nanotron.core.parallel.pipeline_parallelism.tensor_pointer import TensorPointer
-from nanotron.core.parallel.tensor_parallelism.enum import TensorParallelLinearMode
-from nanotron.core.random import (
+from nanotron.parallel.pipeline_parallelism.tensor_pointer import TensorPointer
+from nanotron.parallel.tensor_parallelism.enum import TensorParallelLinearMode
+from nanotron.random import (
     RandomStates,
     get_current_random_state,
     get_synced_random_state,

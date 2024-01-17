@@ -22,25 +22,25 @@ import torch
 from nanotron.config import ParallelismArgs, RecomputeGranularity
 from nanotron import distributed as dist
 from nanotron.distributed import get_global_rank
-from nanotron.core.parallel.parameters import NanotronParameter
-from nanotron.core.parallel.pipeline_parallelism.block import PipelineBlock
-from nanotron.core.parallel.pipeline_parallelism.p2p import P2P
-from nanotron.core.parallel.pipeline_parallelism.tensor_pointer import TensorPointer
-from nanotron.core.parallel.sharded_parameters import SplitConfig, mark_all_parameters_in_module_as_sharded
-from nanotron.core.parallel.tensor_parallelism.distributed_differentiable_primitives import (
+from nanotron.parallel.parameters import NanotronParameter
+from nanotron.parallel.pipeline_parallelism.block import PipelineBlock
+from nanotron.parallel.pipeline_parallelism.p2p import P2P
+from nanotron.parallel.pipeline_parallelism.tensor_pointer import TensorPointer
+from nanotron.parallel.sharded_parameters import SplitConfig, mark_all_parameters_in_module_as_sharded
+from nanotron.parallel.tensor_parallelism.distributed_differentiable_primitives import (
     differentiable_all_gather,
     differentiable_identity,
 )
-from nanotron.core.parallel.tensor_parallelism.functional import sharded_cross_entropy
-from nanotron.core.parallel.tensor_parallelism.nn import (
+from nanotron.parallel.tensor_parallelism.functional import sharded_cross_entropy
+from nanotron.parallel.tensor_parallelism.nn import (
     TensorParallelColumnLinear,
     TensorParallelEmbedding,
     TensorParallelLinearMode,
     TensorParallelRowLinear,
 )
-from nanotron.core.parallel.tied_parameters import create_tied_parameter
-from nanotron.core.random import RandomStates, branch_random_state
-from nanotron.core.utils import checkpoint_method
+from nanotron.parallel.tied_parameters import create_tied_parameter
+from nanotron.random import RandomStates, branch_random_state
+from nanotron.utils import checkpoint_method
 from nanotron.distributed import ParallelContext
 from nanotron.models import AttachableStore, NanotronModel
 from torch import nn

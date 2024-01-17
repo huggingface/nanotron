@@ -1,7 +1,7 @@
 import torch
 from nanotron import logging
-from nanotron.core.parallel.pipeline_parallelism.p2p import P2P
-from nanotron.core.parallel.pipeline_parallelism.state import PipelineBatchState
+from nanotron.parallel.pipeline_parallelism.p2p import P2P
+from nanotron.parallel.pipeline_parallelism.state import PipelineBatchState
 
 logger = logging.get_logger(__name__)
 

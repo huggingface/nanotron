@@ -5,13 +5,13 @@ import torch
 from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.distributed import ProcessGroup
-from nanotron.core.gradient_accumulator import GradientAccumulator
+from nanotron.optim.gradient_accumulator import GradientAccumulator
 from nanotron.logging import log_rank
-from nanotron.core.parallel.data_parallelism.utils import ddp_trigger_sync_in_bwd
-from nanotron.core.parallel.pipeline_parallelism.context_manager import attach_pipeline_state_to_model
-from nanotron.core.parallel.pipeline_parallelism.state import PipelineTrainBatchState
-from nanotron.core.parallel.pipeline_parallelism.tensor_pointer import TensorPointer
-from nanotron.core.utils import ContextManagers
+from nanotron.parallel.data_parallelism.utils import ddp_trigger_sync_in_bwd
+from nanotron.parallel.pipeline_parallelism.context_manager import attach_pipeline_state_to_model
+from nanotron.parallel.pipeline_parallelism.state import PipelineTrainBatchState
+from nanotron.parallel.pipeline_parallelism.tensor_pointer import TensorPointer
+from nanotron.utils import ContextManagers
 from torch import nn as torch_nn
 from torch.nn.parallel import DistributedDataParallel
 

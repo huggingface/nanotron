@@ -7,7 +7,7 @@ from nanotron import logging
 from nanotron.constants import CHECKPOINT_VERSION
 from nanotron import distributed as dist
 from nanotron.distributed import get_global_rank
-from nanotron.core.parallel.parameters import NanotronParameter, ShardedInfo, SlicesPair
+from nanotron.parallel.parameters import NanotronParameter, ShardedInfo, SlicesPair
 from nanotron.distributed import ParallelContext
 from nanotron.logging import log_rank
 from nanotron.serialize.metadata import CheckpointMetadata, TensorMetadata, TensorMetadataV2, load_meta

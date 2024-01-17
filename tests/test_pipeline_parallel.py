@@ -5,15 +5,15 @@ import torch
 from helpers.dummy import DummyModel, dummy_infinite_data_loader
 from helpers.utils import available_gpus, init_distributed
 from nanotron import distributed as dist
-from nanotron.core.parallel.pipeline_parallelism.block import PipelineBlock
-from nanotron.core.parallel.pipeline_parallelism.engine import (
+from nanotron.parallel.pipeline_parallelism.block import PipelineBlock
+from nanotron.parallel.pipeline_parallelism.engine import (
     AllForwardAllBackwardPipelineEngine,
     OneForwardOneBackwardPipelineEngine,
     PipelineEngine,
 )
-from nanotron.core.parallel.pipeline_parallelism.p2p import P2P
-from nanotron.core.parallel.pipeline_parallelism.tensor_pointer import TensorPointer
-from nanotron.core.utils import init_on_device_and_dtype
+from nanotron.parallel.pipeline_parallelism.p2p import P2P
+from nanotron.parallel.pipeline_parallelism.tensor_pointer import TensorPointer
+from nanotron.utils import init_on_device_and_dtype
 from nanotron.distributed import ParallelContext
 from torch import nn
 from torch.nn import functional as F

@@ -27,12 +27,15 @@ from logging import (
     NOTSET,
     WARNING,
     Logger,
+    Formatter
 )
 from typing import List, Optional, Union
 
 from torch import distributed as torch_dist
 
 from nanotron import distributed as dist
+
+from nanotron.distributed import ParallelContext
 
 log_levels = {
     "debug": DEBUG,
@@ -266,6 +269,30 @@ class LoggerWriter:
         ]
         log_str = " | ".join(log_strs)
         log_rank(log_str, logger=get_logger(__name__), level=logging.INFO)
+
+
+def set_logger_verbosity_format(logging_level: str, parallel_context: ParallelContext):
+    node_name = os.environ.get("SLURMD_NODENAME")
+    formatter = Formatter(
+        fmt=f"%(asctime)s [%(levelname)s|DP={dist.get_rank(parallel_context.dp_pg)}|PP={dist.get_rank(parallel_context.pp_pg)}|"
+        f"TP={dist.get_rank(parallel_context.tp_pg)}{'|' + node_name if node_name else ''}]: %(message)s",
+        datefmt="%m/%d/%Y %H:%M:%S",
+    )
+    # TODO @thomasw21: `logging.log_levels` returns valid lg log levels
+    log_level = log_levels[logging_level]
+
+    # main root logger
+    root_logger = get_logger()
+    root_logger.setLevel(log_level)
+    handler = NewLineStreamHandler(sys.stdout)
+    handler.setLevel(log_level)
+    handler.setFormatter(formatter)
+    root_logger.addHandler(handler)
+
+    # Nanotron
+    set_verbosity(log_level)
+    set_formatter(formatter=formatter)
+
 
 
 _configure_library_root_logger()

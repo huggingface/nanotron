@@ -6,27 +6,27 @@ import torch
 from helpers.dummy import DummyModel, dummy_infinite_data_loader
 from helpers.exception import assert_fail_except_rank_with, timeout_after
 from helpers.utils import available_gpus, init_distributed
-from nanotron.core.gradient_accumulator import FP32GradBucketManager, FP32GradientAccumulator, get_fp32_accum_hook
-from nanotron.core.optim import ZeroDistributedOptimizer
-from nanotron.core.optim.named_optimizer import NamedOptimizer
-from nanotron.core.optim.optimizer_from_gradient_accumulator import (
+from nanotron.optim.gradient_accumulator import FP32GradBucketManager, FP32GradientAccumulator, get_fp32_accum_hook
+from nanotron.optim import ZeroDistributedOptimizer
+from nanotron.optim.named_optimizer import NamedOptimizer
+from nanotron.optim.optimizer_from_gradient_accumulator import (
     OptimizerFromGradientAccumulator,
 )
-from nanotron.core.parallel.model import initial_sync
-from nanotron.core.parallel.parameters import NanotronParameter, sanity_check
-from nanotron.core.parallel.pipeline_parallelism.engine import (
+from nanotron.parallel.model import initial_sync
+from nanotron.parallel.parameters import NanotronParameter, sanity_check
+from nanotron.parallel.pipeline_parallelism.engine import (
     AllForwardAllBackwardPipelineEngine,
     OneForwardOneBackwardPipelineEngine,
     PipelineEngine,
 )
-from nanotron.core.parallel.pipeline_parallelism.p2p import P2P
-from nanotron.core.parallel.pipeline_parallelism.utils import get_pp_rank_of
-from nanotron.core.parallel.tied_parameters import (
+from nanotron.parallel.pipeline_parallelism.p2p import P2P
+from nanotron.parallel.pipeline_parallelism.utils import get_pp_rank_of
+from nanotron.parallel.tied_parameters import (
     get_tied_id_to_param,
     sync_tied_weights_gradients,
     tie_parameters,
 )
-from nanotron.core.utils import ContextManagers, assert_tensor_synced_across_pg, init_on_device_and_dtype
+from nanotron.utils import ContextManagers, assert_tensor_synced_across_pg, init_on_device_and_dtype
 from nanotron.distributed import ParallelContext
 from torch import nn
 

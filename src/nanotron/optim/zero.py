@@ -9,9 +9,9 @@ from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.distributed import ProcessGroup
 from nanotron.logging import log_rank, warn_once
-from nanotron.core.optim.base import BaseOptimizer
-from nanotron.core.optim.inherit_from_other_optimizer import InheritFromOtherOptimizer
-from nanotron.core.parallel.parameters import NanotronParameter
+from nanotron.optim.base import BaseOptimizer
+from nanotron.optim.inherit_from_other_optimizer import InheritFromOtherOptimizer
+from nanotron.parallel.parameters import NanotronParameter
 from nanotron.logging import human_format
 
 logger = logging.get_logger(__name__)

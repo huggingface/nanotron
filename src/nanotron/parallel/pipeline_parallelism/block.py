@@ -2,13 +2,13 @@ from typing import Any, Callable, Dict, Optional, Set, Tuple, Union
 
 import torch
 from nanotron import distributed as dist
-from nanotron.core.parallel.pipeline_parallelism.functional import (
+from nanotron.parallel.pipeline_parallelism.functional import (
     recv_from_pipeline_state_buffer,
     send_to_pipeline_state_buffer,
 )
-from nanotron.core.parallel.pipeline_parallelism.p2p import P2P, BatchTensorSendRecvState
-from nanotron.core.parallel.pipeline_parallelism.state import PipelineBatchState, PipelineTrainBatchState
-from nanotron.core.parallel.pipeline_parallelism.tensor_pointer import TensorPointer
+from nanotron.parallel.pipeline_parallelism.p2p import P2P, BatchTensorSendRecvState
+from nanotron.parallel.pipeline_parallelism.state import PipelineBatchState, PipelineTrainBatchState
+from nanotron.parallel.pipeline_parallelism.tensor_pointer import TensorPointer
 from torch import nn
 
 

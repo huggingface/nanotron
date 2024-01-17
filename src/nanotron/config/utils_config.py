@@ -4,12 +4,12 @@ from pathlib import Path
 
 import torch
 
-from nanotron.core.parallel.pipeline_parallelism.engine import (
+from nanotron.parallel.pipeline_parallelism.engine import (
     AllForwardAllBackwardPipelineEngine,
     OneForwardOneBackwardPipelineEngine,
     PipelineEngine,
 )
-from nanotron.core.parallel.tensor_parallelism.nn import TensorParallelLinearMode
+from nanotron.parallel.tensor_parallelism.nn import TensorParallelLinearMode
 from nanotron.generate.sampler import SamplerType
 
 

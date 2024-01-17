@@ -4,8 +4,8 @@ from typing import List, Sequence, Tuple
 import torch
 from nanotron import distributed as dist
 from nanotron import logging
-from nanotron.core.tensor_init import tensor_from_untyped_storage
-from nanotron.core.utils import get_untyped_storage
+from nanotron.utils import tensor_from_untyped_storage
+from nanotron.utils import get_untyped_storage
 
 logger = logging.get_logger(__name__)
 

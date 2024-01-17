@@ -6,25 +6,25 @@ import torch
 from helpers.dummy import DummyModel, dummy_infinite_data_loader
 from helpers.utils import available_gpus, init_distributed
 from nanotron import distributed as dist
-from nanotron.core.clip_grads import clip_grad_norm
-from nanotron.core.gradient_accumulator import (
+from nanotron.optim.clip_grads import clip_grad_norm
+from nanotron.optim.gradient_accumulator import (
     FP32GradientAccumulator,
 )
-from nanotron.core.parallel.model import initial_sync
-from nanotron.core.parallel.parameters import NanotronParameter, sanity_check
-from nanotron.core.parallel.pipeline_parallelism.engine import (
+from nanotron.parallel.model import initial_sync
+from nanotron.parallel.parameters import NanotronParameter, sanity_check
+from nanotron.parallel.pipeline_parallelism.engine import (
     AllForwardAllBackwardPipelineEngine,
 )
-from nanotron.core.parallel.pipeline_parallelism.p2p import P2P
-from nanotron.core.parallel.tensor_parallelism.enum import TensorParallelLinearMode
-from nanotron.core.parallel.tensor_parallelism.nn import (
+from nanotron.parallel.pipeline_parallelism.p2p import P2P
+from nanotron.parallel.tensor_parallelism.enum import TensorParallelLinearMode
+from nanotron.parallel.tensor_parallelism.nn import (
     TensorParallelColumnLinear,
 )
-from nanotron.core.parallel.tied_parameters import (
+from nanotron.parallel.tied_parameters import (
     sync_tied_weights_gradients,
     tie_parameters,
 )
-from nanotron.core.utils import assert_tensor_synced_across_pg, init_on_device_and_dtype
+from nanotron.utils import assert_tensor_synced_across_pg, init_on_device_and_dtype
 from nanotron.distributed import ParallelContext
 from torch import nn
 

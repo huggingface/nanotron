@@ -5,10 +5,10 @@ import torch
 from nanotron import logging
 from nanotron.config import Config
 from nanotron import distributed as dist
-from nanotron.core import optim as optim
+from nanotron import optim as optim
 from nanotron.distributed import get_global_rank
-from nanotron.core.parallel.parameters import NanotronParameter
-from nanotron.core.utils import assert_tensor_synced_across_pg
+from nanotron.parallel.parameters import NanotronParameter
+from nanotron.utils import assert_tensor_synced_across_pg
 from nanotron.distributed import ParallelContext
 from nanotron.logging import log_rank
 from nanotron.serialize.metadata import CheckpointMetadata, load_meta, save_meta

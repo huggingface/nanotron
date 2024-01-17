@@ -7,8 +7,8 @@ import torch
 from helpers.utils import available_gpus, init_distributed
 from nanotron import distributed as dist
 from nanotron.distributed import get_global_rank
-from nanotron.core.parallel.tensor_parallelism.enum import TensorParallelLinearMode
-from nanotron.core.parallel.tensor_parallelism.nn import (
+from nanotron.parallel.tensor_parallelism.enum import TensorParallelLinearMode
+from nanotron.parallel.tensor_parallelism.nn import (
     TensorParallelColumnLinear,
     TensorParallelEmbedding,
     TensorParallelRowLinear,

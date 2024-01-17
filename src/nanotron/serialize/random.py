@@ -2,7 +2,7 @@ from pathlib import Path
 
 import torch
 from nanotron import distributed as dist
-from nanotron.core.random import RandomStates
+from nanotron.random import RandomStates
 from nanotron.distributed import ParallelContext
 
 

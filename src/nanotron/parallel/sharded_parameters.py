@@ -5,7 +5,7 @@ import numpy as np
 from torch import nn
 
 from nanotron import distributed as dist
-from nanotron.core.parallel.parameters import NanotronParameter, SlicesPair
+from nanotron.parallel.parameters import NanotronParameter, SlicesPair
 
 
 @dataclasses.dataclass

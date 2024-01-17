@@ -20,30 +20,30 @@ from nanotron.config import (
     get_config_from_file,
 )
 from nanotron import distributed as dist
-from nanotron.core.clip_grads import clip_grad_norm
-from nanotron.core.parallel.data_parallelism.utils import sync_gradients_across_dp
-from nanotron.core.parallel.parameters import NanotronParameter, check_model_has_grad, sanity_check
-from nanotron.core.parallel.pipeline_parallelism.block import PipelineBlock
-from nanotron.core.parallel.pipeline_parallelism.engine import (
+from nanotron.optim.clip_grads import clip_grad_norm
+from nanotron.parallel.data_parallelism.utils import sync_gradients_across_dp
+from nanotron.parallel.parameters import NanotronParameter, check_model_has_grad, sanity_check
+from nanotron.parallel.pipeline_parallelism.block import PipelineBlock
+from nanotron.parallel.pipeline_parallelism.engine import (
     PipelineEngine,
 )
-from nanotron.core.parallel.pipeline_parallelism.tensor_pointer import TensorPointer
-from nanotron.core.parallel.pipeline_parallelism.utils import get_pp_rank_of
-from nanotron.core.parallel.tensor_parallelism.nn import (
+from nanotron.parallel.pipeline_parallelism.tensor_pointer import TensorPointer
+from nanotron.parallel.pipeline_parallelism.utils import get_pp_rank_of
+from nanotron.parallel.tensor_parallelism.nn import (
     TensorParallelLinearMode,
     TensorParallelRowLinear,
 )
-from nanotron.core.parallel.tied_parameters import (
+from nanotron.parallel.tied_parameters import (
     create_pg_for_tied_weights,
     get_tied_id_to_param,
     sync_tied_weights_gradients,
     tie_parameters,
 )
-from nanotron.core.random import (
+from nanotron.random import (
     set_random_seed,
 )
-from nanotron.core.tensor_init import init_method_normal, scaled_init_method_normal
-from nanotron.core.utils import (
+from nanotron.utils import init_method_normal, scaled_init_method_normal
+from nanotron.utils import (
     assert_tensor_synced_across_pg,
     init_on_device_and_dtype,
 )
@@ -56,9 +56,8 @@ from nanotron.helpers import (
     init_random_states,
     log_throughput,
     lr_scheduler_builder,
-    set_logger_verbosity_format,
 )
-from nanotron.logging import LoggerWriter, LogItem, human_format, log_rank
+from nanotron.logging import LoggerWriter, LogItem, human_format, log_rank, set_logger_verbosity_format
 from nanotron.models import NanotronModel
 from nanotron.serialize import (
     load_lr_scheduler,
@@ -362,8 +361,6 @@ class DistributedTrainer:
                 if self.iteration_step % self.config.checkpoints.checkpoint_interval == 0:
                     self.save_checkpoint()
 
-                self.post_train_step()
-
         self.post_training()
 
     def training_step(
@@ -487,6 +484,9 @@ class DistributedTrainer:
 
         if handle is not None:
             handle.wait()
+
+        self.post_train_step()
+
         return outputs, loss_avg
 
     def validation_step(self, dataloader: Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]]) -> Iterable[Dict]:

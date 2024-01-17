@@ -1,10 +1,7 @@
-import argparse
 import contextlib
 import gc
-import logging as lg
 import math
 import os
-import sys
 import time
 from datetime import datetime
 from math import ceil
@@ -21,22 +18,22 @@ from nanotron.config import (
 )
 from nanotron import distributed as dist
 from nanotron.distributed import ProcessGroup
-from nanotron.core.gradient_accumulator import (
+from nanotron.optim.gradient_accumulator import (
     FP32GradBucketManager,
     FP32GradientAccumulator,
     GradientAccumulator,
     get_fp32_accum_hook,
 )
-from nanotron.core.optim.base import BaseOptimizer, Optimizer
-from nanotron.core.optim.named_optimizer import NamedOptimizer
-from nanotron.core.optim.optimizer_from_gradient_accumulator import (
+from nanotron.optim.base import BaseOptimizer, Optimizer
+from nanotron.optim.named_optimizer import NamedOptimizer
+from nanotron.optim.optimizer_from_gradient_accumulator import (
     OptimizerFromGradientAccumulator,
 )
-from nanotron.core.optim.zero import ZeroDistributedOptimizer
-from nanotron.core.parallel.tensor_parallelism.nn import (
+from nanotron.optim.zero import ZeroDistributedOptimizer
+from nanotron.parallel.tensor_parallelism.nn import (
     TensorParallelLinearMode,
 )
-from nanotron.core.random import (
+from nanotron.random import (
     RandomStates,
     get_current_random_state,
     get_synced_random_state,
@@ -50,36 +47,6 @@ from torch.optim.lr_scheduler import LambdaLR
 from torch.profiler import ProfilerActivity, profile, tensorboard_trace_handler
 
 logger = logging.get_logger(__name__)
-
-
-def get_args():
-    parser = argparse.ArgumentParser()
-    # CONFIG for YAML
-    parser.add_argument("--config-file", type=str, required=True, help="Path to the YAML config file")
-    return parser.parse_args()
-
-
-def set_logger_verbosity_format(logging_level: str, parallel_context: ParallelContext):
-    node_name = os.environ.get("SLURMD_NODENAME")
-    formatter = lg.Formatter(
-        fmt=f"%(asctime)s [%(levelname)s|DP={dist.get_rank(parallel_context.dp_pg)}|PP={dist.get_rank(parallel_context.pp_pg)}|"
-        f"TP={dist.get_rank(parallel_context.tp_pg)}{'|' + node_name if node_name else ''}]: %(message)s",
-        datefmt="%m/%d/%Y %H:%M:%S",
-    )
-    # TODO @thomasw21: `logging.log_levels` returns valid lg log levels
-    log_level = logging.log_levels[logging_level]
-
-    # main root logger
-    root_logger = logging.get_logger()
-    root_logger.setLevel(log_level)
-    handler = logging.NewLineStreamHandler(sys.stdout)
-    handler.setLevel(log_level)
-    handler.setFormatter(formatter)
-    root_logger.addHandler(handler)
-
-    # Nanotron
-    logging.set_verbosity(log_level)
-    logging.set_formatter(formatter=formatter)
 
 
 def _vocab_size_with_padding(orig_vocab_size: int, pg_size: int, make_vocab_size_divisible_by: int):

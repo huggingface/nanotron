@@ -10,18 +10,18 @@ from helpers.utils import (
 )
 from nanotron.constants import CHECKPOINT_VERSION
 from nanotron import distributed as dist
-from nanotron.core.gradient_accumulator import FP32GradientAccumulator
-from nanotron.core.optim.named_optimizer import NamedOptimizer
-from nanotron.core.optim.optimizer_from_gradient_accumulator import (
+from nanotron.optim.gradient_accumulator import FP32GradientAccumulator
+from nanotron.optim.named_optimizer import NamedOptimizer
+from nanotron.optim.optimizer_from_gradient_accumulator import (
     OptimizerFromGradientAccumulator,
 )
-from nanotron.core.optim.zero import ZeroDistributedOptimizer
-from nanotron.core.parallel.pipeline_parallelism.engine import (
+from nanotron.optim.zero import ZeroDistributedOptimizer
+from nanotron.parallel.pipeline_parallelism.engine import (
     AllForwardAllBackwardPipelineEngine,
 )
-from nanotron.core.parallel.sharded_parameters import SplitConfig, create_sharded_parameter_from_config
-from nanotron.core.parallel.tied_parameters import sync_tied_weights_gradients
-from nanotron.core.random import RandomStates, get_current_random_state, get_synced_random_state
+from nanotron.parallel.sharded_parameters import SplitConfig, create_sharded_parameter_from_config
+from nanotron.parallel.tied_parameters import sync_tied_weights_gradients
+from nanotron.random import RandomStates, get_current_random_state, get_synced_random_state
 from nanotron.distributed import ParallelContext
 from nanotron.serialize import (
     load_optimizer,

@@ -4,7 +4,7 @@ from typing import Optional
 from nanotron import logging
 from nanotron.distributed import ProcessGroup
 from nanotron.logging import log_rank
-from nanotron.core.parallel.pipeline_parallelism.block import PipelineBlock
+from nanotron.parallel.pipeline_parallelism.block import PipelineBlock
 from nanotron.distributed import ParallelContext
 from torch import nn
 from transformers import AutoConfig

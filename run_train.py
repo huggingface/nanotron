@@ -14,7 +14,7 @@ from nanotron.config import (
     PretrainDatasetsArgs,
 )
 from nanotron import distributed as dist
-from nanotron.core.utils import (
+from nanotron.utils import (
     main_rank_first,
 )
 from nanotron.dataloader import (

@@ -5,7 +5,7 @@ import torch
 from helpers.exception import assert_fail_with
 from helpers.utils import available_gpus, init_distributed
 from nanotron import distributed as dist
-from nanotron.core.parallel.pipeline_parallelism.p2p import P2P
+from nanotron.parallel.pipeline_parallelism.p2p import P2P
 from nanotron.distributed import ParallelContext
 
 

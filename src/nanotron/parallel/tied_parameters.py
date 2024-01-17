@@ -4,9 +4,9 @@ from typing import Dict, List, Optional, Tuple
 from nanotron import logging
 from nanotron.logging import log_rank
 from nanotron import distributed as dist
-from nanotron.core.gradient_accumulator import GradientAccumulator
-from nanotron.core.parallel.parameters import NanotronParameter
-from nanotron.core.utils import get_parameter_and_parent_module
+from nanotron.optim.gradient_accumulator import GradientAccumulator
+from nanotron.parallel.parameters import NanotronParameter
+from nanotron.utils import get_parameter_and_parent_module
 from nanotron.distributed import ParallelContext
 from torch import nn
 

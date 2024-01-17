@@ -19,24 +19,24 @@ from torch import nn
 
 from nanotron import distributed as dist
 from nanotron.distributed import get_global_rank
-from nanotron.core.parallel.parameters import NanotronParameter
-from nanotron.core.parallel.sharded_parameters import (
+from nanotron.parallel.parameters import NanotronParameter
+from nanotron.parallel.sharded_parameters import (
     SplitConfig,
     create_sharded_parameter_from_config,
     mark_all_parameters_in_module_as_sharded,
 )
-from nanotron.core.parallel.tensor_parallelism.distributed_differentiable_primitives import (
+from nanotron.parallel.tensor_parallelism.distributed_differentiable_primitives import (
     differentiable_all_gather,
     differentiable_all_reduce_sum,
     differentiable_identity,
     differentiable_reduce_scatter_sum,
 )
-from nanotron.core.parallel.tensor_parallelism.enum import TensorParallelLinearMode
-from nanotron.core.parallel.tensor_parallelism.functional import (
+from nanotron.parallel.tensor_parallelism.enum import TensorParallelLinearMode
+from nanotron.parallel.tensor_parallelism.functional import (
     column_linear,
     row_linear,
 )
-from nanotron.core.parallel.tied_parameters import create_tied_parameter
+from nanotron.parallel.tied_parameters import create_tied_parameter
 
 
 class TensorParallelColumnLinear(nn.Linear):
