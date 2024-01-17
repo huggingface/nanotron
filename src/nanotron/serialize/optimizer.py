@@ -250,8 +250,12 @@ def _merge_dp_shard_in_zero1_optimizer(
 
     # NOTE: sanity check, make sure each merged checkpoint has the same dict key
     # as the original checkpoint
-    # for (pp_rank, tp_rank), ckp_optim_state in ckp_merged_dp_shards_optim_states.items():
-    #     assert ckp_optim_state.keys() == ckp_sharded_optim_states[(pp_rank, 0, tp_rank)].keys()
+    for (pp_rank, tp_rank), ckp_optim_state in ckp_merged_dp_shards_optim_states.items():
+        # NOTE: we remove the gradient_accumulator key from sanity check
+        # because we don't merge gradient_accumulator states
+        assert set(ckp_optim_state.keys()) == set(ckp_sharded_optim_states[(pp_rank, 0, tp_rank)].keys()) - {
+            "gradient_accumulator"
+        }
 
     return ckp_merged_dp_shards_optim_states
 
@@ -415,28 +419,21 @@ def load_optimizer(
         new_optim_state_dict["names"] = ckp_sharded_optim_states[(0, 0)]["names"]
         state_dict = new_optim_state_dict
 
-    # NOTE: if the optimizer is ZeRO-1, now we shard the optimizer states across data parallel dimension
-    from nanotron.core.optim.zero import get_sliced_tensor
+    if isinstance(optimizer, ZeroDistributedOptimizer):
+        # NOTE: if the optimizer is ZeRO-1, now we shard the optimizer states across data parallel dimension
+        from nanotron.core.optim.zero import get_sliced_tensor
 
-    current_dp_rank = dist.get_rank(parallel_context.dp_pg)
-    # for name, param in optimizer.named_parameters():
-    #     sliced_tensor = get_sliced_tensor(
-    #         param=param,
-    #         start_offset=optimizer.param_name_to_dp_rank_offsets[name][current_dp_rank][0],
-    #         end_offset=optimizer.param_name_to_dp_rank_offsets[name][current_dp_rank][1],
-    #     )
-    #     param.data = sliced_tensor
-
-    for param_index in state_dict["state"]:
-        param_name = [name for idx, name in state_dict["names"].items() if idx == param_index][0]
-        for state_name in ["exp_avg", "exp_avg_sq"]:
-            sliced_tensor = get_sliced_tensor(
-                param=state_dict["state"][param_index][state_name],
-                # NOTE: name is string
-                start_offset=optimizer.param_name_to_dp_rank_offsets[param_name][current_dp_rank][0],
-                end_offset=optimizer.param_name_to_dp_rank_offsets[param_name][current_dp_rank][1],
-            )
-            state_dict["state"][param_index][state_name] = sliced_tensor
+        current_dp_rank = dist.get_rank(parallel_context.dp_pg)
+        for param_index in state_dict["state"]:
+            param_name = [name for idx, name in state_dict["names"].items() if idx == param_index][0]
+            for state_name in ["exp_avg", "exp_avg_sq"]:
+                sliced_tensor = get_sliced_tensor(
+                    param=state_dict["state"][param_index][state_name],
+                    # NOTE: name is string
+                    start_offset=optimizer.param_name_to_dp_rank_offsets[param_name][current_dp_rank][0],
+                    end_offset=optimizer.param_name_to_dp_rank_offsets[param_name][current_dp_rank][1],
+                )
+                state_dict["state"][param_index][state_name] = sliced_tensor
 
     optimizer.load_state_dict(state_dict)
 
