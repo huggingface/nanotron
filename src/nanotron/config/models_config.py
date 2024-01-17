@@ -1,5 +1,18 @@
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import List, Optional, Union
+
+
+@dataclass
+class RandomInit:
+    std: float
+
+
+@dataclass
+class ExistingCheckpointInit:
+    """This is used to initialize from an already existing model (without optimizer, lr_scheduler...)"""
+
+    path: Path
 
 
 @dataclass

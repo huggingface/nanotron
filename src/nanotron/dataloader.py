@@ -6,14 +6,14 @@ import numpy as np
 import torch
 from nanotron import logging
 from nanotron.config import Config
-from nanotron.core import distributed as dist
-from nanotron.core.parallel.pipeline_parallelism.tensor_pointer import TensorPointer
-from nanotron.core.random import set_random_seed
-from nanotron.core.utils import (
+from nanotron import distributed as dist
+from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
+from nanotron.random import set_random_seed
+from nanotron.sanity_checks import (
     assert_fail_except_rank_with,
     assert_tensor_synced_across_pg,
 )
-from nanotron.distributed import ParallelContext
+from nanotron.parallel import ParallelContext
 from torch.utils.data import BatchSampler, DataLoader
 from torch.utils.data.distributed import DistributedSampler
 

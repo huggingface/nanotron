@@ -33,6 +33,7 @@ In the `/examples` directory, we provide a set of **self-sufficient** examples f
 Requirements:
  - Python >= 3.10
  - PyTorch >= 2.0.0
+ - Flash-Attention >= 2.4.2
 
 To install:
 ```bash
@@ -78,7 +79,7 @@ Let's go through some key concepts.
 
 `ParallelContext` is the base class referencing all the process groups you might need when running parallel workloads. You can initialize it using the following:
 ```python
-from nanotron.distributed import ParallelContext
+from nanotron.parallel import ParallelContext
 
 # define your topology
 parallel_context = ParallelContext(
@@ -190,7 +191,7 @@ Usually the go-to solution when models can't fit within a device. The basic idea
  - Distributed samplers for generation
 
 [Megatron-LM: Training Multi-Billion Parameter Language Models Using Model Parallelism](https://arxiv.org/abs/1909.08053) introduces that notion upon implementing one of the first large scale transformers:
-![Tensor parallelism in transformer model](assets/tensor_parallelism_in_transformer.png)
+![Tensor parallelism in transformer model](assets/tensor_parallel_in_transformer.png)
 (Source: [link](https://arxiv.org/abs/1909.08053))
 
 ## Pipeline parallelism

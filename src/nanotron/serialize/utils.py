@@ -1,7 +1,7 @@
 from enum import Enum
 from typing import List, Optional, Tuple
 
-from nanotron.distributed import ParallelContext
+from nanotron.parallel import ParallelContext
 
 
 class ObjectType(Enum):

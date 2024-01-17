@@ -1,5 +1,4 @@
 import datetime
-import gc
 import json
 import os
 import shutil
@@ -8,7 +7,7 @@ import time
 from dataclasses import asdict
 from pathlib import Path
 from pprint import pformat
-from typing import Callable, Dict, Iterable, Iterator, List, Optional, Tuple, Union
+from typing import Callable, Dict, Iterable, Iterator, List, Optional, Tuple, Union, Type
 
 import numpy as np
 import torch
@@ -20,37 +19,33 @@ from nanotron.config import (
     RandomInit,
     get_config_from_file,
 )
-from nanotron.core import distributed as dist
-from nanotron.core.clip_grads import clip_grad_norm
-from nanotron.core.parallel.data_parallelism.utils import sync_gradients_across_dp
-from nanotron.core.parallel.parameters import NanotronParameter, check_model_has_grad, sanity_check
-from nanotron.core.parallel.pipeline_parallelism.block import PipelineBlock
-from nanotron.core.parallel.pipeline_parallelism.engine import (
+from nanotron import distributed as dist
+from nanotron.optim.clip_grads import clip_grad_norm
+from nanotron.parallel.data_parallel.utils import sync_gradients_across_dp
+from nanotron.parallel.parameters import NanotronParameter, check_model_has_grad, sanity_check
+from nanotron.parallel.pipeline_parallel.block import PipelineBlock
+from nanotron.parallel.pipeline_parallel.engine import (
     PipelineEngine,
 )
-from nanotron.core.parallel.pipeline_parallelism.tensor_pointer import TensorPointer
-from nanotron.core.parallel.pipeline_parallelism.utils import get_pp_rank_of
-from nanotron.core.parallel.tensor_parallelism.nn import (
+from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
+from nanotron.parallel.pipeline_parallel.utils import get_pp_rank_of
+from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelLinearMode,
     TensorParallelRowLinear,
 )
-from nanotron.core.parallel.tied_parameters import (
+from nanotron.parallel.tied_parameters import (
     create_pg_for_tied_weights,
     get_tied_id_to_param,
     sync_tied_weights_gradients,
     tie_parameters,
 )
-from nanotron.core.random import (
+from nanotron.random import (
     set_random_seed,
 )
-from nanotron.core.tensor_init import init_method_normal, scaled_init_method_normal
-from nanotron.core.utils import (
-    assert_tensor_synced_across_pg,
-    check_env,
-    init_on_device_and_dtype,
-)
+from nanotron.utils import init_method_normal, scaled_init_method_normal, init_on_device_and_dtype
+from nanotron.sanity_checks import assert_tensor_synced_across_pg
 from nanotron.dataloader import sanity_check_dataloader
-from nanotron.distributed import ParallelContext
+from nanotron.parallel import ParallelContext
 from nanotron.helpers import (
     _vocab_size_with_padding,
     get_profiler,
@@ -58,9 +53,14 @@ from nanotron.helpers import (
     init_random_states,
     log_throughput,
     lr_scheduler_builder,
-    set_logger_verbosity_format,
 )
-from nanotron.logging import LoggerWriter, LogItem, human_format, log_rank
+from nanotron.sanity_checks import (
+    after_tbi_sanity_checks,
+    before_tbi_sanity_checks,
+    before_optim_step_sanity_checks,
+    after_optim_step_sanity_checks
+)
+from nanotron.logging import LoggerWriter, LogItem, human_format, log_rank, set_logger_verbosity_format
 from nanotron.models import NanotronModel
 from nanotron.serialize import (
     load_lr_scheduler,
@@ -78,14 +78,12 @@ if int(os.environ.get("USE_FAST", 0)) == 1:
     from nanotron.models.fast.falcon import FalconForTraining
     from nanotron.models.fast.gpt2 import GPTForTraining
     from nanotron.models.fast.llama import LlamaForTraining, RotaryEmbedding
-
-    # from nanotron.models.fast.starcoder2 import Starcoder2ForTraining
+    from nanotron.models.fast.starcoder2 import Starcoder2ForTraining
 else:
     from nanotron.models.falcon import FalconForTraining
     from nanotron.models.gpt2 import GPTForTraining
     from nanotron.models.llama import LlamaForTraining, RotaryEmbedding
-
-    # from nanotron.models.fast.starcoder2 import Starcoder2ForTraining
+    from nanotron.models.fast.starcoder2 import Starcoder2ForTraining
 
 logger = logging.get_logger(__name__)
 
@@ -98,20 +96,14 @@ CONFIG_TO_MODEL_CLASS = {
     "GPTBigCodeConfig": GPTForTraining,
     "FalconConfig": FalconForTraining,
     "RWConfig": FalconForTraining,
-    # "Starcoder2Config": Starcoder2ForTraining,
+    "Starcoder2Config": Starcoder2ForTraining,
 }
 
-MIN_GPU_MEM_THRESHOLD = 8e10  # 80GB
-NUM_THROUGHPUT_ITERS = 5
-THROUGHPUT_TENSOR_SIZE = 8e9  # 8GB
 
-
-# TODO @nouamane: add abstract class
 class DistributedTrainer:
-    def __init__(self, config_or_config_file: Union[Config, str]):
+    def __init__(self, config_or_config_file: Union[Config, str], config_class: Type[Config] = Config):
         super().__init__()
-        check_env()
-        self.config = get_config_from_file(config_or_config_file)
+        self.config = get_config_from_file(config_or_config_file, config_class=config_class)
         self.model_config = self.config.model.model_config
 
         ########################################
@@ -125,6 +117,8 @@ class DistributedTrainer:
             data_parallel_size=self.config.parallelism.dp,
         )
 
+        self.pre_init()
+
         # Set log levels
         if dist.get_rank(self.parallel_context.world_pg) == 0:
             if self.config.logging.log_level is not None:
@@ -134,60 +128,6 @@ class DistributedTrainer:
                 set_logger_verbosity_format(
                     self.config.logging.log_level_replica, parallel_context=self.parallel_context
                 )
-
-        ########################################
-        ## Do a couple of NCCL and CUDA tests to catch faulty nodes
-        ########################################
-
-        # Do a first NCCL sync to warmup and try to avoid Timeout after model/data loading
-        log_rank(
-            f"[TEST] Running NCCL sync for ranks {list(range(self.parallel_context.world_pg.size()))}",
-            logger=logger,
-            level=logging.WARNING,
-            group=self.parallel_context.dp_pg,
-            rank=0,
-        )
-        test_tensor = torch.tensor([dist.get_rank(self.parallel_context.world_pg)], device=torch.device("cuda"))
-        test_tensor_list = [torch.zeros_like(test_tensor) for _ in range(self.parallel_context.world_pg.size())]
-        dist.all_gather(test_tensor_list, test_tensor, group=self.parallel_context.world_pg, async_op=False)
-        dist.barrier()
-        log_rank(
-            f"[TEST] NCCL sync for ranks {[t.item() for t in test_tensor_list]}",
-            logger=logger,
-            level=logging.WARNING,
-            group=self.parallel_context.dp_pg,
-            rank=0,
-        )
-
-        # Test to allocate a large tensor to test memory
-        gc.collect()
-        torch.cuda.empty_cache()
-        free_mem, total_mem = torch.cuda.mem_get_info()
-        log_rank(
-            f"[TEST] free memory free_mem: {human_format(free_mem)}, total_mem: {human_format(total_mem)}",
-            logger=logger,
-            level=logging.WARNING,
-            group=self.parallel_context.world_pg,
-            rank=None,
-        )
-        if free_mem < MIN_GPU_MEM_THRESHOLD:
-            raise RuntimeError(
-                f"Not enough memory to train the model on node {os.environ.get('SLURMD_NODENAME')}. Got {human_format(free_mem)} but need at least {human_format(MIN_GPU_MEM_THRESHOLD)}"
-            )  # noqa
-        # Try to allocate all the memory
-        test_tensor_size = int(free_mem * 0.9)
-        test_tensor = torch.zeros((test_tensor_size,), dtype=torch.uint8, device=torch.device("cuda"))
-        log_rank(
-            f"[TEST] Allocated a tensor of size {human_format(test_tensor_size)} (90% of free memory)",
-            logger=logger,
-            level=logging.WARNING,
-            group=self.parallel_context.world_pg,
-            rank=None,
-        )
-        del test_tensor
-        gc.collect()
-        torch.cuda.empty_cache()
-        torch.cuda.reset_peak_memory_stats()
 
         # Log benchmark info
         if os.environ.get("NANOTRON_BENCHMARK", "0") == "1":
@@ -204,16 +144,16 @@ class DistributedTrainer:
         self.random_states = init_random_states(
             parallel_config=self.config.parallelism, tp_pg=self.parallel_context.tp_pg
         )
-        self.model, checkpoint_path = self.init_model()  # Defines self.model
-        self.normalized_model = self.model.module if isinstance(self.model, DistributedDataParallel) else self.model
+        self.model = self.init_model()  # Defines self.model
+        self.normalized_model: NanotronModel = self.model.module if isinstance(self.model, DistributedDataParallel) else self.model
 
         # Init optimizer
         self.optimizer, self.grad_accumulator = init_optimizer_and_grad_accumulator(
             model=self.model, optimizer_args=self.config.optimizer, parallel_context=self.parallel_context
         )
-        if checkpoint_path is not None:
+        if self.init_checkpoint_path is not None:
             load_optimizer(
-                optimizer=self.optimizer, parallel_context=self.parallel_context, root_folder=checkpoint_path
+                optimizer=self.optimizer, parallel_context=self.parallel_context, root_folder=self.init_checkpoint_path
             )
 
         # Init learning rate scheduler
@@ -222,17 +162,17 @@ class DistributedTrainer:
             lr_scheduler_args=self.config.optimizer.learning_rate_scheduler,
             total_training_steps=self.config.tokens.train_steps,
         )
-        if checkpoint_path is not None:
+        if self.init_checkpoint_path is not None:
             load_lr_scheduler(
                 lr_scheduler=self.lr_scheduler,
-                root_folder=checkpoint_path,
+                root_folder=self.init_checkpoint_path,
             )
 
         # Define iteration start state
         self.start_iteration_step: int
         self.consumed_train_samples: int
-        if checkpoint_path is not None:
-            checkpoint_metadata = load_meta(parallel_context=self.parallel_context, root_folder=checkpoint_path)
+        if self.init_checkpoint_path is not None:
+            checkpoint_metadata = load_meta(parallel_context=self.parallel_context, root_folder=self.init_checkpoint_path)
             log_rank(str(checkpoint_metadata), logger=logger, level=logging.INFO, rank=0)
             self.start_iteration_step = checkpoint_metadata.metas["last_train_step"]
             self.consumed_train_samples = checkpoint_metadata.metas["consumed_train_samples"]
@@ -252,72 +192,6 @@ class DistributedTrainer:
         # Log where each module is instantiated
         self.normalized_model.log_modules(level=logging.DEBUG, group=self.parallel_context.world_pg, rank=0)
 
-        # Log config and model config
-        # self.log_object(self.config, "config")
-        # if hasattr(self.model_config, "to_json_string"):
-        #     model_config_dict = json.loads(self.model_config.to_json_string())
-        # else:
-        #     model_config_dict = asdict(self.model_config)
-        # self.log_object(model_config_dict, "model_config")
-
-        # Log environment variables
-        # self.log_object(os.environ, "environment_variables")
-        # if os.environ.get("SLURM_JOB_ID", None) is not None:
-        #     keys = [
-        #         "JobId",
-        #         "Name",
-        #         "Command",
-        #         "STDOUT",
-        #         "STDERR",
-        #         "NumNodes",
-        #         "NodeList",
-        #         "GroupID",
-        #         "OverSubscribe",
-        #         "Partition",
-        #         "cpus-per-task",
-        #         "UserName",
-        #         "SubmitTime",
-        #     ]
-        #     format_str = ",".join(f"{k}:1000" for k in keys)
-        #     output = subprocess.check_output(
-        #         [f'squeue --Format="{format_str}" -j {os.environ.get("SLURM_JOB_ID", None)} --noheader'],
-        #         universal_newlines=True,
-        #         stderr=subprocess.STDOUT,
-        #         shell=True,
-        #     )
-        #     slurm_dict = {k: output[i * 1000 : (i + 1) * 1000].strip() for i, k in enumerate(keys)}
-        #     slurm_job_name = slurm_dict["Name"]
-        #     slurm_job_id = slurm_dict["JobId"]
-        #     for key, value in os.environ.items():
-        #         if key.startswith("SLURM") or key.startswith("SRUN"):
-        #             slurm_dict[key] = value
-        #     slurm_dict = {
-        #         k: o.replace("%x", slurm_job_name).replace("%j", slurm_job_id).replace("%n", "0").replace("%t", "0")
-        #         for k, o in slurm_dict.items()
-        #     }
-        #     for key, value in os.environ.items():
-        #         if key.startswith("SLURM") or key.startswith("SRUN"):
-        #             slurm_dict[key] = value
-        #     self.log_object(slurm_dict, "slurm")
-
-        # Do a first NCCL sync to warmup and try to avoid Timeout after model/data loading
-        test_tensor = torch.tensor([dist.get_rank(self.parallel_context.world_pg)], device=torch.device("cuda"))
-        test_tensor_list = [torch.zeros_like(test_tensor) for _ in range(self.parallel_context.world_pg.size())]
-        dist.all_gather(test_tensor_list, test_tensor, group=self.parallel_context.world_pg, async_op=False)
-        dist.barrier()
-        log_rank(
-            f"[SECOND TEST] NCCL sync for ranks {[t.item() for t in test_tensor_list]}",
-            logger=logger,
-            level=logging.WARNING,
-            group=self.parallel_context.dp_pg,
-            rank=0,
-        )
-        log_rank(
-            f"Global rank: { dist.get_rank(self.parallel_context.world_pg)}/{self.parallel_context.world_pg.size()} | PP: {dist.get_rank(self.parallel_context.pp_pg)}/{self.parallel_context.pp_pg.size()} | DP: {dist.get_rank(self.parallel_context.dp_pg)}/{self.parallel_context.dp_pg.size()} | TP: {dist.get_rank(self.parallel_context.tp_pg)}/{self.parallel_context.tp_pg.size()}",
-            logger=logger,
-            level=logging.INFO,
-        )
-
         self.micro_batch_size = self.config.tokens.micro_batch_size
         self.n_micro_batches_per_batch = self.config.tokens.batch_accumulation_per_replica
         self.global_batch_size = (
@@ -327,54 +201,33 @@ class DistributedTrainer:
         self.iteration_step = self.start_iteration_step
         self.limit_val_batches = self.config.tokens.limit_val_batches
 
-        # # S3 Mover and save initial state
-        # if self.config.checkpoints.s3 is not None:
-        #     # Only local rank 0 should upload
-        #     dummy = bool(int(os.environ.get("LOCAL_RANK", None)) != 0)
-        #     self.s3_mover = S3Mover(
-        #         local_path=self.config.checkpoints.checkpoints_path,
-        #         s3_path=self.config.checkpoints.s3.upload_s3_path,
-        #         # duplicate_checkpoint_path=self.config.checkpoints.resume_checkpoint_path,
-        #         remove_after_upload=self.config.checkpoints.s3.remove_after_upload,
-        #         s5cmd_numworkers=self.config.checkpoints.s3.s5cmd_numworkers,
-        #         s5cmd_concurrency=self.config.checkpoints.s3.s5cmd_concurrency,
-        #         s5cmd_path=self.config.checkpoints.s3.s5cmd_path,
-        #         dummy=dummy,
-        #     )
-        # else:
-        #     self.s3_mover = None
-        # if self.config.checkpoints.lighteval is not None and dist.get_rank(self.parallel_context.world_pg) == 0:
-        #     # We only start evaluation runs on the first node
-        #     if self.s3_mover is None:
-        #         raise ValueError("lighteval requires s3 upload of checkpoints to be enabled")
-        #     self.lighteval_runner = LightEvalRunner(config=self.config, parallel_context=self.parallel_context)
-        #     self.s3_mover.post_upload_callback = self.lighteval_runner.eval_single_checkpoint
+        self.post_init()
 
-        if self.config.checkpoints.save_initial_state and checkpoint_path is None:
-            self.save_checkpoint()
+    def pre_init(self):
+        pass
 
-    # def log_object(self, dataclass_object: Any, name: str):
-    #     if not dataclass_object or isinstance(self.tb_context, contextlib.nullcontext):
-    #         return
+    def post_init(self):
+        pass
 
-    #     self.tb_context.add_text(name, obj_to_markdown(dataclass_object), global_step=1)
+    def pre_training(self, *args, **kwargs):
+        pass
 
-    #     # Dataclass objects are usually configs so we push then already now
-    #     self.tb_context.flush()
+    def post_train_step(self):
+        pass
 
-    #     if isinstance(self.tb_context, HubSummaryWriter):
-    #         self.tb_context.scheduler.trigger()
-
-    @classmethod
-    def from_config_file(cls, config_file: str):
-        config = get_config_from_file(config_file)
-        return cls(config_or_config_file=config)
+    def post_training(self):
+        pass
 
     def train(
         self,
         dataloader_or_dls: Union[Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]], Tuple[Iterator, ...]],
-        # data_config_log: Optional[TrainDataLog] = None,
+        **kwargs,
     ) -> None:
+        self.pre_training(**kwargs)
+
+        if self.config.checkpoints.save_initial_state and self.init_checkpoint_path is None:
+            self.save_checkpoint()
+
         if isinstance(dataloader_or_dls, tuple):
             dataloader_or_dls[1] if len(dataloader_or_dls) > 1 else None
             dataloader_or_dls[2] if len(dataloader_or_dls) > 2 else None
@@ -384,9 +237,6 @@ class DistributedTrainer:
         dataloader = sanity_check_dataloader(
             dataloader=dataloader, parallel_context=self.parallel_context, config=self.config
         )
-
-        # Log data config
-        # self.log_object(data_config_log, name="data_config")
 
         self.pipeline_engine: PipelineEngine = self.config.parallelism.pp_engine
 
@@ -398,17 +248,14 @@ class DistributedTrainer:
             level=logging.INFO,
             rank=0,
         )
-        # Kill switch
-        self.check_kill_switch(save_ckpt=False)
-
         # TODO @nouamanetazi: refactor this
         # Useful mapping
         self.normalized_model = self.model.module if isinstance(self.model, DistributedDataParallel) else self.model
-        self.module_id_to_prefix = {
+        self.normalized_model.module_id_to_prefix = {
             id(module): f"{module_name}." for module_name, module in self.normalized_model.named_modules()
         }
         # Fix the root_model
-        self.module_id_to_prefix[id(self.normalized_model)] = ""
+        self.normalized_model.module_id_to_prefix[id(self.normalized_model)] = ""
 
         prof = get_profiler(config=self.config)
         torch.cuda.empty_cache()
@@ -427,46 +274,16 @@ class DistributedTrainer:
                 if (self.iteration_step - 1) % self.config.logging.iteration_step_info_interval == 0:
                     self.train_step_logs(outputs=outputs, loss_avg=loss_avg)
 
-                # Kill switch
-                self.check_kill_switch(save_ckpt=True)
-
                 # Checkpoint
                 if self.iteration_step % self.config.checkpoints.checkpoint_interval == 0:
                     self.save_checkpoint()
 
-                # Update our background upload/removal of checkpoints
-                # if self.s3_mover is not None:
-                #     self.s3_mover.update()
-
-                # Validation #TODO: fix validation
-                # if (
-                #     valid_dataloader is not None
-                #     and self.iteration_step % self.config.tokens.val_check_interval == 0
-                # ):
-                #     self.validation_step(dataloader=valid_dataloader)
-
-                # Push to Hub
-                # if (
-                #     isinstance(self.tb_context, HubSummaryWriter)
-                #     and (self.iteration_step - 1) % self.config.logging.tensorboard_logger.push_to_hub_interval
-                #     == 0
-                # ):
-                #     # tb_writer only exists on a single rank
-                #     log_rank(
-                #         f"Push Tensorboard logging to Hub at iteration {self.iteration_step} to https://huggingface.co/{self.config.logging.tensorboard_logger.repo_id}/tensorboard",
-                #         logger=logger,
-                #         level=logging.INFO,
-                #     )
-                #     # it is a future that queues to avoid concurrent push
-                #     self.tb_context.scheduler.trigger()
-
-        # if self.s3_mover is not None:
-        #     self.s3_mover.distributed_wait_for_completion(group=self.parallel_context.world_pg)
+        self.post_training()
 
     def training_step(
         self, dataloader: Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]]
     ) -> Tuple[Iterable[Dict], Optional[torch.Tensor]]:
-        self.before_tbi_sanity_checks()
+        before_tbi_sanity_checks(self.config, self.parallel_context, self.normalized_model, self.grad_accumulator)
 
         if self.iteration_step < 5:
             log_rank(
@@ -500,7 +317,7 @@ class DistributedTrainer:
             )
             torch.cuda.reset_peak_memory_stats()
 
-        self.after_tbi_sanity_checks()
+        after_tbi_sanity_checks(self.config, self.parallel_context, self.normalized_model, self.grad_accumulator)
 
         if isinstance(self.model, DistributedDataParallel) and self.grad_accumulator is not None:
             # Wait for fp32 grads allreduce to finish to make sure grads are synced across DP
@@ -559,7 +376,7 @@ class DistributedTrainer:
                 max_norm=self.config.optimizer.clip_grad,
             )
 
-        self.before_optim_step_sanity_checks()
+        before_optim_step_sanity_checks(self.config, self.parallel_context, self.normalized_model, self.grad_accumulator)
 
         # Compute DP average loss and overlap with optimizer step
         if isinstance(outputs[0]["loss"], torch.Tensor):
@@ -580,10 +397,13 @@ class DistributedTrainer:
         # Update the learning rate
         self.lr_scheduler.step()
 
-        self.after_optim_step_sanity_checks()
+        after_optim_step_sanity_checks(self.config, self.parallel_context, self.normalized_model, self.grad_accumulator)
 
         if handle is not None:
             handle.wait()
+
+        self.post_train_step()
+
         return outputs, loss_avg
 
     def validation_step(self, dataloader: Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]]) -> Iterable[Dict]:
@@ -637,11 +457,6 @@ class DistributedTrainer:
             if self.config.optimizer.clip_grad is not None:
                 log_entries.append(LogItem("grad_norm", self.grad_norm_unclipped.item(), "human_format"))  # , ".3f"))
 
-            # if not self.s3_mover.dummy:
-            #     log_entries.append(
-            #         LogItem("s3_mover_busy", self.s3_mover.get_state_as_int(), "human_format")
-            #     )  # , ".3f"))
-
             # Log not too often the memory
             if self.iteration_step < 5 or (self.iteration_step - 1) % self.config.checkpoints.checkpoint_interval == 0:
                 total, used, free = shutil.disk_usage("/")
@@ -658,9 +473,6 @@ class DistributedTrainer:
                         LogItem("hd_free_memory_tb", free, "human_format"),  #  / (2**40), ".2f"),
                     ]
                 )
-
-            # if not isinstance(tb_writer, contextlib.nullcontext):
-            #     tb_writer.add_scalars_from_list(log_entries, self.iteration_step)
 
             self.loggerwriter.add_scalars_from_list(log_entries, self.iteration_step)
 
@@ -731,7 +543,7 @@ class DistributedTrainer:
             model.output_pp_rank = target_pp_ranks[target_pp_rank_idx]
         return model
 
-    def init_model(self) -> Tuple[NanotronModel, Optional[str]]:
+    def init_model(self) -> Union[NanotronModel, DistributedDataParallel]:
         """Initialize the model and load weights from checkpoint if needed."""
         # TODO: add max_position_embeddings
         self.model_config.vocab_size = _vocab_size_with_padding(
@@ -780,12 +592,12 @@ class DistributedTrainer:
         normalized_model = model.module if isinstance(model, DistributedDataParallel) else model
 
         # Load or initialize model weights
-        checkpoint_path = parse_ckpt_path(config=self.config)
+        self.init_checkpoint_path = parse_ckpt_path(config=self.config)
         reloaded_from_checkpoint = False
-        if checkpoint_path is not None:
+        if self.init_checkpoint_path is not None:
             # Reload from a training checkpoint
-            log_rank(f"Loading weights from {checkpoint_path}", logger=logger, level=logging.INFO, rank=0)
-            load_weights(model=normalized_model, parallel_context=self.parallel_context, root_folder=checkpoint_path)
+            log_rank(f"Loading weights from {self.init_checkpoint_path}", logger=logger, level=logging.INFO, rank=0)
+            load_weights(model=normalized_model, parallel_context=self.parallel_context, root_folder=self.init_checkpoint_path)
             reloaded_from_checkpoint = True
         if not reloaded_from_checkpoint:
             log_rank("No checkpoint path provided.", logger=logger, level=logging.INFO)
@@ -822,7 +634,7 @@ class DistributedTrainer:
             else:
                 raise ValueError(f"Unsupported {self.config.model.init_method}")
 
-        return model, checkpoint_path
+        return model
 
     def _init_model(
         self,
@@ -921,27 +733,14 @@ class DistributedTrainer:
 
         return loggerwriter
 
-    def check_kill_switch(self, save_ckpt: bool):
-        if self.config.general.kill_switch_path and self.config.general.kill_switch_path.exists():
-            log_rank(
-                f"Detected kill switch at {self.config.general.kill_switch_path}. Exiting",
-                logger=logger,
-                level=logging.INFO,
-                rank=0,
-            )
+    def pre_save_checkpoint(self):
+        pass
 
-            # Save checkpoint
-            if save_ckpt:
-                self.save_checkpoint()
-            dist.barrier()
-            sys.exit(0)
+    def post_save_checkpoint(self):
+        pass
 
     def save_checkpoint(self) -> Path:
-        # if self.s3_mover is not None:
-        #     self.s3_mover.distributed_wait_for_completion(self.parallel_context.world_pg)
-        #     if self.s3_mover.post_upload_callback_outputs is not None:
-        #         slurm_job_id, slurm_log = self.s3_mover.post_upload_callback_outputs
-        #         self.log_object({"job_id": slurm_job_id, "log": slurm_log}, "slurm_eval")
+        self.pre_save_checkpoint()
 
         checkpoints_path = self.config.checkpoints.checkpoints_path
         checkpoint_path = checkpoints_path / f"{self.iteration_step}"
@@ -995,177 +794,9 @@ class DistributedTrainer:
             with open(checkpoint_path / "model_config.json", mode="w") as fo:
                 fo.write(json.dumps(asdict(self.model_config)))
 
-        # Upload to S3
-        # if self.s3_mover is not None:
-        #     self.s3_mover.start_uploading()
+        self.post_save_checkpoint()
 
         return checkpoint_path
-
-    def before_tbi_sanity_checks(self) -> None:
-        if not self.config.general.ignore_sanity_checks:
-            # SANITY CHECK: Check that the model params are synchronized across dp
-            for name, param in sorted(self.model.named_parameters(), key=lambda x: x[0]):
-                assert_tensor_synced_across_pg(
-                    tensor=param,
-                    pg=self.parallel_context.dp_pg,
-                    msg=lambda err: f"{name} are not synchronized across DP {err}",
-                )
-
-            # SANITY CHECK: Tied weights are synchronized
-            tied_params_list = sorted(
-                get_tied_id_to_param(
-                    parameters=self.normalized_model.parameters(),
-                    root_module=self.normalized_model,
-                ).items(),
-                key=lambda x: x[0],
-            )
-            for (name, group_ranks), param in tied_params_list:
-                group = self.parallel_context.world_ranks_to_pg[group_ranks]
-                assert_tensor_synced_across_pg(
-                    tensor=param,
-                    pg=group,
-                    msg=lambda err: f"[Before train] Tied weights {name} are not synchronized. {err}",
-                )
-
-            # SANITY CHECK: Check that the grad accumulator buffers are ready for DDP
-            if self.grad_accumulator is not None:
-                for _, elt in self.grad_accumulator.fp32_grad_buffers.items():
-                    fp32_grad_buffer = elt["fp32_grad"]
-                    torch.testing.assert_close(
-                        fp32_grad_buffer,
-                        torch.zeros_like(fp32_grad_buffer),
-                        atol=0,
-                        rtol=0,
-                        msg="Grad accumulator buffers must be zeroed in first accumulation step.",
-                    )
-
-            # SANITY CHECK: run model specific sanity checks
-            self.normalized_model.before_tbi_sanity_checks()
-
-    def after_tbi_sanity_checks(self) -> None:
-        if not self.config.general.ignore_sanity_checks:
-            # SANITY CHECK: Check that gradient flow on the entire model
-            # SANITY CHECK: Check that all parameters that required gradients, have actually a gradient
-            # SANITY CHECK: Check for nan/inf
-            for name, param in self.normalized_model.named_parameters():
-                if not param.requires_grad:
-                    continue
-
-                if param.is_tied:
-                    tied_info = param.get_tied_info()
-                    name = tied_info.get_full_name_from_module_id_to_prefix(
-                        module_id_to_prefix=self.module_id_to_prefix
-                    )
-
-                if self.grad_accumulator is not None:
-                    grad = self.grad_accumulator.get_grad_buffer(name=name)
-                else:
-                    grad = param.grad
-
-                if torch.isnan(grad).any() or torch.isinf(grad).any():
-                    raise ValueError("Gradient is nan or inf")
-                if grad is None:
-                    log_rank(
-                        f"Process rank { dist.get_rank(self.parallel_context.world_pg)}/{self.parallel_context.world_pg.size()}: {name} is missing gradient",
-                        logger=logger,
-                        level=logging.ERROR,
-                    )
-
-            # SANITY CHECK: run model specific sanity checks
-            self.normalized_model.after_tbi_sanity_checks()
-
-    def before_optim_step_sanity_checks(self) -> None:
-        if not self.config.general.ignore_sanity_checks:
-            # SANITY CHECK: Test tied weights gradients are synchronized
-            for (name, group_ranks), param in sorted(
-                get_tied_id_to_param(
-                    parameters=self.normalized_model.parameters(), root_module=self.normalized_model
-                ).items(),
-                key=lambda x: x[0],
-            ):
-                if not param.requires_grad:
-                    continue
-
-                if self.grad_accumulator is not None:
-                    grad = self.grad_accumulator.get_grad_buffer(name=name)
-                else:
-                    grad = param.grad
-
-                assert grad is not None, f"Grad is None for {name}"
-                group = self.parallel_context.world_ranks_to_pg[group_ranks]
-                assert_tensor_synced_across_pg(
-                    tensor=grad,
-                    pg=group,
-                    msg=lambda err: f"[Before optimizer step] Tied weights grads for {name} are not synchronized. {err}",
-                )
-
-            # SANITY CHECK: Test gradients are synchronized across DP
-            for name, param in sorted(self.normalized_model.named_parameters(), key=lambda x: x[0]):
-                if not param.requires_grad:
-                    continue
-
-                if param.is_tied:
-                    tied_info = param.get_tied_info()
-                    name = tied_info.get_full_name_from_module_id_to_prefix(
-                        module_id_to_prefix=self.module_id_to_prefix
-                    )
-
-                if self.grad_accumulator is not None:
-                    grad = self.grad_accumulator.get_grad_buffer(name=name)
-                else:
-                    grad = param.grad
-
-                assert grad is not None, f"Grad is None for {name}"
-                assert_tensor_synced_across_pg(
-                    tensor=grad,
-                    pg=self.parallel_context.dp_pg,
-                    msg=lambda err: f"[Before optimizer step] weights grads for {name} are not synchronized across DP. {err}",
-                )
-
-            # SANITY CHECK: Check that the model params are synchronized across dp
-            for name, param in sorted(self.model.named_parameters(), key=lambda x: x[0]):
-                assert_tensor_synced_across_pg(
-                    tensor=param,
-                    pg=self.parallel_context.dp_pg,
-                    msg=lambda err: f"{name} are not synchronized across DP {err}",
-                )
-
-            # SANITY CHECK: Tied weights are synchronized
-            tied_params_list = sorted(
-                get_tied_id_to_param(
-                    parameters=self.normalized_model.parameters(), root_module=self.normalized_model
-                ).items(),
-                key=lambda x: x[0],
-            )
-
-            for (name, group_ranks), param in tied_params_list:
-                group = self.parallel_context.world_ranks_to_pg[group_ranks]
-                assert_tensor_synced_across_pg(
-                    tensor=param,
-                    pg=group,
-                    msg=lambda err: f"[Before optimizer step] Tied weights {name} are not synchronized. {err}",
-                )
-
-            # SANITY CHECK: run model specific sanity checks
-            self.normalized_model.before_optim_step_sanity_checks()
-
-    def after_optim_step_sanity_checks(self) -> None:
-        if not self.config.general.ignore_sanity_checks:
-            # SANITY CHECK: Check that gradients is cleared
-            for name, param in self.model.named_parameters():
-                if not param.requires_grad:
-                    continue
-
-                if param.grad is not None:
-                    log_rank(
-                        f"Process rank { dist.get_rank(self.parallel_context.world_pg)}/{self.parallel_context.world_pg.size()}: {name} still has gradient despite having ran the optimizer",
-                        logger=logger,
-                        level=logging.ERROR,
-                    )
-
-            # SANITY CHECK: run model specific sanity checks
-            self.normalized_model.after_optim_step_sanity_checks()
-
 
 def mark_tied_parameters(
     model: NanotronModel, parallel_context: ParallelContext, parallel_config: Optional[ParallelismArgs] = None

@@ -20,28 +20,27 @@ from pathlib import Path
 
 import torch
 from nanotron import logging
+from nanotron import distributed as dist
 from nanotron.config import GenerationArgs, LoggingArgs, ParallelismArgs, get_config_from_file
-from nanotron.core import distributed as dist
-from nanotron.core.parallel.parameters import sanity_check
-from nanotron.core.parallel.pipeline_parallelism.engine import (
+from nanotron.parallel.parameters import sanity_check
+from nanotron.parallel.pipeline_parallel.engine import (
     OneForwardOneBackwardPipelineEngine,
 )
-from nanotron.core.parallel.pipeline_parallelism.tensor_pointer import TensorPointer
-from nanotron.core.parallel.tensor_parallelism.enum import TensorParallelLinearMode
-from nanotron.core.random import (
+from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
+from nanotron.parallel.tensor_parallel.enum import TensorParallelLinearMode
+from nanotron.random import (
     RandomStates,
     get_current_random_state,
     get_synced_random_state,
     set_random_seed,
 )
-from nanotron.distributed import ParallelContext
-from nanotron.generate.generation import (
+from nanotron.parallel import ParallelContext
+from nanotron.generation.decode import (
     GenerationInput,
     TokenizerConfig,
-    greedy_search_text,
+    decode_text,
 )
-from nanotron.helpers import set_logger_verbosity_format
-from nanotron.logging import log_rank
+from nanotron.logging import log_rank, set_logger_verbosity_format
 from nanotron.serialize import (
     load_weights,
 )
@@ -184,7 +183,7 @@ def main():
         # "This film was probably inspired by Godzilla",
     ]
 
-    outputs = greedy_search_text(
+    outputs = decode_text(
         input_iter=(GenerationInput(text=text) for text in dummy_inputs),
         tokenizer=tokenizer,
         # TODO @thomasw21: From ModelWithLoss extract the model.
@@ -235,7 +234,7 @@ def main():
 
     if args.compare_with_no_cache:
 
-        outputs = greedy_search_text(
+        outputs = decode_text(
             input_iter=(GenerationInput(text=text) for text in dummy_inputs),
             tokenizer=tokenizer,
             # TODO @thomasw21: From ModelWithLoss extract the model.

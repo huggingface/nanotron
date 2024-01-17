@@ -13,8 +13,8 @@ from nanotron import logging
 from nanotron.config import (
     PretrainDatasetsArgs,
 )
-from nanotron.core import distributed as dist
-from nanotron.core.utils import (
+from nanotron import distributed as dist
+from nanotron.utils import (
     main_rank_first,
 )
 from nanotron.dataloader import (

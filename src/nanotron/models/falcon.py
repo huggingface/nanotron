@@ -22,21 +22,21 @@ from typing import Dict, Optional, Union
 
 import torch
 from nanotron.config import FalconConfig, ParallelismArgs, RecomputeGranularity
-from nanotron.core import distributed as dist
-from nanotron.core import logging
-from nanotron.core.parallel.parameters import NanotronParameter
-from nanotron.core.parallel.pipeline_parallelism.block import PipelineBlock, TensorPointer
-from nanotron.core.parallel.pipeline_parallelism.p2p import P2P
-from nanotron.core.parallel.tensor_parallelism.functional import sharded_cross_entropy
-from nanotron.core.parallel.tensor_parallelism.nn import (
+from nanotron import distributed as dist
+from nanotron import logging
+from nanotron.parallel.parameters import NanotronParameter
+from nanotron.parallel.pipeline_parallel.block import PipelineBlock, TensorPointer
+from nanotron.parallel.pipeline_parallel.p2p import P2P
+from nanotron.parallel.tensor_parallel.functional import sharded_cross_entropy
+from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelColumnLinear,
     TensorParallelEmbedding,
     TensorParallelLinearMode,
     TensorParallelRowLinear,
 )
-from nanotron.core.random import RandomStates
-from nanotron.core.utils import checkpoint_method
-from nanotron.distributed import ParallelContext
+from nanotron.random import RandomStates
+from nanotron.utils import checkpoint_method
+from nanotron.parallel import ParallelContext
 from nanotron.models import AttachableStore, NanotronModel
 from torch import nn
 from torch.nn import functional as F

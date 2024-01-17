@@ -5,10 +5,10 @@ import dacite
 import torch
 from nanotron import logging
 from nanotron.constants import CHECKPOINT_VERSION
-from nanotron.core import distributed as dist
-from nanotron.core.distributed import get_global_rank
-from nanotron.core.parallel.parameters import NanotronParameter, ShardedInfo, SlicesPair
-from nanotron.distributed import ParallelContext
+from nanotron import distributed as dist
+from nanotron.distributed import get_global_rank
+from nanotron.parallel.parameters import NanotronParameter, ShardedInfo, SlicesPair
+from nanotron.parallel import ParallelContext
 from nanotron.logging import log_rank
 from nanotron.serialize.metadata import CheckpointMetadata, TensorMetadata, TensorMetadataV2, load_meta
 from nanotron.serialize.utils import (
