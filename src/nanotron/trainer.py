@@ -54,6 +54,12 @@ from nanotron.helpers import (
     log_throughput,
     lr_scheduler_builder,
 )
+from nanotron.sanity_checks import (
+    after_tbi_sanity_checks,
+    before_tbi_sanity_checks,
+    before_optim_step_sanity_checks,
+    after_optim_step_sanity_checks
+)
 from nanotron.logging import LoggerWriter, LogItem, human_format, log_rank, set_logger_verbosity_format
 from nanotron.models import NanotronModel
 from nanotron.serialize import (
@@ -277,7 +283,7 @@ class DistributedTrainer:
     def training_step(
         self, dataloader: Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]]
     ) -> Tuple[Iterable[Dict], Optional[torch.Tensor]]:
-        self.before_tbi_sanity_checks()
+        before_tbi_sanity_checks(self.config, self.parallel_context, self.normalized_model, self.grad_accumulator)
 
         if self.iteration_step < 5:
             log_rank(
@@ -311,7 +317,7 @@ class DistributedTrainer:
             )
             torch.cuda.reset_peak_memory_stats()
 
-        self.after_tbi_sanity_checks()
+        after_tbi_sanity_checks(self.config, self.parallel_context, self.normalized_model, self.grad_accumulator)
 
         if isinstance(self.model, DistributedDataParallel) and self.grad_accumulator is not None:
             # Wait for fp32 grads allreduce to finish to make sure grads are synced across DP
@@ -370,7 +376,7 @@ class DistributedTrainer:
                 max_norm=self.config.optimizer.clip_grad,
             )
 
-        self.before_optim_step_sanity_checks()
+        before_optim_step_sanity_checks(self.config, self.parallel_context, self.normalized_model, self.grad_accumulator)
 
         # Compute DP average loss and overlap with optimizer step
         if isinstance(outputs[0]["loss"], torch.Tensor):
@@ -391,7 +397,7 @@ class DistributedTrainer:
         # Update the learning rate
         self.lr_scheduler.step()
 
-        self.after_optim_step_sanity_checks()
+        after_optim_step_sanity_checks(self.config, self.parallel_context, self.normalized_model, self.grad_accumulator)
 
         if handle is not None:
             handle.wait()
@@ -451,11 +457,6 @@ class DistributedTrainer:
             if self.config.optimizer.clip_grad is not None:
                 log_entries.append(LogItem("grad_norm", self.grad_norm_unclipped.item(), "human_format"))  # , ".3f"))
 
-            # if not self.s3_mover.dummy:
-            #     log_entries.append(
-            #         LogItem("s3_mover_busy", self.s3_mover.get_state_as_int(), "human_format")
-            #     )  # , ".3f"))
-
             # Log not too often the memory
             if self.iteration_step < 5 or (self.iteration_step - 1) % self.config.checkpoints.checkpoint_interval == 0:
                 total, used, free = shutil.disk_usage("/")
@@ -472,9 +473,6 @@ class DistributedTrainer:
                         LogItem("hd_free_memory_tb", free, "human_format"),  #  / (2**40), ".2f"),
                     ]
                 )
-
-            # if not isinstance(tb_writer, contextlib.nullcontext):
-            #     tb_writer.add_scalars_from_list(log_entries, self.iteration_step)
 
             self.loggerwriter.add_scalars_from_list(log_entries, self.iteration_step)
 
