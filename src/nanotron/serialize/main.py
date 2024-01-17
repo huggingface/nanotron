@@ -8,8 +8,8 @@ from nanotron import distributed as dist
 from nanotron import optim as optim
 from nanotron.distributed import get_global_rank
 from nanotron.parallel.parameters import NanotronParameter
-from nanotron.utils import assert_tensor_synced_across_pg
-from nanotron.distributed import ParallelContext
+from nanotron.sanity_checks import assert_tensor_synced_across_pg
+from nanotron.parallel import ParallelContext
 from nanotron.logging import log_rank
 from nanotron.serialize.metadata import CheckpointMetadata, load_meta, save_meta
 from nanotron.serialize.optimizer import load_lr_scheduler, load_optimizer, save_lr_scheduler, save_optimizer

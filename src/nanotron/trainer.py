@@ -42,13 +42,10 @@ from nanotron.parallel.tied_parameters import (
 from nanotron.random import (
     set_random_seed,
 )
-from nanotron.utils import init_method_normal, scaled_init_method_normal
-from nanotron.utils import (
-    assert_tensor_synced_across_pg,
-    init_on_device_and_dtype,
-)
+from nanotron.utils import init_method_normal, scaled_init_method_normal, init_on_device_and_dtype
+from nanotron.sanity_checks import assert_tensor_synced_across_pg
 from nanotron.dataloader import sanity_check_dataloader
-from nanotron.distributed import ParallelContext
+from nanotron.parallel import ParallelContext
 from nanotron.helpers import (
     _vocab_size_with_padding,
     get_profiler,
@@ -75,14 +72,12 @@ if int(os.environ.get("USE_FAST", 0)) == 1:
     from nanotron.models.fast.falcon import FalconForTraining
     from nanotron.models.fast.gpt2 import GPTForTraining
     from nanotron.models.fast.llama import LlamaForTraining, RotaryEmbedding
-
-    # from nanotron.models.fast.starcoder2 import Starcoder2ForTraining
+    from nanotron.models.fast.starcoder2 import Starcoder2ForTraining
 else:
     from nanotron.models.falcon import FalconForTraining
     from nanotron.models.gpt2 import GPTForTraining
     from nanotron.models.llama import LlamaForTraining, RotaryEmbedding
-
-    # from nanotron.models.fast.starcoder2 import Starcoder2ForTraining
+    from nanotron.models.fast.starcoder2 import Starcoder2ForTraining
 
 logger = logging.get_logger(__name__)
 
@@ -95,14 +90,10 @@ CONFIG_TO_MODEL_CLASS = {
     "GPTBigCodeConfig": GPTForTraining,
     "FalconConfig": FalconForTraining,
     "RWConfig": FalconForTraining,
-    # "Starcoder2Config": Starcoder2ForTraining,
+    "Starcoder2Config": Starcoder2ForTraining,
 }
 
-NUM_THROUGHPUT_ITERS = 5
-THROUGHPUT_TENSOR_SIZE = 8e9  # 8GB
 
-
-# TODO @nouamane: add abstract class
 class DistributedTrainer:
     def __init__(self, config_or_config_file: Union[Config, str], config_class: Type[Config] = Config):
         super().__init__()
@@ -148,7 +139,7 @@ class DistributedTrainer:
             parallel_config=self.config.parallelism, tp_pg=self.parallel_context.tp_pg
         )
         self.model = self.init_model()  # Defines self.model
-        self.normalized_model = self.model.module if isinstance(self.model, DistributedDataParallel) else self.model
+        self.normalized_model: NanotronModel = self.model.module if isinstance(self.model, DistributedDataParallel) else self.model
 
         # Init optimizer
         self.optimizer, self.grad_accumulator = init_optimizer_and_grad_accumulator(
@@ -195,72 +186,6 @@ class DistributedTrainer:
         # Log where each module is instantiated
         self.normalized_model.log_modules(level=logging.DEBUG, group=self.parallel_context.world_pg, rank=0)
 
-        # Log config and model config
-        # self.log_object(self.config, "config")
-        # if hasattr(self.model_config, "to_json_string"):
-        #     model_config_dict = json.loads(self.model_config.to_json_string())
-        # else:
-        #     model_config_dict = asdict(self.model_config)
-        # self.log_object(model_config_dict, "model_config")
-
-        # Log environment variables
-        # self.log_object(os.environ, "environment_variables")
-        # if os.environ.get("SLURM_JOB_ID", None) is not None:
-        #     keys = [
-        #         "JobId",
-        #         "Name",
-        #         "Command",
-        #         "STDOUT",
-        #         "STDERR",
-        #         "NumNodes",
-        #         "NodeList",
-        #         "GroupID",
-        #         "OverSubscribe",
-        #         "Partition",
-        #         "cpus-per-task",
-        #         "UserName",
-        #         "SubmitTime",
-        #     ]
-        #     format_str = ",".join(f"{k}:1000" for k in keys)
-        #     output = subprocess.check_output(
-        #         [f'squeue --Format="{format_str}" -j {os.environ.get("SLURM_JOB_ID", None)} --noheader'],
-        #         universal_newlines=True,
-        #         stderr=subprocess.STDOUT,
-        #         shell=True,
-        #     )
-        #     slurm_dict = {k: output[i * 1000 : (i + 1) * 1000].strip() for i, k in enumerate(keys)}
-        #     slurm_job_name = slurm_dict["Name"]
-        #     slurm_job_id = slurm_dict["JobId"]
-        #     for key, value in os.environ.items():
-        #         if key.startswith("SLURM") or key.startswith("SRUN"):
-        #             slurm_dict[key] = value
-        #     slurm_dict = {
-        #         k: o.replace("%x", slurm_job_name).replace("%j", slurm_job_id).replace("%n", "0").replace("%t", "0")
-        #         for k, o in slurm_dict.items()
-        #     }
-        #     for key, value in os.environ.items():
-        #         if key.startswith("SLURM") or key.startswith("SRUN"):
-        #             slurm_dict[key] = value
-        #     self.log_object(slurm_dict, "slurm")
-
-        # Do a first NCCL sync to warmup and try to avoid Timeout after model/data loading
-        test_tensor = torch.tensor([dist.get_rank(self.parallel_context.world_pg)], device=torch.device("cuda"))
-        test_tensor_list = [torch.zeros_like(test_tensor) for _ in range(self.parallel_context.world_pg.size())]
-        dist.all_gather(test_tensor_list, test_tensor, group=self.parallel_context.world_pg, async_op=False)
-        dist.barrier()
-        log_rank(
-            f"[SECOND TEST] NCCL sync for ranks {[t.item() for t in test_tensor_list]}",
-            logger=logger,
-            level=logging.WARNING,
-            group=self.parallel_context.dp_pg,
-            rank=0,
-        )
-        log_rank(
-            f"Global rank: { dist.get_rank(self.parallel_context.world_pg)}/{self.parallel_context.world_pg.size()} | PP: {dist.get_rank(self.parallel_context.pp_pg)}/{self.parallel_context.pp_pg.size()} | DP: {dist.get_rank(self.parallel_context.dp_pg)}/{self.parallel_context.dp_pg.size()} | TP: {dist.get_rank(self.parallel_context.tp_pg)}/{self.parallel_context.tp_pg.size()}",
-            logger=logger,
-            level=logging.INFO,
-        )
-
         self.micro_batch_size = self.config.tokens.micro_batch_size
         self.n_micro_batches_per_batch = self.config.tokens.batch_accumulation_per_replica
         self.global_batch_size = (
@@ -287,11 +212,6 @@ class DistributedTrainer:
     def post_training(self):
         pass
 
-    @classmethod
-    def from_config_file(cls, config_file: str):
-        config = get_config_from_file(config_file)
-        return cls(config_or_config_file=config)
-
     def train(
         self,
         dataloader_or_dls: Union[Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]], Tuple[Iterator, ...]],
@@ -312,9 +232,6 @@ class DistributedTrainer:
             dataloader=dataloader, parallel_context=self.parallel_context, config=self.config
         )
 
-        # Log data config
-        # self.log_object(data_config_log, name="data_config")
-
         self.pipeline_engine: PipelineEngine = self.config.parallelism.pp_engine
 
         self.pipeline_engine.nb_microbatches = self.n_micro_batches_per_batch
@@ -325,17 +242,14 @@ class DistributedTrainer:
             level=logging.INFO,
             rank=0,
         )
-        # Kill switch
-        self.check_kill_switch(save_ckpt=False)
-
         # TODO @nouamanetazi: refactor this
         # Useful mapping
         self.normalized_model = self.model.module if isinstance(self.model, DistributedDataParallel) else self.model
-        self.module_id_to_prefix = {
+        self.normalized_model.module_id_to_prefix = {
             id(module): f"{module_name}." for module_name, module in self.normalized_model.named_modules()
         }
         # Fix the root_model
-        self.module_id_to_prefix[id(self.normalized_model)] = ""
+        self.normalized_model.module_id_to_prefix[id(self.normalized_model)] = ""
 
         prof = get_profiler(config=self.config)
         torch.cuda.empty_cache()
@@ -353,9 +267,6 @@ class DistributedTrainer:
 
                 if (self.iteration_step - 1) % self.config.logging.iteration_step_info_interval == 0:
                     self.train_step_logs(outputs=outputs, loss_avg=loss_avg)
-
-                # Kill switch
-                self.check_kill_switch(save_ckpt=True)
 
                 # Checkpoint
                 if self.iteration_step % self.config.checkpoints.checkpoint_interval == 0:
@@ -635,7 +546,7 @@ class DistributedTrainer:
 
         return model
 
-    def init_model(self) -> Tuple[NanotronModel, Optional[str]]:
+    def init_model(self) -> Union[NanotronModel, DistributedDataParallel]:
         """Initialize the model and load weights from checkpoint if needed."""
         # TODO: add max_position_embeddings
         self.model_config.vocab_size = _vocab_size_with_padding(
@@ -825,21 +736,6 @@ class DistributedTrainer:
 
         return loggerwriter
 
-    def check_kill_switch(self, save_ckpt: bool):
-        if self.config.general.kill_switch_path and self.config.general.kill_switch_path.exists():
-            log_rank(
-                f"Detected kill switch at {self.config.general.kill_switch_path}. Exiting",
-                logger=logger,
-                level=logging.INFO,
-                rank=0,
-            )
-
-            # Save checkpoint
-            if save_ckpt:
-                self.save_checkpoint()
-            dist.barrier()
-            sys.exit(0)
-
     def pre_save_checkpoint(self):
         pass
 
@@ -904,172 +800,6 @@ class DistributedTrainer:
         self.post_save_checkpoint()
 
         return checkpoint_path
-
-    def before_tbi_sanity_checks(self) -> None:
-        if not self.config.general.ignore_sanity_checks:
-            # SANITY CHECK: Check that the model params are synchronized across dp
-            for name, param in sorted(self.model.named_parameters(), key=lambda x: x[0]):
-                assert_tensor_synced_across_pg(
-                    tensor=param,
-                    pg=self.parallel_context.dp_pg,
-                    msg=lambda err: f"{name} are not synchronized across DP {err}",
-                )
-
-            # SANITY CHECK: Tied weights are synchronized
-            tied_params_list = sorted(
-                get_tied_id_to_param(
-                    parameters=self.normalized_model.parameters(),
-                    root_module=self.normalized_model,
-                ).items(),
-                key=lambda x: x[0],
-            )
-            for (name, group_ranks), param in tied_params_list:
-                group = self.parallel_context.world_ranks_to_pg[group_ranks]
-                assert_tensor_synced_across_pg(
-                    tensor=param,
-                    pg=group,
-                    msg=lambda err: f"[Before train] Tied weights {name} are not synchronized. {err}",
-                )
-
-            # SANITY CHECK: Check that the grad accumulator buffers are ready for DDP
-            if self.grad_accumulator is not None:
-                for _, elt in self.grad_accumulator.fp32_grad_buffers.items():
-                    fp32_grad_buffer = elt["fp32_grad"]
-                    torch.testing.assert_close(
-                        fp32_grad_buffer,
-                        torch.zeros_like(fp32_grad_buffer),
-                        atol=0,
-                        rtol=0,
-                        msg="Grad accumulator buffers must be zeroed in first accumulation step.",
-                    )
-
-            # SANITY CHECK: run model specific sanity checks
-            self.normalized_model.before_tbi_sanity_checks()
-
-    def after_tbi_sanity_checks(self) -> None:
-        if not self.config.general.ignore_sanity_checks:
-            # SANITY CHECK: Check that gradient flow on the entire model
-            # SANITY CHECK: Check that all parameters that required gradients, have actually a gradient
-            # SANITY CHECK: Check for nan/inf
-            for name, param in self.normalized_model.named_parameters():
-                if not param.requires_grad:
-                    continue
-
-                if param.is_tied:
-                    tied_info = param.get_tied_info()
-                    name = tied_info.get_full_name_from_module_id_to_prefix(
-                        module_id_to_prefix=self.module_id_to_prefix
-                    )
-
-                if self.grad_accumulator is not None:
-                    grad = self.grad_accumulator.get_grad_buffer(name=name)
-                else:
-                    grad = param.grad
-
-                if torch.isnan(grad).any() or torch.isinf(grad).any():
-                    raise ValueError("Gradient is nan or inf")
-                if grad is None:
-                    log_rank(
-                        f"Process rank { dist.get_rank(self.parallel_context.world_pg)}/{self.parallel_context.world_pg.size()}: {name} is missing gradient",
-                        logger=logger,
-                        level=logging.ERROR,
-                    )
-
-            # SANITY CHECK: run model specific sanity checks
-            self.normalized_model.after_tbi_sanity_checks()
-
-    def before_optim_step_sanity_checks(self) -> None:
-        if not self.config.general.ignore_sanity_checks:
-            # SANITY CHECK: Test tied weights gradients are synchronized
-            for (name, group_ranks), param in sorted(
-                get_tied_id_to_param(
-                    parameters=self.normalized_model.parameters(), root_module=self.normalized_model
-                ).items(),
-                key=lambda x: x[0],
-            ):
-                if not param.requires_grad:
-                    continue
-
-                if self.grad_accumulator is not None:
-                    grad = self.grad_accumulator.get_grad_buffer(name=name)
-                else:
-                    grad = param.grad
-
-                assert grad is not None, f"Grad is None for {name}"
-                group = self.parallel_context.world_ranks_to_pg[group_ranks]
-                assert_tensor_synced_across_pg(
-                    tensor=grad,
-                    pg=group,
-                    msg=lambda err: f"[Before optimizer step] Tied weights grads for {name} are not synchronized. {err}",
-                )
-
-            # SANITY CHECK: Test gradients are synchronized across DP
-            for name, param in sorted(self.normalized_model.named_parameters(), key=lambda x: x[0]):
-                if not param.requires_grad:
-                    continue
-
-                if param.is_tied:
-                    tied_info = param.get_tied_info()
-                    name = tied_info.get_full_name_from_module_id_to_prefix(
-                        module_id_to_prefix=self.module_id_to_prefix
-                    )
-
-                if self.grad_accumulator is not None:
-                    grad = self.grad_accumulator.get_grad_buffer(name=name)
-                else:
-                    grad = param.grad
-
-                assert grad is not None, f"Grad is None for {name}"
-                assert_tensor_synced_across_pg(
-                    tensor=grad,
-                    pg=self.parallel_context.dp_pg,
-                    msg=lambda err: f"[Before optimizer step] weights grads for {name} are not synchronized across DP. {err}",
-                )
-
-            # SANITY CHECK: Check that the model params are synchronized across dp
-            for name, param in sorted(self.model.named_parameters(), key=lambda x: x[0]):
-                assert_tensor_synced_across_pg(
-                    tensor=param,
-                    pg=self.parallel_context.dp_pg,
-                    msg=lambda err: f"{name} are not synchronized across DP {err}",
-                )
-
-            # SANITY CHECK: Tied weights are synchronized
-            tied_params_list = sorted(
-                get_tied_id_to_param(
-                    parameters=self.normalized_model.parameters(), root_module=self.normalized_model
-                ).items(),
-                key=lambda x: x[0],
-            )
-
-            for (name, group_ranks), param in tied_params_list:
-                group = self.parallel_context.world_ranks_to_pg[group_ranks]
-                assert_tensor_synced_across_pg(
-                    tensor=param,
-                    pg=group,
-                    msg=lambda err: f"[Before optimizer step] Tied weights {name} are not synchronized. {err}",
-                )
-
-            # SANITY CHECK: run model specific sanity checks
-            self.normalized_model.before_optim_step_sanity_checks()
-
-    def after_optim_step_sanity_checks(self) -> None:
-        if not self.config.general.ignore_sanity_checks:
-            # SANITY CHECK: Check that gradients is cleared
-            for name, param in self.model.named_parameters():
-                if not param.requires_grad:
-                    continue
-
-                if param.grad is not None:
-                    log_rank(
-                        f"Process rank { dist.get_rank(self.parallel_context.world_pg)}/{self.parallel_context.world_pg.size()}: {name} still has gradient despite having ran the optimizer",
-                        logger=logger,
-                        level=logging.ERROR,
-                    )
-
-            # SANITY CHECK: run model specific sanity checks
-            self.normalized_model.after_optim_step_sanity_checks()
-
 
 def mark_tied_parameters(
     model: NanotronModel, parallel_context: ParallelContext, parallel_config: Optional[ParallelismArgs] = None

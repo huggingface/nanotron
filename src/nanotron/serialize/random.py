@@ -3,7 +3,7 @@ from pathlib import Path
 import torch
 from nanotron import distributed as dist
 from nanotron.random import RandomStates
-from nanotron.distributed import ParallelContext
+from nanotron.parallel import ParallelContext
 
 
 def save_random_states(

@@ -41,7 +41,7 @@ from nanotron.parallel.tensor_parallel.nn import (
 from nanotron.parallel.tied_parameters import create_tied_parameter
 from nanotron.random import RandomStates, branch_random_state
 from nanotron.utils import checkpoint_method
-from nanotron.distributed import ParallelContext
+from nanotron.parallel import ParallelContext
 from nanotron.models import AttachableStore, NanotronModel
 from torch import nn
 from torch.nn import LayerNorm

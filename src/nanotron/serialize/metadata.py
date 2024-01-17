@@ -9,7 +9,7 @@ from dacite import from_dict
 from nanotron.constants import CHECKPOINT_VERSION
 from nanotron import distributed as dist
 from nanotron.parallel.parameters import SlicesPair
-from nanotron.distributed import ParallelContext
+from nanotron.parallel import ParallelContext
 from packaging.version import Version
 
 

@@ -79,7 +79,7 @@ Let's go through some key concepts.
 
 `ParallelContext` is the base class referencing all the process groups you might need when running parallel workloads. You can initialize it using the following:
 ```python
-from nanotron.distributed import ParallelContext
+from nanotron.parallel import ParallelContext
 
 # define your topology
 parallel_context = ParallelContext(

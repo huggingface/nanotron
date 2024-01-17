@@ -4,7 +4,7 @@ from typing import Any, Dict, Optional, Tuple
 import torch
 from nanotron import distributed as dist
 from nanotron import logging
-from nanotron.distributed import ParallelContext
+from nanotron.parallel import ParallelContext
 from nanotron.models.base_model import NanotronModel
 from torch import nn
 

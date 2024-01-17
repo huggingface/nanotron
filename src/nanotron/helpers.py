@@ -38,7 +38,7 @@ from nanotron.random import (
     get_current_random_state,
     get_synced_random_state,
 )
-from nanotron.distributed import ParallelContext
+from nanotron.parallel import ParallelContext
 from nanotron.logging import LogItem, log_rank
 from torch import nn
 from torch.nn.parallel import DistributedDataParallel

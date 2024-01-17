@@ -9,7 +9,7 @@ from nanotron.parallel.tied_parameters import (
     sync_tied_weights_gradients,
     tie_parameters,
 )
-from nanotron.distributed import ParallelContext
+from nanotron.parallel import ParallelContext
 from torch import nn
 
 

@@ -17,7 +17,7 @@ from nanotron.parallel.tensor_parallel import nn
 from nanotron.parallel.tensor_parallel.enum import TensorParallelLinearMode
 from nanotron.parallel.tied_parameters import sync_tied_weights_gradients
 from nanotron.random import RandomStates, branch_random_state, get_current_random_state, get_synced_random_state
-from nanotron.distributed import ParallelContext
+from nanotron.parallel import ParallelContext
 from torch import nn as torch_nn
 from torch.nn.parallel import DistributedDataParallel
 

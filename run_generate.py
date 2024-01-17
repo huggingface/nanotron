@@ -34,7 +34,7 @@ from nanotron.random import (
     get_synced_random_state,
     set_random_seed,
 )
-from nanotron.distributed import ParallelContext
+from nanotron.parallel import ParallelContext
 from nanotron.generation.decode import (
     GenerationInput,
     TokenizerConfig,

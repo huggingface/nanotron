@@ -13,7 +13,7 @@ from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelEmbedding,
     TensorParallelRowLinear,
 )
-from nanotron.distributed import ParallelContext
+from nanotron.parallel import ParallelContext
 from torch import nn as torch_nn
 
 

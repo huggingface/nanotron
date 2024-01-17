@@ -8,7 +8,7 @@ from nanotron.random import (
     get_current_random_state,
     get_synced_random_state,
 )
-from nanotron.distributed import ParallelContext
+from nanotron.parallel import ParallelContext
 
 
 @pytest.mark.skipif(available_gpus() < 2, reason="Testing test_random_state_sync requires at least 2 gpus")

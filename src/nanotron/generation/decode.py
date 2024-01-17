@@ -14,7 +14,7 @@ from nanotron.parallel.pipeline_parallel.p2p import P2P, TensorMetaData, view_as
 from nanotron.parallel.pipeline_parallel.state import PipelineEvalBatchState
 from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
 from nanotron.utils import get_untyped_storage
-from nanotron.distributed import ParallelContext
+from nanotron.parallel import ParallelContext
 from nanotron.generation.sampler import BasicSampler, GreedySampler, SamplerType, TopKSampler, TopPSampler
 from nanotron.helpers import log_throughput
 from nanotron.models.generate_store import Store, attach_store

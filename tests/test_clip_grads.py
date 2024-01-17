@@ -25,7 +25,7 @@ from nanotron.parallel.tied_parameters import (
     tie_parameters,
 )
 from nanotron.utils import assert_tensor_synced_across_pg, init_on_device_and_dtype
-from nanotron.distributed import ParallelContext
+from nanotron.parallel import ParallelContext
 from torch import nn
 
 

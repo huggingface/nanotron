@@ -137,18 +137,12 @@ class GeneralArgs:
     seed: Optional[int] = None
     step: Optional[int] = None
     consumed_train_samples: Optional[int] = None
-    # If you want to signal the training script to stop, you just need to touch the following file
-    # We force users to set one in order to programmatically be able to remove it.
-    kill_switch_path: Optional[Path] = None
-    # If you want to signal the training script to pause, you just need to add the following file
     benchmark_csv_path: Optional[Path] = None
     ignore_sanity_checks: bool = False
 
     def __post_init__(self):
         if self.seed is None:
             self.seed = 42
-        if isinstance(self.kill_switch_path, str):
-            self.kill_switch_path = Path(self.kill_switch_path)
         if self.benchmark_csv_path is not None:
             assert (
                 os.environ.get("NANOTRON_BENCHMARK", None) is not None
@@ -156,12 +150,6 @@ class GeneralArgs:
 
         if self.run is None:
             self.run = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            if os.environ.get("SLURM_JOB_ID", None) is not None:
-                self.run += f"_{os.environ['SLURM_JOB_ID']}"
-        else:
-            self.run = self.run.replace("%d", datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S"))
-            if os.environ.get("SLURM_JOB_ID", None) is not None:
-                self.run = self.run.replace("%j", os.environ["SLURM_JOB_ID"])
 
 
 @dataclass

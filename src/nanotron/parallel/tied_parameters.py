@@ -7,7 +7,7 @@ from nanotron import distributed as dist
 from nanotron.optim.gradient_accumulator import GradientAccumulator
 from nanotron.parallel.parameters import NanotronParameter
 from nanotron.utils import get_parameter_and_parent_module
-from nanotron.distributed import ParallelContext
+from nanotron.parallel import ParallelContext
 from torch import nn
 
 logger = logging.get_logger(__name__)

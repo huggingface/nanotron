@@ -9,11 +9,11 @@ from nanotron.config import Config
 from nanotron import distributed as dist
 from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
 from nanotron.random import set_random_seed
-from nanotron.utils import (
+from nanotron.sanity_checks import (
     assert_fail_except_rank_with,
     assert_tensor_synced_across_pg,
 )
-from nanotron.distributed import ParallelContext
+from nanotron.parallel import ParallelContext
 from torch.utils.data import BatchSampler, DataLoader
 from torch.utils.data.distributed import DistributedSampler
 

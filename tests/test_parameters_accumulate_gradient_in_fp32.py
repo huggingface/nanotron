@@ -12,7 +12,7 @@ from nanotron.optim.named_optimizer import NamedOptimizer
 from nanotron.optim.optimizer_from_gradient_accumulator import (
     OptimizerFromGradientAccumulator,
 )
-from nanotron.parallel.model import initial_sync
+from nanotron.parallel.utils import initial_sync
 from nanotron.parallel.parameters import NanotronParameter, sanity_check
 from nanotron.parallel.pipeline_parallel.engine import (
     AllForwardAllBackwardPipelineEngine,
@@ -27,7 +27,7 @@ from nanotron.parallel.tied_parameters import (
     tie_parameters,
 )
 from nanotron.utils import ContextManagers, assert_tensor_synced_across_pg, init_on_device_and_dtype
-from nanotron.distributed import ParallelContext
+from nanotron.parallel import ParallelContext
 from torch import nn
 
 

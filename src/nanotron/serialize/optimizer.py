@@ -5,7 +5,7 @@ from typing import Optional
 import torch
 from nanotron import distributed as dist
 from nanotron import optim as optim
-from nanotron.distributed import ParallelContext
+from nanotron.parallel import ParallelContext
 from nanotron.serialize.utils import ObjectType
 
 

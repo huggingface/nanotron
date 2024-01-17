@@ -35,7 +35,7 @@ from torch import distributed as torch_dist
 
 from nanotron import distributed as dist
 
-from nanotron.distributed import ParallelContext
+from nanotron.parallel import ParallelContext
 
 log_levels = {
     "debug": DEBUG,

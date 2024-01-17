@@ -242,44 +242,6 @@ def get_parameter_and_parent_module(target: str, root_module: nn.Module):
     return param, mod, param_name
 
 
-def assert_tensor_synced_across_pg(
-    tensor: torch.Tensor,
-    pg: dist.ProcessGroup,
-    msg: Optional[Callable[[str], str]] = None,
-    reference_rank: int = 0,
-):
-    """Assert that `tensor` is synced across `pg` with reference rank. Note that this always passes for reference rank"""
-    if dist.get_rank(pg) == reference_rank:
-        reference_tensor = tensor
-    else:
-        reference_tensor = torch.empty_like(tensor)
-    dist.broadcast(
-        reference_tensor,
-        src=get_global_rank(group=pg, group_rank=reference_rank),
-        group=pg,
-    )
-
-    # TODO @nouamane: Getting Greatest absolute difference: 4.6e-10 at large scale when syncing tied weights
-    torch.testing.assert_close(tensor, reference_tensor, msg=msg)
-
-
-# TODO @nouamanetazi: remove this with SANITY_CHECKS
-@contextmanager
-def assert_fail_except_rank_with(exception_class, rank_exception, pg):
-    try:
-        yield
-    except exception_class:
-        if rank_exception == dist.get_rank(pg):
-            raise AssertionError(f"Expected rank {rank_exception} to not raise {exception_class}.")
-        else:
-            return
-
-    except Exception as e:
-        raise AssertionError(f"Expected {exception_class} to be raised, but got {type(e)} instead:\n{e}")
-    if dist.get_rank(pg) != rank_exception:
-        raise AssertionError(f"Expected {exception_class} to be raised, but no exception was raised.")
-
-
 def get_untyped_storage(tensor: torch.Tensor) -> torch.UntypedStorage:
     if version.parse(torch.__version__) >= version.parse("2.0"):
         return tensor.untyped_storage()

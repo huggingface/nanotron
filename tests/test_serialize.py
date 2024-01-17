@@ -22,7 +22,7 @@ from nanotron.parallel.pipeline_parallel.engine import (
 from nanotron.parallel.sharded_parameters import SplitConfig, create_sharded_parameter_from_config
 from nanotron.parallel.tied_parameters import sync_tied_weights_gradients
 from nanotron.random import RandomStates, get_current_random_state, get_synced_random_state
-from nanotron.distributed import ParallelContext
+from nanotron.parallel import ParallelContext
 from nanotron.serialize import (
     load_optimizer,
     load_random_states,

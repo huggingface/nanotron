@@ -12,7 +12,7 @@ from nanotron.parallel.pipeline_parallel.p2p import P2P
 from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
 from nanotron.parallel.tied_parameters import tie_parameters
 from nanotron.utils import init_on_device_and_dtype
-from nanotron.distributed import ParallelContext
+from nanotron.parallel import ParallelContext
 from torch import nn
 from torch.nn.parallel import DistributedDataParallel
 
