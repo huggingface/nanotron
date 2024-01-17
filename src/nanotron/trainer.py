@@ -541,7 +541,6 @@ class DistributedTrainer:
 
             model.input_pp_rank = target_pp_ranks[0]
             model.output_pp_rank = target_pp_ranks[target_pp_rank_idx]
-
         return model
 
     def init_model(self) -> Union[NanotronModel, DistributedDataParallel]:
