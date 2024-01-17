@@ -128,6 +128,22 @@ def find_optim_index_from_param_name(key_dict, param_name, ckp_sharded_optim_sta
         return param_name
 
 
+def find_param_name_from_optim_index(key_dict, optim_index, ckp_sharded_optim_states, is_zero1_checkpoint: bool):
+    if key_dict == "state":
+        # NOTE: since all shards have the same optim state names
+        # so we take the first shard
+        if is_zero1_checkpoint is True:
+            # NOTE: (pp_rank, dp_rank, tp_rank)
+            OPTIM_STATE_INDEX_TO_PARAM_NAME = ckp_sharded_optim_states[(0, 0, 0)]["names"]
+        else:
+            # NOTE: (pp_rank, tp_rank)
+            OPTIM_STATE_INDEX_TO_PARAM_NAME = ckp_sharded_optim_states[(0, 0)]["names"]
+
+        return OPTIM_STATE_INDEX_TO_PARAM_NAME[optim_index]
+    else:
+        return optim_index
+
+
 def _merge_dp_shard_in_zero1_optimizer(
     model,
     optimizer_config,
@@ -384,6 +400,12 @@ def load_optimizer(
                             ckp_shard_metadata,
                         )
 
+                        if ckp_optim_type == ZeroDistributedOptimizer.__name__:
+                            # NOTE: flatten the optimizer states
+                            new_optim_state_dict["state"][optim_state_index][state_key] = new_optim_state_dict[
+                                "state"
+                            ][optim_state_index][state_key].flatten()
+
                 new_optim_state_dict["state"][optim_state_index]["step"] = ckp_optim_state["state"][optim_state_index][
                     "step"
                 ]
@@ -392,6 +414,29 @@ def load_optimizer(
         # so we take the first shard
         new_optim_state_dict["names"] = ckp_sharded_optim_states[(0, 0)]["names"]
         state_dict = new_optim_state_dict
+
+    # NOTE: if the optimizer is ZeRO-1, now we shard the optimizer states across data parallel dimension
+    from nanotron.core.optim.zero import get_sliced_tensor
+
+    current_dp_rank = dist.get_rank(parallel_context.dp_pg)
+    # for name, param in optimizer.named_parameters():
+    #     sliced_tensor = get_sliced_tensor(
+    #         param=param,
+    #         start_offset=optimizer.param_name_to_dp_rank_offsets[name][current_dp_rank][0],
+    #         end_offset=optimizer.param_name_to_dp_rank_offsets[name][current_dp_rank][1],
+    #     )
+    #     param.data = sliced_tensor
+
+    for param_index in state_dict["state"]:
+        param_name = [name for idx, name in state_dict["names"].items() if idx == param_index][0]
+        for state_name in ["exp_avg", "exp_avg_sq"]:
+            sliced_tensor = get_sliced_tensor(
+                param=state_dict["state"][param_index][state_name],
+                # NOTE: name is string
+                start_offset=optimizer.param_name_to_dp_rank_offsets[param_name][current_dp_rank][0],
+                end_offset=optimizer.param_name_to_dp_rank_offsets[param_name][current_dp_rank][1],
+            )
+            state_dict["state"][param_index][state_name] = sliced_tensor
 
     optimizer.load_state_dict(state_dict)
 
