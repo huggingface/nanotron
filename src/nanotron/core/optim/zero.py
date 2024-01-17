@@ -4,7 +4,6 @@ from typing import Any, Callable, Dict, Iterable, Optional, Tuple, Union
 import numpy as np
 import torch.optim
 from functorch.dim import tree_map
-
 from nanotron.core import distributed as dist
 from nanotron.core import logging
 from nanotron.core.distributed import ProcessGroup
@@ -155,6 +154,14 @@ class ZeroDistributedOptimizer(InheritFromOtherOptimizer):
         # We assume that parameters can be sharded across DP, ie we can "split" a parameter in different DP. This does break some optimizers, like Adafactor and such.
         # `param_name_to_dp_rank_offsets[name]` is a `Dict[int, Tuple[int, int]]` keys are dp_rank, and `Tuple[int, int]` are the offsets of the param belonging to this DP
         param_name_to_dp_rank_offsets = {}
+
+        # NOTE: save the original shapes before flattening the params
+        # so that later on, we can reshape the params to their original shapes
+        # for topology-agnostic optimizer states loading
+        _orig_param_shapes = {}
+        for name, param in named_params:
+            _orig_param_shapes[name] = param.shape
+        self._orig_param_shapes = _orig_param_shapes
 
         for name, param in named_params:
             # We assume parameter to be contiguous in order to have an easy way of sharding it.

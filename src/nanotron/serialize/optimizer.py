@@ -73,6 +73,9 @@ def save_optimizer(
                 config["configs"]["param_name_to_dp_rank_offsets"] = convert_to_string(
                     optimizer.param_name_to_dp_rank_offsets
                 )
+                # NOTE: since tp sharded params are flattened, so we need to save the original param shapes
+                # so that we can contruct the original shapes => reconstruct the unsharded params in tensor parallel dimension
+                config["configs"]["orig_param_shapes"] = convert_to_string(optimizer._orig_param_shapes)
 
             json.dump(config, fo)
 
@@ -223,23 +226,24 @@ def _merge_dp_shard_in_zero1_optimizer(
                         # NOTE: each dp shard has the same step
                         merged_dp_shards_optim_states[key_dict][optim_state_index]["step"] = ckp_optim_state["step"]
             else:
-                unsharded_dp_buffer = torch.zeros(unshard_dp_size, device=device)
-                for dp_rank, ckp_optim_state in filtered_ckp_sharded_optim_states.items():
-                    # NOTE: extract the optimizer state of the current parameter
-                    optim_state_index = find_optim_index_from_param_name(
-                        key_dict=key_dict,
-                        param_name=param_name,
-                        ckp_sharded_optim_states=ckp_sharded_optim_states,
-                        # NOTE: even this checkpoints is from Zero-1,
-                        # but after we merge the shards across data parallel dimension,
-                        # we already convert it to unsharded dp ranks (remove dp_rank)
-                        is_zero1_checkpoint=False,
-                    )
-                    ckp_optim_state = ckp_optim_state[key_dict][optim_state_index]
-                    ckp_offset = param_name_to_dp_rank_offsets[param_name][str(dp_rank)]
-                    assign_shard_to_buffer(unsharded_dp_buffer, ckp_offset, ckp_optim_state)
+                for param_name in param_names:
+                    unsharded_dp_buffer = torch.zeros(unshard_dp_size, device=device)
+                    for dp_rank, ckp_optim_state in filtered_ckp_sharded_optim_states.items():
+                        # NOTE: extract the optimizer state of the current parameter
+                        optim_state_index = find_optim_index_from_param_name(
+                            key_dict=key_dict,
+                            param_name=param_name,
+                            ckp_sharded_optim_states=ckp_sharded_optim_states,
+                            # NOTE: even this checkpoints is from Zero-1,
+                            # but after we merge the shards across data parallel dimension,
+                            # we already convert it to unsharded dp ranks (remove dp_rank)
+                            is_zero1_checkpoint=False,
+                        )
+                        ckp_optim_state = ckp_optim_state[key_dict][optim_state_index]
+                        ckp_offset = param_name_to_dp_rank_offsets[param_name][str(dp_rank)]
+                        assign_shard_to_buffer(unsharded_dp_buffer, ckp_offset, ckp_optim_state)
 
-                merged_dp_shards_optim_states[key_dict][param_name] = unsharded_dp_buffer
+                    merged_dp_shards_optim_states[key_dict][optim_state_index] = unsharded_dp_buffer
 
         ckp_merged_dp_shards_optim_states[(pp_rank, tp_rank)] = merged_dp_shards_optim_states
         # NOTE: each dp shard has the same names, and param_groups since it's the same tp shard
@@ -275,7 +279,6 @@ def load_optimizer(
     ckp_optimizer_config_path = root_folder / "optimizer_config.json"
     ckp_optimizer_config = json.load(ckp_optimizer_config_path.open("r"))
 
-    # NOTE: for OptimizerFromGradientAccumulator only
     if ckp_optimizer_config["parallelism"]["tp_size"] == parallel_context.tp_pg.size():
         # TODO @thomasw21: Load optimizer type and check that it's compatible otherwise we might be be loading something else completely
         state_dict = torch.load(
@@ -306,7 +309,7 @@ def load_optimizer(
                 global_slices = slices_pair.global_slices
                 # NOTE: just in case this is from a zero-1 checkpoint
                 # that means it is flattened, so we need to reshape it
-                unsharded_buffer[global_slices] = ckp_shard_data.view_as(unsharded_buffer)[local_slices]
+                unsharded_buffer[global_slices] = ckp_shard_data[local_slices]
 
             for slices_pair in current_shard_metadata.local_global_slices_pairs:
                 local_slices = slices_pair.local_slices
@@ -360,106 +363,78 @@ def load_optimizer(
             except AttributeError:
                 param = None
 
-            if isinstance(param, NanotronParameter):
-                if param.is_sharded:
-                    # NOTE: optimizer states's shape is equal to the parameter's shape
-                    # NOTE: sometines an unsharded parameter's shape differ
-                    # from an unsharded optimizer state's shape
-                    new_shard_metadata = param.get_sharded_info()
-                    new_unshared_shape = new_shard_metadata.unsharded_shape
+            if not isinstance(param, NanotronParameter):
+                raise NotImplementedError("Parameters are required to be NanotronParameter")
 
-                    # TODO(xrsrke): find a better name than "dict_key"
-                    for key_dict in ["state", "gradient_accumulator"]:
-                        # NOTE: merging optimizer states
-                        optim_state_index = find_optim_index_from_param_name(
-                            key_dict, param_name, ckp_sharded_optim_states, is_zero1_checkpoint=False
-                        )
+            if param.is_sharded:
+                # NOTE: optimizer states's shape is equal to the parameter's shape
+                # NOTE: sometines an unsharded parameter's shape differ
+                # from an unsharded optimizer state's shape
+                new_shard_metadata = param.get_sharded_info()
+                new_unshared_shape = new_shard_metadata.unsharded_shape
 
-                        if key_dict == "state":
-                            state_keys = ["exp_avg", "exp_avg_sq"]
-                            new_optim_state_dict[key_dict][optim_state_index] = {}
-                            for state_key in state_keys:
-                                # TODO(xrsrke): free the memory of the shards that isn't
-                                # corresponding to the current rank
-                                unsharded_buffer = torch.empty(new_unshared_shape, device=param.device)
-                                buffer = torch.zeros_like(param)
+                # TODO(xrsrke): find a better name than "dict_key"
+                for key_dict in ["state", "gradient_accumulator"]:
+                    # NOTE: merging optimizer states
+                    optim_state_index = find_optim_index_from_param_name(
+                        key_dict, param_name, ckp_sharded_optim_states, is_zero1_checkpoint=False
+                    )
 
-                                for (pp_rank, tp_rank), ckp_optim_state in ckp_sharded_optim_states.items():
-                                    ckp_shard_metadata = get_checkpoint_state_metadata(param_name, pp_rank, tp_rank)
-                                    ckp_shard_data = ckp_optim_state[key_dict][optim_state_index][state_key]
-                                    new_optim_state_dict[key_dict][optim_state_index][state_key] = merge_and_shard(
-                                        buffer,
-                                        unsharded_buffer,
-                                        ckp_shard_data,
-                                        new_shard_metadata,
-                                        ckp_shard_metadata,
-                                    )
-
-                            new_optim_state_dict[key_dict][optim_state_index]["step"] = ckp_optim_state[key_dict][
-                                optim_state_index
-                            ]["step"]
-                        elif key_dict == "gradient_accumulator":
-                            buffer = new_optim_state_dict[key_dict][optim_state_index]
-                            unsharded_buffer = torch.empty(new_unshared_shape, device=param_or_buffer.device)
+                    if key_dict == "state":
+                        state_keys = ["exp_avg", "exp_avg_sq"]
+                        new_optim_state_dict[key_dict][optim_state_index] = {}
+                        for state_key in state_keys:
+                            # TODO(xrsrke): free the memory of the shards that isn't
+                            # corresponding to the current rank
+                            unsharded_buffer = torch.empty(new_unshared_shape, device=param.device)
+                            buffer = torch.zeros_like(param)
 
                             for (pp_rank, tp_rank), ckp_optim_state in ckp_sharded_optim_states.items():
                                 ckp_shard_metadata = get_checkpoint_state_metadata(param_name, pp_rank, tp_rank)
-                                ckp_shard_data = ckp_optim_state[key_dict][optim_state_index]
-                                merge_and_shard(
+                                ckp_shard_data = ckp_optim_state[key_dict][optim_state_index][state_key]
+
+                                # NOTE: if the checkpoint is from a Zero-1 optimizer,
+                                # so it's flattened, so we need to reshape it
+                                if ckp_optim_type == ZeroDistributedOptimizer.__name__:
+                                    # NOTE: this is the original shape of the parameter before being flattened
+                                    orig_shape = ckp_optimizer_config["configs"]["orig_param_shapes"][param_name]
+                                    orig_shape = [int(dim) for dim in orig_shape]
+                                    ckp_shard_data = ckp_shard_data.view(orig_shape)
+
+                                new_optim_state_dict[key_dict][optim_state_index][state_key] = merge_and_shard(
                                     buffer,
                                     unsharded_buffer,
                                     ckp_shard_data,
                                     new_shard_metadata,
                                     ckp_shard_metadata,
                                 )
-            else:
-                raise NotImplementedError("Parameters are required to be NanotronParameter")
+
+                        new_optim_state_dict[key_dict][optim_state_index]["step"] = ckp_optim_state[key_dict][
+                            optim_state_index
+                        ]["step"]
+                    elif key_dict == "gradient_accumulator":
+                        buffer = new_optim_state_dict[key_dict][optim_state_index]
+                        unsharded_buffer = torch.empty(new_unshared_shape, device=param_or_buffer.device)
+
+                        for (pp_rank, tp_rank), ckp_optim_state in ckp_sharded_optim_states.items():
+                            ckp_shard_metadata = get_checkpoint_state_metadata(param_name, pp_rank, tp_rank)
+                            ckp_shard_data = ckp_optim_state[key_dict][optim_state_index]
+                            orig_shape = ckp_optimizer_config["configs"]["orig_param_shapes"][param_name]
+                            orig_shape = [int(dim) for dim in orig_shape]
+                            ckp_shard_data = ckp_shard_data.view(orig_shape)
+
+                            merge_and_shard(
+                                buffer,
+                                unsharded_buffer,
+                                ckp_shard_data,
+                                new_shard_metadata,
+                                ckp_shard_metadata,
+                            )
 
         # NOTE: since all shards have the same optim state names
         # so we take the first shard
         new_optim_state_dict["names"] = ckp_sharded_optim_states[(0, 0)]["names"]
         state_dict = new_optim_state_dict
-        # elif ckp_optim_type == ZeroDistributedOptimizer.__name__:
-        #     # checkpoint_dp_size = ckp_optimizer_config["parallelism"]["dp_size"]
-        #     # shard_paths = list(
-        #     #     root_folder.glob(
-        #     #         f"{ObjectType.OPTIMIZER.value}_pp-*-of-{checkpoint_pp_size}_dp-*-of-{checkpoint_dp_size}_tp-*-of-{checkpoint_tp_size}.pt"
-        #     #     )
-        #     # )
-
-        #     # _merge_dp_shard_in_zero1_optimizer(
-        #     #     model, optimizer, ckp_optimizer_config, shard_paths, parallel_context, map_location
-        #     # )
-
-        #     # for param_name, param_or_buffer in tqdm(
-        #     #     sorted(model_state_dict.items(), key=lambda x: x[0]),
-        #     #     disable=dist.get_rank(parallel_context.world_pg) != 0,
-        #     #     desc="Topology-agnostic optimizer loading",
-        #     # ):
-        #     #     unshard_dp_size = get_numel_of_unsharded_dp_param(param_name)
-        #     #     unsharded_dp_buffer = torch.zeros(unshard_dp_size, device=param_or_buffer.device)
-        #     #     # NOTE: merge all checkpoints across data parallel dimension
-
-        #     #     # TODO(xrsrke): support merging optimizer states across pipeline parallel dimension
-        #     #     for (pp_rank, dp_rank, tp_rank), ckp_optim_state in ckp_sharded_optim_states.items():
-        #     #         # extract the optimizer state for the current parameter
-        #     #         optim_state_index = find_optim_index_from_param_name(
-        #     #             optimizer,
-        #     #             key_dict="state", param_name=param_name, ckp_sharded_optim_states=ckp_sharded_optim_states
-        #     #         )
-
-        #     #         ckp_optim_state = ckp_optim_state["state"][optim_state_index]
-        #     #         ckp_offset = param_name_to_dp_rank_offsets[param_name][str(dp_rank)]
-        #     #         # TODO(xrsrke): support other optimizer states
-        #     #         apply_slice(unsharded_dp_buffer, ckp_offset, ckp_optim_state["exp_avg"])
-        #     #         ckp_merged_dp_shards_optim_states[(pp_rank, tp_rank)] = {}
-        #     #         ckp_merged_dp_shards_optim_states[(pp_rank, tp_rank)]["exp_avg"] = ckp_optim_state["exp_avg"]
-
-        #     #     # NOTE: split optimizer states across tensor parallel dimension
-        #     #     # NOTE: split optimizer states across data parallel dimension
-        #     pass
-        # else:
-        #     raise NotImplementedError(f"{ckp_optim_type} is not supported yet")
 
     optimizer.load_state_dict(state_dict)
 
