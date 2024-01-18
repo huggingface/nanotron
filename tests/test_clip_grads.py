@@ -6,12 +6,12 @@ import torch
 from helpers.dummy import DummyModel, dummy_infinite_data_loader
 from helpers.utils import available_gpus, init_distributed
 from nanotron import distributed as dist
+from nanotron.models import init_on_device_and_dtype
 from nanotron.optim.clip_grads import clip_grad_norm
 from nanotron.optim.gradient_accumulator import (
     FP32GradientAccumulator,
 )
 from nanotron.parallel import ParallelContext
-from nanotron.parallel.model import initial_sync
 from nanotron.parallel.parameters import NanotronParameter, sanity_check
 from nanotron.parallel.pipeline_parallel.engine import (
     AllForwardAllBackwardPipelineEngine,
@@ -25,7 +25,8 @@ from nanotron.parallel.tied_parameters import (
     sync_tied_weights_gradients,
     tie_parameters,
 )
-from nanotron.utils import assert_tensor_synced_across_pg, init_on_device_and_dtype
+from nanotron.parallel.utils import initial_sync
+from nanotron.sanity_checks import assert_tensor_synced_across_pg
 from torch import nn
 
 
