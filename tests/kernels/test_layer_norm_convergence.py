@@ -1,6 +1,6 @@
 import torch
-from nanotron.nn.layer_norm import TritonLayerNorm
 from nanotron.logging import LoggerWriter
+from nanotron.nn.layer_norm import TritonLayerNorm
 from torch.nn import LayerNorm
 
 

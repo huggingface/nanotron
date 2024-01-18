@@ -25,15 +25,14 @@ from flash_attn.flash_attn_interface import (
 from flash_attn.layers.rotary import RotaryEmbedding as FlashRotaryEmbedding
 from torch import nn
 
-from nanotron.nn.activations import ACT2FN
-
 from nanotron import distributed as dist
 from nanotron import logging
-from nanotron.config import ParallelismArgs, RecomputeGranularity, LlamaConfig
-from nanotron.nn.layer_norm import TritonRMSNorm
-from nanotron.logging import log_rank
+from nanotron.config import LlamaConfig, ParallelismArgs, RecomputeGranularity
 from nanotron.generation.generate_store import AttachableStore
+from nanotron.logging import log_rank
 from nanotron.models import NanotronModel
+from nanotron.nn.activations import ACT2FN
+from nanotron.nn.layer_norm import TritonRMSNorm
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter
 from nanotron.parallel.pipeline_parallel.block import (

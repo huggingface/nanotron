@@ -1,10 +1,11 @@
 import functools
 import os
 
-from nanotron import distributed as dist
-from nanotron.parallel.tied_parameters import get_tied_id_to_param
-from nanotron.parallel import ParallelContext
 from torch import nn
+
+from nanotron import distributed as dist
+from nanotron.parallel import ParallelContext
+from nanotron.parallel.tied_parameters import get_tied_id_to_param
 
 
 def assert_cuda_max_connections_set_to_1(func):
@@ -19,6 +20,7 @@ def assert_cuda_max_connections_set_to_1(func):
         return func(*args, **kwargs)
 
     return wrapper
+
 
 def initial_sync(model: nn.Module, parallel_context: ParallelContext):
     # Synchronize across dp: basic assumption

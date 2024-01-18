@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Optional
 
 import torch
+
 from nanotron import distributed as dist
 from nanotron import optim as optim
 from nanotron.parallel import ParallelContext

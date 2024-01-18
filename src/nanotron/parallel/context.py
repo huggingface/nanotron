@@ -1,11 +1,13 @@
 import os
-import torch
-import numpy as np
 from typing import Literal, Tuple
+
+import numpy as np
+import torch
 
 import nanotron.distributed as dist
 
 DistributedBackend = Literal["gloo", "mpi", "nccl"]
+
 
 class ParallelContext:
     def __init__(
@@ -162,5 +164,3 @@ class ParallelContext:
         dp_rank = (world_rank // self.tp_pg.size()) % self.dp_pg.size()
         tp_rank = world_rank % self.tp_pg.size()
         return (pp_rank, dp_rank, tp_rank)
-
-

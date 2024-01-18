@@ -1,17 +1,19 @@
+from contextlib import contextmanager
+from typing import Callable, Optional
+
 import torch
-from typing import Optional, Callable
-from contextlib import ExitStack, contextmanager
 
 from nanotron import distributed as dist
 from nanotron import logging
-from nanotron.logging import log_rank, get_logger
 from nanotron.config import Config
-from nanotron.parallel import ParallelContext
-from nanotron.parallel.tied_parameters import get_tied_id_to_param
+from nanotron.logging import get_logger, log_rank
 from nanotron.models import NanotronModel
 from nanotron.optim.gradient_accumulator import GradientAccumulator
+from nanotron.parallel import ParallelContext
+from nanotron.parallel.tied_parameters import get_tied_id_to_param
 
 logger = get_logger(__name__)
+
 
 def assert_tensor_synced_across_pg(
     tensor: torch.Tensor,
@@ -51,7 +53,12 @@ def assert_fail_except_rank_with(exception_class, rank_exception, pg):
         raise AssertionError(f"Expected {exception_class} to be raised, but no exception was raised.")
 
 
-def before_tbi_sanity_checks(config: Config, parallel_context: ParallelContext, normalized_model: NanotronModel, grad_accumulator: GradientAccumulator) -> None:
+def before_tbi_sanity_checks(
+    config: Config,
+    parallel_context: ParallelContext,
+    normalized_model: NanotronModel,
+    grad_accumulator: GradientAccumulator,
+) -> None:
     if not config.general.ignore_sanity_checks:
         # SANITY CHECK: Check that the model params are synchronized across dp
         for name, param in sorted(normalized_model.named_parameters(), key=lambda x: x[0]):
@@ -92,7 +99,13 @@ def before_tbi_sanity_checks(config: Config, parallel_context: ParallelContext, 
         # SANITY CHECK: run model specific sanity checks
         normalized_model.before_tbi_sanity_checks()
 
-def after_tbi_sanity_checks(config: Config, parallel_context: ParallelContext, normalized_model: NanotronModel, grad_accumulator: GradientAccumulator) -> None:
+
+def after_tbi_sanity_checks(
+    config: Config,
+    parallel_context: ParallelContext,
+    normalized_model: NanotronModel,
+    grad_accumulator: GradientAccumulator,
+) -> None:
     if not config.general.ignore_sanity_checks:
         # SANITY CHECK: Check that gradient flow on the entire model
         # SANITY CHECK: Check that all parameters that required gradients, have actually a gradient
@@ -124,13 +137,17 @@ def after_tbi_sanity_checks(config: Config, parallel_context: ParallelContext, n
         # SANITY CHECK: run model specific sanity checks
         normalized_model.after_tbi_sanity_checks()
 
-def before_optim_step_sanity_checks(config: Config, parallel_context: ParallelContext, normalized_model: NanotronModel, grad_accumulator: GradientAccumulator) -> None:
+
+def before_optim_step_sanity_checks(
+    config: Config,
+    parallel_context: ParallelContext,
+    normalized_model: NanotronModel,
+    grad_accumulator: GradientAccumulator,
+) -> None:
     if not config.general.ignore_sanity_checks:
         # SANITY CHECK: Test tied weights gradients are synchronized
         for (name, group_ranks), param in sorted(
-            get_tied_id_to_param(
-                parameters=normalized_model.parameters(), root_module=normalized_model
-            ).items(),
+            get_tied_id_to_param(parameters=normalized_model.parameters(), root_module=normalized_model).items(),
             key=lambda x: x[0],
         ):
             if not param.requires_grad:
@@ -182,9 +199,7 @@ def before_optim_step_sanity_checks(config: Config, parallel_context: ParallelCo
 
         # SANITY CHECK: Tied weights are synchronized
         tied_params_list = sorted(
-            get_tied_id_to_param(
-                parameters=normalized_model.parameters(), root_module=normalized_model
-            ).items(),
+            get_tied_id_to_param(parameters=normalized_model.parameters(), root_module=normalized_model).items(),
             key=lambda x: x[0],
         )
 
@@ -199,7 +214,13 @@ def before_optim_step_sanity_checks(config: Config, parallel_context: ParallelCo
         # SANITY CHECK: run model specific sanity checks
         normalized_model.before_optim_step_sanity_checks()
 
-def after_optim_step_sanity_checks(config: Config, parallel_context: ParallelContext, normalized_model: NanotronModel, grad_accumulator: GradientAccumulator) -> None:
+
+def after_optim_step_sanity_checks(
+    config: Config,
+    parallel_context: ParallelContext,
+    normalized_model: NanotronModel,
+    grad_accumulator: GradientAccumulator,
+) -> None:
     if not config.general.ignore_sanity_checks:
         # SANITY CHECK: Check that gradients is cleared
         for name, param in normalized_model.named_parameters():
@@ -215,4 +236,3 @@ def after_optim_step_sanity_checks(config: Config, parallel_context: ParallelCon
 
         # SANITY CHECK: run model specific sanity checks
         normalized_model.after_optim_step_sanity_checks()
-

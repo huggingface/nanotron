@@ -120,9 +120,5 @@ class Starcoder2Config:
     def n_inner(self):
         return self.intermediate_size
 
-    def __post_init__(self):
-        if self.intermediate_size is None:
-            self.intermediate_size = 4 * self.hidden_size
-
 
 NanotronConfigs = Union[LlamaConfig, Starcoder2Config]

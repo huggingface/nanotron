@@ -30,9 +30,18 @@ from flash_attn.flash_attn_interface import (
     flash_attn_varlen_func,
     flash_attn_with_kvcache,
 )
-from nanotron.config import ParallelismArgs, RecomputeGranularity, Starcoder2Config
+from torch import nn
+from torch.nn import LayerNorm, init
+from torch.nn import functional as F
+
 from nanotron import distributed as dist
+from nanotron.config import ParallelismArgs, RecomputeGranularity, Starcoder2Config
 from nanotron.distributed import get_global_rank
+from nanotron.generation.generate_store import AttachableStore
+from nanotron.models import NanotronModel
+from nanotron.nn.activations import ACT2FN
+from nanotron.nn.layer_norm import TritonLayerNorm
+from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter
 from nanotron.parallel.pipeline_parallel.block import PipelineBlock
 from nanotron.parallel.pipeline_parallel.p2p import P2P
@@ -48,14 +57,6 @@ from nanotron.parallel.tensor_parallel.nn import (
 from nanotron.parallel.tied_parameters import create_tied_parameter
 from nanotron.random import RandomStates, branch_random_state
 from nanotron.utils import checkpoint_method
-from nanotron.parallel import ParallelContext
-from nanotron.nn.layer_norm import TritonLayerNorm
-from nanotron.generation.generate_store import AttachableStore
-from nanotron.models import NanotronModel
-from torch import nn
-from torch.nn import LayerNorm, init
-from torch.nn import functional as F
-from nanotron.nn.activations import ACT2FN
 
 _flash_supports_window_size = "window_size" in list(inspect.signature(flash_attn_varlen_func).parameters)
 

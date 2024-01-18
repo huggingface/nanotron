@@ -1,7 +1,7 @@
 import torch
 from helpers.exception import assert_fail_with
-from nanotron.parallel.parameters import NanotronParameter
 from nanotron.models.base import DTypeInvariantTensor, init_on_device_and_dtype
+from nanotron.parallel.parameters import NanotronParameter
 from torch import nn
 
 
