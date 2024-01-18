@@ -50,7 +50,8 @@ from nanotron.random import RandomStates, branch_random_state
 from nanotron.utils import checkpoint_method
 from nanotron.parallel import ParallelContext
 from nanotron.nn.layer_norm import TritonLayerNorm
-from nanotron.models import AttachableStore, NanotronModel
+from nanotron.generation.generate_store import AttachableStore
+from nanotron.models import NanotronModel
 from torch import nn
 from torch.nn import LayerNorm, init
 from torch.nn import functional as F

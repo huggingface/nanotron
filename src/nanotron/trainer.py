@@ -31,11 +31,11 @@ from nanotron.helpers import (
     lr_scheduler_builder,
 )
 from nanotron.logging import LoggerWriter, LogItem, human_format, log_rank, set_logger_verbosity_format
-from nanotron.models import NanotronModel
+from nanotron.models import NanotronModel, check_model_has_grad
 from nanotron.optim.clip_grads import clip_grad_norm
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.data_parallel.utils import sync_gradients_across_dp
-from nanotron.parallel.parameters import NanotronParameter, check_model_has_grad, sanity_check
+from nanotron.parallel.parameters import NanotronParameter, sanity_check
 from nanotron.parallel.pipeline_parallel.block import PipelineBlock
 from nanotron.parallel.pipeline_parallel.engine import (
     PipelineEngine,
