@@ -8,21 +8,21 @@ from helpers.utils import (
     init_distributed,
     is_dict_equal,
 )
-from nanotron.constants import CHECKPOINT_VERSION
 from nanotron import distributed as dist
+from nanotron.constants import CHECKPOINT_VERSION
 from nanotron.optim.gradient_accumulator import FP32GradientAccumulator
 from nanotron.optim.named_optimizer import NamedOptimizer
 from nanotron.optim.optimizer_from_gradient_accumulator import (
     OptimizerFromGradientAccumulator,
 )
 from nanotron.optim.zero import ZeroDistributedOptimizer
+from nanotron.parallel import ParallelContext
 from nanotron.parallel.pipeline_parallel.engine import (
     AllForwardAllBackwardPipelineEngine,
 )
 from nanotron.parallel.sharded_parameters import SplitConfig, create_sharded_parameter_from_config
 from nanotron.parallel.tied_parameters import sync_tied_weights_gradients
 from nanotron.random import RandomStates, get_current_random_state, get_synced_random_state
-from nanotron.parallel import ParallelContext
 from nanotron.serialize import (
     load_optimizer,
     load_random_states,
@@ -31,7 +31,7 @@ from nanotron.serialize import (
     save_random_states,
     save_weights,
 )
-from nanotron.serialize.metadata import TensorMetadataV2
+from nanotron.serialize.metadata import TensorMetadata
 from torch.nn.parallel import DistributedDataParallel
 
 
@@ -509,7 +509,7 @@ def _test_serialize_deserialize_tensormetadata(parallel_context: ParallelContext
     )
     param = create_sharded_parameter_from_config(parameter=param, pg=parallel_context.tp_pg, split_config=split_config)
     sharded_info = param.get_sharded_info()
-    metadata = TensorMetadataV2(
+    metadata = TensorMetadata(
         version=CHECKPOINT_VERSION,
         local_global_slices_pairs=sharded_info.local_global_slices_pairs,
         unsharded_shape=sharded_info.unsharded_shape,
@@ -520,5 +520,5 @@ def _test_serialize_deserialize_tensormetadata(parallel_context: ParallelContext
     assert all(isinstance(key, str) for key in metadata_str_dict.keys())
     assert all(isinstance(value, str) for value in metadata_str_dict.values())
 
-    metadata_from_str_dict = TensorMetadataV2.from_str_dict(metadata_str_dict)
+    metadata_from_str_dict = TensorMetadata.from_str_dict(metadata_str_dict)
     assert metadata == metadata_from_str_dict

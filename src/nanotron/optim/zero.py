@@ -1,3 +1,4 @@
+import itertools
 import re
 from collections import defaultdict
 from pathlib import Path
@@ -163,10 +164,9 @@ class ZeroDistributedOptimizer(InheritFromOtherOptimizer):
         # NOTE: save the original shapes before flattening the params
         # so that later on, we can reshape the params to their original shapes
         # for topology-agnostic optimizer states loading
-        _orig_param_shapes = {}
+        self._orig_param_shapes = {}
         for name, param in named_params:
-            _orig_param_shapes[name] = param.shape
-        self._orig_param_shapes = _orig_param_shapes
+            self._orig_param_shapes[name] = param.shape
 
         for name, param in named_params:
             # We assume parameter to be contiguous in order to have an easy way of sharding it.
@@ -393,13 +393,10 @@ def extract_parallel_ranks_from_shard_path(
 def merge_dp_shard_in_zero1_optimizer(
     model: nn.Module,
     optimizer_config,
-    optimizer_states: List[str],
     shard_paths: List[Path],
     parallel_context: ParallelContext,
     map_location: Optional[str] = None,
 ) -> Dict[Tuple[int, int], Dict[str, torch.Tensor]]:  # (pp_rank, tp_rank): param_name -> optim_state
-    import itertools
-
     assert (
         optimizer_config["configs"]["param_name_to_dp_rank_offsets"] is not None
     ), "param_name_to_dp_rank_offsets is required"
@@ -413,6 +410,7 @@ def merge_dp_shard_in_zero1_optimizer(
         ckp_sharded_optim_states[(pp_rank, dp_rank, tp_rank)] = torch.load(shard_path, map_location=map_location)
 
     param_name_to_dp_rank_offsets = optimizer_config["configs"]["param_name_to_dp_rank_offsets"]
+    optimizer_state_names = ckp_sharded_optim_states[(0, 0, 0)]["state"][0].keys()
 
     def get_numel_of_unsharded_dp_param(param_name):
         dp_offsets = param_name_to_dp_rank_offsets[param_name]
@@ -449,7 +447,7 @@ def merge_dp_shard_in_zero1_optimizer(
                 is_zero1=True,
             )
             merged_dp_shards_optim_states["state"][optim_state_index] = {}
-            for state_name in optimizer_states:
+            for state_name in optimizer_state_names:
                 unsharded_dp_buffer = torch.zeros(unshard_dp_size, device="cuda")
                 # NOTE: now merge all the params across data parallel dimension
                 for dp_rank, ckp_optim_state in filtered_ckp_sharded_optim_states.items():

@@ -1,13 +1,13 @@
 import re
 from enum import Enum
 from pathlib import Path
-from typing import List, Optional, Tuple, Union
+from typing import List, Optional, Tuple
 
 import torch
 
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import SlicesPair
-from nanotron.serialize.metadata import TensorMetadata, TensorMetadataV2
+from nanotron.serialize.metadata import TensorMetadata
 
 
 class ObjectType(Enum):
@@ -56,7 +56,7 @@ def merge_and_shard_tp_tensors(
     buffer: torch.Tensor,
     unsharded_buffer: torch.Tensor,
     shards_and_slices_maps: List[Tuple[torch.Tensor, Tuple[SlicesPair, ...]]],
-    shard_metadata: Union[TensorMetadata, TensorMetadataV2],
+    shard_metadata: TensorMetadata,
 ) -> torch.Tensor:
     for shard, slices_pairs in shards_and_slices_maps:
         for slices_pair in slices_pairs:

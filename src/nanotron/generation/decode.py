@@ -4,22 +4,23 @@ from itertools import chain, islice
 from typing import Generator, Iterable, List, Optional, Tuple, Union
 
 import torch
+from transformers import LlamaTokenizer
+
+from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.config import BenchArgs, GenerationArgs
-from nanotron import distributed as dist
 from nanotron.distributed import ProcessGroup, get_global_rank
-from nanotron.parallel.pipeline_parallel.block import get_min_max_rank
-from nanotron.parallel.pipeline_parallel.context_manager import attach_pipeline_state_to_model
-from nanotron.parallel.pipeline_parallel.p2p import P2P, TensorMetaData, view_as_contiguous
-from nanotron.parallel.pipeline_parallel.state import PipelineEvalBatchState
-from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
-from nanotron.utils import get_untyped_storage
-from nanotron.parallel import ParallelContext
 from nanotron.generation.sampler import BasicSampler, GreedySampler, SamplerType, TopKSampler, TopPSampler
 from nanotron.helpers import log_throughput
 from nanotron.models.generate_store import Store, attach_store
 from nanotron.models.llama import LlamaModel
-from transformers import LlamaTokenizer
+from nanotron.parallel import ParallelContext
+from nanotron.parallel.pipeline_parallel.block import get_min_max_rank
+from nanotron.parallel.pipeline_parallel.context_manager import attach_pipeline_state_to_model
+from nanotron.parallel.pipeline_parallel.p2p import P2P, P2PTensorMetaData, view_as_contiguous
+from nanotron.parallel.pipeline_parallel.state import PipelineEvalBatchState
+from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
+from nanotron.utils import get_untyped_storage
 
 logger = logging.get_logger(__name__)
 
@@ -237,7 +238,7 @@ def decode_text(
                 for state_id, state in enumerate(decoder_states):
                     new_decoder_states.append(state)
                     # Get the new logits
-                    if not generation_config.use_cache:
+                    if generation_config.use_cache:
                         with attach_store(model=model, store=state.store):
                             # transpose: [sequence_length, batch_size, vocab_size] -> [batch_size, sequence_length, vocab_size]
                             sharded_logits = model(
@@ -783,7 +784,7 @@ def broadcast_tensors(
             meta = [None]
         dist.broadcast_object_list(meta, src=get_global_rank(group_rank=group_src, group=group), group=group)
         dtype, requires_grad, shape, untyped_storage_size, stride, is_contiguous, storage_offset = meta[0]
-        meta = TensorMetaData(
+        meta = P2PTensorMetaData(
             dtype=dtype,
             requires_grad=requires_grad,
             shape=shape,

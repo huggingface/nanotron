@@ -1,27 +1,29 @@
-""" Example of generation with a pretrained model.
-- llama:
-USE_FAST=1 CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node=2 examples/generate.py --pp 2 --tp 1 --model_name huggyllama/llama-7b --ckpt-path pretrained/llama-7b
-USE_FAST=1 CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node=2 examples/generate.py --pp 2 --tp 1 --model_name codellama/CodeLlama-7b-hf --ckpt-path pretrained/CodeLlama-7b-hf
-USE_FAST=1 CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node=2 examples/generate.py --pp 2 --tp 1 --ckpt-path pretrained/Llama-2-7b-hf
-- falcon:
-USE_FAST=1 CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node=8 examples/generate.py --pp 4 --tp 2 --model_name /fsx/shared-falcon-180B/falcon-180B/ --ckpt-path /fsx/shared-falcon-180B/nanotron-falcon-180B
-- santacoder:
-USE_FAST=1 CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node=4 examples/generate.py --pp 2 --tp 2 --model_name bigcode/gpt_bigcode-santacoder --ckpt-path pretrained/gpt_bigcode-santacoder
-- starcoder:
-USE_FAST=1 CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node=4 examples/generate.py --pp 2 --tp 2 --model_name bigcode/starcoder --ckpt-path pretrained/starcoder
-USE_FAST=1 CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node=4 examples/generate.py --pp 2 --tp 2 --model_name bigcode/starcoder --ckpt-path /fsx/nouamane/checkpoints/nanotron/starcoder_s64k_sw4k_dp16_gbs1M/10000
-USE_FAST=1 CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node=1 examples/generate.py --pp 1 --tp 1 --ckpt-path /fsx/nouamane/checkpoints/nanotron/test/12
-- Benchmark:
-USE_BENCH=1 USE_FAST=1 CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node=2 run_benchmark2.py --pp 2 --tp 1 --dp 1 --model_name huggyllama/llama-7b --ckpt-path /admin/home/ferdinand_mom/.cache/huggingface/hub/models--HuggingFaceBR4--llama-7b-orig/snapshots/2160b3d0134a99d365851a7e95864b21e873e1c3
 """
+Nanotron Inference Script
+
+Usage:
+```
+export USE_FAST=1 # optional, for faster inference. Requires flash-attn
+export CUDA_DEVICE_MAX_CONNECTIONS=1 # important for some distributed operations
+torchrun --nproc_per_node=4 run_generate.py --pp 1 --tp 4 --ckpt-path checkpoints/10
+```
+"""
+
 import argparse
 import os
 from pathlib import Path
 
 import torch
-from nanotron import logging
 from nanotron import distributed as dist
+from nanotron import logging
 from nanotron.config import GenerationArgs, LoggingArgs, ParallelismArgs, get_config_from_file
+from nanotron.generation.decode import (
+    GenerationInput,
+    TokenizerConfig,
+    decode_text,
+)
+from nanotron.logging import log_rank, set_logger_verbosity_format
+from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import sanity_check
 from nanotron.parallel.pipeline_parallel.engine import (
     OneForwardOneBackwardPipelineEngine,
@@ -34,13 +36,6 @@ from nanotron.random import (
     get_synced_random_state,
     set_random_seed,
 )
-from nanotron.parallel import ParallelContext
-from nanotron.generation.decode import (
-    GenerationInput,
-    TokenizerConfig,
-    decode_text,
-)
-from nanotron.logging import log_rank, set_logger_verbosity_format
 from nanotron.serialize import (
     load_weights,
 )
@@ -52,13 +47,17 @@ logger = logging.get_logger(__name__)
 
 def get_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model_name", type=str, default=None, help="Model name")
     parser.add_argument("--ckpt-path", type=Path, required=True, help="Checkpoint path")
+    parser.add_argument(
+        "--model_name",
+        type=str,
+        default=None,
+        help="Used to get model config in case there is no `config.yaml` or `model_config.json` in checkpoint path",
+    )
     parser.add_argument("--dp", type=int, default=1)
-    parser.add_argument("--pp", type=int, default=2)
+    parser.add_argument("--pp", type=int, default=1)
     parser.add_argument("--tp", type=int, default=1)
-    parser.add_argument("--max-new-tokens", type=int, default=128)
-    parser.add_argument("--compare-with-no-cache", action="store_true")
+    parser.add_argument("--max-new-tokens", type=int, default=128, help="Maximum number of new tokens to generate")
     return parser.parse_args()
 
 
@@ -73,6 +72,8 @@ def main():
         recompute_granularity=None,
         tp_linear_async_communication=True,
     )
+
+    assert args.ckpt_path.exists(), f"Checkpoint path {args.ckpt_path} does not exist"
 
     logging_config = LoggingArgs(
         log_level="info",
@@ -102,11 +103,8 @@ def main():
     tokenizer_path = args.model_name
     # if config.yaml in checkpoint path we use it
     if (args.ckpt_path / "config.yaml").exists():
-        config_path = args.ckpt_path / "config.yaml"
-        # parse config
-        config = get_config_from_file(config_path.as_posix())
+        config = get_config_from_file((args.ckpt_path / "config.yaml").as_posix())
         model_config = config.model.model_config
-
         tokenizer_path = config.tokenizer.tokenizer_name_or_path
     elif (args.ckpt_path / "model_config.json").exists():
         model_config = AutoConfig.from_pretrained(args.ckpt_path / "model_config.json")
@@ -117,8 +115,8 @@ def main():
         model_name = args.model_name
         model_config: AutoConfig = AutoConfig.from_pretrained(model_name)
 
-    # model_config.num_hidden_layers = 1
     log_rank(f"model_config: {model_config}", logger=logger, level=logging.INFO, rank=0)
+    log_rank(f"tokenizer_path: {tokenizer_path}", logger=logger, level=logging.INFO, rank=0)
 
     model_config_cls = model_config.__class__.__name__
     if model_config_cls not in CONFIG_TO_MODEL_CLASS:
@@ -193,11 +191,8 @@ def main():
         parallel_context=parallel_context,
         max_new_tokens=args.max_new_tokens,
         max_micro_batch_size=2,
-        generation_config=GenerationArgs(sampler="greedy", use_cache=False),
-        # tokenizer_config=TokenizerConfig(max_input_length=8),
-        # tokenizer_config=TokenizerConfig(max_input_length=1024), #TODO @nouamane: fix padding for starcoder
+        generation_config=GenerationArgs(sampler="greedy", use_cache=True),
         tokenizer_config=TokenizerConfig(max_input_length=None),
-        # tokenizer_config=TokenizerConfig(max_input_length=model.config.max_position_embeddings - args.max_new_tokens),
         is_bench=os.environ.get("USE_BENCH", "0") == "1",
     )
 
@@ -231,57 +226,6 @@ def main():
             level=logging.INFO,
             rank=0,
         )
-
-    if args.compare_with_no_cache:
-
-        outputs = decode_text(
-            input_iter=(GenerationInput(text=text) for text in dummy_inputs),
-            tokenizer=tokenizer,
-            # TODO @thomasw21: From ModelWithLoss extract the model.
-            model=model.model,
-            # TODO @thomasw21: Figure out how to pass p2p.
-            p2p=model.model.p2p,
-            parallel_context=parallel_context,
-            max_new_tokens=args.max_new_tokens,
-            max_micro_batch_size=2,
-            generation_config=GenerationArgs(sampler="greedy", use_cache=True),
-            # tokenizer_config=TokenizerConfig(max_input_length=8),
-            # tokenizer_config=TokenizerConfig(max_input_length=1024), #TODO @nouamane: fix padding for starcoder
-            tokenizer_config=TokenizerConfig(max_input_length=None),
-            # tokenizer_config=TokenizerConfig(max_input_length=model.config.max_position_embeddings - args.max_new_tokens),
-            is_bench=os.environ.get("USE_BENCH", "0") == "1",
-        )
-
-        dist.barrier()
-
-        for output in outputs:
-            input_ids = output.input_ids
-            generated_ids = output.generation_ids
-            if isinstance(input_ids, TensorPointer):
-                assert isinstance(generated_ids, TensorPointer)
-                continue
-            assert isinstance(generated_ids, torch.Tensor)
-
-            log_rank(
-                f"input: {tokenizer.decode(input_ids, clean_up_tokenization_spaces=False)[:1000]}",
-                logger=logger,
-                level=logging.INFO,
-                rank=0,
-            )
-
-            log_rank(
-                f"generation: {tokenizer.decode(generated_ids[len(input_ids) :], clean_up_tokenization_spaces=False)}",
-                logger=logger,
-                level=logging.INFO,
-                rank=0,
-            )
-
-            log_rank(
-                "--------------------------------------------------",
-                logger=logger,
-                level=logging.INFO,
-                rank=0,
-            )
 
 
 if __name__ == "__main__":

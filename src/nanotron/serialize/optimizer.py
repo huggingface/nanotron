@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from typing import List, Optional, Tuple, Union
+from typing import Optional, Tuple
 
 import torch
 from torch import nn
@@ -17,12 +17,12 @@ from nanotron.optim.zero import (
 )
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter
-from nanotron.serialize.metadata import TensorMetadata, TensorMetadataV2
+from nanotron.serialize.metadata import TensorMetadata
 from nanotron.serialize.utils import ObjectType, merge_and_shard_tp_tensors
 
-OPTIM_TO_OPTIM_STATE_NAMES = {
-    "AdamW": ["exp_avg", "exp_avg_sq"],
-}
+# OPTIM_TO_OPTIM_STATE_NAMES = {
+#     "AdamW": ["exp_avg", "exp_avg_sq"],
+# }
 
 
 # TODO(xrsrke): take rank instead of parallel_context
@@ -130,9 +130,7 @@ def load_optimizer(
     parallel_context: ParallelContext,
     root_folder: Path,
     map_location: Optional[str] = None,
-    param_shard_metadata: Tuple[
-        Tuple[int, int], Union[TensorMetadata, TensorMetadataV2]
-    ] = None,  # (pp_rank, tp_rank) -> TensorMetadata
+    param_shard_metadata: Tuple[Tuple[int, int], TensorMetadata] = None,  # (pp_rank, tp_rank) -> TensorMetadata
     model: Optional[nn.Module] = None,
 ):
     root_folder = root_folder / "optimizer"
@@ -150,16 +148,15 @@ def load_optimizer(
             model is not None
         ), "You have to pass the model in order to adjust the optimizer states according to how the current parameters are sharded"
 
-        def get_checkpoint_state_metadata(
-            param_name: str, pp_rank: int, tp_rank: int
-        ) -> Union[TensorMetadata, TensorMetadataV2]:
+        def get_checkpoint_state_metadata(param_name: str, pp_rank: int, tp_rank: int) -> TensorMetadata:
             return param_shard_metadata[param_name.replace("module.", "")][(str(pp_rank), str(tp_rank))]
 
-        def get_optimizer_states(optimizer: optim.BaseOptimizer) -> List[str]:
-            optim_cls_name = optimizer.get_base_optimizer().__class__.__name__
-            return OPTIM_TO_OPTIM_STATE_NAMES[optim_cls_name]
+        # def get_optimizer_states(optimizer: optim.BaseOptimizer) -> List[str]:
+        #     optim_cls_name = optimizer.get_base_optimizer().__class__.__name__
+        #     state_names = optimizer.state_dict()["state"][0].keys()
+        #     return OPTIM_TO_OPTIM_STATE_NAMES[optim_cls_name]
 
-        OPTIMIZER_STATE_NAMES = get_optimizer_states(optimizer)
+        # OPTIMIZER_STATE_NAMES = get_optimizer_states(optimizer)
         ckp_pp_size = ckp_optimizer_config["parallelism"]["pp_size"]
         ckp_tp_size = ckp_optimizer_config["parallelism"]["tp_size"]
         ckp_optim_type = ckp_optimizer_config["type"]
@@ -174,7 +171,7 @@ def load_optimizer(
                 )
             )
             ckp_sharded_optim_states = merge_dp_shard_in_zero1_optimizer(
-                model, ckp_optimizer_config, OPTIMIZER_STATE_NAMES, shard_paths, parallel_context, map_location
+                model, ckp_optimizer_config, shard_paths, parallel_context, map_location
             )
         else:
             # NOTE: if the checkpoint is from a Zero-0 optimizer, then we don't need to merge the shards
@@ -190,6 +187,10 @@ def load_optimizer(
 
         model_state_dict = model.state_dict()
         new_optim_state_dict = optimizer.state_dict()
+        # NOTE: because we can only resume training with the same optimizer type
+        # (0, 0) = (pp_rank, tp_rank)
+        # NOTE: also we don't merge "step" because it's just a scalar
+        OPTIMIZER_STATE_NAMES = ckp_sharded_optim_states[(0, 0)]["state"][0].keys() - ["step"]
 
         for param_name, _ in tqdm(
             sorted(model_state_dict.items(), key=lambda x: x[0]),
