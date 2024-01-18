@@ -5,7 +5,7 @@ import torch
 from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.parallel import ParallelContext
-from nanotron.models.base_model import NanotronModel
+from nanotron.models.base import NanotronModel
 from torch import nn
 
 logger = logging.get_logger(__name__)
@@ -171,17 +171,6 @@ class NanotronParameter(nn.Parameter):
         return self.NANOTRON_PARAMETER_METADATA_SHARDED_KEY in getattr(
             self, self.NANOTRON_PARAMETER_METADATA_ATTRIBUTE_NAME
         )
-
-
-def check_model_has_grad(model: NanotronModel, parallel_context: ParallelContext):
-    """Check that there's at least a parameter in current PP rank that has a gradient."""
-    for param in model.parameters():
-        if param.requires_grad:
-            return True
-    raise ValueError(
-        f"Can't use DDP because model in PP={dist.get_rank(parallel_context.pp_pg)} has no gradient. Consider increasing the number of layers of your model, or put a smaller PP size.\n"
-        f"Model: {model}"
-    )
 
 
 def sanity_check(root_module: nn.Module):

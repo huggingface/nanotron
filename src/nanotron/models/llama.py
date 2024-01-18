@@ -32,7 +32,8 @@ from nanotron import logging
 from nanotron.config import ParallelismArgs, RecomputeGranularity, LlamaConfig
 from nanotron.nn.layer_norm import TritonRMSNorm
 from nanotron.logging import log_rank
-from nanotron.models import AttachableStore, NanotronModel
+from nanotron.generation.generate_store import AttachableStore
+from nanotron.models import NanotronModel
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter
 from nanotron.parallel.pipeline_parallel.block import (
