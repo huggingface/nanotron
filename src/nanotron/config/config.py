@@ -27,6 +27,7 @@ from nanotron.parallel.tensor_parallel.nn import TensorParallelLinearMode
 
 logger = get_logger(__name__)
 
+DEFAULT_SEED = 42
 
 @dataclass
 class BenchArgs:
@@ -94,10 +95,13 @@ class PretrainDatasetsArgs:
 class DataArgs:
     """Arguments related to the data and data files processing"""
 
-    dataset: PretrainDatasetsArgs
-    seed: int
+    dataset: Optional[PretrainDatasetsArgs]
+    seed: Optional[int]
     num_loading_workers: Optional[int] = 1
 
+    def __post_init__(self):
+        if self.seed is None:
+            self.seed = DEFAULT_SEED
 
 @dataclass
 class CheckpointsArgs:
@@ -130,7 +134,6 @@ class GeneralArgs:
         run: Name of the run
         step: Global step (updated when we save the checkpoint)
         consumed_train_samples: Number of samples consumed during training (should be actually just step*batch_size)
-        kill_switch_path: Path to the kill switch file
         ignore_sanity_checks: Whether to ignore sanity checks
     """
 
@@ -144,7 +147,7 @@ class GeneralArgs:
 
     def __post_init__(self):
         if self.seed is None:
-            self.seed = 42
+            self.seed = DEFAULT_SEED
         if self.benchmark_csv_path is not None:
             assert (
                 os.environ.get("NANOTRON_BENCHMARK", None) is not None
@@ -309,6 +312,8 @@ class GenerationArgs:
     def __post_init__(self):
         if isinstance(self.sampler, str):
             self.sampler = SamplerType[self.sampler.upper()]
+        if self.seed is None:
+            self.seed = DEFAULT_SEED
 
 
 @dataclass

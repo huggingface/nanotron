@@ -38,8 +38,8 @@ pip install -e .
 ```
 
 Install also:
-- Flash Attention: `pip install packaging; pip install flash-attn>=2.4.2  --no-build-isolation`
-- Also good to have `transformers` `datasets` `python-etcd` `tensorboardX`: `pip install transformers datasets python-etcd tensorboardX`
+- Flash Attention: `pip install packaging; pip install "flash-attn>=2.4.2"  --no-build-isolation`
+- Also nice to have `transformers` `datasets` `python-etcd` `tensorboardX`: `pip install transformers datasets python-etcd tensorboardX`
 
 
 We also support a set of flavors that you can install using `pip install -e [$FLAVOR]`:
