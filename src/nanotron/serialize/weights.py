@@ -161,7 +161,7 @@ def load_sharded_param_w_metadataclass(
     param_or_buffer: torch.Tensor,
     sharded_info: ShardedInfo,
     shards_path: List[Path],
-    param_shard_metadata,
+    param_shard_metadata: Optional[Dict] = None,
 ):
     checkpoint_unsharded_shape = None
     shards_and_slices_maps: List[Tuple[torch.Tensor, Tuple[SlicesPair, ...]]] = []
@@ -173,15 +173,16 @@ def load_sharded_param_w_metadataclass(
             param_metadata = meta_dataclass.from_str_dict(param_metadata)
             shards_and_slices_maps.append((fi.get_tensor("data"), param_metadata.local_global_slices_pairs))
 
-            # NOTE: for optimizer state loading
-            # TODO(xrsrke): save tp rank, and pp rank along with metadata
-            pp_rank, tp_rank = extract_tp_pp_rank_from_shard_path(shard_path)
-            param_shard_metadata[(pp_rank, tp_rank)] = param_metadata
-
             if checkpoint_unsharded_shape is None:
                 checkpoint_unsharded_shape = param_metadata.unsharded_shape
             else:
                 assert checkpoint_unsharded_shape == param_metadata.unsharded_shape
+
+            if param_shard_metadata is not None:
+                # NOTE: store how does model paramater are sharded
+                # so that we can shard optimizer checkpoints in this way
+                pp_rank, tp_rank = extract_tp_pp_rank_from_shard_path(shard_path)
+                param_shard_metadata[(pp_rank, tp_rank)] = param_metadata
 
     assert checkpoint_unsharded_shape is not None
     # TODO @thomasw21: Interestingly enough we don't actually need to instantiate the entire model at all.

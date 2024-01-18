@@ -1,5 +1,7 @@
+import re
 from collections import defaultdict
-from typing import Any, Callable, Dict, Iterable, Optional, Tuple, Union
+from pathlib import Path
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
 
 import numpy as np
 import torch.optim
@@ -11,7 +13,10 @@ from nanotron.core.logging import log_rank, warn_once
 from nanotron.core.optim.base import BaseOptimizer
 from nanotron.core.optim.inherit_from_other_optimizer import InheritFromOtherOptimizer
 from nanotron.core.parallel.parameters import NanotronParameter
+from nanotron.distributed import ParallelContext
 from nanotron.logging import human_format
+from torch import nn
+from tqdm import tqdm
 
 logger = logging.get_logger(__name__)
 
@@ -336,3 +341,154 @@ def get_sliced_tensor(param: NanotronParameter, start_offset: int, end_offset: i
     # This allows us to create a leaf tensor, despite sharing the underlying storage
     result = SlicedFlatTensor(data=param, start_offset=start_offset, end_offset=end_offset)
     return result
+
+
+def find_optim_index_from_param_name(
+    param_name: str,
+    # NOTE: (pp_rank, dp_rank, tp_rank) or (pp_rank, tp_rank)
+    ckp_sharded_optim_states: Union[Tuple[Tuple[int, int, int], torch.Tensor], Tuple[Tuple[int, int], torch.Tensor]],
+    is_zero1: bool,
+):
+    param_name = param_name.replace("module.", "")
+    # NOTE: since all shards have the same optim state names
+    # so we take the first shard
+    if is_zero1 is True:
+        # NOTE: (pp_rank, dp_rank, tp_rank)
+        OPTIM_STATE_INDEX_TO_PARAM_NAME = ckp_sharded_optim_states[(0, 0, 0)]["names"]
+    else:
+        # NOTE: (pp_rank, tp_rank)
+        OPTIM_STATE_INDEX_TO_PARAM_NAME = ckp_sharded_optim_states[(0, 0)]["names"]
+
+    return next((k for k, v in OPTIM_STATE_INDEX_TO_PARAM_NAME.items() if v == param_name), None)
+
+
+def extract_parallel_ranks_from_shard_path(
+    shard_path: Path, is_zero1: bool
+) -> Union[Tuple[int, int, int], Tuple[int, int]]:
+    """Extract parallel ranks from shard path
+
+    For example, if the shard path is:
+    + For ZeRO-1: /path/to/optimizer_pp-0-of-1_dp-0-of-2_tp-0-of-1.pt
+    then the function will return (0, 0, 0) (pp_rank, dp_rank, tp_rank)
+
+    For ZeRO-0: /path/to/optimizer_pp-0-of-1_tp-0-of-1.pt
+    then the function will return (0, 0) (pp_rank, tp_rank)
+    """
+    if is_zero1 is True:
+        # TODO(xrsrke): use the same pattern as weight checkpoints
+        # in weight checkpoints, we do pp-rank-.... but here we only do pp-...
+        # TODO(xrsrke): don't hardcode this
+        pattern = r"optimizer_pp-(\d+)-of-\d+_dp-(\d+)-of-\d+_tp-(\d+)-of-\d+\.pt"
+        match = re.search(pattern, str(shard_path))
+        pp_rank, dp_rank, tp_rank = match.groups()
+        return int(pp_rank), int(dp_rank), int(tp_rank)
+    else:
+        # NOTE: this is zero0 checkpoint
+        pattern = r"pp-(\d+)-of-\d+_tp-(\d+)-of-\d+"
+        match = re.search(pattern, str(shard_path))
+        pp_rank, tp_rank = match.groups()
+        return int(pp_rank), int(tp_rank)
+
+
+def merge_dp_shard_in_zero1_optimizer(
+    model: nn.Module,
+    optimizer_config,
+    optimizer_states: List[str],
+    shard_paths: List[Path],
+    parallel_context: ParallelContext,
+    map_location: Optional[str] = None,
+) -> Dict[Tuple[int, int], Dict[str, torch.Tensor]]:  # (pp_rank, tp_rank): param_name -> optim_state
+    import itertools
+
+    assert (
+        optimizer_config["configs"]["param_name_to_dp_rank_offsets"] is not None
+    ), "param_name_to_dp_rank_offsets is required"
+
+    checkpoint_pp_size = optimizer_config["parallelism"]["pp_size"]
+    checkpoint_tp_size = optimizer_config["parallelism"]["tp_size"]
+
+    ckp_sharded_optim_states = {}
+    for shard_path in shard_paths:
+        pp_rank, dp_rank, tp_rank = extract_parallel_ranks_from_shard_path(shard_path, is_zero1=True)
+        ckp_sharded_optim_states[(pp_rank, dp_rank, tp_rank)] = torch.load(shard_path, map_location=map_location)
+
+    param_name_to_dp_rank_offsets = optimizer_config["configs"]["param_name_to_dp_rank_offsets"]
+
+    def get_numel_of_unsharded_dp_param(param_name):
+        dp_offsets = param_name_to_dp_rank_offsets[param_name]
+        return max(int(value) for values in dp_offsets.values() for value in values)
+
+    def assign_shard_to_buffer(buffer, offset, value):
+        offset_start, offset_end = map(int, offset)
+        buffer[offset_start:offset_end] = value
+        return buffer
+
+    param_names = sorted(model.state_dict().keys(), key=lambda x: x)
+    ckp_merged_dp_shards_optim_states = {}
+    for pp_rank, tp_rank in tqdm(
+        list(itertools.product(range(int(checkpoint_pp_size)), range(int(checkpoint_tp_size)))),
+        disable=dist.get_rank(parallel_context.world_pg) != 0,
+        desc="Merging ZeRO-1's shards across data parallel dimension",
+    ):
+        # NOTE: filter only the shards that correspond to the current pp_rank and tp_rank
+        filtered_ckp_sharded_optim_states = {}
+        for (pp, dp, tp), ckp_optim_state in ckp_sharded_optim_states.items():
+            if pp == pp_rank and tp == tp_rank:
+                filtered_ckp_sharded_optim_states[dp] = ckp_optim_state
+
+        # NOTE: now merge the shards across data parallel dimension
+        # for each parameter, we need to merge all shards across data parallel dimension
+        merged_dp_shards_optim_states = {}
+
+        merged_dp_shards_optim_states["state"] = {}
+
+        for param_name in param_names:
+            unshard_dp_size = get_numel_of_unsharded_dp_param(param_name)
+            optim_state_index = find_optim_index_from_param_name(
+                param_name=param_name,
+                ckp_sharded_optim_states=ckp_sharded_optim_states,
+                is_zero1=True,
+            )
+            merged_dp_shards_optim_states["state"][optim_state_index] = {}
+            for state_name in optimizer_states:
+                unsharded_dp_buffer = torch.zeros(unshard_dp_size, device="cuda")
+                # NOTE: now merge all the params across data parallel dimension
+                for dp_rank, ckp_optim_state in filtered_ckp_sharded_optim_states.items():
+                    # NOTE: extract the optimizer state of the current parameter
+                    ckp_optim_state = ckp_optim_state["state"][optim_state_index]
+                    ckp_offset = param_name_to_dp_rank_offsets[param_name][str(dp_rank)]
+                    assign_shard_to_buffer(unsharded_dp_buffer, ckp_offset, ckp_optim_state[state_name])
+
+                # NOTE: in optimizer states, the "state" use an index to represent the parameter
+                # not the parameter name
+                merged_dp_shards_optim_states["state"][optim_state_index][state_name] = unsharded_dp_buffer
+                # NOTE: each dp shard has the same step
+                merged_dp_shards_optim_states["state"][optim_state_index]["step"] = ckp_optim_state["step"]
+
+        ckp_merged_dp_shards_optim_states[(pp_rank, tp_rank)] = merged_dp_shards_optim_states
+        # NOTE: each dp shard has the same names, and param_groups since it's the same tp shard
+        # the 0 in (pp_rank, 0, tp_rank) is the dp_rank
+        ckp_merged_dp_shards_optim_states[(pp_rank, tp_rank)]["names"] = ckp_sharded_optim_states[
+            (pp_rank, 0, tp_rank)
+        ]["names"]
+        ckp_merged_dp_shards_optim_states[(pp_rank, tp_rank)]["param_groups"] = ckp_sharded_optim_states[
+            (pp_rank, 0, tp_rank)
+        ]["param_groups"]
+
+    assert len(ckp_merged_dp_shards_optim_states) == int(checkpoint_pp_size) * int(
+        checkpoint_tp_size
+    ), f"Expect {int(checkpoint_pp_size) * int(checkpoint_tp_size)} merged dp shards, got {len(ckp_merged_dp_shards_optim_states)}"
+
+    # NOTE: sanity check, make sure each merged checkpoint
+    # has the same dict key as the original checkpoint
+    for (pp_rank, tp_rank), ckp_optim_state in ckp_merged_dp_shards_optim_states.items():
+        # NOTE: we remove the gradient_accumulator key from sanity check
+        # because we don't merge gradient_accumulator states
+        missing_keys = set(ckp_optim_state.keys()) - set(ckp_sharded_optim_states[(pp_rank, 0, tp_rank)].keys())
+        assert len(missing_keys) == 0 - {
+            "gradient_accumulator"
+        }, "Expected the merged dp shards to have the same keys as the original dp shards, but merged dp shard misses: {}".format(
+            missing_keys
+        )
+
+    return ckp_merged_dp_shards_optim_states

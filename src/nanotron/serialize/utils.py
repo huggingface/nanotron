@@ -1,8 +1,10 @@
 from enum import Enum
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Union
 
+import torch
 from nanotron.distributed import ParallelContext
+from nanotron.serialize.metadata import TensorMetadata, TensorMetadataV2
 
 
 class ObjectType(Enum):
@@ -47,3 +49,23 @@ def extract_tp_pp_rank_from_shard_path(shard_path: Path):
     match = re.search(pattern, str(shard_path))
     pp_rank, tp_rank = match.groups()
     return pp_rank, tp_rank
+
+
+def merge_and_shard_tp_tensors(
+    buffer: torch.Tensor,
+    unsharded_buffer: torch.Tensor,
+    ckp_shard_data: torch.Tensor,
+    current_shard_metadata: Union[TensorMetadata, TensorMetadataV2],
+    ckp_shard_metadata: Union[TensorMetadata, TensorMetadataV2],
+) -> torch.Tensor:
+    for slices_pair in ckp_shard_metadata.local_global_slices_pairs:
+        local_slices = slices_pair.local_slices
+        global_slices = slices_pair.global_slices
+        unsharded_buffer[global_slices] = ckp_shard_data[local_slices]
+
+    for slices_pair in current_shard_metadata.local_global_slices_pairs:
+        local_slices = slices_pair.local_slices
+        global_slices = slices_pair.global_slices
+        buffer[local_slices] = unsharded_buffer[global_slices]
+
+    return buffer
