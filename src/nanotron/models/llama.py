@@ -102,7 +102,12 @@ class RotaryEmbedding(nn.Module):
             self.end *= 2
             self._initialized_buffer = False
         if self._initialized_buffer is False:
-            print(f"Initializing rotary embeddings with end={self.end}")
+            log_rank(
+                f"Initializing rotary embeddings with end={self.end}",
+                logger=logger,
+                level=logging.DEBUG,
+                rank=0,
+            )
             self.init_rotary_embeddings()
         dtype = x.dtype
         assert inner_dim % 2 == 0
@@ -384,7 +389,12 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             # Double check that we use store only at inference time
             assert key_states.requires_grad is False
             assert value_states.requires_grad is False
-            print("Using store")
+            log_rank(
+                "Using store",
+                logger=logger,
+                level=logging.DEBUG,
+                rank=0,
+            )
             if "position_offsets" in store:
                 old_position_offsets = store["position_offsets"]
                 position_ids = old_position_offsets[:, None] + sequence_mask

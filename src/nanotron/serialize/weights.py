@@ -88,7 +88,12 @@ def save_weights(model: nn.Module, parallel_context: ParallelContext, root_folde
             try:
                 save_file(tensors={"data": param_or_buffer}, filename=path, metadata=metadata)
             except Exception as e:
-                print(f"Error saving {path} with {metadata}")
+                log_rank(
+                    f"Error saving {path} with {metadata}",
+                    logger=logger,
+                    level=logging.ERROR,
+                    rank=0,
+                )
                 raise e
         else:
             raise NotImplementedError("Parameters are required to be NanotronParameter")

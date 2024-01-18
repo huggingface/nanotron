@@ -4,7 +4,7 @@ Nanotron Inference Script
 Usage:
 ```
 export CUDA_DEVICE_MAX_CONNECTIONS=1 # important for some distributed operations
-torchrun --nproc_per_node=4 run_generate.py --pp 1 --tp 4 --ckpt-path checkpoints/10
+torchrun --nproc_per_node=4 run_generate.py ---ckpt-path checkpoints/test/4
 ```
 """
 
@@ -48,42 +48,31 @@ logger = logging.get_logger(__name__)
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--ckpt-path", type=Path, required=True, help="Checkpoint path")
-    parser.add_argument(
-        "--model_name",
-        type=str,
-        default=None,
-        help="Used to get model config in case there is no `config.yaml` or `model_config.json` in checkpoint path",
-    )
-    parser.add_argument("--dp", type=int, default=1)
-    parser.add_argument("--pp", type=int, default=1)
-    parser.add_argument("--tp", type=int, default=1)
+    parser.add_argument("--dp", type=int, default=0)
+    parser.add_argument("--pp", type=int, default=0)
+    parser.add_argument("--tp", type=int, default=0)
     parser.add_argument("--max-new-tokens", type=int, default=128, help="Maximum number of new tokens to generate")
     return parser.parse_args()
 
 
 def main():
     args = get_args()
+
+    assert args.ckpt_path.exists(), f"Checkpoint path {args.ckpt_path} does not exist"
+
+    config = get_config_from_file((args.ckpt_path / "config.yaml").as_posix())
+    model_config = config.model.model_config
+    tokenizer_path = config.tokenizer.tokenizer_name_or_path
+
     parallel_config = ParallelismArgs(
-        dp=args.dp,
-        pp=args.pp,
-        tp=args.tp,
+        dp=args.dp or config.parallelism.dp,
+        pp=args.pp or config.parallelism.pp,
+        tp=args.tp or config.parallelism.tp,
         pp_engine=OneForwardOneBackwardPipelineEngine(),
         tp_mode=TensorParallelLinearMode.ALL_REDUCE,
         recompute_granularity=None,
         tp_linear_async_communication=True,
     )
-
-    assert args.ckpt_path.exists(), f"Checkpoint path {args.ckpt_path} does not exist"
-
-    logging_config = LoggingArgs(
-        log_level="info",
-        log_level_replica="info",
-    )
-
-    dtype = torch.bfloat16
-
-    # Set random states
-    set_random_seed(42)
 
     # Initialise all process groups
     parallel_context = ParallelContext(
@@ -93,6 +82,11 @@ def main():
     )
 
     # Set log levels
+    logging_config = LoggingArgs(
+        log_level="info",
+        log_level_replica="info",
+    )
+
     if dist.get_rank(parallel_context.world_pg) == 0:
         if logging_config.log_level is not None:
             set_logger_verbosity_format(logging_config.log_level, parallel_context=parallel_context)
@@ -100,12 +94,13 @@ def main():
         if logging_config.log_level_replica is not None:
             set_logger_verbosity_format(logging_config.log_level_replica, parallel_context=parallel_context)
 
-    config = get_config_from_file((args.ckpt_path / "config.yaml").as_posix())
-    model_config = config.model.model_config
-    tokenizer_path = config.tokenizer.tokenizer_name_or_path
-
     log_rank(f"model_config: {model_config}", logger=logger, level=logging.INFO, rank=0)
     log_rank(f"tokenizer_path: {tokenizer_path}", logger=logger, level=logging.INFO, rank=0)
+
+    dtype = torch.bfloat16
+
+    # Set random states
+    set_random_seed(42)
 
     model_config_cls = model_config.__class__.__name__
     if model_config_cls not in CONFIG_TO_MODEL_CLASS:
@@ -183,10 +178,38 @@ def main():
             tokenizer_config=TokenizerConfig(max_input_length=None),
             is_bench=os.environ.get("USE_BENCH", "0") == "1",
         )
+        for output in outputs:
+            input_ids = output.input_ids
+            generated_ids = output.generation_ids
+            if isinstance(input_ids, TensorPointer):
+                assert isinstance(generated_ids, TensorPointer)
+                continue
+            assert isinstance(generated_ids, torch.Tensor)
+
+            log_rank(
+                f"input: {tokenizer.decode(input_ids, clean_up_tokenization_spaces=False)[:1000]}",
+                logger=logger,
+                level=logging.INFO,
+                rank=0,
+            )
+
+            log_rank(
+                f"generation: {tokenizer.decode(generated_ids[len(input_ids) :], clean_up_tokenization_spaces=False)}",
+                logger=logger,
+                level=logging.INFO,
+                rank=0,
+            )
+
+            log_rank(
+                "--------------------------------------------------",
+                logger=logger,
+                level=logging.INFO,
+                rank=0,
+            )
     else:
-        decode_tokenized(
-            input_ids=torch.zeros(1, 1),
-            input_mask=torch.ones(1, 1),
+        outputs = decode_tokenized(
+            input_ids=torch.zeros(1, 1).to(dtype=torch.int64, device="cuda"),
+            input_mask=torch.ones(1, 1).to(dtype=torch.bool, device="cuda"),
             model=model.model,
             parallel_context=parallel_context,
             generation_config=GenerationArgs(sampler="greedy", use_cache=True),
@@ -194,37 +217,28 @@ def main():
             max_new_tokens=12,
             returns_logits=False,
         )
+        for output in outputs:
+            input_ids = output.input_ids
+            generated_ids = output.generation_ids
+            if isinstance(input_ids, TensorPointer):
+                assert isinstance(generated_ids, TensorPointer)
+                continue
+            assert isinstance(generated_ids, torch.Tensor)
+            log_rank(
+                f"generation: {generated_ids[len(input_ids) :]}",
+                logger=logger,
+                level=logging.INFO,
+                rank=0,
+            )
+
+            log_rank(
+                "--------------------------------------------------",
+                logger=logger,
+                level=logging.INFO,
+                rank=0,
+            )
 
     dist.barrier()
-
-    for output in outputs:
-        input_ids = output.input_ids
-        generated_ids = output.generation_ids
-        if isinstance(input_ids, TensorPointer):
-            assert isinstance(generated_ids, TensorPointer)
-            continue
-        assert isinstance(generated_ids, torch.Tensor)
-
-        log_rank(
-            f"input: {tokenizer.decode(input_ids, clean_up_tokenization_spaces=False)[:1000]}",
-            logger=logger,
-            level=logging.INFO,
-            rank=0,
-        )
-
-        log_rank(
-            f"generation: {tokenizer.decode(generated_ids[len(input_ids) :], clean_up_tokenization_spaces=False)}",
-            logger=logger,
-            level=logging.INFO,
-            rank=0,
-        )
-
-        log_rank(
-            "--------------------------------------------------",
-            logger=logger,
-            level=logging.INFO,
-            rank=0,
-        )
 
 
 if __name__ == "__main__":

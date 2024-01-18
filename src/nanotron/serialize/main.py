@@ -58,19 +58,34 @@ def save(
             config.save_as_yaml(root_folder / "config.yaml")
     except Exception as e:
         # TODO @nouamane: catch full disk error
-        print(f"Error while saving config: {e}")
+        log_rank(
+            f"Error while saving config: {e}",
+            logger=logger,
+            level=logging.ERROR,
+            rank=0,
+        )
         raise e
     try:
         if should_save_model:
             save_weights(model=model, parallel_context=parallel_context, root_folder=root_folder)
     except Exception as e:
-        print(f"Error while saving weights checkpoint: {e}")
+        log_rank(
+            f"Error while saving weights checkpoint: {e}",
+            logger=logger,
+            level=logging.ERROR,
+            rank=0,
+        )
         raise e
     try:
         if should_save_optimizer:
             save_optimizer(optimizer=optimizer, parallel_context=parallel_context, root_folder=root_folder)
     except Exception as e:
-        print(f"Error while saving optimizer checkpoint: {e}")
+        log_rank(
+            f"Error while saving optimizer checkpoint: {e}",
+            logger=logger,
+            level=logging.ERROR,
+            rank=0,
+        )
         raise e
     try:
         if should_save_lr_scheduler:
@@ -80,7 +95,12 @@ def save(
                 root_folder=root_folder,
             )
     except Exception as e:
-        print(f"Error while saving lr_scheduler checkpoint: {e}")
+        log_rank(
+            f"Error while saving lr_scheduler checkpoint: {e}",
+            logger=logger,
+            level=logging.ERROR,
+            rank=0,
+        )
         raise e
 
     save_meta(root_folder=root_folder, parallel_context=parallel_context, checkpoint_metadata=checkpoint_metadata)

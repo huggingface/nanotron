@@ -1,10 +1,9 @@
 import dataclasses
 import time
 from itertools import chain, islice
-from typing import Generator, Iterable, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Generator, Iterable, List, Optional, Tuple, Union
 
 import torch
-from transformers import LlamaTokenizer
 
 from nanotron import distributed as dist
 from nanotron import logging
@@ -21,6 +20,13 @@ from nanotron.parallel.pipeline_parallel.p2p import P2PTensorMetaData, view_as_c
 from nanotron.parallel.pipeline_parallel.state import PipelineEvalBatchState
 from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
 from nanotron.utils import get_untyped_storage
+
+if TYPE_CHECKING:
+    try:
+        from transformers import PreTrainedTokenizer
+    except ImportError:
+        PreTrainedTokenizer = None
+
 
 logger = logging.get_logger(__name__)
 
@@ -71,7 +77,7 @@ def chunks(iterable, chunk_size: int) -> Generator[List, None, None]:
 
 def micro_batcher(
     input_iter: Iterable[GenerationInput],
-    tokenizer: LlamaTokenizer,
+    tokenizer: "PreTrainedTokenizer",
     max_micro_batch_size: int,
     tokenizer_config: TokenizerConfig,
     parallel_context: ParallelContext,
@@ -152,7 +158,7 @@ def micro_splitter(
 @torch.inference_mode()
 def decode_text(
     input_iter: Iterable[GenerationInput],
-    tokenizer: LlamaTokenizer,
+    tokenizer: "PreTrainedTokenizer",
     model: LlamaModel,
     parallel_context: ParallelContext,
     generation_config: GenerationArgs,
