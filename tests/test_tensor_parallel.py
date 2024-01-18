@@ -155,7 +155,7 @@ def _test_column_linear(
             TensorParallelLinearMode.ALL_REDUCE,
             True,
             pytest.raises(
-                AssertionError,
+                ValueError,
                 match=r"Cf this: https://github.com/huggingface/nanotron/blob/bf82cded9eef1ba77864b48e65bffefad4076339/src/nanotron/core/parallel/tensor_parallel/nn.py#L132",
             ),
         ),
