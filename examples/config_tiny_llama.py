@@ -1,3 +1,4 @@
+""" Example python script to generate a YAML config file which can be used to run a training with nanotron. Refer to "examples" section in the `/README.md` for more information."""
 import os
 
 from nanotron.config import (
@@ -100,4 +101,8 @@ config = Config(
 
 if __name__ == "__main__":
     dir = os.path.dirname(__file__)
+
+    # Save config as YAML file
     config.save_as_yaml(f"{dir}/config_tiny_llama.yaml")
+
+    # You can now train a model with this config using `/run_train.py`
