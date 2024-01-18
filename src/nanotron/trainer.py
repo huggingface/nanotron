@@ -72,8 +72,6 @@ from nanotron.serialize import (
 )
 from nanotron.utils import init_method_normal, init_on_device_and_dtype, scaled_init_method_normal
 
-from nanotron.models.falcon import FalconForTraining
-from nanotron.models.gpt2 import GPTForTraining
 from nanotron.models.llama import LlamaForTraining, RotaryEmbedding
 from nanotron.models.starcoder2 import Starcoder2ForTraining
 
@@ -85,9 +83,6 @@ dist_logger.setLevel(logging.WARNING)
 
 CONFIG_TO_MODEL_CLASS = {
     "LlamaConfig": LlamaForTraining,
-    "GPTBigCodeConfig": GPTForTraining,
-    "FalconConfig": FalconForTraining,
-    "RWConfig": FalconForTraining,
     "Starcoder2Config": Starcoder2ForTraining,
 }
 
@@ -829,11 +824,6 @@ def mark_tied_parameters(
     for module_name, module in model.named_modules():
         for param_name, param in module.named_parameters(recurse=False):
             name = f"{module_name}.{param_name}"
-
-            if isinstance(model, GPTForTraining) and ".qkv.kv." in name:
-                assert param.is_tied, f"Expected {name} to already be synced"
-                # kv is deliberately skipped as it's tied in model init (_mark_kv_parameters_in_module_as_tied)
-                continue
 
             # if isinstance(model, Starcoder2ForTraining) and ".qkv.kv." in name
             #     assert param.is_tied, f"Expected {name} to already be synced"

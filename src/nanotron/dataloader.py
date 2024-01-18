@@ -80,7 +80,7 @@ def sanity_check_dataloader(
 def get_datasets(
     hf_dataset_or_datasets: Union[dict, str],
     splits: Optional[Union[List[str], str]] = ["train", "test"],
-) -> DatasetDict:
+) -> "DatasetDict":
     """
     Function to load dataset directly from DataArguments.
 
@@ -119,7 +119,7 @@ def get_datasets(
 
 
 # Adapted from h4/src/h4/data/loading.py
-def _get_dataset_mix(dataset_dict: dict, splits: List[str] = None, seed=42) -> DatasetDict:
+def _get_dataset_mix(dataset_dict: dict, splits: List[str] = None, seed=42) -> "DatasetDict":
     """
     Helper function to load dataset mix from dict configuration.
 
@@ -271,8 +271,8 @@ def set_tensor_pointers(
 
 ### CAUSAL LANGUAGE MODELING ###
 def clm_process(
-    raw_dataset: Dataset,
-    tokenizer: PreTrainedTokenizerBase,
+    raw_dataset: "Dataset",
+    tokenizer: "PreTrainedTokenizerBase",
     text_column_name: str,
     dataset_processing_num_proc_per_process: int,
     dataset_overwrite_cache: bool,
@@ -395,7 +395,7 @@ class DataCollatorForCLM:
 def _get_train_sampler(
     dp_size: int,
     dp_rank: int,
-    train_dataset: Dataset,
+    train_dataset: "Dataset",
     seed: int,
     use_loop_to_round_batch_size: bool,
     consumed_train_samples: int,
@@ -429,7 +429,7 @@ def _get_train_sampler(
 
 # Adapted from https://github.com/huggingface/transformers/blob/47e1676255e5dd86b9541f734cd4f4bdcbb50f4a/src/transformers/trainer.py#L837
 def get_train_dataloader(
-    train_dataset: Dataset,
+    train_dataset: "Dataset",
     sequence_length: int,
     parallel_context: ParallelContext,
     input_pp_rank: int,

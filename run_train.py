@@ -9,7 +9,6 @@ torchrun --nproc_per_node=8 run_train.py --config-file examples/config_tiny_llam
 """
 import argparse
 
-from huggingface_hub import __version__ as hf_hub_version
 from nanotron import logging
 from nanotron.config import (
     PretrainDatasetsArgs,
@@ -26,8 +25,14 @@ from nanotron.trainer import DistributedTrainer
 from nanotron.utils import (
     main_rank_first,
 )
-from transformers import AutoTokenizer
-from transformers import __version__ as tf_version
+
+try:
+    from huggingface_hub import __version__ as hf_hub_version
+    from transformers import AutoTokenizer
+    from transformers import __version__ as tf_version
+except ImportError:
+    hf_hub_version = None
+    tf_version = None
 
 logger = logging.get_logger(__name__)
 
