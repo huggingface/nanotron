@@ -6,11 +6,12 @@ from typing import Any, Callable, ClassVar, Dict, List, Tuple, Type, Union
 import dacite
 import torch
 from dacite import from_dict
-from nanotron.constants import CHECKPOINT_VERSION
-from nanotron import distributed as dist
-from nanotron.parallel.parameters import SlicesPair
-from nanotron.parallel import ParallelContext
 from packaging.version import Version
+
+from nanotron import distributed as dist
+from nanotron.constants import CHECKPOINT_VERSION
+from nanotron.parallel import ParallelContext
+from nanotron.parallel.parameters import SlicesPair
 
 
 @dataclasses.dataclass
@@ -24,38 +25,6 @@ class CheckpointMetadata:
 
 @dataclasses.dataclass
 class TensorMetadata:
-    # Anything users want to store
-    # Info of to what slice of the unsharded tensor (global_slices) the current sharded tensor corresponds (local_slices)
-    local_global_slices_pairs: Tuple[SlicesPair, ...]
-    # The shape of the unsharded tensor
-    unsharded_shape: Tuple[int, ...]
-
-    _metadata_config: ClassVar[dacite.Config] = dacite.Config(
-        type_hooks={
-            Tuple[SlicesPair, ...]: SlicesPair.tuple_from_str,
-            Tuple[int, ...]: lambda x: torch.Size(int(size) for size in x.strip("()").split(",") if size),
-        },
-        strict=True,
-    )
-
-    def to_str_dict(self) -> Dict[str, str]:
-        return {
-            "local_global_slices_pairs": SlicesPair.tuple_to_str(self.local_global_slices_pairs),
-            "unsharded_shape": str(tuple(self.unsharded_shape)),
-        }
-
-    @classmethod
-    def from_str_dict(cls, dictionary: Dict[str, str]) -> "TensorMetadata":
-        tensor_metadata: TensorMetadata = dacite.from_dict(
-            data_class=TensorMetadata,
-            data=dictionary,
-            config=cls._metadata_config,
-        )
-        return tensor_metadata
-
-
-@dataclasses.dataclass
-class TensorMetadataV2:
     # Mandatory for checkpoint version higher than 1.2
     version: Version
     # Anything users want to store
@@ -81,9 +50,9 @@ class TensorMetadataV2:
         }
 
     @classmethod
-    def from_str_dict(cls, dictionary: Dict[str, str]) -> "TensorMetadataV2":
-        tensor_metadata: TensorMetadataV2 = dacite.from_dict(
-            data_class=TensorMetadataV2,
+    def from_str_dict(cls, dictionary: Dict[str, str]) -> "TensorMetadata":
+        tensor_metadata: TensorMetadata = dacite.from_dict(
+            data_class=TensorMetadata,
             data=dictionary,
             config=cls._metadata_config,
         )

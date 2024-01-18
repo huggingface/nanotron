@@ -4,7 +4,7 @@ Nanotron Inference Script
 Usage:
 ```
 export USE_FAST=1 # optional, for faster inference. Requires flash-attn
-torchrun --nproc_per_node=8 run_generate.py --pp 2 --tp 4 --ckpt-path nanotron/checkpoints/10
+torchrun --nproc_per_node=8 run_generate.py --pp 2 --tp 4 --ckpt-path checkpoints/10
 ```
 """
 
@@ -71,6 +71,8 @@ def main():
         recompute_granularity=None,
         tp_linear_async_communication=True,
     )
+
+    assert args.ckpt_path.exists(), f"Checkpoint path {args.ckpt_path} does not exist"
 
     logging_config = LoggingArgs(
         log_level="info",
