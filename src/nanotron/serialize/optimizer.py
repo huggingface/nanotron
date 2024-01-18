@@ -3,21 +3,22 @@ from pathlib import Path
 from typing import List, Optional, Tuple, Union
 
 import torch
-from nanotron.core import distributed as dist
-from nanotron.core import optim as optim
-from nanotron.core.optim.zero import (
+from torch import nn
+from tqdm import tqdm
+
+from nanotron import distributed as dist
+from nanotron import optim
+from nanotron.optim.zero import (
     ZeroDistributedOptimizer,
     extract_parallel_ranks_from_shard_path,
     find_optim_index_from_param_name,
     get_sliced_tensor,
     merge_dp_shard_in_zero1_optimizer,
 )
-from nanotron.core.parallel.parameters import NanotronParameter
-from nanotron.distributed import ParallelContext
+from nanotron.parallel import ParallelContext
+from nanotron.parallel.parameters import NanotronParameter
 from nanotron.serialize.metadata import TensorMetadata, TensorMetadataV2
 from nanotron.serialize.utils import ObjectType, merge_and_shard_tp_tensors
-from torch import nn
-from tqdm import tqdm
 
 OPTIM_TO_OPTIM_STATE_NAMES = {
     "AdamW": ["exp_avg", "exp_avg_sq"],

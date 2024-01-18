@@ -1,11 +1,11 @@
 from abc import ABCMeta, abstractmethod
 from typing import Optional
 
-from nanotron.core import logging
-from nanotron.core.distributed import ProcessGroup
-from nanotron.core.logging import log_rank
-from nanotron.core.parallel.pipeline_parallelism.block import PipelineBlock
-from nanotron.distributed import ParallelContext
+from nanotron import logging
+from nanotron.distributed import ProcessGroup
+from nanotron.logging import log_rank
+from nanotron.parallel.pipeline_parallel.block import PipelineBlock
+from nanotron.parallel import ParallelContext
 from torch import nn
 from transformers import AutoConfig
 
@@ -21,6 +21,7 @@ class NanotronModel(nn.Module, metaclass=ABCMeta):
         super().__init__(*args, **kwargs)
         self.parallel_context: ParallelContext
         self.config: AutoConfig
+        self.module_id_to_prefix: dict[int, str]
 
         # Attributes defined when building the model
         self.input_pp_rank: int

@@ -4,8 +4,9 @@ from pathlib import Path
 from typing import List, Optional, Tuple, Union
 
 import torch
-from nanotron.core.parallel.parameters import SlicesPair
-from nanotron.distributed import ParallelContext
+
+from nanotron.parallel import ParallelContext
+from nanotron.parallel.parameters import SlicesPair
 from nanotron.serialize.metadata import TensorMetadata, TensorMetadataV2
 
 

@@ -4,9 +4,9 @@ import pytest
 import torch
 from helpers.exception import assert_fail_with
 from helpers.utils import available_gpus, init_distributed
-from nanotron.core import distributed as dist
-from nanotron.core.parallel.pipeline_parallelism.p2p import P2P
-from nanotron.distributed import ParallelContext
+from nanotron import distributed as dist
+from nanotron.parallel.pipeline_parallel.p2p import P2P
+from nanotron.parallel import ParallelContext
 
 
 @pytest.mark.skipif(available_gpus() < 2, reason="Testing test_ddp_with_afab requires at least 2 gpus")

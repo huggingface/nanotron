@@ -1,6 +1,6 @@
 import torch
-from nanotron.kernels.layer_norm import FusedLayerNorm
-from nanotron.logger import BatchSummaryWriter
+from nanotron.fused.layer_norm import TritonLayerNorm
+from nanotron.logging import LoggerWriter
 from torch.nn import LayerNorm
 
 
@@ -22,7 +22,7 @@ if __name__ == "__main__":
     inputs = torch.randn(BATCH_SIZE, SEQ_LEN, HIDDEN_SIZE, device=DEVICE, dtype=DTYPE)
 
     layer_norm = LayerNorm(normalized_shape=inputs.size(-1), device=DEVICE, dtype=DTYPE)
-    fused_layer_norm = FusedLayerNorm(
+    fused_layer_norm = TritonLayerNorm(
         normalized_shape=inputs.size(-1),
         no_persist_layer_norm=NO_PERSIST_LAYER_NORM,
         device=DEVICE,
@@ -30,7 +30,7 @@ if __name__ == "__main__":
     )
     ref_optim = torch.optim.Adam(layer_norm.parameters(), lr=0.1)
     optim = torch.optim.Adam(fused_layer_norm.parameters(), lr=0.1)
-    logger = BatchSummaryWriter(logdir="./")
+    logger = LoggerWriter()
 
     def loss_function(x):
         return x.sum()
@@ -58,5 +58,3 @@ if __name__ == "__main__":
         # wandb.log({"loss": loss.item(), "ref_loss": ref_loss.item(), "step": step})
         logger.add_scalar("loss", loss.item(), step)
         logger.add_scalar("ref_loss", ref_loss.item(), step)
-
-    logger.close()

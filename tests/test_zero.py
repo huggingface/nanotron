@@ -6,18 +6,18 @@ from helpers.distributed_tensor import assert_tensor_equal_over_group
 from helpers.dummy import dummy_infinite_data_loader, init_dummy_model
 from helpers.exception import assert_fail_with
 from helpers.utils import available_gpus, init_distributed
-from nanotron.core import distributed as dist
-from nanotron.core.optim import NamedOptimizer, ZeroDistributedOptimizer
-from nanotron.core.optim.zero import SlicedFlatTensor
-from nanotron.core.parallel.data_parallelism.utils import sync_gradients_across_dp
-from nanotron.core.parallel.parameters import NanotronParameter
-from nanotron.core.parallel.pipeline_parallelism.engine import AllForwardAllBackwardPipelineEngine
-from nanotron.core.parallel.pipeline_parallelism.tensor_pointer import TensorPointer
-from nanotron.core.parallel.tensor_parallelism import nn
-from nanotron.core.parallel.tensor_parallelism.enum import TensorParallelLinearMode
-from nanotron.core.parallel.tied_parameters import sync_tied_weights_gradients
-from nanotron.core.random import RandomStates, branch_random_state, get_current_random_state, get_synced_random_state
-from nanotron.distributed import ParallelContext
+from nanotron import distributed as dist
+from nanotron.optim import NamedOptimizer, ZeroDistributedOptimizer
+from nanotron.optim.zero import SlicedFlatTensor
+from nanotron.parallel.data_parallel.utils import sync_gradients_across_dp
+from nanotron.parallel.parameters import NanotronParameter
+from nanotron.parallel.pipeline_parallel.engine import AllForwardAllBackwardPipelineEngine
+from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
+from nanotron.parallel.tensor_parallel import nn
+from nanotron.parallel.tensor_parallel.enum import TensorParallelLinearMode
+from nanotron.parallel.tied_parameters import sync_tied_weights_gradients
+from nanotron.random import RandomStates, branch_random_state, get_current_random_state, get_synced_random_state
+from nanotron.parallel import ParallelContext
 from torch import nn as torch_nn
 from torch.nn.parallel import DistributedDataParallel
 

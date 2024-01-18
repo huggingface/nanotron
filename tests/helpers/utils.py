@@ -4,7 +4,7 @@ import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
 import torch.cuda
-from nanotron.distributed import ParallelContext
+from nanotron.parallel import ParallelContext
 from torch.distributed.launcher import elastic_launch
 
 

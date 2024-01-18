@@ -2,14 +2,14 @@ import torch
 from helpers.distributed_tensor import assert_tensor_equal_over_group
 from helpers.exception import assert_fail_with
 from helpers.utils import init_distributed
-from nanotron.core import distributed as dist
-from nanotron.core.parallel.parameters import NanotronParameter
-from nanotron.core.parallel.tied_parameters import (
+from nanotron import distributed as dist
+from nanotron.parallel.parameters import NanotronParameter
+from nanotron.parallel.tied_parameters import (
     get_tied_id_to_param,
     sync_tied_weights_gradients,
     tie_parameters,
 )
-from nanotron.distributed import ParallelContext
+from nanotron.parallel import ParallelContext
 from torch import nn
 
 

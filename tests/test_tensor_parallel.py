@@ -5,15 +5,15 @@ from typing import Any
 import pytest
 import torch
 from helpers.utils import available_gpus, init_distributed
-from nanotron.core import distributed as dist
-from nanotron.core.distributed import get_global_rank
-from nanotron.core.parallel.tensor_parallelism.enum import TensorParallelLinearMode
-from nanotron.core.parallel.tensor_parallelism.nn import (
+from nanotron import distributed as dist
+from nanotron.distributed import get_global_rank
+from nanotron.parallel.tensor_parallel.enum import TensorParallelLinearMode
+from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelColumnLinear,
     TensorParallelEmbedding,
     TensorParallelRowLinear,
 )
-from nanotron.distributed import ParallelContext
+from nanotron.parallel import ParallelContext
 from torch import nn as torch_nn
 
 
@@ -156,7 +156,7 @@ def _test_column_linear(
             True,
             pytest.raises(
                 AssertionError,
-                match=r"Cf this: https://github.com/huggingface/nanotron/blob/bf82cded9eef1ba77864b48e65bffefad4076339/src/nanotron/core/parallel/tensor_parallelism/nn.py#L132",
+                match=r"Cf this: https://github.com/huggingface/nanotron/blob/bf82cded9eef1ba77864b48e65bffefad4076339/src/nanotron/core/parallel/tensor_parallel/nn.py#L132",
             ),
         ),
     ],

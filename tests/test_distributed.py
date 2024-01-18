@@ -6,7 +6,7 @@ from helpers.utils import (
     get_all_3d_configurations,
     init_distributed,
 )
-from nanotron.distributed import ParallelContext
+from nanotron.parallel import ParallelContext
 from torch.distributed import ProcessGroup
 
 

@@ -2,7 +2,7 @@ import datetime
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Union
+from typing import Optional, Union, Type
 
 import dacite
 import torch
@@ -10,19 +10,19 @@ import yaml
 from dacite import from_dict
 from yaml.loader import SafeLoader
 
-from nanotron.config.models_config import NanotronConfigs
+from nanotron.config.models_config import ExistingCheckpointInit, NanotronConfigs, RandomInit
 from nanotron.config.utils_config import (
     RecomputeGranularity,
     cast_str_to_pipeline_engine,
     cast_str_to_torch_dtype,
     serialize,
 )
-from nanotron.core.parallel.pipeline_parallelism.engine import (
+from nanotron.parallel.pipeline_parallel.engine import (
     AllForwardAllBackwardPipelineEngine,
     PipelineEngine,
 )
-from nanotron.core.parallel.tensor_parallelism.nn import TensorParallelLinearMode
-from nanotron.generate.sampler import SamplerType
+from nanotron.parallel.tensor_parallel.nn import TensorParallelLinearMode
+from nanotron.generation.sampler import SamplerType
 from nanotron.logging import get_logger
 
 logger = get_logger(__name__)
@@ -42,7 +42,6 @@ class LoggingArgs:
     log_level: Optional[str] = None
     log_level_replica: Optional[str] = None
     iteration_step_info_interval: Optional[int] = 1
-    extensions = None
 
     def __post_init__(self):
         if self.log_level is None:
@@ -104,7 +103,6 @@ class CheckpointsArgs:
     checkpoints_path: where to save the checkpoints
     checkpoint_interval: how often to save the checkpoints
     resume_checkpoint_path: if you want to load from a specific checkpoint path
-    s3: if you want to upload the checkpoints on s3
 
     """
 
@@ -112,8 +110,7 @@ class CheckpointsArgs:
     checkpoint_interval: int
     save_initial_state: Optional[bool] = False
     resume_checkpoint_path: Optional[Path] = None
-    checkpoints_path_is_shared_file_system: Optional[bool] = True
-    extensions = None
+    checkpoints_path_is_shared_file_system: Optional[bool] = False
 
     def __post_init__(self):
         if isinstance(self.checkpoints_path, str):
@@ -140,18 +137,12 @@ class GeneralArgs:
     seed: Optional[int] = None
     step: Optional[int] = None
     consumed_train_samples: Optional[int] = None
-    # If you want to signal the training script to stop, you just need to touch the following file
-    # We force users to set one in order to programmatically be able to remove it.
-    kill_switch_path: Optional[Path] = None
-    # If you want to signal the training script to pause, you just need to add the following file
     benchmark_csv_path: Optional[Path] = None
     ignore_sanity_checks: bool = False
 
     def __post_init__(self):
         if self.seed is None:
             self.seed = 42
-        if isinstance(self.kill_switch_path, str):
-            self.kill_switch_path = Path(self.kill_switch_path)
         if self.benchmark_csv_path is not None:
             assert (
                 os.environ.get("NANOTRON_BENCHMARK", None) is not None
@@ -159,12 +150,6 @@ class GeneralArgs:
 
         if self.run is None:
             self.run = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            if os.environ.get("SLURM_JOB_ID", None) is not None:
-                self.run += f"_{os.environ['SLURM_JOB_ID']}"
-        else:
-            self.run = self.run.replace("%d", datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S"))
-            if os.environ.get("SLURM_JOB_ID", None) is not None:
-                self.run = self.run.replace("%j", os.environ["SLURM_JOB_ID"])
 
 
 @dataclass
@@ -211,22 +196,6 @@ class ParallelismArgs:
             self.tp_mode = TensorParallelLinearMode[self.tp_mode.upper()]
         if isinstance(self.recompute_granularity, str):
             self.recompute_granularity = RecomputeGranularity[self.recompute_granularity.upper()]
-
-
-@dataclass
-class RandomInit:
-    std: float
-
-
-@dataclass
-class ExistingCheckpointInit:
-    """This is used to initialize from an already existing model (without optimizer, lr_scheduler...)"""
-
-    path: Path
-
-    def __post_init__(self):
-        if isinstance(self.path, str):
-            self.path = Path(self.path)
 
 
 @dataclass
@@ -353,7 +322,7 @@ class Config:
     tokens: TokensArgs
     optimizer: OptimizerArgs
     data: DataArgs
-    profiler: Optional[ProfilerArgs] = None
+    profiler: Optional[ProfilerArgs]
 
     def __post_init__(self):
         # Some final sanity checks across separate arguments sections:
@@ -380,13 +349,13 @@ class Config:
             yaml.dump(config_dict, f)
 
         # Sanity test config can be reloaded
-        _ = get_config_from_file(file_path)
+        _ = get_config_from_file(file_path, config_class=self.__class__)
 
     def as_dict(self) -> dict:
         return serialize(self)
 
 
-def get_config_from_file(config_path: str) -> Config:
+def get_config_from_file(config_path: str, config_class: Type[Config] = Config) -> Config:
     """Get a config objet from a file (python or YAML)
 
     Args:
@@ -402,7 +371,7 @@ def get_config_from_file(config_path: str) -> Config:
     # Make a nice dataclass from our yaml
     try:
         config = from_dict(
-            data_class=Config,
+            data_class=config_class,
             data=args,
             config=dacite.Config(
                 cast=[Path],
