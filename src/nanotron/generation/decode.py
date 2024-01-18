@@ -238,7 +238,7 @@ def decode_text(
                 for state_id, state in enumerate(decoder_states):
                     new_decoder_states.append(state)
                     # Get the new logits
-                    if not generation_config.use_cache:
+                    if generation_config.use_cache:
                         with attach_store(model=model, store=state.store):
                             # transpose: [sequence_length, batch_size, vocab_size] -> [batch_size, sequence_length, vocab_size]
                             sharded_logits = model(
