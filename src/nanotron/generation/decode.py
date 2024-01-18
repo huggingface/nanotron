@@ -12,7 +12,7 @@ from nanotron.config import BenchArgs, GenerationArgs
 from nanotron.distributed import ProcessGroup, get_global_rank
 from nanotron.generation.sampler import BasicSampler, GreedySampler, SamplerType, TopKSampler, TopPSampler
 from nanotron.helpers import log_throughput
-from nanotron.models.generate_store import Store, attach_store
+from nanotron.generation.generate_store import Store, attach_store
 from nanotron.models.llama import LlamaModel
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.pipeline_parallel.block import get_min_max_rank
