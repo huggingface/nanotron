@@ -2,7 +2,7 @@ import datetime
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Union, Type
+from typing import Optional, Type, Union
 
 import dacite
 import torch
@@ -17,15 +17,16 @@ from nanotron.config.utils_config import (
     cast_str_to_torch_dtype,
     serialize,
 )
+from nanotron.generation.sampler import SamplerType
+from nanotron.logging import get_logger
 from nanotron.parallel.pipeline_parallel.engine import (
     AllForwardAllBackwardPipelineEngine,
     PipelineEngine,
 )
 from nanotron.parallel.tensor_parallel.nn import TensorParallelLinearMode
-from nanotron.generation.sampler import SamplerType
-from nanotron.logging import get_logger
 
 logger = get_logger(__name__)
+
 
 @dataclass
 class BenchArgs:
@@ -33,7 +34,8 @@ class BenchArgs:
     sequence_length: int
     micro_batch_size: int
     batch_accumulation_per_replica: int
-    benchmark_csv_path: str 
+    benchmark_csv_path: str
+
 
 @dataclass
 class LoggingArgs:
@@ -322,7 +324,7 @@ class Config:
     tokens: TokensArgs
     optimizer: OptimizerArgs
     data: DataArgs
-    profiler: Optional[ProfilerArgs]
+    profiler: Optional[ProfilerArgs] = None
 
     def __post_init__(self):
         # Some final sanity checks across separate arguments sections:
