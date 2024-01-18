@@ -63,18 +63,17 @@ class RotaryEmbedding(nn.Module):
         # TODO @nouamane: Figure out why we can't set `DTypeInvariantTensor` ...
         # TODO @thomasw21: Complex buffers break DDP, instead we store float and view them as complex
         self.freqs_cis: torch.Tensor
-        self.register_buffer(
-            "freqs_cis",
-            torch.empty(self.end, self.dim // 2, 2, dtype=torch.float),
-            persistent=False,
-        )
         self._initialized_buffer = False
 
     def init_rotary_embeddings(self):
         if self._initialized_buffer is True:
             # Buffer if already initialized
             return
-
+        self.register_buffer(
+            "freqs_cis",
+            torch.empty(self.end, self.dim // 2, 2, dtype=torch.float, device="cuda"),
+            persistent=False,
+        )
         assert self.freqs_cis.device.type == "cuda"
         # TODO @nouamane: One we figure out how to do the DTypeInvariantTensor, this can be removed and changed to an assert
         if self.freqs_cis.dtype != torch.float:
@@ -97,9 +96,11 @@ class RotaryEmbedding(nn.Module):
         position_ids: Optional[torch.LongTensor],  # [batch_size, seq_length]
     ):
         batch_size, seq_length, num_heads, inner_dim = x.shape
-        if seq_length > self.end:
+        if (
+            position_ids[-1, -1] >= self.end or seq_length >= self.end
+        ):  # TODO @nouamane: check if this causes cpu-gpu sync
             self.end *= 2
-            self.init_rotary_embeddings()
+            self._initialized_buffer = False
         if self._initialized_buffer is False:
             self.init_rotary_embeddings()
         dtype = x.dtype
@@ -115,9 +116,7 @@ class RotaryEmbedding(nn.Module):
         else:
             # TODO(kunhao): Should None follow the num_heads dimension?
             if position_ids[-1, -1] < 0 or position_ids[-1, -1] >= self.end:  # Quick test hopefully
-                raise ValueError(
-                    f"Position ids must be in the range [0, {self.end}), but got {position_ids.min()} and {position_ids.max()}"
-                )
+                raise ValueError(f"Position ids must be in the range [0, {self.end}), but got {position_ids}")
             freqs_cis = self.freqs_cis[position_ids][:, :, None, :]
         complex_freqs = torch.view_as_complex(freqs_cis)
         x_out = torch.view_as_real(complex_x * complex_freqs).view(batch_size, seq_length, num_heads, inner_dim)
@@ -171,7 +170,8 @@ class MLP(nn.Module):
             bias=False,
             async_communication=tp_linear_async_communication and tp_mode is TensorParallelLinearMode.REDUCE_SCATTER,
         )
-        self.split_silu_mul = torch.jit.trace(GLUActivation(config.hidden_act))
+        # TODO @nouamane: why can't we torch.jit.script GLUActivation?
+        self.split_silu_mul = GLUActivation(config.hidden_act)
 
     def forward(self, hidden_states):  # [seq_length, batch_size, hidden_dim]
         merged_states = self.gate_up_proj(hidden_states)
