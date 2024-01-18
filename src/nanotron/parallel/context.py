@@ -28,10 +28,11 @@ class ParallelContext:
             "The total number of processes must be divisible by"
             "the number of GPUs per model (tensor_parallel_size * pipeline_parallel_size)."
         )
-        assert num_gpus_per_model * data_parallel_size == world_size, (
-            "The number of process requires to train all replicas",
-            "must be equal to the world size.",
-        )
+        if num_gpus_per_model * data_parallel_size != world_size:
+            raise ValueError(
+                f"The number of process requires to run all replicas ({num_gpus_per_model * data_parallel_size})",
+                f"must be equal to the world size ({world_size}).",
+            )
 
         if not dist.is_available():
             raise ValueError("`torch.distributed is not available as a package, please install it.")
