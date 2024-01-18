@@ -8,7 +8,7 @@ from nanotron import distributed as dist
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.data_parallel.utils import ddp_trigger_sync_in_bwd
 from nanotron.parallel.parameters import NanotronParameter
-from nanotron.utils import assert_tensor_synced_across_pg
+from nanotron.sanity_checks import assert_tensor_synced_across_pg
 from torch import nn
 from torch.distributed import GradBucket
 
