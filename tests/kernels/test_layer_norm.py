@@ -27,8 +27,7 @@ from torch.nn import LayerNorm
     "hidden_size",
     [1024, 1025],  # fused layer norm supports 1024 as hidden size but not 1025
 )
-@pytest.mark.parametrize("no_persist_layer_norm", [True, False])
-def test_fused_layer_norm(hidden_size, no_persist_layer_norm):
+def test_fused_layer_norm(hidden_size):
     BATCH_SIZE = 5
     SEQ_LEN = 128
     DEVICE, DTYPE = torch.device("cuda:0"), torch.float16
@@ -39,7 +38,6 @@ def test_fused_layer_norm(hidden_size, no_persist_layer_norm):
 
     fused_layer_norm = TritonLayerNorm(
         normalized_shape=inputs.size(-1),
-        no_persist_layer_norm=no_persist_layer_norm,
         device=DEVICE,
         dtype=DTYPE,
     )

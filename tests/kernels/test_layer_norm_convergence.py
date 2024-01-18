@@ -16,7 +16,6 @@ if __name__ == "__main__":
     SEQ_LEN = 2
     DEVICE, DTYPE = torch.device("cuda:0"), torch.float32
     HIDDEN_SIZE = 1024
-    NO_PERSIST_LAYER_NORM = True
     NUM_STEPS = 10_000
 
     inputs = torch.randn(BATCH_SIZE, SEQ_LEN, HIDDEN_SIZE, device=DEVICE, dtype=DTYPE)
@@ -24,7 +23,6 @@ if __name__ == "__main__":
     layer_norm = LayerNorm(normalized_shape=inputs.size(-1), device=DEVICE, dtype=DTYPE)
     fused_layer_norm = TritonLayerNorm(
         normalized_shape=inputs.size(-1),
-        no_persist_layer_norm=NO_PERSIST_LAYER_NORM,
         device=DEVICE,
         dtype=DTYPE,
     )
