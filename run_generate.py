@@ -4,7 +4,8 @@ Nanotron Inference Script
 Usage:
 ```
 export USE_FAST=1 # optional, for faster inference. Requires flash-attn
-torchrun --nproc_per_node=8 run_generate.py --pp 2 --tp 4 --ckpt-path checkpoints/10
+export CUDA_DEVICE_MAX_CONNECTIONS=1 # important for some distributed operations
+torchrun --nproc_per_node=4 run_generate.py --pp 1 --tp 4 --ckpt-path checkpoints/10
 ```
 """
 
@@ -190,7 +191,7 @@ def main():
         parallel_context=parallel_context,
         max_new_tokens=args.max_new_tokens,
         max_micro_batch_size=2,
-        generation_config=GenerationArgs(sampler="greedy", use_cache=False),
+        generation_config=GenerationArgs(sampler="greedy", use_cache=True),
         tokenizer_config=TokenizerConfig(max_input_length=None),
         is_bench=os.environ.get("USE_BENCH", "0") == "1",
     )
