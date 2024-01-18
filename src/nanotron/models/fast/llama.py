@@ -393,6 +393,8 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             position_offsets = position_ids[:, -1]
 
             # Compute rotary embeddings
+            #Note: keep track of old rotary embedding end to check if we need to enlarge k_cache and v_cache
+            old_rotary_embed_end = self.rotary_embedding.end
             query_states = self.rotary_embedding(query_states, position_ids=position_ids)
             key_states = self.rotary_embedding(key_states, position_ids=position_ids)
 
@@ -458,7 +460,39 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                 # Subsequent inference iterations (q_length=1)
                 k_cache = store["key"]
                 v_cache = store["value"]
-
+                
+                # NOTE(fmom): According to flash_attn_with_kvcache, "If you pass in k / v, you must make sure that the cache is large enough to hold the new values"
+                # Since rotary embedding has changed (to enable larger context), we need to enlarge k_cache and v_cache
+                if self.rotary_embedding.end > old_rotary_embed_end:
+                    k_cache = torch.cat([
+                        k_cache,
+                        torch.zeros(
+                        (
+                            batch_size,
+                            self.rotary_embedding.end - old_rotary_embed_end,
+                            self.n_local_kv_heads,
+                            self.d_qk,
+                        ),
+                        dtype=query_states.dtype,
+                        device=query_states.device,
+                    )], dim=1)
+                    
+                    v_cache = torch.cat([
+                        v_cache,
+                        torch.zeros(
+                        (
+                            batch_size,
+                            self.rotary_embedding.end - old_rotary_embed_end,
+                            self.n_local_kv_heads,
+                            self.d_v,
+                        ),
+                        dtype=query_states.dtype,
+                        device=query_states.device,
+                    )], dim=1)
+                    
+                assert k_cache.shape[1] == self.rotary_embedding.end, f"Cache size {k_cache.shape[1]} is smaller than rotary embedding end {self.rotary_embedding.end}"
+                assert  v_cache.shape[1] == self.rotary_embedding.end, f"Cache size {v_cache.shape[1]} is smaller than rotary embedding end {self.rotary_embedding.end}"
+                
                 # [batch_size, seq_length, num_heads, d_qk]
                 query_states = query_states.view(
                     batch_size, q_length, self.n_local_q_heads, self.d_qk
