@@ -4,8 +4,7 @@ from typing import List, Sequence, Tuple
 import torch
 from nanotron import distributed as dist
 from nanotron import logging
-from nanotron.utils import tensor_from_untyped_storage
-from nanotron.utils import get_untyped_storage
+from nanotron.utils import get_untyped_storage, tensor_from_untyped_storage
 
 logger = logging.get_logger(__name__)
 
@@ -34,7 +33,7 @@ IS_CONTIGUOUS_TO_ID = {value: id_ for id_, value in enumerate(ID_TO_IS_CONTIGUOU
 
 
 @dataclasses.dataclass
-class TensorMetaData:
+class P2PTensorMetaData:
     shape: Sequence[int]
     stride: Sequence[int]
     is_contiguous: bool
@@ -143,7 +142,7 @@ class P2P:
         self.second_metadata = torch.empty(SECOND_METADATA_SIZE, dtype=torch.long, device=self.device)
 
     def _send_first_metadata_p2p_op(self, tensor: torch.Tensor, to_rank: int, tag: int = 0) -> dist.P2POp:
-        first_metadata = TensorMetaData.to_first_metadata(tensor=tensor, device=self.device)
+        first_metadata = P2PTensorMetaData.to_first_metadata(tensor=tensor, device=self.device)
         return dist.P2POp(
             op=dist.isend,
             tensor=first_metadata,
@@ -163,7 +162,7 @@ class P2P:
         )
 
     def _send_second_metadata_p2p_op(self, tensor: torch.Tensor, to_rank: int, tag: int = 0) -> dist.P2POp:
-        second_metadata = TensorMetaData.to_second_metadata(tensor=tensor, device=self.device)
+        second_metadata = P2PTensorMetaData.to_second_metadata(tensor=tensor, device=self.device)
         return dist.P2POp(
             op=dist.isend,
             tensor=second_metadata,
@@ -194,7 +193,7 @@ class P2P:
         )
 
     def _recv_data_p2p_op(
-        self, tensor_metadata: TensorMetaData, from_rank: int, tag: int = 0
+        self, tensor_metadata: P2PTensorMetaData, from_rank: int, tag: int = 0
     ) -> Tuple[torch.Tensor, dist.P2POp]:
         tensor_buffer = tensor_metadata.create_empty_storage(self.device)
         return tensor_buffer, dist.P2POp(
@@ -243,7 +242,7 @@ class P2P:
             tag=tag,
         )
 
-    def _recv_meta(self, from_rank: int, tag: int) -> TensorMetaData:
+    def _recv_meta(self, from_rank: int, tag: int) -> P2PTensorMetaData:
         dist.recv(
             self.first_metadata,
             src=dist.get_global_rank(group=self.pg, group_rank=from_rank),
@@ -277,7 +276,7 @@ class P2P:
         shape = self.second_metadata[:num_shape]
         stride = self.second_metadata[num_shape:second_metadata_num_elements]
 
-        return TensorMetaData(
+        return P2PTensorMetaData(
             dtype=ID_TO_DTYPE[dtype_id],
             requires_grad=ID_TO_REQUIRES_GRAD[requires_grad_id],
             shape=shape,
@@ -441,7 +440,7 @@ class BatchTensorSendRecvState:
         second_metadatas = [tensor.tolist() for tensor in recv_second_metadata_buffers]
         return second_metadatas
 
-    def _send_recv_data(self, tensor_metadatas: List[TensorMetaData]) -> List[torch.Tensor]:
+    def _send_recv_data(self, tensor_metadatas: List[P2PTensorMetaData]) -> List[torch.Tensor]:
         # turn a list of tuples into a tuple of list
         recv_data_buffers, recv_data_ops = zip(
             *(
@@ -492,7 +491,7 @@ class BatchTensorSendRecvState:
         second_metadatas = self._send_recv_second_metadata(first_metadatas)
 
         tensor_metadatas = [
-            TensorMetaData.from_metadata(first_metadata, second_metadata)
+            P2PTensorMetaData.from_metadata(first_metadata, second_metadata)
             for first_metadata, second_metadata in zip(first_metadatas, second_metadatas)
         ]
 

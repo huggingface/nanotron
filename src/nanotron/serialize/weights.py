@@ -1,25 +1,26 @@
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple
 
 import dacite
 import torch
+from packaging.version import Version
+from safetensors.torch import safe_open, save_file
+from torch import nn
+from tqdm import tqdm
+
+from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.constants import CHECKPOINT_VERSION
-from nanotron import distributed as dist
 from nanotron.distributed import get_global_rank
-from nanotron.parallel.parameters import NanotronParameter, ShardedInfo, SlicesPair
-from nanotron.parallel import ParallelContext
 from nanotron.logging import log_rank
-from nanotron.serialize.metadata import CheckpointMetadata, TensorMetadata, TensorMetadataV2, load_meta
+from nanotron.parallel import ParallelContext
+from nanotron.parallel.parameters import NanotronParameter, ShardedInfo, SlicesPair
+from nanotron.serialize.metadata import CheckpointMetadata, TensorMetadata, load_meta
 from nanotron.serialize.utils import (
     ObjectType,
     get_path,
     get_tp_and_pp_rank_and_size_from,
 )
-from packaging.version import Version
-from safetensors.torch import safe_open, save_file
-from torch import nn
-from tqdm import tqdm
 
 logger = logging.get_logger(__name__)
 
@@ -67,7 +68,7 @@ def save_weights(model: nn.Module, parallel_context: ParallelContext, root_folde
                     world_rank=get_global_rank(group=group, group_rank=dist.get_rank(group)),
                     parallel_context=parallel_context,
                 )
-                metadata = TensorMetadataV2(
+                metadata = TensorMetadata(
                     version=CHECKPOINT_VERSION,
                     local_global_slices_pairs=sharded_info.local_global_slices_pairs,
                     unsharded_shape=sharded_info.unsharded_shape,
@@ -101,7 +102,7 @@ def read_checkpoint_version_from_shard_file(param_save_path: Path) -> Version:
     try:
         with safe_open(param_save_path, framework="pt", device=str("cpu")) as fi:
             param_metadata = fi.metadata()
-            param_metadata = TensorMetadataV2.from_str_dict(param_metadata)
+            param_metadata = TensorMetadata.from_str_dict(param_metadata)
             checkpoint_version = param_metadata.version
     except (dacite.exceptions.MissingValueError, dacite.exceptions.UnexpectedDataError):
         raise CheckpointVersionFromShardFileException()
@@ -130,43 +131,14 @@ def get_checkpoint_version(parallel_context, root_folder, param_save_path: Path)
     return checkpoint_version
 
 
-def load_sharded_param_v1_0(param_or_buffer: torch.Tensor, sharded_info: ShardedInfo, shards_path: List[Path]):
-    checkpoint_sharded_concat_dim = None
-    shards = []
-    for shard_path in shards_path:
-        with safe_open(shard_path, framework="pt", device=str(param_or_buffer.device)) as fi:
-            # TODO @thomasw21: Choose only a slice if we switch the TP topology
-            shards.append(fi.get_tensor("data"))
-            param_metadata = fi.metadata()
-            if checkpoint_sharded_concat_dim is None:
-                checkpoint_sharded_concat_dim = int(param_metadata["concat_dim"])
-            else:
-                assert checkpoint_sharded_concat_dim == int(param_metadata["concat_dim"])
-
-    assert checkpoint_sharded_concat_dim is not None
-    # TODO @thomasw21: Interestingly enough we don't actually need to instantiate the entire model at all.
-    unsharded_tensor = torch.cat(shards, dim=checkpoint_sharded_concat_dim)
-
-    # TODO(kunhao): check unsharded_tensor is fully filled
-    for slices_pair in sharded_info.local_global_slices_pairs:
-        local_slices = slices_pair.local_slices
-        global_slices = slices_pair.global_slices
-        param_or_buffer[local_slices] = unsharded_tensor[global_slices]
-
-
-def load_sharded_param_w_metadataclass(
-    meta_dataclass: Union[TensorMetadata, TensorMetadataV2],
-    param_or_buffer: torch.Tensor,
-    sharded_info: ShardedInfo,
-    shards_path: List[Path],
-):
+def load_sharded_param_latest(param_or_buffer: torch.Tensor, sharded_info: ShardedInfo, shards_path: List[Path]):
     checkpoint_unsharded_shape = None
     shards_and_slices_maps: List[Tuple[torch.Tensor, Tuple[SlicesPair, ...]]] = []
     for shard_path in shards_path:
         with safe_open(shard_path, framework="pt", device=str(param_or_buffer.device)) as fi:
             # TODO @thomasw21: Choose only a slice if we switch the TP topology
             param_metadata = fi.metadata()
-            param_metadata = meta_dataclass.from_str_dict(param_metadata)
+            param_metadata = TensorMetadata.from_str_dict(param_metadata)
             shards_and_slices_maps.append((fi.get_tensor("data"), param_metadata.local_global_slices_pairs))
             if checkpoint_unsharded_shape is None:
                 checkpoint_unsharded_shape = param_metadata.unsharded_shape
@@ -187,24 +159,6 @@ def load_sharded_param_w_metadataclass(
         local_slices = slices_pair.local_slices
         global_slices = slices_pair.global_slices
         param_or_buffer[local_slices] = unsharded_tensor[global_slices]
-
-
-def load_sharded_param_v1_1(param_or_buffer: torch.Tensor, sharded_info: ShardedInfo, shards_path: List[Path]):
-    load_sharded_param_w_metadataclass(
-        meta_dataclass=TensorMetadata,
-        param_or_buffer=param_or_buffer,
-        sharded_info=sharded_info,
-        shards_path=shards_path,
-    )
-
-
-def load_sharded_param_latest(param_or_buffer: torch.Tensor, sharded_info: ShardedInfo, shards_path: List[Path]):
-    load_sharded_param_w_metadataclass(
-        meta_dataclass=TensorMetadataV2,
-        param_or_buffer=param_or_buffer,
-        sharded_info=sharded_info,
-        shards_path=shards_path,
-    )
 
 
 def load_weights(
@@ -313,15 +267,7 @@ def load_weights(
                             current_checkpoint_version == checkpoint_version
                         ), f"Checkpoint version mismatch at {shards_path[0]}."
 
-                if checkpoint_version <= Version("1.0"):
-                    load_sharded_param_v1_0(
-                        param_or_buffer=param_or_buffer, sharded_info=sharded_info, shards_path=shards_path
-                    )
-                elif checkpoint_version <= Version("1.1"):
-                    load_sharded_param_v1_1(
-                        param_or_buffer=param_or_buffer, sharded_info=sharded_info, shards_path=shards_path
-                    )
-                elif checkpoint_version <= CHECKPOINT_VERSION:
+                if checkpoint_version <= CHECKPOINT_VERSION:
                     load_sharded_param_latest(
                         param_or_buffer=param_or_buffer, sharded_info=sharded_info, shards_path=shards_path
                     )
