@@ -1,9 +1,10 @@
 from pathlib import Path
 
 import torch
+
 from nanotron import distributed as dist
-from nanotron.random import RandomStates
 from nanotron.parallel import ParallelContext
+from nanotron.random import RandomStates
 
 
 def save_random_states(

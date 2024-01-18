@@ -5,10 +5,10 @@ import torch
 from helpers.exception import assert_fail_except_rank_with
 from helpers.utils import available_gpus, init_distributed
 from nanotron import distributed as dist
+from nanotron.parallel import ParallelContext
 from nanotron.parallel.data_parallel.utils import ddp_trigger_sync_in_bwd
 from nanotron.parallel.parameters import NanotronParameter
 from nanotron.utils import assert_tensor_synced_across_pg
-from nanotron.parallel import ParallelContext
 from torch import nn
 from torch.distributed import GradBucket
 

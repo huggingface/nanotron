@@ -5,8 +5,8 @@ import torch
 from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.distributed import ProcessGroup
-from nanotron.optim.gradient_accumulator import GradientAccumulator
 from nanotron.logging import log_rank
+from nanotron.optim.gradient_accumulator import GradientAccumulator
 from nanotron.parallel.data_parallel.utils import ddp_trigger_sync_in_bwd
 from nanotron.parallel.pipeline_parallel.context_manager import attach_pipeline_state_to_model
 from nanotron.parallel.pipeline_parallel.state import PipelineTrainBatchState

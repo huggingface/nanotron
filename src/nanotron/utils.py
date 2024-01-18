@@ -1,13 +1,9 @@
 import functools
 import inspect
+import math
 import os
 from contextlib import ExitStack, contextmanager
 from typing import Callable, ContextManager, List, Optional
-import math
-from typing import Callable
-
-import torch
-
 
 import torch
 from packaging import version
@@ -15,7 +11,6 @@ from torch import nn
 from torch.utils.checkpoint import checkpoint
 
 from nanotron import distributed as dist
-from nanotron.distributed import get_global_rank
 
 
 class ContextManagers:
@@ -125,6 +120,7 @@ def get_untyped_storage(tensor: torch.Tensor) -> torch.UntypedStorage:
         return tensor.untyped_storage()
     else:
         return tensor.storage().untyped()
+
 
 def init_method_normal(sigma: float) -> Callable[[torch.Tensor], None]:
     """Init method based on N(0, sigma)."""

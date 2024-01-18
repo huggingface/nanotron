@@ -2,20 +2,21 @@ from pathlib import Path
 from typing import Optional
 
 import torch
-from nanotron import logging
-from nanotron.config import Config
+from torch import nn
+from torch.nn.parallel import DistributedDataParallel
+
 from nanotron import distributed as dist
+from nanotron import logging
 from nanotron import optim as optim
+from nanotron.config import Config
 from nanotron.distributed import get_global_rank
+from nanotron.logging import log_rank
+from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter
 from nanotron.sanity_checks import assert_tensor_synced_across_pg
-from nanotron.parallel import ParallelContext
-from nanotron.logging import log_rank
 from nanotron.serialize.metadata import CheckpointMetadata, load_meta, save_meta
 from nanotron.serialize.optimizer import load_lr_scheduler, load_optimizer, save_lr_scheduler, save_optimizer
 from nanotron.serialize.weights import load_weights, save_weights
-from torch import nn
-from torch.nn.parallel import DistributedDataParallel
 
 """
 We're going to use safetensors. The reason is that loading segments is going to be much easier

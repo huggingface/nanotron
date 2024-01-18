@@ -1,1 +1,2 @@
-from .base import NanotronModel, check_model_has_grad, DTypeInvariantTensor, init_on_device_and_dtype, build_model
+# flake8: noqa
+from .base import DTypeInvariantTensor, NanotronModel, build_model, check_model_has_grad, init_on_device_and_dtype

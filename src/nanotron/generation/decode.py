@@ -10,14 +10,14 @@ from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.config import BenchArgs, GenerationArgs
 from nanotron.distributed import ProcessGroup, get_global_rank
+from nanotron.generation.generate_store import Store, attach_store
 from nanotron.generation.sampler import BasicSampler, GreedySampler, SamplerType, TopKSampler, TopPSampler
 from nanotron.helpers import log_throughput
-from nanotron.generation.generate_store import Store, attach_store
 from nanotron.models.llama import LlamaModel
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.pipeline_parallel.block import get_min_max_rank
 from nanotron.parallel.pipeline_parallel.context_manager import attach_pipeline_state_to_model
-from nanotron.parallel.pipeline_parallel.p2p import P2P, P2PTensorMetaData, view_as_contiguous
+from nanotron.parallel.pipeline_parallel.p2p import P2PTensorMetaData, view_as_contiguous
 from nanotron.parallel.pipeline_parallel.state import PipelineEvalBatchState
 from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
 from nanotron.utils import get_untyped_storage

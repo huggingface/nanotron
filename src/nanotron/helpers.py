@@ -9,6 +9,13 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
+from torch import nn
+from torch.nn.parallel import DistributedDataParallel
+from torch.optim import AdamW
+from torch.optim.lr_scheduler import LambdaLR
+from torch.profiler import ProfilerActivity, profile, tensorboard_trace_handler
+
+from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.config import (
     Config,
@@ -16,20 +23,21 @@ from nanotron.config import (
     OptimizerArgs,
     ParallelismArgs,
 )
-from nanotron import distributed as dist
 from nanotron.distributed import ProcessGroup
+from nanotron.logging import LogItem, log_rank
+from nanotron.optim.base import BaseOptimizer, Optimizer
 from nanotron.optim.gradient_accumulator import (
     FP32GradBucketManager,
     FP32GradientAccumulator,
     GradientAccumulator,
     get_fp32_accum_hook,
 )
-from nanotron.optim.base import BaseOptimizer, Optimizer
 from nanotron.optim.named_optimizer import NamedOptimizer
 from nanotron.optim.optimizer_from_gradient_accumulator import (
     OptimizerFromGradientAccumulator,
 )
 from nanotron.optim.zero import ZeroDistributedOptimizer
+from nanotron.parallel import ParallelContext
 from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelLinearMode,
 )
@@ -38,13 +46,6 @@ from nanotron.random import (
     get_current_random_state,
     get_synced_random_state,
 )
-from nanotron.parallel import ParallelContext
-from nanotron.logging import LogItem, log_rank
-from torch import nn
-from torch.nn.parallel import DistributedDataParallel
-from torch.optim import AdamW
-from torch.optim.lr_scheduler import LambdaLR
-from torch.profiler import ProfilerActivity, profile, tensorboard_trace_handler
 
 logger = logging.get_logger(__name__)
 

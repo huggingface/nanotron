@@ -16,12 +16,7 @@ import torch
 from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.config import GenerationArgs, LoggingArgs, ParallelismArgs, get_config_from_file
-from nanotron.generation.decode import (
-    GenerationInput,
-    TokenizerConfig,
-    decode_text,
-    decode_tokenized
-)
+from nanotron.generation.decode import GenerationInput, TokenizerConfig, decode_text, decode_tokenized
 from nanotron.logging import log_rank, set_logger_verbosity_format
 from nanotron.models import build_model
 from nanotron.parallel import ParallelContext
@@ -40,7 +35,7 @@ from nanotron.random import (
 from nanotron.serialize import (
     load_weights,
 )
-from nanotron.trainer import CONFIG_TO_MODEL_CLASS, DistributedTrainer, mark_tied_parameters
+from nanotron.trainer import CONFIG_TO_MODEL_CLASS, mark_tied_parameters
 
 try:
     from transformers import AutoTokenizer
@@ -181,8 +176,6 @@ def main():
             tokenizer=tokenizer,
             # TODO @thomasw21: From ModelWithLoss extract the model.
             model=model.model,
-            # TODO @thomasw21: Figure out how to pass p2p.
-            p2p=model.model.p2p,
             parallel_context=parallel_context,
             max_new_tokens=args.max_new_tokens,
             max_micro_batch_size=2,
@@ -192,16 +185,15 @@ def main():
         )
     else:
         decode_tokenized(
-        input_ids: torch.zeros(),
-        input_mask: Tensor,
-        model: LlamaModel,
-        p2p=model.model.p2p,
-        parallel_context=parallel_context,
-        generation_config=GenerationArgs(sampler="greedy", use_cache=True),
-        max_micro_batch_size=1,
-        max_new_tokens=12,
-        returns_logits = False)
-        
+            input_ids=torch.zeros(1, 1),
+            input_mask=torch.ones(1, 1),
+            model=model.model,
+            parallel_context=parallel_context,
+            generation_config=GenerationArgs(sampler="greedy", use_cache=True),
+            max_micro_batch_size=1,
+            max_new_tokens=12,
+            returns_logits=False,
+        )
 
     dist.barrier()
 

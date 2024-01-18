@@ -29,6 +29,7 @@ logger = get_logger(__name__)
 
 DEFAULT_SEED = 42
 
+
 @dataclass
 class BenchArgs:
     model_name: str
@@ -102,6 +103,7 @@ class DataArgs:
     def __post_init__(self):
         if self.seed is None:
             self.seed = DEFAULT_SEED
+
 
 @dataclass
 class CheckpointsArgs:

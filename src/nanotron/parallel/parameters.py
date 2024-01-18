@@ -2,11 +2,10 @@ import dataclasses
 from typing import Any, Dict, Optional, Tuple
 
 import torch
+from torch import nn
+
 from nanotron import distributed as dist
 from nanotron import logging
-from nanotron.parallel import ParallelContext
-from nanotron.models.base import NanotronModel
-from torch import nn
 
 logger = logging.get_logger(__name__)
 

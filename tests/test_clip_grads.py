@@ -10,6 +10,7 @@ from nanotron.optim.clip_grads import clip_grad_norm
 from nanotron.optim.gradient_accumulator import (
     FP32GradientAccumulator,
 )
+from nanotron.parallel import ParallelContext
 from nanotron.parallel.model import initial_sync
 from nanotron.parallel.parameters import NanotronParameter, sanity_check
 from nanotron.parallel.pipeline_parallel.engine import (
@@ -25,7 +26,6 @@ from nanotron.parallel.tied_parameters import (
     tie_parameters,
 )
 from nanotron.utils import assert_tensor_synced_across_pg, init_on_device_and_dtype
-from nanotron.parallel import ParallelContext
 from torch import nn
 
 

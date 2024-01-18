@@ -1,19 +1,19 @@
 from abc import ABCMeta, abstractmethod
-from typing import Optional, TYPE_CHECKING, Callable, List
 from contextlib import contextmanager
-import torch
-import numpy as np
+from typing import TYPE_CHECKING, Callable, List, Optional
 
-from nanotron import logging
-from nanotron import distributed as dist
-from nanotron.distributed import ProcessGroup
-from nanotron.logging import log_rank
-from nanotron.parallel import ParallelContext
-from nanotron.parallel.pipeline_parallel.block import PipelineBlock
+import numpy as np
+import torch
 from torch import nn
 
+from nanotron import distributed as dist
+from nanotron import logging
+from nanotron.distributed import ProcessGroup
+from nanotron.logging import log_rank
+from nanotron.parallel.context import ParallelContext
+from nanotron.parallel.pipeline_parallel.block import PipelineBlock
+
 if TYPE_CHECKING:
-    from nanotron.parallel import ParallelContext
     from nanotron.config import NanotronConfigs
 
 logger = logging.get_logger(__name__)
@@ -144,9 +144,7 @@ def build_model(
         pp_size = len(target_pp_ranks)
 
     # Set rank for each pipeline block
-    log_rank(
-        "Setting PP block ranks..", logger=logger, level=logging.INFO, rank=0, group=parallel_context.world_pg
-    )
+    log_rank("Setting PP block ranks..", logger=logger, level=logging.INFO, rank=0, group=parallel_context.world_pg)
     pipeline_blocks = [module for name, module in model.named_modules() if isinstance(module, PipelineBlock)]
     # "cuda" is already defaulted for each process to it's own cuda device
     with init_on_device_and_dtype(device=device, dtype=dtype):

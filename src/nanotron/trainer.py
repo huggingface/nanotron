@@ -8,7 +8,6 @@ from pathlib import Path
 from pprint import pformat
 from typing import Callable, Dict, Iterable, Iterator, List, Optional, Tuple, Type, Union
 
-import numpy as np
 import torch
 from torch.nn.parallel import DistributedDataParallel
 
@@ -31,12 +30,13 @@ from nanotron.helpers import (
     lr_scheduler_builder,
 )
 from nanotron.logging import LoggerWriter, LogItem, human_format, log_rank, set_logger_verbosity_format
-from nanotron.models import NanotronModel, check_model_has_grad, build_model
+from nanotron.models import NanotronModel, build_model, check_model_has_grad
+from nanotron.models.llama import LlamaForTraining, RotaryEmbedding
+from nanotron.models.starcoder2 import Starcoder2ForTraining
 from nanotron.optim.clip_grads import clip_grad_norm
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.data_parallel.utils import sync_gradients_across_dp
 from nanotron.parallel.parameters import NanotronParameter, sanity_check
-from nanotron.parallel.pipeline_parallel.block import PipelineBlock
 from nanotron.parallel.pipeline_parallel.engine import (
     PipelineEngine,
 )
@@ -71,9 +71,6 @@ from nanotron.serialize import (
     save_random_states,
 )
 from nanotron.utils import init_method_normal, scaled_init_method_normal
-
-from nanotron.models.llama import LlamaForTraining, RotaryEmbedding
-from nanotron.models.starcoder2 import Starcoder2ForTraining
 
 logger = logging.get_logger(__name__)
 

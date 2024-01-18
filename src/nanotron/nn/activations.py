@@ -21,7 +21,6 @@ from torch import Tensor, nn
 
 from nanotron import logging
 
-
 logger = logging.get_logger(__name__)
 
 

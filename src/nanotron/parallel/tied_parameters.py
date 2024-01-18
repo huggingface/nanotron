@@ -1,14 +1,15 @@
 from collections import OrderedDict
 from typing import Dict, List, Optional, Tuple
 
+from torch import nn
+
+from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.logging import log_rank
-from nanotron import distributed as dist
 from nanotron.optim.gradient_accumulator import GradientAccumulator
+from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter
 from nanotron.utils import get_parameter_and_parent_module
-from nanotron.parallel import ParallelContext
-from torch import nn
 
 logger = logging.get_logger(__name__)
 
