@@ -348,7 +348,7 @@ def find_optim_index_from_param_name(
     # NOTE: (pp_rank, dp_rank, tp_rank) or (pp_rank, tp_rank)
     ckp_sharded_optim_states: Union[Tuple[Tuple[int, int, int], torch.Tensor], Tuple[Tuple[int, int], torch.Tensor]],
     is_zero1: bool,
-):
+) -> int:
     param_name = param_name.replace("module.", "")
     # NOTE: since all shards have the same optim state names
     # so we take the first shard
@@ -421,7 +421,6 @@ def merge_dp_shard_in_zero1_optimizer(
     def assign_shard_to_buffer(buffer, offset, value):
         offset_start, offset_end = map(int, offset)
         buffer[offset_start:offset_end] = value
-        return buffer
 
     param_names = sorted(model.state_dict().keys(), key=lambda x: x)
     ckp_merged_dp_shards_optim_states = {}

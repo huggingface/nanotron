@@ -9,6 +9,7 @@ from nanotron.core.optim.zero import (
     ZeroDistributedOptimizer,
     extract_parallel_ranks_from_shard_path,
     find_optim_index_from_param_name,
+    get_sliced_tensor,
     merge_dp_shard_in_zero1_optimizer,
 )
 from nanotron.core.parallel.parameters import NanotronParameter
@@ -18,7 +19,7 @@ from nanotron.serialize.utils import ObjectType, merge_and_shard_tp_tensors
 from torch import nn
 from tqdm import tqdm
 
-OPTIM_TO_ADAM_STATES = {
+OPTIM_TO_OPTIM_STATE_NAMES = {
     "AdamW": ["exp_avg", "exp_avg_sq"],
 }
 
@@ -45,6 +46,10 @@ def save_optimizer(
     - If Zero-0 is used, optimizer states are replicated across all DPs. Only DP-0 saves the states
     - If Zero-1 is used, optimizer states are sharded across all DPs. Each DP saves its own states
     """
+    if (not optimizer.inherit_from(optim.ZeroDistributedOptimizer)) and dist.get_rank(parallel_context.dp_pg) > 0:
+        # this is Zero-0, so only DP-0 saves the optimizer states
+        return
+
     # TODO @thomasw21: Figure out if I need to save param groups. Right now I'm assuming no as we only store what's trainable
     # TODO @thomasw21: We can probably "rotate" so that every process stores something (maybe doesn't matter if we're I/O bound)
     root_folder = root_folder / "optimizer"
@@ -90,10 +95,6 @@ def save_optimizer(
 
             json.dump(config, fo)
 
-    if (not optimizer.inherit_from(optim.ZeroDistributedOptimizer)) and dist.get_rank(parallel_context.dp_pg) > 0:
-        # this is Zero-0, so only DP-0 saves the optimizer states
-        return
-
     # We dump the optimizer state using `torch.save`
     torch.save(
         optimizer.state_dict(),
@@ -128,7 +129,9 @@ def load_optimizer(
     parallel_context: ParallelContext,
     root_folder: Path,
     map_location: Optional[str] = None,
-    param_shard_metadata: Tuple[Tuple[int, int], Union[TensorMetadata, TensorMetadataV2]] = None,
+    param_shard_metadata: Tuple[
+        Tuple[int, int], Union[TensorMetadata, TensorMetadataV2]
+    ] = None,  # (pp_rank, tp_rank) -> TensorMetadata
     model: Optional[nn.Module] = None,
 ):
     root_folder = root_folder / "optimizer"
@@ -153,16 +156,16 @@ def load_optimizer(
 
         def get_optimizer_states(optimizer: optim.BaseOptimizer) -> List[str]:
             optim_cls_name = optimizer.get_base_optimizer().__class__.__name__
-            return OPTIM_TO_ADAM_STATES[optim_cls_name]
+            return OPTIM_TO_OPTIM_STATE_NAMES[optim_cls_name]
 
-        OPTIMIZER_STATES = get_optimizer_states(optimizer)
+        OPTIMIZER_STATE_NAMES = get_optimizer_states(optimizer)
         ckp_pp_size = ckp_optimizer_config["parallelism"]["pp_size"]
         ckp_tp_size = ckp_optimizer_config["parallelism"]["tp_size"]
         ckp_optim_type = ckp_optimizer_config["type"]
 
-        # NOTE: if the checkpoint is from a Zero-1 optimizer, then we need to merge the shards
-        # across data parallel dimension, before merging the shards across tensor parallel dimension
         if ckp_optim_type == ZeroDistributedOptimizer.__name__:
+            # NOTE: if the checkpoint is from a Zero-1 optimizer, then we need to merge the shards
+            # across data parallel dimension, before merging the shards across tensor parallel dimension
             ckp_dp_size = ckp_optimizer_config["parallelism"]["dp_size"]
             shard_paths = list(
                 root_folder.glob(
@@ -170,7 +173,7 @@ def load_optimizer(
                 )
             )
             ckp_sharded_optim_states = merge_dp_shard_in_zero1_optimizer(
-                model, ckp_optimizer_config, OPTIMIZER_STATES, shard_paths, parallel_context, map_location
+                model, ckp_optimizer_config, OPTIMIZER_STATE_NAMES, shard_paths, parallel_context, map_location
             )
         else:
             # NOTE: if the checkpoint is from a Zero-0 optimizer, then we don't need to merge the shards
@@ -213,7 +216,7 @@ def load_optimizer(
                 )
 
                 new_optim_state_dict["state"][optim_state_index] = {}
-                for state_key in OPTIMIZER_STATES:
+                for state_key in OPTIMIZER_STATE_NAMES:
                     # TODO(xrsrke): free the memory of the shards that isn't
                     # corresponding to the current rank
                     buffer = torch.zeros_like(param, device="cuda")
@@ -263,15 +266,12 @@ def load_optimizer(
 
     if isinstance(optimizer, ZeroDistributedOptimizer):
         # NOTE: if the optimizer is ZeRO-1, now we shard the optimizer states across data parallel dimension
-        from nanotron.core.optim.zero import get_sliced_tensor
-
         current_dp_rank = dist.get_rank(parallel_context.dp_pg)
         for param_index in state_dict["state"]:
             param_name = [name for idx, name in state_dict["names"].items() if idx == param_index][0]
-            for state_name in OPTIMIZER_STATES:
+            for state_name in OPTIMIZER_STATE_NAMES:
                 sliced_tensor = get_sliced_tensor(
                     param=state_dict["state"][param_index][state_name],
-                    # NOTE: name is string
                     start_offset=optimizer.param_name_to_dp_rank_offsets[param_name][current_dp_rank][0],
                     end_offset=optimizer.param_name_to_dp_rank_offsets[param_name][current_dp_rank][1],
                 )
