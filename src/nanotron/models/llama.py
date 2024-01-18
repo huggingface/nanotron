@@ -112,6 +112,8 @@ class RotaryEmbedding(nn.Module):
             position_ids is not None and position_ids[-1, -1] >= self.end
         ) or seq_length >= self.end:  # TODO @nouamane: check if this causes cpu-gpu sync
             self.end *= 2
+            #NOTE(fmom): Update size of freqs_cis buffer as well 
+            self.freqs_cis = torch.empty(self.end, self.dim // 2, 2, dtype=torch.float).to(self.freqs_cis.device)
             self._initialized_buffer = False
         if self._initialized_buffer is False:
             self.init_rotary_embeddings()
