@@ -20,13 +20,10 @@ We support the following:
 
 <!-- ls examples/
 config_nouamane_llama_tflops.yaml  config_tiny_llama.py  config_tiny_llama.yaml  train_tiny_llama.sh -->
-In the `/examples` directory, you can find an example configuration file, and a script to run it. You can run it using `torchrun`:
+In the `/examples` directory, you can find an example configuration file, and a script to run it. You can run it using:
 ```bash
 torchrun --nproc_per_node=8 run_train.py --config-file examples/config_tiny_llama.yaml
-torchrun --nproc_per_node=8 run_train.py --config-file examples/config_tiny_llama.py
 ```
-<!-- here I should explain that user can use USE_FAST=1 CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node=8 run_train.py --config-file examples/config_nouamane_llama_tflops.yaml -->
-*
 
 > Note: Most examples include a slow modeling (No dependencies, only Pytorch), and a fast modeling (Flash Attention, ...). Make sure to install the dependencies if you want to run the fast modeling, then set the env `export USE_FAST=1`
 
