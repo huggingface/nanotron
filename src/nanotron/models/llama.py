@@ -74,11 +74,6 @@ class RotaryEmbedding(nn.Module):
         # TODO @nouamane: Figure out why we can't set `DTypeInvariantTensor` ...
         # TODO @thomasw21: Complex buffers break DDP, instead we store float and view them as complex
         self.freqs_cis: torch.Tensor
-        self.register_buffer(
-            "freqs_cis",
-            torch.empty(self.end, self.dim // 2, 2, dtype=torch.float),
-            persistent=False,
-        )
         self._initialized_buffer = False
 
     def init_rotary_embeddings(self):
@@ -86,6 +81,11 @@ class RotaryEmbedding(nn.Module):
             # Buffer if already initialized
             return
 
+        self.register_buffer(
+            "freqs_cis",
+            torch.empty(self.end, self.dim // 2, 2, dtype=torch.float, device="cuda"),
+            persistent=False,
+        )
         assert self.freqs_cis.device.type == "cuda"
         # TODO @nouamane: One we figure out how to do the DTypeInvariantTensor, this can be removed and changed to an assert
         if self.freqs_cis.dtype != torch.float:
@@ -112,8 +112,6 @@ class RotaryEmbedding(nn.Module):
             position_ids is not None and position_ids[-1, -1] >= self.end
         ) or seq_length >= self.end:  # TODO @nouamane: check if this causes cpu-gpu sync
             self.end *= 2
-            #NOTE(fmom): Update size of freqs_cis buffer as well 
-            self.freqs_cis = torch.empty(self.end, self.dim // 2, 2, dtype=torch.float).to(self.freqs_cis.device)
             self._initialized_buffer = False
         if self._initialized_buffer is False:
             self.init_rotary_embeddings()
