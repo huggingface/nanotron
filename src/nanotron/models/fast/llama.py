@@ -23,10 +23,17 @@ from flash_attn.flash_attn_interface import (
     flash_attn_with_kvcache,
 )
 from flash_attn.layers.rotary import RotaryEmbedding as FlashRotaryEmbedding
-from nanotron.config import ParallelismArgs, RecomputeGranularity
+from torch import nn
+from transformers import LlamaConfig
+from transformers.activations import ACT2FN
+
 from nanotron import distributed as dist
 from nanotron import logging
+from nanotron.config import ParallelismArgs, RecomputeGranularity
+from nanotron.fused.layer_norm import TritonRMSNorm
 from nanotron.logging import log_rank
+from nanotron.models import AttachableStore, NanotronModel
+from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter
 from nanotron.parallel.pipeline_parallel.block import (
     PipelineBlock,
@@ -42,12 +49,6 @@ from nanotron.parallel.tensor_parallel.nn import (
 )
 from nanotron.random import RandomStates
 from nanotron.utils import checkpoint_method
-from nanotron.parallel import ParallelContext
-from nanotron.fused.layer_norm import TritonRMSNorm
-from nanotron.models import AttachableStore, NanotronModel
-from torch import nn
-from transformers import LlamaConfig
-from transformers.activations import ACT2FN
 
 logger = logging.get_logger(__name__)
 
@@ -95,9 +96,12 @@ class RotaryEmbedding(nn.Module):
         x: torch.Tensor,  # [batch_size, seq_length, num_heads, d_qk]
         position_ids: Optional[torch.LongTensor],  # [batch_size, seq_length]
     ):
+        batch_size, seq_length, num_heads, inner_dim = x.shape
+        if seq_length > self.end:
+            self.end *= 2
+            self.init_rotary_embeddings()
         if self._initialized_buffer is False:
             self.init_rotary_embeddings()
-        batch_size, seq_length, num_heads, inner_dim = x.shape
         dtype = x.dtype
         assert inner_dim % 2 == 0
         x = x.view(
@@ -167,7 +171,7 @@ class MLP(nn.Module):
             bias=False,
             async_communication=tp_linear_async_communication and tp_mode is TensorParallelLinearMode.REDUCE_SCATTER,
         )
-        self.split_silu_mul = torch.jit.script(GLUActivation(config.hidden_act))
+        self.split_silu_mul = torch.jit.trace(GLUActivation(config.hidden_act))
 
     def forward(self, hidden_states):  # [seq_length, batch_size, hidden_dim]
         merged_states = self.gate_up_proj(hidden_states)
