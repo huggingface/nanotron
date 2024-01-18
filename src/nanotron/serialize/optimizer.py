@@ -237,9 +237,10 @@ def load_optimizer(
                         new_optim_state_dict["state"][optim_state_index][state_key] = merge_and_shard_tp_tensors(
                             buffer,
                             unsharded_buffer,
-                            ckp_shard_data,
+                            [
+                                (ckp_shard_data, ckp_shard_metadata.local_global_slices_pairs),
+                            ],
                             new_shard_metadata,
-                            ckp_shard_metadata,
                         )
 
                         if ckp_optim_type == ZeroDistributedOptimizer.__name__:

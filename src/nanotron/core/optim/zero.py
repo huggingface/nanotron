@@ -484,9 +484,9 @@ def merge_dp_shard_in_zero1_optimizer(
         # NOTE: we remove the gradient_accumulator key from sanity check
         # because we don't merge gradient_accumulator states
         missing_keys = set(ckp_optim_state.keys()) - set(ckp_sharded_optim_states[(pp_rank, 0, tp_rank)].keys())
-        assert len(missing_keys) == 0 - {
-            "gradient_accumulator"
-        }, "Expected the merged dp shards to have the same keys as the original dp shards, but merged dp shard misses: {}".format(
+        assert (
+            len(missing_keys - {"gradient_accumulator"}) == 0
+        ), "Expected the merged dp shards to have the same keys as the original dp shards, but merged dp shard misses: {}".format(
             missing_keys
         )
 

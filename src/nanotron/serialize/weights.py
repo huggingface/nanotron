@@ -16,6 +16,7 @@ from nanotron.serialize.utils import (
     extract_tp_pp_rank_from_shard_path,
     get_path,
     get_tp_and_pp_rank_and_size_from,
+    merge_and_shard_tp_tensors,
 )
 from packaging.version import Version
 from safetensors.torch import safe_open, save_file
@@ -187,17 +188,13 @@ def load_sharded_param_w_metadataclass(
     assert checkpoint_unsharded_shape is not None
     # TODO @thomasw21: Interestingly enough we don't actually need to instantiate the entire model at all.
     unsharded_tensor = torch.empty(checkpoint_unsharded_shape, device=param_or_buffer.device)
-    for shard, slices_pairs in shards_and_slices_maps:
-        for slices_pair in slices_pairs:
-            local_slices = slices_pair.local_slices
-            global_slices = slices_pair.global_slices
-            unsharded_tensor[global_slices] = shard[local_slices]
 
-    # TODO(kunhao): check unsharded_tensor is fully filled
-    for slices_pair in sharded_info.local_global_slices_pairs:
-        local_slices = slices_pair.local_slices
-        global_slices = slices_pair.global_slices
-        param_or_buffer[local_slices] = unsharded_tensor[global_slices]
+    merge_and_shard_tp_tensors(
+        buffer=param_or_buffer,
+        unsharded_buffer=unsharded_tensor,
+        shards_and_slices_maps=shards_and_slices_maps,
+        shard_metadata=sharded_info,
+    )
 
 
 def load_sharded_param_v1_1(param_or_buffer: torch.Tensor, sharded_info: ShardedInfo, shards_path: List[Path]):
