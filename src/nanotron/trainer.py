@@ -2,15 +2,17 @@ import datetime
 import json
 import os
 import shutil
-import sys
 import time
 from dataclasses import asdict
 from pathlib import Path
 from pprint import pformat
-from typing import Callable, Dict, Iterable, Iterator, List, Optional, Tuple, Union, Type
+from typing import Callable, Dict, Iterable, Iterator, List, Optional, Tuple, Type, Union
 
 import numpy as np
 import torch
+from torch.nn.parallel import DistributedDataParallel
+
+from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.config import (
     Config,
@@ -19,8 +21,19 @@ from nanotron.config import (
     RandomInit,
     get_config_from_file,
 )
-from nanotron import distributed as dist
+from nanotron.dataloader import sanity_check_dataloader
+from nanotron.helpers import (
+    _vocab_size_with_padding,
+    get_profiler,
+    init_optimizer_and_grad_accumulator,
+    init_random_states,
+    log_throughput,
+    lr_scheduler_builder,
+)
+from nanotron.logging import LoggerWriter, LogItem, human_format, log_rank, set_logger_verbosity_format
+from nanotron.models import NanotronModel
 from nanotron.optim.clip_grads import clip_grad_norm
+from nanotron.parallel import ParallelContext
 from nanotron.parallel.data_parallel.utils import sync_gradients_across_dp
 from nanotron.parallel.parameters import NanotronParameter, check_model_has_grad, sanity_check
 from nanotron.parallel.pipeline_parallel.block import PipelineBlock
@@ -42,26 +55,12 @@ from nanotron.parallel.tied_parameters import (
 from nanotron.random import (
     set_random_seed,
 )
-from nanotron.utils import init_method_normal, scaled_init_method_normal, init_on_device_and_dtype
-from nanotron.sanity_checks import assert_tensor_synced_across_pg
-from nanotron.dataloader import sanity_check_dataloader
-from nanotron.parallel import ParallelContext
-from nanotron.helpers import (
-    _vocab_size_with_padding,
-    get_profiler,
-    init_optimizer_and_grad_accumulator,
-    init_random_states,
-    log_throughput,
-    lr_scheduler_builder,
-)
 from nanotron.sanity_checks import (
+    after_optim_step_sanity_checks,
     after_tbi_sanity_checks,
-    before_tbi_sanity_checks,
     before_optim_step_sanity_checks,
-    after_optim_step_sanity_checks
+    before_tbi_sanity_checks,
 )
-from nanotron.logging import LoggerWriter, LogItem, human_format, log_rank, set_logger_verbosity_format
-from nanotron.models import NanotronModel
 from nanotron.serialize import (
     load_lr_scheduler,
     load_meta,
@@ -71,7 +70,7 @@ from nanotron.serialize import (
     save,
     save_random_states,
 )
-from torch.nn.parallel import DistributedDataParallel
+from nanotron.utils import init_method_normal, init_on_device_and_dtype, scaled_init_method_normal
 
 if int(os.environ.get("USE_FAST", 0)) == 1:
     # We import the fast versions
@@ -81,9 +80,9 @@ if int(os.environ.get("USE_FAST", 0)) == 1:
     from nanotron.models.fast.starcoder2 import Starcoder2ForTraining
 else:
     from nanotron.models.falcon import FalconForTraining
+    from nanotron.models.fast.starcoder2 import Starcoder2ForTraining
     from nanotron.models.gpt2 import GPTForTraining
     from nanotron.models.llama import LlamaForTraining, RotaryEmbedding
-    from nanotron.models.fast.starcoder2 import Starcoder2ForTraining
 
 logger = logging.get_logger(__name__)
 
@@ -145,7 +144,9 @@ class DistributedTrainer:
             parallel_config=self.config.parallelism, tp_pg=self.parallel_context.tp_pg
         )
         self.model = self.init_model()  # Defines self.model
-        self.normalized_model: NanotronModel = self.model.module if isinstance(self.model, DistributedDataParallel) else self.model
+        self.normalized_model: NanotronModel = (
+            self.model.module if isinstance(self.model, DistributedDataParallel) else self.model
+        )
 
         # Init optimizer
         self.optimizer, self.grad_accumulator = init_optimizer_and_grad_accumulator(
@@ -172,7 +173,9 @@ class DistributedTrainer:
         self.start_iteration_step: int
         self.consumed_train_samples: int
         if self.init_checkpoint_path is not None:
-            checkpoint_metadata = load_meta(parallel_context=self.parallel_context, root_folder=self.init_checkpoint_path)
+            checkpoint_metadata = load_meta(
+                parallel_context=self.parallel_context, root_folder=self.init_checkpoint_path
+            )
             log_rank(str(checkpoint_metadata), logger=logger, level=logging.INFO, rank=0)
             self.start_iteration_step = checkpoint_metadata.metas["last_train_step"]
             self.consumed_train_samples = checkpoint_metadata.metas["consumed_train_samples"]
@@ -351,7 +354,7 @@ class DistributedTrainer:
             named_parameters = [
                 (
                     param.get_tied_info().get_full_name_from_module_id_to_prefix(
-                        module_id_to_prefix=self.module_id_to_prefix
+                        module_id_to_prefix=self.normalized_model.module_id_to_prefix
                     )
                     if param.is_tied
                     else name,
@@ -376,7 +379,9 @@ class DistributedTrainer:
                 max_norm=self.config.optimizer.clip_grad,
             )
 
-        before_optim_step_sanity_checks(self.config, self.parallel_context, self.normalized_model, self.grad_accumulator)
+        before_optim_step_sanity_checks(
+            self.config, self.parallel_context, self.normalized_model, self.grad_accumulator
+        )
 
         # Compute DP average loss and overlap with optimizer step
         if isinstance(outputs[0]["loss"], torch.Tensor):
@@ -397,7 +402,9 @@ class DistributedTrainer:
         # Update the learning rate
         self.lr_scheduler.step()
 
-        after_optim_step_sanity_checks(self.config, self.parallel_context, self.normalized_model, self.grad_accumulator)
+        after_optim_step_sanity_checks(
+            self.config, self.parallel_context, self.normalized_model, self.grad_accumulator
+        )
 
         if handle is not None:
             handle.wait()
@@ -597,7 +604,9 @@ class DistributedTrainer:
         if self.init_checkpoint_path is not None:
             # Reload from a training checkpoint
             log_rank(f"Loading weights from {self.init_checkpoint_path}", logger=logger, level=logging.INFO, rank=0)
-            load_weights(model=normalized_model, parallel_context=self.parallel_context, root_folder=self.init_checkpoint_path)
+            load_weights(
+                model=normalized_model, parallel_context=self.parallel_context, root_folder=self.init_checkpoint_path
+            )
             reloaded_from_checkpoint = True
         if not reloaded_from_checkpoint:
             log_rank("No checkpoint path provided.", logger=logger, level=logging.INFO)
@@ -797,6 +806,7 @@ class DistributedTrainer:
         self.post_save_checkpoint()
 
         return checkpoint_path
+
 
 def mark_tied_parameters(
     model: NanotronModel, parallel_context: ParallelContext, parallel_config: Optional[ParallelismArgs] = None
