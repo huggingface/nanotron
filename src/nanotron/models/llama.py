@@ -107,7 +107,7 @@ class RotaryEmbedding(nn.Module):
         x: torch.Tensor,  # [batch_size, num_heads, seq_length, inner_dim]
         position_ids: Optional[torch.LongTensor],  # [batch_size, seq_length]
     ):
-        batch_size, seq_length, num_heads, inner_dim = x.shape
+        batch_size, num_heads, seq_length, inner_dim = x.shape
         if (
             position_ids is not None and position_ids[-1, -1] >= self.end
         ) or seq_length >= self.end:  # TODO @nouamane: check if this causes cpu-gpu sync
