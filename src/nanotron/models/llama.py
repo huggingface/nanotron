@@ -18,10 +18,15 @@ from functools import lru_cache
 from typing import Dict, Optional, Union
 
 import torch
-from nanotron.config import LlamaConfig, ParallelismArgs, RecomputeGranularity
+from torch import nn
+from transformers.activations import ACT2FN
+
 from nanotron import distributed as dist
 from nanotron import logging
+from nanotron.config import LlamaConfig, ParallelismArgs, RecomputeGranularity
 from nanotron.logging import log_rank
+from nanotron.models import AttachableStore, NanotronModel
+from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter
 from nanotron.parallel.pipeline_parallel.block import PipelineBlock, TensorPointer
 from nanotron.parallel.pipeline_parallel.p2p import P2P
@@ -34,10 +39,6 @@ from nanotron.parallel.tensor_parallel.nn import (
 )
 from nanotron.random import RandomStates
 from nanotron.utils import checkpoint_method
-from nanotron.parallel import ParallelContext
-from nanotron.models import AttachableStore, NanotronModel
-from torch import nn
-from transformers.activations import ACT2FN
 
 logger = logging.get_logger(__name__)
 
@@ -106,9 +107,14 @@ class RotaryEmbedding(nn.Module):
         x: torch.Tensor,  # [batch_size, num_heads, seq_length, inner_dim]
         position_ids: Optional[torch.LongTensor],  # [batch_size, seq_length]
     ):
+        batch_size, seq_length, num_heads, inner_dim = x.shape
+        if (
+            position_ids is not None and position_ids[-1, -1] >= self.end
+        ) or seq_length >= self.end:  # TODO @nouamane: check if this causes cpu-gpu sync
+            self.end *= 2
+            self._initialized_buffer = False
         if self._initialized_buffer is False:
             self.init_rotary_embeddings()
-        batch_size, num_heads, seq_length, inner_dim = x.shape
         dtype = x.dtype
         assert inner_dim % 2 == 0
         x = x.view(

@@ -96,12 +96,13 @@ class RotaryEmbedding(nn.Module):
         position_ids: Optional[torch.LongTensor],  # [batch_size, seq_length]
     ):
         batch_size, seq_length, num_heads, inner_dim = x.shape
-        if (
-            position_ids[-1, -1] >= self.end or seq_length >= self.end
-        ):  # TODO @nouamane: check if this causes cpu-gpu sync
+        while (
+            position_ids is not None and position_ids[-1, -1] >= self.end
+        ) or seq_length >= self.end:  # TODO @nouamane: check if this causes cpu-gpu sync
             self.end *= 2
             self._initialized_buffer = False
         if self._initialized_buffer is False:
+            print(f"Initializing rotary embeddings with end={self.end}")
             self.init_rotary_embeddings()
         dtype = x.dtype
         assert inner_dim % 2 == 0
@@ -383,6 +384,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             # Double check that we use store only at inference time
             assert key_states.requires_grad is False
             assert value_states.requires_grad is False
+            print("Using store")
             if "position_offsets" in store:
                 old_position_offsets = store["position_offsets"]
                 position_ids = old_position_offsets[:, None] + sequence_mask
