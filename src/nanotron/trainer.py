@@ -72,17 +72,10 @@ from nanotron.serialize import (
 )
 from nanotron.utils import init_method_normal, init_on_device_and_dtype, scaled_init_method_normal
 
-if int(os.environ.get("USE_FAST", 0)) == 1:
-    # We import the fast versions
-    from nanotron.models.fast.falcon import FalconForTraining
-    from nanotron.models.fast.gpt2 import GPTForTraining
-    from nanotron.models.fast.llama import LlamaForTraining, RotaryEmbedding
-    from nanotron.models.fast.starcoder2 import Starcoder2ForTraining
-else:
-    from nanotron.models.falcon import FalconForTraining
-    from nanotron.models.fast.starcoder2 import Starcoder2ForTraining
-    from nanotron.models.gpt2 import GPTForTraining
-    from nanotron.models.llama import LlamaForTraining, RotaryEmbedding
+from nanotron.models.falcon import FalconForTraining
+from nanotron.models.gpt2 import GPTForTraining
+from nanotron.models.llama import LlamaForTraining, RotaryEmbedding
+from nanotron.models.starcoder2 import Starcoder2ForTraining
 
 logger = logging.get_logger(__name__)
 

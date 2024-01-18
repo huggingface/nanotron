@@ -3,7 +3,6 @@ Nanotron Inference Script
 
 Usage:
 ```
-export USE_FAST=1 # optional, for faster inference. Requires flash-attn
 export CUDA_DEVICE_MAX_CONNECTIONS=1 # important for some distributed operations
 torchrun --nproc_per_node=4 run_generate.py --pp 1 --tp 4 --ckpt-path checkpoints/10
 ```
