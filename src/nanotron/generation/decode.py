@@ -154,7 +154,6 @@ def decode_text(
     input_iter: Iterable[GenerationInput],
     tokenizer: LlamaTokenizer,
     model: LlamaModel,
-    p2p: P2P,
     parallel_context: ParallelContext,
     generation_config: GenerationArgs,
     tokenizer_config: Optional[TokenizerConfig],
@@ -182,7 +181,6 @@ def decode_text(
     is_decoder_logit_rank = dist.get_rank(parallel_context.pp_pg) == decoder_logit_rank
     max_nb_microbatches = decoder_logit_rank - decoder_input_rank + 1
 
-    # TODO @thomasw21: Fix this as we shouldn't get P2P like that
     p2p = model.p2p
 
     # That's annoying but I need this as soon as there's a change communication "cross"
@@ -483,7 +481,6 @@ def decode_tokenized(
     input_ids: torch.Tensor,
     input_mask: torch.Tensor,
     model: LlamaModel,
-    p2p: P2P,
     parallel_context: ParallelContext,
     generation_config: GenerationArgs,
     max_micro_batch_size: int,

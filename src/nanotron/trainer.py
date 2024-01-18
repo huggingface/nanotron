@@ -31,7 +31,7 @@ from nanotron.helpers import (
     lr_scheduler_builder,
 )
 from nanotron.logging import LoggerWriter, LogItem, human_format, log_rank, set_logger_verbosity_format
-from nanotron.models import NanotronModel, check_model_has_grad
+from nanotron.models import NanotronModel, check_model_has_grad, build_model
 from nanotron.optim.clip_grads import clip_grad_norm
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.data_parallel.utils import sync_gradients_across_dp
@@ -70,7 +70,7 @@ from nanotron.serialize import (
     save,
     save_random_states,
 )
-from nanotron.utils import init_method_normal, init_on_device_and_dtype, scaled_init_method_normal
+from nanotron.utils import init_method_normal, scaled_init_method_normal
 
 from nanotron.models.llama import LlamaForTraining, RotaryEmbedding
 from nanotron.models.starcoder2 import Starcoder2ForTraining
@@ -268,6 +268,8 @@ class DistributedTrainer:
                 # Checkpoint
                 if self.iteration_step % self.config.checkpoints.checkpoint_interval == 0:
                     self.save_checkpoint()
+
+        dist.barrier()  # let's wait for everyone before leaving
 
         self.post_training()
 
@@ -486,58 +488,6 @@ class DistributedTrainer:
             else:
                 exit(0)
 
-    @staticmethod
-    def build_model(
-        model_builder: Callable[[], NanotronModel],
-        parallel_context: ParallelContext,
-        dtype: torch.dtype,
-        target_pp_ranks: Optional[List[int]] = None,
-        device: Optional[torch.device] = torch.device("cuda"),
-    ) -> NanotronModel:
-        """Build the model and set the pp ranks for each pipeline block."""
-        # TODO: classes dont take same args
-        log_rank("Building model..", logger=logger, level=logging.INFO, rank=0, group=parallel_context.world_pg)
-        model: NanotronModel = model_builder()
-
-        # If no target pp ranks are specified, we assume that we want to use all pp ranks
-        if target_pp_ranks is None:
-            pp_size = parallel_context.pp_pg.size()
-            target_pp_ranks = list(range(pp_size))
-        else:
-            pp_size = len(target_pp_ranks)
-
-        # Set rank for each pipeline block
-        log_rank(
-            "Setting PP block ranks..", logger=logger, level=logging.INFO, rank=0, group=parallel_context.world_pg
-        )
-        pipeline_blocks = [module for name, module in model.named_modules() if isinstance(module, PipelineBlock)]
-        # "cuda" is already defaulted for each process to it's own cuda device
-        with init_on_device_and_dtype(device=device, dtype=dtype):
-            # TODO: https://github.com/huggingface/nanotron/issues/65
-
-            # Balance compute across PP blocks
-            block_compute_costs = model.get_block_compute_costs()
-            block_cumulative_costs = np.cumsum(
-                [
-                    block_compute_costs[module.module_builder] if module.module_builder in block_compute_costs else 0
-                    for module in pipeline_blocks
-                ]
-            )
-
-            thresholds = [block_cumulative_costs[-1] * ((rank + 1) / pp_size) for rank in range(pp_size)]
-            assert thresholds[-1] >= block_cumulative_costs[-1]
-            target_pp_rank_idx = 0
-            for block, cumulative_cost in zip(pipeline_blocks, block_cumulative_costs):
-                assert target_pp_rank_idx < pp_size
-                block.build_and_set_rank(target_pp_ranks[target_pp_rank_idx])
-
-                if cumulative_cost > thresholds[target_pp_rank_idx]:
-                    target_pp_rank_idx += 1
-
-            model.input_pp_rank = target_pp_ranks[0]
-            model.output_pp_rank = target_pp_ranks[target_pp_rank_idx]
-        return model
-
     def init_model(self) -> Union[NanotronModel, DistributedDataParallel]:
         """Initialize the model and load weights from checkpoint if needed."""
         # TODO: add max_position_embeddings
@@ -645,7 +595,7 @@ class DistributedTrainer:
         make_ddp = not (config.optimizer.accumulate_grad_in_fp32 and config.optimizer.zero_stage > 0)
 
         # Build model and set pp ranks
-        model = self.build_model(
+        model = build_model(
             parallel_context=parallel_context,
             dtype=config.model.dtype,
             target_pp_ranks=target_pp_ranks,
