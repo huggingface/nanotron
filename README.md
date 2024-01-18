@@ -18,8 +18,6 @@ We support the following:
 
 # Examples
 
-<!-- ls examples/
-config_nouamane_llama_tflops.yaml  config_tiny_llama.py  config_tiny_llama.yaml  train_tiny_llama.sh -->
 In the `/examples` directory, you can find an example configuration file, and a script to run it. You can run it using:
 ```bash
 torchrun --nproc_per_node=8 run_train.py --config-file examples/config_tiny_llama.yaml
