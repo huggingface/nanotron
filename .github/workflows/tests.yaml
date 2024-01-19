@@ -3,9 +3,14 @@ name: Run unit tests
 on:
   push:
     branches: [ main ]
+    paths:
+      - "src/**.py"
+      - "examples/**.py"
+      - "tests/**.py"
+
   pull_request:
     branches: [ main ]
-  paths:
+    paths:
       - "src/**.py"
       - "examples/**.py"
       - "tests/**.py"
