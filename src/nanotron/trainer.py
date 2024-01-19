@@ -31,6 +31,7 @@ from nanotron.helpers import (
 )
 from nanotron.logging import LoggerWriter, LogItem, human_format, log_rank, set_logger_verbosity_format
 from nanotron.models import NanotronModel, build_model
+from nanotron.models.base import check_model_has_grad
 from nanotron.models.llama import LlamaForTraining, RotaryEmbedding
 from nanotron.models.starcoder2 import Starcoder2ForTraining
 from nanotron.optim.clip_grads import clip_grad_norm
@@ -650,7 +651,7 @@ class DistributedTrainer:
         # Model make it DDP
         if make_ddp is True:
             # Check that the model has at least one grad. Necessary for DDP
-            # check_model_has_grad(model=model, parallel_context=parallel_context)
+            check_model_has_grad(model=model, parallel_context=parallel_context)
             # TODO @thomasw21: DDP doesn't support broadcasting complex buffers (and we don't really need that broadcasting anyway)
             model = DistributedDataParallel(
                 model,
