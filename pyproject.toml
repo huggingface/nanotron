@@ -19,7 +19,8 @@ dependencies = [
     "numpy",
     "packaging",
     "safetensors",
-    "dacite"
+    "dacite",
+    "tqdm"
 ]
 
 [tool.setuptools.packages.find]

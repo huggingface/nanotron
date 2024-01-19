@@ -18,23 +18,12 @@ import os
 import sys
 from dataclasses import dataclass
 from functools import lru_cache
-from logging import (
-    CRITICAL,
-    DEBUG,
-    ERROR,
-    FATAL,
-    INFO,
-    NOTSET,
-    WARNING,
-    Logger,
-    Formatter
-)
+from logging import CRITICAL, DEBUG, ERROR, FATAL, INFO, NOTSET, WARNING, Formatter, Logger
 from typing import List, Optional, Union
 
 from torch import distributed as torch_dist
 
 from nanotron import distributed as dist
-
 from nanotron.parallel import ParallelContext
 
 log_levels = {
@@ -292,7 +281,6 @@ def set_logger_verbosity_format(logging_level: str, parallel_context: ParallelCo
     # Nanotron
     set_verbosity(log_level)
     set_formatter(formatter=formatter)
-
 
 
 _configure_library_root_logger()

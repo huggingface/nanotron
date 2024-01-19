@@ -1,4 +1,4 @@
-# CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node=8 run_train.py --config-file examples/config_tiny_llama.yaml
+# CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node=8 run_train.py --config-file examples/debug_run_train.yaml
 
 checkpoints:
   checkpoint_interval: 4
@@ -8,12 +8,6 @@ checkpoints:
   save_initial_state: false
 data:
   dataset:
-    dataset_overwrite_cache: false
-    dataset_processing_num_proc_per_process: 1
-    hf_dataset_config_name: null
-    hf_dataset_or_datasets: HuggingFaceH4/testing_alpaca_small
-    hf_dataset_splits: train
-    text_column_name: completion
   num_loading_workers: 1
   seed: 42
 general:

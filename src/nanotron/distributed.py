@@ -1,7 +1,7 @@
 import datetime
 from functools import cache, lru_cache
-from typing import List, Optional, Literal, Tuple
-import numpy as np
+from typing import List, Optional
+
 import torch
 from packaging import version
 from torch import distributed as dist

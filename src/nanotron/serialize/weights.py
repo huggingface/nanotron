@@ -90,7 +90,12 @@ def save_weights(model: nn.Module, parallel_context: ParallelContext, root_folde
             try:
                 save_file(tensors={"data": param_or_buffer}, filename=path, metadata=metadata)
             except Exception as e:
-                print(f"Error saving {path} with {metadata}")
+                log_rank(
+                    f"Error saving {path} with {metadata}",
+                    logger=logger,
+                    level=logging.ERROR,
+                    rank=0,
+                )
                 raise e
         else:
             raise NotImplementedError("Parameters are required to be NanotronParameter")
@@ -201,6 +206,8 @@ def load_weights(
     for name, param_or_buffer in tqdm(
         filtered_state_dict.items(), disable=dist.get_rank(parallel_context.world_pg) != 0, desc="Loading weights"
     ):
+        # NOTE: extract how does the current model parameter are sharded
+        # so that we can load optimizer checkpoints in this way
         param_shard_metadata[name] = {}
         # `state_dict` doesn't return a Param or a buffer, just a tensors which loses some metadata
         try:

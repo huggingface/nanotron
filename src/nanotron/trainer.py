@@ -8,7 +8,6 @@ from pathlib import Path
 from pprint import pformat
 from typing import Callable, Dict, Iterable, Iterator, List, Optional, Tuple, Type, Union
 
-import numpy as np
 import torch
 from torch.nn.parallel import DistributedDataParallel
 
@@ -31,12 +30,13 @@ from nanotron.helpers import (
     lr_scheduler_builder,
 )
 from nanotron.logging import LoggerWriter, LogItem, human_format, log_rank, set_logger_verbosity_format
-from nanotron.models import NanotronModel
+from nanotron.models import NanotronModel, build_model
+from nanotron.models.llama import LlamaForTraining, RotaryEmbedding
+from nanotron.models.starcoder2 import Starcoder2ForTraining
 from nanotron.optim.clip_grads import clip_grad_norm
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.data_parallel.utils import sync_gradients_across_dp
 from nanotron.parallel.parameters import NanotronParameter, sanity_check
-from nanotron.parallel.pipeline_parallel.block import PipelineBlock
 from nanotron.parallel.pipeline_parallel.engine import (
     PipelineEngine,
 )
@@ -70,19 +70,7 @@ from nanotron.serialize import (
     save,
     save_random_states,
 )
-from nanotron.utils import init_method_normal, init_on_device_and_dtype, scaled_init_method_normal
-
-if int(os.environ.get("USE_FAST", 0)) == 1:
-    # We import the fast versions
-    from nanotron.models.fast.falcon import FalconForTraining
-    from nanotron.models.fast.gpt2 import GPTForTraining
-    from nanotron.models.fast.llama import LlamaForTraining, RotaryEmbedding
-    from nanotron.models.fast.starcoder2 import Starcoder2ForTraining
-else:
-    from nanotron.models.falcon import FalconForTraining
-    from nanotron.models.fast.starcoder2 import Starcoder2ForTraining
-    from nanotron.models.gpt2 import GPTForTraining
-    from nanotron.models.llama import LlamaForTraining, RotaryEmbedding
+from nanotron.utils import init_method_normal, scaled_init_method_normal
 
 logger = logging.get_logger(__name__)
 
@@ -92,9 +80,6 @@ dist_logger.setLevel(logging.WARNING)
 
 CONFIG_TO_MODEL_CLASS = {
     "LlamaConfig": LlamaForTraining,
-    "GPTBigCodeConfig": GPTForTraining,
-    "FalconConfig": FalconForTraining,
-    "RWConfig": FalconForTraining,
     "Starcoder2Config": Starcoder2ForTraining,
 }
 
@@ -284,6 +269,8 @@ class DistributedTrainer:
                 # Checkpoint
                 if self.iteration_step % self.config.checkpoints.checkpoint_interval == 0:
                     self.save_checkpoint()
+
+        dist.barrier()  # let's wait for everyone before leaving
 
         self.post_training()
 
@@ -502,58 +489,6 @@ class DistributedTrainer:
             else:
                 exit(0)
 
-    @staticmethod
-    def build_model(
-        model_builder: Callable[[], NanotronModel],
-        parallel_context: ParallelContext,
-        dtype: torch.dtype,
-        target_pp_ranks: Optional[List[int]] = None,
-        device: Optional[torch.device] = torch.device("cuda"),
-    ) -> NanotronModel:
-        """Build the model and set the pp ranks for each pipeline block."""
-        # TODO: classes dont take same args
-        log_rank("Building model..", logger=logger, level=logging.INFO, rank=0, group=parallel_context.world_pg)
-        model: NanotronModel = model_builder()
-
-        # If no target pp ranks are specified, we assume that we want to use all pp ranks
-        if target_pp_ranks is None:
-            pp_size = parallel_context.pp_pg.size()
-            target_pp_ranks = list(range(pp_size))
-        else:
-            pp_size = len(target_pp_ranks)
-
-        # Set rank for each pipeline block
-        log_rank(
-            "Setting PP block ranks..", logger=logger, level=logging.INFO, rank=0, group=parallel_context.world_pg
-        )
-        pipeline_blocks = [module for name, module in model.named_modules() if isinstance(module, PipelineBlock)]
-        # "cuda" is already defaulted for each process to it's own cuda device
-        with init_on_device_and_dtype(device=device, dtype=dtype):
-            # TODO: https://github.com/huggingface/nanotron/issues/65
-
-            # Balance compute across PP blocks
-            block_compute_costs = model.get_block_compute_costs()
-            block_cumulative_costs = np.cumsum(
-                [
-                    block_compute_costs[module.module_builder] if module.module_builder in block_compute_costs else 0
-                    for module in pipeline_blocks
-                ]
-            )
-
-            thresholds = [block_cumulative_costs[-1] * ((rank + 1) / pp_size) for rank in range(pp_size)]
-            assert thresholds[-1] >= block_cumulative_costs[-1]
-            target_pp_rank_idx = 0
-            for block, cumulative_cost in zip(pipeline_blocks, block_cumulative_costs):
-                assert target_pp_rank_idx < pp_size
-                block.build_and_set_rank(target_pp_ranks[target_pp_rank_idx])
-
-                if cumulative_cost > thresholds[target_pp_rank_idx]:
-                    target_pp_rank_idx += 1
-
-            model.input_pp_rank = target_pp_ranks[0]
-            model.output_pp_rank = target_pp_ranks[target_pp_rank_idx]
-        return model
-
     def init_model(self) -> Union[NanotronModel, DistributedDataParallel]:
         """Initialize the model and load weights from checkpoint if needed."""
         # TODO: add max_position_embeddings
@@ -661,7 +596,7 @@ class DistributedTrainer:
         make_ddp = not (config.optimizer.accumulate_grad_in_fp32 and config.optimizer.zero_stage > 0)
 
         # Build model and set pp ranks
-        model = self.build_model(
+        model = build_model(
             parallel_context=parallel_context,
             dtype=config.model.dtype,
             target_pp_ranks=target_pp_ranks,
@@ -840,11 +775,6 @@ def mark_tied_parameters(
     for module_name, module in model.named_modules():
         for param_name, param in module.named_parameters(recurse=False):
             name = f"{module_name}.{param_name}"
-
-            if isinstance(model, GPTForTraining) and ".qkv.kv." in name:
-                assert param.is_tied, f"Expected {name} to already be synced"
-                # kv is deliberately skipped as it's tied in model init (_mark_kv_parameters_in_module_as_tied)
-                continue
 
             # if isinstance(model, Starcoder2ForTraining) and ".qkv.kv." in name
             #     assert param.is_tied, f"Expected {name} to already be synced"

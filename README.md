@@ -1,6 +1,6 @@
 # nanotron
 
-The objective of this repository is to provide easy distributed primitives in order to train a variety of models efficiently.
+The objective of this library is to provide easy distributed primitives in order to train a variety of models efficiently using 3D parallelism.
 
 # Philosophy
 
@@ -16,15 +16,6 @@ We support the following:
  - FP32 gradient accumulation
  - Parameter tying/sharding
 
-# Examples
-
-In the `/examples` directory, you can find an example configuration file, and a script to run it. You can run it using:
-```bash
-torchrun --nproc_per_node=8 run_train.py --config-file examples/config_tiny_llama.yaml
-```
-
-> Note: Most examples include a slow modeling (No dependencies, only Pytorch), and a fast modeling (Flash Attention, ...). Make sure to install the dependencies if you want to run the fast modeling, then set the env `export USE_FAST=1`
-
 # Installation
 
 Requirements:
@@ -32,22 +23,35 @@ Requirements:
  - PyTorch >= 2.0.0
  - Flash-Attention >= 2.4.2
 
-To install:
+To install (in a new env):
 ```bash
+pip install torch
+pip install packaging; pip install "flash-attn>=2.4.2"  --no-build-isolation
 git clone git@github.com:huggingface/nanotron.git
 cd nanotron
 pip install -e .
 ```
 
-Install also:
-- Flash Attention: `pip install packaging; pip install flash-attn>=2.4.2  --no-build-isolation`
-- Also good to have `transformers` `datasets` `python-etcd` `tensorboardX`: `pip install transformers datasets python-etcd tensorboardX`
-
+Also nice to have `transformers` `datasets` `python-etcd` `tensorboardX`: `pip install transformers datasets python-etcd tensorboardX`
 
 We also support a set of flavors that you can install using `pip install -e [$FLAVOR]`:
  - `dev`: Used is you are developping in `nanotron`. It installs in particular our linter mechanism. On top of that you have to run `pre-commit install` afterwards.
  - `test`: We use `pytest` in order to run out testing suite. In order to run tests in parallel, it will install `pytest-xdist`, which you can leverage by running `pytest -n 12 tests` (12 is the number of parallel test)
 
+
+# Quick examples
+
+In the `/examples` directory, you can find a few example configuration file, and a script to run it.
+
+You can run a sample training using:
+```bash
+torchrun --nproc_per_node=8 run_train.py --config-file examples/debug_run_train.yaml
+```
+
+And run a sample generation using:
+```bash
+torchrun --nproc_per_node=8 run_generation.py --ckpt-path checkpoints/text/4
+```
 
 # Development guidelines
 
