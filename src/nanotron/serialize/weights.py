@@ -40,7 +40,6 @@ def save_weights(model: nn.Module, parallel_context: ParallelContext, root_folde
     module_id_to_prefix[id(model)] = ""
 
     # We chunk everything by `tp_world_size` in order to make sure that we gather all the weights into a single device before saving it
-    # param_shard_metadata = {}
     for name, param_or_buffer in tqdm(model.state_dict().items(), desc="Saving weights"):
         # `state_dict` doesn't return a Param or a buffer, just a tensors which loses some metadata
         try:

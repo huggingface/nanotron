@@ -20,10 +20,6 @@ from nanotron.parallel.parameters import NanotronParameter
 from nanotron.serialize.metadata import TensorMetadata
 from nanotron.serialize.utils import ObjectType, merge_and_shard_tp_tensors
 
-# OPTIM_TO_OPTIM_STATE_NAMES = {
-#     "AdamW": ["exp_avg", "exp_avg_sq"],
-# }
-
 
 # TODO(xrsrke): take rank instead of parallel_context
 def optimizer_filename(parallel_context: ParallelContext, is_zero: bool):
@@ -151,12 +147,6 @@ def load_optimizer(
         def get_checkpoint_state_metadata(param_name: str, pp_rank: int, tp_rank: int) -> TensorMetadata:
             return param_shard_metadata[param_name.replace("module.", "")][(str(pp_rank), str(tp_rank))]
 
-        # def get_optimizer_states(optimizer: optim.BaseOptimizer) -> List[str]:
-        #     optim_cls_name = optimizer.get_base_optimizer().__class__.__name__
-        #     state_names = optimizer.state_dict()["state"][0].keys()
-        #     return OPTIM_TO_OPTIM_STATE_NAMES[optim_cls_name]
-
-        # OPTIMIZER_STATE_NAMES = get_optimizer_states(optimizer)
         ckp_pp_size = ckp_optimizer_config["parallelism"]["pp_size"]
         ckp_tp_size = ckp_optimizer_config["parallelism"]["tp_size"]
         ckp_optim_type = ckp_optimizer_config["type"]
