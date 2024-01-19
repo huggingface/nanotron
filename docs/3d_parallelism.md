@@ -1,6 +1,10 @@
-### Ayscronous Tensor Parallelism
+## The internals of nanotron
 
-Q: What are the two different tensor parallel linear modes in Brrrr?
+### 1. Tensor Parallelism
+
+#### Asyncronous Tensor Parallelism
+
+Q: What are the two different tensor parallel linear modes in nanotron?
 A: All-reduce and Reduce-scatter
 
 
@@ -22,7 +26,7 @@ For example with 4 GPUs:
 So each GPU gathers the complete input X from all GPUs.
 
 
-Q: In BRRRR, what is the core difference between regular and asynchronous tensor parallel linear layers in terms of computation?
+Q: In nanotron, what is the core difference between regular and asynchronous tensor parallel linear layers in terms of computation?
 
 A:
 - In regular column parallel, each rank only computes the portion of the output corresponding to its shard of weights. It does not compute the full output matrix.
@@ -57,7 +61,7 @@ A:
 
 So each rank computes the full output using the locally gathered X and its shard of W.
 
-### Tied Linear
+#### Tied Linear
 
 Q: Why does brrr have only a single rank save tied linear weights instead of all ranks?
 
@@ -69,29 +73,29 @@ Q: How does Nanotron detect tied parameters?
 A: Nanotron has a base model class called NanotronModel. NanotronModel class implements a common method for accessing tied parameters (called .get_tied_parameters()) When initializing the model, Trainer calls this method to get a list of parameter names that should be tied.
 For example, for a goose model, it may return ["lm_head.weight", "word_embeddings.weight"] indicating the lm head weight and word embedding weight should be tied.
 
-Q: How does a tied linear layer differ from a regular parallel linear layer in Brrrr?
+Q: How does a tied linear layer differ from a regular parallel linear layer in nanotron?
 A:
 + In a regular parallel linear layer, the weight matrix is sharded across ranks.
 + In a tied linear layer, the entire weight matrix is replicated on all ranks.
 
 
-Q: What is the difference between a tied parameter and a regular parameter in BRRRR?
+Q: What is the difference between a tied parameter and a regular parameter in nanotron?
 
 A:
-+ Tied parameters in BRRRR are parameters that need to have their gradients synchronized (typically summed) across a specific set of ranks during training.
++ Tied parameters in nanotron are parameters that need to have their gradients synchronized (typically summed) across a specific set of ranks during training.
 + Regular parameters don't have any special synchronization requirements.
 
 
-Q: When would you use tied parameters in a transformer model in BRRRR?
+Q: When would you use tied parameters in a transformer model in nanotron?
 
 A: Tied parameters should be used when the same weights are replicated in multiple layers of the transformer. A common example is tying the weights of the embedding layer and the final linear layer in the language modeling head.
 
 
-Q: What are the different types of linear layers in BRRRR and how are they different?
+Q: What are the different types of linear layers in nanotron and how are they different?
 
 A: Tied linear, tensor parallel linear, and async tensor parallel linear
 
-### Pipeline Parallelism
+### 2. Pipeline Parallelism
 
 Q: What are the four core components in brrr’s pipeline parallelism?
 
@@ -159,6 +163,47 @@ A: The pipeline engine batches P2P communication across microbatches, not within
 For example, say we have a model with two pipeline stages, A and B. In microbatch 1, A sends tensor X to B. In microbatch 2, A sends tensor Y to B. Instead of sending X and Y in separate P2P operations, the pipeline engine will batch them together into one send of [X,Y].
 
 
+Q: How does PipelineBlock's forward pass works? (4 steps)
+
+A:
+- Step 1: It receives inputs, which can be Tensors or TensorPointers from other ranks.
+- Step 2: For any TensorPointer inputs, it uses P2P communication to fetch the actual tensor from the rank specified.
+- Step 3: It runs the forward pass of the module it encapsulates, passing the tensors as inputs.
+- Step 4: It returns a dict containing the outputs of the module. For ranks that didn't run this block, it returns TensorPointers instead of real tensors.
+
+
+Q: How does a PipelineBlock decide to return a Tensor vs a TensorPointer? Explain
+
+A: A PipelineBlock will return a TensorPointer if the block is running on a different pipeline rank from the one that is meant to output that tensor. Otherwise, it will return the actual Tensor
+For example, say PipelineBlockA produces output X and is assigned to pipeline rank 2.
++ When running on pipeline rank 2, PipelineBlockA will return the actual Tensor X.
++ But when running on rank 1 or 3, PipelineBlockA will return a TensorPointer to rank 2 rather than the actual Tensor X data.
+
+
+Q: In 3D parallelism, how does Nanotron calculate the overall loss when each microbatch has a different loss value?
+
+A:
+- Step 1: Each microbatch has its own loss value
+- Step 2: The losses for each microbatch are summed together
+- Step 3: The total sum is averaged across data parallelism
+This represents the mean loss across all microbatches in the global batch
+
+
+Q: What does PipelineBlock.rank represent?
+
+A: PipelineBlock.rank specifies which pipeline parallel rank the block is assigned to. When initializing the model, each PipelineBlock's rank is set to place it on a particular pipeline rank.
+For example, setting a block's rank to 2 means it will run on pipeline rank 2. The block's parameters will be instantiated on rank 2's device, and its forward pass will execute on rank 2.
+
+
+Q: What do target_pp_ranks represent when initializing a nanotron model?
+
+A:
+target_pp_ranks specifies which subset of pipeline ranks the model should be built on. By default, the model is built on all pipeline ranks (0 to pp_size-1). But you can pass a custom list like [0, 2, 3] to build the model only on those ranks.
+Concrete example: pp_size = 8, target_pp_ranks = [0, 4, 7]. This will build the model only on pipeline ranks 0, 4, and 7 out of the total 8 ranks. The intermediate ranks 1-3 and 5-6 will not have the model built on them.
+
+
+#### Loading data in 3D parallelism
+
 Q: In 3D parallelism, how does brrr sample training data for a model replicas? (2 steps)
 
 A: For example, with 2 devices, 4 microbatch size, and 100 samples:
@@ -185,46 +230,30 @@ For example, say rank 2 is where the model input is located. Dataloader will ret
 + Other ranks: {"input_ids": TensorPointer(group_rank=2)}
 
 
-Q: How does PipelineBlock's forward pass works? (4 steps)
+Q: Given a dataset with: 100,000 samples, 10 model replicas, Micro-batch size = 16, Consumed samples so far = 10,000
+How does the MegatronPretrainingSampler work concretely? (4 steps)
 
 A:
-- Step 1: It receives inputs, which can be Tensors or TensorPointers from other ranks.
-- Step 2: For any TensorPointer inputs, it uses P2P communication to fetch the actual tensor from the rank specified.
-- Step 3: It runs the forward pass of the module it encapsulates, passing the tensors as inputs.
-- Step 4: It returns a dict containing the outputs of the module. For ranks that didn't run this block, it returns TensorPointers instead of real tensors.
++ Step 1: Available samples = 100,000 - 10,000 = 90,000
++ Step 2 Each model replicas gets shard of 90,000 / 10 = 9,000 samples
++ Step 3: With a microbatch size of 16, each worker samples indices 0-15, 16-31 etc. from its shard (9,000 - 18,000)…
++ Step 4: Update consumed samples after each micro-batch of 16
 
 
-Q: What do target_pp_ranks represent when initializing a nanotron model?
+Q: In 3D parallelism, what's the difference between sequential and random pretraining samplers?
 
-A:
-target_pp_ranks specifies which subset of pipeline ranks the model should be built on. By default, the model is built on all pipeline ranks (0 to pp_size-1). But you can pass a custom list like [0, 2, 3] to build the model only on those ranks.
-Concrete example: pp_size = 8, target_pp_ranks = [0, 4, 7]. This will build the model only on pipeline ranks 0, 4, and 7 out of the total 8 ranks. The intermediate ranks 1-3 and 5-6 will not have the model built on them.
+A: For example, with 2 GPUs, 4 microbatch size, and 8 samples:
+- Sequential sampler walks through its chunk sequentially.
++ GPU 0: [0, 2, 4, 6]
++ GPU 1: [1, 3, 5, 7]
 
-
-Q: How does a PipelineBlock decide to return a Tensor vs a TensorPointer? Explain
-
-A: A PipelineBlock will return a TensorPointer if the block is running on a different pipeline rank from the one that is meant to output that tensor. Otherwise, it will return the actual Tensor
-For example, say PipelineBlockA produces output X and is assigned to pipeline rank 2.
-+ When running on pipeline rank 2, PipelineBlockA will return the actual Tensor X.
-+ But when running on rank 1 or 3, PipelineBlockA will return a TensorPointer to rank 2 rather than the actual Tensor X data.
+- Random sampler shuffles its chunk each epoch before sampling.
++ GPU 0: [6, 4, 0, 2] // shuffled shard
++ GPU 1: [5, 7, 1, 3]
 
 
-Q: In 3D parallelism, how does Nanotron calculate the overall loss when each microbatch has a different loss value?
 
-A:
-- Step 1: Each microbatch has its own loss value
-- Step 2: The losses for each microbatch are summed together
-- Step 3: The total sum is averaged across data parallelism
-This represents the mean loss across all microbatches in the global batch
-
-
-Q: What does PipelineBlock.rank represent?
-
-A: PipelineBlock.rank specifies which pipeline parallel rank the block is assigned to. When initializing the model, each PipelineBlock's rank is set to place it on a particular pipeline rank.
-For example, setting a block's rank to 2 means it will run on pipeline rank 2. The block's parameters will be instantiated on rank 2's device, and its forward pass will execute on rank 2.
-
-
-### Distributed Serialization
+### 3. Distributed Serialization
 
 Q: What are the five things saved in a brrr checkpoint?
 
@@ -267,7 +296,9 @@ A:
 - Step 2: The state tensor is broadcast from rank 0 to all ranks.
 - Step 3: Each rank loads the state tensor into its RNG.
 
-### Trainer & Model Initialization
+### 4. Trainer & Model Initialization
+
+#### Trainer
 
 Q: What's the main idea behind brrr’s model initialization?
 
@@ -287,6 +318,29 @@ Q: Which two nn.Module methods does brrr override to implement its model initial
 A: brrr overrides nn.Module.register_parameter() and nn.Module.register_buffer() which are called when modules register parameters and buffers during initialization.
 
 
+Q: What does kill switch do in Nanotron?
+
+A: Kill switch is a file that the trainer periodically checks during training. If the kill switch file is detected, Trainer will:
++ Step 1: Save a checkpoint
++ Step 2: Exit training gracefully
+
+Q: Why does brrr have the custom initialization context manager instead of just using module.to() to move models to the target device?
+
+A: module.to() moves existing tensors to a new device. BRRR's custom initialization context manager initializes tensors directly on the target device to begin with. For example, if we want mixed precision on GPU from the start, the context manager will initialize weights in fp16 on the GPU, instead of initializing in fp32 on CPU then moving.
+
+
+Q: In FP16 training, how does nanotron updates in the accumulated FP32 gradients when each parameter has an FP16 gradient? (4 steps)
+
+A:
+- Step 1: Each FP16 parameter has an associated FP32 gradient buffer allocated.
+- Step 2: During backward, the FP16 gradients are accumulated into the FP32 buffer, instead of directly into the .grad attribute.
+- Step 3: Before the optimizer step, nanotron copies the accumulated FP32 gradients into the .grad attribute of the FP32 copy of each parameter that will be updated.
+- Step 4: The optimizer performs the update on the FP32 parameters.
+
+
+#### Model Initialization
+
+
 Q: In Nanotron, how does Trainer initialize a model from scratch using 3D parallelism? (5 steps)
 
 A:
@@ -295,6 +349,14 @@ A:
 - Step 3: Mark tied parameters (using tie_parameters())
 - Step 4: Sync model parameters across data parallelism with all_reduce
 - Step 5: Sync tied parameters across their tied groups with all_reduce
+
+
+Q: What is the high-level flow of BRRR's training loop? (3 steps) (ignore schedulers, logging…)
+
+A:
+- Step 1: Do a training step - run forward/backward pass through the model pipeline.
+- Step 2: Check for kill switch file, exit if triggered.
+- Step 3: Save checkpoint if current step matches interval.
 
 
 Q: In 3D parallelism, how does Nanotron calculate the total number of parameters of a replicas? (2 steps)
@@ -306,14 +368,6 @@ A:
     + Stage 1: (TP0): 10 params, (TP1): 15 params. Sum = 25
     + Stage 2: (TP0): 20 params, (TP1): 25 params. Sum = 45
     Total params = Stage 1 + Stage 2 = (10+15) + (20+25) = 35 + 45 = 70
-
-
-Q: What is the high-level flow of BRRR's training loop? (3 steps) (ignore schedulers, logging…)
-
-A:
-- Step 1: Do a training step - run forward/backward pass through the model pipeline.
-- Step 2: Check for kill switch file, exit if triggered.
-- Step 3: Save checkpoint if current step matches interval.
 
 
 Q: Why does BRRR need a kill switch to terminate training? Can't we just Ctrl-C or cancel the job?
@@ -349,45 +403,3 @@ A:
 - Sequential sampler: Walks through each GPU's data shard sequentially
 - Random sampler: Shuffles each GPU's shard before walking through it
 - Cyclic sampler: After one pass through the datasets, loops back to the beginning
-
-
-Q: Given a dataset with: 100,000 samples, 10 model replicas, Micro-batch size = 16, Consumed samples so far = 10,000
-How does the MegatronPretrainingSampler work concretely? (4 steps)
-
-A:
-+ Step 1: Available samples = 100,000 - 10,000 = 90,000
-+ Step 2 Each model replicas gets shard of 90,000 / 10 = 9,000 samples
-+ Step 3: With a microbatch size of 16, each worker samples indices 0-15, 16-31 etc. from its shard (9,000 - 18,000)…
-+ Step 4: Update consumed samples after each micro-batch of 16
-
-
-Q: In 3D parallelism, what's the difference between sequential and random pretraining samplers?
-
-A: For example, with 2 GPUs, 4 microbatch size, and 8 samples:
-- Sequential sampler walks through its chunk sequentially.
-+ GPU 0: [0, 2, 4, 6]
-+ GPU 1: [1, 3, 5, 7]
-
-- Random sampler shuffles its chunk each epoch before sampling.
-+ GPU 0: [6, 4, 0, 2] // shuffled shard
-+ GPU 1: [5, 7, 1, 3]
-
-
-Q: What does kill switch do in Nanotron?
-
-A: Kill switch is a file that the trainer periodically checks during training. If the kill switch file is detected, Trainer will:
-+ Step 1: Save a checkpoint
-+ Step 2: Exit training gracefully
-
-Q: Why does brrr have the custom initialization context manager instead of just using module.to() to move models to the target device?
-
-A: module.to() moves existing tensors to a new device. BRRR's custom initialization context manager initializes tensors directly on the target device to begin with. For example, if we want mixed precision on GPU from the start, the context manager will initialize weights in fp16 on the GPU, instead of initializing in fp32 on CPU then moving.
-
-
-Q: In FP16 training, how does BRRRR updates in the accumulated FP32 gradients when each parameter has an FP16 gradient? (4 steps)
-
-A:
-- Step 1: Each FP16 parameter has an associated FP32 gradient buffer allocated.
-- Step 2: During backward, the FP16 gradients are accumulated into the FP32 buffer, instead of directly into the .grad attribute.
-- Step 3: Before the optimizer step, BRRRR copies the accumulated FP32 gradients into the .grad attribute of the FP32 copy of each parameter that will be updated.
-- Step 4: The optimizer performs the update on the FP32 parameters.
