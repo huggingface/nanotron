@@ -48,8 +48,8 @@ jobs:
         pip install pytest-cov
 
     - name: Python dependencies
-        run: |
-          pip list
+      run: |
+        pip list
 
     - name: Run tests
       run: pytest --color=yes --durations=0 --verbose tests/
