@@ -1,27 +1,25 @@
-""" Example of generation with a pretrained model.
-- llama:
-USE_FAST=1 CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node=2 examples/generate.py --pp 2 --tp 1 --model_name huggyllama/llama-7b --ckpt-path pretrained/llama-7b
-USE_FAST=1 CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node=2 examples/generate.py --pp 2 --tp 1 --model_name codellama/CodeLlama-7b-hf --ckpt-path pretrained/CodeLlama-7b-hf
-USE_FAST=1 CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node=2 examples/generate.py --pp 2 --tp 1 --ckpt-path pretrained/Llama-2-7b-hf
-- falcon:
-USE_FAST=1 CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node=8 examples/generate.py --pp 4 --tp 2 --model_name /fsx/shared-falcon-180B/falcon-180B/ --ckpt-path /fsx/shared-falcon-180B/nanotron-falcon-180B
-- santacoder:
-USE_FAST=1 CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node=4 examples/generate.py --pp 2 --tp 2 --model_name bigcode/gpt_bigcode-santacoder --ckpt-path pretrained/gpt_bigcode-santacoder
-- starcoder:
-USE_FAST=1 CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node=4 examples/generate.py --pp 2 --tp 2 --model_name bigcode/starcoder --ckpt-path pretrained/starcoder
-USE_FAST=1 CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node=4 examples/generate.py --pp 2 --tp 2 --model_name bigcode/starcoder --ckpt-path /fsx/nouamane/checkpoints/nanotron/starcoder_s64k_sw4k_dp16_gbs1M/10000
-USE_FAST=1 CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node=1 examples/generate.py --pp 1 --tp 1 --ckpt-path /fsx/nouamane/checkpoints/nanotron/test/12
-- Benchmark:
-USE_BENCH=1 USE_FAST=1 CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node=2 run_benchmark2.py --pp 2 --tp 1 --dp 1 --model_name huggyllama/llama-7b --ckpt-path /admin/home/ferdinand_mom/.cache/huggingface/hub/models--HuggingFaceBR4--llama-7b-orig/snapshots/2160b3d0134a99d365851a7e95864b21e873e1c3
 """
+Nanotron Inference Script
+
+Usage:
+```
+export CUDA_DEVICE_MAX_CONNECTIONS=1 # important for some distributed operations
+torchrun --nproc_per_node=4 run_generate.py ---ckpt-path checkpoints/test/4
+```
+"""
+
 import argparse
 import os
 from pathlib import Path
 
 import torch
-from nanotron import logging
 from nanotron import distributed as dist
+from nanotron import logging
 from nanotron.config import GenerationArgs, LoggingArgs, ParallelismArgs, get_config_from_file
+from nanotron.generation.decode import GenerationInput, TokenizerConfig, decode_text, decode_tokenized
+from nanotron.logging import log_rank, set_logger_verbosity_format
+from nanotron.models import build_model
+from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import sanity_check
 from nanotron.parallel.pipeline_parallel.engine import (
     OneForwardOneBackwardPipelineEngine,
@@ -34,55 +32,47 @@ from nanotron.random import (
     get_synced_random_state,
     set_random_seed,
 )
-from nanotron.parallel import ParallelContext
-from nanotron.generation.decode import (
-    GenerationInput,
-    TokenizerConfig,
-    decode_text,
-)
-from nanotron.logging import log_rank, set_logger_verbosity_format
 from nanotron.serialize import (
     load_weights,
 )
-from nanotron.trainer import CONFIG_TO_MODEL_CLASS, DistributedTrainer, mark_tied_parameters
-from transformers import AutoConfig, AutoTokenizer
+from nanotron.trainer import CONFIG_TO_MODEL_CLASS, mark_tied_parameters
+
+try:
+    from transformers import AutoTokenizer
+except ImportError:
+    AutoTokenizer = None
 
 logger = logging.get_logger(__name__)
 
 
 def get_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model_name", type=str, default=None, help="Model name")
     parser.add_argument("--ckpt-path", type=Path, required=True, help="Checkpoint path")
-    parser.add_argument("--dp", type=int, default=1)
-    parser.add_argument("--pp", type=int, default=2)
-    parser.add_argument("--tp", type=int, default=1)
-    parser.add_argument("--max-new-tokens", type=int, default=128)
-    parser.add_argument("--compare-with-no-cache", action="store_true")
+    parser.add_argument("--dp", type=int, default=0)
+    parser.add_argument("--pp", type=int, default=0)
+    parser.add_argument("--tp", type=int, default=0)
+    parser.add_argument("--max-new-tokens", type=int, default=128, help="Maximum number of new tokens to generate")
     return parser.parse_args()
 
 
 def main():
     args = get_args()
+
+    assert args.ckpt_path.exists(), f"Checkpoint path {args.ckpt_path} does not exist"
+
+    config = get_config_from_file((args.ckpt_path / "config.yaml").as_posix())
+    model_config = config.model.model_config
+    tokenizer_path = config.tokenizer.tokenizer_name_or_path
+
     parallel_config = ParallelismArgs(
-        dp=args.dp,
-        pp=args.pp,
-        tp=args.tp,
+        dp=args.dp or config.parallelism.dp,
+        pp=args.pp or config.parallelism.pp,
+        tp=args.tp or config.parallelism.tp,
         pp_engine=OneForwardOneBackwardPipelineEngine(),
         tp_mode=TensorParallelLinearMode.ALL_REDUCE,
         recompute_granularity=None,
         tp_linear_async_communication=True,
     )
-
-    logging_config = LoggingArgs(
-        log_level="info",
-        log_level_replica="info",
-    )
-
-    dtype = torch.bfloat16
-
-    # Set random states
-    set_random_seed(42)
 
     # Initialise all process groups
     parallel_context = ParallelContext(
@@ -92,6 +82,11 @@ def main():
     )
 
     # Set log levels
+    logging_config = LoggingArgs(
+        log_level="info",
+        log_level_replica="info",
+    )
+
     if dist.get_rank(parallel_context.world_pg) == 0:
         if logging_config.log_level is not None:
             set_logger_verbosity_format(logging_config.log_level, parallel_context=parallel_context)
@@ -99,26 +94,13 @@ def main():
         if logging_config.log_level_replica is not None:
             set_logger_verbosity_format(logging_config.log_level_replica, parallel_context=parallel_context)
 
-    tokenizer_path = args.model_name
-    # if config.yaml in checkpoint path we use it
-    if (args.ckpt_path / "config.yaml").exists():
-        config_path = args.ckpt_path / "config.yaml"
-        # parse config
-        config = get_config_from_file(config_path.as_posix())
-        model_config = config.model.model_config
-
-        tokenizer_path = config.tokenizer.tokenizer_name_or_path
-    elif (args.ckpt_path / "model_config.json").exists():
-        model_config = AutoConfig.from_pretrained(args.ckpt_path / "model_config.json")
-        if args.model_name is None:
-            tokenizer_path = model_config._name_or_path
-    else:
-        assert args.model_name is not None, "model_name must be provided or config.yaml must be in checkpoint path"
-        model_name = args.model_name
-        model_config: AutoConfig = AutoConfig.from_pretrained(model_name)
-
-    # model_config.num_hidden_layers = 1
     log_rank(f"model_config: {model_config}", logger=logger, level=logging.INFO, rank=0)
+    log_rank(f"tokenizer_path: {tokenizer_path}", logger=logger, level=logging.INFO, rank=0)
+
+    dtype = torch.bfloat16
+
+    # Set random states
+    set_random_seed(42)
 
     model_config_cls = model_config.__class__.__name__
     if model_config_cls not in CONFIG_TO_MODEL_CLASS:
@@ -135,7 +117,7 @@ def main():
         # We don't need to sync across TP when using sequence parallel (REDUCE_SCATTER)
         random_states = RandomStates({})
 
-    model = DistributedTrainer.build_model(
+    model = build_model(
         model_builder=lambda: CONFIG_TO_MODEL_CLASS[model_config_cls](
             config=model_config,
             parallel_context=parallel_context,
@@ -164,96 +146,38 @@ def main():
     load_weights(model=model, parallel_context=parallel_context, root_folder=checkpoint_path)
 
     model.eval()
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
-    # tokenizer.pad_token_id = tokenizer.eos_token_id
-    if tokenizer.pad_token_id is None:
-        if tokenizer.eos_token_id is not None:
-            tokenizer.pad_token_id = tokenizer.eos_token_id
-        elif getattr(model.config, "pad_token_id", None) is not None:
-            tokenizer.pad_token_id = int(model.config.pad_token_id)
-        elif getattr(model.config, "eos_token_id", None) is not None:
-            tokenizer.pad_token_id = int(model.config.eos_token_id)
-        else:
-            tokenizer.add_special_tokens({"pad_token": "[PAD]"})
-    tokenizer.padding_side = "left"
-    tokenizer.truncation_side = "left"  # TODO @nouamane: do we want this?
-    dummy_inputs = [
-        # "Passage: Daniel went back to the garden. Mary travelled to the kitchen. Sandra journeyed to the kitchen. Sandra went to the hallway. John went to the bedroom. Mary went back to the garden. Where is Mary?\nAnswer:",
-        "def fib(n)",
-        # "This film was probably inspired by Godzilla",
-    ]
-
-    outputs = decode_text(
-        input_iter=(GenerationInput(text=text) for text in dummy_inputs),
-        tokenizer=tokenizer,
-        # TODO @thomasw21: From ModelWithLoss extract the model.
-        model=model.model,
-        # TODO @thomasw21: Figure out how to pass p2p.
-        p2p=model.model.p2p,
-        parallel_context=parallel_context,
-        max_new_tokens=args.max_new_tokens,
-        max_micro_batch_size=2,
-        generation_config=GenerationArgs(sampler="greedy", use_cache=False),
-        # tokenizer_config=TokenizerConfig(max_input_length=8),
-        # tokenizer_config=TokenizerConfig(max_input_length=1024), #TODO @nouamane: fix padding for starcoder
-        tokenizer_config=TokenizerConfig(max_input_length=None),
-        # tokenizer_config=TokenizerConfig(max_input_length=model.config.max_position_embeddings - args.max_new_tokens),
-        is_bench=os.environ.get("USE_BENCH", "0") == "1",
-    )
-
-    dist.barrier()
-
-    for output in outputs:
-        input_ids = output.input_ids
-        generated_ids = output.generation_ids
-        if isinstance(input_ids, TensorPointer):
-            assert isinstance(generated_ids, TensorPointer)
-            continue
-        assert isinstance(generated_ids, torch.Tensor)
-
-        log_rank(
-            f"input: {tokenizer.decode(input_ids, clean_up_tokenization_spaces=False)[:1000]}",
-            logger=logger,
-            level=logging.INFO,
-            rank=0,
-        )
-
-        log_rank(
-            f"generation: {tokenizer.decode(generated_ids[len(input_ids) :], clean_up_tokenization_spaces=False)}",
-            logger=logger,
-            level=logging.INFO,
-            rank=0,
-        )
-
-        log_rank(
-            "--------------------------------------------------",
-            logger=logger,
-            level=logging.INFO,
-            rank=0,
-        )
-
-    if args.compare_with_no_cache:
+    if AutoTokenizer is not None:
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
+        # tokenizer.pad_token_id = tokenizer.eos_token_id
+        if tokenizer.pad_token_id is None:
+            if tokenizer.eos_token_id is not None:
+                tokenizer.pad_token_id = tokenizer.eos_token_id
+            elif getattr(model.config, "pad_token_id", None) is not None:
+                tokenizer.pad_token_id = int(model.config.pad_token_id)
+            elif getattr(model.config, "eos_token_id", None) is not None:
+                tokenizer.pad_token_id = int(model.config.eos_token_id)
+            else:
+                tokenizer.add_special_tokens({"pad_token": "[PAD]"})
+        tokenizer.padding_side = "left"
+        tokenizer.truncation_side = "left"  # TODO @nouamane: do we want this?
+        dummy_inputs = [
+            # "Passage: Daniel went back to the garden. Mary travelled to the kitchen. Sandra journeyed to the kitchen. Sandra went to the hallway. John went to the bedroom. Mary went back to the garden. Where is Mary?\nAnswer:",
+            "def fib(n)",
+            # "This film was probably inspired by Godzilla",
+        ]
 
         outputs = decode_text(
             input_iter=(GenerationInput(text=text) for text in dummy_inputs),
             tokenizer=tokenizer,
             # TODO @thomasw21: From ModelWithLoss extract the model.
             model=model.model,
-            # TODO @thomasw21: Figure out how to pass p2p.
-            p2p=model.model.p2p,
             parallel_context=parallel_context,
             max_new_tokens=args.max_new_tokens,
             max_micro_batch_size=2,
             generation_config=GenerationArgs(sampler="greedy", use_cache=True),
-            # tokenizer_config=TokenizerConfig(max_input_length=8),
-            # tokenizer_config=TokenizerConfig(max_input_length=1024), #TODO @nouamane: fix padding for starcoder
             tokenizer_config=TokenizerConfig(max_input_length=None),
-            # tokenizer_config=TokenizerConfig(max_input_length=model.config.max_position_embeddings - args.max_new_tokens),
             is_bench=os.environ.get("USE_BENCH", "0") == "1",
         )
-
-        dist.barrier()
-
         for output in outputs:
             input_ids = output.input_ids
             generated_ids = output.generation_ids
@@ -282,6 +206,39 @@ def main():
                 level=logging.INFO,
                 rank=0,
             )
+    else:
+        outputs = decode_tokenized(
+            input_ids=torch.zeros(1, 1).to(dtype=torch.int64, device="cuda"),
+            input_mask=torch.ones(1, 1).to(dtype=torch.bool, device="cuda"),
+            model=model.model,
+            parallel_context=parallel_context,
+            generation_config=GenerationArgs(sampler="greedy", use_cache=True),
+            max_micro_batch_size=1,
+            max_new_tokens=12,
+            returns_logits=False,
+        )
+        for output in outputs:
+            input_ids = output.input_ids
+            generated_ids = output.generation_ids
+            if isinstance(input_ids, TensorPointer):
+                assert isinstance(generated_ids, TensorPointer)
+                continue
+            assert isinstance(generated_ids, torch.Tensor)
+            log_rank(
+                f"generation: {generated_ids[len(input_ids) :]}",
+                logger=logger,
+                level=logging.INFO,
+                rank=0,
+            )
+
+            log_rank(
+                "--------------------------------------------------",
+                logger=logger,
+                level=logging.INFO,
+                rank=0,
+            )
+
+    dist.barrier()
 
 
 if __name__ == "__main__":

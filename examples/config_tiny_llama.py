@@ -1,3 +1,4 @@
+""" Example python script to generate a YAML config file which can be used to run a training with nanotron. Refer to "examples" section in the `/README.md` for more information."""
 import os
 
 from nanotron.config import (
@@ -35,7 +36,7 @@ model_config = LlamaConfig(
     rope_scaling=None,
     tie_word_embeddings=True,
     use_cache=True,
-    vocab_size=50272,  # GPT2 tokenizer rounded to next multiple of 8
+    vocab_size=256,
 )
 
 num_params = human_format(
@@ -69,8 +70,8 @@ optimizer = OptimizerArgs(
 
 parallelism = ParallelismArgs(
     dp=2,
-    pp=1,
-    tp=1,
+    pp=2,
+    tp=2,
     pp_engine="1f1b",
     tp_mode="REDUCE_SCATTER",
     tp_linear_async_communication=True,
@@ -100,4 +101,8 @@ config = Config(
 
 if __name__ == "__main__":
     dir = os.path.dirname(__file__)
+
+    # Save config as YAML file
     config.save_as_yaml(f"{dir}/config_tiny_llama.yaml")
+
+    # You can now train a model with this config using `/run_train.py`

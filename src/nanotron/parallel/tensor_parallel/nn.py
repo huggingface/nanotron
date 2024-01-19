@@ -129,7 +129,9 @@ class TensorParallelRowLinear(nn.Linear):
             dtype=dtype,
         )
         self.mode = mode
-        self.async_communication = False  # TODO @nouamane: this leads to training instabilities, need to check why
+        self.async_communication = async_communication
+        if self.mode is TensorParallelLinearMode.ALL_REDUCE and self.async_communication:
+            raise ValueError("async_communication is not supported for ALL_REDUCE mode")
 
         if contiguous_chunks is not None:
             assert (

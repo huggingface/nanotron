@@ -3,8 +3,8 @@ from typing import Any, Callable, Dict, Iterable, Optional, Set, Tuple, Union
 
 import torch
 
-from nanotron.optim.gradient_accumulator import GradientAccumulator
 from nanotron.optim.base import BaseOptimizer
+from nanotron.optim.gradient_accumulator import GradientAccumulator
 from nanotron.optim.inherit_from_other_optimizer import InheritFromOtherOptimizer
 from nanotron.parallel.parameters import NanotronParameter
 

@@ -4,18 +4,19 @@ from typing import Dict, Generator, Iterator, List, Optional, Union
 
 import numpy as np
 import torch
+from torch.utils.data import BatchSampler, DataLoader
+from torch.utils.data.distributed import DistributedSampler
+
+from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.config import Config
-from nanotron import distributed as dist
+from nanotron.parallel import ParallelContext
 from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
 from nanotron.random import set_random_seed
 from nanotron.sanity_checks import (
     assert_fail_except_rank_with,
     assert_tensor_synced_across_pg,
 )
-from nanotron.parallel import ParallelContext
-from torch.utils.data import BatchSampler, DataLoader
-from torch.utils.data.distributed import DistributedSampler
 
 try:
     import datasets
@@ -79,7 +80,7 @@ def sanity_check_dataloader(
 def get_datasets(
     hf_dataset_or_datasets: Union[dict, str],
     splits: Optional[Union[List[str], str]] = ["train", "test"],
-) -> DatasetDict:
+) -> "DatasetDict":
     """
     Function to load dataset directly from DataArguments.
 
@@ -118,7 +119,7 @@ def get_datasets(
 
 
 # Adapted from h4/src/h4/data/loading.py
-def _get_dataset_mix(dataset_dict: dict, splits: List[str] = None, seed=42) -> DatasetDict:
+def _get_dataset_mix(dataset_dict: dict, splits: List[str] = None, seed=42) -> "DatasetDict":
     """
     Helper function to load dataset mix from dict configuration.
 
@@ -182,7 +183,7 @@ def dummy_infinite_data_generator(
     seed: int,
     parallel_context: ParallelContext,
 ):
-    def dummy_infinite_data_generator() -> Generator[Dict[str, Union[torch.Tensor, TensorPointer]], None, None]:
+    def data_generator() -> Generator[Dict[str, Union[torch.Tensor, TensorPointer]], None, None]:
         # Random generator
         generator = torch.Generator(device="cuda")
         # Make sure that TP are synced always
@@ -230,7 +231,7 @@ def dummy_infinite_data_generator(
                 else TensorPointer(group_rank=output_pp_rank),
             }
 
-    return dummy_infinite_data_generator
+    return data_generator
 
 
 # Adapted from https://github.com/huggingface/accelerate/blob/a73898027a211c3f6dc4460351b0ec246aa824aa/src/accelerate/data_loader.py#L781C1-L824C28
@@ -270,8 +271,8 @@ def set_tensor_pointers(
 
 ### CAUSAL LANGUAGE MODELING ###
 def clm_process(
-    raw_dataset: Dataset,
-    tokenizer: PreTrainedTokenizerBase,
+    raw_dataset: "Dataset",
+    tokenizer: "PreTrainedTokenizerBase",
     text_column_name: str,
     dataset_processing_num_proc_per_process: int,
     dataset_overwrite_cache: bool,
@@ -321,8 +322,9 @@ class DataCollatorForCLM:
     """
     Data collator used for causal language modeling.
 
-    GPT2Tokenizer doesn't have a _pad_token. For tokenizers that do, inputs can be dynamically padded to the maximum length of a batch if they
-    are not all of the same length. see: https://github.com/huggingface/transformers/blob/47e1676255e5dd86b9541f734cd4f4bdcbb50f4a/src/transformers/data/data_collator.py#L394-L430
+    - input_pp_rank: Discards last input id token
+    - output_pp_rank: Discards first label id token
+    - other pp ranks: Don't have data. Instead, we use `TensorPointer` to point to the rank having the data.
     """
 
     sequence_length: int
@@ -331,7 +333,7 @@ class DataCollatorForCLM:
     parallel_context: ParallelContext
 
     def __call__(self, examples: List[Dict[str, List[np.ndarray]]]) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
-        # Process the case when "input_ids" doesn't exist
+        # Process the case when current rank doesn't require data. We return `TensorPointer` that points to ranks having the data.
         current_pp_rank = dist.get_rank(self.parallel_context.pp_pg)
         if current_pp_rank not in [
             self.input_pp_rank,
@@ -393,7 +395,7 @@ class DataCollatorForCLM:
 def _get_train_sampler(
     dp_size: int,
     dp_rank: int,
-    train_dataset: Dataset,
+    train_dataset: "Dataset",
     seed: int,
     use_loop_to_round_batch_size: bool,
     consumed_train_samples: int,
@@ -427,7 +429,7 @@ def _get_train_sampler(
 
 # Adapted from https://github.com/huggingface/transformers/blob/47e1676255e5dd86b9541f734cd4f4bdcbb50f4a/src/transformers/trainer.py#L837
 def get_train_dataloader(
-    train_dataset: Dataset,
+    train_dataset: "Dataset",
     sequence_length: int,
     parallel_context: ParallelContext,
     input_pp_rank: int,
@@ -443,13 +445,20 @@ def get_train_dataloader(
     if not isinstance(train_dataset, datasets.Dataset):
         raise ValueError(f"training requires a datasets.Dataset, but got {type(train_dataset)}")
 
-    # Only some rank require to run the dataloader.
-    if dist.get_rank(parallel_context.pp_pg) not in [
+    # Case of ranks requiring data
+    if dist.get_rank(parallel_context.pp_pg) in [
         input_pp_rank,
         output_pp_rank,
     ]:
-        # dataset has to have a single column, with `input_ids` as the column name
-        assert train_dataset.column_names == ["input_ids"]
+        train_dataset = train_dataset.with_format(type="numpy", columns=["input_ids"], output_all_columns=True)
+
+    # Case of ranks not requiring data. We give them an infinite dummy dataloader
+    else:
+        #
+        assert train_dataset.column_names == ["input_ids"], (
+            f"Dataset has to have a single column, with `input_ids` as the column name. "
+            f"Current dataset: {train_dataset}"
+        )
         dataset_length = len(train_dataset)
         train_dataset = train_dataset.remove_columns(column_names="input_ids")
         assert (
@@ -459,8 +468,6 @@ def get_train_dataloader(
         train_dataset = EmptyInfiniteDataset(length=dataset_length)
         # No need to spawn a lot of workers, we can just use main
         dataloader_num_workers = 0
-    else:
-        train_dataset = train_dataset.with_format(type="numpy", columns=["input_ids"], output_all_columns=True)
 
     data_collator = DataCollatorForCLM(
         sequence_length=sequence_length,

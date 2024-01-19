@@ -63,9 +63,7 @@ def clip_grad_norm(
         if len(grads) > 0:
             # TODO @nouamanetazi: Check if we should calculate norm per parameter (remove .pow(norm_type)
             total_norm = torch.linalg.vector_norm(
-                torch.stack(
-                    [torch.linalg.vector_norm(g.detach(), ord=norm_type, dtype=torch.float) for g in grads]
-                ),
+                torch.stack([torch.linalg.vector_norm(g.detach(), ord=norm_type, dtype=torch.float) for g in grads]),
                 ord=norm_type,
                 dtype=torch.float,
             ).pow(norm_type)

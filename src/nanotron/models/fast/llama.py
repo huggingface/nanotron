@@ -23,10 +23,17 @@ from flash_attn.flash_attn_interface import (
     flash_attn_with_kvcache,
 )
 from flash_attn.layers.rotary import RotaryEmbedding as FlashRotaryEmbedding
-from nanotron.config import ParallelismArgs, RecomputeGranularity
+from torch import nn
+from transformers import LlamaConfig
+from transformers.activations import ACT2FN
+
 from nanotron import distributed as dist
 from nanotron import logging
+from nanotron.config import ParallelismArgs, RecomputeGranularity
+from nanotron.fused.layer_norm import TritonRMSNorm
 from nanotron.logging import log_rank
+from nanotron.models import AttachableStore, NanotronModel
+from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter
 from nanotron.parallel.pipeline_parallel.block import (
     PipelineBlock,
@@ -42,12 +49,6 @@ from nanotron.parallel.tensor_parallel.nn import (
 )
 from nanotron.random import RandomStates
 from nanotron.utils import checkpoint_method
-from nanotron.parallel import ParallelContext
-from nanotron.fused.layer_norm import TritonRMSNorm
-from nanotron.models import AttachableStore, NanotronModel
-from torch import nn
-from transformers import LlamaConfig
-from transformers.activations import ACT2FN
 
 logger = logging.get_logger(__name__)
 
@@ -62,18 +63,17 @@ class RotaryEmbedding(nn.Module):
         # TODO @nouamane: Figure out why we can't set `DTypeInvariantTensor` ...
         # TODO @thomasw21: Complex buffers break DDP, instead we store float and view them as complex
         self.freqs_cis: torch.Tensor
-        self.register_buffer(
-            "freqs_cis",
-            torch.empty(self.end, self.dim // 2, 2, dtype=torch.float),
-            persistent=False,
-        )
         self._initialized_buffer = False
 
     def init_rotary_embeddings(self):
         if self._initialized_buffer is True:
             # Buffer if already initialized
             return
-
+        self.register_buffer(
+            "freqs_cis",
+            torch.empty(self.end, self.dim // 2, 2, dtype=torch.float, device="cuda"),
+            persistent=False,
+        )
         assert self.freqs_cis.device.type == "cuda"
         # TODO @nouamane: One we figure out how to do the DTypeInvariantTensor, this can be removed and changed to an assert
         if self.freqs_cis.dtype != torch.float:
@@ -95,9 +95,15 @@ class RotaryEmbedding(nn.Module):
         x: torch.Tensor,  # [batch_size, seq_length, num_heads, d_qk]
         position_ids: Optional[torch.LongTensor],  # [batch_size, seq_length]
     ):
-        if self._initialized_buffer is False:
-            self.init_rotary_embeddings()
         batch_size, seq_length, num_heads, inner_dim = x.shape
+        while (
+            position_ids is not None and position_ids[-1, -1] >= self.end
+        ) or seq_length >= self.end:  # TODO @nouamane: check if this causes cpu-gpu sync
+            self.end *= 2
+            self._initialized_buffer = False
+        if self._initialized_buffer is False:
+            print(f"Initializing rotary embeddings with end={self.end}")
+            self.init_rotary_embeddings()
         dtype = x.dtype
         assert inner_dim % 2 == 0
         x = x.view(
@@ -111,9 +117,7 @@ class RotaryEmbedding(nn.Module):
         else:
             # TODO(kunhao): Should None follow the num_heads dimension?
             if position_ids[-1, -1] < 0 or position_ids[-1, -1] >= self.end:  # Quick test hopefully
-                raise ValueError(
-                    f"Position ids must be in the range [0, {self.end}), but got {position_ids.min()} and {position_ids.max()}"
-                )
+                raise ValueError(f"Position ids must be in the range [0, {self.end}), but got {position_ids}")
             freqs_cis = self.freqs_cis[position_ids][:, :, None, :]
         complex_freqs = torch.view_as_complex(freqs_cis)
         x_out = torch.view_as_real(complex_x * complex_freqs).view(batch_size, seq_length, num_heads, inner_dim)
@@ -167,7 +171,8 @@ class MLP(nn.Module):
             bias=False,
             async_communication=tp_linear_async_communication and tp_mode is TensorParallelLinearMode.REDUCE_SCATTER,
         )
-        self.split_silu_mul = torch.jit.script(GLUActivation(config.hidden_act))
+        # TODO @nouamane: why can't we torch.jit.script GLUActivation?
+        self.split_silu_mul = GLUActivation(config.hidden_act)
 
     def forward(self, hidden_states):  # [seq_length, batch_size, hidden_dim]
         merged_states = self.gate_up_proj(hidden_states)
@@ -379,6 +384,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             # Double check that we use store only at inference time
             assert key_states.requires_grad is False
             assert value_states.requires_grad is False
+            print("Using store")
             if "position_offsets" in store:
                 old_position_offsets = store["position_offsets"]
                 position_ids = old_position_offsets[:, None] + sequence_mask
@@ -387,6 +393,8 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             position_offsets = position_ids[:, -1]
 
             # Compute rotary embeddings
+            #Note: keep track of old rotary embedding end to check if we need to enlarge k_cache and v_cache
+            old_rotary_embed_end = self.rotary_embedding.end
             query_states = self.rotary_embedding(query_states, position_ids=position_ids)
             key_states = self.rotary_embedding(key_states, position_ids=position_ids)
 
@@ -452,7 +460,39 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                 # Subsequent inference iterations (q_length=1)
                 k_cache = store["key"]
                 v_cache = store["value"]
-
+                
+                # NOTE(fmom): According to flash_attn_with_kvcache, "If you pass in k / v, you must make sure that the cache is large enough to hold the new values"
+                # Since rotary embedding has changed (to enable larger context), we need to enlarge k_cache and v_cache
+                if self.rotary_embedding.end > old_rotary_embed_end:
+                    k_cache = torch.cat([
+                        k_cache,
+                        torch.zeros(
+                        (
+                            batch_size,
+                            self.rotary_embedding.end - old_rotary_embed_end,
+                            self.n_local_kv_heads,
+                            self.d_qk,
+                        ),
+                        dtype=query_states.dtype,
+                        device=query_states.device,
+                    )], dim=1)
+                    
+                    v_cache = torch.cat([
+                        v_cache,
+                        torch.zeros(
+                        (
+                            batch_size,
+                            self.rotary_embedding.end - old_rotary_embed_end,
+                            self.n_local_kv_heads,
+                            self.d_v,
+                        ),
+                        dtype=query_states.dtype,
+                        device=query_states.device,
+                    )], dim=1)
+                    
+                assert k_cache.shape[1] == self.rotary_embedding.end, f"Cache size {k_cache.shape[1]} is smaller than rotary embedding end {self.rotary_embedding.end}"
+                assert  v_cache.shape[1] == self.rotary_embedding.end, f"Cache size {v_cache.shape[1]} is smaller than rotary embedding end {self.rotary_embedding.end}"
+                
                 # [batch_size, seq_length, num_heads, d_qk]
                 query_states = query_states.view(
                     batch_size, q_length, self.n_local_q_heads, self.d_qk
