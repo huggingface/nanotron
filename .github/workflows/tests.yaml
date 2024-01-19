@@ -4,16 +4,16 @@ on:
   push:
     branches: [ main ]
     paths:
-      - "src/**.py"
-      - "examples/**.py"
-      - "tests/**.py"
+      - "src/**/*.py"
+      - "examples/**/*.py"
+      - "tests/**/*.py"
 
   pull_request:
     branches: [ main ]
     paths:
-      - "src/**.py"
-      - "examples/**.py"
-      - "tests/**.py"
+      - "src/**/*.py"
+      - "examples/**/*.py"
+      - "tests/**/*.py"
 
 jobs:
   tests:
