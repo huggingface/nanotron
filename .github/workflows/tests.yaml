@@ -18,10 +18,8 @@ on:
 jobs:
   tests:
     runs-on: ubuntu-latest
-
     steps:
-    - uses: actions/checkout@v2
-
+    - uses: actions/checkout@v3
     - name: Set up Python 3.10
       uses: actions/setup-python@v2
       with:
@@ -52,9 +50,8 @@ jobs:
         pip install pytest
         pip install pytest-cov
 
-    - name: Python dependencies
-      run: |
-        pip list
+    - name: Show installed libraries and their versions
+      command: pip freeze | tee installed.txt
 
     - name: Run tests
       run: pytest --color=yes --durations=0 --verbose tests/
