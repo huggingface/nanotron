@@ -17,10 +17,15 @@ jobs:
     steps:
     - uses: actions/checkout@v2
 
-    - name: Set up Python 3.9
+    - name: Set up Python 3.10
       uses: actions/setup-python@v2
       with:
-        python-version: 3.9
+        python-version: 3.10
+
+    - name: Python environment
+      run: |
+        which python
+        python --version
 
     - name: Check container state
       run: |
