@@ -54,38 +54,33 @@ class Starcoder2Config:
     Be careful on having a coherent typing as we use it to reconstruct the model from yaml
     """
 
-    is_gpt_bigcode_config: bool = False  # We use this help differentiate models in yaml/python conversion
     activation_function: str = "gelu_pytorch_tanh"
     attention_softmax_in_fp32: bool = True  # TODO: not used
     attn_pdrop: float = 0.1
     bos_token_id: int = 49152  # TODO: not used
     embd_pdrop: float = 0.1
     eos_token_id: int = 49152
-    initializer_range: float = 0.02  # TODO: not used
-    layer_norm_epsilon: float = 1e-05
-    multi_query: bool = True
+    global_attn_layers: List[int] = field(default_factory=list)
+    grouped_query: bool = False  # GQA
     hidden_size: int = 2048
+    initializer_range: float = 0.02  # TODO: not used
+    intermediate_size: Optional[int] = None
+    is_starcoder2_config: bool = True  # We use this help differentiate models in yaml/python conversion
+    layer_norm_epsilon: float = 1e-05
+    max_position_embeddings: int = 4096
+    multi_query: bool = False  # MQA
+    multi_query: bool = True
     num_attention_heads: int = 16
     num_hidden_layers: int = 24
-    intermediate_size: Optional[int] = None
-    max_position_embeddings: int = 4096
+    num_kv_heads: Optional[int] = None
     resid_pdrop: float = 0.1
+    rope_theta: Optional[int] = 10000
     scale_attention_softmax_in_fp32: bool = True
     scale_attn_weights: bool = True
-    vocab_size: int = 49280
-
-    is_starcoder2_config: bool = True  # We use this help differentiate models in yaml/python conversion
     sliding_window_size: Optional[int] = None
-    use_rotary_embeddings: bool = True
-    rope_theta: Optional[int] = 10000
     use_position_embeddings: bool = False  # TODO @nouamane this is not used
-    global_attn_layers: List[int] = field(default_factory=list)
-
-    # MQA
-    multi_query: bool = False
-    # GQA
-    grouped_query: bool = False
-    num_kv_heads: Optional[int] = None
+    use_rotary_embeddings: bool = True
+    vocab_size: int = 49280
 
     def __post_init__(self):
         super().__post_init__()
