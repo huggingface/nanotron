@@ -51,7 +51,7 @@ jobs:
         pip install pytest-cov
 
     - name: Show installed libraries and their versions
-      command: pip freeze | tee installed.txt
+      run: pip freeze | tee installed.txt
 
     - name: Run tests
       run: pytest --color=yes --durations=0 --verbose tests/
