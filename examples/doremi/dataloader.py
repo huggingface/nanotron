@@ -1,9 +1,11 @@
 import dataclasses
+import math
 import warnings
 from typing import Dict, Generator, Iterator, List, Optional, Union
 
 import numpy as np
 import torch
+from doremi_context import DoReMiContext
 from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.config import Config
@@ -14,11 +16,11 @@ from nanotron.sanity_checks import (
     assert_fail_except_rank_with,
     assert_tensor_synced_across_pg,
 )
+from torch import nn
 from torch.utils.data import BatchSampler, DataLoader
 from torch.utils.data.distributed import DistributedSampler
 
 try:
-    import datasets
     from datasets import Dataset, DatasetDict, Features, Sequence, Value, concatenate_datasets, load_dataset
     from transformers import (
         PreTrainedTokenizerBase,
@@ -347,7 +349,8 @@ class DataCollatorForCLM:
             }
 
         # Make sure we load only what's necessary, ie we only load a `input_ids` column.
-        assert all(list(example.keys()) == ["input_ids"] for example in examples)
+        # assert all(list(example.keys()) == ["input_ids"] for example in examples)
+        assert all(list(example.keys()) == ["input_ids", "domain_ids"] for example in examples)
 
         # TODO @nouamanetazi: Is it better to have examples as np.array or torch.Tensor?
         input_ids = np.vstack([examples[i]["input_ids"] for i in range(len(examples))])  # (b, s)
@@ -373,6 +376,8 @@ class DataCollatorForCLM:
         if current_pp_rank == self.output_pp_rank:
             result["label_ids"] = input_ids[:, 1:]
             result["label_mask"] = np.ones((batch_size, self.sequence_length), dtype=np.bool_)
+            # NOTE: only the last pipeline stage needs domain_idxs for computing DoReMi loss
+            result["domain_idxs"] = np.vstack([examples[i]["domain_ids"] for i in range(len(examples))])
 
         if isinstance(result["input_ids"], torch.Tensor) and result["input_ids"].shape[-1] != self.sequence_length:
             raise ValueError(
@@ -390,14 +395,74 @@ class DataCollatorForCLM:
         return result
 
 
+class DistributedSamplerForDoReMi(DistributedSampler):
+    def __init__(
+        self,
+        datasets: List[Dataset],
+        batch_size: int,
+        doremi_context: DoReMiContext,
+        parallel_context: ParallelContext,
+        **kwargs,
+    ):
+        super().__init__(datasets, **kwargs)
+        self.datasets = datasets
+        self.batch_size = batch_size
+        self.domain_weights = doremi_context.domain_weights
+        self.total_size = self._calculate_total_size()
+        self.parallel_context = parallel_context
+
+        # Random generator
+        generator = torch.Generator(device="cpu")
+        # Make sure that TP are synced always
+        # TODO(xrsrke): make seed configurable
+        seed = 42
+        self.generator = generator.manual_seed(
+            seed * (1 + dist.get_rank(self.parallel_context.dp_pg)) * (1 + dist.get_rank(self.parallel_context.pp_pg))
+        )
+
+    def _calculate_total_size(self):
+        total_samples = sum(len(d) for d in self.datasets)
+        return math.ceil(total_samples / self.batch_size) * self.batch_size
+
+    def __iter__(self):
+        domain_indices = []
+
+        lengths = [len(d) for d in self.datasets]
+        offsets = np.cumsum([0] + lengths[:-1])
+
+        for i, dataset in enumerate(self.datasets):
+            dataset_partition_size = len(dataset) // self.num_replicas
+            dataset_partition_offsets = self.rank * dataset_partition_size
+            num_samples = int(dataset_partition_size * self.domain_weights[i].item())
+
+            local_indices = (
+                torch.randint(
+                    low=0, high=dataset_partition_size, size=(num_samples,), generator=self.generator, device="cpu"
+                )
+                + dataset_partition_offsets
+            )
+            # NOTE: align the indicies across the combined dataset
+            global_indices = local_indices + offsets[i]
+            domain_indices.extend(global_indices)
+
+        np.random.shuffle(domain_indices)
+        domain_indices = domain_indices[: self.total_size]
+
+        # Yield indices in batches
+        for i in range(0, len(domain_indices), self.batch_size):
+            yield domain_indices[i : i + self.batch_size]
+
+
 # Adapted from https://github.com/huggingface/transformers/blob/47e1676255e5dd86b9541f734cd4f4bdcbb50f4a/src/transformers/trainer.py#L763-L835
 def _get_train_sampler(
     dp_size: int,
     dp_rank: int,
-    train_dataset: "Dataset",
+    train_datasets: "Dataset",
     seed: int,
     use_loop_to_round_batch_size: bool,
     consumed_train_samples: int,
+    doremi_context: DoReMiContext,
+    parallel_context: ParallelContext,
     micro_batch_size: Optional[int] = None,
     drop_last: Optional[bool] = True,
 ) -> Optional[torch.utils.data.Sampler]:
@@ -410,7 +475,7 @@ def _get_train_sampler(
         assert micro_batch_size is not None
         # loops at the end back to the beginning of the shuffled samples to make each process have a round multiple of batch_size samples.
         sampler = DistributedSamplerWithLoop(
-            train_dataset,
+            train_datasets,
             batch_size=micro_batch_size,
             num_replicas=dp_size,
             rank=dp_rank,
@@ -418,7 +483,17 @@ def _get_train_sampler(
             drop_last=drop_last,
         )
     else:
-        sampler = DistributedSampler(train_dataset, num_replicas=dp_size, rank=dp_rank, seed=seed, drop_last=drop_last)
+        # sampler = DistributedSampler(train_dataset, num_replicas=dp_size, rank=dp_rank, seed=seed, drop_last=drop_last)
+        sampler = DistributedSamplerForDoReMi(
+            train_datasets,
+            batch_size=micro_batch_size,
+            num_replicas=dp_size,
+            rank=dp_rank,
+            seed=seed,
+            drop_last=drop_last,
+            doremi_context=doremi_context,
+            parallel_context=parallel_context,
+        )
 
     if consumed_train_samples > 0:
         sampler = SkipBatchSampler(sampler, skip_batches=consumed_train_samples, dp_size=dp_size)
@@ -426,9 +501,89 @@ def _get_train_sampler(
     return sampler
 
 
+# class CombinedDataset(Dataset):
+#     def __init__(self, datasets: List[Dataset]):
+#         self.datasets = datasets
+#         self.lengths = [len(d) for d in datasets]
+#         self.offsets = np.cumsum([0] + self.lengths[:-1])
+
+#     def __len__(self):
+#         return sum(self.lengths)
+
+#     def __getitem__(self, batch_global_ids: List[List[int]]):
+#         if isinstance(batch_global_ids, list):
+#             outputs = [self.get_sample(global_ids) for global_ids in batch_global_ids]
+#             # TODO(xrsrke): refactor this, make it fast
+#             outputs = {key: [d[key] for d in outputs] for key in outputs[0]}
+#             return outputs
+#         else:
+#             return self.get_sample(batch_global_ids)
+
+#     def get_sample(self, global_ids):
+#         # dataset_idx, local_idx = self.get_dataset_and_local_index(global_ids)
+#         dataset_idx = self.get_dataset_and_local_index(global_ids)
+#         dataset = self.datasets[dataset_idx]
+#         sample = {key: dataset[key][local_idx] for key in dataset.features}
+#         # TODO(xrsrke): use a consistent naming scheme
+#         sample["domain_idx"] = dataset_idx
+#         return sample
+
+#     def get_dataset_and_local_index(self, global_ids) -> List[int]:
+#         domain_local_idxs = []
+#         for global_id in global_ids:
+#             for i, offset in enumerate(self.offsets):
+#                 if global_id < offset + self.lengths[i]:
+#                     domain_local_idxs.append((i, global_id - offset))
+
+#             raise IndexError(f"Index out of range, global_id={global_id}")
+
+#         return domain_local_idxs
+
+
+class CombinedDataset(Dataset):
+    def __init__(self, datasets: List[Dataset]):
+        self.datasets = datasets
+        self.lengths = [len(d) for d in datasets]
+        self.offsets = np.cumsum([0] + self.lengths[:-1])
+
+    def __len__(self) -> int:
+        return sum(self.lengths)
+
+    def __getitem__(self, batch_global_idxs: List[List[int]]) -> Dict:
+        def merge_outputs(outputs):
+            merged_input_ids = sum((o["input_ids"] for o in outputs), [])
+            merged_domain_idx = sum((o["domain_idx"] for o in outputs), [])
+            return {"input_ids": merged_input_ids, "domain_ids": merged_domain_idx}
+
+        outputs = []
+        for global_idxs in batch_global_idxs:
+            output = [self._get_sample(global_idx) for global_idx in global_idxs]
+            # TODO(xrsrke): refactor this, make it fast
+            output = {key: [d[key] for d in output] for key in output[0]}
+            outputs.append(output)
+
+        return merge_outputs(outputs)
+
+    def _get_sample(self, global_idx):
+        dataset_idx, local_idx = self._get_dataset_and_local_index(global_idx)
+        dataset = self.datasets[dataset_idx]
+        sample = {key: dataset[key][local_idx] for key in dataset.features}
+        sample["domain_idx"] = dataset_idx
+        return sample
+
+    def _get_dataset_and_local_index(self, global_idx):
+        for i, offset in enumerate(self.offsets):
+            if global_idx < offset + self.lengths[i]:
+                return i, global_idx - offset
+
+        raise IndexError(f"Index out of range, global_idx={global_idx}")
+
+
 # Adapted from https://github.com/huggingface/transformers/blob/47e1676255e5dd86b9541f734cd4f4bdcbb50f4a/src/transformers/trainer.py#L837
-def get_train_dataloader(
-    train_dataset: "Dataset",
+def get_doremi_dataloader(
+    doremi_context: DoReMiContext,
+    ref_model: nn.Module,
+    train_datasets: List["Dataset"],
     sequence_length: int,
     parallel_context: ParallelContext,
     input_pp_rank: int,
@@ -441,30 +596,33 @@ def get_train_dataloader(
     dataloader_pin_memory: bool = True,
     use_loop_to_round_batch_size: bool = False,
 ) -> DataLoader:
-    if not isinstance(train_dataset, datasets.Dataset):
-        raise ValueError(f"training requires a datasets.Dataset, but got {type(train_dataset)}")
+    # if not isinstance(train_dataset, datasets.Dataset):
+    #     raise ValueError(f"training requires a datasets.Dataset, but got {type(train_dataset)}")
 
     # Case of ranks requiring data
     if dist.get_rank(parallel_context.pp_pg) in [
         input_pp_rank,
         output_pp_rank,
     ]:
-        train_dataset = train_dataset.with_format(type="numpy", columns=["input_ids"], output_all_columns=True)
+        train_datasets = [
+            d.with_format(type="numpy", columns=["input_ids"], output_all_columns=True) for d in train_datasets
+        ]
 
     # Case of ranks not requiring data. We give them an infinite dummy dataloader
     else:
-        #
-        assert train_dataset.column_names == ["input_ids"], (
-            f"Dataset has to have a single column, with `input_ids` as the column name. "
-            f"Current dataset: {train_dataset}"
-        )
-        dataset_length = len(train_dataset)
-        train_dataset = train_dataset.remove_columns(column_names="input_ids")
+        # TODO(xrsrke): recheck this
+        # train_datasets = train_datasets[0]
+        # assert train_dataset.column_names == ["input_ids"], (
+        #     f"Dataset has to have a single column, with `input_ids` as the column name. "
+        #     f"Current dataset: {train_dataset}"
+        # )
+        dataset_length = len(train_datasets[0])
+        train_dataset = train_datasets[0].remove_columns(column_names="input_ids")
         assert (
             len(train_dataset) == 0
         ), f"Dataset has to be empty after removing the `input_ids` column. Current dataset: {train_dataset}"
         # HACK as if we remove the last column of a train_dataset, it becomes empty and it's number of rows becomes empty.
-        train_dataset = EmptyInfiniteDataset(length=dataset_length)
+        train_datasets = EmptyInfiniteDataset(length=dataset_length)
         # No need to spawn a lot of workers, we can just use main
         dataloader_num_workers = 0
 
@@ -481,16 +639,18 @@ def get_train_dataloader(
     train_sampler = _get_train_sampler(
         dp_size=parallel_context.dp_pg.size(),
         dp_rank=dist.get_rank(parallel_context.dp_pg),
-        train_dataset=train_dataset,
+        train_datasets=train_datasets,
         seed=seed_worker,
         use_loop_to_round_batch_size=use_loop_to_round_batch_size,
         micro_batch_size=micro_batch_size,
         drop_last=dataloader_drop_last,
         consumed_train_samples=consumed_train_samples,
+        doremi_context=doremi_context,
+        parallel_context=parallel_context,
     )
-
-    return DataLoader(
-        train_dataset,
+    comebined_dataset = CombinedDataset(train_datasets)
+    dataloader = DataLoader(
+        comebined_dataset,
         batch_size=micro_batch_size,
         sampler=train_sampler,
         collate_fn=data_collator,
@@ -498,9 +658,34 @@ def get_train_dataloader(
         num_workers=dataloader_num_workers,
         pin_memory=dataloader_pin_memory,
         worker_init_fn=get_dataloader_worker_init(dp_rank=dist.get_rank(parallel_context.dp_pg)),
-        # TODO @thomasw21: I'm not sure but this doesn't seem to work at all.
-        # pin_memory_device="cuda",
     )
+
+    from nanotron.logging import log_rank
+
+    def _data_generator():
+        dist.barrier()
+        for batch in dataloader:
+            # Compute reference logprobs
+            # TODO(xrsrke): support PP
+            # TODO(xrsrke): move this to collator
+            # batch = {k: v.to("cuda") if k != "domain_idx" else v for k, v in batch.items()}
+            # batch = {k: v.to("cuda") for k, v in batch.items() if k != "domain_idx"}
+            batch = {k: v.to("cuda") for k, v in batch.items()}
+            log_rank(
+                f"Before reference model do inference, global_rank={dist.get_rank(parallel_context.world_pg)}",
+                logger=logger,
+                level=logging.INFO,
+                rank=None,
+            )
+
+            # NOTE: because the inference model don't take `domain_idxs` as input
+            # we need to remove it from the batch
+            batch_for_inference = {k: v for k, v in batch.items() if k != "domain_idxs"}
+            ref_losses = ref_model(**batch_for_inference)["losses"]
+            batch["ref_losses"] = ref_losses
+            yield batch
+
+    return _data_generator
 
 
 def get_dataloader_worker_init(dp_rank: int):

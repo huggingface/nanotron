@@ -1,7 +1,10 @@
 from pprint import pformat
 from typing import Union
 
-from llama import LlamaForDoReMiTraining
+import torch
+import torch.nn.functional as F
+from doremi_context import DoReMiContext
+from llama import LlamaForDoReMiTraining, LLaMaForInference
 from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.config import (
@@ -12,6 +15,7 @@ from nanotron.helpers import _vocab_size_with_padding
 from nanotron.logging import log_rank
 from nanotron.models import NanotronModel
 from nanotron.parallel.tied_parameters import get_tied_id_to_param
+from nanotron.sanity_checks import assert_tensor_synced_across_pg
 from nanotron.serialize import load_weights, parse_ckpt_path
 from nanotron.trainer import DistributedTrainer
 from nanotron.utils import init_method_normal, scaled_init_method_normal
@@ -25,6 +29,17 @@ logger = logging.get_logger(__name__)
 class DoReMiTrainer(DistributedTrainer):
     def init_model(self) -> Union[NanotronModel, DistributedDataParallel]:
         """Initialize the model and load weights from checkpoint if needed."""
+        NUM_DOMAINS = 5
+        domain_weights = F.softmax(torch.ones(NUM_DOMAINS, requires_grad=False, device="cuda"), dim=-1)
+        self.doremi_context = DoReMiContext(domain_weights=domain_weights)
+
+        # NOTE: SANITY CHECKS: make sure all ranks have the same domain weights
+        assert_tensor_synced_across_pg(
+            tensor=domain_weights,
+            pg=self.parallel_context.world_pg,
+            msg=lambda err: f"Domain weights are not synced across DP {err}",
+        )
+
         # TODO: add max_position_embeddings
         self.model_config.vocab_size = _vocab_size_with_padding(
             self.model_config.vocab_size,
@@ -65,10 +80,22 @@ class DoReMiTrainer(DistributedTrainer):
                 config=self.model_config,
                 parallel_context=self.parallel_context,
                 parallel_config=self.config.parallelism,
-                random_states=self.random_states,
+                doremi_context=self.doremi_context,
             ),
         )
         normalized_model = model.module if isinstance(model, DistributedDataParallel) else model
+
+        log_rank("[DoReMi] Initializing reference model in DoReMi training", logger=logger, level=logging.INFO)
+        self.ref_model = self._init_model(
+            model_builder=lambda: LLaMaForInference(
+                config=self.model_config,
+                parallel_config=self.config.parallelism,
+                parallel_context=self.parallel_context,
+            ),
+        )
+        self.ref_model.eval()
+        for _, param in self.ref_model.named_parameters():
+            param.requires_grad_(False)
 
         # Load or initialize model weights
         self.init_checkpoint_path = parse_ckpt_path(config=self.config)
@@ -79,6 +106,9 @@ class DoReMiTrainer(DistributedTrainer):
             self.param_shard_metadata = load_weights(
                 model=normalized_model, parallel_context=self.parallel_context, root_folder=self.init_checkpoint_path
             )
+            load_weights(
+                model=self.ref_model, parallel_context=self.parallel_context, root_folder=self.init_checkpoint_path
+            )
             reloaded_from_checkpoint = True
         if not reloaded_from_checkpoint:
             log_rank("No checkpoint path provided.", logger=logger, level=logging.INFO)
@@ -86,6 +116,12 @@ class DoReMiTrainer(DistributedTrainer):
                 # Initialize model from an pretrained model checkpoint
                 self.param_shard_metadata = load_weights(
                     model=normalized_model,
+                    parallel_context=self.parallel_context,
+                    root_folder=self.config.model.init_method.path,
+                )
+
+                load_weights(
+                    model=self.ref_model,
                     parallel_context=self.parallel_context,
                     root_folder=self.config.model.init_method.path,
                 )
@@ -99,7 +135,7 @@ class DoReMiTrainer(DistributedTrainer):
                 )
                 # Synchronize parameters so that the model is consistent
                 # sync all params across dp
-                for name, param in sorted(model.named_parameters(), key=lambda x: x[0]):
+                for _, param in sorted(model.named_parameters(), key=lambda x: x[0]):
                     dist.all_reduce(param, op=dist.ReduceOp.AVG, group=self.parallel_context.dp_pg)
 
                 # sync tied params across tied groups

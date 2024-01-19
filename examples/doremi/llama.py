@@ -2,8 +2,9 @@ from typing import Dict, Optional, Union
 
 import torch
 from doremi_context import DoReMiContext
-from nanotron import distributed as dist
+from nanotron import logging
 from nanotron.config import ParallelismArgs
+from nanotron.logging import log_rank
 from nanotron.models import NanotronModel
 from nanotron.models.fast.llama import LlamaModel
 from nanotron.nn.layer_norm import TritonRMSNorm
@@ -19,9 +20,10 @@ from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelEmbedding,
     TensorParallelRowLinear,
 )
-from nanotron.random import RandomStates
 from torch import nn
 from transformers import LlamaConfig
+
+logger = logging.get_logger(__name__)
 
 
 def normalize_domain_weights(weights: torch.Tensor, smoothing_param: float = 1e-3) -> torch.Tensor:
@@ -40,8 +42,8 @@ class LLaMaForInference(NanotronModel):
     def __init__(
         self,
         config: LlamaConfig,
-        parallel_context: ParallelContext,
         parallel_config: Optional[ParallelismArgs],
+        parallel_context: ParallelContext,
     ):
         super().__init__()
         self.model = LlamaModel(config=config, parallel_context=parallel_context, parallel_config=parallel_config)
@@ -64,7 +66,7 @@ class LLaMaForInference(NanotronModel):
         logprobs = sharded_cross_entropy(
             sharded_logits,
             label_ids.contiguous(),
-            group=self.dpg.tp_pg,
+            group=self.parallel_context.tp_pg,
             dtype=torch.float,
         )
         # TODO(xrsrke): recheck if this is correct
@@ -225,37 +227,38 @@ class LLaMaForInference(NanotronModel):
 
 
 class DoReMiLoss(nn.Module):
-    def __init__(self, tp_pg: dist.ProcessGroup):
+    def __init__(self, parallel_context: ParallelContext):
         super().__init__()
-        self.tp_pg = tp_pg
+        self.parallel_context = parallel_context
 
     def forward(
         self,
         sharded_logits: torch.Tensor,  # [seq_length, batch_size, logits]
         label_ids: torch.Tensor,  # [batch_size, seq_length]
         label_mask: torch.Tensor,  # [batch_size, seq_length]
-        domain_idx: torch.Tensor,
+        domain_idxs: torch.Tensor,
         ref_losses: torch.Tensor,
         doremi_context: DoReMiContext,
     ) -> Dict[str, torch.Tensor]:
         # Megatron by defaults cast everything in fp32. `--f16-lm-cross-entropy` is an option you can use to keep current precision.
         # https://github.com/NVIDIA/Megatron-LM/blob/f267e6186eae1d6e2055b412b00e2e545a8e896a/megatron/model/gpt_model.py#L38
+        tp_pg = self.parallel_context.tp_pg
         logprobs = sharded_cross_entropy(
-            sharded_logits, label_ids.transpose(0, 1).contiguous(), group=self.tp_pg, dtype=torch.float
+            sharded_logits, label_ids.transpose(0, 1).contiguous(), group=tp_pg, dtype=torch.float
         ).transpose(0, 1)
-        # TODO @thomasw21: It's unclear what kind of normalization we want to do.
+
         losses = (logprobs * label_mask).sum(dim=-1) / label_mask.sum(dim=-1)
         excess_loss = (losses - ref_losses).clamp(min=0)
 
         # TODO(xrsrke): flatten it in the dataloader
-        domain_idx = domain_idx.view(-1)
+        domain_idxs = domain_idxs.view(-1)
 
         # NOTE: Calculate total loss per domain
-        domain_losses = torch.zeros(domain_idx.max() + 1, device="cuda")
+        domain_losses = torch.zeros(domain_idxs.max() + 1, device="cuda")
         for i in range(len(excess_loss)):
-            domain_losses[domain_idx[i]] += excess_loss[i]
+            domain_losses[domain_idxs[i]] += excess_loss[i]
 
-        tokens_per_domain = torch.bincount(domain_idx, minlength=domain_idx.max() + 1)
+        tokens_per_domain = torch.bincount(domain_idxs, minlength=domain_idxs.max() + 1)
 
         normalized_domain_losses = domain_losses / tokens_per_domain
         updated_domain_weights = doremi_context.domain_weights * torch.exp(
@@ -265,13 +268,19 @@ class DoReMiLoss(nn.Module):
             updated_domain_weights, smoothing_param=doremi_context.smoothing_param
         )
 
-        doremi_context.domain_weights = (
-            normalized_domain_weights * torch.randn_like(normalized_domain_weights)
-        ).detach()
+        doremi_context.domain_weights = normalized_domain_weights.detach()
 
         # Sync the loss
         # I think indexing causes a sync we don't actually want
         # loss = loss[label_mask].sum()
+
+        log_rank(
+            f"[DoReMi] Domain weights: {doremi_context.domain_weights}",
+            logger=logger,
+            level=logging.INFO,
+            rank=0,
+            group=self.parallel_context.dp_pg,
+        )
 
         return {"loss": normalized_domain_weights.sum(dim=-1)}
 
@@ -281,21 +290,20 @@ class LlamaForDoReMiTraining(NanotronModel):
         self,
         config: LlamaConfig,
         parallel_context: ParallelContext,
+        doremi_context: DoReMiContext,
         parallel_config: Optional[ParallelismArgs],
-        random_states: Optional[RandomStates] = None,
-        doremi_context: Optional[DoReMiContext] = None,
     ):
         super().__init__()
         self.model = LlamaModel(config=config, parallel_context=parallel_context, parallel_config=parallel_config)
         self.loss = PipelineBlock(
             p2p=self.model.p2p,
             module_builder=DoReMiLoss,
-            module_kwargs={"tp_pg": parallel_context.tp_pg},
+            module_kwargs={"parallel_context": parallel_context},
             module_input_keys={
                 "sharded_logits",
                 "label_ids",
                 "label_mask",
-                "domain_idx",
+                "domain_idxs",
                 "ref_losses",
                 "doremi_context",
             },
@@ -304,6 +312,7 @@ class LlamaForDoReMiTraining(NanotronModel):
         self.parallel_context = parallel_context
         self.config = config
         self.parallel_config = parallel_config
+        self.doremi_context = doremi_context
 
     def forward(
         self,
@@ -312,7 +321,7 @@ class LlamaForDoReMiTraining(NanotronModel):
         label_ids: Union[torch.Tensor, TensorPointer],
         label_mask: Union[torch.Tensor, TensorPointer],
         # TODO(xrsrke): change to plural
-        domain_idx: Optional[Union[torch.Tensor, TensorPointer]],
+        domain_idxs: Optional[Union[torch.Tensor, TensorPointer]],
         ref_losses: Optional[Union[torch.Tensor, TensorPointer]],
     ) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
         sharded_logits = self.model(
@@ -323,8 +332,8 @@ class LlamaForDoReMiTraining(NanotronModel):
             sharded_logits=sharded_logits,
             label_ids=label_ids,
             label_mask=label_mask,
+            domain_idxs=domain_idxs,
             ref_losses=ref_losses,
-            domain_idx=domain_idx,
             doremi_context=self.doremi_context,
         )["loss"]
         return {"loss": loss}
