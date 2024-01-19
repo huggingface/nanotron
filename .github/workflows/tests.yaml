@@ -11,10 +11,10 @@ on:
 
   pull_request:
     branches: [ main ]
-    paths:
-      - "src/**/*.py"
-      - "examples/**/*.py"
-      - "tests/**/*.py"
+    #paths:
+    #  - "src/**/*.py"
+    #  - "examples/**/*.py"
+    #  - "tests/**/*.py"
 
 jobs:
   tests:
