@@ -30,7 +30,7 @@ from nanotron.helpers import (
     lr_scheduler_builder,
 )
 from nanotron.logging import LoggerWriter, LogItem, human_format, log_rank, set_logger_verbosity_format
-from nanotron.models import NanotronModel, build_model, check_model_has_grad
+from nanotron.models import NanotronModel, build_model
 from nanotron.models.llama import LlamaForTraining, RotaryEmbedding
 from nanotron.models.starcoder2 import Starcoder2ForTraining
 from nanotron.optim.clip_grads import clip_grad_norm
@@ -139,7 +139,11 @@ class DistributedTrainer:
         )
         if self.init_checkpoint_path is not None:
             load_optimizer(
-                optimizer=self.optimizer, parallel_context=self.parallel_context, root_folder=self.init_checkpoint_path
+                optimizer=self.optimizer,
+                parallel_context=self.parallel_context,
+                root_folder=self.init_checkpoint_path,
+                param_shard_metadata=self.param_shard_metadata,
+                model=self.model,
             )
 
         # Init learning rate scheduler
@@ -539,7 +543,7 @@ class DistributedTrainer:
         if self.init_checkpoint_path is not None:
             # Reload from a training checkpoint
             log_rank(f"Loading weights from {self.init_checkpoint_path}", logger=logger, level=logging.INFO, rank=0)
-            load_weights(
+            self.param_shard_metadata = load_weights(
                 model=normalized_model, parallel_context=self.parallel_context, root_folder=self.init_checkpoint_path
             )
             reloaded_from_checkpoint = True
@@ -547,7 +551,7 @@ class DistributedTrainer:
             log_rank("No checkpoint path provided.", logger=logger, level=logging.INFO)
             if isinstance(self.config.model.init_method, ExistingCheckpointInit):
                 # Initialize model from an pretrained model checkpoint
-                load_weights(
+                self.param_shard_metadata = load_weights(
                     model=normalized_model,
                     parallel_context=self.parallel_context,
                     root_folder=self.config.model.init_method.path,
@@ -646,7 +650,7 @@ class DistributedTrainer:
         # Model make it DDP
         if make_ddp is True:
             # Check that the model has at least one grad. Necessary for DDP
-            check_model_has_grad(model=model, parallel_context=parallel_context)
+            # check_model_has_grad(model=model, parallel_context=parallel_context)
             # TODO @thomasw21: DDP doesn't support broadcasting complex buffers (and we don't really need that broadcasting anyway)
             model = DistributedDataParallel(
                 model,

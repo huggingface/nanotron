@@ -18,8 +18,10 @@ from nanotron.parallel.parameters import NanotronParameter, ShardedInfo, SlicesP
 from nanotron.serialize.metadata import CheckpointMetadata, TensorMetadata, load_meta
 from nanotron.serialize.utils import (
     ObjectType,
+    extract_tp_pp_rank_from_shard_path,
     get_path,
     get_tp_and_pp_rank_and_size_from,
+    merge_and_shard_tp_tensors,
 )
 
 logger = logging.get_logger(__name__)
@@ -136,34 +138,45 @@ def get_checkpoint_version(parallel_context, root_folder, param_save_path: Path)
     return checkpoint_version
 
 
-def load_sharded_param_latest(param_or_buffer: torch.Tensor, sharded_info: ShardedInfo, shards_path: List[Path]):
+def load_sharded_param_latest(
+    param_or_buffer: torch.Tensor,
+    sharded_info: ShardedInfo,
+    shards_path: List[Path],
+    param_shard_metadata: Optional[Dict] = None,
+):
     checkpoint_unsharded_shape = None
     shards_and_slices_maps: List[Tuple[torch.Tensor, Tuple[SlicesPair, ...]]] = []
+
     for shard_path in shards_path:
         with safe_open(shard_path, framework="pt", device=str(param_or_buffer.device)) as fi:
             # TODO @thomasw21: Choose only a slice if we switch the TP topology
             param_metadata = fi.metadata()
             param_metadata = TensorMetadata.from_str_dict(param_metadata)
             shards_and_slices_maps.append((fi.get_tensor("data"), param_metadata.local_global_slices_pairs))
+
             if checkpoint_unsharded_shape is None:
                 checkpoint_unsharded_shape = param_metadata.unsharded_shape
             else:
                 assert checkpoint_unsharded_shape == param_metadata.unsharded_shape
 
+            if param_shard_metadata is not None:
+                # NOTE: store how does model paramater are sharded
+                # so that we can shard optimizer checkpoints in this way
+                pp_rank, tp_rank = extract_tp_pp_rank_from_shard_path(shard_path)
+                param_shard_metadata[(pp_rank, tp_rank)] = param_metadata
+
     assert checkpoint_unsharded_shape is not None
     # TODO @thomasw21: Interestingly enough we don't actually need to instantiate the entire model at all.
     unsharded_tensor = torch.empty(checkpoint_unsharded_shape, device=param_or_buffer.device)
-    for shard, slices_pairs in shards_and_slices_maps:
-        for slices_pair in slices_pairs:
-            local_slices = slices_pair.local_slices
-            global_slices = slices_pair.global_slices
-            unsharded_tensor[global_slices] = shard[local_slices]
 
-    # TODO(kunhao): check unsharded_tensor is fully filled
-    for slices_pair in sharded_info.local_global_slices_pairs:
-        local_slices = slices_pair.local_slices
-        global_slices = slices_pair.global_slices
-        param_or_buffer[local_slices] = unsharded_tensor[global_slices]
+    merge_and_shard_tp_tensors(
+        buffer=param_or_buffer,
+        unsharded_buffer=unsharded_tensor,
+        shards_and_slices_maps=shards_and_slices_maps,
+        shard_metadata=sharded_info,
+    )
+
+    return param_shard_metadata
 
 
 def load_weights(
@@ -189,9 +202,13 @@ def load_weights(
     checkpoint_version: Optional[Version] = None
 
     filtered_state_dict = filtered_state_dict if filtered_state_dict is not None else model.state_dict()
+    param_shard_metadata = {}
     for name, param_or_buffer in tqdm(
         filtered_state_dict.items(), disable=dist.get_rank(parallel_context.world_pg) != 0, desc="Loading weights"
     ):
+        # NOTE: extract how does the current model parameter are sharded
+        # so that we can load optimizer checkpoints in this way
+        param_shard_metadata[name] = {}
         # `state_dict` doesn't return a Param or a buffer, just a tensors which loses some metadata
         try:
             param = model.get_parameter(name)
@@ -274,13 +291,18 @@ def load_weights(
 
                 if checkpoint_version <= CHECKPOINT_VERSION:
                     load_sharded_param_latest(
-                        param_or_buffer=param_or_buffer, sharded_info=sharded_info, shards_path=shards_path
+                        param_or_buffer=param_or_buffer,
+                        sharded_info=sharded_info,
+                        shards_path=shards_path,
+                        param_shard_metadata=param_shard_metadata[name],
                     )
                 else:
                     raise ValueError(f"Unsupported checkpoint version {checkpoint_version}")
 
         else:
             raise NotImplementedError(f"Parameters {param} should be a NanotronParameter")
+
+    return param_shard_metadata
 
 
 def get_checkpoint_paths_list(
