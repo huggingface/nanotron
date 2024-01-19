@@ -17,7 +17,7 @@ on:
 
 jobs:
   tests:
-    runs-on: ubuntu-latest
+    runs-on: [multi-gpu, nvidia-gpu, 8-t4, ci]
     steps:
     - uses: actions/checkout@v3
     - name: Set up Python 3.10
