@@ -97,7 +97,6 @@ config = Config(
     logging=LoggingArgs(),
     tokens=tokens,
     data=DataArgs(dataset=dataset, seed=seed),
-    profiler=None,
 )
 
 if __name__ == "__main__":
