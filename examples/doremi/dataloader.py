@@ -8,9 +8,7 @@ import torch
 from doremi_context import DoReMiContext
 from nanotron import distributed as dist
 from nanotron import logging
-from nanotron.config import (
-    PretrainDatasetsArgs,
-)
+from nanotron.config import PretrainDatasetsArgs
 from nanotron.dataloader import EmptyInfiniteDataset, SkipBatchSampler, clm_process, get_dataloader_worker_init
 from nanotron.logging import log_rank
 from nanotron.parallel import ParallelContext
@@ -56,7 +54,7 @@ def get_doremi_datasets(
     return raw_datasets
 
 
-def get_dataloader(trainer: DistributedTrainer, domain_keys: List[str]):
+def get_dataloader(trainer: DistributedTrainer, domain_keys: List[str]) -> DataLoader:
     """Returns a dataloader for training."""
     assert isinstance(trainer.config.data.dataset, PretrainDatasetsArgs), "Please provide a dataset in the config file"
 
@@ -118,12 +116,15 @@ def get_dataloader(trainer: DistributedTrainer, domain_keys: List[str]):
         dataloader_drop_last=True,
     )()
 
-    # Check if we have enough samples for train_steps
+    # NOTE: Check if we have enough samples for train_steps
+    # bach_size = len(dataloader)
+    # NOTE: because currently nanotron set batch size equal to micro batch size
+    # batch_size = trainer.micro_batch_size
     # assert (
     #     trainer.config.tokens.train_steps - trainer.start_iteration_step
-    # ) * trainer.global_batch_size // trainer.parallel_context.dp_pg.size() < len(dataloader), (
-    #     f"Dataset is too small for steps ({len(dataloader)} < {(trainer.config.tokens.train_steps - trainer.start_iteration_step) * trainer.global_batch_size // trainer.parallel_context.dp_pg.size()}), "
-    #     f"Try train_steps<={len(dataloader) * trainer.parallel_context.dp_pg.size() // trainer.global_batch_size + trainer.start_iteration_step}"
+    # ) * trainer.global_batch_size // trainer.parallel_context.dp_pg.size() < batch_size, (
+    #     f"Dataset is too small for steps ({batch_size} < {(trainer.config.tokens.train_steps - trainer.start_iteration_step) * trainer.global_batch_size // trainer.parallel_context.dp_pg.size()}), "
+    #     f"Try train_steps<={batch_size * trainer.parallel_context.dp_pg.size() // trainer.global_batch_size + trainer.start_iteration_step}"
     # )
     return dataloader
 
@@ -344,7 +345,7 @@ class CombinedDataset(Dataset):
 
         return merge_outputs(outputs)
 
-    def _get_sample(self, global_idx: int) -> Dict[str]:
+    def _get_sample(self, global_idx: int) -> Dict:
         dataset_idx, local_idx = self._get_dataset_and_local_index(global_idx)
         dataset = self.datasets[dataset_idx]
         sample = {key: dataset[key][local_idx] for key in dataset.features}

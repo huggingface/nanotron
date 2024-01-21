@@ -99,5 +99,5 @@ tokens:
   sequence_length: 32
   # train_steps: 1000
   # train_steps: 1579
-  train_steps: 1000
+  train_steps: 10
   val_check_interval: -1
