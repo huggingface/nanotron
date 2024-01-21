@@ -10,10 +10,7 @@ from nanotron.models.fast.llama import LlamaModel
 from nanotron.nn.layer_norm import TritonRMSNorm
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter
-from nanotron.parallel.pipeline_parallel.block import (
-    PipelineBlock,
-    TensorPointer,
-)
+from nanotron.parallel.pipeline_parallel.block import PipelineBlock, TensorPointer
 from nanotron.parallel.tensor_parallel.functional import sharded_cross_entropy
 from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelColumnLinear,
