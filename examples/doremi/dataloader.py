@@ -1,7 +1,7 @@
 import dataclasses
 import math
 import warnings
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -75,7 +75,7 @@ def get_dataloader(trainer: DistributedTrainer, domain_keys: List[str]):
     tokenizer.padding_side = "left"
 
     log_rank(
-        f"Downloading datasets from {trainer.config.data.dataset.hf_dataset_or_datasets}",
+        f"Downloading dataset {trainer.config.data.dataset.hf_dataset_or_datasets}",
         logger=logger,
         level=logging.INFO,
         rank=0,
@@ -344,14 +344,14 @@ class CombinedDataset(Dataset):
 
         return merge_outputs(outputs)
 
-    def _get_sample(self, global_idx):
+    def _get_sample(self, global_idx: int) -> Dict[str]:
         dataset_idx, local_idx = self._get_dataset_and_local_index(global_idx)
         dataset = self.datasets[dataset_idx]
         sample = {key: dataset[key][local_idx] for key in dataset.features}
         sample["domain_idx"] = dataset_idx
         return sample
 
-    def _get_dataset_and_local_index(self, global_idx):
+    def _get_dataset_and_local_index(self, global_idx: int) -> Tuple[int, int]:
         for i, offset in enumerate(self.offsets):
             if global_idx < offset + self.lengths[i]:
                 return i, global_idx - offset
@@ -376,9 +376,6 @@ def get_doremi_dataloader(
     dataloader_pin_memory: bool = True,
     use_loop_to_round_batch_size: bool = False,
 ) -> DataLoader:
-    # if not isinstance(train_dataset, datasets.Dataset):
-    #     raise ValueError(f"training requires a datasets.Dataset, but got {type(train_dataset)}")
-
     # Case of ranks requiring data
     if dist.get_rank(parallel_context.pp_pg) in [
         input_pp_rank,
@@ -412,11 +409,6 @@ def get_doremi_dataloader(
         output_pp_rank=output_pp_rank,
         parallel_context=parallel_context,
     )
-    log_rank(
-        f"Before _get_train_sampler, global_rank={dist.get_rank(parallel_context.world_pg)}",
-        logger=logger,
-        level=logging.INFO,
-    )
 
     train_sampler = _get_train_sampler(
         dp_size=parallel_context.dp_pg.size(),
@@ -431,19 +423,7 @@ def get_doremi_dataloader(
         parallel_context=parallel_context,
     )
 
-    log_rank(
-        f"Before CombinedDataset, global_rank={dist.get_rank(parallel_context.world_pg)}",
-        logger=logger,
-        level=logging.INFO,
-    )
-
     comebined_dataset = CombinedDataset(train_datasets)
-
-    log_rank(
-        f"Before DataLoader, global_rank={dist.get_rank(parallel_context.world_pg)}",
-        logger=logger,
-        level=logging.INFO,
-    )
 
     dataloader = DataLoader(
         comebined_dataset,
@@ -460,13 +440,6 @@ def get_doremi_dataloader(
         dist.barrier()
         for batch in dataloader:
             batch = {k: v.to("cuda") for k, v in batch.items()}
-            log_rank(
-                f"Before reference model do inference, global_rank={dist.get_rank(parallel_context.world_pg)}",
-                logger=logger,
-                level=logging.INFO,
-                rank=None,
-            )
-
             # NOTE: because the inference model don't take `domain_idxs`
             # as input we need to remove it from the batch
             batch_for_inference = {k: v for k, v in batch.items() if k != "domain_idxs"}
