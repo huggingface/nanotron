@@ -2,10 +2,9 @@
 DoReMi training script.
 
 Usage:
-```
+
 export CUDA_DEVICE_MAX_CONNECTIONS=1 # important for some distributed operations
 torchrun --nproc_per_node=4 examples/doremi/train_doremi.py --config-file examples/doremi/config_tiny_llama.yaml
-```
 """
 import argparse
 

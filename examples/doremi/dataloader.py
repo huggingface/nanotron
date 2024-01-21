@@ -125,9 +125,6 @@ def get_dataloader(trainer: DistributedTrainer, domain_keys: List[str]):
     #     f"Dataset is too small for steps ({len(dataloader)} < {(trainer.config.tokens.train_steps - trainer.start_iteration_step) * trainer.global_batch_size // trainer.parallel_context.dp_pg.size()}), "
     #     f"Try train_steps<={len(dataloader) * trainer.parallel_context.dp_pg.size() // trainer.global_batch_size + trainer.start_iteration_step}"
     # )
-    # else:
-    #     raise ValueError(f"Unhandled case of `self.config.data.dataset`. Got: {trainer.config.data.dataset}")
-
     return dataloader
 
 
@@ -163,7 +160,6 @@ class DataCollatorForCLM:
 
         assert all(list(example.keys()) == ["input_ids", "domain_ids"] for example in examples)
 
-        # TODO @nouamanetazi: Is it better to have examples as np.array or torch.Tensor?
         input_ids = np.vstack([examples[i]["input_ids"] for i in range(len(examples))])  # (b, s)
         batch_size, expanded_input_length = input_ids.shape
 
@@ -222,7 +218,6 @@ class DistributedSamplerForDoReMi(DistributedSampler):
         self.total_size = self._calculate_total_size()
         self.parallel_context = parallel_context
 
-        # Random generator
         generator = torch.Generator(device="cpu")
         # Make sure that TP are synced always
         # TODO(xrsrke): make seed configurable
@@ -238,10 +233,8 @@ class DistributedSamplerForDoReMi(DistributedSampler):
 
     def __iter__(self):
         domain_indices = []
-
         lengths = [len(d) for d in self.datasets]
         # lengths = compute_total_sample_per_streaming_dataset(self.datasets)
-
         offsets = np.cumsum([0] + lengths[:-1])
 
         for i, dataset in enumerate(self.datasets):
@@ -474,8 +467,8 @@ def get_doremi_dataloader(
                 rank=None,
             )
 
-            # NOTE: because the inference model don't take `domain_idxs` as input
-            # we need to remove it from the batch
+            # NOTE: because the inference model don't take `domain_idxs`
+            # as input we need to remove it from the batch
             batch_for_inference = {k: v for k, v in batch.items() if k != "domain_idxs"}
             ref_losses = ref_model(**batch_for_inference)["losses"]
             batch["ref_losses"] = ref_losses
