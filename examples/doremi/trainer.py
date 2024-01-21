@@ -2,7 +2,6 @@ from pprint import pformat
 from typing import Union
 
 import torch
-import torch.nn.functional as F
 from doremi_context import DoReMiContext
 from llama import LlamaForDoReMiTraining, LLaMaForInference
 from nanotron import distributed as dist
@@ -21,23 +20,31 @@ from nanotron.trainer import DistributedTrainer
 from nanotron.utils import init_method_normal, scaled_init_method_normal
 from torch.nn.parallel import DistributedDataParallel
 
-# from .dataloaders.dpo import dpo_data_generator
-
 logger = logging.get_logger(__name__)
 
 
 class DoReMiTrainer(DistributedTrainer):
+    def __init__(self, domain_weights: torch.Tensor, *args, **kwargs):
+        # NOTE: save the initial domain_weights
+        self.doremi_context = DoReMiContext(domain_weights=domain_weights)
+        super().__init__(*args, **kwargs)
+
     def init_model(self) -> Union[NanotronModel, DistributedDataParallel]:
         """Initialize the model and load weights from checkpoint if needed."""
-        NUM_DOMAINS = 5
-        domain_weights = F.softmax(torch.ones(NUM_DOMAINS, requires_grad=False, device="cuda"), dim=-1)
-        self.doremi_context = DoReMiContext(domain_weights=domain_weights)
+
+        # NOTE: after initializing parallel context, now we can move domain weights to
+        # the GPU corresponding to the current rank
+        self.doremi_context.domain_weights = self.doremi_context.domain_weights.to("cuda")
 
         # NOTE: SANITY CHECKS: make sure all ranks have the same domain weights
         assert_tensor_synced_across_pg(
-            tensor=domain_weights,
+            tensor=self.doremi_context.domain_weights,
             pg=self.parallel_context.world_pg,
-            msg=lambda err: f"Domain weights are not synced across DP {err}",
+            msg=lambda err: f"Domain weights are not synced across ranks {err}",
+        )
+
+        log_rank(
+            f"[DoReMi] Initial domain weights: {self.doremi_context.domain_weights}", logger=logger, level=logging.INFO
         )
 
         # TODO: add max_position_embeddings
@@ -70,11 +77,6 @@ class DoReMiTrainer(DistributedTrainer):
         log_rank(pformat(self.config), logger=logger, level=logging.INFO, rank=0)
         log_rank(pformat(self.model_config), logger=logger, level=logging.INFO, rank=0)
 
-        # model_config_cls = self.model_config.__class__.__name__
-        # assert (
-        #     model_config_cls in CONFIG_TO_MODEL_CLASS
-        # ), f"Unsupported model config {model_config_cls}. Only {CONFIG_TO_MODEL_CLASS.keys()} are supported"
-
         model = self._init_model(
             model_builder=lambda: LlamaForDoReMiTraining(
                 config=self.model_config,
@@ -85,7 +87,8 @@ class DoReMiTrainer(DistributedTrainer):
         )
         normalized_model = model.module if isinstance(model, DistributedDataParallel) else model
 
-        log_rank("[DoReMi] Initializing reference model in DoReMi training", logger=logger, level=logging.INFO)
+        log_rank("[DoReMi] Initializing reference model for DoReMi training", logger=logger, level=logging.INFO)
+
         self.ref_model = self._init_model(
             model_builder=lambda: LLaMaForInference(
                 config=self.model_config,

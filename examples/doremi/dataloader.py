@@ -1,30 +1,32 @@
 import dataclasses
 import math
 import warnings
-from typing import Dict, Generator, Iterator, List, Optional, Union
+from typing import Dict, List, Optional, Union
 
 import numpy as np
 import torch
 from doremi_context import DoReMiContext
+from huggingface_hub import __version__ as hf_hub_version
 from nanotron import distributed as dist
 from nanotron import logging
-from nanotron.config import Config
+from nanotron.config import (
+    PretrainDatasetsArgs,
+)
+from nanotron.dataloader import clm_process
+from nanotron.logging import log_rank
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
+from nanotron.parallel.pipeline_parallel.utils import get_input_output_pp_ranks
 from nanotron.random import set_random_seed
-from nanotron.sanity_checks import (
-    assert_fail_except_rank_with,
-    assert_tensor_synced_across_pg,
-)
+from nanotron.trainer import DistributedTrainer
 from torch import nn
 from torch.utils.data import BatchSampler, DataLoader
 from torch.utils.data.distributed import DistributedSampler
+from transformers import AutoTokenizer
+from transformers import __version__ as tf_version
 
 try:
-    from datasets import Dataset, DatasetDict, Features, Sequence, Value, concatenate_datasets, load_dataset
-    from transformers import (
-        PreTrainedTokenizerBase,
-    )
+    from datasets import Dataset, DatasetDict, load_dataset
     from transformers.trainer_pt_utils import DistributedSamplerWithLoop
 except ImportError:
     warnings.warn("Datasets and/or Transformers not installed, you'll be unable to use the dataloader.")
@@ -33,206 +35,306 @@ except ImportError:
 logger = logging.get_logger(__name__)
 
 
-def sanity_check_dataloader(
-    dataloader: Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]],
-    parallel_context: ParallelContext,
-    config: Config,
-) -> Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]]:
-    for batch in dataloader:
-        micro_batch = {
-            k: v if isinstance(v, TensorPointer) else v.to("cuda", memory_format=torch.contiguous_format)
-            for k, v in batch.items()
-        }
-
-        if not config.general.ignore_sanity_checks:
-            # SANITY CHECK: Check input are not the same across DP
-            for key, value in sorted(micro_batch.items(), key=lambda x: x[0]):
-                if isinstance(value, TensorPointer):
-                    continue
-
-                if "mask" in key:
-                    # It's fine if mask is the same across DP
-                    continue
-
-                with assert_fail_except_rank_with(AssertionError, rank_exception=0, pg=parallel_context.dp_pg):
-                    assert_tensor_synced_across_pg(
-                        tensor=value, pg=parallel_context.dp_pg, msg=lambda err: f"{key} {err}"
-                    )
-
-            # SANITY CHECK: Check input are synchronized throughout TP
-            for key, value in sorted(micro_batch.items(), key=lambda x: x[0]):
-                if isinstance(value, TensorPointer):
-                    continue
-                assert_tensor_synced_across_pg(
-                    tensor=value,
-                    pg=parallel_context.tp_pg,
-                    msg=lambda err: f"{key} are not synchronized throughout TP {err}",
-                )
-
-            # SANITY CHECK: Check that input are synchronized throughout PP
-            # TODO @thomasw21: That's really hard to test as input gets sharded across the PP, let's assume it works for now.
-
-            # SANITY CHECK: Check that an input only exists on the PP rank responsible for it
-            # TODO @nouamanetazi: add this test
-        yield micro_batch
-
-
-# Adapted from h4/src/h4/data/loading.py
-def get_datasets(
-    hf_dataset_or_datasets: Union[dict, str],
+def get_doremi_datasets(
+    hf_dataset: str,
+    domain_keys: List[str],
     splits: Optional[Union[List[str], str]] = ["train", "test"],
-) -> "DatasetDict":
-    """
-    Function to load dataset directly from DataArguments.
-
-    Args:
-        hf_dataset_or_datasets (Union[dict, str]): dict or string. When all probabilities are 1, we concatenate the datasets instead of sampling from them.
-        splits (Optional[List[str]], optional): Section of the dataset to load, defaults to "train", "test"
-            Can be one of `train_ift`, `test_rl`, or `..._rm` etc. H4 datasets are divided into 6 subsets for training / testing.
-
-    Returns
-        DatasetDict: DatasetDict object containing the dataset of the appropriate section with test + train parts.
-    """
-
+) -> List[DatasetDict]:
     if isinstance(splits, str):
         splits = [splits]
 
-    if isinstance(hf_dataset_or_datasets, dict):
-        # Structure of the config to read the datasets and their mix
-        # datasets_mixer:
-        #     - 'dataset1': 0.5
-        #     - 'dataset2': 0.3
-        #     - 'dataset3': 0.2
-        raw_datasets = _get_dataset_mix(hf_dataset_or_datasets, splits=splits)
-    elif isinstance(hf_dataset_or_datasets, str):
-        # e.g. Dataset = "HuggingFaceH4/testing_alpaca_small"
-        # Note this returns things other than just train/test, which may not be intended
-        raw_datasets = DatasetDict()
-        for split in splits:
-            raw_datasets[split] = load_dataset(
-                hf_dataset_or_datasets,
+    raw_datasets = DatasetDict()
+    for split in splits:
+        raw_datasets[split] = []
+        for domain_key in domain_keys:
+            d = load_dataset(
+                hf_dataset,
+                domain_key,
                 split=split,
             )
-    else:
-        raise ValueError(f"hf_dataset_or_datasets must be a dict or string but is {type(hf_dataset_or_datasets)}")
+            raw_datasets[split].append(d)
 
     return raw_datasets
+
+
+def get_dataloader(trainer: DistributedTrainer, domain_keys: List[str]):
+    """Returns a dataloader for training."""
+    assert isinstance(trainer.config.data.dataset, PretrainDatasetsArgs), "Please provide a dataset in the config file"
+
+    log_rank("Using `datasets` library", logger=logger, level=logging.INFO, rank=0)
+
+    tokenizer_path = trainer.config.tokenizer.tokenizer_name_or_path
+    log_rank(
+        f"Loading tokenizer from {tokenizer_path} and transformers/hf_hub versions {tf_version, hf_hub_version}",
+        logger=logger,
+        level=logging.INFO,
+        rank=0,
+    )
+
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
+    tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.padding_side = "left"
+
+    log_rank(
+        f"Downloading datasets from {trainer.config.data.dataset.hf_dataset_or_datasets}",
+        logger=logger,
+        level=logging.INFO,
+        rank=0,
+    )
+
+    raw_datasets = get_doremi_datasets(
+        hf_dataset=trainer.config.data.dataset.hf_dataset_or_datasets,
+        domain_keys=domain_keys,
+        splits=trainer.config.data.dataset.hf_dataset_splits,
+    )["train"]
+
+    # doremi_context = trainer.doremi_context
+    # train_datasets = [train_dataset for i in range(doremi_context.num_domains)]
+
+    train_datasets = []
+    for raw_dataset in raw_datasets:
+        train_datasets.append(
+            clm_process(
+                raw_dataset=raw_dataset,
+                tokenizer=tokenizer,
+                text_column_name=trainer.config.data.dataset.text_column_name,
+                dataset_processing_num_proc_per_process=trainer.config.data.dataset.dataset_processing_num_proc_per_process,
+                dataset_overwrite_cache=trainer.config.data.dataset.dataset_overwrite_cache,
+                sequence_length=trainer.sequence_length,
+            )
+        )
+
+    # We load the processed dataset on the ranks requiring it
+    input_pp_rank, output_pp_rank = get_input_output_pp_ranks(model=trainer.model)
+    doremi_context = trainer.doremi_context
+    dataloader = get_doremi_dataloader(
+        doremi_context=doremi_context,
+        train_datasets=train_datasets,
+        ref_model=trainer.ref_model,
+        sequence_length=trainer.sequence_length,
+        parallel_context=trainer.parallel_context,
+        input_pp_rank=input_pp_rank,
+        output_pp_rank=output_pp_rank,
+        micro_batch_size=trainer.micro_batch_size,
+        consumed_train_samples=trainer.consumed_train_samples,
+        dataloader_num_workers=trainer.config.data.num_loading_workers,
+        seed_worker=trainer.config.data.seed,
+        dataloader_drop_last=True,
+    )()
+
+    # Check if we have enough samples for train_steps
+    # assert (
+    #     trainer.config.tokens.train_steps - trainer.start_iteration_step
+    # ) * trainer.global_batch_size // trainer.parallel_context.dp_pg.size() < len(dataloader), (
+    #     f"Dataset is too small for steps ({len(dataloader)} < {(trainer.config.tokens.train_steps - trainer.start_iteration_step) * trainer.global_batch_size // trainer.parallel_context.dp_pg.size()}), "
+    #     f"Try train_steps<={len(dataloader) * trainer.parallel_context.dp_pg.size() // trainer.global_batch_size + trainer.start_iteration_step}"
+    # )
+    # else:
+    #     raise ValueError(f"Unhandled case of `self.config.data.dataset`. Got: {trainer.config.data.dataset}")
+
+    return dataloader
+
+
+# def sanity_check_dataloader(
+#     dataloader: Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]],
+#     parallel_context: ParallelContext,
+#     config: Config,
+# ) -> Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]]:
+#     for batch in dataloader:
+#         micro_batch = {
+#             k: v if isinstance(v, TensorPointer) else v.to("cuda", memory_format=torch.contiguous_format)
+#             for k, v in batch.items()
+#         }
+
+#         if not config.general.ignore_sanity_checks:
+#             # SANITY CHECK: Check input are not the same across DP
+#             for key, value in sorted(micro_batch.items(), key=lambda x: x[0]):
+#                 if isinstance(value, TensorPointer):
+#                     continue
+
+#                 if "mask" in key:
+#                     # It's fine if mask is the same across DP
+#                     continue
+
+#                 with assert_fail_except_rank_with(AssertionError, rank_exception=0, pg=parallel_context.dp_pg):
+#                     assert_tensor_synced_across_pg(
+#                         tensor=value, pg=parallel_context.dp_pg, msg=lambda err: f"{key} {err}"
+#                     )
+
+#             # SANITY CHECK: Check input are synchronized throughout TP
+#             for key, value in sorted(micro_batch.items(), key=lambda x: x[0]):
+#                 if isinstance(value, TensorPointer):
+#                     continue
+#                 assert_tensor_synced_across_pg(
+#                     tensor=value,
+#                     pg=parallel_context.tp_pg,
+#                     msg=lambda err: f"{key} are not synchronized throughout TP {err}",
+#                 )
+
+#             # SANITY CHECK: Check that input are synchronized throughout PP
+#             # TODO @thomasw21: That's really hard to test as input gets sharded across the PP, let's assume it works for now.
+
+#             # SANITY CHECK: Check that an input only exists on the PP rank responsible for it
+#             # TODO @nouamanetazi: add this test
+#         yield micro_batch
 
 
 # Adapted from h4/src/h4/data/loading.py
-def _get_dataset_mix(dataset_dict: dict, splits: List[str] = None, seed=42) -> "DatasetDict":
-    """
-    Helper function to load dataset mix from dict configuration.
+# def get_datasets(
+#     hf_dataset_or_datasets: Union[dict, str],
+#     splits: Optional[Union[List[str], str]] = ["train", "test"],
+# ) -> "DatasetDict":
+#     """
+#     Function to load dataset directly from DataArguments.
 
-    Args:
-        dataset_dict (dict): Dictionary containing the dataset names and their training proportions. By default, all test proportions are 1.
-        splits (Optional[List[str]], optional): Section of the dataset to load, defaults to "train", "test"
-            Can be one of `train_{ift,rm,rl}` and `test_{ift,rm,rl}`. Our datasets are typically divided into 6 subsets for training / testing.
-    """
-    raw_datasets = DatasetDict()
-    raw_train_datasets = []
-    raw_test_datasets = []
-    fracs = []
-    for ds, frac in dataset_dict.items():
-        if frac < 0:
-            raise ValueError(f"Dataset fraction for dataset {ds} is negative. (= {frac})")
+#     Args:
+#         hf_dataset_or_datasets (Union[dict, str]): dict or string. When all probabilities are 1, we concatenate the datasets instead of sampling from them.
+#         splits (Optional[List[str]], optional): Section of the dataset to load, defaults to "train", "test"
+#             Can be one of `train_ift`, `test_rl`, or `..._rm` etc. H4 datasets are divided into 6 subsets for training / testing.
 
-        fracs.append(frac)
-        for split in splits:
-            if "train" in split:
-                raw_train_datasets.append(
-                    load_dataset(
-                        ds,
-                        split=split,
-                    )
-                )
-            elif "test" in split:
-                raw_test_datasets.append(
-                    load_dataset(
-                        ds,
-                        split=split,
-                    )
-                )
-            else:
-                raise ValueError(f"Split type {split} not recognized as one of test or train.")
+#     Returns
+#         DatasetDict: DatasetDict object containing the dataset of the appropriate section with test + train parts.
+#     """
 
-    if len(raw_train_datasets) > 0:
-        train_subsets = []
-        for dataset, frac in zip(raw_train_datasets, fracs):
-            train_subset = dataset.select(range(int(frac * len(dataset))))
-            train_subsets.append(train_subset)
-        raw_datasets["train"] = concatenate_datasets(train_subsets).shuffle(seed=seed)
+#     if isinstance(splits, str):
+#         splits = [splits]
 
-    # No subsampling for test datasets to enable fair comparison across models
-    if len(raw_test_datasets) > 0:
-        raw_datasets["test"] = concatenate_datasets(raw_test_datasets).shuffle(seed=seed)
+#     if isinstance(hf_dataset_or_datasets, dict):
+#         # Structure of the config to read the datasets and their mix
+#         # datasets_mixer:
+#         #     - 'dataset1': 0.5
+#         #     - 'dataset2': 0.3
+#         #     - 'dataset3': 0.2
+#         raw_datasets = _get_dataset_mix(hf_dataset_or_datasets, splits=splits)
+#     elif isinstance(hf_dataset_or_datasets, str):
+#         # e.g. Dataset = "HuggingFaceH4/testing_alpaca_small"
+#         # Note this returns things other than just train/test, which may not be intended
+#         raw_datasets = DatasetDict()
+#         for split in splits:
+#             raw_datasets[split] = load_dataset(
+#                 hf_dataset_or_datasets,
+#                 split=split,
+#             )
+#     else:
+#         raise ValueError(f"hf_dataset_or_datasets must be a dict or string but is {type(hf_dataset_or_datasets)}")
 
-    if len(raw_datasets) == 0:
-        raise ValueError(
-            f"Dataset {dataset_dict} not recognized with split {split}. Check the dataset has been correctly formatted."
-        )
-
-    return raw_datasets
+#     return raw_datasets
 
 
-def dummy_infinite_data_generator(
-    micro_batch_size: int,
-    sequence_length: int,
-    input_pp_rank: int,
-    output_pp_rank: int,
-    vocab_size: int,
-    seed: int,
-    parallel_context: ParallelContext,
-):
-    def data_generator() -> Generator[Dict[str, Union[torch.Tensor, TensorPointer]], None, None]:
-        # Random generator
-        generator = torch.Generator(device="cuda")
-        # Make sure that TP are synced always
-        generator.manual_seed(
-            seed * (1 + dist.get_rank(parallel_context.dp_pg)) * (1 + dist.get_rank(parallel_context.pp_pg))
-        )
+# # Adapted from h4/src/h4/data/loading.py
+# def _get_dataset_mix(dataset_dict: dict, splits: List[str] = None, seed=42) -> "DatasetDict":
+#     """
+#     Helper function to load dataset mix from dict configuration.
 
-        while True:
-            yield {
-                "input_ids": torch.randint(
-                    0,
-                    vocab_size,
-                    (micro_batch_size, sequence_length),
-                    dtype=torch.long,
-                    device="cuda",
-                    generator=generator,
-                )
-                if dist.get_rank(parallel_context.pp_pg) == input_pp_rank
-                else TensorPointer(group_rank=input_pp_rank),
-                "input_mask": torch.ones(
-                    micro_batch_size,
-                    sequence_length,
-                    dtype=torch.bool,
-                    device="cuda",
-                )
-                if dist.get_rank(parallel_context.pp_pg) == input_pp_rank
-                else TensorPointer(group_rank=input_pp_rank),
-                "label_ids": torch.randint(
-                    0,
-                    vocab_size,
-                    (micro_batch_size, sequence_length),
-                    dtype=torch.long,
-                    device="cuda",
-                    generator=generator,
-                )
-                if dist.get_rank(parallel_context.pp_pg) == output_pp_rank
-                else TensorPointer(group_rank=output_pp_rank),
-                "label_mask": torch.ones(
-                    micro_batch_size,
-                    sequence_length,
-                    dtype=torch.bool,
-                    device="cuda",
-                )
-                if dist.get_rank(parallel_context.pp_pg) == output_pp_rank
-                else TensorPointer(group_rank=output_pp_rank),
-            }
+#     Args:
+#         dataset_dict (dict): Dictionary containing the dataset names and their training proportions. By default, all test proportions are 1.
+#         splits (Optional[List[str]], optional): Section of the dataset to load, defaults to "train", "test"
+#             Can be one of `train_{ift,rm,rl}` and `test_{ift,rm,rl}`. Our datasets are typically divided into 6 subsets for training / testing.
+#     """
+#     raw_datasets = DatasetDict()
+#     raw_train_datasets = []
+#     raw_test_datasets = []
+#     fracs = []
+#     for ds, frac in dataset_dict.items():
+#         if frac < 0:
+#             raise ValueError(f"Dataset fraction for dataset {ds} is negative. (= {frac})")
 
-    return data_generator
+#         fracs.append(frac)
+#         for split in splits:
+#             if "train" in split:
+#                 raw_train_datasets.append(
+#                     load_dataset(
+#                         ds,
+#                         split=split,
+#                     )
+#                 )
+#             elif "test" in split:
+#                 raw_test_datasets.append(
+#                     load_dataset(
+#                         ds,
+#                         split=split,
+#                     )
+#                 )
+#             else:
+#                 raise ValueError(f"Split type {split} not recognized as one of test or train.")
+
+#     if len(raw_train_datasets) > 0:
+#         train_subsets = []
+#         for dataset, frac in zip(raw_train_datasets, fracs):
+#             train_subset = dataset.select(range(int(frac * len(dataset))))
+#             train_subsets.append(train_subset)
+#         raw_datasets["train"] = concatenate_datasets(train_subsets).shuffle(seed=seed)
+
+#     # No subsampling for test datasets to enable fair comparison across models
+#     if len(raw_test_datasets) > 0:
+#         raw_datasets["test"] = concatenate_datasets(raw_test_datasets).shuffle(seed=seed)
+
+#     if len(raw_datasets) == 0:
+#         raise ValueError(
+#             f"Dataset {dataset_dict} not recognized with split {split}. Check the dataset has been correctly formatted."
+#         )
+
+#     return raw_datasets
+
+
+# def dummy_infinite_data_generator(
+#     micro_batch_size: int,
+#     sequence_length: int,
+#     input_pp_rank: int,
+#     output_pp_rank: int,
+#     vocab_size: int,
+#     seed: int,
+#     parallel_context: ParallelContext,
+# ):
+#     def data_generator() -> Generator[Dict[str, Union[torch.Tensor, TensorPointer]], None, None]:
+#         # Random generator
+#         generator = torch.Generator(device="cuda")
+#         # Make sure that TP are synced always
+#         generator.manual_seed(
+#             seed * (1 + dist.get_rank(parallel_context.dp_pg)) * (1 + dist.get_rank(parallel_context.pp_pg))
+#         )
+
+#         while True:
+#             yield {
+#                 "input_ids": torch.randint(
+#                     0,
+#                     vocab_size,
+#                     (micro_batch_size, sequence_length),
+#                     dtype=torch.long,
+#                     device="cuda",
+#                     generator=generator,
+#                 )
+#                 if dist.get_rank(parallel_context.pp_pg) == input_pp_rank
+#                 else TensorPointer(group_rank=input_pp_rank),
+#                 "input_mask": torch.ones(
+#                     micro_batch_size,
+#                     sequence_length,
+#                     dtype=torch.bool,
+#                     device="cuda",
+#                 )
+#                 if dist.get_rank(parallel_context.pp_pg) == input_pp_rank
+#                 else TensorPointer(group_rank=input_pp_rank),
+#                 "label_ids": torch.randint(
+#                     0,
+#                     vocab_size,
+#                     (micro_batch_size, sequence_length),
+#                     dtype=torch.long,
+#                     device="cuda",
+#                     generator=generator,
+#                 )
+#                 if dist.get_rank(parallel_context.pp_pg) == output_pp_rank
+#                 else TensorPointer(group_rank=output_pp_rank),
+#                 "label_mask": torch.ones(
+#                     micro_batch_size,
+#                     sequence_length,
+#                     dtype=torch.bool,
+#                     device="cuda",
+#                 )
+#                 if dist.get_rank(parallel_context.pp_pg) == output_pp_rank
+#                 else TensorPointer(group_rank=output_pp_rank),
+#             }
+
+#     return data_generator
 
 
 # Adapted from https://github.com/huggingface/accelerate/blob/a73898027a211c3f6dc4460351b0ec246aa824aa/src/accelerate/data_loader.py#L781C1-L824C28
@@ -260,61 +362,61 @@ class SkipBatchSampler(BatchSampler):
         return len(self.batch_sampler) - self.skip_batches
 
 
-def set_tensor_pointers(
-    input_dict: Dict[str, Union[torch.Tensor, TensorPointer]], group: dist.ProcessGroup, group_rank: int
-) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
-    """Make sure only the group_rank rank has the data, others have TensorPointers."""
-    return {
-        k: v if dist.get_rank(group) == group_rank else TensorPointer(group_rank=group_rank)
-        for k, v in input_dict.items()
-    }
+# def set_tensor_pointers(
+#     input_dict: Dict[str, Union[torch.Tensor, TensorPointer]], group: dist.ProcessGroup, group_rank: int
+# ) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
+#     """Make sure only the group_rank rank has the data, others have TensorPointers."""
+#     return {
+#         k: v if dist.get_rank(group) == group_rank else TensorPointer(group_rank=group_rank)
+#         for k, v in input_dict.items()
+#     }
 
 
-### CAUSAL LANGUAGE MODELING ###
-def clm_process(
-    raw_dataset: "Dataset",
-    tokenizer: "PreTrainedTokenizerBase",
-    text_column_name: str,
-    dataset_processing_num_proc_per_process: int,
-    dataset_overwrite_cache: bool,
-    sequence_length: int,
-):
-    """Concatenate all texts from raw_dataset and generate chunks of `sequence_length + 1`, where chunks overlap by a single token."""
-    # Adapted from https://github.com/huggingface/transformers/blob/47e1676255e5dd86b9541f734cd4f4bdcbb50f4a/examples/pytorch/language-modeling/run_clm.py#L391-L439
+# ### CAUSAL LANGUAGE MODELING ###
+# def clm_process(
+#     raw_dataset: "Dataset",
+#     tokenizer: "PreTrainedTokenizerBase",
+#     text_column_name: str,
+#     dataset_processing_num_proc_per_process: int,
+#     dataset_overwrite_cache: bool,
+#     sequence_length: int,
+# ):
+#     """Concatenate all texts from raw_dataset and generate chunks of `sequence_length + 1`, where chunks overlap by a single token."""
+#     # Adapted from https://github.com/huggingface/transformers/blob/47e1676255e5dd86b9541f734cd4f4bdcbb50f4a/examples/pytorch/language-modeling/run_clm.py#L391-L439
 
-    def group_texts(examples: Dict[str, List[np.ndarray]]) -> Dict[str, List[np.ndarray]]:
-        # Concatenate all texts.
-        concatenated_examples = {k: np.concatenate(v) for k, v in examples.items()}
-        total_length = len(concatenated_examples[next(iter(examples.keys()))])
-        # WARNING: We drop the small remainder, we could add padding if the model supported it instead of this drop, you can
-        # customize this part to your needs.
-        if total_length >= sequence_length + 1:
-            total_length = ((total_length - 1) // sequence_length) * sequence_length + 1
-        # Split by chunks of sequence_length.
-        result = {
-            k: [
-                t[i : i + sequence_length + 1] for i in range(0, total_length - (sequence_length + 1), sequence_length)
-            ]
-            for k, t in concatenated_examples.items()
-        }
-        return result
+#     def group_texts(examples: Dict[str, List[np.ndarray]]) -> Dict[str, List[np.ndarray]]:
+#         # Concatenate all texts.
+#         concatenated_examples = {k: np.concatenate(v) for k, v in examples.items()}
+#         total_length = len(concatenated_examples[next(iter(examples.keys()))])
+#         # WARNING: We drop the small remainder, we could add padding if the model supported it instead of this drop, you can
+#         # customize this part to your needs.
+#         if total_length >= sequence_length + 1:
+#             total_length = ((total_length - 1) // sequence_length) * sequence_length + 1
+#         # Split by chunks of sequence_length.
+#         result = {
+#             k: [
+#                 t[i : i + sequence_length + 1] for i in range(0, total_length - (sequence_length + 1), sequence_length)
+#             ]
+#             for k, t in concatenated_examples.items()
+#         }
+#         return result
 
-    def _tokenize_and_group_texts(texts: List[str]) -> Dict[str, List[np.ndarray]]:
-        tokenized_batch = tokenizer.batch_encode_plus(texts, return_attention_mask=False, return_token_type_ids=False)
-        tokenized_batch = {k: [np.array(tokenized_texts) for tokenized_texts in v] for k, v in tokenized_batch.items()}
-        return group_texts(tokenized_batch)
+#     def _tokenize_and_group_texts(texts: List[str]) -> Dict[str, List[np.ndarray]]:
+#         tokenized_batch = tokenizer.batch_encode_plus(texts, return_attention_mask=False, return_token_type_ids=False)
+#         tokenized_batch = {k: [np.array(tokenized_texts) for tokenized_texts in v] for k, v in tokenized_batch.items()}
+#         return group_texts(tokenized_batch)
 
-    train_dataset = raw_dataset.map(
-        _tokenize_and_group_texts,
-        input_columns=text_column_name,
-        remove_columns=raw_dataset.column_names,
-        features=Features({"input_ids": Sequence(feature=Value(dtype="int64"), length=sequence_length + 1)}),
-        batched=True,
-        num_proc=dataset_processing_num_proc_per_process,
-        load_from_cache_file=not dataset_overwrite_cache,
-        desc=f"Grouping texts in chunks of {sequence_length+1}",
-    )
-    return train_dataset
+#     train_dataset = raw_dataset.map(
+#         _tokenize_and_group_texts,
+#         input_columns=text_column_name,
+#         remove_columns=raw_dataset.column_names,
+#         features=Features({"input_ids": Sequence(feature=Value(dtype="int64"), length=sequence_length + 1)}),
+#         batched=True,
+#         num_proc=dataset_processing_num_proc_per_process,
+#         load_from_cache_file=not dataset_overwrite_cache,
+#         desc=f"Grouping texts in chunks of {sequence_length+1}",
+#     )
+#     return train_dataset
 
 
 # Adapted from: https://github.com/huggingface/transformers/blob/47e1676255e5dd86b9541f734cd4f4bdcbb50f4a/src/transformers/data/data_collator.py#L607
@@ -422,12 +524,15 @@ class DistributedSamplerForDoReMi(DistributedSampler):
 
     def _calculate_total_size(self):
         total_samples = sum(len(d) for d in self.datasets)
+        # total_samples = sum(compute_total_sample_per_streaming_dataset(self.datasets))
         return math.ceil(total_samples / self.batch_size) * self.batch_size
 
     def __iter__(self):
         domain_indices = []
 
         lengths = [len(d) for d in self.datasets]
+        # lengths = compute_total_sample_per_streaming_dataset(self.datasets)
+
         offsets = np.cumsum([0] + lengths[:-1])
 
         for i, dataset in enumerate(self.datasets):
@@ -501,49 +606,22 @@ def _get_train_sampler(
     return sampler
 
 
-# class CombinedDataset(Dataset):
-#     def __init__(self, datasets: List[Dataset]):
-#         self.datasets = datasets
-#         self.lengths = [len(d) for d in datasets]
-#         self.offsets = np.cumsum([0] + self.lengths[:-1])
-
-#     def __len__(self):
-#         return sum(self.lengths)
-
-#     def __getitem__(self, batch_global_ids: List[List[int]]):
-#         if isinstance(batch_global_ids, list):
-#             outputs = [self.get_sample(global_ids) for global_ids in batch_global_ids]
-#             # TODO(xrsrke): refactor this, make it fast
-#             outputs = {key: [d[key] for d in outputs] for key in outputs[0]}
-#             return outputs
-#         else:
-#             return self.get_sample(batch_global_ids)
-
-#     def get_sample(self, global_ids):
-#         # dataset_idx, local_idx = self.get_dataset_and_local_index(global_ids)
-#         dataset_idx = self.get_dataset_and_local_index(global_ids)
-#         dataset = self.datasets[dataset_idx]
-#         sample = {key: dataset[key][local_idx] for key in dataset.features}
-#         # TODO(xrsrke): use a consistent naming scheme
-#         sample["domain_idx"] = dataset_idx
-#         return sample
-
-#     def get_dataset_and_local_index(self, global_ids) -> List[int]:
-#         domain_local_idxs = []
-#         for global_id in global_ids:
-#             for i, offset in enumerate(self.offsets):
-#                 if global_id < offset + self.lengths[i]:
-#                     domain_local_idxs.append((i, global_id - offset))
-
-#             raise IndexError(f"Index out of range, global_id={global_id}")
-
-#         return domain_local_idxs
+def compute_total_sample_per_streaming_dataset(datasets: List[Dataset]) -> List[int]:
+    lengths = []
+    for d in datasets:
+        sample_count = 0
+        for _ in d:
+            sample_count += 1
+        lengths.append(sample_count)
+    return lengths
 
 
 class CombinedDataset(Dataset):
     def __init__(self, datasets: List[Dataset]):
         self.datasets = datasets
         self.lengths = [len(d) for d in datasets]
+
+        # self.lengths = compute_total_sample_per_streaming_dataset(datasets)
         self.offsets = np.cumsum([0] + self.lengths[:-1])
 
     def __len__(self) -> int:
@@ -626,6 +704,8 @@ def get_doremi_dataloader(
         # No need to spawn a lot of workers, we can just use main
         dataloader_num_workers = 0
 
+    assert 1 == 1
+
     data_collator = DataCollatorForCLM(
         sequence_length=sequence_length,
         input_pp_rank=input_pp_rank,
@@ -635,6 +715,12 @@ def get_doremi_dataloader(
 
     # TODO @nouamanetazi: Remove unused columns: https://github.com/huggingface/transformers/blob/47e1676255e5dd86b9541f734cd4f4bdcbb50f4a/src/transformers/trainer.py#L852
     # TODO @nouamanetazi: Support torch.utils.data.IterableDataset: https://github.com/huggingface/transformers/blob/47e1676255e5dd86b9541f734cd4f4bdcbb50f4a/src/transformers/trainer.py#L855-L872
+
+    log_rank(
+        f"Before _get_train_sampler, global_rank={dist.get_rank(parallel_context.world_pg)}",
+        logger=logger,
+        level=logging.INFO,
+    )
 
     train_sampler = _get_train_sampler(
         dp_size=parallel_context.dp_pg.size(),
@@ -648,7 +734,21 @@ def get_doremi_dataloader(
         doremi_context=doremi_context,
         parallel_context=parallel_context,
     )
+
+    log_rank(
+        f"Before CombinedDataset, global_rank={dist.get_rank(parallel_context.world_pg)}",
+        logger=logger,
+        level=logging.INFO,
+    )
+
     comebined_dataset = CombinedDataset(train_datasets)
+
+    log_rank(
+        f"Before DataLoader, global_rank={dist.get_rank(parallel_context.world_pg)}",
+        logger=logger,
+        level=logging.INFO,
+    )
+
     dataloader = DataLoader(
         comebined_dataset,
         batch_size=micro_batch_size,
@@ -659,8 +759,6 @@ def get_doremi_dataloader(
         pin_memory=dataloader_pin_memory,
         worker_init_fn=get_dataloader_worker_init(dp_rank=dist.get_rank(parallel_context.dp_pg)),
     )
-
-    from nanotron.logging import log_rank
 
     def _data_generator():
         dist.barrier()

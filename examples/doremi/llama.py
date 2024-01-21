@@ -26,18 +26,6 @@ from transformers import LlamaConfig
 logger = logging.get_logger(__name__)
 
 
-def normalize_domain_weights(weights: torch.Tensor, smoothing_param: float = 1e-3) -> torch.Tensor:
-    """
-    Renormalize and smooth domain weights.
-    alpha_t = (1 - c) * (alpha_t' / sum(i=1 to k of alpha_t'[i])) + c * u
-    Algorithm 1 DoReMi domain reweighting (Step 2).
-    """
-    NUM_DOMAINS = weights.shape[0]
-    uniform_weights = torch.ones(NUM_DOMAINS, device=weights.device) / NUM_DOMAINS
-    normalized_weight = (1 - smoothing_param) * weights / weights.sum() + (smoothing_param * uniform_weights)
-    return normalized_weight
-
-
 class LLaMaForInference(NanotronModel):
     def __init__(
         self,
@@ -240,39 +228,29 @@ class DoReMiLoss(nn.Module):
         ref_losses: torch.Tensor,
         doremi_context: DoReMiContext,
     ) -> Dict[str, torch.Tensor]:
-        # Megatron by defaults cast everything in fp32. `--f16-lm-cross-entropy` is an option you can use to keep current precision.
-        # https://github.com/NVIDIA/Megatron-LM/blob/f267e6186eae1d6e2055b412b00e2e545a8e896a/megatron/model/gpt_model.py#L38
         tp_pg = self.parallel_context.tp_pg
         logprobs = sharded_cross_entropy(
             sharded_logits, label_ids.transpose(0, 1).contiguous(), group=tp_pg, dtype=torch.float
         ).transpose(0, 1)
-
         losses = (logprobs * label_mask).sum(dim=-1) / label_mask.sum(dim=-1)
+
         excess_loss = (losses - ref_losses).clamp(min=0)
 
-        # TODO(xrsrke): flatten it in the dataloader
-        domain_idxs = domain_idxs.view(-1)
-
         # NOTE: Calculate total loss per domain
+        domain_idxs = domain_idxs.view(-1)
         domain_losses = torch.zeros(domain_idxs.max() + 1, device="cuda")
         for i in range(len(excess_loss)):
             domain_losses[domain_idxs[i]] += excess_loss[i]
 
+        # NOTE: Normalize and smooth domain weights
         tokens_per_domain = torch.bincount(domain_idxs, minlength=domain_idxs.max() + 1)
-
         normalized_domain_losses = domain_losses / tokens_per_domain
         updated_domain_weights = doremi_context.domain_weights * torch.exp(
             doremi_context.step_size * normalized_domain_losses
         )
-        normalized_domain_weights = normalize_domain_weights(
-            updated_domain_weights, smoothing_param=doremi_context.smoothing_param
-        )
+        smooth_domain_weights = self._normalize_domain_weights(updated_domain_weights, doremi_context.smoothing_param)
 
-        doremi_context.domain_weights = normalized_domain_weights.detach()
-
-        # Sync the loss
-        # I think indexing causes a sync we don't actually want
-        # loss = loss[label_mask].sum()
+        doremi_context.domain_weights = smooth_domain_weights.detach()
 
         log_rank(
             f"[DoReMi] Domain weights: {doremi_context.domain_weights}",
@@ -282,7 +260,18 @@ class DoReMiLoss(nn.Module):
             group=self.parallel_context.dp_pg,
         )
 
-        return {"loss": normalized_domain_weights.sum(dim=-1)}
+        return {"loss": smooth_domain_weights.sum(dim=-1)}
+
+    def _normalize_domain_weights(self, weights: torch.Tensor, smoothing_param) -> torch.Tensor:
+        """
+        Renormalize and smooth domain weights.
+        alpha_t = (1 - c) * (alpha_t' / sum(i=1 to k of alpha_t'[i])) + c * u
+        Algorithm 1 DoReMi domain reweighting (Step 2).
+        """
+        NUM_DOMAINS = weights.shape[0]
+        uniform_weights = torch.ones(NUM_DOMAINS, device=weights.device) / NUM_DOMAINS
+        normalized_weight = (1 - smoothing_param) * weights / weights.sum(dim=-1) + (smoothing_param * uniform_weights)
+        return normalized_weight
 
 
 class LlamaForDoReMiTraining(NanotronModel):
