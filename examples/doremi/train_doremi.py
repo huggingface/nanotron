@@ -44,7 +44,7 @@ if __name__ == "__main__":
     NUM_DOMAINS = len(DOMAIN_KEYS)
     initial_domain_weights = F.softmax(torch.ones(NUM_DOMAINS, requires_grad=False), dim=-1)
 
-    trainer = DoReMiTrainer(initial_domain_weights, config_file)
+    trainer = DoReMiTrainer(initial_domain_weights, DOMAIN_KEYS, config_file)
     # TODO(xrsrke): check the micro batch size is larger than the number of domains
     dataloader = get_dataloader(trainer, DOMAIN_KEYS)
 

@@ -250,9 +250,10 @@ class DoReMiLoss(nn.Module):
         doremi_context.domain_weights = smooth_domain_weights.detach()
 
         return {
-            "loss": smooth_domain_weights.sum(dim=-1),
+            "loss": losses,
+            # "lm_loss": losses.sum(dim=-1),
             "domain_losses": normalized_domain_losses,
-            "domain_weights": doremi_context.domain_weights,
+            "domain_weights": smooth_domain_weights,
         }
 
     def _normalize_domain_weights(self, weights: torch.Tensor, smoothing_param) -> torch.Tensor:
