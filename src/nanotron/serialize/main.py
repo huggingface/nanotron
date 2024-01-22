@@ -16,6 +16,7 @@ from nanotron.parallel.parameters import NanotronParameter
 from nanotron.sanity_checks import assert_tensor_synced_across_pg
 from nanotron.serialize.metadata import CheckpointMetadata, load_meta, save_meta
 from nanotron.serialize.optimizer import load_lr_scheduler, load_optimizer, save_lr_scheduler, save_optimizer
+from nanotron.serialize.utils import check_optim_state_in_sync
 from nanotron.serialize.weights import load_weights, save_weights
 
 """
@@ -132,16 +133,7 @@ def save(
         )
 
     if not optimizer.inherit_from(optim.ZeroDistributedOptimizer):
-        # SANITY CHECK: Check that the optimizer state are synchronized across `parallel_context.dp_pg`
-        for id_, optim_state in sorted(optimizer.state_dict()["state"].items(), key=lambda x: x[0]):
-            for name, tensor in optim_state.items():
-                if name == "step":
-                    # TODO @thomasw21: `torch` introduced a weird exception https://github.com/pytorch/pytorch/pull/75214
-                    tensor = tensor.to("cuda")
-
-                assert_tensor_synced_across_pg(
-                    tensor=tensor, pg=parallel_context.dp_pg, msg=lambda err: f"{name} are not synced across DP {err}"
-                )
+        check_optim_state_in_sync(optimizer, parallel_context.dp_pg)
 
     # SANITY CHECK: tied parameters have their optimizer states synchronized
     # Compute a mapping from id_ to index in the optimizer sense
