@@ -4,7 +4,6 @@ import torch
 from doremi_context import DoReMiContext
 from nanotron import logging
 from nanotron.config import ParallelismArgs
-from nanotron.logging import log_rank
 from nanotron.models import NanotronModel
 from nanotron.models.fast.llama import LlamaModel
 from nanotron.nn.layer_norm import TritonRMSNorm
@@ -243,21 +242,18 @@ class DoReMiLoss(nn.Module):
         # NOTE: Normalize and smooth domain weights
         tokens_per_domain = torch.bincount(domain_idxs, minlength=domain_idxs.max() + 1)
         normalized_domain_losses = domain_losses / tokens_per_domain
+
         updated_domain_weights = doremi_context.domain_weights * torch.exp(
             doremi_context.step_size * normalized_domain_losses
         )
         smooth_domain_weights = self._normalize_domain_weights(updated_domain_weights, doremi_context.smoothing_param)
         doremi_context.domain_weights = smooth_domain_weights.detach()
 
-        log_rank(
-            f"[DoReMi] Domain weights: {str(doremi_context.domain_weights.cpu().numpy())}",
-            logger=logger,
-            level=logging.INFO,
-            rank=0,
-            group=self.parallel_context.dp_pg,
-        )
-
-        return {"loss": smooth_domain_weights.sum(dim=-1)}
+        return {
+            "loss": smooth_domain_weights.sum(dim=-1),
+            "domain_losses": normalized_domain_losses,
+            "domain_weights": doremi_context.domain_weights,
+        }
 
     def _normalize_domain_weights(self, weights: torch.Tensor, smoothing_param) -> torch.Tensor:
         """
@@ -293,7 +289,7 @@ class LlamaForDoReMiTraining(BaseLLaMa):
                 "ref_losses",
                 "doremi_context",
             },
-            module_output_keys={"loss"},
+            module_output_keys={"loss", "domain_losses", "domain_weights"},
         )
         self.parallel_context = parallel_context
         self.config = config
@@ -314,12 +310,12 @@ class LlamaForDoReMiTraining(BaseLLaMa):
             input_ids=input_ids,
             input_mask=input_mask,
         )
-        loss = self.loss(
+        outputs = self.loss(
             sharded_logits=sharded_logits,
             label_ids=label_ids,
             label_mask=label_mask,
             domain_idxs=domain_idxs,
             ref_losses=ref_losses,
             doremi_context=self.doremi_context,
-        )["loss"]
-        return {"loss": loss}
+        )
+        return outputs

@@ -1,7 +1,7 @@
 import dataclasses
 import math
 import warnings
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Union
 
 import numpy as np
 import torch
@@ -9,7 +9,7 @@ from doremi_context import DoReMiContext
 from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.config import PretrainDatasetsArgs
-from nanotron.dataloader import EmptyInfiniteDataset, SkipBatchSampler, clm_process, get_dataloader_worker_init
+from nanotron.dataloader import EmptyInfiniteDataset, SkipBatchSampler, get_dataloader_worker_init
 from nanotron.logging import log_rank
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
@@ -20,9 +20,9 @@ from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 
 try:
-    from datasets import Dataset, DatasetDict, load_dataset
+    from datasets import Dataset, DatasetDict, Features, Sequence, Value, concatenate_datasets, load_dataset
     from huggingface_hub import __version__ as hf_hub_version
-    from transformers import AutoTokenizer
+    from transformers import AutoTokenizer, PreTrainedTokenizerBase
     from transformers import __version__ as tf_version
     from transformers.trainer_pt_utils import DistributedSamplerWithLoop
 except ImportError:
@@ -52,6 +52,59 @@ def get_doremi_datasets(
             raw_datasets[split].append(d)
 
     return raw_datasets
+
+
+def doremi_clm_process(
+    domain_idx: int,
+    raw_dataset: "Dataset",
+    tokenizer: "PreTrainedTokenizerBase",
+    text_column_name: str,
+    dataset_processing_num_proc_per_process: int,
+    dataset_overwrite_cache: bool,
+    sequence_length: int,
+):
+    """Concatenate all texts from raw_dataset and generate chunks of `sequence_length + 1`, where chunks overlap by a single token."""
+    # Adapted from https://github.com/huggingface/transformers/blob/47e1676255e5dd86b9541f734cd4f4bdcbb50f4a/examples/pytorch/language-modeling/run_clm.py#L391-L439
+
+    def group_texts(examples: Dict[str, List[np.ndarray]]) -> Dict[str, List[np.ndarray]]:
+        # Concatenate all texts.
+        concatenated_examples = {k: np.concatenate(v) for k, v in examples.items()}
+        total_length = len(concatenated_examples[next(iter(examples.keys()))])
+        # WARNING: We drop the small remainder, we could add padding if the model supported it instead of this drop, you can
+        # customize this part to your needs.
+        if total_length >= sequence_length + 1:
+            total_length = ((total_length - 1) // sequence_length) * sequence_length + 1
+        # Split by chunks of sequence_length.
+        result = {
+            k: [
+                t[i : i + sequence_length + 1] for i in range(0, total_length - (sequence_length + 1), sequence_length)
+            ]
+            for k, t in concatenated_examples.items()
+        }
+        result["domain_ids"] = [domain_idx] * len(result[next(iter(result.keys()))])
+        return result
+
+    def _tokenize_and_group_texts(texts: List[str]) -> Dict[str, List[np.ndarray]]:
+        tokenized_batch = tokenizer.batch_encode_plus(texts, return_attention_mask=False, return_token_type_ids=False)
+        tokenized_batch = {k: [np.array(tokenized_texts) for tokenized_texts in v] for k, v in tokenized_batch.items()}
+        return group_texts(tokenized_batch)
+
+    train_dataset = raw_dataset.map(
+        _tokenize_and_group_texts,
+        input_columns=text_column_name,
+        remove_columns=raw_dataset.column_names,
+        features=Features(
+            {
+                "input_ids": Sequence(feature=Value(dtype="int64"), length=sequence_length + 1),
+                "domain_ids": Value(dtype="int64"),
+            }
+        ),
+        batched=True,
+        num_proc=dataset_processing_num_proc_per_process,
+        load_from_cache_file=not dataset_overwrite_cache,
+        desc=f"Grouping texts in chunks of {sequence_length+1}",
+    )
+    return train_dataset
 
 
 def get_dataloader(trainer: DistributedTrainer, domain_keys: List[str]) -> DataLoader:
@@ -86,9 +139,10 @@ def get_dataloader(trainer: DistributedTrainer, domain_keys: List[str]) -> DataL
     )["train"]
 
     train_datasets = []
-    for raw_dataset in raw_datasets:
+    for domain_idx, raw_dataset in enumerate(raw_datasets):
         train_datasets.append(
-            clm_process(
+            doremi_clm_process(
+                domain_idx=domain_idx,
                 raw_dataset=raw_dataset,
                 tokenizer=tokenizer,
                 text_column_name=trainer.config.data.dataset.text_column_name,
@@ -97,6 +151,9 @@ def get_dataloader(trainer: DistributedTrainer, domain_keys: List[str]) -> DataL
                 sequence_length=trainer.sequence_length,
             )
         )
+
+    assert 1 == 1
+    log_rank("Before get_doremi_dataloader", logger=logger, level=logging.INFO)
 
     # NOTE: We load the processed dataset on the ranks requiring it
     input_pp_rank, output_pp_rank = get_input_output_pp_ranks(model=trainer.model)
@@ -115,6 +172,8 @@ def get_dataloader(trainer: DistributedTrainer, domain_keys: List[str]) -> DataL
         seed_worker=trainer.config.data.seed,
         dataloader_drop_last=True,
     )()
+
+    log_rank("After get_doremi_dataloader", logger=logger, level=logging.INFO)
 
     # NOTE: Check if we have enough samples for train_steps
     # bach_size = len(dataloader)
@@ -219,11 +278,13 @@ class DistributedSamplerForDoReMi(DistributedSampler):
         self.total_size = self._calculate_total_size()
         self.parallel_context = parallel_context
 
-        generator = torch.Generator(device="cpu")
-        # Make sure that TP are synced always
+        self.lengths = [len(d) for d in self.datasets]
+        # lengths = compute_total_sample_per_streaming_dataset(self.datasets)
+        self.offsets = np.cumsum([0] + self.lengths[:-1])
+
         # TODO(xrsrke): make seed configurable
         seed = 42
-        self.generator = generator.manual_seed(
+        self.generator = torch.Generator(device="cpu").manual_seed(
             seed * (1 + dist.get_rank(self.parallel_context.dp_pg)) * (1 + dist.get_rank(self.parallel_context.pp_pg))
         )
 
@@ -234,11 +295,8 @@ class DistributedSamplerForDoReMi(DistributedSampler):
 
     def __iter__(self):
         domain_indices = []
-        lengths = [len(d) for d in self.datasets]
-        # lengths = compute_total_sample_per_streaming_dataset(self.datasets)
-        offsets = np.cumsum([0] + lengths[:-1])
-
         for i, dataset in enumerate(self.datasets):
+            print(f"DistributedSamplerForDoReMi looping {i} dataset")
             dataset_partition_size = len(dataset) // self.num_replicas
             dataset_partition_offsets = self.rank * dataset_partition_size
             num_samples = int(dataset_partition_size * self.domain_weights[i].item())
@@ -250,7 +308,7 @@ class DistributedSamplerForDoReMi(DistributedSampler):
                 + dataset_partition_offsets
             )
             # NOTE: align the indicies across the combined dataset
-            global_indices = local_indices + offsets[i]
+            global_indices = local_indices + self.offsets[i]
             domain_indices.extend(global_indices)
 
         np.random.shuffle(domain_indices)
@@ -258,7 +316,8 @@ class DistributedSamplerForDoReMi(DistributedSampler):
 
         # Yield indices in batches
         for i in range(0, len(domain_indices), self.batch_size):
-            yield domain_indices[i : i + self.batch_size]
+            xs = domain_indices[i : i + self.batch_size]
+            yield [t.item() for t in xs]
 
 
 # Adapted from https://github.com/huggingface/transformers/blob/47e1676255e5dd86b9541f734cd4f4bdcbb50f4a/src/transformers/trainer.py#L763-L835
@@ -319,45 +378,116 @@ def compute_total_sample_per_streaming_dataset(datasets: List[Dataset]) -> List[
     return lengths
 
 
+# class CombinedDataset(Dataset):
+#     def __init__(self, datasets: List[Dataset]):
+#         self.datasets = datasets
+#         self.lengths = [len(d) for d in datasets]
+#         # self.lengths = compute_total_sample_per_streaming_dataset(datasets)
+#         self.offsets = np.cumsum([0] + self.lengths[:-1])
+
+#     def __len__(self) -> int:
+#         return sum(self.lengths)
+
+#     def __getitem__(self, batch_global_idxs: List[List[int]]) -> Dict:
+#         print("getting item from CombinedDataset")
+#         def merge_outputs(outputs):
+#             merged_input_ids = sum((o["input_ids"] for o in outputs), [])
+#             merged_domain_idx = sum((o["domain_idx"] for o in outputs), [])
+#             return {"input_ids": merged_input_ids, "domain_ids": merged_domain_idx}
+
+#         outputs = []
+#         for global_idxs in batch_global_idxs:
+#             log_rank(f"Looping in CombinedDataset.__getitem__, global_idxs={global_idxs}", logger=logger, level=logging.INFO)
+#             output = [self._get_sample(global_idx) for global_idx in global_idxs]
+#             # TODO(xrsrke): refactor this, make it fast
+#             output = {key: [d[key] for d in output] for key in output[0]}
+#             outputs.append(output)
+
+#         return merge_outputs(outputs)
+
+#     def _get_sample(self, global_idx: int) -> Dict:
+#         log_rank("Before _get_sample", logger=logger, level=logging.INFO)
+#         dataset_idx, local_idx = self._get_dataset_and_local_index(global_idx)
+#         dataset = self.datasets[dataset_idx]
+#         sample = {key: dataset[key][local_idx] for key in dataset.features}
+#         sample["domain_idx"] = dataset_idx
+#         return sample
+
+#     def _get_dataset_and_local_index(self, global_idx: int) -> Tuple[int, int]:
+#         log_rank("Before _get_dataset_and_local_index", logger=logger, level=logging.INFO)
+#         for i, offset in enumerate(self.offsets):
+#             if global_idx < offset + self.lengths[i]:
+#                 return i, global_idx - offset
+
+#         raise IndexError(f"Index out of range, global_idx={global_idx}")
+
+
+# class CombinedDataset(Dataset):
+#     def __init__(self, datasets: List[Dataset]):
+#         self.datasets = datasets
+#         self.lengths = [len(d) for d in datasets]
+#         # self.lengths = compute_total_sample_per_streaming_dataset(datasets)
+#         self.offsets = np.cumsum([0] + self.lengths[:-1])
+
+#     def __len__(self) -> int:
+#         return sum(self.lengths)
+
+#     def __getitem__(self, batch_global_idxs: List[List[int]]) -> Dict:
+#         print("getting item from CombinedDataset")
+#         def merge_outputs(outputs):
+#             merged_input_ids = sum((o["input_ids"] for o in outputs), [])
+#             merged_domain_idx = sum((o["domain_idx"] for o in outputs), [])
+#             return {"input_ids": merged_input_ids, "domain_ids": merged_domain_idx}
+
+#         outputs = []
+#         for global_idxs in batch_global_idxs:
+#             log_rank(f"Looping in CombinedDataset.__getitem__, global_idxs={global_idxs}", logger=logger, level=logging.INFO)
+#             output = [self._get_sample(global_idx) for global_idx in global_idxs]
+#             # TODO(xrsrke): refactor this, make it fast
+#             output = {key: [d[key] for d in output] for key in output[0]}
+#             outputs.append(output)
+
+#         return merge_outputs(outputs)
+
+#     def _get_sample(self, global_idx: int) -> Dict:
+#         log_rank("Before _get_sample", logger=logger, level=logging.INFO)
+#         dataset_idx, local_idx = self._get_dataset_and_local_index(global_idx)
+#         dataset = self.datasets[dataset_idx]
+#         sample = {key: dataset[key][local_idx] for key in dataset.features}
+#         sample["domain_idx"] = dataset_idx
+#         return sample
+
+#     def _get_dataset_and_local_index(self, global_idx: int) -> Tuple[int, int]:
+#         log_rank("Before _get_dataset_and_local_index", logger=logger, level=logging.INFO)
+#         for i, offset in enumerate(self.offsets):
+#             if global_idx < offset + self.lengths[i]:
+#                 return i, global_idx - offset
+
+#         raise IndexError(f"Index out of range, global_idx={global_idx}")
+
+
 class CombinedDataset(Dataset):
-    def __init__(self, datasets: List[Dataset]):
-        self.datasets = datasets
-        self.lengths = [len(d) for d in datasets]
+    def __init__(self, datasets):
+        self.comebined_dataset = concatenate_datasets(datasets)
 
-        # self.lengths = compute_total_sample_per_streaming_dataset(datasets)
-        self.offsets = np.cumsum([0] + self.lengths[:-1])
+    def __len__(self):
+        return len(self.comebined_dataset)
 
-    def __len__(self) -> int:
-        return sum(self.lengths)
+    def __getitem__(self, batch):
+        if isinstance(batch[0], list):
 
-    def __getitem__(self, batch_global_idxs: List[List[int]]) -> Dict:
-        def merge_outputs(outputs):
-            merged_input_ids = sum((o["input_ids"] for o in outputs), [])
-            merged_domain_idx = sum((o["domain_idx"] for o in outputs), [])
-            return {"input_ids": merged_input_ids, "domain_ids": merged_domain_idx}
+            def merge_dicts(data):
+                merged = {
+                    "input_ids": np.concatenate([d["input_ids"] for d in data]),
+                    "domain_ids": np.concatenate([d["domain_ids"] for d in data]),
+                }
+                return merged
 
-        outputs = []
-        for global_idxs in batch_global_idxs:
-            output = [self._get_sample(global_idx) for global_idx in global_idxs]
-            # TODO(xrsrke): refactor this, make it fast
-            output = {key: [d[key] for d in output] for key in output[0]}
-            outputs.append(output)
-
-        return merge_outputs(outputs)
-
-    def _get_sample(self, global_idx: int) -> Dict:
-        dataset_idx, local_idx = self._get_dataset_and_local_index(global_idx)
-        dataset = self.datasets[dataset_idx]
-        sample = {key: dataset[key][local_idx] for key in dataset.features}
-        sample["domain_idx"] = dataset_idx
-        return sample
-
-    def _get_dataset_and_local_index(self, global_idx: int) -> Tuple[int, int]:
-        for i, offset in enumerate(self.offsets):
-            if global_idx < offset + self.lengths[i]:
-                return i, global_idx - offset
-
-        raise IndexError(f"Index out of range, global_idx={global_idx}")
+            # TODO(xrsrke): do a single index, then split the output
+            samples = [self.comebined_dataset[idxs] for idxs in batch]
+            return merge_dicts(samples)
+        else:
+            return self.comebined_dataset[batch]
 
 
 # Adapted from https://github.com/huggingface/transformers/blob/47e1676255e5dd86b9541f734cd4f4bdcbb50f4a/src/transformers/trainer.py#L837
@@ -404,12 +534,16 @@ def get_doremi_dataloader(
         # No need to spawn a lot of workers, we can just use main
         dataloader_num_workers = 0
 
+    log_rank("Before DataCollatorForCLM", logger=logger, level=logging.INFO)
+
     data_collator = DataCollatorForCLM(
         sequence_length=sequence_length,
         input_pp_rank=input_pp_rank,
         output_pp_rank=output_pp_rank,
         parallel_context=parallel_context,
     )
+
+    log_rank("Before _get_train_sampler", logger=logger, level=logging.INFO)
 
     train_sampler = _get_train_sampler(
         dp_size=parallel_context.dp_pg.size(),
@@ -424,7 +558,13 @@ def get_doremi_dataloader(
         parallel_context=parallel_context,
     )
 
+    log_rank("Before comebined_dataset", logger=logger, level=logging.INFO)
+
     comebined_dataset = CombinedDataset(train_datasets)
+    # comebined_dataset = concatenate_datasets(train_datasets)
+
+    assert 1 == 1
+    log_rank("Before DataLoader", logger=logger, level=logging.INFO)
 
     dataloader = DataLoader(
         comebined_dataset,
@@ -439,13 +579,21 @@ def get_doremi_dataloader(
 
     def _data_generator():
         dist.barrier()
+        log_rank("Before looping dataloader", logger=logger, level=logging.INFO)
         for batch in dataloader:
+            log_rank("before move batch to cuda", logger=logger, level=logging.INFO)
             batch = {k: v.to("cuda") for k, v in batch.items()}
             # NOTE: because the inference model don't take `domain_idxs`
             # as input we need to remove it from the batch
+            log_rank("before filtering batch", logger=logger, level=logging.INFO)
+
             batch_for_inference = {k: v for k, v in batch.items() if k != "domain_idxs"}
+
+            log_rank("Before generating ref_losses", logger=logger, level=logging.INFO)
+
             ref_losses = ref_model(**batch_for_inference)["losses"]
             batch["ref_losses"] = ref_losses
+
             yield batch
 
     return _data_generator

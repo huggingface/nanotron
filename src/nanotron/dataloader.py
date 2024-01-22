@@ -269,7 +269,6 @@ def set_tensor_pointers(
     }
 
 
-### CAUSAL LANGUAGE MODELING ###
 def clm_process(
     raw_dataset: "Dataset",
     tokenizer: "PreTrainedTokenizerBase",
@@ -499,8 +498,6 @@ def get_train_dataloader(
         num_workers=dataloader_num_workers,
         pin_memory=dataloader_pin_memory,
         worker_init_fn=get_dataloader_worker_init(dp_rank=dist.get_rank(parallel_context.dp_pg)),
-        # TODO @thomasw21: I'm not sure but this doesn't seem to work at all.
-        # pin_memory_device="cuda",
     )
 
 

@@ -15,13 +15,19 @@ data:
     # hf_dataset_splits: train
     # text_column_name: instruction
 
+    # NOTE: too big
     # hf_dataset_or_datasets: allenai/c4
     # hf_dataset_splits: train
     # text_column_name: text
 
-    hf_dataset_or_datasets: miam
+    # NOTE: good for testing
+    # hf_dataset_or_datasets: miam
+    # hf_dataset_splits: train
+    # text_column_name: Utterance
+
+    hf_dataset_or_datasets: wikicorpus
     hf_dataset_splits: train
-    text_column_name: Utterance
+    text_column_name: text
 
   num_loading_workers: 1
   seed: 42
@@ -99,5 +105,5 @@ tokens:
   sequence_length: 32
   # train_steps: 1000
   # train_steps: 1579
-  train_steps: 10
+  train_steps: 10000
   val_check_interval: -1
