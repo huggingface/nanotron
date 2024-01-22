@@ -331,7 +331,7 @@ class Config:
     tokens: TokensArgs
     optimizer: OptimizerArgs
     data: DataArgs
-    profiler: Optional[ProfilerArgs] = None
+    profiler: Optional[ProfilerArgs]
 
     def __post_init__(self):
         # Some final sanity checks across separate arguments sections:
