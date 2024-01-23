@@ -36,9 +36,11 @@ jobs:
         which python
         python --version
 
-    - name: Check container state
+    - name: Check Pytorch version
       run: |
         nvidia-smi
+        python -c "import torch; print('torch:', torch.__version__, torch)"
+        python -c "import torch; print('CUDA available:', torch.cuda.is_available())"
 
     - name: Instal nanotron
       run: |
@@ -46,8 +48,9 @@ jobs:
         pip install packaging
         pip install wheel
         pip install "flash-attn>=2.4.2"  --no-build-isolation
-        git clone git@github.com:huggingface/nanotron.git
+        git clone https://github.com/huggingface/nanotron.git
         cd nanotron
+        pip install -e .
         pip install -e [dev]
         pip install -e [test]
 
@@ -56,12 +59,6 @@ jobs:
       run: |
         pip install pytest
         pip install pytest-cov
-    
-    - name: Check Pytorch version
-      run: |
-        nvidia-smi
-        python -c "import torch; print('torch:', torch.__version__, torch)"
-        python -c "import torch; print('CUDA available:', torch.cuda.is_available())"
 
     - name: Show installed libraries and their versions
       run: pip freeze | tee installed.txt
