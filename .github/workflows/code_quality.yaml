@@ -15,3 +15,5 @@ jobs:
 
     - name: Count Lines of Code (cloc)
       uses: djdefi/cloc-action@6
+      with:
+        options: --include-dir=src
