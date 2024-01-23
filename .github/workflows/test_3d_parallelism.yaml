@@ -4,10 +4,10 @@ on:
   workflow_dispatch:
   push:
     branches: [ main ]
-    paths:
-      - "src/**/*.py"
-      - "examples/**/*.py"
-      - "tests/**/*.py"
+    # paths:
+    #   - "src/**/*.py"
+    #   - "examples/**/*.py"
+    #   - "tests/**/*.py"
 
   pull_request:
     branches: [ main ]
