@@ -19,12 +19,17 @@ on:
 jobs:
   tests:
     runs-on: [multi-gpu, nvidia-gpu, 8-t4, ci]
+    container:
+      image: nvcr.io/nvidia/pytorch:23.03-py3
+      ports:
+        - 80
+      options: --gpus all --shm-size "8G"
     steps:
     - uses: actions/checkout@v3
-    - name: Set up Python 3.10
-      uses: actions/setup-python@v2
-      with:
-        python-version: '3.10'
+    # - name: Set up Python 3.10
+    #   uses: actions/setup-python@v2
+    #   with:
+    #     python-version: '3.10'
 
     - name: Python environment
       run: |
@@ -40,11 +45,12 @@ jobs:
         python -m pip install --upgrade pip
         pip install packaging
         pip install wheel
-        pip install torch
         pip install "flash-attn>=2.4.2"  --no-build-isolation
         git clone git@github.com:huggingface/nanotron.git
         cd nanotron
-        pip install -e .
+        pip install -e [dev]
+        pip install -e [test]
+
 
     - name: Install test dependencies
       run: |
