@@ -405,7 +405,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                 # but [ False, False, False, False,  True,  True,  False,  False,  True,  True] is not (can't mask in the middle of sequence)
                 assert ~(
                     sequence_mask[:, :-1] & (~sequence_mask[:, 1:])  # True is never followed by False
-                ).any(), f"Can't mask in the middle of sequence, please use USE_FAST=0 instead.\nGot sequence_mask: {sequence_mask}"
+                ).any(), "Can't mask in the middle of sequence, please make sure that pads are at the left of the sequence if existing"
 
                 # preallocate k_cache, v_cache to self.prefill_kv_len
                 k_cache = torch.zeros(
