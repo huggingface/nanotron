@@ -66,6 +66,17 @@ pre-commit install
 pre-commit run --config .pre-commit-config.yaml --all-files
 ```
 
+Features we would like to add:
+- [ ] Support `torch.compile`
+- [ ] Support `torch.distributed.rpc`
+- [ ] More optimized kernels
+- [ ] Support Zero3
+- [ ] Other PP schedules (such as Interleaved 1f1b...)
+- [ ] Ring attention / Sequence Parallelism
+- [ ] 3D Parallel MoEs
+- [ ] Supporting more architectures (Mamba..)
+- [ ] ...
+
 # Credits
 
 We would like to thank everyone working on LLMs, especially those sharing their work openly from which we took great inspiration: Nvidia for `Megatron-LM/apex`, Microsoft for `DeepSpeed`, HazyResearch for `flash-attn`
