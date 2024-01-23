@@ -38,8 +38,10 @@ jobs:
     - name: Instal nanotron
       run: |
         python -m pip install --upgrade pip
+        pip install packaging
+        pip install wheel
         pip install torch
-        pip install packaging; pip install "flash-attn>=2.4.2"  --no-build-isolation
+        pip install "flash-attn>=2.4.2"  --no-build-isolation
         git clone git@github.com:huggingface/nanotron.git
         cd nanotron
         pip install -e .
