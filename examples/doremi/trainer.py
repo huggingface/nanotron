@@ -28,7 +28,7 @@ logger = logging.get_logger(__name__)
 class DoReMiTrainer(DistributedTrainer):
     def __init__(self, domain_weights: torch.Tensor, domain_keys: List[str], *args, **kwargs):
         # NOTE: save the initial domain_weights
-        self.doremi_context = DoReMiContext(domain_weights, domain_keys)
+        self.doremi_context = DoReMiContext(domain_weights, domain_keys, is_proxy=True)
         super().__init__(*args, **kwargs)
 
     def init_model(self) -> Union[NanotronModel, DistributedDataParallel]:

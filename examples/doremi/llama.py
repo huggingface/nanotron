@@ -310,7 +310,7 @@ class LlamaForDoReMiTraining(BaseLLaMa):
                 "ref_losses",
                 "doremi_context",
             },
-            module_output_keys={"loss", "domain_losses", "domain_weights"},
+            module_output_keys={"loss", "excess_losses", "domain_losses", "domain_weights"},
         )
         self.parallel_context = parallel_context
         self.config = config

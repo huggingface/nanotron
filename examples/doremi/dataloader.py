@@ -158,7 +158,7 @@ def get_dataloader(trainer: DistributedTrainer, domain_keys: List[str]) -> DataL
     dataloader = get_doremi_dataloader(
         doremi_context=doremi_context,
         train_datasets=train_datasets,
-        ref_model=trainer.ref_model,
+        ref_model=trainer.ref_model if doremi_context.is_proxy is True else None,
         sequence_length=trainer.sequence_length,
         parallel_context=trainer.parallel_context,
         input_pp_rank=input_pp_rank,
@@ -168,7 +168,10 @@ def get_dataloader(trainer: DistributedTrainer, domain_keys: List[str]) -> DataL
         dataloader_num_workers=trainer.config.data.num_loading_workers,
         seed_worker=trainer.config.data.seed,
         dataloader_drop_last=True,
-    )()
+    )
+    # NOTE: we need to call the dataloader to generate reference losses
+    # if the model is a proxy model
+    dataloader = dataloader() if doremi_context.is_proxy is True else dataloader
 
     # NOTE: Check if we have enough samples for train_steps
     # bach_size = len(dataloader)
@@ -197,6 +200,7 @@ class DataCollatorForCLM:
     input_pp_rank: int
     output_pp_rank: int
     parallel_context: ParallelContext
+    doremi_context: DoReMiContext
 
     def __call__(self, examples: List[Dict[str, List[np.ndarray]]]) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
         # Process the case when current rank doesn't require data. We return `TensorPointer` that points to ranks having the data.
@@ -238,8 +242,11 @@ class DataCollatorForCLM:
         if current_pp_rank == self.output_pp_rank:
             result["label_ids"] = input_ids[:, 1:]
             result["label_mask"] = np.ones((batch_size, self.sequence_length), dtype=np.bool_)
+
             # NOTE: only the last pipeline stage needs domain_idxs for computing DoReMi loss
-            result["domain_idxs"] = np.vstack([examples[i]["domain_ids"] for i in range(len(examples))])
+            # and only the proxy model needs domain_idxs for computing reference loss
+            if self.doremi_context.is_proxy is True:
+                result["domain_idxs"] = np.vstack([examples[i]["domain_ids"] for i in range(len(examples))])
 
         if isinstance(result["input_ids"], torch.Tensor) and result["input_ids"].shape[-1] != self.sequence_length:
             raise ValueError(
@@ -399,7 +406,7 @@ class CombinedDataset(Dataset):
 # Adapted from https://github.com/huggingface/transformers/blob/47e1676255e5dd86b9541f734cd4f4bdcbb50f4a/src/transformers/trainer.py#L837
 def get_doremi_dataloader(
     doremi_context: DoReMiContext,
-    ref_model: nn.Module,
+    ref_model: Optional[nn.Module],
     train_datasets: List["Dataset"],
     sequence_length: int,
     parallel_context: ParallelContext,
@@ -445,6 +452,7 @@ def get_doremi_dataloader(
         input_pp_rank=input_pp_rank,
         output_pp_rank=output_pp_rank,
         parallel_context=parallel_context,
+        doremi_context=doremi_context,
     )
 
     train_sampler = _get_train_sampler(
@@ -484,4 +492,4 @@ def get_doremi_dataloader(
             batch["ref_losses"] = ref_losses
             yield batch
 
-    return _data_generator
+    return _data_generator if ref_model is not None else dataloader

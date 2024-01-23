@@ -1,5 +1,5 @@
 checkpoints:
-  checkpoint_interval: 100
+  checkpoint_interval: 500
   checkpoints_path: checkpoints/test/
   checkpoints_path_is_shared_file_system: true
   # resume_checkpoint_path: checkpoints_test/
@@ -20,14 +20,14 @@ data:
     # hf_dataset_splits: train
     # text_column_name: text
 
-    # NOTE: good for testing
-    hf_dataset_or_datasets: miam
-    hf_dataset_splits: train
-    text_column_name: Utterance
-
-    # hf_dataset_or_datasets: wikicorpus
+    # # NOTE: good for testing
+    # hf_dataset_or_datasets: miam
     # hf_dataset_splits: train
-    # text_column_name: text
+    # text_column_name: Utterance
+
+    hf_dataset_or_datasets: wikicorpus
+    hf_dataset_splits: train
+    text_column_name: text
 
   num_loading_workers: 1
   seed: 42
@@ -83,9 +83,9 @@ optimizer:
     min_decay_lr: 1.0e-05
   torch_adam_is_fused: true
   weight_decay: 0.01
-  zero_stage: 0
+  zero_stage: 1
 parallelism:
-  dp: 2
+  dp: 4
   pp: 1
   pp_engine: 1f1b
   recompute_granularity: SELECTIVE
@@ -98,11 +98,14 @@ tokenizer:
   tokenizer_name_or_path: gpt2
   tokenizer_revision: null
 tokens:
-  batch_accumulation_per_replica: 1
+  # batch_accumulation_per_replica * micro_batch_size * dp = 2 * 10 * 12 = 240
+  # 240 * 1024 = 245760
+  # the doremi paper do 500k tokens per batch
+  batch_accumulation_per_replica: 2
   limit_test_batches: 0
   limit_val_batches: 0
   micro_batch_size: 10
-  sequence_length: 32
+  sequence_length: 1024
   # train_steps: 1000
   # train_steps: 1579
   train_steps: 100_000
