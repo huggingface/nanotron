@@ -31,10 +31,10 @@ if __name__ == "__main__":
     # DOMAIN_KEYS = ['en', 'af', 'am', 'ar']
     # TODO(xrsrke): get these automatically
 
-    # NOTE: for wikicorpus dataset
+    # NOTE: for miami dataset
     # DOMAIN_KEYS = ["dihana", "ilisten", "loria", "maptask", "vm2"]
 
-    # # NOTE: for wikicorpus dataset
+    # NOTE: for wikicorpus dataset
     DOMAIN_KEYS = [
         "raw_ca",
         "raw_es",

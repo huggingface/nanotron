@@ -200,22 +200,28 @@ class LLaMaForInference(BaseLLaMa):
             input_ids=input_ids,
             input_mask=input_mask,
         )
-        sharded_logits = sharded_logits.transpose(0, 1).contiguous()  # [batch size, seq_length, vocab_size]
+        # sharded_logits = sharded_logits.transpose(0, 1).contiguous()  # [batch size, seq_length, vocab_size]
         logprobs = sharded_cross_entropy(
             sharded_logits,
-            label_ids.contiguous(),
+            label_ids.transpose(0, 1).contiguous(),
             group=self.parallel_context.tp_pg,
             dtype=torch.float,
-        )
-        # TODO(xrsrke): recheck if this is correct
+        ).transpose(0, 1)
         losses = (logprobs * label_mask).sum(dim=-1) / label_mask.sum(dim=-1)
         return {"losses": losses}
+
+
+@torch.jit.script
+def masked_mean(loss, label_mask, dtype):
+    # type: (Tensor, Tensor, torch.dtype) -> Tensor
+    return (loss * label_mask).sum(dtype=dtype) / label_mask.sum()
 
 
 class DoReMiLoss(nn.Module):
     def __init__(self, parallel_context: ParallelContext):
         super().__init__()
         self.parallel_context = parallel_context
+        self.iteration = 0
 
     def forward(
         self,
@@ -226,32 +232,46 @@ class DoReMiLoss(nn.Module):
         ref_losses: torch.Tensor,
         doremi_context: DoReMiContext,
     ) -> Dict[str, torch.Tensor]:
-        tp_pg = self.parallel_context.tp_pg
+        # self.iteration += 1
         logprobs = sharded_cross_entropy(
-            sharded_logits, label_ids.transpose(0, 1).contiguous(), group=tp_pg, dtype=torch.float
+            sharded_logits,
+            label_ids.transpose(0, 1).contiguous(),
+            group=self.parallel_context.tp_pg,
+            dtype=torch.float,
         ).transpose(0, 1)
+
+        # NOTE: per token loss
         losses = (logprobs * label_mask).sum(dim=-1) / label_mask.sum(dim=-1)
-        excess_loss = (losses - ref_losses).clamp(min=0)
+        # NOTE: sometimes you'll see the domain losses equal to zero.
+        # this doesn't mean there are bugs, it just means that in that case,
+        # the proxy model is performing better than the reference model
+        # => clamp(lower loss - higher loss, 0) = clamp(negative, 0) = 0.
+        excess_losses = (losses - ref_losses).clamp(min=0)
 
         # NOTE: Calculate total loss per domain
         domain_idxs = domain_idxs.view(-1)
         domain_losses = torch.zeros(domain_idxs.max() + 1, device="cuda")
-        for i in range(len(excess_loss)):
-            domain_losses[domain_idxs[i]] += excess_loss[i]
+        for i in range(len(excess_losses)):
+            domain_losses[domain_idxs[i]] += excess_losses[i]
+
+        # if self.iteration == 4:
+        #     assert 1 == 1
 
         # NOTE: Normalize and smooth domain weights
         tokens_per_domain = torch.bincount(domain_idxs, minlength=domain_idxs.max() + 1)
         normalized_domain_losses = domain_losses / tokens_per_domain
 
+        # NOTE: α_t′ ← α_t-1 exp(η λ_t)
         updated_domain_weights = doremi_context.domain_weights * torch.exp(
             doremi_context.step_size * normalized_domain_losses
         )
         smooth_domain_weights = self._normalize_domain_weights(updated_domain_weights, doremi_context.smoothing_param)
         doremi_context.domain_weights = smooth_domain_weights.detach()
 
+        lm_loss = masked_mean(logprobs, label_mask, dtype=torch.float)
         return {
-            "loss": losses,
-            # "lm_loss": losses.sum(dim=-1),
+            "loss": lm_loss,
+            "excess_losses": excess_losses,
             "domain_losses": normalized_domain_losses,
             "domain_weights": smooth_domain_weights,
         }
