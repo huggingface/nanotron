@@ -34,8 +34,6 @@ jobs:
     - name: Check container state
       run: |
         nvidia-smi
-        python -c "import torch; print('torch:', torch.__version__, torch)"
-        python -c "import torch; print('CUDA available:', torch.cuda.is_available())"
 
     - name: Instal nanotron
       run: |
@@ -50,6 +48,12 @@ jobs:
       run: |
         pip install pytest
         pip install pytest-cov
+    
+    - name: Check Pytorch version
+      run: |
+        nvidia-smi
+        python -c "import torch; print('torch:', torch.__version__, torch)"
+        python -c "import torch; print('CUDA available:', torch.cuda.is_available())"
 
     - name: Show installed libraries and their versions
       run: pip freeze | tee installed.txt
