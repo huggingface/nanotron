@@ -1,4 +1,4 @@
-name: Run unit tests
+name: Run FA2-related unit tests
 
 on:
   workflow_dispatch:
@@ -20,17 +20,12 @@ jobs:
   tests:
     runs-on: [multi-gpu, nvidia-gpu, 8-t4, ci]
     container:
-      # image: nvcr.io/nvidia/pytorch:23.03-py3
       image: runpod/pytorch:2.1.1-py3.10-cuda12.1.1-devel-ubuntu22.04
       ports:
         - 80
       options: --gpus all --shm-size "8G"
     steps:
     - uses: actions/checkout@v3
-    # - name: Set up Python 3.10
-    #   uses: actions/setup-python@v2
-    #   with:
-    #     python-version: '3.10'
 
     - name: Python environment
       run: |
@@ -64,4 +59,6 @@ jobs:
       run: pip freeze | tee installed.txt
 
     - name: Run tests
-      run: pytest --color=yes --durations=0 --verbose tests/
+      # NOTE: -m fa2 will only run the unit tests that have the mark
+      # "fa2" (these are FA2-related tests)
+      run: pytest -m fa2 --color=yes --durations=0 --verbose tests/
