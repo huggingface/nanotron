@@ -1,5 +1,5 @@
 checkpoints:
-  checkpoint_interval: 500
+  checkpoint_interval: 1000
   checkpoints_path: checkpoints/test/
   checkpoints_path_is_shared_file_system: true
   # resume_checkpoint_path: checkpoints_test/
@@ -25,7 +25,11 @@ data:
     # hf_dataset_splits: train
     # text_column_name: Utterance
 
-    hf_dataset_or_datasets: wikicorpus
+    # hf_dataset_or_datasets: wikicorpus
+    # hf_dataset_splits: train
+    # text_column_name: text
+
+    hf_dataset_or_datasets: mc4
     hf_dataset_splits: train
     text_column_name: text
 
@@ -85,7 +89,7 @@ optimizer:
   weight_decay: 0.01
   zero_stage: 1
 parallelism:
-  dp: 4
+  dp: 12
   pp: 1
   pp_engine: 1f1b
   recompute_granularity: SELECTIVE
@@ -108,5 +112,5 @@ tokens:
   sequence_length: 1024
   # train_steps: 1000
   # train_steps: 1579
-  train_steps: 100_000
+  train_steps: 100_00
   val_check_interval: -1

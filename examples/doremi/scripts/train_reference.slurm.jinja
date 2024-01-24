@@ -1,0 +1,47 @@
+#!/bin/bash
+#SBATCH --job-name=doremi_training
+#SBATCH --nodes=3
+#SBATCH --ntasks-per-node=1          # crucial - only 1 task per dist per node!
+#SBATCH --gres=gpu:8
+#SBATCH --exclusive
+#SBATCH --partition=hopper-prod
+#SBATCH -o /fsx/phuc/slurm_logs/doremi/train_reference-%x-%j.out
+#SBATCH --qos=high
+
+echo "START TIME: $(date)"
+
+export USE_FAST=1
+export CUDA_DEVICE_MAX_CONNECTIONS=1
+export XDG_CACHE_HOME=/fsx/phuc/.cache/huggingface_cache
+
+# USE_FAST=1 CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node=4 examples/doremi/train_doremi.py --config-file examples/doremi/config_tiny_llama.yaml
+REPO=/fsx/phuc/projects/nanotron
+TRAINING_SCRIPT=$REPO/examples/doremi/train_reference.py
+CONFIG_FILE=$REPO/examples/doremi/config_100m_llama.yaml
+
+GPUS_PER_NODE=8
+NNODES=$SLURM_NNODES
+
+# so processes know who to talk to
+MASTER_ADDR=$(scontrol show hostnames $SLURM_JOB_NODELIST | head -n 1)
+MASTER_PORT=6000
+
+CMD=" \
+    $TRAINING_SCRIPT \
+    --config-file $CONFIG_FILE
+    "
+
+export LAUNCHER="python -u -m torch.distributed.run \
+    --nproc_per_node $GPUS_PER_NODE \
+    --nnodes $NNODES \
+    --rdzv_endpoint $MASTER_ADDR:$MASTER_PORT \
+    --rdzv_backend c10d \
+    --max_restarts 0 \
+    --tee 3 \
+    "
+
+echo $CMD
+
+srun $SRUN_ARGS -u bash -c "$LAUNCHER --node_rank \$SLURM_PROCID --role \$SLURMD_NODENAME: $CMD"
+
+echo "END TIME: $(date)"
