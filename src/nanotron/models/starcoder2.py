@@ -16,7 +16,7 @@
 
 Some dependencies to update before using:
  - install `torch>=2.0`
- - install `flash-attn>=2.4.2`
+ - install `flash-attn>=2.5.0`
  """
 
 import inspect
