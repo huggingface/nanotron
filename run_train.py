@@ -136,4 +136,4 @@ if __name__ == "__main__":
     print(trainer.model)
     
     # Train
-    # trainer.train(dataloader)
+    trainer.train(dataloader)

@@ -51,12 +51,15 @@ from nanotron.random import RandomStates
 from nanotron.utils import checkpoint_method
 from nanotron.config.models_config import MambaConfig
 
+#NOTE(fmom): mamba_ssm=1.1.1
 from mamba_ssm.models.mixer_seq_simple import create_block, Mamba, _init_weights
 
 try:
     from mamba_ssm.ops.triton.layernorm import RMSNorm, layer_norm_fn, rms_norm_fn
 except ImportError:
     RMSNorm, layer_norm_fn, rms_norm_fn = None, None, None
+
+logger = logging.get_logger(__name__)
 
 class Embedding(nn.Module, AttachableStore):
     def __init__(self, tp_pg: dist.ProcessGroup, config: MambaConfig, parallel_config: Optional[ParallelismArgs]):
@@ -182,7 +185,7 @@ class MambaModel(nn.Module):
             p2p=self.p2p,
             module_builder=RMSNorm,
             module_kwargs={"hidden_size": config.d_model, "eps": config.rms_norm_eps},
-            module_input_keys={"input"},
+            module_input_keys={"x"},
             module_output_keys={"hidden_states"},
         )  # TODO
 
@@ -240,7 +243,7 @@ class MambaModel(nn.Module):
         for block in self.decoder:
             hidden_encoder_states = block(**hidden_encoder_states)
 
-        hidden_states = self.final_layer_norm(input=hidden_encoder_states["hidden_states"])["hidden_states"]
+        hidden_states = self.final_layer_norm(x=hidden_encoder_states["hidden_states"])["hidden_states"]
 
         sharded_logits = self.lm_head(x=hidden_states)["logits"]
 
@@ -359,6 +362,24 @@ class MambaForTraining(NanotronModel):
         self.parallel_context = parallel_context
         self.config = config
         self.parallel_config = parallel_config
+    
+    def forward(
+        self,
+        input_ids: Union[torch.Tensor, TensorPointer],
+        input_mask: Union[torch.Tensor, TensorPointer],
+        label_ids: Union[torch.Tensor, TensorPointer],
+        label_mask: Union[torch.Tensor, TensorPointer],
+    ) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
+        sharded_logits = self.model(
+            input_ids=input_ids,
+            input_mask=input_mask,
+        )
+        loss = self.loss(
+            sharded_logits=sharded_logits,
+            label_ids=label_ids,
+            label_mask=label_mask,
+        )["loss"]
+        return {"loss": loss}
 
     @torch.no_grad()
     def init_model_randomly(self, init_method, scaled_init_method):
@@ -542,7 +563,9 @@ class MambaForTraining(NanotronModel):
                         nn.init.kaiming_uniform_(p, a=math.sqrt(5))
                         with torch.no_grad():
                             p /= math.sqrt(n_residuals_per_layer * n_layer)
-        
+                            
+            log_rank(f"Initialized {module_name} (NEED TO CHECK IF DONE PROPERLY)", logger=logger, level=logging.INFO, rank=0)
+            
         #TODO(fmom): perform check
         # assert initialized_parameters == {
         #     param.get_tied_info().get_full_name_from_module_id_to_prefix(module_id_to_prefix=module_id_to_prefix)

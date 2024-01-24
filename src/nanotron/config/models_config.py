@@ -142,5 +142,6 @@ class Starcoder2Config:
 
 
 #TODO(fmom): check why MambaConfig won't load if it's not the first one in the union
+# NanotronConfigs = Union[LlamaConfig, MambaConfig, Starcoder2Config]
 NanotronConfigs = Union[MambaConfig, LlamaConfig, Starcoder2Config]
 

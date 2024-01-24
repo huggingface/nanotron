@@ -57,7 +57,7 @@ optimizer = OptimizerArgs(
     zero_stage=0,
     weight_decay=0.01,
     clip_grad=1.0,
-    accumulate_grad_in_fp32=True,
+    accumulate_grad_in_fp32=False, #NOTE(fmom): because we are using PP=TP=DP=1
     adam_eps=1e-08,
     adam_beta1=0.9,
     adam_beta2=0.95,
@@ -75,7 +75,7 @@ parallelism = ParallelismArgs(
     recompute_granularity="selective",
 )
 
-tokens = TokensArgs(sequence_length=32, train_steps=10, micro_batch_size=2, batch_accumulation_per_replica=1)
+tokens = TokensArgs(sequence_length=1024, train_steps=40, micro_batch_size=2, batch_accumulation_per_replica=1)
 
 dataset = PretrainDatasetsArgs(
     hf_dataset_or_datasets="stas/openwebtext-10k", text_column_name="text"
@@ -86,7 +86,7 @@ os.makedirs(checkpoints_path, exist_ok=True)
 
 config = Config(
     general=GeneralArgs(project="test", run="mamba", seed=seed),
-    checkpoints=CheckpointsArgs(checkpoints_path=checkpoints_path, checkpoint_interval=10),
+    checkpoints=CheckpointsArgs(checkpoints_path=checkpoints_path, checkpoint_interval=243232232232323332),
     parallelism=parallelism,
     model=ModelArgs(init_method=MambaInit(initializer_range=0.02, rescale_prenorm_residual=True, n_residuals_per_layer=1), model_config=model_config),
     tokenizer=TokenizerArgs("gpt2"),
