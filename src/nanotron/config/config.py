@@ -369,6 +369,25 @@ class Config:
         return serialize(self)
 
 
+def get_config_from_dict(args: dict, config_class: Type[Config] = Config):
+    return from_dict(
+        data_class=config_class,
+        data=args,
+        config=dacite.Config(
+            cast=[Path],
+            type_hooks={
+                torch.dtype: cast_str_to_torch_dtype,
+                PipelineEngine: cast_str_to_pipeline_engine,
+                TensorParallelLinearMode: lambda x: TensorParallelLinearMode[x.upper()],
+                RecomputeGranularity: lambda x: RecomputeGranularity[x.upper()],
+                SamplerType: lambda x: SamplerType[x.upper()],
+            },
+            # strict_unions_match=True,
+            # strict=True,
+        ),
+    )
+
+
 def get_config_from_file(config_path: str, config_class: Type[Config] = Config) -> Config:
     """Get a config objet from a file (python or YAML)
 
@@ -383,25 +402,4 @@ def get_config_from_file(config_path: str, config_class: Type[Config] = Config) 
         args = yaml.load(f, Loader=SafeLoader)
 
     print(args)
-    # Make a nice dataclass from our yaml
-    try:
-        config = from_dict(
-            data_class=config_class,
-            data=args,
-            config=dacite.Config(
-                cast=[Path],
-                type_hooks={
-                    torch.dtype: cast_str_to_torch_dtype,
-                    PipelineEngine: cast_str_to_pipeline_engine,
-                    TensorParallelLinearMode: lambda x: TensorParallelLinearMode[x.upper()],
-                    RecomputeGranularity: lambda x: RecomputeGranularity[x.upper()],
-                    SamplerType: lambda x: SamplerType[x.upper()],
-                },
-                # strict_unions_match=True,
-                # strict=True,
-            ),
-        )
-    except Exception as e:
-        raise ValueError(f"Error parsing config file {config_path}: {e}")
-
-    return config
+    return get_config_from_dict(args, config_class=config_class)
