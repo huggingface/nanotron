@@ -1,4 +1,4 @@
-name: Run unit tests
+name: Run non-FA2-related unit tests
 
 on:
   workflow_dispatch:
