@@ -383,7 +383,7 @@ def get_config_from_dict(args: dict, config_class: Type[Config] = Config):
                 SamplerType: lambda x: SamplerType[x.upper()],
             },
             # strict_unions_match=True,
-            # strict=True,
+            strict=True,
         ),
     )
 
