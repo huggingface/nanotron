@@ -519,9 +519,8 @@ class DistributedTrainer:
                 )
                 self.model_config.max_position_embeddings = self.config.tokens.sequence_length
 
-        # log_rank(pformat(self.config), logger=logger, level=logging.INFO, rank=0)
-        log_rank(pformat(self.config), logger=logger, level=logging.INFO, rank=0)
-        log_rank(pformat(self.model_config), logger=logger, level=logging.INFO, rank=0)
+        log_rank("Config:\n" + pformat(self.config), logger=logger, level=logging.INFO, rank=0)
+        log_rank("Model Config:\n" + pformat(self.model_config), logger=logger, level=logging.INFO, rank=0)
 
         model_config_cls = self.model_config.__class__.__name__
         assert (
