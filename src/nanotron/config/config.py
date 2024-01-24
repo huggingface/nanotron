@@ -1,6 +1,6 @@
 import datetime
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Optional, Type, Union
 
@@ -322,16 +322,21 @@ class GenerationArgs:
 class Config:
     """Main configuration class"""
 
-    general: GeneralArgs
-    checkpoints: CheckpointsArgs
-    parallelism: ParallelismArgs
-    model: ModelArgs
-    tokenizer: TokenizerArgs
-    logging: LoggingArgs
-    tokens: TokensArgs
-    optimizer: OptimizerArgs
-    data: DataArgs
+    general: Optional[GeneralArgs]
+    checkpoints: Optional[CheckpointsArgs]
+    parallelism: Optional[ParallelismArgs]
+    model: Optional[ModelArgs]
+    tokenizer: Optional[TokenizerArgs]
+    logging: Optional[LoggingArgs]
+    tokens: Optional[TokensArgs]
+    optimizer: Optional[OptimizerArgs]
+    data: Optional[DataArgs]
     profiler: Optional[ProfilerArgs]
+
+    @classmethod
+    def create_empty(cls):
+        cls_fields = fields(cls)
+        return cls(**{f.name: None for f in cls_fields})
 
     def __post_init__(self):
         # Some final sanity checks across separate arguments sections:
@@ -364,6 +369,25 @@ class Config:
         return serialize(self)
 
 
+def get_config_from_dict(args: dict, config_class: Type[Config] = Config):
+    return from_dict(
+        data_class=config_class,
+        data=args,
+        config=dacite.Config(
+            cast=[Path],
+            type_hooks={
+                torch.dtype: cast_str_to_torch_dtype,
+                PipelineEngine: cast_str_to_pipeline_engine,
+                TensorParallelLinearMode: lambda x: TensorParallelLinearMode[x.upper()],
+                RecomputeGranularity: lambda x: RecomputeGranularity[x.upper()],
+                SamplerType: lambda x: SamplerType[x.upper()],
+            },
+            # strict_unions_match=True,
+            # strict=True,
+        ),
+    )
+
+
 def get_config_from_file(config_path: str, config_class: Type[Config] = Config) -> Config:
     """Get a config objet from a file (python or YAML)
 
@@ -377,25 +401,4 @@ def get_config_from_file(config_path: str, config_class: Type[Config] = Config) 
     with open(config_path) as f:
         args = yaml.load(f, Loader=SafeLoader)
 
-    # Make a nice dataclass from our yaml
-    try:
-        config = from_dict(
-            data_class=config_class,
-            data=args,
-            config=dacite.Config(
-                cast=[Path],
-                type_hooks={
-                    torch.dtype: cast_str_to_torch_dtype,
-                    PipelineEngine: cast_str_to_pipeline_engine,
-                    TensorParallelLinearMode: lambda x: TensorParallelLinearMode[x.upper()],
-                    RecomputeGranularity: lambda x: RecomputeGranularity[x.upper()],
-                    SamplerType: lambda x: SamplerType[x.upper()],
-                },
-                # strict_unions_match=True,
-                # strict=True,
-            ),
-        )
-    except Exception as e:
-        raise ValueError(f"Error parsing config file {config_path}: {e}")
-
-    return config
+    return get_config_from_dict(args, config_class=config_class)
