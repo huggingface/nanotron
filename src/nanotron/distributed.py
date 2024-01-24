@@ -1,4 +1,5 @@
 import datetime
+import os
 from functools import cache, lru_cache
 from typing import List, Optional
 
@@ -235,3 +236,26 @@ def get_rank(group: Optional[ProcessGroup] = None) -> int:  # pylint: disable=fu
     if result == -1:
         raise RuntimeError("Can not call `get_rank` on a group in which current process is not a part of")
     return result
+
+
+def initialize_torch_distributed():
+    """Initializes torch distributed with the environment variables"""
+    rank = int(os.getenv("RANK", "0"))
+    world_size = int(os.getenv("WORLD_SIZE", "1"))
+    local_rank = int(os.getenv("LOCAL_RANK", "0"))
+
+    if torch.cuda.is_available():
+        # Set the device id.
+        # `torch.cuda.device_count` should return the number of device on a single node.
+        # We assume the nodes to be homogeneous (same number of gpus per node)
+        device_id = local_rank
+        torch.cuda.set_device(torch.cuda.device(device_id))
+        backend = "nccl"
+    else:
+        # TODO @thomasw21: Maybe figure out a way to do distributed `cpu` training at some point
+        raise NotImplementedError(f"CUDA was not found: torch.cuda.is_available(): {torch.cuda.is_available()}")
+        backend = "gloo"
+
+    # Call the init process.
+    dist.init_process_group(backend=backend, world_size=world_size, rank=rank, timeout=dist.default_pg_timeout)
+    return True
