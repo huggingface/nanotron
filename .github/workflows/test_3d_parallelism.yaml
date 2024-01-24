@@ -52,8 +52,8 @@ jobs:
         git clone https://github.com/huggingface/nanotron.git
         cd nanotron
         pip install -e .
-        pip install -e [dev]
-        pip install -e [test]
+        pip install -e .[dev]
+        pip install -e .[test]
 
     - name: Install test dependencies
       run: |
