@@ -48,7 +48,6 @@ jobs:
         python -m pip install --upgrade pip
         pip install packaging
         pip install wheel
-        pip install "flash-attn>=2.4.2"  --no-build-isolation
         git clone https://github.com/huggingface/nanotron.git
         cd nanotron
         pip install -e .
