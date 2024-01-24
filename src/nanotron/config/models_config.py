@@ -1,12 +1,18 @@
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Union
-
+import torch
 
 @dataclass
 class RandomInit:
     std: float
 
+@dataclass
+class MambaInit:
+    # mamba_ssm.models.mixer_seq_simple._init_weights
+    initializer_range: float = 0.02
+    rescale_prenorm_residual: bool = True,
+    n_residuals_per_layer: int = 1,  # Change to 2 if we have MLP
 
 @dataclass
 class ExistingCheckpointInit:
@@ -14,6 +20,25 @@ class ExistingCheckpointInit:
 
     path: Path
 
+@dataclass
+class MambaConfig:
+    """Configuration for a Mamba model
+
+    Be careful on having a coherent typing as we use it to reconstruct the model from yaml
+    """
+
+    d_model: int = 2560
+    num_hidden_layers: int = 64
+    vocab_size: int = 50277
+    ssm_cfg: Optional[dict] = None
+    rms_norm: bool = True
+    fused_add_norm: bool = True
+    residual_in_fp32: bool = True
+    pad_vocab_size_multiple: int = 8
+    # ==== Custom ======
+    dtype: torch.dtype = torch.float32
+    rms_norm_eps: float = 1e-5
+    pad_token_id: Optional[int] = None
 
 @dataclass
 class LlamaConfig:
@@ -116,4 +141,6 @@ class Starcoder2Config:
         return self.intermediate_size
 
 
-NanotronConfigs = Union[LlamaConfig, Starcoder2Config]
+#TODO(fmom): check why MambaConfig won't load if it's not the first one in the union
+NanotronConfigs = Union[MambaConfig, LlamaConfig, Starcoder2Config]
+

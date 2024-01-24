@@ -10,7 +10,7 @@ import yaml
 from dacite import from_dict
 from yaml.loader import SafeLoader
 
-from nanotron.config.models_config import ExistingCheckpointInit, NanotronConfigs, RandomInit
+from nanotron.config.models_config import ExistingCheckpointInit, NanotronConfigs, RandomInit, MambaInit
 from nanotron.config.utils_config import (
     RecomputeGranularity,
     cast_str_to_pipeline_engine,
@@ -210,7 +210,7 @@ class ModelArgs:
     """Arguments related to model architecture"""
 
     model_config: NanotronConfigs
-    init_method: Union[RandomInit, ExistingCheckpointInit]
+    init_method: Union[RandomInit, MambaInit, ExistingCheckpointInit]
     dtype: Optional[torch.dtype] = None
     make_vocab_size_divisible_by: int = 1
     ddp_bucket_cap_mb: int = 25
