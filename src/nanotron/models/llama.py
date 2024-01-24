@@ -30,9 +30,10 @@ from transformers.activations import ACT2FN
 from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.config import ParallelismArgs, RecomputeGranularity
-from nanotron.fused.layer_norm import TritonRMSNorm
+from nanotron.nn.layer_norm import TritonRMSNorm
 from nanotron.logging import log_rank
-from nanotron.models import AttachableStore, NanotronModel
+from nanotron.models import NanotronModel
+from nanotron.generation.generate_store import AttachableStore
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter
 from nanotron.parallel.pipeline_parallel.block import (
