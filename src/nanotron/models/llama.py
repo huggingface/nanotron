@@ -30,9 +30,10 @@ from transformers.activations import ACT2FN
 from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.config import ParallelismArgs, RecomputeGranularity
-from nanotron.nn.layer_norm import TritonRMSNorm
+from nanotron.generation.generate_store import AttachableStore
 from nanotron.logging import log_rank
 from nanotron.models import NanotronModel
+from nanotron.nn.layer_norm import TritonRMSNorm
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter
 from nanotron.parallel.pipeline_parallel.block import (
@@ -49,7 +50,6 @@ from nanotron.parallel.tensor_parallel.nn import (
 )
 from nanotron.random import RandomStates
 from nanotron.utils import checkpoint_method
-from nanotron.generation.generate_store import AttachableStore
 
 logger = logging.get_logger(__name__)
 
@@ -681,66 +681,63 @@ class LlamaModel(nn.Module):
         )
 
         self.token_position_embeddings = PipelineBlock(
-            p2p=self.p2p,
-            module_builder=Embedding,
-            module_kwargs={
-                "tp_pg": parallel_context.tp_pg,
-                "config": config,
-                "parallel_config": parallel_config,
-            },
-            module_input_keys={"input_ids", "input_mask"},
-            module_output_keys={"input_embeds"},
+            self.p2p,
+            Embedding,
+            tp_pg=parallel_context.tp_pg,
+            config=config,
+            parallel_config=parallel_config,
         )
+        # p2p=self.p2p,
+        # module_builder=Embedding,
+        # module_input_keys={"input_ids", "input_mask"},
+        # module_output_keys={"input_embeds"},
+        # )
 
         self.decoder = nn.ModuleList(
             [
                 PipelineBlock(
-                    p2p=self.p2p,
-                    module_builder=LlamaDecoderLayer,
-                    module_kwargs={
-                        "config": config,
-                        "parallel_config": parallel_config,
-                        "tp_pg": parallel_context.tp_pg,
-                        "layer_idx": layer_idx,
-                    },
-                    module_input_keys={"hidden_states", "sequence_mask"},
-                    module_output_keys={"hidden_states", "sequence_mask"},
+                    self.p2p,
+                    LlamaDecoderLayer,
+                    config=config,
+                    parallel_config=parallel_config,
+                    tp_pg=parallel_context.tp_pg,
+                    layer_idx=layer_idx,
+                    # module_input_keys={"hidden_states", "sequence_mask"},
+                    # module_output_keys={"hidden_states", "sequence_mask"},
                 )
                 for layer_idx in range(config.num_hidden_layers)
             ]
         )
 
         self.final_layer_norm = PipelineBlock(
-            p2p=self.p2p,
-            module_builder=TritonRMSNorm,
-            module_kwargs={"hidden_size": config.hidden_size, "eps": config.rms_norm_eps},
-            module_input_keys={"input"},
-            module_output_keys={"hidden_states"},
+            self.p2p,
+            TritonRMSNorm,
+            hidden_size=config.hidden_size,
+            eps=config.rms_norm_eps,
+            # module_input_keys={"input"},
+            # module_output_keys={"hidden_states"},
         )  # TODO
 
         self.lm_head = PipelineBlock(
-            p2p=self.p2p,
+            self.p2p,
             # Understand that this means that we return sharded logits that are going to need to be gathered
-            module_builder=TensorParallelColumnLinear,
-            module_kwargs={
-                "in_features": config.hidden_size,
-                "out_features": config.vocab_size,
-                "pg": parallel_context.tp_pg,
-                "bias": False,
-                # TODO @thomasw21: refactor so that we store that default in a single place.
-                "mode": self.tp_mode,
-                "async_communication": tp_linear_async_communication,
-            },
-            module_input_keys={"x"},
-            module_output_keys={"logits"},
+            TensorParallelColumnLinear,
+            in_features=config.hidden_size,
+            out_features=config.vocab_size,
+            pg=parallel_context.tp_pg,
+            bias=False,
+            # TODO @thomasw21: refactor so that we store that default in a single place.
+            mode=self.tp_mode,
+            async_communication=tp_linear_async_communication,
+            # },
+            # module_input_keys={"x"},
+            # module_output_keys={"logits"},
         )
 
         self.cast_to_fp32 = PipelineBlock(
-            p2p=self.p2p,
-            module_builder=lambda: lambda x: x.float(),
-            module_kwargs={},
+            self.p2p,
+            lambda: lambda x: x.float(),
             module_input_keys={"x"},
-            module_output_keys={"output"},
         )
 
     def forward(
@@ -770,7 +767,7 @@ class LlamaModel(nn.Module):
 
         sharded_logits = self.lm_head(x=hidden_states)["logits"]
 
-        fp32_sharded_logits = self.cast_to_fp32(x=sharded_logits)["output"]
+        fp32_sharded_logits = self.cast_to_fp32(x=sharded_logits)
 
         return fp32_sharded_logits, hidden_states
 
@@ -853,15 +850,15 @@ class LlamaForTraining(NanotronModel):
         super().__init__()
         self.model = LlamaModel(config=config, parallel_context=parallel_context, parallel_config=parallel_config)
         self.loss = PipelineBlock(
-            p2p=self.model.p2p,
-            module_builder=Loss,
-            module_kwargs={"tp_pg": parallel_context.tp_pg},
-            module_input_keys={
-                "sharded_logits",
-                "label_ids",
-                "label_mask",
-            },
-            module_output_keys={"loss"},
+            self.model.p2p,
+            Loss,
+            tp_pg=parallel_context.tp_pg,
+            # module_input_keys={
+            #     "sharded_logits",
+            #     "label_ids",
+            #     "label_mask",
+            # },
+            # module_output_keys={"loss"},
         )
         self.parallel_context = parallel_context
         self.config = config

@@ -1,4 +1,5 @@
-from typing import Any, Callable, Dict, Optional, Set, Tuple, Union
+from inspect import signature
+from typing import Dict, Optional, Tuple, Union
 
 import torch
 from nanotron import distributed as dist
@@ -26,10 +27,13 @@ class PipelineBlock(nn.Module):
     def __init__(
         self,
         p2p: P2P,
-        module_builder: Callable[..., Callable[..., Union[torch.Tensor, Dict[str, torch.Tensor]]]],
-        module_kwargs: Dict[str, Any],
-        module_input_keys: Set[str],
-        module_output_keys: Set[str],
+        module_class,
+        module_input_keys=None,
+        **module_kwargs,
+        # module_builder: Callable[..., Callable[..., Union[torch.Tensor, Dict[str, torch.Tensor]]]],
+        # module_kwargs: Dict[str, Any],
+        # module_input_keys: Set[str],
+        # module_output_keys: Set[str],
     ):
         super().__init__()
         # Module follows a restrictive API: module.forward return a `Dict[str, torch.Tensor]`
@@ -37,10 +41,10 @@ class PipelineBlock(nn.Module):
         # None signifies that we don't use specific pipeline engine and just run typical torch forward/backward pass
         self.pipeline_state: Optional[PipelineBatchState] = None
 
-        self.module_builder = module_builder
+        self.module_class = module_class
         self.module_kwargs = module_kwargs
-        self.module_input_keys = set(module_input_keys)
-        self.module_output_keys = set(module_output_keys)
+        self.module_input_keys = module_input_keys
+        # self.module_output_keys = set(module_class)
 
     def build_and_set_rank(self, pp_rank: int):
         """This method is used to define on which rank computation is going to happen"""
@@ -49,6 +53,9 @@ class PipelineBlock(nn.Module):
         if pp_rank == dist.get_rank(self.p2p.pg):
             # Instantiate the module
             self.pp_block = self.module_builder(**self.module_kwargs)
+        if self.module_input_keys is None:
+            input_signature = signature(self.pp_block.forward)
+            self.module_input_keys = {p.name for p in input_signature.parameters.values()}
 
     def extra_repr(self) -> str:
         return f"pp_rank={self.rank}" if hasattr(self, "rank") is not None else ""
@@ -150,14 +157,14 @@ class PipelineBlock(nn.Module):
         output = self.pp_block(**new_kwargs)
 
         # Helper for functions that return tensors
-        if isinstance(output, torch.Tensor):
-            assert len(self.module_output_keys) == 1
-            output = {next(iter(self.module_output_keys)): output}
+        # if isinstance(output, torch.Tensor):
+        #     assert len(self.module_output_keys) == 1
+        #     output = {'output': output}
 
-        assert isinstance(output, dict), "Modules within a Pipeline Block have to return a Dict[str, torch.Tensor]"
-        assert self.module_output_keys == set(
-            output.keys()
-        ), f"Expected {self.module_output_keys}, got {set(output.keys())}"
+        # assert isinstance(output, dict), "Modules within a Pipeline Block have to return a Dict[str, torch.Tensor]"
+        # assert self.module_output_keys == set(
+        #     output.keys()
+        # ), f"Expected {self.module_output_keys}, got {set(output.keys())}"
 
         return output
 
