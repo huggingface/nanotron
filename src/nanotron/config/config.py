@@ -401,5 +401,4 @@ def get_config_from_file(config_path: str, config_class: Type[Config] = Config) 
     with open(config_path) as f:
         args = yaml.load(f, Loader=SafeLoader)
 
-    print(args)
     return get_config_from_dict(args, config_class=config_class)

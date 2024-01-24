@@ -2,9 +2,10 @@
 
 ### 1. Tensor Parallelism
 
-#### Asyncronous Tensor Parallelism
+#### Asynchronous Tensor Parallelism
 
 Q: What are the two different tensor parallel linear modes in nanotron?
+
 A: All-reduce and Reduce-scatter
 
 
@@ -131,7 +132,7 @@ A: TensorPointer is used to represent tensors that are not locally available on 
 Similarly, if Block B produces an output Y that the next Block C on rank 2 needs, it will return Y wrapped in a TensorPointer pointing to rank 1.
 
 
-Q: In the forward pass, how do the four core components in brr's pipeline parallelism work together? (5 steps)
+Q: In the forward pass, how do the four core components in brrr's pipeline parallelism work together? (5 steps)
 
 A:
 - Step 1: PipelineEngine coordinates executing the PipelineBlocks for each microbatch.
@@ -163,7 +164,7 @@ A: The pipeline engine batches P2P communication across microbatches, not within
 For example, say we have a model with two pipeline stages, A and B. In microbatch 1, A sends tensor X to B. In microbatch 2, A sends tensor Y to B. Instead of sending X and Y in separate P2P operations, the pipeline engine will batch them together into one send of [X,Y].
 
 
-Q: How does PipelineBlock's forward pass works? (4 steps)
+Q: How does PipelineBlock's forward pass work? (4 steps)
 
 A:
 - Step 1: It receives inputs, which can be Tensors or TensorPointers from other ranks.
@@ -204,7 +205,7 @@ Concrete example: pp_size = 8, target_pp_ranks = [0, 4, 7]. This will build the 
 
 #### Loading data in 3D parallelism
 
-Q: In 3D parallelism, how does brrr sample training data for a model replicas? (2 steps)
+Q: In 3D parallelism, how does brrr sample training data for model replicas? (2 steps)
 
 A: For example, with 2 devices, 4 microbatch size, and 100 samples:
 - Step 1: It first divides the full dataset into equal chunks, one chunk per GPU.
