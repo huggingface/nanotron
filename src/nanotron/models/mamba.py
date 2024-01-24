@@ -174,8 +174,8 @@ class MambaModel(nn.Module):
                         "device": self.p2p.device,
                         "dtype": config.dtype,
                     },
-                    module_input_keys={"hidden_states", "sequence_mask", "residual"},  # TODO(fmom): is this correct?
-                    module_output_keys={"hidden_states", "sequence_mask", "residual"},  # TODO(fmom): is this correct?
+                    module_input_keys={"hidden_states", "sequence_mask", "residual"},
+                    module_output_keys={"hidden_states", "sequence_mask", "residual"},
                 )
                 for layer_idx in range(config.num_hidden_layers)
             ]
@@ -187,7 +187,7 @@ class MambaModel(nn.Module):
             module_kwargs={"hidden_size": config.d_model, "eps": config.rms_norm_eps},
             module_input_keys={"x"},
             module_output_keys={"hidden_states"},
-        )  # TODO
+        )
 
         self.lm_head = PipelineBlock(
             p2p=self.p2p,
@@ -268,10 +268,11 @@ class MambaModel(nn.Module):
 
         block_compute_costs = {
             # CausalSelfAttention (qkv proj + attn out) + MLP
-            MambaDecoderLayer: 4096,
+            MambaDecoderLayer: 0,
             # This is the last lm_head
-            TensorParallelColumnLinear: model_config.vocab_size * model_config.d_model,
+            TensorParallelColumnLinear: 0,
         }
+        log_rank(f"get_block_compute_costs() Not implemented yet", logger=logger, level=logging.INFO, rank=0)
         return block_compute_costs
 
     def get_flops_per_sec(self, iteration_time_in_sec, sequence_length, global_batch_size):
@@ -298,8 +299,9 @@ class MambaModel(nn.Module):
         # hardware_flops_per_s = hardware_flops / (iteration_time_in_sec * world_size * 1e12)
         
         # TODO(fmom): undo hardcoding of model_flops_per_s and  hardware_flops_per_s
-        model_flops_per_s = 0.000681
-        hardware_flops_per_s = 0.000681
+        model_flops_per_s = 0
+        hardware_flops_per_s = 0
+        log_rank(f"get_flops_per_sec() Not implemented yet", logger=logger, level=logging.INFO, rank=0)
         return model_flops_per_s, hardware_flops_per_s
 
 
@@ -537,15 +539,53 @@ class MambaForTraining(NanotronModel):
         # Fix the root_model
         module_id_to_prefix[id(model)] = ""
 
-        #TODO(fmom): make it compatible with TensorParralel, TensorEmbedding
+        #TODO(fmom): port initiliaztion from mamba_ssm.mamba_simple.Mamba to here
+
         for module_name, module in model.named_modules():
             if isinstance(module, nn.Linear):
-                if module.bias is not None:
-                    if not getattr(module.bias, "_no_reinit", False):
-                        nn.init.zeros_(module.bias)
-                    
-            elif isinstance(module, nn.Embedding):
+                
+                for param_name, param in module.named_parameters():
+                    assert isinstance(param, NanotronParameter)
+                    if param.is_tied:
+                        tied_info = param.get_tied_info()
+                        full_param_name = tied_info.get_full_name_from_module_id_to_prefix(
+                            module_id_to_prefix=module_id_to_prefix
+                        )
+                    else:
+                        full_param_name = f"{module_name}.{param_name}"
+
+                    if full_param_name in initialized_parameters:
+                        # Already initialized
+                        continue
+
+                    if "weight" == param_name:
+                        pass
+                    elif "bias" == param_name:
+                        param.zero_()
+                    else:
+                        raise ValueError(f"Who the fuck is {param_name}?")
+
+                    assert full_param_name not in initialized_parameters
+                    initialized_parameters.add(full_param_name)
+            elif isinstance(module, TensorParallelEmbedding):
+                assert {"weight"} == {name for name, _ in module.named_parameters()}
+
+                assert isinstance(module.weight, NanotronParameter)
+                if module.weight.is_tied:
+                    tied_info = module.weight.get_tied_info()
+                    full_param_name = tied_info.get_full_name_from_module_id_to_prefix(
+                        module_id_to_prefix=module_id_to_prefix
+                    )
+                else:
+                    full_param_name = f"{module_name}.weight"
+
+                if full_param_name in initialized_parameters:
+                    # Already initialized
+                    continue
+
                 nn.init.normal_(module.weight, std=initializer_range)
+                assert full_param_name not in initialized_parameters
+                initialized_parameters.add(full_param_name)                
 
             if rescale_prenorm_residual:
                 # Reinitialize selected weights subject to the OpenAI GPT-2 Paper Scheme:
@@ -555,7 +595,17 @@ class MambaForTraining(NanotronModel):
                 #
                 # Reference (Megatron-LM): https://github.com/NVIDIA/Megatron-LM/blob/main/megatron/model/gpt_model.py
                 for name, p in module.named_parameters():
-                    if name in ["out_proj.weight", "fc2.weight"]:
+                    if name in ["out_proj.weight"]:
+                        # get fullname
+                        assert isinstance(p, NanotronParameter)
+                        if p.is_tied:
+                            tied_info = p.get_tied_info()
+                            full_param_name = tied_info.get_full_name_from_module_id_to_prefix(
+                                module_id_to_prefix=module_id_to_prefix
+                            )
+                        else:
+                            full_param_name = f"{module_name}.{param_name}"
+                        
                         # Special Scaled Initialization --> There are 2 Layer Norms per Transformer Block
                         # Following Pytorch init, except scale by 1/sqrt(2 * n_layer)
                         # We need to reinit p since this code could be called multiple times
@@ -563,10 +613,11 @@ class MambaForTraining(NanotronModel):
                         nn.init.kaiming_uniform_(p, a=math.sqrt(5))
                         with torch.no_grad():
                             p /= math.sqrt(n_residuals_per_layer * n_layer)
-                            
-            log_rank(f"Initialized {module_name} (NEED TO CHECK IF DONE PROPERLY)", logger=logger, level=logging.INFO, rank=0)
-            
-        #TODO(fmom): perform check
+                                                
+                        assert full_param_name not in initialized_parameters
+                        initialized_parameters.add(full_param_name)
+                                                    
+        # #TODO(fmom): perform check
         # assert initialized_parameters == {
         #     param.get_tied_info().get_full_name_from_module_id_to_prefix(module_id_to_prefix=module_id_to_prefix)
         #     if param.is_tied
