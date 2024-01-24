@@ -22,12 +22,12 @@ We support the following:
 Requirements:
  - Python >= 3.10
  - PyTorch >= 2.0.0
- - Flash-Attention >= 2.4.2
+ - Flash-Attention >= 2.5.0
 
 To install (in a new env):
 ```bash
 pip install torch
-pip install packaging; pip install "flash-attn>=2.4.2"  --no-build-isolation
+pip install packaging; pip install "flash-attn>=2.5.0"  --no-build-isolation
 git clone git@github.com:huggingface/nanotron.git
 cd nanotron
 pip install -e .
