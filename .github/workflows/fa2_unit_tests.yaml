@@ -4,17 +4,18 @@ on:
   workflow_dispatch:
   push:
     branches: [ main ]
-    # paths:
-    #   - "src/**/*.py"
-    #   - "examples/**/*.py"
-    #   - "tests/**/*.py"
+    # Only run tests if we modify the following files
+    paths:
+      - "src/**/*.py"
+      - "examples/**/*.py"
+      - "tests/**/*.py"
 
   pull_request:
     branches: [ main ]
-    #paths:
-    #  - "src/**/*.py"
-    #  - "examples/**/*.py"
-    #  - "tests/**/*.py"
+    paths:
+     - "src/**/*.py"
+     - "examples/**/*.py"
+     - "tests/**/*.py"
 
 jobs:
   tests:

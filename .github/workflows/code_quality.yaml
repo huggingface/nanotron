@@ -1,10 +1,17 @@
 name: Code Quality
 
 on:
+  workflow_dispatch:
   push:
     branches: [ main ]
+    # Only run tests if we modify the following files
+    paths:
+      - "src/**/*.py"
+
   pull_request:
     branches: [ main ]
+    paths:
+     - "src/**/*.py"
 
 jobs:
   cloc:
