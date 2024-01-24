@@ -1,7 +1,7 @@
 
 # Doc on collective operations
 
-This NVIDIA dic is nice on all collective operations (all_reduce, reduce_scatter, etc): https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/usage/collectives.html
+This NVIDIA doc is nice on all collective operations (all_reduce, reduce_scatter, etc): https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/usage/collectives.html
 
 # Usage
 
@@ -31,7 +31,7 @@ From this dataclass you can access multiple process groups:
  - `dp_pg`/`tp_pg`/`pp_pg`: This produces your typical process groups linked to 3D parallelism
  - `world_pg`: ProcessGroup including all the processes.
  - `world_rank_matrix`: This allows one to compute the world rank knowing the 3D ranks of a given process, or inversely when using `get_3d_ranks`.
- - `world_ranks_to_pg`: This is a more generic patterns that allows you to store custom set of ProcessGroups, and querying it via a list of world ranks.
+ - `world_ranks_to_pg`: This is a more generic pattern that allows you to store custom set of ProcessGroups, and querying it via a list of world ranks.
 
 ## NanotronParameter
 
@@ -68,7 +68,7 @@ output = module(input) # Duplicate workload
 
 # Version ....
 ```
-Distributed workloads have the tendency to generate tradeoffs between duplicated computation and extra communication. There's multiple ways to run the same computation, what we can optimize is the amount of communication we do, as well as duplicated work. Sometime it's worth duplicating work in order to reduce communication significantly.
+Distributed workloads have the tendency to generate tradeoffs between duplicated computation and extra communication. There's multiple ways to run the same computation, what we can optimize is the amount of communication we do, as well as duplicated work. Sometimes it's worth duplicating work in order to reduce communication significantly.
 
 As seen in previous example, sometimes the parameters are sharded across multiple devices, and sometimes they are duplicated. In `nanotron`, we decided to add those additional metadatas to `nn.Parameter`. We call our new datastructure: `NanotronParameter`
 
@@ -91,7 +91,7 @@ class ShardedInfo:
     # The shape of the unsharded tensor
     unsharded_shape: Tuple[int, ...]
 ```
-Imaging we sharded a tensor t of shape [8, 64] across 2 ranks, 0 and 3, where rank 0 holds the first shard t[:, :32] and rank 3 holds the second shard t[:, 32:], then the sharded_info for them is:
+Imagine we sharded a tensor t of shape [8, 64] across 2 ranks, 0 and 3, where rank 0 holds the first shard t[:, :32] and rank 3 holds the second shard t[:, 32:], then the sharded_info for them is:
 ```python
 shard_info = ShardedInfo(global_ranks=(0,3), local_global_slices_pairs=(SlicesPair(local_slices=(slice(0,8), slice(0, 32),), global_slices=(slice(0,8), slice(0, 32)),),), unsharded_shape=(8, 64)) # world rank 0
 shard_info = ShardedInfo(global_ranks=(0,3), local_global_slices_pairs=(SlicesPair(local_slices=(slice(0,8), slice(0, 32),), global_slices=(slice(0,8), slice(32, 64)),),), unsharded_shape=(8, 64)) # world rank 3
@@ -99,7 +99,7 @@ shard_info = ShardedInfo(global_ranks=(0,3), local_global_slices_pairs=(SlicesPa
 
 ## Tied parameter
 
-This signifies that multiple occurence of a given parameter are duplicated on multiple devices. Therefore we need a mechanism for them to be synced at all time. A typical example would be `lm_head` on top of transformers that's tied to the work embedding parameters. We attach the following metadata to the parameter:
+This signifies that multiple occurrences of a given parameter are duplicated on multiple devices. Therefore we need a mechanism for them to be synced at all time. A typical example would be `lm_head` on top of transformers that's tied to the word embedding parameters. We attach the following metadata to the parameter:
 ```python
 @dataclasses.dataclass
 class TiedInfo:
@@ -120,7 +120,7 @@ Note: a parameter can be both sharded and tied. Both notion just have to involve
 
 ## Tensor parallelism
 
-Usually the go-to solution when models can't fit within a device. The basic idea is to figure out patterns where one can divide a single workload into multiple smaller workerloads that can run in parallel. We mimick tensor parallelism from Megatron-LM. Current supported modules:
+Usually the go-to solution when models can't fit within a device. The basic idea is to figure out patterns where one can divide a single workload into multiple smaller workerloads that can run in parallel. We mimic tensor parallelism from Megatron-LM. Current supported modules:
  - ColumnLinear/RowLinear
  - ParallelVocabulary
  - Cross-Entropy over sharded logits
@@ -152,11 +152,11 @@ class TensorPointer:
     group_rank: int
 ```
 
-Module defined within `PipelineBlock` can be directly be instantiated on the specific device.
+Module defined within `PipelineBlock` can be directly instantiated on the specific device.
 
 In short, what does `PipelineBlock` does:
  - Receives either a set of `torch.Tensor`/`TensorPointer` as input
- - In case of `TensorPointer`, query the tensor from the specified rank we extract from it's state/context.
+ - In case of `TensorPointer`, query the tensor from the specified rank we extract from its state/context.
  - Run the defined computation if current rank is responsible for running computation
  - Return a dictionary `Dict[str, Union[torch.Tensor, TensorPointer]]`.
    `TensorPointer` as output are for ranks that didn't run computation and require to know where the output of the computation is.
@@ -188,7 +188,7 @@ model.build_and_set_rank(pp_rank) # Instantiate model parameters on `pp_rank` as
 
 In order to define which rank we use the `build_and_set_rank` method. It attaches the rank as a meta data, and builds the module on that specific rank.
 
-Models have to be defined using a "surface" of `PipelineBlock`. Typically, above `PipelineBlock` it's all about defining the `PipelineBlock` computational direct acyclic graph, below is where device specific computation is defines.
+Models have to be defined using a "surface" of `PipelineBlock`. Typically, above `PipelineBlock` it's all about defining the `PipelineBlock` computational direct acyclic graph, below is where device specific computation is defined.
 
 As a non trivial example:
 ```python
@@ -308,7 +308,7 @@ class BaseLogger:
 If you want to have tensorboard logger support: `pip install -e ".[tb-logger]"`.
 If you want to have huggingface-hub tensorboard logger support: `pip install -e ".[hf-logger]"`.
 
-## Random state handling primives
+## Random state handling primitives
 
 We currently have a mechanism to have an arbitrary number of `RandomState` in a `RandomStates`:
 ```python
@@ -322,7 +322,7 @@ class RandomStates(MutableMapping[str, RandomState])
     pass
 ```
 
-At all time we get get/set current random state in the current context
+At all time we get/set current random state in the current context
 ```python
 def get_current_random_state():
    # This gets the current random_state from the current context
@@ -392,11 +392,11 @@ Some observations:
    The motivations are the following:
    - When training, one spends a LOT more time `saving` checkpoints than loading. In doing so, having the fastest saving mechanism helps. Consequently not having any distributed communication/locking will help this.
    - Random states are not so easily reconcilable. Given random states for two seperate processes when we have TP=2, it's not obvious what should be the random state if we set to TP=1.
- - Optimizer states are aligned with parameters. It's usually the case where for each parameter you can define a optimizer state. But that's a limitation on the current serialization format.
+ - Optimizer states are aligned with parameters. It's usually the case where for each parameter you can define an optimizer state. But that's a limitation on the current serialization format.
 
  # Current restrictions:
 
 - `nn.Module` inside PipelineBlocks have to return a `Dict[str,torch.Tensor]` or `torch.Tensor`.
-- No conditional flow on top of pipeline, or at least making sure that all the process within a data parallel rank are performing the same sequence of operations:
+- No conditional flow on top of pipeline, or at least making sure that all the processes within a data parallel rank are performing the same sequence of operations:
   - First all but one process will be things on `TensorPointer` which would make input dependent control flow quite hard.
   - Second if you were to have input dependent control flow, causing two processes within a single data parallel rank to be different, then you might end up with weird communication issues.
