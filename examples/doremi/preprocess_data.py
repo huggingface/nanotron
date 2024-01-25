@@ -142,7 +142,26 @@ if __name__ == "__main__":
     # domain_idx = 1
     # slurm_job_idx = 1
 
-    DOMAIN_KEYS = ["Wikipedia (en)", "ArXiv", "Github", "StackExchange", "DM Mathematics", "PubMed Abstracts"]
+    DOMAIN_KEYS = [
+        "all",
+        "BookCorpus2",
+        "Books3",
+        "Enron Emails",
+        "EuroParl",
+        "FreeLaw",
+        "Gutenberg (PG-19)",
+        "HackerNews",
+        "NIH ExPorter",
+        "OpenSubtitles",
+        "OpenWebText2",
+        "PhilPapers",
+        "Pile-CC",
+        "PubMed Central",
+        "UPSTO Backgrounds",
+        "Ubuntu IRC",
+        "YoutubeSubtitles",
+    ]
+
     domain_name = DOMAIN_KEYS[domain_idx]
 
     config = get_config_from_file(config_file, config_class=Config)

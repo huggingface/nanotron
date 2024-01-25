@@ -6,7 +6,7 @@
 #SBATCH --cpus-per-task=96
 #SBATCH --mem-per-cpu=500
 #SBATCH --qos=high
-#SBATCH --array=0-5
+#SBATCH --array=0-16
 #SBATCH -o /fsx/phuc/project_data/doremi/logs/doremi-%j-%a-%x.out
 
 export XDG_CACHE_HOME=/fsx/phuc/.cache/huggingface_cache

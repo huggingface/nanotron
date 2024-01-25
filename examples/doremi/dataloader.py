@@ -18,9 +18,19 @@ from nanotron.trainer import DistributedTrainer
 from torch import nn
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
+from tqdm import tqdm
 
 try:
-    from datasets import Dataset, DatasetDict, Features, Sequence, Value, concatenate_datasets, load_dataset
+    from datasets import (
+        Dataset,
+        DatasetDict,
+        Features,
+        Sequence,
+        Value,
+        concatenate_datasets,
+        load_dataset,
+        load_from_disk,
+    )
     from huggingface_hub import __version__ as hf_hub_version
     from transformers import AutoTokenizer, PreTrainedTokenizerBase
     from transformers import __version__ as tf_version
@@ -41,6 +51,21 @@ def get_doremi_datasets(
         splits = [splits]
 
     raw_datasets = DatasetDict()
+
+    # NOTE: only for the pile splitted
+    # DOMAIN_KEYS = [
+    #     'Wikipedia (en)',
+    #     'ArXiv', 'Github', 'StackExchange', 'DM Mathematics', 'PubMed Abstracts'
+    # ]
+    # from datasets.features import Sequence, ClassLabel, Value
+    # features = Features({
+    #     'text': Value("string"),
+    #     'meta': {
+    #         "pile_set_name": Value("string")
+    #     },
+    #     "domain": ClassLabel(names=DOMAIN_KEYS)
+    # })
+
     for split in splits:
         raw_datasets[split] = []
         for domain_key in domain_keys:
@@ -48,6 +73,10 @@ def get_doremi_datasets(
                 hf_dataset,
                 domain_key,
                 split=split,
+                # TODO: set this in config
+                # num_proc=50,
+                # download_mode="force_redownload"
+                # features=features
             )
             raw_datasets[split].append(d)
 
@@ -107,50 +136,57 @@ def doremi_clm_process(
     return train_dataset
 
 
-def get_dataloader(trainer: DistributedTrainer, domain_keys: List[str]) -> DataLoader:
+def get_dataloader(
+    trainer: DistributedTrainer, domain_keys: List[str], tokenized_datasets: Optional[List[Dataset]] = None
+) -> DataLoader:
     """Returns a dataloader for training."""
     assert isinstance(trainer.config.data.dataset, PretrainDatasetsArgs), "Please provide a dataset in the config file"
 
-    log_rank("Using `datasets` library", logger=logger, level=logging.INFO, rank=0)
+    if tokenized_datasets is None:
+        log_rank("Using `datasets` library", logger=logger, level=logging.INFO, rank=0)
 
-    tokenizer_path = trainer.config.tokenizer.tokenizer_name_or_path
-    log_rank(
-        f"Loading tokenizer from {tokenizer_path} and transformers/hf_hub versions {tf_version, hf_hub_version}",
-        logger=logger,
-        level=logging.INFO,
-        rank=0,
-    )
-
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
-    tokenizer.pad_token = tokenizer.eos_token
-    tokenizer.padding_side = "left"
-
-    log_rank(
-        f"Downloading dataset {trainer.config.data.dataset.hf_dataset_or_datasets}",
-        logger=logger,
-        level=logging.INFO,
-        rank=0,
-    )
-
-    raw_datasets = get_doremi_datasets(
-        hf_dataset=trainer.config.data.dataset.hf_dataset_or_datasets,
-        domain_keys=domain_keys,
-        splits=trainer.config.data.dataset.hf_dataset_splits,
-    )["train"]
-
-    train_datasets = []
-    for domain_idx, raw_dataset in enumerate(raw_datasets):
-        train_datasets.append(
-            doremi_clm_process(
-                domain_idx=domain_idx,
-                raw_dataset=raw_dataset,
-                tokenizer=tokenizer,
-                text_column_name=trainer.config.data.dataset.text_column_name,
-                dataset_processing_num_proc_per_process=trainer.config.data.dataset.dataset_processing_num_proc_per_process,
-                dataset_overwrite_cache=trainer.config.data.dataset.dataset_overwrite_cache,
-                sequence_length=trainer.sequence_length,
-            )
+        tokenizer_path = trainer.config.tokenizer.tokenizer_name_or_path
+        log_rank(
+            f"Loading tokenizer from {tokenizer_path} and transformers/hf_hub versions {tf_version, hf_hub_version}",
+            logger=logger,
+            level=logging.INFO,
+            rank=0,
         )
+
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
+        tokenizer.pad_token = tokenizer.eos_token
+        tokenizer.padding_side = "left"
+
+        log_rank(
+            f"Downloading dataset {trainer.config.data.dataset.hf_dataset_or_datasets}",
+            logger=logger,
+            level=logging.INFO,
+            rank=0,
+        )
+
+        raw_datasets = get_doremi_datasets(
+            hf_dataset=trainer.config.data.dataset.hf_dataset_or_datasets,
+            domain_keys=domain_keys,
+            splits=trainer.config.data.dataset.hf_dataset_splits,
+        )["train"]
+
+        train_datasets = []
+        for domain_idx, raw_dataset in enumerate(raw_datasets):
+            train_datasets.append(
+                doremi_clm_process(
+                    domain_idx=domain_idx,
+                    raw_dataset=raw_dataset,
+                    tokenizer=tokenizer,
+                    text_column_name=trainer.config.data.dataset.text_column_name,
+                    dataset_processing_num_proc_per_process=trainer.config.data.dataset.dataset_processing_num_proc_per_process,
+                    dataset_overwrite_cache=trainer.config.data.dataset.dataset_overwrite_cache,
+                    sequence_length=trainer.sequence_length,
+                )
+            )
+    else:
+        train_datasets = []
+        for dataset_path in tqdm(tokenized_datasets, desc="Loading tokenized dataset from disk"):
+            train_datasets.append(load_from_disk(dataset_path))
 
     # NOTE: We load the processed dataset on the ranks requiring it
     input_pp_rank, output_pp_rank = get_input_output_pp_ranks(model=trainer.model)

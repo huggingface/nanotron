@@ -20,7 +20,7 @@ data:
     # hf_dataset_splits: train
     # text_column_name: text
 
-    # # NOTE: good for testing
+    # NOTE: good for testing
     # hf_dataset_or_datasets: miam
     # hf_dataset_splits: train
     # text_column_name: Utterance
@@ -29,7 +29,11 @@ data:
     # hf_dataset_splits: train
     # text_column_name: text
 
-    hf_dataset_or_datasets: mc4
+    # hf_dataset_or_datasets: mc4
+    # hf_dataset_splits: train
+    # text_column_name: text
+
+    hf_dataset_or_datasets: /fsx/leandro/the-pile-splitted
     hf_dataset_splits: train
     text_column_name: text
 
@@ -39,7 +43,7 @@ general:
   benchmark_csv_path: null
   consumed_train_samples: null
   ignore_sanity_checks: true
-  project: debug
+  project: train_280m_reference_model
   run: tiny_llama
   seed: 42
   step: null
@@ -89,7 +93,7 @@ optimizer:
   weight_decay: 0.01
   zero_stage: 1
 parallelism:
-  dp: 12
+  dp: 1
   pp: 1
   pp_engine: 1f1b
   recompute_granularity: SELECTIVE
