@@ -311,6 +311,10 @@ class DistributedSamplerForDoReMi(DistributedSampler):
         **kwargs,
     ):
         super().__init__(datasets, **kwargs)
+        assert len(datasets) == len(
+            doremi_context.domain_weights
+        ), "The number of datasets must equal to the number of domain weights"
+
         self.datasets = datasets
         self.batch_size = batch_size
         self.domain_weights = doremi_context.domain_weights
@@ -336,26 +340,104 @@ class DistributedSamplerForDoReMi(DistributedSampler):
         domain_indices = []
         for i, dataset in enumerate(self.datasets):
             dataset_partition_size = len(dataset) // self.num_replicas
-            dataset_partition_offsets = self.rank * dataset_partition_size
             num_samples = int(dataset_partition_size * self.domain_weights[i].item())
+            # dataset_partition_offsets = self.rank * dataset_partition_size
+            # local_indices = (
+            #     torch.randint(
+            #         low=0, high=dataset_partition_size, size=(num_samples,), generator=self.generator, device="cpu"
+            #     )
+            #     + dataset_partition_offsets
+            # )
+            # num_samples = int(self.batch_size * self.domain_weights[i].item())
+            start_offset_idx = self.rank * dataset_partition_size
+            end_offset_idx = start_offset_idx + dataset_partition_size
 
-            local_indices = (
-                torch.randint(
-                    low=0, high=dataset_partition_size, size=(num_samples,), generator=self.generator, device="cpu"
-                )
-                + dataset_partition_offsets
-            )
+            local_indices = torch.randint(
+                low=start_offset_idx, high=end_offset_idx, size=(num_samples,), generator=self.generator, device="cpu"
+            ).tolist()
+
             # NOTE: align the indicies across the combined dataset
             global_indices = local_indices + self.offsets[i]
-            domain_indices.extend(global_indices)
+            domain_indices.append(global_indices)
 
-        np.random.shuffle(domain_indices)
-        domain_indices = domain_indices[: self.total_size]
+        # np.random.shuffle(domain_indices)
+        # NOTE: in some cases, it miss a 1, 2 indicies
+        # domain_indices = domain_indices[: self.total_size]
 
-        # Yield indices in batches
-        for i in range(0, len(domain_indices), self.batch_size):
-            xs = domain_indices[i : i + self.batch_size]
-            yield [t.item() for t in xs]
+        # # Yield indices in batches
+        # for i in range(0, len(domain_indices), self.batch_size):
+        #     xs = domain_indices[i : i + self.batch_size]
+        #     yield [t.item() for t in xs]
+
+        [iter(domain) for domain in domain_indices]
+        domain_batch_sizes = [round(self.batch_size * weight.item()) for weight in self.domain_weights]
+
+        if sum(domain_batch_sizes) != self.batch_size:
+            # NOTE: randomly add a sample to round it up
+            domain_batch_sizes = self._round_up_domain_batch_sizes(domain_batch_sizes)
+
+        assert sum(domain_batch_sizes) == self.batch_size
+
+        # while True:
+        #     batch = []
+        #     for domain_iterator, domain_batch_size in zip(domain_iterators, domain_batch_sizes):
+        #         # TODO(xrsrke): raise if an domain run out of samples
+        #         batch.append([next(domain_iterator, None) for _ in range(domain_batch_size)])
+
+        #     batch = [idx for idx in batch if idx is not None]
+        #     if len(batch) > 0:
+        #         break  # Break if all domains are exhausted
+
+        #     yield batch
+
+        domain_counters = [0 for _ in self.datasets]
+        total_samples_yielded = 0
+
+        while total_samples_yielded < self.total_size:
+            batch = []
+            # NOTE: Flag to indicate if a domain is out of samples
+            out_of_samples = False
+
+            for domain_index, (domain, domain_batch_size) in enumerate(zip(domain_indices, domain_batch_sizes)):
+                start_idx = domain_counters[domain_index]
+                # end_idx = min(start_idx + domain_batch_size, len(domain))
+                end_idx = start_idx + domain_batch_size
+
+                # NOTE: a domain run out of samples
+                if end_idx > len(domain):
+                    out_of_samples = True
+                    break
+
+                batch.extend(domain[start_idx:end_idx])
+                domain_counters[domain_index] = end_idx
+
+            total_samples_yielded += len(batch)
+
+            # NOTE: stop if either one of the domains are out of sample
+            # or the batch is empty
+            if out_of_samples or not batch:
+                break
+
+            yield batch
+
+    def _round_up_domain_batch_sizes(self, domain_batch_size: List[int]) -> List[int]:
+        total_batch_size = sum(domain_batch_size)
+        if total_batch_size < self.batch_size:
+            diff = self.batch_size - total_batch_size
+            while diff > 0:
+                # Randomly select a domain to increase the batch size
+                # selected_domain = random.randint(0, len(domain_batch_size) - 1)
+                selected_domain = torch.randint(
+                    low=0, high=len(domain_batch_size), size=(1,), generator=self.generator, device="cpu"
+                ).item()
+
+                domain_batch_size[selected_domain] += 1
+                total_batch_size += 1
+
+                if total_batch_size == self.batch_size:
+                    break
+
+        return domain_batch_size
 
 
 # Adapted from https://github.com/huggingface/transformers/blob/47e1676255e5dd86b9541f734cd4f4bdcbb50f4a/src/transformers/trainer.py#L763-L835
