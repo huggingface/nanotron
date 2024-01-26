@@ -22,7 +22,7 @@ class DoReMiContext:
     def __post_init__(self):
         assert self.domain_weights.dim() == 1, "The domain_weights tensor must be 1-dimensional"
         assert torch.allclose(
-            self.domain_weights.sum(dim=-1), torch.tensor(1.0), rtol=0.1, atol=0.1
+            self.domain_weights.sum(dim=-1), torch.tensor(1.0), rtol=0.1
         ), "Domain weights must sum up to 1."
         assert (
             self.domain_weights.shape[0] == self.num_domains

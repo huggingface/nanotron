@@ -360,15 +360,6 @@ class DistributedSamplerForDoReMi(DistributedSampler):
             global_indices = local_indices + self.offsets[i]
             domain_indices.append(global_indices)
 
-        # np.random.shuffle(domain_indices)
-        # NOTE: in some cases, it miss a 1, 2 indicies
-        # domain_indices = domain_indices[: self.total_size]
-
-        # # Yield indices in batches
-        # for i in range(0, len(domain_indices), self.batch_size):
-        #     xs = domain_indices[i : i + self.batch_size]
-        #     yield [t.item() for t in xs]
-
         [iter(domain) for domain in domain_indices]
         domain_batch_sizes = [round(self.batch_size * weight.item()) for weight in self.domain_weights]
 
@@ -377,18 +368,6 @@ class DistributedSamplerForDoReMi(DistributedSampler):
             domain_batch_sizes = self._round_up_domain_batch_sizes(domain_batch_sizes)
 
         assert sum(domain_batch_sizes) == self.batch_size
-
-        # while True:
-        #     batch = []
-        #     for domain_iterator, domain_batch_size in zip(domain_iterators, domain_batch_sizes):
-        #         # TODO(xrsrke): raise if an domain run out of samples
-        #         batch.append([next(domain_iterator, None) for _ in range(domain_batch_size)])
-
-        #     batch = [idx for idx in batch if idx is not None]
-        #     if len(batch) > 0:
-        #         break  # Break if all domains are exhausted
-
-        #     yield batch
 
         domain_counters = [0 for _ in self.datasets]
         total_samples_yielded = 0
@@ -400,7 +379,6 @@ class DistributedSamplerForDoReMi(DistributedSampler):
 
             for domain_index, (domain, domain_batch_size) in enumerate(zip(domain_indices, domain_batch_sizes)):
                 start_idx = domain_counters[domain_index]
-                # end_idx = min(start_idx + domain_batch_size, len(domain))
                 end_idx = start_idx + domain_batch_size
 
                 # NOTE: a domain run out of samples
@@ -425,8 +403,7 @@ class DistributedSamplerForDoReMi(DistributedSampler):
         if total_batch_size < self.batch_size:
             diff = self.batch_size - total_batch_size
             while diff > 0:
-                # Randomly select a domain to increase the batch size
-                # selected_domain = random.randint(0, len(domain_batch_size) - 1)
+                # NOTE: Randomly select a domain to increase the batch size
                 selected_domain = torch.randint(
                     low=0, high=len(domain_batch_size), size=(1,), generator=self.generator, device="cpu"
                 ).item()
