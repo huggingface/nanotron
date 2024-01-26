@@ -31,12 +31,26 @@ def datasets(dataset1, dataset2):
     [
         torch.tensor([0.7, 0.3]),
         # NOTE: test auto fill samples if there are rounding errors
-        torch.tensor([0.496, 0.5]),
+        torch.tensor([0.296, 0.201, 0.501]),
+        torch.tensor(
+            [
+                0.34356916553540745,
+                0.16838812972610234,
+                0.24711766854236725,
+                0.0679225638705455,
+                0.059079828519653675,
+                0.043720261601881555,
+                0.01653850841342608,
+                0.00604146633842096,
+                0.04342813428189645,
+                0.0041942731702987,
+            ]
+        ),
     ],
 )
-def test_sampling_from_dist_doremi_sampler(domain_weights, dataset1, dataset2):
-    batch_size = 100
-    datasets = [dataset1, dataset1]
+def test_sampling_from_dist_doremi_sampler(domain_weights, dataset1):
+    batch_size = 512
+    datasets = [dataset1 for _ in range(len(domain_weights))]
     domain_keys = [f"domain {i}" for i in range(len(datasets))]
     doremi_context = DoReMiContext(domain_weights, domain_keys, is_proxy=False)
 
@@ -63,19 +77,23 @@ def _test_sampling_from_dist_doremi_sampler(
     )
 
     domain_weights = doremi_context.domain_weights
-    domain_batch_size = [round(batch_size * weight.item()) for weight in domain_weights]
+    batch_size_per_domain = [round(batch_size * weight.item()) for weight in domain_weights]
     yielded_idxs = []
 
     for idxs in sampler:
         assert batch_size == len(idxs)
 
-        # NOTE: make sure the indicies from a batch is proportion
-        # to the domain weights
-        num_sample_domain_0 = sum(1 for idx in idxs if idx < len(datasets[0]))
-        num_sample_domain_1 = sum(1 for idx in idxs if idx >= len(datasets[1]))
+        # NOTE: make sure the indicies from a batch
+        # is proportion to the domain weights
+        start_indices = [sum([len(ds) for ds in datasets[:i]]) for i in range(len(datasets))]
+        end_indices = [sum([len(ds) for ds in datasets[: i + 1]]) for i in range(len(datasets))]
+        for domain_idx, expected_batch_size in enumerate(batch_size_per_domain):
+            num_samples_per_domain = sum(
+                1 for idx in idxs if idx >= start_indices[domain_idx] and idx < end_indices[domain_idx]
+            )
 
-        assert domain_batch_size[0] == num_sample_domain_0
-        assert domain_batch_size[1] == num_sample_domain_1
+            # NOTE: rounding errors
+            assert abs(expected_batch_size - num_samples_per_domain) <= 1
 
         yielded_idxs.extend(idxs)
 
@@ -192,6 +210,7 @@ def _test_stateless_doremi_sampler(
         idxs_per_epoch.append(all_idxs)
         sampler.reset()
 
+    # NOTE: check if the sequence of idxs across epochs are all the same
     assert all(
         all(arr1[i] == arr2[i] for i in range(len(arr1))) for arr1, arr2 in zip(idxs_per_epoch, idxs_per_epoch[1:])
     )
