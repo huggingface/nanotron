@@ -329,7 +329,10 @@ class DistributedSamplerForDoReMi(DistributedSampler):
         self.lengths = [len(d) for d in self.datasets]
         # lengths = compute_total_sample_per_streaming_dataset(self.datasets)
         self.offsets = np.cumsum([0] + self.lengths[:-1])
-        self.seed = 42
+        self.seed = seed
+
+        dp_size = dist.get_world_size(self.parallel_context.dp_pg)
+        self.global_batch_size = batch_size * dp_size
 
         # self.generator = torch.Generator(device="cpu").manual_seed(
         #     seed * (1 + dist.get_rank(self.parallel_context.dp_pg)) * (1 + dist.get_rank(self.parallel_context.pp_pg))
@@ -359,6 +362,10 @@ class DistributedSamplerForDoReMi(DistributedSampler):
             domain_indices.append(global_indices)
 
         domain_batch_sizes = [round(self.batch_size * weight.item()) for weight in domain_weights]
+        # # NOTE: in some cases, the weight of a domain is too small
+        # # so with a small batch size like 64, the number of samples based on the weight
+        # # would be smaller than 1 => no samples from that domain
+        # domain_batch_sizes = [round(self.global_batch_size * weight.item()) for weight in domain_weights]
         if sum(domain_batch_sizes) != self.batch_size:
             # NOTE: randomly add a sample to round it up
             domain_batch_sizes = self._round_up_domain_batch_sizes(domain_batch_sizes)
@@ -399,19 +406,25 @@ class DistributedSamplerForDoReMi(DistributedSampler):
         NOTE: Make sum(domain_batch_sizes) == batch_size
         """
         total_batch_size = sum(domain_batch_size)
-        if total_batch_size < self.batch_size:
+        while total_batch_size != self.batch_size:
             diff = self.batch_size - total_batch_size
-            while diff > 0:
-                # NOTE: Randomly select a domain to increase the batch size
-                selected_domain = torch.randint(
-                    low=0, high=len(domain_batch_size), size=(1,), generator=self.generator, device="cpu"
-                ).item()
+            # NOTE: Randomly select a domain to increase the batch size
+            selected_domain = torch.randint(
+                low=0, high=len(domain_batch_size), size=(1,), generator=self.generator, device="cpu"
+            ).item()
 
+            # domain_batch_size[selected_domain] += 1
+            # total_batch_size += 1
+
+            # if total_batch_size == self.batch_size:
+            #     break
+
+            if diff > 0:
                 domain_batch_size[selected_domain] += 1
-                total_batch_size += 1
+            elif diff < 0 and domain_batch_size[selected_domain] > 0:
+                domain_batch_size[selected_domain] -= 1
 
-                if total_batch_size == self.batch_size:
-                    break
+            total_batch_size = sum(domain_batch_size)
 
         return domain_batch_size
 
