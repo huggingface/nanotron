@@ -211,15 +211,13 @@ def get_dataloader(
     dataloader = dataloader() if doremi_context.is_proxy is True else dataloader
 
     # NOTE: Check if we have enough samples for train_steps
-    # bach_size = len(dataloader)
-    # NOTE: because currently nanotron set batch size equal to micro batch size
-    # batch_size = 200 # batch_accumulation_per_replica * micro_batch_size
-    # assert (
-    #     trainer.config.tokens.train_steps - trainer.start_iteration_step
-    # ) * trainer.global_batch_size // trainer.parallel_context.dp_pg.size() < batch_size, (
-    #     f"Dataset is too small for steps ({batch_size} < {(trainer.config.tokens.train_steps - trainer.start_iteration_step) * trainer.global_batch_size // trainer.parallel_context.dp_pg.size()}), "
-    #     f"Try train_steps<={batch_size * trainer.parallel_context.dp_pg.size() // trainer.global_batch_size + trainer.start_iteration_step}"
-    # )
+    batch_size = trainer.micro_batch_size
+    assert (
+        trainer.config.tokens.train_steps - trainer.start_iteration_step
+    ) * trainer.global_batch_size // trainer.parallel_context.dp_pg.size() < batch_size, (
+        f"Dataset is too small for steps ({batch_size} < {(trainer.config.tokens.train_steps - trainer.start_iteration_step) * trainer.global_batch_size // trainer.parallel_context.dp_pg.size()}), "
+        f"Try train_steps<={batch_size * trainer.parallel_context.dp_pg.size() // trainer.global_batch_size + trainer.start_iteration_step}"
+    )
     return dataloader
 
 
@@ -306,30 +304,37 @@ class DistributedSamplerForDoReMi(DistributedSampler):
         self,
         datasets: List[Dataset],
         batch_size: int,
-        doremi_context: DoReMiContext,
-        parallel_context: ParallelContext,
+        shuffle: bool = False,
+        # TODO(xrsrke): remove the default seed value
+        seed: int = 42,
+        doremi_context: Optional[DoReMiContext] = None,
+        parallel_context: Optional[ParallelContext] = None,
         **kwargs,
     ):
-        super().__init__(datasets, **kwargs)
         assert len(datasets) == len(
             doremi_context.domain_weights
         ), "The number of datasets must equal to the number of domain weights"
+        assert doremi_context is not None
+        assert parallel_context is not None
+
+        super().__init__(datasets, **kwargs)
 
         self.datasets = datasets
         self.batch_size = batch_size
-        self.domain_weights = doremi_context.domain_weights
-        self.total_size = self._calculate_total_size()
+        self.shuffle = shuffle
+        self.doremi_context = doremi_context
         self.parallel_context = parallel_context
+        self.total_size = self._calculate_total_size()
 
         self.lengths = [len(d) for d in self.datasets]
         # lengths = compute_total_sample_per_streaming_dataset(self.datasets)
         self.offsets = np.cumsum([0] + self.lengths[:-1])
+        self.seed = 42
 
-        # TODO(xrsrke): make seed configurable
-        seed = 42
-        self.generator = torch.Generator(device="cpu").manual_seed(
-            seed * (1 + dist.get_rank(self.parallel_context.dp_pg)) * (1 + dist.get_rank(self.parallel_context.pp_pg))
-        )
+        # self.generator = torch.Generator(device="cpu").manual_seed(
+        #     seed * (1 + dist.get_rank(self.parallel_context.dp_pg)) * (1 + dist.get_rank(self.parallel_context.pp_pg))
+        # )
+        self.reset()
 
     def _calculate_total_size(self):
         total_samples = sum(len(d) for d in self.datasets)
@@ -338,17 +343,10 @@ class DistributedSamplerForDoReMi(DistributedSampler):
 
     def __iter__(self):
         domain_indices = []
+        domain_weights = self.doremi_context.domain_weights
         for i, dataset in enumerate(self.datasets):
             dataset_partition_size = len(dataset) // self.num_replicas
-            num_samples = int(dataset_partition_size * self.domain_weights[i].item())
-            # dataset_partition_offsets = self.rank * dataset_partition_size
-            # local_indices = (
-            #     torch.randint(
-            #         low=0, high=dataset_partition_size, size=(num_samples,), generator=self.generator, device="cpu"
-            #     )
-            #     + dataset_partition_offsets
-            # )
-            # num_samples = int(self.batch_size * self.domain_weights[i].item())
+            num_samples = int(dataset_partition_size * domain_weights[i].item())
             start_offset_idx = self.rank * dataset_partition_size
             end_offset_idx = start_offset_idx + dataset_partition_size
 
@@ -360,25 +358,23 @@ class DistributedSamplerForDoReMi(DistributedSampler):
             global_indices = local_indices + self.offsets[i]
             domain_indices.append(global_indices)
 
-        [iter(domain) for domain in domain_indices]
-        domain_batch_sizes = [round(self.batch_size * weight.item()) for weight in self.domain_weights]
-
+        domain_batch_sizes = [round(self.batch_size * weight.item()) for weight in domain_weights]
         if sum(domain_batch_sizes) != self.batch_size:
             # NOTE: randomly add a sample to round it up
             domain_batch_sizes = self._round_up_domain_batch_sizes(domain_batch_sizes)
 
         assert sum(domain_batch_sizes) == self.batch_size
 
-        domain_counters = [0 for _ in self.datasets]
-        total_samples_yielded = 0
+        # domain_counters = [0 for _ in self.datasets]
+        # total_samples_yielded = 0
 
-        while total_samples_yielded < self.total_size:
+        while self.total_samples_yielded < self.total_size:
             batch = []
             # NOTE: Flag to indicate if a domain is out of samples
             out_of_samples = False
 
             for domain_index, (domain, domain_batch_size) in enumerate(zip(domain_indices, domain_batch_sizes)):
-                start_idx = domain_counters[domain_index]
+                start_idx = self.domain_counters[domain_index]
                 end_idx = start_idx + domain_batch_size
 
                 # NOTE: a domain run out of samples
@@ -387,9 +383,9 @@ class DistributedSamplerForDoReMi(DistributedSampler):
                     break
 
                 batch.extend(domain[start_idx:end_idx])
-                domain_counters[domain_index] = end_idx
+                self.domain_counters[domain_index] = end_idx
 
-            total_samples_yielded += len(batch)
+            self.total_samples_yielded += len(batch)
 
             # NOTE: stop if either one of the domains are out of sample
             # or the batch is empty
@@ -399,6 +395,9 @@ class DistributedSamplerForDoReMi(DistributedSampler):
             yield batch
 
     def _round_up_domain_batch_sizes(self, domain_batch_size: List[int]) -> List[int]:
+        """
+        NOTE: Make sum(domain_batch_sizes) == batch_size
+        """
         total_batch_size = sum(domain_batch_size)
         if total_batch_size < self.batch_size:
             diff = self.batch_size - total_batch_size
@@ -415,6 +414,19 @@ class DistributedSamplerForDoReMi(DistributedSampler):
                     break
 
         return domain_batch_size
+
+    def reset(self):
+        """Reset the state of the sampler for a new epoch."""
+        self.domain_counters = [0 for _ in self.datasets]
+        self.total_samples_yielded = 0
+
+        # TODO(xrsrke): make seed be configureable
+        # Reset the seed of the generator for consistent randomness across epochs
+        self.generator = torch.Generator(device="cpu").manual_seed(
+            self.seed
+            * (1 + dist.get_rank(self.parallel_context.dp_pg))
+            * (1 + dist.get_rank(self.parallel_context.pp_pg))
+        )
 
 
 # Adapted from https://github.com/huggingface/transformers/blob/47e1676255e5dd86b9541f734cd4f4bdcbb50f4a/src/transformers/trainer.py#L763-L835
