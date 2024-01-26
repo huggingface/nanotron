@@ -5,11 +5,11 @@ from typing import Dict, List, Optional, Union
 
 import numpy as np
 import torch
-from doremi_context import DoReMiContext
 from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.config import PretrainDatasetsArgs
 from nanotron.dataloader import EmptyInfiniteDataset, SkipBatchSampler, get_dataloader_worker_init
+from nanotron.doremi.doremi_context import DoReMiContext
 from nanotron.logging import log_rank
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
@@ -186,7 +186,8 @@ def get_dataloader(
     else:
         train_datasets = []
         for dataset_path in tqdm(tokenized_datasets, desc="Loading tokenized dataset from disk"):
-            train_datasets.append(load_from_disk(dataset_path))
+            d = load_from_disk(dataset_path)
+            train_datasets.append(d)
 
     # NOTE: We load the processed dataset on the ranks requiring it
     input_pp_rank, output_pp_rank = get_input_output_pp_ranks(model=trainer.model)
@@ -212,7 +213,7 @@ def get_dataloader(
     # NOTE: Check if we have enough samples for train_steps
     # bach_size = len(dataloader)
     # NOTE: because currently nanotron set batch size equal to micro batch size
-    # batch_size = trainer.micro_batch_size * trainer.micro_batch_size
+    # batch_size = 200 # batch_accumulation_per_replica * micro_batch_size
     # assert (
     #     trainer.config.tokens.train_steps - trainer.start_iteration_step
     # ) * trainer.global_batch_size // trainer.parallel_context.dp_pg.size() < batch_size, (
@@ -405,14 +406,14 @@ def _get_train_sampler(
     return sampler
 
 
-def compute_total_sample_per_streaming_dataset(datasets: List[Dataset]) -> List[int]:
-    lengths = []
-    for d in datasets:
-        sample_count = 0
-        for _ in d:
-            sample_count += 1
-        lengths.append(sample_count)
-    return lengths
+# def compute_total_sample_per_streaming_dataset(datasets: List[Dataset]) -> List[int]:
+#     lengths = []
+#     for d in datasets:
+#         sample_count = 0
+#         for _ in d:
+#             sample_count += 1
+#         lengths.append(sample_count)
+#     return lengths
 
 
 class CombinedDataset(Dataset):
@@ -423,20 +424,30 @@ class CombinedDataset(Dataset):
         return len(self.comebined_dataset)
 
     def __getitem__(self, batch):
+        if isinstance(batch, list) is False:
+            batch = [batch]
+
+        assert len(batch) > 0
         if isinstance(batch[0], list):
 
             def merge_dicts(data):
-                merged = {
-                    "input_ids": np.concatenate([d["input_ids"] for d in data]),
-                    "domain_ids": np.concatenate([d["domain_ids"] for d in data]),
-                }
+                # merged = {
+                #     "input_ids": np.concatenate([d["input_ids"] for d in data]),
+                #     "domain_ids": np.concatenate([d["domain_ids"] for d in data]),
+                # }
+                # return merged
+                merged = {}
+                # NOTE: # Assuming all dictionaries have the same keys
+                for key in data[0].keys():
+                    # NOTE: Concatenating values corresponding to each key
+                    merged[key] = np.concatenate([d[key] for d in data if key in d])
                 return merged
 
             # TODO(xrsrke): do a single index, then split the output
             samples = [self.comebined_dataset[idxs] for idxs in batch]
             return merge_dicts(samples)
-        else:
-            return self.comebined_dataset[batch]
+
+        return self.comebined_dataset[batch]
 
 
 # Adapted from https://github.com/huggingface/transformers/blob/47e1676255e5dd86b9541f734cd4f4bdcbb50f4a/src/transformers/trainer.py#L837

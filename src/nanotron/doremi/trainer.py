@@ -3,14 +3,14 @@ from pprint import pformat
 from typing import Dict, Iterable, List, Optional, Union
 
 import torch
-from doremi_context import DoReMiContext
-from llama import LlamaForDoReMiTraining, LLaMaForInference
 from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.config import (
     ExistingCheckpointInit,
     RandomInit,
 )
+from nanotron.doremi.doremi_context import DoReMiContext
+from nanotron.doremi.llama import LlamaForDoReMiTraining, LLaMaForInference
 from nanotron.helpers import _vocab_size_with_padding
 from nanotron.logging import log_rank
 from nanotron.models import NanotronModel

@@ -10,9 +10,9 @@ import argparse
 
 import torch
 import torch.nn.functional as F
-from dataloader import get_dataloader
 from nanotron import logging
-from trainer import DoReMiTrainer
+from nanotron.doremi.dataloader import get_dataloader
+from nanotron.doremi.trainer import DoReMiTrainer
 
 logger = logging.get_logger(__name__)
 

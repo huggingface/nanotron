@@ -18,3 +18,10 @@ class DoReMiContext:
 
     def get_domain_name(self, domain_idx: int) -> str:
         return self.domain_keys[domain_idx]
+
+    def __post_init__(self):
+        assert self.domain_weights.dim() == 1, "The domain_weights tensor must be 1-dimensional"
+        assert torch.allclose(self.domain_weights.sum(dim=-1), torch.tensor(1.0)), "Domain weights must sum up to 1."
+        assert (
+            self.domain_weights.shape[0] == self.num_domains
+        ), "The length of domain_weights must be equal to the number of domains"

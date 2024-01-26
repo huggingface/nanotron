@@ -11,23 +11,23 @@ import datetime
 from typing import Dict, Iterable, List, Optional, Union
 
 import torch
-import torch.nn.functional as F
-from dataloader import get_dataloader
-from doremi_context import DoReMiContext
+from nanotron import distributed as dist
 from nanotron import logging
+from nanotron.doremi.dataloader import get_dataloader
+from nanotron.doremi.doremi_context import DoReMiContext
 from nanotron.logging import log_rank
 from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
 from nanotron.sanity_checks import assert_tensor_synced_across_pg
 from nanotron.trainer import DistributedTrainer
+
+import wandb
 
 logger = logging.get_logger(__name__)
 
 
 class ReferenceTrainer(DistributedTrainer):
     def __init__(self, domain_weights: torch.Tensor, domain_keys: List[str], *args, **kwargs):
-        # NOTE: save the initial domain_weights
         super().__init__(*args, **kwargs)
-
         self.doremi_context = DoReMiContext(domain_weights, domain_keys, is_proxy=False)
         self.doremi_context.domain_weights = self.doremi_context.domain_weights.to("cuda")
 
@@ -47,12 +47,12 @@ class ReferenceTrainer(DistributedTrainer):
             today = datetime.datetime.now()
             return today.strftime("%d/%m/%Y_%H:%M:%S")
 
-        # if dist.get_rank(self.parallel_context.world_pg) == 0:
-        #     wandb.init(
-        #         project="nanotron",
-        #         name=f"{get_time_name()}_doremi_reference_training",
-        #         config={"nanotron_config": self.config.as_dict()},
-        #     )
+        if dist.get_rank(self.parallel_context.world_pg) == 0:
+            wandb.init(
+                project="nanotron",
+                name=f"{get_time_name()}_doremi_reference_training",
+                config={"nanotron_config": self.config.as_dict()},
+            )
 
     def train_step_logs(
         self,
@@ -60,13 +60,13 @@ class ReferenceTrainer(DistributedTrainer):
         loss_avg: Optional[torch.Tensor],
     ):
         super().train_step_logs(outputs, loss_avg)
-        # if dist.get_rank(self.parallel_context.world_pg) == 0:
-        #     wandb.log(
-        #         {
-        #             "loss_avg": loss_avg.cpu().detach().numpy(),
-        #             "step": self.iteration_step,
-        #         }
-        #     )
+        if dist.get_rank(self.parallel_context.world_pg) == 0:
+            wandb.log(
+                {
+                    "loss_avg": loss_avg.cpu().detach().numpy(),
+                    "step": self.iteration_step,
+                }
+            )
 
 
 def get_args():
@@ -76,16 +76,6 @@ def get_args():
 
 
 if __name__ == "__main__":
-    # import os
-    # # os.getenv('MY_XDG_CACHE_HOME', '~/.cache')
-    # os.environ['XDG_CACHE_HOME'] = '/fsx/phuc/.cache/huggingface_cache'
-
-    # import datasets as datasets
-    # datasets.config.CACHE_DIR = "/fsx/phuc/datasets/mc4_cache"
-    # datasets.config.DOWNLOADED_DATASETS_PATH = "/fsx/phuc/datasets/mc4"
-    # datasets.config.EXTRACTED_DATASETS_PATH = "/fsx/phuc/datasets/mc4_extracted"
-    # datasets.config.HF_CACHE_HOME = "/fsx/phuc/.cache/huggingface_cache"
-
     args = get_args()
     config_file = args.config_file
 
@@ -106,16 +96,41 @@ if __name__ == "__main__":
 
     # NOTE: the pile
     DATASET_PATH = "/fsx/phuc/project_data/doremi/datasets/the_pile_splitted/tokenized_data"
-    DOMAIN_KEYS = ["Github", "FreeLaw", "OpenWebText2", "PubMed Abstracts", "DM Mathematics", "OpenSubtitles"]
+    DOMAIN_KEYS = [
+        "Github",
+        "FreeLaw",
+        "OpenWebText2",
+        "PubMed Abstracts",
+        "DM Mathematics",
+        "OpenSubtitles",
+        "HackerNews",
+        "NIH ExPorter",
+        "PubMed Central",
+        "Enron Emails",
+    ]
     # TOKENIZED_DATASETS = {f"{domain_name}": f"{DATASET_PATH}/{domain_name}" for domain_name in DOMAIN_KEYS}
     TOKENIZED_DATASETS = [f"{DATASET_PATH}/{domain_name}" for domain_name in DOMAIN_KEYS]
-    # DOMAIN_KEYS = [
-    #     'all', 'ArXiv', 'BookCorpus2', 'Books3', 'DM Mathematics', 'Enron Emails', 'EuroParl', 'Gutenberg (PG-19)', 'HackerNews', 'NIH ExPorter', 'OpenSubtitles', 'OpenWebText2', 'PhilPapers', 'Pile-CC', 'PubMed Abstracts', 'PubMed Central', 'StackExchange', 'UPSTO Backgrounds', 'Ubuntu IRC', 'Wikipedia (en)', 'YoutubeSubtitles'
-    # ]
 
     NUM_DOMAINS = len(DOMAIN_KEYS)
-    initial_domain_weights = F.softmax(torch.ones(NUM_DOMAINS, requires_grad=False), dim=-1)
+    # initial_domain_weights = F.softmax(torch.ones(NUM_DOMAINS, requires_grad=False), dim=-1)
+    initial_domain_weights = torch.tensor(
+        [
+            0.34356916553540745,
+            0.16838812972610234,
+            0.24711766854236725,
+            0.0679225638705455,
+            0.059079828519653675,
+            0.043720261601881555,
+            0.01653850841342608,
+            0.00604146633842096,
+            0.04342813428189645,
+            0.0041942731702987,
+        ]
+    )
+
+    assert len(initial_domain_weights) == NUM_DOMAINS
+    assert torch.allclose(initial_domain_weights.sum(), torch.tensor(1.0))
 
     trainer = ReferenceTrainer(initial_domain_weights, DOMAIN_KEYS, config_file)
-    dataloader = get_dataloader(trainer, DOMAIN_KEYS, TOKENIZED_DATASETS)
+    dataloader = get_dataloader(trainer, domain_keys=DOMAIN_KEYS, tokenized_datasets=TOKENIZED_DATASETS)
     trainer.train(dataloader)

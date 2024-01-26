@@ -1,9 +1,9 @@
 from typing import Dict, Optional, Union
 
 import torch
-from doremi_context import DoReMiContext
 from nanotron import logging
 from nanotron.config import ParallelismArgs
+from nanotron.doremi.doremi_context import DoReMiContext
 from nanotron.models import NanotronModel
 from nanotron.models.fast.llama import LlamaModel
 from nanotron.nn.layer_norm import TritonRMSNorm
