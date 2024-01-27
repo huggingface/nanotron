@@ -201,6 +201,7 @@ def get_dataloader(
         input_pp_rank=input_pp_rank,
         output_pp_rank=output_pp_rank,
         micro_batch_size=trainer.micro_batch_size,
+        num_microbatches=trainer.n_micro_batches_per_batch,
         consumed_train_samples=trainer.consumed_train_samples,
         dataloader_num_workers=trainer.config.data.num_loading_workers,
         seed_worker=trainer.config.data.seed,
@@ -455,9 +456,6 @@ class DistributedSamplerForDoReMi(DistributedSampler):
             # NOTE: this is indicies of a model replicas across microbatches
             dp_idxs = batch[dp_start_idx:dp_end_idx]
 
-            if microbatch_idx == 1:
-                assert 1 == 1
-
             assert (
                 len(dp_idxs) // self.num_microbatches == self.batch_size
             ), f"microbatch_idx={microbatch_idx} \
@@ -535,9 +533,11 @@ def _get_train_sampler(
     doremi_context: DoReMiContext,
     parallel_context: ParallelContext,
     micro_batch_size: Optional[int] = None,
+    num_microbatches: Optional[int] = None,
     drop_last: Optional[bool] = True,
 ) -> Optional[torch.utils.data.Sampler]:
     """returns sampler that restricts data loading to a subset of the dataset proper to the DP rank"""
+    assert num_microbatches is not None
 
     # Build the sampler.
     # TODO @nouamanetazi: Support group_by_length: https://github.com/huggingface/transformers/blob/47e1676255e5dd86b9541f734cd4f4bdcbb50f4a/src/transformers/trainer.py#L783-L810
@@ -558,6 +558,7 @@ def _get_train_sampler(
         sampler = DistributedSamplerForDoReMi(
             train_datasets,
             batch_size=micro_batch_size,
+            num_microbatches=num_microbatches,
             num_replicas=dp_size,
             rank=dp_rank,
             seed=seed,
@@ -625,6 +626,7 @@ def get_doremi_dataloader(
     parallel_context: ParallelContext,
     input_pp_rank: int,
     output_pp_rank: int,
+    num_microbatches: int,
     micro_batch_size: int,
     consumed_train_samples: int,
     dataloader_num_workers: int,
@@ -675,6 +677,7 @@ def get_doremi_dataloader(
         seed=seed_worker,
         use_loop_to_round_batch_size=use_loop_to_round_batch_size,
         micro_batch_size=micro_batch_size,
+        num_microbatches=num_microbatches,
         drop_last=dataloader_drop_last,
         consumed_train_samples=consumed_train_samples,
         doremi_context=doremi_context,
