@@ -342,6 +342,15 @@ class DistributedSamplerForDoReMi(DistributedSampler):
         # self.generator = torch.Generator(device="cpu").manual_seed(
         #     seed * (1 + dist.get_rank(self.parallel_context.dp_pg)) * (1 + dist.get_rank(self.parallel_context.pp_pg))
         # )
+        # TODO(xrsrke): make seed be configureable
+        # Reset the seed of the generator for consistent randomness across epochs
+        self.generator = torch.Generator(device="cpu").manual_seed(
+            self.seed
+            * (1 + dist.get_rank(self.parallel_context.dp_pg))
+            * (1 + dist.get_rank(self.parallel_context.pp_pg))
+        )
+
+        self.update_step = 0
         self.reset()
 
     def _calculate_total_size(self):
@@ -389,6 +398,7 @@ class DistributedSamplerForDoReMi(DistributedSampler):
             # NOTE: Flag to indicate if a domain is out of samples
             out_of_samples = False
 
+            sample_per_domain_loggins = []
             for domain_index, (domain, domain_batch_size) in enumerate(zip(domain_indices, domain_batch_sizes)):
                 start_idx = self.domain_counters[domain_index]
                 end_idx = start_idx + domain_batch_size
@@ -399,6 +409,7 @@ class DistributedSamplerForDoReMi(DistributedSampler):
                     break
 
                 global_batch_idxs = domain[start_idx:end_idx]
+                sample_per_domain_loggins.append(len(global_batch_idxs))
                 # indices_per_replica = len(global_batch_idxs) // dp_size
                 # dp_start_idx = dp_rank * indices_per_replica
                 # dp_end_idx = dp_start_idx + indices_per_replica
@@ -447,8 +458,6 @@ class DistributedSamplerForDoReMi(DistributedSampler):
             if out_of_samples or not batch:
                 break
 
-            assert 1 == 1
-
             num_samples_per_replicas = len(batch) // dp_size
             dp_start_idx = dp_rank * num_samples_per_replicas
             dp_end_idx = dp_start_idx + num_samples_per_replicas
@@ -484,6 +493,19 @@ class DistributedSamplerForDoReMi(DistributedSampler):
             microbatch_idx += 1
 
             if microbatch_idx == self.num_microbatches:
+                _logs = {
+                    f"domain_{self.doremi_context.get_domain_name(i)}": v
+                    for i, v in enumerate(sample_per_domain_loggins)
+                }
+                # print(f"samples per domain: {_logs}")
+                log_rank(
+                    f"Samples per domain: {_logs}",
+                    logger=logger,
+                    level=logging.INFO,
+                    rank=0,
+                    group=self.parallel_context.dp_pg,
+                )
+
                 microbatch_idx = 0
                 self.domain_counters[domain_index] = end_idx
 
@@ -513,13 +535,8 @@ class DistributedSamplerForDoReMi(DistributedSampler):
         self.domain_counters = [0 for _ in self.datasets]
         self.total_samples_yielded = 0
 
-        # TODO(xrsrke): make seed be configureable
-        # Reset the seed of the generator for consistent randomness across epochs
-        self.generator = torch.Generator(device="cpu").manual_seed(
-            self.seed
-            * (1 + dist.get_rank(self.parallel_context.dp_pg))
-            * (1 + dist.get_rank(self.parallel_context.pp_pg))
-        )
+        if self.update_step > 0:
+            self.update_step += 1
 
 
 # Adapted from https://github.com/huggingface/transformers/blob/47e1676255e5dd86b9541f734cd4f4bdcbb50f4a/src/transformers/trainer.py#L763-L835

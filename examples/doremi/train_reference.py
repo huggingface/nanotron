@@ -60,10 +60,13 @@ class ReferenceTrainer(DistributedTrainer):
         loss_avg: Optional[torch.Tensor],
     ):
         super().train_step_logs(outputs, loss_avg)
+
+        # NOTE: reset the counting in DistributedSamplerForDoReMi
+        # trainer.sampler.reset()
         if dist.get_rank(self.parallel_context.world_pg) == 0:
             wandb.log(
                 {
-                    "loss_avg": loss_avg.cpu().detach().numpy(),
+                    "loss_avg": loss_avg.item(),
                     "step": self.iteration_step,
                 }
             )
@@ -132,5 +135,13 @@ if __name__ == "__main__":
     assert torch.allclose(initial_domain_weights.sum(), torch.tensor(1.0))
 
     trainer = ReferenceTrainer(initial_domain_weights, DOMAIN_KEYS, config_file)
+    # dist.barrier()
+    # import time
+
+    # # time.sleep(3)
+
+    # # dist.barrier()
+
     dataloader = get_dataloader(trainer, domain_keys=DOMAIN_KEYS, tokenized_datasets=TOKENIZED_DATASETS)
+    # trainer.sampler = dataloader.sampler
     trainer.train(dataloader)
