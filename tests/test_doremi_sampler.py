@@ -98,87 +98,106 @@ def _test_sampling_from_dist_doremi_sampler(
         yielded_idxs.extend(idxs)
 
 
-# @pytest.mark.parametrize(
-#     "domain_weights",
-#     [
-#         # torch.tensor([0.7, 0.3]),
-#         # NOTE: test auto fill samples if there are rounding errors
-#         torch.tensor([0.296, 0.201, 0.501]),
-#         torch.tensor([0.495, 0.495, 0.01]),
-#         # torch.tensor(
-#         #     [
-#         #         0.34356916553540745,
-#         #         0.16838812972610234,
-#         #         0.24711766854236725,
-#         #         0.0679225638705455,
-#         #         0.059079828519653675,
-#         #         0.043720261601881555,
-#         #         0.01653850841342608,
-#         #         0.00604146633842096,
-#         #         0.04342813428189645,
-#         #         0.0041942731702987,
-#         #     ]
-#         # ),
-#     ],
-# )
-# def test_sampling_from_dist_doremi_sampler_with_global_batch_size(domain_weights, dataset1):
-#     # global_batch_size = 512
-#     global_batch_size = 256
-#     batch_size = 64
-#     dp_size = global_batch_size // batch_size
-#     datasets = [dataset1 for _ in range(len(domain_weights))]
-#     domain_keys = [f"domain {i}" for i in range(len(datasets))]
-#     doremi_context = DoReMiContext(domain_weights, domain_keys, is_proxy=False)
+@pytest.mark.parametrize(
+    "domain_weights",
+    [
+        # torch.tensor([0.7, 0.3]),
+        # NOTE: test auto fill samples if there are rounding errors
+        # torch.tensor([0.296, 0.201, 0.501]),
+        # NOTE: if sampling based on batch size, then
+        # the last domain results in no sample (round(0.004 * 64) = 0)
+        # but if do with global batch size, (round(0.004 * 512) = 2)
+        torch.tensor([0.498, 0.498, 0.004]),
+        torch.tensor(
+            [
+                0.34356916553540745,
+                0.16838812972610234,
+                0.24711766854236725,
+                0.0679225638705455,
+                0.059079828519653675,
+                0.043720261601881555,
+                0.01653850841342608,
+                0.00604146633842096,
+                0.04342813428189645,
+                0.0041942731702987,
+            ]
+        ),
+    ],
+)
+def test_sampling_from_dist_doremi_sampler_with_global_batch_size(domain_weights, dataset1):
+    global_batch_size = 256
+    batch_size = 64
+    dp_size = global_batch_size // batch_size
+    datasets = [dataset1 for _ in range(len(domain_weights))]
+    domain_keys = [f"domain {i}" for i in range(len(datasets))]
+    doremi_context = DoReMiContext(domain_weights, domain_keys, is_proxy=False)
 
-#     init_distributed(tp=1, dp=dp_size, pp=1)(_test_sampling_from_dist_doremi_sampler_with_global_batch_size)(
-#         batch_size=batch_size,
-#         global_batch_size=global_batch_size,
-#         datasets=datasets,
-#         doremi_context=doremi_context,
-#     )
+    init_distributed(tp=1, dp=dp_size, pp=1)(_test_sampling_from_dist_doremi_sampler_with_global_batch_size)(
+        batch_size=batch_size,
+        global_batch_size=global_batch_size,
+        datasets=datasets,
+        doremi_context=doremi_context,
+    )
 
 
-# def _test_sampling_from_dist_doremi_sampler_with_global_batch_size(
-#     parallel_context: ParallelContext, batch_size: int, global_batch_size: int, datasets: List[Dataset], doremi_context: DoReMiContext
-# ):
-#     dp_size = dist.get_world_size(parallel_context.dp_pg)
-#     dp_rank = dist.get_rank(parallel_context.dp_pg)
+def _test_sampling_from_dist_doremi_sampler_with_global_batch_size(
+    parallel_context: ParallelContext,
+    batch_size: int,
+    global_batch_size: int,
+    datasets: List[Dataset],
+    doremi_context: DoReMiContext,
+):
+    dp_size = dist.get_world_size(parallel_context.dp_pg)
+    dp_rank = dist.get_rank(parallel_context.dp_pg)
 
-#     sampler = DistributedSamplerForDoReMi(
-#         datasets,
-#         batch_size=batch_size,
-#         num_replicas=dp_size,
-#         rank=dp_rank,
-#         doremi_context=doremi_context,
-#         parallel_context=parallel_context,
-#     )
+    sampler = DistributedSamplerForDoReMi(
+        datasets,
+        batch_size=batch_size,
+        num_replicas=dp_size,
+        rank=dp_rank,
+        doremi_context=doremi_context,
+        parallel_context=parallel_context,
+    )
 
-#     domain_weights = doremi_context.domain_weights
-#     # batch_size_per_domain = [round(batch_size * weight.item()) for weight in domain_weights]
-#     global_batch_size_per_domain = [round(global_batch_size * weight.item()) for weight in domain_weights]
-#     yielded_idxs = []
+    domain_weights = doremi_context.domain_weights
+    # batch_size_per_domain = [round(batch_size * weight.item()) for weight in domain_weights]
+    global_batch_size_per_domain = [round(global_batch_size * weight.item()) for weight in domain_weights]
 
-#     for idxs in sampler:
-#         assert batch_size == len(idxs)
+    for idxs in sampler:
+        # assert 1 == 1
 
-#         # NOTE: make sure the indicies from a batch
-#         # is proportion to the domain weights
-#         start_indices = [sum([len(ds) for ds in datasets[:i]]) for i in range(len(datasets))]
-#         end_indices = [sum([len(ds) for ds in datasets[: i + 1]]) for i in range(len(datasets))]
-#         num_samples_per_domain = []
-#         for domain_idx in range(len(domain_weights)):
-#             num_samples = sum(
-#                 1 for idx in idxs if idx >= start_indices[domain_idx] and idx < end_indices[domain_idx]
-#             )
-#             num_samples_per_domain.append(num_samples)
+        # # if batch_size != len(idxs):
+        # #     assert 1 == 1
 
-#         num_samples_per_domain = torch.tensor(num_samples_per_domain, device="cuda")
-#         dist.all_reduce(num_samples_per_domain, op=dist.ReduceOp.SUM)
+        assert batch_size == len(idxs)
 
-#         for bs, expected_bs in zip(global_batch_size_per_domain, num_samples_per_domain):
-#             # NOTE: take into account rounding errors
-#             # can be accumulated across dp ranks
-#             assert abs(expected_bs - bs) <= dp_size
+        # NOTE: make sure the indicies from a batch
+        # is proportion to the domain weights
+        start_indices = [sum([len(ds) for ds in datasets[:i]]) for i in range(len(datasets))]
+        end_indices = [sum([len(ds) for ds in datasets[: i + 1]]) for i in range(len(datasets))]
+        num_samples_per_domain = []
+        for domain_idx in range(len(domain_weights)):
+            num_samples = sum(1 for idx in idxs if idx >= start_indices[domain_idx] and idx < end_indices[domain_idx])
+            num_samples_per_domain.append(num_samples)
+
+        num_samples_per_domain = torch.tensor(num_samples_per_domain, dtype=torch.int, device="cuda")
+        # NOTE: the domain weights are chosen so that we expect
+        # a domain have zero samples in a batch size
+
+        min_samples_per_domain = num_samples_per_domain.clone()
+        dist.all_reduce(min_samples_per_domain, op=dist.ReduceOp.MIN)
+        assert (min_samples_per_domain == 0).sum().item() > 0
+
+        dist.all_reduce(num_samples_per_domain, op=dist.ReduceOp.SUM)
+
+        # NOTE: the domain weights are chosen so that we expect
+        # no domains have zero sample in the global batch size
+        assert (num_samples_per_domain == 0).sum().item() == 0
+
+        for expected_bs, bs in zip(global_batch_size_per_domain, num_samples_per_domain):
+            # NOTE: take into account rounding errors
+            # can be accumulated across dp ranks
+            assert abs(expected_bs - bs) < dp_size
 
 
 def test_dist_doremi_sampler_sync_across_tp(datasets):

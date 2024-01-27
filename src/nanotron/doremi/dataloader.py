@@ -211,13 +211,13 @@ def get_dataloader(
     dataloader = dataloader() if doremi_context.is_proxy is True else dataloader
 
     # NOTE: Check if we have enough samples for train_steps
-    batch_size = trainer.micro_batch_size
-    assert (
-        trainer.config.tokens.train_steps - trainer.start_iteration_step
-    ) * trainer.global_batch_size // trainer.parallel_context.dp_pg.size() < batch_size, (
-        f"Dataset is too small for steps ({batch_size} < {(trainer.config.tokens.train_steps - trainer.start_iteration_step) * trainer.global_batch_size // trainer.parallel_context.dp_pg.size()}), "
-        f"Try train_steps<={batch_size * trainer.parallel_context.dp_pg.size() // trainer.global_batch_size + trainer.start_iteration_step}"
-    )
+    # batch_size = trainer.micro_batch_size
+    # assert (
+    #     trainer.config.tokens.train_steps - trainer.start_iteration_step
+    # ) * trainer.global_batch_size // trainer.parallel_context.dp_pg.size() < batch_size, (
+    #     f"Dataset is too small for steps ({batch_size} < {(trainer.config.tokens.train_steps - trainer.start_iteration_step) * trainer.global_batch_size // trainer.parallel_context.dp_pg.size()}), "
+    #     f"Try train_steps<={batch_size * trainer.parallel_context.dp_pg.size() // trainer.global_batch_size + trainer.start_iteration_step}"
+    # )
     return dataloader
 
 
@@ -361,20 +361,26 @@ class DistributedSamplerForDoReMi(DistributedSampler):
             global_indices = local_indices + self.offsets[i]
             domain_indices.append(global_indices)
 
-        domain_batch_sizes = [round(self.batch_size * weight.item()) for weight in domain_weights]
-        # # NOTE: in some cases, the weight of a domain is too small
-        # # so with a small batch size like 64, the number of samples based on the weight
-        # # would be smaller than 1 => no samples from that domain
-        # domain_batch_sizes = [round(self.global_batch_size * weight.item()) for weight in domain_weights]
+        # domain_batch_sizes = [round(self.batch_size * weight.item()) for weight in domain_weights]
+
+        # NOTE: in some cases, the weight of a domain is too small
+        # so with a small batch size like 64, the number of samples based on the weight
+        # would be smaller than 1 => no samples from that domain
+        domain_batch_sizes = [round(self.global_batch_size * weight.item()) for weight in domain_weights]
         if sum(domain_batch_sizes) != self.batch_size:
             # NOTE: randomly add a sample to round it up
-            domain_batch_sizes = self._round_up_domain_batch_sizes(domain_batch_sizes)
+            # domain_batch_sizes = self._round_up_domain_batch_sizes(domain_batch_sizes)
+            domain_batch_sizes = self._round_up_domain_batch_sizes(
+                domain_batch_sizes, target_total_size=self.global_batch_size
+            )
 
-        assert sum(domain_batch_sizes) == self.batch_size
+        assert sum(domain_batch_sizes) == self.global_batch_size
 
-        # domain_counters = [0 for _ in self.datasets]
-        # total_samples_yielded = 0
+        # NOTE: modify the code bellow to make it work with global batch size
+        # but yield in per batch size
 
+        dp_size = dist.get_world_size(self.parallel_context.dp_pg)
+        dp_rank = dist.get_rank(self.parallel_context.dp_pg)
         while self.total_samples_yielded < self.total_size:
             batch = []
             # NOTE: Flag to indicate if a domain is out of samples
@@ -389,35 +395,64 @@ class DistributedSamplerForDoReMi(DistributedSampler):
                     out_of_samples = True
                     break
 
-                batch.extend(domain[start_idx:end_idx])
+                idxs = domain[start_idx:end_idx]
+
+                if len(idxs) < dp_size:
+                    if dp_rank >= len(idxs):
+                        # This replica does not receive any indices
+                        assigned_indices = []
+                    else:
+                        # Each replica gets one index
+                        assigned_indices = [idxs[dp_rank]]
+                else:
+                    indices_per_replica = len(idxs) // dp_size
+                    dp_start_idx = dp_rank * indices_per_replica
+                    dp_end_idx = dp_start_idx + indices_per_replica
+
+                    # If there are more indices than replicas, distribute the remainder
+                    remainder = len(idxs) % dp_size
+                    if dp_rank < remainder:
+                        # The first 'remainder' replicas get one extra index
+                        dp_end_idx += 1
+                    assigned_indices = idxs[dp_start_idx:dp_end_idx]
+
+                batch.extend(assigned_indices)
                 self.domain_counters[domain_index] = end_idx
 
-            self.total_samples_yielded += len(batch)
+            self.total_samples_yielded += len(idxs)
 
             # NOTE: stop if either one of the domains are out of sample
             # or the batch is empty
             if out_of_samples or not batch:
                 break
 
+            # TODO(xrsrke): is there a better way?
+            if len(batch) != self.batch_size:
+                diff = self.batch_size - len(batch)
+                random_idxs = torch.randint(
+                    low=0, high=len(batch), size=(abs(diff),), generator=self.generator, device="cpu"
+                ).tolist()
+
+                if diff > 0:
+                    # for i in random_idxs:
+                    #     batch.append(batch[i])
+                    batch.extend(batch[i] for i in random_idxs)
+                else:
+                    batch = [v for idx, v in enumerate(batch) if idx not in random_idxs]
+
             yield batch
 
-    def _round_up_domain_batch_sizes(self, domain_batch_size: List[int]) -> List[int]:
+    def _round_up_domain_batch_sizes(self, domain_batch_size: List[int], target_total_size: int) -> List[int]:
         """
         NOTE: Make sum(domain_batch_sizes) == batch_size
         """
         total_batch_size = sum(domain_batch_size)
-        while total_batch_size != self.batch_size:
-            diff = self.batch_size - total_batch_size
+        while total_batch_size != target_total_size:
+            diff = target_total_size - total_batch_size
             # NOTE: Randomly select a domain to increase the batch size
             selected_domain = torch.randint(
                 low=0, high=len(domain_batch_size), size=(1,), generator=self.generator, device="cpu"
             ).item()
-
-            # domain_batch_size[selected_domain] += 1
-            # total_batch_size += 1
-
-            # if total_batch_size == self.batch_size:
-            #     break
 
             if diff > 0:
                 domain_batch_size[selected_domain] += 1
