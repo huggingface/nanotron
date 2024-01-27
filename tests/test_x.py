@@ -16,9 +16,8 @@ def dataset1():
 @pytest.mark.parametrize(
     "domain_weights",
     [
-        # torch.tensor([0.7, 0.3]),
         # NOTE: test auto fill samples if there are rounding errors
-        # torch.tensor([0.296, 0.201, 0.501]),
+        torch.tensor([0.296, 0.201, 0.501]),
         # NOTE: if sampling based on batch size, then
         # the last domain results in no sample (round(0.004 * 64) = 0)
         # but if do with global batch size, (round(0.004 * 512) = 2)
@@ -43,8 +42,6 @@ def test_sampling_from_dist_doremi_sampler_with_global_batch_size(domain_weights
     global_batch_size = 512
     num_microbatches = 32
     batch_size = 4
-
-    # dp_size = global_batch_size // batch_size
     dp_size = global_batch_size // (batch_size * num_microbatches)
     datasets = [dataset1 for _ in range(len(domain_weights))]
     domain_keys = [f"domain {i}" for i in range(len(datasets))]
@@ -85,6 +82,7 @@ def _test_sampling_from_dist_doremi_sampler_with_global_batch_size(
 
     microbatch_idx = 0
     num_samples_per_domain = [0 for _ in range(len(domain_weights))]
+    yielded_idxs = []
     for idxs in sampler:
         assert batch_size == len(idxs)
 
@@ -94,20 +92,17 @@ def _test_sampling_from_dist_doremi_sampler_with_global_batch_size(
         end_indices = [sum([len(ds) for ds in datasets[: i + 1]]) for i in range(len(datasets))]
         for domain_idx in range(len(domain_weights)):
             num_samples = sum(1 for idx in idxs if idx >= start_indices[domain_idx] and idx < end_indices[domain_idx])
-            # num_samples_per_domain.append(num_samples)
             num_samples_per_domain[domain_idx] += num_samples
 
-        print(f"microbatch_idx: {microbatch_idx}")
-
-        # num_samples_per_domain = torch.tensor(num_samples_per_domain, dtype=torch.int, device="cuda")
-
-        # # NOTE: the domain weights are chosen so that we expect
-        # # a domain have zero samples in a batch size
-        # min_samples_per_domain = num_samples_per_domain.clone()
-        # dist.all_reduce(min_samples_per_domain, op=dist.ReduceOp.MIN)
-        # assert (min_samples_per_domain == 0).sum().item() > 0
+        # NOTE: check that the indicies are not repeated
+        assert not set(idxs).intersection(
+            yielded_idxs
+        ), f"microbatch_idx: {microbatch_idx}, yielded_idxs: {yielded_idxs}, idxs: {idxs}"
 
         if microbatch_idx == num_microbatches - 1:
+            # NOTE: if this is the last microbatch => we iterate through all the microbatches
+            # now we check if the overall number of samples in each domain is correct across
+            # all the microbatches
             num_samples_per_domain = torch.tensor(num_samples_per_domain, dtype=torch.int, device="cuda")
 
             # NOTE: the domain weights are chosen so that we expect
@@ -124,3 +119,4 @@ def _test_sampling_from_dist_doremi_sampler_with_global_batch_size(
             continue
 
         microbatch_idx += 1
+        yielded_idxs.extend(idxs)

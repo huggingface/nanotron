@@ -307,7 +307,6 @@ class DistributedSamplerForDoReMi(DistributedSampler):
         batch_size: int,
         num_microbatches: int,
         shuffle: bool = False,
-        # TODO(xrsrke): remove the default seed value
         seed: int = 42,
         doremi_context: Optional[DoReMiContext] = None,
         parallel_context: Optional[ParallelContext] = None,
@@ -330,24 +329,15 @@ class DistributedSamplerForDoReMi(DistributedSampler):
         self.total_size = self._calculate_total_size()
 
         self.lengths = [len(d) for d in self.datasets]
-        # lengths = compute_total_sample_per_streaming_dataset(self.datasets)
         self.offsets = np.cumsum([0] + self.lengths[:-1])
         self.seed = seed
 
         dp_size = dist.get_world_size(self.parallel_context.dp_pg)
-        # NOTE: num_microbatches = batch_accumulation_per_replica
         self.global_batch_size = batch_size * dp_size * num_microbatches
-        # self.global_batch_size = batch_size * dp_size
-
-        # self.generator = torch.Generator(device="cpu").manual_seed(
-        #     seed * (1 + dist.get_rank(self.parallel_context.dp_pg)) * (1 + dist.get_rank(self.parallel_context.pp_pg))
-        # )
         # TODO(xrsrke): make seed be configureable
         # Reset the seed of the generator for consistent randomness across epochs
         self.generator = torch.Generator(device="cpu").manual_seed(
-            self.seed
-            * (1 + dist.get_rank(self.parallel_context.dp_pg))
-            * (1 + dist.get_rank(self.parallel_context.pp_pg))
+            seed * (1 + dist.get_rank(self.parallel_context.dp_pg)) * (1 + dist.get_rank(self.parallel_context.pp_pg))
         )
 
         self.update_step = 0
@@ -355,7 +345,6 @@ class DistributedSamplerForDoReMi(DistributedSampler):
 
     def _calculate_total_size(self):
         total_samples = sum(len(d) for d in self.datasets)
-        # total_samples = sum(compute_total_sample_per_streaming_dataset(self.datasets))
         return math.ceil(total_samples / self.batch_size) * self.batch_size
 
     def __iter__(self):
@@ -375,15 +364,12 @@ class DistributedSamplerForDoReMi(DistributedSampler):
             global_indices = local_indices + self.offsets[i]
             domain_indices.append(global_indices)
 
-        # domain_batch_sizes = [round(self.batch_size * weight.item()) for weight in domain_weights]
-
         # NOTE: in some cases, the weight of a domain is too small
         # so with a small batch size like 64, the number of samples based on the weight
         # would be smaller than 1 => no samples from that domain
         domain_batch_sizes = [round(self.global_batch_size * weight.item()) for weight in domain_weights]
-        if sum(domain_batch_sizes) != self.batch_size:
+        if sum(domain_batch_sizes) != self.global_batch_size:
             # NOTE: randomly add a sample to round it up
-            # domain_batch_sizes = self._round_up_domain_batch_sizes(domain_batch_sizes)
             domain_batch_sizes = self._round_up_domain_batch_sizes(
                 domain_batch_sizes, target_total_size=self.global_batch_size
             )
@@ -410,52 +396,11 @@ class DistributedSamplerForDoReMi(DistributedSampler):
 
                 global_batch_idxs = domain[start_idx:end_idx]
                 sample_per_domain_loggins.append(len(global_batch_idxs))
-                # indices_per_replica = len(global_batch_idxs) // dp_size
-                # dp_start_idx = dp_rank * indices_per_replica
-                # dp_end_idx = dp_start_idx + indices_per_replica
-
-                # global_batch_idxs = global_batch_idxs[dp_start_idx:dp_end_idx]
-
-                # assert len(global_batch_idxs) // self.num_microbatches == 0
-
-                # if microbatch_idx == self.num_microbatches:
-                #     # NOTE:only update the counter if iterate all the example
-                #     microbatch_idx = 0
-                #     # self.domain_counters[domain_index] = end_idx
-                #     # self.total_samples_yielded += len(global_batch_idxs)
-
-                # microbatch_start_idx = microbatch_idx * self.batch_size
-                # microbatch_end_idx = microbatch_start_idx + self.batch_size
-                # idxs = global_batch_idxs[microbatch_start_idx:microbatch_end_idx]
-                # idxs = domain[start_idx:end_idx]
-
-                # assert 1 == 1
-
-                # if len(idxs) < dp_size:
-                #     if dp_rank >= len(idxs):
-                #         # This replica does not receive any indices
-                #         assigned_indices = []
-                #     else:
-                #         # Each replica gets one index
-                #         assigned_indices = [idxs[dp_rank]]
-                # else:
-                #     indices_per_replica = len(idxs) // dp_size
-                #     dp_start_idx = dp_rank * indices_per_replica
-                #     dp_end_idx = dp_start_idx + indices_per_replica
-
-                #     # If there are more indices than replicas, distribute the remainder
-                #     remainder = len(idxs) % dp_size
-                #     if dp_rank < remainder:
-                #         # The first 'remainder' replicas get one extra index
-                #         dp_end_idx += 1
-                #     assigned_indices = idxs[dp_start_idx:dp_end_idx]
-
-                # batch.extend(assigned_indices)
                 batch.extend(global_batch_idxs)
 
-            # # NOTE: stop if either one of the domains are
-            # # out of sample or the batch is empty
-            if out_of_samples or not batch:
+            # NOTE: stop if either one of the domains are
+            # out of sample or the batch is empty
+            if out_of_samples or not len(batch) == 0:
                 break
 
             num_samples_per_replicas = len(batch) // dp_size
@@ -464,31 +409,14 @@ class DistributedSamplerForDoReMi(DistributedSampler):
 
             # NOTE: this is indicies of a model replicas across microbatches
             dp_idxs = batch[dp_start_idx:dp_end_idx]
-
-            assert (
-                len(dp_idxs) // self.num_microbatches == self.batch_size
-            ), f"microbatch_idx={microbatch_idx} \
-                dp_rank={dp_rank}"
+            assert len(dp_idxs) // self.num_microbatches == self.batch_size
 
             microbatch_start_idx = microbatch_idx * self.batch_size
             microbatch_end_idx = microbatch_start_idx + self.batch_size
             microbatch_idxs = dp_idxs[microbatch_start_idx:microbatch_end_idx]
 
-            # TODO(xrsrke): is there a better way?
-            # if len(batch) != self.batch_size:
-            #     diff = self.batch_size - len(batch)
-            #     random_idxs = torch.randint(
-            #         low=0, high=len(batch), size=(abs(diff),), generator=self.generator, device="cpu"
-            #     ).tolist()
-
-            #     if diff > 0:
-            #         batch.extend(batch[i] for i in random_idxs)
-            #     else:
-            #         batch = [v for idx, v in enumerate(batch) if idx not in random_idxs]
-
             yield microbatch_idxs
 
-            # self.total_samples_yielded += len(idxs)
             self.total_samples_yielded += len(microbatch_idxs)
             microbatch_idx += 1
 
@@ -497,7 +425,6 @@ class DistributedSamplerForDoReMi(DistributedSampler):
                     f"domain_{self.doremi_context.get_domain_name(i)}": v
                     for i, v in enumerate(sample_per_domain_loggins)
                 }
-                # print(f"samples per domain: {_logs}")
                 log_rank(
                     f"Samples per domain: {_logs}",
                     logger=logger,
@@ -590,16 +517,6 @@ def _get_train_sampler(
     return sampler
 
 
-# def compute_total_sample_per_streaming_dataset(datasets: List[Dataset]) -> List[int]:
-#     lengths = []
-#     for d in datasets:
-#         sample_count = 0
-#         for _ in d:
-#             sample_count += 1
-#         lengths.append(sample_count)
-#     return lengths
-
-
 class CombinedDataset(Dataset):
     def __init__(self, datasets):
         self.comebined_dataset = concatenate_datasets(datasets)
@@ -615,11 +532,6 @@ class CombinedDataset(Dataset):
         if isinstance(batch[0], list):
 
             def merge_dicts(data):
-                # merged = {
-                #     "input_ids": np.concatenate([d["input_ids"] for d in data]),
-                #     "domain_ids": np.concatenate([d["domain_ids"] for d in data]),
-                # }
-                # return merged
                 merged = {}
                 # NOTE: # Assuming all dictionaries have the same keys
                 for key in data[0].keys():
