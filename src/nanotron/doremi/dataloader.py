@@ -304,6 +304,7 @@ class DistributedSamplerForDoReMi(DistributedSampler):
         self,
         datasets: List[Dataset],
         batch_size: int,
+        num_microbatches: int,
         shuffle: bool = False,
         # TODO(xrsrke): remove the default seed value
         seed: int = 42,
@@ -321,6 +322,7 @@ class DistributedSamplerForDoReMi(DistributedSampler):
 
         self.datasets = datasets
         self.batch_size = batch_size
+        self.num_microbatches = num_microbatches
         self.shuffle = shuffle
         self.doremi_context = doremi_context
         self.parallel_context = parallel_context
@@ -332,7 +334,9 @@ class DistributedSamplerForDoReMi(DistributedSampler):
         self.seed = seed
 
         dp_size = dist.get_world_size(self.parallel_context.dp_pg)
-        self.global_batch_size = batch_size * dp_size
+        # NOTE: num_microbatches = batch_accumulation_per_replica
+        self.global_batch_size = batch_size * dp_size * num_microbatches
+        # self.global_batch_size = batch_size * dp_size
 
         # self.generator = torch.Generator(device="cpu").manual_seed(
         #     seed * (1 + dist.get_rank(self.parallel_context.dp_pg)) * (1 + dist.get_rank(self.parallel_context.pp_pg))
@@ -376,11 +380,9 @@ class DistributedSamplerForDoReMi(DistributedSampler):
 
         assert sum(domain_batch_sizes) == self.global_batch_size
 
-        # NOTE: modify the code bellow to make it work with global batch size
-        # but yield in per batch size
-
         dp_size = dist.get_world_size(self.parallel_context.dp_pg)
         dp_rank = dist.get_rank(self.parallel_context.dp_pg)
+        microbatch_idx = 0
         while self.total_samples_yielded < self.total_size:
             batch = []
             # NOTE: Flag to indicate if a domain is out of samples
@@ -395,52 +397,97 @@ class DistributedSamplerForDoReMi(DistributedSampler):
                     out_of_samples = True
                     break
 
-                idxs = domain[start_idx:end_idx]
+                global_batch_idxs = domain[start_idx:end_idx]
+                # indices_per_replica = len(global_batch_idxs) // dp_size
+                # dp_start_idx = dp_rank * indices_per_replica
+                # dp_end_idx = dp_start_idx + indices_per_replica
 
-                if len(idxs) < dp_size:
-                    if dp_rank >= len(idxs):
-                        # This replica does not receive any indices
-                        assigned_indices = []
-                    else:
-                        # Each replica gets one index
-                        assigned_indices = [idxs[dp_rank]]
-                else:
-                    indices_per_replica = len(idxs) // dp_size
-                    dp_start_idx = dp_rank * indices_per_replica
-                    dp_end_idx = dp_start_idx + indices_per_replica
+                # global_batch_idxs = global_batch_idxs[dp_start_idx:dp_end_idx]
 
-                    # If there are more indices than replicas, distribute the remainder
-                    remainder = len(idxs) % dp_size
-                    if dp_rank < remainder:
-                        # The first 'remainder' replicas get one extra index
-                        dp_end_idx += 1
-                    assigned_indices = idxs[dp_start_idx:dp_end_idx]
+                # assert len(global_batch_idxs) // self.num_microbatches == 0
 
-                batch.extend(assigned_indices)
-                self.domain_counters[domain_index] = end_idx
+                # if microbatch_idx == self.num_microbatches:
+                #     # NOTE:only update the counter if iterate all the example
+                #     microbatch_idx = 0
+                #     # self.domain_counters[domain_index] = end_idx
+                #     # self.total_samples_yielded += len(global_batch_idxs)
 
-            self.total_samples_yielded += len(idxs)
+                # microbatch_start_idx = microbatch_idx * self.batch_size
+                # microbatch_end_idx = microbatch_start_idx + self.batch_size
+                # idxs = global_batch_idxs[microbatch_start_idx:microbatch_end_idx]
+                # idxs = domain[start_idx:end_idx]
 
-            # NOTE: stop if either one of the domains are out of sample
-            # or the batch is empty
+                # assert 1 == 1
+
+                # if len(idxs) < dp_size:
+                #     if dp_rank >= len(idxs):
+                #         # This replica does not receive any indices
+                #         assigned_indices = []
+                #     else:
+                #         # Each replica gets one index
+                #         assigned_indices = [idxs[dp_rank]]
+                # else:
+                #     indices_per_replica = len(idxs) // dp_size
+                #     dp_start_idx = dp_rank * indices_per_replica
+                #     dp_end_idx = dp_start_idx + indices_per_replica
+
+                #     # If there are more indices than replicas, distribute the remainder
+                #     remainder = len(idxs) % dp_size
+                #     if dp_rank < remainder:
+                #         # The first 'remainder' replicas get one extra index
+                #         dp_end_idx += 1
+                #     assigned_indices = idxs[dp_start_idx:dp_end_idx]
+
+                # batch.extend(assigned_indices)
+                batch.extend(global_batch_idxs)
+
+            # # NOTE: stop if either one of the domains are
+            # # out of sample or the batch is empty
             if out_of_samples or not batch:
                 break
 
+            assert 1 == 1
+
+            num_samples_per_replicas = len(batch) // dp_size
+            dp_start_idx = dp_rank * num_samples_per_replicas
+            dp_end_idx = dp_start_idx + num_samples_per_replicas
+
+            # NOTE: this is indicies of a model replicas across microbatches
+            dp_idxs = batch[dp_start_idx:dp_end_idx]
+
+            if microbatch_idx == 1:
+                assert 1 == 1
+
+            assert (
+                len(dp_idxs) // self.num_microbatches == self.batch_size
+            ), f"microbatch_idx={microbatch_idx} \
+                dp_rank={dp_rank}"
+
+            microbatch_start_idx = microbatch_idx * self.batch_size
+            microbatch_end_idx = microbatch_start_idx + self.batch_size
+            microbatch_idxs = dp_idxs[microbatch_start_idx:microbatch_end_idx]
+
             # TODO(xrsrke): is there a better way?
-            if len(batch) != self.batch_size:
-                diff = self.batch_size - len(batch)
-                random_idxs = torch.randint(
-                    low=0, high=len(batch), size=(abs(diff),), generator=self.generator, device="cpu"
-                ).tolist()
+            # if len(batch) != self.batch_size:
+            #     diff = self.batch_size - len(batch)
+            #     random_idxs = torch.randint(
+            #         low=0, high=len(batch), size=(abs(diff),), generator=self.generator, device="cpu"
+            #     ).tolist()
 
-                if diff > 0:
-                    # for i in random_idxs:
-                    #     batch.append(batch[i])
-                    batch.extend(batch[i] for i in random_idxs)
-                else:
-                    batch = [v for idx, v in enumerate(batch) if idx not in random_idxs]
+            #     if diff > 0:
+            #         batch.extend(batch[i] for i in random_idxs)
+            #     else:
+            #         batch = [v for idx, v in enumerate(batch) if idx not in random_idxs]
 
-            yield batch
+            yield microbatch_idxs
+
+            # self.total_samples_yielded += len(idxs)
+            self.total_samples_yielded += len(microbatch_idxs)
+            microbatch_idx += 1
+
+            if microbatch_idx == self.num_microbatches:
+                microbatch_idx = 0
+                self.domain_counters[domain_index] = end_idx
 
     def _round_up_domain_batch_sizes(self, domain_batch_size: List[int], target_total_size: int) -> List[int]:
         """
