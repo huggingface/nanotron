@@ -36,14 +36,13 @@ def dataset1():
                 0.0041942731702987,
             ]
         ),
+        torch.tensor([0.6, 0.4]),
     ],
 )
 @pytest.mark.parametrize("dp_size", [1, 2, 4])
 def test_sampling_from_dist_doremi_sampler_with_global_batch_size(dp_size, domain_weights: torch.Tensor, dataset1):
     global_batch_size = 512
     num_microbatches = 32
-    # batch_size = 4
-    # dp_size = global_batch_size // (batch_size * num_microbatches)
     batch_size = global_batch_size // (num_microbatches * dp_size)
     datasets = [dataset1 for _ in range(len(domain_weights))]
     domain_keys = [f"domain {i}" for i in range(len(datasets))]
@@ -82,9 +81,11 @@ def _test_sampling_from_dist_doremi_sampler_with_global_batch_size(
     domain_weights = doremi_context.domain_weights
     global_batch_size_per_domain = [round(global_batch_size * weight.item()) for weight in domain_weights]
 
+    loop = 0
     microbatch_idx = 0
     num_samples_per_domain = [0 for _ in range(len(domain_weights))]
     yielded_idxs = []
+    num_yielded_idxs = 0
     for idxs in sampler:
         assert batch_size == len(idxs)
 
@@ -109,29 +110,42 @@ def _test_sampling_from_dist_doremi_sampler_with_global_batch_size(
 
             for expected_bs, bs in zip(global_batch_size_per_domain, num_samples_per_domain):
                 # NOTE: take into account rounding errors
-                assert abs(expected_bs - bs) <= 1, f"abs(expected_bs - bs): {abs(expected_bs - bs)}"
+                # accross all the dp ranks
+                assert abs(expected_bs - bs) <= dp_size, f"abs(expected_bs - bs): {abs(expected_bs - bs)}"
 
             microbatch_idx = 0
             num_samples_per_domain = [0 for _ in range(len(domain_weights))]
             continue
 
         microbatch_idx += 1
+        loop += 1
+        num_yielded_idxs += len(idxs)
         yielded_idxs.extend(idxs)
 
-    total_yielded_idxs = torch.tensor(len(yielded_idxs), dtype=torch.int, device="cuda")
-    total_samples = sum([round(len(ds) * weight.item()) for ds, weight in zip(datasets, domain_weights)])
-    dist.all_reduce(total_yielded_idxs, op=dist.ReduceOp.SUM)
+    # yielded_idxs = torch.tensor(yielded_idxs, dtype=torch.int, device="cuda")
+    # dist.all_reduce(yielded_idxs, op=dist.ReduceOp.MAX)
+    # assert 1 == 1
+
+    num_yielded_idxs = torch.tensor(num_yielded_idxs, dtype=torch.int, device="cuda")
+    assert num_yielded_idxs > 0, f"num_yielded_idxs: {num_yielded_idxs}, loop: {loop}"
+    local_num_yielded_idxs = num_yielded_idxs.clone()
+
+    all_yielded_idxs = [torch.zeros_like(num_yielded_idxs.clone()) for _ in range(dp_size)]
+    dist.all_gather(all_yielded_idxs, num_yielded_idxs)
+
+    expected_num_samples = sum([round(len(ds) * weight.item()) for ds, weight in zip(datasets, domain_weights)])
+    dist.all_reduce(num_yielded_idxs, op=dist.ReduceOp.SUM)
+
+    assert 1 == 1
     assert (
-        total_yielded_idxs == total_samples
-    ), f"total_yielded_idxs: {total_yielded_idxs}, total_samples: {total_samples}"
+        num_yielded_idxs == expected_num_samples
+    ), f"num_yielded_idxs: {num_yielded_idxs}, expected_num_samples: {expected_num_samples}, loop: {loop}, local_num_yielded_idxs: {local_num_yielded_idxs}"
 
 
 @pytest.mark.parametrize("dp_size", [1, 2, 4])
 def test_dist_doremi_sampler_not_repeating_samples(dp_size, dataset1):
     global_batch_size = 512
     num_microbatches = 32
-    # batch_size = 4
-    # dp_size = global_batch_size // (batch_size * num_microbatches)
     batch_size = global_batch_size // (num_microbatches * dp_size)
     domain_weights = torch.tensor([0.296, 0.201, 0.501])
     datasets = [dataset1 for _ in range(len(domain_weights))]
@@ -169,10 +183,22 @@ def _test_dist_doremi_sampler_not_repeating_samples(
     microbatch_idx = 0
     yielded_idxs = []
     for idxs in sampler:
+        if microbatch_idx > 0:
+            assert len(yielded_idxs) > 0
+
         # NOTE: check that the indicies are not repeated
         assert not set(idxs).intersection(
             yielded_idxs
         ), f"microbatch_idx: {microbatch_idx}, yielded_idxs: {yielded_idxs}, idxs: {idxs}"
 
         microbatch_idx += 1
-        yielded_idxs.extend(idxs)
+
+        idxs = torch.tensor(idxs, dtype=torch.int, device="cuda")
+        all_idxs = [torch.zeros_like(idxs) for _ in range(dp_size)]
+        dist.all_gather(all_idxs, idxs)
+        all_idxs = torch.cat(all_idxs, dim=0).view(-1).cpu().tolist()
+        yielded_idxs.extend(all_idxs)
+
+    assert len(set(yielded_idxs)) == len(
+        yielded_idxs
+    ), f"len(set(yielded_idxs)): {len(set(yielded_idxs))}, len(yielded_idxs): {len(yielded_idxs)}"
