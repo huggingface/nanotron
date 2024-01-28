@@ -36,7 +36,28 @@ class MambaConfig:
     residual_in_fp32: bool = True
     pad_vocab_size_multiple: int = 8
     # ==== Custom ======
-    dtype: torch.dtype = torch.float32
+    dtype: str = "float32"
+    rms_norm_eps: float = 1e-5
+    pad_token_id: Optional[int] = None
+
+
+@dataclass
+class MambaFastConfig:
+    """Configuration for a Mamba model
+
+    Be careful on having a coherent typing as we use it to reconstruct the model from yaml
+    """
+
+    d_model: int = 2560
+    num_hidden_layers: int = 64
+    vocab_size: int = 50277
+    ssm_cfg: Optional[dict] = None
+    rms_norm: bool = True
+    fused_add_norm: bool = True
+    residual_in_fp32: bool = True
+    pad_vocab_size_multiple: int = 8
+    # ==== Custom ======
+    dtype: str = "float32"
     rms_norm_eps: float = 1e-5
     pad_token_id: Optional[int] = None
 
@@ -143,5 +164,5 @@ class Starcoder2Config:
 
 #TODO(fmom): check why MambaConfig won't load if it's not the first one in the union
 # NanotronConfigs = Union[LlamaConfig, MambaConfig, Starcoder2Config]
-NanotronConfigs = Union[MambaConfig, LlamaConfig, Starcoder2Config]
+NanotronConfigs = Union[MambaFastConfig, LlamaConfig, MambaConfig, Starcoder2Config]
 

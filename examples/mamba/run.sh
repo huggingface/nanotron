@@ -1,7 +1,7 @@
 #!/bin/sh
 
 if [ "$1" = "debug" ]; then
-    python configs/make_config_mamba.py && \
+    python configs/make_config_mamba_fast.py && \
     FI_PROVIDER="efa" CUDA_DEVICE_MAX_CONNECTIONS=1 debugpy-run -p 1234 -m torch.distributed.launch \
                 -- \
                 --nproc_per_node=1 \
@@ -20,7 +20,7 @@ elif [ "$1" = "eval" ]; then
                 --tp 1 \
                 --ckpt-path /fsx/ferdinandmom/github/mamba/checkpoints/mamba-1p62M-stas-openwebtext-10k/7
 else
-    python configs/make_config_mamba.py && \
+    python configs/make_config_mamba_fast.py && \
     FI_PROVIDER="efa" CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun \
                 --nproc_per_node=1 \
                 --master_port=29600 \
