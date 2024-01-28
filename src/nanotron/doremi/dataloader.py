@@ -602,10 +602,14 @@ class DistributedSamplerForDoReMi(DistributedSampler):
 
         microbatch_idx = 0
         out_of_samples = False
-        dp_size = dist.get_world_size(self.parallel_context.dp_pg)
+        dist.get_world_size(self.parallel_context.dp_pg)
         dist.barrier()
+        # expected_total_samples = sum(
+        #     [round(len(ds) * weight.item()) for ds, weight in zip(self.datasets, domain_weights)]
+        # )
+        # total_sampels = sum([len(d) for d in domain_indices])
         expected_total_samples = sum(
-            [round(len(ds) * weight.item()) for ds, weight in zip(self.datasets, domain_weights)]
+            [round(len(d) * weight.item()) for d, weight in zip(domain_indices, domain_weights)]
         )
 
         while self.total_samples_yielded < expected_total_samples:
@@ -661,7 +665,8 @@ class DistributedSamplerForDoReMi(DistributedSampler):
             else:
                 microbatch_idx += 1
 
-            self.total_samples_yielded += len(microbatch_idxs) * dp_size
+            # self.total_samples_yielded += len(microbatch_idxs) * dp_size
+            self.total_samples_yielded += len(microbatch_idxs)
 
             dist.barrier()
             print(f"rank: {self.rank}, microbatch_idx: {microbatch_idx}, yield microbatch_idxs: {microbatch_idxs} \n")

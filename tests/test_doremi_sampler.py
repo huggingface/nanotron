@@ -304,15 +304,8 @@ def _test_sampling_from_dist_doremi_sampler_with_global_batch_size(
     local_num_yielded_idxs = num_yielded_idxs.clone()
     dist.all_reduce(num_yielded_idxs, op=dist.ReduceOp.SUM)
     expected_num_samples = sum([round(len(ds) * weight.item()) for ds, weight in zip(datasets, domain_weights)])
-
-    # NOTE: there are some rounding errors
-    # assert num_yielded_idxs >= 0.9 * expected_num_samples, f"num_yielded_idxs: {num_yielded_idxs}, expected_num_samples: {expected_num_samples}, loop: {loop}, local_num_yielded_idxs: {local_num_yielded_idxs}"
-    # assert num_yielded_idxs <= expected_num_samples, f"num_yielded_idxs: {num_yielded_idxs}, expected_num_samples: {expected_num_samples}, loop: {loop}, local_num_yielded_idxs: {local_num_yielded_idxs}"
-
-    # NOTE: rounding errors can accumulate across dp ranks
-    # NOTE: +1 is just tuning to make it pass, the diff is small so it's fine
     assert (
-        abs(expected_num_samples - num_yielded_idxs) <= dp_size * len(domain_weights) + 1
+        expected_num_samples == num_yielded_idxs
     ), f"num_yielded_idxs: {num_yielded_idxs}, expected_num_samples: {expected_num_samples}, loop: {loop}, local_num_yielded_idxs: {local_num_yielded_idxs}"
 
 
