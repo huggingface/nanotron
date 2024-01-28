@@ -588,18 +588,10 @@ class DistributedSamplerForDoReMi(DistributedSampler):
             global_indices = local_indices + self.offsets[i]
             domain_indices.append(global_indices)
 
-        # print(f"rank: {self.rank}, domain_indices: {domain_indices} \n")
-
-        # NOTE: this one is correct
-        # total_domain_idxs = torch.tensor(sum([len(d) for d in domain_indices]), dtype=torch.int, device="cuda")
-        # dist.all_reduce(total_domain_idxs, op=dist.ReduceOp.SUM)
-        # assert 1 == 1
-
         # NOTE: in some cases, the weight of a domain is too small
         # so with a small batch size like 64, the number of samples based on the weight
         # would be smaller than 1 => no samples from that domain
         num_samples_per_replicas = self.batch_size * self.num_microbatches
-        # domain_batch_sizes = [self._round_up_if_fractional_part_greater_than_threshold(num_samples_per_replicas * weight.item()) for weight in domain_weights]
         domain_batch_sizes = [round(num_samples_per_replicas * weight.item()) for weight in domain_weights]
         if sum(domain_batch_sizes) != num_samples_per_replicas:
             # NOTE: randomly add a sample to round it up
@@ -608,16 +600,15 @@ class DistributedSamplerForDoReMi(DistributedSampler):
                 target_total_size=num_samples_per_replicas,
             )
 
-        out_of_samples = False
         microbatch_idx = 0
+        out_of_samples = False
         dp_size = dist.get_world_size(self.parallel_context.dp_pg)
         dist.barrier()
-        # total_expected = sum([])
         expected_total_samples = sum(
             [round(len(ds) * weight.item()) for ds, weight in zip(self.datasets, domain_weights)]
         )
 
-        while self.total_samples_yielded <= expected_total_samples:
+        while self.total_samples_yielded < expected_total_samples:
             batch = []
             dist.barrier()
 
@@ -679,101 +670,6 @@ class DistributedSamplerForDoReMi(DistributedSampler):
             dist.barrier()
 
         dist.barrier()
-
-        # # TODO(xrsrke): cache this
-        # assert sum(domain_batch_sizes) == num_samples_per_replicas
-        # # print(f"rank: {self.rank}, domain_batch_sizes after rounding: {domain_batch_sizes} \n")
-
-        # microbatch_idx = 0
-        # dp_size = dist.get_world_size(self.parallel_context.dp_pg)
-
-        # while self.total_samples_yielded < self.total_size:
-        #     batch = []
-        #     # NOTE: Flag to indicate if a domain is out of samples
-        #     out_of_samples = False
-
-        #     # sample_per_domain_loggins = []
-        #     for domain_index, (idxs, domain_batch_size) in enumerate(zip(domain_indices, domain_batch_sizes)):
-        #         start_idx = self.domain_counters[domain_index]
-        #         end_idx = start_idx + domain_batch_size
-
-        #         # NOTE: a domain run out of samples
-        #         if end_idx > len(idxs):
-        #             out_of_samples = True
-        #             break
-
-        #         # NOTE: if the current microbatch is the last one
-        #         # then after yielding the samples, we need to update
-        #         # the domain counter
-        #         if microbatch_idx == self.num_microbatches - 1:
-        #             dist.barrier()
-        #             print(f"rank: {self.rank}, domain_index: {domain_index}, microbatch_idx={microbatch_idx}, now update domain counter to {end_idx} \n")
-        #             self.domain_counters[domain_index] = end_idx
-
-        #         # NOTE: if the current microbatch is more than
-        #         # the number of microbatches, then we need to
-        #         # to reset the microbatch index
-        #         # if microbatch_idx == self.num_microbatches:
-        #         #     dist.barrier()
-        #         #     print(f"rank: {self.rank}, domain_index: {domain_index}, microbatch_idx={microbatch_idx}, now reset to 0 \n")
-        #         #     microbatch_idx = 0
-        #         #     # self.domain_counters[domain_index] = end_idx
-
-        #         dist.barrier()
-        #         print(
-        #             f"rank: {self.rank}, domain_index: {domain_index}, microbatch_idx: {microbatch_idx}, start_idx={start_idx}, end_idx={end_idx} \n"
-        #         )
-
-        #         global_batch_idxs = idxs[start_idx:end_idx]
-        #         # sample_per_domain_loggins.append(len(global_batch_idxs))
-        #         batch.extend(global_batch_idxs)
-
-        #     # NOTE: stop if either one of the domains are
-        #     # out of sample or the batch is empty
-        #     if out_of_samples or len(batch) == 0:
-        #         break
-
-        #     assert len(batch) == self.num_microbatches * self.batch_size
-
-        #     microbatch_start_idx = microbatch_idx * self.batch_size
-        #     microbatch_end_idx = microbatch_start_idx + self.batch_size
-
-        #     assert microbatch_end_idx <= len(batch)
-        #     microbatch_idxs = batch[microbatch_start_idx:microbatch_end_idx]
-
-        #     dist.barrier()
-        #     print(
-        #         f"rank: {self.rank}, microbatch_idx: {microbatch_idx}, microbatch_start_idx: {microbatch_start_idx}, microbatch_end_idx: {microbatch_end_idx} \n"
-        #     )
-        #     # print(f"rank: {self.rank}, yield microbatch_idxs: {microbatch_idxs} \n")
-        #     self.total_samples_yielded += len(microbatch_idxs) * dp_size
-        #     microbatch_idx += 1
-
-        #     yield microbatch_idxs
-
-        #     if microbatch_idx == self.num_microbatches:
-        #         dist.barrier()
-        #         print(f"rank: {self.rank}, domain_index: {domain_index}, microbatch_idx={microbatch_idx}, now reset to 0 \n")
-        #         microbatch_idx = 0
-
-        # NOTE: once a microbatch is yielded
-        # that means that same microbatch is yielded
-        # across all dp ranks
-
-        # if microbatch_idx == self.num_microbatches:
-        #     _logs = {
-        #         f"domain_{self.doremi_context.get_domain_name(i)}": v
-        #         for i, v in enumerate(sample_per_domain_loggins)
-        #     }
-        #     log_rank(
-        #         f"Samples per domain: {_logs}",
-        #         logger=logger,
-        #         level=logging.INFO,
-        #         rank=0,
-        #         group=self.parallel_context.tp_pg,
-        #     )
-
-        #     microbatch_idx = 0
 
     def _round_up_domain_batch_sizes(self, domain_batch_size: List[int], target_total_size: int) -> List[int]:
         """
