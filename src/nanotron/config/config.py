@@ -392,8 +392,8 @@ def get_config_from_file(config_path: str, config_class: Type[Config] = Config) 
                     RecomputeGranularity: lambda x: RecomputeGranularity[x.upper()],
                     SamplerType: lambda x: SamplerType[x.upper()],
                 },
-                # strict_unions_match=True,
-                # strict=True,
+                strict_unions_match=True,
+                strict=True,
             ),
         )
     except Exception as e:
