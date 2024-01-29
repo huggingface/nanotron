@@ -2,24 +2,10 @@ import contextlib
 import os
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
-# import random
-# import socket
 
 import torch.cuda
 from nanotron.parallel import ParallelContext
 from torch.distributed.launcher import elastic_launch
-
-
-# def find_free_port(min_port: int = 2000, max_port: int = 65000) -> int:
-#     while True:
-#         port = random.randint(min_port, max_port)
-#         try:
-#             with socket.socket() as sock:
-#                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-#                 sock.bind(("localhost", port))
-#                 return port
-#         except OSError as e:
-#             raise e
 
 def available_gpus():
     if not torch.cuda.is_available():
@@ -106,8 +92,6 @@ def init_distributed(tp: int, dp: int, pp: int):
         nb_gpus = tp * dp * pp
         run_id = uuid.uuid4()
         
-        # port = find_free_port()
-
         config = torch.distributed.launcher.LaunchConfig(
             min_nodes=1,
             max_nodes=1,
@@ -116,7 +100,6 @@ def init_distributed(tp: int, dp: int, pp: int):
             rdzv_configs={"timeout": 60},
             # Setting port to `0` allows `torch` to randomly pick a port: https://pytorch.org/docs/stable/elastic/run.html#stacked-single-node-multi-worker
             # Works only for single node workload.
-            # rdzv_endpoint=f"localhost:{port}",
             rdzv_endpoint=f"localhost:0",
             run_id=str(run_id),
             max_restarts=0,

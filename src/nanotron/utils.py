@@ -4,6 +4,8 @@ import math
 import os
 from contextlib import ExitStack, contextmanager
 from typing import Callable, ContextManager, List, Optional
+import random
+import socket
 
 import torch
 from packaging import version
@@ -147,3 +149,15 @@ def tensor_from_untyped_storage(untyped_storage: torch.UntypedStorage, dtype: to
     tensor = torch.empty([], dtype=dtype, device=device)
     tensor.set_(source=untyped_storage)
     return tensor
+
+
+def find_free_port(min_port: int = 2000, max_port: int = 65000) -> int:
+    while True:
+        port = random.randint(min_port, max_port)
+        try:
+            with socket.socket() as sock:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                sock.bind(("localhost", port))
+                return port
+        except OSError as e:
+            raise e
