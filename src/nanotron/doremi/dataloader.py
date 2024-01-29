@@ -769,6 +769,7 @@ class DistributedSamplerForDoReMi(DistributedSampler):
 
         # self.update_step = 0
         self.reset()
+        self.setup()
 
     def _calculate_total_size(self):
         total_samples = sum(len(d) for d in self.datasets)
@@ -780,7 +781,51 @@ class DistributedSamplerForDoReMi(DistributedSampler):
         fractional_part = number - int(number)
         return math.ceil(number) if fractional_part > threshold else int(number)
 
-    def __iter__(self):
+    # def __iter__(self):
+    #     domain_indices = []
+    #     domain_weights = self.doremi_context.domain_weights
+    #     # print("------------------ \n")
+    #     # dist.barrier()
+    #     for i, dataset in enumerate(self.datasets):
+    #         # dataset_partition_size = len(dataset) // self.num_replicas
+    #         # num_samples = self._round_up_if_fractional_part_greater_than_threshold(dataset_partition_size * domain_weights[i].item())
+    #         # start_offset_idx = self.rank * dataset_partition_size
+    #         # end_offset_idx = start_offset_idx + dataset_partition_size
+    #         # local_indices = torch.arange(start_offset_idx, end_offset_idx, device="cpu").tolist()
+    #         local_indices = torch.arange(0, len(dataset), device="cpu").tolist()
+
+    #         # NOTE: align the indicies across the combined dataset
+    #         global_indices = local_indices + self.offsets[i]
+    #         domain_indices.append(global_indices)
+
+    #     # NOTE: in some cases, the weight of a domain is too small
+    #     # so with a small batch size like 64, the number of samples based on the weight
+    #     # would be smaller than 1 => no samples from that domain
+    #     # num_samples_per_replicas = self.batch_size * self.num_microbatches
+    #     # domain_batch_sizes = [round(num_samples_per_replicas * weight.item()) for weight in domain_weights]
+    #     # if sum(domain_batch_sizes) != num_samples_per_replicas:
+    #     #     # NOTE: randomly add a sample to round it up
+    #     #     domain_batch_sizes = self._round_up_domain_batch_sizes(
+    #     #         domain_batch_sizes,
+    #     #         target_total_size=num_samples_per_replicas,
+    #     #     )
+
+    #     num_samples_per_global_step = self.batch_size * self.num_microbatches * self.num_replicas
+    #     domain_batch_sizes = [round(num_samples_per_global_step * weight.item()) for weight in domain_weights]
+    #     if sum(domain_batch_sizes) != num_samples_per_global_step:
+    #         # NOTE: randomly add a sample to round it up
+    #         domain_batch_sizes = self._round_up_domain_batch_sizes(
+    #             domain_batch_sizes,
+    #             target_total_size=num_samples_per_global_step,
+    #         )
+
+    #     assert all(x > 0 for x in domain_batch_sizes), "There is a domain with 0 samples per global batch"
+    #     self.domain_batch_sizes = domain_batch_sizes
+    #     self.domain_indices = domain_indices
+    #     self.expected_total_samples = sum([len(d) for d in domain_indices])
+    #     return self
+
+    def setup(self):
         domain_indices = []
         domain_weights = self.doremi_context.domain_weights
         # print("------------------ \n")
@@ -824,6 +869,9 @@ class DistributedSamplerForDoReMi(DistributedSampler):
         self.expected_total_samples = sum([len(d) for d in domain_indices])
         return self
 
+    def __iter__(self):
+        return self
+
     def __next__(self):
         # microbatch_idx = 0
         # dist.get_world_size(self.parallel_context.dp_pg)
@@ -836,105 +884,105 @@ class DistributedSamplerForDoReMi(DistributedSampler):
         #     [round(len(d) * weight.item()) for d, weight in zip(domain_indices, domain_weights)]
         # )
 
-        while self.total_samples_yielded < self.expected_total_samples:
-            batch = []
-            for domain_index, (idxs, domain_batch_size) in enumerate(
-                zip(self.domain_indices, self.domain_batch_sizes)
-            ):
-                start_idx = self.domain_counters[domain_index]
-                end_idx = start_idx + domain_batch_size
-                # dist.barrier()
+        if self.total_samples_yielded >= self.expected_total_samples:
+            raise StopIteration
 
-                # NOTE: BREAK 1
-                if end_idx > len(idxs):
-                    # self.out_of_samples = True
-                    print(
-                        f"rank: {self.rank}, break1, end_idx: {end_idx}, start_idx: {start_idx}, len(idxs): {len(idxs)} \
-                        domain_batch_sizes: {self.domain_batch_sizes}, \
-                        domain_counters: {self.domain_counters}, domain_batch_size: {domain_batch_size} \
-                        microbatch_idx: {self.microbatch_idx}, domain_index: {domain_index}, total_samples_yielded: {self.total_samples_yielded} \
-                            expected_total_samples: {self.expected_total_samples} \
-                    "
-                    )
-                    raise StopIteration
+        batch = []
+        for domain_index, (idxs, domain_batch_size) in enumerate(zip(self.domain_indices, self.domain_batch_sizes)):
+            start_idx = self.domain_counters[domain_index]
+            end_idx = start_idx + domain_batch_size
+            # dist.barrier()
 
-                if self.microbatch_idx == self.num_microbatches - 1:
-                    # dist.barrier()
-                    # print(
-                    #     f"rank: {self.rank}, domain_index: {domain_index}, microbatch_idx={microbatch_idx}, now update domain counter to {end_idx} \n"
-                    # )
-                    self.domain_counters[domain_index] = end_idx
-                    # dist.barrier()
-
-                # NOTE: this contains the idxs portion for num_microbatches
-                global_batch_idxs = idxs[start_idx:end_idx]
-
-                # dist.barrier()
-                # print(
-                #     f"rank: {self.rank}, domain_index: {domain_index}, microbatch_idx={microbatch_idx}, global_batch_idxs: {global_batch_idxs} \n"
-                # )
-                batch.extend(global_batch_idxs)
-                # dist.barrier()
-
-            if len(batch) == 0:
+            # NOTE: BREAK 1
+            if end_idx > len(idxs):
+                # self.out_of_samples = True
                 print(
-                    f"rank: {self.rank}, break2, end_idx: {end_idx}, start_idx: {start_idx}, len(idxs): {len(idxs)} \
-                    domain_counters: {self.domain_counters}, domain_batch_size: {domain_batch_size} \
+                    f"rank: {self.rank}, break1, end_idx: {end_idx}, start_idx: {start_idx}, len(idxs): {len(idxs)} \
                     domain_batch_sizes: {self.domain_batch_sizes}, \
+                    domain_counters: {self.domain_counters}, domain_batch_size: {domain_batch_size} \
                     microbatch_idx: {self.microbatch_idx}, domain_index: {domain_index}, total_samples_yielded: {self.total_samples_yielded} \
                         expected_total_samples: {self.expected_total_samples} \
-                    out_of_samples: {self.out_of_samples}, len(batch): {len(batch)} \
                 "
                 )
-
                 raise StopIteration
 
-            assert len(batch) == self.num_microbatches * self.batch_size * self.num_replicas
+            if self.microbatch_idx == self.num_microbatches - 1:
+                # dist.barrier()
+                # print(
+                #     f"rank: {self.rank}, domain_index: {domain_index}, microbatch_idx={microbatch_idx}, now update domain counter to {end_idx} \n"
+                # )
+                self.domain_counters[domain_index] = end_idx
+                # dist.barrier()
 
-            # NOTE: BREAK2
-            # if self.out_of_samples or len(batch) == 0:
-
-            # dist.barrier()
-            num_samples_per_dp_rank = self.batch_size * self.num_microbatches
-            dp_start_idx = self.rank * num_samples_per_dp_rank
-            dp_end_idx = dp_start_idx + num_samples_per_dp_rank
-
-            # assert dp_end_idx <= len(batch)
-
-            # if dp_end_idx > len(batch):
-            #     raise StopIteration(f"dp_end_idx > len(batch), dp_end_idx: {dp_end_idx}, len(batch): {len(batch)}")
-
-            dp_batch = batch[dp_start_idx:dp_end_idx]
-
-            assert len(dp_batch) == self.num_microbatches * self.batch_size
-
-            microbatch_start_idx = self.microbatch_idx * self.batch_size
-            microbatch_end_idx = microbatch_start_idx + self.batch_size
-
-            # assert microbatch_end_idx <= len(dp_batch) -1
-            # if microbatch_end_idx > len(dp_batch):
-            #     raise StopIteration(f"microbatch_end_idx > len(dp_batch) - 1, microbatch_end_idx: {microbatch_end_idx}, len(dp_batch): {len(dp_batch)}")
+            # NOTE: this contains the idxs portion for num_microbatches
+            global_batch_idxs = idxs[start_idx:end_idx]
 
             # dist.barrier()
             # print(
-            #     f"rank: {self.rank}, microbatch_idx: {microbatch_idx}, microbatch_start_idx: {microbatch_start_idx}, microbatch_end_idx: {microbatch_end_idx} \n"
+            #     f"rank: {self.rank}, domain_index: {domain_index}, microbatch_idx={microbatch_idx}, global_batch_idxs: {global_batch_idxs} \n"
             # )
-            microbatch_idxs = dp_batch[microbatch_start_idx:microbatch_end_idx]
-
+            batch.extend(global_batch_idxs)
             # dist.barrier()
-            if self.microbatch_idx == self.num_microbatches - 1:
-                self.microbatch_idx = 0
-            else:
-                self.microbatch_idx += 1
 
-            # self.total_samples_yielded += len(microbatch_idxs) * dp_size
-            self.total_samples_yielded += len(microbatch_idxs) * self.num_replicas
+        # if len(batch) == 0:
+        #     print(
+        #         f"rank: {self.rank}, break2, end_idx: {end_idx}, start_idx: {start_idx}, len(idxs): {len(idxs)} \
+        #         domain_counters: {self.domain_counters}, domain_batch_size: {domain_batch_size} \
+        #         domain_batch_sizes: {self.domain_batch_sizes}, \
+        #         microbatch_idx: {self.microbatch_idx}, domain_index: {domain_index}, total_samples_yielded: {self.total_samples_yielded} \
+        #             expected_total_samples: {self.expected_total_samples} \
+        #         out_of_samples: {self.out_of_samples}, len(batch): {len(batch)} \
+        #     "
+        #     )
 
-            # dist.barrier()
-            # print(f"rank: {self.rank}, microbatch_idx: {microbatch_idx}, yield microbatch_idxs: {microbatch_idxs} \n")
-            return microbatch_idxs
+        #     raise StopIteration
 
-        #     dist.barrier()
+        assert len(batch) == self.num_microbatches * self.batch_size * self.num_replicas
+
+        # NOTE: BREAK2
+        # if self.out_of_samples or len(batch) == 0:
+
+        # dist.barrier()
+        num_samples_per_dp_rank = self.batch_size * self.num_microbatches
+        dp_start_idx = self.rank * num_samples_per_dp_rank
+        dp_end_idx = dp_start_idx + num_samples_per_dp_rank
+
+        # assert dp_end_idx <= len(batch)
+
+        if dp_end_idx > len(batch):
+            raise StopIteration(f"dp_end_idx > len(batch), dp_end_idx: {dp_end_idx}, len(batch): {len(batch)}")
+
+        dp_batch = batch[dp_start_idx:dp_end_idx]
+
+        assert len(dp_batch) == self.num_microbatches * self.batch_size
+
+        microbatch_start_idx = self.microbatch_idx * self.batch_size
+        microbatch_end_idx = microbatch_start_idx + self.batch_size
+
+        # assert microbatch_end_idx <= len(dp_batch) -1
+        if microbatch_end_idx > len(dp_batch):
+            raise StopIteration(
+                f"microbatch_end_idx > len(dp_batch) - 1, microbatch_end_idx: {microbatch_end_idx}, len(dp_batch): {len(dp_batch)}"
+            )
+
+        # dist.barrier()
+        # print(
+        #     f"rank: {self.rank}, microbatch_idx: {microbatch_idx}, microbatch_start_idx: {microbatch_start_idx}, microbatch_end_idx: {microbatch_end_idx} \n"
+        # )
+        microbatch_idxs = dp_batch[microbatch_start_idx:microbatch_end_idx]
+
+        # dist.barrier()
+        if self.microbatch_idx == self.num_microbatches - 1:
+            self.microbatch_idx = 0
+        else:
+            self.microbatch_idx += 1
+
+        # self.total_samples_yielded += len(microbatch_idxs) * dp_size
+        self.total_samples_yielded += len(microbatch_idxs) * self.num_replicas
+
+        # dist.barrier()
+        # print(f"rank: {self.rank}, microbatch_idx: {microbatch_idx}, yield microbatch_idxs: {microbatch_idxs} \n")
+        return microbatch_idxs
 
         # dist.barrier()
 

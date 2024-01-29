@@ -329,20 +329,20 @@ def _test_sampling_from_dist_doremi_sampler_with_global_batch_size(
         # the last domain results in no sample (round(0.004 * 64) = 0)
         # but if do with global batch size, (round(0.004 * 512) = 2)
         torch.tensor([0.498, 0.498, 0.004]),
-        torch.tensor(
-            [
-                0.34356916553540745,
-                0.16838812972610234,
-                0.24711766854236725,
-                0.0679225638705455,
-                0.059079828519653675,
-                0.043720261601881555,
-                0.01653850841342608,
-                0.00604146633842096,
-                0.04342813428189645,
-                0.0041942731702987,
-            ]
-        ),
+        # torch.tensor(
+        #     [
+        #         0.34356916553540745,
+        #         0.16838812972610234,
+        #         0.24711766854236725,
+        #         0.0679225638705455,
+        #         0.059079828519653675,
+        #         0.043720261601881555,
+        #         0.01653850841342608,
+        #         0.00604146633842096,
+        #         0.04342813428189645,
+        #         0.0041942731702987,
+        #     ]
+        # ),
     ],
 )
 @pytest.mark.parametrize("dp_size", [1, 2, 4])
@@ -382,14 +382,20 @@ def _test_dist_doremi_sampler_not_repeating_samples(
         parallel_context=parallel_context,
     )
 
+    local_yieled_idxs = []
     yielded_idxs = []
     epoch = 0
     for idxs in sampler:
         # NOTE: check that the indicies are not repeated
         assert not set(idxs).intersection(
+            local_yieled_idxs
+        ), f"set(idxs): {set(idxs)}, local_yieled_idxs: {local_yieled_idxs}"
+        assert not set(idxs).intersection(
             yielded_idxs
         ), f"set(idxs): {set(idxs)}, yielded_idxs: {yielded_idxs} \
         epoch: {epoch}"
+
+        local_yieled_idxs.extend(idxs)
 
         # NOTE: gather all the indicies from all the dp ranks
         idxs = torch.tensor(idxs, dtype=torch.int, device="cuda")

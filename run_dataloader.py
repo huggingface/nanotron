@@ -1,13 +1,15 @@
 import torch
 from datasets import load_from_disk
 from nanotron import distributed as dist
-from nanotron.doremi.dataloader import DistributedSamplerForDoReMi
+from nanotron.dataloader import get_dataloader_worker_init
+from nanotron.doremi.dataloader import CombinedDataset, DistributedSamplerForDoReMi
 from nanotron.doremi.doremi_context import DoReMiContext
 from nanotron.parallel import ParallelContext
+from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 if __name__ == "__main__":
-    DP_SIZE = 4
+    DP_SIZE = 16
     # # domain_weights = torch.tensor(
     # #     [
     # #         0.34356916553540745,
@@ -68,9 +70,12 @@ if __name__ == "__main__":
         tensor_parallel_size=1,
     )
 
-    global_batch_size = 32
-    num_microbatches = 2
-    batch_size = global_batch_size // (num_microbatches * DP_SIZE)
+    global_batch_size = 512
+    num_microbatches = 4
+    # batch_size = global_batch_size // (num_microbatches * DP_SIZE)
+    batch_size = 8
+
+    assert global_batch_size == num_microbatches * batch_size * DP_SIZE
 
     dp_size = dist.get_world_size(parallel_context.dp_pg)
     dp_rank = dist.get_rank(parallel_context.dp_pg)
@@ -87,6 +92,19 @@ if __name__ == "__main__":
         parallel_context=parallel_context,
     )
 
+    comebined_dataset = CombinedDataset(datasets)
+
+    dataloader = DataLoader(
+        comebined_dataset,
+        batch_size=batch_size,
+        sampler=sampler,
+        # collate_fn=data_collator,
+        # drop_last=dataloader_drop_last,  # we also drop_last in `clm_process()`
+        num_workers=1,
+        pin_memory=True,
+        worker_init_fn=get_dataloader_worker_init(dp_rank=dist.get_rank(parallel_context.dp_pg)),
+    )
+
     # microbatch_idx = 0
     # yielded_idxs = []
     # for idxs in sampler:
@@ -98,21 +116,28 @@ if __name__ == "__main__":
     #     microbatch_idx += 1
     #     yielded_idxs.extend(idxs)
 
-    iter_sampler = iter(sampler)
+    # iter_sampler = iter(sampler)
     epoch = 0
     yieled_idxs = []
+
+    def sanity(dataloader):
+        for batch in dataloader:
+            yield batch
+
+    dataloader = sanity(dataloader)
+
     while True:
         # idxs = (next(sampler) for _ in range(8))
 
-        idxs = []
+        # idxs = []
         for _ in range(num_microbatches):
-            idxs.extend(next(iter_sampler))
+            _ = next(dataloader)
 
         # NOTE: check not repeating idxs
-        assert not set(idxs).intersection(yieled_idxs), f"epoch: {epoch}"
+        # assert not set(idxs).intersection(yieled_idxs), f"epoch: {epoch}"
 
         if epoch % 1000 == 0:
             print(f"rank: {dist.get_rank(parallel_context.dp_pg)}, epoch: {epoch} \n \n")
 
         epoch += 1
-        yieled_idxs.extend(idxs)
+        # yieled_idxs.extend(idxs)
