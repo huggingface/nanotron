@@ -6,7 +6,6 @@ from typing import List, Optional, Tuple
 import torch
 import torch.distributed as dist
 
-from nanotron import optim
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import SlicesPair
 from nanotron.sanity_checks import assert_tensor_synced_across_pg
@@ -73,14 +72,3 @@ def merge_and_shard_tp_tensors(
         buffer[local_slices] = unsharded_buffer[global_slices]
 
     return buffer
-
-
-def check_optim_state_in_sync(optimizer: optim.BaseOptimizer, pg: dist.ProcessGroup):
-    for _, optim_state in sorted(optimizer.state_dict()["state"].items(), key=lambda x: x[0]):
-        for name, tensor in optim_state.items():
-            if name == "step":
-                tensor = tensor.to("cuda")
-
-            assert_tensor_synced_across_pg(
-                tensor=tensor, pg=pg, msg=lambda err: f"{name} are not synced across DP {err}"
-            )

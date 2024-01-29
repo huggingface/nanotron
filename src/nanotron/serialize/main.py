@@ -13,10 +13,9 @@ from nanotron.distributed import get_global_rank
 from nanotron.logging import log_rank
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter
-from nanotron.sanity_checks import assert_tensor_synced_across_pg
+from nanotron.sanity_checks import assert_tensor_synced_across_pg, check_optim_state_in_sync
 from nanotron.serialize.metadata import CheckpointMetadata, load_meta, save_meta
 from nanotron.serialize.optimizer import load_lr_scheduler, load_optimizer, save_lr_scheduler, save_optimizer
-from nanotron.serialize.utils import check_optim_state_in_sync
 from nanotron.serialize.weights import load_weights, save_weights
 
 """

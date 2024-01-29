@@ -18,7 +18,8 @@ from nanotron.optim.zero import (
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter
 from nanotron.serialize.metadata import TensorMetadata
-from nanotron.serialize.utils import ObjectType, check_optim_state_in_sync, merge_and_shard_tp_tensors
+from nanotron.serialize.utils import ObjectType, merge_and_shard_tp_tensors
+from nanotron.sanity_checks import check_optim_state_in_sync
 
 
 # TODO(xrsrke): take rank instead of parallel_context
