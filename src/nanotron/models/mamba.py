@@ -29,6 +29,7 @@ from functools import partial
 
 from nanotron import distributed as dist
 from nanotron import logging
+from nanotron.config.utils_config import cast_str_to_torch_dtype
 from nanotron.config import ParallelismArgs, RecomputeGranularity
 from nanotron.logging import log_rank
 from nanotron.models import NanotronModel
@@ -172,7 +173,7 @@ class MambaModel(nn.Module):
                         "tp_pg": parallel_context.tp_pg,
                         "layer_idx": layer_idx,
                         "device": self.p2p.device,
-                        "dtype": config.dtype,
+                        "dtype": cast_str_to_torch_dtype[config.dtype],
                     },
                     module_input_keys={"hidden_states", "sequence_mask", "residual"},
                     module_output_keys={"hidden_states", "sequence_mask", "residual"},

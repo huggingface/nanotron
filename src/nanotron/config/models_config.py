@@ -37,7 +37,7 @@ class MambaConfig:
     residual_in_fp32: bool = True
     pad_vocab_size_multiple: int = 8
     # ==== Custom ======
-    dtype: torch.dtype = torch.float32
+    dtype: str = "float32"
     rms_norm_eps: float = 1e-5
     pad_token_id: Optional[int] = None
 
@@ -58,7 +58,7 @@ class MambaFastConfig:
     residual_in_fp32: bool = True
     pad_vocab_size_multiple: int = 8
     # ==== Custom ======
-    dtype: torch.dtype = torch.float32
+    dtype: str = "float32"
     rms_norm_eps: float = 1e-5
     pad_token_id: Optional[int] = None
 
