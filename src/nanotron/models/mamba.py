@@ -215,7 +215,6 @@ class MambaModel(nn.Module):
             module_output_keys={"output"},
         )
 
-        # TODO(fmom): call tied weights here
 
     def forward(
         self,
@@ -626,6 +625,13 @@ class MambaForTraining(NanotronModel):
         #     for name, param in model.named_parameters()
         # }, f"Somehow the initialized set of parameters don't match:\n - Expected: { {name for name, _ in model.named_parameters()} }\n - Got: {initialized_parameters}"
 
+    @staticmethod
+    def get_embeddings_lm_head_tied_names():
+        return [
+            "model.token_position_embeddings.pp_block.token_embedding.weight",
+            "model.lm_head.pp_block.weight",
+        ]
+    
     # TODO(fmom): implement get_block_compute_costs
     def get_block_compute_costs(self):
         """Computes the compute cost of each block in the model so that we can do a better job of load balancing."""
