@@ -7,10 +7,11 @@ class DoReMiLossForProxyTraining:
         self.doremi_context = doremi_context
 
     def __call__(self, losses: torch.Tensor, ref_losses: torch.Tensor, domain_idxs: torch.Tensor):
-        assert losses.shape == ref_losses.shape
+        assert losses.shape == ref_losses.shape, "losses and ref_losses must have the same shape"
+        assert (
+            domain_idxs.shape[0] == losses.shape[0]
+        ), "the batch size of domain_idxs must match the batch size of losses"
 
-        # NOTE: per token loss
-        # losses = (logprobs * label_mask).sum(dim=-1) / label_mask.sum(dim=-1)
         # NOTE: sometimes you'll see the domain losses equal to zero.
         # this doesn't mean there are bugs, it just means that in that case,
         # the proxy model is performing better than the reference model
@@ -26,17 +27,11 @@ class DoReMiLossForProxyTraining:
         for i in range(BATCH_SIZE):
             domain_losses[domain_idxs[i]] += excess_losses[i].sum(dim=-1)
 
-        # for i in range(len(excess_losses)):
-        #     domain_losses[domain_idxs[i]] += excess_losses[i]
-
-        # if self.iteration == 4:
-        #     assert 1 == 1
-
         # NOTE: Normalize and smooth domain weights
-        # tokens_per_domain = torch.bincount(domain_idxs, minlength=domain_idxs.max() + 1)
-        # tokens_per_domain = torch.bincount(domain_idxs, minlength=domain_idxs.max() + 1)
         tokens_per_domain = torch.bincount(domain_idxs, minlength=N_DOMAINS)
         normalized_domain_losses = domain_losses / tokens_per_domain
+        # NOTE: if the domain loss is zero, then the normalized domain loss is zero
+        normalized_domain_losses[torch.isnan(normalized_domain_losses)] = 0.0
 
         # NOTE: α_t′ ← α_t-1 exp(η λ_t)
         updated_domain_weights = self.doremi_context.domain_weights * torch.exp(

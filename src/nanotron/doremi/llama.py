@@ -201,27 +201,14 @@ class LLaMaForInference(BaseLLaMa):
             input_ids=input_ids,
             input_mask=input_mask,
         )
-
-        # sharded_logits = sharded_logits.transpose(0, 1).contiguous()  # [batch size, seq_length, vocab_size]
-        # logprobs = sharded_cross_entropy(
-        #     sharded_logits,
-        #     label_ids.transpose(0, 1).contiguous(),
-        #     group=self.parallel_context.tp_pg,
-        #     dtype=torch.float,
-        # ).transpose(0, 1)
-        # losses = (logprobs * label_mask).sum(dim=-1) / label_mask.sum(dim=-1)
-
         loss = sharded_cross_entropy(
             sharded_logits,
             label_ids.transpose(0, 1).contiguous(),
             group=self.parallel_context.tp_pg,
             dtype=torch.float,
         ).transpose(0, 1)
-        # TODO @thomasw21: It's unclear what kind of normalization we want to do.
-        # lm_loss = masked_mean(loss, label_mask, dtype=torch.float)
-        per_token_losses = loss * label_mask
-
-        return {"losses": per_token_losses}
+        # per_token_losses = loss * label_mask
+        return {"losses": loss}
 
 
 @torch.jit.script
@@ -246,14 +233,6 @@ class DoReMiLoss(nn.Module):
         ref_losses: torch.Tensor,
         # doremi_context: DoReMiContext,
     ) -> Dict[str, torch.Tensor]:
-        # self.iteration += 1
-        # logprobs = sharded_cross_entropy(
-        #     sharded_logits,
-        #     label_ids.transpose(0, 1).contiguous(),
-        #     group=self.parallel_context.tp_pg,
-        #     dtype=torch.float,
-        # ).transpose(0, 1)
-
         loss = sharded_cross_entropy(
             sharded_logits,
             label_ids.transpose(0, 1).contiguous(),
@@ -262,36 +241,8 @@ class DoReMiLoss(nn.Module):
         ).transpose(0, 1)
         lm_loss = masked_mean(loss, label_mask, dtype=torch.float)
 
-        per_token_losses = loss * label_mask
-        excess_losses, domain_losses, domain_weights = self.doremi_loss(per_token_losses, ref_losses, domain_idxs)
-
-        # # NOTE: per token loss
-        # losses = (logprobs * label_mask).sum(dim=-1) / label_mask.sum(dim=-1)
-        # # NOTE: sometimes you'll see the domain losses equal to zero.
-        # # this doesn't mean there are bugs, it just means that in that case,
-        # # the proxy model is performing better than the reference model
-        # # => clamp(lower loss - higher loss, 0) = clamp(negative, 0) = 0.
-        # excess_losses = (losses - ref_losses).clamp(min=0)
-
-        # # NOTE: Calculate total loss per domain
-        # domain_idxs = domain_idxs.view(-1)
-        # domain_losses = torch.zeros(domain_idxs.max() + 1, device="cuda")
-        # for i in range(len(excess_losses)):
-        #     domain_losses[domain_idxs[i]] += excess_losses[i]
-
-        # # if self.iteration == 4:
-        # #     assert 1 == 1
-
-        # # NOTE: Normalize and smooth domain weights
-        # tokens_per_domain = torch.bincount(domain_idxs, minlength=domain_idxs.max() + 1)
-        # normalized_domain_losses = domain_losses / tokens_per_domain
-
-        # # NOTE: α_t′ ← α_t-1 exp(η λ_t)
-        # updated_domain_weights = doremi_context.domain_weights * torch.exp(
-        #     doremi_context.step_size * normalized_domain_losses
-        # )
-        # smooth_domain_weights = self._normalize_domain_weights(updated_domain_weights, doremi_context.smoothing_param)
-        # doremi_context.domain_weights = smooth_domain_weights.detach()
+        # per_token_losses = loss * label_mask
+        excess_losses, domain_losses, domain_weights = self.doremi_loss(loss, ref_losses, domain_idxs)
 
         return {
             "loss": lm_loss,
@@ -299,17 +250,6 @@ class DoReMiLoss(nn.Module):
             "domain_losses": domain_losses,
             "domain_weights": domain_weights,
         }
-
-    # def _normalize_domain_weights(self, weights: torch.Tensor, smoothing_param) -> torch.Tensor:
-    #     """
-    #     Renormalize and smooth domain weights.
-    #     alpha_t = (1 - c) * (alpha_t' / sum(i=1 to k of alpha_t'[i])) + c * u
-    #     Algorithm 1 DoReMi domain reweighting (Step 2).
-    #     """
-    #     NUM_DOMAINS = weights.shape[0]
-    #     uniform_weights = torch.ones(NUM_DOMAINS, device=weights.device) / NUM_DOMAINS
-    #     normalized_weight = (1 - smoothing_param) * weights / weights.sum(dim=-1) + (smoothing_param * uniform_weights)
-    #     return normalized_weight
 
 
 class LlamaForDoReMiTraining(BaseLLaMa):

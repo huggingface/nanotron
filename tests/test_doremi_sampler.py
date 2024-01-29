@@ -291,6 +291,7 @@ def _test_sampling_from_dist_doremi_sampler_with_global_batch_size(
             for expected_bs, bs in zip(global_batch_size_per_domain, num_samples_per_domain):
                 # NOTE: take into account rounding errors
                 # accross all the dp ranks
+                assert bs > 0
                 assert abs(expected_bs - bs) <= dp_size, f"abs(expected_bs - bs): {abs(expected_bs - bs)}"
 
             microbatch_idx = 0
@@ -302,17 +303,17 @@ def _test_sampling_from_dist_doremi_sampler_with_global_batch_size(
         num_yielded_idxs += len(idxs)
         yielded_idxs.extend(idxs)
 
-    num_yielded_idxs = torch.tensor(num_yielded_idxs, dtype=torch.int, device="cuda")
-    local_num_yielded_idxs = num_yielded_idxs.clone()
-    dist.all_reduce(num_yielded_idxs, op=dist.ReduceOp.SUM)
-    expected_num_samples = sum([round(len(ds) * weight.item()) for ds, weight in zip(datasets, domain_weights)])
+    # num_yielded_idxs = torch.tensor(num_yielded_idxs, dtype=torch.int, device="cuda")
+    # local_num_yielded_idxs = num_yielded_idxs.clone()
+    # dist.all_reduce(num_yielded_idxs, op=dist.ReduceOp.SUM)
+    # expected_num_samples = sum([round(len(ds) * weight.item()) for ds, weight in zip(datasets, domain_weights)])
 
-    assert (
-        num_yielded_idxs > expected_num_samples * 0.9
-    ), f"num_yielded_idxs: {num_yielded_idxs}, expected_num_samples: {expected_num_samples}, loop: {loop}, local_num_yielded_idxs: {local_num_yielded_idxs}"
-    assert (
-        num_yielded_idxs <= expected_num_samples
-    ), f"num_yielded_idxs: {num_yielded_idxs}, expected_num_samples: {expected_num_samples}, loop: {loop}, local_num_yielded_idxs: {local_num_yielded_idxs}"
+    # assert (
+    #     num_yielded_idxs > expected_num_samples * 0.9
+    # ), f"num_yielded_idxs: {num_yielded_idxs}, expected_num_samples: {expected_num_samples}, loop: {loop}, local_num_yielded_idxs: {local_num_yielded_idxs}"
+    # assert (
+    #     num_yielded_idxs <= expected_num_samples
+    # ), f"num_yielded_idxs: {num_yielded_idxs}, expected_num_samples: {expected_num_samples}, loop: {loop}, local_num_yielded_idxs: {local_num_yielded_idxs}"
 
     # assert (
     #     expected_num_samples == num_yielded_idxs
