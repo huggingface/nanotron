@@ -609,7 +609,9 @@ class DistributedTrainer:
         parallel_context = self.parallel_context
 
         parallel_config = config.parallelism
-        make_ddp = not (config.optimizer.accumulate_grad_in_fp32 and config.optimizer.zero_stage > 0)
+        make_ddp = parallel_context.data_parallel_size > 1 and not (
+            config.optimizer.accumulate_grad_in_fp32 and config.optimizer.zero_stage > 0
+        )
 
         # Build model and set pp ranks
         model = build_model(
