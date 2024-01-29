@@ -61,13 +61,13 @@ model:
     bos_token_id: 1
     eos_token_id: 2
     hidden_act: silu
-    hidden_size: 1024
+    hidden_size: 64
     initializer_range: 0.02
-    intermediate_size: 4096
+    intermediate_size: 256
     is_llama_config: true
     max_position_embeddings: 256
     num_attention_heads: 8
-    num_hidden_layers: 10
+    num_hidden_layers: 1
     num_key_value_heads: 4
     pad_token_id: null
     pretraining_tp: 1

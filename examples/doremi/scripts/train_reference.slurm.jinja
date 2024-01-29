@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=train_referece_3m_mc4
-#SBATCH --nodes=3
+#SBATCH --nodes=4
 #SBATCH --ntasks-per-node=1          # crucial - only 1 task per dist per node!
 #SBATCH --mem-per-cpu=11G # This is essentially 1.1T / 96
 #SBATCH --cpus-per-task=96
@@ -20,6 +20,7 @@ export XDG_CACHE_HOME=/fsx/phuc/.cache/huggingface_cache
 REPO=/fsx/phuc/projects/nanotron
 TRAINING_SCRIPT=$REPO/examples/doremi/train_reference.py
 CONFIG_FILE=$REPO/examples/doremi/config_100m_llama.yaml
+# CONFIG_FILE=$REPO/examples/doremi/config_100m_for_testing.yaml
 
 GPUS_PER_NODE=8
 NNODES=$SLURM_NNODES
