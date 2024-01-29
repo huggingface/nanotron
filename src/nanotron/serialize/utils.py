@@ -4,9 +4,11 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 import torch
+import torch.distributed as dist
 
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import SlicesPair
+from nanotron.sanity_checks import assert_tensor_synced_across_pg
 from nanotron.serialize.metadata import TensorMetadata
 
 
