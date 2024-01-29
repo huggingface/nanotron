@@ -19,7 +19,8 @@ class DoReMiLossForProxyTraining:
 
         # NOTE: Calculate total loss per domain
         domain_idxs = domain_idxs.view(-1)
-        domain_losses = torch.zeros(domain_idxs.max() + 1, device="cuda")
+        N_DOMAINS = self.doremi_context.num_domains
+        domain_losses = torch.zeros(N_DOMAINS, device="cuda")
 
         BATCH_SIZE = excess_losses.shape[0]
         for i in range(BATCH_SIZE):
@@ -32,7 +33,9 @@ class DoReMiLossForProxyTraining:
         #     assert 1 == 1
 
         # NOTE: Normalize and smooth domain weights
-        tokens_per_domain = torch.bincount(domain_idxs, minlength=domain_idxs.max() + 1)
+        # tokens_per_domain = torch.bincount(domain_idxs, minlength=domain_idxs.max() + 1)
+        # tokens_per_domain = torch.bincount(domain_idxs, minlength=domain_idxs.max() + 1)
+        tokens_per_domain = torch.bincount(domain_idxs, minlength=N_DOMAINS)
         normalized_domain_losses = domain_losses / tokens_per_domain
 
         # NOTE: α_t′ ← α_t-1 exp(η λ_t)
