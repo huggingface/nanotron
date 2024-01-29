@@ -19,6 +19,7 @@ from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter
 from nanotron.serialize.metadata import TensorMetadata
 from nanotron.serialize.utils import ObjectType, merge_and_shard_tp_tensors
+from nanotron.sanity_checks import check_optim_state_in_sync
 
 
 # TODO(xrsrke): take rank instead of parallel_context
@@ -178,13 +179,14 @@ def load_optimizer(
 
         model_state_dict = model.state_dict()
         new_optim_state_dict = optimizer.state_dict()
-        OPTIMIZER_STATE_NAMES = ckp_sharded_optim_states[(0, 0)]["state"][0].keys() - ["step"]
+        OPTIMIZER_STATE_NAMES = sorted(ckp_sharded_optim_states[(0, 0)]["state"][0].keys() - ["step"])
         # NOTE: because we can only resume training with the same optimizer type
         # (0, 0) = (pp_rank, tp_rank)
         # NOTE: also we don't merge "step" because it's just a scalar
 
+        param_names = sorted(model_state_dict.items(), key=lambda x: x[0])
         for param_name, _ in tqdm(
-            sorted(model_state_dict.items(), key=lambda x: x[0]),
+            param_names,
             disable=dist.get_rank(parallel_context.world_pg) != 0,
             desc="Topology-agnostic optimizer loading",
         ):
@@ -276,6 +278,9 @@ def load_optimizer(
                     state_dict["state"][param_index][state_name] = sliced_tensor
 
     optimizer.load_state_dict(state_dict)
+
+    if not optimizer.inherit_from(optim.ZeroDistributedOptimizer):
+        check_optim_state_in_sync(optimizer, parallel_context.dp_pg)
 
 
 def load_lr_scheduler(

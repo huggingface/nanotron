@@ -24,15 +24,15 @@ from flash_attn.flash_attn_interface import (
 )
 from flash_attn.layers.rotary import RotaryEmbedding as FlashRotaryEmbedding
 from torch import nn
+from transformers import LlamaConfig
+from transformers.activations import ACT2FN
 
 from nanotron import distributed as dist
 from nanotron import logging
-from nanotron.config import LlamaConfig, ParallelismArgs, RecomputeGranularity
-from nanotron.generation.generate_store import AttachableStore
+from nanotron.config import ParallelismArgs, RecomputeGranularity
+from nanotron.nn.layer_norm import TritonRMSNorm
 from nanotron.logging import log_rank
 from nanotron.models import NanotronModel
-from nanotron.nn.activations import ACT2FN
-from nanotron.nn.layer_norm import TritonRMSNorm
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter
 from nanotron.parallel.pipeline_parallel.block import (
@@ -49,6 +49,7 @@ from nanotron.parallel.tensor_parallel.nn import (
 )
 from nanotron.random import RandomStates
 from nanotron.utils import checkpoint_method
+from nanotron.generation.generate_store import AttachableStore
 
 logger = logging.get_logger(__name__)
 
@@ -102,12 +103,7 @@ class RotaryEmbedding(nn.Module):
             self.end *= 2
             self._initialized_buffer = False
         if self._initialized_buffer is False:
-            log_rank(
-                f"Initializing rotary embeddings with end={self.end}",
-                logger=logger,
-                level=logging.DEBUG,
-                rank=0,
-            )
+            print(f"Initializing rotary embeddings with end={self.end}")
             self.init_rotary_embeddings()
         dtype = x.dtype
         assert inner_dim % 2 == 0
@@ -389,12 +385,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             # Double check that we use store only at inference time
             assert key_states.requires_grad is False
             assert value_states.requires_grad is False
-            log_rank(
-                "Using store",
-                logger=logger,
-                level=logging.DEBUG,
-                rank=0,
-            )
+            print("Using store")
             if "position_offsets" in store:
                 old_position_offsets = store["position_offsets"]
                 position_ids = old_position_offsets[:, None] + sequence_mask
@@ -403,6 +394,8 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             position_offsets = position_ids[:, -1]
 
             # Compute rotary embeddings
+            # Note: keep track of old rotary embedding end to check if we need to enlarge k_cache and v_cache
+            old_rotary_embed_end = self.rotary_embedding.end
             query_states = self.rotary_embedding(query_states, position_ids=position_ids)
             key_states = self.rotary_embedding(key_states, position_ids=position_ids)
 
@@ -413,7 +406,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                 # but [ False, False, False, False,  True,  True,  False,  False,  True,  True] is not (can't mask in the middle of sequence)
                 assert ~(
                     sequence_mask[:, :-1] & (~sequence_mask[:, 1:])  # True is never followed by False
-                ).any(), f"Can't mask in the middle of sequence, please use USE_FAST=0 instead.\nGot sequence_mask: {sequence_mask}"
+                ).any(), "Can't mask in the middle of sequence, please make sure that pads are at the left of the sequence if existing"
 
                 # preallocate k_cache, v_cache to self.prefill_kv_len
                 k_cache = torch.zeros(
@@ -468,6 +461,50 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                 # Subsequent inference iterations (q_length=1)
                 k_cache = store["key"]
                 v_cache = store["value"]
+
+                # NOTE(fmom): According to flash_attn_with_kvcache, "If you pass in k / v, you must make sure that the cache is large enough to hold the new values"
+                # Since rotary embedding has changed (to enable larger context), we need to enlarge k_cache and v_cache
+                if self.rotary_embedding.end > old_rotary_embed_end:
+                    k_cache = torch.cat(
+                        [
+                            k_cache,
+                            torch.zeros(
+                                (
+                                    batch_size,
+                                    self.rotary_embedding.end - old_rotary_embed_end,
+                                    self.n_local_kv_heads,
+                                    self.d_qk,
+                                ),
+                                dtype=query_states.dtype,
+                                device=query_states.device,
+                            ),
+                        ],
+                        dim=1,
+                    )
+
+                    v_cache = torch.cat(
+                        [
+                            v_cache,
+                            torch.zeros(
+                                (
+                                    batch_size,
+                                    self.rotary_embedding.end - old_rotary_embed_end,
+                                    self.n_local_kv_heads,
+                                    self.d_v,
+                                ),
+                                dtype=query_states.dtype,
+                                device=query_states.device,
+                            ),
+                        ],
+                        dim=1,
+                    )
+
+                assert (
+                    k_cache.shape[1] == self.rotary_embedding.end
+                ), f"Cache size {k_cache.shape[1]} is smaller than rotary embedding end {self.rotary_embedding.end}"
+                assert (
+                    v_cache.shape[1] == self.rotary_embedding.end
+                ), f"Cache size {v_cache.shape[1]} is smaller than rotary embedding end {self.rotary_embedding.end}"
 
                 # [batch_size, seq_length, num_heads, d_qk]
                 query_states = query_states.view(

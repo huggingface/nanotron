@@ -22,12 +22,12 @@ We support the following:
 Requirements:
  - Python >= 3.10
  - PyTorch >= 2.0.0
- - Flash-Attention >= 2.4.2
+ - Flash-Attention >= 2.5.0
 
 To install (in a new env):
 ```bash
 pip install torch
-pip install packaging; pip install "flash-attn>=2.4.2"  --no-build-isolation
+pip install packaging; pip install "flash-attn>=2.5.0"  --no-build-isolation
 git clone git@github.com:huggingface/nanotron.git
 cd nanotron
 pip install -e .
@@ -65,6 +65,17 @@ For the linting:
 pre-commit install
 pre-commit run --config .pre-commit-config.yaml --all-files
 ```
+
+Features we would like to add:
+- [ ] Support `torch.compile`
+- [ ] Support `torch.distributed.rpc`
+- [ ] More optimized kernels
+- [ ] Support Zero3
+- [ ] Other PP schedules (such as Interleaved 1f1b...)
+- [ ] Ring attention / Sequence Parallelism
+- [ ] 3D Parallel MoEs
+- [ ] Supporting more architectures (Mamba..)
+- [ ] ...
 
 # Credits
 
