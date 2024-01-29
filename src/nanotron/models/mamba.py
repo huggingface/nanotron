@@ -173,7 +173,7 @@ class MambaModel(nn.Module):
                         "tp_pg": parallel_context.tp_pg,
                         "layer_idx": layer_idx,
                         "device": self.p2p.device,
-                        "dtype": cast_str_to_torch_dtype[config.dtype],
+                        "dtype": cast_str_to_torch_dtype(config.dtype),
                     },
                     module_input_keys={"hidden_states", "sequence_mask", "residual"},
                     module_output_keys={"hidden_states", "sequence_mask", "residual"},
