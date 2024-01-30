@@ -829,9 +829,6 @@ class DistributedSamplerForDoReMi(DistributedSampler):
 
     def setup(self):
         domain_indices = []
-        domain_weights = self.doremi_context.domain_weights
-        # print("------------------ \n")
-        # dist.barrier()
         for i, dataset in enumerate(self.datasets):
             # dataset_partition_size = len(dataset) // self.num_replicas
             # num_samples = self._round_up_if_fractional_part_greater_than_threshold(dataset_partition_size * domain_weights[i].item())
@@ -844,6 +841,13 @@ class DistributedSamplerForDoReMi(DistributedSampler):
             global_indices = local_indices + self.offsets[i]
             domain_indices.append(global_indices)
 
+        self.num_samples_per_global_step = self.batch_size * self.num_microbatches * self.num_replicas
+        self.domain_indices = domain_indices
+        self.expected_total_samples = sum([len(d) for d in domain_indices])
+
+        # print("------------------ \n")
+        # dist.barrier()
+
         # NOTE: in some cases, the weight of a domain is too small
         # so with a small batch size like 64, the number of samples based on the weight
         # would be smaller than 1 => no samples from that domain
@@ -855,8 +859,16 @@ class DistributedSamplerForDoReMi(DistributedSampler):
         #         domain_batch_sizes,
         #         target_total_size=num_samples_per_replicas,
         #     )
+        # self._recompute_domain_batch_sizes(
+        #     domain_weights=self.doremi_context.domain_weights,
+        #     num_samples_per_global_step=self.num_samples_per_global_step,
+        # )
+        return self
 
-        num_samples_per_global_step = self.batch_size * self.num_microbatches * self.num_replicas
+    def __iter__(self):
+        return self
+
+    def _recompute_domain_batch_sizes(self, domain_weights, num_samples_per_global_step):
         domain_batch_sizes = [round(num_samples_per_global_step * weight.item()) for weight in domain_weights]
         if sum(domain_batch_sizes) != num_samples_per_global_step:
             # NOTE: randomly add a sample to round it up
@@ -866,13 +878,7 @@ class DistributedSamplerForDoReMi(DistributedSampler):
             )
 
         # assert all(x > 0 for x in domain_batch_sizes), "There is a domain with 0 samples per global batch"
-        self.domain_batch_sizes = domain_batch_sizes
-        self.domain_indices = domain_indices
-        self.expected_total_samples = sum([len(d) for d in domain_indices])
-        return self
-
-    def __iter__(self):
-        return self
+        return domain_batch_sizes
 
     def __next__(self):
         # microbatch_idx = 0
@@ -885,12 +891,17 @@ class DistributedSamplerForDoReMi(DistributedSampler):
         # expected_total_samples = sum(
         #     [round(len(d) * weight.item()) for d, weight in zip(domain_indices, domain_weights)]
         # )
+        # domain_weights = self.doremi_context.domain_weights
+        domain_batch_sizes = self._recompute_domain_batch_sizes(
+            domain_weights=self.doremi_context.domain_weights,
+            num_samples_per_global_step=self.num_samples_per_global_step,
+        )
 
         if self.total_samples_yielded >= self.expected_total_samples:
             raise StopIteration
 
         batch = []
-        for domain_index, (idxs, domain_batch_size) in enumerate(zip(self.domain_indices, self.domain_batch_sizes)):
+        for domain_index, (idxs, domain_batch_size) in enumerate(zip(self.domain_indices, domain_batch_sizes)):
             start_idx = self.domain_counters[domain_index]
             end_idx = start_idx + domain_batch_size
             # dist.barrier()
@@ -900,7 +911,7 @@ class DistributedSamplerForDoReMi(DistributedSampler):
                 # self.out_of_samples = True
                 print(
                     f"rank: {self.rank}, break1, end_idx: {end_idx}, start_idx: {start_idx}, len(idxs): {len(idxs)} \
-                    domain_batch_sizes: {self.domain_batch_sizes}, \
+                    domain_batch_sizes: {domain_batch_sizes}, \
                     domain_counters: {self.domain_counters}, domain_batch_size: {domain_batch_size} \
                     microbatch_idx: {self.microbatch_idx}, domain_index: {domain_index}, total_samples_yielded: {self.total_samples_yielded} \
                         expected_total_samples: {self.expected_total_samples} \
@@ -1011,6 +1022,8 @@ class DistributedSamplerForDoReMi(DistributedSampler):
 
     def reset(self):
         """Reset the state of the sampler for a new epoch."""
+        self.setup()
+
         self.microbatch_idx = 0
         self.domain_counters = [0 for _ in self.datasets]
         self.total_samples_yielded = 0
