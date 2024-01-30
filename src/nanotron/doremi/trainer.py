@@ -22,13 +22,25 @@ from nanotron.trainer import DistributedTrainer
 from nanotron.utils import init_method_normal, scaled_init_method_normal
 from torch.nn.parallel import DistributedDataParallel
 
+import wandb
+
 logger = logging.get_logger(__name__)
 
 
 class DoReMiTrainer(DistributedTrainer):
-    def __init__(self, domain_weights: torch.Tensor, domain_keys: List[str], *args, **kwargs):
+    def __init__(
+        self, domain_weights: torch.Tensor, domain_keys: List[str], ref_checkpoint_path: str, *args, **kwargs
+    ):
         # NOTE: save the initial domain_weights
-        self.doremi_context = DoReMiContext(domain_weights, domain_keys, is_proxy=True)
+        self.doremi_context = DoReMiContext(
+            domain_weights,
+            domain_keys,
+            is_proxy=True,
+            step_size=1,
+            smoothing_param=1e-3,
+        )
+        # TODO: add randomly initialize reference model
+        self.ref_checkpoint_path = ref_checkpoint_path
         super().__init__(*args, **kwargs)
 
     def init_model(self) -> Union[NanotronModel, DistributedDataParallel]:
@@ -111,9 +123,9 @@ class DoReMiTrainer(DistributedTrainer):
             self.param_shard_metadata = load_weights(
                 model=normalized_model, parallel_context=self.parallel_context, root_folder=self.init_checkpoint_path
             )
-            load_weights(
-                model=self.ref_model, parallel_context=self.parallel_context, root_folder=self.init_checkpoint_path
-            )
+            # load_weights(
+            #     model=self.ref_model, parallel_context=self.parallel_context, root_folder=self.init_checkpoint_path
+            # )
             reloaded_from_checkpoint = True
         if not reloaded_from_checkpoint:
             log_rank("No checkpoint path provided.", logger=logger, level=logging.INFO)
@@ -125,11 +137,11 @@ class DoReMiTrainer(DistributedTrainer):
                     root_folder=self.config.model.init_method.path,
                 )
 
-                load_weights(
-                    model=self.ref_model,
-                    parallel_context=self.parallel_context,
-                    root_folder=self.config.model.init_method.path,
-                )
+                # load_weights(
+                #     model=self.ref_model,
+                #     parallel_context=self.parallel_context,
+                #     root_folder=self.config.model.init_method.path,
+                # )
             elif isinstance(self.config.model.init_method, RandomInit):
                 # Initialize model randomly
                 normalized_model.init_model_randomly(
@@ -155,6 +167,26 @@ class DoReMiTrainer(DistributedTrainer):
                     dist.all_reduce(param, op=dist.ReduceOp.AVG, group=group)
             else:
                 raise ValueError(f"Unsupported {self.config.model.init_method}")
+
+        if self.ref_checkpoint_path is not None:
+            normalized_ref_model = (
+                self.ref_model.module
+                if isinstance(self.ref_model.module, DistributedDataParallel)
+                else self.ref_model.module
+            )
+
+            log_rank(
+                f"Loading weights from {self.ref_checkpoint_path} for reference model",
+                logger=logger,
+                level=logging.INFO,
+                rank=0,
+            )
+            load_weights(
+                model=normalized_ref_model,
+                parallel_context=self.parallel_context,
+                root_folder=self.ref_checkpoint_path,
+            )
+            # reloaded_from_checkpoint = True
 
         return model
 
@@ -238,12 +270,20 @@ class DoReMiTrainer(DistributedTrainer):
             today = datetime.datetime.now()
             return today.strftime("%d/%m/%Y_%H:%M:%S")
 
-        # if dist.get_rank(self.parallel_context.world_pg) == 0:
-        #     wandb.init(
-        #         project="nanotron",
-        #         name=f"{get_time_name()}_doremi_proxy_training",
-        #         config={"version": 1, "nanotron_config": self.config.as_dict()},
-        #     )
+        if dist.get_rank(self.parallel_context.world_pg) == 0:
+            wandb.init(
+                project="nanotron",
+                name=f"{get_time_name()}_doremi_proxy_training",
+                config={
+                    "version": 1,
+                    "nanotron_config": self.config.as_dict(),
+                    "doremi": {
+                        "smoothing_param": self.doremi_context.smoothing_param,
+                        "step_size": self.doremi_context.step_size,
+                        "domain_keys": self.doremi_context.domain_keys,
+                    },
+                },
+            )
 
     def train_step_logs(
         self,
@@ -283,20 +323,20 @@ class DoReMiTrainer(DistributedTrainer):
             group=self.parallel_context.dp_pg,
         )
 
-        # if dist.get_rank(self.parallel_context.world_pg) == 0:
-        #     weight_logs = {
-        #         f"weight_domain_{self.doremi_context.get_domain_name(i)}": weight
-        #         for i, weight in enumerate(domain_weights)
-        #     }
-        #     loss_logs = {
-        #         f"loss_domain_{self.doremi_context.get_domain_name(i)}": loss for i, loss in enumerate(domain_losses)
-        #     }
-        #     wandb.log(
-        #         {
-        #             **weight_logs,
-        #             **loss_logs,
-        #             "loss_avg": loss_avg.cpu().detach().numpy(),
-        #             # "lm_loss": outputs[0]["lm_loss"].cpu().detach().numpy(),
-        #             "step": self.iteration_step,
-        #         }
-        #     )
+        if dist.get_rank(self.parallel_context.world_pg) == 0:
+            weight_logs = {
+                f"weight_domain_{self.doremi_context.get_domain_name(i)}": weight
+                for i, weight in enumerate(domain_weights)
+            }
+            loss_logs = {
+                f"loss_domain_{self.doremi_context.get_domain_name(i)}": loss for i, loss in enumerate(domain_losses)
+            }
+            wandb.log(
+                {
+                    **weight_logs,
+                    **loss_logs,
+                    "loss_avg": loss_avg.cpu().detach().numpy(),
+                    # "lm_loss": outputs[0]["lm_loss"].cpu().detach().numpy(),
+                    "step": self.iteration_step,
+                }
+            )

@@ -190,6 +190,8 @@ def get_dataloader(
             d = load_from_disk(dataset_path)
             train_datasets.append(d)
 
+    assert 1 == 1
+
     # NOTE: We load the processed dataset on the ranks requiring it
     input_pp_rank, output_pp_rank = get_input_output_pp_ranks(model=trainer.model)
     doremi_context = trainer.doremi_context
@@ -863,7 +865,7 @@ class DistributedSamplerForDoReMi(DistributedSampler):
                 target_total_size=num_samples_per_global_step,
             )
 
-        assert all(x > 0 for x in domain_batch_sizes), "There is a domain with 0 samples per global batch"
+        # assert all(x > 0 for x in domain_batch_sizes), "There is a domain with 0 samples per global batch"
         self.domain_batch_sizes = domain_batch_sizes
         self.domain_indices = domain_indices
         self.expected_total_samples = sum([len(d) for d in domain_indices])

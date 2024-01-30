@@ -9,7 +9,7 @@ class DoReMiContext:
     domain_weights: torch.Tensor
     domain_keys: List[str]
     is_proxy: bool
-    step_size: float = 0.1
+    step_size: float = 1
     smoothing_param: float = 1e-3
 
     @property

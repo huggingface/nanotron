@@ -34,7 +34,7 @@ class DoReMiLossForProxyTraining:
         SEQ_LEN = losses.shape[1]
         normalized_domain_losses = domain_losses / (samples_per_domain * SEQ_LEN)
         # NOTE: if the domain loss is zero, then the normalized domain loss is zero
-        # normalized_domain_losses[torch.isnan(normalized_domain_losses)] = 0.0
+        normalized_domain_losses[torch.isnan(normalized_domain_losses)] = 0.0
 
         # NOTE: α_t′ ← α_t-1 exp(η λ_t)
         updated_domain_weights = self.doremi_context.domain_weights * torch.exp(
