@@ -78,7 +78,7 @@ class LoggingArgs:
 
 @dataclass
 class PretrainDatasetsArgs:
-    hf_dataset_or_datasets: Union[str, list, dict]
+    hf_dataset_mixer: Union[str, list, dict]
     hf_dataset_splits: Optional[Union[str, list]] = None
     hf_dataset_config_name: Optional[str] = None
     dataset_processing_num_proc_per_process: Optional[int] = 1
@@ -364,7 +364,7 @@ class Config:
         return serialize(self)
 
 
-def get_config_from_file(config_path: str, config_class: Type[Config] = Config) -> Config:
+def get_config_from_file(config_path: str, config_class: Type[Config] = Config, is_run_generate: bool = False) -> Config:
     """Get a config objet from a file (python or YAML)
 
     Args:
@@ -377,6 +377,22 @@ def get_config_from_file(config_path: str, config_class: Type[Config] = Config) 
     with open(config_path) as f:
         args = yaml.load(f, Loader=SafeLoader)
 
+    # To run generate with Nanotron, we have to remove unused arguments in the config (s3 etc...)
+    if is_run_generate:
+        # Remove BRRR dataclasses that are not used in Nanotron
+        exclude_keys = set(args.keys()).difference(set(config_class.__dataclass_fields__.keys()))
+        for key in exclude_keys:
+            args.pop(key)
+            print(f"Removed '{key}' dataclass from config")
+            
+        # Remove keys from each Brrr dataclasses that are not used in Nanotron (i.e: is_brrr_data)
+        for key, value in args.items():
+            if isinstance(value, dict):
+                exclude_keys = set(value.keys()).difference(set(config_class.__dataclass_fields__[key].type.__dataclass_fields__.keys()))
+                for key2 in exclude_keys:
+                    args[key].pop(key2)
+                    print(f"Removed '{key2}' from '{key}' dataclass from config")
+    
     print(args)
     # Make a nice dataclass from our yaml
     try:
