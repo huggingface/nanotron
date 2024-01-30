@@ -281,6 +281,7 @@ class DoReMiTrainer(DistributedTrainer):
                         "smoothing_param": self.doremi_context.smoothing_param,
                         "step_size": self.doremi_context.step_size,
                         "domain_keys": self.doremi_context.domain_keys,
+                        "initial_domain_weights": self.doremi_context.domain_weights.cpu().detach().numpy(),
                     },
                 },
             )

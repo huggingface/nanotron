@@ -221,7 +221,7 @@ class DoReMiLoss(nn.Module):
     def __init__(self, parallel_context: ParallelContext, doremi_context: DoReMiContext):
         super().__init__()
         self.parallel_context = parallel_context
-        self.doremi_loss = DoReMiLossForProxyTraining(doremi_context)
+        self.doremi_loss = DoReMiLossForProxyTraining(doremi_context, parallel_context)
         self.iteration = 0
 
     def forward(
