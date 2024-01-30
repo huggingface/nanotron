@@ -870,6 +870,13 @@ class DistributedSamplerForDoReMi(DistributedSampler):
 
     def _recompute_domain_batch_sizes(self, domain_weights, num_samples_per_global_step):
         domain_batch_sizes = [round(num_samples_per_global_step * weight.item()) for weight in domain_weights]
+
+        # NOTE: in some cases, the weight of a domain is too small
+        # resulting in a domain with 0 samples per global batch
+        # => zero loss for that domain => we no longer update the weights of that domain
+        # so we add a sample to that domain
+        domain_batch_sizes = [1 if x == 0 else x for x in domain_batch_sizes]
+
         if sum(domain_batch_sizes) != num_samples_per_global_step:
             # NOTE: randomly add a sample to round it up
             domain_batch_sizes = self._round_up_domain_batch_sizes(
@@ -1007,9 +1014,23 @@ class DistributedSamplerForDoReMi(DistributedSampler):
         while total_batch_size != target_total_size:
             diff = target_total_size - total_batch_size
             # NOTE: Randomly select a domain to increase the batch size
-            selected_domain = torch.randint(
-                low=0, high=len(domain_batch_size), size=(1,), generator=self.generator, device="cpu"
+            # selected_domain = torch.randint(
+            #     low=0, high=len(domain_batch_size), size=(1,), generator=self.generator, device="cpu"
+            # ).item()
+
+            # NOTE: we don't increase or decrease domains with 0 samples or 1 samples
+            # this leads to a problem where a domain with 0 samples will never get any samples
+            # valid_indices = torch.where((domain_batch_size != 0) & (domain_batch_size != 1))[0]
+            # selected_domain = torch.randint(0, len(valid_indices), (1,)).item()
+            # non_zero_one_indices = torch.nonzero(domain_batch_size != 1).squeeze()
+            # non_zero_one_indices = non_zero_one_indices[non_zero_one_indices != 1]
+            # selected_domain = non_zero_one_indices[torch.randint(len(non_zero_one_indices), (1,), generator=self.generator, device="cpu")].item()
+
+            eligible_indices = torch.nonzero(torch.tensor(domain_batch_size) > 1).view(-1)
+            random_index = torch.randint(
+                low=0, high=len(eligible_indices), size=(1,), generator=self.generator, device="cpu"
             ).item()
+            selected_domain = eligible_indices[random_index].item()
 
             if diff > 0:
                 domain_batch_size[selected_domain] += 1
