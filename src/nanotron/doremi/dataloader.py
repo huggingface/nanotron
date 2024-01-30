@@ -284,8 +284,10 @@ class DataCollatorForCLM:
 
             # NOTE: only the last pipeline stage needs domain_idxs for computing DoReMi loss
             # and only the proxy model needs domain_idxs for computing reference loss
-            if self.doremi_context.is_proxy is True:
-                result["domain_idxs"] = np.vstack([examples[i]["domain_ids"] for i in range(len(examples))])
+            # if self.doremi_context.is_proxy is True:
+            #     result["domain_idxs"] = np.vstack([examples[i]["domain_ids"] for i in range(len(examples))])
+            # TODO(xrsrke): use the default one, then add domain_ids, don't duplicate code!
+            result["domain_idxs"] = np.vstack([examples[i]["domain_ids"] for i in range(len(examples))])
 
         if isinstance(result["input_ids"], torch.Tensor) and result["input_ids"].shape[-1] != self.sequence_length:
             raise ValueError(

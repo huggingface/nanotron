@@ -2,9 +2,7 @@ import pytest
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
-from helpers.utils import (
-    init_distributed,
-)
+from helpers.utils import init_distributed
 from nanotron.doremi.doremi_context import DoReMiContext
 from nanotron.doremi.loss import CrossEntropyWithPerDomainLoss, DoReMiLossForProxyTraining, compute_per_domain_loss
 from nanotron.parallel import ParallelContext
@@ -151,40 +149,6 @@ def _test_computing_per_domain_loss(
     )
 
 
-# @pytest.mark.parametrize("tp", [1, 2])
-# def test_cross_entropy_with_per_domain_loss(tp: int, doremi_context):
-#     BATCH_SIZE = 512
-#     SEQ_LEN = 128
-#     VOCAB_SIZE = 4
-#     torch.manual_seed(69)
-
-#     logits = torch.randn(BATCH_SIZE, SEQ_LEN, VOCAB_SIZE)
-#     label_ids = torch.randint(0, VOCAB_SIZE, (BATCH_SIZE, SEQ_LEN))
-#     label_mask = torch.ones((BATCH_SIZE, SEQ_LEN), dtype=torch.bool)
-
-#     ref_losses = F.cross_entropy(logits.view(-1, logits.size(2)), label_ids.view(-1), reduction="none")
-
-#     init_distributed(tp=tp, dp=1, pp=1)(_test_cross_entropy_with_per_domain_loss)(
-#         logits=logits, label_ids=label_ids, label_mask=label_mask, ref_losses=ref_losses, doremi_context=doremi_context, batch_size=BATCH_SIZE
-#     )
-
-
-# def _test_cross_entropy_with_per_domain_loss(parallel_context: ParallelContext, logits, label_ids, label_mask, ref_losses, batch_size, doremi_context):
-#     N_DOMAINS = doremi_context.num_domains
-
-#     logits = logits.to("cuda")
-#     label_ids = label_ids.to("cuda")
-#     label_mask = label_mask.to("cuda")
-#     parallel_logits = get_partition_logit(logits, parallel_context)
-#     domain_idxs = torch.randint(0, N_DOMAINS, (batch_size,), device="cuda")
-
-#     loss_func = CrossEntropyWithPerDomainLoss(doremi_context, parallel_context)
-#     outputs = loss_func(parallel_logits, label_ids, label_mask, domain_idxs)
-
-#     assert torch.allclose(outputs["loss"].cpu().view(-1), ref_losses)
-#     assert 1 == 1
-
-
 @pytest.mark.parametrize("tp", [1, 2])
 def test_cross_entropy_with_per_domain_loss(tp: int, doremi_context):
     BATCH_SIZE = 512
@@ -221,7 +185,6 @@ def _test_cross_entropy_with_per_domain_loss(
 
     parallel_logits = get_partition_logit(logits, parallel_context)
 
-    # loss = sharded_cross_entropy(parallel_logits, label_ids, parallel_context.tp_pg)
     loss_func = CrossEntropyWithPerDomainLoss(doremi_context, parallel_context)
     outputs = loss_func(parallel_logits, label_ids, label_mask, domain_idxs)
 

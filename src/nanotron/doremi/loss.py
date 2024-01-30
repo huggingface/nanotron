@@ -45,7 +45,7 @@ def compute_per_domain_loss(
     # NOTE: if the domain loss is zero, then the normalized domain loss is zero
     normalized_domain_losses[torch.isnan(normalized_domain_losses)] = 0.0
 
-    return domain_losses
+    return normalized_domain_losses
 
 
 class DoReMiLossForProxyTraining:
@@ -149,6 +149,9 @@ class CrossEntropyWithPerDomainLoss(nn.Module):
     ) -> Dict[str, torch.Tensor]:
         # loss = sharded_cross_entropy(
         #     sharded_logits, label_ids.transpose(0, 1).contiguous(), group=tp_pg, dtype=torch.float
+        # ).transpose(0, 1)
+        # per_token_loss = sharded_cross_entropy(
+        #     sharded_logits, label_ids.transpose(0, 1).contiguous(), group=self.parallel_context.tp_pg, dtype=torch.float
         # ).transpose(0, 1)
         per_token_loss = sharded_cross_entropy(
             sharded_logits, label_ids, group=self.parallel_context.tp_pg, dtype=torch.float
