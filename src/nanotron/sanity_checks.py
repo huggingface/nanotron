@@ -11,6 +11,7 @@ from nanotron.models import NanotronModel
 from nanotron.optim.gradient_accumulator import GradientAccumulator
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.tied_parameters import get_tied_id_to_param
+from nanotron import optim
 
 logger = get_logger(__name__)
 
@@ -236,3 +237,14 @@ def after_optim_step_sanity_checks(
 
         # SANITY CHECK: run model specific sanity checks
         normalized_model.after_optim_step_sanity_checks()
+
+
+def check_optim_state_in_sync(optimizer: optim.BaseOptimizer, pg: dist.ProcessGroup):
+    for _, optim_state in sorted(optimizer.state_dict()["state"].items(), key=lambda x: x[0]):
+        for name, tensor in optim_state.items():
+            if name == "step":
+                tensor = tensor.to("cuda")
+
+            assert_tensor_synced_across_pg(
+                tensor=tensor, pg=pg, msg=lambda err: f"{name} are not synced across DP {err}"
+            )
