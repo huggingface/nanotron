@@ -156,7 +156,9 @@ class GeneralArgs:
             ), f"Please set NANOTRON_BENCHMARK to 1 when using benchmark_csv_path. Got {os.environ.get('NANOTRON_BENCHMARK', None)}"
 
         if self.run is None:
-            self.run = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            self.run = "%date_%jobid"
+        self.run.replace("%date", datetime.datetime.now().strftime("%Y%m%d_%H%M%S"))
+        self.run.replace("%jobid", os.environ.get("SLURM_JOB_ID", "local"))
 
 
 @dataclass
