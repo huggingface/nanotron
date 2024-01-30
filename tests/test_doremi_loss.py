@@ -20,8 +20,8 @@ def test_doremi_loss():
     domain_weights = F.softmax(torch.ones(N_DOMAINS, requires_grad=False, device="cuda"), dim=-1)
     doremi_context = DoReMiContext(domain_weights, domain_keys, is_proxy=False)
 
-    losses = torch.rand(BATCH_SIZE, SEQ_LEN, device="cuda")
-    ref_losses = torch.rand(BATCH_SIZE, SEQ_LEN, device="cuda")
+    losses = torch.randn(BATCH_SIZE, SEQ_LEN, device="cuda")
+    ref_losses = torch.randn(BATCH_SIZE, SEQ_LEN, device="cuda")
     domain_idxs = torch.randint(0, N_DOMAINS, (BATCH_SIZE,), device="cuda")
     loss_func = DoReMiLossForProxyTraining(doremi_context)
 
