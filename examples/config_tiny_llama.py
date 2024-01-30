@@ -88,7 +88,7 @@ checkpoints_path = os.path.dirname(os.path.dirname(__file__)) + "/checkpoints"
 os.makedirs(checkpoints_path, exist_ok=True)
 
 config = Config(
-    general=GeneralArgs(project="debug", run="tiny_llama", seed=seed),
+    general=GeneralArgs(project="debug", run="tiny_llama_%date_%jobid", seed=seed),
     checkpoints=CheckpointsArgs(checkpoints_path=checkpoints_path, checkpoint_interval=10),
     parallelism=parallelism,
     model=ModelArgs(init_method=RandomInit(std=0.025), model_config=model_config),
