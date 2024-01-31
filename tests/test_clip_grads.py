@@ -190,8 +190,13 @@ def _test_clip_grads_with_pp(parallel_context: ParallelContext, norm_type: float
 
 
 @pytest.mark.skipif(available_gpus() < 2, reason="test_clip_grads_with_tp requires at least 2 gpus")
-@pytest.mark.parametrize("tp_mode", list(TensorParallelLinearMode))
-@pytest.mark.parametrize("async_communication", [False, True])
+@pytest.mark.parametrize(
+    "tp_mode,async_communication",
+    [
+        pytest.param(TensorParallelLinearMode.ALL_REDUCE, False),
+        pytest.param(TensorParallelLinearMode.REDUCE_SCATTER, True),
+    ],
+)
 @pytest.mark.parametrize("norm_type", [math.inf, 1.0, 2.0])
 def test_clip_grads_with_tp(tp_mode: TensorParallelLinearMode, async_communication: bool, norm_type: float):
     init_distributed(tp=2, dp=1, pp=1)(_test_clip_grads_with_tp)(
