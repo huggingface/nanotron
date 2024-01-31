@@ -108,7 +108,7 @@ def get_dataloader(trainer: DistributedTrainer):
             # Check if we have enough samples for train_steps
             assert (
                 trainer.config.tokens.train_steps - trainer.start_iteration_step
-            ) * trainer.global_batch_size // trainer.parallel_context.dp_pg.size() < len(dataloader), (
+            ) * trainer.global_batch_size // trainer.parallel_context.dp_pg.size() <= len(dataloader), (
                 f"Dataset is too small for steps ({len(dataloader)} < {(trainer.config.tokens.train_steps - trainer.start_iteration_step) * trainer.global_batch_size // trainer.parallel_context.dp_pg.size()}), "
                 f"Try train_steps<={len(dataloader) * trainer.parallel_context.dp_pg.size() // trainer.global_batch_size + trainer.start_iteration_step}"
             )
