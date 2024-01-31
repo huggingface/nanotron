@@ -2,7 +2,7 @@ checkpoints:
   checkpoint_interval: 1000
   checkpoints_path: /fsx/phuc/checkpoints/doremi/reference-2.8b-llama
   checkpoints_path_is_shared_file_system: true
-  # resume_checkpoint_path: checkpoints_test/
+  resume_checkpoint_path: /fsx/phuc/checkpoints/doremi/reference-2.8b-llama
   save_initial_state: false
 data:
   dataset:
@@ -78,8 +78,8 @@ parallelism:
   pp: 1
   pp_engine: 1f1b
   recompute_granularity: SELECTIVE
-  tp: 8
-  # tp: 2
+  # tp: 8
+  tp: 2
   tp_linear_async_communication: true
   tp_mode: REDUCE_SCATTER
 profiler: null

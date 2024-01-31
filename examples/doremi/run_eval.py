@@ -155,6 +155,8 @@ class EvalRunner:
         # self.iteration_step = self.start_iteration_step
         self.limit_val_batches = self.config.tokens.limit_val_batches
 
+        self.post_init()
+
     def init_model(self) -> Union[NanotronModel, DistributedDataParallel]:
         """Initialize the model and load weights from checkpoint if needed."""
         # TODO: add max_position_embeddings
@@ -294,7 +296,7 @@ class EvalRunner:
         if dist.get_rank(self.parallel_context.world_pg) == 0:
             wandb.init(
                 project="nanotron",
-                name=f"{get_time_name()}_eval_doremi_2.8b_reference_training_with_tuned_weights",
+                name=f"{get_time_name()}_eval_doremi_2.8b_reference_training",
                 config={
                     "nanotron_config": self.config.as_dict(),
                     "doremi": {
@@ -322,12 +324,16 @@ class EvalRunner:
 
         for step in range(1000):
             valid_outputs = self.validation_step(dataloader=dataloader)
-            loss = valid_outputs[0]["loss"].cpu().detach().numpy()
+
+            loss_avg = torch.stack([output["loss"] for output in valid_outputs]).sum()
+            dist.all_reduce(loss_avg, group=self.parallel_context.dp_pg, op=dist.ReduceOp.AVG)
+
+            loss_avg = loss_avg.cpu().detach().numpy()
             valid_domain_losses = valid_outputs[0]["domain_losses"].cpu().detach().numpy()
             valid_samples_per_domain = valid_outputs[0]["samples_per_domain"].cpu().detach().numpy()
 
             log_rank(
-                f"[DoReMi][Validation] Step: {step} | Loss: {str(loss)}",
+                f"[DoReMi][Validation] Step: {step} | Loss: {str(loss_avg)}",
                 logger=logger,
                 level=logging.INFO,
                 rank=0,
@@ -349,6 +355,26 @@ class EvalRunner:
                 rank=0,
                 group=self.parallel_context.tp_pg,
             )
+
+            if dist.get_rank(self.parallel_context.world_pg) == 0:
+                valid_loss_logs = {
+                    f"valid_loss_domain_{self.doremi_context.get_domain_name(i)}": loss
+                    for i, loss in enumerate(valid_domain_losses)
+                }
+
+                valid_samples_per_domain_logs = {
+                    f"valid_samples_per_domain_{self.doremi_context.get_domain_name(i)}": n_samples
+                    for i, n_samples in enumerate(valid_samples_per_domain)
+                }
+
+                wandb.log(
+                    {
+                        **valid_loss_logs,
+                        **valid_samples_per_domain_logs,
+                        "loss_avg": loss_avg,
+                        "step": step,
+                    }
+                )
 
     def validation_step(self, dataloader: Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]]) -> Iterable[Dict]:
         outputs = self.pipeline_engine.validate_batch_iter(

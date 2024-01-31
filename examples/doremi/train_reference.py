@@ -40,6 +40,7 @@ logger = logging.get_logger(__name__)
 class ReferenceTrainer(DistributedTrainer):
     def __init__(self, domain_weights: torch.Tensor, domain_keys: List[str], *args, **kwargs):
         self.doremi_context = DoReMiContext(domain_weights, domain_keys, is_proxy=False)
+        self.valid_dataloader = None
         super().__init__(*args, **kwargs)
         self.doremi_context.domain_weights = self.doremi_context.domain_weights.to("cuda")
 
@@ -160,7 +161,7 @@ class ReferenceTrainer(DistributedTrainer):
         if dist.get_rank(self.parallel_context.world_pg) == 0:
             wandb.init(
                 project="nanotron",
-                name=f"{get_time_name()}_doremi_2.8b_reference_training",
+                name=f"{get_time_name()}_doremi_2.8b_reference_training_with_tuned_weights",
                 config={
                     "nanotron_config": self.config.as_dict(),
                     "doremi": {
@@ -172,43 +173,49 @@ class ReferenceTrainer(DistributedTrainer):
                 },
             )
 
-    # def pre_training(self):
-    #     def patch_forward(model_instance):
-    #         def new_forward(*args, **kwargs):
-    #             from nanotron.doremi.llama import LlamaReferenceForTrainingWithPerDomainLoss
-    #             return LlamaReferenceForTrainingWithPerDomainLoss.forward(model_instance, *args, **kwargs)
-    #         return new_forward
+    def pre_training(self):
+        # def patch_forward(model_instance):
+        #     def new_forward(*args, **kwargs):
+        #         from nanotron.doremi.llama import LlamaReferenceForTrainingWithPerDomainLoss
+        #         return LlamaReferenceForTrainingWithPerDomainLoss.forward(model_instance, *args, **kwargs)
+        #     return new_forward
 
-    #     self.model.module.forward = patch_forward(self.model.module)
+        # self.model.module.forward = patch_forward(self.model.module)
 
-    #     # NOTE: a hacky way to initialize doremi model
-    #     from nanotron.trainer import CONFIG_TO_MODEL_CLASS
-    #     CONFIG_TO_MODEL_CLASS.update({"LlamaConfig": LlamaReferenceForTrainingWithPerDomainLoss})
-    #     from nanotron.parallel.pipeline_parallel.block import PipelineBlock
-    #     from nanotron.doremi.loss import CrossEntropyWithPerDomainLoss
+        # # NOTE: a hacky way to initialize doremi model
+        # from nanotron.trainer import CONFIG_TO_MODEL_CLASS
+        # CONFIG_TO_MODEL_CLASS.update({"LlamaConfig": LlamaReferenceForTrainingWithPerDomainLoss})
+        # from nanotron.parallel.pipeline_parallel.block import PipelineBlock
+        # from nanotron.doremi.loss import CrossEntropyWithPerDomainLoss
 
-    #     def copy_attributes(src_instance, dest_instance):
-    #         EXCEPT_ATTRIBUTES = ["module_input_keys", "module_output_keys"]
-    #         for attribute, value in src_instance.__dict__.items():
-    #             if attribute not in EXCEPT_ATTRIBUTES:
-    #                 setattr(dest_instance, attribute, value)
+        # def copy_attributes(src_instance, dest_instance):
+        #     EXCEPT_ATTRIBUTES = ["module_input_keys", "module_output_keys"]
+        #     for attribute, value in src_instance.__dict__.items():
+        #         if attribute not in EXCEPT_ATTRIBUTES:
+        #             setattr(dest_instance, attribute, value)
 
-    #     loss_block = PipelineBlock(
-    #         p2p=self.model.module.loss.p2p,
-    #         module_builder=CrossEntropyWithPerDomainLoss,
-    #         module_kwargs={"parallel_context": self.parallel_context, "doremi_context": self.doremi_context},
-    #         module_input_keys={
-    #             "sharded_logits",
-    #             "label_ids",
-    #             "label_mask",
-    #             "domain_idxs",
-    #         },
-    #         module_output_keys={"loss", "domain_losses"},
-    #     )
-    #     # TODO(xrsrke): move to utils
-    #     copy_attributes(self.model.module.loss, loss_block)
-    #     # NOTE: can't do this, u also need to build the module
-    #     self.model.module.loss = loss_block
+        # loss_block = PipelineBlock(
+        #     p2p=self.model.module.loss.p2p,
+        #     module_builder=CrossEntropyWithPerDomainLoss,
+        #     module_kwargs={"parallel_context": self.parallel_context, "doremi_context": self.doremi_context},
+        #     module_input_keys={
+        #         "sharded_logits",
+        #         "label_ids",
+        #         "label_mask",
+        #         "domain_idxs",
+        #     },
+        #     module_output_keys={"loss", "domain_losses"},
+        # )
+        # # TODO(xrsrke): move to utils
+        # copy_attributes(self.model.module.loss, loss_block)
+        # # NOTE: can't do this, u also need to build the module
+        # self.model.module.loss = loss_block
+        from nanotron.dataloader import sanity_check_dataloader
+
+        if self.valid_dataloader is not None:
+            self.valid_dataloader = sanity_check_dataloader(
+                dataloader=self.valid_dataloader, parallel_context=self.parallel_context, config=self.config
+            )
 
     def train_step_logs(
         self,
@@ -224,7 +231,7 @@ class ReferenceTrainer(DistributedTrainer):
         samples_per_domain = outputs[0]["samples_per_domain"].cpu().detach().numpy()
 
         log_rank(
-            f"[DoReMi] Domain loss: {str(domain_losses)}",
+            f"[DoReMi][Train] Domain loss: {str(domain_losses)}",
             logger=logger,
             level=logging.INFO,
             rank=0,
@@ -232,7 +239,7 @@ class ReferenceTrainer(DistributedTrainer):
         )
 
         log_rank(
-            f"[DoReMi] Samples per domain: {str(samples_per_domain)}",
+            f"[DoReMi][Train] Samples per domain: {str(samples_per_domain)}",
             logger=logger,
             level=logging.INFO,
             rank=0,
@@ -245,8 +252,8 @@ class ReferenceTrainer(DistributedTrainer):
             }
 
             samples_per_domain_logs = {
-                f"samples_per_domain_{self.doremi_context.get_domain_name(i)}": loss
-                for i, loss in enumerate(samples_per_domain)
+                f"samples_per_domain_{self.doremi_context.get_domain_name(i)}": n_samples
+                for i, n_samples in enumerate(samples_per_domain)
             }
 
             wandb.log(
@@ -257,6 +264,48 @@ class ReferenceTrainer(DistributedTrainer):
                     "step": self.iteration_step,
                 }
             )
+
+        if self.valid_dataloader is not None and self.iteration_step % self.config.tokens.val_check_interval == 0:
+            # valid_outputs = self.validation_step(dataloader=self.valid_dataloader)
+            batch = next(self.valid_dataloader)
+            valid_outputs = self.model(batch)
+            valid_domain_losses = valid_outputs[0]["domain_losses"].cpu().detach().numpy()
+            valid_samples_per_domain = valid_outputs[0]["samples_per_domain"].cpu().detach().numpy()
+
+            log_rank(
+                f"[DoReMi][Validation] Domain loss: {str(valid_domain_losses)}",
+                logger=logger,
+                level=logging.INFO,
+                rank=0,
+                group=self.parallel_context.tp_pg,
+            )
+
+            log_rank(
+                f"[DoReMi][Validation] Samples per domain: {str(valid_samples_per_domain)}",
+                logger=logger,
+                level=logging.INFO,
+                rank=0,
+                group=self.parallel_context.tp_pg,
+            )
+
+            # if dist.get_rank(self.parallel_context.world_pg) == 0:
+            #     valid_loss_logs = {
+            #         f"valid_loss_domain_{self.doremi_context.get_domain_name(i)}": loss for i, loss in enumerate(valid_domain_losses)
+            #     }
+
+            #     valid_samples_per_domain_logs = {
+            #         f"valid_samples_per_domain_{self.doremi_context.get_domain_name(i)}": n_samples
+            #         for i, n_samples in enumerate(valid_samples_per_domain)
+            #     }
+
+            #     wandb.log(
+            #         {
+            #             **valid_loss_logs,
+            #             **valid_samples_per_domain_logs,
+            #             # "valid_loss_avg": loss_avg.item(),
+            #             "step": self.iteration_step,
+            #         }
+            #     )
 
 
 def get_args():
@@ -288,7 +337,8 @@ if __name__ == "__main__":
 
     # NOTE: the pile
     # DATASET_PATH = "/fsx/phuc/project_data/doremi/datasets/the_pile_splitted/tokenized_data"
-    DATASET_PATH = "/fsx/phuc/project_data/doremi/datasets/the_pile_splitted/tokenized_data_with_correct_domain"
+    TRAIN_DATASET_PATH = "/fsx/phuc/project_data/doremi/datasets/the_pile_splitted/tokenized_data_with_correct_domain"
+    VALID_DATASET_PATH = "/fsx/phuc/project_data/doremi/datasets/the_pile_splitted/tokenized_valid_data"
     DOMAIN_KEYS = [
         "Github",
         "FreeLaw",
@@ -301,8 +351,9 @@ if __name__ == "__main__":
         "PubMed Central",
         "Enron Emails",
     ]
-    # TOKENIZED_DATASETS = {f"{domain_name}": f"{DATASET_PATH}/{domain_name}" for domain_name in DOMAIN_KEYS}
-    TOKENIZED_DATASETS = [f"{DATASET_PATH}/{domain_name}" for domain_name in DOMAIN_KEYS]
+    # TOKENIZED_DATASETS = {f"{dom.0630ain_name}": f"{DATASET_PATH}/{domain_name}" for domain_name in DOMAIN_KEYS}
+    TOKENIZED_TRAIN_DATASET_PATHS = [f"{TRAIN_DATASET_PATH}/{domain_name}" for domain_name in DOMAIN_KEYS]
+    TOKENIZED_VALID_DATASET_PATHS = [f"{VALID_DATASET_PATH}/{domain_name}" for domain_name in DOMAIN_KEYS]
 
     NUM_DOMAINS = len(DOMAIN_KEYS)
     # initial_domain_weights = F.softmax(torch.ones(NUM_DOMAINS, requires_grad=False), dim=-1)
@@ -338,6 +389,7 @@ if __name__ == "__main__":
 
     # # dist.barrier()
 
-    dataloader = get_dataloader(trainer, domain_keys=DOMAIN_KEYS, tokenized_datasets=TOKENIZED_DATASETS)
-    # trainer.sampler = dataloader.sampler
+    dataloader = get_dataloader(trainer, domain_keys=DOMAIN_KEYS, tokenized_datasets=TOKENIZED_TRAIN_DATASET_PATHS)
+    # valid_dataloader = get_dataloader(trainer, domain_keys=DOMAIN_KEYS, tokenized_datasets=TOKENIZED_VALID_DATASET_PATHS)
+    # trainer.valid_dataloader = iter(valid_dataloader)
     trainer.train(dataloader)
