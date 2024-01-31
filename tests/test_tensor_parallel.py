@@ -21,6 +21,8 @@ from torch import nn as torch_nn
 @pytest.mark.parametrize("tp_mode", list(TensorParallelLinearMode))
 @pytest.mark.parametrize("async_communication", [False, True])
 def test_column_linear(tp: int, dp: int, pp: int, tp_mode: TensorParallelLinearMode, async_communication: bool):
+    if tp_mode is TensorParallelLinearMode.ALL_REDUCE and async_communication:
+        pytest.skip("ALL_REDUCE mode does not support async communication")
     init_distributed(tp=tp, dp=dp, pp=pp)(_test_column_linear)(
         tp_mode=tp_mode, async_communication=async_communication
     )

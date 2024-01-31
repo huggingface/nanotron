@@ -201,6 +201,8 @@ def _test_zero_optimizer(parallel_context: ParallelContext):
 def test_zero_optimizer_with_tp(
     tp: int, dp: int, pp: int, tp_mode: TensorParallelLinearMode, async_communication: bool
 ):
+    if tp_mode is TensorParallelLinearMode.ALL_REDUCE and async_communication:
+        pytest.skip("ALL_REDUCE mode does not support async communication")
     init_distributed(pp=pp, dp=dp, tp=tp)(_test_zero_optimizer_with_tp)(
         tp_mode=tp_mode, async_communication=async_communication
     )
