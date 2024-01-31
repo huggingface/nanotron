@@ -68,7 +68,7 @@ def clip_grad_norm(
                 dtype=torch.float,
             ).pow(norm_type)
         else:
-            total_norm = torch.zeros(1, dtype=torch.float, device=torch.device("cuda"))
+            total_norm = torch.zeros([], dtype=torch.float, device=torch.device("cuda"))
         dist.all_reduce(total_norm, group=mp_pg, op=dist.ReduceOp.SUM)
         total_norm.pow_(1.0 / norm_type)
 
