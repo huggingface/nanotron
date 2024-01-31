@@ -390,7 +390,7 @@ def get_config_from_dict(args: dict, config_class: Type[Config] = Config):
     )
 
 
-def get_config_from_file(config_path: str, config_class: Type[Config] = Config) -> Config:
+def get_config_from_file(config_path: str, config_class: Type[Config] = Config, model_config_class=None) -> Config:
     """Get a config objet from a file (python or YAML)
 
     Args:
@@ -403,4 +403,7 @@ def get_config_from_file(config_path: str, config_class: Type[Config] = Config) 
     with open(config_path) as f:
         args = yaml.load(f, Loader=SafeLoader)
 
-    return get_config_from_dict(args, config_class=config_class)
+    config = get_config_from_dict(args, config_class=config_class)
+    if model_config_class is not None:
+        config.model.model_config = model_config_class(**config.model.model_config)
+    return config
