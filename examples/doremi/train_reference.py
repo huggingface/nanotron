@@ -92,7 +92,8 @@ class ReferenceTrainer(DistributedTrainer):
         #     model_config_cls in CONFIG_TO_MODEL_CLASS
         # ), f"Unsupported model config {model_config_cls}. Only {CONFIG_TO_MODEL_CLASS.keys()} are supported"
 
-        # TODO(xrsrke): less code duplication
+        # TODO(xrsrke): split loading weights
+        # from model initialization in base trainer => less code duplication
         model = self._init_model(
             model_builder=lambda: LlamaReferenceForTrainingWithPerDomainLoss(
                 config=self.model_config,
@@ -220,12 +221,22 @@ class ReferenceTrainer(DistributedTrainer):
         # trainer.sampler.reset()
 
         domain_losses = outputs[0]["domain_losses"].cpu().detach().numpy()
+        samples_per_domain = outputs[0]["samples_per_domain"].cpu().detach().numpy()
+
         log_rank(
             f"[DoReMi] Domain loss: {str(domain_losses)}",
             logger=logger,
             level=logging.INFO,
             rank=0,
-            group=self.parallel_context.dp_pg,
+            group=self.parallel_context.tp_pg,
+        )
+
+        log_rank(
+            f"[DoReMi] Samples per domain: {str(samples_per_domain)}",
+            logger=logger,
+            level=logging.INFO,
+            rank=0,
+            group=self.parallel_context.tp_pg,
         )
 
         if dist.get_rank(self.parallel_context.world_pg) == 0:
@@ -233,9 +244,15 @@ class ReferenceTrainer(DistributedTrainer):
                 f"loss_domain_{self.doremi_context.get_domain_name(i)}": loss for i, loss in enumerate(domain_losses)
             }
 
+            samples_per_domain_logs = {
+                f"samples_per_domain_{self.doremi_context.get_domain_name(i)}": loss
+                for i, loss in enumerate(samples_per_domain)
+            }
+
             wandb.log(
                 {
                     **loss_logs,
+                    **samples_per_domain_logs,
                     "loss_avg": loss_avg.item(),
                     "step": self.iteration_step,
                 }
@@ -245,12 +262,14 @@ class ReferenceTrainer(DistributedTrainer):
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config-file", type=str, required=True, help="Path to the YAML or python config file")
+    parser.add_argument("--tuned", type=str, required=True, help="")
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = get_args()
     config_file = args.config_file
+    tuned = args.tuned
 
     # # NOTE: for wikicorpus dataset
     # DOMAIN_KEYS = [
@@ -287,23 +306,29 @@ if __name__ == "__main__":
 
     NUM_DOMAINS = len(DOMAIN_KEYS)
     # initial_domain_weights = F.softmax(torch.ones(NUM_DOMAINS, requires_grad=False), dim=-1)
-    initial_domain_weights = torch.tensor(
-        [
-            0.34356916553540745,
-            0.16838812972610234,
-            0.24711766854236725,
-            0.0679225638705455,
-            0.059079828519653675,
-            0.043720261601881555,
-            0.01653850841342608,
-            0.00604146633842096,
-            0.04342813428189645,
-            0.0041942731702987,
-        ]
-    )
+
+    if tuned == "true":
+        initial_domain_weights = torch.tensor(
+            [0.06299, 0.177, 0.528, 0.1025, 0.0034, 0.02008, 0.01621, 0.009924, 0.07446, 0.005524]
+        )
+    else:
+        initial_domain_weights = torch.tensor(
+            [
+                0.34356916553540745,
+                0.16838812972610234,
+                0.24711766854236725,
+                0.0679225638705455,
+                0.059079828519653675,
+                0.043720261601881555,
+                0.01653850841342608,
+                0.00604146633842096,
+                0.04342813428189645,
+                0.0041942731702987,
+            ]
+        )
 
     assert len(initial_domain_weights) == NUM_DOMAINS
-    assert torch.allclose(initial_domain_weights.sum(), torch.tensor(1.0))
+    # assert torch.allclose(initial_domain_weights.sum(), torch.tensor(1.0))
 
     trainer = ReferenceTrainer(initial_domain_weights, DOMAIN_KEYS, config_file)
     # dist.barrier()

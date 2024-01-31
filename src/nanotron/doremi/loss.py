@@ -42,10 +42,10 @@ def compute_per_domain_loss(
     samples_per_domain = torch.bincount(domain_ids_dp, minlength=N_DOMAINS)
     SEQ_LEN = losses.shape[1]
     normalized_domain_losses = domain_losses / (samples_per_domain * SEQ_LEN)
-    # NOTE: if the domain loss is zero, then the normalized domain loss is zero
+    # NOTE: if the domain loss is zero, then the normalized domain loss is NaN
     normalized_domain_losses[torch.isnan(normalized_domain_losses)] = 0.0
 
-    return normalized_domain_losses
+    return normalized_domain_losses, samples_per_domain
 
 
 class DoReMiLossForProxyTraining:
@@ -114,12 +114,10 @@ class DoReMiLossForProxyTraining:
         train_domain_weights = (1 - smoothing_param) * torch.exp(log_new_train_domain_weights) + smoothing_param / len(
             log_new_train_domain_weights
         )
-        smooth_domain_weights = train_domain_weights
-
-        self.doremi_context.domain_weights = smooth_domain_weights.detach()
+        self.doremi_context.domain_weights = train_domain_weights.detach()
 
         # return excess_losses, normalized_domain_losses, smooth_domain_weights
-        return excess_losses_dp, normalized_domain_losses, smooth_domain_weights
+        return excess_losses_dp, normalized_domain_losses, train_domain_weights
 
     # def _normalize_domain_weights(self, weights: torch.Tensor, smoothing_param: float) -> torch.Tensor:
     #     """
@@ -157,7 +155,7 @@ class CrossEntropyWithPerDomainLoss(nn.Module):
             sharded_logits, label_ids, group=self.parallel_context.tp_pg, dtype=torch.float
         )
         lm_loss = masked_mean(per_token_loss, label_mask, dtype=torch.float)
-        domain_losses = compute_per_domain_loss(
+        domain_losses, samples_per_domain = compute_per_domain_loss(
             per_token_loss, domain_idxs, self.doremi_context, self.parallel_context
         )
-        return {"loss": lm_loss, "domain_losses": domain_losses}
+        return {"loss": lm_loss, "domain_losses": domain_losses, "samples_per_domain": samples_per_domain}

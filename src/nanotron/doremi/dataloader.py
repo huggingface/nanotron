@@ -287,7 +287,9 @@ class DataCollatorForCLM:
             # if self.doremi_context.is_proxy is True:
             #     result["domain_idxs"] = np.vstack([examples[i]["domain_ids"] for i in range(len(examples))])
             # TODO(xrsrke): use the default one, then add domain_ids, don't duplicate code!
-            result["domain_idxs"] = np.vstack([examples[i]["domain_ids"] for i in range(len(examples))])
+            # result["domain_idxs"] = np.vstack([examples[i]["domain_ids"] for i in range(len(examples))])
+
+        result["domain_idxs"] = np.vstack([examples[i]["domain_ids"] for i in range(len(examples))])
 
         if isinstance(result["input_ids"], torch.Tensor) and result["input_ids"].shape[-1] != self.sequence_length:
             raise ValueError(
@@ -773,7 +775,6 @@ class DistributedSamplerForDoReMi(DistributedSampler):
 
         # self.update_step = 0
         self.reset()
-        self.setup()
 
     def _calculate_total_size(self):
         total_samples = sum(len(d) for d in self.datasets)
@@ -886,7 +887,7 @@ class DistributedSamplerForDoReMi(DistributedSampler):
                 target_total_size=num_samples_per_global_step,
             )
 
-        # assert all(x > 0 for x in domain_batch_sizes), "There is a domain with 0 samples per global batch"
+        assert all(x > 0 for x in domain_batch_sizes), "There is a domain with 0 samples per global batch"
         return domain_batch_sizes
 
     def __next__(self):
@@ -914,6 +915,9 @@ class DistributedSamplerForDoReMi(DistributedSampler):
             start_idx = self.domain_counters[domain_index]
             end_idx = start_idx + domain_batch_size
             # dist.barrier()
+
+            if domain_index >= 3:
+                assert 1 == 1
 
             # NOTE: BREAK 1
             if end_idx > len(idxs):
@@ -1045,12 +1049,12 @@ class DistributedSamplerForDoReMi(DistributedSampler):
 
     def reset(self):
         """Reset the state of the sampler for a new epoch."""
-        self.setup()
-
         self.microbatch_idx = 0
         self.domain_counters = [0 for _ in self.datasets]
         self.total_samples_yielded = 0
         self.out_of_samples = False
+
+        self.setup()
 
         # if self.update_step > 0:
         #     self.update_step += 1

@@ -125,6 +125,7 @@ def test_computing_per_domain_loss(dp: int):
 
     init_distributed(tp=1, dp=dp, pp=1)(_test_computing_per_domain_loss)(
         batch_size=BATCH_SIZE,
+        global_batch_size=GLOBAL_BATCH_SIZE,
         seq_len=SEQ_LEN,
         domain_keys=domain_keys,
         domain_weights=domain_weights,
@@ -132,7 +133,7 @@ def test_computing_per_domain_loss(dp: int):
 
 
 def _test_computing_per_domain_loss(
-    parallel_context: ParallelContext, batch_size, seq_len, domain_keys, domain_weights
+    parallel_context: ParallelContext, batch_size, global_batch_size, seq_len, domain_keys, domain_weights
 ):
     N_DOMAINS = domain_weights.shape[0]
     domain_weights = domain_weights.to("cuda")
@@ -141,11 +142,21 @@ def _test_computing_per_domain_loss(
 
     doremi_context = DoReMiContext(domain_weights, domain_keys, is_proxy=False)
 
-    per_domain_loss = compute_per_domain_loss(losses, domain_idxs, doremi_context, parallel_context)
+    per_domain_loss, samples_per_domain = compute_per_domain_loss(
+        losses, domain_idxs, doremi_context, parallel_context
+    )
 
     assert per_domain_loss.shape == (N_DOMAINS,)
     assert_tensor_synced_across_pg(
         per_domain_loss, parallel_context.dp_pg, msg=lambda err: f"Per domain loss are not synced across ranks {err}"
+    )
+
+    assert samples_per_domain.shape == (N_DOMAINS,)
+    assert sum(samples_per_domain) == global_batch_size
+    assert_tensor_synced_across_pg(
+        samples_per_domain,
+        parallel_context.dp_pg,
+        msg=lambda err: f"Samples per domain are not synced across ranks {err}",
     )
 
 
@@ -171,12 +182,20 @@ def test_cross_entropy_with_per_domain_loss(tp: int, doremi_context):
         label_mask=label_mask,
         domain_idxs=domain_idxs,
         ref_losses=ref_losses,
+        batch_size=BATCH_SIZE,
         doremi_context=doremi_context,
     )
 
 
 def _test_cross_entropy_with_per_domain_loss(
-    parallel_context: ParallelContext, logits, label_ids, label_mask, domain_idxs, ref_losses, doremi_context
+    parallel_context: ParallelContext,
+    logits,
+    label_ids,
+    label_mask,
+    domain_idxs,
+    ref_losses,
+    batch_size,
+    doremi_context,
 ):
     logits = logits.to("cuda")
     label_ids = label_ids.to("cuda")
@@ -190,3 +209,5 @@ def _test_cross_entropy_with_per_domain_loss(
 
     assert torch.allclose(outputs["loss"].cpu().view(-1), ref_losses)
     assert outputs["domain_losses"].shape == (doremi_context.num_domains,)
+    assert outputs["samples_per_domain"].shape == (doremi_context.num_domains,)
+    assert sum(outputs["samples_per_domain"]) == batch_size

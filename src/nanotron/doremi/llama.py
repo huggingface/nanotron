@@ -324,11 +324,13 @@ class LlamaReferenceForTrainingWithPerDomainLoss(BaseLLaMa):
                 "parallel_context": parallel_context,
             },
             module_input_keys={"sharded_logits", "label_ids", "label_mask", "domain_idxs"},
-            module_output_keys={"loss", "domain_losses"},
+            module_output_keys={"loss", "domain_losses", "samples_per_domain"},
         )
         self.parallel_context = parallel_context
         self.config = config
         self.parallel_config = parallel_config
+
+        self.iteration = 0
 
     def forward(
         self,
@@ -343,6 +345,10 @@ class LlamaReferenceForTrainingWithPerDomainLoss(BaseLLaMa):
             input_mask=input_mask,
         )
         sharded_logits = sharded_logits.transpose(0, 1).contiguous()
+
+        if self.iteration == 2:
+            assert 1 == 1
+
         outputs = self.loss(
             sharded_logits=sharded_logits,
             # label_ids=label_ids.transpose(0, 1).contiguous(),
@@ -350,4 +356,10 @@ class LlamaReferenceForTrainingWithPerDomainLoss(BaseLLaMa):
             label_mask=label_mask,
             domain_idxs=domain_idxs,
         )
-        return {"loss": outputs["loss"], "domain_losses": outputs["domain_losses"]}
+
+        self.iteration += 1
+        return {
+            "loss": outputs["loss"],
+            "domain_losses": outputs["domain_losses"],
+            "samples_per_domain": outputs["samples_per_domain"],
+        }
