@@ -345,7 +345,7 @@ class Config:
         if self.profiler is not None and self.profiler.profiler_export_path is not None:
             assert self.tokens.train_steps < 10
 
-        if self.optimizer.learning_rate_scheduler.lr_decay_steps is None:
+        if self.optimizer is not None and self.optimizer.learning_rate_scheduler.lr_decay_steps is None:
             self.optimizer.learning_rate_scheduler.lr_decay_steps = (
                 self.tokens.train_steps - self.optimizer.learning_rate_scheduler.lr_warmup_steps
             )
