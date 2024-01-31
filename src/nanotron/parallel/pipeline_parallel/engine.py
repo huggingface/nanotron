@@ -53,7 +53,8 @@ class PipelineEngine(ABC):
 
         # Add output as activations that require backward pass
         if not isinstance(output["loss"], TensorPointer):
-            assert output["loss"].requires_grad
+            # TODO(xrsrke): support skipping this if in eval mode
+            # assert output["loss"].requires_grad
             state.register_activation_requiring_backward(output["loss"])
         return output
 

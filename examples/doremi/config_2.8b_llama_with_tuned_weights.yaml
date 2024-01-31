@@ -2,7 +2,7 @@ checkpoints:
   checkpoint_interval: 1000
   checkpoints_path: /fsx/phuc/checkpoints/doremi/tuned-2.8b-llama
   checkpoints_path_is_shared_file_system: true
-  # resume_checkpoint_path: checkpoints_test/
+  resume_checkpoint_path: /fsx/phuc/checkpoints/doremi/tuned-2.8b-llama
   save_initial_state: false
 data:
   dataset:
@@ -73,13 +73,13 @@ optimizer:
   weight_decay: 0.01
   zero_stage: 0
 parallelism:
-  dp: 8
-  # dp: 2
+  # dp: 8
+  dp: 2
   pp: 1
   pp_engine: 1f1b
   recompute_granularity: SELECTIVE
-  tp: 8
-  # tp: 2
+  # tp: 8
+  tp: 2
   tp_linear_async_communication: true
   tp_mode: REDUCE_SCATTER
 profiler: null
@@ -93,11 +93,12 @@ tokens:
   # 240 * 1024 = 245760
   # the doremi paper do 500k tokens per batch
   # batch_accumulation_per_replica: 16
+
   # NOTE: some weird bug, where if you run batch_accumulation_per_replica=16
   # it results no samples from some domains
   batch_accumulation_per_replica: 8
   limit_test_batches: 0
-  limit_val_batches: 0
+  limit_val_batches: 8
   micro_batch_size: 8
   sequence_length: 1024
   # train_steps: 1000

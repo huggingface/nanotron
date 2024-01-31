@@ -8,7 +8,7 @@ import torch
 from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.config import PretrainDatasetsArgs
-from nanotron.dataloader import SkipBatchSampler, get_dataloader_worker_init
+from nanotron.dataloader import get_dataloader_worker_init
 from nanotron.doremi.doremi_context import DoReMiContext
 from nanotron.logging import log_rank
 from nanotron.parallel import ParallelContext
@@ -1106,8 +1106,10 @@ def _get_train_sampler(
             parallel_context=parallel_context,
         )
 
-    if consumed_train_samples > 0:
-        sampler = SkipBatchSampler(sampler, skip_batches=consumed_train_samples, dp_size=dp_size)
+    # TODO(xrsrke): temporary remove this for support evaluation
+    # add it back for resuming training
+    # if consumed_train_samples > 0:
+    #     sampler = SkipBatchSampler(sampler, skip_batches=consumed_train_samples, dp_size=dp_size)
 
     return sampler
 

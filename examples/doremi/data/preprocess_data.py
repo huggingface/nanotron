@@ -113,9 +113,9 @@ def tokenize_dataset(config, domain_name, domain_keys):
     raw_dataset = load_dataset(
         config.data.dataset.hf_dataset_or_datasets,
         domain_name,
-        split=["train"],
+        split=["test"],
         # TODO: set this in config
-        num_proc=config.data.dataset.dataset_processing_num_proc_per_process,
+        num_proc=1,
         features=features,
     )[0]
 
@@ -134,32 +134,47 @@ def tokenize_dataset(config, domain_name, domain_keys):
 
 if __name__ == "__main__":
     config_file = "/fsx/phuc/projects/nanotron/examples/doremi/config_100m_llama.yaml"
-    cache_folder = "/fsx/phuc/project_data/doremi/datasets/the_pile_splitted/tokenized_data"
+    cache_folder = "/fsx/phuc/project_data/doremi/datasets/the_pile_splitted/tokenized_valid_data"
     # os.environ["XDG_CACHE_HOME"] = "/fsx/phuc/.cache/huggingface_cache"
 
-    domain_idx = int(os.environ.get("SLURM_ARRAY_TASK_ID", 0))
-    slurm_job_id = int(os.environ.get("SLURM_JOB_ID"))
+    # domain_idx = int(os.environ.get("SLURM_ARRAY_TASK_ID", 0))
+    # slurm_job_id = int(os.environ.get("SLURM_JOB_ID"))
     # domain_idx = 1
     # slurm_job_idx = 1
+    domain_idx = 2
 
+    # DOMAIN_KEYS = [
+    #     "all",
+    #     "BookCorpus2",
+    #     "Books3",
+    #     "Enron Emails",
+    #     "EuroParl",
+    #     "FreeLaw",
+    #     "Gutenberg (PG-19)",
+    #     "HackerNews",
+    #     "NIH ExPorter",
+    #     "OpenSubtitles",
+    #     "OpenWebText2",
+    #     "PhilPapers",
+    #     "Pile-CC",
+    #     "PubMed Central",
+    #     "UPSTO Backgrounds",
+    #     "Ubuntu IRC",
+    #     "YoutubeSubtitles",
+    # ]
+
+    # NOTE: this is the one use in
     DOMAIN_KEYS = [
-        "all",
-        "BookCorpus2",
-        "Books3",
-        "Enron Emails",
-        "EuroParl",
+        "Github",
         "FreeLaw",
-        "Gutenberg (PG-19)",
+        "OpenWebText2",
+        "PubMed Abstracts",
+        "DM Mathematics",
+        "OpenSubtitles",
         "HackerNews",
         "NIH ExPorter",
-        "OpenSubtitles",
-        "OpenWebText2",
-        "PhilPapers",
-        "Pile-CC",
         "PubMed Central",
-        "UPSTO Backgrounds",
-        "Ubuntu IRC",
-        "YoutubeSubtitles",
+        "Enron Emails",
     ]
 
     domain_name = DOMAIN_KEYS[domain_idx]
