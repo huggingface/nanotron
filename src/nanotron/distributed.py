@@ -260,6 +260,8 @@ def initialize_torch_distributed():
 
     # Call the init process.
     port = find_free_port()
-    init_method = f"tcp://localhost:{port}"
-    dist.init_process_group(init_method=init_method, backend=backend, world_size=world_size, rank=rank, timeout=dist.default_pg_timeout)
+    init_method = f"env://localhost:{port}"
+    dist.init_process_group(
+        init_method=init_method, backend=backend, world_size=world_size, rank=rank, timeout=dist.default_pg_timeout
+    )
     return True
