@@ -7,6 +7,7 @@ import torch.cuda
 from nanotron.parallel import ParallelContext
 from torch.distributed.launcher import elastic_launch
 
+
 def available_gpus():
     if not torch.cuda.is_available():
         return 0
@@ -91,7 +92,7 @@ def init_distributed(tp: int, dp: int, pp: int):
         """
         nb_gpus = tp * dp * pp
         run_id = uuid.uuid4()
-        
+
         config = torch.distributed.launcher.LaunchConfig(
             min_nodes=1,
             max_nodes=1,
@@ -100,7 +101,7 @@ def init_distributed(tp: int, dp: int, pp: int):
             rdzv_configs={"timeout": 60},
             # Setting port to `0` allows `torch` to randomly pick a port: https://pytorch.org/docs/stable/elastic/run.html#stacked-single-node-multi-worker
             # Works only for single node workload.
-            rdzv_endpoint=f"localhost:0",
+            rdzv_endpoint="localhost:0",
             run_id=str(run_id),
             max_restarts=0,
             # TODO @thomasw21: Tune as we increase the number of tests

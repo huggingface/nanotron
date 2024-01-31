@@ -48,11 +48,6 @@ jobs:
         pip install -e .[dev]
         pip install -e .[test]
 
-    - name: Install test dependencies
-      run: |
-        pip install pytest
-        pip install pytest-cov
-
     - name: Show installed libraries and their versions
       run: pip freeze | tee installed.txt
 
