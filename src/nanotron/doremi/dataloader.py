@@ -360,21 +360,24 @@ class DistributedSamplerForDoReMi(DistributedSampler):
         self.expected_total_samples = sum([len(d) for d in domain_indices])
 
 
-def get_dataloader(trainer: DistributedTrainer, dataset_paths) -> DataLoader:
-    doremi_context = trainer.doremi_context
-    parallel_context = trainer.parallel_context
-
+def get_datasets(paths):
     datasets = []
-    for path in tqdm(dataset_paths, desc="Loading tokenized dataset from disk"):
+    for path in tqdm(paths, desc="Loading tokenized dataset from disk"):
         d = load_from_disk(path)
         datasets.append(d)
 
-    input_pp_rank, output_pp_rank = get_input_output_pp_ranks(model=trainer.model)
+    return datasets
+
+
+def get_dataloader(trainer: DistributedTrainer, datasets) -> DataLoader:
+    doremi_context = trainer.doremi_context
+    parallel_context = trainer.parallel_context
 
     datasets = [d.with_format(type="numpy", columns=["input_ids"], output_all_columns=True) for d in datasets]
 
     # TODO(xrsrke): decouple trainer from dataloader
     # TODO(xrsrke): decouple data collating from data loading
+    input_pp_rank, output_pp_rank = get_input_output_pp_ranks(model=trainer.model)
     data_collator = DataCollatorForCLM(
         sequence_length=trainer.sequence_length,
         input_pp_rank=input_pp_rank,

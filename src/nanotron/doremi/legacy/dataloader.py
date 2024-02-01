@@ -186,7 +186,7 @@ def get_dataloader(
             )
     else:
         train_datasets = []
-        for dataset_path in tqdm(datasets_path, desc="Loading tokenized dataset from disk"):
+        for dataset_path in tqdm(datasets_path, desc="Loading dataset from disk"):
             d = load_from_disk(dataset_path)
             train_datasets.append(d)
 

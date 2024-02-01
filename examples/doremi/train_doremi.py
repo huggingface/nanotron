@@ -9,11 +9,11 @@ torchrun --nproc_per_node=4 examples/doremi/train_doremi.py --config-file exampl
 import argparse
 
 import torch
-from nanotron import logging
-from nanotron.doremi.dataloader import get_dataloader
+from nanotron.config import get_config_from_file
+from nanotron.doremi.config import DoReMiConfig
+from nanotron.doremi.dataloader import get_dataloader, get_datasets
 from nanotron.doremi.trainer import DoReMiTrainer
-
-logger = logging.get_logger(__name__)
+from nanotron.doremi.utils import compute_domain_weights_based_on_token_count
 
 
 def get_args():
@@ -25,42 +25,21 @@ def get_args():
 if __name__ == "__main__":
     args = get_args()
     config_file = args.config_file
-    from pathlib import Path
+    config = get_config_from_file(config_file, config_class=DoReMiConfig)
+    dataset_paths = [f"{config.data.dataset.hf_dataset_or_datasets}/{name}" for name in config.doremi.domain_names]
 
-    DATASET_PATH = "/fsx/phuc/project_data/doremi/datasets/the_pile_splitted/tokenized_data_with_correct_domain"
-    REF_CHECKPOINT_PATH = Path("/fsx/phuc/checkpoints/doremi/reference-280m-llama/22000")
-    DOMAIN_KEYS = [
-        "Github",
-        "FreeLaw",
-        "OpenWebText2",
-        "PubMed Abstracts",
-        "DM Mathematics",
-        "OpenSubtitles",
-        "HackerNews",
-        "NIH ExPorter",
-        "PubMed Central",
-        "Enron Emails",
-    ]
-    TOKENIZED_DATASETS = [f"{DATASET_PATH}/{domain_name}" for domain_name in DOMAIN_KEYS]
+    datasets = get_datasets(dataset_paths)
+    # TODO(xrsrke): add retrieving domain weights from config
+    # or calculate it in the trainer
+    initial_domain_weights = compute_domain_weights_based_on_token_count(datasets)
+    assert torch.allclose(initial_domain_weights.sum(), torch.tensor(1.0))
 
-    # NUM_DOMAINS = len(DOMAIN_KEYS)
-    # initial_domain_weights = F.softmax(torch.ones(NUM_DOMAINS, requires_grad=False), dim=-1)
-    initial_domain_weights = torch.tensor(
-        [
-            0.34356916553540745,
-            0.16838812972610234,
-            0.24711766854236725,
-            0.0679225638705455,
-            0.059079828519653675,
-            0.043720261601881555,
-            0.01653850841342608,
-            0.00604146633842096,
-            0.04342813428189645,
-            0.0041942731702987,
-        ]
+    domain_names = config.doremi.domain_names
+    ref_model_resume_checkpoint_path = config.doremi.ref_model_resume_checkpoint_path
+
+    # TODO(xrsrke): directly extract domain_names, and ref_model_resume_checkpoint_path from config
+    trainer = DoReMiTrainer(
+        initial_domain_weights, domain_names, ref_model_resume_checkpoint_path, config_file, config_class=DoReMiConfig
     )
-
-    trainer = DoReMiTrainer(initial_domain_weights, DOMAIN_KEYS, REF_CHECKPOINT_PATH, config_file)
-    dataloader = get_dataloader(trainer, dataset_paths=TOKENIZED_DATASETS)
-
+    dataloader = get_dataloader(trainer, datasets)
     trainer.train(dataloader)

@@ -16,10 +16,13 @@ from nanotron import logging
 from nanotron.config import (
     ExistingCheckpointInit,
     RandomInit,
+    get_config_from_file,
 )
-from nanotron.doremi.dataloader import get_dataloader
+from nanotron.doremi.config import DoReMiConfig
+from nanotron.doremi.dataloader import get_dataloader, get_datasets
 from nanotron.doremi.doremi_context import DoReMiContext
 from nanotron.doremi.llama import LlamaReferenceForTrainingWithPerDomainLoss
+from nanotron.doremi.utils import compute_domain_weights_based_on_token_count
 from nanotron.helpers import _vocab_size_with_padding
 from nanotron.logging import log_rank
 from nanotron.models import NanotronModel
@@ -332,55 +335,60 @@ if __name__ == "__main__":
 
     # NOTE: the pile
     # DATASET_PATH = "/fsx/phuc/project_data/doremi/datasets/the_pile_splitted/tokenized_data"
-    TRAIN_DATASET_PATH = "/fsx/phuc/project_data/doremi/datasets/the_pile_splitted/tokenized_data_with_correct_domain"
-    VALID_DATASET_PATH = "/fsx/phuc/project_data/doremi/datasets/the_pile_splitted/tokenized_valid_data"
-    DOMAIN_KEYS = [
-        "Github",
-        "FreeLaw",
-        "OpenWebText2",
-        "PubMed Abstracts",
-        "DM Mathematics",
-        "OpenSubtitles",
-        "HackerNews",
-        "NIH ExPorter",
-        "PubMed Central",
-        "Enron Emails",
-    ]
-    # TOKENIZED_DATASETS = {f"{dom.0630ain_name}": f"{DATASET_PATH}/{domain_name}" for domain_name in DOMAIN_KEYS}
-    TOKENIZED_TRAIN_DATASET_PATHS = [f"{TRAIN_DATASET_PATH}/{domain_name}" for domain_name in DOMAIN_KEYS]
-    TOKENIZED_VALID_DATASET_PATHS = [f"{VALID_DATASET_PATH}/{domain_name}" for domain_name in DOMAIN_KEYS]
+    # TRAIN_DATASET_PATH = "/fsx/phuc/project_data/doremi/datasets/the_pile_splitted/tokenized_data_with_correct_domain"
+    # VALID_DATASET_PATH = "/fsx/phuc/project_data/doremi/datasets/the_pile_splitted/tokenized_valid_data"
+    # DOMAIN_KEYS = [
+    #     "Github",
+    #     "FreeLaw",
+    #     "OpenWebText2",
+    #     "PubMed Abstracts",
+    #     "DM Mathematics",
+    #     "OpenSubtitles",
+    #     "HackerNews",
+    #     "NIH ExPorter",
+    #     "PubMed Central",
+    #     "Enron Emails",
+    # ]
+    # # TOKENIZED_DATASETS = {f"{dom.0630ain_name}": f"{DATASET_PATH}/{domain_name}" for domain_name in DOMAIN_KEYS}
+    # TOKENIZED_TRAIN_DATASET_PATHS = [f"{TRAIN_DATASET_PATH}/{domain_name}" for domain_name in DOMAIN_KEYS]
+    # TOKENIZED_VALID_DATASET_PATHS = [f"{VALID_DATASET_PATH}/{domain_name}" for domain_name in DOMAIN_KEYS]
 
-    NUM_DOMAINS = len(DOMAIN_KEYS)
+    # NUM_DOMAINS = len(DOMAIN_KEYS)
     # initial_domain_weights = F.softmax(torch.ones(NUM_DOMAINS, requires_grad=False), dim=-1)
 
-    if tuned == "true":
-        initial_domain_weights = torch.tensor(
-            [0.06299, 0.177, 0.528, 0.1025, 0.0034, 0.02008, 0.01621, 0.009924, 0.07446, 0.005524]
-        )
-    else:
-        initial_domain_weights = torch.tensor(
-            [
-                0.34356916553540745,
-                0.16838812972610234,
-                0.24711766854236725,
-                0.0679225638705455,
-                0.059079828519653675,
-                0.043720261601881555,
-                0.01653850841342608,
-                0.00604146633842096,
-                0.04342813428189645,
-                0.0041942731702987,
-            ]
-        )
+    # if tuned == "true":
+    #     initial_domain_weights = torch.tensor(
+    #         [0.06299, 0.177, 0.528, 0.1025, 0.0034, 0.02008, 0.01621, 0.009924, 0.07446, 0.005524]
+    #     )
+    # else:
+    #     initial_domain_weights = torch.tensor(
+    #         [
+    #             0.34356916553540745,
+    #             0.16838812972610234,
+    #             0.24711766854236725,
+    #             0.0679225638705455,
+    #             0.059079828519653675,
+    #             0.043720261601881555,
+    #             0.01653850841342608,
+    #             0.00604146633842096,
+    #             0.04342813428189645,
+    #             0.0041942731702987,
+    #         ]
+    #     )
 
-    assert len(initial_domain_weights) == NUM_DOMAINS
-    # assert torch.allclose(initial_domain_weights.sum(), torch.tensor(1.0))
+    # assert len(initial_domain_weights) == NUM_DOMAINS
 
-    trainer = ReferenceTrainer(initial_domain_weights, DOMAIN_KEYS, config_file)
-    dataloader = get_dataloader(
-        trainer,
-        dataset_paths=TOKENIZED_TRAIN_DATASET_PATHS,
-    )
-    # valid_dataloader = get_dataloader(trainer, domain_keys=DOMAIN_KEYS, tokenized_datasets=TOKENIZED_VALID_DATASET_PATHS)
-    # trainer.valid_dataloader = iter(valid_dataloader)
+    config = get_config_from_file(config_file, config_class=DoReMiConfig)
+    dataset_paths = [f"{config.data.dataset.hf_dataset_or_datasets}/{name}" for name in config.doremi.domain_names]
+
+    datasets = get_datasets(dataset_paths)
+    # TODO(xrsrke): add retrieving domain weights from config
+    # or calculate it in the trainer
+    initial_domain_weights = compute_domain_weights_based_on_token_count(datasets)
+    assert torch.allclose(initial_domain_weights.sum(), torch.tensor(1.0))
+
+    domain_names = config.doremi.domain_names
+
+    trainer = ReferenceTrainer(initial_domain_weights, domain_names, config_file, config_class=DoReMiConfig)
+    dataloader = get_dataloader(trainer, datasets)
     trainer.train(dataloader)

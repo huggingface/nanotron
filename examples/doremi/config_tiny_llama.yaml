@@ -4,6 +4,12 @@ checkpoints:
   checkpoints_path_is_shared_file_system: true
   # resume_checkpoint_path: checkpoints_test/
   save_initial_state: false
+
+doremi:
+  domain_names: Github, FreeLaw, OpenWebText2, PubMed Abstracts, DM Mathematics, OpenSubtitles, HackerNews, NIH ExPorter, PubMed Central, Enron Emails
+  ref_model_resume_checkpoint_path: /fsx/phuc/checkpoints/doremi/reference-280m-llama/22000
+
+
 data:
   dataset:
     dataset_overwrite_cache: false
@@ -30,9 +36,12 @@ data:
     # text_column_name: text
 
     # NOTE: the real training
-    hf_dataset_or_datasets: /fsx/leandro/the-pile-splitted
-    hf_dataset_splits: train
-    text_column_name: text
+    # hf_dataset_or_datasets: /fsx/leandro/the-pile-splitted
+    # hf_dataset_splits: train
+    # text_column_name: text
+
+    hf_dataset_or_datasets: /fsx/phuc/project_data/doremi/datasets/the_pile_splitted/tokenized_data_with_correct_domain
+
 
   num_loading_workers: 1
   seed: 42
@@ -152,5 +161,5 @@ tokens:
   sequence_length: 1024
   # train_steps: 1000
   # train_steps: 1579
-  train_steps: 100_000
+  train_steps: 5
   val_check_interval: -1
