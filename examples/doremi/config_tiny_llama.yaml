@@ -7,8 +7,8 @@ checkpoints:
 
 doremi:
   domain_names: Github, FreeLaw, OpenWebText2, PubMed Abstracts, DM Mathematics, OpenSubtitles, HackerNews, NIH ExPorter, PubMed Central, Enron Emails
+  domain_weights: 0.06299, 0.177, 0.528, 0.1025, 0.0034, 0.02008, 0.01621, 0.009924, 0.07446, 0.005524
   ref_model_resume_checkpoint_path: /fsx/phuc/checkpoints/doremi/reference-280m-llama/22000
-
 
 data:
   dataset:

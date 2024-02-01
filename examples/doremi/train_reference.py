@@ -309,86 +309,27 @@ class ReferenceTrainer(DistributedTrainer):
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config-file", type=str, required=True, help="Path to the YAML or python config file")
-    parser.add_argument("--tuned", type=str, required=True, help="")
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = get_args()
     config_file = args.config_file
-    tuned = args.tuned
-
-    # # NOTE: for wikicorpus dataset
-    # DOMAIN_KEYS = [
-    #     "raw_ca",
-    #     "raw_es",
-    #     "raw_en",
-    # ]
-
-    # DOMAIN_KEYS = ['af', 'am', 'az', 'be', 'bg-Latn', 'bn', 'ca', 'ceb', 'co', 'cy', 'el-Latn', 'en', 'eo', 'et', 'eu', 'fil', 'fy', 'ga', 'gd', 'gl', 'gu', 'ha', 'haw', 'hi-Latn', 'hmn', 'ht', 'hy', 'id', 'ig', 'is', 'it', 'iw', 'ja', 'ja-Latn', 'jv', 'ka', 'kk', 'km', 'kn', 'ko', 'ku', 'ky', 'la', 'lb', 'lo', 'lt', 'lv', 'mg', 'mi', 'mk', 'ml', 'mn', 'mr', 'ms', 'mt', 'my', 'ne', 'nl', 'no', 'ny', 'pa', 'pl', 'ps', 'pt', 'ro', 'ru', 'ru-Latn', 'sd', 'si', 'sk', 'sl', 'sm', 'sn', 'so', 'sq', 'sr', 'st', 'su', 'sv', 'sw', 'ta', 'te', 'tg', 'ur', 'uz', 'xh', 'yi', 'yo', 'zh-Latn', 'zu']
-    # DOMAIN_KEYS = ["lt", "az", "ms", "bn", "ca", "cy", "et", "sl"]
-    # DOMAIN_KEYS = ["lt", "az", "ms", "bn"]
-    # DOMAIN_KEYS = ["ne", "lb", "hy", "sr", "mt"] # 3m sequences in the first shard
-
-    # NOTE: some big domains just in case
-    # DOMAIN_KEYS = ["lt", "az", "ms", "bn", "ca", "cy", "et", "sl"]
-
-    # NOTE: the pile
-    # DATASET_PATH = "/fsx/phuc/project_data/doremi/datasets/the_pile_splitted/tokenized_data"
-    # TRAIN_DATASET_PATH = "/fsx/phuc/project_data/doremi/datasets/the_pile_splitted/tokenized_data_with_correct_domain"
-    # VALID_DATASET_PATH = "/fsx/phuc/project_data/doremi/datasets/the_pile_splitted/tokenized_valid_data"
-    # DOMAIN_KEYS = [
-    #     "Github",
-    #     "FreeLaw",
-    #     "OpenWebText2",
-    #     "PubMed Abstracts",
-    #     "DM Mathematics",
-    #     "OpenSubtitles",
-    #     "HackerNews",
-    #     "NIH ExPorter",
-    #     "PubMed Central",
-    #     "Enron Emails",
-    # ]
-    # # TOKENIZED_DATASETS = {f"{dom.0630ain_name}": f"{DATASET_PATH}/{domain_name}" for domain_name in DOMAIN_KEYS}
-    # TOKENIZED_TRAIN_DATASET_PATHS = [f"{TRAIN_DATASET_PATH}/{domain_name}" for domain_name in DOMAIN_KEYS]
-    # TOKENIZED_VALID_DATASET_PATHS = [f"{VALID_DATASET_PATH}/{domain_name}" for domain_name in DOMAIN_KEYS]
-
-    # NUM_DOMAINS = len(DOMAIN_KEYS)
-    # initial_domain_weights = F.softmax(torch.ones(NUM_DOMAINS, requires_grad=False), dim=-1)
-
-    # if tuned == "true":
-    #     initial_domain_weights = torch.tensor(
-    #         [0.06299, 0.177, 0.528, 0.1025, 0.0034, 0.02008, 0.01621, 0.009924, 0.07446, 0.005524]
-    #     )
-    # else:
-    #     initial_domain_weights = torch.tensor(
-    #         [
-    #             0.34356916553540745,
-    #             0.16838812972610234,
-    #             0.24711766854236725,
-    #             0.0679225638705455,
-    #             0.059079828519653675,
-    #             0.043720261601881555,
-    #             0.01653850841342608,
-    #             0.00604146633842096,
-    #             0.04342813428189645,
-    #             0.0041942731702987,
-    #         ]
-    #     )
-
-    # assert len(initial_domain_weights) == NUM_DOMAINS
-
     config = get_config_from_file(config_file, config_class=DoReMiConfig)
-    dataset_paths = [f"{config.data.dataset.hf_dataset_or_datasets}/{name}" for name in config.doremi.domain_names]
 
+    dataset_paths = [f"{config.data.dataset.hf_dataset_or_datasets}/{name}" for name in config.doremi.domain_names]
     datasets = get_datasets(dataset_paths)
+
     # TODO(xrsrke): add retrieving domain weights from config
     # or calculate it in the trainer
-    initial_domain_weights = compute_domain_weights_based_on_token_count(datasets)
-    assert torch.allclose(initial_domain_weights.sum(), torch.tensor(1.0))
+    if config.doremi.domain_weights is None:
+        initial_domain_weights = compute_domain_weights_based_on_token_count(datasets)
+    else:
+        initial_domain_weights = config.doremi.domain_weights
+
+    assert torch.allclose(initial_domain_weights.sum(), torch.tensor(1.0), rtol=1e-3)
 
     domain_names = config.doremi.domain_names
-
     trainer = ReferenceTrainer(initial_domain_weights, domain_names, config_file, config_class=DoReMiConfig)
     dataloader = get_dataloader(trainer, datasets)
     trainer.train(dataloader)

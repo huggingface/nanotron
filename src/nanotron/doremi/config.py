@@ -36,9 +36,12 @@ class DoReMiArgs:
         self.domain_names = [str(name.strip()) for name in self.domain_names.split(",")]
 
         if self.domain_weights is not None:
-            domain_weights = [weight.strip() for weight in self.domain_weights.split(",")]
-            assert sum(domain_weights) == 1.0, "Domain weights must sum to 1.0."
-            self.domain_weights = torch.tensor(domain_weights)
+            domain_weights = [float(weight.strip()) for weight in self.domain_weights.split(",")]
+            domain_weights = torch.tensor(domain_weights)
+            assert torch.allclose(
+                domain_weights.sum(), torch.tensor(1.0), rtol=1e-3
+            ), "Domain weights must sum to 1.0."
+            self.domain_weights = domain_weights
 
         if self.ref_model_checkpoint_path is not None:
             self.ref_model_checkpoint_path = Path(self.ref_model_checkpoint_path)
