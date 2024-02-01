@@ -10,7 +10,7 @@ on:
       - "tests/**/*.py"
 
   pull_request:
-    branches: [ main ]
+    branches: [ '**' ]
     paths:
      - "src/**/*.py"
      - "examples/**/*.py"

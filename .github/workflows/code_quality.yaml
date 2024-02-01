@@ -9,7 +9,7 @@ on:
       - "src/**/*.py"
 
   pull_request:
-    branches: [ main ]
+    branches: [ '**' ]
     paths:
      - "src/**/*.py"
 

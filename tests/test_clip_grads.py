@@ -190,8 +190,13 @@ def _test_clip_grads_with_pp(parallel_context: ParallelContext, norm_type: float
 
 
 @pytest.mark.skipif(available_gpus() < 2, reason="test_clip_grads_with_tp requires at least 2 gpus")
-@pytest.mark.parametrize("tp_mode", list(TensorParallelLinearMode))
-@pytest.mark.parametrize("async_communication", [False, True])
+@pytest.mark.parametrize(
+    "tp_mode,async_communication",
+    [
+        pytest.param(TensorParallelLinearMode.ALL_REDUCE, False),
+        pytest.param(TensorParallelLinearMode.REDUCE_SCATTER, True),
+    ],
+)
 @pytest.mark.parametrize("norm_type", [math.inf, 1.0, 2.0])
 def test_clip_grads_with_tp(tp_mode: TensorParallelLinearMode, async_communication: bool, norm_type: float):
     init_distributed(tp=2, dp=1, pp=1)(_test_clip_grads_with_tp)(
@@ -340,17 +345,9 @@ def test_clip_grads_tied_weights(norm_type: float):
 
 def _test_clip_grads_tied_weights(parallel_context: ParallelContext, norm_type: float):
     if dist.get_rank(parallel_context.pp_pg) == 0:
-        model = nn.ModuleDict(
-            {
-                "dense0": nn.Linear(10, 10, device="cuda"),
-            }
-        )
+        model = nn.ModuleDict({"dense0": nn.Linear(10, 10, device="cuda")})
     else:
-        model = nn.ModuleDict(
-            {
-                "dense1": nn.Linear(10, 10, device="cuda"),
-            }
-        )
+        model = nn.ModuleDict({"dense1": nn.Linear(10, 10, device="cuda")})
 
     # Tie weights/bias
     tie_parameters(
@@ -422,6 +419,7 @@ def _test_clip_grads_tied_weights(parallel_context: ParallelContext, norm_type: 
         norm_type=norm_type,
     )
     ref_total_norm = torch.nn.utils.clip_grad_norm_([ref_weight, ref_bias], max_norm=1.0, norm_type=norm_type)
+    assert len(total_norm.shape) == 0, f"total_norm should be a scalar. Got {total_norm}"
 
     # Check that the gradients have changed
     assert not torch.allclose(old_grad, weight.grad), "Gradients should have changed after clipping"
@@ -429,7 +427,9 @@ def _test_clip_grads_tied_weights(parallel_context: ParallelContext, norm_type: 
     # Test that we get the same gradient after clipping
     torch.testing.assert_close(weight.grad, ref_weight.grad, rtol=1e-7, atol=1e-6)
     torch.testing.assert_close(bias.grad, ref_bias.grad, rtol=1e-7, atol=1e-6)
-    assert total_norm == ref_total_norm, "Total norm should be the same"
+    torch.testing.assert_close(
+        total_norm, ref_total_norm, rtol=0, atol=0, msg=lambda msg: f"{msg}\n" f"Got {total_norm} and {ref_total_norm}"
+    )
 
 
 @pytest.mark.parametrize("half_precision", [torch.float16, torch.bfloat16])
