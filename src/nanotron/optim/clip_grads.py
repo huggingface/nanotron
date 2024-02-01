@@ -56,7 +56,7 @@ def clip_grad_norm(
                 torch.stack([torch.linalg.vector_norm(g.detach(), ord=torch.inf, dtype=torch.float) for g in grads])
             )
         else:
-            total_norm = torch.zeros(1, dtype=torch.float, device=torch.device("cuda"))
+            total_norm = torch.zeros([], dtype=torch.float, device=torch.device("cuda"))
         dist.all_reduce(total_norm, group=mp_pg, op=dist.ReduceOp.MAX)
 
     else:
