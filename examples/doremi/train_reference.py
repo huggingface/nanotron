@@ -377,17 +377,9 @@ if __name__ == "__main__":
     # assert torch.allclose(initial_domain_weights.sum(), torch.tensor(1.0))
 
     trainer = ReferenceTrainer(initial_domain_weights, DOMAIN_KEYS, config_file)
-    # dist.barrier()
-    # import time
-
-    # # time.sleep(3)
-
-    # # dist.barrier()
-
     dataloader = get_dataloader(
         trainer,
-        domain_keys=DOMAIN_KEYS,
-        datasets_paths=TOKENIZED_TRAIN_DATASET_PATHS,
+        dataset_paths=TOKENIZED_TRAIN_DATASET_PATHS,
     )
     # valid_dataloader = get_dataloader(trainer, domain_keys=DOMAIN_KEYS, tokenized_datasets=TOKENIZED_VALID_DATASET_PATHS)
     # trainer.valid_dataloader = iter(valid_dataloader)

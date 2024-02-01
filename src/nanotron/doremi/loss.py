@@ -48,7 +48,7 @@ def compute_per_domain_loss(
     return normalized_domain_losses, samples_per_domain
 
 
-class DoReMiLossForProxyTraining:
+class DomainLossForProxyTraining:
     def __init__(self, doremi_context: DoReMiContext, parallel_context: ParallelContext):
         self.doremi_context = doremi_context
         self.parallel_context = parallel_context
@@ -145,12 +145,6 @@ class CrossEntropyWithPerDomainLoss(nn.Module):
         label_mask: torch.Tensor,  # [batch_size, seq_length]
         domain_idxs: torch.Tensor,
     ) -> Dict[str, torch.Tensor]:
-        # loss = sharded_cross_entropy(
-        #     sharded_logits, label_ids.transpose(0, 1).contiguous(), group=tp_pg, dtype=torch.float
-        # ).transpose(0, 1)
-        # per_token_loss = sharded_cross_entropy(
-        #     sharded_logits, label_ids.transpose(0, 1).contiguous(), group=self.parallel_context.tp_pg, dtype=torch.float
-        # ).transpose(0, 1)
         per_token_loss = sharded_cross_entropy(
             sharded_logits, label_ids, group=self.parallel_context.tp_pg, dtype=torch.float
         )
@@ -159,3 +153,40 @@ class CrossEntropyWithPerDomainLoss(nn.Module):
             per_token_loss, domain_idxs, self.doremi_context, self.parallel_context
         )
         return {"loss": lm_loss, "domain_losses": domain_losses, "samples_per_domain": samples_per_domain}
+
+
+class DoReMiLossForProxyTraining(nn.Module):
+    def __init__(self, doremi_context: DoReMiContext, parallel_context: ParallelContext):
+        super().__init__()
+        self.parallel_context = parallel_context
+        self.doremi_loss = DomainLossForProxyTraining(doremi_context, parallel_context)
+        self.iteration = 0
+
+    def forward(
+        self,
+        sharded_logits: torch.Tensor,  # [seq_length, batch_size, logits]
+        label_ids: torch.Tensor,  # [batch_size, seq_length]
+        label_mask: torch.Tensor,  # [batch_size, seq_length]
+        domain_idxs: torch.Tensor,
+        ref_losses: torch.Tensor,
+    ) -> Dict[str, torch.Tensor]:
+        loss = sharded_cross_entropy(
+            sharded_logits,
+            # label_ids.transpose(0, 1).contiguous(),
+            label_ids,
+            group=self.parallel_context.tp_pg,
+            dtype=torch.float,
+        )
+        # .transpose(0, 1)
+
+        lm_loss = masked_mean(loss, label_mask, dtype=torch.float)
+
+        # per_token_losses = loss * label_mask
+        excess_losses, domain_losses, domain_weights = self.doremi_loss(loss, ref_losses, domain_idxs)
+
+        return {
+            "loss": lm_loss,
+            "excess_losses": excess_losses,
+            "domain_losses": domain_losses,
+            "domain_weights": domain_weights,
+        }

@@ -4,7 +4,12 @@ import torch.distributed as dist
 import torch.nn.functional as F
 from helpers.utils import init_distributed
 from nanotron.doremi.doremi_context import DoReMiContext
-from nanotron.doremi.loss import CrossEntropyWithPerDomainLoss, DoReMiLossForProxyTraining, compute_per_domain_loss
+from nanotron.doremi.loss import (
+    CrossEntropyWithPerDomainLoss,
+    DomainLossForProxyTraining,
+    DoReMiLossForProxyTraining,
+    compute_per_domain_loss,
+)
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.tensor_parallel.functional import sharded_cross_entropy
 from nanotron.sanity_checks import assert_tensor_synced_across_pg
@@ -85,7 +90,7 @@ def _test_doremi_loss(
     domain_idxs = torch.randint(0, N_DOMAINS, (batch_size,), device="cuda")
 
     doremi_context = DoReMiContext(domain_weights, domain_keys, is_proxy=False)
-    loss_func = DoReMiLossForProxyTraining(doremi_context, parallel_context)
+    loss_func = DomainLossForProxyTraining(doremi_context, parallel_context)
 
     excess_loss, domain_losses, domain_weights = loss_func(losses, ref_losses, domain_idxs)
 
@@ -211,3 +216,69 @@ def _test_cross_entropy_with_per_domain_loss(
     assert outputs["domain_losses"].shape == (doremi_context.num_domains,)
     assert outputs["samples_per_domain"].shape == (doremi_context.num_domains,)
     assert sum(outputs["samples_per_domain"]) == batch_size
+
+
+@pytest.mark.parametrize("tp", [1, 2])
+def test_doremi_loss_for_proxy_training(tp: int, doremi_context):
+    BATCH_SIZE = 512
+    SEQ_LEN = 128
+    VOCAB_SIZE = 4
+    N_DOMAINS = doremi_context.num_domains
+
+    torch.manual_seed(69)
+
+    logits = torch.randn(BATCH_SIZE, SEQ_LEN, VOCAB_SIZE)
+    label_ids = torch.randint(0, VOCAB_SIZE, (BATCH_SIZE, SEQ_LEN))
+    label_mask = torch.ones((BATCH_SIZE, SEQ_LEN), dtype=torch.bool)
+    domain_idxs = torch.randint(0, N_DOMAINS, (BATCH_SIZE,))
+
+    ref_losses = torch.randn(BATCH_SIZE, SEQ_LEN)
+    ref_lm_loss = F.cross_entropy(logits.view(-1, logits.size(2)), label_ids.view(-1))
+
+    init_distributed(tp=tp, dp=1, pp=1)(_test_doremi_loss_for_proxy_training)(
+        logits=logits,
+        label_ids=label_ids,
+        label_mask=label_mask,
+        domain_idxs=domain_idxs,
+        ref_losses=ref_losses,
+        ref_lm_loss=ref_lm_loss,
+        batch_size=BATCH_SIZE,
+        seq_len=SEQ_LEN,
+        doremi_context=doremi_context,
+    )
+
+
+def _test_doremi_loss_for_proxy_training(
+    parallel_context: ParallelContext,
+    logits,
+    label_ids,
+    label_mask,
+    domain_idxs,
+    ref_losses,
+    ref_lm_loss,
+    batch_size,
+    seq_len,
+    doremi_context,
+):
+    logits = logits.to("cuda")
+    label_ids = label_ids.to("cuda")
+    label_mask = label_mask.to("cuda")
+    domain_idxs = domain_idxs.to("cuda")
+    ref_losses = ref_losses.to("cuda")
+    doremi_context.domain_weights = doremi_context.domain_weights.to("cuda")
+
+    parallel_logits = get_partition_logit(logits, parallel_context)
+
+    loss_func = DoReMiLossForProxyTraining(doremi_context, parallel_context)
+    outputs = loss_func(parallel_logits, label_ids, label_mask, domain_idxs, ref_losses)
+
+    assert torch.allclose(outputs["loss"].cpu().view(-1), ref_lm_loss)
+
+    assert outputs["excess_losses"].shape == (batch_size, seq_len)
+    assert (outputs["excess_losses"] >= 0).all()
+
+    assert outputs["domain_losses"].shape == (doremi_context.num_domains,)
+    assert (outputs["domain_losses"] > 0).all()
+
+    assert outputs["domain_weights"].shape == (doremi_context.num_domains,)
+    assert torch.allclose(sum(outputs["domain_weights"].cpu()), torch.tensor(1.0))

@@ -5,7 +5,6 @@ from nanotron import logging
 from nanotron.config import ParallelismArgs
 from nanotron.doremi.doremi_context import DoReMiContext
 from nanotron.doremi.loss import CrossEntropyWithPerDomainLoss, DoReMiLossForProxyTraining
-from nanotron.doremi.utils import masked_mean
 from nanotron.models import NanotronModel
 from nanotron.models.fast.llama import LlamaModel
 from nanotron.nn.layer_norm import TritonRMSNorm
@@ -18,7 +17,6 @@ from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelEmbedding,
     TensorParallelRowLinear,
 )
-from torch import nn
 from transformers import LlamaConfig
 
 logger = logging.get_logger(__name__)
@@ -212,41 +210,6 @@ class LLaMaForInference(BaseLLaMa):
         return {"losses": loss}
 
 
-class DoReMiLoss(nn.Module):
-    def __init__(self, parallel_context: ParallelContext, doremi_context: DoReMiContext):
-        super().__init__()
-        self.parallel_context = parallel_context
-        self.doremi_loss = DoReMiLossForProxyTraining(doremi_context, parallel_context)
-        self.iteration = 0
-
-    def forward(
-        self,
-        sharded_logits: torch.Tensor,  # [seq_length, batch_size, logits]
-        label_ids: torch.Tensor,  # [batch_size, seq_length]
-        label_mask: torch.Tensor,  # [batch_size, seq_length]
-        domain_idxs: torch.Tensor,
-        ref_losses: torch.Tensor,
-        # doremi_context: DoReMiContext,
-    ) -> Dict[str, torch.Tensor]:
-        loss = sharded_cross_entropy(
-            sharded_logits,
-            label_ids.transpose(0, 1).contiguous(),
-            group=self.parallel_context.tp_pg,
-            dtype=torch.float,
-        ).transpose(0, 1)
-        lm_loss = masked_mean(loss, label_mask, dtype=torch.float)
-
-        # per_token_losses = loss * label_mask
-        excess_losses, domain_losses, domain_weights = self.doremi_loss(loss, ref_losses, domain_idxs)
-
-        return {
-            "loss": lm_loss,
-            "excess_losses": excess_losses,
-            "domain_losses": domain_losses,
-            "domain_weights": domain_weights,
-        }
-
-
 class LlamaForDoReMiTraining(BaseLLaMa):
     def __init__(
         self,
@@ -259,7 +222,7 @@ class LlamaForDoReMiTraining(BaseLLaMa):
         self.model = LlamaModel(config=config, parallel_context=parallel_context, parallel_config=parallel_config)
         self.loss = PipelineBlock(
             p2p=self.model.p2p,
-            module_builder=DoReMiLoss,
+            module_builder=DoReMiLossForProxyTraining,
             module_kwargs={
                 "parallel_context": parallel_context,
                 "doremi_context": doremi_context,
@@ -270,14 +233,12 @@ class LlamaForDoReMiTraining(BaseLLaMa):
                 "label_mask",
                 "domain_idxs",
                 "ref_losses",
-                # "doremi_context",
             },
             module_output_keys={"loss", "excess_losses", "domain_losses", "domain_weights"},
         )
         self.parallel_context = parallel_context
         self.config = config
         self.parallel_config = parallel_config
-        # self.doremi_context = doremi_context
 
     def forward(
         self,
@@ -285,7 +246,6 @@ class LlamaForDoReMiTraining(BaseLLaMa):
         input_mask: Union[torch.Tensor, TensorPointer],
         label_ids: Union[torch.Tensor, TensorPointer],
         label_mask: Union[torch.Tensor, TensorPointer],
-        # TODO(xrsrke): change to plural
         domain_idxs: Optional[Union[torch.Tensor, TensorPointer]],
         ref_losses: Optional[Union[torch.Tensor, TensorPointer]],
     ) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
@@ -294,14 +254,13 @@ class LlamaForDoReMiTraining(BaseLLaMa):
             input_mask=input_mask,
         )
         sharded_logits = sharded_logits.transpose(0, 1).contiguous()
-        label_ids = label_ids.transpose(0, 1).contiguous()
+        # label_ids = label_ids.transpose(0, 1).contiguous()
         outputs = self.loss(
             sharded_logits=sharded_logits,
             label_ids=label_ids,
             label_mask=label_mask,
             domain_idxs=domain_idxs,
             ref_losses=ref_losses,
-            # doremi_context=self.doremi_context,
         )
         return outputs
 
@@ -330,8 +289,6 @@ class LlamaReferenceForTrainingWithPerDomainLoss(BaseLLaMa):
         self.config = config
         self.parallel_config = parallel_config
 
-        self.iteration = 0
-
     def forward(
         self,
         input_ids: Union[torch.Tensor, TensorPointer],
@@ -345,19 +302,12 @@ class LlamaReferenceForTrainingWithPerDomainLoss(BaseLLaMa):
             input_mask=input_mask,
         )
         sharded_logits = sharded_logits.transpose(0, 1).contiguous()
-
-        if self.iteration == 2:
-            assert 1 == 1
-
         outputs = self.loss(
             sharded_logits=sharded_logits,
-            # label_ids=label_ids.transpose(0, 1).contiguous(),
             label_ids=label_ids,
             label_mask=label_mask,
             domain_idxs=domain_idxs,
         )
-
-        self.iteration += 1
         return {
             "loss": outputs["loss"],
             "domain_losses": outputs["domain_losses"],
