@@ -7,7 +7,6 @@ export CUDA_DEVICE_MAX_CONNECTIONS=1 # important for some distributed operations
 torchrun --nproc_per_node=4 examples/doremi/train_doremi.py --config-file examples/doremi/config_tiny_llama.yaml
 """
 import argparse
-import datetime
 from pprint import pformat
 from typing import Dict, Iterable, List, Optional, Union
 
@@ -31,8 +30,6 @@ from nanotron.serialize import load_weights, parse_ckpt_path
 from nanotron.trainer import DistributedTrainer
 from nanotron.utils import init_method_normal, scaled_init_method_normal
 from torch.nn.parallel import DistributedDataParallel
-
-import wandb
 
 logger = logging.get_logger(__name__)
 
@@ -153,25 +150,25 @@ class ReferenceTrainer(DistributedTrainer):
 
         return model
 
-    def post_init(self):
-        def get_time_name():
-            today = datetime.datetime.now()
-            return today.strftime("%d/%m/%Y_%H:%M:%S")
+    # def post_init(self):
+    #     def get_time_name():
+    #         today = datetime.datetime.now()
+    #         return today.strftime("%d/%m/%Y_%H:%M:%S")
 
-        if dist.get_rank(self.parallel_context.world_pg) == 0:
-            wandb.init(
-                project="nanotron",
-                name=f"{get_time_name()}_doremi_2.8b_reference_training_with_tuned_weights",
-                config={
-                    "nanotron_config": self.config.as_dict(),
-                    "doremi": {
-                        "smoothing_param": self.doremi_context.smoothing_param,
-                        "step_size": self.doremi_context.step_size,
-                        "domain_keys": self.doremi_context.domain_keys,
-                        "initial_domain_weights": self.doremi_context.domain_weights.cpu().detach().numpy(),
-                    },
-                },
-            )
+    #     if dist.get_rank(self.parallel_context.world_pg) == 0:
+    #         wandb.init(
+    #             project="nanotron",
+    #             name=f"{get_time_name()}_doremi_2.8b_reference_training_with_tuned_weights",
+    #             config={
+    #                 "nanotron_config": self.config.as_dict(),
+    #                 "doremi": {
+    #                     "smoothing_param": self.doremi_context.smoothing_param,
+    #                     "step_size": self.doremi_context.step_size,
+    #                     "domain_keys": self.doremi_context.domain_keys,
+    #                     "initial_domain_weights": self.doremi_context.domain_weights.cpu().detach().numpy(),
+    #                 },
+    #             },
+    #         )
 
     def pre_training(self):
         # def patch_forward(model_instance):
@@ -247,23 +244,21 @@ class ReferenceTrainer(DistributedTrainer):
         )
 
         if dist.get_rank(self.parallel_context.world_pg) == 0:
-            loss_logs = {
-                f"loss_domain_{self.doremi_context.get_domain_name(i)}": loss for i, loss in enumerate(domain_losses)
-            }
+            {f"loss_domain_{self.doremi_context.get_domain_name(i)}": loss for i, loss in enumerate(domain_losses)}
 
-            samples_per_domain_logs = {
+            {
                 f"samples_per_domain_{self.doremi_context.get_domain_name(i)}": n_samples
                 for i, n_samples in enumerate(samples_per_domain)
             }
 
-            wandb.log(
-                {
-                    **loss_logs,
-                    **samples_per_domain_logs,
-                    "loss_avg": loss_avg.item(),
-                    "step": self.iteration_step,
-                }
-            )
+            # wandb.log(
+            #     {
+            #         **loss_logs,
+            #         **samples_per_domain_logs,
+            #         "loss_avg": loss_avg.item(),
+            #         "step": self.iteration_step,
+            #     }
+            # )
 
         if self.valid_dataloader is not None and self.iteration_step % self.config.tokens.val_check_interval == 0:
             # valid_outputs = self.validation_step(dataloader=self.valid_dataloader)
@@ -389,7 +384,11 @@ if __name__ == "__main__":
 
     # # dist.barrier()
 
-    dataloader = get_dataloader(trainer, domain_keys=DOMAIN_KEYS, tokenized_datasets=TOKENIZED_TRAIN_DATASET_PATHS)
+    dataloader = get_dataloader(
+        trainer,
+        domain_keys=DOMAIN_KEYS,
+        datasets_paths=TOKENIZED_TRAIN_DATASET_PATHS,
+    )
     # valid_dataloader = get_dataloader(trainer, domain_keys=DOMAIN_KEYS, tokenized_datasets=TOKENIZED_VALID_DATASET_PATHS)
     # trainer.valid_dataloader = iter(valid_dataloader)
     trainer.train(dataloader)
