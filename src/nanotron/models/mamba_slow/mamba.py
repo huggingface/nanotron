@@ -179,7 +179,6 @@ class Mamba(nn.Module):
         self.D._no_weight_decay = True
 
         self.out_proj = nn.Linear(self.d_inner, self.d_model, bias=bias, **factory_kwargs)
-        print()
 
     def forward(self, hidden_states, inference_params=None):
         """
@@ -395,7 +394,9 @@ class Block(nn.Module):
             residual: hidden_states = Mixer(LN(residual))
         """
         if not self.fused_add_norm:
-            residual = (hidden_states + residual) if residual is not None else hidden_states
+            # self.layer_idx was assigned when calling create_block
+            # residual=None happens only at the first block
+            residual = hidden_states if (self.layer_idx == 0) else hidden_states + residual
             hidden_states = self.norm(residual.to(dtype=self.norm.weight.dtype))
             if self.residual_in_fp32:
                 residual = residual.to(torch.float32)
@@ -501,9 +502,9 @@ class MambaDecoderLayer(nn.Module):
         self,
         hidden_states: Union[torch.Tensor, TensorPointer],
         sequence_mask: Union[torch.Tensor, TensorPointer],
-        residual: Optional[Union[torch.Tensor, TensorPointer]] = None,
+        residual: Optional[Union[torch.Tensor, TensorPointer]],
     ) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
-        hidden_states, residual = self.block(hidden_states)
+        hidden_states, residual = self.block(hidden_states, residual)
 
         return {
             "hidden_states": hidden_states,
@@ -614,12 +615,10 @@ class MambaModel(nn.Module):
 
         output = self.token_position_embeddings(input_ids=input_ids, input_mask=input_mask)
 
-        residual = None
-
         hidden_encoder_states = {
             "hidden_states": output["input_embeds"],
             "sequence_mask": input_mask,
-            "residual": residual,
+            "residual": output["input_embeds"],
         }
 
         for block in self.decoder:
