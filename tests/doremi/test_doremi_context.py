@@ -39,6 +39,19 @@ def test_domain_keys_length():
         DoReMiContext(domain_weights, domain_keys, False)
 
 
+def test_record_domain_weights_history():
+    domain_weights = [torch.tensor([0.1, 0.3, 0.6]), torch.tensor([0.2, 0.3, 0.5]), torch.tensor([0.3, 0.3, 0.4])]
+    domain_keys = ["domain1", "domain2", "domain3"]
+
+    doremi_context = DoReMiContext(domain_weights[0], domain_keys, False)
+    doremi_context.set_weight_with_history(domain_weights[1], 1)
+    doremi_context.set_weight_with_history(domain_weights[2], 2)
+
+    for i, history in enumerate(doremi_context.domain_weight_history):
+        assert history["step"] == i
+        assert torch.equal(history["domain_weights"], domain_weights[i])
+
+
 def test_domain_weights_sum():
     with pytest.raises(AssertionError):
         DoReMiContext(torch.tensor([0.5, 0.6]), ["a", "b"], False)
