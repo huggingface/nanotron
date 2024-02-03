@@ -470,7 +470,8 @@ class Embedding(nn.Module, AttachableStore):
             store["past_length"] = past_length + cumsum_mask[:, -1]
 
         # Format input in `[seq_length, batch_size]` to support high TP with low batch_size
-        input_ids = input_ids.transpose(0, 1)
+        #NOTE(fmom): undo transpose for now since Mamba is not using TP
+        # input_ids = input_ids.transpose(0, 1)
         input_embeds = self.token_embedding(input_ids)
         return {"input_embeds": input_embeds}
 
@@ -704,9 +705,16 @@ class Loss(nn.Module):
     ) -> Dict[str, torch.Tensor]:
         # Megatron by defaults cast everything in fp32. `--f16-lm-cross-entropy` is an option you can use to keep current precision.
         # https://github.com/NVIDIA/Megatron-LM/blob/f267e6186eae1d6e2055b412b00e2e545a8e896a/megatron/model/gpt_model.py#L38
+        
+        #NOTE(fmom): undo transpose for now since Mamba is not using TP
+        # loss = sharded_cross_entropy(
+        #     sharded_logits, label_ids.transpose(0, 1).contiguous(), group=self.tp_pg, dtype=torch.float
+        # ).transpose(0, 1)
+        
         loss = sharded_cross_entropy(
-            sharded_logits, label_ids.transpose(0, 1).contiguous(), group=self.tp_pg, dtype=torch.float
-        ).transpose(0, 1)
+            sharded_logits, label_ids, group=self.tp_pg, dtype=torch.float
+        )
+        
         # TODO @thomasw21: It's unclear what kind of normalization we want to do.
         loss = masked_mean(loss, label_mask, dtype=torch.float)
         # I think indexing causes a sync we don't actually want
