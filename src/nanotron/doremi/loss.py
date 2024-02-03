@@ -93,6 +93,10 @@ class DomainLossForProxyTraining:
         samples_per_domain = torch.bincount(domain_ids_dp, minlength=N_DOMAINS)
         SEQ_LEN = losses.shape[1]
         normalized_domain_losses = domain_losses / (samples_per_domain * SEQ_LEN)
+
+        # if dist.get_rank(self.parallel_context.world_pg) == 0:
+        #     print(f"rank: {dist.get_rank(self.parallel_context.world_pg)}samples_per_domain: {samples_per_domain} \n")
+
         # NOTE: if the domain loss is zero, then the normalized domain loss is zero
         normalized_domain_losses[torch.isnan(normalized_domain_losses)] = 0.0
 
@@ -114,10 +118,11 @@ class DomainLossForProxyTraining:
         train_domain_weights = (1 - smoothing_param) * torch.exp(log_new_train_domain_weights) + smoothing_param / len(
             log_new_train_domain_weights
         )
-        self.doremi_context.domain_weights = train_domain_weights.detach()
+        # self.doremi_context.domain_weights = train_domain_weights.detach()
+        # self.doremi_context.add_weight_with_history(train_domain_weights.detach().cpu())
 
         # return excess_losses, normalized_domain_losses, smooth_domain_weights
-        return excess_losses_dp, normalized_domain_losses, train_domain_weights
+        return excess_losses_dp, normalized_domain_losses, train_domain_weights, samples_per_domain
 
     # def _normalize_domain_weights(self, weights: torch.Tensor, smoothing_param: float) -> torch.Tensor:
     #     """
@@ -182,11 +187,14 @@ class DoReMiLossForProxyTraining(nn.Module):
         lm_loss = masked_mean(loss, label_mask, dtype=torch.float)
 
         # per_token_losses = loss * label_mask
-        excess_losses, domain_losses, domain_weights = self.doremi_loss(loss, ref_losses, domain_idxs)
+        excess_losses, domain_losses, domain_weights, samples_per_domain = self.doremi_loss(
+            loss, ref_losses, domain_idxs
+        )
 
         return {
             "loss": lm_loss,
             "excess_losses": excess_losses,
             "domain_losses": domain_losses,
             "domain_weights": domain_weights,
+            "samples_per_domain": samples_per_domain,
         }

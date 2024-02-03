@@ -44,8 +44,13 @@ def test_record_domain_weights_history():
     domain_keys = ["domain1", "domain2", "domain3"]
 
     doremi_context = DoReMiContext(domain_weights[0], domain_keys, False)
-    doremi_context.set_weight_with_history(domain_weights[1], 1)
-    doremi_context.set_weight_with_history(domain_weights[2], 2)
+
+    assert torch.equal(doremi_context.domain_weights, domain_weights[0])
+
+    doremi_context.add_weight_with_history(domain_weights[1], 1)
+    assert torch.equal(doremi_context.domain_weights, domain_weights[1])
+    doremi_context.add_weight_with_history(domain_weights[2], 2)
+    assert torch.equal(doremi_context.domain_weights, domain_weights[2])
 
     for i, history in enumerate(doremi_context.domain_weight_history):
         assert history["step"] == i

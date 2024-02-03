@@ -22,6 +22,8 @@ from nanotron.trainer import DistributedTrainer
 from nanotron.utils import init_method_normal, scaled_init_method_normal
 from torch.nn.parallel import DistributedDataParallel
 
+import wandb
+
 logger = logging.get_logger(__name__)
 
 
@@ -268,21 +270,21 @@ class DoReMiTrainer(DistributedTrainer):
             today = datetime.datetime.now()
             return today.strftime("%d/%m/%Y_%H:%M:%S")
 
-        # if dist.get_rank(self.parallel_context.world_pg) == 0:
-        #     wandb.init(
-        #         project="nanotron",
-        #         name=f"{get_time_name()}_doremi_proxy_training",
-        #         config={
-        #             "version": 1,
-        #             "nanotron_config": self.config.as_dict(),
-        #             "doremi": {
-        #                 "smoothing_param": self.doremi_context.smoothing_param,
-        #                 "step_size": self.doremi_context.step_size,
-        #                 "domain_keys": self.doremi_context.domain_keys,
-        #                 "initial_domain_weights": self.doremi_context.domain_weights.cpu().detach().numpy(),
-        #             },
-        #         },
-        #     )
+        if dist.get_rank(self.parallel_context.world_pg) == 0:
+            wandb.init(
+                project="nanotron",
+                name=f"{get_time_name()}_{self.config.general.project}_{self.config.general.run}",
+                config={
+                    "version": 1,
+                    "nanotron_config": self.config.as_dict(),
+                    "doremi": {
+                        "smoothing_param": self.doremi_context.smoothing_param,
+                        "step_size": self.doremi_context.step_size,
+                        "domain_keys": self.doremi_context.domain_keys,
+                        "initial_domain_weights": self.doremi_context.domain_weights.cpu().detach().numpy(),
+                    },
+                },
+            )
 
     def train_step_logs(
         self,
@@ -291,6 +293,8 @@ class DoReMiTrainer(DistributedTrainer):
     ):
         domain_weights = outputs[0]["domain_weights"]
         domain_losses = outputs[0]["domain_losses"]
+        samples_per_domain = outputs[0]["samples_per_domain"].tolist()
+
         handle_weight = dist.all_reduce(
             domain_weights, group=self.parallel_context.dp_pg, async_op=True, op=dist.ReduceOp.AVG
         )
@@ -302,6 +306,8 @@ class DoReMiTrainer(DistributedTrainer):
 
         handle_weight.wait()
         handle_loss.wait()
+
+        self.doremi_context.add_weight_with_history(domain_weights, self.iteration_step)
 
         domain_weights = domain_weights.cpu().detach().numpy()
         domain_losses = domain_losses.cpu().detach().numpy()
@@ -322,20 +328,31 @@ class DoReMiTrainer(DistributedTrainer):
             group=self.parallel_context.dp_pg,
         )
 
-        # if dist.get_rank(self.parallel_context.world_pg) == 0:
-        #     weight_logs = {
-        #         f"weight_domain_{self.doremi_context.get_domain_name(i)}": weight
-        #         for i, weight in enumerate(domain_weights)
-        #     }
-        #     loss_logs = {
-        #         f"loss_domain_{self.doremi_context.get_domain_name(i)}": loss for i, loss in enumerate(domain_losses)
-        #     }
-        #     wandb.log(
-        #         {
-        #             **weight_logs,
-        #             **loss_logs,
-        #             "loss_avg": loss_avg.cpu().detach().numpy(),
-        #             # "lm_loss": outputs[0]["lm_loss"].cpu().detach().numpy(),
-        #             "step": self.iteration_step,
-        #         }
-        #     )
+        if dist.get_rank(self.parallel_context.world_pg) == 0:
+            if self.iteration_step % self.config.checkpoints.checkpoint_interval == 0:
+                checkpoints_path = self.config.checkpoints.checkpoints_path
+                checkpoint_path = checkpoints_path / f"doremi_domain_weights_{self.iteration_step}.pt"
+                torch.save(self.doremi_context.domain_weight_history, checkpoint_path)
+
+            weight_logs = {
+                f"weight_domain_{self.doremi_context.get_domain_name(i)}": weight
+                for i, weight in enumerate(domain_weights)
+            }
+            loss_logs = {
+                f"loss_domain_{self.doremi_context.get_domain_name(i)}": loss for i, loss in enumerate(domain_losses)
+            }
+            samples_per_domain_logs = {
+                f"samples_per_domain_{self.doremi_context.get_domain_name(i)}": samples
+                for i, samples in enumerate(samples_per_domain)
+            }
+
+            wandb.log(
+                {
+                    **weight_logs,
+                    **loss_logs,
+                    **samples_per_domain_logs,
+                    "loss_avg": loss_avg.cpu().detach().numpy(),
+                    # "lm_loss": outputs[0]["lm_loss"].cpu().detach().numpy(),
+                    "step": self.iteration_step,
+                }
+            )

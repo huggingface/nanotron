@@ -34,6 +34,8 @@ from nanotron.trainer import DistributedTrainer
 from nanotron.utils import init_method_normal, scaled_init_method_normal
 from torch.nn.parallel import DistributedDataParallel
 
+import wandb
+
 logger = logging.get_logger(__name__)
 
 
@@ -153,25 +155,27 @@ class ReferenceTrainer(DistributedTrainer):
 
         return model
 
-    # def post_init(self):
-    #     def get_time_name():
-    #         today = datetime.datetime.now()
-    #         return today.strftime("%d/%m/%Y_%H:%M:%S")
+    def post_init(self):
+        import datetime
 
-    #     if dist.get_rank(self.parallel_context.world_pg) == 0:
-    #         wandb.init(
-    #             project="nanotron",
-    #             name=f"{get_time_name()}_doremi_2.8b_reference_training_with_tuned_weights",
-    #             config={
-    #                 "nanotron_config": self.config.as_dict(),
-    #                 "doremi": {
-    #                     "smoothing_param": self.doremi_context.smoothing_param,
-    #                     "step_size": self.doremi_context.step_size,
-    #                     "domain_keys": self.doremi_context.domain_keys,
-    #                     "initial_domain_weights": self.doremi_context.domain_weights.cpu().detach().numpy(),
-    #                 },
-    #             },
-    #         )
+        def get_time_name():
+            today = datetime.datetime.now()
+            return today.strftime("%d/%m/%Y_%H:%M:%S")
+
+        if dist.get_rank(self.parallel_context.world_pg) == 0:
+            wandb.init(
+                project="nanotron",
+                name=f"{get_time_name()}_{self.config.general.project}_{self.config.general.run}",
+                config={
+                    "nanotron_config": self.config.as_dict(),
+                    "doremi": {
+                        "smoothing_param": self.doremi_context.smoothing_param,
+                        "step_size": self.doremi_context.step_size,
+                        "domain_keys": self.doremi_context.domain_keys,
+                        "initial_domain_weights": self.doremi_context.domain_weights.tolist(),
+                    },
+                },
+            )
 
     def pre_training(self):
         # def patch_forward(model_instance):
@@ -227,15 +231,17 @@ class ReferenceTrainer(DistributedTrainer):
         # NOTE: reset the counting in DistributedSamplerForDoReMi
         # trainer.sampler.reset()
 
-        domain_losses = outputs[0]["domain_losses"].cpu().detach().numpy()
-        samples_per_domain = outputs[0]["samples_per_domain"].cpu().detach().numpy()
+        # domain_losses = outputs[0]["domain_losses"].cpu().detach().numpy()
+        # samples_per_domain = outputs[0]["samples_per_domain"].cpu().detach().numpy()
+        domain_losses = outputs[0]["domain_losses"].tolist()
+        samples_per_domain = outputs[0]["samples_per_domain"].tolist()
 
         log_rank(
             f"[DoReMi][Train] Domain loss: {str(domain_losses)}",
             logger=logger,
             level=logging.INFO,
             rank=0,
-            group=self.parallel_context.tp_pg,
+            # group=self.parallel_context.tp_pg,
         )
 
         log_rank(
@@ -243,67 +249,69 @@ class ReferenceTrainer(DistributedTrainer):
             logger=logger,
             level=logging.INFO,
             rank=0,
-            group=self.parallel_context.tp_pg,
+            # group=self.parallel_context.tp_pg,
         )
 
         if dist.get_rank(self.parallel_context.world_pg) == 0:
-            {f"loss_domain_{self.doremi_context.get_domain_name(i)}": loss for i, loss in enumerate(domain_losses)}
+            loss_logs = {
+                f"loss_domain_{self.doremi_context.get_domain_name(i)}": loss for i, loss in enumerate(domain_losses)
+            }
 
-            {
+            samples_per_domain_logs = {
                 f"samples_per_domain_{self.doremi_context.get_domain_name(i)}": n_samples
                 for i, n_samples in enumerate(samples_per_domain)
             }
 
-            # wandb.log(
-            #     {
-            #         **loss_logs,
-            #         **samples_per_domain_logs,
-            #         "loss_avg": loss_avg.item(),
-            #         "step": self.iteration_step,
-            #     }
-            # )
-
-        if self.valid_dataloader is not None and self.iteration_step % self.config.tokens.val_check_interval == 0:
-            # valid_outputs = self.validation_step(dataloader=self.valid_dataloader)
-            batch = next(self.valid_dataloader)
-            valid_outputs = self.model(batch)
-            valid_domain_losses = valid_outputs[0]["domain_losses"].cpu().detach().numpy()
-            valid_samples_per_domain = valid_outputs[0]["samples_per_domain"].cpu().detach().numpy()
-
-            log_rank(
-                f"[DoReMi][Validation] Domain loss: {str(valid_domain_losses)}",
-                logger=logger,
-                level=logging.INFO,
-                rank=0,
-                group=self.parallel_context.tp_pg,
+            wandb.log(
+                {
+                    **loss_logs,
+                    **samples_per_domain_logs,
+                    "loss_avg": loss_avg.item(),
+                    "step": self.iteration_step,
+                }
             )
 
-            log_rank(
-                f"[DoReMi][Validation] Samples per domain: {str(valid_samples_per_domain)}",
-                logger=logger,
-                level=logging.INFO,
-                rank=0,
-                group=self.parallel_context.tp_pg,
-            )
+        # if self.valid_dataloader is not None and self.iteration_step % self.config.tokens.val_check_interval == 0:
+        #     # valid_outputs = self.validation_step(dataloader=self.valid_dataloader)
+        #     batch = next(self.valid_dataloader)
+        #     valid_outputs = self.model(batch)
+        #     valid_domain_losses = valid_outputs[0]["domain_losses"].cpu().detach().numpy()
+        #     valid_samples_per_domain = valid_outputs[0]["samples_per_domain"].cpu().detach().numpy()
 
-            # if dist.get_rank(self.parallel_context.world_pg) == 0:
-            #     valid_loss_logs = {
-            #         f"valid_loss_domain_{self.doremi_context.get_domain_name(i)}": loss for i, loss in enumerate(valid_domain_losses)
-            #     }
+        #     log_rank(
+        #         f"[DoReMi][Validation] Domain loss: {str(valid_domain_losses)}",
+        #         logger=logger,
+        #         level=logging.INFO,
+        #         rank=0,
+        #         group=self.parallel_context.tp_pg,
+        #     )
 
-            #     valid_samples_per_domain_logs = {
-            #         f"valid_samples_per_domain_{self.doremi_context.get_domain_name(i)}": n_samples
-            #         for i, n_samples in enumerate(valid_samples_per_domain)
-            #     }
+        #     log_rank(
+        #         f"[DoReMi][Validation] Samples per domain: {str(valid_samples_per_domain)}",
+        #         logger=logger,
+        #         level=logging.INFO,
+        #         rank=0,
+        #         group=self.parallel_context.tp_pg,
+        #     )
 
-            #     wandb.log(
-            #         {
-            #             **valid_loss_logs,
-            #             **valid_samples_per_domain_logs,
-            #             # "valid_loss_avg": loss_avg.item(),
-            #             "step": self.iteration_step,
-            #         }
-            #     )
+        #     # if dist.get_rank(self.parallel_context.world_pg) == 0:
+        #     #     valid_loss_logs = {
+        #     #         f"valid_loss_domain_{self.doremi_context.get_domain_name(i)}": loss for i, loss in enumerate(valid_domain_losses)
+        #     #     }
+
+        #     #     valid_samples_per_domain_logs = {
+        #     #         f"valid_samples_per_domain_{self.doremi_context.get_domain_name(i)}": n_samples
+        #     #         for i, n_samples in enumerate(valid_samples_per_domain)
+        #     #     }
+
+        #     #     wandb.log(
+        #     #         {
+        #     #             **valid_loss_logs,
+        #     #             **valid_samples_per_domain_logs,
+        #     #             # "valid_loss_avg": loss_avg.item(),
+        #     #             "step": self.iteration_step,
+        #     #         }
+        #     #     )
 
 
 def get_args():

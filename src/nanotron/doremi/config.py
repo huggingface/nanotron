@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional, Union
 
 import torch
 import yaml
@@ -22,8 +22,8 @@ from nanotron.config.utils_config import serialize
 
 @dataclass
 class DoReMiArgs:
-    domain_weights: Optional[str] = None
-    domain_names: Optional[str] = None
+    domain_weights: Optional[Union[str, List[float]]] = None
+    domain_names: Optional[Union[str, List[str]]] = None
 
     # NOTE: the path where you wan to save the reference model checkpoint
     ref_model_checkpoint_path: Optional[Path] = None
@@ -33,10 +33,13 @@ class DoReMiArgs:
     ref_model_resume_checkpoint_path: Optional[Path] = None
 
     def __post_init__(self):
-        self.domain_names = [str(name.strip()) for name in self.domain_names.split(",")]
+        if isinstance(self.domain_names, str):
+            self.domain_names = [str(name.strip()) for name in self.domain_names.split(",")]
 
         if self.domain_weights is not None:
-            domain_weights = [float(weight.strip()) for weight in self.domain_weights.split(",")]
+            if isinstance(self.domain_weights, str):
+                domain_weights = [float(weight.strip()) for weight in self.domain_weights.split(",")]
+
             domain_weights = torch.tensor(domain_weights)
             assert torch.allclose(
                 domain_weights.sum(), torch.tensor(1.0), rtol=1e-3

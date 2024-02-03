@@ -34,9 +34,9 @@ class DoReMiContext:
         assert (
             self.domain_weights.shape[0] == self.num_domains
         ), "The length of domain_weights must be equal to the number of domains"
-        self.set_weight_with_history(self.domain_weights, 0)
+        self.add_weight_with_history(self.domain_weights, 0)
 
-    def set_weight_with_history(self, domain_weights: torch.Tensor, step: int):
+    def add_weight_with_history(self, domain_weights: torch.Tensor, step: int):
         assert step >= 0, "Step must be a positive integer"
-        self.domain_weight_history.append({"step": step, "domain_weights": domain_weights})
+        self.domain_weight_history.append({"step": step, "domain_weights": domain_weights.cpu()})
         self.domain_weights = domain_weights

@@ -62,7 +62,7 @@ def _test_computing_per_token_loss(parallel_context: ParallelContext, logits, ta
 
 
 @pytest.mark.parametrize("dp", [1, 2])
-def test_doremi_loss(dp: int):
+def test_domain_loss_for_proxy_training(dp: int):
     GLOBAL_BATCH_SIZE = 512
     BATCH_SIZE = GLOBAL_BATCH_SIZE // dp
     SEQ_LEN = 128
@@ -70,7 +70,7 @@ def test_doremi_loss(dp: int):
     domain_keys = [f"domain {i}" for i in range(N_DOMAINS)]
     DOMAIN_WEIGHTS = F.softmax(torch.ones(N_DOMAINS, requires_grad=False), dim=-1)
 
-    init_distributed(tp=1, dp=dp, pp=1)(_test_doremi_loss)(
+    init_distributed(tp=1, dp=dp, pp=1)(_test_domain_loss_for_proxy_training)(
         global_batch_size=GLOBAL_BATCH_SIZE,
         batch_size=BATCH_SIZE,
         seq_len=SEQ_LEN,
@@ -79,7 +79,7 @@ def test_doremi_loss(dp: int):
     )
 
 
-def _test_doremi_loss(
+def _test_domain_loss_for_proxy_training(
     parallel_context: ParallelContext, global_batch_size, batch_size, seq_len, domain_keys, domain_weights
 ):
     N_DOMAINS = domain_weights.shape[0]
@@ -92,7 +92,7 @@ def _test_doremi_loss(
     doremi_context = DoReMiContext(domain_weights, domain_keys, is_proxy=False)
     loss_func = DomainLossForProxyTraining(doremi_context, parallel_context)
 
-    excess_loss, domain_losses, domain_weights = loss_func(losses, ref_losses, domain_idxs)
+    excess_loss, domain_losses, domain_weights, samples_per_domain = loss_func(losses, ref_losses, domain_idxs)
 
     # NOTE: no values in excess_loss should be negative
     assert (excess_loss >= 0.0).all()
@@ -112,7 +112,7 @@ def _test_doremi_loss(
     assert not torch.allclose(initial_domain_weights, domain_weights)
     assert torch.allclose(domain_weights.sum(dim=-1), torch.tensor(1.0))
     # NOTE: check if the loss function updates the domain weights in the doremi context
-    assert torch.allclose(doremi_context.domain_weights, domain_weights)
+    # assert torch.allclose(doremi_context.domain_weights, domain_weights)
     assert_tensor_synced_across_pg(
         domain_weights, parallel_context.dp_pg, msg=lambda err: f"Domain weights are not synced across ranks {err}"
     )
@@ -244,6 +244,7 @@ def test_doremi_loss_for_proxy_training(tp: int, doremi_context):
         ref_lm_loss=ref_lm_loss,
         batch_size=BATCH_SIZE,
         seq_len=SEQ_LEN,
+        n_domains=N_DOMAINS,
         doremi_context=doremi_context,
     )
 
@@ -258,6 +259,7 @@ def _test_doremi_loss_for_proxy_training(
     ref_lm_loss,
     batch_size,
     seq_len,
+    n_domains,
     doremi_context,
 ):
     logits = logits.to("cuda")
@@ -282,3 +284,7 @@ def _test_doremi_loss_for_proxy_training(
 
     assert outputs["domain_weights"].shape == (doremi_context.num_domains,)
     assert torch.allclose(sum(outputs["domain_weights"].cpu()), torch.tensor(1.0))
+
+    samples_per_domain = outputs["samples_per_domain"]
+    assert samples_per_domain.shape == (n_domains,)
+    assert sum(samples_per_domain) == batch_size
