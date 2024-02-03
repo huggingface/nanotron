@@ -1630,7 +1630,7 @@ class Starcoder2ForTraining(NanotronModel):
     def get_block_compute_costs(self):
         """Computes the compute cost of each block in the model so that we can do a better job of load balancing."""
         model_config = self.config
-        d_ff = model_config.n_inner if model_config.n_inner is not None else 4 * model_config.hidden_size
+        d_ff = model_config.n_inner if model_config.intermediate_size is not None else 4 * model_config.hidden_size
         d_qkv = model_config.hidden_size // model_config.num_attention_heads
         block_compute_costs = {
             # CausalSelfAttention (qkv proj + attn out) + MLP
