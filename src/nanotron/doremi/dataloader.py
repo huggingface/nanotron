@@ -362,7 +362,7 @@ class DistributedSamplerForDoReMi(DistributedSampler):
 
 def get_datasets(paths):
     datasets = []
-    for path in tqdm(paths, desc="Loading tokenized dataset from disk"):
+    for path in tqdm(paths, desc="Loading dataset from disk"):
         d = load_from_disk(path)
         datasets.append(d)
 

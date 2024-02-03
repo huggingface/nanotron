@@ -39,10 +39,11 @@ def datasets(dataset1, dataset2):
     return [dataset1, dataset2]
 
 
-def test_dist_doremi_sampler_sync_across_tp(datasets: list):
+def test_dist_doremi_sampler_sync_across_tp(dataset1):
     num_microbatches = 32
     batch_size = 16
     domain_weights = torch.tensor([0.7, 0.3])
+    datasets = [dataset1 for _ in range(len(domain_weights))]
     domain_keys = [f"domain {i}" for i in range(len(datasets))]
     doremi_context = DoReMiContext(domain_weights, domain_keys, is_proxy=False)
 
@@ -71,21 +72,25 @@ def _test_dist_doremi_sampler_sync_across_tp(
     )
 
     tp_size = dist.get_world_size(parallel_context.tp_pg)
-    yield_idxs = torch.tensor(list(sampler), device="cuda").view(-1)
+    yield_idxs = torch.tensor(next(iter(sampler)), device="cuda").view(-1)
     gathered_idxs = [torch.empty_like(yield_idxs, device="cuda") for _ in range(tp_size)]
     dist.all_gather(gathered_idxs, yield_idxs)
     assert all(torch.allclose(t1, t2) for t1, t2 in zip(gathered_idxs, gathered_idxs[1:]))
 
 
-def test_dist_doremi_sampler_not_overlapse_across_dp(datasets: list):
+@pytest.mark.parametrize("dp_size", [2, 4])
+def test_dist_doremi_sampler_not_overlapse_across_dp(dp_size, dataset1):
+    global_batch_size = 512
     num_microbatches = 32
-    batch_size = 16
+    batch_size = global_batch_size // (num_microbatches * dp_size)
     domain_weights = torch.tensor([0.7, 0.3])
+    datasets = [dataset1 for _ in range(len(domain_weights))]
     domain_keys = [f"domain {i}" for i in range(len(datasets))]
     doremi_context = DoReMiContext(domain_weights, domain_keys, is_proxy=False)
 
     init_distributed(tp=1, dp=2, pp=1)(_test_dist_doremi_sampler_not_overlapse_across_dp)(
         batch_size=batch_size,
+        global_batch_size=global_batch_size,
         num_microbatches=num_microbatches,
         datasets=datasets,
         doremi_context=doremi_context,
@@ -93,7 +98,12 @@ def test_dist_doremi_sampler_not_overlapse_across_dp(datasets: list):
 
 
 def _test_dist_doremi_sampler_not_overlapse_across_dp(
-    parallel_context: ParallelContext, batch_size: int, num_microbatches: int, datasets, doremi_context: DoReMiContext
+    parallel_context: ParallelContext,
+    batch_size: int,
+    global_batch_size: int,
+    num_microbatches: int,
+    datasets,
+    doremi_context: DoReMiContext,
 ):
     dp_size = dist.get_world_size(parallel_context.dp_pg)
     dp_rank = dist.get_rank(parallel_context.dp_pg)
@@ -108,10 +118,12 @@ def _test_dist_doremi_sampler_not_overlapse_across_dp(
         parallel_context=parallel_context,
     )
 
-    yield_idxs = torch.tensor(list(sampler), device="cuda").view(-1)
+    yield_idxs = torch.tensor(next(iter(sampler)), device="cuda").view(-1)
     gathered_idxs = [torch.empty_like(yield_idxs, device="cuda") for _ in range(dp_size)]
     dist.all_gather(gathered_idxs, yield_idxs)
     assert not torch.any(torch.isin(*gathered_idxs))
+
+    assert sum([len(x) for x in gathered_idxs]) == batch_size * dp_size
 
 
 @pytest.mark.parametrize(
@@ -264,7 +276,7 @@ def _test_sampling_from_dist_doremi_sampler_with_global_batch_size(
     num_samples_per_domain = [0 for _ in range(len(domain_weights))]
     yielded_idxs = []
     num_yielded_idxs = 0
-    # iter_sampler = iter(sampler)
+
     for idxs in sampler:
         assert batch_size == len(idxs)
 
