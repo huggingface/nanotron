@@ -72,10 +72,12 @@ def _test_dist_doremi_sampler_sync_across_tp(
     )
 
     tp_size = dist.get_world_size(parallel_context.tp_pg)
-    yield_idxs = torch.tensor(next(iter(sampler)), device="cuda").view(-1)
-    gathered_idxs = [torch.empty_like(yield_idxs, device="cuda") for _ in range(tp_size)]
-    dist.all_gather(gathered_idxs, yield_idxs)
-    assert all(torch.allclose(t1, t2) for t1, t2 in zip(gathered_idxs, gathered_idxs[1:]))
+
+    for idxs in sampler:
+        idxs = torch.tensor(idxs, device="cuda").view(-1)
+        gathered_idxs = [torch.empty_like(idxs, device="cuda") for _ in range(tp_size)]
+        dist.all_gather(gathered_idxs, idxs)
+        assert all(torch.allclose(t1, t2) for t1, t2 in zip(gathered_idxs, gathered_idxs[1:]))
 
 
 @pytest.mark.parametrize("dp_size", [2, 4])
@@ -118,12 +120,11 @@ def _test_dist_doremi_sampler_not_overlapse_across_dp(
         parallel_context=parallel_context,
     )
 
-    yield_idxs = torch.tensor(next(iter(sampler)), device="cuda").view(-1)
-    gathered_idxs = [torch.empty_like(yield_idxs, device="cuda") for _ in range(dp_size)]
-    dist.all_gather(gathered_idxs, yield_idxs)
-    assert not torch.any(torch.isin(*gathered_idxs))
-
-    assert sum([len(x) for x in gathered_idxs]) == batch_size * dp_size
+    for idxs in sampler:
+        idxs = torch.tensor(idxs, device="cuda").view(-1)
+        gathered_idxs = [torch.empty_like(idxs, device="cuda") for _ in range(dp_size)]
+        dist.all_gather(gathered_idxs, idxs)
+        assert not torch.any(torch.isin(*gathered_idxs))
 
 
 @pytest.mark.parametrize(
@@ -517,3 +518,77 @@ def _test_dist_doremi_sampler_not_repeating_samples(
 #     #     yielded_idxs.extend(all_idxs)
 
 #     # assert len(set(yielded_idxs)) == len(yielded_idxs)
+
+
+# NOTE: these are low-level implementation details
+# ideally we should not be testing these, but gotta make sure
+# it work (this bug back me down for so hard)
+@pytest.mark.parametrize("dp_size", [2, 4, 8])
+def test_yielding(dp_size, dataset1):
+    # global_batch_size = 1000
+    num_microbatches = 5
+    # batch_size = global_batch_size // (num_microbatches * dp_size)
+    batch_size = 100
+    global_batch_size = batch_size * num_microbatches * dp_size
+
+    domain_weights = torch.tensor([0.7, 0.3])
+    datasets = [dataset1 for _ in range(len(domain_weights))]
+    domain_keys = [f"domain {i}" for i in range(len(datasets))]
+    doremi_context = DoReMiContext(domain_weights, domain_keys, is_proxy=False)
+
+    init_distributed(tp=1, dp=dp_size, pp=1)(_test_yielding)(
+        batch_size=batch_size,
+        global_batch_size=global_batch_size,
+        num_microbatches=num_microbatches,
+        datasets=datasets,
+        domain_weights=domain_weights,
+        doremi_context=doremi_context,
+    )
+
+
+def _test_yielding(
+    parallel_context: ParallelContext,
+    batch_size: int,
+    global_batch_size: int,
+    num_microbatches: int,
+    datasets,
+    domain_weights,
+    doremi_context: DoReMiContext,
+):
+    dp_size = dist.get_world_size(parallel_context.dp_pg)
+    dp_rank = dist.get_rank(parallel_context.dp_pg)
+
+    sampler = DistributedSamplerForDoReMi(
+        datasets,
+        batch_size=batch_size,
+        num_microbatches=num_microbatches,
+        num_replicas=dp_size,
+        rank=dp_rank,
+        doremi_context=doremi_context,
+        parallel_context=parallel_context,
+    )
+
+    step = 0
+    num_yielded_idxs = 0
+    num_yielded_microbatches = 0
+    for idxs in sampler:
+        idxs = torch.tensor(idxs, dtype=torch.int, device="cuda")
+        idxs_dp = [torch.empty_like(idxs) for _ in range(dp_size)]
+        dist.all_gather(idxs_dp, idxs)
+        idxs_dp = torch.cat(idxs_dp, dim=0)
+
+        assert idxs_dp.numel() == batch_size * dp_size
+
+        num_yielded_idxs += len(idxs_dp)
+
+        # NOTE: if it loops through all the microbatches
+        # then we check if the number of samples in each domain
+        if (step + 1) % num_microbatches == 0:
+            num_yielded_microbatches += 1
+            for i, weight in enumerate(domain_weights):
+                assert sampler.domain_counters[i] == int(num_yielded_microbatches * global_batch_size * weight)
+                # assert sampler.microbatch_idx == num_yielded_microbatches - 1
+
+        step += 1
+
+    assert num_yielded_idxs == sum(sampler.domain_counters)

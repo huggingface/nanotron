@@ -176,15 +176,17 @@ class DistributedSamplerForDoReMi(DistributedSampler):
 
         self.reset()
 
+        # self.debug_history = []
+
     def _calculate_total_size(self):
         total_samples = sum(len(d) for d in self.datasets)
         return math.ceil(total_samples / self.batch_size) * self.batch_size
 
-    def _round_up_if_fractional_part_greater_than_threshold(self, number: float, threshold=0.0000001):
-        import math
+    # def _round_up_if_fractional_part_greater_than_threshold(self, number: float, threshold=0.0000001):
+    #     import math
 
-        fractional_part = number - int(number)
-        return math.ceil(number) if fractional_part > threshold else int(number)
+    #     fractional_part = number - int(number)
+    #     return math.ceil(number) if fractional_part > threshold else int(number)
 
     def __iter__(self):
         return self
@@ -209,25 +211,30 @@ class DistributedSamplerForDoReMi(DistributedSampler):
         return domain_batch_sizes
 
     def __next__(self):
-        # TODO(xrsrke): if reference training => don't recompute domain batch sizes
-        domain_batch_sizes = self._recompute_domain_batch_sizes(
-            domain_weights=self.doremi_context.domain_weights,
-            num_samples_per_global_step=self.num_samples_per_global_step,
-        )
 
-        if self.total_samples_yielded >= self.expected_total_samples:
-            raise StopIteration
+        # TODO(xrsrke): if reference training => don't recompute domain batch sizes
+        if self.microbatch_idx == 0:
+            self.domain_batch_sizes = self._recompute_domain_batch_sizes(
+                domain_weights=self.doremi_context.domain_weights,
+                num_samples_per_global_step=self.num_samples_per_global_step,
+            )
+
+        # if self.total_samples_yielded >= self.expected_total_samples:
+        #     raise StopIteration
 
         batch = []
-        for domain_index, (idxs, domain_batch_size) in enumerate(zip(self.domain_indices, domain_batch_sizes)):
+        for domain_index, (idxs, domain_batch_size) in enumerate(zip(self.domain_indices, self.domain_batch_sizes)):
             start_idx = self.domain_counters[domain_index]
             end_idx = start_idx + domain_batch_size
+
+            # if domain_index == 0:
+            #     self.debug_history.append((self.microbatch_idx, domain_index, start_idx, end_idx))
 
             # NOTE: BREAK 1
             if end_idx > len(idxs):
                 print(
                     f"rank: {self.rank}, break1, end_idx: {end_idx}, start_idx: {start_idx}, len(idxs): {len(idxs)} \
-                    domain_batch_sizes: {domain_batch_sizes}, \
+                    domain_batch_sizes: {self.domain_batch_sizes}, \
                     domain_counters: {self.domain_counters}, domain_batch_size: {domain_batch_size} \
                     microbatch_idx: {self.microbatch_idx}, domain_index: {domain_index}, total_samples_yielded: {self.total_samples_yielded} \
                         expected_total_samples: {self.expected_total_samples} \
@@ -240,6 +247,9 @@ class DistributedSamplerForDoReMi(DistributedSampler):
                 # print(
                 #     f"rank: {self.rank}, domain_index: {domain_index}, microbatch_idx={microbatch_idx}, now update domain counter to {end_idx} \n"
                 # )
+                # if domain_index == 0:
+                #     assert 1 == 1
+
                 self.domain_counters[domain_index] = end_idx
                 # dist.barrier()
 
@@ -252,6 +262,13 @@ class DistributedSamplerForDoReMi(DistributedSampler):
             # )
             batch.extend(global_batch_idxs)
             # dist.barrier()
+
+        # assert_tensor_synced_across_pg(
+        #     torch.tensor(batch, device="cuda"), self.parallel_context.dp_pg, msg=lambda err: f"batch are not synced across ranks {err}"
+        # )
+        # assert_tensor_synced_across_pg(
+        #     torch.tensor(batch, device="cuda"), self.parallel_context.tp_pg, msg=lambda err: f"batch are not synced across ranks {err}"
+        # )
 
         # if len(batch) == 0:
         #     print(
@@ -307,7 +324,11 @@ class DistributedSamplerForDoReMi(DistributedSampler):
             self.microbatch_idx += 1
 
         # self.total_samples_yielded += len(microbatch_idxs) * dp_size
-        self.total_samples_yielded += len(microbatch_idxs) * self.num_replicas
+        # self.total_samples_yielded += len(microbatch_idxs) * self.num_replicas
+
+        # assert_tensor_synced_across_pg(
+        #     torch.tensor(microbatch_idxs, device="cuda"), self.parallel_context.tp_pg, msg=lambda err: f"batch are not synced across ranks {err}"
+        # )
 
         # dist.barrier()
         # print(f"rank: {self.rank}, microbatch_idx: {microbatch_idx}, yield microbatch_idxs: {microbatch_idxs} \n")
