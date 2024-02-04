@@ -29,33 +29,91 @@ if __name__ == "__main__":
     # dataset1 = load_dataset("stas/c4-en-10k", split="train[:100]")
     # datasets = [dataset1 for _ in range(len(domain_weights))]
 
-    DATASET_PATH = "/fsx/phuc/project_data/doremi/datasets/the_pile_splitted/tokenized_data"
+    # DATASET_PATH = "/fsx/phuc/project_data/doremi/datasets/the_pile_splitted/tokenized_data"
+    # DOMAIN_KEYS = [
+    #     "Github",
+    #     "FreeLaw",
+    #     "OpenWebText2",
+    #     "PubMed Abstracts",
+    #     "DM Mathematics",
+    #     "OpenSubtitles",
+    #     "HackerNews",
+    #     "NIH ExPorter",
+    #     "PubMed Central",
+    #     "Enron Emails",
+    # ]
+
+    DATASET_PATH = "/fsx/phuc/project_data/doremi/datasets/the_pile_raw/tokenized_data/train"
     DOMAIN_KEYS = [
+        "Pile-CC",
         "Github",
-        "FreeLaw",
         "OpenWebText2",
+        "StackExchange",
+        "Wikipedia (en)",
         "PubMed Abstracts",
-        "DM Mathematics",
-        "OpenSubtitles",
-        "HackerNews",
-        "NIH ExPorter",
+        "USPTO Backgrounds",
+        "FreeLaw",
         "PubMed Central",
         "Enron Emails",
+        "HackerNews",
+        "NIH ExPorter",
+        "Books3",  # 12
+        "ArXiv",  # 13 , launched
+        "DM Mathematics",
+        "OpenSubtitles",
+        "Gutenberg (PG-19)",  # 16, done
+        "Ubuntu IRC",  # 17, done
+        "BookCorpus2",  # 18, launched
+        "EuroParl",  # 19, launch
+        "YoutubeSubtitles",
+        "PhilPapers",
     ]
-    # TOKENIZED_DATASETS = {f"{domain_name}": f"{DATASET_PATH}/{domain_name}" for domain_name in DOMAIN_KEYS}
+
     TOKENIZED_DATASETS = [f"{DATASET_PATH}/{domain_name}" for domain_name in DOMAIN_KEYS]
+    # domain_weights = torch.tensor(
+    #     [
+    #         0.34356916553540745,
+    #         0.16838812972610234,
+    #         0.24711766854236725,
+    #         0.0679225638705455,
+    #         0.059079828519653675,
+    #         0.043720261601881555,
+    #         0.01653850841342608,
+    #         0.00604146633842096,
+    #         0.04342813428189645,
+    #         0.0041942731702987,
+    #     ]
+    # )
+
+    # domain_weights = torch.tensor([
+    #     0.1500, 0.1213, 0.0872, 0.0631, 0.0340, 0.0240, 0.0281, 0.0594, 0.1599,
+    #     0.0015, 0.0058, 0.0021, 0.0605, 0.1136, 0.0209, 0.0154, 0.0202, 0.0037,
+    #     0.0065, 0.0100, 0.0093, 0.0036
+    # ])
     domain_weights = torch.tensor(
         [
-            0.34356916553540745,
-            0.16838812972610234,
-            0.24711766854236725,
-            0.0679225638705455,
-            0.059079828519653675,
-            0.043720261601881555,
-            0.01653850841342608,
-            0.00604146633842096,
-            0.04342813428189645,
-            0.0041942731702987,
+            0.3267,
+            0.003165,
+            0.1223,
+            0.0465,
+            0.06024,
+            0.06611,
+            0.06174,
+            0.0659,
+            0.01737,
+            0.005272,
+            0.004745,
+            0.00686,
+            0.01651,
+            0.08172,
+            0.0009354,
+            0.002027,
+            0.013,
+            0.0609,
+            0.002643,
+            0.01381,
+            0.0004395,
+            0.02115,
         ]
     )
 
@@ -64,18 +122,23 @@ if __name__ == "__main__":
         d = load_from_disk(dataset_path)
         datasets.append(d)
 
+    # from datasets import load_dataset
+    # dataset = load_dataset("stas/c4-en-10k", split="train")
+    # domain_weights = torch.tensor
+    # datasets = [dataset for _ in range(len(domain_weights))]
+
     parallel_context = ParallelContext(
         data_parallel_size=DP_SIZE,
         pipeline_parallel_size=1,
         tensor_parallel_size=1,
     )
 
-    global_batch_size = 512
+    # global_batch_size = 512
     num_microbatches = 4
     # batch_size = global_batch_size // (num_microbatches * DP_SIZE)
     batch_size = 8
 
-    assert global_batch_size == num_microbatches * batch_size * DP_SIZE
+    # assert global_batch_size == num_microbatches * batch_size * DP_SIZE
 
     dp_size = dist.get_world_size(parallel_context.dp_pg)
     dp_rank = dist.get_rank(parallel_context.dp_pg)
@@ -91,12 +154,15 @@ if __name__ == "__main__":
         doremi_context=doremi_context,
         parallel_context=parallel_context,
     )
+    global_rank = dist.get_rank(parallel_context.world_pg)
+
+    print(f"global_rank={global_rank}, num_samples_per_step: {sampler.num_samples_per_global_step}")
 
     comebined_dataset = CombinedDataset(datasets)
 
     dataloader = DataLoader(
         comebined_dataset,
-        batch_size=batch_size,
+        # batch_size=batch_size,
         sampler=sampler,
         # collate_fn=data_collator,
         # drop_last=dataloader_drop_last,  # we also drop_last in `clm_process()`
@@ -120,24 +186,57 @@ if __name__ == "__main__":
     epoch = 0
     yieled_idxs = []
 
-    def sanity(dataloader):
-        for batch in dataloader:
-            yield batch
+    # def sanity(dataloader):
+    #     for batch in dataloader:
+    #         yield batch
 
-    dataloader = sanity(dataloader)
+    # dataloader = sanity(dataloader)
+    # dataloader = iter(dataloader)
 
-    while True:
-        # idxs = (next(sampler) for _ in range(8))
+    step = 0
+    for idxs in dataloader:
+        if dist.get_rank(parallel_context.world_pg) == 0:
+            # print(f"-------------------")
+            # print(f"step = {step}, microbatch_idx = {sampler.microbatch_idx}")
+            # print(f"step = {step}, domain_counters = {sampler.domain_counters}")
+            # print(f"step = {step}, domain_batch_sizes = {sampler.domain_batch_sizes}")
 
-        # idxs = []
-        for _ in range(num_microbatches):
-            _ = next(dataloader)
+            if step % num_microbatches:
+                if dp_rank == 0:
+                    epoch = step / num_microbatches
+                    print(f"################# epoch = {epoch}")
+        step += 1
 
-        # NOTE: check not repeating idxs
-        # assert not set(idxs).intersection(yieled_idxs), f"epoch: {epoch}"
+        # if step == 20:
+        #     break
 
-        if epoch % 1000 == 0:
-            print(f"rank: {dist.get_rank(parallel_context.dp_pg)}, epoch: {epoch} \n \n")
+    # step = 0
+    # while True:
+    #     # # idxs = (next(sampler) for _ in range(8))
 
-        epoch += 1
-        # yieled_idxs.extend(idxs)
+    #     # # idxs = []
+    #     # for _ in range(num_microbatches):
+    #     #     _ = next(dataloader)
+
+    #     # # NOTE: check not repeating idxs
+    #     # # assert not set(idxs).intersection(yieled_idxs), f"epoch: {epoch}"
+
+    #     # if epoch % 1000 == 0:
+    #     #     print(f"rank: {dist.get_rank(parallel_context.dp_pg)}, epoch: {epoch} \n \n")
+
+    #     # epoch += 1
+    #     # # yieled_idxs.extend(idxs)
+
+    #     _ = next(dataloader)
+    #     if dist.get_rank(parallel_context.world_pg) == 0:
+    #         print(f"-------------------")
+    #         print(f"step = {step}, microbatch_idx = {sampler.microbatch_idx}")
+    #         print(f"step = {step}, domain_counters = {sampler.domain_counters}")
+    #         print(f"step = {step}, domain_batch_sizes = {sampler.domain_batch_sizes}")
+
+    #         if step % num_microbatches:
+    #             if dp_rank == 0:
+    #                 epoch = step / num_microbatches
+    #                 print(f"################# epoch = {epoch}")
+
+    #     step += 1
