@@ -11,6 +11,7 @@ from pprint import pformat
 from typing import Dict, Iterable, List, Optional, Union
 
 import torch
+import wandb
 from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.config import (
@@ -33,8 +34,6 @@ from nanotron.serialize import load_weights, parse_ckpt_path
 from nanotron.trainer import DistributedTrainer
 from nanotron.utils import init_method_normal, scaled_init_method_normal
 from torch.nn.parallel import DistributedDataParallel
-
-import wandb
 
 logger = logging.get_logger(__name__)
 
@@ -333,7 +332,7 @@ if __name__ == "__main__":
     if config.doremi.domain_weights is None:
         initial_domain_weights = compute_domain_weights_based_on_token_count(datasets)
     else:
-        initial_domain_weights = config.doremi.domain_weights
+        initial_domain_weights = torch.tensor(config.doremi.domain_weights)
 
     assert torch.allclose(initial_domain_weights.sum(), torch.tensor(1.0), rtol=1e-3)
 

@@ -7,7 +7,7 @@
 #SBATCH --gres=gpu:8
 #SBATCH --exclusive
 #SBATCH --partition=hopper-prod
-#SBATCH -o /fsx/phuc/project_data/doremi/logs/training/validation_train_big_reference-%x-%j.out
+#SBATCH -o /fsx/phuc/project_data/doremi/big_run_01/training/validation_train_big_reference-%x-%j.out
 #SBATCH --qos=high
 
 echo "START TIME: $(date)"
@@ -31,8 +31,7 @@ MASTER_PORT=6000
 
 CMD=" \
     $TRAINING_SCRIPT \
-    --config-file $CONFIG_FILE \
-    --tuned true
+    --config-file $CONFIG_FILE
     "
 
 export LAUNCHER="python -u -m torch.distributed.run \

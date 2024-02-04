@@ -3,6 +3,7 @@ from pprint import pformat
 from typing import Dict, Iterable, List, Optional, Union
 
 import torch
+import wandb
 from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.config import (
@@ -21,8 +22,6 @@ from nanotron.serialize import load_weights, parse_ckpt_path
 from nanotron.trainer import DistributedTrainer
 from nanotron.utils import init_method_normal, scaled_init_method_normal
 from torch.nn.parallel import DistributedDataParallel
-
-import wandb
 
 logger = logging.get_logger(__name__)
 
@@ -322,6 +321,14 @@ class DoReMiTrainer(DistributedTrainer):
 
         log_rank(
             f"[DoReMi] Domain loss: {str(domain_losses)}",
+            logger=logger,
+            level=logging.INFO,
+            rank=0,
+            group=self.parallel_context.dp_pg,
+        )
+
+        log_rank(
+            f"[DoReMi] Samples per domain: {str(samples_per_domain)}",
             logger=logger,
             level=logging.INFO,
             rank=0,

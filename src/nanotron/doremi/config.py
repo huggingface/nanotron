@@ -39,10 +39,12 @@ class DoReMiArgs:
         if self.domain_weights is not None:
             if isinstance(self.domain_weights, str):
                 domain_weights = [float(weight.strip()) for weight in self.domain_weights.split(",")]
+            else:
+                domain_weights = self.domain_weights
 
-            domain_weights = torch.tensor(domain_weights)
+            # domain_weights = torch.tensor(domain_weights)
             assert torch.allclose(
-                domain_weights.sum(), torch.tensor(1.0), rtol=1e-3
+                torch.tensor(domain_weights).sum(), torch.tensor(1.0), rtol=1e-3
             ), "Domain weights must sum to 1.0."
             self.domain_weights = domain_weights
 

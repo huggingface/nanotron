@@ -21,9 +21,13 @@ if __name__ == "__main__":
     )
 
     # global_batch_size = 512
-    num_microbatches = 5
     # batch_size = global_batch_size // (num_microbatches * DP_SIZE)
-    batch_size = 10
+
+    # NOTE: this cause 0 loss in some domains
+    # num_microbatches = 5
+    # batch_size = 10
+    num_microbatches = 1
+    batch_size = 50
 
     # assert global_batch_size == num_microbatches * batch_size * DP_SIZE
 

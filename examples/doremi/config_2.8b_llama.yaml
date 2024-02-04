@@ -1,18 +1,21 @@
 checkpoints:
   checkpoint_interval: 1000
-  checkpoints_path: /fsx/phuc/checkpoints/doremi/reference-2.8b-llama
+  checkpoints_path: /fsx/phuc/checkpoints/doremi/big-run-02/reference-2.8b-llama
   checkpoints_path_is_shared_file_system: true
-  resume_checkpoint_path: /fsx/phuc/checkpoints/doremi/reference-2.8b-llama
+  # resume_checkpoint_path: /fsx/phuc/checkpoints/doremi/reference-2.8b-llama
   save_initial_state: false
+
+doremi:
+  domain_names: Pile-CC, Github, OpenWebText2, StackExchange, Wikipedia (en), PubMed Abstracts, USPTO Backgrounds, FreeLaw, PubMed Central, Enron Emails, HackerNews, NIH ExPorter, Books3, ArXiv, DM Mathematics, OpenSubtitles, Gutenberg (PG-19), Ubuntu IRC, BookCorpus2, EuroParl, YoutubeSubtitles, PhilPapers
+  # domain_weights: 0.1500, 0.1213, 0.0872, 0.0631, 0.0340, 0.0240, 0.0281, 0.0594, 0.1599, 0.0015, 0.0058, 0.0021, 0.0605, 0.1136, 0.0209, 0.0154, 0.0202, 0.0037, 0.0065, 0.0100, 0.0093, 0.0036
+
 data:
   dataset:
     dataset_overwrite_cache: false
     dataset_processing_num_proc_per_process: 1
     hf_dataset_config_name: null
 
-    hf_dataset_or_datasets: /fsx/leandro/the-pile-splitted
-    hf_dataset_splits: train
-    text_column_name: text
+    hf_dataset_or_datasets: /fsx/phuc/project_data/doremi/datasets/the_pile_raw/tokenized_data/train
 
   num_loading_workers: 1
   seed: 42
@@ -20,8 +23,8 @@ general:
   benchmark_csv_path: null
   consumed_train_samples: null
   ignore_sanity_checks: true
-  project: train_280m_reference_model
-  run: tiny_llama
+  project: nanotron
+  run: train_2.8b_llama_reference
   seed: 42
   step: null
 logging:
@@ -29,7 +32,7 @@ logging:
   log_level: info
   log_level_replica: info
 model:
-  ddp_bucket_cap_mb: 25
+  ddp_bucket_cap_mb: 120
   dtype: bfloat16
   init_method:
     std: 0.025
@@ -46,8 +49,8 @@ model:
     is_llama_config: true
     max_position_embeddings: 256
     num_attention_heads: 32
-    # num_hidden_layers: 6
-    num_hidden_layers: 1
+    num_hidden_layers: 6
+    # num_hidden_layers: 1
     num_key_value_heads: 16
     pad_token_id: null
     pretraining_tp: 1
@@ -78,8 +81,8 @@ parallelism:
   pp: 1
   pp_engine: 1f1b
   recompute_granularity: SELECTIVE
-  # tp: 8
-  tp: 2
+  tp: 8
+  # tp: 2
   tp_linear_async_communication: true
   tp_mode: REDUCE_SCATTER
 profiler: null
@@ -95,11 +98,17 @@ tokens:
   # batch_accumulation_per_replica: 16
   # NOTE: some weird bug, where if you run batch_accumulation_per_replica=16
   # it results no samples from some domains
+
+  # NOTE: this causes some domain losses are 0
   batch_accumulation_per_replica: 8
+  micro_batch_size: 8
+
+  batch_accumulation_per_replica: 1
+  micro_batch_size: 64
+
   limit_test_batches: 0
   # NOTE: this is like the number of microbatches for validation
   limit_val_batches: 1
-  micro_batch_size: 8
   sequence_length: 1024
   # train_steps: 1000
   # train_steps: 1579

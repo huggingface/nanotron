@@ -8,6 +8,7 @@ torchrun --nproc_per_node=4 examples/doremi/train_doremi.py --config-file exampl
 """
 import argparse
 
+import torch
 from nanotron.config import get_config_from_file
 from nanotron.doremi.config import DoReMiConfig
 from nanotron.doremi.dataloader import get_dataloader, get_datasets
@@ -34,7 +35,7 @@ if __name__ == "__main__":
     if config.doremi.domain_weights is None:
         initial_domain_weights = compute_domain_weights_based_on_token_count(datasets)
     else:
-        initial_domain_weights = config.doremi.domain_weights
+        initial_domain_weights = torch.tensor(config.doremi.domain_weights)
 
     domain_names = config.doremi.domain_names
     ref_model_resume_checkpoint_path = config.doremi.ref_model_resume_checkpoint_path

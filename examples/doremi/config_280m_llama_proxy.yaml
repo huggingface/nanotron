@@ -1,13 +1,14 @@
 checkpoints:
   checkpoint_interval: 1000
-  checkpoints_path: /fsx/phuc/checkpoints/doremi/proxy-280m-llama
+  checkpoints_path: /fsx/phuc/checkpoints/doremi/big-run-02/proxy-280m-llama
   checkpoints_path_is_shared_file_system: true
   # resume_checkpoint_path: checkpoints_test/
   save_initial_state: false
 
 doremi:
-  domain_names: GitHub, FreeLaw, OpenWebText2, PubMed Abstracts, DM Mathematics, OpenSubtitles, HackerNews, NIH ExPorter, PubMed Central, Enron Emails
-  ref_model_resume_checkpoint_path: /fsx/phuc/checkpoints/doremi/reference-280m-llama/22000
+  domain_names: Pile-CC, Github, OpenWebText2, StackExchange, Wikipedia (en), PubMed Abstracts, USPTO Backgrounds, FreeLaw, PubMed Central, Enron Emails, HackerNews, NIH ExPorter, Books3, ArXiv, DM Mathematics, OpenSubtitles, Gutenberg (PG-19), Ubuntu IRC, BookCorpus2, EuroParl, YoutubeSubtitles, PhilPapers
+  # domain_weights: 0.1500, 0.1213, 0.0872, 0.0631, 0.0340, 0.0240, 0.0281, 0.0594, 0.1599, 0.0015, 0.0058, 0.0021, 0.0605, 0.1136, 0.0209, 0.0154, 0.0202, 0.0037, 0.0065, 0.0100, 0.0093, 0.0036
+  ref_model_resume_checkpoint_path: /fsx/phuc/checkpoints/doremi/big-run-01/reference-280-llama/62000
 
 data:
   dataset:
@@ -42,7 +43,7 @@ data:
     # hf_dataset_splits: train
     # text_column_name: text
 
-    hf_dataset_or_datasets: /fsx/phuc/project_data/doremi/datasets/the_pile_splitted/tokenized_data_with_correct_domain
+    hf_dataset_or_datasets: /fsx/phuc/project_data/doremi/datasets/the_pile_raw/tokenized_data/train
 
   num_loading_workers: 1
   seed: 42
@@ -50,8 +51,8 @@ general:
   benchmark_csv_path: null
   consumed_train_samples: null
   ignore_sanity_checks: true
-  project: train_280m_reference_model
-  run: tiny_llama
+  project: doremi
+  run: train_280m_proxy_model
   seed: 42
   step: null
 logging:
@@ -59,7 +60,7 @@ logging:
   log_level: info
   log_level_replica: info
 model:
-  ddp_bucket_cap_mb: 25
+  ddp_bucket_cap_mb: 120
   dtype: bfloat16
   init_method:
     std: 0.025
@@ -101,6 +102,7 @@ optimizer:
   zero_stage: 0
 parallelism:
   dp: 16
+  # dp: 2
   pp: 1
   pp_engine: 1f1b
   recompute_granularity: SELECTIVE
@@ -116,12 +118,18 @@ tokens:
   # batch_accumulation_per_replica * micro_batch_size * dp = 4 * 8 * 16 = 512
   # 240 * 1024 = 245760
   # the doremi paper do 500k tokens per batch
-  batch_accumulation_per_replica: 4
+
+  # NOTE: this causes some domain losses are 0
+  # batch_accumulation_per_replica: 4
+  # micro_batch_size: 8
+
+  batch_accumulation_per_replica: 1
+  micro_batch_size: 32
+
   limit_test_batches: 0
   limit_val_batches: 0
-  micro_batch_size: 8
   sequence_length: 1024
   # train_steps: 1000
   # train_steps: 1579
-  train_steps: 70_000
+  train_steps: 100_000
   val_check_interval: -1

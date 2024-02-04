@@ -40,8 +40,20 @@ def datasets(dataset1, dataset2):
     return [dataset1, dataset2]
 
 
-def test_dist_doremi_sampler_sync_across_tp(dataset1):
-    num_microbatches = 32
+# class IntegerDataset(Dataset):
+#     def __init__(self, n):
+#         self.n = n
+
+#     def __len__(self):
+#         return self.n
+
+#     def __getitem__(self, idx):
+#         return idx + 1
+
+
+@pytest.mark.parametrize("num_microbatches", [1, 32])
+def test_dist_doremi_sampler_sync_across_tp(num_microbatches, dataset1):
+    # num_microbatches = 32
     batch_size = 16
     domain_weights = torch.tensor([0.7, 0.3])
     datasets = [dataset1 for _ in range(len(domain_weights))]
@@ -82,9 +94,10 @@ def _test_dist_doremi_sampler_sync_across_tp(
 
 
 @pytest.mark.parametrize("dp_size", [2, 4])
-def test_dist_doremi_sampler_not_overlapse_across_dp(dp_size, dataset1):
+@pytest.mark.parametrize("num_microbatches", [1, 32])
+def test_dist_doremi_sampler_not_overlapse_across_dp(dp_size, num_microbatches, dataset1):
     global_batch_size = 512
-    num_microbatches = 32
+    # num_microbatches = 32
     batch_size = global_batch_size // (num_microbatches * dp_size)
     domain_weights = torch.tensor([0.7, 0.3])
     datasets = [dataset1 for _ in range(len(domain_weights))]
@@ -152,9 +165,10 @@ def _test_dist_doremi_sampler_not_overlapse_across_dp(
         ),
     ],
 )
-def test_determistic_doremi_sampler(domain_weights, dataset1):
-    num_microbatches = 32
-    batch_size = 16
+@pytest.mark.parametrize("num_microbatches", [1, 32])
+def test_determistic_doremi_sampler(domain_weights, num_microbatches, dataset1):
+    # num_microbatches = 32
+    batch_size = 100
     datasets = [dataset1 for _ in range(len(domain_weights))]
     domain_keys = [f"domain {i}" for i in range(len(domain_weights))]
     doremi_context = DoReMiContext(domain_weights, domain_keys, is_proxy=False)
@@ -232,9 +246,11 @@ def _test_determistic_doremi_sampler(
     ],
 )
 @pytest.mark.parametrize("dp_size", [1, 2, 4])
-def test_sampling_from_dist_doremi_sampler_with_global_batch_size(dp_size, domain_weights: torch.Tensor, dataset1):
+@pytest.mark.parametrize("num_microbatches", [1, 32])
+def test_sampling_from_dist_doremi_sampler_with_global_batch_size(
+    dp_size, num_microbatches, domain_weights: torch.Tensor, dataset1
+):
     global_batch_size = 512
-    num_microbatches = 32
     batch_size = global_batch_size // (num_microbatches * dp_size)
     datasets = [dataset1 for _ in range(len(domain_weights))]
     domain_keys = [f"domain {i}" for i in range(len(datasets))]
@@ -360,9 +376,10 @@ def _test_sampling_from_dist_doremi_sampler_with_global_batch_size(
     ],
 )
 @pytest.mark.parametrize("dp_size", [1, 2, 4])
-def test_dist_doremi_sampler_not_repeating_samples(domain_weights, dp_size, dataset1):
+@pytest.mark.parametrize("num_microbatches", [1, 32])
+def test_dist_doremi_sampler_not_repeating_samples(domain_weights, dp_size, num_microbatches, dataset1):
     global_batch_size = 512
-    num_microbatches = 32
+    # num_microbatches = 32
     batch_size = global_batch_size // (num_microbatches * dp_size)
     datasets = [dataset1 for _ in range(len(domain_weights))]
     domain_keys = [f"domain {i}" for i in range(len(datasets))]
@@ -525,9 +542,10 @@ def _test_dist_doremi_sampler_not_repeating_samples(
 # ideally we should not be testing these, but gotta make sure
 # it work (this bug back me down for so hard)
 @pytest.mark.parametrize("dp_size", [2, 4, 8])
-def test_yielding(dp_size, dataset1):
+@pytest.mark.parametrize("num_microbatches", [1, 5])
+def test_yielding(dp_size, num_microbatches, dataset1):
     # global_batch_size = 1000
-    num_microbatches = 5
+    # num_microbatches = 5
     # batch_size = global_batch_size // (num_microbatches * dp_size)
     batch_size = 100
     global_batch_size = batch_size * num_microbatches * dp_size
@@ -596,9 +614,10 @@ def _test_yielding(
 
 
 @pytest.mark.parametrize("dp_size", [2, 4, 8])
-def test_yielding_with_dataloader(dp_size, dataset1):
+@pytest.mark.parametrize("num_microbatches", [1, 5])
+def test_yielding_with_dataloader(dp_size, num_microbatches, dataset1):
     # global_batch_size = 1000
-    num_microbatches = 5
+    # num_microbatches = 5
     # batch_size = global_batch_size // (num_microbatches * dp_size)
     batch_size = 100
     global_batch_size = batch_size * num_microbatches * dp_size
@@ -640,15 +659,13 @@ def _test_yielding_with_dataloader(
         parallel_context=parallel_context,
     )
     comebined_dataset = CombinedDataset(datasets)
-    dataloader = DataLoader(comebined_dataset, sampler=sampler)
+    dataloader = DataLoader(comebined_dataset, batch_sampler=sampler)
 
     step = 1
     num_yielded_idxs = 0
     num_yielded_microbatches = 0
     for idxs in dataloader:
         num_idxs = torch.tensor(len(idxs["text"]), dtype=torch.int, device="cuda")
-        num_yielded_idxs += num_idxs.item()
-
         assert num_idxs.item() == batch_size
 
         dist.all_reduce(num_idxs, op=dist.ReduceOp.SUM, group=parallel_context.dp_pg)
@@ -657,17 +674,12 @@ def _test_yielding_with_dataloader(
         if step % num_microbatches == 0:
             num_yielded_microbatches += 1
             for i, weight in enumerate(domain_weights):
-                # try:
-                #     assert sampler.domain_counters[i] == int(num_yielded_microbatches * global_batch_size * weight)
-                # except:
-                #     assert 1 == 1
-
-                if dist.get_rank(parallel_context.world_pg) == 0:
-                    assert 1 == 1
-
                 assert sampler.domain_counters[i] == int(num_yielded_microbatches * global_batch_size * weight)
 
         step += 1
+        num_yielded_idxs += num_idxs.item()
+
+    assert step > 1
 
     # assert num_yielded_idxs == sum(sampler.domain_counters)
 

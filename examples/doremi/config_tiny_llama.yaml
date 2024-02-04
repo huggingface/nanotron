@@ -6,9 +6,9 @@ checkpoints:
   save_initial_state: false
 
 doremi:
-  domain_names: Github, FreeLaw, OpenWebText2, PubMed Abstracts, DM Mathematics, OpenSubtitles, HackerNews, NIH ExPorter, PubMed Central, Enron Emails
-  domain_weights: 0.06299, 0.177, 0.528, 0.1025, 0.0034, 0.02008, 0.01621, 0.009924, 0.07446, 0.005524
-  ref_model_resume_checkpoint_path: /fsx/phuc/checkpoints/doremi/reference-280m-llama/22000
+  domain_names: Pile-CC, Github, OpenWebText2, StackExchange, Wikipedia (en), PubMed Abstracts, USPTO Backgrounds, FreeLaw, PubMed Central, Enron Emails, HackerNews, NIH ExPorter, Books3, ArXiv, DM Mathematics, OpenSubtitles, Gutenberg (PG-19), Ubuntu IRC, BookCorpus2, EuroParl, YoutubeSubtitles, PhilPapers
+  # domain_weights: 0.06299, 0.177, 0.528, 0.1025, 0.0034, 0.02008, 0.01621, 0.009924, 0.07446, 0.005524
+  # ref_model_resume_checkpoint_path: /fsx/phuc/checkpoints/doremi/reference-280m-llama/22000
 
 data:
   dataset:
@@ -40,7 +40,8 @@ data:
     # hf_dataset_splits: train
     # text_column_name: text
 
-    hf_dataset_or_datasets: /fsx/phuc/project_data/doremi/datasets/the_pile_splitted/tokenized_data_with_correct_domain
+    # hf_dataset_or_datasets: /fsx/phuc/project_data/doremi/datasets/the_pile_splitted/tokenized_data_with_correct_domain
+    hf_dataset_or_datasets: /fsx/phuc/project_data/doremi/datasets/the_pile_raw/tokenized_data/train
 
 
   num_loading_workers: 1
@@ -156,7 +157,7 @@ tokens:
   batch_accumulation_per_replica: 1
   limit_test_batches: 0
   limit_val_batches: 0
-  micro_batch_size: 10
+  micro_batch_size: 64
   # sequence_length: 32
   sequence_length: 1024
   # train_steps: 1000

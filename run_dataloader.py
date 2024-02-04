@@ -134,9 +134,13 @@ if __name__ == "__main__":
     )
 
     # global_batch_size = 512
-    num_microbatches = 4
     # batch_size = global_batch_size // (num_microbatches * DP_SIZE)
-    batch_size = 8
+    # NOTE: this cause 0 loss in some domains
+    # num_microbatches = 4
+    # batch_size = 8
+
+    num_microbatches = 1
+    batch_size = 32
 
     # assert global_batch_size == num_microbatches * batch_size * DP_SIZE
 
@@ -195,16 +199,19 @@ if __name__ == "__main__":
 
     step = 0
     for idxs in dataloader:
-        if dist.get_rank(parallel_context.world_pg) == 0:
-            # print(f"-------------------")
-            # print(f"step = {step}, microbatch_idx = {sampler.microbatch_idx}")
-            # print(f"step = {step}, domain_counters = {sampler.domain_counters}")
-            # print(f"step = {step}, domain_batch_sizes = {sampler.domain_batch_sizes}")
+        # if dist.get_rank(parallel_context.world_pg) == 0:
+        #     # print(f"-------------------")
+        #     # print(f"step = {step}, microbatch_idx = {sampler.microbatch_idx}")
+        #     # print(f"step = {step}, domain_counters = {sampler.domain_counters}")
+        #     # print(f"step = {step}, domain_batch_sizes = {sampler.domain_batch_sizes}")
 
-            if step % num_microbatches:
-                if dp_rank == 0:
-                    epoch = step / num_microbatches
-                    print(f"################# epoch = {epoch}")
+        #     if step % num_microbatches:
+        #         if dp_rank == 0:
+        #             epoch = step / num_microbatches
+        #             print(f"################# epoch = {epoch}")
+        if step % 1000:
+            print(f"################# epoch = {step / num_microbatches}")
+
         step += 1
 
         # if step == 20:

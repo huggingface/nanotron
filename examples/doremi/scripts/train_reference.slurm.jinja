@@ -7,7 +7,7 @@
 #SBATCH --gres=gpu:8
 #SBATCH --exclusive
 #SBATCH --partition=hopper-prod
-#SBATCH -o /fsx/phuc/project_data/doremi/logs/training/train_reference-%x-%j.out
+#SBATCH -o /fsx/phuc/project_data/doremi/big_run_02/training/train_reference-%x-%j.out
 #SBATCH --qos=high
 
 echo "START TIME: $(date)"
@@ -19,7 +19,7 @@ export XDG_CACHE_HOME=/fsx/phuc/.cache/huggingface_cache
 # USE_FAST=1 CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node=4 examples/doremi/train_doremi.py --config-file examples/doremi/config_tiny_llama.yaml
 REPO=/fsx/phuc/projects/nanotron
 TRAINING_SCRIPT=$REPO/examples/doremi/train_reference.py
-CONFIG_FILE=$REPO/examples/doremi/config_100m_llama.yaml
+CONFIG_FILE=$REPO/examples/doremi/config_280m_llama.yaml
 # CONFIG_FILE=$REPO/examples/doremi/config_100m_for_testing.yaml
 
 GPUS_PER_NODE=8
