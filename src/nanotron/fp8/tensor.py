@@ -46,7 +46,7 @@ class FP8Tensor(torch.Tensor):
 def convert_torch_dtype_to_te_dtype(dtype: torch.dtype) -> tex.DType:
     # setattr(torch, "fp8e5m2", torch.int8)
     # setattr(torch, "fp8e4m3", torch.uint8)
-    from nanotron.fp8.constants import DTypes
+    from nanotron.fp8.dtypes import DTypes
 
     # NOTE: transformer engine maintains it own dtype mapping
     # so we need to manually map torch dtypes to te dtypes

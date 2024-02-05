@@ -1,5 +1,5 @@
 import torch
-from nanotron.fp8.constants import DTypes
+from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.meta import FP8Meta
 from nanotron.fp8.parameter import FP8Parameter
 from nanotron.fp8.tensor import FP8Tensor

@@ -1,7 +1,7 @@
 import pytest
 import torch
-from nanotron.fp8.constants import DTypes
-from nanotron.fp8.kernel import _fp8_matmul_kernel
+from nanotron.fp8.dtypes import DTypes
+from nanotron.fp8.kernel import fp8_matmul_kernel
 from nanotron.fp8.tensor import FP8Tensor
 from torch import nn
 
@@ -23,7 +23,7 @@ def test_fp8_matmul_kernel(hidden_size, transpose_a, transpose_b, use_split_accu
 
     ref_output = torch.matmul(input, weight)
 
-    output = _fp8_matmul_kernel(
+    output = fp8_matmul_kernel(
         mat_a=fp8_input,
         transpose_a=transpose_a,
         mat_b=fp8_weight,

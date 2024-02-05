@@ -5,7 +5,7 @@ import torch.nn.functional as F
 import transformer_engine as te  # noqa
 from torch import nn
 
-from nanotron.fp8.constants import DTypes
+from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.kernel import fp8_matmul_kernel
 from nanotron.fp8.meta import FP8Meta
 from nanotron.fp8.parameter import FP8Parameter
@@ -37,46 +37,45 @@ class FP8Linear(nn.Linear):
                 "output_grad": FP8Meta(amax=1, dtype=DTypes.FP8E5M2, inverse_scale=1),
             }
 
-    def forward(self, input: Union[FP8Tensor, torch.Tensor]) -> FP8Tensor:
+    def forward(self, input: Union[FP8Tensor, torch.Tensor]) -> torch.Tensor:
         # NOTE: only do fp8 kernel if both input and weight are on CUDA device
         if input.device == torch.device("cpu") or self.weight.device == torch.device("cpu"):
             return F.linear(input, self.weight, self.bias)
 
         # NOTE: just a phony tensor to make pytorch trigger the backward pass
         # because weight and bias's requires grad are set to False
-        # so that we can compute the gradients using fp8 kernels by ourselves
+        # so that we can compute the gradients using the fp8 kernels by ourselves
         phony = torch.empty(0, device=input.device, requires_grad=True)
-        output, _ = _FP8MatMul.apply(input, self.weight, self.fp8_meta, phony)
+        output, _ = _FP8Matmul.apply(input, self.weight, self.fp8_meta, phony)
 
+        # TODO(xrsrke): add support for adding bias in fp8
+        # TODO(xrsrke): support return an fp8 tensor as output
+        # since we will quantize it back to FP8 anyway in the next linear
         output = output if self.bias is None else output + self.bias
         return output
 
 
-class _FP8MatMul(torch.autograd.Function):
+class _FP8Matmul(torch.autograd.Function):
     @staticmethod
+    @torch.no_grad()
     def forward(
         ctx, input: FP8Tensor, weight: FP8Tensor, fp8_meta: FP8LinearMeta, phony: torch.Tensor
     ) -> torch.Tensor:
-        with torch.no_grad():
-            if type(input) == torch.Tensor:
-                input = FP8Tensor(input, dtype=DTypes.FP8E4M3)
-                print(f"_FP8Matmul.forward, after casting input to DTypes.FP8E4M3, input.fp8_meta: {input._fp8_meta}")
+        if type(input) == torch.Tensor:
+            input = FP8Tensor(input, dtype=DTypes.FP8E4M3)
 
         ctx.save_for_backward(input, weight)
         ctx.fp8_meta = fp8_meta
 
-        with torch.no_grad():
-            # NOTE: pass FP8Tensor instead of FP8Parameter
-
-            print(f"_FP8Matmul.forward, before matmul, weight.data._fp8_meta: {weight.data._fp8_meta}")
-
-            output = fp8_matmul_kernel(
-                mat_a=weight.data, transpose_a=True, mat_b=input, transpose_b=False, use_split_accumulator=False
-            )
+        # NOTE: pass FP8Tensor instead of FP8Parameter
+        output = fp8_matmul_kernel(
+            mat_a=weight.data, transpose_a=True, mat_b=input, transpose_b=False, use_split_accumulator=False
+        )
 
         return output, phony
 
     @staticmethod
+    @torch.no_grad()
     def backward(
         ctx, grad_output: torch.Tensor, grad_phony: torch.Tensor
     ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
@@ -85,23 +84,20 @@ class _FP8MatMul(torch.autograd.Function):
         ∂L/∂W = Xᵀ @ ∂L/∂Y
         Source: https://web.eecs.umich.edu/~justincj/teaching/eecs442/notes/linear-backprop.html
         """
-        # grad_output = grad_output.contiguous()
+        # TODO(xrsrke): investigate how does grad_output.contiguous() affect the outputs
         input, weight = ctx.saved_tensors
 
-        with torch.no_grad():
-            if type(grad_output) == torch.Tensor:
-                grad_output = torch.ones_like(grad_output)
-                grad_output = grad_output.contiguous()
-                grad_output = FP8Tensor(grad_output, dtype=DTypes.FP8E5M2)
+        if type(grad_output) == torch.Tensor:
+            grad_output = torch.ones_like(grad_output)
+            grad_output = grad_output.contiguous()
+            grad_output = FP8Tensor(grad_output, dtype=DTypes.FP8E5M2)
 
         grad_input = fp8_matmul_kernel(
             mat_a=grad_output, transpose_a=True, mat_b=weight, transpose_b=True, use_split_accumulator=True
         )
-
         grad_weight = fp8_matmul_kernel(
             mat_a=input, transpose_a=False, mat_b=grad_output, transpose_b=False, use_split_accumulator=True
         )
-
         weight.grad = grad_weight
 
         return grad_input, None, None, None

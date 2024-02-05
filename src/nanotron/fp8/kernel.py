@@ -11,11 +11,11 @@ def fp8_matmul_kernel(
     transpose_a: bool,
     mat_b: FP8Tensor,
     transpose_b: bool,
-    bias: FP8Tensor = None,
-    transpose_bias: bool = False,
-    use_split_accumulator: bool = None,
+    # bias: FP8Tensor = None,
+    # transpose_bias: bool = False,
+    use_split_accumulator: bool,
 ) -> torch.Tensor:
-    assert use_split_accumulator is not None
+    # assert use_split_accumulator is not None
     assert (
         mat_a.device != "cpu" and mat_b.device != "cpu"
     ), "The tensors must be on a CUDA device in order to use the FP8 kernel!!"
@@ -26,11 +26,12 @@ def fp8_matmul_kernel(
     output = torch.empty(mat_a.shape[0], mat_b.shape[1], device=device, dtype=torch.float32)
     workspace = torch.empty(33_554_432, dtype=torch.int8, device=device)
     accumulate = False
-    # use_split_accumulator = False
 
     out_dtype = getattr(tex.DType, "kFloat32")
-    # TODO(xrsrke): add support for adding bias in fp8
+    # NOTE: currently TE don't support adding bias in FP8
+    # along with matmul, it only takes an empty bias
     bias = torch.tensor([], dtype=torch.float32)
+    transpose_bias = False
 
     mat_a_fp8_meta = mat_a.fp8_meta
     mat_b_fp8_meta = mat_b.fp8_meta
