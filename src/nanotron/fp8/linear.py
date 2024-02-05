@@ -76,9 +76,7 @@ class _FP8Matmul(torch.autograd.Function):
 
     @staticmethod
     @torch.no_grad()
-    def backward(
-        ctx, grad_output: torch.Tensor, grad_phony: torch.Tensor
-    ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
+    def backward(ctx, grad_output: torch.Tensor, grad_phony: torch.Tensor) -> Tuple[torch.Tensor, None, None, None]:
         """
         ∂L/∂X = ∂L/∂Y @ Wᵀ
         ∂L/∂W = Xᵀ @ ∂L/∂Y

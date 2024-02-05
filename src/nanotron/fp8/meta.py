@@ -59,5 +59,5 @@ class FP8Meta:
     def _update_inverse_scale(self):
         self.inverse_scale = 1 / self.scale
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"FP8Meta(amax={self.amax}, scale={self.scale}, inverse_scale={self.inverse_scale}, dtype={self.dtype})"

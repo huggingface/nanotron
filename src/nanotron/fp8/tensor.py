@@ -10,7 +10,7 @@ from nanotron.fp8.meta import FP8Meta
 class FP8Tensor(torch.Tensor):
     """FP8 Tensor."""
 
-    def __new__(cls, tensor: torch.Tensor, dtype: DTypes):
+    def __new__(cls, tensor: torch.Tensor, dtype: DTypes) -> torch.Tensor:
         # TODO(xrsrke): if the tensor is on cpu, then bypass the quantization
         # because the current kernels only support gpu tensor
         assert tensor.device != torch.device("cpu"), "FP8Tensor only supports CUDA device"
@@ -52,13 +52,13 @@ def convert_torch_dtype_to_te_dtype(dtype: torch.dtype) -> tex.DType:
     return getattr(tex.DType, TORCH_DTYPE_TE_DTYPE_NAME_MAPPING[dtype])
 
 
-def convert_tensor_to_fp8(tensor: torch.Tensor, meta: "FP8Meta") -> FP8Tensor:
+def convert_tensor_to_fp8(tensor: torch.Tensor, meta: FP8Meta) -> FP8Tensor:
     te_dtype = convert_torch_dtype_to_te_dtype(meta.dtype)
     # TODO(xrsrke): after casting to fp8, update the scaling factor
     return tex.cast_to_fp8(tensor, meta.scale, meta.amax, meta.inverse_scale, te_dtype)
 
 
-def convert_tensor_from_fp8(tensor: torch.Tensor, meta, dtype: torch.dtype) -> torch.Tensor:
+def convert_tensor_from_fp8(tensor: torch.Tensor, meta: FP8Meta, dtype: torch.dtype) -> torch.Tensor:
     assert isinstance(tensor, torch.Tensor)
     assert isinstance(dtype, torch.dtype)
     tensor_dtype = convert_torch_dtype_to_te_dtype(meta.dtype)
