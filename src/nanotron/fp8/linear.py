@@ -74,14 +74,6 @@ class _FP8MatMul(torch.autograd.Function):
                 mat_a=weight.data, transpose_a=True, mat_b=input, transpose_b=False, use_split_accumulator=False
             )
 
-            # output = _fp8_matmul_kernel(
-            #     mat_a=input,
-            #     transpose_a=False,
-            #     mat_b=weight,
-            #     transpose_b=True,
-            #     use_split_accumulator=False
-            # )
-
         return output, phony
 
     @staticmethod
@@ -93,15 +85,8 @@ class _FP8MatMul(torch.autograd.Function):
         ∂L/∂W = Xᵀ @ ∂L/∂Y
         Source: https://web.eecs.umich.edu/~justincj/teaching/eecs442/notes/linear-backprop.html
         """
-        # pydevd.settrace(suspend=False, trace_only_current_thread=True)
-
-        print("---------------------------------------------------------")
-        print("pipegoose's _FP8MatMul.backward got triggered")
         # grad_output = grad_output.contiguous()
         input, weight = ctx.saved_tensors
-
-        print(f"pipegoose's _FP8MatMul.backward, before quantize grad_output: grad_output: {grad_output[0, :3]}")
-        print(f"pipegoose's _FP8MatMul.backward, grad_phony: {grad_phony}")
 
         with torch.no_grad():
             if type(grad_output) == torch.Tensor:
@@ -109,46 +94,13 @@ class _FP8MatMul(torch.autograd.Function):
                 grad_output = grad_output.contiguous()
                 grad_output = FP8Tensor(grad_output, dtype=DTypes.FP8E5M2)
 
-        assert 1 == 1
-
-        # grad_output = FP8Tensor(grad_output) if isinstance(grad_output, torch.Tensor) else grad_output
-        print(
-            f"pipegoose's _FP8MatMul.backward, after quantize grad_output: grad_output: {grad_output[0, :3]}, grad_output._fp8_meta: {grad_output._fp8_meta}"
-        )
-
-        print("pipegoose's _FP8MatMul.backward, grad_input starts")
-        print(f"pipegoose's _FP8MatMul.backward, weight.fp8_meta: {weight.fp8_meta}")
         grad_input = fp8_matmul_kernel(
             mat_a=grad_output, transpose_a=True, mat_b=weight, transpose_b=True, use_split_accumulator=True
         )
-        # grad_input = _fp8_matmul_kernel(
-        #     mat_a=grad_output,
-        #     transpose_a=False,
-        #     mat_b=weight,
-        #     transpose_b=True,
-        #     use_split_accumulator=True
-        # )
-
-        # print(f"pipegoose's _FP8MatMul.backward, grad_input.: {grad_input}")
-        print("pipegoose's _FP8MatMul.backward, grad_input ends")
-
-        print("pipegoose's _FP8MatMul.backward, grad_weight starts")
-        print(f"pipegoose's _FP8MatMul.backward, grad_output.type: {type(grad_output)}")
-        print(f"pipegoose's _FP8MatMul.backward, input.fp8_meta: {input.fp8_meta}")
-        print(f"pipegoose's _FP8MatMul.backward, grad_output.fp8_meta: {grad_output.fp8_meta}")
 
         grad_weight = fp8_matmul_kernel(
             mat_a=input, transpose_a=False, mat_b=grad_output, transpose_b=False, use_split_accumulator=True
         )
-
-        # grad_weight = _fp8_matmul_kernel(
-        #     mat_a=input,
-        #     transpose_a=True,
-        #     mat_b=grad_output,
-        #     transpose_b=False,
-        #     use_split_accumulator=True
-        # )
-        print("pipegoose's _FP8MatMul.backward, grad_weight ends")
 
         weight.grad = grad_weight
 

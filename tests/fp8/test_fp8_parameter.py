@@ -23,21 +23,3 @@ def test_create_fp8_parameter():
 
 # TODO(xrsrke): add test for preventing torch autograd do the backward pass
 # on a FP8Parameter
-
-
-# def test_fp8_parameters_attr():
-#     tensor = torch.randn(16, 16, device="cuda", dtype=torch.float32)
-#     fp8_parameter = FP8Parameter(tensor, DTypes.FP8E4M3)
-
-#     assert fp8_parameter.parameters()
-
-
-# def test_fp8_parameter_backward():
-#     tensor = torch.randn(16, 16, device="cuda", dtype=torch.float32)
-#     fp8_parameter = FP8Parameter(tensor)
-
-#     fp8_parameter.exp().sum().backward()
-
-#     assert fp8_parameter.grad is not None
-#     assert fp8_parameter.grad.shape == tensor.shape
-#     # TODO(xrsrke): make sure that not gradients from the unquantized tensor

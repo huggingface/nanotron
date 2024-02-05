@@ -13,9 +13,6 @@ class FP8Tensor(torch.Tensor):
 
     # TODO(xrsrke): add type hints for fp8_meta
     def __new__(cls, tensor: torch.Tensor, dtype: DTypes):
-        # if isinstance(tensor, FP8Tensor):
-        #     return tensor
-
         # TODO(xrsrke): if the tensor is on cpu, then bypass the quantization
         assert tensor.device != torch.device("cpu"), "FP8Tensor only supports CUDA device"
         assert isinstance(dtype, DTypes)
@@ -80,7 +77,5 @@ def convert_tensor_from_fp8(tensor: torch.Tensor, meta, dtype: torch.dtype) -> t
     assert isinstance(dtype, torch.dtype)
     tensor_dtype = convert_torch_dtype_to_te_dtype(meta.dtype)
     output_dtype = convert_torch_dtype_to_te_dtype(dtype)
-    print(
-        f"convert_tensor_from_fp8: tensor: {tensor[0, :3]} inverse_scale: {meta.inverse_scale}, tensor_dtype: {tensor_dtype}, output_dtype: {output_dtype}"
-    )
+
     return tex.cast_from_fp8(tensor, meta.inverse_scale, tensor_dtype, output_dtype)
