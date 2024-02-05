@@ -9,7 +9,7 @@ from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.kernel import fp8_matmul_kernel
 from nanotron.fp8.meta import FP8Meta
 from nanotron.fp8.parameter import FP8Parameter
-from nanotron.fp8.tensor import FP8Tensor
+from nanotron.fp8.tensor import FP8Tensor, compute_scaling_factor
 
 try:
     import transformer_engine as te  # noqa
@@ -42,12 +42,14 @@ class FP8Linear(nn.Linear):
             #     "output_grad": FP8Meta(amax=1, dtype=DTypes.FP8E5M2, inverse_scale=1),
             # }
 
+            FP8E4M3_SCALE = compute_scaling_factor(amax=1, dtype=DTypes.FP8E4M3)
+            FP8E5M2_SCALE = compute_scaling_factor(amax=1, dtype=DTypes.FP8E5M2)
             self.fp8_meta: FP8LinearMeta = {
                 # kfloat8_e4m3
-                "input_grad": FP8Meta(amax=1, dtype=DTypes.FP8E4M3),
-                "weight_grad": FP8Meta(amax=1, dtype=DTypes.FP8E4M3),
+                "input_grad": FP8Meta(amax=1, dtype=DTypes.FP8E4M3, scale=FP8E4M3_SCALE),
+                "weight_grad": FP8Meta(amax=1, dtype=DTypes.FP8E4M3, scale=FP8E4M3_SCALE),
                 # kfloat8_e5m2
-                "output_grad": FP8Meta(amax=1, dtype=DTypes.FP8E5M2),
+                "output_grad": FP8Meta(amax=1, dtype=DTypes.FP8E5M2, scale=FP8E5M2_SCALE),
             }
 
     def forward(self, input: Union[FP8Tensor, torch.Tensor]) -> torch.Tensor:

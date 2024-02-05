@@ -1,8 +1,9 @@
 import warnings
+from typing import Union
 
 import torch
 
-from nanotron.fp8.constants import FP8_DTYPES
+from nanotron.fp8.constants import DTYPE_TO_FP8_MAX, FP8_DTYPES
 from nanotron.fp8.dtypes import DTypes
 
 try:
@@ -25,7 +26,9 @@ class FP8Tensor(torch.Tensor):
         assert tensor.device != torch.device("cpu"), "FP8Tensor only supports CUDA device"
         assert isinstance(dtype, DTypes)
 
-        fp8_meta = FP8Meta(tensor.abs().max().clone(), dtype)
+        amax = tensor.abs().max().clone()
+        scale = compute_scaling_factor(amax, dtype)
+        fp8_meta = FP8Meta(amax, scale, dtype)
 
         if tensor.dtype not in FP8_DTYPES:
             fp8_tensor = convert_tensor_to_fp8(tensor, fp8_meta)
@@ -78,3 +81,23 @@ def convert_tensor_from_fp8(tensor: torch.Tensor, meta, dtype: torch.dtype) -> t
     output_dtype = convert_torch_dtype_to_te_dtype(dtype)
 
     return tex.cast_from_fp8(tensor, meta.inverse_scale, tensor_dtype, output_dtype)
+
+
+def compute_scaling_factor(amax: Union[float, torch.Tensor], dtype: DTypes, margin: float = 0) -> torch.Tensor:
+    """
+    Compute the scaling factor to quantize a tensor to FP8.
+    Credits: https://github.com/Azure/MS-AMP/blob/d562f0f0bcfc9b712fa0726b73428753ff1300ab/msamp/common/tensor/meta.py#L39
+    """
+    assert amax.dtype is torch.float32 if isinstance(amax, torch.Tensor) else True
+    INITIAL_SCALE = torch.tensor(1)
+    amax = torch.tensor(amax) if not isinstance(amax, torch.Tensor) else amax
+    fp8_max = DTYPE_TO_FP8_MAX[dtype]
+
+    # NOTE: calculate the number of bits to shift the exponent
+    ratio = fp8_max / amax
+    exp = torch.floor(torch.log2(ratio)) - margin
+    sf = torch.round(torch.pow(2, torch.abs(exp)))
+    sf = torch.where(amax > 0.0, sf, INITIAL_SCALE)
+    sf = torch.where(torch.isfinite(amax), sf, INITIAL_SCALE)
+    sf = torch.where(exp < 0, 1 / sf, sf)
+    return sf
