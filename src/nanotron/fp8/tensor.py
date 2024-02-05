@@ -1,5 +1,4 @@
 import warnings
-from typing import Union
 
 import torch
 
@@ -83,21 +82,21 @@ def convert_tensor_from_fp8(tensor: torch.Tensor, meta, dtype: torch.dtype) -> t
     return tex.cast_from_fp8(tensor, meta.inverse_scale, tensor_dtype, output_dtype)
 
 
-def compute_scaling_factor(amax: Union[float, torch.Tensor], dtype: DTypes, margin: float = 0) -> torch.Tensor:
+def compute_scaling_factor(amax: torch.Tensor, dtype: DTypes, margin: float = 0) -> torch.Tensor:
     """
     Compute the scaling factor to quantize a tensor to FP8.
     Credits: https://github.com/Azure/MS-AMP/blob/d562f0f0bcfc9b712fa0726b73428753ff1300ab/msamp/common/tensor/meta.py#L39
     """
-    assert amax.dtype is torch.float32 if isinstance(amax, torch.Tensor) else True
+    assert amax.dtype == torch.float32
+
     INITIAL_SCALE = torch.tensor(1)
-    amax = torch.tensor(amax) if not isinstance(amax, torch.Tensor) else amax
     fp8_max = DTYPE_TO_FP8_MAX[dtype]
 
     # NOTE: calculate the number of bits to shift the exponent
     ratio = fp8_max / amax
     exp = torch.floor(torch.log2(ratio)) - margin
-    sf = torch.round(torch.pow(2, torch.abs(exp)))
-    sf = torch.where(amax > 0.0, sf, INITIAL_SCALE)
-    sf = torch.where(torch.isfinite(amax), sf, INITIAL_SCALE)
-    sf = torch.where(exp < 0, 1 / sf, sf)
-    return sf
+    scaling_factor = torch.round(torch.pow(2, torch.abs(exp)))
+    scaling_factor = torch.where(amax > 0.0, scaling_factor, INITIAL_SCALE)
+    scaling_factor = torch.where(torch.isfinite(amax), scaling_factor, INITIAL_SCALE)
+    scaling_factor = torch.where(exp < 0, 1 / scaling_factor, scaling_factor)
+    return scaling_factor

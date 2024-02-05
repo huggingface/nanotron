@@ -32,18 +32,10 @@ class FP8Linear(nn.Linear):
         if self.weight.device != torch.device("cpu"):
             self.weight = FP8Parameter(self.weight, dtype=DTypes.FP8E4M3)
 
-            # NOTE: quantization metadata for input gradients, weight gradients
+            # NOTE: quantization metadata for input gradients, weight gradients, and output gradients
             # TODO(xrsrke): don't fixed this
-            # self.fp8_meta: FP8LinearMeta = {
-            #     # kfloat8_e4m3
-            #     "input_grad": FP8Meta(amax=1, dtype=DTypes.FP8E4M3, inverse_scale=1),
-            #     "weight_grad": FP8Meta(amax=1, dtype=DTypes.FP8E4M3, inverse_scale=1),
-            #     # kfloat8_e5m2
-            #     "output_grad": FP8Meta(amax=1, dtype=DTypes.FP8E5M2, inverse_scale=1),
-            # }
-
-            FP8E4M3_SCALE = compute_scaling_factor(amax=1, dtype=DTypes.FP8E4M3)
-            FP8E5M2_SCALE = compute_scaling_factor(amax=1, dtype=DTypes.FP8E5M2)
+            FP8E4M3_SCALE = compute_scaling_factor(amax=torch.tensor(1.0, dtype=torch.float32), dtype=DTypes.FP8E4M3)
+            FP8E5M2_SCALE = compute_scaling_factor(amax=torch.tensor(1.0, dtype=torch.float32), dtype=DTypes.FP8E5M2)
             self.fp8_meta: FP8LinearMeta = {
                 # kfloat8_e4m3
                 "input_grad": FP8Meta(amax=1, dtype=DTypes.FP8E4M3, scale=FP8E4M3_SCALE),
@@ -58,7 +50,7 @@ class FP8Linear(nn.Linear):
             return F.linear(input, self.weight, self.bias)
 
         # NOTE: just a phony tensor to make pytorch trigger the backward pass
-        # because weight and bias's requires grad are set to False
+        # because weight and bias's requires_grad are set to False
         # so that we can compute the gradients using the fp8 kernels by ourselves
         phony = torch.empty(0, device=input.device, requires_grad=True)
         output, _ = _FP8Matmul.apply(input, self.weight, self.fp8_meta, phony)
