@@ -88,15 +88,22 @@ def compute_scaling_factor(amax: torch.Tensor, dtype: DTypes, margin: float = 0)
     Credits: https://github.com/Azure/MS-AMP/blob/d562f0f0bcfc9b712fa0726b73428753ff1300ab/msamp/common/tensor/meta.py#L39
     """
     assert amax.dtype == torch.float32
+    # NOTE: Since fp8_max is a fixed number based on two FP8 data types,
+    # we prefer not to take fp8_max in the input arguments.
+    fp8_max = torch.tensor(DTYPE_TO_FP8_MAX[dtype])
 
-    INITIAL_SCALE = torch.tensor(1)
-    fp8_max = DTYPE_TO_FP8_MAX[dtype]
+    # NOTE: torch.jit only take a concrete value rather than a DTYPE_TO_FP8_MAX[dtype],
+    # so we create an inner function to bypass that
+    @torch.jit.script
+    def _inner(amax: torch.Tensor, fp8_max: torch.Tensor, margin: float):
+        INITIAL_SCALE = torch.tensor(1)
+        # NOTE: calculate the number of bits to shift the exponent
+        ratio = fp8_max / amax
+        exp = torch.floor(torch.log2(ratio)) - margin
+        scaling_factor = torch.round(torch.pow(2, torch.abs(exp)))
+        scaling_factor = torch.where(amax > 0.0, scaling_factor, INITIAL_SCALE)
+        scaling_factor = torch.where(torch.isfinite(amax), scaling_factor, INITIAL_SCALE)
+        scaling_factor = torch.where(exp < 0, 1 / scaling_factor, scaling_factor)
+        return scaling_factor
 
-    # NOTE: calculate the number of bits to shift the exponent
-    ratio = fp8_max / amax
-    exp = torch.floor(torch.log2(ratio)) - margin
-    scaling_factor = torch.round(torch.pow(2, torch.abs(exp)))
-    scaling_factor = torch.where(amax > 0.0, scaling_factor, INITIAL_SCALE)
-    scaling_factor = torch.where(torch.isfinite(amax), scaling_factor, INITIAL_SCALE)
-    scaling_factor = torch.where(exp < 0, 1 / scaling_factor, scaling_factor)
-    return scaling_factor
+    return _inner(amax, fp8_max, margin)
