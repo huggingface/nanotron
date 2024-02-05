@@ -12,7 +12,7 @@ from torch.optim import Adam
 try:
     import transformer_engine as te  # noqa
 except ImportError:
-    warnings.warn("Please install Transformer engine for FP8 training.")
+    warnings.warn("Please install Transformer engine for FP8 training!")
 
 
 @pytest.mark.parametrize("is_bias", [True, False])

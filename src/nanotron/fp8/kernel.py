@@ -8,7 +8,7 @@ try:
     import transformer_engine as te  # noqa
     import transformer_engine_extensions as tex
 except ImportError:
-    warnings.warn("Please install Transformer engine for FP8 training.")
+    warnings.warn("Please install Transformer engine for FP8 training!")
 
 
 @torch.no_grad()
@@ -34,34 +34,37 @@ def fp8_matmul_kernel(
     # NOTE: currently TE don't support adding bias in FP8
     # along with matmul, it only takes an empty bias
     bias = torch.tensor([], dtype=torch.float32)
-    transpose_bias = False
+    TE_CONFIG_TRANSPOSE_BIAS = False
 
     mat_a_fp8_meta = mat_a.fp8_meta
     mat_b_fp8_meta = mat_b.fp8_meta
 
-    if transpose_a is False:
-        mat_a = tex.fp8_transpose(mat_a, mat_a_fp8_meta.te_dtype)
+    # NOTE: these are the fixed configs that TE only takes
+    # so we have to TE the A and B matrix to match these configs
+    TE_CONFIG_TRANSPOSE_A = True
+    TE_CONFIG_TRANSPOSE_B = False
+    SCALE = AMAX = _empty_tensor
 
-    if transpose_b is True:
-        mat_b = tex.fp8_transpose(mat_b, mat_b_fp8_meta.te_dtype)
+    mat_a = tex.fp8_transpose(mat_a, mat_a_fp8_meta.te_dtype) if transpose_a is False else mat_a
+    mat_b = tex.fp8_transpose(mat_b, mat_b_fp8_meta.te_dtype) if transpose_b is True else mat_b
 
     tex.te_gemm(
         mat_a,
         mat_a_fp8_meta.inverse_scale,
         mat_a_fp8_meta.te_dtype,
-        True,  # transa, default True
+        TE_CONFIG_TRANSPOSE_A,
         mat_b,
         mat_b_fp8_meta.inverse_scale,
         mat_b_fp8_meta.te_dtype,
-        False,  # transb, default False
+        TE_CONFIG_TRANSPOSE_B,
         output,
-        _empty_tensor,  # scale
+        SCALE,
         out_dtype,
-        _empty_tensor,  # amax
+        AMAX,
         bias,
         out_dtype,
         _empty_tensor,
-        transpose_bias,  # grad, defualt False
+        TE_CONFIG_TRANSPOSE_BIAS,
         workspace,
         workspace.shape[0],
         accumulate,

@@ -12,7 +12,7 @@ try:
     import transformer_engine as te  # noqa
     import transformer_engine_extensions as tex
 except ImportError:
-    warnings.warn("Please install Transformer engine for FP8 training.")
+    warnings.warn("Please install Transformer engine for FP8 training!")
 
 
 @pytest.mark.parametrize("size", [4, 8, 16, 64])

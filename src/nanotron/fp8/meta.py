@@ -11,7 +11,7 @@ try:
     import transformer_engine as te  # noqa
     import transformer_engine_extensions as tex
 except ImportError:
-    warnings.warn("Please install Transformer engine for FP8 training.")
+    warnings.warn("Please install Transformer engine for FP8 training!")
 
 
 @dataclass
@@ -22,7 +22,6 @@ class FP8Meta:
 
     # TODO(xrsrke): change to Literal[torch.int8, torch.uint8]
     dtype: torch.dtype
-    inverse_scale: float = 1.0
 
     @property
     def te_dtype(self) -> tex.DType:
@@ -60,8 +59,9 @@ class FP8Meta:
         sf = torch.where(exp < 0, 1 / sf, sf)
         return sf
 
-    def _update_inverse_scale(self):
-        self.inverse_scale = 1 / self.scale
+    @property
+    def inverse_scale(self) -> torch.Tensor:
+        return 1 / self.scale
 
     def __repr__(self) -> str:
         return f"FP8Meta(amax={self.amax}, scale={self.scale}, inverse_scale={self.inverse_scale}, dtype={self.dtype})"

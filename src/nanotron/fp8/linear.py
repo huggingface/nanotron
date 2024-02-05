@@ -14,7 +14,7 @@ from nanotron.fp8.tensor import FP8Tensor
 try:
     import transformer_engine as te  # noqa
 except ImportError:
-    warnings.warn("Please install Transformer engine for FP8 training.")
+    warnings.warn("Please install Transformer engine for FP8 training!")
 
 
 class FP8LinearMeta(TypedDict):
@@ -34,12 +34,20 @@ class FP8Linear(nn.Linear):
 
             # NOTE: quantization metadata for input gradients, weight gradients
             # TODO(xrsrke): don't fixed this
+            # self.fp8_meta: FP8LinearMeta = {
+            #     # kfloat8_e4m3
+            #     "input_grad": FP8Meta(amax=1, dtype=DTypes.FP8E4M3, inverse_scale=1),
+            #     "weight_grad": FP8Meta(amax=1, dtype=DTypes.FP8E4M3, inverse_scale=1),
+            #     # kfloat8_e5m2
+            #     "output_grad": FP8Meta(amax=1, dtype=DTypes.FP8E5M2, inverse_scale=1),
+            # }
+
             self.fp8_meta: FP8LinearMeta = {
                 # kfloat8_e4m3
-                "input_grad": FP8Meta(amax=1, dtype=DTypes.FP8E4M3, inverse_scale=1),
-                "weight_grad": FP8Meta(amax=1, dtype=DTypes.FP8E4M3, inverse_scale=1),
+                "input_grad": FP8Meta(amax=1, dtype=DTypes.FP8E4M3),
+                "weight_grad": FP8Meta(amax=1, dtype=DTypes.FP8E4M3),
                 # kfloat8_e5m2
-                "output_grad": FP8Meta(amax=1, dtype=DTypes.FP8E5M2, inverse_scale=1),
+                "output_grad": FP8Meta(amax=1, dtype=DTypes.FP8E5M2),
             }
 
     def forward(self, input: Union[FP8Tensor, torch.Tensor]) -> torch.Tensor:

@@ -9,7 +9,7 @@ try:
     import transformer_engine as te  # noqa
     import transformer_engine_extensions as tex
 except ImportError:
-    warnings.warn("Please install Transformer engine for FP8 training.")
+    warnings.warn("Please install Transformer engine for FP8 training!")
 
 
 class FP8Tensor(torch.Tensor):
@@ -25,9 +25,7 @@ class FP8Tensor(torch.Tensor):
         assert tensor.device != torch.device("cpu"), "FP8Tensor only supports CUDA device"
         assert isinstance(dtype, DTypes)
 
-        # TODO(xrsrke): can we store inverse_scale in lower precision?
-        inverse_scale = torch.tensor(1.0, device=tensor.device, dtype=torch.float32)
-        fp8_meta = FP8Meta(tensor.abs().max().clone(), dtype, inverse_scale)
+        fp8_meta = FP8Meta(tensor.abs().max().clone(), dtype)
 
         if tensor.dtype not in FP8_DTYPES:
             fp8_tensor = convert_tensor_to_fp8(tensor, fp8_meta)
@@ -35,7 +33,6 @@ class FP8Tensor(torch.Tensor):
             fp8_tensor = tensor
 
         # TODO(xrsrke): move update inverse scaling to FP8Meta's initialization
-        fp8_meta._update_inverse_scale()
         obj = torch.Tensor._make_subclass(cls, fp8_tensor)
         obj.fp8_meta = fp8_meta
         return obj
@@ -68,7 +65,10 @@ def convert_torch_dtype_to_te_dtype(dtype: torch.dtype) -> tex.DType:
 def convert_tensor_to_fp8(tensor: torch.Tensor, meta) -> FP8Tensor:
     te_dtype = convert_torch_dtype_to_te_dtype(meta.dtype)
     # TODO(xrsrke): after casting to fp8, update the scaling factor
-    return tex.cast_to_fp8(tensor, meta.scale, meta.amax, meta.inverse_scale, te_dtype)
+    # return tex.cast_to_fp8(tensor, meta.scale, meta.amax, meta.inverse_scale, te_dtype)
+    # TODO(xrsrke): it's weird that TE only take inverse_scale equal to 1
+    inverse_scale = torch.tensor(1.0, device=tensor.device, dtype=torch.float32)
+    return tex.cast_to_fp8(tensor, meta.scale, meta.amax, inverse_scale, te_dtype)
 
 
 def convert_tensor_from_fp8(tensor: torch.Tensor, meta, dtype: torch.dtype) -> torch.Tensor:
