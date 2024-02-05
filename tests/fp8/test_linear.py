@@ -16,8 +16,7 @@ except ImportError:
 
 
 @pytest.mark.parametrize("is_bias", [True, False])
-@pytest.mark.parametrize("quantize_input", [True, False])
-def test_fp8_linear_forward_pass(quantize_input, is_bias):
+def test_fp8_linear_forward_pass(is_bias):
     input = torch.randn(16, 16, device="cuda", dtype=torch.float32)
     ref_input = input.detach().clone()
     ref_linear = nn.Linear(16, 16, bias=is_bias, device="cuda", dtype=torch.float32)

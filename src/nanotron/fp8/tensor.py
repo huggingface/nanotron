@@ -67,7 +67,6 @@ def convert_torch_dtype_to_te_dtype(dtype: torch.dtype) -> tex.DType:
 def convert_tensor_to_fp8(tensor: torch.Tensor, meta) -> FP8Tensor:
     te_dtype = convert_torch_dtype_to_te_dtype(meta.dtype)
     # TODO(xrsrke): after casting to fp8, update the scaling factor
-    # return tex.cast_to_fp8(tensor, meta.scale, meta.amax, meta.inverse_scale, te_dtype)
     # TODO(xrsrke): it's weird that TE only take inverse_scale equal to 1
     inverse_scale = torch.tensor(1.0, device=tensor.device, dtype=torch.float32)
     return tex.cast_to_fp8(tensor, meta.scale, meta.amax, inverse_scale, te_dtype)
