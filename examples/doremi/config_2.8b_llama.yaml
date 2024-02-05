@@ -97,11 +97,11 @@ tokens:
   # the doremi paper do 500k tokens per batch
   # batch_accumulation_per_replica: 16
   # NOTE: some weird bug, where if you run batch_accumulation_per_replica=16
-  # it results no samples from some domains
+  # it results no samples from some domainsbatch_accumulation_per_replica
 
   # NOTE: this causes some domain losses are 0
-  batch_accumulation_per_replica: 8
-  micro_batch_size: 8
+  # batch_accumulation_per_replica: 8
+  # micro_batch_size: 8
 
   batch_accumulation_per_replica: 1
   micro_batch_size: 64
