@@ -1,12 +1,18 @@
+import warnings
+
 import pytest
 import torch
-import transformer_engine as te  # noqa
 from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.linear import FP8Linear
 from nanotron.fp8.parameter import FP8Parameter
 from nanotron.fp8.tensor import FP8Tensor
 from torch import nn
 from torch.optim import Adam
+
+try:
+    import transformer_engine as te  # noqa
+except ImportError:
+    warnings.warn("Please install Transformer engine for FP8 training.")
 
 
 @pytest.mark.parametrize("is_bias", [True, False])
@@ -27,7 +33,7 @@ def test_fp8_linear_forward_pass(quantize_input, is_bias):
 
     assert isinstance(output, torch.Tensor)
     assert output.dtype == torch.float32
-    assert torch.allclose(output, ref_output, 0, 0.1)
+    assert torch.allclose(output, ref_output, rtol=0, atol=0.1)
 
 
 # TODO(xrsrke): add cases where the input requires and don't require grad

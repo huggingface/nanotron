@@ -12,8 +12,6 @@ def test_create_fp8_parameter():
 
     fp8_parameter = FP8Parameter(tensor, DTypes.FP8E4M3)
 
-    # TODO(xrsrke): are there better ways for testing
-    # if a tensor is quantized or not?
     assert isinstance(fp8_parameter.data, FP8Tensor)
     assert fp8_parameter.requires_grad is True
     assert fp8_parameter.grad is None

@@ -1,11 +1,17 @@
+import warnings
 from dataclasses import dataclass
 from typing import Union
 
 import torch
-import transformer_engine as te  # noqa
-import transformer_engine_extensions as tex
 
 from nanotron.fp8.constants import DTYPE_TO_FP8_MAX
+from nanotron.fp8.tensor import convert_torch_dtype_to_te_dtype
+
+try:
+    import transformer_engine as te  # noqa
+    import transformer_engine_extensions as tex
+except ImportError:
+    warnings.warn("Please install Transformer engine for FP8 training.")
 
 
 @dataclass
@@ -20,8 +26,6 @@ class FP8Meta:
 
     @property
     def te_dtype(self) -> tex.DType:
-        from nanotron.fp8.tensor import convert_torch_dtype_to_te_dtype
-
         return convert_torch_dtype_to_te_dtype(self.dtype)
 
     def __post_init__(self):

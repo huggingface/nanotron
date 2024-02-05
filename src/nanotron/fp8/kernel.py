@@ -1,8 +1,14 @@
+import warnings
+
 import torch
-import transformer_engine as te  # noqa
-import transformer_engine_extensions as tex
 
 from nanotron.fp8.tensor import FP8Tensor
+
+try:
+    import transformer_engine as te  # noqa
+    import transformer_engine_extensions as tex
+except ImportError:
+    warnings.warn("Please install Transformer engine for FP8 training.")
 
 
 @torch.no_grad()
