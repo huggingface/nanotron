@@ -5,10 +5,10 @@ from nanotron.fp8.parameter import FP8Parameter
 from nanotron.fp8.tensor import FP8Tensor
 
 
-# @pytest.mark.parametrize("quantize_input", [True, False])
 def test_create_fp8_parameter():
+    # TODO(xrsrke): test FP8E5M2 format
+    # TODO(xrsrke): test take a cpu tensor
     tensor = torch.randn(16, 16, device="cuda", dtype=torch.float32)
-    # tensor = FP8Tensor(tensor, DTypes.FP8E4M3) if quantize_input else tensor
 
     fp8_parameter = FP8Parameter(tensor, DTypes.FP8E4M3)
 

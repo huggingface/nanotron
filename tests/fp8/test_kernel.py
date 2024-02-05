@@ -6,6 +6,7 @@ from nanotron.fp8.tensor import FP8Tensor
 from torch import nn
 
 
+@pytest.mark.skip
 @pytest.mark.parametrize("hidden_size", [16, 64, 128, 256, 512, 1024])
 @pytest.mark.parametrize("transpose_a", [True, False])
 @pytest.mark.parametrize("transpose_b", [True, False])

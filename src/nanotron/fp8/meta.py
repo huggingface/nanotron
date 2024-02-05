@@ -38,6 +38,7 @@ class FP8Meta:
         """Return the maximum normal value for the current dtype."""
         return DTYPE_TO_FP8_MAX[self.dtype]
 
+    # @torch.jit.script
     def _compute_scaling_factor(self, margin: float = 0) -> torch.Tensor:
         # Credits: https://github.com/Azure/MS-AMP/blob/d562f0f0bcfc9b712fa0726b73428753ff1300ab/msamp/common/tensor/meta.py#L39
         # NOTE: seems like python 3.11.5 don't call __post_init__ when using dataclass
