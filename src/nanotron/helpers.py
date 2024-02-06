@@ -104,7 +104,7 @@ def lr_scheduler_builder(optimizer: Optimizer, lr_scheduler_args: LRSchedulerArg
         - optional: constant (if lr_decay_steps and/or lr_decay_starting_step are set)
         Warmup starts at lr=0 and ends at `lr=lr`
         Then it stays constant at lr if lr_decay_starting_step is set and larger than lr_warmup_steps
-        Then it decays until `min_decay_lr` for lr_decay_steps if set or (total_training_steps - lr_scheduler_args.lr_warmup_steps or lr_decay_starting_step)
+        Then it decays until `min_decay_lr` for lr_decay_steps if set, else: (total_training_steps - lr_warmup_steps or lr_decay_starting_step)
         Then it stays constant at min_decay_lr if lr_decay_starting_step is set and total_training_steps is larger)
         """
         # No warmup or decay
