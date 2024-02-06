@@ -10,6 +10,7 @@ import yaml
 from dacite import from_dict
 from yaml.loader import SafeLoader
 
+from nanotron.config.lighteval_config import LightEvalConfig
 from nanotron.config.models_config import ExistingCheckpointInit, NanotronConfigs, RandomInit
 from nanotron.config.utils_config import (
     RecomputeGranularity,
@@ -259,6 +260,7 @@ class LRSchedulerArgs:
     lr_decay_style: linear or cosine
     min_decay_lr: minimum learning rate after decay
     lr_decay_steps: optional number of steps to decay the learning rate otherwise will default to train_steps - lr_warmup_steps
+    lr_decay_starting_step: optional number of steps to decay the learning rate otherwise will default to train_steps - lr_warmup_steps
     """
 
     learning_rate: float
@@ -266,6 +268,7 @@ class LRSchedulerArgs:
     lr_warmup_style: str = None
     lr_decay_style: str = None
     lr_decay_steps: Optional[int] = None
+    lr_decay_starting_step: Optional[int] = None
     min_decay_lr: float = None
 
     def __post_init__(self):
@@ -334,6 +337,7 @@ class Config:
     optimizer: Optional[OptimizerArgs]
     data: Optional[DataArgs]
     profiler: Optional[ProfilerArgs]
+    eval: Optional[LightEvalConfig]
 
     @classmethod
     def create_empty(cls):
