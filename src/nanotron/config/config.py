@@ -337,21 +337,23 @@ class Config:
 
 
 def get_config_from_dict(
-    config_dict: dict, config_class: Type = Config, skip_unused_config_keys: bool = True, skip_null_keys: bool = True
+    config_dict: dict, config_class: Type = Config, skip_unused_config_keys: bool = False, skip_null_keys: bool = False
 ):
     """Get a config object from a dictionary
 
     Args:
         args: dictionary of arguments
         config_class: type of the config object to get as a ConfigTypes (Config, LightevalConfig, LightevalSlurm) or str
-        skip_unused_config_keys: whether to skip unused first-level keys in the config file (for config with additional sections)
-        skip_null_keys: whether to skip keys with value None at first and second level
+        skip_unused_config_keys: whether to skip unused first-nesting-level keys in the config file (for config with additional sections)
+        skip_null_keys: whether to skip keys with value None at first and second nesting level
     """
     if skip_unused_config_keys:
+        logger.warning("skip_unused_config_keys set")
         config_dict = {
             field.name: config_dict[field.name] for field in fields(config_class) if field.name in config_dict
         }
     if skip_null_keys:
+        logger.warning("Skip_null_keys set")
         config_dict = {
             k: {kk: vv for kk, vv in v.items() if vv is not None} if isinstance(v, dict) else v
             for k, v in config_dict.items()
@@ -379,8 +381,8 @@ def get_config_from_file(
     config_path: str,
     config_class: Type = Config,
     model_config_class: Optional[Type] = None,
-    skip_unused_config_keys: bool = True,
-    skip_null_keys: bool = True,
+    skip_unused_config_keys: bool = False,
+    skip_null_keys: bool = False,
 ) -> Config:
     """Get a config objet from a file (python or YAML)
 
@@ -389,7 +391,8 @@ def get_config_from_file(
         config_type: if the file is a python file, type of the config object to get as a
             ConfigTypes (Config, LightevalConfig, LightevalSlurm) or str
             if None, will default to Config
-        skip_unused_config_keys: whether to skip unused keys in the config file (for config with additional sections)
+        skip_unused_config_keys: whether to skip unused first-nesting-level keys in the config file (for config with additional sections)
+        skip_null_keys: whether to skip keys with value None at first and second nesting level
     """
     # Open the file and load the file
     with open(config_path) as f:
