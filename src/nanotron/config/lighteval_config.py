@@ -52,17 +52,13 @@ class LightEvalTasksArgs:
     """Arguments related to tasks for LightEval"""
 
     tasks: Optional[str] = None
-    custom_tasks_file: Optional[Path] = None
+    custom_tasks: Optional[str] = None
     max_samples: Optional[int] = None
     num_fewshot_seeds: Optional[int] = None
 
     dataset_loading_processes: Optional[int] = 8
     multichoice_continuations_start_space: Optional[bool] = None
     no_multichoice_continuations_start_space: Optional[bool] = None
-
-    def __post_init__(self):
-        if isinstance(self.custom_tasks_file, str):
-            self.custom_tasks_file = Path(self.custom_tasks_file)
 
 
 @dataclass
