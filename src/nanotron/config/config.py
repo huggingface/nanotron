@@ -356,6 +356,10 @@ class Config:
         return self.tokens.micro_batch_size
 
     @property
+    def n_micro_batches_per_batch(self):
+        return self.tokens.batch_accumulation_per_replica
+
+    @property
     def batch_accumulation_per_replica(self):
         return self.tokens.batch_accumulation_per_replica
 
