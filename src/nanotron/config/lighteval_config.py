@@ -1,11 +1,32 @@
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional, Union
+from typing import Dict, Optional, Union
 
-from nanotron.config import GenerationArgs, ParallelismArgs
+from nanotron.config.parallelism_config import ParallelismArgs
+from nanotron.generation.sampler import SamplerType
 from nanotron.logging import get_logger
 
 logger = get_logger(__name__)
+
+DEFAULT_GENERATION_SEED = 42
+
+
+@dataclass
+class GenerationArgs:
+    sampler: Optional[Union[str, SamplerType]] = None
+    temperature: Optional[float] = None
+    top_k: Optional[int] = None
+    top_p: Optional[float] = None
+    n_samples: Optional[int] = None
+    eos: Optional[str] = None
+    seed: Optional[int] = None
+    use_cache: Optional[bool] = False
+
+    def __post_init__(self):
+        if isinstance(self.sampler, str):
+            self.sampler = SamplerType[self.sampler.upper()]
+        if self.seed is None:
+            self.seed = DEFAULT_GENERATION_SEED
 
 
 @dataclass
@@ -74,5 +95,3 @@ class LightEvalConfig:
     tasks: Optional[LightEvalTasksArgs] = None
     logging: Optional[LightEvalLoggingArgs] = None
     wandb: Optional[LightEvalWandbLoggerConfig] = None
-
-    slurm: Optional[Dict[str, Any]] = None  # For legacy compatibility
