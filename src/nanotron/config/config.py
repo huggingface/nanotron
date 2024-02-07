@@ -31,15 +31,6 @@ DEFAULT_SEED = 42
 
 
 @dataclass
-class BenchArgs:
-    model_name: str
-    sequence_length: int
-    micro_batch_size: int
-    batch_accumulation_per_replica: int
-    benchmark_csv_path: str
-
-
-@dataclass
 class LoggingArgs:
     """Arguments related to logging"""
 
@@ -267,6 +258,7 @@ class LRSchedulerArgs:
     lr_decay_style: str = None
     lr_decay_steps: Optional[int] = None
     min_decay_lr: float = None
+    lr_decay_starting_step: Optional[int] = None
 
     def __post_init__(self):
         if self.lr_warmup_style not in ["linear", "constant"]:
@@ -334,6 +326,7 @@ class Config:
     optimizer: Optional[OptimizerArgs]
     data: Optional[DataArgs]
     profiler: Optional[ProfilerArgs]
+    benchmark_csv_path: Path = "./benchmark.csv"
 
     @classmethod
     def create_empty(cls):
@@ -357,6 +350,18 @@ class Config:
     @property
     def global_batch_size(self):
         return self.tokens.micro_batch_size * self.tokens.batch_accumulation_per_replica * self.parallelism.dp
+
+    @property
+    def micro_batch_size(self):
+        return self.tokens.micro_batch_size
+
+    @property
+    def batch_accumulation_per_replica(self):
+        return self.tokens.batch_accumulation_per_replica
+
+    @property
+    def sequence_length(self):
+        return self.tokens.sequence_length
 
     def save_as_yaml(self, file_path: str):
         config_dict = serialize(self)
