@@ -1,4 +1,5 @@
 import contextlib
+import csv
 import gc
 import math
 import os
@@ -435,7 +436,7 @@ def log_throughput(
     slurm_job_id = os.environ.get("SLURM_JOB_ID", "N/A")
     csv_filename = config.benchmark_csv_path
     table_log = [
-        LogItem("model_name", config.model_name, "s"),
+        LogItem("name", config.general.run, "s"),
         LogItem("nodes", math.ceil(parallel_context.world_pg.size() / 8), "d"),
         LogItem("seq_len", (sequence_length), "d"),
         LogItem("mbs", micro_batch_size, "d"),
@@ -467,8 +468,6 @@ def log_throughput(
         level=logging.INFO,
         rank=0,
     )
-
-    import csv
 
     if dist.get_rank(parallel_context.world_pg) == 0:
         if not os.path.exists(csv_filename):
