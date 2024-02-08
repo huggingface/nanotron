@@ -36,6 +36,7 @@ from nanotron.models.base import check_model_has_grad
 from nanotron.models.llama import LlamaForTraining, RotaryEmbedding
 from nanotron.models.starcoder2 import Starcoder2ForTraining
 from nanotron.models.mamba_slow.mamba import MambaForTraining
+from brrr.models.mamba_fast.mamba import MambaFastForTraining
 from nanotron.optim.clip_grads import clip_grad_norm
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.data_parallel.utils import sync_gradients_across_dp
@@ -85,6 +86,7 @@ CONFIG_TO_MODEL_CLASS = {
     "LlamaConfig": LlamaForTraining,
     "Starcoder2Config": Starcoder2ForTraining,
     "MambaConfig": MambaForTraining,
+    "MambaFastConfig": MambaFastForTraining,
 }
 
 
@@ -561,12 +563,15 @@ class DistributedTrainer:
                     root_folder=self.config.model.init_method.path,
                 )
             elif isinstance(self.config.model.init_method, MambaInit):
-                # Initialize model randomly
-                normalized_model.init_mamba_weights(
-                    n_layer=self.model_config.num_hidden_layers,
-                    initializer_range=self.config.model.init_method.initializer_range,
+                
+                normalized_model.init_model_randomly(
+                    init_method=init_method_normal(self.config.model.init_method.initializer_range),
+                    scaled_init_method=scaled_init_method_normal(
+                        sigma=self.config.model.init_method.initializer_range,
+                        num_layers=self.model_config.num_hidden_layers,
+                        scale=self.config.model.init_method.n_residuals_per_layer
+                    ),
                     rescale_prenorm_residual=self.config.model.init_method.rescale_prenorm_residual,
-                    n_residuals_per_layer=self.config.model.init_method.n_residuals_per_layer
                 )
                 # Synchronize parameters so that the model is consistent
                 # sync all params across dp
@@ -587,9 +592,10 @@ class DistributedTrainer:
                 # Initialize model randomly
                 normalized_model.init_model_randomly(
                     init_method=init_method_normal(self.config.model.init_method.std),
-                    scaled_init_method=scaled_init_method_normal(
-                        self.config.model.init_method.std, self.model_config.num_hidden_layers
-                    ),
+                    scaled_init_method_normal=scaled_init_method_normal(
+                        sigma=self.config.model.init_method.std,
+                        num_layers=self.model_config.num_hidden_layers,
+                    )
                 )
                 # Synchronize parameters so that the model is consistent
                 # sync all params across dp

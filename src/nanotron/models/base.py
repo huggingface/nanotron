@@ -35,7 +35,7 @@ class NanotronModel(nn.Module, metaclass=ABCMeta):
         self.output_pp_rank: int
 
     @abstractmethod
-    def init_model_randomly(self, init_method, scaled_init_method):
+    def init_model_randomly(self, init_method, scaled_init_method, **kwargs):
         ...
 
     @staticmethod
