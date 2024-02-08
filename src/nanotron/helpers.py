@@ -421,8 +421,11 @@ def test_all_pair_to_pair(
     )
 
 
-def create_table_log(config: Config, parallel_context, model_tflops, hardware_tflops, tokens_per_sec, bandwidth):
+def create_table_log(
+    config: Config, parallel_context, model_tflops, hardware_tflops, tokens_per_sec, bandwidth, slurm_job_id
+):
     return [
+        LogItem("job_id", slurm_job_id, "s"),
         LogItem("name", config.general.run, "s"),
         LogItem("nodes", math.ceil(parallel_context.world_pg.size() / 8), "d"),
         LogItem("seq_len", config.sequence_length, "d"),
@@ -457,17 +460,17 @@ def write_to_csv(csv_filename, table_log, model_tflops, slurm_job_id):
             writer = csv.writer(fo)
             writer.writerow([item.tag for item in table_log])
             writer.writerow([f"{item.scalar_value:{item.log_format}}" for item in table_log])
-    elif model_tflops > 0:
-        # replace line with same job_id
-        with open(csv_filename, mode="r") as fi:
-            lines = fi.readlines()
-        with open(csv_filename, mode="w") as fo:
-            writer = csv.writer(fo)
-            for line in lines:
-                if line.startswith(slurm_job_id):
-                    writer.writerow([f"{item.scalar_value:{item.log_format}}" for item in table_log])
-                else:
-                    fo.write(line)
+    # elif model_tflops > 0:
+    #     # replace line with same job_id
+    #     with open(csv_filename, mode="r") as fi:
+    #         lines = fi.readlines()
+    #     with open(csv_filename, mode="w") as fo:
+    #         writer = csv.writer(fo)
+    #         for line in lines:
+    #             if line.startswith(slurm_job_id):
+    #                 writer.writerow([f"{item.scalar_value:{item.log_format}}" for item in table_log])
+    #             else:
+    #                 fo.write(line)
     else:
         with open(csv_filename, mode="a") as fo:
             writer = csv.writer(fo)
@@ -484,7 +487,9 @@ def log_throughput(
 ):
     slurm_job_id = os.environ.get("SLURM_JOB_ID", "N/A")
 
-    table_log = create_table_log(config, parallel_context, model_tflops, hardware_tflops, tokens_per_sec, bandwidth)
+    table_log = create_table_log(
+        config, parallel_context, model_tflops, hardware_tflops, tokens_per_sec, bandwidth, slurm_job_id
+    )
     column_widths = [max(len(item.tag), len(f"{item.scalar_value:{item.log_format}}")) for item in table_log]
     table_output = create_table_output(table_log, column_widths)
 

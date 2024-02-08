@@ -91,6 +91,6 @@ if __name__ == "__main__":
     config.save_as_yaml(f"{dir}/config_llama.yaml")
 
     # Launch training
-    os.system("export CUDA_DEVICE_MAX_CONNECTIONS=1")
-    gpus = config.parallelism.dp * config.parallelism.pp * config.parallelism.tp
-    os.system(f"torchrun --nproc_per_node={gpus} run_train.py --config-file {dir}/config_llama.yaml")
+    # os.system("export CUDA_DEVICE_MAX_CONNECTIONS=1")
+    # gpus = config.parallelism.dp * config.parallelism.pp * config.parallelism.tp
+    # os.system(f"torchrun --nproc_per_node={gpus} run_train.py --config-file {dir}/config_llama.yaml")
