@@ -69,6 +69,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
+from nanotron.utils import init_method_normal, scaled_init_method_normal
 from einops import rearrange, repeat
 
 from mamba_ssm.ops.selective_scan_interface import selective_scan_fn, mamba_inner_fn
@@ -76,7 +77,7 @@ from mamba_ssm.ops.selective_scan_interface import selective_scan_fn, mamba_inne
 try:
     from causal_conv1d import causal_conv1d_fn, causal_conv1d_update
 except ImportError:
-    causal_conv1d_fn, causal_conv1d_update = None
+    causal_conv1d_fn, causal_conv1d_update = None, None
 
 try:
     from mamba_ssm.ops.triton.selective_state_update import selective_state_update
@@ -88,6 +89,7 @@ try:
 except ImportError:
     RMSNorm, layer_norm_fn, rms_norm_fn = None, None, None
 
+import lovely_tensors as lt; lt.monkey_patch()
 
 logger = logging.get_logger(__name__)
 
@@ -96,6 +98,8 @@ class Mamba(nn.Module):
     def __init__(
         self,
         d_model,
+        parallel_config: Optional[ParallelismArgs],
+        tp_pg: dist.ProcessGroup,
         d_state=16,
         d_conv=4,
         expand=2,
@@ -123,8 +127,24 @@ class Mamba(nn.Module):
         self.use_fast_path = use_fast_path
         self.layer_idx = layer_idx
 
-        self.in_proj = nn.Linear(self.d_model, self.d_inner * 2, bias=bias, **factory_kwargs)
-
+        tp_mode = parallel_config.tp_mode if parallel_config is not None else TensorParallelLinearMode.ALL_REDUCE
+        tp_linear_async_communication = (
+            parallel_config.tp_linear_async_communication if parallel_config is not None else False
+        )
+        
+        # Get current tensor parallel rank
+        self.tp_pg = tp_pg
+        self.tp_rank = dist.get_rank(self.tp_pg)
+        
+        self.in_proj = TensorParallelColumnLinear(
+            in_features=self.d_model,
+            out_features=self.d_inner * 2,
+            pg=tp_pg,
+            mode=tp_mode,
+            bias=bias,
+            async_communication=False,
+            contiguous_chunks=None
+        )
         self.conv1d = nn.Conv1d(
             in_channels=self.d_inner,
             out_channels=self.d_inner,
@@ -138,9 +158,16 @@ class Mamba(nn.Module):
         self.activation = "silu"
         self.act = nn.SiLU()
 
-        self.x_proj = nn.Linear(
-            self.d_inner, self.dt_rank + self.d_state * 2, bias=False, **factory_kwargs
+        self.x_proj = TensorParallelRowLinear(
+            in_features=self.d_inner,
+            out_features=self.dt_rank + self.d_state * 2,
+            pg=tp_pg,
+            mode=tp_mode,
+            bias=False,
+            async_communication=tp_linear_async_communication,
+            contiguous_chunks=None
         )
+        
         self.dt_proj = nn.Linear(self.dt_rank, self.d_inner, bias=True, **factory_kwargs)
 
         # Initialize special dt projection to preserve variance at initialization
@@ -178,7 +205,20 @@ class Mamba(nn.Module):
         self.D = nn.Parameter(torch.ones(self.d_inner, device=device))  # Keep in fp32
         self.D._no_weight_decay = True
 
-        self.out_proj = nn.Linear(self.d_inner, self.d_model, bias=bias, **factory_kwargs)
+        # self.out_proj = nn.Linear(self.d_inner, self.d_model, bias=bias, **factory_kwargs)
+        self.out_proj = TensorParallelRowLinear(
+            in_features=self.d_inner,
+            out_features=self.d_model,
+            pg=tp_pg,
+            mode=tp_mode,
+            bias=False,
+            async_communication=tp_linear_async_communication,
+            contiguous_chunks=None
+        )
+        
+    def _split_weight(self, data: torch.Tensor, dim: int) -> torch.Tensor:
+        chunks = torch.chunk(data, self.tp_pg.size(), dim=dim)
+        return chunks[self.tp_rank].contiguous()
 
     def forward(self, hidden_states, inference_params=None):
         """
@@ -196,47 +236,58 @@ class Mamba(nn.Module):
                 return out
 
         # We do matmul and transpose BLH -> HBL at the same time
-        xz = rearrange(
-            self.in_proj.weight @ rearrange(hidden_states, "b l d -> d (b l)"),
-            "d (b l) -> b d l",
-            l=seqlen,
-        )
-        if self.in_proj.bias is not None:
-            xz = xz + rearrange(self.in_proj.bias.to(dtype=xz.dtype), "d -> d 1")
+        xz = self.in_proj(hidden_states).transpose(1, 2)
 
         A = -torch.exp(self.A_log.float())  # (d_inner, d_state)
+        
+        A_shard = self._split_weight(A, dim=0)        
+        conv1d_weight_shard = self._split_weight(self.conv1d.weight, dim=0)
+        conv1d_bias_shard = self._split_weight(self.conv1d.bias, dim=0)
+        dt_proj_weight_shard = self._split_weight(self.dt_proj.weight, dim=0)
+
+        D_shard = self._split_weight(self.D, dim=0)
+        dt_proj_bias_shard = self._split_weight(self.dt_proj.bias, dim=0)
+            
         # In the backward pass we write dx and dz next to each other to avoid torch.cat
         if self.use_fast_path and inference_params is None:  # Doesn't support outputting the states
+            raise NotImplementedError("Fast path not implemented, need to add xz.view(...) into mamba_inner_fn")
             out = mamba_inner_fn(
+                self.d_inner,
+                self.tp_pg,
                 xz,
-                self.conv1d.weight,
-                self.conv1d.bias,
+                conv1d_weight_shard,
+                conv1d_bias_shard,
                 self.x_proj.weight,
-                self.dt_proj.weight,
+                dt_proj_weight_shard,
                 self.out_proj.weight,
                 self.out_proj.bias,
-                A,
+                A_shard,
                 None,  # input-dependent B
                 None,  # input-dependent C
-                self.D.float(),
-                delta_bias=self.dt_proj.bias.float(),
+                D_shard.float(),
+                delta_bias=dt_proj_bias_shard.float(),
                 delta_softplus=True,
             )
         else:
-            x, z = xz.chunk(2, dim=1)
+            assert self.d_inner % self.tp_pg.size() == 0
+            x, z = xz.view(batch, self.d_inner // self.tp_pg.size(), 2, seqlen).chunk(2, dim=2)
+            x = x.squeeze(2)
+            z = z.squeeze(2)
             # Compute short convolution
             if conv_state is not None:
                 # If we just take x[:, :, -self.d_conv :], it will error if seqlen < self.d_conv
                 # Instead F.pad will pad with zeros if seqlen < self.d_conv, and truncate otherwise.
                 conv_state.copy_(F.pad(x, (self.d_conv - x.shape[-1], 0)))  # Update state (B D W)
             if causal_conv1d_fn is None:
+                # TODO(fmom): do split tp
                 x = self.act(self.conv1d(x)[..., :seqlen])
             else:
+                
                 assert self.activation in ["silu", "swish"]
                 x = causal_conv1d_fn(
                     x=x,
-                    weight=rearrange(self.conv1d.weight, "d 1 w -> d w"),
-                    bias=self.conv1d.bias,
+                    weight=rearrange(conv1d_weight_shard, "d 1 w -> d w"),
+                    bias=conv1d_bias_shard,
                     activation=self.activation,
                 )
 
@@ -245,7 +296,7 @@ class Mamba(nn.Module):
             # and L as the fastest moving dimension, since those are what the ssm_scan kernel expects.
             x_dbl = self.x_proj(rearrange(x, "b d l -> (b l) d"))  # (bl d)
             dt, B, C = torch.split(x_dbl, [self.dt_rank, self.d_state, self.d_state], dim=-1)
-            dt = self.dt_proj.weight @ dt.t()
+            dt = dt_proj_weight_shard @ dt.t()
             dt = rearrange(dt, "d (b l) -> b d l", l=seqlen)
             B = rearrange(B, "(b l) dstate -> b dstate l", l=seqlen).contiguous()
             C = rearrange(C, "(b l) dstate -> b dstate l", l=seqlen).contiguous()
@@ -253,12 +304,12 @@ class Mamba(nn.Module):
             y = selective_scan_fn(
                 x,
                 dt,
-                A,
+                A_shard,
                 B,
                 C,
-                self.D.float(),
+                D_shard.float(),
                 z=z,
-                delta_bias=self.dt_proj.bias.float(),
+                delta_bias=dt_proj_bias_shard.float(),
                 delta_softplus=True,
                 return_last_state=ssm_state is not None,
             )
@@ -376,7 +427,7 @@ class Block(nn.Module):
         super().__init__()
         self.residual_in_fp32 = residual_in_fp32
         self.fused_add_norm = fused_add_norm
-        self.mixer = mixer_cls(dim)
+        self.mixer = mixer_cls(d_model=dim)
         self.norm = norm_cls(dim)
         if self.fused_add_norm:
             assert RMSNorm is not None, "RMSNorm import fails"
@@ -418,6 +469,8 @@ class Block(nn.Module):
         return self.mixer.allocate_inference_cache(batch_size, max_seqlen, dtype=dtype, **kwargs)
 
 def create_block(
+    parallel_config: Optional[ParallelismArgs],
+    tp_pg: dist.ProcessGroup,
     d_model,
     ssm_cfg=None,
     norm_epsilon=1e-5,
@@ -431,7 +484,7 @@ def create_block(
     if ssm_cfg is None:
         ssm_cfg = {}
     factory_kwargs = {"device": device, "dtype": dtype}
-    mixer_cls = partial(Mamba, layer_idx=layer_idx, **ssm_cfg, **factory_kwargs)
+    mixer_cls = partial(Mamba, parallel_config=parallel_config, tp_pg=tp_pg, layer_idx=layer_idx, **ssm_cfg, **factory_kwargs)
     norm_cls = partial(
         nn.LayerNorm if not rms_norm else RMSNorm, eps=norm_epsilon, **factory_kwargs
     )
@@ -489,7 +542,9 @@ class MambaDecoderLayer(nn.Module):
 
         super().__init__()
         self.block = create_block(
-                    config.d_model,
+                    parallel_config=parallel_config,
+                    tp_pg=tp_pg,
+                    d_model=config.d_model,
                     ssm_cfg=config.ssm_cfg,
                     norm_epsilon=config.rms_norm_eps,
                     rms_norm=config.rms_norm,
@@ -570,7 +625,7 @@ class MambaModel(nn.Module):
             p2p=self.p2p,
             module_builder=RMSNorm,
             module_kwargs={"hidden_size": config.d_model, "eps": config.rms_norm_eps},
-            module_input_keys={"x"},
+            module_input_keys={"x", "residual"},
             module_output_keys={"hidden_states"},
         )
 
@@ -625,13 +680,31 @@ class MambaModel(nn.Module):
         for block in self.decoder:
             hidden_encoder_states = block(**hidden_encoder_states)
 
-        hidden_states = self.final_layer_norm(x=hidden_encoder_states["hidden_states"])["hidden_states"]
+        hidden_states = self.final_layer_norm(x=hidden_encoder_states["hidden_states"], residual=hidden_encoder_states["residual"])["hidden_states"]
 
         sharded_logits = self.lm_head(x=hidden_states)["logits"]
-
         fp32_sharded_logits = self.cast_to_fp32(x=sharded_logits)["output"]
 
         return fp32_sharded_logits, hidden_states
+
+    def _print_param_stat(self, param):
+        print(f"\tmin={param.min().item()}")
+        print(f"\tmean={param.mean().item()}")
+        print(f"\tmedian={param.median().item()}")
+        print(f"\tmax={param.max().item()}")
+    
+    
+    def _print_all_param_stats(self, msg):
+        print(msg)    
+        named_parameters = list(self.named_parameters())
+        named_parameters.sort(key=lambda x: x[0])
+        for name, param in named_parameters:
+            print(name)
+            print(f"\tmin={param.min().item()}")
+            print(f"\tmean={param.mean().item()}")
+            print(f"\tmedian={param.median().item()}")
+            print(f"\tmax={param.max().item()}")
+        print("================")
 
 
     def get_block_compute_costs(self):
@@ -790,6 +863,8 @@ class MambaForTraining(NanotronModel):
         # Fix the root_model
         module_id_to_prefix[id(model)] = ""
 
+        #TODO(fmom): clean this
+    
         for module_name, module in model.named_modules():
             if isinstance(module, TensorParallelColumnLinear):
                 # Somehow Megatron-LM does something super complicated, https://github.com/NVIDIA/Megatron-LM/blob/2360d732a399dd818d40cbe32828f65b260dee11/megatron/core/tensor_parallel/layers.py#L96
@@ -985,26 +1060,13 @@ class MambaForTraining(NanotronModel):
                 # Reference (Megatron-LM): https://github.com/NVIDIA/Megatron-LM/blob/main/megatron/model/gpt_model.py
                 for name, p in module.named_parameters():
                     if name in ["out_proj.weight"]:
-                        # get fullname
-                        assert isinstance(p, NanotronParameter)
-                        if p.is_tied:
-                            tied_info = p.get_tied_info()
-                            full_param_name = tied_info.get_full_name_from_module_id_to_prefix(
-                                module_id_to_prefix=module_id_to_prefix
-                            )
-                        else:
-                            full_param_name = f"{module_name}.{param_name}"
-                        
                         # Special Scaled Initialization --> There are 2 Layer Norms per Transformer Block
                         # Following Pytorch init, except scale by 1/sqrt(2 * n_layer)
                         # We need to reinit p since this code could be called multiple times
                         # Having just p *= scale would repeatedly scale it down
                         nn.init.kaiming_uniform_(p, a=math.sqrt(5))
                         with torch.no_grad():
-                            p /= math.sqrt(n_residuals_per_layer * n_layer)
-                                                
-                        assert full_param_name not in initialized_parameters
-                        initialized_parameters.add(full_param_name)
+                            p /= math.sqrt(n_residuals_per_layer * n_layer)                                                
                                                     
         # #TODO(fmom): perform check
         # assert initialized_parameters == {
