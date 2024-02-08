@@ -8,7 +8,6 @@
 #SBATCH --account=ycm@a100
 #SBATCH --constraint=a100
 #SBATCH --output=logs/%x_%j.out
-#SBATCH --qos=high
 #SBATCz --exclude ip-26-0-150-70,ip-26-0-154-155
 #SBATCz --array 1-10%1
 #SBATCz --dependency=afterany:521974
