@@ -148,28 +148,37 @@ def init_optimizer_and_grad_accumulator(
     module_id_to_prefix[root_model_id] = ""
 
     # named parameters
-    named_parameters = [
-        (
-            param.get_tied_info().get_full_name_from_module_id_to_prefix(module_id_to_prefix=module_id_to_prefix)
-            if param.is_tied
-            else name,
-            param,
-        )
-        for name, param in normalized_model.named_parameters()
-    ]
+    named_parameters = {
+        "decay": [],
+        "no_decay": []
+    }
+    
+    # NOTE(fmom): Separate parameters who have weight decay and those who don't 
+    # (based on _no_weight_decay attribute that is set in init_model_randomly of each model)
+    for name, param in normalized_model.named_parameters():    
+        if param.is_tied:
+            full_name = param.get_tied_info().get_full_name_from_module_id_to_prefix(module_id_to_prefix=module_id_to_prefix)
+        else:
+            full_name = name
+        
+        if optimizer_args.weight_decay == 0.0 or (hasattr(param, "_no_weight_decay") and param._no_weight_decay):
+            named_parameters["no_decay"].append((full_name, param))
+        else:
+            named_parameters["decay"].append((full_name, param))
+
 
     # Basic optimizer builder
     def basic_optimizer_builder(named_param_groups):
         return NamedOptimizer(
             named_params_or_groups=named_param_groups,
+            weight_decay=optimizer_args.weight_decay,
             optimizer_builder=lambda param_groups: AdamW(  # pylint: disable=E0601
                 param_groups,
                 lr=optimizer_args.learning_rate_scheduler.learning_rate,
-                weight_decay=optimizer_args.weight_decay,
                 eps=optimizer_args.adam_eps,
                 betas=(optimizer_args.adam_beta1, optimizer_args.adam_beta2),
-                fused=optimizer_args.torch_adam_is_fused,
-            ),
+                fused=optimizer_args.torch_adam_is_fused
+            )
         )
 
     optimizer_builder = basic_optimizer_builder
