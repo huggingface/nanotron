@@ -422,7 +422,7 @@ def _test_clip_grads_tied_weights(parallel_context: ParallelContext, norm_type: 
         norm_type=norm_type,
     )
     ref_total_norm = torch.nn.utils.clip_grad_norm_([ref_weight, ref_bias], max_norm=1.0, norm_type=norm_type)
-    assert len(total_norm.shape) == 0, f"total_norm should be a scalar. Got {total_norm}"
+    assert total_norm.dim() == 0, f"total_norm should be a scalar. Got {total_norm}"
 
     # Check that the gradients have changed
     assert not torch.allclose(old_grad, weight.grad), "Gradients should have changed after clipping"
