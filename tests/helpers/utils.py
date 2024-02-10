@@ -195,6 +195,8 @@ def rerun_if_address_is_in_use():
     This function reruns a wrapped function if "address already in use" occurs
     in testing spawned with torch.multiprocessing
 
+    Credits: https://github.com/hpcaitech/ColossalAI/blob/adae123df3badfb15d044bd416f0cf29f250bc86/colossalai/testing/utils.py#L157
+
     Usage::
 
         @rerun_if_address_is_in_use()
@@ -212,13 +214,15 @@ def rerun_if_address_is_in_use():
     else:
         exception = Exception
 
-    func_wrapper = rerun_on_exception(exception_type=exception, pattern=".*Address already in use.*")
+    func_wrapper = rerun_on_exception(exception_type=exception, pattern=".*Address already in use.*", max_try=100)
     return func_wrapper
 
 
 def rerun_on_exception(exception_type: Exception = Exception, pattern: str = None, max_try: int = 10) -> Callable:
     """
     A decorator on a function to re-run when an exception occurs.
+
+    Credits: https://github.com/hpcaitech/ColossalAI/blob/adae123df3badfb15d044bd416f0cf29f250bc86/colossalai/testing/utils.py#L71
 
     Usage::
 
