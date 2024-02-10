@@ -216,7 +216,7 @@ def rerun_if_address_is_in_use():
     return func_wrapper
 
 
-def rerun_on_exception(exception_type: Exception = Exception, pattern: str = None, max_try: int = 5) -> Callable:
+def rerun_on_exception(exception_type: Exception = Exception, pattern: str = None, max_try: int = 10) -> Callable:
     """
     A decorator on a function to re-run when an exception occurs.
 
