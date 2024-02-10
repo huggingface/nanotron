@@ -190,7 +190,7 @@ def get_all_3d_configurations(gpus: int) -> List[Tuple[int, int, int]]:
     return result
 
 
-def rerun_if_address_is_in_use():
+def rerun_if_address_is_in_use(max_try: int = 100):
     """
     This function reruns a wrapped function if "address already in use" occurs
     in testing spawned with torch.multiprocessing
@@ -214,7 +214,7 @@ def rerun_if_address_is_in_use():
     else:
         exception = Exception
 
-    func_wrapper = rerun_on_exception(exception_type=exception, pattern=".*Address already in use.*", max_try=100)
+    func_wrapper = rerun_on_exception(exception_type=exception, pattern=".*Address already in use.*", max_try=max_try)
     return func_wrapper
 
 
@@ -287,6 +287,7 @@ def rerun_on_exception(exception_type: Exception = Exception, pattern: str = Non
                 except exception_type as e:
                     error_lines = str(e).split("\n")
                     if try_count < max_try and (pattern is None or _match_lines(error_lines, pattern)):
+
                         print("Exception is caught, retrying...")
                         # when pattern is not specified, we always skip the exception
                         # when pattern is specified, we only skip when pattern is matched
