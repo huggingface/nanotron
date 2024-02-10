@@ -8,7 +8,6 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import torch.cuda
 from nanotron.parallel import ParallelContext
-from nanotron.utils import find_free_port
 from packaging import version
 from torch.distributed.launcher import elastic_launch
 
@@ -80,6 +79,8 @@ class init_process_and_run_func:
             # NOTE: we use a different random RNG, so that each unit tests don't generate the same port
             seed = random.randint(0, 9999)
             with torch.random.fork_rng(devices=["cuda"], seed=seed):
+                from nanotron.utils import find_free_port
+
                 port = find_free_port()
                 parallel_context = ParallelContext(
                     data_parallel_size=self.dp, pipeline_parallel_size=self.pp, tensor_parallel_size=self.tp, port=port

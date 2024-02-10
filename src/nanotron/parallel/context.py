@@ -5,7 +5,6 @@ import numpy as np
 import torch
 
 import nanotron.distributed as dist
-from nanotron.utils import find_free_port
 
 DistributedBackend = Literal["gloo", "mpi", "nccl"]
 
@@ -50,6 +49,8 @@ class ParallelContext:
         assert backend == "nccl", "Only nccl backend is supported for now."
 
         if not dist.is_initialized():
+            from nanotron.utils import find_free_port
+
             port = find_free_port() if port is None else port
             dist.initialize_torch_distributed(port)
 
