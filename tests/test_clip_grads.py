@@ -427,12 +427,6 @@ def _test_clip_grads_tied_weights(parallel_context: ParallelContext, norm_type: 
     assert not torch.allclose(old_grad, weight.grad), "Gradients should have changed after clipping"
 
     # Test that we get the same gradient after clipping
-    # torch.testing.assert_close(weight.grad, ref_weight.grad, rtol=1e-7, atol=1e-6)
-    # torch.testing.assert_close(bias.grad, ref_bias.grad, rtol=1e-7, atol=1e-6)
-    # torch.testing.assert_close(
-    #     total_norm.cpu(), ref_total_norm.cpu(), rtol=0, atol=0, msg=lambda msg: f"{msg}\n" f"Got {total_norm} and {ref_total_norm}"
-    # )
-
     assert torch.allclose(weight.grad, ref_weight.grad, rtol=1e-7, atol=1e-6)
     assert torch.allclose(bias.grad, ref_bias.grad, rtol=1e-7, atol=1e-6)
     assert torch.allclose(total_norm, ref_total_norm, rtol=0, atol=0), f"Got {total_norm} and {ref_total_norm}"
