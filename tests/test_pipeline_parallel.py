@@ -3,7 +3,7 @@ from typing import Union
 import pytest
 import torch
 from helpers.dummy import DummyModel, dummy_infinite_data_loader
-from helpers.utils import available_gpus, init_distributed
+from helpers.utils import available_gpus, init_distributed, rerun_if_address_is_in_use
 from nanotron import distributed as dist
 from nanotron.models import init_on_device_and_dtype
 from nanotron.parallel import ParallelContext
@@ -20,6 +20,7 @@ from torch.nn import functional as F
 
 
 @pytest.mark.skipif(available_gpus() < 2, reason="Testing build_and_set_rank requires at least 2 gpus")
+@rerun_if_address_is_in_use()
 def test_build_and_set_rank():
     init_distributed(tp=1, dp=1, pp=2)(_test_build_and_set_rank)()
 
@@ -67,6 +68,7 @@ def test_init_on_device_and_dtype():
     "pipeline_engine", [AllForwardAllBackwardPipelineEngine(), OneForwardOneBackwardPipelineEngine()]
 )
 @pytest.mark.parametrize("pp", list(range(2, min(4, available_gpus()) + 1)))
+@rerun_if_address_is_in_use()
 def test_pipeline_engine(pipeline_engine: PipelineEngine, pp: int):
     init_distributed(tp=1, dp=1, pp=pp)(_test_pipeline_engine)(pipeline_engine=pipeline_engine)
 
@@ -209,6 +211,7 @@ def _test_pipeline_engine(parallel_context: ParallelContext, pipeline_engine: Pi
     "pipeline_engine", [AllForwardAllBackwardPipelineEngine(), OneForwardOneBackwardPipelineEngine()]
 )
 @pytest.mark.parametrize("pp", list(range(2, min(4, available_gpus()) + 1)))
+@rerun_if_address_is_in_use()
 def test_pipeline_engine_with_tensor_that_does_not_require_grad(pipeline_engine: PipelineEngine, pp: int):
     init_distributed(pp=pp, dp=1, tp=1)(_test_pipeline_engine_with_tensor_that_does_not_require_grad)(
         pipeline_engine=pipeline_engine
@@ -438,6 +441,7 @@ def _test_pipeline_engine_with_tensor_that_does_not_require_grad(
 
 
 @pytest.mark.parametrize("pp", list(range(2, min(4, available_gpus()) + 1)))
+@rerun_if_address_is_in_use()
 def test_pipeline_forward_without_engine(pp: int):
     init_distributed(pp=pp, dp=1, tp=1)(_test_pipeline_forward_without_engine)()
 
@@ -610,6 +614,7 @@ def _test_pipeline_forward_without_engine(parallel_context: ParallelContext):
 @pytest.mark.parametrize(
     "pipeline_engine", [AllForwardAllBackwardPipelineEngine(), OneForwardOneBackwardPipelineEngine()]
 )
+@rerun_if_address_is_in_use()
 def test_pipeline_engine_diamond(pipeline_engine: PipelineEngine):
     init_distributed(pp=4, dp=1, tp=1)(_test_pipeline_engine_diamond)(pipeline_engine=pipeline_engine)
     pass

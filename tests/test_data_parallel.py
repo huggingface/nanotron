@@ -3,7 +3,7 @@ from contextlib import nullcontext
 import pytest
 import torch
 from helpers.exception import assert_fail_except_rank_with
-from helpers.utils import available_gpus, init_distributed
+from helpers.utils import available_gpus, init_distributed, rerun_if_address_is_in_use
 from nanotron import distributed as dist
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.data_parallel.utils import ddp_trigger_sync_in_bwd
@@ -15,6 +15,7 @@ from torch.distributed import GradBucket
 
 @pytest.mark.skipif(available_gpus() < 2, reason="Testing test_ddp_with_afab requires at least 2 gpus")
 @pytest.mark.parametrize("accumulation_steps", [1, 3])
+@rerun_if_address_is_in_use()
 def test_ddp_with_afab(accumulation_steps):
     init_distributed(tp=1, dp=2, pp=1)(_test_ddp_with_afab)(accumulation_steps=accumulation_steps)
 

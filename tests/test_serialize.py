@@ -7,6 +7,7 @@ from helpers.utils import (
     get_all_3d_configurations,
     init_distributed,
     is_dict_equal,
+    rerun_if_address_is_in_use,
 )
 from nanotron import distributed as dist
 from nanotron.constants import CHECKPOINT_VERSION
@@ -48,6 +49,7 @@ def test_save_and_load_with_changed_topolgy():
         for all_3d_configs in get_all_3d_configurations(gpus)
     ],
 )
+@rerun_if_address_is_in_use()
 def test_save_and_load_model(tp: int, dp: int, pp: int):
     test_context = TestContext()
     # We use DP=2 as we're interested in testing that one
@@ -87,6 +89,7 @@ def _test_save_and_load_model(parallel_context: ParallelContext, test_context: T
         for all_3d_configs in get_all_3d_configurations(gpus)
     ],
 )
+@rerun_if_address_is_in_use()
 def test_save_and_load_optimizer(tp: int, dp: int, pp: int):
     test_context = TestContext()
     # We use DP=2 as we're interested in testing that one
@@ -149,6 +152,7 @@ def _test_save_and_load_optimizer(parallel_context: ParallelContext, test_contex
         for all_3d_configs in get_all_3d_configurations(gpus)
     ],
 )
+@rerun_if_address_is_in_use()
 def test_save_zero_optimizer_and_load_optimizer(tp: int, dp: int, pp: int):
     test_context = TestContext()
     # We use DP=2 as we're interested in testing that one
@@ -220,6 +224,7 @@ def _test_save_zero_optimizer_and_load_optimizer(parallel_context: ParallelConte
         for all_3d_configs in get_all_3d_configurations(gpus)
     ],
 )
+@rerun_if_address_is_in_use()
 def test_save_zero_optimizer_and_load_data_parallel_optimizer(tp: int, dp: int, pp: int):
     test_context = TestContext()
     # We use DP=2 as we're interested in testing that one
@@ -289,6 +294,7 @@ def _test_save_zero_optimizer_and_load_data_parallel_optimizer(
         for all_3d_configs in get_all_3d_configurations(gpus)
     ],
 )
+@rerun_if_address_is_in_use()
 def test_save_data_parallel_optimizer_and_load_zero_optimizer(tp: int, dp: int, pp: int):
     test_context = TestContext()
     # We use DP=2 as we're interested in testing that one
@@ -354,6 +360,7 @@ def _test_save_data_parallel_optimizer_and_load_zero_optimizer(
         for all_3d_configs in get_all_3d_configurations(gpus)
     ],
 )
+@rerun_if_address_is_in_use()
 def test_save_optimizer_with_additional_state_dict_keys(tp: int, dp: int, pp: int):
     test_context = TestContext()
     # We use DP=2 as we're interested in testing that one
@@ -459,6 +466,7 @@ def _test_save_optimizer_with_additional_state_dict_keys(parallel_context: Paral
 
 
 @pytest.mark.skipif(available_gpus() < 2, reason="Testing test_save_and_load_random_states requires at least 2 gpus")
+@rerun_if_address_is_in_use()
 def test_save_and_load_random_states():
     test_context = TestContext()
     # We use DP=2 as we're interested in testing
@@ -496,6 +504,7 @@ def _test_save_and_load_random_states(parallel_context: ParallelContext, test_co
     assert random_states == new_random_states
 
 
+@rerun_if_address_is_in_use()
 def test_serialize_deserialize_tensormetadata():
     test_context = TestContext()
     init_distributed(tp=2, dp=1, pp=1)(_test_serialize_deserialize_tensormetadata)(test_context=test_context)

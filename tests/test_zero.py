@@ -5,7 +5,7 @@ import torch
 from helpers.distributed_tensor import assert_tensor_equal_over_group
 from helpers.dummy import dummy_infinite_data_loader, init_dummy_model
 from helpers.exception import assert_fail_with
-from helpers.utils import available_gpus, init_distributed
+from helpers.utils import available_gpus, init_distributed, rerun_if_address_is_in_use
 from nanotron import distributed as dist
 from nanotron.optim import NamedOptimizer, ZeroDistributedOptimizer
 from nanotron.optim.zero import SlicedFlatTensor
@@ -23,6 +23,7 @@ from torch.nn.parallel import DistributedDataParallel
 
 
 @pytest.mark.parametrize("tp,dp,pp", [pytest.param(1, i, 1) for i in range(1, min(4, available_gpus()) + 1)])
+@rerun_if_address_is_in_use()
 def test_zero_optimizer(tp: int, dp: int, pp: int):
     init_distributed(pp=pp, dp=dp, tp=tp)(_test_zero_optimizer)()
 
@@ -198,6 +199,7 @@ def _test_zero_optimizer(parallel_context: ParallelContext):
 @pytest.mark.parametrize("tp,dp,pp", [pytest.param(2, i, 1) for i in range(1, available_gpus() // 2 + 1)])
 @pytest.mark.parametrize("tp_mode", list(TensorParallelLinearMode))
 @pytest.mark.parametrize("async_communication", [False, True])
+@rerun_if_address_is_in_use()
 def test_zero_optimizer_with_tp(
     tp: int, dp: int, pp: int, tp_mode: TensorParallelLinearMode, async_communication: bool
 ):
@@ -495,6 +497,7 @@ def _test_zero_optimizer_with_tp(
                     )
 
 
+@rerun_if_address_is_in_use()
 def test_sliced_flat_tensor():
     init_distributed(1, 1, 1)(_test_sliced_flat_tensor)()
 

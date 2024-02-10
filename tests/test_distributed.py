@@ -5,6 +5,7 @@ from helpers.utils import (
     available_gpus,
     get_all_3d_configurations,
     init_distributed,
+    rerun_if_address_is_in_use,
 )
 from nanotron.parallel import ParallelContext
 from torch.distributed import ProcessGroup
@@ -32,5 +33,6 @@ def _test_init_parallel_context(parallel_context: ParallelContext):
         for all_3d_configs in get_all_3d_configurations(gpus)
     ],
 )
+@rerun_if_address_is_in_use()
 def test_init_parallel_context(tp: int, dp: int, pp: int):
     init_distributed(tp=tp, dp=dp, pp=pp)(_test_init_parallel_context)()

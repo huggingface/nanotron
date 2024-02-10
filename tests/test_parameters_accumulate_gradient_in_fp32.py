@@ -5,7 +5,7 @@ import pytest
 import torch
 from helpers.dummy import DummyModel, dummy_infinite_data_loader
 from helpers.exception import assert_fail_except_rank_with, timeout_after
-from helpers.utils import available_gpus, init_distributed
+from helpers.utils import available_gpus, init_distributed, rerun_if_address_is_in_use
 from nanotron.models import init_on_device_and_dtype
 from nanotron.optim import ZeroDistributedOptimizer
 from nanotron.optim.gradient_accumulator import FP32GradBucketManager, FP32GradientAccumulator, get_fp32_accum_hook
@@ -141,6 +141,7 @@ def test_optimizer_can_step_gradient_in_fp32(half_precision: torch.dtype):
 @pytest.mark.parametrize("half_precision", [torch.float16, torch.bfloat16])
 @pytest.mark.parametrize("accumulation_steps", [1, 10])
 @pytest.mark.parametrize("train_iterations", [1, 3])
+@rerun_if_address_is_in_use()
 def test_ddp_with_grad_accum_in_fp32(half_precision: torch.dtype, accumulation_steps: int, train_iterations: int):
     init_distributed(tp=1, dp=2, pp=1)(_test_ddp_with_grad_accum_in_fp32)(
         half_precision=half_precision,
@@ -306,6 +307,7 @@ def _test_ddp_with_grad_accum_in_fp32(
     "pipeline_engine", [AllForwardAllBackwardPipelineEngine(), OneForwardOneBackwardPipelineEngine()]
 )
 @pytest.mark.parametrize("reduce_scatter", [True, False])
+@rerun_if_address_is_in_use()
 def test_tied_weights_sync_with_grad_accum_in_fp32(pipeline_engine: PipelineEngine, reduce_scatter: bool):
     init_distributed(tp=1, dp=2, pp=2)(_test_tied_weights_sync_with_grad_accum_in_fp32)(
         pipeline_engine=pipeline_engine, reduce_scatter=reduce_scatter

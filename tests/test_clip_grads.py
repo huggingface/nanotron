@@ -4,7 +4,7 @@ import os
 import pytest
 import torch
 from helpers.dummy import DummyModel, dummy_infinite_data_loader
-from helpers.utils import available_gpus, init_distributed
+from helpers.utils import available_gpus, init_distributed, rerun_if_address_is_in_use
 from nanotron import distributed as dist
 from nanotron.models import init_on_device_and_dtype
 from nanotron.optim.clip_grads import clip_grad_norm
@@ -32,6 +32,7 @@ from torch import nn
 
 @pytest.mark.skipif(available_gpus() < 2, reason="test_clip_grads_with_pp requires at least 2 gpus")
 @pytest.mark.parametrize("norm_type", [math.inf, 1.0, 2.0])
+@rerun_if_address_is_in_use()
 def test_clip_grads_with_pp(norm_type: float):
     init_distributed(tp=1, dp=1, pp=2)(_test_clip_grads_with_pp)(norm_type=norm_type)
 
@@ -198,6 +199,7 @@ def _test_clip_grads_with_pp(parallel_context: ParallelContext, norm_type: float
     ],
 )
 @pytest.mark.parametrize("norm_type", [math.inf, 1.0, 2.0])
+@rerun_if_address_is_in_use()
 def test_clip_grads_with_tp(tp_mode: TensorParallelLinearMode, async_communication: bool, norm_type: float):
     init_distributed(tp=2, dp=1, pp=1)(_test_clip_grads_with_tp)(
         tp_mode=tp_mode, async_communication=async_communication, norm_type=norm_type
@@ -339,6 +341,7 @@ def _test_clip_grads_with_tp(
 
 @pytest.mark.skipif(available_gpus() < 2, reason="test_clip_grads_tied_weights requires at least 2 gpus")
 @pytest.mark.parametrize("norm_type", [math.inf, 1.0, 2.0])
+@rerun_if_address_is_in_use()
 def test_clip_grads_tied_weights(norm_type: float):
     init_distributed(tp=1, dp=1, pp=2)(_test_clip_grads_tied_weights)(norm_type=norm_type)
 
@@ -434,6 +437,7 @@ def _test_clip_grads_tied_weights(parallel_context: ParallelContext, norm_type: 
 
 @pytest.mark.parametrize("half_precision", [torch.float16, torch.bfloat16])
 @pytest.mark.parametrize("norm_type", [math.inf, 1.0, 2.0])
+@rerun_if_address_is_in_use()
 def test_clip_grads_fp32_accumulator(norm_type: float, half_precision: torch.dtype):
     init_distributed(tp=1, dp=1, pp=2)(_test_clip_grads_fp32_accumulator)(
         norm_type=norm_type, half_precision=half_precision
