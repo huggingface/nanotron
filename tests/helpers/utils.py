@@ -190,7 +190,7 @@ def get_all_3d_configurations(gpus: int) -> List[Tuple[int, int, int]]:
     return result
 
 
-def rerun_if_address_is_in_use(max_try: int = 100):
+def rerun_if_address_is_in_use(max_try: int = 150):
     """
     This function reruns a wrapped function if "address already in use" occurs
     in testing spawned with torch.multiprocessing
