@@ -46,7 +46,7 @@ jobs:
         cd nanotron
         pip install -e .
         pip install -e .[dev]
-        pip install -e .[test]
+        pip install pytest==7.4.0 pluggy==1.0.0
 
     - name: Show installed libraries and their versions
       run: pip freeze | tee installed.txt
