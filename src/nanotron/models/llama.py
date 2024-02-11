@@ -896,7 +896,9 @@ class LlamaForTraining(NanotronModel):
         model = self
         initialized_parameters = set()
         # Handle tensor parallelism
-        module_id_to_prefix = {id(module): f"{module_name}." for module_name, module in model.named_modules()}
+        module_id_to_prefix = {
+            id(module): f"{module_name}." for module_name, module in model.named_modules()
+        }  # TODO model is always root_model in tied_info
         # Fix the root_model
         module_id_to_prefix[id(model)] = ""
 
@@ -1026,6 +1028,13 @@ class LlamaForTraining(NanotronModel):
             else name
             for name, param in model.named_parameters()
         }, f"Somehow the initialized set of parameters don't match:\n - Expected: { {name for name, _ in model.named_parameters()} }\n - Got: {initialized_parameters}"
+
+    def get_embeddings_lm_head_tied_names(self):
+        """Get the names of the tied embeddings and lm_head weights"""
+        if self.config.tie_word_embeddings is True:
+            return ["model.token_position_embeddings.pp_block.token_embedding.weight", "model.lm_head.pp_block.weight"]
+        else:
+            return []
 
     def get_block_compute_costs(self):
         """Computes the compute cost of each block in the model so that we can do a better job of load balancing."""
