@@ -42,8 +42,6 @@ class NanotronModel(nn.Module, metaclass=ABCMeta):
     def get_named_params_with_correct_tied(self) -> Iterator[Tuple[str, "NanotronParameter"]]:
         """Return named parameters with correct tied params names.
         For example in the case of tied kv heads in MQA, we need to make sure tied params names are correct."""
-        # case where embd doesnt live in this device?
-        # cache this?
 
         def params_gen():
             for name, param in self.named_parameters():

@@ -1437,12 +1437,10 @@ class Starcoder2ForTraining(NanotronModel):
 
     def tie_custom_params(self) -> None:
         # find all params with names qkv.kv.weight and qkv.kv.bias in them
-        assert_flag = False
         for module_name, module in self.named_modules():
             for param_name, param in module.named_parameters(recurse=False):
                 name = f"{module_name}.{param_name}"
                 if ".qkv.kv." in name:
-                    assert_flag = True
                     assert not param.is_tied, f"Parameter {name} is already tied"
                     shared_weights = [
                         (
@@ -1463,10 +1461,9 @@ class Starcoder2ForTraining(NanotronModel):
                         root_module=self,
                         ties=shared_weights,
                         parallel_context=self.parallel_context,
+                        # We always SUM grads, because kv weights are always duplicated in MQA
                         reduce_op=dist.ReduceOp.SUM,
                     )
-
-        assert assert_flag, f"No kv weights found to tie.\n{self}"
 
     @torch.no_grad()
     def init_model_randomly(self, init_method, scaled_init_method):
