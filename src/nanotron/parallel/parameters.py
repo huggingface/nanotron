@@ -6,6 +6,7 @@ from torch import nn
 
 from nanotron import distributed as dist
 from nanotron import logging
+from nanotron.models import NanotronModel
 
 logger = logging.get_logger(__name__)
 
@@ -56,7 +57,7 @@ class SlicesPair:
 class TiedInfo:
     name: str
     # This allows us to define the scope in which `name` is valid.
-    root_module: nn.Module
+    root_module: NanotronModel
     global_ranks: Tuple[int, ...]
     # None signifies that we do not reduce
     reduce_op: Optional[dist.ReduceOp]
@@ -129,6 +130,7 @@ class NanotronParameter(nn.Parameter):
     def mark_as_tied(
         self, name: str, global_ranks: Tuple[int, ...], reduce_op: Optional[dist.ReduceOp], root_module: nn.Module
     ):
+        # TODO @nouamane: we must assert that root_module is a NanotronModel. For example we mustn't accept root_module to be submodules of NanotronModel
         self._set_metadata(
             self.NANOTRON_PARAMETER_METADATA_TIED_KEY,
             TiedInfo(name=name, global_ranks=global_ranks, reduce_op=reduce_op, root_module=root_module),
