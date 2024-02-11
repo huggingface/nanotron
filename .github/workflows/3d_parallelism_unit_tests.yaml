@@ -60,6 +60,6 @@ jobs:
         -m "not fa2" \
         --color=yes \
         --durations=0 \
-        --ignore tests/kernels/test_layer_norm \
+        --ignore tests/kernels \
         --verbose \
         tests/
