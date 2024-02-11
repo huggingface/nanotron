@@ -8,7 +8,6 @@ from inspect import signature
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import torch.cuda
-import torch.distributed as dist
 from nanotron.parallel import ParallelContext
 from packaging import version
 from torch.distributed.launcher import elastic_launch
@@ -88,11 +87,6 @@ class init_process_and_run_func:
             self.kwargs["parallel_context"] = parallel_context
 
             self.func(*self.args, **self.kwargs)
-
-            # NOTE: after running the test, we free the port
-            if dist.is_initialized():
-                dist.barrier()
-                dist.destroy_process_group()
 
 
 def init_distributed(tp: int, dp: int, pp: int):
