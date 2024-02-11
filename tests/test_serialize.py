@@ -80,6 +80,8 @@ def _test_save_and_load_model(parallel_context: ParallelContext, test_context: T
     match, msg = is_dict_equal(new_model.state_dict(), model.state_dict())
     assert match, msg
 
+    parallel_context.destroy()
+
 
 @pytest.mark.parametrize(
     "tp,dp,pp",
@@ -142,6 +144,8 @@ def _test_save_and_load_optimizer(parallel_context: ParallelContext, test_contex
     # Assert the optimizer states are exactly the same after loading.
     match, msg = is_dict_equal(optimizer.state_dict(), new_optimizer.state_dict())
     assert match, msg
+
+    parallel_context.destroy()
 
 
 @pytest.mark.parametrize(
@@ -214,6 +218,8 @@ def _test_save_zero_optimizer_and_load_optimizer(parallel_context: ParallelConte
     match, msg = is_dict_equal(optimizer.state_dict(), new_optimizer.state_dict())
     assert match, msg
 
+    parallel_context.destroy()
+
 
 @pytest.mark.skip(reason="Assumption that zero and non zero optimizer have the same serialization format doesn't hold")
 @pytest.mark.parametrize(
@@ -283,6 +289,7 @@ def _test_save_zero_optimizer_and_load_data_parallel_optimizer(
     load_optimizer(optimizer=new_optimizer, parallel_context=parallel_context, root_folder=store_folder)
 
     # TODO @thomasw21: Compare zero optimizer with non zero
+    parallel_context.destroy()
 
 
 @pytest.mark.skip(reason="Assumption that zero and non zero optimizer have the same serialization format doesn't hold")
@@ -350,6 +357,7 @@ def _test_save_data_parallel_optimizer_and_load_zero_optimizer(
     load_optimizer(optimizer=new_optimizer, parallel_context=parallel_context, root_folder=store_folder)
 
     # TODO @thomasw21: Compare zero optimizer with non zero
+    parallel_context.destroy()
 
 
 @pytest.mark.parametrize(
@@ -461,6 +469,8 @@ def _test_save_optimizer_with_additional_state_dict_keys(parallel_context: Paral
     )
     assert match, msg
 
+    parallel_context.destroy()
+
 
 # TODO @thomasw21: Test with a optimizer that uses `named_param_groups` instead of `param_groups`
 
@@ -503,6 +513,8 @@ def _test_save_and_load_random_states(parallel_context: ParallelContext, test_co
     # Each rank has restored it's own random state
     assert random_states == new_random_states
 
+    parallel_context.destroy()
+
 
 @rerun_if_address_is_in_use()
 def test_serialize_deserialize_tensormetadata():
@@ -531,3 +543,5 @@ def _test_serialize_deserialize_tensormetadata(parallel_context: ParallelContext
 
     metadata_from_str_dict = TensorMetadata.from_str_dict(metadata_str_dict)
     assert metadata == metadata_from_str_dict
+
+    parallel_context.destroy()

@@ -299,6 +299,8 @@ def _test_ddp_with_grad_accum_in_fp32(
             dist.barrier()
             torch.testing.assert_close(fp32_grad, torch.zeros_like(fp32_grad), atol=1e-6, rtol=1e-7)
 
+    parallel_context.destroy()
+
 
 @pytest.mark.skipif(
     available_gpus() < 4, reason="Testing test_tied_weights_sync_with_grad_accum_in_fp32 requires at least 4 gpus"
@@ -608,3 +610,5 @@ def _test_tied_weights_sync_with_grad_accum_in_fp32(
                 rtol=1e-7,
                 msg=lambda msg: f"Grad for {name} is not correct.\n{msg}",
             )
+
+    parallel_context.destroy()

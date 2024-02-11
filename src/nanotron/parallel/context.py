@@ -148,3 +148,19 @@ class ParallelContext:
         dp_rank = (world_rank // self.tp_pg.size()) % self.dp_pg.size()
         tp_rank = world_rank % self.tp_pg.size()
         return (pp_rank, dp_rank, tp_rank)
+
+    def destroy(self):
+        if not dist.is_initialized():
+            return
+
+        # groups = [self.tp_pg, self.pp_pg, self.dp_pg]
+
+        # for group in groups:
+        #     if not isinstance(group, dist.ProcessGroup) and group is not None:
+        #         continue
+
+        #     dist.barrier(group=group)
+        #     dist.destroy_process_group(group)
+
+        dist.barrier()
+        dist.destroy_process_group()

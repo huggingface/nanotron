@@ -77,3 +77,5 @@ def _test_check_send_recv_tensor(parallel_context: ParallelContext, send_contigu
                 tensor_to_send.as_strided(size=(1,), stride=(1,), storage_offset=0),
                 tensor_travelled_back_and_forth.as_strided(size=(1,), stride=(1,), storage_offset=0),
             )
+
+    parallel_context.destroy()

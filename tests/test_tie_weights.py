@@ -44,6 +44,8 @@ def _test_tie_weight_in_same_device(parallel_context: ParallelContext):
     assert id(weight0) == id(weight1)
     assert id(bias0) == id(bias1)
 
+    parallel_context.destroy()
+
 
 @rerun_if_address_is_in_use()
 def test_tie_weight_in_different_device():
@@ -113,6 +115,8 @@ def _test_tie_weight_in_different_device(parallel_context: ParallelContext):
     assert_tensor_equal_over_group(weight, group=group)
     assert_tensor_equal_over_group(bias, group=group)
 
+    parallel_context.destroy()
+
 
 @rerun_if_address_is_in_use()
 def test_tie_weight_across_dp_is_impossible():
@@ -148,6 +152,8 @@ def _test_tie_weight_across_dp_is_impossible(parallel_context: ParallelContext):
             parallel_context=parallel_context,
             reduce_op=dist.ReduceOp.SUM,
         )
+
+    parallel_context.destroy()
 
 
 @rerun_if_address_is_in_use()
@@ -222,3 +228,5 @@ def _test_tie_weight_in_different_device_have_gradients_synchronized(parallel_co
     # We check that we both gradients are synchronized
     assert_tensor_equal_over_group(weight.grad, group=group)
     assert_tensor_equal_over_group(bias.grad, group=group)
+
+    parallel_context.destroy()

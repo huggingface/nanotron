@@ -144,6 +144,8 @@ def _test_column_linear(
     else:
         ValueError(f"Unsupported mode: {tp_mode}")
 
+    parallel_context.destroy()
+
 
 @pytest.mark.parametrize("tp,dp,pp", [pytest.param(i, 1, 1) for i in range(1, min(4, available_gpus()) + 1)])
 @pytest.mark.parametrize("tp_mode", list(TensorParallelLinearMode))
@@ -259,6 +261,8 @@ def _test_row_linear(parallel_context: ParallelContext, tp_mode: TensorParallelL
     else:
         assert row_linear.bias is None
 
+    parallel_context.destroy()
+
 
 @pytest.mark.parametrize("tp,dp,pp", [pytest.param(i, 1, 1) for i in range(1, min(4, available_gpus()) + 1)])
 @pytest.mark.parametrize("tp_mode", list(TensorParallelLinearMode))
@@ -348,3 +352,5 @@ def _test_tensor_parallel_embedding(parallel_context: ParallelContext, tp_mode: 
         atol=0,
         rtol=0,
     )
+
+    parallel_context.destroy()

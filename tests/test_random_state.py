@@ -44,6 +44,8 @@ def _test_random_state_sync(parallel_context: ParallelContext):
     if dist.get_rank(pg) != reference_rank:
         assert current_random_state != random_states[0]
 
+    parallel_context.destroy()
+
 
 def test_random_state_fork_random_operation_in_global_context():
     key = "my_random_state"

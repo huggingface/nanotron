@@ -76,3 +76,5 @@ def _test_ddp_with_afab(parallel_context: ParallelContext, accumulation_steps: i
         else:
             with assert_fail_except_rank_with(AssertionError, rank_exception=0, pg=parallel_context.dp_pg):
                 assert_tensor_synced_across_pg(grad_hook, parallel_context.dp_pg)
+
+    parallel_context.destroy()

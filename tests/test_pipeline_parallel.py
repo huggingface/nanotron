@@ -52,6 +52,8 @@ def _test_build_and_set_rank(parallel_context: ParallelContext):
             assert not hasattr(non_linear.linear, "pp_block")
             assert not hasattr(non_linear.activation, "pp_block")
 
+    parallel_context.destroy()
+
 
 @pytest.mark.skipif(available_gpus() < 1, reason="Testing test_init_on_device_and_dtype requires at least 1 gpus")
 def test_init_on_device_and_dtype():
@@ -201,6 +203,8 @@ def _test_pipeline_engine(parallel_context: ParallelContext, pipeline_engine: Pi
             ],
             to_rank=reference_rank,
         )
+
+    parallel_context.destroy()
 
 
 @pytest.mark.skipif(
@@ -439,6 +443,8 @@ def _test_pipeline_engine_with_tensor_that_does_not_require_grad(
                     to_rank=reference_rank,
                 )
 
+    parallel_context.destroy()
+
 
 @pytest.mark.parametrize("pp", list(range(2, min(4, available_gpus()) + 1)))
 @rerun_if_address_is_in_use()
@@ -608,6 +614,8 @@ def _test_pipeline_forward_without_engine(parallel_context: ParallelContext):
     if has_reference_model:
         for loss, ref_loss in zip(losses, reference_losses):
             torch.testing.assert_close(loss, ref_loss, atol=1e-6, rtol=1e-7)
+
+    parallel_context.destroy()
 
 
 @pytest.mark.skipif(available_gpus() < 4, reason="Testing `test_pipeline_engine_diamond` requires at least 4 gpus")
@@ -857,3 +865,5 @@ def _test_pipeline_engine_diamond(parallel_context: ParallelContext, pipeline_en
             [non_linear.weight.grad, non_linear.bias.grad],
             to_rank=reference_rank,
         )
+
+    parallel_context.destroy()

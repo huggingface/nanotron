@@ -195,6 +195,8 @@ def _test_zero_optimizer(parallel_context: ParallelContext):
                     msg=lambda msg: f"At iteration {i}, {msg}",
                 )
 
+    parallel_context.destroy()
+
 
 @pytest.mark.parametrize("tp,dp,pp", [pytest.param(2, i, 1) for i in range(1, available_gpus() // 2 + 1)])
 @pytest.mark.parametrize("tp_mode", list(TensorParallelLinearMode))
@@ -496,6 +498,8 @@ def _test_zero_optimizer_with_tp(
                         msg=lambda msg: f"At iteration {i}, {msg}",
                     )
 
+    parallel_context.destroy()
+
 
 @rerun_if_address_is_in_use()
 def test_sliced_flat_tensor():
@@ -536,3 +540,5 @@ def _test_sliced_flat_tensor(parallel_context: ParallelContext):
     c = b[:3]
     # It's important not to contaminate everyone.
     assert not isinstance(c, SlicedFlatTensor)
+
+    parallel_context.destroy()
