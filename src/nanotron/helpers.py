@@ -162,8 +162,7 @@ def init_optimizer_and_grad_accumulator(
 
     module_id_to_prefix = {id(module): f"{module_name}." for module_name, module in unwrapped_model.named_modules()}
     # Fix the root_model
-    root_model_id = id(unwrapped_model)
-    module_id_to_prefix[root_model_id] = ""
+    module_id_to_prefix[id(unwrapped_model)] = ""
 
     # named parameters
     named_parameters = [
