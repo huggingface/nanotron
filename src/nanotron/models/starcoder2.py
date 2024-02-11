@@ -35,7 +35,6 @@ from torch.nn import functional as F
 
 from nanotron import distributed as dist
 from nanotron.config import ParallelismArgs, RecomputeGranularity, Starcoder2Config
-from nanotron.distributed import get_global_rank
 from nanotron.generation.generate_store import AttachableStore
 from nanotron.models import NanotronModel
 from nanotron.nn.activations import ACT2FN
@@ -53,7 +52,7 @@ from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelEmbedding,
     TensorParallelRowLinear,
 )
-from nanotron.parallel.tied_parameters import create_tied_parameter
+from nanotron.parallel.tied_parameters import tie_parameters
 from nanotron.random import RandomStates, branch_random_state
 from nanotron.utils import checkpoint_method
 
@@ -570,7 +569,6 @@ class MQAColumnLinears(nn.Module):
 
         # Marking as tied/sharded
         mark_all_parameters_in_module_as_sharded(self.q, pg=self.pg, split_config=SplitConfig(split_dim=0))
-        self._mark_kv_parameters_in_module_as_tied()
 
         # Init
         self.reset_parameters()
@@ -585,18 +583,6 @@ class MQAColumnLinears(nn.Module):
             fan_in, _ = init._calculate_fan_in_and_fan_out(self._qkv_weight)
             bound = 1 / math.sqrt(fan_in) if fan_in > 0 else 0
             init.uniform_(self._qkv_bias, -bound, bound)
-
-    def _mark_kv_parameters_in_module_as_tied(self):
-        for name, param in list(self.kv.named_parameters()):
-            new_param = create_tied_parameter(
-                parameter=param,
-                name=name,
-                global_ranks=tuple(sorted((get_global_rank(self.pg, i) for i in range(self.pg.size())))),
-                # Always has to be ReduceOp SUM as now this is always duplicated regardless of tp mode
-                reduce_op=dist.ReduceOp.SUM,
-                root_module=self.kv,
-            )
-            setattr(self.kv, name, new_param)
 
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         if self.use_MQAColumnLinearReduceScatterAsyncCommunication:
@@ -1448,6 +1434,39 @@ class Starcoder2ForTraining(NanotronModel):
                 label_mask=label_mask,
             )["loss"]
         }
+
+    def tie_custom_params(self) -> None:
+        # find all params with names qkv.kv.weight and qkv.kv.bias in them
+        assert_flag = False
+        for module_name, module in self.named_modules():
+            for param_name, param in module.named_parameters(recurse=False):
+                name = f"{module_name}.{param_name}"
+                if ".qkv.kv." in name:
+                    assert_flag = True
+                    assert not param.is_tied, f"Parameter {name} is already tied"
+                    shared_weights = [
+                        (
+                            name,
+                            # This adds all the tp_ranks in one go
+                            tuple(
+                                sorted(
+                                    self.parallel_context.world_rank_matrix[
+                                        dist.get_rank(self.parallel_context.pp_pg),
+                                        dist.get_rank(self.parallel_context.dp_pg),
+                                        :,
+                                    ]
+                                )
+                            ),
+                        )
+                    ]
+                    tie_parameters(
+                        root_module=self,
+                        ties=shared_weights,
+                        parallel_context=self.parallel_context,
+                        reduce_op=dist.ReduceOp.SUM,
+                    )
+
+        assert assert_flag, f"No kv weights found to tie.\n{self}"
 
     @torch.no_grad()
     def init_model_randomly(self, init_method, scaled_init_method):

@@ -69,7 +69,7 @@ class TiedInfo:
         return self.get_full_name_from_module_id_to_prefix(module_id_to_prefix)
 
     def get_full_name_from_module_id_to_prefix(self, module_id_to_prefix: Dict[int, str]) -> str:
-        return f"{module_id_to_prefix[id(self.root_module)]}{self.name}"
+        return f"{module_id_to_prefix[id(self.root_module)]}{self.name}"  # this assumes root_module is part of module_id_to_prefix
 
 
 @dataclasses.dataclass
@@ -128,9 +128,9 @@ class NanotronParameter(nn.Parameter):
             metadata[key] = value
 
     def mark_as_tied(
-        self, name: str, global_ranks: Tuple[int, ...], reduce_op: Optional[dist.ReduceOp], root_module: nn.Module
+        self, name: str, global_ranks: Tuple[int, ...], reduce_op: Optional[dist.ReduceOp], root_module: NanotronModel
     ):
-        # TODO @nouamane: we must assert that root_module is a NanotronModel. For example we mustn't accept root_module to be submodules of NanotronModel
+        assert isinstance(root_module, NanotronModel), f"root_module must be a NanotronModel, got {root_module}"
         self._set_metadata(
             self.NANOTRON_PARAMETER_METADATA_TIED_KEY,
             TiedInfo(name=name, global_ranks=global_ranks, reduce_op=reduce_op, root_module=root_module),

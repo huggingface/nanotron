@@ -364,15 +364,8 @@ class DistributedTrainer:
         if self.config.optimizer.clip_grad is not None:
             # Unwrap DDP
             named_parameters = [
-                (
-                    param.get_tied_info().get_full_name_from_module_id_to_prefix(
-                        module_id_to_prefix=self.unwrapped_model.module_id_to_prefix
-                    )
-                    if param.is_tied
-                    else name,
-                    param,
-                )
-                for name, param in self.unwrapped_model.named_parameters()
+                (name, param)
+                for name, param in self.unwrapped_model.get_named_params_with_correct_tied()
                 if param.requires_grad
             ]
             # TODO @nouamane: we need to split `world_rank_matrix` along PP axis, to separate ref from active model
@@ -790,18 +783,16 @@ def mark_tied_parameters(
             root_module=model, ties=shared_embeddings, parallel_context=parallel_context, reduce_op=dist.ReduceOp.SUM
         )
 
+    # Tie custom params
+    model.tie_custom_params()
+
     # Sync all parameters that have the same name and that are not sharded
     assert not isinstance(model, DistributedDataParallel), "model shouldn't be DDP at this point"
     for module_name, module in model.named_modules():
         for param_name, param in module.named_parameters(recurse=False):
             name = f"{module_name}.{param_name}"
 
-            # if isinstance(model, Starcoder2ForTraining) and ".qkv.kv." in name
-            #     assert param.is_tied, f"Expected {name} to already be synced"
-            #     # kv is deliberately skipped as it's tied in model init (_mark_kv_parameters_in_module_as_tied)
-            #     continue
-
-            if isinstance(param, NanotronParameter) and param.is_sharded:
+            if isinstance(param, NanotronParameter) and (param.is_sharded or param.is_tied):
                 continue
 
             if isinstance(module, TensorParallelRowLinear) and "bias" == param_name:
