@@ -77,15 +77,19 @@ class init_process_and_run_func:
     def __call__(self):
         with mock_os_environ(update_key_values={"WORLD_SIZE": f"{self.tp * self.dp * self.pp}"}):
             # NOTE: we use a different random RNG, so that each unit tests don't generate the same port
-            seed = random.randint(0, 9999)
-            with torch.random.fork_rng(devices=["cuda"]):
-                from nanotron.utils import find_free_port
+            # seed = random.randint(0, 9999)
+            # with torch.random.fork_rng(devices=["cuda"]):
+            # from nanotron.utils import find_free_port
 
-                torch.manual_seed(seed)
-                port = find_free_port()
-                parallel_context = ParallelContext(
-                    data_parallel_size=self.dp, pipeline_parallel_size=self.pp, tensor_parallel_size=self.tp, port=port
-                )
+            import time
+
+            random.seed(time.time())
+
+            # torch.manual_seed(seed)
+            # port = find_free_port()
+            parallel_context = ParallelContext(
+                data_parallel_size=self.dp, pipeline_parallel_size=self.pp, tensor_parallel_size=self.tp
+            )
 
             assert "parallel_context" not in self.kwargs
             self.kwargs["parallel_context"] = parallel_context
