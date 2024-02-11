@@ -54,11 +54,12 @@ jobs:
     - name: Run tests
       # NOTE: -m "not fa2" will run all the unit tests that don't have the mark
       # "fa2" (these are FA2-related tests, we can't run it on T4)
-      # -n 1
       run: |
         pytest \
+        -n 1
         -m "not fa2" \
         --color=yes \
         --durations=0 \
+        --verbose \
         --ignore tests/kernels/test_layer_norm \
-        --verbose tests/
+        tests/
