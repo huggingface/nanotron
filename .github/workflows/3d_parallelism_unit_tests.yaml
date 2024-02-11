@@ -46,8 +46,7 @@ jobs:
         cd nanotron
         pip install -e .
         pip install -e .[dev]
-        pip install pytest
-      # pip install -e .[test]
+        pip install -e .[test]
 
     - name: Show installed libraries and their versions
       run: pip freeze | tee installed.txt
@@ -57,6 +56,9 @@ jobs:
       # "fa2" (these are FA2-related tests, we can't run it on T4)
       # -n 1
       run: |
-        pytest -m "not fa2" --color=yes --durations=0 \
+        pytest \
+        -m "not fa2" \
+        --color=yes \
+        --durations=0 \
         --ignore tests/kernels/test_layer_norm \
         --verbose tests/
