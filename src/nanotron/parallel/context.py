@@ -35,7 +35,7 @@ class ParallelContext:
             )
 
         if not dist.is_available():
-            raise ValueError("`torch.distributed is not available as a package, please install it.")
+            raise ValueError("torch.distributed is not available as a package, please install it.")
 
         self.tensor_parallel_size = tensor_parallel_size
         self.pipeline_parallel_size = pipeline_parallel_size
@@ -48,9 +48,6 @@ class ParallelContext:
         assert backend == "nccl", "Only nccl backend is supported for now."
 
         if not dist.is_initialized():
-            # from nanotron.utils import find_free_port
-
-            # port = find_free_port() if port is None else port
             dist.initialize_torch_distributed()
 
         world_size = int(os.getenv("WORLD_SIZE", "1"))

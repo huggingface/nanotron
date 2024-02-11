@@ -2,11 +2,13 @@ import contextlib
 import os
 import random
 import re
+import time
 import uuid
 from inspect import signature
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import torch.cuda
+import torch.distributed as dist
 from nanotron.parallel import ParallelContext
 from packaging import version
 from torch.distributed.launcher import elastic_launch
@@ -76,17 +78,8 @@ class init_process_and_run_func:
 
     def __call__(self):
         with mock_os_environ(update_key_values={"WORLD_SIZE": f"{self.tp * self.dp * self.pp}"}):
-            # NOTE: we use a different random RNG, so that each unit tests don't generate the same port
-            # seed = random.randint(0, 9999)
-            # with torch.random.fork_rng(devices=["cuda"]):
-            # from nanotron.utils import find_free_port
-
-            import time
-
+            # NOTE: we use a different random seed, so that each unit tests don't generate the same port
             random.seed(time.time())
-
-            # torch.manual_seed(seed)
-            # port = find_free_port()
             parallel_context = ParallelContext(
                 data_parallel_size=self.dp, pipeline_parallel_size=self.pp, tensor_parallel_size=self.tp
             )
@@ -95,6 +88,11 @@ class init_process_and_run_func:
             self.kwargs["parallel_context"] = parallel_context
 
             self.func(*self.args, **self.kwargs)
+
+            # NOTE: after running the test, we free the port
+            if dist.is_initialized():
+                dist.barrier()
+                dist.destroy_process_group()
 
 
 def init_distributed(tp: int, dp: int, pp: int):

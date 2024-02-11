@@ -46,7 +46,8 @@ jobs:
         cd nanotron
         pip install -e .
         pip install -e .[dev]
-        pip install -e .[test]
+        pip install pytest
+      # pip install -e .[test]
 
     - name: Show installed libraries and their versions
       run: pip freeze | tee installed.txt
@@ -54,7 +55,8 @@ jobs:
     - name: Run tests
       # NOTE: -m "not fa2" will run all the unit tests that don't have the mark
       # "fa2" (these are FA2-related tests, we can't run it on T4)
+      # -n 1
       run: |
-        pytest -n 1 -m "not fa2" --color=yes --durations=0 --verbose \
+        pytest -m "not fa2" --color=yes --durations=0 --verbose \
         --ignore tests/kernels/test_layer_norm \
         tests/
