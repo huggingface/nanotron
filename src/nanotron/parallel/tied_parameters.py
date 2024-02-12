@@ -5,7 +5,7 @@ from torch import nn
 
 from nanotron import distributed as dist
 from nanotron import logging
-from nanotron.logging import log_rank, warn_once
+from nanotron.logging import log_rank
 from nanotron.optim.gradient_accumulator import GradientAccumulator
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter
@@ -127,9 +127,10 @@ def sync_tied_weights_gradients(
 
     # Only first and last rank should print the warning
     for rank in [0, parallel_context.world_pg.size() - 1]:
-        warn_once(
+        log_rank(
             f"[Debug Tied Weights] Syncing the following tied weights: {tied_id_to_param.keys()}",
             logger=logger,
+            level=logging.DEBUG,
             group=parallel_context.world_pg,
             rank=rank,
         )
