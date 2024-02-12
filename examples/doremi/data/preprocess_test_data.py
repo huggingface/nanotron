@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Dict, List
 
 import numpy as np
+from datasets import load_from_disk
 
 # from dataloader import get_doremi_datasets
 from nanotron.config import get_config_from_file
@@ -17,10 +18,9 @@ try:
         Features,
         Sequence,
         Value,
-        # concatenate_datasets,
-        load_dataset,
     )
 
+    # concatenate_datasets,
     # from huggingface_hub import __version__ as hf_hub_version
     from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
@@ -31,7 +31,7 @@ except ImportError:
 
 
 def doremi_clm_process(
-    # domain_idx: int,
+    domain_idx: int,
     raw_dataset: "Dataset",
     tokenizer: "PreTrainedTokenizerBase",
     text_column_name: str,
@@ -57,6 +57,7 @@ def doremi_clm_process(
             ]
             for k, t in concatenated_examples.items()
         }
+        result["domain_ids"] = [domain_idx] * len(result[next(iter(result.keys()))])
         return result
 
     def _tokenize_and_group_texts(texts: List[str]) -> Dict[str, List[np.ndarray]]:
@@ -67,22 +68,19 @@ def doremi_clm_process(
     train_dataset = raw_dataset.map(
         _tokenize_and_group_texts,
         input_columns=text_column_name,
-        remove_columns=["text"],
+        remove_columns=raw_dataset.column_names,
         features=Features(
             {
-                "input_ids": Sequence(
-                    feature=Value(dtype="int64"),
-                    # length=sequence_length + 1
-                ),
+                "input_ids": Sequence(feature=Value(dtype="int64"), length=sequence_length + 1),
                 "domain_ids": Value(dtype="int64"),
             }
         ),
         batched=True,
-        # num_proc=256,
-        # writer_batch_size=1,
+        num_proc=1,
+        writer_batch_size=1,
         # TODO: remove harcode
         # load_from_cache_file=not dataset_overwrite_cache,
-        # load_from_cache_file=True,
+        load_from_cache_file=True,
         desc=f"Grouping texts in chunks of {sequence_length+1}",
         # cache_file_name="/fsx/phuc/.cache/huggingface_cache/huggingface/modules/datasets_modules/datasets/mc4"
     )
@@ -90,7 +88,9 @@ def doremi_clm_process(
     return train_dataset
 
 
-def tokenize_dataset(config, raw_dataset):
+def tokenize_dataset(config, domain_name, domain_keys, raw_dataset):
+    # assert isinstance(config.data.dataset, PretrainDatasetsArgs), "Please provide a dataset in the config file"
+
     tokenizer_path = config.tokenizer.tokenizer_name_or_path
 
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
@@ -121,12 +121,12 @@ def tokenize_dataset(config, raw_dataset):
     # )[0]
 
     train_dataset = doremi_clm_process(
-        # domain_idx=domain_idx,
+        domain_idx=domain_idx,
         raw_dataset=raw_dataset,
         tokenizer=tokenizer,
         # text_column_name=config.data.dataset.text_column_name,
         text_column_name="text",
-        dataset_processing_num_proc_per_process=1,
+        dataset_processing_num_proc_per_process=3,
         dataset_overwrite_cache=config.data.dataset.dataset_overwrite_cache,
         sequence_length=1024,
     )
@@ -143,19 +143,49 @@ def find_subfolders(path):
     return subfolders
 
 
-def map_domain_ids(example):
-    meta = example["meta"]
-    # example["domain"] = meta["pile_set_name"]
-    example["domain_ids"] = DOMAIN_KEYS.index(meta["pile_set_name"])
-    # del example['meta']
-
-    return example
-
-
 if __name__ == "__main__":
     config_file = "/fsx/phuc/projects/nanotron/examples/doremi/config_280m_llama.yaml"
-    raw_file_path = "/fsx/phuc/project_data/doremi/datasets/the_pile_raw_test/test.jsonl"
+    raw_file_path = "/fsx/phuc/project_data/doremi/datasets/the_pile_raw/splitted_test"
     save_path = "/fsx/phuc/project_data/doremi/datasets/the_pile_raw/tokenized_data/test"
+    # os.environ["XDG_CACHE_HOME"] = "/fsx/phuc/.cache/huggingface_cache"
+
+    # domain_idx = int(os.environ.get("SLURM_ARRAY_TASK_ID", 0))
+    # domain_idx = 21
+    # shard_idx = int(os.environ.get("SLURM_ARRAY_TASK_ID", 0))
+
+    # DOMAIN_KEYS = [
+    #     "all",
+    #     "BookCorpus2",
+    #     "Books3",
+    #     "Enron Emails",
+    #     "EuroParl",
+    #     "FreeLaw",
+    #     "Gutenberg (PG-19)",
+    #     "HackerNews",
+    #     "NIH ExPorter",
+    #     "OpenSubtitles",
+    #     "OpenWebText2",
+    #     "PhilPapers",
+    #     "Pile-CC",
+    #     "PubMed Central",
+    #     "UPSTO Backgrounds",
+    #     "Ubuntu IRC",
+    #     "YoutubeSubtitles",
+    # ]
+
+    # NOTE: this is the one use in
+    # DOMAIN_KEYS = [
+    #     "Github",
+    #     "FreeLaw",
+    #     "OpenWebText2",
+    #     "PubMed Abstracts",
+    #     "DM Mathematics",
+    #     "OpenSubtitles",
+    #     "HackerNews",
+    #     "NIH ExPorter",
+    #     "PubMed Central",
+    #     "Enron Emails",
+    # ]
 
     DOMAIN_KEYS = [
         "Pile-CC",
@@ -182,22 +212,39 @@ if __name__ == "__main__":
         "PhilPapers",
     ]
 
-    config = get_config_from_file(config_file, config_class=DoReMiConfig)
-    print(f"raw_file_path: {raw_file_path}")
+    for domain_idx in range(len(DOMAIN_KEYS)):
+        domain_name = DOMAIN_KEYS[domain_idx]
+        dataset_paths = find_subfolders(f"{raw_file_path}/{domain_name}")
 
-    raw_dataset = load_dataset(
-        "json",
-        data_files=raw_file_path,
-        # num_proc=256
-    )
-    # raw_dataset = Dataset.from_dict(raw_dataset["train"][:10])
-    raw_dataset = raw_dataset.map(
-        map_domain_ids,
-        # num_proc=256
-    )
+        # NOTE: there are 22 domains
+        # but 30 shards for each domain
+        # assert len(dataset_paths) == 30
 
-    train_dataset = tokenize_dataset(config, raw_dataset=raw_dataset)
+        # ds = []
+        # for path in dataset_paths:
+        #     ds.append(load_from_disk(path)['train'])
 
-    cache_path = Path(save_path)
-    os.makedirs(cache_path, exist_ok=True)
-    train_dataset.save_to_disk(cache_path)
+        # from datasets import concatenate_datasets
+        # raw_dataset = concatenate_datasets(ds)
+
+        config = get_config_from_file(config_file, config_class=DoReMiConfig)
+        print(f"domain_idx: {domain_idx}")
+        # print(f"shard_idx: {shard_idx}")
+        print(f"domain_name: {domain_name}")
+        # print(f"config.data.dataset.hf_dataset_or_datasets: {config.data.dataset.hf_dataset_or_datasets}")
+        print(f"raw_file_path: {raw_file_path}")
+
+        # raw_dataset = load_from_disk(dataset_paths[shard_idx])["train"]
+        raw_dataset = load_from_disk(dataset_paths[0])
+        train_dataset = tokenize_dataset(
+            config, domain_name=domain_name, domain_keys=DOMAIN_KEYS, raw_dataset=raw_dataset
+        )
+
+        # NOTE: create a new folder for this domain
+        # cache_path = Path(save_path) / f"{domain_name}/{shard_idx}"
+        cache_path = Path(save_path) / f"{domain_name}"
+        # cache_path = Path(save_path) / f"{domain_name}"
+        os.makedirs(cache_path, exist_ok=True)
+        train_dataset.save_to_disk(cache_path)
+
+    print("done")

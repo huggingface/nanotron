@@ -19,8 +19,10 @@ export XDG_CACHE_HOME=/fsx/phuc/.cache/huggingface_cache
 # USE_FAST=1 CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node=4 examples/doremi/train_doremi.py --config-file examples/doremi/config_tiny_llama.yaml
 REPO=/fsx/phuc/projects/nanotron
 TRAINING_SCRIPT=$REPO/examples/doremi/train_reference.py
-CONFIG_FILE=$REPO/examples/doremi/config_2.8b_llama_with_tuned_weights.yaml
+# CONFIG_FILE=$REPO/examples/doremi/config_2.8b_llama_with_tuned_weights.yaml
 # CONFIG_FILE=$REPO/examples/doremi/config_100m_for_testing.yaml
+CONFIG_FILE=$REPO/examples/doremi/config_2.8b_llama_with_tuned_weights_with_100k_reference.yaml
+
 
 GPUS_PER_NODE=8
 NNODES=$SLURM_NNODES

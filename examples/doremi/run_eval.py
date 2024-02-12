@@ -12,6 +12,7 @@ from pprint import pformat
 from typing import Dict, Iterable, Iterator, List, Union
 
 import torch
+import wandb
 from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.config import (
@@ -20,7 +21,8 @@ from nanotron.config import (
     RandomInit,
     get_config_from_file,
 )
-from nanotron.doremi.dataloader import get_dataloader
+from nanotron.doremi.config import DoReMiConfig
+from nanotron.doremi.dataloader import get_dataloader, get_datasets
 from nanotron.doremi.doremi_context import DoReMiContext
 from nanotron.doremi.llama import LlamaReferenceForTrainingWithPerDomainLoss
 from nanotron.helpers import _vocab_size_with_padding, init_random_states
@@ -36,8 +38,6 @@ from nanotron.serialize import load_weights, parse_ckpt_path
 from nanotron.trainer import mark_tied_parameters
 from nanotron.utils import init_method_normal, scaled_init_method_normal
 from torch.nn.parallel import DistributedDataParallel
-
-import wandb
 
 logger = logging.get_logger(__name__)
 
@@ -296,12 +296,12 @@ class EvalRunner:
         if dist.get_rank(self.parallel_context.world_pg) == 0:
             wandb.init(
                 project="nanotron",
-                name=f"{get_time_name()}_eval_doremi_2.8b_reference_training",
+                name=f"{get_time_name()}_eval_{self.config.general.project}_{self.config.general.run}",
                 config={
                     "nanotron_config": self.config.as_dict(),
                     "doremi": {
                         # TODO(xrsrke): support not hardcoding these
-                        "resume_from_step": 2000,
+                        # "resume_from_step": 2000,
                         "smoothing_param": self.doremi_context.smoothing_param,
                         "step_size": self.doremi_context.step_size,
                         "domain_keys": self.doremi_context.domain_keys,
@@ -394,46 +394,52 @@ def get_args():
 if __name__ == "__main__":
     args = get_args()
     config_file = args.config_file
+    config = get_config_from_file(config_file, config_class=DoReMiConfig)
 
-    VALID_DATASET_PATH = "/fsx/phuc/project_data/doremi/datasets/the_pile_splitted/tokenized_valid_data"
-    DOMAIN_KEYS = [
-        "Github",
-        "FreeLaw",
-        "OpenWebText2",
-        "PubMed Abstracts",
-        "DM Mathematics",
-        "OpenSubtitles",
-        "HackerNews",
-        "NIH ExPorter",
-        "PubMed Central",
-        "Enron Emails",
-    ]
-    TOKENIZED_VALID_DATASET_PATHS = [f"{VALID_DATASET_PATH}/{domain_name}" for domain_name in DOMAIN_KEYS]
+    domain_names = config.doremi.domain_names
+    NUM_DOMAINS = len(domain_names)
+    VALID_DATASET_PATH = "/fsx/phuc/project_data/doremi/datasets/the_pile_raw/tokenized_data/test"
+    # DOMAIN_KEYS = [
+    #     "Github",
+    #     "FreeLaw",
+    #     "OpenWebText2",
+    #     "PubMed Abstracts",
+    #     "DM Mathematics",
+    #     "OpenSubtitles",
+    #     "HackerNews",
+    #     "NIH ExPorter",
+    #     "PubMed Central",
+    #     "Enron Emails",
+    # ]
+    TOKENIZED_VALID_DATASET_PATHS = [f"{VALID_DATASET_PATH}/{domain_name}" for domain_name in domain_names]
+    datasets = get_datasets(TOKENIZED_VALID_DATASET_PATHS)
 
-    NUM_DOMAINS = len(DOMAIN_KEYS)
-    # initial_domain_weights = F.softmax(torch.ones(NUM_DOMAINS, requires_grad=False), dim=-1)
+    import torch.nn.functional as F
+
+    initial_domain_weights = F.softmax(torch.ones(NUM_DOMAINS, requires_grad=False), dim=-1)
 
     # initial_domain_weights = torch.tensor(
     #     [0.06299, 0.177, 0.528, 0.1025, 0.0034, 0.02008, 0.01621, 0.009924, 0.07446, 0.005524]
     # )
-    initial_domain_weights = torch.tensor(
-        [
-            0.34356916553540745,
-            0.16838812972610234,
-            0.24711766854236725,
-            0.0679225638705455,
-            0.059079828519653675,
-            0.043720261601881555,
-            0.01653850841342608,
-            0.00604146633842096,
-            0.04342813428189645,
-            0.0041942731702987,
-        ]
-    )
+    # initial_domain_weights = torch.tensor(
+    #     [
+    #         0.34356916553540745,
+    #         0.16838812972610234,
+    #         0.24711766854236725,
+    #         0.0679225638705455,
+    #         0.059079828519653675,
+    #         0.043720261601881555,
+    #         0.01653850841342608,
+    #         0.00604146633842096,
+    #         0.04342813428189645,
+    #         0.0041942731702987,
+    #     ]
+    # )
+    # initial_domain_weights = compute_domain_weights_based_on_token_count(datasets)
 
     assert len(initial_domain_weights) == NUM_DOMAINS
     # assert torch.allclose(initial_domain_weights.sum(), torch.tensor(1.0))
 
-    trainer = EvalRunner(initial_domain_weights, DOMAIN_KEYS, config_file)
-    dataloader = get_dataloader(trainer, domain_keys=DOMAIN_KEYS, tokenized_datasets=TOKENIZED_VALID_DATASET_PATHS)
+    trainer = EvalRunner(initial_domain_weights, domain_names, config_file, config_class=DoReMiConfig)
+    dataloader = get_dataloader(trainer, datasets=datasets)
     trainer.eval(dataloader)
