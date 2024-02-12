@@ -26,6 +26,7 @@ from nanotron.config import (
 )
 from nanotron.distributed import ProcessGroup
 from nanotron.logging import LogItem, log_rank
+from nanotron.models.base import NanotronModel
 from nanotron.optim.base import BaseOptimizer, Optimizer
 from nanotron.optim.gradient_accumulator import (
     FP32GradBucketManager,
@@ -158,24 +159,15 @@ def lr_scheduler_builder(optimizer: Optimizer, lr_scheduler_args: LRSchedulerArg
 def init_optimizer_and_grad_accumulator(
     model: nn.Module, optimizer_args: OptimizerArgs, parallel_context: ParallelContext
 ) -> Tuple[BaseOptimizer, GradientAccumulator]:
-    # Normalize DDP
-    normalized_model = model.module if isinstance(model, DistributedDataParallel) else model
+    # Unwrap DDP
+    unwrapped_model: NanotronModel = model.module if isinstance(model, DistributedDataParallel) else model
 
-    module_id_to_prefix = {id(module): f"{module_name}." for module_name, module in normalized_model.named_modules()}
+    module_id_to_prefix = {id(module): f"{module_name}." for module_name, module in unwrapped_model.named_modules()}
     # Fix the root_model
-    root_model_id = id(normalized_model)
-    module_id_to_prefix[root_model_id] = ""
+    module_id_to_prefix[id(unwrapped_model)] = ""
 
     # named parameters
-    named_parameters = [
-        (
-            param.get_tied_info().get_full_name_from_module_id_to_prefix(module_id_to_prefix=module_id_to_prefix)
-            if param.is_tied
-            else name,
-            param,
-        )
-        for name, param in normalized_model.named_parameters()
-    ]
+    named_parameters = list(unwrapped_model.get_named_params_with_correct_tied())
 
     # Basic optimizer builder
     def basic_optimizer_builder(named_param_groups):
@@ -263,7 +255,7 @@ def init_optimizer_and_grad_accumulator(
                     )
                     if param.is_tied
                     else name
-                    for name, param in normalized_model.named_parameters()
+                    for name, param in unwrapped_model.named_parameters()
                 },
             ),
             hook=get_fp32_accum_hook(

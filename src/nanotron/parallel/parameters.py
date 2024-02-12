@@ -6,6 +6,7 @@ from torch import nn
 
 from nanotron import distributed as dist
 from nanotron import logging
+from nanotron.models import NanotronModel
 
 logger = logging.get_logger(__name__)
 
@@ -55,7 +56,7 @@ class SlicesPair:
 @dataclasses.dataclass
 class TiedInfo:
     name: str
-    # This allows us to define the scope in which `name` is valid.
+    # name must be defined starting from `root_module` (e.g. root_module.dense0.dense1.weight)
     root_module: nn.Module
     global_ranks: Tuple[int, ...]
     # None signifies that we do not reduce
@@ -68,7 +69,7 @@ class TiedInfo:
         return self.get_full_name_from_module_id_to_prefix(module_id_to_prefix)
 
     def get_full_name_from_module_id_to_prefix(self, module_id_to_prefix: Dict[int, str]) -> str:
-        return f"{module_id_to_prefix[id(self.root_module)]}{self.name}"
+        return f"{module_id_to_prefix[id(self.root_module)]}{self.name}"  # this assumes root_module is part of module_id_to_prefix
 
 
 @dataclasses.dataclass
@@ -127,7 +128,7 @@ class NanotronParameter(nn.Parameter):
             metadata[key] = value
 
     def mark_as_tied(
-        self, name: str, global_ranks: Tuple[int, ...], reduce_op: Optional[dist.ReduceOp], root_module: nn.Module
+        self, name: str, global_ranks: Tuple[int, ...], reduce_op: Optional[dist.ReduceOp], root_module: NanotronModel
     ):
         self._set_metadata(
             self.NANOTRON_PARAMETER_METADATA_TIED_KEY,
