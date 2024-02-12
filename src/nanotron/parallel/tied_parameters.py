@@ -117,13 +117,23 @@ def get_tied_id_to_param(
 
 
 def sync_tied_weights_gradients(
-    module: nn.Module,
+    module: nn.Module,  # TODO: NanotronModel
     parallel_context: ParallelContext,
     grad_accumulator: Optional[GradientAccumulator],
 ):
     tied_id_to_param = get_tied_id_to_param(
         parameters=[param for param in module.parameters() if param.requires_grad], root_module=module
     )
+
+    # Only first and last rank should print the warning
+    for rank in [0, parallel_context.world_pg.size() - 1]:
+        log_rank(
+            f"[Debug Tied Weights] Syncing the following tied weights: {tied_id_to_param.keys()}",
+            logger=logger,
+            level=logging.DEBUG,
+            group=parallel_context.world_pg,
+            rank=rank,
+        )
 
     # Group tensors to reduce by process groups
     # Important to use ordered dict in order to be synchronized across all ranks

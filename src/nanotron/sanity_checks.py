@@ -4,14 +4,13 @@ from typing import Callable, Optional
 import torch
 
 from nanotron import distributed as dist
-from nanotron import logging
+from nanotron import logging, optim
 from nanotron.config import Config
 from nanotron.logging import get_logger, log_rank
 from nanotron.models import NanotronModel
 from nanotron.optim.gradient_accumulator import GradientAccumulator
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.tied_parameters import get_tied_id_to_param
-from nanotron import optim
 
 logger = get_logger(__name__)
 
@@ -57,12 +56,12 @@ def assert_fail_except_rank_with(exception_class, rank_exception, pg):
 def before_tbi_sanity_checks(
     config: Config,
     parallel_context: ParallelContext,
-    normalized_model: NanotronModel,
+    unwrapped_model: NanotronModel,
     grad_accumulator: GradientAccumulator,
 ) -> None:
     if not config.general.ignore_sanity_checks:
         # SANITY CHECK: Check that the model params are synchronized across dp
-        for name, param in sorted(normalized_model.named_parameters(), key=lambda x: x[0]):
+        for name, param in sorted(unwrapped_model.named_parameters(), key=lambda x: x[0]):
             assert_tensor_synced_across_pg(
                 tensor=param,
                 pg=parallel_context.dp_pg,
@@ -72,8 +71,8 @@ def before_tbi_sanity_checks(
         # SANITY CHECK: Tied weights are synchronized
         tied_params_list = sorted(
             get_tied_id_to_param(
-                parameters=normalized_model.parameters(),
-                root_module=normalized_model,
+                parameters=unwrapped_model.parameters(),
+                root_module=unwrapped_model,
             ).items(),
             key=lambda x: x[0],
         )
@@ -98,27 +97,27 @@ def before_tbi_sanity_checks(
                 )
 
         # SANITY CHECK: run model specific sanity checks
-        normalized_model.before_tbi_sanity_checks()
+        unwrapped_model.before_tbi_sanity_checks()
 
 
 def after_tbi_sanity_checks(
     config: Config,
     parallel_context: ParallelContext,
-    normalized_model: NanotronModel,
+    unwrapped_model: NanotronModel,
     grad_accumulator: GradientAccumulator,
 ) -> None:
     if not config.general.ignore_sanity_checks:
         # SANITY CHECK: Check that gradient flow on the entire model
         # SANITY CHECK: Check that all parameters that required gradients, have actually a gradient
         # SANITY CHECK: Check for nan/inf
-        for name, param in normalized_model.named_parameters():
+        for name, param in unwrapped_model.named_parameters():
             if not param.requires_grad:
                 continue
 
             if param.is_tied:
                 tied_info = param.get_tied_info()
                 name = tied_info.get_full_name_from_module_id_to_prefix(
-                    module_id_to_prefix=normalized_model.module_id_to_prefix
+                    module_id_to_prefix=unwrapped_model.module_id_to_prefix
                 )
 
             if grad_accumulator is not None:
@@ -136,19 +135,19 @@ def after_tbi_sanity_checks(
                 )
 
         # SANITY CHECK: run model specific sanity checks
-        normalized_model.after_tbi_sanity_checks()
+        unwrapped_model.after_tbi_sanity_checks()
 
 
 def before_optim_step_sanity_checks(
     config: Config,
     parallel_context: ParallelContext,
-    normalized_model: NanotronModel,
+    unwrapped_model: NanotronModel,
     grad_accumulator: GradientAccumulator,
 ) -> None:
     if not config.general.ignore_sanity_checks:
         # SANITY CHECK: Test tied weights gradients are synchronized
         for (name, group_ranks), param in sorted(
-            get_tied_id_to_param(parameters=normalized_model.parameters(), root_module=normalized_model).items(),
+            get_tied_id_to_param(parameters=unwrapped_model.parameters(), root_module=unwrapped_model).items(),
             key=lambda x: x[0],
         ):
             if not param.requires_grad:
@@ -168,14 +167,14 @@ def before_optim_step_sanity_checks(
             )
 
         # SANITY CHECK: Test gradients are synchronized across DP
-        for name, param in sorted(normalized_model.named_parameters(), key=lambda x: x[0]):
+        for name, param in sorted(unwrapped_model.named_parameters(), key=lambda x: x[0]):
             if not param.requires_grad:
                 continue
 
             if param.is_tied:
                 tied_info = param.get_tied_info()
                 name = tied_info.get_full_name_from_module_id_to_prefix(
-                    module_id_to_prefix=normalized_model.module_id_to_prefix
+                    module_id_to_prefix=unwrapped_model.module_id_to_prefix
                 )
 
             if grad_accumulator is not None:
@@ -191,7 +190,7 @@ def before_optim_step_sanity_checks(
             )
 
         # SANITY CHECK: Check that the model params are synchronized across dp
-        for name, param in sorted(normalized_model.named_parameters(), key=lambda x: x[0]):
+        for name, param in sorted(unwrapped_model.named_parameters(), key=lambda x: x[0]):
             assert_tensor_synced_across_pg(
                 tensor=param,
                 pg=parallel_context.dp_pg,
@@ -200,7 +199,7 @@ def before_optim_step_sanity_checks(
 
         # SANITY CHECK: Tied weights are synchronized
         tied_params_list = sorted(
-            get_tied_id_to_param(parameters=normalized_model.parameters(), root_module=normalized_model).items(),
+            get_tied_id_to_param(parameters=unwrapped_model.parameters(), root_module=unwrapped_model).items(),
             key=lambda x: x[0],
         )
 
@@ -213,18 +212,18 @@ def before_optim_step_sanity_checks(
             )
 
         # SANITY CHECK: run model specific sanity checks
-        normalized_model.before_optim_step_sanity_checks()
+        unwrapped_model.before_optim_step_sanity_checks()
 
 
 def after_optim_step_sanity_checks(
     config: Config,
     parallel_context: ParallelContext,
-    normalized_model: NanotronModel,
+    unwrapped_model: NanotronModel,
     grad_accumulator: GradientAccumulator,
 ) -> None:
     if not config.general.ignore_sanity_checks:
         # SANITY CHECK: Check that gradients is cleared
-        for name, param in normalized_model.named_parameters():
+        for name, param in unwrapped_model.named_parameters():
             if not param.requires_grad:
                 continue
 
@@ -236,7 +235,7 @@ def after_optim_step_sanity_checks(
                 )
 
         # SANITY CHECK: run model specific sanity checks
-        normalized_model.after_optim_step_sanity_checks()
+        unwrapped_model.after_optim_step_sanity_checks()
 
 
 def check_optim_state_in_sync(optimizer: optim.BaseOptimizer, pg: dist.ProcessGroup):

@@ -369,11 +369,11 @@ def _test_save_optimizer_with_additional_state_dict_keys(parallel_context: Paral
 
     if isinstance(model, DistributedDataParallel):
         # Remove the annoying "module." prefix
-        normalized_model = model.module
+        unwrapped_model = model.module
     else:
-        normalized_model = model
+        unwrapped_model = model
 
-    named_parameters = list(normalized_model.named_parameters())
+    named_parameters = list(unwrapped_model.named_parameters())
 
     optimizer = OptimizerFromGradientAccumulator(
         gradient_accumulator_builder=lambda named_params: FP32GradientAccumulator(named_parameters=named_params),
@@ -402,7 +402,7 @@ def _test_save_optimizer_with_additional_state_dict_keys(parallel_context: Paral
         )
         # Manually sync tied parameters
         sync_tied_weights_gradients(
-            module=normalized_model, parallel_context=parallel_context, grad_accumulator=grad_accumulator
+            module=unwrapped_model, parallel_context=parallel_context, grad_accumulator=grad_accumulator
         )
         # Optimizer steps
         optimizer.step()
