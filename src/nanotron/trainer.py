@@ -18,6 +18,7 @@ from nanotron.config import (
     ExistingCheckpointInit,
     ParallelismArgs,
     RandomInit,
+    MambaInit,
     get_config_from_file,
 )
 from nanotron.dataloader import sanity_check_dataloader
@@ -34,6 +35,8 @@ from nanotron.models import NanotronModel, build_model
 from nanotron.models.base import check_model_has_grad
 from nanotron.models.llama import LlamaForTraining, RotaryEmbedding
 from nanotron.models.starcoder2 import Starcoder2ForTraining
+from nanotron.models.mamba_slow.mamba import MambaForTraining
+from brrr.models.mamba_fast.mamba import MambaFastForTraining
 from nanotron.optim.clip_grads import clip_grad_norm
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.data_parallel.utils import sync_gradients_across_dp
@@ -82,6 +85,8 @@ dist_logger.setLevel(logging.WARNING)
 CONFIG_TO_MODEL_CLASS = {
     "LlamaConfig": LlamaForTraining,
     "Starcoder2Config": Starcoder2ForTraining,
+    "MambaConfig": MambaForTraining,
+    "MambaFastConfig": MambaFastForTraining,
 }
 
 
@@ -576,13 +581,40 @@ class DistributedTrainer:
                     parallel_context=self.parallel_context,
                     root_folder=self.config.model.init_method.path,
                 )
+            elif isinstance(self.config.model.init_method, MambaInit):
+                
+                normalized_model.init_model_randomly(
+                    init_method=init_method_normal(self.config.model.init_method.initializer_range),
+                    scaled_init_method=scaled_init_method_normal(
+                        sigma=self.config.model.init_method.initializer_range,
+                        num_layers=self.model_config.num_hidden_layers,
+                        scale=self.config.model.init_method.n_residuals_per_layer
+                    ),
+                    rescale_prenorm_residual=self.config.model.init_method.rescale_prenorm_residual,
+                )
+                # Synchronize parameters so that the model is consistent
+                # sync all params across dp
+                for name, param in sorted(model.named_parameters(), key=lambda x: x[0]):
+                    dist.all_reduce(param, op=dist.ReduceOp.AVG, group=self.parallel_context.dp_pg)
+
+                # sync tied params across tied groups
+                for (_, group_ranks), param in sorted(
+                    get_tied_id_to_param(
+                        parameters=model.parameters(),
+                        root_module=normalized_model,
+                    ).items(),
+                    key=lambda x: x[0],
+                ):
+                    group = self.parallel_context.world_ranks_to_pg[group_ranks]
+                    dist.all_reduce(param, op=dist.ReduceOp.AVG, group=group)
             elif isinstance(self.config.model.init_method, RandomInit):
                 # Initialize model randomly
                 normalized_model.init_model_randomly(
                     init_method=init_method_normal(self.config.model.init_method.std),
-                    scaled_init_method=scaled_init_method_normal(
-                        self.config.model.init_method.std, self.model_config.num_hidden_layers
-                    ),
+                    scaled_init_method_normal=scaled_init_method_normal(
+                        sigma=self.config.model.init_method.std,
+                        num_layers=self.model_config.num_hidden_layers,
+                    )
                 )
                 # Synchronize parameters so that the model is consistent
                 # sync all params across dp

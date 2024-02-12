@@ -60,7 +60,7 @@ def main():
 
     assert args.ckpt_path.exists(), f"Checkpoint path {args.ckpt_path} does not exist"
 
-    config = get_config_from_file((args.ckpt_path / "config.yaml").as_posix())
+    config = get_config_from_file((args.ckpt_path / "config.yaml").as_posix(), is_run_generate=True)
     model_config = config.model.model_config
     tokenizer_path = config.tokenizer.tokenizer_name_or_path
 
@@ -69,7 +69,7 @@ def main():
         pp=args.pp or config.parallelism.pp,
         tp=args.tp or config.parallelism.tp,
         pp_engine=OneForwardOneBackwardPipelineEngine(),
-        tp_mode=TensorParallelLinearMode.ALL_REDUCE,
+        tp_mode=TensorParallelLinearMode.REDUCE_SCATTER,
         recompute_granularity=None,
         tp_linear_async_communication=True,
     )
