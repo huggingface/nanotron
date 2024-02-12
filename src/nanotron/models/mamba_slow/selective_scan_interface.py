@@ -156,27 +156,30 @@ class MambaInnerFn(torch.autograd.Function):
 
     @staticmethod
     @custom_fwd
-    def forward(ctx, xz, conv1d_weight, conv1d_bias, x_proj_weight, delta_proj_weight,
-                out_proj_weight, out_proj_bias,
+    def forward(ctx, d_inner, tp_pg, xz, conv1d_weight, conv1d_bias, x_proj_weight, delta_proj_weight,
                 A, B=None, C=None, D=None, delta_bias=None, B_proj_bias=None,
                 C_proj_bias=None, delta_softplus=True, checkpoint_lvl=1):
         """
              xz: (batch, dim, seqlen)
         """
         assert checkpoint_lvl in [0, 1]
-        L = xz.shape[-1]
+        batch, L = xz.shape[0], xz.shape[-1]
         delta_rank = delta_proj_weight.shape[1]
         d_state = A.shape[-1] * (1 if not A.is_complex() else 2)
         if torch.is_autocast_enabled():
             x_proj_weight = x_proj_weight.to(dtype=torch.get_autocast_gpu_dtype())
             delta_proj_weight = delta_proj_weight.to(dtype=torch.get_autocast_gpu_dtype())
-            out_proj_weight = out_proj_weight.to(dtype=torch.get_autocast_gpu_dtype())
-            out_proj_bias = (out_proj_bias.to(dtype=torch.get_autocast_gpu_dtype())
-                             if out_proj_bias is not None else None)
+
         if xz.stride(-1) != 1:
             xz = xz.contiguous()
         conv1d_weight = rearrange(conv1d_weight, "d 1 w -> d w")
-        x, z = xz.chunk(2, dim=1)
+        
+        # x, z = xz.chunk(2, dim=1)
+        assert d_inner % tp_pg.size() == 0
+        x, z = xz.view(batch, d_inner // tp_pg.size(), 2, L).chunk(2, dim=2)
+        x = x.squeeze(2)
+        z = z.squeeze(2)
+    
         conv1d_bias = conv1d_bias.contiguous() if conv1d_bias is not None else None
         conv1d_out = causal_conv1d_cuda.causal_conv1d_fwd(x, conv1d_weight, conv1d_bias, None, True)
         # We're being very careful here about the layout, to avoid extra transposes.
@@ -218,27 +221,36 @@ class MambaInnerFn(torch.autograd.Function):
             conv1d_out, delta, A, B, C, D, z, delta_bias, delta_softplus
         )
         ctx.delta_softplus = delta_softplus
-        ctx.out_proj_bias_is_None = out_proj_bias is None
+        # ctx.out_proj_bias_is_None = out_proj_bias is None
         ctx.checkpoint_lvl = checkpoint_lvl
         if checkpoint_lvl >= 1:  # Will recompute conv1d_out and delta in the backward pass
             conv1d_out, delta = None, None
+            
+        ctx.d_inner = d_inner
+        ctx.tp_pg = tp_pg
+
         ctx.save_for_backward(xz, conv1d_weight, conv1d_bias, x_dbl, x_proj_weight,
-                              delta_proj_weight, out_proj_weight, conv1d_out, delta,
+                              delta_proj_weight, conv1d_out, delta,
                               A, B, C, D, delta_bias, scan_intermediates, out)
-        return F.linear(rearrange(out_z, "b d l -> b l d"), out_proj_weight, out_proj_bias)
+        
+        return rearrange(out_z, "b d l -> b l d")
 
     @staticmethod
     @custom_bwd
     def backward(ctx, dout):
         # dout: (batch, seqlen, dim)
-        (xz, conv1d_weight, conv1d_bias, x_dbl, x_proj_weight, delta_proj_weight, out_proj_weight,
+        (xz, conv1d_weight, conv1d_bias, x_dbl, x_proj_weight, delta_proj_weight,
          conv1d_out, delta, A, B, C, D, delta_bias, scan_intermediates, out) = ctx.saved_tensors
-        L = xz.shape[-1]
+        batch, L = xz.shape[0], xz.shape[-1]
         delta_rank = delta_proj_weight.shape[1]
         d_state = A.shape[-1] * (1 if not A.is_complex() else 2)
-        x, z = xz.chunk(2, dim=1)
-        if dout.stride(-1) != 1:
-            dout = dout.contiguous()
+        
+        # x, z = xz.chunk(2, dim=1)
+        assert ctx.d_inner % ctx.tp_pg.size() == 0
+        x, z = xz.view(batch, ctx.d_inner // ctx.tp_pg.size(), 2, L).chunk(2, dim=2)
+        x = x.squeeze(2)
+        z = z.squeeze(2)
+    
         if ctx.checkpoint_lvl == 1:
             conv1d_out = causal_conv1d_cuda.causal_conv1d_fwd(x, conv1d_weight, conv1d_bias, None, True)
             delta = rearrange(delta_proj_weight @ x_dbl[:, :delta_rank].t(),
@@ -246,16 +258,24 @@ class MambaInnerFn(torch.autograd.Function):
         # The kernel supports passing in a pre-allocated dz (e.g., in case we want to fuse the
         # backward of selective_scan_cuda with the backward of chunk).
         dxz = torch.empty_like(xz)  # (batch, dim, seqlen)
-        dx, dz = dxz.chunk(2, dim=1)
-        dout = rearrange(dout, "b l e -> e (b l)")
-        dout_y = rearrange(out_proj_weight.t() @ dout, "d (b l) -> b d l", l=L)
+        
+        # dx, dz = dxz.chunk(2, dim=1)
+        assert ctx.d_inner % ctx.tp_pg.size() == 0
+        dx, dz = dxz.view(batch, ctx.d_inner // ctx.tp_pg.size(), 2, L).chunk(2, dim=2)
+        dx = dx.squeeze(2)
+        dz = dz.squeeze(2)
+                
+        dout = rearrange(dout, "b l e -> b e l")
+    
+        if dout.stride(-1) != 1:
+            dout = dout.contiguous()
+    
         dconv1d_out, ddelta, dA, dB, dC, dD, ddelta_bias, dz, out_z = selective_scan_cuda.bwd(
-            conv1d_out, delta, A, B, C, D, z, delta_bias, dout_y, scan_intermediates, out, dz,
+            conv1d_out, delta, A, B, C, D, z, delta_bias, dout, scan_intermediates, out, dz,
             ctx.delta_softplus,
             True  # option to recompute out_z
         )
-        dout_proj_weight = torch.einsum("eB,dB->ed", dout, rearrange(out_z, "b d l -> d (b l)"))
-        dout_proj_bias = dout.sum(dim=(0, 1)) if not ctx.out_proj_bias_is_None else None
+        
         dD = dD if D is not None else None
         dx_dbl = torch.empty_like(x_dbl)
         dB_proj_bias = None
@@ -290,22 +310,37 @@ class MambaInnerFn(torch.autograd.Function):
         )
         dconv1d_bias = dconv1d_bias if conv1d_bias is not None else None
         dconv1d_weight = rearrange(dconv1d_weight, "d w -> d 1 w")
-        return (dxz, dconv1d_weight, dconv1d_bias, dx_proj_weight, ddelta_proj_weight,
-                dout_proj_weight, dout_proj_bias,
+        return (None, # d_inner
+                None, # tp_pg
+                dxz, dconv1d_weight, dconv1d_bias, dx_proj_weight, ddelta_proj_weight,
                 dA, dB, dC, dD,
                 ddelta_bias if delta_bias is not None else None,
                 dB_proj_bias, dC_proj_bias, None)
 
 
 def mamba_inner_fn(
-    xz, conv1d_weight, conv1d_bias, x_proj_weight, delta_proj_weight,
-    out_proj_weight, out_proj_bias,
+    d_inner, tp_pg, xz, conv1d_weight, conv1d_bias, x_proj_weight, delta_proj_weight,
     A, B=None, C=None, D=None, delta_bias=None, B_proj_bias=None,
     C_proj_bias=None, delta_softplus=True
 ):
-    return MambaInnerFn.apply(xz, conv1d_weight, conv1d_bias, x_proj_weight, delta_proj_weight,
-                              out_proj_weight, out_proj_bias,
-                              A, B, C, D, delta_bias, B_proj_bias, C_proj_bias, delta_softplus)
+    
+    return MambaInnerFn.apply(
+        d_inner,
+        tp_pg,
+        xz,
+        conv1d_weight, 
+        conv1d_bias,
+        x_proj_weight, 
+        delta_proj_weight,
+        A, 
+        B, 
+        C, 
+        D, 
+        delta_bias,
+        B_proj_bias, 
+        C_proj_bias, 
+        delta_softplus
+    )
 
 
 def mamba_inner_ref(

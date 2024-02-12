@@ -73,7 +73,7 @@ from torch import Tensor
 from nanotron.utils import init_method_normal, scaled_init_method_normal
 from einops import rearrange, repeat
 
-from mamba_ssm.ops.selective_scan_interface import selective_scan_fn, mamba_inner_fn
+from nanotron.models.mamba_slow.selective_scan_interface import selective_scan_fn, mamba_inner_fn
 
 try:
     from causal_conv1d import causal_conv1d_fn, causal_conv1d_update
@@ -251,24 +251,21 @@ class Mamba(nn.Module):
             
         # In the backward pass we write dx and dz next to each other to avoid torch.cat
         if self.use_fast_path and inference_params is None and os.environ.get("FAST_PATH", "0") == "1":  # Doesn't support outputting the states
-            raise NotImplementedError("Fast path not implemented, need to add xz.view(...) into mamba_inner_fn")
-            # out = mamba_inner_fn(
-            #     self.d_inner,
-            #     self.tp_pg,
-            #     xz,
-            #     conv1d_weight_shard,
-            #     conv1d_bias_shard,
-            #     self.x_proj.weight,
-            #     dt_proj_weight_shard,
-            #     self.out_proj.weight,
-            #     self.out_proj.bias,
-            #     A_shard,
-            #     None,  # input-dependent B
-            #     None,  # input-dependent C
-            #     D_shard.float(),
-            #     delta_bias=dt_proj_bias_shard.float(),
-            #     delta_softplus=True,
-            # )
+            y = mamba_inner_fn(
+                d_inner=self.d_inner,
+                tp_pg=self.tp_pg,
+                xz=xz,
+                conv1d_weight=conv1d_weight_shard,
+                conv1d_bias=conv1d_bias_shard,
+                x_proj_weight=self.x_proj.weight,
+                delta_proj_weight=dt_proj_weight_shard,
+                A=A_shard,
+                B=None, # input-dependent B
+                C=None, # input-dependent C
+                D=D_shard.float(),
+                delta_bias=dt_proj_bias_shard.float(),
+                delta_softplus=True,
+            )
         else:
             assert self.d_inner % self.tp_pg.size() == 0
             x, z = xz.view(batch, self.d_inner // self.tp_pg.size(), 2, seqlen).chunk(2, dim=2)
@@ -318,7 +315,8 @@ class Mamba(nn.Module):
                 y, last_state = y
                 ssm_state.copy_(last_state)
             y = rearrange(y, "b d l -> b l d")
-            out = self.out_proj(y)
+        
+        out = self.out_proj(y)
         return out
 
     def step(self, hidden_states, conv_state, ssm_state):
@@ -674,7 +672,7 @@ class MambaModel(nn.Module):
 
         block_compute_costs = {
             # CausalSelfAttention (qkv proj + attn out) + MLP
-            MambaDecoderLayer: 0,
+            MambaDecoderLayer: 1,
             # This is the last lm_head
             TensorParallelColumnLinear: 0,
         }
@@ -1017,7 +1015,7 @@ class MambaForTraining(NanotronModel):
                         # Having just p *= scale would repeatedly scale it down
                         nn.init.kaiming_uniform_(p, a=math.sqrt(5))
                         with torch.no_grad():
-                            p /= math.sqrt(n_residuals_per_layer * n_layer)                                                
+                            p /= math.sqrt(n_residuals_per_layer * n_layer)                                          
                                                     
         # #TODO(fmom): perform check
         # assert initialized_parameters == {
