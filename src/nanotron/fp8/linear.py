@@ -1,8 +1,8 @@
-import warnings
 from typing import Optional, Tuple, TypedDict, Union
 
 import torch
 import torch.nn.functional as F
+import transformer_engine as te  # noqa
 from torch import nn
 
 from nanotron.fp8.constants import INITIAL_AMAX, INITIAL_SCALING_FACTOR
@@ -11,11 +11,6 @@ from nanotron.fp8.kernel import fp8_matmul_kernel
 from nanotron.fp8.meta import FP8Meta
 from nanotron.fp8.parameter import FP8Parameter
 from nanotron.fp8.tensor import FP8Tensor, update_scaling_factor
-
-try:
-    import transformer_engine as te  # noqa
-except ImportError:
-    warnings.warn("Please install Transformer engine for FP8 training!")
 
 
 class FP8LinearMeta(TypedDict):

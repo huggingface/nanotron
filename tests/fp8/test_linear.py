@@ -1,18 +1,8 @@
-import warnings
-
 import pytest
 import torch
-from nanotron.fp8.dtypes import DTypes
-from nanotron.fp8.linear import FP8Linear
-from nanotron.fp8.parameter import FP8Parameter
-from nanotron.fp8.tensor import FP8Tensor
+from nanotron.fp8 import DTypes, FP8Linear, FP8Parameter, FP8Tensor
 from torch import nn
 from torch.optim import Adam
-
-try:
-    import transformer_engine as te  # noqa
-except ImportError:
-    warnings.warn("Please install Transformer engine for FP8 training!")
 
 
 @pytest.mark.parametrize("is_bias", [True, False])

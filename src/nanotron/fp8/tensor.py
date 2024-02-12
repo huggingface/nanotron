@@ -1,15 +1,9 @@
-import warnings
-
 import torch
+import transformer_engine as te  # noqa
+import transformer_engine_extensions as tex
 
 from nanotron.fp8.constants import DTYPE_TO_FP8_MAX, FP8_DTYPES, INITIAL_SCALING_FACTOR
 from nanotron.fp8.dtypes import DTypes
-
-try:
-    import transformer_engine as te  # noqa
-    import transformer_engine_extensions as tex
-except ImportError:
-    warnings.warn("Please install Transformer engine for FP8 training!")
 
 
 class FP8Tensor(torch.Tensor):
