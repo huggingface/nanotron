@@ -56,8 +56,8 @@ class SlicesPair:
 @dataclasses.dataclass
 class TiedInfo:
     name: str
-    # This allows us to define the scope in which `name` is valid.
-    root_module: NanotronModel
+    # name must be defined starting from `root_module` (e.g. root_module.dense0.dense1.weight)
+    root_module: nn.Module
     global_ranks: Tuple[int, ...]
     # None signifies that we do not reduce
     reduce_op: Optional[dist.ReduceOp]
@@ -130,7 +130,6 @@ class NanotronParameter(nn.Parameter):
     def mark_as_tied(
         self, name: str, global_ranks: Tuple[int, ...], reduce_op: Optional[dist.ReduceOp], root_module: NanotronModel
     ):
-        assert isinstance(root_module, NanotronModel), f"root_module must be a NanotronModel, got {root_module}"
         self._set_metadata(
             self.NANOTRON_PARAMETER_METADATA_TIED_KEY,
             TiedInfo(name=name, global_ranks=global_ranks, reduce_op=reduce_op, root_module=root_module),
