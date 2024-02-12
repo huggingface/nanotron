@@ -448,6 +448,7 @@ def create_table_output(table_log, column_widths):
 
 def write_to_csv(csv_filename, table_log, model_tflops, slurm_job_id):
     if not os.path.exists(csv_filename):
+        os.makedirs(os.path.dirname(csv_filename), exist_ok=True)
         with open(csv_filename, mode="w") as fo:
             writer = csv.writer(fo)
             writer.writerow([item.tag for item in table_log])
