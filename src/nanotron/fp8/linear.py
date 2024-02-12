@@ -5,11 +5,12 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
+from nanotron.fp8.constants import INITIAL_AMAX, INITIAL_SCALING_FACTOR
 from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.kernel import fp8_matmul_kernel
 from nanotron.fp8.meta import FP8Meta
 from nanotron.fp8.parameter import FP8Parameter
-from nanotron.fp8.tensor import FP8Tensor, compute_scaling_factor
+from nanotron.fp8.tensor import FP8Tensor, update_scaling_factor
 
 try:
     import transformer_engine as te  # noqa
@@ -34,8 +35,16 @@ class FP8Linear(nn.Linear):
 
             # NOTE: quantization metadata for input gradients, weight gradients, and output gradients
             # TODO(xrsrke): don't fixed this
-            FP8E4M3_SCALE = compute_scaling_factor(amax=torch.tensor(1.0, dtype=torch.float32), dtype=DTypes.FP8E4M3)
-            FP8E5M2_SCALE = compute_scaling_factor(amax=torch.tensor(1.0, dtype=torch.float32), dtype=DTypes.FP8E5M2)
+            FP8E4M3_SCALE = update_scaling_factor(
+                amax=torch.tensor(INITIAL_AMAX, dtype=torch.float32),
+                scaling_factor=torch.tensor(INITIAL_SCALING_FACTOR),
+                dtype=DTypes.FP8E4M3,
+            )
+            FP8E5M2_SCALE = update_scaling_factor(
+                amax=torch.tensor(INITIAL_AMAX, dtype=torch.float32),
+                scaling_factor=torch.tensor(INITIAL_SCALING_FACTOR, dtype=torch.float32),
+                dtype=DTypes.FP8E5M2,
+            )
             self.fp8_meta: FP8LinearMeta = {
                 # kfloat8_e4m3
                 "input_grad": FP8Meta(amax=1, dtype=DTypes.FP8E4M3, scale=FP8E4M3_SCALE),

@@ -2,7 +2,7 @@ import warnings
 
 import torch
 
-from nanotron.fp8.constants import DTYPE_TO_FP8_MAX, FP8_DTYPES
+from nanotron.fp8.constants import DTYPE_TO_FP8_MAX, FP8_DTYPES, INITIAL_SCALING_FACTOR
 from nanotron.fp8.dtypes import DTypes
 
 try:
@@ -26,7 +26,7 @@ class FP8Tensor(torch.Tensor):
         assert isinstance(dtype, DTypes)
 
         amax = tensor.abs().max().clone()
-        scale = compute_scaling_factor(amax, dtype)
+        scale = update_scaling_factor(amax, torch.tensor(INITIAL_SCALING_FACTOR, dtype=torch.float32), dtype)
         fp8_meta = FP8Meta(amax, scale, dtype)
 
         if tensor.dtype not in FP8_DTYPES:
@@ -81,28 +81,32 @@ def convert_tensor_from_fp8(tensor: torch.Tensor, meta, dtype: torch.dtype) -> t
     return tex.cast_from_fp8(tensor, meta.inverse_scale, tensor_dtype, output_dtype)
 
 
-def compute_scaling_factor(amax: torch.Tensor, dtype: DTypes, margin: float = 0) -> torch.Tensor:
+def update_scaling_factor(
+    amax: torch.Tensor, scaling_factor: torch.Tensor, dtype: DTypes, margin: float = 0
+) -> torch.Tensor:
     """
-    Compute the scaling factor to quantize a tensor to FP8.
+    Update the scaling factor to quantize a tensor to FP8.
     Credits: https://github.com/Azure/MS-AMP/blob/d562f0f0bcfc9b712fa0726b73428753ff1300ab/msamp/common/tensor/meta.py#L39
     """
     assert amax.dtype == torch.float32
+    # TODO(xrsrke): can we use lower precision for scaling_factor?
+    assert scaling_factor.dtype == torch.float32
+
     # NOTE: Since fp8_max is a fixed number based on two FP8 data types,
     # we prefer not to take fp8_max in the input arguments.
-    fp8_max = torch.tensor(DTYPE_TO_FP8_MAX[dtype])
+    fp8_max = torch.tensor(DTYPE_TO_FP8_MAX[dtype], dtype=torch.float32)
 
     # NOTE: torch.jit only take a concrete value rather than a DTYPE_TO_FP8_MAX[dtype],
     # so we create an inner function to bypass that
     @torch.jit.script
-    def _inner(amax: torch.Tensor, fp8_max: torch.Tensor, margin: float):
-        INITIAL_SCALE = torch.tensor(1)
+    def _inner(amax: torch.Tensor, fp8_max: torch.Tensor, scaling_factor: torch.Tensor, margin: float):
         # NOTE: calculate the number of bits to shift the exponent
         ratio = fp8_max / amax
         exp = torch.floor(torch.log2(ratio)) - margin
-        scaling_factor = torch.round(torch.pow(2, torch.abs(exp)))
-        scaling_factor = torch.where(amax > 0.0, scaling_factor, INITIAL_SCALE)
-        scaling_factor = torch.where(torch.isfinite(amax), scaling_factor, INITIAL_SCALE)
-        scaling_factor = torch.where(exp < 0, 1 / scaling_factor, scaling_factor)
-        return scaling_factor
+        new_scaling_factor = torch.round(torch.pow(2, torch.abs(exp)))
+        new_scaling_factor = torch.where(amax > 0.0, new_scaling_factor, scaling_factor)
+        new_scaling_factor = torch.where(torch.isfinite(amax), new_scaling_factor, scaling_factor)
+        new_scaling_factor = torch.where(exp < 0, 1 / new_scaling_factor, new_scaling_factor)
+        return new_scaling_factor
 
-    return _inner(amax, fp8_max, margin)
+    return _inner(amax, fp8_max, scaling_factor, margin)
