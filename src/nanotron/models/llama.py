@@ -896,9 +896,7 @@ class LlamaForTraining(NanotronModel):
         model = self
         initialized_parameters = set()
         # Handle tensor parallelism
-        module_id_to_prefix = {
-            id(module): f"{module_name}." for module_name, module in model.named_modules()
-        }  # TODO model is always root_model in tied_info
+        module_id_to_prefix = {id(module): f"{module_name}." for module_name, module in model.named_modules()}
         # Fix the root_model
         module_id_to_prefix[id(model)] = ""
 
