@@ -14,6 +14,7 @@
 # limitations under the License.
 """ PyTorch Mamba model.
 """
+import os
 from typing import Dict, Optional, Union
 import math
 import torch
@@ -249,25 +250,25 @@ class Mamba(nn.Module):
         dt_proj_bias_shard = self._split_weight(self.dt_proj.bias, dim=0)
             
         # In the backward pass we write dx and dz next to each other to avoid torch.cat
-        if self.use_fast_path and inference_params is None:  # Doesn't support outputting the states
+        if self.use_fast_path and inference_params is None and os.environ.get("FAST_PATH", "0") == "1":  # Doesn't support outputting the states
             raise NotImplementedError("Fast path not implemented, need to add xz.view(...) into mamba_inner_fn")
-            out = mamba_inner_fn(
-                self.d_inner,
-                self.tp_pg,
-                xz,
-                conv1d_weight_shard,
-                conv1d_bias_shard,
-                self.x_proj.weight,
-                dt_proj_weight_shard,
-                self.out_proj.weight,
-                self.out_proj.bias,
-                A_shard,
-                None,  # input-dependent B
-                None,  # input-dependent C
-                D_shard.float(),
-                delta_bias=dt_proj_bias_shard.float(),
-                delta_softplus=True,
-            )
+            # out = mamba_inner_fn(
+            #     self.d_inner,
+            #     self.tp_pg,
+            #     xz,
+            #     conv1d_weight_shard,
+            #     conv1d_bias_shard,
+            #     self.x_proj.weight,
+            #     dt_proj_weight_shard,
+            #     self.out_proj.weight,
+            #     self.out_proj.bias,
+            #     A_shard,
+            #     None,  # input-dependent B
+            #     None,  # input-dependent C
+            #     D_shard.float(),
+            #     delta_bias=dt_proj_bias_shard.float(),
+            #     delta_softplus=True,
+            # )
         else:
             assert self.d_inner % self.tp_pg.size() == 0
             x, z = xz.view(batch, self.d_inner // self.tp_pg.size(), 2, seqlen).chunk(2, dim=2)
@@ -408,96 +409,6 @@ class Mamba(nn.Module):
                 ssm_state.zero_()
         return conv_state, ssm_state
 
-class Block(nn.Module):
-    def __init__(
-        self, dim, mixer_cls, norm_cls=nn.LayerNorm, fused_add_norm=False, residual_in_fp32=False
-    ):
-        """
-        Simple block wrapping a mixer class with LayerNorm/RMSNorm and residual connection"
-
-        This Block has a slightly different structure compared to a regular
-        prenorm Transformer block.
-        The standard block is: LN -> MHA/MLP -> Add.
-        [Ref: https://arxiv.org/abs/2002.04745]
-        Here we have: Add -> LN -> Mixer, returning both
-        the hidden_states (output of the mixer) and the residual.
-        This is purely for performance reasons, as we can fuse add and LayerNorm.
-        The residual needs to be provided (except for the very first block).
-        """
-        super().__init__()
-        self.residual_in_fp32 = residual_in_fp32
-        self.fused_add_norm = fused_add_norm
-        self.mixer = mixer_cls(d_model=dim)
-        self.norm = norm_cls(dim)
-        if self.fused_add_norm:
-            assert RMSNorm is not None, "RMSNorm import fails"
-            assert isinstance(
-                self.norm, (nn.LayerNorm, RMSNorm)
-            ), "Only LayerNorm and RMSNorm are supported for fused_add_norm"
-
-    def forward(
-        self, hidden_states: Tensor, residual: Optional[Tensor] = None, inference_params=None
-    ):
-        r"""Pass the input through the encoder layer.
-
-        Args:
-            hidden_states: the sequence to the encoder layer (required).
-            residual: hidden_states = Mixer(LN(residual))
-        """
-        if not self.fused_add_norm:
-            # self.layer_idx was assigned when calling create_block
-            # residual=None happens only at the first block
-            residual = hidden_states if (self.layer_idx == 0) else hidden_states + residual
-            hidden_states = self.norm(residual.to(dtype=self.norm.weight.dtype))
-            if self.residual_in_fp32:
-                residual = residual.to(torch.float32)
-        else:
-            fused_add_norm_fn = rms_norm_fn if isinstance(self.norm, RMSNorm) else layer_norm_fn
-            hidden_states, residual = fused_add_norm_fn(
-                hidden_states,
-                self.norm.weight,
-                self.norm.bias,
-                residual=residual,
-                prenorm=True,
-                residual_in_fp32=self.residual_in_fp32,
-                eps=self.norm.eps,
-            )
-        hidden_states = self.mixer(hidden_states, inference_params=inference_params)
-        return hidden_states, residual
-
-    def allocate_inference_cache(self, batch_size, max_seqlen, dtype=None, **kwargs):
-        return self.mixer.allocate_inference_cache(batch_size, max_seqlen, dtype=dtype, **kwargs)
-
-def create_block(
-    parallel_config: Optional[ParallelismArgs],
-    tp_pg: dist.ProcessGroup,
-    d_model,
-    ssm_cfg=None,
-    norm_epsilon=1e-5,
-    rms_norm=False,
-    residual_in_fp32=False,
-    fused_add_norm=False,
-    layer_idx=None,
-    device=None,
-    dtype=None,
-):
-    if ssm_cfg is None:
-        ssm_cfg = {}
-    factory_kwargs = {"device": device, "dtype": dtype}
-    mixer_cls = partial(Mamba, parallel_config=parallel_config, tp_pg=tp_pg, layer_idx=layer_idx, **ssm_cfg, **factory_kwargs)
-    norm_cls = partial(
-        nn.LayerNorm if not rms_norm else RMSNorm, eps=norm_epsilon, **factory_kwargs
-    )
-    block = Block(
-        d_model,
-        mixer_cls,
-        norm_cls=norm_cls,
-        fused_add_norm=fused_add_norm,
-        residual_in_fp32=residual_in_fp32,
-    )
-    block.layer_idx = layer_idx
-    return block
-
 class Embedding(nn.Module, AttachableStore):
     def __init__(self, tp_pg: dist.ProcessGroup, config: MambaConfig, parallel_config: Optional[ParallelismArgs]):
         super().__init__()
@@ -537,37 +448,77 @@ class MambaDecoderLayer(nn.Module):
         layer_idx: int,
         device: Optional[torch.device] = None,
         dtype: Optional[torch.dtype] = None,
-    ):    
-        factory_kwargs = {"device": device, "dtype": dtype}
-
+    ):  
         super().__init__()
-        self.block = create_block(
-                    parallel_config=parallel_config,
-                    tp_pg=tp_pg,
-                    d_model=config.d_model,
-                    ssm_cfg=config.ssm_cfg,
-                    norm_epsilon=config.rms_norm_eps,
-                    rms_norm=config.rms_norm,
-                    residual_in_fp32=config.residual_in_fp32,
-                    fused_add_norm=config.fused_add_norm,
-                    layer_idx=layer_idx,
-                    **factory_kwargs,
-                )
+        
+        factory_kwargs = {"device": device, "dtype": dtype}
+                
+        if config.ssm_cfg is None:
+            ssm_cfg = {}
+        else:
+            ssm_cfg = config.ssm_cfg
+
+        self.layer_idx = layer_idx
+        self.residual_in_fp32 = config.residual_in_fp32
+        self.fused_add_norm = config.fused_add_norm
+        
+        self.mixer = Mamba(
+            d_model=config.d_model,
+            parallel_config=parallel_config,
+            tp_pg=tp_pg,
+            layer_idx=layer_idx,
+            **ssm_cfg,
+            **factory_kwargs
+        )
+        
+        self.norm = partial(
+            nn.LayerNorm if not config.rms_norm 
+            else RMSNorm, eps=config.rms_norm_eps, **factory_kwargs
+        )(config.d_model)
+        
+        if self.fused_add_norm:
+            assert RMSNorm is not None, "RMSNorm import fails"
+            assert isinstance(
+                self.norm, (nn.LayerNorm, RMSNorm)
+            ), "Only LayerNorm and RMSNorm are supported for fused_add_norm"
+
 
     def forward(
         self,
         hidden_states: Union[torch.Tensor, TensorPointer],
         sequence_mask: Union[torch.Tensor, TensorPointer],
         residual: Optional[Union[torch.Tensor, TensorPointer]],
+        inference_params=None,
     ) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
-        hidden_states, residual = self.block(hidden_states, residual)
 
+        if not self.fused_add_norm:
+            # self.layer_idx was assigned when calling create_block
+            # residual=None happens only at the first block
+            residual = hidden_states if (self.layer_idx == 0) else hidden_states + residual
+            hidden_states = self.norm(residual.to(dtype=self.norm.weight.dtype))
+            if self.residual_in_fp32:
+                residual = residual.to(torch.float32)
+        else:
+            fused_add_norm_fn = rms_norm_fn if isinstance(self.norm, RMSNorm) else layer_norm_fn
+            hidden_states, residual = fused_add_norm_fn(
+                hidden_states,
+                self.norm.weight,
+                self.norm.bias,
+                residual=residual,
+                prenorm=True,
+                residual_in_fp32=self.residual_in_fp32,
+                eps=self.norm.eps,
+            )
+        hidden_states = self.mixer(hidden_states, inference_params=inference_params)
+        
         return {
             "hidden_states": hidden_states,
             "sequence_mask": sequence_mask,  # NOTE(fmom): dunno how to use it for now. Just keep it
             "residual": residual,
         }
-
+        
+    def allocate_inference_cache(self, batch_size, max_seqlen, dtype=None, **kwargs):
+        return self.mixer.allocate_inference_cache(batch_size, max_seqlen, dtype=dtype, **kwargs)
 
 class MambaModel(nn.Module):
     def __init__(
