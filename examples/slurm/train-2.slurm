@@ -2,11 +2,12 @@
 #SBATCH --job-name=aaa
 #SBATCH --nodes=2
 #SBATCH --ntasks-per-node=1          # crucial - only 1 task per dist per node!
-#SBATCH --cpus-per-task=96
+#SBATCH --cpus-per-task=60
 #SBATCH --gres=gpu:8
 #SBATCH --exclusive
 #SBATCH --account=ycm@a100
 #SBATCH --constraint=a100
+#SBATCH --reservation=bloom2
 #SBATCH --output=logs/%x_%j.out
 #SBATCz --exclude ip-26-0-150-70,ip-26-0-154-155
 #SBATCz --array 1-10%1

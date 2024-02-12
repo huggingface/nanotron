@@ -6,13 +6,7 @@ checkpoints:
   resume_checkpoint_path: null
   save_initial_state: false
 data:
-  dataset:
-    dataset_overwrite_cache: false
-    dataset_processing_num_proc_per_process: 1
-    hf_dataset_config_name: null
-    hf_dataset_or_datasets: stas/openwebtext-10k
-    hf_dataset_splits: train
-    text_column_name: text
+  dataset: null
   num_loading_workers: 1
   seed: 42
 general:
@@ -70,7 +64,7 @@ optimizer:
   weight_decay: 0.01
   zero_stage: 0
 parallelism:
-  dp: 4
+  dp: 2
   pp: 1
   pp_engine: 1f1b
   recompute_granularity: SELECTIVE

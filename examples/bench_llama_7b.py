@@ -15,7 +15,6 @@ from nanotron.config import (
     ModelArgs,
     OptimizerArgs,
     ParallelismArgs,
-    PretrainDatasetsArgs,
     RandomInit,
     TokenizerArgs,
     TokensArgs,
@@ -66,7 +65,7 @@ parallelism = ParallelismArgs(
 
 tokens = TokensArgs(sequence_length=8192, train_steps=5, micro_batch_size=1, batch_accumulation_per_replica=8)
 
-dataset = PretrainDatasetsArgs(hf_dataset_or_datasets="stas/openwebtext-10k", text_column_name="text")
+dataset = None
 
 checkpoints_path = os.path.dirname(os.path.dirname(__file__)) + "/checkpoints"
 os.makedirs(checkpoints_path, exist_ok=True)

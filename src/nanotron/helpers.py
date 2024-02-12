@@ -493,4 +493,4 @@ def log_throughput(
     )
 
     if dist.get_rank(parallel_context.world_pg) == 0:
-        write_to_csv(config.benchmark_csv_path, table_log, model_tflops, slurm_job_id)
+        write_to_csv(config.general.benchmark_csv_path, table_log, model_tflops, slurm_job_id)
