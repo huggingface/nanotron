@@ -29,7 +29,7 @@ from nanotron.helpers import (
     log_throughput,
     lr_scheduler_builder,
 )
-from nanotron.logging import LoggerWriter, LogItem, human_format, log_rank, set_logger_verbosity_format
+from nanotron.logging import LoggerWriter, LogItem, human_format, log_memory, log_rank, set_logger_verbosity_format
 from nanotron.models import NanotronModel, build_model
 from nanotron.models.base import check_model_has_grad
 from nanotron.models.llama import LlamaForTraining, RotaryEmbedding
@@ -301,16 +301,7 @@ class DistributedTrainer:
         before_tbi_sanity_checks(self.config, self.parallel_context, self.unwrapped_model, self.grad_accumulator)
 
         if self.iteration_step < 5:
-            log_rank(
-                f"[Before train batch iter] Memory usage: {torch.cuda.memory_allocated() / 1024**2:.2f}MiB."
-                f" Peak allocated {torch.cuda.max_memory_allocated() / 1024**2:.2f}MiB."
-                f" Peak reserved: {torch.cuda.max_memory_reserved() / 1024**2:.2f}MiB",
-                logger=logger,
-                level=logging.INFO,
-                group=self.parallel_context.world_pg,
-                rank=0,
-            )
-            torch.cuda.reset_peak_memory_stats()
+            log_memory(logger=logger)
 
         outputs = self.pipeline_engine.train_batch_iter(
             model=self.model,
@@ -321,16 +312,7 @@ class DistributedTrainer:
         )
 
         if self.iteration_step < 5:
-            log_rank(
-                f"[After train batch iter] Memory usage: {torch.cuda.memory_allocated() / 1024**2:.2f}MiB."
-                f" Peak allocated {torch.cuda.max_memory_allocated() / 1024**2:.2f}MiB."
-                f" Peak reserved: {torch.cuda.max_memory_reserved() / 1024**2:.2f}MiB",
-                logger=logger,
-                level=logging.INFO,
-                group=self.parallel_context.world_pg,
-                rank=0,
-            )
-            torch.cuda.reset_peak_memory_stats()
+            log_memory(logger=logger)
 
         after_tbi_sanity_checks(self.config, self.parallel_context, self.unwrapped_model, self.grad_accumulator)
 

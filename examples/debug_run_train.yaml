@@ -1,7 +1,7 @@
 # CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node=8 run_train.py --config-file examples/debug_run_train.yaml
 
 checkpoints:
-  checkpoint_interval: 4
+  checkpoint_interval: 40000
   checkpoints_path: checkpoints/test/
   checkpoints_path_is_shared_file_system: true
   # resume_checkpoint_path: checkpoints_test/
