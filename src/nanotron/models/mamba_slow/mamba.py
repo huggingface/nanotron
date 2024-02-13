@@ -53,6 +53,7 @@ from nanotron.random import RandomStates
 from nanotron.utils import checkpoint_method
 from nanotron.config.models_config import MambaConfig
 
+#TODO(fmom): Need to clean imports
 #NOTE(fmom): mamba_ssm=1.1.1
 # from mamba_ssm.models.mixer_seq_simple import create_block, Mamba, _init_weights
 
@@ -146,12 +147,15 @@ class Mamba(nn.Module):
             async_communication=False,
             contiguous_chunks=None
         )
+        
+        assert self.d_inner % self.tp_pg.size() == 0
+        
         self.conv1d = nn.Conv1d(
-            in_channels=self.d_inner,
-            out_channels=self.d_inner,
+            in_channels=self.d_inner // self.tp_pg.size(),
+            out_channels=self.d_inner // self.tp_pg.size(),
             bias=conv_bias,
             kernel_size=d_conv,
-            groups=self.d_inner,
+            groups=self.d_inner // self.tp_pg.size(),
             padding=d_conv - 1,
             **factory_kwargs,
         )
@@ -169,7 +173,7 @@ class Mamba(nn.Module):
             contiguous_chunks=None
         )
         
-        self.dt_proj = nn.Linear(self.dt_rank, self.d_inner, bias=True, **factory_kwargs)
+        self.dt_proj = nn.Linear(self.dt_rank, self.d_inner // self.tp_pg.size(), bias=True, **factory_kwargs)
 
         # Initialize special dt projection to preserve variance at initialization
         dt_init_std = self.dt_rank**-0.5 * dt_scale
@@ -182,7 +186,7 @@ class Mamba(nn.Module):
 
         # Initialize dt bias so that F.softplus(dt_bias) is between dt_min and dt_max
         dt = torch.exp(
-            torch.rand(self.d_inner, **factory_kwargs) * (math.log(dt_max) - math.log(dt_min))
+            torch.rand(self.d_inner // self.tp_pg.size(), **factory_kwargs) * (math.log(dt_max) - math.log(dt_min))
             + math.log(dt_min)
         ).clamp(min=dt_init_floor)
         # Inverse of softplus: https://github.com/pytorch/pytorch/issues/72759
@@ -196,14 +200,14 @@ class Mamba(nn.Module):
         A = repeat(
             torch.arange(1, self.d_state + 1, dtype=torch.float32, device=device),
             "n -> d n",
-            d=self.d_inner,
+            d=self.d_inner // self.tp_pg.size(),
         ).contiguous()
         A_log = torch.log(A)  # Keep A_log in fp32
         self.A_log = nn.Parameter(A_log)
         self.A_log._no_weight_decay = True
 
         # D "skip" parameter
-        self.D = nn.Parameter(torch.ones(self.d_inner, device=device))  # Keep in fp32
+        self.D = nn.Parameter(torch.ones(self.d_inner // self.tp_pg.size(), device=device))  # Keep in fp32
         self.D._no_weight_decay = True
 
         # self.out_proj = nn.Linear(self.d_inner, self.d_model, bias=bias, **factory_kwargs)
@@ -216,10 +220,6 @@ class Mamba(nn.Module):
             async_communication=tp_linear_async_communication,
             contiguous_chunks=None
         )
-        
-    def _split_weight(self, data: torch.Tensor, dim: int) -> torch.Tensor:
-        chunks = torch.chunk(data, self.tp_pg.size(), dim=dim)
-        return chunks[self.tp_rank].contiguous()
 
     def forward(self, hidden_states, inference_params=None):
         """
@@ -238,32 +238,23 @@ class Mamba(nn.Module):
 
         # We do matmul and transpose BLH -> HBL at the same time
         xz = self.in_proj(hidden_states).transpose(1, 2)
-
         A = -torch.exp(self.A_log.float())  # (d_inner, d_state)
         
-        A_shard = self._split_weight(A, dim=0)        
-        conv1d_weight_shard = self._split_weight(self.conv1d.weight, dim=0)
-        conv1d_bias_shard = self._split_weight(self.conv1d.bias, dim=0)
-        dt_proj_weight_shard = self._split_weight(self.dt_proj.weight, dim=0)
-
-        D_shard = self._split_weight(self.D, dim=0)
-        dt_proj_bias_shard = self._split_weight(self.dt_proj.bias, dim=0)
-            
         # In the backward pass we write dx and dz next to each other to avoid torch.cat
         if self.use_fast_path and inference_params is None and os.environ.get("FAST_PATH", "0") == "1":  # Doesn't support outputting the states
             y = mamba_inner_fn(
                 d_inner=self.d_inner,
                 tp_pg=self.tp_pg,
                 xz=xz,
-                conv1d_weight=conv1d_weight_shard,
-                conv1d_bias=conv1d_bias_shard,
+                conv1d_weight=self.conv1d.weight,
+                conv1d_bias=self.conv1d.bias,
                 x_proj_weight=self.x_proj.weight,
-                delta_proj_weight=dt_proj_weight_shard,
-                A=A_shard,
+                delta_proj_weight=self.dt_proj.weight,
+                A=A,
                 B=None, # input-dependent B
                 C=None, # input-dependent C
-                D=D_shard.float(),
-                delta_bias=dt_proj_bias_shard.float(),
+                D=self.D.float(),
+                delta_bias=self.dt_proj.bias.float(),
                 delta_softplus=True,
             )
         else:
@@ -277,15 +268,14 @@ class Mamba(nn.Module):
                 # Instead F.pad will pad with zeros if seqlen < self.d_conv, and truncate otherwise.
                 conv_state.copy_(F.pad(x, (self.d_conv - x.shape[-1], 0)))  # Update state (B D W)
             if causal_conv1d_fn is None:
-                # TODO(fmom): do split tp
                 x = self.act(self.conv1d(x)[..., :seqlen])
             else:
                 
                 assert self.activation in ["silu", "swish"]
                 x = causal_conv1d_fn(
                     x=x,
-                    weight=rearrange(conv1d_weight_shard, "d 1 w -> d w"),
-                    bias=conv1d_bias_shard,
+                    weight=rearrange(self.conv1d.weight, "d 1 w -> d w"),
+                    bias=self.conv1d.bias,
                     activation=self.activation,
                 )
 
@@ -294,7 +284,7 @@ class Mamba(nn.Module):
             # and L as the fastest moving dimension, since those are what the ssm_scan kernel expects.
             x_dbl = self.x_proj(rearrange(x, "b d l -> (b l) d"))  # (bl d)
             dt, B, C = torch.split(x_dbl, [self.dt_rank, self.d_state, self.d_state], dim=-1)
-            dt = dt_proj_weight_shard @ dt.t()
+            dt = self.dt_proj.weight @ dt.t()
             dt = rearrange(dt, "d (b l) -> b d l", l=seqlen)
             B = rearrange(B, "(b l) dstate -> b dstate l", l=seqlen).contiguous()
             C = rearrange(C, "(b l) dstate -> b dstate l", l=seqlen).contiguous()
@@ -302,12 +292,12 @@ class Mamba(nn.Module):
             y = selective_scan_fn(
                 x,
                 dt,
-                A_shard,
+                A,
                 B,
                 C,
-                D_shard.float(),
+                self.D.float(),
                 z=z,
-                delta_bias=dt_proj_bias_shard.float(),
+                delta_bias=self.dt_proj.bias.float(),
                 delta_softplus=True,
                 return_last_state=ssm_state is not None,
             )
@@ -432,7 +422,6 @@ class Embedding(nn.Module, AttachableStore):
             store["past_length"] = past_length + cumsum_mask[:, -1]
 
         # Format input in `[seq_length, batch_size]` to support high TP with low batch_size
-        #NOTE(fmom): undo transpose for now since Mamba is not using TP
         # input_ids = input_ids.transpose(0, 1)
         input_embeds = self.token_embedding(input_ids)
         return {"input_embeds": input_embeds}
@@ -636,6 +625,7 @@ class MambaModel(nn.Module):
 
         return fp32_sharded_logits, hidden_states
 
+    #TODO(fmom): clean this
     def _print_param_stat(self, param):
         print(f"\tmin={param.min().item()}")
         print(f"\tmean={param.mean().item()}")
