@@ -23,7 +23,8 @@ jobs:
       image: runpod/pytorch:2.1.1-py3.10-cuda12.1.1-devel-ubuntu22.04
       ports:
         - 80
-      options: --gpus all --shm-size "8G"
+      options: --gpus all --rm --shm-size "8G"
+    timeout-minutes: 90
     steps:
     - uses: actions/checkout@v3
     - name: Python environment
