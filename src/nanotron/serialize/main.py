@@ -13,7 +13,7 @@ from nanotron.distributed import get_global_rank
 from nanotron.logging import log_rank
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter
-from nanotron.sanity_checks import assert_tensor_synced_across_pg
+from nanotron.sanity_checks import assert_tensor_synced_across_pg, check_optim_state_in_sync
 from nanotron.serialize.metadata import CheckpointMetadata, load_meta, save_meta
 from nanotron.serialize.optimizer import load_lr_scheduler, load_optimizer, save_lr_scheduler, save_optimizer
 from nanotron.serialize.weights import load_weights, save_weights
@@ -49,6 +49,7 @@ def save(
     should_save_optimizer: bool = True,
     should_save_lr_scheduler: bool = True,
     checkpoint_metadata: dict = None,
+    sanity_checks: bool = True,
 ) -> None:
     if checkpoint_metadata is None:
         checkpoint_metadata = {}
@@ -108,89 +109,83 @@ def save(
     # TODO @thomas21: sanity check, not sure whether that needs to happen at testing or now (depends how much it costs)
     ###
     # SANITY CHECK: Check that the model params are synchronized across `parallel_context.dp_pg`
-    for name, param_or_buffer in sorted(model.state_dict().items(), key=lambda x: x[0]):
-        assert_tensor_synced_across_pg(
-            tensor=param_or_buffer, pg=parallel_context.dp_pg, msg=lambda err: f"{name} are not synced across DP {err}"
-        )
+    if sanity_checks:
+        for name, param_or_buffer in sorted(model.state_dict().items(), key=lambda x: x[0]):
+            assert_tensor_synced_across_pg(
+                tensor=param_or_buffer,
+                pg=parallel_context.dp_pg,
+                msg=lambda err: f"{name} are not synced across DP {err}",
+            )
 
-    # SANITY CHECK: Check that the tied parameters are synchronized
-    sorted_tied_parameters = sorted(
-        (
-            param
-            for parameters_group in optimizer.param_groups
-            for param in parameters_group["params"]
-            if param.requires_grad and isinstance(param, NanotronParameter) and param.is_tied
-        ),
-        key=lambda param: param.get_tied_info().name,
-    )
-    for tied_param in sorted_tied_parameters:
-        tied_info = tied_param.get_tied_info()
-        group_ranks = tied_info.global_ranks
-        group = parallel_context.world_ranks_to_pg[group_ranks]
-        assert_tensor_synced_across_pg(
-            tensor=tied_param, pg=group, msg=lambda err: f"Tied {tied_info.name} are not synced {err}"
+        # SANITY CHECK: Check that the tied parameters are synchronized
+        sorted_tied_parameters = sorted(
+            (
+                param
+                for parameters_group in optimizer.param_groups
+                for param in parameters_group["params"]
+                if param.requires_grad and isinstance(param, NanotronParameter) and param.is_tied
+            ),
+            key=lambda param: param.get_tied_info().name,
         )
+        for tied_param in sorted_tied_parameters:
+            tied_info = tied_param.get_tied_info()
+            group_ranks = tied_info.global_ranks
+            group = parallel_context.world_ranks_to_pg[group_ranks]
+            assert_tensor_synced_across_pg(
+                tensor=tied_param, pg=group, msg=lambda err: f"Tied {tied_info.name} are not synced {err}"
+            )
 
-    if not optimizer.inherit_from(optim.ZeroDistributedOptimizer):
-        # SANITY CHECK: Check that the optimizer state are synchronized across `parallel_context.dp_pg`
-        for id_, optim_state in sorted(optimizer.state_dict()["state"].items(), key=lambda x: x[0]):
+        if not optimizer.inherit_from(optim.ZeroDistributedOptimizer):
+            check_optim_state_in_sync(optimizer, parallel_context.dp_pg)
+
+        # SANITY CHECK: tied parameters have their optimizer states synchronized
+        # Compute a mapping from id_ to index in the optimizer sense
+        state_dict = optimizer.state_dict()
+        assert len(optimizer.param_groups) == len(state_dict["param_groups"])
+        index_to_param = {}
+        for real_param_group, index_param_group in zip(optimizer.param_groups, state_dict["param_groups"]):
+            indices = index_param_group["params"]
+            parameters = real_param_group["params"]
+            assert len(indices) == len(parameters)
+            for param, index in zip(parameters, indices):
+                assert index not in index_to_param
+                index_to_param[index] = param
+
+        current_state_dict = optimizer.state_dict()
+        for index, optim_state in sorted(current_state_dict["state"].items(), key=lambda x: x[0]):
+            param = index_to_param[index]
+            if not isinstance(param, NanotronParameter):
+                continue
+            if not param.is_tied:
+                # If it's not shared, we don't need to check it's synced
+                continue
+            tied_info = param.get_tied_info()
+            group_ranks = tied_info.global_ranks
+            group = parallel_context.world_ranks_to_pg[group_ranks]
+            reference_rank = 0
+            current_rank = dist.get_rank(group)
+
             for name, tensor in optim_state.items():
-                if name == "step":
-                    # TODO @thomasw21: `torch` introduced a weird exception https://github.com/pytorch/pytorch/pull/75214
-                    tensor = tensor.to("cuda")
+                # FIXME @thomasw21: Some data is actually on `cpu`, just for this test we most it to `cuda`
+                tensor = tensor.to("cuda")
 
-                assert_tensor_synced_across_pg(
-                    tensor=tensor, pg=parallel_context.dp_pg, msg=lambda err: f"{name} are not synced across DP {err}"
+                if current_rank == reference_rank:
+                    reference_tensor = tensor
+                else:
+                    reference_tensor = torch.empty_like(tensor)
+                dist.broadcast(
+                    reference_tensor,
+                    src=get_global_rank(group=group, group_rank=reference_rank),
+                    group=group,
                 )
-
-    # SANITY CHECK: tied parameters have their optimizer states synchronized
-    # Compute a mapping from id_ to index in the optimizer sense
-    state_dict = optimizer.state_dict()
-    assert len(optimizer.param_groups) == len(state_dict["param_groups"])
-    index_to_param = {}
-    for real_param_group, index_param_group in zip(optimizer.param_groups, state_dict["param_groups"]):
-        indices = index_param_group["params"]
-        parameters = real_param_group["params"]
-        assert len(indices) == len(parameters)
-        for param, index in zip(parameters, indices):
-            assert index not in index_to_param
-            index_to_param[index] = param
-
-    current_state_dict = optimizer.state_dict()
-    for index, optim_state in sorted(current_state_dict["state"].items(), key=lambda x: x[0]):
-        param = index_to_param[index]
-        if not isinstance(param, NanotronParameter):
-            continue
-        if not param.is_tied:
-            # If it's not shared, we don't need to check it's synced
-            continue
-        tied_info = param.get_tied_info()
-        group_ranks = tied_info.global_ranks
-        group = parallel_context.world_ranks_to_pg[group_ranks]
-        reference_rank = 0
-        current_rank = dist.get_rank(group)
-
-        for name, tensor in optim_state.items():
-            # FIXME @thomasw21: Some data is actually on `cpu`, just for this test we most it to `cuda`
-            tensor = tensor.to("cuda")
-
-            if current_rank == reference_rank:
-                reference_tensor = tensor
-            else:
-                reference_tensor = torch.empty_like(tensor)
-            dist.broadcast(
-                reference_tensor,
-                src=get_global_rank(group=group, group_rank=reference_rank),
-                group=group,
-            )
-            torch.testing.assert_close(
-                tensor,
-                reference_tensor,
-                atol=0,
-                rtol=0,
-                msg=lambda msg: f"tensor at {current_state_dict['names'][index]} doesn't match with our reference. Optimizer key: {name}\nCur: {tensor}\nRef: {reference_tensor}\n{msg}",
-            )
-    ###
+                torch.testing.assert_close(
+                    tensor,
+                    reference_tensor,
+                    atol=0,
+                    rtol=0,
+                    msg=lambda msg: f"tensor at {current_state_dict['names'][index]} doesn't match with our reference. Optimizer key: {name}\nCur: {tensor}\nRef: {reference_tensor}\n{msg}",
+                )
+        ###
 
     dist.barrier(parallel_context.world_pg)
 

@@ -86,10 +86,30 @@ CONFIG_TO_MODEL_CLASS = {
 
 
 class DistributedTrainer:
-    def __init__(self, config_or_config_file: Union[Config, str], config_class: Type[Config] = Config):
+    def __init__(
+        self,
+        config_or_config_file: Union[Config, str],
+        config_class: Type[Config] = Config,
+        model_config_class: Optional[Type] = None,
+        model_class: Type[NanotronModel] = None,
+    ):
+        """
+        Nanotron's distributed trainer.
+
+        Args:
+            config_or_config_file: Either a `Config` object or a path to a YAML file containing the config.
+            config_class: The `Config` class to use.
+            model_config_class: The `ModelConfig` class to use (for example `LlamaConfig`). Defaults to `None` which will use the model config class defined in the config.
+            model_class: The `NanotronModel` class to use (for example `LlamaForTraining`). Defaults to `None` which will use the model class defined in the config.
+        """
+
         super().__init__()
-        self.config = get_config_from_file(config_or_config_file, config_class=config_class)
+        self.config = get_config_from_file(
+            config_or_config_file, config_class=config_class, model_config_class=model_config_class
+        )
         self.model_config = self.config.model.model_config
+        if model_class is not None:
+            CONFIG_TO_MODEL_CLASS[self.model_config.__class__.__name__] = model_class
 
         ########################################
         ## We start with setting up loggers and process groups
@@ -130,7 +150,7 @@ class DistributedTrainer:
             parallel_config=self.config.parallelism, tp_pg=self.parallel_context.tp_pg
         )
         self.model = self.init_model()  # Defines self.model
-        self.normalized_model: NanotronModel = (
+        self.unwrapped_model: NanotronModel = (
             self.model.module if isinstance(self.model, DistributedDataParallel) else self.model
         )
 
@@ -178,12 +198,12 @@ class DistributedTrainer:
 
         # Setup tensorboard write and log writers on output rank
         self.logger_ranks = self.parallel_context.world_rank_matrix[
-            self.normalized_model.output_pp_rank, 0, 0
+            self.unwrapped_model.output_pp_rank, 0, 0
         ].flatten()
         self.loggerwriter = self.setup_log_writers()
 
         # Log where each module is instantiated
-        self.normalized_model.log_modules(level=logging.DEBUG, group=self.parallel_context.world_pg, rank=0)
+        self.unwrapped_model.log_modules(level=logging.DEBUG, group=self.parallel_context.world_pg, rank=0)
 
         self.micro_batch_size = self.config.tokens.micro_batch_size
         self.n_micro_batches_per_batch = self.config.tokens.batch_accumulation_per_replica
@@ -243,12 +263,12 @@ class DistributedTrainer:
         )
         # TODO @nouamanetazi: refactor this
         # Useful mapping
-        self.normalized_model = self.model.module if isinstance(self.model, DistributedDataParallel) else self.model
-        self.normalized_model.module_id_to_prefix = {
-            id(module): f"{module_name}." for module_name, module in self.normalized_model.named_modules()
+        self.unwrapped_model = self.model.module if isinstance(self.model, DistributedDataParallel) else self.model
+        self.unwrapped_model.module_id_to_prefix = {
+            id(module): f"{module_name}." for module_name, module in self.unwrapped_model.named_modules()
         }
         # Fix the root_model
-        self.normalized_model.module_id_to_prefix[id(self.normalized_model)] = ""
+        self.unwrapped_model.module_id_to_prefix[id(self.unwrapped_model)] = ""
 
         prof = get_profiler(config=self.config)
         torch.cuda.empty_cache()
@@ -278,7 +298,7 @@ class DistributedTrainer:
     def training_step(
         self, dataloader: Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]]
     ) -> Tuple[Iterable[Dict], Optional[torch.Tensor]]:
-        before_tbi_sanity_checks(self.config, self.parallel_context, self.normalized_model, self.grad_accumulator)
+        before_tbi_sanity_checks(self.config, self.parallel_context, self.unwrapped_model, self.grad_accumulator)
 
         if self.iteration_step < 5:
             log_rank(
@@ -312,7 +332,7 @@ class DistributedTrainer:
             )
             torch.cuda.reset_peak_memory_stats()
 
-        after_tbi_sanity_checks(self.config, self.parallel_context, self.normalized_model, self.grad_accumulator)
+        after_tbi_sanity_checks(self.config, self.parallel_context, self.unwrapped_model, self.grad_accumulator)
 
         if isinstance(self.model, DistributedDataParallel) and self.grad_accumulator is not None:
             # Wait for fp32 grads allreduce to finish to make sure grads are synced across DP
@@ -335,24 +355,17 @@ class DistributedTrainer:
 
         # TODO @nouamane: Put this in hooks so we can overlap communication with gradient computation on the last backward pass.
         sync_tied_weights_gradients(
-            module=self.normalized_model,
+            module=self.unwrapped_model,
             parallel_context=self.parallel_context,
             grad_accumulator=self.grad_accumulator,
         )
 
         # Clip gradients
         if self.config.optimizer.clip_grad is not None:
-            # Normalize DDP
+            # Unwrap DDP
             named_parameters = [
-                (
-                    param.get_tied_info().get_full_name_from_module_id_to_prefix(
-                        module_id_to_prefix=self.normalized_model.module_id_to_prefix
-                    )
-                    if param.is_tied
-                    else name,
-                    param,
-                )
-                for name, param in self.normalized_model.named_parameters()
+                (name, param)
+                for name, param in self.unwrapped_model.get_named_params_with_correct_tied()
                 if param.requires_grad
             ]
             # TODO @nouamane: we need to split `world_rank_matrix` along PP axis, to separate ref from active model
@@ -372,7 +385,7 @@ class DistributedTrainer:
             )
 
         before_optim_step_sanity_checks(
-            self.config, self.parallel_context, self.normalized_model, self.grad_accumulator
+            self.config, self.parallel_context, self.unwrapped_model, self.grad_accumulator
         )
 
         # Compute DP average loss and overlap with optimizer step
@@ -394,9 +407,7 @@ class DistributedTrainer:
         # Update the learning rate
         self.lr_scheduler.step()
 
-        after_optim_step_sanity_checks(
-            self.config, self.parallel_context, self.normalized_model, self.grad_accumulator
-        )
+        after_optim_step_sanity_checks(self.config, self.parallel_context, self.unwrapped_model, self.grad_accumulator)
 
         if handle is not None:
             handle.wait()
@@ -425,7 +436,7 @@ class DistributedTrainer:
         tokens_per_sec = (
             self.global_batch_size * self.sequence_length / (elapsed_time_per_iteration_ms / 1000)
         )  # tokens_per_sec is calculated using sequence_length
-        model_tflops, hardware_tflops = self.normalized_model.get_flops_per_sec(
+        model_tflops, hardware_tflops = self.unwrapped_model.get_flops_per_sec(
             iteration_time_in_sec=elapsed_time_per_iteration_ms / 1000,
             sequence_length=self.sequence_length,
             global_batch_size=self.global_batch_size,
@@ -519,9 +530,8 @@ class DistributedTrainer:
                 )
                 self.model_config.max_position_embeddings = self.config.tokens.sequence_length
 
-        # log_rank(pformat(self.config), logger=logger, level=logging.INFO, rank=0)
-        log_rank(pformat(self.config), logger=logger, level=logging.INFO, rank=0)
-        log_rank(pformat(self.model_config), logger=logger, level=logging.INFO, rank=0)
+        log_rank("Config:\n" + pformat(self.config), logger=logger, level=logging.INFO, rank=0)
+        log_rank("Model Config:\n" + pformat(self.model_config), logger=logger, level=logging.INFO, rank=0)
 
         model_config_cls = self.model_config.__class__.__name__
         assert (
@@ -536,7 +546,7 @@ class DistributedTrainer:
                 random_states=self.random_states,
             ),
         )
-        normalized_model = model.module if isinstance(model, DistributedDataParallel) else model
+        unwrapped_model = model.module if isinstance(model, DistributedDataParallel) else model
 
         # Load or initialize model weights
         self.init_checkpoint_path = parse_ckpt_path(config=self.config)
@@ -545,7 +555,7 @@ class DistributedTrainer:
             # Reload from a training checkpoint
             log_rank(f"Loading weights from {self.init_checkpoint_path}", logger=logger, level=logging.INFO, rank=0)
             self.param_shard_metadata = load_weights(
-                model=normalized_model, parallel_context=self.parallel_context, root_folder=self.init_checkpoint_path
+                model=unwrapped_model, parallel_context=self.parallel_context, root_folder=self.init_checkpoint_path
             )
             reloaded_from_checkpoint = True
         if not reloaded_from_checkpoint:
@@ -553,13 +563,13 @@ class DistributedTrainer:
             if isinstance(self.config.model.init_method, ExistingCheckpointInit):
                 # Initialize model from an pretrained model checkpoint
                 self.param_shard_metadata = load_weights(
-                    model=normalized_model,
+                    model=unwrapped_model,
                     parallel_context=self.parallel_context,
                     root_folder=self.config.model.init_method.path,
                 )
             elif isinstance(self.config.model.init_method, RandomInit):
                 # Initialize model randomly
-                normalized_model.init_model_randomly(
+                unwrapped_model.init_model_randomly(
                     init_method=init_method_normal(self.config.model.init_method.std),
                     scaled_init_method=scaled_init_method_normal(
                         self.config.model.init_method.std, self.model_config.num_hidden_layers
@@ -574,7 +584,7 @@ class DistributedTrainer:
                 for (_, group_ranks), param in sorted(
                     get_tied_id_to_param(
                         parameters=model.parameters(),
-                        root_module=normalized_model,
+                        root_module=unwrapped_model,
                     ).items(),
                     key=lambda x: x[0],
                 ):
@@ -594,7 +604,9 @@ class DistributedTrainer:
         parallel_context = self.parallel_context
 
         parallel_config = config.parallelism
-        make_ddp = not (config.optimizer.accumulate_grad_in_fp32 and config.optimizer.zero_stage > 0)
+        make_ddp = parallel_context.data_parallel_size > 1 and not (
+            config.optimizer.accumulate_grad_in_fp32 and config.optimizer.zero_stage > 0
+        )
 
         # Build model and set pp ranks
         model = build_model(
@@ -713,7 +725,7 @@ class DistributedTrainer:
         self.config.general.consumed_train_samples = self.consumed_train_samples
 
         save(
-            model=self.normalized_model,
+            model=self.unwrapped_model,
             optimizer=self.optimizer,
             lr_scheduler=self.lr_scheduler,
             should_save_model=bool(
@@ -771,18 +783,16 @@ def mark_tied_parameters(
             root_module=model, ties=shared_embeddings, parallel_context=parallel_context, reduce_op=dist.ReduceOp.SUM
         )
 
+    # Tie custom params
+    model.tie_custom_params()
+
     # Sync all parameters that have the same name and that are not sharded
     assert not isinstance(model, DistributedDataParallel), "model shouldn't be DDP at this point"
     for module_name, module in model.named_modules():
         for param_name, param in module.named_parameters(recurse=False):
             name = f"{module_name}.{param_name}"
 
-            # if isinstance(model, Starcoder2ForTraining) and ".qkv.kv." in name
-            #     assert param.is_tied, f"Expected {name} to already be synced"
-            #     # kv is deliberately skipped as it's tied in model init (_mark_kv_parameters_in_module_as_tied)
-            #     continue
-
-            if isinstance(param, NanotronParameter) and param.is_sharded:
+            if isinstance(param, NanotronParameter) and (param.is_sharded or param.is_tied):
                 continue
 
             if isinstance(module, TensorParallelRowLinear) and "bias" == param_name:

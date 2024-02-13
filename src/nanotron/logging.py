@@ -214,7 +214,7 @@ def log_rank(
 
 @lru_cache(maxsize=None)
 def warn_once(
-    logger: Logger, msg: str, group: Optional[dist.ProcessGroup] = None, rank: Optional[int] = None, **kwargs
+    msg: str, logger: Logger, group: Optional[dist.ProcessGroup] = None, rank: Optional[int] = None, **kwargs
 ):
     log_rank(msg=msg, logger=logger, level=logging.WARNING, group=group, rank=rank, **kwargs)
 

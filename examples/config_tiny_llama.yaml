@@ -1,10 +1,8 @@
-# CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node=8 run_train.py --config-file examples/config_tiny_llama.yaml
-
 checkpoints:
-  checkpoint_interval: 4
-  checkpoints_path: checkpoints/test/
-  checkpoints_path_is_shared_file_system: true
-  # resume_checkpoint_path: checkpoints_test/
+  checkpoint_interval: 10
+  checkpoints_path: /fsx/thomwolf/github/nanotron/checkpoints
+  checkpoints_path_is_shared_file_system: false
+  resume_checkpoint_path: null
   save_initial_state: false
 data:
   dataset:
@@ -44,7 +42,7 @@ model:
     is_llama_config: true
     max_position_embeddings: 256
     num_attention_heads: 4
-    num_hidden_layers: 20
+    num_hidden_layers: 2
     num_key_value_heads: 4
     pad_token_id: null
     pretraining_tp: 1

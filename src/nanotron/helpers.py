@@ -25,6 +25,7 @@ from nanotron.config import (
 )
 from nanotron.distributed import ProcessGroup
 from nanotron.logging import LogItem, log_rank
+from nanotron.models.base import NanotronModel
 from nanotron.optim.base import BaseOptimizer, Optimizer
 from nanotron.optim.gradient_accumulator import (
     FP32GradBucketManager,
@@ -80,16 +81,33 @@ def init_random_states(parallel_config: ParallelismArgs, tp_pg: ProcessGroup):
 
 def lr_scheduler_builder(optimizer: Optimizer, lr_scheduler_args: LRSchedulerArgs, total_training_steps: int):
     if lr_scheduler_args.lr_decay_steps is None:
-        lr_decay_steps = (
-            total_training_steps - lr_scheduler_args.lr_warmup_steps
-            if lr_scheduler_args.lr_warmup_steps is not None
-            else total_training_steps
-        )
+        lr_decay_steps = total_training_steps
+        if lr_scheduler_args.lr_warmup_steps is not None:
+            lr_decay_steps -= lr_scheduler_args.lr_warmup_steps
+        if lr_scheduler_args.lr_decay_starting_step is not None:
+            lr_decay_steps -= lr_scheduler_args.lr_decay_starting_step
     else:
         lr_decay_steps = lr_scheduler_args.lr_decay_steps
 
+    if lr_scheduler_args.lr_decay_starting_step is None:
+        if lr_scheduler_args.lr_warmup_steps is not None:
+            lr_decay_starting_step = lr_scheduler_args.lr_warmup_steps
+        else:
+            lr_decay_starting_step = 0
+    else:
+        lr_decay_starting_step = lr_scheduler_args.lr_decay_starting_step
+
     def lr_lambda(current_step: int):
-        """LR Scheduling function, it has 3 phases: warmup, decay, then constant. Warmup starts at lr=0 and ends at `lr=lr`, then it decays until `min_decay_lr` and then stays constant."""
+        """LR Scheduling function, it has from 2 up to 4 phases:
+        - warmup,
+        - optional: constant (if lr_decay_starting_step is set)
+        - decay
+        - optional: constant (if lr_decay_steps and/or lr_decay_starting_step are set)
+        Warmup starts at lr=0 and ends at `lr=lr`
+        Then it stays constant at lr if lr_decay_starting_step is set and larger than lr_warmup_steps
+        Then it decays until `min_decay_lr` for lr_decay_steps if set, else: (total_training_steps - lr_warmup_steps or lr_decay_starting_step)
+        Then it stays constant at min_decay_lr if lr_decay_starting_step is set and total_training_steps is larger)
+        """
         # No warmup or decay
         if lr_scheduler_args.lr_warmup_steps == 0 and lr_decay_steps == 0:
             return lr_scheduler_args.learning_rate
@@ -103,33 +121,34 @@ def lr_scheduler_builder(optimizer: Optimizer, lr_scheduler_args: LRSchedulerArg
             else:
                 raise ValueError(f"Unknown warmup style {lr_scheduler_args.lr_warmup_style}")
 
+        # Optional constant phase at learning_rate
+        elif current_step < lr_decay_starting_step:
+            lmbda = lr_scheduler_args.learning_rate
+
         # Decay phase
-        elif (
-            lr_scheduler_args.lr_decay_style is not None
-            and current_step < lr_decay_steps + lr_scheduler_args.lr_warmup_steps
-        ):
+        elif lr_scheduler_args.lr_decay_style is not None and current_step < lr_decay_starting_step + lr_decay_steps:
             if lr_scheduler_args.lr_decay_style == "cosine":
                 lmbda = (
                     lr_scheduler_args.min_decay_lr
                     + (lr_scheduler_args.learning_rate - lr_scheduler_args.min_decay_lr)
-                    * (1 + math.cos(math.pi * (current_step - lr_scheduler_args.lr_warmup_steps) / lr_decay_steps))
+                    * (1 + math.cos(math.pi * (current_step - lr_decay_starting_step) / lr_decay_steps))
                     / 2
                 )
             elif lr_scheduler_args.lr_decay_style == "linear":
                 lmbda = (
                     lr_scheduler_args.min_decay_lr
                     + (lr_scheduler_args.learning_rate - lr_scheduler_args.min_decay_lr)
-                    * (lr_decay_steps - (current_step - lr_scheduler_args.lr_warmup_steps))
+                    * (lr_decay_steps - (current_step - lr_decay_starting_step))
                     / lr_decay_steps
                 )
             else:
                 raise ValueError(f"Unknown decay style {lr_scheduler_args.lr_decay_style}")
 
-        # Constant phase
+        # Optional constant phase at min_decay_lr
         else:
             lmbda = lr_scheduler_args.min_decay_lr
 
-        lmbda /= lr_scheduler_args.learning_rate
+        lmbda /= lr_scheduler_args.learning_rate  # Normalization for pytorch
         return lmbda
 
     lr_scheduler = LambdaLR(optimizer.get_base_optimizer(), lr_lambda=lr_lambda)
@@ -139,24 +158,15 @@ def lr_scheduler_builder(optimizer: Optimizer, lr_scheduler_args: LRSchedulerArg
 def init_optimizer_and_grad_accumulator(
     model: nn.Module, optimizer_args: OptimizerArgs, parallel_context: ParallelContext
 ) -> Tuple[BaseOptimizer, GradientAccumulator]:
-    # Normalize DDP
-    normalized_model = model.module if isinstance(model, DistributedDataParallel) else model
+    # Unwrap DDP
+    unwrapped_model: NanotronModel = model.module if isinstance(model, DistributedDataParallel) else model
 
-    module_id_to_prefix = {id(module): f"{module_name}." for module_name, module in normalized_model.named_modules()}
+    module_id_to_prefix = {id(module): f"{module_name}." for module_name, module in unwrapped_model.named_modules()}
     # Fix the root_model
-    root_model_id = id(normalized_model)
-    module_id_to_prefix[root_model_id] = ""
+    module_id_to_prefix[id(unwrapped_model)] = ""
 
     # named parameters
-    named_parameters = [
-        (
-            param.get_tied_info().get_full_name_from_module_id_to_prefix(module_id_to_prefix=module_id_to_prefix)
-            if param.is_tied
-            else name,
-            param,
-        )
-        for name, param in normalized_model.named_parameters()
-    ]
+    named_parameters = list(unwrapped_model.get_named_params_with_correct_tied())
 
     # Basic optimizer builder
     def basic_optimizer_builder(named_param_groups):
@@ -244,7 +254,7 @@ def init_optimizer_and_grad_accumulator(
                     )
                     if param.is_tied
                     else name
-                    for name, param in normalized_model.named_parameters()
+                    for name, param in unwrapped_model.named_parameters()
                 },
             ),
             hook=get_fp32_accum_hook(

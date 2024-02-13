@@ -16,12 +16,11 @@
 
 Some dependencies to update before using:
  - install `torch>=2.0`
- - install `flash-attn>=2.4.2`
+ - install `flash-attn>=2.5.0`
  """
 
 import inspect
 import math
-import os
 from typing import Dict, List, Optional, Tuple, Union
 
 import torch
@@ -36,7 +35,6 @@ from torch.nn import functional as F
 
 from nanotron import distributed as dist
 from nanotron.config import ParallelismArgs, RecomputeGranularity, Starcoder2Config
-from nanotron.distributed import get_global_rank
 from nanotron.generation.generate_store import AttachableStore
 from nanotron.models import NanotronModel
 from nanotron.nn.activations import ACT2FN
@@ -54,7 +52,7 @@ from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelEmbedding,
     TensorParallelRowLinear,
 )
-from nanotron.parallel.tied_parameters import create_tied_parameter
+from nanotron.parallel.tied_parameters import tie_parameters
 from nanotron.random import RandomStates, branch_random_state
 from nanotron.utils import checkpoint_method
 
@@ -571,7 +569,6 @@ class MQAColumnLinears(nn.Module):
 
         # Marking as tied/sharded
         mark_all_parameters_in_module_as_sharded(self.q, pg=self.pg, split_config=SplitConfig(split_dim=0))
-        self._mark_kv_parameters_in_module_as_tied()
 
         # Init
         self.reset_parameters()
@@ -586,18 +583,6 @@ class MQAColumnLinears(nn.Module):
             fan_in, _ = init._calculate_fan_in_and_fan_out(self._qkv_weight)
             bound = 1 / math.sqrt(fan_in) if fan_in > 0 else 0
             init.uniform_(self._qkv_bias, -bound, bound)
-
-    def _mark_kv_parameters_in_module_as_tied(self):
-        for name, param in list(self.kv.named_parameters()):
-            new_param = create_tied_parameter(
-                parameter=param,
-                name=name,
-                global_ranks=tuple(sorted((get_global_rank(self.pg, i) for i in range(self.pg.size())))),
-                # Always has to be ReduceOp SUM as now this is always duplicated regardless of tp mode
-                reduce_op=dist.ReduceOp.SUM,
-                root_module=self.kv,
-            )
-            setattr(self.kv, name, new_param)
 
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         if self.use_MQAColumnLinearReduceScatterAsyncCommunication:
@@ -769,7 +754,7 @@ class CausalSelfMQA(nn.Module, AttachableStore):
                 # but [ False, False, False, False,  True,  True,  False,  False,  True,  True] is not (can't mask in the middle of sequence)
                 assert ~(
                     sequence_mask[:, :-1] & (~sequence_mask[:, 1:])  # True is never followed by False
-                ).any(), f"Can't mask in the middle of sequence, please use USE_FAST=0 instead.\nGot sequence_mask: {sequence_mask}"
+                ).any(), "Can't mask in the middle of sequence, please make sure that pads are at the left of the sequence if existing"
 
                 # preallocate k_cache, v_cache to self.prefill_kv_len
                 k_cache = torch.zeros(
@@ -1004,7 +989,7 @@ class CausalSelfGQA(nn.Module, AttachableStore):
                 # but [ False, False, False, False,  True,  True,  False,  False,  True,  True] is not (can't mask in the middle of sequence)
                 assert ~(
                     sequence_mask[:, :-1] & (~sequence_mask[:, 1:])  # True is never followed by False
-                ).any(), f"Can't mask in the middle of sequence, please use USE_FAST=0 instead.\nGot sequence_mask: {sequence_mask}"
+                ).any(), "Can't mask in the middle of sequence, please make sure that pads are at the left of the sequence if existing"
 
                 # preallocate k_cache, v_cache to self.prefill_kv_len
                 k_cache = torch.zeros(
@@ -1450,6 +1435,36 @@ class Starcoder2ForTraining(NanotronModel):
             )["loss"]
         }
 
+    def tie_custom_params(self) -> None:
+        # find all params with names qkv.kv.weight and qkv.kv.bias in them
+        for module_name, module in self.named_modules():
+            for param_name, param in module.named_parameters(recurse=False):
+                name = f"{module_name}.{param_name}"
+                if ".qkv.kv." in name:
+                    assert not param.is_tied, f"Parameter {name} is already tied"
+                    shared_weights = [
+                        (
+                            name,
+                            # This adds all the tp_ranks in one go
+                            tuple(
+                                sorted(
+                                    self.parallel_context.world_rank_matrix[
+                                        dist.get_rank(self.parallel_context.pp_pg),
+                                        dist.get_rank(self.parallel_context.dp_pg),
+                                        :,
+                                    ]
+                                )
+                            ),
+                        )
+                    ]
+                    tie_parameters(
+                        root_module=self,
+                        ties=shared_weights,
+                        parallel_context=self.parallel_context,
+                        # We always SUM grads, because kv weights are always duplicated in MQA
+                        reduce_op=dist.ReduceOp.SUM,
+                    )
+
     @torch.no_grad()
     def init_model_randomly(self, init_method, scaled_init_method):
         model = self
@@ -1554,8 +1569,7 @@ class Starcoder2ForTraining(NanotronModel):
 
                         assert full_param_name not in initialized_parameters
                         initialized_parameters.add(full_param_name)
-                elif os.environ.get("USE_FAST") and isinstance(module, MQAColumnLinears):
-                    # TODO @thomasw21: Handle the non fast version
+                elif isinstance(module, MQAColumnLinears):
                     # Somehow Megatron-LM does something super complicated, https://github.com/NVIDIA/Megatron-LM/blob/2360d732a399dd818d40cbe32828f65b260dee11/megatron/core/tensor_parallel/layers.py#L96
                     # What it does:
                     #  - instantiate a buffer of the `full size` in fp32
@@ -1632,7 +1646,7 @@ class Starcoder2ForTraining(NanotronModel):
     def get_block_compute_costs(self):
         """Computes the compute cost of each block in the model so that we can do a better job of load balancing."""
         model_config = self.config
-        d_ff = model_config.n_inner if model_config.n_inner is not None else 4 * model_config.hidden_size
+        d_ff = model_config.n_inner if model_config.intermediate_size is not None else 4 * model_config.hidden_size
         d_qkv = model_config.hidden_size // model_config.num_attention_heads
         block_compute_costs = {
             # CausalSelfAttention (qkv proj + attn out) + MLP
