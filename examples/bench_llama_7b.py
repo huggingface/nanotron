@@ -15,6 +15,7 @@ from nanotron.config import (
     ModelArgs,
     OptimizerArgs,
     ParallelismArgs,
+    PretrainDatasetsArgs,
     RandomInit,
     TokenizerArgs,
     TokensArgs,
@@ -65,7 +66,7 @@ parallelism = ParallelismArgs(
 
 tokens = TokensArgs(sequence_length=8192, train_steps=5, micro_batch_size=1, batch_accumulation_per_replica=8)
 
-dataset = None
+dataset = PretrainDatasetsArgs(hf_dataset_or_datasets="stas/openwebtext-10k", text_column_name="text")
 
 checkpoints_path = os.path.dirname(os.path.dirname(__file__)) + "/checkpoints"
 os.makedirs(checkpoints_path, exist_ok=True)
@@ -90,6 +91,6 @@ if __name__ == "__main__":
     config.save_as_yaml(f"{dir}/config_llama.yaml")
 
     # Launch training
-    # os.system("export CUDA_DEVICE_MAX_CONNECTIONS=1")
-    # gpus = config.parallelism.dp * config.parallelism.pp * config.parallelism.tp
-    # os.system(f"torchrun --nproc_per_node={gpus} run_train.py --config-file {dir}/config_llama.yaml")
+    os.system("export CUDA_DEVICE_MAX_CONNECTIONS=1")
+    gpus = config.parallelism.dp * config.parallelism.pp * config.parallelism.tp
+    os.system(f"torchrun --nproc_per_node={gpus} run_train.py --config-file {dir}/config_llama.yaml")

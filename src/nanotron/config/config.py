@@ -231,7 +231,6 @@ class LRSchedulerArgs:
     lr_decay_steps: Optional[int] = None
     lr_decay_starting_step: Optional[int] = None
     min_decay_lr: float = None
-    lr_decay_starting_step: Optional[int] = None
 
     def __post_init__(self):
         if self.lr_warmup_style not in ["linear", "constant"]:
