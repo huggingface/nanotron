@@ -36,6 +36,19 @@ CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node=4 examples/doremi/train_
 
 - Step 3: Nanotron saves the domain weights in the model checkpoint. Now, calculate the optimal domain weights by averaging the domain weights across all training steps from step 1: $\bar{\alpha}=\frac{1}{T} \sum_{i=1}^T \alpha_t$.
 
+
+``python
+
+import torch
+
+domain_weights = torch.load("/fsx/xrsrke/checkpoints/doremi/proxy-280m-llama/doremi_domain_weights_100000.pt")
+
+total_weights = sum(d["domain_weights"] for d in domain_weights)
+avg_weights = total_weights / len(domain_weights)
+```
+
+Then, set these `avg_weights` in the config of the larger run in the `doremi` section.
+
 - Step 4: Use the optimized domain weights from step 3 to train a larger model (could be 10x to 30x larger). In our implementation, experimental results show that DoReMi outperforms 15 out of 22 domains on the test set and has a lower average test loss.
 
 ```bash
