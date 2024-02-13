@@ -192,7 +192,6 @@ def _test_clip_grads_with_pp(parallel_context: ParallelContext, norm_type: float
     print(parallel_context.__dir__())
 
     parallel_context.destroy()
-    parallel_context.destroyaa()
 
 
 @pytest.mark.skipif(available_gpus() < 2, reason="test_clip_grads_with_tp requires at least 2 gpus")
@@ -343,7 +342,7 @@ def _test_clip_grads_with_tp(
     )
     torch.testing.assert_close(total_norm, ref_total_norm)
 
-    # parallel_context.destroy()
+    parallel_context.destroy()
 
 
 @pytest.mark.skipif(available_gpus() < 2, reason="test_clip_grads_tied_weights requires at least 2 gpus")
@@ -438,7 +437,7 @@ def _test_clip_grads_tied_weights(parallel_context: ParallelContext, norm_type: 
     assert torch.allclose(bias.grad, ref_bias.grad, rtol=1e-7, atol=1e-6)
     assert torch.allclose(total_norm, ref_total_norm, rtol=0, atol=0), f"Got {total_norm} and {ref_total_norm}"
 
-    # parallel_context.destroy()
+    parallel_context.destroy()
 
 
 @pytest.mark.parametrize("half_precision", [torch.float16, torch.bfloat16])
@@ -628,4 +627,4 @@ def _test_clip_grads_fp32_accumulator(
             to_rank=reference_rank,
         )
 
-    # parallel_context.destroy()
+    parallel_context.destroy()
