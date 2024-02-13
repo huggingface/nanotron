@@ -18,6 +18,7 @@ import os
 from typing import Dict, Optional, Union
 import math
 import torch
+from torch.nn import init 
 from flash_attn import bert_padding
 from flash_attn.flash_attn_interface import (
     flash_attn_varlen_func,
@@ -143,7 +144,7 @@ class Mamba(nn.Module):
             out_features=self.d_inner * 2,
             pg=tp_pg,
             mode=tp_mode,
-            bias=bias,
+            bias=False,
             async_communication=False,
             contiguous_chunks=None
         )
@@ -794,142 +795,7 @@ class MambaForTraining(NanotronModel):
         Note:
             Layernorm weight all 0 or 1 depending on `apply_layernorm_1p`
         """
-        model = self
-        initialized_parameters = set()
-        
-        # Handle tensor parallelism
-        module_id_to_prefix = {id(module): f"{module_name}." for module_name, module in model.named_modules()}
-        # Fix the root_model
-        module_id_to_prefix[id(model)] = ""
-
-        #TODO(fmom): clean this
-    
-        for module_name, module in model.named_modules():
-            if isinstance(module, TensorParallelColumnLinear):
-                # Somehow Megatron-LM does something super complicated, https://github.com/NVIDIA/Megatron-LM/blob/2360d732a399dd818d40cbe32828f65b260dee11/megatron/core/tensor_parallel/layers.py#L96
-                # What it does:
-                #  - instantiate a buffer of the `full size` in fp32
-                #  - run init method on it
-                #  - shard result to get only a specific shard
-                # Instead I'm lazy and just going to run init_method, since they are scalar independent
-                assert {"weight"} == {name for name, _ in module.named_parameters()} or {"weight"} == {
-                    name for name, _ in module.named_parameters()
-                }
-                for param_name, param in module.named_parameters():
-                    assert isinstance(param, NanotronParameter)
-                    if param.is_tied:
-                        tied_info = param.get_tied_info()
-                        full_param_name = tied_info.get_full_name_from_module_id_to_prefix(
-                            module_id_to_prefix=module_id_to_prefix
-                        )
-                    else:
-                        full_param_name = f"{module_name}.{param_name}"
-
-                    if full_param_name in initialized_parameters:
-                        # Already initialized
-                        continue
-
-                    if "weight" == param_name:
-                        init_method(param)
-                    elif "bias" == param_name:
-                        param.zero_()
-                    else:
-                        raise ValueError(f"Who the fuck is {param_name}?")
-
-                    assert full_param_name not in initialized_parameters
-                    initialized_parameters.add(full_param_name)
-            elif isinstance(module, TensorParallelRowLinear):
-                # Somehow Megatron-LM does something super complicated, https://github.com/NVIDIA/Megatron-LM/blob/2360d732a399dd818d40cbe32828f65b260dee11/megatron/core/tensor_parallel/layers.py#L96
-                # What it does:
-                #  - instantiate a buffer of the `full size` in fp32
-                #  - run init method on it
-                #  - shard result to get only a specific shard
-                # Instead I'm lazy and just going to run init_method, since they are scalar independent
-                assert {"weight"} == {name for name, _ in module.named_parameters()} or {"weight"} == {
-                    name for name, _ in module.named_parameters()
-                }
-                for param_name, param in module.named_parameters():
-                    assert isinstance(param, NanotronParameter)
-                    if param.is_tied:
-                        tied_info = param.get_tied_info()
-                        full_param_name = tied_info.get_full_name_from_module_id_to_prefix(
-                            module_id_to_prefix=module_id_to_prefix
-                        )
-                    else:
-                        full_param_name = f"{module_name}.{param_name}"
-
-                    if full_param_name in initialized_parameters:
-                        # Already initialized
-                        continue
-
-                    if "weight" == param_name:
-                        scaled_init_method(param)
-                    elif "bias" == param_name:
-                        param.zero_()
-                    else:
-                        raise ValueError(f"Who the fuck is {param_name}?")
-
-                    assert full_param_name not in initialized_parameters
-                    initialized_parameters.add(full_param_name)
-            elif isinstance(module, RMSNorm):
-                assert {"weight"} == {name for name, _ in module.named_parameters()}
-                for param_name, param in module.named_parameters():
-                    assert isinstance(param, NanotronParameter)
-                    if param.is_tied:
-                        tied_info = param.get_tied_info()
-                        full_param_name = tied_info.get_full_name_from_module_id_to_prefix(
-                            module_id_to_prefix=module_id_to_prefix
-                        )
-                    else:
-                        full_param_name = f"{module_name}.{param_name}"
-
-                    if full_param_name in initialized_parameters:
-                        # Already initialized
-                        continue
-
-                    if "weight" == param_name:
-                        # TODO @thomasw21: Sometimes we actually want 0
-                        param.fill_(1)
-                    elif "bias" == param_name:
-                        param.zero_()
-                    else:
-                        raise ValueError(f"Who the fuck is {param_name}?")
-
-                    assert full_param_name not in initialized_parameters
-                    initialized_parameters.add(full_param_name)
-            elif isinstance(module, TensorParallelEmbedding):
-                # TODO @thomasw21: Handle tied embeddings
-                # Somehow Megatron-LM does something super complicated, https://github.com/NVIDIA/Megatron-LM/blob/2360d732a399dd818d40cbe32828f65b260dee11/megatron/core/tensor_parallel/layers.py#L96
-                # What it does:
-                #  - instantiate a buffer of the `full size` in fp32
-                #  - run init method on it
-                #  - shard result to get only a specific shard
-                # Instead I'm lazy and just going to run init_method, since they are scalar independent
-                assert {"weight"} == {name for name, _ in module.named_parameters()}
-
-                assert isinstance(module.weight, NanotronParameter)
-                if module.weight.is_tied:
-                    tied_info = module.weight.get_tied_info()
-                    full_param_name = tied_info.get_full_name_from_module_id_to_prefix(
-                        module_id_to_prefix=module_id_to_prefix
-                    )
-                else:
-                    full_param_name = f"{module_name}.weight"
-
-                if full_param_name in initialized_parameters:
-                    # Already initialized
-                    continue
-
-                init_method(module.weight)
-                assert full_param_name not in initialized_parameters
-                initialized_parameters.add(full_param_name)
-
-        assert initialized_parameters == {
-            param.get_tied_info().get_full_name_from_module_id_to_prefix(module_id_to_prefix=module_id_to_prefix)
-            if param.is_tied
-            else name
-            for name, param in model.named_parameters()
-        }, f"Somehow the initialized set of parameters don't match:\n - Expected: { {name for name, _ in model.named_parameters()} }\n - Got: {initialized_parameters}"
+        raise NotImplementedError("init_model_randomly not implemented for MambaForTraining")
 
     @torch.no_grad()
     def init_mamba_weights(self, n_layer, initializer_range, rescale_prenorm_residual, n_residuals_per_layer):
@@ -942,78 +808,104 @@ class MambaForTraining(NanotronModel):
         # Fix the root_model
         module_id_to_prefix[id(model)] = ""
 
-        #TODO(fmom): port initiliaztion from mamba_ssm.mamba_simple.Mamba to here
 
-        for module_name, module in model.named_modules():
-            if isinstance(module, nn.Linear):
-                
-                for param_name, param in module.named_parameters():
-                    assert isinstance(param, NanotronParameter)
-                    if param.is_tied:
-                        tied_info = param.get_tied_info()
-                        full_param_name = tied_info.get_full_name_from_module_id_to_prefix(
-                            module_id_to_prefix=module_id_to_prefix
-                        )
-                    else:
-                        full_param_name = f"{module_name}.{param_name}"
-
-                    if full_param_name in initialized_parameters:
-                        # Already initialized
-                        continue
-
-                    if "weight" == param_name:
-                        pass
-                    elif "bias" == param_name:
-                        param.zero_()
-                    else:
-                        raise ValueError(f"Who the fuck is {param_name}?")
-
-                    assert full_param_name not in initialized_parameters
-                    initialized_parameters.add(full_param_name)
-            elif isinstance(module, TensorParallelEmbedding):
-                assert {"weight"} == {name for name, _ in module.named_parameters()}
-
-                assert isinstance(module.weight, NanotronParameter)
-                if module.weight.is_tied:
-                    tied_info = module.weight.get_tied_info()
-                    full_param_name = tied_info.get_full_name_from_module_id_to_prefix(
-                        module_id_to_prefix=module_id_to_prefix
-                    )
+        def _get_module(module, path):
+            # Get module name out of param_name
+            attrs = path.split('.')
+            for attr in attrs:
+                # Case: model.decoder.0.pp_block.mixer.in_proj
+                # Need to convert to model.decoder[0].pp_block.mixer.in_proj
+                if '[' in attr and ']' in attr:
+                    # Split the attribute and index part
+                    attr, index = attr[:-1].split('[')
+                    # Convert index to integer
+                    index = int(index)
+                    # First get the attribute until the index
+                    module = getattr(module, attr)
+                    # Then use the index to get the final module
+                    module = module[index]
                 else:
-                    full_param_name = f"{module_name}.weight"
+                    # Regular attribute access
+                    module = getattr(module, attr)
+            return module
 
-                if full_param_name in initialized_parameters:
-                    # Already initialized
-                    continue
+        for param_name, param in model.named_parameters():
+            assert isinstance(param, NanotronParameter)
+            
+            module_name, param_name = param_name.rsplit('.', 1)
+            
+            if param.is_tied:
+                tied_info = param.get_tied_info()
+                full_param_name = tied_info.get_full_name_from_module_id_to_prefix(
+                    module_id_to_prefix=module_id_to_prefix
+                )
+            else:
+                full_param_name = f"{module_name}.{param_name}"
 
+            if full_param_name in initialized_parameters:
+                # Already initialized
+                continue
+                
+            assert full_param_name not in initialized_parameters
+            initialized_parameters.add(full_param_name)
+            
+            module = _get_module(model, module_name)
+            print(module_name, param_name, module)
+            
+            if isinstance(module, TensorParallelColumnLinear) or isinstance(module, TensorParallelRowLinear):
+                if "weight" == param_name:
+                    init.kaiming_uniform_(param, a=math.sqrt(5))
+                elif "bias" == param_name:
+                    raise ValueError("We don't use bias for TensorParallelColumnLinear and TensorParallelRow")
+                else:
+                    raise ValueError(f"Who the fuck is {param_name}?")
+            elif isinstance(module, nn.Linear):
+                fan_in = None
+                
+                if "weight" == param_name:
+                    fan_in, _ = init._calculate_fan_in_and_fan_out(param)
+                    init.kaiming_uniform_(param, a=math.sqrt(5))
+                elif "bias" == param_name:                        
+                    bound = 1 / math.sqrt(fan_in) if (fan_in is not None and fan_in > 0) else 0
+                    init.uniform_(param, -bound, bound)
+                else:
+                    raise ValueError(f"Who the fuck is {param_name}?")
+
+                if rescale_prenorm_residual and param_name in ["out_proj.weight"]:
+                    # Reinitialize selected weights subject to the OpenAI GPT-2 Paper Scheme:
+                    #   > A modified initialization which accounts for the accumulation on the residual path with model depth. Scale
+                    #   > the weights of residual layers at initialization by a factor of 1/√N where N is the # of residual layers.
+                    #   >   -- GPT-2 :: https://openai.com/blog/better-language-models/
+                    #
+                    # Reference (Megatron-LM): https://github.com/NVIDIA/Megatron-LM/blob/main/megatron/model/gpt_model.py
+                    # Special Scaled Initialization --> There are 2 Layer Norms per Transformer Block
+                    # Following Pytorch init, except scale by 1/sqrt(2 * n_layer)
+                    # We need to reinit p since this code could be called multiple times
+                    # Having just p *= scale would repeatedly scale it down
+                    with torch.no_grad():
+                        p /= math.sqrt(n_residuals_per_layer * n_layer)     
+            elif isinstance(module, TensorParallelEmbedding):
                 nn.init.normal_(module.weight, std=initializer_range)
-                assert full_param_name not in initialized_parameters
-                initialized_parameters.add(full_param_name)                
-
-            if rescale_prenorm_residual:
-                # Reinitialize selected weights subject to the OpenAI GPT-2 Paper Scheme:
-                #   > A modified initialization which accounts for the accumulation on the residual path with model depth. Scale
-                #   > the weights of residual layers at initialization by a factor of 1/√N where N is the # of residual layers.
-                #   >   -- GPT-2 :: https://openai.com/blog/better-language-models/
-                #
-                # Reference (Megatron-LM): https://github.com/NVIDIA/Megatron-LM/blob/main/megatron/model/gpt_model.py
-                for name, p in module.named_parameters():
-                    if name in ["out_proj.weight"]:
-                        # Special Scaled Initialization --> There are 2 Layer Norms per Transformer Block
-                        # Following Pytorch init, except scale by 1/sqrt(2 * n_layer)
-                        # We need to reinit p since this code could be called multiple times
-                        # Having just p *= scale would repeatedly scale it down
-                        nn.init.kaiming_uniform_(p, a=math.sqrt(5))
-                        with torch.no_grad():
-                            p /= math.sqrt(n_residuals_per_layer * n_layer)                                          
-                                                    
-        # #TODO(fmom): perform check
-        # assert initialized_parameters == {
-        #     param.get_tied_info().get_full_name_from_module_id_to_prefix(module_id_to_prefix=module_id_to_prefix)
-        #     if param.is_tied
-        #     else name
-        #     for name, param in model.named_parameters()
-        # }, f"Somehow the initialized set of parameters don't match:\n - Expected: { {name for name, _ in model.named_parameters()} }\n - Got: {initialized_parameters}"
+            elif isinstance(module, RMSNorm) or isinstance(module, nn.LayerNorm):
+                if "weight" == param_name:
+                    # TODO @thomasw21: Sometimes we actually want 0
+                    param.fill_(1)
+                elif "bias" == param_name:
+                    param.zero_()
+                else:
+                    raise ValueError(f"Who the fuck is {param_name}?")
+            elif isinstance(module, Mamba):
+                # NOTE(fmom): nn.Parameter are initialized in Mamba __init__ 
+                # In Mamba, only those 3 parameters don't have weight decay.
+                if param_name in ["dt_bias", "A_log", "D"]:
+                    param._no_weight_decay = True
+                
+        assert initialized_parameters == {
+            param.get_tied_info().get_full_name_from_module_id_to_prefix(module_id_to_prefix=module_id_to_prefix)
+            if param.is_tied
+            else name
+            for name, param in model.named_parameters()
+        }, f"Somehow the initialized set of parameters don't match:\n - Expected: { {name for name, _ in model.named_parameters()} }\n - Got: {initialized_parameters}"
 
     @staticmethod
     def get_embeddings_lm_head_tied_names():
