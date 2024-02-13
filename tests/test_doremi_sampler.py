@@ -1,19 +1,3 @@
-# from typing import List
-# from datasets.arrow_dataset import Dataset
-# from datasets.dataset_dict import DatasetDict, IterableDatasetDict
-# from datasets.iterable_dataset import IterableDataset
-
-# import pytest
-# import torch
-# from datasets import load_dataset
-# from helpers.utils import init_distributed
-# from nanotron import distributed as dist
-# from nanotron.doremi.dataloader import DistributedSamplerForDoReMi
-# from nanotron.doremi.doremi_context import DoReMiContext
-# from nanotron.parallel import ParallelContext
-# from torch.utils.data import Dataset
-
-
 import pytest
 import torch
 from datasets import load_dataset
@@ -40,20 +24,8 @@ def datasets(dataset1, dataset2):
     return [dataset1, dataset2]
 
 
-# class IntegerDataset(Dataset):
-#     def __init__(self, n):
-#         self.n = n
-
-#     def __len__(self):
-#         return self.n
-
-#     def __getitem__(self, idx):
-#         return idx + 1
-
-
 @pytest.mark.parametrize("num_microbatches", [1, 32])
 def test_dist_doremi_sampler_sync_across_tp(num_microbatches, dataset1):
-    # num_microbatches = 32
     batch_size = 16
     domain_weights = torch.tensor([0.7, 0.3])
     datasets = [dataset1 for _ in range(len(domain_weights))]
@@ -97,7 +69,6 @@ def _test_dist_doremi_sampler_sync_across_tp(
 @pytest.mark.parametrize("num_microbatches", [1, 32])
 def test_dist_doremi_sampler_not_overlapse_across_dp(dp_size, num_microbatches, dataset1):
     global_batch_size = 512
-    # num_microbatches = 32
     batch_size = global_batch_size // (num_microbatches * dp_size)
     domain_weights = torch.tensor([0.7, 0.3])
     datasets = [dataset1 for _ in range(len(domain_weights))]
@@ -167,7 +138,6 @@ def _test_dist_doremi_sampler_not_overlapse_across_dp(
 )
 @pytest.mark.parametrize("num_microbatches", [1, 32])
 def test_determistic_doremi_sampler(domain_weights, num_microbatches, dataset1):
-    # num_microbatches = 32
     batch_size = 100
     datasets = [dataset1 for _ in range(len(domain_weights))]
     domain_keys = [f"domain {i}" for i in range(len(domain_weights))]
@@ -353,7 +323,7 @@ def _test_sampling_from_dist_doremi_sampler_with_global_batch_size(
     "domain_weights",
     [
         torch.tensor([0.6, 0.4]),
-        # NOTE: test auto fill samples if there are rounding errors
+        # NOTE: test auto filling samples if there are rounding errors
         torch.tensor([0.296, 0.201, 0.501]),
         # NOTE: if sampling based on batch size, then
         # the last domain results in no sample (round(0.004 * 64) = 0)
@@ -379,7 +349,6 @@ def _test_sampling_from_dist_doremi_sampler_with_global_batch_size(
 @pytest.mark.parametrize("num_microbatches", [1, 32])
 def test_dist_doremi_sampler_not_repeating_samples(domain_weights, dp_size, num_microbatches, dataset1):
     global_batch_size = 512
-    # num_microbatches = 32
     batch_size = global_batch_size // (num_microbatches * dp_size)
     datasets = [dataset1 for _ in range(len(domain_weights))]
     domain_keys = [f"domain {i}" for i in range(len(datasets))]
@@ -439,114 +408,12 @@ def _test_dist_doremi_sampler_not_repeating_samples(
     assert len(set(yielded_idxs)) == len(yielded_idxs)
 
 
-# @pytest.mark.parametrize(
-#     "domain_weights",
-#     [
-#         # torch.tensor([0.6, 0.4]),
-#         # # NOTE: test auto fill samples if there are rounding errors
-#         # torch.tensor([0.296, 0.201, 0.501]),
-#         # # NOTE: if sampling based on batch size, then
-#         # # the last domain results in no sample (round(0.004 * 64) = 0)
-#         # # but if do with global batch size, (round(0.004 * 512) = 2)
-#         # torch.tensor([0.498, 0.498, 0.004]),
-#         torch.tensor(
-#             [
-#                 0.34356916553540745,
-#                 0.16838812972610234,
-#                 0.24711766854236725,
-#                 0.0679225638705455,
-#                 0.059079828519653675,
-#                 0.043720261601881555,
-#                 0.01653850841342608,
-#                 0.00604146633842096,
-#                 0.04342813428189645,
-#                 0.0041942731702987,
-#             ]
-#         ),
-#     ],
-# )
-# @pytest.mark.parametrize("dp_size", [1, 2, 4])
-# def test_dist_doremi_sampler_with_dataloader(domain_weights, dp_size, dataset1):
-#     global_batch_size = 512
-#     num_microbatches = 32
-#     batch_size = global_batch_size // (num_microbatches * dp_size)
-#     datasets = [dataset1 for _ in range(len(domain_weights))]
-#     domain_keys = [f"domain {i}" for i in range(len(datasets))]
-#     doremi_context = DoReMiContext(domain_weights, domain_keys, is_proxy=False)
-
-#     init_distributed(tp=1, dp=dp_size, pp=1)(_test_dist_doremi_sampler_with_dataloader)(
-#         batch_size=batch_size,
-#         num_microbatches=num_microbatches,
-#         datasets=datasets,
-#         doremi_context=doremi_context,
-#     )
-
-
-# def _test_dist_doremi_sampler_with_dataloader(
-#     parallel_context: ParallelContext,
-#     batch_size: int,
-#     num_microbatches: int,
-#     datasets,
-#     doremi_context: DoReMiContext,
-# ):
-#     dp_size = dist.get_world_size(parallel_context.dp_pg)
-#     dp_rank = dist.get_rank(parallel_context.dp_pg)
-
-#     sampler = DistributedSamplerForDoReMi(
-#         datasets,
-#         batch_size=batch_size,
-#         num_microbatches=num_microbatches,
-#         num_replicas=dp_size,
-#         rank=dp_rank,
-#         doremi_context=doremi_context,
-#         parallel_context=parallel_context,
-#     )
-
-#     comebined_dataset = CombinedDataset(datasets)
-
-#     dataloader = DataLoader(
-#         comebined_dataset,
-#         batch_size=batch_size,
-#         sampler=sampler,
-#         # collate_fn=data_collator,
-#         # drop_last=dataloader_drop_last,  # we also drop_last in `clm_process()`
-#         num_workers=1,
-#         pin_memory=True,
-#         # worker_init_fn=get_dataloader_worker_init(dp_rank=dist.get_rank(parallel_context.dp_pg)),
-#     )
-
-#     def sanity(dataloader):
-#         for batch in dataloader:
-#             yield batch
-
-#     dataloader = sanity(dataloader)
-
-#     assert 1 == 1
-
-#     # yielded_idxs = []
-#     # for idxs in sampler:
-#     #     # NOTE: check that the indicies are not repeated
-#     #     assert not set(idxs).intersection(yielded_idxs)
-
-#     #     # NOTE: gather all the indicies from all the dp ranks
-#     #     idxs = torch.tensor(idxs, dtype=torch.int, device="cuda")
-#     #     all_idxs = [torch.zeros_like(idxs) for _ in range(dp_size)]
-#     #     dist.all_gather(all_idxs, idxs)
-#     #     all_idxs = torch.cat(all_idxs, dim=0).view(-1).cpu().tolist()
-#     #     yielded_idxs.extend(all_idxs)
-
-#     # assert len(set(yielded_idxs)) == len(yielded_idxs)
-
-
 # NOTE: these are low-level implementation details
 # ideally we should not be testing these, but gotta make sure
 # it work (this bug back me down for so hard)
 @pytest.mark.parametrize("dp_size", [2, 4, 8])
 @pytest.mark.parametrize("num_microbatches", [1, 5])
 def test_yielding(dp_size, num_microbatches, dataset1):
-    # global_batch_size = 1000
-    # num_microbatches = 5
-    # batch_size = global_batch_size // (num_microbatches * dp_size)
     batch_size = 100
     global_batch_size = batch_size * num_microbatches * dp_size
 
@@ -616,9 +483,6 @@ def _test_yielding(
 @pytest.mark.parametrize("dp_size", [2, 4, 8])
 @pytest.mark.parametrize("num_microbatches", [1, 5])
 def test_yielding_with_dataloader(dp_size, num_microbatches, dataset1):
-    # global_batch_size = 1000
-    # num_microbatches = 5
-    # batch_size = global_batch_size // (num_microbatches * dp_size)
     batch_size = 100
     global_batch_size = batch_size * num_microbatches * dp_size
 

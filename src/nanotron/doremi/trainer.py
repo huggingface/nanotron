@@ -38,7 +38,6 @@ class DoReMiTrainer(DistributedTrainer):
             step_size=1,
             smoothing_param=1e-3,
         )
-        # TODO: add randomly initialize reference model
         self.ref_checkpoint_path = ref_checkpoint_path
         super().__init__(*args, **kwargs)
 

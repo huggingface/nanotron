@@ -112,7 +112,6 @@ def _test_domain_loss_for_proxy_training(
     assert not torch.allclose(initial_domain_weights, domain_weights)
     assert torch.allclose(domain_weights.sum(dim=-1), torch.tensor(1.0))
     # NOTE: check if the loss function updates the domain weights in the doremi context
-    # assert torch.allclose(doremi_context.domain_weights, domain_weights)
     assert_tensor_synced_across_pg(
         domain_weights, parallel_context.dp_pg, msg=lambda err: f"Domain weights are not synced across ranks {err}"
     )
@@ -147,7 +146,7 @@ def _test_computing_per_domain_loss(
 
     doremi_context = DoReMiContext(domain_weights, domain_keys, is_proxy=False)
 
-    per_domain_loss, samples_per_domain = compute_per_domain_loss(
+    losses_dp, per_domain_loss, samples_per_domain = compute_per_domain_loss(
         losses, domain_idxs, doremi_context, parallel_context
     )
 

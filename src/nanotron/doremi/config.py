@@ -42,7 +42,6 @@ class DoReMiArgs:
             else:
                 domain_weights = self.domain_weights
 
-            # domain_weights = torch.tensor(domain_weights)
             assert torch.allclose(
                 torch.tensor(domain_weights).sum(), torch.tensor(1.0), rtol=1e-3
             ), "Domain weights must sum to 1.0."
