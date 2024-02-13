@@ -263,8 +263,8 @@ class LRSchedulerArgs:
     lr_warmup_steps: int = 0
     lr_warmup_style: str = None
     lr_decay_style: str = None
-    min_decay_lr: float = None
     lr_decay_steps: Optional[int] = None
+    min_decay_lr: float = None
 
     def __post_init__(self):
         if self.lr_warmup_style not in ["linear", "constant"]:
@@ -377,6 +377,7 @@ def get_config_from_file(config_path: str, config_class: Type[Config] = Config) 
     with open(config_path) as f:
         args = yaml.load(f, Loader=SafeLoader)
 
+    print(args)
     # Make a nice dataclass from our yaml
     try:
         config = from_dict(
@@ -391,8 +392,8 @@ def get_config_from_file(config_path: str, config_class: Type[Config] = Config) 
                     RecomputeGranularity: lambda x: RecomputeGranularity[x.upper()],
                     SamplerType: lambda x: SamplerType[x.upper()],
                 },
-                strict_unions_match=True,
-                strict=True,
+                # strict_unions_match=True,
+                # strict=True,
             ),
         )
     except Exception as e:
