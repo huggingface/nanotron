@@ -23,7 +23,7 @@ jobs:
       image: runpod/pytorch:2.1.1-py3.10-cuda12.1.1-devel-ubuntu22.04
       ports:
         - 80
-      options: --gpus all --rm --shm-size "8G" -v /dev/shm -v /data/scratch/llama-tiny:/data/scratch/llama-tiny
+      options: --gpus all --rm --shm-size "8G"
     timeout-minutes: 90
     steps:
     - uses: actions/checkout@v3
@@ -43,8 +43,6 @@ jobs:
         python -m pip install --upgrade pip
         pip install packaging
         pip install wheel
-        git clone https://github.com/huggingface/nanotron.git
-        cd nanotron
         pip install -e .
         pip install -e .[dev]
         pip install -e .[test]
