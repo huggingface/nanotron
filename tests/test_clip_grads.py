@@ -340,7 +340,11 @@ def _test_clip_grads_with_tp(
     )
     torch.testing.assert_close(total_norm, ref_total_norm)
 
-    parallel_context.destroy()
+    try:
+        parallel_context.destroy()
+    except Exception:
+        print("Failed to destroy parallel context")
+        print(f"parallel_contex.type: {type(parallel_context)}")
 
 
 @pytest.mark.skipif(available_gpus() < 2, reason="test_clip_grads_tied_weights requires at least 2 gpus")
