@@ -189,7 +189,8 @@ def _test_clip_grads_with_pp(parallel_context: ParallelContext, norm_type: float
             to_rank=reference_rank,
         )
 
-    # parallel_context.destroy()
+    parallel_context.destroyaa()
+    parallel_context.destroy()
 
 
 @pytest.mark.skipif(available_gpus() < 2, reason="test_clip_grads_with_tp requires at least 2 gpus")
