@@ -32,6 +32,15 @@ DEFAULT_SEED = 42
 
 
 @dataclass
+class BenchArgs:
+    model_name: str
+    sequence_length: int
+    micro_batch_size: int
+    batch_accumulation_per_replica: int
+    benchmark_csv_path: str
+
+
+@dataclass
 class LoggingArgs:
     """Arguments related to logging"""
 
@@ -314,22 +323,6 @@ class Config:
     @property
     def global_batch_size(self):
         return self.tokens.micro_batch_size * self.tokens.batch_accumulation_per_replica * self.parallelism.dp
-
-    @property
-    def micro_batch_size(self):
-        return self.tokens.micro_batch_size
-
-    @property
-    def n_micro_batches_per_batch(self):
-        return self.tokens.batch_accumulation_per_replica
-
-    @property
-    def batch_accumulation_per_replica(self):
-        return self.tokens.batch_accumulation_per_replica
-
-    @property
-    def sequence_length(self):
-        return self.tokens.sequence_length
 
     def save_as_yaml(self, file_path: str):
         config_dict = serialize(self)
