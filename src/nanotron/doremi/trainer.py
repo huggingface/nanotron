@@ -188,81 +188,6 @@ class DoReMiTrainer(DistributedTrainer):
 
         return model
 
-    # def pre_init(self):
-    #     # NOTE: after initializing parallel context, now we can move domain weights to
-    #     # the GPU corresponding to the current rank
-    #     self.doremi_context.domain_weights = self.doremi_context.domain_weights.to("cuda")
-
-    #     # NOTE: SANITY CHECKS: make sure all ranks have the same domain weights
-    #     assert_tensor_synced_across_pg(
-    #         tensor=self.doremi_context.domain_weights,
-    #         pg=self.parallel_context.world_pg,
-    #         msg=lambda err: f"Domain weights are not synced across ranks {err}",
-    #     )
-
-    #     log_rank(
-    #         f"[DoReMi] Initial domain weights: {self.doremi_context.domain_weights}", logger=logger, level=logging.INFO
-    #     )
-
-    # def post_init(self):
-    #     """Initialize the model and load weights from checkpoint if needed."""
-    #     log_rank("[DoReMi] Initializing reference model for DoReMi training", logger=logger, level=logging.INFO)
-
-    #     self.ref_model = self._init_model(
-    #         model_builder=lambda: LLaMaForInference(
-    #             config=self.model_config,
-    #             parallel_config=self.config.parallelism,
-    #             parallel_context=self.parallel_context,
-    #         ),
-    #     )
-    #     self.ref_model.eval()
-    #     for _, param in self.ref_model.named_parameters():
-    #         param.requires_grad_(False)
-
-    #     reloaded_from_checkpoint = False
-    #     if self.init_checkpoint_path is not None:
-    #         # Reload from a training checkpoint
-    #         log_rank(f"Loading weights from {self.init_checkpoint_path}", logger=logger, level=logging.INFO, rank=0)
-    #         load_weights(
-    #             model=self.ref_model, parallel_context=self.parallel_context, root_folder=self.init_checkpoint_path
-    #         )
-    #         reloaded_from_checkpoint = True
-
-    #     if not reloaded_from_checkpoint:
-    #         log_rank("No checkpoint path provided.", logger=logger, level=logging.INFO)
-    #         if isinstance(self.config.model.init_method, ExistingCheckpointInit):
-    #             load_weights(
-    #                 model=self.ref_model,
-    #                 parallel_context=self.parallel_context,
-    #                 root_folder=self.config.model.init_method.path,
-    #             )
-    #         elif isinstance(self.config.model.init_method, RandomInit):
-    #             # # Initialize model randomly
-    #             # normalized_model.init_model_randomly(
-    #             #     init_method=init_method_normal(self.config.model.init_method.std),
-    #             #     scaled_init_method=scaled_init_method_normal(
-    #             #         self.config.model.init_method.std, self.model_config.num_hidden_layers
-    #             #     ),
-    #             # )
-    #             # # Synchronize parameters so that the model is consistent
-    #             # # sync all params across dp
-    #             # for _, param in sorted(model.named_parameters(), key=lambda x: x[0]):
-    #             #     dist.all_reduce(param, op=dist.ReduceOp.AVG, group=self.parallel_context.dp_pg)
-
-    #             # # sync tied params across tied groups
-    #             # for (_, group_ranks), param in sorted(
-    #             #     get_tied_id_to_param(
-    #             #         parameters=model.parameters(),
-    #             #         root_module=normalized_model,
-    #             #     ).items(),
-    #             #     key=lambda x: x[0],
-    #             # ):
-    #             #     group = self.parallel_context.world_ranks_to_pg[group_ranks]
-    #             #     dist.all_reduce(param, op=dist.ReduceOp.AVG, group=group)
-    #             pass
-    #         else:
-    #             raise ValueError(f"Unsupported {self.config.model.init_method}")
-
     def pre_training(self):
         def get_time_name():
             today = datetime.datetime.now()
@@ -358,7 +283,6 @@ class DoReMiTrainer(DistributedTrainer):
                     **loss_logs,
                     **samples_per_domain_logs,
                     "loss_avg": loss_avg.cpu().detach().numpy(),
-                    # "lm_loss": outputs[0]["lm_loss"].cpu().detach().numpy(),
                     "step": self.iteration_step,
                 }
             )

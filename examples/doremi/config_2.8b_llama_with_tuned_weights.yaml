@@ -1,13 +1,13 @@
 checkpoints:
-  checkpoint_interval: 1000
-  checkpoints_path: /fsx/phuc/checkpoints/doremi/big-run-02/reference-2.8b-llama-tuned-weights
+  checkpoint_interval: 5000
+  checkpoints_path: /fsx/phuc/checkpoints/doremi/big-run-02/reference-2.8b-llama-tuned-weights_with_100k_proxy
   checkpoints_path_is_shared_file_system: true
-  # resume_checkpoint_path: /fsx/phuc/checkpoints/doremi/tuned-2.8b-llama
+  resume_checkpoint_path: /fsx/phuc/checkpoints/doremi/big-run-02/reference-2.8b-llama-tuned-weights_with_100k_proxy/70000
   save_initial_state: false
 
 doremi:
   domain_names: Pile-CC, Github, OpenWebText2, StackExchange, Wikipedia (en), PubMed Abstracts, USPTO Backgrounds, FreeLaw, PubMed Central, Enron Emails, HackerNews, NIH ExPorter, Books3, ArXiv, DM Mathematics, OpenSubtitles, Gutenberg (PG-19), Ubuntu IRC, BookCorpus2, EuroParl, YoutubeSubtitles, PhilPapers
-  domain_weights: 0.2497, 0.0656, 0.1122, 0.0507, 0.0746, 0.0700, 0.0373, 0.0538, 0.0425, 0.0037, 0.0067, 0.0083, 0.0663, 0.0606, 0.0033, 0.0050, 0.0204, 0.0092, 0.0046, 0.0163, 0.0118, 0.0274
+  # domain_weights: 0.2333, 0.0700, 0.1154, 0.0528, 0.0665, 0.0670, 0.0366, 0.0571, 0.0451, 0.0036, 0.0087, 0.0078, 0.0708, 0.0656, 0.0034, 0.0048, 0.0222, 0.0084, 0.0038, 0.0186, 0.0149, 0.0235
 
 data:
   dataset:
@@ -80,12 +80,17 @@ optimizer:
   weight_decay: 0.01
   zero_stage: 0
 parallelism:
+  # dp: 8
+  # pp: 1
+  # tp: 8
+  # tp: 2
+
+  # NOTE: for running eval
   dp: 8
   pp: 1
+  tp: 2
   pp_engine: 1f1b
   recompute_granularity: SELECTIVE
-  tp: 8
-  # tp: 2
   tp_linear_async_communication: true
   tp_mode: REDUCE_SCATTER
 profiler: null
@@ -112,7 +117,7 @@ tokens:
   micro_batch_size: 64
 
   limit_test_batches: 0
-  limit_val_batches: 8
+  limit_val_batches: 1
   sequence_length: 1024
   # train_steps: 1000
   # train_steps: 70_000

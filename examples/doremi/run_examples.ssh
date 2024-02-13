@@ -1,7 +1,0 @@
-#!/bin/bash
-
-REPO=/fsx/phuc/projects/nanotron
-
-USE_FAST=1 CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node=4 $REPO/examples/doremi/train_reference.py --config-file $REPO/examples/doremi/config_tiny_llama.yaml
-
-USE_FAST=1 CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node=4 $REPO/examples/doremi/train_doremi.py --config-file $REPO/examples/doremi/config_tiny_llama.yaml

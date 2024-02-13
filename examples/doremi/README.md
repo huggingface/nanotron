@@ -18,7 +18,7 @@ In our implementation, experiment results show that doremi outperforms 15 out of
 ![Domain weights comparison](./assets/domain_weights.png)
 
 
-# How it works
+### How it works
 
 - Step 0: Preprocessing data
 

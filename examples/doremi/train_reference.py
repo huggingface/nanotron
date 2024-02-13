@@ -85,24 +85,15 @@ class ReferenceTrainer(DistributedTrainer):
                 )
                 self.model_config.max_position_embeddings = self.config.tokens.sequence_length
 
-        # log_rank(pformat(self.config), logger=logger, level=logging.INFO, rank=0)
         log_rank(pformat(self.config), logger=logger, level=logging.INFO, rank=0)
         log_rank(pformat(self.model_config), logger=logger, level=logging.INFO, rank=0)
 
-        # model_config_cls = self.model_config.__class__.__name__
-        # assert (
-        #     model_config_cls in CONFIG_TO_MODEL_CLASS
-        # ), f"Unsupported model config {model_config_cls}. Only {CONFIG_TO_MODEL_CLASS.keys()} are supported"
-
-        # TODO(xrsrke): split loading weights
-        # from model initialization in base trainer => less code duplication
         model = self._init_model(
             model_builder=lambda: LlamaReferenceForTrainingWithPerDomainLoss(
                 config=self.model_config,
                 doremi_context=self.doremi_context,
                 parallel_context=self.parallel_context,
                 parallel_config=self.config.parallelism,
-                # random_states=self.random_states,
             ),
         )
         normalized_model = model.module if isinstance(model, DistributedDataParallel) else model
@@ -176,50 +167,6 @@ class ReferenceTrainer(DistributedTrainer):
                 },
             )
 
-    def pre_training(self):
-        # def patch_forward(model_instance):
-        #     def new_forward(*args, **kwargs):
-        #         from nanotron.doremi.llama import LlamaReferenceForTrainingWithPerDomainLoss
-        #         return LlamaReferenceForTrainingWithPerDomainLoss.forward(model_instance, *args, **kwargs)
-        #     return new_forward
-
-        # self.model.module.forward = patch_forward(self.model.module)
-
-        # # NOTE: a hacky way to initialize doremi model
-        # from nanotron.trainer import CONFIG_TO_MODEL_CLASS
-        # CONFIG_TO_MODEL_CLASS.update({"LlamaConfig": LlamaReferenceForTrainingWithPerDomainLoss})
-        # from nanotron.parallel.pipeline_parallel.block import PipelineBlock
-        # from nanotron.doremi.loss import CrossEntropyWithPerDomainLoss
-
-        # def copy_attributes(src_instance, dest_instance):
-        #     EXCEPT_ATTRIBUTES = ["module_input_keys", "module_output_keys"]
-        #     for attribute, value in src_instance.__dict__.items():
-        #         if attribute not in EXCEPT_ATTRIBUTES:
-        #             setattr(dest_instance, attribute, value)
-
-        # loss_block = PipelineBlock(
-        #     p2p=self.model.module.loss.p2p,
-        #     module_builder=CrossEntropyWithPerDomainLoss,
-        #     module_kwargs={"parallel_context": self.parallel_context, "doremi_context": self.doremi_context},
-        #     module_input_keys={
-        #         "sharded_logits",
-        #         "label_ids",
-        #         "label_mask",
-        #         "domain_idxs",
-        #     },
-        #     module_output_keys={"loss", "domain_losses"},
-        # )
-        # # TODO(xrsrke): move to utils
-        # copy_attributes(self.model.module.loss, loss_block)
-        # # NOTE: can't do this, u also need to build the module
-        # self.model.module.loss = loss_block
-        from nanotron.dataloader import sanity_check_dataloader
-
-        if self.valid_dataloader is not None:
-            self.valid_dataloader = sanity_check_dataloader(
-                dataloader=self.valid_dataloader, parallel_context=self.parallel_context, config=self.config
-            )
-
     def train_step_logs(
         self,
         outputs: Iterable[Dict[str, Union[torch.Tensor, TensorPointer]]],
@@ -227,11 +174,6 @@ class ReferenceTrainer(DistributedTrainer):
     ):
         super().train_step_logs(outputs, loss_avg)
 
-        # NOTE: reset the counting in DistributedSamplerForDoReMi
-        # trainer.sampler.reset()
-
-        # domain_losses = outputs[0]["domain_losses"].cpu().detach().numpy()
-        # samples_per_domain = outputs[0]["samples_per_domain"].cpu().detach().numpy()
         domain_losses = outputs[0]["domain_losses"].tolist()
         samples_per_domain = outputs[0]["samples_per_domain"].tolist()
 
@@ -240,7 +182,6 @@ class ReferenceTrainer(DistributedTrainer):
             logger=logger,
             level=logging.INFO,
             rank=0,
-            # group=self.parallel_context.tp_pg,
         )
 
         log_rank(
@@ -248,7 +189,6 @@ class ReferenceTrainer(DistributedTrainer):
             logger=logger,
             level=logging.INFO,
             rank=0,
-            # group=self.parallel_context.tp_pg,
         )
 
         if dist.get_rank(self.parallel_context.world_pg) == 0:
@@ -269,48 +209,6 @@ class ReferenceTrainer(DistributedTrainer):
                     "step": self.iteration_step,
                 }
             )
-
-        # if self.valid_dataloader is not None and self.iteration_step % self.config.tokens.val_check_interval == 0:
-        #     # valid_outputs = self.validation_step(dataloader=self.valid_dataloader)
-        #     batch = next(self.valid_dataloader)
-        #     valid_outputs = self.model(batch)
-        #     valid_domain_losses = valid_outputs[0]["domain_losses"].cpu().detach().numpy()
-        #     valid_samples_per_domain = valid_outputs[0]["samples_per_domain"].cpu().detach().numpy()
-
-        #     log_rank(
-        #         f"[DoReMi][Validation] Domain loss: {str(valid_domain_losses)}",
-        #         logger=logger,
-        #         level=logging.INFO,
-        #         rank=0,
-        #         group=self.parallel_context.tp_pg,
-        #     )
-
-        #     log_rank(
-        #         f"[DoReMi][Validation] Samples per domain: {str(valid_samples_per_domain)}",
-        #         logger=logger,
-        #         level=logging.INFO,
-        #         rank=0,
-        #         group=self.parallel_context.tp_pg,
-        #     )
-
-        #     # if dist.get_rank(self.parallel_context.world_pg) == 0:
-        #     #     valid_loss_logs = {
-        #     #         f"valid_loss_domain_{self.doremi_context.get_domain_name(i)}": loss for i, loss in enumerate(valid_domain_losses)
-        #     #     }
-
-        #     #     valid_samples_per_domain_logs = {
-        #     #         f"valid_samples_per_domain_{self.doremi_context.get_domain_name(i)}": n_samples
-        #     #         for i, n_samples in enumerate(valid_samples_per_domain)
-        #     #     }
-
-        #     #     wandb.log(
-        #     #         {
-        #     #             **valid_loss_logs,
-        #     #             **valid_samples_per_domain_logs,
-        #     #             # "valid_loss_avg": loss_avg.item(),
-        #     #             "step": self.iteration_step,
-        #     #         }
-        #     #     )
 
 
 def get_args():
