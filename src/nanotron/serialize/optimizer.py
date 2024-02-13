@@ -17,9 +17,9 @@ from nanotron.optim.zero import (
 )
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter
+from nanotron.sanity_checks import check_optim_state_in_sync
 from nanotron.serialize.metadata import TensorMetadata
 from nanotron.serialize.utils import ObjectType, merge_and_shard_tp_tensors
-from nanotron.sanity_checks import check_optim_state_in_sync
 
 
 # TODO(xrsrke): take rank instead of parallel_context
@@ -197,6 +197,9 @@ def load_optimizer(
 
             if not isinstance(param, NanotronParameter):
                 raise NotImplementedError("Parameters are required to be NanotronParameter")
+
+            if param.is_tied and param_name != param.get_tied_info().name:
+                continue
 
             if param.is_sharded:
                 # NOTE: optimizer states's shape is equal to the parameter's shape
