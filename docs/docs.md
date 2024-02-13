@@ -391,7 +391,7 @@ Some observations:
    Instead of trying to reconcile those and obtain a topology agnostic one, we want to support a `checkpoint_reshape` method.
    The motivations are the following:
    - When training, one spends a LOT more time `saving` checkpoints than loading. In doing so, having the fastest saving mechanism helps. Consequently not having any distributed communication/locking will help this.
-   - Random states are not so easily reconcilable. Given random states for two seperate processes when we have TP=2, it's not obvious what should be the random state if we set to TP=1.
+   - Random states are not so easily reconcilable. Given random states for two separate processes when we have TP=2, it's not obvious what should be the random state if we set to TP=1.
  - Optimizer states are aligned with parameters. It's usually the case where for each parameter you can define an optimizer state. But that's a limitation on the current serialization format.
 
  # Current restrictions:
