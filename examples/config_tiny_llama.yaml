@@ -1,6 +1,6 @@
 checkpoints:
   checkpoint_interval: 10
-  checkpoints_path: /fsx/thomwolf/github/nanotron/checkpoints
+  checkpoints_path: /fsx/nouamane/projects/nanotron/checkpoints
   checkpoints_path_is_shared_file_system: false
   resume_checkpoint_path: null
   save_initial_state: false
@@ -19,9 +19,10 @@ general:
   consumed_train_samples: null
   ignore_sanity_checks: false
   project: debug
-  run: tiny_llama
+  run: tiny_llama_%date_%jobid
   seed: 42
   step: null
+lighteval: null
 logging:
   iteration_step_info_interval: 1
   log_level: info
@@ -59,6 +60,7 @@ optimizer:
   clip_grad: 1.0
   learning_rate_scheduler:
     learning_rate: 0.0003
+    lr_decay_starting_step: null
     lr_decay_steps: 8
     lr_decay_style: cosine
     lr_warmup_steps: 2
