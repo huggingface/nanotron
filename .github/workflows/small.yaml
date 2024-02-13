@@ -23,7 +23,7 @@ jobs:
       image: runpod/pytorch:2.1.1-py3.10-cuda12.1.1-devel-ubuntu22.04
       ports:
         - 80
-      options: --gpus all --rm --shm-size "8G"
+      options: --gpus all --rm --shm-size "8G" -v /dev/shm -v /data/scratch/llama-tiny:/data/scratch/llama-tiny
     timeout-minutes: 90
     steps:
     - uses: actions/checkout@v3
