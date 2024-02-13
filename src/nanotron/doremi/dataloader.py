@@ -368,12 +368,4 @@ def get_dataloader(trainer: DistributedTrainer, datasets) -> DataLoader:
     # if the model is a proxy model
     dataloader = dataloader() if doremi_context.is_proxy is True else dataloader
 
-    # NOTE: Check if we have enough samples for train_steps
-    # batch_size = trainer.micro_batch_size
-    # assert (
-    #     trainer.config.tokens.train_steps - trainer.start_iteration_step
-    # ) * trainer.global_batch_size // trainer.parallel_context.dp_pg.size() < batch_size, (
-    #     f"Dataset is too small for steps ({batch_size} < {(trainer.config.tokens.train_steps - trainer.start_iteration_step) * trainer.global_batch_size // trainer.parallel_context.dp_pg.size()}), "
-    #     f"Try train_steps<={batch_size * trainer.parallel_context.dp_pg.size() // trainer.global_batch_size + trainer.start_iteration_step}"
-    # )
     return dataloader
