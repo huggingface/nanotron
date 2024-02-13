@@ -10,13 +10,12 @@ In our implementation, experiment results show that doremi outperforms 15 out of
 
 
 ![The domains in which we outperform](./assets/outperform.png)
-*The domains in which we outperform*
+
 
 ![The domains in which we don't outperform](./assets/not_outperform.png)
-*The domains in which we don't outperform*
+
 
 ![Domain weights comparison](./assets/domain_weights.png)
-*Domain weights comparison*
 
 
 # How it works
@@ -57,4 +56,4 @@ dataset
         ...
 ```
 
-For each tokenized data, we expect a column name `domain_ids` which contains the domain index of that domain in the dataset. For example, if a sample is from the third domain, it should have a `domain_ids` equal to 2.
+For each tokenized sample, we expect a column name `domain_ids` which contains the domain index of that domain in the dataset. For example, if a sample is from the third domain, it should have a `domain_ids` equal to 2.
