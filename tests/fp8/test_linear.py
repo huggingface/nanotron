@@ -22,7 +22,8 @@ def test_fp8_linear_forward_pass(is_bias):
 
     assert isinstance(output, torch.Tensor)
     assert output.dtype == torch.float32
-    assert torch.allclose(output, ref_output, rtol=0, atol=0.1)
+    
+    torch.testing.assert_allclose(output, ref_output, rtol=0, atol=0.1)
 
 
 # TODO(xrsrke): add cases where the input requires and don't require grad
@@ -45,8 +46,8 @@ def test_fp8_linear_backward_pass(input_requires_grad, device):
 
     # TODO(xrsrke): investigate why input.grad is so high tolerance
     # assert torch.allclose(input.grad, ref_input.grad, 0.2, 0.2) if input_requires_grad else True
-    assert torch.allclose(fp8_linear.weight.grad, ref_linear.weight.grad, 0.1, 0.1)
-    assert torch.allclose(fp8_linear.bias.grad, ref_linear.bias.grad, 0, 0.1)
+    torch.testing.assert_close(fp8_linear.weight.grad, ref_linear.weight.grad, rtol=0.1, atol=0.1)
+    torch.testing.assert_close(fp8_linear.bias.grad, ref_linear.bias.grad, rtol=0, atol=0.1)
 
 
 # TODO(xrsrke): test if FP8Linear has all the methods of a torch.nn.Linear
