@@ -414,7 +414,13 @@ def test_all_pair_to_pair(
 
 
 def create_table_log(
-    config: Config, parallel_context, model_tflops, hardware_tflops, tokens_per_sec, bandwidth, slurm_job_id
+    config: Config,
+    parallel_context: ParallelContext,
+    model_tflops,
+    hardware_tflops,
+    tokens_per_sec,
+    bandwidth,
+    slurm_job_id,
 ):
     return [
         LogItem("job_id", slurm_job_id, "s"),
@@ -422,8 +428,8 @@ def create_table_log(
         LogItem("nodes", math.ceil(parallel_context.world_pg.size() / 8), "d"),
         LogItem("seq_len", config.tokens.sequence_length, "d"),
         LogItem("mbs", config.tokens.micro_batch_size, "d"),
-        LogItem("batch_accum", config.tokens.n_micro_batches_per_batch, "d"),
-        LogItem("gbs", config.tokens.global_batch_size, "d"),
+        LogItem("batch_accum", config.tokens.batch_accumulation_per_replica, "d"),
+        LogItem("gbs", config.global_batch_size, "d"),
         LogItem("mTFLOPs", model_tflops, ".2f"),
         LogItem("hTFLOPs", hardware_tflops, ".2f"),
         LogItem("tok/s/gpu", tokens_per_sec / parallel_context.world_pg.size(), ".2f"),
