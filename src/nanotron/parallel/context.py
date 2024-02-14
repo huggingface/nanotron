@@ -116,7 +116,6 @@ class ParallelContext:
             if rank in pp_ranks:
                 pp_pg = new_group
 
-        # TODO(xrsrke): this looks unnecessary, remove it if possible
         # We build model parallel group (combination of both tensor parallel and pipeline parallel)
         for dp_rank in range(self.data_parallel_size):
             pp_and_tp_ranks = ranks[:, dp_rank, :].reshape(-1)
@@ -124,10 +123,15 @@ class ParallelContext:
             if sorted_ranks not in world_ranks_to_pg:
                 new_group = dist.new_group(ranks=pp_and_tp_ranks)
                 world_ranks_to_pg[sorted_ranks] = new_group
+            else:
+                new_group = world_ranks_to_pg[sorted_ranks]
+            if rank in pp_and_tp_ranks:
+                mp_pg = new_group
 
         self.tp_pg = tp_pg
         self.dp_pg = dp_pg
         self.pp_pg = pp_pg
+        self.mp_pg = mp_pg  # model parallel group = combination of tp and pp for a given dp rank
 
         self.world_rank_matrix = ranks
         self.world_ranks_to_pg = world_ranks_to_pg

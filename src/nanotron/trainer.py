@@ -350,17 +350,8 @@ class DistributedTrainer:
                 for name, param in self.unwrapped_model.get_named_params_with_correct_tied()
                 if param.requires_grad
             ]
-            # TODO @nouamane: we need to split `world_rank_matrix` along PP axis, to separate ref from active model
             self.grad_norm_unclipped = clip_grad_norm(
-                mp_pg=self.parallel_context.world_ranks_to_pg[
-                    tuple(
-                        sorted(
-                            self.parallel_context.world_rank_matrix[
-                                :, dist.get_rank(self.parallel_context.dp_pg), :
-                            ].reshape(-1)
-                        )
-                    )
-                ],
+                mp_pg=self.parallel_context.mp_pg,
                 named_parameters=named_parameters,
                 grad_accumulator=self.grad_accumulator,
                 max_norm=self.config.optimizer.clip_grad,
@@ -784,14 +775,8 @@ def mark_tied_parameters(
             shared_weights = [
                 (
                     name,
-                    # This adds all the tp_ranks in one go
-                    tuple(
-                        sorted(
-                            parallel_context.world_rank_matrix[
-                                dist.get_rank(parallel_context.pp_pg), dist.get_rank(parallel_context.dp_pg), :
-                            ]
-                        )
-                    ),
+                    # sync across TP group
+                    tuple(sorted(dist.get_process_group_ranks(parallel_context.tp_pg))),
                 )
             ]
 
