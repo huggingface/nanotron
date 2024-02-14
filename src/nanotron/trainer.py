@@ -583,15 +583,7 @@ class DistributedTrainer:
                 )
             elif isinstance(self.config.model.init_method, MambaInit):
                 
-                normalized_model.init_model_randomly(
-                    init_method=init_method_normal(self.config.model.init_method.initializer_range),
-                    scaled_init_method=scaled_init_method_normal(
-                        sigma=self.config.model.init_method.initializer_range,
-                        num_layers=self.model_config.num_hidden_layers,
-                        scale=self.config.model.init_method.n_residuals_per_layer
-                    ),
-                    rescale_prenorm_residual=self.config.model.init_method.rescale_prenorm_residual,
-                )
+                normalized_model.init_model_randomly(config=self.config)
                 # Synchronize parameters so that the model is consistent
                 # sync all params across dp
                 for name, param in sorted(model.named_parameters(), key=lambda x: x[0]):
@@ -608,14 +600,9 @@ class DistributedTrainer:
                     group = self.parallel_context.world_ranks_to_pg[group_ranks]
                     dist.all_reduce(param, op=dist.ReduceOp.AVG, group=group)
             elif isinstance(self.config.model.init_method, RandomInit):
-                # Initialize model randomly
-                normalized_model.init_model_randomly(
-                    init_method=init_method_normal(self.config.model.init_method.std),
-                    scaled_init_method_normal=scaled_init_method_normal(
-                        sigma=self.config.model.init_method.std,
-                        num_layers=self.model_config.num_hidden_layers,
-                    )
-                )
+                
+                normalized_model.init_model_randomly(config=self.config)
+                
                 # Synchronize parameters so that the model is consistent
                 # sync all params across dp
                 for name, param in sorted(model.named_parameters(), key=lambda x: x[0]):

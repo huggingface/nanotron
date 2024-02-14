@@ -786,20 +786,7 @@ class MambaForTraining(NanotronModel):
         return {"loss": loss}
 
     @torch.no_grad()
-    def init_model_randomly(self, init_method, scaled_init_method):
-        """Initialize model parameters randomly.
-        Args:
-            init_method (callable): Used for embedding/position/qkv weight in attention/first layer weight of mlp/ /lm_head/
-            scaled_init_method (callable): Used for o weight in attention/second layer weight of mlp/
-
-        Note:
-            Layernorm weight all 0 or 1 depending on `apply_layernorm_1p`
-        """
-        raise NotImplementedError("init_model_randomly not implemented for MambaForTraining")
-
-    @torch.no_grad()
-    def init_mamba_weights(self, n_layer, initializer_range, rescale_prenorm_residual, n_residuals_per_layer):
-        
+    def init_model_randomly(self, config):
         model = self
         initialized_parameters = set()
         
@@ -808,26 +795,11 @@ class MambaForTraining(NanotronModel):
         # Fix the root_model
         module_id_to_prefix[id(model)] = ""
 
+        initializer_range = config.model.init_method.initializer_range
+        n_residuals_per_layer = config.model.init_method.n_residuals_per_layer
+        num_hidden_layers = config.model.model_config.num_hidden_layers
+        rescale_prenorm_residual = config.model.init_method.rescale_prenorm_residual
 
-        def _get_module(module, path):
-            # Get module name out of param_name
-            attrs = path.split('.')
-            for attr in attrs:
-                # Case: model.decoder.0.pp_block.mixer.in_proj
-                # Need to convert to model.decoder[0].pp_block.mixer.in_proj
-                if '[' in attr and ']' in attr:
-                    # Split the attribute and index part
-                    attr, index = attr[:-1].split('[')
-                    # Convert index to integer
-                    index = int(index)
-                    # First get the attribute until the index
-                    module = getattr(module, attr)
-                    # Then use the index to get the final module
-                    module = module[index]
-                else:
-                    # Regular attribute access
-                    module = getattr(module, attr)
-            return module
 
         for param_name, param in model.named_parameters():
             assert isinstance(param, NanotronParameter)
@@ -845,33 +817,18 @@ class MambaForTraining(NanotronModel):
             if full_param_name in initialized_parameters:
                 # Already initialized
                 continue
-                
-            assert full_param_name not in initialized_parameters
-            initialized_parameters.add(full_param_name)
-            
-            module = _get_module(model, module_name)
-            print(module_name, param_name, module)
+
+            module = model.get_submodule(module_name)
             
             if isinstance(module, TensorParallelColumnLinear) or isinstance(module, TensorParallelRowLinear):
                 if "weight" == param_name:
-                    init.kaiming_uniform_(param, a=math.sqrt(5))
+                    init.kaiming_uniform_(module.weight, a=math.sqrt(5))
                 elif "bias" == param_name:
                     raise ValueError("We don't use bias for TensorParallelColumnLinear and TensorParallelRow")
                 else:
                     raise ValueError(f"Who the fuck is {param_name}?")
-            elif isinstance(module, nn.Linear):
-                fan_in = None
                 
-                if "weight" == param_name:
-                    fan_in, _ = init._calculate_fan_in_and_fan_out(param)
-                    init.kaiming_uniform_(param, a=math.sqrt(5))
-                elif "bias" == param_name:                        
-                    bound = 1 / math.sqrt(fan_in) if (fan_in is not None and fan_in > 0) else 0
-                    init.uniform_(param, -bound, bound)
-                else:
-                    raise ValueError(f"Who the fuck is {param_name}?")
-
-                if rescale_prenorm_residual and param_name in ["out_proj.weight"]:
+                if rescale_prenorm_residual and full_param_name.endswith("out_proj.weight"):
                     # Reinitialize selected weights subject to the OpenAI GPT-2 Paper Scheme:
                     #   > A modified initialization which accounts for the accumulation on the residual path with model depth. Scale
                     #   > the weights of residual layers at initialization by a factor of 1/√N where N is the # of residual layers.
@@ -883,15 +840,44 @@ class MambaForTraining(NanotronModel):
                     # We need to reinit p since this code could be called multiple times
                     # Having just p *= scale would repeatedly scale it down
                     with torch.no_grad():
-                        p /= math.sqrt(n_residuals_per_layer * n_layer)     
+                        module.weight /= math.sqrt(n_residuals_per_layer * num_hidden_layers)
+
+            elif isinstance(module, nn.Linear):
+                fan_in = None
+                
+                if "weight" == param_name:
+                    fan_in, _ = init._calculate_fan_in_and_fan_out(module.weight)
+                    init.kaiming_uniform_(module.weight, a=math.sqrt(5))
+                elif "bias" == param_name:                        
+                    bound = 1 / math.sqrt(fan_in) if (fan_in is not None and fan_in > 0) else 0
+                    init.uniform_(module.bias, -bound, bound)
+                else:
+                    raise ValueError(f"Who the fuck is {param_name}?")
+
+                if rescale_prenorm_residual and full_param_name.endswith("out_proj.weight"):
+                    # Reinitialize selected weights subject to the OpenAI GPT-2 Paper Scheme:
+                    #   > A modified initialization which accounts for the accumulation on the residual path with model depth. Scale
+                    #   > the weights of residual layers at initialization by a factor of 1/√N where N is the # of residual layers.
+                    #   >   -- GPT-2 :: https://openai.com/blog/better-language-models/
+                    #
+                    # Reference (Megatron-LM): https://github.com/NVIDIA/Megatron-LM/blob/main/megatron/model/gpt_model.py
+                    # Special Scaled Initialization --> There are 2 Layer Norms per Transformer Block
+                    # Following Pytorch init, except scale by 1/sqrt(2 * n_layer)
+                    # We need to reinit p since this code could be called multiple times
+                    # Having just p *= scale would repeatedly scale it down
+                    with torch.no_grad():
+                        module.weight /= math.sqrt(n_residuals_per_layer * num_hidden_layers)     
+            elif isinstance(module, nn.Conv1d):
+                print("TODO: handle covn1d. For now, it is initialiazed in Mamba constructor")
+                pass
             elif isinstance(module, TensorParallelEmbedding):
                 nn.init.normal_(module.weight, std=initializer_range)
             elif isinstance(module, RMSNorm) or isinstance(module, nn.LayerNorm):
                 if "weight" == param_name:
                     # TODO @thomasw21: Sometimes we actually want 0
-                    param.fill_(1)
+                    module.weight.fill_(1)
                 elif "bias" == param_name:
-                    param.zero_()
+                    module.bias.zero_()
                 else:
                     raise ValueError(f"Who the fuck is {param_name}?")
             elif isinstance(module, Mamba):
@@ -899,7 +885,12 @@ class MambaForTraining(NanotronModel):
                 # In Mamba, only those 3 parameters don't have weight decay.
                 if param_name in ["dt_bias", "A_log", "D"]:
                     param._no_weight_decay = True
-                
+            else:
+                raise Exception(f"Parameter {full_param_name} was not intialized")    
+            
+            assert full_param_name not in initialized_parameters
+            initialized_parameters.add(full_param_name)
+            
         assert initialized_parameters == {
             param.get_tied_info().get_full_name_from_module_id_to_prefix(module_id_to_prefix=module_id_to_prefix)
             if param.is_tied
