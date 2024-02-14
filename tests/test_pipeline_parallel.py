@@ -220,7 +220,6 @@ def test_pipeline_engine_with_tensor_that_does_not_require_grad(pipeline_engine:
     init_distributed(pp=pp, dp=1, tp=1)(_test_pipeline_engine_with_tensor_that_does_not_require_grad)(
         pipeline_engine=pipeline_engine
     )
-    pass
 
 
 def _test_pipeline_engine_with_tensor_that_does_not_require_grad(

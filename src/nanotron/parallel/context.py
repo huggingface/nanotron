@@ -153,14 +153,5 @@ class ParallelContext:
         if not dist.is_initialized():
             return
 
-        # groups = [self.tp_pg, self.pp_pg, self.dp_pg]
-
-        # for group in groups:
-        #     if not isinstance(group, dist.ProcessGroup) and group is not None:
-        #         continue
-
-        #     dist.barrier(group=group)
-        #     dist.destroy_process_group(group)
-
         dist.barrier()
         dist.destroy_process_group()
