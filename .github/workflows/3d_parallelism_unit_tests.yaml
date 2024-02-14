@@ -1,0 +1,63 @@
+name: Run non-FA2-related unit tests
+
+on:
+  push:
+    branches: [ main ]
+    # Only run tests if we modify the following files
+    paths:
+      - "src/**/*.py"
+      - "examples/**/*.py"
+      - "tests/**/*.py"
+
+  pull_request:
+    branches: [ '**' ]
+    paths:
+     - "src/**/*.py"
+     - "examples/**/*.py"
+     - "tests/**/*.py"
+
+jobs:
+  tests:
+    runs-on: [multi-gpu, nvidia-gpu, 8-t4, ci]
+    container:
+      image: runpod/pytorch:2.1.1-py3.10-cuda12.1.1-devel-ubuntu22.04
+      ports:
+        - 80
+      options: --gpus all --shm-size "8G"
+    steps:
+    - uses: actions/checkout@v3
+    - name: Python environment
+      run: |
+        which python
+        python --version
+
+    - name: Check Pytorch version
+      run: |
+        nvidia-smi
+        python -c "import torch; print('torch:', torch.__version__, torch)"
+        python -c "import torch; print('CUDA available:', torch.cuda.is_available())"
+
+    - name: Instal nanotron
+      run: |
+        python -m pip install --upgrade pip
+        pip install packaging
+        pip install wheel
+        pip install -e .
+        pip install -e .[dev]
+        pip install -e .[test]
+
+    - name: Show installed libraries and their versions
+      run: pip freeze | tee installed.txt
+
+    - name: Run tests
+      # NOTE: -m "not fa2" will run all the unit tests that don't have the mark
+      # "fa2" (these are FA2-related tests, we can't run it on T4)
+      run: |
+        pytest \
+        -n 1 \
+        -m "not fa2" \
+        --color=yes \
+        --durations=0 \
+        --ignore tests/kernels \
+        --verbose \
+        tests/
