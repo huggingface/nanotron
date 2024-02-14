@@ -4,7 +4,7 @@ import pytest
 import torch
 from torch import nn
 
-from nanotron.fp8.tracker import ScalingTracker
+from nanotron.fp8 import tracker
 from nanotron.fp8 import FP8Tensor, DTypes
 from nanotron.fp8 import FP8Linear
 from utils import convert_to_fp8_module
@@ -36,7 +36,7 @@ def test_scaling_tracker(interval, n_expected_updates):
 
     linear = nn.Linear(64, 64, device="cuda:0")
     fp8_linear = convert_to_fp8_module(linear)
-    fp8_linear = ScalingTracker(fp8_linear, interval=interval)
+    fp8_linear = tracker.track(fp8_linear, interval=interval)
     
     scaling_factors = {"input_grad": [], "weight_grad": [], "output_grad": []}
     amaxs = {"input_grad": [], "weight_grad": [], "output_grad": []}

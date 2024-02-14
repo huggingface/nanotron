@@ -12,6 +12,14 @@ from nanotron.fp8.kernel import fp8_matmul_kernel
 from nanotron.fp8.meta import FP8Meta
 from nanotron.fp8.parameter import FP8Parameter
 from nanotron.fp8.tensor import FP8Tensor, update_scaling_factor
+from nanotron.fp8.recipe import FP8TensorRecipe, FP8LinearRecipe
+
+
+FP8LMRecipe = FP8LinearRecipe(
+    input_grad=FP8TensorRecipe(dtype=DTypes.FP8E4M3, interval=1, margin=0),
+    weight_grad=FP8TensorRecipe(dtype=DTypes.FP8E4M3, interval=1, margin=0),
+    output_grad=FP8TensorRecipe(dtype=DTypes.FP8E5M2, interval=1, margin=0),
+)
 
 
 @dataclass

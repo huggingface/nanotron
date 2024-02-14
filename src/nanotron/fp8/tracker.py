@@ -26,7 +26,6 @@ class _ScalingTracker(torch.autograd.Function):
         return grad_output
 
 
-def ScalingTracker(module: FP8Linear, interval: int) -> FP8Linear:
+def track(module: FP8Linear, interval: int) -> FP8Linear:
     # TODO(xrsrke): add recursive
     return _ScalingTracker.apply(module, interval)
-

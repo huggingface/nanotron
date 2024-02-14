@@ -1,18 +1,16 @@
 from dataclasses import dataclass
 
-from nanotron.fp8.dtypes import Dtypes
+from nanotron.fp8.dtypes import DTypes
 
 
 class FP8TensorRecipe:
-    dtype: Dtypes
-    window_size: int
+    dtype: DTypes
+    margin: int
+    interval: int
 
 
 @dataclass
 class FP8LinearRecipe:
-    pass
-
-
-FP8LMRecipe = FP8LinearRecipe(
-    
-)
+    input_grad: FP8TensorRecipe
+    weight_grad: FP8TensorRecipe
+    output_grad: FP8TensorRecipe
