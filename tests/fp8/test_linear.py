@@ -82,3 +82,24 @@ def test_fp8_model_bwd():
         optim.step()
 
     assert all(p.grad is not None for p in model.parameters())
+
+
+# NOTE: it seems that dynamic quantization should be in test_tensor
+# but we only do this if we are in training => test it in a linear
+@pytest.mark.parametrize("interval", [1, 5, 10])
+def test_deplay_quantization(interval):
+    # NOTE: test delay quantization (window size)
+    # NOTE: test overflow, underflow, zeros
+    # NOTE: test reduce/increase exponent bits
+
+    HIDDEN_SIZE = 16
+    N_STEPS = 4
+
+    input = torch.randn(HIDDEN_SIZE, HIDDEN_SIZE, device="cuda:0", dtype=torch.float32)
+    # tensor = torch.randn(HIDDEN_SIZE, HIDDEN_SIZE, device="cuda:0", dtype=torch.float32)
+    # fp8_tensor = FP8Tensor(tensor, dtype=DTypes.FP8E4M3)
+    fp8_linear = FP8Linear(HIDDEN_SIZE, HIDDEN_SIZE, device="cuda:0")
+    
+    for _ in range(N_STEPS):
+        output = fp8_linear(input)
+        output.sum().backward()

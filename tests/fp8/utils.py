@@ -1,4 +1,3 @@
-import torch
 import torch.nn as nn
 
 from nanotron.fp8.linear import FP8Linear
