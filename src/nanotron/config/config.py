@@ -288,17 +288,17 @@ class GenerationArgs:
 class Config:
     """Main configuration class"""
 
-    general: Optional[GeneralArgs]
-    checkpoints: Optional[CheckpointsArgs]
-    parallelism: Optional[ParallelismArgs]
-    model: Optional[ModelArgs]
-    tokenizer: Optional[TokenizerArgs]
-    logging: Optional[LoggingArgs]
-    tokens: Optional[TokensArgs]
-    optimizer: Optional[OptimizerArgs]
-    data: Optional[DataArgs]
-    profiler: Optional[ProfilerArgs]
-    lighteval: Optional[LightEvalConfig]
+    general: GeneralArgs
+    parallelism: ParallelismArgs
+    model: ModelArgs
+    tokenizer: TokenizerArgs
+    checkpoints: Optional[CheckpointsArgs] = None
+    logging: Optional[LoggingArgs] = None
+    tokens: Optional[TokensArgs] = None
+    optimizer: Optional[OptimizerArgs] = None
+    data: Optional[DataArgs] = None
+    profiler: Optional[ProfilerArgs] = None
+    lighteval: Optional[LightEvalConfig] = None
 
     @classmethod
     def create_empty(cls):

@@ -106,11 +106,15 @@ def get_dataloader(trainer: DistributedTrainer):
                 dataloader_drop_last=True,
             )
             # Check if we have enough samples for train_steps
-            assert (
-                trainer.config.tokens.train_steps - trainer.start_iteration_step
-            ) * trainer.global_batch_size // trainer.parallel_context.dp_pg.size() <= len(dataloader), (
-                f"Dataset is too small for steps ({len(dataloader)} < {(trainer.config.tokens.train_steps - trainer.start_iteration_step) * trainer.global_batch_size // trainer.parallel_context.dp_pg.size()}), "
-                f"Try train_steps<={len(dataloader) * trainer.parallel_context.dp_pg.size() // trainer.global_batch_size + trainer.start_iteration_step}"
+            total_tokens_dataset = len(dataloader.dataset) * trainer.sequence_length
+            num_tokens_needed_for_training = (
+                (trainer.config.tokens.train_steps - trainer.start_iteration_step)
+                * trainer.global_batch_size
+                * trainer.sequence_length
+            )
+            assert num_tokens_needed_for_training <= total_tokens_dataset, (
+                f"Dataset is too small for steps ({total_tokens_dataset} < {num_tokens_needed_for_training}), "
+                f"Try train_steps<={len(dataloader.dataset) // trainer.global_batch_size + trainer.start_iteration_step}"
             )
     else:
         raise ValueError(f"Unhandled case of `self.config.data.dataset`. Got: {trainer.config.data.dataset}")
