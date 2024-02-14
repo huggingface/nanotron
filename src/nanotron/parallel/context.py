@@ -62,8 +62,6 @@ class ParallelContext:
 
     def _init_parallel_groups(self):
         """Initialize 3D parallelism's all process groups."""
-        # NOTE: ensure all processes have joined the global group
-        # before creating other groups
         dist.barrier()
         world_size = int(os.environ["WORLD_SIZE"])
         ranks = np.arange(0, world_size).reshape(
@@ -92,9 +90,9 @@ class ParallelContext:
         )
 
         self.world_rank_matrix: np.ndarray = ranks
-        dist.barrier()
 
     def create_new_group(self, all_groups_ranks: np.ndarray) -> dist.ProcessGroup:
+        dist.barrier()
         rank = int(os.environ["RANK"])
         new_group_containing_rank = None
         for group_ranks in all_groups_ranks:
@@ -109,6 +107,7 @@ class ParallelContext:
 
             if rank in sorted_ranks:
                 new_group_containing_rank = new_group
+        dist.barrier()
         return new_group_containing_rank
 
     def set_device(self):
