@@ -289,14 +289,14 @@ class Config:
     """Main configuration class"""
 
     general: GeneralArgs
-    checkpoints: CheckpointsArgs
     parallelism: ParallelismArgs
     model: ModelArgs
     tokenizer: TokenizerArgs
-    logging: LoggingArgs
-    tokens: TokensArgs
-    optimizer: OptimizerArgs
-    data: DataArgs
+    checkpoints: Optional[CheckpointsArgs] = None
+    logging: Optional[LoggingArgs] = None
+    tokens: Optional[TokensArgs] = None
+    optimizer: Optional[OptimizerArgs] = None
+    data: Optional[DataArgs] = None
     profiler: Optional[ProfilerArgs] = None
     lighteval: Optional[LightEvalConfig] = None
 
