@@ -3,6 +3,7 @@ import transformer_engine as te  # noqa
 import transformer_engine_extensions as tex
 
 from nanotron.fp8.tensor import FP8Tensor
+from nanotron.fp8.meta import FP8Meta
 
 
 @torch.no_grad()
@@ -30,8 +31,8 @@ def fp8_matmul_kernel(
     bias = torch.tensor([], dtype=torch.float32)
     TE_CONFIG_TRANSPOSE_BIAS = False
 
-    mat_a_fp8_meta = mat_a.fp8_meta
-    mat_b_fp8_meta = mat_b.fp8_meta
+    mat_a_fp8_meta: FP8Meta = mat_a.fp8_meta
+    mat_b_fp8_meta: FP8Meta = mat_b.fp8_meta
 
     # NOTE: these are the fixed configs that TE only takes
     # so we have to TE the A and B matrix to match these configs

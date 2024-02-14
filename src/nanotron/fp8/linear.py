@@ -30,22 +30,22 @@ class FP8Linear(nn.Linear):
 
             # NOTE: quantization metadata for input gradients, weight gradients, and output gradients
             # TODO(xrsrke): don't fixed this
-            FP8E4M3_SCALE = update_scaling_factor(
+            fp8e4m3_scale = update_scaling_factor(
                 amax=torch.tensor(INITIAL_AMAX, dtype=torch.float32),
                 scaling_factor=torch.tensor(INITIAL_SCALING_FACTOR),
                 dtype=DTypes.FP8E4M3,
             )
-            FP8E5M2_SCALE = update_scaling_factor(
+            fp8e5m2_scale = update_scaling_factor(
                 amax=torch.tensor(INITIAL_AMAX, dtype=torch.float32),
                 scaling_factor=torch.tensor(INITIAL_SCALING_FACTOR, dtype=torch.float32),
                 dtype=DTypes.FP8E5M2,
             )
             self.fp8_meta: FP8LinearMeta = {
                 # kfloat8_e4m3
-                "input_grad": FP8Meta(amax=1, dtype=DTypes.FP8E4M3, scale=FP8E4M3_SCALE),
-                "weight_grad": FP8Meta(amax=1, dtype=DTypes.FP8E4M3, scale=FP8E4M3_SCALE),
+                "input_grad": FP8Meta(amax=1, dtype=DTypes.FP8E4M3, scale=fp8e4m3_scale),
+                "weight_grad": FP8Meta(amax=1, dtype=DTypes.FP8E4M3, scale=fp8e4m3_scale),
                 # kfloat8_e5m2
-                "output_grad": FP8Meta(amax=1, dtype=DTypes.FP8E5M2, scale=FP8E5M2_SCALE),
+                "output_grad": FP8Meta(amax=1, dtype=DTypes.FP8E5M2, scale=fp8e5m2_scale),
             }
 
     def forward(self, input: Union[FP8Tensor, torch.Tensor]) -> torch.Tensor:

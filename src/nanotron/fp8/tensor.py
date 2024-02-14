@@ -10,6 +10,9 @@ class FP8Tensor(torch.Tensor):
     """FP8 Tensor."""
 
     def __new__(cls, tensor: torch.Tensor, dtype: DTypes) -> torch.Tensor:
+        assert isinstance(tensor, torch.Tensor), "tensor must be a tensor"
+        assert tensor.dtype not in FP8_DTYPES, "The tensor already quantized to FP8"
+        
         # TODO(xrsrke): there is a circular import issue
         # between tensor.py and meta.py fix this
         from nanotron.fp8.meta import FP8Meta
@@ -22,11 +25,7 @@ class FP8Tensor(torch.Tensor):
         amax = tensor.abs().max().clone()
         scale = update_scaling_factor(amax, torch.tensor(INITIAL_SCALING_FACTOR, dtype=torch.float32), dtype)
         fp8_meta = FP8Meta(amax, scale, dtype)
-
-        if tensor.dtype not in FP8_DTYPES:
-            fp8_tensor = convert_tensor_to_fp8(tensor, fp8_meta)
-        else:
-            fp8_tensor = tensor
+        fp8_tensor = convert_tensor_to_fp8(tensor, fp8_meta)
 
         # TODO(xrsrke): move update inverse scaling to FP8Meta's initialization
         obj = torch.Tensor._make_subclass(cls, fp8_tensor)
