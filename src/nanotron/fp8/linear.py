@@ -1,4 +1,5 @@
-from typing import Optional, Tuple, TypedDict, Union
+from typing import Optional, Tuple, Union
+from dataclasses import dataclass
 
 import torch
 import torch.nn.functional as F
@@ -13,7 +14,8 @@ from nanotron.fp8.parameter import FP8Parameter
 from nanotron.fp8.tensor import FP8Tensor, update_scaling_factor
 
 
-class FP8LinearMeta(TypedDict):
+@dataclass
+class FP8LinearMeta:
     """FP8 metadata for FP8Linear."""
 
     input_grad: FP8Meta
@@ -40,13 +42,14 @@ class FP8Linear(nn.Linear):
                 scaling_factor=torch.tensor(INITIAL_SCALING_FACTOR, dtype=torch.float32),
                 dtype=DTypes.FP8E5M2,
             )
-            self.fp8_meta: FP8LinearMeta = {
+            self.fp8_meta = FP8LinearMeta(
                 # kfloat8_e4m3
-                "input_grad": FP8Meta(amax=1, dtype=DTypes.FP8E4M3, scale=FP8E4M3_SCALE),
-                "weight_grad": FP8Meta(amax=1, dtype=DTypes.FP8E4M3, scale=FP8E4M3_SCALE),
+                input_grad=FP8Meta(amax=1, dtype=DTypes.FP8E4M3, scale=FP8E4M3_SCALE),
+                # TODO: move the weight gradient's metadata to the weight itself
+                weight_grad=FP8Meta(amax=1, dtype=DTypes.FP8E4M3, scale=FP8E4M3_SCALE),
                 # kfloat8_e5m2
-                "output_grad": FP8Meta(amax=1, dtype=DTypes.FP8E5M2, scale=FP8E5M2_SCALE),
-            }
+                output_grad=FP8Meta(amax=1, dtype=DTypes.FP8E5M2, scale=FP8E5M2_SCALE)
+            )
 
     def forward(self, input: Union[FP8Tensor, torch.Tensor]) -> torch.Tensor:
         # NOTE: only do fp8 kernel if both input and weight are on CUDA device

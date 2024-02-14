@@ -17,7 +17,7 @@ class FP8Tensor(torch.Tensor):
         # TODO(xrsrke): if the tensor is on cpu, then bypass the quantization
         # because the current kernels only support gpu tensor
         assert tensor.device != torch.device("cpu"), "FP8Tensor only supports CUDA device"
-        assert isinstance(dtype, DTypes)
+        assert dtype in [DTypes.FP8E4M3, DTypes.FP8E5M2], "FP8Tensor only supports FP8E4M3 and FP8E5M2"
 
         amax = tensor.abs().max().clone()
         scale = update_scaling_factor(amax, torch.tensor(INITIAL_SCALING_FACTOR, dtype=torch.float32), dtype)
