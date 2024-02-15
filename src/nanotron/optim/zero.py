@@ -348,16 +348,17 @@ def find_optim_index_from_param_name(
     # NOTE: (pp_rank, dp_rank, tp_rank) or (pp_rank, tp_rank)
     ckp_sharded_optim_states: Union[Tuple[Tuple[int, int, int], torch.Tensor], Tuple[Tuple[int, int], torch.Tensor]],
     is_zero1: bool,
+    pp_rank=0,
 ) -> int:
     param_name = param_name.replace("module.", "")
     # NOTE: since all shards have the same optim state names
-    # so we take the first shard
+    # so we take the first shard (except optionally the pp dimension)
     if is_zero1 is True:
         # NOTE: (pp_rank, dp_rank, tp_rank)
-        OPTIM_STATE_INDEX_TO_PARAM_NAME = ckp_sharded_optim_states[(0, 0, 0)]["names"]
+        OPTIM_STATE_INDEX_TO_PARAM_NAME = ckp_sharded_optim_states[(pp_rank, 0, 0)]["names"]
     else:
         # NOTE: (pp_rank, tp_rank)
-        OPTIM_STATE_INDEX_TO_PARAM_NAME = ckp_sharded_optim_states[(0, 0)]["names"]
+        OPTIM_STATE_INDEX_TO_PARAM_NAME = ckp_sharded_optim_states[(pp_rank, 0)]["names"]
 
     return next((k for k, v in OPTIM_STATE_INDEX_TO_PARAM_NAME.items() if v == param_name), None)
 
