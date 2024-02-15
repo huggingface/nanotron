@@ -1,19 +1,16 @@
 from copy import deepcopy
 
 import torch
-from torch import nn
-from torch.optim import Adam
-from msamp.nn import LinearReplacer
 from msamp.common.dtype import Dtypes as MS_Dtypes
-from msamp.optim import LBAdam
-
+from msamp.nn import LinearReplacer
+from torch import nn
 
 HIDDEN_SIZE = 16
 ref_linear = nn.Linear(HIDDEN_SIZE, HIDDEN_SIZE, device="cuda")
 msamp_linear = deepcopy(ref_linear)
 msamp_linear = LinearReplacer.replace(msamp_linear, MS_Dtypes.kfloat16)
 
-input = torch.randn(HIDDEN_SIZE, HIDDEN_SIZE, device='cuda')
+input = torch.randn(HIDDEN_SIZE, HIDDEN_SIZE, device="cuda")
 
 ref_output = ref_linear(input)
 ref_output.sum().backward()
