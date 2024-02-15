@@ -23,4 +23,4 @@ jobs:
     - name: Count Lines of Code (cloc)
       uses: djdefi/cloc-action@6
       with:
-        options: --exclude-dir=docs,tests,examples --exclude-lang=YAML --exclude-list-file=sanity_checks.py
+        options: options: --by-file-by-lang --exclude-dir=docs,tests,examples --exclude-lang=YAML,Markdown,TOML --exclude-list-file=sanity_checks.py
