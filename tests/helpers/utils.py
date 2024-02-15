@@ -246,8 +246,8 @@ def global_wrapper(rank, func, tp, pp, dp, port, kwargs):
     def setup_dist_env(rank, world_size, port):
         os.environ["WORLD_SIZE"] = str(world_size)
         os.environ["RANK"] = str(rank)
-        # NOTE: since we do unit tests in
-        # a single node => this is fine!
+        # NOTE: since we do unit tests in a
+        # single node => this is fine!
         os.environ["LOCAL_RANK"] = str(rank)
         os.environ["MASTER_ADDR"] = "localhost"
         os.environ["MASTER_PORT"] = str(port)
