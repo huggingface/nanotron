@@ -8,7 +8,6 @@ from inspect import signature
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import torch.cuda
-import torch.multiprocessing as mp
 from nanotron.parallel import ParallelContext
 from packaging import version
 from torch.distributed.launcher import elastic_launch
@@ -285,8 +284,8 @@ def rerun_on_exception(exception_type: Exception = Exception, pattern: str = Non
             while max_try is None or try_count < max_try:
                 try:
                     try_count += 1
-                    if try_count == max_try:
-                        raise ValueError("Maximum number of attempts is reached, no more retrying...")
+                    # if try_count == max_try:
+                    #     raise ValueError("Maximum number of attempts is reached, no more retrying...")
 
                     ret = func(*args, **kwargs)
                     return ret
@@ -374,30 +373,23 @@ def rerun_on_exception(exception_type: Exception = Exception, pattern: str = Non
 #         mp.spawn(wrapped_func, nprocs=self.world_size)
 
 
-def global_wrapper(rank, func, tp, pp, dp, port, *args, **kwargs):
-    setup_dist_env(rank, tp * pp * dp, port)
-    func(tp=tp, pp=pp, dp=dp, **kwargs)
+# def global_wrapper(rank, func, tp, pp, dp, port, *args, **kwargs):
+#     setup_dist_env(rank, tp * pp * dp, port)
+#     func(tp=tp, pp=pp, dp=dp, *args, **kwargs)
 
 
-def spawn(func: Callable, tp: int, pp: int, dp: int, **kwargs):
-    from nanotron.utils import find_free_port
+# def global_wrapper(rank, func, tp, pp, dp, port, *args, **kwargs):
+#     setup_dist_env(rank, tp * pp * dp, port)
+#     func(tp=tp, pp=pp, dp=dp, **kwargs)
 
-    world_size = tp * pp * dp
-    port = find_free_port()
 
-    # wrapped_func = partial(func, world_size=world_size, tp=tp, pp=pp, dp=dp, port=port, **kwargs)
-    # wrapped_func = init_process_and_run_func_for_spawn(func, tp=tp, dp=dp, pp=pp, kwargs=kwargs)
+# def spawn(func: Callable, tp: int, pp: int, dp: int, **kwargs):
+#     from nanotron.utils import find_free_port
 
-    # def func_wrapper(rank, *args, **kwargs):
-    #     # Set up distributed environment variables for the process
-    #     setup_dist_env(rank, world_size, port)
-    #     # Call the original function without needing to set up the environment explicitly
-    #     func(tp=tp, pp=pp, dp=dp, **kwargs)
+#     world_size = tp * pp * dp
+#     port = find_free_port()
 
-    # wrapped_func = partial(func_wrapper, tp=tp, pp=pp, dp=dp, port=port, **kwargs)
-
-    # mp.spawn(wrapped_func, nprocs=world_size)
-    mp.spawn(global_wrapper, args=(func, tp, pp, dp, port, kwargs), nprocs=world_size)
+#     mp.spawn(global_wrapper, args=(func, tp, pp, dp, port, kwargs), nprocs=world_size)
 
 
 def setup_dist_env(rank, world_size, port):
@@ -406,3 +398,39 @@ def setup_dist_env(rank, world_size, port):
     os.environ["LOCAL_RANK"] = str(rank)
     os.environ["MASTER_ADDR"] = "localhost"
     os.environ["MASTER_PORT"] = str(port)
+
+
+def global_wrapper(rank, func, tp, pp, dp, port, kwargs):
+    world_size = tp * pp * dp
+    setup_dist_env(rank, world_size, port)
+    func(tp=tp, pp=pp, dp=dp, **kwargs)
+
+
+def spawn(func: Callable, tp: int, pp: int, dp: int, **kwargs):
+    import torch.multiprocessing as mp
+    from nanotron.utils import find_free_port
+
+    world_size = tp * pp * dp
+    port = find_free_port()
+
+    # Note that kwargs needs to be passed as part of args in a way that can be unpacked
+    args = (func, tp, pp, dp, port, kwargs)
+    mp.spawn(global_wrapper, args=args, nprocs=world_size)
+
+
+def spawn_new(tp: int, dp: int, pp: int):
+    def _init_distributed(func):
+        def wrapper(**kwargs):
+            import torch.multiprocessing as mp
+            from nanotron.utils import find_free_port
+
+            world_size = tp * pp * dp
+            port = find_free_port()
+
+            # Note that kwargs needs to be passed as part of args in a way that can be unpacked
+            args = (func, tp, pp, dp, port, kwargs)
+            mp.spawn(global_wrapper, args=args, nprocs=world_size)
+
+        return wrapper
+
+    return _init_distributed
