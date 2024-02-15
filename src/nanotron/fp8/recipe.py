@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from nanotron.fp8.dtypes import DTypes
 
 
+@dataclass
 class FP8TensorRecipe:
     dtype: DTypes
     margin: int

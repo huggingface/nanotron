@@ -22,7 +22,8 @@ def test_fp8_linear_forward_pass(is_bias):
 
     assert isinstance(output, torch.Tensor)
     assert output.dtype == torch.float32
-    
+
+    # NOTE: this threshold is from fp8-lm, the paper shows that this is fine
     torch.testing.assert_allclose(output, ref_output, rtol=0, atol=0.1)
 
 
@@ -44,6 +45,7 @@ def test_fp8_linear_backward_pass(input_requires_grad, device):
     ref_linear(ref_input).sum().backward()
     fp8_linear(input).sum().backward()
 
+    # NOTE: this threshold is from fp8-lm, the paper shows that this is fine
     # TODO(xrsrke): investigate why input.grad is so high tolerance
     # assert torch.allclose(input.grad, ref_input.grad, 0.2, 0.2) if input_requires_grad else True
     torch.testing.assert_close(fp8_linear.weight.grad, ref_linear.weight.grad, rtol=0.1, atol=0.1)
@@ -96,10 +98,8 @@ def test_deplay_quantization(interval):
     N_STEPS = 4
 
     input = torch.randn(HIDDEN_SIZE, HIDDEN_SIZE, device="cuda:0", dtype=torch.float32)
-    # tensor = torch.randn(HIDDEN_SIZE, HIDDEN_SIZE, device="cuda:0", dtype=torch.float32)
-    # fp8_tensor = FP8Tensor(tensor, dtype=DTypes.FP8E4M3)
     fp8_linear = FP8Linear(HIDDEN_SIZE, HIDDEN_SIZE, device="cuda:0")
-    
+
     for _ in range(N_STEPS):
         output = fp8_linear(input)
         output.sum().backward()
