@@ -37,8 +37,8 @@ def test_amax_tracker(interval, n_expected_updates):
     fp8_linear = tracker.track(fp8_linear, interval=interval)
 
     amaxs = {"input_grad": [], "weight_grad": [], "output_grad": []}
-
     for _ in range(interval * n_expected_updates):
         fp8_linear(input).sum().backward()
 
+    # TODO(xrsrke): check that it always keep the interval recent amax
     assert len(amaxs) == interval * n_expected_updates
