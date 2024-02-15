@@ -2,10 +2,10 @@ import functools
 import inspect
 import math
 import os
-from contextlib import ExitStack, contextmanager
-from typing import Callable, ContextManager, List, Optional
 import random
 import socket
+from contextlib import ExitStack, contextmanager
+from typing import Callable, ContextManager, List, Optional
 
 import torch
 from packaging import version
@@ -159,5 +159,5 @@ def find_free_port(min_port: int = 2000, max_port: int = 65000) -> int:
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 sock.bind(("localhost", port))
                 return port
-        except OSError as e:
-            raise e
+        except OSError:
+            raise Exception("Address already in use")

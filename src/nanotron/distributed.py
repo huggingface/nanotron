@@ -240,7 +240,7 @@ def get_rank(group: Optional[ProcessGroup] = None) -> int:  # pylint: disable=fu
     return result
 
 
-def initialize_torch_distributed(port: Optional[int] = None):
+def initialize_torch_distributed():
     """Initializes torch distributed with the environment variables"""
     rank = int(os.getenv("RANK", "0"))
     world_size = int(os.getenv("WORLD_SIZE", "1"))
@@ -259,7 +259,14 @@ def initialize_torch_distributed(port: Optional[int] = None):
         backend = "gloo"
 
     # Call the init process.
-    port = find_free_port() if port is None else port
+    # port = find_free_port() if port is None else port
+
+    port = os.getenv("MASTER_PORT")
+    if port is None:
+        port = find_free_port()
+    else:
+        port = int(port)
+
     init_method = f"env://localhost:{port}"
     dist.init_process_group(
         init_method=init_method, backend=backend, world_size=world_size, rank=rank, timeout=dist.default_pg_timeout
