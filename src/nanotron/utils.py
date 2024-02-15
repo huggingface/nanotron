@@ -160,4 +160,6 @@ def find_free_port(min_port: int = 2000, max_port: int = 65000) -> int:
                 sock.bind(("localhost", port))
                 return port
         except OSError:
+            # NOTE: we raise the same message as pytorch distributed raises
+            # so that rerun_if_address_is_in_use() can catch it!
             raise Exception("Address already in use")
