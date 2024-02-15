@@ -17,7 +17,8 @@ def test_check_send_recv_tensor(send_contiguous: bool, full: bool):
     init_distributed(tp=1, dp=1, pp=2)(_test_check_send_recv_tensor)(send_contiguous=send_contiguous, full=full)
 
 
-def _test_check_send_recv_tensor(parallel_context: ParallelContext, send_contiguous: bool, full: bool):
+def _test_check_send_recv_tensor(tp: int, pp: int, dp: int, send_contiguous: bool, full: bool):
+    parallel_context = ParallelContext(data_parallel_size=dp, pipeline_parallel_size=pp, tensor_parallel_size=tp)
     p2p = P2P(pg=parallel_context.pp_pg, device=torch.device("cuda"))
     if dist.get_rank(p2p.pg) == 0:
         tensor_to_send = torch.randn(3, 5, dtype=torch.float, device=torch.device("cuda"))

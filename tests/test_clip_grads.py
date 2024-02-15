@@ -37,7 +37,8 @@ def test_clip_grads_with_pp(norm_type: float):
     init_distributed(tp=1, dp=1, pp=2)(_test_clip_grads_with_pp)(norm_type=norm_type)
 
 
-def _test_clip_grads_with_pp(parallel_context: ParallelContext, norm_type: float):
+def _test_clip_grads_with_pp(tp: int, pp: int, dp: int, norm_type: float):
+    parallel_context = ParallelContext(data_parallel_size=dp, pipeline_parallel_size=pp, tensor_parallel_size=tp)
     device = torch.device("cuda")
     p2p = P2P(parallel_context.pp_pg, device=device)
     reference_rank = 0
@@ -211,10 +212,13 @@ def test_clip_grads_with_tp(tp_mode: TensorParallelLinearMode, async_communicati
 
 
 def _test_clip_grads_with_tp(
-    parallel_context: ParallelContext, tp_mode: TensorParallelLinearMode, async_communication: bool, norm_type: float
+    tp: int, pp: int, dp: int, tp_mode: TensorParallelLinearMode, async_communication: bool, norm_type: float
 ):
     if async_communication:
         os.environ["CUDA_DEVICE_MAX_CONNECTIONS"] = "1"
+
+    parallel_context = ParallelContext(data_parallel_size=dp, pipeline_parallel_size=pp, tensor_parallel_size=tp)
+
     in_features = 2
     out_features_per_tp_rank = 3
     out_features = parallel_context.tp_pg.size() * out_features_per_tp_rank
@@ -352,7 +356,8 @@ def test_clip_grads_tied_weights(norm_type: float):
     init_distributed(tp=1, dp=1, pp=2)(_test_clip_grads_tied_weights)(norm_type=norm_type)
 
 
-def _test_clip_grads_tied_weights(parallel_context: ParallelContext, norm_type: float):
+def _test_clip_grads_tied_weights(tp: int, pp: int, dp: int, norm_type: float):
+    parallel_context = ParallelContext(data_parallel_size=dp, pipeline_parallel_size=pp, tensor_parallel_size=tp)
     if dist.get_rank(parallel_context.pp_pg) == 0:
         model = nn.ModuleDict({"dense0": nn.Linear(10, 10, device="cuda")})
     else:
@@ -449,9 +454,8 @@ def test_clip_grads_fp32_accumulator(norm_type: float, half_precision: torch.dty
     )
 
 
-def _test_clip_grads_fp32_accumulator(
-    parallel_context: ParallelContext, norm_type: float, half_precision: torch.dtype
-):
+def _test_clip_grads_fp32_accumulator(tp: int, pp: int, dp: int, norm_type: float, half_precision: torch.dtype):
+    parallel_context = ParallelContext(data_parallel_size=dp, pipeline_parallel_size=pp, tensor_parallel_size=tp)
     device = torch.device("cuda")
     p2p = P2P(parallel_context.pp_pg, device=device)
     reference_rank = 0

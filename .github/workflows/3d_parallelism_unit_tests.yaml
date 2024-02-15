@@ -54,7 +54,6 @@ jobs:
       # "fa2" (these are FA2-related tests, we can't run it on T4)
       run: |
         pytest \
-        -n 1 \
         -m "not fa2" \
         --color=yes \
         --durations=0 \

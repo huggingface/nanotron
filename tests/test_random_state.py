@@ -19,7 +19,8 @@ def test_random_state_sync(tp: int, dp: int, pp: int):
     init_distributed(tp=tp, dp=dp, pp=pp)(_test_random_state_sync)()
 
 
-def _test_random_state_sync(parallel_context: ParallelContext):
+def _test_random_state_sync(tp: int, pp: int, dp: int):
+    parallel_context = ParallelContext(data_parallel_size=dp, pipeline_parallel_size=pp, tensor_parallel_size=tp)
     current_random_state = get_current_random_state()
     reference_rank = 0
     pg = next(

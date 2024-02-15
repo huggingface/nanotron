@@ -25,7 +25,8 @@ def test_build_and_set_rank():
     init_distributed(tp=1, dp=1, pp=2)(_test_build_and_set_rank)()
 
 
-def _test_build_and_set_rank(parallel_context: ParallelContext):
+def _test_build_and_set_rank(tp: int, pp: int, dp: int):
+    parallel_context = ParallelContext(data_parallel_size=dp, pipeline_parallel_size=pp, tensor_parallel_size=tp)
     device = torch.device("cuda")
     p2p = P2P(pg=parallel_context.pp_pg, device=device)
     model = DummyModel(p2p=p2p)
@@ -75,7 +76,8 @@ def test_pipeline_engine(pipeline_engine: PipelineEngine, pp: int):
     init_distributed(tp=1, dp=1, pp=pp)(_test_pipeline_engine)(pipeline_engine=pipeline_engine)
 
 
-def _test_pipeline_engine(parallel_context: ParallelContext, pipeline_engine: PipelineEngine):
+def _test_pipeline_engine(tp: int, pp: int, dp: int, pipeline_engine: PipelineEngine):
+    parallel_context = ParallelContext(data_parallel_size=dp, pipeline_parallel_size=pp, tensor_parallel_size=tp)
     device = torch.device("cuda")
     p2p = P2P(parallel_context.pp_pg, device=device)
     reference_rank = 0
@@ -223,8 +225,10 @@ def test_pipeline_engine_with_tensor_that_does_not_require_grad(pipeline_engine:
 
 
 def _test_pipeline_engine_with_tensor_that_does_not_require_grad(
-    parallel_context: ParallelContext, pipeline_engine: PipelineEngine
+    tp: int, pp: int, dp: int, pipeline_engine: PipelineEngine
 ):
+    parallel_context = ParallelContext(data_parallel_size=dp, pipeline_parallel_size=pp, tensor_parallel_size=tp)
+
     def activation(x: torch.Tensor, y: torch.Tensor):
         return {"output": F.sigmoid(x) * y, "y": y}
 
@@ -451,7 +455,7 @@ def test_pipeline_forward_without_engine(pp: int):
     init_distributed(pp=pp, dp=1, tp=1)(_test_pipeline_forward_without_engine)()
 
 
-def _test_pipeline_forward_without_engine(parallel_context: ParallelContext):
+def _test_pipeline_forward_without_engine(tp: int, pp: int, dp: int):
     def activation(x: torch.Tensor, y: torch.Tensor):
         return {"output": F.sigmoid(x) * y, "y": y}
 
@@ -506,6 +510,7 @@ def _test_pipeline_forward_without_engine(parallel_context: ParallelContext):
             differentiable_tensor = self.loss(x=differentiable_tensor)["output"]
             return differentiable_tensor
 
+    parallel_context = ParallelContext(data_parallel_size=dp, pipeline_parallel_size=pp, tensor_parallel_size=tp)
     device = torch.device("cuda")
     p2p = P2P(parallel_context.pp_pg, device=device)
     reference_rank = 0
@@ -627,7 +632,7 @@ def test_pipeline_engine_diamond(pipeline_engine: PipelineEngine):
     pass
 
 
-def _test_pipeline_engine_diamond(parallel_context: ParallelContext, pipeline_engine: PipelineEngine):
+def _test_pipeline_engine_diamond(tp: int, pp: int, dp: int, pipeline_engine: PipelineEngine):
     class DiamondModel(nn.Module):
         def __init__(self, p2p: P2P):
             super().__init__()
@@ -720,6 +725,7 @@ def _test_pipeline_engine_diamond(parallel_context: ParallelContext, pipeline_en
             out = self.dense_top.activation(input=self.dense_top.linear(input1=y, input2=z)["output"])["output"]
             return self.loss(x=out)["output"]
 
+    parallel_context = ParallelContext(data_parallel_size=dp, pipeline_parallel_size=pp, tensor_parallel_size=tp)
     device = torch.device("cuda")
     p2p = P2P(parallel_context.pp_pg, device=device)
     reference_rank = 0

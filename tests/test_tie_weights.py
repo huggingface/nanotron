@@ -18,9 +18,10 @@ def test_tie_weight_in_same_device():
     init_distributed(tp=1, dp=1, pp=1)(_test_tie_weight_in_same_device)()
 
 
-def _test_tie_weight_in_same_device(parallel_context: ParallelContext):
+def _test_tie_weight_in_same_device(tp: int, pp: int, dp: int):
     model = nn.ModuleDict({"dense0": nn.Linear(10, 10, device="cuda"), "dense1": nn.Linear(10, 10, device="cuda")})
 
+    parallel_context = ParallelContext(data_parallel_size=dp, pipeline_parallel_size=pp, tensor_parallel_size=tp)
     # Tie weights/bias
     tie_parameters(
         root_module=model,
@@ -52,7 +53,8 @@ def test_tie_weight_in_different_device():
     init_distributed(tp=1, dp=1, pp=2)(_test_tie_weight_in_different_device)()
 
 
-def _test_tie_weight_in_different_device(parallel_context: ParallelContext):
+def _test_tie_weight_in_different_device(tp: int, pp: int, dp: int):
+    parallel_context = ParallelContext(data_parallel_size=dp, pipeline_parallel_size=pp, tensor_parallel_size=tp)
     if dist.get_rank(parallel_context.pp_pg) == 0:
         model = nn.ModuleDict(
             {
@@ -123,7 +125,8 @@ def test_tie_weight_across_dp_is_impossible():
     init_distributed(tp=1, dp=2, pp=1)(_test_tie_weight_across_dp_is_impossible)()
 
 
-def _test_tie_weight_across_dp_is_impossible(parallel_context: ParallelContext):
+def _test_tie_weight_across_dp_is_impossible(tp: int, pp: int, dp: int):
+    parallel_context = ParallelContext(data_parallel_size=dp, pipeline_parallel_size=pp, tensor_parallel_size=tp)
     if dist.get_rank(parallel_context.dp_pg) == 0:
         model = nn.ModuleDict(
             {
@@ -161,7 +164,8 @@ def test_tie_weight_in_different_device_have_gradients_synchronized():
     init_distributed(tp=1, dp=1, pp=2)(_test_tie_weight_in_different_device_have_gradients_synchronized)()
 
 
-def _test_tie_weight_in_different_device_have_gradients_synchronized(parallel_context: ParallelContext):
+def _test_tie_weight_in_different_device_have_gradients_synchronized(tp: int, pp: int, dp: int):
+    parallel_context = ParallelContext(data_parallel_size=dp, pipeline_parallel_size=pp, tensor_parallel_size=tp)
     if dist.get_rank(parallel_context.pp_pg) == 0:
         model = nn.ModuleDict(
             {

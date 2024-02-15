@@ -3,14 +3,12 @@ import os
 import random
 import re
 import time
-import uuid
 from inspect import signature
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import torch.cuda
 from nanotron.parallel import ParallelContext
 from packaging import version
-from torch.distributed.launcher import elastic_launch
 
 
 def available_gpus():
@@ -89,40 +87,40 @@ class init_process_and_run_func:
             self.func(*self.args, **self.kwargs)
 
 
-def init_distributed(tp: int, dp: int, pp: int):
-    def _init_distributed(func):
-        """Wrapper to help initialize distributed nanotron.
+# def init_distributed(tp: int, dp: int, pp: int):
+#     def _init_distributed(func):
+#         """Wrapper to help initialize distributed nanotron.
 
-        :param func: parallel function that runs on all the process, it requires one of its keyword argument to be "parallel_context"
-        """
-        nb_gpus = tp * dp * pp
-        run_id = uuid.uuid4()
+#         :param func: parallel function that runs on all the process, it requires one of its keyword argument to be "parallel_context"
+#         """
+#         nb_gpus = tp * dp * pp
+#         run_id = uuid.uuid4()
 
-        config = torch.distributed.launcher.LaunchConfig(
-            min_nodes=1,
-            max_nodes=1,
-            nproc_per_node=nb_gpus,
-            rdzv_backend="c10d",
-            rdzv_configs={"timeout": 60},
-            # Setting port to `0` allows `torch` to randomly pick a port: https://pytorch.org/docs/stable/elastic/run.html#stacked-single-node-multi-worker
-            # Works only for single node workload.
-            rdzv_endpoint="localhost:0",
-            run_id=str(run_id),
-            max_restarts=0,
-            # TODO @thomasw21: Tune as we increase the number of tests
-            monitor_interval=1,
-            tee=torch.distributed.elastic.multiprocessing.Std(3),
-        )
+#         config = torch.distributed.launcher.LaunchConfig(
+#             min_nodes=1,
+#             max_nodes=1,
+#             nproc_per_node=nb_gpus,
+#             rdzv_backend="c10d",
+#             rdzv_configs={"timeout": 60},
+#             # Setting port to `0` allows `torch` to randomly pick a port: https://pytorch.org/docs/stable/elastic/run.html#stacked-single-node-multi-worker
+#             # Works only for single node workload.
+#             rdzv_endpoint="localhost:0",
+#             run_id=str(run_id),
+#             max_restarts=0,
+#             # TODO @thomasw21: Tune as we increase the number of tests
+#             monitor_interval=1,
+#             tee=torch.distributed.elastic.multiprocessing.Std(3),
+#         )
 
-        def wrapper(*args, **kwargs):
-            return elastic_launch(
-                config=config,
-                entrypoint=init_process_and_run_func(func, tp=tp, dp=dp, pp=pp, args=args, kwargs=kwargs),
-            )()
+#         def wrapper(*args, **kwargs):
+#             return elastic_launch(
+#                 config=config,
+#                 entrypoint=init_process_and_run_func(func, tp=tp, dp=dp, pp=pp, args=args, kwargs=kwargs),
+#             )()
 
-        return wrapper
+#         return wrapper
 
-    return _init_distributed
+#     return _init_distributed
 
 
 def is_dict_equal(first: Dict, second: Dict, sub_paths: Optional[List[str]] = None) -> Tuple[bool, Optional[str]]:
@@ -418,7 +416,7 @@ def spawn(func: Callable, tp: int, pp: int, dp: int, **kwargs):
     mp.spawn(global_wrapper, args=args, nprocs=world_size)
 
 
-def spawn_new(tp: int, dp: int, pp: int):
+def init_distributed(tp: int, dp: int, pp: int):
     def _init_distributed(func):
         def wrapper(**kwargs):
             import torch.multiprocessing as mp

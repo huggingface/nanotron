@@ -56,7 +56,8 @@ def test_save_and_load_model(tp: int, dp: int, pp: int):
     init_distributed(tp=tp, dp=dp, pp=pp)(_test_save_and_load_model)(test_context=test_context)
 
 
-def _test_save_and_load_model(parallel_context: ParallelContext, test_context: TestContext):
+def _test_save_and_load_model(tp: int, pp: int, dp: int, test_context: TestContext):
+    parallel_context = ParallelContext(data_parallel_size=dp, pipeline_parallel_size=pp, tensor_parallel_size=tp)
     model = init_dummy_model(parallel_context=parallel_context)
     store_folder = test_context.get_auto_remove_tmp_dir()
 
@@ -98,8 +99,9 @@ def test_save_and_load_optimizer(tp: int, dp: int, pp: int):
     init_distributed(tp=tp, dp=dp, pp=pp)(_test_save_and_load_optimizer)(test_context=test_context)
 
 
-def _test_save_and_load_optimizer(parallel_context: ParallelContext, test_context: TestContext):
+def _test_save_and_load_optimizer(tp: int, pp: int, dp: int, test_context: TestContext):
     store_folder = test_context.get_auto_remove_tmp_dir()
+    parallel_context = ParallelContext(data_parallel_size=dp, pipeline_parallel_size=pp, tensor_parallel_size=tp)
     model = init_dummy_model(parallel_context=parallel_context)
     optimizer = NamedOptimizer(
         named_params_or_groups=model.named_parameters(),
@@ -163,8 +165,9 @@ def test_save_zero_optimizer_and_load_optimizer(tp: int, dp: int, pp: int):
     init_distributed(tp=tp, dp=dp, pp=pp)(_test_save_zero_optimizer_and_load_optimizer)(test_context=test_context)
 
 
-def _test_save_zero_optimizer_and_load_optimizer(parallel_context: ParallelContext, test_context: TestContext):
+def _test_save_zero_optimizer_and_load_optimizer(tp: int, pp: int, dp: int, test_context: TestContext):
     store_folder = test_context.get_auto_remove_tmp_dir()
+    parallel_context = ParallelContext(data_parallel_size=dp, pipeline_parallel_size=pp, tensor_parallel_size=tp)
     model = init_dummy_model(parallel_context=parallel_context)
     optimizer = ZeroDistributedOptimizer(
         named_params_or_groups=model.named_parameters(),
@@ -239,10 +242,9 @@ def test_save_zero_optimizer_and_load_data_parallel_optimizer(tp: int, dp: int, 
     )
 
 
-def _test_save_zero_optimizer_and_load_data_parallel_optimizer(
-    parallel_context: ParallelContext, test_context: TestContext
-):
+def _test_save_zero_optimizer_and_load_data_parallel_optimizer(tp: int, pp: int, dp: int, test_context: TestContext):
     store_folder = test_context.get_auto_remove_tmp_dir()
+    parallel_context = ParallelContext(data_parallel_size=dp, pipeline_parallel_size=pp, tensor_parallel_size=tp)
     model = init_dummy_model(parallel_context=parallel_context)
     optimizer = ZeroDistributedOptimizer(
         named_params_or_groups=model.named_parameters(),
@@ -310,10 +312,9 @@ def test_save_data_parallel_optimizer_and_load_zero_optimizer(tp: int, dp: int, 
     )
 
 
-def _test_save_data_parallel_optimizer_and_load_zero_optimizer(
-    parallel_context: ParallelContext, test_context: TestContext
-):
+def _test_save_data_parallel_optimizer_and_load_zero_optimizer(tp: int, pp: int, dp: int, test_context: TestContext):
     store_folder = test_context.get_auto_remove_tmp_dir()
+    parallel_context = ParallelContext(data_parallel_size=dp, pipeline_parallel_size=pp, tensor_parallel_size=tp)
     model = init_dummy_model(parallel_context=parallel_context)
     optimizer = NamedOptimizer(
         named_params_or_groups=model.named_parameters(),
@@ -377,9 +378,10 @@ def test_save_optimizer_with_additional_state_dict_keys(tp: int, dp: int, pp: in
     )
 
 
-def _test_save_optimizer_with_additional_state_dict_keys(parallel_context: ParallelContext, test_context: TestContext):
+def _test_save_optimizer_with_additional_state_dict_keys(tp: int, pp: int, dp: int, test_context: TestContext):
     dtype = torch.float16
     store_folder = test_context.get_auto_remove_tmp_dir()
+    parallel_context = ParallelContext(data_parallel_size=dp, pipeline_parallel_size=pp, tensor_parallel_size=tp)
     model = init_dummy_model(parallel_context=parallel_context, dtype=dtype)
 
     if isinstance(model, DistributedDataParallel):
@@ -483,7 +485,8 @@ def test_save_and_load_random_states():
     init_distributed(tp=2, dp=1, pp=1)(_test_save_and_load_random_states)(test_context=test_context)
 
 
-def _test_save_and_load_random_states(parallel_context: ParallelContext, test_context: TestContext):
+def _test_save_and_load_random_states(tp: int, pp: int, dp: int, test_context: TestContext):
+    parallel_context = ParallelContext(data_parallel_size=dp, pipeline_parallel_size=pp, tensor_parallel_size=tp)
     pg = next(
         (pg for pg in [parallel_context.tp_pg, parallel_context.dp_pg, parallel_context.pp_pg] if pg.size() == 2)
     )
@@ -522,12 +525,13 @@ def test_serialize_deserialize_tensormetadata():
     init_distributed(tp=2, dp=1, pp=1)(_test_serialize_deserialize_tensormetadata)(test_context=test_context)
 
 
-def _test_serialize_deserialize_tensormetadata(parallel_context: ParallelContext, test_context: TestContext):
+def _test_serialize_deserialize_tensormetadata(tp: int, pp: int, dp: int, test_context: TestContext):
     param = torch.nn.Parameter(torch.randn(16, 64))
     split_config = SplitConfig(
         split_dim=0,
         contiguous_chunks=(8, 8),
     )
+    parallel_context = ParallelContext(data_parallel_size=dp, pipeline_parallel_size=pp, tensor_parallel_size=tp)
     param = create_sharded_parameter_from_config(parameter=param, pg=parallel_context.tp_pg, split_config=split_config)
     sharded_info = param.get_sharded_info()
     metadata = TensorMetadata(
