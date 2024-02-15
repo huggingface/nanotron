@@ -24,15 +24,15 @@ from flash_attn.flash_attn_interface import (
 )
 from flash_attn.layers.rotary import RotaryEmbedding as FlashRotaryEmbedding
 from torch import nn
-from transformers import LlamaConfig
-from transformers.activations import ACT2FN
 
 from nanotron import distributed as dist
 from nanotron import logging
-from nanotron.config import ParallelismArgs, RecomputeGranularity
-from nanotron.fused.layer_norm import TritonRMSNorm
+from nanotron.config import LlamaConfig, ParallelismArgs, RecomputeGranularity
+from nanotron.generation.generate_store import AttachableStore
 from nanotron.logging import log_rank
-from nanotron.models import AttachableStore, NanotronModel
+from nanotron.models import NanotronModel
+from nanotron.nn.activations import ACT2FN
+from nanotron.nn.layer_norm import TritonRMSNorm
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter
 from nanotron.parallel.pipeline_parallel.block import (
@@ -384,7 +384,6 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             # Double check that we use store only at inference time
             assert key_states.requires_grad is False
             assert value_states.requires_grad is False
-            print("Using store")
             if "position_offsets" in store:
                 old_position_offsets = store["position_offsets"]
                 position_ids = old_position_offsets[:, None] + sequence_mask
@@ -1027,6 +1026,13 @@ class LlamaForTraining(NanotronModel):
             else name
             for name, param in model.named_parameters()
         }, f"Somehow the initialized set of parameters don't match:\n - Expected: { {name for name, _ in model.named_parameters()} }\n - Got: {initialized_parameters}"
+
+    def get_embeddings_lm_head_tied_names(self):
+        """Get the names of the tied embeddings and lm_head weights"""
+        if self.config.tie_word_embeddings is True:
+            return ["model.token_position_embeddings.pp_block.token_embedding.weight", "model.lm_head.pp_block.weight"]
+        else:
+            return []
 
     def get_block_compute_costs(self):
         """Computes the compute cost of each block in the model so that we can do a better job of load balancing."""

@@ -21,6 +21,7 @@ from functools import lru_cache
 from logging import CRITICAL, DEBUG, ERROR, FATAL, INFO, NOTSET, WARNING, Formatter, Logger
 from typing import List, Optional, Union
 
+import torch
 from torch import distributed as torch_dist
 
 from nanotron import distributed as dist
@@ -214,7 +215,7 @@ def log_rank(
 
 @lru_cache(maxsize=None)
 def warn_once(
-    logger: Logger, msg: str, group: Optional[dist.ProcessGroup] = None, rank: Optional[int] = None, **kwargs
+    msg: str, logger: Logger, group: Optional[dist.ProcessGroup] = None, rank: Optional[int] = None, **kwargs
 ):
     log_rank(msg=msg, logger=logger, level=logging.WARNING, group=group, rank=rank, **kwargs)
 
@@ -231,6 +232,18 @@ def human_format(num: float, billions: bool = False, divide_by_1024: bool = Fals
         num /= 1000.0 if not divide_by_1024 else 1024.0
         i += 1
     return "{}{}".format("{:f}".format(num).rstrip("0").rstrip("."), SIZES[magnitude])
+
+
+def log_memory(logger: logging.Logger):
+    log_rank(
+        f" Memory usage: {torch.cuda.memory_allocated() / 1024**2:.2f}MiB."
+        f" Peak allocated {torch.cuda.max_memory_allocated() / 1024**2:.2f}MiB."
+        f" Peak reserved: {torch.cuda.max_memory_reserved() / 1024**2:.2f}MiB",
+        logger=logger,
+        level=logging.INFO,
+        rank=0,
+    )
+    torch.cuda.reset_peak_memory_stats()
 
 
 @dataclass

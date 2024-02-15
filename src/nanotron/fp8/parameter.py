@@ -14,6 +14,7 @@ class FP8Parameter(nn.Parameter):
     """
 
     def __new__(cls, data: torch.Tensor, dtype: DTypes, requires_grad: bool = True) -> nn.Parameter:
+        assert isinstance(data, torch.Tensor), "data must be a tensor"
         assert data.dtype not in FP8_DTYPES, "Currently only support turn a non-fp8 tensor to an fp8 parameter"
         assert data.device != torch.device("cpu"), "FP8Parameter only supports CUDA tensors"
         # TODO(xrsrke): if the tensor is on cpu, then bypass quantization
@@ -23,7 +24,7 @@ class FP8Parameter(nn.Parameter):
             # currently we can't only quantize a tensor to FP8 after the parameter is created
             # because it raise "Only Tensors of floating point and complex dtype can require gradients"
             self = torch.Tensor._make_subclass(cls, data, requires_grad)
-            self._data = FP8Tensor(data, dtype=dtype) if isinstance(data, torch.Tensor) else data
+            self._data = FP8Tensor(data, dtype=dtype)
         return self
 
     @property

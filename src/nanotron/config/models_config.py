@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import Any, List, Optional, Union
 
 
 @dataclass
@@ -69,7 +69,6 @@ class Starcoder2Config:
     layer_norm_epsilon: float = 1e-05
     max_position_embeddings: int = 4096
     multi_query: bool = False  # MQA
-    multi_query: bool = True
     num_attention_heads: int = 16
     num_hidden_layers: int = 24
     num_kv_heads: Optional[int] = None
@@ -83,8 +82,6 @@ class Starcoder2Config:
     vocab_size: int = 49280
 
     def __post_init__(self):
-        super().__post_init__()
-        delattr(self, "is_gpt_bigcode_config")
         if self.global_attn_layers is None:
             self.global_attn_layers = []
 
@@ -116,4 +113,4 @@ class Starcoder2Config:
         return self.intermediate_size
 
 
-NanotronConfigs = Union[LlamaConfig, Starcoder2Config]
+NanotronConfigs = Union[LlamaConfig, Starcoder2Config, Any]

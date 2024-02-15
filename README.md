@@ -22,12 +22,12 @@ We support the following:
 Requirements:
  - Python >= 3.10
  - PyTorch >= 2.0.0
- - Flash-Attention >= 2.4.2
+ - Flash-Attention >= 2.5.0
 
 To install (in a new env):
 ```bash
 pip install torch
-pip install packaging; pip install "flash-attn>=2.4.2"  --no-build-isolation
+pip install packaging; pip install "flash-attn>=2.5.0"  --no-build-isolation
 git clone git@github.com:huggingface/nanotron.git
 cd nanotron
 pip install -e .
@@ -56,7 +56,7 @@ torchrun --nproc_per_node=8 run_generation.py --ckpt-path checkpoints/text/4
 
 # Development guidelines
 
-If you plan on developping on `nanotron`, we suggest you install the `dev` flavor: `pip install -e ".[dev]"`
+If you plan on developing on `nanotron`, we suggest you install the `dev` flavor: `pip install -e ".[dev]"`
 
 We use pre-commit to run a bunch of callbacks on each commit, mostly normalization code in order for the codebase to stay consistent. Please do run `pre-commit install`.
 

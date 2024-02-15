@@ -45,37 +45,20 @@ class ParallelContext:
 
         self.set_device()
 
-        if not dist.is_initialized():
-            rank = int(os.environ["RANK"])
-            host = os.environ["MASTER_ADDR"]
-            # TODO(xrsrke): make it auto search for ports?
-            port = int(os.environ["MASTER_PORT"])
-            self.init_global_dist(rank, world_size, backend, host, port)
-
-        self._init_parallel_groups()
-
-    def init_global_dist(self, rank: int, world_size: int, backend: DistributedBackend, host: str, port: int):
-        """Initialize the global distributed group.
-
-        Args:
-            rank (int): global rank
-            world_size (int): global world size
-            backend (DistributedBackend): distributed backend
-            host (str): communication host
-            port (int): communication port
-        """
         assert backend == "nccl", "Only nccl backend is supported for now."
 
-        init_method = f"tcp://{host}:{port}"
-        dist.init_process_group(
-            rank=rank, world_size=world_size, backend=backend, init_method=init_method, timeout=dist.default_pg_timeout
-        )
+        if not dist.is_initialized():
+            dist.initialize_torch_distributed()
+
+        world_size = int(os.getenv("WORLD_SIZE", "1"))
         ranks = list(range(world_size))
         process_group = dist.new_group(
             ranks=ranks,
             backend=dist.get_backend(),
         )
         self.world_pg = process_group
+
+        self._init_parallel_groups()
 
     def _init_parallel_groups(self):
         """Initialize 3D parallelism's all process groups."""
