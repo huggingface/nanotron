@@ -8,6 +8,7 @@ from inspect import signature
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import torch.cuda
+import torch.multiprocessing as mp
 from nanotron.parallel import ParallelContext
 from packaging import version
 from torch.distributed.launcher import elastic_launch
@@ -284,6 +285,9 @@ def rerun_on_exception(exception_type: Exception = Exception, pattern: str = Non
             while max_try is None or try_count < max_try:
                 try:
                     try_count += 1
+                    if try_count == max_try:
+                        raise ValueError("Maximum number of attempts is reached, no more retrying...")
+
                     ret = func(*args, **kwargs)
                     return ret
                 except exception_type as e:
@@ -307,3 +311,98 @@ def rerun_on_exception(exception_type: Exception = Exception, pattern: str = Non
         return _run_until_success
 
     return _wrapper
+
+
+# class init_process_and_run_func_for_spawn:
+#     """Initialize distributed process groups and run function."""
+
+#     def __init__(self, func, args, kwargs, tp: int, dp: int, pp: int):
+#         self.func = func
+#         self.args = args
+#         self.kwargs = kwargs
+#         self.tp = tp
+#         self.dp = dp
+#         self.pp = pp
+#         self.__name__ = self.__class__.__name__
+#         self.__qualname__ = self.__class__.__qualname__
+
+#     def __call__(self):
+#         from nanotron.utils import find_free_port
+#         port = find_free_port()
+#         with mock_os_environ(update_key_values={
+#             "WORLD_SIZE": f"{self.tp * self.dp * self.pp}",
+#             "MASTER_ADDR": "localhost",
+#             "MASTER_PORT": str(port)
+#         }):
+#             # NOTE: we use a different random seed, so that each unit tests don't generate the same port
+#             # random.seed(time.time())
+#             parallel_context = ParallelContext(
+#                 data_parallel_size=self.dp, pipeline_parallel_size=self.pp, tensor_parallel_size=self.tp
+#             )
+
+#             assert "parallel_context" not in self.kwargs
+#             self.kwargs["parallel_context"] = parallel_context
+
+#             self.func(*self.args, **self.kwargs)
+
+# class ProcessSpawner:
+#     def __init__(self, func, tp, pp, dp, **kwargs):
+#         self.func = func
+#         self.tp = tp
+#         self.pp = pp
+#         self.dp = dp
+#         self.kwargs = kwargs
+#         self.world_size = tp * pp * dp
+#         self.port = find_free_port()
+
+#     @staticmethod
+#     def setup_dist_env(rank, world_size, port):
+#         os.environ["WORLD_SIZE"] = str(world_size)
+#         os.environ["RANK"] = str(rank)
+#         os.environ["LOCAL_RANK"] = str(rank)
+#         os.environ["MASTER_ADDR"] = "localhost"
+#         os.environ["MASTER_PORT"] = str(port)
+
+#     def func_wrapper(self, rank):
+#         # Setup distributed environment for this process
+#         ProcessSpawner.setup_dist_env(rank, self.world_size, self.port)
+#         # Call the actual function with adjusted parameters
+#         self.func(rank=rank, tp=self.tp, pp=self.pp, dp=self.dp, port=self.port, **self.kwargs)
+
+#     def spawn(self):
+#         wrapped_func = partial(self.func_wrapper)
+#         mp.spawn(wrapped_func, nprocs=self.world_size)
+
+
+def global_wrapper(rank, func, tp, pp, dp, port, *args, **kwargs):
+    setup_dist_env(rank, tp * pp * dp, port)
+    func(tp=tp, pp=pp, dp=dp, **kwargs)
+
+
+def spawn(func: Callable, tp: int, pp: int, dp: int, **kwargs):
+    from nanotron.utils import find_free_port
+
+    world_size = tp * pp * dp
+    port = find_free_port()
+
+    # wrapped_func = partial(func, world_size=world_size, tp=tp, pp=pp, dp=dp, port=port, **kwargs)
+    # wrapped_func = init_process_and_run_func_for_spawn(func, tp=tp, dp=dp, pp=pp, kwargs=kwargs)
+
+    # def func_wrapper(rank, *args, **kwargs):
+    #     # Set up distributed environment variables for the process
+    #     setup_dist_env(rank, world_size, port)
+    #     # Call the original function without needing to set up the environment explicitly
+    #     func(tp=tp, pp=pp, dp=dp, **kwargs)
+
+    # wrapped_func = partial(func_wrapper, tp=tp, pp=pp, dp=dp, port=port, **kwargs)
+
+    # mp.spawn(wrapped_func, nprocs=world_size)
+    mp.spawn(global_wrapper, args=(func, tp, pp, dp, port, kwargs), nprocs=world_size)
+
+
+def setup_dist_env(rank, world_size, port):
+    os.environ["WORLD_SIZE"] = str(world_size)
+    os.environ["RANK"] = str(rank)
+    os.environ["LOCAL_RANK"] = str(rank)
+    os.environ["MASTER_ADDR"] = "localhost"
+    os.environ["MASTER_PORT"] = str(port)
