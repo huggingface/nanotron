@@ -198,7 +198,7 @@ class DistributedTrainer:
 
         # Setup tensorboard write and log writers on output rank
         self.logger_ranks = self.parallel_context.world_rank_matrix[
-            self.unwrapped_model.output_pp_rank, 0, 0
+            0, self.unwrapped_model.output_pp_rank, 0, 0
         ].flatten()
         self.loggerwriter = self.setup_log_writers()
 
@@ -744,6 +744,7 @@ def mark_tied_parameters(
                 target,
                 (
                     parallel_context.world_rank_matrix[
+                        dist.get_rank(parallel_context.expert_pg),
                         get_pp_rank_of(target, module=model),
                         dist.get_rank(parallel_context.dp_pg),
                         dist.get_rank(parallel_context.tp_pg),
