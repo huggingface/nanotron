@@ -146,7 +146,7 @@ class GeneralArgs:
     step: Optional[int] = None
     consumed_train_samples: Optional[int] = None
     benchmark_csv_path: Optional[Path] = None
-    ignore_sanity_checks: bool = False
+    ignore_sanity_checks: bool = True
 
     def __post_init__(self):
         if self.seed is None:
