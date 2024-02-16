@@ -138,9 +138,7 @@ def _test_clip_grads_with_pp(parallel_context: ParallelContext, norm_type: float
     old_bias_grad = non_linear.bias.grad.clone()
     # Clip grads
     total_norm = clip_grad_norm(
-        mp_pg=parallel_context.world_ranks_to_pg[
-            tuple(sorted(parallel_context.world_rank_matrix[:, dist.get_rank(parallel_context.dp_pg), :].reshape(-1)))
-        ],
+        mp_pg=parallel_context.mp_pg,
         named_parameters=model.named_parameters(),
         grad_accumulator=None,
         max_norm=1.0,
@@ -311,9 +309,7 @@ def _test_clip_grads_with_tp(
     old_grad = column_linear.weight.grad.clone()
     # Clip grads
     total_norm = clip_grad_norm(
-        mp_pg=parallel_context.world_ranks_to_pg[
-            tuple(sorted(parallel_context.world_rank_matrix[:, dist.get_rank(parallel_context.dp_pg), :].reshape(-1)))
-        ],
+        mp_pg=parallel_context.mp_pg,
         named_parameters=column_linear.named_parameters(),
         grad_accumulator=None,
         max_norm=1.0,
@@ -420,9 +416,7 @@ def _test_clip_grads_tied_weights(parallel_context: ParallelContext, norm_type: 
     old_grad = weight.grad.clone()
     # Clip grads
     total_norm = clip_grad_norm(
-        mp_pg=parallel_context.world_ranks_to_pg[
-            tuple(sorted(parallel_context.world_rank_matrix[:, dist.get_rank(parallel_context.dp_pg), :].reshape(-1)))
-        ],
+        mp_pg=parallel_context.mp_pg,
         named_parameters=model.named_parameters(),
         grad_accumulator=None,
         max_norm=1.0,
@@ -560,9 +554,7 @@ def _test_clip_grads_fp32_accumulator(
 
     # Clip grads
     total_norm = clip_grad_norm(
-        mp_pg=parallel_context.world_ranks_to_pg[
-            tuple(sorted(parallel_context.world_rank_matrix[:, dist.get_rank(parallel_context.dp_pg), :].reshape(-1)))
-        ],
+        mp_pg=parallel_context.mp_pg,
         named_parameters=model.named_parameters(),
         grad_accumulator=grad_accumulator,
         max_norm=1.0,

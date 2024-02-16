@@ -1445,16 +1445,8 @@ class Starcoder2ForTraining(NanotronModel):
                     shared_weights = [
                         (
                             name,
-                            # This adds all the tp_ranks in one go
-                            tuple(
-                                sorted(
-                                    self.parallel_context.world_rank_matrix[
-                                        dist.get_rank(self.parallel_context.pp_pg),
-                                        dist.get_rank(self.parallel_context.dp_pg),
-                                        :,
-                                    ]
-                                )
-                            ),
+                            # sync across TP group
+                            tuple(sorted(dist.get_process_group_ranks(self.parallel_context.tp_pg))),
                         )
                     ]
                     tie_parameters(
