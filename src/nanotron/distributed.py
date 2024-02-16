@@ -259,7 +259,6 @@ def initialize_torch_distributed():
         backend = "gloo"
 
     # Call the init process.
-    # port = find_free_port() if port is None else port
 
     port = os.getenv("MASTER_PORT")
     if port is None:
