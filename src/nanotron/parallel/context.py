@@ -15,8 +15,8 @@ class ParallelContext:
         tensor_parallel_size: int,
         pipeline_parallel_size: int,
         data_parallel_size: int,
-        backend: DistributedBackend = "nccl",
         expert_parallel_size: int = 1,
+        backend: DistributedBackend = "nccl",
     ):
         """Initialize parallel context."""
         num_gpus_per_model = tensor_parallel_size * pipeline_parallel_size * expert_parallel_size

@@ -35,7 +35,7 @@ class ParallelismArgs:
     recompute_granularity: Optional[RecomputeGranularity] = None
     tp_linear_async_communication: Optional[bool] = None
 
-    expert_parallel_size: Optional[int] = None
+    expert_parallel_size: int = 1
 
     def __post_init__(self):
         # Conservative defaults
@@ -52,6 +52,3 @@ class ParallelismArgs:
             self.tp_mode = TensorParallelLinearMode[self.tp_mode.upper()]
         if isinstance(self.recompute_granularity, str):
             self.recompute_granularity = RecomputeGranularity[self.recompute_granularity.upper()]
-
-        if self.expert_parallel_size is None:
-            self.expert_parallel_size = 1
