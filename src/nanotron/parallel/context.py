@@ -19,7 +19,7 @@ class ParallelContext:
         expert_parallel_size: int = 1,
     ):
         """Initialize parallel context."""
-        num_gpus_per_model = tensor_parallel_size * pipeline_parallel_size
+        num_gpus_per_model = tensor_parallel_size * pipeline_parallel_size * expert_parallel_size
         world_size = int(os.environ["WORLD_SIZE"])
 
         assert (

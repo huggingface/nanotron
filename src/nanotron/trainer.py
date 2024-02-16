@@ -120,6 +120,7 @@ class DistributedTrainer:
             tensor_parallel_size=self.config.parallelism.tp,
             pipeline_parallel_size=self.config.parallelism.pp,
             data_parallel_size=self.config.parallelism.dp,
+            expert_parallel_size=self.config.parallelism.expert_parallel_size,
         )
 
         self.pre_init()
