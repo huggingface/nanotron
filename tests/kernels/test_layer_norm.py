@@ -23,6 +23,7 @@ from torch.nn import LayerNorm
 
 
 # @pytest.mark.skipif(available_gpus() < 1, reason="Testing test_fused_layer_norm requires at least 1 gpus")
+@pytest.mark.fa2
 @pytest.mark.parametrize(
     "hidden_size",
     [1024, 1025],  # fused layer norm supports 1024 as hidden size but not 1025
