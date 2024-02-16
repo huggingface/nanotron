@@ -275,9 +275,12 @@ class LoggerWriter:
 
 def set_logger_verbosity_format(logging_level: str, parallel_context: ParallelContext):
     node_name = os.environ.get("SLURMD_NODENAME")
+    expert_parallel_log = (
+        f"|EXP={dist.get_rank(parallel_context.expert_pg)}" if parallel_context.expert_parallel_size > 1 else ""
+    )
     formatter = Formatter(
         fmt=f"%(asctime)s [%(levelname)s|DP={dist.get_rank(parallel_context.dp_pg)}|PP={dist.get_rank(parallel_context.pp_pg)}|"
-        f"TP={dist.get_rank(parallel_context.tp_pg)}{'|' + node_name if node_name else ''}]: %(message)s",
+        f"TP={dist.get_rank(parallel_context.tp_pg)}{expert_parallel_log}{'|' + node_name if node_name else ''}]: %(message)s",
         datefmt="%m/%d/%Y %H:%M:%S",
     )
     # TODO @thomasw21: `logging.log_levels` returns valid lg log levels
