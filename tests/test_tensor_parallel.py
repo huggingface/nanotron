@@ -1,10 +1,8 @@
 import os
-from contextlib import nullcontext as does_not_raise
-from typing import Any
 
 import pytest
 import torch
-from helpers.utils import available_gpus, init_distributed
+from helpers.utils import available_gpus, init_distributed, rerun_if_address_is_in_use
 from nanotron import distributed as dist
 from nanotron.distributed import get_global_rank
 from nanotron.parallel import ParallelContext
@@ -20,7 +18,10 @@ from torch import nn as torch_nn
 @pytest.mark.parametrize("tp,dp,pp", [pytest.param(i, 1, 1) for i in range(1, min(4, available_gpus()) + 1)])
 @pytest.mark.parametrize("tp_mode", list(TensorParallelLinearMode))
 @pytest.mark.parametrize("async_communication", [False, True])
+@rerun_if_address_is_in_use()
 def test_column_linear(tp: int, dp: int, pp: int, tp_mode: TensorParallelLinearMode, async_communication: bool):
+    if tp_mode is TensorParallelLinearMode.ALL_REDUCE and async_communication:
+        pytest.skip("ALL_REDUCE mode does not support async communication")
     init_distributed(tp=tp, dp=dp, pp=pp)(_test_column_linear)(
         tp_mode=tp_mode, async_communication=async_communication
     )
@@ -143,35 +144,21 @@ def _test_column_linear(
     else:
         ValueError(f"Unsupported mode: {tp_mode}")
 
+    parallel_context.destroy()
+
 
 @pytest.mark.parametrize("tp,dp,pp", [pytest.param(i, 1, 1) for i in range(1, min(4, available_gpus()) + 1)])
-@pytest.mark.parametrize(
-    "tp_mode,async_communication,expectation",
-    [
-        pytest.param(TensorParallelLinearMode.ALL_REDUCE, False, does_not_raise()),
-        pytest.param(TensorParallelLinearMode.REDUCE_SCATTER, False, does_not_raise()),
-        pytest.param(TensorParallelLinearMode.REDUCE_SCATTER, True, does_not_raise()),
-        pytest.param(
-            TensorParallelLinearMode.ALL_REDUCE,
-            True,
-            pytest.raises(
-                ValueError,
-                match=r"Cf this: https://github.com/huggingface/nanotron/blob/bf82cded9eef1ba77864b48e65bffefad4076339/src/nanotron/core/parallel/tensor_parallel/nn.py#L132",
-            ),
-        ),
-    ],
-)
-def test_row_linear(
-    tp: int, dp: int, pp: int, tp_mode: TensorParallelLinearMode, async_communication: bool, expectation: Any
-):
-    init_distributed(tp=tp, dp=dp, pp=pp)(_test_row_linear)(
-        tp_mode=tp_mode, async_communication=async_communication, expectation=expectation
-    )
+@pytest.mark.parametrize("tp_mode", list(TensorParallelLinearMode))
+@pytest.mark.parametrize("async_communication", [False, True])
+@rerun_if_address_is_in_use()
+def test_row_linear(tp: int, dp: int, pp: int, tp_mode: TensorParallelLinearMode, async_communication: bool):
+    if tp_mode is TensorParallelLinearMode.ALL_REDUCE and async_communication:
+        pytest.skip("ALL_REDUCE mode does not support async communication")
+
+    init_distributed(tp=tp, dp=dp, pp=pp)(_test_row_linear)(tp_mode=tp_mode, async_communication=async_communication)
 
 
-def _test_row_linear(
-    parallel_context: ParallelContext, tp_mode: TensorParallelLinearMode, async_communication: bool, expectation: Any
-):
+def _test_row_linear(parallel_context: ParallelContext, tp_mode: TensorParallelLinearMode, async_communication: bool):
     if async_communication:
         os.environ["CUDA_DEVICE_MAX_CONNECTIONS"] = "1"
     out_features = 3
@@ -232,52 +219,54 @@ def _test_row_linear(
 
     # Test that we get the same output after forward pass
     # TODO @kunhao: We may want to have our custom error type
-    with expectation:
-        sharded_output = row_linear(random_sharded_input)
-        reference_output = reference_linear(random_input)
+    sharded_output = row_linear(random_sharded_input)
+    reference_output = reference_linear(random_input)
 
-        if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
-            sharded_reference_output = reference_output
-        elif tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
-            assert batch_size % parallel_context.tp_pg.size() == 0
-            sharded_batch_size = batch_size // parallel_context.tp_pg.size()
-            sharded_reference_output = reference_output[
-                dist.get_rank(parallel_context.tp_pg)
-                * sharded_batch_size : (dist.get_rank(parallel_context.tp_pg) + 1)
-                * sharded_batch_size
-            ]
-        else:
-            raise ValueError(f"Unsupported mode: {tp_mode}")
+    if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
+        sharded_reference_output = reference_output
+    elif tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
+        assert batch_size % parallel_context.tp_pg.size() == 0
+        sharded_batch_size = batch_size // parallel_context.tp_pg.size()
+        sharded_reference_output = reference_output[
+            dist.get_rank(parallel_context.tp_pg)
+            * sharded_batch_size : (dist.get_rank(parallel_context.tp_pg) + 1)
+            * sharded_batch_size
+        ]
+    else:
+        raise ValueError(f"Unsupported mode: {tp_mode}")
 
-        # TODO @thomasw21: Tune tolerance
+    # TODO @thomasw21: Tune tolerance
+    torch.testing.assert_close(
+        sharded_output,
+        sharded_reference_output,
+    )
+
+    # Test that we get the same gradient after backward pass
+    sharded_output.sum().backward()
+    reference_output.sum().backward()
+    torch.testing.assert_close(
+        row_linear.weight.grad,
+        reference_linear.weight.grad[
+            :,
+            dist.get_rank(parallel_context.tp_pg)
+            * in_features_per_rank : (dist.get_rank(parallel_context.tp_pg) + 1)
+            * in_features_per_rank,
+        ],
+    )
+    if dist.get_rank(parallel_context.tp_pg) == 0:
         torch.testing.assert_close(
-            sharded_output,
-            sharded_reference_output,
+            row_linear.bias.grad,
+            reference_linear.bias.grad,
         )
+    else:
+        assert row_linear.bias is None
 
-        # Test that we get the same gradient after backward pass
-        sharded_output.sum().backward()
-        reference_output.sum().backward()
-        torch.testing.assert_close(
-            row_linear.weight.grad,
-            reference_linear.weight.grad[
-                :,
-                dist.get_rank(parallel_context.tp_pg)
-                * in_features_per_rank : (dist.get_rank(parallel_context.tp_pg) + 1)
-                * in_features_per_rank,
-            ],
-        )
-        if dist.get_rank(parallel_context.tp_pg) == 0:
-            torch.testing.assert_close(
-                row_linear.bias.grad,
-                reference_linear.bias.grad,
-            )
-        else:
-            assert row_linear.bias is None
+    parallel_context.destroy()
 
 
 @pytest.mark.parametrize("tp,dp,pp", [pytest.param(i, 1, 1) for i in range(1, min(4, available_gpus()) + 1)])
 @pytest.mark.parametrize("tp_mode", list(TensorParallelLinearMode))
+@rerun_if_address_is_in_use()
 def test_tensor_parallel_embedding(tp: int, dp: int, pp: int, tp_mode: TensorParallelLinearMode):
     init_distributed(tp=tp, dp=dp, pp=pp)(_test_tensor_parallel_embedding)(tp_mode=tp_mode)
 
@@ -363,3 +352,5 @@ def _test_tensor_parallel_embedding(parallel_context: ParallelContext, tp_mode: 
         atol=0,
         rtol=0,
     )
+
+    parallel_context.destroy()

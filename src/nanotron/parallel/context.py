@@ -35,7 +35,7 @@ class ParallelContext:
             )
 
         if not dist.is_available():
-            raise ValueError("`torch.distributed is not available as a package, please install it.")
+            raise ValueError("torch.distributed is not available as a package, please install it.")
 
         self.tensor_parallel_size = tensor_parallel_size
         self.pipeline_parallel_size = pipeline_parallel_size
@@ -148,3 +148,10 @@ class ParallelContext:
         dp_rank = (world_rank // self.tp_pg.size()) % self.dp_pg.size()
         tp_rank = world_rank % self.tp_pg.size()
         return (pp_rank, dp_rank, tp_rank)
+
+    def destroy(self):
+        if not dist.is_initialized():
+            return
+
+        dist.barrier()
+        dist.destroy_process_group()

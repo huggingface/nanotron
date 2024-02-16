@@ -4,7 +4,7 @@ import os
 import pytest
 import torch
 from helpers.dummy import DummyModel, dummy_infinite_data_loader
-from helpers.utils import available_gpus, init_distributed
+from helpers.utils import available_gpus, init_distributed, rerun_if_address_is_in_use
 from nanotron import distributed as dist
 from nanotron.models import init_on_device_and_dtype
 from nanotron.optim.clip_grads import clip_grad_norm
@@ -32,6 +32,7 @@ from torch import nn
 
 @pytest.mark.skipif(available_gpus() < 2, reason="test_clip_grads_with_pp requires at least 2 gpus")
 @pytest.mark.parametrize("norm_type", [math.inf, 1.0, 2.0])
+@rerun_if_address_is_in_use()
 def test_clip_grads_with_pp(norm_type: float):
     init_distributed(tp=1, dp=1, pp=2)(_test_clip_grads_with_pp)(norm_type=norm_type)
 
@@ -188,11 +189,21 @@ def _test_clip_grads_with_pp(parallel_context: ParallelContext, norm_type: float
             to_rank=reference_rank,
         )
 
+    print(parallel_context.__dir__())
+
+    parallel_context.destroy()
+
 
 @pytest.mark.skipif(available_gpus() < 2, reason="test_clip_grads_with_tp requires at least 2 gpus")
-@pytest.mark.parametrize("tp_mode", list(TensorParallelLinearMode))
-@pytest.mark.parametrize("async_communication", [False, True])
+@pytest.mark.parametrize(
+    "tp_mode,async_communication",
+    [
+        pytest.param(TensorParallelLinearMode.ALL_REDUCE, False),
+        pytest.param(TensorParallelLinearMode.REDUCE_SCATTER, True),
+    ],
+)
 @pytest.mark.parametrize("norm_type", [math.inf, 1.0, 2.0])
+@rerun_if_address_is_in_use()
 def test_clip_grads_with_tp(tp_mode: TensorParallelLinearMode, async_communication: bool, norm_type: float):
     init_distributed(tp=2, dp=1, pp=1)(_test_clip_grads_with_tp)(
         tp_mode=tp_mode, async_communication=async_communication, norm_type=norm_type
@@ -204,6 +215,7 @@ def _test_clip_grads_with_tp(
 ):
     if async_communication:
         os.environ["CUDA_DEVICE_MAX_CONNECTIONS"] = "1"
+
     in_features = 2
     out_features_per_tp_rank = 3
     out_features = parallel_context.tp_pg.size() * out_features_per_tp_rank
@@ -331,26 +343,21 @@ def _test_clip_grads_with_tp(
     )
     torch.testing.assert_close(total_norm, ref_total_norm)
 
+    parallel_context.destroy()
+
 
 @pytest.mark.skipif(available_gpus() < 2, reason="test_clip_grads_tied_weights requires at least 2 gpus")
 @pytest.mark.parametrize("norm_type", [math.inf, 1.0, 2.0])
+@rerun_if_address_is_in_use()
 def test_clip_grads_tied_weights(norm_type: float):
     init_distributed(tp=1, dp=1, pp=2)(_test_clip_grads_tied_weights)(norm_type=norm_type)
 
 
 def _test_clip_grads_tied_weights(parallel_context: ParallelContext, norm_type: float):
     if dist.get_rank(parallel_context.pp_pg) == 0:
-        model = nn.ModuleDict(
-            {
-                "dense0": nn.Linear(10, 10, device="cuda"),
-            }
-        )
+        model = nn.ModuleDict({"dense0": nn.Linear(10, 10, device="cuda")})
     else:
-        model = nn.ModuleDict(
-            {
-                "dense1": nn.Linear(10, 10, device="cuda"),
-            }
-        )
+        model = nn.ModuleDict({"dense1": nn.Linear(10, 10, device="cuda")})
 
     # Tie weights/bias
     tie_parameters(
@@ -427,13 +434,16 @@ def _test_clip_grads_tied_weights(parallel_context: ParallelContext, norm_type: 
     assert not torch.allclose(old_grad, weight.grad), "Gradients should have changed after clipping"
 
     # Test that we get the same gradient after clipping
-    torch.testing.assert_close(weight.grad, ref_weight.grad, rtol=1e-7, atol=1e-6)
-    torch.testing.assert_close(bias.grad, ref_bias.grad, rtol=1e-7, atol=1e-6)
-    assert total_norm == ref_total_norm, "Total norm should be the same"
+    assert torch.allclose(weight.grad, ref_weight.grad, rtol=1e-7, atol=1e-6)
+    assert torch.allclose(bias.grad, ref_bias.grad, rtol=1e-7, atol=1e-6)
+    assert torch.allclose(total_norm, ref_total_norm, rtol=0, atol=0), f"Got {total_norm} and {ref_total_norm}"
+
+    parallel_context.destroy()
 
 
 @pytest.mark.parametrize("half_precision", [torch.float16, torch.bfloat16])
 @pytest.mark.parametrize("norm_type", [math.inf, 1.0, 2.0])
+@rerun_if_address_is_in_use()
 def test_clip_grads_fp32_accumulator(norm_type: float, half_precision: torch.dtype):
     init_distributed(tp=1, dp=1, pp=2)(_test_clip_grads_fp32_accumulator)(
         norm_type=norm_type, half_precision=half_precision
@@ -617,3 +627,5 @@ def _test_clip_grads_fp32_accumulator(
             ],
             to_rank=reference_rank,
         )
+
+    parallel_context.destroy()

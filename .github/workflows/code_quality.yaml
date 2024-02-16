@@ -1,0 +1,26 @@
+name: Code Quality
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    # Only run tests if we modify the following files
+    paths:
+      - "src/**/*.py"
+
+  pull_request:
+    branches: [ '**' ]
+    paths:
+     - "src/**/*.py"
+
+jobs:
+  cloc:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Count Lines of Code (cloc)
+      uses: djdefi/cloc-action@6
+      with:
+        options: --by-file-by-lang --exclude-dir=docs,tests,examples --exclude-lang=YAML,Markdown,TOML --exclude-list-file=sanity_checks.py
