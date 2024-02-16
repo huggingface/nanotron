@@ -36,7 +36,7 @@ class ParallelContext:
             )
 
         if not dist.is_available():
-            raise ValueError("`torch.distributed is not available as a package, please install it.")
+            raise ValueError("torch.distributed is not available as a package, please install it.")
 
         self.tensor_parallel_size = tensor_parallel_size
         self.pipeline_parallel_size = pipeline_parallel_size
@@ -120,3 +120,10 @@ class ParallelContext:
     def get_3d_ranks(self, world_rank: int) -> Tuple[int, int, int]:
         # return coordinates in world_rank_matrix without expert_parallel_rank
         return tuple(i.item() for i in np.where(self.world_rank_matrix == world_rank))[-3:]
+
+    def destroy(self):
+        if not dist.is_initialized():
+            return
+
+        dist.barrier()
+        dist.destroy_process_group()
