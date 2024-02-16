@@ -25,9 +25,9 @@ from nanotron.serialize.utils import ObjectType, merge_and_shard_tp_tensors
 # TODO(xrsrke): take rank instead of parallel_context
 def optimizer_filename(parallel_context: ParallelContext, is_zero: bool):
     if is_zero is True:
-        return f"{ObjectType.OPTIMIZER.value}_pp-{dist.get_rank(parallel_context.pp_pg)}-of-{parallel_context.pp_pg.size()}_dp-{dist.get_rank(parallel_context.dp_pg)}-of-{parallel_context.dp_pg.size()}_tp-{dist.get_rank(parallel_context.tp_pg)}-of-{parallel_context.tp_pg.size()}.pt"
+        return f"{ObjectType.OPTIMIZER.value}_pp-{dist.get_rank(parallel_context.pp_pg)}-of-{parallel_context.pp_pg.size()}_dp-{dist.get_rank(parallel_context.dp_pg)}-of-{parallel_context.dp_pg.size()}_tp-{dist.get_rank(parallel_context.tp_pg)}-of-{parallel_context.tp_pg.size()}_exp-{dist.get_rank(parallel_context.expert_pg)}-of-{parallel_context.expert_parallel_size}.pt"
     else:
-        return f"{ObjectType.OPTIMIZER.value}_pp-{dist.get_rank(parallel_context.pp_pg)}-of-{parallel_context.pp_pg.size()}_tp-{dist.get_rank(parallel_context.tp_pg)}-of-{parallel_context.tp_pg.size()}.pt"
+        return f"{ObjectType.OPTIMIZER.value}_pp-{dist.get_rank(parallel_context.pp_pg)}-of-{parallel_context.pp_pg.size()}_tp-{dist.get_rank(parallel_context.tp_pg)}-of-{parallel_context.tp_pg.size()}_exp-{dist.get_rank(parallel_context.expert_pg)}-of-{parallel_context.expert_parallel_size}.pt"
 
 
 def lr_scheduler_filename():
@@ -58,6 +58,7 @@ def save_optimizer(
             tp_size = parallel_context.tp_pg.size()
             pp_size = parallel_context.pp_pg.size()
             dp_size = parallel_context.dp_pg.size()
+            expert_parallel_size = parallel_context.expert_parallel_size
 
             config = {
                 "type": str(optimizer.__class__.__name__),
@@ -65,6 +66,7 @@ def save_optimizer(
                     "tp_size": str(tp_size),
                     "dp_size": str(dp_size),
                     "pp_size": str(pp_size),
+                    "expert_parallel_size": str(expert_parallel_size),
                 },
                 "configs": {},
             }
@@ -140,6 +142,7 @@ def load_optimizer(
     ckp_pp_size = ckp_optimizer_config["parallelism"]["pp_size"]
     ckp_tp_size = ckp_optimizer_config["parallelism"]["tp_size"]
     ckp_dp_size = ckp_optimizer_config["parallelism"]["dp_size"]
+    ckpt_expert_parallel_size = ckp_optimizer_config["parallelism"]["expert_parallel_size"]
 
     if int(ckp_tp_size) != int(parallel_context.tp_pg.size()):
         assert (
@@ -159,7 +162,7 @@ def load_optimizer(
             # across data parallel dimension, before merging the shards across tensor parallel dimension
             shard_paths = list(
                 root_folder.glob(
-                    f"{ObjectType.OPTIMIZER.value}_pp-*-of-{ckp_pp_size}_dp-*-of-{ckp_dp_size}_tp-*-of-{ckp_tp_size}.pt"
+                    f"{ObjectType.OPTIMIZER.value}_pp-*-of-{ckp_pp_size}_dp-*-of-{ckp_dp_size}_tp-*-of-{ckp_tp_size}-exp-*-of-{ckpt_expert_parallel_size}.pt"
                 )
             )
             ckp_sharded_optim_states = merge_dp_shard_in_zero1_optimizer(
