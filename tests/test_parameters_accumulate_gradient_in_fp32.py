@@ -151,14 +151,11 @@ def test_ddp_with_grad_accum_in_fp32(half_precision: torch.dtype, accumulation_s
 
 
 def _test_ddp_with_grad_accum_in_fp32(
-    tp: int,
-    pp: int,
-    dp: int,
+    parallel_context: ParallelContext,
     half_precision: torch.dtype,
     accumulation_steps: int,
     train_iterations: int,
 ):
-    parallel_context = ParallelContext(data_parallel_size=dp, pipeline_parallel_size=pp, tensor_parallel_size=tp)
     hidden_size = 32
     n_layers = 3
     model = nn.Sequential(
@@ -319,9 +316,8 @@ def test_tied_weights_sync_with_grad_accum_in_fp32(pipeline_engine: PipelineEngi
 
 
 def _test_tied_weights_sync_with_grad_accum_in_fp32(
-    tp: int, pp: int, dp: int, pipeline_engine: PipelineEngine, reduce_scatter: bool
+    parallel_context: ParallelContext, pipeline_engine: PipelineEngine, reduce_scatter: bool
 ):
-    parallel_context = ParallelContext(data_parallel_size=dp, pipeline_parallel_size=pp, tensor_parallel_size=tp)
     # We init two replicas of 2 denses. Each dense is on a device.
     dtype = torch.float16
     device = torch.device("cuda")

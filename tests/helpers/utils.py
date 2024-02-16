@@ -6,6 +6,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import torch.cuda
 import torch.multiprocessing as mp
+from nanotron.parallel import ParallelContext
 from packaging import version
 
 
@@ -254,7 +255,8 @@ def global_wrapper(rank, func, tp, pp, dp, port, kwargs):
 
     world_size = tp * pp * dp
     setup_dist_env(rank, world_size, port)
-    func(tp=tp, pp=pp, dp=dp, **kwargs)
+    parallel_context = ParallelContext(data_parallel_size=dp, pipeline_parallel_size=pp, tensor_parallel_size=tp)
+    func(parallel_context, **kwargs)
 
 
 def init_distributed(tp: int, dp: int, pp: int):

@@ -27,12 +27,13 @@ def test_column_linear(tp: int, dp: int, pp: int, tp_mode: TensorParallelLinearM
     )
 
 
-def _test_column_linear(tp: int, pp: int, dp: int, tp_mode: TensorParallelLinearMode, async_communication: bool):
+def _test_column_linear(
+    parallel_context: ParallelContext, tp_mode: TensorParallelLinearMode, async_communication: bool
+):
     if async_communication:
         os.environ["CUDA_DEVICE_MAX_CONNECTIONS"] = "1"
     in_features = 2
     out_features_per_tp_rank = 3
-    parallel_context = ParallelContext(data_parallel_size=dp, pipeline_parallel_size=pp, tensor_parallel_size=tp)
     out_features = parallel_context.tp_pg.size() * out_features_per_tp_rank
 
     # Sharded
@@ -157,12 +158,11 @@ def test_row_linear(tp: int, dp: int, pp: int, tp_mode: TensorParallelLinearMode
     init_distributed(tp=tp, dp=dp, pp=pp)(_test_row_linear)(tp_mode=tp_mode, async_communication=async_communication)
 
 
-def _test_row_linear(tp: int, pp: int, dp: int, tp_mode: TensorParallelLinearMode, async_communication: bool):
+def _test_row_linear(parallel_context: ParallelContext, tp_mode: TensorParallelLinearMode, async_communication: bool):
     if async_communication:
         os.environ["CUDA_DEVICE_MAX_CONNECTIONS"] = "1"
     out_features = 3
     in_features_per_rank = 2
-    parallel_context = ParallelContext(data_parallel_size=dp, pipeline_parallel_size=pp, tensor_parallel_size=tp)
     in_features = parallel_context.tp_pg.size() * in_features_per_rank
 
     # Sharded
@@ -271,10 +271,9 @@ def test_tensor_parallel_embedding(tp: int, dp: int, pp: int, tp_mode: TensorPar
     init_distributed(tp=tp, dp=dp, pp=pp)(_test_tensor_parallel_embedding)(tp_mode=tp_mode)
 
 
-def _test_tensor_parallel_embedding(tp: int, pp: int, dp: int, tp_mode: TensorParallelLinearMode):
+def _test_tensor_parallel_embedding(parallel_context: ParallelContext, tp_mode: TensorParallelLinearMode):
     num_embeddings_per_rank = 100
     embedding_dim = 3
-    parallel_context = ParallelContext(data_parallel_size=dp, pipeline_parallel_size=pp, tensor_parallel_size=tp)
     num_embeddings = parallel_context.tp_pg.size() * num_embeddings_per_rank
 
     # Sharded

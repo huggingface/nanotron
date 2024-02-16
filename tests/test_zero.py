@@ -28,8 +28,7 @@ def test_zero_optimizer(tp: int, dp: int, pp: int):
     init_distributed(pp=pp, dp=dp, tp=tp)(_test_zero_optimizer)()
 
 
-def _test_zero_optimizer(tp: int, pp: int, dp: int):
-    parallel_context = ParallelContext(data_parallel_size=dp, pipeline_parallel_size=pp, tensor_parallel_size=tp)
+def _test_zero_optimizer(parallel_context: ParallelContext):
     model = init_dummy_model(parallel_context=parallel_context)
     optimizer = ZeroDistributedOptimizer(
         named_params_or_groups=model.named_parameters(),
@@ -214,11 +213,11 @@ def test_zero_optimizer_with_tp(
 
 
 def _test_zero_optimizer_with_tp(
-    tp: int, pp: int, dp: int, tp_mode: TensorParallelLinearMode, async_communication: bool
+    parallel_context: ParallelContext, tp_mode: TensorParallelLinearMode, async_communication: bool
 ):
     if async_communication:
         os.environ["CUDA_DEVICE_MAX_CONNECTIONS"] = "1"
-    parallel_context = ParallelContext(data_parallel_size=dp, pipeline_parallel_size=pp, tensor_parallel_size=tp)
+
     model = torch_nn.Sequential(
         nn.TensorParallelColumnLinear(
             in_features=5,
@@ -508,9 +507,7 @@ def test_sliced_flat_tensor():
     init_distributed(1, 1, 1)(_test_sliced_flat_tensor)()
 
 
-def _test_sliced_flat_tensor(tp: int, pp: int, dp: int):
-    parallel_context = ParallelContext(data_parallel_size=dp, pipeline_parallel_size=pp, tensor_parallel_size=tp)
-
+def _test_sliced_flat_tensor(parallel_context: ParallelContext):
     a = torch.randn(2, 3, requires_grad=True)
     grad = torch.randn(2, 3)
     a.grad = grad

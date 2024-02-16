@@ -20,8 +20,7 @@ def test_ddp_with_afab(accumulation_steps):
     init_distributed(tp=1, dp=2, pp=1)(_test_ddp_with_afab)(accumulation_steps=accumulation_steps)
 
 
-def _test_ddp_with_afab(tp: int, pp: int, dp: int, accumulation_steps: int):
-    parallel_context = ParallelContext(data_parallel_size=dp, pipeline_parallel_size=pp, tensor_parallel_size=tp)
+def _test_ddp_with_afab(parallel_context: ParallelContext, accumulation_steps: int):
     half_precision = torch.float16
 
     def allreduce_hook(process_group: dist.ProcessGroup, bucket: GradBucket):
