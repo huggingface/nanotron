@@ -5,6 +5,7 @@ import torch
 from nanotron.fp8.optim import FP8Adam
 from torch import nn
 from torch.optim import Adam
+from utils import convert_linear_to_fp8
 
 
 @pytest.mark.parametrize("learning_rate", [1, 1e-3])
@@ -14,8 +15,8 @@ from torch.optim import Adam
 def test_fp8adam_optimizer_states(learning_rate, betas, eps, weight_decay):
     input = torch.randn(16, 16, device="cuda")
     linear = nn.Linear(16, 16, device="cuda")
-    # fp8_linear = convert_to_fp8_module(linear)
-    fp8_linear = deepcopy(linear)
+    fp8_linear = convert_linear_to_fp8(deepcopy(linear))
+    # fp8_linear = deepcopy(linear)
 
     optim = Adam(linear.parameters(), learning_rate, betas, eps, weight_decay)
     fp8_optim = FP8Adam(fp8_linear.parameters(), learning_rate, betas, eps, weight_decay)
@@ -116,3 +117,6 @@ def test_fp8adam_load_state_dict():
 
 def test_fp8adam_grad_accumulation():
     pass
+
+
+# TODO(xrsrke): add sanity check all parameters are FP8Parameter

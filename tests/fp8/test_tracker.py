@@ -1,10 +1,11 @@
+from copy import deepcopy
 from typing import List
 
 import pytest
 import torch
 from nanotron.fp8 import FP8Linear, FP8Tensor, tracker
 from torch import nn
-from utils import convert_to_fp8_module
+from utils import convert_linear_to_fp8
 
 
 class MetaRecorder(torch.autograd.Function):
@@ -33,7 +34,7 @@ def test_amax_tracker(interval, n_expected_updates):
     input = torch.randn((64, 64), dtype=torch.float32, device="cuda:0")
 
     linear = nn.Linear(64, 64, device="cuda:0")
-    fp8_linear = convert_to_fp8_module(linear)
+    fp8_linear = convert_linear_to_fp8(deepcopy(linear))
     fp8_linear = tracker.track(fp8_linear, interval=interval)
 
     amaxs = {"input_grad": [], "weight_grad": [], "output_grad": []}

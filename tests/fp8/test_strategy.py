@@ -9,13 +9,13 @@ from nanotron.fp8.strategy import (
 )
 from nanotron.fp8.tracker import DynamicScaler
 from torch import nn
-from utils import convert_to_fp8_module
+from utils import convert_linear_to_fp8
 
 
 @pytest.fixture
 def fp8_linear():
     linear = nn.Linear(16, 16, bias=True, device="cuda")
-    return convert_to_fp8_module(linear)
+    return convert_linear_to_fp8(linear)
 
 
 @pytest.mark.parametrize("interval", [1, 5, 10])
@@ -23,7 +23,7 @@ def fp8_linear():
 def test_warmup_strategy(interval, n_updates, fp8_linear):
     input = torch.randn((16, 16), dtype=torch.float32, device="cuda")
 
-    fp8_linear = DynamicScaler.track(fp8_linear, strategy=[WarmupStrategy])
+    fp8_linear = DynamicScaler.track(fp8_linear, strategy=[WarmupStrategy(interval=interval)])
 
     count = 0
     scaling_factors = []

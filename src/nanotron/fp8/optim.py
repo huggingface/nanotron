@@ -1,13 +1,25 @@
 import math
-from typing import Any, Dict
+from typing import Any, Dict, List, Tuple
 
 import torch
 from torch import nn
 from torch.optim import Optimizer
 
+from nanotron.fp8.parameter import FP8Parameter
+
 
 class FP8Adam(Optimizer):
-    def __init__(self, params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0, amsgrad=False):
+    def __init__(
+        self,
+        params: List[FP8Parameter],
+        lr: float = 1e-3,
+        betas: Tuple[float, float] = (0.9, 0.999),
+        eps: float = 1e-8,
+        weight_decay: float = 0,
+        amsgrad: bool = False,
+    ):
+        assert [isinstance(p, FP8Parameter) for p in params], "All parameters should be FP8Parameter"
+
         if not 0.0 <= lr:
             raise ValueError("Invalid learning rate: {}".format(lr))
         if not 0.0 <= eps:
@@ -17,6 +29,7 @@ class FP8Adam(Optimizer):
         if not 0.0 <= betas[1] < 1.0:
             raise ValueError("Invalid beta parameter at index 1: {}".format(betas[1]))
         defaults = {"lr": lr, "betas": betas, "eps": eps, "weight_decay": weight_decay, "amsgrad": amsgrad}
+
         super().__init__(params, defaults)
 
     def __setstate__(self, state):
@@ -78,3 +91,10 @@ class FP8Adam(Optimizer):
                 step_size = group["lr"] / bias_correction1
 
                 p.data.addcdiv_(-step_size, exp_avg, denom)
+
+    # TODO(xrsrke): refactor using strategy pattern
+    def _update_scaling_factors(self):
+        for p in self.param_groups:
+            for param in p["params"]:
+                if param.grad is None:
+                    continue
