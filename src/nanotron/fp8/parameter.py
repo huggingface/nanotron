@@ -33,6 +33,7 @@ class FP8Parameter(nn.Parameter):
             # TODO(xrsrke): support take an FP8 Tensor as data
             # currently we can't only quantize a tensor to FP8 after the parameter is created
             # because it raise "Only Tensors of floating point and complex dtype can require gradients"
+            # TODO(xrsrke): delete this fp32 tensor from memory after quantization
             self = torch.Tensor._make_subclass(cls, data, requires_grad)
             self._data = FP8Tensor(data, dtype=dtype)
 

@@ -63,6 +63,7 @@ class _FP8Matmul(torch.autograd.Function):
         # TODO(xrsrke): investigate how does grad_output.contiguous() affect the outputs
         input, weight = ctx.saved_tensors
 
+        # TODO(xrsrke): remove fixed grad_output
         if type(grad_output) == torch.Tensor:
             grad_output = torch.ones_like(grad_output)
             grad_output = grad_output.contiguous()

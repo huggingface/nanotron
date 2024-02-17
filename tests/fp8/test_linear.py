@@ -1,8 +1,11 @@
+from copy import deepcopy
+
 import pytest
 import torch
-from nanotron.fp8 import DTypes, FP8Linear, FP8Parameter, FP8Tensor
+from nanotron.fp8 import FP8Linear, FP8Parameter
 from torch import nn
 from torch.optim import Adam
+from utils import convert_linear_to_fp8
 
 
 @pytest.mark.parametrize("is_bias", [True, False])
@@ -11,11 +14,7 @@ def test_fp8_linear_forward_pass(is_bias):
     ref_input = input.detach().clone()
     ref_linear = nn.Linear(16, 16, bias=is_bias, device="cuda", dtype=torch.float32)
 
-    fp8_linear = FP8Linear(16, 16, bias=is_bias, device="cuda")
-    fp8_linear.weight = FP8Parameter(ref_linear.weight.detach().clone(), DTypes.FP8E4M3)
-
-    if is_bias:
-        fp8_linear.bias.data = ref_linear.bias.detach().clone()
+    fp8_linear = convert_linear_to_fp8(deepcopy(ref_linear))
 
     ref_output = ref_linear(ref_input)
     output = fp8_linear(input)
@@ -33,10 +32,8 @@ def test_fp8_linear_backward_pass(input_requires_grad):
     input = torch.randn(16, 16, device="cuda", dtype=torch.float32, requires_grad=input_requires_grad)
     ref_input = input.detach().clone().requires_grad_(True)
     ref_linear = nn.Linear(16, 16, device="cuda", dtype=torch.float32)
-    fp8_linear = FP8Linear(16, 16, device="cuda")
 
-    fp8_linear.weight.data = FP8Tensor(ref_linear.weight.detach().clone(), dtype=DTypes.FP8E4M3)
-    fp8_linear.bias.data = ref_linear.bias.detach().clone()
+    fp8_linear = convert_linear_to_fp8(deepcopy(ref_linear))
 
     ref_linear(ref_input).sum().backward()
     fp8_linear(input).sum().backward()
@@ -44,6 +41,7 @@ def test_fp8_linear_backward_pass(input_requires_grad):
     # NOTE: this threshold is from fp8-lm, the paper shows that this is fine
     # TODO(xrsrke): investigate why input.grad is so high tolerance
     # assert torch.allclose(input.grad, ref_input.grad, 0.2, 0.2) if input_requires_grad else True
+    # TODO(xrsrke): tune what is the minimum threshold for this to correctly converge
     torch.testing.assert_close(fp8_linear.weight.grad, ref_linear.weight.grad, rtol=0.1, atol=0.1)
     torch.testing.assert_close(fp8_linear.bias.grad, ref_linear.bias.grad, rtol=0, atol=0.1)
 
@@ -92,6 +90,14 @@ def test_deplay_quantization(interval):
     for _ in range(N_STEPS):
         output = fp8_linear(input)
         output.sum().backward()
+
+
+def test_linear_parameters():
+    ref_linear = nn.Linear(16, 16, device="cuda")
+    fp8_linear = convert_linear_to_fp8(deepcopy(ref_linear))
+
+    assert len(list(ref_linear.parameters())) == len(list(fp8_linear.parameters()))
+    assert [isinstance(p, FP8Parameter) for p in fp8_linear.parameters()]
 
 
 # TODO(xrsrke): test if FP8Linear has all the methods of a torch.nn.Linear
