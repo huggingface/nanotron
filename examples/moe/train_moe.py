@@ -10,10 +10,9 @@ import os
 import sys
 
 from config_llamoe import LlaMoEConfig
+from llamoe import LlaMoEForTraining
 from nanotron import logging
 from nanotron.trainer import DistributedTrainer
-
-from examples.moe.llamoe import LlaMoEForTraining
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", ".."))
 

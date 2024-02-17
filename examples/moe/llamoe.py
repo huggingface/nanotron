@@ -23,6 +23,7 @@ from flash_attn.flash_attn_interface import (
     flash_attn_with_kvcache,
 )
 from flash_attn.layers.rotary import RotaryEmbedding as FlashRotaryEmbedding
+from moe import dMoE
 from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.config import ParallelismArgs, RecomputeGranularity
@@ -47,8 +48,6 @@ from nanotron.parallel.tensor_parallel.nn import (
 from nanotron.random import RandomStates
 from nanotron.utils import checkpoint_method
 from torch import nn
-
-from examples.moe.moe import dMoE
 
 logger = logging.get_logger(__name__)
 
