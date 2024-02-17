@@ -11,7 +11,7 @@ def test_fp8_linear_forward_pass(is_bias):
     ref_input = input.detach().clone()
     ref_linear = nn.Linear(16, 16, bias=is_bias, device="cuda", dtype=torch.float32)
 
-    fp8_linear = FP8Linear(16, 16, bias=is_bias, device="cuda:0")
+    fp8_linear = FP8Linear(16, 16, bias=is_bias, device="cuda")
     fp8_linear.weight = FP8Parameter(ref_linear.weight.detach().clone(), DTypes.FP8E4M3)
 
     if is_bias:
@@ -29,17 +29,13 @@ def test_fp8_linear_forward_pass(is_bias):
 
 # TODO(xrsrke): add cases where the input requires and don't require grad
 @pytest.mark.parametrize("input_requires_grad", [True, False])
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
-def test_fp8_linear_backward_pass(input_requires_grad, device):
-    input = torch.randn(16, 16, device=device, dtype=torch.float32, requires_grad=input_requires_grad)
+def test_fp8_linear_backward_pass(input_requires_grad):
+    input = torch.randn(16, 16, device="cuda", dtype=torch.float32, requires_grad=input_requires_grad)
     ref_input = input.detach().clone().requires_grad_(True)
-    ref_linear = nn.Linear(16, 16, device=device, dtype=torch.float32)
-    fp8_linear = FP8Linear(16, 16, device=device)
+    ref_linear = nn.Linear(16, 16, device="cuda", dtype=torch.float32)
+    fp8_linear = FP8Linear(16, 16, device="cuda")
 
-    if device == "cpu":
-        fp8_linear.weight.data = ref_linear.weight.detach().clone()
-    else:
-        fp8_linear.weight.data = FP8Tensor(ref_linear.weight.detach().clone(), dtype=DTypes.FP8E4M3)
+    fp8_linear.weight.data = FP8Tensor(ref_linear.weight.detach().clone(), dtype=DTypes.FP8E4M3)
     fp8_linear.bias.data = ref_linear.bias.detach().clone()
 
     ref_linear(ref_input).sum().backward()
@@ -52,18 +48,11 @@ def test_fp8_linear_backward_pass(input_requires_grad, device):
     torch.testing.assert_close(fp8_linear.bias.grad, ref_linear.bias.grad, rtol=0, atol=0.1)
 
 
-# TODO(xrsrke): test if FP8Linear has all the methods of a torch.nn.Linear
-
-
 def test_fp8_linear_attrs():
-    fp8_linear = FP8Linear(16, 16, device="cuda:0")
+    fp8_linear = FP8Linear(16, 16, device="cuda")
 
     assert next(fp8_linear.parameters()) is not None
     assert all(p.requires_grad for p in fp8_linear.parameters()) is True
-
-
-# TODO(xrsrke): test only calculating the gradients of the weight, bias, or input based
-# on the requires_grad of the input, weight, or bias
 
 
 def test_fp8_model_bwd():
@@ -97,9 +86,16 @@ def test_deplay_quantization(interval):
     HIDDEN_SIZE = 16
     N_STEPS = 4
 
-    input = torch.randn(HIDDEN_SIZE, HIDDEN_SIZE, device="cuda:0", dtype=torch.float32)
-    fp8_linear = FP8Linear(HIDDEN_SIZE, HIDDEN_SIZE, device="cuda:0")
+    input = torch.randn(HIDDEN_SIZE, HIDDEN_SIZE, device="cuda", dtype=torch.float32)
+    fp8_linear = FP8Linear(HIDDEN_SIZE, HIDDEN_SIZE, device="cuda")
 
     for _ in range(N_STEPS):
         output = fp8_linear(input)
         output.sum().backward()
+
+
+# TODO(xrsrke): test if FP8Linear has all the methods of a torch.nn.Linear
+
+
+# TODO(xrsrke): test only calculating the gradients of the weight, bias, or input based
+# on the requires_grad of the input, weight, or bias

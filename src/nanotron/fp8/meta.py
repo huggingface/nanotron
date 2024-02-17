@@ -1,5 +1,5 @@
-from dataclasses import dataclass, field
-from typing import Union, List
+from dataclasses import dataclass
+from typing import Union
 
 import torch
 import transformer_engine as te  # noqa
@@ -18,8 +18,6 @@ class FP8Meta:
 
     # TODO(xrsrke): change to Literal[torch.int8, torch.uint8]
     dtype: torch.dtype
-    
-    amax_history: List[torch.Tensor] = field(default_factory=list)
 
     @property
     def te_dtype(self) -> tex.DType:

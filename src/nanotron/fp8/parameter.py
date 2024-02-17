@@ -1,10 +1,21 @@
+from dataclasses import dataclass
+
 import torch
 from torch import nn
 
-from nanotron.fp8.constants import FP8_DTYPES
+from nanotron.fp8.constants import FP8_DTYPES, INITIAL_AMAX, INITIAL_SCALING_FACTOR
 from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.meta import FP8Meta
-from nanotron.fp8.tensor import FP8Tensor
+from nanotron.fp8.tensor import FP8Tensor, update_scaling_factor
+
+
+@dataclass
+class FP8GradMeta:
+    """FP8 metadata for FP8Linear."""
+
+    input_grad: FP8Meta
+    weight_grad: FP8Meta
+    output_grad: FP8Meta
 
 
 class FP8Parameter(nn.Parameter):
@@ -17,7 +28,6 @@ class FP8Parameter(nn.Parameter):
         assert isinstance(data, torch.Tensor), "data must be a tensor"
         assert data.dtype not in FP8_DTYPES, "Currently only support turn a non-fp8 tensor to an fp8 parameter"
         assert data.device != torch.device("cpu"), "FP8Parameter only supports CUDA tensors"
-        # TODO(xrsrke): if the tensor is on cpu, then bypass quantization
 
         with torch.no_grad():
             # TODO(xrsrke): support take an FP8 Tensor as data
@@ -25,6 +35,29 @@ class FP8Parameter(nn.Parameter):
             # because it raise "Only Tensors of floating point and complex dtype can require gradients"
             self = torch.Tensor._make_subclass(cls, data, requires_grad)
             self._data = FP8Tensor(data, dtype=dtype)
+
+            # TODO(xrsrke): don't fixed these, take it from the FP8 recipe
+            fp8e4m3_scale = update_scaling_factor(
+                amax=torch.tensor(INITIAL_AMAX, dtype=torch.float32),
+                scaling_factor=torch.tensor(INITIAL_SCALING_FACTOR),
+                dtype=DTypes.FP8E4M3,
+            )
+            fp8e5m2_scale = update_scaling_factor(
+                amax=torch.tensor(INITIAL_AMAX, dtype=torch.float32),
+                scaling_factor=torch.tensor(INITIAL_SCALING_FACTOR, dtype=torch.float32),
+                dtype=DTypes.FP8E5M2,
+            )
+
+            # TODO(xrsrke): add type hints of fp8_grad_meta to FP8Parameter
+            self.fp8_grad_meta = FP8GradMeta(
+                input_grad=FP8Meta(amax=INITIAL_AMAX, dtype=DTypes.FP8E4M3, scale=fp8e4m3_scale),
+                # TODO(xrsrke): change weight_grad to data_grad
+                # because this is the gradient of the parameter itself
+                weight_grad=FP8Meta(amax=INITIAL_AMAX, dtype=DTypes.FP8E4M3, scale=fp8e4m3_scale),
+                # kfloat8_e5m2
+                output_grad=FP8Meta(amax=INITIAL_AMAX, dtype=DTypes.FP8E5M2, scale=fp8e5m2_scale),
+            )
+
         return self
 
     @property
@@ -40,4 +73,4 @@ class FP8Parameter(nn.Parameter):
         return self.data.fp8_meta
 
     def __repr__(self) -> str:
-        return f"FP8Parameter({self.data}, fp8_meta={self.fp8_meta}, requires_grad={self.requires_grad}"
+        return f"FP8Parameter({self.data}, fp8_meta={self.fp8_meta}, requires_grad={self.requires_grad}, fp8_grad_meta={self.fp8_grad_meta})"
