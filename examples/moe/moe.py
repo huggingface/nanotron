@@ -12,7 +12,7 @@ try:
     import megablocks.ops as ops
     from megablocks.layers.all_to_all import all_to_all
 except ImportError:
-    warnings.warn("Please install megablocks to use MoEs: `pip install megablock`")
+    warnings.warn("Please install megablocks to use MoEs: `pip install megablocks`")
 
 import stk
 from megablocks.layers import weight_parallel as wp

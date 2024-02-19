@@ -111,8 +111,8 @@ parallelism = ParallelismArgs(
     tp=2,
     expert_parallel_size=2,
     pp_engine="1f1b",
-    tp_mode="ALL_REDUCE",
-    tp_linear_async_communication=False,
+    tp_mode="REDUCE_SCATTER",
+    tp_linear_async_communication=True,
     recompute_granularity=None,
 )
 

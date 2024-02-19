@@ -79,8 +79,8 @@ parallelism:
   pp_engine: 1f1b
   recompute_granularity: null
   tp: 2
-  tp_linear_async_communication: false
-  tp_mode: ALL_REDUCE
+  tp_linear_async_communication: true
+  tp_mode: REDUCE_SCATTER
 profiler: null
 tokenizer:
   tokenizer_max_length: null
