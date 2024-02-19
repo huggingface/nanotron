@@ -17,6 +17,7 @@ from nanotron.config import (
     TokenizerArgs,
     TokensArgs,
 )
+from nanotron.config.config import PretrainDatasetsArgs
 from nanotron.logging import human_format
 
 
@@ -72,7 +73,7 @@ model_config = LlaMoEConfig(
     max_position_embeddings=128,
     tie_word_embeddings=False,
     vocab_size=32000,
-    moe_num_experts=2,
+    moe_num_experts=4,
 )
 
 num_params = human_format(
@@ -107,8 +108,8 @@ optimizer = OptimizerArgs(
 parallelism = ParallelismArgs(
     dp=1,
     pp=1,
-    tp=1,
-    expert_parallel_size=1,
+    tp=2,
+    expert_parallel_size=2,
     pp_engine="1f1b",
     tp_mode="ALL_REDUCE",
     tp_linear_async_communication=False,
@@ -119,18 +120,18 @@ assert (
     model_config.moe_num_experts % parallelism.expert_parallel_size == 0
 ), "Number of experts must be divisible by expert_parallel_size"
 
-tokens = TokensArgs(sequence_length=128, train_steps=1918, micro_batch_size=1, batch_accumulation_per_replica=1)
+tokens = TokensArgs(sequence_length=256, train_steps=1918, micro_batch_size=256, batch_accumulation_per_replica=2)
 
 data = DataArgs(
     seed=SEED,
     num_loading_workers=1,
-    dataset=None
-    # dataset=PretrainDatasetsArgs(
-    #     hf_dataset_or_datasets="roneneldan/TinyStories",
-    #     hf_dataset_splits="train",
-    #     text_column_name="text",
-    #     dataset_processing_num_proc_per_process=12,
-    # ),
+    # dataset=None
+    dataset=PretrainDatasetsArgs(
+        hf_dataset_or_datasets="roneneldan/TinyStories",
+        hf_dataset_splits="train",
+        text_column_name="text",
+        dataset_processing_num_proc_per_process=12,
+    ),
 )
 
 

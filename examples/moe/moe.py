@@ -14,62 +14,71 @@ try:
 except ImportError:
     warnings.warn("Please install megablocks to use MoEs: `pip install megablock`")
 
+import stk
+from megablocks.layers import weight_parallel as wp
+from megablocks.layers.activation_fn import act_fn
 from nanotron import distributed as dist
 from nanotron.config import ParallelismArgs
-from nanotron.parallel.tensor_parallel.nn import (
-    TensorParallelColumnLinear,
-    TensorParallelLinearMode,
-    TensorParallelRowLinear,
-)
 from torch import nn
 
 
-def inclusive_cumsum(x, dim):
-    scalar = ops.inclusive_cumsum(x, dim)
-    return scalar.view(1) if not len(scalar.size()) else scalar
-
-
-class MLP(nn.Module):
+class dMoE(torch.nn.Module):
     def __init__(
         self,
         config: LlaMoEConfig,
-        parallel_config: Optional[ParallelismArgs],
+        expert_parallel_group: dist.ProcessGroup,
         tp_pg: dist.ProcessGroup,
+        parallel_config: Optional[ParallelismArgs],
     ):
         super().__init__()
+        self.config = config
 
-        tp_mode = parallel_config.tp_mode if parallel_config is not None else TensorParallelLinearMode.ALL_REDUCE
-        tp_linear_async_communication = (
-            parallel_config.tp_linear_async_communication if parallel_config is not None else False
+        # Token router.
+        self.gate = LearnedRouter(config)
+
+        # Expert computation helper.
+        self.experts = ParallelDroplessMLP(
+            config,
+            use_bias=False,
+            expert_parallel_group=expert_parallel_group,
+            tp_pg=tp_pg,
+            parallel_config=parallel_config,
         )
 
-        self.expert_pg_size = parallel_config.expert_parallel_size
-        self.experts_per_rank = config.moe_num_experts // min(self.expert_pg_size, config.moe_num_experts)
+    def forward(self, x: torch.Tensor):
+        """
+        Args:
+            x: input tensor of shape [sequence_length, batch_size, hidden_size]
+        """
+        # Compute the expert scores and assignments.
+        # TODO: support sequence parallelism
+        batch_size, sequence_length, _ = x.size()
+        x = x.view(-1, self.config.hidden_size)
+        scores, expert_weights, top_experts = self.gate(x)
 
-        self.w1 = TensorParallelColumnLinear(
-            config.hidden_size,
-            config.intermediate_size * self.experts_per_rank,
-            pg=tp_pg,
-            mode=tp_mode,
-            bias=False,
-            async_communication=tp_linear_async_communication,
-        )
+        # Compute the experts.
+        x = self.experts(x, scores, expert_weights, top_experts)
+        return x.reshape(batch_size, sequence_length, -1)
 
-        self.w2 = TensorParallelRowLinear(
-            config.intermediate_size * self.experts_per_rank,
-            config.hidden_size,
-            pg=tp_pg,
-            mode=tp_mode,
-            bias=False,
-            async_communication=tp_linear_async_communication and tp_mode is TensorParallelLinearMode.REDUCE_SCATTER,
-        )
-        # TODO @nouamane: jit
-        self.act = partial(F.gelu, approximate="tanh")
 
-    def forward(self, hidden_states):  # [seq_length, batch_size, hidden_dim]
-        merged_states = self.w1(hidden_states)
-        hidden_states = self.w2(self.act(merged_states))
-        return {"hidden_states": hidden_states}
+# Adapted from megablocks.layers.router.LearnedRouter
+class LearnedRouter(torch.nn.Module):
+    def __init__(self, config: LlaMoEConfig):
+        super().__init__()
+        self.layer = torch.nn.Linear(config.hidden_size, config.moe_num_experts, bias=False)
+        # TODO: initialization
+        self.config = config
+
+    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        router_logits = self.layer(x)  # (batch * sequence_length, n_experts)
+        scores = F.softmax(router_logits, dim=-1, dtype=torch.float32)  # TODO: fuse?
+
+        if self.config.num_experts_per_tok == 1:
+            expert_weights, expert_indices = scores.max(dim=-1, keepdim=True)
+        else:
+            expert_weights, expert_indices = torch.topk(scores, self.config.num_experts_per_tok, dim=-1)
+
+        return scores, expert_weights, expert_indices.int()
 
 
 # Adapted from megablocks.layers.mlp.ParallelDroplessMLP
@@ -108,9 +117,8 @@ class ParallelDroplessMLP(torch.nn.Module):
         self.blocking = 128
         self.mlp = MLP(config=config, parallel_config=parallel_config, tp_pg=tp_pg)
 
-    def expert_capacity(self, tokens):
-        tokens_per_expert = self.num_experts_per_tok * tokens * self.expert_pg_size / self.num_experts
-        return int(self.config.moe_capacity_factor * tokens_per_expert)
+        max_column_index = (self.config.intermediate_size * self.num_experts) // self.blocking
+        self.transpose_sort_end_bit = max(int(np.ceil(np.log2(max_column_index))), 1)
 
     def indices_and_bins(self, top_expert):
         # Sort the expert ids to produce the scatter/gather
@@ -153,10 +161,12 @@ class ParallelDroplessMLP(torch.nn.Module):
             ) = self.indices_and_padded_bins(top_experts)
 
         # Route the tokens for MoE computation.
-        x = x.view(-1, x.shape[-1])
         x = ops.padded_gather(x, indices, bin_ids, bins, padded_bins, self.num_experts_per_tok)
 
-        x = self.mlp(x)["hidden_states"]
+        with torch.no_grad():
+            topo = self.topology(x, padded_bins)
+
+        x = self.mlp(x, topo)  # TODO: exp_pg=1 and num_experts=2 means the experts will get same data.
 
         # Un-route the data for the MoE output.
         x = ops.padded_scatter(
@@ -167,7 +177,7 @@ class ParallelDroplessMLP(torch.nn.Module):
             bins,
             padded_bins,
             self.num_experts_per_tok,
-            self.config.quantize_scatter_num_bits,
+            -1,
         )
         return x, tokens_per_expert
 
@@ -183,7 +193,6 @@ class ParallelDroplessMLP(torch.nn.Module):
                 async_op=True,
             )
 
-        x = x.view(-1, x.shape[-1])
         x = ops.gather(x, indices, bin_ids, bins, self.num_experts_per_tok)
 
         # Compute the number of tokens that will be received from each
@@ -234,13 +243,6 @@ class ParallelDroplessMLP(torch.nn.Module):
             parallel_tokens_per_expert = parallel_tokens_per_expert.sum(dim=0, dtype=torch.int)
             parallel_bins = inclusive_cumsum(parallel_tokens_per_expert, 0)
 
-            # If expert_capacity is set to zero, set the number of tokens
-            # per expert to the maximum we need to avoid dropping tokens.
-            tokens, hs = x.size()
-            expert_capacity = self.expert_capacity(tokens)
-            if expert_capacity == 0:
-                expert_capacity = torch.max(parallel_tokens_per_expert).item()
-
         # Locally permute the tokens and perform the expert computation.
         # Block to make sure that the cross-device permutation is complete.
         parallel_x_handle.wait()
@@ -251,7 +253,6 @@ class ParallelDroplessMLP(torch.nn.Module):
             parallel_bin_ids,
             None,  # expert_weights
             parallel_bins,
-            expert_capacity,
             num_experts_per_tok=self.num_experts_per_tok,
         )
 
@@ -274,14 +275,16 @@ class ParallelDroplessMLP(torch.nn.Module):
         return x, tokens_per_expert.flatten()
 
     def forward(self, x, scores, expert_weights, top_experts):
-        in_shape = x.size()
-
+        """
+        Args:
+            x: input tensor of shape [sequence_length, batch_size, hidden_size]
+            scores: tensor of shape [sequence_length * batch_size, n_experts]
+            expert_weights: tensor of shape [sequence_length * batch_size, num_experts_per_tok]
+            top_experts: tensor of shape [sequence_length * batch_size, num_experts_per_tok]
+        """
         # Compute the experts.
-        expert_weights = expert_weights.flatten()
-        top_experts = top_experts.flatten()
-        x, tokens_per_expert = self.forward_fn(x, expert_weights, top_experts)
+        x, tokens_per_expert = self.forward_fn(x, expert_weights.flatten(), top_experts.flatten())
 
-        x = x.view(in_shape)
         if self.use_bias:
             return x + self.bias
         return x
@@ -294,7 +297,6 @@ class ParallelDroplessMLP(torch.nn.Module):
         bin_ids,
         expert_weights,
         bins,
-        expert_capactiy,
         num_experts_per_tok,
     ):
         # Round the token counts up to the block size used in the matrix
@@ -303,63 +305,135 @@ class ParallelDroplessMLP(torch.nn.Module):
         padded_bins = inclusive_cumsum(padded_tokens_per_expert, 0)
 
         # Route the tokens for MoE computation.
-        x = x.view(-1, x.shape[-1])
         x = ops.padded_gather(x, indices, bin_ids, bins, padded_bins, num_experts_per_tok)
 
         # Perform the expert computation.
-        x = self.mlp(x)["hidden_states"]
+        with torch.no_grad():
+            topo = self.topology(x, padded_bins)
+        x = self.mlp(x, topo)
 
         # Un-route the data for the MoE output.
         return ops.padded_scatter(x, indices, bin_ids, expert_weights, bins, padded_bins, num_experts_per_tok)
 
+    def sparse_transpose(self, size, row_indices, column_indices, offsets):
+        block_columns = size[1] // self.blocking
+        _, gather_indices = ops.sort(column_indices.int(), self.transpose_sort_end_bit)
+        column_indices_t = row_indices.gather(0, gather_indices.long())
+        block_offsets_t = gather_indices.int()
 
-# Adapted from megablocks.layers.router.LearnedRouter
-class LearnedRouter(torch.nn.Module):
-    def __init__(self, config: LlaMoEConfig):
+        zero = torch.zeros((1,), dtype=torch.int32, device=row_indices.device)
+        nnz_per_column = ops.histogram(column_indices, block_columns)
+        nnz_per_column = ops.inclusive_cumsum(nnz_per_column, 0)
+        offsets_t = torch.cat([zero, nnz_per_column])
+        return column_indices_t, offsets_t, block_offsets_t
+
+    def topology(self, x, padded_bins):
+        padded_tokens, _ = x.size()
+        assert padded_tokens % self.blocking == 0
+        assert self.config.intermediate_size % self.blocking == 0
+
+        # Offsets for the sparse matrix. All rows have the
+        # same number of nonzero blocks dictated by the
+        # dimensionality of a single expert.
+        block_rows = padded_tokens // self.blocking
+        blocks_per_row = self.config.intermediate_size // self.blocking
+        offsets = torch.arange(0, block_rows * blocks_per_row + 1, blocks_per_row, dtype=torch.int32, device=x.device)
+
+        # Indices for the sparse matrix. The indices for
+        # the intermediate matrix are dynamic depending
+        # on the mapping of tokens to experts.
+        column_indices = ops.topology(padded_bins, self.blocking, block_rows, blocks_per_row)
+
+        # TODO(tgale): This is unused. Remove the need for this in stk.
+        # For now, use meta init to save the device memory.
+        data = torch.empty(column_indices.numel(), self.blocking, self.blocking, dtype=x.dtype, device="meta")
+        shape = (padded_tokens, self.config.intermediate_size * self.experts_per_rank)
+        row_indices = stk.ops.row_indices(shape, data, offsets, column_indices)
+        column_indices_t, offsets_t, block_offsets_t = self.sparse_transpose(
+            shape, row_indices, column_indices, offsets
+        )
+        return stk.Matrix(
+            shape, data, row_indices, column_indices, offsets, column_indices_t, offsets_t, block_offsets_t
+        )
+
+
+class ScaleGradient(torch.autograd.Function):
+    @staticmethod
+    @torch.cuda.amp.custom_fwd
+    def forward(ctx, x, scale):
+        ctx.scale = scale
+        return x
+
+    @staticmethod
+    @torch.cuda.amp.custom_bwd
+    def backward(ctx, grad):
+        return grad * ctx.scale, None
+
+
+scale_gradient = ScaleGradient.apply
+
+
+class ExpertParallel(nn.Module):
+    """
+    ExpertParallel serves to scale the gradients of the expert weights because unlike DP the gradients are not averaged across the expert parallel group.
+    """
+
+    def __init__(self, module, expert_parallel_size: int):
         super().__init__()
-        self.layer = torch.nn.Linear(config.hidden_size, config.moe_num_experts, bias=False)
-        # TODO: initialization
-        self.config = config
+        self.module = module
+        self.expert_parallel_size = expert_parallel_size
 
-    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        x = x.view(-1, self.config.hidden_size)
-        router_logits = self.layer(x)  # (batch * sequence_length, n_experts)
-        scores = F.softmax(router_logits, dim=-1, dtype=torch.float32)  # TODO: fuse?
+    def forward(self, *args, **kwargs):
+        self.scale_gradients()
+        return self.module(*args, **kwargs)
 
-        if self.config.num_experts_per_tok == 1:
-            expert_weights, expert_indices = scores.max(dim=-1, keepdim=True)
-        else:
-            expert_weights, expert_indices = torch.topk(scores, self.config.num_experts_per_tok, dim=-1)
-
-        return scores, expert_weights, expert_indices.int()
+    def scale_gradients(self):
+        scale_gradient(self.module, 1 / self.expert_parallel_size)
 
 
-class dMoE(torch.nn.Module):
+class MLP(nn.Module):
     def __init__(
         self,
         config: LlaMoEConfig,
-        expert_parallel_group: dist.ProcessGroup,
-        tp_pg: dist.ProcessGroup,
         parallel_config: Optional[ParallelismArgs],
+        tp_pg: dist.ProcessGroup,
     ):
-        super(dMoE, self).__init__()
+        super().__init__()
 
-        # Token router.
-        self.gate = LearnedRouter(config)
+        self.expert_pg_size = parallel_config.expert_parallel_size if parallel_config is not None else 1
+        self.experts_per_rank = config.moe_num_experts // min(self.expert_pg_size, config.moe_num_experts)
+        self.tp_pg = tp_pg
 
-        # Expert computation helper.
-        self.experts = ParallelDroplessMLP(
-            config,
-            use_bias=False,
-            expert_parallel_group=expert_parallel_group,
-            tp_pg=tp_pg,
-            parallel_config=parallel_config,
+        self.w1 = ExpertParallel(
+            nn.Linear(
+                config.hidden_size, config.intermediate_size * self.experts_per_rank // tp_pg.size(), bias=False
+            ),
+            expert_parallel_size=self.expert_pg_size,
+        )
+        self.w2 = ExpertParallel(
+            nn.Linear(
+                config.hidden_size, config.intermediate_size * self.experts_per_rank // tp_pg.size(), bias=False
+            ),
+            expert_parallel_size=self.expert_pg_size,
         )
 
-    def forward(self, x: torch.Tensor):
-        # Compute the expert scores and assignments.
-        # TODO: support sequence parallelism
-        scores, expert_weights, top_experts = self.gate(x)
+        if self.tp_pg.size() == 1:
+            # transpose self.w1.module.weight
+            self.w1.module.weight.data = self.w1.module.weight.data.T.contiguous()
 
-        # Compute the experts.
-        return self.experts(x, scores, expert_weights, top_experts)
+        # TODO @nouamane: jit
+        self.act = partial(F.gelu, approximate="tanh")
+        self.sdd = partial(wp.sdd_nt, group=self.tp_pg) if self.tp_pg.size() > 1 else stk.ops.sdd
+        self.dsd = partial(wp.dsd_nn, group=self.tp_pg) if self.tp_pg.size() > 1 else stk.ops.dsd
+
+    def forward(self, x, topo):
+        # Compute the MLP.
+        self.w1.scale_gradients(), self.w2.scale_gradients()
+        x = self.sdd(x.contiguous(), self.w1.module.weight, topo)
+        activation_fn_out = act_fn(x, self.act)
+        return self.dsd(activation_fn_out, self.w2.module.weight)
+
+
+def inclusive_cumsum(x, dim):
+    scalar = ops.inclusive_cumsum(x, dim)
+    return scalar.view(1) if not len(scalar.size()) else scalar
