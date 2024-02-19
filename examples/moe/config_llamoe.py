@@ -13,7 +13,6 @@ from nanotron.config import (
     ModelArgs,
     OptimizerArgs,
     ParallelismArgs,
-    PretrainDatasetsArgs,
     RandomInit,
     TokenizerArgs,
     TokensArgs,
@@ -48,16 +47,20 @@ class LlaMoEConfig:
     vocab_size: int = 32000
 
     ## MoE specific
-    moe_num_experts: int = 1  # Number of experts per Sparse MLP layer.
-    num_experts_per_tok: int = (
-        1  # he number of experts to root per-token, can be also interpreted as the `top-p` routing parameter
-    )
-    moe_capacity_factor: int = 1  #
+    # Number of experts per Sparse MLP layer.
+    moe_num_experts: int = 1
+    # the number of experts to root per-token, can be also interpreted as the `top-p` routing parameter
+    num_experts_per_tok: int = 1
+    moe_capacity_factor: int = 1
 
     def __post_init__(self):
         # for backward compatibility
         if self.num_key_value_heads is None:
             self.num_key_value_heads = self.num_attention_heads
+
+        assert (
+            self.num_experts_per_tok <= self.moe_num_experts
+        ), f"num_experts_per_tok ({self.num_experts_per_tok}) must be <= moe_num_experts ({self.moe_num_experts})"
 
 
 model_config = LlaMoEConfig(
@@ -66,10 +69,10 @@ model_config = LlaMoEConfig(
     hidden_size=512,
     num_attention_heads=8,
     intermediate_size=512 * 4,
-    max_position_embeddings=256,
+    max_position_embeddings=128,
     tie_word_embeddings=False,
     vocab_size=32000,
-    moe_num_experts=4,
+    moe_num_experts=2,
 )
 
 num_params = human_format(
@@ -104,8 +107,8 @@ optimizer = OptimizerArgs(
 parallelism = ParallelismArgs(
     dp=1,
     pp=1,
-    tp=2,
-    expert_parallel_size=2,
+    tp=1,
+    expert_parallel_size=1,
     pp_engine="1f1b",
     tp_mode="ALL_REDUCE",
     tp_linear_async_communication=False,
@@ -116,18 +119,18 @@ assert (
     model_config.moe_num_experts % parallelism.expert_parallel_size == 0
 ), "Number of experts must be divisible by expert_parallel_size"
 
-tokens = TokensArgs(sequence_length=256, train_steps=1918, micro_batch_size=256, batch_accumulation_per_replica=2)
+tokens = TokensArgs(sequence_length=128, train_steps=1918, micro_batch_size=1, batch_accumulation_per_replica=1)
 
 data = DataArgs(
     seed=SEED,
     num_loading_workers=1,
-    # dataset=None
-    dataset=PretrainDatasetsArgs(
-        hf_dataset_or_datasets="roneneldan/TinyStories",
-        hf_dataset_splits="train",
-        text_column_name="text",
-        dataset_processing_num_proc_per_process=12,
-    ),
+    dataset=None
+    # dataset=PretrainDatasetsArgs(
+    #     hf_dataset_or_datasets="roneneldan/TinyStories",
+    #     hf_dataset_splits="train",
+    #     text_column_name="text",
+    #     dataset_processing_num_proc_per_process=12,
+    # ),
 )
 
 

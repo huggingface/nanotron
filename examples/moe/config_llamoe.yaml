@@ -5,13 +5,7 @@ checkpoints:
   resume_checkpoint_path: null
   save_initial_state: false
 data:
-  dataset:
-    dataset_overwrite_cache: false
-    dataset_processing_num_proc_per_process: 12
-    hf_dataset_config_name: null
-    hf_dataset_or_datasets: roneneldan/TinyStories
-    hf_dataset_splits: train
-    text_column_name: text
+  dataset: null
   num_loading_workers: 1
   seed: 42
 general:
@@ -41,9 +35,9 @@ model:
     initializer_range: 0.02
     intermediate_size: 2048
     is_llamoe_config: true
-    max_position_embeddings: 256
+    max_position_embeddings: 128
     moe_capacity_factor: 1
-    moe_num_experts: 4
+    moe_num_experts: 2
     num_attention_heads: 8
     num_experts_per_tok: 1
     num_hidden_layers: 6
@@ -74,7 +68,7 @@ optimizer:
   zero_stage: 0
 parallelism:
   dp: 1
-  expert_parallel_size: 4
+  expert_parallel_size: 1
   pp: 1
   pp_engine: 1f1b
   recompute_granularity: null
@@ -87,10 +81,10 @@ tokenizer:
   tokenizer_name_or_path: meta-llama/Llama-2-7b-hf
   tokenizer_revision: null
 tokens:
-  batch_accumulation_per_replica: 2
+  batch_accumulation_per_replica: 1
   limit_test_batches: 0
   limit_val_batches: 0
-  micro_batch_size: 256
-  sequence_length: 256
+  micro_batch_size: 1
+  sequence_length: 128
   train_steps: 1918
   val_check_interval: -1
