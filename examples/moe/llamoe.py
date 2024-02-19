@@ -25,7 +25,7 @@ from flash_attn.flash_attn_interface import (
 from flash_attn.layers.rotary import RotaryEmbedding as FlashRotaryEmbedding
 from nanotron import distributed as dist
 from nanotron import logging
-from nanotron.config import ParallelismArgs, RecomputeGranularity
+from nanotron.config import ParallelismArgs
 from nanotron.generation.generate_store import AttachableStore
 from nanotron.logging import log_rank
 from nanotron.models import NanotronModel
@@ -755,7 +755,6 @@ class LlaMoEModel(nn.Module):
             ffn_hidden_size=self.config.intermediate_size,
             seq_len=sequence_length,
             batch_size=global_batch_size,
-            recompute_granularity=self.parallel_config.recompute_granularity,
         )
 
         model_flops_per_s = model_flops / (iteration_time_in_sec * world_size * 1e12)
@@ -987,7 +986,6 @@ def get_flops(
     seq_len,
     ffn_hidden_size,
     batch_size=1,
-    recompute_granularity=None,
 ):
     """Counts flops in an decoder-only model
     Args:
@@ -999,7 +997,6 @@ def get_flops(
         vocab_size: size of the vocabulary
         seq_len: sequence length of the decoder
         batch_size: batch size
-        recompute_granularity: Activation recomputation method. Either None, FULL or SELECTIVE. Check Megatron-LM docs for more info.
     Returns:
         model_flops: flops in the model (should be independent of the hardware and model implementation)
         hardware_flops: flops in the hardware (actual flops performed on the hardware). Check 6.3 in https://arxiv.org/pdf/2205.05198.pdf
@@ -1045,17 +1042,5 @@ def get_flops(
     # both input and weight tensors
     model_flops = 3 * (decoder_flops_fwd + lm_head_flops_fwd)  # 1 for fwd + 2 for bwd
 
-    if recompute_granularity is None:
-        hardware_flops = model_flops
-    elif recompute_granularity is RecomputeGranularity.FULL:
-        # Note: we don't recompute lm head activs
-        hardware_flops = model_flops + decoder_flops_fwd  # + activ recomputation
-    elif recompute_granularity is RecomputeGranularity.SELECTIVE:
-        # all terms with s^2 are flops that are recomputed
-        # ref. appendix A: https://arxiv.org/pdf/2205.05198.pdf
-        recomputed_decoder_flops = decoder_qk_logits_flops_fwd + decoder_v_logits_flops_fwd
-        hardware_flops = model_flops + recomputed_decoder_flops
-    else:
-        raise ValueError("recompute_granularity must be one of 'full' or 'selective'")
-
+    hardware_flops = model_flops  # TODO @nouamanetazi: add hardware flops
     return model_flops, hardware_flops

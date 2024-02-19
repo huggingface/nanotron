@@ -75,7 +75,6 @@ parallelism = ParallelismArgs(
     pp_engine="1f1b",
     tp_mode="REDUCE_SCATTER",
     tp_linear_async_communication=True,
-    recompute_granularity="selective",
 )
 
 tokens = TokensArgs(sequence_length=32, train_steps=10, micro_batch_size=2, batch_accumulation_per_replica=1)
