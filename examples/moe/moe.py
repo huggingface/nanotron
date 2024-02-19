@@ -7,6 +7,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from config_llamoe import LlaMoEConfig
+from nanotron.parallel.tensor_parallel.enum import TensorParallelLinearMode
 
 try:
     import megablocks.ops as ops
@@ -18,8 +19,11 @@ import stk
 from megablocks.layers import weight_parallel as wp
 from megablocks.layers.activation_fn import act_fn
 from nanotron import distributed as dist
+from nanotron import logging
 from nanotron.config import ParallelismArgs
 from torch import nn
+
+logger = logging.get_logger(__name__)
 
 
 class dMoE(torch.nn.Module):
@@ -32,6 +36,13 @@ class dMoE(torch.nn.Module):
     ):
         super().__init__()
         self.config = config
+        self.tp_mode = parallel_config.tp_mode if parallel_config is not None else TensorParallelLinearMode.ALL_REDUCE
+        if self.tp_mode == TensorParallelLinearMode.REDUCE_SCATTER:
+            logging.warn_once(
+                logger=logger,
+                msg="TensorParallelLinearMode.REDUCE_SCATTER is still experimental for MoEs. Use at your own risk.",
+                rank=0,
+            )
 
         # Token router.
         self.gate = LearnedRouter(config)
