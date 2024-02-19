@@ -2,6 +2,8 @@ import torch
 import transformer_engine as te  # noqa
 
 from nanotron.fp8.constants import FP8_GPU_NAMES
+from nanotron.fp8.dtypes import DTypes
+from nanotron.fp8.meta import FP8Meta
 
 
 def is_fp8_available() -> bool:
@@ -11,3 +13,13 @@ def is_fp8_available() -> bool:
         return any(gpu_name in device_name for gpu_name in FP8_GPU_NAMES)
     else:
         return False
+
+
+def get_tensor_fp8_metadata(tensor: torch.Tensor, dtype: DTypes) -> FP8Meta:
+    from nanotron.fp8.constants import INITIAL_SCALING_FACTOR
+    from nanotron.fp8.tensor import update_scaling_factor
+
+    amax = tensor.abs().max().clone()
+    scale = update_scaling_factor(amax, torch.tensor(INITIAL_SCALING_FACTOR, dtype=torch.float32), dtype)
+    fp8_meta = FP8Meta(amax, scale, dtype)
+    return fp8_meta
