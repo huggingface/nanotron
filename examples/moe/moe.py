@@ -177,7 +177,7 @@ class ParallelDroplessMLP(torch.nn.Module):
         with torch.no_grad():
             topo = self.topology(x, padded_bins)
 
-        x = self.mlp(x, topo)  # TODO: exp_pg=1 and num_experts=2 means the experts will get same data.
+        x = self.mlp(x, topo)
 
         # Un-route the data for the MoE output.
         x = ops.padded_scatter(
@@ -429,7 +429,6 @@ class MLP(nn.Module):
         )
 
         if self.tp_pg.size() == 1:
-            # transpose self.w1.module.weight
             self.w1.module.weight.data = self.w1.module.weight.data.T.contiguous()
 
         # TODO @nouamane: jit
@@ -438,7 +437,6 @@ class MLP(nn.Module):
         self.dsd = partial(wp.dsd_nn, group=self.tp_pg) if self.tp_pg.size() > 1 else stk.ops.dsd
 
     def forward(self, x, topo):
-        # Compute the MLP.
         self.w1.scale_gradients(), self.w2.scale_gradients()
         x = self.sdd(x.contiguous(), self.w1.module.weight, topo)
         activation_fn_out = act_fn(x, self.act)
