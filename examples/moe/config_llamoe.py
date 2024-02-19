@@ -13,11 +13,11 @@ from nanotron.config import (
     ModelArgs,
     OptimizerArgs,
     ParallelismArgs,
-    PretrainDatasetsArgs,
     RandomInit,
     TokenizerArgs,
     TokensArgs,
 )
+from nanotron.config.config import PretrainDatasetsArgs
 from nanotron.logging import human_format
 
 
@@ -48,16 +48,20 @@ class LlaMoEConfig:
     vocab_size: int = 32000
 
     ## MoE specific
-    moe_num_experts: int = 1  # Number of experts per Sparse MLP layer.
-    num_experts_per_tok: int = (
-        1  # he number of experts to root per-token, can be also interpreted as the `top-p` routing parameter
-    )
-    moe_capacity_factor: int = 1  #
+    # Number of experts per Sparse MLP layer.
+    moe_num_experts: int = 1
+    # the number of experts to root per-token, can be also interpreted as the `top-p` routing parameter
+    num_experts_per_tok: int = 1
+    moe_capacity_factor: int = 1
 
     def __post_init__(self):
         # for backward compatibility
         if self.num_key_value_heads is None:
             self.num_key_value_heads = self.num_attention_heads
+
+        assert (
+            self.num_experts_per_tok <= self.moe_num_experts
+        ), f"num_experts_per_tok ({self.num_experts_per_tok}) must be <= moe_num_experts ({self.moe_num_experts})"
 
 
 model_config = LlaMoEConfig(
@@ -66,7 +70,7 @@ model_config = LlaMoEConfig(
     hidden_size=512,
     num_attention_heads=8,
     intermediate_size=512 * 4,
-    max_position_embeddings=256,
+    max_position_embeddings=128,
     tie_word_embeddings=False,
     vocab_size=32000,
     moe_num_experts=4,

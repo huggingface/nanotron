@@ -44,7 +44,7 @@ def sanity_check_dataloader(
         }
 
         if not config.general.ignore_sanity_checks:
-            # SANITY CHECK: Check input are not the same across DP and expert_pg
+            # SANITY CHECK: Check input are not the same across DP
             for key, value in sorted(micro_batch.items(), key=lambda x: x[0]):
                 if isinstance(value, TensorPointer):
                     continue
@@ -56,11 +56,6 @@ def sanity_check_dataloader(
                 with assert_fail_except_rank_with(AssertionError, rank_exception=0, pg=parallel_context.dp_pg):
                     assert_tensor_synced_across_pg(
                         tensor=value, pg=parallel_context.dp_pg, msg=lambda err: f"{key} {err}"
-                    )
-
-                with assert_fail_except_rank_with(AssertionError, rank_exception=0, pg=parallel_context.expert_pg):
-                    assert_tensor_synced_across_pg(
-                        tensor=value, pg=parallel_context.expert_pg, msg=lambda err: f"{key} {err}"
                     )
 
             # SANITY CHECK: Check input are synchronized throughout TP
@@ -484,8 +479,8 @@ def get_train_dataloader(
     )
 
     # Compute size and rank of dataloader workers
-    dl_ranks_size = parallel_context.dp_pg.size() * parallel_context.expert_pg.size()
-    dl_rank = parallel_context.dp_pg.rank() * parallel_context.expert_pg.size() + parallel_context.expert_pg.rank()
+    dl_ranks_size = parallel_context.dp_pg.size()
+    dl_rank = parallel_context.dp_pg.rank()
 
     # TODO @nouamanetazi: Remove unused columns: https://github.com/huggingface/transformers/blob/47e1676255e5dd86b9541f734cd4f4bdcbb50f4a/src/transformers/trainer.py#L852
     # TODO @nouamanetazi: Support torch.utils.data.IterableDataset: https://github.com/huggingface/transformers/blob/47e1676255e5dd86b9541f734cd4f4bdcbb50f4a/src/transformers/trainer.py#L855-L872

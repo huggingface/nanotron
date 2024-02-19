@@ -41,7 +41,7 @@ model:
     initializer_range: 0.02
     intermediate_size: 2048
     is_llamoe_config: true
-    max_position_embeddings: 256
+    max_position_embeddings: 128
     moe_capacity_factor: 1
     moe_num_experts: 4
     num_attention_heads: 8
@@ -74,7 +74,7 @@ optimizer:
   zero_stage: 0
 parallelism:
   dp: 1
-  expert_parallel_size: 4
+  expert_parallel_size: 2
   pp: 1
   pp_engine: 1f1b
   tp: 1
