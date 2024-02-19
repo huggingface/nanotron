@@ -15,10 +15,6 @@ data:
     dataset_processing_num_proc_per_process: 1
     hf_dataset_config_name: null
 
-    # hf_dataset_or_datasets: /fsx/leandro/the-pile-splitted
-    # hf_dataset_splits: train
-    # text_column_name: text
-
     hf_dataset_or_datasets: /fsx/phuc/project_data/doremi/datasets/the_pile_raw/tokenized_data/train
 
   num_loading_workers: 1
@@ -45,8 +41,6 @@ model:
     bos_token_id: 1
     eos_token_id: 2
     hidden_act: silu
-    # NOTE: only change hidden_size, intermediate_size,
-    # num_attention_heads, num_key_value_heads and num_hidden_layers
     hidden_size: 4096
     initializer_range: 0.02
     intermediate_size: 24576
@@ -86,9 +80,9 @@ parallelism:
   # tp: 2
 
   # NOTE: for running eval
-  dp: 8
+  dp: 1
   pp: 1
-  tp: 2
+  tp: 8
   pp_engine: 1f1b
   recompute_granularity: SELECTIVE
   tp_linear_async_communication: true
@@ -121,5 +115,6 @@ tokens:
   sequence_length: 1024
   # train_steps: 1000
   # train_steps: 70_000
-  train_steps: 70_000
+  # train_steps: 70_000
+  train_steps: 70_010
   val_check_interval: -1

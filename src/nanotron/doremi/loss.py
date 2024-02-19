@@ -66,7 +66,7 @@ class DomainLossForProxyTraining:
             excess_losses, domain_idxs, self.doremi_context, self.parallel_context
         )
 
-        # NOTE: if the domain loss is zero, then the normalized domain loss is zero
+        # NOTE: if a domain loss is zero, then the normalized domain loss is zero
         normalized_domain_losses[torch.isnan(normalized_domain_losses)] = 0.0
 
         domain_weights = self.doremi_context.domain_weights

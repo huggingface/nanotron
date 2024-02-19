@@ -10,10 +10,7 @@ def masked_mean(loss: torch.Tensor, label_mask: torch.Tensor, dtype: torch.dtype
 
 
 def compute_domain_weights_based_on_token_count(datasets: List[Dataset]) -> torch.Tensor:
-    weights = []
-    for d in datasets:
-        weights.append(len(d))
-
-    total_samples = sum([len(d) for d in datasets])
-    weights = torch.tensor([x / total_samples for x in weights])
+    num_samples_per_domain = [len(d) for d in datasets]
+    total_samples = sum(num_samples_per_domain)
+    weights = torch.tensor([num_sample / total_samples for num_sample in num_samples_per_domain])
     return weights

@@ -102,8 +102,8 @@ optimizer:
   weight_decay: 0.01
   zero_stage: 0
 parallelism:
-  dp: 16
-  # dp: 2
+  # dp: 16
+  dp: 2
   pp: 1
   pp_engine: 1f1b
   recompute_granularity: SELECTIVE
@@ -132,5 +132,6 @@ tokens:
   sequence_length: 1024
   # train_steps: 1000
   # train_steps: 1579
-  train_steps: 100_000
+  # train_steps: 100_000
+  train_steps: 10
   val_check_interval: -1

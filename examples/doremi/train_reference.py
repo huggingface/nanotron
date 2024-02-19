@@ -4,14 +4,14 @@ DoReMi ttraining script.
 Usage:
 
 export CUDA_DEVICE_MAX_CONNECTIONS=1 # important for some distributed operations
-torchrun --nproc_per_node=4 examples/doremi/train_doremi.py --config-file examples/doremi/config_tiny_llama.yaml
+torchrun --nproc_per_node=4 examples/doremi/train_doremi.py --config-file examples/doremi/config_280m_llama.yaml
 """
+
 import argparse
 from pprint import pformat
 from typing import Dict, Iterable, List, Optional, Union
 
 import torch
-import wandb
 from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.config import (
@@ -34,6 +34,7 @@ from nanotron.serialize import load_weights, parse_ckpt_path
 from nanotron.trainer import DistributedTrainer
 from nanotron.utils import init_method_normal, scaled_init_method_normal
 from torch.nn.parallel import DistributedDataParallel
+from utils import print_array_for_human
 
 logger = logging.get_logger(__name__)
 
@@ -152,20 +153,20 @@ class ReferenceTrainer(DistributedTrainer):
             today = datetime.datetime.now()
             return today.strftime("%d/%m/%Y_%H:%M:%S")
 
-        if dist.get_rank(self.parallel_context.world_pg) == 0:
-            wandb.init(
-                project="nanotron",
-                name=f"{get_time_name()}_{self.config.general.project}_{self.config.general.run}",
-                config={
-                    "nanotron_config": self.config.as_dict(),
-                    "doremi": {
-                        "smoothing_param": self.doremi_context.smoothing_param,
-                        "step_size": self.doremi_context.step_size,
-                        "domain_keys": self.doremi_context.domain_keys,
-                        "initial_domain_weights": self.doremi_context.domain_weights.tolist(),
-                    },
-                },
-            )
+        # if dist.get_rank(self.parallel_context.world_pg) == 0:
+        #     wandb.init(
+        #         project="nanotron",
+        #         name=f"{get_time_name()}_{self.config.general.project}_{self.config.general.run}",
+        #         config={
+        #             "nanotron_config": self.config.as_dict(),
+        #             "doremi": {
+        #                 "smoothing_param": self.doremi_context.smoothing_param,
+        #                 "step_size": self.doremi_context.step_size,
+        #                 "domain_keys": self.doremi_context.domain_keys,
+        #                 "initial_domain_weights": self.doremi_context.domain_weights.tolist(),
+        #             },
+        #         },
+        #     )
 
     def train_step_logs(
         self,
@@ -178,7 +179,7 @@ class ReferenceTrainer(DistributedTrainer):
         samples_per_domain = outputs[0]["samples_per_domain"].tolist()
 
         log_rank(
-            f"[DoReMi][Train] Domain loss: {str(domain_losses)}",
+            f"[DoReMi][Train] Domain loss: {print_array_for_human(domain_losses)}",
             logger=logger,
             level=logging.INFO,
             rank=0,
@@ -191,24 +192,24 @@ class ReferenceTrainer(DistributedTrainer):
             rank=0,
         )
 
-        if dist.get_rank(self.parallel_context.world_pg) == 0:
-            loss_logs = {
-                f"loss_domain_{self.doremi_context.get_domain_name(i)}": loss for i, loss in enumerate(domain_losses)
-            }
+        # if dist.get_rank(self.parallel_context.world_pg) == 0:
+        #     loss_logs = {
+        #         f"loss_domain_{self.doremi_context.get_domain_name(i)}": loss for i, loss in enumerate(domain_losses)
+        #     }
 
-            samples_per_domain_logs = {
-                f"samples_per_domain_{self.doremi_context.get_domain_name(i)}": n_samples
-                for i, n_samples in enumerate(samples_per_domain)
-            }
+        #     samples_per_domain_logs = {
+        #         f"samples_per_domain_{self.doremi_context.get_domain_name(i)}": n_samples
+        #         for i, n_samples in enumerate(samples_per_domain)
+        #     }
 
-            wandb.log(
-                {
-                    **loss_logs,
-                    **samples_per_domain_logs,
-                    "loss_avg": loss_avg.item(),
-                    "step": self.iteration_step,
-                }
-            )
+        #     wandb.log(
+        #         {
+        #             **loss_logs,
+        #             **samples_per_domain_logs,
+        #             "loss_avg": loss_avg.item(),
+        #             "step": self.iteration_step,
+        #         }
+        #     )
 
 
 def get_args():
