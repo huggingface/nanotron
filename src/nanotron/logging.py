@@ -21,6 +21,7 @@ from functools import lru_cache
 from logging import CRITICAL, DEBUG, ERROR, FATAL, INFO, NOTSET, WARNING, Formatter, Logger
 from typing import List, Optional, Union
 
+import torch
 from torch import distributed as torch_dist
 
 from nanotron import distributed as dist
@@ -233,6 +234,18 @@ def human_format(num: float, billions: bool = False, divide_by_1024: bool = Fals
     return "{}{}".format("{:f}".format(num).rstrip("0").rstrip("."), SIZES[magnitude])
 
 
+def log_memory(logger: logging.Logger):
+    log_rank(
+        f" Memory usage: {torch.cuda.memory_allocated() / 1024**2:.2f}MiB."
+        f" Peak allocated {torch.cuda.max_memory_allocated() / 1024**2:.2f}MiB."
+        f" Peak reserved: {torch.cuda.max_memory_reserved() / 1024**2:.2f}MiB",
+        logger=logger,
+        level=logging.INFO,
+        rank=0,
+    )
+    torch.cuda.reset_peak_memory_stats()
+
+
 @dataclass
 class LogItem:
     tag: str
@@ -262,9 +275,12 @@ class LoggerWriter:
 
 def set_logger_verbosity_format(logging_level: str, parallel_context: ParallelContext):
     node_name = os.environ.get("SLURMD_NODENAME")
+    expert_parallel_log = (
+        f"|EXP={dist.get_rank(parallel_context.expert_pg)}" if parallel_context.expert_parallel_size > 1 else ""
+    )
     formatter = Formatter(
         fmt=f"%(asctime)s [%(levelname)s|DP={dist.get_rank(parallel_context.dp_pg)}|PP={dist.get_rank(parallel_context.pp_pg)}|"
-        f"TP={dist.get_rank(parallel_context.tp_pg)}{'|' + node_name if node_name else ''}]: %(message)s",
+        f"TP={dist.get_rank(parallel_context.tp_pg)}{expert_parallel_log}{'|' + node_name if node_name else ''}]: %(message)s",
         datefmt="%m/%d/%Y %H:%M:%S",
     )
     # TODO @thomasw21: `logging.log_levels` returns valid lg log levels

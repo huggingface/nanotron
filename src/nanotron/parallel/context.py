@@ -15,10 +15,11 @@ class ParallelContext:
         tensor_parallel_size: int,
         pipeline_parallel_size: int,
         data_parallel_size: int,
+        expert_parallel_size: int = 1,
         backend: DistributedBackend = "nccl",
     ):
         """Initialize parallel context."""
-        num_gpus_per_model = tensor_parallel_size * pipeline_parallel_size
+        num_gpus_per_model = tensor_parallel_size * pipeline_parallel_size * expert_parallel_size
         world_size = int(os.environ["WORLD_SIZE"])
 
         assert (
@@ -35,11 +36,12 @@ class ParallelContext:
             )
 
         if not dist.is_available():
-            raise ValueError("`torch.distributed is not available as a package, please install it.")
+            raise ValueError("torch.distributed is not available as a package, please install it.")
 
         self.tensor_parallel_size = tensor_parallel_size
         self.pipeline_parallel_size = pipeline_parallel_size
         self.data_parallel_size = data_parallel_size
+        self.expert_parallel_size = expert_parallel_size
 
         self._groups = {}
 
@@ -62,77 +64,49 @@ class ParallelContext:
 
     def _init_parallel_groups(self):
         """Initialize 3D parallelism's all process groups."""
-        # NOTE: ensure all processes have joined the global group
-        # before creating other groups
-        dist.barrier(group=self.world_pg)
-
-        rank = int(os.environ["RANK"])
-        world_size = int(os.environ["WORLD_SIZE"])
-
-        ranks = np.arange(0, world_size).reshape(
-            (self.pipeline_parallel_size, self.data_parallel_size, self.tensor_parallel_size)
-        )
-        world_ranks_to_pg = {}
-
-        tp_pg: dist.ProcessGroup
-        ranks_with_tp_last = ranks.reshape(
-            (self.pipeline_parallel_size * self.data_parallel_size, self.tensor_parallel_size)
-        )
-        for tp_ranks in ranks_with_tp_last:
-            sorted_ranks = tuple(sorted(tp_ranks))
-            if sorted_ranks not in world_ranks_to_pg:
-                new_group = dist.new_group(ranks=tp_ranks)
-                world_ranks_to_pg[sorted_ranks] = new_group
-            else:
-                new_group = world_ranks_to_pg[sorted_ranks]
-            if rank in tp_ranks:
-                tp_pg = new_group
-
-        dp_pg: dist.ProcessGroup
-        ranks_with_dp_last = ranks.transpose((0, 2, 1)).reshape(
-            (self.pipeline_parallel_size * self.tensor_parallel_size, self.data_parallel_size)
-        )
-        for dp_ranks in ranks_with_dp_last:
-            sorted_ranks = tuple(sorted(dp_ranks))
-            if sorted_ranks not in world_ranks_to_pg:
-                new_group = dist.new_group(ranks=dp_ranks)
-                world_ranks_to_pg[sorted_ranks] = new_group
-            else:
-                new_group = world_ranks_to_pg[sorted_ranks]
-            if rank in dp_ranks:
-                dp_pg = new_group
-
-        pp_pg: dist.ProcessGroup
-        ranks_with_pp_last = ranks.transpose((2, 1, 0)).reshape(
-            (self.tensor_parallel_size * self.data_parallel_size, self.pipeline_parallel_size)
-        )
-        for pp_ranks in ranks_with_pp_last:
-            sorted_ranks = tuple(sorted(pp_ranks))
-            if sorted_ranks not in world_ranks_to_pg:
-                new_group = dist.new_group(ranks=pp_ranks)
-                world_ranks_to_pg[sorted_ranks] = new_group
-            else:
-                new_group = world_ranks_to_pg[sorted_ranks]
-            if rank in pp_ranks:
-                pp_pg = new_group
-
-        # TODO(xrsrke): this looks unnecessary, remove it if possible
-        # We build model parallel group (combination of both tensor parallel and pipeline parallel)
-        for dp_rank in range(self.data_parallel_size):
-            pp_and_tp_ranks = ranks[:, dp_rank, :].reshape(-1)
-            sorted_ranks = tuple(sorted(pp_and_tp_ranks))
-            if sorted_ranks not in world_ranks_to_pg:
-                new_group = dist.new_group(ranks=pp_and_tp_ranks)
-                world_ranks_to_pg[sorted_ranks] = new_group
-
-        self.tp_pg = tp_pg
-        self.dp_pg = dp_pg
-        self.pp_pg = pp_pg
-
-        self.world_rank_matrix = ranks
-        self.world_ranks_to_pg = world_ranks_to_pg
-
         dist.barrier()
+        world_size = int(os.environ["WORLD_SIZE"])
+        ranks = np.arange(0, world_size).reshape(
+            (
+                self.expert_parallel_size,
+                self.pipeline_parallel_size,
+                self.data_parallel_size,
+                self.tensor_parallel_size,
+            )
+        )
+        self.world_ranks_to_pg = {}
+
+        # Relevent process groups containing the current rank
+        self.tp_pg = self.create_new_group(ranks.transpose((0, 1, 2, 3)).reshape((-1, self.tensor_parallel_size)))
+        self.dp_pg = self.create_new_group(ranks.transpose((3, 0, 1, 2)).reshape((-1, self.data_parallel_size)))
+        self.pp_pg = self.create_new_group(ranks.transpose((2, 3, 0, 1)).reshape((-1, self.pipeline_parallel_size)))
+        self.expert_pg = self.create_new_group(ranks.transpose((1, 2, 3, 0)).reshape((-1, self.expert_parallel_size)))
+
+        # model parallel group = combination of tp and pp for a given dp rank
+        self.mp_pg = self.create_new_group(
+            [ranks[:, :, dp_rank, :].reshape(-1) for dp_rank in range(self.data_parallel_size)]
+        )
+
+        self.world_rank_matrix: np.ndarray = ranks
+
+    def create_new_group(self, all_groups_ranks: np.ndarray) -> dist.ProcessGroup:
+        dist.barrier()
+        rank = int(os.environ["RANK"])
+        new_group_containing_rank = None
+        for group_ranks in all_groups_ranks:
+            sorted_ranks = tuple(sorted(group_ranks))
+
+            # add new group to `world_ranks_to_pg`
+            if sorted_ranks not in self.world_ranks_to_pg:
+                new_group = dist.new_group(ranks=group_ranks)
+                self.world_ranks_to_pg[sorted_ranks] = new_group
+            else:
+                new_group = self.world_ranks_to_pg[sorted_ranks]
+
+            if rank in sorted_ranks:
+                new_group_containing_rank = new_group
+        dist.barrier()
+        return new_group_containing_rank
 
     def set_device(self):
         local_rank = int(os.getenv("LOCAL_RANK", "0"))
@@ -144,7 +118,12 @@ class ParallelContext:
         torch.cuda.set_device(torch.cuda.device(device_id))
 
     def get_3d_ranks(self, world_rank: int) -> Tuple[int, int, int]:
-        pp_rank = (world_rank // (self.tp_pg.size() * self.dp_pg.size())) % self.pp_pg.size()
-        dp_rank = (world_rank // self.tp_pg.size()) % self.dp_pg.size()
-        tp_rank = world_rank % self.tp_pg.size()
-        return (pp_rank, dp_rank, tp_rank)
+        # return coordinates in world_rank_matrix without expert_parallel_rank
+        return tuple(i.item() for i in np.where(self.world_rank_matrix == world_rank))[-3:]
+
+    def destroy(self):
+        if not dist.is_initialized():
+            return
+
+        dist.barrier()
+        dist.destroy_process_group()

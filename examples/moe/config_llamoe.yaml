@@ -1,25 +1,25 @@
 checkpoints:
-  checkpoint_interval: 10
-  checkpoints_path: /fsx/nouamane/projects/nanotron/checkpoints
+  checkpoint_interval: 100000
+  checkpoints_path: /fsx/nouamane/projects/nanotron/examples/checkpoints
   checkpoints_path_is_shared_file_system: false
   resume_checkpoint_path: null
   save_initial_state: false
 data:
   dataset:
     dataset_overwrite_cache: false
-    dataset_processing_num_proc_per_process: 1
+    dataset_processing_num_proc_per_process: 12
     hf_dataset_config_name: null
-    hf_dataset_or_datasets: HuggingFaceH4/testing_alpaca_small
+    hf_dataset_or_datasets: roneneldan/TinyStories
     hf_dataset_splits: train
-    text_column_name: completion
+    text_column_name: text
   num_loading_workers: 1
   seed: 42
 general:
   benchmark_csv_path: null
   consumed_train_samples: null
-  ignore_sanity_checks: false
-  project: debug
-  run: tiny_llama_%date_%jobid
+  ignore_sanity_checks: true
+  project: moe
+  run: llamoe
   seed: 42
   step: null
 lighteval: null
@@ -37,21 +37,24 @@ model:
     bos_token_id: 1
     eos_token_id: 2
     hidden_act: silu
-    hidden_size: 16
+    hidden_size: 512
     initializer_range: 0.02
-    intermediate_size: 64
-    is_llama_config: true
-    max_position_embeddings: 256
-    num_attention_heads: 4
-    num_hidden_layers: 2
-    num_key_value_heads: 4
+    intermediate_size: 2048
+    is_llamoe_config: true
+    max_position_embeddings: 128
+    moe_capacity_factor: 1
+    moe_num_experts: 4
+    num_attention_heads: 8
+    num_experts_per_tok: 1
+    num_hidden_layers: 6
+    num_key_value_heads: 8
     pad_token_id: null
     pretraining_tp: 1
-    rms_norm_eps: 1.0e-05
+    rms_norm_eps: 1.0e-06
     rope_scaling: null
-    tie_word_embeddings: true
+    tie_word_embeddings: false
     use_cache: true
-    vocab_size: 256
+    vocab_size: 32000
 optimizer:
   accumulate_grad_in_fp32: true
   adam_beta1: 0.9
@@ -61,32 +64,33 @@ optimizer:
   learning_rate_scheduler:
     learning_rate: 0.0003
     lr_decay_starting_step: null
-    lr_decay_steps: 8
+    lr_decay_steps: 1818
     lr_decay_style: cosine
-    lr_warmup_steps: 2
+    lr_warmup_steps: 100
     lr_warmup_style: linear
     min_decay_lr: 1.0e-05
   torch_adam_is_fused: true
   weight_decay: 0.01
   zero_stage: 0
 parallelism:
-  dp: 2
-  pp: 2
+  dp: 1
+  expert_parallel_size: 2
+  pp: 1
   pp_engine: 1f1b
-  recompute_granularity: SELECTIVE
+  recompute_granularity: null
   tp: 2
-  tp_linear_async_communication: true
-  tp_mode: REDUCE_SCATTER
+  tp_linear_async_communication: false
+  tp_mode: ALL_REDUCE
 profiler: null
 tokenizer:
   tokenizer_max_length: null
-  tokenizer_name_or_path: gpt2
+  tokenizer_name_or_path: meta-llama/Llama-2-7b-hf
   tokenizer_revision: null
 tokens:
-  batch_accumulation_per_replica: 1
+  batch_accumulation_per_replica: 2
   limit_test_batches: 0
   limit_val_batches: 0
-  micro_batch_size: 2
-  sequence_length: 32
-  train_steps: 10
+  micro_batch_size: 256
+  sequence_length: 256
+  train_steps: 1918
   val_check_interval: -1

@@ -44,6 +44,7 @@ from nanotron.logging import (
     LoggerWriter,
     LogItem,
     human_format,
+    log_memory,
     log_rank,
     set_logger_verbosity_format,
 )
@@ -133,6 +134,7 @@ class DistributedTrainer:
             tensor_parallel_size=self.config.parallelism.tp,
             pipeline_parallel_size=self.config.parallelism.pp,
             data_parallel_size=self.config.parallelism.dp,
+            expert_parallel_size=self.config.parallelism.expert_parallel_size,
         )
 
         self.pre_init()
@@ -211,7 +213,7 @@ class DistributedTrainer:
 
         # Setup tensorboard write and log writers on output rank
         self.logger_ranks = self.parallel_context.world_rank_matrix[
-            self.unwrapped_model.output_pp_rank, 0, 0
+            0, self.unwrapped_model.output_pp_rank, 0, 0
         ].flatten()
         self.loggerwriter = self.setup_log_writers()
 
@@ -320,16 +322,7 @@ class DistributedTrainer:
         before_tbi_sanity_checks(self.config, self.parallel_context, self.unwrapped_model, self.grad_accumulator)
 
         if self.iteration_step < 5:
-            log_rank(
-                f"[Before train batch iter] Memory usage: {torch.cuda.memory_allocated() / 1024**2:.2f}MiB."
-                f" Peak allocated {torch.cuda.max_memory_allocated() / 1024**2:.2f}MiB."
-                f" Peak reserved: {torch.cuda.max_memory_reserved() / 1024**2:.2f}MiB",
-                logger=logger,
-                level=logging.INFO,
-                group=self.parallel_context.world_pg,
-                rank=0,
-            )
-            torch.cuda.reset_peak_memory_stats()
+            log_memory(logger=logger)
 
         outputs = self.pipeline_engine.train_batch_iter(
             model=self.model,
@@ -340,16 +333,7 @@ class DistributedTrainer:
         )
 
         if self.iteration_step < 5:
-            log_rank(
-                f"[After train batch iter] Memory usage: {torch.cuda.memory_allocated() / 1024**2:.2f}MiB."
-                f" Peak allocated {torch.cuda.max_memory_allocated() / 1024**2:.2f}MiB."
-                f" Peak reserved: {torch.cuda.max_memory_reserved() / 1024**2:.2f}MiB",
-                logger=logger,
-                level=logging.INFO,
-                group=self.parallel_context.world_pg,
-                rank=0,
-            )
-            torch.cuda.reset_peak_memory_stats()
+            log_memory(logger=logger)
 
         after_tbi_sanity_checks(self.config, self.parallel_context, self.unwrapped_model, self.grad_accumulator)
 
@@ -387,17 +371,8 @@ class DistributedTrainer:
                 for name, param in self.unwrapped_model.get_named_params_with_correct_tied()
                 if param.requires_grad
             ]
-            # TODO @nouamane: we need to split `world_rank_matrix` along PP axis, to separate ref from active model
             self.grad_norm_unclipped = clip_grad_norm(
-                mp_pg=self.parallel_context.world_ranks_to_pg[
-                    tuple(
-                        sorted(
-                            self.parallel_context.world_rank_matrix[
-                                :, dist.get_rank(self.parallel_context.dp_pg), :
-                            ].reshape(-1)
-                        )
-                    )
-                ],
+                mp_pg=self.parallel_context.mp_pg,
                 named_parameters=named_parameters,
                 grad_accumulator=self.grad_accumulator,
                 max_norm=self.config.optimizer.clip_grad,
@@ -794,6 +769,7 @@ def mark_tied_parameters(
                 target,
                 (
                     parallel_context.world_rank_matrix[
+                        dist.get_rank(parallel_context.expert_pg),
                         get_pp_rank_of(target, module=model),
                         dist.get_rank(parallel_context.dp_pg),
                         dist.get_rank(parallel_context.tp_pg),
@@ -825,14 +801,8 @@ def mark_tied_parameters(
             shared_weights = [
                 (
                     name,
-                    # This adds all the tp_ranks in one go
-                    tuple(
-                        sorted(
-                            parallel_context.world_rank_matrix[
-                                dist.get_rank(parallel_context.pp_pg), dist.get_rank(parallel_context.dp_pg), :
-                            ]
-                        )
-                    ),
+                    # sync across TP group
+                    tuple(sorted(dist.get_process_group_ranks(parallel_context.tp_pg))),
                 )
             ]
 

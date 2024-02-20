@@ -3,7 +3,7 @@ from contextlib import nullcontext
 import pytest
 import torch
 from helpers.exception import assert_fail_except_rank_with
-from helpers.utils import available_gpus, init_distributed
+from helpers.utils import available_gpus, init_distributed, rerun_if_address_is_in_use
 from nanotron import distributed as dist
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.data_parallel.utils import ddp_trigger_sync_in_bwd
@@ -15,12 +15,12 @@ from torch.distributed import GradBucket
 
 @pytest.mark.skipif(available_gpus() < 2, reason="Testing test_ddp_with_afab requires at least 2 gpus")
 @pytest.mark.parametrize("accumulation_steps", [1, 3])
+@rerun_if_address_is_in_use()
 def test_ddp_with_afab(accumulation_steps):
     init_distributed(tp=1, dp=2, pp=1)(_test_ddp_with_afab)(accumulation_steps=accumulation_steps)
 
 
 def _test_ddp_with_afab(parallel_context: ParallelContext, accumulation_steps: int):
-    dist.get_rank(parallel_context.dp_pg)
     half_precision = torch.float16
 
     def allreduce_hook(process_group: dist.ProcessGroup, bucket: GradBucket):
@@ -75,3 +75,5 @@ def _test_ddp_with_afab(parallel_context: ParallelContext, accumulation_steps: i
         else:
             with assert_fail_except_rank_with(AssertionError, rank_exception=0, pg=parallel_context.dp_pg):
                 assert_tensor_synced_across_pg(grad_hook, parallel_context.dp_pg)
+
+    parallel_context.destroy()

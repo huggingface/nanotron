@@ -1,4 +1,4 @@
-# nanotron
+# ⚡️ Nanotron
 
 The objective of this library is to provide easy distributed primitives in order to train a variety of models efficiently using 3D parallelism. For more information about the internal design of the library or 3D parallelism in general, please check out [[docs.md]](./docs/docs.md) and [[3d_parallelism.md]](./docs/3d_parallelism.md).
 
@@ -56,7 +56,7 @@ torchrun --nproc_per_node=8 run_generation.py --ckpt-path checkpoints/text/4
 
 # Development guidelines
 
-If you plan on developping on `nanotron`, we suggest you install the `dev` flavor: `pip install -e ".[dev]"`
+If you plan on developing on `nanotron`, we suggest you install the `dev` flavor: `pip install -e ".[dev]"`
 
 We use pre-commit to run a bunch of callbacks on each commit, mostly normalization code in order for the codebase to stay consistent. Please do run `pre-commit install`.
 

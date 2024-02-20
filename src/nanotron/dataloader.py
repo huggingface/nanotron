@@ -393,8 +393,8 @@ class DataCollatorForCLM:
 
 # Adapted from https://github.com/huggingface/transformers/blob/47e1676255e5dd86b9541f734cd4f4bdcbb50f4a/src/transformers/trainer.py#L763-L835
 def _get_train_sampler(
-    dp_size: int,
-    dp_rank: int,
+    dl_ranks_size: int,
+    dl_rank: int,
     train_dataset: "Dataset",
     seed: int,
     use_loop_to_round_batch_size: bool,
@@ -413,16 +413,18 @@ def _get_train_sampler(
         sampler = DistributedSamplerWithLoop(
             train_dataset,
             batch_size=micro_batch_size,
-            num_replicas=dp_size,
-            rank=dp_rank,
+            num_replicas=dl_ranks_size,
+            rank=dl_rank,
             seed=seed,
             drop_last=drop_last,
         )
     else:
-        sampler = DistributedSampler(train_dataset, num_replicas=dp_size, rank=dp_rank, seed=seed, drop_last=drop_last)
+        sampler = DistributedSampler(
+            train_dataset, num_replicas=dl_ranks_size, rank=dl_rank, seed=seed, drop_last=drop_last
+        )
 
     if consumed_train_samples > 0:
-        sampler = SkipBatchSampler(sampler, skip_batches=consumed_train_samples, dp_size=dp_size)
+        sampler = SkipBatchSampler(sampler, skip_batches=consumed_train_samples, dp_size=dl_ranks_size)
 
     return sampler
 
@@ -476,12 +478,16 @@ def get_train_dataloader(
         parallel_context=parallel_context,
     )
 
+    # Compute size and rank of dataloader workers
+    dl_ranks_size = parallel_context.dp_pg.size()
+    dl_rank = parallel_context.dp_pg.rank()
+
     # TODO @nouamanetazi: Remove unused columns: https://github.com/huggingface/transformers/blob/47e1676255e5dd86b9541f734cd4f4bdcbb50f4a/src/transformers/trainer.py#L852
     # TODO @nouamanetazi: Support torch.utils.data.IterableDataset: https://github.com/huggingface/transformers/blob/47e1676255e5dd86b9541f734cd4f4bdcbb50f4a/src/transformers/trainer.py#L855-L872
 
     train_sampler = _get_train_sampler(
-        dp_size=parallel_context.dp_pg.size(),
-        dp_rank=dist.get_rank(parallel_context.dp_pg),
+        dl_rank=dl_rank,
+        dl_ranks_size=dl_ranks_size,
         train_dataset=train_dataset,
         seed=seed_worker,
         use_loop_to_round_batch_size=use_loop_to_round_batch_size,
@@ -498,18 +504,18 @@ def get_train_dataloader(
         drop_last=dataloader_drop_last,  # we also drop_last in `clm_process()`
         num_workers=dataloader_num_workers,
         pin_memory=dataloader_pin_memory,
-        worker_init_fn=get_dataloader_worker_init(dp_rank=dist.get_rank(parallel_context.dp_pg)),
+        worker_init_fn=get_dataloader_worker_init(dl_rank=dl_rank),
         # TODO @thomasw21: I'm not sure but this doesn't seem to work at all.
         # pin_memory_device="cuda",
     )
 
 
-def get_dataloader_worker_init(dp_rank: int):
+def get_dataloader_worker_init(dl_rank: int):
     """Creates random states for each worker in order to get different state in each workers"""
 
     def dataloader_worker_init(worker_id):
         # Dataloader is TP/PP synced in random states
-        seed = 2 ** (1 + worker_id) * 3 ** (1 + dp_rank) % (2**32)
+        seed = 2 ** (1 + worker_id) * 3 ** (1 + dl_rank) % (2**32)
         set_random_seed(seed)
 
     return dataloader_worker_init

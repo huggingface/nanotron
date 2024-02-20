@@ -20,6 +20,7 @@ class ParallelismArgs:
         dp: Number of DP replicas
         pp: Number of PP stages
         tp: Number of TP replicas
+        expert_parallel_size: Number of expert parallel replicas (used only for MoEs)
         pp_engine: Pipeline engine to use between "1f1b" and "afab"
         tp_mode: TP mode to use between "all_reduce" and "reduce_scatter": all_reduce is normal, reduce_scatter activate sequence parallelism
         recompute_granularity: Recompute granularity to use between "full" and "selective"
@@ -33,6 +34,8 @@ class ParallelismArgs:
     tp_mode: Optional[TensorParallelLinearMode] = None
     recompute_granularity: Optional[RecomputeGranularity] = None
     tp_linear_async_communication: Optional[bool] = None
+
+    expert_parallel_size: int = 1
 
     def __post_init__(self):
         # Conservative defaults
