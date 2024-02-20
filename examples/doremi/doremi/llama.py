@@ -1,10 +1,10 @@
 from typing import Dict, Optional, Union
 
 import torch
+from transformers import LlamaConfig
+
 from nanotron import logging
 from nanotron.config import ParallelismArgs
-from nanotron.doremi.doremi_context import DoReMiContext
-from nanotron.doremi.loss import CrossEntropyWithPerDomainLoss, DoReMiLossForProxyTraining
 from nanotron.models import NanotronModel
 from nanotron.models.fast.llama import LlamaModel
 from nanotron.nn.layer_norm import TritonRMSNorm
@@ -17,7 +17,9 @@ from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelEmbedding,
     TensorParallelRowLinear,
 )
-from transformers import LlamaConfig
+
+from .doremi_context import DoReMiContext
+from .loss import CrossEntropyWithPerDomainLoss, DoReMiLossForProxyTraining
 
 logger = logging.get_logger(__name__)
 
@@ -206,7 +208,6 @@ class LLaMaForInference(BaseLLaMa):
             group=self.parallel_context.tp_pg,
             dtype=torch.float,
         ).transpose(0, 1)
-        # per_token_losses = loss * label_mask
         return {"losses": loss}
 
 
@@ -249,20 +250,11 @@ class LlamaForDoReMiTraining(BaseLLaMa):
         domain_idxs: Optional[Union[torch.Tensor, TensorPointer]],
         ref_losses: Optional[Union[torch.Tensor, TensorPointer]],
     ) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
-
-        # from nanotron import distributed as dist
-        # dp_size = dist.get_world_size(self.parallel_context.dp_pg)
-        # domain_idxs_dp = [torch.empty_like(torch.tensor(domain_idxs, device="cuda")) for _ in range(dp_size)]
-        # dist.all_gather(domain_idxs_dp, domain_idxs, group=self.parallel_context.dp_pg)
-
-        # assert 1 == 1
-
         sharded_logits = self.model(
             input_ids=input_ids,
             input_mask=input_mask,
         )
         sharded_logits = sharded_logits.transpose(0, 1).contiguous()
-        # label_ids = label_ids.transpose(0, 1).contiguous()
         outputs = self.loss(
             sharded_logits=sharded_logits,
             label_ids=label_ids,
@@ -305,12 +297,6 @@ class LlamaReferenceForTrainingWithPerDomainLoss(BaseLLaMa):
         label_mask: Union[torch.Tensor, TensorPointer],
         domain_idxs: Union[torch.Tensor, TensorPointer],
     ) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
-        # from nanotron import distributed as dist
-        # domain_idxs_dp = [torch.empty_like(domain_idxs) for _ in range(self.parallel_context.dp_world_size)]
-        # dist.all_gather(domain_idxs_dp, domain_idxs)
-
-        # assert 1 == 1
-
         sharded_logits = self.model(
             input_ids=input_ids,
             input_mask=input_mask,

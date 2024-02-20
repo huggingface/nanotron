@@ -2,11 +2,13 @@ from typing import Dict, Tuple
 
 import torch
 import torch.distributed as dist
-from nanotron.doremi.doremi_context import DoReMiContext
-from nanotron.doremi.utils import masked_mean
+from torch import nn
+
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.tensor_parallel.functional import sharded_cross_entropy
-from torch import nn
+
+from .doremi_context import DoReMiContext
+from .utils import masked_mean
 
 
 def compute_per_domain_loss(

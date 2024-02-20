@@ -4,6 +4,7 @@ from typing import List, Optional, Union
 
 import torch
 import yaml
+
 from nanotron.config import (
     CheckpointsArgs,
     DataArgs,
@@ -25,7 +26,7 @@ class DoReMiArgs:
     domain_weights: Optional[Union[str, List[float]]] = None
     domain_names: Optional[Union[str, List[str]]] = None
 
-    # NOTE: the path where you wan to save the reference model checkpoint
+    # NOTE: the path where you want to save the reference model checkpoint
     ref_model_checkpoint_path: Optional[Path] = None
 
     # NOTE: the path where you want to load the
@@ -67,7 +68,6 @@ class DoReMiConfig:
     tokens: TokensArgs
     optimizer: OptimizerArgs
     data: DataArgs
-    # TODO(xrsrke): remove unsupported options
     profiler: Optional[ProfilerArgs]
     doremi: DoReMiArgs
 

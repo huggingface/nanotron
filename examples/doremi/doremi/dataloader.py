@@ -5,17 +5,19 @@ from typing import Dict, List, Optional, Union
 
 import numpy as np
 import torch
+from torch.utils.data import DataLoader
+from torch.utils.data.distributed import DistributedSampler
+from tqdm import tqdm
+
 from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.dataloader import get_dataloader_worker_init
-from nanotron.doremi.doremi_context import DoReMiContext
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
 from nanotron.parallel.pipeline_parallel.utils import get_input_output_pp_ranks
 from nanotron.trainer import DistributedTrainer
-from torch.utils.data import DataLoader
-from torch.utils.data.distributed import DistributedSampler
-from tqdm import tqdm
+
+from .doremi_context import DoReMiContext
 
 try:
     from datasets import Dataset, concatenate_datasets, load_from_disk
@@ -108,13 +110,6 @@ class DataCollatorForCLM:
         if current_pp_rank == self.output_pp_rank:
             result["label_ids"] = input_ids[:, 1:]
             result["label_mask"] = np.ones((batch_size, self.sequence_length), dtype=np.bool_)
-
-            # NOTE: only the last pipeline stage needs domain_idxs for computing DoReMi loss
-            # and only the proxy model needs domain_idxs for computing reference loss
-            # if self.doremi_context.is_proxy is True:
-            #     result["domain_idxs"] = np.vstack([examples[i]["domain_ids"] for i in range(len(examples))])
-            # TODO(xrsrke): use the default one, then add domain_ids, don't duplicate code!
-            # result["domain_idxs"] = np.vstack([examples[i]["domain_ids"] for i in range(len(examples))])
 
         result["domain_idxs"] = np.vstack([examples[i]["domain_ids"] for i in range(len(examples))])
 
@@ -287,12 +282,11 @@ class DistributedSamplerForDoReMi(DistributedSampler):
         for i, dataset in enumerate(self.datasets):
             local_indices = torch.arange(0, len(dataset), device="cpu").tolist()
 
-            # NOTE: align the indicies across the combined dataset
+            # NOTE: align the indices across the combined dataset
             global_indices = local_indices + self.offsets[i]
             domain_indices.append(global_indices)
 
         self.num_samples_per_global_step = self.batch_size * self.num_microbatches * self.num_replicas
-        # self.global_batch_size = self.batch_size * self.num_microbatches * self.num_replicas
         self.domain_indices = domain_indices
         self.expected_total_samples = sum([len(d) for d in domain_indices])
 
@@ -349,7 +343,6 @@ def get_dataloader(trainer: DistributedTrainer, datasets) -> DataLoader:
     def _data_generator(dataloader):
         def inner():
             for batch in dataloader:
-                # TODO(xrskre): remove this, use sanity_check
                 batch = {k: v.to("cuda") for k, v in batch.items()}
                 # NOTE: because the inference model don't take `domain_idxs`
                 # as input we need to remove it from the batch
@@ -361,7 +354,6 @@ def get_dataloader(trainer: DistributedTrainer, datasets) -> DataLoader:
 
         return inner
 
-    # TODO(xrsrke): refactor out data_generator
     dataloader = _data_generator(dataloader) if doremi_context.is_proxy is True else dataloader
 
     # NOTE: we need to call the dataloader to generate reference losses
