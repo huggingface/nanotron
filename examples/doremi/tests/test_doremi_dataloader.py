@@ -11,13 +11,11 @@ from examples.doremi.doremi.dataloader import CombinedDataset
 
 @pytest.fixture
 def dataset1():
-    # return load_dataset("stas/c4-en-10k", split="train")
     return create_dummy_dataset(4000)
 
 
 @pytest.fixture
 def dataset2():
-    # return load_dataset("stas/openwebtext-synthetic-testing", split="10.repeat")
     return create_dummy_dataset(6000)
 
 

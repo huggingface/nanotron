@@ -3,12 +3,6 @@ import sys
 import pytest
 import torch
 
-# current_script_dir = Path(__file__).resolve()
-# # Calculate the root directory based on the current directory structure
-# project_root = current_script_dir.parent.parent.parent
-
-# Add the project root to sys.path
-# if str(project_root) not in sys.path:
 sys.path.append("/fsx/phuc/projects/nanotron")
 
 from examples.doremi.doremi.doremi_context import DoReMiContext

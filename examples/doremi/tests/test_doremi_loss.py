@@ -40,7 +40,6 @@ def get_partition_logit(logits, parallel_context):
 
 
 @pytest.mark.parametrize("tp", [1, 2])
-# @rerun_if_address_is_in_use()
 def test_computing_per_token_loss(tp: int):
     BATCH_SIZE = 512
     SEQ_LEN = 128
@@ -69,7 +68,6 @@ def _test_computing_per_token_loss(parallel_context: ParallelContext, logits, ta
 
 
 @pytest.mark.parametrize("dp", [1, 2])
-# @rerun_if_address_is_in_use()
 def test_domain_loss_for_proxy_training(dp: int):
     GLOBAL_BATCH_SIZE = 512
     BATCH_SIZE = GLOBAL_BATCH_SIZE // dp
@@ -126,7 +124,6 @@ def _test_domain_loss_for_proxy_training(
 
 
 @pytest.mark.parametrize("dp", [1, 2])
-# @rerun_if_address_is_in_use()
 def test_computing_per_domain_loss(dp: int):
     GLOBAL_BATCH_SIZE = 512
     BATCH_SIZE = GLOBAL_BATCH_SIZE // dp
@@ -174,7 +171,6 @@ def _test_computing_per_domain_loss(
 
 
 @pytest.mark.parametrize("tp", [1, 2])
-# @rerun_if_address_is_in_use()
 def test_cross_entropy_with_per_domain_loss(tp: int, doremi_context):
     BATCH_SIZE = 512
     SEQ_LEN = 128
@@ -228,7 +224,6 @@ def _test_cross_entropy_with_per_domain_loss(
 
 
 @pytest.mark.parametrize("tp", [1, 2])
-# @rerun_if_address_is_in_use()
 def test_doremi_loss_for_proxy_training(tp: int, doremi_context):
     BATCH_SIZE = 512
     SEQ_LEN = 128
