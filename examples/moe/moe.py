@@ -400,7 +400,7 @@ class ExpertParallel(nn.Module):
         self.expert_parallel_size = expert_parallel_size
 
     def forward(self, *args, **kwargs):
-        self.scale_gradients()
+        # self.scale_gradients()
         return self.module(*args, **kwargs)
 
     def scale_gradients(self):
@@ -494,10 +494,10 @@ class MLP(nn.Module):
         # TODO @nouamane: jit
         self.act = partial(F.gelu, approximate="tanh")
 
-    def forward(self, hidden_states):  # [seq_length, batch_size, hidden_dim]
+    def forward(self, hidden_states, topo):  # [seq_length, batch_size, hidden_dim]
         merged_states = self.w1(hidden_states)
         hidden_states = self.w2(self.act(merged_states))
-        return {"hidden_states": hidden_states}
+        return hidden_states
 
 
 def inclusive_cumsum(x, dim):
