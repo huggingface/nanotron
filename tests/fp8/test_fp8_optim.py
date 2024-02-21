@@ -10,6 +10,17 @@ from torch.optim import Adam
 from utils import convert_linear_to_fp8
 
 
+def test_fp8_optim_default_initiation():
+    OPTIM_ATTRS = ["lr", "betas", "eps", "weight_decay", "amsgrad"]
+    linear = nn.Linear(16, 16, device="cuda")
+    ref_optim = Adam(linear.parameters())
+    
+    fp8_linear = convert_linear_to_fp8(deepcopy(linear))
+    fp8_optim = FP8Adam(fp8_linear.parameters())
+
+    assert all([ref_optim.defaults[attr] == fp8_optim.defaults[attr] for attr in OPTIM_ATTRS])
+
+
 @pytest.mark.parametrize("learning_rate", [1, 1e-3])
 @pytest.mark.parametrize("betas", [(0.9, 0.999), (0.9, 0.99)])
 @pytest.mark.parametrize("eps", [1e-8, 1e-3])

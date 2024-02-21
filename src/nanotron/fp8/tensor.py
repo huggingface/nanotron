@@ -32,8 +32,8 @@ class FP8Tensor(torch.Tensor):
         obj.fp8_meta = fp8_meta
         return obj
 
-    def __repr__(self) -> str:
-        return f"FP8Tensor({repr(self.data)}, fp8_meta={self.fp8_meta})"
+    # def __repr__(self) -> str:
+    #     return f"FP8Tensor({repr(self.data)}, fp8_meta={self.fp8_meta})"
 
 
 def convert_torch_dtype_to_te_dtype(dtype: torch.dtype) -> tex.DType:

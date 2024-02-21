@@ -5,9 +5,9 @@ from msamp.common.dtype import Dtypes as MS_Dtypes
 from msamp.nn import LinearReplacer
 from msamp.optim import LBAdam
 from torch import nn
-from torch.optim import Adam
+# from torch.optim import Adam
 
-from nanotron.fp8.optim import FP8Adam
+from nanotron.fp8.optim import FP8Adam, Adam
 # from utils import convert_linear_to_fp8
 
 import torch.nn as nn
@@ -47,18 +47,21 @@ if __name__ == "__main__":
     input = torch.randn(HIDDEN_SIZE, HIDDEN_SIZE, device="cuda", requires_grad=False)
 
     for _ in range(N_STEPS):
+        print(f"##### Running reference ##### \n \n")
         ref_output = ref_linear(input)
         ref_output.sum().backward()
         ref_optim.step()
         ref_optim.zero_grad()
         
-        
+        print(f"##### Running MSAMP ##### \n \n")
         msamp_output = msamp_linear(input)
         msamp_output.sum().backward()
         # msamp_optim.all_reduce_grads(msamp_linear)
         msamp_optim.step()
         msamp_optim.zero_grad()
         
+        print(f"##### Running FP8 ##### \n \n")
+
         output = linear(input)
         output.sum().backward()
         optim.step()

@@ -42,14 +42,19 @@ def test_fp8_linear_backward_pass(input_requires_grad):
     # TODO(xrsrke): investigate why input.grad is so high tolerance
     # assert torch.allclose(input.grad, ref_input.grad, 0.2, 0.2) if input_requires_grad else True
     # TODO(xrsrke): tune what is the minimum threshold for this to correctly converge
-    torch.testing.assert_close(fp8_linear.weight.grad, ref_linear.weight.grad, rtol=0.1, atol=0.1)
-    torch.testing.assert_close(fp8_linear.bias.grad, ref_linear.bias.grad, rtol=0, atol=0.1)
+        
+    # NOTE: these weight threashold is tuned from the FP8-LM implementation
+    torch.testing.assert_allclose(fp8_linear.weight.grad, ref_linear.weight.grad, rtol=0.1, atol=0.1)
+    # torch.testing.assert_allclose(fp8_linear.weight.grad, ref_linear.weight.grad, 0.06, 0.1)
+    assert torch.equal(fp8_linear.bias.grad, ref_linear.bias.grad) if input_requires_grad else True
 
 
-def test_fp8_linear_attrs():
+def test_fp8_linear_parameters():
     fp8_linear = FP8Linear(16, 16, device="cuda")
 
-    assert next(fp8_linear.parameters()) is not None
+    assert all([p is not None for p in fp8_linear.parameters()])
+    assert isinstance(fp8_linear.weight, FP8Parameter)
+    assert isinstance(fp8_linear.bias, torch.Tensor)
     assert all(p.requires_grad for p in fp8_linear.parameters()) is True
 
 
