@@ -1,18 +1,24 @@
+import sys
+
 import pytest
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
-from helpers.utils import init_distributed
-from nanotron.doremi.doremi_context import DoReMiContext
-from nanotron.doremi.loss import (
+
+from nanotron.parallel import ParallelContext
+from nanotron.parallel.tensor_parallel.functional import sharded_cross_entropy
+from nanotron.sanity_checks import assert_tensor_synced_across_pg
+
+sys.path.append("/fsx/phuc/projects/nanotron")
+
+from examples.doremi.doremi.doremi_context import DoReMiContext
+from examples.doremi.doremi.loss import (
     CrossEntropyWithPerDomainLoss,
     DomainLossForProxyTraining,
     DoReMiLossForProxyTraining,
     compute_per_domain_loss,
 )
-from nanotron.parallel import ParallelContext
-from nanotron.parallel.tensor_parallel.functional import sharded_cross_entropy
-from nanotron.sanity_checks import assert_tensor_synced_across_pg
+from tests.helpers.utils import init_distributed
 
 
 @pytest.fixture
@@ -34,6 +40,7 @@ def get_partition_logit(logits, parallel_context):
 
 
 @pytest.mark.parametrize("tp", [1, 2])
+# @rerun_if_address_is_in_use()
 def test_computing_per_token_loss(tp: int):
     BATCH_SIZE = 512
     SEQ_LEN = 128
@@ -62,6 +69,7 @@ def _test_computing_per_token_loss(parallel_context: ParallelContext, logits, ta
 
 
 @pytest.mark.parametrize("dp", [1, 2])
+# @rerun_if_address_is_in_use()
 def test_domain_loss_for_proxy_training(dp: int):
     GLOBAL_BATCH_SIZE = 512
     BATCH_SIZE = GLOBAL_BATCH_SIZE // dp
@@ -118,6 +126,7 @@ def _test_domain_loss_for_proxy_training(
 
 
 @pytest.mark.parametrize("dp", [1, 2])
+# @rerun_if_address_is_in_use()
 def test_computing_per_domain_loss(dp: int):
     GLOBAL_BATCH_SIZE = 512
     BATCH_SIZE = GLOBAL_BATCH_SIZE // dp
@@ -165,6 +174,7 @@ def _test_computing_per_domain_loss(
 
 
 @pytest.mark.parametrize("tp", [1, 2])
+# @rerun_if_address_is_in_use()
 def test_cross_entropy_with_per_domain_loss(tp: int, doremi_context):
     BATCH_SIZE = 512
     SEQ_LEN = 128
@@ -218,6 +228,7 @@ def _test_cross_entropy_with_per_domain_loss(
 
 
 @pytest.mark.parametrize("tp", [1, 2])
+# @rerun_if_address_is_in_use()
 def test_doremi_loss_for_proxy_training(tp: int, doremi_context):
     BATCH_SIZE = 512
     SEQ_LEN = 128

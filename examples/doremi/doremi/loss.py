@@ -18,17 +18,21 @@ def compute_per_domain_loss(
     dp_pg = parallel_context.dp_pg
 
     # NOTE: can't do allgather([tensor_list], [tensor]) if a tensor in tensor_list is not contiguous
-    losses_dp = [torch.empty_like(losses, device="cuda").contiguous() for _ in range(dp_size)]
+    losses_dp = [
+        torch.empty_like(losses, device="cuda", memory_format=torch.contiguous_format) for _ in range(dp_size)
+    ]
     dist.all_gather(losses_dp, losses.contiguous(), group=dp_pg)
     losses_dp = torch.cat(losses_dp, dim=0)
 
-    domain_ids_dp = [torch.empty_like(domain_idxs, device="cuda").contiguous() for _ in range(dp_size)]
+    domain_ids_dp = [
+        torch.empty_like(domain_idxs, device="cuda", memory_format=torch.contiguous_format) for _ in range(dp_size)
+    ]
     dist.all_gather(domain_ids_dp, domain_idxs.contiguous(), group=dp_pg)
     domain_ids_dp = torch.cat(domain_ids_dp, dim=0)
 
     # NOTE: Calculate total loss per domain
-    N_DOMAINS = doremi_context.num_domains
-    domain_losses = torch.zeros(N_DOMAINS, device="cuda")
+    n_domains = doremi_context.num_domains
+    domain_losses = torch.zeros(n_domains, device="cuda")
     domain_ids_dp = domain_ids_dp.view(-1)
 
     assert losses_dp.shape[0] == domain_ids_dp.shape[0]
@@ -40,11 +44,12 @@ def compute_per_domain_loss(
         domain_losses[domain_ids_dp[i]] += losses_dp[i].sum(dim=-1)
 
     # NOTE: Normalize and smooth domain weights
-    samples_per_domain = torch.bincount(domain_ids_dp, minlength=N_DOMAINS)
+    samples_per_domain = torch.bincount(domain_ids_dp, minlength=n_domains)
     SEQ_LEN = losses.shape[1]
     normalized_domain_losses = domain_losses / (samples_per_domain * SEQ_LEN)
     # NOTE: if the domain loss is zero, then the normalized domain loss is NaN
-    normalized_domain_losses[torch.isnan(normalized_domain_losses)] = 0.0
+    # normalized_domain_losses[torch.isnan(normalized_domain_losses)] = 0.0
+    normalized_domain_losses[torch.isnan(normalized_domain_losses)].zero_()
     return losses_dp, normalized_domain_losses, samples_per_domain
 
 

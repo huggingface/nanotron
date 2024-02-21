@@ -19,7 +19,6 @@ from typing import (
 )
 
 import torch
-import wandb
 from torch.nn.parallel import DistributedDataParallel
 
 from nanotron import distributed as dist
@@ -97,6 +96,11 @@ CONFIG_TO_MODEL_CLASS = {
     "LlamaConfig": LlamaForTraining,
     "Starcoder2Config": Starcoder2ForTraining,
 }
+
+try:
+    import wandb
+except ImportError:
+    wandb = None
 
 
 class DistributedTrainer:
@@ -239,11 +243,11 @@ class DistributedTrainer:
 
     def pre_training(self, *args, **kwargs):
         current_time = datetime.datetime.now().strftime("%d/%m/%Y_%H:%M:%S")
-        if dist.get_rank(self.parallel_context.world_pg) == 0:
+        if dist.get_rank(self.parallel_context.world_pg) == 0 and wandb is not None:
             wandb.init(
                 project=self.config.general.project,
                 name=f"{current_time}_{self.config.general.project}_{self.config.general.run}",
-                config={"version": 1, "nanotron_config": self.config.as_dict()},
+                config={"nanotron_config": self.config.as_dict()},
             )
 
     def post_train_step(self):
@@ -478,9 +482,10 @@ class DistributedTrainer:
                     ]
                 )
 
-            wandb.log(
-                {**{log_item.tag: log_item.scalar_value for log_item in log_entries}, "step": self.iteration_step}
-            )
+            if wandb is not None:
+                wandb.log(
+                    {**{log_item.tag: log_item.scalar_value for log_item in log_entries}, "step": self.iteration_step}
+                )
 
             self.loggerwriter.add_scalars_from_list(log_entries, self.iteration_step)
 

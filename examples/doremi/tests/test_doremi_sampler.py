@@ -1,22 +1,33 @@
+import sys
+
 import pytest
 import torch
-from datasets import load_dataset
-from helpers.utils import init_distributed
-from nanotron import distributed as dist
-from nanotron.doremi.dataloader import CombinedDataset, DistributedSamplerForDoReMi
-from nanotron.doremi.doremi_context import DoReMiContext
-from nanotron.parallel import ParallelContext
 from torch.utils.data import DataLoader
+
+from nanotron import distributed as dist
+from nanotron.parallel import ParallelContext
+from nanotron.sanity_checks import assert_tensor_synced_across_pg
+
+sys.path.append("/fsx/phuc/projects/nanotron")
+
+from utils import create_dummy_dataset
+
+from examples.doremi.doremi.dataloader import (
+    CombinedDataset,
+    DistributedSamplerForDoReMi,
+)
+from examples.doremi.doremi.doremi_context import DoReMiContext
+from tests.helpers.utils import init_distributed
 
 
 @pytest.fixture
 def dataset1():
-    return load_dataset("stas/c4-en-10k", split="train")
+    return create_dummy_dataset(4000)
 
 
 @pytest.fixture
 def dataset2():
-    return load_dataset("stas/openwebtext-synthetic-testing", split="10.repeat")
+    return create_dummy_dataset(6000)
 
 
 @pytest.fixture
@@ -25,6 +36,7 @@ def datasets(dataset1, dataset2):
 
 
 @pytest.mark.parametrize("num_microbatches", [1, 32])
+# @rerun_if_address_is_in_use()
 def test_dist_doremi_sampler_sync_across_tp(num_microbatches, dataset1):
     batch_size = 16
     domain_weights = torch.tensor([0.7, 0.3])
@@ -56,17 +68,14 @@ def _test_dist_doremi_sampler_sync_across_tp(
         parallel_context=parallel_context,
     )
 
-    tp_size = dist.get_world_size(parallel_context.tp_pg)
-
     for idxs in sampler:
-        idxs = torch.tensor(idxs, device="cuda").view(-1)
-        gathered_idxs = [torch.empty_like(idxs, device="cuda") for _ in range(tp_size)]
-        dist.all_gather(gathered_idxs, idxs)
-        assert all(torch.allclose(t1, t2) for t1, t2 in zip(gathered_idxs, gathered_idxs[1:]))
+        idxs = torch.tensor(idxs, device="cuda")
+        assert_tensor_synced_across_pg(idxs, parallel_context.tp_pg)
 
 
 @pytest.mark.parametrize("dp_size", [2, 4])
 @pytest.mark.parametrize("num_microbatches", [1, 32])
+# @rerun_if_address_is_in_use()
 def test_dist_doremi_sampler_not_overlapse_across_dp(dp_size, num_microbatches, dataset1):
     global_batch_size = 512
     batch_size = global_batch_size // (num_microbatches * dp_size)
@@ -104,13 +113,19 @@ def _test_dist_doremi_sampler_not_overlapse_across_dp(
     )
 
     for idxs in sampler:
-        idxs = torch.tensor(idxs, device="cuda").view(-1)
+        idxs = torch.tensor(idxs, device="cuda")
         gathered_idxs = [torch.empty_like(idxs, device="cuda") for _ in range(dp_size)]
         dist.all_gather(gathered_idxs, idxs)
         assert not torch.any(torch.isin(*gathered_idxs))
 
+        # NOTE: because we want idxs across dp ranks to not overlap
+        # so we assert this fails
+        # with pytest.raises(AssertionError) as e:
+        #     assert_tensor_synced_across_pg(idxs, parallel_context.dp_pg)
+
 
 @pytest.mark.parametrize("num_microbatches", [1, 32])
+# @rerun_if_address_is_in_use()
 def test_determistic_doremi_sampler(num_microbatches, dataset1):
     BATCH_SIZE = 100
     DOMAIN_WEIGHTS = torch.tensor([0.6, 0.4])
@@ -193,6 +208,7 @@ def _test_determistic_doremi_sampler(
 )
 @pytest.mark.parametrize("dp_size", [1, 2, 4])
 @pytest.mark.parametrize("num_microbatches", [1, 32])
+# @rerun_if_address_is_in_use()
 def test_sampling_from_dist_doremi_sampler_with_global_batch_size(
     dp_size, num_microbatches, domain_weights: torch.Tensor, dataset1
 ):
@@ -240,7 +256,7 @@ def _test_sampling_from_dist_doremi_sampler_with_global_batch_size(
     for idxs in sampler:
         assert batch_size == len(idxs)
 
-        # NOTE: make sure the indicies from a batch
+        # NOTE: make sure the indices from a batch
         # is proportion to the domain weights
         start_indices = [sum([len(ds) for ds in datasets[:i]]) for i in range(len(datasets))]
         end_indices = [sum([len(ds) for ds in datasets[: i + 1]]) for i in range(len(datasets))]
@@ -262,7 +278,7 @@ def _test_sampling_from_dist_doremi_sampler_with_global_batch_size(
             for expected_bs, bs in zip(global_batch_size_per_domain, num_samples_per_domain):
                 assert bs > 0
                 # NOTE: take into account rounding errors
-                # accross all the dp ranks
+                # across all the dp ranks
                 assert abs(expected_bs - bs) <= dp_size, f"abs(expected_bs - bs): {abs(expected_bs - bs)}"
 
             microbatch_idx = 0
@@ -299,6 +315,7 @@ def _test_sampling_from_dist_doremi_sampler_with_global_batch_size(
 )
 @pytest.mark.parametrize("dp_size", [1, 2, 4])
 @pytest.mark.parametrize("num_microbatches", [1, 32])
+# @rerun_if_address_is_in_use()
 def test_dist_doremi_sampler_not_repeating_samples(domain_weights, dp_size, num_microbatches, dataset1):
     global_batch_size = 512
     batch_size = global_batch_size // (num_microbatches * dp_size)
@@ -338,7 +355,7 @@ def _test_dist_doremi_sampler_not_repeating_samples(
     yielded_idxs = []
     epoch = 0
     for idxs in sampler:
-        # NOTE: check that the indicies are not repeated
+        # NOTE: check that the indices are not repeated
         assert not set(idxs).intersection(
             local_yieled_idxs
         ), f"set(idxs): {set(idxs)}, local_yieled_idxs: {local_yieled_idxs}"
@@ -349,7 +366,7 @@ def _test_dist_doremi_sampler_not_repeating_samples(
 
         local_yieled_idxs.extend(idxs)
 
-        # NOTE: gather all the indicies from all the dp ranks
+        # NOTE: gather all the indices from all the dp ranks
         idxs = torch.tensor(idxs, dtype=torch.int, device="cuda")
         all_idxs = [torch.zeros_like(idxs) for _ in range(dp_size)]
         dist.all_gather(all_idxs, idxs)
@@ -365,6 +382,7 @@ def _test_dist_doremi_sampler_not_repeating_samples(
 # it work (this bug back me down for so hard)
 @pytest.mark.parametrize("dp_size", [2, 4, 8])
 @pytest.mark.parametrize("num_microbatches", [1, 5])
+# @rerun_if_address_is_in_use()
 def test_yielding(dp_size, num_microbatches, dataset1):
     batch_size = 100
     global_batch_size = batch_size * num_microbatches * dp_size
@@ -428,6 +446,7 @@ def _test_yielding(
 
 @pytest.mark.parametrize("dp_size", [2, 4, 8])
 @pytest.mark.parametrize("num_microbatches", [1, 5])
+# @rerun_if_address_is_in_use()
 def test_yielding_with_dataloader(dp_size, num_microbatches, dataset1):
     batch_size = 100
     global_batch_size = batch_size * num_microbatches * dp_size

@@ -6,7 +6,7 @@ from transformers import LlamaConfig
 from nanotron import logging
 from nanotron.config import ParallelismArgs
 from nanotron.models import NanotronModel
-from nanotron.models.fast.llama import LlamaModel
+from nanotron.models.llama import LlamaModel
 from nanotron.nn.layer_norm import TritonRMSNorm
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter

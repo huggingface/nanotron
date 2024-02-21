@@ -1,13 +1,20 @@
+import sys
+
 import torch
-from datasets import load_dataset
-from nanotron.doremi.utils import compute_domain_weights_based_on_token_count
+
+sys.path.append("/fsx/phuc/projects/nanotron")
+
+
+from utils import create_dummy_dataset
+
+from examples.doremi.doremi.utils import compute_domain_weights_based_on_token_count
 
 
 def test_compute_domain_weights_based_on_token_count():
     datasets = [
-        load_dataset("stas/c4-en-10k", split="train[:10]"),
-        load_dataset("stas/c4-en-10k", split="train[:20]"),
-        load_dataset("stas/c4-en-10k", split="train[:70]"),
+        create_dummy_dataset(10),
+        create_dummy_dataset(20),
+        create_dummy_dataset(70),
     ]
 
     domain_weights = compute_domain_weights_based_on_token_count(datasets)

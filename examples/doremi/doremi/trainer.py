@@ -204,7 +204,6 @@ class DoReMiTrainer(DistributedTrainer):
     #     #         project="nanotron",
     #     #         name=f"{get_time_name()}_{self.config.general.project}_{self.config.general.run}",
     #     #         config={
-    #     #             "version": 1,
     #     #             "nanotron_config": self.config.as_dict(),
     #     #             "doremi": {
     #     #                 "smoothing_param": self.doremi_context.smoothing_param,

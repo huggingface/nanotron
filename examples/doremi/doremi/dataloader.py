@@ -1,7 +1,7 @@
 import dataclasses
 import math
 import warnings
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Union
 
 import numpy as np
 import torch
@@ -135,24 +135,23 @@ class DistributedSamplerForDoReMi(DistributedSampler):
         datasets: List[Dataset],
         batch_size: int,
         num_microbatches: int,
+        num_replicas: int,
+        rank: int,
+        doremi_context: DoReMiContext,
+        parallel_context: ParallelContext,
         shuffle: bool = False,
         seed: int = 42,
-        doremi_context: Optional[DoReMiContext] = None,
-        parallel_context: Optional[ParallelContext] = None,
-        **kwargs,
+        drop_last: bool = False,
     ):
         assert len(datasets) == len(
             doremi_context.domain_weights
         ), "The number of datasets must equal to the number of domain weights"
-        assert doremi_context is not None
-        assert parallel_context is not None
 
-        super().__init__(datasets, **kwargs)
+        super().__init__(datasets, num_replicas=num_replicas, rank=rank, shuffle=shuffle, drop_last=drop_last)
 
         self.datasets = datasets
         self.batch_size = batch_size
         self.num_microbatches = num_microbatches
-        self.shuffle = shuffle
         self.doremi_context = doremi_context
         self.parallel_context = parallel_context
         self.total_size = self._calculate_total_size()
@@ -161,8 +160,8 @@ class DistributedSamplerForDoReMi(DistributedSampler):
         self.offsets = np.cumsum([0] + self.lengths[:-1])
         self.seed = seed
 
-        dp_size = dist.get_world_size(self.parallel_context.dp_pg)
-        self.global_batch_size = batch_size * dp_size * num_microbatches
+        # self.global_batch_size = batch_size * dist.get_world_size(parallel_context.dp_pg) * num_microbatches
+        self.global_batch_size = batch_size * self.num_replicas * num_microbatches
         # NOTE: Reset the seed of the generator for consistent randomness across epochs
         self.generator = torch.Generator(device="cpu").manual_seed(
             seed * (1 + dist.get_rank(self.parallel_context.dp_pg)) * (1 + dist.get_rank(self.parallel_context.pp_pg))
@@ -218,7 +217,7 @@ class DistributedSamplerForDoReMi(DistributedSampler):
                 global_batch_idxs = idxs[start_idx:end_idx]
                 self.batch.extend(global_batch_idxs)
 
-        assert len(self.batch) == self.num_microbatches * self.batch_size * self.num_replicas
+        assert len(self.batch) == self.global_batch_size
 
         num_samples_per_dp_rank = self.batch_size * self.num_microbatches
         dp_start_idx = self.rank * num_samples_per_dp_rank
@@ -246,30 +245,30 @@ class DistributedSamplerForDoReMi(DistributedSampler):
 
         return microbatch_idxs
 
-    def _round_up_domain_batch_sizes(self, domain_batch_size: List[int], target_total_size: int) -> List[int]:
+    def _round_up_domain_batch_sizes(self, domain_batch_sizes: List[int], target_total_size: int) -> List[int]:
         """
-        NOTE: Make sum(domain_batch_sizes) == batch_size
+        NOTE: Makes sum(domain_batch_sizes) == batch_size
         """
-        total_batch_size = sum(domain_batch_size)
+        total_batch_size = sum(domain_batch_sizes)
         while total_batch_size != target_total_size:
             diff = target_total_size - total_batch_size
 
             # NOTE: Randomly select a domain to increase/decrase a sample
             # to match the target_total_size
-            eligible_indices = torch.nonzero(torch.tensor(domain_batch_size) > 1).view(-1)
+            eligible_indices = torch.nonzero(torch.tensor(domain_batch_sizes) > 1).view(-1)
             random_index = torch.randint(
                 low=0, high=len(eligible_indices), size=(1,), generator=self.generator, device="cpu"
             ).item()
             selected_domain = eligible_indices[random_index].item()
 
             if diff > 0:
-                domain_batch_size[selected_domain] += 1
-            elif diff < 0 and domain_batch_size[selected_domain] > 0:
-                domain_batch_size[selected_domain] -= 1
+                domain_batch_sizes[selected_domain] += 1
+            elif diff < 0 and domain_batch_sizes[selected_domain] > 0:
+                domain_batch_sizes[selected_domain] -= 1
 
-            total_batch_size = sum(domain_batch_size)
+            total_batch_size = sum(domain_batch_sizes)
 
-        return domain_batch_size
+        return domain_batch_sizes
 
     def reset(self):
         """Reset the state of the sampler for a new epoch."""
