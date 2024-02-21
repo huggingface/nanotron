@@ -8,6 +8,17 @@ from torch.optim import Adam
 from utils import convert_linear_to_fp8
 
 
+def test_fp8_linear_parameters():
+    ref_linear = nn.Linear(16, 16, device="cuda")
+    fp8_linear = convert_linear_to_fp8(deepcopy(ref_linear))
+
+    assert len(list(ref_linear.parameters())) == len(list(fp8_linear.parameters()))
+    assert all([p is not None for p in fp8_linear.parameters()])
+    assert isinstance(fp8_linear.weight, FP8Parameter)
+    assert isinstance(fp8_linear.bias, torch.Tensor)
+    assert all(p.requires_grad for p in fp8_linear.parameters()) is True
+
+
 @pytest.mark.parametrize("is_bias", [True, False])
 def test_fp8_linear_forward_pass(is_bias):
     input = torch.randn(16, 16, device="cuda", dtype=torch.float32)
@@ -37,25 +48,17 @@ def test_fp8_linear_backward_pass(input_requires_grad):
 
     ref_linear(ref_input).sum().backward()
     fp8_linear(input).sum().backward()
+    
+    assert isinstance(fp8_linear.weight.grad, torch.Tensor)
+    assert isinstance(fp8_linear.bias.grad, torch.Tensor)
 
-    # NOTE: this threshold is from fp8-lm, the paper shows that this is fine
     # TODO(xrsrke): investigate why input.grad is so high tolerance
     # assert torch.allclose(input.grad, ref_input.grad, 0.2, 0.2) if input_requires_grad else True
-    # TODO(xrsrke): tune what is the minimum threshold for this to correctly converge
-        
     # NOTE: these weight threashold is tuned from the FP8-LM implementation
+    # TODO(xrsrke): tune what is the minimum threshold for this to correctly converge
     torch.testing.assert_allclose(fp8_linear.weight.grad, ref_linear.weight.grad, rtol=0.1, atol=0.1)
     # torch.testing.assert_allclose(fp8_linear.weight.grad, ref_linear.weight.grad, 0.06, 0.1)
     assert torch.equal(fp8_linear.bias.grad, ref_linear.bias.grad) if input_requires_grad else True
-
-
-def test_fp8_linear_parameters():
-    fp8_linear = FP8Linear(16, 16, device="cuda")
-
-    assert all([p is not None for p in fp8_linear.parameters()])
-    assert isinstance(fp8_linear.weight, FP8Parameter)
-    assert isinstance(fp8_linear.bias, torch.Tensor)
-    assert all(p.requires_grad for p in fp8_linear.parameters()) is True
 
 
 def test_fp8_model_bwd():
@@ -95,15 +98,6 @@ def test_deplay_quantization(interval):
     for _ in range(N_STEPS):
         output = fp8_linear(input)
         output.sum().backward()
-
-
-def test_linear_parameters():
-    ref_linear = nn.Linear(16, 16, device="cuda")
-    fp8_linear = convert_linear_to_fp8(deepcopy(ref_linear))
-
-    assert len(list(ref_linear.parameters())) == len(list(fp8_linear.parameters()))
-    assert [isinstance(p, FP8Parameter) for p in fp8_linear.parameters()]
-
 
 # TODO(xrsrke): test if FP8Linear has all the methods of a torch.nn.Linear
 

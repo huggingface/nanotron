@@ -70,9 +70,10 @@ def test_fwd_and_bwd():
     output = linear(input)
 
     torch.testing.assert_close(msamp_output.float(), ref_output, rtol=0, atol=0.1)
-    torch.testing.assert_close(msamp_linear.weight.grad, ref_linear.weight.grad, rtol=0.1, atol=0.1)
-    torch.testing.assert_close(msamp_linear.bias.grad, ref_linear.bias.grad, rtol=0, atol=0.1)
-
+    
     msamp_output.sum().backward()
     ref_output.sum().backward()
     output.sum().backward()
+
+    torch.testing.assert_close(msamp_linear.weight.grad.float(), ref_linear.weight.grad, rtol=0.1, atol=0.1)
+    torch.testing.assert_close(msamp_linear.bias.grad, ref_linear.bias.grad, rtol=0, atol=0.1)
