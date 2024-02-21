@@ -8,10 +8,28 @@ from torch import nn
 from torch.optim import Adam
 
 from nanotron.fp8.optim import FP8Adam
-from utils import convert_linear_to_fp8
+# from utils import convert_linear_to_fp8
+
+import torch.nn as nn
+from nanotron.fp8.dtypes import DTypes
+from nanotron.fp8.linear import FP8Linear
+from nanotron.fp8.parameter import FP8Parameter
 
 
-def test_optim():
+def convert_linear_to_fp8(linear: nn.Linear) -> FP8Linear:
+    in_features = linear.in_features
+    out_features = linear.out_features
+    is_bias = linear.bias is not None
+
+    fp8_linear = FP8Linear(in_features, out_features, bias=is_bias, device=linear.weight.device)
+    fp8_linear.weight = FP8Parameter(linear.weight.detach().clone(), DTypes.FP8E4M3)
+
+    if is_bias:
+        fp8_linear.bias = FP8Parameter(linear.bias.detach().clone(), DTypes.FP8E4M3)
+
+    return fp8_linear
+
+if __name__ == "__main__":
     HIDDEN_SIZE = 16
     N_STEPS = 1
     LR = 1e-3
@@ -45,34 +63,8 @@ def test_optim():
         output.sum().backward()
         optim.step()
         optim.zero_grad()
-    
+
 
     # NOTE: 3e-4 is from msamp
     torch.testing.assert_close(msamp_linear.weight.float(), ref_linear.weight, rtol=0, atol=3e-4)
     torch.testing.assert_close(msamp_linear.bias.float(), ref_linear.bias, rtol=0, atol=3e-4)
-
-    # torch.testing.assert_close(linear.weight, ref_linear.weight, rtol=0.1, atol=3e-4)
-    # torch.testing.assert_close(linear.bias, ref_linear.bias, rtol=0, atol=3e-4)
-
-
-def test_fwd_and_bwd():
-    HIDDEN_SIZE = 16
-    ref_linear = nn.Linear(HIDDEN_SIZE, HIDDEN_SIZE, device="cuda")
-    msamp_linear = deepcopy(ref_linear)
-    msamp_linear = LinearReplacer.replace(msamp_linear, MS_Dtypes.kfloat16)
-
-    linear = convert_linear_to_fp8(deepcopy(ref_linear))
-
-    input = torch.randn(HIDDEN_SIZE, HIDDEN_SIZE, device="cuda")
-
-    ref_output = ref_linear(input)
-    msamp_output = msamp_linear(input)
-    output = linear(input)
-
-    torch.testing.assert_close(msamp_output.float(), ref_output, rtol=0, atol=0.1)
-    torch.testing.assert_close(msamp_linear.weight.grad, ref_linear.weight.grad, rtol=0.1, atol=0.1)
-    torch.testing.assert_close(msamp_linear.bias.grad, ref_linear.bias.grad, rtol=0, atol=0.1)
-
-    msamp_output.sum().backward()
-    ref_output.sum().backward()
-    output.sum().backward()

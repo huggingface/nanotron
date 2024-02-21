@@ -11,11 +11,12 @@ from nanotron.fp8.tensor import convert_tensor_from_fp8
 
 
 @pytest.mark.parametrize("size", [4, 8, 16, 64])
-def test_quantize_and_dequantize_tensor_in_fp8(size):
+@pytest.mark.parametrize("dtype", [DTypes.FP8E4M3, DTypes.FP8E5M2])
+def test_quantize_and_dequantize_tensor_in_fp8(size, dtype):
     tensor = torch.randn((size, size), dtype=torch.float32, device="cuda")
     ref_tensor = deepcopy(tensor)
 
-    fp8_tensor = FP8Tensor(tensor, dtype=DTypes.FP8E4M3)
+    fp8_tensor = FP8Tensor(tensor, dtype=dtype)
 
     assert isinstance(fp8_tensor, FP8Tensor)
     assert isinstance(fp8_tensor.fp8_meta, FP8Meta)
@@ -39,9 +40,18 @@ def test_quantize_and_dequantize_tensor_in_fp8(size):
     assert torch.allclose(tensor, ref_tensor, rtol=1e-1, atol=1e-1)
 
 
+def test_fp8_tensor_repr():
+    tensor = torch.randn((64, 64), dtype=torch.float32, device="cuda:0")
+    fp8_tensor = FP8Tensor(tensor, DTypes.FP8E4M3)
+
+    # NOTE: in some cases, it causes an infinite loop
+    # in repr(tensor), so just check if it doesn't loop
+    assert isinstance(repr(fp8_tensor), str)
+
+
+
 def test_fp8_tensor_attrs():
-    SIZE = 64
-    tensor = torch.randn((SIZE, SIZE), dtype=torch.float32, device="cuda:0")
+    tensor = torch.randn((64, 64), dtype=torch.float32, device="cuda:0")
     ref_tensor = tensor.detach().clone()
 
     fp8_tensor = FP8Tensor(tensor, DTypes.FP8E4M3)
@@ -58,3 +68,5 @@ def test_fp8_tensor_attrs():
 # TODO(xrsrke): test it has all the methods of torch.Tensor
 
 # TODO(xrsrke): test it has all the attributes of its input tensor
+
+# TODO(xrsrke): test automatic padding if a tensor shape isn't divisible by 16
