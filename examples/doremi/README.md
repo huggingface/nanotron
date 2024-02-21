@@ -79,4 +79,10 @@ We first train a small 280M model for 70k steps on the Pile to obtain a referenc
 
 The reference model's performance is used as a baseline to determine how difficult a domain is, so that the DoReMi algorithm can adjust the model weights accordingly on-the-fly. Once we obtain the optimized weights, we use them to train a 2.5B model (9x larger than the reference model) for 70k steps and train another one based on the token ratio domain weights (this is technically the same as random sampling, since the probability of a token occurring in the training data is the same as its token ratio).
 
-For evaluation, we do uniform sampling on the test set to evaluate a 2.5B model with optimized domain weights and token ratio domain weights. For more details on hyperparameters, please check the config YAML.
+For evaluation, we do uniform sampling on the test set to evaluate a 2.5B model with optimized domain weights and token ratio domain weights. For more details on hyperparameters, please check the config YAML. Here are the model checkpoints in the experiment:
+- 280M LLaMA reference model: https://huggingface.co/nanotron/doremi-llama-280m-reference
+- 280m LLAMA proxy model: https://huggingface.co/nanotron/doremi-llama-280m-proxy
+- 2.5B LLaMA reference model: https://huggingface.co/nanotron/doremi-llama-2.5b-reference
+- 2.5B llama trained using the optimized weights: https://huggingface.co/nanotron/doremi-llama-2.5b-optimized-weights
+
+and the dataset: https://huggingface.co/datasets/nanotron/the-pile-for-doremi
