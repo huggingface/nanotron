@@ -25,10 +25,8 @@ from nanotron.serialize.utils import ObjectType, merge_and_shard_tp_tensors
 # TODO(xrsrke): take rank instead of parallel_context
 def optimizer_filename(parallel_context: ParallelContext, is_zero: bool):
     if is_zero is True:
-        # return f"{ObjectType.OPTIMIZER.value}_pp-{dist.get_rank(parallel_context.pp_pg)}-of-{parallel_context.pp_pg.size()}_dp-{dist.get_rank(parallel_context.dp_pg)}-of-{parallel_context.dp_pg.size()}_tp-{dist.get_rank(parallel_context.tp_pg)}-of-{parallel_context.tp_pg.size()}_exp-{dist.get_rank(parallel_context.expert_pg)}-of-{parallel_context.expert_parallel_size}.pt"
         return f"{ObjectType.OPTIMIZER.value}_pp-{dist.get_rank(parallel_context.pp_pg)}-of-{parallel_context.pp_pg.size()}_dp-{dist.get_rank(parallel_context.dp_pg)}-of-{parallel_context.dp_pg.size()}_tp-{dist.get_rank(parallel_context.tp_pg)}-of-{parallel_context.tp_pg.size()}.pt"
     else:
-        # return f"{ObjectType.OPTIMIZER.value}_pp-{dist.get_rank(parallel_context.pp_pg)}-of-{parallel_context.pp_pg.size()}_tp-{dist.get_rank(parallel_context.tp_pg)}-of-{parallel_context.tp_pg.size()}_exp-{dist.get_rank(parallel_context.expert_pg)}-of-{parallel_context.expert_parallel_size}.pt"
         return f"{ObjectType.OPTIMIZER.value}_pp-{dist.get_rank(parallel_context.pp_pg)}-of-{parallel_context.pp_pg.size()}_tp-{dist.get_rank(parallel_context.tp_pg)}-of-{parallel_context.tp_pg.size()}.pt"
 
 
@@ -144,7 +142,7 @@ def load_optimizer(
     ckp_pp_size = ckp_optimizer_config["parallelism"]["pp_size"]
     ckp_tp_size = ckp_optimizer_config["parallelism"]["tp_size"]
     ckp_dp_size = ckp_optimizer_config["parallelism"]["dp_size"]
-    # ckpt_expert_parallel_size = ckp_optimizer_config["parallelism"]["expert_parallel_size"]
+    ckpt_expert_parallel_size = ckp_optimizer_config["parallelism"]["expert_parallel_size"]
 
     if int(ckp_tp_size) != int(parallel_context.tp_pg.size()) or int(ckp_pp_size) != int(
         parallel_context.pp_pg.size()
@@ -164,14 +162,9 @@ def load_optimizer(
         if ckp_optim_type == ZeroDistributedOptimizer.__name__:
             # NOTE: if the checkpoint is from a Zero-1 optimizer, then we need to merge the shards
             # across data parallel dimension, before merging the shards across tensor parallel dimension
-            # shard_paths = list(
-            #     root_folder.glob(
-            #         f"{ObjectType.OPTIMIZER.value}_pp-*-of-{ckp_pp_size}_dp-*-of-{ckp_dp_size}_tp-*-of-{ckp_tp_size}-exp-*-of-{ckpt_expert_parallel_size}.pt"
-            #     )
-            # )
             shard_paths = list(
                 root_folder.glob(
-                    f"{ObjectType.OPTIMIZER.value}_pp-*-of-{ckp_pp_size}_dp-*-of-{ckp_dp_size}_tp-*-of-{ckp_tp_size}.pt"
+                    f"{ObjectType.OPTIMIZER.value}_pp-*-of-{ckp_pp_size}_dp-*-of-{ckp_dp_size}_tp-*-of-{ckp_tp_size}-exp-*-of-{ckpt_expert_parallel_size}.pt"
                 )
             )
             ckp_sharded_optim_states = merge_dp_shard_in_zero1_optimizer(
