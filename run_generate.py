@@ -70,7 +70,6 @@ def main():
         tp=args.tp or config.parallelism.tp,
         pp_engine=OneForwardOneBackwardPipelineEngine(),
         tp_mode=TensorParallelLinearMode.ALL_REDUCE,
-        recompute_granularity=None,
         tp_linear_async_communication=True,
     )
 

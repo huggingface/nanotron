@@ -113,7 +113,6 @@ parallelism = ParallelismArgs(
     pp_engine="1f1b",
     tp_mode="ALL_REDUCE",
     tp_linear_async_communication=False,
-    recompute_granularity=None,
 )
 
 assert (
