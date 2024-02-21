@@ -536,6 +536,11 @@ class DistributedTrainer:
         log_rank("Config:\n" + pformat(self.config), logger=logger, level=logging.INFO, rank=0)
         log_rank("Model Config:\n" + pformat(self.model_config), logger=logger, level=logging.INFO, rank=0)
 
+        model = self._init_model_instance()
+        model = self._load_model_checkpoint(model)
+        return model
+
+    def _init_model_instance(self) -> NanotronModel:
         model_config_cls = self.model_config.__class__.__name__
         assert (
             model_config_cls in CONFIG_TO_MODEL_CLASS
@@ -549,6 +554,9 @@ class DistributedTrainer:
                 random_states=self.random_states,
             ),
         )
+        return model
+
+    def _load_model_checkpoint(self, model: NanotronModel) -> NanotronModel:
         unwrapped_model = model.module if isinstance(model, DistributedDataParallel) else model
 
         # Load or initialize model weights
