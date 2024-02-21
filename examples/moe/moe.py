@@ -8,6 +8,7 @@ import torch
 import torch.nn.functional as F
 from config_llamoe import LlaMoEConfig
 from nanotron.parallel.tensor_parallel.enum import TensorParallelLinearMode
+from nanotron.parallel.tensor_parallel.nn import TensorParallelColumnLinear, TensorParallelRowLinear
 
 try:
     import megablocks.ops as ops
@@ -126,7 +127,11 @@ class ParallelDroplessMLP(torch.nn.Module):
         self.forward_fn = self.parallel_forward_once if self.expert_pg_size > 1 else self.forward_once
 
         self.blocking = 128
-        self.mlp = MLP(config=config, parallel_config=parallel_config, tp_pg=tp_pg)
+
+        if self.experts_per_rank == 1:
+            self.mlp = MLP(config=config, parallel_config=parallel_config, tp_pg=tp_pg)
+        else:
+            self.mlp = SparseMLP(config=config, parallel_config=parallel_config, tp_pg=tp_pg)
 
         max_column_index = (self.config.intermediate_size * self.num_experts) // self.blocking
         self.transpose_sort_end_bit = max(int(np.ceil(np.log2(max_column_index))), 1)
@@ -402,7 +407,7 @@ class ExpertParallel(nn.Module):
         scale_gradient(self.module, 1 / self.expert_parallel_size)
 
 
-class MLP(nn.Module):
+class SparseMLP(nn.Module):
     def __init__(
         self,
         config: LlaMoEConfig,
@@ -441,6 +446,58 @@ class MLP(nn.Module):
         x = self.sdd(x.contiguous(), self.w1.module.weight, topo)
         activation_fn_out = act_fn(x, self.act)
         return self.dsd(activation_fn_out, self.w2.module.weight)
+
+
+class MLP(nn.Module):
+    def __init__(
+        self,
+        config: LlaMoEConfig,
+        parallel_config: Optional[ParallelismArgs],
+        tp_pg: dist.ProcessGroup,
+    ):
+        super().__init__()
+
+        tp_mode = parallel_config.tp_mode if parallel_config is not None else TensorParallelLinearMode.ALL_REDUCE
+        tp_linear_async_communication = (
+            parallel_config.tp_linear_async_communication if parallel_config is not None else False
+        )
+
+        self.expert_pg_size = parallel_config.expert_parallel_size
+        self.experts_per_rank = config.moe_num_experts // min(self.expert_pg_size, config.moe_num_experts)
+
+        assert self.experts_per_rank == 1, "moe.MLP only supports 1 expert per rank, otherwise use moe.SparseMLP"
+
+        self.w1 = ExpertParallel(
+            TensorParallelColumnLinear(
+                config.hidden_size,
+                config.intermediate_size * self.experts_per_rank,
+                pg=tp_pg,
+                mode=tp_mode,
+                bias=False,
+                async_communication=tp_linear_async_communication,
+            ),
+            expert_parallel_size=self.expert_pg_size,
+        )
+
+        self.w2 = ExpertParallel(
+            TensorParallelRowLinear(
+                config.intermediate_size * self.experts_per_rank,
+                config.hidden_size,
+                pg=tp_pg,
+                mode=tp_mode,
+                bias=False,
+                async_communication=tp_linear_async_communication
+                and tp_mode is TensorParallelLinearMode.REDUCE_SCATTER,
+            ),
+            expert_parallel_size=self.expert_pg_size,
+        )
+        # TODO @nouamane: jit
+        self.act = partial(F.gelu, approximate="tanh")
+
+    def forward(self, hidden_states):  # [seq_length, batch_size, hidden_dim]
+        merged_states = self.w1(hidden_states)
+        hidden_states = self.w2(self.act(merged_states))
+        return {"hidden_states": hidden_states}
 
 
 def inclusive_cumsum(x, dim):
