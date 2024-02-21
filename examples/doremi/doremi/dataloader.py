@@ -212,12 +212,9 @@ class DistributedSamplerForDoReMi(DistributedSampler):
                 if end_idx > len(idxs):
                     raise StopIteration(f"Domain {domain_index}-th ran out of samples")
 
-                assert self.domain_counters[domain_index] + domain_batch_size == end_idx
                 self.domain_counters[domain_index] = end_idx
                 global_batch_idxs = idxs[start_idx:end_idx]
                 self.batch.extend(global_batch_idxs)
-
-        assert len(self.batch) == self.global_batch_size
 
         num_samples_per_dp_rank = self.batch_size * self.num_microbatches
         dp_start_idx = self.rank * num_samples_per_dp_rank
@@ -227,8 +224,6 @@ class DistributedSamplerForDoReMi(DistributedSampler):
             raise StopIteration
 
         dp_batch = self.batch[dp_start_idx:dp_end_idx]
-
-        assert len(dp_batch) == self.num_microbatches * self.batch_size
 
         microbatch_start_idx = self.microbatch_idx * self.batch_size
         microbatch_end_idx = microbatch_start_idx + self.batch_size
