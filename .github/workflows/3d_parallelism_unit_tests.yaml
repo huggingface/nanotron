@@ -49,7 +49,7 @@ jobs:
     - name: Show installed libraries and their versions
       run: pip freeze | tee installed.txt
 
-    - name: Run tests
+    - name: Run nanotron tests
       # NOTE: -m "not fa2" will run all the unit tests that don't have the mark
       # "fa2" (these are FA2-related tests, we can't run it on T4)
       run: |
@@ -60,5 +60,16 @@ jobs:
         --ignore tests/kernels \
         --ignore tests/fp8 \
         --verbose \
-        tests/ \
+        tests/
+    - name: Run DoReMi tests
+      # NOTE: -m "not fa2" will run all the unit tests that don't have the mark
+      # "fa2" (these are FA2-related tests, we can't run it on T4)
+      run: |
+        pip install -r examples/doremi/requirements.txt && \
+        pytest \
+        --color=yes \
+        --durations=0 \
+        --ignore tests/kernels \
+        --ignore tests/fp8 \
+        --verbose \
         examples/doremi/tests/
