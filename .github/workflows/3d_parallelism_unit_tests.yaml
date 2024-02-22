@@ -61,13 +61,14 @@ jobs:
         --ignore tests/fp8 \
         --verbose \
         tests/
-    - name: Run DoReMi tests
-      # NOTE: -m "not fa2" will run all the unit tests that don't have the mark
-      # "fa2" (these are FA2-related tests, we can't run it on T4)
-      run: |
-        pip install -r examples/doremi/requirements.txt && \
-        pytest \
-        --color=yes \
-        --durations=0 \
-        --verbose \
-        examples/doremi/tests/
+    # NOTE: T4 can't run FA2, DoReMi's LLaMa needs FÀ
+    # - name: Run DoReMi tests
+    #   # NOTE: -m "not fa2" will run all the unit tests that don't have the mark
+    #   # "fa2" (these are FA2-related tests, we can't run it on T4)
+    #   run: |
+    #     pip install -r examples/doremi/requirements.txt && \
+    #     pytest \
+    #     --color=yes \
+    #     --durations=0 \
+    #     --verbose \
+    #     examples/doremi/tests/
