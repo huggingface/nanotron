@@ -1,8 +1,8 @@
 checkpoints:
   checkpoint_interval: 5000
-  checkpoints_path: /fsx/phuc/checkpoints/doremi/big-run-02/reference-2.8b-llama-tuned-weights_with_100k_proxy
+  checkpoints_path: checkpoints/doremi/big-run-02/reference-2.8b-llama-tuned-weights_with_100k_proxy
   checkpoints_path_is_shared_file_system: true
-  resume_checkpoint_path: /fsx/phuc/checkpoints/doremi/big-run-02/reference-2.8b-llama-tuned-weights_with_100k_proxy/70000
+  resume_checkpoint_path: checkpoints/doremi/big-run-02/reference-2.8b-llama-tuned-weights_with_100k_proxy/70000
   save_initial_state: false
 
 doremi:
@@ -15,7 +15,7 @@ data:
     dataset_processing_num_proc_per_process: 1
     hf_dataset_config_name: null
 
-    hf_dataset_or_datasets: /fsx/phuc/project_data/doremi/datasets/the_pile_raw/tokenized_data/train
+    hf_dataset_or_datasets: project_data/doremi/datasets/the_pile_raw/tokenized_data/train
 
   num_loading_workers: 1
   seed: 42
