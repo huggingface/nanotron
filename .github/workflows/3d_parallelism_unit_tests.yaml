@@ -69,7 +69,5 @@ jobs:
         pytest \
         --color=yes \
         --durations=0 \
-        --ignore tests/kernels \
-        --ignore tests/fp8 \
         --verbose \
         examples/doremi/tests/
