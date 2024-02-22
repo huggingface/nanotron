@@ -1,15 +1,14 @@
-import sys
-
 import pytest
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
+from utils import set_system_path
 
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.tensor_parallel.functional import sharded_cross_entropy
 from nanotron.sanity_checks import assert_tensor_synced_across_pg
 
-sys.path.append("/fsx/phuc/projects/nanotron")
+set_system_path()
 
 from examples.doremi.doremi.doremi_context import DoReMiContext
 from examples.doremi.doremi.loss import (

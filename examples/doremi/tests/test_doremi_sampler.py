@@ -1,34 +1,30 @@
-import sys
-
 import pytest
 import torch
 from torch.utils.data import DataLoader
+from utils import create_dummy_dataset, set_system_path
 
 from nanotron import distributed as dist
 from nanotron.parallel import ParallelContext
 from nanotron.sanity_checks import assert_tensor_synced_across_pg
 
-sys.path.append("/fsx/phuc/projects/nanotron")
-
-from utils import create_dummy_dataset
+set_system_path()
 
 from examples.doremi.doremi.dataloader import (
     CombinedDataset,
     DistributedSamplerForDoReMi,
 )
 from examples.doremi.doremi.doremi_context import DoReMiContext
-from tests.helpers.exception import assert_fail_except_rank_with
 from tests.helpers.utils import init_distributed
 
 
 @pytest.fixture
 def dataset1():
-    return create_dummy_dataset(4000)
+    return create_dummy_dataset(7000)
 
 
 @pytest.fixture
 def dataset2():
-    return create_dummy_dataset(6000)
+    return create_dummy_dataset(3000)
 
 
 @pytest.fixture
@@ -42,7 +38,7 @@ def test_dist_doremi_sampler_sync_across_tp(num_microbatches, dataset1):
     domain_weights = torch.tensor([0.7, 0.3])
     datasets = [dataset1 for _ in range(len(domain_weights))]
     domain_keys = [f"domain {i}" for i in range(len(datasets))]
-    doremi_context = DoReMiContext(domain_weights, domain_keys, is_proxy=False)
+    doremi_context = DoReMiContext(domain_weights, domain_keys, is_proxy=True)
 
     init_distributed(tp=2, dp=1, pp=1)(_test_dist_doremi_sampler_sync_across_tp)(
         batch_size=batch_size,
@@ -75,28 +71,31 @@ def _test_dist_doremi_sampler_sync_across_tp(
 
 @pytest.mark.parametrize("dp_size", [2, 4])
 @pytest.mark.parametrize("num_microbatches", [1, 32])
-def test_dist_doremi_sampler_not_overlapse_across_dp(dp_size, num_microbatches, dataset1):
+@pytest.mark.parametrize("is_proxy", [True, False])
+def test_dist_doremi_sampler_not_overlapse_across_dp_for_proxy_training(dp_size, num_microbatches, dataset1, is_proxy):
     global_batch_size = 512
     batch_size = global_batch_size // (num_microbatches * dp_size)
     domain_weights = torch.tensor([0.7, 0.3])
     datasets = [dataset1 for _ in range(len(domain_weights))]
     domain_keys = [f"domain {i}" for i in range(len(datasets))]
-    doremi_context = DoReMiContext(domain_weights, domain_keys, is_proxy=False)
+    doremi_context = DoReMiContext(domain_weights, domain_keys, is_proxy=is_proxy)
 
-    init_distributed(tp=1, dp=2, pp=1)(_test_dist_doremi_sampler_not_overlapse_across_dp)(
+    init_distributed(tp=1, dp=2, pp=1)(_test_dist_doremi_sampler_not_overlapse_across_dp_for_proxy_training)(
         batch_size=batch_size,
         num_microbatches=num_microbatches,
         datasets=datasets,
         doremi_context=doremi_context,
+        is_proxy=is_proxy,
     )
 
 
-def _test_dist_doremi_sampler_not_overlapse_across_dp(
+def _test_dist_doremi_sampler_not_overlapse_across_dp_for_proxy_training(
     parallel_context: ParallelContext,
     batch_size: int,
     num_microbatches: int,
     datasets,
     doremi_context: DoReMiContext,
+    is_proxy: bool,
 ):
     dp_size = dist.get_world_size(parallel_context.dp_pg)
     dp_rank = dist.get_rank(parallel_context.dp_pg)
@@ -112,12 +111,16 @@ def _test_dist_doremi_sampler_not_overlapse_across_dp(
     )
 
     for idxs in sampler:
-        idxs = torch.tensor(idxs, device="cuda")
+        idxs = torch.tensor(idxs, device="cuda").view(-1)
 
-        # NOTE: because we want all the idxs across dp ranks to not overlap
-        # so we want all the ranks to fail
-        with assert_fail_except_rank_with(AssertionError, rank_exception=0, pg=parallel_context.dp_pg):
-            assert_tensor_synced_across_pg(idxs, parallel_context.dp_pg)
+        # NOTE: i tried to use assert_fail_except_rank_with, but it mark the test as failed
+        # even the test raises an exception as expected
+        gathered_idxs = [torch.empty_like(idxs, device="cuda") for _ in range(dp_size)]
+        dist.all_gather(gathered_idxs, idxs)
+
+        # NOTE: whether proxy or reference training
+        # the idxs should not be overlapse
+        assert not torch.any(torch.isin(*gathered_idxs))
 
 
 @pytest.mark.parametrize("num_microbatches", [1, 32])
@@ -127,7 +130,7 @@ def test_determistic_doremi_sampler(num_microbatches, dataset1):
 
     datasets = [dataset1 for _ in range(len(DOMAIN_WEIGHTS))]
     domain_keys = [f"domain {i}" for i in range(len(DOMAIN_WEIGHTS))]
-    doremi_context = DoReMiContext(DOMAIN_WEIGHTS, domain_keys, is_proxy=False)
+    doremi_context = DoReMiContext(DOMAIN_WEIGHTS, domain_keys, is_proxy=True)
     n_epochs = 3
 
     init_distributed(tp=1, dp=1, pp=1)(_test_determistic_doremi_sampler)(
@@ -210,7 +213,7 @@ def test_sampling_from_dist_doremi_sampler_with_global_batch_size(
     batch_size = global_batch_size // (num_microbatches * dp_size)
     datasets = [dataset1 for _ in range(len(domain_weights))]
     domain_keys = [f"domain {i}" for i in range(len(datasets))]
-    doremi_context = DoReMiContext(domain_weights, domain_keys, is_proxy=False)
+    doremi_context = DoReMiContext(domain_weights, domain_keys, is_proxy=True)
 
     init_distributed(tp=1, dp=dp_size, pp=1)(_test_sampling_from_dist_doremi_sampler_with_global_batch_size)(
         batch_size=batch_size,
@@ -314,7 +317,7 @@ def test_dist_doremi_sampler_not_repeating_samples(domain_weights, dp_size, num_
     batch_size = global_batch_size // (num_microbatches * dp_size)
     datasets = [dataset1 for _ in range(len(domain_weights))]
     domain_keys = [f"domain {i}" for i in range(len(datasets))]
-    doremi_context = DoReMiContext(domain_weights, domain_keys, is_proxy=False)
+    doremi_context = DoReMiContext(domain_weights, domain_keys, is_proxy=True)
 
     init_distributed(tp=1, dp=dp_size, pp=1)(_test_dist_doremi_sampler_not_repeating_samples)(
         batch_size=batch_size,
@@ -382,7 +385,7 @@ def test_yielding(dp_size, num_microbatches, dataset1):
     domain_weights = torch.tensor([0.7, 0.3])
     datasets = [dataset1 for _ in range(len(domain_weights))]
     domain_keys = [f"domain {i}" for i in range(len(datasets))]
-    doremi_context = DoReMiContext(domain_weights, domain_keys, is_proxy=False)
+    doremi_context = DoReMiContext(domain_weights, domain_keys, is_proxy=True)
 
     init_distributed(tp=1, dp=dp_size, pp=1)(_test_yielding)(
         batch_size=batch_size,
@@ -445,7 +448,7 @@ def test_yielding_with_dataloader(dp_size, num_microbatches, dataset1):
     domain_weights = torch.tensor([0.7, 0.3])
     datasets = [dataset1 for _ in range(len(domain_weights))]
     domain_keys = [f"domain {i}" for i in range(len(datasets))]
-    doremi_context = DoReMiContext(domain_weights, domain_keys, is_proxy=False)
+    doremi_context = DoReMiContext(domain_weights, domain_keys, is_proxy=True)
 
     init_distributed(tp=1, dp=dp_size, pp=1)(_test_yielding_with_dataloader)(
         batch_size=batch_size,

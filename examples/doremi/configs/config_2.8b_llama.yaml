@@ -88,7 +88,6 @@ parallelism:
   tp: 2
 
   pp_engine: 1f1b
-  recompute_granularity: SELECTIVE
   tp_linear_async_communication: true
   tp_mode: REDUCE_SCATTER
 profiler: null

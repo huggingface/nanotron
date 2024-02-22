@@ -11,6 +11,7 @@ class WeightHistory(TypedDict):
 
 @dataclass
 class DoReMiContext:
+    # NOTE: this is the current domain weights
     domain_weights: torch.Tensor
     domain_keys: List[str]
     is_proxy: bool
@@ -38,5 +39,5 @@ class DoReMiContext:
 
     def add_weight_with_history(self, domain_weights: torch.Tensor, step: int):
         assert step >= 0, "Step must be a positive integer"
-        self.domain_weight_history.append({"step": step, "domain_weights": domain_weights.cpu()})
+        self.domain_weight_history.append(WeightHistory(step=step, weight=domain_weights.cpu()))
         self.domain_weights = domain_weights

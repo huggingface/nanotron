@@ -1,17 +1,16 @@
+import importlib
 import sys
 from pathlib import Path
 
 from datasets import Dataset
 
 
-def set_sys_path():
-    current_script_dir = Path(__file__).resolve().parent
-    # Calculate the root directory based on the current directory structure
-    project_root = current_script_dir.parent
-
-    # Add the project root to sys.path
-    if str(project_root) not in sys.path:
-        sys.path.append(str(project_root))
+def set_system_path():
+    package = importlib.import_module("nanotron")
+    # NOTE:  Path(package.__file__).parent = .../nanotron/src/nanotron
+    # we want .../nanotron
+    package_path = Path(package.__file__).parent.parent.parent
+    sys.path.append(str(package_path))
 
 
 def create_dummy_dataset(num_items: int):

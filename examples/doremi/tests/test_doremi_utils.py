@@ -1,10 +1,7 @@
-import sys
-
 import torch
+from utils import create_dummy_dataset, set_system_path
 
-sys.path.append("/fsx/phuc/projects/nanotron")
-
-from utils import create_dummy_dataset
+set_system_path()
 
 from examples.doremi.doremi.utils import compute_domain_weights_based_on_token_count
 

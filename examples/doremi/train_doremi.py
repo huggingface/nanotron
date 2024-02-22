@@ -4,7 +4,7 @@ DoReMi training script.
 Usage:
 
 export CUDA_DEVICE_MAX_CONNECTIONS=1 # important for some distributed operations
-torchrun --nproc_per_node=4 examples/doremi/train_doremi.py --config-file examples/doremi/config_280m_llama_proxy.yaml
+torchrun --nproc_per_node=4 examples/doremi/train_doremi.py --config-file examples/doremi/configs/config_280m_llama_proxy.yaml
 """
 import argparse
 

@@ -1,9 +1,8 @@
-import sys
-
 import pytest
 import torch
+from utils import set_system_path
 
-sys.path.append("/fsx/phuc/projects/nanotron")
+set_system_path()
 
 from examples.doremi.doremi.doremi_context import DoReMiContext
 
@@ -59,7 +58,7 @@ def test_record_domain_weights_history():
 
     for i, history in enumerate(doremi_context.domain_weight_history):
         assert history["step"] == i
-        assert torch.equal(history["domain_weights"], domain_weights[i])
+        assert torch.equal(history["weight"], domain_weights[i])
 
 
 def test_domain_weights_sum():
