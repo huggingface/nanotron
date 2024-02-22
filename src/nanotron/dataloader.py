@@ -20,10 +20,16 @@ from nanotron.sanity_checks import (
 
 try:
     import datasets
-    from datasets import Dataset, DatasetDict, Features, Sequence, Value, concatenate_datasets, load_dataset
-    from transformers import (
-        PreTrainedTokenizerBase,
+    from datasets import (
+        Dataset,
+        DatasetDict,
+        Features,
+        Sequence,
+        Value,
+        concatenate_datasets,
+        load_dataset,
     )
+    from transformers import PreTrainedTokenizerBase
     from transformers.trainer_pt_utils import DistributedSamplerWithLoop
 except ImportError:
     warnings.warn("Datasets and/or Transformers not installed, you'll be unable to use the dataloader.")
@@ -479,15 +485,15 @@ def get_train_dataloader(
     )
 
     # Compute size and rank of dataloader workers
-    dl_ranks_size = parallel_context.dp_pg.size()
-    dl_rank = parallel_context.dp_pg.rank()
+    dp_ranks_size = parallel_context.dp_pg.size()
+    dp_rank = parallel_context.dp_pg.rank()
 
     # TODO @nouamanetazi: Remove unused columns: https://github.com/huggingface/transformers/blob/47e1676255e5dd86b9541f734cd4f4bdcbb50f4a/src/transformers/trainer.py#L852
     # TODO @nouamanetazi: Support torch.utils.data.IterableDataset: https://github.com/huggingface/transformers/blob/47e1676255e5dd86b9541f734cd4f4bdcbb50f4a/src/transformers/trainer.py#L855-L872
 
     train_sampler = _get_train_sampler(
-        dl_rank=dl_rank,
-        dl_ranks_size=dl_ranks_size,
+        dl_rank=dp_rank,
+        dl_ranks_size=dp_ranks_size,
         train_dataset=train_dataset,
         seed=seed_worker,
         use_loop_to_round_batch_size=use_loop_to_round_batch_size,
@@ -504,18 +510,18 @@ def get_train_dataloader(
         drop_last=dataloader_drop_last,  # we also drop_last in `clm_process()`
         num_workers=dataloader_num_workers,
         pin_memory=dataloader_pin_memory,
-        worker_init_fn=get_dataloader_worker_init(dl_rank=dl_rank),
+        worker_init_fn=get_dataloader_worker_init(dp_rank=dp_rank),
         # TODO @thomasw21: I'm not sure but this doesn't seem to work at all.
         # pin_memory_device="cuda",
     )
 
 
-def get_dataloader_worker_init(dl_rank: int):
+def get_dataloader_worker_init(dp_rank: int):
     """Creates random states for each worker in order to get different state in each workers"""
 
     def dataloader_worker_init(worker_id):
         # Dataloader is TP/PP synced in random states
-        seed = 2 ** (1 + worker_id) * 3 ** (1 + dl_rank) % (2**32)
+        seed = 2 ** (1 + worker_id) * 3 ** (1 + dp_rank) % (2**32)
         set_random_seed(seed)
 
     return dataloader_worker_init

@@ -220,7 +220,7 @@ def load_optimizer(
 
             if param.is_sharded:
                 # NOTE: optimizer states's shape is equal to the parameter's shape
-                # NOTE: sometines an unsharded parameter's shape differ
+                # NOTE: sometimes an unsharded parameter's shape differ
                 # from an unsharded optimizer state's shape
                 new_shard_metadata = param.get_sharded_info()
                 new_unshared_shape = new_shard_metadata.unsharded_shape
