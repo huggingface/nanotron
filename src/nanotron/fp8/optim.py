@@ -10,6 +10,7 @@ from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.parameter import FP8Parameter
 from nanotron.fp8.tensor import FP8Tensor, convert_tensor_from_fp8, convert_tensor_to_fp8
 from nanotron.fp8.utils import get_tensor_fp8_metadata
+from nanotron.fp8.meta import FP8Meta
 
 
 class Adam(Optimizer):
@@ -295,3 +296,39 @@ class FP8Adam(Optimizer):
                     continue
 
                 assert 1 == 1
+
+
+def convert_tensor_to_fp16(tensor: torch.Tensor) -> torch.Tensor:
+    from nanotron.fp8.constants import INITIAL_SCALING_FACTOR
+    from nanotron.fp8.meta import FP8Meta
+    from nanotron.fp8.tensor import update_scaling_factor
+
+    dtype = DTypes.KFLOAT16
+
+    amax = tensor.abs().max().clone()
+    scale = update_scaling_factor(amax, torch.tensor(INITIAL_SCALING_FACTOR, dtype=torch.float32), dtype)
+    meta = FP8Meta(amax, scale, dtype)
+
+    # te_dtype = convert_torch_dtype_to_te_dtype(meta.dtype)
+    # TODO(xrsrke): after casting to fp8, update the scaling factor
+    # TODO(xrsrke): it's weird that TE only take inverse_scale equal to 1
+    # inverse_scale = torch.tensor(1.0, device=tensor.device, dtype=torch.float32)
+    return (tensor * meta.scale).to(torch.float16), meta
+
+
+def convert_tensor_from_fp16(tensor: torch.Tensor, meta: FP8Meta, dtype: torch.dtype) -> torch.Tensor:
+    # from nanotron.fp8.tensor import convert_torch_dtype_to_te_dtype, update_scaling_factor
+    # from nanotron.fp8.constants import INITIAL_SCALING_FACTOR
+    # from nanotron.fp8.meta import FP8Meta
+
+    # dtype = DTypes.KFLOAT16
+
+    # amax = tensor.abs().max().clone()
+    # scale = update_scaling_factor(amax, torch.tensor(INITIAL_SCALING_FACTOR, dtype=torch.float32), dtype)
+    # meta = FP8Meta(amax, scale, dtype)
+
+    # te_dtype = convert_torch_dtype_to_te_dtype(meta.dtype)
+    # TODO(xrsrke): after casting to fp8, update the scaling factor
+    # TODO(xrsrke): it's weird that TE only take inverse_scale equal to 1
+    # inverse_scale = torch.tensor(1.0, device=tensor.device, dtype=torch.float32)
+    return (tensor * meta.inverse_scale).to(dtype)
