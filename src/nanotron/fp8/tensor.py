@@ -1,3 +1,5 @@
+from abc import abstractclassmethod
+
 import torch
 import transformer_engine as te  # noqa
 import transformer_engine_extensions as tex
@@ -6,34 +8,54 @@ from nanotron.fp8.constants import DTYPE_TO_FP8_MAX, FP8_DTYPES, INITIAL_SCALING
 from nanotron.fp8.dtypes import DTypes
 
 
-class FP8Tensor(torch.Tensor):
-    """FP8 Tensor."""
-
+class LowPrecisionTensor(torch.Tensor):
     def __new__(cls, tensor: torch.Tensor, dtype: DTypes) -> torch.Tensor:
         assert isinstance(tensor, torch.Tensor), "tensor must be a tensor"
         assert tensor.dtype not in FP8_DTYPES, "The tensor already quantized to FP8"
-        
-        # TODO(xrsrke): there is a circular import issue
-        # between tensor.py and meta.py fix this
-        from nanotron.fp8.meta import FP8Meta
 
         # TODO(xrsrke): if the tensor is on cpu, then bypass the quantization
         # because the current kernels only support gpu tensor
         assert tensor.device != torch.device("cpu"), "FP8Tensor only supports CUDA device"
         assert dtype in [DTypes.FP8E4M3, DTypes.FP8E5M2], "FP8Tensor only supports FP8E4M3 and FP8E5M2"
 
-        amax = tensor.abs().max().clone()
-        scale = update_scaling_factor(amax, torch.tensor(INITIAL_SCALING_FACTOR, dtype=torch.float32), dtype)
-        fp8_meta = FP8Meta(amax, scale, dtype)
-        fp8_tensor = convert_tensor_to_fp8(tensor, fp8_meta)
+        fp8_meta = cls._get_metadata(tensor, dtype)
+        # fp8_tensor = convert_tensor_to_fp8(tensor, fp8_meta)
+        fp8_tensor = cls._quantize(tensor, fp8_meta)
 
         # TODO(xrsrke): move update inverse scaling to FP8Meta's initialization
         obj = torch.Tensor._make_subclass(cls, fp8_tensor)
         obj.fp8_meta = fp8_meta
         return obj
 
+    @staticmethod
+    def _get_metadata(tensor: torch.Tensor, dtype: DTypes) -> "FP8Meta":
+        # TODO(xrsrke): there is a circular import issue
+        # between tensor.py and meta.py fix this
+        from nanotron.fp8.meta import FP8Meta
+        
+        amax = tensor.abs().max().clone()
+        scale = update_scaling_factor(amax, torch.tensor(INITIAL_SCALING_FACTOR, dtype=torch.float32), dtype)
+        fp8_meta = FP8Meta(amax, scale, dtype)
+        return fp8_meta
+    
+    @abstractclassmethod
+    def _quantize(tensor: torch.Tensor, fp8_meta: "FP8Meta") -> torch.Tensor:
+        raise NotImplementedError
+
+
+class FP8Tensor(LowPrecisionTensor):
+    """FP8 Tensor."""
+
+    @staticmethod
+    def _quantize(tensor: torch.Tensor, fp8_meta: "FP8Meta") -> torch.Tensor:
+        return convert_tensor_to_fp8(tensor, fp8_meta)
+
     # def __repr__(self) -> str:
     #     return f"FP8Tensor({repr(self.data)}, fp8_meta={self.fp8_meta})"
+
+
+class FP16Tensor(LowPrecisionTensor):
+    pass
 
 
 def convert_torch_dtype_to_te_dtype(dtype: torch.dtype) -> tex.DType:

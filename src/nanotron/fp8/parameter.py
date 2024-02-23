@@ -36,6 +36,8 @@ class FP8Parameter(nn.Parameter):
             # TODO(xrsrke): delete this fp32 tensor from memory after quantization
             self = torch.Tensor._make_subclass(cls, data, requires_grad)
             self._data = FP8Tensor(data, dtype=dtype)
+            # TODO(xrsrke): don't store fp32 raw data in memory after quantization
+            self.orig_data = data.data
 
             # TODO(xrsrke): don't fixed these, take it from the FP8 recipe
             fp8e4m3_scale = update_scaling_factor(

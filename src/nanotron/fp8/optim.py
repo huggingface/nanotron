@@ -146,7 +146,7 @@ class FP8Adam(Optimizer):
 
     def __init__(
         self,
-        params: List[FP8Parameter],
+        params: List[nn.Parameter],
         lr: float = 1e-3,
         betas: Tuple[float, float] = (0.9, 0.999),
         eps: float = 1e-8,
@@ -172,6 +172,24 @@ class FP8Adam(Optimizer):
         # then retrieve the exp_avg_dtype from the recipe
         self.exp_avg_dtype = FP8LM_RECIPE.optim.exp_avg_dtype
         self.exp_avg_sq_dtype = FP8LM_RECIPE.optim.exp_avg_sq_dtype
+        
+        self.master_weights: List[nn.Parameter] = []
+        self.fp8_weights: List[FP8Parameter] = []
+                
+        for group in self.param_groups:
+            for p in group["params"]:
+                if p.requires_grad is None:
+                    continue
+                
+                # TODO(xrsrke): retrieve the dtype for master_weights from the recipe
+                assert p.orig_data.dtype == torch.float32
+                self.master_weights.append(convert_tensor_to_fp16(p.orig_data))
+                
+                # NOTE: cast the original weights to FP8
+                # this is where we do FP8 GEMM
+                p = FP8Parameter(p.data.detach().clone(), dtype=FP8LM_RECIPE.optim.master_weight_dtype)
+        
+        # TODO(xrsrke): remove manually clear fp32 weights
 
     def __setstate__(self, state):
         super().__setstate__(state)
@@ -179,6 +197,7 @@ class FP8Adam(Optimizer):
             group.setdefault("amsgrad", False)
 
     def _init_optim_states(self, state: Dict[str, Any], p: nn.Parameter, amsgrad: bool) -> None:
+        # TODO(xrsrke): move this to constants.py
         FP8_DTYPES = [DTypes.FP8E4M3, DTypes.FP8E5M2]
 
         # TODO(xrsrke): only cast to FP8Tensor if the dtype is FP8
@@ -302,33 +321,12 @@ def convert_tensor_to_fp16(tensor: torch.Tensor) -> torch.Tensor:
     from nanotron.fp8.constants import INITIAL_SCALING_FACTOR
     from nanotron.fp8.meta import FP8Meta
     from nanotron.fp8.tensor import update_scaling_factor
-
     dtype = DTypes.KFLOAT16
-
     amax = tensor.abs().max().clone()
     scale = update_scaling_factor(amax, torch.tensor(INITIAL_SCALING_FACTOR, dtype=torch.float32), dtype)
     meta = FP8Meta(amax, scale, dtype)
-
-    # te_dtype = convert_torch_dtype_to_te_dtype(meta.dtype)
-    # TODO(xrsrke): after casting to fp8, update the scaling factor
-    # TODO(xrsrke): it's weird that TE only take inverse_scale equal to 1
-    # inverse_scale = torch.tensor(1.0, device=tensor.device, dtype=torch.float32)
     return (tensor * meta.scale).to(torch.float16), meta
 
 
 def convert_tensor_from_fp16(tensor: torch.Tensor, meta: FP8Meta, dtype: torch.dtype) -> torch.Tensor:
-    # from nanotron.fp8.tensor import convert_torch_dtype_to_te_dtype, update_scaling_factor
-    # from nanotron.fp8.constants import INITIAL_SCALING_FACTOR
-    # from nanotron.fp8.meta import FP8Meta
-
-    # dtype = DTypes.KFLOAT16
-
-    # amax = tensor.abs().max().clone()
-    # scale = update_scaling_factor(amax, torch.tensor(INITIAL_SCALING_FACTOR, dtype=torch.float32), dtype)
-    # meta = FP8Meta(amax, scale, dtype)
-
-    # te_dtype = convert_torch_dtype_to_te_dtype(meta.dtype)
-    # TODO(xrsrke): after casting to fp8, update the scaling factor
-    # TODO(xrsrke): it's weird that TE only take inverse_scale equal to 1
-    # inverse_scale = torch.tensor(1.0, device=tensor.device, dtype=torch.float32)
     return (tensor * meta.inverse_scale).to(dtype)
