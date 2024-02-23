@@ -35,7 +35,7 @@ def tie_parameters(
 ):
     """
     Tie parameters.
-    Within a single device, tied parameters are replaced with a single Paramer
+    Within a single device, tied parameters are replaced with a single Parameter
     Across devices, we add metadata to Parameters that require extra synchronization.
 
     :param root_module: nn.Module
@@ -50,7 +50,7 @@ def tie_parameters(
     dp_ranks = tuple(
         sorted(
             {
-                parallel_context.get_3d_ranks(world_rank=global_rank)[1]
+                parallel_context.get_local_ranks(world_rank=global_rank)[1]
                 for _, global_ranks in ties
                 for global_rank in global_ranks
             }

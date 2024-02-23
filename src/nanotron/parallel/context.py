@@ -76,7 +76,7 @@ class ParallelContext:
         )
         self.world_ranks_to_pg = {}
 
-        # Relevent process groups containing the current rank
+        # Relevant process groups containing the current rank
         self.tp_pg = self.create_new_group(ranks.transpose((0, 1, 2, 3)).reshape((-1, self.tensor_parallel_size)))
         self.dp_pg = self.create_new_group(ranks.transpose((3, 0, 1, 2)).reshape((-1, self.data_parallel_size)))
         self.pp_pg = self.create_new_group(ranks.transpose((2, 3, 0, 1)).reshape((-1, self.pipeline_parallel_size)))
@@ -117,9 +117,9 @@ class ParallelContext:
         device_id = local_rank
         torch.cuda.set_device(torch.cuda.device(device_id))
 
-    def get_3d_ranks(self, world_rank: int) -> Tuple[int, int, int]:
+    def get_local_ranks(self, world_rank: int) -> Tuple[int, int, int]:
         # return coordinates in world_rank_matrix without expert_parallel_rank
-        return tuple(i.item() for i in np.where(self.world_rank_matrix == world_rank))[-3:]
+        return tuple(i.item() for i in np.where(self.world_rank_matrix == world_rank))
 
     def destroy(self):
         if not dist.is_initialized():

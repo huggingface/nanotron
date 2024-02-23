@@ -19,7 +19,7 @@ def _test_init_parallel_context(parallel_context: ParallelContext):
     assert isinstance(parallel_context.dp_pg, ProcessGroup) if parallel_context.data_parallel_size > 1 else True
 
     world_rank = dist.get_rank(parallel_context.world_pg)
-    ranks3d = parallel_context.get_3d_ranks(world_rank)
+    ranks3d = parallel_context.get_local_ranks(world_rank)
     assert isinstance(ranks3d, tuple) and len(ranks3d)
 
     assert isinstance(parallel_context.world_rank_matrix, np.ndarray)
