@@ -77,8 +77,7 @@ parallelism:
   expert_parallel_size: 2
   pp: 1
   pp_engine: 1f1b
-  recompute_granularity: null
-  tp: 2
+  tp: 1
   tp_linear_async_communication: false
   tp_mode: ALL_REDUCE
 profiler: null

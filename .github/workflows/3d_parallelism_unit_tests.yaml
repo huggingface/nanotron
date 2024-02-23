@@ -37,7 +37,7 @@ jobs:
         python -c "import torch; print('torch:', torch.__version__, torch)"
         python -c "import torch; print('CUDA available:', torch.cuda.is_available())"
 
-    - name: Instal nanotron
+    - name: Install nanotron's dependencies
       run: |
         python -m pip install --upgrade pip
         pip install packaging
@@ -49,7 +49,7 @@ jobs:
     - name: Show installed libraries and their versions
       run: pip freeze | tee installed.txt
 
-    - name: Run tests
+    - name: Run nanotron tests
       # NOTE: -m "not fa2" will run all the unit tests that don't have the mark
       # "fa2" (these are FA2-related tests, we can't run it on T4)
       run: |
@@ -61,3 +61,14 @@ jobs:
         --ignore tests/fp8 \
         --verbose \
         tests/
+    # NOTE: T4 can't run FA2, DoReMi's LLaMa needs FÀ
+    # - name: Run DoReMi tests
+    #   # NOTE: -m "not fa2" will run all the unit tests that don't have the mark
+    #   # "fa2" (these are FA2-related tests, we can't run it on T4)
+    #   run: |
+    #     pip install -r examples/doremi/requirements.txt && \
+    #     pytest \
+    #     --color=yes \
+    #     --durations=0 \
+    #     --verbose \
+    #     examples/doremi/tests/

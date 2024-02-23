@@ -6,7 +6,17 @@ import time
 from dataclasses import asdict
 from pathlib import Path
 from pprint import pformat
-from typing import Callable, Dict, Iterable, Iterator, List, Optional, Tuple, Type, Union
+from typing import (
+    Callable,
+    Dict,
+    Iterable,
+    Iterator,
+    List,
+    Optional,
+    Tuple,
+    Type,
+    Union,
+)
 
 import torch
 from torch.nn.parallel import DistributedDataParallel
@@ -29,7 +39,14 @@ from nanotron.helpers import (
     log_throughput,
     lr_scheduler_builder,
 )
-from nanotron.logging import LoggerWriter, LogItem, human_format, log_memory, log_rank, set_logger_verbosity_format
+from nanotron.logging import (
+    LoggerWriter,
+    LogItem,
+    human_format,
+    log_memory,
+    log_rank,
+    set_logger_verbosity_format,
+)
 from nanotron.models import NanotronModel, build_model
 from nanotron.models.base import check_model_has_grad
 from nanotron.models.llama import LlamaForTraining, RotaryEmbedding
@@ -38,9 +55,7 @@ from nanotron.optim.clip_grads import clip_grad_norm
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.data_parallel.utils import sync_gradients_across_dp
 from nanotron.parallel.parameters import NanotronParameter, sanity_check
-from nanotron.parallel.pipeline_parallel.engine import (
-    PipelineEngine,
-)
+from nanotron.parallel.pipeline_parallel.engine import PipelineEngine
 from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
 from nanotron.parallel.pipeline_parallel.utils import get_pp_rank_of
 from nanotron.parallel.tensor_parallel.nn import (
@@ -53,9 +68,7 @@ from nanotron.parallel.tied_parameters import (
     sync_tied_weights_gradients,
     tie_parameters,
 )
-from nanotron.random import (
-    set_random_seed,
-)
+from nanotron.random import set_random_seed
 from nanotron.sanity_checks import (
     after_optim_step_sanity_checks,
     after_tbi_sanity_checks,
@@ -83,6 +96,11 @@ CONFIG_TO_MODEL_CLASS = {
     "LlamaConfig": LlamaForTraining,
     "Starcoder2Config": Starcoder2ForTraining,
 }
+
+try:
+    import wandb
+except ImportError:
+    wandb = None
 
 
 class DistributedTrainer:
@@ -224,7 +242,13 @@ class DistributedTrainer:
         pass
 
     def pre_training(self, *args, **kwargs):
-        pass
+        current_time = datetime.datetime.now().strftime("%d/%m/%Y_%H:%M:%S")
+        if dist.get_rank(self.parallel_context.world_pg) == 0 and wandb is not None:
+            wandb.init(
+                project=self.config.general.project,
+                name=f"{current_time}_{self.config.general.project}_{self.config.general.run}",
+                config={"nanotron_config": self.config.as_dict()},
+            )
 
     def post_train_step(self):
         pass
@@ -458,6 +482,11 @@ class DistributedTrainer:
                     ]
                 )
 
+            if wandb is not None:
+                wandb.log(
+                    {**{log_item.tag: log_item.scalar_value for log_item in log_entries}, "step": self.iteration_step}
+                )
+
             self.loggerwriter.add_scalars_from_list(log_entries, self.iteration_step)
 
         # Nanotron Benchmark mode: we log the throughput and exit
@@ -507,6 +536,11 @@ class DistributedTrainer:
         log_rank("Config:\n" + pformat(self.config), logger=logger, level=logging.INFO, rank=0)
         log_rank("Model Config:\n" + pformat(self.model_config), logger=logger, level=logging.INFO, rank=0)
 
+        model = self._init_model_instance()
+        model = self._load_model_checkpoint(model)
+        return model
+
+    def _init_model_instance(self) -> NanotronModel:
         model_config_cls = self.model_config.__class__.__name__
         assert (
             model_config_cls in CONFIG_TO_MODEL_CLASS
@@ -520,6 +554,9 @@ class DistributedTrainer:
                 random_states=self.random_states,
             ),
         )
+        return model
+
+    def _load_model_checkpoint(self, model: NanotronModel) -> NanotronModel:
         unwrapped_model = model.module if isinstance(model, DistributedDataParallel) else model
 
         # Load or initialize model weights
