@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import Union, Optional
 
 import torch
 from torch import nn
@@ -60,6 +61,7 @@ class FP8Parameter(nn.Parameter):
                 # kfloat8_e5m2
                 output_grad=FP8Meta(amax=INITIAL_AMAX, dtype=DTypes.FP8E5M2, scale=fp8e5m2_scale),
             )
+            self._grad = None
 
         return self
 
@@ -70,6 +72,16 @@ class FP8Parameter(nn.Parameter):
     @data.setter
     def data(self, data: FP8Tensor):
         self._data = data
+        
+    # NOTE: because pytorch don't allow to assign an int grad to a tensor
+    # so we bypass it by using a property
+    @property
+    def grad(self) -> Optional[Union[torch.Tensor, FP8Tensor]]:
+        return self._grad
+    
+    @grad.setter
+    def grad(self, value: Optional[Union[torch.Tensor, FP8Tensor]]):
+        self._grad = value
 
     @property
     def fp8_meta(self) -> FP8Meta:

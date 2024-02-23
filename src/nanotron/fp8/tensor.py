@@ -1,4 +1,4 @@
-from abc import abstractclassmethod
+from abc import abstractstaticmethod
 
 import torch
 import transformer_engine as te  # noqa
@@ -16,7 +16,7 @@ class LowPrecisionTensor(torch.Tensor):
         # TODO(xrsrke): if the tensor is on cpu, then bypass the quantization
         # because the current kernels only support gpu tensor
         assert tensor.device != torch.device("cpu"), "FP8Tensor only supports CUDA device"
-        assert dtype in [DTypes.FP8E4M3, DTypes.FP8E5M2], "FP8Tensor only supports FP8E4M3 and FP8E5M2"
+        assert dtype in [DTypes.FP8E4M3, DTypes.FP8E5M2, DTypes.KFLOAT16]
 
         fp8_meta = cls._get_metadata(tensor, dtype)
         # fp8_tensor = convert_tensor_to_fp8(tensor, fp8_meta)
@@ -24,6 +24,7 @@ class LowPrecisionTensor(torch.Tensor):
 
         # TODO(xrsrke): move update inverse scaling to FP8Meta's initialization
         obj = torch.Tensor._make_subclass(cls, fp8_tensor)
+        # TODO(xrsrke): use a different name, because FP16Tensor also has fp8_meta
         obj.fp8_meta = fp8_meta
         return obj
 
@@ -38,9 +39,12 @@ class LowPrecisionTensor(torch.Tensor):
         fp8_meta = FP8Meta(amax, scale, dtype)
         return fp8_meta
     
-    @abstractclassmethod
+    @abstractstaticmethod
     def _quantize(tensor: torch.Tensor, fp8_meta: "FP8Meta") -> torch.Tensor:
         raise NotImplementedError
+    
+    # def __repr__(self) -> str:
+    #     return f"FP8Tensor({repr(self.data)}, fp8_meta={self.fp8_meta})"
 
 
 class FP8Tensor(LowPrecisionTensor):
@@ -50,12 +54,11 @@ class FP8Tensor(LowPrecisionTensor):
     def _quantize(tensor: torch.Tensor, fp8_meta: "FP8Meta") -> torch.Tensor:
         return convert_tensor_to_fp8(tensor, fp8_meta)
 
-    # def __repr__(self) -> str:
-    #     return f"FP8Tensor({repr(self.data)}, fp8_meta={self.fp8_meta})"
-
 
 class FP16Tensor(LowPrecisionTensor):
-    pass
+    @staticmethod
+    def _quantize(tensor: torch.Tensor, fp8_meta: "FP8Meta") -> torch.Tensor:
+        return (tensor * fp8_meta.scale).to(torch.float16)
 
 
 def convert_torch_dtype_to_te_dtype(dtype: torch.dtype) -> tex.DType:

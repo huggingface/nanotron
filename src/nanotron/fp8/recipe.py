@@ -12,6 +12,10 @@ class FP8TensorRecipe:
 
 @dataclass
 class FP8LinearRecipe:
+    input: FP8TensorRecipe
+    weight: FP8TensorRecipe
+    
+    # NOTE: for the gradients
     input_grad: FP8TensorRecipe
     weight_grad: FP8TensorRecipe
     output_grad: FP8TensorRecipe

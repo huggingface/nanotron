@@ -8,7 +8,7 @@ from torch.optim import Optimizer
 from nanotron.fp8.constants import FP8LM_RECIPE
 from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.parameter import FP8Parameter
-from nanotron.fp8.tensor import FP8Tensor, convert_tensor_from_fp8, convert_tensor_to_fp8
+from nanotron.fp8.tensor import FP8Tensor, FP16Tensor, convert_tensor_from_fp8, convert_tensor_to_fp8
 from nanotron.fp8.utils import get_tensor_fp8_metadata
 from nanotron.fp8.meta import FP8Meta
 
@@ -175,20 +175,28 @@ class FP8Adam(Optimizer):
         
         self.master_weights: List[nn.Parameter] = []
         self.fp8_weights: List[FP8Parameter] = []
+        # NOTE: use to map fp8 param to fp16 master weights
+        self.mappping_fp8_to_fp16: Dict[FP8Tensor, FP16Tensor] = {}
                 
         for group in self.param_groups:
             for p in group["params"]:
                 if p.requires_grad is None:
                     continue
                 
-                # TODO(xrsrke): retrieve the dtype for master_weights from the recipe
                 assert p.orig_data.dtype == torch.float32
-                self.master_weights.append(convert_tensor_to_fp16(p.orig_data))
+                # self.master_weights.append(convert_tensor_to_fp16(p.orig_data))
+                # TODO(xrsrke): retrieve the dtype for master_weights from the recipe
+                fp16_p = FP16Tensor(p.orig_data, dtype=DTypes.KFLOAT16)
+                self.master_weights.append(fp16_p)
+                self.fp8_weights.append(p.data)
+                
+                self.mappping_fp8_to_fp16[p.data] = fp16_p
                 
                 # NOTE: cast the original weights to FP8
                 # this is where we do FP8 GEMM
-                p = FP8Parameter(p.data.detach().clone(), dtype=FP8LM_RECIPE.optim.master_weight_dtype)
+                # p = FP8Parameter(p.data.detach().clone(), dtype=FP8LM_RECIPE.optim.master_weight_dtype)
         
+        assert len(self.master_weights) == len(self.fp8_weights)
         # TODO(xrsrke): remove manually clear fp32 weights
 
     def __setstate__(self, state):
@@ -236,7 +244,7 @@ class FP8Adam(Optimizer):
                     self._init_optim_states(state, p, amsgrad)
 
                 grad = p.grad.data
-                print(f"[FP8Adam] original grad: {grad[:2, :2]}")
+                # print(f"[FP8Adam] original grad: {grad[:2, :2]}")
                 if grad.is_sparse:
                     raise RuntimeError("Adam does not support sparse gradients, please consider SparseAdam instead")
 
@@ -254,23 +262,23 @@ class FP8Adam(Optimizer):
 
                 if group["weight_decay"] != 0:
                     grad = grad.add(group["weight_decay"], p.data)
-                    print(f"[FP8Adam] grad after weight decay: {grad[:2, :2]} \n")
+                    # print(f"[FP8Adam] grad after weight decay: {grad[:2, :2]} \n")
                 
                 # Decay the first and second moment running average coefficient
                 exp_avg, exp_avg_sq = state["exp_avg"], state["exp_avg_sq"]
                 
-                print(f"[FP8Adam] original fp8 exp_avg: exp_avg.data={exp_avg.data[:2, :2]}, exp_avg.fp8_meta={exp_avg.fp8_meta} \n")
+                # print(f"[FP8Adam] original fp8 exp_avg: exp_avg.data={exp_avg.data[:2, :2]}, exp_avg.fp8_meta={exp_avg.fp8_meta} \n")
 
                 # TODO(xrsrke): can we do all calculations in fp8?
                 exp_avg_fp32 = convert_tensor_from_fp8(exp_avg, exp_avg.fp8_meta, torch.float32)
-                print(f"[FP8Adam] exp_avg_fp32: {exp_avg_fp32[:2, :2]} \n")
-                print(f"[FP8Adam] exp_avg_sq: {exp_avg_sq[:2, :2]} \n")
+                # print(f"[FP8Adam] exp_avg_fp32: {exp_avg_fp32[:2, :2]} \n")
+                # print(f"[FP8Adam] exp_avg_sq: {exp_avg_sq[:2, :2]} \n")
 
                 exp_avg_fp32.mul_(beta1).add_(1 - beta1, grad)
                 exp_avg_sq.mul_(beta2).addcmul_(1 - beta2, grad, grad)
                 
-                print(f"[FP8Adam] after mul and add: exp_avg_fp32: {exp_avg_fp32[:2, :2]} \n")
-                print(f"[FP8Adam] after mul and add: exp_avg_sq: {exp_avg_sq[:2, :2]} \n")
+                # print(f"[FP8Adam] after mul and add: exp_avg_fp32: {exp_avg_fp32[:2, :2]} \n")
+                # print(f"[FP8Adam] after mul and add: exp_avg_sq: {exp_avg_sq[:2, :2]} \n")
 
                 if amsgrad:
                     # Maintains the maximum of all 2nd moment running avg. till now
@@ -279,7 +287,7 @@ class FP8Adam(Optimizer):
                     denom = (max_exp_avg_sq.sqrt() / math.sqrt(bias_correction2)).add_(group["eps"])
                 else:
                     denom = (exp_avg_sq.sqrt() / math.sqrt(bias_correction2)).add_(group["eps"])
-                    print(f"[FP8Adam] denom: {denom[:2, :2]} \n")
+                    # print(f"[FP8Adam] denom: {denom[:2, :2]} \n")
 
                 step_size = group["lr"] / bias_correction1
                 print(f"[FP8Adam] step_size: {step_size} \n")
@@ -289,24 +297,24 @@ class FP8Adam(Optimizer):
                 exp_avg_fp32_meta = get_tensor_fp8_metadata(exp_avg_fp32, exp_avg.fp8_meta.dtype)
                 updated_exp_avg_fp8 = convert_tensor_to_fp8(exp_avg_fp32, exp_avg_fp32_meta)
                 
-                print(f"[FP8Adam] updated_exp_avg_fp8: updated_exp_avg_fp8.data={updated_exp_avg_fp8.data[:2, :2]}, exp_avg_fp32_meta={exp_avg_fp32_meta} \n")
+                # print(f"[FP8Adam] updated_exp_avg_fp8: updated_exp_avg_fp8.data={updated_exp_avg_fp8.data[:2, :2]}, exp_avg_fp32_meta={exp_avg_fp32_meta} \n")
                 
                 exp_avg.copy_(updated_exp_avg_fp8)
 
                 # TODO(xrsrke): can we do all calculations in fp8?
-                p_fp32 = convert_tensor_from_fp8(p.data, p.fp8_meta, torch.float32)
+                p_fp16 = self.mappping_fp8_to_fp16[p.data]
+                p_fp32 = convert_tensor_from_fp16(p_fp16, p_fp16.fp8_meta, torch.float32)
+                # p_fp32 = convert_tensor_from_fp8(p.data, p.fp8_meta, torch.float32)
                 p_fp32.addcdiv_(-step_size, exp_avg_fp32, denom)
-                print(f"[FP8Adam] updated p_fp32: {p_fp32[:2, :2]} \n")
+                # print(f"[FP8Adam] updated p_fp32: {p_fp32[:2, :2]} \n")
 
                 p_fp32_meta = get_tensor_fp8_metadata(p_fp32, dtype=p.data.fp8_meta.dtype)
                 updated_p_fp8 = convert_tensor_to_fp8(p_fp32, p_fp32_meta)
                 
-                print(f"[FP8Adam] updated_p_fp8: updated_p_fp8.data={updated_p_fp8.data[:2, :2]}, p_fp32_meta={p_fp32_meta} \n")
+                # print(f"[FP8Adam] updated_p_fp8: updated_p_fp8.data={updated_p_fp8.data[:2, :2]}, p_fp32_meta={p_fp32_meta} \n")
                 
                 p.data.copy_(updated_p_fp8)
                 
-                break
-
     # TODO(xrsrke): refactor using strategy pattern
     def _update_scaling_factors(self):
         for p in self.param_groups:

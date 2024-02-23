@@ -9,14 +9,17 @@ from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.kernel import fp8_matmul_kernel
 from nanotron.fp8.parameter import FP8Parameter
 from nanotron.fp8.tensor import FP8Tensor
+from nanotron.fp8.constants import FP8LM_RECIPE
 
+import pydevd
 
 class FP8Linear(nn.Linear):
     def __init__(self, in_features: int, out_features: int, bias: bool = True, device: Optional[torch.device] = None):
         assert device != torch.device("cpu"), "FP8Linear only supports CUDA tensors"
         super().__init__(in_features, out_features, bias, device)
         # TODO(xrsrke): don't fixed dtype, take it from the FP8 recipe
-        self.weight = FP8Parameter(self.weight, dtype=DTypes.FP8E4M3)
+        # DTypes.FP8E4M3
+        self.weight = FP8Parameter(self.weight, dtype=FP8LM_RECIPE.linear.weight.dtype)
 
     def forward(self, input: Union[FP8Tensor, torch.Tensor]) -> torch.Tensor:
         # NOTE: only do fp8 kernel if both input and weight are on CUDA device
@@ -39,10 +42,11 @@ class FP8Linear(nn.Linear):
 class _FP8Matmul(torch.autograd.Function):
     @staticmethod
     @torch.no_grad()
-    def forward(ctx, input: FP8Tensor, weight: FP8Tensor, phony: torch.Tensor) -> torch.Tensor:
+    def forward(ctx, input: Union[FP8Tensor, torch.Tensor], weight: FP8Tensor, phony: torch.Tensor) -> torch.Tensor:
         if type(input) == torch.Tensor:
-            input = FP8Tensor(input, dtype=DTypes.FP8E4M3)
+            input = FP8Tensor(input, dtype=FP8LM_RECIPE.linear.input.dtype)
 
+        ctx.grad_metadata = weight.fp8_grad_meta
         ctx.save_for_backward(input, weight)
 
         # NOTE: pass FP8Tensor instead of FP8Parameter
@@ -60,6 +64,8 @@ class _FP8Matmul(torch.autograd.Function):
         ∂L/∂W = Xᵀ @ ∂L/∂Y
         Source: https://web.eecs.umich.edu/~justincj/teaching/eecs442/notes/linear-backprop.html
         """
+        pydevd.settrace(suspend=False, trace_only_current_thread=True)
+        
         # TODO(xrsrke): investigate how does grad_output.contiguous() affect the outputs
         input, weight = ctx.saved_tensors
 
@@ -67,7 +73,8 @@ class _FP8Matmul(torch.autograd.Function):
         if type(grad_output) == torch.Tensor:
             grad_output = torch.ones_like(grad_output)
             grad_output = grad_output.contiguous()
-            grad_output = FP8Tensor(grad_output, dtype=DTypes.FP8E5M2)
+            # DTypes.FP8E5M2
+            grad_output = FP8Tensor(grad_output, dtype=FP8LM_RECIPE.linear.output_grad.dtype)
 
         grad_input = fp8_matmul_kernel(
             mat_a=grad_output, transpose_a=True, mat_b=weight, transpose_b=True, use_split_accumulator=True
@@ -75,6 +82,6 @@ class _FP8Matmul(torch.autograd.Function):
         grad_weight = fp8_matmul_kernel(
             mat_a=input, transpose_a=False, mat_b=grad_output, transpose_b=False, use_split_accumulator=True
         )
-        weight.grad = grad_weight
+        weight.grad = FP8Tensor(grad_weight, dtype=FP8LM_RECIPE.linear.weight_grad.dtype)
 
         return grad_input, None, None

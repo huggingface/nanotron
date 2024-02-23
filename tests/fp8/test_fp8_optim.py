@@ -101,8 +101,8 @@ def test_fp8adam_optimizer_state_dtypes(fp8_recipe):
 
         assert not isinstance(fp8_state["exp_avg_sq"], FP8Tensor)
         assert fp8_state["exp_avg_sq"].dtype == exp_avg_sq_dtype
-
-
+     
+   
 # @pytest.mark.parametrize("n_steps", [1, 5])
 @pytest.mark.parametrize("learning_rate", [
     1e-3,
@@ -128,22 +128,15 @@ def test_fp8adam_step(learning_rate, betas, eps, weight_decay):
     fp8_optim = FP8Adam(fp8_linear.parameters(), learning_rate, betas, eps, weight_decay)
     input = torch.randn(16, 16, device="cuda")
 
-    # for _ in range(1):
-    #     linear(input).sum().backward()
-    #     optim.step()
-    #     optim.zero_grad()
+    for _ in range(1):
+        linear(input).sum().backward()
+        optim.step()
+        # optim.zero_grad()
 
-    #     fp8_linear(input).sum().backward()
-    #     fp8_optim.step()
-    #     fp8_optim.zero_grad()
-    
-    linear(input).sum().backward()
-    fp8_linear.weight.grad = deepcopy(linear.weight.grad)
-    fp8_linear.bias.grad = deepcopy(linear.bias.grad)
+        fp8_linear(input).sum().backward()
+        fp8_optim.step()
+        # fp8_optim.zero_grad()
 
-    optim.step()
-    fp8_optim.step()
-    
     # NOTE: since optimizer update depends on the gradients
     # and in this test we only want to check whether fp8 optim step is correct
     # so we will set the gradients to the target one, and only check the optim step
@@ -284,3 +277,55 @@ def test_fp8adam_grad_accumulation():
 
 
 # TODO(xrsrke): add sanity check all parameters are FP8Parameter
+
+
+# @pytest.mark.parametrize("n_steps", [1, 5])
+@pytest.mark.parametrize("learning_rate", [
+    1e-3,
+    # 1
+])
+@pytest.mark.parametrize("betas", [
+    (0.9, 0.999),
+    # (0.9, 0.99)
+])
+@pytest.mark.parametrize("eps", [
+    1e-8,
+    #1e-3
+])
+@pytest.mark.parametrize("weight_decay", [
+    1e-3,
+    # 0
+])
+def test_fp8adam_step_with_correct_grad(learning_rate, betas, eps, weight_decay):
+    linear = nn.Linear(16, 16, device="cuda")
+    fp8_linear = convert_linear_to_fp8(deepcopy(linear))
+
+    optim = Adam(linear.parameters(), learning_rate, betas, eps, weight_decay)
+    fp8_optim = FP8Adam(fp8_linear.parameters(), learning_rate, betas, eps, weight_decay)
+    input = torch.randn(16, 16, device="cuda")
+
+    # for _ in range(1):
+    #     linear(input).sum().backward()
+    #     optim.step()
+    #     optim.zero_grad()
+
+    #     fp8_linear(input).sum().backward()
+    #     fp8_optim.step()
+    #     fp8_optim.zero_grad()
+    
+    linear(input).sum().backward()
+    fp8_linear.weight.grad = deepcopy(linear.weight.grad)
+    fp8_linear.bias.grad = deepcopy(linear.bias.grad)
+
+    optim.step()
+    fp8_optim.step()
+    
+    # NOTE: since optimizer update depends on the gradients
+    # and in this test we only want to check whether fp8 optim step is correct
+    # so we will set the gradients to the target one, and only check the optim step
+
+    weight_fp32 = convert_tensor_from_fp8(fp8_linear.weight.data, fp8_linear.weight.data.fp8_meta, torch.float32)
+    # NOTE: this specific threshold is based on the FP8-LM implementation
+    # the paper shows that it don't hurt convergence
+    torch.testing.assert_allclose(weight_fp32, linear.weight, rtol=0, atol=3e-4)
+    # torch.testing.assert_allclose(fp8_linear.bias, linear.bias, rtol=0, atol=3e-4)

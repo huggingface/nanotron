@@ -2,7 +2,9 @@ from copy import deepcopy
 
 import pytest
 import torch
-from nanotron.fp8 import FP8Linear, FP8Parameter
+from nanotron.fp8.linear import FP8Linear
+from nanotron.fp8.tensor import FP8Tensor
+from nanotron.fp8.parameter import FP8Parameter
 from torch import nn
 from torch.optim import Adam
 from utils import convert_linear_to_fp8
@@ -49,7 +51,7 @@ def test_fp8_linear_backward_pass(input_requires_grad):
     ref_linear(ref_input).sum().backward()
     fp8_linear(input).sum().backward()
     
-    assert isinstance(fp8_linear.weight.grad, torch.Tensor)
+    assert isinstance(fp8_linear.weight.grad, FP8Tensor)
     assert isinstance(fp8_linear.bias.grad, torch.Tensor)
 
     # TODO(xrsrke): investigate why input.grad is so high tolerance
@@ -59,7 +61,6 @@ def test_fp8_linear_backward_pass(input_requires_grad):
     torch.testing.assert_allclose(fp8_linear.weight.grad, ref_linear.weight.grad, rtol=0.1, atol=0.1)
     # torch.testing.assert_allclose(fp8_linear.weight.grad, ref_linear.weight.grad, 0.06, 0.1)
     assert torch.equal(fp8_linear.bias.grad, ref_linear.bias.grad) if input_requires_grad else True
-
 
 def test_fp8_model_bwd():
     HIDEEN_SIZE = 128
