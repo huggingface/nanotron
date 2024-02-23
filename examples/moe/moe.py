@@ -4,11 +4,21 @@ from functools import partial
 from typing import Optional, Tuple
 
 import numpy as np
+import stk
 import torch
 import torch.nn.functional as F
 from config_llamoe import LlaMoEConfig
+from megablocks.layers import weight_parallel as wp
+from megablocks.layers.activation_fn import act_fn
+from nanotron import distributed as dist
+from nanotron import logging
+from nanotron.config import ParallelismArgs
 from nanotron.parallel.tensor_parallel.enum import TensorParallelLinearMode
-from nanotron.parallel.tensor_parallel.nn import TensorParallelColumnLinear, TensorParallelRowLinear
+from nanotron.parallel.tensor_parallel.nn import (
+    TensorParallelColumnLinear,
+    TensorParallelRowLinear,
+)
+from torch import nn
 
 try:
     import megablocks.ops as ops
@@ -16,13 +26,6 @@ try:
 except ImportError:
     warnings.warn("Please install megablocks to use MoEs: `pip install megablocks`")
 
-import stk
-from megablocks.layers import weight_parallel as wp
-from megablocks.layers.activation_fn import act_fn
-from nanotron import distributed as dist
-from nanotron import logging
-from nanotron.config import ParallelismArgs
-from torch import nn
 
 logger = logging.get_logger(__name__)
 
@@ -157,7 +160,7 @@ class ParallelDroplessMLP(torch.nn.Module):
         tokens_per_expert = ops.histogram(top_experts, self.num_experts)
 
         # Round the token counts up to the block size used in
-        # the matrix muliplications. Caculate the starting
+        # the matrix muliplications. Calculate the starting
         # position of each bin.
         padded_tokens_per_expert = ops.round_up(tokens_per_expert, self.blocking)
         padded_bins = inclusive_cumsum(padded_tokens_per_expert, 0)
@@ -269,7 +272,7 @@ class ParallelDroplessMLP(torch.nn.Module):
             parallel_bin_ids,
             None,  # expert_weights
             parallel_bins,
-            num_experts_per_tok=self.num_experts_per_tok,
+            num_experts_per_tok=1,
         )
 
         # Un-permute the tokens across the devices.
