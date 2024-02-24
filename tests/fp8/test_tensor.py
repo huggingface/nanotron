@@ -5,9 +5,9 @@ import pytest
 import torch
 import transformer_engine as te  # noqa
 import transformer_engine_extensions as tex
-from nanotron.fp8 import DTypes, FP8Tensor
+from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.meta import FP8Meta
-from nanotron.fp8.tensor import convert_tensor_from_fp8
+from nanotron.fp8.tensor import FP8Tensor, convert_tensor_from_fp8
 
 
 @pytest.mark.parametrize("size", [4, 8, 16, 64])
@@ -40,6 +40,7 @@ def test_quantize_and_dequantize_tensor_in_fp8(size, dtype):
     assert torch.allclose(tensor, ref_tensor, rtol=1e-1, atol=1e-1)
 
 
+@pytest.marak.parametrize("tensor_cls, dtype", [(FP8Tensor, DTypes.FP8E4M3), (FP16, DTypes.FP8E5M2)])
 def test_fp8_tensor_repr():
     tensor = torch.randn((64, 64), dtype=torch.float32, device="cuda:0")
     fp8_tensor = FP8Tensor(tensor, DTypes.FP8E4M3)
@@ -47,7 +48,6 @@ def test_fp8_tensor_repr():
     # NOTE: in some cases, it causes an infinite loop
     # in repr(tensor), so just check if it doesn't loop
     assert isinstance(repr(fp8_tensor), str)
-
 
 
 def test_fp8_tensor_attrs():

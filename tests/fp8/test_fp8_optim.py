@@ -1,11 +1,11 @@
 from copy import deepcopy
 
+import numpy as np
 import pytest
 import torch
-import numpy as np
 from nanotron.fp8.constants import FP8LM_RECIPE
-from nanotron.fp8.optim import FP8Adam, convert_tensor_to_fp16, convert_tensor_from_fp16
-from nanotron.fp8.tensor import FP8Tensor, convert_tensor_from_fp8
+from nanotron.fp8.optim import FP8Adam, convert_tensor_from_fp16, convert_tensor_to_fp16
+from nanotron.fp8.tensor import FP8Tensor, FP16Tensor, convert_tensor_from_fp8
 from torch import nn
 from torch.optim import Adam
 from utils import convert_linear_to_fp8, convert_to_fp8_module
@@ -15,11 +15,11 @@ def test_fp8_optim_default_initiation():
     OPTIM_ATTRS = ["lr", "betas", "eps", "weight_decay", "amsgrad"]
     linear = nn.Linear(16, 16, device="cuda")
     ref_optim = Adam(linear.parameters())
-    
+
     fp8_linear = convert_linear_to_fp8(deepcopy(linear))
     fp8_optim = FP8Adam(fp8_linear.parameters())
 
-    assert all([ref_optim.defaults[attr] == fp8_optim.defaults[attr] for attr in OPTIM_ATTRS])
+    assert all(ref_optim.defaults[attr] == fp8_optim.defaults[attr] for attr in OPTIM_ATTRS)
 
 
 def test_fp8_optim_master_weights_fp16_and_fp8():
@@ -44,7 +44,10 @@ def test_fp8_optim_master_weights_fp16_and_fp8():
     assert all(w.shape == p.shape for w, p in zip(fp8_optim.master_weights, REF_PARAMS))
 
     assert isinstance(fp8_optim.fp8_weights, list)
-    assert all(isinstance(w, FP8Tensor) for w in fp8_optim.fp8_weights)
+    # NOTE: we keep bias as FP32, and only quantize weight to FP8
+    # bias has ndim == 1
+    assert all(isinstance(p, FP8Tensor) for p in fp8_optim.fp8_weights if p.ndim != 1)
+    assert all(isinstance(p, torch.Tensor) for p in fp8_optim.fp8_weights if p.ndim != 1)
     assert REF_TOTAL_PARAMS == sum([w.numel() for w in fp8_optim.fp8_weights])
     assert all(w.shape == p.shape for w, p in zip(fp8_optim.fp8_weights, REF_PARAMS))
 
@@ -80,10 +83,8 @@ def test_fp8adam_optimizer_states(learning_rate, betas, eps, weight_decay):
         torch.testing.assert_allclose(exp_avg_sq_32, ref_state["exp_avg_sq"])
 
 
-@pytest.mark.parametrize("fp8_recipe", [FP8LM_RECIPE])
-def test_fp8adam_optimizer_state_dtypes(fp8_recipe):
+def test_fp8adam_optimizer_state_dtypes():
     exp_avg_dtype = FP8LM_RECIPE.optim.exp_avg_dtype
-    exp_avg_sq_dtype = FP8LM_RECIPE.optim.exp_avg_sq_dtype
 
     input = torch.randn(16, 16, device="cuda")
     linear = nn.Linear(16, 16, device="cuda")
@@ -99,27 +100,39 @@ def test_fp8adam_optimizer_state_dtypes(fp8_recipe):
         assert isinstance(fp8_state["exp_avg"], FP8Tensor)
         assert fp8_state["exp_avg"].fp8_meta.dtype == exp_avg_dtype
 
-        assert not isinstance(fp8_state["exp_avg_sq"], FP8Tensor)
-        assert fp8_state["exp_avg_sq"].dtype == exp_avg_sq_dtype
-     
-   
+        assert not isinstance(fp8_state["exp_avg_sq"], FP16Tensor)
+        assert fp8_state["exp_avg_sq"].dtype == torch.float16
+
+
 # @pytest.mark.parametrize("n_steps", [1, 5])
-@pytest.mark.parametrize("learning_rate", [
-    1e-3,
-    # 1
-])
-@pytest.mark.parametrize("betas", [
-    (0.9, 0.999),
-    # (0.9, 0.99)
-])
-@pytest.mark.parametrize("eps", [
-    1e-8,
-    #1e-3
-])
-@pytest.mark.parametrize("weight_decay", [
-    1e-3,
-    # 0
-])
+@pytest.mark.parametrize(
+    "learning_rate",
+    [
+        1e-3,
+        # 1
+    ],
+)
+@pytest.mark.parametrize(
+    "betas",
+    [
+        (0.9, 0.999),
+        # (0.9, 0.99)
+    ],
+)
+@pytest.mark.parametrize(
+    "eps",
+    [
+        1e-8,
+        # 1e-3
+    ],
+)
+@pytest.mark.parametrize(
+    "weight_decay",
+    [
+        1e-3,
+        # 0
+    ],
+)
 def test_fp8adam_step(learning_rate, betas, eps, weight_decay):
     linear = nn.Linear(16, 16, device="cuda")
     fp8_linear = convert_linear_to_fp8(deepcopy(linear))
@@ -183,6 +196,7 @@ def test_fp8adam_load_state_dict():
         for key in state_saved:
             torch.testing.assert_allclose(state_new[key], state_saved[key])
 
+
 @pytest.mark.parametrize("size", [4, 8, 16, 64])
 def test_quantize_and_dequantize_tensor_in_fp16(size):
     tensor = torch.randn((size, size), dtype=torch.float32, device="cuda")
@@ -201,7 +215,7 @@ def test_quantize_and_dequantize_tensor_in_fp16(size):
     assert isinstance(tensor, torch.Tensor)
     assert tensor.dtype == torch.float32
     assert torch.allclose(tensor, ref_tensor, rtol=0, atol=1e-03)
-    
+
 
 @pytest.mark.parametrize(
     "learning_rate",
@@ -280,22 +294,34 @@ def test_fp8adam_grad_accumulation():
 
 
 # @pytest.mark.parametrize("n_steps", [1, 5])
-@pytest.mark.parametrize("learning_rate", [
-    1e-3,
-    # 1
-])
-@pytest.mark.parametrize("betas", [
-    (0.9, 0.999),
-    # (0.9, 0.99)
-])
-@pytest.mark.parametrize("eps", [
-    1e-8,
-    #1e-3
-])
-@pytest.mark.parametrize("weight_decay", [
-    1e-3,
-    # 0
-])
+@pytest.mark.parametrize(
+    "learning_rate",
+    [
+        1e-3,
+        # 1
+    ],
+)
+@pytest.mark.parametrize(
+    "betas",
+    [
+        (0.9, 0.999),
+        # (0.9, 0.99)
+    ],
+)
+@pytest.mark.parametrize(
+    "eps",
+    [
+        1e-8,
+        # 1e-3
+    ],
+)
+@pytest.mark.parametrize(
+    "weight_decay",
+    [
+        1e-3,
+        # 0
+    ],
+)
 def test_fp8adam_step_with_correct_grad(learning_rate, betas, eps, weight_decay):
     linear = nn.Linear(16, 16, device="cuda")
     fp8_linear = convert_linear_to_fp8(deepcopy(linear))
@@ -312,14 +338,14 @@ def test_fp8adam_step_with_correct_grad(learning_rate, betas, eps, weight_decay)
     #     fp8_linear(input).sum().backward()
     #     fp8_optim.step()
     #     fp8_optim.zero_grad()
-    
+
     linear(input).sum().backward()
     fp8_linear.weight.grad = deepcopy(linear.weight.grad)
     fp8_linear.bias.grad = deepcopy(linear.bias.grad)
 
     optim.step()
     fp8_optim.step()
-    
+
     # NOTE: since optimizer update depends on the gradients
     # and in this test we only want to check whether fp8 optim step is correct
     # so we will set the gradients to the target one, and only check the optim step

@@ -33,16 +33,16 @@ class LowPrecisionTensor(torch.Tensor):
         # TODO(xrsrke): there is a circular import issue
         # between tensor.py and meta.py fix this
         from nanotron.fp8.meta import FP8Meta
-        
+
         amax = tensor.abs().max().clone()
         scale = update_scaling_factor(amax, torch.tensor(INITIAL_SCALING_FACTOR, dtype=torch.float32), dtype)
         fp8_meta = FP8Meta(amax, scale, dtype)
         return fp8_meta
-    
+
     @abstractstaticmethod
     def _quantize(tensor: torch.Tensor, fp8_meta: "FP8Meta") -> torch.Tensor:
         raise NotImplementedError
-    
+
     # def __repr__(self) -> str:
     #     return f"FP8Tensor({repr(self.data)}, fp8_meta={self.fp8_meta})"
 
@@ -56,6 +56,7 @@ class FP8Tensor(LowPrecisionTensor):
 
 
 class FP16Tensor(LowPrecisionTensor):
+    # TODO(xrsrke): change the name to lp_meta = low_precision_meta
     @staticmethod
     def _quantize(tensor: torch.Tensor, fp8_meta: "FP8Meta") -> torch.Tensor:
         return (tensor * fp8_meta.scale).to(torch.float16)
@@ -106,7 +107,9 @@ def update_scaling_factor(
     Update the scaling factor to quantize a tensor to FP8.
     Credits: https://github.com/Azure/MS-AMP/blob/d562f0f0bcfc9b712fa0726b73428753ff1300ab/msamp/common/tensor/meta.py#L39
     """
-    assert amax.dtype == torch.float32
+    # TODO(xrsrke): sometimes we store some params in fp16
+    # make this configurable
+    assert amax.dtype in [torch.float32, torch.float16]
     # TODO(xrsrke): can we use lower precision for scaling_factor?
     assert scaling_factor.dtype == torch.float32
 

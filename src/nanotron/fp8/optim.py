@@ -1,5 +1,5 @@
 import math
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, Union
 
 import torch
 from torch import nn
@@ -7,10 +7,10 @@ from torch.optim import Optimizer
 
 from nanotron.fp8.constants import FP8LM_RECIPE
 from nanotron.fp8.dtypes import DTypes
+from nanotron.fp8.meta import FP8Meta
 from nanotron.fp8.parameter import FP8Parameter
 from nanotron.fp8.tensor import FP8Tensor, FP16Tensor, convert_tensor_from_fp8, convert_tensor_to_fp8
 from nanotron.fp8.utils import get_tensor_fp8_metadata
-from nanotron.fp8.meta import FP8Meta
 
 
 class Adam(Optimizer):
@@ -34,8 +34,7 @@ class Adam(Optimizer):
         https://openreview.net/forum?id=ryQu7f-RZ
     """
 
-    def __init__(self, params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8,
-                 weight_decay=0, amsgrad=False):
+    def __init__(self, params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0, amsgrad=False):
         if not 0.0 <= lr:
             raise ValueError("Invalid learning rate: {}".format(lr))
         if not 0.0 <= eps:
@@ -44,14 +43,13 @@ class Adam(Optimizer):
             raise ValueError("Invalid beta parameter at index 0: {}".format(betas[0]))
         if not 0.0 <= betas[1] < 1.0:
             raise ValueError("Invalid beta parameter at index 1: {}".format(betas[1]))
-        defaults = dict(lr=lr, betas=betas, eps=eps,
-                        weight_decay=weight_decay, amsgrad=amsgrad)
+        defaults = {"lr": lr, "betas": betas, "eps": eps, "weight_decay": weight_decay, "amsgrad": amsgrad}
         super(Adam, self).__init__(params, defaults)
 
     def __setstate__(self, state):
         super(Adam, self).__setstate__(state)
         for group in self.param_groups:
-            group.setdefault('amsgrad', False)
+            group.setdefault("amsgrad", False)
 
     def step(self, closure=None):
         """Performs a single optimization step.
@@ -64,75 +62,79 @@ class Adam(Optimizer):
             loss = closure()
 
         for group in self.param_groups:
-            for p in group['params']:
+            for p in group["params"]:
                 if p.grad is None:
                     continue
                 grad = p.grad.data
-                
+
                 print(f"[Ref Adam] original grad: {grad[:2, :2]} \n")
-                
+
                 if grad.is_sparse:
-                    raise RuntimeError('Adam does not support sparse gradients, please consider SparseAdam instead')
-                amsgrad = group['amsgrad']
+                    raise RuntimeError("Adam does not support sparse gradients, please consider SparseAdam instead")
+                amsgrad = group["amsgrad"]
 
                 state = self.state[p]
 
                 # State initialization
                 if len(state) == 0:
-                    state['step'] = 0
+                    state["step"] = 0
                     # Exponential moving average of gradient values
-                    state['exp_avg'] = torch.zeros_like(p.data, memory_format=torch.preserve_format)
+                    state["exp_avg"] = torch.zeros_like(p.data, memory_format=torch.preserve_format)
                     # Exponential moving average of squared gradient values
-                    state['exp_avg_sq'] = torch.zeros_like(p.data, memory_format=torch.preserve_format)
+                    state["exp_avg_sq"] = torch.zeros_like(p.data, memory_format=torch.preserve_format)
                     if amsgrad:
                         # Maintains max of all exp. moving avg. of sq. grad. values
-                        state['max_exp_avg_sq'] = torch.zeros_like(p.data, memory_format=torch.preserve_format)
+                        state["max_exp_avg_sq"] = torch.zeros_like(p.data, memory_format=torch.preserve_format)
 
-                exp_avg, exp_avg_sq = state['exp_avg'], state['exp_avg_sq']
+                exp_avg, exp_avg_sq = state["exp_avg"], state["exp_avg_sq"]
                 if amsgrad:
-                    max_exp_avg_sq = state['max_exp_avg_sq']
-                beta1, beta2 = group['betas']
-                
-                print(f"[Ref Adam] original exp_avg: exp_avg.data={exp_avg.data[:2, :2]}, exp_avg.dtype={exp_avg.dtype} \n")
-                print(f"[Ref Adam] original exp_avg_sq: exp_avg_sq.data={exp_avg_sq.data[:2, :2]}, exp_avg_sq.dtype={exp_avg_sq.dtype} \n")
+                    max_exp_avg_sq = state["max_exp_avg_sq"]
+                beta1, beta2 = group["betas"]
+
+                print(
+                    f"[Ref Adam] original exp_avg: exp_avg.data={exp_avg.data[:2, :2]}, exp_avg.dtype={exp_avg.dtype} \n"
+                )
+                print(
+                    f"[Ref Adam] original exp_avg_sq: exp_avg_sq.data={exp_avg_sq.data[:2, :2]}, exp_avg_sq.dtype={exp_avg_sq.dtype} \n"
+                )
                 print(f"[Ref Adam] beta1: {beta1}, beta2: {beta2}")
 
-                state['step'] += 1
-                bias_correction1 = 1 - beta1 ** state['step']
-                bias_correction2 = 1 - beta2 ** state['step']
+                state["step"] += 1
+                bias_correction1 = 1 - beta1 ** state["step"]
+                bias_correction2 = 1 - beta2 ** state["step"]
                 print(f"[Ref Adam]: bias_correction1: {bias_correction1}, bias_correction2: {bias_correction2}")
 
-                if group['weight_decay'] != 0:
-                    grad = grad.add(group['weight_decay'], p.data)
+                if group["weight_decay"] != 0:
+                    grad = grad.add(group["weight_decay"], p.data)
                     print(f"[Ref Adam] grad after weight decay: {grad[:2, :2]} \n")
 
                 # Decay the first and second moment running average coefficient
                 exp_avg.mul_(beta1).add_(1 - beta1, grad)
                 exp_avg_sq.mul_(beta2).addcmul_(1 - beta2, grad, grad)
-                
+
                 print(f"[Ref Adam] after mul and add: exp_avg: {exp_avg[:2, :2]} \n")
                 print(f"[Ref Adam] after mul and add: exp_avg_sq: {exp_avg_sq[:2, :2]} \n")
-                
+
                 if amsgrad:
                     # Maintains the maximum of all 2nd moment running avg. till now
                     torch.max(max_exp_avg_sq, exp_avg_sq, out=max_exp_avg_sq)
                     # Use the max. for normalizing running avg. of gradient
-                    denom = (max_exp_avg_sq.sqrt() / math.sqrt(bias_correction2)).add_(group['eps'])
+                    denom = (max_exp_avg_sq.sqrt() / math.sqrt(bias_correction2)).add_(group["eps"])
                 else:
-                    denom = (exp_avg_sq.sqrt() / math.sqrt(bias_correction2)).add_(group['eps'])
+                    denom = (exp_avg_sq.sqrt() / math.sqrt(bias_correction2)).add_(group["eps"])
                     print(f"[Ref Adam] exp_avg_sq.sqrt(): {exp_avg_sq.sqrt()[:2, :2]} \n")
                     print(f"[Ref Adam] math.sqrt(bias_correction2)): {math.sqrt(bias_correction2)} \n")
                     print(f"[Ref Adam] group['eps']: {group['eps']} \n")
 
-                step_size = group['lr'] / bias_correction1
+                step_size = group["lr"] / bias_correction1
                 print(f"[Ref Adam] step_size: {step_size} \n")
                 print(f"[Ref Adam] exp_avg: {exp_avg[:2, :2]} \n")
                 print(f"[Ref Adam] denom: {denom[:2, :2]} \n")
 
                 p.data.addcdiv_(-step_size, exp_avg, denom)
-                
+
                 print(f"[Ref Adam] updated p: {p.data[:2, :2]} \n")
-                
+
                 break
 
         return loss
@@ -172,30 +174,33 @@ class FP8Adam(Optimizer):
         # then retrieve the exp_avg_dtype from the recipe
         self.exp_avg_dtype = FP8LM_RECIPE.optim.exp_avg_dtype
         self.exp_avg_sq_dtype = FP8LM_RECIPE.optim.exp_avg_sq_dtype
-        
-        self.master_weights: List[nn.Parameter] = []
-        self.fp8_weights: List[FP8Parameter] = []
-        # NOTE: use to map fp8 param to fp16 master weights
-        self.mappping_fp8_to_fp16: Dict[FP8Tensor, FP16Tensor] = {}
-                
+
+        self.master_weights: List[FP16Tensor] = []
+        # NOTE: torch.Tensor is bias
+        self.fp8_weights: List[Union[FP8Parameter, torch.Tensor]] = []
+        # NOTE: use to map fp8 param to master weights
+        self.mappping_fp8_to_master_weight: Dict[FP8Tensor, Union[FP16Tensor, torch.Tensor]] = {}
+
         for group in self.param_groups:
             for p in group["params"]:
                 if p.requires_grad is None:
                     continue
-                
-                assert p.orig_data.dtype == torch.float32
-                # self.master_weights.append(convert_tensor_to_fp16(p.orig_data))
+
+                # NOTE: if a tensor.ndim == 1, it's a bias
+                raw_data = p.data if p.ndim == 1 else p.orig_data
+                assert raw_data.dtype == torch.float32
+
                 # TODO(xrsrke): retrieve the dtype for master_weights from the recipe
-                fp16_p = FP16Tensor(p.orig_data, dtype=DTypes.KFLOAT16)
+                fp16_p = FP16Tensor(raw_data, dtype=DTypes.KFLOAT16)
+
                 self.master_weights.append(fp16_p)
                 self.fp8_weights.append(p.data)
-                
-                self.mappping_fp8_to_fp16[p.data] = fp16_p
-                
+                self.mappping_fp8_to_master_weight[p.data.data_ptr()] = fp16_p
+
                 # NOTE: cast the original weights to FP8
                 # this is where we do FP8 GEMM
                 # p = FP8Parameter(p.data.detach().clone(), dtype=FP8LM_RECIPE.optim.master_weight_dtype)
-        
+
         assert len(self.master_weights) == len(self.fp8_weights)
         # TODO(xrsrke): remove manually clear fp32 weights
 
@@ -220,9 +225,9 @@ class FP8Adam(Optimizer):
 
         # Exponential moving average of squared gradient values
         # TODO(xrsrke): don't fixed the dtype to fp16
-        exp_avg_sq = torch.zeros(p.data.shape, dtype=torch.float32, device="cuda")
-        if self.exp_avg_sq_dtype in FP8_DTYPES:
-            exp_avg_sq = FP8Tensor(exp_avg_sq, dtype=self.exp_avg_dtype)
+        exp_avg_sq = torch.zeros(p.data.shape, dtype=torch.float16, device="cuda")
+        # if self.exp_avg_sq_dtype in FP8_DTYPES:
+        #     exp_avg_sq = FP8Tensor(exp_avg_sq, dtype=self.exp_avg_dtype)
 
         state["step"] = 0
         state["exp_avg"] = exp_avg
@@ -237,7 +242,7 @@ class FP8Adam(Optimizer):
             for p in group["params"]:
                 if p.grad is None:
                     continue
-                
+
                 state = self.state[p]
                 amsgrad = group["amsgrad"]
                 if len(state) == 0:
@@ -256,27 +261,27 @@ class FP8Adam(Optimizer):
                 state["step"] += 1
                 bias_correction1 = 1 - beta1 ** state["step"]
                 bias_correction2 = 1 - beta2 ** state["step"]
-                
+
                 print(f"[FP8Adam] beta1: {beta1}, beta2: {beta2}")
                 print(f"[FP8Adam]: bias_correction1: {bias_correction1}, bias_correction2: {bias_correction2}")
 
                 if group["weight_decay"] != 0:
                     grad = grad.add(group["weight_decay"], p.data)
                     # print(f"[FP8Adam] grad after weight decay: {grad[:2, :2]} \n")
-                
+
                 # Decay the first and second moment running average coefficient
                 exp_avg, exp_avg_sq = state["exp_avg"], state["exp_avg_sq"]
-                
+
                 # print(f"[FP8Adam] original fp8 exp_avg: exp_avg.data={exp_avg.data[:2, :2]}, exp_avg.fp8_meta={exp_avg.fp8_meta} \n")
 
                 # TODO(xrsrke): can we do all calculations in fp8?
-                exp_avg_fp32 = convert_tensor_from_fp8(exp_avg, exp_avg.fp8_meta, torch.float32)
+                exp_avg_fp32 = convert_tensor_from_fp8(exp_avg, exp_avg.fp8_meta, torch.float16)
                 # print(f"[FP8Adam] exp_avg_fp32: {exp_avg_fp32[:2, :2]} \n")
                 # print(f"[FP8Adam] exp_avg_sq: {exp_avg_sq[:2, :2]} \n")
 
                 exp_avg_fp32.mul_(beta1).add_(1 - beta1, grad)
                 exp_avg_sq.mul_(beta2).addcmul_(1 - beta2, grad, grad)
-                
+
                 # print(f"[FP8Adam] after mul and add: exp_avg_fp32: {exp_avg_fp32[:2, :2]} \n")
                 # print(f"[FP8Adam] after mul and add: exp_avg_sq: {exp_avg_sq[:2, :2]} \n")
 
@@ -296,25 +301,29 @@ class FP8Adam(Optimizer):
                 # in a separate cuda streams
                 exp_avg_fp32_meta = get_tensor_fp8_metadata(exp_avg_fp32, exp_avg.fp8_meta.dtype)
                 updated_exp_avg_fp8 = convert_tensor_to_fp8(exp_avg_fp32, exp_avg_fp32_meta)
-                
+
                 # print(f"[FP8Adam] updated_exp_avg_fp8: updated_exp_avg_fp8.data={updated_exp_avg_fp8.data[:2, :2]}, exp_avg_fp32_meta={exp_avg_fp32_meta} \n")
-                
+
                 exp_avg.copy_(updated_exp_avg_fp8)
 
                 # TODO(xrsrke): can we do all calculations in fp8?
-                p_fp16 = self.mappping_fp8_to_fp16[p.data]
-                p_fp32 = convert_tensor_from_fp16(p_fp16, p_fp16.fp8_meta, torch.float32)
+                # NOTE: somehow the view of bias changed, but the storage is the same
+                # so we can't do the mapping, so now we map data_ptr to data_ptr
+                # TODO(xrsrke): ideally, we should map tensor to tensor
+                # it's easier to debug (u know which tensor is which)
+                p_master = self.mappping_fp8_to_master_weight[p.data.data_ptr()]
+                # p_fp32 = convert_tensor_from_fp16(p_master, p_master.fp8_meta, torch.float32)
                 # p_fp32 = convert_tensor_from_fp8(p.data, p.fp8_meta, torch.float32)
-                p_fp32.addcdiv_(-step_size, exp_avg_fp32, denom)
+                p_master.addcdiv_(-step_size, exp_avg_fp32, denom)
                 # print(f"[FP8Adam] updated p_fp32: {p_fp32[:2, :2]} \n")
 
-                p_fp32_meta = get_tensor_fp8_metadata(p_fp32, dtype=p.data.fp8_meta.dtype)
-                updated_p_fp8 = convert_tensor_to_fp8(p_fp32, p_fp32_meta)
-                
+                if p.data.ndim != 1:
+                    p_fp32_meta = get_tensor_fp8_metadata(p_master, dtype=p.data.fp8_meta.dtype)
+                    updated_p_fp8 = convert_tensor_to_fp8(p_master, p_fp32_meta)
+                    p.data.copy_(updated_p_fp8)
+
                 # print(f"[FP8Adam] updated_p_fp8: updated_p_fp8.data={updated_p_fp8.data[:2, :2]}, p_fp32_meta={p_fp32_meta} \n")
-                
-                p.data.copy_(updated_p_fp8)
-                
+
     # TODO(xrsrke): refactor using strategy pattern
     def _update_scaling_factors(self):
         for p in self.param_groups:
@@ -329,6 +338,7 @@ def convert_tensor_to_fp16(tensor: torch.Tensor) -> torch.Tensor:
     from nanotron.fp8.constants import INITIAL_SCALING_FACTOR
     from nanotron.fp8.meta import FP8Meta
     from nanotron.fp8.tensor import update_scaling_factor
+
     dtype = DTypes.KFLOAT16
     amax = tensor.abs().max().clone()
     scale = update_scaling_factor(amax, torch.tensor(INITIAL_SCALING_FACTOR, dtype=torch.float32), dtype)
