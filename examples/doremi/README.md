@@ -9,6 +9,7 @@ In our implementation, the experiment results show that doremi outperforms 15 ou
 - 2.5B reference and tuned weight models [[link]](https://wandb.ai/neuralink/nanotron/reports/-DoReMi-2-5B-tuned-weights-vs-2-5B-token-ratio-domain-weights-s-training--Vmlldzo2NzYwNzE2)
 - And how the 280M proxy model's domain weights change during training [[link]](https://wandb.ai/neuralink/nanotron/runs/j9ojbso1?workspace=user-neuralink)
 
+and the comparison of cross-entropy loss between the two 2.5B models on testset (the x-axis here just means sampling another batch from the test set given the same checkpoint): [[link]](https://api.wandb.ai/links/neuralink/qvof4dfq).
 
 ![The domains in which we outperform](./assets/outperform.png)
 
@@ -85,4 +86,4 @@ For evaluation, we do uniform sampling on the test set to evaluate a 2.5B model 
 - 2.5B LLaMA reference model: https://huggingface.co/nanotron/doremi-llama-2.5b-reference
 - 2.5B llama trained using the optimized weights: https://huggingface.co/nanotron/doremi-llama-2.5b-optimized-weights
 
-and the evaluation results from 2.5B 70k checkpoint (the x-axis here just means sampling another batch from the test set given the same checkpoint): [https://wandb.ai/neuralink/nanotron/reports/-DoReMi-2-5B-LLamA--Vmlldzo2NzQ3MDE3](https://api.wandb.ai/links/neuralink/qvof4dfq), and the dataset: https://huggingface.co/datasets/nanotron/the-pile-for-doremi
+and the dataset: https://huggingface.co/datasets/nanotron/the-pile-for-doremi
