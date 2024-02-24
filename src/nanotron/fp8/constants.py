@@ -30,6 +30,6 @@ FP8LM_RECIPE = FP8TrainingRecipe(
     optim=FP8OptimRecipe(
         master_weight_dtype=DTypes.KFLOAT16,
         exp_avg_dtype=DTypes.FP8E4M3,
-        exp_avg_sq_dtype=torch.float16,
+        exp_avg_sq_dtype=DTypes.KFLOAT16,
     ),
 )

@@ -1,6 +1,5 @@
 from typing import Optional, Tuple, Union
 
-import pydevd
 import torch
 import torch.nn.functional as F
 import transformer_engine as te  # noqa
@@ -63,7 +62,7 @@ class _FP8Matmul(torch.autograd.Function):
         ∂L/∂W = Xᵀ @ ∂L/∂Y
         Reference: https://web.eecs.umich.edu/~justincj/teaching/eecs442/notes/linear-backprop.html
         """
-        pydevd.settrace(suspend=False, trace_only_current_thread=True)
+        # pydevd.settrace(suspend=False, trace_only_current_thread=True)
 
         # TODO(xrsrke): investigate how does grad_output.contiguous() affect the outputs
         input, weight = ctx.saved_tensors
@@ -81,6 +80,6 @@ class _FP8Matmul(torch.autograd.Function):
         grad_weight = fp8_matmul_kernel(
             mat_a=input, transpose_a=False, mat_b=grad_output, transpose_b=False, use_split_accumulator=True
         )
+        # TODO(xrsrke): maintain a persistence metadata across training
         weight.grad = FP8Tensor(grad_weight, dtype=FP8LM_RECIPE.linear.weight_grad.dtype)
-
         return grad_input, None, None
