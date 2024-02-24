@@ -18,7 +18,7 @@ In our implementation, the experiment results show that doremi outperforms 15 ou
 
 ![Domain weights comparison](./assets/domain_weights.png)
 
-**Notes**: The graph above represent test losses, not validation losses (this is a typo 🫠). The x-axis doesn't mean anything, it simply means sampling another batch of evaluation data from the same final checkpoint.
+**Notes**: The graph above represent test losses, not validation losses (this is a typo 🫠). The x-axis doesn't mean anything, it simply means sampling another batch of testset from the same final checkpoint.
 
 ### How it works
 
@@ -36,7 +36,7 @@ CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node=4 examples/doremi/train_
 CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node=4 examples/doremi/train_doremi.py --config-file examples/doremi/configs/config_280m_llama_proxy.yaml
 ```
 
-- Step 3: Nanotron saves the domain weights in the model checkpoint. Now, calculate the optimal domain weights by averaging the domain weights across all training steps from step 1: $\bar{\alpha}=\frac{1}{T} \sum_{i=1}^T \alpha_t$.
+- Step 3: Nanotron saves the domain weights in the model checkpoint. Now, calculate the optimal domain weights by averaging the domain weights across all training steps from step 1: ˉα=1T∑Ti=1αt\bar{\alpha}=\frac{1}{T} \sum_{i=1}^T \alpha_t.
 
 
 ```python
@@ -85,4 +85,4 @@ For evaluation, we do uniform sampling on the test set to evaluate a 2.5B model 
 - 2.5B LLaMA reference model: https://huggingface.co/nanotron/doremi-llama-2.5b-reference
 - 2.5B llama trained using the optimized weights: https://huggingface.co/nanotron/doremi-llama-2.5b-optimized-weights
 
-and the dataset: https://huggingface.co/datasets/nanotron/the-pile-for-doremi
+and the evaluation results from 2.5B 70k checkpoint (the x-axis here just means sampling another batch from the test set given the same checkpoint): [https://wandb.ai/neuralink/nanotron/reports/-DoReMi-2-5B-LLamA--Vmlldzo2NzQ3MDE3](https://api.wandb.ai/links/neuralink/qvof4dfq), and the dataset: https://huggingface.co/datasets/nanotron/the-pile-for-doremi
