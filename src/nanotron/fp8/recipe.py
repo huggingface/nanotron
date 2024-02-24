@@ -1,11 +1,14 @@
 from dataclasses import dataclass
+from typing import Union
+
+import torch
 
 from nanotron.fp8.dtypes import DTypes
 
 
 @dataclass
 class FP8TensorRecipe:
-    dtype: DTypes
+    dtype: Union[DTypes, torch.dtype]
     margin: int
     interval: int
 
@@ -14,7 +17,7 @@ class FP8TensorRecipe:
 class FP8LinearRecipe:
     input: FP8TensorRecipe
     weight: FP8TensorRecipe
-    
+
     # NOTE: for the gradients
     input_grad: FP8TensorRecipe
     weight_grad: FP8TensorRecipe
@@ -26,9 +29,9 @@ class FP8OptimRecipe:
     # NOTE: these are just storage dtypes
     # not FP8Tensor that need to dynamically change
     # during training
-    master_weight_dtype: DTypes
-    exp_avg_dtype: DTypes
-    exp_avg_sq_dtype: DTypes
+    master_weight_dtype: Union[DTypes, torch.dtype]
+    exp_avg_dtype: Union[DTypes, torch.dtype]
+    exp_avg_sq_dtype: Union[DTypes, torch.dtype]
 
 
 @dataclass

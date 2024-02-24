@@ -22,14 +22,13 @@ FP8LM_RECIPE = FP8TrainingRecipe(
     linear=FP8LinearRecipe(
         input=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=16),
         weight=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=16),
-        
         # NOTE: these are the dtypes for the gradients
         input_grad=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=16),
         weight_grad=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=16),
         output_grad=FP8TensorRecipe(dtype=DTypes.FP8E5M2, margin=0, interval=1),
     ),
     optim=FP8OptimRecipe(
-        master_weight_dtype=torch.float16,
+        master_weight_dtype=DTypes.KFLOAT16,
         exp_avg_dtype=DTypes.FP8E4M3,
         exp_avg_sq_dtype=torch.float16,
     ),

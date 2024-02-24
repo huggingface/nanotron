@@ -1,17 +1,16 @@
 from typing import Optional, Tuple, Union
 
+import pydevd
 import torch
 import torch.nn.functional as F
 import transformer_engine as te  # noqa
 from torch import nn
 
-from nanotron.fp8.dtypes import DTypes
+from nanotron.fp8.constants import FP8LM_RECIPE
 from nanotron.fp8.kernel import fp8_matmul_kernel
 from nanotron.fp8.parameter import FP8Parameter
 from nanotron.fp8.tensor import FP8Tensor
-from nanotron.fp8.constants import FP8LM_RECIPE
 
-import pydevd
 
 class FP8Linear(nn.Linear):
     def __init__(self, in_features: int, out_features: int, bias: bool = True, device: Optional[torch.device] = None):
@@ -62,10 +61,10 @@ class _FP8Matmul(torch.autograd.Function):
         """
         ∂L/∂X = ∂L/∂Y @ Wᵀ
         ∂L/∂W = Xᵀ @ ∂L/∂Y
-        Source: https://web.eecs.umich.edu/~justincj/teaching/eecs442/notes/linear-backprop.html
+        Reference: https://web.eecs.umich.edu/~justincj/teaching/eecs442/notes/linear-backprop.html
         """
         pydevd.settrace(suspend=False, trace_only_current_thread=True)
-        
+
         # TODO(xrsrke): investigate how does grad_output.contiguous() affect the outputs
         input, weight = ctx.saved_tensors
 

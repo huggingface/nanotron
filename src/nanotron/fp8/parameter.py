@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Union, Optional
+from typing import Optional, Union
 
 import torch
 from torch import nn
@@ -72,16 +72,16 @@ class FP8Parameter(nn.Parameter):
     @data.setter
     def data(self, data: FP8Tensor):
         self._data = data
-        
-    # NOTE: because pytorch don't allow to assign an int grad to a tensor
-    # so we bypass it by using a property
+
+    # # NOTE: because pytorch don't allow to assign an int grad to a tensor
+    # # so we bypass it by using a property
     @property
     def grad(self) -> Optional[Union[torch.Tensor, FP8Tensor]]:
-        return self._grad
-    
+        return self.data._grad
+
     @grad.setter
     def grad(self, value: Optional[Union[torch.Tensor, FP8Tensor]]):
-        self._grad = value
+        self.data._grad = value
 
     @property
     def fp8_meta(self) -> FP8Meta:
@@ -89,3 +89,13 @@ class FP8Parameter(nn.Parameter):
 
     def __repr__(self) -> str:
         return f"FP8Parameter({self.data}, fp8_meta={self.fp8_meta}, requires_grad={self.requires_grad}, fp8_grad_meta={self.fp8_grad_meta})"
+
+    # def __setattr__(self, name: str, value: Any):
+    #     if name == "grad":
+    #         # NOTE: bypass RuntimeError: assigned grad has data of a different type
+    #         # beca(use pytorch don't allow to assign an int grad to a tensor
+    #         # TODO(xrsrke): allow get fp8 gradients using param.grad instead of param.fp8_grad
+    #         # self.fp8_grad = value
+    #         self.data._grad = value
+    #     else:
+    #         return super().__setattr__(name, value)
