@@ -20,6 +20,7 @@ from typing import (
 
 import torch
 from torch.nn.parallel import DistributedDataParallel
+from torch.utils.data import DataLoader
 
 from nanotron import distributed as dist
 from nanotron import logging
@@ -255,10 +256,30 @@ class DistributedTrainer:
 
     def post_training(self):
         pass
+    
+    def _update_dataloader_based_on_training_progress(self, dataloaders: List[DataLoader]) -> DataLoader:
+        for stage in self.config.data.dataset_stages:
+            if stage.training_steps == self.iteration_step:
+                log_rank(
+                    f"Switching to a new dataloader from training stage {stage.name}",
+                    logger=logger,
+                    level=logging.INFO,
+                    rank=0,
+                )
+                
+                dataloader = dataloaders[stage.name]
+                dataloader = dataloader() if callable(dataloader) else dataloader
+                dataloader = sanity_check_dataloader(
+                    dataloader=dataloader, parallel_context=self.parallel_context, config=self.config
+                )
+                self.current_dataloader = dataloader
+        
+        if self.current_dataloader is None:
+            raise RuntimeError("No dataloader found! Please check your config")
 
     def train(
         self,
-        dataloader_or_dls: Union[Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]], Tuple[Iterator, ...]],
+        dataloader_or_dls: List[Union[Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]], Tuple[Iterator, ...]]],
         **kwargs,
     ) -> None:
         self.pre_training(**kwargs)
@@ -266,18 +287,20 @@ class DistributedTrainer:
         if self.config.checkpoints.save_initial_state and self.init_checkpoint_path is None:
             self.save_checkpoint()
 
-        if isinstance(dataloader_or_dls, tuple):
-            dataloader_or_dls[1] if len(dataloader_or_dls) > 1 else None
-            dataloader_or_dls[2] if len(dataloader_or_dls) > 2 else None
-            dataloader = dataloader_or_dls[0]
-        else:
-            dataloader = dataloader_or_dls
-        dataloader = sanity_check_dataloader(
-            dataloader=dataloader, parallel_context=self.parallel_context, config=self.config
-        )
+        # if isinstance(dataloader_or_dls, tuple):
+        #     # dataloader_or_dls[1] if len(dataloader_or_dls) > 1 else None
+        #     # dataloader_or_dls[2] if len(dataloader_or_dls) > 2 else None
+        #     dataloader = dataloader_or_dls[0]
+        # else:
+        #     dataloader = dataloader_or_dls
+        
+        
+        # dataloader = sanity_check_dataloader(
+        #     dataloader=dataloader, parallel_context=self.parallel_context, config=self.config
+        # )
+        # self.current_dataloader = dataloader
 
         self.pipeline_engine: PipelineEngine = self.config.parallelism.pp_engine
-
         self.pipeline_engine.nb_microbatches = self.n_micro_batches_per_batch
 
         log_rank(
@@ -299,12 +322,15 @@ class DistributedTrainer:
         torch.cuda.empty_cache()
         with prof:
             for self.iteration_step in range(self.start_iteration_step + 1, self.config.tokens.train_steps + 1):
+                self._update_dataloader_based_on_training_progress(dataloader_or_dls)
+                
                 if isinstance(prof, torch.profiler.profile):
                     prof.step()
+                
                 self.iteration_start_time = time.time()
 
                 # Training step
-                outputs, loss_avg = self.training_step(dataloader=dataloader)
+                outputs, loss_avg = self.training_step(dataloader=self.current_dataloader)
 
                 # Training Logs
                 self.consumed_train_samples += self.global_batch_size

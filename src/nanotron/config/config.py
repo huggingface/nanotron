@@ -91,6 +91,17 @@ class PretrainDatasetsArgs:
             self.text_column_name = "text"
         if self.hf_dataset_splits is None:
             self.hf_dataset_splits = "train"
+            
+
+@dataclass
+class DatasetStages:
+    """Arguments for loading dataset in different stages of the training process"""
+    name: str
+    training_steps: int
+    dataset: Optional[PretrainDatasetsArgs]
+    
+    # TODO(xrsrke): training stages should not have the same name
+    # not overlapse training steps, not negative
 
 
 @dataclass
@@ -98,6 +109,7 @@ class DataArgs:
     """Arguments related to the data and data files processing"""
 
     dataset: Optional[PretrainDatasetsArgs]
+    dataset_stages: Optional[list[DatasetStages]]
     seed: Optional[int]
     num_loading_workers: Optional[int] = 1
 
