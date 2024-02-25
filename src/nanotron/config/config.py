@@ -11,7 +11,11 @@ from dacite import from_dict
 from yaml.loader import SafeLoader
 
 from nanotron.config.lighteval_config import LightEvalConfig
-from nanotron.config.models_config import ExistingCheckpointInit, NanotronConfigs, RandomInit
+from nanotron.config.models_config import (
+    ExistingCheckpointInit,
+    NanotronConfigs,
+    RandomInit,
+)
 from nanotron.config.parallelism_config import ParallelismArgs
 from nanotron.config.utils_config import (
     RecomputeGranularity,
@@ -21,9 +25,7 @@ from nanotron.config.utils_config import (
 )
 from nanotron.generation.sampler import SamplerType
 from nanotron.logging import get_logger
-from nanotron.parallel.pipeline_parallel.engine import (
-    PipelineEngine,
-)
+from nanotron.parallel.pipeline_parallel.engine import PipelineEngine
 from nanotron.parallel.tensor_parallel.nn import TensorParallelLinearMode
 
 logger = get_logger(__name__)
@@ -91,17 +93,20 @@ class PretrainDatasetsArgs:
             self.text_column_name = "text"
         if self.hf_dataset_splits is None:
             self.hf_dataset_splits = "train"
-            
+
 
 @dataclass
 class DatasetStages:
     """Arguments for loading dataset in different stages of the training process"""
+
     name: str
+    # NOTE: the starting step in the training process
     training_steps: int
     dataset: Optional[PretrainDatasetsArgs]
-    
-    # TODO(xrsrke): training stages should not have the same name
-    # not overlapse training steps, not negative
+
+    def __post_init__(self):
+        if self.training_steps < 0:
+            raise ValueError(f"training_steps should be a positive integer and not {self.training_steps}")
 
 
 @dataclass
@@ -116,6 +121,21 @@ class DataArgs:
     def __post_init__(self):
         if self.seed is None:
             self.seed = DEFAULT_SEED
+
+        if self.dataset is not None and self.dataset_stages is not None:
+            raise ValueError("dataset and dataset_stages should not be defined at the same time")
+
+        if self.dataset_stages is not None:
+            names = [stage.name for stage in self.dataset_stages]
+            training_steps = [stage.training_steps for stage in self.dataset_stages]
+            for stage in self.dataset_stages:
+                if names.count(stage.name) > 1:
+                    raise ValueError(f"Each stage should have unique names and not {names}")
+
+                if training_steps.count(stage.training_steps) > 1:
+                    raise ValueError(
+                        f"Each stage should have unique starting training step, please stage {stage.name}"
+                    )
 
 
 @dataclass
@@ -396,7 +416,7 @@ def get_config_from_file(
     skip_unused_config_keys: bool = False,
     skip_null_keys: bool = False,
 ) -> Config:
-    """Get a config objet from a file (python or YAML)
+    """Get a config object from a file (python or YAML)
 
     Args:
         config_path: path to the config file

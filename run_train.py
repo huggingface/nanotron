@@ -8,14 +8,12 @@ torchrun --nproc_per_node=8 run_train.py --config-file examples/config_tiny_llam
 ```
 """
 import argparse
-from typing import List, cast, Dict
+from typing import Dict, cast
 
 from torch.utils.data import DataLoader
 
 from nanotron import logging
-from nanotron.config import (
-    PretrainDatasetsArgs, DataArgs
-)
+from nanotron.config import DataArgs, PretrainDatasetsArgs
 from nanotron.dataloader import (
     clm_process,
     dummy_infinite_data_generator,
@@ -25,9 +23,7 @@ from nanotron.dataloader import (
 from nanotron.logging import log_rank
 from nanotron.parallel.pipeline_parallel.utils import get_input_output_pp_ranks
 from nanotron.trainer import DistributedTrainer
-from nanotron.utils import (
-    main_rank_first,
-)
+from nanotron.utils import main_rank_first
 
 try:
     from huggingface_hub import __version__ as hf_hub_version
@@ -213,12 +209,16 @@ def get_dataloader(trainer: DistributedTrainer, dataset: PretrainDatasetsArgs):
 def get_dataloader_for_training_stages(trainer: DistributedTrainer) -> Dict[str, DataLoader]:
     trainer.config.data = cast(DataArgs, trainer.config.data)
     if trainer.config.data.dataset_stages is None:
-        return {"default": get_dataloader(trainer)}
+        return {"default": get_dataloader(trainer, trainer.config.data.dataset)}
     else:
         sorted_stages = sorted(trainer.config.data.dataset_stages, key=lambda stage: stage.training_steps)
         dataloaders = {}
         for idx, stage in enumerate(sorted_stages):
-            dataloader = get_dataloader(trainer, stage.dataset) if idx == 0 else lambda stage=stage: get_dataloader(trainer, stage.dataset)
+            dataloader = (
+                get_dataloader(trainer, stage.dataset)
+                if idx == 0
+                else lambda stage=stage: get_dataloader(trainer, stage.dataset)
+            )
             dataloaders[stage.name] = dataloader
         return dataloaders
 

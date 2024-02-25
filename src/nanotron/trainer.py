@@ -256,26 +256,29 @@ class DistributedTrainer:
 
     def post_training(self):
         pass
-    
-    def _update_dataloader_based_on_training_progress(self, dataloaders: List[DataLoader]) -> DataLoader:
-        for stage in self.config.data.dataset_stages:
-            if stage.training_steps == self.iteration_step:
-                log_rank(
-                    f"Switching to a new dataloader from training stage {stage.name}",
-                    logger=logger,
-                    level=logging.INFO,
-                    rank=0,
-                )
-                
-                dataloader = dataloaders[stage.name]
-                dataloader = dataloader() if callable(dataloader) else dataloader
-                dataloader = sanity_check_dataloader(
-                    dataloader=dataloader, parallel_context=self.parallel_context, config=self.config
-                )
-                self.current_dataloader = dataloader
-        
-        if self.current_dataloader is None:
-            raise RuntimeError("No dataloader found! Please check your config")
+
+    def _update_dataloader_based_on_training_stages(self, dataloaders: List[DataLoader]) -> DataLoader:
+        dataloader = None
+        if self.config.data.dataset_stages is None:
+            dataloader = dataloaders["default"]
+        else:
+            for stage in self.config.data.dataset_stages:
+                if stage.training_steps == self.iteration_step:
+                    log_rank(
+                        f"[Training Stage: {stage.name}] Switching to a new dataset {stage.dataset.hf_dataset_or_datasets}",
+                        logger=logger,
+                        level=logging.INFO,
+                        rank=0,
+                    )
+
+                    dataloader = dataloaders[stage.name]
+                    dataloader = dataloader() if callable(dataloader) else dataloader
+                    break
+
+        if dataloader is not None:
+            self.current_dataloader = sanity_check_dataloader(
+                dataloader=dataloader, parallel_context=self.parallel_context, config=self.config
+            )
 
     def train(
         self,
@@ -286,19 +289,6 @@ class DistributedTrainer:
 
         if self.config.checkpoints.save_initial_state and self.init_checkpoint_path is None:
             self.save_checkpoint()
-
-        # if isinstance(dataloader_or_dls, tuple):
-        #     # dataloader_or_dls[1] if len(dataloader_or_dls) > 1 else None
-        #     # dataloader_or_dls[2] if len(dataloader_or_dls) > 2 else None
-        #     dataloader = dataloader_or_dls[0]
-        # else:
-        #     dataloader = dataloader_or_dls
-        
-        
-        # dataloader = sanity_check_dataloader(
-        #     dataloader=dataloader, parallel_context=self.parallel_context, config=self.config
-        # )
-        # self.current_dataloader = dataloader
 
         self.pipeline_engine: PipelineEngine = self.config.parallelism.pp_engine
         self.pipeline_engine.nb_microbatches = self.n_micro_batches_per_batch
@@ -322,11 +312,16 @@ class DistributedTrainer:
         torch.cuda.empty_cache()
         with prof:
             for self.iteration_step in range(self.start_iteration_step + 1, self.config.tokens.train_steps + 1):
-                self._update_dataloader_based_on_training_progress(dataloader_or_dls)
-                
+                # NOTE: the second condition is for if we have a single training stages
+                # and this is the first iteration step
+                if self.config.data.dataset_stages is not None or (
+                    self.config.data.dataset_stages is None and self.iteration_step == 1
+                ):
+                    self._update_dataloader_based_on_training_stages(dataloader_or_dls)
+
                 if isinstance(prof, torch.profiler.profile):
                     prof.step()
-                
+
                 self.iteration_start_time = time.time()
 
                 # Training step
@@ -508,7 +503,7 @@ class DistributedTrainer:
                     ]
                 )
 
-            if wandb is not None:
+            if wandb is not None and dist.get_rank(self.parallel_context.world_pg) == 0:
                 wandb.log(
                     {**{log_item.tag: log_item.scalar_value for log_item in log_entries}, "step": self.iteration_step}
                 )

@@ -5,13 +5,36 @@ checkpoints:
   resume_checkpoint_path: null
   save_initial_state: false
 data:
-  dataset:
-    dataset_overwrite_cache: false
-    dataset_processing_num_proc_per_process: 1
-    hf_dataset_config_name: null
-    hf_dataset_or_datasets: HuggingFaceH4/testing_alpaca_small
-    hf_dataset_splits: train
-    text_column_name: completion
+  # NOTE: if you wanna use a single dataset for the entire training
+  # dataset:
+  #   dataset_overwrite_cache: false
+  #   dataset_processing_num_proc_per_process: 1
+  #   hf_dataset_config_name: null
+  #   hf_dataset_or_datasets: HuggingFaceH4/testing_alpaca_small
+  #   hf_dataset_splits: train
+  #   text_column_name: completion
+
+  # NOTE: if you wanna use different datasets for different stages of the training
+  dataset_stages:
+    - name: Stable Training Stage
+      training_steps: 1
+      dataset:
+        dataset_overwrite_cache: false
+        dataset_processing_num_proc_per_process: 1
+        hf_dataset_config_name: null
+        hf_dataset_or_datasets: HuggingFaceH4/testing_alpaca_small
+        hf_dataset_splits: train
+        text_column_name: completion
+    - name: Annealing Phase
+      training_steps: 10
+      dataset:
+        dataset_overwrite_cache: false
+        dataset_processing_num_proc_per_process: 1
+        hf_dataset_config_name: null
+        hf_dataset_or_datasets: stas/c4-en-10k
+        hf_dataset_splits: train
+        text_column_name: text
+
   num_loading_workers: 1
   seed: 42
 general:
@@ -87,5 +110,5 @@ tokens:
   limit_val_batches: 0
   micro_batch_size: 2
   sequence_length: 32
-  train_steps: 10
+  train_steps: 20
   val_check_interval: -1
