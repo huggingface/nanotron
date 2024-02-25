@@ -144,11 +144,11 @@ def test_fp8adam_step(learning_rate, betas, eps, weight_decay):
     for _ in range(1):
         linear(input).sum().backward()
         optim.step()
-        # optim.zero_grad()
+        optim.zero_grad()
 
         fp8_linear(input).sum().backward()
         fp8_optim.step()
-        # fp8_optim.zero_grad()
+        fp8_optim.zero_grad()
 
     # NOTE: since optimizer update depends on the gradients
     # and in this test we only want to check whether fp8 optim step is correct
@@ -158,7 +158,7 @@ def test_fp8adam_step(learning_rate, betas, eps, weight_decay):
     # NOTE: this specific threshold is based on the FP8-LM implementation
     # the paper shows that it don't hurt convergence
     torch.testing.assert_allclose(weight_fp32, linear.weight, rtol=0, atol=3e-4)
-    # torch.testing.assert_allclose(fp8_linear.bias, linear.bias, rtol=0, atol=3e-4)
+    torch.testing.assert_allclose(fp8_linear.bias, linear.bias, rtol=0, atol=3e-4)
 
 
 def test_fp8adam_zero_grad():

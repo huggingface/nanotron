@@ -248,10 +248,15 @@ class FP8Adam(Optimizer):
                 if len(state) == 0:
                     self._init_optim_states(state, p, amsgrad)
 
-                grad = p.grad.data
+                grad = p.grad
                 # print(f"[FP8Adam] original grad: {grad[:2, :2]}")
+                if p.ndim != 1:
+                    fp16_grad = convert_tensor_from_fp8(grad, grad.fp8_meta, torch.float16)
+                else:
+                    fp16_grad = grad.to(torch.float16)
+
                 if grad.is_sparse:
-                    raise RuntimeError("Adam does not support sparse gradients, please consider SparseAdam instead")
+                    raise RuntimeError("FP8Adam does not support sparse gradients!")
 
                 if amsgrad:
                     max_exp_avg_sq = state["max_exp_avg_sq"]
@@ -265,8 +270,15 @@ class FP8Adam(Optimizer):
                 print(f"[FP8Adam] beta1: {beta1}, beta2: {beta2}")
                 print(f"[FP8Adam]: bias_correction1: {bias_correction1}, bias_correction2: {bias_correction2}")
 
+                # TODO(xrsrke): can we do all calculations in fp8?
+                # NOTE: somehow the view of bias changed, but the storage is the same
+                # so we can't do the mapping, so now we map data_ptr to data_ptr
+                # TODO(xrsrke): ideally, we should map tensor to tensor
+                # it's easier to debug (u know which tensor is which)
+                fp16_p = self.mappping_fp8_to_master_weight[p.data.data_ptr()]
+
                 if group["weight_decay"] != 0:
-                    grad = grad.add(group["weight_decay"], p.data)
+                    fp16_grad = fp16_grad.add(group["weight_decay"], fp16_p)
                     # print(f"[FP8Adam] grad after weight decay: {grad[:2, :2]} \n")
 
                 # Decay the first and second moment running average coefficient
@@ -306,21 +318,17 @@ class FP8Adam(Optimizer):
 
                 exp_avg.copy_(updated_exp_avg_fp8)
 
-                # TODO(xrsrke): can we do all calculations in fp8?
-                # NOTE: somehow the view of bias changed, but the storage is the same
-                # so we can't do the mapping, so now we map data_ptr to data_ptr
-                # TODO(xrsrke): ideally, we should map tensor to tensor
-                # it's easier to debug (u know which tensor is which)
-                p_master = self.mappping_fp8_to_master_weight[p.data.data_ptr()]
                 # p_fp32 = convert_tensor_from_fp16(p_master, p_master.fp8_meta, torch.float32)
                 # p_fp32 = convert_tensor_from_fp8(p.data, p.fp8_meta, torch.float32)
-                p_master.addcdiv_(-step_size, exp_avg_fp32, denom)
+                fp16_p.addcdiv_(-step_size, exp_avg_fp32, denom)
                 # print(f"[FP8Adam] updated p_fp32: {p_fp32[:2, :2]} \n")
 
                 if p.data.ndim != 1:
-                    p_fp32_meta = get_tensor_fp8_metadata(p_master, dtype=p.data.fp8_meta.dtype)
-                    updated_p_fp8 = convert_tensor_to_fp8(p_master, p_fp32_meta)
+                    p_fp32_meta = get_tensor_fp8_metadata(fp16_p, dtype=p.data.fp8_meta.dtype)
+                    updated_p_fp8 = convert_tensor_to_fp8(fp16_p, p_fp32_meta)
                     p.data.copy_(updated_p_fp8)
+                else:
+                    p.data.copy_(fp16_p)
 
                 # print(f"[FP8Adam] updated_p_fp8: updated_p_fp8.data={updated_p_fp8.data[:2, :2]}, p_fp32_meta={p_fp32_meta} \n")
 
