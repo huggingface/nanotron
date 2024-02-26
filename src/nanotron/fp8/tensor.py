@@ -56,6 +56,9 @@ class FP8Tensor(LowPrecisionTensor):
 
 
 class FP16Tensor(LowPrecisionTensor):
+
+    # TODO(xrsrke): remove specifying the dtype KFLOAT16
+    # in initialization
     # TODO(xrsrke): change the name to lp_meta = low_precision_meta
     @staticmethod
     def _quantize(tensor: torch.Tensor, fp8_meta: "FP8Meta") -> torch.Tensor:
@@ -98,6 +101,12 @@ def convert_tensor_from_fp8(tensor: torch.Tensor, meta, dtype: torch.dtype) -> t
     output_dtype = convert_torch_dtype_to_te_dtype(dtype)
 
     return tex.cast_from_fp8(tensor, meta.inverse_scale, tensor_dtype, output_dtype)
+
+
+def convert_tensor_from_fp16(tensor: FP16Tensor, dtype: torch.dtype) -> torch.Tensor:
+    assert isinstance(tensor, FP16Tensor)
+    assert isinstance(dtype, torch.dtype)
+    return (tensor * tensor.fp8_meta.inverse_scale).to(dtype)
 
 
 def update_scaling_factor(

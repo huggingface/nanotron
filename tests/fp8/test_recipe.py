@@ -1,4 +1,3 @@
-import torch
 from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.recipe import FP8LinearRecipe, FP8OptimRecipe, FP8TensorRecipe, FP8TrainingRecipe
 
@@ -13,9 +12,9 @@ def test_fp8_training_recipe():
             output_grad=FP8TensorRecipe(dtype=DTypes.FP8E5M2, margin=0, interval=1),
         ),
         optim=FP8OptimRecipe(
-            master_weight_dtype=torch.float16,
+            master_weight_dtype=DTypes.KFLOAT16,
             exp_avg_dtype=DTypes.FP8E4M3,
-            exp_avg_sq_dtype=torch.float16,
+            exp_avg_sq_dtype=DTypes.KFLOAT16,
         ),
     )
 
@@ -39,6 +38,6 @@ def test_fp8_training_recipe():
     assert recipe.linear.output_grad.margin == 0
     assert recipe.linear.output_grad.interval == 1
 
-    assert recipe.optim.master_weight_dtype == torch.float16
+    assert recipe.optim.master_weight_dtype == DTypes.KFLOAT16
     assert recipe.optim.exp_avg_dtype == DTypes.FP8E4M3
-    assert recipe.optim.exp_avg_sq_dtype == torch.float16
+    assert recipe.optim.exp_avg_sq_dtype == DTypes.KFLOAT16
