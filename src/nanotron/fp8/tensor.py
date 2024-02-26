@@ -1,8 +1,10 @@
+from __future__ import annotations
 from abc import abstractstaticmethod
 
 import torch
 import transformer_engine as te  # noqa
 import transformer_engine_extensions as tex
+
 
 from nanotron.fp8.constants import DTYPE_TO_FP8_MAX, FP8_DTYPES, INITIAL_SCALING_FACTOR
 from nanotron.fp8.dtypes import DTypes
