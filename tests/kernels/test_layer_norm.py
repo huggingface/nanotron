@@ -1,28 +1,10 @@
-# Copyright (c) 2020, NVIDIA CORPORATION.  All rights reserved.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-#
-# Modified by nanotron team.
-
 import pytest
 import torch
-from nanotron.nn.layer_norm import TritonLayerNorm
-
-# from helpers.utils import available_gpus
 from torch.nn import LayerNorm
 
+from nanotron.nn.layer_norm import TritonLayerNorm
 
-# @pytest.mark.skipif(available_gpus() < 1, reason="Testing test_fused_layer_norm requires at least 1 gpus")
+
 @pytest.mark.fa2
 @pytest.mark.parametrize(
     "hidden_size",
@@ -44,10 +26,13 @@ def test_fused_layer_norm(hidden_size):
     )
     outputs = fused_layer_norm(inputs)
 
-    assert torch.allclose(outputs, ref_outputs, rtol=1e-3, atol=1e-3)
+    # NOTE: with torch.float16, FA2's use a atol of 1e-2
+    # https://github.com/Dao-AILab/flash-attention/blob/87a1277653fc55cd615f5341255e00c69d5c00a1/tests/ops/triton/test_layer_norm.py#L63-L64
+    torch.testing.assert_close(outputs, ref_outputs, rtol=1e-3, atol=1e-2)
 
     outputs.sum().backward()
     ref_outputs.sum().backward()
 
-    assert torch.allclose(fused_layer_norm.weight.grad, layer_norm.weight.grad, rtol=1e-3)
-    assert torch.allclose(fused_layer_norm.bias.grad, layer_norm.bias.grad, rtol=1e-3)
+    # NOTE: same as above
+    torch.testing.assert_close(fused_layer_norm.weight.grad, layer_norm.weight.grad, rtol=1e-3, atol=1e-2)
+    torch.testing.assert_close(fused_layer_norm.bias.grad, layer_norm.bias.grad, rtol=1e-3, atol=1e-2)
