@@ -15,6 +15,7 @@ class FP8TensorRecipe:
 class FP8LinearRecipe:
     input: FP8TensorRecipe
     weight: FP8TensorRecipe
+    bias: FP8TensorRecipe
 
     # NOTE: for the gradients
     input_grad: FP8TensorRecipe

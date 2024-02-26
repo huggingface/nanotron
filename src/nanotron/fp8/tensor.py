@@ -1,10 +1,10 @@
 from __future__ import annotations
+
 from abc import abstractstaticmethod
 
 import torch
 import transformer_engine as te  # noqa
 import transformer_engine_extensions as tex
-
 
 from nanotron.fp8.constants import DTYPE_TO_FP8_MAX, FP8_DTYPES, INITIAL_SCALING_FACTOR
 from nanotron.fp8.dtypes import DTypes
@@ -103,6 +103,22 @@ def convert_tensor_from_fp8(tensor: torch.Tensor, meta, dtype: torch.dtype) -> t
     output_dtype = convert_torch_dtype_to_te_dtype(dtype)
 
     return tex.cast_from_fp8(tensor, meta.inverse_scale, tensor_dtype, output_dtype)
+
+
+# def convert_tensor_to_fp16(tensor: torch.Tensor) -> torch.Tensor:
+#     from nanotron.fp8.constants import INITIAL_SCALING_FACTOR
+#     from nanotron.fp8.meta import FP8Meta
+#     from nanotron.fp8.tensor import update_scaling_factor
+
+#     dtype = DTypes.KFLOAT16
+#     amax = tensor.abs().max().clone()
+#     scale = update_scaling_factor(amax, torch.tensor(INITIAL_SCALING_FACTOR, dtype=torch.float32), dtype)
+#     meta = FP8Meta(amax, scale, dtype)
+#     return (tensor * meta.scale).to(torch.float16), meta
+
+
+# def convert_tensor_from_fp16(tensor: torch.Tensor, meta: FP8Meta, dtype: torch.dtype) -> torch.Tensor:
+#     return (tensor * meta.inverse_scale).to(dtype)
 
 
 def convert_tensor_from_fp16(tensor: FP16Tensor, dtype: torch.dtype) -> torch.Tensor:

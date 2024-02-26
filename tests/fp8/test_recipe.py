@@ -7,6 +7,7 @@ def test_fp8_training_recipe():
         linear=FP8LinearRecipe(
             input=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=16),
             weight=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=16),
+            bias=FP8TensorRecipe(dtype=DTypes.KFLOAT16, margin=0, interval=16),
             input_grad=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=16),
             weight_grad=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=16),
             output_grad=FP8TensorRecipe(dtype=DTypes.FP8E5M2, margin=0, interval=1),
@@ -25,6 +26,10 @@ def test_fp8_training_recipe():
     assert recipe.linear.weight.dtype == DTypes.FP8E4M3
     assert recipe.linear.weight.margin == 0
     assert recipe.linear.weight.interval == 16
+
+    assert recipe.linear.bias.dtype == DTypes.KFLOAT16
+    assert recipe.linear.bias.margin == 0
+    assert recipe.linear.bias.interval == 16
 
     assert recipe.linear.input_grad.dtype == DTypes.FP8E4M3
     assert recipe.linear.input_grad.margin == 0

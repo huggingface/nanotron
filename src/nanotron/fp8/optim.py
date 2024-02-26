@@ -7,7 +7,6 @@ from torch.optim import Optimizer
 
 from nanotron.fp8.constants import FP8LM_RECIPE
 from nanotron.fp8.dtypes import DTypes
-from nanotron.fp8.meta import FP8Meta
 from nanotron.fp8.parameter import FP8Parameter
 from nanotron.fp8.tensor import FP8Tensor, FP16Tensor, convert_tensor_from_fp8, convert_tensor_to_fp8
 from nanotron.fp8.utils import get_tensor_fp8_metadata
@@ -225,7 +224,7 @@ class FP8Adam(Optimizer):
 
         # Exponential moving average of squared gradient values
         # TODO(xrsrke): don't fixed the dtype to fp16
-        exp_avg_sq = torch.zeros(p.data.shape, dtype=torch.float16, device="cuda")
+        exp_avg_sq = torch.zeros(p.data.shape, dtype=torch.float32, device="cuda")
         # if self.exp_avg_sq_dtype in FP8_DTYPES:
         #     exp_avg_sq = FP8Tensor(exp_avg_sq, dtype=self.exp_avg_dtype)
 
@@ -339,19 +338,3 @@ class FP8Adam(Optimizer):
                     continue
 
                 assert 1 == 1
-
-
-def convert_tensor_to_fp16(tensor: torch.Tensor) -> torch.Tensor:
-    from nanotron.fp8.constants import INITIAL_SCALING_FACTOR
-    from nanotron.fp8.meta import FP8Meta
-    from nanotron.fp8.tensor import update_scaling_factor
-
-    dtype = DTypes.KFLOAT16
-    amax = tensor.abs().max().clone()
-    scale = update_scaling_factor(amax, torch.tensor(INITIAL_SCALING_FACTOR, dtype=torch.float32), dtype)
-    meta = FP8Meta(amax, scale, dtype)
-    return (tensor * meta.scale).to(torch.float16), meta
-
-
-def convert_tensor_from_fp16(tensor: torch.Tensor, meta: FP8Meta, dtype: torch.dtype) -> torch.Tensor:
-    return (tensor * meta.inverse_scale).to(dtype)

@@ -1,10 +1,13 @@
 from copy import deepcopy
 
-import numpy as np
 import pytest
 import torch
 from nanotron.fp8.constants import FP8LM_RECIPE
-from nanotron.fp8.optim import FP8Adam, convert_tensor_from_fp16, convert_tensor_to_fp16
+from nanotron.fp8.optim import (
+    FP8Adam,
+)
+
+# convert_tensor_from_fp16, convert_tensor_to_fp16
 from nanotron.fp8.tensor import FP8Tensor, FP16Tensor, convert_tensor_from_fp8
 from torch import nn
 from torch.optim import Adam
@@ -60,7 +63,6 @@ def test_fp8adam_optimizer_states(learning_rate, betas, eps, weight_decay):
     input = torch.randn(16, 16, device="cuda")
     linear = nn.Linear(16, 16, device="cuda")
     fp8_linear = convert_linear_to_fp8(deepcopy(linear))
-    # fp8_linear = deepcopy(linear)
 
     optim = Adam(linear.parameters(), learning_rate, betas, eps, weight_decay)
     fp8_optim = FP8Adam(fp8_linear.parameters(), learning_rate, betas, eps, weight_decay)
@@ -197,24 +199,24 @@ def test_fp8adam_load_state_dict():
             torch.testing.assert_allclose(state_new[key], state_saved[key])
 
 
-@pytest.mark.parametrize("size", [4, 8, 16, 64])
-def test_quantize_and_dequantize_tensor_in_fp16(size):
-    tensor = torch.randn((size, size), dtype=torch.float32, device="cuda")
-    ref_tensor = deepcopy(tensor)
+# @pytest.mark.parametrize("size", [4, 8, 16, 64])
+# def test_quantize_and_dequantize_tensor_in_fp16(size):
+#     tensor = torch.randn((size, size), dtype=torch.float32, device="cuda")
+#     ref_tensor = deepcopy(tensor)
 
-    fp16_tensor, fp16_meta = convert_tensor_to_fp16(tensor)
+#     fp16_tensor, fp16_meta = convert_tensor_to_fp16(tensor)
 
-    assert isinstance(fp16_tensor, torch.Tensor)
-    assert fp16_tensor.device == ref_tensor.device
-    assert fp16_tensor.dtype == torch.float16
-    assert fp16_tensor.shape == ref_tensor.shape
-    assert fp16_tensor.numel() == ref_tensor.numel()
-    assert not np.array_equal(fp16_tensor.cpu().numpy(), ref_tensor.cpu().numpy())
+#     assert isinstance(fp16_tensor, torch.Tensor)
+#     assert fp16_tensor.device == ref_tensor.device
+#     assert fp16_tensor.dtype == torch.float16
+#     assert fp16_tensor.shape == ref_tensor.shape
+#     assert fp16_tensor.numel() == ref_tensor.numel()
+#     assert not np.array_equal(fp16_tensor.cpu().numpy(), ref_tensor.cpu().numpy())
 
-    tensor = convert_tensor_from_fp16(fp16_tensor, fp16_meta, torch.float32)
-    assert isinstance(tensor, torch.Tensor)
-    assert tensor.dtype == torch.float32
-    assert torch.allclose(tensor, ref_tensor, rtol=0, atol=1e-03)
+#     tensor = convert_tensor_from_fp16(fp16_tensor, fp16_meta, torch.float32)
+#     assert isinstance(tensor, torch.Tensor)
+#     assert tensor.dtype == torch.float32
+#     assert torch.allclose(tensor, ref_tensor, rtol=0, atol=1e-03)
 
 
 @pytest.mark.parametrize(
@@ -340,8 +342,8 @@ def test_fp8adam_step_with_correct_grad(learning_rate, betas, eps, weight_decay)
     #     fp8_optim.zero_grad()
 
     linear(input).sum().backward()
-    fp8_linear.weight.grad = deepcopy(linear.weight.grad)
-    fp8_linear.bias.grad = deepcopy(linear.bias.grad)
+    fp8_linear.weight.grad = FP8Tensor(linear.weight.grad, dtype=FP8LM_RECIPE.linear.weight_grad.dtype)
+    fp8_linear.bias.grad = deepcopy(linear.bias.grad, dtype=FP8LM_RECIPE.linear.input_grad.dtype)
 
     optim.step()
     fp8_optim.step()

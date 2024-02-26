@@ -23,6 +23,7 @@ FP8LM_RECIPE = FP8TrainingRecipe(
     linear=FP8LinearRecipe(
         input=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=16),
         weight=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=1),
+        bias=FP8TensorRecipe(dtype=DTypes.KFLOAT16, margin=0, interval=16),
         # NOTE: these are the dtypes for the gradients
         input_grad=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=16),
         weight_grad=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=1),

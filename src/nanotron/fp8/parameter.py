@@ -89,13 +89,3 @@ class FP8Parameter(nn.Parameter):
 
     def __repr__(self) -> str:
         return f"FP8Parameter({self.data}, fp8_meta={self.fp8_meta}, requires_grad={self.requires_grad}, fp8_grad_meta={self.fp8_grad_meta})"
-
-    # def __setattr__(self, name: str, value: Any):
-    #     if name == "grad":
-    #         # NOTE: bypass RuntimeError: assigned grad has data of a different type
-    #         # beca(use pytorch don't allow to assign an int grad to a tensor
-    #         # TODO(xrsrke): allow get fp8 gradients using param.grad instead of param.fp8_grad
-    #         # self.fp8_grad = value
-    #         self.data._grad = value
-    #     else:
-    #         return super().__setattr__(name, value)
