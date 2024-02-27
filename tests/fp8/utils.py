@@ -1,9 +1,10 @@
+from copy import deepcopy
 
+import torch
 import torch.nn as nn
 from nanotron.fp8.constants import FP8LM_RECIPE
 from nanotron.fp8.linear import FP8Linear
 from nanotron.fp8.parameter import FP8Parameter
-from nanotron.fp8.tensor import FP16Tensor
 
 
 def convert_linear_to_fp8(linear: nn.Linear) -> FP8Linear:
@@ -15,7 +16,9 @@ def convert_linear_to_fp8(linear: nn.Linear) -> FP8Linear:
     fp8_linear.weight = FP8Parameter(linear.weight.detach().clone(), FP8LM_RECIPE.linear.weight.dtype)
 
     if is_bias:
-        fp8_linear.bias.data = FP16Tensor(linear.bias.detach().clone(), FP8LM_RECIPE.linear.bias.dtype)
+        # fp8_linear.bias.data = FP16Tensor(linear.bias.detach().clone(), FP8LM_RECIPE.linear.bias.dtype)
+        fp8_linear.bias.orig_data = deepcopy(linear.bias.data)
+        fp8_linear.bias.data = deepcopy(linear.bias.data).to(torch.float16)
 
     return fp8_linear
 

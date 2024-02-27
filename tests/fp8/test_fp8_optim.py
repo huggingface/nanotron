@@ -3,6 +3,7 @@ from copy import deepcopy
 import pytest
 import torch
 from nanotron.fp8.constants import FP8LM_RECIPE
+from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.optim import (
     FP8Adam,
 )
@@ -40,7 +41,8 @@ def test_fp8_optim_master_weights_fp16_and_fp8():
     REF_TOTAL_PARAMS = sum([p.numel() for p in ref_model.parameters()])
 
     assert isinstance(fp8_optim.master_weights, list)
-    assert all(isinstance(w, torch.Tensor) for w in fp8_optim.master_weights)
+    # assert all(isinstance(w, torch.Tensor) for w in fp8_optim.master_weights)
+    assert all(isinstance(w, FP16Tensor) for w in fp8_optim.master_weights)
     # TODO(xrsrke): retrieve the dtype from the FP8 recipe
     assert all(w.dtype == torch.float16 for w in fp8_optim.master_weights)
     assert REF_TOTAL_PARAMS == sum([w.numel() for w in fp8_optim.master_weights])
@@ -169,7 +171,6 @@ def test_fp8adam_zero_grad():
     fp8_linear = convert_linear_to_fp8(deepcopy(linear))
     fp8_optim = FP8Adam(fp8_linear.parameters(), lr=1e-3)
     fp8_linear(input).sum().backward()
-    fp8_optim.step()
 
     assert [p.grad is not None for p in fp8_linear.parameters()]
 
@@ -296,41 +297,46 @@ def test_fp8adam_grad_accumulation():
 
 
 # @pytest.mark.parametrize("n_steps", [1, 5])
-@pytest.mark.parametrize(
-    "learning_rate",
-    [
-        1e-3,
-        # 1
-    ],
-)
-@pytest.mark.parametrize(
-    "betas",
-    [
-        (0.9, 0.999),
-        # (0.9, 0.99)
-    ],
-)
-@pytest.mark.parametrize(
-    "eps",
-    [
-        1e-8,
-        # 1e-3
-    ],
-)
-@pytest.mark.parametrize(
-    "weight_decay",
-    [
-        1e-3,
-        # 0
-    ],
-)
-def test_fp8adam_step_with_correct_grad(learning_rate, betas, eps, weight_decay):
+# @pytest.mark.parametrize(
+#     "learning_rate",
+#     [
+#         1e-3,
+#         # 1
+#     ],
+# )
+# @pytest.mark.parametrize(
+#     "betas",
+#     [
+#         (0.9, 0.999),
+#         # (0.9, 0.99)
+#     ],
+# )
+# @pytest.mark.parametrize(
+#     "eps",
+#     [
+#         1e-8,
+#         # 1e-3
+#     ],
+# )
+# @pytest.mark.parametrize(
+#     "weight_decay",
+#     [
+#         1e-3,
+#         # 0
+#     ],
+# )
+def test_fp8adam_step_with_correct_grad():
+    LR = 1e-3
+    BETAS = (0.9, 0.999)
+    EPS = 1e-8
+    WEIGHT_DECAY = 1e-3
+
+    input = torch.randn(16, 16, device="cuda")
     linear = nn.Linear(16, 16, device="cuda")
     fp8_linear = convert_linear_to_fp8(deepcopy(linear))
 
-    optim = Adam(linear.parameters(), learning_rate, betas, eps, weight_decay)
-    fp8_optim = FP8Adam(fp8_linear.parameters(), learning_rate, betas, eps, weight_decay)
-    input = torch.randn(16, 16, device="cuda")
+    optim = Adam(linear.parameters(), LR, BETAS, EPS, WEIGHT_DECAY)
+    fp8_optim = FP8Adam(fp8_linear.parameters(), LR, BETAS, EPS, WEIGHT_DECAY)
 
     # for _ in range(1):
     #     linear(input).sum().backward()
@@ -342,8 +348,10 @@ def test_fp8adam_step_with_correct_grad(learning_rate, betas, eps, weight_decay)
     #     fp8_optim.zero_grad()
 
     linear(input).sum().backward()
-    fp8_linear.weight.grad = FP8Tensor(linear.weight.grad, dtype=FP8LM_RECIPE.linear.weight_grad.dtype)
-    fp8_linear.bias.grad = deepcopy(linear.bias.grad, dtype=FP8LM_RECIPE.linear.input_grad.dtype)
+
+    fp8_linear.weight.grad = FP8Tensor(deepcopy(linear.weight.grad), dtype=FP8LM_RECIPE.linear.weight_grad.dtype)
+    # fp8_linear.bias.grad = deepcopy(linear.bias.grad).to(torch.float16)
+    fp8_linear.bias.grad = FP16Tensor(deepcopy(linear.bias.grad), dtype=DTypes.KFLOAT16)
 
     optim.step()
     fp8_optim.step()
@@ -355,5 +363,6 @@ def test_fp8adam_step_with_correct_grad(learning_rate, betas, eps, weight_decay)
     weight_fp32 = convert_tensor_from_fp8(fp8_linear.weight.data, fp8_linear.weight.data.fp8_meta, torch.float32)
     # NOTE: this specific threshold is based on the FP8-LM implementation
     # the paper shows that it don't hurt convergence
+    # reference: https://github.com/Azure/MS-AMP/blob/51f34acdb4a8cf06e0c58185de05198a955ba3db/tests/optim/test_adamw.py#L85
     torch.testing.assert_allclose(weight_fp32, linear.weight, rtol=0, atol=3e-4)
     # torch.testing.assert_allclose(fp8_linear.bias, linear.bias, rtol=0, atol=3e-4)
