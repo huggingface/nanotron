@@ -603,26 +603,6 @@ class MambaModel(nn.Module):
 
         return fp32_sharded_logits, hidden_states
 
-    #TODO(fmom): clean this
-    def _print_param_stat(self, param):
-        print(f"\tmin={param.min().item()}")
-        print(f"\tmean={param.mean().item()}")
-        print(f"\tmedian={param.median().item()}")
-        print(f"\tmax={param.max().item()}")
-    
-    
-    def _print_all_param_stats(self, msg):
-        print(msg)    
-        named_parameters = list(self.named_parameters())
-        named_parameters.sort(key=lambda x: x[0])
-        for name, param in named_parameters:
-            print(name)
-            print(f"\tmin={param.min().item()}")
-            print(f"\tmean={param.mean().item()}")
-            print(f"\tmedian={param.median().item()}")
-            print(f"\tmax={param.max().item()}")
-        print("================")
-
 
     def get_block_compute_costs(self):
         """Computes the compute cost of each block in the model so that we can do a better job of load balancing."""
