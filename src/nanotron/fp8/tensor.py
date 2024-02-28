@@ -122,9 +122,15 @@ def convert_tensor_from_fp8(tensor: torch.Tensor, meta, dtype: torch.dtype) -> t
 
 
 def convert_tensor_from_fp16(tensor: FP16Tensor, dtype: torch.dtype) -> torch.Tensor:
-    assert isinstance(tensor, FP16Tensor)
+    # assert isinstance(tensor, FP16Tensor)
     assert isinstance(dtype, torch.dtype)
     return (tensor * tensor.fp8_meta.inverse_scale).to(dtype)
+
+
+def _convert_tensor_from_fp16(tensor: FP16Tensor, fp8_meta, dtype: torch.dtype) -> torch.Tensor:
+    # assert isinstance(tensor, FP16Tensor)
+    assert isinstance(dtype, torch.dtype)
+    return (tensor * fp8_meta.inverse_scale).to(dtype)
 
 
 def update_scaling_factor(

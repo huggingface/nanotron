@@ -1,8 +1,8 @@
 ------------------[REF optim]----------------------
 
 
-[Ref Adam] original grad: tensor([[-1.0216, -0.4360],
-        [-1.0216, -0.4360]], device='cuda:0')
+[Ref Adam] original grad: tensor([[-1.2152, -7.5961],
+        [-1.2152, -7.5961]], device='cuda:0')
 
 [Ref Adam] original exp_avg: exp_avg.data=tensor([[0., 0.],
         [0., 0.]], device='cuda:0'), exp_avg.dtype=torch.float32
@@ -12,17 +12,17 @@
 
 [Ref Adam] beta1: 0.9, beta2: 0.999
 [Ref Adam]: bias_correction1: 0.09999999999999998, bias_correction2: 0.0010000000000000009
-[Ref Adam] grad after weight decay: tensor([[-1.0217, -0.4361],
-        [-1.0218, -0.4360]], device='cuda:0')
+[Ref Adam] grad after weight decay: tensor([[-1.2155, -7.5961],
+        [-1.2152, -7.5959]], device='cuda:0')
 
-[Ref Adam] after mul and add: exp_avg: tensor([[-0.1022, -0.0436],
-        [-0.1022, -0.0436]], device='cuda:0')
+[Ref Adam] after mul and add: exp_avg: tensor([[-0.1215, -0.7596],
+        [-0.1215, -0.7596]], device='cuda:0')
 
-[Ref Adam] after mul and add: exp_avg_sq: tensor([[0.0010, 0.0002],
-        [0.0010, 0.0002]], device='cuda:0')
+[Ref Adam] after mul and add: exp_avg_sq: tensor([[0.0015, 0.0577],
+        [0.0015, 0.0577]], device='cuda:0')
 
-[Ref Adam] exp_avg_sq.sqrt(): tensor([[0.0323, 0.0138],
-        [0.0323, 0.0138]], device='cuda:0')
+[Ref Adam] exp_avg_sq.sqrt(): tensor([[0.0384, 0.2402],
+        [0.0384, 0.2402]], device='cuda:0')
 
 [Ref Adam] math.sqrt(bias_correction2)): 0.031622776601683805
 
@@ -30,32 +30,35 @@
 
 [Ref Adam] step_size: 0.010000000000000002
 
-[Ref Adam] exp_avg: tensor([[-0.1022, -0.0436],
-        [-0.1022, -0.0436]], device='cuda:0')
+[Ref Adam] exp_avg: tensor([[-0.1215, -0.7596],
+        [-0.1215, -0.7596]], device='cuda:0')
 
-[Ref Adam] denom: tensor([[1.0217, 0.4361],
-        [1.0218, 0.4360]], device='cuda:0')
+[Ref Adam] denom: tensor([[1.2155, 7.5961],
+        [1.2152, 7.5959]], device='cuda:0')
 
-[Ref Adam] updated p: tensor([[-0.1271, -0.0929],
-        [-0.2087, -0.0623]], device='cuda:0')
+[Ref Adam] updated p: tensor([[-0.2207, -0.0300],
+        [ 0.0917,  0.1757]], device='cuda:0')
 
 ------------------[FP8 optim]----------------------
 
 
-[FP8Adam] original grad: FP8Tensor([[224, 214],
-           [224, 214]], device='cuda:0', dtype=torch.uint8)
+[FP8Adam] original grad: FP8Tensor([[226, 247],
+           [226, 247]], device='cuda:0', dtype=torch.uint8)
+
+[FP8Adam] fp32_grad: tensor([[-1.2500, -7.5000],
+        [-1.2500, -7.5000]], device='cuda:0')
 
 [FP8Adam] beta1: 0.9, beta2: 0.999
 [FP8Adam]: bias_correction1: 0.09999999999999998, bias_correction2: 0.0010000000000000009
-[FP8Adam] fp16_p: FP16Tensor([[-33600., -24624.],
-            [-54976., -16608.]], device='cuda:0', dtype=torch.float16)
+[FP8Adam] fp16_p: FP16Tensor([[-58112.,  -8116.],
+            [ 23776.,  45792.]], device='cuda:0', dtype=torch.float16)
 
-[FP8Adam] fp32_p: FP16Tensor([[-0.1282, -0.0939],
-            [-0.2097, -0.0634]], device='cuda:0')
+[FP8Adam] fp32_p: FP16Tensor([[-0.2217, -0.0310],
+            [ 0.0907,  0.1747]], device='cuda:0')
 
 FP8Adam] group['weight_decay']: 0.001
-[FP8Adam] grad after weight decay: FP16Tensor([[-1.0001, -0.4376],
-            [-1.0002, -0.4376]], device='cuda:0')
+[FP8Adam] grad after weight decay: FP16Tensor([[-1.2502, -7.5000],
+            [-1.2499, -7.4998]], device='cuda:0')
 
 [FP8Adam] original fp8 exp_avg: exp_avg.data=FP8Tensor([[0, 0],
            [0, 0]], device='cuda:0', dtype=torch.uint8), exp_avg.fp8_meta=FP8Meta(amax=0.0, scale=1.0, inverse_scale=1.0, dtype=DTypes.FP8E4M3)
@@ -69,45 +72,39 @@ FP8Adam] group['weight_decay']: 0.001
 [FP8Adam] fp32_exp_avg_sq: FP16Tensor([[0., 0.],
             [0., 0.]], device='cuda:0')
 
-[FP8Adam] after mul and add: fp32_exp_avg: tensor([[-0.1000, -0.0438],
-        [-0.1000, -0.0438]], device='cuda:0')
+[FP8Adam] after mul and add: fp32_exp_avg: tensor([[-0.1250, -0.7500],
+        [-0.1250, -0.7500]], device='cuda:0')
 
-[FP8Adam] after mul and add: fp32_exp_avg_sq: FP16Tensor([[0.0010, 0.0002],
-            [0.0010, 0.0002]], device='cuda:0')
+[FP8Adam] after mul and add: fp32_exp_avg_sq: FP16Tensor([[0.0016, 0.0563],
+            [0.0016, 0.0562]], device='cuda:0')
 
-[FP8Adam] fp32_exp_avg_sq.sqrt(): FP16Tensor([[0.0316, 0.0138],
-            [0.0316, 0.0138]], device='cuda:0')
+[FP8Adam] fp32_exp_avg_sq.sqrt(): FP16Tensor([[0.0395, 0.2372],
+            [0.0395, 0.2372]], device='cuda:0')
 
 [FP8Adam] math.sqrt(bias_correction2)): 0.031622776601683805
 
 [FP8Adam] group['eps']: 1e-08
 
-[FP8Adam] denom: FP16Tensor([[1.0001, 0.4376],
-            [1.0002, 0.4376]], device='cuda:0')
+[FP8Adam] denom: FP16Tensor([[1.2502, 7.5000],
+            [1.2499, 7.4998]], device='cuda:0')
 
 [FP8Adam] group['lr']: 0.001
 
 [FP8Adam] step_size: 0.010000000000000002
 
-[FP8Adam] updated_exp_avg_fp8: updated_exp_avg_fp8.data=tensor([[221, 211],
-        [221, 211]], device='cuda:0', dtype=torch.uint8), exp_avg_fp32_meta=FP8Meta(amax=1.3000240325927734, scale=256.0, inverse_scale=0.00390625, dtype=DTypes.FP8E4M3)
+[FP8Adam] updated_exp_avg_fp8: updated_exp_avg_fp8.data=tensor([[224, 244],
+        [224, 244]], device='cuda:0', dtype=torch.uint8), exp_avg_fp32_meta=FP8Meta(amax=1.0000184774398804, scale=256.0, inverse_scale=0.00390625, dtype=DTypes.FP8E4M3)
 
-[FP8Adam] updated p_fp32: FP16Tensor([[-0.1272, -0.0929],
-            [-0.2087, -0.0624]], device='cuda:0')
+[FP8Adam] updated p_fp32: FP16Tensor([[-0.2207, -0.0300],
+            [ 0.0917,  0.1757]], device='cuda:0')
 
-[FP8Adam] updated_p_fp8: updated_p_fp8.data=tensor([[240, 236],
-        [245, 232]], device='cuda:0', dtype=torch.uint8), p_fp32_meta=FP8Meta(amax=FP16Tensor(0.2500, device='cuda:0'), scale=1024.0, inverse_scale=0.0009765625, dtype=DTypes.FP8E4M3)
+[FP8Adam] updated_p_fp8: updated_p_fp8.data=tensor([[246, 223],
+        [108, 115]], device='cuda:0', dtype=torch.uint8), p_fp32_meta=FP8Meta(amax=FP16Tensor(0.2500, device='cuda:0'), scale=1024.0, inverse_scale=0.0009765625, dtype=DTypes.FP8E4M3)
 
 ------------------[Evaluation]----------------------
 
 
-[FP8] fp8_linear.weight.data: FP8Tensor([[240, 236],
-           [245, 232]], device='cuda:0', dtype=torch.uint8)
+[FP8] fp8_linear.weight.data: FP8Tensor([[246, 223],
+           [108, 115]], device='cuda:0', dtype=torch.uint8)
 
-[FP8] fp8_linear.weight.data.fp8_meta: FP8Meta(amax=0.24901214241981506, scale=1024.0, inverse_scale=0.0009765625, dtype=DTypes.FP8E4M3)
-
-[FP8] weight_fp32.weight: tensor([[-0.1250, -0.0938],
-        [-0.2031, -0.0625]], device='cuda:0')
-
-[FP32] linear.weight: tensor([[-0.1271, -0.0929],
-        [-0.2087, -0.0623]], device='cuda:0', grad_fn=<SliceBackward0>)
+[FP8] fp8_linear.weight.data.fp8_meta: FP8Meta(amax=0.2493383139371872, scale=1024.0, inverse_scale=0.0009765625, dtype=DTypes.FP8E4M3)

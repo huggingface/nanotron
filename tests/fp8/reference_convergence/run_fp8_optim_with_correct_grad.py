@@ -11,9 +11,7 @@ from nanotron.fp8.optim import (
     FP8Adam,
 )
 from nanotron.fp8.parameter import FP8Parameter
-
-# convert_tensor_from_fp16, convert_tensor_to_fp16
-from nanotron.fp8.tensor import FP8Tensor, FP16Tensor, convert_tensor_from_fp8
+from nanotron.fp8.tensor import FP8Tensor, FP16Tensor, convert_tensor_from_fp8, convert_tensor_from_fp16
 from torch import nn
 
 
@@ -49,16 +47,16 @@ if __name__ == "__main__":
     # for _ in range(1):
     #     linear(input).sum().backward()
     #     optim.step()
-    #     optim.zero_grad()
+    #     # optim.zero_grad()
 
     #     fp8_linear(input).sum().backward()
     #     fp8_optim.step()
-    #     fp8_optim.zero_grad()
+    #     # fp8_optim.zero_grad()
 
     linear(input).sum().backward()
 
     fp8_linear.weight.grad = FP8Tensor(deepcopy(linear.weight.grad), dtype=FP8LM_RECIPE.linear.weight_grad.dtype)
-    # fp8_linear.bias.grad = deepcopy(linear.bias.grad).to(torch.float16)
+    # # fp8_linear.bias.grad = deepcopy(linear.bias.grad).to(torch.float16)
     fp8_linear.bias.grad = FP16Tensor(deepcopy(linear.bias.grad), dtype=DTypes.KFLOAT16)
 
     print("------------------[REF optim]---------------------- \n \n")
@@ -77,6 +75,7 @@ if __name__ == "__main__":
     print(f"[FP8] fp8_linear.weight.data.fp8_meta: {fp8_linear.weight.data.fp8_meta} \n")
 
     weight_fp32 = convert_tensor_from_fp8(fp8_linear.weight.data, fp8_linear.weight.data.fp8_meta, torch.float32)
+    bias_fp32 = convert_tensor_from_fp16(fp8_linear.bias, torch.float32)
     # NOTE: this specific threshold is based on the FP8-LM implementation
     # the paper shows that it don't hurt convergence
     # reference: https://github.com/Azure/MS-AMP/blob/51f34acdb4a8cf06e0c58185de05198a955ba3db/tests/optim/test_adamw.py#L85
@@ -84,5 +83,8 @@ if __name__ == "__main__":
     print(f"[FP8] weight_fp32.weight: {weight_fp32[:2, :2]} \n")
     print(f"[FP32] linear.weight: {linear.weight[:2, :2]} \n")
 
+    torch.testing.assert_close(bias_fp32, linear.bias, rtol=0, atol=3e-4)
+
     torch.testing.assert_close(fp8_optim.fp32_p.data[:], linear.weight[:], rtol=0, atol=3e-4)
-    torch.testing.assert_allclose(weight_fp32, linear.weight, rtol=0, atol=3e-4)
+    torch.testing.assert_close(weight_fp32, linear.weight, rtol=0.1, atol=0.1)
+    torch.testing.assert_close(weight_fp32, linear.weight, rtol=0, atol=3e-4)

@@ -72,7 +72,8 @@ class Adam(Optimizer):
                     continue
                 grad = p.grad.data
 
-                print(f"[Ref Adam] original grad: {grad[:2, :2]} \n")
+                if p.ndim != 1:
+                    print(f"[Ref Adam] original grad: {grad[:2, :2]} \n")
 
                 if grad.is_sparse:
                     raise RuntimeError("Adam does not support sparse gradients, please consider SparseAdam instead")
@@ -96,29 +97,34 @@ class Adam(Optimizer):
                     max_exp_avg_sq = state["max_exp_avg_sq"]
                 beta1, beta2 = group["betas"]
 
-                print(
-                    f"[Ref Adam] original exp_avg: exp_avg.data={exp_avg.data[:2, :2]}, exp_avg.dtype={exp_avg.dtype} \n"
-                )
-                print(
-                    f"[Ref Adam] original exp_avg_sq: exp_avg_sq.data={exp_avg_sq.data[:2, :2]}, exp_avg_sq.dtype={exp_avg_sq.dtype} \n"
-                )
-                print(f"[Ref Adam] beta1: {beta1}, beta2: {beta2}")
+                if p.ndim != 1:
+                    print(
+                        f"[Ref Adam] original exp_avg: exp_avg.data={exp_avg.data[:2, :2]}, exp_avg.dtype={exp_avg.dtype} \n"
+                    )
+                    print(
+                        f"[Ref Adam] original exp_avg_sq: exp_avg_sq.data={exp_avg_sq.data[:2, :2]}, exp_avg_sq.dtype={exp_avg_sq.dtype} \n"
+                    )
+                    print(f"[Ref Adam] beta1: {beta1}, beta2: {beta2}")
 
                 state["step"] += 1
                 bias_correction1 = 1 - beta1 ** state["step"]
                 bias_correction2 = 1 - beta2 ** state["step"]
-                print(f"[Ref Adam]: bias_correction1: {bias_correction1}, bias_correction2: {bias_correction2}")
+
+                if p.ndim != 1:
+                    print(f"[Ref Adam]: bias_correction1: {bias_correction1}, bias_correction2: {bias_correction2}")
 
                 if group["weight_decay"] != 0:
                     grad = grad.add(group["weight_decay"], p.data)
-                    print(f"[Ref Adam] grad after weight decay: {grad[:2, :2]} \n")
+                    if p.ndim != 1:
+                        print(f"[Ref Adam] grad after weight decay: {grad[:2, :2]} \n")
 
                 # Decay the first and second moment running average coefficient
                 exp_avg.mul_(beta1).add_(1 - beta1, grad)
                 exp_avg_sq.mul_(beta2).addcmul_(1 - beta2, grad, grad)
 
-                print(f"[Ref Adam] after mul and add: exp_avg: {exp_avg[:2, :2]} \n")
-                print(f"[Ref Adam] after mul and add: exp_avg_sq: {exp_avg_sq[:2, :2]} \n")
+                if p.ndim != 1:
+                    print(f"[Ref Adam] after mul and add: exp_avg: {exp_avg[:2, :2]} \n")
+                    print(f"[Ref Adam] after mul and add: exp_avg_sq: {exp_avg_sq[:2, :2]} \n")
 
                 if amsgrad:
                     # Maintains the maximum of all 2nd moment running avg. till now
@@ -127,21 +133,26 @@ class Adam(Optimizer):
                     denom = (max_exp_avg_sq.sqrt() / math.sqrt(bias_correction2)).add_(group["eps"])
                 else:
                     denom = (exp_avg_sq.sqrt() / math.sqrt(bias_correction2)).add_(group["eps"])
-                    print(f"[Ref Adam] exp_avg_sq.sqrt(): {exp_avg_sq.sqrt()[:2, :2]} \n")
-                    print(f"[Ref Adam] math.sqrt(bias_correction2)): {math.sqrt(bias_correction2)} \n")
-                    print(f"[Ref Adam] group['eps']: {group['eps']} \n")
+
+                    if p.ndim != 1:
+                        print(f"[Ref Adam] exp_avg_sq.sqrt(): {exp_avg_sq.sqrt()[:2, :2]} \n")
+                        print(f"[Ref Adam] math.sqrt(bias_correction2)): {math.sqrt(bias_correction2)} \n")
+                        print(f"[Ref Adam] group['eps']: {group['eps']} \n")
 
                 step_size = group["lr"] / bias_correction1
-                print(f"[Ref Adam] step_size: {step_size} \n")
-                print(f"[Ref Adam] exp_avg: {exp_avg[:2, :2]} \n")
-                print(f"[Ref Adam] denom: {denom[:2, :2]} \n")
+
+                if p.ndim != 1:
+                    print(f"[Ref Adam] step_size: {step_size} \n")
+                    print(f"[Ref Adam] exp_avg: {exp_avg[:2, :2]} \n")
+                    print(f"[Ref Adam] denom: {denom[:2, :2]} \n")
 
                 p.data.addcdiv_(-step_size, exp_avg, denom)
 
-                print(f"[Ref Adam] updated p: {p.data[:2, :2]} \n")
+                if p.ndim != 1:
+                    print(f"[Ref Adam] updated p: {p.data[:2, :2]} \n")
 
-                break
-            break
+            #     break
+            # break
 
         return loss
 
@@ -205,9 +216,9 @@ class FP8Adam(Optimizer):
                 # else:
                 fp16_p = FP16Tensor(raw_data, dtype=DTypes.KFLOAT16)
 
+                self.mappping_fp8_to_master_weight[p.data_ptr()] = fp16_p
                 self.master_weights.append(fp16_p)
                 self.fp8_weights.append(p.data)
-                self.mappping_fp8_to_master_weight[p.data.data_ptr()] = fp16_p
 
                 # NOTE: cast the original weights to FP8
                 # this is where we do FP8 GEMM
@@ -265,7 +276,8 @@ class FP8Adam(Optimizer):
                 assert isinstance(p, FP8Parameter) or isinstance(p, torch.Tensor)
                 assert isinstance(grad, FP8Tensor) or isinstance(grad, FP16Tensor)
 
-                print(f"[FP8Adam] original grad: {grad[:2, :2]} \n")
+                if p.ndim != 1:
+                    print(f"[FP8Adam] original grad: {grad[:2, :2]} \n")
 
                 if p.ndim != 1:
                     # fp16_grad = convert_tensor_from_fp8(grad, grad.fp8_meta, torch.float16)
@@ -273,6 +285,9 @@ class FP8Adam(Optimizer):
                 else:
                     # fp16_grad = grad
                     fp32_grad = convert_tensor_from_fp16(grad, torch.float32)
+
+                if p.ndim != 1:
+                    print(f"[FP8Adam] fp32_grad: {fp32_grad[:2, :2]} \n")
 
                 if grad.is_sparse:
                     raise RuntimeError("FP8Adam does not support sparse gradients!")
@@ -286,40 +301,44 @@ class FP8Adam(Optimizer):
                 bias_correction1 = 1 - beta1 ** state["step"]
                 bias_correction2 = 1 - beta2 ** state["step"]
 
-                print(f"[FP8Adam] beta1: {beta1}, beta2: {beta2}")
-                print(f"[FP8Adam]: bias_correction1: {bias_correction1}, bias_correction2: {bias_correction2}")
+                if p.ndim != 1:
+                    print(f"[FP8Adam] beta1: {beta1}, beta2: {beta2}")
+                    print(f"[FP8Adam]: bias_correction1: {bias_correction1}, bias_correction2: {bias_correction2}")
 
                 # TODO(xrsrke): can we do all calculations in fp8?
                 # NOTE: somehow the view of bias changed, but the storage is the same
                 # so we can't do the mapping, so now we map data_ptr to data_ptr
                 # TODO(xrsrke): ideally, we should map tensor to tensor
                 # it's easier to debug (u know which tensor is which)
-                fp16_p = self.mappping_fp8_to_master_weight[p.data.data_ptr()]
+                fp16_p = self.mappping_fp8_to_master_weight[p.data_ptr()]
                 assert fp16_p.dtype == torch.float16
                 fp32_p = convert_tensor_from_fp16(fp16_p, torch.float32)
 
                 assert fp32_p.dtype == torch.float32
                 assert fp32_grad.dtype == torch.float32
 
-                print(f"[FP8Adam] fp16_p: {fp16_p[:2, :2]} \n")
-                print(f"[FP8Adam] fp32_p: {fp32_p[:2, :2]} \n")
+                if p.ndim != 1:
+                    print(f"[FP8Adam] fp16_p: {fp16_p[:2, :2]} \n")
+                    print(f"[FP8Adam] fp32_p: {fp32_p[:2, :2]} \n")
 
                 if group["weight_decay"] != 0:
                     fp32_grad = fp32_grad.add(group["weight_decay"], fp32_p)
-                    print(f"FP8Adam] group['weight_decay']: {group['weight_decay']}")
-                    print(f"[FP8Adam] grad after weight decay: {fp32_grad[:2, :2]} \n")
+                    if p.ndim != 1:
+                        print(f"FP8Adam] group['weight_decay']: {group['weight_decay']}")
+                        print(f"[FP8Adam] grad after weight decay: {fp32_grad[:2, :2]} \n")
 
                 # Decay the first and second moment running average coefficient
                 exp_avg, exp_avg_sq = state["exp_avg"], state["exp_avg_sq"]
                 assert exp_avg.dtype == torch.uint8
                 assert exp_avg_sq.dtype == torch.float16
 
-                print(
-                    f"[FP8Adam] original fp8 exp_avg: exp_avg.data={exp_avg.data[:2, :2]}, exp_avg.fp8_meta={exp_avg.fp8_meta} \n"
-                )
-                print(
-                    f"[FP8Adam] original fp16 exp_avg_sq: exp_avg_sq.data={exp_avg_sq.data[:2, :2]}, exp_avg_sq.dtype={exp_avg_sq.dtype} \n"
-                )
+                if p.ndim != 1:
+                    print(
+                        f"[FP8Adam] original fp8 exp_avg: exp_avg.data={exp_avg.data[:2, :2]}, exp_avg.fp8_meta={exp_avg.fp8_meta} \n"
+                    )
+                    print(
+                        f"[FP8Adam] original fp16 exp_avg_sq: exp_avg_sq.data={exp_avg_sq.data[:2, :2]}, exp_avg_sq.dtype={exp_avg_sq.dtype} \n"
+                    )
 
                 # TODO(xrsrke): can we do all calculations in fp8?
                 # fp16_exp_avg = convert_tensor_from_fp8(exp_avg, exp_avg.fp8_meta, torch.float16)
@@ -329,8 +348,9 @@ class FP8Adam(Optimizer):
                 assert fp32_exp_avg.dtype == torch.float32
                 assert fp32_exp_avg_sq.dtype == torch.float32
 
-                print(f"[FP8Adam] fp32_exp_avg: {fp32_exp_avg[:2, :2]} \n")
-                print(f"[FP8Adam] fp32_exp_avg_sq: {fp32_exp_avg_sq[:2, :2]} \n")
+                if p.ndim != 1:
+                    print(f"[FP8Adam] fp32_exp_avg: {fp32_exp_avg[:2, :2]} \n")
+                    print(f"[FP8Adam] fp32_exp_avg_sq: {fp32_exp_avg_sq[:2, :2]} \n")
 
                 # fp32_exp_avg.mul_(beta1).add_(1 - beta1, grad)
                 # fp32_exp_avg_sq.mul_(beta2).addcmul_(1 - beta2, grad, grad)
@@ -338,8 +358,9 @@ class FP8Adam(Optimizer):
                 fp32_exp_avg.mul_(beta1).add_(1 - beta1, fp32_grad)
                 fp32_exp_avg_sq.mul_(beta2).addcmul_(1 - beta2, fp32_grad, fp32_grad)
 
-                print(f"[FP8Adam] after mul and add: fp32_exp_avg: {fp32_exp_avg[:2, :2]} \n")
-                print(f"[FP8Adam] after mul and add: fp32_exp_avg_sq: {fp32_exp_avg_sq[:2, :2]} \n")
+                if p.ndim != 1:
+                    print(f"[FP8Adam] after mul and add: fp32_exp_avg: {fp32_exp_avg[:2, :2]} \n")
+                    print(f"[FP8Adam] after mul and add: fp32_exp_avg_sq: {fp32_exp_avg_sq[:2, :2]} \n")
 
                 if amsgrad:
                     # Maintains the maximum of all 2nd moment running avg. till now
@@ -348,17 +369,21 @@ class FP8Adam(Optimizer):
                     # Use the max. for normalizing running avg. of gradient
                     denom = (max_exp_avg_sq.sqrt() / math.sqrt(bias_correction2)).add_(group["eps"])
                 else:
-                    print(f"[FP8Adam] fp32_exp_avg_sq.sqrt(): {fp32_exp_avg_sq.sqrt()[:2, :2]} \n")
-                    print(f"[FP8Adam] math.sqrt(bias_correction2)): {math.sqrt(bias_correction2)} \n")
-                    print(f"[FP8Adam] group['eps']: {group['eps']} \n")
+                    if p.ndim != 1:
+                        print(f"[FP8Adam] fp32_exp_avg_sq.sqrt(): {fp32_exp_avg_sq.sqrt()[:2, :2]} \n")
+                        print(f"[FP8Adam] math.sqrt(bias_correction2)): {math.sqrt(bias_correction2)} \n")
+                        print(f"[FP8Adam] group['eps']: {group['eps']} \n")
 
                     denom = (fp32_exp_avg_sq.sqrt() / math.sqrt(bias_correction2)).add_(group["eps"])
 
-                    print(f"[FP8Adam] denom: {denom[:2, :2]} \n")
+                    if p.ndim != 1:
+                        print(f"[FP8Adam] denom: {denom[:2, :2]} \n")
 
                 step_size = group["lr"] / bias_correction1
-                print(f"[FP8Adam] group['lr']: {group['lr']} \n")
-                print(f"[FP8Adam] step_size: {step_size} \n")
+
+                if p.ndim != 1:
+                    print(f"[FP8Adam] group['lr']: {group['lr']} \n")
+                    print(f"[FP8Adam] step_size: {step_size} \n")
 
                 # TODO(xrsrke): update optimizer states asyncronously
                 # in a separate cuda streams
@@ -367,16 +392,18 @@ class FP8Adam(Optimizer):
                 exp_avg_fp32_meta = get_tensor_fp8_metadata(fp32_exp_avg, exp_avg.fp8_meta.dtype)
                 updated_exp_avg_fp8 = convert_tensor_to_fp8(fp32_exp_avg, exp_avg_fp32_meta)
 
-                print(
-                    f"[FP8Adam] updated_exp_avg_fp8: updated_exp_avg_fp8.data={updated_exp_avg_fp8.data[:2, :2]}, exp_avg_fp32_meta={exp_avg_fp32_meta} \n"
-                )
+                if p.ndim != 1:
+                    print(
+                        f"[FP8Adam] updated_exp_avg_fp8: updated_exp_avg_fp8.data={updated_exp_avg_fp8.data[:2, :2]}, exp_avg_fp32_meta={exp_avg_fp32_meta} \n"
+                    )
 
                 # exp_avg.copy_(updated_exp_avg_fp8)
                 # fp16_p.addcdiv_(-step_size, fp16_exp_avg, denom)
 
                 fp32_p.addcdiv_(-step_size, fp32_exp_avg, denom)
 
-                print(f"[FP8Adam] updated p_fp32: {fp32_p[:2, :2]} \n")
+                if p.ndim != 1:
+                    print(f"[FP8Adam] updated p_fp32: {fp32_p[:2, :2]} \n")
 
                 # NOTE: store back fp8
                 exp_avg.copy_(updated_exp_avg_fp8)
@@ -390,20 +417,24 @@ class FP8Adam(Optimizer):
                     updated_p_fp8 = convert_tensor_to_fp8(fp32_p, p_fp32_meta)
                     p.data.copy_(updated_p_fp8)
 
-                    print(
-                        f"[FP8Adam] updated_p_fp8: updated_p_fp8.data={updated_p_fp8.data[:2, :2]}, p_fp32_meta={p_fp32_meta} \n"
-                    )
+                    if p.ndim != 1:
+                        print(
+                            f"[FP8Adam] updated_p_fp8: updated_p_fp8.data={updated_p_fp8.data[:2, :2]}, p_fp32_meta={p_fp32_meta} \n"
+                        )
                 else:
                     # p.data.copy_(fp32_p)
                     fp16_p = FP16Tensor(fp32_p, dtype=DTypes.KFLOAT16)
+
+                    p.fp8_meta = fp16_p.fp8_meta
                     p.data.copy_(fp16_p)
-                    print(f"[FP8Adam] fp32_p: fp32_p.data={fp32_p.data[:2]} \n")
-                    print(f"[FP8Adam] fp16_p: fp16_p.data={fp16_p.data[:2]} \n")
-                    print(f"[FP8Adam] p: p.data={p.data[:2]} \n")
+
+                    # p.data = fp16_p
+                    if p.ndim != 1:
+                        print(f"[FP8Adam] fp32_p: fp32_p.data={fp32_p.data[:2]} \n")
+                        print(f"[FP8Adam] fp16_p: fp16_p.data={fp16_p.data[:2]} \n")
+                        print(f"[FP8Adam] p: p.data={p.data[:2]} \n")
 
                 # print(f"[FP8Adam] updated_p_fp8: updated_p_fp8.data={updated_p_fp8.data[:2, :2]}, p_fp32_meta={p_fp32_meta} \n")
-                break
-            break
 
     # TODO(xrsrke): refactor using strategy pattern
     def _update_scaling_factors(self):
