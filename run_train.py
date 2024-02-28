@@ -135,5 +135,6 @@ if __name__ == "__main__":
     # Load trainer and data
     trainer = DistributedTrainer(config_file)
     dataloader = get_dataloader(trainer)
+
     # Train
     trainer.train(dataloader)
