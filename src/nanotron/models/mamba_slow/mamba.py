@@ -16,23 +16,13 @@
 """
 import os
 from typing import Dict, Optional, Union
-import math
-import torch
 from torch.nn import init 
-from flash_attn import bert_padding
-from flash_attn.flash_attn_interface import (
-    flash_attn_varlen_func,
-    flash_attn_with_kvcache,
-)
-from flash_attn.layers.rotary import RotaryEmbedding as FlashRotaryEmbedding
-from torch import nn
-from transformers.activations import ACT2FN
 from functools import partial
 
 from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.config.utils_config import cast_str_to_torch_dtype
-from nanotron.config import ParallelismArgs, RecomputeGranularity
+from nanotron.config import ParallelismArgs
 from nanotron.logging import log_rank
 from nanotron.models import NanotronModel
 from nanotron.generation.generate_store import AttachableStore
@@ -51,19 +41,7 @@ from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelRowLinear,
 )
 from nanotron.random import RandomStates
-from nanotron.utils import checkpoint_method
 from nanotron.config.models_config import MambaConfig
-
-#TODO(fmom): Need to clean imports
-#NOTE(fmom): mamba_ssm=1.1.1
-# from mamba_ssm.models.mixer_seq_simple import create_block, Mamba, _init_weights
-
-# try:
-#     from mamba_ssm.ops.triton.layernorm import RMSNorm, layer_norm_fn, rms_norm_fn
-# except ImportError:
-#     RMSNorm, layer_norm_fn, rms_norm_fn = None, None, None
-
-# Copyright (c) 2023, Albert Gu, Tri Dao.
 import math
 from typing import Optional
 
@@ -72,7 +50,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
-from nanotron.utils import init_method_normal, scaled_init_method_normal
 from einops import rearrange, repeat
 
 from nanotron.models.mamba_slow.selective_scan_interface import selective_scan_fn, mamba_inner_fn
@@ -92,7 +69,7 @@ try:
 except ImportError:
     RMSNorm, layer_norm_fn, rms_norm_fn = None, None, None
 
-import lovely_tensors as lt; lt.monkey_patch()
+# import lovely_tensors as lt; lt.monkey_patch()
 
 logger = logging.get_logger(__name__)
 
