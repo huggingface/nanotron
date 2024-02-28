@@ -205,27 +205,19 @@ class FP8Adam(Optimizer):
 
                 # NOTE: if a tensor.ndim == 1, it's a bias
                 # raw_data = p.data if p.ndim == 1 else p.orig_data
+                # TODO(xrsrke): remove orig_data after FP8 working
                 raw_data = p.orig_data
-                # assert raw_data.dtype == torch.float32
+                assert raw_data.dtype == torch.float32
 
                 # TODO(xrsrke): retrieve the dtype for master_weights from the recipe
-                # fp16_p = FP16Tensor(raw_data, dtype=DTypes.KFLOAT16)
-                # fp16_p = raw_data.to(torch.float16) if raw_data != torch.float16 else raw_data
-                # if p.ndim == 1:
-                #     fp16_p = raw_data.to(torch.float16)
-                # else:
                 fp16_p = FP16Tensor(raw_data, dtype=DTypes.KFLOAT16)
 
                 self.mappping_fp8_to_master_weight[p.data_ptr()] = fp16_p
                 self.master_weights.append(fp16_p)
                 self.fp8_weights.append(p.data)
 
-                # NOTE: cast the original weights to FP8
-                # this is where we do FP8 GEMM
-                # p = FP8Parameter(p.data.detach().clone(), dtype=FP8LM_RECIPE.optim.master_weight_dtype)
-
         assert len(self.master_weights) == len(self.fp8_weights)
-        # TODO(xrsrke): remove manually clear fp32 weights
+        # TODO(xrsrke): auto free fp32 weights from memory
 
     def __setstate__(self, state):
         super().__setstate__(state)
@@ -274,7 +266,8 @@ class FP8Adam(Optimizer):
                 grad = p.grad
 
                 assert isinstance(p, FP8Parameter) or isinstance(p, torch.Tensor)
-                assert isinstance(grad, FP8Tensor) or isinstance(grad, FP16Tensor)
+                # assert isinstance(grad, FP8Tensor) or isinstance(grad, FP16Tensor)
+                assert isinstance(grad, FP8Tensor) or isinstance(grad, torch.Tensor)
 
                 if p.ndim != 1:
                     print(f"[FP8Adam] original grad: {grad[:2, :2]} \n")
@@ -285,6 +278,7 @@ class FP8Adam(Optimizer):
                 else:
                     # fp16_grad = grad
                     fp32_grad = convert_tensor_from_fp16(grad, torch.float32)
+                    # fp32_grad = grad.float()
 
                 if p.ndim != 1:
                     print(f"[FP8Adam] fp32_grad: {fp32_grad[:2, :2]} \n")
@@ -413,19 +407,21 @@ class FP8Adam(Optimizer):
                 # it returns False even though p is FP8Parameter
                 if p.ndim != 1:
                     self.fp32_p = fp32_p.clone()
-                    p_fp32_meta = get_tensor_fp8_metadata(fp32_p, dtype=p.data.fp8_meta.dtype)
-                    updated_p_fp8 = convert_tensor_to_fp8(fp32_p, p_fp32_meta)
+                    # p_fp32_meta = get_tensor_fp8_metadata(fp32_p, dtype=p.data.fp8_meta.dtype)
+                    # updated_p_fp8 = convert_tensor_to_fp8(fp32_p, p_fp32_meta)
+                    updated_p_fp8 = FP8Tensor(fp32_p, dtype=p.data.fp8_meta.dtype)
                     p.data.copy_(updated_p_fp8)
 
                     if p.ndim != 1:
                         print(
-                            f"[FP8Adam] updated_p_fp8: updated_p_fp8.data={updated_p_fp8.data[:2, :2]}, p_fp32_meta={p_fp32_meta} \n"
+                            f"[FP8Adam] updated_p_fp8: updated_p_fp8.data={updated_p_fp8.data[:2, :2]}, updated_p_fp8.fp8_meta={updated_p_fp8.fp8_meta} \n"
                         )
                 else:
                     # p.data.copy_(fp32_p)
                     fp16_p = FP16Tensor(fp32_p, dtype=DTypes.KFLOAT16)
 
                     p.fp8_meta = fp16_p.fp8_meta
+                    # fp16_p = fp32_p.to(torch.float16)
                     p.data.copy_(fp16_p)
 
                     # p.data = fp16_p
