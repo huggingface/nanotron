@@ -154,13 +154,14 @@ class Mamba(nn.Module):
         self.dt_proj = nn.Linear(self.dt_rank, self.d_inner // self.tp_pg.size(), bias=True, **factory_kwargs)
 
         # Initialize special dt projection to preserve variance at initialization
-        dt_init_std = self.dt_rank**-0.5 * dt_scale
-        if dt_init == "constant":
-            nn.init.constant_(self.dt_proj.weight, dt_init_std)
-        elif dt_init == "random":
-            nn.init.uniform_(self.dt_proj.weight, -dt_init_std, dt_init_std)
-        else:
-            raise NotImplementedError
+        # Perform in `def init_model_randomly`
+        # dt_init_std = self.dt_rank**-0.5 * dt_scale
+        # if dt_init == "constant":
+        #     nn.init.constant_(self.dt_proj.weight, dt_init_std)
+        # elif dt_init == "random":
+        #     nn.init.uniform_(self.dt_proj.weight, -dt_init_std, dt_init_std)
+        # else:
+        #     raise NotImplementedError
 
         # Initialize dt bias so that F.softplus(dt_bias) is between dt_min and dt_max
         dt = torch.exp(
@@ -757,6 +758,11 @@ class MambaForTraining(NanotronModel):
         num_hidden_layers = config.model.model_config.num_hidden_layers
         rescale_prenorm_residual = config.model.init_method.rescale_prenorm_residual
 
+        if config.model.model_config.ssm_cfg is not None:
+            dt_init = config.model.model_config.ssm_cfg["dt_init"]
+            d_model = config.model.model_config.ssm_cfg["d_model"]        
+            dt_rank = config.model.model_config.ssm_cfg["dt_rank"]
+            dt_scale = config.model.model_config.ssm_cfg["dt_scale"]
 
         for param_name, param in model.named_parameters():
             assert isinstance(param, NanotronParameter)
@@ -798,7 +804,18 @@ class MambaForTraining(NanotronModel):
                     # Having just p *= scale would repeatedly scale it down
                     with torch.no_grad():
                         module.weight /= math.sqrt(n_residuals_per_layer * num_hidden_layers)
-
+            
+            elif isinstance(module, nn.Conv1d):
+                fan_in = None                
+                if "weight" == param_name:
+                    fan_in, _ = init._calculate_fan_in_and_fan_out(param)
+                    init.kaiming_uniform_(module.weight, a=math.sqrt(5))
+                elif "bias" == param_name:                        
+                    bound = 1 / math.sqrt(fan_in) if (fan_in is not None and fan_in > 0) else 0
+                    init.uniform_(module.bias, -bound, bound)
+                else:
+                    raise ValueError(f"Who the fuck is {param_name}?")
+            
             elif isinstance(module, nn.Linear):
                 fan_in = None
                 
@@ -811,24 +828,24 @@ class MambaForTraining(NanotronModel):
                 else:
                     raise ValueError(f"Who the fuck is {param_name}?")
 
-                if rescale_prenorm_residual and full_param_name.endswith("out_proj.weight"):
-                    # Reinitialize selected weights subject to the OpenAI GPT-2 Paper Scheme:
-                    #   > A modified initialization which accounts for the accumulation on the residual path with model depth. Scale
-                    #   > the weights of residual layers at initialization by a factor of 1/√N where N is the # of residual layers.
-                    #   >   -- GPT-2 :: https://openai.com/blog/better-language-models/
-                    #
-                    # Reference (Megatron-LM): https://github.com/NVIDIA/Megatron-LM/blob/main/megatron/model/gpt_model.py
-                    # Special Scaled Initialization --> There are 2 Layer Norms per Transformer Block
-                    # Following Pytorch init, except scale by 1/sqrt(2 * n_layer)
-                    # We need to reinit p since this code could be called multiple times
-                    # Having just p *= scale would repeatedly scale it down
-                    with torch.no_grad():
-                        module.weight /= math.sqrt(n_residuals_per_layer * num_hidden_layers)     
-            elif isinstance(module, nn.Conv1d):
-                print("TODO: handle covn1d. For now, it is initialiazed in Mamba constructor")
-                pass
+                
+                if config.model.model_config.ssm_cfg is not None:
+
+                    if dt_rank == "auto":
+                        dt_init_std = math.ceil(d_model / 16)**-0.5 * dt_scale
+                    else:
+                        dt_init_std = dt_rank**-0.5 * dt_scale                    
+                    
+                    if dt_init == "constant":
+                        nn.init.constant_(module.weight, dt_init_std)
+                    elif dt_init == "random":
+                        nn.init.uniform_(module.weight, -dt_init_std, dt_init_std)
+                    else:
+                        raise NotImplementedError
+
             elif isinstance(module, TensorParallelEmbedding):
                 nn.init.normal_(module.weight, std=initializer_range)
+
             elif isinstance(module, RMSNorm) or isinstance(module, nn.LayerNorm):
                 if "weight" == param_name:
                     # TODO @thomasw21: Sometimes we actually want 0
@@ -837,11 +854,13 @@ class MambaForTraining(NanotronModel):
                     module.bias.zero_()
                 else:
                     raise ValueError(f"Who the fuck is {param_name}?")
+            
             elif isinstance(module, Mamba):
                 # NOTE(fmom): nn.Parameter are initialized in Mamba __init__ 
                 # In Mamba, only those 3 parameters don't have weight decay.
                 if param_name in ["dt_bias", "A_log", "D"]:
                     param._no_weight_decay = True
+            
             else:
                 raise Exception(f"Parameter {full_param_name} was not intialized")    
             
