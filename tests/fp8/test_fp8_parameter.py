@@ -30,9 +30,10 @@ def test_fp8_parameter_grad_metadata():
     assert all(isinstance(getattr(fp8_parameter.fp8_grad_meta, attr), FP8Meta) for attr in GRAD_META)
 
 
+@pytest.mark.parametrize("dtype", [DTypes.FP8E4M3, DTypes.FP8E5M2])
 @pytest.mark.parametrize("grad_dtype", [DTypes.FP8E4M3, DTypes.FP8E5M2])
-def test_setting_fp8_gradient_to_fp8_parameter(grad_dtype):
-    fp8_parameter = FP8Parameter(torch.randn(16, 16, device="cuda"), DTypes.FP8E4M3)
+def test_setting_fp8_gradient_to_fp8_parameter(dtype, grad_dtype):
+    fp8_parameter = FP8Parameter(torch.randn(16, 16, device="cuda"), dtype)
     fp8_grad = FP8Tensor(torch.randn(16, 16, device="cuda"), dtype=grad_dtype)
 
     fp8_parameter.grad = fp8_grad

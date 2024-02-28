@@ -20,6 +20,10 @@ def get_tensor_fp8_metadata(tensor: torch.Tensor, dtype: DTypes) -> FP8Meta:
     from nanotron.fp8.tensor import update_scaling_factor
 
     amax = tensor.abs().max().clone()
+    assert amax.dtype == torch.float32
+
     scale = update_scaling_factor(amax, torch.tensor(INITIAL_SCALING_FACTOR, dtype=torch.float32), dtype)
+    assert scale.dtype == torch.float32
+
     fp8_meta = FP8Meta(amax, scale, dtype)
     return fp8_meta

@@ -4,6 +4,7 @@ import pytest
 import torch
 from nanotron.fp8.constants import FP8LM_RECIPE
 from nanotron.fp8.dtypes import DTypes
+from nanotron.fp8.optim import Adam as REFAdam
 from nanotron.fp8.optim import (
     FP8Adam,
 )
@@ -335,7 +336,7 @@ def test_fp8adam_step_with_correct_grad():
     linear = nn.Linear(16, 16, device="cuda")
     fp8_linear = convert_linear_to_fp8(deepcopy(linear))
 
-    optim = Adam(linear.parameters(), LR, BETAS, EPS, WEIGHT_DECAY)
+    optim = REFAdam(linear.parameters(), LR, BETAS, EPS, WEIGHT_DECAY)
     fp8_optim = FP8Adam(fp8_linear.parameters(), LR, BETAS, EPS, WEIGHT_DECAY)
 
     # for _ in range(1):
