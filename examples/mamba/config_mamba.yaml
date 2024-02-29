@@ -15,6 +15,13 @@ data:
     text_column_name: text
   num_loading_workers: 1
   seed: 42
+experiment_logger:
+  tensorboard_logger:
+    flush_secs: 30
+    tensorboard_dir: /fsx/ferdinandmom/logs/tb_logs
+  wandb_logger:
+    wandb_entity: bouteille
+    wandb_project: test
 general:
   benchmark_csv_path: null
   consumed_train_samples: null
