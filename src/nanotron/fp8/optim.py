@@ -14,6 +14,7 @@ from nanotron.fp8.tensor import (
     convert_tensor_from_fp8,
     convert_tensor_from_fp16,
 )
+from nanotron.fp8.utils import is_overflow_underflow_nan
 
 
 class Adam(Optimizer):
@@ -266,6 +267,9 @@ class FP8Adam(Optimizer):
 
                 grad = p.grad
 
+                if is_overflow_underflow_nan(grad):
+                    raise ValueError("Overflow, underflow, or NaN detected in the gradients")
+
                 assert isinstance(p, FP8Parameter) or isinstance(p, torch.Tensor)
                 # assert isinstance(grad, FP8Tensor) or isinstance(grad, FP16Tensor)
                 assert isinstance(grad, FP8Tensor) or isinstance(grad, torch.Tensor)
@@ -393,9 +397,6 @@ class FP8Adam(Optimizer):
                         f"[FP8Adam] updated_exp_avg_fp8: updated_exp_avg_fp8.data={updated_exp_avg_fp8.data[:2, :2]}, updated_exp_avg_fp8.fp8_meta={updated_exp_avg_fp8.fp8_meta} \n"
                     )
 
-                # exp_avg.copy_(updated_exp_avg_fp8)
-                # fp16_p.addcdiv_(-step_size, fp16_exp_avg, denom)
-
                 fp32_p.addcdiv_(-step_size, fp32_exp_avg, denom)
 
                 if p.ndim != 1:
@@ -413,8 +414,6 @@ class FP8Adam(Optimizer):
                 # it returns False even though p is FP8Parameter
                 if p.ndim != 1:
                     self.fp32_p = fp32_p.clone()
-                    # p_fp32_meta = get_tensor_fp8_metadata(fp32_p, dtype=p.data.fp8_meta.dtype)
-                    # updated_p_fp8 = convert_tensor_to_fp8(fp32_p, p_fp32_meta)
                     updated_p_fp8 = FP8Tensor(fp32_p, dtype=p.data.fp8_meta.dtype)
                     p.data.copy_(updated_p_fp8)
 
@@ -423,11 +422,8 @@ class FP8Adam(Optimizer):
                             f"[FP8Adam] updated_p_fp8: updated_p_fp8.data={updated_p_fp8.data[:2, :2]}, updated_p_fp8.fp8_meta={updated_p_fp8.fp8_meta} \n"
                         )
                 else:
-                    # p.data.copy_(fp32_p)
                     fp16_p = FP16Tensor(fp32_p, dtype=DTypes.KFLOAT16)
-
                     p.fp8_meta = fp16_p.fp8_meta
-                    # fp16_p = fp32_p.to(torch.float16)
                     p.data.copy_(fp16_p)
 
                     # p.data = fp16_p
