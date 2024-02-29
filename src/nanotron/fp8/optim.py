@@ -13,9 +13,7 @@ from nanotron.fp8.tensor import (
     FP16Tensor,
     convert_tensor_from_fp8,
     convert_tensor_from_fp16,
-    convert_tensor_to_fp8,
 )
-from nanotron.fp8.utils import get_tensor_fp8_metadata
 
 
 class Adam(Optimizer):
@@ -56,6 +54,7 @@ class Adam(Optimizer):
         for group in self.param_groups:
             group.setdefault("amsgrad", False)
 
+    # @snoop
     def step(self, closure=None):
         """Performs a single optimization step.
         Arguments:
@@ -252,6 +251,8 @@ class FP8Adam(Optimizer):
             # Maintains max of all exp. moving avg. of sq. grad. values
             state["max_exp_avg_sq"] = torch.zeros_like(p.data, memory_format=torch.preserve_format)
 
+    # @torchsnooper.snoop()
+    # @snoop
     def step(self):
         for group in self.param_groups:
             for p in group["params"]:
@@ -383,12 +384,13 @@ class FP8Adam(Optimizer):
                 # in a separate cuda streams
                 # exp_avg_fp32_meta = get_tensor_fp8_metadata(fp16_exp_avg, exp_avg.fp8_meta.dtype)
                 # updated_exp_avg_fp8 = convert_tensor_to_fp8(fp16_exp_avg, exp_avg_fp32_meta)
-                exp_avg_fp32_meta = get_tensor_fp8_metadata(fp32_exp_avg, exp_avg.fp8_meta.dtype)
-                updated_exp_avg_fp8 = convert_tensor_to_fp8(fp32_exp_avg, exp_avg_fp32_meta)
+                # exp_avg_fp32_meta = get_tensor_fp8_metadata(fp32_exp_avg, exp_avg.fp8_meta.dtype)
+                # updated_exp_avg_fp8 = convert_tensor_to_fp8(fp32_exp_avg, exp_avg_fp32_meta)
+                updated_exp_avg_fp8 = FP8Tensor(fp32_exp_avg, dtype=exp_avg.fp8_meta.dtype)
 
                 if p.ndim != 1:
                     print(
-                        f"[FP8Adam] updated_exp_avg_fp8: updated_exp_avg_fp8.data={updated_exp_avg_fp8.data[:2, :2]}, exp_avg_fp32_meta={exp_avg_fp32_meta} \n"
+                        f"[FP8Adam] updated_exp_avg_fp8: updated_exp_avg_fp8.data={updated_exp_avg_fp8.data[:2, :2]}, updated_exp_avg_fp8.fp8_meta={updated_exp_avg_fp8.fp8_meta} \n"
                     )
 
                 # exp_avg.copy_(updated_exp_avg_fp8)
@@ -400,8 +402,12 @@ class FP8Adam(Optimizer):
                     print(f"[FP8Adam] updated p_fp32: {fp32_p[:2, :2]} \n")
 
                 # NOTE: store back fp8
+                exp_avg.fp8_meta = updated_exp_avg_fp8.fp8_meta
                 exp_avg.copy_(updated_exp_avg_fp8)
-                exp_avg_sq.copy_(FP16Tensor(fp32_exp_avg_sq, dtype=DTypes.KFLOAT16))
+
+                fp8_exp_avg_sq = FP16Tensor(fp32_exp_avg_sq, dtype=DTypes.KFLOAT16)
+                exp_avg_sq.copy_(fp8_exp_avg_sq)
+                exp_avg_sq.fp8_meta = fp8_exp_avg_sq.fp8_meta
 
                 # NOTE: i tried to isinstance(p, FP8Parameter) but it's not working
                 # it returns False even though p is FP8Parameter

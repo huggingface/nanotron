@@ -45,8 +45,10 @@ class LowPrecisionTensor(torch.Tensor):
     def _quantize(tensor: torch.Tensor, fp8_meta: "FP8Meta") -> torch.Tensor:
         raise NotImplementedError
 
-    # def __repr__(self) -> str:
-    #     return f"FP8Tensor({repr(self.data)}, fp8_meta={self.fp8_meta})"
+    def __repr__(self) -> str:
+        if hasattr(self, "fp8_meta"):
+            return f"FP8Tensor({repr(self.data)}, fp8_meta={self.fp8_meta})"
+        return super().__repr__()
 
 
 class FP8Tensor(LowPrecisionTensor):

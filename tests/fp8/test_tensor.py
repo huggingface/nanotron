@@ -22,7 +22,7 @@ def test_fp8_meta_of_a_fp8_tensor(dtype):
     # because we initialize scale with 1
     assert fp8_tensor.fp8_meta.amax == ref_tensor.abs().max()
     assert isinstance(fp8_tensor.fp8_meta.inverse_scale, torch.Tensor)
-    assert fp8_tensor.fp8_meta.scale != 0.1 and fp8_tensor.fp8_meta.scale != 1
+    assert fp8_tensor.fp8_meta.scale != 0.1 and fp8_tensor.fp8_meta.scale != 1.0
     assert isinstance(fp8_tensor.fp8_meta.te_dtype, tex.DType)
 
 

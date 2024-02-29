@@ -80,7 +80,11 @@ if __name__ == "__main__":
     # the paper shows that it don't hurt convergence
     # reference: https://github.com/Azure/MS-AMP/blob/51f34acdb4a8cf06e0c58185de05198a955ba3db/tests/optim/test_adamw.py#L85
 
+    print(f"[FP8] fp8_linear.bias: {fp8_linear.bias} \n")
+    print(f"[FP8] bias_fp32: {bias_fp32} \n")
     print(f"[FP8] weight_fp32.weight: {weight_fp32[:2, :2]} \n")
+    print(f"[FP8] fp8_optim.fp32_p.data[:]: {fp8_optim.fp32_p.data[:2, :2]} \n")
+
     print(f"[FP32] linear.weight: {linear.weight[:2, :2]} \n")
 
     torch.testing.assert_close(bias_fp32, linear.bias, rtol=0, atol=3e-4)
