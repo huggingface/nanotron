@@ -108,6 +108,8 @@ class Mamba(nn.Module):
         self.layer_idx = layer_idx
 
         tp_mode = parallel_config.tp_mode if parallel_config is not None else TensorParallelLinearMode.ALL_REDUCE
+        assert tp_mode == TensorParallelLinearMode.REDUCE_SCATTER or not parallel_config.tp_linear_async_communication; "Only ALL_REDUCE and tp_linear_async_communication=False are supported"
+        
         tp_linear_async_communication = (
             parallel_config.tp_linear_async_communication if parallel_config is not None else False
         )
@@ -205,6 +207,10 @@ class Mamba(nn.Module):
         hidden_states: (B, L, D)
         Returns: same shape as hidden_states
         """
+        
+        if inference_params is not None:
+            raise NotImplementedError("Inference params not tested yet.")
+
         batch, seqlen, dim = hidden_states.shape
 
         conv_state, ssm_state = None, None
@@ -486,30 +492,7 @@ class MambaDecoderLayer(nn.Module):
     def allocate_inference_cache(self, batch_size, max_seqlen, dtype=None, **kwargs):
         return self.mixer.allocate_inference_cache(batch_size, max_seqlen, dtype=dtype, **kwargs)
 
-class GenerationMixin:
-    def allocate_inference_cache(self, batch_size, max_seqlen, dtype=None, **kwargs):
-        raise NotImplementedError
-
-    def generate(
-        self,
-        input_ids,
-        max_length,
-        top_k=1,
-        top_p=0.0,
-        min_p=0.0,
-        temperature=1.0,
-        return_dict_in_generate=False,
-        output_scores=False,
-        **kwargs,
-    ):
-        output = decode(
-            input_ids, self, max_length, top_k=top_k, top_p=top_p, min_p = min_p, temperature=temperature, **kwargs
-        )
-        if not output_scores:
-            output.scores = None
-        return output if return_dict_in_generate else output.sequences
-
-class MambaModel(nn.Module, GenerationMixin):
+class MambaModel(nn.Module):
     def __init__(
         self,
         config: MambaConfig,
