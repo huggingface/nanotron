@@ -19,6 +19,7 @@ from typing import (
 )
 
 import torch
+from brrr.models.mamba_fast.mamba import MambaFastForTraining
 from torch.nn.parallel import DistributedDataParallel
 
 from nanotron import distributed as dist
@@ -26,9 +27,9 @@ from nanotron import logging
 from nanotron.config import (
     Config,
     ExistingCheckpointInit,
+    MambaInit,
     ParallelismArgs,
     RandomInit,
-    MambaInit,
     get_config_from_file,
 )
 from nanotron.dataloader import sanity_check_dataloader
@@ -51,9 +52,8 @@ from nanotron.logging import (
 from nanotron.models import NanotronModel, build_model
 from nanotron.models.base import check_model_has_grad
 from nanotron.models.llama import LlamaForTraining, RotaryEmbedding
-from nanotron.models.starcoder2 import Starcoder2ForTraining
 from nanotron.models.mamba.mamba import MambaForTraining
-from brrr.models.mamba_fast.mamba import MambaFastForTraining
+from nanotron.models.starcoder2 import Starcoder2ForTraining
 from nanotron.optim.clip_grads import clip_grad_norm
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.data_parallel.utils import sync_gradients_across_dp
@@ -87,7 +87,6 @@ from nanotron.serialize import (
     save,
     save_random_states,
 )
-from nanotron.utils import init_method_normal, scaled_init_method_normal
 
 logger = logging.get_logger(__name__)
 
@@ -584,7 +583,7 @@ class DistributedTrainer:
                     root_folder=self.config.model.init_method.path,
                 )
             elif isinstance(self.config.model.init_method, MambaInit):
-                
+
                 unwrapped_model.init_model_randomly(config=self.config)
                 # Synchronize parameters so that the model is consistent
                 # sync all params across dp
@@ -602,9 +601,9 @@ class DistributedTrainer:
                     group = self.parallel_context.world_ranks_to_pg[group_ranks]
                     dist.all_reduce(param, op=dist.ReduceOp.AVG, group=group)
             elif isinstance(self.config.model.init_method, RandomInit):
-                
+
                 unwrapped_model.init_model_randomly(config=self.config)
-                
+
                 # Synchronize parameters so that the model is consistent
                 # sync all params across dp
                 for name, param in sorted(model.named_parameters(), key=lambda x: x[0]):

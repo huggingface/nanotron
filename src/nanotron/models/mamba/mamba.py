@@ -14,24 +14,32 @@
 # limitations under the License.
 """ PyTorch Mamba model.
 """
+import math
 import os
-from typing import Dict, Optional, Union
-from torch.nn import init 
 from functools import partial
+from typing import Dict, Optional, Union
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from einops import rearrange, repeat
+from torch.nn import init
 
 from nanotron import distributed as dist
 from nanotron import logging
-from nanotron.config.utils_config import cast_str_to_torch_dtype
 from nanotron.config import ParallelismArgs
+from nanotron.config.models_config import MambaConfig
+from nanotron.config.utils_config import cast_str_to_torch_dtype
+from nanotron.generation.generate_store import AttachableStore
 from nanotron.logging import log_rank
 from nanotron.models import NanotronModel
-from nanotron.generation.generate_store import AttachableStore
+from nanotron.models.mamba.selective_scan_interface import (
+    mamba_inner_fn,
+    selective_scan_fn,
+)
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter
-from nanotron.parallel.pipeline_parallel.block import (
-    PipelineBlock,
-    TensorPointer,
-)
+from nanotron.parallel.pipeline_parallel.block import PipelineBlock, TensorPointer
 from nanotron.parallel.pipeline_parallel.p2p import P2P
 from nanotron.parallel.tensor_parallel.functional import sharded_cross_entropy
 from nanotron.parallel.tensor_parallel.nn import (
@@ -41,18 +49,6 @@ from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelRowLinear,
 )
 from nanotron.random import RandomStates
-from nanotron.config.models_config import MambaConfig
-import math
-from typing import Optional
-
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from torch import Tensor
-
-from einops import rearrange, repeat
-
-from nanotron.models.mamba.selective_scan_interface import selective_scan_fn, mamba_inner_fn
 
 try:
     from causal_conv1d import causal_conv1d_fn, causal_conv1d_update
@@ -80,21 +76,21 @@ class Mamba(nn.Module):
         d_model: int,
         parallel_config: Optional[ParallelismArgs],
         tp_pg: dist.ProcessGroup,
-        d_state: int=16,
-        d_conv: int=4,
-        expand: int=2,
-        dt_rank: str="auto",
-        dt_min: float=0.001,
-        dt_max: float=0.1,
-        dt_init: str="random",
-        dt_scale: float=1.0,
-        dt_init_floor: float=1e-4,
-        conv_bias: bool=True,
-        bias: bool=False,
-        use_fast_path: bool=True,  # Fused kernel options
-        layer_idx: Optional[int]=None,
-        device: Optional[torch.device]=None,
-        dtype: Optional[torch.dtype]=None,
+        d_state: int = 16,
+        d_conv: int = 4,
+        expand: int = 2,
+        dt_rank: str = "auto",
+        dt_min: float = 0.001,
+        dt_max: float = 0.1,
+        dt_init: str = "random",
+        dt_scale: float = 1.0,
+        dt_init_floor: float = 1e-4,
+        conv_bias: bool = True,
+        bias: bool = False,
+        use_fast_path: bool = True,  # Fused kernel options
+        layer_idx: Optional[int] = None,
+        device: Optional[torch.device] = None,
+        dtype: Optional[torch.dtype] = None,
     ):
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
@@ -108,16 +104,17 @@ class Mamba(nn.Module):
         self.layer_idx = layer_idx
 
         tp_mode = parallel_config.tp_mode if parallel_config is not None else TensorParallelLinearMode.ALL_REDUCE
-        assert tp_mode == TensorParallelLinearMode.REDUCE_SCATTER or not parallel_config.tp_linear_async_communication; "Only ALL_REDUCE and tp_linear_async_communication=False are supported"
-        
+        assert tp_mode == TensorParallelLinearMode.REDUCE_SCATTER or not parallel_config.tp_linear_async_communication
+        "Only ALL_REDUCE and tp_linear_async_communication=False are supported"
+
         tp_linear_async_communication = (
             parallel_config.tp_linear_async_communication if parallel_config is not None else False
         )
-        
+
         # Get current tensor parallel rank
         self.tp_pg = tp_pg
         self.tp_rank = dist.get_rank(self.tp_pg)
-        
+
         self.in_proj = TensorParallelColumnLinear(
             in_features=self.d_model,
             out_features=self.d_inner * 2,
@@ -125,11 +122,11 @@ class Mamba(nn.Module):
             mode=tp_mode,
             bias=False,
             async_communication=False,
-            contiguous_chunks=None
+            contiguous_chunks=None,
         )
-        
+
         assert self.d_inner % self.tp_pg.size() == 0
-        
+
         self.conv1d = nn.Conv1d(
             in_channels=self.d_inner // self.tp_pg.size(),
             out_channels=self.d_inner // self.tp_pg.size(),
@@ -150,9 +147,9 @@ class Mamba(nn.Module):
             mode=tp_mode,
             bias=False,
             async_communication=tp_linear_async_communication,
-            contiguous_chunks=None
+            contiguous_chunks=None,
         )
-        
+
         self.dt_proj = nn.Linear(self.dt_rank, self.d_inner // self.tp_pg.size(), bias=True, **factory_kwargs)
 
         # Initialize special dt projection to preserve variance at initialization
@@ -199,7 +196,7 @@ class Mamba(nn.Module):
             mode=tp_mode,
             bias=False,
             async_communication=tp_linear_async_communication,
-            contiguous_chunks=None
+            contiguous_chunks=None,
         )
 
     def forward(self, hidden_states: Union[torch.Tensor, TensorPointer], inference_params=None):
@@ -207,7 +204,7 @@ class Mamba(nn.Module):
         hidden_states: (B, L, D)
         Returns: same shape as hidden_states
         """
-        
+
         if inference_params is not None:
             raise NotImplementedError("Inference params not tested yet.")
 
@@ -224,9 +221,11 @@ class Mamba(nn.Module):
         # We do matmul and transpose BLH -> HBL at the same time
         xz = self.in_proj(hidden_states).transpose(1, 2)
         A = -torch.exp(self.A_log.float())  # (d_inner, d_state)
-        
+
         # In the backward pass we write dx and dz next to each other to avoid torch.cat
-        if self.use_fast_path and inference_params is None and os.environ.get("FAST_PATH", "0") == "1":  # Doesn't support outputting the states
+        if (
+            self.use_fast_path and inference_params is None and os.environ.get("FAST_PATH", "0") == "1"
+        ):  # Doesn't support outputting the states
             y = mamba_inner_fn(
                 d_inner=self.d_inner,
                 tp_pg=self.tp_pg,
@@ -236,8 +235,8 @@ class Mamba(nn.Module):
                 x_proj_weight=self.x_proj.weight,
                 delta_proj_weight=self.dt_proj.weight,
                 A=A,
-                B=None, # input-dependent B
-                C=None, # input-dependent C
+                B=None,  # input-dependent B
+                C=None,  # input-dependent C
                 D=self.D.float(),
                 delta_bias=self.dt_proj.bias.float(),
                 delta_softplus=True,
@@ -255,7 +254,6 @@ class Mamba(nn.Module):
             if causal_conv1d_fn is None:
                 x = self.act(self.conv1d(x)[..., :seqlen])
             else:
-                
                 assert self.activation in ["silu", "swish"]
                 x = causal_conv1d_fn(
                     x=x,
@@ -290,11 +288,16 @@ class Mamba(nn.Module):
                 y, last_state = y
                 ssm_state.copy_(last_state)
             y = rearrange(y, "b d l -> b l d")
-        
+
         out = self.out_proj(y)
         return out
 
-    def step(self, hidden_states: Union[torch.Tensor, TensorPointer], conv_state: torch.Tensor, ssm_state: torch.Tensor):
+    def step(
+        self,
+        hidden_states: Union[torch.Tensor, TensorPointer],
+        conv_state: torch.Tensor,
+        ssm_state: torch.Tensor,
+    ):
         dtype = hidden_states.dtype
         assert hidden_states.shape[1] == 1, "Only support decoding with 1 token at a time for now"
         xz = self.in_proj(hidden_states.squeeze(1))  # (B 2D)
@@ -335,29 +338,45 @@ class Mamba(nn.Module):
             y = y * self.act(z)  # (B D)
         else:
             y = selective_state_update(
-                ssm_state, x, dt, A, B, C, self.D, z=z, dt_bias=self.dt_proj.bias, dt_softplus=True
+                ssm_state,
+                x,
+                dt,
+                A,
+                B,
+                C,
+                self.D,
+                z=z,
+                dt_bias=self.dt_proj.bias,
+                dt_softplus=True,
             )
 
         out = self.out_proj(y)
         return out.unsqueeze(1), conv_state, ssm_state
 
-    def allocate_inference_cache(self, batch_size: int, max_seqlen: int, dtype: torch.dtype=None, **kwargs):
+    def allocate_inference_cache(self, batch_size: int, max_seqlen: int, dtype: torch.dtype = None, **kwargs):
         device = self.out_proj.weight.device
         conv_dtype = self.conv1d.weight.dtype if dtype is None else dtype
         conv_state = torch.zeros(
-            batch_size, self.d_model * self.expand, self.d_conv, device=device, dtype=conv_dtype
+            batch_size,
+            self.d_model * self.expand,
+            self.d_conv,
+            device=device,
+            dtype=conv_dtype,
         )
         ssm_dtype = self.dt_proj.weight.dtype if dtype is None else dtype
         # ssm_dtype = torch.float32
         ssm_state = torch.zeros(
-            batch_size, self.d_model * self.expand, self.d_state, device=device, dtype=ssm_dtype
+            batch_size,
+            self.d_model * self.expand,
+            self.d_state,
+            device=device,
+            dtype=ssm_dtype,
         )
         return conv_state, ssm_state
 
-    def _get_states_from_cache(self, inference_params, batch_size: int, initialize_states: bool=False):
+    def _get_states_from_cache(self, inference_params, batch_size: int, initialize_states: bool = False):
         assert self.layer_idx is not None
         if self.layer_idx not in inference_params.key_value_memory_dict:
-            batch_shape = (batch_size,)
             conv_state = torch.zeros(
                 batch_size,
                 self.d_model * self.expand,
@@ -373,7 +392,10 @@ class Mamba(nn.Module):
                 dtype=self.dt_proj.weight.dtype,
                 # dtype=torch.float32,
             )
-            inference_params.key_value_memory_dict[self.layer_idx] = (conv_state, ssm_state)
+            inference_params.key_value_memory_dict[self.layer_idx] = (
+                conv_state,
+                ssm_state,
+            )
         else:
             conv_state, ssm_state = inference_params.key_value_memory_dict[self.layer_idx]
             # TODO: What if batch size changes between generation, and we reuse the same states?
@@ -382,8 +404,14 @@ class Mamba(nn.Module):
                 ssm_state.zero_()
         return conv_state, ssm_state
 
+
 class Embedding(nn.Module, AttachableStore):
-    def __init__(self, tp_pg: dist.ProcessGroup, config: MambaConfig, parallel_config: Optional[ParallelismArgs]):
+    def __init__(
+        self,
+        tp_pg: dist.ProcessGroup,
+        config: MambaConfig,
+        parallel_config: Optional[ParallelismArgs],
+    ):
         super().__init__()
         self.token_embedding = TensorParallelEmbedding(
             num_embeddings=config.vocab_size,
@@ -411,6 +439,7 @@ class Embedding(nn.Module, AttachableStore):
         input_embeds = self.token_embedding(input_ids)
         return {"input_embeds": input_embeds}
 
+
 class MambaDecoderLayer(nn.Module):
     def __init__(
         self,
@@ -420,11 +449,11 @@ class MambaDecoderLayer(nn.Module):
         layer_idx: int,
         device: Optional[torch.device] = None,
         dtype: Optional[torch.dtype] = None,
-    ):  
+    ):
         super().__init__()
-        
+
         factory_kwargs = {"device": device, "dtype": dtype}
-                
+
         if config.ssm_cfg is None:
             ssm_cfg = {}
         else:
@@ -433,27 +462,27 @@ class MambaDecoderLayer(nn.Module):
         self.layer_idx = layer_idx
         self.residual_in_fp32 = config.residual_in_fp32
         self.fused_add_norm = config.fused_add_norm
-        
+
         self.mixer = Mamba(
             d_model=config.d_model,
             parallel_config=parallel_config,
             tp_pg=tp_pg,
             layer_idx=layer_idx,
             **ssm_cfg,
-            **factory_kwargs
+            **factory_kwargs,
         )
-        
+
         self.norm = partial(
-            nn.LayerNorm if not config.rms_norm 
-            else RMSNorm, eps=config.rms_norm_eps, **factory_kwargs
+            nn.LayerNorm if not config.rms_norm else RMSNorm,
+            eps=config.rms_norm_eps,
+            **factory_kwargs,
         )(config.d_model)
-        
+
         if self.fused_add_norm:
             assert RMSNorm is not None, "RMSNorm import fails"
             assert isinstance(
                 self.norm, (nn.LayerNorm, RMSNorm)
             ), "Only LayerNorm and RMSNorm are supported for fused_add_norm"
-
 
     def forward(
         self,
@@ -462,7 +491,6 @@ class MambaDecoderLayer(nn.Module):
         residual: Optional[Union[torch.Tensor, TensorPointer]],
         inference_params=None,
     ) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
-
         if not self.fused_add_norm:
             # self.layer_idx was assigned when calling create_block
             # residual=None happens only at the first block
@@ -482,15 +510,16 @@ class MambaDecoderLayer(nn.Module):
                 eps=self.norm.eps,
             )
         hidden_states = self.mixer(hidden_states, inference_params=inference_params)
-        
+
         return {
             "hidden_states": hidden_states,
             "sequence_mask": sequence_mask,  # NOTE(fmom): dunno how to use it for now. Just keep it
             "residual": residual,
         }
-        
+
     def allocate_inference_cache(self, batch_size, max_seqlen, dtype=None, **kwargs):
         return self.mixer.allocate_inference_cache(batch_size, max_seqlen, dtype=dtype, **kwargs)
+
 
 class MambaModel(nn.Module):
     def __init__(
@@ -501,7 +530,7 @@ class MambaModel(nn.Module):
         random_states: Optional[RandomStates] = None,
     ):
         super().__init__()
-        
+
         # Declare all the nodes
         self.p2p = P2P(parallel_context.pp_pg, device=torch.device("cuda"))
         self.config = config
@@ -577,7 +606,6 @@ class MambaModel(nn.Module):
             module_output_keys={"output"},
         )
 
-
     def forward(
         self,
         input_ids: Union[torch.Tensor, TensorPointer],  # [batch_size, seq_length]
@@ -603,13 +631,15 @@ class MambaModel(nn.Module):
         for block in self.decoder:
             hidden_encoder_states = block(**hidden_encoder_states)
 
-        hidden_states = self.final_layer_norm(x=hidden_encoder_states["hidden_states"], residual=hidden_encoder_states["residual"])["hidden_states"]
+        hidden_states = self.final_layer_norm(
+            x=hidden_encoder_states["hidden_states"],
+            residual=hidden_encoder_states["residual"],
+        )["hidden_states"]
 
         sharded_logits = self.lm_head(x=hidden_states)["logits"]
         fp32_sharded_logits = self.cast_to_fp32(x=sharded_logits)["output"]
 
         return fp32_sharded_logits, hidden_states
-
 
     def get_block_compute_costs(self):
         """Computes the compute cost of each block in the model so that we can do a better job of load balancing."""
@@ -623,7 +653,6 @@ class MambaModel(nn.Module):
         #     # This is the last lm_head
         #     TensorParallelColumnLinear: model_config.vocab_size * model_config.d_model,
         # }
-        model_config = self.config
 
         block_compute_costs = {
             # CausalSelfAttention (qkv proj + attn out) + MLP
@@ -631,7 +660,12 @@ class MambaModel(nn.Module):
             # This is the last lm_head
             TensorParallelColumnLinear: 0,
         }
-        log_rank(f"get_block_compute_costs() Not implemented yet", logger=logger, level=logging.INFO, rank=0)
+        log_rank(
+            "get_block_compute_costs() Not implemented yet",
+            logger=logger,
+            level=logging.INFO,
+            rank=0,
+        )
         return block_compute_costs
 
     def get_flops_per_sec(self, iteration_time_in_sec, sequence_length, global_batch_size):
@@ -656,18 +690,26 @@ class MambaModel(nn.Module):
 
         # model_flops_per_s = model_flops / (iteration_time_in_sec * world_size * 1e12)
         # hardware_flops_per_s = hardware_flops / (iteration_time_in_sec * world_size * 1e12)
-        
+
         # TODO(fmom): undo hardcoding of model_flops_per_s and  hardware_flops_per_s
         model_flops_per_s = 0
         hardware_flops_per_s = 0
-        log_rank(f"get_flops_per_sec() Not implemented yet", logger=logger, level=logging.INFO, rank=0)
+        log_rank(
+            "get_flops_per_sec() Not implemented yet",
+            logger=logger,
+            level=logging.INFO,
+            rank=0,
+        )
         return model_flops_per_s, hardware_flops_per_s
 
 
 torch.jit.script
+
+
 def masked_mean(loss, label_mask, dtype):
     # type: (Tensor, Tensor, torch.dtype) -> Tensor
     return (loss * label_mask).sum(dtype=dtype) / label_mask.sum()
+
 
 class Loss(nn.Module):
     def __init__(self, tp_pg: dist.ProcessGroup):
@@ -682,16 +724,14 @@ class Loss(nn.Module):
     ) -> Dict[str, torch.Tensor]:
         # Megatron by defaults cast everything in fp32. `--f16-lm-cross-entropy` is an option you can use to keep current precision.
         # https://github.com/NVIDIA/Megatron-LM/blob/f267e6186eae1d6e2055b412b00e2e545a8e896a/megatron/model/gpt_model.py#L38
-        
-        #NOTE(fmom): undo transpose for now since Mamba is not using TP
+
+        # NOTE(fmom): undo transpose for now since Mamba is not using TP
         # loss = sharded_cross_entropy(
         #     sharded_logits, label_ids.transpose(0, 1).contiguous(), group=self.tp_pg, dtype=torch.float
         # ).transpose(0, 1)
-        
-        loss = sharded_cross_entropy(
-            sharded_logits, label_ids, group=self.tp_pg, dtype=torch.float
-        )
-        
+
+        loss = sharded_cross_entropy(sharded_logits, label_ids, group=self.tp_pg, dtype=torch.float)
+
         # TODO @thomasw21: It's unclear what kind of normalization we want to do.
         loss = masked_mean(loss, label_mask, dtype=torch.float)
         # I think indexing causes a sync we don't actually want
@@ -708,14 +748,14 @@ class MambaForTraining(NanotronModel):
         random_states: Optional[RandomStates] = None,
     ):
         super().__init__()
-        
+
         self.model = MambaModel(
             config=config,
             parallel_context=parallel_context,
             parallel_config=parallel_config,
             random_states=random_states,
         )
-        
+
         self.loss = PipelineBlock(
             p2p=self.model.p2p,
             module_builder=Loss,
@@ -730,7 +770,7 @@ class MambaForTraining(NanotronModel):
         self.parallel_context = parallel_context
         self.config = config
         self.parallel_config = parallel_config
-    
+
     def forward(
         self,
         input_ids: Union[torch.Tensor, TensorPointer],
@@ -753,7 +793,7 @@ class MambaForTraining(NanotronModel):
     def init_model_randomly(self, config):
         model = self
         initialized_parameters = set()
-        
+
         # Handle tensor parallelism
         module_id_to_prefix = {id(module): f"{module_name}." for module_name, module in model.named_modules()}
         # Fix the root_model
@@ -763,18 +803,18 @@ class MambaForTraining(NanotronModel):
         n_residuals_per_layer = config.model.init_method.n_residuals_per_layer
         num_hidden_layers = config.model.model_config.num_hidden_layers
         rescale_prenorm_residual = config.model.init_method.rescale_prenorm_residual
+        d_model = config.model.model_config.d_model
 
         if config.model.model_config.ssm_cfg is not None:
             dt_init = config.model.model_config.ssm_cfg["dt_init"]
-            d_model = config.model.model_config.ssm_cfg["d_model"]        
             dt_rank = config.model.model_config.ssm_cfg["dt_rank"]
             dt_scale = config.model.model_config.ssm_cfg["dt_scale"]
 
         for param_name, param in model.named_parameters():
             assert isinstance(param, NanotronParameter)
-            
-            module_name, param_name = param_name.rsplit('.', 1)
-            
+
+            module_name, param_name = param_name.rsplit(".", 1)
+
             if param.is_tied:
                 tied_info = param.get_tied_info()
                 full_param_name = tied_info.get_full_name_from_module_id_to_prefix(
@@ -788,7 +828,7 @@ class MambaForTraining(NanotronModel):
                 continue
 
             module = model.get_submodule(module_name)
-            
+
             if isinstance(module, TensorParallelColumnLinear) or isinstance(module, TensorParallelRowLinear):
                 if "weight" == param_name:
                     init.kaiming_uniform_(module.weight, a=math.sqrt(5))
@@ -796,7 +836,7 @@ class MambaForTraining(NanotronModel):
                     raise ValueError("We don't use bias for TensorParallelColumnLinear and TensorParallelRow")
                 else:
                     raise ValueError(f"Who the fuck is {param_name}?")
-                
+
                 if rescale_prenorm_residual and full_param_name.endswith("out_proj.weight"):
                     # Reinitialize selected weights subject to the OpenAI GPT-2 Paper Scheme:
                     #   > A modified initialization which accounts for the accumulation on the residual path with model depth. Scale
@@ -810,38 +850,36 @@ class MambaForTraining(NanotronModel):
                     # Having just p *= scale would repeatedly scale it down
                     with torch.no_grad():
                         module.weight /= math.sqrt(n_residuals_per_layer * num_hidden_layers)
-            
+
             elif isinstance(module, nn.Conv1d):
-                fan_in = None                
+                fan_in = None
                 if "weight" == param_name:
                     fan_in, _ = init._calculate_fan_in_and_fan_out(param)
                     init.kaiming_uniform_(module.weight, a=math.sqrt(5))
-                elif "bias" == param_name:                        
+                elif "bias" == param_name:
                     bound = 1 / math.sqrt(fan_in) if (fan_in is not None and fan_in > 0) else 0
                     init.uniform_(module.bias, -bound, bound)
                 else:
                     raise ValueError(f"Who the fuck is {param_name}?")
-            
+
             elif isinstance(module, nn.Linear):
                 fan_in = None
-                
+
                 if "weight" == param_name:
                     fan_in, _ = init._calculate_fan_in_and_fan_out(module.weight)
                     init.kaiming_uniform_(module.weight, a=math.sqrt(5))
-                elif "bias" == param_name:                        
+                elif "bias" == param_name:
                     bound = 1 / math.sqrt(fan_in) if (fan_in is not None and fan_in > 0) else 0
                     init.uniform_(module.bias, -bound, bound)
                 else:
                     raise ValueError(f"Who the fuck is {param_name}?")
 
-                
                 if config.model.model_config.ssm_cfg is not None:
-
                     if dt_rank == "auto":
-                        dt_init_std = math.ceil(d_model / 16)**-0.5 * dt_scale
+                        dt_init_std = math.ceil(d_model / 16) ** -0.5 * dt_scale
                     else:
-                        dt_init_std = dt_rank**-0.5 * dt_scale                    
-                    
+                        dt_init_std = dt_rank**-0.5 * dt_scale
+
                     if dt_init == "constant":
                         nn.init.constant_(module.weight, dt_init_std)
                     elif dt_init == "random":
@@ -860,19 +898,19 @@ class MambaForTraining(NanotronModel):
                     module.bias.zero_()
                 else:
                     raise ValueError(f"Who the fuck is {param_name}?")
-            
+
             elif isinstance(module, Mamba):
-                # NOTE(fmom): nn.Parameter are initialized in Mamba __init__ 
+                # NOTE(fmom): nn.Parameter are initialized in Mamba __init__
                 # In Mamba, only those 3 parameters don't have weight decay.
                 if param_name in ["dt_bias", "A_log", "D"]:
                     param._no_weight_decay = True
-            
+
             else:
-                raise Exception(f"Parameter {full_param_name} was not intialized")    
-            
+                raise Exception(f"Parameter {full_param_name} was not initialized")
+
             assert full_param_name not in initialized_parameters
             initialized_parameters.add(full_param_name)
-            
+
         assert initialized_parameters == {
             param.get_tied_info().get_full_name_from_module_id_to_prefix(module_id_to_prefix=module_id_to_prefix)
             if param.is_tied
@@ -886,7 +924,7 @@ class MambaForTraining(NanotronModel):
             "model.token_position_embeddings.pp_block.token_embedding.weight",
             "model.lm_head.pp_block.weight",
         ]
-    
+
     # TODO(fmom): implement get_block_compute_costs
     def get_block_compute_costs(self):
         """Computes the compute cost of each block in the model so that we can do a better job of load balancing."""
