@@ -52,7 +52,7 @@ from nanotron.models import NanotronModel, build_model
 from nanotron.models.base import check_model_has_grad
 from nanotron.models.llama import LlamaForTraining, RotaryEmbedding
 from nanotron.models.starcoder2 import Starcoder2ForTraining
-from nanotron.models.mamba_slow.mamba import MambaForTraining
+from nanotron.models.mamba.mamba import MambaForTraining
 from brrr.models.mamba_fast.mamba import MambaFastForTraining
 from nanotron.optim.clip_grads import clip_grad_norm
 from nanotron.parallel import ParallelContext

@@ -52,7 +52,7 @@ from torch import Tensor
 
 from einops import rearrange, repeat
 
-from nanotron.models.mamba_slow.selective_scan_interface import selective_scan_fn, mamba_inner_fn
+from nanotron.models.mamba.selective_scan_interface import selective_scan_fn, mamba_inner_fn
 
 try:
     from causal_conv1d import causal_conv1d_fn, causal_conv1d_update
@@ -486,7 +486,30 @@ class MambaDecoderLayer(nn.Module):
     def allocate_inference_cache(self, batch_size, max_seqlen, dtype=None, **kwargs):
         return self.mixer.allocate_inference_cache(batch_size, max_seqlen, dtype=dtype, **kwargs)
 
-class MambaModel(nn.Module):
+class GenerationMixin:
+    def allocate_inference_cache(self, batch_size, max_seqlen, dtype=None, **kwargs):
+        raise NotImplementedError
+
+    def generate(
+        self,
+        input_ids,
+        max_length,
+        top_k=1,
+        top_p=0.0,
+        min_p=0.0,
+        temperature=1.0,
+        return_dict_in_generate=False,
+        output_scores=False,
+        **kwargs,
+    ):
+        output = decode(
+            input_ids, self, max_length, top_k=top_k, top_p=top_p, min_p = min_p, temperature=temperature, **kwargs
+        )
+        if not output_scores:
+            output.scores = None
+        return output if return_dict_in_generate else output.sequences
+
+class MambaModel(nn.Module, GenerationMixin):
     def __init__(
         self,
         config: MambaConfig,
