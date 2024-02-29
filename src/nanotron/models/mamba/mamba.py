@@ -77,24 +77,24 @@ logger = logging.get_logger(__name__)
 class Mamba(nn.Module):
     def __init__(
         self,
-        d_model,
+        d_model: int,
         parallel_config: Optional[ParallelismArgs],
         tp_pg: dist.ProcessGroup,
-        d_state=16,
-        d_conv=4,
-        expand=2,
-        dt_rank="auto",
-        dt_min=0.001,
-        dt_max=0.1,
-        dt_init="random",
-        dt_scale=1.0,
-        dt_init_floor=1e-4,
-        conv_bias=True,
-        bias=False,
-        use_fast_path=True,  # Fused kernel options
-        layer_idx=None,
-        device=None,
-        dtype=None,
+        d_state: int=16,
+        d_conv: int=4,
+        expand: int=2,
+        dt_rank: str="auto",
+        dt_min: float=0.001,
+        dt_max: float=0.1,
+        dt_init: str="random",
+        dt_scale: float=1.0,
+        dt_init_floor: float=1e-4,
+        conv_bias: bool=True,
+        bias: bool=False,
+        use_fast_path: bool=True,  # Fused kernel options
+        layer_idx: Optional[int]=None,
+        device: Optional[torch.device]=None,
+        dtype: Optional[torch.dtype]=None,
     ):
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
@@ -202,7 +202,7 @@ class Mamba(nn.Module):
             contiguous_chunks=None
         )
 
-    def forward(self, hidden_states, inference_params=None):
+    def forward(self, hidden_states: Union[torch.Tensor, TensorPointer], inference_params=None):
         """
         hidden_states: (B, L, D)
         Returns: same shape as hidden_states
@@ -294,7 +294,7 @@ class Mamba(nn.Module):
         out = self.out_proj(y)
         return out
 
-    def step(self, hidden_states, conv_state, ssm_state):
+    def step(self, hidden_states: Union[torch.Tensor, TensorPointer], conv_state: torch.Tensor, ssm_state: torch.Tensor):
         dtype = hidden_states.dtype
         assert hidden_states.shape[1] == 1, "Only support decoding with 1 token at a time for now"
         xz = self.in_proj(hidden_states.squeeze(1))  # (B 2D)
@@ -341,7 +341,7 @@ class Mamba(nn.Module):
         out = self.out_proj(y)
         return out.unsqueeze(1), conv_state, ssm_state
 
-    def allocate_inference_cache(self, batch_size, max_seqlen, dtype=None, **kwargs):
+    def allocate_inference_cache(self, batch_size: int, max_seqlen: int, dtype: torch.dtype=None, **kwargs):
         device = self.out_proj.weight.device
         conv_dtype = self.conv1d.weight.dtype if dtype is None else dtype
         conv_state = torch.zeros(
@@ -354,7 +354,7 @@ class Mamba(nn.Module):
         )
         return conv_state, ssm_state
 
-    def _get_states_from_cache(self, inference_params, batch_size, initialize_states=False):
+    def _get_states_from_cache(self, inference_params, batch_size: int, initialize_states: bool=False):
         assert self.layer_idx is not None
         if self.layer_idx not in inference_params.key_value_memory_dict:
             batch_shape = (batch_size,)
