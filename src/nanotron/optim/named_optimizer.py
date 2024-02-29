@@ -11,8 +11,8 @@ class NamedOptimizer(InheritFromOtherOptimizer):
     def __init__(
         self,
         named_params_or_groups: Iterable[Union[Tuple[str, torch.Tensor], Dict[str, Any]]],
-        weight_decay: float,
         optimizer_builder: Callable[[Iterable[Dict[str, Any]]], torch.optim.Optimizer],
+        weight_decay: float = 0.0,
     ): 
         id_to_name_decay, id_to_name_no_decay  = {}, {}
         
