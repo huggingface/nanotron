@@ -123,26 +123,6 @@ def get_untyped_storage(tensor: torch.Tensor) -> torch.UntypedStorage:
     else:
         return tensor.storage().untyped()
 
-
-def init_method_normal(sigma: float) -> Callable[[torch.Tensor], None]:
-    """Init method based on N(0, sigma)."""
-
-    def init_(tensor: torch.Tensor):
-        torch.nn.init.normal_(tensor, mean=0.0, std=sigma)
-
-    return init_
-
-
-def scaled_init_method_normal(sigma: float, num_layers: int, scale: int = 2) -> Callable[[torch.Tensor], None]:
-    """Default: Init method based on N(0, sigma/sqrt(2*num_layers)."""
-    std = sigma / math.sqrt(scale * num_layers)
-
-    def init_(tensor: torch.Tensor):
-        torch.nn.init.normal_(tensor, mean=0.0, std=std)
-
-    return init_
-
-
 def tensor_from_untyped_storage(untyped_storage: torch.UntypedStorage, dtype: torch.dtype):
     # TODO @thomasw21: Figure out what's the best Pytorch way of building a tensor from a storage.
     device = untyped_storage.device

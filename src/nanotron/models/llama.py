@@ -902,7 +902,6 @@ class LlamaForTraining(NanotronModel):
         for param_name, param in model.named_parameters():
             assert isinstance(param, NanotronParameter)
             
-            #TODO(fmom): Make sure it works with PP=2
             module_name, param_name = param_name.rsplit('.', 1)
             
             if param.is_tied:
