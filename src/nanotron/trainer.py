@@ -26,7 +26,6 @@ from nanotron import logging
 from nanotron.config import (
     Config,
     ExistingCheckpointInit,
-    MambaInit,
     ParallelismArgs,
     RandomInit,
     get_config_from_file,
@@ -578,24 +577,6 @@ class DistributedTrainer:
                     parallel_context=self.parallel_context,
                     root_folder=self.config.model.init_method.path,
                 )
-            elif isinstance(self.config.model.init_method, MambaInit):
-
-                unwrapped_model.init_model_randomly(config=self.config)
-                # Synchronize parameters so that the model is consistent
-                # sync all params across dp
-                for name, param in sorted(model.named_parameters(), key=lambda x: x[0]):
-                    dist.all_reduce(param, op=dist.ReduceOp.AVG, group=self.parallel_context.dp_pg)
-
-                # sync tied params across tied groups
-                for (_, group_ranks), param in sorted(
-                    get_tied_id_to_param(
-                        parameters=model.parameters(),
-                        root_module=unwrapped_model,
-                    ).items(),
-                    key=lambda x: x[0],
-                ):
-                    group = self.parallel_context.world_ranks_to_pg[group_ranks]
-                    dist.all_reduce(param, op=dist.ReduceOp.AVG, group=group)
             elif isinstance(self.config.model.init_method, RandomInit):
 
                 unwrapped_model.init_model_randomly(config=self.config)

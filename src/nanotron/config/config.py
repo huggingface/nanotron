@@ -13,7 +13,6 @@ from yaml.loader import SafeLoader
 from nanotron.config.lighteval_config import LightEvalConfig
 from nanotron.config.models_config import (
     ExistingCheckpointInit,
-    MambaInit,
     NanotronConfigs,
     RandomInit,
 )
@@ -177,7 +176,7 @@ class ModelArgs:
     """Arguments related to model architecture"""
 
     model_config: NanotronConfigs
-    init_method: Union[RandomInit, MambaInit, ExistingCheckpointInit]
+    init_method: Union[RandomInit, ExistingCheckpointInit]
     dtype: Optional[torch.dtype] = None
     make_vocab_size_divisible_by: int = 1
     ddp_bucket_cap_mb: int = 25

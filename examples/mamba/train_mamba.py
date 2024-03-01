@@ -4,9 +4,9 @@ import sys
 
 from mamba.config_mamba import MambaConfig
 from mamba.mamba import MambaForTraining
+from mamba.trainer import MambaTrainer
 
 from nanotron import logging
-from nanotron.trainer import DistributedTrainer
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", ".."))
 
@@ -26,7 +26,7 @@ if __name__ == "__main__":
     config_file = args.config_file
 
     # Load trainer and data
-    trainer = DistributedTrainer(config_file, model_config_class=MambaConfig, model_class=MambaForTraining)
+    trainer = MambaTrainer(config_file, model_config_class=MambaConfig, model_class=MambaForTraining)
     dataloader = get_dataloader(trainer)
 
     # Train
