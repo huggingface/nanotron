@@ -9,8 +9,6 @@ Modeling code for Mamba to use with [Nanotron](https://github.com/huggingface/na
 ## 🚀 Quickstart
 
 ```bash
-# Generate a config file
-python examples/moe/config_mamba.py
 
 pip install einops
 pip install causal-conv1d>=1.1.0,<1.2.0
