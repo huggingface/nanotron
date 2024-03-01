@@ -1,6 +1,8 @@
 """ Example python script to generate a YAML config file which can be used to run a training with nanotron. Refer to "examples" section in the `/README.md` for more information."""
 import math
 import os
+from dataclasses import dataclass
+from typing import Optional
 
 from nanotron.config import (
     CheckpointsArgs,
@@ -9,7 +11,6 @@ from nanotron.config import (
     GeneralArgs,
     LoggingArgs,
     LRSchedulerArgs,
-    MambaConfig,
     MambaInit,
     ModelArgs,
     OptimizerArgs,
@@ -19,6 +20,29 @@ from nanotron.config import (
     TokensArgs,
 )
 from nanotron.logging import human_format
+
+
+@dataclass
+class MambaConfig:
+    """Configuration for a Mamba model
+
+    Be careful on having a coherent typing as we use it to reconstruct the model from yaml
+    """
+
+    is_mamba_config: bool = True  # We use this help differentiate models in yaml/python conversion
+    d_model: int = 2560
+    num_hidden_layers: int = 64
+    vocab_size: int = 50277
+    ssm_cfg: Optional[dict] = None
+    rms_norm: bool = True
+    fused_add_norm: bool = True
+    residual_in_fp32: bool = True
+    pad_vocab_size_multiple: int = 8
+    # ==== Custom ======
+    dtype: str = "float32"
+    rms_norm_eps: float = 1e-5
+    pad_token_id: Optional[int] = None
+
 
 ssm_cfg_dtype = "bfloat16"
 ssm_cfg = {

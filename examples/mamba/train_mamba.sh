@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Simple script to create a tiny llama model and train it
+# Simple script to create a tiny mamba model and train it
 
 set -e -x
 
@@ -8,7 +8,7 @@ set -e -x
 
 EXAMPLE_PATH=$(cd -- "$(dirname "$0")" >/dev/null 2>&1 ; pwd -P)
 REPO_PATH=$(dirname $EXAMPLE_PATH)
-python $EXAMPLE_PATH/config_mamba.py
+python $EXAMPLE_PATH/mamba/config_mamba.py
 
 # Setup from environment variables
 
@@ -21,4 +21,4 @@ python -u -m torch.distributed.run \
     --rdzv_backend c10d \
     --max_restarts 0 \
     --tee 3 \
-    $REPO_PATH/../run_train.py --config-file $EXAMPLE_PATH/config_mamba.yaml
+    $REPO_PATH/mamba/train_mamba.py --config-file $EXAMPLE_PATH/mamba/config_mamba.yaml

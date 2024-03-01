@@ -28,15 +28,10 @@ from torch.nn import init
 from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.config import ParallelismArgs
-from nanotron.config.models_config import MambaConfig
 from nanotron.config.utils_config import cast_str_to_torch_dtype
 from nanotron.generation.generate_store import AttachableStore
 from nanotron.logging import log_rank
 from nanotron.models import NanotronModel
-from nanotron.models.mamba.selective_scan_interface import (
-    mamba_inner_fn,
-    selective_scan_fn,
-)
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter
 from nanotron.parallel.pipeline_parallel.block import PipelineBlock, TensorPointer
@@ -49,6 +44,9 @@ from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelRowLinear,
 )
 from nanotron.random import RandomStates
+
+from .config_mamba import MambaConfig
+from .selective_scan_interface import mamba_inner_fn, selective_scan_fn
 
 try:
     from causal_conv1d import causal_conv1d_fn, causal_conv1d_update
