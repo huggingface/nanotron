@@ -19,7 +19,6 @@ from typing import (
 )
 
 import torch
-from brrr.models.mamba_fast.mamba import MambaFastForTraining
 from torch.nn.parallel import DistributedDataParallel
 
 from nanotron import distributed as dist
@@ -52,7 +51,6 @@ from nanotron.logging import (
 from nanotron.models import NanotronModel, build_model
 from nanotron.models.base import check_model_has_grad
 from nanotron.models.llama import LlamaForTraining, RotaryEmbedding
-from nanotron.models.mamba.mamba import MambaForTraining
 from nanotron.models.starcoder2 import Starcoder2ForTraining
 from nanotron.optim.clip_grads import clip_grad_norm
 from nanotron.parallel import ParallelContext
@@ -97,8 +95,6 @@ dist_logger.setLevel(logging.WARNING)
 CONFIG_TO_MODEL_CLASS = {
     "LlamaConfig": LlamaForTraining,
     "Starcoder2Config": Starcoder2ForTraining,
-    "MambaConfig": MambaForTraining,
-    "MambaFastConfig": MambaFastForTraining,
 }
 
 try:
@@ -247,7 +243,7 @@ class DistributedTrainer:
 
     def pre_training(self, *args, **kwargs):
         current_time = datetime.datetime.now().strftime("%d/%m/%Y_%H:%M:%S")
-        if dist.get_rank(self.parallel_context.world_pg) == 0 and wandb is not None:
+        if dist.get_rank(self.parallel_context.world_pg) in self.logger_ranks and wandb is not None:
             wandb.init(
                 project=self.config.general.project,
                 name=f"{current_time}_{self.config.general.project}_{self.config.general.run}",
@@ -486,7 +482,7 @@ class DistributedTrainer:
                     ]
                 )
 
-            if wandb is not None:
+            if dist.get_rank(self.parallel_context.world_pg) in self.logger_ranks and wandb is not None:
                 wandb.log(
                     {**{log_item.tag: log_item.scalar_value for log_item in log_entries}, "step": self.iteration_step}
                 )
