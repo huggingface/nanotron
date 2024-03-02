@@ -35,3 +35,12 @@ FP8LM_RECIPE = FP8TrainingRecipe(
         exp_avg_sq_dtype=DTypes.KFLOAT16,
     ),
 )
+
+### FOR DYNAMIC LOSS SCALING ###
+
+# TODO(xrsrke): Make it more deliberate, like if people import this constant,
+# they should know that it is a constant for dynamic loss scaling
+# NOTE: these initial scaling factors are from deepspeed, but we are technically free to choose our own
+LS_INITIAL_SCALING_VALUE = torch.tensor(2**16, dtype=torch.float32)
+LS_INITIAL_SCALING_FACTOR = torch.tensor(2.0, dtype=torch.float32)
+LS_INTERVAL = 1000
