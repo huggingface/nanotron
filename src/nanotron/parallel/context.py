@@ -127,3 +127,27 @@ class ParallelContext:
 
         dist.barrier()
         dist.destroy_process_group()
+
+    def get_global_rank(
+        self,
+        expert_parallel_rank: int,
+        pipeline_parallel_rank: int,
+        data_parallel_rank: int,
+        tensor_parallel_rank: int,
+    ) -> int:
+        """
+        Get the global rank based on the specified ranks in different parallel groups.
+
+        :param expert_parallel_rank: int, Rank in the expert parallel group.
+        :param pipeline_parallel_rank: int, Rank in the pipeline parallel group.
+        :param data_parallel_rank: int, Rank in the data parallel group.
+        :param tensor_parallel_rank: int, Rank in the tensor parallel group.
+
+        :return: int, The global rank.
+        """
+        return self.world_rank_matrix[
+            expert_parallel_rank,
+            pipeline_parallel_rank,
+            data_parallel_rank,
+            tensor_parallel_rank,
+        ]
