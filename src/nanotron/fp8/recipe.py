@@ -29,6 +29,8 @@ class FP8LinearRecipe:
     weight_grad: FP8TensorRecipe
     output_grad: FP8TensorRecipe
 
+    # TODO(xrsrke): this is a low-level implementation details
+    # we should hide this from high-level apis later on
     split_accumulator: FP8SplitAccumulator
 
 
