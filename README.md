@@ -66,6 +66,11 @@ pre-commit install
 pre-commit run --config .pre-commit-config.yaml --all-files
 ```
 
+*As a part of making sure we aren't slowed down as the codebase grows, we will not merge a PR if the features it introduces do not have test coverage.*
+
+We have extensions built on top of Nanotron, with their tests located in the `/examples` folder. Since VSCode defaults to discovering tests only in the `/tests` folder, please run tests from both `/examples` and `/tests` to ensure your PR does not break these extensions.
+
+
 Features we would like to add:
 - [ ] Support `torch.compile`
 - [ ] Support `torch.distributed.rpc`
