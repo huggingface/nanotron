@@ -8,18 +8,21 @@ from torch.optim import Adam
 
 
 def test_loss_scaler_attributes():
-    loss_scaler = LossScaler()
+    scaling_value = torch.tensor(1.0)
+    scaling_factor = torch.tensor(2.0)
+    interval = 10
 
-    assert isinstance(loss_scaler.scaling_value, torch.Tensor)
-    assert isinstance(loss_scaler.scaling_factor, torch.Tensor)
-    assert isinstance(loss_scaler.interval, int)
-    assert isinstance(loss_scaler.overflow_counter, int)
+    loss_scaler = LossScaler(scaling_value, scaling_factor, interval)
+
+    assert loss_scaler.scaling_value == scaling_value
+    assert loss_scaler.scaling_factor == scaling_factor
+    assert loss_scaler.interval == interval
 
 
 def test_gradients_correctness():
+    input = torch.randn(4, 4)
     linear = nn.Linear(4, 4)
     ref_linear = deepcopy(linear)
-    input = torch.randn(4, 4)
     loss = linear(input).sum()
 
     loss_scaler = LossScaler()
@@ -57,16 +60,16 @@ def test_loss_scaler_step():
 
 
 def test_not_update_scaling_factor_until_calling_it():
-    interval = 1
+    INTERVAL = 1
 
     input = torch.randn(4, 4)
     linear = nn.Linear(4, 4)
     optim = Adam(linear.parameters())
-    loss_scaler = LossScaler(interval=interval)
+    loss_scaler = LossScaler(interval=INTERVAL)
     initial_scaling_value = deepcopy(loss_scaler.scaling_value)
 
     loss_scaler.scale(linear(input).sum()).backward()
-    loss_scaler.step(optim)
+    linear.weight.grad[0] = torch.tensor(float("inf"))
 
     assert torch.allclose(loss_scaler.scaling_value, initial_scaling_value)
 
@@ -75,27 +78,55 @@ def test_not_update_scaling_factor_until_calling_it():
     assert not torch.allclose(loss_scaler.scaling_value, initial_scaling_value)
 
 
-def test_delay_scaling():
-    pass
-
-
 def test_not_update_parameters_when_overflow_is_detected():
     input = torch.randn(4, 4)
     linear = nn.Linear(4, 4)
+    ref_linear = deepcopy(linear)
     optim = Adam(linear.parameters())
     loss_scaler = LossScaler()
-    deepcopy(loss_scaler.scaling_value)
 
     linear(input).sum().backward()
     loss_scaler.scale(linear(input).sum()).backward()
 
-    assert torch.allclose(linear.weight, linear.weight)
-    assert torch.allclose(linear.bias, linear.bias)
+    assert torch.allclose(linear.weight, ref_linear.weight)
+    assert torch.allclose(linear.bias, ref_linear.bias)
 
+    # NOTE: we intentionally set only 1 gradient to be inf
+    linear.weight.grad[0] = torch.tensor(float("inf"))
     loss_scaler.step(optim)
 
-    assert torch.allclose(linear.weight, linear.weight)
-    assert torch.allclose(linear.bias, linear.bias)
+    assert torch.allclose(linear.weight, ref_linear.weight)
+    assert torch.allclose(linear.bias, ref_linear.bias)
+
+
+@pytest.mark.parametrize("interval", [1, 5, 10])
+def test_deplay_update_scaling_factor(interval):
+    iterations = 0
+
+    input = torch.randn(4, 4)
+    linear = nn.Linear(4, 4)
+    optim = Adam(linear.parameters())
+    loss_scaler = LossScaler(interval=interval)
+    current_scaling_value = deepcopy(loss_scaler.scaling_value)
+
+    for i in range(1, 20):
+        loss_scaler.scale(linear(input).sum()).backward()
+        # NOTE: we set the gradients to be inf
+        # so that we can test the overflow detection
+        linear.weight.grad[0] = torch.tensor(float("inf"))
+
+        loss_scaler.step(optim)
+        loss_scaler.update()
+
+        iterations += 1
+
+        if i % interval == 0:
+            assert not torch.allclose(
+                loss_scaler.scaling_value, current_scaling_value
+            ), f"iteration {iterations} failed to update scaling value"
+            current_scaling_value = deepcopy(loss_scaler.scaling_value)
+        else:
+            assert torch.allclose(loss_scaler.scaling_value, current_scaling_value), f"iterations {iterations}"
 
 
 @pytest.mark.parametrize("tensor, output", [[torch.tensor(1.0), False], [torch.tensor(1e308).pow(2), True]])
