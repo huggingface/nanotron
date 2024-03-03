@@ -28,7 +28,7 @@ class LossScaler:
     def scale(self, loss: torch.Tensor) -> torch.Tensor:
         return loss * self.scaling_value
 
-    def step(self, optim: torch.optim.Optimizer):
+    def step(self, optim: torch.optim.Optimizer, *args, **kwargs):
         detected_overflow = False
         for group in optim.param_groups:
             for p in group["params"]:
@@ -49,16 +49,13 @@ class LossScaler:
                     if p.grad is not None:
                         p.grad = p.grad / self.scaling_value
 
-            optim.step()
-
-    def _update_new_scaling_factor(self):
-        self.scaling_value = self.scaling_value * self.scaling_factor
+            optim.step(*args, **kwargs)
 
     def update(self):
         self.overflow_counter += 1
 
         if self.overflow_counter == self.interval:
-            self._update_new_scaling_factor()
+            self.scaling_value = self.scaling_value * self.scaling_factor
             self.overflow_counter = 0
 
 

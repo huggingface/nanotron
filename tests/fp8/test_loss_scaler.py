@@ -101,8 +101,6 @@ def test_not_update_parameters_when_overflow_is_detected():
 
 @pytest.mark.parametrize("interval", [1, 5, 10])
 def test_deplay_update_scaling_factor(interval):
-    iterations = 0
-
     input = torch.randn(4, 4)
     linear = nn.Linear(4, 4)
     optim = Adam(linear.parameters())
@@ -118,21 +116,32 @@ def test_deplay_update_scaling_factor(interval):
         loss_scaler.step(optim)
         loss_scaler.update()
 
-        iterations += 1
-
         if i % interval == 0:
-            assert not torch.allclose(
-                loss_scaler.scaling_value, current_scaling_value
-            ), f"iteration {iterations} failed to update scaling value"
+            assert not torch.allclose(loss_scaler.scaling_value, current_scaling_value)
             current_scaling_value = deepcopy(loss_scaler.scaling_value)
         else:
-            assert torch.allclose(loss_scaler.scaling_value, current_scaling_value), f"iterations {iterations}"
+            assert torch.allclose(loss_scaler.scaling_value, current_scaling_value)
 
 
-@pytest.mark.parametrize("tensor, output", [[torch.tensor(1.0), False], [torch.tensor(1e308).pow(2), True]])
+@pytest.mark.parametrize(
+    "tensor, output",
+    [
+        [torch.tensor(1.0), False],
+        [torch.tensor(1e308).pow(2), True],
+        [torch.tensor(float("inf")), True],
+        [torch.randn(2, 3), True],
+    ],
+)
 def test_overflow(tensor, output):
+    if tensor.ndim > 1:
+        tensor[0, 0] = torch.tensor(float("inf"))
+
     assert is_overflow(tensor) == output
 
+
+# TODO(xrsrke): test decrease the scaling factor when overflow is detected
+
+# TODO(xrsrke): test increase the scaling factor when no overflow is detected for n intervals
 
 # TODO(xrsrke): test that we don't scale the gradients of parameters that are not updated
 # by the optimizer

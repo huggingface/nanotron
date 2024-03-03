@@ -1,7 +1,13 @@
 import torch
 
 from nanotron.fp8.dtypes import DTypes
-from nanotron.fp8.recipe import FP8LinearRecipe, FP8OptimRecipe, FP8TensorRecipe, FP8TrainingRecipe
+from nanotron.fp8.recipe import (
+    FP8LinearRecipe,
+    FP8OptimRecipe,
+    FP8SplitAccumulator,
+    FP8TensorRecipe,
+    FP8TrainingRecipe,
+)
 
 FP8_GPU_NAMES = ["h100", "rtx 4090"]
 
@@ -28,6 +34,7 @@ FP8LM_RECIPE = FP8TrainingRecipe(
         input_grad=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=16),
         weight_grad=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=1),
         output_grad=FP8TensorRecipe(dtype=DTypes.FP8E5M2, margin=0, interval=16),
+        split_accumulator=FP8SplitAccumulator(output=False, input_grad=True, weight_grad=True),
     ),
     optim=FP8OptimRecipe(
         master_weight_dtype=DTypes.KFLOAT16,
@@ -41,6 +48,6 @@ FP8LM_RECIPE = FP8TrainingRecipe(
 # TODO(xrsrke): Make it more deliberate, like if people import this constant,
 # they should know that it is a constant for dynamic loss scaling
 # NOTE: these initial scaling factors are from deepspeed, but we are technically free to choose our own
-LS_INITIAL_SCALING_VALUE = torch.tensor(2**16, dtype=torch.float32)
+LS_INITIAL_SCALING_VALUE = torch.tensor(2**32, dtype=torch.float32)
 LS_INITIAL_SCALING_FACTOR = torch.tensor(2.0, dtype=torch.float32)
 LS_INTERVAL = 1000

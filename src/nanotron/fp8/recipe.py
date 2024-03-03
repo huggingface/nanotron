@@ -12,6 +12,13 @@ class FP8TensorRecipe:
 
 
 @dataclass
+class FP8SplitAccumulator:
+    output: bool
+    input_grad: bool
+    weight_grad: bool
+
+
+@dataclass
 class FP8LinearRecipe:
     input: FP8TensorRecipe
     weight: FP8TensorRecipe
@@ -21,6 +28,8 @@ class FP8LinearRecipe:
     input_grad: FP8TensorRecipe
     weight_grad: FP8TensorRecipe
     output_grad: FP8TensorRecipe
+
+    split_accumulator: FP8SplitAccumulator
 
 
 @dataclass
