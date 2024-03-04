@@ -700,9 +700,6 @@ class MambaModel(nn.Module):
         return model_flops_per_s, hardware_flops_per_s
 
 
-torch.jit.script
-
-
 def masked_mean(loss, label_mask, dtype):
     # type: (Tensor, Tensor, torch.dtype) -> Tensor
     return (loss * label_mask).sum(dtype=dtype) / label_mask.sum()
