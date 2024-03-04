@@ -481,9 +481,13 @@ class DistributedTrainer:
                     ]
                 )
 
+            # NOTE: only one rank writes to wandb
             if dist.get_rank(self.parallel_context.world_pg) == self.logger_ranks[0] and wandb is not None:
                 wandb.log(
-                    {**{log_item.tag: log_item.scalar_value for log_item in log_entries}, "step": self.iteration_step}
+                    {
+                        **{log_item.tag: log_item.scalar_value for log_item in log_entries},
+                        "iteration_step": self.iteration_step,
+                    }
                 )
 
             self.loggerwriter.add_scalars_from_list(log_entries, self.iteration_step)
