@@ -43,12 +43,16 @@ class DoReMiTrainer(DistributedTrainer):
     ):
         # NOTE: save the initial domain_weights
         config: DoReMiConfig = get_config_from_file(config_or_config_file, config_class=config_class)
+        assert (
+            config.doremi.ref_model_resume_checkpoint_path is not None
+        ), "You must provide a reference model checkpoint path for DoReMi training."
+
         self.doremi_context = DoReMiContext(
             domain_weights,
             config.doremi.domain_names,
             is_proxy=True,
-            step_size=1,
-            smoothing_param=1e-3,
+            step_size=config.doremi.step_size,
+            smoothing_param=config.doremi.smoothing_params,
         )
         self.ref_checkpoint_path = config.doremi.ref_model_resume_checkpoint_path
         super().__init__(config_or_config_file, config_class)
@@ -172,7 +176,7 @@ class DoReMiTrainer(DistributedTrainer):
                         **loss_logs,
                         **samples_per_domain_logs,
                         "loss_avg": loss_avg.cpu().detach().numpy(),
-                        "step": self.iteration_step,
+                        "iteration_step": self.iteration_step,
                     }
                 )
 
@@ -245,6 +249,6 @@ class ReferenceTrainer(DistributedTrainer):
                     **loss_logs,
                     **samples_per_domain_logs,
                     "loss_avg": loss_avg.item(),
-                    "step": self.iteration_step,
+                    "iteration_step": self.iteration_step,
                 }
             )

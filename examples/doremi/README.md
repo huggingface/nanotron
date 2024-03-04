@@ -22,7 +22,7 @@ In our implementation, the experiment results show that doremi outperforms 15 ou
 
 ### How it works
 
-- Step 0: Preprocessing data
+- Step 0: `pip install -r examples/doremi/requirements.txt`
 
 - Step 1: Train a small reference model using uniform sampling from each domain (for a given global batch size, you equally sample `x` samples across all domains, or in some cases, a domain has a smaller amount of samples than other domains. This leads to some domains running out of samples early, so you could enable automatic domain weights based on the token count).
 
