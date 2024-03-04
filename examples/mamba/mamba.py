@@ -101,7 +101,7 @@ class Mamba(nn.Module):
 
         tp_mode = parallel_config.tp_mode if parallel_config is not None else TensorParallelLinearMode.ALL_REDUCE
         assert tp_mode == TensorParallelLinearMode.ALL_REDUCE or parallel_config.tp_linear_async_communication is False
-        "Only ALL_REDUCE and tp_linear_async_communication=False are supported"
+        "Only ALL_REDUCE and tp_linear_async_communication=False are supported"  # noqa: E702
 
         tp_linear_async_communication = (
             parallel_config.tp_linear_async_communication if parallel_config is not None else False
