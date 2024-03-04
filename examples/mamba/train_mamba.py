@@ -2,7 +2,7 @@ import argparse
 import os
 import sys
 
-from mamba.config_mamba import MambaConfig
+from mamba.config import MambaConfig
 from mamba.mamba import MambaForTraining
 from mamba.trainer import MambaTrainer
 

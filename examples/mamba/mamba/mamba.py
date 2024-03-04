@@ -45,7 +45,7 @@ from nanotron.parallel.tensor_parallel.nn import (
 )
 from nanotron.random import RandomStates
 
-from .config_mamba import MambaConfig
+from .config import MambaConfig
 from .selective_scan_interface import mamba_inner_fn, selective_scan_fn
 
 try:
@@ -102,7 +102,7 @@ class Mamba(nn.Module):
         self.layer_idx = layer_idx
 
         tp_mode = parallel_config.tp_mode if parallel_config is not None else TensorParallelLinearMode.ALL_REDUCE
-        assert tp_mode == TensorParallelLinearMode.ALL_REDUCE or parallel_config.tp_linear_async_communication == False
+        assert tp_mode == TensorParallelLinearMode.ALL_REDUCE or parallel_config.tp_linear_async_communication is False
         "Only ALL_REDUCE and tp_linear_async_communication=False are supported"
 
         tp_linear_async_communication = (
