@@ -12,34 +12,29 @@ class NamedOptimizer(InheritFromOtherOptimizer):
         self,
         named_params_or_groups: Iterable[Union[Tuple[str, torch.Tensor], Dict[str, Any]]],
         optimizer_builder: Callable[[Iterable[Dict[str, Any]]], torch.optim.Optimizer],
-        weight_decay: float = 0.0,
-    ): 
-        id_to_name_decay, id_to_name_no_decay  = {}, {}
-        
-        # Don't need to check that param_groups are overlapping since the optimizer will do it for me.
-        #  https://github.com/pytorch/pytorch/blob/88b3810c94b45f5982df616e2bc4c471d173f491/torch/optim/optimizer.py#L473
-        id_to_name_decay.update(
-            {id(param): name for name, param in named_params_or_groups["decay"] if id(param) not in id_to_name_decay}
-        )         
-        id_to_name_no_decay.update(
-            {id(param): name for name, param in named_params_or_groups["no_decay"] if id(param) not in id_to_name_no_decay}
-        )
-        
-        id_to_name = {**id_to_name_decay, **id_to_name_no_decay}
+    ):
+        named_param_groups = list(named_params_or_groups)
+        if len(named_param_groups) == 0 or not isinstance(named_param_groups[0], dict):
+            named_param_groups = [{"named_params": named_param_groups}]
+
+        id_to_name = {}
+        params = []
+        for named_param_group in named_param_groups:
+            assert "named_params" in named_param_group
+            # Don't need to check that param_groups are overlapping since the optimizer will do it for me.
+            #  https://github.com/pytorch/pytorch/blob/88b3810c94b45f5982df616e2bc4c471d173f491/torch/optim/optimizer.py#L473
+            id_to_name.update(
+                {id(param): name for name, param in named_param_group["named_params"] if id(param) not in id_to_name}
+            )
+            params.append(
+                {
+                    **{k: v for k, v in named_param_group.items() if k != "named_params"},
+                    "params": [param for _, param in named_param_group["named_params"]],
+                }
+            )
+
         name_to_id = {v: k for k, v in id_to_name.items()}
         assert len(id_to_name) == len(name_to_id)
-
-        #TODO(fmom) Pass weight decay value from config here
-        params = [
-            {
-                "params": [param for _, param in named_params_or_groups["decay"]],
-                "weight_decay": weight_decay
-            },
-            {
-                "params": [param for _, param in named_params_or_groups["no_decay"]],
-                "weight_decay": 0.0
-            }
-        ]
 
         # Sanity check
         for param_group in params:

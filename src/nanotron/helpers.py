@@ -18,12 +18,7 @@ from torch.profiler import ProfilerActivity, profile, tensorboard_trace_handler
 
 from nanotron import distributed as dist
 from nanotron import logging
-from nanotron.config import (
-    Config,
-    LRSchedulerArgs,
-    OptimizerArgs,
-    ParallelismArgs,
-)
+from nanotron.config import Config, LRSchedulerArgs, OptimizerArgs, ParallelismArgs
 from nanotron.distributed import ProcessGroup
 from nanotron.logging import LogItem, log_rank
 from nanotron.models.base import NanotronModel
@@ -40,9 +35,7 @@ from nanotron.optim.optimizer_from_gradient_accumulator import (
 )
 from nanotron.optim.zero import ZeroDistributedOptimizer
 from nanotron.parallel import ParallelContext
-from nanotron.parallel.tensor_parallel.nn import (
-    TensorParallelLinearMode,
-)
+from nanotron.parallel.tensor_parallel.nn import TensorParallelLinearMode
 from nanotron.random import (
     RandomStates,
     get_current_random_state,
@@ -166,25 +159,7 @@ def init_optimizer_and_grad_accumulator(
     # Fix the root_model
     module_id_to_prefix[id(unwrapped_model)] = ""
 
-    # named parameters
-    named_parameters = {
-        "decay": [],
-        "no_decay": []
-    }
-    
-    # NOTE(fmom): Separate parameters who have weight decay and those who don't 
-    # (based on _no_weight_decay attribute that is set in init_model_randomly of each model)
-    for name, param in unwrapped_model.named_parameters():    
-        if param.is_tied:
-            full_name = param.get_tied_info().get_full_name_from_module_id_to_prefix(module_id_to_prefix=module_id_to_prefix)
-        else:
-            full_name = name
-        
-        if optimizer_args.weight_decay == 0.0 or (hasattr(param, "_no_weight_decay") and param._no_weight_decay):
-            named_parameters["no_decay"].append((full_name, param))
-        else:
-            named_parameters["decay"].append((full_name, param))
-
+    named_parameters = list(unwrapped_model.get_named_params_with_correct_tied())
 
     # Basic optimizer builder
     def basic_optimizer_builder(named_param_groups):
@@ -196,8 +171,8 @@ def init_optimizer_and_grad_accumulator(
                 lr=optimizer_args.learning_rate_scheduler.learning_rate,
                 eps=optimizer_args.adam_eps,
                 betas=(optimizer_args.adam_beta1, optimizer_args.adam_beta2),
-                fused=optimizer_args.torch_adam_is_fused
-            )
+                fused=optimizer_args.torch_adam_is_fused,
+            ),
         )
 
     optimizer_builder = basic_optimizer_builder
