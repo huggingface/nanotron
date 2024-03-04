@@ -62,7 +62,7 @@ model:
       use_fast_path: true
     vocab_size: 50277
 optimizer:
-  accumulate_grad_in_fp32: false
+  accumulate_grad_in_fp32: true
   adam_beta1: 0.9
   adam_beta2: 0.95
   adam_eps: 1.0e-08

@@ -9,11 +9,12 @@ from nanotron.trainer import DistributedTrainer
 logger = logging.get_logger(__name__)
 
 from nanotron import distributed as dist
-from nanotron.config import Config, ExistingCheckpointInit, MambaInit
 from nanotron.logging import log_rank
 from nanotron.models import NanotronModel
 from nanotron.parallel.tied_parameters import get_tied_id_to_param
 from nanotron.serialize import load_weights, parse_ckpt_path
+
+from .config_mamba import ExistingCheckpointInit, MambaInit
 
 
 class MambaTrainer(DistributedTrainer):

@@ -9,14 +9,6 @@ class RandomInit:
 
 
 @dataclass
-class MambaInit:
-    # mamba_ssm.models.mixer_seq_simple._init_weights
-    initializer_range: float = 0.02
-    rescale_prenorm_residual: bool = (True,)
-    n_residuals_per_layer: int = (1,)  # Change to 2 if we have MLP
-
-
-@dataclass
 class ExistingCheckpointInit:
     """This is used to initialize from an already existing model (without optimizer, lr_scheduler...)"""
 
