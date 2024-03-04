@@ -102,7 +102,7 @@ class Mamba(nn.Module):
         self.layer_idx = layer_idx
 
         tp_mode = parallel_config.tp_mode if parallel_config is not None else TensorParallelLinearMode.ALL_REDUCE
-        assert tp_mode == TensorParallelLinearMode.REDUCE_SCATTER or not parallel_config.tp_linear_async_communication
+        assert tp_mode == TensorParallelLinearMode.ALL_REDUCE or parallel_config.tp_linear_async_communication == False
         "Only ALL_REDUCE and tp_linear_async_communication=False are supported"
 
         tp_linear_async_communication = (
