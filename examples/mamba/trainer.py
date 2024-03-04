@@ -9,9 +9,21 @@ from nanotron.trainer import DistributedTrainer
 logger = logging.get_logger(__name__)
 
 from nanotron import distributed as dist
+from nanotron.config import ParallelismArgs
 from nanotron.logging import log_rank
 from nanotron.models import NanotronModel
-from nanotron.parallel.tied_parameters import get_tied_id_to_param
+from nanotron.parallel import ParallelContext
+from nanotron.parallel.parameters import NanotronParameter
+from nanotron.parallel.pipeline_parallel.utils import get_pp_rank_of
+from nanotron.parallel.tensor_parallel.nn import (
+    TensorParallelLinearMode,
+    TensorParallelRowLinear,
+)
+from nanotron.parallel.tied_parameters import (
+    create_pg_for_tied_weights,
+    get_tied_id_to_param,
+    tie_parameters,
+)
 from nanotron.serialize import load_weights, parse_ckpt_path
 
 
@@ -25,6 +37,77 @@ class MambaTrainer(DistributedTrainer):
     ):
         assert config_class == MambaConfig
         super().__init__(config_or_config_file, config_class, model_config_class, model_class)
+
+    def _mark_tied_parameters(
+        self,
+        model: NanotronModel,
+        parallel_context: ParallelContext,
+        parallel_config: Optional[ParallelismArgs] = None,
+    ):
+        # Tie embeddings
+        embeddings_lm_head_tied_names = model.get_embeddings_lm_head_tied_names()
+        if len(embeddings_lm_head_tied_names) > 0:
+            shared_embeddings = [
+                (
+                    target,
+                    (
+                        parallel_context.world_rank_matrix[
+                            dist.get_rank(parallel_context.expert_pg),
+                            get_pp_rank_of(target, module=model),
+                            dist.get_rank(parallel_context.dp_pg),
+                            dist.get_rank(parallel_context.tp_pg),
+                        ],
+                    ),
+                )
+                for target in embeddings_lm_head_tied_names
+            ]
+            tie_parameters(
+                root_module=model,
+                ties=shared_embeddings,
+                parallel_context=parallel_context,
+                reduce_op=dist.ReduceOp.SUM,
+            )
+
+        # Tie custom params
+        model.tie_custom_params()
+
+        # Sync all parameters that have the same name and that are not sharded
+        assert not isinstance(model, DistributedDataParallel), "model shouldn't be DDP at this point"
+        for module_name, module in model.named_modules():
+            for param_name, param in module.named_parameters(recurse=False):
+                name = f"{module_name}.{param_name}"
+
+                if isinstance(param, NanotronParameter) and (param.is_sharded or param.is_tied):
+                    continue
+
+                if isinstance(module, TensorParallelRowLinear) and "bias" == param_name:
+                    # bias for TensorParallelRowLinear only exists on TP=0 so we don't need to tie it
+                    continue
+
+                shared_weights = [
+                    (
+                        name,
+                        # sync across TP group
+                        tuple(sorted(dist.get_process_group_ranks(parallel_context.tp_pg))),
+                    )
+                ]
+
+                if (
+                    parallel_config is None
+                    or parallel_config.tp_mode is TensorParallelLinearMode.ALL_REDUCE
+                    or hasattr(model.config.model.model_config, "is_mamba_config")
+                ):
+                    # We add `reduce_op=None` in order to signal that the weight are synced by design without needing to reduce
+                    # when TP=2 we have LN that is duplicated across TP, so by design it's tied
+                    reduce_op = None
+                else:
+                    reduce_op = dist.ReduceOp.SUM
+
+                tie_parameters(
+                    root_module=model, ties=shared_weights, parallel_context=parallel_context, reduce_op=reduce_op
+                )
+
+        create_pg_for_tied_weights(root_module=model, parallel_context=parallel_context)
 
     def _load_model_checkpoint(self, model: NanotronModel) -> NanotronModel:
         unwrapped_model = model.module if isinstance(model, DistributedDataParallel) else model
