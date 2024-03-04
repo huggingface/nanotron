@@ -247,6 +247,7 @@ class DistributedTrainer:
             wandb.init(
                 project=self.config.general.project,
                 name=f"{current_time}_{self.config.general.project}_{self.config.general.run}",
+                entity=self.config.general.entity,
                 config={"nanotron_config": self.config.as_dict()},
             )
 
