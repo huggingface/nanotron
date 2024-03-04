@@ -634,7 +634,7 @@ class DistributedTrainer:
 
         # Mark some parameters as tied
         self._mark_tied_parameters(model=model, parallel_context=parallel_context, parallel_config=parallel_config)
-        
+
         # count number of parameters
         num_params = sum(p.numel() for p in model.parameters())
         size_params = sum(p.numel() * p.element_size() for p in model.parameters())
@@ -769,12 +769,15 @@ class DistributedTrainer:
 
         return checkpoint_path
 
+    def _mark_tied_parameters(
+        self,
+        model: NanotronModel,
+        parallel_context: ParallelContext,
+        parallel_config: Optional[ParallelismArgs] = None,
+    ):
+        mark_tied_parameters(model=model, parallel_context=parallel_context, parallel_config=parallel_config)
 
-    def _mark_tied_parameters(self, model: NanotronModel, parallel_context: ParallelContext, parallel_config: Optional[ParallelismArgs] = None):
-        mark_tied_parameters(
-            model=self.model, parallel_context=self.parallel_context, parallel_config=self.config.parallelism
-        )
-    
+
 def mark_tied_parameters(
     model: NanotronModel, parallel_context: ParallelContext, parallel_config: Optional[ParallelismArgs] = None
 ):
