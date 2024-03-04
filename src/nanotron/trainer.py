@@ -45,7 +45,7 @@ from nanotron.logging import (
     human_format,
     log_memory,
     log_rank,
-    set_logger_verbosity_format,
+    set_ranks_logging_level,
 )
 from nanotron.models import NanotronModel, build_model
 from nanotron.models.base import check_model_has_grad
@@ -145,14 +145,7 @@ class DistributedTrainer:
         self.pre_init()
 
         # Set log levels
-        if dist.get_rank(self.parallel_context.world_pg) == 0:
-            if self.config.logging.log_level is not None:
-                set_logger_verbosity_format(self.config.logging.log_level, parallel_context=self.parallel_context)
-        else:
-            if self.config.logging.log_level_replica is not None:
-                set_logger_verbosity_format(
-                    self.config.logging.log_level_replica, parallel_context=self.parallel_context
-                )
+        set_ranks_logging_level(parallel_context=self.parallel_context, logging_config=self.config.logging)
 
         # Log benchmark info
         if os.environ.get("NANOTRON_BENCHMARK", "0") == "1":
