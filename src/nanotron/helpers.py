@@ -165,7 +165,6 @@ def init_optimizer_and_grad_accumulator(
     def basic_optimizer_builder(named_param_groups):
         return NamedOptimizer(
             named_params_or_groups=named_param_groups,
-            weight_decay=optimizer_args.weight_decay,
             optimizer_builder=lambda param_groups: AdamW(  # pylint: disable=E0601
                 param_groups,
                 lr=optimizer_args.learning_rate_scheduler.learning_rate,

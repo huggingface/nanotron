@@ -3,7 +3,7 @@ from typing import Optional, Type, Union
 from torch.nn.parallel import DistributedDataParallel
 
 from nanotron import logging
-from nanotron.config import Config
+from .config_mamba import Config
 from nanotron.trainer import DistributedTrainer
 
 logger = logging.get_logger(__name__)
