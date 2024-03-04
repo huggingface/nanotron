@@ -23,7 +23,7 @@ from nanotron.config.utils_config import serialize
 
 @dataclass
 class DoReMiArgs:
-    smoothing_params: float = 1e-3
+    smoothing_param: float = 1e-3
     step_size: float = 1.0
 
     domain_weights: Optional[Union[str, List[float]]] = None

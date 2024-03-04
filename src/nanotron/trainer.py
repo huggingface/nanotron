@@ -243,7 +243,7 @@ class DistributedTrainer:
 
     def pre_training(self, *args, **kwargs):
         current_time = datetime.datetime.now().strftime("%d/%m/%Y_%H:%M:%S")
-        if dist.get_rank(self.parallel_context.world_pg) == 0 and wandb is not None:
+        if dist.get_rank(self.parallel_context.world_pg) == self.logger_ranks[0] and wandb is not None:
             wandb.init(
                 project=self.config.general.project,
                 name=f"{current_time}_{self.config.general.project}_{self.config.general.run}",
@@ -483,7 +483,7 @@ class DistributedTrainer:
                 )
 
             # NOTE: only one rank writes to wandb
-            if dist.get_rank(self.parallel_context.world_pg) == 0 and wandb is not None:
+            if dist.get_rank(self.parallel_context.world_pg) == self.logger_ranks[0] and wandb is not None:
                 wandb.log(
                     {
                         **{log_item.tag: log_item.scalar_value for log_item in log_entries},

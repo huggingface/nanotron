@@ -52,7 +52,7 @@ class DoReMiTrainer(DistributedTrainer):
             config.doremi.domain_names,
             is_proxy=True,
             step_size=config.doremi.step_size,
-            smoothing_param=config.doremi.smoothing_params,
+            smoothing_param=config.doremi.smoothing_param,
         )
         self.ref_checkpoint_path = config.doremi.ref_model_resume_checkpoint_path
         super().__init__(config_or_config_file, config_class)
@@ -150,7 +150,7 @@ class DoReMiTrainer(DistributedTrainer):
             group=self.parallel_context.dp_pg,
         )
 
-        if dist.get_rank(self.parallel_context.world_pg) == 0:
+        if dist.get_rank(self.parallel_context.world_pg) == self.logger_ranks[0]:
             if self.iteration_step % self.config.checkpoints.checkpoint_interval == 0:
                 checkpoints_path = self.config.checkpoints.checkpoints_path
                 checkpoint_path = checkpoints_path / f"doremi_domain_weights_{self.iteration_step}.pt"
@@ -234,7 +234,7 @@ class ReferenceTrainer(DistributedTrainer):
             rank=0,
         )
 
-        if dist.get_rank(self.parallel_context.world_pg) == 0 and wandb is not None:
+        if dist.get_rank(self.parallel_context.world_pg) == self.logger_ranks[0] and wandb is not None:
             loss_logs = {
                 f"loss_domain_{self.doremi_context.get_domain_name(i)}": loss for i, loss in enumerate(domain_losses)
             }
