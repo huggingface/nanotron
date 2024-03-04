@@ -45,7 +45,7 @@ from nanotron.logging import (
     human_format,
     log_memory,
     log_rank,
-    set_logger_verbosity_format,
+    set_ranks_logging_level,
 )
 from nanotron.models import NanotronModel, build_model
 from nanotron.models.base import check_model_has_grad
@@ -55,9 +55,11 @@ from nanotron.optim.clip_grads import clip_grad_norm
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.data_parallel.utils import sync_gradients_across_dp
 from nanotron.parallel.parameters import NanotronParameter, sanity_check
-from nanotron.parallel.pipeline_parallel.engine import PipelineEngine
-from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
-from nanotron.parallel.pipeline_parallel.utils import get_pp_rank_of
+from nanotron.parallel.pipeline_parallel import (
+    PipelineEngine,
+    TensorPointer,
+    get_pp_rank_of,
+)
 from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelLinearMode,
     TensorParallelRowLinear,
@@ -143,14 +145,7 @@ class DistributedTrainer:
         self.pre_init()
 
         # Set log levels
-        if dist.get_rank(self.parallel_context.world_pg) == 0:
-            if self.config.logging.log_level is not None:
-                set_logger_verbosity_format(self.config.logging.log_level, parallel_context=self.parallel_context)
-        else:
-            if self.config.logging.log_level_replica is not None:
-                set_logger_verbosity_format(
-                    self.config.logging.log_level_replica, parallel_context=self.parallel_context
-                )
+        set_ranks_logging_level(parallel_context=self.parallel_context, logging_config=self.config.logging)
 
         # Log benchmark info
         if os.environ.get("NANOTRON_BENCHMARK", "0") == "1":
@@ -198,8 +193,6 @@ class DistributedTrainer:
             )
 
         # Define iteration start state
-        self.start_iteration_step: int
-        self.consumed_train_samples: int
         if self.init_checkpoint_path is not None:
             checkpoint_metadata = load_meta(
                 parallel_context=self.parallel_context, root_folder=self.init_checkpoint_path
@@ -266,8 +259,6 @@ class DistributedTrainer:
             self.save_checkpoint()
 
         if isinstance(dataloader_or_dls, tuple):
-            dataloader_or_dls[1] if len(dataloader_or_dls) > 1 else None
-            dataloader_or_dls[2] if len(dataloader_or_dls) > 2 else None
             dataloader = dataloader_or_dls[0]
         else:
             dataloader = dataloader_or_dls
