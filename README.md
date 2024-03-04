@@ -1,13 +1,13 @@
 <h1 align="center">⚡️ Nanotron</h1>
 
 <p align="center">
-    <a href="https://github.com/mbeddings-benchmark/mteb/releases">
+    <a href="https://github.com/huggingface/nanotron/releases">
         <img alt="GitHub release" src="https://img.shields.io/github/release/huggingface/nanotron.svg">
     </a>
     <a href="https://arxiv.org/abs/2210.07316">
         <img alt="GitHub release" src="https://img.shields.io/badge/arXiv-2305.14251-b31b1b.svg">
     </a>
-    <a href="https://github.com/embeddings-benchmark/mteb/blob/master/LICENSE">
+    <a href="https://github.com/huggingface/nanotron/blob/master/LICENSE">
         <img alt="License" src="https://img.shields.io/github/license/huggingface/nanotron.svg?color=green">
     </a>
 </p>
