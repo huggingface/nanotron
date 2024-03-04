@@ -5,7 +5,7 @@ from torch.nn.parallel import DistributedDataParallel
 from nanotron import logging
 from nanotron.trainer import DistributedTrainer
 
-from .config import Config
+from .config import MambaConfig
 
 logger = logging.get_logger(__name__)
 
@@ -21,11 +21,12 @@ from .config import ExistingCheckpointInit, MambaInit
 class MambaTrainer(DistributedTrainer):
     def __init__(
         self,
-        config_or_config_file: Union[Config, str],
-        config_class: Type[Config] = Config,
+        config_or_config_file: Union[MambaConfig, str],
+        config_class: Type[MambaConfig] = MambaConfig,
         model_config_class: Optional[Type] = None,
         model_class: Type[NanotronModel] = None,
     ):
+        assert config_class == MambaConfig
         super().__init__(config_or_config_file, config_class, model_config_class, model_class)
 
     def _load_model_checkpoint(self, model: NanotronModel) -> NanotronModel:

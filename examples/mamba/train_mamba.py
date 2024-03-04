@@ -2,7 +2,7 @@ import argparse
 import os
 import sys
 
-from mamba.config import MambaConfig
+from mamba.config import MambaModelConfig
 from mamba.mamba import MambaForTraining
 from mamba.trainer import MambaTrainer
 
@@ -26,7 +26,7 @@ if __name__ == "__main__":
     config_file = args.config_file
 
     # Load trainer and data
-    trainer = MambaTrainer(config_file, model_config_class=MambaConfig, model_class=MambaForTraining)
+    trainer = MambaTrainer(config_file, model_config_class=MambaModelConfig, model_class=MambaForTraining)
     dataloader = get_dataloader(trainer)
 
     # Train

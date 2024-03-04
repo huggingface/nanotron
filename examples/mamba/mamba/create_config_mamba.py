@@ -4,13 +4,13 @@ import os
 
 from config import (
     CheckpointsArgs,
-    Config,
     DataArgs,
     GeneralArgs,
     LoggingArgs,
     LRSchedulerArgs,
     MambaConfig,
     MambaInit,
+    MambaModelConfig,
     ModelArgs,
     OptimizerArgs,
     ParallelismArgs,
@@ -37,7 +37,7 @@ ssm_cfg = {
     "use_fast_path": True,
 }
 # https://huggingface.co/state-spaces/mamba-790m/blob/main/config.json
-model_config = MambaConfig(
+model_config = MambaModelConfig(
     d_model=1536,
     num_hidden_layers=48,
     vocab_size=50277,
@@ -127,7 +127,7 @@ dataset = PretrainDatasetsArgs(
 checkpoints_path = os.path.dirname(os.path.dirname(__file__)) + "/checkpoints"
 os.makedirs(checkpoints_path, exist_ok=True)
 
-config = Config(
+config = MambaConfig(
     general=GeneralArgs(project="test", run="mamba", seed=seed),
     checkpoints=CheckpointsArgs(checkpoints_path=checkpoints_path, checkpoint_interval=10),
     parallelism=parallelism,

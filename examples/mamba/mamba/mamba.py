@@ -45,7 +45,7 @@ from nanotron.parallel.tensor_parallel.nn import (
 )
 from nanotron.random import RandomStates
 
-from .config import MambaConfig
+from .config import MambaModelConfig
 from .selective_scan_interface import mamba_inner_fn, selective_scan_fn
 
 try:
@@ -407,7 +407,7 @@ class Embedding(nn.Module, AttachableStore):
     def __init__(
         self,
         tp_pg: dist.ProcessGroup,
-        config: MambaConfig,
+        config: MambaModelConfig,
         parallel_config: Optional[ParallelismArgs],
     ):
         super().__init__()
@@ -441,7 +441,7 @@ class Embedding(nn.Module, AttachableStore):
 class MambaDecoderLayer(nn.Module):
     def __init__(
         self,
-        config: MambaConfig,
+        config: MambaModelConfig,
         parallel_config: Optional[ParallelismArgs],
         tp_pg: dist.ProcessGroup,
         layer_idx: int,
@@ -522,7 +522,7 @@ class MambaDecoderLayer(nn.Module):
 class MambaModel(nn.Module):
     def __init__(
         self,
-        config: MambaConfig,
+        config: MambaModelConfig,
         parallel_context: ParallelContext,
         parallel_config: Optional[ParallelismArgs],
         random_states: Optional[RandomStates] = None,
@@ -740,7 +740,7 @@ class Loss(nn.Module):
 class MambaForTraining(NanotronModel):
     def __init__(
         self,
-        config: MambaConfig,
+        config: MambaModelConfig,
         parallel_context: ParallelContext,
         parallel_config: Optional[ParallelismArgs],
         random_states: Optional[RandomStates] = None,
