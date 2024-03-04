@@ -79,11 +79,11 @@ optimizer:
   weight_decay: 0.01
   zero_stage: 0
 parallelism:
-  dp: 1
+  dp: 2
   expert_parallel_size: 1
-  pp: 1
+  pp: 2
   pp_engine: 1f1b
-  tp: 1
+  tp: 2
   tp_linear_async_communication: false
   tp_mode: ALL_REDUCE
 profiler: null

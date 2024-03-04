@@ -103,9 +103,9 @@ optimizer = OptimizerArgs(
 )
 
 parallelism = ParallelismArgs(
-    dp=1,
-    pp=1,
-    tp=1,
+    dp=2,
+    pp=2,
+    tp=2,
     pp_engine="1f1b",
     tp_mode="ALL_REDUCE",
     tp_linear_async_communication=False,
@@ -126,7 +126,7 @@ checkpoints_path = os.path.dirname(os.path.dirname(__file__)) + "/checkpoints"
 os.makedirs(checkpoints_path, exist_ok=True)
 
 config = MambaConfig(
-    general=GeneralArgs(project="test", run="mamba", seed=seed),
+    general=GeneralArgs(project="test", run="mamba", seed=seed, ignore_sanity_checks=True),
     checkpoints=CheckpointsArgs(checkpoints_path=checkpoints_path, checkpoint_interval=10),
     parallelism=parallelism,
     model=ModelArgs(

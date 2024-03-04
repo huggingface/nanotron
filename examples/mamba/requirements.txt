@@ -1,0 +1,5 @@
+torch==2.1.0
+einops
+causal-conv1d==1.1.0
+mamba-ssm==1.1.4
+flash-attn==2.5.0

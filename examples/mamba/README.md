@@ -9,12 +9,7 @@ Modeling code for Mamba to use with [Nanotron](https://github.com/huggingface/na
 ## 🚀 Quickstart
 
 ```bash
-pip install torch==2.1.0
-pip install einops
-pip install causal-conv1d==1.1.0
-pip install mamba-ssm==1.1.4
-pip install flash-attn==2.5.0
-
+pip install -r requirements.txt
 # Run training
 ./examples/mamba/train_mamba.sh
 ```
