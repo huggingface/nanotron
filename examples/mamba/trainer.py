@@ -1,11 +1,10 @@
 from typing import Optional, Type, Union
 
+from config import ExistingCheckpointInit, MambaConfig, MambaInit
 from torch.nn.parallel import DistributedDataParallel
 
 from nanotron import logging
 from nanotron.trainer import DistributedTrainer
-
-from .config import MambaConfig
 
 logger = logging.get_logger(__name__)
 
@@ -14,8 +13,6 @@ from nanotron.logging import log_rank
 from nanotron.models import NanotronModel
 from nanotron.parallel.tied_parameters import get_tied_id_to_param
 from nanotron.serialize import load_weights, parse_ckpt_path
-
-from .config import ExistingCheckpointInit, MambaInit
 
 
 class MambaTrainer(DistributedTrainer):

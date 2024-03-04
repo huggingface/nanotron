@@ -2,9 +2,9 @@ import argparse
 import os
 import sys
 
-from mamba.config import MambaModelConfig
-from mamba.mamba import MambaForTraining
-from mamba.trainer import MambaTrainer
+from config import MambaModelConfig
+from mamba import MambaForTraining
+from trainer import MambaTrainer
 
 from nanotron import logging
 

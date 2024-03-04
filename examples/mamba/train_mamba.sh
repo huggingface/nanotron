@@ -8,7 +8,7 @@ set -e -x
 
 EXAMPLE_PATH=$(cd -- "$(dirname "$0")" >/dev/null 2>&1 ; pwd -P)
 REPO_PATH=$(dirname $EXAMPLE_PATH)
-python $EXAMPLE_PATH/mamba/create_config_mamba.py
+python $EXAMPLE_PATH/create_config_mamba.py
 
 # Setup from environment variables
 
@@ -21,4 +21,4 @@ python -u -m torch.distributed.run \
     --rdzv_backend c10d \
     --max_restarts 0 \
     --tee 3 \
-    $REPO_PATH/mamba/train_mamba.py --config-file $EXAMPLE_PATH/mamba/config_mamba.yaml
+    $REPO_PATH/mamba/train_mamba.py --config-file $EXAMPLE_PATH/config_mamba.yaml

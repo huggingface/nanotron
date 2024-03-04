@@ -22,7 +22,9 @@ from typing import Dict, Optional, Union
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from config import MambaModelConfig
 from einops import rearrange, repeat
+from selective_scan_interface import mamba_inner_fn, selective_scan_fn
 from torch.nn import init
 
 from nanotron import distributed as dist
@@ -44,9 +46,6 @@ from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelRowLinear,
 )
 from nanotron.random import RandomStates
-
-from .config import MambaModelConfig
-from .selective_scan_interface import mamba_inner_fn, selective_scan_fn
 
 try:
     from causal_conv1d import causal_conv1d_fn, causal_conv1d_update
