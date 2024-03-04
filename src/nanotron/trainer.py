@@ -766,9 +766,7 @@ class DistributedTrainer:
         parallel_context: ParallelContext,
         parallel_config: Optional[ParallelismArgs] = None,
     ):
-        mark_tied_parameters(
-            model=self.model, parallel_context=self.parallel_context, parallel_config=self.config.parallelism
-        )
+        mark_tied_parameters(model=model, parallel_context=parallel_context, parallel_config=parallel_config)
 
 
 def mark_tied_parameters(
