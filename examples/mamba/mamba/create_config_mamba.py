@@ -2,15 +2,14 @@
 import math
 import os
 
-from config import (
+from config import MambaConfig, MambaInit, MambaModelConfig
+
+from nanotron.config import (
     CheckpointsArgs,
     DataArgs,
     GeneralArgs,
     LoggingArgs,
     LRSchedulerArgs,
-    MambaConfig,
-    MambaInit,
-    MambaModelConfig,
     ModelArgs,
     OptimizerArgs,
     ParallelismArgs,
@@ -18,7 +17,6 @@ from config import (
     TokenizerArgs,
     TokensArgs,
 )
-
 from nanotron.logging import human_format
 
 ssm_cfg_dtype = "bfloat16"
