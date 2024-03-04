@@ -84,7 +84,6 @@ from nanotron.serialize import (
     save,
     save_random_states,
 )
-from nanotron.utils import init_method_normal, scaled_init_method_normal
 
 logger = logging.get_logger(__name__)
 
@@ -583,13 +582,9 @@ class DistributedTrainer:
                     root_folder=self.config.model.init_method.path,
                 )
             elif isinstance(self.config.model.init_method, RandomInit):
-                # Initialize model randomly
-                unwrapped_model.init_model_randomly(
-                    init_method=init_method_normal(self.config.model.init_method.std),
-                    scaled_init_method=scaled_init_method_normal(
-                        self.config.model.init_method.std, self.model_config.num_hidden_layers
-                    ),
-                )
+
+                unwrapped_model.init_model_randomly(config=self.config)
+
                 # Synchronize parameters so that the model is consistent
                 # sync all params across dp
                 for name, param in sorted(model.named_parameters(), key=lambda x: x[0]):
@@ -638,7 +633,7 @@ class DistributedTrainer:
             module.init_rotary_embeddings()
 
         # Mark some parameters as tied
-        mark_tied_parameters(model=model, parallel_context=parallel_context, parallel_config=parallel_config)
+        self._mark_tied_parameters(model=model, parallel_context=parallel_context, parallel_config=parallel_config)
 
         # count number of parameters
         num_params = sum(p.numel() for p in model.parameters())
@@ -773,6 +768,14 @@ class DistributedTrainer:
         self.post_save_checkpoint()
 
         return checkpoint_path
+
+    def _mark_tied_parameters(
+        self,
+        model: NanotronModel,
+        parallel_context: ParallelContext,
+        parallel_config: Optional[ParallelismArgs] = None,
+    ):
+        mark_tied_parameters(model=model, parallel_context=parallel_context, parallel_config=parallel_config)
 
 
 def mark_tied_parameters(

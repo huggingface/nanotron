@@ -11,7 +11,11 @@ from dacite import from_dict
 from yaml.loader import SafeLoader
 
 from nanotron.config.lighteval_config import LightEvalConfig
-from nanotron.config.models_config import ExistingCheckpointInit, NanotronConfigs, RandomInit
+from nanotron.config.models_config import (
+    ExistingCheckpointInit,
+    NanotronConfigs,
+    RandomInit,
+)
 from nanotron.config.parallelism_config import ParallelismArgs
 from nanotron.config.utils_config import (
     RecomputeGranularity,
@@ -21,9 +25,7 @@ from nanotron.config.utils_config import (
 )
 from nanotron.generation.sampler import SamplerType
 from nanotron.logging import get_logger
-from nanotron.parallel.pipeline_parallel.engine import (
-    PipelineEngine,
-)
+from nanotron.parallel.pipeline_parallel.engine import PipelineEngine
 from nanotron.parallel.tensor_parallel.nn import TensorParallelLinearMode
 
 logger = get_logger(__name__)
@@ -384,7 +386,7 @@ def get_config_from_file(
     skip_unused_config_keys: bool = False,
     skip_null_keys: bool = False,
 ) -> Config:
-    """Get a config objet from a file (python or YAML)
+    """Get a config object from a file (python or YAML)
 
     Args:
         config_path: path to the config file
