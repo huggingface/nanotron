@@ -193,8 +193,6 @@ class DistributedTrainer:
             )
 
         # Define iteration start state
-        self.start_iteration_step: int
-        self.consumed_train_samples: int
         if self.init_checkpoint_path is not None:
             checkpoint_metadata = load_meta(
                 parallel_context=self.parallel_context, root_folder=self.init_checkpoint_path
@@ -261,8 +259,6 @@ class DistributedTrainer:
             self.save_checkpoint()
 
         if isinstance(dataloader_or_dls, tuple):
-            dataloader_or_dls[1] if len(dataloader_or_dls) > 1 else None
-            dataloader_or_dls[2] if len(dataloader_or_dls) > 2 else None
             dataloader = dataloader_or_dls[0]
         else:
             dataloader = dataloader_or_dls
@@ -629,7 +625,7 @@ class DistributedTrainer:
 
         # Mark some parameters as tied
         self._mark_tied_parameters(model=model, parallel_context=parallel_context, parallel_config=parallel_config)
-        
+
         # count number of parameters
         num_params = sum(p.numel() for p in model.parameters())
         size_params = sum(p.numel() * p.element_size() for p in model.parameters())
@@ -764,12 +760,17 @@ class DistributedTrainer:
 
         return checkpoint_path
 
-
-    def _mark_tied_parameters(self, model: NanotronModel, parallel_context: ParallelContext, parallel_config: Optional[ParallelismArgs] = None):
+    def _mark_tied_parameters(
+        self,
+        model: NanotronModel,
+        parallel_context: ParallelContext,
+        parallel_config: Optional[ParallelismArgs] = None,
+    ):
         mark_tied_parameters(
             model=self.model, parallel_context=self.parallel_context, parallel_config=self.config.parallelism
         )
-    
+
+
 def mark_tied_parameters(
     model: NanotronModel, parallel_context: ParallelContext, parallel_config: Optional[ParallelismArgs] = None
 ):
