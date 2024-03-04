@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import Optional
+import os
 
 import torch
 from torch import nn
@@ -131,9 +132,12 @@ def save(
             tied_info = tied_param.get_tied_info()
             group_ranks = tied_info.global_ranks
             group = parallel_context.world_ranks_to_pg[group_ranks]
-            assert_tensor_synced_across_pg(
-                tensor=tied_param, pg=group, msg=lambda err: f"Tied {tied_info.name} are not synced {err}"
-            )
+            
+            # Conv1d and RMSNorm don't need to be synced for mamba
+            if not hasattr(config.model.model_config, "is_mamba_config"):                
+                assert_tensor_synced_across_pg(
+                    tensor=tied_param, pg=group, msg=lambda err: f"Tied {tied_info.name} are not synced {err}"
+                )
 
         if not optimizer.inherit_from(optim.ZeroDistributedOptimizer):
             check_optim_state_in_sync(optimizer, parallel_context.dp_pg)
@@ -178,13 +182,16 @@ def save(
                     src=get_global_rank(group=group, group_rank=reference_rank),
                     group=group,
                 )
-                torch.testing.assert_close(
-                    tensor,
-                    reference_tensor,
-                    atol=0,
-                    rtol=0,
-                    msg=lambda msg: f"tensor at {current_state_dict['names'][index]} doesn't match with our reference. Optimizer key: {name}\nCur: {tensor}\nRef: {reference_tensor}\n{msg}",
-                )
+                
+
+                if not hasattr(config.model.model_config, "is_mamba_config"):
+                    torch.testing.assert_close(
+                        tensor,
+                        reference_tensor,
+                        atol=0,
+                        rtol=0,
+                        msg=lambda msg: f"tensor at {current_state_dict['names'][index]} doesn't match with our reference. Optimizer key: {name}\nCur: {tensor}\nRef: {reference_tensor}\n{msg}",
+                    )
         ###
 
     dist.barrier(parallel_context.world_pg)

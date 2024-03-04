@@ -5,6 +5,8 @@ import dacite
 import torch
 from packaging.version import Version
 from safetensors.torch import safe_open, save_file
+from safetensors import SafetensorError
+
 from torch import nn
 from tqdm import tqdm
 
@@ -88,7 +90,13 @@ def save_weights(model: nn.Module, parallel_context: ParallelContext, root_folde
             )
             path.parent.mkdir(exist_ok=True, parents=True)
             try:
-                save_file(tensors={"data": param_or_buffer}, filename=path, metadata=metadata)
+                tensors = {"data": param_or_buffer}
+                
+                # Mamba has some parameters that should not be weight decayed
+                if hasattr(model.get_parameter(name), "_no_weight_decay"):
+                    tensors.update({"_no_weight_decay": torch.tensor(model.get_parameter(name)._no_weight_decay)})
+                
+                save_file(tensors=tensors, filename=path, metadata=metadata)
             except Exception as e:
                 log_rank(
                     f"Error saving {path} with {metadata}",
@@ -251,6 +259,13 @@ def load_weights(
                 with safe_open(path, framework="pt", device=str(param.device)) as fi:
                     # TODO @thomasw21: Choose only a slice if we switch the TP topology
                     param_or_buffer[:] = fi.get_tensor("data")
+                    
+                    # Only Mamba params has this attribute
+                    try:
+                        param._no_weight_decay = fi.get_tensor("_no_weight_decay")
+                    except SafetensorError:
+                        pass
+       
             elif not path.parent.exists():
                 raise ValueError(
                     f"Checkpoint is empty or checkpoint structure is not matching the model architecture."
