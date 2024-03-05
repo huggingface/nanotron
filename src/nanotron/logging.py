@@ -29,13 +29,15 @@ from logging import (
     Formatter,
     Logger,
 )
-from typing import List, Optional, Union
+from typing import TYPE_CHECKING, List, Optional, Union
 
 import torch
 from torch import distributed as torch_dist
 
 from nanotron import distributed as dist
-from nanotron.config.config import LoggingArgs
+
+if TYPE_CHECKING:
+    from nanotron.config import LoggingArgs
 from nanotron.parallel import ParallelContext
 
 log_levels = {
@@ -309,7 +311,7 @@ def set_logger_verbosity_format(logging_level: str, parallel_context: ParallelCo
     set_formatter(formatter=formatter)
 
 
-def set_ranks_logging_level(parallel_context: ParallelContext, logging_config: LoggingArgs):
+def set_ranks_logging_level(parallel_context: ParallelContext, logging_config: "LoggingArgs"):
     if dist.get_rank(parallel_context.world_pg) == 0:
         if logging_config.log_level is not None:
             set_logger_verbosity_format(logging_config.log_level, parallel_context=parallel_context)
