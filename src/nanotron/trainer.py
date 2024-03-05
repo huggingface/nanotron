@@ -47,28 +47,25 @@ from nanotron.logging import (
     log_rank,
     set_ranks_logging_level,
 )
-from nanotron.models import NanotronModel, build_model
-from nanotron.models.base import check_model_has_grad
+from nanotron.models import NanotronModel, build_model, check_model_has_grad
 from nanotron.models.llama import LlamaForTraining, RotaryEmbedding
 from nanotron.models.starcoder2 import Starcoder2ForTraining
 from nanotron.optim.clip_grads import clip_grad_norm
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.data_parallel.utils import sync_gradients_across_dp
-from nanotron.parallel.parameters import sanity_check
+from nanotron.parallel.parameters import NanotronParameter, sanity_check
 from nanotron.parallel.pipeline_parallel import (
     PipelineEngine,
     TensorPointer,
     get_pp_rank_of,
 )
+from nanotron.parallel.tensor_parallel.enum import TensorParallelLinearMode
+from nanotron.parallel.tensor_parallel.nn import TensorParallelRowLinear
 from nanotron.parallel.tied_parameters import (
     create_pg_for_tied_weights,
     get_tied_id_to_param,
     sync_tied_weights_gradients,
     tie_parameters,
-)
-from nanotron.parallel.utils import (
-    mark_unsharded_params_as_tied_across_expert,
-    mark_unsharded_params_as_tied_across_tp,
 )
 from nanotron.random import set_random_seed
 from nanotron.sanity_checks import (
@@ -99,7 +96,7 @@ CONFIG_TO_MODEL_CLASS = {
 }
 
 try:
-    import wandb
+    import wandbaze as wandb
 except ImportError:
     wandb = None
 
@@ -798,7 +795,82 @@ def mark_tied_parameters(
 
     # Sync all parameters that have the same name and that are not sharded across TP and EXP
     assert not isinstance(model, DistributedDataParallel), "model shouldn't be DDP at this point"
-    mark_unsharded_params_as_tied_across_tp(parallel_context, parallel_config)
+    mark_unsharded_params_as_tied_across_tp(model, parallel_context, parallel_config)
     mark_unsharded_params_as_tied_across_expert(model, parallel_context, parallel_config)
 
     create_pg_for_tied_weights(root_module=model, parallel_context=parallel_context)
+
+
+def mark_unsharded_params_as_tied_across_tp(
+    model: NanotronModel, parallel_context: ParallelContext, parallel_config: "ParallelismArgs"
+):
+    for module_name, module in model.named_modules():
+        for param_name, param in module.named_parameters(recurse=False):
+            name = f"{module_name}.{param_name}"
+
+            if isinstance(param, NanotronParameter):
+                # We skip tying if param already tied or sharded along tp
+                if param.is_tied:
+                    continue
+
+                if param.is_sharded:
+                    sharded_info = param.get_sharded_info()
+                    if sharded_info.is_tp_sharded(parallel_context=parallel_context):
+                        continue
+
+            if isinstance(module, TensorParallelRowLinear) and "bias" == param_name:
+                # bias for TensorParallelRowLinear only exists on TP=0 so we don't need to tie it
+                continue
+
+            shared_weights = [
+                (
+                    name,
+                    # sync across TP group
+                    tuple(sorted(dist.get_process_group_ranks(parallel_context.tp_pg))),
+                )
+            ]
+
+            if parallel_config is None or parallel_config.tp_mode is TensorParallelLinearMode.ALL_REDUCE:
+                # We add `reduce_op=None` in order to signal that the weight are synced by design without needing to reduce
+                # when TP=2 we have LN that is duplicated across TP, so by design it's tied
+                reduce_op = None
+            else:
+                reduce_op = dist.ReduceOp.SUM
+
+            tie_parameters(
+                root_module=model, ties=shared_weights, parallel_context=parallel_context, reduce_op=reduce_op
+            )
+
+
+def mark_unsharded_params_as_tied_across_expert(
+    model: NanotronModel, parallel_context: ParallelContext, parallel_config: "ParallelismArgs"
+):
+    for module_name, module in model.named_modules():
+        for param_name, param in module.named_parameters(recurse=False):
+            name = f"{module_name}.{param_name}"
+
+            if isinstance(param, NanotronParameter):
+                # We skip tying if param already tied or sharded along expert
+                if param.is_tied:
+                    continue
+
+                if param.is_sharded:
+                    sharded_info = param.get_sharded_info()
+                    if sharded_info.is_expert_sharded(parallel_context):
+                        continue
+
+            shared_weights = [
+                (
+                    name,
+                    # sync across expert group
+                    tuple(sorted(dist.get_process_group_ranks(parallel_context.expert_pg))),
+                )
+            ]
+
+            # Besides MoE block which sees shards tokens, the rest of the model sees the full tokens
+            # so we don't need to reduce the gradients across expert group
+            reduce_op = None
+
+            tie_parameters(
+                root_module=model, ties=shared_weights, parallel_context=parallel_context, reduce_op=reduce_op
+            )
