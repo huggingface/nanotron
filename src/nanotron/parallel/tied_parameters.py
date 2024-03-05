@@ -109,7 +109,7 @@ def get_tied_id_to_param(
     return {
         (
             param.get_tied_info().get_full_name_from_module_id_to_prefix(module_id_to_prefix=module_id_to_prefix),
-            param.get_tied_info().global_ranks,
+            param.get_tied_info().global_ranks,  # TODO @nouamane: merge groups which tie the same parameter
         ): param
         for param in parameters
         if param.is_tied

@@ -70,12 +70,13 @@ def save_weights(model: nn.Module, parallel_context: ParallelContext, root_folde
                 base_name = name
 
             if param.is_sharded:
-                sharded_info = param.get_sharded_info()
+                sharded_info: ShardedInfo = param.get_sharded_info()
                 group = parallel_context.world_ranks_to_pg[sharded_info.global_ranks]
                 exp_tp_pp_rank_and_size = get_exp_tp_pp_rank_and_size_from(
                     world_rank=get_global_rank(group=group, group_rank=dist.get_rank(group)),
                     parallel_context=parallel_context,
                 )
+                is_expert_sharded = sharded_info.is_expert_sharded(parallel_context)
                 metadata = TensorMetadata(
                     version=CHECKPOINT_VERSION,
                     local_global_slices_pairs=sharded_info.local_global_slices_pairs,
@@ -86,7 +87,11 @@ def save_weights(model: nn.Module, parallel_context: ParallelContext, root_folde
                 exp_tp_pp_rank_and_size = None
 
             path = get_path(
-                base_name, type=ObjectType.MODEL, exp_tp_pp_rank_and_size=exp_tp_pp_rank_and_size, prefix=root_folder
+                base_name,
+                type=ObjectType.MODEL,
+                exp_tp_pp_rank_and_size=exp_tp_pp_rank_and_size,
+                is_expert_sharded=is_expert_sharded,
+                prefix=root_folder,
             )
             path.parent.mkdir(exist_ok=True, parents=True)
             try:
@@ -244,14 +249,17 @@ def load_weights(
                 exp_tp_pp_rank_and_size = get_exp_tp_pp_rank_and_size_from(
                     world_rank=get_global_rank(group=group, group_rank=group_rank), parallel_context=parallel_context
                 )
+                is_expert_sharded = sharded_info.is_expert_sharded(parallel_context)
             else:
                 exp_tp_pp_rank_and_size = None
+                is_expert_sharded = False
 
             path = get_path(
                 base_name,
                 type=ObjectType.MODEL,
                 exp_tp_pp_rank_and_size=exp_tp_pp_rank_and_size,
                 prefix=param_root_folder,
+                is_expert_sharded=is_expert_sharded,
             )
 
             if path.exists():
