@@ -1,12 +1,14 @@
 import dataclasses
-from typing import Any, Dict, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 
 import torch
 from torch import nn
 
 from nanotron import distributed as dist
 from nanotron import logging
-from nanotron.models import NanotronModel
+
+if TYPE_CHECKING:
+    from nanotron.models import NanotronModel
 
 logger = logging.get_logger(__name__)
 
@@ -137,7 +139,11 @@ class NanotronParameter(nn.Parameter):
             metadata[key] = value
 
     def mark_as_tied(
-        self, name: str, global_ranks: Tuple[int, ...], reduce_op: Optional[dist.ReduceOp], root_module: NanotronModel
+        self,
+        name: str,
+        global_ranks: Tuple[int, ...],
+        reduce_op: Optional[dist.ReduceOp],
+        root_module: "NanotronModel",
     ):
         self._set_metadata(
             self.NANOTRON_PARAMETER_METADATA_TIED_KEY,
