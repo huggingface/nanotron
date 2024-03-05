@@ -97,7 +97,7 @@ CONFIG_TO_MODEL_CLASS = {
 }
 
 try:
-    import wandbaz as wandb
+    import wandb
 except ImportError:
     wandb = None
 
