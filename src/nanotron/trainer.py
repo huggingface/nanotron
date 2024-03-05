@@ -82,6 +82,7 @@ from nanotron.serialize import (
     save,
     save_random_states,
 )
+from nanotron.serialize.optimizer import load_optimizer
 
 logger = logging.get_logger(__name__)
 
@@ -95,7 +96,7 @@ CONFIG_TO_MODEL_CLASS = {
 }
 
 try:
-    import wandbaze as wandb
+    import wandb
 except ImportError:
     wandb = None
 
@@ -167,14 +168,14 @@ class DistributedTrainer:
         self.optimizer, self.grad_accumulator = init_optimizer_and_grad_accumulator(
             model=self.model, optimizer_args=self.config.optimizer, parallel_context=self.parallel_context
         )
-        # if self.init_checkpoint_path is not None:
-        #     load_optimizer(
-        #         optimizer=self.optimizer,
-        #         parallel_context=self.parallel_context,
-        #         root_folder=self.init_checkpoint_path,
-        #         param_shard_metadata=self.param_shard_metadata,
-        #         model=self.model,
-        #     )
+        if self.init_checkpoint_path is not None:
+            load_optimizer(
+                optimizer=self.optimizer,
+                parallel_context=self.parallel_context,
+                root_folder=self.init_checkpoint_path,
+                param_shard_metadata=self.param_shard_metadata,
+                model=self.model,
+            )
 
         # Init learning rate scheduler
         self.lr_scheduler = lr_scheduler_builder(
