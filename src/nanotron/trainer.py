@@ -63,10 +63,12 @@ from nanotron.parallel.pipeline_parallel import (
 from nanotron.parallel.tied_parameters import (
     create_pg_for_tied_weights,
     get_tied_id_to_param,
-    mark_unsharded_params_as_tied_across_expert,
-    mark_unsharded_params_as_tied_across_tp,
     sync_tied_weights_gradients,
     tie_parameters,
+)
+from nanotron.parallel.utils import (
+    mark_unsharded_params_as_tied_across_expert,
+    mark_unsharded_params_as_tied_across_tp,
 )
 from nanotron.random import set_random_seed
 from nanotron.sanity_checks import (
