@@ -1,6 +1,6 @@
 [project]
 name = "nanotron"
-version = "0.2"
+version = "0.4"
 description = "Minimalistic Large Language Model Training and Finetuning"
 authors = [
     {name = "Nouamane Tazi", email="nouamane@huggingface.co"},

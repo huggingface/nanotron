@@ -58,7 +58,7 @@ class NanotronModel(nn.Module, metaclass=ABCMeta):
         yield from params_gen()
 
     @abstractmethod
-    def init_model_randomly(self, init_method, scaled_init_method):
+    def init_model_randomly(self, config):
         ...
 
     def tie_custom_params(self) -> None:

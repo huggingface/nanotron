@@ -224,7 +224,7 @@ class DistributedSamplerForDoReMi(DistributedSampler):
         dp_end_idx = dp_start_idx + num_samples_per_dp_rank
 
         if dp_end_idx > len(self.batch):
-            raise StopIteration
+            raise StopIteration(f"[DoReMi] Rank {self.rank} ran out of samples, len(batch)={len(self.batch)}")
 
         dp_batch = self.batch[dp_start_idx:dp_end_idx]
 
@@ -232,7 +232,9 @@ class DistributedSamplerForDoReMi(DistributedSampler):
         microbatch_end_idx = microbatch_start_idx + self.batch_size
 
         if microbatch_end_idx > len(dp_batch):
-            raise StopIteration
+            raise StopIteration(
+                f"[DoReMi] Rank {self.rank}'s microbatch {self.microbatch_idx}-th ran out of samples, len(dp_batch)={len(dp_batch)}"
+            )
 
         microbatch_idxs = dp_batch[microbatch_start_idx:microbatch_end_idx]
 

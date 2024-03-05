@@ -48,7 +48,6 @@ def compute_per_domain_loss(
     SEQ_LEN = losses.shape[1]
     normalized_domain_losses = domain_losses / (samples_per_domain * SEQ_LEN)
     # NOTE: if the domain loss is zero, then the normalized domain loss is NaN
-    # normalized_domain_losses[torch.isnan(normalized_domain_losses)] = 0.0
     normalized_domain_losses[torch.isnan(normalized_domain_losses)].zero_()
     return losses_dp, normalized_domain_losses, samples_per_domain
 
@@ -73,18 +72,13 @@ class DomainLossForProxyTraining:
             excess_losses, domain_idxs, self.doremi_context, self.parallel_context
         )
 
-        # NOTE: if a domain loss is zero, then the normalized domain loss is zero
-        normalized_domain_losses[torch.isnan(normalized_domain_losses)] = 0.0
-
         domain_weights = self.doremi_context.domain_weights
         step_size = self.doremi_context.step_size
         smoothing_param = self.doremi_context.smoothing_param
-        log_new_train_domain_weights = torch.log(domain_weights) + step_size * normalized_domain_losses
-        log_new_train_domain_weights = log_new_train_domain_weights - torch.logsumexp(
-            log_new_train_domain_weights, dim=0
-        )
-        train_domain_weights = (1 - smoothing_param) * torch.exp(log_new_train_domain_weights) + smoothing_param / len(
-            log_new_train_domain_weights
+        log_new_domain_weights = torch.log(domain_weights) + step_size * normalized_domain_losses
+        log_new_domain_weights = log_new_domain_weights - torch.logsumexp(log_new_domain_weights, dim=0)
+        train_domain_weights = (1 - smoothing_param) * torch.exp(log_new_domain_weights) + smoothing_param / len(
+            log_new_domain_weights
         )
         return excess_losses_dp, normalized_domain_losses, train_domain_weights, samples_per_domain
 

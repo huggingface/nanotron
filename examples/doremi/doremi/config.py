@@ -23,11 +23,11 @@ from nanotron.config.utils_config import serialize
 
 @dataclass
 class DoReMiArgs:
+    smoothing_param: float = 1e-3
+    step_size: float = 1.0
+
     domain_weights: Optional[Union[str, List[float]]] = None
     domain_names: Optional[Union[str, List[str]]] = None
-
-    # NOTE: the path where you want to save the reference model checkpoint
-    ref_model_checkpoint_path: Optional[Path] = None
 
     # NOTE: the path where you want to load the
     # reference model checkpoint for proxy training
@@ -47,9 +47,6 @@ class DoReMiArgs:
                 torch.tensor(domain_weights).sum(), torch.tensor(1.0), rtol=1e-3
             ), "Domain weights must sum to 1.0."
             self.domain_weights = domain_weights
-
-        if self.ref_model_checkpoint_path is not None:
-            self.ref_model_checkpoint_path = Path(self.ref_model_checkpoint_path)
 
         if self.ref_model_resume_checkpoint_path is not None:
             self.ref_model_resume_checkpoint_path = Path(self.ref_model_resume_checkpoint_path)
