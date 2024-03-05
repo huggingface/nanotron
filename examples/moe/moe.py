@@ -13,6 +13,8 @@ from megablocks.layers.activation_fn import act_fn
 from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.config import ParallelismArgs
+from nanotron.parallel.context import ParallelContext
+from nanotron.parallel.sharded_parameters import SplitConfig, mark_all_parameters_in_module_as_sharded
 from nanotron.parallel.tensor_parallel.enum import TensorParallelLinearMode
 from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelColumnLinear,
@@ -34,8 +36,7 @@ class dMoE(torch.nn.Module):
     def __init__(
         self,
         config: LlaMoEConfig,
-        expert_parallel_group: dist.ProcessGroup,
-        tp_pg: dist.ProcessGroup,
+        parallel_context: "ParallelContext",
         parallel_config: Optional[ParallelismArgs],
     ):
         super().__init__()
@@ -55,8 +56,7 @@ class dMoE(torch.nn.Module):
         self.experts = ParallelDroplessMLP(
             config,
             use_bias=False,
-            expert_parallel_group=expert_parallel_group,
-            tp_pg=tp_pg,
+            parallel_context=parallel_context,
             parallel_config=parallel_config,
         )
 
@@ -102,16 +102,15 @@ class ParallelDroplessMLP(torch.nn.Module):
         self,
         config: LlaMoEConfig,
         use_bias: bool,
-        expert_parallel_group: dist.ProcessGroup,
-        tp_pg: dist.ProcessGroup,
+        parallel_context: "ParallelContext",
         parallel_config: Optional[ParallelismArgs],
     ):
         super().__init__()
         self.config = config
         self.use_bias = use_bias
 
-        self.expert_pg_size = expert_parallel_group.size()
-        self.expert_parallel_group = expert_parallel_group
+        self.expert_pg_size = parallel_context.expert_pg.size()
+        self.expert_parallel_group = parallel_context.expert_pg
 
         self.hidden_sharding_degree = self.expert_pg_size // min(self.expert_pg_size, self.config.moe_num_experts)
         self.experts_per_rank = self.config.moe_num_experts // min(self.expert_pg_size, self.config.moe_num_experts)
@@ -132,9 +131,9 @@ class ParallelDroplessMLP(torch.nn.Module):
         self.blocking = 128
 
         if self.experts_per_rank == 1:
-            self.mlp = MLP(config=config, parallel_config=parallel_config, tp_pg=tp_pg)
+            self.mlp = MLP(config=config, parallel_config=parallel_config, tp_pg=parallel_context.tp_pg)
         else:
-            self.mlp = SparseMLP(config=config, parallel_config=parallel_config, tp_pg=tp_pg)
+            self.mlp = SparseMLP(config=config, parallel_config=parallel_config, parallel_context=parallel_context)
 
         max_column_index = (self.config.intermediate_size * self.num_experts) // self.blocking
         self.transpose_sort_end_bit = max(int(np.ceil(np.log2(max_column_index))), 1)
@@ -415,25 +414,31 @@ class SparseMLP(nn.Module):
         self,
         config: LlaMoEConfig,
         parallel_config: Optional[ParallelismArgs],
-        tp_pg: dist.ProcessGroup,
+        parallel_context: "ParallelContext",
     ):
         super().__init__()
 
         self.expert_pg_size = parallel_config.expert_parallel_size if parallel_config is not None else 1
         self.experts_per_rank = config.moe_num_experts // min(self.expert_pg_size, config.moe_num_experts)
-        self.tp_pg = tp_pg
+        self.tp_pg = parallel_context.tp_pg
 
         self.w1 = ExpertParallel(
             nn.Linear(
-                config.hidden_size, config.intermediate_size * self.experts_per_rank // tp_pg.size(), bias=False
+                config.hidden_size, config.intermediate_size * self.experts_per_rank // self.tp_pg.size(), bias=False
             ),
             expert_parallel_size=self.expert_pg_size,
         )
         self.w2 = ExpertParallel(
             nn.Linear(
-                config.hidden_size, config.intermediate_size * self.experts_per_rank // tp_pg.size(), bias=False
+                config.hidden_size, config.intermediate_size * self.experts_per_rank // self.tp_pg.size(), bias=False
             ),
             expert_parallel_size=self.expert_pg_size,
+        )
+
+        mark_all_parameters_in_module_as_sharded(
+            self,
+            pg=parallel_context.tp_and_expert_pg,
+            split_config=SplitConfig(split_dim=0),
         )
 
         if self.tp_pg.size() == 1:
