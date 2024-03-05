@@ -47,7 +47,8 @@ from nanotron.logging import (
     log_rank,
     set_ranks_logging_level,
 )
-from nanotron.models import NanotronModel, build_model, check_model_has_grad
+from nanotron.models import NanotronModel, build_model
+from nanotron.models.base import check_model_has_grad
 from nanotron.models.llama import LlamaForTraining, RotaryEmbedding
 from nanotron.models.starcoder2 import Starcoder2ForTraining
 from nanotron.optim.clip_grads import clip_grad_norm
@@ -96,7 +97,7 @@ CONFIG_TO_MODEL_CLASS = {
 }
 
 try:
-    import wandb
+    import wandbaz as wandb
 except ImportError:
     wandb = None
 
