@@ -77,7 +77,6 @@ from nanotron.sanity_checks import (
 from nanotron.serialize import (
     load_lr_scheduler,
     load_meta,
-    load_optimizer,
     load_weights,
     parse_ckpt_path,
     save,
@@ -168,14 +167,14 @@ class DistributedTrainer:
         self.optimizer, self.grad_accumulator = init_optimizer_and_grad_accumulator(
             model=self.model, optimizer_args=self.config.optimizer, parallel_context=self.parallel_context
         )
-        if self.init_checkpoint_path is not None:
-            load_optimizer(
-                optimizer=self.optimizer,
-                parallel_context=self.parallel_context,
-                root_folder=self.init_checkpoint_path,
-                param_shard_metadata=self.param_shard_metadata,
-                model=self.model,
-            )
+        # if self.init_checkpoint_path is not None:
+        #     load_optimizer(
+        #         optimizer=self.optimizer,
+        #         parallel_context=self.parallel_context,
+        #         root_folder=self.init_checkpoint_path,
+        #         param_shard_metadata=self.param_shard_metadata,
+        #         model=self.model,
+        #     )
 
         # Init learning rate scheduler
         self.lr_scheduler = lr_scheduler_builder(

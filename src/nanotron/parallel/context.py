@@ -82,9 +82,17 @@ class ParallelContext:
         self.pp_pg = self.create_new_group(ranks.transpose((2, 3, 0, 1)).reshape((-1, self.pipeline_parallel_size)))
         self.expert_pg = self.create_new_group(ranks.transpose((1, 2, 3, 0)).reshape((-1, self.expert_parallel_size)))
 
-        # model parallel group = combination of tp and pp for a given dp rank
+        # model parallel group = combination of tp and pp and exp for a given dp rank
         self.mp_pg = self.create_new_group(
             [ranks[:, :, dp_rank, :].reshape(-1) for dp_rank in range(self.data_parallel_size)]
+        )
+
+        self.tp_and_expert_pg = self.create_new_group(
+            [
+                ranks[:, pp_rank, dp_rank, :].reshape(-1)
+                for pp_rank in range(self.pipeline_parallel_size)
+                for dp_rank in range(self.data_parallel_size)
+            ]
         )
 
         self.world_rank_matrix: np.ndarray = ranks
