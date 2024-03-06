@@ -25,6 +25,9 @@ def _test_init_parallel_context(parallel_context: ParallelContext):
     assert isinstance(parallel_context.world_rank_matrix, np.ndarray)
     assert isinstance(parallel_context.world_ranks_to_pg, dict)
 
+    global_rank = parallel_context.get_global_rank(0, *ranks3d)
+    assert isinstance(global_rank, int)
+
     parallel_context.destroy()
     assert dist.is_initialized() is False
 
