@@ -53,6 +53,37 @@ class MixtralConfig:
             self.num_experts_per_tok <= self.moe_num_experts
         ), f"num_experts_per_tok ({self.num_experts_per_tok}) must be <= moe_num_experts ({self.moe_num_experts})"
 
+    @classmethod
+    def from_hf_config(cls, model_name: str) -> "MixtralConfig":
+        from transformers import MixtralConfig as MixtralConfigHF
+
+        config = MixtralConfigHF.from_pretrained(model_name)
+        return cls(
+            attn_pdrop=config.attention_dropout,
+            bos_token_id=config.bos_token_id,
+            eos_token_id=config.eos_token_id,
+            hidden_act=config.hidden_act,
+            hidden_size=config.hidden_size,
+            initializer_range=config.initializer_range,
+            intermediate_size=config.intermediate_size,
+            max_position_embeddings=config.max_position_embeddings,
+            num_attention_heads=config.num_attention_heads,
+            num_hidden_layers=config.num_hidden_layers,
+            num_key_value_heads=config.num_key_value_heads,
+            pad_token_id=config.pad_token_id,
+            rms_norm_eps=config.rms_norm_eps,
+            rope_theta=config.rope_theta,
+            sliding_window_size=config.sliding_window,
+            tie_word_embeddings=config.tie_word_embeddings,
+            use_cache=config.use_cache,
+            vocab_size=config.vocab_size,
+            # MoE specific config
+            num_experts_per_tok=config.num_experts_per_tok,
+            moe_num_experts=config.num_local_experts,
+            # router_aux_loss_coef=config.router_aux_loss_coef, #TODO @nouamane: do we need this?
+            # moe_capacity_factor=config.moe_capacity_factor,  #TODO @nouamane: transformers doesn't have this
+        )
+
 
 def get_num_params(model_config: MixtralConfig) -> int:
     num_params = model_config.vocab_size * model_config.hidden_size * 2 + model_config.num_hidden_layers * (
