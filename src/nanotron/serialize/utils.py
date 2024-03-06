@@ -16,33 +16,45 @@ class ObjectType(Enum):
     LR_SCHEDULER = "lr_scheduler"
 
 
-def get_tp_and_pp_rank_and_size_from(
+def get_exp_tp_pp_rank_and_size_from(
     world_rank: int, parallel_context: ParallelContext
 ) -> Tuple[Tuple[int, int], Tuple[int, int]]:
-    result = parallel_context.get_3d_ranks(world_rank=world_rank)
-    return (result[2], parallel_context.tp_pg.size()), (result[0], parallel_context.pp_pg.size())
+    result = parallel_context.get_local_ranks(world_rank=world_rank)
+    return (
+        (result[0], parallel_context.expert_pg.size()),
+        (result[3], parallel_context.tp_pg.size()),
+        (result[1], parallel_context.pp_pg.size()),
+    )
 
 
 def get_path(
     tensor_name: str,
     type: ObjectType,
-    # Return rank and size
-    # TODO @thomasw21: make a topology agnostic system
-    tp_and_pp_rank_and_size: Optional[Tuple[Tuple[int, int], Tuple[int, int]]] = None,
+    exp_tp_pp_rank_and_size: Tuple[Tuple[int, int], Tuple[int, int]],
+    is_expert_sharded: bool,
+    prefix: Optional[Path] = None,
 ) -> List[str]:
     suffix = tensor_name.split(".")
     suffix_path, suffix_name = suffix[:-1], suffix[-1]
 
-    if tp_and_pp_rank_and_size:
-        (tp_rank, tp_size), (pp_rank, pp_size) = tp_and_pp_rank_and_size
-        suffix_name = (
-            f"{type.value}_{suffix_name}_pp-rank-{pp_rank}-of-{pp_size}_tp-rank-{tp_rank}-of-{tp_size}.safetensors"
-        )
-    else:
-        suffix_name = f"{type.value}_{suffix_name}.safetensors"
+    suffix_name = f"{type.value}_{suffix_name}.safetensors"
+
+    if exp_tp_pp_rank_and_size:
+        # We always show pp_rank and tp_rank if `exp_tp_pp_rank_and_size` is provided
+        # We only show exp_rank if tensor is exp_sharded and exp_size > 1
+        (exp_rank, exp_size), (tp_rank, tp_size), (pp_rank, pp_size) = exp_tp_pp_rank_and_size
+        if not is_expert_sharded or exp_size == 1:
+            suffix_name = (
+                f"{type.value}_{suffix_name}_pp-rank-{pp_rank}-of-{pp_size}_tp-rank-{tp_rank}-of-{tp_size}.safetensors"
+            )
+        else:
+            suffix_name = f"{type.value}_{suffix_name}_pp-rank-{pp_rank}-of-{pp_size}_tp-rank-{tp_rank}-of-{tp_size}_exp-rank-{exp_rank}-of-{exp_size}.safetensors"
 
     suffix_path.append(suffix_name)
-    return suffix_path
+    if prefix is None:
+        return suffix_path
+    else:
+        return prefix.joinpath(*suffix_path)
 
 
 def extract_tp_pp_rank_from_shard_path(shard_path: Path):

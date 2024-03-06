@@ -1,4 +1,31 @@
-# ⚡️ Nanotron
+<h1 align="center">⚡️ Nanotron</h1>
+
+<p align="center">
+    <a href="https://github.com/huggingface/nanotron/releases">
+        <img alt="GitHub release" src="https://img.shields.io/github/release/huggingface/nanotron.svg">
+    </a>
+    <a href="https://github.com/huggingface/nanotron/blob/master/LICENSE">
+        <img alt="License" src="https://img.shields.io/github/license/huggingface/nanotron.svg?color=green">
+    </a>
+</p>
+
+<h4 align="center">
+    <p>
+        <a href="#Philosophy">Philosophy</a> •
+        <a href="#Core-Features">Core Features</a> •
+        <a href="#Installation">Installation</a> •
+        <a href="#Quick-examples">Usage</a> •
+        <a href="#Development-guidelines">Contributions</a>
+    <p>
+</h4>
+
+<h3 align="center">
+    <a href="https://huggingface.co/nanotron"><img style="float: middle; padding: 10px 10px 10px 10px;" width="60" height="55" src="https://huggingface.co/datasets/huggingface/brand-assets/resolve/main/hf-logo.png" /></a>
+</h3>
+
+
+
+#
 
 The objective of this library is to provide easy distributed primitives in order to train a variety of models efficiently using 3D parallelism. For more information about the internal design of the library or 3D parallelism in general, please check out [[docs.md]](./docs/docs.md) and [[3d_parallelism.md]](./docs/3d_parallelism.md).
 
@@ -28,12 +55,10 @@ To install (in a new env):
 ```bash
 pip install torch
 pip install packaging; pip install "flash-attn>=2.5.0"  --no-build-isolation
-git clone git@github.com:huggingface/nanotron.git
-cd nanotron
-pip install -e .
+pip install nanotron
 ```
 
-Also nice to have `transformers` `datasets` `python-etcd` `tensorboardX`: `pip install transformers datasets python-etcd tensorboardX`
+Also nice to have: `pip install transformers datasets python-etcd tensorboardX`
 
 We also support a set of flavors that you can install using `pip install -e [$FLAVOR]`:
  - `dev`: Used is you are developping in `nanotron`. It installs in particular our linter mechanism. On top of that you have to run `pre-commit install` afterwards.
@@ -68,7 +93,6 @@ pre-commit run --config .pre-commit-config.yaml --all-files
 
 Features we would like to add:
 - [ ] Support `torch.compile`
-- [ ] Support `torch.distributed.rpc`
 - [ ] More optimized kernels
 - [ ] Support Zero3
 - [ ] Other PP schedules (such as Interleaved 1f1b...)

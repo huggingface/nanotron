@@ -18,12 +18,7 @@ from torch.profiler import ProfilerActivity, profile, tensorboard_trace_handler
 
 from nanotron import distributed as dist
 from nanotron import logging
-from nanotron.config import (
-    Config,
-    LRSchedulerArgs,
-    OptimizerArgs,
-    ParallelismArgs,
-)
+from nanotron.config import Config, LRSchedulerArgs, OptimizerArgs, ParallelismArgs
 from nanotron.distributed import ProcessGroup
 from nanotron.logging import LogItem, log_rank
 from nanotron.models.base import NanotronModel
@@ -40,9 +35,7 @@ from nanotron.optim.optimizer_from_gradient_accumulator import (
 )
 from nanotron.optim.zero import ZeroDistributedOptimizer
 from nanotron.parallel import ParallelContext
-from nanotron.parallel.tensor_parallel.nn import (
-    TensorParallelLinearMode,
-)
+from nanotron.parallel.tensor_parallel.nn import TensorParallelLinearMode
 from nanotron.random import (
     RandomStates,
     get_current_random_state,
@@ -166,7 +159,6 @@ def init_optimizer_and_grad_accumulator(
     # Fix the root_model
     module_id_to_prefix[id(unwrapped_model)] = ""
 
-    # named parameters
     named_parameters = list(unwrapped_model.get_named_params_with_correct_tied())
 
     # Basic optimizer builder
@@ -175,8 +167,8 @@ def init_optimizer_and_grad_accumulator(
             named_params_or_groups=named_param_groups,
             optimizer_builder=lambda param_groups: AdamW(  # pylint: disable=E0601
                 param_groups,
-                lr=optimizer_args.learning_rate_scheduler.learning_rate,
                 weight_decay=optimizer_args.weight_decay,
+                lr=optimizer_args.learning_rate_scheduler.learning_rate,
                 eps=optimizer_args.adam_eps,
                 betas=(optimizer_args.adam_beta1, optimizer_args.adam_beta2),
                 fused=optimizer_args.torch_adam_is_fused,
