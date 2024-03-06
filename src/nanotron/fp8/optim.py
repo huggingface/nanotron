@@ -171,6 +171,7 @@ class FP8Adam(Optimizer):
         eps: float = 1e-8,
         weight_decay: float = 0,
         amsgrad: bool = False,
+        out_dtype: DTypes = DTypes.KFLOAT16,
     ):
         # TODO(xrsrke): add this back, after fp8 working
         # assert [isinstance(p, FP8Parameter) for p in params], "All parameters should be FP8Parameter"
@@ -183,6 +184,9 @@ class FP8Adam(Optimizer):
             raise ValueError("Invalid beta parameter at index 0: {}".format(betas[0]))
         if not 0.0 <= betas[1] < 1.0:
             raise ValueError("Invalid beta parameter at index 1: {}".format(betas[1]))
+
+        assert out_dtype in DTypes, "Please provide an accumulation precision format"
+        
         defaults = {"lr": lr, "betas": betas, "eps": eps, "weight_decay": weight_decay, "amsgrad": amsgrad}
 
         super().__init__(params, defaults)
@@ -191,6 +195,7 @@ class FP8Adam(Optimizer):
         # then retrieve the exp_avg_dtype from the recipe
         self.exp_avg_dtype = FP8LM_RECIPE.optim.exp_avg_dtype
         self.exp_avg_sq_dtype = FP8LM_RECIPE.optim.exp_avg_sq_dtype
+        self.out_dtype = out_dtype
 
         self.master_weights: List[FP16Tensor] = []
         # NOTE: torch.Tensor is bias

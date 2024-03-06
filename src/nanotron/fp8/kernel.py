@@ -4,6 +4,7 @@ import transformer_engine_extensions as tex
 
 from nanotron.fp8.tensor import FP8Tensor
 from nanotron.fp8.meta import FP8Meta
+from nanotron.fp8.dtypes import DTypes
 
 
 @torch.no_grad()
@@ -13,6 +14,7 @@ def fp8_matmul_kernel(
     mat_b: FP8Tensor,
     transpose_b: bool,
     use_split_accumulator: bool,
+    out_dtype: DTypes
 ) -> torch.Tensor:
     assert (
         mat_a.device != "cpu" and mat_b.device != "cpu"
@@ -25,7 +27,9 @@ def fp8_matmul_kernel(
     workspace = torch.empty(33_554_432, dtype=torch.int8, device=device)
     accumulate = False
 
+    # NOTE: this is the accumulation precision dtype
     out_dtype = getattr(tex.DType, "kFloat32")
+    
     # NOTE: currently TE don't support adding bias in FP8
     # along with matmul, it only takes an empty bias
     bias = torch.tensor([], dtype=torch.float32)

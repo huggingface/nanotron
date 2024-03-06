@@ -19,8 +19,13 @@ FP8E4M3_DTYPE = torch.int8
 FP8E5M2_DTYPE = torch.uint8
 
 # TODO(xrsrke): rename to DTYPE_TO_FP_MAX
+# TODO(xrsrke): change to QDTYPE
 DTYPE_TO_FP8_MAX = {DTypes.FP8E4M3: 448.0, DTypes.FP8E5M2: 57344.0, DTypes.KFLOAT16: 65504.0}
 
+QTYPE_TO_DTYPE = {
+    DTypes.KFLOAT16: torch.float16,
+    DTypes.KFLOAT32: torch.float32
+}
 
 # NOTE: the training recipe of the FP8-LM paper
 # FP8-LM: Training FP8 Large Language Models

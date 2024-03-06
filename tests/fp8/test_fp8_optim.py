@@ -61,7 +61,7 @@ def test_fp8_optim_master_weights_fp16_and_fp8():
             for layer in (nn.Linear(16, 64, device="cuda"), nn.ReLU(), nn.Linear(64, 16, device="cuda"), nn.ReLU())
         ]
     )
-    fp8_model = convert_to_fp8_module(deepcopy(ref_model))
+    fp8_model = convert_to_fp8_module(deepcopy(ref_model), out_dtype=DTypes.KFLOAT16)
     fp8_optim = FP8Adam(fp8_model.parameters())
 
     REF_PARAMS = list(ref_model.parameters())

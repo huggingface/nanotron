@@ -5,30 +5,35 @@ import torch.nn.functional as F
 import transformer_engine as te  # noqa
 from torch import nn
 
-from nanotron.fp8.constants import FP8LM_RECIPE
+from nanotron.fp8.constants import FP8LM_RECIPE, QTYPE_TO_DTYPE
 from nanotron.fp8.kernel import fp8_matmul_kernel
 from nanotron.fp8.parameter import FP8Parameter
 from nanotron.fp8.tensor import FP8Tensor
+from nanotron.fp8.dtypes import DTypes
 
 
 class FP8Linear(nn.Linear):
-    def __init__(self, in_features: int, out_features: int, bias: bool = True, device: Optional[torch.device] = None):
+    def __init__(self, in_features: int, out_features: int, bias: bool = True, device: Optional[torch.device] = None, qtype: DTypes = DTypes.KFLOAT32):
         assert device != torch.device("cpu"), "FP8Linear only supports CUDA tensors"
-        super().__init__(in_features, out_features, bias, device)
+        assert qtype in DTypes
+        
+        super().__init__(in_features, out_features, bias, device, QTYPE_TO_DTYPE[qtype])
         # TODO(xrsrke): don't fixed dtype, take it from the FP8 recipe
         # DTypes.FP8E4M3
         self.weight = FP8Parameter(self.weight, dtype=FP8LM_RECIPE.linear.weight.dtype)
+        self.qtype = qtype
 
     def forward(self, input: Union[FP8Tensor, torch.Tensor]) -> torch.Tensor:
         # NOTE: only do fp8 kernel if both input and weight are on CUDA device
         if input.device == torch.device("cpu") or self.weight.device == torch.device("cpu"):
+            # TODO(xrsrke): adjust the accumation precision
             return F.linear(input, self.weight, self.bias)
 
         # NOTE: just a phony tensor to make pytorch trigger the backward pass
         # because weight and bias's requires_grad are set to False
         # so that we can compute the gradients using the fp8 kernels by ourselves
         phony = torch.empty(0, device=input.device, requires_grad=True)
-        output, _ = _FP8Matmul.apply(input, self.weight, phony)
+        output, _ = _FP8Matmul.apply(input, self.weight, phony, self.qtype)
 
         # TODO(xrsrke): add support for adding bias in fp8
         # TODO(xrsrke): support return an fp8 tensor as output
@@ -40,7 +45,7 @@ class FP8Linear(nn.Linear):
 class _FP8Matmul(torch.autograd.Function):
     @staticmethod
     @torch.no_grad()
-    def forward(ctx, input: Union[FP8Tensor, torch.Tensor], weight: FP8Tensor, phony: torch.Tensor) -> torch.Tensor:
+    def forward(ctx, input: Union[FP8Tensor, torch.Tensor], weight: FP8Tensor, phony: torch.Tensor, qtype: DTypes) -> torch.Tensor:
         if type(input) == torch.Tensor:
             input = FP8Tensor(input, dtype=FP8LM_RECIPE.linear.input.dtype)
 
