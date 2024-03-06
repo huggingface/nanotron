@@ -287,7 +287,8 @@ class FP8Adam(Optimizer):
                     fp32_grad = convert_tensor_from_fp8(grad, grad.fp8_meta, torch.float32)
                 else:
                     # fp16_grad = grad
-                    fp32_grad = convert_tensor_from_fp16(grad, torch.float32)
+                    # fp32_grad = convert_tensor_from_fp16(grad, torch.float32)
+                    fp32_grad = grad.float()
                     # fp32_grad = grad.float()
 
                 if p.ndim != 1:

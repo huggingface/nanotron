@@ -6,7 +6,7 @@ from nanotron.fp8.linear import FP8Linear
 from nanotron.fp8.parameter import FP8Parameter
 from nanotron.fp8.tensor import FP8Tensor, convert_tensor_from_fp8
 from nanotron.fp8.dtypes import DTypes
-from nanotron.fp8.constants import QTYPE_TO_DTYPE
+from nanotron.fp8.constants import QTYPE_TO_DTYPE, FP8_DTYPES
 from torch import nn
 from torch.optim import Adam
 from utils import convert_linear_to_fp8
@@ -66,6 +66,8 @@ def test_fp8_linear_backward_pass(input_requires_grad, accum_qtype):
     fp8_linear(input).sum().backward()
 
     assert isinstance(fp8_linear.weight.grad, FP8Tensor)
+    assert fp8_linear.bias.grad.dtype in FP8_DTYPES
+    
     assert isinstance(fp8_linear.bias.grad, torch.Tensor)
     assert fp8_linear.bias.grad.dtype == QTYPE_TO_DTYPE[accum_qtype]
 

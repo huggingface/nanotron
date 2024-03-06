@@ -26,6 +26,7 @@ class LossScaler:
         self.overflow_counter = 0
 
     def scale(self, loss: torch.Tensor) -> torch.Tensor:
+        # TODO(xrsrke): add autocast loss to float32 before scaling it
         return loss * self.scaling_value
 
     def step(self, optim: torch.optim.Optimizer, *args, **kwargs):
@@ -40,6 +41,8 @@ class LossScaler:
         if detected_overflow:
             # TODO(xrsrke): add logging that we skip optimizer step when overflow
             # is detected
+            # TODO(xrsrke): remvoe this after debugging
+            raise RuntimeError("Detected overflow")
             if self.interval == 1:
                 self.update()
         else:
