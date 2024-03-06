@@ -40,7 +40,7 @@ def create_sharded_parameter_from_config(
 ) -> NanotronParameter:
     current_rank = dist.get_rank(pg)
     param_num_dims = len(parameter.shape)
-    global_ranks = tuple(sorted((dist.get_global_rank(pg, i) for i in range(pg.size()))))
+    global_ranks = dist.get_global_ranks(pg)
     split_dim = split_config.split_dim
     assert split_dim < param_num_dims
     contiguous_chunks = split_config.contiguous_chunks

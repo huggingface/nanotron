@@ -17,7 +17,7 @@ pip install megablocks
 
 # Run training
 export CUDA_DEVICE_MAX_CONNECTIONS=1 # important for some distributed operations
-torchrun --nproc_per_node=8 examples/moe/train_moe.py --config-file examples/moe/config_llamoe.yaml
+torchrun --nproc_per_node=4 examples/moe/train_moe.py --config-file examples/moe/config_llamoe.yaml
 ```
 
 ## 🚀 Use your custom model

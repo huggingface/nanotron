@@ -60,10 +60,8 @@ from nanotron.parallel.pipeline_parallel import (
     TensorPointer,
     get_pp_rank_of,
 )
-from nanotron.parallel.tensor_parallel.nn import (
-    TensorParallelLinearMode,
-    TensorParallelRowLinear,
-)
+from nanotron.parallel.tensor_parallel.enum import TensorParallelLinearMode
+from nanotron.parallel.tensor_parallel.nn import TensorParallelRowLinear
 from nanotron.parallel.tied_parameters import (
     create_pg_for_tied_weights,
     get_tied_id_to_param,
@@ -80,12 +78,12 @@ from nanotron.sanity_checks import (
 from nanotron.serialize import (
     load_lr_scheduler,
     load_meta,
-    load_optimizer,
     load_weights,
     parse_ckpt_path,
     save,
     save_random_states,
 )
+from nanotron.serialize.optimizer import load_optimizer
 
 logger = logging.get_logger(__name__)
 
@@ -796,14 +794,30 @@ def mark_tied_parameters(
     # Tie custom params
     model.tie_custom_params()
 
-    # Sync all parameters that have the same name and that are not sharded
+    # Sync all parameters that have the same name and that are not sharded across TP and EXP
     assert not isinstance(model, DistributedDataParallel), "model shouldn't be DDP at this point"
+    mark_unsharded_params_as_tied_across_tp(model, parallel_context, parallel_config)
+    mark_unsharded_params_as_tied_across_expert(model, parallel_context, parallel_config)
+
+    create_pg_for_tied_weights(root_module=model, parallel_context=parallel_context)
+
+
+def mark_unsharded_params_as_tied_across_tp(
+    model: NanotronModel, parallel_context: ParallelContext, parallel_config: "ParallelismArgs"
+):
     for module_name, module in model.named_modules():
         for param_name, param in module.named_parameters(recurse=False):
             name = f"{module_name}.{param_name}"
 
-            if isinstance(param, NanotronParameter) and (param.is_sharded or param.is_tied):
-                continue
+            if isinstance(param, NanotronParameter):
+                # We skip tying if param already tied or sharded along tp
+                if param.is_tied:
+                    continue
+
+                if param.is_sharded:
+                    sharded_info = param.get_sharded_info()
+                    if sharded_info.is_tp_sharded(parallel_context=parallel_context):
+                        continue
 
             if isinstance(module, TensorParallelRowLinear) and "bias" == param_name:
                 # bias for TensorParallelRowLinear only exists on TP=0 so we don't need to tie it
@@ -828,4 +842,36 @@ def mark_tied_parameters(
                 root_module=model, ties=shared_weights, parallel_context=parallel_context, reduce_op=reduce_op
             )
 
-    create_pg_for_tied_weights(root_module=model, parallel_context=parallel_context)
+
+def mark_unsharded_params_as_tied_across_expert(
+    model: NanotronModel, parallel_context: ParallelContext, parallel_config: "ParallelismArgs"
+):
+    for module_name, module in model.named_modules():
+        for param_name, param in module.named_parameters(recurse=False):
+            name = f"{module_name}.{param_name}"
+
+            if isinstance(param, NanotronParameter):
+                # We skip tying if param already tied or sharded along expert
+                if param.is_tied:
+                    continue
+
+                if param.is_sharded:
+                    sharded_info = param.get_sharded_info()
+                    if sharded_info.is_expert_sharded(parallel_context):
+                        continue
+
+            shared_weights = [
+                (
+                    name,
+                    # sync across expert group
+                    tuple(sorted(dist.get_process_group_ranks(parallel_context.expert_pg))),
+                )
+            ]
+
+            # Besides MoE block which sees shards tokens, the rest of the model sees the full tokens
+            # so we don't need to reduce the gradients across expert group
+            reduce_op = None
+
+            tie_parameters(
+                root_module=model, ties=shared_weights, parallel_context=parallel_context, reduce_op=reduce_op
+            )

@@ -4,9 +4,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import dacite
 import torch
 from packaging.version import Version
-from safetensors.torch import safe_open, save_file
 from safetensors import SafetensorError
-
+from safetensors.torch import safe_open, save_file
 from torch import nn
 from tqdm import tqdm
 
@@ -21,8 +20,8 @@ from nanotron.serialize.metadata import CheckpointMetadata, TensorMetadata, load
 from nanotron.serialize.utils import (
     ObjectType,
     extract_tp_pp_rank_from_shard_path,
+    get_exp_tp_pp_rank_and_size_from,
     get_path,
-    get_tp_and_pp_rank_and_size_from,
     merge_and_shard_tp_tensors,
 )
 
@@ -43,12 +42,17 @@ def save_weights(model: nn.Module, parallel_context: ParallelContext, root_folde
 
     # We chunk everything by `tp_world_size` in order to make sure that we gather all the weights into a single device before saving it
     for name, param_or_buffer in tqdm(model.state_dict().items(), desc="Saving weights"):
+
+        # exp_rank=0 saves all weights whereas exp_rank>0 save only MLP weights
+        if dist.get_rank(parallel_context.expert_pg) != 0:
+            if "experts" not in name:
+                continue
+
         # `state_dict` doesn't return a Param or a buffer, just a tensors which loses some metadata
         try:
-            # TODO @thomasw21: That's supposed to be slow. Can we try not calling `get_parameter()`?
             param = model.get_parameter(name)
         except AttributeError:
-            # TODO @thomasw21: Handle buffers
+            # TODO @nouamanetazi: Handle buffers
             param = None
 
         if isinstance(param, NanotronParameter):
@@ -66,12 +70,13 @@ def save_weights(model: nn.Module, parallel_context: ParallelContext, root_folde
                 base_name = name
 
             if param.is_sharded:
-                sharded_info = param.get_sharded_info()
+                sharded_info: ShardedInfo = param.get_sharded_info()
                 group = parallel_context.world_ranks_to_pg[sharded_info.global_ranks]
-                tp_and_pp_rank_and_size = get_tp_and_pp_rank_and_size_from(
+                exp_tp_pp_rank_and_size = get_exp_tp_pp_rank_and_size_from(
                     world_rank=get_global_rank(group=group, group_rank=dist.get_rank(group)),
                     parallel_context=parallel_context,
                 )
+                is_expert_sharded = sharded_info.is_expert_sharded(parallel_context)
                 metadata = TensorMetadata(
                     version=CHECKPOINT_VERSION,
                     local_global_slices_pairs=sharded_info.local_global_slices_pairs,
@@ -79,23 +84,23 @@ def save_weights(model: nn.Module, parallel_context: ParallelContext, root_folde
                 ).to_str_dict()
 
             else:
-                tp_and_pp_rank_and_size = None
+                exp_tp_pp_rank_and_size = None
 
-            path = root_folder.joinpath(
-                *get_path(
-                    base_name,
-                    type=ObjectType.MODEL,
-                    tp_and_pp_rank_and_size=tp_and_pp_rank_and_size,
-                )
+            path = get_path(
+                base_name,
+                type=ObjectType.MODEL,
+                exp_tp_pp_rank_and_size=exp_tp_pp_rank_and_size,
+                is_expert_sharded=is_expert_sharded,
+                prefix=root_folder,
             )
             path.parent.mkdir(exist_ok=True, parents=True)
             try:
                 tensors = {"data": param_or_buffer}
-                
+
                 # Mamba has some parameters that should not be weight decayed
                 if hasattr(model.get_parameter(name), "_no_weight_decay"):
                     tensors.update({"_no_weight_decay": torch.tensor(model.get_parameter(name)._no_weight_decay)})
-                
+
                 save_file(tensors=tensors, filename=path, metadata=metadata)
             except Exception as e:
                 log_rank(
@@ -168,7 +173,7 @@ def load_sharded_param_latest(
                 assert checkpoint_unsharded_shape == param_metadata.unsharded_shape
 
             if param_shard_metadata is not None:
-                # NOTE: store how does model paramater are sharded
+                # NOTE: store how does model parameter are sharded
                 # so that we can shard optimizer checkpoints in this way
                 pp_rank, tp_rank = extract_tp_pp_rank_from_shard_path(shard_path)
                 param_shard_metadata[(pp_rank, tp_rank)] = param_metadata
@@ -241,31 +246,33 @@ def load_weights(
                     group = parallel_context.world_ranks_to_pg[sharded_info.global_ranks]
                     group_rank = dist.get_rank(group)
 
-                tp_and_pp_rank_and_size = get_tp_and_pp_rank_and_size_from(
+                exp_tp_pp_rank_and_size = get_exp_tp_pp_rank_and_size_from(
                     world_rank=get_global_rank(group=group, group_rank=group_rank), parallel_context=parallel_context
                 )
+                is_expert_sharded = sharded_info.is_expert_sharded(parallel_context)
             else:
-                tp_and_pp_rank_and_size = None
+                exp_tp_pp_rank_and_size = None
+                is_expert_sharded = False
 
-            path = param_root_folder.joinpath(
-                *get_path(
-                    base_name,
-                    type=ObjectType.MODEL,
-                    tp_and_pp_rank_and_size=tp_and_pp_rank_and_size,
-                )
+            path = get_path(
+                base_name,
+                type=ObjectType.MODEL,
+                exp_tp_pp_rank_and_size=exp_tp_pp_rank_and_size,
+                prefix=param_root_folder,
+                is_expert_sharded=is_expert_sharded,
             )
 
             if path.exists():
                 with safe_open(path, framework="pt", device=str(param.device)) as fi:
                     # TODO @thomasw21: Choose only a slice if we switch the TP topology
                     param_or_buffer[:] = fi.get_tensor("data")
-                    
+
                     # Only Mamba params has this attribute
                     try:
                         param._no_weight_decay = fi.get_tensor("_no_weight_decay")
                     except SafetensorError:
                         pass
-       
+
             elif not path.parent.exists():
                 raise ValueError(
                     f"Checkpoint is empty or checkpoint structure is not matching the model architecture."
@@ -374,22 +381,21 @@ def get_checkpoint_paths_list(
                     group = parallel_context.world_ranks_to_pg[sharded_info.global_ranks]
                     group_rank = dist.get_rank(group)
 
-                tp_and_pp_rank_and_size = get_tp_and_pp_rank_and_size_from(
+                exp_tp_pp_rank_and_size = get_exp_tp_pp_rank_and_size_from(
                     world_rank=get_global_rank(group=group, group_rank=group_rank), parallel_context=parallel_context
                 )
             else:
-                tp_and_pp_rank_and_size = None
+                exp_tp_pp_rank_and_size = None
 
             if only_list_folders:
                 paths.append(param_root_folder.joinpath(base_name.split(".")[:-1]))
             else:
                 paths.append(
-                    param_root_folder.joinpath(
-                        *get_path(
-                            base_name,
-                            type=ObjectType.MODEL,
-                            tp_and_pp_rank_and_size=tp_and_pp_rank_and_size,
-                        )
+                    get_path(
+                        base_name,
+                        type=ObjectType.MODEL,
+                        exp_tp_pp_rank_and_size=exp_tp_pp_rank_and_size,
+                        prefix=param_root_folder,
                     )
                 )
 
