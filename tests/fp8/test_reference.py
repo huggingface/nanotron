@@ -23,7 +23,7 @@ def test_optim():
 
     ref_linear = nn.Linear(HIDDEN_SIZE, HIDDEN_SIZE, device="cuda")
     linear = deepcopy(ref_linear)
-    linear = convert_linear_to_fp8(linear)
+    linear = convert_linear_to_fp8(linear, accum_qtype=DTypes.KFLOAT16)
     msamp_linear = deepcopy(ref_linear)
     msamp_linear = LinearReplacer.replace(msamp_linear, MS_Dtypes.kfloat16)
 
@@ -64,7 +64,7 @@ def test_fwd_and_bwd():
     msamp_linear = deepcopy(ref_linear)
     msamp_linear = LinearReplacer.replace(msamp_linear, MS_Dtypes.kfloat16)
 
-    linear = convert_linear_to_fp8(deepcopy(ref_linear))
+    linear = convert_linear_to_fp8(deepcopy(ref_linear), accum_qtype=DTypes.KFLOAT16)
 
     input = torch.randn(HIDDEN_SIZE, HIDDEN_SIZE, device="cuda")
 

@@ -47,7 +47,7 @@ def test_fp8_optim_default_initiation():
     linear = nn.Linear(16, 16, device="cuda")
     ref_optim = Adam(linear.parameters())
 
-    fp8_linear = convert_linear_to_fp8(deepcopy(linear))
+    fp8_linear = convert_linear_to_fp8(deepcopy(linear), accum_qtype=DTypes.KFLOAT16)
     fp8_optim = FP8Adam(fp8_linear.parameters())
 
     assert all(ref_optim.defaults[attr] == fp8_optim.defaults[attr] for attr in OPTIM_ATTRS)
@@ -61,7 +61,7 @@ def test_fp8_optim_master_weights_fp16_and_fp8():
             for layer in (nn.Linear(16, 64, device="cuda"), nn.ReLU(), nn.Linear(64, 16, device="cuda"), nn.ReLU())
         ]
     )
-    fp8_model = convert_to_fp8_module(deepcopy(ref_model), out_dtype=DTypes.KFLOAT16)
+    fp8_model = convert_to_fp8_module(deepcopy(ref_model), accum_qtype=DTypes.KFLOAT16)
     fp8_optim = FP8Adam(fp8_model.parameters())
 
     REF_PARAMS = list(ref_model.parameters())
@@ -90,7 +90,7 @@ def test_fp8_optim_master_weights_fp16_and_fp8():
 def test_fp8adam_optimizer_states(learning_rate, betas, eps, weight_decay):
     input = torch.randn(16, 16, device="cuda")
     linear = nn.Linear(16, 16, device="cuda")
-    fp8_linear = convert_linear_to_fp8(deepcopy(linear))
+    fp8_linear = convert_linear_to_fp8(deepcopy(linear), accum_qtype=DTypes.KFLOAT16)
 
     optim = Adam(linear.parameters(), learning_rate, betas, eps, weight_decay)
     fp8_optim = FP8Adam(fp8_linear.parameters(), learning_rate, betas, eps, weight_decay)
@@ -127,7 +127,7 @@ def test_fp8adam_optimizer_states(learning_rate, betas, eps, weight_decay):
 def test_fp8adam_optimizer_state_dtypes():
     # input = torch.randn(16, 16, device="cuda")
     linear = nn.Linear(16, 16, device="cuda")
-    fp8_linear = convert_linear_to_fp8(deepcopy(linear))
+    fp8_linear = convert_linear_to_fp8(deepcopy(linear), accum_qtype=DTypes.KFLOAT16)
 
     fp8_optim = FP8Adam(fp8_linear.parameters())
     set_fake_fp8_grads(fp8_linear)
@@ -174,7 +174,7 @@ def test_fp8adam_optimizer_state_dtypes():
 )
 def test_fp8adam_step(learning_rate, betas, eps, weight_decay):
     linear = nn.Linear(16, 16, device="cuda")
-    fp8_linear = convert_linear_to_fp8(deepcopy(linear))
+    fp8_linear = convert_linear_to_fp8(deepcopy(linear), accum_qtype=DTypes.KFLOAT16)
 
     optim = Adam(linear.parameters(), learning_rate, betas, eps, weight_decay)
     fp8_optim = FP8Adam(fp8_linear.parameters(), learning_rate, betas, eps, weight_decay)
@@ -203,7 +203,7 @@ def test_fp8adam_step(learning_rate, betas, eps, weight_decay):
 def test_fp8adam_zero_grad():
     input = torch.randn(16, 16, device="cuda")
     linear = nn.Linear(16, 16, device="cuda")
-    fp8_linear = convert_linear_to_fp8(deepcopy(linear))
+    fp8_linear = convert_linear_to_fp8(deepcopy(linear), accum_qtype=DTypes.KFLOAT16)
     fp8_optim = FP8Adam(fp8_linear.parameters(), lr=1e-3)
     fp8_linear(input).sum().backward()
 
@@ -222,7 +222,7 @@ def test_fp8adam_step_with_correct_grad():
 
     input = torch.randn(16, 16, device="cuda")
     linear = nn.Linear(16, 16, device="cuda")
-    fp8_linear = convert_linear_to_fp8(deepcopy(linear))
+    fp8_linear = convert_linear_to_fp8(deepcopy(linear), accum_qtype=DTypes.KFLOAT16)
 
     optim = REFAdam(linear.parameters(), LR, BETAS, EPS, WEIGHT_DECAY)
     fp8_optim = FP8Adam(fp8_linear.parameters(), LR, BETAS, EPS, WEIGHT_DECAY)
@@ -255,7 +255,7 @@ def test_fp8adam_step_with_correct_grad():
 def test_fp8adam_load_state_dict():
     input = torch.randn(16, 16, device="cuda")
     linear = nn.Linear(16, 16, device="cuda")
-    fp8_linear = convert_linear_to_fp8(deepcopy(linear))
+    fp8_linear = convert_linear_to_fp8(deepcopy(linear), accum_qtype=DTypes.KFLOAT16)
     # fp8_linear = deepcopy(linear)
     fp8_optim = FP8Adam(fp8_linear.parameters(), lr=1e-3)
     fp8_linear(input).sum().backward()

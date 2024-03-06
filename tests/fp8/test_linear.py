@@ -12,19 +12,19 @@ from torch.optim import Adam
 from utils import convert_linear_to_fp8
 
 
-@pytest.mark.parametrize("out_dtype", [DTypes.KFLOAT32, DTypes.KFLOAT16])
+@pytest.mark.parametrize("accum_qtype", [DTypes.KFLOAT32, DTypes.KFLOAT16])
 @pytest.mark.parametrize("bias", [True, False])
-def test_create_an_fp8_linear_parameters(bias, out_dtype):
-    fp8_linear = FP8Linear(64, 64, bias=bias, device="cuda", out_dtype=out_dtype)
+def test_create_an_fp8_linear_parameters(bias, accum_qtype):
+    fp8_linear = FP8Linear(64, 64, bias=bias, device="cuda", accum_qtype=accum_qtype)
 
     assert isinstance(fp8_linear.weight, FP8Parameter)
     assert isinstance(fp8_linear.bias, torch.Tensor) if bias else True
-    assert isinstance(fp8_linear.out_dtype, DTypes)
+    assert isinstance(fp8_linear.accum_qtype, DTypes)
 
 
 def test_fp8_linear_parameters():
     ref_linear = nn.Linear(16, 16, device="cuda")
-    fp8_linear = convert_linear_to_fp8(deepcopy(ref_linear))
+    fp8_linear = convert_linear_to_fp8(deepcopy(ref_linear), accum_qtype=DTypes.KFLOAT32)
 
     assert len(list(ref_linear.parameters())) == len(list(fp8_linear.parameters()))
     assert all(p is not None for p in fp8_linear.parameters())
@@ -34,19 +34,19 @@ def test_fp8_linear_parameters():
 
 
 @pytest.mark.parametrize("is_bias", [True, False])
-@pytest.mark.parametrize("out_dtype", [DTypes.KFLOAT32, DTypes.KFLOAT16])
-def test_fp8_linear_forward_pass(is_bias, out_dtype):
+@pytest.mark.parametrize("accum_qtype", [DTypes.KFLOAT32, DTypes.KFLOAT16])
+def test_fp8_linear_forward_pass(is_bias, accum_qtype):
     input = torch.randn(16, 16, device="cuda", dtype=torch.float32)
     ref_input = input.detach().clone()
     ref_linear = nn.Linear(16, 16, bias=is_bias, device="cuda", dtype=torch.float32)
 
-    fp8_linear = convert_linear_to_fp8(deepcopy(ref_linear), out_dtype)
+    fp8_linear = convert_linear_to_fp8(deepcopy(ref_linear), accum_qtype)
 
     ref_output = ref_linear(ref_input)
     output = fp8_linear(input)
 
     assert isinstance(output, torch.Tensor)
-    assert output.dtype == QTYPE_TO_DTYPE[out_dtype]
+    assert output.dtype == QTYPE_TO_DTYPE[accum_qtype]
 
     # NOTE: this threshold is from fp8-lm, the paper shows that this is fine
     torch.testing.assert_allclose(output, ref_output, rtol=0, atol=0.1)
@@ -54,20 +54,20 @@ def test_fp8_linear_forward_pass(is_bias, out_dtype):
 
 # TODO(xrsrke): add cases where the input requires and don't require grad
 @pytest.mark.parametrize("input_requires_grad", [True, False])
-@pytest.mark.parametrize("out_dtype", [DTypes.KFLOAT32, DTypes.KFLOAT16])
-def test_fp8_linear_backward_pass(input_requires_grad, out_dtype):
+@pytest.mark.parametrize("accum_qtype", [DTypes.KFLOAT32, DTypes.KFLOAT16])
+def test_fp8_linear_backward_pass(input_requires_grad, accum_qtype):
     input = torch.randn(16, 16, device="cuda", dtype=torch.float32, requires_grad=input_requires_grad)
     ref_input = input.detach().clone().requires_grad_(True)
     ref_linear = nn.Linear(16, 16, device="cuda", dtype=torch.float32)
 
-    fp8_linear = convert_linear_to_fp8(deepcopy(ref_linear), out_dtype)
+    fp8_linear = convert_linear_to_fp8(deepcopy(ref_linear), accum_qtype)
 
     ref_linear(ref_input).sum().backward()
     fp8_linear(input).sum().backward()
 
     assert isinstance(fp8_linear.weight.grad, FP8Tensor)
     assert isinstance(fp8_linear.bias.grad, torch.Tensor)
-    assert fp8_linear.bias.grad.dtype == QTYPE_TO_DTYPE[out_dtype]
+    assert fp8_linear.bias.grad.dtype == QTYPE_TO_DTYPE[accum_qtype]
 
     # TODO(xrsrke): investigate why input.grad is so high tolerance
     # assert torch.allclose(input.grad, ref_input.grad, 0.2, 0.2) if input_requires_grad else True

@@ -14,25 +14,36 @@ def fp8_matmul_kernel(
     mat_b: FP8Tensor,
     transpose_b: bool,
     use_split_accumulator: bool,
-    out_dtype: DTypes
+    accum_qtype: DTypes
 ) -> torch.Tensor:
     assert (
         mat_a.device != "cpu" and mat_b.device != "cpu"
     ), "The tensors must be on a CUDA device in order to use the FP8 kernel!!"
-
+    assert isinstance(accum_qtype, DTypes)
+    
     device = mat_a.device
+    
+    # NOTE: this is the accumulation precision dtype
+    # TODO(xrsrke): move this mapping to constants
+    if accum_qtype == DTypes.KFLOAT32:
+        out_dtype = getattr(tex.DType, "kFloat32")
+        out_torch_dtype = torch.float32
+    elif accum_qtype == DTypes.KFLOAT16:
+        out_dtype = getattr(tex.DType, "kFloat16")
+        out_torch_dtype = torch.float16
+    else:
+        raise ValueError(f"Unsupported accumulation dtype: {accum_qtype}")
 
     _empty_tensor = torch.Tensor()
-    output = torch.empty(mat_a.shape[0], mat_b.shape[1], device=device, dtype=torch.float32)
+    # output = torch.empty(mat_a.shape[0], mat_b.shape[1], device=device, dtype=torch.float32)
+    output = torch.empty(mat_a.shape[0], mat_b.shape[1], device=device, dtype=out_torch_dtype)
     workspace = torch.empty(33_554_432, dtype=torch.int8, device=device)
     accumulate = False
-
-    # NOTE: this is the accumulation precision dtype
-    out_dtype = getattr(tex.DType, "kFloat32")
     
     # NOTE: currently TE don't support adding bias in FP8
     # along with matmul, it only takes an empty bias
-    bias = torch.tensor([], dtype=torch.float32)
+    # bias = torch.tensor([], dtype=torch.float32)
+    bias = torch.tensor([], dtype=out_torch_dtype)
     TE_CONFIG_TRANSPOSE_BIAS = False
 
     mat_a_fp8_meta: FP8Meta = mat_a.fp8_meta
