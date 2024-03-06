@@ -5,7 +5,7 @@ import torch
 from torch import nn
 from torch.optim import Optimizer
 
-from nanotron.fp8.constants import FP8LM_RECIPE
+from nanotron.fp8.constants import FP8LM_RECIPE, FP8_DTYPES
 from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.parameter import FP8Parameter
 from nanotron.fp8.tensor import (
@@ -275,9 +275,11 @@ class FP8Adam(Optimizer):
                 if is_overflow_underflow_nan(grad):
                     raise ValueError("Overflow, underflow, or NaN detected in the gradients")
 
-                assert isinstance(p, FP8Parameter) or isinstance(p, torch.Tensor)
+                # assert isinstance(p, FP8Parameter) or isinstance(p, torch.Tensor)
                 # assert isinstance(grad, FP8Tensor) or isinstance(grad, FP16Tensor)
-                assert isinstance(grad, FP8Tensor) or isinstance(grad, torch.Tensor)
+                # NOTE: sanity check
+                assert (isinstance(p, FP8Parameter) and p.dtype in FP8_DTYPES) or (isinstance(p, torch.Tensor) and p.dtype == torch.float16)
+                assert (isinstance(grad, FP8Tensor) and grad.dtype in FP8_DTYPES) or (isinstance(grad, torch.Tensor) and grad.dtype == torch.float16)
 
                 if p.ndim != 1:
                     print(f"[FP8Adam] original grad: {grad[:2, :2]} \n")
@@ -288,7 +290,7 @@ class FP8Adam(Optimizer):
                 else:
                     # fp16_grad = grad
                     # fp32_grad = convert_tensor_from_fp16(grad, torch.float32)
-                    fp32_grad = grad.float()
+                    fp32_grad = grad.to(torch.float32)
                     # fp32_grad = grad.float()
 
                 if p.ndim != 1:

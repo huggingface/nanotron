@@ -124,7 +124,7 @@ def test_deplay_update_scaling_factor(interval):
 
 
 @pytest.mark.parametrize(
-    "tensor, output",
+    "tensor, expected_output",
     [
         [torch.tensor(1.0), False],
         [torch.tensor(1e308).pow(2), True],
@@ -132,11 +132,14 @@ def test_deplay_update_scaling_factor(interval):
         [torch.randn(2, 3), True],
     ],
 )
-def test_overflow(tensor, output):
+def test_overflow(tensor, expected_output):
     if tensor.ndim > 1:
         tensor[0, 0] = torch.tensor(float("inf"))
 
-    assert is_overflow(tensor) == output
+    output = is_overflow(tensor)
+    
+    assert isinstance(output, bool)
+    assert output is expected_output
 
 
 # TODO(xrsrke): test decrease the scaling factor when overflow is detected

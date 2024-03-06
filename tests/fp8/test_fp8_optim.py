@@ -223,7 +223,8 @@ def test_fp8adam_zero_grad():
     assert [p.grad is None for p in fp8_linear.parameters()]
 
 
-def test_fp8adam_step_with_loss_scaling():
+@pytest.mark.parametrize("scaling_value", [torch.tensor(2, dtype=torch.float32).pow(15), torch.tensor(2, dtype=torch.float32).pow(2)])
+def test_fp8adam_step_with_loss_scaling(scaling_value):
     LR = 1e-3
     BETAS = (0.9, 0.999)
     EPS = 1e-8
@@ -231,7 +232,7 @@ def test_fp8adam_step_with_loss_scaling():
     
     ref_linear = nn.Linear(16, 16, device="cuda")
     fp8_linear = convert_linear_to_fp8(deepcopy(ref_linear), accum_qtype=DTypes.KFLOAT16)
-    loss_scaler = LossScaler()
+    loss_scaler = LossScaler(scaling_value)
 
     ref_optim = Adam(ref_linear.parameters(), LR, BETAS, EPS, WEIGHT_DECAY)
     fp8_optim = FP8Adam(fp8_linear.parameters(), LR, BETAS, EPS, WEIGHT_DECAY)

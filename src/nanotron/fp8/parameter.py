@@ -21,8 +21,9 @@ class FP8GradMeta:
 
 class FP8Parameter(nn.Parameter):
     """
-    A custom FP8 parameter class that allows gradients
-    to flow into FP8 tensors (which are integer tensors).
+    A custom FP8 parameter class that allows
+    fp8 gradients (which are integer tensors)
+    to flow into FP8 tensors.
     """
 
     def __new__(cls, data: torch.Tensor, dtype: DTypes, requires_grad: bool = True) -> nn.Parameter:
@@ -82,6 +83,10 @@ class FP8Parameter(nn.Parameter):
     @grad.setter
     def grad(self, value: Optional[Union[torch.Tensor, FP8Tensor]]):
         self.data._grad = value
+    
+    @property
+    def dtype(self) -> torch.dtype:
+        return self._data.dtype
 
     @property
     def fp8_meta(self) -> FP8Meta:

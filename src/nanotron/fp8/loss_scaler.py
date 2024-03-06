@@ -1,4 +1,5 @@
 import torch
+from torch.optim import Optimizer
 
 from nanotron.fp8.constants import LS_INITIAL_SCALING_FACTOR, LS_INITIAL_SCALING_VALUE, LS_INTERVAL
 
@@ -27,9 +28,10 @@ class LossScaler:
 
     def scale(self, loss: torch.Tensor) -> torch.Tensor:
         # TODO(xrsrke): add autocast loss to float32 before scaling it
+        # TODO(xrsrke): do inplace operation
         return loss * self.scaling_value
 
-    def step(self, optim: torch.optim.Optimizer, *args, **kwargs):
+    def step(self, optim: Optimizer, *args, **kwargs):
         detected_overflow = False
         for group in optim.param_groups:
             for p in group["params"]:
@@ -50,11 +52,13 @@ class LossScaler:
             for group in optim.param_groups:
                 for p in group["params"]:
                     if p.grad is not None:
+                        # TODO(xrsrke): do inplace operation
                         p.grad = p.grad / self.scaling_value
 
             optim.step(*args, **kwargs)
 
     def update(self):
+        # TODO(xrsrke): remove this
         self.overflow_counter += 1
 
         if self.overflow_counter == self.interval:
@@ -63,8 +67,10 @@ class LossScaler:
 
 
 def is_overflow(tensor: torch.Tensor) -> bool:
-    return torch.any(torch.isinf(tensor))
-
+    if torch.isinf(tensor).any() or torch.isnan(tensor).any():
+        return True
+    else:
+        return False
 
 def is_underflow():
     pass

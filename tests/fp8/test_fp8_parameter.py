@@ -4,6 +4,7 @@ from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.meta import FP8Meta
 from nanotron.fp8.parameter import FP8Parameter
 from nanotron.fp8.tensor import FP8Tensor
+from nanotron.fp8.constants import FP8_DTYPES
 
 
 @pytest.mark.parametrize("dtype", [DTypes.FP8E4M3, DTypes.FP8E5M2])
@@ -17,6 +18,8 @@ def test_create_fp8_parameter(dtype):
     assert isinstance(fp8_parameter.data, FP8Tensor)
     assert fp8_parameter.requires_grad is True
     assert fp8_parameter.grad is None
+    assert fp8_parameter.dtype in FP8_DTYPES
+    
     assert isinstance(fp8_parameter.fp8_meta, FP8Meta)
     assert isinstance(fp8_parameter.data.fp8_meta, FP8Meta)
 

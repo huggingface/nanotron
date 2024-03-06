@@ -66,7 +66,7 @@ def test_fp8_linear_backward_pass(input_requires_grad, accum_qtype):
     fp8_linear(input).sum().backward()
 
     assert isinstance(fp8_linear.weight.grad, FP8Tensor)
-    assert fp8_linear.bias.grad.dtype in FP8_DTYPES
+    assert fp8_linear.weight.grad.dtype in FP8_DTYPES
     
     assert isinstance(fp8_linear.bias.grad, torch.Tensor)
     assert fp8_linear.bias.grad.dtype == QTYPE_TO_DTYPE[accum_qtype]

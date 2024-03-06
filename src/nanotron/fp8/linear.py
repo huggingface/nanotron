@@ -10,6 +10,7 @@ from nanotron.fp8.kernel import fp8_matmul_kernel
 from nanotron.fp8.parameter import FP8Parameter
 from nanotron.fp8.tensor import FP8Tensor
 from nanotron.fp8.dtypes import DTypes
+import pydevd
 
 
 class FP8Linear(nn.Linear):
@@ -100,6 +101,9 @@ class _FP8Matmul(torch.autograd.Function):
             mat_a=input, transpose_a=False, mat_b=grad_output, transpose_b=False, use_split_accumulator=True,
             accum_qtype=accum_qtype
         )
+        
+        assert grad_input.dtype == QTYPE_TO_DTYPE[accum_qtype]
+        assert grad_weight.dtype == QTYPE_TO_DTYPE[accum_qtype]
         # TODO(xrsrke): maintain a persistence metadata across training
         weight.grad = FP8Tensor(grad_weight, dtype=FP8LM_RECIPE.linear.weight_grad.dtype)
         return grad_input, None, None, None

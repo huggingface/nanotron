@@ -14,11 +14,10 @@ def convert_linear_to_fp8(linear: nn.Linear, accum_qtype: DTypes) -> FP8Linear:
     is_bias = linear.bias is not None
 
     fp8_linear = FP8Linear(in_features, out_features, bias=is_bias, device=linear.weight.device, accum_qtype=accum_qtype)
-    fp8_linear.weight = FP8Parameter(linear.weight.detach().clone(), FP8LM_RECIPE.linear.weight.dtype)
+    fp8_linear.weight = FP8Parameter(linear.weight.data.clone(), FP8LM_RECIPE.linear.weight.dtype)
 
     if is_bias:        
-        # fp8_linear.bias.data = FP16Tensor(linear.bias.detach().clone(), FP8LM_RECIPE.linear.bias.dtype)
-        fp8_linear.bias.orig_data = deepcopy(linear.bias.data)
+        fp8_linear.bias.orig_data = linear.bias.data.clone()
         fp8_linear.bias.data = linear.bias.data.to(QTYPE_TO_DTYPE[accum_qtype])
 
     return fp8_linear
