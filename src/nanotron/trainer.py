@@ -55,11 +55,11 @@ from nanotron.optim.clip_grads import clip_grad_norm
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.data_parallel.utils import sync_gradients_across_dp
 from nanotron.parallel.parameters import NanotronParameter, sanity_check
-from nanotron.parallel.pipeline_parallel import (
+from nanotron.parallel.pipeline_parallel.engine import (
     PipelineEngine,
     TensorPointer,
-    get_pp_rank_of,
 )
+from nanotron.parallel.pipeline_parallel.utils import get_pp_rank_of
 from nanotron.parallel.tensor_parallel.enum import TensorParallelLinearMode
 from nanotron.parallel.tensor_parallel.nn import TensorParallelRowLinear
 from nanotron.parallel.tied_parameters import (
