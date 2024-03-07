@@ -27,7 +27,7 @@ def _test_init_parallel_context(parallel_context: ParallelContext):
 
     local_rank = tuple(i.item() for i in np.where(parallel_context.world_rank_matrix == world_rank))
     global_rank = parallel_context.get_global_rank(*local_rank)
-    assert isinstance(global_rank, int)
+    assert isinstance(global_rank, np.int32)
 
     assert global_rank == parallel_context.world_rank_matrix[local_rank]
 

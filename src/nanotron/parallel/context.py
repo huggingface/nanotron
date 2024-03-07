@@ -127,7 +127,7 @@ class ParallelContext:
 
     def get_local_ranks(self, world_rank: int) -> Tuple[int, int, int]:
         # return coordinates in world_rank_matrix without expert_parallel_rank
-        return tuple(i.item() for i in np.where(self.world_rank_matrix == world_rank))
+        return tuple(i.item() for i in np.where(self.world_rank_matrix == world_rank))[-3:]
 
     def destroy(self):
         if not dist.is_initialized():
@@ -142,7 +142,7 @@ class ParallelContext:
         pipeline_parallel_rank: int,
         data_parallel_rank: int,
         tensor_parallel_rank: int,
-    ) -> int:
+    ) -> np.int32:
         """
         Get the global rank based on the specified ranks in different parallel groups.
 
