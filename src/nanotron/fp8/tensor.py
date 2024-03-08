@@ -45,6 +45,24 @@ class LowPrecisionTensor(torch.Tensor):
     def _quantize(tensor: torch.Tensor, fp8_meta: "FP8Meta") -> torch.Tensor:
         raise NotImplementedError
 
+    def mul_(self, other: torch.Tensor):
+        assert isinstance(other, torch.Tensor)
+        assert other.ndim == 1, "FP8Tensor doesn't support broadcasting for scaling factor"
+
+        self.fp8_meta._inverse_scale = self.fp8_meta.inverse_scale * other
+
+    def div_(self, other: torch.Tensor):
+        assert isinstance(other, torch.Tensor)
+        assert other.ndim == 1, "FP8Tensor doesn't support broadcasting for scaling factor"
+
+        self.mul_(1 / other)
+
+    def __add__(self, other: torch.Tensor):
+        raise ValueError("You can't directly add a FP8Tensor with another tensor")
+
+    def __sub__(self, other: torch.Tensor):
+        raise ValueError("You can't directly subtract a FP8Tensor with another tensor")
+
     def __repr__(self) -> str:
         if hasattr(self, "fp8_meta"):
             return f"FP8Tensor({repr(self.data)}, fp8_meta={self.fp8_meta})"
@@ -56,6 +74,9 @@ class FP8Tensor(LowPrecisionTensor):
 
     @staticmethod
     def _quantize(tensor: torch.Tensor, fp8_meta: "FP8Meta") -> torch.Tensor:
+        assert isinstance(tensor, torch.Tensor)
+        assert tensor.dtype not in FP8_DTYPES, "The tensor already quantized to FP8"
+        
         return convert_tensor_to_fp8(tensor, fp8_meta)
 
 
@@ -66,6 +87,9 @@ class FP16Tensor(LowPrecisionTensor):
     # TODO(xrsrke): change the name to lp_meta = low_precision_meta
     @staticmethod
     def _quantize(tensor: torch.Tensor, fp8_meta: "FP8Meta") -> torch.Tensor:
+        assert isinstance(tensor, torch.Tensor)
+        assert tensor.dtype != torch.float16, "You can't quantize a tensor to FP16 if it's already FP16"
+
         return (tensor * fp8_meta.scale).to(torch.float16)
 
 
@@ -126,13 +150,21 @@ def convert_tensor_from_fp8(tensor: torch.Tensor, meta, dtype: torch.dtype) -> t
 def convert_tensor_from_fp16(tensor: FP16Tensor, dtype: torch.dtype) -> torch.Tensor:
     # assert isinstance(tensor, FP16Tensor)
     assert isinstance(dtype, torch.dtype)
-    return (tensor * tensor.fp8_meta.inverse_scale).to(dtype)
+    # TODO(xrsrke): this is a hacky way to turn a fp16 tensor to a non-quantize tensor
+    inverse_scale = tensor.fp8_meta.inverse_scale
+    tensor = tensor.clone()
+    tensor = (tensor * inverse_scale).to(dtype)
+    return torch.tensor(tensor, dtype=dtype).squeeze(dim=0)
 
 
 def _convert_tensor_from_fp16(tensor: FP16Tensor, fp8_meta, dtype: torch.dtype) -> torch.Tensor:
     # assert isinstance(tensor, FP16Tensor)
     assert isinstance(dtype, torch.dtype)
-    return (tensor * fp8_meta.inverse_scale).to(dtype)
+
+    inverse_scale = fp8_meta.inverse_scale
+    tensor = tensor.clone()
+    tensor = (tensor * inverse_scale).to(dtype)
+    return torch.tensor(tensor, dtype=dtype).squeeze(dim=0)
 
 
 def update_scaling_factor(
