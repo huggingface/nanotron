@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Union
+from typing import Union, Optional
 
 import torch
 import transformer_engine as te  # noqa
@@ -18,6 +18,7 @@ class FP8Meta:
 
     # TODO(xrsrke): change to Literal[torch.int8, torch.uint8]
     dtype: torch.dtype
+    _inverse_scale: Optional[torch.Tensor] = None
 
     @property
     def te_dtype(self) -> tex.DType:
@@ -34,7 +35,9 @@ class FP8Meta:
 
     @property
     def inverse_scale(self) -> torch.Tensor:
-        return 1 / self.scale
+        # TODO(xrsrke): this is a hacky way, remove the _inverse_scale
+        return 1 / self.scale if self._inverse_scale is None else self._inverse_scale
+
 
     def __repr__(self) -> str:
         return f"FP8Meta(amax={self.amax}, scale={self.scale}, inverse_scale={self.inverse_scale}, dtype={self.dtype})"

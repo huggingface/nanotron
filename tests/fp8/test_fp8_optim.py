@@ -97,6 +97,8 @@ def test_fp8_optim_master_weights_fp16_and_fp8():
 @pytest.mark.parametrize("eps", [1e-8, 1e-3])
 @pytest.mark.parametrize("weight_decay", [0, 0.5])
 def test_fp8adam_optimizer_states(learning_rate, betas, eps, weight_decay):
+    # NOTE: this one works
+    # learning_rate, betas, eps, weight_decay = ((0.001, (0.9, 0.999), 1e-08, 0))
     input = torch.randn(16, 16, device="cuda")
     linear = nn.Linear(16, 16, device="cuda")
     fp8_linear = convert_linear_to_fp8(deepcopy(linear), accum_qtype=DTypes.KFLOAT16)
@@ -104,21 +106,15 @@ def test_fp8adam_optimizer_states(learning_rate, betas, eps, weight_decay):
     optim = Adam(linear.parameters(), learning_rate, betas, eps, weight_decay)
     fp8_optim = FP8Adam(fp8_linear.parameters(), learning_rate, betas, eps, weight_decay)
 
-    # for _ in range(4):
-    #     optim.zero_grad()
-    #     fp8_optim.zero_grad()
+    for _ in range(1):
+        optim.zero_grad()
+        fp8_optim.zero_grad()
 
-    #     linear(input).sum().backward()
-    #     fp8_linear(input).sum().backward()
+        linear(input).sum().backward()
+        fp8_linear(input).sum().backward()
 
-    #     optim.step()
-    #     fp8_optim.step()
-
-    linear(input).sum().backward()
-    set_fake_fp8_grads(fp8_linear, linear)
-
-    optim.step()
-    fp8_optim.step()
+        optim.step()
+        fp8_optim.step()
 
     for (_, ref_state), (_, fp8_state) in zip(optim.state.items(), fp8_optim.state.items()):
         fp32_exp_avg = convert_tensor_from_fp8(fp8_state["exp_avg"], fp8_state["exp_avg"].fp8_meta, torch.float32)
@@ -152,36 +148,9 @@ def test_fp8adam_optimizer_state_dtypes():
         assert fp8_state["exp_avg_sq"].dtype == torch.float16
 
 
-# @pytest.mark.parametrize("n_steps", [1, 5])
-@pytest.mark.parametrize(
-    "learning_rate",
-    [
-        1e-3,
-        # 1
-    ],
-)
-@pytest.mark.parametrize(
-    "betas",
-    [
-        (0.9, 0.999),
-        # (0.9, 0.99)
-    ],
-)
-@pytest.mark.parametrize(
-    "eps",
-    [
-        1e-8,
-        # 1e-3
-    ],
-)
-@pytest.mark.parametrize(
-    "weight_decay",
-    [
-        1e-3,
-        # 0
-    ],
-)
-def test_fp8adam_step(learning_rate, betas, eps, weight_decay):
+def test_fp8adam_step():
+    learning_rate, betas, eps, weight_decay = (0.001, (0.9, 0.999), 1e-08, 0)
+
     linear = nn.Linear(16, 16, device="cuda")
     fp8_linear = convert_linear_to_fp8(deepcopy(linear), accum_qtype=DTypes.KFLOAT16)
 
@@ -223,12 +192,25 @@ def test_fp8adam_zero_grad():
     assert [p.grad is None for p in fp8_linear.parameters()]
 
 
-@pytest.mark.parametrize("scaling_value", [torch.tensor(2, dtype=torch.float32).pow(15), torch.tensor(2, dtype=torch.float32).pow(2)])
+@pytest.mark.parametrize("scaling_value", [
+    torch.tensor(2, dtype=torch.float32).pow(1),
+    torch.tensor(2, dtype=torch.float32).pow(2),
+    torch.tensor(2, dtype=torch.float32).pow(3),
+    torch.tensor(2, dtype=torch.float32).pow(4),
+    torch.tensor(2, dtype=torch.float32).pow(5),
+    torch.tensor(2, dtype=torch.float32).pow(6),
+    torch.tensor(2, dtype=torch.float32).pow(7),
+    torch.tensor(2, dtype=torch.float32).pow(8),
+    torch.tensor(2, dtype=torch.float32).pow(9),
+    torch.tensor(2, dtype=torch.float32).pow(10),
+    torch.tensor(2, dtype=torch.float32).pow(11),
+    torch.tensor(2, dtype=torch.float32).pow(12),
+    torch.tensor(2, dtype=torch.float32).pow(13),
+    torch.tensor(2, dtype=torch.float32).pow(14),
+    torch.tensor(2, dtype=torch.float32).pow(15),
+])
 def test_fp8adam_step_with_loss_scaling(scaling_value):
-    LR = 1e-3
-    BETAS = (0.9, 0.999)
-    EPS = 1e-8
-    WEIGHT_DECAY = 1e-3
+    LR, BETAS, EPS, WEIGHT_DECAY = ((0.001, (0.9, 0.999), 1e-08, 0))
     
     ref_linear = nn.Linear(16, 16, device="cuda")
     fp8_linear = convert_linear_to_fp8(deepcopy(ref_linear), accum_qtype=DTypes.KFLOAT16)

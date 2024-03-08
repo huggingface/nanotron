@@ -10,12 +10,14 @@ from nanotron.fp8.meta import FP8Meta
 from nanotron.fp8.tensor import FP8Tensor, FP16Tensor, convert_tensor_from_fp8, convert_tensor_from_fp16
 
 
-@pytest.mark.parametrize("dtype", [DTypes.FP8E4M3, DTypes.FP8E5M2])
-def test_fp8_meta_of_a_fp8_tensor(dtype):
+@pytest.mark.parametrize(
+    "tensor_cls, dtype", [(FP8Tensor, DTypes.FP8E4M3), (FP8Tensor, DTypes.FP8E5M2), (FP16Tensor, DTypes.KFLOAT16)]
+)
+def test_fp8_and_fp16_metadata(tensor_cls, dtype):
     tensor = torch.randn((4, 4), dtype=torch.float32, device="cuda")
     ref_tensor = deepcopy(tensor)
 
-    fp8_tensor = FP8Tensor(tensor, dtype=dtype)
+    fp8_tensor = tensor_cls(tensor, dtype=dtype)
 
     # TODO(xrsrke): remove the fixed 1 factor
     # it couples with the current implementation of FP8Meta

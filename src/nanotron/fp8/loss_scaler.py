@@ -2,6 +2,7 @@ import torch
 from torch.optim import Optimizer
 
 from nanotron.fp8.constants import LS_INITIAL_SCALING_FACTOR, LS_INITIAL_SCALING_VALUE, LS_INTERVAL
+from nanotron.fp8.tensor import FP8Tensor, FP16Tensor
 
 
 class LossScaler:
@@ -53,7 +54,10 @@ class LossScaler:
                 for p in group["params"]:
                     if p.grad is not None:
                         # TODO(xrsrke): do inplace operation
-                        p.grad = p.grad / self.scaling_value
+                        if isinstance(p.grad, FP8Tensor) or isinstance(p.grad, FP16Tensor):
+                            p.grad.fp8_meta._inverse_scale = p.grad.fp8_meta.inverse_scale * (1 / self.scaling_value)
+                        else:
+                            p.grad = p.grad / self.scaling_value
 
             optim.step(*args, **kwargs)
 
