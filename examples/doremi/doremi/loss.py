@@ -48,7 +48,7 @@ def compute_per_domain_loss(
     SEQ_LEN = losses.shape[1]
     normalized_domain_losses = domain_losses / (samples_per_domain * SEQ_LEN)
     # NOTE: if the domain loss is zero, then the normalized domain loss is NaN
-    normalized_domain_losses[torch.isnan(normalized_domain_losses)].zero_()
+    normalized_domain_losses[torch.isnan(normalized_domain_losses)] = 0.0
     return losses_dp, normalized_domain_losses, samples_per_domain
 
 
