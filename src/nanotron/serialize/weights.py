@@ -69,6 +69,8 @@ def save_weights(model: nn.Module, parallel_context: ParallelContext, root_folde
             else:
                 base_name = name
             
+            is_expert_sharded = False # Let's test the solution to the potential bug by defining is_expert_sharded before using it.
+
             if param.is_sharded:
                 sharded_info: ShardedInfo = param.get_sharded_info()
                 group = parallel_context.world_ranks_to_pg[sharded_info.global_ranks]
