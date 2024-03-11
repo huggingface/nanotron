@@ -142,7 +142,7 @@ class ParallelContext:
         pipeline_parallel_rank: int,
         data_parallel_rank: int,
         tensor_parallel_rank: int,
-    ) -> np.int32:
+    ) -> np.int64:
         """
         Get the global rank based on the specified ranks in different parallel groups.
 
@@ -151,7 +151,7 @@ class ParallelContext:
         :param data_parallel_rank: int, Rank in the data parallel group.
         :param tensor_parallel_rank: int, Rank in the tensor parallel group.
 
-        :return: int, The global rank.
+        :return: numpy.int64, The global rank.
         """
         return self.world_rank_matrix[
             expert_parallel_rank,
