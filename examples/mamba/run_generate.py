@@ -73,6 +73,8 @@ def main():
     config = get_config_from_file((args.ckpt_path / "config.yaml").as_posix(), config_class=MambaConfig, model_config_class=MambaModelConfig)
     model_config = config.model.model_config
     tokenizer_path = config.tokenizer.tokenizer_name_or_path
+    
+    assert "EleutherAI/gpt-neox-20b" == tokenizer_path; f"Should be EleutherAI/gpt-neox-20b tokenizer and not '{tokenizer_path}'"
 
     parallel_config = ParallelismArgs(
         dp=args.dp or config.parallelism.dp,
@@ -161,8 +163,9 @@ def main():
         tokenizer.truncation_side = "left"  # TODO @nouamane: do we want this?
         dummy_inputs = [
             # "Passage: Daniel went back to the garden. Mary travelled to the kitchen. Sandra journeyed to the kitchen. Sandra went to the hallway. John went to the bedroom. Mary went back to the garden. Where is Mary?\nAnswer:",
-            "def fib(n)",
+            # "def fib(n)",
             # "This film was probably inspired by Godzilla",
+            "Hello"
         ]
 
         outputs = decode_text(
