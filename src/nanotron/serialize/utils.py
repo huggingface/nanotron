@@ -37,8 +37,6 @@ def get_path(
     suffix = tensor_name.split(".")
     suffix_path, suffix_name = suffix[:-1], suffix[-1]
 
-    suffix_name = f"{type.value}_{suffix_name}.safetensors"
-
     if exp_tp_pp_rank_and_size:
         # We always show pp_rank and tp_rank if `exp_tp_pp_rank_and_size` is provided
         # We only show exp_rank if tensor is exp_sharded and exp_size > 1

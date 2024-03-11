@@ -291,7 +291,9 @@ def load_weights(
                 suffix = base_name.rsplit(".", 1)[-1]
                 shards_path = list(path.parent.glob(f"{ObjectType.MODEL.value}_{suffix}*.safetensors"))
                 if len(shards_path) <= 0:
-                    raise ValueError(f"Could not find any shards in {path.parent}")
+                    raise ValueError(
+                        f"Could not find any shards {ObjectType.MODEL.value}_{suffix}*.safetensors in {path.parent}"
+                    )
 
                 if checkpoint_version is None:
                     checkpoint_version = get_checkpoint_version(
