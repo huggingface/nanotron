@@ -32,6 +32,33 @@ from nanotron.serialize import save_meta, save_weights
 from nanotron.trainer import mark_tied_parameters
 
 
+def sanity_check_weights(model, model_ref):
+    
+    def sort_key(name_param_pair):
+        name, _ = name_param_pair
+        # Split the name and take the last part as the key for sorting
+        return name.split('.')[-1]
+    
+    total, fail = 0, 0
+    
+    for (name_ref, param_ref), (name, param) in zip(
+            sorted(model_ref.named_parameters(), key=sort_key),
+            sorted(model.model.named_parameters(), key=sort_key)
+        ):
+        
+        total += 1
+        try:
+            torch.testing.assert_allclose(param_ref, param, rtol=1e-10, atol=1e-10)
+        except AssertionError as e:
+            print(f"{name_ref} and {name} are not equal")
+            fail += 1
+    
+    print(f"{fail}/{total} parameters are not equal")
+    
+    if fail > 0:
+        raise AssertionError("Some parameters are not equal")
+            
+
 def get_weight_from_hf(
     name: str,
     ref_module_state_dict: Dict[str, torch.Tensor],
@@ -117,7 +144,7 @@ if __name__ == "__main__":
     yaml_content = f"""
     is_mamba_config: true
     d_model: {d_model}
-    dtype: bfloat16
+    dtype: float32
     fused_add_norm: true
     is_mamba_config: true
     num_hidden_layers: {num_hidden_layers}
@@ -147,13 +174,15 @@ if __name__ == "__main__":
 
     attrs = yaml.safe_load(yaml_content)
     model_config = MambaModelConfig(**attrs)
+    
+    assert model_config.dtype == "float32", "Convert weights only in float32"
 
-    # # Initiliaze Brrr model
-    # model_config.vocab_size = _vocab_size_with_padding(
-    #         model_config.vocab_size,
-    #         pg_size=parallel_context.tp_pg.size(),
-    #         make_vocab_size_divisible_by=1,
-    # )
+    # Initiliaze Brrr model
+    model_config.vocab_size = _vocab_size_with_padding(
+            model_config.vocab_size,
+            pg_size=parallel_context.tp_pg.size(),
+            make_vocab_size_divisible_by=4, # 50277 -> 50280
+    )
 
     nanotron_model = build_model(
         model_builder=lambda: MambaForTraining(
@@ -240,6 +269,9 @@ if __name__ == "__main__":
     mark_tied_parameters(model=nanotron_model, parallel_context=parallel_context)
 
     sanity_check(root_module=nanotron_model)
+    
+    sanity_check_weights(model=nanotron_model, model_ref=model_ref)
+    
     save_weights(model=nanotron_model, parallel_context=parallel_context, root_folder=save_path)
     checkpoint_metadata = {
         "last_train_step": 0,
@@ -255,7 +287,7 @@ if __name__ == "__main__":
                     init_method=MambaInit(),
                     model_config=model_config,
                 ),
-            tokenizer=TokenizerArgs("EleutherAI/gpt-neox-20b"),
+            tokenizer=TokenizerArgs(pretrained_model_name + "-hf"),
         )
         print("Saving config ...")
         yaml.dump(config.as_dict(), f)
