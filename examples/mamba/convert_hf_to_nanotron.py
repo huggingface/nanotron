@@ -30,34 +30,48 @@ from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter, sanity_check
 from nanotron.serialize import save_meta, save_weights
 from nanotron.trainer import mark_tied_parameters
+from nanotron import logging
+from nanotron.logging import log_rank, set_ranks_logging_level
+from nanotron.config import LoggingArgs
+
+logger = logging.get_logger(__name__)
 
 
-def sanity_check_weights(model, model_ref):
-    
-    def sort_key(name_param_pair):
+def sanity_check_weights(model, model_ref, tp_size):    
+    def _sort_key(name_param_pair):
         name, _ = name_param_pair
         # Split the name and take the last part as the key for sorting
         return name.split('.')[-1]
     
+    def _split_weight(data: torch.Tensor, dim: int) -> torch.Tensor:
+        rank = dist.get_rank()
+        world_size = dist.get_world_size()
+        chunks = torch.chunk(data, world_size, dim=dim)
+        return chunks[rank].contiguous()
+    
     total, fail = 0, 0
     
     for (name_ref, param_ref), (name, param) in zip(
-            sorted(model_ref.named_parameters(), key=sort_key),
-            sorted(model.model.named_parameters(), key=sort_key)
+            sorted(model_ref.named_parameters(), key=_sort_key),
+            sorted(model.model.named_parameters(), key=_sort_key)
         ):
         
         total += 1
         try:
-            torch.testing.assert_allclose(param_ref, param, rtol=1e-10, atol=1e-10)
+            param_shard_ref = param_ref
+            if isinstance(param, NanotronParameter) and param.is_sharded and tp_size > 1:
+                dim = next(index for index, (dim1, dim2) in enumerate(zip(param.shape, param_ref.shape)) if dim1 != dim2)
+                param_shard_ref = _split_weight(param_ref, dim)
+            
+            torch.testing.assert_close(param_shard_ref, param, rtol=1e-10, atol=1e-10)
         except AssertionError as e:
-            print(f"{name_ref} and {name} are not equal")
+            log_rank(f"{name_ref} and {name} are not equal. {e}", logger=logger, level=logging.INFO, rank=0)
             fail += 1
     
-    print(f"{fail}/{total} parameters are not equal")
+    log_rank(f"{fail}/{total} parameters are not equal", logger=logger, level=logging.INFO, rank=0)
     
     if fail > 0:
         raise AssertionError("Some parameters are not equal")
-            
 
 def get_weight_from_hf(
     name: str,
@@ -66,12 +80,10 @@ def get_weight_from_hf(
     nanotron_to_hf: Dict[str, str],
     get_grad: bool = False
 ) -> torch.Tensor:
-    """From our brrr implementation, we get the equivalent tensor in transformers implementation"""
-
+    """From our brrr implementation, we get the equivalent tensor in transformers implementation"""    
     hf_name = nanotron_to_hf[name]
 
     if get_grad is False:
-
         def get_tensor(path: str):
             return ref_module_state_dict[path]
     else:
@@ -79,7 +91,7 @@ def get_weight_from_hf(
         def get_tensor(path: str):
             weight = ref_module.get_parameter(path)
             return weight.grad
-
+    
     return get_tensor(hf_name)
 
 if __name__ == "__main__":
@@ -94,13 +106,8 @@ if __name__ == "__main__":
     if args.model not in ["130M", "370M", "790M", "1.4B", "2.8B"]:
         raise ValueError("Model should be one of 130M, 370M, 790M, 1.4B, 2.8B")
 
-    if args.tp > 1:
-        raise ValueError("Tensor parallelism not supported yet (as A_log is nn.Parameter which is not a NanotronParameter and thus cannot be marked as is_sharded)")
-
     save_path = Path(args.save_path)
 
-    #TODO: Do it this way so that we can choose the dp pp and tp we want
-    # https://github.com/huggingface/brrr/blob/main/legacy_examples/starcoder2/convert_brrr_to_trfrs.py
     parallel_config = ParallelismArgs(
         dp=args.dp,
         pp=args.pp,
@@ -115,6 +122,15 @@ if __name__ == "__main__":
         pipeline_parallel_size=parallel_config.pp,
         tensor_parallel_size=parallel_config.tp,
     )
+
+    # Set log log levels
+    logging_config = LoggingArgs(
+        log_level="info",
+        log_level_replica="info",
+    )
+
+    # Set log levels
+    set_ranks_logging_level(parallel_context=parallel_context, logging_config=logging_config)
 
     d_model = None
     num_hidden_layers = None
@@ -171,6 +187,7 @@ if __name__ == "__main__":
         "int64": torch.int64,
         "bool": torch.bool,
     }
+    device = torch.device("cuda")
 
     attrs = yaml.safe_load(yaml_content)
     model_config = MambaModelConfig(**attrs)
@@ -193,7 +210,7 @@ if __name__ == "__main__":
         ),
         parallel_context=parallel_context,
         dtype=str_to_dtype[model_config.dtype],
-        device=torch.device("cpu")
+        device=device
     )
 
     device_map = {}
@@ -212,7 +229,7 @@ if __name__ == "__main__":
 
     device_map["lm_head"] = nanotron_model.model.lm_head.rank if current_pp_rank in tied_embs_ranks else "meta"
 
-    model_ref = MambaLMHeadModel.from_pretrained(pretrained_model_name, device="cpu", dtype=str_to_dtype[model_config.dtype])
+    model_ref = MambaLMHeadModel.from_pretrained(pretrained_model_name, device=device, dtype=str_to_dtype[model_config.dtype])
 
     # Create a mapping from nanotron to hf
     nanotron_to_hf = {}
@@ -270,7 +287,7 @@ if __name__ == "__main__":
 
     sanity_check(root_module=nanotron_model)
     
-    sanity_check_weights(model=nanotron_model, model_ref=model_ref)
+    sanity_check_weights(model=nanotron_model, model_ref=model_ref, tp_size=parallel_context.tp_pg.size())
     
     save_weights(model=nanotron_model, parallel_context=parallel_context, root_folder=save_path)
     checkpoint_metadata = {
@@ -289,5 +306,5 @@ if __name__ == "__main__":
                 ),
             tokenizer=TokenizerArgs(pretrained_model_name + "-hf"),
         )
-        print("Saving config ...")
+        log_rank("Saving config ...", logger=logger, level=logging.INFO, rank=0)
         yaml.dump(config.as_dict(), f)
