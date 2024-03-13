@@ -119,7 +119,6 @@ class DoReMiTrainer(DistributedTrainer):
         loss_avg: Optional[torch.Tensor],
     ):
 
-        excess_losses = outputs[0]["excess_losses"]
         domain_weights = outputs[0]["domain_weights"]
         domain_losses = outputs[0]["domain_losses"]
         samples_per_domain = outputs[0]["samples_per_domain"].tolist()
@@ -140,12 +139,10 @@ class DoReMiTrainer(DistributedTrainer):
 
         domain_weights = domain_weights.cpu().detach().numpy()
         domain_losses = domain_losses.cpu().detach().numpy()
-        excess_losses = excess_losses.cpu().detach().numpy()
 
         log_rank(
             f"""[DoReMi] Domain weights: {print_array_for_human(domain_weights)}
             [DoReMi] Domain losses: {print_array_for_human(domain_losses)}
-            [DoReMi] Excess losses: {print_array_for_human(excess_losses)}
             [DoReMi] Samples per domain: {str(samples_per_domain)}
             """,
             logger=logger,
@@ -170,11 +167,6 @@ class DoReMiTrainer(DistributedTrainer):
                     for i, loss in enumerate(domain_losses)
                 }
 
-                excess_loss_logs = {
-                    f"excess_loss_domain_{self.doremi_context.get_domain_name(i)}": loss
-                    for i, loss in enumerate(excess_losses)
-                }
-
                 samples_per_domain_logs = {
                     f"samples_per_domain_{self.doremi_context.get_domain_name(i)}": samples
                     for i, samples in enumerate(samples_per_domain)
@@ -184,7 +176,6 @@ class DoReMiTrainer(DistributedTrainer):
                     {
                         **weight_logs,
                         **loss_logs,
-                        **excess_loss_logs,
                         **samples_per_domain_logs,
                         "loss_avg": loss_avg.cpu().detach().numpy(),
                         "iteration_step": self.iteration_step,
