@@ -25,7 +25,7 @@ class NanosetBuilder(object):
         self, config: NanosetConfig,
     ):
         self.config = config
-        self.sizes = config.split_sizes 
+        self.sizes = config.split_num_samples 
         self.cls = Nanoset # NOTE: keep it like that to support BlendedNanoset in the future
 
     def build(self) -> List[Nanoset]:

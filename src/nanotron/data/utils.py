@@ -3,6 +3,7 @@ from nanotron.logging import log_rank
 
 from enum import Enum
 from typing import List
+import re
 
 import numpy
 

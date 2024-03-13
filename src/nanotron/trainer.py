@@ -154,14 +154,14 @@ class DistributedTrainer:
         ## Compile Nanoset helpers
         ########################################
             
-            # Only if Using Nanoset Datasets
-            if isinstance(self.config.data.dataset, NanosetDatasetsArgs):
-                if dist.get_rank() == 0:
-                    log_rank("Compiling dataset index builder ...", logger=logger, level=logging.INFO, rank=0)
-                    from nanotron.data.utils import compile_helpers
+        # Only if Using Nanoset Datasets
+        if isinstance(self.config.data.dataset, NanosetDatasetsArgs):
+            if dist.get_rank() == 0:
+                log_rank("Compiling dataset index builder ...", logger=logger, level=logging.INFO, rank=0)
+                from nanotron.data.utils import compile_helpers
 
-                    compile_helpers()
-                    log_rank("Done with dataset index builder.", logger=logger, level=logging.INFO, rank=0)
+                compile_helpers()
+                log_rank("Done with dataset index builder.", logger=logger, level=logging.INFO, rank=0)
         
         ########################################
         ## Setting up our model, optimizers, schedulers, etc.

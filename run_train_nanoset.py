@@ -42,7 +42,7 @@ def get_dataloaders(trainer: DistributedTrainer):
     )
 
     # Build Nanoset datasets
-    train_dataset, valid_dataset, test_dataset = NanosetBuilder(nanoset_config).build(nanoset_config)
+    train_dataset, valid_dataset, test_dataset = NanosetBuilder(nanoset_config).build()
 
     # Prepare train, valid and test dataloaders
     train_dataloader = build_nanoset_dataloader(
