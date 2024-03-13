@@ -27,7 +27,6 @@ def build_nanoset_dataloader(
         consumed_train_samples: int = 0,
         dataloader_drop_last: bool = True,
         dataloader_pin_memory: bool = True,
-        use_loop_to_round_batch_size: bool = False,
 ) -> DataLoader:
 
     # Case of ranks not requiring data. We give them a dummy dataset, then the collator will do his job
@@ -56,8 +55,6 @@ def build_nanoset_dataloader(
         dl_ranks_size=dp_ranks_size,
         dl_rank=dp_rank,
         seed=seed_worker,
-        use_loop_to_round_batch_size=use_loop_to_round_batch_size,
-        micro_batch_size=micro_batch_size,
         drop_last=dataloader_drop_last,
         consumed_train_samples=consumed_train_samples,
     )
