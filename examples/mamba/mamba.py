@@ -220,7 +220,7 @@ class Mamba(nn.Module):
 
         # In the backward pass we write dx and dz next to each other to avoid torch.cat
         if (
-            self.use_fast_path and inference_params is None and os.environ.get("FAST_PATH", "0") == "1"
+            self.use_fast_path and inference_params is None
         ):  # Doesn't support outputting the states
             y = mamba_inner_fn(
                 d_inner=self.d_inner,
