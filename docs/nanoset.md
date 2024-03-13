@@ -2,12 +2,35 @@
 
 ## Data pre-processing
 
+The training data requires preprocessing. First, place your training data in a loose json format, with one json containing a text sample per line. For example:
+
+<pre>
+{"src": "www.nvidia.com", "text": "The quick brown fox", "type": "Eng", "id": "0", "title": "First Part"}
+{"src": "The Internet", "text": "jumps over the lazy dog", "type": "Eng", "id": "42", "title": "Second Part"}
+</pre>
+
+The name of the `text` field of the json can be changed by using the `--json-key` flag in preprocess_data.py The other metadata are optional and are not used in training.
+
+The loose json is then processed into a binary format for training. To convert the json into mmap format use [`preprocess_data.py`](/tools/preprocess_data.py). An example script to prepare data for Llama2 training is:
+
+<pre>
+python tools/preprocess_data.py \
+       --input my_corpus.json \
+       --output-prefix my-llama2-dataset \
+       --tokenizer-type Llama2Tokenizer \
+       --tokenizer-model /models/Llama-2-7b-chat-hf/tokenizer.model \
+       --append-eod \
+       --workers 6
+</pre>
+
+The output will be two files named, in this case, `my-llama2-dataset_text_document.bin` and `my-llama2-dataset_text_document.idx`. The `--data-path` specified later in training is the full path and new filename, but without the file extension.
+
+----
+
 Data preprocessing is built around the following classes:
 
 1. `MMapIndexedDatasetBuilder`
 2. `MMapIndexedDataset`
-
-At the moment, an end-to-end data preprocessing implementation is left to the user. See the class docstring(s) for more details.
 
 #### MMapIndexedDatasetBuilder
 
