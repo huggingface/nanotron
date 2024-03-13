@@ -17,7 +17,7 @@ from nanotron.data.utils import Split
 
 logger = logging.get_logger(__name__)
 
-class Nanoset(torch.data.utils.Dataset):
+class Nanoset(torch.utils.data.Dataset):
     """Adapted from https://github.com/NVIDIA/Megatron-LM/blob/main/megatron/core/datasets/gpt_dataset.py"""
     
     """The base Nanoset dataset

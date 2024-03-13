@@ -5,7 +5,6 @@
 
 # Essentially re-written in entirety
 
-import logging
 import os
 import shutil
 import struct
@@ -19,6 +18,7 @@ from typing import List, Optional, Tuple, Type, Union
 import numpy
 import torch
 
+from nanotron import logging
 from nanotron.logging import log_rank
 
 logger = logging.get_logger(__name__)
