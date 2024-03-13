@@ -65,6 +65,28 @@ except ImportError:
 
 logger = logging.get_logger(__name__)
 
+from dataclasses import dataclass, field
+from torch import Tensor
+from nanotron.parallel.sharded_parameters import SplitConfig, create_sharded_parameter_from_config
+
+@dataclass
+class InferenceParams:
+    """Inference parameters that are passed to the main model in order
+    to efficienly calculate and store the context during inference."""
+
+    max_seqlen: int
+    max_batch_size: int
+    seqlen_offset: int = 0
+    batch_size_offset: int = 0
+    key_value_memory_dict: dict = field(default_factory=dict)
+    lengths_per_sample: Optional[Tensor] = None
+
+    def reset(self, max_seqlen, max_batch_size):
+        self.max_seqlen = max_seqlen
+        self.max_batch_size = max_batch_size
+        self.seqlen_offset = 0
+        if self.lengths_per_sample is not None:
+            self.lengths_per_sample.zero_()
 
 class Mamba(nn.Module):
     def __init__(
@@ -197,10 +219,6 @@ class Mamba(nn.Module):
         hidden_states: (B, L, D)
         Returns: same shape as hidden_states
         """
-
-        if inference_params is not None:
-            raise NotImplementedError("Inference params not tested yet.")
-
         batch, seqlen, dim = hidden_states.shape
 
         conv_state, ssm_state = None, None
@@ -291,11 +309,14 @@ class Mamba(nn.Module):
         conv_state: torch.Tensor,
         ssm_state: torch.Tensor,
     ):
+        batch, seqlen, dim = hidden_states.shape
         dtype = hidden_states.dtype
-        assert hidden_states.shape[1] == 1, "Only support decoding with 1 token at a time for now"
+        assert seqlen == 1, "Only support decoding with 1 token at a time for now"
         xz = self.in_proj(hidden_states.squeeze(1))  # (B 2D)
-        x, z = xz.chunk(2, dim=-1)  # (B D)
-
+        x, z = xz.view(batch, self.d_inner // self.tp_pg.size(), 2).chunk(2, dim=2)
+        x = x.squeeze(2)  # (B D)
+        z = z.squeeze(2)  # (B D)
+        
         # Conv step
         if causal_conv1d_update is None:
             conv_state.copy_(torch.roll(conv_state, shifts=-1, dims=-1))  # Update state (B D W)
@@ -372,14 +393,14 @@ class Mamba(nn.Module):
         if self.layer_idx not in inference_params.key_value_memory_dict:
             conv_state = torch.zeros(
                 batch_size,
-                self.d_model * self.expand,
+                self.d_model * self.expand // self.tp_pg.size(),
                 self.d_conv,
                 device=self.conv1d.weight.device,
                 dtype=self.conv1d.weight.dtype,
             )
             ssm_state = torch.zeros(
                 batch_size,
-                self.d_model * self.expand,
+                self.d_model * self.expand // self.tp_pg.size(),
                 self.d_state,
                 device=self.dt_proj.weight.device,
                 dtype=self.dt_proj.weight.dtype,
@@ -559,7 +580,7 @@ class MambaModel(nn.Module):
                         "device": self.p2p.device,
                         "dtype": cast_str_to_torch_dtype(config.dtype),
                     },
-                    module_input_keys={"hidden_states", "sequence_mask", "residual"},
+                    module_input_keys={"hidden_states", "sequence_mask", "residual", "inference_params"},
                     module_output_keys={"hidden_states", "sequence_mask", "residual"},
                 )
                 for layer_idx in range(config.num_hidden_layers)
@@ -598,6 +619,19 @@ class MambaModel(nn.Module):
             module_input_keys={"x"},
             module_output_keys={"output"},
         )
+        
+        self.inference_params = None
+        
+    def setup_inference_params(self, max_length, max_batch_size):
+        self.inference_params = InferenceParams(max_seqlen=max_length, max_batch_size=max_batch_size)
+
+    def update_inference_params(self, logits: torch.Tensor):
+        if self.inference_params is not None:
+            self.inference_params.seqlen_offset += 1 # We are processing only one token at a time
+            # We need to transpose to make it compatible with decode.py (which will tranpose again, thus cancelling this transpose)
+            logits = logits.transpose(0, 1)  # [batch_size, seq_length, vocab_size]
+        return logits    
+        
 
     def forward(
         self,
@@ -622,7 +656,7 @@ class MambaModel(nn.Module):
         }
 
         for block in self.decoder:
-            hidden_encoder_states = block(**hidden_encoder_states)
+            hidden_encoder_states = block(**hidden_encoder_states, inference_params=self.inference_params)
 
         hidden_states = self.final_layer_norm(
             x=hidden_encoder_states["hidden_states"],
@@ -632,6 +666,8 @@ class MambaModel(nn.Module):
         sharded_logits = self.lm_head(x=hidden_states)["logits"]
         fp32_sharded_logits = self.cast_to_fp32(x=sharded_logits)["output"]
 
+        fp32_sharded_logits = self.update_inference_params(fp32_sharded_logits)
+        
         return fp32_sharded_logits, hidden_states
 
     def get_block_compute_costs(self):

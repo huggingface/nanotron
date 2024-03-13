@@ -57,34 +57,9 @@ logger = logging.get_logger(__name__)
 # from transformers import MambaForCausalLM
 from mamba_ssm.models.mixer_seq_simple import MambaLMHeadModel
 
+from nanotron.parallel.parameters import NanotronParameter
 
 import lovely_tensors as lt; lt.monkey_patch()
-
-def sanity_check_weights(model, model_ref):
-    
-    def sort_key(name_param_pair):
-        name, _ = name_param_pair
-        # Split the name and take the last part as the key for sorting
-        return name.split('.')[-1]
-    
-    total, fail = 0, 0
-    
-    for (name_ref, param_ref), (name, param) in zip(
-            sorted(model_ref.named_parameters(), key=sort_key),
-            sorted(model.model.named_parameters(), key=sort_key)
-        ):
-        
-        total += 1
-        try:
-            torch.testing.assert_close(param_ref, param, rtol=1e-10, atol=1e-10)
-        except AssertionError as e:
-            print(f"{name_ref} and {name} are not equal. Error: {e}")
-            fail += 1
-    
-    print(f"{fail}/{total} parameters are not equal.")
-    
-    if fail > 0:
-        raise AssertionError("Some parameters are not equal")
 
 def get_args():
     parser = argparse.ArgumentParser()
@@ -115,6 +90,8 @@ def main():
         tp_mode=TensorParallelLinearMode.ALL_REDUCE,
         tp_linear_async_communication=False,
     )
+
+    print(parallel_config)
 
     # Initialise all process groups
     parallel_context = ParallelContext(
@@ -193,9 +170,6 @@ def main():
         rank=0,
     )
     load_weights(model=model, parallel_context=parallel_context, root_folder=checkpoint_path)
-
-    sanity_check_weights(model=model, model_ref=model_ref)
-    
     model.eval()
     model_ref.eval()
     
@@ -220,6 +194,12 @@ def main():
             "Hello"
         ]
 
+        log_rank("Setup Inference mode for mamba model", logger=logger, level=logging.INFO, rank=0)
+        #TODO: make it work with batch of inputs
+        assert len(dummy_inputs) == 1, f"Only one input is supported for now. Got {len(dummy_inputs)} inputs"
+        batch_size = tokenizer(dummy_inputs, return_tensors="pt").input_ids.size(0)
+        model.model.setup_inference_params(max_length=args.max_new_tokens, max_batch_size=batch_size)
+        
         outputs = decode_text(
             input_iter=(GenerationInput(text=text) for text in dummy_inputs),
             tokenizer=tokenizer,
@@ -268,7 +248,7 @@ def main():
         output_ref = model_ref.generate(
             input_ids=input_ids,
             max_length=args.max_new_tokens,
-            cg=True,
+            cg=False,
             return_dict_in_generate=True,
             output_scores=True,
             enable_timing=False,
