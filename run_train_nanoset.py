@@ -28,17 +28,10 @@ def get_dataloaders(trainer: DistributedTrainer):
     input_pp_rank, output_pp_rank = get_input_output_pp_ranks(model=trainer.model)
 
     # Create Nanoset config
-    # TODO Test this calculus multinode
     split_num_samples = compute_datasets_num_samples(train_iters=trainer.config.tokens.train_steps,
                                                eval_interval=trainer.config.tokens.val_check_interval,
                                                eval_iters=trainer.config.tokens.val_steps,
                                                global_batch_size=trainer.global_batch_size)
-    
-    default_split_num_samples = trainer.consumed_train_samples
-
-    assert split_num_samples == default_split_num_samples
-
-    # break
     
     nanoset_config = NanosetConfig(
         random_seed=trainer.config.data.seed,
