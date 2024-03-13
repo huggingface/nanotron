@@ -37,7 +37,7 @@ from nanotron.config import LoggingArgs
 logger = logging.get_logger(__name__)
 
 
-def sanity_check_weights(model, model_ref, tp_size):    
+def sanity_check_weights(model, model_ref, tp_size):
     def _sort_key(name_param_pair):
         name, _ = name_param_pair
         # Split the name and take the last part as the key for sorting
@@ -49,7 +49,7 @@ def sanity_check_weights(model, model_ref, tp_size):
         chunks = torch.chunk(data, world_size, dim=dim)
         return chunks[rank].contiguous()
     
-    total, fail = 0, 0
+    total, fail, excluded = 0, 0, 0
     
     for (name_ref, param_ref), (name, param) in zip(
             sorted(model_ref.named_parameters(), key=_sort_key),
@@ -63,11 +63,17 @@ def sanity_check_weights(model, model_ref, tp_size):
                 dim = next(index for index, (dim1, dim2) in enumerate(zip(param.shape, param_ref.shape)) if dim1 != dim2)
                 param_shard_ref = _split_weight(param_ref, dim)
             
+            if "in_proj" in name_ref:
+                # Don't check this weight as we changed it manually (interleaved)
+                excluded += 1
+                continue
+            
             torch.testing.assert_close(param_shard_ref, param, rtol=1e-10, atol=1e-10)
         except AssertionError as e:
             log_rank(f"{name_ref} and {name} are not equal. {e}", logger=logger, level=logging.INFO, rank=0)
             fail += 1
     
+    log_rank(f"{excluded}/{total} parameters were not sanity check (interleaved)", logger=logger, level=logging.INFO, rank=0)
     log_rank(f"{fail}/{total} parameters are not equal", logger=logger, level=logging.INFO, rank=0)
     
     if fail > 0:
@@ -81,18 +87,39 @@ def get_weight_from_hf(
     get_grad: bool = False
 ) -> torch.Tensor:
     """From our brrr implementation, we get the equivalent tensor in transformers implementation"""    
+  
+    def _interleave_pattern(N):
+        """
+        interleave_pattern(4) -> [0, 2, 1, 3]
+        interleave_pattern(8) -> [0, 4, 1, 5, 2, 6, 3, 7]
+        """
+        assert N % 2 == 0, "N must be even"
+        pattern = []
+        for i in range(N // 2):
+            pattern.append(i)
+            pattern.append(i + N // 2)
+        return pattern
+  
     hf_name = nanotron_to_hf[name]
-
+    
     if get_grad is False:
-        def get_tensor(path: str):
+        def _get_tensor(path: str):
             return ref_module_state_dict[path]
     else:
-
-        def get_tensor(path: str):
-            weight = ref_module.get_parameter(path)
-            return weight.grad
+        def _get_tensor(path: str):
+            param = ref_module.get_parameter(path)
+            return param.grad
     
-    return get_tensor(hf_name)
+    param = _get_tensor(hf_name)
+    
+    if "in_proj" in hf_name:
+        # In Nanotron, we do tensor parallel column so weight need to be split in the column dimension (i.e: xz.view(...))
+        # However, the HF weights was trained such that it expected xz.chunk(...) to split the tensor in the row dimension
+        # Thus, we need to interleaved the HF weights to make it compatible with Nanotron
+        log_rank(f"Interleaving {hf_name} to make it compatible with Nanotron", logger=logger, level=logging.INFO, rank=0)
+        param = param[_interleave_pattern(param.shape[0]), :]
+        
+    return param
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Convert HF weights from states-space repo to brrr weights")
