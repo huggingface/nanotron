@@ -94,14 +94,22 @@ class PretrainDatasetsArgs:
         if self.hf_dataset_splits is None:
             self.hf_dataset_splits = "train"
 
+@dataclass
+class NanosetDatasetsArgs:
+    data_path: str
+    split: Optional[str] = None
+
+    def __post_init__(self):
+        if self.split is None:
+            self.split = "949,50,1"
 
 @dataclass
 class DataArgs:
     """Arguments related to the data and data files processing"""
 
-    dataset: Optional[PretrainDatasetsArgs]
+    dataset: Union[PretrainDatasetsArgs, NanosetDatasetsArgs]
     seed: Optional[int]
-    num_loading_workers: Optional[int] = 1
+    num_loading_workers: Optional[int] = 0
 
     def __post_init__(self):
         if self.seed is None:
@@ -136,6 +144,7 @@ class GeneralArgs:
 
     Args:
         project: Name of the project (a project gather several runs in common tensorboard/hub-folders)
+        entity: Weights and bias entity name (optional)
         run: Name of the run
         step: Global step (updated when we save the checkpoint)
         consumed_train_samples: Number of samples consumed during training (should be actually just step*batch_size)
@@ -143,6 +152,7 @@ class GeneralArgs:
     """
 
     project: str
+    entity: Optional[str] = None
     run: Optional[str] = None
     seed: Optional[int] = None
     step: Optional[int] = None
@@ -210,6 +220,7 @@ class TokensArgs:
     batch_accumulation_per_replica: int
 
     val_check_interval: Optional[int] = -1
+    val_steps: Optional[int] = 10
     limit_val_batches: Optional[int] = 0
     limit_test_batches: Optional[int] = 0
 
