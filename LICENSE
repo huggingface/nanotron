@@ -201,7 +201,7 @@
    limitations under the License.
 
 This repository also contains code from Facebook (from their Fairseq project)
-and NVIDIA (from their Megatron project). Files from these organizations 
+and NVIDIA (from their Megatron project). Files from these organizations
 have notices at the top of each file. Below are licenses used in those files, as indicated.
 
 ------------- LICENSE FOR Facebook Fairseq code --------------

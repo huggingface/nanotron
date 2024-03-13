@@ -2,6 +2,8 @@
 
 ## Data pre-processing
 
+For data pre-processing, refer to [Megatron-LM project](https://github.com/NVIDIA/Megatron-LM/tree/main?tab=readme-ov-file#data-preprocessing), as Nanoset requires the same kind of preprocessing. The main file used is [`preprocess_data.py`](https://github.com/NVIDIA/Megatron-LM/blob/main/tools/preprocess_data.py)
+
 The training data requires preprocessing. First, place your training data in a loose json format, with one json containing a text sample per line. For example:
 
 <pre>
@@ -9,9 +11,9 @@ The training data requires preprocessing. First, place your training data in a l
 {"src": "The Internet", "text": "jumps over the lazy dog", "type": "Eng", "id": "42", "title": "Second Part"}
 </pre>
 
-The name of the `text` field of the json can be changed by using the `--json-key` flag in preprocess_data.py The other metadata are optional and are not used in training.
+The name of the `text` field of the json can be changed by using the `--json-key` flag in [`preprocess_data.py`](https://github.com/NVIDIA/Megatron-LM/blob/main/tools/preprocess_data.py). The other metadata are optional and are not used in training.
 
-The loose json is then processed into a binary format for training. To convert the json into mmap format use [`preprocess_data.py`](/tools/preprocess_data.py). An example script to prepare data for Llama2 training is:
+The loose json is then processed into a binary format for training. To convert the json into mmap format use [`preprocess_data.py`](https://github.com/NVIDIA/Megatron-LM/blob/main/tools/preprocess_data.py). An example script to prepare data for Llama2 training is:
 
 <pre>
 python tools/preprocess_data.py \
@@ -66,7 +68,7 @@ See the class docstrings for more details.
 
 #### NanosetConfig
 
-The `NanosetConfig` class parameterizes the `NanosetBuilder` and in turn the `Nanoset`.
+The `NanosetConfig` class parametrizes the `NanosetBuilder` and in turn the `Nanoset`.
 
 Different training/inference regimes will require different extensions e.g. the `NanosetConfig`
 
@@ -111,7 +113,7 @@ The `Nanoset` creates three index mappings to facilitate lookup: (1) the documen
     Do_idx = [8, 8, 9, 6, 7, 5, 8, 5, 6, 6, 5, 9, 7, 7, 9]
     ```
 
-2. The sample index _Sa_idx_ is a 2-D array mapping from _j_ to pairs of (_i_, _Do_idx_[ _i_ ] offset) of shape `[N + 1, 2]`. The rows _j_ and _j_ + 1 serve as the left and right bounds for the _j_-th sample. 
+2. The sample index _Sa_idx_ is a 2-D array mapping from _j_ to pairs of (_i_, _Do_idx_[ _i_ ] offset) of shape `[N + 1, 2]`. The rows _j_ and _j_ + 1 serve as the left and right bounds for the _j_-th sample.
 
     ```
     Given:
@@ -164,4 +166,3 @@ To query the `Nanoset` for the _k_-th sample we do the following
     ```
 
 To save time during initialization, each index is built/cached sequentially on one process rank and subsequently loaded in parallel on other process ranks. The cached indices are unique to a hash generated in the `Nanoset.__init__` function.
-

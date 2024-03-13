@@ -10,16 +10,15 @@ torchrun --nproc_per_node=8 run_train.py --config-file examples/config_tiny_llam
 import argparse
 
 from nanotron import logging
-
+from nanotron.data.dataloader_builder import build_nanoset_dataloader
+from nanotron.data.dataset_builder import NanosetBuilder
+from nanotron.data.nanoset import NanosetConfig
+from nanotron.data.utils import compute_datasets_num_samples
 from nanotron.parallel.pipeline_parallel.utils import get_input_output_pp_ranks
 from nanotron.trainer import DistributedTrainer
 
-from nanotron.data.nanoset import NanosetConfig
-from nanotron.data.dataset_builder import NanosetBuilder
-from nanotron.data.dataloader_builder import build_nanoset_dataloader
-from nanotron.data.utils import compute_datasets_num_samples
-
 logger = logging.get_logger(__name__)
+
 
 def get_dataloaders(trainer: DistributedTrainer):
     """Returns train, valid and test dataloaders"""
@@ -28,17 +27,19 @@ def get_dataloaders(trainer: DistributedTrainer):
     input_pp_rank, output_pp_rank = get_input_output_pp_ranks(model=trainer.model)
 
     # Create Nanoset config
-    split_num_samples = compute_datasets_num_samples(train_iters=trainer.config.tokens.train_steps,
-                                               eval_interval=trainer.config.tokens.val_check_interval,
-                                               eval_iters=trainer.config.tokens.val_steps,
-                                               global_batch_size=trainer.global_batch_size)
-    
+    split_num_samples = compute_datasets_num_samples(
+        train_iters=trainer.config.tokens.train_steps,
+        eval_interval=trainer.config.tokens.val_check_interval,
+        eval_iters=trainer.config.tokens.val_steps,
+        global_batch_size=trainer.global_batch_size,
+    )
+
     nanoset_config = NanosetConfig(
         random_seed=trainer.config.data.seed,
         sequence_length=trainer.sequence_length,
         data_path=trainer.config.data.dataset.data_path,
         split=trainer.config.data.dataset.split,
-        split_num_samples=split_num_samples
+        split_num_samples=split_num_samples,
     )
 
     # Build Nanoset datasets
@@ -85,8 +86,6 @@ def get_dataloaders(trainer: DistributedTrainer):
     return train_dataloader, valid_dataloader, test_dataloader
 
 
-
-
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config-file", type=str, required=True, help="Path to the YAML or python config file")
@@ -99,7 +98,7 @@ if __name__ == "__main__":
 
     # Load trainer and data
     trainer = DistributedTrainer(config_file)
-    
+
     train_dataloader, valid_dataloader, test_dataloader = get_dataloaders(trainer)
 
     # Train

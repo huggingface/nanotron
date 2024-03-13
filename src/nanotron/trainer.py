@@ -26,10 +26,10 @@ from nanotron import logging
 from nanotron.config import (
     Config,
     ExistingCheckpointInit,
+    NanosetDatasetsArgs,
     ParallelismArgs,
     RandomInit,
     get_config_from_file,
-    NanosetDatasetsArgs
 )
 from nanotron.dataloader import sanity_check_dataloader
 from nanotron.helpers import (
@@ -153,7 +153,7 @@ class DistributedTrainer:
         ########################################
         ## Compile Nanoset helpers
         ########################################
-            
+
         # Only if Using Nanoset Datasets
         if isinstance(self.config.data.dataset, NanosetDatasetsArgs):
             if dist.get_rank() == 0:
@@ -162,7 +162,7 @@ class DistributedTrainer:
 
                 compile_helpers()
                 log_rank("Done with dataset index builder.", logger=logger, level=logging.INFO, rank=0)
-        
+
         ########################################
         ## Setting up our model, optimizers, schedulers, etc.
         ########################################
@@ -491,7 +491,7 @@ class DistributedTrainer:
                         **{log_item.tag: log_item.scalar_value for log_item in log_entries},
                         "iteration_step": self.iteration_step,
                     },
-                    step=self.iteration_step-1
+                    step=self.iteration_step - 1,
                 )
 
             self.loggerwriter.add_scalars_from_list(log_entries, self.iteration_step)

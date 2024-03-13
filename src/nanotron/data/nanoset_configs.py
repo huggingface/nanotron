@@ -7,9 +7,9 @@ from nanotron.data.utils import parse_and_normalize_split
 @dataclass
 class NanosetConfig:
     """Configuration object for Nanoset datasets
-    
+
     Attributes:
-    
+
         random_seed (int): The seed for all RNG during dataset creation.
 
         sequence_length (int): The sequence length.
@@ -31,7 +31,7 @@ class NanosetConfig:
     random_seed: int
 
     sequence_length: int
-    
+
     split_num_samples: list[int]
 
     data_path: Optional[List[str]] = None

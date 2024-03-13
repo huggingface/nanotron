@@ -1,17 +1,18 @@
-from nanotron import logging
 import math
 from typing import Any, List, Optional, Tuple, Type, Union
 
 import numpy
 import torch
 
-from nanotron.data.nanoset import NanosetConfig, Nanoset
+from nanotron import logging
 from nanotron.data.indexed_dataset import MMapIndexedDataset
+from nanotron.data.nanoset import Nanoset, NanosetConfig
 from nanotron.data.utils import Split, normalize
 
 logger = logging.get_logger(__name__)
 
 DistributedDataset = Union[Nanoset, MMapIndexedDataset]
+
 
 class NanosetBuilder(object):
     """Builder class for the Nanoset classes
@@ -22,17 +23,18 @@ class NanosetBuilder(object):
     """
 
     def __init__(
-        self, config: NanosetConfig,
+        self,
+        config: NanosetConfig,
     ):
         self.config = config
-        self.sizes = config.split_num_samples 
-        self.cls = Nanoset # NOTE: keep it like that to support BlendedNanoset in the future
+        self.sizes = config.split_num_samples
+        self.cls = Nanoset  # NOTE: keep it like that to support BlendedNanoset in the future
 
     def build(self) -> List[Nanoset]:
         """Build all dataset splits according to the provided data_path(s)
-        
+
         This method is distributed-aware and must be called on all ranks.
-        
+
         The dataset splits returned can vary according to the config. Supply config.data_path and
         config.split to build BlendedNanoset and/or Nanoset splits from the same
         distribution. Supply config.data_path_per_split to build BlendedNanoset and/or Nanoset
@@ -48,7 +50,7 @@ class NanosetBuilder(object):
         self,
     ) -> List[Nanoset]:
         """Build all dataset splits according to the provided data_path(s)
-        
+
         See the NanosetBuilder.build alias for more information.
 
         Returns:
@@ -67,7 +69,10 @@ class NanosetBuilder(object):
             return self._build_nanoset_dataset_splits(data_path[0], split, self.sizes)
 
     def _build_nanoset_dataset_splits(
-        self, path_prefix: str, split: List[float], sizes: List[int],
+        self,
+        path_prefix: str,
+        split: List[float],
+        sizes: List[int],
     ) -> List[Nanoset]:
         """Build each Nanoset split from a single MMapIndexedDataset
 
@@ -79,17 +84,13 @@ class NanosetBuilder(object):
             sizes (List[int]): The number of total samples to draw from each split
 
         Returns:
-            List[Nanoset]: The Nanoset per split. Always returns Nanosets because we build them in each and every rank 
+            List[Nanoset]: The Nanoset per split. Always returns Nanosets because we build them in each and every rank
         """
-        
-        indexed_dataset = self._build_generic_dataset(
-            MMapIndexedDataset, path_prefix, False
-        )
-        
-        split_idx_bounds = _get_split_indices(
-            split, indexed_dataset.sequence_lengths.shape[0]
-        )
-        
+
+        indexed_dataset = self._build_generic_dataset(MMapIndexedDataset, path_prefix, False)
+
+        split_idx_bounds = _get_split_indices(split, indexed_dataset.sequence_lengths.shape[0])
+
         split_indices = [
             numpy.arange(
                 start=split_idx_bounds[i],
@@ -114,7 +115,9 @@ class NanosetBuilder(object):
         return nanoset_datasets
 
     def _build_generic_dataset(
-        self, cls: Type[DistributedDataset], *args: Any,
+        self,
+        cls: Type[DistributedDataset],
+        *args: Any,
     ) -> Optional[DistributedDataset]:
         """Build the DistributedDataset
 
@@ -141,10 +144,10 @@ class NanosetBuilder(object):
                     dataset = cls(*args)
                 except OSError as err:
                     log = (
-                        f"Failed to write dataset materials to the data cache directory. "
-                        + f"Please supply a directory to which you have write access via "
-                        + f"the path_to_cache attribute in NanosetConfig and "
-                        + f"retry. Refer to the preserved traceback above for more information."
+                        "Failed to write dataset materials to the data cache directory. "
+                        + "Please supply a directory to which you have write access via "
+                        + "the path_to_cache attribute in NanosetConfig and "
+                        + "retry. Refer to the preserved traceback above for more information."
                     )
                     raise Exception(log) from err
 
@@ -174,23 +177,22 @@ def _get_split_indices(split: List[float], num_elements: int) -> List[int]:
     split_indices = [0]
     for split_pct in split:
         split_indices.append(split_indices[-1] + int(round(split_pct * float(num_elements))))
-    split_indices[1:] = list(
-        map(lambda _: _ - (split_indices[-1] - num_elements), split_indices[1:])
-    )
+    split_indices[1:] = [_ - (split_indices[-1] - num_elements) for _ in split_indices[1:]]
 
     assert len(split_indices) == len(split) + 1
     assert split_indices[-1] == num_elements
 
     return split_indices
 
+
 # NOTE: Keep for BlendedNanoset
 def _get_prefixes_weights_and_sizes_for_blend(
     data_path: List[str], target_num_samples_per_split: List[int]
 ) -> Tuple[List[str], List[float], List[List[int]]]:
     """Determine the contribution of the Nanoset splits to the BlendedNanoset splits
-    
+
     Args:
-        data_path (List[str]): e.g. ["30", "path/to/dataset_1_prefix", "70", 
+        data_path (List[str]): e.g. ["30", "path/to/dataset_1_prefix", "70",
         "path/to/dataset_2_prefix"]
 
         target_num_samples_per_split (List[int]): The number of samples to target for each
@@ -201,18 +203,13 @@ def _get_prefixes_weights_and_sizes_for_blend(
         ["path/to/dataset_1_prefix", "path/to/dataset_2_prefix"], the normalized weights e.g.
         [0.3, 0.7], and the number of samples to request per Nanoset per split
     """
-    weights, prefixes = zip(
-        *[(float(data_path[i]), data_path[i + 1].strip()) for i in range(0, len(data_path), 2)]
-    )
+    weights, prefixes = zip(*[(float(data_path[i]), data_path[i + 1].strip()) for i in range(0, len(data_path), 2)])
 
     weights = normalize(weights)
 
     # NOTE: Use 0.5% target margin to ensure we satiate the network
     sizes_per_dataset = [
-        [
-            int(math.ceil(target_num_samples * weight * 1.005))
-            for target_num_samples in target_num_samples_per_split
-        ]
+        [int(math.ceil(target_num_samples * weight * 1.005)) for target_num_samples in target_num_samples_per_split]
         for weight in weights
     ]
 

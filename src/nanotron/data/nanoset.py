@@ -1,6 +1,3 @@
-from nanotron import logging
-from nanotron.logging import log_rank
-
 import hashlib
 import json
 import os
@@ -8,18 +5,21 @@ import time
 from collections import OrderedDict
 from typing import Dict, List, Tuple
 
-import torch
 import numpy
+import torch
 
-from nanotron.data.nanoset_configs import NanosetConfig
+from nanotron import logging
 from nanotron.data.indexed_dataset import MMapIndexedDataset
+from nanotron.data.nanoset_configs import NanosetConfig
 from nanotron.data.utils import Split
+from nanotron.logging import log_rank
 
 logger = logging.get_logger(__name__)
 
+
 class Nanoset(torch.utils.data.Dataset):
     """Adapted from https://github.com/NVIDIA/Megatron-LM/blob/main/megatron/core/datasets/gpt_dataset.py"""
-    
+
     """The base Nanoset dataset
 
     Args:
@@ -43,7 +43,7 @@ class Nanoset(torch.utils.data.Dataset):
         index_split: Split,
         config: NanosetConfig,
     ) -> None:
-        
+
         assert indexed_indices.size > 0
         assert num_samples > 0
         assert self.is_multimodal() == indexed_dataset.multimodal
@@ -64,15 +64,13 @@ class Nanoset(torch.utils.data.Dataset):
             self.unique_identifiers[attr] = getattr(self.config, attr)
 
         self.unique_description = json.dumps(self.unique_identifiers, indent=4)
-        self.unique_description_hash = hashlib.md5(
-            self.unique_description.encode("utf-8")
-        ).hexdigest()
+        self.unique_description_hash = hashlib.md5(self.unique_description.encode("utf-8")).hexdigest()
 
         self._finalize()
 
     def _finalize(self) -> None:
         """Abstract method implementation
-        
+
         Load or build/cache the document, sample, and shuffle indices
         """
         assert isinstance(self.config, NanosetConfig)
@@ -102,7 +100,7 @@ class Nanoset(torch.utils.data.Dataset):
             dictionary
         """
         text, _ = self._query_document_sample_shuffle_indices(idx)
-        
+
         return {"text": text}
 
     # TODO @tj-solergibert: Delete this funcs if not used?
@@ -124,7 +122,7 @@ class Nanoset(torch.utils.data.Dataset):
             bool: True
         """
         return True
-    
+
     # TODO @tj-solergibert: Delete this funcs if not used?
     @classmethod
     def is_split_by_document(cls) -> bool:
@@ -150,9 +148,7 @@ class Nanoset(torch.utils.data.Dataset):
         """
         return ["split", "random_seed", "sequence_length"]
 
-    def _query_document_sample_shuffle_indices(
-        self, idx: int
-    ) -> Tuple[numpy.ndarray, numpy.ndarray]:
+    def _query_document_sample_shuffle_indices(self, idx: int) -> Tuple[numpy.ndarray, numpy.ndarray]:
         """Get the text (token ids) and document ids for a given index
 
         Args:
@@ -194,9 +190,7 @@ class Nanoset(torch.utils.data.Dataset):
                 # Add the sample part
                 offset = 0 if i > doc_index_beg else doc_index_beg_offset
                 length = None if i < doc_index_end else doc_index_end_offset + 1
-                sample_parts.append(
-                    self.indexed_dataset.get(self.document_index[i], offset=offset, length=length)
-                )
+                sample_parts.append(self.indexed_dataset.get(self.document_index[i], offset=offset, length=length))
 
         return (
             numpy.array(numpy.concatenate(sample_parts), dtype=numpy.int64),
@@ -207,7 +201,7 @@ class Nanoset(torch.utils.data.Dataset):
         self,
     ) -> Tuple[numpy.ndarray, numpy.ndarray, numpy.ndarray]:
         """Build the document index, the sample index, and the shuffle index
-        
+
         The document index:
             -- 1-D
             -- An ordered array of document ids
@@ -228,13 +222,10 @@ class Nanoset(torch.utils.data.Dataset):
         """
         path_to_cache = getattr(self.config, "path_to_cache")
         if path_to_cache is None:
-            path_to_cache = os.path.join(
-                self.indexed_dataset.path_prefix, "cache", f"{type(self).__name__}_indices"
-            )
+            path_to_cache = os.path.join(self.indexed_dataset.path_prefix, "cache", f"{type(self).__name__}_indices")
 
-        get_path_to = lambda suffix: os.path.join(
-            path_to_cache, f"{self.unique_description_hash}-{type(self).__name__}-{suffix}"
-        )
+        def get_path_to(suffix):
+            return os.path.join(path_to_cache, f"{self.unique_description_hash}-{type(self).__name__}-{suffix}")
         path_to_description = get_path_to("description.txt")
         path_to_document_index = get_path_to("document_index.npy")
         path_to_sample_index = get_path_to("sample_index.npy")
@@ -260,18 +251,16 @@ class Nanoset(torch.utils.data.Dataset):
         if not cache_hit and torch.distributed.get_rank() == 0:
             log_rank(
                 f"Build and save the {type(self).__name__} {self.index_split.name} indices",
-                logger=logger, 
-                level=logging.INFO, 
-                rank=0
+                logger=logger,
+                level=logging.INFO,
+                rank=0,
             )
 
             if num_epochs == 1:
                 separate_final_epoch = False
             else:
                 # Get the number of samples for the last epoch
-                num_samples_sans_final_epoch = (
-                    (num_epochs - 1) * num_tokens_per_epoch - 1
-                ) // sequence_length
+                num_samples_sans_final_epoch = ((num_epochs - 1) * num_tokens_per_epoch - 1) // sequence_length
                 num_samples_from_final_epoch = self.num_samples - num_samples_sans_final_epoch
                 num_samples_per_epoch = (num_tokens_per_epoch - 1) // sequence_length
 
@@ -283,24 +272,20 @@ class Nanoset(torch.utils.data.Dataset):
 
                 # Separate the final epoch if it falls below the threshold
                 threshold = 0.80
-                separate_final_epoch = num_samples_from_final_epoch < int(
-                    threshold * num_samples_per_epoch
-                )
+                separate_final_epoch = num_samples_from_final_epoch < int(threshold * num_samples_per_epoch)
 
                 log_rank(
                     f"> num_samples_from_final_epoch: {num_samples_from_final_epoch}",
-                    logger=logger, 
-                    level=logging.DEBUG, 
-                    rank=0
+                    logger=logger,
+                    level=logging.DEBUG,
+                    rank=0,
                 )
                 log_rank(f"> threshold: {threshold}", logger=logger, level=logging.DEBUG, rank=0)
                 log_rank(
                     f"> num_samples_per_epoch: {num_samples_per_epoch}", logger=logger, level=logging.DEBUG, rank=0
                 )
 
-            log_rank(
-                f"> separate_final_epoch: {separate_final_epoch}", logger=logger, level=logging.DEBUG, rank=0
-            )
+            log_rank(f"> separate_final_epoch: {separate_final_epoch}", logger=logger, level=logging.DEBUG, rank=0)
 
             numpy_random_state = numpy.random.RandomState(getattr(self.config, "random_seed"))
 
@@ -313,7 +298,9 @@ class Nanoset(torch.utils.data.Dataset):
             # Build the document index
             log_rank(
                 f"\tBuild and save the document index to {os.path.basename(path_to_document_index)}",
-                logger=logger, level=logging.INFO, rank=0
+                logger=logger,
+                level=logging.INFO,
+                rank=0,
             )
             t_beg = time.time()
             document_index = _build_document_index(
@@ -325,8 +312,10 @@ class Nanoset(torch.utils.data.Dataset):
 
             # Build the sample index
             log_rank(
-                f"\tBuild and save the sample index to {os.path.basename(path_to_sample_index)}", 
-                logger=logger, level=logging.INFO, rank=0
+                f"\tBuild and save the sample index to {os.path.basename(path_to_sample_index)}",
+                logger=logger,
+                level=logging.INFO,
+                rank=0,
             )
             t_beg = time.time()
             from nanotron.data import helpers
@@ -347,7 +336,9 @@ class Nanoset(torch.utils.data.Dataset):
             # Build the shuffle index
             log_rank(
                 f"\tBuild and save the shuffle index to {os.path.basename(path_to_shuffle_index)}",
-                logger=logger, level=logging.INFO, rank=0
+                logger=logger,
+                level=logging.INFO,
+                rank=0,
             )
             t_beg = time.time()
             if separate_final_epoch:
@@ -363,40 +354,46 @@ class Nanoset(torch.utils.data.Dataset):
             log_rank(f"\t> time elapsed: {t_end - t_beg:4f} seconds", logger=logger, level=logging.DEBUG, rank=0)
 
         log_rank(
-            f"Load the {type(self).__name__} {self.index_split.name} indices", 
-            logger=logger, level=logging.INFO, rank=0
+            f"Load the {type(self).__name__} {self.index_split.name} indices",
+            logger=logger,
+            level=logging.INFO,
+            rank=0,
         )
 
         log_rank(
             f"\tLoad the document index from {os.path.basename(path_to_document_index)}",
-            logger=logger, level=logging.INFO, rank=0
+            logger=logger,
+            level=logging.INFO,
+            rank=0,
         )
         t_beg = time.time()
-        document_index = numpy.load(path_to_document_index, allow_pickle=True, mmap_mode='r')
+        document_index = numpy.load(path_to_document_index, allow_pickle=True, mmap_mode="r")
         t_end = time.time()
         log_rank(f"\t> time elapsed: {t_end - t_beg:4f} seconds", logger=logger, level=logging.DEBUG, rank=0)
 
         log_rank(
             f"\tLoad the sample index from {os.path.basename(path_to_sample_index)}",
-            logger=logger, level=logging.INFO, rank=0
+            logger=logger,
+            level=logging.INFO,
+            rank=0,
         )
         t_beg = time.time()
-        sample_index = numpy.load(path_to_sample_index, allow_pickle=True, mmap_mode='r')
+        sample_index = numpy.load(path_to_sample_index, allow_pickle=True, mmap_mode="r")
         t_end = time.time()
         log_rank(f"\t> time elapsed: {t_end - t_beg:4f} seconds", logger=logger, level=logging.DEBUG, rank=0)
 
         log_rank(
             f"\tLoad the shuffle index from {os.path.basename(path_to_shuffle_index)}",
-            logger=logger, level=logging.INFO, rank=0
+            logger=logger,
+            level=logging.INFO,
+            rank=0,
         )
         t_beg = time.time()
-        shuffle_index = numpy.load(path_to_shuffle_index, allow_pickle=True, mmap_mode='r')
+        shuffle_index = numpy.load(path_to_shuffle_index, allow_pickle=True, mmap_mode="r")
         t_end = time.time()
         log_rank(f"\t> time elapsed: {t_end - t_beg:4f} seconds", logger=logger, level=logging.DEBUG, rank=0)
 
-        log_rank(
-            f"> total number of samples: {sample_index.shape[0] - 1}", logger=logger, level=logging.INFO, rank=0
-        )
+        log_rank(f"> total number of samples: {sample_index.shape[0] - 1}", logger=logger, level=logging.INFO, rank=0)
         log_rank(f"> total number of epochs: {num_epochs}", logger=logger, level=logging.INFO, rank=0)
 
         return document_index, sample_index, shuffle_index
@@ -470,7 +467,7 @@ def _build_document_index(
         document_index = document_index.astype(numpy.int32)
         numpy_random_state.shuffle(document_index)
         return document_index
-    
+
     doc_idx_first = _build_document_index(documents, num_epochs - 1, numpy_random_state, False)
     doc_idx_last = _build_document_index(documents, 1, numpy_random_state, False)
     return numpy.concatenate((doc_idx_first, doc_idx_last))
@@ -508,4 +505,3 @@ def _build_shuffle_index(
     numpy_random_state.shuffle(shuffle_idx_last)
 
     return numpy.concatenate((shuffle_idx_first, shuffle_idx_last))
-

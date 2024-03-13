@@ -1,44 +1,46 @@
-from nanotron import logging
-from nanotron.logging import log_rank
+# QUESTION: Move them here?
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Union
 
-import nanotron.distributed as dist
+import numpy as np
+import torch
 from torch.utils.data import DataLoader, Sampler
 from torch.utils.data.distributed import DistributedSampler
-from nanotron.dataloader import SkipBatchSampler, EmptyInfiniteDataset, get_dataloader_worker_init # QUESTION: Move them here?
 
-from dataclasses import dataclass
-import torch
-import numpy as np
-from typing import Dict, List, Union, Optional
-from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
+import nanotron.distributed as dist
+from nanotron import logging
+from nanotron.dataloader import (
+    EmptyInfiniteDataset,
+    SkipBatchSampler,
+    get_dataloader_worker_init,
+)
 from nanotron.parallel import ParallelContext
+from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
 
 logger = logging.get_logger(__name__)
 
+
 def build_nanoset_dataloader(
-        dataset,
-        sequence_length: int,
-        parallel_context: ParallelContext,
-        input_pp_rank: int,
-        output_pp_rank: int,
-        micro_batch_size: int,
-        dataloader_num_workers: int,
-        seed_worker: int,
-        consumed_train_samples: int = 0,
-        dataloader_drop_last: bool = True,
-        dataloader_pin_memory: bool = True,
+    dataset,
+    sequence_length: int,
+    parallel_context: ParallelContext,
+    input_pp_rank: int,
+    output_pp_rank: int,
+    micro_batch_size: int,
+    dataloader_num_workers: int,
+    seed_worker: int,
+    consumed_train_samples: int = 0,
+    dataloader_drop_last: bool = True,
+    dataloader_pin_memory: bool = True,
 ) -> DataLoader:
 
     # Case of ranks not requiring data. We give them a dummy dataset, then the collator will do his job
-    if not dist.get_rank(parallel_context.pp_pg) in [
-        input_pp_rank,
-        output_pp_rank,
-    ]:
+    if dist.get_rank(parallel_context.pp_pg) not in [input_pp_rank, output_pp_rank]:
         dataset_length = len(dataset)
         dataset = EmptyInfiniteDataset(length=dataset_length)
         # No need to spawn a lot of workers, we can just use main
         dataloader_num_workers = 0
-    
+
     data_collator = NanosetDataCollatorForCLM(
         sequence_length=sequence_length,
         input_pp_rank=input_pp_rank,
@@ -49,7 +51,7 @@ def build_nanoset_dataloader(
     # Compute size and rank of dataloader workers
     dp_ranks_size = parallel_context.dp_pg.size()
     dp_rank = parallel_context.dp_pg.rank()
-    
+
     sampler = get_sampler(
         dataset=dataset,
         dl_ranks_size=dp_ranks_size,
@@ -72,12 +74,13 @@ def build_nanoset_dataloader(
         # pin_memory_device="cuda",
     )
 
+
 @dataclass
 class NanosetDataCollatorForCLM:
     """
     Data collator used for causal language modeling with Nanoset.
 
-    - sequence_length: Sequence legth of the model
+    - sequence_length: Sequence length of the model
     - input_pp_rank: Discards last input id token
     - output_pp_rank: Discards first label id token
     - other pp ranks: Don't have data. Instead, we use `TensorPointer` to point to the rank having the data.
@@ -89,16 +92,16 @@ class NanosetDataCollatorForCLM:
     parallel_context: ParallelContext
 
     def __call__(self, examples: List[Dict[str, List[np.ndarray]]]) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
-    
+
         # Process the case when current rank doesn't require data. We return `TensorPointer` that points to ranks having the data.
         current_pp_rank = dist.get_rank(self.parallel_context.pp_pg)
-    
+
         if current_pp_rank not in [
             self.input_pp_rank,
             self.output_pp_rank,
         ]:
             # assert all(len(example) == 0 for example in examples)
-            
+
             return {
                 "input_ids": TensorPointer(group_rank=self.input_pp_rank),
                 "input_mask": TensorPointer(group_rank=self.input_pp_rank),
@@ -149,6 +152,7 @@ class NanosetDataCollatorForCLM:
         result = {k: v if isinstance(v, TensorPointer) else torch.from_numpy(v) for k, v in result.items()}
         return result
 
+
 def get_sampler(
     dl_ranks_size: int,
     dl_rank: int,
@@ -158,12 +162,10 @@ def get_sampler(
     drop_last: Optional[bool] = True,
 ) -> Optional[Sampler]:
     """returns sampler that restricts data loading to a subset of the dataset proper to the DP rank"""
-    
-    # NOTE: Removed DistributedSamplerWithLoop to support valid and test samplers. 
-    
-    sampler = DistributedSampler(
-            dataset, num_replicas=dl_ranks_size, rank=dl_rank, seed=seed, drop_last=drop_last
-    )
+
+    # NOTE: Removed DistributedSamplerWithLoop to support valid and test samplers.
+
+    sampler = DistributedSampler(dataset, num_replicas=dl_ranks_size, rank=dl_rank, seed=seed, drop_last=drop_last)
 
     if consumed_train_samples > 0:
         sampler = SkipBatchSampler(sampler, skip_batches=consumed_train_samples, dp_size=dl_ranks_size)

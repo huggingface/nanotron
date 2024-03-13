@@ -94,6 +94,7 @@ class PretrainDatasetsArgs:
         if self.hf_dataset_splits is None:
             self.hf_dataset_splits = "train"
 
+
 @dataclass
 class NanosetDatasetsArgs:
     data_path: str
@@ -102,6 +103,7 @@ class NanosetDatasetsArgs:
     def __post_init__(self):
         if self.split is None:
             self.split = "949,50,1"
+
 
 @dataclass
 class DataArgs:

@@ -27,9 +27,9 @@ _INDEX_HEADER = b"MMIDIDX\x00\x00"
 
 # TODO @tj-solergibert: Refractor. Delete multimodal references.
 
+
 class DType(Enum):
-    """The NumPy data type Enum for writing/reading the MMapIndexedDataset indices
-    """
+    """The NumPy data type Enum for writing/reading the MMapIndexedDataset indices"""
 
     uint8 = 1
     int8 = 2
@@ -190,7 +190,7 @@ class _IndexWriter(object):
         # the mode per sequence
         if sequence_modes is not None:
             sequence_modes = numpy.array(sequence_modes, dtype=numpy.int8)
-            self.idx_writer.write(sequence_modes.tobytes(order='C'))
+            self.idx_writer.write(sequence_modes.tobytes(order="C"))
             del sequence_modes
 
     def _sequence_pointers(self, sequence_lengths: List[int]) -> List[int]:
@@ -243,7 +243,7 @@ class _IndexReader(object):
         self.bin_buffer_mmap = numpy.memmap(idx_path, mode="r", order="C")
         self.bin_buffer = memoryview(self.bin_buffer_mmap)
 
-        log_rank(f"\tExtract the sequence lengths", logger=logger, level=logging.INFO, rank=0)
+        log_rank("\tExtract the sequence lengths", logger=logger, level=logging.INFO, rank=0)
         t_beg = time.time()
         self.sequence_lengths = numpy.frombuffer(
             self.bin_buffer, dtype=numpy.int32, count=self.sequence_count, offset=offset
@@ -251,7 +251,7 @@ class _IndexReader(object):
         t_end = time.time()
         log_rank(f"\t> time elapsed: {t_end - t_beg:4f} seconds", logger=logger, level=logging.DEBUG, rank=0)
 
-        log_rank(f"\tExtract the sequence pointers", logger=logger, level=logging.INFO, rank=0)
+        log_rank("\tExtract the sequence pointers", logger=logger, level=logging.INFO, rank=0)
         t_beg = time.time()
         self.sequence_pointers = numpy.frombuffer(
             self.bin_buffer,
@@ -262,7 +262,7 @@ class _IndexReader(object):
         t_end = time.time()
         log_rank(f"\t> time elapsed: {t_end - t_beg:4f} seconds", logger=logger, level=logging.DEBUG, rank=0)
 
-        log_rank(f"\tExtract the document indices", logger=logger, level=logging.INFO, rank=0)
+        log_rank("\tExtract the document indices", logger=logger, level=logging.INFO, rank=0)
         t_beg = time.time()
         self.document_indices = numpy.frombuffer(
             self.bin_buffer,
@@ -275,7 +275,7 @@ class _IndexReader(object):
 
         self.sequence_modes = None
         if multimodal:
-            log_rank(f"\tExtract the sequence modes", logger=logger, level=logging.INFO, rank=0)
+            log_rank("\tExtract the sequence modes", logger=logger, level=logging.INFO, rank=0)
             t_beg = time.time()
             self.sequence_modes = numpy.frombuffer(
                 self.bin_buffer,
@@ -296,14 +296,13 @@ class _IndexReader(object):
         log_rank(f"> total number of sequences: {len(self)}", logger=logger, level=logging.INFO, rank=0)
         log_rank(
             f"> total number of documents: {self.document_indices.shape[0] - 1}",
-            logger=logger, 
-            level=logging.INFO, 
-            rank=0
+            logger=logger,
+            level=logging.INFO,
+            rank=0,
         )
 
     def __del__(self) -> None:
-        """Clean up the object
-        """
+        """Clean up the object"""
         self.bin_buffer_mmap._mmap.close()
         del self.bin_buffer_mmap
 
@@ -388,8 +387,7 @@ class MMapIndexedDataset(torch.utils.data.Dataset):
         self.initialize(path_prefix, multimodal)
 
     def __del__(self) -> None:
-        """Clean up the object
-        """
+        """Clean up the object"""
         if self.bin_buffer_mmap is not None:
             self.bin_buffer_mmap._mmap.close()
         del self.bin_buffer_mmap
@@ -460,9 +458,7 @@ class MMapIndexedDataset(torch.utils.data.Dataset):
         if length is None:
             length = sequence_length - offset
         sequence_pointer += offset * DType.size(self.index.dtype)
-        sequence = numpy.frombuffer(
-            self.bin_buffer, dtype=self.index.dtype, count=length, offset=sequence_pointer
-        )
+        sequence = numpy.frombuffer(self.bin_buffer, dtype=self.index.dtype, count=length, offset=sequence_pointer)
         return (sequence, sequence_mode) if sequence_mode is not None else sequence
 
     @property
@@ -522,9 +518,7 @@ class MMapIndexedDataset(torch.utils.data.Dataset):
         Returns:
             bool: Whether the MMapIndexedDataset exists on disk at the prefix
         """
-        return os.path.exists(get_idx_path(path_prefix)) and os.path.exists(
-            get_bin_path(path_prefix)
-        )
+        return os.path.exists(get_idx_path(path_prefix)) and os.path.exists(get_bin_path(path_prefix))
 
 
 class MMapIndexedDatasetBuilder(object):
@@ -538,9 +532,7 @@ class MMapIndexedDatasetBuilder(object):
         multimodal (bool, optional): Whether the dataset is multimodal. Defaults to False.
     """
 
-    def __init__(
-        self, bin_path: str, dtype: Type[numpy.number] = numpy.int32, multimodal: bool = False
-    ) -> None:
+    def __init__(self, bin_path: str, dtype: Type[numpy.number] = numpy.int32, multimodal: bool = False) -> None:
         self.data_file = open(bin_path, "wb")
         self.dtype = dtype
         self.multimodal = multimodal
@@ -563,9 +555,7 @@ class MMapIndexedDatasetBuilder(object):
         if self.multimodal:
             self.sequence_modes.append(mode)
 
-    def add_document(
-        self, tensor: torch.Tensor, lengths: List[int], modes: Optional[List[int]] = None
-    ) -> None:
+    def add_document(self, tensor: torch.Tensor, lengths: List[int], modes: Optional[List[int]] = None) -> None:
         """Add an entire document to the dataset
 
         Args:
@@ -582,8 +572,7 @@ class MMapIndexedDatasetBuilder(object):
             self.sequence_modes.extend(modes if modes is not None else [0] * lengths)
 
     def end_document(self) -> None:
-        """Finalize the document, for use with MMapIndexedDatasetBuilder.add_item
-        """
+        """Finalize the document, for use with MMapIndexedDatasetBuilder.add_item"""
         self.document_indices.append(len(self.sequence_lengths))
 
     def add_index(self, path_prefix: str) -> None:

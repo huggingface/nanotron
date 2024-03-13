@@ -19,6 +19,9 @@ from nanotron.sanity_checks import (
 )
 
 try:
+    from transformers import PreTrainedTokenizerBase
+    from transformers.trainer_pt_utils import DistributedSamplerWithLoop
+
     import datasets
     from datasets import (
         Dataset,
@@ -29,8 +32,6 @@ try:
         concatenate_datasets,
         load_dataset,
     )
-    from transformers import PreTrainedTokenizerBase
-    from transformers.trainer_pt_utils import DistributedSamplerWithLoop
 except ImportError:
     warnings.warn("Datasets and/or Transformers not installed, you'll be unable to use the dataloader.")
 
@@ -238,6 +239,7 @@ def dummy_infinite_data_generator(
             }
 
     return data_generator
+
 
 # QUESTION: Move it to nanotron.data.dataloader_builder?
 # Adapted from https://github.com/huggingface/accelerate/blob/a73898027a211c3f6dc4460351b0ec246aa824aa/src/accelerate/data_loader.py#L781C1-L824C28
@@ -515,6 +517,7 @@ def get_train_dataloader(
         # pin_memory_device="cuda",
     )
 
+
 # QUESTION: Move it to nanotron.data.dataloader_builder?
 def get_dataloader_worker_init(dp_rank: int):
     """Creates random states for each worker in order to get different state in each workers"""
@@ -525,6 +528,7 @@ def get_dataloader_worker_init(dp_rank: int):
         set_random_seed(seed)
 
     return dataloader_worker_init
+
 
 # QUESTION: Move it to nanotron.data.dataloader_builder?
 class EmptyInfiniteDataset:

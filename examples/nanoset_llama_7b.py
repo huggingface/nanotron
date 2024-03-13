@@ -13,9 +13,9 @@ from nanotron.config import (
     LoggingArgs,
     LRSchedulerArgs,
     ModelArgs,
+    NanosetDatasetsArgs,
     OptimizerArgs,
     ParallelismArgs,
-    NanosetDatasetsArgs,
     RandomInit,
     TokenizerArgs,
     TokensArgs,
@@ -65,7 +65,7 @@ parallelism = ParallelismArgs(
 
 tokens = TokensArgs(sequence_length=8192, train_steps=5, micro_batch_size=1, batch_accumulation_per_replica=8)
 
-dataset = NanosetDatasetsArgs(data_path="PATH_TO_DATASET", split='949,50,1')
+dataset = NanosetDatasetsArgs(data_path="PATH_TO_DATASET", split="949,50,1")
 
 checkpoints_path = os.path.dirname(os.path.dirname(__file__)) + "/checkpoints"
 os.makedirs(checkpoints_path, exist_ok=True)

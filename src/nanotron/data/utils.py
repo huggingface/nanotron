@@ -1,11 +1,11 @@
-from nanotron import logging
-from nanotron.logging import log_rank
-
+import re
 from enum import Enum
 from typing import List
-import re
 
 import numpy
+
+from nanotron import logging
+from nanotron.logging import log_rank
 
 logger = logging.get_logger(__name__)
 
@@ -17,8 +17,7 @@ class Split(Enum):
 
 
 def compile_helpers():
-    """Compile C++ helper functions at runtime. Make sure this is invoked on a single process.
-    """
+    """Compile C++ helper functions at runtime. Make sure this is invoked on a single process."""
     import os
     import subprocess
 
@@ -28,6 +27,7 @@ def compile_helpers():
 
         log_rank("Failed to compile the C++ dataset helper functions", logger=logger, level=logging.ERROR, rank=0)
         sys.exit(1)
+
 
 def normalize(weights: List[float]) -> List[float]:
     """Do non-exponentiated normalization
@@ -43,6 +43,7 @@ def normalize(weights: List[float]) -> List[float]:
     w = (w / w_sum).tolist()
     return w
 
+
 def parse_and_normalize_split(split: str) -> List[float]:
     """Parse the dataset split ratios from a string
 
@@ -56,25 +57,24 @@ def parse_and_normalize_split(split: str) -> List[float]:
     split = split + [0.0 for _ in range(len(Split) - len(split))]
 
     assert len(split) == len(Split)
-    assert all(map(lambda _: _ >= 0.0, split))
+    assert all((_ >= 0.0 for _ in split))
 
     split = normalize(split)
 
     return split
 
+
 def compute_datasets_num_samples(train_iters, eval_interval, eval_iters, global_batch_size):
-    
+
     train_samples = train_iters * global_batch_size
     eval_iters = (train_iters // eval_interval + 1) * eval_iters
     test_iters = eval_iters
 
-    datasets_num_samples = [train_samples,
-                            eval_iters * global_batch_size,
-                            test_iters * global_batch_size]
-    
+    datasets_num_samples = [train_samples, eval_iters * global_batch_size, test_iters * global_batch_size]
+
     log_rank(" > Datasets target sizes (minimum size):", logger=logger, level=logging.INFO, rank=0)
     log_rank("    Train:      {}".format(datasets_num_samples[0]), logger=logger, level=logging.INFO, rank=0)
     log_rank("    Validation: {}".format(datasets_num_samples[1]), logger=logger, level=logging.INFO, rank=0)
     log_rank("    Test:       {}".format(datasets_num_samples[2]), logger=logger, level=logging.INFO, rank=0)
-    
+
     return datasets_num_samples
