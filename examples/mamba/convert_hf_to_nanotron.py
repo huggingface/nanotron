@@ -225,8 +225,10 @@ if __name__ == "__main__":
     model_config.vocab_size = _vocab_size_with_padding(
             model_config.vocab_size,
             pg_size=parallel_context.tp_pg.size(),
-            make_vocab_size_divisible_by=4, # 50277 -> 50280
+            make_vocab_size_divisible_by=5, # So that every value of TP from 1 to 8 yield a vocab_size of 50280
     )
+
+    model_ref = MambaLMHeadModel.from_pretrained(pretrained_model_name, device=device, dtype=str_to_dtype[model_config.dtype])
 
     nanotron_model = build_model(
         model_builder=lambda: MambaForTraining(
@@ -255,8 +257,6 @@ if __name__ == "__main__":
         )
 
     device_map["lm_head"] = nanotron_model.model.lm_head.rank if current_pp_rank in tied_embs_ranks else "meta"
-
-    model_ref = MambaLMHeadModel.from_pretrained(pretrained_model_name, device=device, dtype=str_to_dtype[model_config.dtype])
 
     # Create a mapping from nanotron to hf
     nanotron_to_hf = {}
