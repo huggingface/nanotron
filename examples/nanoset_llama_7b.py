@@ -65,7 +65,7 @@ parallelism = ParallelismArgs(
 
 tokens = TokensArgs(sequence_length=8192, train_steps=5, micro_batch_size=1, batch_accumulation_per_replica=8)
 
-dataset = NanosetDatasetsArgs(data_path="XXXX", split='949,50,1')
+dataset = NanosetDatasetsArgs(data_path="PATH_TO_DATASET", split='949,50,1')
 
 checkpoints_path = os.path.dirname(os.path.dirname(__file__)) + "/checkpoints"
 os.makedirs(checkpoints_path, exist_ok=True)
@@ -87,7 +87,7 @@ if __name__ == "__main__":
     dir = os.path.dirname(__file__)
 
     # Save config as YAML file
-    config.save_as_yaml(f"{dir}/config_llama.yaml")
+    config.save_as_yaml(f"{dir}/config_nanoset_llama_7b.yaml")
 
     # Launch training
     os.system("export CUDA_DEVICE_MAX_CONNECTIONS=1")
