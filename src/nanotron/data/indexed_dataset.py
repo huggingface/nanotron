@@ -21,7 +21,7 @@ import torch
 
 from nanotron.logging import log_rank
 
-logger = logging.getLogger(__name__)
+logger = logging.get_logger(__name__)
 
 _INDEX_HEADER = b"MMIDIDX\x00\x00"
 

@@ -9,7 +9,7 @@ from nanotron.data.nanoset import NanosetConfig, Nanoset
 from nanotron.data.indexed_dataset import MMapIndexedDataset
 from nanotron.data.utils import Split, normalize
 
-logger = logging.getLogger(__name__)
+logger = logging.get_logger(__name__)
 
 DistributedDataset = Union[Nanoset, MMapIndexedDataset]
 

@@ -15,7 +15,7 @@ from nanotron.data.nanoset_configs import NanosetConfig
 from nanotron.data.indexed_dataset import MMapIndexedDataset
 from nanotron.data.utils import Split
 
-logger = logging.getLogger(__name__)
+logger = logging.get_logger(__name__)
 
 class Nanoset(torch.data.utils.Dataset):
     """Adapted from https://github.com/NVIDIA/Megatron-LM/blob/main/megatron/core/datasets/gpt_dataset.py"""
