@@ -8,6 +8,7 @@ Command:
 import argparse
 import torch
 import yaml
+import json
 from pathlib import Path
 from tqdm import tqdm
 from typing import Dict
@@ -335,3 +336,7 @@ if __name__ == "__main__":
         )
         log_rank("Saving config ...", logger=logger, level=logging.INFO, rank=0)
         yaml.dump(config.as_dict(), f)
+        
+    with open(save_path / "model_config.json", "w") as f:
+        log_rank("Saving model config ...", logger=logger, level=logging.INFO, rank=0)
+        json.dump(attrs, f)
