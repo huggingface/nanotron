@@ -483,7 +483,8 @@ class DistributedTrainer:
                 )
 
             # NOTE: only one rank writes to wandb
-            if dist.get_rank(self.parallel_context.world_pg) == self.logger_ranks[0] and wandb is not None:
+            # NOTE: if we do self.logger_ranks[0], somehow more than one rank writes to wandb
+            if dist.get_rank(self.parallel_context.world_pg) == 0 and wandb is not None:
                 wandb.log(
                     {
                         **{log_item.tag: log_item.scalar_value for log_item in log_entries},

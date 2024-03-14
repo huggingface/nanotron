@@ -159,6 +159,18 @@ class DoReMiTrainer(DistributedTrainer):
             group=self.parallel_context.dp_pg,
         )
 
+        assert_tensor_synced_across_pg(
+            tensor=self.doremi_context.domain_weights,
+            pg=self.parallel_context.world_pg,
+            msg=lambda err: f"Domain weights are not synced across ranks {err}",
+        )
+
+        assert_tensor_synced_across_pg(
+            tensor=loss_avg,
+            pg=self.parallel_context.world_pg,
+            msg=lambda err: f"DRO loss are not synced across ranks {err}",
+        )
+
         if dist.get_rank(self.parallel_context.world_pg) == 0:
             if self.iteration_step % self.config.checkpoints.checkpoint_interval == 0:
                 checkpoints_path = self.config.checkpoints.checkpoints_path
@@ -185,8 +197,8 @@ class DoReMiTrainer(DistributedTrainer):
                         **weight_logs,
                         **domain_loss_logs,
                         **samples_per_domain_logs,
-                        "dro_loss": loss_avg.cpu().detach().numpy(),
-                        "lm_loss": lm_loss_avg.cpu().detach().numpy(),
+                        # NOTE: this is cross entropy loss
+                        "ce_loss": lm_loss_avg.cpu().detach().numpy(),
                         "iteration_step": self.iteration_step,
                     }
                 )

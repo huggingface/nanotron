@@ -101,10 +101,9 @@ def _test_domain_loss_for_proxy_training(
 
     outputs = loss_func(losses, ref_losses, domain_idxs)
 
-    assert outputs.keys() == {"dro_loss", "excess_losses", "domain_losses", "domain_weights", "samples_per_domain"}
+    assert outputs.keys() == {"dro_loss", "domain_losses", "domain_weights", "samples_per_domain"}
 
     dro_loss = outputs["dro_loss"]
-    excess_losses = outputs["excess_losses"]
     domain_losses = outputs["domain_losses"]
     domain_weights = outputs["domain_weights"]
     samples_per_domain = outputs["samples_per_domain"]
@@ -113,12 +112,6 @@ def _test_domain_loss_for_proxy_training(
     assert dro_loss.requires_grad is True
 
     # NOTE: no values in excess_losses should be negative
-    assert (excess_losses >= 0.0).all()
-    assert excess_losses.shape == (global_batch_size, seq_len)
-    assert_tensor_synced_across_pg(
-        excess_losses, parallel_context.dp_pg, msg=lambda err: f"Excess losses are not synced across ranks {err}"
-    )
-
     assert (domain_losses > 0.0).all()
     assert domain_losses.shape == (N_DOMAINS,)
     assert_tensor_synced_across_pg(
