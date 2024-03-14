@@ -143,7 +143,13 @@ class DoReMiTrainer(DistributedTrainer):
         handle_domain_loss.wait()
         handle_lm_loss.wait()
 
+        assert_tensor_synced_across_pg(
+            tensor=domain_weights,
+            pg=self.parallel_context.world_pg,
+            msg=lambda err: f"Domain weights are not synced across ranks {err}",
+        )
         self.doremi_context.add_weight_with_history(domain_weights, self.iteration_step)
+        assert torch.equal(self.doremi_context.domain_weights, domain_weights)
 
         domain_weights = domain_weights.cpu().detach().numpy()
         domain_losses = domain_losses.cpu().detach().numpy()
@@ -159,12 +165,7 @@ class DoReMiTrainer(DistributedTrainer):
             group=self.parallel_context.dp_pg,
         )
 
-        assert_tensor_synced_across_pg(
-            tensor=self.doremi_context.domain_weights,
-            pg=self.parallel_context.world_pg,
-            msg=lambda err: f"Domain weights are not synced across ranks {err}",
-        )
-
+        # NOTE: this is DRO loss
         assert_tensor_synced_across_pg(
             tensor=loss_avg,
             pg=self.parallel_context.world_pg,

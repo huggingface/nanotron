@@ -89,6 +89,13 @@ def test_domain_loss_for_proxy_training(dp: int):
 def _test_domain_loss_for_proxy_training(
     parallel_context: ParallelContext, global_batch_size, batch_size, seq_len, domain_keys, domain_weights
 ):
+    def assert_if_tensor_not_synced_across_pg(tensor, pg, msg):
+        world_size = dist.get_world_size(pg)
+        tensor_list = [torch.zeros_like(tensor, device="cuda") for _ in range(world_size)]
+        dist.all_gather(tensor_list, tensor, group=pg)
+        tensor_list = torch.cat(tensor_list, dim=0)
+        assert torch.unique(tensor_list).size(0) == tensor_list.size(0), msg
+
     N_DOMAINS = domain_weights.shape[0]
     domain_weights = domain_weights.to("cuda")
     initial_domain_weights = domain_weights.clone()
@@ -114,21 +121,37 @@ def _test_domain_loss_for_proxy_training(
     # NOTE: no values in excess_losses should be negative
     assert (domain_losses > 0.0).all()
     assert domain_losses.shape == (N_DOMAINS,)
-    assert_tensor_synced_across_pg(
-        domain_losses, parallel_context.dp_pg, msg=lambda err: f"Domain losses are not synced across ranks {err}"
+
+    # NOTE: we expect each replicas computes its own domain losses
+
+    # dp_size = dist.get_world_size(parallel_context.dp_pg)
+    # domain_losses_dp = [torch.zeros_like(domain_losses, device="cuda") for _ in range(dp_size)]
+    # dist.all_gather(domain_losses_dp, domain_losses, group=parallel_context.dp_pg)
+    # domain_losses_dp = torch.cat(domain_losses_dp, dim=0)
+    # assert torch.unique(domain_losses_dp).size(0) == domain_losses_dp.size(0)
+
+    # assert_tensor_synced_across_pg(
+    #     domain_losses, parallel_context.dp_pg, msg=lambda err: f"Domain losses are not synced across ranks {err}"
+    # )
+    assert_if_tensor_not_synced_across_pg(
+        domain_losses, parallel_context.dp_pg, "Domain losses should be unique across dp ranks"
     )
 
     assert (domain_weights > 0.0).all()
     assert domain_weights.shape == (N_DOMAINS,)
     assert not torch.allclose(initial_domain_weights, domain_weights)
     assert torch.allclose(domain_weights.sum(dim=-1), torch.tensor(1.0))
+
     # NOTE: check if the loss function updates the domain weights in the doremi context
-    assert_tensor_synced_across_pg(
-        domain_weights, parallel_context.dp_pg, msg=lambda err: f"Domain weights are not synced across ranks {err}"
+    # assert_tensor_synced_across_pg(
+    #     domain_weights, parallel_context.dp_pg, msg=lambda err: f"Domain weights are not synced across ranks {err}"
+    # )
+    assert_if_tensor_not_synced_across_pg(
+        domain_weights, parallel_context.dp_pg, "Domain weights should be unique across dp ranks"
     )
 
     assert samples_per_domain.shape == (N_DOMAINS,)
-    assert sum(samples_per_domain) == global_batch_size
+    assert sum(samples_per_domain) == batch_size
 
 
 @pytest.mark.parametrize("dp", [1, 2])

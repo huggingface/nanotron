@@ -41,3 +41,9 @@ class DoReMiContext:
         assert step >= 0, "Step must be a positive integer"
         self.domain_weight_history.append(WeightHistory(step=step, weight=domain_weights.cpu()))
         self.domain_weights = domain_weights
+
+    def save_to_checkpoint(self):
+        pass
+
+    def load_from_checkpoint(self):
+        pass
