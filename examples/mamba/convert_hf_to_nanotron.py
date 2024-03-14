@@ -13,7 +13,7 @@ from pathlib import Path
 from tqdm import tqdm
 from typing import Dict
 from mamba_ssm.models.mixer_seq_simple import MambaLMHeadModel
-import lovely_tensors as lt; lt.monkey_patch()
+from dataclasses import asdict
 
 from nanotron.config import (
     AllForwardAllBackwardPipelineEngine,
@@ -339,4 +339,4 @@ if __name__ == "__main__":
         
     with open(save_path / "model_config.json", "w") as f:
         log_rank("Saving model config ...", logger=logger, level=logging.INFO, rank=0)
-        json.dump(attrs, f)
+        json.dump(asdict(model_config), f)
