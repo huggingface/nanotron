@@ -125,21 +125,7 @@ class ParallelContext:
         device_id = local_rank
         torch.cuda.set_device(torch.cuda.device(device_id))
 
-    def get_local_ranks(self, world_rank: int) -> Tuple[Annotated[int, "ep_rank"], 
-                                                        Annotated[int, "pp_rank"], 
-                                                        Annotated[int, "dp_rank"], 
-                                                        Annotated[int, "tp_rank"]]:
-        """
-        Get the local ranks (expert_parallel_rank, pipeline_parallel_rank, 
-        data_parallel_rank, tensor_parallel_rank) corresponding to a given world rank.
-
-        :param world_rank: int, The global rank to find local ranks for.
-
-        :return: A tuple containing local ranks 
-                (expert_parallel_rank, pipeline_parallel_rank, 
-                data_parallel_rank, tensor_parallel_rank).
-        """
-
+    def get_local_ranks(self, world_rank: int) -> Tuple[int, int, int]:
         return tuple(i.item() for i in np.where(self.world_rank_matrix == world_rank))
 
     def destroy(self):
