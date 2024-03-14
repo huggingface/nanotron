@@ -297,7 +297,6 @@ def _test_doremi_loss_for_proxy_training(
     assert outputs.keys() == {
         "lm_loss",
         "loss",
-        "excess_losses",
         "domain_losses",
         "domain_weights",
         "samples_per_domain",
@@ -308,9 +307,6 @@ def _test_doremi_loss_for_proxy_training(
     assert outputs["loss"].requires_grad is True
 
     assert torch.allclose(outputs["lm_loss"].cpu().view(-1), ref_lm_loss)
-
-    assert outputs["excess_losses"].shape == (batch_size, seq_len)
-    assert (outputs["excess_losses"] >= 0).all()
 
     assert outputs["domain_losses"].shape == (doremi_context.num_domains,)
     assert (outputs["domain_losses"] > 0).all()

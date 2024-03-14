@@ -238,7 +238,6 @@ class LlamaForDoReMiTraining(BaseLLaMa):
             module_output_keys={
                 "loss",
                 "lm_loss",
-                "excess_losses",
                 "domain_losses",
                 "domain_weights",
                 "samples_per_domain",

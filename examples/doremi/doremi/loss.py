@@ -52,6 +52,32 @@ def compute_per_domain_loss(
     return losses_dp, normalized_domain_losses, samples_per_domain
 
 
+def compute_domain_loss_per_replicas(
+    losses: torch.Tensor, domain_idxs: torch.Tensor, doremi_context: DoReMiContext
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    domain_idxs = domain_idxs.view(-1)
+
+    # NOTE: Calculate total loss per domain
+    n_domains = doremi_context.num_domains
+    domain_losses = torch.zeros(n_domains, device="cuda")
+
+    assert losses.shape[0] == domain_idxs.shape[0]
+    GLOBAL_BATCH_SIZE = domain_idxs.shape[0]
+
+    for i in range(GLOBAL_BATCH_SIZE):
+        # NOTE: sum the excess losses of all tokens in the batch
+        # then add it to the domain loss of the corresponding domain
+        domain_losses[domain_idxs[i]] += losses[i].sum(dim=-1)
+
+    # NOTE: Normalize and smooth domain weights
+    samples_per_domain = torch.bincount(domain_idxs, minlength=n_domains)
+    SEQ_LEN = losses.shape[1]
+    normalized_domain_losses = domain_losses / (samples_per_domain * SEQ_LEN)
+    # NOTE: if the domain loss is zero, then the normalized domain loss is NaN
+    normalized_domain_losses[torch.isnan(normalized_domain_losses)] = 0.0
+    return normalized_domain_losses, samples_per_domain
+
+
 class DomainLossForProxyTraining:
     def __init__(self, doremi_context: DoReMiContext, parallel_context: ParallelContext):
         self.doremi_context = doremi_context
@@ -68,8 +94,11 @@ class DomainLossForProxyTraining:
         # the proxy model is performing better than the reference model
         # => clamp(lower loss - higher loss, 0) = clamp(negative, 0) = 0.
         excess_losses = (losses - ref_losses).clamp(min=0)
-        excess_losses_dp, normalized_domain_losses, samples_per_domain = compute_per_domain_loss(
-            excess_losses, domain_idxs, self.doremi_context, self.parallel_context
+        # excess_losses_dp, normalized_domain_losses, samples_per_domain = compute_per_domain_loss(
+        #     excess_losses, domain_idxs, self.doremi_context, self.parallel_context
+        # )
+        normalized_domain_losses, samples_per_domain = compute_domain_loss_per_replicas(
+            excess_losses, domain_idxs, self.doremi_context
         )
 
         domain_weights = self.doremi_context.domain_weights
@@ -86,7 +115,7 @@ class DomainLossForProxyTraining:
         # return excess_losses_dp, normalized_domain_losses, train_domain_weights, samples_per_domain
         return {
             "dro_loss": dro_loss,
-            "excess_losses": excess_losses_dp,
+            # "excess_losses": excess_losses_dp,
             "domain_losses": normalized_domain_losses,
             "domain_weights": train_domain_weights,
             "samples_per_domain": samples_per_domain,
@@ -146,7 +175,6 @@ class DoReMiLossForProxyTraining(nn.Module):
         return {
             "lm_loss": lm_loss,
             "loss": doremi_loss_outputs["dro_loss"],  # NOTE: this is the one we optimize
-            "excess_losses": doremi_loss_outputs["excess_losses"],
             "domain_losses": doremi_loss_outputs["domain_losses"],
             "domain_weights": doremi_loss_outputs["domain_weights"],
             "samples_per_domain": doremi_loss_outputs["samples_per_domain"],

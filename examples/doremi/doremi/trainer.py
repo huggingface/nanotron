@@ -125,18 +125,23 @@ class DoReMiTrainer(DistributedTrainer):
         domain_weights = outputs[0]["domain_weights"]
         domain_losses = outputs[0]["domain_losses"]
         samples_per_domain = outputs[0]["samples_per_domain"].tolist()
+        lm_loss_avg = torch.stack([output["lm_loss"] for output in outputs]).sum()
 
         handle_weight = dist.all_reduce(
             domain_weights, group=self.parallel_context.dp_pg, async_op=True, op=dist.ReduceOp.AVG
         )
-        handle_loss = dist.all_reduce(
+        handle_domain_loss = dist.all_reduce(
             domain_losses, group=self.parallel_context.dp_pg, async_op=True, op=dist.ReduceOp.AVG
+        )
+        handle_lm_loss = dist.all_reduce(
+            lm_loss_avg, group=self.parallel_context.dp_pg, async_op=True, op=dist.ReduceOp.AVG
         )
 
         super().train_step_logs(outputs, loss_avg)
 
         handle_weight.wait()
-        handle_loss.wait()
+        handle_domain_loss.wait()
+        handle_lm_loss.wait()
 
         self.doremi_context.add_weight_with_history(domain_weights, self.iteration_step)
 
@@ -154,7 +159,7 @@ class DoReMiTrainer(DistributedTrainer):
             group=self.parallel_context.dp_pg,
         )
 
-        if dist.get_rank(self.parallel_context.world_pg) == self.logger_ranks[0]:
+        if dist.get_rank(self.parallel_context.world_pg) == 0:
             if self.iteration_step % self.config.checkpoints.checkpoint_interval == 0:
                 checkpoints_path = self.config.checkpoints.checkpoints_path
                 checkpoint_path = checkpoints_path / f"doremi_domain_weights_{self.iteration_step}.pt"
@@ -165,7 +170,7 @@ class DoReMiTrainer(DistributedTrainer):
                     f"weight_domain_{self.doremi_context.get_domain_name(i)}": weight
                     for i, weight in enumerate(domain_weights)
                 }
-                loss_logs = {
+                domain_loss_logs = {
                     f"loss_domain_{self.doremi_context.get_domain_name(i)}": loss
                     for i, loss in enumerate(domain_losses)
                 }
@@ -178,9 +183,10 @@ class DoReMiTrainer(DistributedTrainer):
                 wandb.log(
                     {
                         **weight_logs,
-                        **loss_logs,
+                        **domain_loss_logs,
                         **samples_per_domain_logs,
-                        "loss_avg": loss_avg.cpu().detach().numpy(),
+                        "dro_loss": loss_avg.cpu().detach().numpy(),
+                        "lm_loss": lm_loss_avg.cpu().detach().numpy(),
                         "iteration_step": self.iteration_step,
                     }
                 )
