@@ -80,7 +80,17 @@ class DomainLossForProxyTraining:
         train_domain_weights = (1 - smoothing_param) * torch.exp(log_new_domain_weights) + smoothing_param / len(
             log_new_domain_weights
         )
-        return excess_losses_dp, normalized_domain_losses, train_domain_weights, samples_per_domain
+
+        dro_loss = (train_domain_weights * normalized_domain_losses).sum(dim=-1)
+
+        # return excess_losses_dp, normalized_domain_losses, train_domain_weights, samples_per_domain
+        return {
+            "dro_loss": dro_loss,
+            "excess_losses": excess_losses_dp,
+            "domain_losses": normalized_domain_losses,
+            "domain_weights": train_domain_weights,
+            "samples_per_domain": samples_per_domain,
+        }
 
 
 class CrossEntropyWithPerDomainLoss(nn.Module):
@@ -127,14 +137,17 @@ class DoReMiLossForProxyTraining(nn.Module):
             dtype=torch.float,
         )
         lm_loss = masked_mean(loss, label_mask, dtype=torch.float)
-        excess_losses, domain_losses, domain_weights, samples_per_domain = self.doremi_loss(
-            loss, ref_losses, domain_idxs
-        )
+        # excess_losses, domain_losses, domain_weights, samples_per_domain = self.doremi_loss(
+        #     loss, ref_losses, domain_idxs
+        # )
+
+        doremi_loss_outputs = self.doremi_loss(loss, ref_losses, domain_idxs)
 
         return {
-            "loss": lm_loss,
-            "excess_losses": excess_losses,
-            "domain_losses": domain_losses,
-            "domain_weights": domain_weights,
-            "samples_per_domain": samples_per_domain,
+            "lm_loss": lm_loss,
+            "loss": doremi_loss_outputs["dro_loss"],  # NOTE: this is the one we optimize
+            "excess_losses": doremi_loss_outputs["excess_losses"],
+            "domain_losses": doremi_loss_outputs["domain_losses"],
+            "domain_weights": doremi_loss_outputs["domain_weights"],
+            "samples_per_domain": doremi_loss_outputs["samples_per_domain"],
         }

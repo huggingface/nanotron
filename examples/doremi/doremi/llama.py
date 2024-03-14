@@ -235,7 +235,14 @@ class LlamaForDoReMiTraining(BaseLLaMa):
                 "domain_idxs",
                 "ref_losses",
             },
-            module_output_keys={"loss", "excess_losses", "domain_losses", "domain_weights", "samples_per_domain"},
+            module_output_keys={
+                "loss",
+                "lm_loss",
+                "excess_losses",
+                "domain_losses",
+                "domain_weights",
+                "samples_per_domain",
+            },
         )
         self.parallel_context = parallel_context
         self.config = config

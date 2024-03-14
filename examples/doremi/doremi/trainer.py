@@ -47,6 +47,9 @@ class DoReMiTrainer(DistributedTrainer):
             config.doremi.ref_model_resume_checkpoint_path is not None
         ), "You must provide a reference model checkpoint path for DoReMi training."
 
+        if domain_weights.requires_grad is False:
+            domain_weights.requires_grad_(True)
+
         self.doremi_context = DoReMiContext(
             domain_weights,
             config.doremi.domain_names,
