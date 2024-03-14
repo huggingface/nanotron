@@ -1,5 +1,5 @@
 import os
-from typing import Literal, Tuple
+from typing import Literal, Tuple, Annotated
 
 import numpy as np
 import torch
@@ -125,9 +125,22 @@ class ParallelContext:
         device_id = local_rank
         torch.cuda.set_device(torch.cuda.device(device_id))
 
-    def get_local_ranks(self, world_rank: int) -> Tuple[int, int, int]:
-        # return coordinates in world_rank_matrix without expert_parallel_rank
-        return tuple(i.item() for i in np.where(self.world_rank_matrix == world_rank))[-3:]
+    def get_local_ranks(self, world_rank: int) -> Tuple[Annotated[int, "ep_rank"], 
+                                                        Annotated[int, "pp_rank"], 
+                                                        Annotated[int, "dp_rank"], 
+                                                        Annotated[int, "tp_rank"]]:
+        """
+        Get the local ranks (expert_parallel_rank, pipeline_parallel_rank, 
+        data_parallel_rank, tensor_parallel_rank) corresponding to a given world rank.
+
+        :param world_rank: int, The global rank to find local ranks for.
+
+        :return: A tuple containing local ranks 
+                (expert_parallel_rank, pipeline_parallel_rank, 
+                data_parallel_rank, tensor_parallel_rank).
+        """
+
+        return tuple(i.item() for i in np.where(self.world_rank_matrix == world_rank))
 
     def destroy(self):
         if not dist.is_initialized():
@@ -138,24 +151,19 @@ class ParallelContext:
 
     def get_global_rank(
         self,
-        expert_parallel_rank: int,
-        pipeline_parallel_rank: int,
-        data_parallel_rank: int,
-        tensor_parallel_rank: int,
+        ep_rank: int,
+        pp_rank: int,
+        dp_rank: int,
+        tp_rank: int,
     ) -> np.int64:
         """
         Get the global rank based on the specified ranks in different parallel groups.
 
-        :param expert_parallel_rank: int, Rank in the expert parallel group.
-        :param pipeline_parallel_rank: int, Rank in the pipeline parallel group.
-        :param data_parallel_rank: int, Rank in the data parallel group.
-        :param tensor_parallel_rank: int, Rank in the tensor parallel group.
+        :param ep_rank: int, Rank in the expert parallel group.
+        :param pp_rank: int, Rank in the pipeline parallel group.
+        :param dp_rank: int, Rank in the data parallel group.
+        :param tp_rank: int, Rank in the tensor parallel group.
 
         :return: numpy.int64, The global rank.
         """
-        return self.world_rank_matrix[
-            expert_parallel_rank,
-            pipeline_parallel_rank,
-            data_parallel_rank,
-            tensor_parallel_rank,
-        ]
+        return self.world_rank_matrix[ep_rank, pp_rank, dp_rank, tp_rank]
