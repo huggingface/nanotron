@@ -69,12 +69,13 @@ def compute_domain_loss_per_replicas(
         # then add it to the domain loss of the corresponding domain
         domain_losses[domain_idxs[i]] += losses[i].sum(dim=-1)
 
-    # NOTE: Normalize and smooth domain weights
-    samples_per_domain = torch.bincount(domain_idxs, minlength=n_domains)
+    # NOTE: Normalize domain weights
     SEQ_LEN = losses.shape[1]
+    samples_per_domain = torch.bincount(domain_idxs, minlength=n_domains)
     normalized_domain_losses = domain_losses / (samples_per_domain * SEQ_LEN)
+
     # NOTE: if the domain loss is zero, then the normalized domain loss is NaN
-    normalized_domain_losses[torch.isnan(normalized_domain_losses)] = 0.0
+    # normalized_domain_losses[torch.isnan(normalized_domain_losses)] = 0.0
     return normalized_domain_losses, samples_per_domain
 
 
@@ -94,9 +95,6 @@ class DomainLossForProxyTraining:
         # the proxy model is performing better than the reference model
         # => clamp(lower loss - higher loss, 0) = clamp(negative, 0) = 0.
         excess_losses = (losses - ref_losses).clamp(min=0)
-        # excess_losses_dp, normalized_domain_losses, samples_per_domain = compute_per_domain_loss(
-        #     excess_losses, domain_idxs, self.doremi_context, self.parallel_context
-        # )
         normalized_domain_losses, samples_per_domain = compute_domain_loss_per_replicas(
             excess_losses, domain_idxs, self.doremi_context
         )
@@ -109,13 +107,10 @@ class DomainLossForProxyTraining:
         train_domain_weights = (1 - smoothing_param) * torch.exp(log_new_domain_weights) + smoothing_param / len(
             log_new_domain_weights
         )
-
         dro_loss = (train_domain_weights * normalized_domain_losses).sum(dim=-1)
 
-        # return excess_losses_dp, normalized_domain_losses, train_domain_weights, samples_per_domain
         return {
             "dro_loss": dro_loss,
-            # "excess_losses": excess_losses_dp,
             "domain_losses": normalized_domain_losses,
             "domain_weights": train_domain_weights,
             "samples_per_domain": samples_per_domain,
@@ -166,10 +161,6 @@ class DoReMiLossForProxyTraining(nn.Module):
             dtype=torch.float,
         )
         lm_loss = masked_mean(loss, label_mask, dtype=torch.float)
-        # excess_losses, domain_losses, domain_weights, samples_per_domain = self.doremi_loss(
-        #     loss, ref_losses, domain_idxs
-        # )
-
         doremi_loss_outputs = self.doremi_loss(loss, ref_losses, domain_idxs)
 
         return {
