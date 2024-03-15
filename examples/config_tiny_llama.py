@@ -27,7 +27,7 @@ model_config = LlamaConfig(
     hidden_size=16,
     initializer_range=0.02,
     intermediate_size=64,
-    max_position_embeddings=256,
+    max_position_embeddings=50277,
     num_attention_heads=4,
     num_hidden_layers=2,
     num_key_value_heads=4,
@@ -36,7 +36,7 @@ model_config = LlamaConfig(
     rope_scaling=None,
     tie_word_embeddings=True,
     use_cache=True,
-    vocab_size=256,
+    vocab_size=50277,
 )
 
 num_params = human_format(
