@@ -164,7 +164,7 @@ def load_optimizer(
             # across data parallel dimension, before merging the shards across tensor parallel dimension
             shard_paths = list(
                 root_folder.glob(
-                    f"{ObjectType.OPTIMIZER.value}_pp-*-of-{ckp_pp_size}_dp-*-of-{ckp_dp_size}_tp-*-of-{ckp_tp_size}-exp-*-of-{ckpt_expert_parallel_size}.pt"
+                    f"{ObjectType.OPTIMIZER.value}_pp-*-of-{ckp_pp_size}_dp-*-of-{ckp_dp_size}_tp-*-of-{ckp_tp_size}_exp-*-of-{ckpt_expert_parallel_size}.pt"
                 )
             )
             ckp_sharded_optim_states = merge_dp_shard_in_zero1_optimizer(
@@ -174,7 +174,9 @@ def load_optimizer(
             # NOTE: if the checkpoint is from a Zero-0 optimizer, then we don't need to merge the shards
             # across data parallel dimension, just directly load the checkpoints
             shard_paths = list(
-                root_folder.glob(f"{ObjectType.OPTIMIZER.value}_pp-*-of-{ckp_pp_size}_tp-*-of-{ckp_tp_size}.pt")
+                root_folder.glob(
+                    f"{ObjectType.OPTIMIZER.value}_pp-*-of-{ckp_pp_size}_tp-*-of-{ckp_tp_size}_exp-*-of-{ckpt_expert_parallel_size}.pt"
+                )
             )
 
             ckp_sharded_optim_states = {}
