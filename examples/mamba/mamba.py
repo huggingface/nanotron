@@ -423,14 +423,14 @@ class Embedding(nn.Module, AttachableStore):
     def __init__(
         self,
         tp_pg: dist.ProcessGroup,
-        config: MambaModelConfig,
+        model_config: MambaModelConfig,
         parallel_config: Optional[ParallelismArgs],
     ):
         super().__init__()
         self.token_embedding = TensorParallelEmbedding(
-            num_embeddings=config.vocab_size,
-            embedding_dim=config.d_model,
-            padding_idx=config.pad_token_id,
+            num_embeddings=model_config.vocab_size,
+            embedding_dim=model_config.d_model,
+            padding_idx=model_config.pad_token_id,
             pg=tp_pg,
             mode=parallel_config.tp_mode if parallel_config is not None else TensorParallelLinearMode.ALL_REDUCE,
         )
@@ -457,7 +457,7 @@ class Embedding(nn.Module, AttachableStore):
 class MambaDecoderLayer(nn.Module):
     def __init__(
         self,
-        config: MambaModelConfig,
+        model_config: MambaModelConfig,
         parallel_config: Optional[ParallelismArgs],
         tp_pg: dist.ProcessGroup,
         layer_idx: int,
@@ -468,17 +468,17 @@ class MambaDecoderLayer(nn.Module):
 
         factory_kwargs = {"device": device, "dtype": dtype}
 
-        if config.ssm_cfg is None:
+        if model_config.ssm_cfg is None:
             ssm_cfg = {}
         else:
-            ssm_cfg = config.ssm_cfg
+            ssm_cfg = model_config.ssm_cfg
 
         self.layer_idx = layer_idx
-        self.residual_in_fp32 = config.residual_in_fp32
-        self.fused_add_norm = config.fused_add_norm
+        self.residual_in_fp32 = model_config.residual_in_fp32
+        self.fused_add_norm = model_config.fused_add_norm
 
         self.mixer = Mamba(
-            d_model=config.d_model,
+            d_model=model_config.d_model,
             parallel_config=parallel_config,
             tp_pg=tp_pg,
             layer_idx=layer_idx,
@@ -487,10 +487,10 @@ class MambaDecoderLayer(nn.Module):
         )
 
         self.norm = partial(
-            nn.LayerNorm if not config.rms_norm else RMSNorm,
-            eps=config.rms_norm_eps,
+            nn.LayerNorm if not model_config.rms_norm else RMSNorm,
+            eps=model_config.rms_norm_eps,
             **factory_kwargs,
-        )(config.d_model)
+        )(model_config.d_model)
 
         if self.fused_add_norm:
             assert RMSNorm is not None, "RMSNorm import fails"
@@ -538,7 +538,7 @@ class MambaDecoderLayer(nn.Module):
 class MambaModel(nn.Module):
     def __init__(
         self,
-        config: MambaModelConfig,
+        model_config: MambaModelConfig,
         parallel_context: ParallelContext,
         parallel_config: Optional[ParallelismArgs],
         random_states: Optional[RandomStates] = None,
@@ -547,7 +547,7 @@ class MambaModel(nn.Module):
 
         # Declare all the nodes
         self.p2p = P2P(parallel_context.pp_pg, device=torch.device("cuda"))
-        self.config = config
+        self.model_config = model_config
         self.parallel_config = parallel_config
         self.parallel_context = parallel_context
         self.tp_mode = parallel_config.tp_mode if parallel_config is not None else TensorParallelLinearMode.ALL_REDUCE
@@ -560,7 +560,7 @@ class MambaModel(nn.Module):
             module_builder=Embedding,
             module_kwargs={
                 "tp_pg": parallel_context.tp_pg,
-                "config": config,
+                "model_config": model_config,
                 "parallel_config": parallel_config,
             },
             module_input_keys={"input_ids", "input_mask"},
@@ -573,24 +573,24 @@ class MambaModel(nn.Module):
                     p2p=self.p2p,
                     module_builder=MambaDecoderLayer,
                     module_kwargs={
-                        "config": config,
+                        "model_config": model_config,
                         "parallel_config": parallel_config,
                         "tp_pg": parallel_context.tp_pg,
                         "layer_idx": layer_idx,
                         "device": self.p2p.device,
-                        "dtype": cast_str_to_torch_dtype(config.dtype),
+                        "dtype": cast_str_to_torch_dtype(model_config.dtype),
                     },
                     module_input_keys={"hidden_states", "sequence_mask", "residual", "inference_params"},
                     module_output_keys={"hidden_states", "sequence_mask", "residual"},
                 )
-                for layer_idx in range(config.num_hidden_layers)
+                for layer_idx in range(model_config.num_hidden_layers)
             ]
         )
 
         self.final_layer_norm = PipelineBlock(
             p2p=self.p2p,
             module_builder=RMSNorm,
-            module_kwargs={"hidden_size": config.d_model, "eps": config.rms_norm_eps},
+            module_kwargs={"hidden_size": model_config.d_model, "eps": model_config.rms_norm_eps},
             module_input_keys={"x", "residual"},
             module_output_keys={"hidden_states"},
         )
@@ -600,8 +600,8 @@ class MambaModel(nn.Module):
             # Understand that this means that we return sharded logits that are going to need to be gathered
             module_builder=TensorParallelColumnLinear,
             module_kwargs={
-                "in_features": config.d_model,
-                "out_features": config.vocab_size,
+                "in_features": model_config.d_model,
+                "out_features": model_config.vocab_size,
                 "pg": parallel_context.tp_pg,
                 "bias": False,
                 # TODO @thomasw21: refactor so that we store that default in a single place.
@@ -768,17 +768,21 @@ class Loss(nn.Module):
 class MambaForTraining(NanotronModel):
     def __init__(
         self,
-        config: MambaModelConfig,
+        model_config: MambaModelConfig,
         parallel_context: ParallelContext,
         parallel_config: Optional[ParallelismArgs],
         random_states: Optional[RandomStates] = None,
     ):
         super().__init__()
 
+        self.parallel_context = parallel_context
+        self.model_config = model_config
+        self.parallel_config = parallel_config
+        
         self.model = MambaModel(
-            config=config,
-            parallel_context=parallel_context,
-            parallel_config=parallel_config,
+            model_config=self.model_config,
+            parallel_context=self.parallel_context,
+            parallel_config=self.parallel_config,
             random_states=random_states,
         )
 
@@ -793,9 +797,6 @@ class MambaForTraining(NanotronModel):
             },
             module_output_keys={"loss"},
         )
-        self.parallel_context = parallel_context
-        self.config = config
-        self.parallel_config = parallel_config
 
     def forward(
         self,

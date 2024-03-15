@@ -74,7 +74,7 @@ def convert_checkpoint_and_save(checkpoint_path: Path, save_path: Path):
     
     model_nanotron = build_model(
         model_builder=lambda: MambaForTraining(
-            config=model_config,
+            model_config=model_config,
             parallel_context=parallel_context,
             parallel_config=parallel_config,
             random_states=None,

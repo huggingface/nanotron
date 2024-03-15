@@ -233,7 +233,7 @@ if __name__ == "__main__":
 
     nanotron_model = build_model(
         model_builder=lambda: MambaForTraining(
-            config=model_config,
+            model_config=model_config,
             parallel_context=parallel_context,
             parallel_config=parallel_config,
             random_states=None,
