@@ -22,13 +22,13 @@ from typing import Dict, Optional, Union
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from config import MambaModelConfig
+from config import MambaModelConfig, MambaInferenceConfig
 from einops import rearrange, repeat
 from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.config import ParallelismArgs
 from nanotron.config.utils_config import cast_str_to_torch_dtype
-from nanotron.generation.generate_store import AttachableStore
+from nanotron.generation.generate_store import AttachableStore, Store
 from nanotron.logging import log_rank
 from nanotron.models import NanotronModel
 from nanotron.parallel import ParallelContext
@@ -69,24 +69,6 @@ from dataclasses import dataclass, field
 from torch import Tensor
 from nanotron.parallel.sharded_parameters import SplitConfig, create_sharded_parameter_from_config
 
-@dataclass
-class InferenceParams:
-    """Inference parameters that are passed to the main model in order
-    to efficienly calculate and store the context during inference."""
-
-    max_seqlen: int
-    max_batch_size: int
-    seqlen_offset: int = 0
-    batch_size_offset: int = 0
-    key_value_memory_dict: dict = field(default_factory=dict)
-    lengths_per_sample: Optional[Tensor] = None
-
-    def reset(self, max_seqlen, max_batch_size):
-        self.max_seqlen = max_seqlen
-        self.max_batch_size = max_batch_size
-        self.seqlen_offset = 0
-        if self.lengths_per_sample is not None:
-            self.lengths_per_sample.zero_()
 
 class Mamba(nn.Module):
     def __init__(
@@ -109,6 +91,8 @@ class Mamba(nn.Module):
         layer_idx: Optional[int] = None,
         device: Optional[torch.device] = None,
         dtype: Optional[torch.dtype] = None,
+        is_inference: bool = False,
+        store: Optional[Store] = None,
     ):
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
@@ -120,6 +104,7 @@ class Mamba(nn.Module):
         self.dt_rank = math.ceil(self.d_model / 16) if dt_rank == "auto" else dt_rank
         self.use_fast_path = use_fast_path
         self.layer_idx = layer_idx
+        self.is_inference = is_inference
 
         tp_mode = parallel_config.tp_mode if parallel_config is not None else TensorParallelLinearMode.ALL_REDUCE
         assert tp_mode == TensorParallelLinearMode.ALL_REDUCE or parallel_config.tp_linear_async_communication is False
@@ -129,6 +114,7 @@ class Mamba(nn.Module):
             parallel_config.tp_linear_async_communication if parallel_config is not None else False
         )
 
+        self.store = store
         # Get current tensor parallel rank
         self.tp_pg = tp_pg
         self.tp_rank = dist.get_rank(self.tp_pg)
@@ -214,7 +200,7 @@ class Mamba(nn.Module):
             contiguous_chunks=None,
         )
 
-    def forward(self, hidden_states: Union[torch.Tensor, TensorPointer], inference_params=None):
+    def forward(self, hidden_states: Union[torch.Tensor, TensorPointer]):
         """
         hidden_states: (B, L, D)
         Returns: same shape as hidden_states
@@ -222,9 +208,9 @@ class Mamba(nn.Module):
         batch, seqlen, dim = hidden_states.shape
 
         conv_state, ssm_state = None, None
-        if inference_params is not None:
-            conv_state, ssm_state = self._get_states_from_cache(inference_params, batch)
-            if inference_params.seqlen_offset > 0:
+        if self.is_inference:
+            conv_state, ssm_state = self._get_states_from_cache(batch)
+            if self.store["seqlen_offset"] > 0:
                 # The states are updated inplace
                 out, _, _ = self.step(hidden_states, conv_state, ssm_state)
                 return out
@@ -235,7 +221,7 @@ class Mamba(nn.Module):
 
         # In the backward pass we write dx and dz next to each other to avoid torch.cat
         if (
-            self.use_fast_path and inference_params is None
+            self.use_fast_path and not self.is_inference
         ):  # Doesn't support outputting the states
             y = mamba_inner_fn(
                 d_inner=self.d_inner,
@@ -367,7 +353,7 @@ class Mamba(nn.Module):
         out = self.out_proj(y)
         return out.unsqueeze(1), conv_state, ssm_state
 
-    def allocate_inference_cache(self, batch_size: int, max_seqlen: int, dtype: torch.dtype = None, **kwargs):
+    def allocate_inference_cache(self, batch_size: int, max_new_tokens: int, dtype: torch.dtype = None, **kwargs):
         device = self.out_proj.weight.device
         conv_dtype = self.conv1d.weight.dtype if dtype is None else dtype
         conv_state = torch.zeros(
@@ -388,9 +374,10 @@ class Mamba(nn.Module):
         )
         return conv_state, ssm_state
 
-    def _get_states_from_cache(self, inference_params, batch_size: int, initialize_states: bool = False):
+    def _get_states_from_cache(self, batch_size: int, initialize_states: bool = False):
         assert self.layer_idx is not None
-        if self.layer_idx not in inference_params.key_value_memory_dict:
+        
+        if self.layer_idx not in self.store["key_value_memory_dict"]:
             conv_state = torch.zeros(
                 batch_size,
                 self.d_model * self.expand // self.tp_pg.size(),
@@ -406,12 +393,13 @@ class Mamba(nn.Module):
                 dtype=self.dt_proj.weight.dtype,
                 # dtype=torch.float32,
             )
-            inference_params.key_value_memory_dict[self.layer_idx] = (
+            
+            self.store["key_value_memory_dict"][self.layer_idx] = (
                 conv_state,
-                ssm_state,
+                ssm_state
             )
         else:
-            conv_state, ssm_state = inference_params.key_value_memory_dict[self.layer_idx]
+            conv_state, ssm_state = self.store["key_value_memory_dict"][self.layer_idx]
             # TODO: What if batch size changes between generation, and we reuse the same states?
             if initialize_states:
                 conv_state.zero_()
@@ -463,6 +451,8 @@ class MambaDecoderLayer(nn.Module):
         layer_idx: int,
         device: Optional[torch.device] = None,
         dtype: Optional[torch.dtype] = None,
+        is_inference: bool = False,
+        store: Optional[Store] = None,
     ):
         super().__init__()
 
@@ -482,6 +472,8 @@ class MambaDecoderLayer(nn.Module):
             parallel_config=parallel_config,
             tp_pg=tp_pg,
             layer_idx=layer_idx,
+            is_inference=is_inference,
+            store=store,
             **ssm_cfg,
             **factory_kwargs,
         )
@@ -503,7 +495,6 @@ class MambaDecoderLayer(nn.Module):
         hidden_states: Union[torch.Tensor, TensorPointer],
         sequence_mask: Union[torch.Tensor, TensorPointer],
         residual: Optional[Union[torch.Tensor, TensorPointer]],
-        inference_params=None,
     ) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
         if not self.fused_add_norm:
             # self.layer_idx was assigned when calling create_block
@@ -523,7 +514,7 @@ class MambaDecoderLayer(nn.Module):
                 residual_in_fp32=self.residual_in_fp32,
                 eps=self.norm.eps,
             )
-        hidden_states = self.mixer(hidden_states, inference_params=inference_params)
+        hidden_states = self.mixer(hidden_states)
 
         return {
             "hidden_states": hidden_states,
@@ -531,8 +522,8 @@ class MambaDecoderLayer(nn.Module):
             "residual": residual,
         }
 
-    def allocate_inference_cache(self, batch_size, max_seqlen, dtype=None, **kwargs):
-        return self.mixer.allocate_inference_cache(batch_size, max_seqlen, dtype=dtype, **kwargs)
+    def allocate_inference_cache(self, batch_size, max_new_tokens, dtype=None, **kwargs):
+        return self.mixer.allocate_inference_cache(batch_size, max_new_tokens, dtype=dtype, **kwargs)
 
 
 class MambaModel(nn.Module):
@@ -542,6 +533,8 @@ class MambaModel(nn.Module):
         parallel_context: ParallelContext,
         parallel_config: Optional[ParallelismArgs],
         random_states: Optional[RandomStates] = None,
+        is_inference: bool = False,
+        store: Optional[Store] = None,
     ):
         super().__init__()
 
@@ -554,7 +547,10 @@ class MambaModel(nn.Module):
         tp_linear_async_communication = (
             parallel_config.tp_linear_async_communication if parallel_config is not None else False
         )
-
+        
+        self.is_inference = is_inference
+        self.store = store
+            
         self.token_position_embeddings = PipelineBlock(
             p2p=self.p2p,
             module_builder=Embedding,
@@ -579,8 +575,10 @@ class MambaModel(nn.Module):
                         "layer_idx": layer_idx,
                         "device": self.p2p.device,
                         "dtype": cast_str_to_torch_dtype(model_config.dtype),
+                        "is_inference": is_inference,
+                        "store": self.store
                     },
-                    module_input_keys={"hidden_states", "sequence_mask", "residual", "inference_params"},
+                    module_input_keys={"hidden_states", "sequence_mask", "residual"},
                     module_output_keys={"hidden_states", "sequence_mask", "residual"},
                 )
                 for layer_idx in range(model_config.num_hidden_layers)
@@ -619,25 +617,14 @@ class MambaModel(nn.Module):
             module_input_keys={"x"},
             module_output_keys={"output"},
         )
-        
-        self.inference_params = None
-        
-    def setup_inference_params(self, max_length, max_batch_size):
-        self.inference_params = InferenceParams(max_seqlen=max_length, max_batch_size=max_batch_size)
 
-    def update_inference_params(self, logits: torch.Tensor):
-        if self.inference_params is not None:
-            self.inference_params.seqlen_offset += 1 # We are processing only one token at a time
-            # We need to transpose to make it compatible with decode.py (which will tranpose again, thus cancelling this transpose)
-            logits = logits.transpose(0, 1)  # [batch_size, seq_length, vocab_size]
-        return logits    
-        
 
     def forward(
         self,
         input_ids: Union[torch.Tensor, TensorPointer],  # [batch_size, seq_length]
         input_mask: Union[torch.Tensor, TensorPointer],  # [batch_size, seq_length]
     ):
+        
         return self.forward_with_hidden_states(input_ids=input_ids, input_mask=input_mask)[0]
 
     def forward_with_hidden_states(
@@ -656,7 +643,7 @@ class MambaModel(nn.Module):
         }
 
         for block in self.decoder:
-            hidden_encoder_states = block(**hidden_encoder_states, inference_params=self.inference_params)
+            hidden_encoder_states = block(**hidden_encoder_states)
 
         hidden_states = self.final_layer_norm(
             x=hidden_encoder_states["hidden_states"],
@@ -666,7 +653,8 @@ class MambaModel(nn.Module):
         sharded_logits = self.lm_head(x=hidden_states)["logits"]
         fp32_sharded_logits = self.cast_to_fp32(x=sharded_logits)["output"]
 
-        fp32_sharded_logits = self.update_inference_params(fp32_sharded_logits)
+        if self.is_inference:
+            self.store["seqlen_offset"] += 1 # We are processing only one token at a time
         
         return fp32_sharded_logits, hidden_states
 
@@ -765,13 +753,15 @@ class Loss(nn.Module):
         return {"loss": loss}
 
 
-class MambaForTraining(NanotronModel):
+class MambaForTraining(NanotronModel, AttachableStore):
     def __init__(
         self,
         model_config: MambaModelConfig,
         parallel_context: ParallelContext,
         parallel_config: Optional[ParallelismArgs],
         random_states: Optional[RandomStates] = None,
+        is_inference: bool = False,
+        inference_config: Optional[MambaInferenceConfig] = None,
     ):
         super().__init__()
 
@@ -779,11 +769,27 @@ class MambaForTraining(NanotronModel):
         self.model_config = model_config
         self.parallel_config = parallel_config
         
+        store = None
+        
+        if is_inference and inference_config is not None:
+            self._attach_store(Store())
+            self._store.update(
+                {
+                    "max_new_tokens": inference_config.max_new_tokens,
+                    "max_batch_size": 1, # We are processing only one token at a time
+                    "seqlen_offset": 0,
+                    "key_value_memory_dict": {},
+                }
+            )
+            store = self._store
+
         self.model = MambaModel(
             model_config=self.model_config,
             parallel_context=self.parallel_context,
             parallel_config=self.parallel_config,
             random_states=random_states,
+            is_inference=is_inference,
+            store=store,
         )
 
         self.loss = PipelineBlock(

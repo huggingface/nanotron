@@ -43,8 +43,8 @@ from nanotron.random import (
     set_random_seed,
 )
 from nanotron.serialize import load_weights
-from nanotron.trainer import CONFIG_TO_MODEL_CLASS, mark_tied_parameters
-from config import MambaConfig, MambaModelConfig
+from nanotron.trainer import mark_tied_parameters
+from config import MambaConfig, MambaModelConfig, MambaInferenceConfig
 from mamba import MambaForTraining
 
 try:
@@ -54,10 +54,7 @@ except ImportError:
 
 logger = logging.get_logger(__name__)
 
-# from transformers import MambaForCausalLM
 from mamba_ssm.models.mixer_seq_simple import MambaLMHeadModel
-
-from nanotron.parallel.parameters import NanotronParameter
 
 import lovely_tensors as lt; lt.monkey_patch()
 
@@ -145,6 +142,8 @@ def main():
             parallel_context=parallel_context,
             parallel_config=parallel_config,
             random_states=random_states,
+            is_inference=True,
+            inference_config=MambaInferenceConfig(max_new_tokens=args.max_new_tokens),
         ),
         dtype=str_to_dtype[model_config.dtype],
         parallel_context=parallel_context,
@@ -195,10 +194,7 @@ def main():
         ]
 
         log_rank("Setup Inference mode for mamba model", logger=logger, level=logging.INFO, rank=0)
-        #TODO: make it work with batch of inputs
-        assert len(dummy_inputs) == 1, f"Only one input is supported for now. Got {len(dummy_inputs)} inputs"
-        batch_size = tokenizer(dummy_inputs, return_tensors="pt").input_ids.size(0)
-        model.model.setup_inference_params(max_length=args.max_new_tokens, max_batch_size=batch_size)
+        # assert config.inference_params.max_batch_size == 1, "Only batch size 1 is supported for inference for now"
         
         outputs = decode_text(
             input_iter=(GenerationInput(text=text) for text in dummy_inputs),
@@ -211,6 +207,7 @@ def main():
             generation_config=GenerationArgs(sampler="greedy", use_cache=True),
             tokenizer_config=TokenizerConfig(max_input_length=None),
             is_bench=os.environ.get("USE_BENCH", "0") == "1",
+            is_logits_transpose=False,
         )
         for output in outputs:
             input_ids = output.input_ids
