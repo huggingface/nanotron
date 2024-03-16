@@ -87,7 +87,7 @@ class NanosetBuilder(object):
             List[Nanoset]: The Nanoset per split. Always returns Nanosets because we build them in each and every rank
         """
 
-        indexed_dataset = self._build_generic_dataset(MMapIndexedDataset, path_prefix, False)
+        indexed_dataset = self._build_generic_dataset(MMapIndexedDataset, path_prefix)
 
         split_idx_bounds = _get_split_indices(split, indexed_dataset.sequence_lengths.shape[0])
 

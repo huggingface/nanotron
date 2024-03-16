@@ -18,9 +18,9 @@ logger = logging.get_logger(__name__)
 
 
 class Nanoset(torch.utils.data.Dataset):
-    """Adapted from https://github.com/NVIDIA/Megatron-LM/blob/main/megatron/core/datasets/gpt_dataset.py"""
+    """Adapted from https://github.com/NVIDIA/Megatron-LM/blob/main/megatron/core/datasets/gpt_dataset.py
 
-    """The base Nanoset dataset
+    The base Nanoset dataset
 
     Args:
         indexed_dataset (MMapIndexedDataset): The MMapIndexedDataset around which to build the
@@ -46,8 +46,6 @@ class Nanoset(torch.utils.data.Dataset):
 
         assert indexed_indices.size > 0
         assert num_samples > 0
-        assert self.is_multimodal() == indexed_dataset.multimodal
-        assert self.is_split_by_sequence() != self.is_split_by_document()
 
         self.indexed_dataset = indexed_dataset
         self.indexed_indices = indexed_indices
@@ -103,39 +101,6 @@ class Nanoset(torch.utils.data.Dataset):
 
         return {"text": text}
 
-    # TODO @tj-solergibert: Delete this funcs if not used?
-    @staticmethod
-    def is_multimodal() -> bool:
-        """Abstract method implementation
-
-        Returns:
-            bool: False
-        """
-        return False
-
-    # TODO @tj-solergibert: Delete this funcs if not used?
-    @staticmethod
-    def is_split_by_sequence() -> bool:
-        """Abstract method implementation
-
-        Returns:
-            bool: True
-        """
-        return True
-
-    # TODO @tj-solergibert: Delete this funcs if not used?
-    @classmethod
-    def is_split_by_document(cls) -> bool:
-        """Return whether the dataset is split by document
-
-        For example, the BERT train/valid/test split is document aware
-
-        Returns:
-            bool: The negation of cls.is_split_by_sequence
-        """
-        return not cls.is_split_by_sequence()
-
-    # TODO @tj-solergibert: Delete this funcs if not used?
     @staticmethod
     def _key_config_attributes() -> List[str]:
         """Return all config attributes which contribute to uniquely identifying the dataset.
@@ -226,6 +191,7 @@ class Nanoset(torch.utils.data.Dataset):
 
         def get_path_to(suffix):
             return os.path.join(path_to_cache, f"{self.unique_description_hash}-{type(self).__name__}-{suffix}")
+
         path_to_description = get_path_to("description.txt")
         path_to_document_index = get_path_to("document_index.npy")
         path_to_sample_index = get_path_to("sample_index.npy")
