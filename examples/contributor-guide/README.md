@@ -1,7 +1,3 @@
----
-tags: main
----
-
 # Nanotron contribution guide
 
 # Rent a GPU on Vastai
