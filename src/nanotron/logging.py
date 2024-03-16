@@ -225,8 +225,8 @@ def log_rank(
         # rank is None means everyone logs
         if rank is None or dist.get_rank(group) == rank:
             logger.log(level, msg, **kwargs)
-            
-    except RuntimeError:
+
+    except:
         logger.log(level, msg, **kwargs)
 
 
