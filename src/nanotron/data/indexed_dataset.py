@@ -237,7 +237,7 @@ class _IndexReader(object):
             self.bin_buffer, dtype=numpy.int32, count=self.sequence_count, offset=offset
         )
         t_end = time.time()
-        log_rank(f"\t> time elapsed: {t_end - t_beg:4f} seconds", logger=logger, level=logging.DEBUG, rank=0)
+        log_rank(f"\t> Time elapsed: {t_end - t_beg:4f} seconds", logger=logger, level=logging.DEBUG, rank=0)
 
         log_rank("\tExtract the sequence pointers", logger=logger, level=logging.INFO, rank=0)
         t_beg = time.time()
@@ -248,7 +248,7 @@ class _IndexReader(object):
             offset=offset + self.sequence_lengths.nbytes,
         )
         t_end = time.time()
-        log_rank(f"\t> time elapsed: {t_end - t_beg:4f} seconds", logger=logger, level=logging.DEBUG, rank=0)
+        log_rank(f"\t> Time elapsed: {t_end - t_beg:4f} seconds", logger=logger, level=logging.DEBUG, rank=0)
 
         log_rank("\tExtract the document indices", logger=logger, level=logging.INFO, rank=0)
         t_beg = time.time()
@@ -259,15 +259,15 @@ class _IndexReader(object):
             offset=offset + self.sequence_lengths.nbytes + self.sequence_pointers.nbytes,
         )
         t_end = time.time()
-        log_rank(f"\t> time elapsed: {t_end - t_beg:4f} seconds", logger=logger, level=logging.DEBUG, rank=0)
+        log_rank(f"\t> Time elapsed: {t_end - t_beg:4f} seconds", logger=logger, level=logging.DEBUG, rank=0)
 
         assert self.sequence_lengths.shape[0] == len(self)
         assert self.sequence_lengths.shape[0] == self.sequence_count
         assert self.sequence_lengths.shape[0] == self.document_indices[-1]
 
-        log_rank(f"> total number of sequences: {len(self)}", logger=logger, level=logging.INFO, rank=0)
+        log_rank(f"> Total number of sequences: {len(self)}", logger=logger, level=logging.INFO, rank=0)
         log_rank(
-            f"> total number of documents: {self.document_indices.shape[0] - 1}",
+            f"> Total number of documents: {self.document_indices.shape[0] - 1}",
             logger=logger,
             level=logging.INFO,
             rank=0,

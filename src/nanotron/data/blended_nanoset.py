@@ -152,7 +152,7 @@ class BlendedNanoset(torch.utils.data.Dataset):
                 )
 
             t_end = time.time()
-            log_rank(f"\t> time elapsed: {t_end - t_beg:4f} seconds", logger=logger, level=logging.DEBUG, rank=0)
+            log_rank(f"\t> Time elapsed: {t_end - t_beg:4f} seconds", logger=logger, level=logging.DEBUG, rank=0)
 
             return dataset_index, dataset_sample_index
 
@@ -162,7 +162,7 @@ class BlendedNanoset(torch.utils.data.Dataset):
         t_beg = time.time()
         dataset_index = numpy.load(path_to_dataset_index, allow_pickle=True, mmap_mode="r")
         t_end = time.time()
-        log_rank(f"\t> time elapsed: {t_end - t_beg:4f} seconds", logger=logger, level=logging.DEBUG, rank=0)
+        log_rank(f"\t> Time elapsed: {t_end - t_beg:4f} seconds", logger=logger, level=logging.DEBUG, rank=0)
 
         log_rank(
             f"\tLoad the dataset sample index from {path_to_dataset_sample_index}",
@@ -173,6 +173,6 @@ class BlendedNanoset(torch.utils.data.Dataset):
         t_beg = time.time()
         dataset_sample_index = numpy.load(path_to_dataset_sample_index, allow_pickle=True, mmap_mode="r")
         t_end = time.time()
-        log_rank(f"\t> time elapsed: {t_end - t_beg:4f} seconds", logger=logger, level=logging.DEBUG, rank=0)
+        log_rank(f"\t> Time elapsed: {t_end - t_beg:4f} seconds", logger=logger, level=logging.DEBUG, rank=0)
 
         return dataset_index, dataset_sample_index

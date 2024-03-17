@@ -104,6 +104,8 @@ class NanosetDatasetsArgs:
     def __post_init__(self):
         if self.split is None:
             self.split = "949,50,1"
+        if not os.path.isdir(self.path_to_cache):
+            self.path_to_cache = None
 
 
 @dataclass

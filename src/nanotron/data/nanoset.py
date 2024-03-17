@@ -246,7 +246,7 @@ class Nanoset(torch.utils.data.Dataset):
                     level=logging.DEBUG,
                     rank=0,
                 )
-                log_rank(f"> threshold: {threshold}", logger=logger, level=logging.DEBUG, rank=0)
+                log_rank(f"> Threshold: {threshold}", logger=logger, level=logging.DEBUG, rank=0)
                 log_rank(
                     f"> num_samples_per_epoch: {num_samples_per_epoch}", logger=logger, level=logging.DEBUG, rank=0
                 )
@@ -274,7 +274,7 @@ class Nanoset(torch.utils.data.Dataset):
             )
             numpy.save(path_to_document_index, document_index, allow_pickle=True)
             t_end = time.time()
-            log_rank(f"\t> time elapsed: {t_end - t_beg:4f} seconds", logger=logger, level=logging.DEBUG, rank=0)
+            log_rank(f"\t> Time elapsed: {t_end - t_beg:4f} seconds", logger=logger, level=logging.DEBUG, rank=0)
 
             # Build the sample index
             log_rank(
@@ -297,7 +297,7 @@ class Nanoset(torch.utils.data.Dataset):
             )
             numpy.save(path_to_sample_index, sample_index, allow_pickle=True)
             t_end = time.time()
-            log_rank(f"\t> time elapsed: {t_end - t_beg:4f} seconds", logger=logger, level=logging.DEBUG, rank=0)
+            log_rank(f"\t> Time elapsed: {t_end - t_beg:4f} seconds", logger=logger, level=logging.DEBUG, rank=0)
 
             # Build the shuffle index
             log_rank(
@@ -317,7 +317,7 @@ class Nanoset(torch.utils.data.Dataset):
                 )
             numpy.save(path_to_shuffle_index, shuffle_index, allow_pickle=True)
             t_end = time.time()
-            log_rank(f"\t> time elapsed: {t_end - t_beg:4f} seconds", logger=logger, level=logging.DEBUG, rank=0)
+            log_rank(f"\t> Time elapsed: {t_end - t_beg:4f} seconds", logger=logger, level=logging.DEBUG, rank=0)
 
         log_rank(
             f"Load the {type(self).__name__} {self.index_split.name} indices",
@@ -346,7 +346,7 @@ class Nanoset(torch.utils.data.Dataset):
         t_beg = time.time()
         sample_index = numpy.load(path_to_sample_index, allow_pickle=True, mmap_mode="r")
         t_end = time.time()
-        log_rank(f"\t> time elapsed: {t_end - t_beg:4f} seconds", logger=logger, level=logging.DEBUG, rank=0)
+        log_rank(f"\t> Time elapsed: {t_end - t_beg:4f} seconds", logger=logger, level=logging.DEBUG, rank=0)
 
         log_rank(
             f"\tLoad the shuffle index from {os.path.basename(path_to_shuffle_index)}",
@@ -357,10 +357,10 @@ class Nanoset(torch.utils.data.Dataset):
         t_beg = time.time()
         shuffle_index = numpy.load(path_to_shuffle_index, allow_pickle=True, mmap_mode="r")
         t_end = time.time()
-        log_rank(f"\t> time elapsed: {t_end - t_beg:4f} seconds", logger=logger, level=logging.DEBUG, rank=0)
+        log_rank(f"\t> Time elapsed: {t_end - t_beg:4f} seconds", logger=logger, level=logging.DEBUG, rank=0)
 
-        log_rank(f"> total number of samples: {sample_index.shape[0] - 1}", logger=logger, level=logging.INFO, rank=0)
-        log_rank(f"> total number of epochs: {num_epochs}", logger=logger, level=logging.INFO, rank=0)
+        log_rank(f"> Total number of samples: {sample_index.shape[0] - 1}", logger=logger, level=logging.INFO, rank=0)
+        log_rank(f"> Total number of epochs: {num_epochs}", logger=logger, level=logging.INFO, rank=0)
 
         return document_index, sample_index, shuffle_index
 

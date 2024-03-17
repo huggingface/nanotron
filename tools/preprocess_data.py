@@ -72,15 +72,13 @@ class Partition(object):
         pool = multiprocessing.Pool(self.workers, initializer=encoder.initializer)
         encoded_docs = pool.imap(encoder.encode, fin, 32)
 
-        level = "document"
-
         output_bin_files = {}
         output_idx_files = {}
         builders = {}
 
         for key in self.args.json_keys:
-            output_bin_files[key] = "{}_{}_{}.bin".format(output_prefix, key, level)
-            output_idx_files[key] = "{}_{}_{}.idx".format(output_prefix, key, level)
+            output_bin_files[key] = "{}_{}.bin".format(output_prefix, key)
+            output_idx_files[key] = "{}_{}.idx".format(output_prefix, key)
             builders[key] = indexed_dataset.MMapIndexedDatasetBuilder(
                 output_bin_files[key],
                 dtype=indexed_dataset.DType.optimal_dtype(tokenizer.vocab_size),
@@ -217,8 +215,6 @@ def main(args):
         return
 
     # Merge bin/idx partitions
-    level = "document"
-
     output_bin_files = {}
     output_idx_files = {}
     builders = {}
@@ -226,8 +222,8 @@ def main(args):
     tokenizer = AutoTokenizer.from_pretrained(args.pretrained_model_name_or_path)
 
     for key in args.json_keys:
-        output_bin_files[key] = "{}_{}_{}.bin".format(args.output_prefix, key, level)
-        output_idx_files[key] = "{}_{}_{}.idx".format(args.output_prefix, key, level)
+        output_bin_files[key] = "{}_{}.bin".format(args.output_prefix, key)
+        output_idx_files[key] = "{}_{}.idx".format(args.output_prefix, key)
         builders[key] = indexed_dataset.MMapIndexedDatasetBuilder(
             output_bin_files[key],
             dtype=indexed_dataset.DType.optimal_dtype(tokenizer.vocab_size),
@@ -235,7 +231,7 @@ def main(args):
 
         for name in in_ss_out_names:
             parition_output_prefix = name["output_prefix"]
-            full_partition_output_prefix = "{}_{}_{}".format(parition_output_prefix, key, level)
+            full_partition_output_prefix = "{}_{}".format(parition_output_prefix, key)
             builders[key].add_index(full_partition_output_prefix)
         builders[key].finalize(output_idx_files[key])
 
