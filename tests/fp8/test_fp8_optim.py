@@ -227,7 +227,13 @@ def test_fp8adam_step_with_loss_scaling(scaling_value):
         # optim.zero_grad()
         
         loss = fp8_linear(input).sum()
-        loss_scaler.scale(loss.to(torch.float32)).backward()
+        loss = loss.to(torch.float32)
+        scaled_loss = loss_scaler.scale(loss)
+        
+        # TODO(xrsrke): remove these sanity checks after debugging
+        assert not torch.allclose(scaled_loss, ref_loss)
+        
+        scaled_loss.backward()
         loss_scaler.step(fp8_optim)
         # fp8_optim.zero_grad()
 

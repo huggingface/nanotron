@@ -47,26 +47,30 @@ class LowPrecisionTensor(torch.Tensor):
 
     def mul_(self, other: torch.Tensor):
         assert isinstance(other, torch.Tensor)
-        assert other.ndim == 1, "FP8Tensor doesn't support broadcasting for scaling factor"
+        assert other.ndim == 0 or other.ndim == 1, "FP8Tensor don't support directly do matrix multiplication in FP8. You should cast it to a higher precision format."
 
+        other = other.squeeze() if other.ndim == 1 else other
         self.fp8_meta._inverse_scale = self.fp8_meta.inverse_scale * other
 
     def div_(self, other: torch.Tensor):
         assert isinstance(other, torch.Tensor)
-        assert other.ndim == 1, "FP8Tensor doesn't support broadcasting for scaling factor"
+        assert other.ndim == 1, "FP8Tensor don't support directly do matrix division in FP8. You should cast it to a higher precision format."
 
         self.mul_(1 / other)
 
     def __add__(self, other: torch.Tensor):
-        raise ValueError("You can't directly add a FP8Tensor with another tensor")
+        raise ValueError("You can't directly add a FP8Tensor with another tensor. You should cast it to a higher precision format")
 
     def __sub__(self, other: torch.Tensor):
-        raise ValueError("You can't directly subtract a FP8Tensor with another tensor")
+        raise ValueError("You can't directly subtract a FP8Tensor with another tensor. You should cast it to a higher precision format")
 
     def __repr__(self) -> str:
         if hasattr(self, "fp8_meta"):
             return f"FP8Tensor({repr(self.data)}, fp8_meta={self.fp8_meta})"
         return super().__repr__()
+
+    def clone(self) -> FP8Tensor:
+        return FP8Tensor(self.data.clone(), self.fp8_meta.dtype)
 
 
 class FP8Tensor(LowPrecisionTensor):

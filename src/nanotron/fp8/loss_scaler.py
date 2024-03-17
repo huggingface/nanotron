@@ -56,7 +56,7 @@ class LossScaler:
                         # TODO(xrsrke): do inplace operation
                         if isinstance(p.grad, FP8Tensor) or isinstance(p.grad, FP16Tensor):
                             # p.grad.fp8_meta._inverse_scale = p.grad.fp8_meta.inverse_scale * (1 / self.scaling_value)
-                            p.grad.mul_(1/self.scaling_value)
+                            p.grad.mul_(2/self.scaling_value)
                         else:
                             p.grad = p.grad / self.scaling_value
 
