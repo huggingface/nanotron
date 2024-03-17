@@ -78,5 +78,3 @@ def compute_datasets_num_samples(train_iters, eval_interval, eval_iters, global_
     log_rank("    Test:       {}".format(datasets_num_samples[2]), logger=logger, level=logging.INFO, rank=0)
 
     return datasets_num_samples
-
-# PRECOMMIT

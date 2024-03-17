@@ -40,6 +40,7 @@ def get_dataloaders(trainer: DistributedTrainer):
         data_path=trainer.config.data.dataset.data_path,
         split=trainer.config.data.dataset.split,
         split_num_samples=split_num_samples,
+        path_to_cache=trainer.config.data.dataset.path_to_cache,
     )
 
     # Build Nanoset datasets

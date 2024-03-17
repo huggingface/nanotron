@@ -1,19 +1,19 @@
 import math
-from typing import Any, List, Optional, Tuple, Type, Union
+from typing import Any, List, Type, Union
 
 import numpy
 import torch
 
 from nanotron import logging
+from nanotron.data.blended_nanoset import BlendedNanoset
 from nanotron.data.indexed_dataset import MMapIndexedDataset
 from nanotron.data.nanoset import Nanoset
-from nanotron.data.blended_nanoset import BlendedNanoset
 from nanotron.data.nanoset_configs import NanosetConfig
 from nanotron.data.utils import Split, normalize
 
 logger = logging.get_logger(__name__)
 
-DistributedDataset = Union[Nanoset, MMapIndexedDataset]
+DistributedDataset = Union[Nanoset, MMapIndexedDataset, BlendedNanoset]
 
 
 class NanosetBuilder(object):
@@ -29,9 +29,6 @@ class NanosetBuilder(object):
         config: NanosetConfig,
     ):
         self.config = config
-        self.sizes = config.split_num_samples
-        # TODO: Quit cls as we are only supporting Nanoset datasets. Blended are mmapindex + nanoset + blended
-        #self.cls = Nanoset  # NOTE: keep it like that to support BlendedNanoset in the future
 
     def build(self) -> List[Nanoset]:
         """Build all dataset splits according to the provided data_path(s)
@@ -40,12 +37,10 @@ class NanosetBuilder(object):
 
         The dataset splits returned can vary according to the config. Supply config.data_path and
         config.split to build BlendedNanoset and/or Nanoset splits from the same
-        distribution. Supply config.data_path_per_split to build BlendedNanoset and/or Nanoset
-        splits from separate distributions.
+        distribution.
 
         Returns:
-            List[Union[BlendedNanoset, Nanoset]]: A list of either
-            Nanoset or BlendedNanoset per split
+            List[Union[BlendedNanoset, Nanoset]]: A list of either Nanoset or BlendedNanoset per split
         """
         return self._build_blended_dataset_splits()
 
@@ -57,8 +52,7 @@ class NanosetBuilder(object):
         See the NanosetBuilder.build alias for more information.
 
         Returns:
-            List[Optional[Union[BlendedNanoset, Nanoset]]]: A list of either
-            Nanoset or BlendedNanoset per split
+            List[Union[BlendedNanoset, Nanoset]]: A list of either Nanoset or BlendedNanoset per split
         """
 
         data_path = getattr(self.config, "data_path")
@@ -66,18 +60,21 @@ class NanosetBuilder(object):
 
         # Single Nanoset
         if isinstance(data_path, str):
-            return self._build_nanoset_dataset_splits(data_path[0], split, self.sizes)
-        
+            return self._build_nanoset_dataset_splits(data_path, split, self.config.split_num_samples)
+
         # Blended Nanoset
-        prefix_per_dataset = list(data_path.keys())              
-        weight_per_dataset = normalize(list(data_path.values())) 
-        
+        prefix_per_dataset = list(data_path.keys())
+        weight_per_dataset = normalize(list(data_path.values()))
+
         # NOTE: Use 0.5% target margin to ensure we satiate the network
         sizes_per_dataset = [
-            [int(math.ceil(target_num_samples * weight * 1.005)) for target_num_samples in self.sizes]
+            [
+                int(math.ceil(target_num_samples * weight * 1.005))
+                for target_num_samples in self.config.split_num_samples
+            ]
             for weight in weight_per_dataset
         ]
-        
+
         nanoset_datasets = [[] for _ in range(len(Split))]
 
         for i in range(len(prefix_per_dataset)):
@@ -85,15 +82,15 @@ class NanosetBuilder(object):
                 prefix_per_dataset[i], split, sizes_per_dataset[i]
             )
             for j in range(len(nanoset_datasets_split)):
-                    nanoset_datasets[j].append(nanoset_datasets_split[j])
-        
+                nanoset_datasets[j].append(nanoset_datasets_split[j])
+
         # Sum over all contributing datasets, per split
         size_per_split = list(map(sum, zip(*sizes_per_dataset)))
 
         blended_nanosets = []
 
         for i in range(len(nanoset_datasets)):
-            is_none = map(lambda _: _ is None, nanoset_datasets[i])
+            is_none = (_ is None for _ in nanoset_datasets[i])
 
             if split[i] == 0.0:
                 assert all(is_none)
@@ -162,7 +159,7 @@ class NanosetBuilder(object):
         self,
         cls: Type[DistributedDataset],
         *args: Any,
-    ) -> Optional[DistributedDataset]:
+    ) -> DistributedDataset:
         """Build the DistributedDataset
 
         Args:
@@ -227,33 +224,3 @@ def _get_split_indices(split: List[float], num_elements: int) -> List[int]:
     assert split_indices[-1] == num_elements
 
     return split_indices
-
-
-# NOTE: Keep for BlendedNanoset
-def _get_prefixes_weights_and_sizes_for_blend(prefixes, weights, splits) -> Tuple[List[str], List[float], List[List[int]]]:
-    """Determine the contribution of the Nanoset splits to the BlendedNanoset splits
-
-    Args:
-        data_path (List[str]): e.g. ["30", "path/to/dataset_1_prefix", "70",
-        "path/to/dataset_2_prefix"]
-
-        target_num_samples_per_split (List[int]): The number of samples to target for each
-        BlendedNanoset split
-
-    Returns:
-        Tuple[List[str], List[float], List[List[int]]]: The prefix strings e.g.
-        ["path/to/dataset_1_prefix", "path/to/dataset_2_prefix"], the normalized weights e.g.
-        [0.3, 0.7], and the number of samples to request per Nanoset per split
-    """
-
-    weights = normalize(weights)
-
-    # NOTE: Use 0.5% target margin to ensure we satiate the network
-    sizes_per_dataset = [
-        [int(math.ceil(target_num_samples * weight * 1.005)) for target_num_samples in target_num_samples_per_split]
-        for weight in weights
-    ]
-
-    return prefixes, weights, sizes_per_dataset
-
-# PRECOMMIT

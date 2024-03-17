@@ -38,14 +38,12 @@ class NanosetConfig:
 
     split: str
 
-    split_vector: Optional[List[float]] = field(init=False, default=None)
-
     path_to_cache: str = None
+
+    split_vector: Optional[List[float]] = field(init=False, default=None)
 
     def __post_init__(self):
         """Python dataclass method that is used to modify attributes after initialization. See
         https://docs.python.org/3/library/dataclasses.html#post-init-processing for more details.
         """
         self.split_vector = parse_and_normalize_split(self.split)
-
-# PRECOMMIT

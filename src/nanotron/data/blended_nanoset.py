@@ -8,15 +8,13 @@ from typing import Dict, List, Tuple, Union
 import numpy
 import torch
 
-from nanotron.data.nanoset_configs import NanosetConfig
-from nanotron.data.nanoset import Nanoset
-from nanotron.data.utils import normalize
 from nanotron import logging
+from nanotron.data.nanoset import Nanoset
+from nanotron.data.nanoset_configs import NanosetConfig
+from nanotron.data.utils import normalize
 from nanotron.logging import log_rank
 
 logger = logging.get_logger(__name__)
-
-_VERBOSE = False
 
 
 class BlendedNanoset(torch.utils.data.Dataset):
@@ -44,11 +42,11 @@ class BlendedNanoset(torch.utils.data.Dataset):
     ) -> None:
         assert len(datasets) == len(weights)
         assert numpy.isclose(sum(weights), 1.0)
-        assert all(map(lambda _: type(_) == type(datasets[0]), datasets))
+        assert all((type(_) == type(datasets[0]) for _ in datasets))
 
         # Alert user to unnecessary blending
         if len(datasets) == 1:
-            log_rank(f"Building a BlendedNanoset for a single Nanoset", logger=logger, level=logging.WARNING, rank=0)
+            log_rank("Building a BlendedNanoset for a single Nanoset", logger=logger, level=logging.WARNING, rank=0)
 
         # Redundant normalization for bitwise identical comparison with Megatron-LM
         weights = normalize(weights)
@@ -65,9 +63,7 @@ class BlendedNanoset(torch.utils.data.Dataset):
         unique_identifiers["size"] = self.size
 
         self.unique_description = json.dumps(unique_identifiers, indent=4)
-        self.unique_description_hash = hashlib.md5(
-            self.unique_description.encode("utf-8")
-        ).hexdigest()
+        self.unique_description_hash = hashlib.md5(self.unique_description.encode("utf-8")).hexdigest()
 
         self.dataset_index, self.dataset_sample_index = self._build_indices()
 
@@ -85,9 +81,8 @@ class BlendedNanoset(torch.utils.data.Dataset):
     def __getitem__(self, idx: int) -> Dict[str, Union[int, numpy.ndarray]]:
         dataset_id = self.dataset_index[idx]
         dataset_sample_id = self.dataset_sample_index[idx]
-        
+
         return self.datasets[dataset_id][dataset_sample_id]
-        
 
     def _build_indices(self) -> Tuple[numpy.ndarray, numpy.ndarray]:
         """Build and optionally cache the dataset index and the dataset sample index
@@ -102,9 +97,10 @@ class BlendedNanoset(torch.utils.data.Dataset):
         path_to_cache = getattr(self.config, "path_to_cache")
 
         if path_to_cache:
-            get_path_to = lambda suffix: os.path.join(
-                path_to_cache, f"{self.unique_description_hash}-{type(self).__name__}-{suffix}"
-            )
+
+            def get_path_to(suffix):
+                return os.path.join(path_to_cache, f"{self.unique_description_hash}-{type(self).__name__}-{suffix}")
+
             path_to_description = get_path_to("description.txt")
             path_to_dataset_index = get_path_to("dataset_index.npy")
             path_to_dataset_sample_index = get_path_to("dataset_sample_index.npy")
@@ -121,7 +117,9 @@ class BlendedNanoset(torch.utils.data.Dataset):
             log_rank(f"Build and save the {type(self).__name__} indices", logger=logger, level=logging.INFO, rank=0)
 
             # Build the dataset and dataset sample indexes
-            log_rank(f"\tBuild and save the dataset and dataset sample indexes", logger=logger, level=logging.INFO, rank=0)
+            log_rank(
+                "\tBuild and save the dataset and dataset sample indexes", logger=logger, level=logging.INFO, rank=0
+            )
 
             t_beg = time.time()
             from nanotron.data import helpers
@@ -134,7 +132,7 @@ class BlendedNanoset(torch.utils.data.Dataset):
                 self.weights,
                 len(self.datasets),
                 self.size,
-                _VERBOSE,
+                False,
             )
 
             if path_to_cache:
@@ -146,7 +144,12 @@ class BlendedNanoset(torch.utils.data.Dataset):
                 numpy.save(path_to_dataset_index, dataset_index, allow_pickle=True)
                 numpy.save(path_to_dataset_sample_index, dataset_sample_index, allow_pickle=True)
             else:
-                log_rank("Unable to save the indexes because path_to_cache is None", logger=logger, level=logging.WARNING, rank=0)
+                log_rank(
+                    "Unable to save the indexes because path_to_cache is None",
+                    logger=logger,
+                    level=logging.WARNING,
+                    rank=0,
+                )
 
             t_end = time.time()
             log_rank(f"\t> time elapsed: {t_end - t_beg:4f} seconds", logger=logger, level=logging.DEBUG, rank=0)
@@ -157,18 +160,19 @@ class BlendedNanoset(torch.utils.data.Dataset):
 
         log_rank(f"\tLoad the dataset index from {path_to_dataset_index}", logger=logger, level=logging.INFO, rank=0)
         t_beg = time.time()
-        dataset_index = numpy.load(path_to_dataset_index, allow_pickle=True, mmap_mode='r')
+        dataset_index = numpy.load(path_to_dataset_index, allow_pickle=True, mmap_mode="r")
         t_end = time.time()
         log_rank(f"\t> time elapsed: {t_end - t_beg:4f} seconds", logger=logger, level=logging.DEBUG, rank=0)
 
-        log_rank(f"\tLoad the dataset sample index from {path_to_dataset_sample_index}", logger=logger, level=logging.INFO, rank=0)
-        t_beg = time.time()
-        dataset_sample_index = numpy.load(
-            path_to_dataset_sample_index, allow_pickle=True, mmap_mode='r'
+        log_rank(
+            f"\tLoad the dataset sample index from {path_to_dataset_sample_index}",
+            logger=logger,
+            level=logging.INFO,
+            rank=0,
         )
+        t_beg = time.time()
+        dataset_sample_index = numpy.load(path_to_dataset_sample_index, allow_pickle=True, mmap_mode="r")
         t_end = time.time()
         log_rank(f"\t> time elapsed: {t_end - t_beg:4f} seconds", logger=logger, level=logging.DEBUG, rank=0)
 
         return dataset_index, dataset_sample_index
-    
-# PRECOMMIT

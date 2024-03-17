@@ -99,6 +99,7 @@ class PretrainDatasetsArgs:
 class NanosetDatasetsArgs:
     data_path: Union[str, dict]
     split: Optional[str] = None
+    path_to_cache: Optional[str] = None
 
     def __post_init__(self):
         if self.split is None:
@@ -426,6 +427,3 @@ def get_config_from_file(
             )
         config.model.model_config = model_config_class(**config.model.model_config)
     return config
-
-
-# PRECOMMIT

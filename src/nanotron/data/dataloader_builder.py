@@ -1,4 +1,3 @@
-# QUESTION: Move them here?
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Union
 
@@ -70,8 +69,6 @@ def build_nanoset_dataloader(
         num_workers=dataloader_num_workers,
         pin_memory=dataloader_pin_memory,
         worker_init_fn=get_dataloader_worker_init(dp_rank=dp_rank),
-        # TODO @thomasw21: I'm not sure but this doesn't seem to work at all.
-        # pin_memory_device="cuda",
     )
 
 
@@ -100,8 +97,6 @@ class NanosetDataCollatorForCLM:
             self.input_pp_rank,
             self.output_pp_rank,
         ]:
-            # assert all(len(example) == 0 for example in examples)
-
             return {
                 "input_ids": TensorPointer(group_rank=self.input_pp_rank),
                 "input_mask": TensorPointer(group_rank=self.input_pp_rank),
@@ -162,8 +157,6 @@ def get_sampler(
     drop_last: Optional[bool] = True,
 ) -> Optional[Sampler]:
     """returns sampler that restricts data loading to a subset of the dataset proper to the DP rank"""
-
-    # NOTE: Removed DistributedSamplerWithLoop to support valid and test samplers.
 
     sampler = DistributedSampler(dataset, num_replicas=dl_ranks_size, rank=dl_rank, seed=seed, drop_last=drop_last)
 
