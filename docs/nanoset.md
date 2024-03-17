@@ -1,31 +1,40 @@
-# Data Pipeline
+# Nanoset
 
 ## Data pre-processing
 
-For data pre-processing, refer to [Megatron-LM project](https://github.com/NVIDIA/Megatron-LM/tree/main?tab=readme-ov-file#data-preprocessing), as Nanoset requires the same kind of preprocessing. The main file used is [`preprocess_data.py`](https://github.com/NVIDIA/Megatron-LM/blob/main/tools/preprocess_data.py)
+Nanotron incorporates Nanosets, a streamlined version of Megatron-LM datasets. It also includes BlendedNanosets, to be able to combine different Nanosets.
 
-The training data requires preprocessing. First, place your training data in a loose json format, with one json containing a text sample per line. For example:
+The training data requires preprocessing. Just like Megatron, first, place your training data in a loose json format, with one json containing a text sample per line. For example:
 
 <pre>
 {"src": "www.nvidia.com", "text": "The quick brown fox", "type": "Eng", "id": "0", "title": "First Part"}
 {"src": "The Internet", "text": "jumps over the lazy dog", "type": "Eng", "id": "42", "title": "Second Part"}
 </pre>
 
-The name of the `text` field of the json can be changed by using the `--json-key` flag in [`preprocess_data.py`](https://github.com/NVIDIA/Megatron-LM/blob/main/tools/preprocess_data.py). The other metadata are optional and are not used in training.
-
-The loose json is then processed into a binary format for training. To convert the json into mmap format use [`preprocess_data.py`](https://github.com/NVIDIA/Megatron-LM/blob/main/tools/preprocess_data.py). An example script to prepare data for Llama2 training is:
+The loose json is then processed into a binary format for training using the [`tools/preprocess_data.py`](../tools/preprocess_data.py) script. Below we show an example for processing a corpus with the Llama2 tokenizer.
 
 <pre>
 python tools/preprocess_data.py \
-       --input my_corpus.json \
-       --output-prefix my-llama2-dataset \
-       --tokenizer-type Llama2Tokenizer \
-       --tokenizer-model /models/Llama-2-7b-chat-hf/tokenizer.model \
-       --append-eod \
-       --workers 6
+       --input data/my_corpus.json \
+       --output-prefix data/processed-datasets/my-llama2-dataset \
+       --pretrained-model-name-or-path models/Llama-2-7b \
+       --workers 128 \
+       --partitions 8
 </pre>
 
-The output will be two files named, in this case, `my-llama2-dataset_text_document.bin` and `my-llama2-dataset_text_document.idx`. The `--data-path` specified later in training is the full path and new filename, but without the file extension.
+In `--pretrained-model-name-or-path`, we will have to specify a tokenizer in the same way as we do when using `AutoTokenizers.from_pretrained(...)`.
+
+The output will be two files named, in this case, `my-llama2-dataset_text.bin` and `my-llama2-dataset_text.idx`. The `data_path` specified later in training is the full path and new filename, but **without** the file extension.
+
+We also include the following scripts:
+- [`hf_datasets_to_json.py`](../tools/hf_datasets_to_json.py): A tool to transform datasets from the Hugging Face Hub (or local) to the .json format required by `preprocess_data.py`.
+- [`merge_datasets.py`](../tools/merge_datasets.py): A tool to merge preprocessed datasets (_.bin_ and _.idx_ files) into a single file.
+
+## NanosetDatasetsArgs
+
+jjj
+
+
 
 ----
 
@@ -53,7 +62,6 @@ The index file stores document-level and sequence-level metadata second:
 - In order, the number of elements per sequence
 - In order, the byte offset (pointer) per sequence
 - In order, the consecutive sequence index range `[...)` per document
-- In order, the mode per sequence (in the multimodal case)
 
 ## Data loading: construction
 
@@ -62,21 +70,22 @@ Building the data loaders is a distributed-aware process built around the follow
 1. `NanosetConfig`
 2. `NanosetBuilder`
 3. `MMapIndexedDataset`
-3. `Nanoset`
+4. `Nanoset`
+5. `BlendedNanoset`
 
 See the class docstrings for more details.
 
 #### NanosetConfig
 
-The `NanosetConfig` class parametrizes the `NanosetBuilder` and in turn the `Nanoset`.
+The `NanosetConfig` class parametrizes the `NanosetBuilder` and in turn the `Nanoset` and `BlendedNanoset`.
 
-Different training/inference regimes will require different extensions e.g. the `NanosetConfig`
+Refer to [`nanoset_configs.py`](../src/nanotron/data/nanoset_configs.py) to view the different configurable parameters.
 
 #### NanosetBuilder
 
 The `NanosetBuilder` class builds the highest-level data interfaces.
 
-**NB:** All ranks should attempt to build the dataset via the `NanosetBuilder` or the program will hang. Which ranks follow through on their attempts can be controlled via the `NanosetConfig`.
+**NB:** All ranks should attempt to build the dataset via the `NanosetBuilder` or the program will hang.
 
 #### MMapIndexedDataset
 
