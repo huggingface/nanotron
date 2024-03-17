@@ -155,6 +155,11 @@ def check_files_exist(in_ss_out_names, key, num_partitions):
 
 def main(args):
 
+    # Check if output directory exists
+    if not os.path.isdir(os.path.abspath(os.path.join(args.output_prefix, os.path.pardir))):
+        print(f"Creating {os.path.abspath(os.path.join(args.output_prefix, os.path.pardir))} directory...")
+        os.makedirs(os.path.abspath(os.path.join(args.output_prefix, os.path.pardir)), exist_ok=True)
+
     in_ss_out_names = []
     if args.partitions == 1:
         file_name, extension = os.path.splitext(args.input)
