@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import List, Optional, Union
 
 from nanotron.data.utils import parse_and_normalize_split
 
@@ -34,13 +34,12 @@ class NanosetConfig:
 
     split_num_samples: list[int]
 
-    data_path: Optional[List[str]] = None
+    data_path: Union[str, dict]
 
-    split: Optional[str] = None
+    split: str
 
     split_vector: Optional[List[float]] = field(init=False, default=None)
 
-    # TODO We add the cache because it need its somewhere, take a look later
     path_to_cache: str = None
 
     def __post_init__(self):
@@ -48,3 +47,5 @@ class NanosetConfig:
         https://docs.python.org/3/library/dataclasses.html#post-init-processing for more details.
         """
         self.split_vector = parse_and_normalize_split(self.split)
+
+# PRECOMMIT

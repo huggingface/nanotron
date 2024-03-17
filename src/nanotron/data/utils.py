@@ -67,8 +67,8 @@ def parse_and_normalize_split(split: str) -> List[float]:
 def compute_datasets_num_samples(train_iters, eval_interval, eval_iters, global_batch_size):
 
     train_samples = train_iters * global_batch_size
-    eval_iters = (train_iters // eval_interval + 1) * eval_iters
     test_iters = eval_iters
+    eval_iters = (train_iters // eval_interval + 1) * eval_iters
 
     datasets_num_samples = [train_samples, eval_iters * global_batch_size, test_iters * global_batch_size]
 
@@ -78,3 +78,5 @@ def compute_datasets_num_samples(train_iters, eval_interval, eval_iters, global_
     log_rank("    Test:       {}".format(datasets_num_samples[2]), logger=logger, level=logging.INFO, rank=0)
 
     return datasets_num_samples
+
+# PRECOMMIT
