@@ -158,13 +158,15 @@ def load_optimizer(
             return param_shard_metadata[param_name.replace("module.", "")][(str(pp_rank), str(tp_rank))]
 
         ckp_optim_type = ckp_optimizer_config["type"]
+        # NOTE: does not consider if expert parallelism topology has changed
+        exp_rank = dist.get_rank(parallel_context.expert_pg)
 
         if ckp_optim_type == ZeroDistributedOptimizer.__name__:
             # NOTE: if the checkpoint is from a Zero-1 optimizer, then we need to merge the shards
             # across data parallel dimension, before merging the shards across tensor parallel dimension
             shard_paths = list(
                 root_folder.glob(
-                    f"{ObjectType.OPTIMIZER.value}_pp-*-of-{ckp_pp_size}_dp-*-of-{ckp_dp_size}_tp-*-of-{ckp_tp_size}_exp-*-of-{ckpt_expert_parallel_size}.pt"
+                    f"{ObjectType.OPTIMIZER.value}_pp-*-of-{ckp_pp_size}_dp-*-of-{ckp_dp_size}_tp-*-of-{ckp_tp_size}_exp-{exp_rank}-of-{ckpt_expert_parallel_size}.pt"
                 )
             )
             ckp_sharded_optim_states = merge_dp_shard_in_zero1_optimizer(
@@ -175,7 +177,7 @@ def load_optimizer(
             # across data parallel dimension, just directly load the checkpoints
             shard_paths = list(
                 root_folder.glob(
-                    f"{ObjectType.OPTIMIZER.value}_pp-*-of-{ckp_pp_size}_tp-*-of-{ckp_tp_size}_exp-*-of-{ckpt_expert_parallel_size}.pt"
+                    f"{ObjectType.OPTIMIZER.value}_pp-*-of-{ckp_pp_size}_tp-*-of-{ckp_tp_size}_exp-{exp_rank}-of-{ckpt_expert_parallel_size}.pt"
                 )
             )
 
