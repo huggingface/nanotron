@@ -324,19 +324,20 @@ if __name__ == "__main__":
     }
     save_meta(root_folder=save_path, parallel_context=parallel_context, checkpoint_metadata=checkpoint_metadata)
 
-    with open(save_path / "config.yaml", "w") as f:
-        config = MambaConfig(
-            general=GeneralArgs(project="test", run="mamba"),
-            parallelism=parallel_config,
-            model=ModelArgs(
-                    init_method=MambaInit(),
-                    model_config=model_config,
-                ),
-            tokenizer=TokenizerArgs(pretrained_model_name + "-hf"),
-        )
-        log_rank("Saving config ...", logger=logger, level=logging.INFO, rank=0)
-        yaml.dump(config.as_dict(), f)
-        
-    with open(save_path / "model_config.json", "w") as f:
-        log_rank("Saving model config ...", logger=logger, level=logging.INFO, rank=0)
-        json.dump(asdict(model_config), f)
+    if dist.get_rank() == 0:
+        with open(save_path / "config.yaml", "w") as f:
+            config = MambaConfig(
+                general=GeneralArgs(project="test", run="mamba"),
+                parallelism=parallel_config,
+                model=ModelArgs(
+                        init_method=MambaInit(),
+                        model_config=model_config,
+                    ),
+                tokenizer=TokenizerArgs(pretrained_model_name + "-hf"),
+            )
+            log_rank("Saving config ...", logger=logger, level=logging.INFO, rank=0)
+            yaml.dump(config.as_dict(), f)
+            
+        with open(save_path / "model_config.json", "w") as f:
+            log_rank("Saving model config ...", logger=logger, level=logging.INFO, rank=0)
+            json.dump(asdict(model_config), f)
