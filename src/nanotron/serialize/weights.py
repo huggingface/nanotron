@@ -85,6 +85,7 @@ def save_weights(model: nn.Module, parallel_context: ParallelContext, root_folde
 
             else:
                 exp_tp_pp_rank_and_size = None
+                is_expert_sharded = False
 
             path = get_path(
                 base_name,

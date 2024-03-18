@@ -126,7 +126,6 @@ class ParallelContext:
         torch.cuda.set_device(torch.cuda.device(device_id))
 
     def get_local_ranks(self, world_rank: int) -> Tuple[int, int, int]:
-        # return coordinates in world_rank_matrix without expert_parallel_rank
         return tuple(i.item() for i in np.where(self.world_rank_matrix == world_rank))
 
     def destroy(self):
