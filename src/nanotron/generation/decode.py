@@ -262,7 +262,10 @@ def decode_text(
                         )
 
                     if isinstance(sharded_logits, torch.Tensor):
-                        sharded_logits = sharded_logits.transpose(0, 1)
+                        # sharded_logits = sharded_logits.transpose(0, 1)
+                        print("Don't transpose sharded logits for mamba")
+                        pass
+
                     # Communicate
                     # TODO @thomasw21: Make a diagram to show how this works
                     nb_send: int = 0
