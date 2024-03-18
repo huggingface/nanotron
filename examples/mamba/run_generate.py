@@ -138,7 +138,7 @@ def main():
 
     model = build_model(
         model_builder=lambda: MambaForTraining(
-            model_config=model_config,
+            config=model_config,
             parallel_context=parallel_context,
             parallel_config=parallel_config,
             random_states=random_states,
