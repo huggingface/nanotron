@@ -58,3 +58,8 @@ To work with Nanosets, we need to configure 3 arguments:
       num_loading_workers: 0
       seed: 1234
     ```
+
+Finally, to use the Nanosets, launch the training with [`run_train_nanoset.py`](../run_train_nanoset.py).
+```shell
+torchrun --nproc-per-node 8 run_train_nanoset.py --config configs/nanoset_llama2.yaml
+```
