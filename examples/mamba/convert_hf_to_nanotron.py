@@ -37,49 +37,6 @@ from nanotron.config import LoggingArgs
 
 logger = logging.get_logger(__name__)
 
-
-# def sanity_check_weights(model, model_ref, tp_size):
-#     def _sort_key(name_param_pair):
-#         name, _ = name_param_pair
-#         # Split the name and take the last part as the key for sorting
-#         return name.split('.')[-1]
-    
-#     def _split_weight(data: torch.Tensor, dim: int) -> torch.Tensor:
-#         rank = dist.get_rank()
-#         world_size = dist.get_world_size()
-#         chunks = torch.chunk(data, world_size, dim=dim)
-#         return chunks[rank].contiguous()
-    
-#     total, fail, excluded = 0, 0, 0
-    
-#     for (name_ref, param_ref), (name, param) in zip(
-#             sorted(model_ref.named_parameters(), key=_sort_key),
-#             sorted(model.model.named_parameters(), key=_sort_key)
-#         ):
-        
-#         total += 1
-#         try:
-#             param_shard_ref = param_ref
-#             if isinstance(param, NanotronParameter) and param.is_sharded and tp_size > 1:
-#                 dim = next(index for index, (dim1, dim2) in enumerate(zip(param.shape, param_ref.shape)) if dim1 != dim2)
-#                 param_shard_ref = _split_weight(param_ref, dim)
-            
-#             if "in_proj" in name_ref:
-#                 # Don't check this weight as we changed it manually (interleaved)
-#                 excluded += 1
-#                 continue
-            
-#             torch.testing.assert_close(param_shard_ref, param, rtol=1e-10, atol=1e-10)
-#         except AssertionError as e:
-#             log_rank(f"{name_ref} and {name} are not equal. {e}", logger=logger, level=logging.INFO, rank=0)
-#             fail += 1
-    
-#     log_rank(f"{excluded}/{total} parameters were not sanity check (interleaved)", logger=logger, level=logging.INFO, rank=0)
-#     log_rank(f"{fail}/{total} parameters are not equal", logger=logger, level=logging.INFO, rank=0)
-    
-#     if fail > 0:
-#         raise AssertionError("Some parameters are not equal")
-
 def get_weight_from_hf(
     name: str,
     ref_module_state_dict: Dict[str, torch.Tensor],
