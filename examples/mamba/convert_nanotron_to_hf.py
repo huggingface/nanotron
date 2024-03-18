@@ -35,27 +35,14 @@ import lovely_tensors as lt; lt.monkey_patch()
 HARDCODED_HF_MODEL_NAME = "state-spaces/mamba-130m-hf"
 HARCODED_PROMPT = "Hello"
 
-str_to_dtype = {
-    "float32": torch.float32,
-    "float64": torch.float64,
-    "complex64": torch.complex64,
-    "complex128": torch.complex128,
-    "float16": torch.float16,
-    "bfloat16": torch.bfloat16,
-    "uint8": torch.uint8,
-    "int8": torch.int8,
-    "int16": torch.int16,
-    "int32": torch.int32,
-    "int64": torch.int64,
-    "bool": torch.bool,
-}
-
 def convert_checkpoint_and_save(checkpoint_path: Path, save_path: Path):
     device = torch.device("cuda")
     
     with open(checkpoint_path / "model_config.json", "r") as f:
         attrs = json.load(f)
         model_config = MambaModelConfig(**attrs)
+    
+    dtype = getattr(torch, model_config.dtype)
     
     parallel_config = ParallelismArgs(
         dp=1,
@@ -80,7 +67,7 @@ def convert_checkpoint_and_save(checkpoint_path: Path, save_path: Path):
             random_states=None,
         ),
         parallel_context=parallel_context,
-        dtype=str_to_dtype[model_config.dtype],
+        dtype=dtype,
         device=device
     )
     
@@ -121,7 +108,7 @@ def convert_checkpoint_and_save(checkpoint_path: Path, save_path: Path):
         )
         
     # Initialised HF model
-    with init_on_device_and_dtype(device, str_to_dtype[model_config.dtype]):
+    with init_on_device_and_dtype(device, dtype):
         model_hf = MambaForCausalLM._from_config(model_config_hf)
 
     # Get mapping of Nanotron layer and HF layer

@@ -120,21 +120,7 @@ def main():
     else:
         # We don't need to sync across TP when using sequence parallel (REDUCE_SCATTER)
         random_states = RandomStates({})
-    
-    str_to_dtype = {
-        "float32": torch.float32,
-        "float64": torch.float64,
-        "complex64": torch.complex64,
-        "complex128": torch.complex128,
-        "float16": torch.float16,
-        "bfloat16": torch.bfloat16,
-        "uint8": torch.uint8,
-        "int8": torch.int8,
-        "int16": torch.int16,
-        "int32": torch.int32,
-        "int64": torch.int64,
-        "bool": torch.bool,
-    }
+
 
     model = build_model(
         model_builder=lambda: MambaForTraining(
@@ -145,12 +131,9 @@ def main():
             is_inference=True,
             inference_config=MambaInferenceConfig(max_new_tokens=args.max_new_tokens),
         ),
-        dtype=str_to_dtype[model_config.dtype],
+        dtype=getattr(torch, model_config.dtype),
         parallel_context=parallel_context,
     )
-    
-    assert str_to_dtype[model_config.dtype] == torch.float32, f"Model dtype {str_to_dtype[model_config.dtype]} should be torch.float32"
-
     model_ref = MambaLMHeadModel.from_pretrained("state-spaces/mamba-130m").to("cuda")
 
     # Mark some parameters as tied

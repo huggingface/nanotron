@@ -35,7 +35,14 @@ from nanotron import logging
 from nanotron.logging import log_rank, set_ranks_logging_level
 from nanotron.config import LoggingArgs
 
+from transformers.utils import WEIGHTS_NAME, CONFIG_NAME
+from transformers.utils.hub import cached_file
+from mamba_ssm.models.config_mamba import MambaConfig as HFMambaConfig
 logger = logging.get_logger(__name__)
+
+def load_config_hf(model_name):
+    resolved_archive_file = cached_file(model_name, CONFIG_NAME, _raise_exceptions_for_missing_entries=False)
+    return json.load(open(resolved_archive_file))
 
 def get_weight_from_hf(
     name: str,
@@ -81,16 +88,15 @@ def get_weight_from_hf(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Convert HF weights from states-space repo to brrr weights")
-    parser.add_argument("--model", type=str, default="130M", help="130M | 370M | 790M | 1.4B | 2.8B")
     parser.add_argument("--save_path", type=str, default="mamba-nanotron")
+    parser.add_argument("--model", type=str, default="state-spaces/mamba-130m")
     parser.add_argument("--dp", type=int, default=1)
     parser.add_argument("--pp", type=int, default=1)
     parser.add_argument("--tp", type=int, default=1)
     args = parser.parse_args()
 
-    if args.model not in ["130M", "370M", "790M", "1.4B", "2.8B"]:
-        raise ValueError("Model should be one of 130M, 370M, 790M, 1.4B, 2.8B")
-
+    assert "state-spaces" in args.model, "Only models from state-spaces repo are supported"
+    
     save_path = Path(args.save_path)
 
     parallel_config = ParallelismArgs(
@@ -101,6 +107,7 @@ if __name__ == "__main__":
         tp_mode=TensorParallelLinearMode.ALL_REDUCE,
         tp_linear_async_communication=False,
     )
+    assert parallel_config.tp_mode == TensorParallelLinearMode.ALL_REDUCE and parallel_config.tp_linear_async_communication is False
 
     parallel_context = ParallelContext(
         data_parallel_size=parallel_config.dp,
@@ -117,38 +124,18 @@ if __name__ == "__main__":
     # Set log levels
     set_ranks_logging_level(parallel_context=parallel_context, logging_config=logging_config)
 
-    d_model = None
-    num_hidden_layers = None
-    pretrained_model_name = None
+    hf_config_data = load_config_hf(args.model)
+    hf_config = HFMambaConfig(**hf_config_data)
 
-    if args.model == "130M":
-        d_model = 768
-        num_hidden_layers = 24
-        pretrained_model_name = "state-spaces/mamba-130m"
-    elif args.model == "370M":
-        d_model = 1024
-        num_hidden_layers = 48
-        pretrained_model_name = "state-spaces/mamba-370m"
-    elif args.model == "790M":
-        d_model = 1536
-        num_hidden_layers = 24
-        pretrained_model_name = "state-spaces/mamba-790m"
-    elif args.model == "1.4B":
-        d_model = 2048
-        num_hidden_layers = 48
-        pretrained_model_name = "state-spaces/mamba-1.4b"
-    elif args.model == "2.8B":
-        d_model = 2560
-        num_hidden_layers = 64
-        pretrained_model_name = "state-spaces/mamba-2.8b"
-
+    dtype_str = "float32"
+    
     yaml_content = f"""
     is_mamba_config: true
-    d_model: {d_model}
-    dtype: float32
+    d_model: {hf_config.d_model}
+    dtype: {dtype_str}
     fused_add_norm: true
     is_mamba_config: true
-    num_hidden_layers: {num_hidden_layers}
+    num_hidden_layers: {hf_config.n_layer}
     pad_token_id: null
     pad_vocab_size_multiple: 8
     residual_in_fp32: true
@@ -158,27 +145,11 @@ if __name__ == "__main__":
     vocab_size: 50277
     """
 
-    str_to_dtype = {
-        "float32": torch.float32,
-        "float64": torch.float64,
-        "complex64": torch.complex64,
-        "complex128": torch.complex128,
-        "float16": torch.float16,
-        "bfloat16": torch.bfloat16,
-        "uint8": torch.uint8,
-        "int8": torch.int8,
-        "int16": torch.int16,
-        "int32": torch.int32,
-        "int64": torch.int64,
-        "bool": torch.bool,
-    }
+    dtype = getattr(torch, dtype_str)
     device = torch.device("cuda")
 
     attrs = yaml.safe_load(yaml_content)
     model_config = MambaModelConfig(**attrs)
-    
-    assert model_config.dtype == "float32", "Convert weights only in float32"
-
     # Initiliaze Brrr model
     model_config.vocab_size = _vocab_size_with_padding(
             model_config.vocab_size,
@@ -186,7 +157,7 @@ if __name__ == "__main__":
             make_vocab_size_divisible_by=5, # So that every value of TP from 1 to 8 yield a vocab_size of 50280
     )
 
-    model_ref = MambaLMHeadModel.from_pretrained(pretrained_model_name, device=device, dtype=str_to_dtype[model_config.dtype])
+    model_ref = MambaLMHeadModel.from_pretrained(args.model, device=device, dtype=dtype)
 
     nanotron_model = build_model(
         model_builder=lambda: MambaForTraining(
@@ -196,7 +167,7 @@ if __name__ == "__main__":
             random_states=None,
         ),
         parallel_context=parallel_context,
-        dtype=str_to_dtype[model_config.dtype],
+        dtype=dtype,
         device=device
     )
 
@@ -272,8 +243,6 @@ if __name__ == "__main__":
 
     sanity_check(root_module=nanotron_model)
     
-    # sanity_check_weights(model=nanotron_model, model_ref=model_ref, tp_size=parallel_context.tp_pg.size())
-    
     save_weights(model=nanotron_model, parallel_context=parallel_context, root_folder=save_path)
     checkpoint_metadata = {
         "last_train_step": 0,
@@ -290,7 +259,7 @@ if __name__ == "__main__":
                         init_method=MambaInit(),
                         model_config=model_config,
                     ),
-                tokenizer=TokenizerArgs(pretrained_model_name + "-hf"),
+                tokenizer=TokenizerArgs(args.model + "-hf"),
             )
             log_rank("Saving config ...", logger=logger, level=logging.INFO, rank=0)
             yaml.dump(config.as_dict(), f)
