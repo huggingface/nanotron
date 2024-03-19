@@ -30,7 +30,7 @@ class NanosetBuilder(object):
     ):
         self.config = config
 
-    def build(self) -> List[Nanoset]:
+    def build(self) -> List[Union[BlendedNanoset, Nanoset]]:
         """Build all dataset splits according to the provided data_path(s)
 
         This method is distributed-aware and must be called on all ranks.
@@ -38,18 +38,6 @@ class NanosetBuilder(object):
         The dataset splits returned can vary according to the config. Supply config.data_path and
         config.split to build BlendedNanoset and/or Nanoset splits from the same
         distribution.
-
-        Returns:
-            List[Union[BlendedNanoset, Nanoset]]: A list of either Nanoset or BlendedNanoset per split
-        """
-        return self._build_blended_dataset_splits()
-
-    def _build_blended_dataset_splits(
-        self,
-    ) -> List[Nanoset]:
-        """Build all dataset splits according to the provided data_path(s)
-
-        See the NanosetBuilder.build alias for more information.
 
         Returns:
             List[Union[BlendedNanoset, Nanoset]]: A list of either Nanoset or BlendedNanoset per split
