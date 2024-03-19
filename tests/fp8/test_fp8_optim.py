@@ -6,6 +6,7 @@ import torch
 from nanotron.fp8.constants import FP8LM_RECIPE
 from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.linear import FP8Linear
+from nanotron.fp8.loss_scaler import LossScaler
 from nanotron.fp8.optim import Adam as REFAdam
 from nanotron.fp8.optim import (
     FP8Adam,
@@ -20,7 +21,6 @@ from nanotron.fp8.tensor import (
 from torch import nn
 from torch.optim import Adam
 from utils import convert_linear_to_fp8, convert_to_fp8_module
-from nanotron.fp8.loss_scaler import LossScaler
 
 
 def set_fake_fp8_grads(linear: FP8Linear, ref_linear: Optional[nn.Linear] = None) -> FP8Linear:
@@ -29,14 +29,14 @@ def set_fake_fp8_grads(linear: FP8Linear, ref_linear: Optional[nn.Linear] = None
         if ref_linear is None
         else ref_linear.weight.grad
     )
-    weight_grad = FP8Tensor(weight_grad, dtype=FP8LM_RECIPE.linear.weight_grad.dtype)
+    weight_grad = FP8Tensor(deepcopy(weight_grad), dtype=FP8LM_RECIPE.linear.weight_grad.dtype)
 
     bias_grad = (
         torch.randn_like(linear.bias.data, device="cuda", dtype=torch.float32)
         if ref_linear is None
         else ref_linear.bias.grad
     )
-    bias_grad = FP16Tensor(bias_grad, dtype=DTypes.KFLOAT16)
+    bias_grad = FP16Tensor(deepcopy(bias_grad), dtype=DTypes.KFLOAT16)
 
     linear.weight.grad = weight_grad
     linear.bias.grad = bias_grad
@@ -58,7 +58,7 @@ def test_fp8_optim_default_initiation():
 #     linear = nn.Linear(16, 16, device="cuda")
 #     fp8_linear = convert_linear_to_fp8(deepcopy(linear), accum_qtype=DTypes.KFLOAT16)
 #     fp8_optim = FP8Adam(fp8_linear.parameters())
-    
+
 #     assert 1 == 1
 
 
@@ -98,7 +98,6 @@ def test_fp8_optim_master_weights_fp16_and_fp8():
 @pytest.mark.parametrize("weight_decay", [0, 0.5])
 def test_fp8adam_optimizer_states(learning_rate, betas, eps, weight_decay):
     # NOTE: this one works
-    # learning_rate, betas, eps, weight_decay = ((0.001, (0.9, 0.999), 1e-08, 0))
     input = torch.randn(16, 16, device="cuda")
     linear = nn.Linear(16, 16, device="cuda")
     fp8_linear = convert_linear_to_fp8(deepcopy(linear), accum_qtype=DTypes.KFLOAT16)
@@ -130,12 +129,12 @@ def test_fp8adam_optimizer_states(learning_rate, betas, eps, weight_decay):
 
 
 def test_fp8adam_optimizer_state_dtypes():
-    # input = torch.randn(16, 16, device="cuda")
+    input = torch.randn(16, 16, device="cuda")
     linear = nn.Linear(16, 16, device="cuda")
     fp8_linear = convert_linear_to_fp8(deepcopy(linear), accum_qtype=DTypes.KFLOAT16)
 
     fp8_optim = FP8Adam(fp8_linear.parameters())
-    set_fake_fp8_grads(fp8_linear)
+    fp8_linear(input).sum().backward()
     fp8_optim.step()
 
     for _, fp8_state in fp8_optim.state.items():
@@ -149,14 +148,16 @@ def test_fp8adam_optimizer_state_dtypes():
 
 
 def test_fp8adam_step():
-    learning_rate, betas, eps, weight_decay = (0.001, (0.9, 0.999), 1e-08, 0)
+    LR, BETAS, EPS, WEIGHT_DECAY = (0.001, (0.9, 0.999), 1e-08, 0)
 
+    input = torch.randn(16, 16, device="cuda")
     linear = nn.Linear(16, 16, device="cuda")
     fp8_linear = convert_linear_to_fp8(deepcopy(linear), accum_qtype=DTypes.KFLOAT16)
 
-    optim = Adam(linear.parameters(), learning_rate, betas, eps, weight_decay)
-    fp8_optim = FP8Adam(fp8_linear.parameters(), learning_rate, betas, eps, weight_decay)
-    input = torch.randn(16, 16, device="cuda")
+    # optim = Adam(linear.parameters(), LR, BETAS, EPS, WEIGHT_DECAY)
+    # fp8_optim = FP8Adam(fp8_linear.parameters(), LR, BETAS, EPS, WEIGHT_DECAY)
+    optim = Adam(linear.parameters(), weight_decay=WEIGHT_DECAY)
+    fp8_optim = FP8Adam(fp8_linear.parameters(), weight_decay=WEIGHT_DECAY)
 
     for _ in range(1):
         linear(input).sum().backward()
@@ -192,50 +193,54 @@ def test_fp8adam_zero_grad():
     assert [p.grad is None for p in fp8_linear.parameters()]
 
 
-@pytest.mark.parametrize("scaling_value", [
-    torch.tensor(2, dtype=torch.float32).pow(1),
-    torch.tensor(2, dtype=torch.float32).pow(2),
-    torch.tensor(2, dtype=torch.float32).pow(3),
-    torch.tensor(2, dtype=torch.float32).pow(4),
-    torch.tensor(2, dtype=torch.float32).pow(5),
-    torch.tensor(2, dtype=torch.float32).pow(6),
-    torch.tensor(2, dtype=torch.float32).pow(7),
-    torch.tensor(2, dtype=torch.float32).pow(8),
-    torch.tensor(2, dtype=torch.float32).pow(9),
-    torch.tensor(2, dtype=torch.float32).pow(10),
-    torch.tensor(2, dtype=torch.float32).pow(11),
-    torch.tensor(2, dtype=torch.float32).pow(12),
-    torch.tensor(2, dtype=torch.float32).pow(13),
-    torch.tensor(2, dtype=torch.float32).pow(14),
-    torch.tensor(2, dtype=torch.float32).pow(15),
-])
+@pytest.mark.parametrize(
+    "scaling_value",
+    [
+        torch.tensor(2, dtype=torch.float32).pow(1),
+        torch.tensor(2, dtype=torch.float32).pow(2),
+        torch.tensor(2, dtype=torch.float32).pow(3),
+        torch.tensor(2, dtype=torch.float32).pow(4),
+        torch.tensor(2, dtype=torch.float32).pow(5),
+        torch.tensor(2, dtype=torch.float32).pow(6),
+        torch.tensor(2, dtype=torch.float32).pow(7),
+        torch.tensor(2, dtype=torch.float32).pow(8),
+        torch.tensor(2, dtype=torch.float32).pow(9),
+        torch.tensor(2, dtype=torch.float32).pow(10),
+        torch.tensor(2, dtype=torch.float32).pow(11),
+        torch.tensor(2, dtype=torch.float32).pow(12),
+        torch.tensor(2, dtype=torch.float32).pow(13),
+        torch.tensor(2, dtype=torch.float32).pow(14),
+        torch.tensor(2, dtype=torch.float32).pow(15),
+    ],
+)
 def test_fp8adam_step_with_loss_scaling(scaling_value):
-    LR, BETAS, EPS, WEIGHT_DECAY = ((0.001, (0.9, 0.999), 1e-08, 0))
-    
+    LR, BETAS, EPS, WEIGHT_DECAY = (0.001, (0.9, 0.999), 1e-08, 0)
+    # LR, BETAS, EPS, WEIGHT_DECAY = ((0.001, (0.9, 0.999), 1e-08, 0))
+
+    input = torch.randn(16, 16, device="cuda")
     ref_linear = nn.Linear(16, 16, device="cuda")
     fp8_linear = convert_linear_to_fp8(deepcopy(ref_linear), accum_qtype=DTypes.KFLOAT16)
     loss_scaler = LossScaler(scaling_value)
 
     ref_optim = Adam(ref_linear.parameters(), LR, BETAS, EPS, WEIGHT_DECAY)
     fp8_optim = FP8Adam(fp8_linear.parameters(), LR, BETAS, EPS, WEIGHT_DECAY)
-    input = torch.randn(16, 16, device="cuda")
 
     for _ in range(1):
         ref_loss = ref_linear(input).sum()
         ref_loss.backward()
         ref_optim.step()
-        # optim.zero_grad()
-        
+        ref_optim.zero_grad()
+
         loss = fp8_linear(input).sum()
         loss = loss.to(torch.float32)
         scaled_loss = loss_scaler.scale(loss)
-        
+
         # TODO(xrsrke): remove these sanity checks after debugging
         assert not torch.allclose(scaled_loss, ref_loss)
-        
+
         scaled_loss.backward()
         loss_scaler.step(fp8_optim)
-        # fp8_optim.zero_grad()
+        fp8_optim.zero_grad()
 
     # NOTE: since optimizer update depends on the gradients
     # and in this test we only want to check whether fp8 optim step is correct
@@ -244,6 +249,7 @@ def test_fp8adam_step_with_loss_scaling(scaling_value):
     weight_fp32 = convert_tensor_from_fp8(fp8_linear.weight.data, fp8_linear.weight.data.fp8_meta, torch.float32)
     # NOTE: this specific threshold is based on the FP8-LM implementation
     # the paper shows that it don't hurt convergence
+    # source: https://github.com/Azure/MS-AMP/blob/0a2cd721fa68ee725e3b2fb132df02ddb8069d62/tests/optim/test_adamw.py#L85
     torch.testing.assert_allclose(weight_fp32, ref_linear.weight, rtol=0, atol=3e-4)
     torch.testing.assert_allclose(fp8_linear.bias, ref_linear.bias, rtol=0, atol=3e-4)
 

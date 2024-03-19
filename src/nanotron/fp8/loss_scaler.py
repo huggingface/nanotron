@@ -1,7 +1,11 @@
+from typing import List, Union
+
 import torch
+from torch import nn
 from torch.optim import Optimizer
 
 from nanotron.fp8.constants import LS_INITIAL_SCALING_FACTOR, LS_INITIAL_SCALING_VALUE, LS_INTERVAL
+from nanotron.fp8.parameter import FP8Parameter
 from nanotron.fp8.tensor import FP8Tensor, FP16Tensor
 
 
@@ -16,6 +20,8 @@ class LossScaler:
     ):
         # NOTE: because the precision of these scaling factors
         # affect the precision of the gradients
+        assert isinstance(scaling_value, torch.Tensor)
+        assert isinstance(scaling_factor, torch.Tensor)
         assert scaling_value.dtype == torch.float32
         assert scaling_factor.dtype == torch.float32
         assert interval > 0
@@ -52,15 +58,27 @@ class LossScaler:
             # NOTE: unscale gradients
             for group in optim.param_groups:
                 for p in group["params"]:
-                    if p.grad is not None:
-                        # TODO(xrsrke): do inplace operation
-                        if isinstance(p.grad, FP8Tensor) or isinstance(p.grad, FP16Tensor):
-                            # p.grad.fp8_meta._inverse_scale = p.grad.fp8_meta.inverse_scale * (1 / self.scaling_value)
-                            p.grad.mul_(2/self.scaling_value)
-                        else:
-                            p.grad = p.grad / self.scaling_value
+                    # if p.requires_grad and p.grad is not None:
+                    #     # TODO(xrsrke): do inplace operation
+                    #     if isinstance(p.grad, FP8Tensor) or isinstance(p.grad, FP16Tensor):
+                    #         p.grad.mul_(1 / self.scaling_value)
+                    #     else:
+                    #         p.grad = p.grad / self.scaling_value
+                    self._unscale_param_(p)
 
             optim.step(*args, **kwargs)
+
+    def unscale_(self, params: List[Union[nn.Parameter, FP8Parameter]]):
+        """Unscale the gradients of parameters in place."""
+        for p in params:
+            self._unscale_param_(p)
+
+    def _unscale_param_(self, p: Union[nn.Parameter, FP8Parameter]):
+        if p.requires_grad and p.grad is not None:
+            if isinstance(p.grad, FP8Tensor) or isinstance(p.grad, FP16Tensor):
+                p.grad.mul_(1 / self.scaling_value)
+            else:
+                p.grad.div_(self.scaling_value)
 
     def update(self):
         # TODO(xrsrke): remove this
@@ -76,6 +94,7 @@ def is_overflow(tensor: torch.Tensor) -> bool:
         return True
     else:
         return False
+
 
 def is_underflow():
     pass

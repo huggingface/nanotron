@@ -244,6 +244,23 @@ def test_clone_fp8_tensor(tensor_cls, dtype):
     assert id(cloned_fp8_tensor.fp8_meta) != id(fp8_tensor.fp8_meta)
 
 
+@pytest.mark.parametrize(
+    "tensor_cls, dtype",
+    [
+        (FP8Tensor, DTypes.FP8E4M3),
+        (FP8Tensor, DTypes.FP8E5M2),
+        (FP16Tensor, DTypes.KFLOAT16),
+    ],
+)
+def test_determistic_quantization(tensor_cls, dtype):
+    tensor = torch.randn((64, 64), dtype=torch.float32, device="cuda:0")
+    fp8_tensor = tensor_cls(deepcopy(tensor), dtype)
+    ref_fp8_tensor = tensor_cls(deepcopy(tensor), dtype)
+
+    assert torch.equal(fp8_tensor, ref_fp8_tensor)
+    assert fp8_tensor.fp8_meta == ref_fp8_tensor.fp8_meta
+
+
 # TODO(xrsrke): test it has all the methods of torch.Tensor
 
 # TODO(xrsrke): test it has all the attributes of its input tensor
