@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from abc import abstractstaticmethod
+from copy import deepcopy
+from typing import cast
 
 import torch
 import transformer_engine as te  # noqa
@@ -46,23 +48,33 @@ class LowPrecisionTensor(torch.Tensor):
         raise NotImplementedError
 
     def mul_(self, other: torch.Tensor):
+        from nanotron.fp8.meta import FP8Meta
+
         assert isinstance(other, torch.Tensor)
-        assert other.ndim == 0 or other.ndim == 1, "FP8Tensor don't support directly do matrix multiplication in FP8. You should cast it to a higher precision format."
+        assert (
+            other.ndim == 0 or other.ndim == 1
+        ), "FP8Tensor don't support directly do matrix multiplication in FP8. You should cast it to a higher precision format."
 
         other = other.squeeze() if other.ndim == 1 else other
-        self.fp8_meta._inverse_scale = self.fp8_meta.inverse_scale * other
+        self.fp8_meta = cast(FP8Meta, self.fp8_meta)
+        self.fp8_meta.scale = 1 / (self.fp8_meta.inverse_scale * other)
 
     def div_(self, other: torch.Tensor):
         assert isinstance(other, torch.Tensor)
-        assert other.ndim == 1, "FP8Tensor don't support directly do matrix division in FP8. You should cast it to a higher precision format."
-
+        assert (
+            other.ndim == 0 or other.ndim == 1
+        ), "FP8Tensor don't support directly do matrix division in FP8. You should cast it to a higher precision format."
         self.mul_(1 / other)
 
     def __add__(self, other: torch.Tensor):
-        raise ValueError("You can't directly add a FP8Tensor with another tensor. You should cast it to a higher precision format")
+        raise ValueError(
+            "You can't directly add a FP8Tensor with another tensor. You should cast it to a higher precision format"
+        )
 
     def __sub__(self, other: torch.Tensor):
-        raise ValueError("You can't directly subtract a FP8Tensor with another tensor. You should cast it to a higher precision format")
+        raise ValueError(
+            "You can't directly subtract a FP8Tensor with another tensor. You should cast it to a higher precision format"
+        )
 
     def __repr__(self) -> str:
         if hasattr(self, "fp8_meta"):
@@ -70,7 +82,9 @@ class LowPrecisionTensor(torch.Tensor):
         return super().__repr__()
 
     def clone(self) -> FP8Tensor:
-        return FP8Tensor(self.data.clone(), self.fp8_meta.dtype)
+        tensor = super().clone()
+        tensor.fp8_meta = deepcopy(self.fp8_meta)
+        return tensor
 
 
 class FP8Tensor(LowPrecisionTensor):
@@ -80,7 +94,7 @@ class FP8Tensor(LowPrecisionTensor):
     def _quantize(tensor: torch.Tensor, fp8_meta: "FP8Meta") -> torch.Tensor:
         assert isinstance(tensor, torch.Tensor)
         assert tensor.dtype not in FP8_DTYPES, "The tensor already quantized to FP8"
-        
+
         return convert_tensor_to_fp8(tensor, fp8_meta)
 
 
@@ -135,24 +149,7 @@ def convert_tensor_from_fp8(tensor: torch.Tensor, meta, dtype: torch.dtype) -> t
     return tex.cast_from_fp8(tensor, meta.inverse_scale, tensor_dtype, output_dtype)
 
 
-# def convert_tensor_to_fp16(tensor: torch.Tensor) -> torch.Tensor:
-#     from nanotron.fp8.constants import INITIAL_SCALING_FACTOR
-#     from nanotron.fp8.meta import FP8Meta
-#     from nanotron.fp8.tensor import update_scaling_factor
-
-#     dtype = DTypes.KFLOAT16
-#     amax = tensor.abs().max().clone()
-#     scale = update_scaling_factor(amax, torch.tensor(INITIAL_SCALING_FACTOR, dtype=torch.float32), dtype)
-#     meta = FP8Meta(amax, scale, dtype)
-#     return (tensor * meta.scale).to(torch.float16), meta
-
-
-# def convert_tensor_from_fp16(tensor: torch.Tensor, meta: FP8Meta, dtype: torch.dtype) -> torch.Tensor:
-#     return (tensor * meta.inverse_scale).to(dtype)
-
-
 def convert_tensor_from_fp16(tensor: FP16Tensor, dtype: torch.dtype) -> torch.Tensor:
-    # assert isinstance(tensor, FP16Tensor)
     assert isinstance(dtype, torch.dtype)
     # TODO(xrsrke): this is a hacky way to turn a fp16 tensor to a non-quantize tensor
     inverse_scale = tensor.fp8_meta.inverse_scale
@@ -162,7 +159,6 @@ def convert_tensor_from_fp16(tensor: FP16Tensor, dtype: torch.dtype) -> torch.Te
 
 
 def _convert_tensor_from_fp16(tensor: FP16Tensor, fp8_meta, dtype: torch.dtype) -> torch.Tensor:
-    # assert isinstance(tensor, FP16Tensor)
     assert isinstance(dtype, torch.dtype)
 
     inverse_scale = fp8_meta.inverse_scale
