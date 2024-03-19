@@ -53,6 +53,8 @@ class Nanoset(torch.utils.data.Dataset):
         self.index_split = index_split
         self.config = config
 
+        # Create unique identifier
+
         self.unique_identifiers = OrderedDict()
         self.unique_identifiers["class"] = type(self).__name__
         self.unique_identifiers["path_prefix"] = self.indexed_dataset.path_prefix
@@ -64,14 +66,7 @@ class Nanoset(torch.utils.data.Dataset):
         self.unique_description = json.dumps(self.unique_identifiers, indent=4)
         self.unique_description_hash = hashlib.md5(self.unique_description.encode("utf-8")).hexdigest()
 
-        self._finalize()
-
-    def _finalize(self) -> None:
-        """Abstract method implementation
-
-        Load or build/cache the document, sample, and shuffle indices
-        """
-        assert isinstance(self.config, NanosetConfig)
+        # Load or build/cache the document, sample, and shuffle indices
 
         (
             self.document_index,
@@ -88,40 +83,15 @@ class Nanoset(torch.utils.data.Dataset):
         return self.sample_index.shape[0] - 1
 
     def __getitem__(self, idx: int) -> Dict[str, numpy.ndarray]:
-        """Abstract method implementation
+        """Get the text (token ids) for a given index
 
         Args:
             idx (int): The index into the dataset
 
         Returns:
-            Dict[str, numpy.ndarray]: The text ids and (optionally) the document ids wrapped in a
-            dictionary
+            Dict[str, numpy.ndarray]: The token ids wrapped in a dictionary
         """
-        text, _ = self._query_document_sample_shuffle_indices(idx)
 
-        return {"text": text}
-
-    @staticmethod
-    def _key_config_attributes() -> List[str]:
-        """Return all config attributes which contribute to uniquely identifying the dataset.
-
-        These attributes will be used to build a uniquely identifying string and MD5 hash which
-        will be used to cache/load the dataset from run to run.
-
-        Returns:
-            List[str]: The key config attributes
-        """
-        return ["split", "random_seed", "sequence_length"]
-
-    def _query_document_sample_shuffle_indices(self, idx: int) -> Tuple[numpy.ndarray, numpy.ndarray]:
-        """Get the text (token ids) and document ids for a given index
-
-        Args:
-            idx (int): The index into the dataset
-
-        Returns:
-            Tuple[numpy.ndarray, numpy.ndarray]: The text ids and document ids
-        """
         # Do the shuffle mapping
         idx = self.shuffle_index[idx]
 
@@ -129,16 +99,13 @@ class Nanoset(torch.utils.data.Dataset):
         doc_index_beg, doc_index_beg_offset = self.sample_index[idx]
         doc_index_end, doc_index_end_offset = self.sample_index[idx + 1]
 
-        document_ids = []
-        sample_parts = []
+        tokens = []
 
         # Sample spans a single document
         if doc_index_beg == doc_index_end:
-            # Add the document id
-            document_ids.append(self.document_index[doc_index_beg])
 
             # Add the entire sample
-            sample_parts.append(
+            tokens.append(
                 self.indexed_dataset.get(
                     self.document_index[doc_index_beg],
                     offset=doc_index_beg_offset,
@@ -149,18 +116,13 @@ class Nanoset(torch.utils.data.Dataset):
         # Sample spans multiple documents
         else:
             for i in range(doc_index_beg, doc_index_end + 1):
-                # Add the document id
-                document_ids.append(self.document_index[i])
 
                 # Add the sample part
                 offset = 0 if i > doc_index_beg else doc_index_beg_offset
                 length = None if i < doc_index_end else doc_index_end_offset + 1
-                sample_parts.append(self.indexed_dataset.get(self.document_index[i], offset=offset, length=length))
+                tokens.append(self.indexed_dataset.get(self.document_index[i], offset=offset, length=length))
 
-        return (
-            numpy.array(numpy.concatenate(sample_parts), dtype=numpy.int64),
-            numpy.array(document_ids, dtype=numpy.int64),
-        )
+        return {"text": numpy.array(numpy.concatenate(tokens), dtype=numpy.int64)}
 
     def _build_document_sample_shuffle_indices(
         self,
@@ -363,6 +325,18 @@ class Nanoset(torch.utils.data.Dataset):
         log_rank(f"> Total number of epochs: {num_epochs}", logger=logger, level=logging.INFO, rank=0)
 
         return document_index, sample_index, shuffle_index
+
+    @staticmethod
+    def _key_config_attributes() -> List[str]:
+        """Return all config attributes which contribute to uniquely identifying the dataset.
+
+        These attributes will be used to build a uniquely identifying string and MD5 hash which
+        will be used to cache/load the dataset from run to run.
+
+        Returns:
+            List[str]: The key config attributes
+        """
+        return ["split", "random_seed", "sequence_length"]
 
 
 def _get_num_tokens_per_epoch(indexed_dataset: MMapIndexedDataset, indices: numpy.ndarray) -> int:

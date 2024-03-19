@@ -56,6 +56,8 @@ class BlendedNanoset(torch.utils.data.Dataset):
         self.size = size
         self.config = config
 
+        # Create unique identifier
+
         unique_identifiers = OrderedDict()
         unique_identifiers["class"] = type(self).__name__
         unique_identifiers["datasets"] = [dataset.unique_identifiers for dataset in self.datasets]
