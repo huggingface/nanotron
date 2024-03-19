@@ -36,6 +36,7 @@ class LossScaler:
     def scale(self, loss: torch.Tensor) -> torch.Tensor:
         # TODO(xrsrke): add autocast loss to float32 before scaling it
         # TODO(xrsrke): do inplace operation
+        loss = loss.to(torch.float32) if loss.dtype != torch.float32 else loss
         return loss * self.scaling_value
 
     def step(self, optim: Optimizer, *args, **kwargs):
@@ -58,12 +59,6 @@ class LossScaler:
             # NOTE: unscale gradients
             for group in optim.param_groups:
                 for p in group["params"]:
-                    # if p.requires_grad and p.grad is not None:
-                    #     # TODO(xrsrke): do inplace operation
-                    #     if isinstance(p.grad, FP8Tensor) or isinstance(p.grad, FP16Tensor):
-                    #         p.grad.mul_(1 / self.scaling_value)
-                    #     else:
-                    #         p.grad = p.grad / self.scaling_value
                     self._unscale_param_(p)
 
             optim.step(*args, **kwargs)

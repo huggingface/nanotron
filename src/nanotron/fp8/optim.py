@@ -5,7 +5,7 @@ import torch
 from torch import nn
 from torch.optim import Optimizer
 
-from nanotron.fp8.constants import FP8LM_RECIPE, FP8_DTYPES
+from nanotron.fp8.constants import FP8_DTYPES, FP8LM_RECIPE
 from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.parameter import FP8Parameter
 from nanotron.fp8.tensor import (
@@ -186,7 +186,7 @@ class FP8Adam(Optimizer):
             raise ValueError("Invalid beta parameter at index 1: {}".format(betas[1]))
 
         assert out_dtype in DTypes, "Please provide an accumulation precision format"
-        
+
         defaults = {"lr": lr, "betas": betas, "eps": eps, "weight_decay": weight_decay, "amsgrad": amsgrad}
 
         super().__init__(params, defaults)
@@ -278,8 +278,12 @@ class FP8Adam(Optimizer):
                 # assert isinstance(p, FP8Parameter) or isinstance(p, torch.Tensor)
                 # assert isinstance(grad, FP8Tensor) or isinstance(grad, FP16Tensor)
                 # NOTE: sanity check
-                assert (isinstance(p, FP8Parameter) and p.dtype in FP8_DTYPES) or (isinstance(p, torch.Tensor) and p.dtype == torch.float16)
-                assert (isinstance(grad, FP8Tensor) and grad.dtype in FP8_DTYPES) or (isinstance(grad, torch.Tensor) and grad.dtype == torch.float16)
+                assert (isinstance(p, FP8Parameter) and p.dtype in FP8_DTYPES) or (
+                    isinstance(p, torch.Tensor) and p.dtype == torch.float16
+                )
+                assert (isinstance(grad, FP8Tensor) and grad.dtype in FP8_DTYPES) or (
+                    isinstance(grad, torch.Tensor) and grad.dtype == torch.float16
+                )
 
                 if p.ndim != 1:
                     print(f"[FP8Adam] original grad: {grad[:2, :2]} \n")
@@ -405,17 +409,20 @@ class FP8Adam(Optimizer):
                         f"[FP8Adam] updated_exp_avg_fp8: updated_exp_avg_fp8.data={updated_exp_avg_fp8.data[:2, :2]}, updated_exp_avg_fp8.fp8_meta={updated_exp_avg_fp8.fp8_meta} \n"
                     )
 
-                fp32_p.addcdiv_(-step_size, fp32_exp_avg, denom)
+                # fp32_p.addcdiv_(-step_size, fp32_exp_avg, denom)
+                fp32_p.data = fp32_p.data - step_size * (fp32_exp_avg / denom)
 
                 if p.ndim != 1:
                     print(f"[FP8Adam] updated p_fp32: {fp32_p[:2, :2]} \n")
 
                 # NOTE: store back fp8
-                exp_avg.fp8_meta = updated_exp_avg_fp8.fp8_meta
-                exp_avg.copy_(updated_exp_avg_fp8)
+                # exp_avg.fp8_meta = updated_exp_avg_fp8.fp8_meta
+                # exp_avg.copy_(updated_exp_avg_fp8)
+                exp_avg.data = updated_exp_avg_fp8
 
                 fp8_exp_avg_sq = FP16Tensor(fp32_exp_avg_sq, dtype=DTypes.KFLOAT16)
-                exp_avg_sq.copy_(fp8_exp_avg_sq)
+                # exp_avg_sq.copy_(fp8_exp_avg_sq)
+                exp_avg_sq.data = fp8_exp_avg_sq
                 exp_avg_sq.fp8_meta = fp8_exp_avg_sq.fp8_meta
 
                 # NOTE: i tried to isinstance(p, FP8Parameter) but it's not working
@@ -423,16 +430,19 @@ class FP8Adam(Optimizer):
                 if p.ndim != 1:
                     self.fp32_p = fp32_p.clone()
                     updated_p_fp8 = FP8Tensor(fp32_p, dtype=p.data.fp8_meta.dtype)
-                    p.data.copy_(updated_p_fp8)
+                    self.updated_p_fp8 = updated_p_fp8
+                    # p.data.copy_(updated_p_fp8)
+                    p.data = updated_p_fp8
 
                     if p.ndim != 1:
                         print(
                             f"[FP8Adam] updated_p_fp8: updated_p_fp8.data={updated_p_fp8.data[:2, :2]}, updated_p_fp8.fp8_meta={updated_p_fp8.fp8_meta} \n"
                         )
                 else:
-                    fp16_p = FP16Tensor(fp32_p, dtype=DTypes.KFLOAT16)
-                    p.fp8_meta = fp16_p.fp8_meta
-                    p.data.copy_(fp16_p)
+                    # fp16_p = FP16Tensor(fp32_p, dtype=DTypes.KFLOAT16)
+                    # p.fp8_meta = fp16_p.fp8_meta
+                    fp16_p = fp32_p.to(torch.float16)
+                    p.data = fp16_p
 
                     # p.data = fp16_p
                     if p.ndim != 1:

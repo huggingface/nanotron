@@ -32,6 +32,14 @@ class LowPrecisionTensor(torch.Tensor):
         obj.fp8_meta = fp8_meta
         return obj
 
+    # @property
+    # def data(self) -> torch.Tensor:
+    #     return self.data
+
+    # @data.setter
+    # def data(self, tensor: torch.Tensor):
+    #     self.data = tensor
+
     @staticmethod
     def _get_metadata(tensor: torch.Tensor, dtype: DTypes) -> "FP8Meta":
         # TODO(xrsrke): there is a circular import issue

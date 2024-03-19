@@ -80,8 +80,7 @@ def test_fp8_gradients_correctness():
     ref_linear = convert_linear_to_fp8(deepcopy(fp32_linear), DTypes.KFLOAT16)
 
     ref_loss = ref_linear(input).sum()
-    loss = linear(input).sum()
-    scaled_loss = loss_scaler.scale(loss.to(torch.float32))
+    scaled_loss = loss_scaler.scale(linear(input).sum())
 
     assert torch.equal(scaled_loss, ref_loss.to(torch.float32) * SCALING_VALUE)
 

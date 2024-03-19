@@ -58,6 +58,26 @@ def test_optim():
     # torch.testing.assert_close(linear.bias, ref_linear.bias, rtol=0, atol=3e-4)
 
 
+# NOTE: because we do O3 optimization, it only available for deepspeed
+# so can't do reference test
+# def test_fwd():
+#     HIDDEN_SIZE = 16
+#     ref_linear = nn.Linear(HIDDEN_SIZE, HIDDEN_SIZE, device="cuda")
+#     msamp_linear = deepcopy(ref_linear)
+#     msamp_linear = LinearReplacer.replace(msamp_linear, MS_Dtypes.kfloat16)
+
+#     linear = convert_linear_to_fp8(deepcopy(ref_linear), accum_qtype=DTypes.KFLOAT16)
+
+#     input = torch.randn(HIDDEN_SIZE, HIDDEN_SIZE, device="cuda")
+
+#     ref_output = ref_linear(input)
+#     msamp_output = msamp_linear(input)
+#     output = linear(input)
+
+#     torch.testing.assert_close(msamp_output.float(), ref_output, rtol=0, atol=0.1)
+#     # assert torch.equal(output, msamp_output)
+
+
 def test_fwd_and_bwd():
     HIDDEN_SIZE = 16
     ref_linear = nn.Linear(HIDDEN_SIZE, HIDDEN_SIZE, device="cuda")
@@ -78,6 +98,9 @@ def test_fwd_and_bwd():
     ref_output.sum().backward()
     output.sum().backward()
 
+    # weight_fp32 = convert_tensor_from_fp8(linear.weight, linear.weight.fp8_meta, torch.float32)
+    # assert torch.equal(weight_fp32, msamp_linear.weight.grad.float())
+
     torch.testing.assert_close(msamp_linear.weight.grad.float(), ref_linear.weight.grad, rtol=0.1, atol=0.1)
     torch.testing.assert_close(msamp_linear.bias.grad, ref_linear.bias.grad, rtol=0, atol=0.1)
 
@@ -96,6 +119,7 @@ def test_quantize_and_dequantize_tensor_in_fp8(size, dtype, msamp_dtype):
 
     fp8_tensor = FP8Tensor(deepcopy(tensor), dtype=dtype)
 
+    assert torch.equal(fp8_tensor, msamp_fp8_tensor)
     assert not np.array_equal(fp8_tensor.cpu().numpy(), ref_tensor.cpu().numpy())
 
     tensor = convert_tensor_from_fp8(fp8_tensor, fp8_tensor.fp8_meta, torch.float32)
@@ -107,5 +131,6 @@ def test_quantize_and_dequantize_tensor_in_fp8(size, dtype, msamp_dtype):
     # NOTE: i tried to use rtol=0, atol=0.1
     # but even msamp fails to pass 6/8 tests
     # so now use 0.1, but better do a systematic tuning
+    assert torch.equal(tensor, msamp_tensor)
     torch.testing.assert_close(msamp_tensor, ref_tensor, rtol=0.1, atol=0.1)
     torch.testing.assert_close(tensor, ref_tensor, rtol=0.1, atol=0.1)

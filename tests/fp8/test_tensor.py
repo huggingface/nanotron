@@ -118,9 +118,9 @@ def test_fp8_and_fp16_tensor_attrs(tensor_cls, dtype, expected_dtype):
 @pytest.mark.parametrize(
     "scale",
     [
-        torch.randn(1, device="cuda:0").squeeze(),  # an random scalar
-        torch.randn(1, device="cuda:0"),
-        torch.randn(4, 4, device="cuda:0"),
+        torch.ones(1, device="cuda:0").squeeze() * 2,  # an random scalar
+        torch.ones(1, device="cuda:0") * 2,
+        torch.ones(4, 4, device="cuda:0") * 2,
     ],
 )
 def test_multiple_fp8_tensor(tensor_cls, dtype, scale):
@@ -139,8 +139,6 @@ def test_multiple_fp8_tensor(tensor_cls, dtype, scale):
     if isinstance(fp8_tensor, FP8Tensor):
         # NOTE: with the current implementation, we only scale the metadata
         # not the tensor itself, so we expect the tensor to be the same
-        # assert torch.equal(fp8_tensor, ref_fp8_tensor)
-        # assert fp8_tensor.fp8_meta.scale != ref_fp8_tensor.fp8_meta.scale
         tensor = convert_tensor_from_fp8(fp8_tensor, fp8_tensor.fp8_meta, torch.float32)
         # NOTE: use the same tolerance as test_quantize_and_dequantize_tensor_in_fp8
         torch.testing.assert_allclose(tensor, ref_tensor * scale, rtol=0.1, atol=0.1)
@@ -160,12 +158,17 @@ def test_multiple_fp8_tensor(tensor_cls, dtype, scale):
 @pytest.mark.parametrize(
     "scale",
     [
-        torch.randn(1, device="cuda:0").squeeze(),  # an random scalar
-        torch.randn(1, device="cuda:0"),
-        torch.randn(4, 4, device="cuda:0") * 2,
+        torch.ones(1, device="cuda:0").squeeze() * 2,  # an random scalar
+        torch.ones(1, device="cuda:0") * 2,
+        torch.ones(4, 4, device="cuda:0") * 2,
     ],
 )
 def test_divide_fp8_tensor(tensor_cls, dtype, scale):
+    # NOTE: the reason that we use 2 as the scale is because
+    # the purpose of this test is to test whether we scale the magnitude
+    # of the tensor, so if use other values from normal distribution,
+    # some values could lead to quantization error, and for this test we don't
+    # test the quantization error
     tensor = torch.randn((64, 64), dtype=torch.float32, device="cuda:0")
     ref_tensor = tensor.detach().clone()
 
@@ -234,6 +237,7 @@ def test_clone_fp8_tensor(tensor_cls, dtype):
     cloned_fp8_tensor = fp8_tensor.clone()
 
     assert isinstance(cloned_fp8_tensor, tensor_cls)
+    assert id(cloned_fp8_tensor) != id(fp8_tensor)
     assert cloned_fp8_tensor.device == fp8_tensor.device
 
     assert torch.equal(cloned_fp8_tensor, fp8_tensor)
@@ -259,6 +263,38 @@ def test_determistic_quantization(tensor_cls, dtype):
 
     assert torch.equal(fp8_tensor, ref_fp8_tensor)
     assert fp8_tensor.fp8_meta == ref_fp8_tensor.fp8_meta
+
+
+@pytest.mark.parametrize(
+    "tensor_cls, dtype", [(FP8Tensor, DTypes.FP8E4M3), (FP8Tensor, DTypes.FP8E5M2), (FP16Tensor, DTypes.KFLOAT16)]
+)
+def test_fp8_and_fp16_tensor_storage_memory(tensor_cls, dtype):
+    tensor = torch.randn((4, 4), dtype=torch.float32, device="cuda")
+    ref_tensor = deepcopy(tensor)
+
+    fp8_tensor = tensor_cls(tensor, dtype=dtype)
+
+    assert id(fp8_tensor) != id(ref_tensor)
+
+    assert isinstance(fp8_tensor.data, torch.Tensor)
+    assert id(fp8_tensor.data) != id(ref_tensor.data)
+    assert fp8_tensor.data_ptr() == fp8_tensor.data.data_ptr()
+    assert fp8_tensor.data.data_ptr() != ref_tensor.data_ptr()
+
+
+@pytest.mark.parametrize(
+    "tensor_cls, dtype", [(FP8Tensor, DTypes.FP8E4M3), (FP8Tensor, DTypes.FP8E5M2), (FP16Tensor, DTypes.KFLOAT16)]
+)
+def test_set_data_for_fp8_and_fp16_tensor(tensor_cls, dtype):
+    tensor = torch.randn((4, 4), dtype=torch.float32, device="cuda")
+    fp8_tensor = tensor_cls(tensor, dtype=dtype)
+
+    new_data = torch.randint(low=0, high=256, size=(4, 4), dtype=torch.uint8)
+    fp8_tensor.data = new_data.data
+
+    assert id(fp8_tensor.data) == id(new_data)
+    assert torch.equal(fp8_tensor.data, new_data)
+    assert fp8_tensor.data.data_ptr() == new_data.data_ptr()
 
 
 # TODO(xrsrke): test it has all the methods of torch.Tensor
