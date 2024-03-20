@@ -34,11 +34,15 @@ class LowPrecisionTensor(torch.Tensor):
 
     # @property
     # def data(self) -> torch.Tensor:
-    #     return self.data
+    #     # return self.__dict__['data']
+    #     return super().data
 
     # @data.setter
-    # def data(self, tensor: torch.Tensor):
-    #     self.data = tensor
+    # def data(self, data: FP8Tensor):
+    #     assert isinstance(data, FP8Tensor)
+    #     assert data.dtype == self.dtype, "The data must have the same dtype as the tensor"
+    #     self.__dict__['data'] = data.data
+    #     self.fp8_meta = data.fp8_meta
 
     @staticmethod
     def _get_metadata(tensor: torch.Tensor, dtype: DTypes) -> "FP8Meta":

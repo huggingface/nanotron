@@ -282,6 +282,28 @@ def test_fp8_and_fp16_tensor_storage_memory(tensor_cls, dtype):
     assert fp8_tensor.data.data_ptr() != ref_tensor.data_ptr()
 
 
+# @pytest.mark.parametrize(
+#     "tensor_cls, dtype", [(FP8Tensor, DTypes.FP8E4M3), (FP8Tensor, DTypes.FP8E5M2), (FP16Tensor, DTypes.KFLOAT16)]
+# )
+# def test_set_data_for_fp8_and_fp16_tensor(tensor_cls, dtype):
+#     tensor = torch.randn((4, 4), dtype=torch.float32, device="cuda")
+#     fp8_tensor = tensor_cls(tensor, dtype=dtype)
+
+#     new_data = torch.randint(low=0, high=256, size=(4, 4), dtype=torch.uint8)
+#     # new_data = tensor_cls(tensor, dtype=dtype)
+#     fp8_tensor.data = new_data.data
+
+#     # assert id(fp8_tensor.data) == id(new_data)
+#     # assert torch.equal(fp8_tensor.data, new_data)
+#     # assert fp8_tensor.data_ptr() == new_data.data.data_ptr()
+
+#     # assert fp8_tensor.fp8_meta is new_data.fp8_meta
+
+#     assert id(fp8_tensor.data) == id(new_data.data)
+#     assert torch.equal(fp8_tensor.data, new_data)
+#     assert fp8_tensor.data.data_ptr() == new_data.data_ptr()
+
+
 @pytest.mark.parametrize(
     "tensor_cls, dtype", [(FP8Tensor, DTypes.FP8E4M3), (FP8Tensor, DTypes.FP8E5M2), (FP16Tensor, DTypes.KFLOAT16)]
 )

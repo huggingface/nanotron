@@ -70,6 +70,8 @@ def test_set_data_in_fp8_parameter(dtype):
     assert torch.equal(fp8_parameter.data, new_fp8_data)
     assert fp8_parameter.data.data_ptr() == new_fp8_data.data_ptr()
 
+    assert fp8_parameter.fp8_meta is new_fp8_data.fp8_meta
+
 
 @pytest.mark.parametrize("dtype", [DTypes.FP8E4M3, DTypes.FP8E5M2])
 def test_set_gradient_in_fp8_parameter(dtype):
