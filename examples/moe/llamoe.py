@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """ PyTorch LLaMa MoE model."""
+import math
 from typing import Dict, Optional, Union
 
 import torch
@@ -33,10 +34,7 @@ from nanotron.models import NanotronModel
 from nanotron.nn.layer_norm import TritonRMSNorm
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter
-from nanotron.parallel.pipeline_parallel.block import (
-    PipelineBlock,
-    TensorPointer,
-)
+from nanotron.parallel.pipeline_parallel.block import PipelineBlock, TensorPointer
 from nanotron.parallel.pipeline_parallel.p2p import P2P
 from nanotron.parallel.tensor_parallel.functional import sharded_cross_entropy
 from nanotron.parallel.tensor_parallel.nn import (
@@ -48,6 +46,7 @@ from nanotron.parallel.tensor_parallel.nn import (
 from nanotron.random import RandomStates
 from nanotron.utils import checkpoint_method
 from torch import nn
+from torch.nn import init
 
 logger = logging.get_logger(__name__)
 
@@ -467,7 +466,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                     value_states,
                     rotary_cos=None,
                     rotary_sin=None,
-                    # TODO @nouamane: seems like this doesnt help to indicate padding in (for first iteration it's just 0)
+                    # TODO @nouamane: seems like this doesn't help to indicate padding in (for first iteration it's just 0)
                     cache_seqlens=position_offsets.contiguous(),
                     softmax_scale=None,
                     causal=True,
@@ -549,8 +548,7 @@ class LlaMoEDecoderLayer(nn.Module):
 
         self.block_sparse_moe = dMoE(
             config,
-            expert_parallel_group=parallel_context.expert_pg,
-            tp_pg=parallel_context.tp_pg,
+            parallel_context=parallel_context,
             parallel_config=parallel_config,
         )
 
@@ -834,12 +832,8 @@ class LlaMoEForTraining(NanotronModel):
         return {"loss": loss}
 
     @torch.no_grad()
-    def init_model_randomly(self, init_method, scaled_init_method):
+    def init_model_randomly(self, config):
         """Initialize model parameters randomly.
-        Args:
-            init_method (callable): Used for embedding/position/qkv weight in attention/first layer weight of mlp/ /lm_head/
-            scaled_init_method (callable): Used for o weight in attention/second layer weight of mlp/
-
         Note:
             Layernorm weight all 0 or 1 depending on `apply_layernorm_1p`
         """
@@ -850,122 +844,77 @@ class LlaMoEForTraining(NanotronModel):
         # Fix the root_model
         module_id_to_prefix[id(model)] = ""
 
-        # TODO @nouamane: initialization for dmoe
-        for module_name, module in model.named_modules():
+        std = config.model.init_method.std
+        sigma = config.model.init_method.std
+        num_layers = config.model.model_config.num_hidden_layers
+
+        for param_name, param in model.named_parameters():
+            assert isinstance(param, NanotronParameter)
+
+            module_name, param_name = param_name.rsplit(".", 1)
+
+            if param.is_tied:
+                tied_info = param.get_tied_info()
+                full_param_name = tied_info.get_full_name_from_module_id_to_prefix(
+                    module_id_to_prefix=module_id_to_prefix
+                )
+            else:
+                full_param_name = f"{module_name}.{param_name}"
+
+            if full_param_name in initialized_parameters:
+                # Already initialized
+                continue
+
+            module = model.get_submodule(module_name)
+
             if isinstance(module, TensorParallelColumnLinear):
-                assert {"weight"} == {name for name, _ in module.named_parameters()} or {"weight"} == {
-                    name for name, _ in module.named_parameters()
-                }
-                for param_name, param in module.named_parameters():
-                    assert isinstance(param, NanotronParameter)
-                    if param.is_tied:
-                        tied_info = param.get_tied_info()
-                        full_param_name = tied_info.get_full_name_from_module_id_to_prefix(
-                            module_id_to_prefix=module_id_to_prefix
-                        )
-                    else:
-                        full_param_name = f"{module_name}.{param_name}"
-
-                    if full_param_name in initialized_parameters:
-                        # Already initialized
-                        continue
-
-                    if "weight" == param_name:
-                        init_method(param)
-                    elif "bias" == param_name:
-                        param.zero_()
-                    else:
-                        raise ValueError(f"Who the fuck is {param_name}?")
-
-                    assert full_param_name not in initialized_parameters
-                    initialized_parameters.add(full_param_name)
-            elif isinstance(module, TensorParallelRowLinear):
-                assert {"weight"} == {name for name, _ in module.named_parameters()} or {"weight"} == {
-                    name for name, _ in module.named_parameters()
-                }
-                for param_name, param in module.named_parameters():
-                    assert isinstance(param, NanotronParameter)
-                    if param.is_tied:
-                        tied_info = param.get_tied_info()
-                        full_param_name = tied_info.get_full_name_from_module_id_to_prefix(
-                            module_id_to_prefix=module_id_to_prefix
-                        )
-                    else:
-                        full_param_name = f"{module_name}.{param_name}"
-
-                    if full_param_name in initialized_parameters:
-                        # Already initialized
-                        continue
-
-                    if "weight" == param_name:
-                        scaled_init_method(param)
-                    elif "bias" == param_name:
-                        param.zero_()
-                    else:
-                        raise ValueError(f"Who the fuck is {param_name}?")
-
-                    assert full_param_name not in initialized_parameters
-                    initialized_parameters.add(full_param_name)
-            elif isinstance(module, TritonRMSNorm):
-                assert {"weight"} == {name for name, _ in module.named_parameters()}
-                for param_name, param in module.named_parameters():
-                    assert isinstance(param, NanotronParameter)
-                    if param.is_tied:
-                        tied_info = param.get_tied_info()
-                        full_param_name = tied_info.get_full_name_from_module_id_to_prefix(
-                            module_id_to_prefix=module_id_to_prefix
-                        )
-                    else:
-                        full_param_name = f"{module_name}.{param_name}"
-
-                    if full_param_name in initialized_parameters:
-                        # Already initialized
-                        continue
-
-                    if "weight" == param_name:
-                        # TODO @thomasw21: Sometimes we actually want 0
-                        param.fill_(1)
-                    elif "bias" == param_name:
-                        param.zero_()
-                    else:
-                        raise ValueError(f"Who the fuck is {param_name}?")
-
-                    assert full_param_name not in initialized_parameters
-                    initialized_parameters.add(full_param_name)
-            elif isinstance(module, TensorParallelEmbedding):
-                # TODO @thomasw21: Handle tied embeddings
-                # Somehow Megatron-LM does something super complicated, https://github.com/NVIDIA/Megatron-LM/blob/2360d732a399dd818d40cbe32828f65b260dee11/megatron/core/tensor_parallel/layers.py#L96
-                # What it does:
-                #  - instantiate a buffer of the `full size` in fp32
-                #  - run init method on it
-                #  - shard result to get only a specific shard
-                # Instead I'm lazy and just going to run init_method, since they are scalar independent
-                assert {"weight"} == {name for name, _ in module.named_parameters()}
-
-                assert isinstance(module.weight, NanotronParameter)
-                if module.weight.is_tied:
-                    tied_info = module.weight.get_tied_info()
-                    full_param_name = tied_info.get_full_name_from_module_id_to_prefix(
-                        module_id_to_prefix=module_id_to_prefix
-                    )
+                if "weight" == param_name:
+                    nn.init.normal_(module.weight, mean=0.0, std=std)
+                elif "bias" == param_name:
+                    module.bias.zero_()
                 else:
-                    full_param_name = f"{module_name}.weight"
+                    raise ValueError(f"Who the fuck is {param_name}?")
+            elif isinstance(module, TensorParallelRowLinear):
+                if "weight" == param_name:
+                    nn.init.normal_(module.weight, mean=0.0, std=sigma / math.sqrt(2 * num_layers))
+                elif "bias" == param_name:
+                    param.zero_()
+                else:
+                    raise ValueError(f"Who the fuck is {param_name}?")
+            elif isinstance(module, TritonRMSNorm):
+                if "weight" == param_name:
+                    # TODO @thomasw21: Sometimes we actually want 0
+                    module.weight.fill_(1)
+                elif "bias" == param_name:
+                    module.bias.zero_()
+                else:
+                    raise ValueError(f"Who the fuck is {param_name}?")
+            elif isinstance(module, nn.Linear):
+                fan_in = None
 
-                if full_param_name in initialized_parameters:
-                    # Already initialized
-                    continue
+                if "weight" == param_name:
+                    fan_in, _ = init._calculate_fan_in_and_fan_out(module.weight)
+                    init.kaiming_uniform_(module.weight, a=math.sqrt(5))
+                elif "bias" == param_name:
+                    bound = 1 / math.sqrt(fan_in) if (fan_in is not None and fan_in > 0) else 0
+                    init.uniform_(module.bias, -bound, bound)
+                else:
+                    raise ValueError(f"Who the fuck is {param_name}?")
 
-                init_method(module.weight)
-                assert full_param_name not in initialized_parameters
-                initialized_parameters.add(full_param_name)
+            elif isinstance(module, TensorParallelEmbedding):
+                nn.init.normal_(module.weight, mean=0.0, std=std)
+            else:
+                raise Exception(f"Parameter {full_param_name} was not initialized")
 
-        # assert initialized_parameters == {
-        #     param.get_tied_info().get_full_name_from_module_id_to_prefix(module_id_to_prefix=module_id_to_prefix)
-        #     if param.is_tied
-        #     else name
-        #     for name, param in model.named_parameters()
-        # }, f"Somehow the initialized set of parameters don't match:\n - Expected: { {name for name, _ in model.named_parameters()} }\n - Got: {initialized_parameters}"
-        # TODO @nouamane: init dMoE
+            assert full_param_name not in initialized_parameters
+            initialized_parameters.add(full_param_name)
+
+        assert initialized_parameters == {
+            param.get_tied_info().get_full_name_from_module_id_to_prefix(module_id_to_prefix=module_id_to_prefix)
+            if param.is_tied
+            else name
+            for name, param in model.named_parameters()
+        }, f"Somehow the initialized set of parameters don't match:\n - Expected: { {name for name, _ in model.named_parameters()} }\n - Got: {initialized_parameters}"
 
     def get_block_compute_costs(self):
         """Computes the compute cost of each block in the model so that we can do a better job of load balancing."""
