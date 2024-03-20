@@ -15,7 +15,7 @@
 """ PyTorch LLaMa model.
 """
 from typing import Dict, Optional, Union
-
+import math
 import torch
 from flash_attn import bert_padding
 from flash_attn.flash_attn_interface import (
@@ -27,7 +27,7 @@ from torch import nn
 
 from nanotron import distributed as dist
 from nanotron import logging
-from nanotron.config import LlamaConfig, ParallelismArgs, RecomputeGranularity
+from nanotron.config import LlamaConfig, ParallelismArgs
 from nanotron.generation.generate_store import AttachableStore
 from nanotron.logging import log_rank
 from nanotron.models import NanotronModel
@@ -803,7 +803,6 @@ class LlamaModel(nn.Module):
             ffn_hidden_size=self.config.intermediate_size,
             seq_len=sequence_length,
             batch_size=global_batch_size,
-            recompute_granularity=self.parallel_config.recompute_granularity,
         )
 
         model_flops_per_s = model_flops / (iteration_time_in_sec * world_size * 1e12)
@@ -882,14 +881,10 @@ class LlamaForTraining(NanotronModel):
             label_mask=label_mask,
         )["loss"]
         return {"loss": loss}
-
+    
     @torch.no_grad()
-    def init_model_randomly(self, init_method, scaled_init_method):
+    def init_model_randomly(self, config):
         """Initialize model parameters randomly.
-        Args:
-            init_method (callable): Used for embedding/position/qkv weight in attention/first layer weight of mlp/ /lm_head/
-            scaled_init_method (callable): Used for o weight in attention/second layer weight of mlp/
-
         Note:
             Layernorm weight all 0 or 1 depending on `apply_layernorm_1p`
         """
@@ -900,126 +895,59 @@ class LlamaForTraining(NanotronModel):
         # Fix the root_model
         module_id_to_prefix[id(model)] = ""
 
-        for module_name, module in model.named_modules():
+        std = config.model.init_method.std
+        sigma = config.model.init_method.std
+        num_layers = config.model.model_config.num_hidden_layers
+        
+        for param_name, param in model.named_parameters():
+            assert isinstance(param, NanotronParameter)
+            
+            module_name, param_name = param_name.rsplit('.', 1)
+            
+            if param.is_tied:
+                tied_info = param.get_tied_info()
+                full_param_name = tied_info.get_full_name_from_module_id_to_prefix(
+                    module_id_to_prefix=module_id_to_prefix
+                )
+            else:
+                full_param_name = f"{module_name}.{param_name}"
+
+            if full_param_name in initialized_parameters:
+                # Already initialized
+                continue
+
+            module = model.get_submodule(module_name)
+
             if isinstance(module, TensorParallelColumnLinear):
-                # Somehow Megatron-LM does something super complicated, https://github.com/NVIDIA/Megatron-LM/blob/2360d732a399dd818d40cbe32828f65b260dee11/megatron/core/tensor_parallel/layers.py#L96
-                # What it does:
-                #  - instantiate a buffer of the `full size` in fp32
-                #  - run init method on it
-                #  - shard result to get only a specific shard
-                # Instead I'm lazy and just going to run init_method, since they are scalar independent
-                assert {"weight"} == {name for name, _ in module.named_parameters()} or {"weight"} == {
-                    name for name, _ in module.named_parameters()
-                }
-                for param_name, param in module.named_parameters():
-                    assert isinstance(param, NanotronParameter)
-                    if param.is_tied:
-                        tied_info = param.get_tied_info()
-                        full_param_name = tied_info.get_full_name_from_module_id_to_prefix(
-                            module_id_to_prefix=module_id_to_prefix
-                        )
-                    else:
-                        full_param_name = f"{module_name}.{param_name}"
-
-                    if full_param_name in initialized_parameters:
-                        # Already initialized
-                        continue
-
-                    if "weight" == param_name:
-                        init_method(param)
-                    elif "bias" == param_name:
-                        param.zero_()
-                    else:
-                        raise ValueError(f"Who the fuck is {param_name}?")
-
-                    assert full_param_name not in initialized_parameters
-                    initialized_parameters.add(full_param_name)
-            elif isinstance(module, TensorParallelRowLinear):
-                # Somehow Megatron-LM does something super complicated, https://github.com/NVIDIA/Megatron-LM/blob/2360d732a399dd818d40cbe32828f65b260dee11/megatron/core/tensor_parallel/layers.py#L96
-                # What it does:
-                #  - instantiate a buffer of the `full size` in fp32
-                #  - run init method on it
-                #  - shard result to get only a specific shard
-                # Instead I'm lazy and just going to run init_method, since they are scalar independent
-                assert {"weight"} == {name for name, _ in module.named_parameters()} or {"weight"} == {
-                    name for name, _ in module.named_parameters()
-                }
-                for param_name, param in module.named_parameters():
-                    assert isinstance(param, NanotronParameter)
-                    if param.is_tied:
-                        tied_info = param.get_tied_info()
-                        full_param_name = tied_info.get_full_name_from_module_id_to_prefix(
-                            module_id_to_prefix=module_id_to_prefix
-                        )
-                    else:
-                        full_param_name = f"{module_name}.{param_name}"
-
-                    if full_param_name in initialized_parameters:
-                        # Already initialized
-                        continue
-
-                    if "weight" == param_name:
-                        scaled_init_method(param)
-                    elif "bias" == param_name:
-                        param.zero_()
-                    else:
-                        raise ValueError(f"Who the fuck is {param_name}?")
-
-                    assert full_param_name not in initialized_parameters
-                    initialized_parameters.add(full_param_name)
-            elif isinstance(module, TritonRMSNorm):
-                assert {"weight"} == {name for name, _ in module.named_parameters()}
-                for param_name, param in module.named_parameters():
-                    assert isinstance(param, NanotronParameter)
-                    if param.is_tied:
-                        tied_info = param.get_tied_info()
-                        full_param_name = tied_info.get_full_name_from_module_id_to_prefix(
-                            module_id_to_prefix=module_id_to_prefix
-                        )
-                    else:
-                        full_param_name = f"{module_name}.{param_name}"
-
-                    if full_param_name in initialized_parameters:
-                        # Already initialized
-                        continue
-
-                    if "weight" == param_name:
-                        # TODO @thomasw21: Sometimes we actually want 0
-                        param.fill_(1)
-                    elif "bias" == param_name:
-                        param.zero_()
-                    else:
-                        raise ValueError(f"Who the fuck is {param_name}?")
-
-                    assert full_param_name not in initialized_parameters
-                    initialized_parameters.add(full_param_name)
-            elif isinstance(module, TensorParallelEmbedding):
-                # TODO @thomasw21: Handle tied embeddings
-                # Somehow Megatron-LM does something super complicated, https://github.com/NVIDIA/Megatron-LM/blob/2360d732a399dd818d40cbe32828f65b260dee11/megatron/core/tensor_parallel/layers.py#L96
-                # What it does:
-                #  - instantiate a buffer of the `full size` in fp32
-                #  - run init method on it
-                #  - shard result to get only a specific shard
-                # Instead I'm lazy and just going to run init_method, since they are scalar independent
-                assert {"weight"} == {name for name, _ in module.named_parameters()}
-
-                assert isinstance(module.weight, NanotronParameter)
-                if module.weight.is_tied:
-                    tied_info = module.weight.get_tied_info()
-                    full_param_name = tied_info.get_full_name_from_module_id_to_prefix(
-                        module_id_to_prefix=module_id_to_prefix
-                    )
+                if "weight" == param_name:
+                    torch.nn.init.normal_(module.weight, mean=0.0, std=std)
+                elif "bias" == param_name:
+                    module.bias.zero_()
                 else:
-                    full_param_name = f"{module_name}.weight"
+                    raise ValueError(f"Who the fuck is {param_name}?")
+            elif isinstance(module, TensorParallelRowLinear):
+                if "weight" == param_name:
+                    torch.nn.init.normal_(module.weight, mean=0.0, std=sigma / math.sqrt(2 * num_layers))
+                elif "bias" == param_name:
+                    param.zero_()
+                else:
+                    raise ValueError(f"Who the fuck is {param_name}?")
+            elif isinstance(module, TritonRMSNorm):
+                if "weight" == param_name:
+                    # TODO @thomasw21: Sometimes we actually want 0
+                    module.weight.fill_(1)
+                elif "bias" == param_name:
+                    module.bias.zero_()
+                else:
+                    raise ValueError(f"Who the fuck is {param_name}?")
+            elif isinstance(module, TensorParallelEmbedding):
+                nn.init.normal_(module.weight, mean=0.0, std=std)
+            else:
+                raise Exception(f"Parameter {full_param_name} was not intialized")
 
-                if full_param_name in initialized_parameters:
-                    # Already initialized
-                    continue
-
-                init_method(module.weight)
-                assert full_param_name not in initialized_parameters
-                initialized_parameters.add(full_param_name)
-
+            assert full_param_name not in initialized_parameters
+            initialized_parameters.add(full_param_name)
+            
         assert initialized_parameters == {
             param.get_tied_info().get_full_name_from_module_id_to_prefix(module_id_to_prefix=module_id_to_prefix)
             if param.is_tied
@@ -1052,7 +980,6 @@ def get_flops(
     seq_len,
     ffn_hidden_size,
     batch_size=1,
-    recompute_granularity=None,
 ):
     """Counts flops in an decoder-only model
     Args:
@@ -1064,7 +991,6 @@ def get_flops(
         vocab_size: size of the vocabulary
         seq_len: sequence length of the decoder
         batch_size: batch size
-        recompute_granularity: Activation recomputation method. Either None, FULL or SELECTIVE. Check Megatron-LM docs for more info.
     Returns:
         model_flops: flops in the model (should be independent of the hardware and model implementation)
         hardware_flops: flops in the hardware (actual flops performed on the hardware). Check 6.3 in https://arxiv.org/pdf/2205.05198.pdf
@@ -1110,17 +1036,6 @@ def get_flops(
     # both input and weight tensors
     model_flops = 3 * (decoder_flops_fwd + lm_head_flops_fwd)  # 1 for fwd + 2 for bwd
 
-    if recompute_granularity is None:
-        hardware_flops = model_flops
-    elif recompute_granularity is RecomputeGranularity.FULL:
-        # Note: we don't recompute lm head activs
-        hardware_flops = model_flops + decoder_flops_fwd  # + activ recomputation
-    elif recompute_granularity is RecomputeGranularity.SELECTIVE:
-        # all terms with s^2 are flops that are recomputed
-        # ref. appendix A: https://arxiv.org/pdf/2205.05198.pdf
-        recomputed_decoder_flops = decoder_qk_logits_flops_fwd + decoder_v_logits_flops_fwd
-        hardware_flops = model_flops + recomputed_decoder_flops
-    else:
-        raise ValueError("recompute_granularity must be one of 'full' or 'selective'")
+    hardware_flops = model_flops  # TODO: This is a placeholder for now
 
     return model_flops, hardware_flops

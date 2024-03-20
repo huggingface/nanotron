@@ -160,6 +160,5 @@ cython_debug/
 #.idea/
 
 .vscode
-.github
 
 checkpoints/

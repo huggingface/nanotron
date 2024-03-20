@@ -6,7 +6,17 @@ import time
 from dataclasses import asdict
 from pathlib import Path
 from pprint import pformat
-from typing import Callable, Dict, Iterable, Iterator, List, Optional, Tuple, Type, Union
+from typing import (
+    Callable,
+    Dict,
+    Iterable,
+    Iterator,
+    List,
+    Optional,
+    Tuple,
+    Type,
+    Union,
+)
 
 import torch
 from torch.nn.parallel import DistributedDataParallel
@@ -29,7 +39,14 @@ from nanotron.helpers import (
     log_throughput,
     lr_scheduler_builder,
 )
-from nanotron.logging import LoggerWriter, LogItem, human_format, log_memory, log_rank, set_logger_verbosity_format
+from nanotron.logging import (
+    LoggerWriter,
+    LogItem,
+    human_format,
+    log_memory,
+    log_rank,
+    set_ranks_logging_level,
+)
 from nanotron.models import NanotronModel, build_model
 from nanotron.models.base import check_model_has_grad
 from nanotron.models.llama import LlamaForTraining, RotaryEmbedding
@@ -40,22 +57,18 @@ from nanotron.parallel.data_parallel.utils import sync_gradients_across_dp
 from nanotron.parallel.parameters import NanotronParameter, sanity_check
 from nanotron.parallel.pipeline_parallel.engine import (
     PipelineEngine,
+    TensorPointer,
 )
-from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
 from nanotron.parallel.pipeline_parallel.utils import get_pp_rank_of
-from nanotron.parallel.tensor_parallel.nn import (
-    TensorParallelLinearMode,
-    TensorParallelRowLinear,
-)
+from nanotron.parallel.tensor_parallel.enum import TensorParallelLinearMode
+from nanotron.parallel.tensor_parallel.nn import TensorParallelRowLinear
 from nanotron.parallel.tied_parameters import (
     create_pg_for_tied_weights,
     get_tied_id_to_param,
     sync_tied_weights_gradients,
     tie_parameters,
 )
-from nanotron.random import (
-    set_random_seed,
-)
+from nanotron.random import set_random_seed
 from nanotron.sanity_checks import (
     after_optim_step_sanity_checks,
     after_tbi_sanity_checks,
@@ -65,13 +78,12 @@ from nanotron.sanity_checks import (
 from nanotron.serialize import (
     load_lr_scheduler,
     load_meta,
-    load_optimizer,
     load_weights,
     parse_ckpt_path,
     save,
     save_random_states,
 )
-from nanotron.utils import init_method_normal, scaled_init_method_normal
+from nanotron.serialize.optimizer import load_optimizer
 
 logger = logging.get_logger(__name__)
 
@@ -83,6 +95,11 @@ CONFIG_TO_MODEL_CLASS = {
     "LlamaConfig": LlamaForTraining,
     "Starcoder2Config": Starcoder2ForTraining,
 }
+
+try:
+    import wandb
+except ImportError:
+    wandb = None
 
 
 class DistributedTrainer:
@@ -120,19 +137,13 @@ class DistributedTrainer:
             tensor_parallel_size=self.config.parallelism.tp,
             pipeline_parallel_size=self.config.parallelism.pp,
             data_parallel_size=self.config.parallelism.dp,
+            expert_parallel_size=self.config.parallelism.expert_parallel_size,
         )
 
         self.pre_init()
 
         # Set log levels
-        if dist.get_rank(self.parallel_context.world_pg) == 0:
-            if self.config.logging.log_level is not None:
-                set_logger_verbosity_format(self.config.logging.log_level, parallel_context=self.parallel_context)
-        else:
-            if self.config.logging.log_level_replica is not None:
-                set_logger_verbosity_format(
-                    self.config.logging.log_level_replica, parallel_context=self.parallel_context
-                )
+        set_ranks_logging_level(parallel_context=self.parallel_context, logging_config=self.config.logging)
 
         # Log benchmark info
         if os.environ.get("NANOTRON_BENCHMARK", "0") == "1":
@@ -180,8 +191,6 @@ class DistributedTrainer:
             )
 
         # Define iteration start state
-        self.start_iteration_step: int
-        self.consumed_train_samples: int
         if self.init_checkpoint_path is not None:
             checkpoint_metadata = load_meta(
                 parallel_context=self.parallel_context, root_folder=self.init_checkpoint_path
@@ -198,7 +207,7 @@ class DistributedTrainer:
 
         # Setup tensorboard write and log writers on output rank
         self.logger_ranks = self.parallel_context.world_rank_matrix[
-            self.unwrapped_model.output_pp_rank, 0, 0
+            0, self.unwrapped_model.output_pp_rank, 0, 0
         ].flatten()
         self.loggerwriter = self.setup_log_writers()
 
@@ -223,7 +232,13 @@ class DistributedTrainer:
         pass
 
     def pre_training(self, *args, **kwargs):
-        pass
+        current_time = datetime.datetime.now().strftime("%d/%m/%Y_%H:%M:%S")
+        if dist.get_rank(self.parallel_context.world_pg) == self.logger_ranks[0] and wandb is not None:
+            wandb.init(
+                project=self.config.general.project,
+                name=f"{current_time}_{self.config.general.project}_{self.config.general.run}",
+                config={"nanotron_config": self.config.as_dict()},
+            )
 
     def post_train_step(self):
         pass
@@ -242,8 +257,6 @@ class DistributedTrainer:
             self.save_checkpoint()
 
         if isinstance(dataloader_or_dls, tuple):
-            dataloader_or_dls[1] if len(dataloader_or_dls) > 1 else None
-            dataloader_or_dls[2] if len(dataloader_or_dls) > 2 else None
             dataloader = dataloader_or_dls[0]
         else:
             dataloader = dataloader_or_dls
@@ -350,17 +363,8 @@ class DistributedTrainer:
                 for name, param in self.unwrapped_model.get_named_params_with_correct_tied()
                 if param.requires_grad
             ]
-            # TODO @nouamane: we need to split `world_rank_matrix` along PP axis, to separate ref from active model
             self.grad_norm_unclipped = clip_grad_norm(
-                mp_pg=self.parallel_context.world_ranks_to_pg[
-                    tuple(
-                        sorted(
-                            self.parallel_context.world_rank_matrix[
-                                :, dist.get_rank(self.parallel_context.dp_pg), :
-                            ].reshape(-1)
-                        )
-                    )
-                ],
+                mp_pg=self.parallel_context.mp_pg,
                 named_parameters=named_parameters,
                 grad_accumulator=self.grad_accumulator,
                 max_norm=self.config.optimizer.clip_grad,
@@ -466,6 +470,15 @@ class DistributedTrainer:
                     ]
                 )
 
+            # NOTE: only one rank writes to wandb
+            if dist.get_rank(self.parallel_context.world_pg) == self.logger_ranks[0] and wandb is not None:
+                wandb.log(
+                    {
+                        **{log_item.tag: log_item.scalar_value for log_item in log_entries},
+                        "iteration_step": self.iteration_step,
+                    }
+                )
+
             self.loggerwriter.add_scalars_from_list(log_entries, self.iteration_step)
 
         # Nanotron Benchmark mode: we log the throughput and exit
@@ -515,6 +528,11 @@ class DistributedTrainer:
         log_rank("Config:\n" + pformat(self.config), logger=logger, level=logging.INFO, rank=0)
         log_rank("Model Config:\n" + pformat(self.model_config), logger=logger, level=logging.INFO, rank=0)
 
+        model = self._init_model_instance()
+        model = self._load_model_checkpoint(model)
+        return model
+
+    def _init_model_instance(self) -> NanotronModel:
         model_config_cls = self.model_config.__class__.__name__
         assert (
             model_config_cls in CONFIG_TO_MODEL_CLASS
@@ -528,6 +546,9 @@ class DistributedTrainer:
                 random_states=self.random_states,
             ),
         )
+        return model
+
+    def _load_model_checkpoint(self, model: NanotronModel) -> NanotronModel:
         unwrapped_model = model.module if isinstance(model, DistributedDataParallel) else model
 
         # Load or initialize model weights
@@ -550,13 +571,9 @@ class DistributedTrainer:
                     root_folder=self.config.model.init_method.path,
                 )
             elif isinstance(self.config.model.init_method, RandomInit):
-                # Initialize model randomly
-                unwrapped_model.init_model_randomly(
-                    init_method=init_method_normal(self.config.model.init_method.std),
-                    scaled_init_method=scaled_init_method_normal(
-                        self.config.model.init_method.std, self.model_config.num_hidden_layers
-                    ),
-                )
+
+                unwrapped_model.init_model_randomly(config=self.config)
+
                 # Synchronize parameters so that the model is consistent
                 # sync all params across dp
                 for name, param in sorted(model.named_parameters(), key=lambda x: x[0]):
@@ -605,7 +622,7 @@ class DistributedTrainer:
             module.init_rotary_embeddings()
 
         # Mark some parameters as tied
-        mark_tied_parameters(model=model, parallel_context=parallel_context, parallel_config=parallel_config)
+        self._mark_tied_parameters(model=model, parallel_context=parallel_context, parallel_config=parallel_config)
 
         # count number of parameters
         num_params = sum(p.numel() for p in model.parameters())
@@ -741,6 +758,14 @@ class DistributedTrainer:
 
         return checkpoint_path
 
+    def _mark_tied_parameters(
+        self,
+        model: NanotronModel,
+        parallel_context: ParallelContext,
+        parallel_config: Optional[ParallelismArgs] = None,
+    ):
+        mark_tied_parameters(model=model, parallel_context=parallel_context, parallel_config=parallel_config)
+
 
 def mark_tied_parameters(
     model: NanotronModel, parallel_context: ParallelContext, parallel_config: Optional[ParallelismArgs] = None
@@ -753,6 +778,7 @@ def mark_tied_parameters(
                 target,
                 (
                     parallel_context.world_rank_matrix[
+                        dist.get_rank(parallel_context.expert_pg),
                         get_pp_rank_of(target, module=model),
                         dist.get_rank(parallel_context.dp_pg),
                         dist.get_rank(parallel_context.tp_pg),
@@ -768,14 +794,30 @@ def mark_tied_parameters(
     # Tie custom params
     model.tie_custom_params()
 
-    # Sync all parameters that have the same name and that are not sharded
+    # Sync all parameters that have the same name and that are not sharded across TP and EXP
     assert not isinstance(model, DistributedDataParallel), "model shouldn't be DDP at this point"
+    mark_unsharded_params_as_tied_across_tp(model, parallel_context, parallel_config)
+    mark_unsharded_params_as_tied_across_expert(model, parallel_context, parallel_config)
+
+    create_pg_for_tied_weights(root_module=model, parallel_context=parallel_context)
+
+
+def mark_unsharded_params_as_tied_across_tp(
+    model: NanotronModel, parallel_context: ParallelContext, parallel_config: "ParallelismArgs"
+):
     for module_name, module in model.named_modules():
         for param_name, param in module.named_parameters(recurse=False):
             name = f"{module_name}.{param_name}"
 
-            if isinstance(param, NanotronParameter) and (param.is_sharded or param.is_tied):
-                continue
+            if isinstance(param, NanotronParameter):
+                # We skip tying if param already tied or sharded along tp
+                if param.is_tied:
+                    continue
+
+                if param.is_sharded:
+                    sharded_info = param.get_sharded_info()
+                    if sharded_info.is_tp_sharded(parallel_context=parallel_context):
+                        continue
 
             if isinstance(module, TensorParallelRowLinear) and "bias" == param_name:
                 # bias for TensorParallelRowLinear only exists on TP=0 so we don't need to tie it
@@ -784,14 +826,8 @@ def mark_tied_parameters(
             shared_weights = [
                 (
                     name,
-                    # This adds all the tp_ranks in one go
-                    tuple(
-                        sorted(
-                            parallel_context.world_rank_matrix[
-                                dist.get_rank(parallel_context.pp_pg), dist.get_rank(parallel_context.dp_pg), :
-                            ]
-                        )
-                    ),
+                    # sync across TP group
+                    tuple(sorted(dist.get_process_group_ranks(parallel_context.tp_pg))),
                 )
             ]
 
@@ -806,4 +842,36 @@ def mark_tied_parameters(
                 root_module=model, ties=shared_weights, parallel_context=parallel_context, reduce_op=reduce_op
             )
 
-    create_pg_for_tied_weights(root_module=model, parallel_context=parallel_context)
+
+def mark_unsharded_params_as_tied_across_expert(
+    model: NanotronModel, parallel_context: ParallelContext, parallel_config: "ParallelismArgs"
+):
+    for module_name, module in model.named_modules():
+        for param_name, param in module.named_parameters(recurse=False):
+            name = f"{module_name}.{param_name}"
+
+            if isinstance(param, NanotronParameter):
+                # We skip tying if param already tied or sharded along expert
+                if param.is_tied:
+                    continue
+
+                if param.is_sharded:
+                    sharded_info = param.get_sharded_info()
+                    if sharded_info.is_expert_sharded(parallel_context):
+                        continue
+
+            shared_weights = [
+                (
+                    name,
+                    # sync across expert group
+                    tuple(sorted(dist.get_process_group_ranks(parallel_context.expert_pg))),
+                )
+            ]
+
+            # Besides MoE block which sees shards tokens, the rest of the model sees the full tokens
+            # so we don't need to reduce the gradients across expert group
+            reduce_op = None
+
+            tie_parameters(
+                root_module=model, ties=shared_weights, parallel_context=parallel_context, reduce_op=reduce_op
+            )

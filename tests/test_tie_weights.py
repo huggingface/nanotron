@@ -1,7 +1,7 @@
 import torch
 from helpers.distributed_tensor import assert_tensor_equal_over_group
 from helpers.exception import assert_fail_with
-from helpers.utils import init_distributed
+from helpers.utils import init_distributed, rerun_if_address_is_in_use
 from nanotron import distributed as dist
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter
@@ -13,6 +13,7 @@ from nanotron.parallel.tied_parameters import (
 from torch import nn
 
 
+@rerun_if_address_is_in_use()
 def test_tie_weight_in_same_device():
     init_distributed(tp=1, dp=1, pp=1)(_test_tie_weight_in_same_device)()
 
@@ -43,7 +44,10 @@ def _test_tie_weight_in_same_device(parallel_context: ParallelContext):
     assert id(weight0) == id(weight1)
     assert id(bias0) == id(bias1)
 
+    parallel_context.destroy()
 
+
+@rerun_if_address_is_in_use()
 def test_tie_weight_in_different_device():
     init_distributed(tp=1, dp=1, pp=2)(_test_tie_weight_in_different_device)()
 
@@ -111,7 +115,10 @@ def _test_tie_weight_in_different_device(parallel_context: ParallelContext):
     assert_tensor_equal_over_group(weight, group=group)
     assert_tensor_equal_over_group(bias, group=group)
 
+    parallel_context.destroy()
 
+
+@rerun_if_address_is_in_use()
 def test_tie_weight_across_dp_is_impossible():
     init_distributed(tp=1, dp=2, pp=1)(_test_tie_weight_across_dp_is_impossible)()
 
@@ -146,7 +153,10 @@ def _test_tie_weight_across_dp_is_impossible(parallel_context: ParallelContext):
             reduce_op=dist.ReduceOp.SUM,
         )
 
+    parallel_context.destroy()
 
+
+@rerun_if_address_is_in_use()
 def test_tie_weight_in_different_device_have_gradients_synchronized():
     init_distributed(tp=1, dp=1, pp=2)(_test_tie_weight_in_different_device_have_gradients_synchronized)()
 
@@ -218,3 +228,5 @@ def _test_tie_weight_in_different_device_have_gradients_synchronized(parallel_co
     # We check that we both gradients are synchronized
     assert_tensor_equal_over_group(weight.grad, group=group)
     assert_tensor_equal_over_group(bias.grad, group=group)
+
+    parallel_context.destroy()

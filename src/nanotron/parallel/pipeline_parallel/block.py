@@ -51,7 +51,7 @@ class PipelineBlock(nn.Module):
             self.pp_block = self.module_builder(**self.module_kwargs)
 
     def extra_repr(self) -> str:
-        return f"pp_rank={self.rank}" if hasattr(self, "rank") is not None else ""
+        return f"pp_rank={self.rank}" if hasattr(self, "rank") else ""
 
     def set_pipeline_state(self, pipeline_state: Optional[PipelineBatchState]):
         self.pipeline_state = pipeline_state

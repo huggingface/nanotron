@@ -2,6 +2,8 @@ import functools
 import inspect
 import math
 import os
+import random
+import socket
 from contextlib import ExitStack, contextmanager
 from typing import Callable, ContextManager, List, Optional
 
@@ -121,29 +123,21 @@ def get_untyped_storage(tensor: torch.Tensor) -> torch.UntypedStorage:
     else:
         return tensor.storage().untyped()
 
-
-def init_method_normal(sigma: float) -> Callable[[torch.Tensor], None]:
-    """Init method based on N(0, sigma)."""
-
-    def init_(tensor: torch.Tensor):
-        torch.nn.init.normal_(tensor, mean=0.0, std=sigma)
-
-    return init_
-
-
-def scaled_init_method_normal(sigma: float, num_layers: int) -> Callable[[torch.Tensor], None]:
-    """Init method based on N(0, sigma/sqrt(2*num_layers)."""
-    std = sigma / math.sqrt(2.0 * num_layers)
-
-    def init_(tensor: torch.Tensor):
-        torch.nn.init.normal_(tensor, mean=0.0, std=std)
-
-    return init_
-
-
 def tensor_from_untyped_storage(untyped_storage: torch.UntypedStorage, dtype: torch.dtype):
     # TODO @thomasw21: Figure out what's the best Pytorch way of building a tensor from a storage.
     device = untyped_storage.device
     tensor = torch.empty([], dtype=dtype, device=device)
     tensor.set_(source=untyped_storage)
     return tensor
+
+
+def find_free_port(min_port: int = 2000, max_port: int = 65000) -> int:
+    while True:
+        port = random.randint(min_port, max_port)
+        try:
+            with socket.socket() as sock:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                sock.bind(("localhost", port))
+                return port
+        except OSError:
+            continue
