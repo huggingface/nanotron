@@ -416,7 +416,7 @@ class FP8Adam(Optimizer):
                     print(f"[FP8Adam] updated p_fp32: {fp32_p[:2, :2]} \n")
 
                 # NOTE: store back fp8
-                # exp_avg.fp8_meta = updated_exp_avg_fp8.fp8_meta
+                exp_avg.fp8_meta = updated_exp_avg_fp8.fp8_meta
                 # exp_avg.copy_(updated_exp_avg_fp8)
                 exp_avg.data = updated_exp_avg_fp8
 
