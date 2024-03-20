@@ -98,12 +98,10 @@ class PretrainDatasetsArgs:
 @dataclass
 class NanosetDatasetsArgs:
     data_path: Union[str, dict]
-    split: Optional[str] = None
-    path_to_cache: Optional[str] = None
+    split: Optional[str] = "949,50,1"
+    path_to_cache: Optional[str] = "_"
 
     def __post_init__(self):
-        if self.split is None:
-            self.split = "949,50,1"
         if not os.path.isdir(self.path_to_cache):
             self.path_to_cache = None
 
