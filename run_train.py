@@ -211,9 +211,11 @@ def get_dataloader_for_training_stages(trainer: DistributedTrainer) -> Dict[str,
     if trainer.config.data.dataset_stages is None:
         return {"default": get_dataloader(trainer, trainer.config.data.dataset)}
     else:
-        sorted_stages = sorted(trainer.config.data.dataset_stages, key=lambda stage: stage.training_steps)
+        sorted_stages = sorted(trainer.config.data.dataset_stages, key=lambda stage: stage.starting_training_step)
         dataloaders = {}
         for idx, stage in enumerate(sorted_stages):
+            # NOTE: we only create the dataloader for the first stage,
+            # then we lazy initialize the dataloader for the other stages
             dataloader = (
                 get_dataloader(trainer, stage.dataset)
                 if idx == 0

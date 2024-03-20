@@ -96,17 +96,18 @@ class PretrainDatasetsArgs:
 
 
 @dataclass
-class DatasetStages:
+class DatasetStage:
     """Arguments for loading dataset in different stages of the training process"""
 
     name: str
-    # NOTE: the starting step in the training process
-    training_steps: int
-    dataset: Optional[PretrainDatasetsArgs]
+    
+    # NOTE: the starting training step in the training process
+    starting_training_step: int
+    dataset: PretrainDatasetsArgs
 
     def __post_init__(self):
-        if self.training_steps < 0:
-            raise ValueError(f"training_steps should be a positive integer and not {self.training_steps}")
+        if self.starting_training_step < 0:
+            raise ValueError(f"training_steps should be a positive integer and not {self.starting_training_step}")
 
 
 @dataclass
@@ -114,7 +115,7 @@ class DataArgs:
     """Arguments related to the data and data files processing"""
 
     dataset: Optional[PretrainDatasetsArgs]
-    dataset_stages: Optional[list[DatasetStages]]
+    dataset_stages: Optional[list[DatasetStage]]
     seed: Optional[int]
     num_loading_workers: Optional[int] = 1
 
@@ -127,14 +128,14 @@ class DataArgs:
 
         if self.dataset_stages is not None:
             names = [stage.name for stage in self.dataset_stages]
-            training_steps = [stage.training_steps for stage in self.dataset_stages]
+            training_steps = [stage.starting_training_step for stage in self.dataset_stages]
             for stage in self.dataset_stages:
                 if names.count(stage.name) > 1:
                     raise ValueError(f"Each stage should have unique names and not {names}")
 
-                if training_steps.count(stage.training_steps) > 1:
+                if training_steps.count(stage.starting_training_step) > 1:
                     raise ValueError(
-                        f"Each stage should have unique starting training step, please stage {stage.name}"
+                        f"Each stage should have unique starting training step, please change the starting training step for stage {stage.name}"
                     )
 
 
