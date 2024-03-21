@@ -140,9 +140,8 @@ def get_args():
 def get_file_name(args, file_id):
     file_name, extension = os.path.splitext(args.input)
     input_file_name = file_name + "_" + str(file_id) + extension
-    sentence_split_file = file_name + "_ss_" + str(file_id) + extension
     output_prefix = args.output_prefix + "_" + str(file_id)
-    file_names = {"partition": input_file_name, "sentence_split": sentence_split_file, "output_prefix": output_prefix}
+    file_names = {"partition": input_file_name, "output_prefix": output_prefix}
     return file_names
 
 
@@ -154,7 +153,8 @@ def check_files_exist(in_ss_out_names, key, num_partitions):
 
 
 def main(args):
-
+    # Check if json file is not empty
+    assert os.path.getsize(args.input), f"{args.input} is empty!"
     # Check if output directory exists
     if not os.path.isdir(os.path.abspath(os.path.join(args.output_prefix, os.path.pardir))):
         print(f"Creating {os.path.abspath(os.path.join(args.output_prefix, os.path.pardir))} directory...")
@@ -162,11 +162,8 @@ def main(args):
 
     in_ss_out_names = []
     if args.partitions == 1:
-        file_name, extension = os.path.splitext(args.input)
-        sentence_split_file = file_name + "_ss" + extension
         file_names = {
             "partition": args.input,
-            "sentence_split": sentence_split_file,
             "output_prefix": args.output_prefix,
         }
         in_ss_out_names.append(file_names)

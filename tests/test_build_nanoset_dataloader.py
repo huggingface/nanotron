@@ -84,7 +84,7 @@ def _test_build_nanoset_dataloader(parallel_context: ParallelContext, test_conte
     blended_nanoset_config = NanosetConfig(
         random_seed=SEED,
         sequence_length=SEQ_LENGTH,
-        data_path={dataset_1_bin_path: 0.2, dataset_2_bin_path: 0.2},
+        data_path={dataset_1_bin_path: 0.8, dataset_2_bin_path: 0.2},
         split=SPLIT,
         split_num_samples=split_num_samples,
         path_to_cache=test_context.get_auto_remove_tmp_dir(),
@@ -117,3 +117,5 @@ def _test_build_nanoset_dataloader(parallel_context: ParallelContext, test_conte
         # Check a batch produced by the Dataloader
         batch = next(iter(dataloader))
         assert_batch_dataloader(batch=batch, parallel_context=parallel_context)
+
+        parallel_context.destroy()
