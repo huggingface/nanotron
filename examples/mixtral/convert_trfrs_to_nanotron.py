@@ -3,9 +3,7 @@
 This module converts
 
 Command:
-torchrun  --nproc_per_node=1 convert_trfrs_to_nanotron.py \
-    --model_name  hf-internal-testing/Mixtral-tiny \
-        --save_path ./pretrained/mixtral
+torchrun --nproc_per_node=1 examples/mixtral/convert_trfrs_to_nanotron.py --model_name  hf-internal-testing/Mixtral-tiny --save_path ./pretrained/mixtral
 """
 import argparse
 import sys

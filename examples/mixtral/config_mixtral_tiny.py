@@ -65,10 +65,10 @@ PARALLELISM = ParallelismArgs(
 
 tokens = TokensArgs(sequence_length=256, train_steps=1918, micro_batch_size=2, batch_accumulation_per_replica=1)
 checkpoints = CheckpointsArgs(
-    checkpoints_path="checkpoints/",
+    checkpoints_path="checkpointsz/",
     checkpoint_interval=100000,
     save_initial_state=True,
-    resume_checkpoint_path="checkpoints/",
+    resume_checkpoint_path="checkpointsz/",
 )
 optimizer = OptimizerArgs(
     zero_stage=0,

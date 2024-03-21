@@ -1,8 +1,8 @@
 checkpoints:
   checkpoint_interval: 100000
-  checkpoints_path: checkpoints
+  checkpoints_path: checkpointsz
   checkpoints_path_is_shared_file_system: false
-  resume_checkpoint_path: checkpoints
+  resume_checkpoint_path: checkpointsz
   save_initial_state: true
 data:
   dataset: null
