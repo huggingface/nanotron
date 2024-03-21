@@ -13,6 +13,13 @@ import datasets
 from tools.preprocess_data import main
 
 
+def create_dataset_paths(tmp_dir: str, quantity: int):
+    json_dataset_path = [os.path.join(tmp_dir, f"pytest_{i}") for i in range(quantity)]
+    bin_dataset_path = [f"{path}_text" for path in json_dataset_path]
+
+    return json_dataset_path, bin_dataset_path
+
+
 def create_dummy_json_dataset(path_to_json: str, dummy_text: str, n_samples: int = 500):
 
     ds_dict = {"indices": list(range(n_samples))}

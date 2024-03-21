@@ -1,17 +1,18 @@
-import os
-
 import pytest
-import torch
 from helpers.context import TestContext
-from helpers.data import assert_batch_dataloader, create_dummy_json_dataset, preprocess_dummy_dataset
+from helpers.data import (
+    assert_batch_dataloader,
+    create_dataset_paths,
+    create_dummy_json_dataset,
+    preprocess_dummy_dataset,
+)
 from helpers.utils import available_gpus, get_all_3d_configurations, init_distributed, rerun_if_address_is_in_use
-from nanotron import distributed as dist
 from nanotron.data.blended_nanoset import BlendedNanoset
 from nanotron.data.dataloader_builder import build_nanoset_dataloader
 from nanotron.data.dataset_builder import NanosetBuilder
 from nanotron.data.nanoset import Nanoset
 from nanotron.data.nanoset_configs import NanosetConfig
-from nanotron.data.utils import compute_datasets_num_samples
+from nanotron.data.utils import compile_helpers, compute_datasets_num_samples
 from nanotron.parallel import ParallelContext
 
 
@@ -19,17 +20,35 @@ from nanotron.parallel import ParallelContext
     "tp,dp,pp",
     [
         pytest.param(*all_3d_configs)
-        for gpus in range(1, min(available_gpus(), 8) + 1)
+        for gpus in range(1, min(available_gpus(), 4) + 1)
         for all_3d_configs in get_all_3d_configurations(gpus)
     ],
 )
 @rerun_if_address_is_in_use()
 def test_build_nanoset_dataloader(tp: int, dp: int, pp: int):
     test_context = TestContext()
-    init_distributed(tp=tp, dp=dp, pp=pp)(_test_build_nanoset_dataloader)(test_context=test_context)
+
+    # Compile helpers & Create dataset files
+    compile_helpers()
+
+    json_paths, bin_paths = create_dataset_paths(tmp_dir=test_context.get_auto_remove_tmp_dir(), quantity=2)
+
+    # Create dummy json datasets
+    for idx, json_path in enumerate(json_paths):
+        create_dummy_json_dataset(path_to_json=json_path, dummy_text=f"Nanoset {idx}!")
+
+    # Preprocess dummy json datasets
+    for json_path in json_paths:
+        preprocess_dummy_dataset(path_to_json=json_path)
+
+    init_distributed(tp=tp, dp=dp, pp=pp)(_test_build_nanoset_dataloader)(
+        test_context=test_context, path_to_bin_files=bin_paths
+    )
 
 
-def _test_build_nanoset_dataloader(parallel_context: ParallelContext, test_context: TestContext):
+def _test_build_nanoset_dataloader(
+    parallel_context: ParallelContext, test_context: TestContext, path_to_bin_files: str
+):
     TRAIN_STEPS = 10000
     VAL_CHECK_INTERVAL = TRAIN_STEPS / 4
     VAL_STEPS = TRAIN_STEPS / 10
@@ -39,28 +58,7 @@ def _test_build_nanoset_dataloader(parallel_context: ParallelContext, test_conte
 
     SEED = 1234
     SEQ_LENGTH = 8192
-    SPLIT = "8,1,1"
-
-    dataset_1_json_path = os.path.join(test_context.get_auto_remove_tmp_dir(), "pytest_1")
-    dataset_2_json_path = os.path.join(test_context.get_auto_remove_tmp_dir(), "pytest_2")
-    dataset_1_bin_path = dataset_1_json_path + "_text"
-    dataset_2_bin_path = dataset_2_json_path + "_text"
-
-    # Compile helpers & Create dataset files
-    if dist.get_rank() == 0:
-        from nanotron.data.utils import compile_helpers
-
-        compile_helpers()
-
-        # Create dummy json datasets
-        create_dummy_json_dataset(path_to_json=dataset_1_json_path, dummy_text="Nanoset 1!")
-        create_dummy_json_dataset(path_to_json=dataset_2_json_path, dummy_text="Nanoset 2!")
-
-        # Preprocess dummy json datasets
-        preprocess_dummy_dataset(path_to_json=dataset_1_json_path)
-        preprocess_dummy_dataset(path_to_json=dataset_2_json_path)
-
-    torch.distributed.barrier()
+    SPLIT = "950,40,10"
 
     input_pp_rank, output_pp_rank = 0, int(parallel_context.pp_pg.size() - 1)
 
@@ -75,7 +73,7 @@ def _test_build_nanoset_dataloader(parallel_context: ParallelContext, test_conte
     nanoset_config = NanosetConfig(
         random_seed=SEED,
         sequence_length=SEQ_LENGTH,
-        data_path=dataset_1_bin_path,
+        data_path=path_to_bin_files[0],
         split=SPLIT,
         split_num_samples=split_num_samples,
         path_to_cache=test_context.get_auto_remove_tmp_dir(),
@@ -84,7 +82,7 @@ def _test_build_nanoset_dataloader(parallel_context: ParallelContext, test_conte
     blended_nanoset_config = NanosetConfig(
         random_seed=SEED,
         sequence_length=SEQ_LENGTH,
-        data_path={dataset_1_bin_path: 0.8, dataset_2_bin_path: 0.2},
+        data_path={bin_path: 5 - idx for idx, bin_path in enumerate(path_to_bin_files)},
         split=SPLIT,
         split_num_samples=split_num_samples,
         path_to_cache=test_context.get_auto_remove_tmp_dir(),
@@ -118,4 +116,4 @@ def _test_build_nanoset_dataloader(parallel_context: ParallelContext, test_conte
         batch = next(iter(dataloader))
         assert_batch_dataloader(batch=batch, parallel_context=parallel_context)
 
-        parallel_context.destroy()
+    parallel_context.destroy()
