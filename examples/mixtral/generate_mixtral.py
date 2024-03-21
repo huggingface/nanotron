@@ -9,6 +9,7 @@ torchrun --nproc_per_node=1 examples/mixtral/generate_mixtral.py --ckpt-path pre
 """
 
 import argparse
+import json
 import os
 from pathlib import Path
 
@@ -20,7 +21,6 @@ from nanotron.config import (
     GenerationArgs,
     LoggingArgs,
     ParallelismArgs,
-    get_config_from_file,
 )
 from nanotron.generation.decode import (
     GenerationInput,
@@ -60,6 +60,7 @@ logger = logging.get_logger(__name__)
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--ckpt-path", type=Path, default=Path("pretrained/mixtral"))
+    parser.add_argument("--tokenizer-name", type=str, default="mistralai/Mistral-7B-v0.1")
     parser.add_argument("--dp", type=int, default=0)
     parser.add_argument("--pp", type=int, default=0)
     parser.add_argument("--tp", type=int, default=0)
@@ -72,14 +73,14 @@ def main():
 
     assert args.ckpt_path.exists(), f"Checkpoint path {args.ckpt_path} does not exist"
 
-    config = get_config_from_file((args.ckpt_path / "config.yaml").as_posix(), model_config_class=MixtralConfig)
-    model_config = config.model.model_config
-    tokenizer_path = config.tokenizer.tokenizer_name_or_path
+    with open(args.ckpt_path / "model_config.json", "r") as f:
+        model_config = MixtralConfig(**json.load(f))
+    tokenizer_path = args.tokenizer_name
 
     parallel_config = ParallelismArgs(
-        dp=args.dp or config.parallelism.dp,
-        pp=args.pp or config.parallelism.pp,
-        tp=args.tp or config.parallelism.tp,
+        dp=args.dp or 1,
+        pp=args.pp or 1,
+        tp=args.tp or 1,
         pp_engine=OneForwardOneBackwardPipelineEngine(),
         tp_mode=TensorParallelLinearMode.ALL_REDUCE,
         tp_linear_async_communication=False,

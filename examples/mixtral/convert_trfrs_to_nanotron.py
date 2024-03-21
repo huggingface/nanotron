@@ -33,7 +33,7 @@ from transformers import MixtralForCausalLM
 def get_args():
     parser = argparse.ArgumentParser(description="Convert transformers weights to nanotron weights")
     parser.add_argument("--model_name", type=str, default="hf-internal-testing/Mixtral-tiny")
-    parser.add_argument("--save_path", type=str, default="pretrained/Mixtral-7B-v0.1")
+    parser.add_argument("--save_path", type=str, default="pretrained/mixtral")
     parser.add_argument("--dp", type=int, default=1)
     parser.add_argument("--pp", type=int, default=1)
     parser.add_argument("--tp", type=int, default=1)
@@ -207,7 +207,7 @@ def convert_trfrs_to_nanotron(dp, pp, tp, model_name="huggyllama/llama-7b", save
     model = initialize_nanotron_model(dtype, parallel_context, parallel_config, nanotron_model_config)
 
     # Initialise transformers model
-    device_map = fix_device_map_for_pp(CONFIG_NANOTRON.model.model_config, model, parallel_context)
+    device_map = fix_device_map_for_pp(nanotron_model_config, model, parallel_context)
     model_ref = MixtralForCausalLM.from_pretrained(model_name, torch_dtype=dtype, device_map=device_map)
     print(model)
     print(model_ref)
@@ -258,6 +258,7 @@ def convert_trfrs_to_nanotron(dp, pp, tp, model_name="huggyllama/llama-7b", save
         lr_scheduler=None,
         parallel_context=parallel_context,
         root_folder=save_path,
+        should_save_config=False,
         should_save_optimizer=False,
         should_save_lr_scheduler=False,
         checkpoint_metadata=checkpoint_metadata,
@@ -266,11 +267,11 @@ def convert_trfrs_to_nanotron(dp, pp, tp, model_name="huggyllama/llama-7b", save
 
     if dist.get_rank(parallel_context.world_pg) == 0:
         with open(save_path / "model_config.json", mode="w") as fo:
-            fo.write(json.dumps(asdict(CONFIG_NANOTRON.model.model_config), indent=4))
+            fo.write(json.dumps(asdict(nanotron_model_config), indent=4))
 
     print(f"Model saved to {save_path}")
     print("You can test the model by running the following command:")
-    print(f"torchrun --nproc_per_node=1 run_generate.py --ckpt-path {save_path}")
+    print(f"torchrun --nproc_per_node=1 generate_mixtral.py --ckpt-path {save_path}")
 
 
 def main():
