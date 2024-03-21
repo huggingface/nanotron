@@ -530,7 +530,8 @@ class SparseGLU(SparseMLP):
     def forward(self, x, topo):
         # We need to scale gradients manually since we don't call the linears forward
         self.w1.scale_gradients(), self.w2.scale_gradients(), self.w3.scale_gradients()
-
-        x = self.sdd(x.contiguous(), self.w1.module.weight, topo)
-        activation_fn_out = act_fn(x, self.act)
-        return self.dsd(activation_fn_out, self.w2.module.weight) * self.dsd(activation_fn_out, self.w3.module.weight)
+        x = x.contiguous()
+        x1 = self.sdd(x, self.w1.module.weight, topo)
+        x2 = self.sdd(x, self.w3.module.weight, topo)
+        x = stk.ops.mul(act_fn(x1, self.act), x2)
+        return self.dsd(x, self.w2.module.weight)
