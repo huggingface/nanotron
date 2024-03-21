@@ -16,15 +16,18 @@ from typing import (
     Tuple,
     Type,
     Union,
+    cast,
 )
 
 import torch
 from torch.nn.parallel import DistributedDataParallel
+from torch.utils.data import DataLoader
 
 from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.config import (
     Config,
+    DatasetStageArgs,
     ExistingCheckpointInit,
     ParallelismArgs,
     RandomInit,
@@ -222,6 +225,8 @@ class DistributedTrainer:
         self.sequence_length = self.config.tokens.sequence_length
         self.iteration_step = self.start_iteration_step
         self.limit_val_batches = self.config.tokens.limit_val_batches
+        # NOTE: the dataloader currently in use for the current training stage
+        self.current_dataloader: Optional[DataLoader] = None
 
         self.post_init()
 
@@ -246,23 +251,76 @@ class DistributedTrainer:
     def post_training(self):
         pass
 
+    def _print_training_plan(self):
+        stages_info = "".join(
+            f"[Stage {stage.name}] start from step {stage.start_training_step} \n" for stage in self.config.data_stages
+        )
+        full_log_message = f"[Training Plan] There are {len(self.config.data_stages)} training stages \n{stages_info}"
+        log_rank(full_log_message, logger=logger, level=logging.INFO, rank=0)
+
+    def _update_dataloader_based_on_training_stages(self, dataloaders: List[DataLoader]):
+        assert len(dataloaders) > 0, "No dataloaders provided"
+        assert len(dataloaders) == len(
+            self.config.data_stages
+        ), "Number of dataloaders should match the number of dataset stages"
+
+        def clear_dataloader_from_memory(dataloader: DataLoader, stage_name: str):
+            import gc
+
+            log_rank(
+                f"[Training Stage: {stage_name}] Clearing the previous training stage's dataloader and datasets from memory",
+                logger=logger,
+                level=logging.INFO,
+            )
+
+            # NOTE: Clear the internal state of the dataloader
+            del dataloader.dataset
+            del dataloader.sampler
+            del dataloader.batch_sampler
+
+            gc.collect()
+
+        dataloader = None
+        for stage_id, stage in enumerate(self.config.data_stages):
+            stage = cast(DatasetStageArgs, stage)
+
+            if stage.start_training_step == self.iteration_step:
+                if self.current_dataloader is not None:
+                    prev_stage_name = self.config.data_stages[stage_id - 1].name
+                    prev_dataloader = dataloaders[prev_stage_name]
+                    if isinstance(prev_dataloader, DataLoader):
+                        # NOTE: we don't need to clear dummy data generator from memory
+                        clear_dataloader_from_memory(prev_dataloader, stage_name=stage.name)
+
+                log_rank(
+                    f"[Training Stage: {stage.name}] Switching to a new dataset {stage.data.dataset.hf_dataset_or_datasets}",
+                    logger=logger,
+                    level=logging.INFO,
+                    rank=0,
+                )
+
+                dataloader = dataloaders[stage.name]
+                # NOTE: if a dataloader is lazy initialized, we need to call it to initialize it
+                dataloader = dataloader() if callable(dataloader) else dataloader
+                break
+
+        if dataloader is not None:
+            self.current_dataloader = sanity_check_dataloader(
+                dataloader=dataloader, parallel_context=self.parallel_context, config=self.config
+            )
+
     def train(
         self,
-        dataloader_or_dls: Union[Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]], Tuple[Iterator, ...]],
+        dataloader_or_dls: Dict[
+            str, Union[Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]], Tuple[Iterator, ...]]
+        ],
         **kwargs,
     ) -> None:
         self.pre_training(**kwargs)
+        self._print_training_plan()
 
         if self.config.checkpoints.save_initial_state and self.init_checkpoint_path is None:
             self.save_checkpoint()
-
-        if isinstance(dataloader_or_dls, tuple):
-            dataloader = dataloader_or_dls[0]
-        else:
-            dataloader = dataloader_or_dls
-        dataloader = sanity_check_dataloader(
-            dataloader=dataloader, parallel_context=self.parallel_context, config=self.config
-        )
 
         self.pipeline_engine: PipelineEngine = self.config.parallelism.pp_engine
 
@@ -289,10 +347,12 @@ class DistributedTrainer:
             for self.iteration_step in range(self.start_iteration_step + 1, self.config.tokens.train_steps + 1):
                 if isinstance(prof, torch.profiler.profile):
                     prof.step()
+
                 self.iteration_start_time = time.time()
+                self._update_dataloader_based_on_training_stages(dataloader_or_dls)
 
                 # Training step
-                outputs, loss_avg = self.training_step(dataloader=dataloader)
+                outputs, loss_avg = self.training_step(dataloader=self.current_dataloader)
 
                 # Training Logs
                 self.consumed_train_samples += self.global_batch_size
