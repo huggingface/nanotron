@@ -173,11 +173,6 @@ def fix_device_map_for_pp(model_config_nanotron, model, parallel_context):
     device_map["lm_head"] = model.model.lm_head.rank if current_pp_rank == model.model.lm_head.rank else "meta"
 
 
-import lovely_tensors as lt
-
-lt.monkey_patch()  # noqa
-
-
 def convert_trfrs_to_nanotron(dp, pp, tp, model_name="huggyllama/llama-7b", save_path="pretrained/llama-7b"):
     # check save_path doesnt exist or is empty
     save_path = Path(save_path)
@@ -273,10 +268,43 @@ def convert_trfrs_to_nanotron(dp, pp, tp, model_name="huggyllama/llama-7b", save
     print("You can test the model by running the following command:")
     print(f"torchrun --nproc_per_node=1 generate_mixtral.py --ckpt-path {save_path}")
 
+    return model, model_ref
+
+
+def ref_generate(model_ref):
+    # Check model_ref outputs the same as model
+    model_ref.eval()
+    model_ref.to("cuda")
+    from transformers import AutoTokenizer
+
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(model_ref.config._name_or_path)
+    except Exception:
+        tokenizer = AutoTokenizer.from_pretrained("mistralai/Mistral-7B-v0.1")
+    text = "def fib(n)"
+    inputs = tokenizer(text, return_tensors="pt").to("cuda")
+    print("Reference hf generation with prompt :", text)
+    output = model_ref.generate(**inputs, max_new_tokens=128, do_sample=False)
+    from pprint import pprint
+
+    out = output[0][len(inputs.input_ids[0]) :]
+    pprint(
+        {
+            "input": text,
+            "generation": tokenizer.decode(out, clean_up_tokenization_spaces=False),
+            "generation_ids": out,
+        }
+    )
+
 
 def main():
-    args = get_args()
-    convert_trfrs_to_nanotron(**vars(args))
+    get_args()
+    # model, model_ref = convert_trfrs_to_nanotron(**vars(args))
+    # Ref generation
+    model_ref = MixtralForCausalLM.from_pretrained(
+        "hf-internal-testing/Mixtral-tiny", torch_dtype=torch.bfloat16, device_map={"": "cuda"}
+    )
+    ref_generate(model_ref)
 
 
 if __name__ == "__main__":
