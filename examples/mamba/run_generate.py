@@ -44,7 +44,7 @@ from nanotron.random import (
 )
 from nanotron.serialize import load_weights
 from nanotron.trainer import mark_tied_parameters
-from config import MambaConfig, MambaModelConfig, MambaInferenceConfig
+from config import MambaConfig, MambaModelConfig
 from mamba import MambaForTraining
 
 try:
@@ -121,15 +121,12 @@ def main():
         # We don't need to sync across TP when using sequence parallel (REDUCE_SCATTER)
         random_states = RandomStates({})
 
-
     model = build_model(
         model_builder=lambda: MambaForTraining(
             config=model_config,
             parallel_context=parallel_context,
             parallel_config=parallel_config,
             random_states=random_states,
-            is_inference=True,
-            inference_config=MambaInferenceConfig(max_new_tokens=args.max_new_tokens),
         ),
         dtype=getattr(torch, model_config.dtype),
         parallel_context=parallel_context,

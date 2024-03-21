@@ -5,11 +5,6 @@ import torch
 
 from nanotron.config import Config, ExistingCheckpointInit, NanotronConfigs
 from nanotron.config.utils_config import cast_str_to_torch_dtype
-
-@dataclass
-class MambaInferenceConfig:
-    max_new_tokens: int = 42
-    
 @dataclass
 class MambaInit:
     # mamba_ssm.models.mixer_seq_simple._init_weights

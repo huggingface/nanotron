@@ -216,11 +216,24 @@ def decode_text(
             is_max_nb_microbatches = number_states_in_buffer == max_nb_microbatches
 
             # Initialize decoder states
+            store = Store()
+            
+            if model.__class__.__name__ == "MambaModel":
+
+                store.update(
+                    {
+                        "max_new_tokens": max_new_tokens,
+                        "max_batch_size": 1, # We are processing only one token at a time
+                        "seqlen_offset": 0,
+                        "key_value_memory_dict": {},
+                    }
+                )
+            
             decoder_states: Iterable[GenerationStates] = (
                 GenerationStates(
                     new_input_ids=batch.input_ids,
                     new_input_mask=batch.input_masks,
-                    store=Store(),
+                    store=store,
                     generation_ids=[batch.input_ids],
                     generation_mask=[batch.input_masks],
                 )
@@ -244,19 +257,12 @@ def decode_text(
                     new_decoder_states.append(state)
                     # Get the new logits
                     if generation_config.use_cache:
-                        if hasattr(model, "_store"):
-                            # Some model like mamba already has store build up for generation
+                        with attach_store(model=model, store=state.store):
+                            # transpose: [sequence_length, batch_size, vocab_size] -> [batch_size, sequence_length, vocab_size]
                             sharded_logits = model(
                                 input_ids=state.new_input_ids,
                                 input_mask=state.new_input_mask,
                             )
-                        else:
-                            with attach_store(model=model, store=state.store):
-                                # transpose: [sequence_length, batch_size, vocab_size] -> [batch_size, sequence_length, vocab_size]
-                                sharded_logits = model(
-                                    input_ids=state.new_input_ids,
-                                    input_mask=state.new_input_mask,
-                                )
                     else:
                         if isinstance(state.new_input_ids, torch.Tensor):
                             batch_generated_ids = torch.cat(state.generation_ids, dim=-1)

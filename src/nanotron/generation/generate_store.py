@@ -31,7 +31,7 @@ class AttachableStore:
         if hasattr(self, "_store"):
             if isinstance(self, nn.Module):
                 assert self.training is False, "Store is used only in evaluation mode"
-            return self._store[id(self)]
+            return self._store
         else:
             return None
 
