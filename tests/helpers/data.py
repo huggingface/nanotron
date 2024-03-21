@@ -67,14 +67,14 @@ def assert_batch_dataloader(batch: dict, parallel_context):
 
         # Assert that we have the SAME element in all the processes belonging to the same tensor parallel group
         assert_tensor_synced_across_pg(
-            tensor=tensor.flatten(),
+            tensor=tensor.flatten().cuda(),
             pg=parallel_context.tp_pg,
             msg=lambda err: f"{element} is not synchronized across TP {err}",
         )
 
         # Assert that we have the SAME class of data in all processes belonging to the same data parallel group
         assert_tensor_synced_across_pg(
-            tensor=torch.tensor(data_class),
+            tensor=torch.tensor(data_class, device="cuda"),
             pg=parallel_context.dp_pg,
             msg=lambda err: f"{element} is not synchronized across DP {err}",
         )

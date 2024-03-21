@@ -4,7 +4,7 @@ import pytest
 import torch
 from helpers.context import TestContext
 from helpers.data import assert_batch_dataloader, create_dummy_json_dataset, preprocess_dummy_dataset
-from helpers.utils import get_all_3d_configurations, init_distributed, rerun_if_address_is_in_use
+from helpers.utils import available_gpus, get_all_3d_configurations, init_distributed, rerun_if_address_is_in_use
 from nanotron import distributed as dist
 from nanotron.data.blended_nanoset import BlendedNanoset
 from nanotron.data.dataloader_builder import build_nanoset_dataloader
@@ -19,7 +19,7 @@ from nanotron.parallel import ParallelContext
     "tp,dp,pp",
     [
         pytest.param(*all_3d_configs)
-        for gpus in range(1, min(12, 8) + 1)
+        for gpus in range(1, min(available_gpus(), 8) + 1)
         for all_3d_configs in get_all_3d_configurations(gpus)
     ],
 )
