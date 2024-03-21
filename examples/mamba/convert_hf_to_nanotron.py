@@ -142,7 +142,7 @@ if __name__ == "__main__":
     rms_norm: true
     rms_norm_eps: 1.0e-05
     ssm_cfg: null
-    vocab_size: 50277
+    vocab_size: 50280
     """
 
     dtype = getattr(torch, dtype_str)
@@ -150,12 +150,7 @@ if __name__ == "__main__":
 
     attrs = yaml.safe_load(yaml_content)
     model_config = MambaModelConfig(**attrs)
-    # Initiliaze Brrr model
-    model_config.vocab_size = _vocab_size_with_padding(
-            model_config.vocab_size,
-            pg_size=parallel_context.tp_pg.size(),
-            make_vocab_size_divisible_by=5, # So that every value of TP from 1 to 8 yield a vocab_size of 50280
-    )
+    assert model_config.vocab_size == 50280
 
     model_ref = MambaLMHeadModel.from_pretrained(args.model, device=device, dtype=dtype)
 
