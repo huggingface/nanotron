@@ -3,7 +3,7 @@ import json
 import os
 import time
 from collections import OrderedDict
-from typing import Dict, List, Tuple
+from typing import Dict, Tuple
 
 import numpy
 import torch
@@ -60,8 +60,9 @@ class Nanoset(torch.utils.data.Dataset):
         self.unique_identifiers["path_prefix"] = self.indexed_dataset.path_prefix
         self.unique_identifiers["num_samples"] = self.num_samples
         self.unique_identifiers["index_split"] = self.index_split.name
-        for attr in self._key_config_attributes():
-            self.unique_identifiers[attr] = getattr(self.config, attr)
+        self.unique_identifiers["split"] = self.config.split
+        self.unique_identifiers["random_seed"] = self.config.random_seed
+        self.unique_identifiers["sequence_length"] = self.config.sequence_length
 
         self.unique_description = json.dumps(self.unique_identifiers, indent=4)
         self.unique_description_hash = hashlib.md5(self.unique_description.encode("utf-8")).hexdigest()
@@ -325,18 +326,6 @@ class Nanoset(torch.utils.data.Dataset):
         log_rank(f"> Total number of epochs: {num_epochs}", logger=logger, level=logging.INFO, rank=0)
 
         return document_index, sample_index, shuffle_index
-
-    @staticmethod
-    def _key_config_attributes() -> List[str]:
-        """Return all config attributes which contribute to uniquely identifying the dataset.
-
-        These attributes will be used to build a uniquely identifying string and MD5 hash which
-        will be used to cache/load the dataset from run to run.
-
-        Returns:
-            List[str]: The key config attributes
-        """
-        return ["split", "random_seed", "sequence_length"]
 
 
 def _get_num_tokens_per_epoch(indexed_dataset: MMapIndexedDataset, indices: numpy.ndarray) -> int:

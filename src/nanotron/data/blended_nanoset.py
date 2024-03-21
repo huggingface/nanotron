@@ -27,7 +27,7 @@ class BlendedNanoset(torch.utils.data.Dataset):
 
         size (int): The number of samples to draw from the blend
 
-        config (BlendedNanosetConfig): The config object which informs dataset creation
+        config (NanosetConfig): The config object which informs dataset creation
 
     Raises:
         RuntimeError: When the dataset has fewer or more samples than 'size' post-initialization
