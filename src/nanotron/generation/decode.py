@@ -216,24 +216,11 @@ def decode_text(
             is_max_nb_microbatches = number_states_in_buffer == max_nb_microbatches
 
             # Initialize decoder states
-            store = Store()
-            
-            if model.__class__.__name__ == "MambaModel":
-
-                store.update(
-                    {
-                        "max_new_tokens": max_new_tokens,
-                        "max_batch_size": 1, # We are processing only one token at a time
-                        "seqlen_offset": 0,
-                        "key_value_memory_dict": {},
-                    }
-                )
-            
             decoder_states: Iterable[GenerationStates] = (
                 GenerationStates(
                     new_input_ids=batch.input_ids,
                     new_input_mask=batch.input_masks,
-                    store=store,
+                    store=Store(),
                     generation_ids=[batch.input_ids],
                     generation_mask=[batch.input_masks],
                 )

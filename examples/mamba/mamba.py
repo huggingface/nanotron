@@ -205,8 +205,16 @@ class Mamba(nn.Module, AttachableStore):
         
         store = self.get_local_store()
         if store is not None:
+            
+            if "key_value_memory_list" not in store:
+                store["key_value_memory_list"] = []
+            
+            if "seqlen_offset" not in self._store:
+                self._store["seqlen_offset"] = 0
+            
             conv_state, ssm_state = self._get_states_from_cache(batch)
-            if store["seqlen_offset"] > 0:
+
+            if self._store["seqlen_offset"] > 0:
                 # The states are updated inplace
                 out, _, _ = self.step(hidden_states, conv_state, ssm_state)
                 return out
@@ -349,33 +357,12 @@ class Mamba(nn.Module, AttachableStore):
         out = self.out_proj(y)
         return out.unsqueeze(1), conv_state, ssm_state
 
-    def allocate_inference_cache(self, batch_size: int, max_new_tokens: int, dtype: torch.dtype = None, **kwargs):
-        device = self.out_proj.weight.device
-        conv_dtype = self.conv1d.weight.dtype if dtype is None else dtype
-        conv_state = torch.zeros(
-            batch_size,
-            self.d_model * self.expand,
-            self.d_conv,
-            device=device,
-            dtype=conv_dtype,
-        )
-        ssm_dtype = self.dt_proj.weight.dtype if dtype is None else dtype
-        # ssm_dtype = torch.float32
-        ssm_state = torch.zeros(
-            batch_size,
-            self.d_model * self.expand,
-            self.d_state,
-            device=device,
-            dtype=ssm_dtype,
-        )
-        return conv_state, ssm_state
-
     def _get_states_from_cache(self, batch_size: int, initialize_states: bool = False):
         assert self.layer_idx is not None
         
         store = self.get_local_store()
         
-        if self.layer_idx not in store["key_value_memory_dict"]:
+        if len(store["key_value_memory_list"]) == 0:
             conv_state = torch.zeros(
                 batch_size,
                 self.d_model * self.expand // self.tp_pg.size(),
@@ -391,13 +378,12 @@ class Mamba(nn.Module, AttachableStore):
                 dtype=self.dt_proj.weight.dtype,
                 # dtype=torch.float32,
             )
-            
-            store["key_value_memory_dict"][self.layer_idx] = (
+            store["key_value_memory_list"] = (
                 conv_state,
                 ssm_state
             )
         else:
-            conv_state, ssm_state = store["key_value_memory_dict"][self.layer_idx]
+            conv_state, ssm_state = store["key_value_memory_list"]
             # TODO: What if batch size changes between generation, and we reuse the same states?
             if initialize_states:
                 conv_state.zero_()
@@ -515,10 +501,6 @@ class MambaDecoderLayer(nn.Module):
             "sequence_mask": sequence_mask,  # NOTE(fmom): dunno how to use it for now. Just keep it
             "residual": residual,
         }
-
-    def allocate_inference_cache(self, batch_size, max_new_tokens, dtype=None, **kwargs):
-        return self.mixer.allocate_inference_cache(batch_size, max_new_tokens, dtype=dtype, **kwargs)
-
 
 class MambaModel(nn.Module, AttachableStore):
     def __init__(
@@ -640,10 +622,8 @@ class MambaModel(nn.Module, AttachableStore):
         sharded_logits = self.lm_head(x=hidden_states)["logits"]
         fp32_sharded_logits = self.cast_to_fp32(x=sharded_logits)["output"]
 
-        store = self.get_local_store()
-
-        if store is not None:
-            store["seqlen_offset"] += 1 # We are processing only one token at a time
+        if self._store is not None:
+            self._store["seqlen_offset"] += 1
         
         return fp32_sharded_logits, hidden_states
 
