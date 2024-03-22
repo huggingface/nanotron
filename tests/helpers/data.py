@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 
@@ -9,7 +10,6 @@ import torch
 from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
 from nanotron.sanity_checks import assert_tensor_synced_across_pg
 
-import datasets
 from tools.preprocess_data import main
 
 
@@ -22,16 +22,11 @@ def create_dataset_paths(tmp_dir: str, quantity: int):
 
 def create_dummy_json_dataset(path_to_json: str, dummy_text: str, n_samples: int = 500):
 
-    ds_dict = {"indices": list(range(n_samples))}
-    ds = datasets.Dataset.from_dict(ds_dict)
-
-    def create_text(sample):
-        return {
-            "text": f"[{sample['indices']}] Hello! I'm sample {sample['indices']}! And this is my dummy text: {dummy_text}"
-        }
-
-    new_ds = ds.map(create_text, batched=False).remove_columns(["indices"])
-    new_ds.to_json(path_or_buf=path_to_json + ".json")
+    with open(path_to_json + ".json", "a") as json_file:
+        for sample in range(n_samples):
+            sample_dict = {"text": f"[{sample}] Hello! Im sample {sample}! And this is my dummy text: {dummy_text}"}
+            json_file.write(json.dumps(sample_dict))
+            json_file.write("\n")
 
 
 def preprocess_dummy_dataset(path_to_json: str):
