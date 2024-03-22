@@ -114,6 +114,11 @@ def _test_build_nanoset_dataloader(
 
         # Check a batch produced by the Dataloader
         batch = next(iter(dataloader))
-        assert_batch_dataloader(batch=batch, parallel_context=parallel_context)
+        assert_batch_dataloader(
+            batch=batch,
+            parallel_context=parallel_context,
+            micro_batch_size=MICRO_BATCH_SIZE,
+            sequence_length=SEQ_LENGTH,
+        )
 
     parallel_context.destroy()

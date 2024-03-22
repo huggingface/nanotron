@@ -46,7 +46,7 @@ def preprocess_dummy_dataset(path_to_json: str):
     main(args)
 
 
-def assert_batch_dataloader(batch: dict, parallel_context):
+def assert_batch_dataloader(batch: dict, parallel_context, micro_batch_size: int, sequence_length: int):
     """
     batch (dict): Batch produced from the Dataloader, with keys input_ids, input_mask, label_ids, label_mask
 
@@ -56,6 +56,10 @@ def assert_batch_dataloader(batch: dict, parallel_context):
         data_class = (
             0  # 0 if tensor is from the ids, 1 if TensorPointer and 2 if mask. Used in the data parallel group check
         )
+
+        # Check shape of mask and ids tensors
+        if isinstance(tensor, torch.Tensor):
+            assert tensor.shape == (micro_batch_size, sequence_length)
 
         # TensorPointer case: Check that all TensorPointers from the same tp_pg point to the same group_rank. Create torch.tensor with group_rank
         if isinstance(tensor, TensorPointer):
