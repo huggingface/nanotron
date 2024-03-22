@@ -237,6 +237,15 @@ class DistributedTrainer:
         pass
 
     def pre_training(self, *args, **kwargs):
+        self._print_training_plan()
+
+        log_rank(
+            f"[Start training] datetime: {datetime.datetime.now()} | mbs: {self.micro_batch_size} | grad_accum: {self.n_micro_batches_per_batch} | global_batch_size: {self.global_batch_size} | sequence_length: {self.sequence_length} | train_steps: {self.config.tokens.train_steps} | start_iteration_step: {self.start_iteration_step} | consumed_train_samples: {self.consumed_train_samples}",  # noqa
+            logger=logger,
+            level=logging.INFO,
+            rank=0,
+        )
+
         current_time = datetime.datetime.now().strftime("%d/%m/%Y_%H:%M:%S")
         if dist.get_rank(self.parallel_context.world_pg) == self.logger_ranks[0] and wandb is not None:
             wandb.init(
@@ -273,7 +282,7 @@ class DistributedTrainer:
                 level=logging.INFO,
             )
 
-            # NOTE: Clear the internal state of the dataloader
+            # NOTE: Clear dataloader from memory
             del dataloader.dataset
             del dataloader.sampler
             del dataloader.batch_sampler
@@ -317,7 +326,6 @@ class DistributedTrainer:
         **kwargs,
     ) -> None:
         self.pre_training(**kwargs)
-        self._print_training_plan()
 
         if self.config.checkpoints.save_initial_state and self.init_checkpoint_path is None:
             self.save_checkpoint()
@@ -326,12 +334,6 @@ class DistributedTrainer:
 
         self.pipeline_engine.nb_microbatches = self.n_micro_batches_per_batch
 
-        log_rank(
-            f"[Start training] datetime: {datetime.datetime.now()} | mbs: {self.micro_batch_size} | grad_accum: {self.n_micro_batches_per_batch} | global_batch_size: {self.global_batch_size} | sequence_length: {self.sequence_length} | train_steps: {self.config.tokens.train_steps} | start_iteration_step: {self.start_iteration_step} | consumed_train_samples: {self.consumed_train_samples}",  # noqa
-            logger=logger,
-            level=logging.INFO,
-            rank=0,
-        )
         # TODO @nouamanetazi: refactor this
         # Useful mapping
         self.unwrapped_model = self.model.module if isinstance(self.model, DistributedDataParallel) else self.model
