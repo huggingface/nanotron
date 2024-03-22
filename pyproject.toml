@@ -20,7 +20,8 @@ dependencies = [
     "packaging",
     "safetensors",
     "dacite",
-    "tqdm"
+    "tqdm",
+    "transformers"
 ]
 
 [tool.setuptools.packages.find]
