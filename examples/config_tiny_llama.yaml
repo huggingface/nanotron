@@ -1,6 +1,6 @@
 checkpoints:
   checkpoint_interval: 10
-  checkpoints_path: /fsx/nouamane/projects/nanotron/checkpoints
+  checkpoints_path: /fsx/phuc/projects/nanotron/checkpoints
   checkpoints_path_is_shared_file_system: false
   resume_checkpoint_path: null
   save_initial_state: false
@@ -17,7 +17,7 @@ data:
 general:
   benchmark_csv_path: null
   consumed_train_samples: null
-  ignore_sanity_checks: false
+  ignore_sanity_checks: true
   project: debug
   run: tiny_llama_%date_%jobid
   seed: 42
@@ -71,6 +71,7 @@ optimizer:
   zero_stage: 0
 parallelism:
   dp: 2
+  expert_parallel_size: 1
   pp: 2
   pp_engine: 1f1b
   recompute_granularity: SELECTIVE

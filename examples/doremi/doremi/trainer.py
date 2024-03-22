@@ -121,7 +121,6 @@ class DoReMiTrainer(DistributedTrainer):
         outputs: Iterable[Dict[str, Union[torch.Tensor, TensorPointer]]],
         loss_avg: Optional[torch.Tensor],
     ):
-
         domain_weights = outputs[0]["domain_weights"]
         domain_losses = outputs[0]["domain_losses"]
         samples_per_domain = outputs[0]["samples_per_domain"].tolist()
