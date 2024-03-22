@@ -322,6 +322,15 @@ def test_fp8adam_load_state_dict():
             torch.testing.assert_allclose(state_new[key], state_saved[key])
 
 
+# def test_fp8_parameter_track_amaxs():
+#     pass
+
+
+# def test_fp8_parameter_delay_scaling_factor_update():
+#     pass
+
+
+
 # TODO(xrsrke): add sanity check all parameters are FP8Parameter
 
 # TODO(xrsrke): add gradient accumulation test

@@ -319,6 +319,18 @@ def test_set_data_for_fp8_and_fp16_tensor(tensor_cls, dtype):
     assert fp8_tensor.data.data_ptr() == new_data.data_ptr()
 
 
+@pytest.mark.parametrize(
+    "tensor_cls, dtype", [(FP8Tensor, DTypes.FP8E4M3), (FP8Tensor, DTypes.FP8E5M2)]
+)
+def test_fp8_parameter_track_amaxs(tensor_cls, dtype):
+    tensor = torch.randn((4, 4), dtype=torch.float32, device="cuda")
+    fp8_tensor = tensor_cls(tensor, dtype=dtype)
+
+
+def test_fp8_parameter_delay_scaling_factor_update():
+    pass
+
+
 # TODO(xrsrke): test it has all the methods of torch.Tensor
 
 # TODO(xrsrke): test it has all the attributes of its input tensor

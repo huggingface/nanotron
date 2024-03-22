@@ -90,5 +90,13 @@ def test_set_gradient_in_fp8_parameter(dtype):
     assert fp8_parameter.data.grad is fp8_parameter.grad
 
 
+# def test_fp8_parameter_track_amaxs():
+#     pass
+
+
+# def test_fp8_parameter_delay_scaling_factor_update():
+#     pass
+
+
 # TODO(xrsrke): add test for preventing torch autograd do the backward pass
 # on a FP8Parameter
