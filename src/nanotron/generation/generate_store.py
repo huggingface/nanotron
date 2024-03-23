@@ -35,6 +35,14 @@ class AttachableStore:
         else:
             return None
 
+    def get_global_store(self):
+        if hasattr(self, "_store"):
+            if isinstance(self, nn.Module):
+                assert self.training is False, "Store is used only in evaluation mode"
+            return self._store
+        else:
+            return None
+
 
 @contextlib.contextmanager
 def attach_store(model: nn.Module, store: Store):
