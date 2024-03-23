@@ -1,19 +1,36 @@
 checkpoints:
   checkpoint_interval: 10
-  checkpoints_path: /fsx/nouamane/projects/nanotron/checkpoints
+  checkpoints_path: checkpoints
   checkpoints_path_is_shared_file_system: false
   resume_checkpoint_path: null
   save_initial_state: false
-data:
-  dataset:
-    dataset_overwrite_cache: false
-    dataset_processing_num_proc_per_process: 1
-    hf_dataset_config_name: null
-    hf_dataset_or_datasets: HuggingFaceH4/testing_alpaca_small
-    hf_dataset_splits: train
-    text_column_name: completion
-  num_loading_workers: 1
-  seed: 42
+
+data_stages:
+  - name: Stable Training Stage
+    start_training_step: 1
+    data:
+      dataset:
+        dataset_overwrite_cache: false
+        dataset_processing_num_proc_per_process: 1
+        hf_dataset_config_name: null
+        hf_dataset_or_datasets: HuggingFaceH4/testing_alpaca_small
+        hf_dataset_splits: train
+        text_column_name: completion
+      num_loading_workers: 1
+      seed: 42
+  - name: Annealing Phase
+    start_training_step: 10
+    data:
+      dataset:
+        dataset_overwrite_cache: false
+        dataset_processing_num_proc_per_process: 1
+        hf_dataset_config_name: null
+        hf_dataset_or_datasets: HuggingFaceH4/testing_alpaca_small
+        hf_dataset_splits: train
+        text_column_name: completion
+      num_loading_workers: 1
+      seed: 42
+
 general:
   benchmark_csv_path: null
   consumed_train_samples: null
@@ -87,5 +104,5 @@ tokens:
   limit_val_batches: 0
   micro_batch_size: 2
   sequence_length: 32
-  train_steps: 10
+  train_steps: 20
   val_check_interval: -1
