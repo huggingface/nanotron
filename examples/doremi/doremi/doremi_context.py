@@ -28,13 +28,20 @@ class DoReMiContext:
         return self.domain_keys[domain_idx]
 
     def __post_init__(self):
-        assert self.domain_weights.dim() == 1, "The domain_weights tensor must be 1-dimensional"
-        assert torch.allclose(
-            self.domain_weights.sum(dim=-1), torch.tensor(1.0), rtol=0.1
-        ), "Domain weights must sum up to 1."
-        assert (
-            self.domain_weights.shape[0] == self.num_domains
-        ), "The length of domain_weights must be equal to the number of domains"
+        assert isinstance(self.domain_weights, list)
+        assert isinstance(self.domain_keys, list)
+        assert len(self.domain_weights) == len(
+            self.domain_keys
+        ), "The length of domain_weights and domain_keys must match."
+
+        domain_weights = torch.tensor(self.domain_weights)
+        assert torch.allclose(domain_weights.sum(), torch.tensor(1.0), rtol=0.1), "Domain weights must sum up to 1."
+
+        self.domain_weights = domain_weights
+
+        # assert (
+        #     domain_weights.shape[0] == self.num_domains
+        # ), "The length of domain_weights must be equal to the number of domains"
         self.add_weight_with_history(self.domain_weights, 0)
 
     def add_weight_with_history(self, domain_weights: torch.Tensor, step: int):

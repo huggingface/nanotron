@@ -3,8 +3,6 @@ from typing import Dict, Optional, Union
 
 import torch
 import torch.nn as nn
-from transformers import LlamaConfig
-
 from nanotron import logging
 from nanotron.config import ParallelismArgs
 from nanotron.models import NanotronModel
@@ -19,6 +17,7 @@ from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelEmbedding,
     TensorParallelRowLinear,
 )
+from transformers import LlamaConfig
 
 from .doremi_context import DoReMiContext
 from .loss import CrossEntropyWithPerDomainLoss, DoReMiLossForProxyTraining
@@ -89,7 +88,7 @@ class BaseLLaMa(NanotronModel):
             elif isinstance(module, TensorParallelEmbedding):
                 nn.init.normal_(module.weight, mean=0.0, std=std)
             else:
-                raise Exception(f"Parameter {full_param_name} was not intialized")
+                raise Exception(f"Parameter {full_param_name} was not initialized")
 
             assert full_param_name not in initialized_parameters
             initialized_parameters.add(full_param_name)
@@ -164,10 +163,17 @@ class LlamaForDoReMiTraining(BaseLLaMa):
                 "sharded_logits",
                 "label_ids",
                 "label_mask",
-                "domain_idxs",
+                "dataset_idxs",
                 "ref_losses",
             },
-            module_output_keys={"loss", "excess_losses", "domain_losses", "domain_weights", "samples_per_domain"},
+            # module_output_keys={"loss", "excess_losses", "domain_losses", "domain_weights", "samples_per_domain"},
+            module_output_keys={
+                "loss",
+                "lm_loss",
+                "domain_losses",
+                "domain_weights",
+                "samples_per_domain",
+            },
         )
         self.parallel_context = parallel_context
         self.config = config
@@ -179,7 +185,7 @@ class LlamaForDoReMiTraining(BaseLLaMa):
         input_mask: Union[torch.Tensor, TensorPointer],
         label_ids: Union[torch.Tensor, TensorPointer],
         label_mask: Union[torch.Tensor, TensorPointer],
-        domain_idxs: Optional[Union[torch.Tensor, TensorPointer]],
+        dataset_idxs: Optional[Union[torch.Tensor, TensorPointer]],
         ref_losses: Optional[Union[torch.Tensor, TensorPointer]],
     ) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
         sharded_logits = self.model(
@@ -191,7 +197,7 @@ class LlamaForDoReMiTraining(BaseLLaMa):
             sharded_logits=sharded_logits,
             label_ids=label_ids,
             label_mask=label_mask,
-            domain_idxs=domain_idxs,
+            dataset_idxs=dataset_idxs,
             ref_losses=ref_losses,
         )
         return outputs

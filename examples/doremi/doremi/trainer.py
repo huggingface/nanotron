@@ -1,8 +1,6 @@
 from typing import Dict, Iterable, List, Optional, Type, Union
 
 import torch
-from torch.nn.parallel import DistributedDataParallel
-
 from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.config import Config, get_config_from_file
@@ -12,6 +10,7 @@ from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
 from nanotron.sanity_checks import assert_tensor_synced_across_pg
 from nanotron.serialize import load_weights
 from nanotron.trainer import DistributedTrainer
+from torch.nn.parallel import DistributedDataParallel
 
 from .config import DoReMiConfig
 from .doremi_context import DoReMiContext
@@ -37,7 +36,6 @@ def print_array_for_human(arr: List[float], precision: int = 5) -> str:
 class DoReMiTrainer(DistributedTrainer):
     def __init__(
         self,
-        domain_weights: torch.Tensor,
         config_or_config_file: Union[Config, str],
         config_class: Type[Config] = Config,
     ):
@@ -48,7 +46,7 @@ class DoReMiTrainer(DistributedTrainer):
         ), "You must provide a reference model checkpoint path for DoReMi training."
 
         self.doremi_context = DoReMiContext(
-            domain_weights,
+            config.doremi.domain_weights,
             config.doremi.domain_names,
             is_proxy=True,
             step_size=config.doremi.step_size,
@@ -121,21 +119,32 @@ class DoReMiTrainer(DistributedTrainer):
         domain_weights = outputs[0]["domain_weights"]
         domain_losses = outputs[0]["domain_losses"]
         samples_per_domain = outputs[0]["samples_per_domain"].tolist()
+        lm_loss_avg = torch.stack([output["lm_loss"] for output in outputs]).sum()
 
         handle_weight = dist.all_reduce(
             domain_weights, group=self.parallel_context.dp_pg, async_op=True, op=dist.ReduceOp.AVG
         )
-        handle_loss = dist.all_reduce(
+        handle_domain_loss = dist.all_reduce(
             domain_losses, group=self.parallel_context.dp_pg, async_op=True, op=dist.ReduceOp.AVG
+        )
+        handle_lm_loss = dist.all_reduce(
+            lm_loss_avg, group=self.parallel_context.dp_pg, async_op=True, op=dist.ReduceOp.AVG
         )
 
         super().train_step_logs(outputs, loss_avg)
 
         handle_weight.wait()
-        handle_loss.wait()
+        handle_domain_loss.wait()
+        handle_lm_loss.wait()
+
+        if not self.config.general.ignore_sanity_checks:
+            assert_tensor_synced_across_pg(
+                tensor=domain_weights,
+                pg=self.parallel_context.world_pg,
+                msg=lambda err: f"Domain weights are not synced across ranks {err}",
+            )
 
         self.doremi_context.add_weight_with_history(domain_weights, self.iteration_step)
-
         domain_weights = domain_weights.cpu().detach().numpy()
         domain_losses = domain_losses.cpu().detach().numpy()
 
@@ -150,6 +159,13 @@ class DoReMiTrainer(DistributedTrainer):
             group=self.parallel_context.dp_pg,
         )
 
+        if not self.config.general.ignore_sanity_checks:
+            assert_tensor_synced_across_pg(
+                tensor=loss_avg,
+                pg=self.parallel_context.world_pg,
+                msg=lambda err: f"DRO loss are not synced across ranks {err}",
+            )
+
         if dist.get_rank(self.parallel_context.world_pg) == self.logger_ranks[0]:
             if self.iteration_step % self.config.checkpoints.checkpoint_interval == 0:
                 checkpoints_path = self.config.checkpoints.checkpoints_path
@@ -161,7 +177,7 @@ class DoReMiTrainer(DistributedTrainer):
                     f"weight_domain_{self.doremi_context.get_domain_name(i)}": weight
                     for i, weight in enumerate(domain_weights)
                 }
-                loss_logs = {
+                domain_loss_logs = {
                     f"loss_domain_{self.doremi_context.get_domain_name(i)}": loss
                     for i, loss in enumerate(domain_losses)
                 }
@@ -173,9 +189,9 @@ class DoReMiTrainer(DistributedTrainer):
                 wandb.log(
                     {
                         **weight_logs,
-                        **loss_logs,
+                        **domain_loss_logs,
                         **samples_per_domain_logs,
-                        "loss_avg": loss_avg.cpu().detach().numpy(),
+                        "ce_loss": lm_loss_avg.cpu().detach().numpy(),
                         "iteration_step": self.iteration_step,
                     }
                 )

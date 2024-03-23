@@ -8,13 +8,18 @@ torchrun --nproc_per_node=4 examples/doremi/train_doremi.py --config-file exampl
 """
 import argparse
 
-import torch
-from doremi.config import DoReMiConfig
-from doremi.dataloader import get_dataloader, get_datasets
-from doremi.trainer import DoReMiTrainer
-from doremi.utils import compute_domain_weights_based_on_token_count
+# import torch
+from nanotron.dataloader import get_dataloader
 
-from nanotron.config import get_config_from_file
+from doremi.config import DoReMiConfig
+
+# from doremi.dataloader import get_dataloader, get_datasets
+from doremi.dataloader import get_dataloader_for_proxy_training
+from doremi.trainer import DoReMiTrainer
+
+# from doremi.utils import compute_domain_weights_based_on_token_count
+
+# from nanotron.config import get_config_from_file
 
 
 def get_args():
@@ -26,18 +31,19 @@ def get_args():
 if __name__ == "__main__":
     args = get_args()
     config_file = args.config_file
-    config: DoReMiConfig = get_config_from_file(config_file, config_class=DoReMiConfig)
+    # config: DoReMiConfig = get_config_from_file(config_file, config_class=DoReMiConfig)
 
-    dataset_paths = [f"{config.data.dataset.hf_dataset_or_datasets}/{name}" for name in config.doremi.domain_names]
-    datasets = get_datasets(dataset_paths)
+    # dataset_paths = [f"{config.data.dataset.hf_dataset_or_datasets}/{name}" for name in config.doremi.domain_names]
+    # datasets = get_datasets(dataset_paths)
 
-    # TODO(xrsrke): add retrieving domain weights from config
-    # or calculate it in the trainer
-    if config.doremi.domain_weights is None:
-        domain_weights = compute_domain_weights_based_on_token_count(datasets)
-    else:
-        domain_weights = torch.tensor(config.doremi.domain_weights)
+    # # TODO(xrsrke): add retrieving domain weights from config
+    # # or calculate it in the trainer
+    # if config.doremi.domain_weights is None:
+    #     domain_weights = compute_domain_weights_based_on_token_count(datasets)
+    # else:
+    #     domain_weights = torch.tensor(config.doremi.domain_weights)
 
-    trainer = DoReMiTrainer(domain_weights, config_file, config_class=DoReMiConfig)
-    dataloader = get_dataloader(trainer, datasets)
+    trainer = DoReMiTrainer(config_file, config_class=DoReMiConfig)
+    dataloader = get_dataloader(trainer)
+    dataloader = get_dataloader_for_proxy_training(dataloader, ref_model=trainer.ref_model)
     trainer.train(dataloader)

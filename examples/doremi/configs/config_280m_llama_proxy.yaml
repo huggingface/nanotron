@@ -6,9 +6,15 @@ checkpoints:
   save_initial_state: false
 
 doremi:
-  domain_names: Pile-CC, Github, OpenWebText2, StackExchange, Wikipedia (en), PubMed Abstracts, USPTO Backgrounds, FreeLaw, PubMed Central, Enron Emails, HackerNews, NIH ExPorter, Books3, ArXiv, DM Mathematics, OpenSubtitles, Gutenberg (PG-19), Ubuntu IRC, BookCorpus2, EuroParl, YoutubeSubtitles, PhilPapers
+  # domain_names: Pile-CC, Github, OpenWebText2, StackExchange, Wikipedia (en), PubMed Abstracts, USPTO Backgrounds, FreeLaw, PubMed Central, Enron Emails, HackerNews, NIH ExPorter, Books3, ArXiv, DM Mathematics, OpenSubtitles, Gutenberg (PG-19), Ubuntu IRC, BookCorpus2, EuroParl, YoutubeSubtitles, PhilPapers
   # domain_weights: 0.1500, 0.1213, 0.0872, 0.0631, 0.0340, 0.0240, 0.0281, 0.0594, 0.1599, 0.0015, 0.0058, 0.0021, 0.0605, 0.1136, 0.0209, 0.0154, 0.0202, 0.0037, 0.0065, 0.0100, 0.0093, 0.0036
-  ref_model_resume_checkpoint_path: checkpoints/doremi/big-run-02/refrence-280m-llama/100000
+
+  domain_names: Pile-CC, Github, OpenWebText2
+  domain_weights:
+  - 0.5
+  - 0.3
+  - 0.2
+  ref_model_resume_checkpoint_path: /fsx/phuc/projects/nanotron/checkpoints/1
 
 data:
   dataset:
@@ -43,7 +49,14 @@ data:
     # hf_dataset_splits: train
     # text_column_name: text
 
-    hf_dataset_or_datasets: project_data/doremi/datasets/the_pile_raw/tokenized_data/train
+    # hf_dataset_or_datasets: /fsx/phuc/datasets/doremi/the_pile/testset
+    hf_dataset_or_datasets:
+      vicgalle/alpaca-gpt4: 0.5
+      vicgalle/alpaca-gpt4: 0.3
+      vicgalle/alpaca-gpt4: 0.2
+    hf_dataset_splits: train
+    text_column_name: instruction
+    # hf_dataset_config_name: dihana
 
   num_loading_workers: 1
   seed: 42
@@ -81,7 +94,7 @@ model:
     pretraining_tp: 1
     rms_norm_eps: 1.0e-05
     rope_scaling: null
-    tie_word_embeddings: true
+    tie_word_embeddings: false
     use_cache: true
     vocab_size: 49152
 optimizer:
@@ -123,11 +136,13 @@ tokens:
   # micro_batch_size: 8
 
   batch_accumulation_per_replica: 1
-  micro_batch_size: 32
+  # micro_batch_size: 32
+  micro_batch_size: 2
 
   limit_test_batches: 0
   limit_val_batches: 0
-  sequence_length: 1024
+  # sequence_length: 1024
+  sequence_length: 10
   # train_steps: 1000
   # train_steps: 1579
   # train_steps: 100_000

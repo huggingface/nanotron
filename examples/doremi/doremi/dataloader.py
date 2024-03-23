@@ -5,10 +5,6 @@ from typing import Dict, List, Union
 
 import numpy as np
 import torch
-from torch.utils.data import DataLoader
-from torch.utils.data.distributed import DistributedSampler
-from tqdm import tqdm
-
 from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.dataloader import get_dataloader_worker_init
@@ -16,6 +12,10 @@ from nanotron.parallel import ParallelContext
 from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
 from nanotron.parallel.pipeline_parallel.utils import get_input_output_pp_ranks
 from nanotron.trainer import DistributedTrainer
+from torch import nn
+from torch.utils.data import DataLoader
+from torch.utils.data.distributed import DistributedSampler
+from tqdm import tqdm
 
 from .doremi_context import DoReMiContext
 
@@ -374,4 +374,24 @@ def get_dataloader(trainer: DistributedTrainer, datasets) -> DataLoader:
     # if the model is a proxy model
     dataloader = dataloader() if doremi_context.is_proxy is True else dataloader
 
+    return dataloader
+
+
+def get_dataloader_for_proxy_training(dataloader: DataLoader, ref_model: nn.Module):
+    def _data_generator(dataloader):
+        def inner():
+            for batch in dataloader:
+                batch = {k: v.to("cuda") for k, v in batch.items()}
+                # NOTE: because the inference model don't take `domain_idxs`
+                # as input we need to remove it from the batch
+                batch_for_inference = {k: v for k, v in batch.items() if k != "dataset_idxs"}
+
+                ref_losses = ref_model(**batch_for_inference)["losses"]
+                batch["ref_losses"] = ref_losses
+                yield batch
+
+        return inner
+
+    dataloader = _data_generator(dataloader)
+    dataloader = dataloader()
     return dataloader
