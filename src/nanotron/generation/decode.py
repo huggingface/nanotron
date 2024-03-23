@@ -166,6 +166,7 @@ def decode_text(
     max_micro_batch_size: int,
     max_new_tokens: int,
     is_bench: bool = False,
+    is_logits_transpose: bool = True,
 ) -> Generator[GenerationOutput, None, None]:
     """We assume the following:
     - Everyone receives ALL the input text. # TODO @thomasw21: technically only specific ranks need to receive input.
@@ -261,10 +262,8 @@ def decode_text(
                             input_mask=batch_generated_mask,
                         )
 
-                    if isinstance(sharded_logits, torch.Tensor):
-                        # sharded_logits = sharded_logits.transpose(0, 1)
-                        print("Don't transpose sharded logits for mamba")
-                        pass
+                    if isinstance(sharded_logits, torch.Tensor) and is_logits_transpose:
+                        sharded_logits = sharded_logits.transpose(0, 1)
 
                     # Communicate
                     # TODO @thomasw21: Make a diagram to show how this works
