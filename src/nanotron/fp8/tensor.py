@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from abc import abstractstaticmethod
 from copy import deepcopy
-from typing import cast
+from typing import Union, cast
 
 import torch
 import transformer_engine as te  # noqa
@@ -13,7 +13,7 @@ from nanotron.fp8.dtypes import DTypes
 
 
 class LowPrecisionTensor(torch.Tensor):
-    def __new__(cls, tensor: torch.Tensor, dtype: DTypes) -> torch.Tensor:
+    def __new__(cls, tensor: torch.Tensor, dtype: DTypes, interval: int = 1) -> torch.Tensor:
         assert isinstance(tensor, torch.Tensor), "tensor must be a tensor"
         assert tensor.dtype not in FP8_DTYPES, "The tensor already quantized to FP8"
 
@@ -22,7 +22,7 @@ class LowPrecisionTensor(torch.Tensor):
         assert tensor.device != torch.device("cpu"), "FP8Tensor only supports CUDA device"
         assert dtype in [DTypes.FP8E4M3, DTypes.FP8E5M2, DTypes.KFLOAT16]
 
-        fp8_meta = cls._get_metadata(tensor, dtype)
+        fp8_meta = cls._get_metadata(tensor, dtype, interval)
         # fp8_tensor = convert_tensor_to_fp8(tensor, fp8_meta)
         fp8_tensor = cls._quantize(tensor, fp8_meta)
 
@@ -38,21 +38,27 @@ class LowPrecisionTensor(torch.Tensor):
     #     return super().data
 
     # @data.setter
-    # def data(self, data: FP8Tensor):
+    # def data(self, data: Union[torch.Tensor, FP8Tensor]):
     #     assert isinstance(data, FP8Tensor)
     #     assert data.dtype == self.dtype, "The data must have the same dtype as the tensor"
     #     self.__dict__['data'] = data.data
     #     self.fp8_meta = data.fp8_meta
 
+    def __setattr__(self, __name: str, __value: torch.Any) -> None:
+        if __name == "data":
+            assert 1 == 1
+
+        return super().__setattr__(__name, __value)
+
     @staticmethod
-    def _get_metadata(tensor: torch.Tensor, dtype: DTypes) -> "FP8Meta":
+    def _get_metadata(tensor: torch.Tensor, dtype: DTypes, interval: int) -> "FP8Meta":
         # TODO(xrsrke): there is a circular import issue
         # between tensor.py and meta.py fix this
         from nanotron.fp8.meta import FP8Meta
 
         amax = tensor.abs().max().clone()
         scale = update_scaling_factor(amax, torch.tensor(INITIAL_SCALING_FACTOR, dtype=torch.float32), dtype)
-        fp8_meta = FP8Meta(amax, scale, dtype)
+        fp8_meta = FP8Meta(amax, scale, dtype, interval)
         return fp8_meta
 
     @abstractstaticmethod
@@ -87,6 +93,30 @@ class LowPrecisionTensor(torch.Tensor):
         raise ValueError(
             "You can't directly subtract a FP8Tensor with another tensor. You should cast it to a higher precision format"
         )
+
+    def __eq__(self, other: LowPrecisionTensor) -> bool:
+        assert isinstance(
+            other, self.__class__
+        ), "Expected other tensor to be an instance of {self.__class__}, got {other.__class__}"
+        return True if self.fp8_meta == other.fp8_meta and torch.equal(self.data, other.data) else False
+
+    # TODO(xrsrke): directly set a tensor data using tensor.data = new_data
+    def set_data(self, data: Union[torch.Tensor, LowPrecisionTensor]):
+        # pydevd.settrace(suspend=False, trace_only_current_thread=True)
+
+        assert isinstance(data, (self.__class__, torch.Tensor)), f"data must be a torch.Tensor or a {self.__class__}"
+        if isinstance(data, torch.Tensor):
+            quantized_data = self.__class__(data, self.fp8_meta.dtype, self.fp8_meta.interval)
+        else:
+            assert data.dtype == self.data.dtype, "The data must have the same dtype as the tensor, got {data.dtype}"
+            assert data.fp8_meta == self.fp8_meta, "The data must have the same FP8Meta as the tensor"
+            quantized_data = data
+
+        self.data = quantized_data.data
+
+        # NOTE: for delay scaling
+        new_amax = quantized_data.fp8_meta.amax
+        self.fp8_meta.add_amax(new_amax)
 
     def __repr__(self) -> str:
         if hasattr(self, "fp8_meta"):

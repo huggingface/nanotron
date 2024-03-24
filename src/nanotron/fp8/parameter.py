@@ -4,7 +4,7 @@ from typing import Optional, Union
 import torch
 from torch import nn
 
-from nanotron.fp8.constants import FP8_DTYPES, INITIAL_AMAX, INITIAL_SCALING_FACTOR
+from nanotron.fp8.constants import FP8_DTYPES, FP8LM_RECIPE, INITIAL_AMAX, INITIAL_SCALING_FACTOR
 from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.meta import FP8Meta
 from nanotron.fp8.tensor import FP8Tensor, update_scaling_factor
@@ -26,7 +26,7 @@ class FP8Parameter(nn.Parameter):
     to flow into FP8 tensors.
     """
 
-    def __new__(cls, data: torch.Tensor, dtype: DTypes, requires_grad: bool = True) -> nn.Parameter:
+    def __new__(cls, data: torch.Tensor, dtype: DTypes, requires_grad: bool = True, interval: int = 1) -> nn.Parameter:
         assert isinstance(data, torch.Tensor), "data must be a tensor"
         assert data.dtype not in FP8_DTYPES, "Currently only support turn a non-fp8 tensor to an fp8 parameter"
         assert data.device != torch.device("cpu"), "FP8Parameter only supports CUDA tensors"
@@ -37,7 +37,7 @@ class FP8Parameter(nn.Parameter):
             # because it raise "Only Tensors of floating point and complex dtype can require gradients"
             # TODO(xrsrke): delete this fp32 tensor from memory after quantization
             self = torch.Tensor._make_subclass(cls, data, requires_grad)
-            self._data = FP8Tensor(data, dtype=dtype)
+            self._data = FP8Tensor(data, dtype=dtype, interval=interval)
             # TODO(xrsrke): don't store fp32 raw data in memory after quantization
             self.orig_data = data.data
 
@@ -55,12 +55,27 @@ class FP8Parameter(nn.Parameter):
 
             # TODO(xrsrke): add type hints of fp8_grad_meta to FP8Parameter
             self.fp8_grad_meta = FP8GradMeta(
-                input_grad=FP8Meta(amax=INITIAL_AMAX, dtype=DTypes.FP8E4M3, scale=fp8e4m3_scale),
+                input_grad=FP8Meta(
+                    amax=INITIAL_AMAX,
+                    dtype=DTypes.FP8E4M3,
+                    scale=fp8e4m3_scale,
+                    interval=FP8LM_RECIPE.linear.input_grad.interval,
+                ),
                 # TODO(xrsrke): change weight_grad to data_grad
                 # because this is the gradient of the parameter itself
-                weight_grad=FP8Meta(amax=INITIAL_AMAX, dtype=DTypes.FP8E4M3, scale=fp8e4m3_scale),
+                weight_grad=FP8Meta(
+                    amax=INITIAL_AMAX,
+                    dtype=DTypes.FP8E4M3,
+                    scale=fp8e4m3_scale,
+                    interval=FP8LM_RECIPE.linear.weight_grad.interval,
+                ),
                 # kfloat8_e5m2
-                output_grad=FP8Meta(amax=INITIAL_AMAX, dtype=DTypes.FP8E5M2, scale=fp8e5m2_scale),
+                output_grad=FP8Meta(
+                    amax=INITIAL_AMAX,
+                    dtype=DTypes.FP8E5M2,
+                    scale=fp8e5m2_scale,
+                    interval=FP8LM_RECIPE.linear.output_grad.interval,
+                ),
             )
             self._grad = None
 
@@ -83,7 +98,7 @@ class FP8Parameter(nn.Parameter):
     @grad.setter
     def grad(self, value: Optional[Union[torch.Tensor, FP8Tensor]]):
         self.data._grad = value
-    
+
     @property
     def dtype(self) -> torch.dtype:
         return self._data.dtype

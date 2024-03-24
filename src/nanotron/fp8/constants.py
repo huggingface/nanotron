@@ -11,8 +11,8 @@ from nanotron.fp8.recipe import (
 
 FP8_GPU_NAMES = ["h100", "rtx 4090"]
 
-INITIAL_AMAX = 1.0
-INITIAL_SCALING_FACTOR = 1.0
+INITIAL_AMAX = torch.tensor(1.0, dtype=torch.float32)
+INITIAL_SCALING_FACTOR = torch.tensor(1.0, dtype=torch.float32)
 
 FP8_DTYPES = [torch.int8, torch.uint8]
 FP8E4M3_DTYPE = torch.int8
@@ -23,8 +23,12 @@ FP8E5M2_DTYPE = torch.uint8
 DTYPE_TO_FP8_MAX = {DTypes.FP8E4M3: 448.0, DTypes.FP8E5M2: 57344.0, DTypes.KFLOAT16: 65504.0}
 
 QTYPE_TO_DTYPE = {
+    # DTypes.FP8E4M3: torch.int8,
+    # TODO(xrsrke): FP8E4M3 stores as uint8?
+    DTypes.FP8E4M3: torch.uint8,
+    DTypes.FP8E5M2: torch.uint8,
     DTypes.KFLOAT16: torch.float16,
-    DTypes.KFLOAT32: torch.float32
+    DTypes.KFLOAT32: torch.float32,
 }
 
 # NOTE: the training recipe of the FP8-LM paper

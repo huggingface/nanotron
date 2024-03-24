@@ -120,10 +120,10 @@ def test_fp8adam_optimizer_states(learning_rate, betas, eps, weight_decay):
 
         # NOTE: i'm not sure this should be the target threshold
         # but i assume that if two tensors are equal, then the difference should be
-        # from quantization error, so i take these threasholds from fp8's quantization error's threashold
+        # from quantization error, so i take these thresholds from fp8's quantization error's threshold
         torch.testing.assert_allclose(fp32_exp_avg, ref_state["exp_avg"], rtol=0.1, atol=0.1)
         # torch.testing.assert_allclose(fp32_exp_avg_sq, ref_state["exp_avg_sq"], rtol=0.1, atol=0.1)
-        # torch.testing.assert_allclose(fp32_exp_avg_sq, ref_state["exp_avg_sq"], rtol=0, atol=1e-03) # fp16's quantization error's threashold
+        # torch.testing.assert_allclose(fp32_exp_avg_sq, ref_state["exp_avg_sq"], rtol=0, atol=1e-03) # fp16's quantization error's threshold
         torch.testing.assert_allclose(fp32_exp_avg_sq, ref_state["exp_avg_sq"], rtol=0, atol=1e-02)
 
 
@@ -328,7 +328,6 @@ def test_fp8adam_load_state_dict():
 
 # def test_fp8_parameter_delay_scaling_factor_update():
 #     pass
-
 
 
 # TODO(xrsrke): add sanity check all parameters are FP8Parameter

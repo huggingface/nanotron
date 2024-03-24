@@ -1,13 +1,13 @@
 from dataclasses import dataclass
-from typing import Optional, Union
+from typing import List
 
 import torch
 import transformer_engine as te  # noqa
 import transformer_engine_extensions as tex
 
 from nanotron.fp8.constants import DTYPE_TO_FP8_MAX
-from nanotron.fp8.tensor import convert_torch_dtype_to_te_dtype
 from nanotron.fp8.dtypes import DTypes
+from nanotron.fp8.tensor import convert_torch_dtype_to_te_dtype
 
 
 @dataclass
@@ -19,6 +19,7 @@ class FP8Meta:
 
     # TODO(xrsrke): change to Literal[torch.int8, torch.uint8]
     dtype: DTypes
+    interval: int
 
     @property
     def te_dtype(self) -> tex.DType:
@@ -28,11 +29,19 @@ class FP8Meta:
         assert isinstance(self.scale, torch.Tensor)
         assert isinstance(self.amax, torch.Tensor)
         assert isinstance(self.dtype, DTypes)
-        assert self.scale.dtype == torch.float32, f"Expected scale to be of dtype torch.float32, got {self.scale.dtype}"
-        assert self.amax.dtype == torch.float32, f"Expected amax to be of dtype torch.float32, got {self.amax.dtype}"
-        
+        assert isinstance(self.interval, int)
+        assert self.interval > 0, f"Expected interval to be greater than 0, got {self.interval}"
+        assert (
+            self.scale.dtype == torch.float32
+        ), f"Expected scale to be of dtype torch.float32, got {self.scale.dtype}"
+        assert self.amax.dtype in [
+            torch.float32,
+            torch.float16,
+        ], f"Expected amax to be of dtype torch.float32 or torch.float16, got {self.amax.dtype}"
+
         # NOTE: transformer engine only accepts torch tensors
         self.amax = torch.tensor(self.amax, device="cuda") if not isinstance(self.amax, torch.Tensor) else self.amax
+        self._amaxs: List[torch.Tensor] = [self.amax]
 
     @property
     def fp8_max(self) -> float:
@@ -42,8 +51,24 @@ class FP8Meta:
     @property
     def inverse_scale(self) -> torch.Tensor:
         # TODO(xrsrke): this is a hacky way, remove the _inverse_scale
-        # return 1 / self.scale if self._inverse_scale is None else self._inverse_scale
         return 1 / self.scale
+
+    # TODO(xrsrke): move to strategy pattern
+    def add_amax(self, amax: torch.Tensor):
+        if len(self._amaxs) == self.interval:
+            # TODO(xrsrke): do we have to clear the old amax
+            # from memory?
+            self._amaxs.pop(0)
+
+        self._amaxs.append(amax)
+
+    @property
+    def amaxs(self) -> List[torch.Tensor]:
+        return self._amaxs
+
+    @property
+    def is_ready_to_scale(self) -> bool:
+        return len(self.amaxs) == self.interval
 
     def __repr__(self) -> str:
         return f"FP8Meta(amax={self.amax}, scale={self.scale}, inverse_scale={self.inverse_scale}, dtype={self.dtype})"

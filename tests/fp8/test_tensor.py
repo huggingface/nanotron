@@ -1,10 +1,12 @@
 from copy import deepcopy
+from typing import cast
 
 import numpy as np
 import pytest
 import torch
 import transformer_engine as te  # noqa
 import transformer_engine_extensions as tex
+from nanotron.fp8.constants import QTYPE_TO_DTYPE
 from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.meta import FP8Meta
 from nanotron.fp8.tensor import FP8Tensor, FP16Tensor, convert_tensor_from_fp8, convert_tensor_from_fp16
@@ -14,19 +16,22 @@ from utils import fail_if_expect_to_fail
 @pytest.mark.parametrize(
     "tensor_cls, dtype", [(FP8Tensor, DTypes.FP8E4M3), (FP8Tensor, DTypes.FP8E5M2), (FP16Tensor, DTypes.KFLOAT16)]
 )
-def test_fp8_and_fp16_metadata(tensor_cls, dtype):
+@pytest.mark.parametrize("interval", [1, 5])
+def test_fp8_and_fp16_metadata(tensor_cls, dtype, interval):
     tensor = torch.randn((4, 4), dtype=torch.float32, device="cuda")
     ref_tensor = deepcopy(tensor)
 
-    fp8_tensor = tensor_cls(tensor, dtype=dtype)
+    fp8_tensor = tensor_cls(tensor, dtype=dtype, interval=interval)
+    fp8_meta = cast(FP8Meta, fp8_tensor.fp8_meta)
 
     # TODO(xrsrke): remove the fixed 1 factor
     # it couples with the current implementation of FP8Meta
     # because we initialize scale with 1
-    assert fp8_tensor.fp8_meta.amax == ref_tensor.abs().max()
-    assert isinstance(fp8_tensor.fp8_meta.inverse_scale, torch.Tensor)
-    assert fp8_tensor.fp8_meta.scale != 0.1 and fp8_tensor.fp8_meta.scale != 1.0
-    assert isinstance(fp8_tensor.fp8_meta.te_dtype, tex.DType)
+    assert fp8_meta.amax == ref_tensor.abs().max()
+    assert isinstance(fp8_meta.inverse_scale, torch.Tensor)
+    assert fp8_meta.scale != 0.1 and fp8_meta.scale != 1.0
+    assert isinstance(fp8_meta.te_dtype, tex.DType)
+    assert fp8_meta.interval == interval
 
 
 @pytest.mark.parametrize("size", [4, 8, 16, 64])
@@ -307,28 +312,93 @@ def test_fp8_and_fp16_tensor_storage_memory(tensor_cls, dtype):
 @pytest.mark.parametrize(
     "tensor_cls, dtype", [(FP8Tensor, DTypes.FP8E4M3), (FP8Tensor, DTypes.FP8E5M2), (FP16Tensor, DTypes.KFLOAT16)]
 )
-def test_set_data_for_fp8_and_fp16_tensor(tensor_cls, dtype):
+def test_setting_new_data_for_fp8_and_fp16_tensor(tensor_cls, dtype):
+    tensor = torch.randn((4, 4), dtype=torch.float32, device="cuda")
+    fp8_tensor = tensor_cls(tensor, dtype=dtype)
+
+    new_data = torch.randn(fp8_tensor.shape, dtype=torch.float32, device="cuda")
+    ref_new_data = deepcopy(new_data)
+    expected_quantized_tensor = tensor_cls(ref_new_data, dtype=dtype)
+
+    fp8_tensor.set_data(new_data)
+
+    assert fp8_tensor.data.dtype == QTYPE_TO_DTYPE[dtype]
+    assert torch.equal(fp8_tensor, expected_quantized_tensor)
+
+
+@pytest.mark.parametrize(
+    "tensor_cls, dtype", [(FP8Tensor, DTypes.FP8E4M3), (FP8Tensor, DTypes.FP8E5M2), (FP16Tensor, DTypes.KFLOAT16)]
+)
+def test_the_memory_location_after_setting_new_data_for_fp8_and_fp16_tensor(tensor_cls, dtype):
     tensor = torch.randn((4, 4), dtype=torch.float32, device="cuda")
     fp8_tensor = tensor_cls(tensor, dtype=dtype)
 
     new_data = torch.randint(low=0, high=256, size=(4, 4), dtype=torch.uint8)
-    fp8_tensor.data = new_data.data
+    fp8_tensor.set_data(new_data)
 
     assert id(fp8_tensor.data) == id(new_data)
     assert torch.equal(fp8_tensor.data, new_data)
     assert fp8_tensor.data.data_ptr() == new_data.data_ptr()
 
 
-@pytest.mark.parametrize(
-    "tensor_cls, dtype", [(FP8Tensor, DTypes.FP8E4M3), (FP8Tensor, DTypes.FP8E5M2)]
-)
-def test_fp8_parameter_track_amaxs(tensor_cls, dtype):
+@pytest.mark.parametrize("dtype", [DTypes.FP8E4M3, DTypes.FP8E5M2])
+@pytest.mark.parametrize("interval", [1, 5, 10])
+def test_fp8_tensor_track_amaxs(dtype, interval):
     tensor = torch.randn((4, 4), dtype=torch.float32, device="cuda")
-    fp8_tensor = tensor_cls(tensor, dtype=dtype)
+    fp8_tensor = FP8Tensor(tensor, dtype=dtype, interval=interval)
+    fp8_meta = cast(FP8Meta, fp8_tensor.fp8_meta)
+
+    assert isinstance(fp8_meta.amaxs, list)
+    assert len(fp8_meta.amaxs) == 1
+    assert torch.equal(fp8_meta.amaxs[0], tensor.abs().max())
+
+    for i in range(interval * 2):
+        new_data = torch.randn(fp8_tensor.shape, dtype=torch.float32, device="cuda")
+        fp8_tensor.set_data(new_data)
+
+        # NOTE: we expect it only maintains amaxs in
+        # a window of interval, not more than that
+        # NOTE: i+1 aligns the starting index to 1
+        # i+1+1 because we have the initial amax, then add the new amax
+        assert len(fp8_meta.amaxs) == (i + 2) if (i + 2) < interval else interval
+        assert torch.equal(fp8_meta.amaxs[-1], new_data.abs().max())
 
 
-def test_fp8_parameter_delay_scaling_factor_update():
+@pytest.mark.parametrize("dtype", [DTypes.FP8E4M3, DTypes.FP8E5M2])
+@pytest.mark.parametrize("interval", [1, 5, 10])
+def test_delay_scaling_fp8_tensor(dtype, interval):
+    tensor = torch.randn((4, 4), dtype=torch.float32, device="cuda")
+    fp8_tensor = FP8Tensor(tensor, dtype=dtype, interval=interval)
+    fp8_meta = cast(FP8Meta, fp8_tensor.fp8_meta)
+
+    for i in range(1, (interval * 1) + 1):
+        new_data = torch.randn(fp8_tensor.shape, dtype=torch.float32, device="cuda")
+        fp8_tensor.set_data(new_data)
+
+        assert fp8_meta.is_ready_to_scale == ((i + 1) >= interval)
+
+
+def test_clear_amaxs_history_if_overflow_occur():
     pass
+
+
+# NOTE: add testing based on tensor metadata
+@pytest.mark.parametrize("dtype", [DTypes.FP8E4M3, DTypes.FP8E5M2])
+def test_fp8_and_fp16_tensor_equality_based_on_tensor_value(dtype):
+    tensor = torch.randn((4, 4), dtype=torch.float32, device="cuda")
+    ref_tensor = deepcopy(tensor)
+
+    fp8_tensor = FP8Tensor(tensor, dtype=dtype)
+    ref_fp8_tensor = FP8Tensor(ref_tensor, dtype=dtype)
+
+    assert fp8_tensor == ref_fp8_tensor
+    assert torch.equal(fp8_tensor, ref_fp8_tensor)
+
+    new_data = torch.randn(tensor.shape, dtype=torch.float32, device="cuda")
+    ref_fp8_tensor.set_data(new_data)
+
+    assert not fp8_tensor == ref_fp8_tensor
+    assert not torch.equal(fp8_tensor, ref_fp8_tensor)
 
 
 # TODO(xrsrke): test it has all the methods of torch.Tensor
