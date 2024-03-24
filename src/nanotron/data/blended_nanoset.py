@@ -11,7 +11,6 @@ import torch
 from nanotron import logging
 from nanotron.data.nanoset import Nanoset
 from nanotron.data.nanoset_configs import NanosetConfig
-from nanotron.data.utils import normalize
 from nanotron.logging import log_rank
 
 logger = logging.get_logger(__name__)
@@ -48,9 +47,6 @@ class BlendedNanoset(torch.utils.data.Dataset):
         if len(datasets) == 1:
             log_rank("Building a BlendedNanoset for a single Nanoset", logger=logger, level=logging.WARNING, rank=0)
 
-        # Redundant normalization for bitwise identical comparison with Megatron-LM
-        weights = normalize(weights)
-
         self.datasets = datasets
         self.weights = weights
         self.size = size
@@ -67,7 +63,7 @@ class BlendedNanoset(torch.utils.data.Dataset):
         self.unique_description = json.dumps(unique_identifiers, indent=4)
         self.unique_description_hash = hashlib.md5(self.unique_description.encode("utf-8")).hexdigest()
 
-        self.dataset_index, self.dataset_sample_index = self._build_indices()
+        self.dataset_index, self.dataset_sample_index = self.build_indices()
 
         # Check size
         _ = self[self.size - 1]
@@ -86,7 +82,7 @@ class BlendedNanoset(torch.utils.data.Dataset):
 
         return self.datasets[dataset_id][dataset_sample_id]
 
-    def _build_indices(self) -> Tuple[numpy.ndarray, numpy.ndarray]:
+    def build_indices(self) -> Tuple[numpy.ndarray, numpy.ndarray]:
         """Build and optionally cache the dataset index and the dataset sample index
 
         The dataset index is a 1-D mapping which determines the dataset to query. The dataset

@@ -48,13 +48,13 @@ class NanosetBuilder(object):
 
         # Single Nanoset
         if isinstance(data_path, str):
-            return self._build_nanoset_dataset_splits(data_path, split, self.config.split_num_samples)
+            return self.build_nanoset_dataset_splits(data_path, split, self.config.split_num_samples)
 
         # Blended Nanoset
         prefix_per_dataset = list(data_path.keys())
         weight_per_dataset = normalize(list(data_path.values()))
 
-        # NOTE: Use 0.5% target margin to ensure we satiate the network
+        # NOTE: Use 0.5% target margin to ensure that that we do not exhaust the indices of any dataset in the Blend
         sizes_per_dataset = [
             [
                 int(math.ceil(target_num_samples * weight * 1.005))
@@ -66,9 +66,10 @@ class NanosetBuilder(object):
         nanoset_datasets = [[] for _ in range(len(Split))]
 
         for i in range(len(prefix_per_dataset)):
-            nanoset_datasets_split = self._build_nanoset_dataset_splits(
+            nanoset_datasets_split = self.build_nanoset_dataset_splits(
                 prefix_per_dataset[i], split, sizes_per_dataset[i]
             )
+
             for j in range(len(nanoset_datasets_split)):
                 nanoset_datasets[j].append(nanoset_datasets_split[j])
 
@@ -84,9 +85,9 @@ class NanosetBuilder(object):
                 assert all(is_none)
                 blended_nanosets.append(None)
             else:
-                assert all(is_none) or not any(is_none)
+                assert not any(is_none)
                 blended_nanosets.append(
-                    self._build_generic_dataset(
+                    self.build_generic_dataset(
                         BlendedNanoset,
                         nanoset_datasets[i],
                         weight_per_dataset,
@@ -97,7 +98,7 @@ class NanosetBuilder(object):
 
         return blended_nanosets
 
-    def _build_nanoset_dataset_splits(
+    def build_nanoset_dataset_splits(
         self,
         path_prefix: str,
         split: List[float],
@@ -115,10 +116,9 @@ class NanosetBuilder(object):
         Returns:
             List[Nanoset]: The Nanoset per split. Always returns Nanosets because we build them in each and every rank
         """
+        indexed_dataset = self.build_generic_dataset(MMapIndexedDataset, path_prefix)
 
-        indexed_dataset = self._build_generic_dataset(MMapIndexedDataset, path_prefix)
-
-        split_idx_bounds = _get_split_indices(split, indexed_dataset.sequence_lengths.shape[0])
+        split_idx_bounds = get_split_indices(split, indexed_dataset.sequence_lengths.shape[0])
 
         split_indices = [
             numpy.arange(
@@ -136,14 +136,14 @@ class NanosetBuilder(object):
                 nanoset_datasets.append(None)
             else:
                 nanoset_datasets.append(
-                    self._build_generic_dataset(
+                    self.build_generic_dataset(
                         Nanoset, indexed_dataset, split_indices[i], sizes[i], _split, self.config
                     )
                 )
 
         return nanoset_datasets
 
-    def _build_generic_dataset(
+    def build_generic_dataset(
         self,
         cls: Type[DistributedDataset],
         *args: Any,
@@ -190,7 +190,7 @@ class NanosetBuilder(object):
         return cls(*args)
 
 
-def _get_split_indices(split: List[float], num_elements: int) -> List[int]:
+def get_split_indices(split: List[float], num_elements: int) -> List[int]:
     """Determine the document index bounds per split
 
     Args:

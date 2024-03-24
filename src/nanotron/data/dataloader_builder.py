@@ -27,7 +27,6 @@ def build_nanoset_dataloader(
     output_pp_rank: int,
     micro_batch_size: int,
     dataloader_num_workers: int,
-    seed_worker: int,
     consumed_train_samples: int = 0,
     dataloader_drop_last: bool = True,
     dataloader_pin_memory: bool = True,
@@ -55,7 +54,6 @@ def build_nanoset_dataloader(
         dataset=dataset,
         dl_ranks_size=dp_ranks_size,
         dl_rank=dp_rank,
-        seed=seed_worker,
         drop_last=dataloader_drop_last,
         consumed_train_samples=consumed_train_samples,
     )
@@ -152,13 +150,12 @@ def get_sampler(
     dl_ranks_size: int,
     dl_rank: int,
     dataset,
-    seed: int,
     consumed_train_samples: int,
     drop_last: Optional[bool] = True,
 ) -> Optional[Sampler]:
     """returns sampler that restricts data loading to a subset of the dataset proper to the DP rank"""
 
-    sampler = DistributedSampler(dataset, num_replicas=dl_ranks_size, rank=dl_rank, seed=seed, drop_last=drop_last)
+    sampler = DistributedSampler(dataset, num_replicas=dl_ranks_size, rank=dl_rank, shuffle=False, drop_last=drop_last)
 
     if consumed_train_samples > 0:
         sampler = SkipBatchSampler(sampler, skip_batches=consumed_train_samples, dp_size=dl_ranks_size)

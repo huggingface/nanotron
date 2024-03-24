@@ -56,7 +56,6 @@ def get_dataloaders(trainer: DistributedTrainer):
         micro_batch_size=trainer.micro_batch_size,
         consumed_train_samples=trainer.consumed_train_samples,
         dataloader_num_workers=trainer.config.data.num_loading_workers,
-        seed_worker=trainer.config.data.seed,
         dataloader_drop_last=True,
     )
 
@@ -68,7 +67,6 @@ def get_dataloaders(trainer: DistributedTrainer):
         output_pp_rank=output_pp_rank,
         micro_batch_size=trainer.micro_batch_size,
         dataloader_num_workers=trainer.config.data.num_loading_workers,
-        seed_worker=trainer.config.data.seed,
         dataloader_drop_last=True,
     )
 
@@ -80,7 +78,6 @@ def get_dataloaders(trainer: DistributedTrainer):
         output_pp_rank=output_pp_rank,
         micro_batch_size=trainer.micro_batch_size,
         dataloader_num_workers=trainer.config.data.num_loading_workers,
-        seed_worker=trainer.config.data.seed,
         dataloader_drop_last=True,
     )
 
