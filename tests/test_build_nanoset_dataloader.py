@@ -1,3 +1,5 @@
+import random
+
 import pytest
 from helpers.context import TestContext
 from helpers.data import (
@@ -49,16 +51,18 @@ def test_build_nanoset_dataloader(tp: int, dp: int, pp: int):
 def _test_build_nanoset_dataloader(
     parallel_context: ParallelContext, test_context: TestContext, path_to_bin_files: str
 ):
-    TRAIN_STEPS = 10000
+    SEED = 1234
+    random.seed(SEED)
+
+    TRAIN_STEPS = random.randint(1000, 10000)
     VAL_CHECK_INTERVAL = TRAIN_STEPS / 4
     VAL_STEPS = TRAIN_STEPS / 10
-    MICRO_BATCH_SIZE = 4
-    N_MICRO_BATCHES_PER_BATCH = 8
+    MICRO_BATCH_SIZE = 2 ** random.randint(1, 4)
+    N_MICRO_BATCHES_PER_BATCH = 2 ** random.randint(1, 4)
     GLOBAL_BATCH_SIZE = MICRO_BATCH_SIZE * N_MICRO_BATCHES_PER_BATCH * parallel_context.dp_pg.size()
 
-    SEED = 1234
-    SEQ_LENGTH = 8192
-    SPLIT = "950,40,10"
+    SEQ_LENGTH = 2 ** random.randint(10, 14)
+    SPLIT = "{},{},{}".format(random.randint(1, 100), random.randint(1, 100), random.randint(1, 100))
 
     input_pp_rank, output_pp_rank = 0, int(parallel_context.pp_pg.size() - 1)
 
@@ -82,7 +86,7 @@ def _test_build_nanoset_dataloader(
     blended_nanoset_config = NanosetConfig(
         random_seed=SEED,
         sequence_length=SEQ_LENGTH,
-        data_path={bin_path: 5 - idx for idx, bin_path in enumerate(path_to_bin_files)},
+        data_path={bin_path: random.randint(1, 100) for bin_path in path_to_bin_files},
         split=SPLIT,
         split_num_samples=split_num_samples,
         path_to_cache=test_context.get_auto_remove_tmp_dir(),
@@ -108,7 +112,6 @@ def _test_build_nanoset_dataloader(
             output_pp_rank=output_pp_rank,
             micro_batch_size=MICRO_BATCH_SIZE,
             dataloader_num_workers=0,
-            seed_worker=SEED,
             dataloader_drop_last=True,
         )
 

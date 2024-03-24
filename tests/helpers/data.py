@@ -20,7 +20,7 @@ def create_dataset_paths(tmp_dir: str, quantity: int):
     return json_dataset_path, bin_dataset_path
 
 
-def create_dummy_json_dataset(path_to_json: str, dummy_text: str, n_samples: int = 500):
+def create_dummy_json_dataset(path_to_json: str, dummy_text: str, n_samples: int = 50000):
 
     with open(path_to_json + ".json", "a") as json_file:
         for sample in range(n_samples):
@@ -33,12 +33,12 @@ def preprocess_dummy_dataset(path_to_json: str):
     # Create args for preprocessing
     args = Namespace(
         input=path_to_json + ".json",
-        json_keys=["text"],
+        json_key="text",
         output_prefix=path_to_json,
         pretrained_model_name_or_path="openai-community/gpt2",
         workers=int(min(os.cpu_count(), 8)),
         partitions=int((min(os.cpu_count(), 8) / 2)),
-        append_eod=True,
+        append_eos=True,
         log_interval=int(1000),
     )
 
