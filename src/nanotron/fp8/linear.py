@@ -64,7 +64,9 @@ class _FP8Matmul(torch.autograd.Function):
         ctx, input: Union[FP8Tensor, torch.Tensor], weight: FP8Tensor, phony: torch.Tensor, accum_qtype: DTypes
     ) -> torch.Tensor:
         if type(input) == torch.Tensor:
-            input = FP8Tensor(input, dtype=FP8LM_RECIPE.linear.input.dtype)
+            input = FP8Tensor(
+                input, dtype=FP8LM_RECIPE.linear.input.dtype, interval=FP8LM_RECIPE.linear.input.interval
+            )
 
         ctx.grad_metadata = weight.fp8_grad_meta
         ctx.accum_qtype = accum_qtype

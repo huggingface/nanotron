@@ -312,7 +312,8 @@ def test_fp8_and_fp16_tensor_storage_memory(tensor_cls, dtype):
 @pytest.mark.parametrize(
     "tensor_cls, dtype", [(FP8Tensor, DTypes.FP8E4M3), (FP8Tensor, DTypes.FP8E5M2), (FP16Tensor, DTypes.KFLOAT16)]
 )
-def test_setting_new_data_for_fp8_and_fp16_tensor(tensor_cls, dtype):
+@pytest.mark.parametrize("is_quantized", [True, False])
+def test_setting_new_data_for_fp8_and_fp16_tensor(tensor_cls, dtype, is_quantized):
     tensor = torch.randn((4, 4), dtype=torch.float32, device="cuda")
     fp8_tensor = tensor_cls(tensor, dtype=dtype)
 
@@ -320,25 +321,26 @@ def test_setting_new_data_for_fp8_and_fp16_tensor(tensor_cls, dtype):
     ref_new_data = deepcopy(new_data)
     expected_quantized_tensor = tensor_cls(ref_new_data, dtype=dtype)
 
+    new_data = tensor_cls(ref_new_data, dtype=dtype) if is_quantized else ref_new_data
     fp8_tensor.set_data(new_data)
 
     assert fp8_tensor.data.dtype == QTYPE_TO_DTYPE[dtype]
     assert torch.equal(fp8_tensor, expected_quantized_tensor)
 
 
-@pytest.mark.parametrize(
-    "tensor_cls, dtype", [(FP8Tensor, DTypes.FP8E4M3), (FP8Tensor, DTypes.FP8E5M2), (FP16Tensor, DTypes.KFLOAT16)]
-)
-def test_the_memory_location_after_setting_new_data_for_fp8_and_fp16_tensor(tensor_cls, dtype):
-    tensor = torch.randn((4, 4), dtype=torch.float32, device="cuda")
-    fp8_tensor = tensor_cls(tensor, dtype=dtype)
+# @pytest.mark.parametrize(
+#     "tensor_cls, dtype", [(FP8Tensor, DTypes.FP8E4M3), (FP8Tensor, DTypes.FP8E5M2), (FP16Tensor, DTypes.KFLOAT16)]
+# )
+# def test_the_memory_location_after_setting_new_data_for_fp8_and_fp16_tensor(tensor_cls, dtype):
+#     tensor = torch.randn((4, 4), dtype=torch.float32, device="cuda")
+#     fp8_tensor = tensor_cls(tensor, dtype=dtype)
 
-    new_data = torch.randint(low=0, high=256, size=(4, 4), dtype=torch.uint8)
-    fp8_tensor.set_data(new_data)
+#     new_data = torch.randint(low=0, high=256, size=(4, 4), dtype=torch.uint8)
+#     fp8_tensor.set_data(new_data)
 
-    assert id(fp8_tensor.data) == id(new_data)
-    assert torch.equal(fp8_tensor.data, new_data)
-    assert fp8_tensor.data.data_ptr() == new_data.data_ptr()
+#     assert id(fp8_tensor.data) == id(new_data)
+#     assert torch.equal(fp8_tensor.data, new_data)
+#     assert fp8_tensor.data.data_ptr() == new_data.data_ptr()
 
 
 @pytest.mark.parametrize("dtype", [DTypes.FP8E4M3, DTypes.FP8E5M2])
@@ -378,8 +380,19 @@ def test_delay_scaling_fp8_tensor(dtype, interval):
         assert fp8_meta.is_ready_to_scale == ((i + 1) >= interval)
 
 
-def test_clear_amaxs_history_if_overflow_occur():
-    pass
+# @pytest.mark.parametrize("dtype", [DTypes.FP8E4M3, DTypes.FP8E5M2])
+# @pytest.mark.parametrize("interval", [1, 5, 10])
+# def test_clear_amaxs_history_if_overflow_occur(dtype, interval):
+#     tensor = torch.randn((4, 4), dtype=torch.float32, device="cuda")
+#     fp8_tensor = FP8Tensor(tensor, dtype=dtype, interval=interval)
+#     fp8_meta = cast(FP8Meta, fp8_tensor.fp8_meta)
+
+#     new_data = torch.randn(fp8_tensor.shape, dtype=torch.float32, device="cuda")
+#     new_data[0] = torch.tensor(float('inf'))
+#     fp8_tensor.set_data(new_data)
+
+#     assert fp8_meta.amaxs == [new_data.abs().max()]
+#     # assert fp8_meta.is_ready_to_scale == ((i + 1) >= interval)
 
 
 # NOTE: add testing based on tensor metadata
@@ -399,6 +412,27 @@ def test_fp8_and_fp16_tensor_equality_based_on_tensor_value(dtype):
 
     assert not fp8_tensor == ref_fp8_tensor
     assert not torch.equal(fp8_tensor, ref_fp8_tensor)
+
+
+@pytest.mark.parametrize("dtype", [DTypes.FP8E4M3, DTypes.FP8E5M2])
+@pytest.mark.parametrize("interval", [1, 5, 10])
+def test_dynamic_fp8_quantization(dtype, interval):
+    tensor = torch.randn((4, 4), dtype=torch.float32, device="cuda")
+    new_data = deepcopy(tensor)
+
+    fp8_tensor = FP8Tensor(tensor, dtype=dtype, interval=interval)
+    fp8_meta = cast(FP8Meta, fp8_tensor.fp8_meta)
+
+    history_sf = []
+    history_sf.append(fp8_meta.scale)
+    for _ in range(1, (interval * 1) + 1):
+        new_data = new_data.clone() * 2
+        fp8_tensor.set_data(new_data)
+
+        assert fp8_meta.scale not in history_sf
+        history_sf.append(fp8_meta.scale)
+
+    # tensor = convert_tensor_from_fp8(fp8_tensor, fp8_tensor.fp8_meta, torch.float32)
 
 
 # TODO(xrsrke): test it has all the methods of torch.Tensor

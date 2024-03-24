@@ -96,7 +96,6 @@ def test_fp8_optim_master_weights_fp16_and_fp8():
 @pytest.mark.parametrize("eps", [1e-8, 1e-3])
 @pytest.mark.parametrize("weight_decay", [0, 0.5])
 def test_fp8adam_optimizer_states(learning_rate, betas, eps, weight_decay):
-    # NOTE: this one works
     input = torch.randn(16, 16, device="cuda")
     linear = nn.Linear(16, 16, device="cuda")
     fp8_linear = convert_linear_to_fp8(deepcopy(linear), accum_qtype=DTypes.KFLOAT16)

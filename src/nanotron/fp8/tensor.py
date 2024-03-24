@@ -23,7 +23,6 @@ class LowPrecisionTensor(torch.Tensor):
         assert dtype in [DTypes.FP8E4M3, DTypes.FP8E5M2, DTypes.KFLOAT16]
 
         fp8_meta = cls._get_metadata(tensor, dtype, interval)
-        # fp8_tensor = convert_tensor_to_fp8(tensor, fp8_meta)
         fp8_tensor = cls._quantize(tensor, fp8_meta)
 
         # TODO(xrsrke): move update inverse scaling to FP8Meta's initialization
@@ -102,21 +101,23 @@ class LowPrecisionTensor(torch.Tensor):
 
     # TODO(xrsrke): directly set a tensor data using tensor.data = new_data
     def set_data(self, data: Union[torch.Tensor, LowPrecisionTensor]):
-        # pydevd.settrace(suspend=False, trace_only_current_thread=True)
-
         assert isinstance(data, (self.__class__, torch.Tensor)), f"data must be a torch.Tensor or a {self.__class__}"
-        if isinstance(data, torch.Tensor):
-            quantized_data = self.__class__(data, self.fp8_meta.dtype, self.fp8_meta.interval)
-        else:
+        if data.__class__ in [FP8Tensor, FP16Tensor]:
             assert data.dtype == self.data.dtype, "The data must have the same dtype as the tensor, got {data.dtype}"
-            assert data.fp8_meta == self.fp8_meta, "The data must have the same FP8Meta as the tensor"
             quantized_data = data
+        else:
+            quantized_data = self.__class__(data, self.fp8_meta.dtype, self.fp8_meta.interval)
 
         self.data = quantized_data.data
 
         # NOTE: for delay scaling
         new_amax = quantized_data.fp8_meta.amax
         self.fp8_meta.add_amax(new_amax)
+
+        max_amax = torch.max(torch.stack(self.fp8_meta.amaxs))
+        self.fp8_meta.scale = update_scaling_factor(
+            max_amax, torch.tensor(INITIAL_SCALING_FACTOR, dtype=torch.float32), self.fp8_meta.dtype
+        )
 
     def __repr__(self) -> str:
         if hasattr(self, "fp8_meta"):
