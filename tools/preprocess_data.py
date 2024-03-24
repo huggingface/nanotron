@@ -23,30 +23,13 @@ class Encoder(object):
 
     def encode(self, json_line):
         data = json.loads(json_line)
-        ids = {}
-        lens = {}
-        for key in self.args.json_keys:
-            text = data[key]
-            if isinstance(text, list):
-                sentences = text
-            else:
-                sentences = [text]
-            doc_ids = []
-            sentence_lens = []
-            for sentence in sentences:
-                sentence_ids = Encoder.tokenizer.encode(sentence)
+        text = data[self.args.json_key]
 
-                if len(sentence_ids) > 0:
-                    doc_ids.extend(sentence_ids)
-                    sentence_lens.append(len(sentence_ids))
+        text_ids = Encoder.tokenizer.encode(text)
+        if self.args.append_eos:
+            text_ids.append(Encoder.tokenizer.eos_token_id)
 
-            if len(doc_ids) > 0 and self.args.append_eod:
-                doc_ids.append(Encoder.tokenizer.eos_token_id)
-                sentence_lens[-1] += 1
-
-            ids[key] = doc_ids
-            lens[key] = sentence_lens
-        return ids, lens, len(json_line)
+        return text_ids, len(text_ids), len(json_line)
 
 
 class Partition(object):
@@ -72,39 +55,31 @@ class Partition(object):
         pool = multiprocessing.Pool(self.workers, initializer=encoder.initializer)
         encoded_docs = pool.imap(encoder.encode, fin, 32)
 
-        output_bin_files = {}
-        output_idx_files = {}
-        builders = {}
+        output_bin_file = "{}_{}.bin".format(output_prefix, self.args.json_key)
+        output_idx_file = "{}_{}.idx".format(output_prefix, self.args.json_key)
 
-        for key in self.args.json_keys:
-            output_bin_files[key] = "{}_{}.bin".format(output_prefix, key)
-            output_idx_files[key] = "{}_{}.idx".format(output_prefix, key)
-            builders[key] = indexed_dataset.MMapIndexedDatasetBuilder(
-                output_bin_files[key],
-                dtype=indexed_dataset.DType.optimal_dtype(tokenizer.vocab_size),
-            )
+        builder = indexed_dataset.MMapIndexedDatasetBuilder(
+            output_bin_file, dtype=indexed_dataset.DType.optimal_dtype(tokenizer.vocab_size)
+        )
 
         startup_end = time.time()
         proc_start = time.time()
         total_bytes_processed = 0
         print("Time to startup:", startup_end - startup_start)
-        for i, (doc, sentence_lens, bytes_processed) in enumerate(encoded_docs, start=1):
+        for i, (text_ids, len_text_ids, bytes_processed) in enumerate(encoded_docs, start=1):
             total_bytes_processed += bytes_processed
-            for key in doc.keys():
-                builders[key].add_document(doc[key], sentence_lens[key])
+            builder.add_document([text_ids], [len_text_ids])
             self.print_processing_stats(i, proc_start, total_bytes_processed)
 
         fin.close()
-        builders[key].finalize(output_idx_files[key])
+        builder.finalize(output_idx_file)
 
 
 def get_args():
     parser = argparse.ArgumentParser()
     group = parser.add_argument_group(title="input data")
     group.add_argument("--input", type=str, required=True, help="Path to input JSON")
-    group.add_argument(
-        "--json-keys", nargs="+", default=["text"], help="space separate listed of keys to extract from json"
-    )
+    group.add_argument("--json-key", type=str, default="text", help="Key to extract from json")
 
     group = parser.add_argument_group(title="tokenizer")
     group.add_argument(
@@ -113,10 +88,12 @@ def get_args():
         required=True,
         help="A path to a directory containing vocabulary files required by the tokenizer or the model id of a predefined tokenizer hosted inside a model repo on the Hugging Face Hub.",
     )
-    group.add_argument("--append-eod", action="store_true", help="Append an <eod> token to the end of a document.")
+    group.add_argument("--append-eos", action="store_true", help="Append an <eos> token to the end of a sample.")
 
     group = parser.add_argument_group(title="output data")
-    group.add_argument("--output-prefix", type=str, required=True, help="Path to binary output file without suffix")
+    group.add_argument(
+        "--output-prefix", type=str, required=True, help="Path to binary and index output files without suffix"
+    )
 
     group = parser.add_argument_group(title="runtime")
     group.add_argument(
@@ -145,13 +122,6 @@ def get_file_name(args, file_id):
     return file_names
 
 
-def check_files_exist(in_ss_out_names, key, num_partitions):
-    for i in range(num_partitions):
-        if not os.path.exists(in_ss_out_names[i][key]):
-            return False
-    return True
-
-
 def main(args):
     # Check if json file is not empty
     assert os.path.getsize(args.input), f"{args.input} is empty!"
@@ -175,27 +145,23 @@ def main(args):
             in_ss_out_name = get_file_name(args, idx)
             in_ss_out_names.append(in_ss_out_name)
 
-        # Check to see if paritions were already created
-        partitions_present = check_files_exist(in_ss_out_names, "partition", args.partitions)
+        # Populate .jsonl partition files from parent files
+        partitioned_input_files = []
+        for idx in range(args.partitions):
+            partitioned_input_file = open(in_ss_out_names[idx]["partition"], "w")
+            partitioned_input_files.append(partitioned_input_file)
 
-        if not partitions_present:
-            # Populate .jsonl partition files from parent files
-            partitioned_input_files = []
-            for idx in range(args.partitions):
-                partitioned_input_file = open(in_ss_out_names[idx]["partition"], "w")
-                partitioned_input_files.append(partitioned_input_file)
+        index = 0
+        for in_file_name in in_file_names:
+            fin = open(in_file_name, "r", encoding="utf-8")
 
-            index = 0
-            for in_file_name in in_file_names:
-                fin = open(in_file_name, "r", encoding="utf-8")
+            for line in fin:
+                partitioned_input_files[index].write(line)
+                index = (index + 1) % args.partitions
+            fin.close()
 
-                for line in fin:
-                    partitioned_input_files[index].write(line)
-                    index = (index + 1) % args.partitions
-                fin.close()
-
-            for idx in range(args.partitions):
-                partitioned_input_files[idx].close()
+        for idx in range(args.partitions):
+            partitioned_input_files[idx].close()
 
     assert args.workers % args.partitions == 0
     partition = Partition(args, args.workers // args.partitions)
@@ -217,25 +183,27 @@ def main(args):
         return
 
     # Merge bin/idx partitions
-    output_bin_files = {}
-    output_idx_files = {}
-    builders = {}
-
     tokenizer = AutoTokenizer.from_pretrained(args.pretrained_model_name_or_path)
 
-    for key in args.json_keys:
-        output_bin_files[key] = "{}_{}.bin".format(args.output_prefix, key)
-        output_idx_files[key] = "{}_{}.idx".format(args.output_prefix, key)
-        builders[key] = indexed_dataset.MMapIndexedDatasetBuilder(
-            output_bin_files[key],
-            dtype=indexed_dataset.DType.optimal_dtype(tokenizer.vocab_size),
-        )
+    output_bin_file = "{}_{}.bin".format(args.output_prefix, args.json_key)
+    output_idx_file = "{}_{}.idx".format(args.output_prefix, args.json_key)
 
-        for name in in_ss_out_names:
-            parition_output_prefix = name["output_prefix"]
-            full_partition_output_prefix = "{}_{}".format(parition_output_prefix, key)
-            builders[key].add_index(full_partition_output_prefix)
-        builders[key].finalize(output_idx_files[key])
+    builder = indexed_dataset.MMapIndexedDatasetBuilder(
+        output_bin_file, dtype=indexed_dataset.DType.optimal_dtype(tokenizer.vocab_size)
+    )
+
+    for name in in_ss_out_names:
+        parition_output_prefix = name["output_prefix"]
+        full_partition_output_prefix = "{}_{}".format(parition_output_prefix, args.json_key)
+        builder.add_index(full_partition_output_prefix)
+    builder.finalize(output_idx_file)
+
+    # Clean temporary files
+    for name in in_ss_out_names:
+        os.remove(name["partition"])
+        output_prefixs = glob.glob(name["output_prefix"] + "*")
+        for output in output_prefixs:
+            os.remove(output)
 
 
 if __name__ == "__main__":
