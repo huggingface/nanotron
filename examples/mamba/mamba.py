@@ -385,7 +385,6 @@ class Mamba(nn.Module, AttachableStore):
                 self.d_state,
                 device=self.dt_proj.weight.device,
                 dtype=self.dt_proj.weight.dtype,
-                # dtype=torch.float32,
             )
             store["key_value_memory_list"] = (conv_state, ssm_state)
         else:
