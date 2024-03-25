@@ -109,15 +109,19 @@ class LowPrecisionTensor(torch.Tensor):
             quantized_data = self.__class__(data, self.fp8_meta.dtype, self.fp8_meta.interval)
 
         self.data = quantized_data.data
-
         # NOTE: for delay scaling
         new_amax = quantized_data.fp8_meta.amax
-        self.fp8_meta.add_amax(new_amax)
 
-        max_amax = torch.max(torch.stack(self.fp8_meta.amaxs))
-        self.fp8_meta.scale = update_scaling_factor(
-            max_amax, torch.tensor(INITIAL_SCALING_FACTOR, dtype=torch.float32), self.fp8_meta.dtype
-        )
+        fp8_meta = self.fp8_meta
+        fp8_meta.add_amax(new_amax)
+
+        # if fp8_meta.is_ready_to_scale:
+        #     # TODO(xrsrke): move this to FP8Meta?
+        #     # max_amax = torch.max(torch.stack(fp8_meta.amaxs))
+        #     # fp8_meta.scale = update_scaling_factor(
+        #     #     max_amax, torch.tensor(INITIAL_SCALING_FACTOR, dtype=torch.float32), fp8_meta.dtype
+        #     # )
+        #     fp8_meta.rescale()
 
     def __repr__(self) -> str:
         if hasattr(self, "fp8_meta"):

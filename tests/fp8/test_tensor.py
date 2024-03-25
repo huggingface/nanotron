@@ -373,11 +373,16 @@ def test_delay_scaling_fp8_tensor(dtype, interval):
     fp8_tensor = FP8Tensor(tensor, dtype=dtype, interval=interval)
     fp8_meta = cast(FP8Meta, fp8_tensor.fp8_meta)
 
-    for i in range(1, (interval * 1) + 1):
+    for i in range(1, (interval * 2) + 1):
         new_data = torch.randn(fp8_tensor.shape, dtype=torch.float32, device="cuda")
         fp8_tensor.set_data(new_data)
 
-        assert fp8_meta.is_ready_to_scale == ((i + 1) >= interval)
+        # assert fp8_meta.is_ready_to_scale == ((i + 1) >= interval)
+        # assert fp8_meta.is_ready_to_scale == ((i + 1) % interval == 0)
+        if i == 4:
+            assert 1 == 1
+
+        assert fp8_meta.is_ready_to_scale == ((i + 1) % interval == 0)
 
 
 # @pytest.mark.parametrize("dtype", [DTypes.FP8E4M3, DTypes.FP8E5M2])
@@ -425,11 +430,16 @@ def test_dynamic_fp8_quantization(dtype, interval):
 
     history_sf = []
     history_sf.append(fp8_meta.scale)
-    for _ in range(1, (interval * 1) + 1):
+    for i in range(1, (interval * 2) + 1):
         new_data = new_data.clone() * 2
         fp8_tensor.set_data(new_data)
 
-        assert fp8_meta.scale not in history_sf
+        # assert (not fp8_meta.scale in history_sf) == (i % interval == 0)
+        if i == 8:
+            assert 1 == 1
+
+        assert fp8_meta.is_ready_to_scale is True, f"i: {i}, interval: {interval}"
+        assert (fp8_meta.scale not in history_sf) == ((i + 1) % interval == 0)
         history_sf.append(fp8_meta.scale)
 
     # tensor = convert_tensor_from_fp8(fp8_tensor, fp8_tensor.fp8_meta, torch.float32)

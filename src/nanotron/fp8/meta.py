@@ -42,6 +42,7 @@ class FP8Meta:
         # NOTE: transformer engine only accepts torch tensors
         self.amax = torch.tensor(self.amax, device="cuda") if not isinstance(self.amax, torch.Tensor) else self.amax
         self._amaxs: List[torch.Tensor] = [self.amax]
+        self._num_remaining_steps_until_rescale: int = self.interval
 
     @property
     def fp8_max(self) -> float:
@@ -61,6 +62,13 @@ class FP8Meta:
             self._amaxs.pop(0)
 
         self._amaxs.append(amax)
+        self._num_remaining_steps_until_rescale -= 1
+        assert (
+            self._num_remaining_steps_until_rescale >= 0
+        ), "Expected num_remaining_steps_until_rescale to be greater than or equal to 0"
+
+        if self.is_ready_to_scale:
+            self.rescale()
 
     @property
     def amaxs(self) -> List[torch.Tensor]:
@@ -68,7 +76,16 @@ class FP8Meta:
 
     @property
     def is_ready_to_scale(self) -> bool:
-        return len(self.amaxs) == self.interval
+        return len(self.amaxs) == self.interval and self._num_remaining_steps_until_rescale == 0
+
+    def rescale(self):
+        assert self.is_ready_to_scale is True, "Cannot rescale if not ready to scale"
+        from nanotron.fp8.tensor import update_scaling_factor
+
+        max_amax = torch.max(torch.stack(self.amaxs))
+        current_scale = self.scale
+        self.scale = update_scaling_factor(max_amax, current_scale, self.dtype)
+        self._num_remaining_steps_until_rescale = self.interval
 
     def __repr__(self) -> str:
         return f"FP8Meta(amax={self.amax}, scale={self.scale}, inverse_scale={self.inverse_scale}, dtype={self.dtype})"
