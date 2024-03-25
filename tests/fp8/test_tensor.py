@@ -77,6 +77,15 @@ def test_quantize_and_dequantize_tensor_in_fp16(size):
     torch.testing.assert_close(tensor, ref_tensor, rtol=0, atol=1e-03)
 
 
+# @pytest.mark.parametrize(
+#     "tensor_cls, dtype", [(FP8Tensor, DTypes.FP8E4M3), (FP8Tensor, DTypes.FP8E5M2), (FP16Tensor, DTypes.KFLOAT16)]
+# )
+# def test_quantize_overflow_fp8_and_fp16_tensor(tensor_cls, dtype):
+#     tensor = torch.randn((64, 64), dtype=torch.float32, device="cuda:0")
+#     tensor[0, 0] = torch.tensor(float("inf"))
+#     fp8_tensor = tensor_cls(tensor, dtype)
+
+
 @pytest.mark.parametrize(
     "tensor_cls, dtype", [(FP8Tensor, DTypes.FP8E4M3), (FP8Tensor, DTypes.FP8E5M2), (FP16Tensor, DTypes.KFLOAT16)]
 )
@@ -396,7 +405,25 @@ def test_fp8_dynamic_quantization(dtype, interval):
         assert (fp8_meta.scale not in history_sf) == (i % interval == 0)
         history_sf.append(fp8_meta.scale)
 
-    # tensor = convert_tensor_from_fp8(fp8_tensor, fp8_tensor.fp8_meta, torch.float32)
+
+@pytest.mark.parametrize("dtype", [DTypes.FP8E4M3, DTypes.FP8E5M2])
+@pytest.mark.parametrize("interval", [5, 10])
+@pytest.mark.parametrize("is_overflow_after_warmup", [True, False])
+def test_fp8_dynamic_quantization_under_overflow(dtype, interval, is_overflow_after_warmup):
+    tensor = torch.randn((4, 4), dtype=torch.float32, device="cuda")
+    new_data = deepcopy(tensor)
+    fp8_tensor = FP8Tensor(tensor, dtype=dtype, interval=interval)
+    fp8_meta = cast(FP8Meta, fp8_tensor.fp8_meta)
+
+    past_steps = interval if is_overflow_after_warmup else 1
+
+    for _ in range(past_steps):
+        new_data = new_data.clone() * 2
+        new_data[0] = torch.tensor(float("inf"))
+
+    fp8_tensor.set_data(new_data)
+
+    assert fp8_meta.is_ready_to_scale is True
 
 
 # TODO(xrsrke): test it has all the methods of torch.Tensor

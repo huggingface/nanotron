@@ -35,4 +35,4 @@ def is_overflow_underflow_nan(tensor: torch.Tensor) -> bool:
     underflow = torch.isneginf(tensor).any().item()
     nan = torch.isnan(tensor).any().item()
 
-    return True if overflow and underflow and nan else False
+    return True if (overflow or underflow or nan) else False

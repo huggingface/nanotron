@@ -56,14 +56,24 @@ class FP8Meta:
 
     # TODO(xrsrke): move to strategy pattern
     def add_amax(self, amax: torch.Tensor):
+        from nanotron.fp8.utils import is_overflow_underflow_nan
+
         if len(self._amaxs) == self.interval:
             # TODO(xrsrke): do we have to clear the old amax
             # from memory?
             self._amaxs.pop(0)
 
+        is_overflowed = is_overflow_underflow_nan(amax)
+
+        if is_overflowed:
+            # NOTE: if amax is inf or nan, we use 0 as the new amax
+            amax = torch.tensor(0.0, dtype=torch.float32, device="cuda")
+
         self._amaxs.append(amax)
 
-        if self.interval != 1:
+        if is_overflowed:
+            self._num_remaining_steps_until_rescale = 0
+        elif self.interval != 1:
             self._num_remaining_steps_until_rescale -= 1
 
         if self.is_ready_to_scale:
