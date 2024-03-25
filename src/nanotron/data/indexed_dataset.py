@@ -3,15 +3,11 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-# Essentially re-written in entirety
-
-import os
 import shutil
 import struct
 import time
 from enum import Enum
 from functools import lru_cache
-from itertools import accumulate
 from types import TracebackType
 from typing import List, Optional, Tuple, Type, Union
 
@@ -313,46 +309,11 @@ class MMapIndexedDataset(torch.utils.data.Dataset):
 
     def __init__(self, path_prefix: str) -> None:
         super().__init__()
-        self.path_prefix = None
-
-        self.index = None
-        self.bin_buffer = None
-        self.bin_buffer_mmap = None
-
-        self.initialize(path_prefix)
-
-    def initialize(self, path_prefix: str) -> None:
-        """Initialize the dataset
-
-        This method is called by MMapIndexedDataset.__init__ during object creation and by
-        MMapIndexedDataset.__setstate__ during un-puckling
-
-        Args:
-            path_prefix (str): The index (.idx) and data (.bin) prefix
-
-        """
         self.path_prefix = path_prefix
 
         self.index = _IndexReader(get_idx_path(self.path_prefix))
         self.bin_buffer_mmap = numpy.memmap(get_bin_path(self.path_prefix), mode="r", order="C")
         self.bin_buffer = memoryview(self.bin_buffer_mmap)
-
-    def __getstate__(self) -> str:
-        """Get the state during pickling
-
-        Returns:
-            Tuple[str, bool]: The state tuple
-        """
-        return self.path_prefix
-
-    def __setstate__(self, path_prefix: str) -> None:
-        """Set the state during un-pickling
-
-        Args:
-            state (Tuple[str, bool]): The state tuple
-
-        """
-        self.initialize(path_prefix)
 
     def __del__(self) -> None:
         """Clean up the object"""
@@ -368,50 +329,6 @@ class MMapIndexedDataset(torch.utils.data.Dataset):
             int: The length of the dataset
         """
         return len(self.index)
-
-    def __getitem__(self, idx: Union[int, numpy.integer, slice]) -> numpy.ndarray:
-        """Return from the dataset
-
-        Args:
-            idx (Union[int, numpy.integer, slice]): The index or index slice into the dataset
-
-        Raises:
-            ValueError: When the index slice is non-contiguous
-
-            TypeError: When the index is of an unexpected type
-
-        Returns:
-            numpy.ndarray: The sequence tokens at the index or index slice
-        """
-
-        if isinstance(idx, (int, numpy.integer)):
-            sequence_pointer, sequence_length = self.index[idx]
-            sequence = numpy.frombuffer(
-                self.bin_buffer,
-                dtype=self.index.dtype,
-                count=sequence_length,
-                offset=sequence_pointer,
-            )
-            return sequence
-
-        elif isinstance(idx, slice):
-            start, stop, step = idx.indices(len(self))
-            if step != 1:
-                raise ValueError("Slices into indexed_dataset must be contiguous")
-            sequence_lengths = self.index.sequence_lengths[idx]
-            sequence_offsets = list(accumulate(sequence_lengths))
-            sequences = numpy.split(
-                numpy.frombuffer(
-                    self.bin_buffer,
-                    dtype=self.index.dtype,
-                    count=sum(sequence_lengths),
-                    offset=self.index.sequence_pointers[start],
-                ),
-                sequence_offsets[:-1],
-            )
-            return sequences
-        else:
-            raise TypeError("Unexpected type received for idx: {}".format(type(idx)))
 
     def get(self, idx: int, offset: int = 0, length: Optional[int] = None) -> numpy.ndarray:
         """Retrieve a single item from the dataset with the option to only
@@ -444,38 +361,6 @@ class MMapIndexedDataset(torch.utils.data.Dataset):
             numpy.ndarray: The document indices
         """
         return self.index.document_indices
-
-    def get_document_indices(self) -> numpy.ndarray:
-        """Get the document indices
-
-        This method is slated for deprecation.
-
-        Returns:
-            numpy.ndarray: The document indices
-        """
-        return self.index.document_indices
-
-    def set_document_indices(self, document_indices: numpy.ndarray) -> None:
-        """Set the document indices
-
-        This method is slated for deprecation.
-
-        Args:
-            document_indices (numpy.ndarray): The document indices
-        """
-        self.index.document_indices = document_indices
-
-    @staticmethod
-    def exists(path_prefix: str) -> bool:
-        """Return whether the MMapIndexedDataset exists on disk at the prefix
-
-        Args:
-            path_prefix (str): The prefix to the index (.idx) and data (.bin) files
-
-        Returns:
-            bool: Whether the MMapIndexedDataset exists on disk at the prefix
-        """
-        return os.path.exists(get_idx_path(path_prefix)) and os.path.exists(get_bin_path(path_prefix))
 
 
 class MMapIndexedDatasetBuilder(object):
