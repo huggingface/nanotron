@@ -12,10 +12,9 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" PyTorch Mamba model.
-"""
+"""PyTorch Mamba model."""
+
 import math
-import os
 from functools import partial
 from typing import Dict, Optional, Union
 
@@ -28,13 +27,14 @@ from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.config import ParallelismArgs
 from nanotron.config.utils_config import cast_str_to_torch_dtype
-from nanotron.generation.generate_store import AttachableStore, Store
+from nanotron.generation.generate_store import AttachableStore
 from nanotron.logging import log_rank
 from nanotron.models import NanotronModel
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter
 from nanotron.parallel.pipeline_parallel.block import PipelineBlock, TensorPointer
 from nanotron.parallel.pipeline_parallel.p2p import P2P
+from nanotron.parallel.sharded_parameters import SplitConfig, create_sharded_parameter_from_config
 from nanotron.parallel.tensor_parallel.functional import sharded_cross_entropy
 from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelColumnLinear,
@@ -62,10 +62,6 @@ except ImportError:
     RMSNorm, layer_norm_fn, rms_norm_fn = None, None, None
 
 logger = logging.get_logger(__name__)
-
-from dataclasses import dataclass, field
-from torch import Tensor
-from nanotron.parallel.sharded_parameters import SplitConfig, create_sharded_parameter_from_config
 
 
 class Mamba(nn.Module, AttachableStore):
@@ -135,9 +131,13 @@ class Mamba(nn.Module, AttachableStore):
             **factory_kwargs,
         )
 
-        self.conv1d.weight = create_sharded_parameter_from_config(parameter=self.conv1d.weight, pg=self.tp_pg, split_config=SplitConfig(split_dim=0))
+        self.conv1d.weight = create_sharded_parameter_from_config(
+            parameter=self.conv1d.weight, pg=self.tp_pg, split_config=SplitConfig(split_dim=0)
+        )
         if conv_bias:
-            self.conv1d.bias = create_sharded_parameter_from_config(parameter=self.conv1d.bias, pg=self.tp_pg, split_config=SplitConfig(split_dim=0))
+            self.conv1d.bias = create_sharded_parameter_from_config(
+                parameter=self.conv1d.bias, pg=self.tp_pg, split_config=SplitConfig(split_dim=0)
+            )
 
         self.activation = "silu"
         self.act = nn.SiLU()
@@ -166,8 +166,12 @@ class Mamba(nn.Module, AttachableStore):
         # Our initialization would set all Linear.bias to zero, need to mark this one as _no_reinit
         self.dt_proj.bias._no_reinit = True
 
-        self.dt_proj.weight = create_sharded_parameter_from_config(parameter=self.dt_proj.weight, pg=self.tp_pg, split_config=SplitConfig(split_dim=0))
-        self.dt_proj.bias = create_sharded_parameter_from_config(parameter=self.dt_proj.bias, pg=self.tp_pg, split_config=SplitConfig(split_dim=0))
+        self.dt_proj.weight = create_sharded_parameter_from_config(
+            parameter=self.dt_proj.weight, pg=self.tp_pg, split_config=SplitConfig(split_dim=0)
+        )
+        self.dt_proj.bias = create_sharded_parameter_from_config(
+            parameter=self.dt_proj.bias, pg=self.tp_pg, split_config=SplitConfig(split_dim=0)
+        )
 
         # S4D real initialization
         A = repeat(
@@ -176,11 +180,17 @@ class Mamba(nn.Module, AttachableStore):
             d=self.d_inner // self.tp_pg.size(),
         ).contiguous()
         A_log = torch.log(A)  # Keep A_log in fp32
-        self.A_log = create_sharded_parameter_from_config(parameter=A_log, pg=self.tp_pg, split_config=SplitConfig(split_dim=0))
+        self.A_log = create_sharded_parameter_from_config(
+            parameter=A_log, pg=self.tp_pg, split_config=SplitConfig(split_dim=0)
+        )
         self.A_log._no_weight_decay = True
 
         # D "skip" parameter
-        self.D = create_sharded_parameter_from_config(parameter=torch.ones(self.d_inner // self.tp_pg.size(), device=device), pg=self.tp_pg, split_config=SplitConfig(split_dim=0))
+        self.D = create_sharded_parameter_from_config(
+            parameter=torch.ones(self.d_inner // self.tp_pg.size(), device=device),
+            pg=self.tp_pg,
+            split_config=SplitConfig(split_dim=0),
+        )
         self.D._no_weight_decay = True
 
         # self.out_proj = nn.Linear(self.d_inner, self.d_model, bias=bias, **factory_kwargs)
@@ -199,34 +209,33 @@ class Mamba(nn.Module, AttachableStore):
         hidden_states: (B, L, D)
         Returns: same shape as hidden_states
         """
-        batch, seqlen, dim = hidden_states.shape
+        batch_size, seqlen, dim = hidden_states.shape
 
         conv_state, ssm_state = None, None
-        
+
         store = self.get_local_store()
         if store is not None:
-            
             if "key_value_memory_list" not in store:
                 store["key_value_memory_list"] = []
-            
-            if "seqlen_offset" not in self._store:
-                self._store["seqlen_offset"] = 0
-            
-            conv_state, ssm_state = self._get_states_from_cache(batch)
 
-            if self._store["seqlen_offset"] > 0:
+            if "seqlen_offset" not in store:
+                store["seqlen_offset"] = 0
+
+            conv_state, ssm_state = self._get_states_from_cache(batch_size)
+
+            if store["seqlen_offset"] > 0:
                 # The states are updated inplace
                 out, _, _ = self.step(hidden_states, conv_state, ssm_state)
                 return out
+
+            store["seqlen_offset"] += 1
 
         # We do matmul and transpose BLH -> HBL at the same time
         xz = self.in_proj(hidden_states).transpose(1, 2)
         A = -torch.exp(self.A_log.float())  # (d_inner, d_state)
 
         # In the backward pass we write dx and dz next to each other to avoid torch.cat
-        if (
-            self.use_fast_path and store is None
-        ):  # Doesn't support outputting the states
+        if self.use_fast_path and store is None:  # Doesn't support outputting the states
             y = mamba_inner_fn(
                 d_inner=self.d_inner,
                 tp_pg=self.tp_pg,
@@ -244,7 +253,7 @@ class Mamba(nn.Module, AttachableStore):
             )
         else:
             assert self.d_inner % self.tp_pg.size() == 0
-            x, z = xz.view(batch, self.d_inner // self.tp_pg.size(), 2, seqlen).chunk(2, dim=2)
+            x, z = xz.view(batch_size, self.d_inner // self.tp_pg.size(), 2, seqlen).chunk(2, dim=2)
             x = x.squeeze(2)
             z = z.squeeze(2)
             # Compute short convolution
@@ -299,14 +308,14 @@ class Mamba(nn.Module, AttachableStore):
         conv_state: torch.Tensor,
         ssm_state: torch.Tensor,
     ):
-        batch, seqlen, dim = hidden_states.shape
+        batch_size, seqlen, dim = hidden_states.shape
         dtype = hidden_states.dtype
         assert seqlen == 1, "Only support decoding with 1 token at a time for now"
         xz = self.in_proj(hidden_states.squeeze(1))  # (B 2D)
-        x, z = xz.view(batch, self.d_inner // self.tp_pg.size(), 2).chunk(2, dim=2)
+        x, z = xz.view(batch_size, self.d_inner // self.tp_pg.size(), 2).chunk(2, dim=2)
         x = x.squeeze(2)  # (B D)
         z = z.squeeze(2)  # (B D)
-        
+
         # Conv step
         if causal_conv1d_update is None:
             conv_state.copy_(torch.roll(conv_state, shifts=-1, dims=-1))  # Update state (B D W)
@@ -359,9 +368,9 @@ class Mamba(nn.Module, AttachableStore):
 
     def _get_states_from_cache(self, batch_size: int, initialize_states: bool = False):
         assert self.layer_idx is not None
-        
+
         store = self.get_local_store()
-        
+
         if len(store["key_value_memory_list"]) == 0:
             conv_state = torch.zeros(
                 batch_size,
@@ -378,10 +387,7 @@ class Mamba(nn.Module, AttachableStore):
                 dtype=self.dt_proj.weight.dtype,
                 # dtype=torch.float32,
             )
-            store["key_value_memory_list"] = (
-                conv_state,
-                ssm_state
-            )
+            store["key_value_memory_list"] = (conv_state, ssm_state)
         else:
             conv_state, ssm_state = store["key_value_memory_list"]
             # TODO: What if batch size changes between generation, and we reuse the same states?
@@ -502,7 +508,8 @@ class MambaDecoderLayer(nn.Module):
             "residual": residual,
         }
 
-class MambaModel(nn.Module, AttachableStore):
+
+class MambaModel(nn.Module):
     def __init__(
         self,
         config: MambaModelConfig,
@@ -521,7 +528,7 @@ class MambaModel(nn.Module, AttachableStore):
         tp_linear_async_communication = (
             parallel_config.tp_linear_async_communication if parallel_config is not None else False
         )
-        
+
         self.token_position_embeddings = PipelineBlock(
             p2p=self.p2p,
             module_builder=Embedding,
@@ -587,13 +594,11 @@ class MambaModel(nn.Module, AttachableStore):
             module_output_keys={"output"},
         )
 
-
     def forward(
         self,
         input_ids: Union[torch.Tensor, TensorPointer],  # [batch_size, seq_length]
         input_mask: Union[torch.Tensor, TensorPointer],  # [batch_size, seq_length]
     ):
-        
         return self.forward_with_hidden_states(input_ids=input_ids, input_mask=input_mask)[0]
 
     def forward_with_hidden_states(
@@ -622,9 +627,6 @@ class MambaModel(nn.Module, AttachableStore):
         sharded_logits = self.lm_head(x=hidden_states)["logits"]
         fp32_sharded_logits = self.cast_to_fp32(x=sharded_logits)["output"]
 
-        if self._store is not None:
-            self._store["seqlen_offset"] += 1
-        
         return fp32_sharded_logits, hidden_states
 
     def get_block_compute_costs(self):
