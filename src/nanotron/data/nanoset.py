@@ -11,7 +11,7 @@ import torch
 from nanotron import logging
 from nanotron.data.indexed_dataset import MMapIndexedDataset
 from nanotron.data.nanoset_configs import NanosetConfig
-from nanotron.data.utils import Split
+from nanotron.data.utils import Split, build_sample_idx
 from nanotron.logging import log_rank
 
 logger = logging.get_logger(__name__)
@@ -213,16 +213,14 @@ class Nanoset(torch.utils.data.Dataset):
                 rank=0,
             )
             t_beg = time.time()
-            from nanotron.data import helpers
 
             assert document_index.dtype == numpy.int32
             assert self.indexed_dataset.sequence_lengths.dtype == numpy.int32
-            sample_index = helpers.build_sample_idx(
-                self.indexed_dataset.sequence_lengths,
-                document_index,
-                sequence_length,
-                1,
-                num_tokens_per_epoch,
+            sample_index = build_sample_idx(
+                sizes=self.indexed_dataset.sequence_lengths,
+                doc_idx=document_index,
+                seq_length=sequence_length,
+                tokens_per_epoch=num_tokens_per_epoch,
             )
             numpy.save(path_to_sample_index, sample_index, allow_pickle=True)
             t_end = time.time()

@@ -15,7 +15,7 @@ from nanotron.data.dataloader_builder import build_nanoset_dataloader
 from nanotron.data.dataset_builder import NanosetBuilder
 from nanotron.data.nanoset import Nanoset
 from nanotron.data.nanoset_configs import NanosetConfig
-from nanotron.data.utils import compile_helpers, compute_datasets_num_samples
+from nanotron.data.utils import compute_datasets_num_samples
 from nanotron.parallel import ParallelContext
 
 
@@ -31,9 +31,7 @@ from nanotron.parallel import ParallelContext
 def test_build_nanoset_dataloader(tp: int, dp: int, pp: int):
     test_context = TestContext()
 
-    # Compile helpers & Create dataset files
-    compile_helpers()
-
+    # Create dataset files
     json_paths, bin_paths = create_dataset_paths(tmp_dir=test_context.get_auto_remove_tmp_dir(), quantity=2)
 
     # Create dummy json datasets

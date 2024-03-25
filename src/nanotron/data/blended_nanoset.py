@@ -11,6 +11,7 @@ import torch
 from nanotron import logging
 from nanotron.data.nanoset import Nanoset
 from nanotron.data.nanoset_configs import NanosetConfig
+from nanotron.data.utils import build_blending_indices
 from nanotron.logging import log_rank
 
 logger = logging.get_logger(__name__)
@@ -120,17 +121,9 @@ class BlendedNanoset(torch.utils.data.Dataset):
             )
 
             t_beg = time.time()
-            from nanotron.data import helpers
 
-            dataset_index = numpy.zeros(self.size, dtype=numpy.int16)
-            dataset_sample_index = numpy.zeros(self.size, dtype=numpy.int64)
-            helpers.build_blending_indices(
-                dataset_index,
-                dataset_sample_index,
-                self.weights,
-                len(self.datasets),
-                self.size,
-                False,
+            dataset_index, dataset_sample_index = build_blending_indices(
+                size=self.size, weights=numpy.array(self.weights)
             )
 
             if path_to_cache:
