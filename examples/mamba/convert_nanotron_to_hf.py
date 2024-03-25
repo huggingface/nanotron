@@ -5,45 +5,39 @@ Command:
     torchrun --nproc_per_node=1 convert_nanotron_to_hf.py --checkpoint_path=weights-tp1 --save_path=HF_130M
 """
 import argparse
-import torch
-import yaml
 import json
 from pathlib import Path
 
+import torch
+from config import MambaModelConfig
+from mamba import MambaForTraining
+from nanotron import logging
 from nanotron.config import (
     AllForwardAllBackwardPipelineEngine,
     ParallelismArgs,
     TensorParallelLinearMode,
 )
-from config import MambaModelConfig
-
-from nanotron.distributed import dist
-from nanotron.models import build_model
-from mamba import MambaForTraining
+from nanotron.models import build_model, init_on_device_and_dtype
 from nanotron.parallel import ParallelContext
-from nanotron.trainer import mark_tied_parameters
-from nanotron import logging
 from nanotron.serialize import load_weights
-from nanotron.models import init_on_device_and_dtype
-
-from transformers import MambaConfig, MambaForCausalLM, AutoTokenizer
+from nanotron.trainer import mark_tied_parameters
+from transformers import AutoTokenizer, MambaConfig, MambaForCausalLM
 
 logger = logging.get_logger(__name__)
 
-import lovely_tensors as lt; lt.monkey_patch()
-
-HARDCODED_HF_MODEL_NAME = "state-spaces/mamba-130m-hf"
+TOKENIZER_NAME = "state-spaces/mamba-130m-hf"
 HARCODED_PROMPT = "Hello"
+
 
 def convert_checkpoint_and_save(checkpoint_path: Path, save_path: Path):
     device = torch.device("cuda")
-    
+
     with open(checkpoint_path / "model_config.json", "r") as f:
         attrs = json.load(f)
         model_config = MambaModelConfig(**attrs)
-    
+
     dtype = getattr(torch, model_config.dtype)
-    
+
     parallel_config = ParallelismArgs(
         dp=1,
         pp=1,
@@ -58,7 +52,7 @@ def convert_checkpoint_and_save(checkpoint_path: Path, save_path: Path):
         pipeline_parallel_size=1,
         tensor_parallel_size=1,
     )
-    
+
     model_nanotron = build_model(
         model_builder=lambda: MambaForTraining(
             config=model_config,
@@ -68,9 +62,9 @@ def convert_checkpoint_and_save(checkpoint_path: Path, save_path: Path):
         ),
         parallel_context=parallel_context,
         dtype=dtype,
-        device=device
+        device=device,
     )
-    
+
     mark_tied_parameters(model=model_nanotron, parallel_context=parallel_context)
 
     # Load checkpoint directly in memory and then only keep the state dictionary
@@ -80,7 +74,7 @@ def convert_checkpoint_and_save(checkpoint_path: Path, save_path: Path):
 
     # Init the HF mode
     if model_config.ssm_cfg is None:
-      model_config_hf = MambaConfig(
+        model_config_hf = MambaConfig(
             vocab_size=model_config.vocab_size,
             num_hidden_layers=model_config.num_hidden_layers,
             residual_in_fp32=model_config.residual_in_fp32,
@@ -106,7 +100,7 @@ def convert_checkpoint_and_save(checkpoint_path: Path, save_path: Path):
             time_step_init_scheme=model_config.ssm_cfg["dt_init"],
             time_step_floor=model_config.ssm_cfg["dt_init_floor"],
         )
-        
+
     # Initialised HF model
     with init_on_device_and_dtype(device, dtype):
         model_hf = MambaForCausalLM._from_config(model_config_hf)
@@ -115,26 +109,25 @@ def convert_checkpoint_and_save(checkpoint_path: Path, save_path: Path):
     hf_to_nanotron = {}
 
     # Static mappings
-    hf_to_nanotron['backbone.embeddings.weight'] = 'token_position_embeddings.pp_block.token_embedding.weight'
-    hf_to_nanotron['backbone.norm_f.weight'] = 'final_layer_norm.pp_block.weight'
-    hf_to_nanotron['lm_head.weight'] = 'lm_head.pp_block.weight'
+    hf_to_nanotron["backbone.embeddings.weight"] = "token_position_embeddings.pp_block.token_embedding.weight"
+    hf_to_nanotron["backbone.norm_f.weight"] = "final_layer_norm.pp_block.weight"
+    hf_to_nanotron["lm_head.weight"] = "lm_head.pp_block.weight"
 
     # Dynamic mappings within a loop
     for i in range(model_config.num_hidden_layers):
-        hf_to_nanotron[f'backbone.layers.{i}.mixer.A_log'] = f'decoder.{i}.pp_block.mixer.A_log'
-        hf_to_nanotron[f'backbone.layers.{i}.mixer.D'] = f'decoder.{i}.pp_block.mixer.D'
-        hf_to_nanotron[f'backbone.layers.{i}.mixer.in_proj.weight'] = f'decoder.{i}.pp_block.mixer.in_proj.weight'
-        hf_to_nanotron[f'backbone.layers.{i}.mixer.conv1d.weight'] = f'decoder.{i}.pp_block.mixer.conv1d.weight'
-        hf_to_nanotron[f'backbone.layers.{i}.mixer.conv1d.bias'] = f'decoder.{i}.pp_block.mixer.conv1d.bias'
-        hf_to_nanotron[f'backbone.layers.{i}.mixer.x_proj.weight'] = f'decoder.{i}.pp_block.mixer.x_proj.weight'
-        hf_to_nanotron[f'backbone.layers.{i}.mixer.x_proj.bias'] = f'decoder.{i}.pp_block.mixer.x_proj.bias'
-        hf_to_nanotron[f'backbone.layers.{i}.mixer.dt_proj.weight'] = f'decoder.{i}.pp_block.mixer.dt_proj.weight'
-        hf_to_nanotron[f'backbone.layers.{i}.mixer.dt_proj.bias'] = f'decoder.{i}.pp_block.mixer.dt_proj.bias'
-        hf_to_nanotron[f'backbone.layers.{i}.mixer.out_proj.weight'] = f'decoder.{i}.pp_block.mixer.out_proj.weight'
-        hf_to_nanotron[f'backbone.layers.{i}.mixer.out_proj.bias'] = f'decoder.{i}.pp_block.mixer.out_proj.bias'
-        hf_to_nanotron[f'backbone.layers.{i}.norm.weight'] = f'decoder.{i}.pp_block.norm.weight'
-    
-    
+        hf_to_nanotron[f"backbone.layers.{i}.mixer.A_log"] = f"decoder.{i}.pp_block.mixer.A_log"
+        hf_to_nanotron[f"backbone.layers.{i}.mixer.D"] = f"decoder.{i}.pp_block.mixer.D"
+        hf_to_nanotron[f"backbone.layers.{i}.mixer.in_proj.weight"] = f"decoder.{i}.pp_block.mixer.in_proj.weight"
+        hf_to_nanotron[f"backbone.layers.{i}.mixer.conv1d.weight"] = f"decoder.{i}.pp_block.mixer.conv1d.weight"
+        hf_to_nanotron[f"backbone.layers.{i}.mixer.conv1d.bias"] = f"decoder.{i}.pp_block.mixer.conv1d.bias"
+        hf_to_nanotron[f"backbone.layers.{i}.mixer.x_proj.weight"] = f"decoder.{i}.pp_block.mixer.x_proj.weight"
+        hf_to_nanotron[f"backbone.layers.{i}.mixer.x_proj.bias"] = f"decoder.{i}.pp_block.mixer.x_proj.bias"
+        hf_to_nanotron[f"backbone.layers.{i}.mixer.dt_proj.weight"] = f"decoder.{i}.pp_block.mixer.dt_proj.weight"
+        hf_to_nanotron[f"backbone.layers.{i}.mixer.dt_proj.bias"] = f"decoder.{i}.pp_block.mixer.dt_proj.bias"
+        hf_to_nanotron[f"backbone.layers.{i}.mixer.out_proj.weight"] = f"decoder.{i}.pp_block.mixer.out_proj.weight"
+        hf_to_nanotron[f"backbone.layers.{i}.mixer.out_proj.bias"] = f"decoder.{i}.pp_block.mixer.out_proj.bias"
+        hf_to_nanotron[f"backbone.layers.{i}.norm.weight"] = f"decoder.{i}.pp_block.norm.weight"
+
     def _reverse_interleave_pattern(N):
         """
         Compute the reverse of the interleave pattern given by _interleave_pattern.
@@ -143,6 +136,7 @@ def convert_checkpoint_and_save(checkpoint_path: Path, save_path: Path):
         reverse_interleave_pattern(8) -> [0, 2, 4, 6, 1, 3, 5, 7]
         """
         assert N % 2 == 0, "N must be even"
+
         def __interleave_pattern(N):
             """
             interleave_pattern(4) -> [0, 2, 1, 3]
@@ -154,7 +148,7 @@ def convert_checkpoint_and_save(checkpoint_path: Path, save_path: Path):
                 pattern.append(i)
                 pattern.append(i + N // 2)
             return pattern
-    
+
         interleaved_pattern = __interleave_pattern(N)
         reverse_pattern = [0] * N
         for original_index, interleaved_index in enumerate(interleaved_pattern):
@@ -171,7 +165,7 @@ def convert_checkpoint_and_save(checkpoint_path: Path, save_path: Path):
             if "in_proj" in nanotron_key:
                 # Undo the interleaving weights in Nanotron to make it HF compatible
                 param = param[_reverse_interleave_pattern(param.shape[0]), :]
-            
+
             with torch.no_grad():
                 param_hf.copy_(param)
 
@@ -179,20 +173,16 @@ def convert_checkpoint_and_save(checkpoint_path: Path, save_path: Path):
     model_hf.save_pretrained(save_path)
     print(f"Model saved to {save_path}")
 
-def check_converted_model_generation(save_path: Path, hf_reference_model_name: str):
-    tokenizer = AutoTokenizer.from_pretrained(hf_reference_model_name)
+
+def check_converted_model_generation(save_path: Path, tokenizer_name: str):
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
     input_ids = tokenizer(HARCODED_PROMPT, return_tensors="pt")["input_ids"]
     print("Inputs:", tokenizer.batch_decode(input_ids))
-    
-    # Ref
-    model = MambaForCausalLM.from_pretrained(hf_reference_model_name)
-    out = model.generate(input_ids, max_new_tokens=20)
-    print("Generation (ref): ", tokenizer.batch_decode(out))    
 
-    # Converted
     model = MambaForCausalLM.from_pretrained(save_path)
-    out = model.generate(input_ids, max_new_tokens=20)
+    out = model.generate(input_ids, max_new_tokens=100)
     print("Generation (converted): ", tokenizer.batch_decode(out))
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Convert Nanotron weights to HF format")
@@ -207,4 +197,4 @@ if __name__ == "__main__":
     convert_checkpoint_and_save(checkpoint_path=checkpoint_path, save_path=save_path)
 
     # check if the conversion was successful by generating some text
-    check_converted_model_generation(save_path=save_path, hf_reference_model_name=HARDCODED_HF_MODEL_NAME)
+    check_converted_model_generation(save_path=save_path, tokenizer_name=TOKENIZER_NAME)

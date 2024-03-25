@@ -13,6 +13,8 @@ import os
 from pathlib import Path
 
 import torch
+from config import MambaConfig, MambaModelConfig
+from mamba import MambaForTraining
 from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.config import (
@@ -44,8 +46,6 @@ from nanotron.random import (
 )
 from nanotron.serialize import load_weights
 from nanotron.trainer import mark_tied_parameters
-from config import MambaConfig, MambaModelConfig
-from mamba import MambaForTraining
 
 try:
     from transformers import AutoTokenizer
@@ -54,9 +54,6 @@ except ImportError:
 
 logger = logging.get_logger(__name__)
 
-from mamba_ssm.models.mixer_seq_simple import MambaLMHeadModel
-
-import lovely_tensors as lt; lt.monkey_patch()
 
 def get_args():
     parser = argparse.ArgumentParser()
@@ -73,11 +70,14 @@ def main():
 
     assert args.ckpt_path.exists(), f"Checkpoint path {args.ckpt_path} does not exist"
 
-    config = get_config_from_file((args.ckpt_path / "config.yaml").as_posix(), config_class=MambaConfig, model_config_class=MambaModelConfig)
+    config = get_config_from_file(
+        (args.ckpt_path / "config.yaml").as_posix(), config_class=MambaConfig, model_config_class=MambaModelConfig
+    )
     model_config = config.model.model_config
     tokenizer_path = config.tokenizer.tokenizer_name_or_path
-    
-    assert "state-spaces/mamba-130m-hf" == tokenizer_path; f"Should be 'state-spaces/mamba-130m-hf' tokenizer and not '{tokenizer_path}'"
+
+    assert "state-spaces/mamba-130m-hf" == tokenizer_path
+    f"Should be 'state-spaces/mamba-130m-hf' tokenizer and not '{tokenizer_path}'"
 
     parallel_config = ParallelismArgs(
         dp=args.dp or config.parallelism.dp,
@@ -111,7 +111,7 @@ def main():
 
     # Set random states
     set_random_seed(42)
-    
+
     # Get synchronized random states
     if parallel_config.tp_mode is TensorParallelLinearMode.ALL_REDUCE:
         random_states = RandomStates(
@@ -131,8 +131,6 @@ def main():
         dtype=getattr(torch, model_config.dtype),
         parallel_context=parallel_context,
     )
-    model_ref = MambaLMHeadModel.from_pretrained("state-spaces/mamba-130m").to("cuda")
-
     # Mark some parameters as tied
     # TODO @nouamane: this is only needed for training, can we just mark params as NanotronParameter instead?
     mark_tied_parameters(model=model, parallel_context=parallel_context, parallel_config=parallel_config)
@@ -150,8 +148,7 @@ def main():
     )
     load_weights(model=model, parallel_context=parallel_context, root_folder=checkpoint_path)
     model.eval()
-    model_ref.eval()
-    
+
     if AutoTokenizer is not None:
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
         # tokenizer.pad_token_id = tokenizer.eos_token_id
@@ -168,14 +165,13 @@ def main():
         tokenizer.truncation_side = "left"  # TODO @nouamane: do we want this?
         dummy_inputs = [
             # "Passage: Daniel went back to the garden. Mary travelled to the kitchen. Sandra journeyed to the kitchen. Sandra went to the hallway. John went to the bedroom. Mary went back to the garden. Where is Mary?\nAnswer:",
-            # "def fib(n)",
             # "This film was probably inspired by Godzilla",
             "Hello"
         ]
 
         log_rank("Setup Inference mode for mamba model", logger=logger, level=logging.INFO, rank=0)
         # assert config.inference_params.max_batch_size == 1, "Only batch size 1 is supported for inference for now"
-        
+
         outputs = decode_text(
             input_iter=(GenerationInput(text=text) for text in dummy_inputs),
             tokenizer=tokenizer,
@@ -217,27 +213,10 @@ def main():
                 level=logging.INFO,
                 rank=0,
             )
-            
+
         # Model ref
         tokens = tokenizer(dummy_inputs, return_tensors="pt")
         input_ids = tokens.input_ids.to(device="cuda")
-
-        output_ref = model_ref.generate(
-            input_ids=input_ids,
-            max_length=args.max_new_tokens,
-            cg=False,
-            return_dict_in_generate=True,
-            output_scores=True,
-            enable_timing=False,
-            temperature=1.0,
-            top_k=1,
-            top_p=1.0,
-            min_p=0.0,
-            repetition_penalty=1.0
-        )
-        
-        log_rank(f"input REF: {tokenizer.decode(input_ids[0], clean_up_tokenization_spaces=False)}", logger=logger, level=logging.INFO, rank=0)
-        log_rank(f"generation REF: {tokenizer.batch_decode(output_ref.sequences.tolist())}", logger=logger, level=logging.INFO, rank=0)
     else:
         outputs = decode_tokenized(
             input_ids=torch.zeros(1, 1).to(dtype=torch.int64, device="cuda"),
