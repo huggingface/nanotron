@@ -6,6 +6,7 @@ import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir, os.pardir)))
 from argparse import Namespace
 
+import numpy as np
 import torch
 from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
 from nanotron.sanity_checks import assert_tensor_synced_across_pg
@@ -84,3 +85,10 @@ def assert_batch_dataloader(batch: dict, parallel_context, micro_batch_size: int
             pg=parallel_context.dp_pg,
             msg=lambda err: f"{element} is not synchronized across DP {err}",
         )
+
+
+def get_max_value_by_group(dataset_idx, dataset_sample_idx, group_idx):
+    mask = dataset_idx == group_idx
+    filtered_values = dataset_sample_idx[mask]
+    max_val = np.amax(filtered_values)
+    return max_val

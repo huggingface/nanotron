@@ -6,6 +6,7 @@ from helpers.data import (
     assert_batch_dataloader,
     create_dataset_paths,
     create_dummy_json_dataset,
+    get_max_value_by_group,
     preprocess_dummy_dataset,
 )
 from helpers.utils import available_gpus, get_all_3d_configurations, init_distributed, rerun_if_address_is_in_use
@@ -98,10 +99,14 @@ def _test_build_nanoset_dataloader(
     for config, dataset_type in zip(configs, dataset_types):
         # Create Nanosets
         train_dataset, valid_dataset, test_dataset = NanosetBuilder(config).build()
-        # Check the type of Nanoset and the quantity of Nanosets in BlendedNanoset
+        # Check the type of Nanoset, the quantity of Nanosets in BlendedNanoset and the size of each Nanoset in BlendedNanoset
         assert isinstance(train_dataset, dataset_type)
         if isinstance(train_dataset, BlendedNanoset):
             assert len(train_dataset.datasets) > 1
+            for idx, dataset in enumerate(train_dataset.datasets):
+                assert len(dataset) > get_max_value_by_group(
+                    train_dataset.dataset_index, train_dataset.dataset_sample_index, idx
+                )
 
         # Create Dataloaders
         dataloader = build_nanoset_dataloader(
