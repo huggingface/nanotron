@@ -201,8 +201,7 @@ def main(args):
     # Clean temporary files
     for name in in_ss_out_names:
         os.remove(name["partition"])
-        output_prefixs = glob.glob(name["output_prefix"] + "*")
-        for output in output_prefixs:
+        for output in glob.glob(name["output_prefix"] + "*"):
             os.remove(output)
 
 
