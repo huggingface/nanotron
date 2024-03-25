@@ -146,7 +146,7 @@ class Nanoset(torch.utils.data.Dataset):
             shuffle index
 
         """
-        path_to_cache = getattr(self.config, "path_to_cache")
+        path_to_cache = self.config.path_to_cache
         if path_to_cache is None:
             path_to_cache = os.path.join(self.indexed_dataset.path_prefix, "cache", f"{type(self).__name__}_indices")
 
@@ -171,7 +171,7 @@ class Nanoset(torch.utils.data.Dataset):
 
         num_tokens_per_epoch = compute_num_tokens_per_epoch(self.indexed_dataset, self.indexed_indices)
 
-        sequence_length = getattr(self.config, "sequence_length")
+        sequence_length = self.config.sequence_length
 
         num_epochs = compute_num_epochs(num_tokens_per_epoch, sequence_length, self.num_samples)
 
@@ -183,7 +183,7 @@ class Nanoset(torch.utils.data.Dataset):
                 rank=0,
             )
 
-            numpy_random_state = numpy.random.RandomState(getattr(self.config, "random_seed"))
+            numpy_random_state = numpy.random.RandomState(self.config.random_seed)
 
             os.makedirs(path_to_cache, exist_ok=True)
 

@@ -93,7 +93,7 @@ class BlendedNanoset(torch.utils.data.Dataset):
         Returns:
             Tuple[numpy.ndarray, numpy.ndarray]: The dataset index and the dataset sample index
         """
-        path_to_cache = getattr(self.config, "path_to_cache")
+        path_to_cache = self.config.path_to_cache
 
         if path_to_cache:
 

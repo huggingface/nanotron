@@ -43,8 +43,8 @@ class NanosetBuilder(object):
             List[Union[BlendedNanoset, Nanoset]]: A list of either Nanoset or BlendedNanoset per split
         """
 
-        data_path = getattr(self.config, "data_path")
-        split = getattr(self.config, "split_vector")
+        data_path = self.config.data_path
+        split = self.config.split_vector
 
         # Single Nanoset
         if isinstance(data_path, str):

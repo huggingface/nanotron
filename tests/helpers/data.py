@@ -1,9 +1,13 @@
+import importlib
 import json
 import os
 import sys
+from pathlib import Path
 
-# Hack to import preprocess_data.py
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir, os.pardir)))
+package = importlib.import_module("nanotron")
+package_path = Path(package.__file__).parent.parent.parent
+sys.path.append(str(package_path))
+
 from argparse import Namespace
 
 import numpy as np

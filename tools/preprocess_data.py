@@ -1,44 +1,52 @@
 import argparse
 import glob
+import importlib
 import json
 import multiprocessing
 import os
 import sys
 import time
+from pathlib import Path
 
-# TODO tj-solergibert: Keep this hack or not? Hack to be able to process data without installing nanotron.
-sys.path.append(os.path.join(os.path.abspath(os.path.join(os.path.dirname(__file__), os.path.pardir)), "src"))
+package = importlib.import_module("nanotron")
+package_path = Path(package.__file__).parent.parent
+sys.path.append(str(package_path))
 
 from nanotron.data import indexed_dataset
 from transformers import AutoTokenizer
 
 
 class Encoder(object):
-    def __init__(self, args):
-        self.args = args
+    def __init__(self, pretrained_model_name_or_path, json_key, append_eos):
+        self.pretrained_model_name_or_path = pretrained_model_name_or_path
+        self.json_key = json_key
+        self.append_eos = append_eos
 
     def initializer(self):
         # Use Encoder class as a container for global data
-        Encoder.tokenizer = AutoTokenizer.from_pretrained(self.args.pretrained_model_name_or_path)
+        Encoder.tokenizer = AutoTokenizer.from_pretrained(self.pretrained_model_name_or_path)
 
     def encode(self, json_line):
         data = json.loads(json_line)
-        text = data[self.args.json_key]
+        text = data[self.json_key]
 
         text_ids = Encoder.tokenizer.encode(text)
-        if self.args.append_eos:
+        if self.append_eos:
             text_ids.append(Encoder.tokenizer.eos_token_id)
 
         return text_ids, len(text_ids), len(json_line)
 
 
 class Partition(object):
-    def __init__(self, args, workers):
-        self.args = args
-        self.workers = workers
+    def __init__(self, args):
+        self.workers = args.workers // args.partitions
+        self.log_interval = args.log_interval
+        self.pretrained_model_name_or_path = args.pretrained_model_name_or_path
+        self.json_key = args.json_key
+        self.append_eos = args.append_eos
 
     def print_processing_stats(self, count, proc_start, total_bytes_processed):
-        if count % self.args.log_interval == 0:
+        if count % self.log_interval == 0:
             current = time.time()
             elapsed = current - proc_start
             mbs = total_bytes_processed / elapsed / 1024 / 1024
@@ -50,13 +58,13 @@ class Partition(object):
         fin = open(input_file_name, "r", encoding="utf-8")
 
         startup_start = time.time()
-        encoder = Encoder(self.args)
-        tokenizer = AutoTokenizer.from_pretrained(self.args.pretrained_model_name_or_path)
+        encoder = Encoder(self.pretrained_model_name_or_path, self.json_key, self.append_eos)
+        tokenizer = AutoTokenizer.from_pretrained(self.pretrained_model_name_or_path)
         pool = multiprocessing.Pool(self.workers, initializer=encoder.initializer)
         encoded_docs = pool.imap(encoder.encode, fin, 32)
 
-        output_bin_file = "{}_{}.bin".format(output_prefix, self.args.json_key)
-        output_idx_file = "{}_{}.idx".format(output_prefix, self.args.json_key)
+        output_bin_file = "{}_{}.bin".format(output_prefix, self.json_key)
+        output_idx_file = "{}_{}.idx".format(output_prefix, self.json_key)
 
         builder = indexed_dataset.MMapIndexedDatasetBuilder(
             output_bin_file, dtype=indexed_dataset.DType.optimal_dtype(tokenizer.vocab_size)
@@ -114,10 +122,10 @@ def get_args():
     return args
 
 
-def get_file_name(args, file_id):
-    file_name, extension = os.path.splitext(args.input)
+def get_file_name(input, output_prefix, file_id):
+    file_name, extension = os.path.splitext(input)
     input_file_name = file_name + "_" + str(file_id) + extension
-    output_prefix = args.output_prefix + "_" + str(file_id)
+    output_prefix = output_prefix + "_" + str(file_id)
     file_names = {"partition": input_file_name, "output_prefix": output_prefix}
     return file_names
 
@@ -142,7 +150,7 @@ def main(args):
 
         # Create .jsonl partition files
         for idx in range(args.partitions):
-            in_ss_out_name = get_file_name(args, idx)
+            in_ss_out_name = get_file_name(args.input, args.output_prefix, idx)
             in_ss_out_names.append(in_ss_out_name)
 
         # Populate .jsonl partition files from parent files
@@ -164,7 +172,7 @@ def main(args):
             partitioned_input_files[idx].close()
 
     assert args.workers % args.partitions == 0
-    partition = Partition(args, args.workers // args.partitions)
+    partition = Partition(args)
 
     # Encode partition files in parallel
     processes = []
