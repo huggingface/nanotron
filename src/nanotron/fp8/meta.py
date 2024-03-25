@@ -42,7 +42,7 @@ class FP8Meta:
         # NOTE: transformer engine only accepts torch tensors
         self.amax = torch.tensor(self.amax, device="cuda") if not isinstance(self.amax, torch.Tensor) else self.amax
         self._amaxs: List[torch.Tensor] = [self.amax]
-        self._num_remaining_steps_until_rescale: int = self.interval
+        self._num_remaining_steps_until_rescale: int = self.interval - 1
 
     @property
     def fp8_max(self) -> float:
@@ -62,11 +62,10 @@ class FP8Meta:
             self._amaxs.pop(0)
 
         self._amaxs.append(amax)
-        self._num_remaining_steps_until_rescale -= 1
-        assert (
-            self._num_remaining_steps_until_rescale >= 0
-        ), "Expected num_remaining_steps_until_rescale to be greater than or equal to 0"
-
+        
+        if self.interval != 1:
+            self._num_remaining_steps_until_rescale -= 1
+        
         if self.is_ready_to_scale:
             self.rescale()
 

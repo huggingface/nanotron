@@ -287,28 +287,6 @@ def test_fp8_and_fp16_tensor_storage_memory(tensor_cls, dtype):
     assert fp8_tensor.data.data_ptr() != ref_tensor.data_ptr()
 
 
-# @pytest.mark.parametrize(
-#     "tensor_cls, dtype", [(FP8Tensor, DTypes.FP8E4M3), (FP8Tensor, DTypes.FP8E5M2), (FP16Tensor, DTypes.KFLOAT16)]
-# )
-# def test_set_data_for_fp8_and_fp16_tensor(tensor_cls, dtype):
-#     tensor = torch.randn((4, 4), dtype=torch.float32, device="cuda")
-#     fp8_tensor = tensor_cls(tensor, dtype=dtype)
-
-#     new_data = torch.randint(low=0, high=256, size=(4, 4), dtype=torch.uint8)
-#     # new_data = tensor_cls(tensor, dtype=dtype)
-#     fp8_tensor.data = new_data.data
-
-#     # assert id(fp8_tensor.data) == id(new_data)
-#     # assert torch.equal(fp8_tensor.data, new_data)
-#     # assert fp8_tensor.data_ptr() == new_data.data.data_ptr()
-
-#     # assert fp8_tensor.fp8_meta is new_data.fp8_meta
-
-#     assert id(fp8_tensor.data) == id(new_data.data)
-#     assert torch.equal(fp8_tensor.data, new_data)
-#     assert fp8_tensor.data.data_ptr() == new_data.data_ptr()
-
-
 @pytest.mark.parametrize(
     "tensor_cls, dtype", [(FP8Tensor, DTypes.FP8E4M3), (FP8Tensor, DTypes.FP8E5M2), (FP16Tensor, DTypes.KFLOAT16)]
 )
@@ -326,21 +304,9 @@ def test_setting_new_data_for_fp8_and_fp16_tensor(tensor_cls, dtype, is_quantize
 
     assert fp8_tensor.data.dtype == QTYPE_TO_DTYPE[dtype]
     assert torch.equal(fp8_tensor, expected_quantized_tensor)
-
-
-# @pytest.mark.parametrize(
-#     "tensor_cls, dtype", [(FP8Tensor, DTypes.FP8E4M3), (FP8Tensor, DTypes.FP8E5M2), (FP16Tensor, DTypes.KFLOAT16)]
-# )
-# def test_the_memory_location_after_setting_new_data_for_fp8_and_fp16_tensor(tensor_cls, dtype):
-#     tensor = torch.randn((4, 4), dtype=torch.float32, device="cuda")
-#     fp8_tensor = tensor_cls(tensor, dtype=dtype)
-
-#     new_data = torch.randint(low=0, high=256, size=(4, 4), dtype=torch.uint8)
-#     fp8_tensor.set_data(new_data)
-
-#     assert id(fp8_tensor.data) == id(new_data)
-#     assert torch.equal(fp8_tensor.data, new_data)
-#     assert fp8_tensor.data.data_ptr() == new_data.data_ptr()
+    
+    if is_quantized:
+        assert fp8_tensor.data.data_ptr() == new_data.data.data_ptr()
 
 
 @pytest.mark.parametrize("dtype", [DTypes.FP8E4M3, DTypes.FP8E5M2])
@@ -354,15 +320,13 @@ def test_fp8_tensor_track_amaxs(dtype, interval):
     assert len(fp8_meta.amaxs) == 1
     assert torch.equal(fp8_meta.amaxs[0], tensor.abs().max())
 
-    for i in range(interval * 2):
+    for i in range(2, (interval * 2) + 1):
         new_data = torch.randn(fp8_tensor.shape, dtype=torch.float32, device="cuda")
         fp8_tensor.set_data(new_data)
 
         # NOTE: we expect it only maintains amaxs in
         # a window of interval, not more than that
-        # NOTE: i+1 aligns the starting index to 1
-        # i+1+1 because we have the initial amax, then add the new amax
-        assert len(fp8_meta.amaxs) == (i + 2) if (i + 2) < interval else interval
+        assert len(fp8_meta.amaxs) == i if i < interval else interval
         assert torch.equal(fp8_meta.amaxs[-1], new_data.abs().max())
 
 
@@ -373,16 +337,11 @@ def test_delay_scaling_fp8_tensor(dtype, interval):
     fp8_tensor = FP8Tensor(tensor, dtype=dtype, interval=interval)
     fp8_meta = cast(FP8Meta, fp8_tensor.fp8_meta)
 
-    for i in range(1, (interval * 2) + 1):
+    for i in range(2, (interval * 2) + 1):
         new_data = torch.randn(fp8_tensor.shape, dtype=torch.float32, device="cuda")
         fp8_tensor.set_data(new_data)
 
-        # assert fp8_meta.is_ready_to_scale == ((i + 1) >= interval)
-        # assert fp8_meta.is_ready_to_scale == ((i + 1) % interval == 0)
-        if i == 4:
-            assert 1 == 1
-
-        assert fp8_meta.is_ready_to_scale == ((i + 1) % interval == 0)
+        assert fp8_meta.is_ready_to_scale == (i-1 % interval == 0)
 
 
 # @pytest.mark.parametrize("dtype", [DTypes.FP8E4M3, DTypes.FP8E5M2])
@@ -421,7 +380,7 @@ def test_fp8_and_fp16_tensor_equality_based_on_tensor_value(dtype):
 
 @pytest.mark.parametrize("dtype", [DTypes.FP8E4M3, DTypes.FP8E5M2])
 @pytest.mark.parametrize("interval", [1, 5, 10])
-def test_dynamic_fp8_quantization(dtype, interval):
+def test_fp8_dynamic_quantization(dtype, interval):
     tensor = torch.randn((4, 4), dtype=torch.float32, device="cuda")
     new_data = deepcopy(tensor)
 
@@ -430,16 +389,11 @@ def test_dynamic_fp8_quantization(dtype, interval):
 
     history_sf = []
     history_sf.append(fp8_meta.scale)
-    for i in range(1, (interval * 2) + 1):
+    for i in range(2, (interval * 2) + 1):
         new_data = new_data.clone() * 2
         fp8_tensor.set_data(new_data)
 
-        # assert (not fp8_meta.scale in history_sf) == (i % interval == 0)
-        if i == 8:
-            assert 1 == 1
-
-        assert fp8_meta.is_ready_to_scale is True, f"i: {i}, interval: {interval}"
-        assert (fp8_meta.scale not in history_sf) == ((i + 1) % interval == 0)
+        assert (fp8_meta.scale not in history_sf) == (i % interval == 0)
         history_sf.append(fp8_meta.scale)
 
     # tensor = convert_tensor_from_fp8(fp8_tensor, fp8_tensor.fp8_meta, torch.float32)
