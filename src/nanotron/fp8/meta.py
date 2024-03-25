@@ -62,10 +62,10 @@ class FP8Meta:
             self._amaxs.pop(0)
 
         self._amaxs.append(amax)
-        
+
         if self.interval != 1:
             self._num_remaining_steps_until_rescale -= 1
-        
+
         if self.is_ready_to_scale:
             self.rescale()
 

@@ -304,7 +304,7 @@ def test_setting_new_data_for_fp8_and_fp16_tensor(tensor_cls, dtype, is_quantize
 
     assert fp8_tensor.data.dtype == QTYPE_TO_DTYPE[dtype]
     assert torch.equal(fp8_tensor, expected_quantized_tensor)
-    
+
     if is_quantized:
         assert fp8_tensor.data.data_ptr() == new_data.data.data_ptr()
 
@@ -341,7 +341,7 @@ def test_delay_scaling_fp8_tensor(dtype, interval):
         new_data = torch.randn(fp8_tensor.shape, dtype=torch.float32, device="cuda")
         fp8_tensor.set_data(new_data)
 
-        assert fp8_meta.is_ready_to_scale == (i-1 % interval == 0)
+        assert fp8_meta.is_ready_to_scale == (i - 1 % interval == 0)
 
 
 # @pytest.mark.parametrize("dtype", [DTypes.FP8E4M3, DTypes.FP8E5M2])
