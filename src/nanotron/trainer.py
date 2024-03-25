@@ -209,9 +209,12 @@ class DistributedTrainer:
             self.consumed_train_samples = 0
 
         # Setup tensorboard write and log writers on output rank
-        self.logger_ranks = self.parallel_context.world_rank_matrix[
-            0, self.unwrapped_model.output_pp_rank, 0, 0
-        ].flatten()
+        self.logger_ranks = self.parallel_context.get_global_rank(
+            ep_rank=0,
+            pp_rank=self.unwrapped_model.output_pp_rank,
+            dp_rank=0,
+            tp_rank=0
+        ).flatten()
         self.loggerwriter = self.setup_log_writers()
 
         # Log where each module is instantiated
@@ -839,12 +842,12 @@ def mark_tied_parameters(
             (
                 target,
                 (
-                    parallel_context.world_rank_matrix[
-                        dist.get_rank(parallel_context.expert_pg),
-                        get_pp_rank_of(target, module=model),
-                        dist.get_rank(parallel_context.dp_pg),
-                        dist.get_rank(parallel_context.tp_pg),
-                    ],
+                    parallel_context.get_global_rank(
+                        ep_rank=dist.get_rank(parallel_context.expert_pg),
+                        pp_rank=get_pp_rank_of(target, module=model),
+                        dp_rank=dist.get_rank(parallel_context.dp_pg),
+                        tp_rank=dist.get_rank(parallel_context.tp_pg),
+                    ),
                 ),
             )
             for target in embeddings_lm_head_tied_names
