@@ -10,6 +10,7 @@ sys.path.append(str(package_path))
 
 from argparse import Namespace
 
+import nanotron.distributed as dist
 import numpy as np
 import torch
 from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
@@ -58,6 +59,16 @@ def assert_batch_dataloader(batch: dict, parallel_context, micro_batch_size: int
     """
     for element in batch:
         tensor = batch[element]
+
+        # Assert that inputs are only present in input_pp_rank and outputs in output_pp_rank
+        input_pp_rank, output_pp_rank = 0, int(parallel_context.pp_pg.size() - 1)
+        if dist.get_rank(parallel_context.pp_pg) == input_pp_rank and element.startswith("input_"):
+            assert isinstance(tensor, torch.Tensor)
+        elif dist.get_rank(parallel_context.pp_pg) == output_pp_rank and element.startswith("label_"):
+            assert isinstance(tensor, torch.Tensor)
+        else:
+            assert isinstance(tensor, TensorPointer)
+
         data_class = (
             0  # 0 if tensor is from the ids, 1 if TensorPointer and 2 if mask. Used in the data parallel group check
         )
