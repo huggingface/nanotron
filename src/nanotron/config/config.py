@@ -221,7 +221,6 @@ class TokensArgs:
     batch_accumulation_per_replica: int
 
     val_check_interval: Optional[int] = -1
-    val_steps: Optional[int] = 10
     limit_val_batches: Optional[int] = 0
     limit_test_batches: Optional[int] = 0
 

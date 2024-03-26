@@ -1,4 +1,3 @@
-import math
 from typing import Any, List, Type, Union
 
 import numpy
@@ -55,12 +54,10 @@ class NanosetBuilder(object):
         weight_per_dataset = normalize(list(data_path.values()))
 
         # NOTE: Use 0.5% target margin to ensure that that we do not exhaust the indices of any dataset in the Blend
+        # Just specify sizes for the train splits; valid and test will contain all samples reserved for those splits from all the datasets
         sizes_per_dataset = [
-            [
-                int(math.ceil(target_num_samples * weight * 1.005))
-                for target_num_samples in self.config.split_num_samples
-            ]
-            for weight in weight_per_dataset
+            [int(self.config.split_num_samples[0] * dataset_weight * 1.005), None, None]
+            for dataset_weight in weight_per_dataset
         ]
 
         nanoset_datasets = [[] for _ in range(len(Split))]
@@ -72,9 +69,6 @@ class NanosetBuilder(object):
 
             for j in range(len(nanoset_datasets_split)):
                 nanoset_datasets[j].append(nanoset_datasets_split[j])
-
-        # Sum over all contributing datasets, per split
-        size_per_split = list(map(sum, zip(*sizes_per_dataset)))
 
         blended_nanosets = []
 
@@ -91,7 +85,7 @@ class NanosetBuilder(object):
                         BlendedNanoset,
                         nanoset_datasets[i],
                         weight_per_dataset,
-                        size_per_split[i],
+                        self.config.split_num_samples[i],
                         self.config,
                     )
                 )

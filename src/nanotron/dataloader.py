@@ -403,10 +403,10 @@ class DataCollatorForCLM:
 def _get_train_sampler(
     dl_ranks_size: int,
     dl_rank: int,
-    train_dataset: "Dataset",
-    seed: int,
-    use_loop_to_round_batch_size: bool,
+    train_dataset: Union["Dataset", torch.utils.data.Dataset],
     consumed_train_samples: int,
+    seed: int = 42,
+    use_loop_to_round_batch_size: bool = False,
     micro_batch_size: Optional[int] = None,
     drop_last: Optional[bool] = True,
 ) -> Optional[torch.utils.data.Sampler]:

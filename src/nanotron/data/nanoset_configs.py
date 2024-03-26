@@ -23,7 +23,9 @@ class NanosetConfig:
         split_vector Optional[List[float]]): The split string, parsed and normalized post-
         initialization. Not to be passed to the constructor.
 
-        split_num_samples (list[int]): List containing the number of samples per split
+        train_split_samples (int): The number of samples of the train split split (global batch size * training steps)
+
+        split_num_samples (list[int]): List containing the number of samples per split. Valid and test splits set to None in order to consume all the samples. Not to be passed to the constructor.
 
         path_to_cache (str): Where all re-useable dataset indices are to be cached.
     """
@@ -32,7 +34,7 @@ class NanosetConfig:
 
     sequence_length: int
 
-    split_num_samples: list[int]
+    train_split_samples: int
 
     data_path: Union[str, dict]
 
@@ -42,8 +44,11 @@ class NanosetConfig:
 
     split_vector: Optional[List[float]] = field(init=False, default=None)
 
+    split_num_samples: list[int] = field(init=False, default=None)
+
     def __post_init__(self):
         """Python dataclass method that is used to modify attributes after initialization. See
         https://docs.python.org/3/library/dataclasses.html#post-init-processing for more details.
         """
         self.split_vector = parse_and_normalize_split(self.split)
+        self.split_num_samples = [self.train_split_samples, None, None]

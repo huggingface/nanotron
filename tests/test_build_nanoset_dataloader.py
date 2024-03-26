@@ -1,5 +1,3 @@
-import random
-
 import pytest
 from helpers.context import TestContext
 from helpers.data import (
@@ -15,7 +13,6 @@ from nanotron.data.dataloader_builder import build_nanoset_dataloader
 from nanotron.data.dataset_builder import NanosetBuilder
 from nanotron.data.nanoset import Nanoset
 from nanotron.data.nanoset_configs import NanosetConfig
-from nanotron.data.utils import compute_datasets_num_samples
 from nanotron.parallel import ParallelContext
 
 
@@ -27,8 +24,10 @@ from nanotron.parallel import ParallelContext
         for all_3d_configs in get_all_3d_configurations(gpus)
     ],
 )
+@pytest.mark.parametrize("train_steps", [100, 500])
+@pytest.mark.parametrize("sequence_length", [512, 8192])
 @rerun_if_address_is_in_use()
-def test_build_nanoset_dataloader(tp: int, dp: int, pp: int):
+def test_build_nanoset_dataloader(tp: int, dp: int, pp: int, train_steps: int, sequence_length: int):
     test_context = TestContext()
 
     # Create dataset files
@@ -43,51 +42,45 @@ def test_build_nanoset_dataloader(tp: int, dp: int, pp: int):
         preprocess_dummy_dataset(path_to_json=json_path)
 
     init_distributed(tp=tp, dp=dp, pp=pp)(_test_build_nanoset_dataloader)(
-        test_context=test_context, path_to_bin_files=bin_paths
+        test_context=test_context,
+        path_to_bin_files=bin_paths,
+        train_steps=train_steps,
+        sequence_length=sequence_length,
     )
 
 
 def _test_build_nanoset_dataloader(
-    parallel_context: ParallelContext, test_context: TestContext, path_to_bin_files: str
+    parallel_context: ParallelContext,
+    test_context: TestContext,
+    path_to_bin_files: str,
+    train_steps: int,
+    sequence_length: int,
 ):
     SEED = 1234
-    random.seed(SEED)
-
-    TRAIN_STEPS = random.randint(1000, 10000)
-    VAL_CHECK_INTERVAL = TRAIN_STEPS / 4
-    VAL_STEPS = TRAIN_STEPS / 10
-    MICRO_BATCH_SIZE = 2 ** random.randint(1, 4)
-    N_MICRO_BATCHES_PER_BATCH = 2 ** random.randint(1, 4)
+    MICRO_BATCH_SIZE = 4
+    N_MICRO_BATCHES_PER_BATCH = 8
     GLOBAL_BATCH_SIZE = MICRO_BATCH_SIZE * N_MICRO_BATCHES_PER_BATCH * parallel_context.dp_pg.size()
 
-    SEQ_LENGTH = 2 ** random.randint(10, 14)
-    SPLIT = "{},{},{}".format(random.randint(1, 100), random.randint(1, 100), random.randint(1, 100))
+    SPLIT = "70,20,10"
 
     input_pp_rank, output_pp_rank = 0, int(parallel_context.pp_pg.size() - 1)
 
     # Create Nanoset configs: 1. Normal 2. Blended
-    split_num_samples = compute_datasets_num_samples(
-        train_iters=TRAIN_STEPS,
-        eval_interval=VAL_CHECK_INTERVAL,
-        eval_iters=VAL_STEPS,
-        global_batch_size=GLOBAL_BATCH_SIZE,
-    )
-
     nanoset_config = NanosetConfig(
         random_seed=SEED,
-        sequence_length=SEQ_LENGTH,
+        sequence_length=sequence_length,
         data_path=path_to_bin_files[0],
         split=SPLIT,
-        split_num_samples=split_num_samples,
+        train_split_samples=train_steps * GLOBAL_BATCH_SIZE,
         path_to_cache=test_context.get_auto_remove_tmp_dir(),
     )
 
     blended_nanoset_config = NanosetConfig(
         random_seed=SEED,
-        sequence_length=SEQ_LENGTH,
-        data_path={bin_path: random.randint(1, 100) for bin_path in path_to_bin_files},
+        sequence_length=sequence_length,
+        data_path={path_to_bin_files[0]: 0.8, path_to_bin_files[1]: 0.2},
         split=SPLIT,
-        split_num_samples=split_num_samples,
+        train_split_samples=train_steps * GLOBAL_BATCH_SIZE,
         path_to_cache=test_context.get_auto_remove_tmp_dir(),
     )
 
@@ -109,7 +102,7 @@ def _test_build_nanoset_dataloader(
         # Create Dataloaders
         dataloader = build_nanoset_dataloader(
             train_dataset,
-            sequence_length=SEQ_LENGTH,
+            sequence_length=sequence_length,
             parallel_context=parallel_context,
             input_pp_rank=input_pp_rank,
             output_pp_rank=output_pp_rank,
@@ -124,7 +117,7 @@ def _test_build_nanoset_dataloader(
             batch=batch,
             parallel_context=parallel_context,
             micro_batch_size=MICRO_BATCH_SIZE,
-            sequence_length=SEQ_LENGTH,
+            sequence_length=sequence_length,
         )
 
     parallel_context.destroy()

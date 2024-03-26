@@ -11,7 +11,6 @@ import torch
 from nanotron import logging
 from nanotron.data.nanoset import Nanoset
 from nanotron.data.nanoset_configs import NanosetConfig
-from nanotron.data.utils import build_blending_indices
 from nanotron.logging import log_rank
 
 logger = logging.get_logger(__name__)
@@ -42,7 +41,7 @@ class BlendedNanoset(torch.utils.data.Dataset):
     ) -> None:
         assert len(datasets) == len(weights)
         assert numpy.isclose(sum(weights), 1.0)
-        assert all((type(_) == type(datasets[0]) for _ in datasets))
+        assert all((isinstance(dataset, Nanoset) for dataset in datasets))
 
         # Alert user to unnecessary blending
         if len(datasets) == 1:
@@ -50,8 +49,11 @@ class BlendedNanoset(torch.utils.data.Dataset):
 
         self.datasets = datasets
         self.weights = weights
-        self.size = size
         self.config = config
+        # For the train split, we will have global batch size * train steps samples
+        # For the valid and test splits, we will consume entirely both datasets
+        self.dataset_sizes = [len(dataset) for dataset in self.datasets]
+        self.size = size if size is not None else sum(self.dataset_sizes)
 
         # Create unique identifier
 
@@ -60,6 +62,7 @@ class BlendedNanoset(torch.utils.data.Dataset):
         unique_identifiers["datasets"] = [dataset.unique_identifiers for dataset in self.datasets]
         unique_identifiers["weights"] = self.weights
         unique_identifiers["size"] = self.size
+        unique_identifiers["dataset_sizes"] = self.dataset_sizes
 
         self.unique_description = json.dumps(unique_identifiers, indent=4)
         self.unique_description_hash = hashlib.md5(self.unique_description.encode("utf-8")).hexdigest()
@@ -70,9 +73,9 @@ class BlendedNanoset(torch.utils.data.Dataset):
         _ = self[self.size - 1]
         try:
             _ = self[self.size]
-            raise RuntimeError(f"{type(self).__name__} size is improperly bounded")
+            raise RuntimeError("BlendedNanoset size is improperly bounded")
         except IndexError:
-            log_rank(f"> {type(self).__name__} length: {len(self)}", logger=logger, level=logging.INFO, rank=0)
+            log_rank(f"> BlendedNanoset length: {len(self)}", logger=logger, level=logging.INFO, rank=0)
 
     def __len__(self) -> int:
         return self.size
@@ -123,7 +126,7 @@ class BlendedNanoset(torch.utils.data.Dataset):
             t_beg = time.time()
 
             dataset_index, dataset_sample_index = build_blending_indices(
-                size=self.size, weights=numpy.array(self.weights)
+                n_samples=self.size, weights=numpy.array(self.weights), dataset_sizes=self.dataset_sizes
             )
 
             if path_to_cache:
@@ -167,3 +170,35 @@ class BlendedNanoset(torch.utils.data.Dataset):
         log_rank(f"\t> Time elapsed: {t_end - t_beg:4f} seconds", logger=logger, level=logging.DEBUG, rank=0)
 
         return dataset_index, dataset_sample_index
+
+
+def build_blending_indices(
+    n_samples: int, weights: numpy.ndarray, dataset_sizes: List
+) -> Tuple[numpy.ndarray, numpy.ndarray]:
+    """Given multiple datasets and a weighting array, build samples
+    such that it follows those weights."""
+    # Create empty arrays for dataset indices and dataset sample indices
+    dataset_index = numpy.empty((n_samples,), dtype="uint")
+    dataset_sample_index = numpy.empty((n_samples,), dtype="long")
+
+    # Initialize buffer for number of samples used for each dataset
+    current_samples = numpy.zeros((len(weights),), dtype="long")
+
+    # Iterate over all samples
+    for sample_idx in range(n_samples):
+
+        # Convert sample index to float for comparison against weights
+        sample_idx_float = max(sample_idx, 1.0)
+
+        # Find the dataset with the highest error
+        errors = weights * sample_idx_float - current_samples
+        max_error_index = numpy.argmax(errors)
+
+        # Assign the dataset index and update the sample index
+        dataset_index[sample_idx] = max_error_index
+        dataset_sample_index[sample_idx] = current_samples[max_error_index] % dataset_sizes[max_error_index]
+
+        # Update the total samples for the selected dataset
+        current_samples[max_error_index] += 1
+
+    return dataset_index, dataset_sample_index

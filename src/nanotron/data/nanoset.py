@@ -3,7 +3,7 @@ import json
 import os
 import time
 from collections import OrderedDict
-from typing import Dict, Tuple
+from typing import Dict, Tuple, Union
 
 import numpy
 import torch
@@ -11,15 +11,14 @@ import torch
 from nanotron import logging
 from nanotron.data.indexed_dataset import MMapIndexedDataset
 from nanotron.data.nanoset_configs import NanosetConfig
-from nanotron.data.utils import Split, build_sample_idx
+from nanotron.data.utils import Split
 from nanotron.logging import log_rank
 
 logger = logging.get_logger(__name__)
 
 
 class Nanoset(torch.utils.data.Dataset):
-    """Adapted from https://github.com/NVIDIA/Megatron-LM/blob/main/megatron/core/datasets/gpt_dataset.py
-
+    """
     The base Nanoset dataset
 
     Args:
@@ -28,7 +27,7 @@ class Nanoset(torch.utils.data.Dataset):
 
         indexed_indices (numpy.ndarray): The set of the documents indices to expose
 
-        num_samples (int): The number of samples to draw from the indexed dataset
+        num_samples (int): Number of samples that we will consume from the dataset. If it is None, we will consume all the samples only 1 time (valid and test splits). For the train split, we will introduce train steps * global batch size and compute the number of epochs based on the length of the dataset.
 
         index_split (Split): The indexed_indices Split (train, valid, test)
 
@@ -39,13 +38,12 @@ class Nanoset(torch.utils.data.Dataset):
         self,
         indexed_dataset: MMapIndexedDataset,
         indexed_indices: numpy.ndarray,
-        num_samples: int,
+        num_samples: Union[int, None],
         index_split: Split,
         config: NanosetConfig,
     ) -> None:
 
         assert indexed_indices.size > 0
-        assert num_samples > 0
 
         self.indexed_dataset = indexed_dataset
         self.indexed_indices = indexed_indices
@@ -58,7 +56,6 @@ class Nanoset(torch.utils.data.Dataset):
         self.unique_identifiers = OrderedDict()
         self.unique_identifiers["class"] = type(self).__name__
         self.unique_identifiers["path_prefix"] = self.indexed_dataset.path_prefix
-        self.unique_identifiers["num_samples"] = self.num_samples
         self.unique_identifiers["index_split"] = self.index_split.name
         self.unique_identifiers["split"] = self.config.split
         self.unique_identifiers["random_seed"] = self.config.random_seed
@@ -122,7 +119,7 @@ class Nanoset(torch.utils.data.Dataset):
                 length = None if i < doc_index_end else doc_index_end_offset + 1
                 tokens.append(self.indexed_dataset.get(self.document_index[i], offset=offset, length=length))
 
-        return {"text": numpy.array(numpy.concatenate(tokens), dtype=numpy.int64)}
+        return {"input_ids": numpy.array(numpy.concatenate(tokens), dtype=numpy.int64)}
 
     def build_document_sample_shuffle_indices(
         self,
@@ -171,10 +168,6 @@ class Nanoset(torch.utils.data.Dataset):
 
         num_tokens_per_epoch = compute_num_tokens_per_epoch(self.indexed_dataset, self.indexed_indices)
 
-        sequence_length = self.config.sequence_length
-
-        num_epochs = compute_num_epochs(num_tokens_per_epoch, sequence_length, self.num_samples)
-
         if not cache_hit and torch.distributed.get_rank() == 0:
             log_rank(
                 f"Build and save the {type(self).__name__} {self.index_split.name} indices",
@@ -219,7 +212,7 @@ class Nanoset(torch.utils.data.Dataset):
             sample_index = build_sample_idx(
                 sizes=self.indexed_dataset.sequence_lengths,
                 doc_idx=document_index,
-                seq_length=sequence_length,
+                seq_length=self.config.sequence_length,
                 tokens_per_epoch=num_tokens_per_epoch,
             )
             numpy.save(path_to_sample_index, sample_index, allow_pickle=True)
@@ -236,12 +229,14 @@ class Nanoset(torch.utils.data.Dataset):
             t_beg = time.time()
             shuffle_index = numpy.arange(start=0, stop=(sample_index.shape[0] - 1), step=1, dtype=numpy.uint32)
             numpy_random_state.shuffle(shuffle_index)
-            n_concatenations = (
-                int(self.num_samples / shuffle_index.shape[0]) + 1
-            )  # NOTE: To ensure that we always generate more samples than requested in num_samples
+            if self.num_samples is not None:  # For the train split, concatenate shuffle Indexes
+                n_concatenations = (
+                    int(self.num_samples / shuffle_index.shape[0]) + 1
+                )  # NOTE: To ensure that we always generate more samples than requested in num_samples
+                shuffle_index = numpy.concatenate([shuffle_index for _ in range(n_concatenations)])
             numpy.save(
                 path_to_shuffle_index,
-                numpy.concatenate([shuffle_index for _ in range(n_concatenations)]),
+                shuffle_index,
                 allow_pickle=True,
             )
             t_end = time.time()
@@ -287,10 +282,68 @@ class Nanoset(torch.utils.data.Dataset):
         t_end = time.time()
         log_rank(f"\t> Time elapsed: {t_end - t_beg:4f} seconds", logger=logger, level=logging.DEBUG, rank=0)
 
-        log_rank(f"> Total number of samples: {shuffle_index.shape[0]}", logger=logger, level=logging.INFO, rank=0)
-        log_rank(f"> Total number of epochs: {num_epochs}", logger=logger, level=logging.INFO, rank=0)
+        log_rank(f"> Total number of samples: {sample_index.shape[0] - 1}", logger=logger, level=logging.INFO, rank=0)
+
+        if (
+            self.num_samples is not None
+        ):  # Compute number of epochs we will iterate over this Nanoset. Just for training
+            num_epochs = round(self.num_samples / (sample_index.shape[0] - 1), 2)
+            log_rank(f"> Total number of epochs: {num_epochs}", logger=logger, level=logging.INFO, rank=0)
 
         return document_index, sample_index, shuffle_index
+
+
+def build_sample_idx(sizes, doc_idx, seq_length, tokens_per_epoch):
+    # Check validity of inumpyut args.
+    assert seq_length > 1
+    assert tokens_per_epoch > 1
+
+    # Compute the number of samples.
+    num_samples = (tokens_per_epoch - 1) // seq_length
+
+    # Allocate memory for the mapping table.
+    sample_idx = numpy.full([num_samples + 1, 2], fill_value=-999, dtype=numpy.int32)
+
+    # Setup helper vars.
+    sample_index = 0
+    doc_idx_index = 0
+    doc_offset = 0
+
+    # Add the first entry to the mapping table.
+    sample_idx[sample_index][0] = doc_idx_index
+    sample_idx[sample_index][1] = doc_offset
+    sample_index += 1
+
+    # Loop over the rest of the samples.
+    while sample_index <= num_samples:
+        # Start with a fresh sequence.
+        remaining_seq_length = seq_length + 1
+
+        # Keep adding docs until we reach the end of the sequence.
+        while remaining_seq_length != 0:
+            # Look up the current document length.
+            doc_id = doc_idx[doc_idx_index]
+            doc_length = sizes[doc_id] - doc_offset
+
+            # Try to add it to the current sequence.
+            remaining_seq_length -= doc_length
+
+            # If it fits, adjust offset and break out of inner loop.
+            if remaining_seq_length <= 0:
+                doc_offset += remaining_seq_length + doc_length - 1
+                remaining_seq_length = 0
+            else:
+                # Otherwise move to the next document.
+                doc_idx_index += 1
+                doc_offset = 0
+
+        # Store the current sequence in the mapping table.
+        sample_idx[sample_index][0] = doc_idx_index
+        sample_idx[sample_index][1] = doc_offset
+        sample_index += 1
+
+    assert not numpy.any(sample_idx == -999)
+    return sample_idx
 
 
 def compute_num_tokens_per_epoch(indexed_dataset: MMapIndexedDataset, indices: numpy.ndarray) -> int:
@@ -305,28 +358,3 @@ def compute_num_tokens_per_epoch(indexed_dataset: MMapIndexedDataset, indices: n
         int: The number of tokens in a single epoch
     """
     return numpy.sum(indexed_dataset.sequence_lengths[indices])
-
-
-def compute_num_epochs(num_tokens_per_epoch: int, seq_length: int, num_samples: int) -> int:
-    """Calculate the number of epochs
-
-    Args:
-        num_tokens_per_epoch (int): The number of tokens in a single epoch
-
-        seq_length (int): The sequence length in tokens
-
-        num_samples (int): The total number of samples
-
-    Returns:
-        int: The number of epochs
-    """
-    num_epochs = 0
-    num_tokens = 0
-    while True:
-        num_epochs += 1
-        num_tokens += num_tokens_per_epoch
-        # -1 is because we need to retrieve seq_length + 1 token each time
-        # but the last token will overlap with the first token of the next
-        # sample except for the last sample.
-        if ((num_tokens - 1) // seq_length) >= num_samples:
-            return num_epochs

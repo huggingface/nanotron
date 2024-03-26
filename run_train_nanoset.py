@@ -13,7 +13,6 @@ from nanotron import logging
 from nanotron.data.dataloader_builder import build_nanoset_dataloader
 from nanotron.data.dataset_builder import NanosetBuilder
 from nanotron.data.nanoset import NanosetConfig
-from nanotron.data.utils import compute_datasets_num_samples
 from nanotron.parallel.pipeline_parallel.utils import get_input_output_pp_ranks
 from nanotron.trainer import DistributedTrainer
 
@@ -27,19 +26,12 @@ def get_dataloaders(trainer: DistributedTrainer):
     input_pp_rank, output_pp_rank = get_input_output_pp_ranks(model=trainer.model)
 
     # Create Nanoset config
-    split_num_samples = compute_datasets_num_samples(
-        train_iters=trainer.config.tokens.train_steps,
-        eval_interval=trainer.config.tokens.val_check_interval,
-        eval_iters=trainer.config.tokens.val_steps,
-        global_batch_size=trainer.global_batch_size,
-    )
-
     nanoset_config = NanosetConfig(
         random_seed=trainer.config.data.seed,
         sequence_length=trainer.sequence_length,
         data_path=trainer.config.data.dataset.data_path,
         split=trainer.config.data.dataset.split,
-        split_num_samples=split_num_samples,
+        train_split_samples=trainer.config.tokens.train_steps * trainer.global_batch_size,
         path_to_cache=trainer.config.data.dataset.path_to_cache,
     )
 

@@ -65,12 +65,20 @@ torchrun --nproc-per-node 8 run_train_nanoset.py --config configs/nanoset_llama2
 ```
 
 ## Under the hood
+### Number of samples
+
+When using Nanosets, we specify the `data_path` to the preprocessed dataset and a `split`. This `split` value will be used to divide the total number of documents into train, valid, and test sets.
+
+For the train split, the number of samples consumed from the Nanoset will be determined by the `number of train steps * global batch size`, so if this number is higher than the number of samples created with the documents assigned to the train split, we will see the dataset samples more than once (> 1 epoch). In the case of the valid and test split, we will see all the samples only once.
+
+In the case of the `BlendedNanoset`, we will also indicate the weight of each dataset to construct data batches according to the specified proportion. In this case, the train split will respect this proportion, considering that the number of samples will be calculated in the same way as in the Nanosets, so it may happen that we consume one dataset for 3 epochs and another larger dataset for only one epoch. For the valid and test splits, the same as in the Nanosets will occur; we will consume all the samples only once.
+
 ### Nanoset
 A `Nanoset` is paremeterized by the following variables:
 - The underlying `MMapIndexedDataset` instance (`indexed_dataset`)
 - The sequence length `S`
 - The split indices `indexed_indices` (the congituous subset of document or sequence indices used for training, validation, and testing)
-- The total number of samples `N` of the Nanoset
+- The total number of samples `N` of the Nanoset that we will consume during training. In the case of the valid and test splits, we will only consume the dataset once
 - The random seed `R`
 
 The `Nanoset` creates three index mappings to facilitate lookup: (1) The `document_index`, (2) the `sample_index`, and (3) the `shuffle_index`.
@@ -107,7 +115,7 @@ sample_index[16] = (19, 1000)     => From document_index[19] we don't have S tok
 
 len(sample_index) => 17, but only 16 useful samples
 ```
-3. The shuffle index (`shuffle_index`) is a 1-D array mapping from _k_ to _j_ of length `n_concatenations * (len(sample_index) - 1)`, where `n_concatenations` is defined as `(N / (len(sample_index) - 1)) + 1`, so that `len(shuffle_index)` is always greater than `N`. Before concatenating the full array, `shuffle_index` is shuffled according to `R`.
+3. In the train split, the shuffle index (`shuffle_index`) is a 1-D array mapping from _k_ to _j_ of length `n_concatenations * (len(sample_index) - 1)`, where `n_concatenations` is defined as `(N / (len(sample_index) - 1)) + 1`, so that `len(shuffle_index)` is always greater than `N`. While for the valid and test splits, `len(shuffle_index) == len(sample_index) - 1`. Before concatenating the full array, `shuffle_index` is shuffled according to `R`.
 ```
 Given:
 
