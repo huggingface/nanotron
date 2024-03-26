@@ -45,7 +45,7 @@ jobs:
         uv pip install wheel
         uv pip install -e .
         uv pip install -e .[dev]
-        uv  install -e .[test]
+        uv pip install -e .[test]
 
     - name: Show installed libraries and their versions
       run: uv pip freeze | tee installed.txt
