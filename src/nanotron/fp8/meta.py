@@ -85,7 +85,8 @@ class FP8Meta:
 
     @property
     def is_ready_to_scale(self) -> bool:
-        return len(self.amaxs) == self.interval and self._num_remaining_steps_until_rescale == 0
+        # return len(self.amaxs) == self.interval and self._num_remaining_steps_until_rescale == 0
+        return self._num_remaining_steps_until_rescale == 0
 
     def rescale(self):
         assert self.is_ready_to_scale is True, "Cannot rescale if not ready to scale"
