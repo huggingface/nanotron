@@ -69,8 +69,8 @@ optimizer = OptimizerArgs(
 )
 
 parallelism = ParallelismArgs(
-    dp=2,
-    pp=2,
+    dp=1,
+    pp=1,
     tp=2,
     pp_engine="1f1b",
     tp_mode="REDUCE_SCATTER",
@@ -103,6 +103,6 @@ if __name__ == "__main__":
     dir = os.path.dirname(__file__)
 
     # Save config as YAML file
-    config.save_as_yaml(f"{dir}/config_tiny_llama.yaml")
+    config.save_as_yaml(f"{dir}/debug_config_tiny_llama.yaml")
 
     # You can now train a model with this config using `/run_train.py`

@@ -25,6 +25,12 @@ def _test_init_parallel_context(parallel_context: ParallelContext):
     assert isinstance(parallel_context.world_rank_matrix, np.ndarray)
     assert isinstance(parallel_context.world_ranks_to_pg, dict)
 
+    local_rank = tuple(i.item() for i in np.where(parallel_context.world_rank_matrix == world_rank))
+    global_rank = parallel_context.get_global_rank(*local_rank)
+    assert isinstance(global_rank, np.int64), f"The type of global_rank is {type(global_rank)}"
+
+    assert global_rank == dist.get_rank()
+
     parallel_context.destroy()
     assert dist.is_initialized() is False
 
