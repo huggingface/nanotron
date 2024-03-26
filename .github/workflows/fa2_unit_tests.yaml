@@ -19,7 +19,7 @@ on:
 
 jobs:
   tests:
-    runs-on: [single-gpu, nvidia-gpu, a10, ci]
+    # runs-on: [single-gpu, nvidia-gpu, a10, ci]
     container:
       image: runpod/pytorch:2.1.1-py3.10-cuda12.1.1-devel-ubuntu22.04
       ports:
@@ -47,10 +47,10 @@ jobs:
         source .venv/bin/activate
         uv pip install packaging
         uv pip install wheel
-        uv pip install "flash-attn>=2.5.0" --no-build-isolation
         uv pip install -e .
         uv pip install -e .[dev]
         uv pip install -e .[test]
+        uv pip install "flash-attn>=2.5.0" --no-build-isolation
 
     - name: Show installed libraries and their versions
       run: uv pip freeze | tee installed.txt
