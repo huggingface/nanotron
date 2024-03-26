@@ -17,7 +17,7 @@ from transformers import AutoTokenizer
 
 
 class Encoder(object):
-    def __init__(self, pretrained_model_name_or_path, json_key, append_eos):
+    def __init__(self, pretrained_model_name_or_path: str, json_key: str, append_eos: bool):
         self.pretrained_model_name_or_path = pretrained_model_name_or_path
         self.json_key = json_key
         self.append_eos = append_eos
@@ -26,7 +26,7 @@ class Encoder(object):
         # Use Encoder class as a container for global data
         Encoder.tokenizer = AutoTokenizer.from_pretrained(self.pretrained_model_name_or_path)
 
-    def encode(self, json_line):
+    def encode(self, json_line: str):
         data = json.loads(json_line)
         text = data[self.json_key]
 
@@ -38,21 +38,23 @@ class Encoder(object):
 
 
 class Partition(object):
-    def __init__(self, args):
-        self.workers = args.workers // args.partitions
-        self.log_interval = args.log_interval
-        self.pretrained_model_name_or_path = args.pretrained_model_name_or_path
-        self.json_key = args.json_key
-        self.append_eos = args.append_eos
+    def __init__(
+        self, workers: int, log_interval: int, pretrained_model_name_or_path: str, json_key: str, append_eos: bool
+    ):
+        self.workers = workers
+        self.log_interval = log_interval
+        self.pretrained_model_name_or_path = pretrained_model_name_or_path
+        self.json_key = json_key
+        self.append_eos = append_eos
 
-    def print_processing_stats(self, count, proc_start, total_bytes_processed):
+    def print_processing_stats(self, count: int, proc_start: float, total_bytes_processed: int):
         if count % self.log_interval == 0:
             current = time.time()
             elapsed = current - proc_start
             mbs = total_bytes_processed / elapsed / 1024 / 1024
             print(f"Processed {count} documents", f"({count/elapsed} docs/s, {mbs} MB/s).", file=sys.stderr)
 
-    def process_json_file(self, file_name):
+    def process_json_file(self, file_name: str):
         input_file_name, output_prefix = file_name
         print("Opening", input_file_name)
         fin = open(input_file_name, "r", encoding="utf-8")
@@ -122,7 +124,7 @@ def get_args():
     return args
 
 
-def get_file_name(input, output_prefix, file_id):
+def get_file_name(input: str, output_prefix: str, file_id: int):
     file_name, extension = os.path.splitext(input)
     input_file_name = file_name + "_" + str(file_id) + extension
     output_prefix = output_prefix + "_" + str(file_id)
@@ -172,7 +174,13 @@ def main(args):
             partitioned_input_files[idx].close()
 
     assert args.workers % args.partitions == 0
-    partition = Partition(args)
+    partition = Partition(
+        args.workers // args.partitions,
+        args.log_interval,
+        args.pretrained_model_name_or_path,
+        args.json_key,
+        args.append_eos,
+    )
 
     # Encode partition files in parallel
     processes = []
