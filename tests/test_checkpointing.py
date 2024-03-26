@@ -16,7 +16,7 @@ class CheckpointedModel(nn.Module):
         self.fwd_counter = 0
 
     @checkpoint_method("is_checkpointed")
-    def forward(self, x: Union[torch.Tensor, TensorPointer]):
+    def forward(self, x: Union[torch.Tensor, TensorPointer]) -> torch.Tensor:
         x = self.dense1(x)
         if self.is_checkpointed and self.fwd_counter == 0:
             assert not x.requires_grad, "x should not require grad when checkpointed, because fwd runs in no_grad mode"
