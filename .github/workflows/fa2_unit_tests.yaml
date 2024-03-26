@@ -19,8 +19,8 @@ on:
 
 jobs:
   tests:
-    runs-on: ubuntu-latest
-    # runs-on: [single-gpu, nvidia-gpu, a10, ci]
+    # runs-on: ubuntu-latest
+    runs-on: [single-gpu, nvidia-gpu, a10, ci]
     container:
       image: runpod/pytorch:2.1.1-py3.10-cuda12.1.1-devel-ubuntu22.04
       ports:
