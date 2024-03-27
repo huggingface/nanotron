@@ -346,7 +346,7 @@ class Config:
         if self.data_stages is not None:
             names = [stage.name for stage in self.data_stages]
             training_steps = [stage.start_training_step for stage in self.data_stages]
-            assert all(
+            assert any(
                 stage.start_training_step == 1 for stage in self.data_stages
             ), "You must have a training stage starting at 1 in the config's data_stages"
 
