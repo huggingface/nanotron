@@ -39,7 +39,7 @@ jobs:
 
     - name: Install nanotron's dependencies
       run: |
-      python -m venv ./venv
+        python -m venv ./venv
         . ./venv/bin/activate
         python -m pip install --upgrade pip
         python -m pip install --upgrade uv
