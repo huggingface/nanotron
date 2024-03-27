@@ -42,19 +42,24 @@ jobs:
 
     # python -m venv ./venv
     # source ./venv/bin/activate
+    # uv venv
+    # source .venv/bin/activate
+
+    # pip install packaging -H
+    # pip install wheel -H
+    # pip pip install "flash-attn>=2.5.0" --no-build-isolation
+    # pip pip install -e .
+    # pip pip install -e .[dev]
+    # uv pip install -e .[test]
+
     - name: Install nanotron
       run: |
+        python -m venv .venv
+        source .venv/bin/activate
+
         python -m pip install --upgrade pip
         python -m pip install --upgrade uv
         pip install uv
-        uv venv
-        source .venv/bin/activate
-        # pip install packaging -H
-        # pip install wheel -H
-        # pip pip install "flash-attn>=2.5.0" --no-build-isolation
-        # pip pip install -e .
-        # pip pip install -e .[dev]
-        # uv pip install -e .[test]
 
     # - name: Show installed libraries and their versions
     #   run: uv pip freeze | tee installed.txt
