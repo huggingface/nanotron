@@ -54,12 +54,10 @@ jobs:
 
     - name: Install nanotron
       run: |
-        python -m venv .venv
-        source .venv/bin/activate
-
         python -m pip install --upgrade pip
         python -m pip install --upgrade uv
-        pip install uv
+        uv venv venv
+        uv pip install -e .
 
     # - name: Show installed libraries and their versions
     #   run: uv pip freeze | tee installed.txt
