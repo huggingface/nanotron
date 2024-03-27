@@ -1,7 +1,9 @@
+import hashlib
 import importlib
 import json
 import os
 import sys
+from collections import OrderedDict
 from pathlib import Path
 
 package = importlib.import_module("nanotron")
@@ -13,6 +15,9 @@ from argparse import Namespace
 import nanotron.distributed as dist
 import numpy as np
 import torch
+from nanotron.data.blended_nanoset import BlendedNanoset
+from nanotron.data.nanoset import Nanoset
+from nanotron.parallel import ParallelContext
 from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
 from nanotron.sanity_checks import assert_tensor_synced_across_pg
 
@@ -52,7 +57,9 @@ def preprocess_dummy_dataset(path_to_json: str):
     main(args)
 
 
-def assert_batch_dataloader(batch: dict, parallel_context, micro_batch_size: int, sequence_length: int):
+def assert_batch_dataloader(
+    batch: dict, parallel_context: ParallelContext, micro_batch_size: int, sequence_length: int
+):
     """
     batch (dict): Batch produced from the Dataloader, with keys input_ids, input_mask, label_ids, label_mask
 
@@ -102,8 +109,54 @@ def assert_batch_dataloader(batch: dict, parallel_context, micro_batch_size: int
         )
 
 
-def get_max_value_by_group(dataset_idx, dataset_sample_idx, group_idx):
+def get_max_value_by_group(dataset_idx: np.array, dataset_sample_idx: np.array, group_idx: int):
     mask = dataset_idx == group_idx
     filtered_values = dataset_sample_idx[mask]
     max_val = np.amax(filtered_values)
     return max_val
+
+
+def assert_nanoset(nanoset: Nanoset, parallel_context: ParallelContext):
+    # Extract a sample from the Nanoset
+    IDX_SAMPLE = 23
+
+    nanoset_identifiers = OrderedDict()
+    nanoset_identifiers["path_prefix"] = nanoset.indexed_dataset.path_prefix
+    nanoset_identifiers["split"] = nanoset.config.split
+    nanoset_identifiers["random_seed"] = nanoset.config.random_seed
+    nanoset_identifiers["sequence_length"] = nanoset.config.sequence_length
+    nanoset_identifiers["length"] = len(nanoset)
+    nanoset_identifiers["input_ids"] = nanoset[IDX_SAMPLE]["input_ids"].tolist()
+    nanoset_identifiers["indices"] = nanoset.indexed_indices.tolist()
+
+    unique_description = json.dumps(nanoset_identifiers, indent=4)
+    # Create 8 digit description hash
+    unique_description_hash = int(hashlib.sha256(unique_description.encode("utf-8")).hexdigest(), 16) % 10**8
+    assert_tensor_synced_across_pg(
+        tensor=torch.tensor(unique_description_hash, device="cuda"),
+        pg=parallel_context.world_pg,
+        msg=lambda err: f"Nanoset is not synchronized across all processes {err}",
+    )
+
+
+def assert_blendednanoset(blendednanoset: BlendedNanoset, parallel_context: ParallelContext):
+    # Extract a sample from the Nanoset
+    IDX_SAMPLE = 23
+
+    blendednanoset_identifiers = OrderedDict()
+    blendednanoset_identifiers["datasets"] = [dataset.unique_identifiers for dataset in blendednanoset.datasets]
+    blendednanoset_identifiers["weights"] = blendednanoset.weights
+    blendednanoset_identifiers["length"] = len(blendednanoset)
+    blendednanoset_identifiers["dataset_sizes"] = blendednanoset.dataset_sizes
+    blendednanoset_identifiers["input_ids"] = blendednanoset[IDX_SAMPLE]["input_ids"].tolist()
+    blendednanoset_identifiers["dataset_index"] = blendednanoset.dataset_index.tolist()
+    blendednanoset_identifiers["dataset_sample_index"] = blendednanoset.dataset_sample_index.tolist()
+
+    unique_description = json.dumps(blendednanoset_identifiers, indent=4)
+    # Create 8 digit description hash
+    unique_description_hash = int(hashlib.sha256(unique_description.encode("utf-8")).hexdigest(), 16) % 10**8
+    assert_tensor_synced_across_pg(
+        tensor=torch.tensor(unique_description_hash, device="cuda"),
+        pg=parallel_context.world_pg,
+        msg=lambda err: f"BlendedNanoset is not synchronized across all processes {err}",
+    )

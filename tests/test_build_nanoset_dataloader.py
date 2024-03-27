@@ -2,6 +2,8 @@ import pytest
 from helpers.context import TestContext
 from helpers.data import (
     assert_batch_dataloader,
+    assert_blendednanoset,
+    assert_nanoset,
     create_dataset_paths,
     create_dummy_json_dataset,
     get_max_value_by_group,
@@ -90,14 +92,26 @@ def _test_build_nanoset_dataloader(
     for config, dataset_type in zip(configs, dataset_types):
         # Create Nanosets
         train_dataset, valid_dataset, test_dataset = NanosetBuilder(config).build()
-        # Check the type of Nanoset, the quantity of Nanosets in BlendedNanoset and the size of each Nanoset in BlendedNanoset
+
         assert isinstance(train_dataset, dataset_type)
+
+        if isinstance(train_dataset, Nanoset):
+            # Assert Nanoset is the same across all processes
+            assert_nanoset(train_dataset, parallel_context)
+
         if isinstance(train_dataset, BlendedNanoset):
+            # Check the BlendedNanoset is composed of > 1 Nanoset
             assert len(train_dataset.datasets) > 1
+            # Assert BlendedNanoset is the same across all processes
+            assert_blendednanoset(train_dataset, parallel_context)
+            # For each Nanoset in BlendedNanoset
             for idx, dataset in enumerate(train_dataset.datasets):
+                # Check that each Nanoset of BlendedNanoset has more samples than the ones requested by BlendedNanoset
                 assert len(dataset) > get_max_value_by_group(
                     train_dataset.dataset_index, train_dataset.dataset_sample_index, idx
                 )
+                # Assert Nanoset is the same across all processes
+                assert_nanoset(dataset, parallel_context)
 
         # Create Dataloaders
         dataloader = build_nanoset_dataloader(
