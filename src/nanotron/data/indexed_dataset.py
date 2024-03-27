@@ -261,7 +261,6 @@ class _IndexReader(object):
         assert self.sequence_lengths.shape[0] == self.sequence_count
         assert self.sequence_lengths.shape[0] == self.document_indices[-1]
 
-        log_rank(f"> Total number of sequences: {len(self)}", logger=logger, level=logging.INFO, rank=0)
         log_rank(
             f"> Total number of documents: {self.document_indices.shape[0] - 1}",
             logger=logger,

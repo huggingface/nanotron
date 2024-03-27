@@ -75,7 +75,7 @@ class BlendedNanoset(torch.utils.data.Dataset):
             _ = self[self.size]
             raise RuntimeError("BlendedNanoset size is improperly bounded")
         except IndexError:
-            log_rank(f"> BlendedNanoset length: {len(self)}", logger=logger, level=logging.INFO, rank=0)
+            pass
 
     def __len__(self) -> int:
         return self.size
