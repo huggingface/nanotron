@@ -44,13 +44,13 @@ jobs:
     # source ./venv/bin/activate
     - name: Install nanotron
       run: |
-        python -m pip install --upgrade pip
-        python -m pip install --upgrade uv
+        python -m pip install --upgrade pip -H
+        python -m pip install --upgrade uv -H
         pip install uv
         uv venv
         source .venv/bin/activate
-        pip install packaging
-        pip install wheel
+        pip install packaging -H
+        pip install wheel -H
         pip pip install "flash-attn>=2.5.0" --no-build-isolation
         pip pip install -e .
         pip pip install -e .[dev]
