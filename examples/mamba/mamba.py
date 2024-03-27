@@ -226,9 +226,10 @@ class Mamba(nn.Module, AttachableStore):
             if store["seqlen_offset"] > 0:
                 # The states are updated inplace
                 out, _, _ = self.step(hidden_states, conv_state, ssm_state)
+                store["seqlen_offset"] += 1
                 return out
-
-            store["seqlen_offset"] += 1
+            else:
+                store["seqlen_offset"] += 1
 
         # We do matmul and transpose BLH -> HBL at the same time
         xz = self.in_proj(hidden_states).transpose(1, 2)
