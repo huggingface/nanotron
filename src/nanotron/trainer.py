@@ -29,12 +29,11 @@ from nanotron.config import (
     Config,
     DatasetStageArgs,
     ExistingCheckpointInit,
+    NanosetDatasetsArgs,
     ParallelismArgs,
     RandomInit,
     get_config_from_file,
 )
-from nanotron.data.blended_nanoset import BlendedNanoset
-from nanotron.data.nanoset import Nanoset
 from nanotron.dataloader import sanity_check_dataloader
 from nanotron.helpers import (
     _vocab_size_with_padding,
@@ -302,14 +301,13 @@ class DistributedTrainer:
                     if isinstance(prev_dataloader, DataLoader):
                         # NOTE: we don't need to clear dummy data generator from memory
                         clear_dataloader_from_memory(prev_dataloader, stage_name=stage.name)
-                if isinstance(dataloaders[0].dataset, Union[Nanoset, BlendedNanoset]):
+                if isinstance(stage.data.dataset, NanosetDatasetsArgs):
                     log_rank(
                         f"[Training Stage: {stage.name}] Switching to a new dataset {stage.data.dataset.data_path}",
                         logger=logger,
                         level=logging.INFO,
                         rank=0,
                     )
-                    dataloader = dataloaders[0]
                 else:
                     log_rank(
                         f"[Training Stage: {stage.name}] Switching to a new dataset {stage.data.dataset.hf_dataset_or_datasets}",
@@ -317,7 +315,8 @@ class DistributedTrainer:
                         level=logging.INFO,
                         rank=0,
                     )
-                    dataloader = dataloaders[stage.name]
+
+                dataloader = dataloaders[stage.name]
 
                 # NOTE: if a dataloader is lazy initialized, we need to call it to initialize it
                 dataloader = dataloader() if callable(dataloader) else dataloader
