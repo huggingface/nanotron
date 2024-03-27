@@ -50,6 +50,7 @@ def build_nanoset_dataloader(
         dl_rank=dp_rank,
         drop_last=dataloader_drop_last,
         consumed_train_samples=consumed_train_samples,
+        shuffle=False,
     )
 
     return DataLoader(

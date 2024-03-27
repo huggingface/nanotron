@@ -21,18 +21,21 @@ logger = logging.get_logger(__name__)
 
 def get_dataloaders(trainer: DistributedTrainer):
     """Returns train, valid and test dataloaders"""
+    assert (
+        len(trainer.config.data_stages) == 1
+    ), "Nanosets currently don't support loading DataLoaders based on training stages"
 
     # First, we need to know which ranks to feed the dataloader to
     input_pp_rank, output_pp_rank = get_input_output_pp_ranks(model=trainer.model)
 
     # Create Nanoset config
     nanoset_config = NanosetConfig(
-        random_seed=trainer.config.data.seed,
+        random_seed=trainer.config.data_stages[0].data.seed,
         sequence_length=trainer.sequence_length,
-        data_path=trainer.config.data.dataset.data_path,
-        split=trainer.config.data.dataset.split,
+        data_path=trainer.config.data_stages[0].data.dataset.data_path,
+        split=trainer.config.data_stages[0].data.dataset.split,
         train_split_samples=trainer.config.tokens.train_steps * trainer.global_batch_size,
-        path_to_cache=trainer.config.data.dataset.path_to_cache,
+        path_to_cache=trainer.config.data_stages[0].data.dataset.path_to_cache,
     )
 
     # Build Nanoset datasets
@@ -47,7 +50,7 @@ def get_dataloaders(trainer: DistributedTrainer):
         output_pp_rank=output_pp_rank,
         micro_batch_size=trainer.micro_batch_size,
         consumed_train_samples=trainer.consumed_train_samples,
-        dataloader_num_workers=trainer.config.data.num_loading_workers,
+        dataloader_num_workers=trainer.config.data_stages[0].data.num_loading_workers,
         dataloader_drop_last=True,
     )
 
@@ -58,7 +61,7 @@ def get_dataloaders(trainer: DistributedTrainer):
         input_pp_rank=input_pp_rank,
         output_pp_rank=output_pp_rank,
         micro_batch_size=trainer.micro_batch_size,
-        dataloader_num_workers=trainer.config.data.num_loading_workers,
+        dataloader_num_workers=trainer.config.data_stages[0].data.num_loading_workers,
         dataloader_drop_last=True,
     )
 
@@ -69,7 +72,7 @@ def get_dataloaders(trainer: DistributedTrainer):
         input_pp_rank=input_pp_rank,
         output_pp_rank=output_pp_rank,
         micro_batch_size=trainer.micro_batch_size,
-        dataloader_num_workers=trainer.config.data.num_loading_workers,
+        dataloader_num_workers=trainer.config.data_stages[0].data.num_loading_workers,
         dataloader_drop_last=True,
     )
 
@@ -92,4 +95,4 @@ if __name__ == "__main__":
     train_dataloader, valid_dataloader, test_dataloader = get_dataloaders(trainer)
 
     # Train
-    trainer.train(train_dataloader)
+    trainer.train([train_dataloader])

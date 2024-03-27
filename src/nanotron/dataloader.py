@@ -409,6 +409,7 @@ def _get_train_sampler(
     use_loop_to_round_batch_size: bool = False,
     micro_batch_size: Optional[int] = None,
     drop_last: Optional[bool] = True,
+    shuffle: bool = True,
 ) -> Optional[torch.utils.data.Sampler]:
     """returns sampler that restricts data loading to a subset of the dataset proper to the DP rank"""
 
@@ -428,7 +429,7 @@ def _get_train_sampler(
         )
     else:
         sampler = DistributedSampler(
-            train_dataset, num_replicas=dl_ranks_size, rank=dl_rank, seed=seed, drop_last=drop_last
+            train_dataset, num_replicas=dl_ranks_size, rank=dl_rank, seed=seed, drop_last=drop_last, shuffle=shuffle
         )
 
     if consumed_train_samples > 0:

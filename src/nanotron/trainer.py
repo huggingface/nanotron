@@ -33,6 +33,8 @@ from nanotron.config import (
     RandomInit,
     get_config_from_file,
 )
+from nanotron.data.blended_nanoset import BlendedNanoset
+from nanotron.data.nanoset import Nanoset
 from nanotron.dataloader import sanity_check_dataloader
 from nanotron.helpers import (
     _vocab_size_with_padding,
@@ -210,10 +212,7 @@ class DistributedTrainer:
 
         # Setup tensorboard write and log writers on output rank
         self.logger_ranks = self.parallel_context.get_global_rank(
-            ep_rank=0,
-            pp_rank=self.unwrapped_model.output_pp_rank,
-            dp_rank=0,
-            tp_rank=0
+            ep_rank=0, pp_rank=self.unwrapped_model.output_pp_rank, dp_rank=0, tp_rank=0
         ).flatten()
         self.loggerwriter = self.setup_log_writers()
 
@@ -303,15 +302,23 @@ class DistributedTrainer:
                     if isinstance(prev_dataloader, DataLoader):
                         # NOTE: we don't need to clear dummy data generator from memory
                         clear_dataloader_from_memory(prev_dataloader, stage_name=stage.name)
+                if isinstance(dataloaders[0].dataset, Union[Nanoset, BlendedNanoset]):
+                    log_rank(
+                        f"[Training Stage: {stage.name}] Switching to a new dataset {stage.data.dataset.data_path}",
+                        logger=logger,
+                        level=logging.INFO,
+                        rank=0,
+                    )
+                    dataloader = dataloaders[0]
+                else:
+                    log_rank(
+                        f"[Training Stage: {stage.name}] Switching to a new dataset {stage.data.dataset.hf_dataset_or_datasets}",
+                        logger=logger,
+                        level=logging.INFO,
+                        rank=0,
+                    )
+                    dataloader = dataloaders[stage.name]
 
-                log_rank(
-                    f"[Training Stage: {stage.name}] Switching to a new dataset {stage.data.dataset.hf_dataset_or_datasets}",
-                    logger=logger,
-                    level=logging.INFO,
-                    rank=0,
-                )
-
-                dataloader = dataloaders[stage.name]
                 # NOTE: if a dataloader is lazy initialized, we need to call it to initialize it
                 dataloader = dataloader() if callable(dataloader) else dataloader
                 break
