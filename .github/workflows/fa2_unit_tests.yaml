@@ -40,17 +40,17 @@ jobs:
         python -c "import torch; print('torch:', torch.__version__, torch)"
         python -c "import torch; print('CUDA available:', torch.cuda.is_available())"
 
+    # python -m venv ./venv
+    # source ./venv/bin/activate
     - name: Install nanotron
       run: |
-        python -m venv ./venv
-        source ./venv/bin/activate
         python -m pip install --upgrade pip
         pip install packaging
         pip install wheel
+        pip pip install "flash-attn>=2.5.0" --no-build-isolation
+        pip pip install -e .
+        pip pip install -e .[dev]
         pip install uv
-        uv pip install "flash-attn>=2.5.0" --no-build-isolation
-        uv pip install -e .
-        uv pip install -e .[dev]
         uv pip install -e .[test]
 
     - name: Show installed libraries and their versions
