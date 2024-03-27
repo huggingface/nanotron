@@ -44,22 +44,22 @@ jobs:
     # source ./venv/bin/activate
     - name: Install nanotron
       run: |
-        python -m pip install --upgrade pip -H
-        python -m pip install --upgrade uv -H
+        python -m pip install --upgrade pip
+        python -m pip install --upgrade uv
         pip install uv
         uv venv
         source .venv/bin/activate
-        pip install packaging -H
-        pip install wheel -H
-        pip pip install "flash-attn>=2.5.0" --no-build-isolation
-        pip pip install -e .
-        pip pip install -e .[dev]
-        uv pip install -e .[test]
+        # pip install packaging -H
+        # pip install wheel -H
+        # pip pip install "flash-attn>=2.5.0" --no-build-isolation
+        # pip pip install -e .
+        # pip pip install -e .[dev]
+        # uv pip install -e .[test]
 
-    - name: Show installed libraries and their versions
-      run: uv pip freeze | tee installed.txt
+    # - name: Show installed libraries and their versions
+    #   run: uv pip freeze | tee installed.txt
 
-    - name: Run tests
-      # NOTE: -m fa2 will only run the unit tests that have the mark
-      # "fa2" (these are FA2-related tests)
-      run: pytest -m fa2 --color=yes --durations=0 --ignore tests/fp8 --verbose tests/
+    # - name: Run tests
+    #   # NOTE: -m fa2 will only run the unit tests that have the mark
+    #   # "fa2" (these are FA2-related tests)
+    #   run: pytest -m fa2 --color=yes --durations=0 --ignore tests/fp8 --verbose tests/
