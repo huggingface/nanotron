@@ -9,7 +9,6 @@ from nanotron import distributed as dist
 from nanotron import logging
 from nanotron import optim as optim
 from nanotron.config import Config
-from nanotron.distributed import get_global_rank
 from nanotron.logging import log_rank
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter
@@ -170,29 +169,16 @@ def save(
             tied_info = param.get_tied_info()
             group_ranks = tied_info.global_ranks
             group = parallel_context.world_ranks_to_pg[group_ranks]
-            reference_rank = 0
-            current_rank = dist.get_rank(group)
+            dist.get_rank(group)
 
             for name, tensor in optim_state.items():
                 # FIXME @thomasw21: Some data is actually on `cpu`, just for this test we most it to `cuda`
                 tensor = tensor.to("cuda")
 
-                if current_rank == reference_rank:
-                    reference_tensor = tensor
-                else:
-                    reference_tensor = torch.empty_like(tensor)
-                dist.broadcast(
-                    reference_tensor,
-                    src=get_global_rank(group=group, group_rank=reference_rank),
-                    group=group,
-                )
-
-                torch.testing.assert_close(
-                    tensor,
-                    reference_tensor,
-                    atol=0,
-                    rtol=0,
-                    msg=lambda msg: f"tensor at {current_state_dict['names'][index]} doesn't match with our reference. Optimizer key: {name}\nCur: {tensor}\nRef: {reference_tensor}\n{msg}",
+                assert_tensor_synced_across_pg(
+                    tensor=tensor,
+                    pg=group,
+                    msg=lambda err: f"Optimizer state for {name} of tied parameter {tied_info.name} is not synced {err}",
                 )
         ###
 
