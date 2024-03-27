@@ -112,6 +112,8 @@ class NanosetBuilder(object):
         Returns:
             List[Nanoset]: The Nanoset per split. Always returns Nanosets because we build them in each and every rank
         """
+        assert numpy.isclose(sum(split), 1.0), f"Split ratios must sum to 1.00. Passed {split}"
+
         indexed_dataset = self.build_generic_dataset(MMapIndexedDataset, path_prefix)
 
         split_idx_bounds = get_split_indices(split, indexed_dataset.sequence_lengths.shape[0])

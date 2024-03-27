@@ -99,7 +99,9 @@ class PretrainDatasetsArgs:
 class NanosetDatasetsArgs:
     data_path: Union[str, dict]
     split: Optional[str] = "949,50,1"
-    path_to_cache: Optional[str] = "_"
+    path_to_cache: Optional[
+        str
+    ] = "_"  # If defaults to None, dacite is not able to parse the config. Set to None in __post_init__
 
     def __post_init__(self):
         if not os.path.isdir(self.path_to_cache):

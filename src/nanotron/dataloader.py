@@ -241,7 +241,6 @@ def dummy_infinite_data_generator(
     return data_generator
 
 
-# QUESTION: Move it to nanotron.data.dataloader_builder?
 # Adapted from https://github.com/huggingface/accelerate/blob/a73898027a211c3f6dc4460351b0ec246aa824aa/src/accelerate/data_loader.py#L781C1-L824C28
 class SkipBatchSampler(BatchSampler):
     """
@@ -400,7 +399,7 @@ class DataCollatorForCLM:
 
 
 # Adapted from https://github.com/huggingface/transformers/blob/47e1676255e5dd86b9541f734cd4f4bdcbb50f4a/src/transformers/trainer.py#L763-L835
-def _get_train_sampler(
+def get_sampler(
     dl_ranks_size: int,
     dl_rank: int,
     train_dataset: Union["Dataset", torch.utils.data.Dataset],
@@ -494,7 +493,7 @@ def get_train_dataloader(
     # TODO @nouamanetazi: Remove unused columns: https://github.com/huggingface/transformers/blob/47e1676255e5dd86b9541f734cd4f4bdcbb50f4a/src/transformers/trainer.py#L852
     # TODO @nouamanetazi: Support torch.utils.data.IterableDataset: https://github.com/huggingface/transformers/blob/47e1676255e5dd86b9541f734cd4f4bdcbb50f4a/src/transformers/trainer.py#L855-L872
 
-    train_sampler = _get_train_sampler(
+    train_sampler = get_sampler(
         dl_rank=dp_rank,
         dl_ranks_size=dp_ranks_size,
         train_dataset=train_dataset,
@@ -519,7 +518,6 @@ def get_train_dataloader(
     )
 
 
-# QUESTION: Move it to nanotron.data.dataloader_builder?
 def get_dataloader_worker_init(dp_rank: int):
     """Creates random states for each worker in order to get different state in each workers"""
 
@@ -531,7 +529,6 @@ def get_dataloader_worker_init(dp_rank: int):
     return dataloader_worker_init
 
 
-# QUESTION: Move it to nanotron.data.dataloader_builder?
 class EmptyInfiniteDataset:
     """Hack as removing all columns from a datasets.Dataset makes the number of rows 0."""
 

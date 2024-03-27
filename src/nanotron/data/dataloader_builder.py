@@ -5,8 +5,8 @@ from nanotron import logging
 from nanotron.dataloader import (
     DataCollatorForCLM,
     EmptyInfiniteDataset,
-    _get_train_sampler,
     get_dataloader_worker_init,
+    get_sampler,
 )
 from nanotron.parallel import ParallelContext
 
@@ -44,7 +44,7 @@ def build_nanoset_dataloader(
     dp_ranks_size = parallel_context.dp_pg.size()
     dp_rank = parallel_context.dp_pg.rank()
 
-    sampler = _get_train_sampler(
+    sampler = get_sampler(
         train_dataset=dataset,
         dl_ranks_size=dp_ranks_size,
         dl_rank=dp_rank,
