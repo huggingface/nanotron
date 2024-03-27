@@ -217,12 +217,15 @@ def log_rank(
     **kwargs,
 ):
     """Log only if the current process is the rank specified."""
-    # Use default group is group is not provided
-    if group is None:
-        group = torch_dist.distributed_c10d._get_default_group()
+    if torch.distributed.is_initialized():
+        # Use default group is group is not provided
+        if group is None:
+            group = torch_dist.distributed_c10d._get_default_group()
 
-    # rank is None means everyone logs
-    if rank is None or dist.get_rank(group) == rank:
+        # rank is None means everyone logs
+        if rank is None or dist.get_rank(group) == rank:
+            logger.log(level, msg, **kwargs)
+    else:
         logger.log(level, msg, **kwargs)
 
 

@@ -1,0 +1,54 @@
+from dataclasses import dataclass, field
+from typing import List, Optional, Union
+
+from nanotron.data.utils import parse_and_normalize_split
+
+
+@dataclass
+class NanosetConfig:
+    """Configuration object for Nanoset datasets
+
+    Attributes:
+
+        random_seed (int): The seed for all RNG during dataset creation.
+
+        sequence_length (int): The sequence length.
+
+        data_path (str): Path to the .bin and .idx file without the extension
+
+        split (Optional[str]): The split string, a comma separated weighting for the dataset splits
+        when drawing samples from a single distribution. Not to be used with 'blend_per_split'.
+        Defaults to None.
+
+        split_vector Optional[List[float]]): The split string, parsed and normalized post-
+        initialization. Not to be passed to the constructor.
+
+        train_split_samples (int): The number of samples of the train split split (global batch size * training steps)
+
+        split_num_samples (list[int]): List containing the number of samples per split. Valid and test splits set to None in order to consume all the samples. Not to be passed to the constructor.
+
+        path_to_cache (str): Where all re-useable dataset indices are to be cached.
+    """
+
+    random_seed: int
+
+    sequence_length: int
+
+    train_split_samples: int
+
+    data_path: Union[str, dict]
+
+    split: str
+
+    path_to_cache: str = None
+
+    split_vector: Optional[List[float]] = field(init=False, default=None)
+
+    split_num_samples: list[int] = field(init=False, default=None)
+
+    def __post_init__(self):
+        """Python dataclass method that is used to modify attributes after initialization. See
+        https://docs.python.org/3/library/dataclasses.html#post-init-processing for more details.
+        """
+        self.split_vector = parse_and_normalize_split(self.split)
+        self.split_num_samples = [self.train_split_samples, None, None]

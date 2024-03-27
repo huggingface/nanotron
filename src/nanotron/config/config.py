@@ -96,12 +96,25 @@ class PretrainDatasetsArgs:
 
 
 @dataclass
+class NanosetDatasetsArgs:
+    data_path: Union[str, dict]
+    split: Optional[str] = "949,50,1"
+    path_to_cache: Optional[
+        str
+    ] = "_"  # If defaults to None, dacite is not able to parse the config. Set to None in __post_init__
+
+    def __post_init__(self):
+        if not os.path.isdir(self.path_to_cache):
+            self.path_to_cache = None
+
+
+@dataclass
 class DataArgs:
     """Arguments related to the data and data files processing"""
 
-    dataset: Optional[PretrainDatasetsArgs]
+    dataset: Union[PretrainDatasetsArgs, NanosetDatasetsArgs]
     seed: Optional[int]
-    num_loading_workers: Optional[int] = 1
+    num_loading_workers: Optional[int] = 0
 
     def __post_init__(self):
         if self.seed is None:
@@ -333,7 +346,7 @@ class Config:
         if self.data_stages is not None:
             names = [stage.name for stage in self.data_stages]
             training_steps = [stage.start_training_step for stage in self.data_stages]
-            assert all(
+            assert any(
                 stage.start_training_step == 1 for stage in self.data_stages
             ), "You must have a training stage starting at 1 in the config's data_stages"
 
