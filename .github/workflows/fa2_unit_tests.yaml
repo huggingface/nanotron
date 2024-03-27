@@ -57,12 +57,15 @@ jobs:
         python -m venv ./venv
         . ./venv/bin/activate
 
+        echo "VIRTUAL ENV:" $VIRTUAL_ENV
+
         python -m pip install --upgrade pip
         python -m pip install --upgrade uv
-        uv venv venv
+        uv pip install packaging
+        uv pip install wheel
         uv pip install -e .
-
-        echo "VIRTUAL ENV:" $VIRTUAL_ENV
+        uv pip install -e .[dev]
+        uv pip install -e .[test]
 
     # - name: Show installed libraries and their versions
     #   run: uv pip freeze | tee installed.txt
