@@ -49,6 +49,7 @@ jobs:
         python -m pip install --upgrade uv
         uv pip install packaging
         uv pip install wheel
+        uv pip install torch
         pip install "flash-attn>=2.5.0" --no-build-isolation
         uv pip install -e .
         uv pip install -e .[dev]
