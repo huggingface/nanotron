@@ -45,12 +45,15 @@ jobs:
     - name: Install nanotron
       run: |
         python -m pip install --upgrade pip
+        python -m pip install --upgrade uv
+        pip install uv
+        uv venv
+        source .venv/bin/activate
         pip install packaging
         pip install wheel
         pip pip install "flash-attn>=2.5.0" --no-build-isolation
         pip pip install -e .
         pip pip install -e .[dev]
-        pip install uv
         uv pip install -e .[test]
 
     - name: Show installed libraries and their versions
