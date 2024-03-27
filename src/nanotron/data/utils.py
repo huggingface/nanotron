@@ -5,6 +5,7 @@ from typing import List
 import numpy
 
 from nanotron import logging
+from nanotron.logging import log_rank
 
 logger = logging.get_logger(__name__)
 
@@ -50,3 +51,30 @@ def parse_and_normalize_split(split: str) -> List[float]:
     split = normalize(split)
 
     return split
+
+
+def count_blending_indexes(dataset_idx: numpy.ndarray, n_datasets: int):
+    counts = []
+
+    for dataset in range(n_datasets):
+        counts.append(numpy.count_nonzero(dataset_idx == dataset))
+
+    return counts
+
+
+def log_BlendedNanoset_stats(blended_nanosets):
+    for blended_nanoset, split_name in zip(blended_nanosets, Split):
+        log_rank(
+            f"> Total number of samples of the {split_name._name_} BlendedNanoset: {len(blended_nanoset)}",
+            logger=logger,
+            level=logging.INFO,
+            rank=0,
+        )
+        nanoset_sample_count = count_blending_indexes(blended_nanoset.dataset_index, len(blended_nanoset.datasets))
+        for idx, nanoset in enumerate(blended_nanoset.datasets):
+            log_rank(
+                f">   Total number of samples from the {nanoset.indexed_dataset.path_prefix.rsplit('/', 1)[-1]} Nanoset: {nanoset_sample_count[idx]} ({round(normalize(nanoset_sample_count)[idx], 2)})",
+                logger=logger,
+                level=logging.INFO,
+                rank=0,
+            )

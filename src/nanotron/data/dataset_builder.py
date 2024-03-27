@@ -8,7 +8,7 @@ from nanotron.data.blended_nanoset import BlendedNanoset
 from nanotron.data.indexed_dataset import MMapIndexedDataset
 from nanotron.data.nanoset import Nanoset
 from nanotron.data.nanoset_configs import NanosetConfig
-from nanotron.data.utils import Split, normalize
+from nanotron.data.utils import Split, log_BlendedNanoset_stats, normalize
 
 logger = logging.get_logger(__name__)
 
@@ -89,6 +89,8 @@ class NanosetBuilder(object):
                         self.config,
                     )
                 )
+
+        log_BlendedNanoset_stats(blended_nanosets)
 
         return blended_nanosets
 
