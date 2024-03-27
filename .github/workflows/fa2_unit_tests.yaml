@@ -41,6 +41,7 @@ jobs:
         python -c "import torch; print('CUDA available:', torch.cuda.is_available())"
 
     - name: Install nanotron
+      # NOTE: uv can't build flash-attn
       run: |
         python -m venv ./venv
         . ./venv/bin/activate
@@ -48,7 +49,7 @@ jobs:
         python -m pip install --upgrade uv
         uv pip install packaging
         uv pip install wheel
-        uv pip install "flash-attn>=2.5.0" --no-build-isolation
+        pip install "flash-attn>=2.5.0" --no-build-isolation
         uv pip install -e .
         uv pip install -e .[dev]
         uv pip install -e .[test]
