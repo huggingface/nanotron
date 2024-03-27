@@ -40,37 +40,23 @@ jobs:
         python -c "import torch; print('torch:', torch.__version__, torch)"
         python -c "import torch; print('CUDA available:', torch.cuda.is_available())"
 
-    # python -m venv ./venv
-    # source ./venv/bin/activate
-    # uv venv
-    # source .venv/bin/activate
-
-    # pip install packaging -H
-    # pip install wheel -H
-    # pip pip install "flash-attn>=2.5.0" --no-build-isolation
-    # pip pip install -e .
-    # pip pip install -e .[dev]
-    # uv pip install -e .[test]
-
     - name: Install nanotron
       run: |
         python -m venv ./venv
         . ./venv/bin/activate
-
-        echo "VIRTUAL ENV:" $VIRTUAL_ENV
-
         python -m pip install --upgrade pip
         python -m pip install --upgrade uv
         uv pip install packaging
         uv pip install wheel
+        uv pip install "flash-attn>=2.5.0" --no-build-isolation
         uv pip install -e .
         uv pip install -e .[dev]
         uv pip install -e .[test]
 
-    # - name: Show installed libraries and their versions
-    #   run: uv pip freeze | tee installed.txt
+    - name: Show installed libraries and their versions
+      run: uv pip freeze | tee installed.txt
 
-    # - name: Run tests
-    #   # NOTE: -m fa2 will only run the unit tests that have the mark
-    #   # "fa2" (these are FA2-related tests)
-    #   run: pytest -m fa2 --color=yes --durations=0 --ignore tests/fp8 --verbose tests/
+    - name: Run tests
+      # NOTE: -m fa2 will only run the unit tests that have the mark
+      # "fa2" (these are FA2-related tests)
+      run: pytest -m fa2 --color=yes --durations=0 --ignore tests/fp8 --verbose tests/
