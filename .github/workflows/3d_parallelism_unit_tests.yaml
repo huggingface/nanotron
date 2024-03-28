@@ -50,13 +50,8 @@ jobs:
         uv pip install -e .[dev]
         uv pip install -e .[test]
 
-    - name: Show installed libraries and their versions
-      run: uv pip freeze | tee installed.txt
+        uv pip freeze | tee installed.txt
 
-    - name: Run nanotron tests
-      # NOTE: -m "not fa2" will run all the unit tests that don't have the mark
-      # "fa2" (these are FA2-related tests, we can't run it on T4)
-      run: |
         pytest \
         -m "not fa2" \
         --color=yes \
@@ -65,6 +60,22 @@ jobs:
         --ignore tests/fp8 \
         --verbose \
         tests/
+
+    # - name: Show installed libraries and their versions
+    #   run: uv pip freeze | tee installed.txt
+
+    # - name: Run nanotron tests
+    #   # NOTE: -m "not fa2" will run all the unit tests that don't have the mark
+    #   # "fa2" (these are FA2-related tests, we can't run it on T4)
+    #   run: |
+    #     pytest \
+    #     -m "not fa2" \
+    #     --color=yes \
+    #     --durations=0 \
+    #     --ignore tests/kernels \
+    #     --ignore tests/fp8 \
+    #     --verbose \
+    #     tests/
     # NOTE: T4 can't run FA2, DoReMi's LLaMa needs FÀ
     # - name: Run DoReMi tests
     #   # NOTE: -m "not fa2" will run all the unit tests that don't have the mark

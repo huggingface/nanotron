@@ -56,10 +56,14 @@ jobs:
         uv pip install -e .[dev]
         uv pip install -e .[test]
 
-    - name: Show installed libraries and their versions
-      run: uv pip freeze | tee installed.txt
+        uv pip freeze | tee installed.txt
 
-    - name: Run tests
-      # NOTE: -m fa2 will only run the unit tests that have the mark
-      # "fa2" (these are FA2-related tests)
-      run: pytest -m fa2 --color=yes --durations=0 --ignore tests/fp8 --verbose tests/
+        pytest -m fa2 --color=yes --durations=0 --ignore tests/fp8 --verbose tests/
+
+    # - name: Show installed libraries and their versions
+    #   run: uv pip freeze | tee installed.txt
+
+    # - name: Run tests
+    #   # NOTE: -m fa2 will only run the unit tests that have the mark
+    #   # "fa2" (these are FA2-related tests)
+    #   run: pytest -m fa2 --color=yes --durations=0 --ignore tests/fp8 --verbose tests/
