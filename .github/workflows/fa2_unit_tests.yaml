@@ -40,12 +40,13 @@ jobs:
         python -c "import torch; print('torch:', torch.__version__, torch)"
         python -c "import torch; print('CUDA available:', torch.cuda.is_available())"
 
+    # python -m venv ./venv
+    # . ./venv/bin/activate
     - name: Install nanotron
       # NOTE: uv can't build flash-attn
       run: |
-        python -m venv ./venv
-        . ./venv/bin/activate
-        export PATH="$PATH:$(python -c 'import site; print(site.USER_BASE + "/bin")')"
+        python -m venv $GITHUB_WORKSPACE/venv
+        . $GITHUB_WORKSPACE/venv/bin/activate
         python -m pip install --upgrade pip
         python -m pip install --upgrade uv
         uv pip install packaging
@@ -56,14 +57,14 @@ jobs:
         uv pip install -e .[dev]
         uv pip install -e .[test]
 
+    - name: Show installed libraries and their versions
+      run: |
+        . $GITHUB_WORKSPACE/venv/bin/activate
         uv pip freeze | tee installed.txt
 
+    - name: Run tests
+      # NOTE: -m fa2 will only run the unit tests that have the mark
+      # "fa2" (these are FA2-related tests)
+      run: |
+        . $GITHUB_WORKSPACE/venv/bin/activate
         pytest -m fa2 --color=yes --durations=0 --ignore tests/fp8 --verbose tests/
-
-    # - name: Show installed libraries and their versions
-    #   run: uv pip freeze | tee installed.txt
-
-    # - name: Run tests
-    #   # NOTE: -m fa2 will only run the unit tests that have the mark
-    #   # "fa2" (these are FA2-related tests)
-    #   run: pytest -m fa2 --color=yes --durations=0 --ignore tests/fp8 --verbose tests/
