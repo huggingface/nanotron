@@ -4,6 +4,7 @@ from helpers.data import (
     assert_batch_dataloader,
     assert_blendednanoset,
     assert_nanoset,
+    compute_batch_hash,
     create_dataset_paths,
     create_dummy_json_dataset,
     get_max_value_by_group,
@@ -133,5 +134,28 @@ def _test_build_nanoset_dataloader(
             micro_batch_size=MICRO_BATCH_SIZE,
             sequence_length=sequence_length,
         )
+
+        # Recover from failures
+        SKIPED_BATCHES = 20
+        dataloader = iter(dataloader)
+        for _ in range(SKIPED_BATCHES + 1):  # In order to compare with the first batch of the recovered DataLoader
+            batch = next(dataloader)
+
+        recovered_dataloader = build_nanoset_dataloader(
+            train_dataset,
+            sequence_length=sequence_length,
+            parallel_context=parallel_context,
+            input_pp_rank=input_pp_rank,
+            output_pp_rank=output_pp_rank,
+            micro_batch_size=MICRO_BATCH_SIZE,
+            dataloader_num_workers=0,
+            dataloader_drop_last=True,
+            # NOTE The dataloader serves batches of micro_batch_size despite of batch_accumulation_per_replica
+            consumed_train_samples=SKIPED_BATCHES * MICRO_BATCH_SIZE * parallel_context.dp_pg.size(),
+        )
+
+        recovered_first_batch = next(iter(recovered_dataloader))
+
+        assert compute_batch_hash(batch) == compute_batch_hash(recovered_first_batch)
 
     parallel_context.destroy()

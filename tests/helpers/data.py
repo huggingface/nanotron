@@ -116,7 +116,20 @@ def get_max_value_by_group(dataset_idx: np.array, dataset_sample_idx: np.array, 
     return max_val
 
 
+def compute_hash(identifier: OrderedDict, n_digit: int = 8) -> int:
+    """
+    Creates a sha256 hash from the elements of a OrderedDict
+    """
+    unique_description = json.dumps(identifier, indent=4)
+    # Create n_digit description hash
+    unique_description_hash = int(hashlib.sha256(unique_description.encode("utf-8")).hexdigest(), 16) % 10**n_digit
+    return unique_description_hash
+
+
 def assert_nanoset(nanoset: Nanoset, parallel_context: ParallelContext):
+    """
+    Checks that the same Nanoset is created in all processes
+    """
     # Extract a sample from the Nanoset
     IDX_SAMPLE = 23
 
@@ -129,9 +142,7 @@ def assert_nanoset(nanoset: Nanoset, parallel_context: ParallelContext):
     nanoset_identifiers["input_ids"] = nanoset[IDX_SAMPLE]["input_ids"].tolist()
     nanoset_identifiers["indices"] = nanoset.indexed_indices.tolist()
 
-    unique_description = json.dumps(nanoset_identifiers, indent=4)
-    # Create 8 digit description hash
-    unique_description_hash = int(hashlib.sha256(unique_description.encode("utf-8")).hexdigest(), 16) % 10**8
+    unique_description_hash = compute_hash(nanoset_identifiers)
     assert_tensor_synced_across_pg(
         tensor=torch.tensor(unique_description_hash, device="cuda"),
         pg=parallel_context.world_pg,
@@ -140,7 +151,10 @@ def assert_nanoset(nanoset: Nanoset, parallel_context: ParallelContext):
 
 
 def assert_blendednanoset(blendednanoset: BlendedNanoset, parallel_context: ParallelContext):
-    # Extract a sample from the Nanoset
+    """
+    Checks that the same BlendedNanoset is created in all processes
+    """
+    # Extract a sample from the BlendedNanoset
     IDX_SAMPLE = 23
 
     blendednanoset_identifiers = OrderedDict()
@@ -152,11 +166,40 @@ def assert_blendednanoset(blendednanoset: BlendedNanoset, parallel_context: Para
     blendednanoset_identifiers["dataset_index"] = blendednanoset.dataset_index.tolist()
     blendednanoset_identifiers["dataset_sample_index"] = blendednanoset.dataset_sample_index.tolist()
 
-    unique_description = json.dumps(blendednanoset_identifiers, indent=4)
-    # Create 8 digit description hash
-    unique_description_hash = int(hashlib.sha256(unique_description.encode("utf-8")).hexdigest(), 16) % 10**8
+    unique_description_hash = compute_hash(blendednanoset_identifiers)
     assert_tensor_synced_across_pg(
         tensor=torch.tensor(unique_description_hash, device="cuda"),
         pg=parallel_context.world_pg,
         msg=lambda err: f"BlendedNanoset is not synchronized across all processes {err}",
     )
+
+
+def compute_batch_hash(batch: dict) -> int:
+    """
+    Checks that the Nanoset/BlendedNanoset is in the same state after recovering from a crash
+
+    batch (dict): Batch produced from the Dataloader, with keys input_ids, input_mask, label_ids, label_mask
+
+    """
+    batch_identifiers = OrderedDict()
+
+    for element in batch:
+        tensor = batch[element]
+
+        # TensorPointer
+        if isinstance(tensor, TensorPointer):
+            identifier = tensor.group_rank
+
+        # Attention Masks case: dtype is torch.bool --> Transform to int64
+        elif tensor.dtype == torch.bool:
+            identifier = tensor.long().tolist()
+
+        # Input IDs tensor
+        else:
+            identifier = tensor.tolist()
+
+        batch_identifiers[element] = identifier
+
+    unique_description_hash = compute_hash(batch_identifiers)
+
+    return unique_description_hash
