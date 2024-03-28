@@ -3,10 +3,10 @@ import math
 import os
 
 from config import MambaConfig, MambaInit, MambaModelConfig
-
 from nanotron.config import (
     CheckpointsArgs,
     DataArgs,
+    DatasetStageArgs,
     GeneralArgs,
     LoggingArgs,
     LRSchedulerArgs,
@@ -80,7 +80,8 @@ norm_f = model_config.d_model
 num_params = human_format(
     (
         tie_embedding
-        + model_config.num_hidden_layers * (A_log + D + in_proj + conv1d + x_proj + dt_proj + out_proj + norm) + norm_f
+        + model_config.num_hidden_layers * (A_log + D + in_proj + conv1d + x_proj + dt_proj + out_proj + norm)
+        + norm_f
     )
 ).replace(".", "p")
 
@@ -137,7 +138,12 @@ config = MambaConfig(
     optimizer=optimizer,
     logging=LoggingArgs(),
     tokens=tokens,
-    data=DataArgs(dataset=dataset, seed=seed),
+    data_stages=[
+        DatasetStageArgs(
+            name="Stable Training Stage", start_training_step=1, data=DataArgs(dataset=dataset, seed=seed)
+        ),
+        DatasetStageArgs(name="Annealing Phase", start_training_step=10, data=DataArgs(dataset=dataset, seed=seed)),
+    ],
     profiler=None,
 )
 
