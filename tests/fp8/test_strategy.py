@@ -8,8 +8,8 @@ from nanotron.fp8.strategy import (
     WarmupStrategy,
 )
 from nanotron.fp8.tracker import DynamicScaler
+from nanotron.fp8.utils import convert_linear_to_fp8
 from torch import nn
-from utils import convert_linear_to_fp8
 
 
 @pytest.fixture

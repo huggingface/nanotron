@@ -3,32 +3,28 @@ from copy import deepcopy
 import torch
 from nanotron.fp8.constants import FP8LM_RECIPE
 from nanotron.fp8.dtypes import DTypes
-
-# from utils import convert_linear_to_fp8, convert_to_fp8_module
-from nanotron.fp8.linear import FP8Linear
 from nanotron.fp8.optim import Adam as REFAdam
 from nanotron.fp8.optim import (
     FP8Adam,
 )
-from nanotron.fp8.parameter import FP8Parameter
 from nanotron.fp8.tensor import FP8Tensor, FP16Tensor, convert_tensor_from_fp8, convert_tensor_from_fp16
+from nanotron.fp8.utils import convert_linear_to_fp8
 from torch import nn
 
+# def convert_linear_to_fp8(linear: nn.Linear) -> FP8Linear:
+#     in_features = linear.in_features
+#     out_features = linear.out_features
+#     is_bias = linear.bias is not None
 
-def convert_linear_to_fp8(linear: nn.Linear) -> FP8Linear:
-    in_features = linear.in_features
-    out_features = linear.out_features
-    is_bias = linear.bias is not None
+#     fp8_linear = FP8Linear(in_features, out_features, bias=is_bias, device=linear.weight.device)
+#     fp8_linear.weight = FP8Parameter(linear.weight.detach().clone(), FP8LM_RECIPE.linear.weight.dtype)
 
-    fp8_linear = FP8Linear(in_features, out_features, bias=is_bias, device=linear.weight.device)
-    fp8_linear.weight = FP8Parameter(linear.weight.detach().clone(), FP8LM_RECIPE.linear.weight.dtype)
+#     if is_bias:
+#         # fp8_linear.bias.data = FP16Tensor(linear.bias.detach().clone(), FP8LM_RECIPE.linear.bias.dtype)
+#         fp8_linear.bias.orig_data = deepcopy(linear.bias.data)
+#         fp8_linear.bias.data = deepcopy(linear.bias.data).to(torch.float16)
 
-    if is_bias:
-        # fp8_linear.bias.data = FP16Tensor(linear.bias.detach().clone(), FP8LM_RECIPE.linear.bias.dtype)
-        fp8_linear.bias.orig_data = deepcopy(linear.bias.data)
-        fp8_linear.bias.data = deepcopy(linear.bias.data).to(torch.float16)
-
-    return fp8_linear
+#     return fp8_linear
 
 
 if __name__ == "__main__":

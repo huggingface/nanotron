@@ -4,8 +4,8 @@ from typing import List
 import pytest
 import torch
 from nanotron.fp8 import FP8Linear, FP8Tensor, tracker
+from nanotron.fp8.utils import convert_linear_to_fp8
 from torch import nn
-from utils import convert_linear_to_fp8
 
 
 class MetaRecorder(torch.autograd.Function):

@@ -11,9 +11,9 @@ from msamp.optim import LBAdam
 from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.optim import FP8Adam
 from nanotron.fp8.tensor import FP8Tensor, convert_tensor_from_fp8
+from nanotron.fp8.utils import convert_linear_to_fp8
 from torch import nn
 from torch.optim import Adam
-from utils import convert_linear_to_fp8
 
 
 def test_optim():

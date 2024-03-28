@@ -2,14 +2,14 @@ from copy import deepcopy
 
 import pytest
 import torch
+from nanotron.fp8.constants import FP8_DTYPES, QTYPE_TO_DTYPE
+from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.linear import FP8Linear
 from nanotron.fp8.parameter import FP8Parameter
 from nanotron.fp8.tensor import FP8Tensor, convert_tensor_from_fp8
-from nanotron.fp8.dtypes import DTypes
-from nanotron.fp8.constants import QTYPE_TO_DTYPE, FP8_DTYPES
+from nanotron.fp8.utils import convert_linear_to_fp8
 from torch import nn
 from torch.optim import Adam
-from utils import convert_linear_to_fp8
 
 
 @pytest.mark.parametrize("accum_qtype", [DTypes.KFLOAT32, DTypes.KFLOAT16])
@@ -67,14 +67,14 @@ def test_fp8_linear_backward_pass(input_requires_grad, accum_qtype):
 
     assert isinstance(fp8_linear.weight.grad, FP8Tensor)
     assert fp8_linear.weight.grad.dtype in FP8_DTYPES
-    
+
     assert isinstance(fp8_linear.bias.grad, torch.Tensor)
     assert fp8_linear.bias.grad.dtype == QTYPE_TO_DTYPE[accum_qtype]
 
     # TODO(xrsrke): investigate why input.grad is so high tolerance
     # assert torch.allclose(input.grad, ref_input.grad, 0.2, 0.2) if input_requires_grad else True
 
-    # NOTE: these weight threashold is tuned from the FP8-LM implementation
+    # NOTE: these weight threshold is tuned from the FP8-LM implementation
     # TODO(xrsrke): tune what is the minimum threshold for this to correctly converge
     weight_grad = convert_tensor_from_fp8(fp8_linear.weight.grad, fp8_linear.weight.grad.fp8_meta, torch.float32)
     torch.testing.assert_allclose(weight_grad, ref_linear.weight.grad, rtol=0.06, atol=0.1)

@@ -117,4 +117,6 @@ def test_fp8adam_grad_accumulation():
     pass
 
 
+# NOTE: some sanity check low-level implementation, once it works, we can remove it
+
 # TODO(xrsrke): add sanity check all parameters are FP8Parameter

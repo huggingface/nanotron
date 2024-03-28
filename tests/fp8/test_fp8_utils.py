@@ -3,9 +3,8 @@ import torch
 from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.linear import FP8Linear
 from nanotron.fp8.parameter import FP8Parameter
-from nanotron.fp8.utils import is_overflow_underflow_nan
+from nanotron.fp8.utils import convert_linear_to_fp8, is_overflow_underflow_nan
 from torch import nn
-from utils import convert_linear_to_fp8
 
 
 @pytest.mark.parametrize("out_dtype", [DTypes.KFLOAT32, DTypes.KFLOAT16])

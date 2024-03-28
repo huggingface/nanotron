@@ -22,7 +22,7 @@ class FP8Linear(nn.Linear):
         out_features: int,
         bias: bool = True,
         device: Optional[torch.device] = None,
-        accum_qtype: DTypes = DTypes.KFLOAT32,
+        accum_qtype: DTypes = DTypes.KFLOAT16,
     ):
         """
         Args:
@@ -35,7 +35,9 @@ class FP8Linear(nn.Linear):
         super().__init__(in_features, out_features, bias, device, QTYPE_TO_DTYPE[accum_qtype])
         # TODO(xrsrke): don't fixed dtype, take it from the FP8 recipe
         # DTypes.FP8E4M3
-        self.weight = FP8Parameter(self.weight, dtype=FP8LM_RECIPE.linear.weight.dtype)
+        self.weight = FP8Parameter(
+            self.weight, dtype=FP8LM_RECIPE.linear.weight.dtype, interval=FP8LM_RECIPE.linear.weight.interval
+        )
         self.accum_qtype = accum_qtype
 
     def forward(self, input: Union[FP8Tensor, torch.Tensor]) -> torch.Tensor:
@@ -65,7 +67,10 @@ class _FP8Matmul(torch.autograd.Function):
     ) -> torch.Tensor:
         if type(input) == torch.Tensor:
             input = FP8Tensor(
-                input, dtype=FP8LM_RECIPE.linear.input.dtype, interval=FP8LM_RECIPE.linear.input.interval
+                input,
+                dtype=FP8LM_RECIPE.linear.input.dtype,
+                interval=FP8LM_RECIPE.linear.input.interval,
+                is_dynamic_scaling=FP8LM_RECIPE.linear.input.is_dynamic_scaling,
             )
 
         ctx.grad_metadata = weight.fp8_grad_meta

@@ -5,9 +5,9 @@ import torch
 from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.loss_scaler import LossScaler, is_overflow
 from nanotron.fp8.tensor import convert_tensor_from_fp8
+from nanotron.fp8.utils import convert_linear_to_fp8
 from torch import nn
 from torch.optim import Adam
-from utils import convert_linear_to_fp8
 
 
 def test_loss_scaler_attributes():

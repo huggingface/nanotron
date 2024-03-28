@@ -20,6 +20,7 @@ class FP8Meta:
     # TODO(xrsrke): change to Literal[torch.int8, torch.uint8]
     dtype: DTypes
     interval: int
+    is_dynamic_scaling: bool = False
 
     @property
     def te_dtype(self) -> tex.DType:
@@ -86,7 +87,7 @@ class FP8Meta:
     @property
     def is_ready_to_scale(self) -> bool:
         # return len(self.amaxs) == self.interval and self._num_remaining_steps_until_rescale == 0
-        return self._num_remaining_steps_until_rescale == 0
+        return self.is_dynamic_scaling and self._num_remaining_steps_until_rescale == 0
 
     def rescale(self):
         assert self.is_ready_to_scale is True, "Cannot rescale if not ready to scale"

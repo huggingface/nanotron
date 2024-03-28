@@ -13,7 +13,9 @@ from nanotron.fp8.dtypes import DTypes
 
 
 class LowPrecisionTensor(torch.Tensor):
-    def __new__(cls, tensor: torch.Tensor, dtype: DTypes, interval: int = 1) -> torch.Tensor:
+    def __new__(
+        cls, tensor: torch.Tensor, dtype: DTypes, interval: int = 1, is_dynamic_scaling: bool = False
+    ) -> torch.Tensor:
         assert isinstance(tensor, torch.Tensor), "tensor must be a tensor"
         assert tensor.dtype not in FP8_DTYPES, "The tensor already quantized to FP8"
 
@@ -22,7 +24,7 @@ class LowPrecisionTensor(torch.Tensor):
         assert tensor.device != torch.device("cpu"), "FP8Tensor only supports CUDA device"
         assert dtype in [DTypes.FP8E4M3, DTypes.FP8E5M2, DTypes.KFLOAT16]
 
-        fp8_meta = cls._get_metadata(tensor, dtype, interval)
+        fp8_meta = cls._get_metadata(tensor, dtype, interval, is_dynamic_scaling)
         fp8_tensor = cls._quantize(tensor, fp8_meta)
 
         # TODO(xrsrke): move update inverse scaling to FP8Meta's initialization
@@ -50,14 +52,14 @@ class LowPrecisionTensor(torch.Tensor):
         return super().__setattr__(__name, __value)
 
     @staticmethod
-    def _get_metadata(tensor: torch.Tensor, dtype: DTypes, interval: int) -> "FP8Meta":
+    def _get_metadata(tensor: torch.Tensor, dtype: DTypes, interval: int, is_dynamic_scaling: bool) -> "FP8Meta":
         # TODO(xrsrke): there is a circular import issue
         # between tensor.py and meta.py fix this
         from nanotron.fp8.meta import FP8Meta
 
         amax = tensor.abs().max().clone()
         scale = update_scaling_factor(amax, torch.tensor(INITIAL_SCALING_FACTOR, dtype=torch.float32), dtype)
-        fp8_meta = FP8Meta(amax, scale, dtype, interval)
+        fp8_meta = FP8Meta(amax, scale, dtype, interval, is_dynamic_scaling)
         return fp8_meta
 
     @abstractstaticmethod
@@ -112,13 +114,16 @@ class LowPrecisionTensor(torch.Tensor):
         # NOTE: for delay scaling
         new_amax = quantized_data.fp8_meta.amax
 
-        fp8_meta = self.fp8_meta
-        fp8_meta.add_amax(new_amax)
+        self.fp8_meta.add_amax(new_amax)
 
     def __repr__(self) -> str:
         if hasattr(self, "fp8_meta"):
             return f"FP8Tensor({repr(self.data)}, fp8_meta={self.fp8_meta})"
         return super().__repr__()
+
+    # @abstractstaticmethod
+    # def to(self, dtype: torch.dtype):
+    #     raise NotImplementedError
 
     def clone(self) -> FP8Tensor:
         tensor = super().clone()
@@ -135,6 +140,9 @@ class FP8Tensor(LowPrecisionTensor):
         assert tensor.dtype not in FP8_DTYPES, "The tensor already quantized to FP8"
 
         return convert_tensor_to_fp8(tensor, fp8_meta)
+
+    # def to(self, dtype: Union[torch.float16, torch.float32]):
+    #     assert dtype in [torch.float16, torch.float32], "FP8Tensor only supports casting to FP16 or FP32"
 
 
 class FP16Tensor(LowPrecisionTensor):

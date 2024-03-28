@@ -36,13 +36,13 @@ QTYPE_TO_DTYPE = {
 # https://arxiv.org/abs/2310.18313
 FP8LM_RECIPE = FP8TrainingRecipe(
     linear=FP8LinearRecipe(
-        input=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=16),
-        weight=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=1),
-        bias=FP8TensorRecipe(dtype=DTypes.KFLOAT16, margin=0, interval=16),
+        input=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=16, is_dynamic_scaling=False),
+        weight=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=1, is_dynamic_scaling=True),
+        bias=FP8TensorRecipe(dtype=DTypes.KFLOAT16, margin=0, interval=16, is_dynamic_scaling=False),
         # NOTE: these are the dtypes for the gradients
-        input_grad=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=16),
-        weight_grad=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=1),
-        output_grad=FP8TensorRecipe(dtype=DTypes.FP8E5M2, margin=0, interval=16),
+        input_grad=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=16, is_dynamic_scaling=True),
+        weight_grad=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=1, is_dynamic_scaling=True),
+        output_grad=FP8TensorRecipe(dtype=DTypes.FP8E5M2, margin=0, interval=16, is_dynamic_scaling=True),
         split_accumulator=FP8SplitAccumulator(output=False, input_grad=True, weight_grad=True),
     ),
     optim=FP8OptimRecipe(
