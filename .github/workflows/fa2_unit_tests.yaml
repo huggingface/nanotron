@@ -39,20 +39,29 @@ jobs:
         python -c "import torch; print('torch:', torch.__version__, torch)"
         python -c "import torch; print('CUDA available:', torch.cuda.is_available())"
 
-    - name: Instal nanotron
+    - name: Install nanotron
+      # NOTE: uv can't build flash-attn
       run: |
+        python -m venv $GITHUB_WORKSPACE/venv
+        . $GITHUB_WORKSPACE/venv/bin/activate
         python -m pip install --upgrade pip
-        pip install packaging
-        pip install wheel
+        python -m pip install --upgrade uv
+        uv pip install packaging
+        uv pip install wheel
+        uv pip install torch
         pip install "flash-attn>=2.5.0" --no-build-isolation
-        pip install -e .
-        pip install -e .[dev]
-        pip install -e .[test]
+        uv pip install -e .
+        uv pip install -e .[dev]
+        uv pip install -e .[test]
 
     - name: Show installed libraries and their versions
-      run: pip freeze | tee installed.txt
+      run: |
+        . $GITHUB_WORKSPACE/venv/bin/activate
+        uv pip freeze | tee installed.txt
 
     - name: Run tests
       # NOTE: -m fa2 will only run the unit tests that have the mark
       # "fa2" (these are FA2-related tests)
-      run: pytest -m fa2 --color=yes --durations=0 --ignore tests/fp8 --verbose tests/
+      run: |
+        . $GITHUB_WORKSPACE/venv/bin/activate
+        pytest -m fa2 --color=yes --durations=0 --ignore tests/fp8 --verbose tests/
