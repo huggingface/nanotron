@@ -39,8 +39,8 @@ jobs:
 
     - name: Install nanotron's dependencies
       run: |
-        python -m venv ./venv
-        . ./venv/bin/activate
+        python -m venv $GITHUB_WORKSPACE/venv
+        . $GITHUB_WORKSPACE/venv/bin/activate
         export PATH="$PATH:$(python -c 'import site; print(site.USER_BASE + "/bin")')"
         python -m pip install --upgrade pip
         python -m pip install --upgrade uv
@@ -50,8 +50,11 @@ jobs:
         uv pip install -e .[dev]
         uv pip install -e .[test]
 
-        uv pip freeze | tee installed.txt
-
+    - name: Run nanotron tests
+      # NOTE: -m "not fa2" will run all the unit tests that don't have the mark
+      # "fa2" (these are FA2-related tests, we can't run it on T4)
+      run: |
+        . $GITHUB_WORKSPACE/venv/bin/activate
         pytest \
         -m "not fa2" \
         --color=yes \
@@ -61,21 +64,6 @@ jobs:
         --verbose \
         tests/
 
-    # - name: Show installed libraries and their versions
-    #   run: uv pip freeze | tee installed.txt
-
-    # - name: Run nanotron tests
-    #   # NOTE: -m "not fa2" will run all the unit tests that don't have the mark
-    #   # "fa2" (these are FA2-related tests, we can't run it on T4)
-    #   run: |
-    #     pytest \
-    #     -m "not fa2" \
-    #     --color=yes \
-    #     --durations=0 \
-    #     --ignore tests/kernels \
-    #     --ignore tests/fp8 \
-    #     --verbose \
-    #     tests/
     # NOTE: T4 can't run FA2, DoReMi's LLaMa needs FÀ
     # - name: Run DoReMi tests
     #   # NOTE: -m "not fa2" will run all the unit tests that don't have the mark

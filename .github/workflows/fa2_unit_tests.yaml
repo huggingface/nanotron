@@ -5,21 +5,20 @@ on:
   push:
     branches: [ main ]
     # Only run tests if we modify the following files
-    # paths:
-    #   - "src/**/*.py"
-    #   - "examples/**/*.py"
-    #   - "tests/**/*.py"
+    paths:
+      - "src/**/*.py"
+      - "examples/**/*.py"
+      - "tests/**/*.py"
 
   pull_request:
     branches: [ '**' ]
-    # paths:
-    #  - "src/**/*.py"
-    #  - "examples/**/*.py"
-    #  - "tests/**/*.py"
+    paths:
+     - "src/**/*.py"
+     - "examples/**/*.py"
+     - "tests/**/*.py"
 
 jobs:
   tests:
-    # runs-on: ubuntu-latest
     runs-on: [single-gpu, nvidia-gpu, a10, ci]
     container:
       image: runpod/pytorch:2.1.1-py3.10-cuda12.1.1-devel-ubuntu22.04
@@ -40,8 +39,6 @@ jobs:
         python -c "import torch; print('torch:', torch.__version__, torch)"
         python -c "import torch; print('CUDA available:', torch.cuda.is_available())"
 
-    # python -m venv ./venv
-    # . ./venv/bin/activate
     - name: Install nanotron
       # NOTE: uv can't build flash-attn
       run: |
