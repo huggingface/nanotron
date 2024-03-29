@@ -30,7 +30,8 @@ class NanosetBuilder(object):
         self.config = config
 
     def build(self) -> List[Union[BlendedNanoset, Nanoset]]:
-        """Build all dataset splits according to the provided data_path(s)
+        """
+        Build all dataset splits according to the provided data_path(s)
 
         This method is distributed-aware and must be called on all ranks.
 
@@ -47,7 +48,9 @@ class NanosetBuilder(object):
 
         # Single Nanoset
         if isinstance(data_path, str):
-            return self.build_nanoset_dataset_splits(data_path, split, self.config.split_num_samples)
+            return self.build_nanoset_dataset_splits(
+                data_path, self.config.sequence_length, split, self.config.split_num_samples
+            )
 
         # Blended Nanoset
         prefix_per_dataset = list(data_path.keys())
@@ -64,7 +67,7 @@ class NanosetBuilder(object):
 
         for i in range(len(prefix_per_dataset)):
             nanoset_datasets_split = self.build_nanoset_dataset_splits(
-                prefix_per_dataset[i], split, sizes_per_dataset[i]
+                prefix_per_dataset[i], self.config.sequence_length, split, sizes_per_dataset[i]
             )
 
             for j in range(len(nanoset_datasets_split)):
@@ -97,13 +100,17 @@ class NanosetBuilder(object):
     def build_nanoset_dataset_splits(
         self,
         path_prefix: str,
+        sequence_length: int,
         split: List[float],
         sizes: List[int],
     ) -> List[Nanoset]:
-        """Build each Nanoset split from a single MMapIndexedDataset
+        """
+        Build each Nanoset split from a single MMapIndexedDataset
 
         Args:
             path_prefix (str): The MMapIndexedDataset .bin and .idx file prefix
+
+            sequence_length (int): The number of tokens MMapIndexedDataset has to extract for each sample
 
             split (List[float]): The dataset split ratios (must sum to 1.00)
 
@@ -116,7 +123,7 @@ class NanosetBuilder(object):
 
         indexed_dataset = self.build_generic_dataset(MMapIndexedDataset, path_prefix)
 
-        split_idx_bounds = get_split_indices(split, indexed_dataset.sequence_lengths.shape[0])
+        split_idx_bounds = get_split_indices(split, len(indexed_dataset), sequence_length)
 
         split_indices = [
             numpy.arange(
@@ -129,13 +136,13 @@ class NanosetBuilder(object):
         ]
 
         nanoset_datasets = []
-        for i, _split in enumerate(Split):
+        for i, split_name in enumerate(Split):
             if split[i] == 0.0:
                 nanoset_datasets.append(None)
             else:
                 nanoset_datasets.append(
                     self.build_generic_dataset(
-                        Nanoset, indexed_dataset, split_indices[i], sizes[i], _split, self.config
+                        Nanoset, indexed_dataset, split_indices[i], sizes[i], split_name, self.config
                     )
                 )
 
@@ -146,7 +153,8 @@ class NanosetBuilder(object):
         cls: Type[DistributedDataset],
         *args: Any,
     ) -> DistributedDataset:
-        """Build the DistributedDataset
+        """
+        Build the DistributedDataset
 
         Args:
             cls (Type[DistributedDataset]): The DistributedDataset class to be built
@@ -154,59 +162,48 @@ class NanosetBuilder(object):
             args (Tuple[Any]): The positional arguments used to build the provided
             DistributedDataset class
 
-        Raises:
-            Exception: When the dataset constructor raises an OSError
-
         Returns:
             DistributedDataset: The DistributedDataset instantion
         """
-        if torch.distributed.is_initialized():
-            rank = torch.distributed.get_rank()
 
-            dataset = None
+        rank = torch.distributed.get_rank()
+        dataset = None
 
-            # First, build on rank 0
-            if rank == 0:
-                try:
-                    dataset = cls(*args)
-                except OSError as err:
-                    log = (
-                        "Failed to write dataset materials to the data cache directory. "
-                        + "Please supply a directory to which you have write access via "
-                        + "the path_to_cache attribute in NanosetConfig and "
-                        + "retry. Refer to the preserved traceback above for more information."
-                    )
-                    raise Exception(log) from err
+        # First, build on rank 0
+        if rank == 0:
+            dataset = cls(*args)
 
-            torch.distributed.barrier()
+        torch.distributed.barrier()
 
-            if rank != 0:
-                dataset = cls(*args)
+        # Then, in the other ranks
+        if rank != 0:
+            dataset = cls(*args)
 
-            return dataset
-
-        return cls(*args)
+        return dataset
 
 
-def get_split_indices(split: List[float], num_elements: int) -> List[int]:
-    """Determine the document index bounds per split
+def get_split_indices(split: List[float], number_of_tokens: int, sequence_length: int) -> List[int]:
+    """
+    Determine the sample index bounds per split. The division is done at the Token level
 
     Args:
         split (List[float]): The dataset split ratios (must sum to 1.00)
 
-        num_elements (int): The number of elements, e.g. sequences or documents, available for
-        the split
+        number_of_tokens (int): The number of tokens available in the MMapIndexedDataset
+
+        sequence_length (int): The number of tokens to extract from MMapIndexedDataset for each sample
 
     Returns:
-        List[int]: The indices for all three splits e.g. [0, 900, 990, 1000] for a 1000-document
-        set and a [90.0, 9.0, 1.0] split
+        List[int]: The indices for all three splits e.g. [0, 800, 900, 1000] for a 1024000 token dataset,
+        1024 sequence length and a [8, 1, 1] split
     """
+    number_of_samples = int(number_of_tokens / sequence_length)
     split_indices = [0]
     for split_pct in split:
-        split_indices.append(split_indices[-1] + int(round(split_pct * float(num_elements))))
-    split_indices[1:] = [_ - (split_indices[-1] - num_elements) for _ in split_indices[1:]]
+        split_indices.append(split_indices[-1] + int(round(split_pct * float(number_of_samples))))
+    split_indices[1:] = [_ - (split_indices[-1] - number_of_samples) for _ in split_indices[1:]]
 
     assert len(split_indices) == len(split) + 1
-    assert split_indices[-1] == num_elements
+    assert split_indices[-1] == number_of_samples
 
     return split_indices

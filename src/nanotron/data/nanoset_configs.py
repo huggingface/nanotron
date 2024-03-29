@@ -6,7 +6,8 @@ from nanotron.data.utils import parse_and_normalize_split
 
 @dataclass
 class NanosetConfig:
-    """Configuration object for Nanoset datasets
+    """
+    Configuration object for Nanoset datasets
 
     Attributes:
 

@@ -34,11 +34,11 @@ def test_build_nanoset_dataloader(tp: int, dp: int, pp: int, train_steps: int, s
     test_context = TestContext()
 
     # Create dataset files
-    json_paths, bin_paths = create_dataset_paths(tmp_dir=test_context.get_auto_remove_tmp_dir(), quantity=2)
+    json_paths, mmap_dataset_paths = create_dataset_paths(tmp_dir=test_context.get_auto_remove_tmp_dir(), quantity=2)
 
     # Create dummy json datasets
     for idx, json_path in enumerate(json_paths):
-        create_dummy_json_dataset(path_to_json=json_path, dummy_text=f"Nanoset {idx}!")
+        create_dummy_json_dataset(path_to_json=json_path, dummy_text=f"Nanoset {idx}!", n_samples=(idx + 1) * 50000)
 
     # Preprocess dummy json datasets
     for json_path in json_paths:
@@ -46,7 +46,7 @@ def test_build_nanoset_dataloader(tp: int, dp: int, pp: int, train_steps: int, s
 
     init_distributed(tp=tp, dp=dp, pp=pp)(_test_build_nanoset_dataloader)(
         test_context=test_context,
-        path_to_bin_files=bin_paths,
+        path_to_mmap_files=mmap_dataset_paths,
         train_steps=train_steps,
         sequence_length=sequence_length,
     )
@@ -55,7 +55,7 @@ def test_build_nanoset_dataloader(tp: int, dp: int, pp: int, train_steps: int, s
 def _test_build_nanoset_dataloader(
     parallel_context: ParallelContext,
     test_context: TestContext,
-    path_to_bin_files: str,
+    path_to_mmap_files: str,
     train_steps: int,
     sequence_length: int,
 ):
@@ -72,7 +72,7 @@ def _test_build_nanoset_dataloader(
     nanoset_config = NanosetConfig(
         random_seed=SEED,
         sequence_length=sequence_length,
-        data_path=path_to_bin_files[0],
+        data_path=path_to_mmap_files[0],
         split=SPLIT,
         train_split_samples=train_steps * GLOBAL_BATCH_SIZE,
         path_to_cache=test_context.get_auto_remove_tmp_dir(),
@@ -81,7 +81,7 @@ def _test_build_nanoset_dataloader(
     blended_nanoset_config = NanosetConfig(
         random_seed=SEED,
         sequence_length=sequence_length,
-        data_path={path_to_bin_files[0]: 0.8, path_to_bin_files[1]: 0.2},
+        data_path={path_to_mmap_files[0]: 0.8, path_to_mmap_files[1]: 0.2},
         split=SPLIT,
         train_split_samples=train_steps * GLOBAL_BATCH_SIZE,
         path_to_cache=test_context.get_auto_remove_tmp_dir(),

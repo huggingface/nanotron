@@ -17,7 +17,8 @@ class Split(Enum):
 
 
 def normalize(weights: List[float]) -> List[float]:
-    """Do non-exponentiated normalization
+    """
+    Normalize elements of a list
 
     Args:
         weights (List[float]): The weights
@@ -32,13 +33,14 @@ def normalize(weights: List[float]) -> List[float]:
 
 
 def parse_and_normalize_split(split: str) -> List[float]:
-    """Parse the dataset split ratios from a string
+    """
+    Parse the dataset split ratios from a string
 
     Args:
-        split (str): The train valid test split string e.g. "99,1,0"
+        split (str): The train, valid, test split string e.g. "90,8,2"
 
     Returns:
-        List[float]: The trian valid test split ratios e.g. [99.0, 1.0, 0.0]
+        List[float]: The trian, valid, test split ratios e.g. [0.9, 0.08, 0.02]
     """
     split = list(map(float, re.findall(r"[.0-9]+", split)))
     split = split + [0.0 for _ in range(len(Split) - len(split))]
@@ -64,6 +66,8 @@ def count_blending_indexes(dataset_idx: numpy.ndarray, n_datasets: int):
 
 def log_BlendedNanoset_stats(blended_nanosets):
     for blended_nanoset, split_name in zip(blended_nanosets, Split):
+        if blended_nanoset is None:
+            break
         log_rank(
             f"> Total number of samples of the {split_name._name_} BlendedNanoset: {len(blended_nanoset)}",
             logger=logger,
@@ -73,7 +77,7 @@ def log_BlendedNanoset_stats(blended_nanosets):
         nanoset_sample_count = count_blending_indexes(blended_nanoset.dataset_index, len(blended_nanoset.datasets))
         for idx, nanoset in enumerate(blended_nanoset.datasets):
             log_rank(
-                f">   Total number of samples from the {nanoset.indexed_dataset.path_prefix.rsplit('/', 1)[-1]} Nanoset: {nanoset_sample_count[idx]} ({round(normalize(nanoset_sample_count)[idx], 2)})",
+                f">   Total number of samples from the {nanoset.indexed_dataset.path_to_mmap.rsplit('/', 1)[-1]} Nanoset: {nanoset_sample_count[idx]} ({round(normalize(nanoset_sample_count)[idx], 2)})",
                 logger=logger,
                 level=logging.INFO,
                 rank=0,

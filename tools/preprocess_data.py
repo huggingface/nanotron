@@ -1,95 +1,38 @@
 import argparse
-import glob
-import importlib
-import json
 import multiprocessing
 import os
-import sys
-import time
-from pathlib import Path
+import shutil
 
-package = importlib.import_module("nanotron")
-package_path = Path(package.__file__).parent.parent
-sys.path.append(str(package_path))
+import numpy as np
+from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
-from nanotron.data import indexed_dataset
-from transformers import AutoTokenizer
+from datasets import Dataset, concatenate_datasets, load_dataset
 
 
-class Encoder(object):
-    def __init__(self, pretrained_model_name_or_path: str, json_key: str, append_eos: bool):
-        self.pretrained_model_name_or_path = pretrained_model_name_or_path
-        self.json_key = json_key
-        self.append_eos = append_eos
-
-    def initializer(self):
-        # Use Encoder class as a container for global data
-        Encoder.tokenizer = AutoTokenizer.from_pretrained(self.pretrained_model_name_or_path)
-
-    def encode(self, json_line: str):
-        data = json.loads(json_line)
-        text = data[self.json_key]
-
-        text_ids = Encoder.tokenizer.encode(text)
-        if self.append_eos:
-            text_ids.append(Encoder.tokenizer.eos_token_id)
-
-        return text_ids, len(text_ids), len(json_line)
-
-
-class Partition(object):
-    def __init__(
-        self, workers: int, log_interval: int, pretrained_model_name_or_path: str, json_key: str, append_eos: bool
-    ):
-        self.workers = workers
-        self.log_interval = log_interval
-        self.pretrained_model_name_or_path = pretrained_model_name_or_path
-        self.json_key = json_key
-        self.append_eos = append_eos
-
-    def print_processing_stats(self, count: int, proc_start: float, total_bytes_processed: int):
-        if count % self.log_interval == 0:
-            current = time.time()
-            elapsed = current - proc_start
-            mbs = total_bytes_processed / elapsed / 1024 / 1024
-            print(f"Processed {count} documents", f"({count/elapsed} docs/s, {mbs} MB/s).", file=sys.stderr)
-
-    def process_json_file(self, file_name: str):
-        input_file_name, output_prefix = file_name
-        print("Opening", input_file_name)
-        fin = open(input_file_name, "r", encoding="utf-8")
-
-        startup_start = time.time()
-        encoder = Encoder(self.pretrained_model_name_or_path, self.json_key, self.append_eos)
-        tokenizer = AutoTokenizer.from_pretrained(self.pretrained_model_name_or_path)
-        pool = multiprocessing.Pool(self.workers, initializer=encoder.initializer)
-        encoded_docs = pool.imap(encoder.encode, fin, 32)
-
-        output_bin_file = "{}_{}.bin".format(output_prefix, self.json_key)
-        output_idx_file = "{}_{}.idx".format(output_prefix, self.json_key)
-
-        builder = indexed_dataset.MMapIndexedDatasetBuilder(
-            output_bin_file, dtype=indexed_dataset.DType.optimal_dtype(tokenizer.vocab_size)
-        )
-
-        startup_end = time.time()
-        proc_start = time.time()
-        total_bytes_processed = 0
-        print("Time to startup:", startup_end - startup_start)
-        for i, (text_ids, len_text_ids, bytes_processed) in enumerate(encoded_docs, start=1):
-            total_bytes_processed += bytes_processed
-            builder.add_document([text_ids], [len_text_ids])
-            self.print_processing_stats(i, proc_start, total_bytes_processed)
-
-        fin.close()
-        builder.finalize(output_idx_file)
+def preprocess_shard(
+    dataset_shard: Dataset, output_file: str, tokenizer: PreTrainedTokenizerBase, column: str, add_special_tokens: bool
+):
+    dataset_shard = dataset_shard.map(
+        lambda x: {"input_ids": tokenizer.encode(x, add_special_tokens=add_special_tokens)},
+        input_columns=column,
+        batched=False,
+        remove_columns=[column],
+    )
+    input_ids_file = open(output_file, "wb")
+    for sample in dataset_shard:
+        np_array = np.array(sample["input_ids"], dtype=np.uint16)
+        input_ids_file.write(np_array.tobytes(order="C"))
+    input_ids_file.close()
 
 
 def get_args():
     parser = argparse.ArgumentParser()
     group = parser.add_argument_group(title="input data")
-    group.add_argument("--input", type=str, required=True, help="Path to input JSON")
-    group.add_argument("--json-key", type=str, default="text", help="Key to extract from json")
+    group.add_argument(
+        "--input", type=str, required=True, help="Path to local stored dataset or repository on the Hugging Face hub"
+    )
+    group.add_argument("--column", type=str, default="text", help="Column to preprocess from the Dataset")
+    parser.add_argument("--split", type=str, default="train", help="Which split of the data to process")
 
     group = parser.add_argument_group(title="tokenizer")
     group.add_argument(
@@ -98,127 +41,79 @@ def get_args():
         required=True,
         help="A path to a directory containing vocabulary files required by the tokenizer or the model id of a predefined tokenizer hosted inside a model repo on the Hugging Face Hub.",
     )
-    group.add_argument("--append-eos", action="store_true", help="Append an <eos> token to the end of a sample.")
+    group.add_argument(
+        "--add-special-tokens",
+        action="store_true",
+        help="Whether or not to add special tokens when encoding the sequences. This will be passed to the Tokenizer",
+    )
 
     group = parser.add_argument_group(title="output data")
-    group.add_argument(
-        "--output-prefix", type=str, required=True, help="Path to binary and index output files without suffix"
-    )
+    group.add_argument("--output-prefix", type=str, required=True, help="Path to the output processed dataset file")
 
     group = parser.add_argument_group(title="runtime")
-    group.add_argument(
-        "--workers",
-        type=int,
-        required=True,
-        help=(
-            "Number of worker processes to launch."
-            "A good default for fast pre-processing "
-            "is: (workers * partitions) = available CPU cores."
-        ),
-    )
-    group.add_argument("--partitions", type=int, default=1, help="Number of file partitions")
-    group.add_argument("--log-interval", type=int, default=1000, help="Interval between progress updates")
+    group.add_argument("--num-workers", type=int, default=8, help="Number of workers processing the dataset")
 
     args = parser.parse_args()
 
     return args
 
 
-def get_file_name(input: str, output_prefix: str, file_id: int):
-    file_name, extension = os.path.splitext(input)
-    input_file_name = file_name + "_" + str(file_id) + extension
-    output_prefix = output_prefix + "_" + str(file_id)
-    file_names = {"partition": input_file_name, "output_prefix": output_prefix}
-    return file_names
-
-
 def main(args):
-    # Check if json file is not empty
-    assert os.path.getsize(args.input), f"{args.input} is empty!"
+
     # Check if output directory exists
     if not os.path.isdir(os.path.abspath(os.path.join(args.output_prefix, os.path.pardir))):
         print(f"Creating {os.path.abspath(os.path.join(args.output_prefix, os.path.pardir))} directory...")
         os.makedirs(os.path.abspath(os.path.join(args.output_prefix, os.path.pardir)), exist_ok=True)
 
-    in_ss_out_names = []
-    if args.partitions == 1:
-        file_names = {
-            "partition": args.input,
-            "output_prefix": args.output_prefix,
-        }
-        in_ss_out_names.append(file_names)
+    if args.input.endswith(".json"):  # For processing JSON files (Cross compatibility with other projects)
+        ds = load_dataset("json", data_files=args.input)
+        ds = concatenate_datasets([ds[splits] for splits in ds.keys()])  # Return DatasetDict
     else:
-        in_file_names = glob.glob(args.input)
+        ds = load_dataset(args.input, split=args.split, num_proc=args.num_workers)
 
-        # Create .jsonl partition files
-        for idx in range(args.partitions):
-            in_ss_out_name = get_file_name(args.input, args.output_prefix, idx)
-            in_ss_out_names.append(in_ss_out_name)
+    ds = ds.select_columns(args.column)
 
-        # Populate .jsonl partition files from parent files
-        partitioned_input_files = []
-        for idx in range(args.partitions):
-            partitioned_input_file = open(in_ss_out_names[idx]["partition"], "w")
-            partitioned_input_files.append(partitioned_input_file)
+    tokenizer = AutoTokenizer.from_pretrained(args.pretrained_model_name_or_path)
 
-        index = 0
-        for in_file_name in in_file_names:
-            fin = open(in_file_name, "r", encoding="utf-8")
-
-            for line in fin:
-                partitioned_input_files[index].write(line)
-                index = (index + 1) % args.partitions
-            fin.close()
-
-        for idx in range(args.partitions):
-            partitioned_input_files[idx].close()
-
-    assert args.workers % args.partitions == 0
-    partition = Partition(
-        args.workers // args.partitions,
-        args.log_interval,
-        args.pretrained_model_name_or_path,
-        args.json_key,
-        args.append_eos,
-    )
-
-    # Encode partition files in parallel
+    # Create tmp directory for worker outputs
+    tmp_folder = os.path.abspath(os.path.join(args.output_prefix, os.pardir, "tmp"))
+    os.makedirs(tmp_folder, exist_ok=True)
+    workers_output_files = []
     processes = []
-    input_key = "partition"
-    for name in in_ss_out_names:
+
+    print("Creating worker output files...")
+    for worker in range(args.num_workers):
+        worker_output_file = os.path.join(tmp_folder, f"worker_{worker}_input_ids.npy")
+        workers_output_files.append(worker_output_file)
+
         p = multiprocessing.Process(
-            target=partition.process_json_file, args=((name[input_key], name["output_prefix"]),)
+            target=preprocess_shard,
+            args=(
+                ds.shard(num_shards=args.num_workers, index=worker, contiguous=True),
+                worker_output_file,
+                tokenizer,
+                args.column,
+                args.add_special_tokens,
+            ),
         )
+
         p.start()
         processes.append(p)
 
     for p in processes:
         p.join()
 
-    if args.partitions == 1:
-        return
+    print("Merging worker output files...")
+    output_file = f"{args.output_prefix}_input_ids.npy"
+    input_ids_file = open(output_file, "wb")
+    for worker_output_file in workers_output_files:
+        with open(worker_output_file, "rb") as f:
+            shutil.copyfileobj(f, input_ids_file)
+        os.remove(worker_output_file)
 
-    # Merge bin/idx partitions
-    tokenizer = AutoTokenizer.from_pretrained(args.pretrained_model_name_or_path)
-
-    output_bin_file = "{}_{}.bin".format(args.output_prefix, args.json_key)
-    output_idx_file = "{}_{}.idx".format(args.output_prefix, args.json_key)
-
-    builder = indexed_dataset.MMapIndexedDatasetBuilder(
-        output_bin_file, dtype=indexed_dataset.DType.optimal_dtype(tokenizer.vocab_size)
-    )
-
-    for name in in_ss_out_names:
-        parition_output_prefix = name["output_prefix"]
-        full_partition_output_prefix = "{}_{}".format(parition_output_prefix, args.json_key)
-        builder.add_index(full_partition_output_prefix)
-    builder.finalize(output_idx_file)
-
-    # Clean temporary files
-    for name in in_ss_out_names:
-        os.remove(name["partition"])
-        for output in glob.glob(name["output_prefix"] + "*"):
-            os.remove(output)
+    input_ids_file.close()
+    os.rmdir(tmp_folder)
+    print(f"Done! {args.input} processed dataset stored in {output_file}")
 
 
 if __name__ == "__main__":

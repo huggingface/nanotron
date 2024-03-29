@@ -17,7 +17,8 @@ logger = logging.get_logger(__name__)
 
 
 class BlendedNanoset(torch.utils.data.Dataset):
-    """Conjugating class for a set of Nanoset instances
+    """
+    Conjugating class for a set of Nanoset instances
 
     Args:
         datasets (List[Nanoset]): The Nanoset instances to blend
@@ -27,9 +28,6 @@ class BlendedNanoset(torch.utils.data.Dataset):
         size (int): The number of samples to draw from the blend
 
         config (NanosetConfig): The config object which informs dataset creation
-
-    Raises:
-        RuntimeError: When the dataset has fewer or more samples than 'size' post-initialization
     """
 
     def __init__(
@@ -43,13 +41,10 @@ class BlendedNanoset(torch.utils.data.Dataset):
         assert numpy.isclose(sum(weights), 1.0)
         assert all((isinstance(dataset, Nanoset) for dataset in datasets))
 
-        # Alert user to unnecessary blending
-        if len(datasets) == 1:
-            log_rank("Building a BlendedNanoset for a single Nanoset", logger=logger, level=logging.WARNING, rank=0)
-
         self.datasets = datasets
         self.weights = weights
         self.config = config
+
         # For the train split, we will have global batch size * train steps samples
         # For the valid and test splits, we will consume entirely both datasets
         self.dataset_sizes = [len(dataset) for dataset in self.datasets]
@@ -87,7 +82,8 @@ class BlendedNanoset(torch.utils.data.Dataset):
         return self.datasets[dataset_id][dataset_sample_id]
 
     def build_indices(self) -> Tuple[numpy.ndarray, numpy.ndarray]:
-        """Build and optionally cache the dataset index and the dataset sample index
+        """
+        Build and optionally cache the dataset index and the dataset sample index
 
         The dataset index is a 1-D mapping which determines the dataset to query. The dataset
         sample index is a 1-D mapping which determines the sample to request from the queried
@@ -103,25 +99,16 @@ class BlendedNanoset(torch.utils.data.Dataset):
             def get_path_to(suffix):
                 return os.path.join(path_to_cache, f"{self.unique_description_hash}-{type(self).__name__}-{suffix}")
 
-            path_to_description = get_path_to("description.txt")
             path_to_dataset_index = get_path_to("dataset_index.npy")
             path_to_dataset_sample_index = get_path_to("dataset_sample_index.npy")
-            cache_hit = all(
-                map(
-                    os.path.isfile,
-                    [path_to_description, path_to_dataset_index, path_to_dataset_sample_index],
-                )
-            )
+            cache_hit = all(map(os.path.isfile, [path_to_dataset_index, path_to_dataset_sample_index]))
+
         else:
             cache_hit = False
 
         if not path_to_cache or (not cache_hit and torch.distributed.get_rank() == 0):
-            log_rank(f"Build and save the {type(self).__name__} indices", logger=logger, level=logging.INFO, rank=0)
 
-            # Build the dataset and dataset sample indexes
-            log_rank(
-                "\tBuild and save the dataset and dataset sample indexes", logger=logger, level=logging.INFO, rank=0
-            )
+            log_rank(f"Build and save the {type(self).__name__} indices", logger=logger, level=logging.INFO, rank=0)
 
             t_beg = time.time()
 
@@ -131,9 +118,7 @@ class BlendedNanoset(torch.utils.data.Dataset):
 
             if path_to_cache:
                 os.makedirs(path_to_cache, exist_ok=True)
-                # Write the description
-                with open(path_to_description, "wt") as writer:
-                    writer.write(self.unique_description)
+
                 # Save the indexes
                 numpy.save(path_to_dataset_index, dataset_index, allow_pickle=True)
                 numpy.save(path_to_dataset_sample_index, dataset_sample_index, allow_pickle=True)
@@ -175,7 +160,7 @@ class BlendedNanoset(torch.utils.data.Dataset):
 def build_blending_indices(
     n_samples: int, weights: numpy.ndarray, dataset_sizes: List
 ) -> Tuple[numpy.ndarray, numpy.ndarray]:
-    """Given multiple datasets and a weighting array, build samples
+    """Given multiple datasets and a weighting array, build samples indexes
     such that it follows those weights."""
     # Create empty arrays for dataset indices and dataset sample indices
     dataset_index = numpy.empty((n_samples,), dtype="uint")

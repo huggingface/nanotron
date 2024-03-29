@@ -25,7 +25,7 @@ from torch.utils.data import DataLoader
 logger = logging.get_logger(__name__)
 
 
-def get_dataloader_from_data_stage(trainer: DistributedTrainer, data: DataArgs):
+def get_dataloader_from_data_stage(trainer: DistributedTrainer, data: DataArgs) -> DataLoader:
     """Returns train, valid and test dataloaders"""
 
     # First, we need to know which ranks to feed the dataloader to

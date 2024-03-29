@@ -26,9 +26,9 @@ from tools.preprocess_data import main
 
 def create_dataset_paths(tmp_dir: str, quantity: int):
     json_dataset_path = [os.path.join(tmp_dir, f"pytest_{i}") for i in range(quantity)]
-    bin_dataset_path = [f"{path}_text" for path in json_dataset_path]
+    mmap_dataset_path = [f"{path}_input_ids.npy" for path in json_dataset_path]
 
-    return json_dataset_path, bin_dataset_path
+    return json_dataset_path, mmap_dataset_path
 
 
 def create_dummy_json_dataset(path_to_json: str, dummy_text: str, n_samples: int = 50000):
@@ -44,13 +44,11 @@ def preprocess_dummy_dataset(path_to_json: str):
     # Create args for preprocessing
     args = Namespace(
         input=path_to_json + ".json",
-        json_key="text",
+        column="text",
         output_prefix=path_to_json,
         pretrained_model_name_or_path="openai-community/gpt2",
-        workers=int(min(os.cpu_count(), 8)),
-        partitions=int((min(os.cpu_count(), 8) / 2)),
-        append_eos=True,
-        log_interval=int(1000),
+        num_workers=int(min(os.cpu_count(), 4)),
+        add_special_tokens=False,
     )
 
     # tools/preprocess_data.py main
@@ -134,7 +132,7 @@ def assert_nanoset(nanoset: Nanoset, parallel_context: ParallelContext):
     IDX_SAMPLE = 23
 
     nanoset_identifiers = OrderedDict()
-    nanoset_identifiers["path_prefix"] = nanoset.indexed_dataset.path_prefix
+    nanoset_identifiers["path_to_mmap"] = nanoset.indexed_dataset.path_to_mmap
     nanoset_identifiers["split"] = nanoset.config.split
     nanoset_identifiers["random_seed"] = nanoset.config.random_seed
     nanoset_identifiers["sequence_length"] = nanoset.config.sequence_length
