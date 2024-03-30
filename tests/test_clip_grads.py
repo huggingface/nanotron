@@ -204,8 +204,8 @@ def _test_clip_grads_with_tp(
 ):
     if async_communication:
         os.environ["CUDA_DEVICE_MAX_CONNECTIONS"] = "1"
-    in_features = 2
-    out_features_per_tp_rank = 3
+    in_features = 4
+    out_features_per_tp_rank = 8
     out_features = parallel_context.tp_pg.size() * out_features_per_tp_rank
 
     # Sharded
