@@ -22,7 +22,7 @@ class FP8Linear(nn.Linear):
         out_features: int,
         bias: bool = True,
         device: Optional[torch.device] = None,
-        accum_qtype: DTypes = DTypes.KFLOAT16,
+        accum_qtype: DTypes = FP8LM_RECIPE.linear.accum_dtype,
     ):
         """
         Args:
@@ -73,7 +73,6 @@ class _FP8Matmul(torch.autograd.Function):
                 is_dynamic_scaling=FP8LM_RECIPE.linear.input.is_dynamic_scaling,
             )
 
-        ctx.grad_metadata = weight.fp8_grad_meta
         ctx.accum_qtype = accum_qtype
         ctx.save_for_backward(input, weight)
 

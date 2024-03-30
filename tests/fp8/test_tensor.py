@@ -321,6 +321,38 @@ def test_setting_new_data_for_fp8_and_fp16_tensor(tensor_cls, dtype, is_quantize
     # assert torch.equal(fp8_tensor.fp8_meta.scale, expected_quantized_tensor.fp8_meta.scale)
 
 
+# @pytest.mark.parametrize(
+#     "tensor_cls, dtype", [(FP8Tensor, DTypes.FP8E4M3), (FP8Tensor, DTypes.FP8E5M2), (FP16Tensor, DTypes.KFLOAT16)]
+# )
+# @pytest.mark.parametrize("is_quantized", [True, False])
+# def test_setting_None_data_for_fp8_and_fp16_tensor(tensor_cls, dtype, is_quantized):
+#     tensor = torch.randn((4, 4), dtype=torch.float32, device="cuda")
+#     fp8_tensor = tensor_cls(tensor, dtype=dtype)
+
+#     fp8_tensor.set_data(None)
+
+#     assert fp8_tensor is None
+#     assert fp8_tensor.data is None
+
+
+@pytest.mark.parametrize(
+    "tensor_cls, dtype", [(FP8Tensor, DTypes.FP8E4M3), (FP8Tensor, DTypes.FP8E5M2), (FP16Tensor, DTypes.KFLOAT16)]
+)
+def test_zero_out_data_of_fp8_and_fp16_tensor(tensor_cls, dtype):
+    tensor = torch.randn((4, 4), dtype=torch.float32, device="cuda")
+    fp8_tensor = tensor_cls(tensor, dtype=dtype)
+
+    fp8_tensor.zero_()
+
+    assert torch.equal(fp8_tensor, torch.zeros_like(fp8_tensor))
+
+    if tensor_cls == FP8Tensor:
+        dequantized_tensor = convert_tensor_from_fp8(fp8_tensor, fp8_tensor.fp8_meta, torch.float32)
+    else:
+        dequantized_tensor = convert_tensor_from_fp16(fp8_tensor, torch.float32)
+    assert torch.equal(dequantized_tensor, torch.zeros_like(tensor))
+
+
 @pytest.mark.parametrize("dtype", [DTypes.FP8E4M3, DTypes.FP8E5M2])
 @pytest.mark.parametrize("interval", [1, 5, 10])
 @pytest.mark.parametrize("is_quantized", [True, False])

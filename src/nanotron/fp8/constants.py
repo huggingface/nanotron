@@ -36,6 +36,7 @@ QTYPE_TO_DTYPE = {
 # https://arxiv.org/abs/2310.18313
 FP8LM_RECIPE = FP8TrainingRecipe(
     linear=FP8LinearRecipe(
+        accum_dtype=DTypes.KFLOAT16,
         input=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=16, is_dynamic_scaling=True),
         weight=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=1, is_dynamic_scaling=False),
         bias=FP8TensorRecipe(dtype=DTypes.KFLOAT16, margin=0, interval=16, is_dynamic_scaling=False),
@@ -46,6 +47,7 @@ FP8LM_RECIPE = FP8TrainingRecipe(
         split_accumulator=FP8SplitAccumulator(output=False, input_grad=True, weight_grad=True),
     ),
     optim=FP8OptimRecipe(
+        accum_dtype=DTypes.KFLOAT32,
         master_weight_dtype=DTypes.KFLOAT16,
         exp_avg_dtype=DTypes.FP8E4M3,
         exp_avg_sq_dtype=DTypes.KFLOAT16,

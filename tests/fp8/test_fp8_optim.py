@@ -192,6 +192,44 @@ def test_fp8adam_zero_grad():
     assert [p.grad is None for p in fp8_linear.parameters()]
 
 
+# NOTE: this is just for sanity check, will remove this once fp8 training works
+# @pytest.mark.parametrize("n_layers", [1, 5])
+@pytest.mark.parametrize("is_bias", [True, False])
+@pytest.mark.parametrize("n_steps", [1, 5])
+def test_if_gradient_flows_with_multiple_layers(is_bias, n_steps):
+    n_layers = 1
+    HIDDEN_SIZE = 64
+
+    input = torch.randn(HIDDEN_SIZE, HIDDEN_SIZE, device="cuda", requires_grad=True)
+    ref_model = nn.Sequential(
+        *[
+            layer
+            for _ in range(n_layers)
+            for layer in (nn.Linear(HIDDEN_SIZE, HIDDEN_SIZE, bias=is_bias, device="cuda"), nn.ReLU())
+        ][:-1]
+    )
+    ref_optim = Adam(ref_model.parameters(), lr=1e-3)
+
+    fp8_model = convert_to_fp8_module(deepcopy(ref_model))
+    fp8_optim = FP8Adam(fp8_model.parameters(), lr=1e-3)
+
+    for _ in range(n_steps):
+        # NOTE: we intentionally call .zero_grad() first because if using
+        # torch.Optimizer's default .zero_grad() method,
+        # it causes gradients not flowing
+        ref_optim.zero_grad()
+        ref_model(input).sum().backward()
+        ref_optim.step()
+
+        fp8_optim.zero_grad()
+        fp8_model(input).sum().backward()
+        fp8_optim.step()
+
+    assert all(p.grad is not None for p in fp8_model.parameters())
+    assert all(isinstance(p.grad, FP8Tensor) for p in fp8_model.parameters() if p.grad.ndim > 1)
+    assert all(isinstance(p.grad, torch.Tensor) for p in fp8_model.parameters() if p.grad.ndim == 1)
+
+
 @pytest.mark.parametrize(
     "scaling_value",
     [

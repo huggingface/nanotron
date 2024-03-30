@@ -45,11 +45,11 @@ class LowPrecisionTensor(torch.Tensor):
     #     self.__dict__['data'] = data.data
     #     self.fp8_meta = data.fp8_meta
 
-    def __setattr__(self, __name: str, __value: torch.Any) -> None:
-        if __name == "data":
-            assert 1 == 1
+    # def __setattr__(self, __name: str, __value: torch.Any) -> None:
+    #     if __name == "data":
+    #         assert 1 == 1
 
-        return super().__setattr__(__name, __value)
+    #     return super().__setattr__(__name, __value)
 
     @staticmethod
     def _get_metadata(tensor: torch.Tensor, dtype: DTypes, interval: int, is_dynamic_scaling: bool) -> "FP8Meta":
@@ -102,7 +102,7 @@ class LowPrecisionTensor(torch.Tensor):
         return True if self.fp8_meta == other.fp8_meta and torch.equal(self.data, other.data) else False
 
     # TODO(xrsrke): directly set a tensor data using tensor.data = new_data
-    def set_data(self, data: Union[torch.Tensor, LowPrecisionTensor]):
+    def set_data(self, data: Union[torch.Tensor, LowPrecisionTensor, None]):
         assert isinstance(data, (self.__class__, torch.Tensor)), f"data must be a torch.Tensor or a {self.__class__}"
         if data.__class__ in [FP8Tensor, FP16Tensor]:
             assert data.dtype == self.data.dtype, "The data must have the same dtype as the tensor, got {data.dtype}"

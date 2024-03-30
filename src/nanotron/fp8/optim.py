@@ -171,7 +171,7 @@ class FP8Adam(Optimizer):
         eps: float = 1e-8,
         weight_decay: float = 0,
         # amsgrad: bool = False,
-        out_dtype: DTypes = DTypes.KFLOAT16,
+        accum_dtype: DTypes = FP8LM_RECIPE.optim.accum_dtype,
     ):
         # TODO(xrsrke): add this back, after fp8 working
         # assert [isinstance(p, FP8Parameter) for p in params], "All parameters should be FP8Parameter"
@@ -185,7 +185,7 @@ class FP8Adam(Optimizer):
         if not 0.0 <= betas[1] < 1.0:
             raise ValueError("Invalid beta parameter at index 1: {}".format(betas[1]))
 
-        assert out_dtype in DTypes, "Please provide an accumulation precision format"
+        assert accum_dtype in DTypes, "Please provide an accumulation precision format"
 
         defaults = {"lr": lr, "betas": betas, "eps": eps, "weight_decay": weight_decay, "amsgrad": False}
 
@@ -195,7 +195,7 @@ class FP8Adam(Optimizer):
         # then retrieve the exp_avg_dtype from the recipe
         self.exp_avg_dtype = FP8LM_RECIPE.optim.exp_avg_dtype
         self.exp_avg_sq_dtype = FP8LM_RECIPE.optim.exp_avg_sq_dtype
-        self.out_dtype = out_dtype
+        self.accum_dtype = accum_dtype
 
         self.master_weights: List[FP16Tensor] = []
         # NOTE: torch.Tensor is bias
@@ -270,18 +270,11 @@ class FP8Adam(Optimizer):
                     continue
 
                 state = self.state[p]
-                # amsgrad = group["amsgrad"]
                 if len(state) == 0:
-                    # self._init_optim_states(state, p, amsgrad)
                     self._init_optim_states(state, p)
 
                 grad = p.grad
 
-                if is_overflow_underflow_nan(grad):
-                    raise ValueError("Overflow, underflow, or NaN detected in the gradients")
-
-                # assert isinstance(p, FP8Parameter) or isinstance(p, torch.Tensor)
-                # assert isinstance(grad, FP8Tensor) or isinstance(grad, FP16Tensor)
                 # NOTE: sanity check
                 assert (isinstance(p, FP8Parameter) and p.dtype in FP8_DTYPES) or (
                     isinstance(p, torch.Tensor) and p.dtype == torch.float16
@@ -293,27 +286,20 @@ class FP8Adam(Optimizer):
                 if p.ndim != 1:
                     print(f"[FP8Adam] original grad: {grad[:2, :2]} \n")
 
-                # if p.ndim != 1:
-                #     # fp16_grad = convert_tensor_from_fp8(grad, grad.fp8_meta, torch.float16)
-                #     fp32_grad = convert_tensor_from_fp8(grad, grad.fp8_meta, torch.float32)
-                # else:
-                #     fp32_grad = grad.to(torch.float32)
-                #     # fp32_grad = grad.float()
-
                 fp32_grad = (
                     grad.to(torch.float32)
                     if p.ndim == 1
                     else convert_tensor_from_fp8(grad, grad.fp8_meta, torch.float32)
                 )
 
+                if is_overflow_underflow_nan(fp32_grad):
+                    raise ValueError("Overflow, underflow, or NaN detected in the gradients")
+
                 if fp32_grad.is_sparse:
                     raise RuntimeError("FP8Adam does not support sparse gradients!")
 
                 if p.ndim != 1:
                     print(f"[FP8Adam] fp32_grad: {fp32_grad[:2, :2]} \n")
-
-                # if amsgrad:
-                #     max_exp_avg_sq = state["max_exp_avg_sq"]
 
                 beta1, beta2 = group["betas"]
 
@@ -330,7 +316,6 @@ class FP8Adam(Optimizer):
                 # so we can't do the mapping, so now we map data_ptr to data_ptr
                 # TODO(xrsrke): ideally, we should map tensor to tensor
                 # it's easier to debug (u know which tensor is which)
-                # fp16_p = self.mappping_fp8_to_master_weight[p.data_ptr()]
                 fp16_p = self.mappping_fp8_to_master_weight[p]
                 assert fp16_p.dtype == torch.float16
                 fp32_p = convert_tensor_from_fp16(fp16_p, torch.float32)
@@ -362,7 +347,6 @@ class FP8Adam(Optimizer):
                     )
 
                 # TODO(xrsrke): can we do all calculations in fp8?
-                # fp16_exp_avg = convert_tensor_from_fp8(exp_avg, exp_avg.fp8_meta, torch.float16)
                 fp32_exp_avg = convert_tensor_from_fp8(exp_avg, exp_avg.fp8_meta, torch.float32)
                 fp32_exp_avg_sq = convert_tensor_from_fp16(exp_avg_sq, torch.float32)
 
@@ -372,9 +356,6 @@ class FP8Adam(Optimizer):
                 if p.ndim != 1:
                     print(f"[FP8Adam] fp32_exp_avg: {fp32_exp_avg[:2, :2]} \n")
                     print(f"[FP8Adam] fp32_exp_avg_sq: {fp32_exp_avg_sq[:2, :2]} \n")
-
-                # fp32_exp_avg.mul_(beta1).add_(1 - beta1, grad)
-                # fp32_exp_avg_sq.mul_(beta2).addcmul_(1 - beta2, grad, grad)
 
                 fp32_exp_avg.mul_(beta1).add_(1 - beta1, fp32_grad)
                 fp32_exp_avg_sq.mul_(beta2).addcmul_(1 - beta2, fp32_grad, fp32_grad)
@@ -399,17 +380,7 @@ class FP8Adam(Optimizer):
                     print(f"[FP8Adam] group['lr']: {group['lr']} \n")
                     print(f"[FP8Adam] step_size: {step_size} \n")
 
-                # fp32_p.addcdiv_(-step_size, fp32_exp_avg, denom)
-                # fp32_p.data = fp32_p.data - step_size * (fp32_exp_avg / denom)
                 fp32_p = fp32_p - step_size * (fp32_exp_avg / denom)
-
-                # TODO(xrsrke): update optimizer states asynchronously
-                # in a separate cuda streams
-                # exp_avg_fp32_meta = get_tensor_fp8_metadata(fp16_exp_avg, exp_avg.fp8_meta.dtype)
-                # updated_exp_avg_fp8 = convert_tensor_to_fp8(fp16_exp_avg, exp_avg_fp32_meta)
-                # exp_avg_fp32_meta = get_tensor_fp8_metadata(fp32_exp_avg, exp_avg.fp8_meta.dtype)
-                # updated_exp_avg_fp8 = convert_tensor_to_fp8(fp32_exp_avg, exp_avg_fp32_meta)
-                # updated_exp_avg_fp8 = FP8Tensor(fp32_exp_avg, dtype=exp_avg.fp8_meta.dtype)
 
                 # if p.ndim != 1:
                 #     print(
@@ -420,20 +391,11 @@ class FP8Adam(Optimizer):
                 #     print(f"[FP8Adam] updated p_fp32: {fp32_p[:2, :2]} \n")
 
                 # # NOTE: store back fp8
-                # exp_avg.fp8_meta = updated_exp_avg_fp8.fp8_meta
-                # # exp_avg.copy_(updated_exp_avg_fp8)
-                # exp_avg.data = updated_exp_avg_fp8
                 exp_avg.set_data(fp32_exp_avg)
-
-                # fp8_exp_avg_sq = FP16Tensor(fp32_exp_avg_sq, dtype=DTypes.KFLOAT16)
-                # # exp_avg_sq.copy_(fp8_exp_avg_sq)
-                # exp_avg_sq.data = fp8_exp_avg_sq
-                # exp_avg_sq.fp8_meta = fp8_exp_avg_sq.fp8_meta
                 exp_avg_sq.set_data(fp32_exp_avg_sq)
 
                 # NOTE: i tried to isinstance(p, FP8Parameter) but it's not working
                 # it returns False even though p is FP8Parameter
-
                 self.mappping_fp8_to_master_weight[p] = FP16Tensor(fp32_p, dtype=DTypes.KFLOAT16)
 
                 if p.ndim != 1:
@@ -459,11 +421,13 @@ class FP8Adam(Optimizer):
 
                 # print(f"[FP8Adam] updated_p_fp8: updated_p_fp8.data={updated_p_fp8.data[:2, :2]}, p_fp32_meta={p_fp32_meta} \n")
 
-    # TODO(xrsrke): refactor using strategy pattern
-    def _update_scaling_factors(self):
-        for p in self.param_groups:
-            for param in p["params"]:
-                if param.grad is None:
+    def zero_grad(self):
+        for group in self.param_groups:
+            for p in group["params"]:
+                if p.grad is None:
                     continue
 
-                assert 1 == 1
+                if isinstance(p.grad, FP8Tensor):
+                    p.grad.zero_()
+                else:
+                    p.grad.zero_()

@@ -9,7 +9,6 @@ from nanotron.fp8.parameter import FP8Parameter
 from nanotron.fp8.tensor import FP8Tensor, convert_tensor_from_fp8
 from nanotron.fp8.utils import convert_linear_to_fp8
 from torch import nn
-from torch.optim import Adam
 
 
 @pytest.mark.parametrize("accum_qtype", [DTypes.KFLOAT32, DTypes.KFLOAT16])
@@ -79,26 +78,6 @@ def test_fp8_linear_backward_pass(input_requires_grad, accum_qtype):
     weight_grad = convert_tensor_from_fp8(fp8_linear.weight.grad, fp8_linear.weight.grad.fp8_meta, torch.float32)
     torch.testing.assert_allclose(weight_grad, ref_linear.weight.grad, rtol=0.06, atol=0.1)
     torch.testing.assert_allclose(fp8_linear.bias.grad, ref_linear.bias.grad)
-
-
-def test_fp8_model_bwd():
-    HIDEEN_SIZE = 128
-    N_LAYERS = 5
-    N_EPOCHS = 3
-
-    input = torch.randn(HIDEEN_SIZE, HIDEEN_SIZE, device="cuda", requires_grad=True)
-
-    model = nn.Sequential(
-        *[nn.Sequential(FP8Linear(HIDEEN_SIZE, HIDEEN_SIZE, device="cuda"), nn.ReLU()) for _ in range(N_LAYERS)]
-    )
-    optim = Adam(model.parameters(), lr=1e-3)
-
-    for _ in range(N_EPOCHS):
-        optim.zero_grad()
-        model(input).sum().backward()
-        optim.step()
-
-    assert all(p.grad is not None for p in model.parameters())
 
 
 # NOTE: it seems that dynamic quantization should be in test_tensor

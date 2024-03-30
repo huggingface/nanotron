@@ -64,13 +64,16 @@ def test_fp8adam_step(learning_rate, betas, eps, weight_decay):
     input = torch.randn(16, 16, device="cuda")
 
     for _ in range(5):
+        # NOTE: we intentionally put .zero_grad() first because using
+        # torch.Optimizer's zero_grad, it causes some bugs
+        # that makes gradients not flowing
+        optim.zero_grad()
         linear(input).sum().backward()
         optim.step()
-        optim.zero_grad()
 
+        ref_optim.zero_grad()
         ref_linear(input).sum().backward()
         ref_optim.step()
-        ref_optim.zero_grad()
 
     torch.testing.assert_allclose(ref_linear.weight, linear.weight, rtol=0.1, atol=3e-4)
     torch.testing.assert_allclose(ref_linear.bias, linear.bias, rtol=0, atol=3e-4)

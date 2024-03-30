@@ -1,4 +1,7 @@
 from dataclasses import dataclass
+from typing import Union
+
+import torch
 
 from nanotron.fp8.dtypes import DTypes
 
@@ -21,6 +24,8 @@ class FP8SplitAccumulator:
 
 @dataclass
 class FP8LinearRecipe:
+    accum_dtype: DTypes
+
     input: FP8TensorRecipe
     weight: FP8TensorRecipe
     bias: FP8TensorRecipe
@@ -41,6 +46,8 @@ class FP8OptimRecipe:
     # not FP8Tensor that need to dynamically change
     # during training
     master_weight_dtype: DTypes
+    accum_dtype: Union[torch.dtype, DTypes]
+
     exp_avg_dtype: DTypes
     exp_avg_sq_dtype: DTypes
 
