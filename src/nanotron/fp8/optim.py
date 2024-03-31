@@ -211,7 +211,8 @@ class FP8Adam(Optimizer):
                 # NOTE: if a tensor.ndim == 1, it's a bias
                 # raw_data = p.data if p.ndim == 1 else p.orig_data
                 # TODO(xrsrke): remove orig_data after FP8 working
-                raw_data = p.orig_data
+                # raw_data = p.orig_data
+                raw_data = p.orig_data if hasattr(p, "orig_data") else p.data
                 assert raw_data.dtype == torch.float32
 
                 # TODO(xrsrke): retrieve the dtype for master_weights from the recipe
@@ -427,7 +428,4 @@ class FP8Adam(Optimizer):
                 if p.grad is None:
                     continue
 
-                if isinstance(p.grad, FP8Tensor):
-                    p.grad.zero_()
-                else:
-                    p.grad.zero_()
+                p.grad.zero_()
