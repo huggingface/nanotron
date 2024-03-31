@@ -1,6 +1,6 @@
 import pytest
 import torch
-from helpers.utils import available_gpus, init_distributed
+from helpers.utils import available_gpus, init_distributed, rerun_if_address_is_in_use
 from nanotron import distributed as dist
 from nanotron.parallel import ParallelContext
 from nanotron.random import (
@@ -13,6 +13,7 @@ from nanotron.random import (
 
 @pytest.mark.skipif(available_gpus() < 2, reason="Testing test_random_state_sync requires at least 2 gpus")
 @pytest.mark.parametrize("tp,dp,pp", [(2, 1, 1), (1, 2, 1), (1, 1, 2)])
+@rerun_if_address_is_in_use()
 def test_random_state_sync(tp: int, dp: int, pp: int):
     # TODO @nouamane: Make a test with 4 gpus (2 in one pg, 2 in other pg)
     init_distributed(tp=tp, dp=dp, pp=pp)(_test_random_state_sync)()
@@ -42,6 +43,8 @@ def _test_random_state_sync(parallel_context: ParallelContext):
     dist.broadcast_object_list(random_states, src=reference_rank, group=pg)
     if dist.get_rank(pg) != reference_rank:
         assert current_random_state != random_states[0]
+
+    parallel_context.destroy()
 
 
 def test_random_state_fork_random_operation_in_global_context():

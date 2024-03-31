@@ -1,6 +1,6 @@
 from abc import ABCMeta, abstractmethod
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Callable, List, Optional
+from typing import TYPE_CHECKING, Callable, Iterator, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -15,6 +15,7 @@ from nanotron.parallel.pipeline_parallel.block import PipelineBlock
 
 if TYPE_CHECKING:
     from nanotron.config import NanotronConfigs
+    from nanotron.parallel.parameters import NanotronParameter
 
 logger = logging.get_logger(__name__)
 
@@ -34,9 +35,35 @@ class NanotronModel(nn.Module, metaclass=ABCMeta):
         self.input_pp_rank: int
         self.output_pp_rank: int
 
+        # Useful mapping to get param names
+        self.module_id_to_prefix = {id(module): f"{module_name}." for module_name, module in self.named_modules()}
+        self.module_id_to_prefix[id(self)] = ""
+
+    def get_named_params_with_correct_tied(self) -> Iterator[Tuple[str, "NanotronParameter"]]:
+        """Return named parameters with correct tied params names.
+        For example in the case of tied kv heads in MQA, we need to make sure tied params names are correct."""
+
+        def params_gen():
+            for name, param in self.named_parameters():
+                if param.is_tied:
+                    yield (
+                        param.get_tied_info().get_full_name_from_module_id_to_prefix(
+                            module_id_to_prefix=self.module_id_to_prefix
+                        ),
+                        param,
+                    )
+                else:
+                    yield name, param
+
+        yield from params_gen()
+
     @abstractmethod
-    def init_model_randomly(self, init_method, scaled_init_method):
+    def init_model_randomly(self, config):
         ...
+
+    def tie_custom_params(self) -> None:
+        """Tie custom parameters. For example for MQA marks kv heads as tied."""
+        pass
 
     @staticmethod
     def get_embeddings_lm_head_tied_names() -> list[str]:

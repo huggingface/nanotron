@@ -6,15 +6,28 @@ import time
 from dataclasses import asdict
 from pathlib import Path
 from pprint import pformat
-from typing import Callable, Dict, Iterable, Iterator, List, Optional, Tuple, Type, Union
+from typing import (
+    Callable,
+    Dict,
+    Iterable,
+    Iterator,
+    List,
+    Optional,
+    Tuple,
+    Type,
+    Union,
+    cast,
+)
 
 import torch
 from torch.nn.parallel import DistributedDataParallel
+from torch.utils.data import DataLoader
 
 from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.config import (
     Config,
+    DatasetStageArgs,
     ExistingCheckpointInit,
     ParallelismArgs,
     RandomInit,
@@ -29,7 +42,14 @@ from nanotron.helpers import (
     log_throughput,
     lr_scheduler_builder,
 )
-from nanotron.logging import LoggerWriter, LogItem, human_format, log_rank, set_logger_verbosity_format
+from nanotron.logging import (
+    LoggerWriter,
+    LogItem,
+    human_format,
+    log_memory,
+    log_rank,
+    set_ranks_logging_level,
+)
 from nanotron.models import NanotronModel, build_model
 from nanotron.models.base import check_model_has_grad
 from nanotron.models.llama import LlamaForTraining, RotaryEmbedding
@@ -40,22 +60,18 @@ from nanotron.parallel.data_parallel.utils import sync_gradients_across_dp
 from nanotron.parallel.parameters import NanotronParameter, sanity_check
 from nanotron.parallel.pipeline_parallel.engine import (
     PipelineEngine,
+    TensorPointer,
 )
-from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
 from nanotron.parallel.pipeline_parallel.utils import get_pp_rank_of
-from nanotron.parallel.tensor_parallel.nn import (
-    TensorParallelLinearMode,
-    TensorParallelRowLinear,
-)
+from nanotron.parallel.tensor_parallel.enum import TensorParallelLinearMode
+from nanotron.parallel.tensor_parallel.nn import TensorParallelRowLinear
 from nanotron.parallel.tied_parameters import (
     create_pg_for_tied_weights,
     get_tied_id_to_param,
     sync_tied_weights_gradients,
     tie_parameters,
 )
-from nanotron.random import (
-    set_random_seed,
-)
+from nanotron.random import set_random_seed
 from nanotron.sanity_checks import (
     after_optim_step_sanity_checks,
     after_tbi_sanity_checks,
@@ -65,13 +81,12 @@ from nanotron.sanity_checks import (
 from nanotron.serialize import (
     load_lr_scheduler,
     load_meta,
-    load_optimizer,
     load_weights,
     parse_ckpt_path,
     save,
     save_random_states,
 )
-from nanotron.utils import init_method_normal, scaled_init_method_normal
+from nanotron.serialize.optimizer import load_optimizer
 
 logger = logging.get_logger(__name__)
 
@@ -84,12 +99,18 @@ CONFIG_TO_MODEL_CLASS = {
     "Starcoder2Config": Starcoder2ForTraining,
 }
 
+try:
+    import wandb
+except ImportError:
+    wandb = None
+
 
 class DistributedTrainer:
     def __init__(
         self,
         config_or_config_file: Union[Config, str],
         config_class: Type[Config] = Config,
+        model_config_class: Optional[Type] = None,
         model_class: Type[NanotronModel] = None,
     ):
         """
@@ -98,11 +119,14 @@ class DistributedTrainer:
         Args:
             config_or_config_file: Either a `Config` object or a path to a YAML file containing the config.
             config_class: The `Config` class to use.
+            model_config_class: The `ModelConfig` class to use (for example `LlamaConfig`). Defaults to `None` which will use the model config class defined in the config.
             model_class: The `NanotronModel` class to use (for example `LlamaForTraining`). Defaults to `None` which will use the model class defined in the config.
         """
 
         super().__init__()
-        self.config = get_config_from_file(config_or_config_file, config_class=config_class)
+        self.config = get_config_from_file(
+            config_or_config_file, config_class=config_class, model_config_class=model_config_class
+        )
         self.model_config = self.config.model.model_config
         if model_class is not None:
             CONFIG_TO_MODEL_CLASS[self.model_config.__class__.__name__] = model_class
@@ -116,19 +140,13 @@ class DistributedTrainer:
             tensor_parallel_size=self.config.parallelism.tp,
             pipeline_parallel_size=self.config.parallelism.pp,
             data_parallel_size=self.config.parallelism.dp,
+            expert_parallel_size=self.config.parallelism.expert_parallel_size,
         )
 
         self.pre_init()
 
         # Set log levels
-        if dist.get_rank(self.parallel_context.world_pg) == 0:
-            if self.config.logging.log_level is not None:
-                set_logger_verbosity_format(self.config.logging.log_level, parallel_context=self.parallel_context)
-        else:
-            if self.config.logging.log_level_replica is not None:
-                set_logger_verbosity_format(
-                    self.config.logging.log_level_replica, parallel_context=self.parallel_context
-                )
+        set_ranks_logging_level(parallel_context=self.parallel_context, logging_config=self.config.logging)
 
         # Log benchmark info
         if os.environ.get("NANOTRON_BENCHMARK", "0") == "1":
@@ -146,7 +164,7 @@ class DistributedTrainer:
             parallel_config=self.config.parallelism, tp_pg=self.parallel_context.tp_pg
         )
         self.model = self.init_model()  # Defines self.model
-        self.normalized_model: NanotronModel = (
+        self.unwrapped_model: NanotronModel = (
             self.model.module if isinstance(self.model, DistributedDataParallel) else self.model
         )
 
@@ -176,8 +194,6 @@ class DistributedTrainer:
             )
 
         # Define iteration start state
-        self.start_iteration_step: int
-        self.consumed_train_samples: int
         if self.init_checkpoint_path is not None:
             checkpoint_metadata = load_meta(
                 parallel_context=self.parallel_context, root_folder=self.init_checkpoint_path
@@ -193,13 +209,16 @@ class DistributedTrainer:
             self.consumed_train_samples = 0
 
         # Setup tensorboard write and log writers on output rank
-        self.logger_ranks = self.parallel_context.world_rank_matrix[
-            self.normalized_model.output_pp_rank, 0, 0
-        ].flatten()
+        self.logger_ranks = self.parallel_context.get_global_rank(
+            ep_rank=0,
+            pp_rank=self.unwrapped_model.output_pp_rank,
+            dp_rank=0,
+            tp_rank=0
+        ).flatten()
         self.loggerwriter = self.setup_log_writers()
 
         # Log where each module is instantiated
-        self.normalized_model.log_modules(level=logging.DEBUG, group=self.parallel_context.world_pg, rank=0)
+        self.unwrapped_model.log_modules(level=logging.DEBUG, group=self.parallel_context.world_pg, rank=0)
 
         self.micro_batch_size = self.config.tokens.micro_batch_size
         self.n_micro_batches_per_batch = self.config.tokens.batch_accumulation_per_replica
@@ -209,6 +228,8 @@ class DistributedTrainer:
         self.sequence_length = self.config.tokens.sequence_length
         self.iteration_step = self.start_iteration_step
         self.limit_val_batches = self.config.tokens.limit_val_batches
+        # NOTE: the dataloader currently in use for the current training stage
+        self.current_dataloader: Optional[DataLoader] = None
 
         self.post_init()
 
@@ -219,37 +240,7 @@ class DistributedTrainer:
         pass
 
     def pre_training(self, *args, **kwargs):
-        pass
-
-    def post_train_step(self):
-        pass
-
-    def post_training(self):
-        pass
-
-    def train(
-        self,
-        dataloader_or_dls: Union[Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]], Tuple[Iterator, ...]],
-        **kwargs,
-    ) -> None:
-        self.pre_training(**kwargs)
-
-        if self.config.checkpoints.save_initial_state and self.init_checkpoint_path is None:
-            self.save_checkpoint()
-
-        if isinstance(dataloader_or_dls, tuple):
-            dataloader_or_dls[1] if len(dataloader_or_dls) > 1 else None
-            dataloader_or_dls[2] if len(dataloader_or_dls) > 2 else None
-            dataloader = dataloader_or_dls[0]
-        else:
-            dataloader = dataloader_or_dls
-        dataloader = sanity_check_dataloader(
-            dataloader=dataloader, parallel_context=self.parallel_context, config=self.config
-        )
-
-        self.pipeline_engine: PipelineEngine = self.config.parallelism.pp_engine
-
-        self.pipeline_engine.nb_microbatches = self.n_micro_batches_per_batch
+        self._print_training_plan()
 
         log_rank(
             f"[Start training] datetime: {datetime.datetime.now()} | mbs: {self.micro_batch_size} | grad_accum: {self.n_micro_batches_per_batch} | global_batch_size: {self.global_batch_size} | sequence_length: {self.sequence_length} | train_steps: {self.config.tokens.train_steps} | start_iteration_step: {self.start_iteration_step} | consumed_train_samples: {self.consumed_train_samples}",  # noqa
@@ -257,14 +248,103 @@ class DistributedTrainer:
             level=logging.INFO,
             rank=0,
         )
+
+        current_time = datetime.datetime.now().strftime("%d/%m/%Y_%H:%M:%S")
+        if dist.get_rank(self.parallel_context.world_pg) == self.logger_ranks[0] and wandb is not None:
+            wandb.init(
+                project=self.config.general.project,
+                name=f"{current_time}_{self.config.general.project}_{self.config.general.run}",
+                config={"nanotron_config": self.config.as_dict()},
+            )
+
+    def post_train_step(self):
+        pass
+
+    def post_training(self):
+        pass
+
+    def _print_training_plan(self):
+        stages_info = "".join(
+            f"[Stage {stage.name}] start from step {stage.start_training_step} \n" for stage in self.config.data_stages
+        )
+        full_log_message = f"[Training Plan] There are {len(self.config.data_stages)} training stages \n{stages_info}"
+        log_rank(full_log_message, logger=logger, level=logging.INFO, rank=0)
+
+    def _update_dataloader_based_on_training_stages(self, dataloaders: List[DataLoader]):
+        assert len(dataloaders) > 0, "No dataloaders provided"
+        assert len(dataloaders) == len(
+            self.config.data_stages
+        ), "Number of dataloaders should match the number of dataset stages"
+
+        def clear_dataloader_from_memory(dataloader: DataLoader, stage_name: str):
+            import gc
+
+            log_rank(
+                f"[Training Stage: {stage_name}] Clearing the previous training stage's dataloader and datasets from memory",
+                logger=logger,
+                level=logging.INFO,
+            )
+
+            # NOTE: Clear dataloader from memory
+            del dataloader.dataset
+            del dataloader.sampler
+            del dataloader.batch_sampler
+
+            gc.collect()
+
+        dataloader = None
+        for stage_id, stage in enumerate(self.config.data_stages):
+            stage = cast(DatasetStageArgs, stage)
+
+            if stage.start_training_step == self.iteration_step:
+                if self.current_dataloader is not None:
+                    prev_stage_name = self.config.data_stages[stage_id - 1].name
+                    prev_dataloader = dataloaders[prev_stage_name]
+                    if isinstance(prev_dataloader, DataLoader):
+                        # NOTE: we don't need to clear dummy data generator from memory
+                        clear_dataloader_from_memory(prev_dataloader, stage_name=stage.name)
+
+                log_rank(
+                    f"[Training Stage: {stage.name}] Switching to a new dataset {stage.data.dataset.hf_dataset_or_datasets}",
+                    logger=logger,
+                    level=logging.INFO,
+                    rank=0,
+                )
+
+                dataloader = dataloaders[stage.name]
+                # NOTE: if a dataloader is lazy initialized, we need to call it to initialize it
+                dataloader = dataloader() if callable(dataloader) else dataloader
+                break
+
+        if dataloader is not None:
+            self.current_dataloader = sanity_check_dataloader(
+                dataloader=dataloader, parallel_context=self.parallel_context, config=self.config
+            )
+
+    def train(
+        self,
+        dataloader_or_dls: Dict[
+            str, Union[Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]], Tuple[Iterator, ...]]
+        ],
+        **kwargs,
+    ) -> None:
+        self.pre_training(**kwargs)
+
+        if self.config.checkpoints.save_initial_state and self.init_checkpoint_path is None:
+            self.save_checkpoint()
+
+        self.pipeline_engine: PipelineEngine = self.config.parallelism.pp_engine
+
+        self.pipeline_engine.nb_microbatches = self.n_micro_batches_per_batch
+
         # TODO @nouamanetazi: refactor this
         # Useful mapping
-        self.normalized_model = self.model.module if isinstance(self.model, DistributedDataParallel) else self.model
-        self.normalized_model.module_id_to_prefix = {
-            id(module): f"{module_name}." for module_name, module in self.normalized_model.named_modules()
+        self.unwrapped_model = self.model.module if isinstance(self.model, DistributedDataParallel) else self.model
+        self.unwrapped_model.module_id_to_prefix = {
+            id(module): f"{module_name}." for module_name, module in self.unwrapped_model.named_modules()
         }
         # Fix the root_model
-        self.normalized_model.module_id_to_prefix[id(self.normalized_model)] = ""
+        self.unwrapped_model.module_id_to_prefix[id(self.unwrapped_model)] = ""
 
         prof = get_profiler(config=self.config)
         torch.cuda.empty_cache()
@@ -272,10 +352,12 @@ class DistributedTrainer:
             for self.iteration_step in range(self.start_iteration_step + 1, self.config.tokens.train_steps + 1):
                 if isinstance(prof, torch.profiler.profile):
                     prof.step()
+
                 self.iteration_start_time = time.time()
+                self._update_dataloader_based_on_training_stages(dataloader_or_dls)
 
                 # Training step
-                outputs, loss_avg = self.training_step(dataloader=dataloader)
+                outputs, loss_avg = self.training_step(dataloader=self.current_dataloader)
 
                 # Training Logs
                 self.consumed_train_samples += self.global_batch_size
@@ -294,19 +376,10 @@ class DistributedTrainer:
     def training_step(
         self, dataloader: Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]]
     ) -> Tuple[Iterable[Dict], Optional[torch.Tensor]]:
-        before_tbi_sanity_checks(self.config, self.parallel_context, self.normalized_model, self.grad_accumulator)
+        before_tbi_sanity_checks(self.config, self.parallel_context, self.unwrapped_model, self.grad_accumulator)
 
         if self.iteration_step < 5:
-            log_rank(
-                f"[Before train batch iter] Memory usage: {torch.cuda.memory_allocated() / 1024**2:.2f}MiB."
-                f" Peak allocated {torch.cuda.max_memory_allocated() / 1024**2:.2f}MiB."
-                f" Peak reserved: {torch.cuda.max_memory_reserved() / 1024**2:.2f}MiB",
-                logger=logger,
-                level=logging.INFO,
-                group=self.parallel_context.world_pg,
-                rank=0,
-            )
-            torch.cuda.reset_peak_memory_stats()
+            log_memory(logger=logger)
 
         outputs = self.pipeline_engine.train_batch_iter(
             model=self.model,
@@ -317,18 +390,9 @@ class DistributedTrainer:
         )
 
         if self.iteration_step < 5:
-            log_rank(
-                f"[After train batch iter] Memory usage: {torch.cuda.memory_allocated() / 1024**2:.2f}MiB."
-                f" Peak allocated {torch.cuda.max_memory_allocated() / 1024**2:.2f}MiB."
-                f" Peak reserved: {torch.cuda.max_memory_reserved() / 1024**2:.2f}MiB",
-                logger=logger,
-                level=logging.INFO,
-                group=self.parallel_context.world_pg,
-                rank=0,
-            )
-            torch.cuda.reset_peak_memory_stats()
+            log_memory(logger=logger)
 
-        after_tbi_sanity_checks(self.config, self.parallel_context, self.normalized_model, self.grad_accumulator)
+        after_tbi_sanity_checks(self.config, self.parallel_context, self.unwrapped_model, self.grad_accumulator)
 
         if isinstance(self.model, DistributedDataParallel) and self.grad_accumulator is not None:
             # Wait for fp32 grads allreduce to finish to make sure grads are synced across DP
@@ -351,44 +415,28 @@ class DistributedTrainer:
 
         # TODO @nouamane: Put this in hooks so we can overlap communication with gradient computation on the last backward pass.
         sync_tied_weights_gradients(
-            module=self.normalized_model,
+            module=self.unwrapped_model,
             parallel_context=self.parallel_context,
             grad_accumulator=self.grad_accumulator,
         )
 
         # Clip gradients
         if self.config.optimizer.clip_grad is not None:
-            # Normalize DDP
+            # Unwrap DDP
             named_parameters = [
-                (
-                    param.get_tied_info().get_full_name_from_module_id_to_prefix(
-                        module_id_to_prefix=self.normalized_model.module_id_to_prefix
-                    )
-                    if param.is_tied
-                    else name,
-                    param,
-                )
-                for name, param in self.normalized_model.named_parameters()
+                (name, param)
+                for name, param in self.unwrapped_model.get_named_params_with_correct_tied()
                 if param.requires_grad
             ]
-            # TODO @nouamane: we need to split `world_rank_matrix` along PP axis, to separate ref from active model
             self.grad_norm_unclipped = clip_grad_norm(
-                mp_pg=self.parallel_context.world_ranks_to_pg[
-                    tuple(
-                        sorted(
-                            self.parallel_context.world_rank_matrix[
-                                :, dist.get_rank(self.parallel_context.dp_pg), :
-                            ].reshape(-1)
-                        )
-                    )
-                ],
+                mp_pg=self.parallel_context.mp_pg,
                 named_parameters=named_parameters,
                 grad_accumulator=self.grad_accumulator,
                 max_norm=self.config.optimizer.clip_grad,
             )
 
         before_optim_step_sanity_checks(
-            self.config, self.parallel_context, self.normalized_model, self.grad_accumulator
+            self.config, self.parallel_context, self.unwrapped_model, self.grad_accumulator
         )
 
         # Compute DP average loss and overlap with optimizer step
@@ -410,9 +458,7 @@ class DistributedTrainer:
         # Update the learning rate
         self.lr_scheduler.step()
 
-        after_optim_step_sanity_checks(
-            self.config, self.parallel_context, self.normalized_model, self.grad_accumulator
-        )
+        after_optim_step_sanity_checks(self.config, self.parallel_context, self.unwrapped_model, self.grad_accumulator)
 
         if handle is not None:
             handle.wait()
@@ -441,7 +487,7 @@ class DistributedTrainer:
         tokens_per_sec = (
             self.global_batch_size * self.sequence_length / (elapsed_time_per_iteration_ms / 1000)
         )  # tokens_per_sec is calculated using sequence_length
-        model_tflops, hardware_tflops = self.normalized_model.get_flops_per_sec(
+        model_tflops, hardware_tflops = self.unwrapped_model.get_flops_per_sec(
             iteration_time_in_sec=elapsed_time_per_iteration_ms / 1000,
             sequence_length=self.sequence_length,
             global_batch_size=self.global_batch_size,
@@ -487,6 +533,15 @@ class DistributedTrainer:
                         LogItem("hd_used_memory_tb", used, "human_format"),  #  / (2**40), ".2f"),
                         LogItem("hd_free_memory_tb", free, "human_format"),  #  / (2**40), ".2f"),
                     ]
+                )
+
+            # NOTE: only one rank writes to wandb
+            if dist.get_rank(self.parallel_context.world_pg) == self.logger_ranks[0] and wandb is not None:
+                wandb.log(
+                    {
+                        **{log_item.tag: log_item.scalar_value for log_item in log_entries},
+                        "iteration_step": self.iteration_step,
+                    }
                 )
 
             self.loggerwriter.add_scalars_from_list(log_entries, self.iteration_step)
@@ -538,6 +593,11 @@ class DistributedTrainer:
         log_rank("Config:\n" + pformat(self.config), logger=logger, level=logging.INFO, rank=0)
         log_rank("Model Config:\n" + pformat(self.model_config), logger=logger, level=logging.INFO, rank=0)
 
+        model = self._init_model_instance()
+        model = self._load_model_checkpoint(model)
+        return model
+
+    def _init_model_instance(self) -> NanotronModel:
         model_config_cls = self.model_config.__class__.__name__
         assert (
             model_config_cls in CONFIG_TO_MODEL_CLASS
@@ -551,7 +611,10 @@ class DistributedTrainer:
                 random_states=self.random_states,
             ),
         )
-        normalized_model = model.module if isinstance(model, DistributedDataParallel) else model
+        return model
+
+    def _load_model_checkpoint(self, model: NanotronModel) -> NanotronModel:
+        unwrapped_model = model.module if isinstance(model, DistributedDataParallel) else model
 
         # Load or initialize model weights
         self.init_checkpoint_path = parse_ckpt_path(config=self.config)
@@ -560,7 +623,7 @@ class DistributedTrainer:
             # Reload from a training checkpoint
             log_rank(f"Loading weights from {self.init_checkpoint_path}", logger=logger, level=logging.INFO, rank=0)
             self.param_shard_metadata = load_weights(
-                model=normalized_model, parallel_context=self.parallel_context, root_folder=self.init_checkpoint_path
+                model=unwrapped_model, parallel_context=self.parallel_context, root_folder=self.init_checkpoint_path
             )
             reloaded_from_checkpoint = True
         if not reloaded_from_checkpoint:
@@ -568,18 +631,14 @@ class DistributedTrainer:
             if isinstance(self.config.model.init_method, ExistingCheckpointInit):
                 # Initialize model from an pretrained model checkpoint
                 self.param_shard_metadata = load_weights(
-                    model=normalized_model,
+                    model=unwrapped_model,
                     parallel_context=self.parallel_context,
                     root_folder=self.config.model.init_method.path,
                 )
             elif isinstance(self.config.model.init_method, RandomInit):
-                # Initialize model randomly
-                normalized_model.init_model_randomly(
-                    init_method=init_method_normal(self.config.model.init_method.std),
-                    scaled_init_method=scaled_init_method_normal(
-                        self.config.model.init_method.std, self.model_config.num_hidden_layers
-                    ),
-                )
+
+                unwrapped_model.init_model_randomly(config=self.config)
+
                 # Synchronize parameters so that the model is consistent
                 # sync all params across dp
                 for name, param in sorted(model.named_parameters(), key=lambda x: x[0]):
@@ -589,7 +648,7 @@ class DistributedTrainer:
                 for (_, group_ranks), param in sorted(
                     get_tied_id_to_param(
                         parameters=model.parameters(),
-                        root_module=normalized_model,
+                        root_module=unwrapped_model,
                     ).items(),
                     key=lambda x: x[0],
                 ):
@@ -609,7 +668,9 @@ class DistributedTrainer:
         parallel_context = self.parallel_context
 
         parallel_config = config.parallelism
-        make_ddp = not (config.optimizer.accumulate_grad_in_fp32 and config.optimizer.zero_stage > 0)
+        make_ddp = parallel_context.data_parallel_size > 1 and not (
+            config.optimizer.accumulate_grad_in_fp32 and config.optimizer.zero_stage > 0
+        )
 
         # Build model and set pp ranks
         model = build_model(
@@ -626,7 +687,7 @@ class DistributedTrainer:
             module.init_rotary_embeddings()
 
         # Mark some parameters as tied
-        mark_tied_parameters(model=model, parallel_context=parallel_context, parallel_config=parallel_config)
+        self._mark_tied_parameters(model=model, parallel_context=parallel_context, parallel_config=parallel_config)
 
         # count number of parameters
         num_params = sum(p.numel() for p in model.parameters())
@@ -728,7 +789,7 @@ class DistributedTrainer:
         self.config.general.consumed_train_samples = self.consumed_train_samples
 
         save(
-            model=self.normalized_model,
+            model=self.unwrapped_model,
             optimizer=self.optimizer,
             lr_scheduler=self.lr_scheduler,
             should_save_model=bool(
@@ -762,6 +823,14 @@ class DistributedTrainer:
 
         return checkpoint_path
 
+    def _mark_tied_parameters(
+        self,
+        model: NanotronModel,
+        parallel_context: ParallelContext,
+        parallel_config: Optional[ParallelismArgs] = None,
+    ):
+        mark_tied_parameters(model=model, parallel_context=parallel_context, parallel_config=parallel_config)
+
 
 def mark_tied_parameters(
     model: NanotronModel, parallel_context: ParallelContext, parallel_config: Optional[ParallelismArgs] = None
@@ -773,11 +842,12 @@ def mark_tied_parameters(
             (
                 target,
                 (
-                    parallel_context.world_rank_matrix[
-                        get_pp_rank_of(target, module=model),
-                        dist.get_rank(parallel_context.dp_pg),
-                        dist.get_rank(parallel_context.tp_pg),
-                    ],
+                    parallel_context.get_global_rank(
+                        ep_rank=dist.get_rank(parallel_context.expert_pg),
+                        pp_rank=get_pp_rank_of(target, module=model),
+                        dp_rank=dist.get_rank(parallel_context.dp_pg),
+                        tp_rank=dist.get_rank(parallel_context.tp_pg),
+                    ),
                 ),
             )
             for target in embeddings_lm_head_tied_names
@@ -786,19 +856,33 @@ def mark_tied_parameters(
             root_module=model, ties=shared_embeddings, parallel_context=parallel_context, reduce_op=dist.ReduceOp.SUM
         )
 
-    # Sync all parameters that have the same name and that are not sharded
+    # Tie custom params
+    model.tie_custom_params()
+
+    # Sync all parameters that have the same name and that are not sharded across TP and EXP
     assert not isinstance(model, DistributedDataParallel), "model shouldn't be DDP at this point"
+    mark_unsharded_params_as_tied_across_tp(model, parallel_context, parallel_config)
+    mark_unsharded_params_as_tied_across_expert(model, parallel_context, parallel_config)
+
+    create_pg_for_tied_weights(root_module=model, parallel_context=parallel_context)
+
+
+def mark_unsharded_params_as_tied_across_tp(
+    model: NanotronModel, parallel_context: ParallelContext, parallel_config: "ParallelismArgs"
+):
     for module_name, module in model.named_modules():
         for param_name, param in module.named_parameters(recurse=False):
             name = f"{module_name}.{param_name}"
 
-            # if isinstance(model, Starcoder2ForTraining) and ".qkv.kv." in name
-            #     assert param.is_tied, f"Expected {name} to already be synced"
-            #     # kv is deliberately skipped as it's tied in model init (_mark_kv_parameters_in_module_as_tied)
-            #     continue
+            if isinstance(param, NanotronParameter):
+                # We skip tying if param already tied or sharded along tp
+                if param.is_tied:
+                    continue
 
-            if isinstance(param, NanotronParameter) and param.is_sharded:
-                continue
+                if param.is_sharded:
+                    sharded_info = param.get_sharded_info()
+                    if sharded_info.is_tp_sharded(parallel_context=parallel_context):
+                        continue
 
             if isinstance(module, TensorParallelRowLinear) and "bias" == param_name:
                 # bias for TensorParallelRowLinear only exists on TP=0 so we don't need to tie it
@@ -807,14 +891,8 @@ def mark_tied_parameters(
             shared_weights = [
                 (
                     name,
-                    # This adds all the tp_ranks in one go
-                    tuple(
-                        sorted(
-                            parallel_context.world_rank_matrix[
-                                dist.get_rank(parallel_context.pp_pg), dist.get_rank(parallel_context.dp_pg), :
-                            ]
-                        )
-                    ),
+                    # sync across TP group
+                    tuple(sorted(dist.get_process_group_ranks(parallel_context.tp_pg))),
                 )
             ]
 
@@ -829,4 +907,36 @@ def mark_tied_parameters(
                 root_module=model, ties=shared_weights, parallel_context=parallel_context, reduce_op=reduce_op
             )
 
-    create_pg_for_tied_weights(root_module=model, parallel_context=parallel_context)
+
+def mark_unsharded_params_as_tied_across_expert(
+    model: NanotronModel, parallel_context: ParallelContext, parallel_config: "ParallelismArgs"
+):
+    for module_name, module in model.named_modules():
+        for param_name, param in module.named_parameters(recurse=False):
+            name = f"{module_name}.{param_name}"
+
+            if isinstance(param, NanotronParameter):
+                # We skip tying if param already tied or sharded along expert
+                if param.is_tied:
+                    continue
+
+                if param.is_sharded:
+                    sharded_info = param.get_sharded_info()
+                    if sharded_info.is_expert_sharded(parallel_context):
+                        continue
+
+            shared_weights = [
+                (
+                    name,
+                    # sync across expert group
+                    tuple(sorted(dist.get_process_group_ranks(parallel_context.expert_pg))),
+                )
+            ]
+
+            # Besides MoE block which sees shards tokens, the rest of the model sees the full tokens
+            # so we don't need to reduce the gradients across expert group
+            reduce_op = None
+
+            tie_parameters(
+                root_module=model, ties=shared_weights, parallel_context=parallel_context, reduce_op=reduce_op
+            )

@@ -35,7 +35,7 @@ def tie_parameters(
 ):
     """
     Tie parameters.
-    Within a single device, tied parameters are replaced with a single Paramer
+    Within a single device, tied parameters are replaced with a single Parameter
     Across devices, we add metadata to Parameters that require extra synchronization.
 
     :param root_module: nn.Module
@@ -50,7 +50,7 @@ def tie_parameters(
     dp_ranks = tuple(
         sorted(
             {
-                parallel_context.get_3d_ranks(world_rank=global_rank)[1]
+                parallel_context.get_local_ranks(world_rank=global_rank)[2]
                 for _, global_ranks in ties
                 for global_rank in global_ranks
             }
@@ -109,7 +109,7 @@ def get_tied_id_to_param(
     return {
         (
             param.get_tied_info().get_full_name_from_module_id_to_prefix(module_id_to_prefix=module_id_to_prefix),
-            param.get_tied_info().global_ranks,
+            param.get_tied_info().global_ranks,  # TODO @nouamane: merge groups which tie the same parameter
         ): param
         for param in parameters
         if param.is_tied
@@ -117,13 +117,23 @@ def get_tied_id_to_param(
 
 
 def sync_tied_weights_gradients(
-    module: nn.Module,
+    module: nn.Module,  # TODO: NanotronModel
     parallel_context: ParallelContext,
     grad_accumulator: Optional[GradientAccumulator],
 ):
     tied_id_to_param = get_tied_id_to_param(
         parameters=[param for param in module.parameters() if param.requires_grad], root_module=module
     )
+
+    # Only first and last rank should print the warning
+    for rank in [0, parallel_context.world_pg.size() - 1]:
+        log_rank(
+            f"[Debug Tied Weights] Syncing the following tied weights: {tied_id_to_param.keys()}",
+            logger=logger,
+            level=logging.DEBUG,
+            group=parallel_context.world_pg,
+            rank=rank,
+        )
 
     # Group tensors to reduce by process groups
     # Important to use ordered dict in order to be synchronized across all ranks

@@ -1,0 +1,99 @@
+checkpoints:
+  checkpoint_interval: 1000
+  checkpoints_path: checkpoints/doremi/big-run-02/refrence-280m-llama
+  checkpoints_path_is_shared_file_system: true
+  # resume_checkpoint_path: checkpoints_test/
+  save_initial_state: false
+
+doremi:
+  domain_names: Pile-CC, Github, OpenWebText2, StackExchange, Wikipedia (en), PubMed Abstracts, USPTO Backgrounds, FreeLaw, PubMed Central, Enron Emails, HackerNews, NIH ExPorter, Books3, ArXiv, DM Mathematics, OpenSubtitles, Gutenberg (PG-19), Ubuntu IRC, BookCorpus2, EuroParl, YoutubeSubtitles, PhilPapers
+
+data:
+  dataset:
+    dataset_overwrite_cache: false
+    dataset_processing_num_proc_per_process: 1
+    hf_dataset_config_name: null
+
+    hf_dataset_or_datasets: project_data/doremi/datasets/the_pile_raw/tokenized_data/train
+    hf_dataset_splits: train
+    text_column_name: text
+
+  num_loading_workers: 1
+  seed: 42
+general:
+  benchmark_csv_path: null
+  consumed_train_samples: null
+  ignore_sanity_checks: true
+  project: doremi
+  run: train_280m_reference_model
+  seed: 42
+  step: null
+logging:
+  iteration_step_info_interval: 1
+  log_level: info
+  log_level_replica: info
+model:
+  ddp_bucket_cap_mb: 120
+  dtype: bfloat16
+  init_method:
+    std: 0.025
+  make_vocab_size_divisible_by: 1
+  model_config:
+    bos_token_id: 1
+    eos_token_id: 2
+    hidden_act: silu
+    hidden_size: 1024
+    initializer_range: 0.02
+    intermediate_size: 4096
+    is_llama_config: true
+    max_position_embeddings: 256
+    num_attention_heads: 8
+    num_hidden_layers: 10
+    num_key_value_heads: 4
+    pad_token_id: null
+    pretraining_tp: 1
+    rms_norm_eps: 1.0e-05
+    rope_scaling: null
+    tie_word_embeddings: true
+    use_cache: true
+    vocab_size: 49152
+optimizer:
+  accumulate_grad_in_fp32: true
+  adam_beta1: 0.9
+  adam_beta2: 0.95
+  adam_eps: 1.0e-08
+  clip_grad: 1.0
+  learning_rate_scheduler:
+    learning_rate: 0.0003
+    lr_decay_steps: 8
+    lr_decay_style: cosine
+    lr_warmup_steps: 2
+    lr_warmup_style: linear
+    min_decay_lr: 1.0e-05
+  torch_adam_is_fused: true
+  weight_decay: 0.01
+  zero_stage: 0
+parallelism:
+  dp: 2
+  pp: 1
+  pp_engine: 1f1b
+  tp: 2
+  tp_linear_async_communication: true
+  tp_mode: REDUCE_SCATTER
+profiler: null
+tokenizer:
+  tokenizer_max_length: null
+  tokenizer_name_or_path: gpt2
+  tokenizer_revision: null
+tokens:
+  # NOTE: batch_accumulation_per_replica * micro_batch_size * dp = 1 * 32 * 16 = 512
+  # 512 * 1024 = 524288 tokens per step
+  batch_accumulation_per_replica: 1
+  micro_batch_size: 32
+
+  limit_test_batches: 0
+  limit_val_batches: 0
+  sequence_length: 1024
+  # train_steps: 100_000
+  train_steps: 10
+  val_check_interval: -1

@@ -2,7 +2,7 @@ import datetime
 import os
 from dataclasses import dataclass, fields
 from pathlib import Path
-from typing import Optional, Type, Union
+from typing import List, Optional, Type, Union
 
 import dacite
 import torch
@@ -10,7 +10,13 @@ import yaml
 from dacite import from_dict
 from yaml.loader import SafeLoader
 
-from nanotron.config.models_config import ExistingCheckpointInit, NanotronConfigs, RandomInit
+from nanotron.config.lighteval_config import LightEvalConfig
+from nanotron.config.models_config import (
+    ExistingCheckpointInit,
+    NanotronConfigs,
+    RandomInit,
+)
+from nanotron.config.parallelism_config import ParallelismArgs
 from nanotron.config.utils_config import (
     RecomputeGranularity,
     cast_str_to_pipeline_engine,
@@ -19,10 +25,7 @@ from nanotron.config.utils_config import (
 )
 from nanotron.generation.sampler import SamplerType
 from nanotron.logging import get_logger
-from nanotron.parallel.pipeline_parallel.engine import (
-    AllForwardAllBackwardPipelineEngine,
-    PipelineEngine,
-)
+from nanotron.parallel.pipeline_parallel.engine import PipelineEngine
 from nanotron.parallel.tensor_parallel.nn import TensorParallelLinearMode
 
 logger = get_logger(__name__)
@@ -106,6 +109,19 @@ class DataArgs:
 
 
 @dataclass
+class DatasetStageArgs:
+    """Arguments for loading dataset in different stages of the training process"""
+
+    name: str
+    start_training_step: int
+    data: DataArgs
+
+    def __post_init__(self):
+        if self.start_training_step < 0:
+            raise ValueError(f"training_steps should be a positive integer and not {self.start_training_step}")
+
+
+@dataclass
 class CheckpointsArgs:
     """Arguments related to checkpoints:
     checkpoints_path: where to save the checkpoints
@@ -145,7 +161,7 @@ class GeneralArgs:
     step: Optional[int] = None
     consumed_train_samples: Optional[int] = None
     benchmark_csv_path: Optional[Path] = None
-    ignore_sanity_checks: bool = False
+    ignore_sanity_checks: bool = True
 
     def __post_init__(self):
         if self.seed is None:
@@ -156,7 +172,9 @@ class GeneralArgs:
             ), f"Please set NANOTRON_BENCHMARK to 1 when using benchmark_csv_path. Got {os.environ.get('NANOTRON_BENCHMARK', None)}"
 
         if self.run is None:
-            self.run = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            self.run = "%date_%jobid"
+        self.run.replace("%date", datetime.datetime.now().strftime("%Y%m%d_%H%M%S"))
+        self.run.replace("%jobid", os.environ.get("SLURM_JOB_ID", "local"))
 
 
 @dataclass
@@ -164,45 +182,6 @@ class ProfilerArgs:
     """Arguments related to profiling"""
 
     profiler_export_path: Optional[Path]
-
-
-@dataclass
-class ParallelismArgs:
-    """Arguments related to TP/PP/DP
-
-    Args:
-        dp: Number of DP replicas
-        pp: Number of PP stages
-        tp: Number of TP replicas
-        pp_engine: Pipeline engine to use between "1f1b" and "afab"
-        tp_mode: TP mode to use between "all_reduce" and "reduce_scatter": all_reduce is normal, reduce_scatter activate sequence parallelism
-        recompute_granularity: Recompute granularity to use between "full" and "selective"
-        tp_linear_async_communication: Whether to use async communication in TP linear layers
-    """
-
-    dp: int
-    pp: int
-    tp: int
-    pp_engine: Optional[PipelineEngine] = None
-    tp_mode: Optional[TensorParallelLinearMode] = None
-    recompute_granularity: Optional[RecomputeGranularity] = None
-    tp_linear_async_communication: Optional[bool] = None
-
-    def __post_init__(self):
-        # Conservative defaults
-        if self.pp_engine is None:
-            self.pp_engine = AllForwardAllBackwardPipelineEngine()
-        if self.tp_mode is None:
-            self.tp_mode = TensorParallelLinearMode.ALL_REDUCE
-        if self.tp_linear_async_communication is None:
-            self.tp_linear_async_communication = False
-
-        if isinstance(self.pp_engine, str):
-            self.pp_engine = cast_str_to_pipeline_engine(self.pp_engine)
-        if isinstance(self.tp_mode, str):
-            self.tp_mode = TensorParallelLinearMode[self.tp_mode.upper()]
-        if isinstance(self.recompute_granularity, str):
-            self.recompute_granularity = RecomputeGranularity[self.recompute_granularity.upper()]
 
 
 @dataclass
@@ -257,6 +236,7 @@ class LRSchedulerArgs:
     lr_decay_style: linear or cosine
     min_decay_lr: minimum learning rate after decay
     lr_decay_steps: optional number of steps to decay the learning rate otherwise will default to train_steps - lr_warmup_steps
+    lr_decay_starting_step: optional number of steps to decay the learning rate otherwise will default to train_steps - lr_warmup_steps
     """
 
     learning_rate: float
@@ -264,6 +244,7 @@ class LRSchedulerArgs:
     lr_warmup_style: str = None
     lr_decay_style: str = None
     lr_decay_steps: Optional[int] = None
+    lr_decay_starting_step: Optional[int] = None
     min_decay_lr: float = None
 
     def __post_init__(self):
@@ -322,16 +303,17 @@ class GenerationArgs:
 class Config:
     """Main configuration class"""
 
-    general: Optional[GeneralArgs]
-    checkpoints: Optional[CheckpointsArgs]
-    parallelism: Optional[ParallelismArgs]
-    model: Optional[ModelArgs]
-    tokenizer: Optional[TokenizerArgs]
-    logging: Optional[LoggingArgs]
-    tokens: Optional[TokensArgs]
-    optimizer: Optional[OptimizerArgs]
-    data: Optional[DataArgs]
-    profiler: Optional[ProfilerArgs]
+    general: GeneralArgs
+    parallelism: ParallelismArgs
+    model: ModelArgs
+    tokenizer: TokenizerArgs
+    checkpoints: Optional[CheckpointsArgs] = None
+    logging: Optional[LoggingArgs] = None
+    tokens: Optional[TokensArgs] = None
+    optimizer: Optional[OptimizerArgs] = None
+    data_stages: Optional[List[DatasetStageArgs]] = None
+    profiler: Optional[ProfilerArgs] = None
+    lighteval: Optional[LightEvalConfig] = None
 
     @classmethod
     def create_empty(cls):
@@ -343,10 +325,26 @@ class Config:
         if self.profiler is not None and self.profiler.profiler_export_path is not None:
             assert self.tokens.train_steps < 10
 
-        if self.optimizer.learning_rate_scheduler.lr_decay_steps is None:
+        if self.optimizer is not None and self.optimizer.learning_rate_scheduler.lr_decay_steps is None:
             self.optimizer.learning_rate_scheduler.lr_decay_steps = (
                 self.tokens.train_steps - self.optimizer.learning_rate_scheduler.lr_warmup_steps
             )
+
+        if self.data_stages is not None:
+            names = [stage.name for stage in self.data_stages]
+            training_steps = [stage.start_training_step for stage in self.data_stages]
+            assert all(
+                stage.start_training_step == 1 for stage in self.data_stages
+            ), "You must have a training stage starting at 1 in the config's data_stages"
+
+            for stage in self.data_stages:
+                if names.count(stage.name) > 1:
+                    raise ValueError(f"Each stage should have unique names and not {names}")
+
+                if training_steps.count(stage.start_training_step) > 1:
+                    raise ValueError(
+                        f"Each stage should have unique starting training step, please change the starting training step for stage {stage.name}"
+                    )
 
         # # if lighteval, we need tokenizer to be defined
         # if self.checkpoints.lighteval is not None:
@@ -369,10 +367,32 @@ class Config:
         return serialize(self)
 
 
-def get_config_from_dict(args: dict, config_class: Type[Config] = Config):
+def get_config_from_dict(
+    config_dict: dict, config_class: Type = Config, skip_unused_config_keys: bool = False, skip_null_keys: bool = False
+):
+    """Get a config object from a dictionary
+
+    Args:
+        args: dictionary of arguments
+        config_class: type of the config object to get as a ConfigTypes (Config, LightevalConfig, LightevalSlurm) or str
+        skip_unused_config_keys: whether to skip unused first-nesting-level keys in the config file (for config with additional sections)
+        skip_null_keys: whether to skip keys with value None at first and second nesting level
+    """
+    if skip_unused_config_keys:
+        logger.warning("skip_unused_config_keys set")
+        config_dict = {
+            field.name: config_dict[field.name] for field in fields(config_class) if field.name in config_dict
+        }
+    if skip_null_keys:
+        logger.warning("Skip_null_keys set")
+        config_dict = {
+            k: {kk: vv for kk, vv in v.items() if vv is not None} if isinstance(v, dict) else v
+            for k, v in config_dict.items()
+            if v is not None
+        }
     return from_dict(
         data_class=config_class,
-        data=args,
+        data=config_dict,
         config=dacite.Config(
             cast=[Path],
             type_hooks={
@@ -383,22 +403,42 @@ def get_config_from_dict(args: dict, config_class: Type[Config] = Config):
                 SamplerType: lambda x: SamplerType[x.upper()],
             },
             # strict_unions_match=True,
-            # strict=True,
+            strict=True,
         ),
     )
 
 
-def get_config_from_file(config_path: str, config_class: Type[Config] = Config) -> Config:
-    """Get a config objet from a file (python or YAML)
+def get_config_from_file(
+    config_path: str,
+    config_class: Type = Config,
+    model_config_class: Optional[Type] = None,
+    skip_unused_config_keys: bool = False,
+    skip_null_keys: bool = False,
+) -> Config:
+    """Get a config object from a file (python or YAML)
 
     Args:
         config_path: path to the config file
         config_type: if the file is a python file, type of the config object to get as a
             ConfigTypes (Config, LightevalConfig, LightevalSlurm) or str
             if None, will default to Config
+        skip_unused_config_keys: whether to skip unused first-nesting-level keys in the config file (for config with additional sections)
+        skip_null_keys: whether to skip keys with value None at first and second nesting level
     """
     # Open the file and load the file
     with open(config_path) as f:
-        args = yaml.load(f, Loader=SafeLoader)
+        config_dict = yaml.load(f, Loader=SafeLoader)
 
-    return get_config_from_dict(args, config_class=config_class)
+    config = get_config_from_dict(
+        config_dict,
+        config_class=config_class,
+        skip_unused_config_keys=skip_unused_config_keys,
+        skip_null_keys=skip_null_keys,
+    )
+    if model_config_class is not None:
+        if not isinstance(config.model.model_config, (dict, model_config_class)):
+            raise ValueError(
+                f"model_config should be a dictionary or a {model_config_class} and not {config.model.model_config}"
+            )
+        config.model.model_config = model_config_class(**config.model.model_config)
+    return config

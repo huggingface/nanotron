@@ -27,7 +27,7 @@ model_config = LlamaConfig(
     hidden_size=16,
     initializer_range=0.02,
     intermediate_size=64,
-    max_position_embeddings=256,
+    max_position_embeddings=50277,
     num_attention_heads=4,
     num_hidden_layers=2,
     num_key_value_heads=4,
@@ -36,7 +36,7 @@ model_config = LlamaConfig(
     rope_scaling=None,
     tie_word_embeddings=True,
     use_cache=True,
-    vocab_size=256,
+    vocab_size=50277,
 )
 
 num_params = human_format(
@@ -75,7 +75,6 @@ parallelism = ParallelismArgs(
     pp_engine="1f1b",
     tp_mode="REDUCE_SCATTER",
     tp_linear_async_communication=True,
-    recompute_granularity="selective",
 )
 
 tokens = TokensArgs(sequence_length=32, train_steps=10, micro_batch_size=2, batch_accumulation_per_replica=1)
@@ -88,7 +87,7 @@ checkpoints_path = os.path.dirname(os.path.dirname(__file__)) + "/checkpoints"
 os.makedirs(checkpoints_path, exist_ok=True)
 
 config = Config(
-    general=GeneralArgs(project="debug", run="tiny_llama", seed=seed),
+    general=GeneralArgs(project="debug", run="tiny_llama_%date_%jobid", seed=seed),
     checkpoints=CheckpointsArgs(checkpoints_path=checkpoints_path, checkpoint_interval=10),
     parallelism=parallelism,
     model=ModelArgs(init_method=RandomInit(std=0.025), model_config=model_config),

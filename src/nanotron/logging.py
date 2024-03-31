@@ -18,12 +18,26 @@ import os
 import sys
 from dataclasses import dataclass
 from functools import lru_cache
-from logging import CRITICAL, DEBUG, ERROR, FATAL, INFO, NOTSET, WARNING, Formatter, Logger
-from typing import List, Optional, Union
+from logging import (
+    CRITICAL,
+    DEBUG,
+    ERROR,
+    FATAL,
+    INFO,
+    NOTSET,
+    WARNING,
+    Formatter,
+    Logger,
+)
+from typing import TYPE_CHECKING, List, Optional, Union
 
+import torch
 from torch import distributed as torch_dist
 
 from nanotron import distributed as dist
+
+if TYPE_CHECKING:
+    from nanotron.config import LoggingArgs
 from nanotron.parallel import ParallelContext
 
 log_levels = {
@@ -214,7 +228,7 @@ def log_rank(
 
 @lru_cache(maxsize=None)
 def warn_once(
-    logger: Logger, msg: str, group: Optional[dist.ProcessGroup] = None, rank: Optional[int] = None, **kwargs
+    msg: str, logger: Logger, group: Optional[dist.ProcessGroup] = None, rank: Optional[int] = None, **kwargs
 ):
     log_rank(msg=msg, logger=logger, level=logging.WARNING, group=group, rank=rank, **kwargs)
 
@@ -231,6 +245,18 @@ def human_format(num: float, billions: bool = False, divide_by_1024: bool = Fals
         num /= 1000.0 if not divide_by_1024 else 1024.0
         i += 1
     return "{}{}".format("{:f}".format(num).rstrip("0").rstrip("."), SIZES[magnitude])
+
+
+def log_memory(logger: logging.Logger):
+    log_rank(
+        f" Memory usage: {torch.cuda.memory_allocated() / 1024**2:.2f}MiB."
+        f" Peak allocated {torch.cuda.max_memory_allocated() / 1024**2:.2f}MiB."
+        f" Peak reserved: {torch.cuda.max_memory_reserved() / 1024**2:.2f}MiB",
+        logger=logger,
+        level=logging.INFO,
+        rank=0,
+    )
+    torch.cuda.reset_peak_memory_stats()
 
 
 @dataclass
@@ -262,12 +288,14 @@ class LoggerWriter:
 
 def set_logger_verbosity_format(logging_level: str, parallel_context: ParallelContext):
     node_name = os.environ.get("SLURMD_NODENAME")
+    expert_parallel_log = (
+        f"|EXP={dist.get_rank(parallel_context.expert_pg)}" if parallel_context.expert_parallel_size > 1 else ""
+    )
     formatter = Formatter(
         fmt=f"%(asctime)s [%(levelname)s|DP={dist.get_rank(parallel_context.dp_pg)}|PP={dist.get_rank(parallel_context.pp_pg)}|"
-        f"TP={dist.get_rank(parallel_context.tp_pg)}{'|' + node_name if node_name else ''}]: %(message)s",
+        f"TP={dist.get_rank(parallel_context.tp_pg)}{expert_parallel_log}{'|' + node_name if node_name else ''}]: %(message)s",
         datefmt="%m/%d/%Y %H:%M:%S",
     )
-    # TODO @thomasw21: `logging.log_levels` returns valid lg log levels
     log_level = log_levels[logging_level]
 
     # main root logger
@@ -281,6 +309,15 @@ def set_logger_verbosity_format(logging_level: str, parallel_context: ParallelCo
     # Nanotron
     set_verbosity(log_level)
     set_formatter(formatter=formatter)
+
+
+def set_ranks_logging_level(parallel_context: ParallelContext, logging_config: "LoggingArgs"):
+    if dist.get_rank(parallel_context.world_pg) == 0:
+        if logging_config.log_level is not None:
+            set_logger_verbosity_format(logging_config.log_level, parallel_context=parallel_context)
+    else:
+        if logging_config.log_level_replica is not None:
+            set_logger_verbosity_format(logging_config.log_level_replica, parallel_context=parallel_context)
 
 
 _configure_library_root_logger()

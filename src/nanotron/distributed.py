@@ -1,13 +1,15 @@
 import datetime
 import os
 from functools import cache, lru_cache
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import torch
 from packaging import version
 from torch import distributed as dist
 from torch.distributed import *  # noqa
 from torch.distributed.distributed_c10d import ProcessGroup
+
+from nanotron.utils import find_free_port
 
 torch_version_above_1_13 = version.parse(torch.__version__) >= version.parse("1.13.0")
 Work = dist.Work if torch_version_above_1_13 else dist._Work
@@ -228,6 +230,10 @@ def get_global_rank(group: ProcessGroup, group_rank: int) -> int:  # pylint: dis
         return dist.distributed_c10d._get_global_rank(group=group, rank=group_rank)
 
 
+def get_global_ranks(group: ProcessGroup) -> Tuple[int]:
+    return tuple(sorted((get_global_rank(group, i) for i in range(group.size()))))
+
+
 # We cache for dp, pp, tp process groups, world group, and tied process group for tied params
 @lru_cache
 def get_rank(group: Optional[ProcessGroup] = None) -> int:  # pylint: disable=function-redefined
@@ -257,5 +263,15 @@ def initialize_torch_distributed():
         backend = "gloo"
 
     # Call the init process.
-    dist.init_process_group(backend=backend, world_size=world_size, rank=rank, timeout=dist.default_pg_timeout)
+
+    port = os.getenv("MASTER_PORT")
+    if port is None:
+        port = find_free_port()
+    else:
+        port = int(port)
+
+    init_method = f"env://localhost:{port}"
+    dist.init_process_group(
+        init_method=init_method, backend=backend, world_size=world_size, rank=rank, timeout=dist.default_pg_timeout
+    )
     return True

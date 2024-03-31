@@ -3,7 +3,7 @@ import contextlib
 import pytest
 import torch
 from helpers.exception import assert_fail_with
-from helpers.utils import available_gpus, init_distributed
+from helpers.utils import available_gpus, init_distributed, rerun_if_address_is_in_use
 from nanotron import distributed as dist
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.pipeline_parallel.p2p import P2P
@@ -12,6 +12,7 @@ from nanotron.parallel.pipeline_parallel.p2p import P2P
 @pytest.mark.skipif(available_gpus() < 2, reason="Testing test_ddp_with_afab requires at least 2 gpus")
 @pytest.mark.parametrize("send_contiguous", [True, False])
 @pytest.mark.parametrize("full", [True, False])
+@rerun_if_address_is_in_use()
 def test_check_send_recv_tensor(send_contiguous: bool, full: bool):
     init_distributed(tp=1, dp=1, pp=2)(_test_check_send_recv_tensor)(send_contiguous=send_contiguous, full=full)
 
@@ -76,3 +77,5 @@ def _test_check_send_recv_tensor(parallel_context: ParallelContext, send_contigu
                 tensor_to_send.as_strided(size=(1,), stride=(1,), storage_offset=0),
                 tensor_travelled_back_and_forth.as_strided(size=(1,), stride=(1,), storage_offset=0),
             )
+
+    parallel_context.destroy()

@@ -1,4 +1,5 @@
 import contextlib
+import csv
 import gc
 import math
 import os
@@ -17,14 +18,10 @@ from torch.profiler import ProfilerActivity, profile, tensorboard_trace_handler
 
 from nanotron import distributed as dist
 from nanotron import logging
-from nanotron.config import (
-    Config,
-    LRSchedulerArgs,
-    OptimizerArgs,
-    ParallelismArgs,
-)
+from nanotron.config import Config, LRSchedulerArgs, OptimizerArgs, ParallelismArgs
 from nanotron.distributed import ProcessGroup
 from nanotron.logging import LogItem, log_rank
+from nanotron.models.base import NanotronModel
 from nanotron.optim.base import BaseOptimizer, Optimizer
 from nanotron.optim.gradient_accumulator import (
     FP32GradBucketManager,
@@ -38,9 +35,7 @@ from nanotron.optim.optimizer_from_gradient_accumulator import (
 )
 from nanotron.optim.zero import ZeroDistributedOptimizer
 from nanotron.parallel import ParallelContext
-from nanotron.parallel.tensor_parallel.nn import (
-    TensorParallelLinearMode,
-)
+from nanotron.parallel.tensor_parallel.nn import TensorParallelLinearMode
 from nanotron.random import (
     RandomStates,
     get_current_random_state,
@@ -80,16 +75,33 @@ def init_random_states(parallel_config: ParallelismArgs, tp_pg: ProcessGroup):
 
 def lr_scheduler_builder(optimizer: Optimizer, lr_scheduler_args: LRSchedulerArgs, total_training_steps: int):
     if lr_scheduler_args.lr_decay_steps is None:
-        lr_decay_steps = (
-            total_training_steps - lr_scheduler_args.lr_warmup_steps
-            if lr_scheduler_args.lr_warmup_steps is not None
-            else total_training_steps
-        )
+        lr_decay_steps = total_training_steps
+        if lr_scheduler_args.lr_warmup_steps is not None:
+            lr_decay_steps -= lr_scheduler_args.lr_warmup_steps
+        if lr_scheduler_args.lr_decay_starting_step is not None:
+            lr_decay_steps -= lr_scheduler_args.lr_decay_starting_step
     else:
         lr_decay_steps = lr_scheduler_args.lr_decay_steps
 
+    if lr_scheduler_args.lr_decay_starting_step is None:
+        if lr_scheduler_args.lr_warmup_steps is not None:
+            lr_decay_starting_step = lr_scheduler_args.lr_warmup_steps
+        else:
+            lr_decay_starting_step = 0
+    else:
+        lr_decay_starting_step = lr_scheduler_args.lr_decay_starting_step
+
     def lr_lambda(current_step: int):
-        """LR Scheduling function, it has 3 phases: warmup, decay, then constant. Warmup starts at lr=0 and ends at `lr=lr`, then it decays until `min_decay_lr` and then stays constant."""
+        """LR Scheduling function, it has from 2 up to 4 phases:
+        - warmup,
+        - optional: constant (if lr_decay_starting_step is set)
+        - decay
+        - optional: constant (if lr_decay_steps and/or lr_decay_starting_step are set)
+        Warmup starts at lr=0 and ends at `lr=lr`
+        Then it stays constant at lr if lr_decay_starting_step is set and larger than lr_warmup_steps
+        Then it decays until `min_decay_lr` for lr_decay_steps if set, else: (total_training_steps - lr_warmup_steps or lr_decay_starting_step)
+        Then it stays constant at min_decay_lr if lr_decay_starting_step is set and total_training_steps is larger)
+        """
         # No warmup or decay
         if lr_scheduler_args.lr_warmup_steps == 0 and lr_decay_steps == 0:
             return lr_scheduler_args.learning_rate
@@ -103,33 +115,34 @@ def lr_scheduler_builder(optimizer: Optimizer, lr_scheduler_args: LRSchedulerArg
             else:
                 raise ValueError(f"Unknown warmup style {lr_scheduler_args.lr_warmup_style}")
 
+        # Optional constant phase at learning_rate
+        elif current_step < lr_decay_starting_step:
+            lmbda = lr_scheduler_args.learning_rate
+
         # Decay phase
-        elif (
-            lr_scheduler_args.lr_decay_style is not None
-            and current_step < lr_decay_steps + lr_scheduler_args.lr_warmup_steps
-        ):
+        elif lr_scheduler_args.lr_decay_style is not None and current_step < lr_decay_starting_step + lr_decay_steps:
             if lr_scheduler_args.lr_decay_style == "cosine":
                 lmbda = (
                     lr_scheduler_args.min_decay_lr
                     + (lr_scheduler_args.learning_rate - lr_scheduler_args.min_decay_lr)
-                    * (1 + math.cos(math.pi * (current_step - lr_scheduler_args.lr_warmup_steps) / lr_decay_steps))
+                    * (1 + math.cos(math.pi * (current_step - lr_decay_starting_step) / lr_decay_steps))
                     / 2
                 )
             elif lr_scheduler_args.lr_decay_style == "linear":
                 lmbda = (
                     lr_scheduler_args.min_decay_lr
                     + (lr_scheduler_args.learning_rate - lr_scheduler_args.min_decay_lr)
-                    * (lr_decay_steps - (current_step - lr_scheduler_args.lr_warmup_steps))
+                    * (lr_decay_steps - (current_step - lr_decay_starting_step))
                     / lr_decay_steps
                 )
             else:
                 raise ValueError(f"Unknown decay style {lr_scheduler_args.lr_decay_style}")
 
-        # Constant phase
+        # Optional constant phase at min_decay_lr
         else:
             lmbda = lr_scheduler_args.min_decay_lr
 
-        lmbda /= lr_scheduler_args.learning_rate
+        lmbda /= lr_scheduler_args.learning_rate  # Normalization for pytorch
         return lmbda
 
     lr_scheduler = LambdaLR(optimizer.get_base_optimizer(), lr_lambda=lr_lambda)
@@ -139,24 +152,14 @@ def lr_scheduler_builder(optimizer: Optimizer, lr_scheduler_args: LRSchedulerArg
 def init_optimizer_and_grad_accumulator(
     model: nn.Module, optimizer_args: OptimizerArgs, parallel_context: ParallelContext
 ) -> Tuple[BaseOptimizer, GradientAccumulator]:
-    # Normalize DDP
-    normalized_model = model.module if isinstance(model, DistributedDataParallel) else model
+    # Unwrap DDP
+    unwrapped_model: NanotronModel = model.module if isinstance(model, DistributedDataParallel) else model
 
-    module_id_to_prefix = {id(module): f"{module_name}." for module_name, module in normalized_model.named_modules()}
+    module_id_to_prefix = {id(module): f"{module_name}." for module_name, module in unwrapped_model.named_modules()}
     # Fix the root_model
-    root_model_id = id(normalized_model)
-    module_id_to_prefix[root_model_id] = ""
+    module_id_to_prefix[id(unwrapped_model)] = ""
 
-    # named parameters
-    named_parameters = [
-        (
-            param.get_tied_info().get_full_name_from_module_id_to_prefix(module_id_to_prefix=module_id_to_prefix)
-            if param.is_tied
-            else name,
-            param,
-        )
-        for name, param in normalized_model.named_parameters()
-    ]
+    named_parameters = list(unwrapped_model.get_named_params_with_correct_tied())
 
     # Basic optimizer builder
     def basic_optimizer_builder(named_param_groups):
@@ -164,8 +167,8 @@ def init_optimizer_and_grad_accumulator(
             named_params_or_groups=named_param_groups,
             optimizer_builder=lambda param_groups: AdamW(  # pylint: disable=E0601
                 param_groups,
-                lr=optimizer_args.learning_rate_scheduler.learning_rate,
                 weight_decay=optimizer_args.weight_decay,
+                lr=optimizer_args.learning_rate_scheduler.learning_rate,
                 eps=optimizer_args.adam_eps,
                 betas=(optimizer_args.adam_beta1, optimizer_args.adam_beta2),
                 fused=optimizer_args.torch_adam_is_fused,
@@ -244,7 +247,7 @@ def init_optimizer_and_grad_accumulator(
                     )
                     if param.is_tied
                     else name
-                    for name, param in normalized_model.named_parameters()
+                    for name, param in unwrapped_model.named_parameters()
                 },
             ),
             hook=get_fp32_accum_hook(
@@ -402,27 +405,23 @@ def test_all_pair_to_pair(
     )
 
 
-def log_throughput(
+def create_table_log(
     config: Config,
     parallel_context: ParallelContext,
-    model_tflops=0,
-    hardware_tflops=0,
-    tokens_per_sec=0,
-    bandwidth=0,
+    model_tflops,
+    hardware_tflops,
+    tokens_per_sec,
+    bandwidth,
+    slurm_job_id,
 ):
-    micro_batch_size = config.micro_batch_size
-    n_micro_batches_per_batch = config.batch_accumulation_per_replica
-    global_batch_size = micro_batch_size * n_micro_batches_per_batch * parallel_context.dp_pg.size()
-    sequence_length = config.sequence_length
-    slurm_job_id = os.environ.get("SLURM_JOB_ID", "N/A")
-    csv_filename = config.benchmark_csv_path
-    table_log = [
-        LogItem("model_name", config.model_name, "s"),
+    return [
+        LogItem("job_id", slurm_job_id, "s"),
+        LogItem("name", config.general.run, "s"),
         LogItem("nodes", math.ceil(parallel_context.world_pg.size() / 8), "d"),
-        LogItem("seq_len", (sequence_length), "d"),
-        LogItem("mbs", micro_batch_size, "d"),
-        LogItem("batch_accum", n_micro_batches_per_batch, "d"),
-        LogItem("gbs", global_batch_size, "d"),
+        LogItem("seq_len", config.tokens.sequence_length, "d"),
+        LogItem("mbs", config.tokens.micro_batch_size, "d"),
+        LogItem("batch_accum", config.tokens.batch_accumulation_per_replica, "d"),
+        LogItem("gbs", config.global_batch_size, "d"),
         LogItem("mTFLOPs", model_tflops, ".2f"),
         LogItem("hTFLOPs", hardware_tflops, ".2f"),
         LogItem("tok/s/gpu", tokens_per_sec / parallel_context.world_pg.size(), ".2f"),
@@ -431,7 +430,8 @@ def log_throughput(
         LogItem("Mem Res (GB)", torch.cuda.max_memory_reserved() / 1024**3, ".2f"),
     ]
 
-    column_widths = [max(len(item.tag), len(f"{item.scalar_value:{item.log_format}}")) for item in table_log]
+
+def create_table_output(table_log, column_widths):
     header_row = "| " + " | ".join([item.tag.ljust(width) for item, width in zip(table_log, column_widths)]) + " |"
     separator_row = "| " + " | ".join(["-" * width for width in column_widths]) + " |"
     data_row = (
@@ -441,7 +441,48 @@ def log_throughput(
         )
         + " |"
     )
-    table_output = f"{header_row}\n{separator_row}\n{data_row}"
+    return f"{header_row}\n{separator_row}\n{data_row}"
+
+
+def write_to_csv(csv_filename, table_log, model_tflops, slurm_job_id):
+    if not os.path.exists(csv_filename):
+        os.makedirs(os.path.dirname(csv_filename), exist_ok=True)
+        with open(csv_filename, mode="w") as fo:
+            writer = csv.writer(fo)
+            writer.writerow([item.tag for item in table_log])
+            writer.writerow([f"{item.scalar_value:{item.log_format}}" for item in table_log])
+    # elif model_tflops > 0:
+    #     # replace line with same job_id
+    #     with open(csv_filename, mode="r") as fi:
+    #         lines = fi.readlines()
+    #     with open(csv_filename, mode="w") as fo:
+    #         writer = csv.writer(fo)
+    #         for line in lines:
+    #             if line.startswith(slurm_job_id):
+    #                 writer.writerow([f"{item.scalar_value:{item.log_format}}" for item in table_log])
+    #             else:
+    #                 fo.write(line)
+    else:
+        with open(csv_filename, mode="a") as fo:
+            writer = csv.writer(fo)
+            writer.writerow([f"{item.scalar_value:{item.log_format}}" for item in table_log])
+
+
+def log_throughput(
+    config: Config,
+    parallel_context: ParallelContext,
+    model_tflops=0,
+    hardware_tflops=0,
+    tokens_per_sec=0,
+    bandwidth=0,
+):
+    slurm_job_id = os.environ.get("SLURM_JOB_ID", "N/A")
+
+    table_log = create_table_log(
+        config, parallel_context, model_tflops, hardware_tflops, tokens_per_sec, bandwidth, slurm_job_id
+    )
+    column_widths = [max(len(item.tag), len(f"{item.scalar_value:{item.log_format}}")) for item in table_log]
+    table_output = create_table_output(table_log, column_widths)
 
     log_rank(
         table_output,
@@ -450,26 +491,5 @@ def log_throughput(
         rank=0,
     )
 
-    import csv
-
     if dist.get_rank(parallel_context.world_pg) == 0:
-        if not os.path.exists(csv_filename):
-            with open(csv_filename, mode="w") as fo:
-                writer = csv.writer(fo)
-                writer.writerow([item.tag for item in table_log])
-                writer.writerow([f"{item.scalar_value:{item.log_format}}" for item in table_log])
-        elif model_tflops > 0:
-            # replace line with same job_id
-            with open(csv_filename, mode="r") as fi:
-                lines = fi.readlines()
-            with open(csv_filename, mode="w") as fo:
-                writer = csv.writer(fo)
-                for line in lines:
-                    if line.startswith(slurm_job_id):
-                        writer.writerow([f"{item.scalar_value:{item.log_format}}" for item in table_log])
-                    else:
-                        fo.write(line)
-        else:
-            with open(csv_filename, mode="a") as fo:
-                writer = csv.writer(fo)
-                writer.writerow([f"{item.scalar_value:{item.log_format}}" for item in table_log])
+        write_to_csv(config.general.benchmark_csv_path, table_log, model_tflops, slurm_job_id)
