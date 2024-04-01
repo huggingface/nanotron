@@ -278,7 +278,8 @@ class TensorParallelEmbedding(nn.Embedding):
             # translate for [0, self.max_id - self.min_id[
             masked_input = input_ids.clone() - self.min_id
             # default all out of bounds values to `0`
-            masked_input[input_mask] = 0
+            # masked_input[input_mask] = 0
+            masked_input[input_mask].zero_()
         else:
             masked_input = input_ids
         out = super().forward(masked_input)

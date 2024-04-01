@@ -64,13 +64,15 @@ class DummyModel(nn.Module):
         return x
 
 
-def init_dummy_model(parallel_context: ParallelContext, dtype: torch.dtype = torch.float) -> DummyModel:
-    p2p = P2P(pg=parallel_context.pp_pg, device=torch.device("cuda"))
+def init_dummy_model(
+    parallel_context: ParallelContext, dtype: torch.dtype = torch.float, device: torch.device = torch.device("cuda")
+) -> DummyModel:
+    p2p = P2P(pg=parallel_context.pp_pg, device=device)
     model = DummyModel(p2p=p2p)
 
     # Build model using contiguous segments
     pipeline_blocks = [module for name, module in model.named_modules() if isinstance(module, PipelineBlock)]
-    with init_on_device_and_dtype(device=torch.device("cuda"), dtype=dtype):
+    with init_on_device_and_dtype(device=device, dtype=dtype):
         contiguous_size = ceil(len(pipeline_blocks) / parallel_context.pp_pg.size())
         for i, block in enumerate(pipeline_blocks):
             rank = i // contiguous_size

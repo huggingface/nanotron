@@ -88,7 +88,7 @@ optimizer:
   zero_stage: 0
 parallelism:
   dp: 2
-  pp: 2
+  pp: 1
   pp_engine: 1f1b
   tp: 2
   tp_linear_async_communication: true

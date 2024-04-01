@@ -210,10 +210,7 @@ class DistributedTrainer:
 
         # Setup tensorboard write and log writers on output rank
         self.logger_ranks = self.parallel_context.get_global_rank(
-            ep_rank=0,
-            pp_rank=self.unwrapped_model.output_pp_rank,
-            dp_rank=0,
-            tp_rank=0
+            ep_rank=0, pp_rank=self.unwrapped_model.output_pp_rank, dp_rank=0, tp_rank=0
         ).flatten()
         self.loggerwriter = self.setup_log_writers()
 
@@ -328,6 +325,13 @@ class DistributedTrainer:
         ],
         **kwargs,
     ) -> None:
+
+        # from torch.fx import symbolic_trace
+        # # from nanotron.scaling import _tracing
+
+        # # traced_graph_module = symbolic_trace(self.model, concrete_args={})
+        # # traced_graph_module = _tracing(model)
+
         self.pre_training(**kwargs)
 
         if self.config.checkpoints.save_initial_state and self.init_checkpoint_path is None:
@@ -638,6 +642,8 @@ class DistributedTrainer:
             elif isinstance(self.config.model.init_method, RandomInit):
 
                 unwrapped_model.init_model_randomly(config=self.config)
+
+                assert 1 == 1
 
                 # Synchronize parameters so that the model is consistent
                 # sync all params across dp
