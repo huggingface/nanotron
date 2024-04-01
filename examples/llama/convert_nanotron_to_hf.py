@@ -27,8 +27,7 @@ from transformers import LlamaConfig as HFLlamaConfig
 
 logger = logging.get_logger(__name__)
 
-TOKENIZER_NAME = "state-spaces/mamba-130m-hf"
-HARCODED_PROMPT = "Hello"
+HARCODED_PROMPT = "what is the meaning of the word chutzpah?"
 
 
 def convert_checkpoint_and_save(checkpoint_path: Path, save_path: Path):
@@ -171,7 +170,6 @@ def check_converted_model_generation(save_path: Path, tokenizer_name: str):
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
     input_ids = tokenizer(HARCODED_PROMPT, return_tensors="pt")["input_ids"]
     print("Inputs:", tokenizer.batch_decode(input_ids))
-
     model = LlamaForCausalLM.from_pretrained(save_path)
     out = model.generate(input_ids, max_new_tokens=100)
     print("Generation (converted): ", tokenizer.batch_decode(out))
@@ -179,15 +177,13 @@ def check_converted_model_generation(save_path: Path, tokenizer_name: str):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Convert Nanotron weights to HF format")
-    parser.add_argument("--checkpoint_path", type=str, default="mamba-130m")
-    parser.add_argument("--save_path", type=str, default="mamba-hf")
+    parser.add_argument("--checkpoint_path", type=str, default="llama-7b", help="Path to the checkpoint")
+    parser.add_argument("--save_path", type=str, default="llama-7b-hf", help="Path to save the HF model")
+    parser.add_argument("--tokenizer_name", type=str, default="EleutherAI/gpt-j-6B")
     args = parser.parse_args()
-
     save_path = Path(args.save_path)
     checkpoint_path = Path(args.checkpoint_path)
-
     # Convert Nanotron model to HF format
     convert_checkpoint_and_save(checkpoint_path=checkpoint_path, save_path=save_path)
-
     # check if the conversion was successful by generating some text
-    check_converted_model_generation(save_path=save_path, tokenizer_name=TOKENIZER_NAME)
+    check_converted_model_generation(save_path=save_path, tokenizer_name=args.tokenizer_name)
