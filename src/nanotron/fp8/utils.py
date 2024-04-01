@@ -90,6 +90,7 @@ def convert_to_fp8_module(module: nn.Module, accum_qtype: DTypes = FP8LM_RECIPE.
     for name, child in get_leaf_modules(module):
         if isinstance(child, nn.Linear):
             fp8_linear = convert_linear_to_fp8(child, accum_qtype)
+            fp8_linear.name = name
             set_module(module, name, fp8_linear)
 
     return module

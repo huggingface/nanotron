@@ -11,6 +11,7 @@ from torch.optim import Adam
 from datasets import load_dataset
 from torch.utils.data import DataLoader
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import BloomConfig, BloomModel, BloomTokenizerFast, BloomForCausalLM
 
 import wandb
 
@@ -27,13 +28,14 @@ def l1_norm_diff(loss, ref_loss):
 
 if __name__ == "__main__":
     BATCH_SIZE = 16
-    HIDDEN_SIZE = 16
-    N_STEPS = 1000
+    # HIDDEN_SIZE = 16
+    N_EPOCHS = 1
     LR = 1e-3
-    N_LAYERS = 16
-    WITH_BIAS = True
+    # N_LAYERS = 16
+    # WITH_BIAS = True
     SEED = 42
-    MODEL_NAME = "gpt2"
+    # MODEL_NAME = "gpt2"
+    MODEL_NAME = "bigscience/bloom"
     # NOTE: CohereForAI/aya_dataset: 200k examples
     # NOTE: stas/c4-en-10k
     DATA_NAME = "CohereForAI/aya_dataset"
@@ -48,18 +50,28 @@ if __name__ == "__main__":
     # fp32_linear = fp32_linear[:-1]
     
     torch.manual_seed(SEED)
+    torch.cuda.empty_cache()
+    
+    # config = BloomConfig(
+    #     hidden_size=64,
+    #     n_layer=5,
+    #     slow_but_exact=True
+    # )
+    config = BloomConfig()
 
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+    # tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+    tokenizer = BloomTokenizerFast.from_pretrained(MODEL_NAME)
     tokenizer.pad_token = tokenizer.eos_token
+    
+    # fp32_linear = AutoModelForCausalLM.from_pretrained(MODEL_NAME).to("cuda")
+    fp32_linear = BloomForCausalLM(config)
+    
     dataset = load_dataset(DATA_NAME)
     dataset = dataset.map(
         lambda x: tokenizer(x["inputs"], padding="max_length", truncation=True, max_length=512, return_tensors="pt")
     )
     dataset.set_format(type="torch", columns=["input_ids", "attention_mask"])
-    dataloaders = DataLoader(dataset["train"], batch_size=64, shuffle=True)
-
-    fp32_linear = AutoModelForCausalLM.from_pretrained(MODEL_NAME).to("cuda")
-    fp32_linear = AutoModelForCausalLM.from_pretrained(MODEL_NAME).to("cuda")
+    dataloaders = DataLoader(dataset["train"], batch_size=BATCH_SIZE, shuffle=True)
 
     bf16_linear = deepcopy(fp32_linear)
     fp8_linear = deepcopy(fp32_linear)
@@ -85,109 +97,87 @@ if __name__ == "__main__":
 
     fp8_linear_with_scaler = convert_to_fp8_module(fp8_linear_with_scaler, accum_qtype=DTypes.KFLOAT16)
     fp8_optim_with_scaler = FP8Adam(fp8_linear_with_scaler.parameters(), lr=LR)
+    
+    fp32_linear = fp32_linear.to("cuda")
+    bf16_linear = bf16_linear.to("cuda")
+    fp8_linear = fp8_linear.to("cuda")
+    fp8_linear_with_scaler = fp8_linear_with_scaler.to("cuda")
+    msamp_linear = msamp_linear.to("cuda")
+    msamp_linear_with_scaler = msamp_linear_with_scaler.to("cuda")
 
     wandb.init(
         project="fp8_for_nanotron",
         name=f"{get_time_name()}.convergence_gpt2",
         config={
-            # "batch_size": BATCH_SIZE,
-            # "hidden_size": HIDDEN_SIZE,
-            "n_steps": N_STEPS,
+            "epochs": 1,
             "lr": LR,
-            # "n_layers": N_LAYERS,
-            # "with_bias": WITH_BIAS,
-            # "act_func": fp32_linear[1].__class__.__name__ if N_LAYERS > 1 else "None",
+            "batch_size": BATCH_SIZE,
             "optim": fp32_optim.__class__.__name__,
             "optim_params": fp32_optim.defaults,
             "num_params": sum(p.numel() for p in fp32_linear.parameters()),
+            "model_config": config.to_dict(),
         },
     )
 
     msamp_scaler = torch.cuda.amp.GradScaler()
     fp8_scaler = LossScaler()
 
-    # loss_func = nn.CrossEntropyLoss()
-    def loss_func(outputs, input_ids):
+    def loss_func(outputs, targets):
         func = nn.CrossEntropyLoss()
-        logits = outputs.logits.squeeze(dim=1)
+        # logits = outputs.logits.squeeze(dim=1)
+        # targets = input_ids.squeeze(dim=1)
+        logits = outputs.logits
         logits = logits[:, :-1, :].contiguous()
-        targets = input_ids.squeeze(dim=1)
-        targets = targets[:, 1:].contiguous()
-        # return func(outputs.logits.view(-1, outputs.logits.shape[-1]), input_ids[:, 1:].view(-1))
         return func(logits.view(-1, logits.shape[-1]), targets.view(-1))
-
-    # batch_inputs = []
-    # batch_targets = []
-    # inputs = torch.randn(BATCH_SIZE, HIDDEN_SIZE).to("cuda")
-    # targets = torch.randint(0, HIDDEN_SIZE, (BATCH_SIZE,)).to("cuda")
-    # for _ in range(N_STEPS):
-    #     batch_inputs.append(inputs.clone())
-    #     batch_targets.append(targets.clone())
-
+    
     fp32_losses = []
     fp8_with_loss_scaler_losses = []
     msamp_with_loss_scaler_losses = []
-
-    for step in range(N_STEPS):
+    
+    for epoch in range(N_EPOCHS):
         for step, batch in enumerate(dataloaders):
             print(f"step: {step} /n /n")
 
-            batch = {k: v.to("cuda") for k, v in batch.items()}
-            # input_ids = batch["input_ids"].to("cuda")
-            # targets = batch["input_ids"][:, 1:].to("cuda")
-            # inputs = batch_inputs[step]
-            # targets = batch_targets[step]
-            # inputs = torch.randn(BATCH_SIZE, HIDDEN_SIZE).to("cuda")
-            # targets = torch.randint(0, HIDDEN_SIZE, (BATCH_SIZE,)).to("cuda")
+            batch = {k: v.squeeze(dim=1).to("cuda") for k, v in batch.items()}
+            targets = batch["input_ids"][:, 1:].contiguous()
 
             fp32_optim.zero_grad()
-            # ref_output = fp32_linear(**batch, labels=batch["input_ids"])
-            ref_output = fp32_linear(**batch)
-            # fp32_loss = loss_func(ref_output, targets)
-            # fp32_loss = loss_func(
-            #     ref_output.logits.view(-1, ref_output.logits.shape[-1]), input_ids.view(-1)
-            # )
-            fp32_loss = loss_func(ref_output, batch["input_ids"])
-            # fp32_loss = ref_output.loss
+            fp32_output = fp32_linear(**batch)
+            fp32_loss = loss_func(fp32_output, targets)
+            # fp32_loss = fp32_output.loss
             fp32_loss.backward()
             fp32_optim.step()
             
             # bf16_optim.zero_grad()
-            # bf16_output = bf16_linear(input_ids.to(dtype=torch.bfloat16))
-            # # bf16_loss = loss_func(bf16_output, targets)
-            # bf16_loss = loss_func(ref_output, input_ids)
+            # bf16_output = bf16_linear(**batch)
+            # bf16_loss = loss_func(bf16_output, batch["input_ids"])
             # bf16_loss.backward()
             # bf16_optim.step()
 
-            # fp8_output = fp8_linear(inputs)
-            # fp8_loss = loss_func(fp8_output, targets)
+            # fp8_output = fp8_linear(**batch)
+            # fp8_loss = loss_func(fp8_output, batch["input_ids"])
             # fp8_loss.backward()
             # fp8_optim.step()
             # fp8_optim.zero_grad()
 
             # fp8_optim_with_scaler.zero_grad()
-            # fp8_output_with_scaler = fp8_linear_with_scaler(input_ids)
-            # # fp8_loss_with_scaler = loss_func(fp8_output_with_scaler, targets)
-            # fp8_loss_with_scaler = loss_func(fp8_output_with_scaler, input_ids)
+            # fp8_output_with_scaler = fp8_linear_with_scaler(**batch)
+            # fp8_loss_with_scaler = loss_func(fp8_output_with_scaler, batch["input_ids"])
             # fp8_scaler.scale(fp8_loss_with_scaler)
             # fp8_scaler.step(fp8_optim_with_scaler)
             # fp8_scaler.update()
 
             msamp_optim.zero_grad()
-            # msamp_output = msamp_linear(**batch, labels=batch["input_ids"])
             msamp_output = msamp_linear(**batch)
-            # msamp_loss = loss_func(msamp_output, targets)
-            msamp_loss = loss_func(msamp_output, batch["input_ids"])
+            msamp_loss = loss_func(msamp_output, targets)
             # msamp_loss = msamp_output.loss
             msamp_loss.backward()
             msamp_optim.all_reduce_grads(msamp_linear)
             msamp_optim.step()
 
             msamp_optim_with_scaler.zero_grad()
-            # msamp_output_with_scaler = msamp_linear_with_scaler(**batch, labels=batch["input_ids"])
             msamp_output_with_scaler = msamp_linear_with_scaler(**batch)
-            # msamp_loss_with_scaler = loss_func(msamp_output_with_scaler, targets)
-            msamp_loss_with_scaler = loss_func(msamp_output_with_scaler, batch["input_ids"])
+            msamp_loss_with_scaler = loss_func(msamp_output_with_scaler, targets)
             # msamp_loss_with_scaler = msamp_output_with_scaler.loss
             msamp_scaler.scale(msamp_loss_with_scaler).backward()
             msamp_scaler.step(msamp_optim_with_scaler)
@@ -199,7 +189,6 @@ if __name__ == "__main__":
 
             # l1_norm_diff_fp8_with_loss_scaler_relative_to_fp32 = l1_norm_diff(fp8_loss_with_scaler, fp32_loss)
             # l1_norm_diff_msamp_with_loss_scaler_relative_to_fp32 = l1_norm_diff(msamp_loss_with_scaler, fp32_loss)
-            
             
             # std_fp8_with_loss_scaler_relative_to_fp32 = (torch.tensor(fp8_with_loss_scaler_losses) - torch.tensor(fp32_losses)).std()
             # std_msamp_with_loss_scaler_relative_to_fp32 = (torch.tensor(msamp_with_loss_scaler_losses) - torch.tensor(fp32_losses)).std()

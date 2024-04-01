@@ -134,78 +134,78 @@ if __name__ == "__main__":
             inputs = dataloaders["input_ids"].to("cuda")
             targets = inputs[:, 1:]
         
-        # inputs = batch_inputs[step]
-        # targets = batch_targets[step]
-        inputs = torch.randn(BATCH_SIZE, INPUT_DIM).to("cuda")
-        targets = torch.randint(0, HIDDEN_SIZE, (BATCH_SIZE,)).to("cuda")
+            # inputs = batch_inputs[step]
+            # targets = batch_targets[step]
+            # inputs = torch.randn(BATCH_SIZE, INPUT_DIM).to("cuda")
+            # targets = torch.randint(0, HIDDEN_SIZE, (BATCH_SIZE,)).to("cuda")
 
-        fp32_optim.zero_grad()
-        ref_output = fp32_linear(inputs)
-        fp32_loss = loss_func(ref_output, targets)
-        fp32_loss.backward()
-        fp32_optim.step()
-        
-        bf16_optim.zero_grad()
-        bf16_output = bf16_linear(inputs.to(dtype=torch.bfloat16))
-        bf16_loss = loss_func(bf16_output, targets)
-        bf16_loss.backward()
-        bf16_optim.step()
+            fp32_optim.zero_grad()
+            ref_output = fp32_linear(inputs)
+            fp32_loss = loss_func(ref_output, targets)
+            fp32_loss.backward()
+            fp32_optim.step()
+            
+            bf16_optim.zero_grad()
+            bf16_output = bf16_linear(inputs.to(dtype=torch.bfloat16))
+            bf16_loss = loss_func(bf16_output, targets)
+            bf16_loss.backward()
+            bf16_optim.step()
 
-        # fp8_output = fp8_linear(inputs)
-        # fp8_loss = loss_func(fp8_output, targets)
-        # fp8_loss.backward()
-        # fp8_optim.step()
-        # fp8_optim.zero_grad()
+            # fp8_output = fp8_linear(inputs)
+            # fp8_loss = loss_func(fp8_output, targets)
+            # fp8_loss.backward()
+            # fp8_optim.step()
+            # fp8_optim.zero_grad()
 
-        fp8_optim_with_scaler.zero_grad()
-        fp8_output_with_scaler = fp8_linear_with_scaler(inputs)
-        fp8_loss_with_scaler = loss_func(fp8_output_with_scaler, targets)
-        # fp8_scaler.scale(fp8_loss_with_scaler)
-        # fp8_scaler.step(fp8_optim_with_scaler)
-        # fp8_scaler.update()
+            fp8_optim_with_scaler.zero_grad()
+            fp8_output_with_scaler = fp8_linear_with_scaler(inputs)
+            fp8_loss_with_scaler = loss_func(fp8_output_with_scaler, targets)
+            # fp8_scaler.scale(fp8_loss_with_scaler)
+            # fp8_scaler.step(fp8_optim_with_scaler)
+            # fp8_scaler.update()
 
-        msamp_optim.zero_grad()
-        msamp_output = msamp_linear(inputs)
-        msamp_loss = loss_func(msamp_output, targets)
-        msamp_loss.backward()
-        msamp_optim.all_reduce_grads(msamp_linear)
-        msamp_optim.step()
+            msamp_optim.zero_grad()
+            msamp_output = msamp_linear(inputs)
+            msamp_loss = loss_func(msamp_output, targets)
+            msamp_loss.backward()
+            msamp_optim.all_reduce_grads(msamp_linear)
+            msamp_optim.step()
 
-        msamp_optim_with_scaler.zero_grad()
-        msamp_output_with_scaler = msamp_linear_with_scaler(inputs)
-        msamp_loss_with_scaler = loss_func(msamp_output_with_scaler, targets)
-        msamp_scaler.scale(msamp_loss_with_scaler).backward()
-        msamp_scaler.step(msamp_optim_with_scaler)
-        msamp_scaler.update()
+            msamp_optim_with_scaler.zero_grad()
+            msamp_output_with_scaler = msamp_linear_with_scaler(inputs)
+            msamp_loss_with_scaler = loss_func(msamp_output_with_scaler, targets)
+            msamp_scaler.scale(msamp_loss_with_scaler).backward()
+            msamp_scaler.step(msamp_optim_with_scaler)
+            msamp_scaler.update()
 
-        fp32_losses.append(fp32_loss.item())
-        fp8_with_loss_scaler_losses.append(fp8_loss_with_scaler.item())
-        msamp_with_loss_scaler_losses.append(msamp_loss_with_scaler.item())
+            fp32_losses.append(fp32_loss.item())
+            fp8_with_loss_scaler_losses.append(fp8_loss_with_scaler.item())
+            msamp_with_loss_scaler_losses.append(msamp_loss_with_scaler.item())
 
-        # l1_norm_diff_fp8_with_loss_scaler_relative_to_fp32 = l1_norm_diff(fp8_loss_with_scaler, fp32_loss)
-        # l1_norm_diff_msamp_with_loss_scaler_relative_to_fp32 = l1_norm_diff(msamp_loss_with_scaler, fp32_loss)
-        
-        
-        # std_fp8_with_loss_scaler_relative_to_fp32 = (torch.tensor(fp8_with_loss_scaler_losses) - torch.tensor(fp32_losses)).std()
-        # std_msamp_with_loss_scaler_relative_to_fp32 = (torch.tensor(msamp_with_loss_scaler_losses) - torch.tensor(fp32_losses)).std()
+            # l1_norm_diff_fp8_with_loss_scaler_relative_to_fp32 = l1_norm_diff(fp8_loss_with_scaler, fp32_loss)
+            # l1_norm_diff_msamp_with_loss_scaler_relative_to_fp32 = l1_norm_diff(msamp_loss_with_scaler, fp32_loss)
+            
+            
+            # std_fp8_with_loss_scaler_relative_to_fp32 = (torch.tensor(fp8_with_loss_scaler_losses) - torch.tensor(fp32_losses)).std()
+            # std_msamp_with_loss_scaler_relative_to_fp32 = (torch.tensor(msamp_with_loss_scaler_losses) - torch.tensor(fp32_losses)).std()
 
-        wandb.log(
-            {
-                "fp32_loss": fp32_loss.item(),
-                "bf16_loss": bf16_loss.item(),
-                
-                # "fp8_loss": fp8_loss.item(),
-                "fp8_loss_with_scaler": fp8_loss_with_scaler.item(),
-                "msamp_o2_loss": msamp_loss.item(),
-                "msamp_o2_loss_with_scaler": msamp_loss_with_scaler.item(),
-                "l1_norm_diff_fp8_with_loss_scaler_relative_to_fp32": l1_norm_diff(fp8_loss_with_scaler, fp32_loss).item(),
-                "l1_norm_diff_msamp_with_loss_scaler_relative_to_fp32": l1_norm_diff(msamp_loss_with_scaler, fp32_loss).item(),
-                
-                "l1_norm_diff_fp8_with_loss_scaler_relative_to_bf16": l1_norm_diff(fp8_loss_with_scaler, bf16_loss).item(),
-                "l1_norm_diff_msamp_with_loss_scaler_relative_to_bf16": l1_norm_diff(msamp_loss_with_scaler, bf16_loss).item(),
-            }
-        )
+            wandb.log(
+                {
+                    "fp32_loss": fp32_loss.item(),
+                    "bf16_loss": bf16_loss.item(),
+                    
+                    # "fp8_loss": fp8_loss.item(),
+                    "fp8_loss_with_scaler": fp8_loss_with_scaler.item(),
+                    "msamp_o2_loss": msamp_loss.item(),
+                    "msamp_o2_loss_with_scaler": msamp_loss_with_scaler.item(),
+                    "l1_norm_diff_fp8_with_loss_scaler_relative_to_fp32": l1_norm_diff(fp8_loss_with_scaler, fp32_loss).item(),
+                    "l1_norm_diff_msamp_with_loss_scaler_relative_to_fp32": l1_norm_diff(msamp_loss_with_scaler, fp32_loss).item(),
+                    
+                    "l1_norm_diff_fp8_with_loss_scaler_relative_to_bf16": l1_norm_diff(fp8_loss_with_scaler, bf16_loss).item(),
+                    "l1_norm_diff_msamp_with_loss_scaler_relative_to_bf16": l1_norm_diff(msamp_loss_with_scaler, bf16_loss).item(),
+                }
+            )
 
-    # NOTE: 3e-4 is from msamp
-    # torch.testing.assert_close(msamp_linear.weight.float(), ref_linear.weight, rtol=0.1, atol=3e-4)
-    # torch.testing.assert_close(msamp_linear.bias.float(), ref_linear.bias, rtol=0, atol=3e-4)
+        # NOTE: 3e-4 is from msamp
+        # torch.testing.assert_close(msamp_linear.weight.float(), ref_linear.weight, rtol=0.1, atol=3e-4)
+        # torch.testing.assert_close(msamp_linear.bias.float(), ref_linear.bias, rtol=0, atol=3e-4)
