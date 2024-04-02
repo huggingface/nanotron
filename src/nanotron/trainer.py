@@ -643,6 +643,12 @@ class DistributedTrainer:
 
                 unwrapped_model.init_model_randomly(config=self.config)
 
+                from nanotron.scaling import parametrize_using_mu_transfer
+
+                model.module = parametrize_using_mu_transfer(
+                    model.module, config=self.config, parallel_context=self.parallel_context
+                )
+
                 assert 1 == 1
 
                 # Synchronize parameters so that the model is consistent

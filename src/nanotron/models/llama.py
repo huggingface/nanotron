@@ -14,8 +14,9 @@
 # limitations under the License.
 """ PyTorch LLaMa model.
 """
-from typing import Dict, Optional, Union
 import math
+from typing import Dict, Optional, Union
+
 import torch
 from flash_attn import bert_padding
 from flash_attn.flash_attn_interface import (
@@ -48,6 +49,7 @@ from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelRowLinear,
 )
 from nanotron.random import RandomStates
+from nanotron.scaling import WeightType, init_weight_using_mu_transfer
 from nanotron.utils import checkpoint_method
 
 logger = logging.get_logger(__name__)
@@ -162,7 +164,6 @@ class MLP(nn.Module):
             async_communication=tp_linear_async_communication,
             contiguous_chunks=gate_up_contiguous_chunks,
         )
-
         self.down_proj = TensorParallelRowLinear(
             config.intermediate_size,
             config.hidden_size,
@@ -171,6 +172,8 @@ class MLP(nn.Module):
             bias=False,
             async_communication=tp_linear_async_communication and tp_mode is TensorParallelLinearMode.REDUCE_SCATTER,
         )
+        self.gate_up_proj.linear_type = WeightType.HIDDEN_WEIGHTS
+        self.down_proj.linear_type = WeightType.HIDDEN_WEIGHTS
         # TODO @nouamane: why can't we torch.jit.script GLUActivation?
         self.split_silu_mul = GLUActivation(config.hidden_act)
 
@@ -331,6 +334,8 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             bias=False,
             async_communication=tp_linear_async_communication,
         )
+        self.qkv_proj.linear_type = WeightType.HIDDEN_WEIGHTS
+        self.o_proj.linear_type = WeightType.HIDDEN_WEIGHTS
 
         self.attention = CoreAttention(
             config,
@@ -594,6 +599,7 @@ class LlamaDecoderLayer(nn.Module):
     ):
         super().__init__()
         self.input_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.input_layernorm.linear_type = WeightType.INPUT_WEIGHTS
         self.attn = CausalSelfAttention(
             config=config,
             parallel_config=parallel_config,
@@ -602,6 +608,7 @@ class LlamaDecoderLayer(nn.Module):
         )
 
         self.post_attention_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.post_attention_layernorm.linear_type = WeightType.INPUT_WEIGHTS
         self.mlp = MLP(config=config, parallel_config=parallel_config, tp_pg=tp_pg)
 
     def forward(
@@ -637,6 +644,7 @@ class Embedding(nn.Module, AttachableStore):
             pg=tp_pg,
             mode=parallel_config.tp_mode if parallel_config is not None else TensorParallelLinearMode.ALL_REDUCE,
         )
+        self.token_embedding.linear_type = WeightType.INPUT_WEIGHTS
         self.pg = tp_pg
 
     def forward(self, input_ids: torch.Tensor, input_mask: torch.Tensor):  # [batch_size, seq_length]
@@ -715,6 +723,7 @@ class LlamaModel(nn.Module):
             module_input_keys={"input"},
             module_output_keys={"hidden_states"},
         )  # TODO
+        self.final_layer_norm.linear_type = WeightType.INPUT_WEIGHTS
 
         self.lm_head = PipelineBlock(
             p2p=self.p2p,
@@ -732,6 +741,7 @@ class LlamaModel(nn.Module):
             module_input_keys={"x"},
             module_output_keys={"logits"},
         )
+        self.lm_head.linear_type = WeightType.OUTPUT_WEIGHTS
 
         self.cast_to_fp32 = PipelineBlock(
             p2p=self.p2p,
@@ -881,7 +891,7 @@ class LlamaForTraining(NanotronModel):
             label_mask=label_mask,
         )["loss"]
         return {"loss": loss}
-    
+
     @torch.no_grad()
     def init_model_randomly(self, config):
         """Initialize model parameters randomly.
@@ -898,12 +908,12 @@ class LlamaForTraining(NanotronModel):
         std = config.model.init_method.std
         sigma = config.model.init_method.std
         num_layers = config.model.model_config.num_hidden_layers
-        
+
         for param_name, param in model.named_parameters():
             assert isinstance(param, NanotronParameter)
-            
-            module_name, param_name = param_name.rsplit('.', 1)
-            
+
+            module_name, param_name = param_name.rsplit(".", 1)
+
             if param.is_tied:
                 tied_info = param.get_tied_info()
                 full_param_name = tied_info.get_full_name_from_module_id_to_prefix(
@@ -918,13 +928,21 @@ class LlamaForTraining(NanotronModel):
 
             module = model.get_submodule(module_name)
 
+            hidden_size = config.model.model_config.hidden_size
+
             if isinstance(module, TensorParallelColumnLinear):
                 if "weight" == param_name:
-                    torch.nn.init.normal_(module.weight, mean=0.0, std=std)
+                    if hasattr(module, "linear_type"):
+                        init_weight_using_mu_transfer(
+                            module.weight, name="weight", hidden_size=hidden_size, linear_type=module.linear_type
+                        )
+                    else:
+                        torch.nn.init.normal_(module.weight, mean=0.0, std=std)
                 elif "bias" == param_name:
                     module.bias.zero_()
                 else:
                     raise ValueError(f"Who the fuck is {param_name}?")
+
             elif isinstance(module, TensorParallelRowLinear):
                 if "weight" == param_name:
                     torch.nn.init.normal_(module.weight, mean=0.0, std=sigma / math.sqrt(2 * num_layers))
@@ -943,11 +961,11 @@ class LlamaForTraining(NanotronModel):
             elif isinstance(module, TensorParallelEmbedding):
                 nn.init.normal_(module.weight, mean=0.0, std=std)
             else:
-                raise Exception(f"Parameter {full_param_name} was not intialized")
+                raise Exception(f"Parameter {full_param_name} was not initialized")
 
             assert full_param_name not in initialized_parameters
             initialized_parameters.add(full_param_name)
-            
+
         assert initialized_parameters == {
             param.get_tied_info().get_full_name_from_module_id_to_prefix(module_id_to_prefix=module_id_to_prefix)
             if param.is_tied
