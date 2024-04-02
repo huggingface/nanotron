@@ -46,8 +46,13 @@ def test_fp8_linear_parameters():
 @pytest.mark.parametrize("is_bias", [True, False])
 @pytest.mark.parametrize("accum_qtype", [DTypes.KFLOAT32, DTypes.KFLOAT16])
 def test_fp8_linear_forward_pass(input, is_bias, accum_qtype):
+    HIDDEN_SIZE = 64
+    INTERDIM_SIZE = 64 * 4
+
     ref_input = input.detach().clone()
-    ref_linear = nn.Linear(64, 64, bias=is_bias, device="cuda", dtype=torch.float32)
+    ref_linear = nn.Linear(HIDDEN_SIZE, INTERDIM_SIZE, bias=is_bias, device="cuda", dtype=torch.float32)
+    # torch.nn.init.normal_(ref_linear.weight, mean=0.0, std=math.sqrt(1/(INTERDIM_SIZE)))
+    # torch.nn.init.normal_(ref_linear.bias, mean=0.0, std=math.sqrt(1/(HIDDEN_SIZE)))
 
     fp8_linear = convert_linear_to_fp8(deepcopy(ref_linear), accum_qtype)
 

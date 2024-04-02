@@ -38,8 +38,8 @@ def fp8_matmul_kernel(
 
     # output = torch.empty(mat_a.shape[0], mat_b.shape[1], device=device, dtype=torch.float32)
     # output = torch.empty(mat_a.shape[0], mat_b.shape[-1], device=device, dtype=out_torch_dtype)
-    # NOTE: mat_b = input, mat_a = weight
-    output = torch.empty(mat_b.shape[0], mat_b.shape[-1], device=device, dtype=out_torch_dtype)
+    # NOTE: mat_a = weight, mat_b = input
+    output = torch.empty(mat_b.shape[0], mat_a.shape[0], device=device, dtype=out_torch_dtype)
 
     workspace = torch.empty(33_554_432, dtype=torch.int8, device=device)
     accumulate = False

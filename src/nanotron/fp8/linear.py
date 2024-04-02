@@ -47,6 +47,9 @@ class FP8Linear(nn.Linear):
             # TODO(xrsrke): adjust the accumation precision
             return F.linear(input, self.weight, self.bias)
 
+        # if self.name == "transformer.h.0.self_attention.query_key_value":
+        #     assert 1 == 1
+
         from einops import rearrange
 
         seq_len = None
@@ -124,8 +127,6 @@ class _FP8Matmul(torch.autograd.Function):
         ∂L/∂W = Xᵀ @ ∂L/∂Y
         Reference: https://web.eecs.umich.edu/~justincj/teaching/eecs442/notes/linear-backprop.html
         """
-        pydevd.settrace(suspend=False, trace_only_current_thread=True)
-
         # TODO(xrsrke): investigate how does grad_output.contiguous() affect the outputs
         input, weight = ctx.saved_tensors
         accum_qtype = ctx.accum_qtype
@@ -157,5 +158,6 @@ class _FP8Matmul(torch.autograd.Function):
         assert grad_input.dtype == QTYPE_TO_DTYPE[accum_qtype]
         assert grad_weight.dtype == QTYPE_TO_DTYPE[accum_qtype]
         # TODO(xrsrke): maintain a persistence metadata across training
+        pydevd.settrace(suspend=False, trace_only_current_thread=True)
         weight.grad = FP8Tensor(grad_weight, dtype=FP8LM_RECIPE.linear.weight_grad.dtype)
         return grad_input, None, None, None
