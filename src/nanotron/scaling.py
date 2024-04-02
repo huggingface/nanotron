@@ -129,8 +129,6 @@ def parametrize_using_mu_transfer(model: nn.Module, config: Config, parallel_con
     # named_modules = list(model.named_modules())
     named_modules = _get_leaf_modules(model)
 
-
-
     [x[0] for x in named_modules if not hasattr(x[1], "linear_type")]
     scale_modules = [x for x in named_modules if hasattr(x[1], "linear_type")]
 
