@@ -30,73 +30,11 @@ logger = logging.get_logger(__name__)
 HARCODED_PROMPT = "what is the meaning of the word chutzpah?"
 
 
-def convert_checkpoint_and_save(checkpoint_path: Path, save_path: Path):
-    device = torch.device("cuda")
-
-    with open(checkpoint_path / "model_config.json", "r") as f:
-        attrs = json.load(f)
-        model_config = NanotronLlamaConfig(**attrs)
-
-    dtype = getattr(torch, model_config.dtype)
-
-    parallel_config = ParallelismArgs(
-        dp=1,
-        pp=1,
-        tp=1,
-        pp_engine=AllForwardAllBackwardPipelineEngine(),
-        tp_mode=TensorParallelLinearMode.ALL_REDUCE,
-        tp_linear_async_communication=False,
-    )
-
-    parallel_context = ParallelContext(
-        data_parallel_size=1,
-        pipeline_parallel_size=1,
-        tensor_parallel_size=1,
-    )
-
-    model_nanotron = build_model(
-        model_builder=lambda: LlamaForTraining(
-            config=model_config,
-            parallel_context=parallel_context,
-            parallel_config=parallel_config,
-            random_states=None,
-        ),
-        parallel_context=parallel_context,
-        dtype=dtype,
-        device=device,
-    )
-
-    mark_tied_parameters(model=model_nanotron, parallel_context=parallel_context)
-
-    # Load checkpoint directly in memory and then only keep the state dictionary
-    load_weights(model=model_nanotron, parallel_context=parallel_context, root_folder=checkpoint_path)
-    model_nanotron_state_dict = model_nanotron.state_dict()
-    del model_nanotron
-
-    # Init the HF mode
-    model_config_hf = HFLlamaConfig(
-        bos_token_id=model_config.bos_token_id,
-        eos_token_id=model_config.eos_token_id,
-        hidden_act=model_config.hidden_act,
-        hidden_size=model_config.hidden_size,
-        initializer_range=model_config.initializer_range,
-        intermediate_size=model_config.intermediate_size,
-        max_position_embeddings=model_config.max_position_embeddings,
-        num_attention_heads=model_config.num_attention_heads,
-        num_hidden_layers=model_config.num_hidden_layers,
-        num_key_value_heads=model_config.num_key_value_heads,
-        pad_token_id=model_config.pad_token_id,
-        pretraining_tp=model_config.pretraining_tp,
-        rms_norm_eps=model_config.rms_norm_eps,
-        rope_scaling=model_config.rope_scaling,
-        tie_word_embeddings=model_config.tie_word_embeddings,
-        use_cache=model_config.use_cache,
-        vocab_size=model_config.vocab_size,
-    )
-
-    # Initialised HF model
-    with init_on_device_and_dtype(device, dtype):
-        model_hf = LlamaForCausalLM._from_config(model_config_hf)
+def convert_nanotron_to_hf(
+    nanotron_model: LlamaForTraining, hf_model: LlamaForCausalLM, model_config: NanotronLlamaConfig
+) -> LlamaForCausalLM:
+    model_nanotron_state_dict = nanotron_model.state_dict()
+    del nanotron_model
     # Get mapping of Nanotron layer and HF layer
     hf_to_nanotron = {}
 
@@ -148,7 +86,7 @@ def convert_checkpoint_and_save(checkpoint_path: Path, save_path: Path):
         return reverse_pattern
 
     # Loop over the state dict and convert the keys to HF format
-    for module_name_hf, module_hf in model_hf.named_modules():
+    for module_name_hf, module_hf in hf_model.named_modules():
         for param_name_hf, param_hf in module_hf.named_parameters(recurse=False):
             # Get the Nanotron parameter
             nanotron_key = "model." + hf_to_nanotron[f"{module_name_hf}.{param_name_hf}"]
@@ -160,9 +98,78 @@ def convert_checkpoint_and_save(checkpoint_path: Path, save_path: Path):
 
             with torch.no_grad():
                 param_hf.copy_(param)
+    return hf_model
 
+
+def load_nanotron_model(
+    model_config: NanotronLlamaConfig, device: torch.device, dtype: torch.dtype, checkpoint_path: Path
+) -> LlamaForTraining:
+    parallel_config = ParallelismArgs(
+        dp=1,
+        pp=1,
+        tp=1,
+        pp_engine=AllForwardAllBackwardPipelineEngine(),
+        tp_mode=TensorParallelLinearMode.ALL_REDUCE,
+        tp_linear_async_communication=False,
+    )
+    parallel_context = ParallelContext(
+        data_parallel_size=1,
+        pipeline_parallel_size=1,
+        tensor_parallel_size=1,
+    )
+    nanotron_model = build_model(
+        model_builder=lambda: LlamaForTraining(
+            config=model_config,
+            parallel_context=parallel_context,
+            parallel_config=parallel_config,
+            random_states=None,
+        ),
+        parallel_context=parallel_context,
+        dtype=dtype,
+        device=device,
+    )
+    mark_tied_parameters(model=nanotron_model, parallel_context=parallel_context)
+    # Load checkpoint directly in memory and then only keep the state dictionary
+    load_weights(model=nanotron_model, parallel_context=parallel_context, root_folder=checkpoint_path)
+    return nanotron_model
+
+
+def convert_checkpoint_and_save(checkpoint_path: Path, save_path: Path):
+    device = torch.device("cuda")
+
+    with open(checkpoint_path / "model_config.json", "r") as f:
+        attrs = json.load(f)
+        model_config = NanotronLlamaConfig(**attrs)
+    dtype = getattr(torch, model_config.dtype)
+    nanotron_model = load_nanotron_model(
+        model_config=model_config, device=device, dtype=dtype, checkpoint_path=checkpoint_path
+    )
+    # Init the HF mode
+    model_config_hf = HFLlamaConfig(
+        bos_token_id=model_config.bos_token_id,
+        eos_token_id=model_config.eos_token_id,
+        hidden_act=model_config.hidden_act,
+        hidden_size=model_config.hidden_size,
+        initializer_range=model_config.initializer_range,
+        intermediate_size=model_config.intermediate_size,
+        max_position_embeddings=model_config.max_position_embeddings,
+        num_attention_heads=model_config.num_attention_heads,
+        num_hidden_layers=model_config.num_hidden_layers,
+        num_key_value_heads=model_config.num_key_value_heads,
+        pad_token_id=model_config.pad_token_id,
+        pretraining_tp=model_config.pretraining_tp,
+        rms_norm_eps=model_config.rms_norm_eps,
+        rope_scaling=model_config.rope_scaling,
+        tie_word_embeddings=model_config.tie_word_embeddings,
+        use_cache=model_config.use_cache,
+        vocab_size=model_config.vocab_size,
+    )
+    # Initialised HF model
+    with init_on_device_and_dtype(device, dtype):
+        hf_model = LlamaForCausalLM._from_config(model_config_hf)
+    hf_model = convert_nanotron_to_hf(nanotron_model=nanotron_model, hf_model=hf_model)
     # Save the model
-    model_hf.save_pretrained(save_path)
+    hf_model.save_pretrained(save_path)
     print(f"Model saved to {save_path}")
 
 
@@ -179,7 +186,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Convert Nanotron weights to HF format")
     parser.add_argument("--checkpoint_path", type=str, default="llama-7b", help="Path to the checkpoint")
     parser.add_argument("--save_path", type=str, default="llama-7b-hf", help="Path to save the HF model")
-    parser.add_argument("--tokenizer_name", type=str, default="EleutherAI/gpt-j-6B")
+    parser.add_argument("--tokenizer_name", type=str, default="meta-llama/Llama-2-7b-chat-hf")
     args = parser.parse_args()
     save_path = Path(args.save_path)
     checkpoint_path = Path(args.checkpoint_path)
