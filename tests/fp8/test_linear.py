@@ -32,12 +32,22 @@ def test_fp8_linear_parameters():
     assert all(p.requires_grad for p in fp8_linear.parameters()) is True
 
 
+@pytest.mark.parametrize(
+    "input",
+    [
+        # torch.randn(5, 16, device="cuda", dtype=torch.float32), # [B, H]
+        # torch.randn(5, 10, 16, device="cuda", dtype=torch.float32), # [B, N, H],
+        torch.randn(64, 64, device="cuda", dtype=torch.float32),  # [B, H]
+        torch.randn(16, 64, device="cuda", dtype=torch.float32),  # [B, H]
+        torch.randn(16, 32, 64, device="cuda", dtype=torch.float32),  # [B, N, H]
+        torch.randn(64, 64, 64, device="cuda", dtype=torch.float32),  # [B, N, H]
+    ],
+)
 @pytest.mark.parametrize("is_bias", [True, False])
 @pytest.mark.parametrize("accum_qtype", [DTypes.KFLOAT32, DTypes.KFLOAT16])
-def test_fp8_linear_forward_pass(is_bias, accum_qtype):
-    input = torch.randn(16, 16, device="cuda", dtype=torch.float32)
+def test_fp8_linear_forward_pass(input, is_bias, accum_qtype):
     ref_input = input.detach().clone()
-    ref_linear = nn.Linear(16, 16, bias=is_bias, device="cuda", dtype=torch.float32)
+    ref_linear = nn.Linear(64, 64, bias=is_bias, device="cuda", dtype=torch.float32)
 
     fp8_linear = convert_linear_to_fp8(deepcopy(ref_linear), accum_qtype)
 

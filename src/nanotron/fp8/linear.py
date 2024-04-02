@@ -1,5 +1,6 @@
 from typing import Optional, Tuple, Union
 
+import pydevd
 import torch
 import torch.nn.functional as F
 import transformer_engine as te  # noqa
@@ -46,6 +47,19 @@ class FP8Linear(nn.Linear):
             # TODO(xrsrke): adjust the accumation precision
             return F.linear(input, self.weight, self.bias)
 
+        from einops import rearrange
+
+        seq_len = None
+        batch_size = None
+        is_input_flat = False
+        if input.ndim == 3:
+            batch_size = input.shape[0]
+            seq_len = input.shape[1]
+            is_input_flat = True
+            input = rearrange(input, "b n h -> (b n) h")
+        elif input.ndim > 3:
+            raise ValueError(f"Unsupported input shape: {input.shape}")
+
         # NOTE: just a phony tensor to make pytorch trigger the backward pass
         # because weight and bias's requires_grad are set to False
         # so that we can compute the gradients using the fp8 kernels by ourselves
@@ -57,6 +71,7 @@ class FP8Linear(nn.Linear):
         # TODO(xrsrke): support return an fp8 tensor as output
         # since we will quantize it back to FP8 anyway in the next linear
         output = output if self.bias is None else output + self.bias
+        output = rearrange(output, "(b n) h -> b n h", n=seq_len, b=batch_size) if is_input_flat is True else output
         return output
 
 
@@ -77,12 +92,24 @@ class _FP8Matmul(torch.autograd.Function):
         ctx.accum_qtype = accum_qtype
         ctx.save_for_backward(input, weight)
 
+        # weight = weight.T
+
         # NOTE: pass FP8Tensor instead of FP8Parameter
         output = fp8_matmul_kernel(
+            # NOTE: that works
             mat_a=weight.data,
             transpose_a=True,
             mat_b=input,
             transpose_b=False,
+            # NOTE: input @ weight.T
+            # mat_a=input,
+            # transpose_a=False,
+            # mat_b=weight.data,
+            # transpose_b=True,
+            # mat_a=weight.data,
+            # transpose_a=False,
+            # mat_b=input,
+            # transpose_b=False,
             use_split_accumulator=False,
             accum_qtype=accum_qtype,
         )
@@ -97,7 +124,7 @@ class _FP8Matmul(torch.autograd.Function):
         ∂L/∂W = Xᵀ @ ∂L/∂Y
         Reference: https://web.eecs.umich.edu/~justincj/teaching/eecs442/notes/linear-backprop.html
         """
-        # pydevd.settrace(suspend=False, trace_only_current_thread=True)
+        pydevd.settrace(suspend=False, trace_only_current_thread=True)
 
         # TODO(xrsrke): investigate how does grad_output.contiguous() affect the outputs
         input, weight = ctx.saved_tensors
