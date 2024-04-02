@@ -140,7 +140,7 @@ def convert_checkpoint_and_save(checkpoint_path: Path, save_path: Path):
     with open(checkpoint_path / "model_config.json", "r") as f:
         attrs = json.load(f)
         model_config = NanotronLlamaConfig(**attrs)
-    dtype = getattr(torch, model_config.dtype)
+    dtype = getattr(torch, "bfloat16")
     nanotron_model = load_nanotron_model(
         model_config=model_config, device=device, dtype=dtype, checkpoint_path=checkpoint_path
     )
@@ -167,7 +167,7 @@ def convert_checkpoint_and_save(checkpoint_path: Path, save_path: Path):
     # Initialised HF model
     with init_on_device_and_dtype(device, dtype):
         hf_model = LlamaForCausalLM._from_config(model_config_hf)
-    hf_model = convert_nanotron_to_hf(nanotron_model=nanotron_model, hf_model=hf_model)
+    hf_model = convert_nanotron_to_hf(nanotron_model, hf_model, model_config)
     # Save the model
     hf_model.save_pretrained(save_path)
     print(f"Model saved to {save_path}")
