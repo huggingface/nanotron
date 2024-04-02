@@ -50,7 +50,7 @@ class FP8Linear(nn.Linear):
         # because weight and bias's requires_grad are set to False
         # so that we can compute the gradients using the fp8 kernels by ourselves
         phony = torch.empty(0, device=input.device, requires_grad=True)
-        print(f"name={self.name}")
+        # print(f"name={self.name}")
         output, _ = _FP8Matmul.apply(input, self.weight, phony, self.accum_qtype)
 
         # TODO(xrsrke): add support for adding bias in fp8

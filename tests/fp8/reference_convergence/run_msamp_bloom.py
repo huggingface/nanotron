@@ -8,7 +8,6 @@ import torch.nn as nn
 import torch.optim as optim
 from datasets import load_dataset
 from torch.utils.data import DataLoader
-from transformers import AutoModelForCausalLM, AutoTokenizer
 from transformers import BloomConfig, BloomTokenizerFast, BloomForCausalLM
 from nanotron.fp8.optim import FP8Adam
 from nanotron.fp8.utils import convert_to_fp8_module
@@ -75,7 +74,7 @@ def main():
         
     fp32_model = deepcopy(model).to("cuda")
     bf16_model = deepcopy(model).to("cuda")
-    # fp8_model = deepcopy(model).to("cuda")
+    fp8_model = deepcopy(model).to("cuda")
     msamp_model = deepcopy(model).to("cuda")
 
 
@@ -93,8 +92,8 @@ def main():
     bf16_model = bf16_model.to(dtype=torch.bfloat16)
     bf16_optim = optim.Adam(bf16_model.parameters(), lr=LR)
     
-    # fp8_model = convert_to_fp8_module(fp8_model, accum_qtype=DTypes.KFLOAT16)
-    # fp8_optim = FP8Adam(fp8_model.parameters(), lr=LR)
+    fp8_model = convert_to_fp8_module(fp8_model, accum_qtype=DTypes.KFLOAT16)
+    fp8_optim = FP8Adam(fp8_model.parameters(), lr=LR)
 
     msamp_optim = optim.Adam(msamp_model.parameters(), lr=LR)
     msamp_model, msamp_optim = msamp.initialize(msamp_model, msamp_optim, opt_level=OPT_LEVEL)
@@ -102,6 +101,10 @@ def main():
     msamp_model.train()
     bf16_model.train()
     fp32_model.train()
+    
+    for fp8_p, fp32_p in zip(fp8_model.parameters(), fp32_model.parameters()):
+        assert fp8_p.shape == fp32_p.shape
+
     
     wandb.init(
         project="fp8_for_nanotron",
@@ -145,12 +148,12 @@ def main():
             bf16_loss.backward()
             bf16_optim.step()
             
-            # fp8_optim.zero_grad()
-            # fp8_output = fp8_model(**batch)
-            # fp8_loss = loss_func(fp8_output, targets)
-            # fp8_scaler.scale(fp8_loss).backward()
-            # fp8_scaler.step(fp8_optim)
-            # fp8_scaler.update()
+            fp8_optim.zero_grad()
+            fp8_output = fp8_model(**batch)
+            fp8_loss = loss_func(fp8_output, targets)
+            fp8_scaler.scale(fp8_loss).backward()
+            fp8_scaler.step(fp8_optim)
+            fp8_scaler.update()
 
             msamp_optim.zero_grad()
             msamp_output = msamp_model(**batch)
@@ -162,13 +165,13 @@ def main():
             wandb.log({
                 "fp32_loss": fp32_loss.item(),
                 "bf16_loss": bf16_loss.item(),
-                # "fp8_loss": fp8_loss.item(),
+                "fp8_loss": fp8_loss.item(),
                 "msamp_loss": msamp_loss.item(),
                 
-                # "l1_norm_diff_fp8_with_loss_scaler_relative_to_fp32": l1_norm_diff(fp8_loss, fp32_loss).item(),
+                "l1_norm_diff_fp8_with_loss_scaler_relative_to_fp32": l1_norm_diff(fp8_loss, fp32_loss).item(),
                 "l1_norm_diff_msamp_with_loss_scaler_relative_to_fp32": l1_norm_diff(msamp_loss, fp32_loss).item(),
                 
-                # "l1_norm_diff_fp8_with_loss_scaler_relative_to_bf16": l1_norm_diff(fp8_loss, bf16_loss).item(),
+                "l1_norm_diff_fp8_with_loss_scaler_relative_to_bf16": l1_norm_diff(fp8_loss, bf16_loss).item(),
                 "l1_norm_diff_msamp_with_loss_scaler_relative_to_bf16": l1_norm_diff(msamp_loss, bf16_loss).item(),
             })
 
