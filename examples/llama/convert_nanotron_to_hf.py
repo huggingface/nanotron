@@ -8,6 +8,7 @@ Command:
 import argparse
 import json
 from pathlib import Path
+from typing import Literal
 
 import torch
 from nanotron import logging
@@ -33,30 +34,33 @@ HARCODED_PROMPT = "what is the meaning of the word chutzpah?"
 def convert_nanotron_to_hf(
     nanotron_model: LlamaForTraining, hf_model: LlamaForCausalLM, model_config: NanotronLlamaConfig
 ) -> LlamaForCausalLM:
-    model_nanotron_state_dict = nanotron_model.state_dict()
+    nanotron_model_state_dict = nanotron_model.state_dict()
     del nanotron_model
     # Get mapping of Nanotron layer and HF layer
     hf_to_nanotron = {}
 
     # Static mappings
-    hf_to_nanotron["backbone.embeddings.weight"] = "token_position_embeddings.pp_block.token_embedding.weight"
-    hf_to_nanotron["backbone.norm_f.weight"] = "final_layer_norm.pp_block.weight"
     hf_to_nanotron["lm_head.weight"] = "lm_head.pp_block.weight"
+    hf_to_nanotron["model.embed_tokens.weight"] = "token_position_embeddings.pp_block.token_embedding.weight"
+    hf_to_nanotron["model.norm.weight"] = "final_layer_norm.pp_block.weight"
+    hf_to_nanotron["model.embed_tokens.weight"] = "token_position_embeddings.pp_block.token_embedding.weight"
 
     # Dynamic mappings within a loop
     for i in range(model_config.num_hidden_layers):
-        hf_to_nanotron[f"backbone.layers.{i}.mixer.A_log"] = f"decoder.{i}.pp_block.mixer.A_log"
-        hf_to_nanotron[f"backbone.layers.{i}.mixer.D"] = f"decoder.{i}.pp_block.mixer.D"
-        hf_to_nanotron[f"backbone.layers.{i}.mixer.in_proj.weight"] = f"decoder.{i}.pp_block.mixer.in_proj.weight"
-        hf_to_nanotron[f"backbone.layers.{i}.mixer.conv1d.weight"] = f"decoder.{i}.pp_block.mixer.conv1d.weight"
-        hf_to_nanotron[f"backbone.layers.{i}.mixer.conv1d.bias"] = f"decoder.{i}.pp_block.mixer.conv1d.bias"
-        hf_to_nanotron[f"backbone.layers.{i}.mixer.x_proj.weight"] = f"decoder.{i}.pp_block.mixer.x_proj.weight"
-        hf_to_nanotron[f"backbone.layers.{i}.mixer.x_proj.bias"] = f"decoder.{i}.pp_block.mixer.x_proj.bias"
-        hf_to_nanotron[f"backbone.layers.{i}.mixer.dt_proj.weight"] = f"decoder.{i}.pp_block.mixer.dt_proj.weight"
-        hf_to_nanotron[f"backbone.layers.{i}.mixer.dt_proj.bias"] = f"decoder.{i}.pp_block.mixer.dt_proj.bias"
-        hf_to_nanotron[f"backbone.layers.{i}.mixer.out_proj.weight"] = f"decoder.{i}.pp_block.mixer.out_proj.weight"
-        hf_to_nanotron[f"backbone.layers.{i}.mixer.out_proj.bias"] = f"decoder.{i}.pp_block.mixer.out_proj.bias"
-        hf_to_nanotron[f"backbone.layers.{i}.norm.weight"] = f"decoder.{i}.pp_block.norm.weight"
+        hf_to_nanotron[f"model.layers.{i}.self_attn.q_proj.weight"] = f"decoder.{i}.pp_block.attn.qkv_proj.weight"
+        hf_to_nanotron[f"model.layers.{i}.self_attn.k_proj.weight"] = f"decoder.{i}.pp_block.attn.qkv_proj.weight"
+        hf_to_nanotron[f"model.layers.{i}.self_attn.v_proj.weight"] = f"decoder.{i}.pp_block.attn.qkv_proj.weight"
+        hf_to_nanotron[f"model.layers.{i}.self_attn.o_proj.weight"] = f"decoder.{i}.pp_block.attn.o_proj.weight"
+        hf_to_nanotron[f"model.layers.{i}.mlp.gate_proj.weight"] = f"decoder.{i}.pp_block.mlp.gate_up_proj.weight"
+        hf_to_nanotron[f"model.layers.{i}.mlp.gate_proj.bias"] = f"decoder.{i}.pp_block.mlp.gate_up_proj.bias"
+        hf_to_nanotron[f"model.layers.{i}.mlp.up_proj.weight"] = f"decoder.{i}.pp_block.mlp.gate_up_proj.weight"
+        hf_to_nanotron[f"model.layers.{i}.mlp.up_proj.bias"] = f"decoder.{i}.pp_block.mlp.gate_up_proj.bias"
+        hf_to_nanotron[f"model.layers.{i}.mlp.down_proj.weight"] = f"decoder.{i}.pp_block.mlp.down_proj.weight"
+        hf_to_nanotron[f"model.layers.{i}.mlp.down_proj.bias"] = f"decoder.{i}.pp_block.mlp.down_proj.bias"
+        hf_to_nanotron[f"model.layers.{i}.input_layernorm.weight"] = f"decoder.{i}.pp_block.input_layernorm.weight"
+        hf_to_nanotron[
+            f"model.layers.{i}.post_attention_layernorm.weight"
+        ] = f"decoder.{i}.pp_block.post_attention_layernorm.weight"
 
     def _reverse_interleave_pattern(N):
         """
@@ -90,15 +94,41 @@ def convert_nanotron_to_hf(
         for param_name_hf, param_hf in module_hf.named_parameters(recurse=False):
             # Get the Nanotron parameter
             nanotron_key = "model." + hf_to_nanotron[f"{module_name_hf}.{param_name_hf}"]
-            param = model_nanotron_state_dict[nanotron_key]
-
-            if "in_proj" in nanotron_key:
+            param = nanotron_model_state_dict[nanotron_key]
+            if "qkv_proj" in nanotron_key:
+                proj_name = module_name_hf.split(".")[4][0]
+                param = _handle_attention_block(param, proj_name)
                 # Undo the interleaving weights in Nanotron to make it HF compatible
                 param = param[_reverse_interleave_pattern(param.shape[0]), :]
-
+            elif "gate_up_proj" in nanotron_key:
+                gate = "gate" in param_name_hf
+                param = _handle_gate_up_proj(param, gate)
             with torch.no_grad():
                 param_hf.copy_(param)
     return hf_model
+
+
+def _handle_attention_block(qkv: torch.Tensor, part: Literal["q", "k", "v"]) -> torch.Tensor:
+    assert part in ["q", "k", "v"], "part must be one of [q, k, v]"
+    if not qkv.shape[0] % 3 == 0:
+        raise ValueError("qkv shape must be a multiple of 3")
+    # Divide by 3 beceause we have q, k, v, each of which represents
+    # one third of the total size of the first dimension
+    weight_size = qkv.shape[0] // 3
+    if part == "q":
+        return qkv[:weight_size]
+    elif part == "k":
+        return qkv[weight_size : 2 * weight_size]
+    else:
+        return qkv[2 * weight_size :]
+
+
+def _handle_gate_up_proj(gate_up_proj: torch.Tensor, gate: bool) -> torch.Tensor:
+    weight_size = gate_up_proj.shape[0] // 2
+    if gate:
+        return gate_up_proj[:weight_size]
+    else:
+        return gate_up_proj[weight_size:]
 
 
 def load_nanotron_model(
@@ -174,7 +204,7 @@ def convert_checkpoint_and_save(checkpoint_path: Path, save_path: Path):
 
 
 def check_converted_model_generation(save_path: Path, tokenizer_name: str):
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, token="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")
     input_ids = tokenizer(HARCODED_PROMPT, return_tensors="pt")["input_ids"]
     print("Inputs:", tokenizer.batch_decode(input_ids))
     model = LlamaForCausalLM.from_pretrained(save_path)
