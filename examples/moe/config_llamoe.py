@@ -7,6 +7,7 @@ from nanotron.config import (
     CheckpointsArgs,
     Config,
     DataArgs,
+    DatasetStageArgs,
     GeneralArgs,
     LoggingArgs,
     LRSchedulerArgs,
@@ -151,7 +152,10 @@ config = Config(
     optimizer=optimizer,
     logging=LoggingArgs(),
     tokens=tokens,
-    data=data,
+    data_stages=[
+        DatasetStageArgs(name="Stable Training Stage", start_training_step=1, data=data),
+        DatasetStageArgs(name="Annealing Phase", start_training_step=10, data=data),
+    ],
 )
 
 if __name__ == "__main__":
