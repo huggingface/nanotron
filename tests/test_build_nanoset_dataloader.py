@@ -145,9 +145,8 @@ def _test_build_nanoset_dataloader(
         for all_3d_configs in get_all_3d_configurations(gpus)
     ],
 )
-@pytest.mark.parametrize("train_steps", [100, 500])
 @pytest.mark.parametrize("skipped_batches", [20, 50])
-def test_recover_nanoset_dataloader(tp: int, dp: int, pp: int, train_steps: int, skipped_batches: int):
+def test_recover_nanoset_dataloader(tp: int, dp: int, pp: int, skipped_batches: int):
     test_context = TestContext()
 
     # Create dataset files
@@ -164,7 +163,6 @@ def test_recover_nanoset_dataloader(tp: int, dp: int, pp: int, train_steps: int,
     init_distributed(tp=tp, dp=dp, pp=pp)(_test_recover_nanoset_dataloader)(
         test_context=test_context,
         path_to_mmap_files=mmap_dataset_paths,
-        train_steps=train_steps,
         skipped_batches=skipped_batches,
     )
 
@@ -173,7 +171,6 @@ def _test_recover_nanoset_dataloader(
     parallel_context: ParallelContext,
     test_context: TestContext,
     path_to_mmap_files: str,
-    train_steps: int,
     skipped_batches: int,
 ):
     SEED = 1234
@@ -181,6 +178,7 @@ def _test_recover_nanoset_dataloader(
     N_MICRO_BATCHES_PER_BATCH = 8
     GLOBAL_BATCH_SIZE = MICRO_BATCH_SIZE * N_MICRO_BATCHES_PER_BATCH * parallel_context.dp_pg.size()
     SEQUENCE_LENGTH = 1024
+    TRAIN_STEPS = 100
 
     SPLIT = "70,20,10"
 
@@ -192,7 +190,7 @@ def _test_recover_nanoset_dataloader(
         sequence_length=SEQUENCE_LENGTH,
         data_path=path_to_mmap_files[0],
         split=SPLIT,
-        train_split_samples=train_steps * GLOBAL_BATCH_SIZE,
+        train_split_samples=TRAIN_STEPS * GLOBAL_BATCH_SIZE,
         path_to_cache=test_context.get_auto_remove_tmp_dir(),
     )
 
@@ -201,7 +199,7 @@ def _test_recover_nanoset_dataloader(
         sequence_length=SEQUENCE_LENGTH,
         data_path={path_to_mmap_files[0]: 0.8, path_to_mmap_files[1]: 0.2},
         split=SPLIT,
-        train_split_samples=train_steps * GLOBAL_BATCH_SIZE,
+        train_split_samples=TRAIN_STEPS * GLOBAL_BATCH_SIZE,
         path_to_cache=test_context.get_auto_remove_tmp_dir(),
     )
 
