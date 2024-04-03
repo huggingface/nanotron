@@ -1,5 +1,4 @@
 from contextlib import nullcontext
-
 import pytest
 import torch
 from helpers.exception import assert_fail_except_rank_with
@@ -11,16 +10,41 @@ from nanotron.parallel.parameters import NanotronParameter
 from nanotron.sanity_checks import assert_tensor_synced_across_pg
 from torch import nn
 from torch.distributed import GradBucket
+import logging as lg
+from nanotron import logging
+import sys
+
+
+def set_logger_verbosity_format(logging_level: str, parallel_context: "ParallelContext"):
+    formatter = lg.Formatter(
+        fmt=f"%(asctime)s [%(levelname)s|DP={dist.get_rank(parallel_context.dp_pg)}|PP={dist.get_rank(parallel_context.pp_pg)}|TP={dist.get_rank(parallel_context.tp_pg)}]: %(message)s",
+        datefmt="%m/%d/%Y %H:%M:%S",
+    )
+    log_level = logging.log_levels[logging_level]
+
+    # main root logger
+    root_logger = logging.get_logger()
+    root_logger.setLevel(log_level)
+    handler = logging.NewLineStreamHandler(sys.stdout)
+    handler.setLevel(log_level)
+    handler.setFormatter(formatter)
+    root_logger.addHandler(handler)
+
+    # Brrr
+    logging.set_verbosity(log_level)
+    logging.set_formatter(formatter=formatter)
 
 
 @pytest.mark.skipif(available_gpus() < 2, reason="Testing test_ddp_with_afab requires at least 2 gpus")
-@pytest.mark.parametrize("accumulation_steps", [1, 3])
 @rerun_if_address_is_in_use()
 def test_ddp_with_afab(accumulation_steps):
     init_distributed(tp=1, dp=2, pp=1)(_test_ddp_with_afab)(accumulation_steps=accumulation_steps)
-
-
+    
 def _test_ddp_with_afab(parallel_context: ParallelContext, accumulation_steps: int):
+    # Set log levels
+    set_logger_verbosity_format("debug", parallel_context=parallel_context)
+    set_logger_verbosity_format("debug", parallel_context=parallel_context)
+    
     half_precision = torch.float16
 
     def allreduce_hook(process_group: dist.ProcessGroup, bucket: GradBucket):
@@ -77,3 +101,6 @@ def _test_ddp_with_afab(parallel_context: ParallelContext, accumulation_steps: i
                 assert_tensor_synced_across_pg(grad_hook, parallel_context.dp_pg)
 
     parallel_context.destroy()
+
+if __name__ == "__main__":
+    test_ddp_with_afab(accumulation_steps=3)

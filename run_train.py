@@ -134,7 +134,8 @@ def get_dataloader(trainer: DistributedTrainer) -> Dict[str, DataLoader]:
         # then we lazy initialize the dataloader for the other stages
         stage = cast(DatasetStageArgs, stage)
         dataloader = (
-            get_dataloader(trainer, stage.data)
+            # get_dataloader(trainer, stage.data)
+            get_dataloader_from_data_stage(trainer, stage.data)
             if idx == 0
             else lambda stage=stage: get_dataloader_from_data_stage(trainer, stage.data)
         )

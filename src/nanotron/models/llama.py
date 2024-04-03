@@ -17,12 +17,13 @@
 from typing import Dict, Optional, Union
 import math
 import torch
-from flash_attn import bert_padding
-from flash_attn.flash_attn_interface import (
-    flash_attn_varlen_func,
-    flash_attn_with_kvcache,
-)
-from flash_attn.layers.rotary import RotaryEmbedding as FlashRotaryEmbedding
+# from flash_attn import bert_padding
+# from flash_attn.flash_attn_interface import (
+#     flash_attn_varlen_func,
+#     flash_attn_with_kvcache,
+# )
+# from flash_attn.layers.rotary import RotaryEmbedding as FlashRotaryEmbedding
+from transformers.models.llama.modeling_llama import LlamaRotaryEmbedding
 from torch import nn
 
 from nanotron import distributed as dist
@@ -32,7 +33,8 @@ from nanotron.generation.generate_store import AttachableStore
 from nanotron.logging import log_rank
 from nanotron.models import NanotronModel
 from nanotron.nn.activations import ACT2FN
-from nanotron.nn.layer_norm import TritonRMSNorm
+# from nanotron.nn.layer_norm import TritonRMSNorm
+from torch.nn import LayerNorm
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter
 from nanotron.parallel.pipeline_parallel.block import (
@@ -52,6 +54,89 @@ from nanotron.utils import checkpoint_method
 
 logger = logging.get_logger(__name__)
 
+
+# rotary pos emb helpers (torch.jit.script does not seem to support staticmethod...)
+@torch.jit.script
+def rotate_half(x):
+    x1, x2 = x[..., : x.shape[-1] // 2], x[..., x.shape[-1] // 2 :]
+    return torch.cat((-x2, x1), dim=-1)
+class StarcoderRotaryEmbedding(nn.Module):
+    """Implementation of RotaryEmbedding from GPT-NeoX."""
+
+    def __init__(self, head_dim: int, base: int):
+        super().__init__()
+        self.base = base
+        self.head_dim = head_dim
+        self.seq_len_cached = -1
+        # TODO @nouamane: Figure out why we can't set `DTypeInvariantTensor` ...
+        self.inv_freq: torch.Tensor
+        self.register_buffer(
+            "inv_freq",
+            torch.empty(head_dim // 2, dtype=torch.float),
+            persistent=False,
+        )
+        self.cos_cached: Optional[torch.Tensor] = None
+        self.sin_cached: Optional[torch.Tensor] = None
+        self._initialized_buffer = False
+
+    def init_rotary_embeddings(self):
+        if self._initialized_buffer is True:
+            # Buffer if already initialized
+            return
+
+        assert self.inv_freq.device.type == "cuda"
+        # TODO @nouamane: One we figure out how to do the DTypeInvariantTensor, this can be removed and changed to an assert
+        if self.inv_freq.dtype != torch.float:
+            self.inv_freq = self.inv_freq.to(torch.float)
+        assert self.inv_freq.dtype == torch.float
+
+        self.inv_freq = 1.0 / (
+            self.base ** (torch.arange(0, self.head_dim, 2, dtype=torch.float, device="cuda") / self.head_dim)
+        )
+
+        self._initialized_buffer = True
+
+    def cos_sin(self, seq_len: int, past_key_values_length: int, device="cpu", dtype=torch.bfloat16) -> torch.Tensor:
+        total_length = seq_len + past_key_values_length
+        if total_length > self.seq_len_cached:
+            self.seq_len_cached = total_length
+            t = torch.arange(total_length, device=device, dtype=self.inv_freq.dtype)
+            freqs = torch.einsum("i,j->ij", t, self.inv_freq)
+            emb = torch.cat((freqs, freqs), dim=-1)  # [seq_len, head_dim]
+
+            if dtype in [torch.float16, torch.bfloat16]:
+                emb = emb.float()
+
+            self.cos_cached = emb.cos()[None, :, None, :]  # [1, seq_len, 1, head_dim]
+            self.sin_cached = emb.sin()[None, :, None, :]
+
+            self.cos_cached = self.cos_cached.type(dtype)
+            self.sin_cached = self.sin_cached.type(dtype)
+
+        return (
+            self.cos_cached[:, past_key_values_length : seq_len + past_key_values_length],
+            self.sin_cached[:, past_key_values_length : seq_len + past_key_values_length],
+        )
+
+    def forward(self, query, key, past_key_values_length=0):
+        """
+        Args:
+            query: [batch_size, seq_len, num_heads, head_dim]
+            key: [batch_size, seq_len, num_heads, head_dim]
+            past_key_values_length: int
+
+        Returns:
+            query: [batch_size, seq_len, num_heads, head_dim]
+            key: [batch_size, seq_len, num_heads, head_dim]
+        """
+        # TODO @nouamane: support position_ids
+        if self._initialized_buffer is False:
+            self.init_rotary_embeddings()
+        seq_len = query.shape[1]
+        cos, sin = self.cos_sin(
+            seq_len, past_key_values_length, query.device, query.dtype
+        )  # [1, seq_len, 1, head_dim]
+        return (query * cos) + (rotate_half(query) * sin), (key * cos) + (rotate_half(key) * sin)
 
 class RotaryEmbedding(nn.Module):
     def __init__(self, dim: int, end: int, theta: float = 10000.0):
@@ -321,8 +406,10 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         )
 
         # NOTE: Only supported for training (TODO(fmom): position_ids not supported yet)
-        self.flash_rotary_embedding = FlashRotaryEmbedding(dim=self.d_qk, interleaved=True)
-
+        # self.flash_rotary_embedding = FlashRotaryEmbedding(dim=self.d_qk, interleaved=True)
+        # self.flash_rotary_embedding = LlamaRotaryEmbedding(dim=self.d_qk)
+        self.flash_rotary_embedding = StarcoderRotaryEmbedding(self.d_qk, 10**5)
+        
         self.o_proj = TensorParallelRowLinear(
             config.num_attention_heads * self.d_qk,
             self.d_model,
@@ -545,36 +632,64 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             # Here it is, [batch_size, seq_length, num_heads, d_qk]
             # [2, batch_size, seq_length, num_heads, d_qk]
             key_value_states = torch.cat([key_states.unsqueeze(0), value_states.unsqueeze(0)], dim=0)
+            
             # [batch_size, seq_length, 2, num_heads, d_qk]
             key_value_states = key_value_states.permute(1, 2, 0, 3, 4).contiguous()
-            query_states, key_value_states = self.flash_rotary_embedding(query_states, kv=key_value_states)
+            # query_states, key_states = self.flash_rotary_embedding(query_states, key_states)
+            
             # [batch_size, seq_length, num_heads, d_qk]
             key_states, value_states = torch.split(key_value_states, 1, dim=2)
+            # [batch_size, seq_length, num_heads, d_qk]: [2, 32, 1, 4, 256]
+            key_states = key_states.squeeze(2)
+            value_states = value_states.squeeze(2)
+            query_states, key_states = self.flash_rotary_embedding(query_states, key_states)
 
             q_sequence_mask = sequence_mask
             kv_sequence_mask = sequence_mask
 
             kv_length = key_states.shape[1]
             # [batch_size, seq_length, num_heads, d_qk]
-            # Shaping for use in `flash-attn` version of flash-attn: `flash_attn_unpadded_func`
+            
+            
+            # need to be (batch_size, num_heads, q_len, self.d_qk) for torch.nn.functional.scaled_dot_product_attention
+            # debug note: batch_size=2, seq_len=32, hidden_dim=1024, self.d_qk=256, self.n_local_q_heads=4, q_length=32
             query_states = query_states.view(
-                batch_size * q_length, self.n_local_q_heads, self.d_qk
-            )  # [batch_size * q_length, self.n_heads, d_qk]
-
+                batch_size, self.n_local_q_heads, q_length, self.d_qk
+            )  
             key_states = key_states.view(
-                batch_size * kv_length, self.n_local_kv_heads, self.d_qk
-            )  # [batch_size * kv_length, self.n_heads, d_qk]
-            value_states = value_states.view(
-                batch_size * kv_length, self.n_local_kv_heads, self.d_v
-            )  # [batch_size * kv_length, self.n_heads, d_v]
-
-            attention_output = self.attention(
-                query_states=query_states,
-                key_states=key_states,
-                value_states=value_states,
-                q_sequence_mask=q_sequence_mask,
-                kv_sequence_mask=kv_sequence_mask,
+                batch_size, self.n_local_kv_heads, kv_length, self.d_qk
+            )  
+            value_states = value_states.reshape(
+                batch_size, self.n_local_kv_heads, kv_length, self.d_v
+            )  
+            
+            attention_output =  torch.nn.functional.scaled_dot_product_attention(
+                query_states,
+                key_states,
+                value_states,
+                # attn_mask=sequence_mask,
+                dropout_p=0.0,
             )
+            
+            # Shaping for use in `flash-attn` version of flash-attn: `flash_attn_unpadded_func`
+            # query_states = query_states.view(
+            #     batch_size * q_length, self.n_local_q_heads, self.d_qk
+            # )  # [batch_size * q_length, self.n_heads, d_qk]
+            # key_states = key_states.view(
+            #     batch_size * kv_length, self.n_local_kv_heads, self.d_qk
+            # )  # [batch_size * kv_length, self.n_heads, d_qk]
+            # value_states = value_states.view(
+            #     batch_size * kv_length, self.n_local_kv_heads, self.d_v
+            # )  # [batch_size * kv_length, self.n_heads, d_v]
+
+            # attention_output = self.attention(
+            #     query_states=query_states,
+            #     key_states=key_states,
+            #     value_states=value_states,
+            #     q_sequence_mask=q_sequence_mask,
+            #     kv_sequence_mask=kv_sequence_mask,
+            # )
+        
 
         attention_output = (
             attention_output.contiguous().view(batch_size, q_length, self.n_local_q_heads * self.d_v).transpose(0, 1)
@@ -593,7 +708,10 @@ class LlamaDecoderLayer(nn.Module):
         layer_idx: int,
     ):
         super().__init__()
-        self.input_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        ## re
+        # self.input_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.input_layernorm = LayerNorm(config.hidden_size, eps=config.rms_norm_eps)
+        
         self.attn = CausalSelfAttention(
             config=config,
             parallel_config=parallel_config,
@@ -601,7 +719,9 @@ class LlamaDecoderLayer(nn.Module):
             layer_idx=layer_idx,
         )
 
-        self.post_attention_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        # self.post_attention_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.post_attention_layernorm = LayerNorm(config.hidden_size, eps=config.rms_norm_eps)
+        
         self.mlp = MLP(config=config, parallel_config=parallel_config, tp_pg=tp_pg)
 
     def forward(
@@ -710,8 +830,10 @@ class LlamaModel(nn.Module):
 
         self.final_layer_norm = PipelineBlock(
             p2p=self.p2p,
-            module_builder=TritonRMSNorm,
-            module_kwargs={"hidden_size": config.hidden_size, "eps": config.rms_norm_eps},
+            # module_builder=TritonRMSNorm,
+            module_builder=LayerNorm,
+            # module_kwargs={"hidden_size": config.hidden_size, "eps": config.rms_norm_eps},
+            module_kwargs={"normalized_shape": config.hidden_size, "eps": config.rms_norm_eps},
             module_input_keys={"input"},
             module_output_keys={"hidden_states"},
         )  # TODO
@@ -932,7 +1054,8 @@ class LlamaForTraining(NanotronModel):
                     param.zero_()
                 else:
                     raise ValueError(f"Who the fuck is {param_name}?")
-            elif isinstance(module, TritonRMSNorm):
+            # elif isinstance(module, TritonRMSNorm):
+            elif isinstance(module, LayerNorm):
                 if "weight" == param_name:
                     # TODO @thomasw21: Sometimes we actually want 0
                     module.weight.fill_(1)
