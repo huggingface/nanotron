@@ -204,7 +204,7 @@ def convert_checkpoint_and_save(checkpoint_path: Path, save_path: Path):
 
 
 def check_converted_model_generation(save_path: Path, tokenizer_name: str):
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, token="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")
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
     input_ids = tokenizer(HARCODED_PROMPT, return_tensors="pt")["input_ids"]
     print("Inputs:", tokenizer.batch_decode(input_ids))
     model = LlamaForCausalLM.from_pretrained(save_path)
