@@ -124,7 +124,7 @@ def compute_hash(identifier: OrderedDict, n_digit: int = 8) -> int:
     return unique_description_hash
 
 
-def assert_nanoset(nanoset: Nanoset, parallel_context: ParallelContext):
+def assert_nanoset_sync_across_all_ranks(nanoset: Nanoset, parallel_context: ParallelContext):
     """
     Checks that the same Nanoset is created in all processes
     """
@@ -148,7 +148,7 @@ def assert_nanoset(nanoset: Nanoset, parallel_context: ParallelContext):
     )
 
 
-def assert_blendednanoset(blendednanoset: BlendedNanoset, parallel_context: ParallelContext):
+def assert_blendednanoset_sync_across_all_ranks(blendednanoset: BlendedNanoset, parallel_context: ParallelContext):
     """
     Checks that the same BlendedNanoset is created in all processes
     """

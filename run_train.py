@@ -11,11 +11,10 @@ import argparse
 from typing import Dict, cast
 
 from nanotron import logging
-from nanotron.config import (
-    DataArgs,
-    DatasetStageArgs,
-    PretrainDatasetsArgs,
-)
+from nanotron.config import DataArgs, DatasetStageArgs, NanosetDatasetsArgs, PretrainDatasetsArgs
+from nanotron.data.dataloader_builder import build_nanoset_dataloader
+from nanotron.data.dataset_builder import NanosetBuilder
+from nanotron.data.nanoset_configs import NanosetConfig
 from nanotron.dataloader import (
     clm_process,
     dummy_infinite_data_generator,
@@ -120,6 +119,37 @@ def get_dataloader_from_data_stage(trainer: DistributedTrainer, data: DataArgs):
                 f"Dataset is too small for steps ({total_tokens_dataset} < {num_tokens_needed_for_training}), "
                 f"Try train_steps<={len(dataloader.dataset) // trainer.global_batch_size + trainer.start_iteration_step}"
             )
+
+    # Case 3: Nanosets
+    elif isinstance(data.dataset, NanosetDatasetsArgs):
+        # Create Nanoset config
+        nanoset_config = NanosetConfig(
+            random_seed=data.seed,
+            sequence_length=trainer.sequence_length,
+            data_path=data.dataset.data_path,
+            split=data.dataset.split,
+            train_split_samples=trainer.config.tokens.train_steps * trainer.global_batch_size,
+            path_to_cache=data.dataset.path_to_cache,
+        )
+
+        # Build Nanoset datasets
+        train_dataset, _, _ = NanosetBuilder(nanoset_config).build()
+
+        # Prepare train dataloaders
+        train_dataloader = build_nanoset_dataloader(
+            train_dataset,
+            trainer.sequence_length,
+            parallel_context=trainer.parallel_context,
+            input_pp_rank=input_pp_rank,
+            output_pp_rank=output_pp_rank,
+            micro_batch_size=trainer.micro_batch_size,
+            consumed_train_samples=trainer.consumed_train_samples,
+            dataloader_num_workers=data.num_loading_workers,
+            dataloader_drop_last=True,
+        )
+
+        return train_dataloader
+
     else:
         raise ValueError(f"Unhandled case of `self.config.data.dataset`. Got: {data.dataset}")
 

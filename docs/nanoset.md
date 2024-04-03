@@ -19,7 +19,7 @@ python tools/preprocess_data.py \
        --input data/my_corpus.json \
        --output-prefix data/processed-datasets/my-llama2-dataset \
        --pretrained-model-name-or-path models/Llama-2-7b \
-       --workers 128
+       --num-workers 128
 </pre>
 
 In `--pretrained-model-name-or-path`, we will have to specify a tokenizer in the same way as we do when using `AutoTokenizers.from_pretrained(...)`.

@@ -113,7 +113,7 @@ class Nanoset(torch.utils.data.Dataset):
         path_to_cache = self.config.path_to_cache
         if path_to_cache is None:
             path_to_cache = os.path.join(
-                self.indexed_dataset.path_prefix[:-4], "cache", f"{type(self).__name__}_indices"
+                self.indexed_dataset.path_to_mmap[:-4], "cache", f"{type(self).__name__}_indices"
             )
 
         def get_path_to(suffix):
