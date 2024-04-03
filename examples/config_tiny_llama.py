@@ -5,6 +5,7 @@ from nanotron.config import (
     CheckpointsArgs,
     Config,
     DataArgs,
+    DatasetStageArgs,
     GeneralArgs,
     LlamaConfig,
     LoggingArgs,
@@ -24,12 +25,12 @@ model_config = LlamaConfig(
     bos_token_id=1,
     eos_token_id=2,
     hidden_act="silu",
-    hidden_size=16,
+    hidden_size=1024,
     initializer_range=0.02,
-    intermediate_size=64,
+    intermediate_size=2048,
     max_position_embeddings=50277,
     num_attention_heads=4,
-    num_hidden_layers=2,
+    num_hidden_layers=12,
     num_key_value_heads=4,
     pretraining_tp=1,
     rms_norm_eps=1e-05,
@@ -69,12 +70,12 @@ optimizer = OptimizerArgs(
 )
 
 parallelism = ParallelismArgs(
-    dp=2,
-    pp=2,
-    tp=2,
-    pp_engine="1f1b",
-    tp_mode="REDUCE_SCATTER",
-    tp_linear_async_communication=True,
+    dp=1,
+    pp=1,
+    tp=1,
+    pp_engine="afab",
+    tp_mode="ALL_REDUCE",
+    tp_linear_async_communication=False,
 )
 
 tokens = TokensArgs(sequence_length=32, train_steps=10, micro_batch_size=2, batch_accumulation_per_replica=1)
@@ -95,7 +96,7 @@ config = Config(
     optimizer=optimizer,
     logging=LoggingArgs(),
     tokens=tokens,
-    data=DataArgs(dataset=dataset, seed=seed),
+    data_stages=[DatasetStageArgs(name="Stable Training Stage", start_training_step=1, data=DataArgs(dataset=dataset, seed=seed))],
     profiler=None,
 )
 

@@ -5,6 +5,7 @@ from nanotron.config import (
     CheckpointsArgs,
     Config,
     DataArgs,
+    DatasetStageArgs,
     GeneralArgs,
     LlamaConfig,
     LoggingArgs,
@@ -95,7 +96,7 @@ config = Config(
     optimizer=optimizer,
     logging=LoggingArgs(),
     tokens=tokens,
-    data=DataArgs(dataset=dataset, seed=seed),
+    data_stages=[DatasetStageArgs(name="Stable Training Stage", start_training_step=1, data=DataArgs(dataset=dataset, seed=seed))],
     profiler=None,
 )
 
