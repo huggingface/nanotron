@@ -35,16 +35,13 @@ def convert_nanotron_to_hf(
     nanotron_model: LlamaForTraining, hf_model: LlamaForCausalLM, model_config: NanotronLlamaConfig
 ) -> LlamaForCausalLM:
     nanotron_model_state_dict = nanotron_model.state_dict()
-    del nanotron_model
     # Get mapping of Nanotron layer and HF layer
     hf_to_nanotron = {}
-
     # Static mappings
     hf_to_nanotron["lm_head.weight"] = "lm_head.pp_block.weight"
     hf_to_nanotron["model.embed_tokens.weight"] = "token_position_embeddings.pp_block.token_embedding.weight"
     hf_to_nanotron["model.norm.weight"] = "final_layer_norm.pp_block.weight"
     hf_to_nanotron["model.embed_tokens.weight"] = "token_position_embeddings.pp_block.token_embedding.weight"
-
     # Dynamic mappings within a loop
     for i in range(model_config.num_hidden_layers):
         hf_to_nanotron[f"model.layers.{i}.self_attn.q_proj.weight"] = f"decoder.{i}.pp_block.attn.qkv_proj.weight"
@@ -61,34 +58,6 @@ def convert_nanotron_to_hf(
         hf_to_nanotron[
             f"model.layers.{i}.post_attention_layernorm.weight"
         ] = f"decoder.{i}.pp_block.post_attention_layernorm.weight"
-
-    def _reverse_interleave_pattern(N):
-        """
-        Compute the reverse of the interleave pattern given by _interleave_pattern.
-        Example:
-        reverse_interleave_pattern(4) -> [0, 2, 1, 3]
-        reverse_interleave_pattern(8) -> [0, 2, 4, 6, 1, 3, 5, 7]
-        """
-        assert N % 2 == 0, "N must be even"
-
-        def __interleave_pattern(N):
-            """
-            interleave_pattern(4) -> [0, 2, 1, 3]
-            interleave_pattern(8) -> [0, 4, 1, 5, 2, 6, 3, 7]
-            """
-            assert N % 2 == 0, "N must be even"
-            pattern = []
-            for i in range(N // 2):
-                pattern.append(i)
-                pattern.append(i + N // 2)
-            return pattern
-
-        interleaved_pattern = __interleave_pattern(N)
-        reverse_pattern = [0] * N
-        for original_index, interleaved_index in enumerate(interleaved_pattern):
-            reverse_pattern[interleaved_index] = original_index
-        return reverse_pattern
-
     # Loop over the state dict and convert the keys to HF format
     for module_name_hf, module_hf in hf_model.named_modules():
         for param_name_hf, param_hf in module_hf.named_parameters(recurse=False):
@@ -98,8 +67,6 @@ def convert_nanotron_to_hf(
             if "qkv_proj" in nanotron_key:
                 proj_name = module_name_hf.split(".")[4][0]
                 param = _handle_attention_block(param, proj_name)
-                # Undo the interleaving weights in Nanotron to make it HF compatible
-                param = param[_reverse_interleave_pattern(param.shape[0]), :]
             elif "gate_up_proj" in nanotron_key:
                 gate = "gate" in param_name_hf
                 param = _handle_gate_up_proj(param, gate)
@@ -166,7 +133,6 @@ def load_nanotron_model(
 
 def convert_checkpoint_and_save(checkpoint_path: Path, save_path: Path):
     device = torch.device("cuda")
-
     with open(checkpoint_path / "model_config.json", "r") as f:
         attrs = json.load(f)
         model_config = NanotronLlamaConfig(**attrs)
