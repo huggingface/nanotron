@@ -10,7 +10,7 @@ from helpers.data import (
     get_max_value_by_group,
     preprocess_dummy_dataset,
 )
-from helpers.utils import available_gpus, get_all_3d_configurations, init_distributed
+from helpers.utils import available_gpus, get_all_3d_configurations, init_distributed, rerun_if_address_is_in_use
 from nanotron.data.blended_nanoset import BlendedNanoset
 from nanotron.data.dataloader_builder import build_nanoset_dataloader
 from nanotron.data.dataset_builder import NanosetBuilder
@@ -29,6 +29,7 @@ from nanotron.parallel import ParallelContext
 )
 @pytest.mark.parametrize("train_steps", [5, 10])
 @pytest.mark.parametrize("sequence_length", [512, 8192])
+@rerun_if_address_is_in_use()
 def test_build_nanoset_dataloader(tp: int, dp: int, pp: int, train_steps: int, sequence_length: int):
     test_context = TestContext()
 
@@ -146,6 +147,7 @@ def _test_build_nanoset_dataloader(
     ],
 )
 @pytest.mark.parametrize("skipped_batches", [20, 50])
+@rerun_if_address_is_in_use()
 def test_recover_nanoset_dataloader(tp: int, dp: int, pp: int, skipped_batches: int):
     test_context = TestContext()
 
