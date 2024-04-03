@@ -8,6 +8,7 @@ from nanotron.fp8.linear import FP8Linear
 from nanotron.fp8.parameter import FP8Parameter
 from nanotron.fp8.tensor import FP8Tensor, convert_tensor_from_fp8
 from nanotron.fp8.utils import convert_linear_to_fp8
+from timm.models.layers import trunc_normal_
 from torch import nn
 
 
@@ -35,8 +36,6 @@ def test_fp8_linear_parameters():
 @pytest.mark.parametrize(
     "input",
     [
-        # torch.randn(5, 16, device="cuda", dtype=torch.float32), # [B, H]
-        # torch.randn(5, 10, 16, device="cuda", dtype=torch.float32), # [B, N, H],
         torch.randn(64, 64, device="cuda", dtype=torch.float32),  # [B, H]
         torch.randn(16, 64, device="cuda", dtype=torch.float32),  # [B, H]
         torch.randn(16, 32, 64, device="cuda", dtype=torch.float32),  # [B, N, H]
@@ -51,6 +50,7 @@ def test_fp8_linear_forward_pass(input, is_bias, accum_qtype):
 
     ref_input = input.detach().clone()
     ref_linear = nn.Linear(HIDDEN_SIZE, INTERDIM_SIZE, bias=is_bias, device="cuda", dtype=torch.float32)
+    trunc_normal_(ref_linear.weight, std=0.02)
     # torch.nn.init.normal_(ref_linear.weight, mean=0.0, std=math.sqrt(1/(INTERDIM_SIZE)))
     # torch.nn.init.normal_(ref_linear.bias, mean=0.0, std=math.sqrt(1/(HIDDEN_SIZE)))
 
@@ -67,12 +67,23 @@ def test_fp8_linear_forward_pass(input, is_bias, accum_qtype):
 
 
 # TODO(xrsrke): add cases where the input requires and don't require grad
-@pytest.mark.parametrize("input_requires_grad", [True, False])
+@pytest.mark.parametrize(
+    "input",
+    [
+        torch.randn(64, 64, device="cuda", dtype=torch.float32),  # [B, H]
+        torch.randn(16, 64, device="cuda", dtype=torch.float32),  # [B, H]
+        torch.randn(16, 32, 64, device="cuda", dtype=torch.float32),  # [B, N, H]
+        torch.randn(64, 64, 64, device="cuda", dtype=torch.float32),  # [B, N, H]
+    ],
+)
 @pytest.mark.parametrize("accum_qtype", [DTypes.KFLOAT32, DTypes.KFLOAT16])
-def test_fp8_linear_backward_pass(input_requires_grad, accum_qtype):
-    input = torch.randn(16, 16, device="cuda", dtype=torch.float32, requires_grad=input_requires_grad)
+def test_fp8_linear_backward_pass(input, accum_qtype):
+    HIDDEN_SIZE = 64
+    INTERDIM_SIZE = 64 * 4
+
     ref_input = input.detach().clone().requires_grad_(True)
-    ref_linear = nn.Linear(16, 16, device="cuda", dtype=torch.float32)
+    ref_linear = nn.Linear(HIDDEN_SIZE, INTERDIM_SIZE, device="cuda", dtype=torch.float32)
+    trunc_normal_(ref_linear.weight, std=0.02)
 
     fp8_linear = convert_linear_to_fp8(deepcopy(ref_linear), accum_qtype)
 

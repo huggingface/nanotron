@@ -1,6 +1,5 @@
 from typing import Optional, Tuple, Union
 
-import pydevd
 import torch
 import torch.nn.functional as F
 import transformer_engine as te  # noqa
@@ -8,7 +7,7 @@ from torch import nn
 
 from nanotron.fp8.constants import FP8LM_RECIPE, QTYPE_TO_DTYPE
 from nanotron.fp8.dtypes import DTypes
-from nanotron.fp8.kernel import fp8_matmul_kernel
+from nanotron.fp8.kernel import _fp8_matmul_kernel_2, fp8_matmul_kernel
 from nanotron.fp8.parameter import FP8Parameter
 from nanotron.fp8.tensor import FP8Tensor
 
@@ -95,8 +94,6 @@ class _FP8Matmul(torch.autograd.Function):
         ctx.accum_qtype = accum_qtype
         ctx.save_for_backward(input, weight)
 
-        # weight = weight.T
-
         # NOTE: pass FP8Tensor instead of FP8Parameter
         output = fp8_matmul_kernel(
             # NOTE: that works
@@ -127,18 +124,36 @@ class _FP8Matmul(torch.autograd.Function):
         ∂L/∂W = Xᵀ @ ∂L/∂Y
         Reference: https://web.eecs.umich.edu/~justincj/teaching/eecs442/notes/linear-backprop.html
         """
-        # TODO(xrsrke): investigate how does grad_output.contiguous() affect the outputs
+        # pydevd.settrace(suspend=False, trace_only_current_thread=True)
         input, weight = ctx.saved_tensors
         accum_qtype = ctx.accum_qtype
 
-        # TODO(xrsrke): remove fixed grad_output
         if type(grad_output) == torch.Tensor:
-            # grad_output = torch.ones_like(grad_output)
+            # TODO(xrsrke): investigate how does grad_output.contiguous() affect the outputs
             grad_output = grad_output.contiguous()
             grad_output = FP8Tensor(grad_output, dtype=FP8LM_RECIPE.linear.output_grad.dtype)
 
         # TODO(xrsrke): extract use_split_accumulator from FP8Recipe
-        grad_input = fp8_matmul_kernel(
+        # grad_input = fp8_matmul_kernel(
+        #     mat_a=grad_output,
+        #     transpose_a=True,
+        #     mat_b=weight,
+        #     transpose_b=True,
+        #     use_split_accumulator=True,
+        #     accum_qtype=accum_qtype,
+        #     is_backward=True
+        # )
+        # grad_weight = fp8_matmul_kernel(
+        #     mat_a=input,
+        #     transpose_a=False,
+        #     mat_b=grad_output,
+        #     transpose_b=False,
+        #     use_split_accumulator=True,
+        #     accum_qtype=accum_qtype,
+        #     is_backward=True
+        # )
+
+        grad_input = _fp8_matmul_kernel_2(
             mat_a=grad_output,
             transpose_a=True,
             mat_b=weight,
@@ -146,7 +161,7 @@ class _FP8Matmul(torch.autograd.Function):
             use_split_accumulator=True,
             accum_qtype=accum_qtype,
         )
-        grad_weight = fp8_matmul_kernel(
+        grad_weight = _fp8_matmul_kernel_2(
             mat_a=input,
             transpose_a=False,
             mat_b=grad_output,
@@ -155,9 +170,25 @@ class _FP8Matmul(torch.autograd.Function):
             accum_qtype=accum_qtype,
         )
 
+        # grad_input = _fp8_matmul_kernel(
+        #     mat_a=grad_output,
+        #     transpose_a=False,
+        #     mat_b=weight,
+        #     transpose_b=True,
+        #     use_split_accumulator=True,
+        #     accum_qtype=accum_qtype,
+        # )
+        # grad_weight = _fp8_matmul_kernel(
+        #     mat_a=input,
+        #     transpose_a=True,
+        #     mat_b=grad_output,
+        #     transpose_b=False,
+        #     use_split_accumulator=True,
+        #     accum_qtype=accum_qtype,
+        # )
+
         assert grad_input.dtype == QTYPE_TO_DTYPE[accum_qtype]
         assert grad_weight.dtype == QTYPE_TO_DTYPE[accum_qtype]
         # TODO(xrsrke): maintain a persistence metadata across training
-        pydevd.settrace(suspend=False, trace_only_current_thread=True)
         weight.grad = FP8Tensor(grad_weight, dtype=FP8LM_RECIPE.linear.weight_grad.dtype)
         return grad_input, None, None, None
