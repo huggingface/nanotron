@@ -112,14 +112,25 @@ def init_weight_for_output_weights(weight, hidden_size):
     torch.nn.init.normal_(weight, mean=0.0, std=1)
 
 
-def init_weight_using_mu_transfer(weight, name, hidden_size, linear_type):
+# IS_PARAMETRIZE = {
+#     WeightType.INPUT_WEIGHTS: {"weight": True, "bias": False}
+# }
+
+
+def init_weight_using_mu_transfer(weight, name, hidden_size, linear_type, default):
     if linear_type == WeightType.INPUT_WEIGHTS:
         if name == "weight" or name == "bias":
             init_weight_for_input_weights(weight, hidden_size)
     elif linear_type == WeightType.HIDDEN_WEIGHTS:
-        init_weight_for_hidden_weights(module.weight, hidden_size)
+        if name == "weight":
+            init_weight_for_hidden_weights(weight, hidden_size)
+        else:
+            default()
     elif linear_type == WeightType.OUTPUT_WEIGHTS:
-        init_weight_for_output_weights(module.weight, hidden_size)
+        if name == "weight":
+            init_weight_for_output_weights(weight, hidden_size)
+        else:
+            default()
     else:
         raise ValueError(f"Unknown linear type: {linear_type}")
 

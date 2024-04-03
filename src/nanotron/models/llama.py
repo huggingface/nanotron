@@ -529,7 +529,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                     value_states,
                     rotary_cos=None,
                     rotary_sin=None,
-                    # TODO @nouamane: seems like this doesnt help to indicate padding in (for first iteration it's just 0)
+                    # TODO @nouamane: seems like this doesn't help to indicate padding in (for first iteration it's just 0)
                     cache_seqlens=position_offsets.contiguous(),
                     softmax_scale=None,
                     causal=True,
@@ -932,34 +932,119 @@ class LlamaForTraining(NanotronModel):
 
             if isinstance(module, TensorParallelColumnLinear):
                 if "weight" == param_name:
+
+                    def default():
+                        return torch.nn.init.normal_(module.weight, mean=0.0, std=std)
+
                     if hasattr(module, "linear_type"):
                         init_weight_using_mu_transfer(
-                            module.weight, name="weight", hidden_size=hidden_size, linear_type=module.linear_type
+                            module.weight,
+                            name="weight",
+                            hidden_size=hidden_size,
+                            linear_type=module.linear_type,
+                            default=default,
                         )
                     else:
-                        torch.nn.init.normal_(module.weight, mean=0.0, std=std)
+                        default()
                 elif "bias" == param_name:
-                    module.bias.zero_()
+
+                    def default():
+                        return module.bias.zero_()
+
+                    if hasattr(module, "linear_type"):
+                        init_weight_using_mu_transfer(
+                            module.bias,
+                            name="bias",
+                            hidden_size=hidden_size,
+                            linear_type=module.linear_type,
+                            default=default,
+                        )
+                    else:
+                        default()
                 else:
                     raise ValueError(f"Who the fuck is {param_name}?")
 
             elif isinstance(module, TensorParallelRowLinear):
                 if "weight" == param_name:
-                    torch.nn.init.normal_(module.weight, mean=0.0, std=sigma / math.sqrt(2 * num_layers))
+
+                    def default():
+                        return torch.nn.init.normal_(module.weight, mean=0.0, std=sigma / math.sqrt(2 * num_layers))
+
+                    if hasattr(module, "linear_type"):
+                        init_weight_using_mu_transfer(
+                            module.weight,
+                            name="weight",
+                            hidden_size=hidden_size,
+                            linear_type=module.linear_type,
+                            default=default,
+                        )
+                    else:
+                        default()
                 elif "bias" == param_name:
-                    param.zero_()
+
+                    def default():
+                        return param.zero_()
+
+                    if hasattr(module, "linear_type"):
+                        init_weight_using_mu_transfer(
+                            param,
+                            name="bias",
+                            hidden_size=hidden_size,
+                            linear_type=module.linear_type,
+                            default=default,
+                        )
+                    else:
+                        default()
                 else:
                     raise ValueError(f"Who the fuck is {param_name}?")
             elif isinstance(module, TritonRMSNorm):
                 if "weight" == param_name:
                     # TODO @thomasw21: Sometimes we actually want 0
-                    module.weight.fill_(1)
+                    def default():
+                        return module.weight.fill_(1)
+
+                    if hasattr(module, "linear_type"):
+                        init_weight_using_mu_transfer(
+                            module.weight,
+                            name="weight",
+                            hidden_size=hidden_size,
+                            linear_type=module.linear_type,
+                            default=default,
+                        )
+                    else:
+                        default()
                 elif "bias" == param_name:
-                    module.bias.zero_()
+
+                    def default():
+                        return module.bias.zero_()
+
+                    if hasattr(module, "linear_type"):
+                        init_weight_using_mu_transfer(
+                            module.bias,
+                            name="bias",
+                            hidden_size=hidden_size,
+                            linear_type=module.linear_type,
+                            default=default,
+                        )
+                    else:
+                        default()
                 else:
                     raise ValueError(f"Who the fuck is {param_name}?")
             elif isinstance(module, TensorParallelEmbedding):
-                nn.init.normal_(module.weight, mean=0.0, std=std)
+
+                def default():
+                    return nn.init.normal_(module.weight, mean=0.0, std=std)
+
+                if hasattr(module, "linear_type"):
+                    init_weight_using_mu_transfer(
+                        module.weight,
+                        name="weight",
+                        hidden_size=hidden_size,
+                        linear_type=module.linear_type,
+                        default=default,
+                    )
+                else:
+                    default()
             else:
                 raise Exception(f"Parameter {full_param_name} was not initialized")
 
