@@ -67,11 +67,33 @@ def fp8_matmul_kernel(
     mat_a = tex.fp8_transpose(mat_a, mat_a_fp8_meta.te_dtype) if transpose_a is False else mat_a
     mat_b = tex.fp8_transpose(mat_b, mat_b_fp8_meta.te_dtype) if transpose_b is True else mat_b
 
+    # if transpose_a is True:
+    #     mat_a = mat_a
+    # elif transpose_a is False:
+    #     mat_a = tex.fp8_transpose(mat_a, mat_a_fp8_meta.te_dtype)
+
+    # if transpose_b is False:
+    #     mat_b = mat_b
+    # elif transpose_b is True:
+    #     mat_b = tex.fp8_transpose(mat_b, mat_b_fp8_meta.te_dtype)
+
+    # if transpose_a is False:
+    #     mat_a = mat_a
+    # elif transpose_a is True:
+    #     mat_a = tex.fp8_transpose(mat_a, mat_a_fp8_meta.te_dtype)
+
+    # if transpose_b is True:
+    #     mat_b = mat_b
+    # elif transpose_b is False:
+    #     mat_b = tex.fp8_transpose(mat_b, mat_b_fp8_meta.te_dtype)
+
     # output = torch.empty(mat_a.T.shape[0], mat_b.shape[-1], device=device, dtype=out_torch_dtype)
     if is_backward is False:
         output = torch.empty(mat_b.shape[0], mat_a.shape[0], device=device, dtype=out_torch_dtype)
+        # output = torch.empty(mat_b.shape[-1], mat_a.shape[-1], device=device, dtype=out_torch_dtype)
     else:
         output = torch.empty(mat_b.shape[0], mat_a.shape[0], device=device, dtype=out_torch_dtype)
+        # output = torch.empty(mat_a.shape[-1], mat_b.shape[-1], device=device, dtype=out_torch_dtype)
 
     tex.te_gemm(
         mat_a,
@@ -246,21 +268,32 @@ def _fp8_matmul_kernel_2(
     # orig_mat_a_shape = deepcopy(mat_a.shape)
     # orig_mat_b_shape = deepcopy(mat_b.shape)
 
-    mat_a_new_shape = mat_a.T.shape if transpose_a is True and TE_CONFIG_TRANSPOSE_A is True else mat_a.T.shape
-    mat_b_new_shape = mat_b.T.shape if transpose_b is True and TE_CONFIG_TRANSPOSE_B is True else mat_b.T.shape
+    # mat_a_new_shape = mat_a.T.shape if transpose_a is True and TE_CONFIG_TRANSPOSE_A is True else mat_a.T.shape
+    # mat_b_new_shape = mat_b.T.shape if transpose_b is True and TE_CONFIG_TRANSPOSE_B is True else mat_b.T.shape
 
-    mat_a = tex.fp8_transpose(mat_a, mat_a_fp8_meta.te_dtype) if transpose_a is False else mat_a
-    mat_b = tex.fp8_transpose(mat_b, mat_b_fp8_meta.te_dtype) if transpose_b is True else mat_b
+    # mat_a = tex.fp8_transpose(mat_a, mat_a_fp8_meta.te_dtype) if transpose_a is False else mat_a
+    # mat_b = tex.fp8_transpose(mat_b, mat_b_fp8_meta.te_dtype) if transpose_b is True else mat_b
+
+    if transpose_a is True:
+        mat_a_transposed = mat_a
+    elif transpose_a is False:
+        mat_a_transposed = tex.fp8_transpose(mat_a, mat_a_fp8_meta.te_dtype)
+
+    if transpose_b is False:
+        mat_b_transposed = mat_b
+    elif transpose_b is True:
+        mat_b_transposed = tex.fp8_transpose(mat_b, mat_b_fp8_meta.te_dtype)
 
     # output = torch.empty(mat_a.T.shape[0], mat_b.shape[-1], device=device, dtype=out_torch_dtype)
-    output = torch.empty(mat_a_new_shape[0], mat_b_new_shape[-1], device=device, dtype=out_torch_dtype)
+    # output = torch.empty(mat_a_new_shape[0], mat_b_new_shape[-1], device=device, dtype=out_torch_dtype)
+    output = torch.empty(mat_a_transposed.shape[-1], mat_b_transposed.shape[-1], device=device, dtype=out_torch_dtype)
 
     tex.te_gemm(
-        mat_a,
+        mat_a_transposed,
         mat_a_fp8_meta.inverse_scale,
         mat_a_fp8_meta.te_dtype,
         TE_CONFIG_TRANSPOSE_A,
-        mat_b,
+        mat_b_transposed,
         mat_b_fp8_meta.inverse_scale,
         mat_b_fp8_meta.te_dtype,
         TE_CONFIG_TRANSPOSE_B,

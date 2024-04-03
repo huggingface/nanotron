@@ -1,3 +1,4 @@
+import math
 from copy import deepcopy
 
 import pytest
@@ -76,14 +77,24 @@ def test_fp8_linear_forward_pass(input, is_bias, accum_qtype):
         torch.randn(64, 64, 64, device="cuda", dtype=torch.float32),  # [B, N, H]
     ],
 )
+@pytest.mark.parametrize(
+    "init_method",
+    [
+        lambda weight: trunc_normal_(weight, std=0.02),
+        lambda weight: trunc_normal_(weight, std=math.sqrt(1 / 64)),
+        lambda weight: trunc_normal_(weight, std=math.sqrt(1 / 64 * 4)),
+        lambda weight: trunc_normal_(weight, std=1),
+    ],
+)
 @pytest.mark.parametrize("accum_qtype", [DTypes.KFLOAT32, DTypes.KFLOAT16])
-def test_fp8_linear_backward_pass(input, accum_qtype):
+def test_fp8_linear_backward_pass(input, init_method, accum_qtype):
     HIDDEN_SIZE = 64
     INTERDIM_SIZE = 64 * 4
 
     ref_input = input.detach().clone().requires_grad_(True)
     ref_linear = nn.Linear(HIDDEN_SIZE, INTERDIM_SIZE, device="cuda", dtype=torch.float32)
-    trunc_normal_(ref_linear.weight, std=0.02)
+    # trunc_normal_(ref_linear.weight, std=0.02)
+    # trunc_normal_(ref_linear.weight, std=math.sqrt(1 / (HIDDEN_SIZE)))
 
     fp8_linear = convert_linear_to_fp8(deepcopy(ref_linear), accum_qtype)
 

@@ -51,10 +51,10 @@ class LossScaler:
         if detected_overflow:
             # TODO(xrsrke): add logging that we skip optimizer step when overflow
             # is detected
-            # TODO(xrsrke): remvoe this after debugging
-            raise RuntimeError("Detected overflow")
-            if self.interval == 1:
-                self.update()
+            # TODO(xrsrke): remove this after debugging
+            # raise RuntimeError("Detected overflow")
+            print("Detected overflow, skipping optimizer step")
+            self.update()
         else:
             # NOTE: unscale gradients
             for group in optim.param_groups:

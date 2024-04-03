@@ -1,6 +1,5 @@
 from __future__ import print_function
 
-import math
 from copy import deepcopy
 
 import msamp
@@ -12,8 +11,9 @@ from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.loss_scaler import LossScaler
 from nanotron.fp8.optim import FP8Adam
 from nanotron.fp8.utils import convert_to_fp8_module
+from timm.models.layers import trunc_normal_
 from torch.utils.data import DataLoader
-from transformers import BloomConfig, BloomForCausalLM, BloomTokenizerFast
+from transformers import BloomConfig, BloomTokenizerFast
 
 import wandb
 
@@ -36,21 +36,56 @@ def l1_norm_diff(loss, ref_loss):
     return (loss - ref_loss).abs().mean()
 
 
+from dataclasses import dataclass
+
+
+@dataclass
+class ModelOutput:
+    logits: torch.Tensor
+
+
+class ToyModel(nn.Module):
+    def __init__(self, config: BloomConfig):
+        super().__init__()
+        self.word_embeddings = nn.Embedding(config.vocab_size, config.hidden_size)
+        # self.net = nn.Sequential(
+        #     nn.Linear(config.hidden_size, config.vocab_size),
+        # )
+        self.linear = nn.Linear(config.hidden_size, config.vocab_size)
+
+        # self.linear.weight.data.normal_(mean=0.0, std=0.02)
+        # self.word_embeddings.weight.data.normal_(mean=0.0, std=0.02)
+        trunc_normal_(self.linear.weight.data, std=0.02)
+        trunc_normal_(self.word_embeddings.weight.data, std=0.02)
+
+    def forward(self, input_ids, attention_mask):
+        x = self.word_embeddings(input_ids)
+        # return self.net(x)
+        return ModelOutput(logits=self.linear(x))
+
+
 def main():
     """The main function."""
 
     SEED = 42
-    LR = 6e-4
+    # LR = 6e-4
+    LR = 0.01
     SEQ_LEN = 128
     BATCH_SIZE = 16
     N_EPOCHS = 1
 
     # MODEL_NAME = "gpt2"
     MODEL_NAME = "bigscience/bloom"
-    HIDDEN_SIZE = 768
-    N_LAYERS = 12
-    N_HEADS = 12
-    INITIALIZER_RANGE = math.sqrt(1 / HIDDEN_SIZE)
+    HIDDEN_SIZE = 16
+    N_LAYERS = 1
+    N_HEADS = 2
+
+    # HIDDEN_SIZE = 16
+    # N_LAYERS = 1
+    # N_HEADS = 2
+
+    # INITIALIZER_RANGE = math.sqrt(1 / HIDDEN_SIZE)
+    INITIALIZER_RANGE = 0.02
 
     # NOTE: CohereForAI/aya_dataset: 200k examples
     # NOTE: stas/c4-en-10k
@@ -78,7 +113,8 @@ def main():
         slow_but_exact=True,
         initializer_range=INITIALIZER_RANGE,
     )
-    model = BloomForCausalLM(config)
+    # model = BloomForCausalLM(config)
+    model = ToyModel(config)
 
     fp32_model = deepcopy(model).to("cuda")
     bf16_model = deepcopy(model).to("cuda")

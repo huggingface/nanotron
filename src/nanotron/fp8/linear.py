@@ -3,11 +3,12 @@ from typing import Optional, Tuple, Union
 import torch
 import torch.nn.functional as F
 import transformer_engine as te  # noqa
+import transformer_engine_extensions as tex
 from torch import nn
 
 from nanotron.fp8.constants import FP8LM_RECIPE, QTYPE_TO_DTYPE
 from nanotron.fp8.dtypes import DTypes
-from nanotron.fp8.kernel import _fp8_matmul_kernel_2, fp8_matmul_kernel
+from nanotron.fp8.kernel import fp8_matmul_kernel
 from nanotron.fp8.parameter import FP8Parameter
 from nanotron.fp8.tensor import FP8Tensor
 
@@ -101,18 +102,19 @@ class _FP8Matmul(torch.autograd.Function):
             transpose_a=True,
             mat_b=input,
             transpose_b=False,
-            # NOTE: input @ weight.T
-            # mat_a=input,
-            # transpose_a=False,
-            # mat_b=weight.data,
-            # transpose_b=True,
-            # mat_a=weight.data,
-            # transpose_a=False,
-            # mat_b=input,
-            # transpose_b=False,
             use_split_accumulator=False,
             accum_qtype=accum_qtype,
         )
+
+        # output = _fp8_matmul_kernel_2(
+        #     # NOTE: that works
+        #     mat_a=input,
+        #     transpose_a=False,
+        #     mat_b=weight.data,
+        #     transpose_b=True,
+        #     use_split_accumulator=False,
+        #     accum_qtype=accum_qtype,
+        # )
 
         return output, phony
 
@@ -153,22 +155,50 @@ class _FP8Matmul(torch.autograd.Function):
         #     is_backward=True
         # )
 
-        grad_input = _fp8_matmul_kernel_2(
-            mat_a=grad_output,
+        grad_output_transposed = tex.fp8_transpose(grad_output, grad_output.fp8_meta.te_dtype)
+        grad_output_transposed.fp8_meta = grad_output.fp8_meta
+        weight_transposed = tex.fp8_transpose(weight, weight.fp8_meta.te_dtype)
+        weight_transposed.fp8_meta = weight.fp8_meta
+
+        grad_input = fp8_matmul_kernel(
+            mat_a=weight_transposed,
             transpose_a=True,
-            mat_b=weight,
-            transpose_b=True,
-            use_split_accumulator=True,
-            accum_qtype=accum_qtype,
-        )
-        grad_weight = _fp8_matmul_kernel_2(
-            mat_a=input,
-            transpose_a=False,
             mat_b=grad_output,
             transpose_b=False,
             use_split_accumulator=True,
             accum_qtype=accum_qtype,
+            # is_backward=True
         )
+
+        input_tranposed = tex.fp8_transpose(input, input.fp8_meta.te_dtype)
+        input_tranposed.fp8_meta = input.fp8_meta
+
+        grad_weight = fp8_matmul_kernel(
+            mat_a=input_tranposed,
+            transpose_a=True,
+            mat_b=grad_output_transposed,
+            transpose_b=False,
+            use_split_accumulator=True,
+            accum_qtype=accum_qtype,
+            # is_backward=True
+        )
+
+        # grad_input = _fp8_matmul_kernel_2(
+        #     mat_a=grad_output,
+        #     transpose_a=True,
+        #     mat_b=weight,
+        #     transpose_b=True,
+        #     use_split_accumulator=True,
+        #     accum_qtype=accum_qtype,
+        # )
+        # grad_weight = _fp8_matmul_kernel_2(
+        #     mat_a=input,
+        #     transpose_a=False,
+        #     mat_b=grad_output,
+        #     transpose_b=False,
+        #     use_split_accumulator=True,
+        #     accum_qtype=accum_qtype,
+        # )
 
         # grad_input = _fp8_matmul_kernel(
         #     mat_a=grad_output,
