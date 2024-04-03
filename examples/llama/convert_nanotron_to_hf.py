@@ -8,7 +8,7 @@ Command:
 import argparse
 import json
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Optional
 
 import torch
 from nanotron import logging
@@ -99,7 +99,7 @@ def _handle_gate_up_proj(gate_up_proj: torch.Tensor, gate: bool) -> torch.Tensor
 
 
 def load_nanotron_model(
-    model_config: NanotronLlamaConfig, device: torch.device, dtype: torch.dtype, checkpoint_path: Path
+    model_config: NanotronLlamaConfig, device: torch.device, dtype: torch.dtype, checkpoint_path: Optional[Path] = None
 ) -> LlamaForTraining:
     parallel_config = ParallelismArgs(
         dp=1,
@@ -127,8 +127,32 @@ def load_nanotron_model(
     )
     mark_tied_parameters(model=nanotron_model, parallel_context=parallel_context)
     # Load checkpoint directly in memory and then only keep the state dictionary
-    load_weights(model=nanotron_model, parallel_context=parallel_context, root_folder=checkpoint_path)
+    if checkpoint_path is not None:
+        load_weights(model=nanotron_model, parallel_context=parallel_context, root_folder=checkpoint_path)
     return nanotron_model
+
+
+def hf_config_from_nanotron_config(nanotron_config):
+    model_config_hf = HFLlamaConfig(
+        bos_token_id=nanotron_config.bos_token_id,
+        eos_token_id=nanotron_config.eos_token_id,
+        hidden_act=nanotron_config.hidden_act,
+        hidden_size=nanotron_config.hidden_size,
+        initializer_range=nanotron_config.initializer_range,
+        intermediate_size=nanotron_config.intermediate_size,
+        max_position_embeddings=nanotron_config.max_position_embeddings,
+        num_attention_heads=nanotron_config.num_attention_heads,
+        num_hidden_layers=nanotron_config.num_hidden_layers,
+        num_key_value_heads=nanotron_config.num_key_value_heads,
+        pad_token_id=nanotron_config.pad_token_id,
+        pretraining_tp=nanotron_config.pretraining_tp,
+        rms_norm_eps=nanotron_config.rms_norm_eps,
+        rope_scaling=nanotron_config.rope_scaling,
+        tie_word_embeddings=nanotron_config.tie_word_embeddings,
+        use_cache=nanotron_config.use_cache,
+        vocab_size=nanotron_config.vocab_size,
+    )
+    return model_config_hf
 
 
 def convert_checkpoint_and_save(checkpoint_path: Path, save_path: Path):
@@ -141,27 +165,10 @@ def convert_checkpoint_and_save(checkpoint_path: Path, save_path: Path):
         model_config=model_config, device=device, dtype=dtype, checkpoint_path=checkpoint_path
     )
     # Init the HF mode
-    model_config_hf = HFLlamaConfig(
-        bos_token_id=model_config.bos_token_id,
-        eos_token_id=model_config.eos_token_id,
-        hidden_act=model_config.hidden_act,
-        hidden_size=model_config.hidden_size,
-        initializer_range=model_config.initializer_range,
-        intermediate_size=model_config.intermediate_size,
-        max_position_embeddings=model_config.max_position_embeddings,
-        num_attention_heads=model_config.num_attention_heads,
-        num_hidden_layers=model_config.num_hidden_layers,
-        num_key_value_heads=model_config.num_key_value_heads,
-        pad_token_id=model_config.pad_token_id,
-        pretraining_tp=model_config.pretraining_tp,
-        rms_norm_eps=model_config.rms_norm_eps,
-        rope_scaling=model_config.rope_scaling,
-        tie_word_embeddings=model_config.tie_word_embeddings,
-        use_cache=model_config.use_cache,
-        vocab_size=model_config.vocab_size,
-    )
+
     # Initialised HF model
     with init_on_device_and_dtype(device, dtype):
+        model_config_hf = hf_config_from_nanotron_config(model_config)
         hf_model = LlamaForCausalLM._from_config(model_config_hf)
     hf_model = convert_nanotron_to_hf(nanotron_model, hf_model, model_config)
     # Save the model
