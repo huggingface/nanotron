@@ -24,7 +24,7 @@ general:
   consumed_train_samples: null
   ignore_sanity_checks: false
   project: µTransfer_for_nanotron
-  run: llama_width_8192_config
+  run: exp4_llama_width_8192
   seed: 42
   step: null
 lighteval: null
@@ -38,7 +38,7 @@ model:
   init_method:
     # std: 0.025 # original
     # std: 0.03125 # 1/sqrt(1024)=0.03125
-    std: 0.022097086912079608 # 1/sqrt(2048)=0.022097086912079608
+    std: 0.011048543456039804 # 1/sqrt(8192)=0.011048543456039804
   make_vocab_size_divisible_by: 1
   model_config:
     bos_token_id: 1

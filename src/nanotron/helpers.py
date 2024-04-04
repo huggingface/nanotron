@@ -179,6 +179,11 @@ def group_parameters_by_linear_type(
         WeightType.HIDDEN_WEIGHTS: config.learning_rate_scheduler.learning_rate / fan_in,
         WeightType.OUTPUT_WEIGHTS: config.learning_rate_scheduler.learning_rate,
     }
+    LINEAR_TYPE_TO_WD = {
+        WeightType.INPUT_WEIGHTS: config.weight_decay,
+        WeightType.HIDDEN_WEIGHTS: config.weight_decay * fan_in,
+        WeightType.OUTPUT_WEIGHTS: config.weight_decay,
+    }
 
     named_param_groups = []
     # NOTE: now format it to [{"named_params": [(name, param)], "lr": lr}, ...]
@@ -187,6 +192,7 @@ def group_parameters_by_linear_type(
             {
                 "named_params": named_params,
                 "lr": LINEAR_TYPE_TO_LR[linear_type],
+                "weight_decay": LINEAR_TYPE_TO_WD[linear_type],
             }
         )
 
