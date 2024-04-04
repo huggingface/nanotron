@@ -76,9 +76,6 @@ def main():
     model_config = config.model.model_config
     tokenizer_path = config.tokenizer.tokenizer_name_or_path
 
-    assert "state-spaces/mamba-130m-hf" == tokenizer_path
-    f"Should be 'state-spaces/mamba-130m-hf' tokenizer and not '{tokenizer_path}'"
-
     parallel_config = ParallelismArgs(
         dp=args.dp or config.parallelism.dp,
         pp=args.pp or config.parallelism.pp,
