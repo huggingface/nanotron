@@ -1,4 +1,3 @@
-# ruff: noqa: E402
 """
 Converts a nanotron model to HF format
 Command:
