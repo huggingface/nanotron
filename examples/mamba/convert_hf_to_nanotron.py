@@ -1,9 +1,9 @@
 # ruff: noqa: E402
 """
-Converts a HF model from (https://huggingface.co/state-spaces/) to a Brrr model
+Converts a HF model to a Nanotron model
 
 Command:
-    torchrun --nproc_per_node=1 convert_hf_to_nanotron.py --model state-spaces/mamba-130m --tokenizer state-spaces/mamba-130m-hf  --save_path nanotron_weights
+    torchrun --nproc_per_node=1 convert_hf_to_nanotron.py --inp_path state-spaces/mamba-130m-hf --out_path nanotron_weights
 """
 import argparse
 import json
@@ -15,8 +15,6 @@ import torch
 import yaml
 from config import MambaConfig, MambaInit, MambaModelConfig
 from mamba import MambaForTraining
-from mamba_ssm.models.config_mamba import MambaConfig as HFMambaConfig
-from mamba_ssm.models.mixer_seq_simple import MambaLMHeadModel
 from nanotron import logging
 from nanotron.config import (
     AllForwardAllBackwardPipelineEngine,
@@ -35,6 +33,8 @@ from nanotron.parallel.parameters import NanotronParameter, sanity_check
 from nanotron.serialize import save_meta, save_weights
 from nanotron.trainer import mark_tied_parameters
 from tqdm import tqdm
+from transformers import MambaConfig as HFMambaConfig
+from transformers import MambaForCausalLM
 from transformers.utils import CONFIG_NAME
 from transformers.utils.hub import cached_file
 
@@ -49,7 +49,7 @@ def load_config_hf(model_name):
 def get_weight_from_hf(
     name: str,
     ref_module_state_dict: Dict[str, torch.Tensor],
-    ref_module: MambaLMHeadModel,
+    ref_module: MambaForCausalLM,
     nanotron_to_hf: Dict[str, str],
     get_grad: bool = False,
 ) -> torch.Tensor:
@@ -96,17 +96,14 @@ def get_weight_from_hf(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Convert HF weights from states-space repo to brrr weights")
-    parser.add_argument("--save_path", type=str, default="mamba-nanotron")
-    parser.add_argument("--model", type=str, default="state-spaces/mamba-130m")
-    parser.add_argument("--tokenizer", type=str, default="state-spaces/mamba-130m-hf")
+    parser.add_argument("--inp_path", type=str, default="state-spaces/mamba-130m-hf")
+    parser.add_argument("--out_path", type=str, default="nanotron_weight")
     parser.add_argument("--dp", type=int, default=1)
     parser.add_argument("--pp", type=int, default=1)
     parser.add_argument("--tp", type=int, default=1)
     args = parser.parse_args()
 
-    assert "state-spaces" in args.model, "Only models from state-spaces repo are supported"
-
-    save_path = Path(args.save_path)
+    out_path = Path(args.out_path)
 
     parallel_config = ParallelismArgs(
         dp=args.dp,
@@ -136,25 +133,25 @@ if __name__ == "__main__":
     # Set log levels
     set_ranks_logging_level(parallel_context=parallel_context, logging_config=logging_config)
 
-    hf_config_data = load_config_hf(args.model)
-    hf_config = HFMambaConfig(**hf_config_data)
+    hf_config = HFMambaConfig.from_pretrained(args.inp_path)
 
     dtype_str = "float32"
 
+    # TODO(fmom): Add support for ssm_cfg
     yaml_content = f"""
     is_mamba_config: true
-    d_model: {hf_config.d_model}
+    d_model: {hf_config.hidden_size}
     dtype: {dtype_str}
     fused_add_norm: true
     is_mamba_config: true
-    num_hidden_layers: {hf_config.n_layer}
+    num_hidden_layers: {hf_config.num_hidden_layers}
     pad_token_id: null
     pad_vocab_size_multiple: 8
     residual_in_fp32: true
     rms_norm: true
     rms_norm_eps: 1.0e-05
     ssm_cfg: null
-    vocab_size: 50280
+    vocab_size: {hf_config.vocab_size}
     """
 
     dtype = getattr(torch, dtype_str)
@@ -162,9 +159,10 @@ if __name__ == "__main__":
 
     attrs = yaml.safe_load(yaml_content)
     model_config = MambaModelConfig(**attrs)
-    assert model_config.vocab_size == 50280
 
-    model_ref = MambaLMHeadModel.from_pretrained(args.model, device=device, dtype=dtype)
+    model_ref = MambaForCausalLM.from_pretrained(args.inp_path)
+    model_ref.to(device, dtype=dtype)
+    model_ref.eval()
 
     nanotron_model = build_model(
         model_builder=lambda: MambaForTraining(
@@ -194,9 +192,15 @@ if __name__ == "__main__":
 
     device_map["lm_head"] = nanotron_model.model.lm_head.rank if current_pp_rank in tied_embs_ranks else "meta"
 
-    # Create a mapping from nanotron to hf
+    # Get mapping of Nanotron layer to HF layer
     nanotron_to_hf = {}
 
+    # Static mappings
+    nanotron_to_hf["token_position_embeddings.pp_block.token_embedding.weight"] = "backbone.embeddings.weight"
+    nanotron_to_hf["final_layer_norm.pp_block.weight"] = "backbone.norm_f.weight"
+    nanotron_to_hf["lm_head.pp_block.weight"] = "lm_head.weight"
+
+    # Dynamic mappings within a loop
     for i in range(model_config.num_hidden_layers):
         nanotron_to_hf[f"decoder.{i}.pp_block.mixer.A_log"] = f"backbone.layers.{i}.mixer.A_log"
         nanotron_to_hf[f"decoder.{i}.pp_block.mixer.D"] = f"backbone.layers.{i}.mixer.D"
@@ -210,10 +214,6 @@ if __name__ == "__main__":
         nanotron_to_hf[f"decoder.{i}.pp_block.mixer.out_proj.weight"] = f"backbone.layers.{i}.mixer.out_proj.weight"
         nanotron_to_hf[f"decoder.{i}.pp_block.mixer.out_proj.bias"] = f"backbone.layers.{i}.mixer.out_proj.bias"
         nanotron_to_hf[f"decoder.{i}.pp_block.norm.weight"] = f"backbone.layers.{i}.norm.weight"
-
-    nanotron_to_hf["token_position_embeddings.pp_block.token_embedding.weight"] = "backbone.embedding.weight"
-    nanotron_to_hf["final_layer_norm.pp_block.weight"] = "backbone.norm_f.weight"
-    nanotron_to_hf["lm_head.pp_block.weight"] = "lm_head.weight"
 
     # Sync weights
     ref_state_dict = model_ref.state_dict()
@@ -255,15 +255,15 @@ if __name__ == "__main__":
 
     sanity_check(root_module=nanotron_model)
 
-    save_weights(model=nanotron_model, parallel_context=parallel_context, root_folder=save_path)
+    save_weights(model=nanotron_model, parallel_context=parallel_context, root_folder=out_path)
     checkpoint_metadata = {
         "last_train_step": 0,
         "consumed_train_samples": 0,
     }
-    save_meta(root_folder=save_path, parallel_context=parallel_context, checkpoint_metadata=checkpoint_metadata)
+    save_meta(root_folder=out_path, parallel_context=parallel_context, checkpoint_metadata=checkpoint_metadata)
 
     if dist.get_rank() == 0:
-        with open(save_path / "config.yaml", "w") as f:
+        with open(out_path / "config.yaml", "w") as f:
             config = MambaConfig(
                 general=GeneralArgs(project="test", run="mamba"),
                 parallelism=parallel_config,
@@ -271,11 +271,11 @@ if __name__ == "__main__":
                     init_method=MambaInit(),
                     model_config=model_config,
                 ),
-                tokenizer=TokenizerArgs(args.tokenizer),
+                tokenizer=TokenizerArgs(args.inp_path),
             )
             log_rank("Saving config ...", logger=logger, level=logging.INFO, rank=0)
             yaml.dump(config.as_dict(), f)
 
-        with open(save_path / "model_config.json", "w") as f:
+        with open(out_path / "model_config.json", "w") as f:
             log_rank("Saving model config ...", logger=logger, level=logging.INFO, rank=0)
             json.dump(asdict(model_config), f)
