@@ -45,5 +45,14 @@ if __name__ == "__main__":
 
     trainer = DoReMiTrainer(config_file, config_class=DoReMiConfig)
     dataloader = get_dataloader(trainer)
+
+    # world_pg = trainer.parallel_context.world_pg
+    # for samples in dataloader:
+    #     assert 1 == 1
+    #     # _input_ids = torch.tensor(train_dataset[i]["input_ids"], device="cuda")
+    #     # _dataset_idxs = torch.tensor(train_dataset[i]["dataset_idxs"], device="cuda")
+    #     # assert_tensor_synced_across_pg(_input_ids, world_pg, msg=lambda err: f"input_ids {err}, i: {i}")
+    #     # assert_tensor_synced_across_pg(_dataset_idxs, world_pg, msg=lambda err: f"input_ids {err}, i: {i}")
+
     dataloader = get_dataloader_for_proxy_training(dataloader, ref_model=trainer.ref_model)
     trainer.train(dataloader)

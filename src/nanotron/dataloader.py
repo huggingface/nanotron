@@ -10,7 +10,6 @@ from torch.utils.data.distributed import DistributedSampler
 from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.config import Config, PretrainDatasetsArgs
-
 from nanotron.logging import log_rank
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
@@ -31,6 +30,7 @@ try:
         Sequence,
         Value,
         concatenate_datasets,
+        interleave_datasets,
         load_dataset,
     )
     from huggingface_hub import __version__ as hf_hub_version
@@ -44,6 +44,43 @@ except ImportError:
 
 
 logger = logging.get_logger(__name__)
+
+
+class CombinedDataset(Dataset):
+    def __init__(self, datasets: List[Dataset], weights: torch.Tensor, seed: int):
+        assert len(datasets) == len(weights)
+        assert weights.sum() == 1.0
+        assert weights.ndim == 1
+
+        for i in range(len(datasets)):
+            assert all(x["dataset_idxs"] == i for x in datasets[i])
+
+        self.datasets = datasets
+        self.comebined_dataset = concatenate_datasets(datasets)
+        # self.comebined_dataset = interleave_datasets(datasets, weights.tolist(), stopping_strategy="first_exhausted", seed=42)
+        # self.comebined_dataset = interleave_datasets(datasets, stopping_strategy="first_exhausted", seed=42)
+        # assert 1 == 1
+
+    def __len__(self) -> int:
+        return len(self.comebined_dataset)
+
+    def __getitem__(self, batch: Union[int, List[int]]) -> Dict[str, Union[torch.Tensor, np.array]]:
+        if isinstance(batch, list) is False:
+            batch = [batch]
+
+        assert len(batch) > 0
+        if isinstance(batch[0], list):
+            # TODO(xrsrke): do a single index, then split the output
+            samples = [self.comebined_dataset[idxs] for idxs in batch]
+            return self._merge_dicts(samples)
+
+        return self.comebined_dataset[batch]
+
+    def _merge_dicts(self, data):
+        merged = {}
+        for key in data[0].keys():
+            merged[key] = np.concatenate([d[key] for d in data if key in d])
+        return merged
 
 
 def sanity_check_dataloader(
@@ -133,7 +170,7 @@ def get_datasets(
 
 
 # Adapted from h4/src/h4/data/loading.py
-def _get_dataset_mix(dataset_dict: dict, splits: List[str] = None, seed=42) -> "DatasetDict":
+def _get_dataset_mix(dataset_dict: dict, splits: List[str] = None, seed: int = 42) -> "DatasetDict":
     """
     Helper function to load dataset mix from dict configuration.
 
@@ -296,6 +333,7 @@ def clm_process(
     dataset_processing_num_proc_per_process: int,
     dataset_overwrite_cache: bool,
     sequence_length: int,
+    dataset_idx: int,
 ):
     """Concatenate all texts from raw_dataset and generate chunks of `sequence_length + 1`, where chunks overlap by a single token."""
     # Adapted from https://github.com/huggingface/transformers/blob/47e1676255e5dd86b9541f734cd4f4bdcbb50f4a/examples/pytorch/language-modeling/run_clm.py#L391-L439
@@ -333,7 +371,7 @@ def clm_process(
         desc=f"Grouping texts in chunks of {sequence_length+1}",
     )
     # TODO(xrsrke): remove this shit
-    train_dataset = train_dataset.add_column("dataset_idxs", [0] * len(train_dataset))
+    train_dataset = train_dataset.add_column("dataset_idxs", [dataset_idx] * len(train_dataset))
     return train_dataset
 
 
@@ -422,6 +460,7 @@ def _get_train_sampler(
     dl_ranks_size: int,
     dl_rank: int,
     train_dataset: "Dataset",
+    shuffle: bool,
     seed: int,
     use_loop_to_round_batch_size: bool,
     consumed_train_samples: int,
@@ -446,7 +485,7 @@ def _get_train_sampler(
         )
     else:
         sampler = DistributedSampler(
-            train_dataset, num_replicas=dl_ranks_size, rank=dl_rank, seed=seed, drop_last=drop_last
+            train_dataset, num_replicas=dl_ranks_size, rank=dl_rank, shuffle=shuffle, seed=seed, drop_last=drop_last
         )
 
     if consumed_train_samples > 0:
@@ -478,21 +517,28 @@ def get_train_dataloader(
         input_pp_rank,
         output_pp_rank,
     ]:
-        train_dataset = train_dataset.with_format(type="numpy", columns=["input_ids"], output_all_columns=True)
-
+        # for dataset_idx in range(len(train_dataset.comebined_dataset)):
+        #     d = train_dataset.comebined_dataset[dataset_idx]
+        #     train_dataset.comebined_dataset[dataset_idx] = d.with_format(type="numpy", columns=["input_ids"], output_all_columns=True)
+        pass
     # Case of ranks not requiring data. We give them an infinite dummy dataloader
     else:
-        #
-        assert train_dataset.column_names == ["input_ids"], (
-            f"Dataset has to have a single column, with `input_ids` as the column name. "
-            f"Current dataset: {train_dataset}"
-        )
+        # TODO(xrsrke): delete train_dataset from memory
+
         dataset_length = len(train_dataset)
-        train_dataset = train_dataset.remove_columns(column_names="input_ids")
-        assert (
-            len(train_dataset) == 0
-        ), f"Dataset has to be empty after removing the `input_ids` column. Current dataset: {train_dataset}"
-        # HACK as if we remove the last column of a train_dataset, it becomes empty and it's number of rows becomes empty.
+        # for dataset_idx in range(len(train_dataset.comebined_dataset)):
+        #     d = train_dataset.comebined_dataset[dataset_idx]
+        #     assert d.column_names == ["input_ids"], (
+        #         f"Dataset has to have a single column, with `input_ids` as the column name. "
+        #         f"Current dataset: {train_dataset}"
+        #     )
+        #     dataset_length = len(d)
+        #     d = d.remove_columns(column_names="input_ids")
+        #     assert (
+        #         len(d) == 0
+        #     ), f"Dataset has to be empty after removing the `input_ids` column. Current dataset: {d}"
+        #     # HACK as if we remove the last column of a train_dataset, it becomes empty and it's number of rows becomes empty.
+
         train_dataset = EmptyInfiniteDataset(length=dataset_length)
         # No need to spawn a lot of workers, we can just use main
         dataloader_num_workers = 0
@@ -515,6 +561,7 @@ def get_train_dataloader(
         dl_rank=dp_rank,
         dl_ranks_size=dp_ranks_size,
         train_dataset=train_dataset,
+        shuffle=False,
         seed=seed_worker,
         use_loop_to_round_batch_size=use_loop_to_round_batch_size,
         micro_batch_size=micro_batch_size,
@@ -524,6 +571,7 @@ def get_train_dataloader(
 
     return DataLoader(
         train_dataset,
+        shuffle=False,
         batch_size=micro_batch_size,
         sampler=train_sampler,
         collate_fn=data_collator,
@@ -607,15 +655,34 @@ def get_dataloader(trainer: "DistributedTrainer"):
             tokenizer.pad_token = tokenizer.eos_token
             tokenizer.padding_side = "left"
 
+            num_datasets = len(trainer.config.data.dataset.hf_dataset_or_datasets)
+            if "dataset_idxs" in raw_dataset.column_names:
+                # assert num_datasets > 1, "Multiple datasets are required to use `dataset_idxs` column."
+
+                raw_datasets = []
+                for i in range(num_datasets):
+                    raw_datasets.append(raw_dataset.filter(lambda x: x["dataset_idxs"] == i))
+
             # We apply the Causal Language Modeling preprocessing
-            train_dataset = clm_process(
-                raw_dataset=raw_dataset,
-                tokenizer=tokenizer,
-                text_column_name=trainer.config.data.dataset.text_column_name,
-                dataset_processing_num_proc_per_process=trainer.config.data.dataset.dataset_processing_num_proc_per_process,
-                dataset_overwrite_cache=trainer.config.data.dataset.dataset_overwrite_cache,
-                sequence_length=trainer.sequence_length,
-            )
+            tokenized_datasets = []
+            for dataset_idx in range(len(raw_datasets)):
+                d = raw_datasets[dataset_idx]
+                assert all(x["dataset_idxs"] == dataset_idx for x in d)
+                d = clm_process(
+                    raw_dataset=d,
+                    tokenizer=tokenizer,
+                    text_column_name=trainer.config.data.dataset.text_column_name,
+                    dataset_processing_num_proc_per_process=trainer.config.data.dataset.dataset_processing_num_proc_per_process,
+                    dataset_overwrite_cache=trainer.config.data.dataset.dataset_overwrite_cache,
+                    sequence_length=trainer.sequence_length,
+                    dataset_idx=dataset_idx,
+                )
+                d = d.with_format(type="numpy", columns=["input_ids"], output_all_columns=True)
+                tokenized_datasets.append(d)
+
+            assert all(x["dataset_idxs"] == i for i, d in enumerate(tokenized_datasets) for x in d)
+            weights = torch.tensor(list(trainer.config.data.dataset.hf_dataset_or_datasets.values()))
+            train_dataset = CombinedDataset(tokenized_datasets, weights, trainer.config.data.seed)
 
             # We load the processed dataset on the ranks requiring it
             dataloader = get_train_dataloader(

@@ -9,11 +9,15 @@ doremi:
   # domain_names: Pile-CC, Github, OpenWebText2, StackExchange, Wikipedia (en), PubMed Abstracts, USPTO Backgrounds, FreeLaw, PubMed Central, Enron Emails, HackerNews, NIH ExPorter, Books3, ArXiv, DM Mathematics, OpenSubtitles, Gutenberg (PG-19), Ubuntu IRC, BookCorpus2, EuroParl, YoutubeSubtitles, PhilPapers
   # domain_weights: 0.1500, 0.1213, 0.0872, 0.0631, 0.0340, 0.0240, 0.0281, 0.0594, 0.1599, 0.0015, 0.0058, 0.0021, 0.0605, 0.1136, 0.0209, 0.0154, 0.0202, 0.0037, 0.0065, 0.0100, 0.0093, 0.0036
 
-  domain_names: Pile-CC, Github, OpenWebText2
+  # domain_names: Pile-CC, Github, OpenWebText2
+  # domain_weights:
+  # - 0.5
+  # - 0.3
+  # - 0.2
+  domain_names: Pile-CC, Github
   domain_weights:
   - 0.5
-  - 0.3
-  - 0.2
+  - 0.5
   ref_model_resume_checkpoint_path: /fsx/phuc/projects/nanotron/checkpoints/1
 
 data:
@@ -50,11 +54,19 @@ data:
     # text_column_name: text
 
     # hf_dataset_or_datasets: /fsx/phuc/datasets/doremi/the_pile/testset
+
+
+    # hf_dataset_or_datasets:
+    #   Fraser/mnist-text-small: 0.5
+    #   # MarmoraAI/SmallMarmoraChat: 0.5
+    #   andstor/methods2test_small: 0.5 # 50 mb
+    #   # oliveirabruno01/shaped-svgs-small-unlabeled: 0.2
+    # text_column_name: text
+
     hf_dataset_or_datasets:
-      vicgalle/alpaca-gpt4: 0.5
-      vicgalle/alpaca-gpt4: 0.3
-      vicgalle/alpaca-gpt4: 0.2
-    hf_dataset_splits: train
+      lksy/ru_instruct_gpt4: 0.5
+      iamtarun/python_code_instructions_18k_alpaca: 0.5
+      # OdiaGenAI/OdiEnCorp_translation_instructions_25k: 0.2
     text_column_name: instruction
     # hf_dataset_config_name: dihana
 
@@ -137,7 +149,7 @@ tokens:
 
   batch_accumulation_per_replica: 1
   # micro_batch_size: 32
-  micro_batch_size: 2
+  micro_batch_size: 100
 
   limit_test_batches: 0
   limit_val_batches: 0
