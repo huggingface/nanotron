@@ -6,7 +6,7 @@ import os
 import time
 from datetime import datetime
 from math import ceil
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -149,6 +149,50 @@ def lr_scheduler_builder(optimizer: Optimizer, lr_scheduler_args: LRSchedulerArg
     return lr_scheduler
 
 
+# TODO(xrsrke): refactor
+def group_parameters_by_linear_type(
+    named_parameters: List[Tuple[str, torch.Tensor]],
+    model: NanotronModel,
+    config: OptimizerArgs,
+) -> List[Dict[str, Any]]:
+    named_parameters_by_linear_type = {}
+    for name, param in named_parameters:
+        # NOTE: remove .weight and .bias from the name
+        module_name = name.rsplit(".", 1)[0]
+        module = model.get_submodule(module_name)
+        linear_type = getattr(module, "linear_type", None)
+
+        if linear_type not in named_parameters_by_linear_type:
+            named_parameters_by_linear_type[linear_type] = []
+
+        named_parameters_by_linear_type[linear_type].append((name, param))
+
+    assert len(named_parameters) == sum(
+        len(v) for v in named_parameters_by_linear_type.values()
+    ), "Missing some named parameters"
+
+    from nanotron.scaling import WeightType
+
+    fan_in = model.config.hidden_size
+    LINEAR_TYPE_TO_LR = {
+        WeightType.INPUT_WEIGHTS: config.learning_rate_scheduler.learning_rate,
+        WeightType.HIDDEN_WEIGHTS: config.learning_rate_scheduler.learning_rate / fan_in,
+        WeightType.OUTPUT_WEIGHTS: config.learning_rate_scheduler.learning_rate,
+    }
+
+    named_param_groups = []
+    # NOTE: now format it to [{"named_params": [(name, param)], "lr": lr}, ...]
+    for linear_type, named_params in named_parameters_by_linear_type.items():
+        named_param_groups.append(
+            {
+                "named_params": named_params,
+                "lr": LINEAR_TYPE_TO_LR[linear_type],
+            }
+        )
+
+    return named_param_groups
+
+
 def init_optimizer_and_grad_accumulator(
     model: nn.Module, optimizer_args: OptimizerArgs, parallel_context: ParallelContext
 ) -> Tuple[BaseOptimizer, GradientAccumulator]:
@@ -160,6 +204,7 @@ def init_optimizer_and_grad_accumulator(
     module_id_to_prefix[id(unwrapped_model)] = ""
 
     named_parameters = list(unwrapped_model.get_named_params_with_correct_tied())
+    named_parameters = group_parameters_by_linear_type(named_parameters, unwrapped_model, optimizer_args)
 
     # Basic optimizer builder
     def basic_optimizer_builder(named_param_groups):
