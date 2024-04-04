@@ -116,7 +116,7 @@ class Mamba(nn.Module, AttachableStore):
             mode=tp_mode,
             bias=False,
             async_communication=False,
-            contiguous_chunks=None,
+            contiguous_chunks=(self.d_inner, self.d_inner),
         )
 
         assert self.d_inner % self.tp_pg.size() == 0
@@ -251,10 +251,14 @@ class Mamba(nn.Module, AttachableStore):
                 delta_softplus=True,
             )
         else:
-            assert self.d_inner % self.tp_pg.size() == 0
-            x, z = xz.view(batch_size, self.d_inner // self.tp_pg.size(), 2, seqlen).chunk(2, dim=2)
+            if self.tp_pg.size() > 1:
+                x, z = xz.view(batch_size, self.d_inner // 2, 2, seqlen).chunk(2, dim=2)
+            else:
+                x, z = xz.view(batch_size, self.d_inner, 2, seqlen).chunk(2, dim=2)
+
             x = x.squeeze(2)
             z = z.squeeze(2)
+
             # Compute short convolution
             if conv_state is not None:
                 # If we just take x[:, :, -self.d_conv :], it will error if seqlen < self.d_conv
@@ -311,10 +315,14 @@ class Mamba(nn.Module, AttachableStore):
         dtype = hidden_states.dtype
         assert seqlen == 1, "Only support decoding with 1 token at a time for now"
         xz = self.in_proj(hidden_states.squeeze(1))  # (B 2D)
-        x, z = xz.view(batch_size, self.d_inner // self.tp_pg.size(), 2).chunk(2, dim=2)
+
+        if self.tp_pg.size() > 1:
+            x, z = xz.view(batch_size, self.d_inner // 2, 2).chunk(2, dim=2)
+        else:
+            x, z = xz.view(batch_size, self.d_inner, 2).chunk(2, dim=2)
+
         x = x.squeeze(2)  # (B D)
         z = z.squeeze(2)  # (B D)
-
         # Conv step
         if causal_conv1d_update is None:
             conv_state.copy_(torch.roll(conv_state, shifts=-1, dims=-1))  # Update state (B D W)
