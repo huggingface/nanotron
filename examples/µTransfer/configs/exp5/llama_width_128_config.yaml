@@ -29,7 +29,7 @@ general:
   consumed_train_samples: null
   ignore_sanity_checks: false
   project: µTransfer_for_nanotron
-  run: exp5_llama_width_8192
+  run: exp5_llama_width_128
   seed: 42
   step: null
 lighteval: null
@@ -41,9 +41,7 @@ model:
   ddp_bucket_cap_mb: 120
   dtype: bfloat16
   init_method:
-    # std: 0.025 # original
-    # std: 0.03125 # 1/sqrt(1024)=0.03125
-    std: 0.011048543456039804 # 1/sqrt(8192)=0.011048543456039804
+    std: 0.08838834764831843 # 1/sqrt(128)=0.08838834764831843
   make_vocab_size_divisible_by: 1
   model_config:
     bos_token_id: 1
@@ -51,8 +49,8 @@ model:
     hidden_act: silu
     initializer_range: 0.02
 
-    hidden_size: 8192
-    intermediate_size: 32768
+    hidden_size: 128
+    intermediate_size: 512
     num_hidden_layers: 4
 
     is_llama_config: true
@@ -74,7 +72,7 @@ optimizer:
   adam_eps: 1.0e-08
   clip_grad: 1.0
   learning_rate_scheduler:
-    learning_rate: 0.001 # note: 1/2 of pythia use this for a 400m model
+    learning_rate: 0.1
     lr_decay_starting_step: null
     lr_decay_steps: null
     lr_decay_style: cosine
@@ -85,10 +83,10 @@ optimizer:
   weight_decay: 0.1
   zero_stage: 1
 parallelism:
-  dp: 4
+  dp: 2
   pp: 1
   pp_engine: 1f1b
-  tp: 2
+  tp: 4
   tp_linear_async_communication: true
   tp_mode: REDUCE_SCATTER
 profiler: null

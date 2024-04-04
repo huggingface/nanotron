@@ -91,7 +91,7 @@ def lr_scheduler_builder(optimizer: Optimizer, lr_scheduler_args: LRSchedulerArg
     else:
         lr_decay_starting_step = lr_scheduler_args.lr_decay_starting_step
 
-    def lr_lambda(current_step: int):
+    def lr_lambda(current_step: int, lr: float):
         """LR Scheduling function, it has from 2 up to 4 phases:
         - warmup,
         - optional: constant (if lr_decay_starting_step is set)
@@ -104,34 +104,34 @@ def lr_scheduler_builder(optimizer: Optimizer, lr_scheduler_args: LRSchedulerArg
         """
         # No warmup or decay
         if lr_scheduler_args.lr_warmup_steps == 0 and lr_decay_steps == 0:
-            return lr_scheduler_args.learning_rate
+            return lr
 
         # Warmup phase
         elif lr_scheduler_args.lr_warmup_style is not None and current_step <= lr_scheduler_args.lr_warmup_steps:
             if lr_scheduler_args.lr_warmup_style == "linear":
-                lmbda = lr_scheduler_args.learning_rate * current_step / max(lr_scheduler_args.lr_warmup_steps, 1)
+                lmbda = lr * current_step / max(lr_scheduler_args.lr_warmup_steps, 1)
             elif lr_scheduler_args.lr_warmup_style == "constant":
-                lmbda = lr_scheduler_args.learning_rate
+                lmbda = log_rank
             else:
                 raise ValueError(f"Unknown warmup style {lr_scheduler_args.lr_warmup_style}")
 
         # Optional constant phase at learning_rate
         elif current_step < lr_decay_starting_step:
-            lmbda = lr_scheduler_args.learning_rate
+            lmbda = lr
 
         # Decay phase
         elif lr_scheduler_args.lr_decay_style is not None and current_step < lr_decay_starting_step + lr_decay_steps:
             if lr_scheduler_args.lr_decay_style == "cosine":
                 lmbda = (
                     lr_scheduler_args.min_decay_lr
-                    + (lr_scheduler_args.learning_rate - lr_scheduler_args.min_decay_lr)
+                    + (lr - lr_scheduler_args.min_decay_lr)
                     * (1 + math.cos(math.pi * (current_step - lr_decay_starting_step) / lr_decay_steps))
                     / 2
                 )
             elif lr_scheduler_args.lr_decay_style == "linear":
                 lmbda = (
                     lr_scheduler_args.min_decay_lr
-                    + (lr_scheduler_args.learning_rate - lr_scheduler_args.min_decay_lr)
+                    + (lr - lr_scheduler_args.min_decay_lr)
                     * (lr_decay_steps - (current_step - lr_decay_starting_step))
                     / lr_decay_steps
                 )
@@ -142,10 +142,25 @@ def lr_scheduler_builder(optimizer: Optimizer, lr_scheduler_args: LRSchedulerArg
         else:
             lmbda = lr_scheduler_args.min_decay_lr
 
-        lmbda /= lr_scheduler_args.learning_rate  # Normalization for pytorch
+        lmbda /= lr  # Normalization for pytorch
         return lmbda
 
-    lr_scheduler = LambdaLR(optimizer.get_base_optimizer(), lr_lambda=lr_lambda)
+    # def get_lr_lambda_for_param_group(lr: float):
+    #     from functools import partial
+    #     return partial(lambda current_step: lr_lambda(current_step), lr=lr)
+
+    def get_lr_lambda_for_param_group(lr: float):
+        from functools import partial
+
+        return partial(lr_lambda, lr=lr)
+
+    lr_lambdas = []
+    assert len(optimizer.get_base_optimizer().param_groups) == 3
+
+    for param_group in optimizer.get_base_optimizer().param_groups:
+        lr_lambdas.append(get_lr_lambda_for_param_group(lr=param_group["lr"]))
+
+    lr_scheduler = LambdaLR(optimizer.get_base_optimizer(), lr_lambda=lr_lambdas)
     return lr_scheduler
 
 

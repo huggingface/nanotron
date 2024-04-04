@@ -74,7 +74,8 @@ optimizer:
   adam_eps: 1.0e-08
   clip_grad: 1.0
   learning_rate_scheduler:
-    learning_rate: 0.001 # note: 1/2 of pythia use this for a 400m model
+    # learning_rate: 0.001
+    learning_rate: 0.01
     lr_decay_starting_step: null
     lr_decay_steps: null
     lr_decay_style: cosine
@@ -85,10 +86,10 @@ optimizer:
   weight_decay: 0.1
   zero_stage: 1
 parallelism:
-  dp: 4
+  dp: 2
   pp: 1
   pp_engine: 1f1b
-  tp: 2
+  tp: 4
   tp_linear_async_communication: true
   tp_mode: REDUCE_SCATTER
 profiler: null
