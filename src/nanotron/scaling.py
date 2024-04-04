@@ -172,3 +172,7 @@ def parametrize_using_mu_transfer(model: nn.Module, config: Config, parallel_con
             raise ValueError(f"Unknown linear type: {module.linear_type}")
 
         module.register_forward_hook(hook_func)
+
+
+def monitor_l1_norm_activations(model: nn.Module):
+    pass

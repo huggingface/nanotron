@@ -213,6 +213,8 @@ class CoreAttention(nn.Module):
         # TODO(kunhao): flash attn's causal means that the query can only attend to the keys before it. This is not
         # what we want if we are using kv cache. This is a hack as we always have q_length == 1 when using kv cache.
         causal = False if q_sequence_mask.shape[1] == 1 else True
+        # NOTE: this scale is for µTransfer
+        softmax_scale = 1 / query_states.shape[-1]
         attn_output = flash_attn_varlen_func(
             q=query_states,
             k=key_states,
@@ -222,7 +224,7 @@ class CoreAttention(nn.Module):
             max_seqlen_q=q_sequence_mask.shape[1],
             max_seqlen_k=kv_sequence_mask.shape[1],
             dropout_p=0.0,
-            softmax_scale=None,  # This already defaults to the scale I'm interested in
+            softmax_scale=softmax_scale,  # This already defaults to the scale I'm interested in
             causal=causal,
             return_attn_probs=False,
         )
@@ -774,6 +776,19 @@ class LlamaModel(nn.Module):
         for encoder_block in self.decoder:
             hidden_encoder_states = encoder_block(**hidden_encoder_states)
 
+        # hidden_states.shape = [seq_length/tp_rank, batch_size, hidden_dim]
+        mup_l1_norm = hidden_encoder_states["hidden_states"].mean(dim=[0, 1]).abs()  # [hidden_dim]
+        dist.all_reduce(
+            mup_l1_norm, op=dist.ReduceOp.SUM, group=self.parallel_context.tp_pg
+        )  # sum [hidden_dim] across tp ranks
+        mup_l1_norm = mup_l1_norm.mean()
+        dist.all_reduce(mup_l1_norm, op=dist.ReduceOp.AVG, group=self.parallel_context.dp_pg)
+
+        if dist.get_rank() == 0:
+            import wandb
+
+            wandb.log({"output_l1_norm": mup_l1_norm.cpu().detach().float().numpy(), "width": self.config.hidden_size})
+
         hidden_states = self.final_layer_norm(input=hidden_encoder_states["hidden_states"])["hidden_states"]
 
         sharded_logits = self.lm_head(x=hidden_states)["logits"]
@@ -839,6 +854,10 @@ class Loss(nn.Module):
     ) -> Dict[str, torch.Tensor]:
         # Megatron by defaults cast everything in fp32. `--f16-lm-cross-entropy` is an option you can use to keep current precision.
         # https://github.com/NVIDIA/Megatron-LM/blob/f267e6186eae1d6e2055b412b00e2e545a8e896a/megatron/model/gpt_model.py#L38
+
+        # mup_logit_l1_norm = sharded_logits.mean(dim=[0,1]).abs()
+        # dist.all_reduce(mup_logit_l1_norm, op=dist.ReduceOp.AVERAGE, group=self.tp_pg)
+
         loss = sharded_cross_entropy(
             sharded_logits, label_ids.transpose(0, 1).contiguous(), group=self.tp_pg, dtype=torch.float
         ).transpose(0, 1)
