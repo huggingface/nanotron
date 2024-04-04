@@ -3,7 +3,6 @@ import math
 import os
 
 from config import MambaConfig, MambaInit, MambaModelConfig
-
 from nanotron.config import (
     CheckpointsArgs,
     DataArgs,
@@ -36,9 +35,9 @@ ssm_cfg = {
 }
 # https://huggingface.co/state-spaces/mamba-790m/blob/main/config.json
 model_config = MambaModelConfig(
-    d_model=1536,
+    d_model=1024,
     num_hidden_layers=48,
-    vocab_size=50277,
+    vocab_size=50278,
     ssm_cfg=ssm_cfg,
     rms_norm=True,
     fused_add_norm=True,
@@ -98,7 +97,11 @@ optimizer = OptimizerArgs(
     adam_beta2=0.95,
     torch_adam_is_fused=True,
     learning_rate_scheduler=LRSchedulerArgs(
-        learning_rate=3e-4, lr_warmup_steps=10, lr_warmup_style="linear", lr_decay_style="cosine", min_decay_lr=1e-5
+        learning_rate=0.0015,
+        lr_warmup_steps=30,
+        lr_warmup_style="linear",
+        lr_decay_style="cosine",
+        min_decay_lr=0.00015,
     ),
 )
 
@@ -111,7 +114,7 @@ parallelism = ParallelismArgs(
     tp_linear_async_communication=False,
 )
 
-tokens = TokensArgs(sequence_length=2048, train_steps=100, micro_batch_size=2, batch_accumulation_per_replica=1)
+tokens = TokensArgs(sequence_length=2048, train_steps=300, micro_batch_size=8, batch_accumulation_per_replica=1)
 
 dataset = PretrainDatasetsArgs(
     hf_dataset_or_datasets={"roneneldan/TinyStories": 1.0},
@@ -127,7 +130,7 @@ os.makedirs(checkpoints_path, exist_ok=True)
 
 config = MambaConfig(
     general=GeneralArgs(project="test", run="mamba", seed=seed, ignore_sanity_checks=True),
-    checkpoints=CheckpointsArgs(checkpoints_path=checkpoints_path, checkpoint_interval=10),
+    checkpoints=CheckpointsArgs(checkpoints_path=checkpoints_path, checkpoint_interval=100),
     parallelism=parallelism,
     model=ModelArgs(
         init_method=MambaInit(initializer_range=0.02, rescale_prenorm_residual=True, n_residuals_per_layer=1),
