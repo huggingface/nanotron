@@ -46,11 +46,6 @@ model:
     hidden_act: silu
     initializer_range: 0.02
 
-    # NOTE: 250m
-    # hidden_size: 1024
-    # intermediate_size: 4096
-    # num_hidden_layers: 10
-
     hidden_size: 8192
     intermediate_size: 32768
     num_hidden_layers: 4

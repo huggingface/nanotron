@@ -38,7 +38,8 @@ model:
   init_method:
     # std: 0.025 # original
     # std: 0.03125 # 1/sqrt(1024)=0.03125
-    std: 0.022097086912079608 # 1/sqrt(2048)=0.022097086912079608
+    # std: 0.022097086912079608 # 1/sqrt(2048)=0.022097086912079608
+    std: 0.015625 # 1/sqrt(4096)=0.015625
   make_vocab_size_divisible_by: 1
   model_config:
     bos_token_id: 1
