@@ -166,7 +166,7 @@ def main():
         dummy_inputs = [
             # "Passage: Daniel went back to the garden. Mary travelled to the kitchen. Sandra journeyed to the kitchen. Sandra went to the hallway. John went to the bedroom. Mary went back to the garden. Where is Mary?\nAnswer:",
             # "This film was probably inspired by Godzilla",
-            "Hello"
+            "What is your "
         ]
 
         log_rank("Setup Inference mode for mamba model", logger=logger, level=logging.INFO, rank=0)
@@ -183,7 +183,7 @@ def main():
             generation_config=GenerationArgs(sampler="greedy", use_cache=True),
             tokenizer_config=TokenizerConfig(max_input_length=None),
             is_bench=os.environ.get("USE_BENCH", "0") == "1",
-            is_logits_transpose=False,
+            logits_are_batch_first=False,
         )
         for output in outputs:
             input_ids = output.input_ids

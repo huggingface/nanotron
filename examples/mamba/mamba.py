@@ -163,8 +163,6 @@ class Mamba(nn.Module, AttachableStore):
         inv_dt = dt + torch.log(-torch.expm1(-dt))
         with torch.no_grad():
             self.dt_proj.bias.copy_(inv_dt)
-        # Our initialization would set all Linear.bias to zero, need to mark this one as _no_reinit
-        self.dt_proj.bias._no_reinit = True
 
         self.dt_proj.weight = create_sharded_parameter_from_config(
             parameter=self.dt_proj.weight, pg=self.tp_pg, split_config=SplitConfig(split_dim=0)

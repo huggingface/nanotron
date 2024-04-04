@@ -3,56 +3,58 @@
 Converts a HF model from (https://huggingface.co/state-spaces/) to a Brrr model
 
 Command:
-    torchrun --nproc_per_node=1 convert_hf_to_nanotron.py --model 130M  --save_path nanotron-weights
+    torchrun --nproc_per_node=1 convert_hf_to_nanotron.py --model state-spaces/mamba-130m --tokenizer state-spaces/mamba-130m-hf  --save_path nanotron_weights
 """
 import argparse
+import json
+from dataclasses import asdict
+from pathlib import Path
+from typing import Dict
+
 import torch
 import yaml
-import json
-from pathlib import Path
-from tqdm import tqdm
-from typing import Dict
+from config import MambaConfig, MambaInit, MambaModelConfig
+from mamba import MambaForTraining
+from mamba_ssm.models.config_mamba import MambaConfig as HFMambaConfig
 from mamba_ssm.models.mixer_seq_simple import MambaLMHeadModel
-from dataclasses import asdict
-
+from nanotron import logging
 from nanotron.config import (
     AllForwardAllBackwardPipelineEngine,
+    GeneralArgs,
+    LoggingArgs,
+    ModelArgs,
     ParallelismArgs,
     TensorParallelLinearMode,
+    TokenizerArgs,
 )
-from config import MambaModelConfig, MambaConfig, MambaInit
-from nanotron.config import GeneralArgs, ModelArgs, TokenizerArgs
-
 from nanotron.distributed import dist
-from nanotron.helpers import _vocab_size_with_padding
+from nanotron.logging import log_rank, set_ranks_logging_level
 from nanotron.models import build_model
-from mamba import MambaForTraining
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter, sanity_check
 from nanotron.serialize import save_meta, save_weights
 from nanotron.trainer import mark_tied_parameters
-from nanotron import logging
-from nanotron.logging import log_rank, set_ranks_logging_level
-from nanotron.config import LoggingArgs
-
-from transformers.utils import WEIGHTS_NAME, CONFIG_NAME
+from tqdm import tqdm
+from transformers.utils import CONFIG_NAME
 from transformers.utils.hub import cached_file
-from mamba_ssm.models.config_mamba import MambaConfig as HFMambaConfig
+
 logger = logging.get_logger(__name__)
+
 
 def load_config_hf(model_name):
     resolved_archive_file = cached_file(model_name, CONFIG_NAME, _raise_exceptions_for_missing_entries=False)
     return json.load(open(resolved_archive_file))
+
 
 def get_weight_from_hf(
     name: str,
     ref_module_state_dict: Dict[str, torch.Tensor],
     ref_module: MambaLMHeadModel,
     nanotron_to_hf: Dict[str, str],
-    get_grad: bool = False
+    get_grad: bool = False,
 ) -> torch.Tensor:
-    """From our brrr implementation, we get the equivalent tensor in transformers implementation"""    
-  
+    """From our brrr implementation, we get the equivalent tensor in transformers implementation"""
+
     def _interleave_pattern(N):
         """
         interleave_pattern(4) -> [0, 2, 1, 3]
@@ -64,39 +66,46 @@ def get_weight_from_hf(
             pattern.append(i)
             pattern.append(i + N // 2)
         return pattern
-  
+
     hf_name = nanotron_to_hf[name]
-    
+
     if get_grad is False:
+
         def _get_tensor(path: str):
             return ref_module_state_dict[path]
+
     else:
+
         def _get_tensor(path: str):
             param = ref_module.get_parameter(path)
             return param.grad
-    
+
     param = _get_tensor(hf_name)
-    
+
     if "in_proj" in hf_name:
         # In Nanotron, we do tensor parallel column so weight need to be split in the column dimension (i.e: xz.view(...))
         # However, the HF weights was trained such that it expected xz.chunk(...) to split the tensor in the row dimension
         # Thus, we need to interleaved the HF weights to make it compatible with Nanotron
-        log_rank(f"Interleaving {hf_name} to make it compatible with Nanotron", logger=logger, level=logging.INFO, rank=0)
+        log_rank(
+            f"Interleaving {hf_name} to make it compatible with Nanotron", logger=logger, level=logging.INFO, rank=0
+        )
         param = param[_interleave_pattern(param.shape[0]), :]
-        
+
     return param
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Convert HF weights from states-space repo to brrr weights")
     parser.add_argument("--save_path", type=str, default="mamba-nanotron")
     parser.add_argument("--model", type=str, default="state-spaces/mamba-130m")
+    parser.add_argument("--tokenizer", type=str, default="state-spaces/mamba-130m-hf")
     parser.add_argument("--dp", type=int, default=1)
     parser.add_argument("--pp", type=int, default=1)
     parser.add_argument("--tp", type=int, default=1)
     args = parser.parse_args()
 
     assert "state-spaces" in args.model, "Only models from state-spaces repo are supported"
-    
+
     save_path = Path(args.save_path)
 
     parallel_config = ParallelismArgs(
@@ -107,7 +116,10 @@ if __name__ == "__main__":
         tp_mode=TensorParallelLinearMode.ALL_REDUCE,
         tp_linear_async_communication=False,
     )
-    assert parallel_config.tp_mode == TensorParallelLinearMode.ALL_REDUCE and parallel_config.tp_linear_async_communication is False
+    assert (
+        parallel_config.tp_mode == TensorParallelLinearMode.ALL_REDUCE
+        and parallel_config.tp_linear_async_communication is False
+    )
 
     parallel_context = ParallelContext(
         data_parallel_size=parallel_config.dp,
@@ -128,7 +140,7 @@ if __name__ == "__main__":
     hf_config = HFMambaConfig(**hf_config_data)
 
     dtype_str = "float32"
-    
+
     yaml_content = f"""
     is_mamba_config: true
     d_model: {hf_config.d_model}
@@ -163,7 +175,7 @@ if __name__ == "__main__":
         ),
         parallel_context=parallel_context,
         dtype=dtype,
-        device=device
+        device=device,
     )
 
     device_map = {}
@@ -186,28 +198,33 @@ if __name__ == "__main__":
     nanotron_to_hf = {}
 
     for i in range(model_config.num_hidden_layers):
-        nanotron_to_hf[f'decoder.{i}.pp_block.mixer.A_log'] = f'backbone.layers.{i}.mixer.A_log'
-        nanotron_to_hf[f'decoder.{i}.pp_block.mixer.D'] = f'backbone.layers.{i}.mixer.D'
-        nanotron_to_hf[f'decoder.{i}.pp_block.mixer.in_proj.weight'] = f'backbone.layers.{i}.mixer.in_proj.weight'
-        nanotron_to_hf[f'decoder.{i}.pp_block.mixer.conv1d.weight'] = f'backbone.layers.{i}.mixer.conv1d.weight'
-        nanotron_to_hf[f'decoder.{i}.pp_block.mixer.conv1d.bias'] = f'backbone.layers.{i}.mixer.conv1d.bias'
-        nanotron_to_hf[f'decoder.{i}.pp_block.mixer.x_proj.weight'] = f'backbone.layers.{i}.mixer.x_proj.weight'
-        nanotron_to_hf[f'decoder.{i}.pp_block.mixer.x_proj.bias'] = f'backbone.layers.{i}.mixer.x_proj.bias'
-        nanotron_to_hf[f'decoder.{i}.pp_block.mixer.dt_proj.weight'] = f'backbone.layers.{i}.mixer.dt_proj.weight'
-        nanotron_to_hf[f'decoder.{i}.pp_block.mixer.dt_proj.bias'] = f'backbone.layers.{i}.mixer.dt_proj.bias'
-        nanotron_to_hf[f'decoder.{i}.pp_block.mixer.out_proj.weight'] = f'backbone.layers.{i}.mixer.out_proj.weight'
-        #TODO: Maybe check if bias exists?
-        nanotron_to_hf[f'decoder.{i}.pp_block.mixer.out_proj.bias'] = f'backbone.layers.{i}.mixer.out_proj.bias'
-        nanotron_to_hf[f'decoder.{i}.pp_block.norm.weight'] = f'backbone.layers.{i}.norm.weight'
+        nanotron_to_hf[f"decoder.{i}.pp_block.mixer.A_log"] = f"backbone.layers.{i}.mixer.A_log"
+        nanotron_to_hf[f"decoder.{i}.pp_block.mixer.D"] = f"backbone.layers.{i}.mixer.D"
+        nanotron_to_hf[f"decoder.{i}.pp_block.mixer.in_proj.weight"] = f"backbone.layers.{i}.mixer.in_proj.weight"
+        nanotron_to_hf[f"decoder.{i}.pp_block.mixer.conv1d.weight"] = f"backbone.layers.{i}.mixer.conv1d.weight"
+        nanotron_to_hf[f"decoder.{i}.pp_block.mixer.conv1d.bias"] = f"backbone.layers.{i}.mixer.conv1d.bias"
+        nanotron_to_hf[f"decoder.{i}.pp_block.mixer.x_proj.weight"] = f"backbone.layers.{i}.mixer.x_proj.weight"
+        nanotron_to_hf[f"decoder.{i}.pp_block.mixer.x_proj.bias"] = f"backbone.layers.{i}.mixer.x_proj.bias"
+        nanotron_to_hf[f"decoder.{i}.pp_block.mixer.dt_proj.weight"] = f"backbone.layers.{i}.mixer.dt_proj.weight"
+        nanotron_to_hf[f"decoder.{i}.pp_block.mixer.dt_proj.bias"] = f"backbone.layers.{i}.mixer.dt_proj.bias"
+        nanotron_to_hf[f"decoder.{i}.pp_block.mixer.out_proj.weight"] = f"backbone.layers.{i}.mixer.out_proj.weight"
+        nanotron_to_hf[f"decoder.{i}.pp_block.mixer.out_proj.bias"] = f"backbone.layers.{i}.mixer.out_proj.bias"
+        nanotron_to_hf[f"decoder.{i}.pp_block.norm.weight"] = f"backbone.layers.{i}.norm.weight"
 
-    nanotron_to_hf['token_position_embeddings.pp_block.token_embedding.weight'] = 'backbone.embedding.weight'
-    nanotron_to_hf['final_layer_norm.pp_block.weight'] = 'backbone.norm_f.weight'
-    nanotron_to_hf['lm_head.pp_block.weight'] = 'lm_head.weight'
+    nanotron_to_hf["token_position_embeddings.pp_block.token_embedding.weight"] = "backbone.embedding.weight"
+    nanotron_to_hf["final_layer_norm.pp_block.weight"] = "backbone.norm_f.weight"
+    nanotron_to_hf["lm_head.pp_block.weight"] = "lm_head.weight"
 
     # Sync weights
     ref_state_dict = model_ref.state_dict()
-    for name, param in tqdm(nanotron_model.model.named_parameters(), total=len(list(nanotron_model.model.named_parameters())), desc="Converting"):
-        ref_param = get_weight_from_hf(name=name, ref_module_state_dict=ref_state_dict, ref_module=model_ref, nanotron_to_hf=nanotron_to_hf)
+    for name, param in tqdm(
+        nanotron_model.model.named_parameters(),
+        total=len(list(nanotron_model.model.named_parameters())),
+        desc="Converting",
+    ):
+        ref_param = get_weight_from_hf(
+            name=name, ref_module_state_dict=ref_state_dict, ref_module=model_ref, nanotron_to_hf=nanotron_to_hf
+        )
 
         param_is_tp_sharded = (
             isinstance(param, NanotronParameter)
@@ -237,7 +254,7 @@ if __name__ == "__main__":
     mark_tied_parameters(model=nanotron_model, parallel_context=parallel_context)
 
     sanity_check(root_module=nanotron_model)
-    
+
     save_weights(model=nanotron_model, parallel_context=parallel_context, root_folder=save_path)
     checkpoint_metadata = {
         "last_train_step": 0,
@@ -251,14 +268,14 @@ if __name__ == "__main__":
                 general=GeneralArgs(project="test", run="mamba"),
                 parallelism=parallel_config,
                 model=ModelArgs(
-                        init_method=MambaInit(),
-                        model_config=model_config,
-                    ),
-                tokenizer=TokenizerArgs(args.model + "-hf"),
+                    init_method=MambaInit(),
+                    model_config=model_config,
+                ),
+                tokenizer=TokenizerArgs(args.tokenizer),
             )
             log_rank("Saving config ...", logger=logger, level=logging.INFO, rank=0)
             yaml.dump(config.as_dict(), f)
-            
+
         with open(save_path / "model_config.json", "w") as f:
             log_rank("Saving model config ...", logger=logger, level=logging.INFO, rank=0)
             json.dump(asdict(model_config), f)

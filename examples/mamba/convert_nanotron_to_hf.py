@@ -2,13 +2,14 @@
 """
 Converts a nanotron model to HF format
 Command:
-    torchrun --nproc_per_node=1 convert_nanotron_to_hf.py --checkpoint_path=weights-tp1 --save_path=HF_130M
+    torchrun --nproc_per_node=1 convert_nanotron_to_hf.py --checkpoint_path=nanotron_weights --save_path=HF_weights
 """
 import argparse
 import json
 from pathlib import Path
 
 import torch
+import yaml
 from config import MambaModelConfig
 from mamba import MambaForTraining
 from nanotron import logging
@@ -25,12 +26,13 @@ from transformers import AutoTokenizer, MambaConfig, MambaForCausalLM
 
 logger = logging.get_logger(__name__)
 
-TOKENIZER_NAME = "state-spaces/mamba-130m-hf"
-HARCODED_PROMPT = "Hello"
-
 
 def convert_checkpoint_and_save(checkpoint_path: Path, save_path: Path):
     device = torch.device("cuda")
+
+    with open(checkpoint_path / "config.yaml", "r") as f:
+        attrs = yaml.safe_load(f)
+        tokenizer_name = attrs["tokenizer"]["tokenizer_name_or_path"]
 
     with open(checkpoint_path / "model_config.json", "r") as f:
         attrs = json.load(f)
@@ -173,9 +175,16 @@ def convert_checkpoint_and_save(checkpoint_path: Path, save_path: Path):
     model_hf.save_pretrained(save_path)
     print(f"Model saved to {save_path}")
 
-
-def check_converted_model_generation(save_path: Path, tokenizer_name: str):
+    # Save the tokenizer
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+    tokenizer.save_pretrained(save_path)
+    print(f"Tokenizer saved to {save_path}")
+
+
+def check_converted_model_generation(save_path: Path):
+    HARCODED_PROMPT = "What is your "
+
+    tokenizer = AutoTokenizer.from_pretrained(save_path)
     input_ids = tokenizer(HARCODED_PROMPT, return_tensors="pt")["input_ids"]
     print("Inputs:", tokenizer.batch_decode(input_ids))
 
@@ -197,4 +206,4 @@ if __name__ == "__main__":
     convert_checkpoint_and_save(checkpoint_path=checkpoint_path, save_path=save_path)
 
     # check if the conversion was successful by generating some text
-    check_converted_model_generation(save_path=save_path, tokenizer_name=TOKENIZER_NAME)
+    check_converted_model_generation(save_path=save_path)
