@@ -36,7 +36,6 @@ def print_array_for_human(arr: List[float], precision: int = 5) -> str:
 class DoReMiTrainer(DistributedTrainer):
     def __init__(
         self,
-        domain_weights: torch.Tensor,
         config_or_config_file: Union[Config, str],
         config_class: Type[Config] = Config,
     ):
@@ -47,7 +46,6 @@ class DoReMiTrainer(DistributedTrainer):
         ), "You must provide a reference model checkpoint path for DoReMi training."
 
         self.doremi_context = DoReMiContext(
-            domain_weights,
             config.doremi.domain_names,
             is_proxy=True,
             step_size=config.doremi.step_size,
@@ -124,7 +122,7 @@ class DoReMiTrainer(DistributedTrainer):
     ):
         domain_weights = outputs[0]["domain_weights"]
         domain_losses = outputs[0]["domain_losses"]
-        samples_per_domain = outputs[0]["samples_per_domain"].tolist()
+        samples_per_domain = outputs[0]["samples_per_domain"]
         # NOTE: this is cross entropy loss
         ce_loss_avg = torch.stack([output["ce_loss"] for output in outputs]).sum()
 
@@ -134,6 +132,10 @@ class DoReMiTrainer(DistributedTrainer):
         handle_loss = dist.all_reduce(
             domain_losses, group=self.parallel_context.dp_pg, async_op=True, op=dist.ReduceOp.AVG
         )
+        # NOTE: sum the total samples per domain across dp replicas
+        handle_samples_per_domain = dist.all_reduce(
+            samples_per_domain, group=self.parallel_context.dp_pg, async_op=True, op=dist.ReduceOp.SUM
+        )
         handle_ce_loss = dist.all_reduce(
             ce_loss_avg, group=self.parallel_context.dp_pg, async_op=True, op=dist.ReduceOp.AVG
         )
@@ -142,6 +144,7 @@ class DoReMiTrainer(DistributedTrainer):
 
         handle_weight.wait()
         handle_loss.wait()
+        handle_samples_per_domain.wait()
         handle_ce_loss.wait()
 
         self.doremi_context.add_weight_with_history(domain_weights, self.iteration_step)

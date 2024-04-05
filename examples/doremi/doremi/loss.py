@@ -94,9 +94,6 @@ class DomainLossForProxyTraining:
         # the proxy model is performing better than the reference model
         # => clamp(lower loss - higher loss, 0) = clamp(negative, 0) = 0.
         excess_losses = (losses - ref_losses).clamp(min=0)
-        # _, normalized_domain_losses, samples_per_domain = compute_per_domain_loss(
-        #     excess_losses, domain_idxs, self.doremi_context, self.parallel_context
-        # )
         normalized_domain_losses, samples_per_domain = compute_domain_loss_per_replicas(
             excess_losses, domain_idxs, self.doremi_context
         )

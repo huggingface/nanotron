@@ -8,13 +8,11 @@ torchrun --nproc_per_node=4 examples/doremi/train_doremi.py --config-file exampl
 """
 import argparse
 
-import torch
 from nanotron.config import get_config_from_file
 
 from doremi.config import DoReMiConfig
 from doremi.dataloader import get_dataloader, get_datasets
 from doremi.trainer import DoReMiTrainer
-from doremi.utils import compute_domain_weights_based_on_token_count
 
 
 def get_args():
@@ -33,13 +31,6 @@ if __name__ == "__main__":
     ]
     datasets = get_datasets(dataset_paths)
 
-    # TODO(xrsrke): add retrieving domain weights from config
-    # or calculate it in the trainer
-    if config.doremi.domain_weights is None:
-        domain_weights = compute_domain_weights_based_on_token_count(datasets)
-    else:
-        domain_weights = torch.tensor(config.doremi.domain_weights)
-
-    trainer = DoReMiTrainer(domain_weights, config_file, config_class=DoReMiConfig)
+    trainer = DoReMiTrainer(config_file, config_class=DoReMiConfig)
     dataloader = get_dataloader(trainer, datasets)
     trainer.train(dataloader)
