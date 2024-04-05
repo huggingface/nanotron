@@ -83,6 +83,289 @@ class CombinedDataset(Dataset):
         return merged
 
 
+import math
+
+
+class WeightedDistributedSampler(DistributedSampler):
+    def __init__(
+        self,
+        weights: torch.Tensor,
+        datasets: List[Dataset],
+        batch_size: int,
+        num_microbatches: int,
+        num_replicas: int,
+        rank: int,
+        parallel_context: ParallelContext,
+        shuffle: bool = False,
+        seed: int = 42,
+        drop_last: bool = False,
+    ):
+        super().__init__(datasets, num_replicas=num_replicas, rank=rank, shuffle=shuffle, drop_last=drop_last)
+
+        self.weights = weights
+        self.datasets = datasets
+        self.batch_size = batch_size
+        self.num_microbatches = num_microbatches
+        self.parallel_context = parallel_context
+        self.total_size = self._calculate_total_size()
+
+        self.lengths = [len(d) for d in self.datasets]
+        self.offsets = np.cumsum([0] + self.lengths[:-1])
+        self.seed = seed
+
+        # self.global_batch_size = batch_size * dist.get_world_size(parallel_context.dp_pg) * num_microbatches
+        self.global_batch_size = batch_size * self.num_replicas * num_microbatches
+        # NOTE: Reset the seed of the generator for consistent randomness across epochs
+        self.generator = torch.Generator(device="cpu").manual_seed(
+            seed * (1 + dist.get_rank(self.parallel_context.dp_pg)) * (1 + dist.get_rank(self.parallel_context.pp_pg))
+        )
+
+        self.reset()
+
+    def _calculate_total_size(self):
+        total_samples = sum(len(d) for d in self.datasets)
+        return math.ceil(total_samples / self.batch_size) * self.batch_size
+
+    def __iter__(self):
+        return self
+
+    def _recompute_domain_batch_sizes(self, domain_weights):
+        domain_batch_sizes = [round(self.global_batch_size * weight.item()) for weight in domain_weights]
+
+        # NOTE: in some cases, the weight of a domain is too small
+        # resulting in a domain with 0 samples per global batch
+        # => zero loss for that domain => we no longer update the weights of that domain
+        # so we add a sample to that domain
+        domain_batch_sizes = [1 if x < 1 else x for x in domain_batch_sizes]
+
+        if sum(domain_batch_sizes) != self.global_batch_size:
+            # NOTE: randomly add a sample to round it up
+            domain_batch_sizes = self._round_up_domain_batch_sizes(
+                domain_batch_sizes,
+                target_total_size=self.global_batch_size,
+            )
+
+        assert all(x > 0 for x in domain_batch_sizes), "There is a domain with 0 samples per global batch"
+        return domain_batch_sizes
+
+    def __next__(self):
+        if self.microbatch_idx == 0:
+            # NOTE: because we randomly add a sample to round up the domain batch sizes
+            # so it's better if we recompute the global batch every time we start a new microbatch
+            # so that not bias towards a domain (where that domain gets more samples than the others)
+            self.domain_batch_sizes = self._recompute_domain_batch_sizes(
+                domain_weights=self.weights,
+            )
+
+            self.batch = []
+            for domain_index, (idxs, domain_batch_size) in enumerate(
+                zip(self.domain_indices, self.domain_batch_sizes)
+            ):
+                start_idx = self.domain_counters[domain_index]
+                end_idx = start_idx + domain_batch_size
+
+                if end_idx > len(idxs):
+                    raise StopIteration(f"Domain {domain_index}-th ran out of samples")
+
+                assert self.domain_counters[domain_index] + domain_batch_size == end_idx
+                self.domain_counters[domain_index] = end_idx
+                global_batch_idxs = idxs[start_idx:end_idx]
+                self.batch.extend(global_batch_idxs)
+
+        num_samples_per_dp_rank = self.batch_size * self.num_microbatches
+        dp_start_idx = self.rank * num_samples_per_dp_rank
+        dp_end_idx = dp_start_idx + num_samples_per_dp_rank
+
+        if dp_end_idx > len(self.batch):
+            raise StopIteration(f"[DoReMi] Rank {self.rank} ran out of samples, len(batch)={len(self.batch)}")
+
+        dp_batch = self.batch[dp_start_idx:dp_end_idx]
+
+        microbatch_start_idx = self.microbatch_idx * self.batch_size
+        microbatch_end_idx = microbatch_start_idx + self.batch_size
+
+        if microbatch_end_idx > len(dp_batch):
+            raise StopIteration(
+                f"[DoReMi] Rank {self.rank}'s microbatch {self.microbatch_idx}-th ran out of samples, len(dp_batch)={len(dp_batch)}"
+            )
+
+        microbatch_idxs = dp_batch[microbatch_start_idx:microbatch_end_idx]
+
+        if self.microbatch_idx == self.num_microbatches - 1:
+            self.microbatch_idx = 0
+        else:
+            self.microbatch_idx += 1
+
+        return microbatch_idxs
+
+    def _recompute_global_batch(self):
+        self.domain_batch_sizes = self._recompute_domain_batch_sizes(
+            domain_weights=self.weights,
+        )
+        for domain_index, (idxs, domain_batch_size) in enumerate(zip(self.domain_indices, self.domain_batch_sizes)):
+            start_idx = self.domain_counters[domain_index]
+            end_idx = start_idx + domain_batch_size
+
+            if end_idx > len(idxs):
+                raise StopIteration(f"Domain {domain_index}-th ran out of samples")
+
+            self.domain_counters[domain_index] = end_idx
+            global_batch_idxs = idxs[start_idx:end_idx]
+            self.batch.extend(global_batch_idxs)
+
+    def _round_up_domain_batch_sizes(self, domain_batch_sizes: List[int], target_total_size: int) -> List[int]:
+        """
+        NOTE: Makes sum(domain_batch_sizes) == batch_size
+        """
+        total_batch_size = sum(domain_batch_sizes)
+        while total_batch_size != target_total_size:
+            diff = target_total_size - total_batch_size
+
+            # NOTE: Randomly select a domain to increase/decrase a sample
+            # to match the target_total_size
+            eligible_indices = torch.nonzero(torch.tensor(domain_batch_sizes) > 1).view(-1)
+            random_index = torch.randint(
+                low=0, high=len(eligible_indices), size=(1,), generator=self.generator, device="cpu"
+            ).item()
+            selected_domain = eligible_indices[random_index].item()
+
+            if diff > 0:
+                domain_batch_sizes[selected_domain] += 1
+            elif diff < 0 and domain_batch_sizes[selected_domain] > 0:
+                domain_batch_sizes[selected_domain] -= 1
+
+            total_batch_size = sum(domain_batch_sizes)
+
+        return domain_batch_sizes
+
+    def reset(self):
+        """Reset the state of the sampler for a new epoch."""
+        self.microbatch_idx = 0
+        self.domain_counters = [0 for _ in self.datasets]
+        self.total_samples_yielded = 0
+        self.out_of_samples = False
+
+        domain_indices = []
+        for i, dataset in enumerate(self.datasets):
+            local_indices = torch.arange(0, len(dataset), device="cpu").tolist()
+
+            # NOTE: align the indices across the combined dataset
+            global_indices = local_indices + self.offsets[i]
+            domain_indices.append(global_indices)
+
+        self.num_samples_per_global_step = self.batch_size * self.num_microbatches * self.num_replicas
+        self.domain_indices = domain_indices
+        self.expected_total_samples = sum([len(d) for d in domain_indices])
+
+
+import abc
+from dataclasses import dataclass
+
+
+@dataclass
+class BaseMegatronSampler:
+    total_samples: int
+    consumed_samples: int
+    micro_batch_size: int
+    data_parallel_rank: int
+    data_parallel_size: int
+    global_batch_size: int
+    drop_last: bool = True
+    pad_samples_to_global_batch_size: Optional[bool] = False
+
+    def __post_init__(self):
+        self.micro_batch_times_data_parallel_size = self.micro_batch_size * self.data_parallel_size
+
+        # Sanity checks.
+        if self.total_samples <= 0:
+            raise RuntimeError("no sample to consume: {}".format(self.total_samples))
+        if self.consumed_samples >= self.total_samples:
+            raise RuntimeError("no samples left to consume: {}, {}".format(self.consumed_samples, self.total_samples))
+        if self.micro_batch_size <= 0:
+            raise RuntimeError(f"micro_batch_size size must be greater than 0, but {self.micro_batch_size}")
+        if self.data_parallel_size <= 0:
+            raise RuntimeError(f"data parallel size must be greater than 0, but {self.data_parallel_size}")
+        if self.data_parallel_rank >= self.data_parallel_size:
+            raise RuntimeError(
+                "data_parallel_rank should be smaller than data size, but {} >= {}".format(
+                    self.data_parallel_rank, self.data_parallel_size
+                )
+            )
+        if self.global_batch_size % (self.micro_batch_size * self.data_parallel_size) != 0:
+            raise RuntimeError(
+                f"`global_batch_size` ({self.global_batch_size}) is not divisible by "
+                f"`micro_batch_size ({self.micro_batch_size}) x data_parallel_size "
+                f"({self.data_parallel_size})`"
+            )
+        if self.pad_samples_to_global_batch_size and self.global_batch_size is None:
+            raise RuntimeError(
+                "`pad_samples_to_global_batch_size` can be `True` only when "
+                "`global_batch_size` is set to an integer value"
+            )
+        log_rank(
+            f"Instantiating MegatronPretrainingSampler with total_samples: {self.total_samples} and consumed_samples: {self.consumed_samples}",
+            logger=logger,
+            level=logging.INFO,
+            rank=0,
+        )
+
+    @abc.abstractmethod
+    def __iter__(self):
+        ...
+
+
+@dataclass
+class MegatronPretrainingSampler(BaseMegatronSampler):
+    def get_start_end_idx(self):
+        start_idx = self.data_parallel_rank * self.micro_batch_size
+        end_idx = start_idx + self.micro_batch_size
+        return start_idx, end_idx
+
+    def __len__(self):
+        num_available_samples: int = self.total_samples - self.consumed_samples
+        if self.global_batch_size is not None:
+            if self.drop_last:
+                return num_available_samples // self.global_batch_size
+            else:
+                return (num_available_samples + self.global_batch_size - 1) // self.global_batch_size
+        else:
+            if self.drop_last:
+                return num_available_samples // self.micro_batch_times_data_parallel_size
+            else:
+                return (num_available_samples - 1) // self.micro_batch_times_data_parallel_size + 1
+
+    def __iter__(self):
+        batch = []
+        batch_idx = 0
+        # Last batch will be dropped if drop_last is not set False
+        for idx in range(self.consumed_samples, self.total_samples):
+            batch.append(idx)
+            if len(batch) == self.micro_batch_times_data_parallel_size:
+                start_idx, end_idx = self.get_start_end_idx()
+                log_rank(
+                    f"DLrank {self.data_parallel_rank} batch {batch_idx} {batch[start_idx:end_idx]} self.consumed_samples {self.consumed_samples}",
+                    logger=logger,
+                    level=logging.DEBUG,
+                )
+                yield batch[start_idx:end_idx]
+                batch = []
+                batch_idx += 1
+
+        # Check the last partial batch and see drop_last is set
+        if len(batch) > 0 and not self.drop_last:
+            if self.pad_samples_to_global_batch_size:
+                for i in range(
+                    self.data_parallel_rank, self.global_batch_size, self.micro_batch_times_data_parallel_size
+                ):
+                    indices = [batch[j] for j in range(i, max(len(batch), i + self.micro_batch_size))]
+                    num_pad = self.micro_batch_size - len(indices)
+                    indices = indices + [-1] * num_pad
+                    yield indices
+            else:
+                start_idx, end_idx = self.get_start_end_idx()
+                yield batch[start_idx:end_idx]
+
+
 def sanity_check_dataloader(
     dataloader: Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]],
     parallel_context: ParallelContext,
@@ -508,6 +791,9 @@ def get_train_dataloader(
     dataloader_drop_last: bool = True,
     dataloader_pin_memory: bool = True,
     use_loop_to_round_batch_size: bool = False,
+    # TODO(xrsrke): refactor
+    weights: Optional[torch.Tensor] = None,
+    num_microbatches: Optional[int] = None,
 ) -> DataLoader:
     if not isinstance(train_dataset, datasets.Dataset):
         raise ValueError(f"training requires a datasets.Dataset, but got {type(train_dataset)}")
@@ -557,25 +843,51 @@ def get_train_dataloader(
     # TODO @nouamanetazi: Remove unused columns: https://github.com/huggingface/transformers/blob/47e1676255e5dd86b9541f734cd4f4bdcbb50f4a/src/transformers/trainer.py#L852
     # TODO @nouamanetazi: Support torch.utils.data.IterableDataset: https://github.com/huggingface/transformers/blob/47e1676255e5dd86b9541f734cd4f4bdcbb50f4a/src/transformers/trainer.py#L855-L872
 
-    train_sampler = _get_train_sampler(
-        dl_rank=dp_rank,
-        dl_ranks_size=dp_ranks_size,
-        train_dataset=train_dataset,
-        shuffle=False,
-        seed=seed_worker,
-        use_loop_to_round_batch_size=use_loop_to_round_batch_size,
-        micro_batch_size=micro_batch_size,
-        drop_last=dataloader_drop_last,
-        consumed_train_samples=consumed_train_samples,
+    train_sampler = WeightedDistributedSampler(
+        weights=weights,
+        datasets=train_dataset.datasets,
+        batch_size=micro_batch_size,
+        num_microbatches=num_microbatches,
+        num_replicas=dp_ranks_size,
+        rank=dp_rank,
+        seed=42,
+        drop_last=True,
+        parallel_context=parallel_context,
     )
+
+    # train_sampler = _get_train_sampler(
+    #     dl_rank=dp_rank,
+    #     dl_ranks_size=dp_ranks_size,
+    #     train_dataset=train_dataset,
+    #     shuffle=False,
+    #     seed=seed_worker,
+    #     use_loop_to_round_batch_size=use_loop_to_round_batch_size,
+    #     micro_batch_size=micro_batch_size,
+    #     drop_last=dataloader_drop_last,
+    #     consumed_train_samples=consumed_train_samples,
+    # )
+
+    # return DataLoader(
+    #     train_dataset,
+    #     shuffle=False,
+    #     batch_size=micro_batch_size,
+    #     batch_sampler=train_sampler,
+    #     collate_fn=data_collator,
+    #     drop_last=dataloader_drop_last,  # we also drop_last in `clm_process()`
+    #     num_workers=dataloader_num_workers,
+    #     pin_memory=dataloader_pin_memory,
+    #     worker_init_fn=get_dataloader_worker_init(dp_rank=dp_rank),
+    #     # TODO @thomasw21: I'm not sure but this doesn't seem to work at all.
+    #     # pin_memory_device="cuda",
+    # )
 
     return DataLoader(
         train_dataset,
-        shuffle=False,
-        batch_size=micro_batch_size,
-        sampler=train_sampler,
+        # shuffle=False,
+        # batch_size=micro_batch_size,
+        batch_sampler=train_sampler,
         collate_fn=data_collator,
-        drop_last=dataloader_drop_last,  # we also drop_last in `clm_process()`
+        # drop_last=dataloader_drop_last,  # we also drop_last in `clm_process()`
         num_workers=dataloader_num_workers,
         pin_memory=dataloader_pin_memory,
         worker_init_fn=get_dataloader_worker_init(dp_rank=dp_rank),
@@ -696,6 +1008,8 @@ def get_dataloader(trainer: "DistributedTrainer"):
                 dataloader_num_workers=trainer.config.data.num_loading_workers,
                 seed_worker=trainer.config.data.seed,
                 dataloader_drop_last=True,
+                weights=weights,
+                num_microbatches=trainer.n_micro_batches_per_batch,
             )
             # Check if we have enough samples for train_steps
             total_tokens_dataset = len(dataloader.dataset) * trainer.sequence_length

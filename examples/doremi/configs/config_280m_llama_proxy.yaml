@@ -149,7 +149,7 @@ tokens:
 
   batch_accumulation_per_replica: 1
   # micro_batch_size: 32
-  micro_batch_size: 100
+  micro_batch_size: 16
 
   limit_test_batches: 0
   limit_val_batches: 0
