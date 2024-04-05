@@ -84,14 +84,18 @@ def _test_attention_layers(parallel_context, dummy_inputs):
     updated_hf_model = convert_nanotron_to_hf(nanotron_model, hf_model, CONFIG)
     nanotron_attention = get_nanotron_attention(nanotron_model)
     hf_attention = get_hf_attention(updated_hf_model)
-    x_nanotron = dummy_inputs
-    x_hf = dummy_inputs.permute(1, 0, 2)
-    mask = torch.ones_like(x_hf[..., 0])
+    x_nanotron = dummy_inputs.permute(1, 0, 2)
+    x_hf = dummy_inputs
+    mask = torch.repeat_interleave(torch.ones_like(x_hf[..., 0])[..., None], SEQUENCE_LENGTH, dim=-1)
     # llama.py @ L. 391
-    position_ids = torch.cumsum(mask, dim=-1, dtype=torch.int32) - 1
+    position_ids = torch.cumsum(mask[..., 0], dim=-1, dtype=torch.int32) - 1
     y_nanotron = nanotron_attention.to(device="cuda").forward(
-        x_nanotron.cuda().bfloat16(), mask.permute(1, 0).cuda().bfloat16()
+        x_nanotron.cuda().bfloat16(), mask[..., 0].cuda().bfloat16()
     )["hidden_states"]
-    y_hf = hf_attention(x_hf.cuda().bfloat16(), position_ids=position_ids.cuda().bfloat16())[0]
+    y_hf = hf_attention(
+        x_hf.cuda().bfloat16(),
+        attention_mask=mask[:, None].cuda().bfloat16(),
+        position_ids=position_ids.cuda().bfloat16(),
+    )[0]
     assert y_hf.permute(1, 0, 2).shape == y_nanotron.shape
     assert torch.allclose(y_hf, y_nanotron.permute(1, 0, 2))
