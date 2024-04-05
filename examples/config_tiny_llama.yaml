@@ -1,40 +1,38 @@
 checkpoints:
   checkpoint_interval: 10
-  checkpoints_path: checkpoints
+  checkpoints_path: /fsx/haojun/nanotron_latest/checkpoints
   checkpoints_path_is_shared_file_system: false
   resume_checkpoint_path: null
   save_initial_state: false
-
 data_stages:
-  - name: Stable Training Stage
-    start_training_step: 1
-    data:
-      dataset:
-        dataset_overwrite_cache: false
-        dataset_processing_num_proc_per_process: 1
-        hf_dataset_config_name: null
-        hf_dataset_or_datasets: HuggingFaceH4/testing_alpaca_small
-        hf_dataset_splits: train
-        text_column_name: completion
-      num_loading_workers: 1
-      seed: 42
-  - name: Annealing Phase
-    start_training_step: 10
-    data:
-      dataset:
-        dataset_overwrite_cache: false
-        dataset_processing_num_proc_per_process: 1
-        hf_dataset_config_name: null
-        hf_dataset_or_datasets: HuggingFaceH4/testing_alpaca_small
-        hf_dataset_splits: train
-        text_column_name: completion
-      num_loading_workers: 1
-      seed: 42
-
+- data:
+    dataset:
+      dataset_overwrite_cache: false
+      dataset_processing_num_proc_per_process: 1
+      hf_dataset_config_name: null
+      hf_dataset_or_datasets: HuggingFaceH4/testing_alpaca_small
+      hf_dataset_splits: train
+      text_column_name: completion
+    num_loading_workers: 1
+    seed: 42
+  name: Stable Training Stage
+  start_training_step: 1
+- data:
+    dataset:
+      dataset_overwrite_cache: false
+      dataset_processing_num_proc_per_process: 1
+      hf_dataset_config_name: null
+      hf_dataset_or_datasets: HuggingFaceH4/testing_alpaca_small
+      hf_dataset_splits: train
+      text_column_name: completion
+    num_loading_workers: 1
+    seed: 42
+  name: Annealing Phase
+  start_training_step: 10
 general:
   benchmark_csv_path: null
   consumed_train_samples: null
-  ignore_sanity_checks: false
+  ignore_sanity_checks: true
   project: debug
   run: tiny_llama_%date_%jobid
   seed: 42
@@ -54,13 +52,13 @@ model:
     bos_token_id: 1
     eos_token_id: 2
     hidden_act: silu
-    hidden_size: 16
+    hidden_size: 1024
     initializer_range: 0.02
-    intermediate_size: 64
+    intermediate_size: 2048
     is_llama_config: true
-    max_position_embeddings: 256
+    max_position_embeddings: 50277
     num_attention_heads: 4
-    num_hidden_layers: 2
+    num_hidden_layers: 12
     num_key_value_heads: 4
     pad_token_id: null
     pretraining_tp: 1
@@ -68,7 +66,7 @@ model:
     rope_scaling: null
     tie_word_embeddings: true
     use_cache: true
-    vocab_size: 256
+    vocab_size: 50277
 optimizer:
   accumulate_grad_in_fp32: true
   adam_beta1: 0.9
@@ -88,11 +86,12 @@ optimizer:
   zero_stage: 0
 parallelism:
   dp: 2
+  expert_parallel_size: 1
   pp: 2
-  pp_engine: 1f1b
+  pp_engine: afab
   tp: 2
-  tp_linear_async_communication: true
-  tp_mode: REDUCE_SCATTER
+  tp_linear_async_communication: false
+  tp_mode: ALL_REDUCE
 profiler: null
 tokenizer:
   tokenizer_max_length: null
@@ -104,5 +103,5 @@ tokens:
   limit_val_batches: 0
   micro_batch_size: 2
   sequence_length: 32
-  train_steps: 20
+  train_steps: 10
   val_check_interval: -1
