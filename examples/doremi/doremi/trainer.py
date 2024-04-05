@@ -1,8 +1,6 @@
 from typing import Dict, Iterable, List, Optional, Type, Union
 
 import torch
-from torch.nn.parallel import DistributedDataParallel
-
 from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.config import Config, get_config_from_file
@@ -12,6 +10,7 @@ from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
 from nanotron.sanity_checks import assert_tensor_synced_across_pg
 from nanotron.serialize import load_weights
 from nanotron.trainer import DistributedTrainer
+from torch.nn.parallel import DistributedDataParallel
 
 from .config import DoReMiConfig
 from .doremi_context import DoReMiContext
@@ -58,6 +57,9 @@ class DoReMiTrainer(DistributedTrainer):
         super().__init__(config_or_config_file, config_class)
 
     def _init_model_instance(self) -> Union[NanotronModel, DistributedDataParallel]:
+        assert (
+            self.ref_checkpoint_path is not None
+        ), "You must provide a reference model checkpoint path for DoReMi's proxy training."
         # NOTE: after initializing parallel context, now we can move domain weights to
         # the GPU corresponding to the current rank
         self.doremi_context.domain_weights = self.doremi_context.domain_weights.to("cuda")
@@ -70,7 +72,10 @@ class DoReMiTrainer(DistributedTrainer):
         )
 
         log_rank(
-            f"[DoReMi] Initial domain weights: {self.doremi_context.domain_weights}", logger=logger, level=logging.INFO
+            f"""[DoReMi] In DoReMi's proxy training, please note that 'loss' represents DRO loss, and 'ce_loss' represent cross entropy loss.
+            [DoReMi] Domain weights: {self.doremi_context.domain_weights}""",
+            logger=logger,
+            level=logging.INFO,
         )
 
         model = self._init_model(
@@ -92,24 +97,23 @@ class DoReMiTrainer(DistributedTrainer):
             ),
         )
 
-        if self.ref_checkpoint_path is not None:
-            normalized_ref_model = (
-                self.ref_model.module
-                if isinstance(self.ref_model.module, DistributedDataParallel)
-                else self.ref_model.module
-            )
+        normalized_ref_model = (
+            self.ref_model.module
+            if isinstance(self.ref_model.module, DistributedDataParallel)
+            else self.ref_model.module
+        )
 
-            log_rank(
-                f"Loading weights from {self.ref_checkpoint_path} for reference model",
-                logger=logger,
-                level=logging.INFO,
-                rank=0,
-            )
-            load_weights(
-                model=normalized_ref_model,
-                parallel_context=self.parallel_context,
-                root_folder=self.ref_checkpoint_path,
-            )
+        log_rank(
+            f"Loading weights from {self.ref_checkpoint_path} for reference model",
+            logger=logger,
+            level=logging.INFO,
+            rank=0,
+        )
+        load_weights(
+            model=normalized_ref_model,
+            parallel_context=self.parallel_context,
+            root_folder=self.ref_checkpoint_path,
+        )
 
         return model
 
@@ -121,6 +125,8 @@ class DoReMiTrainer(DistributedTrainer):
         domain_weights = outputs[0]["domain_weights"]
         domain_losses = outputs[0]["domain_losses"]
         samples_per_domain = outputs[0]["samples_per_domain"].tolist()
+        # NOTE: this is cross entropy loss
+        ce_loss_avg = torch.stack([output["ce_loss"] for output in outputs]).sum()
 
         handle_weight = dist.all_reduce(
             domain_weights, group=self.parallel_context.dp_pg, async_op=True, op=dist.ReduceOp.AVG
@@ -128,11 +134,15 @@ class DoReMiTrainer(DistributedTrainer):
         handle_loss = dist.all_reduce(
             domain_losses, group=self.parallel_context.dp_pg, async_op=True, op=dist.ReduceOp.AVG
         )
+        handle_ce_loss = dist.all_reduce(
+            ce_loss_avg, group=self.parallel_context.dp_pg, async_op=True, op=dist.ReduceOp.AVG
+        )
 
         super().train_step_logs(outputs, loss_avg)
 
         handle_weight.wait()
         handle_loss.wait()
+        handle_ce_loss.wait()
 
         self.doremi_context.add_weight_with_history(domain_weights, self.iteration_step)
 
@@ -175,7 +185,7 @@ class DoReMiTrainer(DistributedTrainer):
                         **weight_logs,
                         **loss_logs,
                         **samples_per_domain_logs,
-                        "loss_avg": loss_avg.cpu().detach().numpy(),
+                        "ce_loss": ce_loss_avg.cpu().detach().numpy(),
                         "iteration_step": self.iteration_step,
                     }
                 )
