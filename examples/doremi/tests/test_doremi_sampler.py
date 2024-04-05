@@ -34,15 +34,15 @@ def datasets(dataset1, dataset2):
 @pytest.mark.parametrize("num_microbatches", [1, 32])
 @pytest.mark.parametrize("is_proxy", [True, False])
 def test_dist_doremi_sampler_sync_across_tp(num_microbatches, dataset1, is_proxy):
-    batch_size = 16
     NUM_DOMAINS = 2
+    BATCH_SIZE = 16
 
     datasets = [dataset1 for _ in range(NUM_DOMAINS)]
     domain_keys = [f"domain {i}" for i in range(NUM_DOMAINS)]
     doremi_context = DoReMiContext(domain_keys, is_proxy=is_proxy)
 
     init_distributed(tp=2, dp=1, pp=1)(_test_dist_doremi_sampler_sync_across_tp)(
-        batch_size=batch_size,
+        batch_size=BATCH_SIZE,
         num_microbatches=num_microbatches,
         datasets=datasets,
         doremi_context=doremi_context,
@@ -74,14 +74,9 @@ def _test_dist_doremi_sampler_sync_across_tp(
 @pytest.mark.parametrize("num_microbatches", [1, 32])
 @pytest.mark.parametrize("is_proxy", [True, False])
 def test_dist_doremi_sampler_not_overlapse_across_dp_for_proxy_training(dp_size, num_microbatches, dataset1, is_proxy):
-    global_batch_size = 512
-    batch_size = global_batch_size // (num_microbatches * dp_size)
-    # domain_weights = torch.tensor([0.7, 0.3])
-    # datasets = [dataset1 for _ in range(len(domain_weights))]
-    # domain_keys = [f"domain {i}" for i in range(len(datasets))]
-    # doremi_context = DoReMiContext(domain_weights, domain_keys, is_proxy=is_proxy)
-
     NUM_DOMAINS = 2
+    GLOBAL_BATCH_SIZE = 512
+    batch_size = GLOBAL_BATCH_SIZE // (num_microbatches * dp_size)
 
     datasets = [dataset1 for _ in range(NUM_DOMAINS)]
     domain_keys = [f"domain {i}" for i in range(NUM_DOMAINS)]
@@ -92,7 +87,6 @@ def test_dist_doremi_sampler_not_overlapse_across_dp_for_proxy_training(dp_size,
         num_microbatches=num_microbatches,
         datasets=datasets,
         doremi_context=doremi_context,
-        is_proxy=is_proxy,
     )
 
 
@@ -102,7 +96,6 @@ def _test_dist_doremi_sampler_not_overlapse_across_dp_for_proxy_training(
     num_microbatches: int,
     datasets,
     doremi_context: DoReMiContext,
-    is_proxy: bool,
 ):
     dp_size = dist.get_world_size(parallel_context.dp_pg)
     dp_rank = dist.get_rank(parallel_context.dp_pg)
@@ -339,9 +332,6 @@ def _test_dist_doremi_sampler_not_repeating_samples(
     assert len(set(yielded_idxs)) == len(yielded_idxs)
 
 
-# NOTE: these are low-level implementation details
-# ideally we should not be testing these, but gotta make sure
-# it work (this bug back me down for so hard)
 @pytest.mark.parametrize("dp_size", [2, 4, 8])
 @pytest.mark.parametrize("num_microbatches", [1, 5])
 @pytest.mark.parametrize("is_proxy", [True, False])
