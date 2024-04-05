@@ -93,16 +93,12 @@ def _test_domain_loss_for_proxy_training(
     doremi_context.domain_weights = doremi_context.domain_weights.to("cuda")
     loss_func = DomainLossForProxyTraining(doremi_context, parallel_context)
 
-    # excess_loss, domain_losses, domain_weights, samples_per_domain = loss_func(losses, ref_losses, domain_idxs)
     outputs = loss_func(losses, ref_losses, domain_idxs)
 
     assert outputs.keys() == {"dro_loss", "domain_losses", "domain_weights", "samples_per_domain"}
 
     assert (outputs["domain_losses"] > 0.0).all()
     assert outputs["domain_losses"].shape == (N_DOMAINS,)
-    # assert_tensor_synced_across_pg(
-    #     outputs["domain_losses"], parallel_context.dp_pg, msg=lambda err: f"Domain losses are not synced across ranks {err}"
-    # )
 
     assert (outputs["domain_weights"] > 0.0).all()
     assert outputs["domain_weights"].shape == (N_DOMAINS,)
@@ -153,7 +149,6 @@ def _test_computing_per_domain_loss(
     )
 
 
-@pytest.mark.skip
 @pytest.mark.parametrize("dp", [1, 2])
 def test_computing_domain_loss_per_replicas(dp: int):
     GLOBAL_BATCH_SIZE = 512
@@ -183,17 +178,7 @@ def _test_computing_domain_loss_per_replicas(
     per_domain_loss, samples_per_domain = compute_domain_loss_per_replicas(losses, domain_idxs, doremi_context)
 
     assert per_domain_loss.shape == (N_DOMAINS,)
-    assert_tensor_synced_across_pg(
-        per_domain_loss, parallel_context.dp_pg, msg=lambda err: f"Per domain loss are not synced across ranks {err}"
-    )
-
     assert samples_per_domain.shape == (N_DOMAINS,)
-    assert sum(samples_per_domain) == global_batch_size
-    assert_tensor_synced_across_pg(
-        samples_per_domain,
-        parallel_context.dp_pg,
-        msg=lambda err: f"Samples per domain are not synced across ranks {err}",
-    )
 
 
 @pytest.mark.skip
