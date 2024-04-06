@@ -1,5 +1,6 @@
 import math
 from copy import deepcopy
+from functools import partial, reduce
 
 import pytest
 import torch
@@ -8,7 +9,7 @@ from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.linear import FP8Linear
 from nanotron.fp8.parameter import FP8Parameter
 from nanotron.fp8.tensor import FP8Tensor, convert_tensor_from_fp8
-from nanotron.fp8.utils import convert_linear_to_fp8
+from nanotron.fp8.utils import convert_linear_to_fp8, convert_to_fp8_module
 from timm.models.layers import trunc_normal_
 from torch import nn
 
@@ -115,6 +116,51 @@ def test_fp8_linear_backward_pass(input, init_method, accum_qtype):
     weight_grad = convert_tensor_from_fp8(fp8_linear.weight.grad, fp8_linear.weight.grad.fp8_meta, torch.float32)
     torch.testing.assert_allclose(weight_grad, ref_linear.weight.grad, rtol=0.06, atol=0.1)
     torch.testing.assert_allclose(fp8_linear.bias.grad, ref_linear.bias.grad)
+
+
+@pytest.mark.parametrize("accum_qtype", [DTypes.KFLOAT32, DTypes.KFLOAT16])
+def test_fp8_modules_trigger_the_entire_computational_graph(accum_qtype):
+    HIDDEN_SIZE = 16
+    TIMELINE = []
+
+    def backward_hook(module, grad_input, grad_output, idx):
+        TIMELINE.append(f"{module.__class__.__name__}.{idx}.backward")
+
+    class Logger(nn.Module):
+        def __init__(self, idx: int, module: nn.Linear):
+            super().__init__()
+            module.register_backward_hook(partial(backward_hook, idx=idx))
+            self.module = module
+            self.idx = idx
+
+        def forward(self, input):
+            TIMELINE.append(f"{self.module.__class__.__name__}.{self.idx}.forward")
+            return self.module(input)
+
+    input = torch.randn(HIDDEN_SIZE, HIDDEN_SIZE, device="cuda", dtype=torch.float32)
+    fp8_linear = nn.Sequential(
+        nn.Linear(HIDDEN_SIZE, HIDDEN_SIZE, device="cuda", dtype=torch.float32),
+        nn.ReLU(),
+        nn.Linear(HIDDEN_SIZE, HIDDEN_SIZE, device="cuda", dtype=torch.float32),
+        nn.ReLU(),
+    )
+    fp8_linear = convert_to_fp8_module(fp8_linear, accum_qtype)
+    fp8_linear = nn.ModuleList([Logger(idx, module) for idx, module in enumerate(fp8_linear)])
+
+    output = reduce(lambda x, module: module(x), fp8_linear, input)
+    scalar = torch.randn(1, device="cuda", dtype=output.dtype)
+    (output.sum() * scalar).backward()
+
+    assert TIMELINE == [
+        "FP8Linear.0.forward",
+        "ReLU.1.forward",
+        "FP8Linear.2.forward",
+        "ReLU.3.forward",
+        "ReLU.3.backward",
+        "FP8Linear.2.backward",
+        "ReLU.1.backward",
+        "FP8Linear.0.backward",
+    ]
 
 
 # NOTE: it seems that dynamic quantization should be in test_tensor

@@ -1,7 +1,9 @@
+from typing import Dict, List, Tuple
+
+import pydevd
 import torch
 import transformer_engine as te  # noqa
 from torch import nn
-from typing import List, Tuple
 
 from nanotron.fp8.constants import FP8_GPU_NAMES, FP8LM_RECIPE, QTYPE_TO_DTYPE
 from nanotron.fp8.dtypes import DTypes
@@ -72,7 +74,7 @@ def get_leaf_modules(module: nn.Module) -> List[Tuple[str, nn.Module]]:
 
 def convert_to_fp8_module(module: nn.Module, accum_qtype: DTypes = FP8LM_RECIPE.linear.accum_dtype) -> nn.Module:
     def set_module(model, name, value):
-        parts = name.split('.')
+        parts = name.split(".")
         module = model
         for i, part in enumerate(parts):
             if part.isdigit():
@@ -86,7 +88,7 @@ def convert_to_fp8_module(module: nn.Module, accum_qtype: DTypes = FP8LM_RECIPE.
                 else:
                     module = getattr(module, part)
         return model
-        
+
     for name, child in get_leaf_modules(module):
         if isinstance(child, nn.Linear):
             fp8_linear = convert_linear_to_fp8(child, accum_qtype)
@@ -94,3 +96,42 @@ def convert_to_fp8_module(module: nn.Module, accum_qtype: DTypes = FP8LM_RECIPE.
             set_module(module, name, fp8_linear)
 
     return module
+
+
+def track_module_statistics(name: str, module: nn.Linear, logging: Dict[str, Dict[str, float]]):
+    if name not in logging:
+        logging[name] = {}
+
+    def _collect_stats(tensor):
+        return {
+            "mean": tensor.mean().item(),
+            "std": tensor.std().item(),
+            "var": tensor.var().item(),
+            "norm": tensor.norm().item(),
+            "min": tensor.min().item(),
+            "max": tensor.max().item(),
+        }
+
+    def _save_output_stats(module: nn.Linear, input: torch.Tensor, output: torch.Tensor):
+        logging[name]["weight"] = _collect_stats(module.weight)
+
+        if module.bias is not None:
+            logging[name]["bias"] = _collect_stats(module.bias)
+
+        logging[name]["output"] = _collect_stats(output)
+
+    def _save_grad_stats(module: nn.Linear, grad_output: torch.Tensor):
+        # if isinstance(grad_output, tuple):
+        #     for i, x in enumerate(tensor):
+        #         if x is None: continue
+
+        pydevd.settrace(suspend=False, trace_only_current_thread=True)
+        logging[name]["grad_output"] = _collect_stats(grad_output[0])
+
+    # def _save_grad_stats(module: nn.Linear, input_grad: torch.Tensor, grad_output: torch.Tensor):
+    #     pydevd.settrace(suspend=False, trace_only_current_thread=True)
+    #     logging[name]["grad_output"] = _collect_stats(grad_output)
+
+    module.register_forward_hook(_save_output_stats)
+    module.register_full_backward_pre_hook(_save_grad_stats)
+    # module.register_module_full_backward_hook(_save_grad_stats)

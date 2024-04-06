@@ -1,13 +1,15 @@
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 
 import msamp
 import torch
 from datasets import load_dataset
+from nanotron.fp8.constants import FP8LM_RECIPE
 from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.loss_scaler import LossScaler
 from nanotron.fp8.optim import FP8Adam
 from nanotron.fp8.utils import convert_to_fp8_module
+from timm.models.layers import trunc_normal_
 from torch import nn
 from torch.optim import Adam
 from torch.utils.data import DataLoader
@@ -36,15 +38,13 @@ class ToyModel(nn.Module):
     def __init__(self, vocab_size, hidden_size):
         super().__init__()
         self.word_embeddings = nn.Embedding(vocab_size, hidden_size)
-        # self.net = nn.Sequential(
-        #     nn.Linear(config.hidden_size, config.vocab_size),
-        # )
         self.linear = nn.Linear(hidden_size, vocab_size)
 
-        # self.linear.weight.data.normal_(mean=0.0, std=0.02)
-        # self.word_embeddings.weight.data.normal_(mean=0.0, std=0.02)
-        # trunc_normal_(self.linear.weight.data, std=0.02)
-        # trunc_normal_(self.word_embeddings.weight.data, std=0.02)
+        import math
+
+        std = math.sqrt(1 / hidden_size)
+        trunc_normal_(self.word_embeddings.weight.data, std=std)
+        trunc_normal_(self.linear.weight.data, std=std)
 
     def forward(self, input_ids):
         x = self.word_embeddings(input_ids)
@@ -77,6 +77,8 @@ if __name__ == "__main__":
     # assert 16 ** math.ceil(math.log(tokenizer.vocab_size, 16)) == tokenizer.vocab_size
     assert len(tokenizer) % 16 == 0
 
+    torch.cuda.empty_cache()
+
     # fp32_linear = nn.Sequential(
     #     *[
     #         layer
@@ -97,16 +99,16 @@ if __name__ == "__main__":
     # fp32_linear = fp32_linear[:-1]
     fp32_linear = ToyModel(vocab_size=len(tokenizer), hidden_size=HIDDEN_SIZE).to("cuda")
 
-    bf16_linear = deepcopy(fp32_linear)
-    fp8_linear = deepcopy(fp32_linear)
+    # bf16_linear = deepcopy(fp32_linear)
+    # fp8_linear = deepcopy(fp32_linear)
     fp8_linear_with_scaler = deepcopy(fp32_linear)
     msamp_linear = deepcopy(fp32_linear)
     msamp_linear_with_scaler = deepcopy(fp32_linear)
 
     fp32_optim = Adam(fp32_linear.parameters(), lr=LR)
 
-    bf16_linear = bf16_linear.to(dtype=torch.bfloat16)
-    bf16_optim = Adam(bf16_linear.parameters(), lr=LR)
+    # bf16_linear = bf16_linear.to(dtype=torch.bfloat16)
+    # bf16_optim = Adam(bf16_linear.parameters(), lr=LR)
 
     msamp_optim = Adam(msamp_linear.parameters(), lr=LR)
     msamp_linear, msamp_optim = msamp.initialize(msamp_linear, msamp_optim, opt_level="O2")
@@ -116,8 +118,8 @@ if __name__ == "__main__":
         msamp_linear_with_scaler, msamp_optim_with_scaler, opt_level="O2"
     )
 
-    fp8_linear = convert_to_fp8_module(fp8_linear, accum_qtype=DTypes.KFLOAT16)
-    fp8_optim = FP8Adam(fp8_linear.parameters(), lr=LR)
+    # fp8_linear = convert_to_fp8_module(fp8_linear, accum_qtype=DTypes.KFLOAT16)
+    # fp8_optim = FP8Adam(fp8_linear.parameters(), lr=LR)
 
     fp8_linear_with_scaler = convert_to_fp8_module(fp8_linear_with_scaler, accum_qtype=DTypes.KFLOAT16)
     fp8_optim_with_scaler = FP8Adam(fp8_linear_with_scaler.parameters(), lr=LR)
@@ -137,6 +139,7 @@ if __name__ == "__main__":
             "optim": fp32_optim.__class__.__name__,
             "optim_params": fp32_optim.defaults,
             "num_params": sum(p.numel() for p in fp32_linear.parameters()),
+            "fp8_recipe": asdict(FP8LM_RECIPE),
         },
     )
 
@@ -177,10 +180,10 @@ if __name__ == "__main__":
             inputs = batch["input_ids"]
             targets = batch["input_ids"][:, 1:].contiguous()
 
-            # inputs = batch_inputs[step]
-            # targets = batch_targets[step]
-            # inputs = torch.randn(BATCH_SIZE, INPUT_DIM).to("cuda")
-            # targets = torch.randint(0, HIDDEN_SIZE, (BATCH_SIZE,)).to("cuda")
+            # # inputs = batch_inputs[step]
+            # # targets = batch_targets[step]
+            inputs = torch.randn(BATCH_SIZE, INPUT_DIM).to("cuda")
+            targets = torch.randint(0, HIDDEN_SIZE, (BATCH_SIZE,)).to("cuda")
 
             fp32_optim.zero_grad()
             ref_output = fp32_linear(inputs)
@@ -203,7 +206,7 @@ if __name__ == "__main__":
             fp8_optim_with_scaler.zero_grad()
             fp8_output_with_scaler = fp8_linear_with_scaler(inputs)
             fp8_loss_with_scaler = loss_func(fp8_output_with_scaler, targets)
-            fp8_scaler.scale(fp8_loss_with_scaler)
+            fp8_scaler.scale(fp8_loss_with_scaler).backward()
             fp8_scaler.step(fp8_optim_with_scaler)
             fp8_scaler.update()
 

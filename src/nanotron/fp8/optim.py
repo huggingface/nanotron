@@ -265,6 +265,9 @@ class FP8Adam(Optimizer):
     # @torchsnooper.snoop()
     # @snoop
     def step(self):
+        # NOTE: sanity check the entire params has at least one grad
+        assert any(p.grad is not None for group in self.param_groups for p in group["params"])
+
         for group in self.param_groups:
             for p in group["params"]:
                 if p.grad is None:

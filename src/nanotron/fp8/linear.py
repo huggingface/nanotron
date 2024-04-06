@@ -221,4 +221,6 @@ class _FP8Matmul(torch.autograd.Function):
         assert grad_weight.dtype == QTYPE_TO_DTYPE[accum_qtype]
         # TODO(xrsrke): maintain a persistence metadata across training
         weight.grad = FP8Tensor(grad_weight, dtype=FP8LM_RECIPE.linear.weight_grad.dtype)
+        # NOTE: sanity check
+        assert isinstance(weight.grad, FP8Tensor)
         return grad_input, None, None, None

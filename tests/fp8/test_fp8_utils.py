@@ -3,7 +3,13 @@ import torch
 from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.linear import FP8Linear
 from nanotron.fp8.parameter import FP8Parameter
-from nanotron.fp8.utils import convert_linear_to_fp8, convert_to_fp8_module, is_overflow_underflow_nan, get_leaf_modules
+from nanotron.fp8.utils import (
+    convert_linear_to_fp8,
+    convert_to_fp8_module,
+    get_leaf_modules,
+    is_overflow_underflow_nan,
+    track_module_statistics,
+)
 from torch import nn
 
 
@@ -22,7 +28,7 @@ def test_convert_linear_to_fp8(accum_dtype):
 def test_convert_module_to_fp8(model_type, accum_dtype):
     HIDDEN_SIZE = 16
     input = torch.randn(1, HIDDEN_SIZE, device="cuda")
-    
+
     if model_type == "multilayers":
         model = nn.Sequential(
             nn.Linear(16, 16, device="cuda"),
@@ -32,17 +38,17 @@ def test_convert_module_to_fp8(model_type, accum_dtype):
         )
     else:
         model = nn.Transformer(nhead=2, num_encoder_layers=4, d_model=HIDDEN_SIZE).to("cuda")
-    
+
     fp8_model = convert_to_fp8_module(model, accum_dtype)
-    
+
     assert fp8_model(input).shape == model(input).shape
 
     ref_modules = get_leaf_modules(model)
     fp8_modules = get_leaf_modules(fp8_model)
-    
+
     for (ref_name, ref_module), (fp8_name, fp8_module) in zip(ref_modules, fp8_modules):
         assert ref_name == fp8_name
-        
+
         if not isinstance(ref_module, nn.Linear):
             assert isinstance(fp8_module, type(ref_module))
         else:
@@ -72,3 +78,14 @@ def test_convert_module_to_fp8(model_type, accum_dtype):
 def test_detect_overflow_underflow_nan(tensor, expected_output):
     output = is_overflow_underflow_nan(tensor)
     assert output == expected_output
+
+
+def test_track_module_statistics():
+    input = torch.randn(1, 16, device="cuda")
+    linear = nn.Linear(16, 16, device="cuda")
+
+    LOGGING = {}
+    track_module_statistics("linear", linear, logging=LOGGING)
+    linear(input).sum().backward()
+
+    assert 1 == 1
