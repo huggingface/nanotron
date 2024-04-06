@@ -1,17 +1,17 @@
 from copy import deepcopy
+from dataclasses import dataclass
 
 import msamp
 import torch
+from datasets import load_dataset
 from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.loss_scaler import LossScaler
 from nanotron.fp8.optim import FP8Adam
 from nanotron.fp8.utils import convert_to_fp8_module
 from torch import nn
 from torch.optim import Adam
-from datasets import load_dataset
 from torch.utils.data import DataLoader
-from transformers import AutoModelForCausalLM, AutoTokenizer
-
+from transformers import AutoTokenizer
 
 import wandb
 
@@ -27,6 +27,31 @@ def l1_norm_diff(loss, ref_loss):
     return (loss - ref_loss).abs().mean()
 
 
+@dataclass
+class ModelOutput:
+    logits: torch.Tensor
+
+
+class ToyModel(nn.Module):
+    def __init__(self, vocab_size, hidden_size):
+        super().__init__()
+        self.word_embeddings = nn.Embedding(vocab_size, hidden_size)
+        # self.net = nn.Sequential(
+        #     nn.Linear(config.hidden_size, config.vocab_size),
+        # )
+        self.linear = nn.Linear(hidden_size, vocab_size)
+
+        # self.linear.weight.data.normal_(mean=0.0, std=0.02)
+        # self.word_embeddings.weight.data.normal_(mean=0.0, std=0.02)
+        # trunc_normal_(self.linear.weight.data, std=0.02)
+        # trunc_normal_(self.word_embeddings.weight.data, std=0.02)
+
+    def forward(self, input_ids):
+        x = self.word_embeddings(input_ids)
+        # return self.net(x)
+        return ModelOutput(logits=self.linear(x))
+
+
 if __name__ == "__main__":
     BATCH_SIZE = 64
     INPUT_DIM = 64
@@ -37,7 +62,21 @@ if __name__ == "__main__":
     WITH_BIAS = True
     MODEL_NAME = "gpt2"
     DATA_NAME = "CohereForAI/aya_dataset"
-    
+
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+    tokenizer.pad_token = tokenizer.eos_token
+
+    import math
+
+    prev_vocab_size = deepcopy(len(tokenizer))
+    next_power_of_16 = 16 ** math.ceil(math.log(len(tokenizer), 16))
+    tokens_to_add = next_power_of_16 - len(tokenizer)
+    if tokens_to_add > 0:
+        new_tokens = [f"<placeholder_{i}>" for i in range(tokens_to_add)]
+        tokenizer.add_tokens(new_tokens)
+    # assert 16 ** math.ceil(math.log(tokenizer.vocab_size, 16)) == tokenizer.vocab_size
+    assert len(tokenizer) % 16 == 0
+
     # fp32_linear = nn.Sequential(
     #     *[
     #         layer
@@ -45,17 +84,18 @@ if __name__ == "__main__":
     #         for layer in (nn.Linear(HIDDEN_SIZE, HIDDEN_SIZE, bias=WITH_BIAS).to("cuda"), nn.ReLU())
     #     ]
     # )
-    fp32_linear = nn.Sequential(
-        *[
-            layer
-            for i in range(N_LAYERS)
-            for layer in (
-                nn.Linear(HIDDEN_SIZE if i > 0 else INPUT_DIM, HIDDEN_SIZE, bias=WITH_BIAS).to("cuda"),
-                nn.ReLU()
-            )
-        ]
-    )
-    fp32_linear = fp32_linear[:-1]
+    # fp32_linear = nn.Sequential(
+    #     *[
+    #         layer
+    #         for i in range(N_LAYERS)
+    #         for layer in (
+    #             nn.Linear(HIDDEN_SIZE if i > 0 else INPUT_DIM, HIDDEN_SIZE, bias=WITH_BIAS).to("cuda"),
+    #             nn.ReLU()
+    #         )
+    #     ]
+    # )
+    # fp32_linear = fp32_linear[:-1]
+    fp32_linear = ToyModel(vocab_size=len(tokenizer), hidden_size=HIDDEN_SIZE).to("cuda")
 
     bf16_linear = deepcopy(fp32_linear)
     fp8_linear = deepcopy(fp32_linear)
@@ -64,7 +104,7 @@ if __name__ == "__main__":
     msamp_linear_with_scaler = deepcopy(fp32_linear)
 
     fp32_optim = Adam(fp32_linear.parameters(), lr=LR)
-    
+
     bf16_linear = bf16_linear.to(dtype=torch.bfloat16)
     bf16_optim = Adam(bf16_linear.parameters(), lr=LR)
 
@@ -93,7 +133,7 @@ if __name__ == "__main__":
             "lr": LR,
             "n_layers": N_LAYERS,
             "with_bias": WITH_BIAS,
-            "act_func": fp32_linear[1].__class__.__name__ if N_LAYERS > 1 else "None",
+            # "act_func": fp32_linear[1].__class__.__name__ if N_LAYERS > 1 else "None",
             "optim": fp32_optim.__class__.__name__,
             "optim_params": fp32_optim.defaults,
             "num_params": sum(p.numel() for p in fp32_linear.parameters()),
@@ -103,7 +143,12 @@ if __name__ == "__main__":
     msamp_scaler = torch.cuda.amp.GradScaler()
     fp8_scaler = LossScaler()
 
-    loss_func = nn.CrossEntropyLoss()
+    # loss_func = nn.CrossEntropyLoss()
+    def loss_func(outputs, targets):
+        func = nn.CrossEntropyLoss()
+        logits = outputs.logits
+        logits = logits[:, :-1, :].contiguous()
+        return func(logits.view(-1, logits.shape[-1]), targets.view(-1))
 
     # batch_inputs = []
     # batch_targets = []
@@ -112,10 +157,7 @@ if __name__ == "__main__":
     # for _ in range(N_STEPS):
     #     batch_inputs.append(inputs.clone())
     #     batch_targets.append(targets.clone())
-    
-    
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-    tokenizer.pad_token = tokenizer.eos_token
+
     dataset = load_dataset(DATA_NAME)
     dataset = dataset.map(
         lambda x: tokenizer(x["inputs"], padding="max_length", truncation=True, max_length=512, return_tensors="pt")
@@ -128,12 +170,13 @@ if __name__ == "__main__":
     msamp_with_loss_scaler_losses = []
 
     for step in range(N_STEPS):
-        for inputs in dataloaders:
+        for step, batch in enumerate(dataloaders):
             print(f"step: {step} /n /n")
 
-            inputs = dataloaders["input_ids"].to("cuda")
-            targets = inputs[:, 1:]
-        
+            batch = {k: v.squeeze(dim=1).to("cuda") for k, v in batch.items()}
+            inputs = batch["input_ids"]
+            targets = batch["input_ids"][:, 1:].contiguous()
+
             # inputs = batch_inputs[step]
             # targets = batch_targets[step]
             # inputs = torch.randn(BATCH_SIZE, INPUT_DIM).to("cuda")
@@ -144,12 +187,12 @@ if __name__ == "__main__":
             fp32_loss = loss_func(ref_output, targets)
             fp32_loss.backward()
             fp32_optim.step()
-            
-            bf16_optim.zero_grad()
-            bf16_output = bf16_linear(inputs.to(dtype=torch.bfloat16))
-            bf16_loss = loss_func(bf16_output, targets)
-            bf16_loss.backward()
-            bf16_optim.step()
+
+            # bf16_optim.zero_grad()
+            # bf16_output = bf16_linear(inputs.to(dtype=torch.bfloat16))
+            # bf16_loss = loss_func(bf16_output, targets)
+            # bf16_loss.backward()
+            # bf16_optim.step()
 
             # fp8_output = fp8_linear(inputs)
             # fp8_loss = loss_func(fp8_output, targets)
@@ -160,9 +203,9 @@ if __name__ == "__main__":
             fp8_optim_with_scaler.zero_grad()
             fp8_output_with_scaler = fp8_linear_with_scaler(inputs)
             fp8_loss_with_scaler = loss_func(fp8_output_with_scaler, targets)
-            # fp8_scaler.scale(fp8_loss_with_scaler)
-            # fp8_scaler.step(fp8_optim_with_scaler)
-            # fp8_scaler.update()
+            fp8_scaler.scale(fp8_loss_with_scaler)
+            fp8_scaler.step(fp8_optim_with_scaler)
+            fp8_scaler.update()
 
             msamp_optim.zero_grad()
             msamp_output = msamp_linear(inputs)
@@ -184,25 +227,26 @@ if __name__ == "__main__":
 
             # l1_norm_diff_fp8_with_loss_scaler_relative_to_fp32 = l1_norm_diff(fp8_loss_with_scaler, fp32_loss)
             # l1_norm_diff_msamp_with_loss_scaler_relative_to_fp32 = l1_norm_diff(msamp_loss_with_scaler, fp32_loss)
-            
-            
+
             # std_fp8_with_loss_scaler_relative_to_fp32 = (torch.tensor(fp8_with_loss_scaler_losses) - torch.tensor(fp32_losses)).std()
             # std_msamp_with_loss_scaler_relative_to_fp32 = (torch.tensor(msamp_with_loss_scaler_losses) - torch.tensor(fp32_losses)).std()
 
             wandb.log(
                 {
                     "fp32_loss": fp32_loss.item(),
-                    "bf16_loss": bf16_loss.item(),
-                    
+                    # "bf16_loss": bf16_loss.item(),
                     # "fp8_loss": fp8_loss.item(),
                     "fp8_loss_with_scaler": fp8_loss_with_scaler.item(),
                     "msamp_o2_loss": msamp_loss.item(),
                     "msamp_o2_loss_with_scaler": msamp_loss_with_scaler.item(),
-                    "l1_norm_diff_fp8_with_loss_scaler_relative_to_fp32": l1_norm_diff(fp8_loss_with_scaler, fp32_loss).item(),
-                    "l1_norm_diff_msamp_with_loss_scaler_relative_to_fp32": l1_norm_diff(msamp_loss_with_scaler, fp32_loss).item(),
-                    
-                    "l1_norm_diff_fp8_with_loss_scaler_relative_to_bf16": l1_norm_diff(fp8_loss_with_scaler, bf16_loss).item(),
-                    "l1_norm_diff_msamp_with_loss_scaler_relative_to_bf16": l1_norm_diff(msamp_loss_with_scaler, bf16_loss).item(),
+                    "l1_norm_diff_fp8_with_loss_scaler_relative_to_fp32": l1_norm_diff(
+                        fp8_loss_with_scaler, fp32_loss
+                    ).item(),
+                    "l1_norm_diff_msamp_with_loss_scaler_relative_to_fp32": l1_norm_diff(
+                        msamp_loss_with_scaler, fp32_loss
+                    ).item(),
+                    # "l1_norm_diff_fp8_with_loss_scaler_relative_to_bf16": l1_norm_diff(fp8_loss_with_scaler, bf16_loss).item(),
+                    # "l1_norm_diff_msamp_with_loss_scaler_relative_to_bf16": l1_norm_diff(msamp_loss_with_scaler, bf16_loss).item(),
                 }
             )
 
