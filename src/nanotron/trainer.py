@@ -303,9 +303,16 @@ class DistributedTrainer:
                     if isinstance(prev_dataloader, DataLoader):
                         # NOTE: we don't need to clear dummy data generator from memory
                         clear_dataloader_from_memory(prev_dataloader, stage_name=stage.name)
+                
+                # some datasets in brrr doesn't have hf_dataset_or_datasets attribute, like TokenizedBytesDatasetArgs
+                if hasattr(stage.data.dataset, 'hf_dataset_or_datasets'):
+                    dataset_info = f"[Training Stage: {stage.name}] Switching to a new dataset {stage.data.dataset.hf_dataset_or_datasets}"
+                else:
+                    # Optionally, provide a default message or handle the case when the attribute doesn't exist
+                    dataset_info = f"[Training Stage: {stage.name}] Switching to a new dataset, details not available"
 
                 log_rank(
-                    f"[Training Stage: {stage.name}] Switching to a new dataset {stage.data.dataset.hf_dataset_or_datasets}",
+                    dataset_info,
                     logger=logger,
                     level=logging.INFO,
                     rank=0,
@@ -380,7 +387,7 @@ class DistributedTrainer:
 
         if self.iteration_step < 5:
             log_memory(logger=logger)
-
+            
         outputs = self.pipeline_engine.train_batch_iter(
             model=self.model,
             pg=self.parallel_context.pp_pg,

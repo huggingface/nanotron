@@ -23,12 +23,3 @@ debugpy-run -m torch.distributed.run -p 5678 \
     --max_restarts 0 \
     --tee 3 \
     $REPO_PATH/../run_train.py --config-file $EXAMPLE_PATH/debug_config_tiny_llama.yaml
-
-
-# python -u -m torch.distributed.run \
-#     --nproc_per_node 2 \
-#     --nnodes 1 \
-#     --rdzv_backend c10d \
-#     --max_restarts 0 \
-#     --tee 3 \
-#     $REPO_PATH/../run_train.py --config-file $EXAMPLE_PATH/debug_config_tiny_llama.yaml

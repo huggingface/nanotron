@@ -358,8 +358,8 @@ class Config:
         config_dict = serialize(self)
         file_path = str(file_path)
         with open(file_path, "w") as f:
-            yaml.dump(config_dict, f)
-
+            yaml.dump(config_dict, f)     
+            
         # Sanity test config can be reloaded
         _ = get_config_from_file(file_path, config_class=self.__class__)
 
