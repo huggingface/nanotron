@@ -9,6 +9,7 @@ from nanotron.fp8.utils import (
     get_leaf_modules,
     is_overflow_underflow_nan,
     track_module_statistics,
+    _log,
 )
 from torch import nn
 
@@ -81,11 +82,24 @@ def test_detect_overflow_underflow_nan(tensor, expected_output):
 
 
 def test_track_module_statistics():
-    input = torch.randn(1, 16, device="cuda")
-    linear = nn.Linear(16, 16, device="cuda")
-
-    LOGGING = {}
-    track_module_statistics("linear", linear, logging=LOGGING)
-    linear(input).sum().backward()
-
-    assert 1 == 1
+    class FP8Model(nn.Module):
+        def __init__(self):
+            super(FP8Model, self).__init__()
+            self.fin = FP8Linear(32, 32, device="cuda")
+            self.relu = nn.ReLU()
+            self.fout = FP8Linear(32, 32, device="cuda")
+        
+        def forward(self, x):
+            return self.fout(self.relu(self.fin(x)))
+        
+    input = torch.randn(32, 32, device="cuda")
+    model = FP8Model()
+        
+    logs = _log(model)
+    
+    for _ in range(5):
+        model(input).sum().backward()
+        
+    # NOTE: now merge module_name:x:statistic into a flat dictionary
+    assert logs.keys() == {"fin", "relu", "fout"}
+    assert logs["fin"].keys() == {"weight", "bias", "input:0", "output:0", "grad_output:0"}

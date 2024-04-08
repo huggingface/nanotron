@@ -113,25 +113,50 @@ def track_module_statistics(name: str, module: nn.Linear, logging: Dict[str, Dic
         }
 
     def _save_output_stats(module: nn.Linear, input: torch.Tensor, output: torch.Tensor):
-        logging[name]["weight"] = _collect_stats(module.weight)
+        if hasattr(module, "weight") and module.weight is not None:
+            logging[name]["weight"] = _collect_stats(module.weight)
+            # logging[name]["weight"] = _collect_stats(module.weight)
 
-        if module.bias is not None:
+        if hasattr(module, "bias") and module.bias is not None:
             logging[name]["bias"] = _collect_stats(module.bias)
 
-        logging[name]["output"] = _collect_stats(output)
+        inputs = input if isinstance(input, tuple) else (input,)
+        outputs = output if isinstance(output, tuple) else (output,)
+        
+        for i, inp in enumerate(inputs):
+            if inp.dtype == torch.long:
+                # NOTE: this is input ids in transformers
+                continue
+            
+            logging[name][f"input:{i}"] = _collect_stats(inp)
+        
+        for i, out in enumerate(outputs):
+            logging[name][f"output:{i}"] = _collect_stats(out)
 
     def _save_grad_stats(module: nn.Linear, grad_output: torch.Tensor):
-        # if isinstance(grad_output, tuple):
-        #     for i, x in enumerate(tensor):
-        #         if x is None: continue
-
-        pydevd.settrace(suspend=False, trace_only_current_thread=True)
-        logging[name]["grad_output"] = _collect_stats(grad_output[0])
-
-    # def _save_grad_stats(module: nn.Linear, input_grad: torch.Tensor, grad_output: torch.Tensor):
-    #     pydevd.settrace(suspend=False, trace_only_current_thread=True)
-    #     logging[name]["grad_output"] = _collect_stats(grad_output)
+        grad_outputs = grad_output if isinstance(grad_output, tuple) else (grad_output,)
+        for i, grad in enumerate(grad_outputs):
+            logging[name][f"grad_output:{i}"] = _collect_stats(grad)
 
     module.register_forward_hook(_save_output_stats)
     module.register_full_backward_pre_hook(_save_grad_stats)
-    # module.register_module_full_backward_hook(_save_grad_stats)
+
+
+def _log(model: nn.Module):
+    LOGGING = {}
+    leaf_modules = get_leaf_modules(model)
+    for name, module in leaf_modules:
+        track_module_statistics(name, module, logging=LOGGING)
+
+    
+    return LOGGING
+
+
+def convert_logs_to_flat_logs(logs, prefix):
+    flat_logs = {}
+    for module_name, components in logs.items():
+        for component_name, stats in components.items():
+            for stat_name, value in stats.items():
+                flat_logs[f"{prefix}:{module_name}:{component_name}:{stat_name}"] = value
+    
+    return flat_logs

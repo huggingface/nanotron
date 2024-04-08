@@ -14,6 +14,7 @@ from torch import nn
 from torch.optim import Adam
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
+from nanotron.fp8.utils import _log, convert_logs_to_flat_logs
 
 import wandb
 
@@ -57,7 +58,8 @@ if __name__ == "__main__":
     INPUT_DIM = 64
     HIDDEN_SIZE = 64
     N_STEPS = 1000
-    LR = 1e-3
+    # LR = 1e-3
+    LR = 6e-4
     N_LAYERS = 16
     WITH_BIAS = True
     MODEL_NAME = "gpt2"
@@ -182,9 +184,10 @@ if __name__ == "__main__":
 
             # # inputs = batch_inputs[step]
             # # targets = batch_targets[step]
-            inputs = torch.randn(BATCH_SIZE, INPUT_DIM).to("cuda")
-            targets = torch.randint(0, HIDDEN_SIZE, (BATCH_SIZE,)).to("cuda")
+            # inputs = torch.randn(BATCH_SIZE, INPUT_DIM).to("cuda")
+            # targets = torch.randint(0, HIDDEN_SIZE, (BATCH_SIZE,)).to("cuda")
 
+            fp32_logs = _log(fp32_linear)
             fp32_optim.zero_grad()
             ref_output = fp32_linear(inputs)
             fp32_loss = loss_func(ref_output, targets)
@@ -203,6 +206,7 @@ if __name__ == "__main__":
             # fp8_optim.step()
             # fp8_optim.zero_grad()
 
+            fp8_logs = _log(fp8_linear_with_scaler)
             fp8_optim_with_scaler.zero_grad()
             fp8_output_with_scaler = fp8_linear_with_scaler(inputs)
             fp8_loss_with_scaler = loss_func(fp8_output_with_scaler, targets)
@@ -210,6 +214,7 @@ if __name__ == "__main__":
             fp8_scaler.step(fp8_optim_with_scaler)
             fp8_scaler.update()
 
+            # msamp_logs = _log(msamp_linear)
             msamp_optim.zero_grad()
             msamp_output = msamp_linear(inputs)
             msamp_loss = loss_func(msamp_output, targets)
@@ -217,6 +222,7 @@ if __name__ == "__main__":
             msamp_optim.all_reduce_grads(msamp_linear)
             msamp_optim.step()
 
+            # msamp_with_loss_scaler_logs = _log(msamp_linear_with_scaler)
             msamp_optim_with_scaler.zero_grad()
             msamp_output_with_scaler = msamp_linear_with_scaler(inputs)
             msamp_loss_with_scaler = loss_func(msamp_output_with_scaler, targets)
@@ -248,6 +254,8 @@ if __name__ == "__main__":
                     "l1_norm_diff_msamp_with_loss_scaler_relative_to_fp32": l1_norm_diff(
                         msamp_loss_with_scaler, fp32_loss
                     ).item(),
+                    **convert_logs_to_flat_logs(fp32_logs, prefix="fp32"),
+                    **convert_logs_to_flat_logs(fp8_logs, prefix="fp8"),
                     # "l1_norm_diff_fp8_with_loss_scaler_relative_to_bf16": l1_norm_diff(fp8_loss_with_scaler, bf16_loss).item(),
                     # "l1_norm_diff_msamp_with_loss_scaler_relative_to_bf16": l1_norm_diff(msamp_loss_with_scaler, bf16_loss).item(),
                 }
