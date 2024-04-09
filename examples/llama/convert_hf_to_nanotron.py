@@ -8,19 +8,18 @@ import json
 from argparse import ArgumentParser
 from pathlib import Path
 
-import torch
-from transformers import LlamaForCausalLM
-from transformers import LlamaConfig as HFLlamaConfig
-
 import nanotron
+import torch
+from convert_weights import get_config_mapping, get_weight_mapping, load_nanotron_model
 from nanotron.config import LlamaConfig as NanotronLlamaConfig
 from nanotron.models.llama import LlamaForTraining
+from transformers import LlamaConfig as HFLlamaConfig
+from transformers import LlamaForCausalLM
 
-from convert_weights import get_weight_mapping, get_config_mapping, load_nanotron_model
 
-
-def _handle_attention_block(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor,
-                            n_q_heads: int, n_kv_heads: int, d_qk: int) -> torch.Tensor:
+def _handle_attention_block(
+    q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, n_q_heads: int, n_kv_heads: int, d_qk: int
+) -> torch.Tensor:
 
     # Huggingface Llama separates the q, k, v weights (as opposed to nanotron).
     # Furthermore, in the rotary embeddings in nanotron expects interleaved pairs of even
@@ -33,7 +32,7 @@ def _handle_attention_block(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor,
     def interleave(w: torch.Tensor):
         w_new = []
         for head_w in w.split(d_qk):
-            head_w = head_w.view(2, d_qk//2, -1).transpose(0, 1).reshape(d_qk, -1)
+            head_w = head_w.view(2, d_qk // 2, -1).transpose(0, 1).reshape(d_qk, -1)
             w_new.append(head_w)
         return torch.cat(w_new)
 
@@ -42,8 +41,7 @@ def _handle_attention_block(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor,
     return torch.cat([q, k, v])
 
 
-def convert_hf_to_nt(model_hf: LlamaForCausalLM, model_nt: LlamaForTraining, 
-                     config: NanotronLlamaConfig):
+def convert_hf_to_nt(model_hf: LlamaForCausalLM, model_nt: LlamaForTraining, config: NanotronLlamaConfig):
     """Converts the weights from the model_hf to model_nt, making modifications
     in-place."""
 
@@ -60,8 +58,12 @@ def convert_hf_to_nt(model_hf: LlamaForCausalLM, model_nt: LlamaForTraining,
                 k = hf_sd[key_k]
                 v = hf_sd[key_v]
                 param = _handle_attention_block(
-                    q, k, v, config.num_attention_heads, config.num_key_value_heads,
-                    config.hidden_size//config.num_attention_heads
+                    q,
+                    k,
+                    v,
+                    config.num_attention_heads,
+                    config.num_key_value_heads,
+                    config.hidden_size // config.num_attention_heads,
                 )
             # The case of gate_up_proj, nt_to_hf_map has two keys.
             elif "gate_up_proj" in module_name_nt:
@@ -80,8 +82,7 @@ def convert_hf_to_nt(model_hf: LlamaForCausalLM, model_nt: LlamaForTraining,
 
 def get_nt_config(config: HFLlamaConfig) -> NanotronLlamaConfig:
     """Converts a huggingface configuration to nanotron configuration."""
-    attrs = {key: getattr(config, value)
-             for key, value in get_config_mapping(nt_to_hf=True).items()}
+    attrs = {key: getattr(config, value) for key, value in get_config_mapping(nt_to_hf=True).items()}
     return NanotronLlamaConfig(**attrs)
 
 
@@ -98,12 +99,12 @@ def convert_checkpoint_and_save(checkpoint_path: Path, save_path: Path):
     nanotron_model = load_nanotron_model(model_config=model_config)
 
     # Copy weights and save model.
-    parallel_context = nanotron.parallel.ParallelContext(data_parallel_size=1, pipeline_parallel_size=1,
-                                                         tensor_parallel_size=1)
+    parallel_context = nanotron.parallel.ParallelContext(
+        data_parallel_size=1, pipeline_parallel_size=1, tensor_parallel_size=1
+    )
     convert_hf_to_nt(hf_model, nanotron_model, model_config)
-    nanotron.serialize.save_weights(model=nanotron_model, parallel_context=parallel_context,
-                                    root_folder=save_path)
-    with open(save_path/"model_config.json", "w+") as f:
+    nanotron.serialize.save_weights(model=nanotron_model, parallel_context=parallel_context, root_folder=save_path)
+    with open(save_path / "model_config.json", "w+") as f:
         json.dump(vars(model_config), f)
     print(f"Model saved to {save_path}")
 

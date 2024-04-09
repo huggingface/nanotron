@@ -10,21 +10,19 @@ from pathlib import Path
 from typing import Literal, Optional
 
 import torch
-from transformers import LlamaConfig as HFLlamaConfig
-from transformers import AutoTokenizer, LlamaForCausalLM
-
+from convert_weights import get_config_mapping, get_weight_mapping, load_nanotron_model
 from nanotron.config import LlamaConfig as NanotronLlamaConfig
-from nanotron.models.llama import LlamaForTraining
 from nanotron.models import init_on_device_and_dtype
-
-from convert_weights import get_weight_mapping, get_config_mapping, load_nanotron_model
-
+from nanotron.models.llama import LlamaForTraining
+from transformers import AutoTokenizer, LlamaForCausalLM
+from transformers import LlamaConfig as HFLlamaConfig
 
 TEST_PROMPT = "What is the meaning of the word chutzpah?\nThe word chutzpah means"
 
 
-def _handle_attention_block(qkv: torch.Tensor, part: Literal["q", "k", "v"],
-                            n_q_heads: int, n_kv_heads: int, d_qk: int) -> torch.Tensor:
+def _handle_attention_block(
+    qkv: torch.Tensor, part: Literal["q", "k", "v"], n_q_heads: int, n_kv_heads: int, d_qk: int
+) -> torch.Tensor:
 
     # Huggingface Llama separates the q, k, v weights (as opposed to nanotron).
     # Furthermore, in the rotary embeddings in nanotron expects interleaved pairs of even
@@ -37,14 +35,14 @@ def _handle_attention_block(qkv: torch.Tensor, part: Literal["q", "k", "v"],
     def interleave(w: torch.Tensor):
         w_new = []
         for head_w in w.split(d_qk):
-            head_w = head_w.view(d_qk//2, 2, -1).transpose(0, 1).reshape(d_qk, -1)
+            head_w = head_w.view(d_qk // 2, 2, -1).transpose(0, 1).reshape(d_qk, -1)
             w_new.append(head_w)
         return torch.cat(w_new)
 
     assert part in ["q", "k", "v"], "part must be one of [q, k, v]"
 
-    index_end_q = n_q_heads*d_qk
-    index_end_k = index_end_q + n_kv_heads*d_qk
+    index_end_q = n_q_heads * d_qk
+    index_end_k = index_end_q + n_kv_heads * d_qk
     if part == "q":
         return interleave(qkv[:index_end_q])
     if part == "k":
@@ -63,9 +61,7 @@ def _handle_gate_up_proj(gate_up_proj: torch.Tensor, gate: bool) -> torch.Tensor
         return gate_up_proj[weight_size:]
 
 
-
-def convert_nt_to_hf(nanotron_model: LlamaForTraining, hf_model: LlamaForCausalLM,
-                     model_config: NanotronLlamaConfig):
+def convert_nt_to_hf(nanotron_model: LlamaForTraining, hf_model: LlamaForCausalLM, model_config: NanotronLlamaConfig):
     """Converts the weights from the nanotron_model to hf_model, making modifications
     in-place."""
 
@@ -81,9 +77,11 @@ def convert_nt_to_hf(nanotron_model: LlamaForTraining, hf_model: LlamaForCausalL
             if "qkv_proj" in nanotron_key:
                 proj_name = module_name_hf.split(".")[4][0]
                 param = _handle_attention_block(
-                    param, proj_name, model_config.num_attention_heads,
+                    param,
+                    proj_name,
+                    model_config.num_attention_heads,
                     model_config.num_key_value_heads,
-                    model_config.hidden_size//model_config.num_attention_heads
+                    model_config.hidden_size // model_config.num_attention_heads,
                 )
 
             elif "gate_up_proj" in nanotron_key:
@@ -96,20 +94,18 @@ def convert_nt_to_hf(nanotron_model: LlamaForTraining, hf_model: LlamaForCausalL
 
 def get_hf_config(config: NanotronLlamaConfig) -> HFLlamaConfig:
     """Converts a nanotron configuration to huggingface configuration."""
-    attrs = {key: getattr(config, value)
-             for key, value in get_config_mapping(nt_to_hf=False).items()}
+    attrs = {key: getattr(config, value) for key, value in get_config_mapping(nt_to_hf=False).items()}
     return HFLlamaConfig(**attrs)
 
 
-def convert_checkpoint_and_save(checkpoint_path: Path, save_path: Path,
-                                tokenizer_name: Optional[str] = None):
+def convert_checkpoint_and_save(checkpoint_path: Path, save_path: Path, tokenizer_name: Optional[str] = None):
     """Loads the nanotron checkpoint in `checkpoint_path`, creates
     a new huggingface instance, copies the weights from the nanotron checkpoint
     and saves the transformed huggingface to `save_path`."""
 
     # Init nanotron model.
     device = torch.device("cuda")
-    with open(checkpoint_path/"model_config.json", "r") as f:
+    with open(checkpoint_path / "model_config.json", "r") as f:
         attrs = json.load(f)
         model_config = NanotronLlamaConfig(**attrs)
     dtype = getattr(torch, "bfloat16")
@@ -152,8 +148,9 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # Convert Nanotron model to HF format.
-    convert_checkpoint_and_save(checkpoint_path=args.checkpoint_path, save_path=args.save_path,
-                                tokenizer_name=args.tokenizer_name)
+    convert_checkpoint_and_save(
+        checkpoint_path=args.checkpoint_path, save_path=args.save_path, tokenizer_name=args.tokenizer_name
+    )
 
     # Check if the conversion was successful by generating some text.
     if args.tokenizer_name is not None:

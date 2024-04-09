@@ -1,17 +1,15 @@
 import json
-from typing import Optional
 from pathlib import Path
-
-import torch
-from transformers import AutoTokenizer, LlamaForCausalLM
+from typing import Optional
 
 import nanotron
+import torch
 from nanotron.config import LlamaConfig as NanotronLlamaConfig
 from nanotron.models.llama import LlamaForTraining
 from nanotron.trainer import mark_tied_parameters
 
 
-def get_weight_mapping(config: NanotronLlamaConfig, nt_to_hf: bool = True) -> dict[str, str]: 
+def get_weight_mapping(config: NanotronLlamaConfig, nt_to_hf: bool = True) -> dict[str, str]:
     """Returns the nanotron to huggingface parameter mapping if `nt_to_hf`, otherwise the
     huggingface to nanotron mapping."""
 
@@ -82,10 +80,12 @@ def get_config_mapping(nt_to_hf: bool = True) -> dict[str, str]:
     return hf_to_nt_map
 
 
-def load_nanotron_model(model_config: Optional[NanotronLlamaConfig] = None,
-                        device: torch.device = torch.device("cuda"),
-                        dtype: torch.dtype = torch.bfloat16,
-                        checkpoint_path: Optional[Path] = None) -> LlamaForTraining:
+def load_nanotron_model(
+    model_config: Optional[NanotronLlamaConfig] = None,
+    device: torch.device = torch.device("cuda"),
+    dtype: torch.dtype = torch.bfloat16,
+    checkpoint_path: Optional[Path] = None,
+) -> LlamaForTraining:
 
     """
     Creates and returns a nanotron model.
@@ -97,7 +97,7 @@ def load_nanotron_model(model_config: Optional[NanotronLlamaConfig] = None,
 
     if model_config is None:
         assert checkpoint_path is not None
-        with open(checkpoint_path/"model_config.json") as f:
+        with open(checkpoint_path / "model_config.json") as f:
             model_config = NanotronLlamaConfig(**json.load(f))
 
     parallel_config = nanotron.config.ParallelismArgs(
@@ -109,9 +109,7 @@ def load_nanotron_model(model_config: Optional[NanotronLlamaConfig] = None,
         tp_linear_async_communication=False,
     )
     parallel_context = nanotron.parallel.ParallelContext(
-        data_parallel_size=1,
-        pipeline_parallel_size=1,
-        tensor_parallel_size=1
+        data_parallel_size=1, pipeline_parallel_size=1, tensor_parallel_size=1
     )
     nanotron_model = nanotron.models.build_model(
         model_builder=lambda: LlamaForTraining(
@@ -128,6 +126,7 @@ def load_nanotron_model(model_config: Optional[NanotronLlamaConfig] = None,
 
     # Load checkpoint directly in memory and then only keep the state dictionary
     if checkpoint_path is not None:
-        nanotron.serialize.load_weights(model=nanotron_model, parallel_context=parallel_context,
-                                        root_folder=checkpoint_path)
+        nanotron.serialize.load_weights(
+            model=nanotron_model, parallel_context=parallel_context, root_folder=checkpoint_path
+        )
     return nanotron_model
