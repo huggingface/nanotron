@@ -62,6 +62,12 @@ def create_huggingface_model() -> LlamaForCausalLM:
     return model_hf
 
 
+@pytest.fixture(autouse=True, scope="module")
+def fix_seed():
+    torch.manual_seed(0)
+    yield
+
+
 @pytest.fixture
 def input_ids() -> torch.Tensor:
     return torch.randint(0, CONFIG.vocab_size, size=(BATCH_SIZE, SEQUENCE_LENGTH), device="cuda")
