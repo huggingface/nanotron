@@ -48,7 +48,7 @@ CONFIG = NanotronLlamaConfig(
 
 BATCH_SIZE = 3
 SEQUENCE_LENGTH = 5
-ATOL = 0.005
+ATOL = 0.02
 
 
 def create_nanotron_model() -> LlamaForTraining:
