@@ -1070,6 +1070,17 @@ class LlamaForTraining(NanotronModel):
             assert full_param_name not in initialized_parameters
             initialized_parameters.add(full_param_name)
 
+        from nanotron.scaling import _get_leaf_modules
+
+        leaf_modules = _get_leaf_modules(model)
+
+        fan_in = config.model.model_config.hidden_size
+
+        for _, module in leaf_modules:
+            if hasattr(module, "linear_type"):
+                if module.linear_type == WeightType.OUTPUT_WEIGHTS:
+                    module.register_forward_hook(lambda module, input, output: output * (1 / fan_in))
+
         assert initialized_parameters == {
             param.get_tied_info().get_full_name_from_module_id_to_prefix(module_id_to_prefix=module_id_to_prefix)
             if param.is_tied

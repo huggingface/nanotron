@@ -117,6 +117,20 @@ def init_weight_for_output_weights(weight, hidden_size):
 # }
 
 
+
+
+def input_weight_hook(module, input, output):
+    return output * 1
+
+
+def hidden_weight_hook(module, input, output):
+    return output * 1
+
+
+def output_weight_hook(module, input, output):
+    return output * (1 / fan_in)
+
+
 def init_weight_using_mu_transfer(weight, name, hidden_size, linear_type, default):
     if linear_type == WeightType.INPUT_WEIGHTS:
         if name == "weight" or name == "bias":
@@ -136,7 +150,7 @@ def init_weight_using_mu_transfer(weight, name, hidden_size, linear_type, defaul
 
 
 def parametrize_using_mu_transfer(model: nn.Module, config: Config, parallel_context: ParallelContext) -> nn.Module:
-    list(model.named_parameters())
+    # list(model.named_parameters())
     # named_modules = list(model.named_modules())
     named_modules = _get_leaf_modules(model)
 
@@ -149,16 +163,15 @@ def parametrize_using_mu_transfer(model: nn.Module, config: Config, parallel_con
     #         if module.bias is not None:
     #             assert 1 == 1
 
-    fan_in = config.model.model_config.hidden_size
 
-    def input_weight_hook(module, input, output):
-        return output * 1
+    # def input_weight_hook(module, input, output):
+    #     return output * 1
 
-    def hidden_weight_hook(module, input, output):
-        return output * 1
+    # def hidden_weight_hook(module, input, output):
+    #     return output * 1
 
-    def output_weight_hook(module, input, output):
-        return output * (1 / fan_in)
+    # def output_weight_hook(module, input, output):
+    #     return output * (1 / fan_in)
 
     for name, module in scale_modules:
         assert isinstance(module, nn.Module)
