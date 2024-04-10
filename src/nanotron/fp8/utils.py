@@ -37,6 +37,8 @@ def get_tensor_fp8_metadata(tensor: torch.Tensor, dtype: DTypes) -> FP8Meta:
 
 # TODO(xrsrke): shorter name
 def is_overflow_underflow_nan(tensor: torch.Tensor) -> bool:
+    assert isinstance(tensor, torch.Tensor)
+    
     overflow = torch.isinf(tensor).any().item()
     underflow = torch.isneginf(tensor).any().item()
     nan = torch.isnan(tensor).any().item()

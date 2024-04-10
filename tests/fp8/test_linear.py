@@ -9,7 +9,7 @@ from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.linear import FP8Linear
 from nanotron.fp8.parameter import FP8Parameter
 from nanotron.fp8.tensor import FP8Tensor, convert_tensor_from_fp8
-from nanotron.fp8.utils import convert_linear_to_fp8, convert_to_fp8_module
+from nanotron.fp8.utils import convert_linear_to_fp8, convert_to_fp8_module, is_overflow_underflow_nan
 from timm.models.layers import trunc_normal_
 from torch import nn
 
@@ -161,6 +161,10 @@ def test_fp8_modules_trigger_the_entire_computational_graph(accum_qtype):
         "ReLU.1.backward",
         "FP8Linear.0.backward",
     ]
+    
+    for p in fp8_linear.parameters():
+        if p.requires_grad is True:
+            assert is_overflow_underflow_nan(p.grad) is False
 
 
 # NOTE: it seems that dynamic quantization should be in test_tensor

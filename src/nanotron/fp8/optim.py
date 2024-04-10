@@ -282,7 +282,8 @@ class FP8Adam(Optimizer):
                 # NOTE: sanity check
                 assert (isinstance(p, FP8Parameter) and p.dtype in FP8_DTYPES) or (
                     isinstance(p, torch.Tensor) and p.dtype == torch.float16
-                )
+                ), f"type(p)={type(p)}, p.dtype={p.dtype}"
+                
                 assert (isinstance(grad, FP8Tensor) and grad.dtype in FP8_DTYPES) or (
                     isinstance(grad, torch.Tensor) and grad.dtype == torch.float16
                 )
