@@ -52,6 +52,7 @@ def get_weight_from_hf(
     ref_module: MambaForCausalLM,
     nanotron_to_hf: Dict[str, str],
     get_grad: bool = False,
+    param_is_tp_sharded: bool = False,
 ) -> torch.Tensor:
     """From our brrr implementation, we get the equivalent tensor in transformers implementation"""
 
@@ -82,14 +83,15 @@ def get_weight_from_hf(
 
     param = _get_tensor(hf_name)
 
-    if "in_proj" in hf_name:
+    # only do this when the weight is not sharded in tensor parallel
+    if "in_proj" in hf_name and not param_is_tp_sharded:
         # In Nanotron, we do tensor parallel column so weight need to be split in the column dimension (i.e: xz.view(...))
         # However, the HF weights was trained such that it expected xz.chunk(...) to split the tensor in the row dimension
         # Thus, we need to interleaved the HF weights to make it compatible with Nanotron
         log_rank(
             f"Interleaving {hf_name} to make it compatible with Nanotron", logger=logger, level=logging.INFO, rank=0
         )
-        param = param[_interleave_pattern(param.shape[0]), :]
+        return param[_interleave_pattern(param.shape[0]), :]
 
     return param
 
@@ -222,14 +224,18 @@ if __name__ == "__main__":
         total=len(list(nanotron_model.model.named_parameters())),
         desc="Converting",
     ):
-        ref_param = get_weight_from_hf(
-            name=name, ref_module_state_dict=ref_state_dict, ref_module=model_ref, nanotron_to_hf=nanotron_to_hf
-        )
-
         param_is_tp_sharded = (
             isinstance(param, NanotronParameter)
             and param.is_sharded
             and parallel_context.world_ranks_to_pg[param.get_sharded_info().global_ranks] == parallel_context.tp_pg
+        )
+
+        ref_param = get_weight_from_hf(
+            name=name,
+            ref_module_state_dict=ref_state_dict,
+            ref_module=model_ref,
+            nanotron_to_hf=nanotron_to_hf,
+            param_is_tp_sharded=param_is_tp_sharded,
         )
 
         if param_is_tp_sharded:
@@ -249,7 +255,6 @@ if __name__ == "__main__":
                 param.copy_(ref_param)
                 ref_param = None
                 torch.cuda.empty_cache()
-
     # Marks parameters as NanotronParameters
     mark_tied_parameters(model=nanotron_model, parallel_context=parallel_context)
 
