@@ -175,22 +175,22 @@ if __name__ == "__main__":
     directories.append(config.checkpoints.checkpoints_path)
     directories.append(config.checkpoints.resume_checkpoint_path)
 
-    if config.lighteval is not None:
-        config.lighteval.slurm_script_dir = f"{experiment_path}/lighteval/slurm_scripts"
-        config.lighteval.slurm_template = f"{experiment_path}/run_eval.slurm.jinja"
-        config.lighteval.logging.local_output_path = f"{experiment_path}/logs"
+    # if config.lighteval is not None:
+    # config.lighteval.slurm_script_dir = f"{experiment_path}/lighteval/slurm_scripts"
+    # config.lighteval.slurm_template = f"{experiment_path}/run_eval.slurm.jinja"
+    # config.lighteval.logging.local_output_path = f"{experiment_path}/logs"
 
-        directories.append(config.lighteval.slurm_script_dir)
-        directories.append(config.lighteval.logging.local_output_path)
-        directories.append(config.lighteval.s3_tmp_dir)
+    # directories.append(config.lighteval.slurm_script_dir)
+    # directories.append(config.lighteval.logging.local_output_path)
 
     # if config.s3_upload is not None:
     #     config.s3_upload.upload_s3_path = f"s3://huggingface-brrr-us-east-1/fmom/checkpoints/{args.wandb_run}_{job_id}"
     #     directories.append(config.s3_upload.upload_s3_path)
 
-    if config.profiler is not None:
-        config.profiler.profiler_export_path = f"{experiment_path}/logs"
-        directories.append(config.profiler.profiler_export_path)
+    # if config.profiler is not None:
+    #     config.profiler.profiler_export_path = f"{experiment_path}/logs"
+
+    directories.append(f"{experiment_path}/logs")
 
     for dir_path in directories:
         if not os.path.exists(dir_path):

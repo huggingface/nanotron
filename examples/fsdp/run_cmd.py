@@ -92,7 +92,9 @@ def main():
             f"../../run_train.py --config-file={args.config_file}"
         )
 
-    subprocess.run(command, shell=True, env=env_vars)
+    # strip yaml from args.config_file path
+    with open(f"{os.path.dirname(args.config_file)}/logs/log.txt", "w") as f:
+        subprocess.run(command, shell=True, env=env_vars, stdout=f, stderr=f)
 
 
 if __name__ == "__main__":
