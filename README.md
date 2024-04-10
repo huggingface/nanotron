@@ -105,6 +105,11 @@ Features we would like to add:
 - [ ] Supporting more architectures (Mamba..)
 - [ ] ...
 
+
+# Useful scripts
+- `scripts/log_lighteval_to_wandb.py`: logs the evaluation results of LightEval to wandb, including summary statistics.
+
+
 # Credits
 
 We would like to thank everyone working on LLMs, especially those sharing their work openly from which we took great inspiration: Nvidia for `Megatron-LM/apex`, Microsoft for `DeepSpeed`, HazyResearch for `flash-attn`
