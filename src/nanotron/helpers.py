@@ -7,6 +7,7 @@ import time
 from datetime import datetime
 from math import ceil
 from typing import Dict, List, Optional, Tuple
+from functools import partial
 
 import numpy as np
 import torch
@@ -74,6 +75,64 @@ def init_random_states(parallel_config: ParallelismArgs, tp_pg: ProcessGroup):
 
 
 def lr_scheduler_builder(optimizer: Optimizer, lr_scheduler_args: LRSchedulerArgs, total_training_steps: int):
+    def lr_lambda(current_step: int, lr: float):
+        """LR Scheduling function, it has from 2 up to 4 phases:
+        - warmup,
+        - optional: constant (if lr_decay_starting_step is set)
+        - decay
+        - optional: constant (if lr_decay_steps and/or lr_decay_starting_step are set)
+        Warmup starts at lr=0 and ends at `lr=lr`
+        Then it stays constant at lr if lr_decay_starting_step is set and larger than lr_warmup_steps
+        Then it decays until `min_decay_lr` for lr_decay_steps if set, else: (total_training_steps - lr_warmup_steps or lr_decay_starting_step)
+        Then it stays constant at min_decay_lr if lr_decay_starting_step is set and total_training_steps is larger)
+        """
+        # No warmup or decay
+        if lr_scheduler_args.lr_warmup_steps == 0 and lr_decay_steps == 0:
+            return lr
+
+        # Warmup phase
+        elif lr_scheduler_args.lr_warmup_style is not None and current_step <= lr_scheduler_args.lr_warmup_steps:
+            if lr_scheduler_args.lr_warmup_style == "linear":
+                lmbda = lr * current_step / max(lr_scheduler_args.lr_warmup_steps, 1)
+            elif lr_scheduler_args.lr_warmup_style == "constant":
+                lmbda = lr
+            else:
+                raise ValueError(f"Unknown warmup style {lr_scheduler_args.lr_warmup_style}")
+
+        # Optional constant phase at learning_rate
+        elif current_step < lr_decay_starting_step:
+            lmbda = lr
+
+        # Decay phase
+        elif lr_scheduler_args.lr_decay_style is not None and current_step < lr_decay_starting_step + lr_decay_steps:
+            if lr_scheduler_args.lr_decay_style == "cosine":
+                lmbda = (
+                    lr_scheduler_args.min_decay_lr
+                    + (lr - lr_scheduler_args.min_decay_lr)
+                    * (1 + math.cos(math.pi * (current_step - lr_decay_starting_step) / lr_decay_steps))
+                    / 2
+                )
+            elif lr_scheduler_args.lr_decay_style == "linear":
+                lmbda = (
+                    lr_scheduler_args.min_decay_lr
+                    + (lr - lr_scheduler_args.min_decay_lr)
+                    * (lr_decay_steps - (current_step - lr_decay_starting_step))
+                    / lr_decay_steps
+                )
+            else:
+                raise ValueError(f"Unknown decay style {lr_scheduler_args.lr_decay_style}")
+
+        # Optional constant phase at min_decay_lr
+        else:
+            lmbda = lr_scheduler_args.min_decay_lr
+
+        lmbda /= lr  # Normalization for pytorch
+        return lmbda
+
+    def get_lr_lambda_for_param_group(lr: float):
+        from functools import partial
+        return partial(lr_lambda, lr=lr)
+    
     if lr_scheduler_args.lr_decay_steps is None:
         lr_decay_steps = total_training_steps
         if lr_scheduler_args.lr_warmup_steps is not None:
@@ -91,62 +150,72 @@ def lr_scheduler_builder(optimizer: Optimizer, lr_scheduler_args: LRSchedulerArg
     else:
         lr_decay_starting_step = lr_scheduler_args.lr_decay_starting_step
 
-    def lr_lambda(current_step: int):
-        """LR Scheduling function, it has from 2 up to 4 phases:
-        - warmup,
-        - optional: constant (if lr_decay_starting_step is set)
-        - decay
-        - optional: constant (if lr_decay_steps and/or lr_decay_starting_step are set)
-        Warmup starts at lr=0 and ends at `lr=lr`
-        Then it stays constant at lr if lr_decay_starting_step is set and larger than lr_warmup_steps
-        Then it decays until `min_decay_lr` for lr_decay_steps if set, else: (total_training_steps - lr_warmup_steps or lr_decay_starting_step)
-        Then it stays constant at min_decay_lr if lr_decay_starting_step is set and total_training_steps is larger)
-        """
-        # No warmup or decay
-        if lr_scheduler_args.lr_warmup_steps == 0 and lr_decay_steps == 0:
-            return lr_scheduler_args.learning_rate
+    lr_scheduler = LambdaLR(optimizer.get_base_optimizer(), lr_lambda=partial(lr_lambda, lr=lr_scheduler_args.learning_rate))
 
-        # Warmup phase
-        elif lr_scheduler_args.lr_warmup_style is not None and current_step <= lr_scheduler_args.lr_warmup_steps:
-            if lr_scheduler_args.lr_warmup_style == "linear":
-                lmbda = lr_scheduler_args.learning_rate * current_step / max(lr_scheduler_args.lr_warmup_steps, 1)
-            elif lr_scheduler_args.lr_warmup_style == "constant":
-                lmbda = lr_scheduler_args.learning_rate
-            else:
-                raise ValueError(f"Unknown warmup style {lr_scheduler_args.lr_warmup_style}")
+    # # NOTE: because we have two group of parameters in spectral µTransfer
+    # assert len(optimizer.get_base_optimizer().param_groups) == 2
 
-        # Optional constant phase at learning_rate
-        elif current_step < lr_decay_starting_step:
-            lmbda = lr_scheduler_args.learning_rate
+    # # NOTE: get learning rate scheduler for each param group
+    # lr_lambdas = []
+    # for param_group in optimizer.get_base_optimizer().param_groups:
+    #     lr_lambdas.append(get_lr_lambda_for_param_group(lr=param_group["lr"]))
 
-        # Decay phase
-        elif lr_scheduler_args.lr_decay_style is not None and current_step < lr_decay_starting_step + lr_decay_steps:
-            if lr_scheduler_args.lr_decay_style == "cosine":
-                lmbda = (
-                    lr_scheduler_args.min_decay_lr
-                    + (lr_scheduler_args.learning_rate - lr_scheduler_args.min_decay_lr)
-                    * (1 + math.cos(math.pi * (current_step - lr_decay_starting_step) / lr_decay_steps))
-                    / 2
-                )
-            elif lr_scheduler_args.lr_decay_style == "linear":
-                lmbda = (
-                    lr_scheduler_args.min_decay_lr
-                    + (lr_scheduler_args.learning_rate - lr_scheduler_args.min_decay_lr)
-                    * (lr_decay_steps - (current_step - lr_decay_starting_step))
-                    / lr_decay_steps
-                )
-            else:
-                raise ValueError(f"Unknown decay style {lr_scheduler_args.lr_decay_style}")
-
-        # Optional constant phase at min_decay_lr
-        else:
-            lmbda = lr_scheduler_args.min_decay_lr
-
-        lmbda /= lr_scheduler_args.learning_rate  # Normalization for pytorch
-        return lmbda
-
-    lr_scheduler = LambdaLR(optimizer.get_base_optimizer(), lr_lambda=lr_lambda)
+    # lr_scheduler = LambdaLR(optimizer.get_base_optimizer(), lr_lambda=lr_lambdas)
+    
     return lr_scheduler
+
+
+from typing import Any
+
+
+# # TODO(xrsrke): refactor
+# def group_parameters_by_linear_type(
+#     named_parameters: List[Tuple[str, torch.Tensor]],
+#     model: NanotronModel,
+#     config: OptimizerArgs,
+# ) -> List[Dict[str, Any]]:
+#     named_parameters_by_linear_type = {}
+#     for name, param in named_parameters:
+#         # NOTE: remove .weight and .bias from the name
+#         module_name = name.rsplit(".", 1)[0]
+#         module = model.get_submodule(module_name)
+#         linear_type = getattr(module, "linear_type", None)
+
+#         if linear_type not in named_parameters_by_linear_type:
+#             named_parameters_by_linear_type[linear_type] = []
+
+#         named_parameters_by_linear_type[linear_type].append((name, param))
+
+#     assert len(named_parameters) == sum(
+#         len(v) for v in named_parameters_by_linear_type.values()
+#     ), "Missing some named parameters"
+
+#     from nanotron.scaling import WeightType
+
+#     fan_in = model.config.hidden_size
+#     LINEAR_TYPE_TO_LR = {
+#         WeightType.INPUT_WEIGHTS: config.learning_rate_scheduler.learning_rate,
+#         WeightType.HIDDEN_WEIGHTS: config.learning_rate_scheduler.learning_rate / fan_in,
+#         WeightType.OUTPUT_WEIGHTS: config.learning_rate_scheduler.learning_rate,
+#     }
+#     LINEAR_TYPE_TO_WD = {
+#         WeightType.INPUT_WEIGHTS: config.weight_decay,
+#         WeightType.HIDDEN_WEIGHTS: config.weight_decay * fan_in,
+#         WeightType.OUTPUT_WEIGHTS: config.weight_decay,
+#     }
+
+#     named_param_groups = []
+#     # NOTE: now format it to [{"named_params": [(name, param)], "lr": lr}, ...]
+#     for linear_type, named_params in named_parameters_by_linear_type.items():
+#         named_param_groups.append(
+#             {
+#                 "named_params": named_params,
+#                 "lr": LINEAR_TYPE_TO_LR[linear_type],
+#                 "weight_decay": LINEAR_TYPE_TO_WD[linear_type],
+#             }
+#         )
+
+#     return named_param_groups
 
 
 def init_optimizer_and_grad_accumulator(
@@ -175,7 +244,7 @@ def init_optimizer_and_grad_accumulator(
             named_parameters["no_decay"].append((full_name, param))
         else:
             named_parameters["decay"].append((full_name, param))
-
+    
     # Basic optimizer builder
     def basic_optimizer_builder(named_param_groups):
         return NamedOptimizer(
@@ -188,6 +257,7 @@ def init_optimizer_and_grad_accumulator(
                 betas=(optimizer_args.adam_beta1, optimizer_args.adam_beta2),
                 fused=optimizer_args.torch_adam_is_fused,
             ),
+            param_name_to_lr_scaling=model.param_name_to_lr_scaling
         )
 
     optimizer_builder = basic_optimizer_builder

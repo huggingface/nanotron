@@ -13,7 +13,10 @@ class NamedOptimizer(InheritFromOtherOptimizer):
         named_params_or_groups: Iterable[Union[Tuple[str, torch.Tensor], Dict[str, Any]]],
         optimizer_builder: Callable[[Iterable[Dict[str, Any]]], torch.optim.Optimizer],
         weight_decay: float = 0.0,
+        param_name_to_lr_scaling = None,
     ):
+        assert param_name_to_lr_scaling is not None
+        
         id_to_name_decay, id_to_name_no_decay = {}, {}
 
         # Don't need to check that param_groups are overlapping since the optimizer will do it for me.
@@ -47,7 +50,77 @@ class NamedOptimizer(InheritFromOtherOptimizer):
                 # https://github.com/pytorch/pytorch/issues/100701
                 assert param.numel() > 0
 
-        super().__init__(optimizer=optimizer_builder(params), id_to_name=id_to_name)
+        # NOTE: further separate parameters if its name is in model.param_name_to_lr_scaling
+        # mup_params = []
+        # for param_group in params:
+        #     for p in param_group["params"]:
+        #         name = id_to_name[id(p)]
+        #         non_mup_params = []
+                
+        #         if name in param_name_to_lr_scaling:
+        #             # NOTE: **param_group except "params" 
+        #             optim_hyerparameters = {k: v for k, v in param_group.items() if k != 'params'}
+        #             mup_params.append({"params": [p], "lr": param_name_to_lr_scaling[name], **optim_hyerparameters})
+        #             param_group["params"].remove(p)
+        #         else:
+        #             non_mup_params.append(p)
+        
+        num_orig_params = sum([len(param_group["params"]) for param_group in params])
+        
+        # merged_params = []
+        # for param_group in params:
+        #     mup_group = {"params": []}
+        #     non_mup_group = {"params": []}
+            
+        #     for p in param_group["params"]:
+        #         name = id_to_name[id(p)]
+                
+        #         if name in param_name_to_lr_scaling:
+        #             optim_hyperparameters = {k: v for k, v in param_group.items() if k != 'params'}
+        #             mup_group["params"].append(p)
+        #             mup_group.update(optim_hyperparameters)
+        #             mup_group["lr"] = param_name_to_lr_scaling[name]
+        #         else:
+        #             non_mup_group["params"].append(p)
+            
+        #     if mup_group["params"]:
+        #         merged_params.append(mup_group)
+            
+        #     if non_mup_group["params"]:
+        #         non_mup_group.update({k: v for k, v in param_group.items() if k != 'params'})
+        #         merged_params.append(non_mup_group)
+        
+        print("merging parameters for mup")
+        assert len(param_name_to_lr_scaling) > 0
+        print(param_name_to_lr_scaling)
+
+        merged_params = []
+        for param_group in params:
+            non_mup_params = []
+            
+            for p in param_group["params"]:
+                name = id_to_name[id(p)]
+                print(f"param name: {name}")
+                
+                if name in param_name_to_lr_scaling:
+                    mup_group = {k: v for k, v in param_group.items() if k != 'params'}
+                    mup_group["params"] = [p]
+                    mup_group["lr"] = param_name_to_lr_scaling[name]
+                    merged_params.append(mup_group)
+                else:
+                    non_mup_params.append(p)
+            
+            if non_mup_params:
+                non_mup_group = {k: v for k, v in param_group.items() if k != 'params'}
+                non_mup_group["params"] = non_mup_params
+                merged_params.append(non_mup_group)
+                            
+        # NOTE: sanity check that mup_params has the same number of parameters as params
+        num_mum_params = sum([len(param_group["params"]) for param_group in merged_params])
+        assert num_orig_params == num_mum_params, f"Number of parameters in mup_params ({num_mum_params}) is not equal to the number of parameters in params ({num_orig_params})"
+        
+        print(f"merged_params has {len(merged_params)} groups")
+        super().__init__(optimizer=optimizer_builder(merged_params), id_to_name=id_to_name)
 
     def state_dict(self) -> dict:
         optim_state_dict = super().state_dict()
