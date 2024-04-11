@@ -49,7 +49,7 @@ from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelRowLinear,
 )
 from nanotron.random import RandomStates
-from nanotron.scaling import WeightType, init_weight_using_mu_transfer
+from nanotron.scaling import WeightType
 from nanotron.utils import checkpoint_method
 
 logger = logging.get_logger(__name__)
@@ -924,8 +924,21 @@ class LlamaForTraining(NanotronModel):
         # Fix the root_model
         module_id_to_prefix[id(model)] = ""
 
-        std = config.model.init_method.std
-        sigma = config.model.init_method.std
+        # TODO(xrsrke): refactor this
+        INIT_TYPE = "sp"
+
+        if INIT_TYPE == "sp":
+            std = config.model.init_method.std
+            sigma = config.model.init_method.std
+            # MODULE_TO_STD_MAPPING = {
+            #     TensorParallelColumnLinear: std,
+            #     TensorParallelRowLinear: sigma / math.sqrt(2 * num_layers),
+            #     TensorParallelEmbedding: std,
+            # }
+
+        elif INIT_TYPE == "mup":
+            std = 1
+
         num_layers = config.model.model_config.num_hidden_layers
 
         for param_name, param in model.named_parameters():
@@ -947,139 +960,35 @@ class LlamaForTraining(NanotronModel):
 
             module = model.get_submodule(module_name)
 
-            hidden_size = config.model.model_config.hidden_size
-
             if isinstance(module, TensorParallelColumnLinear):
                 if "weight" == param_name:
-
-                    def default():
-                        return torch.nn.init.normal_(module.weight, mean=0.0, std=std)
-
-                    if hasattr(module, "linear_type"):
-                        init_weight_using_mu_transfer(
-                            module.weight,
-                            name="weight",
-                            hidden_size=hidden_size,
-                            linear_type=module.linear_type,
-                            default=default,
-                        )
-                    else:
-                        default()
+                    nn.init.normal_(module.weight, mean=0.0, std=std)
                 elif "bias" == param_name:
-
-                    def default():
-                        return module.bias.zero_()
-
-                    if hasattr(module, "linear_type"):
-                        init_weight_using_mu_transfer(
-                            module.bias,
-                            name="bias",
-                            hidden_size=hidden_size,
-                            linear_type=module.linear_type,
-                            default=default,
-                        )
-                    else:
-                        default()
+                    module.bias.zero_()
                 else:
                     raise ValueError(f"Who the fuck is {param_name}?")
-
             elif isinstance(module, TensorParallelRowLinear):
                 if "weight" == param_name:
-
-                    def default():
-                        return torch.nn.init.normal_(module.weight, mean=0.0, std=sigma / math.sqrt(2 * num_layers))
-
-                    if hasattr(module, "linear_type"):
-                        init_weight_using_mu_transfer(
-                            module.weight,
-                            name="weight",
-                            hidden_size=hidden_size,
-                            linear_type=module.linear_type,
-                            default=default,
-                        )
-                    else:
-                        default()
+                    nn.init.normal_(module.weight, mean=0.0, std=sigma / math.sqrt(2 * num_layers))
                 elif "bias" == param_name:
-
-                    def default():
-                        return param.zero_()
-
-                    if hasattr(module, "linear_type"):
-                        init_weight_using_mu_transfer(
-                            param,
-                            name="bias",
-                            hidden_size=hidden_size,
-                            linear_type=module.linear_type,
-                            default=default,
-                        )
-                    else:
-                        default()
+                    param.zero_()
                 else:
                     raise ValueError(f"Who the fuck is {param_name}?")
             elif isinstance(module, TritonRMSNorm):
                 if "weight" == param_name:
                     # TODO @thomasw21: Sometimes we actually want 0
-                    def default():
-                        return module.weight.fill_(1)
-
-                    if hasattr(module, "linear_type"):
-                        init_weight_using_mu_transfer(
-                            module.weight,
-                            name="weight",
-                            hidden_size=hidden_size,
-                            linear_type=module.linear_type,
-                            default=default,
-                        )
-                    else:
-                        default()
+                    module.weight.fill_(1)
                 elif "bias" == param_name:
-
-                    def default():
-                        return module.bias.zero_()
-
-                    if hasattr(module, "linear_type"):
-                        init_weight_using_mu_transfer(
-                            module.bias,
-                            name="bias",
-                            hidden_size=hidden_size,
-                            linear_type=module.linear_type,
-                            default=default,
-                        )
-                    else:
-                        default()
+                    module.bias.zero_()
                 else:
                     raise ValueError(f"Who the fuck is {param_name}?")
             elif isinstance(module, TensorParallelEmbedding):
-
-                def default():
-                    return nn.init.normal_(module.weight, mean=0.0, std=std)
-
-                if hasattr(module, "linear_type"):
-                    init_weight_using_mu_transfer(
-                        module.weight,
-                        name="weight",
-                        hidden_size=hidden_size,
-                        linear_type=module.linear_type,
-                        default=default,
-                    )
-                else:
-                    default()
+                nn.init.normal_(module.weight, mean=0.0, std=std)
             else:
                 raise Exception(f"Parameter {full_param_name} was not initialized")
 
             assert full_param_name not in initialized_parameters
             initialized_parameters.add(full_param_name)
-
-        from nanotron.scaling import _get_leaf_modules
-
-        leaf_modules = _get_leaf_modules(model)
-
-        fan_in = config.model.model_config.hidden_size
-
-        for _, module in leaf_modules:
-            if hasattr(module, "linear_type"):
-                if module.linear_type == WeightType.OUTPUT_WEIGHTS:
-                    module.register_forward_hook(lambda module, input, output: output * (1 / fan_in))
 
         assert initialized_parameters == {
             param.get_tied_info().get_full_name_from_module_id_to_prefix(module_id_to_prefix=module_id_to_prefix)

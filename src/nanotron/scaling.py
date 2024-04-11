@@ -117,8 +117,6 @@ def init_weight_for_output_weights(weight, hidden_size):
 # }
 
 
-
-
 def input_weight_hook(module, input, output):
     return output * 1
 
@@ -162,7 +160,6 @@ def parametrize_using_mu_transfer(model: nn.Module, config: Config, parallel_con
     #         # NOTE: qkv don't have bias
     #         if module.bias is not None:
     #             assert 1 == 1
-
 
     # def input_weight_hook(module, input, output):
     #     return output * 1
