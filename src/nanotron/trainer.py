@@ -31,6 +31,7 @@ from nanotron.config import (
     ExistingCheckpointInit,
     ParallelismArgs,
     RandomInit,
+    SpectralMupInit,
     get_config_from_file,
 )
 from nanotron.dataloader import sanity_check_dataloader
@@ -78,6 +79,7 @@ from nanotron.sanity_checks import (
     before_optim_step_sanity_checks,
     before_tbi_sanity_checks,
 )
+from nanotron.scaling.parametrization import ParametrizationMethod
 from nanotron.serialize import (
     load_lr_scheduler,
     load_meta,
@@ -652,21 +654,17 @@ class DistributedTrainer:
                     parallel_context=self.parallel_context,
                     root_folder=self.config.model.init_method.path,
                 )
-            elif isinstance(self.config.model.init_method, RandomInit):
-
-                unwrapped_model.init_model_randomly(config=self.config)
-
-                # from nanotron.scaling import parametrize_using_mu_transfer
-
-                # model.module = parametrize_using_mu_transfer(
-                #     model.module, config=self.config, parallel_context=self.parallel_context
-                # )
-
-                # assert 1 == 1
+            elif isinstance(self.config.model.init_method, (RandomInit, SpectralMupInit)):
+                _init_method = (
+                    ParametrizationMethod.STANDARD
+                    if isinstance(self.config.model.init_method, RandomInit)
+                    else ParametrizationMethod.SPECTRAL_MUP
+                )
+                unwrapped_model.init_model_randomly(config=self.config, init_method=_init_method)
 
                 # Synchronize parameters so that the model is consistent
                 # sync all params across dp
-                for name, param in sorted(model.named_parameters(), key=lambda x: x[0]):
+                for _, param in sorted(model.named_parameters(), key=lambda x: x[0]):
                     dist.all_reduce(param, op=dist.ReduceOp.AVG, group=self.parallel_context.dp_pg)
 
                 # sync tied params across tied groups

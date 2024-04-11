@@ -9,6 +9,14 @@ class RandomInit:
 
 
 @dataclass
+class SpectralMupInit:
+    use_mup: bool
+
+    def __post_init__(self):
+        assert self.use_mup, "You should only call use_mup if you want to use it"
+
+
+@dataclass
 class ExistingCheckpointInit:
     """This is used to initialize from an already existing model (without optimizer, lr_scheduler...)"""
 

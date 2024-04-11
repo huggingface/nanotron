@@ -27,7 +27,7 @@ from torch import nn
 
 from nanotron import distributed as dist
 from nanotron import logging
-from nanotron.config import LlamaConfig, ParallelismArgs
+from nanotron.config import Config, LlamaConfig, ParallelismArgs
 from nanotron.generation.generate_store import AttachableStore
 from nanotron.logging import log_rank
 from nanotron.models import NanotronModel
@@ -45,7 +45,7 @@ from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelRowLinear,
 )
 from nanotron.random import RandomStates
-from nanotron.scaling.parametrization import StandardParametrizator
+from nanotron.scaling.parametrization import ParametrizationMethod, SpectralMupParametrizator, StandardParametrizator
 from nanotron.utils import checkpoint_method
 
 logger = logging.get_logger(__name__)
@@ -971,22 +971,29 @@ class LlamaForTraining(NanotronModel):
     #     }, f"Somehow the initialized set of parameters don't match:\n - Expected: { {name for name, _ in model.named_parameters()} }\n - Got: {initialized_parameters}"
 
     @torch.no_grad()
-    def init_model_randomly(self, config):
+    def init_model_randomly(self, config: Config, init_method: ParametrizationMethod):
         """Initialize model parameters randomly.
         Note:
             Layernorm weight all 0 or 1 depending on `apply_layernorm_1p`
         """
+        INIT_TYPE_TO_PARAMETRIZATOR = {
+            ParametrizationMethod.STANDARD: StandardParametrizator,
+            ParametrizationMethod.SPECTRAL_MUP: SpectralMupParametrizator,
+        }
+        parametrizator = INIT_TYPE_TO_PARAMETRIZATOR[init_method](config=config.model)
+
+        log_rank(
+            f"Parametrizing model parameters using {parametrizator.__class__.__name__}",
+            logger=logger,
+            level=logging.INFO,
+        )
+
         model = self
         initialized_parameters = set()
         # Handle tensor parallelism
         module_id_to_prefix = {id(module): f"{module_name}." for module_name, module in model.named_modules()}
         # Fix the root_model
         module_id_to_prefix[id(model)] = ""
-
-        # std = config.model.init_method.std
-        # num_layers = config.model.model_config.num_hidden_layers
-
-        parametrizator = StandardParametrizator(config=config.model)
 
         for param_name, param in model.named_parameters():
             assert isinstance(param, NanotronParameter)
