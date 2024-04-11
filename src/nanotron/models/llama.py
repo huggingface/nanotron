@@ -32,7 +32,11 @@ from nanotron.config import LlamaConfig, ParallelismArgs
 from nanotron.generation.generate_store import AttachableStore
 from nanotron.logging import log_rank
 from nanotron.models import NanotronModel
-from nanotron.models.moe import dMoE
+from nanotron.models.moe import (
+    batched_load_balancing_loss,
+    clear_load_balancing_stats,
+    dMoE,
+)
 from nanotron.nn.activations import ACT2FN
 from nanotron.nn.layer_norm import TritonRMSNorm
 from nanotron.parallel import ParallelContext
@@ -651,8 +655,8 @@ class LlamaDecoderLayer(nn.Module):
 
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
-        hidden_states = self.mlp(hidden_states=hidden_states)["hidden_states"]
-        hidden_states = hidden_states + residual
+        mlp_output = self.mlp(hidden_states=hidden_states)
+        hidden_states = mlp_output["hidden_states"] + residual
 
         return {
             "hidden_states": hidden_states,
@@ -928,8 +932,12 @@ class LlamaForTraining(NanotronModel):
             sharded_logits=sharded_logits,
             label_ids=label_ids,
             label_mask=label_mask,
-        )["loss"]
-        return {"loss": loss}
+        )
+        if self.config.moe_num_experts > 1:
+            aux_loss = batched_load_balancing_loss(self.config, self.parallel_context.pp_pg.size())
+            loss["load_balancing_loss"] = aux_loss
+            clear_load_balancing_stats()
+        return loss
 
     @torch.no_grad()
     def init_model_randomly(self, config):

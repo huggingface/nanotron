@@ -2,6 +2,9 @@ from abc import ABC, abstractmethod
 from typing import Dict, Iterable, Optional, Union
 
 import torch
+from torch import nn as torch_nn
+from torch.nn.parallel import DistributedDataParallel
+
 from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.distributed import ProcessGroup
@@ -12,8 +15,6 @@ from nanotron.parallel.pipeline_parallel.context_manager import attach_pipeline_
 from nanotron.parallel.pipeline_parallel.state import PipelineTrainBatchState
 from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
 from nanotron.utils import ContextManagers
-from torch import nn as torch_nn
-from torch.nn.parallel import DistributedDataParallel
 
 logger = logging.get_logger(__name__)
 
@@ -49,8 +50,12 @@ class PipelineEngine(ABC):
 
         # We normalize our loss
         if not isinstance(output["loss"], TensorPointer):
-            output["loss"] = output["loss"] / self.nb_microbatches
-
+            output = {k: v / self.nb_microbatches for k, v in output.items()}
+            if len(output) > 1:
+                output["original_loss"] = output["loss"].clone().detach()
+                for k, v in output.items():
+                    if k != "loss" and k != "original_loss":
+                        output["loss"] += v
         # Add output as activations that require backward pass
         if not isinstance(output["loss"], TensorPointer):
             assert output["loss"].requires_grad
@@ -65,7 +70,10 @@ class PipelineEngine(ABC):
         return context
 
     def backward(
-        self, context: ContextManagers, state: PipelineTrainBatchState, grad_accumulator: Optional[GradientAccumulator]
+        self,
+        context: ContextManagers,
+        state: PipelineTrainBatchState,
+        grad_accumulator: Optional[GradientAccumulator],
     ):
         # Increment the number of backwards
         state.nb_backwards += 1

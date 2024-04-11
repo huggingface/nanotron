@@ -43,6 +43,7 @@ class LlamaConfig:
     # MoE specific
     moe_num_experts: int = 1
     num_experts_per_tok: int = 1
+    moe_loss_weight: float = 0.01
 
     def __post_init__(self):
         # for backward compatibility
