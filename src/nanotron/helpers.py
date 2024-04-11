@@ -6,7 +6,7 @@ import os
 import time
 from datetime import datetime
 from math import ceil
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -145,6 +145,8 @@ def lr_scheduler_builder(optimizer: Optimizer, lr_scheduler_args: LRSchedulerArg
         lmbda /= lr  # Normalization for pytorch
         return lmbda
 
+    from functools import partial
+
     # def get_lr_lambda_for_param_group(lr: float):
     #     from functools import partial
     #     return partial(lambda current_step: lr_lambda(current_step), lr=lr)
@@ -155,65 +157,68 @@ def lr_scheduler_builder(optimizer: Optimizer, lr_scheduler_args: LRSchedulerArg
         return partial(lr_lambda, lr=lr)
 
     # NOTE: because we have two group of parameters in spectral µTransfer
-    assert len(optimizer.get_base_optimizer().param_groups) == 3
+    # assert len(optimizer.get_base_optimizer().param_groups) == 3
 
-    # NOTE: get learning rate scheduler for each param group
-    lr_lambdas = []
-    for param_group in optimizer.get_base_optimizer().param_groups:
-        lr_lambdas.append(get_lr_lambda_for_param_group(lr=param_group["lr"]))
+    # # NOTE: get learning rate scheduler for each param group
+    # lr_lambdas = []
+    # for param_group in optimizer.get_base_optimizer().param_groups:
+    #     lr_lambdas.append(get_lr_lambda_for_param_group(lr=param_group["lr"]))
 
-    lr_scheduler = LambdaLR(optimizer.get_base_optimizer(), lr_lambda=lr_lambdas)
+    # lr_scheduler = LambdaLR(optimizer.get_base_optimizer(), lr_lambda=lr_lambdas)
+    lr_scheduler = LambdaLR(
+        optimizer.get_base_optimizer(), lr_lambda=partial(lr_lambda, lr=lr_scheduler_args.learning_rate)
+    )
     return lr_scheduler
 
 
-# TODO(xrsrke): refactor
-def group_parameters_by_linear_type(
-    named_parameters: List[Tuple[str, torch.Tensor]],
-    model: NanotronModel,
-    config: OptimizerArgs,
-) -> List[Dict[str, Any]]:
-    named_parameters_by_linear_type = {}
-    for name, param in named_parameters:
-        # NOTE: remove .weight and .bias from the name
-        module_name = name.rsplit(".", 1)[0]
-        module = model.get_submodule(module_name)
-        linear_type = getattr(module, "linear_type", None)
+# # TODO(xrsrke): refactor
+# def group_parameters_by_linear_type(
+#     named_parameters: List[Tuple[str, torch.Tensor]],
+#     model: NanotronModel,
+#     config: OptimizerArgs,
+# ) -> List[Dict[str, Any]]:
+#     named_parameters_by_linear_type = {}
+#     for name, param in named_parameters:
+#         # NOTE: remove .weight and .bias from the name
+#         module_name = name.rsplit(".", 1)[0]
+#         module = model.get_submodule(module_name)
+#         linear_type = getattr(module, "linear_type", None)
 
-        if linear_type not in named_parameters_by_linear_type:
-            named_parameters_by_linear_type[linear_type] = []
+#         if linear_type not in named_parameters_by_linear_type:
+#             named_parameters_by_linear_type[linear_type] = []
 
-        named_parameters_by_linear_type[linear_type].append((name, param))
+#         named_parameters_by_linear_type[linear_type].append((name, param))
 
-    assert len(named_parameters) == sum(
-        len(v) for v in named_parameters_by_linear_type.values()
-    ), "Missing some named parameters"
+#     assert len(named_parameters) == sum(
+#         len(v) for v in named_parameters_by_linear_type.values()
+#     ), "Missing some named parameters"
 
-    from nanotron.scaling import WeightType
+#     from nanotron.scaling import WeightType
 
-    fan_in = model.config.hidden_size
-    LINEAR_TYPE_TO_LR = {
-        WeightType.INPUT_WEIGHTS: config.learning_rate_scheduler.learning_rate,
-        WeightType.HIDDEN_WEIGHTS: config.learning_rate_scheduler.learning_rate / fan_in,
-        WeightType.OUTPUT_WEIGHTS: config.learning_rate_scheduler.learning_rate,
-    }
-    LINEAR_TYPE_TO_WD = {
-        WeightType.INPUT_WEIGHTS: config.weight_decay,
-        WeightType.HIDDEN_WEIGHTS: config.weight_decay * fan_in,
-        WeightType.OUTPUT_WEIGHTS: config.weight_decay,
-    }
+#     fan_in = model.config.hidden_size
+#     LINEAR_TYPE_TO_LR = {
+#         WeightType.INPUT_WEIGHTS: config.learning_rate_scheduler.learning_rate,
+#         WeightType.HIDDEN_WEIGHTS: config.learning_rate_scheduler.learning_rate / fan_in,
+#         WeightType.OUTPUT_WEIGHTS: config.learning_rate_scheduler.learning_rate,
+#     }
+#     LINEAR_TYPE_TO_WD = {
+#         WeightType.INPUT_WEIGHTS: config.weight_decay,
+#         WeightType.HIDDEN_WEIGHTS: config.weight_decay * fan_in,
+#         WeightType.OUTPUT_WEIGHTS: config.weight_decay,
+#     }
 
-    named_param_groups = []
-    # NOTE: now format it to [{"named_params": [(name, param)], "lr": lr}, ...]
-    for linear_type, named_params in named_parameters_by_linear_type.items():
-        named_param_groups.append(
-            {
-                "named_params": named_params,
-                "lr": LINEAR_TYPE_TO_LR[linear_type],
-                "weight_decay": LINEAR_TYPE_TO_WD[linear_type],
-            }
-        )
+#     named_param_groups = []
+#     # NOTE: now format it to [{"named_params": [(name, param)], "lr": lr}, ...]
+#     for linear_type, named_params in named_parameters_by_linear_type.items():
+#         named_param_groups.append(
+#             {
+#                 "named_params": named_params,
+#                 "lr": LINEAR_TYPE_TO_LR[linear_type],
+#                 "weight_decay": LINEAR_TYPE_TO_WD[linear_type],
+#             }
+#         )
 
-    return named_param_groups
+#     return named_param_groups
 
 
 def init_optimizer_and_grad_accumulator(
@@ -227,7 +232,7 @@ def init_optimizer_and_grad_accumulator(
     module_id_to_prefix[id(unwrapped_model)] = ""
 
     named_parameters = list(unwrapped_model.get_named_params_with_correct_tied())
-    named_parameters = group_parameters_by_linear_type(named_parameters, unwrapped_model, optimizer_args)
+    # named_parameters = group_parameters_by_linear_type(named_parameters, unwrapped_model, optimizer_args)
 
     # Basic optimizer builder
     def basic_optimizer_builder(named_param_groups):
