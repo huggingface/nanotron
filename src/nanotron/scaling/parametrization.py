@@ -1,8 +1,9 @@
 import math
+from abc import abstractmethod
 from enum import Enum, auto
 
 import torch
-from nanotron.config import ModelArgs
+from nanotron.config import ModelArgs, OptimizerArgs
 from nanotron.nn.layer_norm import TritonRMSNorm
 from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelColumnLinear,
@@ -118,3 +119,41 @@ class SpectralMupParametrizator(Parametrizator):
         # NOTE: you're free to change the initialization of input embedding/lm head
         if "weight" == param_name:
             init.normal_(module.weight, mean=0.0, std=self.std)
+
+
+class LearningRateForParametrizator:
+    def __init__(self, config: OptimizerArgs):
+        self.config = config
+
+    @abstractmethod
+    def get_lr(self, param_name: str, module: nn.Module):
+        raise NotImplementedError
+
+
+class LearningRateForSP(LearningRateForParametrizator):
+    def get_lr(self, param_name: str, module: nn.Module):
+        return self.config.learning_rate_scheduler.learning_rate
+
+
+class LearningRateForSpectralMup(LearningRateForParametrizator):
+    def __init__(self, config: OptimizerArgs):
+        super().__init__(config)
+        self.MODULE_TO_PARAMETRIZE = {
+            TensorParallelColumnLinear: self._get_mup_lr,
+            TensorParallelRowLinear: self._get_mup_lr,
+            TritonRMSNorm: self._get_global_lr,
+            TensorParallelEmbedding: self._get_global_lr,
+        }
+
+    def _get_mup_lr(self, param_name: str, module: nn.Module):
+        assert param_name in ["weight", "bias"]
+        data = module.weight if param_name == "weight" else module.bias
+        lr = self.config.learning_rate_scheduler.learning_rate
+        fan_in, fan_out = init._calculate_fan_in_and_fan_out(data)
+        return lr * (fan_out / fan_in)
+
+    def _get_global_lr(self, param_name: str, module: nn.Module) -> float:
+        return self.config.learning_rate_scheduler.learning_rate
+
+    def get_lr(self, param_name: str, module: nn.Module) -> float:
+        return self.MODULE_TO_PARAMETRIZE[type(module)](param_name, module)
