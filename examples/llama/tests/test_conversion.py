@@ -1,13 +1,18 @@
+# ruff: noqa: E402
 import json
 
-import nanotron
 import pytest
 import torch
+from transformers import LlamaForCausalLM
+from utils import set_system_path
+
+set_system_path()
+
+import nanotron
 from nanotron.config import LlamaConfig as NanotronLlamaConfig
 from nanotron.models.base import init_on_device_and_dtype
 from nanotron.models.llama import LlamaForTraining
 from nanotron.parallel import ParallelContext
-from transformers import LlamaForCausalLM
 
 from examples.llama.convert_hf_to_nanotron import convert_checkpoint_and_save as convert_hf_to_nt_and_save
 from examples.llama.convert_hf_to_nanotron import convert_hf_to_nt
