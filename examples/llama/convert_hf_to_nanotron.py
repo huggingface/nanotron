@@ -10,8 +10,11 @@ from pathlib import Path
 
 import nanotron
 import torch
+import yaml
 from convert_weights import get_config_mapping, get_weight_mapping, load_nanotron_model
 from nanotron.config import LlamaConfig as NanotronLlamaConfig
+from nanotron.config.config import Config, GeneralArgs, ModelArgs, TokenizerArgs
+from nanotron.config.models_config import RandomInit
 from nanotron.models.llama import LlamaForTraining
 from transformers import LlamaConfig as HFLlamaConfig
 from transformers import LlamaForCausalLM
@@ -20,7 +23,6 @@ from transformers import LlamaForCausalLM
 def _handle_attention_block(
     q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, n_q_heads: int, n_kv_heads: int, d_qk: int
 ) -> torch.Tensor:
-
     # Huggingface Llama separates the q, k, v weights (as opposed to nanotron).
     # Furthermore, in the rotary embeddings in nanotron expects interleaved pairs of even
     # and odd dimensions GPT-J style, while the huggingface implementation expects
@@ -80,7 +82,7 @@ def convert_hf_to_nt(model_hf: LlamaForCausalLM, model_nt: LlamaForTraining, con
                 param_nt.copy_(param)
 
 
-def get_nt_config(config: HFLlamaConfig) -> NanotronLlamaConfig:
+def get_nanotron_config(config: HFLlamaConfig) -> NanotronLlamaConfig:
     """Converts a huggingface configuration to nanotron configuration."""
     attrs = {key: getattr(config, value) for key, value in get_config_mapping(nt_to_hf=True).items()}
     return NanotronLlamaConfig(**attrs)
@@ -95,7 +97,7 @@ def convert_checkpoint_and_save(checkpoint_path: Path, save_path: Path):
     hf_model = LlamaForCausalLM.from_pretrained(checkpoint_path)
 
     # Init nanotron model.
-    model_config = get_nt_config(hf_model.config)
+    model_config = get_nanotron_config(hf_model.config)
     nanotron_model = load_nanotron_model(model_config=model_config)
 
     # Copy weights and save model.
@@ -106,6 +108,25 @@ def convert_checkpoint_and_save(checkpoint_path: Path, save_path: Path):
     nanotron.serialize.save_weights(model=nanotron_model, parallel_context=parallel_context, root_folder=save_path)
     with open(save_path / "model_config.json", "w+") as f:
         json.dump(vars(model_config), f)
+    parallel_config = nanotron.config.ParallelismArgs(
+        dp=1,
+        pp=1,
+        tp=1,
+        pp_engine=nanotron.config.AllForwardAllBackwardPipelineEngine(),
+        tp_mode=nanotron.config.TensorParallelLinearMode.ALL_REDUCE,
+        tp_linear_async_communication=False,
+    )
+    with open(save_path / "config.yaml", "w") as f:
+        config = Config(
+            general=GeneralArgs(project="test", run="llama"),
+            parallelism=parallel_config,
+            model=ModelArgs(
+                init_method=RandomInit(std=0.2),
+                model_config=model_config,
+            ),
+            tokenizer=TokenizerArgs(checkpoint_path),
+        )
+        yaml.dump(config.as_dict(), f)
     print(f"Model saved to {save_path}")
 
 
