@@ -14,8 +14,9 @@
 # limitations under the License.
 """ PyTorch LLaMa model.
 """
-from typing import Dict, Optional, Union
 import math
+from typing import Dict, Optional, Union
+
 import torch
 from flash_attn import bert_padding
 from flash_attn.flash_attn_interface import (
@@ -31,6 +32,7 @@ from nanotron.config import LlamaConfig, ParallelismArgs
 from nanotron.generation.generate_store import AttachableStore
 from nanotron.logging import log_rank
 from nanotron.models import NanotronModel
+from nanotron.models.moe import dMoE
 from nanotron.nn.activations import ACT2FN
 from nanotron.nn.layer_norm import TritonRMSNorm
 from nanotron.parallel import ParallelContext
@@ -181,7 +183,12 @@ class MLP(nn.Module):
 
 
 class CoreAttention(nn.Module):
-    def __init__(self, config: LlamaConfig, parallel_config: Optional[ParallelismArgs], layer_idx: int):
+    def __init__(
+        self,
+        config: LlamaConfig,
+        parallel_config: Optional[ParallelismArgs],
+        layer_idx: int,
+    ):
         super().__init__()
         # TODO @thomasw21: GPT has a weird `d_kv` config which I'm guessing is essentically a `d_qkv`
         assert (
@@ -202,10 +209,28 @@ class CoreAttention(nn.Module):
         kv_sequence_mask: torch.Tensor,  # torch.BoolTensor [batch_size, kv_length] (can be broadcasted to that size)
     ):
         # TODO @thomasw21: Compute once, instead of computing for each layers.
-        cu_seqlens_q = torch.zeros((q_sequence_mask.shape[0] + 1), dtype=torch.int32, device=query_states.device)
-        cu_seqlens_k = torch.zeros((kv_sequence_mask.shape[0] + 1), dtype=torch.int32, device=query_states.device)
-        torch.cumsum(q_sequence_mask.sum(-1, dtype=torch.int32), dim=0, dtype=torch.int32, out=cu_seqlens_q[1:])
-        torch.cumsum(kv_sequence_mask.sum(-1, dtype=torch.int32), dim=0, dtype=torch.int32, out=cu_seqlens_k[1:])
+        cu_seqlens_q = torch.zeros(
+            (q_sequence_mask.shape[0] + 1),
+            dtype=torch.int32,
+            device=query_states.device,
+        )
+        cu_seqlens_k = torch.zeros(
+            (kv_sequence_mask.shape[0] + 1),
+            dtype=torch.int32,
+            device=query_states.device,
+        )
+        torch.cumsum(
+            q_sequence_mask.sum(-1, dtype=torch.int32),
+            dim=0,
+            dtype=torch.int32,
+            out=cu_seqlens_q[1:],
+        )
+        torch.cumsum(
+            kv_sequence_mask.sum(-1, dtype=torch.int32),
+            dim=0,
+            dtype=torch.int32,
+            out=cu_seqlens_k[1:],
+        )
 
         # TODO(kunhao): flash attn's causal means that the query can only attend to the keys before it. This is not
         # what we want if we are using kv cache. This is a hack as we always have q_length == 1 when using kv cache.
@@ -524,7 +549,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                     value_states,
                     rotary_cos=None,
                     rotary_sin=None,
-                    # TODO @nouamane: seems like this doesnt help to indicate padding in (for first iteration it's just 0)
+                    # TODO @nouamane: seems like this doesn't help to indicate padding in (for first iteration it's just 0)
                     cache_seqlens=position_offsets.contiguous(),
                     softmax_scale=None,
                     causal=True,
@@ -589,6 +614,7 @@ class LlamaDecoderLayer(nn.Module):
         self,
         config: LlamaConfig,
         parallel_config: Optional[ParallelismArgs],
+        parallel_context: ParallelContext,
         tp_pg: dist.ProcessGroup,
         layer_idx: int,
     ):
@@ -602,7 +628,14 @@ class LlamaDecoderLayer(nn.Module):
         )
 
         self.post_attention_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.mlp = MLP(config=config, parallel_config=parallel_config, tp_pg=tp_pg)
+        if config.moe_num_experts > 1:
+            self.mlp = dMoE(
+                config=config,
+                parallel_config=parallel_config,
+                parallel_context=parallel_context,
+            )
+        else:
+            self.mlp = MLP(config=config, parallel_config=parallel_config, tp_pg=tp_pg)
 
     def forward(
         self,
@@ -628,14 +661,19 @@ class LlamaDecoderLayer(nn.Module):
 
 
 class Embedding(nn.Module, AttachableStore):
-    def __init__(self, tp_pg: dist.ProcessGroup, config: LlamaConfig, parallel_config: Optional[ParallelismArgs]):
+    def __init__(
+        self,
+        tp_pg: dist.ProcessGroup,
+        config: LlamaConfig,
+        parallel_config: Optional[ParallelismArgs],
+    ):
         super().__init__()
         self.token_embedding = TensorParallelEmbedding(
             num_embeddings=config.vocab_size,
             embedding_dim=config.hidden_size,
             padding_idx=config.pad_token_id,
             pg=tp_pg,
-            mode=parallel_config.tp_mode if parallel_config is not None else TensorParallelLinearMode.ALL_REDUCE,
+            mode=(parallel_config.tp_mode if parallel_config is not None else TensorParallelLinearMode.ALL_REDUCE),
         )
         self.pg = tp_pg
 
@@ -699,6 +737,7 @@ class LlamaModel(nn.Module):
                         "config": config,
                         "parallel_config": parallel_config,
                         "tp_pg": parallel_context.tp_pg,
+                        "parallel_context": parallel_context,
                         "layer_idx": layer_idx,
                     },
                     module_input_keys={"hidden_states", "sequence_mask"},
@@ -711,7 +750,10 @@ class LlamaModel(nn.Module):
         self.final_layer_norm = PipelineBlock(
             p2p=self.p2p,
             module_builder=TritonRMSNorm,
-            module_kwargs={"hidden_size": config.hidden_size, "eps": config.rms_norm_eps},
+            module_kwargs={
+                "hidden_size": config.hidden_size,
+                "eps": config.rms_norm_eps,
+            },
             module_input_keys={"input"},
             module_output_keys={"hidden_states"},
         )  # TODO
@@ -830,7 +872,10 @@ class Loss(nn.Module):
         # Megatron by defaults cast everything in fp32. `--f16-lm-cross-entropy` is an option you can use to keep current precision.
         # https://github.com/NVIDIA/Megatron-LM/blob/f267e6186eae1d6e2055b412b00e2e545a8e896a/megatron/model/gpt_model.py#L38
         loss = sharded_cross_entropy(
-            sharded_logits, label_ids.transpose(0, 1).contiguous(), group=self.tp_pg, dtype=torch.float
+            sharded_logits,
+            label_ids.transpose(0, 1).contiguous(),
+            group=self.tp_pg,
+            dtype=torch.float,
         ).transpose(0, 1)
         # TODO @thomasw21: It's unclear what kind of normalization we want to do.
         loss = masked_mean(loss, label_mask, dtype=torch.float)
@@ -848,7 +893,11 @@ class LlamaForTraining(NanotronModel):
         random_states: Optional[RandomStates] = None,
     ):
         super().__init__()
-        self.model = LlamaModel(config=config, parallel_context=parallel_context, parallel_config=parallel_config)
+        self.model = LlamaModel(
+            config=config,
+            parallel_context=parallel_context,
+            parallel_config=parallel_config,
+        )
         self.loss = PipelineBlock(
             p2p=self.model.p2p,
             module_builder=Loss,
@@ -881,7 +930,7 @@ class LlamaForTraining(NanotronModel):
             label_mask=label_mask,
         )["loss"]
         return {"loss": loss}
-    
+
     @torch.no_grad()
     def init_model_randomly(self, config):
         """Initialize model parameters randomly.
@@ -898,12 +947,12 @@ class LlamaForTraining(NanotronModel):
         std = config.model.init_method.std
         sigma = config.model.init_method.std
         num_layers = config.model.model_config.num_hidden_layers
-        
+
         for param_name, param in model.named_parameters():
             assert isinstance(param, NanotronParameter)
-            
-            module_name, param_name = param_name.rsplit('.', 1)
-            
+
+            module_name, param_name = param_name.rsplit(".", 1)
+
             if param.is_tied:
                 tied_info = param.get_tied_info()
                 full_param_name = tied_info.get_full_name_from_module_id_to_prefix(
@@ -940,25 +989,40 @@ class LlamaForTraining(NanotronModel):
                     module.bias.zero_()
                 else:
                     raise ValueError(f"Who the fuck is {param_name}?")
+            elif isinstance(module, nn.Linear):
+                fan_in = None
+                if "weight" == param_name:
+                    fan_in, _ = torch.nn.init._calculate_fan_in_and_fan_out(module.weight)
+                    torch.nn.init.kaiming_uniform_(module.weight, a=math.sqrt(5))
+                elif "bias" == param_name:
+                    bound = 1 / math.sqrt(fan_in) if (fan_in is not None and fan_in > 0) else 0
+                    torch.nn.init.uniform_(module.bias, -bound, bound)
+                else:
+                    raise ValueError(f"Who the fuck is {param_name}?")
             elif isinstance(module, TensorParallelEmbedding):
                 nn.init.normal_(module.weight, mean=0.0, std=std)
             else:
-                raise Exception(f"Parameter {full_param_name} was not intialized")
+                raise Exception(f"Parameter {full_param_name} was not initialized")
 
             assert full_param_name not in initialized_parameters
             initialized_parameters.add(full_param_name)
-            
+
         assert initialized_parameters == {
-            param.get_tied_info().get_full_name_from_module_id_to_prefix(module_id_to_prefix=module_id_to_prefix)
-            if param.is_tied
-            else name
+            (
+                param.get_tied_info().get_full_name_from_module_id_to_prefix(module_id_to_prefix=module_id_to_prefix)
+                if param.is_tied
+                else name
+            )
             for name, param in model.named_parameters()
         }, f"Somehow the initialized set of parameters don't match:\n - Expected: { {name for name, _ in model.named_parameters()} }\n - Got: {initialized_parameters}"
 
     def get_embeddings_lm_head_tied_names(self):
         """Get the names of the tied embeddings and lm_head weights"""
         if self.config.tie_word_embeddings is True:
-            return ["model.token_position_embeddings.pp_block.token_embedding.weight", "model.lm_head.pp_block.weight"]
+            return [
+                "model.token_position_embeddings.pp_block.token_embedding.weight",
+                "model.lm_head.pp_block.weight",
+            ]
         else:
             return []
 
