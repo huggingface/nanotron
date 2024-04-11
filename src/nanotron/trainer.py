@@ -274,6 +274,18 @@ class DistributedTrainer:
         log_rank(full_log_message, logger=logger, level=logging.INFO, rank=0)
 
     def _update_dataloader_based_on_training_stages(self, dataloaders: List[DataLoader]):
+
+        if not hasattr(self.config, "data_stages") or self.config.data_stages is None:
+            if self.current_dataloader is None:
+                if isinstance(dataloaders, tuple):
+                    dataloader = dataloaders[0]
+                else:
+                    dataloader = dataloaders
+                self.current_dataloader = sanity_check_dataloader(
+                    dataloader=dataloader, parallel_context=self.parallel_context, config=self.config
+                )
+            return
+
         assert len(dataloaders) > 0, "No dataloaders provided"
         assert len(dataloaders) == len(
             self.config.data_stages
