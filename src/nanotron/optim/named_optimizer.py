@@ -50,49 +50,10 @@ class NamedOptimizer(InheritFromOtherOptimizer):
                 # https://github.com/pytorch/pytorch/issues/100701
                 assert param.numel() > 0
 
-        # NOTE: further separate parameters if its name is in model.param_name_to_lr_scaling
-        # mup_params = []
-        # for param_group in params:
-        #     for p in param_group["params"]:
-        #         name = id_to_name[id(p)]
-        #         non_mup_params = []
-                
-        #         if name in param_name_to_lr_scaling:
-        #             # NOTE: **param_group except "params" 
-        #             optim_hyerparameters = {k: v for k, v in param_group.items() if k != 'params'}
-        #             mup_params.append({"params": [p], "lr": param_name_to_lr_scaling[name], **optim_hyerparameters})
-        #             param_group["params"].remove(p)
-        #         else:
-        #             non_mup_params.append(p)
-        
         num_orig_params = sum([len(param_group["params"]) for param_group in params])
-        
-        # merged_params = []
-        # for param_group in params:
-        #     mup_group = {"params": []}
-        #     non_mup_group = {"params": []}
-            
-        #     for p in param_group["params"]:
-        #         name = id_to_name[id(p)]
-                
-        #         if name in param_name_to_lr_scaling:
-        #             optim_hyperparameters = {k: v for k, v in param_group.items() if k != 'params'}
-        #             mup_group["params"].append(p)
-        #             mup_group.update(optim_hyperparameters)
-        #             mup_group["lr"] = param_name_to_lr_scaling[name]
-        #         else:
-        #             non_mup_group["params"].append(p)
-            
-        #     if mup_group["params"]:
-        #         merged_params.append(mup_group)
-            
-        #     if non_mup_group["params"]:
-        #         non_mup_group.update({k: v for k, v in param_group.items() if k != 'params'})
-        #         merged_params.append(non_mup_group)
-        
         print("merging parameters for mup")
         assert len(param_name_to_lr_scaling) > 0
-        print(param_name_to_lr_scaling)
+        # print(param_name_to_lr_scaling)
 
         merged_params = []
         for param_group in params:
@@ -100,7 +61,6 @@ class NamedOptimizer(InheritFromOtherOptimizer):
             
             for p in param_group["params"]:
                 name = id_to_name[id(p)]
-                print(f"param name: {name}")
                 
                 if name in param_name_to_lr_scaling:
                     mup_group = {k: v for k, v in param_group.items() if k != 'params'}
