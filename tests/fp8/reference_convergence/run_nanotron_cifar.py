@@ -31,52 +31,99 @@ def l1_norm_diff(loss, ref_loss):
     return (loss - ref_loss).abs().mean()
 
 
-def get_dataloader():
-    import torchvision
-    import torchvision.transforms as transforms
+# def get_dataloader():
+#     import torchvision
+#     import torchvision.transforms as transforms
     
-    transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
+#     transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
 
-    trainset = torchvision.datasets.CIFAR10(root='./data', train=True, download=True, transform=transform)
-    trainloader = torch.utils.data.DataLoader(trainset, batch_size=16, shuffle=True, num_workers=2)
-    testset = torchvision.datasets.CIFAR10(root='./data', train=False, download=True, transform=transform)
-    testloader = torch.utils.data.DataLoader(testset, batch_size=4, shuffle=False, num_workers=2)
+#     trainset = torchvision.datasets.CIFAR10(root='./data', train=True, download=True, transform=transform)
+#     trainloader = torch.utils.data.DataLoader(trainset, batch_size=16, shuffle=True, num_workers=2)
+#     testset = torchvision.datasets.CIFAR10(root='./data', train=False, download=True, transform=transform)
+#     testloader = torch.utils.data.DataLoader(testset, batch_size=4, shuffle=False, num_workers=2)
 
-    classes = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
+#     classes = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
     
-    return trainloader, testloader
+#     return trainloader, testloader
 
+
+def get_cifar_dataloader(batch_size):
+    from torchvision import datasets, transforms
+    import torch
+    
+    transform = transforms.Compose(
+        [transforms.ToTensor(),
+        transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
+
+    trainset = datasets.CIFAR10(root="./", train=True,
+                                            download=True, transform=transform)
+    train_loader = torch.utils.data.DataLoader(trainset, batch_size=batch_size,
+                                            shuffle=False, num_workers=2)
+
+    testset = datasets.CIFAR10(root="./", train=False,
+                                        download=True, transform=transform)
+    test_loader = torch.utils.data.DataLoader(testset, batch_size=batch_size,
+                                            shuffle=False, num_workers=2)
+
+    classes = ('plane', 'car', 'bird', 'cat',
+            'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
+    
+    return classes, train_loader, test_loader
+
+
+
+
+# def compute_ce_loss(batch, model, prefix):
+#     import torch.nn.functional as F
+#     input, target = batch
+#     input = input.view(input.size(0), -1)
+#     output = model(input)
+#     return F.cross_entropy(output, target)
+
+
+
+# class Net(nn.Module):
+#     """Define a Convolutional Neural Network."""
+#     def __init__(self):
+#         """Constructor."""
+#         super(Net, self).__init__()
+#         # self.conv1 = nn.Conv2d(3, 6, 5)
+#         # self.pool = nn.MaxPool2d(2, 2)
+#         # self.conv2 = nn.Conv2d(6, 16, 5)
+#         # self.fc1 = nn.Linear(16 * 5 * 5, 120)
+#         # self.fc2 = nn.Linear(120, 84)
+#         # self.fc3 = nn.Linear(84, 10)
+        
+#         # self.fc1 = nn.Linear(16 * 5 * 5, 256)
+#         self.fc1 = nn.Linear(49152, 256)
+#         self.fc2 = nn.Linear(256, 128)
+#         # self.fc3 = nn.Linear(128, 10)
+#         self.fc3 = nn.Linear(128, 16)
+
+#     def forward(self, x):
+#         """Forward computation."""
+#         # x = self.pool(F.relu(self.conv1(x)))
+#         # x = self.pool(F.relu(self.conv2(x)))
+#         # x = x.view(-1, 16 * 5 * 5)
+#         x = inputs.view(-1)
+#         x = F.relu(self.fc1(x))
+#         x = F.relu(self.fc2(x))
+#         x = self.fc3(x)
+#         return x
 
 
 class Net(nn.Module):
-    """Define a Convolutional Neural Network."""
-    def __init__(self):
-        """Constructor."""
+    """Take this MLP from greg yang's mup repo"""
+    def __init__(self, width, num_classes=10):
         super(Net, self).__init__()
-        # self.conv1 = nn.Conv2d(3, 6, 5)
-        # self.pool = nn.MaxPool2d(2, 2)
-        # self.conv2 = nn.Conv2d(6, 16, 5)
-        # self.fc1 = nn.Linear(16 * 5 * 5, 120)
-        # self.fc2 = nn.Linear(120, 84)
-        # self.fc3 = nn.Linear(84, 10)
-        
-        # self.fc1 = nn.Linear(16 * 5 * 5, 256)
-        self.fc1 = nn.Linear(49152, 256)
-        self.fc2 = nn.Linear(256, 128)
-        # self.fc3 = nn.Linear(128, 10)
-        self.fc3 = nn.Linear(128, 16)
+        self.fc_1 = nn.Linear(3072, width, bias=True)
+        self.fc_2 = nn.Linear(width, width, bias=True)
+        self.fc_3 = nn.Linear(width, 16, bias=True)
 
     def forward(self, x):
-        """Forward computation."""
-        # x = self.pool(F.relu(self.conv1(x)))
-        # x = self.pool(F.relu(self.conv2(x)))
-        # x = x.view(-1, 16 * 5 * 5)
-        x = inputs.view(-1)
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        x = self.fc3(x)
-        return x
-
+        x = self.fc_3(F.relu(self.fc_2(F.relu(self.fc_1(x)))))
+        return x[:, :10]
+    
 
 if __name__ == "__main__":
     BATCH_SIZE = 64
@@ -92,7 +139,7 @@ if __name__ == "__main__":
     
     torch.cuda.empty_cache()
 
-    fp32_linear = Net().to("cuda")
+    fp32_linear = Net(128).to("cuda")
 
     # bf16_linear = deepcopy(fp32_linear)
     fp8_linear = deepcopy(fp32_linear)
@@ -146,7 +193,8 @@ if __name__ == "__main__":
     # dataset.set_format(type="torch", columns=["input_ids", "attention_mask"])
     # dataloaders = DataLoader(dataset["train"], batch_size=32, shuffle=True)
     
-    train_loader, test_loader = get_dataloader()
+    # train_loader, test_loader = get_dataloader()
+    _, train_dataloader, test_dataloader = get_cifar_dataloader(BATCH_SIZE)
 
     fp32_losses = []
     fp8_with_loss_scaler_losses = []
@@ -172,9 +220,12 @@ if __name__ == "__main__":
     )
 
     for step in range(N_STEPS):
-        for step, batch in enumerate(train_loader):
+        for step, batch in enumerate(train_dataloader):
             print(f"step: {step} /n /n")
-            inputs, labels = batch[0].to("cuda"), batch[1].to("cuda")
+            # inputs, labels = batch[0].to("cuda"), batch[1].to("cuda")
+            batch = [x.to("cuda") for x in batch]
+            inputs, targets = batch
+            inputs = inputs.view(inputs.size(0), -1)
 
             # batch = {k: v.squeeze(dim=1).to("cuda") for k, v in batch.items()}
             # inputs = batch["input_ids"]
@@ -188,7 +239,7 @@ if __name__ == "__main__":
             fp32_logs = _log(fp32_linear)
             fp32_optim.zero_grad()
             ref_output = fp32_linear(inputs)
-            fp32_loss = loss_func(ref_output, labels)
+            fp32_loss = loss_func(ref_output, targets)
             fp32_loss.backward()
             fp32_optim.step()
 
@@ -198,33 +249,33 @@ if __name__ == "__main__":
             # bf16_loss.backward()
             # bf16_optim.step()
             
+            fp8_logs = _log(fp8_linear)
+            fp8_optim.zero_grad()
+            fp8_output = fp8_linear(inputs)
+            fp8_loss = loss_func(fp8_output, targets)
+            fp8_loss.backward()
+            fp8_optim.step()
+            
             # fp8_logs = _log(fp8_linear)
             # fp8_optim.zero_grad()
             # fp8_output = fp8_linear(inputs)
             # fp8_loss = loss_func(fp8_output, targets)
             # fp8_loss.backward()
             # fp8_optim.step()
-            
-            # fp8_logs = _log(fp8_linear)
-            # fp8_optim.zero_grad()
-            # fp8_output = fp8_linear(inputs)
-            # fp8_loss = loss_func(fp8_output, labels)
-            # fp8_loss.backward()
-            # fp8_optim.step()
 
-            # fp8_with_scaler_logs = _log(fp8_linear_with_scaler)
-            # fp8_optim_with_scaler.zero_grad()
-            # fp8_output_with_scaler = fp8_linear_with_scaler(inputs)
-            # fp8_loss_with_scaler = loss_func(fp8_output_with_scaler, labels)
-            # scaled_fp8_loss_with_scaler = fp8_scaler.scale(fp8_loss_with_scaler)
-            # scaled_fp8_loss_with_scaler.backward()
-            # fp8_scaler.step(fp8_optim_with_scaler)
-            # fp8_scaler.update()
+            fp8_with_scaler_logs = _log(fp8_linear_with_scaler)
+            fp8_optim_with_scaler.zero_grad()
+            fp8_output_with_scaler = fp8_linear_with_scaler(inputs)
+            fp8_loss_with_scaler = loss_func(fp8_output_with_scaler, targets)
+            scaled_fp8_loss_with_scaler = fp8_scaler.scale(fp8_loss_with_scaler)
+            scaled_fp8_loss_with_scaler.backward()
+            fp8_scaler.step(fp8_optim_with_scaler)
+            fp8_scaler.update()
 
             # msamp_logs = _log(msamp_linear)
             msamp_optim.zero_grad()
             msamp_output = msamp_linear(inputs)
-            msamp_loss = loss_func(msamp_output, labels)
+            msamp_loss = loss_func(msamp_output, targets)
             msamp_loss.backward()
             msamp_optim.all_reduce_grads(msamp_linear)
             msamp_optim.step()
@@ -232,7 +283,7 @@ if __name__ == "__main__":
             # msamp_with_loss_scaler_logs = _log(msamp_linear_with_scaler)
             msamp_optim_with_scaler.zero_grad()
             msamp_output_with_scaler = msamp_linear_with_scaler(inputs)
-            msamp_loss_with_scaler = loss_func(msamp_output_with_scaler, labels)
+            msamp_loss_with_scaler = loss_func(msamp_output_with_scaler, targets)
             scaled_msamp_loss_with_scaler = msamp_scaler.scale(msamp_loss_with_scaler)
             scaled_msamp_loss_with_scaler.backward()
             msamp_scaler.step(msamp_optim_with_scaler)
@@ -252,28 +303,28 @@ if __name__ == "__main__":
                 {
                     "fp32_loss": fp32_loss.item(),
                     # "bf16_loss": bf16_loss.item(),
-                    # "fp8_loss": fp8_loss.item(),
-                    # "fp8_loss_with_scaler": fp8_loss_with_scaler.item(),
-                    # "scaled_fp8_loss_with_scaler": scaled_fp8_loss_with_scaler.item(),
+                    "fp8_loss": fp8_loss.item(),
+                    "fp8_loss_with_scaler": fp8_loss_with_scaler.item(),
+                    "scaled_fp8_loss_with_scaler": scaled_fp8_loss_with_scaler.item(),
                     
                     "msamp_o2_loss": msamp_loss.item(),
                     "msamp_o2_loss_with_scaler": msamp_loss_with_scaler.item(),
                     "scaled_msamp_o2_loss_with_scaler": scaled_msamp_loss_with_scaler.item(),
                     
-                    # "l1_norm_diff_fp8_relative_to_fp32": l1_norm_diff(
-                    #     fp8_loss, fp32_loss
-                    # ).item(),
-                    # "l1_norm_diff_fp8_with_loss_scaler_relative_to_fp32": l1_norm_diff(
-                    #     fp8_loss_with_scaler, fp32_loss
-                    # ).item(),
+                    "l1_norm_diff_fp8_relative_to_fp32": l1_norm_diff(
+                        fp8_loss, fp32_loss
+                    ).item(),
+                    "l1_norm_diff_fp8_with_loss_scaler_relative_to_fp32": l1_norm_diff(
+                        fp8_loss_with_scaler, fp32_loss
+                    ).item(),
                     "l1_norm_diff_msamp_with_loss_scaler_relative_to_fp32": l1_norm_diff(
                         msamp_loss_with_scaler, fp32_loss
                     ).item(),
-                    **convert_logs_to_flat_logs(fp32_logs, prefix="fp32"),
-                    # **convert_logs_to_flat_logs(fp8_logs, prefix="fp8"),
-                    # **convert_logs_to_flat_logs(fp8_with_scaler_logs, prefix="fp8_with_scaler"),
                     # "l1_norm_diff_fp8_with_loss_scaler_relative_to_bf16": l1_norm_diff(fp8_loss_with_scaler, bf16_loss).item(),
                     # "l1_norm_diff_msamp_with_loss_scaler_relative_to_bf16": l1_norm_diff(msamp_loss_with_scaler, bf16_loss).item(),
+                    **convert_logs_to_flat_logs(fp32_logs, prefix="fp32"),
+                    **convert_logs_to_flat_logs(fp8_logs, prefix="fp8"),
+                    **convert_logs_to_flat_logs(fp8_with_scaler_logs, prefix="fp8_with_scaler"),
                 }
             )
 

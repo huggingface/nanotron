@@ -298,7 +298,9 @@ class FP8Adam(Optimizer):
                 )
 
                 if is_overflow_underflow_nan(fp32_grad):
-                    raise ValueError("Overflow, underflow, or NaN detected in the gradients")
+                    print(f"Overflow, underflow, or NaN detected in the gradients. So skip the current step")
+                    continue
+                    # raise ValueError("Overflow, underflow, or NaN detected in the gradients")
 
                 if fp32_grad.is_sparse:
                     raise RuntimeError("FP8Adam does not support sparse gradients!")
