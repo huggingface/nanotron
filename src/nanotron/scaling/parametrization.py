@@ -1,5 +1,4 @@
 import math
-from abc import abstractmethod
 from enum import Enum, auto
 
 import torch
@@ -23,9 +22,11 @@ class Parametrizator:
     def __init__(self, config: ModelArgs):
         self.config = config
 
-    @abstractmethod
-    def parametrize(self, param_name: str, module: torch.Tensor):
-        pass
+    def parametrize(self, param_name: str, module: nn.Module):
+        if not isinstance(module, tuple(self.MODULE_TO_PARAMETRIZE.keys())):
+            raise Exception(f"Parameter {param_name} was not initialized")
+
+        return self.MODULE_TO_PARAMETRIZE[type(module)](param_name, module)
 
 
 class StandardParametrizator(Parametrizator):
@@ -73,12 +74,6 @@ class StandardParametrizator(Parametrizator):
         if "weight" == param_name:
             init.normal_(module.weight, mean=0.0, std=self.std)
 
-    def parametrize(self, param_name: str, module: nn.Module):
-        if not isinstance(module, tuple(self.MODULE_TO_PARAMETRIZE.keys())):
-            raise Exception(f"Parameter {param_name} was not initialized")
-
-        return self.MODULE_TO_PARAMETRIZE[type(module)](param_name, module)
-
 
 class SpectralMupParametrizator(Parametrizator):
     """
@@ -94,12 +89,7 @@ class SpectralMupParametrizator(Parametrizator):
             TritonRMSNorm: self._parametrize_layer_norm,
             TensorParallelEmbedding: self._parametrize_embedding,
         }
-
         self.std = 1.0
-        self.num_layers = config.model_config.num_hidden_layers
-
-        self.hidden_size = config.model_config.hidden_size
-        self.intermediate_size = config.model_config.intermediate_size
 
     def _compute_spectral_std(self, std: float, fan_in: int, fan_out: int):
         return (std / math.sqrt(fan_in)) * min(1, math.sqrt(fan_out / fan_in))
@@ -128,9 +118,3 @@ class SpectralMupParametrizator(Parametrizator):
         # NOTE: you're free to change the initialization of input embedding/lm head
         if "weight" == param_name:
             init.normal_(module.weight, mean=0.0, std=self.std)
-
-    def parametrize(self, name: str, module: nn.Module):
-        if not isinstance(module, tuple(self.MODULE_TO_PARAMETRIZE.keys())):
-            raise Exception(f"Parameter {name} was not initialized")
-
-        return self.MODULE_TO_PARAMETRIZE[type(module)](name, module)
