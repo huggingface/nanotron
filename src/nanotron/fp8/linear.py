@@ -5,6 +5,7 @@ import torch.nn.functional as F
 import transformer_engine as te  # noqa
 import transformer_engine_extensions as tex
 from torch import nn
+import pydevd
 
 from nanotron.fp8.constants import FP8LM_RECIPE, QTYPE_TO_DTYPE
 from nanotron.fp8.dtypes import DTypes
@@ -102,7 +103,7 @@ class _FP8Matmul(torch.autograd.Function):
             transpose_a=True,
             mat_b=input,
             transpose_b=False,
-            use_split_accumulator=False,
+            use_split_accumulator=FP8LM_RECIPE.linear.split_accumulator.output,
             accum_qtype=accum_qtype,
         )
 
@@ -126,7 +127,7 @@ class _FP8Matmul(torch.autograd.Function):
         ∂L/∂W = Xᵀ @ ∂L/∂Y
         Reference: https://web.eecs.umich.edu/~justincj/teaching/eecs442/notes/linear-backprop.html
         """
-        # pydevd.settrace(suspend=False, trace_only_current_thread=True)
+        pydevd.settrace(suspend=False, trace_only_current_thread=True)
         input, weight = ctx.saved_tensors
         accum_qtype = ctx.accum_qtype
 
@@ -165,7 +166,7 @@ class _FP8Matmul(torch.autograd.Function):
             transpose_a=True,
             mat_b=grad_output,
             transpose_b=False,
-            use_split_accumulator=True,
+            use_split_accumulator=FP8LM_RECIPE.linear.split_accumulator.input_grad,
             accum_qtype=accum_qtype,
             # is_backward=True
         )
@@ -178,7 +179,7 @@ class _FP8Matmul(torch.autograd.Function):
             transpose_a=True,
             mat_b=grad_output_transposed,
             transpose_b=False,
-            use_split_accumulator=True,
+            use_split_accumulator=FP8LM_RECIPE.linear.split_accumulator.weight_grad,
             accum_qtype=accum_qtype,
             # is_backward=True
         )

@@ -1,21 +1,19 @@
 from copy import deepcopy
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 
 import msamp
 import torch
-from datasets import load_dataset
 from nanotron.fp8.constants import FP8LM_RECIPE
 from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.loss_scaler import LossScaler
 from nanotron.fp8.optim import FP8Adam
 from nanotron.fp8.utils import convert_to_fp8_module
-from timm.models.layers import trunc_normal_
 from torch import nn
 from torch.optim import Adam
-from torch.utils.data import DataLoader
-from transformers import AutoTokenizer
 from nanotron.fp8.utils import _log, convert_logs_to_flat_logs
 import torch.nn.functional as F
+import deepspeed
+import argparse
 
 import wandb
 
@@ -29,22 +27,6 @@ def get_time_name():
 
 def l1_norm_diff(loss, ref_loss):
     return (loss - ref_loss).abs().mean()
-
-
-# def get_dataloader():
-#     import torchvision
-#     import torchvision.transforms as transforms
-    
-#     transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
-
-#     trainset = torchvision.datasets.CIFAR10(root='./data', train=True, download=True, transform=transform)
-#     trainloader = torch.utils.data.DataLoader(trainset, batch_size=16, shuffle=True, num_workers=2)
-#     testset = torchvision.datasets.CIFAR10(root='./data', train=False, download=True, transform=transform)
-#     testloader = torch.utils.data.DataLoader(testset, batch_size=4, shuffle=False, num_workers=2)
-
-#     classes = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
-    
-#     return trainloader, testloader
 
 
 def get_cifar_dataloader(batch_size):
@@ -71,47 +53,6 @@ def get_cifar_dataloader(batch_size):
     return classes, train_loader, test_loader
 
 
-
-
-# def compute_ce_loss(batch, model, prefix):
-#     import torch.nn.functional as F
-#     input, target = batch
-#     input = input.view(input.size(0), -1)
-#     output = model(input)
-#     return F.cross_entropy(output, target)
-
-
-
-# class Net(nn.Module):
-#     """Define a Convolutional Neural Network."""
-#     def __init__(self):
-#         """Constructor."""
-#         super(Net, self).__init__()
-#         # self.conv1 = nn.Conv2d(3, 6, 5)
-#         # self.pool = nn.MaxPool2d(2, 2)
-#         # self.conv2 = nn.Conv2d(6, 16, 5)
-#         # self.fc1 = nn.Linear(16 * 5 * 5, 120)
-#         # self.fc2 = nn.Linear(120, 84)
-#         # self.fc3 = nn.Linear(84, 10)
-        
-#         # self.fc1 = nn.Linear(16 * 5 * 5, 256)
-#         self.fc1 = nn.Linear(49152, 256)
-#         self.fc2 = nn.Linear(256, 128)
-#         # self.fc3 = nn.Linear(128, 10)
-#         self.fc3 = nn.Linear(128, 16)
-
-#     def forward(self, x):
-#         """Forward computation."""
-#         # x = self.pool(F.relu(self.conv1(x)))
-#         # x = self.pool(F.relu(self.conv2(x)))
-#         # x = x.view(-1, 16 * 5 * 5)
-#         x = inputs.view(-1)
-#         x = F.relu(self.fc1(x))
-#         x = F.relu(self.fc2(x))
-#         x = self.fc3(x)
-#         return x
-
-
 class Net(nn.Module):
     """Take this MLP from greg yang's mup repo"""
     def __init__(self, width, num_classes=10):
@@ -124,13 +65,38 @@ class Net(nn.Module):
         x = self.fc_3(F.relu(self.fc_2(F.relu(self.fc_1(x)))))
         return x[:, :10]
     
+    
+def add_argument():
+    """Add arguments."""
+    parser = argparse.ArgumentParser(description='CIFAR')
+
+    # data
+    # cuda
+    parser.add_argument(
+        '--with_cuda', default=False, action='store_true', help="use CPU in case there\'s no GPU support"
+    )
+    parser.add_argument('--use_ema', default=False, action='store_true', help='whether use exponential moving average')
+
+    # train
+    parser.add_argument('-b', '--batch_size', default=32, type=int, help='mini-batch size (default: 32)')
+    parser.add_argument('-e', '--epochs', default=30, type=int, help='number of total epochs (default: 30)')
+    parser.add_argument('--local_rank', type=int, default=-1, help='local rank passed from distributed launcher')
+
+    parser.add_argument('--log-interval', type=int, default=200, help='output logging information at a given interval')
+
+    # Include DeepSpeed configuration arguments
+    parser = deepspeed.add_config_arguments(parser)
+
+    args = parser.parse_args()
+
+    return args
+    
 
 if __name__ == "__main__":
     BATCH_SIZE = 64
     INPUT_DIM = 64
     HIDDEN_SIZE = 64
     N_STEPS = 1000
-    # LR = 1e-3
     LR = 6e-4
     N_LAYERS = 16
     WITH_BIAS = True
@@ -146,6 +112,7 @@ if __name__ == "__main__":
     fp8_linear_with_scaler = deepcopy(fp32_linear)
     msamp_linear = deepcopy(fp32_linear)
     msamp_linear_with_scaler = deepcopy(fp32_linear)
+    deepspeed_linear = deepcopy(fp32_linear)
 
     fp32_optim = Adam(fp32_linear.parameters(), lr=LR)
 
@@ -169,31 +136,11 @@ if __name__ == "__main__":
     msamp_scaler = torch.cuda.amp.GradScaler()
     fp8_scaler = LossScaler()
 
-    # loss_func = nn.CrossEntropyLoss()
-    # def loss_func(outputs, targets):
-    #     func = nn.CrossEntropyLoss()
-    #     logits = outputs.logits
-    #     logits = logits[:, :-1, :].contiguous()
-    #     return func(logits.view(-1, logits.shape[-1]), targets.view(-1))
-    
+    args = add_argument()
+    deepspeed.init_distributed()
+    deepspeed_linear, deepspeed_optim, _, _  = deepspeed.initialize(args=args, model=deepspeed_linear)
+
     loss_func = nn.CrossEntropyLoss()
-
-    # batch_inputs = []
-    # batch_targets = []
-    # inputs = torch.randn(BATCH_SIZE, HIDDEN_SIZE).to("cuda")
-    # targets = torch.randint(0, HIDDEN_SIZE, (BATCH_SIZE,)).to("cuda")
-    # for _ in range(N_STEPS):
-    #     batch_inputs.append(inputs.clone())
-    #     batch_targets.append(targets.clone())
-
-    # dataset = load_dataset(DATA_NAME)
-    # dataset = dataset.map(
-    #     lambda x: tokenizer(x["inputs"], padding="max_length", truncation=True, max_length=512, return_tensors="pt")
-    # )
-    # dataset.set_format(type="torch", columns=["input_ids", "attention_mask"])
-    # dataloaders = DataLoader(dataset["train"], batch_size=32, shuffle=True)
-    
-    # train_loader, test_loader = get_dataloader()
     _, train_dataloader, test_dataloader = get_cifar_dataloader(BATCH_SIZE)
 
     fp32_losses = []
@@ -202,7 +149,7 @@ if __name__ == "__main__":
     
     wandb.init(
         project="fp8_for_nanotron",
-        name=f"{get_time_name()}.convergence_fp8_n_layers_{N_LAYERS}_and_input_dim_{INPUT_DIM}_and_hidden_size_{HIDDEN_SIZE}_and_lr_{LR}_and_bias_{WITH_BIAS}_and_batch_size_{BATCH_SIZE}",
+        name=f"{get_time_name()}.n_layers_{N_LAYERS}_and_input_dim_{INPUT_DIM}_and_hidden_size_{HIDDEN_SIZE}_and_lr_{LR}_and_bias_{WITH_BIAS}_and_batch_size_{BATCH_SIZE}",
         config={
             "batch_size": BATCH_SIZE,
             "input_dim": INPUT_DIM,
@@ -222,19 +169,9 @@ if __name__ == "__main__":
     for step in range(N_STEPS):
         for step, batch in enumerate(train_dataloader):
             print(f"step: {step} /n /n")
-            # inputs, labels = batch[0].to("cuda"), batch[1].to("cuda")
             batch = [x.to("cuda") for x in batch]
             inputs, targets = batch
             inputs = inputs.view(inputs.size(0), -1)
-
-            # batch = {k: v.squeeze(dim=1).to("cuda") for k, v in batch.items()}
-            # inputs = batch["input_ids"]
-            # targets = batch["input_ids"][:, 1:].contiguous()
-
-            # # inputs = batch_inputs[step]
-            # # targets = batch_targets[step]
-            # inputs = torch.randn(BATCH_SIZE, INPUT_DIM).to("cuda")
-            # targets = torch.randint(0, HIDDEN_SIZE, (BATCH_SIZE,)).to("cuda")
 
             fp32_logs = _log(fp32_linear)
             fp32_optim.zero_grad()
@@ -250,24 +187,18 @@ if __name__ == "__main__":
             # bf16_optim.step()
             
             fp8_logs = _log(fp8_linear)
-            fp8_optim.zero_grad()
             fp8_output = fp8_linear(inputs)
             fp8_loss = loss_func(fp8_output, targets)
+            fp8_optim.zero_grad()
             fp8_loss.backward()
             fp8_optim.step()
-            
-            # fp8_logs = _log(fp8_linear)
-            # fp8_optim.zero_grad()
-            # fp8_output = fp8_linear(inputs)
-            # fp8_loss = loss_func(fp8_output, targets)
-            # fp8_loss.backward()
-            # fp8_optim.step()
 
             fp8_with_scaler_logs = _log(fp8_linear_with_scaler)
-            fp8_optim_with_scaler.zero_grad()
             fp8_output_with_scaler = fp8_linear_with_scaler(inputs)
             fp8_loss_with_scaler = loss_func(fp8_output_with_scaler, targets)
+            fp8_scaler.scaling_value = deepspeed_linear.optimizer.loss_scaler.loss_scale
             scaled_fp8_loss_with_scaler = fp8_scaler.scale(fp8_loss_with_scaler)
+            fp8_optim_with_scaler.zero_grad()
             scaled_fp8_loss_with_scaler.backward()
             fp8_scaler.step(fp8_optim_with_scaler)
             fp8_scaler.update()
@@ -288,6 +219,12 @@ if __name__ == "__main__":
             scaled_msamp_loss_with_scaler.backward()
             msamp_scaler.step(msamp_optim_with_scaler)
             msamp_scaler.update()
+                    
+            
+            deepspeed_output = deepspeed_linear(inputs.half())
+            deepspeed_loss = loss_func(deepspeed_output, targets)
+            deepspeed_linear.backward(deepspeed_loss)
+            deepspeed_linear.step()
 
             fp32_losses.append(fp32_loss.item())
             # fp8_with_loss_scaler_losses.append(fp8_loss_with_scaler.item())
@@ -310,6 +247,8 @@ if __name__ == "__main__":
                     "msamp_o2_loss": msamp_loss.item(),
                     "msamp_o2_loss_with_scaler": msamp_loss_with_scaler.item(),
                     "scaled_msamp_o2_loss_with_scaler": scaled_msamp_loss_with_scaler.item(),
+                    
+                    "deepspeed_loss": deepspeed_loss.item(),
                     
                     "l1_norm_diff_fp8_relative_to_fp32": l1_norm_diff(
                         fp8_loss, fp32_loss

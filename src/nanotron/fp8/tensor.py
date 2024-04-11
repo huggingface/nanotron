@@ -31,6 +31,7 @@ class LowPrecisionTensor(torch.Tensor):
         obj = torch.Tensor._make_subclass(cls, fp8_tensor)
         # TODO(xrsrke): use a different name, because FP16Tensor also has fp8_meta
         obj.fp8_meta = fp8_meta
+        obj.orig_data = tensor
         return obj
 
     # @property

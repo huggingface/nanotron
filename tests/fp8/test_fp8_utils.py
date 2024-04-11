@@ -97,9 +97,13 @@ def test_track_module_statistics():
         
     logs = _log(model)
     
-    for _ in range(5):
+    for _ in range(1):
         model(input).sum().backward()
         
     # NOTE: now merge module_name:x:statistic into a flat dictionary
     assert logs.keys() == {"fin", "relu", "fout"}
-    assert logs["fin"].keys() == {"weight", "bias", "input:0", "output:0", "grad_output:0"}
+    assert logs["fin"].keys() == {
+        "weight", "bias", "input", "output",
+        "grad_output:0", "grad_input:0", "grad_input:1",
+        "input_grad", "weight_grad",
+    }

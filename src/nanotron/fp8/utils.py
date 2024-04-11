@@ -114,7 +114,7 @@ def track_module_statistics(name: str, module: nn.Linear, logging: Dict[str, Dic
             "max": tensor.max().item(),
         }
 
-    def _save_output_stats(module: nn.Linear, input: torch.Tensor, output: torch.Tensor):
+    def _save_output_stats(module: nn.Linear, input: torch.Tensor, output: torch.Tensor):        
         if hasattr(module, "weight") and module.weight is not None:
             logging[name]["weight"] = _collect_stats(module.weight)
             # logging[name]["weight"] = _collect_stats(module.weight)
@@ -125,23 +125,46 @@ def track_module_statistics(name: str, module: nn.Linear, logging: Dict[str, Dic
         inputs = input if isinstance(input, tuple) else (input,)
         outputs = output if isinstance(output, tuple) else (output,)
         
-        for i, inp in enumerate(inputs):
-            if inp.dtype == torch.long:
-                # NOTE: this is input ids in transformers
-                continue
-            
-            logging[name][f"input:{i}"] = _collect_stats(inp)
+        if len(inputs) > 1:
+            for i, inp in enumerate(inputs):
+                if inp.dtype == torch.long:
+                    # NOTE: this is input ids in transformers
+                    continue
+                logging[name][f"input:{i}"] = _collect_stats(inp)
+        else:
+            logging[name]["input"] = _collect_stats(inputs[0])
         
-        for i, out in enumerate(outputs):
-            logging[name][f"output:{i}"] = _collect_stats(out)
-
-    def _save_grad_stats(module: nn.Linear, grad_output: torch.Tensor):
-        grad_outputs = grad_output if isinstance(grad_output, tuple) else (grad_output,)
-        for i, grad in enumerate(grad_outputs):
-            logging[name][f"grad_output:{i}"] = _collect_stats(grad)
+        if len(outputs) > 1:
+            for i, out in enumerate(outputs):
+                logging[name][f"output:{i}"] = _collect_stats(out)
+        else:
+            logging[name]["output"] = _collect_stats(outputs[0])
+    
+    def _save_grad_stats(module: nn.Linear, grad_input, grad_output: torch.Tensor):
+        # import pydevd
+        # pydevd.settrace(suspend=False, trace_only_current_thread=True)
+        # logging[name][f"weight_grad"] = _collect_stats(module.weight.grad.orig_data)
+        # logging[name][f"bias_grad"] = _collect_stats(module.bias.grad)
+        
+        if isinstance(grad_output, tuple):
+            for i, grad in enumerate(grad_output):
+                logging[name][f"grad_output:{i}"] = _collect_stats(grad)
+        else:
+            logging[name]["grad_output"] = _collect_stats(grad_output)
+            
+            
+        if isinstance(grad_input, tuple):
+            for i, grad in enumerate(grad_input):
+                if grad is not None:
+                    logging[name][f"grad_input:{i}"] = _collect_stats(grad)
+        else:
+            if grad_input is not None:
+                logging[name]["grad_input"] = _collect_stats(grad_input)
 
     module.register_forward_hook(_save_output_stats)
-    module.register_full_backward_pre_hook(_save_grad_stats)
+    # module.register_full_backward_pre_hook(_save_grad_stats)
+    module.register_backward_hook(_save_grad_stats)
+    # module.register_module_full_backward_hook(_save_grad_stats)
 
 
 def _log(model: nn.Module):
