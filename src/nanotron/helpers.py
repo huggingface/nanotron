@@ -5,6 +5,7 @@ import math
 import os
 import time
 from datetime import datetime
+from functools import partial
 from math import ceil
 from typing import Dict, List, Optional, Tuple
 
@@ -146,21 +147,8 @@ def lr_scheduler_builder(optimizer: Optimizer, lr_scheduler_args: LRSchedulerArg
         lmbda /= lr  # Normalization for pytorch
         return lmbda
 
-    # def get_lr_lambda_for_param_group(lr: float):
-    #     from functools import partial
-    #     return partial(lambda current_step: lr_lambda(current_step), lr=lr)
-
     def get_lr_lambda_for_param_group(lr: float):
-        from functools import partial
-
         return partial(lr_lambda, lr=lr)
-
-    # lr_scheduler = LambdaLR(
-    #     optimizer.get_base_optimizer(), lr_lambda=partial(lr_lambda, lr=lr_scheduler_args.learning_rate)
-    # )
-
-    # NOTE: because we have two group of parameters in spectral µTransfer
-    # assert len(optimizer.get_base_optimizer().param_groups) == 3
 
     # NOTE: get learning rate scheduler for each param group
     lr_lambdas = []
@@ -170,59 +158,8 @@ def lr_scheduler_builder(optimizer: Optimizer, lr_scheduler_args: LRSchedulerArg
     assert len(lr_lambdas) == len(
         optimizer.get_base_optimizer().param_groups
     ), "Custom learning rate functions don't match the number of param groups"
-
     lr_scheduler = LambdaLR(optimizer.get_base_optimizer(), lr_lambda=lr_lambdas)
     return lr_scheduler
-
-
-# # TODO(xrsrke): refactor
-# def group_parameters_by_linear_type(
-#     named_parameters: List[Tuple[str, torch.Tensor]],
-#     model: NanotronModel,
-#     config: OptimizerArgs,
-# ) -> List[Dict[str, Any]]:
-#     named_parameters_by_linear_type = {}
-#     for name, param in named_parameters:
-#         # NOTE: remove .weight and .bias from the name
-#         module_name = name.rsplit(".", 1)[0]
-#         module = model.get_submodule(module_name)
-#         linear_type = getattr(module, "linear_type", None)
-
-#         if linear_type not in named_parameters_by_linear_type:
-#             named_parameters_by_linear_type[linear_type] = []
-
-#         named_parameters_by_linear_type[linear_type].append((name, param))
-
-#     assert len(named_parameters) == sum(
-#         len(v) for v in named_parameters_by_linear_type.values()
-#     ), "Missing some named parameters"
-
-#     from nanotron.scaling import WeightType
-
-#     fan_in = model.config.hidden_size
-#     LINEAR_TYPE_TO_LR = {
-#         WeightType.INPUT_WEIGHTS: config.learning_rate_scheduler.learning_rate,
-#         WeightType.HIDDEN_WEIGHTS: config.learning_rate_scheduler.learning_rate / fan_in,
-#         WeightType.OUTPUT_WEIGHTS: config.learning_rate_scheduler.learning_rate,
-#     }
-#     LINEAR_TYPE_TO_WD = {
-#         WeightType.INPUT_WEIGHTS: config.weight_decay,
-#         WeightType.HIDDEN_WEIGHTS: config.weight_decay * fan_in,
-#         WeightType.OUTPUT_WEIGHTS: config.weight_decay,
-#     }
-
-#     named_param_groups = []
-#     # NOTE: now format it to [{"named_params": [(name, param)], "lr": lr}, ...]
-#     for linear_type, named_params in named_parameters_by_linear_type.items():
-#         named_param_groups.append(
-#             {
-#                 "named_params": named_params,
-#                 "lr": LINEAR_TYPE_TO_LR[linear_type],
-#                 "weight_decay": LINEAR_TYPE_TO_WD[linear_type],
-#             }
-#         )
-
-#     return named_param_groups
 
 
 def init_optimizer_and_grad_accumulator(
@@ -250,15 +187,13 @@ def init_optimizer_and_grad_accumulator(
         else LearningRateForSP
     )
     log_rank(
-        f"Using {lr_mapper_cls} as learning rate",
+        f"Using {lr_mapper_cls.__name__} as learning rate",
         logger=logger,
         level=logging.INFO,
         group=parallel_context.world_pg,
         rank=0,
     )
     learning_rate_mapper = lr_mapper_cls(names_to_modules=names_to_modules, config=optimizer_args)
-
-    # named_parameters = group_parameters_by_linear_type(named_parameters, unwrapped_model, optimizer_args)
 
     # Basic optimizer builder
     def basic_optimizer_builder(named_param_groups):

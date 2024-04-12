@@ -3,7 +3,6 @@ from abc import abstractmethod
 from enum import Enum, auto
 from typing import Dict
 
-# from nanotron.config import ModelArgs, OptimizerArgs
 from torch import nn
 from torch.nn import init
 
@@ -79,7 +78,7 @@ class StandardParametrizator(Parametrizator):
 
 class SpectralMupParametrizator(Parametrizator):
     """
-    A Spectral Condition for Feature Learning.
+    A Spectral Condition for Feature Learning by Greg Yang, et al.
     https://arxiv.org/abs/2310.17813
     """
 
@@ -102,6 +101,12 @@ class SpectralMupParametrizator(Parametrizator):
 
     @staticmethod
     def _compute_spectral_std(std: float, fan_in: int, fan_out: int):
+        """
+        Parametrization 1 (Spectral parametrization)
+        Page 8, A Spectral Condition for Feature Learning by Greg Yang, et al.
+
+        σₗ = Θ(1/√nₗ₋₁ min{1, √(nₗ/nₗ₋₁)})
+        """
         return (std / math.sqrt(fan_in)) * min(1, math.sqrt(fan_out / fan_in))
 
     def _parametrize_mup_weight(self, param_name: str, module: nn.Module):
@@ -122,10 +127,6 @@ class SpectralMupParametrizator(Parametrizator):
             fan_in = fan_in * world_size
         else:
             raise ValueError(f"Unknown module {module}")
-
-        vocab_size = self.config.model_config.vocab_size
-        if fan_in == vocab_size or fan_out == vocab_size:
-            return self._parametrize_embedding(param_name, module)
 
         std = SpectralMupParametrizator._compute_spectral_std(std=self.std, fan_in=fan_in, fan_out=fan_out)
         init.normal_(data, mean=0.0, std=std)
@@ -164,6 +165,8 @@ class LearningRateForSP(LearningRateForParametrizator):
 
 
 class LearningRateForSpectralMup(LearningRateForParametrizator):
+    """A Spectral Condition for Feature Learning by Greg Yang, et al."""
+
     def __init__(self, names_to_modules: Dict[str, nn.Module], config: "OptimizerArgs"):
         super().__init__(names_to_modules, config)
 
@@ -182,6 +185,17 @@ class LearningRateForSpectralMup(LearningRateForParametrizator):
         }
 
     def _get_mup_lr(self, param: nn.Parameter, module: nn.Module):
+        """
+        Parametrization 1 (Spectral parametrization)
+        Page 8, A Spectral Condition for Feature Learning by Greg Yang, et al.
+
+        ηₗ = Θ(nₗ/nₗ₋₁)
+        """
+        from nanotron.parallel.tensor_parallel.nn import (
+            TensorParallelColumnLinear,
+            TensorParallelRowLinear,
+        )
+
         lr = self.config.learning_rate_scheduler.learning_rate
         fan_in, fan_out = init._calculate_fan_in_and_fan_out(param)
         world_size = module.world_size

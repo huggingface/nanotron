@@ -771,19 +771,6 @@ class LlamaModel(nn.Module):
         for encoder_block in self.decoder:
             hidden_encoder_states = encoder_block(**hidden_encoder_states)
 
-        # hidden_states.shape = [seq_length/tp_rank, batch_size, hidden_dim]
-        mup_l1_norm = hidden_encoder_states["hidden_states"].mean(dim=[0, 1]).abs()  # [hidden_dim]
-        dist.all_reduce(
-            mup_l1_norm, op=dist.ReduceOp.SUM, group=self.parallel_context.tp_pg
-        )  # sum [hidden_dim] across tp ranks
-        mup_l1_norm = mup_l1_norm.mean()
-        dist.all_reduce(mup_l1_norm, op=dist.ReduceOp.AVG, group=self.parallel_context.dp_pg)
-
-        if dist.get_rank() == 0:
-            import wandb
-
-            wandb.log({"output_l1_norm": mup_l1_norm.cpu().detach().float().numpy(), "width": self.config.hidden_size})
-
         hidden_states = self.final_layer_norm(input=hidden_encoder_states["hidden_states"])["hidden_states"]
 
         sharded_logits = self.lm_head(x=hidden_states)["logits"]
