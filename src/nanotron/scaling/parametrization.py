@@ -4,12 +4,6 @@ from enum import Enum, auto
 from typing import Dict
 
 # from nanotron.config import ModelArgs, OptimizerArgs
-from nanotron.nn.layer_norm import TritonRMSNorm
-from nanotron.parallel.tensor_parallel.nn import (
-    TensorParallelColumnLinear,
-    TensorParallelEmbedding,
-    TensorParallelRowLinear,
-)
 from torch import nn
 from torch.nn import init
 
@@ -33,6 +27,13 @@ class Parametrizator:
 class StandardParametrizator(Parametrizator):
     def __init__(self, config: "ModelArgs"):
         super().__init__(config)
+        from nanotron.nn.layer_norm import TritonRMSNorm
+        from nanotron.parallel.tensor_parallel.nn import (
+            TensorParallelColumnLinear,
+            TensorParallelEmbedding,
+            TensorParallelRowLinear,
+        )
+
         self.MODULE_TO_PARAMETRIZE = {
             TensorParallelColumnLinear: self._parametrize_column_linear,
             TensorParallelRowLinear: self._parametrize_row_linear,
@@ -84,6 +85,13 @@ class SpectralMupParametrizator(Parametrizator):
 
     def __init__(self, config: "ModelArgs"):
         super().__init__(config)
+        from nanotron.nn.layer_norm import TritonRMSNorm
+        from nanotron.parallel.tensor_parallel.nn import (
+            TensorParallelColumnLinear,
+            TensorParallelEmbedding,
+            TensorParallelRowLinear,
+        )
+
         self.MODULE_TO_PARAMETRIZE = {
             TensorParallelColumnLinear: self._parametrize_mup_weight,
             TensorParallelRowLinear: self._parametrize_mup_weight,
@@ -92,10 +100,16 @@ class SpectralMupParametrizator(Parametrizator):
         }
         self.std = 1.0
 
-    def _compute_spectral_std(self, std: float, fan_in: int, fan_out: int):
+    @staticmethod
+    def _compute_spectral_std(std: float, fan_in: int, fan_out: int):
         return (std / math.sqrt(fan_in)) * min(1, math.sqrt(fan_out / fan_in))
 
     def _parametrize_mup_weight(self, param_name: str, module: nn.Module):
+        from nanotron.parallel.tensor_parallel.nn import (
+            TensorParallelColumnLinear,
+            TensorParallelRowLinear,
+        )
+
         assert param_name in ["weight", "bias"]
 
         data = module.weight if param_name == "weight" else module.bias
@@ -109,13 +123,17 @@ class SpectralMupParametrizator(Parametrizator):
         else:
             raise ValueError(f"Unknown module {module}")
 
-        std = self._compute_spectral_std(std=self.std, fan_in=fan_in, fan_out=fan_out)
+        vocab_size = self.config.model_config.vocab_size
+        if fan_in == vocab_size or fan_out == vocab_size:
+            return self._parametrize_embedding(param_name, module)
+
+        std = SpectralMupParametrizator._compute_spectral_std(std=self.std, fan_in=fan_in, fan_out=fan_out)
         init.normal_(data, mean=0.0, std=std)
 
     def _parametrize_layer_norm(self, param_name: str, module: nn.Module):
         assert param_name in ["weight", "bias"]
 
-        # NOTE: you're free to change the initialization of the layer norm
+        # NOTE: you're free to change the initialization of layer norm
         # as it's not a part of µTransfer
         if "weight" == param_name:
             module.weight.fill_(1)
@@ -148,6 +166,14 @@ class LearningRateForSP(LearningRateForParametrizator):
 class LearningRateForSpectralMup(LearningRateForParametrizator):
     def __init__(self, names_to_modules: Dict[str, nn.Module], config: "OptimizerArgs"):
         super().__init__(names_to_modules, config)
+
+        from nanotron.nn.layer_norm import TritonRMSNorm
+        from nanotron.parallel.tensor_parallel.nn import (
+            TensorParallelColumnLinear,
+            TensorParallelEmbedding,
+            TensorParallelRowLinear,
+        )
+
         self.MODULE_TO_PARAMETRIZE = {
             TensorParallelColumnLinear: self._get_mup_lr,
             TensorParallelRowLinear: self._get_mup_lr,

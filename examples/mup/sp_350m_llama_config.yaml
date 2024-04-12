@@ -36,7 +36,7 @@ general:
   consumed_train_samples: null
   ignore_sanity_checks: true
   project: debug
-  run: tiny_llama_ref
+  run: llama_350m_sp
   seed: 42
   step: null
 lighteval: null
@@ -49,23 +49,15 @@ model:
   dtype: bfloat16
   init_method:
     std: 0.03125 # 1/sqrt(1024)=0.022097086912079608
-    # use_mup: true
   make_vocab_size_divisible_by: 1
   model_config:
     bos_token_id: 1
     eos_token_id: 2
     hidden_act: silu
     initializer_range: 0.02
-
-    # NOTE: 250m
-    # hidden_size: 1024
-    # intermediate_size: 4096
-    # num_hidden_layers: 10
-
     hidden_size: 1024
     intermediate_size: 4096
     num_hidden_layers: 14
-
     is_llama_config: true
     max_position_embeddings: 1024
     num_attention_heads: 8
@@ -74,8 +66,7 @@ model:
     pretraining_tp: 1
     rms_norm_eps: 1.0e-05
     rope_scaling: null
-    # tie_word_embeddings: true
-    tie_word_embeddings: false # original use true
+    tie_word_embeddings: false
     use_cache: true
     vocab_size: 49152
 optimizer:

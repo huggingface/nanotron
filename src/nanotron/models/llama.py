@@ -212,9 +212,7 @@ class CoreAttention(nn.Module):
         # in SP, we use sqrt(1/d_h)
         from nanotron import constants
 
-        print(f"d_head: {query_states.shape[-1]}")
         softmax_scale = 1 / query_states.shape[-1] if constants.IS_MUP else None
-
         attn_output = flash_attn_varlen_func(
             q=query_states,
             k=key_states,

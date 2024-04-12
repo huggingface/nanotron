@@ -57,7 +57,6 @@ class NamedOptimizer(InheritFromOtherOptimizer):
             for p in param_group["params"]:
                 name = id_to_name[id(p)]
                 lr = learning_rate_mapper.get_lr(name, p)
-                print(f"{name} has lr: {lr}")
                 assert isinstance(lr, float), f"Expected a float, got {lr} for parameter {name}"
                 other_hyperparameters = {k: v for k, v in param_group.items() if k != "params"}
                 params_with_lr.append({"params": [p], "lr": lr, **other_hyperparameters})
