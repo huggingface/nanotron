@@ -80,13 +80,31 @@ def get_config_mapping(nt_to_hf: bool = True) -> dict[str, str]:
     return hf_to_nt_map
 
 
+def make_parallel_config(
+    dp: int = 1,
+    pp: int = 1,
+    tp: int = 1,
+):
+    parallel_config = nanotron.config.ParallelismArgs(
+        dp=dp,
+        pp=pp,
+        tp=tp,
+        pp_engine=nanotron.config.AllForwardAllBackwardPipelineEngine(),
+        tp_mode=nanotron.config.TensorParallelLinearMode.ALL_REDUCE,
+        tp_linear_async_communication=False,
+    )
+    return parallel_config
+
+
 def load_nanotron_model(
+    pp: int = 1,
+    tp: int = 1,
+    dp: int = 1,
     model_config: Optional[NanotronLlamaConfig] = None,
     device: torch.device = torch.device("cuda"),
     dtype: torch.dtype = torch.bfloat16,
     checkpoint_path: Optional[Path] = None,
 ) -> LlamaForTraining:
-
     """
     Creates and returns a nanotron model.
     If `model_config` is None, then `checkpoint_path` must be set, in which case
@@ -100,16 +118,9 @@ def load_nanotron_model(
         with open(checkpoint_path / "model_config.json") as f:
             model_config = NanotronLlamaConfig(**json.load(f))
 
-    parallel_config = nanotron.config.ParallelismArgs(
-        dp=1,
-        pp=1,
-        tp=1,
-        pp_engine=nanotron.config.AllForwardAllBackwardPipelineEngine(),
-        tp_mode=nanotron.config.TensorParallelLinearMode.ALL_REDUCE,
-        tp_linear_async_communication=False,
-    )
+    parallel_config = make_parallel_config(pp=pp, tp=tp, dp=dp)
     parallel_context = nanotron.parallel.ParallelContext(
-        data_parallel_size=1, pipeline_parallel_size=1, tensor_parallel_size=1
+        data_parallel_size=dp, pipeline_parallel_size=pp, tensor_parallel_size=tp
     )
     nanotron_model = nanotron.models.build_model(
         model_builder=lambda: LlamaForTraining(
@@ -123,7 +134,6 @@ def load_nanotron_model(
         device=device,
     )
     mark_tied_parameters(model=nanotron_model, parallel_context=parallel_context)
-
     # Load checkpoint directly in memory and then only keep the state dictionary
     if checkpoint_path is not None:
         nanotron.serialize.load_weights(
