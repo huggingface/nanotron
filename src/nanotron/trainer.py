@@ -170,9 +170,18 @@ class DistributedTrainer:
             self.model.module if isinstance(self.model, DistributedDataParallel) else self.model
         )
 
+        parametrization_method = (
+            ParametrizationMethod.STANDARD
+            if isinstance(self.config.model.init_method, RandomInit)
+            else ParametrizationMethod.SPECTRAL_MUP
+        )
+
         # Init optimizer
         self.optimizer, self.grad_accumulator = init_optimizer_and_grad_accumulator(
-            model=self.model, optimizer_args=self.config.optimizer, parallel_context=self.parallel_context
+            parametrization_method=parametrization_method,
+            model=self.model,
+            optimizer_args=self.config.optimizer,
+            parallel_context=self.parallel_context,
         )
         if self.init_checkpoint_path is not None:
             load_optimizer(

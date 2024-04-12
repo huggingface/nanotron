@@ -41,6 +41,7 @@ from nanotron.random import (
     get_current_random_state,
     get_synced_random_state,
 )
+from nanotron.scaling.parametrization import LearningRateForSP, LearningRateForSpectralMup, ParametrizationMethod
 
 logger = logging.get_logger(__name__)
 
@@ -145,8 +146,6 @@ def lr_scheduler_builder(optimizer: Optimizer, lr_scheduler_args: LRSchedulerArg
         lmbda /= lr  # Normalization for pytorch
         return lmbda
 
-    from functools import partial
-
     # def get_lr_lambda_for_param_group(lr: float):
     #     from functools import partial
     #     return partial(lambda current_step: lr_lambda(current_step), lr=lr)
@@ -156,18 +155,23 @@ def lr_scheduler_builder(optimizer: Optimizer, lr_scheduler_args: LRSchedulerArg
 
         return partial(lr_lambda, lr=lr)
 
+    # lr_scheduler = LambdaLR(
+    #     optimizer.get_base_optimizer(), lr_lambda=partial(lr_lambda, lr=lr_scheduler_args.learning_rate)
+    # )
+
     # NOTE: because we have two group of parameters in spectral µTransfer
     # assert len(optimizer.get_base_optimizer().param_groups) == 3
 
-    # # NOTE: get learning rate scheduler for each param group
-    # lr_lambdas = []
-    # for param_group in optimizer.get_base_optimizer().param_groups:
-    #     lr_lambdas.append(get_lr_lambda_for_param_group(lr=param_group["lr"]))
+    # NOTE: get learning rate scheduler for each param group
+    lr_lambdas = []
+    for param_group in optimizer.get_base_optimizer().param_groups:
+        lr_lambdas.append(get_lr_lambda_for_param_group(lr=param_group["lr"]))
 
-    # lr_scheduler = LambdaLR(optimizer.get_base_optimizer(), lr_lambda=lr_lambdas)
-    lr_scheduler = LambdaLR(
-        optimizer.get_base_optimizer(), lr_lambda=partial(lr_lambda, lr=lr_scheduler_args.learning_rate)
-    )
+    assert len(lr_lambdas) == len(
+        optimizer.get_base_optimizer().param_groups
+    ), "Custom learning rate functions don't match the number of param groups"
+
+    lr_scheduler = LambdaLR(optimizer.get_base_optimizer(), lr_lambda=lr_lambdas)
     return lr_scheduler
 
 
@@ -222,7 +226,10 @@ def lr_scheduler_builder(optimizer: Optimizer, lr_scheduler_args: LRSchedulerArg
 
 
 def init_optimizer_and_grad_accumulator(
-    model: nn.Module, optimizer_args: OptimizerArgs, parallel_context: ParallelContext
+    parametrization_method: ParametrizationMethod,
+    model: nn.Module,
+    optimizer_args: OptimizerArgs,
+    parallel_context: ParallelContext,
 ) -> Tuple[BaseOptimizer, GradientAccumulator]:
     # Unwrap DDP
     unwrapped_model: NanotronModel = model.module if isinstance(model, DistributedDataParallel) else model
@@ -232,6 +239,17 @@ def init_optimizer_and_grad_accumulator(
     module_id_to_prefix[id(unwrapped_model)] = ""
 
     named_parameters = list(unwrapped_model.get_named_params_with_correct_tied())
+    # NOTE: get the module from name in named_parameters
+
+    names_to_modules = {name: unwrapped_model.get_submodule(name.rsplit(".", 1)[0]) for name, _ in named_parameters}
+
+    if parametrization_method == ParametrizationMethod.SPECTRAL_MUP:
+        learning_rate_mapper = LearningRateForSpectralMup(names_to_modules=names_to_modules, config=optimizer_args)
+    elif parametrization_method == ParametrizationMethod.STANDARD:
+        learning_rate_mapper = LearningRateForSP(names_to_modules=names_to_modules, config=optimizer_args)
+    else:
+        raise ValueError(f"Unknown parametrization method {parametrization_method}")
+
     # named_parameters = group_parameters_by_linear_type(named_parameters, unwrapped_model, optimizer_args)
 
     # Basic optimizer builder
@@ -246,6 +264,7 @@ def init_optimizer_and_grad_accumulator(
                 betas=(optimizer_args.adam_beta1, optimizer_args.adam_beta2),
                 fused=optimizer_args.torch_adam_is_fused,
             ),
+            learning_rate_mapper=learning_rate_mapper,
         )
 
     optimizer_builder = basic_optimizer_builder

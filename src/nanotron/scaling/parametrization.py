@@ -1,9 +1,11 @@
 import math
 from abc import abstractmethod
 from enum import Enum, auto
+from typing import Dict
 
 import torch
-from nanotron.config import ModelArgs, OptimizerArgs
+
+# from nanotron.config import ModelArgs, OptimizerArgs
 from nanotron.nn.layer_norm import TritonRMSNorm
 from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelColumnLinear,
@@ -20,7 +22,7 @@ class ParametrizationMethod(Enum):
 
 
 class Parametrizator:
-    def __init__(self, config: ModelArgs):
+    def __init__(self, config: "ModelArgs"):
         self.config = config
 
     def parametrize(self, param_name: str, module: nn.Module):
@@ -31,7 +33,7 @@ class Parametrizator:
 
 
 class StandardParametrizator(Parametrizator):
-    def __init__(self, config: ModelArgs):
+    def __init__(self, config: "ModelArgs"):
         super().__init__(config)
         self.MODULE_TO_PARAMETRIZE = {
             TensorParallelColumnLinear: self._parametrize_column_linear,
@@ -82,7 +84,7 @@ class SpectralMupParametrizator(Parametrizator):
     https://arxiv.org/abs/2310.17813
     """
 
-    def __init__(self, config: ModelArgs):
+    def __init__(self, config: "ModelArgs"):
         super().__init__(config)
         self.MODULE_TO_PARAMETRIZE = {
             TensorParallelColumnLinear: self._parametrize_mup_weight,
@@ -122,8 +124,9 @@ class SpectralMupParametrizator(Parametrizator):
 
 
 class LearningRateForParametrizator:
-    def __init__(self, config: OptimizerArgs):
+    def __init__(self, names_to_modules: Dict[str, nn.Module], config: "OptimizerArgs"):
         self.config = config
+        self.names_to_modules = names_to_modules
 
     @abstractmethod
     def get_lr(self, param_name: str, module: nn.Module):
@@ -131,13 +134,13 @@ class LearningRateForParametrizator:
 
 
 class LearningRateForSP(LearningRateForParametrizator):
-    def get_lr(self, param_name: str, module: nn.Module):
+    def get_lr(self, param_name: str, param: nn.Module):
         return self.config.learning_rate_scheduler.learning_rate
 
 
 class LearningRateForSpectralMup(LearningRateForParametrizator):
-    def __init__(self, config: OptimizerArgs):
-        super().__init__(config)
+    def __init__(self, names_to_modules: Dict[str, nn.Module], config: "OptimizerArgs"):
+        super().__init__(names_to_modules, config)
         self.MODULE_TO_PARAMETRIZE = {
             TensorParallelColumnLinear: self._get_mup_lr,
             TensorParallelRowLinear: self._get_mup_lr,
@@ -145,15 +148,15 @@ class LearningRateForSpectralMup(LearningRateForParametrizator):
             TensorParallelEmbedding: self._get_global_lr,
         }
 
-    def _get_mup_lr(self, param_name: str, module: nn.Module):
-        assert param_name in ["weight", "bias"]
-        data = module.weight if param_name == "weight" else module.bias
+    def _get_mup_lr(self, param_name: str, param: nn.Module):
+        # assert param_name in ["weight", "bias"]
         lr = self.config.learning_rate_scheduler.learning_rate
-        fan_in, fan_out = init._calculate_fan_in_and_fan_out(data)
+        fan_in, fan_out = init._calculate_fan_in_and_fan_out(param)
         return lr * (fan_out / fan_in)
 
-    def _get_global_lr(self, param_name: str, module: nn.Module) -> float:
+    def _get_global_lr(self, param_name: str, param: nn.Module) -> float:
         return self.config.learning_rate_scheduler.learning_rate
 
-    def get_lr(self, param_name: str, module: nn.Module) -> float:
-        return self.MODULE_TO_PARAMETRIZE[type(module)](param_name, module)
+    def get_lr(self, param_name: str, param: nn.Parameter) -> float:
+        module = self.names_to_modules[param_name]
+        return self.MODULE_TO_PARAMETRIZE[type(module)](param_name, param)
