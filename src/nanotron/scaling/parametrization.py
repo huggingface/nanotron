@@ -3,8 +3,6 @@ from abc import abstractmethod
 from enum import Enum, auto
 from typing import Dict
 
-import torch
-
 # from nanotron.config import ModelArgs, OptimizerArgs
 from nanotron.nn.layer_norm import TritonRMSNorm
 from nanotron.parallel.tensor_parallel.nn import (
@@ -97,11 +95,20 @@ class SpectralMupParametrizator(Parametrizator):
     def _compute_spectral_std(self, std: float, fan_in: int, fan_out: int):
         return (std / math.sqrt(fan_in)) * min(1, math.sqrt(fan_out / fan_in))
 
-    def _parametrize_mup_weight(self, param_name: str, module: torch.Tensor):
+    def _parametrize_mup_weight(self, param_name: str, module: nn.Module):
         assert param_name in ["weight", "bias"]
 
         data = module.weight if param_name == "weight" else module.bias
         fan_in, fan_out = init._calculate_fan_in_and_fan_out(data)
+        world_size = module.world_size
+
+        if isinstance(module, TensorParallelColumnLinear):
+            fan_out = fan_out * world_size
+        elif isinstance(module, TensorParallelRowLinear):
+            fan_in = fan_in * world_size
+        else:
+            raise ValueError(f"Unknown module {module}")
+
         std = self._compute_spectral_std(std=self.std, fan_in=fan_in, fan_out=fan_out)
         init.normal_(data, mean=0.0, std=std)
 
@@ -148,15 +155,23 @@ class LearningRateForSpectralMup(LearningRateForParametrizator):
             TensorParallelEmbedding: self._get_global_lr,
         }
 
-    def _get_mup_lr(self, param_name: str, param: nn.Module):
-        # assert param_name in ["weight", "bias"]
+    def _get_mup_lr(self, param: nn.Parameter, module: nn.Module):
         lr = self.config.learning_rate_scheduler.learning_rate
         fan_in, fan_out = init._calculate_fan_in_and_fan_out(param)
+        world_size = module.world_size
+
+        if isinstance(module, TensorParallelColumnLinear):
+            fan_out = fan_out * world_size
+        elif isinstance(module, TensorParallelRowLinear):
+            fan_in = fan_in * world_size
+        else:
+            raise ValueError(f"Unknown module {module}")
+
         return lr * (fan_out / fan_in)
 
-    def _get_global_lr(self, param_name: str, param: nn.Module) -> float:
+    def _get_global_lr(self, param: nn.Parameter, module: nn.Module) -> float:
         return self.config.learning_rate_scheduler.learning_rate
 
     def get_lr(self, param_name: str, param: nn.Parameter) -> float:
         module = self.names_to_modules[param_name]
-        return self.MODULE_TO_PARAMETRIZE[type(module)](param_name, param)
+        return self.MODULE_TO_PARAMETRIZE[type(module)](param, module)

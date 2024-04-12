@@ -210,7 +210,10 @@ class CoreAttention(nn.Module):
 
         # NOTE: this scale is for µTransfer,
         # in SP, we use sqrt(1/d_h)
-        softmax_scale = 1 / query_states.shape[-1]
+        from nanotron import constants
+
+        print(f"d_head: {query_states.shape[-1]}")
+        softmax_scale = 1 / query_states.shape[-1] if constants.IS_MUP else None
 
         attn_output = flash_attn_varlen_func(
             q=query_states,
@@ -435,6 +438,10 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                 )
                 (value_unpad, _, _, _) = bert_padding.unpad_input(value_states, sequence_mask)
 
+                from nanotron import constants
+
+                softmax_scale = 1 / query_states.shape[-1] if constants.IS_MUP else None
+
                 output_unpad = flash_attn_varlen_func(
                     q=query_unpad,  # (total_q, n_local_q_heads, d_qk)
                     k=key_unpad,  # (total_kv, n_local_kv_heads, d_qk)
@@ -444,7 +451,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                     max_seqlen_q=max_seqlen_q,
                     max_seqlen_k=max_seqlen_k,
                     dropout_p=0.0,
-                    softmax_scale=None,
+                    softmax_scale=softmax_scale,
                     causal=True,  # True in prefill phase, False in subsequent phases
                     return_attn_probs=False,
                 )  # (total_unpadded, n_local_q_heads, d_v)
@@ -912,6 +919,11 @@ class LlamaForTraining(NanotronModel):
             ParametrizationMethod.SPECTRAL_MUP: SpectralMupParametrizator,
         }
         parametrizator = INIT_TYPE_TO_PARAMETRIZATOR[init_method](config=config.model)
+
+        if init_method == ParametrizationMethod.SPECTRAL_MUP:
+            from nanotron import constants
+
+            constants.IS_MUP = True
 
         log_rank(
             f"Parametrizing model parameters using {parametrizator.__class__.__name__}",

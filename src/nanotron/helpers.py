@@ -242,13 +242,21 @@ def init_optimizer_and_grad_accumulator(
     # NOTE: get the module from name in named_parameters
 
     names_to_modules = {name: unwrapped_model.get_submodule(name.rsplit(".", 1)[0]) for name, _ in named_parameters}
+    assert parametrization_method in [ParametrizationMethod.SPECTRAL_MUP, ParametrizationMethod.STANDARD]
 
-    if parametrization_method == ParametrizationMethod.SPECTRAL_MUP:
-        learning_rate_mapper = LearningRateForSpectralMup(names_to_modules=names_to_modules, config=optimizer_args)
-    elif parametrization_method == ParametrizationMethod.STANDARD:
-        learning_rate_mapper = LearningRateForSP(names_to_modules=names_to_modules, config=optimizer_args)
-    else:
-        raise ValueError(f"Unknown parametrization method {parametrization_method}")
+    lr_mapper_cls = (
+        LearningRateForSpectralMup
+        if parametrization_method == ParametrizationMethod.SPECTRAL_MUP
+        else LearningRateForSP
+    )
+    log_rank(
+        f"Using {lr_mapper_cls} as learning rate",
+        logger=logger,
+        level=logging.INFO,
+        group=parallel_context.world_pg,
+        rank=0,
+    )
+    learning_rate_mapper = lr_mapper_cls(names_to_modules=names_to_modules, config=optimizer_args)
 
     # named_parameters = group_parameters_by_linear_type(named_parameters, unwrapped_model, optimizer_args)
 

@@ -43,6 +43,7 @@ We support the following:
  - ZeRO-1 optimizer
  - FP32 gradient accumulation
  - Parameter tying/sharding
+ - Spectral µTransfer parametrization for scaling up neural networks
 
 # Installation
 

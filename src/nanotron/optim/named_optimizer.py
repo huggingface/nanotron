@@ -1,4 +1,4 @@
-from typing import Any, Callable, Dict, Iterable, Tuple, Union
+from typing import Any, Callable, Dict, Iterable, List, Tuple, Union
 
 import torch
 
@@ -38,24 +38,30 @@ class NamedOptimizer(InheritFromOtherOptimizer):
         name_to_id = {v: k for k, v in id_to_name.items()}
         assert len(id_to_name) == len(name_to_id)
 
-        # NOTE: mapping learning rate based on the paramitrization
-        params_with_lr = []
-        for param_group in params:
-            for p in param_group["params"]:
-                name = id_to_name[id(p)]
-                lr = learning_rate_mapper.get_lr(name, p)
-                assert lr is not None, f"Learning rate for {name} is None"
-                other_hyperparameters = {k: v for k, v in param_group.items() if k != "params"}
-                params_with_lr.append({"params": [p], "lr": lr, **other_hyperparameters})
+        params = self._get_custom_learning_rate_for_params(id_to_name, params, learning_rate_mapper)
 
         # Sanity check
-        for param_group in params_with_lr:
+        for param_group in params:
             _params = param_group["params"]
             for param in _params:
                 # https://github.com/pytorch/pytorch/issues/100701
                 assert param.numel() > 0
 
-        super().__init__(optimizer=optimizer_builder(params_with_lr), id_to_name=id_to_name)
+        super().__init__(optimizer=optimizer_builder(params), id_to_name=id_to_name)
+
+    def _get_custom_learning_rate_for_params(
+        self, id_to_name, params: List[Dict[str, Any]], learning_rate_mapper
+    ) -> List[Dict[str, Any]]:
+        params_with_lr = []
+        for param_group in params:
+            for p in param_group["params"]:
+                name = id_to_name[id(p)]
+                lr = learning_rate_mapper.get_lr(name, p)
+                print(f"{name} has lr: {lr}")
+                assert isinstance(lr, float), f"Expected a float, got {lr} for parameter {name}"
+                other_hyperparameters = {k: v for k, v in param_group.items() if k != "params"}
+                params_with_lr.append({"params": [p], "lr": lr, **other_hyperparameters})
+        return params_with_lr
 
     def state_dict(self) -> dict:
         optim_state_dict = super().state_dict()
