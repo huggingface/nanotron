@@ -71,7 +71,7 @@ class DoReMiTrainer(DistributedTrainer):
 
         log_rank(
             f"""[DoReMi] In DoReMi's proxy training, please note that 'loss' represents DRO loss, and 'ce_loss' represent cross entropy loss.
-            [DoReMi] Domain weights: {self.doremi_context.domain_weights}""",
+            [DoReMi] Sampling weights: {self.doremi_context.domain_weights}""",
             logger=logger,
             level=logging.INFO,
         )
@@ -152,6 +152,9 @@ class DoReMiTrainer(DistributedTrainer):
         domain_weights = domain_weights.cpu().detach().numpy()
         domain_losses = domain_losses.cpu().detach().numpy()
 
+        # NOTE: the domain weights here aren't the sampling weights
+        # but in-flight weights of the current step, we use a fixed uniform weights
+        # for sampling
         log_rank(
             f"""[DoReMi] Domain weights: {print_array_for_human(domain_weights)}
             [DoReMi] Domain losses: {print_array_for_human(domain_losses)}
