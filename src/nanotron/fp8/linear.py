@@ -1,4 +1,4 @@
-from typing import Optional, Tuple, Union
+from typing import Optional, Tuple, Union, TypedDict
 
 import torch
 import torch.nn.functional as F
@@ -12,7 +12,16 @@ from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.kernel import fp8_matmul_kernel
 from nanotron.fp8.parameter import FP8Parameter
 from nanotron.fp8.tensor import FP8Tensor
+from nanotron.fp8.meta import FP8Meta
 
+
+class FP8LinearMeta(TypedDict):
+    """FP8 metadata for FP8Linear."""
+
+    input_grad: FP8Meta
+    weight_grad: FP8Meta
+    output_grad: FP8Meta
+    
 
 class FP8Linear(nn.Linear):
     # TODO(xrsrke): qtype isn't the data types of the weight and bias

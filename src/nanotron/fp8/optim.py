@@ -14,7 +14,7 @@ from nanotron.fp8.tensor import (
     convert_tensor_from_fp8,
     convert_tensor_from_fp16,
 )
-from nanotron.fp8.utils import is_overflow_underflow_nan
+from nanotron.fp8.utils import is_overflow_underflow_nan, compute_stas
 
 
 class Adam(Optimizer):
@@ -225,11 +225,16 @@ class FP8Adam(Optimizer):
 
         assert len(self.master_weights) == len(self.fp8_weights)
         # TODO(xrsrke): auto free fp32 weights from memory
+        
+        self.loggings = []
 
     def __setstate__(self, state):
         super().__setstate__(state)
         for group in self.param_groups:
             group.setdefault("amsgrad", False)
+    
+    # def _set_logging(self):
+    #     pass
 
     def _init_optim_states(
         self,
@@ -246,7 +251,6 @@ class FP8Adam(Optimizer):
         # TODO(xrsrke): maybe initialize a lower precision then cast to FP8Tensor
         # because zeros fp16 = zeros fp32?
         exp_avg = torch.zeros(p.data.shape, dtype=torch.float32, device="cuda")
-        # if self.exp_avg_dtype in FP8_DTYPES:
         exp_avg = FP8Tensor(exp_avg, dtype=self.exp_avg_dtype)
 
         # Exponential moving average of squared gradient values
@@ -267,17 +271,21 @@ class FP8Adam(Optimizer):
     def step(self):
         # NOTE: sanity check the entire params has at least one grad
         assert any(p.grad is not None for group in self.param_groups for p in group["params"])
-
+        loggings = {}
+        
         for group in self.param_groups:
             for p in group["params"]:
                 if p.grad is None:
                     continue
+                
+                loggings[p] = {}
 
                 state = self.state[p]
                 if len(state) == 0:
                     self._init_optim_states(state, p)
 
                 grad = p.grad
+                # loggings[p]["lp_grad"] = compute_stas(grad)
 
                 # NOTE: sanity check
                 assert (isinstance(p, FP8Parameter) and p.dtype in FP8_DTYPES) or (
@@ -296,6 +304,7 @@ class FP8Adam(Optimizer):
                     if p.ndim == 1
                     else convert_tensor_from_fp8(grad, grad.fp8_meta, torch.float32)
                 )
+                loggings[p]["hp_grad"] = compute_stas(fp32_grad)
 
                 if is_overflow_underflow_nan(fp32_grad):
                     print(f"Overflow, underflow, or NaN detected in the gradients. So skip the current step")
@@ -324,8 +333,10 @@ class FP8Adam(Optimizer):
                 # TODO(xrsrke): ideally, we should map tensor to tensor
                 # it's easier to debug (u know which tensor is which)
                 fp16_p = self.mappping_fp8_to_master_weight[p]
+                # loggings[p]["lp_p"] = compute_stas(fp16_p)
                 assert fp16_p.dtype == torch.float16
                 fp32_p = convert_tensor_from_fp16(fp16_p, torch.float32)
+                loggings[p]["hp_p"] = compute_stas(fp32_p)
 
                 assert fp32_p.dtype == torch.float32
                 assert fp32_grad.dtype == torch.float32
@@ -344,6 +355,9 @@ class FP8Adam(Optimizer):
                 exp_avg, exp_avg_sq = state["exp_avg"], state["exp_avg_sq"]
                 assert exp_avg.dtype == torch.uint8
                 assert exp_avg_sq.dtype == torch.float16
+                
+                # loggings[p]["lp_exp_avg"] = compute_stas(exp_avg)
+                # loggings[p]["lp_exp_avg_sq"] = compute_stas(exp_avg_sq)
 
                 if p.ndim != 1:
                     print(
@@ -356,6 +370,9 @@ class FP8Adam(Optimizer):
                 # TODO(xrsrke): can we do all calculations in fp8?
                 fp32_exp_avg = convert_tensor_from_fp8(exp_avg, exp_avg.fp8_meta, torch.float32)
                 fp32_exp_avg_sq = convert_tensor_from_fp16(exp_avg_sq, torch.float32)
+                
+                loggings[p]["hp_exp_avg"] = compute_stas(fp32_exp_avg)
+                loggings[p]["hp_exp_avg_sq"] = compute_stas(fp32_exp_avg_sq)
 
                 assert fp32_exp_avg.dtype == torch.float32
                 assert fp32_exp_avg_sq.dtype == torch.float32
@@ -428,6 +445,8 @@ class FP8Adam(Optimizer):
 
                 # print(f"[FP8Adam] updated_p_fp8: updated_p_fp8.data={updated_p_fp8.data[:2, :2]}, p_fp32_meta={p_fp32_meta} \n")
 
+        self.loggings.append(loggings)
+        
     def zero_grad(self):
         for group in self.param_groups:
             for p in group["params"]:

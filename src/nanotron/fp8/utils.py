@@ -1,6 +1,6 @@
 from typing import Dict, List, Tuple
 
-# import pydevd
+import pydevd
 import torch
 import transformer_engine as te  # noqa
 from torch import nn
@@ -10,6 +10,7 @@ from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.linear import FP8Linear
 from nanotron.fp8.meta import FP8Meta
 from nanotron.fp8.parameter import FP8Parameter
+# from nanotron.fp8.optim import FP8Adam
 
 
 def is_fp8_available() -> bool:
@@ -100,27 +101,28 @@ def convert_to_fp8_module(module: nn.Module, accum_qtype: DTypes = FP8LM_RECIPE.
     return module
 
 
+def compute_stas(tensor):
+    return {
+        "mean": tensor.mean().item(),
+        "std": tensor.std().item(),
+        "var": tensor.var().item(),
+        "norm": tensor.norm().item(),
+        "min": tensor.min().item(),
+        "max": tensor.max().item(),
+        "amax": tensor.abs().max().item(),
+    }
+
 def track_module_statistics(name: str, module: nn.Linear, logging: Dict[str, Dict[str, float]]):
     if name not in logging:
         logging[name] = {}
 
-    def _collect_stats(tensor):
-        return {
-            "mean": tensor.mean().item(),
-            "std": tensor.std().item(),
-            "var": tensor.var().item(),
-            "norm": tensor.norm().item(),
-            "min": tensor.min().item(),
-            "max": tensor.max().item(),
-        }
-
     def _save_output_stats(module: nn.Linear, input: torch.Tensor, output: torch.Tensor):        
         if hasattr(module, "weight") and module.weight is not None:
-            logging[name]["weight"] = _collect_stats(module.weight)
+            logging[name]["weight"] = compute_stas(module.weight)
             # logging[name]["weight"] = _collect_stats(module.weight)
 
         if hasattr(module, "bias") and module.bias is not None:
-            logging[name]["bias"] = _collect_stats(module.bias)
+            logging[name]["bias"] = compute_stas(module.bias)
 
         inputs = input if isinstance(input, tuple) else (input,)
         outputs = output if isinstance(output, tuple) else (output,)
@@ -130,15 +132,15 @@ def track_module_statistics(name: str, module: nn.Linear, logging: Dict[str, Dic
                 if inp.dtype == torch.long:
                     # NOTE: this is input ids in transformers
                     continue
-                logging[name][f"input:{i}"] = _collect_stats(inp)
+                logging[name][f"input:{i}"] = compute_stas(inp)
         else:
-            logging[name]["input"] = _collect_stats(inputs[0])
+            logging[name]["input"] = compute_stas(inputs[0])
         
         if len(outputs) > 1:
             for i, out in enumerate(outputs):
-                logging[name][f"output:{i}"] = _collect_stats(out)
+                logging[name][f"output:{i}"] = compute_stas(out)
         else:
-            logging[name]["output"] = _collect_stats(outputs[0])
+            logging[name]["output"] = compute_stas(outputs[0])
     
     def _save_grad_stats(module: nn.Linear, grad_input, grad_output: torch.Tensor):
         # import pydevd
@@ -148,18 +150,18 @@ def track_module_statistics(name: str, module: nn.Linear, logging: Dict[str, Dic
         
         if isinstance(grad_output, tuple):
             for i, grad in enumerate(grad_output):
-                logging[name][f"grad_output:{i}"] = _collect_stats(grad)
+                logging[name][f"grad_output:{i}"] = compute_stas(grad)
         else:
-            logging[name]["grad_output"] = _collect_stats(grad_output)
+            logging[name]["grad_output"] = compute_stas(grad_output)
             
             
         if isinstance(grad_input, tuple):
             for i, grad in enumerate(grad_input):
                 if grad is not None:
-                    logging[name][f"grad_input:{i}"] = _collect_stats(grad)
+                    logging[name][f"grad_input:{i}"] = compute_stas(grad)
         else:
             if grad_input is not None:
-                logging[name]["grad_input"] = _collect_stats(grad_input)
+                logging[name]["grad_input"] = compute_stas(grad_input)
 
     module.register_forward_hook(_save_output_stats)
     # module.register_full_backward_pre_hook(_save_grad_stats)
@@ -185,3 +187,15 @@ def convert_logs_to_flat_logs(logs, prefix):
                 flat_logs[f"{prefix}:{module_name}:{component_name}:{stat_name}"] = value
     
     return flat_logs
+
+
+def track_optimizer(optim: "FP8Adam"):
+    # logs = {}
+    # def _track(optim, args, kwargs):
+    #     pydevd.settrace(suspend=False, trace_only_current_thread=True)
+    #     assert 1 == 1
+    
+    # optim.register_step_post_hook(_track)
+
+    # return logs
+    pass
