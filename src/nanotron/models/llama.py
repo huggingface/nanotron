@@ -25,8 +25,8 @@ from flash_attn.flash_attn_interface import (
 from flash_attn.layers.rotary import RotaryEmbedding as FlashRotaryEmbedding
 from torch import nn
 
+from nanotron import constants, logging
 from nanotron import distributed as dist
-from nanotron import logging
 from nanotron.config import Config, LlamaConfig, ParallelismArgs
 from nanotron.generation.generate_store import AttachableStore
 from nanotron.logging import log_rank
@@ -210,9 +210,7 @@ class CoreAttention(nn.Module):
 
         # NOTE: this scale is for µTransfer,
         # in SP, we use sqrt(1/d_h)
-        from nanotron import constants
-
-        softmax_scale = 1 / query_states.shape[-1] if constants.IS_MUP else None
+        softmax_scale = 1 / query_states.shape[-1] if constants.USING_MUP else None
         attn_output = flash_attn_varlen_func(
             q=query_states,
             k=key_states,
@@ -436,10 +434,9 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                 )
                 (value_unpad, _, _, _) = bert_padding.unpad_input(value_states, sequence_mask)
 
-                from nanotron import constants
-
-                softmax_scale = 1 / query_states.shape[-1] if constants.IS_MUP else None
-
+                # NOTE: this scale is for µTransfer,
+                # in SP, we use sqrt(1/d_h)
+                softmax_scale = 1 / query_states.shape[-1] if constants.USING_MUP else None
                 output_unpad = flash_attn_varlen_func(
                     q=query_unpad,  # (total_q, n_local_q_heads, d_qk)
                     k=key_unpad,  # (total_kv, n_local_kv_heads, d_qk)
@@ -523,6 +520,9 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                     batch_size, kv_length, self.n_local_kv_heads, self.d_v
                 )  # [batch_size, kv_length, self.n_heads, d_v]
 
+                # NOTE: this scale is for µTransfer,
+                # in SP, we use sqrt(1/d_h)
+                softmax_scale = 1 / query_states.shape[-1] if constants.USING_MUP else None
                 attention_output = flash_attn_with_kvcache(
                     query_states,
                     k_cache,
@@ -533,7 +533,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                     rotary_sin=None,
                     # TODO @nouamane: seems like this doesn't help to indicate padding in (for first iteration it's just 0)
                     cache_seqlens=position_offsets.contiguous(),
-                    softmax_scale=None,
+                    softmax_scale=softmax_scale,
                     causal=True,
                     rotary_interleaved=False,  # GPT-NeoX style
                 )
@@ -917,11 +917,8 @@ class LlamaForTraining(NanotronModel):
             ParametrizationMethod.SPECTRAL_MUP: SpectralMupParametrizator,
         }
         parametrizator = INIT_TYPE_TO_PARAMETRIZATOR[init_method](config=config.model)
-
         if init_method == ParametrizationMethod.SPECTRAL_MUP:
-            from nanotron import constants
-
-            constants.IS_MUP = True
+            constants.USING_MUP = True
 
         log_rank(
             f"Parametrizing model parameters using {parametrizator.__class__.__name__}",

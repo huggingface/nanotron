@@ -6,4 +6,4 @@ CHECKPOINT_VERSION = Version("1.2")
 
 PY_VERSION = parse(platform.python_version())
 
-IS_MUP = False
+USING_MUP: bool = False
