@@ -113,7 +113,7 @@ def lr_scheduler_builder(optimizer: Optimizer, lr_scheduler_args: LRSchedulerArg
             if lr_scheduler_args.lr_warmup_style == "linear":
                 lmbda = lr * current_step / max(lr_scheduler_args.lr_warmup_steps, 1)
             elif lr_scheduler_args.lr_warmup_style == "constant":
-                lmbda = log_rank
+                lmbda = lr_scheduler_args.learning_rate
             else:
                 raise ValueError(f"Unknown warmup style {lr_scheduler_args.lr_warmup_style}")
 

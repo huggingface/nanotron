@@ -837,9 +837,6 @@ class Loss(nn.Module):
         # Megatron by defaults cast everything in fp32. `--f16-lm-cross-entropy` is an option you can use to keep current precision.
         # https://github.com/NVIDIA/Megatron-LM/blob/f267e6186eae1d6e2055b412b00e2e545a8e896a/megatron/model/gpt_model.py#L38
 
-        # mup_logit_l1_norm = sharded_logits.mean(dim=[0,1]).abs()
-        # dist.all_reduce(mup_logit_l1_norm, op=dist.ReduceOp.AVERAGE, group=self.tp_pg)
-
         loss = sharded_cross_entropy(
             sharded_logits, label_ids.transpose(0, 1).contiguous(), group=self.tp_pg, dtype=torch.float
         ).transpose(0, 1)
