@@ -168,6 +168,16 @@ def init_optimizer_and_grad_accumulator(
     optimizer_args: OptimizerArgs,
     parallel_context: ParallelContext,
 ) -> Tuple[BaseOptimizer, GradientAccumulator]:
+    def get_names_from_modules_in_current_pp_rank(model: NanotronModel):
+        names_to_modules = {}
+        for name, _ in named_parameters:
+            try:
+                names_to_modules[name] = model.get_submodule(name.rsplit(".", 1)[0])
+            except AttributeError:
+                # NOTE: this module aren't belong to the current pp rank
+                pass
+        return names_to_modules
+
     # Unwrap DDP
     unwrapped_model: NanotronModel = model.module if isinstance(model, DistributedDataParallel) else model
 
@@ -178,7 +188,8 @@ def init_optimizer_and_grad_accumulator(
     named_parameters = list(unwrapped_model.get_named_params_with_correct_tied())
     # NOTE: get the module from name in named_parameters
 
-    names_to_modules = {name: unwrapped_model.get_submodule(name.rsplit(".", 1)[0]) for name, _ in named_parameters}
+    # NOTE: since in the case of pipeline parallelism, each rank only has a subset of the model
+    names_to_modules = get_names_from_modules_in_current_pp_rank(unwrapped_model)
     assert parametrization_method in [ParametrizationMethod.SPECTRAL_MUP, ParametrizationMethod.STANDARD]
 
     lr_mapper_cls = (

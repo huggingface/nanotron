@@ -59,7 +59,7 @@ class NanotronModel(nn.Module, metaclass=ABCMeta):
 
     @abstractmethod
     def init_model_randomly(self, config):
-        ...
+        pass
 
     def tie_custom_params(self) -> None:
         """Tie custom parameters. For example for MQA marks kv heads as tied."""
@@ -171,7 +171,7 @@ def build_model(
         pp_size = len(target_pp_ranks)
 
     # Set rank for each pipeline block
-    log_rank("Setting PP block ranks..", logger=logger, level=logging.INFO, rank=0, group=parallel_context.world_pg)
+    log_rank("Setting PP block ranks...", logger=logger, level=logging.INFO, rank=0, group=parallel_context.world_pg)
     pipeline_blocks = [module for name, module in model.named_modules() if isinstance(module, PipelineBlock)]
     # "cuda" is already defaulted for each process to it's own cuda device
     with init_on_device_and_dtype(device=device, dtype=dtype):

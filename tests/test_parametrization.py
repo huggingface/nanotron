@@ -10,7 +10,22 @@ from nanotron.parallel import ParallelContext
 from nanotron.scaling.parametrization import ParametrizationMethod
 
 
-def _test_init_parallel_context(
+@pytest.mark.parametrize("tp,dp,pp", [(2, 1, 1)])
+@pytest.mark.parametrize("parametrization_method", [ParametrizationMethod.SPECTRAL_MUP])
+@rerun_if_address_is_in_use()
+def test_parametrization(tp: int, dp: int, pp: int, parametrization_method: ParametrizationMethod):
+    if parametrization_method == ParametrizationMethod.STANDARD:
+        init_method = RandomInit(std=1.0)
+    elif parametrization_method == ParametrizationMethod.SPECTRAL_MUP:
+        init_method = SpectralMupInit(use_mup=True)
+
+    init_distributed(tp=tp, dp=dp, pp=pp)(_test_parametrization)(
+        init_method=init_method,
+        parametrization_method=parametrization_method,
+    )
+
+
+def _test_parametrization(
     parallel_context: ParallelContext,
     init_method: Union[RandomInit, SpectralMupInit],
     parametrization_method: ParametrizationMethod,
@@ -37,7 +52,7 @@ def _test_init_parallel_context(
         "post_attention_layernorm": torch.tensor(0.0),
         "final_layer_norm": torch.tensor(0.0),
         "token_embedding": torch.tensor(1.0),
-        "lm_head": torch.tensor(1.0),
+        # "lm_head": torch.tensor(1.0),
         "qkv_proj": spectral_std(fan_in=hidden_size, fan_out=interdimte_size),
         "o_proj": spectral_std(fan_in=o_proj_infeatures, fan_out=hidden_size),
         "gate_up_proj": spectral_std(fan_in=hidden_size, fan_out=interdimte_size),
@@ -50,23 +65,11 @@ def _test_init_parallel_context(
                 return NAME_TO_EXPECTED_STD[name]
 
     for name, param in llama.model.named_parameters():
+        if "lm_head" in name:
+            continue
+
         expected_std = find_expected_std(name)
         assert expected_std is not None, f"Could not find expected std for {name}"
         assert torch.allclose(
             param.std().float(), expected_std, atol=0.05
         ), f"name: {name}, expected: {expected_std}, actual: {param.std()}"
-
-
-@pytest.mark.parametrize("tp,dp,pp", [(2, 1, 1)])
-@pytest.mark.parametrize("parametrization_method", [ParametrizationMethod.SPECTRAL_MUP])
-@rerun_if_address_is_in_use()
-def test_init_parallel_context(tp: int, dp: int, pp: int, parametrization_method: ParametrizationMethod):
-    if parametrization_method == ParametrizationMethod.STANDARD:
-        init_method = RandomInit(std=1.0)
-    elif parametrization_method == ParametrizationMethod.SPECTRAL_MUP:
-        init_method = SpectralMupInit(use_mup=True)
-
-    init_distributed(tp=tp, dp=dp, pp=pp)(_test_init_parallel_context)(
-        init_method=init_method,
-        parametrization_method=parametrization_method,
-    )

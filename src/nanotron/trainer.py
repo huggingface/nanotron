@@ -301,25 +301,6 @@ class DistributedTrainer:
             self.current_dataloader = dataloaders
             return
 
-    def _update_dataloader_based_on_training_stages(self, dataloaders: List[DataLoader]):
-        from collections.abc import Generator
-
-        if not hasattr(self.config, "data_stages") or self.config.data_stages is None:
-            if self.current_dataloader is None:
-                if isinstance(dataloaders, tuple):
-                    dataloader = dataloaders[0]
-                else:
-                    dataloader = dataloaders
-                self.current_dataloader = sanity_check_dataloader(
-                    dataloader=dataloader, parallel_context=self.parallel_context, config=self.config
-                )
-            return
-        elif isinstance(dataloaders, Generator):
-            # TODO(xrsrke): this is a hacky way to handle DoReMi's dataloader
-            # remove this in the next PR
-            self.current_dataloader = dataloaders
-            return
-
         assert len(dataloaders) > 0, "No dataloaders provided"
         assert len(dataloaders) == len(
             self.config.data_stages
