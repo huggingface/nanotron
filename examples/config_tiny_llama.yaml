@@ -4,20 +4,35 @@ checkpoints:
   checkpoints_path_is_shared_file_system: false
   resume_checkpoint_path: null
   save_initial_state: false
-data:
-  dataset:
-    dataset_overwrite_cache: false
-    dataset_processing_num_proc_per_process: 1
-    hf_dataset_config_name: null
-    hf_dataset_or_datasets: HuggingFaceH4/testing_alpaca_small
-    hf_dataset_splits: train
-    text_column_name: completion
-  num_loading_workers: 1
-  seed: 42
+data_stages:
+- data:
+    dataset:
+      dataset_overwrite_cache: false
+      dataset_processing_num_proc_per_process: 1
+      hf_dataset_config_name: null
+      hf_dataset_or_datasets: HuggingFaceH4/testing_alpaca_small
+      hf_dataset_splits: train
+      text_column_name: completion
+    num_loading_workers: 1
+    seed: 42
+  name: Stable Training Stage
+  start_training_step: 1
+- data:
+    dataset:
+      dataset_overwrite_cache: false
+      dataset_processing_num_proc_per_process: 1
+      hf_dataset_config_name: null
+      hf_dataset_or_datasets: HuggingFaceH4/testing_alpaca_small
+      hf_dataset_splits: train
+      text_column_name: completion
+    num_loading_workers: 1
+    seed: 42
+  name: Annealing Phase
+  start_training_step: 10
 general:
   benchmark_csv_path: null
   consumed_train_samples: null
-  ignore_sanity_checks: false
+  ignore_sanity_checks: true
   project: debug
   run: tiny_llama_%date_%jobid
   seed: 42
@@ -71,6 +86,7 @@ optimizer:
   zero_stage: 0
 parallelism:
   dp: 2
+  expert_parallel_size: 1
   pp: 2
   pp_engine: 1f1b
   tp: 2

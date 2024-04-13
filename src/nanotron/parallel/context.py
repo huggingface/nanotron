@@ -1,5 +1,5 @@
 import os
-from typing import Literal, Tuple
+from typing import Literal, Tuple, Annotated
 
 import numpy as np
 import torch
@@ -134,3 +134,22 @@ class ParallelContext:
 
         dist.barrier()
         dist.destroy_process_group()
+
+    def get_global_rank(
+        self,
+        ep_rank: int,
+        pp_rank: int,
+        dp_rank: int,
+        tp_rank: int,
+    ) -> np.int64:
+        """
+        Get the global rank based on the specified ranks in different parallel groups.
+
+        :param ep_rank: int, Rank in the expert parallel group.
+        :param pp_rank: int, Rank in the pipeline parallel group.
+        :param dp_rank: int, Rank in the data parallel group.
+        :param tp_rank: int, Rank in the tensor parallel group.
+
+        :return: numpy.int64, The global rank.
+        """
+        return self.world_rank_matrix[ep_rank, pp_rank, dp_rank, tp_rank]

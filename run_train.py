@@ -8,9 +8,12 @@ torchrun --nproc_per_node=8 run_train.py --config-file examples/config_tiny_llam
 ```
 """
 import argparse
+from typing import Dict, cast
 
 from nanotron import logging
 from nanotron.config import (
+    DataArgs,
+    DatasetStageArgs,
     PretrainDatasetsArgs,
 )
 from nanotron.dataloader import (
@@ -25,6 +28,7 @@ from nanotron.trainer import DistributedTrainer
 from nanotron.utils import (
     main_rank_first,
 )
+from torch.utils.data import DataLoader
 
 try:
     from huggingface_hub import __version__ as hf_hub_version
@@ -37,14 +41,14 @@ except ImportError:
 logger = logging.get_logger(__name__)
 
 
-def get_dataloader(trainer: DistributedTrainer):
+def get_dataloader_from_data_stage(trainer: DistributedTrainer, data: DataArgs):
     """Returns a dataloader for training."""
 
     # First, we need to know which ranks to feed the dataloader to
     input_pp_rank, output_pp_rank = get_input_output_pp_ranks(model=trainer.model)
 
     # Case 1: Dummy data generator
-    if trainer.config.data.dataset is None:
+    if data.dataset is None:
         log_rank("Using dummy data generator", logger=logger, level=logging.INFO, rank=0)
         dataloader = dummy_infinite_data_generator(
             micro_batch_size=trainer.micro_batch_size,
@@ -52,12 +56,12 @@ def get_dataloader(trainer: DistributedTrainer):
             input_pp_rank=input_pp_rank,
             output_pp_rank=output_pp_rank,
             vocab_size=trainer.model_config.vocab_size,
-            seed=trainer.config.data.seed,
+            seed=data.seed,
             parallel_context=trainer.parallel_context,
         )()
 
     # Case 2: HuggingFace datasets
-    elif isinstance(trainer.config.data.dataset, PretrainDatasetsArgs):
+    elif isinstance(data.dataset, PretrainDatasetsArgs):
         log_rank("Using `datasets` library", logger=logger, level=logging.INFO, rank=0)
         tokenizer_path = trainer.config.tokenizer.tokenizer_name_or_path
         log_rank(
@@ -74,8 +78,8 @@ def get_dataloader(trainer: DistributedTrainer):
 
             # We load the raw dataset
             raw_dataset = get_datasets(
-                hf_dataset_or_datasets=trainer.config.data.dataset.hf_dataset_or_datasets,
-                splits=trainer.config.data.dataset.hf_dataset_splits,
+                hf_dataset_or_datasets=data.dataset.hf_dataset_or_datasets,
+                splits=data.dataset.hf_dataset_splits,
             )["train"]
 
             tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
@@ -86,9 +90,9 @@ def get_dataloader(trainer: DistributedTrainer):
             train_dataset = clm_process(
                 raw_dataset=raw_dataset,
                 tokenizer=tokenizer,
-                text_column_name=trainer.config.data.dataset.text_column_name,
-                dataset_processing_num_proc_per_process=trainer.config.data.dataset.dataset_processing_num_proc_per_process,
-                dataset_overwrite_cache=trainer.config.data.dataset.dataset_overwrite_cache,
+                text_column_name=data.dataset.text_column_name,
+                dataset_processing_num_proc_per_process=data.dataset.dataset_processing_num_proc_per_process,
+                dataset_overwrite_cache=data.dataset.dataset_overwrite_cache,
                 sequence_length=trainer.sequence_length,
             )
 
@@ -101,8 +105,8 @@ def get_dataloader(trainer: DistributedTrainer):
                 output_pp_rank=output_pp_rank,
                 micro_batch_size=trainer.micro_batch_size,
                 consumed_train_samples=trainer.consumed_train_samples,
-                dataloader_num_workers=trainer.config.data.num_loading_workers,
-                seed_worker=trainer.config.data.seed,
+                dataloader_num_workers=data.num_loading_workers,
+                seed_worker=data.seed,
                 dataloader_drop_last=True,
             )
             # Check if we have enough samples for train_steps
@@ -117,9 +121,25 @@ def get_dataloader(trainer: DistributedTrainer):
                 f"Try train_steps<={len(dataloader.dataset) // trainer.global_batch_size + trainer.start_iteration_step}"
             )
     else:
-        raise ValueError(f"Unhandled case of `self.config.data.dataset`. Got: {trainer.config.data.dataset}")
+        raise ValueError(f"Unhandled case of `self.config.data.dataset`. Got: {data.dataset}")
 
     return dataloader
+
+
+def get_dataloader(trainer: DistributedTrainer) -> Dict[str, DataLoader]:
+    sorted_stages = sorted(trainer.config.data_stages, key=lambda stage: stage.start_training_step)
+    dataloaders = {}
+    for idx, stage in enumerate(sorted_stages):
+        # NOTE: we only create the dataloader for the first stage,
+        # then we lazy initialize the dataloader for the other stages
+        stage = cast(DatasetStageArgs, stage)
+        dataloader = (
+            get_dataloader_from_data_stage(trainer, stage.data)
+            if idx == 0
+            else lambda stage=stage: get_dataloader_from_data_stage(trainer, stage.data)
+        )
+        dataloaders[stage.name] = dataloader
+    return dataloaders
 
 
 def get_args():
