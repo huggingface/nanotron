@@ -1,6 +1,6 @@
 from abc import ABCMeta, abstractmethod
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Callable, Iterator, List, Optional, Tuple
+from typing import TYPE_CHECKING, Callable, Dict, Iterator, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -98,6 +98,18 @@ class NanotronModel(nn.Module, metaclass=ABCMeta):
                 group=group,
                 rank=rank,
             )
+
+    def get_named_modules(self) -> Dict[str, nn.Module]:
+        """Return the named modules that only belongs to the current pp rank."""
+        named_parameters = list(self.get_named_params_with_correct_tied())
+        names_to_modules = {}
+        for name, _ in named_parameters:
+            try:
+                names_to_modules[name] = self.get_submodule(name.rsplit(".", 1)[0])
+            except AttributeError:
+                # NOTE: this module aren't belong to the current pp rank
+                pass
+        return names_to_modules
 
 
 class DTypeInvariantTensor(torch.Tensor):

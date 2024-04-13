@@ -158,6 +158,11 @@ def lr_scheduler_builder(optimizer: Optimizer, lr_scheduler_args: LRSchedulerArg
     assert len(lr_lambdas) == len(
         optimizer.get_base_optimizer().param_groups
     ), "Custom learning rate functions don't match the number of param groups"
+    log_rank(
+        f"[Optimizer Building] There are total {len(lr_lambdas)} custom learning rate function for parameter groups",
+        logger=logger,
+        level=logging.DEBUG,
+    )
     lr_scheduler = LambdaLR(optimizer.get_base_optimizer(), lr_lambda=lr_lambdas)
     return lr_scheduler
 
@@ -168,16 +173,6 @@ def init_optimizer_and_grad_accumulator(
     optimizer_args: OptimizerArgs,
     parallel_context: ParallelContext,
 ) -> Tuple[BaseOptimizer, GradientAccumulator]:
-    def get_names_from_modules_in_current_pp_rank(model: NanotronModel):
-        names_to_modules = {}
-        for name, _ in named_parameters:
-            try:
-                names_to_modules[name] = model.get_submodule(name.rsplit(".", 1)[0])
-            except AttributeError:
-                # NOTE: this module aren't belong to the current pp rank
-                pass
-        return names_to_modules
-
     # Unwrap DDP
     unwrapped_model: NanotronModel = model.module if isinstance(model, DistributedDataParallel) else model
 
@@ -189,7 +184,7 @@ def init_optimizer_and_grad_accumulator(
     # NOTE: get the module from name in named_parameters
 
     # NOTE: since in the case of pipeline parallelism, each rank only has a subset of the model
-    names_to_modules = get_names_from_modules_in_current_pp_rank(unwrapped_model)
+    names_to_modules = unwrapped_model.get_named_modules()
     assert parametrization_method in [ParametrizationMethod.SPECTRAL_MUP, ParametrizationMethod.STANDARD]
 
     lr_mapper_cls = (
@@ -198,7 +193,7 @@ def init_optimizer_and_grad_accumulator(
         else LearningRateForSP
     )
     log_rank(
-        f"Using {lr_mapper_cls.__name__} as learning rate",
+        f"[Optimizer Building] Using {lr_mapper_cls.__name__} as learning rate",
         logger=logger,
         level=logging.INFO,
         group=parallel_context.world_pg,

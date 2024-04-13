@@ -2,8 +2,12 @@ from typing import Any, Callable, Dict, Iterable, List, Tuple, Union
 
 import torch
 
+from nanotron import logging
+from nanotron.logging import log_rank
 from nanotron.optim.inherit_from_other_optimizer import InheritFromOtherOptimizer
 from nanotron.scaling.parametrization import LearningRateForParametrizator
+
+logger = logging.get_logger(__name__)
 
 
 class NamedOptimizer(InheritFromOtherOptimizer):
@@ -60,6 +64,13 @@ class NamedOptimizer(InheritFromOtherOptimizer):
                 assert isinstance(lr, float), f"Expected a float, got {lr} for parameter {name}"
                 other_hyperparameters = {k: v for k, v in param_group.items() if k != "params"}
                 params_with_lr.append({"params": [p], "lr": lr, **other_hyperparameters})
+
+        log_rank(
+            f"[Optimizer Building] There are total {len(params_with_lr)} parameter groups with custom learning rate",
+            logger=logger,
+            level=logging.DEBUG,
+        )
+
         return params_with_lr
 
     def state_dict(self) -> dict:

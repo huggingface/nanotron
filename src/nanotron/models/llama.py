@@ -908,6 +908,7 @@ class LlamaForTraining(NanotronModel):
             f"Parametrizing model parameters using {parametrizator.__class__.__name__}",
             logger=logger,
             level=logging.INFO,
+            rank=0,
         )
 
         model = self
