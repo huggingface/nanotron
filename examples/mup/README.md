@@ -1,4 +1,4 @@
-OpenAI's scaling laws in 2020 has shown that scaling is one of the core ingredients for the success of LLMs. But naively stacking more layers can lead to unstable training due to exploding or vanishing gradients. A common approach researchers take is to halve the learning rate as they scale up, but this often leads to suboptimal training outcomes. In our implementation, the experimental results show that in a 350m llama, spectral µTransfer matches the pretraining performance of the baseline (albeit with a slightly higher training loss of 0.04). In another MLP-only experiment, µTransfer maintains a consistent L1 norm of activation across widths, and depths and allows scaling up to 2B while the SP baseline blows up and becomes untrainable.
+OpenAI's scaling laws [[link]](https://arxiv.org/abs/2001.08361) in 2020 has shown that scaling is one of the core ingredients for the success of LLMs. But naively stacking more layers can lead to unstable training due to exploding or vanishing gradients. A common approach researchers take is to halve the learning rate as they scale up, but this often leads to suboptimal training outcomes. In our implementation, the experimental results show that in a 350m llama, spectral µTransfer matches the pretraining performance of the baseline (albeit with a slightly higher training loss of 0.04). In another MLP-only experiment, µTransfer maintains a consistent L1 norm of activation across widths, and depths and allows scaling up to 2B while the SP baseline blows up and becomes untrainable.
 
 
 # How to use Spectral µTransfer
@@ -15,10 +15,11 @@ model:
 
 # MLP Only Experiment
 
-We ran a systematic experiment varying the number of layers from 8 to 32, width from 128 to 8192, and batch size from 32 to 2048, all on a logarithmic scale, CIFAR dataset, using an MSE training objective for 4 epochs with Adam optimizer. [Experiment Report](https://wandb.ai/neuralink/exp14_mup_grid_search/reports/-Spectral-Transfer-MLP-s-Experiment-Results--Vmlldzo3NDQ0NTQw?accessToken=xe0mkunx3y8t0xzbzxu9caqcre57or5la58d9o209hinanlmzoaj7es24m4elvdj)
+We ran a systematic experiment varying the number of layers from 8 to 32, width from 128 to 8192, and batch size from 32 to 2048, all on a logarithmic scale, CIFAR dataset, using an MSE training objective for 4 epochs with Adam optimizer. [[Experiment Report]](https://wandb.ai/neuralink/exp14_mup_grid_search/reports/-Spectral-Transfer-MLP-s-Experiment-Results--Vmlldzo3NDQ0NTQw?accessToken=xe0mkunx3y8t0xzbzxu9caqcre57or5la58d9o209hinanlmzoaj7es24m4elvdj)
 
 
 ![Scale across widths](./assets/scale-across-width.png)
+
 
 
 ![Scale across depths](./assets/scale-across-depth.png)
@@ -26,6 +27,6 @@ We ran a systematic experiment varying the number of layers from 8 to 32, width 
 
 # On 350m LLaMA
 
-We trained a 350m model with spectral µTransfer and standard parametrization using Nanotron, processing 1 million tokens per step at a learning rate of 0.001. µTransfer matches the performance of standard parametrization, with a slightly higher training loss of 0.04. [Experiment Report](https://api.wandb.ai/links/neuralink/i70nnpu9)
+We trained a 350m model with spectral µTransfer and standard parametrization using Nanotron, processing 1 million tokens per step at a learning rate of 0.001. µTransfer matches the performance of standard parametrization, with a slightly higher training loss of 0.04. [[Experiment Report]](https://api.wandb.ai/links/neuralink/i70nnpu9)
 
 ![LLaMA](./assets/llama.png)
