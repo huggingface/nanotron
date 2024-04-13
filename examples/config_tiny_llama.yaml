@@ -1,10 +1,9 @@
 checkpoints:
-  checkpoint_interval: 100000
+  checkpoint_interval: 10
   checkpoints_path: checkpoints
   checkpoints_path_is_shared_file_system: false
   resume_checkpoint_path: null
   save_initial_state: false
-
 data_stages:
   - name: Stable Training Stage
     start_training_step: 1
@@ -30,11 +29,10 @@ data_stages:
         text_column_name: completion
       num_loading_workers: 1
       seed: 42
-
 general:
   benchmark_csv_path: null
   consumed_train_samples: null
-  ignore_sanity_checks: false
+  ignore_sanity_checks: true
   project: debug
   run: tiny_llama_%date_%jobid
   seed: 42
@@ -90,7 +88,8 @@ optimizer:
   zero_stage: 0
 parallelism:
   dp: 2
-  pp: 1
+  expert_parallel_size: 1
+  pp: 2
   pp_engine: 1f1b
   tp: 2
   tp_linear_async_communication: true
@@ -104,7 +103,7 @@ tokens:
   batch_accumulation_per_replica: 1
   limit_test_batches: 0
   limit_val_batches: 0
-  micro_batch_size: 64
-  sequence_length: 128
+  micro_batch_size: 2
+  sequence_length: 32
   train_steps: 10
   val_check_interval: -1
