@@ -417,7 +417,7 @@ def create_table_log(
     return [
         LogItem("job_id", slurm_job_id, "s"),
         LogItem("name", config.general.run, "s"),
-        LogItem("nodes", math.ceil(parallel_context.world_pg.size() / 8), "d"),
+        LogItem("nodes", math.ceil(parallel_context.world_pg.size() / torch.cuda.device_count()), "d"),
         LogItem("seq_len", config.tokens.sequence_length, "d"),
         LogItem("mbs", config.tokens.micro_batch_size, "d"),
         LogItem("batch_accum", config.tokens.batch_accumulation_per_replica, "d"),
