@@ -282,7 +282,9 @@ class DistributedTrainer:
                 else:
                     dataloader = dataloaders
                 self.current_dataloader = sanity_check_dataloader(
-                    dataloader=dataloader, parallel_context=self.parallel_context, config=self.config
+                    dataloader=dataloader,
+                    parallel_context=self.parallel_context,
+                    config=self.config,
                 )
             return
 
@@ -477,6 +479,7 @@ class DistributedTrainer:
             self.grad_accumulator,
         )
 
+        aux_losses = {}
         # Compute DP average loss and overlap with optimizer step
         if isinstance(outputs[0]["loss"], torch.Tensor):
             # This is an average on only one data rank.
@@ -490,7 +493,6 @@ class DistributedTrainer:
                 async_op=True,
                 op=dist.ReduceOp.AVG,
             )
-            aux_losses = {}
             for k in outputs[0].keys():
                 if k != "loss":
                     aux_losses[k] = torch.stack(

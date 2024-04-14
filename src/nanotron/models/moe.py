@@ -60,7 +60,6 @@ def clear_load_balancing_stats():
 def batched_load_balancing_loss(
     # from config
     config: LlamaConfig,
-    pipeline_parallel_size: int,
 ):
     tokens_per_expert, expert_scores = zip(*get_load_balancing_stats())
     # tokens_per_expert[i].shape = (num_experts)
@@ -69,22 +68,6 @@ def batched_load_balancing_loss(
     moe_num_experts = config.moe_num_experts
     moe_loss_weight = config.moe_loss_weight
     num_experts_per_token = config.num_experts_per_tok
-
-    num_layers_per_pipeline_stage = num_hidden_layers // pipeline_parallel_size
-    if len(tokens_per_expert) != num_layers_per_pipeline_stage:
-        raise ValueError(
-            f"Expected {num_layers_per_pipeline_stage} token_per_experts "
-            f"but found {len(tokens_per_expert)}.\nnum_layers = "
-            f"{num_hidden_layers}\npipeline_model_parallel_size = "
-            f"{pipeline_parallel_size}\n"
-        )
-    if len(expert_scores) != num_layers_per_pipeline_stage:
-        raise ValueError(
-            f"Expected {num_layers_per_pipeline_stage} expert_scores "
-            f"but found {len(tokens_per_expert)}.\nnum_layers = "
-            f"{num_hidden_layers}\npipeline_model_parallel_size = "
-            f"{pipeline_parallel_size}\n"
-        )
 
     # Verify the shape of the tokens_per_expert and expert_scores tensors.
     assert all(x.ndim == 1 and x.numel() == moe_num_experts for x in tokens_per_expert)
@@ -98,10 +81,6 @@ def batched_load_balancing_loss(
     # expert_scores = torch.cat(expert_scores, dim=1).float().mean(dim=0)
     expert_scores = torch.cat(expert_scores, dim=1).mean(dim=0)
     tokens_per_expert = torch.cat(tokens_per_expert).to(expert_scores.dtype)
-
-    expected_values = num_layers_per_pipeline_stage * moe_num_experts
-    assert tokens_per_expert.numel() == expected_values
-    assert expert_scores.numel() == expected_values
 
     # Calculate the total scale across all factors.
     # loss_weight * num_experts / (num_layers * tokens * top_k)
@@ -607,6 +586,18 @@ class MLP(nn.Module):
                 bias=False,
                 async_communication=tp_linear_async_communication
                 and tp_mode is TensorParallelLinearMode.REDUCE_SCATTER,
+            ),
+            expert_parallel_size=self.expert_pg_size,
+        )
+
+        self.w1 = ExpertParallel(
+            TensorParallelColumnLinear(
+                config.hidden_size,
+                config.intermediate_size * self.experts_per_rank,
+                pg=tp_pg,
+                mode=tp_mode,
+                bias=False,
+                async_communication=tp_linear_async_communication,
             ),
             expert_parallel_size=self.expert_pg_size,
         )

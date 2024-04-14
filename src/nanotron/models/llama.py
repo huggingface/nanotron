@@ -823,10 +823,14 @@ class LlamaModel(nn.Module):
         model_config = self.config
         d_ff = model_config.intermediate_size
         d_qkv = model_config.hidden_size // model_config.num_attention_heads
+        attention_cost = 4 * model_config.num_attention_heads * d_qkv * model_config.hidden_size
+        mlp_cost = 3 * d_ff * model_config.hidden_size
+        if model_config.moe_num_experts > 1:
+            mlp_cost *= model_config.num_experts_per_tok  # active experts
+            mlp_cost += model_config.hidden_size * model_config.moe_num_experts  # routing
         block_compute_costs = {
             # CausalSelfAttention (qkv proj + attn out) + MLP
-            LlamaDecoderLayer: 4 * model_config.num_attention_heads * d_qkv * model_config.hidden_size
-            + 3 * d_ff * model_config.hidden_size,
+            LlamaDecoderLayer: attention_cost + mlp_cost,
             # This is the last lm_head
             TensorParallelColumnLinear: model_config.vocab_size * model_config.hidden_size,
         }
@@ -934,7 +938,7 @@ class LlamaForTraining(NanotronModel):
             label_mask=label_mask,
         )
         if self.config.moe_num_experts > 1:
-            aux_loss = batched_load_balancing_loss(self.config, self.parallel_context.pp_pg.size())
+            aux_loss = batched_load_balancing_loss(self.config)
             loss["load_balancing_loss"] = aux_loss
             clear_load_balancing_stats()
         return loss
