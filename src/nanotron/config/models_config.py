@@ -10,6 +10,8 @@ class RandomInit:
 
 @dataclass
 class SpectralMupInit:
+    """This is used to initialize the model with spectral mup. Set it to True to use it."""
+
     use_mup: bool
 
     def __post_init__(self):

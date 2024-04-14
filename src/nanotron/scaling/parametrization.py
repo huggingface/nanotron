@@ -3,6 +3,13 @@ from abc import abstractmethod
 from enum import Enum, auto
 from typing import Dict
 
+from nanotron.config import ModelArgs
+from nanotron.nn.layer_norm import TritonRMSNorm
+from nanotron.parallel.tensor_parallel.nn import (
+    TensorParallelColumnLinear,
+    TensorParallelEmbedding,
+    TensorParallelRowLinear,
+)
 from torch import nn
 from torch.nn import init
 
@@ -13,7 +20,7 @@ class ParametrizationMethod(Enum):
 
 
 class Parametrizator:
-    def __init__(self, config: "ModelArgs"):
+    def __init__(self, config: ModelArgs):
         self.config = config
 
     def parametrize(self, param_name: str, module: nn.Module):
@@ -24,15 +31,8 @@ class Parametrizator:
 
 
 class StandardParametrizator(Parametrizator):
-    def __init__(self, config: "ModelArgs"):
+    def __init__(self, config: ModelArgs):
         super().__init__(config)
-        from nanotron.nn.layer_norm import TritonRMSNorm
-        from nanotron.parallel.tensor_parallel.nn import (
-            TensorParallelColumnLinear,
-            TensorParallelEmbedding,
-            TensorParallelRowLinear,
-        )
-
         self.MODULE_TO_PARAMETRIZE = {
             TensorParallelColumnLinear: self._parametrize_column_linear,
             TensorParallelRowLinear: self._parametrize_row_linear,
@@ -82,15 +82,8 @@ class SpectralMupParametrizator(Parametrizator):
     https://arxiv.org/abs/2310.17813
     """
 
-    def __init__(self, config: "ModelArgs"):
+    def __init__(self, config: ModelArgs):
         super().__init__(config)
-        from nanotron.nn.layer_norm import TritonRMSNorm
-        from nanotron.parallel.tensor_parallel.nn import (
-            TensorParallelColumnLinear,
-            TensorParallelEmbedding,
-            TensorParallelRowLinear,
-        )
-
         self.MODULE_TO_PARAMETRIZE = {
             TensorParallelColumnLinear: self._parametrize_mup_weight,
             TensorParallelRowLinear: self._parametrize_mup_weight,
@@ -110,11 +103,6 @@ class SpectralMupParametrizator(Parametrizator):
         return (std / math.sqrt(fan_in)) * min(1, math.sqrt(fan_out / fan_in))
 
     def _parametrize_mup_weight(self, param_name: str, module: nn.Module):
-        from nanotron.parallel.tensor_parallel.nn import (
-            TensorParallelColumnLinear,
-            TensorParallelRowLinear,
-        )
-
         assert param_name in ["weight", "bias"]
 
         data = module.weight if param_name == "weight" else module.bias
@@ -155,28 +143,26 @@ class LearningRateForParametrizator:
         self.names_to_modules = names_to_modules
 
     @abstractmethod
-    def get_lr(self, param_name: str, module: nn.Module):
+    def get_lr(self, param_name: str, module: nn.Module) -> float:
         raise NotImplementedError
 
 
 class LearningRateForSP(LearningRateForParametrizator):
-    def get_lr(self, param_name: str, param: nn.Module):
+    """All parameters get the same learning rate."""
+
+    def get_lr(self, param_name: str, param: nn.Module) -> float:
         return self.lr
 
 
 class LearningRateForSpectralMup(LearningRateForParametrizator):
-    """A Spectral Condition for Feature Learning by Greg Yang, et al."""
+    """
+    A Spectral Condition for Feature Learning by Greg Yang, et al.
+
+    NOTE: each parameter gets a custom learning rate based on its fan-in and fan-out.
+    """
 
     def __init__(self, lr: float, names_to_modules: Dict[str, nn.Module]):
         super().__init__(lr, names_to_modules)
-
-        from nanotron.nn.layer_norm import TritonRMSNorm
-        from nanotron.parallel.tensor_parallel.nn import (
-            TensorParallelColumnLinear,
-            TensorParallelEmbedding,
-            TensorParallelRowLinear,
-        )
-
         self.MODULE_TO_PARAMETRIZE = {
             TensorParallelColumnLinear: self._get_mup_lr,
             TensorParallelRowLinear: self._get_mup_lr,
@@ -191,11 +177,6 @@ class LearningRateForSpectralMup(LearningRateForParametrizator):
 
         ηₗ = Θ(nₗ/nₗ₋₁)
         """
-        from nanotron.parallel.tensor_parallel.nn import (
-            TensorParallelColumnLinear,
-            TensorParallelRowLinear,
-        )
-
         fan_in, fan_out = init._calculate_fan_in_and_fan_out(param)
         world_size = module.world_size
 
