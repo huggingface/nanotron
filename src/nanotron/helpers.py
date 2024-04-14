@@ -157,23 +157,31 @@ def lr_scheduler_builder(optimizer: Optimizer, lr_scheduler_args: LRSchedulerArg
 
     assert len(lr_lambdas) == len(
         optimizer.get_base_optimizer().param_groups
-    ), "Custom learning rate functions don't match the number of param groups"
+    ), "Custom learning rate functions dont match the number of param groups"
+
     log_rank(
         f"[Optimizer Building] There are total {len(lr_lambdas)} custom learning rate function for parameter groups",
         logger=logger,
         level=logging.DEBUG,
     )
+
     lr_scheduler = LambdaLR(optimizer.get_base_optimizer(), lr_lambda=lr_lambdas)
     return lr_scheduler
 
 
-def _get_custom_lr_for_named_parameters(
+def get_custom_lr_for_named_parameters(
     parametrization_method: ParametrizationMethod,
+    lr: float,
     named_parameters: Iterable[Tuple[str, torch.Tensor]],
     model: NanotronModel,
-    config: OptimizerArgs,
-    parallel_context: ParallelContext,
 ) -> List[Dict[str, Any]]:
+    """
+    Get custom learning rates for parameters based on the parametrization method.
+
+    NOTE: in some paramtrization methods, we use a global learning rate for all parameters,
+    in others we use a custom learning rate for each parameter (eg: spectral µTransfer).
+    """
+
     assert parametrization_method in [ParametrizationMethod.SPECTRAL_MUP, ParametrizationMethod.STANDARD]
 
     lr_mapper_cls = (
@@ -186,14 +194,13 @@ def _get_custom_lr_for_named_parameters(
         f"[Optimizer Building] Using {lr_mapper_cls.__name__} as learning rate",
         logger=logger,
         level=logging.INFO,
-        group=parallel_context.world_pg,
         rank=0,
     )
 
     # NOTE: since in the case of pipeline parallelism, each rank only has a subset of the model
     # so we only get the parameters that are in the current rank
     names_to_modules = model.get_named_modules()
-    learning_rate_mapper = lr_mapper_cls(names_to_modules=names_to_modules, config=config)
+    learning_rate_mapper = lr_mapper_cls(names_to_modules=names_to_modules, lr=lr)
 
     named_param_groups_with_custom_lr = []
     for (
@@ -203,6 +210,12 @@ def _get_custom_lr_for_named_parameters(
         learning_rate = learning_rate_mapper.get_lr(name, param)
         assert isinstance(learning_rate, float), f"Expected a float, got {learning_rate} for parameter {name}"
         named_param_groups_with_custom_lr.append({"named_params": [(name, param)], "lr": learning_rate})
+
+    log_rank(
+        f"[Optimizer Building] Creating {len(named_param_groups_with_custom_lr)} param groups with custom learning rates",
+        logger=logger,
+        level=logging.DEBUG,
+    )
 
     return named_param_groups_with_custom_lr
 
@@ -221,12 +234,11 @@ def init_optimizer_and_grad_accumulator(
     module_id_to_prefix[id(unwrapped_model)] = ""
 
     named_parameters = list(unwrapped_model.get_named_params_with_correct_tied())
-    named_param_groups = _get_custom_lr_for_named_parameters(
+    named_param_groups = get_custom_lr_for_named_parameters(
         parametrization_method=parametrization_method,
         named_parameters=named_parameters,
         model=unwrapped_model,
-        config=optimizer_args,
-        parallel_context=parallel_context,
+        lr=optimizer_args.learning_rate_scheduler.learning_rate,
     )
 
     # Basic optimizer builder
@@ -327,7 +339,8 @@ def init_optimizer_and_grad_accumulator(
 
 
 def test_equal_dict(first: Dict, second: Dict, sub_paths: Optional[List[str]] = None) -> None:
-    """Raise if doesn't match"""
+    """Raise if doesn't match."""
+
     if sub_paths is None:
         sub_paths = []
 

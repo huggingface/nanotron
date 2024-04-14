@@ -150,8 +150,8 @@ class SpectralMupParametrizator(Parametrizator):
 
 
 class LearningRateForParametrizator:
-    def __init__(self, names_to_modules: Dict[str, nn.Module], config: "OptimizerArgs"):
-        self.config = config
+    def __init__(self, lr: float, names_to_modules: Dict[str, nn.Module]):
+        self.lr = lr
         self.names_to_modules = names_to_modules
 
     @abstractmethod
@@ -161,14 +161,14 @@ class LearningRateForParametrizator:
 
 class LearningRateForSP(LearningRateForParametrizator):
     def get_lr(self, param_name: str, param: nn.Module):
-        return self.config.learning_rate_scheduler.learning_rate
+        return self.lr
 
 
 class LearningRateForSpectralMup(LearningRateForParametrizator):
     """A Spectral Condition for Feature Learning by Greg Yang, et al."""
 
-    def __init__(self, names_to_modules: Dict[str, nn.Module], config: "OptimizerArgs"):
-        super().__init__(names_to_modules, config)
+    def __init__(self, lr: float, names_to_modules: Dict[str, nn.Module]):
+        super().__init__(lr, names_to_modules)
 
         from nanotron.nn.layer_norm import TritonRMSNorm
         from nanotron.parallel.tensor_parallel.nn import (
@@ -196,7 +196,6 @@ class LearningRateForSpectralMup(LearningRateForParametrizator):
             TensorParallelRowLinear,
         )
 
-        lr = self.config.learning_rate_scheduler.learning_rate
         fan_in, fan_out = init._calculate_fan_in_and_fan_out(param)
         world_size = module.world_size
 
@@ -207,10 +206,10 @@ class LearningRateForSpectralMup(LearningRateForParametrizator):
         else:
             raise ValueError(f"Unknown module {module}")
 
-        return lr * (fan_out / fan_in)
+        return self.lr * (fan_out / fan_in)
 
     def _get_global_lr(self, param: nn.Parameter, module: nn.Module) -> float:
-        return self.config.learning_rate_scheduler.learning_rate
+        return self.lr
 
     def get_lr(self, param_name: str, param: nn.Parameter) -> float:
         module = self.names_to_modules[param_name]
