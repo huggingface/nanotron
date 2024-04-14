@@ -57,9 +57,6 @@ class FP8Linear(nn.Linear):
             # TODO(xrsrke): adjust the accumation precision
             return F.linear(input, self.weight, self.bias)
 
-        # if self.name == "transformer.h.0.self_attention.query_key_value":
-        #     assert 1 == 1
-
         from einops import rearrange
 
         seq_len = None
@@ -136,14 +133,15 @@ class _FP8Matmul(torch.autograd.Function):
         ∂L/∂W = Xᵀ @ ∂L/∂Y
         Reference: https://web.eecs.umich.edu/~justincj/teaching/eecs442/notes/linear-backprop.html
         """
-        pydevd.settrace(suspend=False, trace_only_current_thread=True)
-        input, weight = ctx.saved_tensors
+        # pydevd.settrace(suspend=False, trace_only_current_thread=True)
+        fp8_input, fp8_weight = ctx.saved_tensors
         accum_qtype = ctx.accum_qtype
 
-        if type(grad_output) == torch.Tensor:
-            # TODO(xrsrke): investigate how does grad_output.contiguous() affect the outputs
-            grad_output = grad_output.contiguous()
-            grad_output = FP8Tensor(grad_output, dtype=FP8LM_RECIPE.linear.output_grad.dtype)
+        # if type(grad_output) == torch.Tensor:
+        
+        #     # TODO(xrsrke): investigate how does grad_output.contiguous() affect the outputs
+        grad_output = grad_output.contiguous()
+        fp8_grad_output = FP8Tensor(grad_output, dtype=FP8LM_RECIPE.linear.output_grad.dtype)
 
         # TODO(xrsrke): extract use_split_accumulator from FP8Recipe
         # grad_input = fp8_matmul_kernel(
@@ -165,28 +163,29 @@ class _FP8Matmul(torch.autograd.Function):
         #     is_backward=True
         # )
 
-        grad_output_transposed = tex.fp8_transpose(grad_output, grad_output.fp8_meta.te_dtype)
-        grad_output_transposed.fp8_meta = grad_output.fp8_meta
-        weight_transposed = tex.fp8_transpose(weight, weight.fp8_meta.te_dtype)
-        weight_transposed.fp8_meta = weight.fp8_meta
+        fp8_weight_transposed = tex.fp8_transpose(fp8_weight, fp8_weight.fp8_meta.te_dtype)
+        fp8_weight_transposed.fp8_meta = fp8_weight.fp8_meta
 
         grad_input = fp8_matmul_kernel(
-            mat_a=weight_transposed,
+            mat_a=fp8_weight_transposed,
             transpose_a=True,
-            mat_b=grad_output,
+            mat_b=fp8_grad_output,
             transpose_b=False,
             use_split_accumulator=FP8LM_RECIPE.linear.split_accumulator.input_grad,
             accum_qtype=accum_qtype,
             # is_backward=True
         )
+        
+        fp8_grad_output_transposed = tex.fp8_transpose(fp8_grad_output, fp8_grad_output.fp8_meta.te_dtype)
+        fp8_grad_output_transposed.fp8_meta = fp8_grad_output.fp8_meta
 
-        input_tranposed = tex.fp8_transpose(input, input.fp8_meta.te_dtype)
-        input_tranposed.fp8_meta = input.fp8_meta
+        fp8_input_tranposed = tex.fp8_transpose(fp8_input, fp8_input.fp8_meta.te_dtype)
+        fp8_input_tranposed.fp8_meta = fp8_input.fp8_meta
 
         grad_weight = fp8_matmul_kernel(
-            mat_a=input_tranposed,
+            mat_a=fp8_input_tranposed,
             transpose_a=True,
-            mat_b=grad_output_transposed,
+            mat_b=fp8_grad_output_transposed,
             transpose_b=False,
             use_split_accumulator=FP8LM_RECIPE.linear.split_accumulator.weight_grad,
             accum_qtype=accum_qtype,
@@ -230,7 +229,7 @@ class _FP8Matmul(torch.autograd.Function):
         assert grad_input.dtype == QTYPE_TO_DTYPE[accum_qtype]
         assert grad_weight.dtype == QTYPE_TO_DTYPE[accum_qtype]
         # TODO(xrsrke): maintain a persistence metadata across training
-        weight.grad = FP8Tensor(grad_weight, dtype=FP8LM_RECIPE.linear.weight_grad.dtype)
+        fp8_weight.grad = FP8Tensor(grad_weight, dtype=FP8LM_RECIPE.linear.weight_grad.dtype)
         # NOTE: sanity check
-        assert isinstance(weight.grad, FP8Tensor)
+        assert isinstance(fp8_weight.grad, FP8Tensor)
         return grad_input, None, None, None

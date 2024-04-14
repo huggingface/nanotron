@@ -97,7 +97,8 @@ if __name__ == "__main__":
     INPUT_DIM = 64
     HIDDEN_SIZE = 64
     N_STEPS = 1000
-    LR = 6e-4
+    # LR = 6e-4
+    LR = 1e-3
     N_LAYERS = 16
     WITH_BIAS = True
     MODEL_NAME = "gpt2"
@@ -192,17 +193,7 @@ if __name__ == "__main__":
             fp8_optim.zero_grad()
             fp8_loss.backward()
             fp8_optim.step()
-
-            fp8_with_scaler_logs = _log(fp8_linear_with_scaler)
-            fp8_output_with_scaler = fp8_linear_with_scaler(inputs)
-            fp8_loss_with_scaler = loss_func(fp8_output_with_scaler, targets)
-            fp8_scaler.scaling_value = deepspeed_linear.optimizer.loss_scaler.loss_scale
-            scaled_fp8_loss_with_scaler = fp8_scaler.scale(fp8_loss_with_scaler)
-            fp8_optim_with_scaler.zero_grad()
-            scaled_fp8_loss_with_scaler.backward()
-            fp8_scaler.step(fp8_optim_with_scaler)
-            fp8_scaler.update()
-
+            
             # msamp_logs = _log(msamp_linear)
             msamp_optim.zero_grad()
             msamp_output = msamp_linear(inputs)
@@ -220,11 +211,20 @@ if __name__ == "__main__":
             msamp_scaler.step(msamp_optim_with_scaler)
             msamp_scaler.update()
                     
-            
             deepspeed_output = deepspeed_linear(inputs.half())
             deepspeed_loss = loss_func(deepspeed_output, targets)
             deepspeed_linear.backward(deepspeed_loss)
             deepspeed_linear.step()
+            
+            fp8_with_scaler_logs = _log(fp8_linear_with_scaler)
+            fp8_output_with_scaler = fp8_linear_with_scaler(inputs)
+            fp8_loss_with_scaler = loss_func(fp8_output_with_scaler, targets)
+            fp8_scaler.scaling_value = deepspeed_linear.optimizer.loss_scaler.loss_scale
+            scaled_fp8_loss_with_scaler = fp8_scaler.scale(fp8_loss_with_scaler)
+            fp8_optim_with_scaler.zero_grad()
+            scaled_fp8_loss_with_scaler.backward()
+            fp8_scaler.step(fp8_optim_with_scaler)
+            # fp8_scaler.update()
 
             fp32_losses.append(fp32_loss.item())
             # fp8_with_loss_scaler_losses.append(fp8_loss_with_scaler.item())
@@ -241,13 +241,15 @@ if __name__ == "__main__":
                     "fp32_loss": fp32_loss.item(),
                     # "bf16_loss": bf16_loss.item(),
                     "fp8_loss": fp8_loss.item(),
-                    "fp8_loss_with_scaler": fp8_loss_with_scaler.item(),
+                    "fp8_loss_with_scaler": fp8_loss_with_scaler,
+                    "fp8_scaling_value": fp8_scaler.scaling_value,
                     "scaled_fp8_loss_with_scaler": scaled_fp8_loss_with_scaler.item(),
                     
                     "msamp_o2_loss": msamp_loss.item(),
                     "msamp_o2_loss_with_scaler": msamp_loss_with_scaler.item(),
                     "scaled_msamp_o2_loss_with_scaler": scaled_msamp_loss_with_scaler.item(),
                     
+                    "deepspeed_scaling_value": deepspeed_linear.optimizer.loss_scaler.loss_scale,
                     "deepspeed_loss": deepspeed_loss.item(),
                     
                     "l1_norm_diff_fp8_relative_to_fp32": l1_norm_diff(
