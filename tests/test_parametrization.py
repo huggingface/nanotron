@@ -30,7 +30,7 @@ def _test_parametrization(
     init_method: Union[RandomInit, SpectralMupInit],
     parametrization_method: ParametrizationMethod,
 ):
-    def spectral_std(fan_in, fan_out):
+    def spectral_std(fan_in: int, fan_out: int):
         return torch.tensor((1.0 / math.sqrt(fan_in)) * min(1, math.sqrt(fan_out / fan_in)))
 
     model_args = ModelArgs(init_method=init_method, model_config=TINY_LLAMA_CONFIG)

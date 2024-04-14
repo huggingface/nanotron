@@ -7,7 +7,7 @@ import time
 from datetime import datetime
 from functools import partial
 from math import ceil
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -167,6 +167,46 @@ def lr_scheduler_builder(optimizer: Optimizer, lr_scheduler_args: LRSchedulerArg
     return lr_scheduler
 
 
+def _get_custom_lr_for_named_parameters(
+    parametrization_method: ParametrizationMethod,
+    named_parameters: Iterable[Tuple[str, torch.Tensor]],
+    model: NanotronModel,
+    config: OptimizerArgs,
+    parallel_context: ParallelContext,
+) -> List[Dict[str, Any]]:
+    assert parametrization_method in [ParametrizationMethod.SPECTRAL_MUP, ParametrizationMethod.STANDARD]
+
+    lr_mapper_cls = (
+        LearningRateForSpectralMup
+        if parametrization_method == ParametrizationMethod.SPECTRAL_MUP
+        else LearningRateForSP
+    )
+
+    log_rank(
+        f"[Optimizer Building] Using {lr_mapper_cls.__name__} as learning rate",
+        logger=logger,
+        level=logging.INFO,
+        group=parallel_context.world_pg,
+        rank=0,
+    )
+
+    # NOTE: since in the case of pipeline parallelism, each rank only has a subset of the model
+    # so we only get the parameters that are in the current rank
+    names_to_modules = model.get_named_modules()
+    learning_rate_mapper = lr_mapper_cls(names_to_modules=names_to_modules, config=config)
+
+    named_param_groups_with_custom_lr = []
+    for (
+        name,
+        param,
+    ) in named_parameters:
+        learning_rate = learning_rate_mapper.get_lr(name, param)
+        assert isinstance(learning_rate, float), f"Expected a float, got {learning_rate} for parameter {name}"
+        named_param_groups_with_custom_lr.append({"named_params": [(name, param)], "lr": learning_rate})
+
+    return named_param_groups_with_custom_lr
+
+
 def init_optimizer_and_grad_accumulator(
     parametrization_method: ParametrizationMethod,
     model: nn.Module,
@@ -181,25 +221,13 @@ def init_optimizer_and_grad_accumulator(
     module_id_to_prefix[id(unwrapped_model)] = ""
 
     named_parameters = list(unwrapped_model.get_named_params_with_correct_tied())
-    # NOTE: get the module from name in named_parameters
-
-    # NOTE: since in the case of pipeline parallelism, each rank only has a subset of the model
-    names_to_modules = unwrapped_model.get_named_modules()
-    assert parametrization_method in [ParametrizationMethod.SPECTRAL_MUP, ParametrizationMethod.STANDARD]
-
-    lr_mapper_cls = (
-        LearningRateForSpectralMup
-        if parametrization_method == ParametrizationMethod.SPECTRAL_MUP
-        else LearningRateForSP
+    named_param_groups = _get_custom_lr_for_named_parameters(
+        parametrization_method=parametrization_method,
+        named_parameters=named_parameters,
+        model=unwrapped_model,
+        config=optimizer_args,
+        parallel_context=parallel_context,
     )
-    log_rank(
-        f"[Optimizer Building] Using {lr_mapper_cls.__name__} as learning rate",
-        logger=logger,
-        level=logging.INFO,
-        group=parallel_context.world_pg,
-        rank=0,
-    )
-    learning_rate_mapper = lr_mapper_cls(names_to_modules=names_to_modules, config=optimizer_args)
 
     # Basic optimizer builder
     def basic_optimizer_builder(named_param_groups):
@@ -213,7 +241,6 @@ def init_optimizer_and_grad_accumulator(
                 betas=(optimizer_args.adam_beta1, optimizer_args.adam_beta2),
                 fused=optimizer_args.torch_adam_is_fused,
             ),
-            learning_rate_mapper=learning_rate_mapper,
         )
 
     optimizer_builder = basic_optimizer_builder
@@ -243,7 +270,7 @@ def init_optimizer_and_grad_accumulator(
     if optimizer_args.zero_stage > 0:
         # Build optimizer
         optimizer = ZeroDistributedOptimizer(
-            named_params_or_groups=named_parameters,
+            named_params_or_groups=named_param_groups,
             # TODO @thomasw21: We need a better API for gradient accumulation/zero etc ...
             optimizer_builder=optimizer_builder,
             dp_pg=parallel_context.dp_pg,
@@ -261,7 +288,7 @@ def init_optimizer_and_grad_accumulator(
             assert param.data_ptr() == optim_model_param.data_ptr()
     else:
         # Build optimizer
-        optimizer = optimizer_builder(named_parameters)
+        optimizer = optimizer_builder(named_param_groups)
 
     if grad_accumulator is not None and optimizer_args.zero_stage > 0:
         # There's a way to only require to reduce_scatter the gradients instead of all_reducing
