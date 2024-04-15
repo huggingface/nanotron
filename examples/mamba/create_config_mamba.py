@@ -6,6 +6,7 @@ from config import MambaConfig, MambaInit, MambaModelConfig
 from nanotron.config import (
     CheckpointsArgs,
     DataArgs,
+    DatasetStageArgs,
     GeneralArgs,
     LoggingArgs,
     LRSchedulerArgs,
@@ -116,14 +117,16 @@ parallelism = ParallelismArgs(
 
 tokens = TokensArgs(sequence_length=2048, train_steps=300, micro_batch_size=8, batch_accumulation_per_replica=1)
 
-dataset = PretrainDatasetsArgs(
-    hf_dataset_or_datasets={"roneneldan/TinyStories": 1.0},
-    hf_dataset_config_name=None,
-    hf_dataset_splits="train",
-    dataset_processing_num_proc_per_process=24,
-    dataset_overwrite_cache=False,
-    text_column_name="text",
-)
+data_stages = [
+    DatasetStageArgs(
+        name="Stable Training Stage",
+        start_training_step=1,
+        data=DataArgs(
+            dataset=PretrainDatasetsArgs(hf_dataset_or_datasets="roneneldan/TinyStories", text_column_name="text"),
+            seed=seed,
+        ),
+    )
+]
 
 checkpoints_path = os.path.dirname(os.path.dirname(__file__)) + "/checkpoints"
 os.makedirs(checkpoints_path, exist_ok=True)
@@ -140,7 +143,7 @@ config = MambaConfig(
     optimizer=optimizer,
     logging=LoggingArgs(),
     tokens=tokens,
-    data=DataArgs(dataset=dataset, seed=seed),
+    data_stages=data_stages,
     profiler=None,
 )
 
