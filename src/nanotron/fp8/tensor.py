@@ -116,12 +116,13 @@ class LowPrecisionTensor(torch.Tensor):
         new_amax = quantized_data.fp8_meta.amax
 
         self.fp8_meta.add_amax(new_amax)
-        
+    
     @property
     def T(self) -> FP8Tensor:
         """Transpose the tensor."""
         transposed_t = tex.fp8_transpose(self, self.fp8_meta.te_dtype)
         transposed_t.fp8_meta = self.fp8_meta
+        # return FP8Tensor(transposed_t, self.fp8_meta.dtype, self.fp8_meta.interval)
         return transposed_t
 
     def __repr__(self) -> str:

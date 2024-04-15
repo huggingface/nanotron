@@ -61,6 +61,7 @@ FP8LM_RECIPE = FP8TrainingRecipe(
 # NOTE: these initial scaling factors are from deepspeed, but we are technically free to choose our own
 # LS_INITIAL_SCALING_VALUE = torch.tensor(2**32, dtype=torch.float32)
 # 2^15 = 32768
-LS_INITIAL_SCALING_VALUE = torch.tensor(2**32, dtype=torch.float32)
+# LS_INITIAL_SCALING_VALUE = torch.tensor(2**32, dtype=torch.float32)
+LS_INITIAL_SCALING_VALUE = torch.tensor(32768, dtype=torch.float32)
 LS_INITIAL_SCALING_FACTOR = torch.tensor(2.0, dtype=torch.float32)
 LS_INTERVAL = 1000

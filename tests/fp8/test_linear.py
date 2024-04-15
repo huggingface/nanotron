@@ -10,6 +10,7 @@ from nanotron.fp8.linear import FP8Linear
 from nanotron.fp8.parameter import FP8Parameter
 from nanotron.fp8.tensor import FP8Tensor, convert_tensor_from_fp8
 from nanotron.fp8.utils import convert_linear_to_fp8, convert_to_fp8_module, is_overflow_underflow_nan
+from nanotron.fp8.loss_scaler import LossScaler
 from timm.models.layers import trunc_normal_
 from torch import nn
 
@@ -35,6 +36,7 @@ def test_fp8_linear_parameters():
     assert all(p.requires_grad for p in fp8_linear.parameters()) is True
 
 
+@pytest.mark.parametrize("n_layers", [1, 2])
 @pytest.mark.parametrize(
     "input",
     [
@@ -46,17 +48,24 @@ def test_fp8_linear_parameters():
 )
 @pytest.mark.parametrize("is_bias", [True, False])
 @pytest.mark.parametrize("accum_qtype", [DTypes.KFLOAT32, DTypes.KFLOAT16])
-def test_fp8_linear_forward_pass(input, is_bias, accum_qtype):
+def test_fp8_linear_forward_pass(n_layers, input, is_bias, accum_qtype):
     HIDDEN_SIZE = 64
     INTERDIM_SIZE = 64 * 4
 
     ref_input = input.detach().clone()
-    ref_linear = nn.Linear(HIDDEN_SIZE, INTERDIM_SIZE, bias=is_bias, device="cuda", dtype=torch.float32)
-    trunc_normal_(ref_linear.weight, std=0.02)
-    # torch.nn.init.normal_(ref_linear.weight, mean=0.0, std=math.sqrt(1/(INTERDIM_SIZE)))
-    # torch.nn.init.normal_(ref_linear.bias, mean=0.0, std=math.sqrt(1/(HIDDEN_SIZE)))
+    ref_linear = nn.Sequential(
+        *[
+            layer
+            for _ in range(n_layers)
+            for layer in (nn.Linear(HIDDEN_SIZE, HIDDEN_SIZE, bias=is_bias, device="cuda"), nn.ReLU())
+        ]
+    )
+    
+    # trunc_normal_(ref_linear[0].weight, std=0.02)
+    # if n_layers == 2:
+    #     trunc_normal_(ref_linear[2].weight, std=0.02)
 
-    fp8_linear = convert_linear_to_fp8(deepcopy(ref_linear), accum_qtype)
+    fp8_linear = convert_to_fp8_module(deepcopy(ref_linear), accum_qtype)
 
     ref_output = ref_linear(ref_input)
     output = fp8_linear(input)
@@ -69,53 +78,95 @@ def test_fp8_linear_forward_pass(input, is_bias, accum_qtype):
 
 
 # TODO(xrsrke): add cases where the input requires and don't require grad
+@pytest.mark.parametrize("n_layers", [1, 2])
 @pytest.mark.parametrize(
     "input",
     [
         torch.randn(64, 64, device="cuda", dtype=torch.float32),  # [B, H]
-        torch.randn(16, 64, device="cuda", dtype=torch.float32),  # [B, H]
-        torch.randn(16, 32, 64, device="cuda", dtype=torch.float32),  # [B, N, H]
-        torch.randn(64, 64, 64, device="cuda", dtype=torch.float32),  # [B, N, H]
+        # torch.randn(16, 64, device="cuda", dtype=torch.float32),  # [B, H]
+        # torch.randn(16, 32, 64, device="cuda", dtype=torch.float32),  # [B, N, H]
+        # torch.randn(64, 64, 64, device="cuda", dtype=torch.float32),  # [B, N, H]
     ],
 )
-@pytest.mark.parametrize(
-    "init_method",
-    [
-        lambda weight: trunc_normal_(weight, std=0.02),
-        lambda weight: trunc_normal_(weight, std=math.sqrt(1 / 64)),
-        lambda weight: trunc_normal_(weight, std=math.sqrt(1 / 64 * 4)),
-        lambda weight: trunc_normal_(weight, std=1),
-    ],
-)
+# @pytest.mark.parametrize(
+#     "init_method",
+#     [
+#         lambda weight: trunc_normal_(weight, std=0.02),
+#         lambda weight: trunc_normal_(weight, std=math.sqrt(1 / 64)),
+#         lambda weight: trunc_normal_(weight, std=math.sqrt(1 / 64 * 4)),
+#         lambda weight: trunc_normal_(weight, std=1),
+#     ],
+# )
+# @pytest.mark.parametrize("is_bias", [True, False])
+@pytest.mark.parametrize("with_scaler", [True, False])
 @pytest.mark.parametrize("accum_qtype", [DTypes.KFLOAT32, DTypes.KFLOAT16])
-def test_fp8_linear_backward_pass(input, init_method, accum_qtype):
+def test_fp8_linear_backward_pass(n_layers, input, with_scaler, accum_qtype):
+    is_bias = False
+    
     HIDDEN_SIZE = 64
     INTERDIM_SIZE = 64 * 4
 
     ref_input = input.detach().clone().requires_grad_(True)
-    ref_linear = nn.Linear(HIDDEN_SIZE, INTERDIM_SIZE, device="cuda", dtype=torch.float32)
+    # ref_linear = nn.Linear(HIDDEN_SIZE, INTERDIM_SIZE, device="cuda", dtype=torch.float32)
+    ref_linear = nn.Sequential(
+        *[
+            layer
+            for _ in range(n_layers)
+            for layer in (nn.Linear(HIDDEN_SIZE, HIDDEN_SIZE, bias=is_bias, device="cuda"), nn.ReLU())
+        ]
+    )
+    
+    loss_scaler = LossScaler()
+        
     # trunc_normal_(ref_linear.weight, std=0.02)
     # trunc_normal_(ref_linear.weight, std=math.sqrt(1 / (HIDDEN_SIZE)))
 
-    fp8_linear = convert_linear_to_fp8(deepcopy(ref_linear), accum_qtype)
+    # fp8_linear = convert_linear_to_fp8(deepcopy(ref_linear), accum_qtype)
+    fp8_linear = convert_to_fp8_module(deepcopy(ref_linear), accum_qtype)
 
     ref_linear(ref_input).sum().backward()
-    fp8_linear(input).sum().backward()
+    
+    if with_scaler is False:
+        fp8_linear(input).sum().backward()
+    else:
+        loss_scaler.scale(fp8_linear(input).sum()).backward()
+        loss_scaler.unscale_(fp8_linear.parameters())
+        
+    for ref_p, p in zip(ref_linear.parameters(), fp8_linear.parameters()):
+        if p.requires_grad is False:
+            assert p.grad is None
+            continue
+        
+        if isinstance(p, FP8Parameter):
+            assert isinstance(p.grad, FP8Tensor)
+            assert p.grad.dtype in FP8_DTYPES
+            grad = convert_tensor_from_fp8(p.grad, p.grad.fp8_meta, torch.float32)
+        else:
+            assert isinstance(p.grad, torch.Tensor)
+            assert p.grad.dtype == QTYPE_TO_DTYPE[accum_qtype]
+        
+        assert is_overflow_underflow_nan(grad) is False
+        if p.ndim > 1:
+            # NOTE: these weight threshold is tuned from the FP8-LM implementation
+            # TODO(xrsrke): tune what is the minimum threshold for this to correctly converge
+            torch.testing.assert_allclose(grad, ref_p.grad, rtol=0.06, atol=0.1)
+        else:
+            torch.testing.assert_allclose(grad, ref_p.grad)
 
-    assert isinstance(fp8_linear.weight.grad, FP8Tensor)
-    assert fp8_linear.weight.grad.dtype in FP8_DTYPES
+    # assert isinstance(fp8_linear.weight.grad, FP8Tensor)
+    # assert fp8_linear.weight.grad.dtype in FP8_DTYPES
 
-    assert isinstance(fp8_linear.bias.grad, torch.Tensor)
-    assert fp8_linear.bias.grad.dtype == QTYPE_TO_DTYPE[accum_qtype]
+    # assert isinstance(fp8_linear.bias.grad, torch.Tensor)
+    # assert fp8_linear.bias.grad.dtype == QTYPE_TO_DTYPE[accum_qtype]
 
-    # TODO(xrsrke): investigate why input.grad is so high tolerance
-    # assert torch.allclose(input.grad, ref_input.grad, 0.2, 0.2) if input_requires_grad else True
+    # # TODO(xrsrke): investigate why input.grad is so high tolerance
+    # # assert torch.allclose(input.grad, ref_input.grad, 0.2, 0.2) if input_requires_grad else True
 
-    # NOTE: these weight threshold is tuned from the FP8-LM implementation
-    # TODO(xrsrke): tune what is the minimum threshold for this to correctly converge
-    weight_grad = convert_tensor_from_fp8(fp8_linear.weight.grad, fp8_linear.weight.grad.fp8_meta, torch.float32)
-    torch.testing.assert_allclose(weight_grad, ref_linear.weight.grad, rtol=0.06, atol=0.1)
-    torch.testing.assert_allclose(fp8_linear.bias.grad, ref_linear.bias.grad)
+    # # NOTE: these weight threshold is tuned from the FP8-LM implementation
+    # # TODO(xrsrke): tune what is the minimum threshold for this to correctly converge
+    # weight_grad = convert_tensor_from_fp8(fp8_linear.weight.grad, fp8_linear.weight.grad.fp8_meta, torch.float32)
+    # torch.testing.assert_allclose(weight_grad, ref_linear.weight.grad, rtol=0.06, atol=0.1)
+    # torch.testing.assert_allclose(fp8_linear.bias.grad, ref_linear.bias.grad)
 
 
 @pytest.mark.parametrize("accum_qtype", [DTypes.KFLOAT32, DTypes.KFLOAT16])

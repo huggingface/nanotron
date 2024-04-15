@@ -133,7 +133,7 @@ class _FP8Matmul(torch.autograd.Function):
         ∂L/∂W = Xᵀ @ ∂L/∂Y
         Reference: https://web.eecs.umich.edu/~justincj/teaching/eecs442/notes/linear-backprop.html
         """
-        # pydevd.settrace(suspend=False, trace_only_current_thread=True)
+        pydevd.settrace(suspend=False, trace_only_current_thread=True)
         fp8_input, fp8_weight = ctx.saved_tensors
         accum_qtype = ctx.accum_qtype
 
@@ -163,11 +163,12 @@ class _FP8Matmul(torch.autograd.Function):
         #     is_backward=True
         # )
 
-        fp8_weight_transposed = tex.fp8_transpose(fp8_weight, fp8_weight.fp8_meta.te_dtype)
-        fp8_weight_transposed.fp8_meta = fp8_weight.fp8_meta
+        # fp8_weight_transposed = tex.fp8_transpose(fp8_weight, fp8_weight.fp8_meta.te_dtype)
+        # fp8_weight_transposed.fp8_meta = fp8_weight.fp8_meta
+        transposed_fp8_weight = fp8_weight.t()
 
         grad_input = fp8_matmul_kernel(
-            mat_a=fp8_weight_transposed,
+            mat_a=transposed_fp8_weight,
             transpose_a=True,
             mat_b=fp8_grad_output,
             transpose_b=False,
@@ -176,16 +177,18 @@ class _FP8Matmul(torch.autograd.Function):
             # is_backward=True
         )
         
-        fp8_grad_output_transposed = tex.fp8_transpose(fp8_grad_output, fp8_grad_output.fp8_meta.te_dtype)
-        fp8_grad_output_transposed.fp8_meta = fp8_grad_output.fp8_meta
-
-        fp8_input_tranposed = tex.fp8_transpose(fp8_input, fp8_input.fp8_meta.te_dtype)
-        fp8_input_tranposed.fp8_meta = fp8_input.fp8_meta
+        # fp8_grad_output_transposed = tex.fp8_transpose(fp8_grad_output, fp8_grad_output.fp8_meta.te_dtype)
+        # fp8_grad_output_transposed.fp8_meta = fp8_grad_output.fp8_meta
+        # fp8_input_tranposed = tex.fp8_transpose(fp8_input, fp8_input.fp8_meta.te_dtype)
+        # fp8_input_tranposed.fp8_meta = fp8_input.fp8_meta
+        
+        transposed_fp8_grad_output = fp8_grad_output.t()
+        transposed_fp8_input = fp8_input.t()
 
         grad_weight = fp8_matmul_kernel(
-            mat_a=fp8_input_tranposed,
+            mat_a=transposed_fp8_input,
             transpose_a=True,
-            mat_b=fp8_grad_output_transposed,
+            mat_b=transposed_fp8_grad_output,
             transpose_b=False,
             use_split_accumulator=FP8LM_RECIPE.linear.split_accumulator.weight_grad,
             accum_qtype=accum_qtype,

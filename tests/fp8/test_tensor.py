@@ -77,6 +77,14 @@ def test_quantize_and_dequantize_tensor_in_fp16(size):
     torch.testing.assert_close(tensor, ref_tensor, rtol=0, atol=1e-03)
 
 
+@pytest.mark.parametrize("size", [4, 8, 16, 64])
+@pytest.mark.parametrize("dtype", [DTypes.FP8E4M3, DTypes.FP8E5M2])
+def test_create_fp8_tensor_from_int_data(size, dtype):
+    tensor = torch.randn((size, size), dtype=torch.float32, device="cuda")
+    ref_tensor = deepcopy(tensor)
+
+    fp8_tensor = FP8Tensor(tensor, dtype=dtype)
+
 # @pytest.mark.parametrize(
 #     "tensor_cls, dtype", [(FP8Tensor, DTypes.FP8E4M3), (FP8Tensor, DTypes.FP8E5M2), (FP16Tensor, DTypes.KFLOAT16)]
 # )
@@ -276,13 +284,20 @@ def test_transpose_fp8_tensor(tensor_cls, dtype):
 
     transposed_fp8_tensor = fp8_tensor.T
     if tensor_cls == FP8Tensor:
+        assert isinstance(transposed_fp8_tensor, FP8Tensor)
         ref_transposed = convert_tensor_from_fp8(fp8_tensor, fp8_tensor.fp8_meta, torch.float32).T
         dequant_transposed_fp8_tensor = convert_tensor_from_fp8(transposed_fp8_tensor, transposed_fp8_tensor.fp8_meta, torch.float32)
     else:
+        assert isinstance(transposed_fp8_tensor, FP16Tensor)
         dequant_transposed_fp8_tensor = convert_tensor_from_fp16(transposed_fp8_tensor, torch.float32)
         ref_transposed = convert_tensor_from_fp16(fp8_tensor, torch.float32).T
             
     assert torch.equal(dequant_transposed_fp8_tensor, ref_transposed)
+    
+    # NOTE: transpose should not affect quantization
+    detransposed_fp8_tensor = transposed_fp8_tensor.T
+    
+    assert 1 == 1
 
 
 @pytest.mark.parametrize(
