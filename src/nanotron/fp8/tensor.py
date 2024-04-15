@@ -107,6 +107,7 @@ class LowPrecisionTensor(torch.Tensor):
             "You can't directly subtract a FP8Tensor with another tensor. You should cast it to a higher precision format"
         )
 
+    # TODO(xrsrke): need some more work to make it work with torch.equal
     def __eq__(self, other: LowPrecisionTensor) -> bool:
         assert isinstance(
             other, self.__class__
@@ -127,6 +128,12 @@ class LowPrecisionTensor(torch.Tensor):
         new_amax = quantized_data.fp8_meta.amax
 
         self.fp8_meta.add_amax(new_amax)
+        self.fp8_meta.scale = quantized_data.fp8_meta.scale
+        self.fp8_meta.amax = quantized_data.fp8_meta.amax
+        # NOT_COPY_ATTRIBUTES = ["_amaxs", "_num_remaining_steps_until_rescale"]
+        # for key, value in quantized_data.fp8_meta.__dict__.items():
+        #     if key not in NOT_COPY_ATTRIBUTES:
+        #         setattr(self.fp8_meta, key, value)
     
     def transpose_fp8(self) -> FP8Tensor:
         """Transpose the tensor."""

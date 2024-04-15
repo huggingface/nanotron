@@ -346,7 +346,7 @@ def test_setting_new_data_for_fp8_and_fp16_tensor(tensor_cls, dtype, is_quantize
     ref_new_data = deepcopy(new_data)
     expected_quantized_tensor = tensor_cls(ref_new_data, dtype=dtype)
 
-    new_data = tensor_cls(ref_new_data, dtype=dtype) if is_quantized else ref_new_data
+    new_data = tensor_cls(new_data, dtype=dtype) if is_quantized else new_data
     fp8_tensor.set_data(new_data)
 
     assert fp8_tensor.data.dtype == QTYPE_TO_DTYPE[dtype]
@@ -450,16 +450,20 @@ def test_delay_scaling_fp8_tensor(dtype, interval, is_dynamic_scaling):
 
 
 # NOTE: add testing based on tensor metadata
+@pytest.mark.parametrize("is_meta_the_same", [True, False])
 @pytest.mark.parametrize("dtype", [DTypes.FP8E4M3, DTypes.FP8E5M2])
-def test_fp8_and_fp16_tensor_equality_based_on_tensor_value(dtype):
+def test_fp8_and_fp16_tensor_equality_based_on_tensor_value(is_meta_the_same, dtype):
     tensor = torch.randn((4, 4), dtype=torch.float32, device="cuda")
     ref_tensor = deepcopy(tensor)
 
     fp8_tensor = FP8Tensor(tensor, dtype=dtype)
     ref_fp8_tensor = FP8Tensor(ref_tensor, dtype=dtype)
+    
+    if not is_meta_the_same:
+        fp8_tensor.fp8_meta.scale = ref_fp8_tensor.fp8_meta.scale * 2
 
-    assert fp8_tensor == ref_fp8_tensor
-    assert torch.equal(fp8_tensor, ref_fp8_tensor)
+    assert (fp8_tensor == ref_fp8_tensor) is is_meta_the_same
+    assert torch.equal(fp8_tensor, ref_fp8_tensor) is is_meta_the_same
 
     new_data = torch.randn(tensor.shape, dtype=torch.float32, device="cuda")
     ref_fp8_tensor.set_data(new_data)

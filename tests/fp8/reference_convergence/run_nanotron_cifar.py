@@ -187,10 +187,10 @@ if __name__ == "__main__":
             # bf16_loss.backward()
             # bf16_optim.step()
             
+            fp8_optim.zero_grad()
             fp8_logs = _log(fp8_linear)
             fp8_output = fp8_linear(inputs)
             fp8_loss = loss_func(fp8_output, targets)
-            fp8_optim.zero_grad()
             fp8_loss.backward()
             fp8_optim.step()
             
@@ -224,7 +224,7 @@ if __name__ == "__main__":
             fp8_optim_with_scaler.zero_grad()
             scaled_fp8_loss_with_scaler.backward()
             fp8_scaler.step(fp8_optim_with_scaler)
-            # fp8_scaler.update()
+            fp8_scaler.update()
 
             fp32_losses.append(fp32_loss.item())
             # fp8_with_loss_scaler_losses.append(fp8_loss_with_scaler.item())
@@ -255,9 +255,9 @@ if __name__ == "__main__":
                     "l1_norm_diff_fp8_relative_to_fp32": l1_norm_diff(
                         fp8_loss, fp32_loss
                     ).item(),
-                    "l1_norm_diff_fp8_with_loss_scaler_relative_to_fp32": l1_norm_diff(
-                        fp8_loss_with_scaler, fp32_loss
-                    ).item(),
+                    # "l1_norm_diff_fp8_with_loss_scaler_relative_to_fp32": l1_norm_diff(
+                    #     fp8_loss_with_scaler, fp32_loss
+                    # ).item(),
                     "l1_norm_diff_msamp_with_loss_scaler_relative_to_fp32": l1_norm_diff(
                         msamp_loss_with_scaler, fp32_loss
                     ).item(),

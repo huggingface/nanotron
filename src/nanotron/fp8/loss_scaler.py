@@ -55,28 +55,34 @@ class LossScaler:
         #         print(param_to_name)
         
         
-        detected_overflow = False
+        # detected_overflow = False
+        # for group in optim.param_groups:
+        #     for p in group["params"]:
+        #         if p.grad is not None:
+        #             if is_overflow(p.grad):
+        #                 detected_overflow = True
+        #                 break
+
+        # if detected_overflow:
+        #     # TODO(xrsrke): add logging that we skip optimizer step when overflow
+        #     # is detected
+        #     # TODO(xrsrke): remove this after debugging
+        #     raise RuntimeError("Detected overflow")
+        #     # print("Detected overflow, skipping optimizer step")
+        #     # self.update()
+        # else:
+        #     # NOTE: unscale gradients
+        #     for group in optim.param_groups:
+        #         for p in group["params"]:
+        #             self._unscale_param_(p)
+
+        #     optim.step(*args, **kwargs)
+        
         for group in optim.param_groups:
             for p in group["params"]:
-                if p.grad is not None:
-                    if is_overflow(p.grad):
-                        detected_overflow = True
-                        break
+                self._unscale_param_(p)
 
-        if detected_overflow:
-            # TODO(xrsrke): add logging that we skip optimizer step when overflow
-            # is detected
-            # TODO(xrsrke): remove this after debugging
-            # raise RuntimeError("Detected overflow")
-            print("Detected overflow, skipping optimizer step")
-            # self.update()
-        else:
-            # NOTE: unscale gradients
-            for group in optim.param_groups:
-                for p in group["params"]:
-                    self._unscale_param_(p)
-
-            optim.step(*args, **kwargs)
+        optim.step(*args, **kwargs)
 
     def unscale_(self, params: List[Union[nn.Parameter, FP8Parameter]]):
         """Unscale the gradients of parameters in place."""

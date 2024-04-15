@@ -61,6 +61,25 @@ def test_fp8_optim_default_initiation():
 #     assert 1 == 1
 
 
+@pytest.mark.parametrize("n_layers", [1, 10])
+def test_fp8adam_params(n_layers):
+    linear = nn.Sequential(
+        *[
+            layer
+            for _ in range(n_layers)
+            for layer in (nn.Linear(16, 16, device="cuda"), nn.ReLU())
+        ]
+    )
+    ref_linear = deepcopy(linear)
+    fp8_linear = convert_to_fp8_module(deepcopy(linear))
+
+    ref_optim = Adam(ref_linear.parameters())
+    fp8_optim = FP8Adam(fp8_linear.parameters())
+
+    for ref_param_group, fp8_param_group in zip(ref_optim.param_groups, fp8_optim.param_groups):
+        assert len(ref_param_group["params"]) == len(fp8_param_group["params"])
+
+
 def test_fp8_optim_master_weights_fp16_and_fp8():
     ref_model = nn.Sequential(
         *[
@@ -152,6 +171,7 @@ def test_fp8adam_step(n_steps):
     input = torch.randn(16, 16, device="cuda")
     linear = nn.Linear(16, 16, device="cuda")
     fp8_linear = convert_linear_to_fp8(deepcopy(linear), accum_qtype=DTypes.KFLOAT16)
+    before_amax = fp8_linear.weight.data.fp8_meta.amax
 
     # optim = Adam(linear.parameters(), LR, BETAS, EPS, WEIGHT_DECAY)
     # fp8_optim = FP8Adam(fp8_linear.parameters(), LR, BETAS, EPS, WEIGHT_DECAY)
@@ -171,6 +191,12 @@ def test_fp8adam_step(n_steps):
     # and in this test we only want to check whether fp8 optim step is correct
     # so we will set the gradients to the target one, and only check the optim step
 
+    # NOTE: sanity check if the parameters
+    # are updated at all
+    after_amax = fp8_linear.weight.data.fp8_meta.amax
+    
+    assert not torch.equal(before_amax, after_amax)
+    
     weight_fp32 = convert_tensor_from_fp8(fp8_linear.weight.data, fp8_linear.weight.data.fp8_meta, torch.float32)
     # NOTE: this specific threshold is based on the FP8-LM implementation
     # the paper shows that it don't hurt convergence
@@ -248,6 +274,7 @@ def test_if_gradient_flows_with_multiple_layers(is_bias, n_steps):
         torch.tensor(2, dtype=torch.float32).pow(13),
         torch.tensor(2, dtype=torch.float32).pow(14),
         torch.tensor(2, dtype=torch.float32).pow(15),
+        torch.tensor(32768, dtype=torch.float32),
     ],
 )
 def test_fp8adam_step_with_loss_scaling(scaling_value):
@@ -358,6 +385,36 @@ def test_fp8adam_load_state_dict():
     for state_new, state_saved in zip(new_fp8_optim.state.values(), fp8_optim.state.values()):
         for key in state_saved:
             torch.testing.assert_allclose(state_new[key], state_saved[key])
+
+
+def test_fp8adam_not_change_memory_address():
+    input = torch.randn(16, 16, device="cuda")
+    linear = nn.Sequential(
+        *[
+            layer
+            for _ in range(5)
+            for layer in (nn.Linear(16, 16, device="cuda"), nn.ReLU())
+        ]
+    )
+    fp8_linear = convert_to_fp8_module(linear)
+    fp8_optim = FP8Adam(fp8_linear.parameters())
+    # note: the memory address of params in param_grou[s]
+    before_param_mem_addres = []
+    for param_group in fp8_optim.param_groups:
+        for p in param_group["params"]:
+            before_param_mem_addres.append(id(p))
+    
+    for _ in range(5):
+        fp8_optim.zero_grad()
+        fp8_linear(input).sum().backward()
+        fp8_optim.step()
+
+    after_param_mem_addres = []
+    for param_group in fp8_optim.param_groups:
+        for p in param_group["params"]:
+            after_param_mem_addres.append(id(p))
+    
+    assert before_param_mem_addres == after_param_mem_addres
 
 
 # def test_fp8_parameter_track_amaxs():
