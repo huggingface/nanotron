@@ -118,7 +118,7 @@ class Mamba(nn.Module):
             mode=tp_mode,
             bias=False,
             async_communication=False,
-            contiguous_chunks=None,
+            contiguous_chunks=(self.d_inner, self.d_inner),
         )
 
         assert self.d_inner % self.tp_pg.size() == 0
@@ -509,7 +509,7 @@ class MambaDecoderLayer(nn.Module):
                 hidden_states,
                 self.norm.weight,
                 self.norm.bias,
-                residual=residual,
+                residual=None if (self.layer_idx == 0) else residual,
                 prenorm=True,
                 residual_in_fp32=self.residual_in_fp32,
                 eps=self.norm.eps,
