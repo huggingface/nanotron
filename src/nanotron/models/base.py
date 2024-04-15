@@ -99,17 +99,38 @@ class NanotronModel(nn.Module, metaclass=ABCMeta):
                 rank=rank,
             )
 
-    def get_named_modules(self) -> Dict[str, nn.Module]:
-        """Return the named modules that only belongs to the current pp rank."""
-        named_parameters = list(self.get_named_params_with_correct_tied())
-        names_to_modules = {}
-        for name, _ in named_parameters:
-            try:
-                names_to_modules[name] = self.get_submodule(name.rsplit(".", 1)[0])
-            except AttributeError:
-                # NOTE: this module aren't belong to the current pp rank
-                pass
-        return names_to_modules
+    @property
+    def named_modules_in_pp_rank(self) -> Dict[str, nn.Module]:
+        """Return the named modules that only belongs to the current pp rank.
+
+        An example output:
+        {
+            'module_name': module,
+            ...
+        }
+
+        NOTE: not include module_name.weight or bias, but only module_name
+        """
+
+        def get_leaf_modules(module: nn.Module) -> List[Tuple[str, nn.Module]]:
+            """
+            Return all the leaf modules (modules without any child modules) in a PyTorch module.
+            """
+            leaf_modules = []
+            for n, m in module.named_modules():
+                if not list(m.children()):
+                    leaf_modules.append((n, m))
+            return leaf_modules
+
+        modules = get_leaf_modules(self)
+        named_modules_in_current_pp_rank = {}
+        for name, module in modules:
+            if isinstance(module, PipelineBlock):
+                # NOTE: these are the modules that aren't belong to the current pp rank
+                continue
+            named_modules_in_current_pp_rank[name] = module
+
+        return named_modules_in_current_pp_rank
 
 
 class DTypeInvariantTensor(torch.Tensor):

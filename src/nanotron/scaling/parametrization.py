@@ -193,5 +193,9 @@ class LearningRateForSpectralMup(LearningRateForParametrizator):
         return self.lr
 
     def get_lr(self, param_name: str, param: nn.Parameter) -> float:
-        module = self.names_to_modules[param_name]
+        # NOTE: param_name should be like 'model.token_position_embeddings.pp_block.token_embedding.weight'
+        # since names_to_modules map module_name to module
+        # so we remove the .weight and .bias from param_name to get the module_name
+        module_name = param_name.rsplit(".", 1)[0]
+        module = self.names_to_modules[module_name]
         return self.MODULE_TO_PARAMETRIZE[type(module)](param, module)

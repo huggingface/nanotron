@@ -199,8 +199,7 @@ def get_custom_lr_for_named_parameters(
 
     # NOTE: since in the case of pipeline parallelism, each rank only has a subset of the model
     # so we only get the parameters that are in the current rank
-    names_to_modules = model.get_named_modules()
-    learning_rate_mapper = lr_mapper_cls(names_to_modules=names_to_modules, lr=lr)
+    learning_rate_mapper = lr_mapper_cls(names_to_modules=model.named_modules_in_pp_rank, lr=lr)
 
     named_param_groups_with_custom_lr = []
     for (
