@@ -93,8 +93,17 @@ def lr_scheduler_builder(optimizer: Optimizer, lr_scheduler_args: LRSchedulerArg
     else:
         lr_decay_starting_step = lr_scheduler_args.lr_decay_starting_step
 
-    def lr_lambda(current_step: int, lr: float):
-        """LR Scheduling function, it has from 2 up to 4 phases:
+    def lr_lambda(current_step: int, initial_lr: float):
+        """
+        current_step: current training step
+        initial_lr: the learning rate of a parameter group
+
+        More info on initial_lr:
+        And in standard parameterization, lr_lambda only takes a single learning rate.
+        But in µTransfer, each parameter has a custom learning rate (custom_lr = lr_scheduler_args.learning_rate * scaling_factor),
+        so each parameter group has a custom lr_lambda function.
+
+        LR Scheduling function, it has from 2 up to 4 phases:
         - warmup,
         - optional: constant (if lr_decay_starting_step is set)
         - decay
@@ -106,12 +115,12 @@ def lr_scheduler_builder(optimizer: Optimizer, lr_scheduler_args: LRSchedulerArg
         """
         # No warmup or decay
         if lr_scheduler_args.lr_warmup_steps == 0 and lr_decay_steps == 0:
-            return lr
+            return initial_lr
 
         # Warmup phase
         elif lr_scheduler_args.lr_warmup_style is not None and current_step <= lr_scheduler_args.lr_warmup_steps:
             if lr_scheduler_args.lr_warmup_style == "linear":
-                lmbda = lr * current_step / max(lr_scheduler_args.lr_warmup_steps, 1)
+                lmbda = initial_lr * current_step / max(lr_scheduler_args.lr_warmup_steps, 1)
             elif lr_scheduler_args.lr_warmup_style == "constant":
                 lmbda = lr_scheduler_args.learning_rate
             else:
@@ -119,21 +128,21 @@ def lr_scheduler_builder(optimizer: Optimizer, lr_scheduler_args: LRSchedulerArg
 
         # Optional constant phase at learning_rate
         elif current_step < lr_decay_starting_step:
-            lmbda = lr
+            lmbda = initial_lr
 
         # Decay phase
         elif lr_scheduler_args.lr_decay_style is not None and current_step < lr_decay_starting_step + lr_decay_steps:
             if lr_scheduler_args.lr_decay_style == "cosine":
                 lmbda = (
                     lr_scheduler_args.min_decay_lr
-                    + (lr - lr_scheduler_args.min_decay_lr)
+                    + (initial_lr - lr_scheduler_args.min_decay_lr)
                     * (1 + math.cos(math.pi * (current_step - lr_decay_starting_step) / lr_decay_steps))
                     / 2
                 )
             elif lr_scheduler_args.lr_decay_style == "linear":
                 lmbda = (
                     lr_scheduler_args.min_decay_lr
-                    + (lr - lr_scheduler_args.min_decay_lr)
+                    + (initial_lr - lr_scheduler_args.min_decay_lr)
                     * (lr_decay_steps - (current_step - lr_decay_starting_step))
                     / lr_decay_steps
                 )
@@ -144,11 +153,11 @@ def lr_scheduler_builder(optimizer: Optimizer, lr_scheduler_args: LRSchedulerArg
         else:
             lmbda = lr_scheduler_args.min_decay_lr
 
-        lmbda /= lr  # Normalization for pytorch
+        lmbda /= initial_lr  # Normalization for pytorch
         return lmbda
 
     def get_lr_lambda_for_param_group(lr: float):
-        return partial(lr_lambda, lr=lr)
+        return partial(lr_lambda, initial_lr=lr)
 
     # NOTE: get learning rate scheduler for each param group
     lr_lambdas = []
