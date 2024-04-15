@@ -1,7 +1,7 @@
 import datetime
 import os
 from functools import cache, lru_cache
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import torch
 from packaging import version
@@ -228,6 +228,10 @@ def get_global_rank(group: ProcessGroup, group_rank: int) -> int:  # pylint: dis
     else:
         # Support pytorch 1.12
         return dist.distributed_c10d._get_global_rank(group=group, rank=group_rank)
+
+
+def get_global_ranks(group: ProcessGroup) -> Tuple[int]:
+    return tuple(sorted((get_global_rank(group, i) for i in range(group.size()))))
 
 
 # We cache for dp, pp, tp process groups, world group, and tied process group for tied params

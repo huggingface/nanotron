@@ -30,7 +30,7 @@ parallel_context = ParallelContext(
 From this dataclass you can access multiple process groups:
  - `dp_pg`/`tp_pg`/`pp_pg`: This produces your typical process groups linked to 3D parallelism
  - `world_pg`: ProcessGroup including all the processes.
- - `world_rank_matrix`: This allows one to compute the world rank knowing the 3D ranks of a given process, or inversely when using `get_3d_ranks`.
+ - `world_rank_matrix`: This allows one to compute the world rank knowing the 3D ranks of a given process, or inversely when using `get_local_ranks`.
  - `world_ranks_to_pg`: This is a more generic pattern that allows you to store custom set of ProcessGroups, and querying it via a list of world ranks.
 
 ## NanotronParameter

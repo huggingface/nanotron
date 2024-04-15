@@ -16,15 +16,18 @@ from typing import (
     Tuple,
     Type,
     Union,
+    cast,
 )
 
 import torch
 from torch.nn.parallel import DistributedDataParallel
+from torch.utils.data import DataLoader
 
 from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.config import (
     Config,
+    DatasetStageArgs,
     ExistingCheckpointInit,
     ParallelismArgs,
     RandomInit,
@@ -55,15 +58,13 @@ from nanotron.optim.clip_grads import clip_grad_norm
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.data_parallel.utils import sync_gradients_across_dp
 from nanotron.parallel.parameters import NanotronParameter, sanity_check
-from nanotron.parallel.pipeline_parallel import (
+from nanotron.parallel.pipeline_parallel.engine import (
     PipelineEngine,
     TensorPointer,
-    get_pp_rank_of,
 )
-from nanotron.parallel.tensor_parallel.nn import (
-    TensorParallelLinearMode,
-    TensorParallelRowLinear,
-)
+from nanotron.parallel.pipeline_parallel.utils import get_pp_rank_of
+from nanotron.parallel.tensor_parallel.enum import TensorParallelLinearMode
+from nanotron.parallel.tensor_parallel.nn import TensorParallelRowLinear
 from nanotron.parallel.tied_parameters import (
     create_pg_for_tied_weights,
     get_tied_id_to_param,
@@ -80,12 +81,12 @@ from nanotron.sanity_checks import (
 from nanotron.serialize import (
     load_lr_scheduler,
     load_meta,
-    load_optimizer,
     load_weights,
     parse_ckpt_path,
     save,
     save_random_states,
 )
+from nanotron.serialize.optimizer import load_optimizer
 
 logger = logging.get_logger(__name__)
 
@@ -208,9 +209,9 @@ class DistributedTrainer:
             self.consumed_train_samples = 0
 
         # Setup tensorboard write and log writers on output rank
-        self.logger_ranks = self.parallel_context.world_rank_matrix[
-            0, self.unwrapped_model.output_pp_rank, 0, 0
-        ].flatten()
+        self.logger_ranks = self.parallel_context.get_global_rank(
+            ep_rank=0, pp_rank=self.unwrapped_model.output_pp_rank, dp_rank=0, tp_rank=0
+        ).flatten()
         self.loggerwriter = self.setup_log_writers()
 
         # Log where each module is instantiated
@@ -224,6 +225,8 @@ class DistributedTrainer:
         self.sequence_length = self.config.tokens.sequence_length
         self.iteration_step = self.start_iteration_step
         self.limit_val_batches = self.config.tokens.limit_val_batches
+        # NOTE: the dataloader currently in use for the current training stage
+        self.current_dataloader: Optional[DataLoader] = None
 
         self.post_init()
 
@@ -234,11 +237,20 @@ class DistributedTrainer:
         pass
 
     def pre_training(self, *args, **kwargs):
+        self._print_training_plan()
+
+        log_rank(
+            f"[Start training] datetime: {datetime.datetime.now()} | mbs: {self.micro_batch_size} | grad_accum: {self.n_micro_batches_per_batch} | global_batch_size: {self.global_batch_size} | sequence_length: {self.sequence_length} | train_steps: {self.config.tokens.train_steps} | start_iteration_step: {self.start_iteration_step} | consumed_train_samples: {self.consumed_train_samples}",  # noqa
+            logger=logger,
+            level=logging.INFO,
+            rank=0,
+        )
+
         current_time = datetime.datetime.now().strftime("%d/%m/%Y_%H:%M:%S")
         if dist.get_rank(self.parallel_context.world_pg) == self.logger_ranks[0] and wandb is not None:
             wandb.init(
                 project=self.config.general.project,
-                name=f"{current_time}_{self.config.general.project}_{self.config.general.run}",
+                name=f"{current_time}_{self.config.general.run}",
                 config={"nanotron_config": self.config.as_dict()},
             )
 
@@ -248,9 +260,91 @@ class DistributedTrainer:
     def post_training(self):
         pass
 
+    def _print_training_plan(self):
+        if hasattr(self.config, "data_stages") and self.config.data_stages is not None:
+            stages_info = "".join(
+                f"[Stage {stage.name}] start from step {stage.start_training_step} \n"
+                for stage in self.config.data_stages
+            )
+            full_log_message = (
+                f"[Training Plan] There are {len(self.config.data_stages)} training stages \n{stages_info}"
+            )
+            log_rank(full_log_message, logger=logger, level=logging.INFO, rank=0)
+
+    def _update_dataloader_based_on_training_stages(self, dataloaders: Union[List[DataLoader], DataLoader]):
+        from collections.abc import Generator
+
+        if not hasattr(self.config, "data_stages") or self.config.data_stages is None:
+            if self.current_dataloader is None:
+                if isinstance(dataloaders, tuple):
+                    dataloader = dataloaders[0]
+                else:
+                    dataloader = dataloaders
+                self.current_dataloader = sanity_check_dataloader(
+                    dataloader=dataloader, parallel_context=self.parallel_context, config=self.config
+                )
+            return
+        elif isinstance(dataloaders, Generator):
+            # TODO(xrsrke): this is a hacky way to handle DoReMi's dataloader
+            # remove this in the next PR
+            self.current_dataloader = dataloaders
+            return
+
+        assert len(dataloaders) > 0, "No dataloaders provided"
+        assert len(dataloaders) == len(
+            self.config.data_stages
+        ), "Number of dataloaders should match the number of dataset stages"
+
+        def clear_dataloader_from_memory(dataloader: DataLoader, stage_name: str):
+            import gc
+
+            log_rank(
+                f"[Training Stage: {stage_name}] Clearing the previous training stage's dataloader and datasets from memory",
+                logger=logger,
+                level=logging.INFO,
+            )
+
+            # NOTE: Clear dataloader from memory
+            del dataloader.dataset
+            del dataloader.sampler
+            del dataloader.batch_sampler
+
+            gc.collect()
+
+        dataloader = None
+        for stage_id, stage in enumerate(self.config.data_stages):
+            stage = cast(DatasetStageArgs, stage)
+
+            if stage.start_training_step == self.iteration_step:
+                if self.current_dataloader is not None:
+                    prev_stage_name = self.config.data_stages[stage_id - 1].name
+                    prev_dataloader = dataloaders[prev_stage_name]
+                    if isinstance(prev_dataloader, DataLoader):
+                        # NOTE: we don't need to clear dummy data generator from memory
+                        clear_dataloader_from_memory(prev_dataloader, stage_name=stage.name)
+
+                log_rank(
+                    f"[Training Stage: {stage.name}] Switching to a new dataset {stage.data.dataset.hf_dataset_or_datasets}",
+                    logger=logger,
+                    level=logging.INFO,
+                    rank=0,
+                )
+
+                dataloader = dataloaders[stage.name]
+                # NOTE: if a dataloader is lazy initialized, we need to call it to initialize it
+                dataloader = dataloader() if callable(dataloader) else dataloader
+                break
+
+        if dataloader is not None:
+            self.current_dataloader = sanity_check_dataloader(
+                dataloader=dataloader, parallel_context=self.parallel_context, config=self.config
+            )
+
     def train(
         self,
-        dataloader_or_dls: Union[Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]], Tuple[Iterator, ...]],
+        dataloader_or_dls: Dict[
+            str, Union[Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]], Tuple[Iterator, ...]]
+        ],
         **kwargs,
     ) -> None:
         self.pre_training(**kwargs)
@@ -258,24 +352,10 @@ class DistributedTrainer:
         if self.config.checkpoints.save_initial_state and self.init_checkpoint_path is None:
             self.save_checkpoint()
 
-        if isinstance(dataloader_or_dls, tuple):
-            dataloader = dataloader_or_dls[0]
-        else:
-            dataloader = dataloader_or_dls
-        dataloader = sanity_check_dataloader(
-            dataloader=dataloader, parallel_context=self.parallel_context, config=self.config
-        )
-
         self.pipeline_engine: PipelineEngine = self.config.parallelism.pp_engine
 
         self.pipeline_engine.nb_microbatches = self.n_micro_batches_per_batch
 
-        log_rank(
-            f"[Start training] datetime: {datetime.datetime.now()} | mbs: {self.micro_batch_size} | grad_accum: {self.n_micro_batches_per_batch} | global_batch_size: {self.global_batch_size} | sequence_length: {self.sequence_length} | train_steps: {self.config.tokens.train_steps} | start_iteration_step: {self.start_iteration_step} | consumed_train_samples: {self.consumed_train_samples}",  # noqa
-            logger=logger,
-            level=logging.INFO,
-            rank=0,
-        )
         # TODO @nouamanetazi: refactor this
         # Useful mapping
         self.unwrapped_model = self.model.module if isinstance(self.model, DistributedDataParallel) else self.model
@@ -291,10 +371,12 @@ class DistributedTrainer:
             for self.iteration_step in range(self.start_iteration_step + 1, self.config.tokens.train_steps + 1):
                 if isinstance(prof, torch.profiler.profile):
                     prof.step()
+
                 self.iteration_start_time = time.time()
+                self._update_dataloader_based_on_training_stages(dataloader_or_dls)
 
                 # Training step
-                outputs, loss_avg = self.training_step(dataloader=dataloader)
+                outputs, loss_avg = self.training_step(dataloader=self.current_dataloader)
 
                 # Training Logs
                 self.consumed_train_samples += self.global_batch_size
@@ -779,12 +861,12 @@ def mark_tied_parameters(
             (
                 target,
                 (
-                    parallel_context.world_rank_matrix[
-                        dist.get_rank(parallel_context.expert_pg),
-                        get_pp_rank_of(target, module=model),
-                        dist.get_rank(parallel_context.dp_pg),
-                        dist.get_rank(parallel_context.tp_pg),
-                    ],
+                    parallel_context.get_global_rank(
+                        ep_rank=dist.get_rank(parallel_context.expert_pg),
+                        pp_rank=get_pp_rank_of(target, module=model),
+                        dp_rank=dist.get_rank(parallel_context.dp_pg),
+                        tp_rank=dist.get_rank(parallel_context.tp_pg),
+                    ),
                 ),
             )
             for target in embeddings_lm_head_tied_names
@@ -796,14 +878,30 @@ def mark_tied_parameters(
     # Tie custom params
     model.tie_custom_params()
 
-    # Sync all parameters that have the same name and that are not sharded
+    # Sync all parameters that have the same name and that are not sharded across TP and EXP
     assert not isinstance(model, DistributedDataParallel), "model shouldn't be DDP at this point"
+    mark_unsharded_params_as_tied_across_tp(model, parallel_context, parallel_config)
+    mark_unsharded_params_as_tied_across_expert(model, parallel_context, parallel_config)
+
+    create_pg_for_tied_weights(root_module=model, parallel_context=parallel_context)
+
+
+def mark_unsharded_params_as_tied_across_tp(
+    model: NanotronModel, parallel_context: ParallelContext, parallel_config: "ParallelismArgs"
+):
     for module_name, module in model.named_modules():
         for param_name, param in module.named_parameters(recurse=False):
             name = f"{module_name}.{param_name}"
 
-            if isinstance(param, NanotronParameter) and (param.is_sharded or param.is_tied):
-                continue
+            if isinstance(param, NanotronParameter):
+                # We skip tying if param already tied or sharded along tp
+                if param.is_tied:
+                    continue
+
+                if param.is_sharded:
+                    sharded_info = param.get_sharded_info()
+                    if sharded_info.is_tp_sharded(parallel_context=parallel_context):
+                        continue
 
             if isinstance(module, TensorParallelRowLinear) and "bias" == param_name:
                 # bias for TensorParallelRowLinear only exists on TP=0 so we don't need to tie it
@@ -828,4 +926,36 @@ def mark_tied_parameters(
                 root_module=model, ties=shared_weights, parallel_context=parallel_context, reduce_op=reduce_op
             )
 
-    create_pg_for_tied_weights(root_module=model, parallel_context=parallel_context)
+
+def mark_unsharded_params_as_tied_across_expert(
+    model: NanotronModel, parallel_context: ParallelContext, parallel_config: "ParallelismArgs"
+):
+    for module_name, module in model.named_modules():
+        for param_name, param in module.named_parameters(recurse=False):
+            name = f"{module_name}.{param_name}"
+
+            if isinstance(param, NanotronParameter):
+                # We skip tying if param already tied or sharded along expert
+                if param.is_tied:
+                    continue
+
+                if param.is_sharded:
+                    sharded_info = param.get_sharded_info()
+                    if sharded_info.is_expert_sharded(parallel_context):
+                        continue
+
+            shared_weights = [
+                (
+                    name,
+                    # sync across expert group
+                    tuple(sorted(dist.get_process_group_ranks(parallel_context.expert_pg))),
+                )
+            ]
+
+            # Besides MoE block which sees shards tokens, the rest of the model sees the full tokens
+            # so we don't need to reduce the gradients across expert group
+            reduce_op = None
+
+            tie_parameters(
+                root_module=model, ties=shared_weights, parallel_context=parallel_context, reduce_op=reduce_op
+            )

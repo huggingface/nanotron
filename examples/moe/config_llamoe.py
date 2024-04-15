@@ -7,6 +7,7 @@ from nanotron.config import (
     CheckpointsArgs,
     Config,
     DataArgs,
+    DatasetStageArgs,
     GeneralArgs,
     LoggingArgs,
     LRSchedulerArgs,
@@ -66,7 +67,7 @@ class LlaMoEConfig:
 
 model_config = LlaMoEConfig(
     # Config for a 52M llama model
-    num_hidden_layers=6,
+    num_hidden_layers=1,
     hidden_size=512,
     num_attention_heads=8,
     intermediate_size=512 * 4,
@@ -97,7 +98,7 @@ optimizer = OptimizerArgs(
     zero_stage=0,
     weight_decay=0.01,
     clip_grad=1.0,
-    accumulate_grad_in_fp32=True,
+    accumulate_grad_in_fp32=False,
     adam_eps=1e-08,
     adam_beta1=0.9,
     adam_beta2=0.95,
@@ -139,14 +140,22 @@ os.makedirs(checkpoints_path, exist_ok=True)
 
 config = Config(
     general=GeneralArgs(project="moe", run="llamoe", seed=SEED),
-    checkpoints=CheckpointsArgs(checkpoints_path=checkpoints_path, checkpoint_interval=100000),
+    checkpoints=CheckpointsArgs(
+        checkpoints_path=checkpoints_path,
+        checkpoint_interval=100000,
+        save_initial_state=True,
+        resume_checkpoint_path=checkpoints_path,
+    ),
     parallelism=parallelism,
     model=ModelArgs(init_method=RandomInit(std=0.025), model_config=model_config),
     tokenizer=TokenizerArgs("meta-llama/Llama-2-7b-hf"),
     optimizer=optimizer,
     logging=LoggingArgs(),
     tokens=tokens,
-    data=data,
+    data_stages=[
+        DatasetStageArgs(name="Stable Training Stage", start_training_step=1, data=data),
+        DatasetStageArgs(name="Annealing Phase", start_training_step=10, data=data),
+    ],
 )
 
 if __name__ == "__main__":

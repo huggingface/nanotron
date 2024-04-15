@@ -48,8 +48,8 @@ def save_optimizer(
         # this is Zero-0, so only DP-0 saves the optimizer states
         return
 
-    # TODO @thomasw21: Figure out if I need to save param groups. Right now I'm assuming no as we only store what's trainable
-    # TODO @thomasw21: We can probably "rotate" so that every process stores something (maybe doesn't matter if we're I/O bound)
+    # TODO: Figure out if I need to save param groups. Right now I'm assuming no as we only store what's trainable
+    # TODO: We can probably "rotate" so that every process stores something (maybe doesn't matter if we're I/O bound)
     root_folder = root_folder / "optimizer"
     root_folder.mkdir(exist_ok=True, parents=True)
 

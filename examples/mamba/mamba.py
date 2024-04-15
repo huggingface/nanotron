@@ -663,7 +663,10 @@ class MambaModel(nn.Module):
         return block_compute_costs
 
     def get_flops_per_sec(self, iteration_time_in_sec, sequence_length, global_batch_size):
-        """Get flops per second for a given model"""
+        """
+        Get flops per second for a Mamba model. 
+        Terms such as nonlinearities, biases, and layer normalization are omitted (https://arxiv.org/pdf/2001.08361.pdf)
+        """
         # world_size = self.parallel_context.world_pg.size()
         # try:
         #     num_key_values_heads = self.config.num_key_value_heads
@@ -684,16 +687,40 @@ class MambaModel(nn.Module):
 
         # model_flops_per_s = model_flops / (iteration_time_in_sec * world_size * 1e12)
         # hardware_flops_per_s = hardware_flops / (iteration_time_in_sec * world_size * 1e12)
+        world_size = self.parallel_context.world_pg.size()
 
-        # TODO(fmom): undo hardcoding of model_flops_per_s and  hardware_flops_per_s
-        model_flops_per_s = 0
-        hardware_flops_per_s = 0
-        log_rank(
-            "get_flops_per_sec() Not implemented yet",
-            logger=logger,
-            level=logging.INFO,
-            rank=0,
+        expand = 2 if ("expand" not in self.config.ssm_cfg) else self.config.ssm_cfg["expand"]
+        d_state = 16 if ("d_state" not in self.config.ssm_cfg) else self.config.ssm_cfg["d_state"]
+        dt_rank = (
+            math.ceil(self.config.d_model / 16)
+            if ("dt_rank" not in self.config.ssm_cfg or self.config.ssm_cfg["dt_rank"] == "auto")
+            else self.config.ssm_cfg["dt_rank"]
         )
+
+        d_inner = int(expand * self.config.d_model)
+
+        # embeddings (do not include embeddigns as per Chinchilla)
+        # embeddings = 2 * sequence_length * self.config.vocab_size * self.config.d_model
+
+        # selective scan, see : https://github.com/state-spaces/mamba/issues/110
+        scan = 9 * sequence_length * d_state * self.config.d_model
+
+        # linear projections
+        in_proj = 2 * sequence_length * self.config.d_model * d_inner * 2
+        x_proj = 2 * sequence_length * d_inner * (dt_rank + d_state * 2)
+        dt_proj = 2 * sequence_length * dt_rank * d_inner
+        out_proj = 2 * sequence_length * d_inner * self.config.d_model
+
+        # output projection
+        projection = 2 * sequence_length * self.config.vocab_size * self.config.d_model
+
+        forward_flops = self.config.num_hidden_layers * (in_proj + scan + x_proj + dt_proj + out_proj) + projection
+        backward_flops = 2 * forward_flops
+        model_flops = forward_flops + backward_flops
+        model_flops_per_s = model_flops * global_batch_size / (iteration_time_in_sec * world_size * 1e12)
+        # add hardware flops later
+        hardware_flops_per_s = 0
+
         return model_flops_per_s, hardware_flops_per_s
 
 

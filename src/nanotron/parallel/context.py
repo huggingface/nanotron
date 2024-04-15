@@ -1,5 +1,5 @@
 import os
-from typing import Literal, Tuple
+from typing import Literal, Tuple, Annotated
 
 import numpy as np
 import torch
@@ -76,15 +76,23 @@ class ParallelContext:
         )
         self.world_ranks_to_pg = {}
 
-        # Relevent process groups containing the current rank
+        # Relevant process groups containing the current rank
         self.tp_pg = self.create_new_group(ranks.transpose((0, 1, 2, 3)).reshape((-1, self.tensor_parallel_size)))
         self.dp_pg = self.create_new_group(ranks.transpose((3, 0, 1, 2)).reshape((-1, self.data_parallel_size)))
         self.pp_pg = self.create_new_group(ranks.transpose((2, 3, 0, 1)).reshape((-1, self.pipeline_parallel_size)))
         self.expert_pg = self.create_new_group(ranks.transpose((1, 2, 3, 0)).reshape((-1, self.expert_parallel_size)))
 
-        # model parallel group = combination of tp and pp for a given dp rank
+        # model parallel group = combination of tp and pp and exp for a given dp rank
         self.mp_pg = self.create_new_group(
             [ranks[:, :, dp_rank, :].reshape(-1) for dp_rank in range(self.data_parallel_size)]
+        )
+
+        self.tp_and_expert_pg = self.create_new_group(
+            [
+                ranks[:, pp_rank, dp_rank, :].reshape(-1)
+                for pp_rank in range(self.pipeline_parallel_size)
+                for dp_rank in range(self.data_parallel_size)
+            ]
         )
 
         self.world_rank_matrix: np.ndarray = ranks
@@ -117,9 +125,8 @@ class ParallelContext:
         device_id = local_rank
         torch.cuda.set_device(torch.cuda.device(device_id))
 
-    def get_3d_ranks(self, world_rank: int) -> Tuple[int, int, int]:
-        # return coordinates in world_rank_matrix without expert_parallel_rank
-        return tuple(i.item() for i in np.where(self.world_rank_matrix == world_rank))[-3:]
+    def get_local_ranks(self, world_rank: int) -> Tuple[int, int, int]:
+        return tuple(i.item() for i in np.where(self.world_rank_matrix == world_rank))
 
     def destroy(self):
         if not dist.is_initialized():
@@ -127,3 +134,22 @@ class ParallelContext:
 
         dist.barrier()
         dist.destroy_process_group()
+
+    def get_global_rank(
+        self,
+        ep_rank: int,
+        pp_rank: int,
+        dp_rank: int,
+        tp_rank: int,
+    ) -> np.int64:
+        """
+        Get the global rank based on the specified ranks in different parallel groups.
+
+        :param ep_rank: int, Rank in the expert parallel group.
+        :param pp_rank: int, Rank in the pipeline parallel group.
+        :param dp_rank: int, Rank in the data parallel group.
+        :param tp_rank: int, Rank in the tensor parallel group.
+
+        :return: numpy.int64, The global rank.
+        """
+        return self.world_rank_matrix[ep_rank, pp_rank, dp_rank, tp_rank]

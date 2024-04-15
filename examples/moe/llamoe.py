@@ -25,9 +25,6 @@ from flash_attn.flash_attn_interface import (
 )
 from flash_attn.layers.rotary import RotaryEmbedding as FlashRotaryEmbedding
 from moe import dMoE
-from torch import nn
-from torch.nn import init
-
 from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.config import ParallelismArgs
@@ -48,6 +45,8 @@ from nanotron.parallel.tensor_parallel.nn import (
 )
 from nanotron.random import RandomStates
 from nanotron.utils import checkpoint_method
+from torch import nn
+from torch.nn import init
 
 logger = logging.get_logger(__name__)
 
@@ -467,7 +466,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                     value_states,
                     rotary_cos=None,
                     rotary_sin=None,
-                    # TODO @nouamane: seems like this doesnt help to indicate padding in (for first iteration it's just 0)
+                    # TODO @nouamane: seems like this doesn't help to indicate padding in (for first iteration it's just 0)
                     cache_seqlens=position_offsets.contiguous(),
                     softmax_scale=None,
                     causal=True,
@@ -549,8 +548,7 @@ class LlaMoEDecoderLayer(nn.Module):
 
         self.block_sparse_moe = dMoE(
             config,
-            expert_parallel_group=parallel_context.expert_pg,
-            tp_pg=parallel_context.tp_pg,
+            parallel_context=parallel_context,
             parallel_config=parallel_config,
         )
 
@@ -906,7 +904,7 @@ class LlaMoEForTraining(NanotronModel):
             elif isinstance(module, TensorParallelEmbedding):
                 nn.init.normal_(module.weight, mean=0.0, std=std)
             else:
-                raise Exception(f"Parameter {full_param_name} was not intialized")
+                raise Exception(f"Parameter {full_param_name} was not initialized")
 
             assert full_param_name not in initialized_parameters
             initialized_parameters.add(full_param_name)
