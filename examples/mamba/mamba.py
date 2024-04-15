@@ -872,24 +872,22 @@ class MambaForTraining(NanotronModel):
                         module.weight /= math.sqrt(n_residuals_per_layer * num_hidden_layers)
 
             elif isinstance(module, nn.Conv1d):
-                fan_in = None
+                fan_in, _ = init._calculate_fan_in_and_fan_out(module.weight)
                 if "weight" == param_name:
-                    fan_in, _ = init._calculate_fan_in_and_fan_out(param)
                     init.kaiming_uniform_(module.weight, a=math.sqrt(5))
                 elif "bias" == param_name:
-                    bound = 1 / math.sqrt(fan_in) if (fan_in is not None and fan_in > 0) else 0
+                    bound = 1 / math.sqrt(fan_in) if (fan_in > 0) else 0
                     init.uniform_(module.bias, -bound, bound)
                 else:
                     raise ValueError(f"Who the fuck is {param_name}?")
 
             elif isinstance(module, nn.Linear):
-                fan_in = None
+                fan_in, _ = init._calculate_fan_in_and_fan_out(module.weight)
 
                 if "weight" == param_name:
-                    fan_in, _ = init._calculate_fan_in_and_fan_out(module.weight)
                     init.kaiming_uniform_(module.weight, a=math.sqrt(5))
                 elif "bias" == param_name:
-                    bound = 1 / math.sqrt(fan_in) if (fan_in is not None and fan_in > 0) else 0
+                    bound = 1 / math.sqrt(fan_in) if (fan_in > 0) else 0
                     init.uniform_(module.bias, -bound, bound)
                 else:
                     raise ValueError(f"Who the fuck is {param_name}?")
