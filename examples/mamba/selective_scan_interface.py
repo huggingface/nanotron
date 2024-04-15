@@ -235,11 +235,9 @@ class MambaInnerFn(torch.autograd.Function):
             xz = xz.contiguous()
         conv1d_weight = rearrange(conv1d_weight, "d 1 w -> d w")
 
-        if tp_pg.size() > 1:
-            x, z = xz.view(batch, d_inner // 2, 2, L).chunk(2, dim=2)
-        else:
-            x, z = xz.view(batch, d_inner, 2, L).chunk(2, dim=2)
-
+        # x, z = xz.chunk(2, dim=1)
+        assert d_inner % tp_pg.size() == 0
+        x, z = xz.view(batch, d_inner // tp_pg.size(), 2, L).chunk(2, dim=2)
         x = x.squeeze(2)
         z = z.squeeze(2)
 

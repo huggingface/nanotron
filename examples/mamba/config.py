@@ -2,15 +2,17 @@ from dataclasses import dataclass
 from typing import Optional, Union
 
 import torch
+
 from nanotron.config import Config, ExistingCheckpointInit, NanotronConfigs
 from nanotron.config.utils_config import cast_str_to_torch_dtype
 
 
 @dataclass
 class MambaInit:
+    # mamba_ssm.models.mixer_seq_simple._init_weights
     initializer_range: float = 0.02
-    rescale_prenorm_residual: bool = True
-    n_residuals_per_layer: int = 1  # Change to 2 if we have MLP
+    rescale_prenorm_residual: bool = (True,)
+    n_residuals_per_layer: int = (1,)  # Change to 2 if we have MLP
 
 
 @dataclass
