@@ -50,8 +50,6 @@ class PipelineBlock(nn.Module):
         if pp_rank == dist.get_rank(self.p2p.pg):
             # Instantiate the module
             self.pp_block = self.module_builder(**self.module_kwargs)
-            if hasattr(self, "linear_type"):
-                self.pp_block.linear_type = self.linear_type
 
     def extra_repr(self) -> str:
         return f"pp_rank={self.rank}" if hasattr(self, "rank") else ""

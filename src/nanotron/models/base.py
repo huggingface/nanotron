@@ -59,7 +59,7 @@ class NanotronModel(nn.Module, metaclass=ABCMeta):
 
     @abstractmethod
     def init_model_randomly(self, config):
-        pass
+        ...
 
     def tie_custom_params(self) -> None:
         """Tie custom parameters. For example for MQA marks kv heads as tied."""

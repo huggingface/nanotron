@@ -15,7 +15,7 @@ class SpectralMupInit:
     use_mup: bool
 
     def __post_init__(self):
-        assert self.use_mup, "You should only call use_mup if you want to use it"
+        assert self.use_mup, "Remove `use_mup` if you don't want to use it"
 
 
 @dataclass
@@ -52,9 +52,18 @@ class LlamaConfig:
     vocab_size: int = 32000
 
     def __post_init__(self):
+        # NOTE: user don't set self._init_method, ModelArgs will set it
+        # then we only pass LlamaConfig around
+        self._is_using_mup: bool = False
+        # self._init_method: Optional[Union[RandomInit, SpectralMupInit, ExistingCheckpointInit]] = None
+
         # for backward compatibility
         if self.num_key_value_heads is None:
             self.num_key_value_heads = self.num_attention_heads
+
+    @property
+    def is_using_mup(self) -> bool:
+        return self._is_using_mup
 
 
 @dataclass

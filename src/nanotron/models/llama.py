@@ -25,9 +25,10 @@ from flash_attn.flash_attn_interface import (
 from flash_attn.layers.rotary import RotaryEmbedding as FlashRotaryEmbedding
 from torch import nn
 
-from nanotron import constants, logging
 from nanotron import distributed as dist
+from nanotron import logging
 from nanotron.config import Config, LlamaConfig, ParallelismArgs
+from nanotron.config.models_config import RandomInit, SpectralMupInit
 from nanotron.generation.generate_store import AttachableStore
 from nanotron.logging import log_rank
 from nanotron.models import NanotronModel
@@ -45,7 +46,7 @@ from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelRowLinear,
 )
 from nanotron.random import RandomStates
-from nanotron.scaling.parametrization import ParametrizationMethod, SpectralMupParametrizator, StandardParametrizator
+from nanotron.scaling.parametrization import SpectralMupParametrizator, StandardParametrizator
 from nanotron.utils import checkpoint_method
 
 logger = logging.get_logger(__name__)
@@ -186,6 +187,7 @@ class CoreAttention(nn.Module):
         ), f"Hidden size {config.hidden_size} must be divisible by number of attention heads {config.num_attention_heads}."
         self.d_qk = config.hidden_size // config.num_attention_heads
         self.d_v = config.hidden_size // config.num_attention_heads
+        self.is_using_mup = config.is_using_mup
 
         self.checkpoint_attention = False  # Because flash_attn already does checkpointing
 
@@ -210,7 +212,7 @@ class CoreAttention(nn.Module):
 
         # NOTE: this scale is for µTransfer,
         # in SP, we use sqrt(1/d_h)
-        softmax_scale = 1 / query_states.shape[-1] if constants.USING_MUP else None
+        softmax_scale = 1 / query_states.shape[-1] if self.is_using_mup else None
         attn_output = flash_attn_varlen_func(
             q=query_states,
             k=key_states,
@@ -292,6 +294,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         self.d_qk = config.hidden_size // config.num_attention_heads
         self.d_v = config.hidden_size // config.num_attention_heads
         self.d_model = config.hidden_size
+        self.is_using_mup = config.is_using_mup
 
         # TODO @thomasw21: refactor so that we store that default in a single place.
         tp_mode = parallel_config.tp_mode if parallel_config is not None else TensorParallelLinearMode.ALL_REDUCE
@@ -436,7 +439,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
 
                 # NOTE: this scale is for µTransfer,
                 # in SP, we use sqrt(1/d_h)
-                softmax_scale = 1 / query_states.shape[-1] if constants.USING_MUP else None
+                softmax_scale = 1 / query_states.shape[-1] if self.is_using_mup else None
                 output_unpad = flash_attn_varlen_func(
                     q=query_unpad,  # (total_q, n_local_q_heads, d_qk)
                     k=key_unpad,  # (total_kv, n_local_kv_heads, d_qk)
@@ -522,7 +525,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
 
                 # NOTE: this scale is for µTransfer,
                 # in SP, we use sqrt(1/d_h)
-                softmax_scale = 1 / query_states.shape[-1] if constants.USING_MUP else None
+                softmax_scale = 1 / query_states.shape[-1] if self.is_using_mup else None
                 attention_output = flash_attn_with_kvcache(
                     query_states,
                     k_cache,
@@ -891,18 +894,20 @@ class LlamaForTraining(NanotronModel):
         return {"loss": loss}
 
     @torch.no_grad()
-    def init_model_randomly(self, config: Config, init_method: ParametrizationMethod):
+    def init_model_randomly(self, config: Config):
         """Initialize model parameters randomly.
         Note:
             Layernorm weight all 0 or 1 depending on `apply_layernorm_1p`
         """
-        INIT_TYPE_TO_PARAMETRIZATOR = {
-            ParametrizationMethod.STANDARD: StandardParametrizator,
-            ParametrizationMethod.SPECTRAL_MUP: SpectralMupParametrizator,
-        }
-        parametrizator = INIT_TYPE_TO_PARAMETRIZATOR[init_method](config=config.model)
-        if init_method == ParametrizationMethod.SPECTRAL_MUP:
-            constants.USING_MUP = True
+        init_method = config.model.init_method
+        if isinstance(init_method, RandomInit):
+            parametrizator_cls = StandardParametrizator
+        elif isinstance(init_method, SpectralMupInit):
+            parametrizator_cls = SpectralMupParametrizator
+        else:
+            raise ValueError(f"Unknown init method {init_method}")
+
+        parametrizator = parametrizator_cls(config=config.model)
 
         log_rank(
             f"Parametrizing model parameters using {parametrizator.__class__.__name__}",

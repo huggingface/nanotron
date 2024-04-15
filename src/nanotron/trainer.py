@@ -666,12 +666,7 @@ class DistributedTrainer:
                     root_folder=self.config.model.init_method.path,
                 )
             elif isinstance(self.config.model.init_method, (RandomInit, SpectralMupInit)):
-                _init_method = (
-                    ParametrizationMethod.STANDARD
-                    if isinstance(self.config.model.init_method, RandomInit)
-                    else ParametrizationMethod.SPECTRAL_MUP
-                )
-                unwrapped_model.init_model_randomly(config=self.config, init_method=_init_method)
+                unwrapped_model.init_model_randomly(config=self.config)
 
                 # Synchronize parameters so that the model is consistent
                 # sync all params across dp
