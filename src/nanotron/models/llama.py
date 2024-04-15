@@ -17,12 +17,13 @@
 from typing import Dict, Optional, Union
 
 import torch
-from flash_attn import bert_padding
-from flash_attn.flash_attn_interface import (
-    flash_attn_varlen_func,
-    flash_attn_with_kvcache,
-)
-from flash_attn.layers.rotary import RotaryEmbedding as FlashRotaryEmbedding
+
+# from flash_attn import bert_padding
+# from flash_attn.flash_attn_interface import (
+#     flash_attn_varlen_func,
+#     flash_attn_with_kvcache,
+# )
+# from flash_attn.layers.rotary import RotaryEmbedding as FlashRotaryEmbedding
 from torch import nn
 
 from nanotron import distributed as dist
@@ -200,6 +201,8 @@ class CoreAttention(nn.Module):
         q_sequence_mask: torch.Tensor,  # torch.BoolTensor [batch_size, q_length] (can be broadcasted to that size)
         kv_sequence_mask: torch.Tensor,  # torch.BoolTensor [batch_size, kv_length] (can be broadcasted to that size)
     ):
+        from flash_attn.flash_attn_interface import flash_attn_varlen_func
+
         # TODO @thomasw21: Compute once, instead of computing for each layers.
         cu_seqlens_q = torch.zeros((q_sequence_mask.shape[0] + 1), dtype=torch.int32, device=query_states.device)
         cu_seqlens_k = torch.zeros((kv_sequence_mask.shape[0] + 1), dtype=torch.int32, device=query_states.device)
@@ -266,6 +269,8 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         tp_pg: dist.ProcessGroup,
         layer_idx: int,
     ):
+        from flash_attn.layers.rotary import RotaryEmbedding as FlashRotaryEmbedding
+
         super().__init__()
         # Tensor parallel considerations: We split tensors along head dimension
         assert (
@@ -351,6 +356,12 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         hidden_states,  # [seq_length, batch_size, hidden_size]
         sequence_mask,  # [batch_size, seq_length]
     ):
+        from flash_attn import bert_padding
+        from flash_attn.flash_attn_interface import (
+            flash_attn_varlen_func,
+            flash_attn_with_kvcache,
+        )
+
         qkv_states = self.qkv_proj(
             hidden_states
         )  # [seq_length, batch_size, n_local_q_heads * d_qk + 2 * n_local_kv_heads * d_qk]

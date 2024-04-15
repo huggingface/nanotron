@@ -39,10 +39,9 @@ general:
   run: llama_350m_mup
   seed: 42
   step: null
-lighteval: null
 logging:
   iteration_step_info_interval: 1
-  log_level: info
+  log_level: debug
   log_level_replica: info
 model:
   ddp_bucket_cap_mb: 120
@@ -108,3 +107,35 @@ tokens:
   sequence_length: 1024
   train_steps: 440
   val_check_interval: -1
+lighteval:
+  batch_size: 16
+  checkpoints_path: null
+  generation: null
+  logging:
+    hub_repo_details: null
+    hub_repo_results: null
+    # hub_repo_tensorboard: HuggingFaceBR4/fmom-mamba2
+    local_output_path: /fsx/phuc/new_workspace/experiments/mup_for_mamba2/test_mamba350M_tp4_917cfc66/logs
+    push_details_to_hub: null
+    push_results_to_hub: null
+    push_results_to_tensorboard: true
+    tensorboard_metric_prefix: e
+  parallelism:
+    dp: 2
+    expert_parallel_size: 1
+    pp: 1
+    pp_engine: 1f1b
+    tp: 2
+    tp_linear_async_communication: false
+    tp_mode: ALL_REDUCE
+  # slurm_script_dir: /fsx/phuc/new_workspace/experiments/mup_for_mamba2/test_mamba350M_tp4_917cfc66/lighteval/slurm_scripts
+  # slurm_template: /fsx/phuc/new_workspace/experiments/mup_for_mamba2/test_mamba350M_tp4_917cfc66/run_eval.slurm.jinja
+  tasks:
+    # custom_tasks: brrr.lighteval.custom_tasks
+    dataset_loading_processes: 8
+    max_samples: 1000
+    multichoice_continuations_start_space: null
+    no_multichoice_continuations_start_space: null
+    num_fewshot_seeds: null
+    tasks: early-signal
+  wandb: null

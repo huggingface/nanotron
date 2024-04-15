@@ -27,6 +27,8 @@ We ran a systematic experiment varying the number of layers from 8 to 32, width 
 
 # On 350m LLaMA
 
-We trained a 350m model with spectral µTransfer and standard parametrization using Nanotron, processing 1 million tokens per step at a learning rate of 0.001. µTransfer matches the performance of standard parametrization, with a slightly higher training loss of 0.04. [[Experiment Report]](https://api.wandb.ai/links/neuralink/i70nnpu9)
+We trained a 350m model with spectral µTransfer and standard parametrization using Nanotron, a global batch size of 1m tokens at a learning rate of 0.001. µTransfer matches the performance of standard parametrization, with a slightly higher training loss of 0.04. [[Experiment Report]](https://api.wandb.ai/links/neuralink/i70nnpu9)
+
+Please check the directory [[./examples/mup/configs]](/examples/mup/configs) for the configurations we used to reproduce the experiments.
 
 ![LLaMA](./assets/llama.png)

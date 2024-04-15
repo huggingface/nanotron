@@ -112,6 +112,10 @@ Features we would like to add:
 - `scripts/log_lighteval_to_wandb.py`: logs the evaluation results of LightEval to wandb, including summary statistics.
 
 
+# Environment Variables
+- `NANOTRON_BENCHMARK=1`: if you want to log the throughput during training
+
+
 # Credits
 
 We would like to thank everyone working on LLMs, especially those sharing their work openly from which we took great inspiration: Nvidia for `Megatron-LM/apex`, Microsoft for `DeepSpeed`, HazyResearch for `flash-attn`
