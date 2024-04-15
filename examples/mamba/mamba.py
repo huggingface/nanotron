@@ -12,10 +12,9 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" PyTorch Mamba model.
-"""
+"""PyTorch Mamba model."""
+
 import math
-import os
 from functools import partial
 from typing import Dict, Optional, Union
 
@@ -35,6 +34,7 @@ from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter
 from nanotron.parallel.pipeline_parallel.block import PipelineBlock, TensorPointer
 from nanotron.parallel.pipeline_parallel.p2p import P2P
+from nanotron.parallel.sharded_parameters import SplitConfig, create_sharded_parameter_from_config
 from nanotron.parallel.tensor_parallel.functional import sharded_cross_entropy
 from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelColumnLinear,
@@ -133,6 +133,14 @@ class Mamba(nn.Module):
             **factory_kwargs,
         )
 
+        self.conv1d.weight = create_sharded_parameter_from_config(
+            parameter=self.conv1d.weight, pg=self.tp_pg, split_config=SplitConfig(split_dim=0)
+        )
+        if conv_bias:
+            self.conv1d.bias = create_sharded_parameter_from_config(
+                parameter=self.conv1d.bias, pg=self.tp_pg, split_config=SplitConfig(split_dim=0)
+            )
+
         self.activation = "silu"
         self.act = nn.SiLU()
 
@@ -148,16 +156,6 @@ class Mamba(nn.Module):
 
         self.dt_proj = nn.Linear(self.dt_rank, self.d_inner // self.tp_pg.size(), bias=True, **factory_kwargs)
 
-        # Initialize special dt projection to preserve variance at initialization
-        # Perform in `def init_model_randomly`
-        # dt_init_std = self.dt_rank**-0.5 * dt_scale
-        # if dt_init == "constant":
-        #     nn.init.constant_(self.dt_proj.weight, dt_init_std)
-        # elif dt_init == "random":
-        #     nn.init.uniform_(self.dt_proj.weight, -dt_init_std, dt_init_std)
-        # else:
-        #     raise NotImplementedError
-
         # Initialize dt bias so that F.softplus(dt_bias) is between dt_min and dt_max
         dt = torch.exp(
             torch.rand(self.d_inner // self.tp_pg.size(), **factory_kwargs) * (math.log(dt_max) - math.log(dt_min))
@@ -167,8 +165,13 @@ class Mamba(nn.Module):
         inv_dt = dt + torch.log(-torch.expm1(-dt))
         with torch.no_grad():
             self.dt_proj.bias.copy_(inv_dt)
-        # Our initialization would set all Linear.bias to zero, need to mark this one as _no_reinit
-        self.dt_proj.bias._no_reinit = True
+
+        self.dt_proj.weight = create_sharded_parameter_from_config(
+            parameter=self.dt_proj.weight, pg=self.tp_pg, split_config=SplitConfig(split_dim=0)
+        )
+        self.dt_proj.bias = create_sharded_parameter_from_config(
+            parameter=self.dt_proj.bias, pg=self.tp_pg, split_config=SplitConfig(split_dim=0)
+        )
 
         # S4D real initialization
         A = repeat(
@@ -177,11 +180,17 @@ class Mamba(nn.Module):
             d=self.d_inner // self.tp_pg.size(),
         ).contiguous()
         A_log = torch.log(A)  # Keep A_log in fp32
-        self.A_log = nn.Parameter(A_log)
+        self.A_log = create_sharded_parameter_from_config(
+            parameter=A_log, pg=self.tp_pg, split_config=SplitConfig(split_dim=0)
+        )
         self.A_log._no_weight_decay = True
 
         # D "skip" parameter
-        self.D = nn.Parameter(torch.ones(self.d_inner // self.tp_pg.size(), device=device))  # Keep in fp32
+        self.D = create_sharded_parameter_from_config(
+            parameter=torch.ones(self.d_inner // self.tp_pg.size(), device=device),
+            pg=self.tp_pg,
+            split_config=SplitConfig(split_dim=0),
+        )
         self.D._no_weight_decay = True
 
         # self.out_proj = nn.Linear(self.d_inner, self.d_model, bias=bias, **factory_kwargs)
@@ -500,7 +509,7 @@ class MambaDecoderLayer(nn.Module):
                 hidden_states,
                 self.norm.weight,
                 self.norm.bias,
-                residual=residual,
+                residual=None if (self.layer_idx == 0) else residual,
                 prenorm=True,
                 residual_in_fp32=self.residual_in_fp32,
                 eps=self.norm.eps,
@@ -872,24 +881,22 @@ class MambaForTraining(NanotronModel):
                         module.weight /= math.sqrt(n_residuals_per_layer * num_hidden_layers)
 
             elif isinstance(module, nn.Conv1d):
-                fan_in = None
+                fan_in, _ = init._calculate_fan_in_and_fan_out(module.weight)
                 if "weight" == param_name:
-                    fan_in, _ = init._calculate_fan_in_and_fan_out(param)
                     init.kaiming_uniform_(module.weight, a=math.sqrt(5))
                 elif "bias" == param_name:
-                    bound = 1 / math.sqrt(fan_in) if (fan_in is not None and fan_in > 0) else 0
+                    bound = 1 / math.sqrt(fan_in) if (fan_in > 0) else 0
                     init.uniform_(module.bias, -bound, bound)
                 else:
                     raise ValueError(f"Who the fuck is {param_name}?")
 
             elif isinstance(module, nn.Linear):
-                fan_in = None
+                fan_in, _ = init._calculate_fan_in_and_fan_out(module.weight)
 
                 if "weight" == param_name:
-                    fan_in, _ = init._calculate_fan_in_and_fan_out(module.weight)
                     init.kaiming_uniform_(module.weight, a=math.sqrt(5))
                 elif "bias" == param_name:
-                    bound = 1 / math.sqrt(fan_in) if (fan_in is not None and fan_in > 0) else 0
+                    bound = 1 / math.sqrt(fan_in) if (fan_in > 0) else 0
                     init.uniform_(module.bias, -bound, bound)
                 else:
                     raise ValueError(f"Who the fuck is {param_name}?")
