@@ -20,7 +20,7 @@ from examples.llama.convert_nanotron_to_hf import convert_checkpoint_and_save as
 from examples.llama.convert_nanotron_to_hf import convert_nt_to_hf, get_hf_config
 from examples.llama.convert_weights import load_nanotron_model
 from tests.helpers.context import TestContext
-from tests.helpers.utils import init_distributed
+from tests.helpers.utils import init_distributed, rerun_if_address_is_in_use
 
 CONFIG = NanotronLlamaConfig(
     **{
@@ -203,5 +203,6 @@ def _test_tensor_parallel_conversion(parallel_context: ParallelContext):
     assert torch.allclose(logits_nt, logits_hf, atol=ATOL), torch.mean(torch.abs(logits_nt - logits_hf))
 
 
+@rerun_if_address_is_in_use()
 def test_tensor_parallel_conversion():
     init_distributed(tp=2, dp=1, pp=1)(_test_tensor_parallel_conversion)()
