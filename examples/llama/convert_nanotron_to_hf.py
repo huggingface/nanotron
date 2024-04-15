@@ -9,7 +9,9 @@ from argparse import ArgumentParser
 from pathlib import Path
 from typing import Literal, Optional
 
+import nanotron
 import torch
+import yaml
 from convert_weights import get_config_mapping, get_weight_mapping, load_nanotron_model
 from nanotron.config import LlamaConfig as NanotronLlamaConfig
 from nanotron.models import init_on_device_and_dtype
@@ -23,7 +25,6 @@ TEST_PROMPT = "What is the meaning of the word chutzpah?\nThe word chutzpah mean
 def _handle_attention_block(
     qkv: torch.Tensor, part: Literal["q", "k", "v"], n_q_heads: int, n_kv_heads: int, d_qk: int
 ) -> torch.Tensor:
-
     # Huggingface Llama separates the q, k, v weights (as opposed to nanotron).
     # Furthermore, in the rotary embeddings in nanotron expects interleaved pairs of even
     # and odd dimensions GPT-J style, while the huggingface implementation expects
@@ -108,11 +109,19 @@ def convert_checkpoint_and_save(checkpoint_path: Path, save_path: Path, tokenize
     with open(checkpoint_path / "model_config.json", "r") as f:
         attrs = json.load(f)
         model_config = NanotronLlamaConfig(**attrs)
-    dtype = getattr(torch, "bfloat16")
-    nanotron_model = load_nanotron_model(
-        model_config=model_config, device=device, dtype=dtype, checkpoint_path=checkpoint_path
+    with open(checkpoint_path / "config.yaml") as f:
+        training_config = yaml.safe_load(f)
+    parallelism = nanotron.config.ParallelismArgs(
+        **training_config["parallelism"],
     )
-
+    dtype = getattr(torch, training_config["model"]["dtype"])
+    nanotron_model = load_nanotron_model(
+        parallel_config=parallelism,
+        model_config=model_config,
+        device=device,
+        dtype=dtype,
+        checkpoint_path=checkpoint_path,
+    )
     # Init huggingface model.
     with init_on_device_and_dtype(device, dtype):
         model_config_hf = get_hf_config(model_config)
