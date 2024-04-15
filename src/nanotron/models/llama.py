@@ -17,13 +17,6 @@
 from typing import Dict, Optional, Union
 
 import torch
-
-# from flash_attn import bert_padding
-# from flash_attn.flash_attn_interface import (
-#     flash_attn_varlen_func,
-#     flash_attn_with_kvcache,
-# )
-# from flash_attn.layers.rotary import RotaryEmbedding as FlashRotaryEmbedding
 from torch import nn
 
 from nanotron import distributed as dist
