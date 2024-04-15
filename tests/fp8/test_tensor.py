@@ -270,6 +270,29 @@ def test_clone_fp8_tensor(tensor_cls, dtype):
         (FP16Tensor, DTypes.KFLOAT16),
     ],
 )
+def test_transpose_fp8_tensor(tensor_cls, dtype):
+    tensor = torch.randn((16, 16), dtype=torch.float32, device="cuda:0")
+    fp8_tensor = tensor_cls(deepcopy(tensor), dtype)
+
+    transposed_fp8_tensor = fp8_tensor.T
+    if tensor_cls == FP8Tensor:
+        ref_transposed = convert_tensor_from_fp8(fp8_tensor, fp8_tensor.fp8_meta, torch.float32).T
+        dequant_transposed_fp8_tensor = convert_tensor_from_fp8(transposed_fp8_tensor, transposed_fp8_tensor.fp8_meta, torch.float32)
+    else:
+        dequant_transposed_fp8_tensor = convert_tensor_from_fp16(transposed_fp8_tensor, torch.float32)
+        ref_transposed = convert_tensor_from_fp16(fp8_tensor, torch.float32).T
+            
+    assert torch.equal(dequant_transposed_fp8_tensor, ref_transposed)
+
+
+@pytest.mark.parametrize(
+    "tensor_cls, dtype",
+    [
+        (FP8Tensor, DTypes.FP8E4M3),
+        (FP8Tensor, DTypes.FP8E5M2),
+        (FP16Tensor, DTypes.KFLOAT16),
+    ],
+)
 def test_determistic_quantization(tensor_cls, dtype):
     tensor = torch.randn((64, 64), dtype=torch.float32, device="cuda:0")
     fp8_tensor = tensor_cls(deepcopy(tensor), dtype)
