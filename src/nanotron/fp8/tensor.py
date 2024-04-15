@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from abc import abstractstaticmethod
 from copy import deepcopy
-from typing import Union, cast
+from typing import Union, cast, Optional
 
 import torch
 import transformer_engine as te  # noqa
@@ -10,22 +10,33 @@ import transformer_engine_extensions as tex
 
 from nanotron.fp8.constants import DTYPE_TO_FP8_MAX, FP8_DTYPES, INITIAL_SCALING_FACTOR
 from nanotron.fp8.dtypes import DTypes
+from nanotron.fp8.meta import FP8Meta
 
 
 class LowPrecisionTensor(torch.Tensor):
     def __new__(
-        cls, tensor: torch.Tensor, dtype: DTypes, interval: int = 1, is_dynamic_scaling: bool = False
+        cls,
+        tensor: torch.Tensor,
+        dtype: Optional[DTypes] = None,
+        interval: Optional[int] = 1,
+        is_dynamic_scaling: Optional[bool] = False,
+        fp8_meta: Optional[FP8Meta] = None
     ) -> torch.Tensor:
         assert isinstance(tensor, torch.Tensor), "tensor must be a tensor"
-        assert tensor.dtype not in FP8_DTYPES, "The tensor already quantized to FP8"
 
         # TODO(xrsrke): if the tensor is on cpu, then bypass the quantization
         # because the current kernels only support gpu tensor
         assert tensor.device != torch.device("cpu"), "FP8Tensor only supports CUDA device"
-        assert dtype in [DTypes.FP8E4M3, DTypes.FP8E5M2, DTypes.KFLOAT16]
 
-        fp8_meta = cls._get_metadata(tensor, dtype, interval, is_dynamic_scaling)
-        fp8_tensor = cls._quantize(tensor, fp8_meta)
+        if fp8_meta is None:
+            assert tensor.dtype not in FP8_DTYPES, "The tensor already quantized to FP8"
+            assert dtype in [DTypes.FP8E4M3, DTypes.FP8E5M2, DTypes.KFLOAT16]
+            
+            fp8_meta = cls._get_metadata(tensor, dtype, interval, is_dynamic_scaling)
+            fp8_tensor = cls._quantize(tensor, fp8_meta)
+        else:
+            assert tensor.dtype in FP8_DTYPES
+            fp8_tensor = tensor
 
         # TODO(xrsrke): move update inverse scaling to FP8Meta's initialization
         obj = torch.Tensor._make_subclass(cls, fp8_tensor)
@@ -65,7 +76,7 @@ class LowPrecisionTensor(torch.Tensor):
 
     @abstractstaticmethod
     def _quantize(tensor: torch.Tensor, fp8_meta: "FP8Meta") -> torch.Tensor:
-        raise NotImplementedError
+        ...
 
     def mul_(self, other: torch.Tensor):
         from nanotron.fp8.meta import FP8Meta
@@ -117,13 +128,11 @@ class LowPrecisionTensor(torch.Tensor):
 
         self.fp8_meta.add_amax(new_amax)
     
-    @property
-    def T(self) -> FP8Tensor:
+    def transpose_fp8(self) -> FP8Tensor:
         """Transpose the tensor."""
         transposed_t = tex.fp8_transpose(self, self.fp8_meta.te_dtype)
         transposed_t.fp8_meta = self.fp8_meta
-        # return FP8Tensor(transposed_t, self.fp8_meta.dtype, self.fp8_meta.interval)
-        return transposed_t
+        return self.__class__(transposed_t, fp8_meta=self.fp8_meta)
 
     def __repr__(self) -> str:
         if hasattr(self, "fp8_meta"):

@@ -7,7 +7,6 @@ import transformer_engine_extensions as tex
 
 from nanotron.fp8.constants import DTYPE_TO_FP8_MAX
 from nanotron.fp8.dtypes import DTypes
-from nanotron.fp8.tensor import convert_torch_dtype_to_te_dtype
 
 
 @dataclass
@@ -24,6 +23,7 @@ class FP8Meta:
 
     @property
     def te_dtype(self) -> tex.DType:
+        from nanotron.fp8.tensor import convert_torch_dtype_to_te_dtype
         return convert_torch_dtype_to_te_dtype(self.dtype)
 
     def __post_init__(self):

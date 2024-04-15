@@ -219,7 +219,7 @@ if __name__ == "__main__":
             fp8_with_scaler_logs = _log(fp8_linear_with_scaler)
             fp8_output_with_scaler = fp8_linear_with_scaler(inputs)
             fp8_loss_with_scaler = loss_func(fp8_output_with_scaler, targets)
-            fp8_scaler.scaling_value = deepspeed_linear.optimizer.loss_scaler.loss_scale
+            fp8_scaler.scaling_value = torch.tensor(deepspeed_linear.optimizer.loss_scaler.loss_scale, device="cuda")
             scaled_fp8_loss_with_scaler = fp8_scaler.scale(fp8_loss_with_scaler)
             fp8_optim_with_scaler.zero_grad()
             scaled_fp8_loss_with_scaler.backward()

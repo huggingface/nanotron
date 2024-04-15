@@ -1,4 +1,4 @@
-from typing import Optional, Tuple, Union, TypedDict
+from typing import Optional, Tuple, Union, TypedDict, cast
 
 import torch
 import torch.nn.functional as F
@@ -100,7 +100,7 @@ class _FP8Matmul(torch.autograd.Function):
             )
 
         ctx.accum_qtype = accum_qtype
-        ctx.save_for_backward(input, weight)
+        ctx.save_for_backward(input, weight.data)
 
         # NOTE: pass FP8Tensor instead of FP8Parameter
         output = fp8_matmul_kernel(
@@ -133,13 +133,12 @@ class _FP8Matmul(torch.autograd.Function):
         ∂L/∂W = Xᵀ @ ∂L/∂Y
         Reference: https://web.eecs.umich.edu/~justincj/teaching/eecs442/notes/linear-backprop.html
         """
-        pydevd.settrace(suspend=False, trace_only_current_thread=True)
+        # pydevd.settrace(suspend=False, trace_only_current_thread=True)
         fp8_input, fp8_weight = ctx.saved_tensors
         accum_qtype = ctx.accum_qtype
-
-        # if type(grad_output) == torch.Tensor:
         
-        #     # TODO(xrsrke): investigate how does grad_output.contiguous() affect the outputs
+        fp8_input = cast(FP8Tensor, fp8_input)
+        fp8_weight = cast(FP8Tensor, fp8_weight)
         grad_output = grad_output.contiguous()
         fp8_grad_output = FP8Tensor(grad_output, dtype=FP8LM_RECIPE.linear.output_grad.dtype)
 
@@ -165,7 +164,7 @@ class _FP8Matmul(torch.autograd.Function):
 
         # fp8_weight_transposed = tex.fp8_transpose(fp8_weight, fp8_weight.fp8_meta.te_dtype)
         # fp8_weight_transposed.fp8_meta = fp8_weight.fp8_meta
-        transposed_fp8_weight = fp8_weight.t()
+        transposed_fp8_weight = fp8_weight.transpose_fp8()
 
         grad_input = fp8_matmul_kernel(
             mat_a=transposed_fp8_weight,
@@ -174,7 +173,7 @@ class _FP8Matmul(torch.autograd.Function):
             transpose_b=False,
             use_split_accumulator=FP8LM_RECIPE.linear.split_accumulator.input_grad,
             accum_qtype=accum_qtype,
-            # is_backward=True
+            is_backward=True
         )
         
         # fp8_grad_output_transposed = tex.fp8_transpose(fp8_grad_output, fp8_grad_output.fp8_meta.te_dtype)
@@ -182,8 +181,8 @@ class _FP8Matmul(torch.autograd.Function):
         # fp8_input_tranposed = tex.fp8_transpose(fp8_input, fp8_input.fp8_meta.te_dtype)
         # fp8_input_tranposed.fp8_meta = fp8_input.fp8_meta
         
-        transposed_fp8_grad_output = fp8_grad_output.t()
-        transposed_fp8_input = fp8_input.t()
+        transposed_fp8_grad_output = fp8_grad_output.transpose_fp8()
+        transposed_fp8_input = fp8_input.transpose_fp8()
 
         grad_weight = fp8_matmul_kernel(
             mat_a=transposed_fp8_input,
