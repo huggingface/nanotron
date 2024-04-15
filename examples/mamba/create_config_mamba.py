@@ -3,10 +3,10 @@ import math
 import os
 
 from config import MambaConfig, MambaInit, MambaModelConfig
-
 from nanotron.config import (
     CheckpointsArgs,
     DataArgs,
+    DatasetStageArgs,
     GeneralArgs,
     LoggingArgs,
     LRSchedulerArgs,
@@ -36,9 +36,9 @@ ssm_cfg = {
 }
 # https://huggingface.co/state-spaces/mamba-790m/blob/main/config.json
 model_config = MambaModelConfig(
-    d_model=1536,
+    d_model=1024,
     num_hidden_layers=48,
-    vocab_size=50277,
+    vocab_size=50278,
     ssm_cfg=ssm_cfg,
     rms_norm=True,
     fused_add_norm=True,
@@ -80,7 +80,7 @@ norm_f = model_config.d_model
 num_params = human_format(
     (
         tie_embedding
-        + model_config.num_hidden_layers * (A_log + D + in_proj + conv1d + x_proj + dt_proj + out_proj + norm) + norm_f
+        + model_config.num_hidden_layers * (A_log + D + in_proj + conv1d + x_proj + dt_proj + out_proj + norm + norm_f)
     )
 ).replace(".", "p")
 
@@ -98,7 +98,11 @@ optimizer = OptimizerArgs(
     adam_beta2=0.95,
     torch_adam_is_fused=True,
     learning_rate_scheduler=LRSchedulerArgs(
-        learning_rate=3e-4, lr_warmup_steps=10, lr_warmup_style="linear", lr_decay_style="cosine", min_decay_lr=1e-5
+        learning_rate=0.0015,
+        lr_warmup_steps=30,
+        lr_warmup_style="linear",
+        lr_decay_style="cosine",
+        min_decay_lr=0.00015,
     ),
 )
 
@@ -111,23 +115,25 @@ parallelism = ParallelismArgs(
     tp_linear_async_communication=False,
 )
 
-tokens = TokensArgs(sequence_length=2048, train_steps=100, micro_batch_size=2, batch_accumulation_per_replica=1)
+tokens = TokensArgs(sequence_length=2048, train_steps=300, micro_batch_size=8, batch_accumulation_per_replica=1)
 
-dataset = PretrainDatasetsArgs(
-    hf_dataset_or_datasets={"roneneldan/TinyStories": 1.0},
-    hf_dataset_config_name=None,
-    hf_dataset_splits="train",
-    dataset_processing_num_proc_per_process=24,
-    dataset_overwrite_cache=False,
-    text_column_name="text",
-)
+data_stages = [
+    DatasetStageArgs(
+        name="Stable Training Stage",
+        start_training_step=1,
+        data=DataArgs(
+            dataset=PretrainDatasetsArgs(hf_dataset_or_datasets="roneneldan/TinyStories", text_column_name="text"),
+            seed=seed,
+        ),
+    )
+]
 
 checkpoints_path = os.path.dirname(os.path.dirname(__file__)) + "/checkpoints"
 os.makedirs(checkpoints_path, exist_ok=True)
 
 config = MambaConfig(
     general=GeneralArgs(project="test", run="mamba", seed=seed, ignore_sanity_checks=True),
-    checkpoints=CheckpointsArgs(checkpoints_path=checkpoints_path, checkpoint_interval=10),
+    checkpoints=CheckpointsArgs(checkpoints_path=checkpoints_path, checkpoint_interval=100),
     parallelism=parallelism,
     model=ModelArgs(
         init_method=MambaInit(initializer_range=0.02, rescale_prenorm_residual=True, n_residuals_per_layer=1),
@@ -137,7 +143,7 @@ config = MambaConfig(
     optimizer=optimizer,
     logging=LoggingArgs(),
     tokens=tokens,
-    data=DataArgs(dataset=dataset, seed=seed),
+    data_stages=data_stages,
     profiler=None,
 )
 

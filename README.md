@@ -15,7 +15,8 @@
         <a href="#Core-Features">Core Features</a> •
         <a href="#Installation">Installation</a> •
         <a href="#Quick-examples">Usage</a> •
-        <a href="#Development-guidelines">Contributions</a>
+        <a href="#Development-guidelines">Contributions</a> •
+        <a href="docs/debugging.md">Debugging</a>
     <p>
 </h4>
 
@@ -71,7 +72,7 @@ In the `/examples` directory, you can find a few example configuration file, and
 
 You can run a sample training using:
 ```bash
-torchrun --nproc_per_node=8 run_train.py --config-file examples/debug_run_train.yaml
+torchrun --nproc_per_node=8 run_train.py --config-file examples/train_tiny_llama.sh
 ```
 
 And run a sample generation using:
@@ -104,6 +105,11 @@ Features we would like to add:
 - [ ] 3D Parallel MoEs
 - [ ] Supporting more architectures (Mamba..)
 - [ ] ...
+
+
+# Useful scripts
+- `scripts/log_lighteval_to_wandb.py`: logs the evaluation results of LightEval to wandb, including summary statistics.
+
 
 # Credits
 

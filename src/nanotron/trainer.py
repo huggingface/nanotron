@@ -210,10 +210,7 @@ class DistributedTrainer:
 
         # Setup tensorboard write and log writers on output rank
         self.logger_ranks = self.parallel_context.get_global_rank(
-            ep_rank=0,
-            pp_rank=self.unwrapped_model.output_pp_rank,
-            dp_rank=0,
-            tp_rank=0
+            ep_rank=0, pp_rank=self.unwrapped_model.output_pp_rank, dp_rank=0, tp_rank=0
         ).flatten()
         self.loggerwriter = self.setup_log_writers()
 
@@ -253,7 +250,7 @@ class DistributedTrainer:
         if dist.get_rank(self.parallel_context.world_pg) == self.logger_ranks[0] and wandb is not None:
             wandb.init(
                 project=self.config.general.project,
-                name=f"{current_time}_{self.config.general.project}_{self.config.general.run}",
+                name=f"{current_time}_{self.config.general.run}",
                 config={"nanotron_config": self.config.as_dict()},
             )
 
@@ -264,13 +261,35 @@ class DistributedTrainer:
         pass
 
     def _print_training_plan(self):
-        stages_info = "".join(
-            f"[Stage {stage.name}] start from step {stage.start_training_step} \n" for stage in self.config.data_stages
-        )
-        full_log_message = f"[Training Plan] There are {len(self.config.data_stages)} training stages \n{stages_info}"
-        log_rank(full_log_message, logger=logger, level=logging.INFO, rank=0)
+        if hasattr(self.config, "data_stages") and self.config.data_stages is not None:
+            stages_info = "".join(
+                f"[Stage {stage.name}] start from step {stage.start_training_step} \n"
+                for stage in self.config.data_stages
+            )
+            full_log_message = (
+                f"[Training Plan] There are {len(self.config.data_stages)} training stages \n{stages_info}"
+            )
+            log_rank(full_log_message, logger=logger, level=logging.INFO, rank=0)
 
-    def _update_dataloader_based_on_training_stages(self, dataloaders: List[DataLoader]):
+    def _update_dataloader_based_on_training_stages(self, dataloaders: Union[List[DataLoader], DataLoader]):
+        from collections.abc import Generator
+
+        if not hasattr(self.config, "data_stages") or self.config.data_stages is None:
+            if self.current_dataloader is None:
+                if isinstance(dataloaders, tuple):
+                    dataloader = dataloaders[0]
+                else:
+                    dataloader = dataloaders
+                self.current_dataloader = sanity_check_dataloader(
+                    dataloader=dataloader, parallel_context=self.parallel_context, config=self.config
+                )
+            return
+        elif isinstance(dataloaders, Generator):
+            # TODO(xrsrke): this is a hacky way to handle DoReMi's dataloader
+            # remove this in the next PR
+            self.current_dataloader = dataloaders
+            return
+
         assert len(dataloaders) > 0, "No dataloaders provided"
         assert len(dataloaders) == len(
             self.config.data_stages
