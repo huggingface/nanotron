@@ -171,7 +171,7 @@ def lr_scheduler_builder(optimizer: Optimizer, lr_scheduler_args: LRSchedulerArg
     log_rank(
         f"[Optimizer Building] There are total {len(lr_lambdas)} custom learning rate function for parameter groups",
         logger=logger,
-        level=logging.DEBUG,
+        level=logging.INFO,
     )
 
     lr_scheduler = LambdaLR(optimizer.get_base_optimizer(), lr_lambda=lr_lambdas)
@@ -222,7 +222,7 @@ def get_custom_lr_for_named_parameters(
     log_rank(
         f"[Optimizer Building] Creating {len(named_param_groups_with_custom_lr)} param groups with custom learning rates",
         logger=logger,
-        level=logging.DEBUG,
+        level=logging.INFO,
     )
 
     return named_param_groups_with_custom_lr

@@ -41,7 +41,7 @@ general:
   step: null
 logging:
   iteration_step_info_interval: 1
-  log_level: debug
+  log_level: info
   log_level_replica: info
 model:
   ddp_bucket_cap_mb: 120
@@ -105,7 +105,8 @@ tokens:
   limit_val_batches: 0
   micro_batch_size: 32
   sequence_length: 1024
-  train_steps: 440
+  # train_steps: 440
+  train_steps: 500
   val_check_interval: -1
 lighteval:
   batch_size: 16

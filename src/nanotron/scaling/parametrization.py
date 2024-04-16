@@ -3,7 +3,9 @@ from abc import abstractmethod
 from enum import Enum, auto
 from typing import Dict
 
+from nanotron import logging
 from nanotron.config import ModelArgs
+from nanotron.logging import log_rank
 from nanotron.nn.layer_norm import TritonRMSNorm
 from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelColumnLinear,
@@ -12,6 +14,19 @@ from nanotron.parallel.tensor_parallel.nn import (
 )
 from torch import nn
 from torch.nn import init
+
+logger = logging.get_logger(__name__)
+
+
+NAME_TO_FAN_MAPPING = {"gate_up_proj": [1024, 4096], "token_embedding": [49152, 1024]}
+
+
+def find_fan(name, data):
+    for key, value in NAME_TO_FAN_MAPPING.items():
+        if key in name:
+            return value
+
+    return None
 
 
 class ParametrizationMethod(Enum):
@@ -88,9 +103,11 @@ class SpectralMupParametrizator(Parametrizator):
             TensorParallelColumnLinear: self._parametrize_mup_weight,
             TensorParallelRowLinear: self._parametrize_mup_weight,
             TritonRMSNorm: self._parametrize_layer_norm,
-            TensorParallelEmbedding: self._parametrize_embedding,
+            # TensorParallelEmbedding: self._parametrize_embedding,
+            TensorParallelEmbedding: self._parametrize_mup_weight,
         }
-        self.std = 1.0
+        # self.std = 1.0
+        self.std = 0.03125
 
     @staticmethod
     def _compute_spectral_std(std: float, fan_in: int, fan_out: int):
@@ -107,16 +124,26 @@ class SpectralMupParametrizator(Parametrizator):
 
         data = module.weight if param_name == "weight" else module.bias
         fan_in, fan_out = init._calculate_fan_in_and_fan_out(data)
-        world_size = module.world_size
+        # world_size = module.world_size
+        world_size = 2
 
         if isinstance(module, TensorParallelColumnLinear):
             fan_out = fan_out * world_size
-        elif isinstance(module, TensorParallelRowLinear):
+        elif isinstance(module, (TensorParallelRowLinear)):
             fan_in = fan_in * world_size
+        elif isinstance(module, (TensorParallelEmbedding)):
+            fan_in, fan_out = 49152, 1024
         else:
             raise ValueError(f"Unknown module {module}")
 
         std = SpectralMupParametrizator._compute_spectral_std(std=self.std, fan_in=fan_in, fan_out=fan_out)
+
+        log_rank(
+            f"Parameter {param_name} has fan_in={fan_in}, fan_out={fan_out}, std={std}",
+            logger=logger,
+            level=logging.INFO,
+        )
+
         init.normal_(data, mean=0.0, std=std)
 
     def _parametrize_layer_norm(self, param_name: str, module: nn.Module):
@@ -167,10 +194,11 @@ class LearningRateForSpectralMup(LearningRateForParametrizator):
             TensorParallelColumnLinear: self._get_mup_lr,
             TensorParallelRowLinear: self._get_mup_lr,
             TritonRMSNorm: self._get_global_lr,
-            TensorParallelEmbedding: self._get_global_lr,
+            # TensorParallelEmbedding: self._get_global_lr,
+            TensorParallelEmbedding: self._get_mup_lr,
         }
 
-    def _get_mup_lr(self, param: nn.Parameter, module: nn.Module):
+    def _get_mup_lr(self, param_name: str, param: nn.Parameter, module: nn.Module):
         """
         Parametrization 1 (Spectral parametrization)
         Page 8, A Spectral Condition for Feature Learning by Greg Yang, et al.
@@ -179,17 +207,27 @@ class LearningRateForSpectralMup(LearningRateForParametrizator):
         """
         fan_in, fan_out = init._calculate_fan_in_and_fan_out(param)
         world_size = module.world_size
+        world_size = 2
 
-        if isinstance(module, TensorParallelColumnLinear):
+        if isinstance(module, (TensorParallelColumnLinear)):
             fan_out = fan_out * world_size
-        elif isinstance(module, TensorParallelRowLinear):
+        elif isinstance(module, (TensorParallelRowLinear)):
             fan_in = fan_in * world_size
+        elif isinstance(module, (TensorParallelEmbedding)):
+            fan_in, fan_out = 49152, 1024
         else:
             raise ValueError(f"Unknown module {module}")
 
-        return self.lr * (fan_out / fan_in)
+        scaled_lr = self.lr * (fan_out / fan_in)
+        log_rank(
+            f"Parameter {param_name} has fan_in={fan_in}, fan_out={fan_out}, scaled_lr={scaled_lr}",
+            logger=logger,
+            level=logging.INFO,
+        )
 
-    def _get_global_lr(self, param: nn.Parameter, module: nn.Module) -> float:
+        return scaled_lr
+
+    def _get_global_lr(self, param_name: str, param: nn.Parameter, module: nn.Module) -> float:
         return self.lr
 
     def get_lr(self, param_name: str, param: nn.Parameter) -> float:
@@ -199,4 +237,4 @@ class LearningRateForSpectralMup(LearningRateForParametrizator):
         # so we remove the .weight and .bias from param_name to get the module_name
         module_name = param_name.rsplit(".", 1)[0]
         module = self.names_to_modules[module_name]
-        return self.MODULE_TO_PARAMETRIZE[type(module)](param, module)
+        return self.MODULE_TO_PARAMETRIZE[type(module)](param_name, param, module)
