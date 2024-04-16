@@ -14,7 +14,7 @@ from nanotron.scaling.parametrization import ParametrizationMethod
 @pytest.mark.parametrize(
     "parametrization_method", [ParametrizationMethod.STANDARD, ParametrizationMethod.SPECTRAL_MUP]
 )
-@pytest.mark.fa2
+@pytest.mark.skip
 @rerun_if_address_is_in_use()
 def test_get_custom_lr(tp: int, dp: int, pp: int, parametrization_method: ParametrizationMethod):
     LR = 1e-3

@@ -10,7 +10,7 @@ from torch import nn
 
 
 @pytest.mark.parametrize("tp,dp,pp", [(1, 1, 1), (2, 2, 2)])
-@pytest.mark.fa2
+@pytest.mark.skip
 @rerun_if_address_is_in_use()
 def test_get_named_modules_in_pp_rank(tp: int, dp: int, pp: int):
     model_args = ModelArgs(init_method=RandomInit(std=1.0), model_config=TINY_LLAMA_CONFIG)

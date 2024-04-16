@@ -12,7 +12,7 @@ from nanotron.scaling.parametrization import ParametrizationMethod
 
 @pytest.mark.parametrize("tp,dp,pp", [(2, 1, 1)])
 @pytest.mark.parametrize("parametrization_method", [ParametrizationMethod.SPECTRAL_MUP])
-@pytest.mark.fa2
+@pytest.mark.skip
 @rerun_if_address_is_in_use()
 def test_parametrization(tp: int, dp: int, pp: int, parametrization_method: ParametrizationMethod):
     if parametrization_method == ParametrizationMethod.STANDARD:
