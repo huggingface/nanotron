@@ -66,14 +66,18 @@ class Adam(Optimizer):
         if closure is not None:
             loss = closure()
 
+        loggings = {}
         for group in self.param_groups:
             for p in group["params"]:
                 if p.grad is None:
                     continue
+                
+                loggings[p] = {}
+                
                 grad = p.grad.data
 
-                if p.ndim != 1:
-                    print(f"[Ref Adam] original grad: {grad[:2, :2]} \n")
+                # if p.ndim != 1:
+                #     print(f"[Ref Adam] original grad: {grad[:2, :2]} \n")
 
                 if grad.is_sparse:
                     raise RuntimeError("Adam does not support sparse gradients, please consider SparseAdam instead")
@@ -93,38 +97,50 @@ class Adam(Optimizer):
                         state["max_exp_avg_sq"] = torch.zeros_like(p.data, memory_format=torch.preserve_format)
 
                 exp_avg, exp_avg_sq = state["exp_avg"], state["exp_avg_sq"]
+                
+                loggings[p]["exp_avg"] = compute_stas(exp_avg)
+                loggings[p]["exp_avg_sq"] = compute_stas(exp_avg_sq)
+                
                 if amsgrad:
                     max_exp_avg_sq = state["max_exp_avg_sq"]
                 beta1, beta2 = group["betas"]
+                
+                loggings[p]["group:beta1"] = {"value": beta1}
+                loggings[p]["group:beta2"] = {"value": beta2}
+                loggings[p]["group:lr"] = {"value": group["lr"]}
+                loggings[p]["group:eps"] = {"value": group["eps"]}
 
-                if p.ndim != 1:
-                    print(
-                        f"[Ref Adam] original exp_avg: exp_avg.data={exp_avg.data[:2, :2]}, exp_avg.dtype={exp_avg.dtype} \n"
-                    )
-                    print(
-                        f"[Ref Adam] original exp_avg_sq: exp_avg_sq.data={exp_avg_sq.data[:2, :2]}, exp_avg_sq.dtype={exp_avg_sq.dtype} \n"
-                    )
-                    print(f"[Ref Adam] beta1: {beta1}, beta2: {beta2}")
+                # if p.ndim != 1:
+                #     print(
+                #         f"[Ref Adam] original exp_avg: exp_avg.data={exp_avg.data[:2, :2]}, exp_avg.dtype={exp_avg.dtype} \n"
+                #     )
+                #     print(
+                #         f"[Ref Adam] original exp_avg_sq: exp_avg_sq.data={exp_avg_sq.data[:2, :2]}, exp_avg_sq.dtype={exp_avg_sq.dtype} \n"
+                #     )
+                #     print(f"[Ref Adam] beta1: {beta1}, beta2: {beta2}")
 
                 state["step"] += 1
                 bias_correction1 = 1 - beta1 ** state["step"]
                 bias_correction2 = 1 - beta2 ** state["step"]
+                
+                loggings[p]["bias_correction1"] = {"value": bias_correction1}
+                loggings[p]["bias_correction2"] = {"value": bias_correction2}
 
-                if p.ndim != 1:
-                    print(f"[Ref Adam]: bias_correction1: {bias_correction1}, bias_correction2: {bias_correction2}")
+                # if p.ndim != 1:
+                #     print(f"[Ref Adam]: bias_correction1: {bias_correction1}, bias_correction2: {bias_correction2}")
 
                 if group["weight_decay"] != 0:
                     grad = grad.add(group["weight_decay"], p.data)
-                    if p.ndim != 1:
-                        print(f"[Ref Adam] grad after weight decay: {grad[:2, :2]} \n")
+                    # if p.ndim != 1:
+                    #     print(f"[Ref Adam] grad after weight decay: {grad[:2, :2]} \n")
 
                 # Decay the first and second moment running average coefficient
                 exp_avg.mul_(beta1).add_(1 - beta1, grad)
                 exp_avg_sq.mul_(beta2).addcmul_(1 - beta2, grad, grad)
 
-                if p.ndim != 1:
-                    print(f"[Ref Adam] after mul and add: exp_avg: {exp_avg[:2, :2]} \n")
-                    print(f"[Ref Adam] after mul and add: exp_avg_sq: {exp_avg_sq[:2, :2]} \n")
+                # if p.ndim != 1:
+                #     print(f"[Ref Adam] after mul and add: exp_avg: {exp_avg[:2, :2]} \n")
+                #     print(f"[Ref Adam] after mul and add: exp_avg_sq: {exp_avg_sq[:2, :2]} \n")
 
                 if amsgrad:
                     # Maintains the maximum of all 2nd moment running avg. till now
@@ -134,25 +150,29 @@ class Adam(Optimizer):
                 else:
                     denom = (exp_avg_sq.sqrt() / math.sqrt(bias_correction2)).add_(group["eps"])
 
-                    if p.ndim != 1:
-                        print(f"[Ref Adam] exp_avg_sq.sqrt(): {exp_avg_sq.sqrt()[:2, :2]} \n")
-                        print(f"[Ref Adam] math.sqrt(bias_correction2)): {math.sqrt(bias_correction2)} \n")
-                        print(f"[Ref Adam] group['eps']: {group['eps']} \n")
+                    # if p.ndim != 1:
+                    #     print(f"[Ref Adam] exp_avg_sq.sqrt(): {exp_avg_sq.sqrt()[:2, :2]} \n")
+                    #     print(f"[Ref Adam] math.sqrt(bias_correction2)): {math.sqrt(bias_correction2)} \n")
+                    #     print(f"[Ref Adam] group['eps']: {group['eps']} \n")
 
                 step_size = group["lr"] / bias_correction1
+                loggings[p]["denom"] = compute_stas(denom)
+                loggings[p]["step_size"] = {"value": step_size}
 
-                if p.ndim != 1:
-                    print(f"[Ref Adam] step_size: {step_size} \n")
-                    print(f"[Ref Adam] exp_avg: {exp_avg[:2, :2]} \n")
-                    print(f"[Ref Adam] denom: {denom[:2, :2]} \n")
+                # if p.ndim != 1:
+                #     print(f"[Ref Adam] step_size: {step_size} \n")
+                #     print(f"[Ref Adam] exp_avg: {exp_avg[:2, :2]} \n")
+                #     print(f"[Ref Adam] denom: {denom[:2, :2]} \n")
 
                 p.data.addcdiv_(-step_size, exp_avg, denom)
 
-                if p.ndim != 1:
-                    print(f"[Ref Adam] updated p: {p.data[:2, :2]} \n")
+                # if p.ndim != 1:
+                #     print(f"[Ref Adam] updated p: {p.data[:2, :2]} \n")
 
             #     break
             # break
+        
+        self.loggings = loggings
 
         return loss
 
@@ -202,12 +222,12 @@ class FP8Adam(Optimizer):
         self.fp8_weights: List[Union[FP8Parameter, torch.Tensor]] = []
         # NOTE: use to map fp8 param to master weights
         self.mappping_fp8_to_master_weight: Dict[FP8Tensor, Union[FP16Tensor, torch.Tensor]] = {}
-
+        
         for group in self.param_groups:
             for p in group["params"]:
                 if p.requires_grad is None:
                     continue
-
+            
                 # NOTE: if a tensor.ndim == 1, it's a bias
                 # raw_data = p.data if p.ndim == 1 else p.orig_data
                 # TODO(xrsrke): remove orig_data after FP8 working
@@ -326,6 +346,11 @@ class FP8Adam(Optimizer):
                 state["step"] += 1
                 bias_correction1 = 1 - beta1 ** state["step"]
                 bias_correction2 = 1 - beta2 ** state["step"]
+                
+                loggings[p]["group:beta1"] = {"value": beta1}
+                loggings[p]["group:beta2"] = {"value": beta2}
+                loggings[p]["bias_correction1"] = {"value": bias_correction1}
+                loggings[p]["bias_correction2"] = {"value": bias_correction2}
 
                 # if p.ndim != 1:
                 #     print(f"[FP8Adam] beta1: {beta1}, beta2: {beta2}")
@@ -337,9 +362,11 @@ class FP8Adam(Optimizer):
                 # TODO(xrsrke): ideally, we should map tensor to tensor
                 # it's easier to debug (u know which tensor is which)
                 fp16_p = self.mappping_fp8_to_master_weight[p]
-                # loggings[p]["lp_p"] = compute_stas(fp16_p)
+                loggings[p]["lp_p"] = compute_stas(fp16_p)
+                
                 assert fp16_p.dtype == torch.float16
                 fp32_p = convert_tensor_from_fp16(fp16_p, torch.float32)
+                # orig_fp32_p = fp32_p.clone()
                 loggings[p]["hp_p"] = compute_stas(fp32_p)
 
                 assert fp32_p.dtype == torch.float32
@@ -360,8 +387,8 @@ class FP8Adam(Optimizer):
                 assert exp_avg.dtype == torch.uint8
                 assert exp_avg_sq.dtype == torch.float16
                 
-                # loggings[p]["lp_exp_avg"] = compute_stas(exp_avg)
-                # loggings[p]["lp_exp_avg_sq"] = compute_stas(exp_avg_sq)
+                loggings[p]["lp_exp_avg"] = compute_stas(exp_avg)
+                loggings[p]["lp_exp_avg_sq"] = compute_stas(exp_avg_sq)
 
                 # if p.ndim != 1:
                 #     print(
@@ -398,11 +425,17 @@ class FP8Adam(Optimizer):
                 #     print(f"[FP8Adam] group['eps']: {group['eps']} \n")
 
                 denom = (fp32_exp_avg_sq.sqrt() / math.sqrt(bias_correction2)).add_(group["eps"])
-
+                loggings[p]["denom"] = compute_stas(denom)
+                
                 # if p.ndim != 1:
                 #     print(f"[FP8Adam] denom: {denom[:2, :2]} \n")
 
                 step_size = group["lr"] / bias_correction1
+                
+                
+                loggings[p]["group:lr"] = {"value": group["lr"]}
+                loggings[p]["group:eps"] = {"value": group["eps"]}
+                loggings[p]["step_size"] = {"value": step_size}
 
                 # if p.ndim != 1:
                 #     print(f"[FP8Adam] group['lr']: {group['lr']} \n")
@@ -449,7 +482,7 @@ class FP8Adam(Optimizer):
 
                 # print(f"[FP8Adam] updated_p_fp8: updated_p_fp8.data={updated_p_fp8.data[:2, :2]}, p_fp32_meta={p_fp32_meta} \n")
 
-        self.loggings.append(loggings)
+        self.loggings = loggings
         
     def zero_grad(self):
         for group in self.param_groups:
