@@ -124,6 +124,7 @@ class LowPrecisionTensor(torch.Tensor):
             quantized_data = self.__class__(data, self.fp8_meta.dtype, self.fp8_meta.interval)
 
         self.data = quantized_data.data
+        self.orig_data = quantized_data.orig_data
         # NOTE: for delay scaling
         new_amax = quantized_data.fp8_meta.amax
 

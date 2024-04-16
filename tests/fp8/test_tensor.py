@@ -351,12 +351,15 @@ def test_setting_new_data_for_fp8_and_fp16_tensor(tensor_cls, dtype, is_quantize
 
     assert fp8_tensor.data.dtype == QTYPE_TO_DTYPE[dtype]
     assert torch.equal(fp8_tensor, expected_quantized_tensor)
-
+    
     if is_quantized:
-        assert fp8_tensor.data.data_ptr() == new_data.data.data_ptr()
+        if tensor_cls == FP8Tensor:
+            dequantized_tensor = convert_tensor_from_fp8(fp8_tensor, fp8_tensor.fp8_meta, torch.float32)
+        else:
+            dequantized_tensor = convert_tensor_from_fp16(fp8_tensor, torch.float32)
 
-    # NOTE: we test this in dynamic quantization
-    # assert torch.equal(fp8_tensor.fp8_meta.scale, expected_quantized_tensor.fp8_meta.scale)
+        assert torch.allclose(dequantized_tensor, ref_new_data, rtol=0.1, atol=0.1)
+        assert fp8_tensor.data.data_ptr() == new_data.data.data_ptr()
 
 
 # @pytest.mark.parametrize(

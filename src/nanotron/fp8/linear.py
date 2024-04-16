@@ -92,7 +92,7 @@ class _FP8Matmul(torch.autograd.Function):
         ctx, input: Union[FP8Tensor, torch.Tensor], weight: FP8Tensor, phony: torch.Tensor, accum_qtype: DTypes
     ) -> torch.Tensor:
         if type(input) == torch.Tensor:
-            input = FP8Tensor(
+            fp8_input = FP8Tensor(
                 input,
                 dtype=FP8LM_RECIPE.linear.input.dtype,
                 interval=FP8LM_RECIPE.linear.input.interval,
@@ -100,14 +100,14 @@ class _FP8Matmul(torch.autograd.Function):
             )
 
         ctx.accum_qtype = accum_qtype
-        ctx.save_for_backward(input, weight.data)
+        ctx.save_for_backward(fp8_input, weight.data)
 
         # NOTE: pass FP8Tensor instead of FP8Parameter
         output = fp8_matmul_kernel(
             # NOTE: that works
             mat_a=weight.data,
             transpose_a=True,
-            mat_b=input,
+            mat_b=fp8_input,
             transpose_b=False,
             use_split_accumulator=FP8LM_RECIPE.linear.split_accumulator.output,
             accum_qtype=accum_qtype,

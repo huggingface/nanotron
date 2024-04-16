@@ -102,15 +102,23 @@ def convert_to_fp8_module(module: nn.Module, accum_qtype: DTypes = FP8LM_RECIPE.
 
 
 def compute_stas(tensor):
-    return {
-        "mean": tensor.mean().item(),
-        "std": tensor.std().item(),
-        "var": tensor.var().item(),
-        "norm": tensor.norm().item(),
-        "min": tensor.min().item(),
-        "max": tensor.max().item(),
-        "amax": tensor.abs().max().item(),
-    }
+    from nanotron.fp8.tensor import FP8Tensor, FP16Tensor
+    
+    if isinstance(tensor, FP8Tensor) or isinstance(tensor, FP16Tensor):
+        return {
+            "amax": tensor.fp8_meta.amax,
+            "scale": tensor.fp8_meta.scale,
+        }
+    else:
+        return {
+            "mean": tensor.mean().item(),
+            "std": tensor.std().item(),
+            "var": tensor.var().item(),
+            "norm": tensor.norm().item(),
+            "min": tensor.min().item(),
+            "max": tensor.max().item(),
+            "amax": tensor.abs().max().item(),
+        }
 
 def track_module_statistics(name: str, module: nn.Linear, logging: Dict[str, Dict[str, float]]):
     if name not in logging:
@@ -118,7 +126,7 @@ def track_module_statistics(name: str, module: nn.Linear, logging: Dict[str, Dic
 
     def _save_output_stats(module: nn.Linear, input: torch.Tensor, output: torch.Tensor):        
         if hasattr(module, "weight") and module.weight is not None:
-            logging[name]["weight"] = compute_stas(module.weight)
+            logging[name]["weight"] = compute_stas(module.weight.data)
             # logging[name]["weight"] = _collect_stats(module.weight)
 
         if hasattr(module, "bias") and module.bias is not None:
@@ -150,6 +158,9 @@ def track_module_statistics(name: str, module: nn.Linear, logging: Dict[str, Dic
         
         if isinstance(grad_output, tuple):
             for i, grad in enumerate(grad_output):
+                if grad is None:
+                    continue
+                
                 logging[name][f"grad_output:{i}"] = compute_stas(grad)
         else:
             logging[name]["grad_output"] = compute_stas(grad_output)

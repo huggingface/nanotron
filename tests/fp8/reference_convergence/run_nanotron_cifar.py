@@ -57,9 +57,9 @@ class Net(nn.Module):
     """Take this MLP from greg yang's mup repo"""
     def __init__(self, width, num_classes=10):
         super(Net, self).__init__()
-        self.fc_1 = nn.Linear(3072, width, bias=True)
-        self.fc_2 = nn.Linear(width, width, bias=True)
-        self.fc_3 = nn.Linear(width, 16, bias=True)
+        self.fc_1 = nn.Linear(3072, width, bias=False)
+        self.fc_2 = nn.Linear(width, width, bias=False)
+        self.fc_3 = nn.Linear(width, 16, bias=False)
 
     def forward(self, x):
         x = self.fc_3(F.relu(self.fc_2(F.relu(self.fc_1(x)))))
@@ -186,6 +186,9 @@ if __name__ == "__main__":
             # bf16_loss = loss_func(bf16_output, targets)
             # bf16_loss.backward()
             # bf16_optim.step()
+            
+            if step == 2:
+                assert 1 == 1
             
             fp8_optim.zero_grad()
             fp8_logs = _log(fp8_linear)
