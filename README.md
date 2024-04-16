@@ -44,6 +44,7 @@ We support the following:
  - ZeRO-1 optimizer
  - FP32 gradient accumulation
  - Parameter tying/sharding
+ - Spectral µTransfer parametrization for scaling up neural networks
 
 # Installation
 
@@ -109,6 +110,10 @@ Features we would like to add:
 
 # Useful scripts
 - `scripts/log_lighteval_to_wandb.py`: logs the evaluation results of LightEval to wandb, including summary statistics.
+
+
+# Environment Variables
+- `NANOTRON_BENCHMARK=1`: if you want to log the throughput during training
 
 
 # Credits
