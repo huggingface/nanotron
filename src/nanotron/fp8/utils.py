@@ -174,20 +174,22 @@ def track_module_statistics(name: str, module: nn.Linear, logging: Dict[str, Dic
             if grad_input is not None:
                 logging[name]["grad_input"] = compute_stas(grad_input)
 
-    module.register_forward_hook(_save_output_stats)
+    handles = []
+    handles.append(module.register_forward_hook(_save_output_stats))
     # module.register_full_backward_pre_hook(_save_grad_stats)
-    module.register_backward_hook(_save_grad_stats)
+    handles.append(module.register_backward_hook(_save_grad_stats))
+    return handles
     # module.register_module_full_backward_hook(_save_grad_stats)
 
 
 def _log(model: nn.Module):
     LOGGING = {}
     leaf_modules = get_leaf_modules(model)
+    all_handles = []
     for name, module in leaf_modules:
-        track_module_statistics(name, module, logging=LOGGING)
-
+        all_handles.append(track_module_statistics(name, module, logging=LOGGING))
     
-    return LOGGING
+    return LOGGING, all_handles
 
 
 def convert_logs_to_flat_logs(logs, prefix):

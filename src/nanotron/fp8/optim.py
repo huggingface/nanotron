@@ -227,6 +227,7 @@ class FP8Adam(Optimizer):
         # TODO(xrsrke): auto free fp32 weights from memory
         
         self.loggings = []
+        self._is_overflow = False
 
     def __setstate__(self, state):
         super().__setstate__(state)
@@ -273,6 +274,8 @@ class FP8Adam(Optimizer):
         assert any(p.grad is not None for group in self.param_groups for p in group["params"])
         loggings = {}
         
+        self._is_overflow = False
+        
         for group in self.param_groups:
             for p in group["params"]:
                 if p.grad is None:
@@ -307,8 +310,9 @@ class FP8Adam(Optimizer):
                 loggings[p]["hp_grad"] = compute_stas(fp32_grad)
 
                 if is_overflow_underflow_nan(fp32_grad):
+                    self._is_overflow = True
+                    return
                     # print(f"Overflow, underflow, or NaN detected in the gradients. So skip the current step")
-                    continue
                     # raise ValueError("Overflow, underflow, or NaN detected in the gradients")
 
                 if fp32_grad.is_sparse:
