@@ -1,4 +1,6 @@
 # ruff: noqa: E402
+import json
+from pathlib import Path
 
 import pytest
 import torch
@@ -7,13 +9,18 @@ from utils import set_system_path
 
 set_system_path()
 
+import nanotron
 from nanotron.config import LlamaConfig as NanotronLlamaConfig
 from nanotron.models.base import init_on_device_and_dtype
 from nanotron.models.llama import LlamaForTraining
 from nanotron.parallel import ParallelContext
 
-from examples.llama.convert_nanotron_to_hf import get_hf_config
+from examples.llama.convert_hf_to_nanotron import convert_checkpoint_and_save as convert_hf_to_nt_and_save
+from examples.llama.convert_nanotron_to_hf import convert_checkpoint_and_save as convert_nt_to_hf_and_save
+from examples.llama.convert_hf_to_nanotron import convert_hf_to_nt
+from examples.llama.convert_nanotron_to_hf import convert_nt_to_hf, get_hf_config
 from examples.llama.convert_weights import load_nanotron_model
+from tests.helpers.context import TestContext
 from tests.helpers.utils import init_distributed
 
 CONFIG = NanotronLlamaConfig(
@@ -186,17 +193,55 @@ def input_ids() -> torch.Tensor:
 #     init_distributed(tp=1, dp=1, pp=1)(_test_composed_conversion)()
 
 
-def _test_tensor_parallel_conversion(parallel_context: ParallelContext):
-    # model_nt = create_nanotron_model(tp=2)
-    # model_hf = create_huggingface_model()
-    # convert_nt_to_hf(model_nt, model_hf, CONFIG)
-    # input_mask = torch.ones_like(input_ids)
-    # logits_nt = model_nt.model(input_ids, input_mask).permute(1, 0, 2)
+def _save_parallel_nanotron(parallel_context: ParallelContext, input_ids: torch.Tensor, nt_path: Path):
+    # Create and save a parallel model.
+    model_nt = create_nanotron_model(tp=parallel_context.tensor_parallel_size, pp=parallel_context.pipeline_parallel_size)
+    # print(torch.distributed.get_rank(), "model_nt", set(p.device for p in model_nt.parameters()))
+    nanotron.serialize.save_weights(model=model_nt, parallel_context=parallel_context, root_folder=nt_path)
+    with open(nt_path/"model_config.json", "w+") as f:
+        json.dump(vars(CONFIG), f)
+
+    # Get parallel predictions.
+    input_ids = input_ids.cuda()  # Move them to the current device index.
+    input_mask = torch.ones_like(input_ids)
+    # print(torch.distributed.get_rank(), "input_ids", input_ids.device)
+    logits_nt = model_nt.model(input_ids, input_mask).permute(1, 0, 2)
+    if torch.distributed.get_rank() == 0:
+        torch.save(logits_nt.detach().cpu(), nt_path/"logits.pt")
+    # print(torch.distributed.get_rank(), logits_nt.shape)
+
+    # Convert nanotron to hf, load it and compare logits.
+    # hf_path = root/"hf"
+    # convert_nt_to_hf_and_save(nt_path, hf_path)
+    # model_hf = LlamaForCausalLM.from_pretrained(hf_path).cuda()
     # logits_hf = model_hf(input_ids).logits
+
     # assert logits_nt.size() == logits_hf.size()
     # assert torch.allclose(logits_nt, logits_hf, atol=ATOL), torch.mean(torch.abs(logits_nt - logits_hf))
-    assert True
 
 
-def test_tensor_parallel_conversion():
-    init_distributed(tp=2, dp=1, pp=1)(_test_tensor_parallel_conversion)()
+def _convert_from_parallel(parallel_context: ParallelContext, input_ids: torch.Tensor, nt_path: Path, hf_path: Path):
+    # Convert parallel nanotron to hf, get and save huggingface predictions.
+    convert_nt_to_hf_and_save(nt_path, hf_path)
+    model_hf = LlamaForCausalLM.from_pretrained(hf_path).cuda()
+    logits_hf = model_hf(input_ids).logits
+    torch.save(logits_hf.detach().cpu(), hf_path/"logits.pt")
+
+def test_tensor_parallel_conversion(input_ids: torch.Tensor):
+    # Set up test.
+    test_context = TestContext()
+    root = test_context.get_auto_remove_tmp_dir()
+    nt_path =root/"nanotron"
+    hf_path =root/"nanotron"
+
+    # Launch both parts.
+    init_distributed(tp=2, dp=1, pp=1)(_save_parallel_nanotron)(input_ids=input_ids, nt_path=nt_path)
+    assert (nt_path/"logits.pt").exists()
+    init_distributed(tp=1, dp=1, pp=1)(_convert_from_parallel)(input_ids=input_ids, nt_path=nt_path, hf_path=hf_path)
+    assert (hf_path/"logits.pt").exists()
+
+    # Load logits and verify they match.
+    logits_nt = torch.load(nt_path/"logits.pt")
+    logits_hf = torch.load(hf_path/"logits.pt")
+    assert logits_nt.size() == logits_hf.size()
+    assert torch.allclose(logits_nt, logits_hf, atol=ATOL), torch.mean(torch.abs(logits_nt - logits_hf))
