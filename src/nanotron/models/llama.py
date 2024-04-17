@@ -957,7 +957,8 @@ class LlamaForTraining(NanotronModel):
                 continue
 
             module = model.get_submodule(module_name)
-            parametrizator.parametrize(param_name, module)
+            # parametrizator.parametrize(param_name, module)
+            parametrizator.parametrize(full_param_name, module)
 
             assert full_param_name not in initialized_parameters
             initialized_parameters.add(full_param_name)
