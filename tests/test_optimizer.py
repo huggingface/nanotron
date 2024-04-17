@@ -4,8 +4,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from nanotron.optim.gradient_accumulator import FP32GradientAccumulator
-from nanotron.optim.ref_named_optimizer import NamedOptimizer
-from nanotron.optim.ref_optimizer_from_gradient_accumulator import OptimizerFromGradientAccumulator
+from nanotron.optim.named_optimizer import NamedOptimizer
+from nanotron.optim.optimizer_from_gradient_accumulator import OptimizerFromGradientAccumulator
 from nanotron.parallel.parameters import NanotronParameter
 from nanotron.random import set_random_seed
 

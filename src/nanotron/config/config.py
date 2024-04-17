@@ -266,7 +266,7 @@ class LRSchedulerArgs:
 
 @dataclass
 class SGDOptimizerArgs:
-    name: str = "SGD"
+    name: str = "sgd"
 
 
 @dataclass
@@ -275,7 +275,7 @@ class AdamWOptimizerArgs:
     adam_beta1: float
     adam_beta2: float
     torch_adam_is_fused: bool
-    name: str = "AdamW"
+    name: str = "adamW"
 
 
 @dataclass

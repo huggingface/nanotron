@@ -7,6 +7,7 @@ import uuid
 import wandb
 from config import MambaConfig, MambaInit, MambaModelConfig
 from nanotron.config import (
+    AdamWOptimizerArgs,
     CheckpointsArgs,
     DataArgs,
     DatasetStageArgs,
@@ -17,7 +18,6 @@ from nanotron.config import (
     OptimizerArgs,
     ParallelismArgs,
     PretrainDatasetsArgs,
-    SGDOptimizerArgs,
     TokenizerArgs,
     TokensArgs,
 )
@@ -96,23 +96,6 @@ print(f"Model has {num_params} parameters")
 
 seed = 42
 
-# optimizer = AdamWOptimizerArgs(
-#     zero_stage=0,
-#     weight_decay=0.01,
-#     clip_grad=1.0,
-#     accumulate_grad_in_fp32=True,  # NOTE(fmom): because we are using PP=TP=DP=1
-#     adam_eps=1e-08,
-#     adam_beta1=0.9,
-#     adam_beta2=0.95,
-#     torch_adam_is_fused=True,
-#     learning_rate_scheduler=LRSchedulerArgs(
-#         learning_rate=0.0015,
-#         lr_warmup_steps=30,
-#         lr_warmup_style="linear",
-#         lr_decay_style="cosine",
-#         min_decay_lr=0.00015,
-#     ),
-# )
 
 optimizer = OptimizerArgs(
     zero_stage=0,
@@ -126,8 +109,28 @@ optimizer = OptimizerArgs(
         lr_decay_style="cosine",
         min_decay_lr=0.00015,
     ),
-    optimizer_factory=SGDOptimizerArgs(),
+    optimizer_factory=AdamWOptimizerArgs(
+        adam_eps=1e-08,
+        adam_beta1=0.9,
+        adam_beta2=0.95,
+        torch_adam_is_fused=True,
+    ),
 )
+
+# optimizer = OptimizerArgs(
+#     zero_stage=0,
+#     weight_decay=0.01,
+#     clip_grad=1.0,
+#     accumulate_grad_in_fp32=True,  # NOTE(fmom): because we are using PP=TP=DP=1
+#     learning_rate_scheduler=LRSchedulerArgs(
+#         learning_rate=0.0015,
+#         lr_warmup_steps=30,
+#         lr_warmup_style="linear",
+#         lr_decay_style="cosine",
+#         min_decay_lr=0.00015,
+#     ),
+#     optimizer_factory=SGDOptimizerArgs(),
+# )
 
 parallelism = ParallelismArgs(
     dp=1,

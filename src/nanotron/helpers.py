@@ -6,13 +6,12 @@ import os
 import time
 from datetime import datetime
 from math import ceil
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 import torch
 from torch import nn
 from torch.nn.parallel import DistributedDataParallel
-from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
 from torch.profiler import ProfilerActivity, profile, tensorboard_trace_handler
 
@@ -149,6 +148,41 @@ def lr_scheduler_builder(optimizer: Optimizer, lr_scheduler_args: LRSchedulerArg
     return lr_scheduler
 
 
+def get_custom_weight_decay_for_named_parameters(
+    named_parameters: Iterable[Tuple[str, torch.Tensor]],
+    model: NanotronModel,
+    module_id_to_prefix: Dict[int, str],
+    weight_decay: float,
+):
+    named_param_groups_with_custom_weight_decay = []
+
+    for name, param in named_parameters:
+
+        if param.is_tied:
+            full_name = param.get_tied_info().get_full_name_from_module_id_to_prefix(
+                module_id_to_prefix=module_id_to_prefix
+            )
+        else:
+            full_name = name
+
+        if hasattr(param, "_no_weight_decay") and param._no_weight_decay:
+            named_param_groups_with_custom_weight_decay.append(
+                {"named_params": [(full_name, param)], "weight_decay": 0.0}
+            )
+        else:
+            named_param_groups_with_custom_weight_decay.append(
+                {"named_params": [(full_name, param)], "weight_decay": weight_decay}
+            )
+
+    log_rank(
+        f"[Optimizer Building] Creating {len(named_param_groups_with_custom_weight_decay)} param groups with custom weight decay",
+        logger=logger,
+        level=logging.DEBUG,
+    )
+
+    return named_param_groups_with_custom_weight_decay
+
+
 def init_optimizer_and_grad_accumulator(
     model: nn.Module, optimizer_args: OptimizerArgs, parallel_context: ParallelContext
 ) -> Tuple[BaseOptimizer, GradientAccumulator]:
@@ -161,18 +195,44 @@ def init_optimizer_and_grad_accumulator(
 
     named_parameters = list(unwrapped_model.get_named_params_with_correct_tied())
 
+    named_param_groups = get_custom_weight_decay_for_named_parameters(
+        named_parameters=named_parameters,
+        model=unwrapped_model,
+        module_id_to_prefix=module_id_to_prefix,
+        weight_decay=optimizer_args.weight_decay,
+    )
+
     # Basic optimizer builder
     def basic_optimizer_builder(named_param_groups):
+        optimizer = None
+
+        if optimizer_args.optimizer_factory.name == "adamW":
+
+            def optimizer(param_groups):
+                return torch.optim.AdamW(
+                    param_groups,
+                    lr=optimizer_args.learning_rate_scheduler.learning_rate,
+                    weight_decay=optimizer_args.weight_decay,
+                    eps=optimizer_args.optimizer_factory.adam_eps,
+                    betas=(optimizer_args.optimizer_factory.adam_beta1, optimizer_args.optimizer_factory.adam_beta2),
+                    fused=optimizer_args.optimizer_factory.torch_adam_is_fused,
+                )
+
+        elif optimizer_args.optimizer_factory.name == "sgd":
+
+            def optimizer(param_groups):
+                return torch.optim.SGD(
+                    param_groups,
+                    lr=optimizer_args.learning_rate_scheduler.learning_rate,
+                    weight_decay=optimizer_args.weight_decay,
+                )
+
+        else:
+            raise ValueError(f"Optimizer {optimizer_args.optimizer_factory.name} is not supported")
+
         return NamedOptimizer(
             named_params_or_groups=named_param_groups,
-            optimizer_builder=lambda param_groups: AdamW(  # pylint: disable=E0601
-                param_groups,
-                weight_decay=optimizer_args.weight_decay,
-                lr=optimizer_args.learning_rate_scheduler.learning_rate,
-                eps=optimizer_args.adam_eps,
-                betas=(optimizer_args.adam_beta1, optimizer_args.adam_beta2),
-                fused=optimizer_args.torch_adam_is_fused,
-            ),
+            optimizer_builder=optimizer,
         )
 
     optimizer_builder = basic_optimizer_builder
@@ -220,7 +280,7 @@ def init_optimizer_and_grad_accumulator(
             assert param.data_ptr() == optim_model_param.data_ptr()
     else:
         # Build optimizer
-        optimizer = optimizer_builder(named_parameters)
+        optimizer = optimizer_builder(named_param_groups)
 
     if grad_accumulator is not None and optimizer_args.zero_stage > 0:
         # There's a way to only require to reduce_scatter the gradients instead of all_reducing
