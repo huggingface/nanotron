@@ -34,14 +34,25 @@ from nanotron.config import (
     get_config_from_file,
 )
 from nanotron.dataloader import sanity_check_dataloader
-from nanotron.helpers import (
-    _vocab_size_with_padding,
-    get_profiler,
-    init_optimizer_and_grad_accumulator,
-    init_random_states,
-    log_throughput,
-    lr_scheduler_builder,
-)
+
+if os.environ.get("TEST_WD", "0") == "1":
+    from nanotron.helpers import (
+        _vocab_size_with_padding,
+        get_profiler,
+        init_optimizer_and_grad_accumulator,
+        init_random_states,
+        log_throughput,
+        lr_scheduler_builder,
+    )
+else:
+    from nanotron.ref_helpers import (
+        _vocab_size_with_padding,
+        get_profiler,
+        init_optimizer_and_grad_accumulator,
+        init_random_states,
+        log_throughput,
+        lr_scheduler_builder,
+    )
 from nanotron.logging import (
     LoggerWriter,
     LogItem,
@@ -247,7 +258,11 @@ class DistributedTrainer:
         )
 
         current_time = datetime.datetime.now().strftime("%d/%m/%Y_%H:%M:%S")
-        if dist.get_rank(self.parallel_context.world_pg) == self.logger_ranks[0] and wandb is not None:
+        if (
+            dist.get_rank(self.parallel_context.world_pg) == self.logger_ranks[0]
+            and wandb is not None
+            and os.environ.get("USE_WANDB", "0") == "1"
+        ):
             wandb.init(
                 project=self.config.general.project,
                 name=f"{current_time}_{self.config.general.run}",
@@ -555,7 +570,11 @@ class DistributedTrainer:
                 )
 
             # NOTE: only one rank writes to wandb
-            if dist.get_rank(self.parallel_context.world_pg) == self.logger_ranks[0] and wandb is not None:
+            if (
+                dist.get_rank(self.parallel_context.world_pg) == self.logger_ranks[0]
+                and wandb is not None
+                and os.environ.get("USE_WANDB", "0") == "1"
+            ):
                 wandb.log(
                     {
                         **{log_item.tag: log_item.scalar_value for log_item in log_entries},
