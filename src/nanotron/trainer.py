@@ -31,6 +31,7 @@ from nanotron.config import (
     ExistingCheckpointInit,
     ParallelismArgs,
     RandomInit,
+    SpectralMupInit,
     get_config_from_file,
 )
 from nanotron.dataloader import sanity_check_dataloader
@@ -78,6 +79,7 @@ from nanotron.sanity_checks import (
     before_optim_step_sanity_checks,
     before_tbi_sanity_checks,
 )
+from nanotron.scaling.parametrization import ParametrizationMethod
 from nanotron.serialize import (
     load_lr_scheduler,
     load_meta,
@@ -168,9 +170,19 @@ class DistributedTrainer:
             self.model.module if isinstance(self.model, DistributedDataParallel) else self.model
         )
 
+        # TODO: find a better way to handle this
+        parametrization_method = (
+            ParametrizationMethod.SPECTRAL_MUP
+            if hasattr(self.config.model.init_method, "use_mup") and self.config.model.init_method.use_mup
+            else ParametrizationMethod.STANDARD
+        )
+
         # Init optimizer
         self.optimizer, self.grad_accumulator = init_optimizer_and_grad_accumulator(
-            model=self.model, optimizer_args=self.config.optimizer, parallel_context=self.parallel_context
+            parametrization_method=parametrization_method,
+            model=self.model,
+            optimizer_args=self.config.optimizer,
+            parallel_context=self.parallel_context,
         )
         if self.init_checkpoint_path is not None:
             load_optimizer(
@@ -654,13 +666,12 @@ class DistributedTrainer:
                     parallel_context=self.parallel_context,
                     root_folder=self.config.model.init_method.path,
                 )
-            elif isinstance(self.config.model.init_method, RandomInit):
-
+            elif isinstance(self.config.model.init_method, (RandomInit, SpectralMupInit)):
                 unwrapped_model.init_model_randomly(config=self.config)
 
                 # Synchronize parameters so that the model is consistent
                 # sync all params across dp
-                for name, param in sorted(model.named_parameters(), key=lambda x: x[0]):
+                for _, param in sorted(model.named_parameters(), key=lambda x: x[0]):
                     dist.all_reduce(param, op=dist.ReduceOp.AVG, group=self.parallel_context.dp_pg)
 
                 # sync tied params across tied groups
