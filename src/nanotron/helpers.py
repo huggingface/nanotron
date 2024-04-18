@@ -179,6 +179,7 @@ def lr_scheduler_builder(optimizer: Optimizer, lr_scheduler_args: LRSchedulerArg
 
 def get_custom_weight_decay_for_named_parameters(
     named_param_groups: List[Dict[str, Any]],
+    named_param_without_weight_decay: List[str],
     model: NanotronModel,
     module_id_to_prefix: Dict[int, str],
     weight_decay: float,
@@ -193,7 +194,7 @@ def get_custom_weight_decay_for_named_parameters(
         else:
             pass
 
-        if hasattr(param, "_no_weight_decay") and param._no_weight_decay:
+        if any(name.endswith(substring) for substring in named_param_without_weight_decay):
             group["weight_decay"] = 0.0
         else:
             group["weight_decay"] = weight_decay
@@ -279,8 +280,11 @@ def init_optimizer_and_grad_accumulator(
         lr=optimizer_args.learning_rate_scheduler.learning_rate,
     )
 
+    named_param_without_weight_decay = unwrapped_model.model.get_named_params_without_weight_decay()
+
     named_param_groups = get_custom_weight_decay_for_named_parameters(
         named_param_groups=named_param_groups,
+        named_param_without_weight_decay=named_param_without_weight_decay,
         model=unwrapped_model,
         module_id_to_prefix=module_id_to_prefix,
         weight_decay=optimizer_args.weight_decay,
