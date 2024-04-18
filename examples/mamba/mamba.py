@@ -722,7 +722,7 @@ class MambaModel(nn.Module):
         return model_flops_per_s, hardware_flops_per_s
 
     def get_named_params_without_weight_decay(self):
-        # get full name with "dt_bias", "A_log", "D"
+        # get full name with "A_log", "D"
         named_param_without_weight_decay = []
         for name, _ in self.named_parameters():
             if "A_log" in name or "D" in name:
