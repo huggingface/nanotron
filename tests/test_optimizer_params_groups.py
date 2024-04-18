@@ -1,3 +1,4 @@
+import pytest
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -212,11 +213,12 @@ def test_optimizer_lr_weight_decay_multiple_group():
         torch.testing.assert_close(expected_fc2_weight, updated_fc2_weight)
 
 
-def test_optimizer_grad_accumulation_lr_one_group():
+@pytest.mark.parametrize("half_precision", [torch.float16, torch.bfloat16])
+@pytest.mark.parametrize("accumulation_steps", [1, 10])
+def test_optimizer_grad_accumulation_lr_one_group(half_precision: torch.dtype, accumulation_steps: int):
     set_random_seed(42)
-    dtype = torch.bfloat16
+    dtype = half_precision
     lr1 = 0.1
-    accumulation_steps = 10
 
     model = DummyModel(dtype=dtype).to("cuda")
 
@@ -277,10 +279,11 @@ def test_optimizer_grad_accumulation_lr_one_group():
             torch.testing.assert_close(expected_fc2_weight, updated_fc2_weight)
 
 
-def test_optimizer_grad_accumulation_lr_multiple_group():
+@pytest.mark.parametrize("half_precision", [torch.float16, torch.bfloat16])
+@pytest.mark.parametrize("accumulation_steps", [1, 10])
+def test_optimizer_grad_accumulation_lr_multiple_group(half_precision: torch.dtype, accumulation_steps: int):
     set_random_seed(42)
-    dtype = torch.bfloat16
-    accumulation_steps = 10
+    dtype = half_precision
     lr1, lr2 = 0.1, 0.001
 
     model = DummyModel(dtype=dtype).to("cuda")
@@ -341,10 +344,11 @@ def test_optimizer_grad_accumulation_lr_multiple_group():
             torch.testing.assert_close(expected_fc2_weight, updated_fc2_weight)
 
 
-def test_optimizer_grad_accumulation_lr_weight_decay_one_group():
+@pytest.mark.parametrize("half_precision", [torch.float16, torch.bfloat16])
+@pytest.mark.parametrize("accumulation_steps", [1, 10])
+def test_optimizer_grad_accumulation_lr_weight_decay_one_group(half_precision: torch.dtype, accumulation_steps: int):
     set_random_seed(42)
-    dtype = torch.bfloat16
-    accumulation_steps = 10
+    dtype = half_precision
     lr1 = 0.1
     weight_decay = 0.1
 
@@ -407,10 +411,13 @@ def test_optimizer_grad_accumulation_lr_weight_decay_one_group():
             torch.testing.assert_close(expected_fc2_weight, updated_fc2_weight)
 
 
-def test_optimizer_grad_accumulation_lr_weight_decay_multiple_group():
+@pytest.mark.parametrize("half_precision", [torch.float16, torch.bfloat16])
+@pytest.mark.parametrize("accumulation_steps", [1, 10])
+def test_optimizer_grad_accumulation_lr_weight_decay_multiple_group(
+    half_precision: torch.dtype, accumulation_steps: int
+):
     set_random_seed(42)
-    dtype = torch.bfloat16
-    accumulation_steps = 10
+    dtype = half_precision
     lr1, lr2 = 0.1, 0.001
     weight_decay1, weight_decay2 = 0.1, 0.001
 
@@ -478,23 +485,3 @@ def test_optimizer_grad_accumulation_lr_weight_decay_multiple_group():
 
             torch.testing.assert_close(expected_fc1_weight, updated_fc1_weight)
             torch.testing.assert_close(expected_fc2_weight, updated_fc2_weight)
-
-
-if __name__ == "__main__":
-    # Optimizer
-    test_optimizer_lr_one_group()
-    test_optimizer_lr_multiple_group()
-    test_optimizer_lr_weight_decay_one_group()
-    test_optimizer_lr_weight_decay_multiple_group()
-
-    # Grad accumulation
-    test_optimizer_grad_accumulation_lr_one_group()
-    test_optimizer_grad_accumulation_lr_multiple_group()
-    test_optimizer_grad_accumulation_lr_weight_decay_one_group()
-    test_optimizer_grad_accumulation_lr_weight_decay_multiple_group()
-
-    # TODO(fmom): Zero
-    # test_optimizer_grad_accumulation_zero_lr_one_group()
-    # test_optimizer_grad_accumulation_zero_lr_multiple_group()
-    # test_optimizer_grad_accumulation_zero_lr_weight_decay_one_group()
-    # test_optimizer_grad_accumulation_zero_lr_weight_decay_multiple_group()
