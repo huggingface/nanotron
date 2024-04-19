@@ -170,10 +170,11 @@ class DistributedTrainer:
             self.model.module if isinstance(self.model, DistributedDataParallel) else self.model
         )
 
+        # TODO: find a better way to handle this
         parametrization_method = (
-            ParametrizationMethod.STANDARD
-            if isinstance(self.config.model.init_method, RandomInit)
-            else ParametrizationMethod.SPECTRAL_MUP
+            ParametrizationMethod.SPECTRAL_MUP
+            if hasattr(self.config.model.init_method, "use_mup") and self.config.model.init_method.use_mup
+            else ParametrizationMethod.STANDARD
         )
 
         # Init optimizer

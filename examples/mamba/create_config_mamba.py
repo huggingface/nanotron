@@ -1,9 +1,11 @@
 """ Example python script to generate a YAML config file which can be used to run a training with nanotron. Refer to "examples" section in the `/README.md` for more information."""
 import math
 import os
+import uuid
 
 from config import MambaConfig, MambaInit, MambaModelConfig
 from nanotron.config import (
+    AdamWOptimizerArgs,
     CheckpointsArgs,
     DataArgs,
     DatasetStageArgs,
@@ -18,6 +20,10 @@ from nanotron.config import (
     TokensArgs,
 )
 from nanotron.logging import human_format
+
+new_job_id = uuid.uuid4()
+job_id = str(new_job_id)[:8]
+seed = 42
 
 ssm_cfg_dtype = "bfloat16"
 ssm_cfg = {
@@ -37,7 +43,7 @@ ssm_cfg = {
 # https://huggingface.co/state-spaces/mamba-790m/blob/main/config.json
 model_config = MambaModelConfig(
     d_model=1024,
-    num_hidden_layers=48,
+    num_hidden_layers=2,
     vocab_size=50278,
     ssm_cfg=ssm_cfg,
     rms_norm=True,
@@ -88,15 +94,12 @@ print(f"Model has {num_params} parameters")
 
 seed = 42
 
+
 optimizer = OptimizerArgs(
     zero_stage=0,
     weight_decay=0.01,
     clip_grad=1.0,
     accumulate_grad_in_fp32=True,  # NOTE(fmom): because we are using PP=TP=DP=1
-    adam_eps=1e-08,
-    adam_beta1=0.9,
-    adam_beta2=0.95,
-    torch_adam_is_fused=True,
     learning_rate_scheduler=LRSchedulerArgs(
         learning_rate=0.0015,
         lr_warmup_steps=30,
@@ -104,7 +107,14 @@ optimizer = OptimizerArgs(
         lr_decay_style="cosine",
         min_decay_lr=0.00015,
     ),
+    optimizer_factory=AdamWOptimizerArgs(
+        adam_eps=1e-08,
+        adam_beta1=0.9,
+        adam_beta2=0.95,
+        torch_adam_is_fused=True,
+    ),
 )
+
 
 parallelism = ParallelismArgs(
     dp=2,
@@ -128,6 +138,11 @@ data_stages = [
     )
 ]
 
+model = ModelArgs(
+    init_method=MambaInit(initializer_range=0.02, rescale_prenorm_residual=True, n_residuals_per_layer=1),
+    model_config=model_config,
+)
+
 checkpoints_path = os.path.dirname(os.path.dirname(__file__)) + "/checkpoints"
 os.makedirs(checkpoints_path, exist_ok=True)
 
@@ -135,10 +150,7 @@ config = MambaConfig(
     general=GeneralArgs(project="test", run="mamba", seed=seed, ignore_sanity_checks=True),
     checkpoints=CheckpointsArgs(checkpoints_path=checkpoints_path, checkpoint_interval=100),
     parallelism=parallelism,
-    model=ModelArgs(
-        init_method=MambaInit(initializer_range=0.02, rescale_prenorm_residual=True, n_residuals_per_layer=1),
-        model_config=model_config,
-    ),
+    model=model,
     tokenizer=TokenizerArgs("gpt2"),
     optimizer=optimizer,
     logging=LoggingArgs(),
