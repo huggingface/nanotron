@@ -628,7 +628,7 @@ class LlamaDecoderLayer(nn.Module):
         if not config.for_inference:
             self.input_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         else:
-            # replace TritonRMSNorm with RMSNorm for a fixed output.
+            # replace TritonRMSNorm with RMSNorm for a deterministic output.
             self.input_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.attn = CausalSelfAttention(
             config=config,
@@ -639,7 +639,7 @@ class LlamaDecoderLayer(nn.Module):
         if not config.for_inference:
             self.post_attention_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         else:
-            # replace TritonRMSNorm with RMSNorm for a fixed output.
+            # replace TritonRMSNorm with RMSNorm for a deterministic output.
             self.post_attention_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.mlp = MLP(config=config, parallel_config=parallel_config, tp_pg=tp_pg)
 

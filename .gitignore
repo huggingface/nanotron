@@ -163,5 +163,4 @@ cython_debug/
 
 checkpoints/
 
-# wandb
 **/wandb/**
