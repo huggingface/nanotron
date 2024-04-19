@@ -489,7 +489,7 @@ def test_optimizer_grad_accumulation_lr_weight_decay_multiple_group(
             torch.testing.assert_close(expected_fc2_weight, updated_fc2_weight)
 
 
-@pytest.mark.skipif(available_gpus() < 2, reason="Testing ddp_hook_allreduce requires at least 2 gpus")
+@pytest.mark.skipif(available_gpus() < 2, reason="Testing requires at least 2 gpus")
 @pytest.mark.parametrize("half_precision", [torch.float16, torch.bfloat16])
 @pytest.mark.parametrize("accumulation_steps", [1, 10])
 @rerun_if_address_is_in_use()
