@@ -376,6 +376,36 @@ class DistributedTrainer:
         # Fix the root_model
         self.unwrapped_model.module_id_to_prefix[id(self.unwrapped_model)] = ""
 
+        # If we resume training, we need to load back the proper training stage
+        if self.start_iteration_step > 0:
+            dataloader, curr_stage = None, None
+
+            for stage_id, stage in enumerate(self.config.data_stages):
+                stage = cast(DatasetStageArgs, stage)
+                # NOTE: we need to find the previous stage's dataloader
+                if self.start_iteration_step < stage.start_training_step:
+                    prev_stage = self.config.data_stages[stage_id - 1]
+                    dataloader = dataloader_or_dls[prev_stage.name]
+                    curr_stage = prev_stage
+                    break
+
+            # NOTE: that means we need to resume from the last stage
+            if dataloader is None and curr_stage is None:
+                dataloader = dataloader_or_dls[self.config.data_stages[-1].name]
+                curr_stage = self.config.data_stages[-1]
+
+            dataloader = dataloader() if callable(dataloader) else dataloader
+            self.current_dataloader = sanity_check_dataloader(
+                dataloader=dataloader, parallel_context=self.parallel_context, config=self.config
+            )
+
+            log_rank(
+                f"[Training Stage: {curr_stage.name}] Resuming training from of {curr_stage.name}",
+                logger=logger,
+                level=logging.INFO,
+                rank=0,
+            )
+
         prof = get_profiler(config=self.config)
         torch.cuda.empty_cache()
         with prof:
