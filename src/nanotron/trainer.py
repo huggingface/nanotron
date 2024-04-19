@@ -335,7 +335,7 @@ class DistributedTrainer:
                         clear_dataloader_from_memory(prev_dataloader, stage_name=stage.name)
 
                 log_rank(
-                    f"[Training Stage: {stage.name}] Switching to a new dataset {stage.data.dataset.hf_dataset_or_datasets}",
+                    f"[Training Stage: {stage.name}] Switching to a new dataset",
                     logger=logger,
                     level=logging.INFO,
                     rank=0,
