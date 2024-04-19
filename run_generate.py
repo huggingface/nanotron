@@ -71,14 +71,10 @@ def main():
     assert args.ckpt_path.exists(), f"Checkpoint path {args.ckpt_path} does not exist"
 
     config = get_config_from_file((args.ckpt_path / "config.yaml").as_posix(), config_class=Config)
-    # config = get_config_from_file((args.ckpt_path / "config.yaml").as_posix())
     model_config = config.model.model_config
     tokenizer_path = config.tokenizer.tokenizer_name_or_path
 
     parallel_config = ParallelismArgs(
-        # dp=args.dp or config.parallelism.dp,
-        # pp=args.pp or config.parallelism.pp,
-        # tp=args.tp or config.parallelism.tp,
         dp=config.parallelism.dp,
         pp=config.parallelism.pp,
         tp=config.parallelism.tp,
