@@ -178,35 +178,38 @@ def lr_scheduler_builder(optimizer: Optimizer, lr_scheduler_args: LRSchedulerArg
 
 
 def get_custom_weight_decay_for_named_parameters(
-    named_param_groups: List[Dict[str, Any]],
+    named_parameters: Iterable[Tuple[str, torch.Tensor]],
     model: NanotronModel,
     module_id_to_prefix: Dict[int, str],
     weight_decay: float,
 ) -> List[Dict[str, Any]]:
+    """
+    Apply weight decay to all parameters except the ones that are in the named_param_without_weight_decay list.
+    """
 
-    named_param_without_weight_decay = model.model.get_named_params_without_weight_decay()
+    named_param_groups_with_custom_weight_decay = []
 
-    for group in named_param_groups:
+    exclude_named_params = model.model.get_named_params_without_weight_decay()
 
-        name, param = group["named_params"][0]
-
+    for name, param in named_parameters:
         if param.is_tied:
             param.get_tied_info().get_full_name_from_module_id_to_prefix(module_id_to_prefix=module_id_to_prefix)
         else:
             pass
 
-        if any(name.endswith(substring) for substring in named_param_without_weight_decay):
-            group["weight_decay"] = 0.0
+        if any(name.endswith(substring) for substring in exclude_named_params):
+            named_param_groups_with_custom_weight_decay.append({"named_params": [(name, param)], "weight_decay": 0.0})
         else:
-            group["weight_decay"] = weight_decay
+            named_param_groups_with_custom_weight_decay.append(
+                {"named_params": [(name, param)], "weight_decay": weight_decay}
+            )
 
     log_rank(
-        f"[Optimizer Building] Creating {len(named_param_groups)} param groups with custom weight decay",
+        f"[Optimizer Building] Creating {len(named_param_groups_with_custom_weight_decay)} param groups with custom weight decay",
         logger=logger,
         level=logging.DEBUG,
     )
-
-    return named_param_groups
+    return named_param_groups_with_custom_weight_decay
 
 
 def get_custom_lr_for_named_parameters(
@@ -259,6 +262,31 @@ def get_custom_lr_for_named_parameters(
     return named_param_groups_with_custom_lr
 
 
+def merge_named_param_groups(
+    named_param_groups_with_lr: List[Dict[str, Any]],
+    named_param_groups_with_weight_decay: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+
+    assert len(named_param_groups_with_lr) == len(
+        named_param_groups_with_weight_decay
+    ), "Named param groups don't match in length"
+
+    named_param_groups = []
+    for group_with_lr, group_with_weight_decay in zip(
+        named_param_groups_with_lr, named_param_groups_with_weight_decay
+    ):
+        assert group_with_lr["named_params"] == group_with_weight_decay["named_params"]
+        named_param_groups.append(
+            {
+                "named_params": group_with_lr["named_params"],
+                "lr": group_with_lr["lr"],
+                "weight_decay": group_with_weight_decay["weight_decay"],
+            }
+        )
+
+    return named_param_groups
+
+
 def init_optimizer_and_grad_accumulator(
     parametrization_method: ParametrizationMethod,
     model: nn.Module,
@@ -274,18 +302,20 @@ def init_optimizer_and_grad_accumulator(
 
     named_parameters = list(unwrapped_model.get_named_params_with_correct_tied())
 
-    named_param_groups = get_custom_lr_for_named_parameters(
+    named_param_groups_with_lr = get_custom_lr_for_named_parameters(
         parametrization_method=parametrization_method,
         named_parameters=named_parameters,
         model=unwrapped_model,
         lr=optimizer_args.learning_rate_scheduler.learning_rate,
     )
-    named_param_groups = get_custom_weight_decay_for_named_parameters(
-        named_param_groups=named_param_groups,
+    named_param_groups_with_weight_decay = get_custom_weight_decay_for_named_parameters(
+        named_parameters=named_parameters,
         model=unwrapped_model,
         module_id_to_prefix=module_id_to_prefix,
         weight_decay=optimizer_args.weight_decay,
     )
+
+    named_param_groups = merge_named_param_groups(named_param_groups_with_lr, named_param_groups_with_weight_decay)
 
     # Basic optimizer builder
     def basic_optimizer_builder(named_param_groups):
