@@ -13,10 +13,22 @@ import os
 from pathlib import Path
 
 import torch
+
 from nanotron import distributed as dist
 from nanotron import logging
-from nanotron.config import GenerationArgs, LoggingArgs, ParallelismArgs, get_config_from_file
-from nanotron.generation.decode import GenerationInput, TokenizerConfig, decode_text, decode_tokenized
+from nanotron.config import (
+    Config,
+    GenerationArgs,
+    LoggingArgs,
+    ParallelismArgs,
+    get_config_from_file,
+)
+from nanotron.generation.decode import (
+    GenerationInput,
+    TokenizerConfig,
+    decode_text,
+    decode_tokenized,
+)
 from nanotron.logging import log_rank, set_logger_verbosity_format
 from nanotron.models import build_model
 from nanotron.parallel import ParallelContext
@@ -32,9 +44,7 @@ from nanotron.random import (
     get_synced_random_state,
     set_random_seed,
 )
-from nanotron.serialize import (
-    load_weights,
-)
+from nanotron.serialize import load_weights
 from nanotron.trainer import CONFIG_TO_MODEL_CLASS, mark_tied_parameters
 
 try:
@@ -60,17 +70,21 @@ def main():
 
     assert args.ckpt_path.exists(), f"Checkpoint path {args.ckpt_path} does not exist"
 
-    config = get_config_from_file((args.ckpt_path / "config.yaml").as_posix())
+    config = get_config_from_file((args.ckpt_path / "config.yaml").as_posix(), config_class=Config)
+    # config = get_config_from_file((args.ckpt_path / "config.yaml").as_posix())
     model_config = config.model.model_config
     tokenizer_path = config.tokenizer.tokenizer_name_or_path
 
     parallel_config = ParallelismArgs(
-        dp=args.dp or config.parallelism.dp,
-        pp=args.pp or config.parallelism.pp,
-        tp=args.tp or config.parallelism.tp,
+        # dp=args.dp or config.parallelism.dp,
+        # pp=args.pp or config.parallelism.pp,
+        # tp=args.tp or config.parallelism.tp,
+        dp=config.parallelism.dp,
+        pp=config.parallelism.pp,
+        tp=config.parallelism.tp,
         pp_engine=OneForwardOneBackwardPipelineEngine(),
-        tp_mode=TensorParallelLinearMode.ALL_REDUCE,
-        tp_linear_async_communication=True,
+        tp_mode=TensorParallelLinearMode.REDUCE_SCATTER,
+        tp_linear_async_communication=config.parallelism.tp_linear_async_communication,
     )
 
     # Initialise all process groups

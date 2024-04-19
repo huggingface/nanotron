@@ -17,6 +17,8 @@
 from typing import Dict, Optional, Union
 
 import torch
+
+# from torch.nn import LayerNorm
 from flash_attn import bert_padding
 from flash_attn.flash_attn_interface import (
     flash_attn_varlen_func,
@@ -35,10 +37,7 @@ from nanotron.nn.activations import ACT2FN
 from nanotron.nn.layer_norm import TritonRMSNorm
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter
-from nanotron.parallel.pipeline_parallel.block import (
-    PipelineBlock,
-    TensorPointer,
-)
+from nanotron.parallel.pipeline_parallel.block import PipelineBlock, TensorPointer
 from nanotron.parallel.pipeline_parallel.p2p import P2P
 from nanotron.parallel.tensor_parallel.functional import sharded_cross_entropy
 from nanotron.parallel.tensor_parallel.nn import (
@@ -51,6 +50,23 @@ from nanotron.random import RandomStates
 from nanotron.utils import checkpoint_method
 
 logger = logging.get_logger(__name__)
+
+
+class RMSNorm(nn.Module):
+    def __init__(self, dim: int, eps: float = 1e-6):
+        super().__init__()
+        self.eps = eps
+        self.weight = nn.Parameter(torch.zeros(dim))
+
+    def _norm(self, x):
+        return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+
+    def forward(self, x):
+        output = self._norm(x.float())
+        # Llama does x.to(float16) * w whilst Gemma is (x * w).to(float16)
+        # See https://github.com/huggingface/transformers/pull/29402
+        output = output * (1.0 + self.weight.float())
+        return output.type_as(x)
 
 
 class RotaryEmbedding(nn.Module):
@@ -593,15 +609,23 @@ class LlamaDecoderLayer(nn.Module):
         layer_idx: int,
     ):
         super().__init__()
-        self.input_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        # TritonRMSNorm is faster but generate randomized results. Use TritonRMSNorm for training as it's faster
+        if not config.for_inference:
+            self.input_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        else:
+            # replace TritonRMSNorm with RMSNorm for a fixed output.
+            self.input_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.attn = CausalSelfAttention(
             config=config,
             parallel_config=parallel_config,
             tp_pg=tp_pg,
             layer_idx=layer_idx,
         )
-
-        self.post_attention_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        if not config.for_inference:
+            self.post_attention_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        else:
+            # replace TritonRMSNorm with RMSNorm for a fixed output.
+            self.post_attention_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.mlp = MLP(config=config, parallel_config=parallel_config, tp_pg=tp_pg)
 
     def forward(
