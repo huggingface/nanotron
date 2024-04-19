@@ -162,3 +162,7 @@ cython_debug/
 .vscode
 
 checkpoints/
+
+# wandb
+examples/wandb
+examples/contributor-guide/wandb
