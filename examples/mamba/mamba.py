@@ -12,10 +12,9 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" PyTorch Mamba model.
-"""
+"""PyTorch Mamba model."""
+
 import math
-import os
 from functools import partial
 from typing import Dict, Optional, Union
 
@@ -35,6 +34,7 @@ from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter
 from nanotron.parallel.pipeline_parallel.block import PipelineBlock, TensorPointer
 from nanotron.parallel.pipeline_parallel.p2p import P2P
+from nanotron.parallel.sharded_parameters import SplitConfig, create_sharded_parameter_from_config
 from nanotron.parallel.tensor_parallel.functional import sharded_cross_entropy
 from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelColumnLinear,
@@ -61,12 +61,10 @@ try:
 except ImportError:
     RMSNorm, layer_norm_fn, rms_norm_fn = None, None, None
 
-# import lovely_tensors as lt; lt.monkey_patch()
-
 logger = logging.get_logger(__name__)
 
 
-class Mamba(nn.Module):
+class Mamba(nn.Module, AttachableStore):
     def __init__(
         self,
         d_model: int,
@@ -133,6 +131,14 @@ class Mamba(nn.Module):
             **factory_kwargs,
         )
 
+        self.conv1d.weight = create_sharded_parameter_from_config(
+            parameter=self.conv1d.weight, pg=self.tp_pg, split_config=SplitConfig(split_dim=0)
+        )
+        if conv_bias:
+            self.conv1d.bias = create_sharded_parameter_from_config(
+                parameter=self.conv1d.bias, pg=self.tp_pg, split_config=SplitConfig(split_dim=0)
+            )
+
         self.activation = "silu"
         self.act = nn.SiLU()
 
@@ -148,16 +154,6 @@ class Mamba(nn.Module):
 
         self.dt_proj = nn.Linear(self.dt_rank, self.d_inner // self.tp_pg.size(), bias=True, **factory_kwargs)
 
-        # Initialize special dt projection to preserve variance at initialization
-        # Perform in `def init_model_randomly`
-        # dt_init_std = self.dt_rank**-0.5 * dt_scale
-        # if dt_init == "constant":
-        #     nn.init.constant_(self.dt_proj.weight, dt_init_std)
-        # elif dt_init == "random":
-        #     nn.init.uniform_(self.dt_proj.weight, -dt_init_std, dt_init_std)
-        # else:
-        #     raise NotImplementedError
-
         # Initialize dt bias so that F.softplus(dt_bias) is between dt_min and dt_max
         dt = torch.exp(
             torch.rand(self.d_inner // self.tp_pg.size(), **factory_kwargs) * (math.log(dt_max) - math.log(dt_min))
@@ -167,8 +163,13 @@ class Mamba(nn.Module):
         inv_dt = dt + torch.log(-torch.expm1(-dt))
         with torch.no_grad():
             self.dt_proj.bias.copy_(inv_dt)
-        # Our initialization would set all Linear.bias to zero, need to mark this one as _no_reinit
-        self.dt_proj.bias._no_reinit = True
+
+        self.dt_proj.weight = create_sharded_parameter_from_config(
+            parameter=self.dt_proj.weight, pg=self.tp_pg, split_config=SplitConfig(split_dim=0)
+        )
+        self.dt_proj.bias = create_sharded_parameter_from_config(
+            parameter=self.dt_proj.bias, pg=self.tp_pg, split_config=SplitConfig(split_dim=0)
+        )
 
         # S4D real initialization
         A = repeat(
@@ -177,11 +178,17 @@ class Mamba(nn.Module):
             d=self.d_inner // self.tp_pg.size(),
         ).contiguous()
         A_log = torch.log(A)  # Keep A_log in fp32
-        self.A_log = nn.Parameter(A_log)
+        self.A_log = create_sharded_parameter_from_config(
+            parameter=A_log, pg=self.tp_pg, split_config=SplitConfig(split_dim=0)
+        )
         self.A_log._no_weight_decay = True
 
         # D "skip" parameter
-        self.D = nn.Parameter(torch.ones(self.d_inner // self.tp_pg.size(), device=device))  # Keep in fp32
+        self.D = create_sharded_parameter_from_config(
+            parameter=torch.ones(self.d_inner // self.tp_pg.size(), device=device),
+            pg=self.tp_pg,
+            split_config=SplitConfig(split_dim=0),
+        )
         self.D._no_weight_decay = True
 
         # self.out_proj = nn.Linear(self.d_inner, self.d_model, bias=bias, **factory_kwargs)
@@ -195,33 +202,39 @@ class Mamba(nn.Module):
             contiguous_chunks=None,
         )
 
-    def forward(self, hidden_states: Union[torch.Tensor, TensorPointer], inference_params=None):
+    def forward(self, hidden_states: Union[torch.Tensor, TensorPointer]):
         """
         hidden_states: (B, L, D)
         Returns: same shape as hidden_states
         """
-
-        if inference_params is not None:
-            raise NotImplementedError("Inference params not tested yet.")
-
-        batch, seqlen, dim = hidden_states.shape
+        batch_size, seqlen, dim = hidden_states.shape
 
         conv_state, ssm_state = None, None
-        if inference_params is not None:
-            conv_state, ssm_state = self._get_states_from_cache(inference_params, batch)
-            if inference_params.seqlen_offset > 0:
+
+        store = self.get_local_store()
+        if store is not None:
+            if "key_value_memory_list" not in store:
+                store["key_value_memory_list"] = []
+
+            if "seqlen_offset" not in store:
+                store["seqlen_offset"] = 0
+
+            conv_state, ssm_state = self._get_states_from_cache(batch_size)
+
+            if store["seqlen_offset"] > 0:
                 # The states are updated inplace
                 out, _, _ = self.step(hidden_states, conv_state, ssm_state)
+                store["seqlen_offset"] += 1
                 return out
+            else:
+                store["seqlen_offset"] += 1
 
         # We do matmul and transpose BLH -> HBL at the same time
         xz = self.in_proj(hidden_states).transpose(1, 2)
         A = -torch.exp(self.A_log.float())  # (d_inner, d_state)
 
         # In the backward pass we write dx and dz next to each other to avoid torch.cat
-        if (
-            self.use_fast_path and inference_params is None and os.environ.get("FAST_PATH", "0") == "1"
-        ):  # Doesn't support outputting the states
+        if self.use_fast_path and store is None:  # Doesn't support outputting the states
             y = mamba_inner_fn(
                 d_inner=self.d_inner,
                 tp_pg=self.tp_pg,
@@ -238,10 +251,14 @@ class Mamba(nn.Module):
                 delta_softplus=True,
             )
         else:
-            assert self.d_inner % self.tp_pg.size() == 0
-            x, z = xz.view(batch, self.d_inner // self.tp_pg.size(), 2, seqlen).chunk(2, dim=2)
+            if self.tp_pg.size() > 1:
+                x, z = xz.view(batch_size, self.d_inner // 2, 2, seqlen).chunk(2, dim=2)
+            else:
+                x, z = xz.view(batch_size, self.d_inner, 2, seqlen).chunk(2, dim=2)
+
             x = x.squeeze(2)
             z = z.squeeze(2)
+
             # Compute short convolution
             if conv_state is not None:
                 # If we just take x[:, :, -self.d_conv :], it will error if seqlen < self.d_conv
@@ -294,11 +311,18 @@ class Mamba(nn.Module):
         conv_state: torch.Tensor,
         ssm_state: torch.Tensor,
     ):
+        batch_size, seqlen, dim = hidden_states.shape
         dtype = hidden_states.dtype
-        assert hidden_states.shape[1] == 1, "Only support decoding with 1 token at a time for now"
+        assert seqlen == 1, "Only support decoding with 1 token at a time for now"
         xz = self.in_proj(hidden_states.squeeze(1))  # (B 2D)
-        x, z = xz.chunk(2, dim=-1)  # (B D)
 
+        if self.tp_pg.size() > 1:
+            x, z = xz.view(batch_size, self.d_inner // 2, 2).chunk(2, dim=2)
+        else:
+            x, z = xz.view(batch_size, self.d_inner, 2).chunk(2, dim=2)
+
+        x = x.squeeze(2)  # (B D)
+        z = z.squeeze(2)  # (B D)
         # Conv step
         if causal_conv1d_update is None:
             conv_state.copy_(torch.roll(conv_state, shifts=-1, dims=-1))  # Update state (B D W)
@@ -349,51 +373,29 @@ class Mamba(nn.Module):
         out = self.out_proj(y)
         return out.unsqueeze(1), conv_state, ssm_state
 
-    def allocate_inference_cache(self, batch_size: int, max_seqlen: int, dtype: torch.dtype = None, **kwargs):
-        device = self.out_proj.weight.device
-        conv_dtype = self.conv1d.weight.dtype if dtype is None else dtype
-        conv_state = torch.zeros(
-            batch_size,
-            self.d_model * self.expand,
-            self.d_conv,
-            device=device,
-            dtype=conv_dtype,
-        )
-        ssm_dtype = self.dt_proj.weight.dtype if dtype is None else dtype
-        # ssm_dtype = torch.float32
-        ssm_state = torch.zeros(
-            batch_size,
-            self.d_model * self.expand,
-            self.d_state,
-            device=device,
-            dtype=ssm_dtype,
-        )
-        return conv_state, ssm_state
-
-    def _get_states_from_cache(self, inference_params, batch_size: int, initialize_states: bool = False):
+    def _get_states_from_cache(self, batch_size: int, initialize_states: bool = False):
         assert self.layer_idx is not None
-        if self.layer_idx not in inference_params.key_value_memory_dict:
+
+        store = self.get_local_store()
+
+        if len(store["key_value_memory_list"]) == 0:
             conv_state = torch.zeros(
                 batch_size,
-                self.d_model * self.expand,
+                self.d_model * self.expand // self.tp_pg.size(),
                 self.d_conv,
                 device=self.conv1d.weight.device,
                 dtype=self.conv1d.weight.dtype,
             )
             ssm_state = torch.zeros(
                 batch_size,
-                self.d_model * self.expand,
+                self.d_model * self.expand // self.tp_pg.size(),
                 self.d_state,
                 device=self.dt_proj.weight.device,
                 dtype=self.dt_proj.weight.dtype,
-                # dtype=torch.float32,
             )
-            inference_params.key_value_memory_dict[self.layer_idx] = (
-                conv_state,
-                ssm_state,
-            )
+            store["key_value_memory_list"] = (conv_state, ssm_state)
         else:
-            conv_state, ssm_state = inference_params.key_value_memory_dict[self.layer_idx]
+            conv_state, ssm_state = store["key_value_memory_list"]
             # TODO: What if batch size changes between generation, and we reuse the same states?
             if initialize_states:
                 conv_state.zero_()
@@ -485,7 +487,6 @@ class MambaDecoderLayer(nn.Module):
         hidden_states: Union[torch.Tensor, TensorPointer],
         sequence_mask: Union[torch.Tensor, TensorPointer],
         residual: Optional[Union[torch.Tensor, TensorPointer]],
-        inference_params=None,
     ) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
         if not self.fused_add_norm:
             # self.layer_idx was assigned when calling create_block
@@ -500,21 +501,18 @@ class MambaDecoderLayer(nn.Module):
                 hidden_states,
                 self.norm.weight,
                 self.norm.bias,
-                residual=residual,
+                residual=None if (self.layer_idx == 0) else residual,
                 prenorm=True,
                 residual_in_fp32=self.residual_in_fp32,
                 eps=self.norm.eps,
             )
-        hidden_states = self.mixer(hidden_states, inference_params=inference_params)
+        hidden_states = self.mixer(hidden_states)
 
         return {
             "hidden_states": hidden_states,
             "sequence_mask": sequence_mask,  # NOTE(fmom): dunno how to use it for now. Just keep it
             "residual": residual,
         }
-
-    def allocate_inference_cache(self, batch_size, max_seqlen, dtype=None, **kwargs):
-        return self.mixer.allocate_inference_cache(batch_size, max_seqlen, dtype=dtype, **kwargs)
 
 
 class MambaModel(nn.Module):
@@ -769,10 +767,14 @@ class MambaForTraining(NanotronModel):
     ):
         super().__init__()
 
+        self.parallel_context = parallel_context
+        self.config = config
+        self.parallel_config = parallel_config
+
         self.model = MambaModel(
-            config=config,
-            parallel_context=parallel_context,
-            parallel_config=parallel_config,
+            config=self.config,
+            parallel_context=self.parallel_context,
+            parallel_config=self.parallel_config,
             random_states=random_states,
         )
 
@@ -787,9 +789,6 @@ class MambaForTraining(NanotronModel):
             },
             module_output_keys={"loss"},
         )
-        self.parallel_context = parallel_context
-        self.config = config
-        self.parallel_config = parallel_config
 
     def forward(
         self,
@@ -872,24 +871,22 @@ class MambaForTraining(NanotronModel):
                         module.weight /= math.sqrt(n_residuals_per_layer * num_hidden_layers)
 
             elif isinstance(module, nn.Conv1d):
-                fan_in = None
+                fan_in, _ = init._calculate_fan_in_and_fan_out(module.weight)
                 if "weight" == param_name:
-                    fan_in, _ = init._calculate_fan_in_and_fan_out(param)
                     init.kaiming_uniform_(module.weight, a=math.sqrt(5))
                 elif "bias" == param_name:
-                    bound = 1 / math.sqrt(fan_in) if (fan_in is not None and fan_in > 0) else 0
+                    bound = 1 / math.sqrt(fan_in) if (fan_in > 0) else 0
                     init.uniform_(module.bias, -bound, bound)
                 else:
                     raise ValueError(f"Who the fuck is {param_name}?")
 
             elif isinstance(module, nn.Linear):
-                fan_in = None
+                fan_in, _ = init._calculate_fan_in_and_fan_out(module.weight)
 
                 if "weight" == param_name:
-                    fan_in, _ = init._calculate_fan_in_and_fan_out(module.weight)
                     init.kaiming_uniform_(module.weight, a=math.sqrt(5))
                 elif "bias" == param_name:
-                    bound = 1 / math.sqrt(fan_in) if (fan_in is not None and fan_in > 0) else 0
+                    bound = 1 / math.sqrt(fan_in) if (fan_in > 0) else 0
                     init.uniform_(module.bias, -bound, bound)
                 else:
                     raise ValueError(f"Who the fuck is {param_name}?")
