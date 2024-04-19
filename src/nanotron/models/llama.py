@@ -923,7 +923,10 @@ class LlamaForTraining(NanotronModel):
         else:
             raise ValueError(f"Unknown init method {init_method}")
 
-        parametrizator = parametrizator_cls(config=config.model)
+        if isinstance(init_method, RandomInit):
+            parametrizator = parametrizator_cls(config=config.model)
+        else:
+            parametrizator = parametrizator_cls(config=config.model, parallel_context=self.parallel_context)
 
         log_rank(
             f"Parametrizing model parameters using {parametrizator.__class__.__name__}",
@@ -957,8 +960,10 @@ class LlamaForTraining(NanotronModel):
                 continue
 
             module = model.get_submodule(module_name)
-            # parametrizator.parametrize(param_name, module)
-            parametrizator.parametrize(full_param_name, module)
+            if isinstance(init_method, RandomInit):
+                parametrizator.parametrize(param_name, module)
+            else:
+                parametrizator.parametrize(full_param_name, module)
 
             assert full_param_name not in initialized_parameters
             initialized_parameters.add(full_param_name)

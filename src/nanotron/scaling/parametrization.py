@@ -3,6 +3,7 @@ from abc import abstractmethod
 from enum import Enum, auto
 from typing import Dict
 
+import torch
 from nanotron import logging
 from nanotron.config import ModelArgs
 from nanotron.logging import log_rank
@@ -17,12 +18,28 @@ from torch.nn import init
 
 logger = logging.get_logger(__name__)
 
+DP_PG = None
 
 # NAME_TO_FAN_MAPPING = {"gate_up_proj": [1024, 4096], "token_embedding": [49152, 1024]}
 
+LAYERNORM_NAMES = ["input_layernorm", "post_attention_layernorm", "final_layer_norm"]
+
+
+def is_layernorm(name):
+    for ln_name in LAYERNORM_NAMES:
+        if ln_name in name:
+            return True
+
+    return False
+
+
 NAME_TO_FAN_MAPPING = {
-    "token_embedding.weight": [49152, 1024],
-    "token_embedding.bias": [49152, 1],
+    # NOTE: the original
+    # "token_embedding.weight": [49152, 1024],
+    # "token_embedding.bias": [49152, 1],
+    "token_embedding.weight": [1, 1024],
+    "token_embedding.bias": [1, 1],
+    # NOTE:
     "qkv_proj.weight": [1024, 2048],
     "qkv_proj.bias": [1024, 1],
     "o_proj.weight": [1024, 1024],
@@ -60,9 +77,22 @@ def get_fan_in_fan_out_from_param_name(name):
     return None
 
 
-def get_std_from_param_name(name):
-    if "token_embedding" in name:
-        return 1.0
+def get_std_from_param_name(name, parallel_context):
+    # global DP_PG
+    # DP_PG = parallel_context.dp_pg
+
+    # if "token_embedding" in name:
+    #     log_rank(
+    #         f"param_name={name}, std={1.0}",  # noqa
+    #         logger=logger,
+    #         level=logging.WARNING,
+    #         group=DP_PG,
+    #         rank=0
+    #     )
+    #     return 1.0
+
+    # if is_layernorm(name):
+    #     return 1.0
 
     fan_in, fan_out = get_fan_in_fan_out_from_param_name(name)
     std = spectral_sigma(fan_in=fan_in, fan_out=fan_out, init_std=1.0)
@@ -71,14 +101,28 @@ def get_std_from_param_name(name):
         f"param_name={name}, fan_in={fan_in}, fan_out={fan_out}, std={std}",  # noqa
         logger=logger,
         level=logging.WARNING,
+        group=parallel_context.dp_pg,
+        rank=0,
     )
 
     return std
 
 
-def get_lr_from_param_name(name):
-    if "token_embedding" in name:
-        return 1.0
+def get_lr_from_param_name(initial_lr, name):
+    # global DP_PG
+
+    # if "token_embedding" in name:
+    #     log_rank(
+    #         f"param_name={name}, final_lr={initial_lr}",  # noqa
+    #         logger=logger,
+    #         level=logging.WARNING,
+    #         group=DP_PG,
+    #         rank=0
+    #     )
+    #     return initial_lr
+
+    # if is_layernorm(name):
+    #     return 1.0
 
     # for key, value in NAME_TO_LR.items():
     #     if key in name:
@@ -87,15 +131,18 @@ def get_lr_from_param_name(name):
     # return None
     fan_in, fan_out = get_fan_in_fan_out_from_param_name(name)
     lr = spectral_lr(fan_in=fan_in, fan_out=fan_out)
-    lr_after_64 = lr
+    lr_after_64 = lr / 64
+    scaled_lr = initial_lr * lr_after_64
 
     log_rank(
-        f"param_name={name}, fan_in={fan_in}, fan_out={fan_out}, lr={lr}, lr_after_64={lr_after_64}",  # noqa
+        f"param_name={name}, fan_in={fan_in}, fan_out={fan_out}, lr={lr}, lr_after_64={lr_after_64}, scaled_lr={scaled_lr}",  # noqa
         logger=logger,
         level=logging.WARNING,
+        group=DP_PG,
+        rank=0,
     )
 
-    return lr_after_64
+    return scaled_lr
 
 
 class ParametrizationMethod(Enum):
@@ -244,7 +291,7 @@ class SpectralMupParametrizator:
     https://arxiv.org/abs/2310.17813
     """
 
-    def __init__(self, config: ModelArgs):
+    def __init__(self, config: ModelArgs, parallel_context):
         self.config = config
         self.MODULE_TO_PARAMETRIZE = {
             TensorParallelColumnLinear: self._parametrize_mup_weight,
@@ -254,6 +301,7 @@ class SpectralMupParametrizator:
             TensorParallelEmbedding: self._parametrize_mup_weight,
         }
         self.std = 1.0
+        self.parallel_context = parallel_context
         # self.std = 0.03125
 
     @staticmethod
@@ -295,7 +343,7 @@ class SpectralMupParametrizator:
         assert "weight" in param_name or "bias" in param_name
         data = module.weight if "weight" in param_name else module.bias
 
-        std = get_std_from_param_name(param_name)
+        std = get_std_from_param_name(param_name, self.parallel_context)
 
         # log_rank(
         #     f"Parameter {param_name} has fan_in={fan_in}, fan_out={fan_out}, std={std}",
@@ -303,7 +351,14 @@ class SpectralMupParametrizator:
         #     level=logging.INFO,
         # )
 
-        init.normal_(data, mean=0.0, std=std)
+        if "weight" in param_name:
+            module.weight.data = torch.randn_like(data.data, dtype=data.dtype, device=data.device) * std
+        elif "bias" in param_name:
+            module.bias.data = torch.randn_like(data.data, dtype=data.dtype, device=data.device) * std
+
+        # data.data = torch.nn.Parameter(torch.randn_like(data.data) * std)
+
+        # init.normal_(data, mean=0.0, std=std)
 
     def _parametrize_layer_norm(self, param_name: str, module: nn.Module):
         # assert param_name in ["weight", "bias"]
@@ -454,8 +509,8 @@ class LearningRateForSpectralMup:
 
         # scaled_lr = (self.lr * (fan_out / fan_in)) / 64
 
-        scaling_factor = get_lr_from_param_name(param_name)
-        scaled_lr = self.lr * scaling_factor
+        scaled_lr = get_lr_from_param_name(self.lr, param_name)
+        # scaled_lr = self.lr * scaling_factor
 
         # log_rank(
         #     f"Parameter {param_name} has fan_in={fan_in}, fan_out={fan_out}, scaled_lr={scaled_lr}",
