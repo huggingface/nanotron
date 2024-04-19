@@ -263,19 +263,28 @@ class LRSchedulerArgs:
 
 
 @dataclass
-class OptimizerArgs:
-    """Arguments related to the optimizer and learning rate"""
+class SGDOptimizerArgs:
+    name: str = "sgd"
 
-    zero_stage: int
-    weight_decay: float
-    clip_grad: Optional[float]
 
-    accumulate_grad_in_fp32: bool
-
+@dataclass
+class AdamWOptimizerArgs:
     adam_eps: float
     adam_beta1: float
     adam_beta2: float
     torch_adam_is_fused: bool
+    name: str = "adamW"
+
+
+@dataclass
+class OptimizerArgs:
+    """Arguments related to the optimizer and learning rate"""
+
+    optimizer_factory: Union[SGDOptimizerArgs, AdamWOptimizerArgs]
+    zero_stage: int
+    weight_decay: float
+    clip_grad: Optional[float]
+    accumulate_grad_in_fp32: bool
     learning_rate_scheduler: LRSchedulerArgs
 
 
@@ -356,8 +365,8 @@ class Config:
         config_dict = serialize(self)
         file_path = str(file_path)
         with open(file_path, "w") as f:
-            yaml.dump(config_dict, f)     
-            
+            yaml.dump(config_dict, f)
+
         # Sanity test config can be reloaded
         _ = get_config_from_file(file_path, config_class=self.__class__)
 

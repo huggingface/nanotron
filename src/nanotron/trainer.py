@@ -170,10 +170,11 @@ class DistributedTrainer:
             self.model.module if isinstance(self.model, DistributedDataParallel) else self.model
         )
 
+        # TODO: find a better way to handle this
         parametrization_method = (
-            ParametrizationMethod.STANDARD
-            if isinstance(self.config.model.init_method, RandomInit)
-            else ParametrizationMethod.SPECTRAL_MUP
+            ParametrizationMethod.SPECTRAL_MUP
+            if hasattr(self.config.model.init_method, "use_mup") and self.config.model.init_method.use_mup
+            else ParametrizationMethod.STANDARD
         )
 
         # Init optimizer
@@ -333,9 +334,9 @@ class DistributedTrainer:
                     if isinstance(prev_dataloader, DataLoader):
                         # NOTE: we don't need to clear dummy data generator from memory
                         clear_dataloader_from_memory(prev_dataloader, stage_name=stage.name)
-                
+
                 # some datasets in brrr doesn't have hf_dataset_or_datasets attribute, like TokenizedBytesDatasetArgs
-                if hasattr(stage.data.dataset, 'hf_dataset_or_datasets'):
+                if hasattr(stage.data.dataset, "hf_dataset_or_datasets"):
                     dataset_info = f"[Training Stage: {stage.name}] Switching to a new dataset {stage.data.dataset.hf_dataset_or_datasets}"
                 else:
                     # Optionally, provide a default message or handle the case when the attribute doesn't exist
@@ -417,7 +418,7 @@ class DistributedTrainer:
 
         if self.iteration_step < 5:
             log_memory(logger=logger)
-            
+
         outputs = self.pipeline_engine.train_batch_iter(
             model=self.model,
             pg=self.parallel_context.pp_pg,
