@@ -366,7 +366,11 @@ class Config:
 
 
 def get_config_from_dict(
-    config_dict: dict, config_class: Type = Config, skip_unused_config_keys: bool = False, skip_null_keys: bool = False
+    config_dict: dict,
+    config_class: Type = Config,
+    skip_unused_config_keys: bool = False,
+    skip_null_keys: bool = False,
+    igonore_all_unused_keys: bool = False,
 ):
     """Get a config object from a dictionary
 
@@ -375,6 +379,7 @@ def get_config_from_dict(
         config_class: type of the config object to get as a ConfigTypes (Config, LightevalConfig, LightevalSlurm) or str
         skip_unused_config_keys: whether to skip unused first-nesting-level keys in the config file (for config with additional sections)
         skip_null_keys: whether to skip keys with value None at first and second nesting level
+        igonore_all_unused_keys: to ignore all the config keys that are not used
     """
     if skip_unused_config_keys:
         logger.warning("skip_unused_config_keys set")
@@ -401,7 +406,7 @@ def get_config_from_dict(
                 SamplerType: lambda x: SamplerType[x.upper()],
             },
             # strict_unions_match=True,
-            strict=True,
+            strict=not igonore_all_unused_keys,
         ),
     )
 
@@ -412,6 +417,7 @@ def get_config_from_file(
     model_config_class: Optional[Type] = None,
     skip_unused_config_keys: bool = False,
     skip_null_keys: bool = False,
+    igonore_all_unused_keys: bool = False,
 ) -> Config:
     """Get a config object from a file (python or YAML)
 
@@ -422,6 +428,7 @@ def get_config_from_file(
             if None, will default to Config
         skip_unused_config_keys: whether to skip unused first-nesting-level keys in the config file (for config with additional sections)
         skip_null_keys: whether to skip keys with value None at first and second nesting level
+        igonore_all_unused_keys: to ignore all the config keys that are not used
     """
     # Open the file and load the file
     with open(config_path) as f:
@@ -432,6 +439,7 @@ def get_config_from_file(
         config_class=config_class,
         skip_unused_config_keys=skip_unused_config_keys,
         skip_null_keys=skip_null_keys,
+        igonore_all_unused_keys=igonore_all_unused_keys,
     )
     if model_config_class is not None:
         if not isinstance(config.model.model_config, (dict, model_config_class)):
