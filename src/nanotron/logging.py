@@ -18,13 +18,26 @@ import os
 import sys
 from dataclasses import dataclass
 from functools import lru_cache
-from logging import CRITICAL, DEBUG, ERROR, FATAL, INFO, NOTSET, WARNING, Formatter, Logger
-from typing import List, Optional, Union
+from logging import (
+    CRITICAL,
+    DEBUG,
+    ERROR,
+    FATAL,
+    INFO,
+    NOTSET,
+    WARNING,
+    Formatter,
+    Logger,
+)
+from typing import TYPE_CHECKING, List, Optional, Union
 
 import torch
 from torch import distributed as torch_dist
 
 from nanotron import distributed as dist
+
+if TYPE_CHECKING:
+    from nanotron.config import LoggingArgs
 from nanotron.parallel import ParallelContext
 
 log_levels = {
@@ -283,7 +296,6 @@ def set_logger_verbosity_format(logging_level: str, parallel_context: ParallelCo
         f"TP={dist.get_rank(parallel_context.tp_pg)}{expert_parallel_log}{'|' + node_name if node_name else ''}]: %(message)s",
         datefmt="%m/%d/%Y %H:%M:%S",
     )
-    # TODO @thomasw21: `logging.log_levels` returns valid lg log levels
     log_level = log_levels[logging_level]
 
     # main root logger
@@ -297,6 +309,15 @@ def set_logger_verbosity_format(logging_level: str, parallel_context: ParallelCo
     # Nanotron
     set_verbosity(log_level)
     set_formatter(formatter=formatter)
+
+
+def set_ranks_logging_level(parallel_context: ParallelContext, logging_config: "LoggingArgs"):
+    if dist.get_rank(parallel_context.world_pg) == 0:
+        if logging_config.log_level is not None:
+            set_logger_verbosity_format(logging_config.log_level, parallel_context=parallel_context)
+    else:
+        if logging_config.log_level_replica is not None:
+            set_logger_verbosity_format(logging_config.log_level_replica, parallel_context=parallel_context)
 
 
 _configure_library_root_logger()

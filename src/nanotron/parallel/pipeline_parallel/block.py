@@ -1,6 +1,8 @@
 from typing import Any, Callable, Dict, Optional, Set, Tuple, Union
 
 import torch
+from torch import nn
+
 from nanotron import distributed as dist
 from nanotron.parallel.pipeline_parallel.functional import (
     recv_from_pipeline_state_buffer,
@@ -9,7 +11,6 @@ from nanotron.parallel.pipeline_parallel.functional import (
 from nanotron.parallel.pipeline_parallel.p2p import P2P, BatchTensorSendRecvState
 from nanotron.parallel.pipeline_parallel.state import PipelineBatchState, PipelineTrainBatchState
 from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
-from torch import nn
 
 
 class PipelineBlock(nn.Module):
@@ -19,7 +20,7 @@ class PipelineBlock(nn.Module):
      - PipelineBlocks have to wrap a method/function/module that outputs a Dict[str, torch.Tensor]
 
     Some considerations:
-     - In the litterature, authors often refer to pipeline stages as a granularity block. Our notion is more granular. A pipeline stage is list of contiguous (in the forward sense) of pipeline blocks.
+     - In the literature, authors often refer to pipeline stages as a granularity block. Our notion is more granular. A pipeline stage is list of contiguous (in the forward sense) of pipeline blocks.
     All PipelineBlock definition exist in each rank, they are just instantiated/built on a single rank per pipeline parallel process group.
     """
 
@@ -51,7 +52,7 @@ class PipelineBlock(nn.Module):
             self.pp_block = self.module_builder(**self.module_kwargs)
 
     def extra_repr(self) -> str:
-        return f"pp_rank={self.rank}" if hasattr(self, "rank") is not None else ""
+        return f"pp_rank={self.rank}" if hasattr(self, "rank") else ""
 
     def set_pipeline_state(self, pipeline_state: Optional[PipelineBatchState]):
         self.pipeline_state = pipeline_state

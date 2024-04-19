@@ -1,12 +1,14 @@
 import dataclasses
-from typing import Any, Dict, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 
 import torch
 from torch import nn
 
 from nanotron import distributed as dist
 from nanotron import logging
-from nanotron.models import NanotronModel
+
+if TYPE_CHECKING:
+    from nanotron.models import NanotronModel
 
 logger = logging.get_logger(__name__)
 
@@ -80,6 +82,15 @@ class ShardedInfo:
     # The shape of the unsharded tensor
     unsharded_shape: Tuple[int, ...]
 
+    def is_tp_sharded(self, parallel_context) -> bool:
+        return set(dist.get_global_ranks(parallel_context.tp_pg)).issubset(set(self.global_ranks))
+
+    def is_expert_sharded(self, parallel_context) -> bool:
+        return set(dist.get_global_ranks(parallel_context.expert_pg)).issubset(set(self.global_ranks))
+
+    def is_dp_sharded(self, parallel_context):
+        return set(dist.get_global_ranks(parallel_context.dp_pg)).issubset(set(self.global_ranks))
+
 
 class NanotronParameter(nn.Parameter):
     """Base class for all parameters in Nanotronmodels
@@ -90,7 +101,7 @@ class NanotronParameter(nn.Parameter):
 
     .. note::
         Notes about tied weights:
-        - Tied weights means weights that need to be synced only within the same DP rank, regardless if they are part of TP strategy or just shared weights betweem two layers.
+        - Tied weights means weights that need to be synced only within the same DP rank, regardless if they are part of TP strategy or just shared weights between two layers.
         - Syncing tied weights usually require to sum gradients.
         - Some weights are synced without needing to reduce grads over ranks. They can be in the same device (ex: enc/dec embeds in the same PP stage) or they can be duplicated across TP and duplicate the workload across TP ranks (ex: LN using traditional TP)
         - Even if some weights don't need their grads to be reduced, it's still useful for them to be marked as tied. For example, current serialization format requires to mark them correctly.
@@ -122,13 +133,17 @@ class NanotronParameter(nn.Parameter):
 
         if key in metadata:
             raise ValueError(
-                f"We shouldn't override previous metadata. Key to be overriden: {key}, current metadata: {metadata}"
+                f"We shouldn't override previous metadata. Key to be overridden: {key}, current metadata: {metadata}"
             )
         else:
             metadata[key] = value
 
     def mark_as_tied(
-        self, name: str, global_ranks: Tuple[int, ...], reduce_op: Optional[dist.ReduceOp], root_module: NanotronModel
+        self,
+        name: str,
+        global_ranks: Tuple[int, ...],
+        reduce_op: Optional[dist.ReduceOp],
+        root_module: "NanotronModel",
     ):
         self._set_metadata(
             self.NANOTRON_PARAMETER_METADATA_TIED_KEY,

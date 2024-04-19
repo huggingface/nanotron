@@ -29,7 +29,7 @@ from nanotron.generation.decode import (
     decode_text,
     decode_tokenized,
 )
-from nanotron.logging import log_rank, set_logger_verbosity_format
+from nanotron.logging import log_rank, set_ranks_logging_level
 from nanotron.models import build_model
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import sanity_check
@@ -96,12 +96,8 @@ def main():
         log_level_replica="info",
     )
 
-    if dist.get_rank(parallel_context.world_pg) == 0:
-        if logging_config.log_level is not None:
-            set_logger_verbosity_format(logging_config.log_level, parallel_context=parallel_context)
-    else:
-        if logging_config.log_level_replica is not None:
-            set_logger_verbosity_format(logging_config.log_level_replica, parallel_context=parallel_context)
+    # Set log levels
+    set_ranks_logging_level(parallel_context=parallel_context, logging_config=logging_config)
 
     log_rank(f"model_config: {model_config}", logger=logger, level=logging.INFO, rank=0)
     log_rank(f"tokenizer_path: {tokenizer_path}", logger=logger, level=logging.INFO, rank=0)

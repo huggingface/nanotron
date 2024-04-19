@@ -2,7 +2,7 @@ import datetime
 import os
 from dataclasses import dataclass, fields
 from pathlib import Path
-from typing import Optional, Type, Union
+from typing import List, Optional, Type, Union
 
 import dacite
 import torch
@@ -11,7 +11,7 @@ from dacite import from_dict
 from yaml.loader import SafeLoader
 
 from nanotron.config.lighteval_config import LightEvalConfig
-from nanotron.config.models_config import ExistingCheckpointInit, NanotronConfigs, RandomInit
+from nanotron.config.models_config import ExistingCheckpointInit, NanotronConfigs, RandomInit, SpectralMupInit
 from nanotron.config.parallelism_config import ParallelismArgs
 from nanotron.config.utils_config import (
     RecomputeGranularity,
@@ -21,9 +21,7 @@ from nanotron.config.utils_config import (
 )
 from nanotron.generation.sampler import SamplerType
 from nanotron.logging import get_logger
-from nanotron.parallel.pipeline_parallel.engine import (
-    PipelineEngine,
-)
+from nanotron.parallel.pipeline_parallel.engine import PipelineEngine
 from nanotron.parallel.tensor_parallel.nn import TensorParallelLinearMode
 
 logger = get_logger(__name__)
@@ -107,6 +105,19 @@ class DataArgs:
 
 
 @dataclass
+class DatasetStageArgs:
+    """Arguments for loading dataset in different stages of the training process"""
+
+    name: str
+    start_training_step: int
+    data: DataArgs
+
+    def __post_init__(self):
+        if self.start_training_step < 0:
+            raise ValueError(f"training_steps should be a positive integer and not {self.start_training_step}")
+
+
+@dataclass
 class CheckpointsArgs:
     """Arguments related to checkpoints:
     checkpoints_path: where to save the checkpoints
@@ -174,7 +185,7 @@ class ModelArgs:
     """Arguments related to model architecture"""
 
     model_config: NanotronConfigs
-    init_method: Union[RandomInit, ExistingCheckpointInit]
+    init_method: Union[RandomInit, SpectralMupInit, ExistingCheckpointInit]
     dtype: Optional[torch.dtype] = None
     make_vocab_size_divisible_by: int = 1
     ddp_bucket_cap_mb: int = 25
@@ -184,6 +195,8 @@ class ModelArgs:
             self.dtype = torch.bfloat16
         if isinstance(self.dtype, str):
             self.dtype = cast_str_to_torch_dtype(self.dtype)
+
+        self.model_config._is_using_mup = isinstance(self.init_method, SpectralMupInit)
 
         # if self.model_config.max_position_embeddings is None:
         #     self.model_config.max_position_embeddings = 0
@@ -296,7 +309,7 @@ class Config:
     logging: Optional[LoggingArgs] = None
     tokens: Optional[TokensArgs] = None
     optimizer: Optional[OptimizerArgs] = None
-    data: Optional[DataArgs] = None
+    data_stages: Optional[List[DatasetStageArgs]] = None
     profiler: Optional[ProfilerArgs] = None
     lighteval: Optional[LightEvalConfig] = None
 
@@ -314,6 +327,22 @@ class Config:
             self.optimizer.learning_rate_scheduler.lr_decay_steps = (
                 self.tokens.train_steps - self.optimizer.learning_rate_scheduler.lr_warmup_steps
             )
+
+        if self.data_stages is not None:
+            names = [stage.name for stage in self.data_stages]
+            training_steps = [stage.start_training_step for stage in self.data_stages]
+            assert any(
+                stage.start_training_step == 1 for stage in self.data_stages
+            ), "You must have a training stage starting at 1 in the config's data_stages"
+
+            for stage in self.data_stages:
+                if names.count(stage.name) > 1:
+                    raise ValueError(f"Each stage should have unique names and not {names}")
+
+                if training_steps.count(stage.start_training_step) > 1:
+                    raise ValueError(
+                        f"Each stage should have unique starting training step, please change the starting training step for stage {stage.name}"
+                    )
 
         # # if lighteval, we need tokenizer to be defined
         # if self.checkpoints.lighteval is not None:
@@ -384,7 +413,7 @@ def get_config_from_file(
     skip_unused_config_keys: bool = False,
     skip_null_keys: bool = False,
 ) -> Config:
-    """Get a config objet from a file (python or YAML)
+    """Get a config object from a file (python or YAML)
 
     Args:
         config_path: path to the config file

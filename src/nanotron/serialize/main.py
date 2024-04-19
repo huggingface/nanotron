@@ -13,9 +13,17 @@ from nanotron.distributed import get_global_rank
 from nanotron.logging import log_rank
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter
-from nanotron.sanity_checks import assert_tensor_synced_across_pg, check_optim_state_in_sync
+from nanotron.sanity_checks import (
+    assert_tensor_synced_across_pg,
+    check_optim_state_in_sync,
+)
 from nanotron.serialize.metadata import CheckpointMetadata, load_meta, save_meta
-from nanotron.serialize.optimizer import load_lr_scheduler, load_optimizer, save_lr_scheduler, save_optimizer
+from nanotron.serialize.optimizer import (
+    load_lr_scheduler,
+    load_optimizer,
+    save_lr_scheduler,
+    save_optimizer,
+)
 from nanotron.serialize.weights import load_weights, save_weights
 
 """
@@ -131,10 +139,10 @@ def save(
             tied_info = tied_param.get_tied_info()
             group_ranks = tied_info.global_ranks
             group = parallel_context.world_ranks_to_pg[group_ranks]
+
             assert_tensor_synced_across_pg(
                 tensor=tied_param, pg=group, msg=lambda err: f"Tied {tied_info.name} are not synced {err}"
             )
-
         if not optimizer.inherit_from(optim.ZeroDistributedOptimizer):
             check_optim_state_in_sync(optimizer, parallel_context.dp_pg)
 
@@ -178,6 +186,7 @@ def save(
                     src=get_global_rank(group=group, group_rank=reference_rank),
                     group=group,
                 )
+
                 torch.testing.assert_close(
                     tensor,
                     reference_tensor,

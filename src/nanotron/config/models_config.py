@@ -9,6 +9,16 @@ class RandomInit:
 
 
 @dataclass
+class SpectralMupInit:
+    """This is used to initialize the model with spectral mup. Set it to True to use it."""
+
+    use_mup: bool
+
+    def __post_init__(self):
+        assert self.use_mup, "Remove `use_mup` if you don't want to use it"
+
+
+@dataclass
 class ExistingCheckpointInit:
     """This is used to initialize from an already existing model (without optimizer, lr_scheduler...)"""
 
@@ -43,9 +53,18 @@ class LlamaConfig:
     for_inference: bool = False  # if true, replace TritonRMSNorm with LayerNorm for a fixed output. use TritonRMSNorm for training as it's faster
 
     def __post_init__(self):
+        # NOTE: user don't set self._init_method, ModelArgs will set it
+        # then we only pass LlamaConfig around
+        self._is_using_mup: bool = False
+        # self._init_method: Optional[Union[RandomInit, SpectralMupInit, ExistingCheckpointInit]] = None
+
         # for backward compatibility
         if self.num_key_value_heads is None:
             self.num_key_value_heads = self.num_attention_heads
+
+    @property
+    def is_using_mup(self) -> bool:
+        return self._is_using_mup
 
 
 @dataclass

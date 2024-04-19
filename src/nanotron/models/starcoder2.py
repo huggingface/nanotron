@@ -24,11 +24,6 @@ import math
 from typing import Dict, List, Optional, Tuple, Union
 
 import torch
-from flash_attn import bert_padding
-from flash_attn.flash_attn_interface import (
-    flash_attn_varlen_func,
-    flash_attn_with_kvcache,
-)
 from torch import nn
 from torch.nn import LayerNorm, init
 from torch.nn import functional as F
@@ -44,9 +39,15 @@ from nanotron.parallel.parameters import NanotronParameter
 from nanotron.parallel.pipeline_parallel.block import PipelineBlock
 from nanotron.parallel.pipeline_parallel.p2p import P2P
 from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
-from nanotron.parallel.sharded_parameters import SplitConfig, mark_all_parameters_in_module_as_sharded
+from nanotron.parallel.sharded_parameters import (
+    SplitConfig,
+    mark_all_parameters_in_module_as_sharded,
+)
 from nanotron.parallel.tensor_parallel.enum import TensorParallelLinearMode
-from nanotron.parallel.tensor_parallel.functional import column_linear, sharded_cross_entropy
+from nanotron.parallel.tensor_parallel.functional import (
+    column_linear,
+    sharded_cross_entropy,
+)
 from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelColumnLinear,
     TensorParallelEmbedding,
@@ -55,8 +56,6 @@ from nanotron.parallel.tensor_parallel.nn import (
 from nanotron.parallel.tied_parameters import tie_parameters
 from nanotron.random import RandomStates, branch_random_state
 from nanotron.utils import checkpoint_method
-
-_flash_supports_window_size = "window_size" in list(inspect.signature(flash_attn_varlen_func).parameters)
 
 
 def pad_to_right(tensor, mask, new_tensor=None):
@@ -221,6 +220,10 @@ class CoreAttention(nn.Module):
 
     def __init__(self, config: Starcoder2Config, parallel_config: Optional[ParallelismArgs], layer_idx: int):
         super().__init__()
+        from flash_attn.flash_attn_interface import flash_attn_varlen_func
+
+        _flash_supports_window_size = "window_size" in list(inspect.signature(flash_attn_varlen_func).parameters)
+
         assert (
             config.hidden_size % config.num_attention_heads == 0
         ), f"Hidden size {config.hidden_size} must be divisible by number of attention heads {config.num_attention_heads}."
@@ -251,6 +254,8 @@ class CoreAttention(nn.Module):
         q_sequence_mask: torch.Tensor,  # torch.BoolTensor [batch_size, q_length] (can be broadcasted to that size)
         kv_sequence_mask: torch.Tensor,  # torch.BoolTensor [batch_size, kv_length] (can be broadcasted to that size)
     ):
+        from flash_attn.flash_attn_interface import flash_attn_varlen_func
+
         # TODO @thomasw21: Compute once, instead of computing for each layers.
         cu_seqlens_q = torch.zeros((q_sequence_mask.shape[0] + 1), dtype=torch.int32, device=query_states.device)
         cu_seqlens_k = torch.zeros((kv_sequence_mask.shape[0] + 1), dtype=torch.int32, device=query_states.device)
@@ -675,6 +680,12 @@ class CausalSelfMQA(nn.Module, AttachableStore):
         hidden_states,  # [seq_length, batch_size, hidden_dim]
         sequence_mask,  # [batch_size, seq_length]
     ):
+        from flash_attn import bert_padding
+        from flash_attn.flash_attn_interface import (
+            flash_attn_varlen_func,
+            flash_attn_with_kvcache,
+        )
+
         batch_size = hidden_states.shape[1]
 
         def unshape(states):
@@ -826,7 +837,7 @@ class CausalSelfMQA(nn.Module, AttachableStore):
                     value_states,
                     rotary_cos=None,
                     rotary_sin=None,
-                    # TODO @nouamane: seems like this doesnt help to indicate padding in (for first iteration it's just 0)
+                    # TODO @nouamane: seems like this doesn't help to indicate padding in (for first iteration it's just 0)
                     cache_seqlens=position_offsets.contiguous(),
                     softmax_scale=None,
                     causal=True,
@@ -949,6 +960,12 @@ class CausalSelfGQA(nn.Module, AttachableStore):
         hidden_states,  # (seq_length, batch_size, hidden_size)
         sequence_mask,  # (batch_size, seq_length)
     ):
+        from flash_attn import bert_padding
+        from flash_attn.flash_attn_interface import (
+            flash_attn_varlen_func,
+            flash_attn_with_kvcache,
+        )
+
         fused_qkv = self.query_key_value(
             hidden_states
         )  # [seq_length, batch_size, n_local_q_heads * head_dim + 2 * n_local_kv_heads * head_dim]
@@ -1065,7 +1082,7 @@ class CausalSelfGQA(nn.Module, AttachableStore):
                     value_states,
                     rotary_cos=None,
                     rotary_sin=None,
-                    # TODO @nouamane: seems like this doesnt help to indicate padding in (for first iteration it's just 0)
+                    # TODO @nouamane: seems like this doesn't help to indicate padding in (for first iteration it's just 0)
                     cache_seqlens=position_offsets.contiguous(),
                     softmax_scale=None,
                     causal=True,
@@ -1458,169 +1475,85 @@ class Starcoder2ForTraining(NanotronModel):
                     )
 
     @torch.no_grad()
-    def init_model_randomly(self, init_method, scaled_init_method):
+    def init_model_randomly(self, config):
+        """Initialize model parameters randomly.
+        Note:
+            Layernorm weight all 0 or 1 depending on `apply_layernorm_1p`
+        """
         model = self
-        # Set to 0: LayerNorm bias / all bias
         initialized_parameters = set()
         # Handle tensor parallelism
-        with torch.no_grad():
-            module_id_to_prefix = {id(module): f"{module_name}." for module_name, module in model.named_modules()}
-            # Fix the root_model
-            module_id_to_prefix[id(model)] = ""
+        module_id_to_prefix = {id(module): f"{module_name}." for module_name, module in model.named_modules()}
+        # Fix the root_model
+        module_id_to_prefix[id(model)] = ""
 
-            for module_name, module in model.named_modules():
-                if isinstance(module, TensorParallelColumnLinear):
-                    # Somehow Megatron-LM does something super complicated, https://github.com/NVIDIA/Megatron-LM/blob/2360d732a399dd818d40cbe32828f65b260dee11/megatron/core/tensor_parallel/layers.py#L96
-                    # What it does:
-                    #  - instantiate a buffer of the `full size` in fp32
-                    #  - run init method on it
-                    #  - shard result to get only a specific shard
-                    # Instead I'm lazy and just going to run init_method, since they are scalar independent
-                    assert {"weight", "bias"} == {name for name, _ in module.named_parameters()} or {"weight"} == {
-                        name for name, _ in module.named_parameters()
-                    }
-                    for param_name, param in module.named_parameters():
-                        assert isinstance(param, NanotronParameter)
-                        if param.is_tied:
-                            tied_info = param.get_tied_info()
-                            full_param_name = tied_info.get_full_name_from_module_id_to_prefix(
-                                module_id_to_prefix=module_id_to_prefix
-                            )
-                        else:
-                            full_param_name = f"{module_name}.{param_name}"
+        std = config.model.init_method.std
+        sigma = config.model.init_method.std
+        num_layers = config.model.model_config.num_hidden_layers
 
-                        if full_param_name in initialized_parameters:
-                            # Already initialized
-                            continue
+        for param_name, param in model.named_parameters():
+            assert isinstance(param, NanotronParameter)
 
-                        if "weight" == param_name:
-                            init_method(param)
-                        elif "bias" == param_name:
-                            param.zero_()
-                        else:
-                            raise ValueError(f"Who the fuck is {param_name}?")
+            module_name, param_name = param_name.rsplit(".", 1)
 
-                        assert full_param_name not in initialized_parameters
-                        initialized_parameters.add(full_param_name)
-                elif isinstance(module, TensorParallelRowLinear):
-                    # Somehow Megatron-LM does something super complicated, https://github.com/NVIDIA/Megatron-LM/blob/2360d732a399dd818d40cbe32828f65b260dee11/megatron/core/tensor_parallel/layers.py#L96
-                    # What it does:
-                    #  - instantiate a buffer of the `full size` in fp32
-                    #  - run init method on it
-                    #  - shard result to get only a specific shard
-                    # Instead I'm lazy and just going to run init_method, since they are scalar independent
-                    assert {"weight", "bias"} == {name for name, _ in module.named_parameters()} or {"weight"} == {
-                        name for name, _ in module.named_parameters()
-                    }
-                    for param_name, param in module.named_parameters():
-                        assert isinstance(param, NanotronParameter)
-                        if param.is_tied:
-                            tied_info = param.get_tied_info()
-                            full_param_name = tied_info.get_full_name_from_module_id_to_prefix(
-                                module_id_to_prefix=module_id_to_prefix
-                            )
-                        else:
-                            full_param_name = f"{module_name}.{param_name}"
+            if param.is_tied:
+                tied_info = param.get_tied_info()
+                full_param_name = tied_info.get_full_name_from_module_id_to_prefix(
+                    module_id_to_prefix=module_id_to_prefix
+                )
+            else:
+                full_param_name = f"{module_name}.{param_name}"
 
-                        if full_param_name in initialized_parameters:
-                            # Already initialized
-                            continue
+            if full_param_name in initialized_parameters:
+                # Already initialized
+                continue
 
-                        if "weight" == param_name:
-                            scaled_init_method(param)
-                        elif "bias" == param_name:
-                            param.zero_()
-                        else:
-                            raise ValueError(f"Who the fuck is {param_name}?")
+            module = model.get_submodule(module_name)
 
-                        assert full_param_name not in initialized_parameters
-                        initialized_parameters.add(full_param_name)
-                elif isinstance(module, LayerNorm):
-                    assert {"weight", "bias"} == {name for name, _ in module.named_parameters()}
-                    for param_name, param in module.named_parameters():
-                        assert isinstance(param, NanotronParameter)
-                        if param.is_tied:
-                            tied_info = param.get_tied_info()
-                            full_param_name = tied_info.get_full_name_from_module_id_to_prefix(
-                                module_id_to_prefix=module_id_to_prefix
-                            )
-                        else:
-                            full_param_name = f"{module_name}.{param_name}"
+            if isinstance(module, TensorParallelColumnLinear):
+                if "weight" == param_name:
+                    nn.init.normal_(module.weight, mean=0.0, std=std)
+                elif "bias" == param_name:
+                    module.bias.zero_()
+                else:
+                    raise ValueError(f"Who the fuck is {param_name}?")
+            elif isinstance(module, TensorParallelRowLinear):
+                if "weight" == param_name:
+                    nn.init.normal_(module.weight, mean=0.0, std=sigma / math.sqrt(2 * num_layers))
+                elif "bias" == param_name:
+                    param.zero_()
+                else:
+                    raise ValueError(f"Who the fuck is {param_name}?")
+            elif isinstance(module, LayerNorm):
+                if "weight" == param_name:
+                    # TODO @thomasw21: Sometimes we actually want 0
+                    module.weight.fill_(1)
+                elif "bias" == param_name:
+                    module.bias.zero_()
+                else:
+                    raise ValueError(f"Who the fuck is {param_name}?")
+            elif isinstance(module, MQAColumnLinears):
+                if "weight" == param_name:
+                    nn.init.normal_(module.weight, mean=0.0, std=std)
+                elif "bias" == param_name:
+                    module.bias.zero_()
+                else:
+                    raise ValueError(f"Who the fuck is {param_name}?")
 
-                        if full_param_name in initialized_parameters:
-                            # Already initialized
-                            continue
+            elif isinstance(module, TensorParallelEmbedding):
+                nn.init.normal_(module.weight, mean=0.0, std=std)
+            else:
+                raise Exception(f"Parameter {full_param_name} was not initialized")
 
-                        if "weight" == param_name:
-                            # TODO @thomasw21: Sometimes we actually want 0
-                            param.fill_(1)
-                        elif "bias" == param_name:
-                            param.zero_()
-                        else:
-                            raise ValueError(f"Who the fuck is {param_name}?")
+            assert full_param_name not in initialized_parameters
+            initialized_parameters.add(full_param_name)
 
-                        assert full_param_name not in initialized_parameters
-                        initialized_parameters.add(full_param_name)
-                elif isinstance(module, MQAColumnLinears):
-                    # Somehow Megatron-LM does something super complicated, https://github.com/NVIDIA/Megatron-LM/blob/2360d732a399dd818d40cbe32828f65b260dee11/megatron/core/tensor_parallel/layers.py#L96
-                    # What it does:
-                    #  - instantiate a buffer of the `full size` in fp32
-                    #  - run init method on it
-                    #  - shard result to get only a specific shard
-                    # Instead I'm lazy and just going to run init_method, since they are scalar independent
-                    # TODO @thomasw21: handle the case there's no bias
-                    assert {"q.weight", "q.bias", "kv.weight", "kv.bias"} == {
-                        name for name, _ in module.named_parameters()
-                    }
-                    for param_name, param in module.named_parameters():
-                        assert isinstance(param, NanotronParameter)
-                        if param.is_tied:
-                            tied_info = param.get_tied_info()
-                            full_param_name = tied_info.get_full_name_from_module_id_to_prefix(
-                                module_id_to_prefix=module_id_to_prefix
-                            )
-                        else:
-                            full_param_name = f"{module_name}.{param_name}"
-
-                        if full_param_name in initialized_parameters:
-                            # Already initialized
-                            continue
-
-                        if ".weight" in param_name:
-                            init_method(param)
-                        elif ".bias" in param_name:
-                            param.zero_()
-                        else:
-                            raise ValueError(f"Who the fuck is {param_name}?")
-
-                        assert full_param_name not in initialized_parameters
-                        initialized_parameters.add(full_param_name)
-                elif isinstance(module, TensorParallelEmbedding):
-                    # TODO @thomasw21: Handle tied embeddings
-                    # Somehow Megatron-LM does something super complicated, https://github.com/NVIDIA/Megatron-LM/blob/2360d732a399dd818d40cbe32828f65b260dee11/megatron/core/tensor_parallel/layers.py#L96
-                    # What it does:
-                    #  - instantiate a buffer of the `full size` in fp32
-                    #  - run init method on it
-                    #  - shard result to get only a specific shard
-                    # Instead I'm lazy and just going to run init_method, since they are scalar independent
-                    assert {"weight"} == {name for name, _ in module.named_parameters()}
-
-                    assert isinstance(module.weight, NanotronParameter)
-                    if module.weight.is_tied:
-                        tied_info = module.weight.get_tied_info()
-                        full_param_name = tied_info.get_full_name_from_module_id_to_prefix(
-                            module_id_to_prefix=module_id_to_prefix
-                        )
-                    else:
-                        full_param_name = f"{module_name}.weight"
-
-                    if full_param_name in initialized_parameters:
-                        # Already initialized
-                        continue
-
-                    init_method(module.weight)
-                    assert full_param_name not in initialized_parameters
-                    initialized_parameters.add(full_param_name)
+        assert initialized_parameters == {
+            param.get_tied_info().get_full_name_from_module_id_to_prefix(module_id_to_prefix=module_id_to_prefix)
+            if param.is_tied
+            else name
+            for name, param in model.named_parameters()
+        }, f"Somehow the initialized set of parameters don't match:\n - Expected: { {name for name, _ in model.named_parameters()} }\n - Got: {initialized_parameters}"
 
     @staticmethod
     def get_embeddings_lm_head_tied_names() -> List[str]:
