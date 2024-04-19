@@ -521,7 +521,7 @@ class LearningRateForSpectralMup:
         return scaled_lr
 
     def _get_global_lr(self, param_name: str, param: nn.Parameter, module: nn.Module) -> float:
-        return self.lr
+        return self.lr / 64
 
     def get_lr(self, param_name: str, param: nn.Parameter) -> float:
         """Return the learning rate for the given parameter."""
