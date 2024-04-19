@@ -164,5 +164,4 @@ cython_debug/
 checkpoints/
 
 # wandb
-examples/wandb
-examples/contributor-guide/wandb
+/wandb/

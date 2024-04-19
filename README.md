@@ -62,7 +62,7 @@ pip install nanotron
 
 Also nice to have: `pip install transformers datasets python-etcd tensorboardX`
 
-We also support a set of flavors that you can install using `pip install -e [$FLAVOR]`:
+We also support a set of flavors that you can install using `pip install -e .[$FLAVOR]`:
  - `dev`: Used is you are developping in `nanotron`. It installs in particular our linter mechanism. On top of that you have to run `pre-commit install` afterwards.
  - `test`: We use `pytest` in order to run out testing suite. In order to run tests in parallel, it will install `pytest-xdist`, which you can leverage by running `pytest -n 12 tests` (12 is the number of parallel test)
 
