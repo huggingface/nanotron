@@ -17,13 +17,6 @@
 from typing import Dict, Optional, Union
 
 import torch
-
-from flash_attn import bert_padding
-from flash_attn.flash_attn_interface import (
-    flash_attn_varlen_func,
-    flash_attn_with_kvcache,
-)
-from flash_attn.layers.rotary import RotaryEmbedding as FlashRotaryEmbedding
 from torch import nn
 
 from nanotron import distributed as dist
@@ -59,10 +52,10 @@ class RMSNorm(nn.Module):
         self.eps = eps
         self.weight = nn.Parameter(torch.zeros(dim))
 
-    def _norm(self, x):
+    def _norm(self, x: torch.Tensor) -> torch.Tensor:
         return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         output = self._norm(x.float())
         # Llama does x.to(float16) * w whilst Gemma is (x * w).to(float16)
         # See https://github.com/huggingface/transformers/pull/29402
