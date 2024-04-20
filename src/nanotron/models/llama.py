@@ -47,20 +47,18 @@ logger = logging.get_logger(__name__)
 
 
 class RMSNorm(nn.Module):
-    def __init__(self, dim: int, eps: float = 1e-6):
+    def __init__(self, hidden_size: int, eps: float = 1e-6):
         super().__init__()
         self.eps = eps
-        self.weight = nn.Parameter(torch.zeros(dim))
+        self.weight = nn.Parameter(torch.zeros(hidden_size))
 
-    def _norm(self, x: torch.Tensor) -> torch.Tensor:
-        return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+    def _norm(self, input: torch.Tensor) -> torch.Tensor:
+        return input * torch.rsqrt(input.pow(2).mean(-1, keepdim=True) + self.eps)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        output = self._norm(x.float())
-        # Llama does x.to(float16) * w whilst Gemma is (x * w).to(float16)
-        # See https://github.com/huggingface/transformers/pull/29402
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        output = self._norm(input.float())
         output = output * (1.0 + self.weight.float())
-        return output.type_as(x)
+        return output.type_as(input)
 
 
 class RotaryEmbedding(nn.Module):
@@ -622,10 +620,11 @@ class LlamaDecoderLayer(nn.Module):
         parallel_config: Optional[ParallelismArgs],
         tp_pg: dist.ProcessGroup,
         layer_idx: int,
+        for_inference: bool = False,
     ):
         super().__init__()
         # TritonRMSNorm is faster but generate randomized results. Use TritonRMSNorm for training as it's faster
-        if not config.for_inference:
+        if not for_inference:
             self.input_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         else:
             # replace TritonRMSNorm with RMSNorm for a deterministic output.
@@ -636,7 +635,7 @@ class LlamaDecoderLayer(nn.Module):
             tp_pg=tp_pg,
             layer_idx=layer_idx,
         )
-        if not config.for_inference:
+        if not for_inference:
             self.post_attention_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         else:
             # replace TritonRMSNorm with RMSNorm for a deterministic output.
@@ -704,6 +703,7 @@ class LlamaModel(nn.Module):
         config: LlamaConfig,
         parallel_context: ParallelContext,
         parallel_config: Optional[ParallelismArgs],
+        for_inference: bool = False,
     ):
         super().__init__()
 
@@ -739,6 +739,7 @@ class LlamaModel(nn.Module):
                         "parallel_config": parallel_config,
                         "tp_pg": parallel_context.tp_pg,
                         "layer_idx": layer_idx,
+                        "for_inference": for_inference,
                     },
                     module_input_keys={"hidden_states", "sequence_mask"},
                     module_output_keys={"hidden_states", "sequence_mask"},
@@ -749,7 +750,7 @@ class LlamaModel(nn.Module):
 
         self.final_layer_norm = PipelineBlock(
             p2p=self.p2p,
-            module_builder=TritonRMSNorm,
+            module_builder=TritonRMSNorm if not for_inference else RMSNorm,
             module_kwargs={"hidden_size": config.hidden_size, "eps": config.rms_norm_eps},
             module_input_keys={"input"},
             module_output_keys={"hidden_states"},
@@ -886,9 +887,15 @@ class LlamaForTraining(NanotronModel):
         parallel_context: ParallelContext,
         parallel_config: Optional[ParallelismArgs],
         random_states: Optional[RandomStates] = None,
+        for_inference: bool = False,
     ):
         super().__init__()
-        self.model = LlamaModel(config=config, parallel_context=parallel_context, parallel_config=parallel_config)
+        self.model = LlamaModel(
+            config=config,
+            parallel_context=parallel_context,
+            parallel_config=parallel_config,
+            for_inference=for_inference,
+        )
         self.loss = PipelineBlock(
             p2p=self.model.p2p,
             module_builder=Loss,
