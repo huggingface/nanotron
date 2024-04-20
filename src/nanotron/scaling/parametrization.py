@@ -33,46 +33,53 @@ NAME_TO_FAN_MAPPING = {
     # "token_embedding.bias": [1024, 1],
 }
 
-N_LAYERS = 14
-WIDTH_BASE = 1024
-TARGET_WIDTH = 1024
+# N_LAYERS = 14
+# WIDTH_BASE = 1024
+# TARGET_WIDTH = 1024
 
 STD_BASE = 0.08
 EMBED_MULTIPLIER = 10.0
-BASE_LR = 0.001
-WIDTH_MULTIPLIER = WIDTH_BASE/TARGET_WIDTH
+# BASE_LR = 0.005
+# WIDTH_MULTIPLIER = WIDTH_BASE/TARGET_WIDTH
 
-NAME_TO_STD_MAPPING = {
-    "token_embedding.weight": STD_BASE**2,
-    "qkv_proj.weight": (STD_BASE**2)/WIDTH_MULTIPLIER,
-    "o_proj.weight": (STD_BASE**2)/(2*WIDTH_MULTIPLIER*N_LAYERS),
-    "gate_up_proj.weight": (STD_BASE**2)/WIDTH_MULTIPLIER,
-    "down_proj.weight": (STD_BASE**2)/(2*WIDTH_MULTIPLIER*N_LAYERS),
-    "lm_head.pp_block.weight": STD_BASE**2,
-}
+# NAME_TO_STD_MAPPING = {
+#     "token_embedding.weight": STD_BASE**2,
+#     "qkv_proj.weight": (STD_BASE**2)/WIDTH_MULTIPLIER,
+#     "o_proj.weight": (STD_BASE**2)/(2*WIDTH_MULTIPLIER*N_LAYERS),
+#     "gate_up_proj.weight": (STD_BASE**2)/WIDTH_MULTIPLIER,
+#     "down_proj.weight": (STD_BASE**2)/(2*WIDTH_MULTIPLIER*N_LAYERS),
+#     "lm_head.pp_block.weight": STD_BASE**2,
+# }
 
 
-NAME_TO_LR_MAPPING = {
-    "token_embedding.weight": BASE_LR,
-    "qkv_proj.weight": BASE_LR/WIDTH_MULTIPLIER,
-    "o_proj.weight": BASE_LR/WIDTH_MULTIPLIER,
-    "gate_up_proj.weight": BASE_LR/WIDTH_MULTIPLIER,
-    "down_proj.weight": BASE_LR/WIDTH_MULTIPLIER,
-    "lm_head.pp_block.weight": BASE_LR,
+# NAME_TO_LR_MAPPING = {
+#     "token_embedding.weight": BASE_LR,
+#     "qkv_proj.weight": BASE_LR/WIDTH_MULTIPLIER,
+#     "o_proj.weight": BASE_LR/WIDTH_MULTIPLIER,
+#     "gate_up_proj.weight": BASE_LR/WIDTH_MULTIPLIER,
+#     "down_proj.weight": BASE_LR/WIDTH_MULTIPLIER,
+#     "lm_head.pp_block.weight": BASE_LR,
     
     
-    "input_layernorm.weight": BASE_LR,
-    "input_layernorm.bias": BASE_LR,
-    "post_attention_layernorm.weight": BASE_LR,
-    "post_attention_layernorm.bias": BASE_LR,
-    "final_layer_norm.pp_block.weight": BASE_LR,
-    "final_layer_norm.pp_block.bias": BASE_LR,
-}
+#     "input_layernorm.weight": BASE_LR,
+#     "input_layernorm.bias": BASE_LR,
+#     "post_attention_layernorm.weight": BASE_LR,
+#     "post_attention_layernorm.bias": BASE_LR,
+#     "final_layer_norm.pp_block.weight": BASE_LR,
+#     "final_layer_norm.pp_block.bias": BASE_LR,
+# }
+
+WIDTH_BASE = 1024
+NUM_LAYERS = None
+WIDTH_MULTIPLIER = None
 
 NAME_TO_MULTIPLIER_MAPPING = {
     "token_embedding": EMBED_MULTIPLIER,
-    "lm_head": 1/EMBED_MULTIPLIER, 
+    # "lm_head": 1/WIDTH_MULTIPLIER, 
 }
+
+# def get_width_multipler(num_layers, width_base, target_width):
+#     return width_base/target_width
 
 
 class ParametrizationMethod(Enum):
@@ -212,9 +219,29 @@ class SpectralMupParametrizator:
             TritonRMSNorm: self._parametrize_layer_norm,
         }
         
+        STD_BASE = 0.02
+        # WIDTH_BASE = 1024
+        
+        global NUM_LAYERS
+        global WIDTH_BASE
+        global WIDTH_MULTIPLIER
+        
+        NUM_LAYERS = config.model_config.num_hidden_layers
+        WIDTH_MULTIPLIER = config.model_config.hidden_size/ WIDTH_BASE
+        
+        self.NAME_TO_STD_MAPPING = {
+            "token_embedding.weight": STD_BASE**2,
+            "qkv_proj.weight": (STD_BASE**2)/WIDTH_MULTIPLIER,
+            "o_proj.weight": (STD_BASE**2)/(2*WIDTH_MULTIPLIER*NUM_LAYERS),
+            "gate_up_proj.weight": (STD_BASE**2)/WIDTH_MULTIPLIER,
+            "down_proj.weight": (STD_BASE**2)/(2*WIDTH_MULTIPLIER*NUM_LAYERS),
+            "lm_head.pp_block.weight": STD_BASE**2,
+        }
+        
     def _parametrize_layer_norm(self, param_name: str, module: nn.Module):
         assert "weight" in param_name or "bias" in param_name, f"Unknown parameter {param_name}"
         
+        print("Init layer norm")
         if "weight" in param_name:
             module.weight.fill_(1)
         elif "bias" in param_name:
@@ -222,18 +249,19 @@ class SpectralMupParametrizator:
 
     def _parametrize_mup_weight(self, param_name: str, module: nn.Module):
         def find_std(param_name):
-            for key in NAME_TO_STD_MAPPING:
+            for key in self.NAME_TO_STD_MAPPING:
                 if key in param_name:
-                    return NAME_TO_STD_MAPPING[key]
+                    return self.NAME_TO_STD_MAPPING[key]
 
             return None
         
         std = find_std(param_name)
         if std is None:
             raise Exception(f"Parameter {param_name} was not initialized")
-    
+
         data = module.weight if "weight" in param_name else module.bias
         
+        print(f"param_name: {param_name}, std: {std}")
         init.normal_(data, mean=0.0, std=std)
         
     def parametrize(self, param_name: str, module: nn.Module):
@@ -313,18 +341,42 @@ class LearningRateForSpectralMup:
     def __init__(self, lr: float, names_to_modules: Dict[str, nn.Module]):
         self.lr = lr
         self.names_to_modules = names_to_modules
+        
+        global NUM_LAYERS
+        global WIDTH_BASE
+        global WIDTH_MULTIPLIER
+        
+        BASE_LR = lr
+        self.NAME_TO_LR_MAPPING = {
+            "token_embedding.weight": BASE_LR,
+            "qkv_proj.weight": BASE_LR/WIDTH_MULTIPLIER,
+            "o_proj.weight": BASE_LR/WIDTH_MULTIPLIER,
+            "gate_up_proj.weight": BASE_LR/WIDTH_MULTIPLIER,
+            "down_proj.weight": BASE_LR/WIDTH_MULTIPLIER,
+            "lm_head.pp_block.weight": BASE_LR,
+            
+            
+            "input_layernorm.weight": BASE_LR,
+            "input_layernorm.bias": BASE_LR,
+            "post_attention_layernorm.weight": BASE_LR,
+            "post_attention_layernorm.bias": BASE_LR,
+            "final_layer_norm.pp_block.weight": BASE_LR,
+            "final_layer_norm.pp_block.bias": BASE_LR,
+        }
 
     @abstractmethod
     def get_lr(self, param_name: str, module: nn.Module) -> float:
         def find_lr(param_name):
-            for key in NAME_TO_LR_MAPPING:
+            for key in self.NAME_TO_LR_MAPPING:
                 if key in param_name:
-                    return NAME_TO_LR_MAPPING[key]
+                    return self.NAME_TO_LR_MAPPING[key]
 
             return None
 
         lr = find_lr(param_name)
         if lr is None:
             raise Exception(f"Parameter {param_name} can't find lr")
+
+        print(f"param_name: {param_name}, lr: {lr}")
         
         return lr

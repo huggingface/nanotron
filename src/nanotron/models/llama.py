@@ -788,8 +788,9 @@ class LlamaModel(nn.Module):
         sharded_logits = self.lm_head(x=hidden_states)["logits"]
         
         if self.is_using_mup:
-            from nanotron.scaling.parametrization import NAME_TO_MULTIPLIER_MAPPING
-            sharded_logits = sharded_logits * torch.tensor(NAME_TO_MULTIPLIER_MAPPING["lm_head"], device=output.device, dtype=output.dtype)
+            from nanotron.scaling.parametrization import NAME_TO_MULTIPLIER_MAPPING, WIDTH_MULTIPLIER
+            
+            sharded_logits = sharded_logits * torch.tensor(1/WIDTH_MULTIPLIER, device=output.device, dtype=output.dtype)
 
         fp32_sharded_logits = self.cast_to_fp32(x=sharded_logits)["output"]
 
