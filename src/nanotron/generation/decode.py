@@ -227,13 +227,17 @@ def decode_text(
             )
 
             if is_bench:
-                start_time, elapsed_time_first_iteration = time.perf_counter(), 0
+                start_time = torch.cuda.Event(enable_timing=True)
+                end_time = torch.cuda.Event(enable_timing=True)
+                start_time.record()
+                elapsed_time_first_iteration = 0
 
             for generation_iter in range(max_new_tokens):
 
                 if is_bench and generation_iter == 0:
+                    end_time.record()
                     torch.cuda.synchronize()
-                    elapsed_time_first_iteration = start_time - time.perf_counter()
+                    elapsed_time_first_iteration = start_time.elapsed_time(end_time) / 1000
 
                 all_new_decoder_input_ids_and_mask_same_rank: List[
                     Tuple[Union[torch.LongTensor, TensorPointer], Union[torch.BoolTensor, TensorPointer]]
@@ -384,8 +388,9 @@ def decode_text(
 
             if is_bench:
                 # Compute throughput (tok/s/gpu). Note that the first generation is done with full seq_len, so we don't count it.
+                end_time.record()
                 torch.cuda.synchronize()
-                total_time_sec = time.perf_counter() - start_time - elapsed_time_first_iteration
+                total_time_sec = start_time.elapsed_time(end_time) / 1000 - elapsed_time_first_iteration
                 # We generate 1 token per iteration per batch (batch=microbatch)
                 # Number of tokens generated every iteration: gbs/iteration_time
                 global_batch_size = len(batches) * parallel_context.dp_pg.size()

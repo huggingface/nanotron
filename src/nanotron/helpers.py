@@ -377,14 +377,15 @@ def test_all_pair_to_pair(
                 continue
             test_tensor = torch.zeros((int(throughput_size),), dtype=torch.uint8, device=torch.device("cuda"))
             for k in range(throughput_iters):
-                pre = time.perf_counter()
-                torch.cuda.synchronize()
+                pre = torch.cuda.Event(enable_timing=True)
+                post = torch.cuda.Event(enable_timing=True)
+                pre.record()
                 if wr == a:
                     dist.send(test_tensor, b, group=parallel_context.world_pg, tag=i + k)
                 elif wr == b:
                     dist.recv(test_tensor, a, group=parallel_context.world_pg, tag=i + k)
                 torch.cuda.synchronize()
-                duration = time.perf_counter() - pre
+                duration = pre.elapsed_time(post) / 1000 # time is reported in milliseconds
             del test_tensor
             gc.collect()
             torch.cuda.empty_cache()

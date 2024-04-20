@@ -372,7 +372,8 @@ class DistributedTrainer:
                 if isinstance(prof, torch.profiler.profile):
                     prof.step()
 
-                self.iteration_start_time = time.time()
+                self.iteration_start_time = torch.cuda.Event(enable_timing=True)
+                self.iteration_start_time.record()
                 self._update_dataloader_based_on_training_stages(dataloader_or_dls)
 
                 # Training step
@@ -500,9 +501,11 @@ class DistributedTrainer:
         loss_avg: Optional[torch.Tensor],
     ) -> None:
         # TODO @nouamanetazi: Megatron-LM seems to be using a barrier to report their interval time. Check if this is necessary. https://github.com/NouamaneTazi/Megatron-LM/blob/e241a96c3085b18e36c6cee1d68a8155de77b5a6/megatron/training.py#L607
-        dist.barrier()
+        iteration_end_time = torch.cuda.Event(enable_timing=True)
+        iteration_end_time.record()
+        # dist.barrier()
         torch.cuda.synchronize()
-        elapsed_time_per_iteration_ms = (time.time() - self.iteration_start_time) * 1000
+        elapsed_time_per_iteration_ms = self.iteration_start_time.elapsed_time(iteration_end_time) # time reported in milliseconds
         tokens_per_sec = (
             self.global_batch_size * self.sequence_length / (elapsed_time_per_iteration_ms / 1000)
         )  # tokens_per_sec is calculated using sequence_length
