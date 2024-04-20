@@ -12,6 +12,10 @@ from nanotron.parallel.tensor_parallel.nn import (
 )
 from torch import nn
 from torch.nn import init
+from nanotron import logging
+from nanotron.logging import log_rank
+
+logger = logging.get_logger(__name__)
 
 
 NAME_TO_FAN_MAPPING = {
@@ -37,7 +41,7 @@ NAME_TO_FAN_MAPPING = {
 # WIDTH_BASE = 1024
 # TARGET_WIDTH = 1024
 
-STD_BASE = 0.08
+# STD_BASE = 0.02
 EMBED_MULTIPLIER = 10.0
 # BASE_LR = 0.005
 # WIDTH_MULTIPLIER = WIDTH_BASE/TARGET_WIDTH
@@ -69,9 +73,10 @@ EMBED_MULTIPLIER = 10.0
 #     "final_layer_norm.pp_block.bias": BASE_LR,
 # }
 
-WIDTH_BASE = 1024
+WIDTH_BASE = 256
 NUM_LAYERS = None
 WIDTH_MULTIPLIER = None
+PARALLEL_CONTEXT = None
 
 NAME_TO_MULTIPLIER_MAPPING = {
     "token_embedding": EMBED_MULTIPLIER,
@@ -99,7 +104,7 @@ class Parametrizator:
 
 
 class StandardParametrizator(Parametrizator):
-    def __init__(self, config: ModelArgs):
+    def __init__(self, config: ModelArgs, parallel_context):
         super().__init__(config)
         self.MODULE_TO_PARAMETRIZE = {
             TensorParallelColumnLinear: self._parametrize_column_linear,
@@ -210,7 +215,7 @@ class StandardParametrizator(Parametrizator):
             
             
 class SpectralMupParametrizator:
-    def __init__(self, config: ModelArgs):
+    def __init__(self, config: ModelArgs, parallel_context):
         self.config = config
         self.MODULE_TO_PARAMETRIZE = {
             TensorParallelColumnLinear: self._parametrize_mup_weight,
@@ -219,7 +224,7 @@ class SpectralMupParametrizator:
             TritonRMSNorm: self._parametrize_layer_norm,
         }
         
-        STD_BASE = 0.02
+        STD_BASE = 0.08
         # WIDTH_BASE = 1024
         
         global NUM_LAYERS
@@ -237,6 +242,10 @@ class SpectralMupParametrizator:
             "down_proj.weight": (STD_BASE**2)/(2*WIDTH_MULTIPLIER*NUM_LAYERS),
             "lm_head.pp_block.weight": STD_BASE**2,
         }
+        self.parallel_context = parallel_context
+        
+        global PARALLEL_CONTEXT
+        PARALLEL_CONTEXT = parallel_context
         
     def _parametrize_layer_norm(self, param_name: str, module: nn.Module):
         assert "weight" in param_name or "bias" in param_name, f"Unknown parameter {param_name}"
@@ -248,21 +257,30 @@ class SpectralMupParametrizator:
             module.bias.zero_()
 
     def _parametrize_mup_weight(self, param_name: str, module: nn.Module):
-        def find_std(param_name):
+        def find_var(param_name):
             for key in self.NAME_TO_STD_MAPPING:
                 if key in param_name:
                     return self.NAME_TO_STD_MAPPING[key]
 
             return None
         
-        std = find_std(param_name)
-        if std is None:
+        var = find_var(param_name)
+        if var is None:
             raise Exception(f"Parameter {param_name} was not initialized")
 
         data = module.weight if "weight" in param_name else module.bias
+                
+        log_rank(
+            f"param_name: {param_name}, var: {var}",
+            logger=logger,
+            level=logging.INFO,
+            group=self.parallel_context.dp_pg,
+            rank=0,
+        )
         
-        print(f"param_name: {param_name}, std: {std}")
-        init.normal_(data, mean=0.0, std=std)
+        import math
+        
+        init.normal_(data, mean=0.0, std=math.sqrt(var))
         
     def parametrize(self, param_name: str, module: nn.Module):
         if not isinstance(module, tuple(self.MODULE_TO_PARAMETRIZE.keys())):
@@ -376,7 +394,15 @@ class LearningRateForSpectralMup:
         lr = find_lr(param_name)
         if lr is None:
             raise Exception(f"Parameter {param_name} can't find lr")
-
-        print(f"param_name: {param_name}, lr: {lr}")
+        
+        global PARALLEL_CONTEXT
+        
+        log_rank(
+            f"param_name: {param_name}, lr: {lr}",
+            logger=logger,
+            level=logging.INFO,
+            group=PARALLEL_CONTEXT.dp_pg,
+            rank=0,
+        )
         
         return lr

@@ -782,6 +782,17 @@ class LlamaModel(nn.Module):
         }
         for encoder_block in self.decoder:
             hidden_encoder_states = encoder_block(**hidden_encoder_states)
+            
+        mup_l1_norm = hidden_encoder_states["hidden_states"].mean(dim=[0, 1]).abs()  # [hidden_dim]
+        dist.all_reduce(
+            mup_l1_norm, op=dist.ReduceOp.SUM, group=self.parallel_context.tp_pg
+        )  # sum [hidden_dim] across tp ranks
+        mup_l1_norm = mup_l1_norm.mean()
+        dist.all_reduce(mup_l1_norm, op=dist.ReduceOp.AVG, group=self.parallel_context.dp_pg)
+
+        if dist.get_rank() == 0:
+            import wandb
+            wandb.log({"output_l1_norm": mup_l1_norm.cpu().detach().float().numpy(), "width": self.config.hidden_size})
 
         hidden_states = self.final_layer_norm(input=hidden_encoder_states["hidden_states"])["hidden_states"]
 
@@ -921,7 +932,7 @@ class LlamaForTraining(NanotronModel):
         else:
             raise ValueError(f"Unknown init method {init_method}")
 
-        parametrizator = parametrizator_cls(config=config.model)
+        parametrizator = parametrizator_cls(config=config.model, parallel_context=self.parallel_context)
 
         log_rank(
             f"Parametrizing model parameters using {parametrizator.__class__.__name__}",
