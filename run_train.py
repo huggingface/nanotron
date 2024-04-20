@@ -133,7 +133,7 @@ def get_dataloader_from_data_stage(trainer: DistributedTrainer, data: DataArgs):
         )
 
         # Build Nanoset datasets
-        train_dataset, _, _ = NanosetBuilder(nanoset_config).build()
+        train_dataset, _, _ = NanosetBuilder(nanoset_config, trainer.parallel_context.world_pg).build()
 
         # Prepare train dataloaders
         train_dataloader = build_nanoset_dataloader(

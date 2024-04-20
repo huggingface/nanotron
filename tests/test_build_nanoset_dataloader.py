@@ -92,7 +92,7 @@ def _test_build_nanoset_dataloader(
 
     for config, dataset_type in zip(configs, dataset_types):
         # Create Nanosets
-        train_dataset, _, _ = NanosetBuilder(config).build()
+        train_dataset, _, _ = NanosetBuilder(config, parallel_context.world_pg).build()
 
         assert isinstance(train_dataset, dataset_type)
 
@@ -209,7 +209,7 @@ def _test_recover_nanoset_dataloader(
 
     for config in configs:
         # Create Nanosets
-        train_dataset, _, _ = NanosetBuilder(config).build()
+        train_dataset, _, _ = NanosetBuilder(config, parallel_context.world_pg).build()
 
         # Create initial Dataloader
         dataloader = build_nanoset_dataloader(

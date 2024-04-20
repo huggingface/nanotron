@@ -1,14 +1,15 @@
 from typing import Any, List, Type, Union
 
 import numpy
-import torch
 
+from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.data.blended_nanoset import BlendedNanoset
 from nanotron.data.indexed_dataset import MMapIndexedDataset
 from nanotron.data.nanoset import Nanoset
 from nanotron.data.nanoset_configs import NanosetConfig
 from nanotron.data.utils import Split, log_BlendedNanoset_stats, normalize
+from nanotron.utils import main_rank_first
 
 logger = logging.get_logger(__name__)
 
@@ -21,13 +22,12 @@ class NanosetBuilder(object):
     Args:
 
         config (NanosetConfig): The config object which informs dataset creation
+        world_pg (dist.ProcessGroup): World parallel group for creating the Nanosets in main rank first
     """
 
-    def __init__(
-        self,
-        config: NanosetConfig,
-    ):
+    def __init__(self, config: NanosetConfig, world_pg: dist.ProcessGroup):
         self.config = config
+        self.world_pg = world_pg
 
     def build(self) -> List[Union[BlendedNanoset, Nanoset]]:
         """
@@ -166,17 +166,7 @@ class NanosetBuilder(object):
             DistributedDataset: The DistributedDataset instantion
         """
 
-        rank = torch.distributed.get_rank()
-        dataset = None
-
-        # First, build on rank 0
-        if rank == 0:
-            dataset = cls(*args)
-
-        torch.distributed.barrier()
-
-        # Then, in the other ranks
-        if rank != 0:
+        with main_rank_first(self.world_pg):
             dataset = cls(*args)
 
         return dataset
@@ -195,7 +185,7 @@ def get_split_indices(split: List[float], number_of_tokens: int, sequence_length
 
     Returns:
         List[int]: The indices for all three splits e.g. [0, 800, 900, 1000] for a 1024000 token dataset,
-        1024 sequence length and a [8, 1, 1] split
+        1024 sequence length and a [0.8, 0.1, 0.1] split
     """
     number_of_samples = int(number_of_tokens / sequence_length)
     split_indices = [0]
