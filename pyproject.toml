@@ -21,8 +21,6 @@ dependencies = [
     "safetensors",
     "dacite",
     "tqdm",
-    "transformers",
-    "datasets"
 ]
 
 [tool.setuptools.packages.find]
@@ -47,6 +45,11 @@ test = [
 
 fast-modeling = [
     "flash-attn>=2.5.0",
+]
+
+nanosets = [
+     "transformers",
+     "datasets",
 ]
 
 [build-system]

@@ -1,4 +1,10 @@
-# Nanoset
+# Nanosets
+
+## Install
+To use `Nanosets`, it's necessary to install Nanotron with the `nanosets` flavor.
+```
+pip install -e '.[nanosets]'
+```
 
 ## Data pre-processing
 
@@ -18,11 +24,11 @@ The dataset is then processed into a mmap format for training using the [`tools/
 python tools/preprocess_data.py \
        --input data/my_corpus.json \
        --output-prefix data/processed-datasets/my-llama2-dataset \
-       --pretrained-model-name-or-path models/Llama-2-7b \
+       --tokenizer-name-or-path meta-llama/Llama-2-7b-hf \
        --num-workers 128
 </pre>
 
-In `--pretrained-model-name-or-path`, we will have to specify a tokenizer in the same way as we do when using `AutoTokenizers.from_pretrained(...)`.
+In `--tokenizer-name-or-path`, we will have to specify a tokenizer in the same way as we do when using `AutoTokenizers.from_pretrained(...)`.
 
 The output will be one file named, in this case, `my-llama2-dataset_input_ids.npy`. We will then have to specify this file in the `data_path` field in the config file.
 
