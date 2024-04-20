@@ -46,7 +46,7 @@ def preprocess_dummy_dataset(path_to_json: str):
         input=path_to_json + ".json",
         column="text",
         output_prefix=path_to_json,
-        pretrained_model_name_or_path="openai-community/gpt2",
+        tokenizer_name_or_path="openai-community/gpt2",
         num_workers=int(min(os.cpu_count(), 4)),
         add_special_tokens=False,
     )

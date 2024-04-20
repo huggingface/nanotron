@@ -4,6 +4,7 @@ import os
 import shutil
 
 import numpy as np
+from tqdm import tqdm
 from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
 from datasets import Dataset, concatenate_datasets, load_dataset
@@ -13,9 +14,10 @@ def preprocess_shard(
     dataset_shard: Dataset, output_file: str, tokenizer: PreTrainedTokenizerBase, column: str, add_special_tokens: bool
 ):
     dataset_shard = dataset_shard.map(
-        lambda x: {"input_ids": tokenizer.encode(x, add_special_tokens=add_special_tokens)},
+        lambda x: {"input_ids": tokenizer(x, add_special_tokens=add_special_tokens).input_ids},
         input_columns=column,
-        batched=False,
+        batched=True,
+        desc="Tokenizing Dataset",
         remove_columns=[column],
     )
     input_ids_file = open(output_file, "wb")
@@ -36,7 +38,7 @@ def get_args():
 
     group = parser.add_argument_group(title="tokenizer")
     group.add_argument(
-        "--pretrained-model-name-or-path",
+        "--tokenizer-name-or-path",
         type=str,
         required=True,
         help="A path to a directory containing vocabulary files required by the tokenizer or the model id of a predefined tokenizer hosted inside a model repo on the Hugging Face Hub.",
@@ -67,13 +69,15 @@ def main(args):
 
     if args.input.endswith(".json"):  # For processing JSON files (Cross compatibility with other projects)
         ds = load_dataset("json", data_files=args.input)
-        ds = concatenate_datasets([ds[splits] for splits in ds.keys()])  # Return DatasetDict
+        ds = concatenate_datasets(
+            [ds[splits] for splits in ds.keys()]
+        )  # load_dataset returns DatasetDict and we want a Dataset
     else:
         ds = load_dataset(args.input, split=args.split, num_proc=args.num_workers)
 
     ds = ds.select_columns(args.column)
 
-    tokenizer = AutoTokenizer.from_pretrained(args.pretrained_model_name_or_path)
+    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_name_or_path)
 
     # Create tmp directory for worker outputs
     tmp_folder = os.path.abspath(os.path.join(args.output_prefix, os.pardir, "tmp"))
@@ -103,10 +107,9 @@ def main(args):
     for p in processes:
         p.join()
 
-    print("Merging worker output files...")
     output_file = f"{args.output_prefix}_input_ids.npy"
     input_ids_file = open(output_file, "wb")
-    for worker_output_file in workers_output_files:
+    for worker_output_file in tqdm(workers_output_files, desc="Merging worker output files"):
         with open(worker_output_file, "rb") as f:
             shutil.copyfileobj(f, input_ids_file)
         os.remove(worker_output_file)
