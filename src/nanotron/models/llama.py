@@ -667,7 +667,7 @@ class Embedding(nn.Module, AttachableStore):
 
         # Format input in `[seq_length, batch_size]` to support high TP with low batch_size
         input_ids = input_ids.transpose(0, 1)
-        input_embeds = self.token_embedding(input_ids)
+        input_embeds = self.token_embedding(input_ids)        
         return {"input_embeds": input_embeds}
 
 
@@ -754,6 +754,7 @@ class LlamaModel(nn.Module):
             module_input_keys={"x"},
             module_output_keys={"output"},
         )
+        self.is_using_mup = config.is_using_mup
 
     def forward(
         self,
@@ -770,9 +771,13 @@ class LlamaModel(nn.Module):
         # all tensors are optional as most ranks don't need anything from the dataloader.
 
         output = self.token_position_embeddings(input_ids=input_ids, input_mask=input_mask)
+        output = output["input_embeds"]
+        if self.is_using_mup:
+            from nanotron.scaling.parametrization import NAME_TO_MULTIPLIER_MAPPING
+            output = output * torch.tensor(NAME_TO_MULTIPLIER_MAPPING["token_embedding"], device=output.device, dtype=output.dtype)
 
         hidden_encoder_states = {
-            "hidden_states": output["input_embeds"],
+            "hidden_states": output,
             "sequence_mask": input_mask,
         }
         for encoder_block in self.decoder:
@@ -781,6 +786,10 @@ class LlamaModel(nn.Module):
         hidden_states = self.final_layer_norm(input=hidden_encoder_states["hidden_states"])["hidden_states"]
 
         sharded_logits = self.lm_head(x=hidden_states)["logits"]
+        
+        if self.is_using_mup:
+            from nanotron.scaling.parametrization import NAME_TO_MULTIPLIER_MAPPING
+            sharded_logits = sharded_logits * torch.tensor(NAME_TO_MULTIPLIER_MAPPING["lm_head"], device=output.device, dtype=output.dtype)
 
         fp32_sharded_logits = self.cast_to_fp32(x=sharded_logits)["output"]
 
@@ -945,7 +954,7 @@ class LlamaForTraining(NanotronModel):
                 continue
 
             module = model.get_submodule(module_name)
-            parametrizator.parametrize(param_name, module)
+            parametrizator.parametrize(full_param_name, module)
 
             assert full_param_name not in initialized_parameters
             initialized_parameters.add(full_param_name)
