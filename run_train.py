@@ -8,7 +8,7 @@ torchrun --nproc_per_node=8 run_train.py --config-file examples/config_tiny_llam
 ```
 """
 import argparse
-from typing import Dict, cast
+from typing import Dict, List, cast
 
 from nanotron import logging
 from nanotron.config import (
@@ -41,8 +41,15 @@ except ImportError:
 logger = logging.get_logger(__name__)
 
 
-def get_dataloader_from_data_stage(trainer: DistributedTrainer, data: DataArgs):
+def get_dataloader_from_data_stage(
+    trainer: DistributedTrainer,
+    data: DataArgs,
+    consumed_train_samples: int,
+    num_remaining_train_steps: int,
+):
     """Returns a dataloader for training."""
+    assert consumed_train_samples >= 0, "consumed_train_samples should be greater than 0"
+    assert num_remaining_train_steps >= 0, "num_remaining_train_steps should be greater than 0"
 
     # First, we need to know which ranks to feed the dataloader to
     input_pp_rank, output_pp_rank = get_input_output_pp_ranks(model=trainer.model)
@@ -105,17 +112,23 @@ def get_dataloader_from_data_stage(trainer: DistributedTrainer, data: DataArgs):
                 input_pp_rank=input_pp_rank,
                 output_pp_rank=output_pp_rank,
                 micro_batch_size=trainer.micro_batch_size,
-                consumed_train_samples=trainer.consumed_train_samples,
+                consumed_train_samples=consumed_train_samples,
                 dataloader_num_workers=data.num_loading_workers,
                 seed_worker=data.seed,
                 dataloader_drop_last=True,
             )
             # Check if we have enough samples for train_steps
+
+            # NOTE: compute the remaining number of tokens that need for training
+
             total_tokens_dataset = len(dataloader.dataset) * trainer.sequence_length
+            # num_tokens_needed_for_training = (
+            #     (trainer.config.tokens.train_steps - trainer.start_iteration_step)
+            #     * trainer.global_batch_size
+            #     * trainer.sequence_length
+            # )
             num_tokens_needed_for_training = (
-                (trainer.config.tokens.train_steps - trainer.start_iteration_step)
-                * trainer.global_batch_size
-                * trainer.sequence_length
+                num_remaining_train_steps * trainer.global_batch_size * trainer.sequence_length
             )
             assert num_tokens_needed_for_training <= total_tokens_dataset, (
                 f"Dataset is too small for steps ({total_tokens_dataset} < {num_tokens_needed_for_training}), "
@@ -127,17 +140,76 @@ def get_dataloader_from_data_stage(trainer: DistributedTrainer, data: DataArgs):
     return dataloader
 
 
+def _compute_num_remaining_train_steps(total_train_steps: int, data_stages: List[DatasetStageArgs]) -> int:
+    """
+    Compute the number of remaining training steps for each data stage based on checkpoint.
+    """
+    remaining_train_steps = []
+    for stage_idx, stage in enumerate(data_stages):
+        stage = cast(DatasetStageArgs, stage)
+        if stage_idx == len(data_stages) - 1:
+            last_train_step = total_train_steps
+        else:
+            last_train_step = data_stages[stage_idx + 1].start_training_step
+
+        remaining_train_steps.append(last_train_step - stage.start_training_step)
+
+    return remaining_train_steps
+
+
 def get_dataloader(trainer: DistributedTrainer) -> Dict[str, DataLoader]:
-    sorted_stages = sorted(trainer.config.data_stages, key=lambda stage: stage.start_training_step)
+    data_stages = trainer.metadata.data_stages
     dataloaders = {}
-    for idx, stage in enumerate(sorted_stages):
+
+    def find_consumed_train_samples(start_training_step) -> int:
+        return next(
+            (
+                stage.consumed_train_samples
+                for stage in data_stages
+                if stage.start_training_step == start_training_step
+            ),
+            None,
+        )
+
+    remaining_train_steps = _compute_num_remaining_train_steps(
+        trainer.config.tokens.train_steps, trainer.config.data_stages
+    )
+    for stage_idx, stage in enumerate(trainer.config.data_stages):
         # NOTE: we only create the dataloader for the first stage,
         # then we lazy initialize the dataloader for the other stages
         stage = cast(DatasetStageArgs, stage)
+        # assert data_stages[stage_idx].start_training_step == stage.start_training_step, "Mismatch the order of data stages in the config file and the checkpoint."
+
+        consumed_train_samples = find_consumed_train_samples(stage.start_training_step)
+        assert (
+            consumed_train_samples is not None
+        ), f"Cannot find consumed_train_samples for stage {stage.start_training_step} in the checkpoint"
+
+        # TODO: compute the number of remaining training steps for each data stage
+
+        num_remaining_train_steps = remaining_train_steps[stage_idx]
+
+        log_rank(
+            f"Stage {stage.name} has {num_remaining_train_steps} remaining training steps and has consumed {consumed_train_samples} samples",
+            logger=logger,
+            level=logging.INFO,
+            rank=0,
+        )
+
         dataloader = (
-            get_dataloader_from_data_stage(trainer, stage.data)
-            if idx == 0
-            else lambda stage=stage: get_dataloader_from_data_stage(trainer, stage.data)
+            get_dataloader_from_data_stage(
+                trainer,
+                stage.data,
+                consumed_train_samples=consumed_train_samples,
+                num_remaining_train_steps=num_remaining_train_steps,
+            )
+            if stage_idx == 0
+            else lambda stage=stage: get_dataloader_from_data_stage(
+                trainer,
+                stage.data,
+                consumed_train_samples=consumed_train_samples,
+                num_remaining_train_steps=num_remaining_train_steps,
+            )
         )
         dataloaders[stage.name] = dataloader
     return dataloaders

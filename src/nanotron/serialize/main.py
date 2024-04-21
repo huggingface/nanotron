@@ -17,7 +17,7 @@ from nanotron.sanity_checks import (
     assert_tensor_synced_across_pg,
     check_optim_state_in_sync,
 )
-from nanotron.serialize.metadata import CheckpointMetadata, load_meta, save_meta
+from nanotron.serialize.metadata import CheckpointMetadata, TrainingMetadata, load_meta, save_meta
 from nanotron.serialize.optimizer import (
     load_lr_scheduler,
     load_optimizer,
@@ -51,16 +51,17 @@ def save(
     optimizer: optim.BaseOptimizer,
     lr_scheduler: torch.optim.lr_scheduler.LRScheduler,
     parallel_context: ParallelContext,
+    training_metadata: TrainingMetadata,
     root_folder: Path,
     should_save_config: bool = True,
     should_save_model: bool = True,
     should_save_optimizer: bool = True,
     should_save_lr_scheduler: bool = True,
-    checkpoint_metadata: dict = None,
     sanity_checks: bool = True,
 ) -> None:
-    if checkpoint_metadata is None:
-        checkpoint_metadata = {}
+    assert isinstance(training_metadata, TrainingMetadata)
+    # if checkpoint_metadata is None:
+    #     checkpoint_metadata = {}
 
     try:
         if should_save_config:
@@ -98,6 +99,7 @@ def save(
         raise e
     try:
         if should_save_lr_scheduler:
+            # assert len(lr_scheduler.lambdas) == optimizer.param_groups
             save_lr_scheduler(
                 lr_scheduler=lr_scheduler,
                 parallel_context=parallel_context,
@@ -112,7 +114,7 @@ def save(
         )
         raise e
 
-    save_meta(root_folder=root_folder, parallel_context=parallel_context, checkpoint_metadata=checkpoint_metadata)
+    save_meta(root_folder=root_folder, parallel_context=parallel_context, training_metadata=training_metadata)
 
     # TODO @thomas21: sanity check, not sure whether that needs to happen at testing or now (depends how much it costs)
     ###
