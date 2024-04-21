@@ -34,9 +34,12 @@ from nanotron.config import (
     SpectralMupInit,
     get_config_from_file,
 )
+from nanotron.constants import MODEL_CONFIG_FILE_NAME
 from nanotron.dataloader import sanity_check_dataloader
 from nanotron.helpers import (
     _vocab_size_with_padding,
+    compute_remain_train_steps_of_a_data_stage_from_ckp,
+    get_consumed_train_samples_of_a_data_stage_from_ckp,
     get_profiler,
     init_optimizer_and_grad_accumulator,
     init_random_states,
@@ -351,19 +354,22 @@ class DistributedTrainer:
 
         dataloader = None
 
+        def find_stage_idx_to_resume():
+            reversed_data_stages = sorted(self.config.data_stages, key=lambda x: x.start_training_step, reverse=True)
+            for idx, stage in enumerate(reversed_data_stages):
+                if self.iteration_step >= stage.start_training_step:
+                    return len(self.config.data_stages) - idx - 1
+            return None
+
+        stage_idx_to_resume = find_stage_idx_to_resume()
+
         for stage_idx, stage in enumerate(self.config.data_stages):
             if stage_idx < self.metadata.last_stage_idx:
                 continue
 
             stage = cast(DatasetStageArgs, stage)
 
-            is_resume_from_training = (
-                self.iteration_step >= stage.start_training_step and self.current_dataloader is None
-            )
-
-            if is_resume_from_training:
-                log_rank(f"Resuming training from stage {stage.name}", logger=logger, level=logging.INFO, rank=0)
-
+            is_resume_from_training = self.current_dataloader is None and stage_idx_to_resume == stage_idx
             if (
                 stage.start_training_step == 0 and stage.start_training_step == self.iteration_step
             ) or is_resume_from_training:
@@ -376,6 +382,18 @@ class DistributedTrainer:
                         clear_dataloader_from_memory(prev_dataloader, stage_name=stage.name)
 
                 self.metadata.last_stage_idx = stage_idx
+
+                if is_resume_from_training:
+                    remaining_train_steps = compute_remain_train_steps_of_a_data_stage_from_ckp(
+                        stage, self.config, self.metadata
+                    )
+                    consumed_train_steps = get_consumed_train_samples_of_a_data_stage_from_ckp(stage, self.metadata)
+                    log_rank(
+                        f"Resuming training from stage {stage.name}, it has trained for {consumed_train_steps} samples and has {remaining_train_steps} remaining train steps",
+                        logger=logger,
+                        level=logging.INFO,
+                        rank=0,
+                    )
 
                 log_rank(
                     f"[Training Stage: {stage.name}] Switching to a new dataset",
@@ -908,9 +926,9 @@ class DistributedTrainer:
             fo.write(f"{self.iteration_step}")
 
         if hasattr(self.model_config, "to_json_file"):
-            self.model_config.to_json_file(checkpoint_path / "model_config.json")
+            self.model_config.to_json_file(checkpoint_path / MODEL_CONFIG_FILE_NAME)
         else:
-            with open(checkpoint_path / "model_config.json", mode="w") as fo:
+            with open(checkpoint_path / MODEL_CONFIG_FILE_NAME, mode="w") as fo:
                 fo.write(json.dumps(asdict(self.model_config)))
 
         self.post_save_checkpoint()

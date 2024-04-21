@@ -1,14 +1,16 @@
 from pathlib import Path
-from typing import Optional
+from typing import Optional, cast
 
 import torch
 from torch import nn
 from torch.nn.parallel import DistributedDataParallel
+from torch.optim.lr_scheduler import LambdaLR
 
 from nanotron import distributed as dist
 from nanotron import logging
 from nanotron import optim as optim
 from nanotron.config import Config
+from nanotron.constants import MODEL_CONFIG_FILE_NAME
 from nanotron.distributed import get_global_rank
 from nanotron.logging import log_rank
 from nanotron.parallel import ParallelContext
@@ -60,8 +62,6 @@ def save(
     sanity_checks: bool = True,
 ) -> None:
     assert isinstance(training_metadata, TrainingMetadata)
-    # if checkpoint_metadata is None:
-    #     checkpoint_metadata = {}
 
     try:
         if should_save_config:
@@ -99,7 +99,11 @@ def save(
         raise e
     try:
         if should_save_lr_scheduler:
-            # assert len(lr_scheduler.lambdas) == optimizer.param_groups
+            lr_scheduler = cast(LambdaLR, lr_scheduler)
+            assert len(lr_scheduler.lr_lambdas) == len(
+                optimizer.param_groups
+            ), "The number of lambdas functions in the scheduler should be equal to the number of parameter groups in the optimizer."
+
             save_lr_scheduler(
                 lr_scheduler=lr_scheduler,
                 parallel_context=parallel_context,
@@ -196,7 +200,6 @@ def save(
                     rtol=0,
                     msg=lambda msg: f"tensor at {current_state_dict['names'][index]} doesn't match with our reference. Optimizer key: {name}\nCur: {tensor}\nRef: {reference_tensor}\n{msg}",
                 )
-        ###
 
     dist.barrier(parallel_context.world_pg)
 
@@ -258,7 +261,7 @@ def parse_ckpt_path(config: Config) -> Optional[Path]:
             load_from_candidate = int(fi.read())
         checkpoint_path = config.checkpoints.resume_checkpoint_path / str(load_from_candidate)
 
-    elif (config.checkpoints.resume_checkpoint_path / "model_config.json").exists():
+    elif (config.checkpoints.resume_checkpoint_path / MODEL_CONFIG_FILE_NAME).exists():
         # we assume that the checkpoint path is a path to a checkpoint
         checkpoint_path = config.checkpoints.resume_checkpoint_path
 
