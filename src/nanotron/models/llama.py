@@ -26,6 +26,7 @@ from nanotron.config.models_config import RandomInit, SpectralMupInit
 from nanotron.generation.generate_store import AttachableStore
 from nanotron.logging import log_rank
 from nanotron.models import NanotronModel
+from nanotron.models.attention import InfiniAttention
 from nanotron.nn.activations import ACT2FN
 from nanotron.nn.layer_norm import TritonRMSNorm
 from nanotron.parallel import ParallelContext
@@ -348,6 +349,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         self,
         hidden_states,  # [seq_length, batch_size, hidden_size]
         sequence_mask,  # [batch_size, seq_length]
+        return_qkv_states: bool = False,
     ):
         from flash_attn import bert_padding
         from flash_attn.flash_attn_interface import (
@@ -595,7 +597,9 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         )
         output = self.o_proj(attention_output)
 
-        return {"hidden_states": output, "sequence_mask": sequence_mask}
+        return_outputs = {"hidden_states": output, "sequence_mask": sequence_mask}
+        return_outputs["qkv_states"] = (query_states, key_states, value_states) if return_qkv_states else ()
+        return return_outputs
 
 
 class LlamaDecoderLayer(nn.Module):
@@ -608,7 +612,14 @@ class LlamaDecoderLayer(nn.Module):
     ):
         super().__init__()
         self.input_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.attn = CausalSelfAttention(
+        # self.attn = CausalSelfAttention(
+        #     config=config,
+        #     parallel_config=parallel_config,
+        #     tp_pg=tp_pg,
+        #     layer_idx=layer_idx,
+        # )
+
+        self.attn = InfiniAttention(
             config=config,
             parallel_config=parallel_config,
             tp_pg=tp_pg,
