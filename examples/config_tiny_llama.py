@@ -2,6 +2,7 @@
 import os
 
 from nanotron.config import (
+    AdamWOptimizerArgs,
     CheckpointsArgs,
     Config,
     DataArgs,
@@ -62,11 +63,13 @@ optimizer = OptimizerArgs(
     weight_decay=0.01,
     clip_grad=1.0,
     accumulate_grad_in_fp32=True,
-    adam_eps=1e-08,
-    adam_beta1=0.9,
-    adam_beta2=0.95,
-    torch_adam_is_fused=True,
     learning_rate_scheduler=learning_rate,
+    optimizer_factory=AdamWOptimizerArgs(
+        adam_eps=1e-08,
+        adam_beta1=0.9,
+        adam_beta2=0.95,
+        torch_adam_is_fused=True,
+    ),
 )
 
 parallelism = ParallelismArgs(

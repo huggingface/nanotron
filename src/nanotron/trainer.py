@@ -378,13 +378,6 @@ class DistributedTrainer:
                         rank=0,
                     )
 
-                log_rank(
-                    f"[Training Stage: {stage.name}] Switching to a new dataset",
-                    logger=logger,
-                    level=logging.INFO,
-                    rank=0,
-                )
-
                 dataloader = dataloaders[stage.name]
                 # NOTE: if a dataloader is lazy initialized, we need to call it to initialize it
                 dataloader = dataloader() if callable(dataloader) else dataloader
