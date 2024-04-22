@@ -65,6 +65,10 @@ class NanotronModel(nn.Module, metaclass=ABCMeta):
         """Tie custom parameters. For example for MQA marks kv heads as tied."""
         pass
 
+    def get_named_params_without_weight_decay(self) -> Iterator[Tuple[str, "NanotronParameter"]]:
+        """Return named parameters without weight decay. By default, we just use the `optimizer_args.weight_decay` attribute."""
+        return []
+
     @staticmethod
     def get_embeddings_lm_head_tied_names() -> list[str]:
         """Returns the names of the embeddings and lm_head weights that are tied together. Returns empty list if not tied.

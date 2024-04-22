@@ -190,7 +190,11 @@ def get_custom_weight_decay_for_named_parameters(
 
     named_param_groups_with_custom_weight_decay = []
 
-    exclude_named_params = model.model.get_named_params_without_weight_decay()
+    exclude_named_params = model.get_named_params_without_weight_decay()
+
+    if len(exclude_named_params) == 0:
+        # Case where there is no parameter to exclude from weight decay
+        return [{"named_params": named_parameters, "weight_decay": weight_decay}]
 
     for name, param in named_parameters:
         if param.is_tied:
@@ -320,7 +324,15 @@ def init_optimizer_and_grad_accumulator(
         weight_decay=optimizer_args.weight_decay,
     )
 
-    named_param_groups = merge_named_param_groups(named_param_groups_with_lr, named_param_groups_with_weight_decay)
+    if len(named_param_groups_with_lr) != 1 and len(named_param_groups_with_weight_decay) != 1:
+        raise ValueError("Custom weight decays is not compatible with muP yet. Please open an issue...")
+    elif len(named_param_groups_with_lr) != 1:
+        named_param_groups = named_param_groups_with_weight_decay
+    elif len(named_param_groups_with_weight_decay) != 1:
+        named_param_groups = named_param_groups_with_lr
+    else:
+        # TODO: fix this
+        named_param_groups = merge_named_param_groups(named_param_groups_with_lr, named_param_groups_with_weight_decay)
 
     # Basic optimizer builder
     def basic_optimizer_builder(named_param_groups):

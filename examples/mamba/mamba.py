@@ -953,3 +953,6 @@ class MambaForTraining(NanotronModel):
     def get_flops_per_sec(self, iteration_time_in_sec, sequence_length, global_batch_size):
         """Get flops per second for a given model"""
         return self.model.get_flops_per_sec(iteration_time_in_sec, sequence_length, global_batch_size)
+
+    def get_named_params_without_weight_decay(self):
+        return self.model.get_named_params_without_weight_decay()
