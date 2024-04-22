@@ -216,27 +216,12 @@ class DistributedTrainer:
             )
             assert isinstance(checkpoint_metadata.metas, TrainingMetadata)
             log_rank(str(checkpoint_metadata), logger=logger, level=logging.INFO, rank=0)
-
-            # self.start_iteration_step = checkpoint_metadata.metas["last_train_step"]
-            # self.consumed_train_samples = checkpoint_metadata.metas["consumed_train_samples"]
-
             self.metadata: TrainingMetadata = checkpoint_metadata.metas
-
-            # self.training_metadata: TrainingMetadata = checkpoint_metadata.metas
             # NOTE: we should not change data stages
             assert (
                 self.config.tokens.train_steps > self.metadata.last_train_step
             ), f"Loaded checkpoint has already trained {self.metadata.last_train_step} batches, you need to specify a higher `config.tokens.train_steps`"
         else:
-            # self.start_iteration_step = 0
-            # self.consumed_train_samples = 0
-
-            # self.training_metadata: TrainingMetadata = TrainingMetadata(
-            #     data={},
-            #     consumed_train_samples=0,
-            #     last_train_step=0,
-            # )
-
             data_stages = [
                 DataStageMetadata(
                     name=stage.name, start_training_step=stage.start_training_step, consumed_train_samples=0
@@ -449,7 +434,6 @@ class DistributedTrainer:
                 outputs, loss_avg = self.training_step(dataloader=self.current_dataloader)
 
                 # Training Logs
-                # self.consumed_train_samples += self.global_batch_size
                 # TODO(xrsrke): refactor using callbacks would be better
                 self.metadata.consumed_train_samples += self.global_batch_size
                 self.metadata.last_train_step = self.iteration_step
@@ -874,25 +858,6 @@ class DistributedTrainer:
         dist.barrier(self.parallel_context.world_pg)
 
         log_rank(f"Saving checkpoint at {checkpoint_path}", logger=logger, level=logging.WARNING, rank=0)
-
-        # checkpoint_metadata = {
-        #     "last_train_step": self.iteration_step,
-        #     # TODO: @nouamanetazi: Add more metadata to the checkpoint to be able to resume dataloader states properly
-        #     "consumed_train_samples": self.consumed_train_samples,
-        # }
-
-        # if hasattr(self.config, "data_stages") and self.config.data_stages is not None:
-        #     data = [DataStageMetadata(name=stage.name, start_training_step=stage.start_training_step, consumed_train_samples=0) for stage in self.config.data_stages]
-
-        # NOTE: support resume in 1st data stage
-        # support
-
-        # training_metadata = TrainingMetadata(
-        #     consumed_train_samples=self.consumed_train_samples,
-        #     last_train_step=self.iteration_step,
-        #     current_data_stage_idx=0,
-        #     data={},
-        # )
 
         # Update step/samples numbers before we save the config
         self.config.general.step = self.metadata.last_train_step
