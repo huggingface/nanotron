@@ -599,6 +599,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
 
         return_outputs = {"hidden_states": output, "sequence_mask": sequence_mask}
         return_outputs["qkv_states"] = (query_states, key_states, value_states) if return_qkv_states else ()
+        return_outputs["attention_output"] = attention_output
         return return_outputs
 
 
