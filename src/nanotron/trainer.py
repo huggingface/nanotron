@@ -370,9 +370,7 @@ class DistributedTrainer:
             stage = cast(DatasetStageArgs, stage)
 
             is_resume_from_training = self.current_dataloader is None and stage_idx_to_resume == stage_idx
-            if (
-                stage.start_training_step == 0 and stage.start_training_step == self.iteration_step
-            ) or is_resume_from_training:
+            if (stage.start_training_step == self.iteration_step) or is_resume_from_training:
                 if self.current_dataloader is not None:
                     prev_stage_name = self.config.data_stages[stage_idx - 1].name
                     prev_dataloader = dataloaders[prev_stage_name]
