@@ -241,24 +241,28 @@ def get_custom_lr_for_named_parameters(
         rank=0,
     )
 
-    # NOTE: since in the case of pipeline parallelism, each rank only has a subset of the model
-    # so we only get the parameters that are in the current rank
-    learning_rate_mapper = lr_mapper_cls(names_to_modules=model.named_modules_in_pp_rank, lr=lr)
+    if parametrization_method == ParametrizationMethod.STANDARD:
+        named_param_groups_with_custom_lr = [{"named_params": named_parameters, "lr": lr}]
 
-    named_param_groups_with_custom_lr = []
-    for (
-        name,
-        param,
-    ) in named_parameters:
-        learning_rate = learning_rate_mapper.get_lr(name, param)
-        assert isinstance(learning_rate, float), f"Expected a float, got {learning_rate} for parameter {name}"
-        named_param_groups_with_custom_lr.append({"named_params": [(name, param)], "lr": learning_rate})
+    else:
+        # NOTE: since in the case of pipeline parallelism, each rank only has a subset of the model
+        # so we only get the parameters that are in the current rank
+        learning_rate_mapper = lr_mapper_cls(names_to_modules=model.named_modules_in_pp_rank, lr=lr)
 
-    log_rank(
-        f"[Optimizer Building] Creating {len(named_param_groups_with_custom_lr)} param groups with custom learning rates",
-        logger=logger,
-        level=logging.DEBUG,
-    )
+        named_param_groups_with_custom_lr = []
+        for (
+            name,
+            param,
+        ) in named_parameters:
+            learning_rate = learning_rate_mapper.get_lr(name, param)
+            assert isinstance(learning_rate, float), f"Expected a float, got {learning_rate} for parameter {name}"
+            named_param_groups_with_custom_lr.append({"named_params": [(name, param)], "lr": learning_rate})
+
+        log_rank(
+            f"[Optimizer Building] Creating {len(named_param_groups_with_custom_lr)} param groups with custom learning rates",
+            logger=logger,
+            level=logging.DEBUG,
+        )
 
     return named_param_groups_with_custom_lr
 
