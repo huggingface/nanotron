@@ -50,7 +50,6 @@ class LlamaConfig:
     tie_word_embeddings: bool = False
     use_cache: bool = True
     vocab_size: int = 32000
-    for_inference: bool = False  # if true, replace TritonRMSNorm with LayerNorm for a fixed output. use TritonRMSNorm for training as it's faster
 
     def __post_init__(self):
         # NOTE: user don't set self._init_method, ModelArgs will set it

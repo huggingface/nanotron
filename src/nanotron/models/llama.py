@@ -14,6 +14,7 @@
 # limitations under the License.
 """PyTorch LLaMa model."""
 
+import os
 from typing import Dict, Optional, Union
 
 import torch
@@ -27,7 +28,6 @@ from nanotron.generation.generate_store import AttachableStore
 from nanotron.logging import log_rank
 from nanotron.models import NanotronModel
 from nanotron.nn.activations import ACT2FN
-from nanotron.nn.layer_norm import TritonRMSNorm
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter
 from nanotron.parallel.pipeline_parallel.block import PipelineBlock, TensorPointer
@@ -45,20 +45,27 @@ from nanotron.utils import checkpoint_method
 
 logger = logging.get_logger(__name__)
 
+USE_DETERMINISTIC_OPS = os.getenv("USE_DETERMINISTIC_OPS", False)
 
-class RMSNorm(nn.Module):
-    def __init__(self, hidden_size: int, eps: float = 1e-6):
-        super().__init__()
-        self.eps = eps
-        self.weight = nn.Parameter(torch.zeros(hidden_size))
+# TritonRMSNorm is faster but generate randomized results.
+if USE_DETERMINISTIC_OPS is True:
+    from nanotron.nn.layer_norm import TritonRMSNorm as RMSNorm
+# Replace TritonRMSNorm with RMSNorm for a deterministic output.
+else:
 
-    def _norm(self, input: torch.Tensor) -> torch.Tensor:
-        return input * torch.rsqrt(input.pow(2).mean(-1, keepdim=True) + self.eps)
+    class RMSNorm(nn.Module):
+        def __init__(self, hidden_size: int, eps: float = 1e-6):
+            super().__init__()
+            self.eps = eps
+            self.weight = nn.Parameter(torch.zeros(hidden_size))
 
-    def forward(self, input: torch.Tensor) -> torch.Tensor:
-        output = self._norm(input.float())
-        output = output * (1.0 + self.weight.float())
-        return output.type_as(input)
+        def _norm(self, input: torch.Tensor) -> torch.Tensor:
+            return input * torch.rsqrt(input.pow(2).mean(-1, keepdim=True) + self.eps)
+
+        def forward(self, input: torch.Tensor) -> torch.Tensor:
+            output = self._norm(input.float())
+            output = output * (1.0 + self.weight.float())
+            return output.type_as(input)
 
 
 class RotaryEmbedding(nn.Module):
@@ -620,26 +627,17 @@ class LlamaDecoderLayer(nn.Module):
         parallel_config: Optional[ParallelismArgs],
         tp_pg: dist.ProcessGroup,
         layer_idx: int,
-        for_inference: bool = False,
     ):
         super().__init__()
-        # TritonRMSNorm is faster but generate randomized results. Use TritonRMSNorm for training as it's faster
-        if not for_inference:
-            self.input_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        else:
-            # replace TritonRMSNorm with RMSNorm for a deterministic output.
-            self.input_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.input_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.attn = CausalSelfAttention(
             config=config,
             parallel_config=parallel_config,
             tp_pg=tp_pg,
             layer_idx=layer_idx,
         )
-        if not for_inference:
-            self.post_attention_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        else:
-            # replace TritonRMSNorm with RMSNorm for a deterministic output.
-            self.post_attention_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.post_attention_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+
         self.mlp = MLP(config=config, parallel_config=parallel_config, tp_pg=tp_pg)
 
     def forward(
@@ -703,7 +701,6 @@ class LlamaModel(nn.Module):
         config: LlamaConfig,
         parallel_context: ParallelContext,
         parallel_config: Optional[ParallelismArgs],
-        for_inference: bool = False,
     ):
         super().__init__()
 
@@ -739,7 +736,6 @@ class LlamaModel(nn.Module):
                         "parallel_config": parallel_config,
                         "tp_pg": parallel_context.tp_pg,
                         "layer_idx": layer_idx,
-                        "for_inference": for_inference,
                     },
                     module_input_keys={"hidden_states", "sequence_mask"},
                     module_output_keys={"hidden_states", "sequence_mask"},
@@ -750,7 +746,7 @@ class LlamaModel(nn.Module):
 
         self.final_layer_norm = PipelineBlock(
             p2p=self.p2p,
-            module_builder=TritonRMSNorm if not for_inference else RMSNorm,
+            module_builder=RMSNorm,
             module_kwargs={"hidden_size": config.hidden_size, "eps": config.rms_norm_eps},
             module_input_keys={"input"},
             module_output_keys={"hidden_states"},
@@ -887,14 +883,12 @@ class LlamaForTraining(NanotronModel):
         parallel_context: ParallelContext,
         parallel_config: Optional[ParallelismArgs],
         random_states: Optional[RandomStates] = None,
-        for_inference: bool = False,
     ):
         super().__init__()
         self.model = LlamaModel(
             config=config,
             parallel_context=parallel_context,
             parallel_config=parallel_config,
-            for_inference=for_inference,
         )
         self.loss = PipelineBlock(
             p2p=self.model.p2p,
