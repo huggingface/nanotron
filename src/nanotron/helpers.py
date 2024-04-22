@@ -18,7 +18,7 @@ from torch.profiler import ProfilerActivity, profile, tensorboard_trace_handler
 
 from nanotron import distributed as dist
 from nanotron import logging
-from nanotron.config import Config, LRSchedulerArgs, OptimizerArgs, ParallelismArgs
+from nanotron.config import Config, DatasetStageArgs, LRSchedulerArgs, OptimizerArgs, ParallelismArgs
 from nanotron.distributed import ProcessGroup
 from nanotron.logging import LogItem, log_rank
 from nanotron.models.base import NanotronModel
@@ -42,6 +42,7 @@ from nanotron.random import (
     get_synced_random_state,
 )
 from nanotron.scaling.parametrization import LearningRateForSP, LearningRateForSpectralMup, ParametrizationMethod
+from nanotron.serialize.metadata import TrainingMetadata
 
 logger = logging.get_logger(__name__)
 
@@ -669,3 +670,32 @@ def log_throughput(
 
     if dist.get_rank(parallel_context.world_pg) == 0:
         write_to_csv(config.general.benchmark_csv_path, table_log, model_tflops, slurm_job_id)
+
+
+def compute_remain_train_steps_of_a_data_stage_from_ckp(
+    stage: DatasetStageArgs, config: Config, metadata: TrainingMetadata
+) -> int:
+    def is_last_stage():
+        sorted_stages = sorted(config.data_stages, key=lambda x: x.start_training_step)
+        return sorted_stages[-1].start_training_step == stage.start_training_step
+
+    def is_resume_from_training():
+        return metadata.last_train_step > 0
+
+    if is_last_stage() is True:
+        total_train_steps = config.tokens.train_steps
+    else:
+        next_stage = next((s for s in config.data_stages if s.start_training_step > stage.start_training_step), None)
+        total_train_steps = next_stage.start_training_step
+    last_train_steps = metadata.last_train_step if is_resume_from_training() else stage.start_training_step
+    return total_train_steps - last_train_steps
+
+
+def get_consumed_train_samples_of_a_data_stage_from_ckp(
+    stage: DatasetStageArgs, metadata: TrainingMetadata
+) -> Optional[int]:
+    start_training_step = stage.start_training_step
+    return next(
+        (s.consumed_train_samples for s in metadata.data_stages if s.start_training_step == start_training_step),
+        None,
+    )
