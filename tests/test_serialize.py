@@ -113,7 +113,6 @@ def test_save_and_load_with_changed_topolgy(tp1: int, dp1: int, pp1: int, tp2: i
     # Create first model.
     init_distributed(tp=tp1, dp=dp1, pp=pp1)(_create_model_and_serialize_all)(root_path=model1_path)
     assert (model1_path/"model").exists()
-
     assert (model1_path/"inputs.pt").exists()
     assert (model1_path/"outputs.pt").exists()
 
