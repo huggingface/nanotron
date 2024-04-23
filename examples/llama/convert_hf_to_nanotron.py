@@ -5,6 +5,7 @@ Command:
 """
 
 import json
+import dataclasses
 from argparse import ArgumentParser
 from pathlib import Path
 
@@ -106,7 +107,7 @@ def convert_checkpoint_and_save(checkpoint_path: Path, save_path: Path):
     convert_hf_to_nt(hf_model, nanotron_model, model_config)
     nanotron.serialize.save_weights(model=nanotron_model, parallel_context=parallel_context, root_folder=save_path)
     with open(save_path / "model_config.json", "w+") as f:
-        json.dump(vars(model_config), f)
+        json.dump(dataclasses.asdict(model_config), f)
     print(f"Model saved to {save_path}")
 
 

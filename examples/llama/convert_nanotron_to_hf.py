@@ -113,7 +113,7 @@ def convert_checkpoint_and_save(checkpoint_path: Path, save_path: Path, tokenize
         checkpoint_path=checkpoint_path,
     )
     # Init huggingface model.
-    with init_on_device_and_dtype(device, dtype):
+    with init_on_device_and_dtype(torch.device("cuda"), torch.bfloat16):
         model_config_hf = get_hf_config(model_config)
         hf_model = LlamaForCausalLM._from_config(model_config_hf)
 

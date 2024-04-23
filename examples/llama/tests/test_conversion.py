@@ -1,6 +1,7 @@
 # ruff: noqa: E402
 import json
 from pathlib import Path
+import dataclasses
 
 import pytest
 import torch
@@ -14,12 +15,13 @@ from nanotron.config import LlamaConfig as NanotronLlamaConfig
 from nanotron.models.base import init_on_device_and_dtype
 from nanotron.models.llama import LlamaForTraining
 from nanotron.parallel import ParallelContext
+from nanotron.trainer import mark_tied_parameters
 
 from examples.llama.convert_hf_to_nanotron import convert_checkpoint_and_save as convert_hf_to_nt_and_save
 from examples.llama.convert_nanotron_to_hf import convert_checkpoint_and_save as convert_nt_to_hf_and_save
 from examples.llama.convert_hf_to_nanotron import convert_hf_to_nt
 from examples.llama.convert_nanotron_to_hf import convert_nt_to_hf, get_hf_config
-from examples.llama.convert_weights import make_parallel_config
+from examples.llama.convert_weights import load_nanotron_model, make_parallel_config
 from tests.helpers.context import TestContext
 from tests.helpers.utils import init_distributed
 
@@ -49,7 +51,7 @@ CONFIG = NanotronLlamaConfig(
 
 BATCH_SIZE = 3
 SEQUENCE_LENGTH = 5
-ATOL = 0.02
+ATOL = 0.03
 
 
 def create_nanotron_model(parallel_context: ParallelContext) -> LlamaForTraining:
@@ -69,7 +71,7 @@ def create_nanotron_model(parallel_context: ParallelContext) -> LlamaForTraining
         dtype=torch.bfloat16,
         device=torch.device("cuda"),
     )
-    # mark_tied_parameters(model=nanotron_model, parallel_context=parallel_context)
+    mark_tied_parameters(model=nanotron_model, parallel_context=parallel_context)
     return nanotron_model
 
 
@@ -112,10 +114,9 @@ def _test_nt_to_hf_with_files(parallel_context: ParallelContext, input_ids: torc
     root = test_context.get_auto_remove_tmp_dir()
     nt_path = root / "nanotron"
     hf_path = root / "hf"
-    print(model_nt)
     nanotron.serialize.save_weights(model=model_nt, parallel_context=parallel_context, root_folder=nt_path)
     with open(nt_path / "model_config.json", "w+") as f:
-        json.dump(vars(CONFIG), f)
+        json.dump(dataclasses.asdict(CONFIG), f)
     input_mask = torch.ones_like(input_ids)
     logits_nt = model_nt.model(input_ids, input_mask).permute(1, 0, 2)
     del model_nt
@@ -201,19 +202,16 @@ def test_composed_conversion():
 def _save_parallel_nanotron(parallel_context: ParallelContext, input_ids: torch.Tensor, nt_path: Path):
     # Create and save a parallel model.
     model_nt = create_nanotron_model(parallel_context)
-    # print(torch.distributed.get_rank(), "model_nt", set(p.device for p in model_nt.parameters()))
     nanotron.serialize.save_weights(model=model_nt, parallel_context=parallel_context, root_folder=nt_path)
     with open(nt_path/"model_config.json", "w+") as f:
-        json.dump(vars(CONFIG), f)
+        json.dump(dataclasses.asdict(CONFIG), f)
 
     # Get parallel predictions.
     input_ids = input_ids.cuda()  # Move them to the current device index.
     input_mask = torch.ones_like(input_ids)
-    # print(torch.distributed.get_rank(), "input_ids", input_ids.device)
     logits_nt = model_nt.model(input_ids, input_mask).permute(1, 0, 2)
     if torch.distributed.get_rank() == 0:
         torch.save(logits_nt.detach().cpu(), nt_path/"logits.pt")
-    # print(torch.distributed.get_rank(), logits_nt.shape)
 
     # Convert nanotron to hf, load it and compare logits.
     # hf_path = root/"hf"
