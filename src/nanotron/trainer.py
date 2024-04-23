@@ -94,6 +94,8 @@ from nanotron.serialize import (
 from nanotron.serialize.metadata import DataStageMetadata, TrainingMetadata
 from nanotron.serialize.optimizer import load_optimizer
 
+from brrr.models.mamba_fast.mamba import MambaForTraining
+
 logger = logging.get_logger(__name__)
 
 # Reduce the logging noise from torch.distributed when creating new process groups
@@ -103,6 +105,7 @@ dist_logger.setLevel(logging.WARNING)
 CONFIG_TO_MODEL_CLASS = {
     "LlamaConfig": LlamaForTraining,
     "Starcoder2Config": Starcoder2ForTraining,
+    "MambaModelConfig": MambaForTraining,
 }
 
 try:
