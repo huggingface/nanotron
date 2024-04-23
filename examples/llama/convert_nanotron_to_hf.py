@@ -9,9 +9,7 @@ from argparse import ArgumentParser
 from pathlib import Path
 from typing import Literal, Optional
 
-import nanotron
 import torch
-import yaml
 from convert_weights import get_config_mapping, get_weight_mapping, load_nanotron_model
 from nanotron.config import LlamaConfig as NanotronLlamaConfig
 from nanotron.models import init_on_device_and_dtype

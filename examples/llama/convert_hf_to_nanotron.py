@@ -4,17 +4,15 @@ Command:
     torchrun --nproc_per_node=1 convert_hf_to_nanotron.py --checkpoint_path=hf_weights --save_path=nanotron_weights
 """
 
-import json
 import dataclasses
+import json
 from argparse import ArgumentParser
 from pathlib import Path
 
 import nanotron
 import torch
-from convert_weights import get_config_mapping, get_weight_mapping, load_nanotron_model, make_parallel_config
+from convert_weights import get_config_mapping, get_weight_mapping, load_nanotron_model
 from nanotron.config import LlamaConfig as NanotronLlamaConfig
-from nanotron.config.config import Config, GeneralArgs, ModelArgs, TokenizerArgs
-from nanotron.config.models_config import RandomInit
 from nanotron.models.llama import LlamaForTraining
 from transformers import LlamaConfig as HFLlamaConfig
 from transformers import LlamaForCausalLM

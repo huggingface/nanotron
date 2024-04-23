@@ -1,7 +1,7 @@
 # ruff: noqa: E402
+import dataclasses
 import json
 from pathlib import Path
-import dataclasses
 
 import pytest
 import torch
@@ -18,8 +18,8 @@ from nanotron.parallel import ParallelContext
 from nanotron.trainer import mark_tied_parameters
 
 from examples.llama.convert_hf_to_nanotron import convert_checkpoint_and_save as convert_hf_to_nt_and_save
-from examples.llama.convert_nanotron_to_hf import convert_checkpoint_and_save as convert_nt_to_hf_and_save
 from examples.llama.convert_hf_to_nanotron import convert_hf_to_nt
+from examples.llama.convert_nanotron_to_hf import convert_checkpoint_and_save as convert_nt_to_hf_and_save
 from examples.llama.convert_nanotron_to_hf import convert_nt_to_hf, get_hf_config
 from examples.llama.convert_weights import load_nanotron_model, make_parallel_config
 from tests.helpers.context import TestContext
@@ -203,7 +203,7 @@ def _save_parallel_nanotron(parallel_context: ParallelContext, input_ids: torch.
     # Create and save a parallel model.
     model_nt = create_nanotron_model(parallel_context)
     nanotron.serialize.save_weights(model=model_nt, parallel_context=parallel_context, root_folder=nt_path)
-    with open(nt_path/"model_config.json", "w+") as f:
+    with open(nt_path / "model_config.json", "w+") as f:
         json.dump(dataclasses.asdict(CONFIG), f)
 
     # Get parallel predictions.
@@ -211,7 +211,7 @@ def _save_parallel_nanotron(parallel_context: ParallelContext, input_ids: torch.
     input_mask = torch.ones_like(input_ids)
     logits_nt = model_nt.model(input_ids, input_mask).permute(1, 0, 2)
     if torch.distributed.get_rank() == 0:
-        torch.save(logits_nt.detach().cpu(), nt_path/"logits.pt")
+        torch.save(logits_nt.detach().cpu(), nt_path / "logits.pt")
 
     # Convert nanotron to hf, load it and compare logits.
     # hf_path = root/"hf"
@@ -228,23 +228,24 @@ def _convert_from_parallel(parallel_context: ParallelContext, input_ids: torch.T
     convert_nt_to_hf_and_save(nt_path, hf_path)
     model_hf = LlamaForCausalLM.from_pretrained(hf_path).cuda()
     logits_hf = model_hf(input_ids).logits
-    torch.save(logits_hf.detach().cpu(), hf_path/"logits.pt")
+    torch.save(logits_hf.detach().cpu(), hf_path / "logits.pt")
+
 
 def test_tensor_parallel_conversion(input_ids: torch.Tensor):
     # Set up test.
     test_context = TestContext()
     root = test_context.get_auto_remove_tmp_dir()
-    nt_path =root/"nanotron"
-    hf_path =root/"nanotron"
+    nt_path = root / "nanotron"
+    hf_path = root / "nanotron"
 
     # Launch both parts.
     init_distributed(tp=2, dp=1, pp=1)(_save_parallel_nanotron)(input_ids=input_ids, nt_path=nt_path)
-    assert (nt_path/"logits.pt").exists()
+    assert (nt_path / "logits.pt").exists()
     init_distributed(tp=1, dp=1, pp=1)(_convert_from_parallel)(input_ids=input_ids, nt_path=nt_path, hf_path=hf_path)
-    assert (hf_path/"logits.pt").exists()
+    assert (hf_path / "logits.pt").exists()
 
     # Load logits and verify they match.
-    logits_nt = torch.load(nt_path/"logits.pt")
-    logits_hf = torch.load(hf_path/"logits.pt")
+    logits_nt = torch.load(nt_path / "logits.pt")
+    logits_hf = torch.load(hf_path / "logits.pt")
     assert logits_nt.size() == logits_hf.size()
     assert torch.allclose(logits_nt, logits_hf, atol=ATOL), torch.mean(torch.abs(logits_nt - logits_hf))
