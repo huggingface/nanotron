@@ -65,12 +65,15 @@ class NanotronModel(nn.Module, metaclass=ABCMeta):
         """Tie custom parameters. For example for MQA marks kv heads as tied."""
         pass
 
-    @staticmethod
-    def get_embeddings_lm_head_tied_names() -> list[str]:
+    def get_embeddings_lm_head_tied_names(self) -> list[str]:
         """Returns the names of the embeddings and lm_head weights that are tied together. Returns empty list if not tied.
 
         Example for GPT2 model: ["model.token_position_embeddings.pp_block.token_embedding.weight", "model.lm_head.pp_block.weight"]
         """
+        return []
+    
+    def get_named_params_without_weight_decay(self) -> List[str]:
+        """Return a list of named parameters that should not have weight decay applied to them."""
         return []
 
     def before_tbi_sanity_checks(self) -> None:
