@@ -22,7 +22,7 @@ class InfiniAttention(nn.Module):
     ):
         super().__init__()
 
-        self.n_segments = 4
+        self.n_segments = 50
 
         from nanotron.models.llama import CausalSelfAttention
 
@@ -57,6 +57,7 @@ class InfiniAttention(nn.Module):
 
         device = self.o_proj.weight.device
         dtype = self.o_proj.weight.dtype
+        # self.balance_factors = TensorParallelRowLinear(config.num_attention_heads * self.d_head, 1, pg=tp_pg, mode=tp_mode)
         self.balance_factors = nn.Parameter(torch.randn(self.n_local_heads, device=device, dtype=dtype))
 
         # assert self.o_proj.weight.shape == self.attn.o_proj.weight.shape
@@ -97,19 +98,19 @@ class InfiniAttention(nn.Module):
                 query_states,
                 "(batch_size seq_len) n_heads d_head -> batch_size n_heads seq_len d_head",
                 batch_size=batch_size,
-                n_heads=self.n_local_heads,
+                # n_heads=self.n_local_heads,
             )
             key_states = rearrange(
                 key_states,
                 "(batch_size seq_len) n_heads d_head -> batch_size n_heads seq_len d_head",
                 batch_size=batch_size,
-                n_heads=self.n_local_heads,
+                # n_heads=self.n_local_heads,
             )
             value_states = rearrange(
                 value_states,
                 "(batch_size seq_len) n_heads d_head -> batch_size n_heads seq_len d_head",
                 batch_size=batch_size,
-                n_heads=self.n_local_heads,
+                # n_heads=self.n_local_heads,
             )
 
             # assert query_states.shape == (batch_size, self.n_local_heads, segment_length, self.d_head)

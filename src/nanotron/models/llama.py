@@ -325,14 +325,14 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         # NOTE: Only supported for training (TODO(fmom): position_ids not supported yet)
         self.flash_rotary_embedding = FlashRotaryEmbedding(dim=self.d_qk, interleaved=True)
 
-        self.o_proj = TensorParallelRowLinear(
-            config.num_attention_heads * self.d_qk,
-            self.d_model,
-            pg=tp_pg,
-            mode=tp_mode,
-            bias=False,
-            async_communication=tp_linear_async_communication,
-        )
+        # self.o_proj = TensorParallelRowLinear(
+        #     config.num_attention_heads * self.d_qk,
+        #     self.d_model,
+        #     pg=tp_pg,
+        #     mode=tp_mode,
+        #     bias=False,
+        #     async_communication=tp_linear_async_communication,
+        # )
 
         self.attention = CoreAttention(
             config,
@@ -594,11 +594,11 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         attention_output = (
             attention_output.contiguous().view(batch_size, q_length, self.n_local_q_heads * self.d_v).transpose(0, 1)
         )
-        output = self.o_proj(attention_output)
+        # output = self.o_proj(attention_output)
 
-        return_outputs = {"hidden_states": output, "sequence_mask": sequence_mask}
-        # return_outputs["qkv_states"] = (query_states, key_states, value_states) if return_qkv_states else ()
-        # return_outputs["attention_output"] = attention_output
+        return_outputs = {"hidden_states": None, "sequence_mask": sequence_mask}
+        return_outputs["qkv_states"] = (query_states, key_states, value_states) if return_qkv_states else ()
+        return_outputs["attention_output"] = attention_output
         return return_outputs
 
 
@@ -612,19 +612,21 @@ class LlamaDecoderLayer(nn.Module):
     ):
         super().__init__()
         self.input_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.attn = CausalSelfAttention(
-            config=config,
-            parallel_config=parallel_config,
-            tp_pg=tp_pg,
-            layer_idx=layer_idx,
-        )
-
-        # self.attn = InfiniAttention(
+        # self.attn = CausalSelfAttention(
         #     config=config,
         #     parallel_config=parallel_config,
         #     tp_pg=tp_pg,
         #     layer_idx=layer_idx,
         # )
+
+        from nanotron.models.attention import InfiniAttention
+
+        self.attn = InfiniAttention(
+            config=config,
+            parallel_config=parallel_config,
+            tp_pg=tp_pg,
+            layer_idx=layer_idx,
+        )
 
         self.post_attention_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.mlp = MLP(config=config, parallel_config=parallel_config, tp_pg=tp_pg)
