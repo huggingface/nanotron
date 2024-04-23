@@ -326,14 +326,14 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         # NOTE: Only supported for training (TODO(fmom): position_ids not supported yet)
         self.flash_rotary_embedding = FlashRotaryEmbedding(dim=self.d_qk, interleaved=True)
 
-        self.o_proj = TensorParallelRowLinear(
-            config.num_attention_heads * self.d_qk,
-            self.d_model,
-            pg=tp_pg,
-            mode=tp_mode,
-            bias=False,
-            async_communication=tp_linear_async_communication,
-        )
+        # self.o_proj = TensorParallelRowLinear(
+        #     config.num_attention_heads * self.d_qk,
+        #     self.d_model,
+        #     pg=tp_pg,
+        #     mode=tp_mode,
+        #     bias=False,
+        #     async_communication=tp_linear_async_communication,
+        # )
 
         self.attention = CoreAttention(
             config,
@@ -595,9 +595,9 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         attention_output = (
             attention_output.contiguous().view(batch_size, q_length, self.n_local_q_heads * self.d_v).transpose(0, 1)
         )
-        output = self.o_proj(attention_output)
+        # output = self.o_proj(attention_output)
 
-        return_outputs = {"hidden_states": output, "sequence_mask": sequence_mask}
+        return_outputs = {"hidden_states": None, "sequence_mask": sequence_mask}
         return_outputs["qkv_states"] = (query_states, key_states, value_states) if return_qkv_states else ()
         return_outputs["attention_output"] = attention_output
         return return_outputs
@@ -956,8 +956,13 @@ class LlamaForTraining(NanotronModel):
                 # Already initialized
                 continue
 
-            module = model.get_submodule(module_name)
-            parametrizator.parametrize(param_name, module)
+            if "balance_factors" in param_name:
+                import torch.nn.init as init
+
+                init.normal_(param, mean=0.0, std=0.01)
+            else:
+                module = model.get_submodule(module_name)
+                parametrizator.parametrize(param_name, module)
 
             assert full_param_name not in initialized_parameters
             initialized_parameters.add(full_param_name)
