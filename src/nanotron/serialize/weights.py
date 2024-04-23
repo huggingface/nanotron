@@ -278,7 +278,7 @@ def load_weights(
                 # TODO @thomasw21: Make so that we don't need to code this logic somewhere else than in `get_path`
                 sharded_info = param.get_sharded_info()
                 suffix = base_name.rsplit(".", 1)[-1]
-                shards_path = list(path.parent.glob(f"model_{ObjectType.MODEL.value}_{suffix}*.safetensors"))
+                shards_path = list(path.parent.glob(f"{ObjectType.MODEL.value}_{suffix}*.safetensors"))
                 if len(shards_path) <= 0:
                     raise ValueError(f"Could not find any shards in {path.parent}")
 
