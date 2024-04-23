@@ -1,7 +1,9 @@
+import os
+from pathlib import Path
 import pytest
 import torch
 from helpers.context import TestContext
-from helpers.dummy import dummy_infinite_data_loader, init_dummy_model
+from helpers.dummy import dummy_infinite_data_loader, init_dummy_model, init_dummy_parallel_model
 from helpers.utils import (
     available_gpus,
     get_all_3d_configurations,
@@ -22,6 +24,7 @@ from nanotron.parallel.pipeline_parallel.engine import (
     AllForwardAllBackwardPipelineEngine,
 )
 from nanotron.parallel.sharded_parameters import SplitConfig, create_sharded_parameter_from_config
+from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
 from nanotron.parallel.tied_parameters import sync_tied_weights_gradients
 from nanotron.random import RandomStates, get_current_random_state, get_synced_random_state
 from nanotron.serialize import (
@@ -36,9 +39,91 @@ from nanotron.serialize.metadata import TensorMetadata
 from torch.nn.parallel import DistributedDataParallel
 
 
-def test_save_and_load_with_changed_topolgy():
-    # TODO @thomasw21: We want to be able to support a change of topology mechanism
-    return
+def _create_model_and_serialize_all(parallel_context: ParallelContext, root_path: Path):
+    # Create and save model.
+    model = init_dummy_parallel_model(parallel_context)
+    model = model.requires_grad_(False)  # Otherwise we need to specify pipeline engine.
+
+    # Get inputs and outputs.
+    current_pp_rank = dist.get_rank(parallel_context.pp_pg)
+    if current_pp_rank == 0:
+        inputs = torch.randn(2, 16).cuda()
+    else:
+        inputs = TensorPointer(group_rank=0)
+    outputs = model(inputs, return_loss=False)
+
+    # Serialize everything.
+    save_weights(model=model, parallel_context=parallel_context, root_folder=root_path/"model")
+    rank = torch.distributed.get_rank()
+    world_size = int(os.environ["WORLD_SIZE"])
+    if rank == 0:  # Save inputs on first process.
+        torch.save(inputs.detach().cpu(), root_path/"inputs.pt")
+    if rank == world_size - 1:  # Save outputs on last process.
+        torch.save(outputs.detach().cpu(), root_path/"outputs.pt")
+
+
+def _load_from_serialized(parallel_context: ParallelContext, load_path: Path, save_path: Path):
+    # Load inputs.
+    world_size = int(os.environ["WORLD_SIZE"])
+    current_pp_rank = dist.get_rank(parallel_context.pp_pg)
+    if current_pp_rank == 0:
+        inputs = torch.load(load_path/"inputs.pt").cuda()
+    else:
+        inputs = TensorPointer(group_rank=0)
+
+    # Create new random model.
+    model = init_dummy_parallel_model(parallel_context=parallel_context)
+    model = model.requires_grad_(False)
+    outputs = model(inputs, return_loss=False)
+    rank = torch.distributed.get_rank()
+    if rank == world_size - 1:
+        expected_outputs = torch.load(load_path/"outputs.pt")
+        assert not torch.allclose(outputs.detach().cpu(), expected_outputs)
+
+    # Load model and save correct outputs and checkpoint.
+    load_weights(model=model, parallel_context=parallel_context, root_folder=load_path/"model")
+    outputs = model(inputs, return_loss=False)
+    save_weights(model=model, parallel_context=parallel_context, root_folder=save_path/"model")
+    if rank == world_size - 1:
+        torch.save(outputs.detach().cpu(), save_path/"outputs.pt")
+
+
+@pytest.mark.parametrize(
+    "tp1,dp1,pp1,tp2,dp2,pp2",
+    [
+        pytest.param(tp1, dp1, pp1, tp2, dp2, pp2)
+        for gpus in range(1, min(available_gpus(), 4) + 1)
+        for tp1, dp1, pp1 in get_all_3d_configurations(gpus)
+        for tp2, dp2, pp2 in get_all_3d_configurations(gpus)
+        if (tp1, dp1, pp1) != (tp2, dp2, pp2) and  # ensure topology changed
+            16 % tp1 == 0 and 16 % tp2 == 0 and  # 16 tensor dimension evenly divided
+            8 % pp1 == 0 and 8 % pp2 == 0  # 8 layers evenly divided
+    ]
+)
+def test_save_and_load_with_changed_topolgy(tp1: int, dp1: int, pp1: int, tp2: int, dp2: int, pp2: int):
+    # Set up test.
+    print("Testing", tp1, dp1, pp1, tp2, dp2, pp2)
+    test_context = TestContext()
+    root = test_context.get_auto_remove_tmp_dir()
+    model1_path = root/"model1"
+    model2_path = root/"model2"
+    model1_path.mkdir()
+    model2_path.mkdir()
+
+    # Create first model.
+    init_distributed(tp=tp1, dp=dp1, pp=pp1)(_create_model_and_serialize_all)(root_path=model1_path)
+    assert (model1_path/"model").exists()
+
+    assert (model1_path/"inputs.pt").exists()
+    assert (model1_path/"outputs.pt").exists()
+
+    # Create second model and compare outputs.
+    init_distributed(tp=tp2, dp=dp2, pp=pp2)(_load_from_serialized)(load_path=model1_path, save_path=model2_path)
+    assert (model2_path/"outputs.pt").exists()
+
+    outputs1 = torch.load(model1_path/"outputs.pt")
+    outputs2 = torch.load(model2_path/"outputs.pt")
+    assert torch.allclose(outputs1, outputs2)
 
 
 @pytest.mark.parametrize(
