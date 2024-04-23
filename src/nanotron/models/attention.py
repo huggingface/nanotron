@@ -51,6 +51,8 @@ class InfiniAttention(nn.Module):
             bias=False,
             async_communication=tp_linear_async_communication,
         )
+        # NOTE: because the number of heads are splited in TP
+        # so we find them on the fly
         self.n_local_heads = self.attn.n_local_q_heads
 
         device = self.o_proj.weight.device
@@ -66,7 +68,7 @@ class InfiniAttention(nn.Module):
 
     def forward(
         self,
-        hidden_states: TensorType["seq_length", "batch_size", "hidden_size"],
+        hidden_states: TensorType["sharded_seq_length", "batch_size", "hidden_size"],
         sequence_mask: TensorType["batch_size", "seq_length"],
     ):
         batch_size = hidden_states.shape[1]
@@ -89,40 +91,34 @@ class InfiniAttention(nn.Module):
             )
 
             local_attn_outputs = attn_outputs["attention_output"]
-            # sequence_masks.append(attn_outputs["sequence_mask"])
-
-            # NOTE: query_states.shape = [batch_size * q_length, self.n_heads, d_qk]
-            # NOTE: key_states.shape or value_states.shape = [batch_size * kv_length, self.n_heads, d_qk]
             query_states, key_states, value_states = attn_outputs["qkv_states"]
 
             query_states = rearrange(
                 query_states,
                 "(batch_size seq_len) n_heads d_head -> batch_size n_heads seq_len d_head",
                 batch_size=batch_size,
+                n_heads=self.n_local_heads,
             )
-            # NOTE: because the number of heads are splited in TP
-            # so we find them on the fly
-
             key_states = rearrange(
                 key_states,
                 "(batch_size seq_len) n_heads d_head -> batch_size n_heads seq_len d_head",
                 batch_size=batch_size,
+                n_heads=self.n_local_heads,
             )
             value_states = rearrange(
                 value_states,
                 "(batch_size seq_len) n_heads d_head -> batch_size n_heads seq_len d_head",
                 batch_size=batch_size,
+                n_heads=self.n_local_heads,
             )
 
-            # NOTE: because we split the heads in TP, we need to find the number of heads on the fly
-            N_HEADS = query_states.shape[1]
-            assert N_HEADS == self.n_local_heads
-            # balance_factors = torch.randn(N_HEADS, device=local_attn_outputs.device, dtype=local_attn_outputs.dtype)
+            # assert query_states.shape == (batch_size, self.n_local_heads, segment_length, self.d_head)
+            assert query_states.shape == key_states.shape == value_states.shape
 
             retrieved_memory = self._retrieve_from_memory(
                 query_states, prev_memory=memory, prev_normalization=normalization
             )
-            retrieved_memory = retrieved_memory.detach()
+            # retrieved_memory = retrieved_memory.detach()
 
             local_attn_outputs = rearrange(
                 local_attn_outputs,
@@ -131,12 +127,17 @@ class InfiniAttention(nn.Module):
             )
 
             global_weights = F.sigmoid(self.balance_factors)
-            global_attn_outputs = global_weights[None, :, None, None] * retrieved_memory
+            global_weights = rearrange(global_weights, "n_heads -> 1 n_heads 1 1")
 
-            local_weights = F.sigmoid(1 - self.balance_factors)
-            local_attn_outputs = local_weights[None, :, None, None] * local_attn_outputs
+            local_weights = 1 - F.sigmoid(self.balance_factors)
+            local_weights = rearrange(local_weights, "n_heads -> 1 n_heads 1 1")
 
-            attention_output = global_attn_outputs + local_attn_outputs
+            # assert torch.allclose(global_weights + local_weights, torch.ones_like(global_weights))
+
+            attention_output = global_weights * retrieved_memory + local_weights * local_attn_outputs
+
+            # assert attention_output.shape == (batch_size, self.n_local_heads, segment_length, self.d_head)
+
             attention_output = rearrange(
                 attention_output, "batch_size n_heads seq_len d_head -> seq_len batch_size (n_heads d_head)"
             )
@@ -146,8 +147,8 @@ class InfiniAttention(nn.Module):
             assert output.shape == (segment_length, batch_size, hidden_size)
 
             memory, normalization = self._update_memory(memory, normalization, key_states, value_states)
-            memory = memory.detach()
-            normalization = normalization.detach()
+            # memory = memory.detach()
+            # normalization = normalization.detach()
 
             outputs.append(output)
 
@@ -160,6 +161,30 @@ class InfiniAttention(nn.Module):
         return_outputs = {"hidden_states": outputs, "sequence_mask": sequence_mask}
         return return_outputs
 
+    def _retrieve_from_memory(self, query_states, prev_memory, prev_normalization):
+        # return torch.zeros_like(query_states)
+        if prev_memory is None:
+            return torch.zeros_like(query_states)
+
+        query_states = F.elu(query_states) + 1
+        retrieved_memory = einsum(
+            query_states,
+            prev_memory,
+            "batch_size n_heads seq_length d_k, batch_size n_heads d_k d_v -> batch_size n_heads seq_length d_v",
+        )
+
+        denominator = einsum(
+            query_states,
+            prev_normalization,
+            "batch_size n_heads seq_length d_head, batch_size n_heads d_head -> batch_size n_heads seq_length",
+        )
+        denominator = rearrange(denominator, "batch_size n_heads seq_length -> batch_size n_heads seq_length 1")
+        # [batch_size, n_heads, seq_length, d_v] / [batch_size, n_heads, seq_length, 1], so each d_v is divide by the normalized value
+
+        # NOTE: because normalization is the sum of all the keys, so each word should have the same normalization
+        retrieved_memory = retrieved_memory / denominator
+        return retrieved_memory
+
     def _update_memory(self, prev_memory, prev_normalization, key_states, value_states):
         TYPE = "delta"
         key_states = F.elu(key_states) + 1
@@ -171,14 +196,6 @@ class InfiniAttention(nn.Module):
             if prev_memory is None or prev_normalization is None:
                 new_value_states = value_states
             else:
-                # denominator = torch.matmul(key_states, prev_normalization)
-                # denominator = denominator[:, :, :, None]
-
-                # numerator = einsum(
-                #     key_states, prev_memory,
-                #     "batch_size n_heads seq_len d_head, batch_size n_heads seq_len d_head -> batch_size n_heads seq_len"
-                # )
-
                 numerator = einsum(
                     key_states,
                     prev_memory,
@@ -194,8 +211,11 @@ class InfiniAttention(nn.Module):
                     prev_normalization,
                     "batch_size n_heads seq_length d_k, batch_size n_heads d_k -> batch_size n_heads seq_length",
                 )
+                denominator = rearrange(
+                    denominator, "batch_size n_heads seq_length -> batch_size n_heads seq_length 1"
+                )
 
-                prev_v = numerator / denominator[:, :, :, None]
+                prev_v = numerator / denominator
                 new_value_states = value_states - prev_v
 
         memory = torch.matmul(key_states.transpose(-2, -1), new_value_states)
@@ -209,23 +229,3 @@ class InfiniAttention(nn.Module):
         normalization += prev_normalization if prev_normalization is not None else 0
 
         return memory, normalization
-
-    def _retrieve_from_memory(self, query_states, prev_memory, prev_normalization):
-        if prev_memory is None:
-            return torch.zeros_like(query_states)
-
-        query_states = F.elu(query_states) + 1
-        retrieved_memory = einsum(
-            query_states,
-            prev_memory,
-            "batch_size n_heads seq_length d_k, batch_size n_heads d_k d_v -> batch_size n_heads seq_length d_v",
-        )
-
-        denominator = einsum(
-            query_states,
-            prev_normalization,
-            "batch_size n_heads seq_length d_k, batch_size n_heads d_k -> batch_size n_heads seq_length",
-        )
-        # [batch_size, n_heads, seq_length, d_v] / [batch_size, n_heads, seq_length, 1], so each d_v is divide by the normalized value
-        retrieved_memory = retrieved_memory / denominator[:, :, :, None]
-        return retrieved_memory
