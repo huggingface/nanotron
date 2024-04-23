@@ -190,7 +190,7 @@ def get_custom_weight_decay_for_named_parameters(
 
     named_param_groups_with_custom_weight_decay = []
 
-    exclude_named_params = model.model.get_named_params_without_weight_decay()
+    exclude_named_params = model.get_named_params_without_weight_decay()
 
     for name, param in named_parameters:
         if param.is_tied:
