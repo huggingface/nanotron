@@ -398,7 +398,7 @@ class DistributedTrainer:
         self.pre_training(**kwargs)
 
         if self.config.checkpoints.save_initial_state and self.init_checkpoint_path is None:
-            self.save_checkpoint(dataloader_or_dls)
+            self.save_checkpoint()
 
         self.pipeline_engine: PipelineEngine = self.config.parallelism.pp_engine
 
