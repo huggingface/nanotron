@@ -687,8 +687,15 @@ def compute_remain_train_steps_of_a_data_stage_from_ckp(
     else:
         next_stage = next((s for s in config.data_stages if s.start_training_step > stage.start_training_step), None)
         total_train_steps = next_stage.start_training_step
-    last_train_steps = metadata.last_train_step if is_resume_from_training() else stage.start_training_step
-    return total_train_steps - last_train_steps
+    
+    if metadata.last_train_step > stage.start_training_step:
+        # NOTE: if the last_train_step is larger than the start_training_step of the current stage,
+        # it means that the training has already passed this stage
+        # so there is no remaining steps
+        return 0
+    else:
+        last_train_steps = metadata.last_train_step if is_resume_from_training() else stage.start_training_step
+        return total_train_steps - last_train_steps
 
 
 def get_consumed_train_samples_of_a_data_stage_from_ckp(
