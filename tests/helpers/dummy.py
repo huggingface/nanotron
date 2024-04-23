@@ -13,6 +13,8 @@ from nanotron.parallel.pipeline_parallel.p2p import P2P
 from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
 from nanotron.parallel.tied_parameters import tie_parameters
 from nanotron.parallel.utils import initial_sync
+from nanotron.parallel.tensor_parallel.enum import TensorParallelLinearMode
+from nanotron.parallel.tensor_parallel.nn import TensorParallelColumnLinear, TensorParallelRowLinear
 from torch import nn
 from torch.nn.parallel import DistributedDataParallel
 
@@ -62,6 +64,86 @@ class DummyModel(nn.Module):
             x = non_linear.activation(input=x)["output"]
         x = self.loss(x=x)["output"]
         return x
+
+
+class DummyParallelModel(nn.Module):
+    def __init__(self, p2p: P2P, tp_pg: dist.ProcessGroup, num_layers: int = 8, hidden_size: int = 16):
+        super().__init__()
+        self.num_layers = num_layers
+        self.hidden_size = hidden_size
+        self.p2p = p2p
+        self.mlp = nn.Sequential(
+            *(
+                nn.ModuleDict(
+                    {
+                        "linear1": PipelineBlock(
+                            p2p=p2p,
+                            module_builder=TensorParallelColumnLinear,
+                            module_kwargs={"in_features": hidden_size, "out_features": hidden_size,
+                                           "pg": tp_pg, "mode": TensorParallelLinearMode.ALL_REDUCE,
+                                           "async_communication": True},
+                            module_input_keys={"x"},
+                            module_output_keys={"output"},
+                        ),
+                        "activation": PipelineBlock(
+                            p2p=p2p,
+                            module_builder=nn.Sigmoid,
+                            module_kwargs={},
+                            module_input_keys={"input"},
+                            module_output_keys={"output"},
+                        ),
+                        "linear2": PipelineBlock(
+                            p2p=p2p,
+                            module_builder=TensorParallelRowLinear,
+                            module_kwargs={"in_features": hidden_size, "out_features": hidden_size,
+                                           "pg": tp_pg, "mode": TensorParallelLinearMode.ALL_REDUCE},
+                            module_input_keys={"x"},
+                            module_output_keys={"output"},
+                        ),
+
+                    }
+                )
+                for pp_rank in range(num_layers)
+            )
+        )
+
+        self.loss = PipelineBlock(
+            p2p=p2p,
+            module_builder=lambda: lambda x: x.sum(),
+            module_kwargs={},
+            module_input_keys={"x"},
+            module_output_keys={"output"},
+        )
+
+    def forward(self, x: torch.Tensor | TensorPointer, return_loss: bool = True):
+        for non_linear in self.mlp:
+            x = non_linear.linear1(x=x)["output"]
+            x = non_linear.activation(input=x)["output"]
+            x = non_linear.linear2(x=x)["output"]
+        if return_loss:
+            x = self.loss(x=x)["output"]
+        return x
+
+
+def init_dummy_parallel_model(parallel_context: ParallelContext, dtype: torch.dtype = torch.float,
+                              num_layers: int = 8, hidden_size: int = 16) -> DummyParallelModel:
+    p2p = P2P(pg=parallel_context.pp_pg, device=torch.device("cuda"))
+    model = DummyParallelModel(p2p=p2p, tp_pg=parallel_context.tp_pg, num_layers=num_layers, hidden_size=hidden_size)
+
+    # Build model.
+    pipeline_blocks = [module for name, module in model.named_modules() if isinstance(module, PipelineBlock)]
+    with init_on_device_and_dtype(device=torch.device("cuda"), dtype=dtype):
+        contiguous_size = ceil(len(pipeline_blocks) / parallel_context.pp_pg.size())
+        for i, block in enumerate(pipeline_blocks):
+            rank = i // contiguous_size
+            block.build_and_set_rank(rank)
+
+    initial_sync(model=model, parallel_context=parallel_context)
+
+    assert len(list(model.named_parameters())) > 0
+    model = DistributedDataParallel(model, process_group=parallel_context.dp_pg)
+
+    return model
 
 
 def init_dummy_model(parallel_context: ParallelContext, dtype: torch.dtype = torch.float) -> DummyModel:
