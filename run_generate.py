@@ -78,7 +78,7 @@ def main():
         tp=args.tp or config.parallelism.tp,
         pp_engine=OneForwardOneBackwardPipelineEngine(),
         tp_mode=TensorParallelLinearMode.ALL_REDUCE,
-        tp_linear_async_communication=True,
+        tp_linear_async_communication=False,
     )
 
     # Initialise all process groups
@@ -164,9 +164,12 @@ def main():
         tokenizer.padding_side = "left"
         tokenizer.truncation_side = "left"  # TODO @nouamane: do we want this?
         dummy_inputs = [
-            # "Passage: Daniel went back to the garden. Mary travelled to the kitchen. Sandra journeyed to the kitchen. Sandra went to the hallway. John went to the bedroom. Mary went back to the garden. Where is Mary?\nAnswer:",
+            "Passage: Daniel went back to the garden. Mary travelled to the kitchen. Sandra journeyed to the kitchen. Sandra went to the hallway. John went to the bedroom. Mary went back to the garden. Where is Mary?\nAnswer:",
             "def fib(n)",
-            # "This film was probably inspired by Godzilla",
+            "This film was probably inspired by Godzilla",
+            "The future of AI is",
+            "Advancements in technology will lead to",
+            "Tomorrow's world is shaped by",
         ]
 
         outputs = decode_text(
@@ -177,7 +180,7 @@ def main():
             parallel_context=parallel_context,
             max_new_tokens=args.max_new_tokens,
             max_micro_batch_size=2,
-            generation_config=GenerationArgs(sampler="greedy", use_cache=True),
+            generation_config=GenerationArgs(sampler="top_k", use_cache=True, n_samples=2),
             tokenizer_config=TokenizerConfig(max_input_length=None),
             is_bench=os.environ.get("USE_BENCH", "0") == "1",
         )

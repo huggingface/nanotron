@@ -190,6 +190,16 @@ def decode_text(
 
     p2p = model.p2p
 
+    if generation_config and generation_config.n_samples:
+        assert isinstance(generation_config.n_samples, int) and generation_config.n_samples > 0
+        if sampler_type != SamplerType.TOP_P and sampler_type != SamplerType.TOP_K:
+            raise ValueError("Only support n_samples for TOP_P and TOP_K sampler")
+        new_input_iter = []
+        for input in input_iter:
+            for _ in range(generation_config.n_samples):
+                new_input_iter.append(GenerationInput(text=input.text))
+        input_iter = new_input_iter
+
     # That's annoying but I need this as soon as there's a change communication "cross"
     pipeline_state = PipelineEvalBatchState()
     with attach_pipeline_state_to_model(model=model, pipeline_state=pipeline_state):
