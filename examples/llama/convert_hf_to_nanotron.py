@@ -10,7 +10,6 @@ from pathlib import Path
 
 import nanotron
 import torch
-import yaml
 from convert_weights import get_config_mapping, get_weight_mapping, load_nanotron_model, make_parallel_config
 from nanotron.config import LlamaConfig as NanotronLlamaConfig
 from nanotron.config.config import Config, GeneralArgs, ModelArgs, TokenizerArgs
@@ -88,7 +87,7 @@ def get_nanotron_config(config: HFLlamaConfig) -> NanotronLlamaConfig:
     return NanotronLlamaConfig(**attrs)
 
 
-def convert_checkpoint_and_save(checkpoint_path: Path, save_path: Path, dp: int, pp: int, tp: int):
+def convert_checkpoint_and_save(checkpoint_path: Path, save_path: Path):
     """Loads the huggingface checkpoint in `checkpoint_path`, creates
     a new nanotron instance, copies the weights from the huggingface checkpoint
     and saves the transformed nanotron to `save_path`."""
@@ -102,24 +101,12 @@ def convert_checkpoint_and_save(checkpoint_path: Path, save_path: Path, dp: int,
 
     # Copy weights and save model.
     parallel_context = nanotron.parallel.ParallelContext(
-        data_parallel_size=dp, pipeline_parallel_size=pp, tensor_parallel_size=tp
+        data_parallel_size=1, pipeline_parallel_size=1, tensor_parallel_size=1
     )
     convert_hf_to_nt(hf_model, nanotron_model, model_config)
     nanotron.serialize.save_weights(model=nanotron_model, parallel_context=parallel_context, root_folder=save_path)
     with open(save_path / "model_config.json", "w+") as f:
         json.dump(vars(model_config), f)
-    parallel_config = make_parallel_config(dp=dp, pp=pp, tp=tp)
-    with open(save_path / "config.yaml", "w") as f:
-        config = Config(
-            general=GeneralArgs(project="test", run="llama"),
-            parallelism=parallel_config,
-            model=ModelArgs(
-                init_method=RandomInit(std=0.2),
-                model_config=model_config,
-            ),
-            tokenizer=TokenizerArgs(checkpoint_path),
-        )
-        yaml.dump(config.as_dict(), f)
     print(f"Model saved to {save_path}")
 
 
@@ -127,10 +114,7 @@ if __name__ == "__main__":
     parser = ArgumentParser(description="Convert HF weights to nanotron format")
     parser.add_argument("--checkpoint_path", type=Path, default="llama-7b", help="Path to the checkpoint")
     parser.add_argument("--save_path", type=Path, default="llama-7b-hf", help="Path to save the nanotron model")
-    parser.add_argument("--dp", type=int, default=1, help="Data parallel size")
-    parser.add_argument("--pp", type=int, default=1, help="Pipeline parallel size")
-    parser.add_argument("--tp", type=int, default=1, help="Tensor parallel size")
     args = parser.parse_args()
 
     # Convert HF model to nanotron format.
-    convert_checkpoint_and_save(checkpoint_path=args.checkpoint_path, save_path=args.save_path)
+    convert_checkpoint_and_save(checkpoint_path=args.checkpoint_path, save_path=args.save_path, dp=1, tp=1, pp=1)

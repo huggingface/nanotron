@@ -97,7 +97,6 @@ def make_parallel_config(
 
 
 def load_nanotron_model(
-    parallel_config: nanotron.config.ParallelismArgs = None,
     model_config: Optional[NanotronLlamaConfig] = None,
     device: torch.device = torch.device("cuda"),
     dtype: torch.dtype = torch.bfloat16,
@@ -115,8 +114,7 @@ def load_nanotron_model(
         assert checkpoint_path is not None
         with open(checkpoint_path / "model_config.json") as f:
             model_config = NanotronLlamaConfig(**json.load(f))
-    if parallel_config is None:
-        parallel_config = make_parallel_config()
+    parallel_config = make_parallel_config()
     parallel_context = nanotron.parallel.ParallelContext(
         data_parallel_size=parallel_config.dp,
         pipeline_parallel_size=parallel_config.pp,
