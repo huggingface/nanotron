@@ -11,11 +11,7 @@ from dacite import from_dict
 from yaml.loader import SafeLoader
 
 from nanotron.config.lighteval_config import LightEvalConfig
-from nanotron.config.models_config import (
-    ExistingCheckpointInit,
-    NanotronConfigs,
-    RandomInit,
-)
+from nanotron.config.models_config import ExistingCheckpointInit, NanotronConfigs, RandomInit, SpectralMupInit
 from nanotron.config.parallelism_config import ParallelismArgs
 from nanotron.config.utils_config import (
     RecomputeGranularity,
@@ -189,7 +185,7 @@ class ModelArgs:
     """Arguments related to model architecture"""
 
     model_config: NanotronConfigs
-    init_method: Union[RandomInit, ExistingCheckpointInit]
+    init_method: Union[RandomInit, SpectralMupInit, ExistingCheckpointInit]
     dtype: Optional[torch.dtype] = None
     make_vocab_size_divisible_by: int = 1
     ddp_bucket_cap_mb: int = 25
@@ -199,6 +195,8 @@ class ModelArgs:
             self.dtype = torch.bfloat16
         if isinstance(self.dtype, str):
             self.dtype = cast_str_to_torch_dtype(self.dtype)
+
+        self.model_config._is_using_mup = isinstance(self.init_method, SpectralMupInit)
 
         # if self.model_config.max_position_embeddings is None:
         #     self.model_config.max_position_embeddings = 0
@@ -333,7 +331,7 @@ class Config:
         if self.data_stages is not None:
             names = [stage.name for stage in self.data_stages]
             training_steps = [stage.start_training_step for stage in self.data_stages]
-            assert all(
+            assert any(
                 stage.start_training_step == 1 for stage in self.data_stages
             ), "You must have a training stage starting at 1 in the config's data_stages"
 

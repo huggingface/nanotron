@@ -12,22 +12,17 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" PyTorch LLaMa model.
-"""
+"""PyTorch LLaMa model."""
+
 from typing import Dict, Optional, Union
-import math
+
 import torch
-from flash_attn import bert_padding
-from flash_attn.flash_attn_interface import (
-    flash_attn_varlen_func,
-    flash_attn_with_kvcache,
-)
-from flash_attn.layers.rotary import RotaryEmbedding as FlashRotaryEmbedding
 from torch import nn
 
 from nanotron import distributed as dist
 from nanotron import logging
-from nanotron.config import LlamaConfig, ParallelismArgs
+from nanotron.config import Config, LlamaConfig, ParallelismArgs
+from nanotron.config.models_config import RandomInit, SpectralMupInit
 from nanotron.generation.generate_store import AttachableStore
 from nanotron.logging import log_rank
 from nanotron.models import NanotronModel
@@ -35,10 +30,7 @@ from nanotron.nn.activations import ACT2FN
 from nanotron.nn.layer_norm import TritonRMSNorm
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter
-from nanotron.parallel.pipeline_parallel.block import (
-    PipelineBlock,
-    TensorPointer,
-)
+from nanotron.parallel.pipeline_parallel.block import PipelineBlock, TensorPointer
 from nanotron.parallel.pipeline_parallel.p2p import P2P
 from nanotron.parallel.tensor_parallel.functional import sharded_cross_entropy
 from nanotron.parallel.tensor_parallel.nn import (
@@ -48,6 +40,7 @@ from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelRowLinear,
 )
 from nanotron.random import RandomStates
+from nanotron.scaling.parametrization import SpectralMupParametrizator, StandardParametrizator
 from nanotron.utils import checkpoint_method
 
 logger = logging.get_logger(__name__)
@@ -162,7 +155,6 @@ class MLP(nn.Module):
             async_communication=tp_linear_async_communication,
             contiguous_chunks=gate_up_contiguous_chunks,
         )
-
         self.down_proj = TensorParallelRowLinear(
             config.intermediate_size,
             config.hidden_size,
@@ -189,6 +181,7 @@ class CoreAttention(nn.Module):
         ), f"Hidden size {config.hidden_size} must be divisible by number of attention heads {config.num_attention_heads}."
         self.d_qk = config.hidden_size // config.num_attention_heads
         self.d_v = config.hidden_size // config.num_attention_heads
+        self.is_using_mup = config.is_using_mup
 
         self.checkpoint_attention = False  # Because flash_attn already does checkpointing
 
@@ -201,6 +194,8 @@ class CoreAttention(nn.Module):
         q_sequence_mask: torch.Tensor,  # torch.BoolTensor [batch_size, q_length] (can be broadcasted to that size)
         kv_sequence_mask: torch.Tensor,  # torch.BoolTensor [batch_size, kv_length] (can be broadcasted to that size)
     ):
+        from flash_attn.flash_attn_interface import flash_attn_varlen_func
+
         # TODO @thomasw21: Compute once, instead of computing for each layers.
         cu_seqlens_q = torch.zeros((q_sequence_mask.shape[0] + 1), dtype=torch.int32, device=query_states.device)
         cu_seqlens_k = torch.zeros((kv_sequence_mask.shape[0] + 1), dtype=torch.int32, device=query_states.device)
@@ -210,6 +205,10 @@ class CoreAttention(nn.Module):
         # TODO(kunhao): flash attn's causal means that the query can only attend to the keys before it. This is not
         # what we want if we are using kv cache. This is a hack as we always have q_length == 1 when using kv cache.
         causal = False if q_sequence_mask.shape[1] == 1 else True
+
+        # NOTE: this scale is for µTransfer,
+        # in SP, we use sqrt(1/d_h)
+        softmax_scale = 1 / query_states.shape[-1] if self.is_using_mup else None
         attn_output = flash_attn_varlen_func(
             q=query_states,
             k=key_states,
@@ -219,7 +218,7 @@ class CoreAttention(nn.Module):
             max_seqlen_q=q_sequence_mask.shape[1],
             max_seqlen_k=kv_sequence_mask.shape[1],
             dropout_p=0.0,
-            softmax_scale=None,  # This already defaults to the scale I'm interested in
+            softmax_scale=softmax_scale,
             causal=causal,
             return_attn_probs=False,
         )
@@ -263,6 +262,8 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         tp_pg: dist.ProcessGroup,
         layer_idx: int,
     ):
+        from flash_attn.layers.rotary import RotaryEmbedding as FlashRotaryEmbedding
+
         super().__init__()
         # Tensor parallel considerations: We split tensors along head dimension
         assert (
@@ -291,6 +292,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         self.d_qk = config.hidden_size // config.num_attention_heads
         self.d_v = config.hidden_size // config.num_attention_heads
         self.d_model = config.hidden_size
+        self.is_using_mup = config.is_using_mup
 
         # TODO @thomasw21: refactor so that we store that default in a single place.
         tp_mode = parallel_config.tp_mode if parallel_config is not None else TensorParallelLinearMode.ALL_REDUCE
@@ -347,6 +349,12 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         hidden_states,  # [seq_length, batch_size, hidden_size]
         sequence_mask,  # [batch_size, seq_length]
     ):
+        from flash_attn import bert_padding
+        from flash_attn.flash_attn_interface import (
+            flash_attn_varlen_func,
+            flash_attn_with_kvcache,
+        )
+
         qkv_states = self.qkv_proj(
             hidden_states
         )  # [seq_length, batch_size, n_local_q_heads * d_qk + 2 * n_local_kv_heads * d_qk]
@@ -433,6 +441,9 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                 )
                 (value_unpad, _, _, _) = bert_padding.unpad_input(value_states, sequence_mask)
 
+                # NOTE: this scale is for µTransfer,
+                # in SP, we use sqrt(1/d_h)
+                softmax_scale = 1 / query_states.shape[-1] if self.is_using_mup else None
                 output_unpad = flash_attn_varlen_func(
                     q=query_unpad,  # (total_q, n_local_q_heads, d_qk)
                     k=key_unpad,  # (total_kv, n_local_kv_heads, d_qk)
@@ -442,7 +453,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                     max_seqlen_q=max_seqlen_q,
                     max_seqlen_k=max_seqlen_k,
                     dropout_p=0.0,
-                    softmax_scale=None,
+                    softmax_scale=softmax_scale,
                     causal=True,  # True in prefill phase, False in subsequent phases
                     return_attn_probs=False,
                 )  # (total_unpadded, n_local_q_heads, d_v)
@@ -516,6 +527,9 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                     batch_size, kv_length, self.n_local_kv_heads, self.d_v
                 )  # [batch_size, kv_length, self.n_heads, d_v]
 
+                # NOTE: this scale is for µTransfer,
+                # in SP, we use sqrt(1/d_h)
+                softmax_scale = 1 / query_states.shape[-1] if self.is_using_mup else None
                 attention_output = flash_attn_with_kvcache(
                     query_states,
                     k_cache,
@@ -524,9 +538,9 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                     value_states,
                     rotary_cos=None,
                     rotary_sin=None,
-                    # TODO @nouamane: seems like this doesnt help to indicate padding in (for first iteration it's just 0)
+                    # TODO @nouamane: seems like this doesn't help to indicate padding in (for first iteration it's just 0)
                     cache_seqlens=position_offsets.contiguous(),
-                    softmax_scale=None,
+                    softmax_scale=softmax_scale,
                     causal=True,
                     rotary_interleaved=False,  # GPT-NeoX style
                 )
@@ -829,6 +843,7 @@ class Loss(nn.Module):
     ) -> Dict[str, torch.Tensor]:
         # Megatron by defaults cast everything in fp32. `--f16-lm-cross-entropy` is an option you can use to keep current precision.
         # https://github.com/NVIDIA/Megatron-LM/blob/f267e6186eae1d6e2055b412b00e2e545a8e896a/megatron/model/gpt_model.py#L38
+
         loss = sharded_cross_entropy(
             sharded_logits, label_ids.transpose(0, 1).contiguous(), group=self.tp_pg, dtype=torch.float
         ).transpose(0, 1)
@@ -881,13 +896,30 @@ class LlamaForTraining(NanotronModel):
             label_mask=label_mask,
         )["loss"]
         return {"loss": loss}
-    
+
     @torch.no_grad()
-    def init_model_randomly(self, config):
+    def init_model_randomly(self, config: Config):
         """Initialize model parameters randomly.
         Note:
             Layernorm weight all 0 or 1 depending on `apply_layernorm_1p`
         """
+        init_method = config.model.init_method
+        if isinstance(init_method, RandomInit):
+            parametrizator_cls = StandardParametrizator
+        elif isinstance(init_method, SpectralMupInit):
+            parametrizator_cls = SpectralMupParametrizator
+        else:
+            raise ValueError(f"Unknown init method {init_method}")
+
+        parametrizator = parametrizator_cls(config=config.model)
+
+        log_rank(
+            f"Parametrizing model parameters using {parametrizator.__class__.__name__}",
+            logger=logger,
+            level=logging.INFO,
+            rank=0,
+        )
+
         model = self
         initialized_parameters = set()
         # Handle tensor parallelism
@@ -895,15 +927,11 @@ class LlamaForTraining(NanotronModel):
         # Fix the root_model
         module_id_to_prefix[id(model)] = ""
 
-        std = config.model.init_method.std
-        sigma = config.model.init_method.std
-        num_layers = config.model.model_config.num_hidden_layers
-        
         for param_name, param in model.named_parameters():
             assert isinstance(param, NanotronParameter)
-            
-            module_name, param_name = param_name.rsplit('.', 1)
-            
+
+            module_name, param_name = param_name.rsplit(".", 1)
+
             if param.is_tied:
                 tied_info = param.get_tied_info()
                 full_param_name = tied_info.get_full_name_from_module_id_to_prefix(
@@ -917,37 +945,11 @@ class LlamaForTraining(NanotronModel):
                 continue
 
             module = model.get_submodule(module_name)
-
-            if isinstance(module, TensorParallelColumnLinear):
-                if "weight" == param_name:
-                    torch.nn.init.normal_(module.weight, mean=0.0, std=std)
-                elif "bias" == param_name:
-                    module.bias.zero_()
-                else:
-                    raise ValueError(f"Who the fuck is {param_name}?")
-            elif isinstance(module, TensorParallelRowLinear):
-                if "weight" == param_name:
-                    torch.nn.init.normal_(module.weight, mean=0.0, std=sigma / math.sqrt(2 * num_layers))
-                elif "bias" == param_name:
-                    param.zero_()
-                else:
-                    raise ValueError(f"Who the fuck is {param_name}?")
-            elif isinstance(module, TritonRMSNorm):
-                if "weight" == param_name:
-                    # TODO @thomasw21: Sometimes we actually want 0
-                    module.weight.fill_(1)
-                elif "bias" == param_name:
-                    module.bias.zero_()
-                else:
-                    raise ValueError(f"Who the fuck is {param_name}?")
-            elif isinstance(module, TensorParallelEmbedding):
-                nn.init.normal_(module.weight, mean=0.0, std=std)
-            else:
-                raise Exception(f"Parameter {full_param_name} was not intialized")
+            parametrizator.parametrize(param_name, module)
 
             assert full_param_name not in initialized_parameters
             initialized_parameters.add(full_param_name)
-            
+
         assert initialized_parameters == {
             param.get_tied_info().get_full_name_from_module_id_to_prefix(module_id_to_prefix=module_id_to_prefix)
             if param.is_tied

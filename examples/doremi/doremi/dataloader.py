@@ -5,10 +5,6 @@ from typing import Dict, List, Union
 
 import numpy as np
 import torch
-from torch.utils.data import DataLoader
-from torch.utils.data.distributed import DistributedSampler
-from tqdm import tqdm
-
 from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.dataloader import get_dataloader_worker_init
@@ -16,6 +12,9 @@ from nanotron.parallel import ParallelContext
 from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
 from nanotron.parallel.pipeline_parallel.utils import get_input_output_pp_ranks
 from nanotron.trainer import DistributedTrainer
+from torch.utils.data import DataLoader
+from torch.utils.data.distributed import DistributedSampler
+from tqdm import tqdm
 
 from .doremi_context import DoReMiContext
 
@@ -337,7 +336,7 @@ def get_dataloader(trainer: DistributedTrainer, datasets) -> DataLoader:
         num_microbatches=trainer.n_micro_batches_per_batch,
         num_replicas=parallel_context.dp_pg.size(),
         rank=dist.get_rank(parallel_context.dp_pg),
-        seed=trainer.config.data.seed,
+        seed=trainer.config.data_stages[0].data.seed,
         drop_last=True,
         doremi_context=doremi_context,
         parallel_context=parallel_context,
@@ -349,7 +348,7 @@ def get_dataloader(trainer: DistributedTrainer, datasets) -> DataLoader:
         comebined_dataset,
         batch_sampler=sampler,
         collate_fn=data_collator,
-        num_workers=trainer.config.data.num_loading_workers,
+        num_workers=trainer.config.data_stages[0].data.num_loading_workers,
         pin_memory=True,
         worker_init_fn=get_dataloader_worker_init(dp_rank=dist.get_rank(parallel_context.dp_pg)),
     )
