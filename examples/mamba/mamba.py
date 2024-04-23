@@ -721,14 +721,6 @@ class MambaModel(nn.Module):
 
         return model_flops_per_s, hardware_flops_per_s
 
-    def get_named_params_without_weight_decay(self):
-        # get full name with "A_log", "D"
-        named_param_without_weight_decay = []
-        for name, _ in self.named_parameters():
-            if "A_log" in name or "D" in name:
-                named_param_without_weight_decay.append(name)
-        return named_param_without_weight_decay
-
 
 def masked_mean(loss, label_mask, dtype):
     # type: (Tensor, Tensor, torch.dtype) -> Tensor
@@ -813,6 +805,14 @@ class MambaForTraining(NanotronModel):
             label_mask=label_mask,
         )["loss"]
         return {"loss": loss}
+    
+    def get_named_params_without_weight_decay(self):
+        # get full name with "A_log", "D"
+        named_param_without_weight_decay = []
+        for name, _ in self.model.named_parameters():
+            if "A_log" in name or "D" in name:
+                named_param_without_weight_decay.append(name)
+        return named_param_without_weight_decay
 
     @torch.no_grad()
     def init_model_randomly(self, config):
