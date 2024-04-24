@@ -5,20 +5,20 @@ import math
 import os
 import time
 from datetime import datetime
+from functools import partial
 from math import ceil
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 import torch
 from torch import nn
 from torch.nn.parallel import DistributedDataParallel
-from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
 from torch.profiler import ProfilerActivity, profile, tensorboard_trace_handler
 
 from nanotron import distributed as dist
 from nanotron import logging
-from nanotron.config import Config, LRSchedulerArgs, OptimizerArgs, ParallelismArgs
+from nanotron.config import Config, DatasetStageArgs, LRSchedulerArgs, OptimizerArgs, ParallelismArgs
 from nanotron.distributed import ProcessGroup
 from nanotron.logging import LogItem, log_rank
 from nanotron.models.base import NanotronModel
@@ -41,6 +41,8 @@ from nanotron.random import (
     get_current_random_state,
     get_synced_random_state,
 )
+from nanotron.scaling.parametrization import LearningRateForSP, LearningRateForSpectralMup, ParametrizationMethod
+from nanotron.serialize.metadata import TrainingMetadata
 
 logger = logging.get_logger(__name__)
 
@@ -91,8 +93,17 @@ def lr_scheduler_builder(optimizer: Optimizer, lr_scheduler_args: LRSchedulerArg
     else:
         lr_decay_starting_step = lr_scheduler_args.lr_decay_starting_step
 
-    def lr_lambda(current_step: int):
-        """LR Scheduling function, it has from 2 up to 4 phases:
+    def lr_lambda(current_step: int, initial_lr: float):
+        """
+        current_step: current training step
+        initial_lr: the learning rate of a parameter group
+
+        More info on initial_lr:
+        And in standard parameterization, lr_lambda only takes a single learning rate.
+        But in µTransfer, each parameter has a custom learning rate (custom_lr = lr_scheduler_args.learning_rate * scaling_factor),
+        so each parameter group has a custom lr_lambda function.
+
+        LR Scheduling function, it has from 2 up to 4 phases:
         - warmup,
         - optional: constant (if lr_decay_starting_step is set)
         - decay
@@ -104,12 +115,12 @@ def lr_scheduler_builder(optimizer: Optimizer, lr_scheduler_args: LRSchedulerArg
         """
         # No warmup or decay
         if lr_scheduler_args.lr_warmup_steps == 0 and lr_decay_steps == 0:
-            return lr_scheduler_args.learning_rate
+            return initial_lr
 
         # Warmup phase
         elif lr_scheduler_args.lr_warmup_style is not None and current_step <= lr_scheduler_args.lr_warmup_steps:
             if lr_scheduler_args.lr_warmup_style == "linear":
-                lmbda = lr_scheduler_args.learning_rate * current_step / max(lr_scheduler_args.lr_warmup_steps, 1)
+                lmbda = initial_lr * current_step / max(lr_scheduler_args.lr_warmup_steps, 1)
             elif lr_scheduler_args.lr_warmup_style == "constant":
                 lmbda = lr_scheduler_args.learning_rate
             else:
@@ -117,21 +128,21 @@ def lr_scheduler_builder(optimizer: Optimizer, lr_scheduler_args: LRSchedulerArg
 
         # Optional constant phase at learning_rate
         elif current_step < lr_decay_starting_step:
-            lmbda = lr_scheduler_args.learning_rate
+            lmbda = initial_lr
 
         # Decay phase
         elif lr_scheduler_args.lr_decay_style is not None and current_step < lr_decay_starting_step + lr_decay_steps:
             if lr_scheduler_args.lr_decay_style == "cosine":
                 lmbda = (
                     lr_scheduler_args.min_decay_lr
-                    + (lr_scheduler_args.learning_rate - lr_scheduler_args.min_decay_lr)
+                    + (initial_lr - lr_scheduler_args.min_decay_lr)
                     * (1 + math.cos(math.pi * (current_step - lr_decay_starting_step) / lr_decay_steps))
                     / 2
                 )
             elif lr_scheduler_args.lr_decay_style == "linear":
                 lmbda = (
                     lr_scheduler_args.min_decay_lr
-                    + (lr_scheduler_args.learning_rate - lr_scheduler_args.min_decay_lr)
+                    + (initial_lr - lr_scheduler_args.min_decay_lr)
                     * (lr_decay_steps - (current_step - lr_decay_starting_step))
                     / lr_decay_steps
                 )
@@ -142,15 +153,146 @@ def lr_scheduler_builder(optimizer: Optimizer, lr_scheduler_args: LRSchedulerArg
         else:
             lmbda = lr_scheduler_args.min_decay_lr
 
-        lmbda /= lr_scheduler_args.learning_rate  # Normalization for pytorch
+        lmbda /= initial_lr  # Normalization for pytorch
         return lmbda
 
-    lr_scheduler = LambdaLR(optimizer.get_base_optimizer(), lr_lambda=lr_lambda)
+    def get_lr_lambda_for_param_group(lr: float):
+        return partial(lr_lambda, initial_lr=lr)
+
+    # NOTE: get learning rate scheduler for each param group
+    lr_lambdas = []
+    for param_group in optimizer.get_base_optimizer().param_groups:
+        lr_lambdas.append(get_lr_lambda_for_param_group(lr=param_group["lr"]))
+
+    assert len(lr_lambdas) == len(
+        optimizer.get_base_optimizer().param_groups
+    ), "Custom learning rate functions dont match the number of param groups"
+
+    log_rank(
+        f"[Optimizer Building] There are total {len(lr_lambdas)} custom learning rate function for parameter groups",
+        logger=logger,
+        level=logging.DEBUG,
+    )
+
+    lr_scheduler = LambdaLR(optimizer.get_base_optimizer(), lr_lambda=lr_lambdas)
     return lr_scheduler
 
 
+def get_custom_weight_decay_for_named_parameters(
+    named_parameters: Iterable[Tuple[str, torch.Tensor]],
+    model: NanotronModel,
+    module_id_to_prefix: Dict[int, str],
+    weight_decay: float,
+) -> List[Dict[str, Any]]:
+    """
+    Apply weight decay to all parameters except the ones that are in the named_param_without_weight_decay list.
+    """
+
+    named_param_groups_with_custom_weight_decay = []
+
+    exclude_named_params = model.get_named_params_without_weight_decay()
+
+    for name, param in named_parameters:
+        if param.is_tied:
+            param.get_tied_info().get_full_name_from_module_id_to_prefix(module_id_to_prefix=module_id_to_prefix)
+        else:
+            pass
+
+        if any(name.endswith(substring) for substring in exclude_named_params):
+            named_param_groups_with_custom_weight_decay.append({"named_params": [(name, param)], "weight_decay": 0.0})
+        else:
+            named_param_groups_with_custom_weight_decay.append(
+                {"named_params": [(name, param)], "weight_decay": weight_decay}
+            )
+
+    log_rank(
+        f"[Optimizer Building] Creating {len(named_param_groups_with_custom_weight_decay)} param groups with custom weight decay",
+        logger=logger,
+        level=logging.DEBUG,
+    )
+    return named_param_groups_with_custom_weight_decay
+
+
+def get_custom_lr_for_named_parameters(
+    parametrization_method: ParametrizationMethod,
+    lr: float,
+    named_parameters: Iterable[Tuple[str, torch.Tensor]],
+    model: NanotronModel,
+) -> List[Dict[str, Any]]:
+    """
+    Get custom learning rates for parameters based on the parametrization method.
+
+    NOTE: in some paramtrization methods, we use a global learning rate for all parameters,
+    in others we use a custom learning rate for each parameter (eg: spectral µTransfer).
+    """
+
+    assert parametrization_method in [ParametrizationMethod.SPECTRAL_MUP, ParametrizationMethod.STANDARD]
+
+    lr_mapper_cls = (
+        LearningRateForSpectralMup
+        if parametrization_method == ParametrizationMethod.SPECTRAL_MUP
+        else LearningRateForSP
+    )
+
+    log_rank(
+        f"[Optimizer Building] Using {lr_mapper_cls.__name__} as learning rate",
+        logger=logger,
+        level=logging.INFO,
+        rank=0,
+    )
+
+    # NOTE: since in the case of pipeline parallelism, each rank only has a subset of the model
+    # so we only get the parameters that are in the current rank
+    learning_rate_mapper = lr_mapper_cls(names_to_modules=model.named_modules_in_pp_rank, lr=lr)
+
+    named_param_groups_with_custom_lr = []
+    for (
+        name,
+        param,
+    ) in named_parameters:
+        learning_rate = learning_rate_mapper.get_lr(name, param)
+        assert isinstance(learning_rate, float), f"Expected a float, got {learning_rate} for parameter {name}"
+        named_param_groups_with_custom_lr.append({"named_params": [(name, param)], "lr": learning_rate})
+
+    log_rank(
+        f"[Optimizer Building] Creating {len(named_param_groups_with_custom_lr)} param groups with custom learning rates",
+        logger=logger,
+        level=logging.DEBUG,
+    )
+
+    return named_param_groups_with_custom_lr
+
+
+def merge_named_param_groups(
+    named_param_groups_with_lr: List[Dict[str, Any]],
+    named_param_groups_with_weight_decay: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+
+    assert len(named_param_groups_with_lr) == len(
+        named_param_groups_with_weight_decay
+    ), "Named param groups don't match in length"
+
+    named_param_groups = []
+    for group_with_lr, group_with_weight_decay in zip(
+        named_param_groups_with_lr, named_param_groups_with_weight_decay
+    ):
+        assert group_with_lr["named_params"] == group_with_weight_decay["named_params"]
+        named_param_groups.append(
+            {
+                "named_params": group_with_lr["named_params"],
+                "lr": group_with_lr["lr"],
+                "weight_decay": group_with_weight_decay["weight_decay"],
+            }
+        )
+
+    return named_param_groups
+
+
 def init_optimizer_and_grad_accumulator(
-    model: nn.Module, optimizer_args: OptimizerArgs, parallel_context: ParallelContext
+    parametrization_method: ParametrizationMethod,
+    model: nn.Module,
+    optimizer_args: OptimizerArgs,
+    parallel_context: ParallelContext,
 ) -> Tuple[BaseOptimizer, GradientAccumulator]:
     # Unwrap DDP
     unwrapped_model: NanotronModel = model.module if isinstance(model, DistributedDataParallel) else model
@@ -161,18 +303,52 @@ def init_optimizer_and_grad_accumulator(
 
     named_parameters = list(unwrapped_model.get_named_params_with_correct_tied())
 
+    named_param_groups_with_lr = get_custom_lr_for_named_parameters(
+        parametrization_method=parametrization_method,
+        named_parameters=named_parameters,
+        model=unwrapped_model,
+        lr=optimizer_args.learning_rate_scheduler.learning_rate,
+    )
+    named_param_groups_with_weight_decay = get_custom_weight_decay_for_named_parameters(
+        named_parameters=named_parameters,
+        model=unwrapped_model,
+        module_id_to_prefix=module_id_to_prefix,
+        weight_decay=optimizer_args.weight_decay,
+    )
+
+    named_param_groups = merge_named_param_groups(named_param_groups_with_lr, named_param_groups_with_weight_decay)
+
     # Basic optimizer builder
     def basic_optimizer_builder(named_param_groups):
+        optimizer = None
+
+        if optimizer_args.optimizer_factory.name == "adamW":
+
+            def optimizer(param_groups):
+                return torch.optim.AdamW(
+                    param_groups,
+                    lr=optimizer_args.learning_rate_scheduler.learning_rate,
+                    weight_decay=optimizer_args.weight_decay,
+                    eps=optimizer_args.optimizer_factory.adam_eps,
+                    betas=(optimizer_args.optimizer_factory.adam_beta1, optimizer_args.optimizer_factory.adam_beta2),
+                    fused=optimizer_args.optimizer_factory.torch_adam_is_fused,
+                )
+
+        elif optimizer_args.optimizer_factory.name == "sgd":
+
+            def optimizer(param_groups):
+                return torch.optim.SGD(
+                    param_groups,
+                    lr=optimizer_args.learning_rate_scheduler.learning_rate,
+                    weight_decay=optimizer_args.weight_decay,
+                )
+
+        else:
+            raise ValueError(f"Optimizer {optimizer_args.optimizer_factory.name} is not supported")
+
         return NamedOptimizer(
             named_params_or_groups=named_param_groups,
-            optimizer_builder=lambda param_groups: AdamW(  # pylint: disable=E0601
-                param_groups,
-                weight_decay=optimizer_args.weight_decay,
-                lr=optimizer_args.learning_rate_scheduler.learning_rate,
-                eps=optimizer_args.adam_eps,
-                betas=(optimizer_args.adam_beta1, optimizer_args.adam_beta2),
-                fused=optimizer_args.torch_adam_is_fused,
-            ),
+            optimizer_builder=optimizer,
         )
 
     optimizer_builder = basic_optimizer_builder
@@ -202,7 +378,7 @@ def init_optimizer_and_grad_accumulator(
     if optimizer_args.zero_stage > 0:
         # Build optimizer
         optimizer = ZeroDistributedOptimizer(
-            named_params_or_groups=named_parameters,
+            named_params_or_groups=named_param_groups,
             # TODO @thomasw21: We need a better API for gradient accumulation/zero etc ...
             optimizer_builder=optimizer_builder,
             dp_pg=parallel_context.dp_pg,
@@ -220,7 +396,7 @@ def init_optimizer_and_grad_accumulator(
             assert param.data_ptr() == optim_model_param.data_ptr()
     else:
         # Build optimizer
-        optimizer = optimizer_builder(named_parameters)
+        optimizer = optimizer_builder(named_param_groups)
 
     if grad_accumulator is not None and optimizer_args.zero_stage > 0:
         # There's a way to only require to reduce_scatter the gradients instead of all_reducing
@@ -259,7 +435,8 @@ def init_optimizer_and_grad_accumulator(
 
 
 def test_equal_dict(first: Dict, second: Dict, sub_paths: Optional[List[str]] = None) -> None:
-    """Raise if doesn't match"""
+    """Raise if doesn't match."""
+
     if sub_paths is None:
         sub_paths = []
 
@@ -493,3 +670,39 @@ def log_throughput(
 
     if dist.get_rank(parallel_context.world_pg) == 0:
         write_to_csv(config.general.benchmark_csv_path, table_log, model_tflops, slurm_job_id)
+
+
+def compute_remain_train_steps_of_a_data_stage_from_ckp(
+    stage: DatasetStageArgs, config: Config, metadata: TrainingMetadata
+) -> int:
+    def is_last_stage():
+        sorted_stages = sorted(config.data_stages, key=lambda x: x.start_training_step)
+        return sorted_stages[-1].start_training_step == stage.start_training_step
+
+    def is_resume_from_training():
+        return metadata.last_train_step > 0
+
+    if is_last_stage() is True:
+        total_train_steps = config.tokens.train_steps
+    else:
+        next_stage = next((s for s in config.data_stages if s.start_training_step > stage.start_training_step), None)
+        total_train_steps = next_stage.start_training_step
+    
+    if metadata.last_train_step > stage.start_training_step:
+        # NOTE: if the last_train_step is larger than the start_training_step of the current stage,
+        # it means that the training has already passed this stage
+        # so there is no remaining steps
+        return 0
+    else:
+        last_train_steps = metadata.last_train_step if is_resume_from_training() else stage.start_training_step
+        return total_train_steps - last_train_steps
+
+
+def get_consumed_train_samples_of_a_data_stage_from_ckp(
+    stage: DatasetStageArgs, metadata: TrainingMetadata
+) -> Optional[int]:
+    start_training_step = stage.start_training_step
+    return next(
+        (s.consumed_train_samples for s in metadata.data_stages if s.start_training_step == start_training_step),
+        None,
+    )

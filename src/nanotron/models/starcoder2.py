@@ -24,15 +24,9 @@ import math
 from typing import Dict, List, Optional, Tuple, Union
 
 import torch
-from flash_attn import bert_padding
-from flash_attn.flash_attn_interface import (
-    flash_attn_varlen_func,
-    flash_attn_with_kvcache,
-)
 from torch import nn
-from torch.nn import LayerNorm
+from torch.nn import LayerNorm, init
 from torch.nn import functional as F
-from torch.nn import init
 
 from nanotron import distributed as dist
 from nanotron.config import ParallelismArgs, Starcoder2Config
@@ -62,8 +56,6 @@ from nanotron.parallel.tensor_parallel.nn import (
 from nanotron.parallel.tied_parameters import tie_parameters
 from nanotron.random import RandomStates, branch_random_state
 from nanotron.utils import checkpoint_method
-
-_flash_supports_window_size = "window_size" in list(inspect.signature(flash_attn_varlen_func).parameters)
 
 
 def pad_to_right(tensor, mask, new_tensor=None):
@@ -228,6 +220,10 @@ class CoreAttention(nn.Module):
 
     def __init__(self, config: Starcoder2Config, parallel_config: Optional[ParallelismArgs], layer_idx: int):
         super().__init__()
+        from flash_attn.flash_attn_interface import flash_attn_varlen_func
+
+        _flash_supports_window_size = "window_size" in list(inspect.signature(flash_attn_varlen_func).parameters)
+
         assert (
             config.hidden_size % config.num_attention_heads == 0
         ), f"Hidden size {config.hidden_size} must be divisible by number of attention heads {config.num_attention_heads}."
@@ -258,6 +254,8 @@ class CoreAttention(nn.Module):
         q_sequence_mask: torch.Tensor,  # torch.BoolTensor [batch_size, q_length] (can be broadcasted to that size)
         kv_sequence_mask: torch.Tensor,  # torch.BoolTensor [batch_size, kv_length] (can be broadcasted to that size)
     ):
+        from flash_attn.flash_attn_interface import flash_attn_varlen_func
+
         # TODO @thomasw21: Compute once, instead of computing for each layers.
         cu_seqlens_q = torch.zeros((q_sequence_mask.shape[0] + 1), dtype=torch.int32, device=query_states.device)
         cu_seqlens_k = torch.zeros((kv_sequence_mask.shape[0] + 1), dtype=torch.int32, device=query_states.device)
@@ -682,6 +680,12 @@ class CausalSelfMQA(nn.Module, AttachableStore):
         hidden_states,  # [seq_length, batch_size, hidden_dim]
         sequence_mask,  # [batch_size, seq_length]
     ):
+        from flash_attn import bert_padding
+        from flash_attn.flash_attn_interface import (
+            flash_attn_varlen_func,
+            flash_attn_with_kvcache,
+        )
+
         batch_size = hidden_states.shape[1]
 
         def unshape(states):
@@ -833,7 +837,7 @@ class CausalSelfMQA(nn.Module, AttachableStore):
                     value_states,
                     rotary_cos=None,
                     rotary_sin=None,
-                    # TODO @nouamane: seems like this doesnt help to indicate padding in (for first iteration it's just 0)
+                    # TODO @nouamane: seems like this doesn't help to indicate padding in (for first iteration it's just 0)
                     cache_seqlens=position_offsets.contiguous(),
                     softmax_scale=None,
                     causal=True,
@@ -956,6 +960,12 @@ class CausalSelfGQA(nn.Module, AttachableStore):
         hidden_states,  # (seq_length, batch_size, hidden_size)
         sequence_mask,  # (batch_size, seq_length)
     ):
+        from flash_attn import bert_padding
+        from flash_attn.flash_attn_interface import (
+            flash_attn_varlen_func,
+            flash_attn_with_kvcache,
+        )
+
         fused_qkv = self.query_key_value(
             hidden_states
         )  # [seq_length, batch_size, n_local_q_heads * head_dim + 2 * n_local_kv_heads * head_dim]
@@ -1072,7 +1082,7 @@ class CausalSelfGQA(nn.Module, AttachableStore):
                     value_states,
                     rotary_cos=None,
                     rotary_sin=None,
-                    # TODO @nouamane: seems like this doesnt help to indicate padding in (for first iteration it's just 0)
+                    # TODO @nouamane: seems like this doesn't help to indicate padding in (for first iteration it's just 0)
                     cache_seqlens=position_offsets.contiguous(),
                     softmax_scale=None,
                     causal=True,
@@ -1533,7 +1543,7 @@ class Starcoder2ForTraining(NanotronModel):
             elif isinstance(module, TensorParallelEmbedding):
                 nn.init.normal_(module.weight, mean=0.0, std=std)
             else:
-                raise Exception(f"Parameter {full_param_name} was not intialized")
+                raise Exception(f"Parameter {full_param_name} was not initialized")
 
             assert full_param_name not in initialized_parameters
             initialized_parameters.add(full_param_name)
@@ -1545,8 +1555,7 @@ class Starcoder2ForTraining(NanotronModel):
             for name, param in model.named_parameters()
         }, f"Somehow the initialized set of parameters don't match:\n - Expected: { {name for name, _ in model.named_parameters()} }\n - Got: {initialized_parameters}"
 
-    @staticmethod
-    def get_embeddings_lm_head_tied_names() -> List[str]:
+    def get_embeddings_lm_head_tied_names(self) -> List[str]:
         return [
             "model.token_embeddings.pp_block.token_embedding.weight",
             "model.lm_head.pp_block.weight",

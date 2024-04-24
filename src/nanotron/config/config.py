@@ -11,11 +11,7 @@ from dacite import from_dict
 from yaml.loader import SafeLoader
 
 from nanotron.config.lighteval_config import LightEvalConfig
-from nanotron.config.models_config import (
-    ExistingCheckpointInit,
-    NanotronConfigs,
-    RandomInit,
-)
+from nanotron.config.models_config import ExistingCheckpointInit, NanotronConfigs, RandomInit, SpectralMupInit
 from nanotron.config.parallelism_config import ParallelismArgs
 from nanotron.config.utils_config import (
     RecomputeGranularity,
@@ -189,7 +185,7 @@ class ModelArgs:
     """Arguments related to model architecture"""
 
     model_config: NanotronConfigs
-    init_method: Union[RandomInit, ExistingCheckpointInit]
+    init_method: Union[RandomInit, SpectralMupInit, ExistingCheckpointInit]
     dtype: Optional[torch.dtype] = None
     make_vocab_size_divisible_by: int = 1
     ddp_bucket_cap_mb: int = 25
@@ -199,6 +195,8 @@ class ModelArgs:
             self.dtype = torch.bfloat16
         if isinstance(self.dtype, str):
             self.dtype = cast_str_to_torch_dtype(self.dtype)
+
+        self.model_config._is_using_mup = isinstance(self.init_method, SpectralMupInit)
 
         # if self.model_config.max_position_embeddings is None:
         #     self.model_config.max_position_embeddings = 0
@@ -265,19 +263,28 @@ class LRSchedulerArgs:
 
 
 @dataclass
-class OptimizerArgs:
-    """Arguments related to the optimizer and learning rate"""
+class SGDOptimizerArgs:
+    name: str = "sgd"
 
-    zero_stage: int
-    weight_decay: float
-    clip_grad: Optional[float]
 
-    accumulate_grad_in_fp32: bool
-
+@dataclass
+class AdamWOptimizerArgs:
     adam_eps: float
     adam_beta1: float
     adam_beta2: float
     torch_adam_is_fused: bool
+    name: str = "adamW"
+
+
+@dataclass
+class OptimizerArgs:
+    """Arguments related to the optimizer and learning rate"""
+
+    optimizer_factory: Union[SGDOptimizerArgs, AdamWOptimizerArgs]
+    zero_stage: int
+    weight_decay: float
+    clip_grad: Optional[float]
+    accumulate_grad_in_fp32: bool
     learning_rate_scheduler: LRSchedulerArgs
 
 
@@ -331,6 +338,7 @@ class Config:
             )
 
         if self.data_stages is not None:
+            self.data_stages = sorted(self.data_stages, key=lambda stage: stage.start_training_step)
             names = [stage.name for stage in self.data_stages]
             training_steps = [stage.start_training_step for stage in self.data_stages]
             assert any(
@@ -345,6 +353,12 @@ class Config:
                     raise ValueError(
                         f"Each stage should have unique starting training step, please change the starting training step for stage {stage.name}"
                     )
+
+            # NOTE: must order the stages by start_training_step from lowest to highest
+            assert all(
+                self.data_stages[i].start_training_step < self.data_stages[i + 1].start_training_step
+                for i in range(len(self.data_stages) - 1)
+            ), "The stages are not sorted by start_training_step in increasing order"
 
         # # if lighteval, we need tokenizer to be defined
         # if self.checkpoints.lighteval is not None:
