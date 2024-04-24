@@ -116,7 +116,7 @@ class Mamba(nn.Module, AttachableStore):
             mode=tp_mode,
             bias=False,
             async_communication=False,
-            contiguous_chunks=(self.d_inner, self.d_inner),
+            contiguous_chunks=None,
         )
 
         assert self.d_inner % self.tp_pg.size() == 0
@@ -228,7 +228,6 @@ class Mamba(nn.Module, AttachableStore):
                 return out
             else:
                 store["seqlen_offset"] += 1
-
         # We do matmul and transpose BLH -> HBL at the same time
         xz = self.in_proj(hidden_states).transpose(1, 2)
         A = -torch.exp(self.A_log.float())  # (d_inner, d_state)
@@ -664,7 +663,7 @@ class MambaModel(nn.Module):
 
     def get_flops_per_sec(self, iteration_time_in_sec, sequence_length, global_batch_size):
         """
-        Get flops per second for a Mamba model. 
+        Get flops per second for a Mamba model.
         Terms such as nonlinearities, biases, and layer normalization are omitted (https://arxiv.org/pdf/2001.08361.pdf)
         """
         # world_size = self.parallel_context.world_pg.size()
