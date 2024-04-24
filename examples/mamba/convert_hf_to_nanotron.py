@@ -83,8 +83,6 @@ def get_weight_from_hf(
 
     param = _get_tensor(hf_name)
 
-    # only do this when the weight is not sharded in tensor parallel
-    # if "in_proj" in hf_name and not param_is_tp_sharded:
     if "in_proj" in hf_name:
         # In Nanotron, we do tensor parallel column so weight need to be split in the column dimension (i.e: xz.view(...))
         # However, the HF weights was trained such that it expected xz.chunk(...) to split the tensor in the row dimension
