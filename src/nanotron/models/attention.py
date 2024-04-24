@@ -5,15 +5,11 @@ import torch.distributed as dist
 import torch.nn.functional as F
 from einops import einsum, rearrange, reduce
 from torch import nn
-
-# from jaxtyping import Float, Array
 from torchtyping import TensorType
 
 from nanotron.config import LlamaConfig, ParallelismArgs
-from nanotron.parallel.tensor_parallel.nn import (
-    TensorParallelLinearMode,
-    TensorParallelRowLinear,
-)
+from nanotron.models.llama import CausalSelfAttention
+from nanotron.parallel.sharded_parameters import SplitConfig, create_sharded_parameter_from_config
 
 
 class InfiniAttention(nn.Module):
@@ -24,41 +20,43 @@ class InfiniAttention(nn.Module):
 
         self.n_segments = 50
 
-        from nanotron.models.llama import CausalSelfAttention
-
-        tp_mode = parallel_config.tp_mode if parallel_config is not None else TensorParallelLinearMode.ALL_REDUCE
-        tp_linear_async_communication = (
-            parallel_config.tp_linear_async_communication if parallel_config is not None else False
-        )
+        self.d_head = config.hidden_size // config.num_attention_heads
 
         self.config = config
-
         self.attn = CausalSelfAttention(
             config=config,
             parallel_config=parallel_config,
             tp_pg=tp_pg,
             layer_idx=layer_idx,
         )
+        # NOTE: hacky, memory mapping
+        self.qkv_proj = self.attn.qkv_proj
+        self.rotary_embedding = self.attn.rotary_embedding
+        self.flash_rotary_embedding = self.attn.flash_rotary_embedding
+        self.o_proj = self.attn.o_proj
 
-        d_model = config.hidden_size
-        self.d_head = config.hidden_size // config.num_attention_heads
-
-        self.o_proj = TensorParallelRowLinear(
-            config.num_attention_heads * self.d_head,
-            d_model,
-            pg=tp_pg,
-            mode=tp_mode,
-            bias=False,
-            async_communication=tp_linear_async_communication,
-        )
-        # NOTE: because the number of heads are splited in TP
-        # so we find them on the fly
         self.n_local_heads = self.attn.n_local_q_heads
 
-        device = self.o_proj.weight.device
-        dtype = self.o_proj.weight.dtype
+        # self.o_proj = TensorParallelRowLinear(
+        #     config.num_attention_heads * self.d_head,
+        #     d_model,
+        #     pg=tp_pg,
+        #     mode=tp_mode,
+        #     bias=False,
+        #     async_communication=tp_linear_async_communication,
+        # )
+        # NOTE: because the number of heads are splited in TP
+        # so we find them on the fly
+
+        device = self.attn.o_proj.weight.device
+        dtype = self.attn.o_proj.weight.dtype
         # self.balance_factors = TensorParallelRowLinear(config.num_attention_heads * self.d_head, 1, pg=tp_pg, mode=tp_mode)
-        self.balance_factors = nn.Parameter(torch.randn(self.n_local_heads, device=device, dtype=dtype))
+        # self.balance_factors = nn.Parameter(torch.randn(self.n_local_heads, device=device, dtype=dtype))
+
+        balance_factors = nn.Parameter(torch.randn(config.num_attention_heads, device=device, dtype=dtype))
+        self.balance_factors = create_sharded_parameter_from_config(
+            parameter=balance_factors, pg=tp_pg, split_config=SplitConfig(split_dim=0)
+        )
 
         # assert self.o_proj.weight.shape == self.attn.o_proj.weight.shape
 
@@ -114,7 +112,8 @@ class InfiniAttention(nn.Module):
             )
 
             # assert query_states.shape == (batch_size, self.n_local_heads, segment_length, self.d_head)
-            assert query_states.shape == key_states.shape == value_states.shape
+            # NOTE: uncomment because of kv heads differ from q heads
+            # assert query_states.shape == key_states.shape == value_states.shape
 
             retrieved_memory = self._retrieve_from_memory(
                 query_states, prev_memory=memory, prev_normalization=normalization
@@ -143,7 +142,7 @@ class InfiniAttention(nn.Module):
                 attention_output, "batch_size n_heads seq_len d_head -> seq_len batch_size (n_heads d_head)"
             )
 
-            output = self.o_proj(attention_output)
+            output = self.attn.o_proj(attention_output)
 
             assert output.shape == (segment_length, batch_size, hidden_size)
 

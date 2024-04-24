@@ -198,6 +198,7 @@ def load_weights(
     parallel_context: ParallelContext,
     root_folder: Path,
     filtered_state_dict: Optional[Dict[str, Any]] = None,
+    strict: bool = False,
 ):
     """Load weights from a checkpoint
 
@@ -206,6 +207,8 @@ def load_weights(
         parallel_context: distributed process groups
         root_folder: root folder of the checkpoint
         filtered_state_dict: state dict to load from (overrides model.state_dict()). if None, load from model.state_dict()
+        strict: whether to strictly enforce that the keys in the state_dict match the keys returned by this module's state_dict() function
+        if you set strict to False, we will skip loading the parameters that can't find the checkpoint file.
     """
     param_root_folder = root_folder / "model"
 
@@ -275,10 +278,18 @@ def load_weights(
                         pass
 
             elif not path.parent.exists():
-                raise ValueError(
-                    f"Checkpoint is empty or checkpoint structure is not matching the model architecture."
-                    f"Couldn't find folder {path.parent} in checkpoint at {root_folder}"
-                )
+                if strict is False:
+                    log_rank(
+                        f"We can't find the checkpoint for parameter {name} at {path.parent}. Skipping it.",
+                        logger=logger,
+                        level=logging.WARNING,
+                        rank=0,
+                    )
+                else:
+                    raise ValueError(
+                        f"Checkpoint is empty or checkpoint structure is not matching the model architecture."
+                        f"Couldn't find folder {path.parent} in checkpoint at {root_folder}"
+                    )
             else:
                 # Let's assume that the topology changed and the param is sharded.
                 # We search for all the files from the shards, concatenate the "unsharded" tensor
@@ -292,7 +303,16 @@ def load_weights(
                 suffix = base_name.rsplit(".", 1)[-1]
                 shards_path = list(path.parent.glob(f"{ObjectType.MODEL.value}_{suffix}*.safetensors"))
                 if len(shards_path) <= 0:
-                    raise ValueError(f"Could not find any shards in {path.parent}")
+                    if strict is False:
+                        log_rank(
+                            f"We can't find the checkpoint for parameter {name} at {path}. Skipping it.",
+                            logger=logger,
+                            level=logging.WARNING,
+                            rank=0,
+                        )
+                        continue
+                    else:
+                        raise ValueError(f"Could not find any shards in {path.parent}")
 
                 if checkpoint_version is None:
                     checkpoint_version = get_checkpoint_version(

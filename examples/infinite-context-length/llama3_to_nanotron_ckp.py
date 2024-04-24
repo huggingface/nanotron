@@ -297,6 +297,6 @@ if __name__ == "__main__":
     os.environ["TRANSFORMERS_CACHE"] = "/admin/home/phuc_nguyen/.cache/huggingface/hub"
 
     checkpoint_path = "meta-llama/Meta-Llama-3-8B"
-    save_path = Path("/fsx/phuc/projects/infini-attention/llama3-ckps/8b/nanotron-ckp")
+    save_path = Path("/fsx/phuc/projects/infini-attention/llama3-ckps/8b/nanotron_ckp_tp_agnostic")
 
     convert_checkpoint_and_save(checkpoint_path=checkpoint_path, save_path=save_path, dp=1, pp=1, tp=1)
