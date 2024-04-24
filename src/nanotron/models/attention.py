@@ -3,7 +3,7 @@ from typing import Optional
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
-from einops import einsum, rearrange, reduce
+from einops import einsum, rearrange, reduce, repeat
 from torch import nn
 from torchtyping import TensorType
 
@@ -18,7 +18,7 @@ class InfiniAttention(nn.Module):
     ):
         super().__init__()
 
-        self.n_segments = 64
+        self.n_segments = 4
 
         self.d_head = config.hidden_size // config.num_attention_heads
 
@@ -54,6 +54,7 @@ class InfiniAttention(nn.Module):
         # self.balance_factors = nn.Parameter(torch.randn(self.n_local_heads, device=device, dtype=dtype))
         self.n_local_q_heads = self.attn.n_local_q_heads
         self.n_local_kv_heads = self.attn.n_local_kv_heads
+        self.is_gqa = self.attn.is_gqa
 
         balance_factors = nn.Parameter(torch.randn((self.n_local_heads,), device=device, dtype=dtype))
         self.tp_pg = tp_pg
@@ -179,6 +180,20 @@ class InfiniAttention(nn.Module):
         if prev_memory is None:
             return torch.zeros_like(query_states)
 
+        if self.is_gqa:
+            # NOTE: we in GQA, multiple heads share the same kv
+            # so we miss some kv heads in the shape, so we repeat them
+            prev_memory = repeat(
+                prev_memory,
+                "batch_size n_kv_heads d_k d_v -> batch_size (n_kv_heads n) d_k d_v",
+                n=self.n_local_q_heads // self.n_local_kv_heads,
+            )
+            prev_normalization = repeat(
+                prev_normalization,
+                "batch_size n_kv_heads d_head -> batch_size (n_kv_heads n) d_head",
+                n=self.n_local_q_heads // self.n_local_kv_heads,
+            )
+
         query_states = F.elu(query_states) + 1
         retrieved_memory = einsum(
             query_states,
@@ -233,6 +248,7 @@ class InfiniAttention(nn.Module):
 
         memory = torch.matmul(key_states.transpose(-2, -1), new_value_states)
 
+        # TODO(xrsrke): deduplicate the repeated kv heads
         # memory = einsum(key_states, value_states, 'batch_size n_heads k_length d_head, batch_size n_heads v_length d_head -> batch_size n_heads k_length v_length')
         normalization = reduce(
             key_states, "batch_size n_heads seq_length d_head -> batch_size n_heads d_head", reduction="sum"
