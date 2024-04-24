@@ -18,7 +18,7 @@ class InfiniAttention(nn.Module):
     ):
         super().__init__()
 
-        self.n_segments = 50
+        self.n_segments = 64
 
         self.d_head = config.hidden_size // config.num_attention_heads
 
@@ -52,10 +52,18 @@ class InfiniAttention(nn.Module):
         dtype = self.attn.o_proj.weight.dtype
         # self.balance_factors = TensorParallelRowLinear(config.num_attention_heads * self.d_head, 1, pg=tp_pg, mode=tp_mode)
         # self.balance_factors = nn.Parameter(torch.randn(self.n_local_heads, device=device, dtype=dtype))
+        self.n_local_q_heads = self.attn.n_local_q_heads
+        self.n_local_kv_heads = self.attn.n_local_kv_heads
 
-        balance_factors = nn.Parameter(torch.randn(config.num_attention_heads, device=device, dtype=dtype))
+        balance_factors = nn.Parameter(torch.randn((self.n_local_heads,), device=device, dtype=dtype))
+        self.tp_pg = tp_pg
         self.balance_factors = create_sharded_parameter_from_config(
-            parameter=balance_factors, pg=tp_pg, split_config=SplitConfig(split_dim=0)
+            parameter=balance_factors,
+            pg=tp_pg,
+            split_config=SplitConfig(
+                split_dim=0,
+                # contiguous_chunks=(self.n_local_heads, self.n_local_heads)
+            ),
         )
 
         # assert self.o_proj.weight.shape == self.attn.o_proj.weight.shape
@@ -70,8 +78,13 @@ class InfiniAttention(nn.Module):
         hidden_states: TensorType["sharded_seq_length", "batch_size", "hidden_size"],
         sequence_mask: TensorType["batch_size", "seq_length"],
     ):
+        # NOTE: check divided by n_segments
+
         batch_size = hidden_states.shape[1]
         seq_len = hidden_states.shape[0]
+
+        assert seq_len % self.n_segments == 0, f"seq_len: {seq_len}, n_segments: {self.n_segments}"
+
         segment_length = seq_len // self.n_segments
         hidden_size = hidden_states.shape[2]
 
@@ -170,7 +183,7 @@ class InfiniAttention(nn.Module):
         retrieved_memory = einsum(
             query_states,
             prev_memory,
-            "batch_size n_heads seq_length d_k, batch_size n_heads d_k d_v -> batch_size n_heads seq_length d_v",
+            "batch_size n_heads seq_length d_q, batch_size n_heads d_k d_v -> batch_size n_heads seq_length d_v",
         )
 
         denominator = einsum(

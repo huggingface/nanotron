@@ -48,7 +48,10 @@ def create_sharded_parameter_from_config(
     if contiguous_chunks is None:
         # we are assuming that the parameter is contiguous along the split_dim, i.e. 1 whole chunk
         # all parameters are equally shardable across the process group along the split_dim
+
         shard_length = parameter.shape[split_dim]
+        # shard_length = parameter.shape[split_dim] // pg.size()
+
         global_slice = slice(current_rank * shard_length, (current_rank + 1) * shard_length)
         # construct a mapping from local slices to global slices, multi-dimensional version
         local_slices = tuple(slice(None) for _ in range(param_num_dims))
