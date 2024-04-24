@@ -244,6 +244,7 @@ def load_weights(
                 exp_tp_pp_rank_and_size = get_exp_tp_pp_rank_and_size_from(
                     world_rank=get_global_rank(group=group, group_rank=group_rank), parallel_context=parallel_context
                 )
+                # TODO @nouamane: do we consider exp_size=1 expert_sharded?
                 is_expert_sharded = sharded_info.is_expert_sharded(parallel_context)
             else:
                 exp_tp_pp_rank_and_size = None
