@@ -34,6 +34,7 @@ from nanotron.config import (
     SpectralMupInit,
     get_config_from_file,
 )
+from nanotron.constants import LR_SCHEDULER_CKP_PATH, METADATA_CKP_PATH, OPTIMIZER_CKP_PATH
 from nanotron.dataloader import sanity_check_dataloader
 from nanotron.helpers import (
     _vocab_size_with_padding,
@@ -184,13 +185,24 @@ class DistributedTrainer:
             parallel_context=self.parallel_context,
         )
         if self.init_checkpoint_path is not None:
-            load_optimizer(
-                optimizer=self.optimizer,
-                parallel_context=self.parallel_context,
-                root_folder=self.init_checkpoint_path,
-                param_shard_metadata=self.param_shard_metadata,
-                model=self.model,
-            )
+            # NOTE: in some cases where we convert hf checkpoints to nanotron checkpoints,
+            # we might not have the optimizer state
+            optim_ckp_path = OPTIMIZER_CKP_PATH.format(self.init_checkpoint_path)
+            if os.path.exists(optim_ckp_path):
+                load_optimizer(
+                    optimizer=self.optimizer,
+                    parallel_context=self.parallel_context,
+                    root_folder=self.init_checkpoint_path,
+                    param_shard_metadata=self.param_shard_metadata,
+                    model=self.model,
+                )
+            else:
+                log_rank(
+                    f"Can't find the optimizer state's checkpoint in {optim_ckp_path}, so we skip loading its checkpoint!",
+                    logger=logger,
+                    level=logging.INFO,
+                    rank=0,
+                )
 
         # Init learning rate scheduler
         self.lr_scheduler = lr_scheduler_builder(
@@ -199,13 +211,24 @@ class DistributedTrainer:
             total_training_steps=self.config.tokens.train_steps,
         )
         if self.init_checkpoint_path is not None:
-            load_lr_scheduler(
-                lr_scheduler=self.lr_scheduler,
-                root_folder=self.init_checkpoint_path,
-            )
+            lr_scheduler_ckp_path = LR_SCHEDULER_CKP_PATH.format(self.init_checkpoint_path)
+            if os.path.exists(lr_scheduler_ckp_path):
+                load_lr_scheduler(
+                    lr_scheduler=self.lr_scheduler,
+                    root_folder=self.init_checkpoint_path,
+                )
+            else:
+                log_rank(
+                    f"Can't find the LR scheduler's checkpoint in {lr_scheduler_ckp_path}, so we skip loading its checkpoint!",
+                    logger=logger,
+                    level=logging.INFO,
+                    rank=0,
+                )
 
         # Define iteration start state
-        if self.init_checkpoint_path is not None:
+        metadata_ckp_path = METADATA_CKP_PATH.format(self.init_checkpoint_path)
+        is_ckp_meta_data_exists = os.path.exists(metadata_ckp_path)
+        if self.init_checkpoint_path is not None and is_ckp_meta_data_exists:
             checkpoint_metadata = load_meta(
                 parallel_context=self.parallel_context, root_folder=self.init_checkpoint_path
             )
@@ -216,6 +239,14 @@ class DistributedTrainer:
                 self.config.tokens.train_steps > self.start_iteration_step
             ), f"Loaded checkpoint has already trained {self.start_iteration_step} batches, you need to specify a higher `config.tokens.train_steps`"
         else:
+            if self.init_checkpoint_path is not None and not is_ckp_meta_data_exists:
+                log_rank(
+                    f"Can't find the checkpoint metadata in {metadata_ckp_path}, so we skip loading it!",
+                    logger=logger,
+                    level=logging.INFO,
+                    rank=0,
+                )
+
             self.start_iteration_step = 0
             self.consumed_train_samples = 0
 

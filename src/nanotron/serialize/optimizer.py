@@ -136,6 +136,7 @@ def load_optimizer(
     # `load_state_dict` copies the state dict which can be very large in case of Zero-0 so we load to cpu and then move to the right device
     map_location = "cpu" if not optimizer.inherit_from(optim.ZeroDistributedOptimizer) else map_location
     ckp_optimizer_config_path = root_folder / "optimizer_config.json"
+
     with open(ckp_optimizer_config_path, "r") as file:
         ckp_optimizer_config = json.load(file)
 
