@@ -157,37 +157,51 @@ import numpy as np
 from datasets import Dataset
 
 
-def generate_dataset(max_length=1000):
-    # context_lengths = np.logspace(10, np.log10(max_length), num=10, dtype=int)
+def generate_dataset():
+    num_prompts = 100
     soft_prompt = "There is an important info hidden inside a lot of irrelevant text. Find it and memorize them. I will quiz you about the important information there."
-    context_lengths = [1024, 2048]
+    context_lengths = [
+        1024,
+        2048,
+        4096,
+        8192,
+        16384,
+        32768,
+        # 65536,
+        # 131072,
+        # 262144,
+        # 524288,
+        # 1048576,
+    ]
     depth_percents = np.linspace(0, 100, num=21)
 
     dataset_dict = {"id": [], "prompt": [], "answer": [], "context_length": [], "depth_percent": []}
     generated_ids = set()
 
     for context_length in context_lengths:
+        print(f"Generating prompts for context length: {context_length} \n")
         for depth_percent in depth_percents:
-            pass_key = random.randint(1, 10000)
-            needle = f"The pass key is {pass_key}. Remember it. {pass_key} is the pass key. "
-            retrieval_question = "What is the pass key? The pass key is "
+            for _ in range(num_prompts):
+                pass_key = random.randint(1, 10000)
+                needle = f"The pass key is {pass_key}. Remember it. {pass_key} is the pass key. "
+                retrieval_question = "What is the pass key? The pass key is "
 
-            prompt, _ = generate_needle_in_haystack_test(
-                needle, haystack_dir, soft_prompt, retrieval_question, context_length, depth_percent
-            )
-            # answer = f"The pass key is {pass_key}"
+                prompt, _ = generate_needle_in_haystack_test(
+                    needle, haystack_dir, soft_prompt, retrieval_question, context_length, depth_percent
+                )
+                # answer = f"The pass key is {pass_key}"
 
-            while True:
-                text_id = str(uuid.uuid4())
-                if text_id not in generated_ids:
-                    generated_ids.add(text_id)
-                    break
+                while True:
+                    text_id = str(uuid.uuid4())
+                    if text_id not in generated_ids:
+                        generated_ids.add(text_id)
+                        break
 
-            dataset_dict["id"].append(text_id)
-            dataset_dict["prompt"].append(prompt)
-            dataset_dict["answer"].append(pass_key)
-            dataset_dict["context_length"].append(context_length)
-            dataset_dict["depth_percent"].append(depth_percent)
+                dataset_dict["id"].append(text_id)
+                dataset_dict["prompt"].append(prompt)
+                dataset_dict["answer"].append(pass_key)
+                dataset_dict["context_length"].append(context_length)
+                dataset_dict["depth_percent"].append(depth_percent)
 
     dataset = Dataset.from_dict(dataset_dict)
     return dataset
