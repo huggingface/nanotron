@@ -4,7 +4,7 @@ Nanotron Inference Script
 Usage:
 ```
 export CUDA_DEVICE_MAX_CONNECTIONS=1 # important for some distributed operations
-torchrun --nproc_per_node=4 run_generate.py ---ckpt-path checkpoints/test/4
+torchrun --nproc_per_node=4 run_generate.py --ckpt-path checkpoints/test/4
 ```
 """
 
@@ -77,7 +77,7 @@ def main():
         pp=args.pp or config.parallelism.pp,
         tp=args.tp or config.parallelism.tp,
         pp_engine=OneForwardOneBackwardPipelineEngine(),
-        tp_mode=TensorParallelLinearMode.ALL_REDUCE,
+        tp_mode=TensorParallelLinearMode.REDUCE_SCATTER,
         tp_linear_async_communication=True,
     )
 
@@ -164,8 +164,8 @@ def main():
         tokenizer.padding_side = "left"
         tokenizer.truncation_side = "left"  # TODO @nouamane: do we want this?
         dummy_inputs = [
-            # "Passage: Daniel went back to the garden. Mary travelled to the kitchen. Sandra journeyed to the kitchen. Sandra went to the hallway. John went to the bedroom. Mary went back to the garden. Where is Mary?\nAnswer:",
-            "def fib(n)",
+            "The capital of France is",
+            "Passage: Daniel went back to the garden. Mary travelled to the kitchen. Sandra journeyed to the kitchen. Sandra went to the hallway. John went to the bedroom. Mary went back to the garden. Where is Mary?\nAnswer:",
             # "This film was probably inspired by Godzilla",
         ]
 
