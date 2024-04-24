@@ -4,7 +4,6 @@ from typing import Any, Dict, List, Optional, Tuple
 import dacite
 import torch
 from packaging.version import Version
-from safetensors import SafetensorError
 from safetensors.torch import safe_open, save_file
 from torch import nn
 from tqdm import tqdm
@@ -97,11 +96,6 @@ def save_weights(model: nn.Module, parallel_context: ParallelContext, root_folde
             path.parent.mkdir(exist_ok=True, parents=True)
             try:
                 tensors = {"data": param_or_buffer}
-
-                # Mamba has some parameters that should not be weight decayed
-                if hasattr(model.get_parameter(name), "_no_weight_decay"):
-                    tensors.update({"_no_weight_decay": torch.tensor(model.get_parameter(name)._no_weight_decay)})
-
                 save_file(tensors=tensors, filename=path, metadata=metadata)
             except Exception as e:
                 log_rank(
@@ -267,12 +261,6 @@ def load_weights(
                 with safe_open(path, framework="pt", device=str(param.device)) as fi:
                     # TODO @thomasw21: Choose only a slice if we switch the TP topology
                     param_or_buffer[:] = fi.get_tensor("data")
-
-                    # Only Mamba params has this attribute
-                    try:
-                        param._no_weight_decay = fi.get_tensor("_no_weight_decay")
-                    except SafetensorError:
-                        pass
 
             elif not path.parent.exists():
                 raise ValueError(

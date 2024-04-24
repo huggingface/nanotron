@@ -1,19 +1,34 @@
 checkpoints:
   checkpoint_interval: 10
-  checkpoints_path: /fsx/ferdinandmom/ferdinand-hf/nanotron/examples/checkpoints
+  checkpoints_path: /fsx/haojun/nanotron_latest/examples/checkpoints
   checkpoints_path_is_shared_file_system: false
   resume_checkpoint_path: null
   save_initial_state: false
-data:
-  dataset:
-    dataset_overwrite_cache: false
-    dataset_processing_num_proc_per_process: 1
-    hf_dataset_config_name: null
-    hf_dataset_or_datasets: HuggingFaceH4/testing_alpaca_small
-    hf_dataset_splits: train
-    text_column_name: completion
-  num_loading_workers: 1
-  seed: 42
+data_stages:
+- data:
+    dataset:
+      dataset_overwrite_cache: false
+      dataset_processing_num_proc_per_process: 1
+      hf_dataset_config_name: null
+      hf_dataset_or_datasets: HuggingFaceH4/testing_alpaca_small
+      hf_dataset_splits: train
+      text_column_name: completion
+    num_loading_workers: 1
+    seed: 42
+  name: Stable Training Stage
+  start_training_step: 1
+- data:
+    dataset:
+      dataset_overwrite_cache: false
+      dataset_processing_num_proc_per_process: 1
+      hf_dataset_config_name: null
+      hf_dataset_or_datasets: HuggingFaceH4/testing_alpaca_small
+      hf_dataset_splits: train
+      text_column_name: completion
+    num_loading_workers: 1
+    seed: 42
+  name: Annealing Phase
+  start_training_step: 10
 general:
   benchmark_csv_path: null
   consumed_train_samples: null

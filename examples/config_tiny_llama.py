@@ -2,9 +2,11 @@
 import os
 
 from nanotron.config import (
+    AdamWOptimizerArgs,
     CheckpointsArgs,
     Config,
     DataArgs,
+    DatasetStageArgs,
     GeneralArgs,
     LlamaConfig,
     LoggingArgs,
@@ -27,7 +29,7 @@ model_config = LlamaConfig(
     hidden_size=16,
     initializer_range=0.02,
     intermediate_size=64,
-    max_position_embeddings=50277,
+    max_position_embeddings=256,
     num_attention_heads=4,
     num_hidden_layers=2,
     num_key_value_heads=4,
@@ -36,7 +38,7 @@ model_config = LlamaConfig(
     rope_scaling=None,
     tie_word_embeddings=True,
     use_cache=True,
-    vocab_size=50277,
+    vocab_size=256,
 )
 
 num_params = human_format(
@@ -61,11 +63,13 @@ optimizer = OptimizerArgs(
     weight_decay=0.01,
     clip_grad=1.0,
     accumulate_grad_in_fp32=True,
-    adam_eps=1e-08,
-    adam_beta1=0.9,
-    adam_beta2=0.95,
-    torch_adam_is_fused=True,
     learning_rate_scheduler=learning_rate,
+    optimizer_factory=AdamWOptimizerArgs(
+        adam_eps=1e-08,
+        adam_beta1=0.9,
+        adam_beta2=0.95,
+        torch_adam_is_fused=True,
+    ),
 )
 
 parallelism = ParallelismArgs(
@@ -95,7 +99,12 @@ config = Config(
     optimizer=optimizer,
     logging=LoggingArgs(),
     tokens=tokens,
-    data=DataArgs(dataset=dataset, seed=seed),
+    data_stages=[
+        DatasetStageArgs(
+            name="Stable Training Stage", start_training_step=1, data=DataArgs(dataset=dataset, seed=seed)
+        ),
+        DatasetStageArgs(name="Annealing Phase", start_training_step=10, data=DataArgs(dataset=dataset, seed=seed)),
+    ],
     profiler=None,
 )
 
