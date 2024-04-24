@@ -1,4 +1,4 @@
-"""File to update the checkpoint from 1.3 to 1.4 to fix the problem where '{type.value}_{suffix_name}.safetensors' was duplicated.
+"""Fixes the problem where '{type.value}_{suffix_name}.safetensors' was duplicated in checkpoint files
 
 For example this script will change the following:
 ```
@@ -9,7 +9,7 @@ checkpoints/10/model/model/decoder/0/pp_block/attn/o_proj/model_weight_pp-rank-0
 
 Example Usage:
 
-python scripts/update_ckpt_to_1_4.py /fsx/nouamane/projects/nanotron/checkpoints/10
+python scripts/fix_checkpoint_bad_naming.py /fsx/nouamane/projects/nanotron/checkpoints/10
 """
 
 import argparse
@@ -37,8 +37,7 @@ def update_checkpoint(checkpoint_dir: str):
                 # so that we get "model_weight_pp-rank-0-of-1_tp-rank-0-of-2.safetensors"
 
                 print(f"Renaming {file} to {new_file}")
-                # os.rename(os.path.join(root, file), os.path.join(root, new_file))
-                raise ("done")
+                os.rename(os.path.join(root, file), os.path.join(root, new_file))
 
 
 def main():
