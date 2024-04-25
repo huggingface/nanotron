@@ -402,7 +402,7 @@ class ExpertParallel(nn.Module):
         self.expert_parallel_size = expert_parallel_size
 
     def forward(self, *args, **kwargs):
-        # self.scale_gradients()
+        self.scale_gradients()
         return self.module(*args, **kwargs)
 
     def scale_gradients(self):
