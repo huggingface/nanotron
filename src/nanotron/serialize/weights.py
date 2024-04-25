@@ -289,7 +289,7 @@ def load_weights(
                     prefix=param_root_folder,
                     is_expert_sharded=is_expert_sharded,
                     version=checkpoint_version or CHECKPOINT_VERSION,
-                    return_all_matches=True
+                    return_all_matches=True,
                 )
 
                 if len(shards_path) <= 0:

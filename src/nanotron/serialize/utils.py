@@ -6,10 +6,10 @@ from typing import List, Optional, Tuple
 import torch
 from packaging.version import Version
 
+from nanotron.constants import CHECKPOINT_VERSION
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import SlicesPair
 from nanotron.serialize.metadata import TensorMetadata
-from nanotron.constants import CHECKPOINT_VERSION
 
 
 class ObjectType(Enum):
@@ -40,7 +40,6 @@ def get_path(
 ) -> Path | List[Path]:
     suffix = tensor_name.split(".")
     suffix_path, suffix_name = suffix[:-1], suffix[-1]
-
 
     if version == Version("1.3"):
         suffix_name = f"{type.value}_{suffix_name}.safetensors"
