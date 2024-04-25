@@ -15,7 +15,6 @@
 """PyTorch LLaMa model."""
 from typing import Dict, Optional, Union
 
-import lovely_tensors as lt
 import torch
 from torch import nn
 
@@ -43,7 +42,6 @@ from nanotron.random import RandomStates
 from nanotron.scaling.parametrization import SpectralMupParametrizator, StandardParametrizator
 from nanotron.utils import checkpoint_method
 
-lt.monkey_patch()
 logger = logging.get_logger(__name__)
 
 
@@ -325,9 +323,6 @@ class CausalSelfAttention(nn.Module, AttachableStore):
 
         # NOTE: Only supported for training (TODO(fmom): position_ids not supported yet)
         self.flash_rotary_embedding = FlashRotaryEmbedding(dim=self.d_qk, interleaved=True)
-        from flash_attn.layers.rotary import RotaryEmbedding as TridaoRotary
-
-        self.tridao_rotary = TridaoRotary(dim=self.d_qk, interleaved=True)
 
         self.o_proj = TensorParallelRowLinear(
             config.num_attention_heads * self.d_qk,
@@ -561,45 +556,29 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             # Apply rotary embeddings to query/key states
             # NOTE: The layout is different from models/llama.py which is [batch_size, num_heads, seq_length, d_qk]
             # Here it is, [batch_size, seq_length, num_heads, d_qk]
-            import os
 
-            if os.environ.get("NEW", "0") == "1":
-                # source: https://github.com/Dao-AILab/flash-attention/issues/177
-                (query_unpad, indices_q, cu_seqlens_q, max_seqlen_q) = bert_padding.unpad_input(
-                    query_states, sequence_mask
-                )
-                (key_unpad, indices_k, cu_seqlens_k, max_seqlen_k) = bert_padding.unpad_input(
-                    key_states, sequence_mask
-                )
+            # source: https://github.com/Dao-AILab/flash-attention/issues/177
+            (query_unpad, indices_q, cu_seqlens_q, max_seqlen_q) = bert_padding.unpad_input(
+                query_states, sequence_mask
+            )
+            (key_unpad, indices_k, cu_seqlens_k, max_seqlen_k) = bert_padding.unpad_input(key_states, sequence_mask)
 
-                query_unpad, key_unpad = self.flash_rotary_embedding(
-                    q=query_unpad,
-                    k=key_unpad,
-                    cu_seqlens_q=cu_seqlens_q,
-                    cu_seqlens_k=cu_seqlens_k,
-                    max_seqlen_q=max_seqlen_q,
-                    max_seqlen_k=max_seqlen_k,
-                )
+            query_unpad, key_unpad = self.flash_rotary_embedding(
+                q=query_unpad,
+                k=key_unpad,
+                cu_seqlens_q=cu_seqlens_q,
+                cu_seqlens_k=cu_seqlens_k,
+                max_seqlen_q=max_seqlen_q,
+                max_seqlen_k=max_seqlen_k,
+            )
 
-                query_states = bert_padding.pad_input(
-                    query_unpad, indices_q, batch_size, q_length
-                )  # (batch_size, q_length, n_local_q_heads, d_v)
+            query_states = bert_padding.pad_input(
+                query_unpad, indices_q, batch_size, q_length
+            )  # (batch_size, q_length, n_local_q_heads, d_v)
 
-                key_states = bert_padding.pad_input(
-                    key_unpad, indices_k, batch_size, q_length
-                )  # (batch_size, q_length, n_local_kv_heads, d_qk)
-
-            else:
-                # Apply rotary embeddings to query/key states
-                # NOTE: The layout is different from models/llama.py which is [batch_size, num_heads, seq_length, d_qk]
-                # Here it is, [batch_size, seq_length, num_heads, d_qk]
-                # [2, batch_size, seq_length, num_heads, d_qk]
-                key_value_states = torch.cat([key_states.unsqueeze(0), value_states.unsqueeze(0)], dim=0)
-                # [batch_size, seq_length, 2, num_heads, d_qk]
-                key_value_states = key_value_states.permute(1, 2, 0, 3, 4).contiguous()
-                query_states, key_value_states = self.tridao_rotary(query_states, kv=key_value_states)
-                # [batch_size, seq_length, num_heads, d_qk]
-                key_states, value_states = torch.split(key_value_states, 1, dim=2)
+            key_states = bert_padding.pad_input(
+                key_unpad, indices_k, batch_size, q_length
+            )  # (batch_size, q_length, n_local_kv_heads, d_qk)
 
             q_sequence_mask = sequence_mask
             kv_sequence_mask = sequence_mask
