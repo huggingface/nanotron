@@ -402,13 +402,10 @@ class FlashRotaryEmbedding(torch.nn.Module):
         self,
         q: torch.Tensor,
         k: torch.Tensor,
-        v: torch.Tensor,
         cu_seqlens_q: torch.Tensor,
         cu_seqlens_k: torch.Tensor,
-        cu_seqlens_v: torch.Tensor,
         max_seqlen_q: int,
         max_seqlen_k: int,
-        max_seqlen_v: int,
         max_seqlen: Optional[int] = None,
         seqlen_offset: Union[int, torch.Tensor] = 0,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
@@ -451,15 +448,4 @@ class FlashRotaryEmbedding(torch.nn.Module):
             max_seqlen=max_seqlen_k,
         )
 
-        v = apply_rotary_emb_func(
-            v,
-            self._cos_cached,
-            self._sin_cached,
-            interleaved=self.interleaved,
-            inplace=True,
-            seqlen_offsets=seqlen_offset,
-            cu_seqlens=cu_seqlens_v,
-            max_seqlen=max_seqlen_v,
-        )
-
-        return q, k, v
+        return q, k

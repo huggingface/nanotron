@@ -571,20 +571,14 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                 (key_unpad, indices_k, cu_seqlens_k, max_seqlen_k) = bert_padding.unpad_input(
                     key_states, sequence_mask
                 )
-                (value_unpad, indices_v, cu_seqlens_v, max_seqlen_v) = bert_padding.unpad_input(
-                    value_states, sequence_mask
-                )
 
-                query_unpad, key_unpad, value_unpad = self.flash_rotary_embedding(
+                query_unpad, key_unpad = self.flash_rotary_embedding(
                     q=query_unpad,
                     k=key_unpad,
-                    v=value_unpad,
                     cu_seqlens_q=cu_seqlens_q,
                     cu_seqlens_k=cu_seqlens_k,
-                    cu_seqlens_v=cu_seqlens_v,
                     max_seqlen_q=max_seqlen_q,
                     max_seqlen_k=max_seqlen_k,
-                    max_seqlen_v=max_seqlen_v,
                 )
 
                 query_states = bert_padding.pad_input(
@@ -595,26 +589,6 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                     key_unpad, indices_k, batch_size, q_length
                 )  # (batch_size, q_length, n_local_kv_heads, d_qk)
 
-                value_states = bert_padding.pad_input(
-                    value_unpad, indices_v, batch_size, q_length
-                )  # (batch_size, q_length, n_local_kv_heads, d_v)
-
-                q_sequence_mask = sequence_mask
-                kv_sequence_mask = sequence_mask
-
-                kv_length = key_states.shape[1]
-                # [batch_size, seq_length, num_heads, d_qk]
-                # Shaping for use in `flash-attn` version of flash-attn: `flash_attn_unpadded_func`
-                query_states = query_states.view(
-                    batch_size * q_length, self.n_local_q_heads, self.d_qk
-                )  # [batch_size * q_length, self.n_heads, d_qk]
-
-                key_states = key_states.view(
-                    batch_size * kv_length, self.n_local_kv_heads, self.d_qk
-                )  # [batch_size * kv_length, self.n_heads, d_qk]
-                value_states = value_states.view(
-                    batch_size * kv_length, self.n_local_kv_heads, self.d_qk
-                )  # [batch_size * kv_length, self.n_heads, d_qk]
             else:
                 # Apply rotary embeddings to query/key states
                 # NOTE: The layout is different from models/llama.py which is [batch_size, num_heads, seq_length, d_qk]
@@ -627,22 +601,22 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                 # [batch_size, seq_length, num_heads, d_qk]
                 key_states, value_states = torch.split(key_value_states, 1, dim=2)
 
-                q_sequence_mask = sequence_mask
-                kv_sequence_mask = sequence_mask
+            q_sequence_mask = sequence_mask
+            kv_sequence_mask = sequence_mask
 
-                kv_length = key_states.shape[1]
-                # [batch_size, seq_length, num_heads, d_qk]
-                # Shaping for use in `flash-attn` version of flash-attn: `flash_attn_unpadded_func`
-                query_states = query_states.view(
-                    batch_size * q_length, self.n_local_q_heads, self.d_qk
-                )  # [batch_size * q_length, self.n_heads, d_qk]
+            kv_length = key_states.shape[1]
+            # [batch_size, seq_length, num_heads, d_qk]
+            # Shaping for use in `flash-attn` version of flash-attn: `flash_attn_unpadded_func`
+            query_states = query_states.view(
+                batch_size * q_length, self.n_local_q_heads, self.d_qk
+            )  # [batch_size * q_length, self.n_heads, d_qk]
 
-                key_states = key_states.view(
-                    batch_size * kv_length, self.n_local_kv_heads, self.d_qk
-                )  # [batch_size * kv_length, self.n_heads, d_qk]
-                value_states = value_states.view(
-                    batch_size * kv_length, self.n_local_kv_heads, self.d_qk
-                )  # [batch_size * kv_length, self.n_heads, d_qk]
+            key_states = key_states.view(
+                batch_size * kv_length, self.n_local_kv_heads, self.d_qk
+            )  # [batch_size * kv_length, self.n_heads, d_qk]
+            value_states = value_states.view(
+                batch_size * kv_length, self.n_local_kv_heads, self.d_qk
+            )  # [batch_size * kv_length, self.n_heads, d_qk]
 
             attention_output = self.attention(
                 query_states=query_states,
