@@ -116,4 +116,4 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # Convert HF model to nanotron format.
-    convert_checkpoint_and_save(checkpoint_path=args.checkpoint_path, save_path=args.save_path, dp=1, tp=1, pp=1)
+    convert_checkpoint_and_save(checkpoint_path=args.checkpoint_path, save_path=args.save_path)
