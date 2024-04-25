@@ -18,7 +18,8 @@ class InfiniAttention(nn.Module):
     ):
         super().__init__()
 
-        self.n_segments = 4
+        # self.n_segments = 16
+        self.n_segments = 8
 
         self.d_head = config.hidden_size // config.num_attention_heads
 
@@ -34,6 +35,9 @@ class InfiniAttention(nn.Module):
         self.rotary_embedding = self.attn.rotary_embedding
         self.flash_rotary_embedding = self.attn.flash_rotary_embedding
         self.o_proj = self.attn.o_proj
+
+        assert self.qkv_proj.weight.storage().data_ptr() and self.attn.o_proj.weight.storage().data_ptr()
+        assert self.o_proj.weight.storage().data_ptr() and self.attn.o_proj.weight.storage().data_ptr()
 
         self.n_local_heads = self.attn.n_local_q_heads
 
