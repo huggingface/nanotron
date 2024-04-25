@@ -19,7 +19,9 @@ class InfiniAttention(nn.Module):
         super().__init__()
 
         # self.n_segments = 16
-        self.n_segments = 8
+        self.n_segments = 4
+
+        # TODO(xrsrk): log warning if you set n_segments to 1, then it equivalent to standard attention
 
         self.d_head = config.hidden_size // config.num_attention_heads
 
