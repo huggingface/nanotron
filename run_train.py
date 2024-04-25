@@ -117,10 +117,10 @@ def get_dataloader_from_data_stage(trainer: DistributedTrainer, data: DataArgs):
                 * trainer.global_batch_size
                 * trainer.sequence_length
             )
-            # assert num_tokens_needed_for_training <= total_tokens_dataset, (
-            #     f"Dataset is too small for steps ({total_tokens_dataset} < {num_tokens_needed_for_training}), "
-            #     f"Try train_steps<={len(dataloader.dataset) // trainer.global_batch_size + trainer.start_iteration_step}"
-            # )
+            assert num_tokens_needed_for_training <= total_tokens_dataset, (
+                f"Dataset is too small for steps ({total_tokens_dataset} < {num_tokens_needed_for_training}), "
+                f"Try train_steps<={len(dataloader.dataset) // trainer.global_batch_size + trainer.start_iteration_step}"
+            )
     else:
         raise ValueError(f"Unhandled case of `self.config.data.dataset`. Got: {data.dataset}")
 

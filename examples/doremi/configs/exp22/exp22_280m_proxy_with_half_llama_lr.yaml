@@ -1,0 +1,193 @@
+checkpoints:
+  checkpoint_interval: 5000
+  checkpoints_path: /fsx/phuc/new_workspace/experiments/doremi_for_mamba/exp22_280m_proxy_with_half_llama_lr/checkpoints
+  checkpoints_path_is_shared_file_system: true
+  resume_checkpoint_path: /fsx/phuc/new_workspace/experiments/doremi_for_mamba/exp22_280m_proxy_with_half_llama_lr/checkpoints
+  save_initial_state: false
+
+
+doremi:
+  step_size: 1.
+  smoothing_param: 0.001
+  domain_names: fineweb, stack_full, c4, arxiv, synthetic-data, stack-pull-requests, stack-jupyter-scripts, stack-jupyter-structured, open-web-math, stack-issues, stackoverflow, wikipedia, project-gutenberg, deepmind-math, stack-kaggle-scripts, stack-documentation
+  ref_model_resume_checkpoint_path: /fsx/phuc/new_workspace/experiments/doremi_for_mamba/exp22_280m_reference_with_half_llama_lr/checkpoints/200000
+
+
+data:
+  dataset:
+    dataloader_type: single
+    dataset_max_tokens: null
+    dataset_weights:
+    - 0.0625 # fineweb
+    - 0.0625 # stack_full
+    - 0.0625 # c4
+    - 0.0625 # arxiv
+    - 0.0625 # synthetic-data
+    - 0.0625 # stack-pull-requests
+    - 0.0625 # stack-jupyter-scripts
+    - 0.0625 # stack-jupyter-structured
+    - 0.0625 # open-web-math
+    - 0.0625 # stack-issues
+    - 0.0625 # stackoverflow
+    - 0.0625 # wikipedia
+    - 0.0625 # project-gutenberg
+    - 0.0625 # deepmind-math
+    - 0.0625 # stack-kaggle-scripts
+    - 0.0625 # stack-documentation
+    datasets:
+    # - filepath: /fsx/phuc/datasets/huggingface-llm-datasets/first_shard/fineweb/000_CC-MAIN-2023-50.ds
+    #   skip_tokens: 0
+    # - filename_pattern: .*.ds
+    - filename_pattern: .*\.ds$
+      folder: /fsx/phuc/datasets/huggingface-llm-datasets/fineweb_v1/CC-MAIN-2022-21/
+      skip_tokens: 0
+    - filepath: /fsx/phuc/datasets/huggingface-llm-datasets/first_shard/stack_full/000_stack_full.ds
+      skip_tokens: 0
+    - filepath: /fsx/phuc/datasets/huggingface-llm-datasets/first_shard/c4/000_c4.ds
+      skip_tokens: 0
+    - filepath: /fsx/phuc/datasets/huggingface-llm-datasets/first_shard/arxiv/000_arxiv.ds
+      skip_tokens: 0
+    - filepath: /fsx/phuc/datasets/huggingface-llm-datasets/first_shard/synthetic-data/000_synthetic-data.ds
+      skip_tokens: 0
+    - filepath: /fsx/phuc/datasets/huggingface-llm-datasets/first_shard/stack-pull-requests/000_stack-pull-requests.ds
+      skip_tokens: 0
+    - filepath: /fsx/phuc/datasets/huggingface-llm-datasets/first_shard/stack-jupyter-scripts/000_stack-jupyter-scripts.ds
+      skip_tokens: 0
+    - filepath: /fsx/phuc/datasets/huggingface-llm-datasets/first_shard/stack-jupyter-structured/000_stack-jupyter-structured.ds
+      skip_tokens: 0
+    - filepath: /fsx/phuc/datasets/huggingface-llm-datasets/first_shard/open-web-math/000_open-web-math.ds
+      skip_tokens: 0
+    - filepath: /fsx/phuc/datasets/huggingface-llm-datasets/first_shard/stack-issues/000_stack_issues.ds
+      skip_tokens: 0
+    - filepath: /fsx/phuc/datasets/huggingface-llm-datasets/first_shard/stackoverflow/000_stackoverflow.ds
+      skip_tokens: 0
+    - filepath: /fsx/phuc/datasets/huggingface-llm-datasets/first_shard/wikipedia/000_wikipedia.ds
+      skip_tokens: 0
+    - filepath: /fsx/phuc/datasets/huggingface-llm-datasets/first_shard/project-gutenberg/000_project_gutenberg.ds
+      skip_tokens: 0
+    - filepath: /fsx/phuc/datasets/huggingface-llm-datasets/first_shard/deepmind-math/000_deepmind-math.ds
+      skip_tokens: 0
+    - filepath: /fsx/phuc/datasets/huggingface-llm-datasets/first_shard/stack-kaggle-scripts/000_stack-kaggle-scripts.ds
+      skip_tokens: 0
+    - filepath: /fsx/phuc/datasets/huggingface-llm-datasets/first_shard/stack-documentation/000_stack-documentation.ds
+      skip_tokens: 0
+
+    pad_samples_to_global_batch_size: false
+    skip_in_stream: true
+  num_loading_workers: 0
+  seed: 1234
+
+
+general:
+  benchmark_csv_path: null
+  consumed_train_samples: null
+  ignore_sanity_checks: true
+  project: doremi_for_mamba
+  run: exp22_280m_proxy_with_half_llama_lr_and_with_small_new_fineweb_and_everything_else_ref
+  seed: 42
+  step: null
+logging:
+  iteration_step_info_interval: 1
+  log_level: info
+  log_level_replica: info
+model:
+  ddp_bucket_cap_mb: 120
+  dtype: bfloat16
+  init_method:
+    # std: 0.025 # original
+    std: 0.03125 # 1/sqrt(1024)=0.03125
+  make_vocab_size_divisible_by: 1
+  model_config:
+    bos_token_id: 1
+    eos_token_id: 2
+    hidden_act: silu
+    hidden_size: 1024
+    initializer_range: 0.02
+    intermediate_size: 4096
+    is_llama_config: true
+    max_position_embeddings: 1024
+    num_attention_heads: 8
+    num_hidden_layers: 10
+    num_key_value_heads: 4
+    pad_token_id: null
+    pretraining_tp: 1
+    rms_norm_eps: 1.0e-05
+    rope_scaling: null
+    # tie_word_embeddings: true
+    tie_word_embeddings: false # original use true
+    use_cache: true
+    vocab_size: 49152
+
+# NOTE: original
+# optimizer:
+#   accumulate_grad_in_fp32: true
+#   adam_beta1: 0.9
+#   adam_beta2: 0.95
+#   adam_eps: 1.0e-08
+#   clip_grad: 1.0
+#   learning_rate_scheduler:
+#     learning_rate: 0.0003
+#     lr_decay_steps: 8
+#     lr_decay_style: cosine
+#     lr_warmup_steps: 2
+#     lr_warmup_style: linear
+#     min_decay_lr: 1.0e-05
+#   torch_adam_is_fused: true
+#   weight_decay: 0.01
+#   zero_stage: 0
+
+optimizer:
+  accumulate_grad_in_fp32: false
+  adam_beta1: 0.9
+  adam_beta2: 0.95
+  adam_eps: 1.0e-08
+  clip_grad: 1.0
+  learning_rate_scheduler:
+    learning_rate: 0.00015 # note: 1/2 of pythia use this for a 400m model
+    lr_decay_starting_step: null
+    lr_decay_steps: null
+    lr_decay_style: cosine
+    lr_warmup_steps: 20_000 # 10% warm up of total training steps
+    lr_warmup_style: linear
+    min_decay_lr: 1.0e-05
+  torch_adam_is_fused: true
+  weight_decay: 0.1
+  zero_stage: 0
+
+parallelism:
+  dp: 16
+  pp: 1
+  pp_engine: 1f1b
+  tp: 2
+  tp_linear_async_communication: true
+  tp_mode: REDUCE_SCATTER
+profiler: null
+tokenizer:
+  tokenizer_max_length: null
+  tokenizer_name_or_path: lvwerra/the-tokenizer-v1
+  tokenizer_revision: null
+tokens:
+  # NOTE: batch_accumulation_per_replica * micro_batch_size * dp = 1 * 32 * 16 = 512
+  # 512 * 1024 = 524288 tokens per step
+  batch_accumulation_per_replica: 1
+  micro_batch_size: 32
+
+  limit_test_batches: 0
+  limit_val_batches: 0
+  sequence_length: 1024
+  train_steps: 200_000
+  val_check_interval: -1
+
+s3_upload:
+  remove_after_upload: true
+  s5cmd_concurrency: 5
+  s5cmd_numworkers: 16
+  upload_s3_path: s3://phuc-experiments/doremi/mamba-full-training-data/token_count_ratio/lighteval/exp22/exp22_280m_proxy_with_half_llama_lr/
+
+experiment_logger:
+  tensorboard_logger:
+    flush_secs: 30
+    tensorboard_dir: /fsx/phuc/project_data/doremi/mamba/tb_logs
+  wandb_logger:
+    wandb_entity: null
+    wandb_project: doremi_for_mamba

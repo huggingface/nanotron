@@ -36,10 +36,9 @@ general:
   consumed_train_samples: null
   ignore_sanity_checks: true
   project: debug
-  run: llama_350m_sp
+  run: llama_350m_ref
   seed: 42
   step: null
-lighteval: null
 logging:
   iteration_step_info_interval: 1
   log_level: info
@@ -48,16 +47,19 @@ model:
   ddp_bucket_cap_mb: 120
   dtype: bfloat16
   init_method:
-    std: 0.03125 # 1/sqrt(1024)=0.022097086912079608
+    std: 0.03125 # 1/sqrt(hidden_size)
+    # use_mup: true
   make_vocab_size_divisible_by: 1
   model_config:
     bos_token_id: 1
     eos_token_id: 2
     hidden_act: silu
     initializer_range: 0.02
+
     hidden_size: 1024
     intermediate_size: 4096
     num_hidden_layers: 14
+
     is_llama_config: true
     max_position_embeddings: 1024
     num_attention_heads: 8
@@ -76,7 +78,7 @@ optimizer:
   adam_eps: 1.0e-08
   clip_grad: 1.0
   learning_rate_scheduler:
-    learning_rate: 0.001
+    learning_rate: 0.01
     lr_decay_starting_step: null
     lr_decay_steps: null
     lr_decay_style: cosine
@@ -104,5 +106,38 @@ tokens:
   limit_val_batches: 0
   micro_batch_size: 32
   sequence_length: 1024
-  train_steps: 440
+  # train_steps: 440
+  train_steps: 500
   val_check_interval: -1
+lighteval:
+  batch_size: 16
+  checkpoints_path: null
+  generation: null
+  logging:
+    hub_repo_details: null
+    hub_repo_results: null
+    # hub_repo_tensorboard: HuggingFaceBR4/fmom-mamba2
+    local_output_path: /fsx/phuc/new_workspace/experiments/mup_for_mamba2/test_mamba350M_tp4_917cfc66/logs
+    push_details_to_hub: null
+    push_results_to_hub: null
+    push_results_to_tensorboard: true
+    tensorboard_metric_prefix: e
+  parallelism:
+    dp: 2
+    expert_parallel_size: 1
+    pp: 1
+    pp_engine: 1f1b
+    tp: 2
+    tp_linear_async_communication: false
+    tp_mode: ALL_REDUCE
+  # slurm_script_dir: /fsx/phuc/new_workspace/experiments/mup_for_mamba2/test_mamba350M_tp4_917cfc66/lighteval/slurm_scripts
+  # slurm_template: /fsx/phuc/new_workspace/experiments/mup_for_mamba2/test_mamba350M_tp4_917cfc66/run_eval.slurm.jinja
+  tasks:
+    # custom_tasks: brrr.lighteval.custom_tasks
+    dataset_loading_processes: 8
+    max_samples: 1000
+    multichoice_continuations_start_space: null
+    no_multichoice_continuations_start_space: null
+    num_fewshot_seeds: null
+    tasks: early-signal
+  wandb: null

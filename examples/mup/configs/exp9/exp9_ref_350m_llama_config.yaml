@@ -1,0 +1,178 @@
+checkpoints:
+  checkpoint_interval: 1000
+  checkpoints_path: /fsx/phuc/new_workspace/experiments/mup_for_llama2_with_fixed_fanin/exp9_ref_350m_llama_config/checkpoints
+  checkpoints_path_is_shared_file_system: false
+  resume_checkpoint_path: /fsx/phuc/new_workspace/experiments/mup_for_llama2_with_fixed_fanin/exp9_ref_350m_llama_config/checkpoints
+  save_initial_state: false
+
+data:
+  dataset:
+    dataloader_type: single
+    dataset_max_tokens: null
+    dataset_weights:
+    - 0.6
+    - 0.2
+    - 0.1
+    - 0.1
+    - 0.1
+    - 0.1
+    - 0.1
+    - 0.1
+    - 0.1
+    - 0.1
+    - 0.1
+    - 0.1
+    - 0.1
+    - 0.1
+    - 0.1
+    - 0.1
+    datasets:
+    - filename_pattern: .*/tokenized-v1/standard/.*.ds
+      folder: s3://huggingface-llm-datasets/fineweb/
+      skip_tokens: 0
+    - filename_pattern: tokenized-v1/standard/.*.ds
+      folder: s3://huggingface-llm-datasets/stack_full/
+      skip_tokens: 0
+    - filename_pattern: tokenized-v1/standard/.*.ds
+      folder: s3://huggingface-llm-datasets/c4/
+      skip_tokens: 0
+    - filename_pattern: tokenized-v1/standard/.*.ds
+      folder: s3://huggingface-llm-datasets/arxiv/
+      skip_tokens: 0
+    - filename_pattern: tokenized-v1/standard/.*.ds
+      folder: s3://huggingface-llm-datasets/synthetic-data/
+      skip_tokens: 0
+    - filename_pattern: tokenized-v1/standard/.*.ds
+      folder: s3://huggingface-llm-datasets/stack-pull-requests/
+      skip_tokens: 0
+    - filename_pattern: tokenized-v1/standard/.*.ds
+      folder: s3://huggingface-llm-datasets/stack-jupyter-scripts/
+      skip_tokens: 0
+    - filename_pattern: tokenized-v1/standard/.*.ds
+      folder: s3://huggingface-llm-datasets/stack-jupyter-structured/
+      skip_tokens: 0
+    - filename_pattern: tokenized-v1/standard/.*.ds
+      folder: s3://huggingface-llm-datasets/open-web-math/
+      skip_tokens: 0
+    - filename_pattern: tokenized-v1/standard/.*.ds
+      folder: s3://huggingface-llm-datasets/stack-issues/
+      skip_tokens: 0
+    - filename_pattern: tokenized-v1/standard/.*.ds
+      folder: s3://huggingface-llm-datasets/stackoverflow/
+      skip_tokens: 0
+    - filename_pattern: tokenized-v1/standard/.*.ds
+      folder: s3://huggingface-llm-datasets/wikipedia/
+      skip_tokens: 0
+    - filename_pattern: tokenized-v1/standard/.*.ds
+      folder: s3://huggingface-llm-datasets/project-gutenberg/
+      skip_tokens: 0
+    - filename_pattern: tokenized-v1/standard/.*.ds
+      folder: s3://huggingface-llm-datasets/deepmind-math/
+      skip_tokens: 0
+    - filename_pattern: tokenized-v1/standard/.*.ds
+      folder: s3://huggingface-llm-datasets/stack-kaggle-scripts/
+      skip_tokens: 0
+    - filename_pattern: tokenized-v1/standard/.*.ds
+      folder: s3://huggingface-llm-datasets/stack-documentation/
+      skip_tokens: 0
+    pad_samples_to_global_batch_size: false
+    skip_in_stream: true
+  num_loading_workers: 0
+  seed: 42
+
+general:
+  benchmark_csv_path: null
+  consumed_train_samples: null
+  ignore_sanity_checks: true
+  project: mup_for_llama2_with_fixed_fanin
+  run: exp9_ref_350m_llama_config_0.03125
+  seed: 42
+  step: null
+logging:
+  iteration_step_info_interval: 1
+  log_level: info
+  log_level_replica: info
+model:
+  ddp_bucket_cap_mb: 120
+  dtype: bfloat16
+  init_method:
+    std: 0.03125 # 1/sqrt(hidden_size)
+    # use_mup: true
+  make_vocab_size_divisible_by: 1
+  model_config:
+    bos_token_id: 1
+    eos_token_id: 2
+    hidden_act: silu
+    initializer_range: 0.02
+
+    hidden_size: 1024
+    intermediate_size: 4096
+    num_hidden_layers: 14
+
+    is_llama_config: true
+    max_position_embeddings: 1024
+    num_attention_heads: 8
+    num_key_value_heads: 4
+    pad_token_id: null
+    pretraining_tp: 1
+    rms_norm_eps: 1.0e-05
+    rope_scaling: null
+    tie_word_embeddings: false
+    use_cache: true
+    vocab_size: 49152
+optimizer:
+  accumulate_grad_in_fp32: false
+  adam_beta1: 0.9
+  adam_beta2: 0.95
+  adam_eps: 1.0e-08
+  clip_grad: 1.0
+  learning_rate_scheduler:
+    learning_rate: 0.03125
+    lr_decay_starting_step: null
+    lr_decay_steps: null
+    lr_decay_style: cosine
+    lr_warmup_steps: 4000 # 10% warm up of total training steps
+    lr_warmup_style: linear
+    min_decay_lr: 1.0e-05
+  torch_adam_is_fused: true
+  weight_decay: 0.1
+  zero_stage: 0
+parallelism:
+  dp: 4
+  pp: 1
+  pp_engine: 1f1b
+  tp: 2
+  tp_linear_async_communication: true
+  tp_mode: REDUCE_SCATTER
+profiler: null
+tokenizer:
+  tokenizer_max_length: null
+  tokenizer_name_or_path: lvwerra/the-tokenizer-v1
+  tokenizer_revision: null
+tokens:
+  batch_accumulation_per_replica: 8
+  limit_test_batches: 0
+  limit_val_batches: 0
+  micro_batch_size: 32
+  sequence_length: 1024
+  # train_steps: 440
+  train_steps: 20_000
+  val_check_interval: -1
+
+
+s3_upload:
+  remove_after_upload: true
+  s5cmd_concurrency: 5
+  s5cmd_numworkers: 16
+  s5cmd_path: /fsx/nouamane/miniconda/envs/2-1-cu121/bin/s5cmd
+  upload_s3_path: s3://phuc-experiments/spectral_mup/fanin_1_for_inp_embed/exp9/exp9_ref_350m_llama_config/
+
+
+experiment_logger:
+  # run: exp2_1b_mup_mamba_445277ad_20b_tokens
+  tensorboard_logger:
+    flush_secs: 30
+    tensorboard_dir: /fsx/phuc/project_data/mup_for_llama2_with_fixed_fanin/tb_logs
+  wandb_logger:
+    wandb_entity: neuralink
+    wandb_project: mup_for_llama2_with_fixed_fanin

@@ -77,7 +77,7 @@ optimizer:
   adam_eps: 1.0e-08
   clip_grad: 1.0
   learning_rate_scheduler:
-    learning_rate: 0.001
+    learning_rate: 0.125
     lr_decay_starting_step: null
     lr_decay_steps: null
     lr_decay_style: cosine
@@ -106,7 +106,7 @@ tokens:
   micro_batch_size: 32
   sequence_length: 1024
   # train_steps: 440
-  train_steps: 500
+  train_steps: 20_000
   val_check_interval: -1
 lighteval:
   batch_size: 16
