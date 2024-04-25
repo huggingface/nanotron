@@ -1,7 +1,7 @@
 """
 Converts a nanotron model to HF format
 Command:
-    torchrun --nproc_per_node=1 convert_nanotron_to_hf.py --checkpoint_path=weights-tp1 --save_path=HF_130M
+    torchrun --nproc_per_node=1 convert_nanotron_to_hf.py --checkpoint_path=nanotron-path --save_path=hf-path
 """
 
 import json
@@ -9,9 +9,7 @@ from argparse import ArgumentParser
 from pathlib import Path
 from typing import Literal, Optional
 
-import nanotron
 import torch
-import yaml
 from convert_weights import get_config_mapping, get_weight_mapping, load_nanotron_model
 from nanotron.config import LlamaConfig as NanotronLlamaConfig
 from nanotron.models import init_on_device_and_dtype
@@ -105,25 +103,15 @@ def convert_checkpoint_and_save(checkpoint_path: Path, save_path: Path, tokenize
     and saves the transformed huggingface to `save_path`."""
 
     # Init nanotron model.
-    device = torch.device("cuda")
     with open(checkpoint_path / "model_config.json", "r") as f:
         attrs = json.load(f)
         model_config = NanotronLlamaConfig(**attrs)
-    with open(checkpoint_path / "config.yaml") as f:
-        training_config = yaml.safe_load(f)
-    parallelism = nanotron.config.ParallelismArgs(
-        **training_config["parallelism"],
-    )
-    dtype = getattr(torch, training_config["model"]["dtype"])
     nanotron_model = load_nanotron_model(
-        parallel_config=parallelism,
         model_config=model_config,
-        device=device,
-        dtype=dtype,
         checkpoint_path=checkpoint_path,
     )
     # Init huggingface model.
-    with init_on_device_and_dtype(device, dtype):
+    with init_on_device_and_dtype(torch.device("cuda"), torch.bfloat16):
         model_config_hf = get_hf_config(model_config)
         hf_model = LlamaForCausalLM._from_config(model_config_hf)
 
