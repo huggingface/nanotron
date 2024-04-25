@@ -208,6 +208,12 @@ def load_weights(
     module_id_to_prefix[id(model)] = ""
 
     checkpoint_version: Optional[Version] = None
+    try:
+        # Try to fetch the checkpoint version from the metadata from the beginning.
+        # If not found, it will be obtained after the first time loading a parameter.
+        checkpoint_version = read_checkpoint_version_from_meta(parallel_context, root_folder)
+    except FileNotFoundError:
+        pass
 
     filtered_state_dict = filtered_state_dict if filtered_state_dict is not None else model.state_dict()
     param_shard_metadata = {}
@@ -255,11 +261,12 @@ def load_weights(
                 exp_tp_pp_rank_and_size=exp_tp_pp_rank_and_size,
                 prefix=param_root_folder,
                 is_expert_sharded=is_expert_sharded,
+                version=checkpoint_version or CHECKPOINT_VERSION,
             )
 
             if path.exists():
+                # If the exact path exists, then the topology did not change.
                 with safe_open(path, framework="pt", device=str(param.device)) as fi:
-                    # TODO @thomasw21: Choose only a slice if we switch the TP topology
                     param_or_buffer[:] = fi.get_tensor("data")
 
             elif not path.parent.exists():
@@ -275,17 +282,21 @@ def load_weights(
                     raise ValueError(
                         f"`{name}` is not a sharded parameter. It's possible you were expecting {path} to exist."
                     )
-                # TODO @thomasw21: Make so that we don't need to code this logic somewhere else than in `get_path`
-                sharded_info = param.get_sharded_info()
-                suffix = base_name.rsplit(".", 1)[-1]
-                shards_path = list(path.parent.glob(f"{ObjectType.MODEL.value}_{suffix}*.safetensors"))
+                shards_path = get_path(
+                    base_name,
+                    type=ObjectType.MODEL,
+                    exp_tp_pp_rank_and_size=exp_tp_pp_rank_and_size,
+                    prefix=param_root_folder,
+                    is_expert_sharded=is_expert_sharded,
+                    version=checkpoint_version or CHECKPOINT_VERSION,
+                    return_all_matches=True
+                )
+
                 if len(shards_path) <= 0:
                     raise ValueError(f"Could not find any shards in {path.parent}")
 
                 if checkpoint_version is None:
-                    checkpoint_version = get_checkpoint_version(
-                        parallel_context, root_folder, param_save_path=shards_path[0]
-                    )
+                    checkpoint_version = get_checkpoint_version(parallel_context, root_folder, shards_path[0])
                 else:
                     current_checkpoint_version = None
                     try:
@@ -300,6 +311,8 @@ def load_weights(
                             current_checkpoint_version == checkpoint_version
                         ), f"Checkpoint version mismatch at {shards_path[0]}."
 
+                # Load the param.
+                sharded_info = param.get_sharded_info()
                 if checkpoint_version <= CHECKPOINT_VERSION:
                     load_sharded_param_latest(
                         param_or_buffer=param_or_buffer,

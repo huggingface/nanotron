@@ -4,10 +4,12 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 import torch
+from packaging.version import Version
 
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import SlicesPair
 from nanotron.serialize.metadata import TensorMetadata
+from nanotron.constants import CHECKPOINT_VERSION
 
 
 class ObjectType(Enum):
@@ -30,32 +32,45 @@ def get_exp_tp_pp_rank_and_size_from(
 def get_path(
     tensor_name: str,
     type: ObjectType,
-    exp_tp_pp_rank_and_size: Tuple[Tuple[int, int], Tuple[int, int]],
+    exp_tp_pp_rank_and_size: Tuple[Tuple[int, int], Tuple[int, int], Tuple[int, int]],
     is_expert_sharded: bool,
     prefix: Optional[Path] = None,
-) -> List[str]:
+    version: Version = CHECKPOINT_VERSION,
+    return_all_matches: bool = False,
+) -> Path | List[Path]:
     suffix = tensor_name.split(".")
     suffix_path, suffix_name = suffix[:-1], suffix[-1]
 
 
+    if version == Version("1.3"):
+        suffix_name = f"{type.value}_{suffix_name}.safetensors"
     if exp_tp_pp_rank_and_size:
         # We always show pp_rank and tp_rank if `exp_tp_pp_rank_and_size` is provided
         # We only show exp_rank if tensor is exp_sharded and exp_size > 1
         (exp_rank, exp_size), (tp_rank, tp_size), (pp_rank, pp_size) = exp_tp_pp_rank_and_size
         if not is_expert_sharded or exp_size == 1:
+            pattern = f"{type.value}_{suffix_name}*.safetensors"
             suffix_name = (
                 f"{type.value}_{suffix_name}_pp-rank-{pp_rank}-of-{pp_size}_tp-rank-{tp_rank}-of-{tp_size}.safetensors"
             )
         else:
+            pattern = f"{type.value}_{suffix_name}*exp-rank-{exp_rank}-of-{exp_size}.safetensors"
             suffix_name = f"{type.value}_{suffix_name}_pp-rank-{pp_rank}-of-{pp_size}_tp-rank-{tp_rank}-of-{tp_size}_exp-rank-{exp_rank}-of-{exp_size}.safetensors"
-    else:
+    elif version > Version("1.3"):
+        pattern = f"{type.value}_{suffix_name}*.safetensors"
         suffix_name = f"{type.value}_{suffix_name}.safetensors"
 
-    suffix_path.append(suffix_name)
-    if prefix is None:
-        return suffix_path
+    if return_all_matches:
+        if prefix is None:
+            return list(Path(suffix_path[0]).joinpath(*suffix_path[1:]).glob(pattern))
+        else:
+            return list(prefix.joinpath(*suffix_path).glob(pattern))
     else:
-        return prefix.joinpath(*suffix_path)
+        suffix_path.append(suffix_name)
+        if prefix is None:
+            return Path(suffix_path[0]).joinpath(*suffix_path[1:])
+        else:
+            return prefix.joinpath(*suffix_path)
 
 
 def extract_tp_pp_rank_from_shard_path(shard_path: Path):
