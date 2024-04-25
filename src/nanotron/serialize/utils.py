@@ -45,7 +45,6 @@ def get_path(
         suffix_name = f"{type.value}_{suffix_name}.safetensors"
     if exp_tp_pp_rank_and_size:
         # We always show pp_rank and tp_rank if `exp_tp_pp_rank_and_size` is provided
-        # We only show exp_rank if tensor is exp_sharded and exp_size > 1
         (exp_rank, exp_size), (tp_rank, tp_size), (pp_rank, pp_size) = exp_tp_pp_rank_and_size
         if not is_expert_sharded or exp_size == 1:
             pattern = f"{type.value}_{suffix_name}*.safetensors"
