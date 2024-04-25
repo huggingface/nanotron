@@ -180,7 +180,7 @@ def main():
             parallel_context=parallel_context,
             max_new_tokens=args.max_new_tokens,
             max_micro_batch_size=2,
-            generation_config=GenerationArgs(sampler="top_k", use_cache=True, n_samples=2),
+            generation_config=GenerationArgs(sampler="top_k", top_k=10, use_cache=True, n_samples=2),
             tokenizer_config=TokenizerConfig(max_input_length=None),
             is_bench=os.environ.get("USE_BENCH", "0") == "1",
         )
