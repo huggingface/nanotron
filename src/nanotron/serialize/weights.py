@@ -244,6 +244,7 @@ def load_weights(
                 exp_tp_pp_rank_and_size = get_exp_tp_pp_rank_and_size_from(
                     world_rank=get_global_rank(group=group, group_rank=group_rank), parallel_context=parallel_context
                 )
+                # TODO @nouamane: do we consider exp_size=1 expert_sharded?
                 is_expert_sharded = sharded_info.is_expert_sharded(parallel_context)
             else:
                 exp_tp_pp_rank_and_size = None
@@ -280,7 +281,10 @@ def load_weights(
                 suffix = base_name.rsplit(".", 1)[-1]
                 shards_path = list(path.parent.glob(f"{ObjectType.MODEL.value}_{suffix}*.safetensors"))
                 if len(shards_path) <= 0:
-                    raise ValueError(f"Could not find any shards in {path.parent}")
+                    raise ValueError(
+                        f"Could not find any shards {ObjectType.MODEL.value}_{suffix}*.safetensors in {path.parent}."
+                        f"If you notice `.safetensors` in the middle of the name of some of the checkpoints files. You need to run `scripts/fix_checkpoint_bad_naming.py`."
+                    )
 
                 if checkpoint_version is None:
                     checkpoint_version = get_checkpoint_version(
