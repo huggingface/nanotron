@@ -59,7 +59,8 @@ def get_args():
     parser.add_argument("--dp", type=int, default=0)
     parser.add_argument("--pp", type=int, default=0)
     parser.add_argument("--tp", type=int, default=0)
-    parser.add_argument("--max-new-tokens", type=int, default=128, help="Maximum number of new tokens to generate")
+    parser.add_argument("--max-new-tokens", type=int, default=64, help="Maximum number of new tokens to generate")
+    parser.add_argument("--use_cache", action="store_true", help="Use cache for generation")
     return parser.parse_args()
 
 
@@ -68,7 +69,9 @@ def main():
 
     assert args.ckpt_path.exists(), f"Checkpoint path {args.ckpt_path} does not exist"
 
-    config = get_config_from_file((args.ckpt_path / "config.yaml").as_posix())
+    config = get_config_from_file(
+        (args.ckpt_path / "config.yaml").as_posix(), skip_null_keys=True, skip_unused_config_keys=True
+    )
     model_config = config.model.model_config
     tokenizer_path = config.tokenizer.tokenizer_name_or_path
 
@@ -78,7 +81,7 @@ def main():
         tp=args.tp or config.parallelism.tp,
         pp_engine=OneForwardOneBackwardPipelineEngine(),
         tp_mode=TensorParallelLinearMode.ALL_REDUCE,
-        tp_linear_async_communication=True,
+        tp_linear_async_communication=False,
     )
 
     # Initialise all process groups
@@ -162,11 +165,13 @@ def main():
             else:
                 tokenizer.add_special_tokens({"pad_token": "[PAD]"})
         tokenizer.padding_side = "left"
-        tokenizer.truncation_side = "left"  # TODO @nouamane: do we want this?
+        # tokenizer.truncation_side = "left"  # TODO @nouamane: do we want this?
         dummy_inputs = [
             # "Passage: Daniel went back to the garden. Mary travelled to the kitchen. Sandra journeyed to the kitchen. Sandra went to the hallway. John went to the bedroom. Mary went back to the garden. Where is Mary?\nAnswer:",
-            "def fib(n)",
             # "This film was probably inspired by Godzilla",
+            "def fib(n)",
+            # "def fib(n)",
+            "The capital of France is ",
         ]
 
         outputs = decode_text(
@@ -177,7 +182,7 @@ def main():
             parallel_context=parallel_context,
             max_new_tokens=args.max_new_tokens,
             max_micro_batch_size=2,
-            generation_config=GenerationArgs(sampler="greedy", use_cache=True),
+            generation_config=GenerationArgs(sampler="greedy", use_cache=args.use_cache),
             tokenizer_config=TokenizerConfig(max_input_length=None),
             is_bench=os.environ.get("USE_BENCH", "0") == "1",
         )

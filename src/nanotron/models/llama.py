@@ -13,9 +13,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """PyTorch LLaMa model."""
+from typing import Dict, Optional, Union
 
-from typing import Dict, Optional, Union, List
-
+import lovely_tensors as lt
 import torch
 from torch import nn
 
@@ -43,6 +43,7 @@ from nanotron.random import RandomStates
 from nanotron.scaling.parametrization import SpectralMupParametrizator, StandardParametrizator
 from nanotron.utils import checkpoint_method
 
+lt.monkey_patch()
 logger = logging.get_logger(__name__)
 
 
@@ -95,7 +96,7 @@ class RotaryEmbedding(nn.Module):
             self.end *= 2
             self._initialized_buffer = False
         if self._initialized_buffer is False:
-            print(f"Initializing rotary embeddings with end={self.end}")
+            # print(f"Initializing rotary embeddings with end={self.end}")
             self.init_rotary_embeddings()
         dtype = x.dtype
         assert inner_dim % 2 == 0
@@ -262,7 +263,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         tp_pg: dist.ProcessGroup,
         layer_idx: int,
     ):
-        from flash_attn.layers.rotary import RotaryEmbedding as FlashRotaryEmbedding
+        from nanotron.nn.flash_rotary import FlashRotaryEmbedding
 
         super().__init__()
         # Tensor parallel considerations: We split tensors along head dimension
@@ -324,6 +325,9 @@ class CausalSelfAttention(nn.Module, AttachableStore):
 
         # NOTE: Only supported for training (TODO(fmom): position_ids not supported yet)
         self.flash_rotary_embedding = FlashRotaryEmbedding(dim=self.d_qk, interleaved=True)
+        from flash_attn.layers.rotary import RotaryEmbedding as TridaoRotary
+
+        self.tridao_rotary = TridaoRotary(dim=self.d_qk, interleaved=True)
 
         self.o_proj = TensorParallelRowLinear(
             config.num_attention_heads * self.d_qk,
@@ -557,30 +561,88 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             # Apply rotary embeddings to query/key states
             # NOTE: The layout is different from models/llama.py which is [batch_size, num_heads, seq_length, d_qk]
             # Here it is, [batch_size, seq_length, num_heads, d_qk]
-            # [2, batch_size, seq_length, num_heads, d_qk]
-            key_value_states = torch.cat([key_states.unsqueeze(0), value_states.unsqueeze(0)], dim=0)
-            # [batch_size, seq_length, 2, num_heads, d_qk]
-            key_value_states = key_value_states.permute(1, 2, 0, 3, 4).contiguous()
-            query_states, key_value_states = self.flash_rotary_embedding(query_states, kv=key_value_states)
-            # [batch_size, seq_length, num_heads, d_qk]
-            key_states, value_states = torch.split(key_value_states, 1, dim=2)
+            import os
 
-            q_sequence_mask = sequence_mask
-            kv_sequence_mask = sequence_mask
+            if os.environ.get("NEW", "0") == "1":
+                # source: https://github.com/Dao-AILab/flash-attention/issues/177
+                (query_unpad, indices_q, cu_seqlens_q, max_seqlen_q) = bert_padding.unpad_input(
+                    query_states, sequence_mask
+                )
+                (key_unpad, indices_k, cu_seqlens_k, max_seqlen_k) = bert_padding.unpad_input(
+                    key_states, sequence_mask
+                )
+                (value_unpad, indices_v, cu_seqlens_v, max_seqlen_v) = bert_padding.unpad_input(
+                    value_states, sequence_mask
+                )
 
-            kv_length = key_states.shape[1]
-            # [batch_size, seq_length, num_heads, d_qk]
-            # Shaping for use in `flash-attn` version of flash-attn: `flash_attn_unpadded_func`
-            query_states = query_states.view(
-                batch_size * q_length, self.n_local_q_heads, self.d_qk
-            )  # [batch_size * q_length, self.n_heads, d_qk]
+                query_unpad, key_unpad, value_unpad = self.flash_rotary_embedding(
+                    q=query_unpad,
+                    k=key_unpad,
+                    v=value_unpad,
+                    cu_seqlens_q=cu_seqlens_q,
+                    cu_seqlens_k=cu_seqlens_k,
+                    cu_seqlens_v=cu_seqlens_v,
+                    max_seqlen_q=max_seqlen_q,
+                    max_seqlen_k=max_seqlen_k,
+                    max_seqlen_v=max_seqlen_v,
+                )
 
-            key_states = key_states.view(
-                batch_size * kv_length, self.n_local_kv_heads, self.d_qk
-            )  # [batch_size * kv_length, self.n_heads, d_qk]
-            value_states = value_states.view(
-                batch_size * kv_length, self.n_local_kv_heads, self.d_v
-            )  # [batch_size * kv_length, self.n_heads, d_v]
+                query_states = bert_padding.pad_input(
+                    query_unpad, indices_q, batch_size, q_length
+                )  # (batch_size, q_length, n_local_q_heads, d_v)
+
+                key_states = bert_padding.pad_input(
+                    key_unpad, indices_k, batch_size, q_length
+                )  # (batch_size, q_length, n_local_kv_heads, d_qk)
+
+                value_states = bert_padding.pad_input(
+                    value_unpad, indices_v, batch_size, q_length
+                )  # (batch_size, q_length, n_local_kv_heads, d_v)
+
+                q_sequence_mask = sequence_mask
+                kv_sequence_mask = sequence_mask
+
+                kv_length = key_states.shape[1]
+                # [batch_size, seq_length, num_heads, d_qk]
+                # Shaping for use in `flash-attn` version of flash-attn: `flash_attn_unpadded_func`
+                query_states = query_states.view(
+                    batch_size * q_length, self.n_local_q_heads, self.d_qk
+                )  # [batch_size * q_length, self.n_heads, d_qk]
+
+                key_states = key_states.view(
+                    batch_size * kv_length, self.n_local_kv_heads, self.d_qk
+                )  # [batch_size * kv_length, self.n_heads, d_qk]
+                value_states = value_states.view(
+                    batch_size * kv_length, self.n_local_kv_heads, self.d_qk
+                )  # [batch_size * kv_length, self.n_heads, d_qk]
+            else:
+                # Apply rotary embeddings to query/key states
+                # NOTE: The layout is different from models/llama.py which is [batch_size, num_heads, seq_length, d_qk]
+                # Here it is, [batch_size, seq_length, num_heads, d_qk]
+                # [2, batch_size, seq_length, num_heads, d_qk]
+                key_value_states = torch.cat([key_states.unsqueeze(0), value_states.unsqueeze(0)], dim=0)
+                # [batch_size, seq_length, 2, num_heads, d_qk]
+                key_value_states = key_value_states.permute(1, 2, 0, 3, 4).contiguous()
+                query_states, key_value_states = self.tridao_rotary(query_states, kv=key_value_states)
+                # [batch_size, seq_length, num_heads, d_qk]
+                key_states, value_states = torch.split(key_value_states, 1, dim=2)
+
+                q_sequence_mask = sequence_mask
+                kv_sequence_mask = sequence_mask
+
+                kv_length = key_states.shape[1]
+                # [batch_size, seq_length, num_heads, d_qk]
+                # Shaping for use in `flash-attn` version of flash-attn: `flash_attn_unpadded_func`
+                query_states = query_states.view(
+                    batch_size * q_length, self.n_local_q_heads, self.d_qk
+                )  # [batch_size * q_length, self.n_heads, d_qk]
+
+                key_states = key_states.view(
+                    batch_size * kv_length, self.n_local_kv_heads, self.d_qk
+                )  # [batch_size * kv_length, self.n_heads, d_qk]
+                value_states = value_states.view(
+                    batch_size * kv_length, self.n_local_kv_heads, self.d_qk
+                )  # [batch_size * kv_length, self.n_heads, d_qk]
 
             attention_output = self.attention(
                 query_states=query_states,
