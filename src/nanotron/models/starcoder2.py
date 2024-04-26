@@ -1555,8 +1555,7 @@ class Starcoder2ForTraining(NanotronModel):
             for name, param in model.named_parameters()
         }, f"Somehow the initialized set of parameters don't match:\n - Expected: { {name for name, _ in model.named_parameters()} }\n - Got: {initialized_parameters}"
 
-    @staticmethod
-    def get_embeddings_lm_head_tied_names() -> List[str]:
+    def get_embeddings_lm_head_tied_names(self) -> List[str]:
         return [
             "model.token_embeddings.pp_block.token_embedding.weight",
             "model.lm_head.pp_block.weight",

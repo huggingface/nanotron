@@ -1,7 +1,7 @@
 import dataclasses
 import json
 from pathlib import Path
-from typing import Any, Callable, ClassVar, Dict, List, Tuple, Type, Union
+from typing import Any, Callable, ClassVar, Dict, List, Optional, Tuple, Type, Union
 
 import dacite
 import torch
@@ -9,9 +9,53 @@ from dacite import from_dict
 from packaging.version import Version
 
 from nanotron import distributed as dist
-from nanotron.constants import CHECKPOINT_VERSION
+from nanotron.constants import CHECKPOINT_FILE_NAME, CHECKPOINT_VERSION
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import SlicesPair
+
+
+@dataclasses.dataclass
+class DataStageMetadata:
+    """
+    consumed_train_samples: The number of samples consumed by the model in the this stage (each stage starts from zero).
+    last_train_step: The last training step across all stages.
+
+    # NOTE: we should allow people to change the name of the data stages in the config file.
+    # but not the start_training_step, because it could
+    """
+
+    name: str
+    start_training_step: int
+    consumed_train_samples: int
+
+
+@dataclasses.dataclass
+class TrainingMetadata:
+    """
+    consumed_train_samples: The number of samples consumed globally, across all stages.
+    last_train_step: The last training step across all stages.
+    last_stage_idx: The index of the last stage that was trained.
+    data_stages: The metadata for each stage.
+    """
+
+    consumed_train_samples: int
+    last_train_step: int
+
+    # TODO(xrsrke): make this not optional, once we entirely remove
+    # the old checkpoint version
+    last_stage_idx: Optional[int] = None
+    data_stages: Optional[List[DataStageMetadata]] = None
+
+    def __post_init__(self):
+        # NOTE: this is a sanity check after loading a trained checkpoint
+        total_consumed_samples_across_stages = sum(stage.consumed_train_samples for stage in self.data_stages)
+        assert (
+            self.consumed_train_samples == total_consumed_samples_across_stages
+        ), "Mismatch between the total consumed samples and the sum of consumed samples across stages! Something went wrong in the training."
+
+        # TODO(xrsrke): remove this once we entirely remove non-data-stage training
+        if self.last_stage_idx is not None:
+            assert self.data_stages is not None, "data_stages should not be None if last_stage_idx is not None"
 
 
 @dataclasses.dataclass
@@ -19,8 +63,8 @@ class CheckpointMetadata:
     version: Version
     tp: int
     dp: int
-    # Anything users want to store
-    metas: Dict
+    metas: TrainingMetadata
+    custom_metas: Optional[Dict[str, Any]] = None
 
 
 @dataclasses.dataclass
@@ -81,7 +125,9 @@ def to_list(list_: Union[List, Tuple], type_hooks: Dict[Type, Callable[[Any], An
     return list_.__class__((process_type(elt, type_hooks=type_hooks) for elt in list_))
 
 
-def save_meta(parallel_context: ParallelContext, root_folder: Path, checkpoint_metadata: dict):
+def save_meta(parallel_context: ParallelContext, root_folder: Path, training_metadata: TrainingMetadata):
+    assert isinstance(training_metadata, TrainingMetadata)
+
     if dist.get_rank(parallel_context.world_pg) != 0:
         return
 
@@ -90,18 +136,18 @@ def save_meta(parallel_context: ParallelContext, root_folder: Path, checkpoint_m
         version=CHECKPOINT_VERSION,
         tp=parallel_context.tp_pg.size(),
         dp=parallel_context.dp_pg.size(),
-        metas=checkpoint_metadata,
+        metas=training_metadata,
     )
 
     # There are some types that require manual casting in order to work correctly.
     processed_metadata = process_type(dataclasses.asdict(checkpoint_metadata), type_hooks={Version: lambda x: str(x)})
 
-    with open(root_folder / "checkpoint_metadata.json", mode="w") as fo:
+    with open(root_folder / CHECKPOINT_FILE_NAME, mode="w") as fo:
         json.dump(processed_metadata, fo, indent=2, sort_keys=True)
 
 
 def load_meta(parallel_context: ParallelContext, root_folder: Path) -> CheckpointMetadata:
-    with open(root_folder / "checkpoint_metadata.json", mode="r") as fi:
+    with open(root_folder / CHECKPOINT_FILE_NAME, mode="r") as fi:
         checkpoint_metadata = json.load(fi)
         checkpoint_metadata = from_dict(
             data_class=CheckpointMetadata,
