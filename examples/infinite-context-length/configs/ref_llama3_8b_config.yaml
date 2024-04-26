@@ -3,7 +3,11 @@ checkpoints:
   # checkpoints_path: /fsx/phuc/new_workspace/experiments/8b_llama3/llama3_8b_config/checkpoints
   checkpoints_path: /fsx/phuc/projects/infini-attention/llama3-ckps/8b/nanotron_ckp_initial_state
   checkpoints_path_is_shared_file_system: false
-  resume_checkpoint_path: /fsx/phuc/projects/infini-attention/llama3-ckps/8b/nanotron_ckp_tp_agnostic
+  # resume_checkpoint_path: /fsx/phuc/projects/infini-attention/llama3-ckps/8b/nanotron_ckp_tp_agnostic
+  resume_checkpoint_path: /fsx/phuc/projects/nanotron/llama3_8b_generated_from_brrr
+  # resume_checkpoint_path: /fsx/phuc/projects/nanotron/llama3_8b_generated_from_brrr
+  # resume_checkpoint_path: /fsx/phuc/projects/nanotron/llama3_8b_generated_from_brrr_with_pp_4/
+  # resume_checkpoint_path: /fsx/haojun/lighteval_evaluation_model/llama3-8b-hf
   save_initial_state: true
 general:
   benchmark_csv_path: null
@@ -65,7 +69,7 @@ parallelism:
   expert_parallel_size: 1
   pp: 1
   pp_engine: 1f1b
-  tp: 2
+  tp: 8
   tp_linear_async_communication: true
   tp_mode: REDUCE_SCATTER
 # parallelism:
@@ -86,7 +90,7 @@ tokens:
   limit_test_batches: 0
   limit_val_batches: 0
   micro_batch_size: 1
-  sequence_length: 4096
+  sequence_length: 8192
   train_steps: 10
   val_check_interval: -1
 
@@ -129,37 +133,37 @@ data_stages:
       num_loading_workers: 1
       seed: 42
 
-lighteval:
-  batch_size: 16
-  checkpoints_path: null
-  generation: null
-  logging:
-    hub_repo_details: null
-    hub_repo_results: null
-    hub_repo_tensorboard: HuggingFaceBR4/8b_llama3_evals
-    local_output_path: /fsx/phuc/new_workspace/experiments/8b_llama3/evals_of_the_released_ckp/logs
-    push_details_to_hub: null
-    push_results_to_hub: null
-    push_results_to_tensorboard: true
-    tensorboard_metric_prefix: e
-  parallelism:
-    dp: 8
-    pp: 1
-    pp_engine: 1f1b
-    tp: 1
-    tp_linear_async_communication: false
-    tp_mode: ALL_REDUCE
-  slurm_script_dir: /fsx/phuc/new_workspace/experiments/8b_llama3/llama3_8b_config/lighteval/slurm_scripts
-  slurm_template: /fsx/phuc/new_workspace/experiments/8b_llama3/llama3_8b_config/run_eval.slurm.jinja
-  tasks:
-    custom_tasks: brrr.lighteval.evaluation_tasks
-    dataset_loading_processes: 8
-    max_samples: 1000
-    multichoice_continuations_start_space: null
-    no_multichoice_continuations_start_space: null
-    num_fewshot_seeds: null
-    tasks: early-signal
-  wandb:
-    wandb_project: 8b_llama3
-    wandb_entity: null
-    wandb_run_name: llama3_8b_config
+# lighteval:
+#   batch_size: 16
+#   checkpoints_path: null
+#   generation: null
+#   logging:
+#     hub_repo_details: null
+#     hub_repo_results: null
+#     hub_repo_tensorboard: HuggingFaceBR4/8b_llama3_evals
+#     local_output_path: /fsx/phuc/new_workspace/experiments/8b_llama3/evals_of_the_released_ckp/logs
+#     push_details_to_hub: null
+#     push_results_to_hub: null
+#     push_results_to_tensorboard: true
+#     tensorboard_metric_prefix: e
+#   parallelism:
+#     dp: 8
+#     pp: 1
+#     pp_engine: 1f1b
+#     tp: 1
+#     tp_linear_async_communication: false
+#     tp_mode: ALL_REDUCE
+#   slurm_script_dir: /fsx/phuc/new_workspace/experiments/8b_llama3/llama3_8b_config/lighteval/slurm_scripts
+#   slurm_template: /fsx/phuc/new_workspace/experiments/8b_llama3/llama3_8b_config/run_eval.slurm.jinja
+#   tasks:
+#     custom_tasks: brrr.lighteval.evaluation_tasks
+#     dataset_loading_processes: 8
+#     max_samples: 1000
+#     multichoice_continuations_start_space: null
+#     no_multichoice_continuations_start_space: null
+#     num_fewshot_seeds: null
+#     tasks: early-signal
+#   wandb:
+#     wandb_project: 8b_llama3
+#     wandb_entity: null
+#     wandb_run_name: llama3_8b_config
