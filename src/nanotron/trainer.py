@@ -656,7 +656,6 @@ class DistributedTrainer:
                     rank=0,
                 )
             else:
-                # Rather than indirectly setting max_position_embeddings to tokens.sequence_length, we should directly assert their equality.
                 assert (
                     self.config.tokens.sequence_length == self.model_config.max_position_embeddings
                 ), "The tokenizer's sequence length does not match the model's maximum position embeddings."
