@@ -95,7 +95,6 @@ class RotaryEmbedding(nn.Module):
             self.end *= 2
             self._initialized_buffer = False
         if self._initialized_buffer is False:
-            print(f"Initializing rotary embeddings with end={self.end}")
             self.init_rotary_embeddings()
         dtype = x.dtype
         assert inner_dim % 2 == 0
@@ -208,7 +207,7 @@ class CoreAttention(nn.Module):
 
         # NOTE: this scale is for µTransfer,
         # in SP, we use sqrt(1/d_h)
-        softmax_scale = 1 / query_states.shape[-1] if self.is_using_mup else None
+        1 / query_states.shape[-1] if self.is_using_mup else None
         attn_output = flash_attn_varlen_func(
             q=query_states,
             k=key_states,
@@ -218,7 +217,7 @@ class CoreAttention(nn.Module):
             max_seqlen_q=q_sequence_mask.shape[1],
             max_seqlen_k=kv_sequence_mask.shape[1],
             dropout_p=0.0,
-            softmax_scale=softmax_scale,
+            softmax_scale=None,
             causal=causal,
             return_attn_probs=False,
         )
@@ -595,12 +594,12 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             attention_output.contiguous().view(batch_size, q_length, self.n_local_q_heads * self.d_v).transpose(0, 1)
         )
 
-        # output = self.o_proj(attention_output)
-        # return_outputs = {"hidden_states": output, "sequence_mask": sequence_mask}
+        output = self.o_proj(attention_output)
+        return_outputs = {"hidden_states": output, "sequence_mask": sequence_mask}
 
-        return_outputs = {"hidden_states": None, "sequence_mask": sequence_mask}
-        return_outputs["qkv_states"] = (query_states, key_states, value_states) if return_qkv_states else ()
-        return_outputs["attention_output"] = attention_output
+        # return_outputs = {"hidden_states": None, "sequence_mask": sequence_mask}
+        # return_outputs["qkv_states"] = (query_states, key_states, value_states) if return_qkv_states else ()
+        # return_outputs["attention_output"] = attention_output
         return return_outputs
 
 
@@ -614,21 +613,21 @@ class LlamaDecoderLayer(nn.Module):
     ):
         super().__init__()
         self.input_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        # self.attn = CausalSelfAttention(
-        #     config=config,
-        #     parallel_config=parallel_config,
-        #     tp_pg=tp_pg,
-        #     layer_idx=layer_idx,
-        # )
-
-        from nanotron.models.attention import InfiniAttention
-
-        self.attn = InfiniAttention(
+        self.attn = CausalSelfAttention(
             config=config,
             parallel_config=parallel_config,
             tp_pg=tp_pg,
             layer_idx=layer_idx,
         )
+
+        # from nanotron.models.attention import InfiniAttention
+
+        # self.attn = InfiniAttention(
+        #     config=config,
+        #     parallel_config=parallel_config,
+        #     tp_pg=tp_pg,
+        #     layer_idx=layer_idx,
+        # )
 
         self.post_attention_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.mlp = MLP(config=config, parallel_config=parallel_config, tp_pg=tp_pg)
@@ -858,12 +857,14 @@ class Loss(nn.Module):
     ) -> Dict[str, torch.Tensor]:
         # Megatron by defaults cast everything in fp32. `--f16-lm-cross-entropy` is an option you can use to keep current precision.
         # https://github.com/NVIDIA/Megatron-LM/blob/f267e6186eae1d6e2055b412b00e2e545a8e896a/megatron/model/gpt_model.py#L38
+        import lovely_tensors as lt
 
+        lt.monkey_patch()  # noqa
         loss = sharded_cross_entropy(
             sharded_logits, label_ids.transpose(0, 1).contiguous(), group=self.tp_pg, dtype=torch.float
         ).transpose(0, 1)
         # TODO @thomasw21: It's unclear what kind of normalization we want to do.
-        loss = masked_mean(loss, label_mask, dtype=torch.float)
+        masked_mean(loss, label_mask, dtype=torch.float)
         # I think indexing causes a sync we don't actually want
         # loss = loss[label_mask].sum()
         return {"loss": loss}
@@ -901,6 +902,12 @@ class LlamaForTraining(NanotronModel):
         label_ids: Union[torch.Tensor, TensorPointer],
         label_mask: Union[torch.Tensor, TensorPointer],
     ) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
+        from transformers import AutoTokenizer
+
+        tokenizer = AutoTokenizer.from_pretrained("meta-llama/Meta-Llama-3-8B")
+        tokenizer.decode(input_ids[0].cpu().numpy(), skip_special_tokens=True)
+        tokenizer.decode(label_ids[0].cpu().numpy(), skip_special_tokens=True)
+
         sharded_logits = self.model(
             input_ids=input_ids,
             input_mask=input_mask,

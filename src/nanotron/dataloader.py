@@ -313,6 +313,9 @@ def clm_process(
         tokenized_batch = {k: [np.array(tokenized_texts) for tokenized_texts in v] for k, v in tokenized_batch.items()}
         return group_texts(tokenized_batch)
 
+    # limit raw_dataset to first 1000
+    raw_dataset = raw_dataset.select(range(1000))
+
     train_dataset = raw_dataset.map(
         _tokenize_and_group_texts,
         input_columns=text_column_name,

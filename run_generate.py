@@ -25,7 +25,6 @@ from nanotron.generation.decode import (
     GenerationInput,
     TokenizerConfig,
     decode_text,
-    decode_tokenized,
 )
 from nanotron.logging import log_rank, set_ranks_logging_level
 from nanotron.models import build_model
@@ -77,8 +76,8 @@ def main():
         pp=args.pp or config.parallelism.pp,
         tp=args.tp or config.parallelism.tp,
         pp_engine=OneForwardOneBackwardPipelineEngine(),
-        tp_mode=TensorParallelLinearMode.REDUCE_SCATTER,
-        tp_linear_async_communication=True,
+        tp_mode=TensorParallelLinearMode.ALL_REDUCE,
+        tp_linear_async_communication=False,
     )
 
     # Initialise all process groups
@@ -165,7 +164,8 @@ def main():
         tokenizer.truncation_side = "left"  # TODO @nouamane: do we want this?
         dummy_inputs = [
             "The capital of France is",
-            "Passage: Daniel went back to the garden. Mary travelled to the kitchen. Sandra journeyed to the kitchen. Sandra went to the hallway. John went to the bedroom. Mary went back to the garden. Where is Mary?\nAnswer:",
+            "The capital of France is",
+            # "Passage: Daniel went back to the garden. Mary travelled to the kitchen. Sandra journeyed to the kitchen. Sandra went to the hallway. John went to the bedroom. Mary went back to the garden. Where is Mary?\nAnswer:",
             # "This film was probably inspired by Godzilla",
         ]
 
@@ -177,7 +177,7 @@ def main():
             parallel_context=parallel_context,
             max_new_tokens=args.max_new_tokens,
             max_micro_batch_size=2,
-            generation_config=GenerationArgs(sampler="greedy", use_cache=True),
+            generation_config=GenerationArgs(sampler="greedy", use_cache=False),
             tokenizer_config=TokenizerConfig(max_input_length=None),
             is_bench=os.environ.get("USE_BENCH", "0") == "1",
         )
@@ -210,16 +210,16 @@ def main():
                 rank=0,
             )
     else:
-        outputs = decode_tokenized(
-            input_ids=torch.zeros(1, 1).to(dtype=torch.int64, device="cuda"),
-            input_mask=torch.ones(1, 1).to(dtype=torch.bool, device="cuda"),
-            model=model.model,
-            parallel_context=parallel_context,
-            generation_config=GenerationArgs(sampler="greedy", use_cache=True),
-            max_micro_batch_size=1,
-            max_new_tokens=12,
-            returns_logits=False,
-        )
+        # outputs = decode_tokenized(
+        #     input_ids=torch.zeros(1, 1).to(dtype=torch.int64, device="cuda"),
+        #     input_mask=torch.ones(1, 1).to(dtype=torch.bool, device="cuda"),
+        #     model=model.model,
+        #     parallel_context=parallel_context,
+        #     generation_config=GenerationArgs(sampler="greedy", use_cache=False),
+        #     max_micro_batch_size=1,
+        #     max_new_tokens=4,
+        #     returns_logits=False,
+        # )
         for output in outputs:
             input_ids = output.input_ids
             generated_ids = output.generation_ids

@@ -1,12 +1,25 @@
+"""
+Converts a HF model to nanotron format
+Command:
+    torchrun --nproc_per_node=1 convert_hf_to_nanotron.py --checkpoint_path=hf_weights --save_path=nanotron_weights
+"""
+
 import json
 from pathlib import Path
 from typing import Optional
 
 import nanotron
 import torch
+import yaml
+
+# from convert_weights import get_config_mapping, get_weight_mapping, load_nanotron_model, make_parallel_config
 from nanotron.config import LlamaConfig as NanotronLlamaConfig
+from nanotron.config.config import Config, GeneralArgs, ModelArgs, TokenizerArgs
+from nanotron.config.models_config import RandomInit
 from nanotron.models.llama import LlamaForTraining
 from nanotron.trainer import mark_tied_parameters
+from transformers import LlamaConfig as HFLlamaConfig
+from transformers import LlamaForCausalLM
 
 
 def get_weight_mapping(config: NanotronLlamaConfig, nt_to_hf: bool = True) -> dict[str, str]:
@@ -142,28 +155,6 @@ def load_nanotron_model(
     return nanotron_model
 
 
-"""
-Converts a HF model to nanotron format
-Command:
-    torchrun --nproc_per_node=1 convert_hf_to_nanotron.py --checkpoint_path=hf_weights --save_path=nanotron_weights
-"""
-
-import json
-from pathlib import Path
-
-import nanotron
-import torch
-import yaml
-
-# from convert_weights import get_config_mapping, get_weight_mapping, load_nanotron_model, make_parallel_config
-from nanotron.config import LlamaConfig as NanotronLlamaConfig
-from nanotron.config.config import Config, GeneralArgs, ModelArgs, TokenizerArgs
-from nanotron.config.models_config import RandomInit
-from nanotron.models.llama import LlamaForTraining
-from transformers import LlamaConfig as HFLlamaConfig
-from transformers import LlamaForCausalLM
-
-
 def _handle_attention_block(
     q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, n_q_heads: int, n_kv_heads: int, d_qk: int
 ) -> torch.Tensor:
@@ -278,25 +269,13 @@ def convert_checkpoint_and_save(checkpoint_path: Path, save_path: Path, dp: int,
     print(f"Model saved to {save_path}")
 
 
-# if __name__ == "__main__":
-#     parser = ArgumentParser(description="Convert HF weights to nanotron format")
-#     parser.add_argument("--checkpoint_path", type=Path, default="llama-7b", help="Path to the checkpoint")
-#     parser.add_argument("--save_path", type=Path, default="llama-7b-hf", help="Path to save the nanotron model")
-#     parser.add_argument("--dp", type=int, default=1, help="Data parallel size")
-#     parser.add_argument("--pp", type=int, default=1, help="Pipeline parallel size")
-#     parser.add_argument("--tp", type=int, default=1, help="Tensor parallel size")
-#     args = parser.parse_args()
-
-#     # Convert HF model to nanotron format.
-#     convert_checkpoint_and_save(checkpoint_path=args.checkpoint_path, save_path=args.save_path)
-
-
 if __name__ == "__main__":
     import os
 
     os.environ["TRANSFORMERS_CACHE"] = "/admin/home/phuc_nguyen/.cache/huggingface/hub"
 
     checkpoint_path = "meta-llama/Meta-Llama-3-8B"
-    save_path = Path("/fsx/phuc/projects/infini-attention/llama3-ckps/8b/nanotron_ckp_tp_agnostic")
+    save_path = Path("/fsx/nouamane/projects/nanotron/pretrained/llama3-8B-interleave")
 
     convert_checkpoint_and_save(checkpoint_path=checkpoint_path, save_path=save_path, dp=1, pp=1, tp=1)
+    # torchrun --nproc_per_node=1 examples/infinite-context-length/llama3_to_nanotron_ckp.py
