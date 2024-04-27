@@ -53,6 +53,9 @@ except ImportError:
 logger = logging.get_logger(__name__)
 
 
+USE_CACHE = True
+
+
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--ckpt-path", type=Path, required=True, help="Checkpoint path")
@@ -164,10 +167,17 @@ def main():
         tokenizer.padding_side = "left"
         tokenizer.truncation_side = "left"  # TODO @nouamane: do we want this?
         dummy_inputs = [
-            "The capital of France is",
-            "Passage: Daniel went back to the garden. Mary travelled to the kitchen. Sandra journeyed to the kitchen. Sandra went to the hallway. John went to the bedroom. Mary went back to the garden. Where is Mary?\nAnswer:",
+            # "Continue and repeat the following single digit only, without any spaces. Don't repeat the sentence. Now the number: 11111111111111111111",
+            # "The capital of France is Paris. " * 2,
+            "The capital of France is Paris. "
+            * 1000
+            # "The capital of France is Paris. " * 3000 # note doesnt run
+            # "The capital of France is",
+            # "Passage: Daniel went back to the garden. Mary travelled to the kitchen. Sandra journeyed to the kitchen. Sandra went to the hallway. John went to the bedroom. Mary went back to the garden. Where is Mary?\nAnswer:",
             # "This film was probably inspired by Godzilla",
         ]
+
+        # text = "The capital of France is Paris. " * 7000
 
         outputs = decode_text(
             input_iter=(GenerationInput(text=text) for text in dummy_inputs),
@@ -177,7 +187,7 @@ def main():
             parallel_context=parallel_context,
             max_new_tokens=args.max_new_tokens,
             max_micro_batch_size=2,
-            generation_config=GenerationArgs(sampler="greedy", use_cache=True),
+            generation_config=GenerationArgs(sampler="greedy", use_cache=USE_CACHE),
             tokenizer_config=TokenizerConfig(max_input_length=None),
             is_bench=os.environ.get("USE_BENCH", "0") == "1",
         )
@@ -215,7 +225,7 @@ def main():
             input_mask=torch.ones(1, 1).to(dtype=torch.bool, device="cuda"),
             model=model.model,
             parallel_context=parallel_context,
-            generation_config=GenerationArgs(sampler="greedy", use_cache=True),
+            generation_config=GenerationArgs(sampler="greedy", use_cache=USE_CACHE),
             max_micro_batch_size=1,
             max_new_tokens=12,
             returns_logits=False,

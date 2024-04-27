@@ -32,16 +32,17 @@ class InfiniAttention(nn.Module):
             tp_pg=tp_pg,
             layer_idx=layer_idx,
         )
-        # NOTE: hacky, memory mapping
-        self.qkv_proj = self.attn.qkv_proj
-        self.rotary_embedding = self.attn.rotary_embedding
-        self.flash_rotary_embedding = self.attn.flash_rotary_embedding
-        self.o_proj = self.attn.o_proj
+        # # NOTE: hacky, memory mapping
+        # self.qkv_proj = self.attn.qkv_proj
+        # self.rotary_embedding = self.attn.rotary_embedding
+        # self.flash_rotary_embedding = self.attn.flash_rotary_embedding
+        # self.o_proj = self.attn.o_proj
 
-        assert self.qkv_proj.weight.storage().data_ptr() and self.attn.o_proj.weight.storage().data_ptr()
-        assert self.o_proj.weight.storage().data_ptr() and self.attn.o_proj.weight.storage().data_ptr()
+        # assert self.qkv_proj.weight.storage().data_ptr() and self.attn.o_proj.weight.storage().data_ptr()
+        # assert self.o_proj.weight.storage().data_ptr() and self.attn.o_proj.weight.storage().data_ptr()
 
-        self.n_local_heads = self.attn.n_local_q_heads
+        # self.n_local_heads = self.attn.n_local_q_heads
+        # self.num_key_value_groups = self.attn.n_repeats
 
         # self.o_proj = TensorParallelRowLinear(
         #     config.num_attention_heads * self.d_head,
@@ -60,9 +61,10 @@ class InfiniAttention(nn.Module):
         # self.balance_factors = nn.Parameter(torch.randn(self.n_local_heads, device=device, dtype=dtype))
         self.n_local_q_heads = self.attn.n_local_q_heads
         self.n_local_kv_heads = self.attn.n_local_kv_heads
+        self.n_q_groups = config.num_attention_heads // config.num_key_value_heads
         self.is_gqa = self.attn.is_gqa
 
-        balance_factors = nn.Parameter(torch.randn((self.n_local_heads,), device=device, dtype=dtype))
+        balance_factors = nn.Parameter(torch.randn(self.n_local_q_heads, device=device, dtype=dtype))
         self.tp_pg = tp_pg
         self.balance_factors = create_sharded_parameter_from_config(
             parameter=balance_factors,
@@ -114,21 +116,21 @@ class InfiniAttention(nn.Module):
 
             query_states = rearrange(
                 query_states,
-                "(batch_size seq_len) n_heads d_head -> batch_size n_heads seq_len d_head",
+                "(batch_size seq_len) n_q_heads d_head -> batch_size n_q_heads seq_len d_head",
                 batch_size=batch_size,
-                # n_heads=self.n_local_heads,
+                # n_heads=self.n_local_q_heads,
             )
             key_states = rearrange(
                 key_states,
-                "(batch_size seq_len) n_heads d_head -> batch_size n_heads seq_len d_head",
+                "(batch_size seq_len) n_k_heads d_head -> batch_size n_k_heads seq_len d_head",
                 batch_size=batch_size,
-                # n_heads=self.n_local_heads,
+                # n_heads=self.n_local_kv_heads,
             )
             value_states = rearrange(
                 value_states,
-                "(batch_size seq_len) n_heads d_head -> batch_size n_heads seq_len d_head",
+                "(batch_size seq_len) n_v_heads d_head -> batch_size n_v_heads seq_len d_head",
                 batch_size=batch_size,
-                # n_heads=self.n_local_heads,
+                # n_heads=self.n_local_kv_heads,
             )
 
             # assert query_states.shape == (batch_size, self.n_local_heads, segment_length, self.d_head)
@@ -142,15 +144,16 @@ class InfiniAttention(nn.Module):
 
             local_attn_outputs = rearrange(
                 local_attn_outputs,
-                "seq_len batch_size (n_heads d_head) -> batch_size n_heads seq_len d_head",
+                "seq_len batch_size (n_q_heads d_head) -> batch_size n_q_heads seq_len d_head",
                 d_head=self.d_head,
+                # n_q_heads=self.n_local_q_heads,
             )
 
             global_weights = F.sigmoid(self.balance_factors)
-            global_weights = rearrange(global_weights, "n_heads -> 1 n_heads 1 1")
+            global_weights = rearrange(global_weights, "n_q_heads -> 1 n_q_heads 1 1")
 
             local_weights = 1 - F.sigmoid(self.balance_factors)
-            local_weights = rearrange(local_weights, "n_heads -> 1 n_heads 1 1")
+            local_weights = rearrange(local_weights, "n_q_heads -> 1 n_q_heads 1 1")
 
             # assert torch.allclose(global_weights + local_weights, torch.ones_like(global_weights))
 
@@ -159,7 +162,9 @@ class InfiniAttention(nn.Module):
             # assert attention_output.shape == (batch_size, self.n_local_heads, segment_length, self.d_head)
 
             attention_output = rearrange(
-                attention_output, "batch_size n_heads seq_len d_head -> seq_len batch_size (n_heads d_head)"
+                attention_output,
+                "batch_size n_q_heads seq_len d_head -> seq_len batch_size (n_q_heads d_head)",
+                # n_q_heads=self.n_local_q_heads
             )
 
             output = self.attn.o_proj(attention_output)
@@ -192,13 +197,15 @@ class InfiniAttention(nn.Module):
             prev_memory = repeat(
                 prev_memory,
                 "batch_size n_kv_heads d_k d_v -> batch_size (n_kv_heads n) d_k d_v",
-                n=self.n_local_q_heads // self.n_local_kv_heads,
+                n=self.n_q_groups,
             )
             prev_normalization = repeat(
                 prev_normalization,
                 "batch_size n_kv_heads d_head -> batch_size (n_kv_heads n) d_head",
-                n=self.n_local_q_heads // self.n_local_kv_heads,
+                n=self.n_q_groups,
             )
+            # prev_memory = prev_memory.repeat(1, 1, self.num_key_value_groups, 1)
+            # prev_normalization = prev_normalization.repeat(1, self.num_key_value_groups, 1)
 
         query_states = F.elu(query_states) + 1
         retrieved_memory = einsum(

@@ -603,12 +603,12 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             attention_output.contiguous().view(batch_size, q_length, self.n_local_q_heads * self.d_v).transpose(0, 1)
         )
 
-        output = self.o_proj(attention_output)
-        return_outputs = {"hidden_states": output, "sequence_mask": sequence_mask}
+        # output = self.o_proj(attention_output)
+        # return_outputs = {"hidden_states": output, "sequence_mask": sequence_mask}
 
-        # return_outputs = {"hidden_states": None, "sequence_mask": sequence_mask}
-        # return_outputs["qkv_states"] = (query_states, key_states, value_states) if return_qkv_states else ()
-        # return_outputs["attention_output"] = attention_output
+        return_outputs = {"hidden_states": None, "sequence_mask": sequence_mask}
+        return_outputs["qkv_states"] = (query_states, key_states, value_states) if return_qkv_states else ()
+        return_outputs["attention_output"] = attention_output
         return return_outputs
 
 
@@ -622,21 +622,21 @@ class LlamaDecoderLayer(nn.Module):
     ):
         super().__init__()
         self.input_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.attn = CausalSelfAttention(
-            config=config,
-            parallel_config=parallel_config,
-            tp_pg=tp_pg,
-            layer_idx=layer_idx,
-        )
-
-        # from nanotron.models.attention import InfiniAttention
-
-        # self.attn = InfiniAttention(
+        # self.attn = CausalSelfAttention(
         #     config=config,
         #     parallel_config=parallel_config,
         #     tp_pg=tp_pg,
         #     layer_idx=layer_idx,
         # )
+
+        from nanotron.models.attention import InfiniAttention
+
+        self.attn = InfiniAttention(
+            config=config,
+            parallel_config=parallel_config,
+            tp_pg=tp_pg,
+            layer_idx=layer_idx,
+        )
 
         self.post_attention_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.mlp = MLP(config=config, parallel_config=parallel_config, tp_pg=tp_pg)
@@ -916,27 +916,27 @@ class LlamaForTraining(NanotronModel):
         label_mask: Union[torch.Tensor, TensorPointer],
     ) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
         # input_ids = torch.tensor([[128000, 791, 6864, 315, 9822, 374]], device="cuda")
-        input_ids[0, 0] = 128000
+        # input_ids[0, 0] = 128000
         sharded_logits = self.model(
             input_ids=input_ids,
             input_mask=input_mask,
         )
 
-        from nanotron.generation.sampler import GreedySampler
+        # from nanotron.generation.sampler import GreedySampler
 
-        sampler = GreedySampler(pg=self.parallel_context.tp_pg)
-        new_decoder_input_ids = sampler(sharded_logits=sharded_logits.transpose(0, 1)[:, -1, :])
+        # sampler = GreedySampler(pg=self.parallel_context.tp_pg)
+        # new_decoder_input_ids = sampler(sharded_logits=sharded_logits.transpose(0, 1)[:, -1, :])
 
-        input = self.tokenizer.decode(input_ids[0].cpu().numpy())
-        prediction = self.tokenizer.decode(new_decoder_input_ids[0].cpu().numpy())
-        target = self.tokenizer.decode(label_ids[0][-1].cpu().numpy())
+        # input = self.tokenizer.decode(input_ids[0].cpu().numpy())
+        # prediction = self.tokenizer.decode(new_decoder_input_ids[0].cpu().numpy())
+        # target = self.tokenizer.decode(label_ids[0][-1].cpu().numpy())
 
-        log_rank(
-            f"text: {input[-20:]}, prediction: {prediction}, target: {target}",
-            logger=logger,
-            level=logging.INFO,
-            rank=0,
-        )
+        # log_rank(
+        #     f"text: {input[-20:]}, prediction: {prediction}, target: {target}",
+        #     logger=logger,
+        #     level=logging.INFO,
+        #     rank=0,
+        # )
 
         loss = self.loss(
             sharded_logits=sharded_logits,

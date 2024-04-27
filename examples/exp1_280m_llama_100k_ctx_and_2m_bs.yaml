@@ -22,9 +22,9 @@ model:
     intermediate_size: 4096
     is_llama_config: true
     max_position_embeddings: 1024
-    num_attention_heads: 8
+    num_attention_heads: 16
     num_hidden_layers: 10
-    num_key_value_heads: 8
+    num_key_value_heads: 16
     pad_token_id: null
     pretraining_tp: 1
     rms_norm_eps: 1.0e-05

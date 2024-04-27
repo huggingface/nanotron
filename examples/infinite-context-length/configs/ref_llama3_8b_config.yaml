@@ -1,5 +1,5 @@
 checkpoints:
-  checkpoint_interval: 1000
+  checkpoint_interval: 1000000
   # checkpoints_path: /fsx/phuc/new_workspace/experiments/8b_llama3/llama3_8b_config/checkpoints
   checkpoints_path: /fsx/phuc/projects/infini-attention/llama3-ckps/8b/nanotron_ckp_initial_state
   checkpoints_path_is_shared_file_system: false
@@ -48,19 +48,19 @@ model:
     vocab_size: 128256
 
 optimizer:
-  accumulate_grad_in_fp32: false
+  accumulate_grad_in_fp32: true
   adam_beta1: 0.9
   adam_beta2: 0.95
   adam_eps: 1.0e-08
   clip_grad: 1.0
   learning_rate_scheduler:
-    learning_rate: 0.00015 # note: 1/2 of pythia use this for a 400m model
+    learning_rate: 3.0e-5 # note: 1/2 of pythia use this for a 400m model
     lr_decay_starting_step: null
     lr_decay_steps: null
     lr_decay_style: cosine
-    lr_warmup_steps: 715 # 10% warm up of total training steps
+    lr_warmup_steps: 4000 # 10% warm up of total training steps
     lr_warmup_style: linear
-    min_decay_lr: 1.0e-05
+    min_decay_lr: 3.0e-6
   torch_adam_is_fused: true
   weight_decay: 0.1
   zero_stage: 1
@@ -86,12 +86,12 @@ tokenizer:
   tokenizer_name_or_path: meta-llama/Meta-Llama-3-8B
   tokenizer_revision: null
 tokens:
-  batch_accumulation_per_replica: 1
+  batch_accumulation_per_replica: 40
   limit_test_batches: 0
   limit_val_batches: 0
   micro_batch_size: 1
-  sequence_length: 8192
-  train_steps: 10
+  sequence_length: 32768
+  train_steps: 20_000
   val_check_interval: -1
 
 data_stages:

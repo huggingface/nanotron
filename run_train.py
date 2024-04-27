@@ -83,8 +83,21 @@ def get_dataloader_from_data_stage(trainer: DistributedTrainer, data: DataArgs):
                 splits=data.dataset.hf_dataset_splits,
             )["train"]
 
+            # # # raw_dataset = Dataset.from_dict({
+            # # #     'text': ["The capital of France is Paris. " * 8000]
+            # # # })
+
+            # raw_dataset = Dataset.from_dict({
+            #     'text': ["The capital of France is Paris. " * 8000]
+            # })
+
+            # # # raw_dataset = Dataset.from_dict({
+            # # #     'text': ["Continue and repeat the following number only, without any spaces. " + "111111111111" * 1200000]
+            # # # })
+
             tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
             tokenizer.pad_token = tokenizer.eos_token
+            # tokenizer.pad_token_id = 128001
             tokenizer.padding_side = "left"
 
             # We apply the Causal Language Modeling preprocessing
