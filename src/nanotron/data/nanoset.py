@@ -158,7 +158,7 @@ def build_nanoset_index_helper(
     """
     # Create empty arrays for dataset indices and dataset sample indices
     dataset_index = np.empty((n_samples,), dtype="uint")
-    dataset_sample_index = np.empty((n_samples,), dtype="long")
+    dataset_sample_index = np.empty((n_samples,), dtype="long")  # Supports dataset with up to 2**64 samples
 
     # Initialize buffer for number of samples used for each dataset
     current_samples = np.zeros((len(weights),), dtype="long")

@@ -1,3 +1,5 @@
+from math import isclose
+
 import numpy as np
 import pytest
 from helpers.context import TestContext
@@ -12,6 +14,7 @@ from helpers.data import (
 from helpers.utils import available_gpus, get_all_3d_configurations, init_distributed, rerun_if_address_is_in_use
 from nanotron.data.dataloader_builder import build_nanoset_dataloader
 from nanotron.data.nanoset import Nanoset
+from nanotron.data.utils import count_dataset_indexes, normalize
 from nanotron.parallel import ParallelContext
 from nanotron.utils import main_rank_first
 
@@ -95,13 +98,17 @@ def _test_build_nanoset_dataloader(
 
         # Assert we have the same Nanoset in all ranks
         assert_nanoset_sync_across_all_ranks(train_dataset, parallel_context)
-        # Assert Nanoset doesn't sample indexes greater than the datasets
+        dataset_sample_count = count_dataset_indexes(train_dataset.dataset_index, len(train_dataset.dataset_paths))
         for idx, ds_length in enumerate(train_dataset.dataset_lengths):
+            # Assert Nanoset doesn't sample indexes greater than the datasets
             assert (
                 np.max(train_dataset.dataset_sample_index, where=train_dataset.dataset_index == idx, initial=-1)
                 < ds_length
             ), f"Error building Nanoset Indexes: Tryng to access sample {np.max(train_dataset.dataset_sample_index, where=train_dataset.dataset_index==idx, initial = -1)} of a {ds_length} sample dataset"
-
+            # Assert Nanoset builds up the correct blend WRT the dataset_weights
+            assert isclose(
+                normalize(dataset_sample_count).tolist()[idx], train_dataset.dataset_weights[idx], abs_tol=0.05
+            ), f"Requested Nanoset to contain {round(train_dataset.dataset_weights[idx]*100, 2)}% of samples from {train_dataset.dataset_paths[idx]} but got {round(normalize(dataset_sample_count).tolist()[idx]*100, 2)}%"
         # Create Dataloaders
         dataloader = build_nanoset_dataloader(
             train_dataset,
