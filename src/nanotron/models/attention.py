@@ -22,7 +22,7 @@ class InfiniAttention(nn.Module):
     ):
         super().__init__()
 
-        self.n_segments = 50
+        self.n_segments = 4
 
         from nanotron.models.llama import CausalSelfAttention
 
@@ -114,7 +114,7 @@ class InfiniAttention(nn.Module):
             )
 
             # assert query_states.shape == (batch_size, self.n_local_heads, segment_length, self.d_head)
-            assert query_states.shape == key_states.shape == value_states.shape
+            # assert query_states.shape == key_states.shape == value_states.shape
 
             retrieved_memory = self._retrieve_from_memory(
                 query_states, prev_memory=memory, prev_normalization=normalization
@@ -166,6 +166,19 @@ class InfiniAttention(nn.Module):
         # return torch.zeros_like(query_states)
         if prev_memory is None:
             return torch.zeros_like(query_states)
+
+        from einops import repeat
+
+        prev_memory = repeat(
+            prev_memory,
+            "batch_size n_kv_heads d_k d_v -> batch_size (n_kv_heads n) d_k d_v",
+            n=self.attn.n_repeats,
+        )
+        prev_normalization = repeat(
+            prev_normalization,
+            "batch_size n_kv_heads d_head -> batch_size (n_kv_heads n) d_head",
+            n=self.attn.n_repeats,
+        )
 
         query_states = F.elu(query_states) + 1
         retrieved_memory = einsum(
