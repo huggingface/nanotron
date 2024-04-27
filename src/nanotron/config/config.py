@@ -94,7 +94,6 @@ class PretrainDatasetsArgs:
 @dataclass
 class NanosetDatasetsArgs:
     dataset_path: Union[str, dict, List[str]]
-    # dataset_weights: Optional[List] = field(init=False, default=None)
 
     def __post_init__(self):
         if isinstance(self.dataset_path, str):  # Case 1: 1 Dataset file
