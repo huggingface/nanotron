@@ -419,7 +419,7 @@ def get_config_from_dict(
                 RecomputeGranularity: lambda x: RecomputeGranularity[x.upper()],
                 SamplerType: lambda x: SamplerType[x.upper()],
             },
-            strict_unions_match=True,
+            strict=True,
         ),
     )
 

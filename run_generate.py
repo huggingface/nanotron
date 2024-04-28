@@ -74,12 +74,12 @@ def main():
     tokenizer_path = config.tokenizer.tokenizer_name_or_path
 
     parallel_config = ParallelismArgs(
-        dp=config.parallelism.dp,
-        pp=config.parallelism.pp,
-        tp=config.parallelism.tp,
+        dp=args.dp if args.dp != 0 else config.parallelism.dp,
+        pp=args.pp if args.pp != 0 else config.parallelism.pp,
+        tp=args.tp if args.tp != 0 else config.parallelism.tp,
         pp_engine=OneForwardOneBackwardPipelineEngine(),
-        tp_mode=TensorParallelLinearMode.REDUCE_SCATTER,
-        tp_linear_async_communication=config.parallelism.tp_linear_async_communication,
+        tp_mode=TensorParallelLinearMode.ALL_REDUCE,
+        tp_linear_async_communication=False,
     )
 
     # Initialise all process groups
