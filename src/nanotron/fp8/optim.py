@@ -271,13 +271,16 @@ class FP8Adam(Optimizer):
         # Exponential moving average of gradient values
         # TODO(xrsrke): maybe initialize a lower precision then cast to FP8Tensor
         # because zeros fp16 = zeros fp32?
-        exp_avg = torch.zeros(p.data.shape, dtype=torch.float32, device="cuda")
-        exp_avg = FP8Tensor(exp_avg, dtype=self.exp_avg_dtype)
+        # exp_avg = torch.zeros(p.data.shape, dtype=torch.float32, device="cuda")
+        # exp_avg = FP8Tensor(exp_avg, dtype=self.exp_avg_dtype)
 
         # Exponential moving average of squared gradient values
         # TODO(xrsrke): don't fixed the dtype to fp16
+        # exp_avg_sq = torch.zeros(p.data.shape, dtype=torch.float32, device="cuda")
+        # exp_avg_sq = FP16Tensor(exp_avg_sq, dtype=DTypes.KFLOAT16)
+        
+        exp_avg = torch.zeros(p.data.shape, dtype=torch.float32, device="cuda")
         exp_avg_sq = torch.zeros(p.data.shape, dtype=torch.float32, device="cuda")
-        exp_avg_sq = FP16Tensor(exp_avg_sq, dtype=DTypes.KFLOAT16)
 
         state["step"] = 0
         state["exp_avg"] = exp_avg
@@ -366,7 +369,7 @@ class FP8Adam(Optimizer):
                 
                 assert fp16_p.dtype == torch.float16
                 fp32_p = convert_tensor_from_fp16(fp16_p, torch.float32)
-                # orig_fp32_p = fp32_p.clone()
+                # orig_fp32_p = fp32_p.clone() 
                 loggings[p]["hp_p"] = compute_stas(fp32_p)
 
                 assert fp32_p.dtype == torch.float32
@@ -384,11 +387,11 @@ class FP8Adam(Optimizer):
 
                 # Decay the first and second moment running average coefficient
                 exp_avg, exp_avg_sq = state["exp_avg"], state["exp_avg_sq"]
-                assert exp_avg.dtype == torch.uint8
-                assert exp_avg_sq.dtype == torch.float16
+                # assert exp_avg.dtype == torch.uint8
+                # assert exp_avg_sq.dtype == torch.float16
                 
-                loggings[p]["lp_exp_avg"] = compute_stas(exp_avg)
-                loggings[p]["lp_exp_avg_sq"] = compute_stas(exp_avg_sq)
+                # loggings[p]["lp_exp_avg"] = compute_stas(exp_avg)
+                # loggings[p]["lp_exp_avg_sq"] = compute_stas(exp_avg_sq)
 
                 # if p.ndim != 1:
                 #     print(
@@ -399,8 +402,10 @@ class FP8Adam(Optimizer):
                 #     )
 
                 # TODO(xrsrke): can we do all calculations in fp8?
-                fp32_exp_avg = convert_tensor_from_fp8(exp_avg, exp_avg.fp8_meta, torch.float32)
-                fp32_exp_avg_sq = convert_tensor_from_fp16(exp_avg_sq, torch.float32)
+                # fp32_exp_avg = convert_tensor_from_fp8(exp_avg, exp_avg.fp8_meta, torch.float32)
+                # fp32_exp_avg_sq = convert_tensor_from_fp16(exp_avg_sq, torch.float32)
+                fp32_exp_avg = exp_avg
+                fp32_exp_avg_sq = exp_avg_sq
                 
                 loggings[p]["hp_exp_avg"] = compute_stas(fp32_exp_avg)
                 loggings[p]["hp_exp_avg_sq"] = compute_stas(fp32_exp_avg_sq)
@@ -452,8 +457,8 @@ class FP8Adam(Optimizer):
                 #     print(f"[FP8Adam] updated p_fp32: {fp32_p[:2, :2]} \n")
 
                 # # NOTE: store back fp8
-                exp_avg.set_data(fp32_exp_avg)
-                exp_avg_sq.set_data(fp32_exp_avg_sq)
+                # exp_avg.set_data(fp32_exp_avg)
+                # exp_avg_sq.set_data(fp32_exp_avg_sq)
 
                 # NOTE: i tried to isinstance(p, FP8Parameter) but it's not working
                 # it returns False even though p is FP8Parameter
