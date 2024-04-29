@@ -65,3 +65,16 @@ FP8LM_RECIPE = FP8TrainingRecipe(
 LS_INITIAL_SCALING_VALUE = torch.tensor(32768, dtype=torch.float32)
 LS_INITIAL_SCALING_FACTOR = torch.tensor(2.0, dtype=torch.float32)
 LS_INTERVAL = 1000
+
+
+# FOR TESTING
+# NOTE: this tolerance is from FP8-LM's implementation
+# reference: https://github.com/Azure/MS-AMP/blob/9ac98df5371f3d4174d8f103a1932b3a41a4b8a3/tests/common/tensor/test_cast.py#L23
+# NOTE: i tried to use rtol=0, atol=0.1
+# but even msamp fails to pass 6/8 tests
+# so now use 0.1, but better do a systematic tuning
+FP8_RTOL_THRESHOLD = 0.1
+FP8_ATOL_THRESHOLD = 0.1
+
+FP16_RTOL_THRESHOLD = 0
+FP16_ATOL_THRESHOLD = 1e-03

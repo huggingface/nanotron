@@ -1,7 +1,12 @@
 import datetime
 import os
-from functools import cache, lru_cache
+from functools import lru_cache
 from typing import List, Optional, Tuple
+
+try:
+    from functools import cache
+except ImportError:
+    from functools import lru_cache as cache
 
 import torch
 from packaging import version

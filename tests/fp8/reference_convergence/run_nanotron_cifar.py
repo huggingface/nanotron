@@ -60,12 +60,27 @@ class Net(nn.Module):
     def __init__(self, width, num_classes=10):
         super(Net, self).__init__()
         self.fc_1 = nn.Linear(3072, width, bias=False)
-        self.fc_2 = nn.Linear(width, width, bias=False)
-        self.fc_3 = nn.Linear(width, 16, bias=False)
+        self.fc_2 = nn.Linear(width, width*4, bias=False)
+        self.fc_3 = nn.Linear(width*4, width*4, bias=False)
+        self.fc_4 = nn.Linear(width*4, width, bias=False)
+        self.fc_5 = nn.Linear(width, 16, bias=False)
 
     def forward(self, x):
-        x = self.fc_3(F.relu(self.fc_2(F.relu(self.fc_1(x)))))
+        x = self.fc_5(F.relu(self.fc_4(F.relu(self.fc_3(F.relu(self.fc_2(F.relu(self.fc_1(x)))))))))
         return x[:, :10]
+    
+
+def format_billions(number):
+    """
+    Convert a number to a string with a 'b' suffix, representing billions.
+    
+    Args:
+    number (float or int): The number to convert.
+
+    Returns:
+    str: The formatted number with one decimal place followed by 'b'.
+    """
+    return f"{number / 1_000_000_000:.1f}b"
     
     
 def add_argument():
@@ -110,8 +125,8 @@ def check_if_overflow(optim):
 if __name__ == "__main__":
     BATCH_SIZE = 64
     INPUT_DIM = 64
-    HIDDEN_SIZE = 64
-    N_STEPS = 1000
+    HIDDEN_SIZE = 512
+    N_STEPS = 20_000
     # LR = 6e-4
     LR = 1e-3
     N_LAYERS = 16
@@ -121,7 +136,7 @@ if __name__ == "__main__":
     
     torch.cuda.empty_cache()
 
-    fp32_linear = Net(128).to("cuda")
+    fp32_linear = Net(HIDDEN_SIZE).to("cuda")
 
     # bf16_linear = deepcopy(fp32_linear)
     fp8_linear = deepcopy(fp32_linear)
@@ -163,9 +178,10 @@ if __name__ == "__main__":
     fp8_with_loss_scaler_losses = []
     msamp_with_loss_scaler_losses = []
     
+    num_params = sum(p.numel() for p in fp32_linear.parameters())
     wandb.init(
         project="fp8_for_nanotron",
-        name=f"{get_time_name()}.n_layers_{N_LAYERS}_and_input_dim_{INPUT_DIM}_and_hidden_size_{HIDDEN_SIZE}_and_lr_{LR}_and_bias_{WITH_BIAS}_and_batch_size_{BATCH_SIZE}",
+        name=f"{format_billions(num_params)}b_params_and_n_layers_{N_LAYERS}_and_input_dim_{INPUT_DIM}_and_hidden_size_{HIDDEN_SIZE}_and_lr_{LR}_and_bias_{WITH_BIAS}_and_batch_size_{BATCH_SIZE}",
         config={
             "batch_size": BATCH_SIZE,
             "input_dim": INPUT_DIM,
@@ -177,7 +193,7 @@ if __name__ == "__main__":
             # "act_func": fp32_linear[1].__class__.__name__ if N_LAYERS > 1 else "None",
             "optim": fp32_optim.__class__.__name__,
             "optim_params": fp32_optim.defaults,
-            "num_params": sum(p.numel() for p in fp32_linear.parameters()),
+            "num_params": num_params,
             "fp8_recipe": asdict(FP8LM_RECIPE),
         },
     )
@@ -197,11 +213,6 @@ if __name__ == "__main__":
     
     for step in range(N_STEPS):
         for step, batch in enumerate(train_dataloader):
-                
-            # print(f"step: {step} /n /n")
-            
-            if step == 1:
-                assert 1 == 1
                 
             batch = [x.to("cuda") for x in batch]
             inputs, targets = batch
@@ -227,22 +238,22 @@ if __name__ == "__main__":
             fp8_loss.backward()
             fp8_optim.step()
             
-            # msamp_logs = _log(msamp_linear)
-            msamp_optim.zero_grad()
-            msamp_output = msamp_linear(inputs)
-            msamp_loss = loss_func(msamp_output, targets)
-            msamp_loss.backward()
-            msamp_optim.all_reduce_grads(msamp_linear)
-            msamp_optim.step()
+            # # msamp_logs = _log(msamp_linear)
+            # msamp_optim.zero_grad()
+            # msamp_output = msamp_linear(inputs)
+            # msamp_loss = loss_func(msamp_output, targets)
+            # msamp_loss.backward()
+            # msamp_optim.all_reduce_grads(msamp_linear)
+            # msamp_optim.step()
 
-            # msamp_with_loss_scaler_logs = _log(msamp_linear_with_scaler)
-            msamp_optim_with_scaler.zero_grad()
-            msamp_output_with_scaler = msamp_linear_with_scaler(inputs)
-            msamp_loss_with_scaler = loss_func(msamp_output_with_scaler, targets)
-            scaled_msamp_loss_with_scaler = msamp_scaler.scale(msamp_loss_with_scaler)
-            scaled_msamp_loss_with_scaler.backward()
-            msamp_scaler.step(msamp_optim_with_scaler)
-            msamp_scaler.update()
+            # # msamp_with_loss_scaler_logs = _log(msamp_linear_with_scaler)
+            # msamp_optim_with_scaler.zero_grad()
+            # msamp_output_with_scaler = msamp_linear_with_scaler(inputs)
+            # msamp_loss_with_scaler = loss_func(msamp_output_with_scaler, targets)
+            # scaled_msamp_loss_with_scaler = msamp_scaler.scale(msamp_loss_with_scaler)
+            # scaled_msamp_loss_with_scaler.backward()
+            # msamp_scaler.step(msamp_optim_with_scaler)
+            # msamp_scaler.update()
                     
             deepspeed_output = deepspeed_linear(inputs.half())
             deepspeed_loss = loss_func(deepspeed_output, targets)
@@ -258,26 +269,26 @@ if __name__ == "__main__":
             scaled_fp8_loss_with_scaler = fp8_scaler.scale(fp8_loss_with_scaler)
             scaled_fp8_loss_with_scaler.backward()
             # is_overflow_bool = check_if_overflow(fp8_optim_with_scaler)
-            
             fp8_scaler.step(fp8_optim_with_scaler)
             
             is_overflow_bool = fp8_optim_with_scaler._is_overflow
             
-            # fp8_scaler.update()
+            fp8_scaler.update()
             deepspeed_scaler.update_scale(is_overflow_bool)
             
             fp32_losses.append(fp32_loss.item())
-            # fp8_with_loss_scaler_losses.append(fp8_loss_with_scaler.item())
-            msamp_with_loss_scaler_losses.append(msamp_loss_with_scaler.item())
+            fp8_with_loss_scaler_losses.append(fp8_loss_with_scaler.item())
+            # msamp_with_loss_scaler_losses.append(msamp_loss_with_scaler.item())
 
-            # l1_norm_diff_fp8_with_loss_scaler_relative_to_fp32 = l1_norm_diff(fp8_loss_with_scaler, fp32_loss)
+            l1_norm_diff_fp8_with_loss_scaler_relative_to_fp32 = l1_norm_diff(fp8_loss_with_scaler, fp32_loss)
             # l1_norm_diff_msamp_with_loss_scaler_relative_to_fp32 = l1_norm_diff(msamp_loss_with_scaler, fp32_loss)
 
             # std_fp8_with_loss_scaler_relative_to_fp32 = (torch.tensor(fp8_with_loss_scaler_losses) - torch.tensor(fp32_losses)).std()
             # std_msamp_with_loss_scaler_relative_to_fp32 = (torch.tensor(msamp_with_loss_scaler_losses) - torch.tensor(fp32_losses)).std()
             
-            print(f"step: {step}, is_overflow={is_overflow_bool}, fp8_scaler.scaling_value: {fp8_scaler.scaling_value}")
-            print(f"f32_loss: {fp32_loss.item()}, fp8_loss: {fp8_loss.item()}, fp8_loss_with_scaler: {fp8_loss_with_scaler.item()}")
+            # print(f"step: {step}, is_overflow={is_overflow_bool}, fp8_scaler.scaling_value: {fp8_scaler.scaling_value}")
+            # print(f"step: {step}, f32_loss: {fp32_loss.item()}, fp8_loss: {fp8_loss.item()}, fp8_loss_with_scaler: {fp8_loss_with_scaler.item()}")
+            print(f"step: {step}, f32_loss: {fp32_loss.item()}, fp8_loss: {fp8_loss.item()}")
 
             fp32_optim_logs = get_optim_logs(fp32_linear_params_id_to_param_names, fp32_optim, prefix="fp32:optim_state:")
             fp8_optim_logs = get_optim_logs(fp8_linear_params_id_to_param_names, fp8_optim, prefix="fp8:optim_state:")
@@ -292,9 +303,9 @@ if __name__ == "__main__":
                     "fp8_scaling_value": fp8_scaler.scaling_value.item(),
                     "scaled_fp8_loss_with_scaler": scaled_fp8_loss_with_scaler.item(),
                     
-                    "msamp_o2_loss": msamp_loss.item(),
-                    "msamp_o2_loss_with_scaler": msamp_loss_with_scaler.item(),
-                    "scaled_msamp_o2_loss_with_scaler": scaled_msamp_loss_with_scaler.item(),
+                    # "msamp_o2_loss": msamp_loss.item(),
+                    # "msamp_o2_loss_with_scaler": msamp_loss_with_scaler.item(),
+                    # "scaled_msamp_o2_loss_with_scaler": scaled_msamp_loss_with_scaler.item(),
                     
                     "deepspeed_scaling_value": deepspeed_linear.optimizer.loss_scaler.loss_scale,
                     "deepspeed_loss": deepspeed_loss.item(),
@@ -302,12 +313,12 @@ if __name__ == "__main__":
                     "l1_norm_diff_fp8_relative_to_fp32": l1_norm_diff(
                         fp8_loss, fp32_loss
                     ).item(),
-                    # "l1_norm_diff_fp8_with_loss_scaler_relative_to_fp32": l1_norm_diff(
-                    #     fp8_loss_with_scaler, fp32_loss
-                    # ).item(),
-                    "l1_norm_diff_msamp_with_loss_scaler_relative_to_fp32": l1_norm_diff(
-                        msamp_loss_with_scaler, fp32_loss
+                    "l1_norm_diff_fp8_with_loss_scaler_relative_to_fp32": l1_norm_diff(
+                        fp8_loss_with_scaler, fp32_loss
                     ).item(),
+                    # "l1_norm_diff_msamp_with_loss_scaler_relative_to_fp32": l1_norm_diff(
+                    #     msamp_loss_with_scaler, fp32_loss
+                    # ).item(),
                     # "l1_norm_diff_fp8_with_loss_scaler_relative_to_bf16": l1_norm_diff(fp8_loss_with_scaler, bf16_loss).item(),
                     # "l1_norm_diff_msamp_with_loss_scaler_relative_to_bf16": l1_norm_diff(msamp_loss_with_scaler, bf16_loss).item(),
                     **convert_logs_to_flat_logs(fp32_logs, prefix="fp32"),

@@ -11,7 +11,7 @@ from nanotron.fp8.parameter import FP8Parameter
 from nanotron.fp8.tensor import FP8Tensor, convert_tensor_from_fp8
 from nanotron.fp8.utils import convert_linear_to_fp8, convert_to_fp8_module, is_overflow_underflow_nan
 from nanotron.fp8.loss_scaler import LossScaler
-from timm.models.layers import trunc_normal_
+# from timm.models.layers import trunc_normal_
 from torch import nn
 
 
@@ -60,10 +60,6 @@ def test_fp8_linear_forward_pass(n_layers, input, is_bias, accum_qtype):
             for layer in (nn.Linear(HIDDEN_SIZE, HIDDEN_SIZE, bias=is_bias, device="cuda"), nn.ReLU())
         ]
     )
-    
-    # trunc_normal_(ref_linear[0].weight, std=0.02)
-    # if n_layers == 2:
-    #     trunc_normal_(ref_linear[2].weight, std=0.02)
 
     fp8_linear = convert_to_fp8_module(deepcopy(ref_linear), accum_qtype)
 

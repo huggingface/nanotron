@@ -5,8 +5,11 @@ import torch.distributed as dist
 import nanotron.fp8.distributed as fp8_dist
 from nanotron.parallel import ParallelContext
 from nanotron.fp8 import FP8Tensor, DTypes
+from utils import set_system_path
 
-from helpers.utils import init_distributed
+set_system_path()
+
+from tests.helpers.utils import init_distributed, rerun_if_address_is_in_use
 
 
 
@@ -14,6 +17,7 @@ from helpers.utils import init_distributed
 @pytest.mark.parametrize("op", [dist.ReduceOp.SUM, dist.ReduceOp.MIN])
 @pytest.mark.parametrize("async_op", [True, False])
 @pytest.mark.parametrize("world_size", [1, 2, 5])
+@rerun_if_address_is_in_use()
 def test_all_reduce(dtype, op, async_op, world_size):
     init_distributed(tp=world_size, dp=1, pp=1)(_test_all_reduce)(dtype=dtype, op=op, async_op=async_op)
 

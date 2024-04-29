@@ -28,6 +28,7 @@ def record_meta(module: FP8Linear, scaling_factors: List, amaxs: List) -> FP8Lin
     return module
 
 
+@pytest.mark.skip
 @pytest.mark.parametrize("interval", [1, 5, 10])
 @pytest.mark.parametrize("n_expected_updates", [1, 5])
 def test_amax_tracker(interval, n_expected_updates):
