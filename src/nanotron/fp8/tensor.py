@@ -129,8 +129,8 @@ class LowPrecisionTensor(torch.Tensor):
         new_amax = quantized_data.fp8_meta.amax
 
         self.fp8_meta.add_amax(new_amax)
-        self.fp8_meta.scale = quantized_data.fp8_meta.scale
-        self.fp8_meta.amax = quantized_data.fp8_meta.amax
+        # self.fp8_meta.scale = quantized_data.fp8_meta.scale
+        # self.fp8_meta.amax = quantized_data.fp8_meta.amax
         # NOT_COPY_ATTRIBUTES = ["_amaxs", "_num_remaining_steps_until_rescale"]
         # for key, value in quantized_data.fp8_meta.__dict__.items():
         #     if key not in NOT_COPY_ATTRIBUTES:

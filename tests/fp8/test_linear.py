@@ -238,3 +238,6 @@ def test_deplay_quantization(interval):
 
 # TODO(xrsrke): test only calculating the gradients of the weight, bias, or input based
 # on the requires_grad of the input, weight, or bias
+
+# TODO(xrsrke): test automatic padding if a input/weight shape isn't divisible by 16
+
