@@ -4,9 +4,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 import torch
-from packaging.version import Version
 
-from nanotron.constants import CHECKPOINT_VERSION
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import SlicesPair
 from nanotron.serialize.metadata import TensorMetadata
@@ -35,14 +33,11 @@ def get_path(
     exp_tp_pp_rank_and_size: Tuple[Tuple[int, int], Tuple[int, int], Tuple[int, int]],
     is_expert_sharded: bool,
     prefix: Optional[Path] = None,
-    version: Version = CHECKPOINT_VERSION,
     return_all_matches: bool = False,
 ) -> Path | List[Path]:
     suffix = tensor_name.split(".")
     suffix_path, suffix_name = suffix[:-1], suffix[-1]
 
-    if version == Version("1.3"):
-        suffix_name = f"{type.value}_{suffix_name}.safetensors"
     if exp_tp_pp_rank_and_size:
         # We always show pp_rank and tp_rank if `exp_tp_pp_rank_and_size` is provided
         (exp_rank, exp_size), (tp_rank, tp_size), (pp_rank, pp_size) = exp_tp_pp_rank_and_size
@@ -54,7 +49,7 @@ def get_path(
         else:
             pattern = f"{type.value}_{suffix_name}*exp-rank-{exp_rank}-of-{exp_size}.safetensors"
             suffix_name = f"{type.value}_{suffix_name}_pp-rank-{pp_rank}-of-{pp_size}_tp-rank-{tp_rank}-of-{tp_size}_exp-rank-{exp_rank}-of-{exp_size}.safetensors"
-    elif version > Version("1.3"):
+    else:
         pattern = f"{type.value}_{suffix_name}*.safetensors"
         suffix_name = f"{type.value}_{suffix_name}.safetensors"
 

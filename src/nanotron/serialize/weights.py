@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -15,6 +16,7 @@ from nanotron.distributed import get_global_rank
 from nanotron.logging import log_rank
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter, ShardedInfo, SlicesPair
+from nanotron.serialize.legacy import update_checkpoints_with_wrong_prefix
 from nanotron.serialize.metadata import CheckpointMetadata, TensorMetadata, load_meta
 from nanotron.serialize.utils import (
     ObjectType,
@@ -208,12 +210,17 @@ def load_weights(
     module_id_to_prefix[id(model)] = ""
 
     checkpoint_version: Optional[Version] = None
-    try:
-        # Try to fetch the checkpoint version from the metadata from the beginning.
-        # If not found, it will be obtained after the first time loading a parameter.
-        checkpoint_version = read_checkpoint_version_from_meta(parallel_context, root_folder)
-    except FileNotFoundError:
-        pass
+
+    # Determine if the checkpoint matches the duplicated ".safetensors" naming and fix it.
+    wrong_names = {
+        Path(root) / name
+        for root, _, names in os.walk(param_root_folder)
+        for name in names
+        if name.count(".safetensors") == 2
+    }
+    if len(wrong_names) > 0:
+        print(f"Note: Old checkpoints detected. Upgrading to v{CHECKPOINT_VERSION}")
+        update_checkpoints_with_wrong_prefix(param_root_folder)
 
     filtered_state_dict = filtered_state_dict if filtered_state_dict is not None else model.state_dict()
     param_shard_metadata = {}
@@ -262,7 +269,6 @@ def load_weights(
                 exp_tp_pp_rank_and_size=exp_tp_pp_rank_and_size,
                 prefix=param_root_folder,
                 is_expert_sharded=is_expert_sharded,
-                version=checkpoint_version or CHECKPOINT_VERSION,
             )
 
             if path.exists():
@@ -289,15 +295,11 @@ def load_weights(
                     exp_tp_pp_rank_and_size=exp_tp_pp_rank_and_size,
                     prefix=param_root_folder,
                     is_expert_sharded=is_expert_sharded,
-                    version=checkpoint_version or CHECKPOINT_VERSION,
                     return_all_matches=True,
                 )
 
                 if len(shards_path) <= 0:
-                    raise ValueError(
-                        f"Could not find any shards {ObjectType.MODEL.value}_{suffix}*.safetensors in {path.parent}."
-                        f"If you notice `.safetensors` in the middle of the name of some of the checkpoints files. You need to run `scripts/fix_checkpoint_bad_naming.py`."
-                    )
+                    raise ValueError(f"Could not find any shards in {path.parent}.")
 
                 if checkpoint_version is None:
                     checkpoint_version = get_checkpoint_version(parallel_context, root_folder, shards_path[0])
