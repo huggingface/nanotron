@@ -73,7 +73,7 @@ optimizer = OptimizerArgs(
 )
 
 parallelism = ParallelismArgs(
-    dp=4,
+    dp=2,
     pp=1,
     tp=2,
     pp_engine="1f1b",
@@ -82,7 +82,7 @@ parallelism = ParallelismArgs(
 )
 
 # a global batch-size of 1M tokens.  micro_batch_size * dp * sequence_length * batch_accumulation_per_replica
-tokens = TokensArgs(sequence_length=512, train_steps=200, micro_batch_size=128, batch_accumulation_per_replica=4)
+tokens = TokensArgs(sequence_length=512, train_steps=200, micro_batch_size=128, batch_accumulation_per_replica=8)
 
 checkpoints_path = os.path.dirname(os.path.dirname(__file__)) + "/checkpoints"
 os.makedirs(checkpoints_path, exist_ok=True)

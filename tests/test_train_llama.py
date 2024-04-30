@@ -14,7 +14,7 @@ import subprocess
 CONFIG_FILE = "examples/config_train_llama.yaml"
 CREATE_CONFIG_FILE = "examples/config_train_llama.py"
 TRAIN_SCRIPT = "run_train.py"
-NUM_GPUS = 8
+NUM_GPUS = 4
 
 ## 100+ steps: lm_loss < 3.5
 ## 200  steps: lm_loss < 3

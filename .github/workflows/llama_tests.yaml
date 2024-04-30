@@ -19,7 +19,7 @@ on:
 jobs:
   tests:
     # NOTE: 8-a10 to run LLama
-    runs-on: [multi-gpu, nvidia-gpu, 8-a10, ci]
+    runs-on: [multi-gpu, nvidia-gpu, 4-a10, ci]
     container:
       image: runpod/pytorch:2.1.1-py3.10-cuda12.1.1-devel-ubuntu22.04
       ports:
