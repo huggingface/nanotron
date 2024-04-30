@@ -1,4 +1,4 @@
-name: Run examples
+name: Run Llama example and loss test
 
 on:
   push:
@@ -43,9 +43,11 @@ jobs:
         python -m pip install --upgrade pip
         pip install packaging
         pip install wheel
+        pip install "flash-attn>=2.5.0"  --no-build-isolation
         pip install -e .
         pip install -e .[dev]
         pip install -e .[test]
+        pip install transformers datasets
 
     - name: Show installed libraries and their versions
       run: pip freeze | tee installed.txt
