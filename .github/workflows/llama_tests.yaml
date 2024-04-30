@@ -1,0 +1,57 @@
+name: Run examples
+
+on:
+  push:
+    branches: [ main ]
+    # Only run tests if we modify the following files
+    paths:
+      - "src/**/*.py"
+      - "examples/**/*.py"
+      - "tests/**/*.py"
+
+  pull_request:
+    branches: [ '**' ]
+    paths:
+     - "src/**/*.py"
+     - "examples/**/*.py"
+     - "tests/**/*.py"
+
+jobs:
+  tests:
+    # NOTE: 8-a10 to run LLama
+    runs-on: [multi-gpu, nvidia-gpu, 8-a10, ci]
+    container:
+      image: runpod/pytorch:2.1.1-py3.10-cuda12.1.1-devel-ubuntu22.04
+      ports:
+        - 80
+      options: --gpus all --shm-size "8G"
+    steps:
+    - uses: actions/checkout@v3
+    - name: Python environment
+      run: |
+        which python
+        python --version
+
+    - name: Check Pytorch version
+      run: |
+        nvidia-smi
+        python -c "import torch; print('torch:', torch.__version__, torch)"
+        python -c "import torch; print('CUDA available:', torch.cuda.is_available())"
+
+    - name: Install nanotron's dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install packaging
+        pip install wheel
+        pip install -e .
+        pip install -e .[dev]
+        pip install -e .[test]
+
+    - name: Show installed libraries and their versions
+      run: pip freeze | tee installed.txt
+
+    - name: Run tiny Llama example
+      run: ./examples/train_tiny_llama.sh
+
+    - name: Run Llama loss tests
+      run: pytest -sv tests/test_train_llama.py
