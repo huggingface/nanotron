@@ -95,7 +95,7 @@ class _FP8Matmul(torch.autograd.Function):
             input,
             dtype=FP8LM_RECIPE.linear.input.dtype,
             interval=FP8LM_RECIPE.linear.input.interval,
-            is_dynamic_scaling=FP8LM_RECIPE.linear.input.is_dynamic_scaling,
+            is_delayed_scaling=FP8LM_RECIPE.linear.input.is_delayed_scaling,
         )
 
         ctx.accum_qtype = accum_qtype

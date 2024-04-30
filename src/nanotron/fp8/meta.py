@@ -20,7 +20,7 @@ class FP8Meta:
     dtype: DTypes
     interval: int
     # TODO(xrsrke): change to is_delay_scaling
-    is_dynamic_scaling: bool = False
+    is_delayed_scaling: bool = False
 
     @property
     def te_dtype(self) -> tex.DType:
@@ -42,6 +42,9 @@ class FP8Meta:
             torch.float16,
         ], f"Expected amax to be of dtype torch.float32 or torch.float16, got {self.amax.dtype}"
 
+        if self.is_delayed_scaling is False and self.interval > 1:
+            raise ValueError("Interval must be 1 if not using delayed scaling because we scale every interval")
+
         # NOTE: transformer engine only accepts torch tensors
         self.amax = torch.tensor(self.amax, device="cuda") if not isinstance(self.amax, torch.Tensor) else self.amax
         self._amaxs: List[torch.Tensor] = [self.amax]
@@ -52,18 +55,6 @@ class FP8Meta:
     def fp8_max(self) -> float:
         """Return the maximum normal value for the current dtype."""
         return DTYPE_TO_FP8_MAX[self.dtype]
-
-    # @property
-    # def scale(self) -> torch.Tensor:
-    #     return self._scale
-
-    # @scale.setter
-    # def scale(self, value: torch.Tensor):
-    #     # if len(self._amaxs) == 0:
-    #     #     self._scale = value
-    #     # elif self.is_ready_to_scale is True:
-    #     #     # NOTE: now compute the scaling factor based on the intervals
-    #     self._scale = value
 
     @property
     def inverse_scale(self) -> torch.Tensor:
@@ -101,11 +92,11 @@ class FP8Meta:
 
     @property
     def is_ready_to_scale(self) -> bool:
-        if self.is_dynamic_scaling is False:
+        if self.is_delayed_scaling is False:
             # NOTE: if this is not dynamic scaling, then we scale every interval
             return True
 
-        if self.is_dynamic_scaling and self._num_remaining_steps_until_rescale == 0:
+        if self.is_delayed_scaling and self._num_remaining_steps_until_rescale == 0:
             # NOTE: if this is dynamic scaling, then we only scale once we reach the interval
             return True
 

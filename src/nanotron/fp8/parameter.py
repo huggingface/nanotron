@@ -60,7 +60,7 @@ class FP8Parameter(nn.Parameter):
                     dtype=DTypes.FP8E4M3,
                     scale=fp8e4m3_scale,
                     interval=FP8LM_RECIPE.linear.input_grad.interval,
-                    is_dynamic_scaling=FP8LM_RECIPE.linear.input_grad.is_dynamic_scaling,
+                    is_delayed_scaling=FP8LM_RECIPE.linear.input_grad.is_delayed_scaling,
                 ),
                 # TODO(xrsrke): change weight_grad to data_grad
                 # because this is the gradient of the parameter itself
@@ -69,7 +69,7 @@ class FP8Parameter(nn.Parameter):
                     dtype=DTypes.FP8E4M3,
                     scale=fp8e4m3_scale,
                     interval=FP8LM_RECIPE.linear.weight_grad.interval,
-                    is_dynamic_scaling=FP8LM_RECIPE.linear.weight_grad.is_dynamic_scaling,
+                    is_delayed_scaling=FP8LM_RECIPE.linear.weight_grad.is_delayed_scaling,
                 ),
                 # kfloat8_e5m2
                 output_grad=FP8Meta(
@@ -77,7 +77,7 @@ class FP8Parameter(nn.Parameter):
                     dtype=DTypes.FP8E5M2,
                     scale=fp8e5m2_scale,
                     interval=FP8LM_RECIPE.linear.output_grad.interval,
-                    is_dynamic_scaling=FP8LM_RECIPE.linear.output_grad.is_dynamic_scaling,
+                    is_delayed_scaling=FP8LM_RECIPE.linear.output_grad.is_delayed_scaling,
                 ),
             )
             self._grad = None

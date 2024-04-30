@@ -286,7 +286,9 @@ if __name__ == "__main__":
 
             # print(f"step: {step}, is_overflow={is_overflow_bool}, fp8_scaler.scaling_value: {fp8_scaler.scaling_value}")
             # print(f"step: {step}, f32_loss: {fp32_loss.item()}, fp8_loss: {fp8_loss.item()}, fp8_loss_with_scaler: {fp8_loss_with_scaler.item()}")
-            print(f"step: {step}, f32_loss: {fp32_loss.item()}, fp8_loss: {fp8_loss.item()}")
+            print(
+                f"step: {step}, is_overflow={is_overflow_bool}, f32_loss: {fp32_loss.item()}, fp8_loss: {fp8_loss.item()}"
+            )
 
             fp32_optim_logs = get_optim_logs(
                 fp32_linear_params_id_to_param_names, fp32_optim, prefix="fp32:optim_state:"
