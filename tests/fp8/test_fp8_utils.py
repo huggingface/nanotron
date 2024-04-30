@@ -2,18 +2,17 @@ import pytest
 import torch
 from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.linear import FP8Linear
+from nanotron.fp8.optim import FP8Adam
 from nanotron.fp8.parameter import FP8Parameter
 from nanotron.fp8.utils import (
+    _log,
     convert_linear_to_fp8,
     convert_to_fp8_module,
     get_leaf_modules,
     is_overflow_underflow_nan,
-    track_module_statistics,
-    _log,
     track_optimizer,
 )
 from torch import nn
-from nanotron.fp8.optim import FP8Adam
 
 
 @pytest.mark.parametrize("accum_dtype", [DTypes.KFLOAT32, DTypes.KFLOAT16])
@@ -90,24 +89,30 @@ def test_track_module_statistics():
             self.fin = FP8Linear(32, 32, device="cuda")
             self.relu = nn.ReLU()
             self.fout = FP8Linear(32, 32, device="cuda")
-        
+
         def forward(self, x):
             return self.fout(self.relu(self.fin(x)))
-        
+
     input = torch.randn(32, 32, device="cuda")
     model = FP8Model()
-        
+
     logs = _log(model)
-    
+
     for _ in range(1):
         model(input).sum().backward()
-        
+
     # NOTE: now merge module_name:x:statistic into a flat dictionary
     assert logs.keys() == {"fin", "relu", "fout"}
     assert logs["fin"].keys() == {
-        "weight", "bias", "input", "output",
-        "grad_output:0", "grad_input:0", "grad_input:1",
-        "input_grad", "weight_grad",
+        "weight",
+        "bias",
+        "input",
+        "output",
+        "grad_output:0",
+        "grad_input:0",
+        "grad_input:1",
+        "input_grad",
+        "weight_grad",
     }
 
 
@@ -116,12 +121,12 @@ def test_track_fp8_optimizer():
     linear = nn.Linear(16, 16, device="cuda")
     fp8_linear = convert_linear_to_fp8(linear, accum_qtype=DTypes.KFLOAT16)
     fp8_optim = FP8Adam(fp8_linear.parameters())
-    
+
     logs = track_optimizer(fp8_optim)
 
     for _ in range(1):
         fp8_linear(input).sum().backward()
         fp8_optim.step()
         fp8_optim.zero_grad()
-    
+
     assert logs.keys() == ["master_weights", "optimizer_states"]

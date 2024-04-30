@@ -1,4 +1,3 @@
-import math
 from copy import deepcopy
 from functools import partial, reduce
 
@@ -7,10 +6,11 @@ import torch
 from nanotron.fp8.constants import FP8_DTYPES, QTYPE_TO_DTYPE
 from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.linear import FP8Linear
+from nanotron.fp8.loss_scaler import LossScaler
 from nanotron.fp8.parameter import FP8Parameter
 from nanotron.fp8.tensor import FP8Tensor, convert_tensor_from_fp8
 from nanotron.fp8.utils import convert_linear_to_fp8, convert_to_fp8_module, is_overflow_underflow_nan
-from nanotron.fp8.loss_scaler import LossScaler
+
 # from timm.models.layers import trunc_normal_
 from torch import nn
 
@@ -50,7 +50,6 @@ def test_fp8_linear_parameters():
 @pytest.mark.parametrize("accum_qtype", [DTypes.KFLOAT32, DTypes.KFLOAT16])
 def test_fp8_linear_forward_pass(n_layers, input, is_bias, accum_qtype):
     HIDDEN_SIZE = 64
-    INTERDIM_SIZE = 64 * 4
 
     ref_input = input.detach().clone()
     ref_linear = nn.Sequential(
@@ -98,9 +97,8 @@ def test_fp8_linear_forward_pass(n_layers, input, is_bias, accum_qtype):
 @pytest.mark.parametrize("accum_qtype", [DTypes.KFLOAT32, DTypes.KFLOAT16])
 def test_fp8_linear_backward_pass(n_layers, input, with_scaler, accum_qtype):
     is_bias = False
-    
+
     HIDDEN_SIZE = 64
-    INTERDIM_SIZE = 64 * 4
 
     ref_input = input.detach().clone().requires_grad_(True)
     # ref_linear = nn.Linear(HIDDEN_SIZE, INTERDIM_SIZE, device="cuda", dtype=torch.float32)
@@ -111,9 +109,9 @@ def test_fp8_linear_backward_pass(n_layers, input, with_scaler, accum_qtype):
             for layer in (nn.Linear(HIDDEN_SIZE, HIDDEN_SIZE, bias=is_bias, device="cuda"), nn.ReLU())
         ]
     )
-    
+
     loss_scaler = LossScaler()
-        
+
     # trunc_normal_(ref_linear.weight, std=0.02)
     # trunc_normal_(ref_linear.weight, std=math.sqrt(1 / (HIDDEN_SIZE)))
 
@@ -121,18 +119,18 @@ def test_fp8_linear_backward_pass(n_layers, input, with_scaler, accum_qtype):
     fp8_linear = convert_to_fp8_module(deepcopy(ref_linear), accum_qtype)
 
     ref_linear(ref_input).sum().backward()
-    
+
     if with_scaler is False:
         fp8_linear(input).sum().backward()
     else:
         loss_scaler.scale(fp8_linear(input).sum()).backward()
         loss_scaler.unscale_(fp8_linear.parameters())
-        
+
     for ref_p, p in zip(ref_linear.parameters(), fp8_linear.parameters()):
         if p.requires_grad is False:
             assert p.grad is None
             continue
-        
+
         if isinstance(p, FP8Parameter):
             assert isinstance(p.grad, FP8Tensor)
             assert p.grad.dtype in FP8_DTYPES
@@ -140,7 +138,7 @@ def test_fp8_linear_backward_pass(n_layers, input, with_scaler, accum_qtype):
         else:
             assert isinstance(p.grad, torch.Tensor)
             assert p.grad.dtype == QTYPE_TO_DTYPE[accum_qtype]
-        
+
         assert is_overflow_underflow_nan(grad) is False
         if p.ndim > 1:
             # NOTE: these weight threshold is tuned from the FP8-LM implementation
@@ -208,7 +206,7 @@ def test_fp8_modules_trigger_the_entire_computational_graph(accum_qtype):
         "ReLU.1.backward",
         "FP8Linear.0.backward",
     ]
-    
+
     for p in fp8_linear.parameters():
         if p.requires_grad is True:
             assert is_overflow_underflow_nan(p.grad) is False
@@ -240,4 +238,3 @@ def test_deplay_quantization(interval):
 # on the requires_grad of the input, weight, or bias
 
 # TODO(xrsrke): test automatic padding if a input/weight shape isn't divisible by 16
-

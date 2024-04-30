@@ -15,7 +15,6 @@ from nanotron.fp8.tensor import (
     FP8Tensor,
     FP16Tensor,
     convert_tensor_from_fp8,
-    convert_tensor_from_fp16,
 )
 from nanotron.fp8.utils import convert_linear_to_fp8, convert_to_fp8_module
 from torch import nn
@@ -64,11 +63,7 @@ def test_fp8_optim_default_initiation():
 @pytest.mark.parametrize("n_layers", [1, 10])
 def test_fp8adam_params(n_layers):
     linear = nn.Sequential(
-        *[
-            layer
-            for _ in range(n_layers)
-            for layer in (nn.Linear(16, 16, device="cuda"), nn.ReLU())
-        ]
+        *[layer for _ in range(n_layers) for layer in (nn.Linear(16, 16, device="cuda"), nn.ReLU())]
     )
     ref_linear = deepcopy(linear)
     fp8_linear = convert_to_fp8_module(deepcopy(linear))
@@ -198,9 +193,9 @@ def test_fp8adam_step(n_steps):
     # NOTE: sanity check if the parameters
     # are updated at all
     after_amax = fp8_linear.weight.data.fp8_meta.amax
-    
+
     assert not torch.equal(before_amax, after_amax)
-    
+
     weight_fp32 = convert_tensor_from_fp8(fp8_linear.weight.data, fp8_linear.weight.data.fp8_meta, torch.float32)
     # NOTE: this specific threshold is based on the FP8-LM implementation
     # the paper shows that it don't hurt convergence
@@ -393,13 +388,7 @@ def test_fp8adam_load_state_dict():
 
 def test_fp8adam_not_change_memory_address():
     input = torch.randn(16, 16, device="cuda")
-    linear = nn.Sequential(
-        *[
-            layer
-            for _ in range(5)
-            for layer in (nn.Linear(16, 16, device="cuda"), nn.ReLU())
-        ]
-    )
+    linear = nn.Sequential(*[layer for _ in range(5) for layer in (nn.Linear(16, 16, device="cuda"), nn.ReLU())])
     fp8_linear = convert_to_fp8_module(linear)
     fp8_optim = FP8Adam(fp8_linear.parameters())
     # note: the memory address of params in param_grou[s]
@@ -407,7 +396,7 @@ def test_fp8adam_not_change_memory_address():
     for param_group in fp8_optim.param_groups:
         for p in param_group["params"]:
             before_param_mem_addres.append(id(p))
-    
+
     for _ in range(5):
         fp8_optim.zero_grad()
         fp8_linear(input).sum().backward()
@@ -417,7 +406,7 @@ def test_fp8adam_not_change_memory_address():
     for param_group in fp8_optim.param_groups:
         for p in param_group["params"]:
             after_param_mem_addres.append(id(p))
-    
+
     assert before_param_mem_addres == after_param_mem_addres
 
 

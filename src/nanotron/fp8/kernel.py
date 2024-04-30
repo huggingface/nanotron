@@ -89,7 +89,7 @@ def fp8_matmul_kernel(
         #     mat_b = tex.fp8_transpose(mat_b, mat_b_fp8_meta.te_dtype)
 
         # output = torch.empty(mat_a.T.shape[0], mat_b.shape[-1], device=device, dtype=out_torch_dtype)
-        
+
     if is_backward is False:
         output = torch.empty(mat_b.shape[0], mat_a.shape[0], device=device, dtype=out_torch_dtype)
         # output = torch.empty(mat_b.shape[-1], mat_a.shape[-1], device=device, dtype=out_torch_dtype)

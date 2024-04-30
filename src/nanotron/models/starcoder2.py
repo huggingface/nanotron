@@ -30,9 +30,8 @@ from flash_attn.flash_attn_interface import (
     flash_attn_with_kvcache,
 )
 from torch import nn
-from torch.nn import LayerNorm
+from torch.nn import LayerNorm, init
 from torch.nn import functional as F
-from torch.nn import init
 
 from nanotron import distributed as dist
 from nanotron.config import ParallelismArgs, Starcoder2Config
@@ -1533,7 +1532,7 @@ class Starcoder2ForTraining(NanotronModel):
             elif isinstance(module, TensorParallelEmbedding):
                 nn.init.normal_(module.weight, mean=0.0, std=std)
             else:
-                raise Exception(f"Parameter {full_param_name} was not intialized")
+                raise Exception(f"Parameter {full_param_name} was not initialized")
 
             assert full_param_name not in initialized_parameters
             initialized_parameters.add(full_param_name)

@@ -86,7 +86,7 @@ def _test_column_linear(
             random_input = sharded_random_input
     else:
         ValueError(f"Unsupported mode: {tp_mode}")
-    # It's important that `random_input` and `sharded_random_input` are two seperate tensors with seperate storage
+    # It's important that `random_input` and `sharded_random_input` are two separate tensors with separate storage
     sharded_random_input = sharded_random_input.clone()
     random_input.requires_grad = True
     sharded_random_input.requires_grad = True

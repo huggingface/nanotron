@@ -1,6 +1,5 @@
 from typing import Dict, List, Tuple
 
-import pydevd
 import torch
 import transformer_engine as te  # noqa
 from torch import nn
@@ -10,6 +9,7 @@ from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.linear import FP8Linear
 from nanotron.fp8.meta import FP8Meta
 from nanotron.fp8.parameter import FP8Parameter
+
 # from nanotron.fp8.optim import FP8Adam
 
 
@@ -39,7 +39,7 @@ def get_tensor_fp8_metadata(tensor: torch.Tensor, dtype: DTypes) -> FP8Meta:
 # TODO(xrsrke): shorter name
 def is_overflow_underflow_nan(tensor: torch.Tensor) -> bool:
     assert isinstance(tensor, torch.Tensor)
-    
+
     overflow = torch.isinf(tensor).any().item()
     underflow = torch.isneginf(tensor).any().item()
     nan = torch.isnan(tensor).any().item()
@@ -103,7 +103,7 @@ def convert_to_fp8_module(module: nn.Module, accum_qtype: DTypes = FP8LM_RECIPE.
 
 def compute_stas(tensor):
     from nanotron.fp8.tensor import FP8Tensor, FP16Tensor
-    
+
     if isinstance(tensor, FP8Tensor) or isinstance(tensor, FP16Tensor):
         return {
             "amax": tensor.fp8_meta.amax,
@@ -120,11 +120,12 @@ def compute_stas(tensor):
             "amax": tensor.abs().max().item(),
         }
 
+
 def track_module_statistics(name: str, module: nn.Linear, logging: Dict[str, Dict[str, float]]):
     if name not in logging:
         logging[name] = {}
 
-    def _save_output_stats(module: nn.Linear, input: torch.Tensor, output: torch.Tensor):        
+    def _save_output_stats(module: nn.Linear, input: torch.Tensor, output: torch.Tensor):
         if hasattr(module, "weight") and module.weight is not None:
             logging[name]["weight"] = compute_stas(module.weight.data)
             # logging[name]["weight"] = _collect_stats(module.weight)
@@ -134,7 +135,7 @@ def track_module_statistics(name: str, module: nn.Linear, logging: Dict[str, Dic
 
         inputs = input if isinstance(input, tuple) else (input,)
         outputs = output if isinstance(output, tuple) else (output,)
-        
+
         if len(inputs) > 1:
             for i, inp in enumerate(inputs):
                 if inp.dtype == torch.long:
@@ -143,29 +144,28 @@ def track_module_statistics(name: str, module: nn.Linear, logging: Dict[str, Dic
                 logging[name][f"input:{i}"] = compute_stas(inp)
         else:
             logging[name]["input"] = compute_stas(inputs[0])
-        
+
         if len(outputs) > 1:
             for i, out in enumerate(outputs):
                 logging[name][f"output:{i}"] = compute_stas(out)
         else:
             logging[name]["output"] = compute_stas(outputs[0])
-    
+
     def _save_grad_stats(module: nn.Linear, grad_input, grad_output: torch.Tensor):
         # import pydevd
         # pydevd.settrace(suspend=False, trace_only_current_thread=True)
         # logging[name][f"weight_grad"] = _collect_stats(module.weight.grad.orig_data)
         # logging[name][f"bias_grad"] = _collect_stats(module.bias.grad)
-        
+
         if isinstance(grad_output, tuple):
             for i, grad in enumerate(grad_output):
                 if grad is None:
                     continue
-                
+
                 logging[name][f"grad_output:{i}"] = compute_stas(grad)
         else:
             logging[name]["grad_output"] = compute_stas(grad_output)
-            
-            
+
         if isinstance(grad_input, tuple):
             for i, grad in enumerate(grad_input):
                 if grad is not None:
@@ -188,7 +188,7 @@ def _log(model: nn.Module):
     all_handles = []
     for name, module in leaf_modules:
         all_handles.append(track_module_statistics(name, module, logging=LOGGING))
-    
+
     return LOGGING, all_handles
 
 
@@ -198,7 +198,7 @@ def convert_logs_to_flat_logs(logs, prefix):
         for component_name, stats in components.items():
             for stat_name, value in stats.items():
                 flat_logs[f"{prefix}:{module_name}:{component_name}:{stat_name}"] = value
-    
+
     return flat_logs
 
 
@@ -207,7 +207,7 @@ def track_optimizer(optim: "FP8Adam"):
     # def _track(optim, args, kwargs):
     #     pydevd.settrace(suspend=False, trace_only_current_thread=True)
     #     assert 1 == 1
-    
+
     # optim.register_step_post_hook(_track)
 
     # return logs

@@ -14,8 +14,9 @@
 # limitations under the License.
 """ PyTorch LLaMa model.
 """
-from typing import Dict, Optional, Union
 import math
+from typing import Dict, Optional, Union
+
 import torch
 from flash_attn import bert_padding
 from flash_attn.flash_attn_interface import (
@@ -881,7 +882,7 @@ class LlamaForTraining(NanotronModel):
             label_mask=label_mask,
         )["loss"]
         return {"loss": loss}
-    
+
     @torch.no_grad()
     def init_model_randomly(self, config):
         """Initialize model parameters randomly.
@@ -898,12 +899,12 @@ class LlamaForTraining(NanotronModel):
         std = config.model.init_method.std
         sigma = config.model.init_method.std
         num_layers = config.model.model_config.num_hidden_layers
-        
+
         for param_name, param in model.named_parameters():
             assert isinstance(param, NanotronParameter)
-            
-            module_name, param_name = param_name.rsplit('.', 1)
-            
+
+            module_name, param_name = param_name.rsplit(".", 1)
+
             if param.is_tied:
                 tied_info = param.get_tied_info()
                 full_param_name = tied_info.get_full_name_from_module_id_to_prefix(
@@ -943,11 +944,11 @@ class LlamaForTraining(NanotronModel):
             elif isinstance(module, TensorParallelEmbedding):
                 nn.init.normal_(module.weight, mean=0.0, std=std)
             else:
-                raise Exception(f"Parameter {full_param_name} was not intialized")
+                raise Exception(f"Parameter {full_param_name} was not initialized")
 
             assert full_param_name not in initialized_parameters
             initialized_parameters.add(full_param_name)
-            
+
         assert initialized_parameters == {
             param.get_tied_info().get_full_name_from_module_id_to_prefix(module_id_to_prefix=module_id_to_prefix)
             if param.is_tied

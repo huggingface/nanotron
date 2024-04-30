@@ -2,10 +2,9 @@ from typing import Dict, Tuple
 
 import torch
 import torch.distributed as dist
-from torch import nn
-
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.tensor_parallel.functional import sharded_cross_entropy
+from torch import nn
 
 from .doremi_context import DoReMiContext
 from .utils import masked_mean

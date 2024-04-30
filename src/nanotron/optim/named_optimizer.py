@@ -6,7 +6,7 @@ from nanotron.optim.inherit_from_other_optimizer import InheritFromOtherOptimize
 
 
 class NamedOptimizer(InheritFromOtherOptimizer):
-    """Mimicks somewhat the torch optimizer API"""
+    """Mimics somewhat the torch optimizer API"""
 
     def __init__(
         self,

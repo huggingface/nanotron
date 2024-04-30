@@ -1,8 +1,6 @@
 from typing import Dict, Iterable, List, Optional, Type, Union
 
 import torch
-from torch.nn.parallel import DistributedDataParallel
-
 from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.config import Config, get_config_from_file
@@ -12,6 +10,7 @@ from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
 from nanotron.sanity_checks import assert_tensor_synced_across_pg
 from nanotron.serialize import load_weights
 from nanotron.trainer import DistributedTrainer
+from torch.nn.parallel import DistributedDataParallel
 
 from .config import DoReMiConfig
 from .doremi_context import DoReMiContext

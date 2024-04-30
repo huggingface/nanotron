@@ -6,6 +6,7 @@ import msamp
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import wandb
 from datasets import load_dataset
 from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.loss_scaler import LossScaler
@@ -14,8 +15,6 @@ from nanotron.fp8.utils import convert_to_fp8_module
 from timm.models.layers import trunc_normal_
 from torch.utils.data import DataLoader
 from transformers import BloomConfig, BloomTokenizerFast
-
-import wandb
 
 
 def get_time_name():

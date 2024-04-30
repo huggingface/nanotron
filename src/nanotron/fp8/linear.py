@@ -1,18 +1,16 @@
-from typing import Optional, Tuple, Union, TypedDict, cast
+from typing import Optional, Tuple, TypedDict, Union, cast
 
 import torch
 import torch.nn.functional as F
 import transformer_engine as te  # noqa
-import transformer_engine_extensions as tex
 from torch import nn
-import pydevd
 
 from nanotron.fp8.constants import FP8LM_RECIPE, QTYPE_TO_DTYPE
 from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.kernel import fp8_matmul_kernel
+from nanotron.fp8.meta import FP8Meta
 from nanotron.fp8.parameter import FP8Parameter
 from nanotron.fp8.tensor import FP8Tensor
-from nanotron.fp8.meta import FP8Meta
 
 
 class FP8LinearMeta(TypedDict):
@@ -21,7 +19,7 @@ class FP8LinearMeta(TypedDict):
     input_grad: FP8Meta
     weight_grad: FP8Meta
     output_grad: FP8Meta
-    
+
 
 class FP8Linear(nn.Linear):
     # TODO(xrsrke): qtype isn't the data types of the weight and bias
@@ -92,7 +90,7 @@ class _FP8Matmul(torch.autograd.Function):
         ctx, input: Union[FP8Tensor, torch.Tensor], weight: FP8Tensor, phony: torch.Tensor, accum_qtype: DTypes
     ) -> torch.Tensor:
         assert not isinstance(input, FP8Tensor)
-        
+
         fp8_input = FP8Tensor(
             input,
             dtype=FP8LM_RECIPE.linear.input.dtype,
@@ -137,7 +135,7 @@ class _FP8Matmul(torch.autograd.Function):
         # pydevd.settrace(suspend=False, trace_only_current_thread=True)
         fp8_input, fp8_weight = ctx.saved_tensors
         accum_qtype = ctx.accum_qtype
-        
+
         fp8_input = cast(FP8Tensor, fp8_input)
         fp8_weight = cast(FP8Tensor, fp8_weight)
         grad_output = grad_output.contiguous()
@@ -174,14 +172,14 @@ class _FP8Matmul(torch.autograd.Function):
             transpose_b=False,
             use_split_accumulator=FP8LM_RECIPE.linear.split_accumulator.input_grad,
             accum_qtype=accum_qtype,
-            is_backward=True
+            is_backward=True,
         )
-        
+
         # fp8_grad_output_transposed = tex.fp8_transpose(fp8_grad_output, fp8_grad_output.fp8_meta.te_dtype)
         # fp8_grad_output_transposed.fp8_meta = fp8_grad_output.fp8_meta
         # fp8_input_tranposed = tex.fp8_transpose(fp8_input, fp8_input.fp8_meta.te_dtype)
         # fp8_input_tranposed.fp8_meta = fp8_input.fp8_meta
-        
+
         transposed_fp8_grad_output = fp8_grad_output.transpose_fp8()
         transposed_fp8_input = fp8_input.transpose_fp8()
 

@@ -1,7 +1,8 @@
-from nanotron.models import NanotronModel
-from nanotron.parallel.pipeline_parallel.block import PipelineBlock
 from torch import nn
 from torch.nn.parallel import DistributedDataParallel
+
+from nanotron.models import NanotronModel
+from nanotron.parallel.pipeline_parallel.block import PipelineBlock
 
 
 def get_input_output_pp_ranks(model: NanotronModel | DistributedDataParallel):

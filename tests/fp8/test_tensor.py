@@ -6,11 +6,17 @@ import pytest
 import torch
 import transformer_engine as te  # noqa
 import transformer_engine_extensions as tex
-from nanotron.fp8.constants import QTYPE_TO_DTYPE, FP8_RTOL_THRESHOLD, FP8_ATOL_THRESHOLD, FP16_RTOL_THRESHOLD, FP16_ATOL_THRESHOLD
+from nanotron.fp8.constants import (
+    FP8_ATOL_THRESHOLD,
+    FP8_RTOL_THRESHOLD,
+    FP16_ATOL_THRESHOLD,
+    FP16_RTOL_THRESHOLD,
+    QTYPE_TO_DTYPE,
+)
 from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.meta import FP8Meta
 from nanotron.fp8.tensor import FP8Tensor, FP16Tensor, convert_tensor_from_fp8, convert_tensor_from_fp16
-from utils import fail_if_expect_to_fail, set_system_path
+from utils import fail_if_expect_to_fail
 
 
 @pytest.mark.parametrize(
@@ -123,7 +129,11 @@ def test_fp8_and_fp16_tensor_attrs(tensor_cls, dtype, expected_dtype):
     ],
 )
 def test_multiple_fp8_tensor(tensor_cls, dtype, scale):
-    RTOL, ATOL = (FP8_RTOL_THRESHOLD, FP8_ATOL_THRESHOLD) if tensor_cls == FP8Tensor else (FP16_RTOL_THRESHOLD, FP16_ATOL_THRESHOLD)
+    RTOL, ATOL = (
+        (FP8_RTOL_THRESHOLD, FP8_ATOL_THRESHOLD)
+        if tensor_cls == FP8Tensor
+        else (FP16_RTOL_THRESHOLD, FP16_ATOL_THRESHOLD)
+    )
     tensor = torch.randn((4, 4), dtype=torch.float32, device="cuda:0")
     ref_tensor = tensor.detach().clone()
 
@@ -263,12 +273,14 @@ def test_transpose_fp8_tensor(tensor_cls, dtype):
     if tensor_cls == FP8Tensor:
         assert isinstance(transposed_fp8_tensor, FP8Tensor)
         ref_transposed = convert_tensor_from_fp8(fp8_tensor, fp8_tensor.fp8_meta, torch.float32).T
-        dequant_transposed_fp8_tensor = convert_tensor_from_fp8(transposed_fp8_tensor, transposed_fp8_tensor.fp8_meta, torch.float32)
+        dequant_transposed_fp8_tensor = convert_tensor_from_fp8(
+            transposed_fp8_tensor, transposed_fp8_tensor.fp8_meta, torch.float32
+        )
     else:
         assert isinstance(transposed_fp8_tensor, FP16Tensor)
         dequant_transposed_fp8_tensor = convert_tensor_from_fp16(transposed_fp8_tensor, torch.float32)
         ref_transposed = convert_tensor_from_fp16(fp8_tensor, torch.float32).T
-    
+
     torch.testing.assert_close(dequant_transposed_fp8_tensor, ref_transposed)
 
 
@@ -311,8 +323,12 @@ def test_fp8_and_fp16_tensor_storage_memory(tensor_cls, dtype):
 )
 @pytest.mark.parametrize("is_quantized", [True, False])
 def test_setting_new_data_for_fp8_and_fp16_tensor(tensor_cls, dtype, is_quantized):
-    RTOL, ATOL = (FP8_RTOL_THRESHOLD, FP8_ATOL_THRESHOLD) if tensor_cls == FP8Tensor else (FP16_RTOL_THRESHOLD, FP16_ATOL_THRESHOLD)
-    
+    RTOL, ATOL = (
+        (FP8_RTOL_THRESHOLD, FP8_ATOL_THRESHOLD)
+        if tensor_cls == FP8Tensor
+        else (FP16_RTOL_THRESHOLD, FP16_ATOL_THRESHOLD)
+    )
+
     tensor = torch.randn((4, 4), dtype=torch.float32, device="cuda")
     fp8_tensor = tensor_cls(tensor, dtype=dtype)
 
@@ -325,7 +341,7 @@ def test_setting_new_data_for_fp8_and_fp16_tensor(tensor_cls, dtype, is_quantize
 
     assert fp8_tensor.data.dtype == QTYPE_TO_DTYPE[dtype]
     assert torch.equal(fp8_tensor, expected_quantized_tensor)
-    
+
     if is_quantized:
         if tensor_cls == FP8Tensor:
             dequantized_tensor = convert_tensor_from_fp8(fp8_tensor, fp8_tensor.fp8_meta, torch.float32)
@@ -386,7 +402,7 @@ def test_fp8_and_fp16_tensor_equality_based_on_tensor_value(is_meta_the_same, dt
 
     fp8_tensor = FP8Tensor(tensor, dtype=dtype)
     ref_fp8_tensor = FP8Tensor(ref_tensor, dtype=dtype)
-    
+
     if not is_meta_the_same:
         fp8_tensor.fp8_meta.scale = ref_fp8_tensor.fp8_meta.scale * 2
 

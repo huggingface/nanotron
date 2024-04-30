@@ -25,6 +25,7 @@ class FP8Meta:
     @property
     def te_dtype(self) -> tex.DType:
         from nanotron.fp8.tensor import convert_torch_dtype_to_te_dtype
+
         return convert_torch_dtype_to_te_dtype(self.dtype)
 
     def __post_init__(self):
@@ -51,11 +52,11 @@ class FP8Meta:
     def fp8_max(self) -> float:
         """Return the maximum normal value for the current dtype."""
         return DTYPE_TO_FP8_MAX[self.dtype]
-    
+
     # @property
     # def scale(self) -> torch.Tensor:
     #     return self._scale
-    
+
     # @scale.setter
     # def scale(self, value: torch.Tensor):
     #     # if len(self._amaxs) == 0:
@@ -63,7 +64,6 @@ class FP8Meta:
     #     # elif self.is_ready_to_scale is True:
     #     #     # NOTE: now compute the scaling factor based on the intervals
     #     self._scale = value
-
 
     @property
     def inverse_scale(self) -> torch.Tensor:
@@ -104,11 +104,11 @@ class FP8Meta:
         if self.is_dynamic_scaling is False:
             # NOTE: if this is not dynamic scaling, then we scale every interval
             return True
-        
+
         if self.is_dynamic_scaling and self._num_remaining_steps_until_rescale == 0:
             # NOTE: if this is dynamic scaling, then we only scale once we reach the interval
             return True
-        
+
         return False
 
     def rescale(self):

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from abc import abstractstaticmethod
 from copy import deepcopy
-from typing import Union, cast, Optional
+from typing import Optional, Union, cast
 
 import torch
 import transformer_engine as te  # noqa
@@ -20,7 +20,7 @@ class LowPrecisionTensor(torch.Tensor):
         dtype: Optional[DTypes] = None,
         interval: Optional[int] = 1,
         is_dynamic_scaling: Optional[bool] = False,
-        fp8_meta: Optional[FP8Meta] = None
+        fp8_meta: Optional[FP8Meta] = None,
     ) -> torch.Tensor:
         assert isinstance(tensor, torch.Tensor), "tensor must be a tensor"
 
@@ -31,7 +31,7 @@ class LowPrecisionTensor(torch.Tensor):
         if fp8_meta is None:
             assert tensor.dtype not in FP8_DTYPES, "The tensor already quantized to FP8"
             assert dtype in [DTypes.FP8E4M3, DTypes.FP8E5M2, DTypes.KFLOAT16]
-            
+
             fp8_meta = cls._get_metadata(tensor, dtype, interval, is_dynamic_scaling)
             fp8_tensor = cls._quantize(tensor, fp8_meta)
         else:
@@ -79,7 +79,6 @@ class LowPrecisionTensor(torch.Tensor):
         ...
 
     def mul_(self, other: torch.Tensor):
-        from nanotron.fp8.meta import FP8Meta
 
         assert isinstance(other, torch.Tensor)
         assert (
@@ -135,7 +134,7 @@ class LowPrecisionTensor(torch.Tensor):
         # for key, value in quantized_data.fp8_meta.__dict__.items():
         #     if key not in NOT_COPY_ATTRIBUTES:
         #         setattr(self.fp8_meta, key, value)
-    
+
     def transpose_fp8(self) -> FP8Tensor:
         """Transpose the tensor."""
         transposed_t = tex.fp8_transpose(self, self.fp8_meta.te_dtype)

@@ -2,7 +2,6 @@ from dataclasses import dataclass
 from typing import Optional, Union
 
 import torch
-
 from nanotron.config import Config, ExistingCheckpointInit, NanotronConfigs
 from nanotron.config.utils_config import cast_str_to_torch_dtype
 

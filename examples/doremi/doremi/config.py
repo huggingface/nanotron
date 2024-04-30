@@ -4,7 +4,6 @@ from typing import List, Optional, Union
 
 import torch
 import yaml
-
 from nanotron.config import (
     CheckpointsArgs,
     DataArgs,

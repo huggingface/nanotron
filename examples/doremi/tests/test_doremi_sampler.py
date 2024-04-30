@@ -1,11 +1,10 @@
 import pytest
 import torch
-from torch.utils.data import DataLoader
-from utils import create_dummy_dataset, set_system_path
-
 from nanotron import distributed as dist
 from nanotron.parallel import ParallelContext
 from nanotron.sanity_checks import assert_tensor_synced_across_pg
+from torch.utils.data import DataLoader
+from utils import create_dummy_dataset, set_system_path
 
 set_system_path()
 

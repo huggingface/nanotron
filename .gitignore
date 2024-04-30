@@ -162,3 +162,7 @@ cython_debug/
 .vscode
 
 checkpoints/
+
+tests/fp8/reference_convergence/cifar-10-batches-py/
+tests/fp8/reference_convergence/cifar-10-python.tar.gz
+wandb/

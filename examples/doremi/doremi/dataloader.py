@@ -5,10 +5,6 @@ from typing import Dict, List, Union
 
 import numpy as np
 import torch
-from torch.utils.data import DataLoader
-from torch.utils.data.distributed import DistributedSampler
-from tqdm import tqdm
-
 from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.dataloader import get_dataloader_worker_init
@@ -16,6 +12,9 @@ from nanotron.parallel import ParallelContext
 from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
 from nanotron.parallel.pipeline_parallel.utils import get_input_output_pp_ranks
 from nanotron.trainer import DistributedTrainer
+from torch.utils.data import DataLoader
+from torch.utils.data.distributed import DistributedSampler
+from tqdm import tqdm
 
 from .doremi_context import DoReMiContext
 

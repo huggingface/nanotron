@@ -2,11 +2,10 @@ import pytest
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
-from utils import set_system_path
-
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.tensor_parallel.functional import sharded_cross_entropy
 from nanotron.sanity_checks import assert_tensor_synced_across_pg
+from utils import set_system_path
 
 set_system_path()
 

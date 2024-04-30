@@ -3,21 +3,19 @@ from dataclasses import asdict, dataclass
 
 import msamp
 import torch
+import torch.nn.functional as F
+import wandb
 from datasets import load_dataset
 from nanotron.fp8.constants import FP8LM_RECIPE
 from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.loss_scaler import LossScaler
 from nanotron.fp8.optim import FP8Adam
-from nanotron.fp8.utils import convert_to_fp8_module
+from nanotron.fp8.utils import _log, convert_logs_to_flat_logs, convert_to_fp8_module
 from timm.models.layers import trunc_normal_
 from torch import nn
 from torch.optim import Adam
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
-from nanotron.fp8.utils import _log, convert_logs_to_flat_logs
-import torch.nn.functional as F
-
-import wandb
 
 
 def get_time_name():
@@ -157,7 +155,7 @@ if __name__ == "__main__":
     fp32_losses = []
     fp8_with_loss_scaler_losses = []
     msamp_with_loss_scaler_losses = []
-    
+
     wandb.init(
         project="fp8_for_nanotron",
         name=f"{get_time_name()}.convergence_fp8_n_layers_{N_LAYERS}_and_input_dim_{INPUT_DIM}_and_hidden_size_{HIDDEN_SIZE}_and_lr_{LR}_and_bias_{WITH_BIAS}_and_batch_size_{BATCH_SIZE}",
@@ -202,14 +200,14 @@ if __name__ == "__main__":
             # bf16_loss = loss_func(bf16_output, targets)
             # bf16_loss.backward()
             # bf16_optim.step()
-            
+
             # fp8_logs = _log(fp8_linear)
             # fp8_optim.zero_grad()
             # fp8_output = fp8_linear(inputs)
             # fp8_loss = loss_func(fp8_output, targets)
             # fp8_loss.backward()
             # fp8_optim.step()
-            
+
             fp8_logs = _log(fp8_linear)
             fp8_optim.zero_grad()
             fp8_output = fp8_linear(inputs)
@@ -260,14 +258,10 @@ if __name__ == "__main__":
                     "fp8_loss": fp8_loss.item(),
                     "fp8_loss_with_scaler": fp8_loss_with_scaler.item(),
                     "scaled_fp8_loss_with_scaler": scaled_fp8_loss_with_scaler.item(),
-                    
                     "msamp_o2_loss": msamp_loss.item(),
                     "msamp_o2_loss_with_scaler": msamp_loss_with_scaler.item(),
                     "scaled_msamp_o2_loss_with_scaler": scaled_msamp_loss_with_scaler.item(),
-                    
-                    "l1_norm_diff_fp8_relative_to_fp32": l1_norm_diff(
-                        fp8_loss, fp32_loss
-                    ).item(),
+                    "l1_norm_diff_fp8_relative_to_fp32": l1_norm_diff(fp8_loss, fp32_loss).item(),
                     "l1_norm_diff_fp8_with_loss_scaler_relative_to_fp32": l1_norm_diff(
                         fp8_loss_with_scaler, fp32_loss
                     ).item(),

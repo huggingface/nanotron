@@ -666,7 +666,7 @@ class MambaModel(nn.Module):
 
     def get_flops_per_sec(self, iteration_time_in_sec, sequence_length, global_batch_size):
         """
-        Get flops per second for a Mamba model. 
+        Get flops per second for a Mamba model.
         Terms such as nonlinearities, biases, and layer normalization are omitted (https://arxiv.org/pdf/2001.08361.pdf)
         """
         # world_size = self.parallel_context.world_pg.size()

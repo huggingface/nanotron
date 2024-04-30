@@ -14,7 +14,7 @@ from nanotron.fp8.tensor import (
     convert_tensor_from_fp8,
     convert_tensor_from_fp16,
 )
-from nanotron.fp8.utils import is_overflow_underflow_nan, compute_stas
+from nanotron.fp8.utils import compute_stas, is_overflow_underflow_nan
 
 
 class Adam(Optimizer):
@@ -71,9 +71,9 @@ class Adam(Optimizer):
             for p in group["params"]:
                 if p.grad is None:
                     continue
-                
+
                 loggings[p] = {}
-                
+
                 grad = p.grad.data
 
                 # if p.ndim != 1:
@@ -97,14 +97,14 @@ class Adam(Optimizer):
                         state["max_exp_avg_sq"] = torch.zeros_like(p.data, memory_format=torch.preserve_format)
 
                 exp_avg, exp_avg_sq = state["exp_avg"], state["exp_avg_sq"]
-                
+
                 loggings[p]["exp_avg"] = compute_stas(exp_avg)
                 loggings[p]["exp_avg_sq"] = compute_stas(exp_avg_sq)
-                
+
                 if amsgrad:
                     max_exp_avg_sq = state["max_exp_avg_sq"]
                 beta1, beta2 = group["betas"]
-                
+
                 loggings[p]["group:beta1"] = {"value": beta1}
                 loggings[p]["group:beta2"] = {"value": beta2}
                 loggings[p]["group:lr"] = {"value": group["lr"]}
@@ -122,7 +122,7 @@ class Adam(Optimizer):
                 state["step"] += 1
                 bias_correction1 = 1 - beta1 ** state["step"]
                 bias_correction2 = 1 - beta2 ** state["step"]
-                
+
                 loggings[p]["bias_correction1"] = {"value": bias_correction1}
                 loggings[p]["bias_correction2"] = {"value": bias_correction2}
 
@@ -171,7 +171,7 @@ class Adam(Optimizer):
 
             #     break
             # break
-        
+
         self.loggings = loggings
 
         return loss
@@ -222,12 +222,12 @@ class FP8Adam(Optimizer):
         self.fp8_weights: List[Union[FP8Parameter, torch.Tensor]] = []
         # NOTE: use to map fp8 param to master weights
         self.mappping_fp8_to_master_weight: Dict[FP8Tensor, Union[FP16Tensor, torch.Tensor]] = {}
-        
+
         for group in self.param_groups:
             for p in group["params"]:
                 if p.requires_grad is None:
                     continue
-            
+
                 # NOTE: if a tensor.ndim == 1, it's a bias
                 # raw_data = p.data if p.ndim == 1 else p.orig_data
                 # TODO(xrsrke): remove orig_data after FP8 working
@@ -245,7 +245,7 @@ class FP8Adam(Optimizer):
 
         assert len(self.master_weights) == len(self.fp8_weights)
         # TODO(xrsrke): auto free fp32 weights from memory
-        
+
         self.loggings = []
         self._is_overflow = False
 
@@ -253,7 +253,7 @@ class FP8Adam(Optimizer):
         super().__setstate__(state)
         for group in self.param_groups:
             group.setdefault("amsgrad", False)
-    
+
     # def _set_logging(self):
     #     pass
 
@@ -278,7 +278,7 @@ class FP8Adam(Optimizer):
         # TODO(xrsrke): don't fixed the dtype to fp16
         # exp_avg_sq = torch.zeros(p.data.shape, dtype=torch.float32, device="cuda")
         # exp_avg_sq = FP16Tensor(exp_avg_sq, dtype=DTypes.KFLOAT16)
-        
+
         exp_avg = torch.zeros(p.data.shape, dtype=torch.float32, device="cuda")
         exp_avg_sq = torch.zeros(p.data.shape, dtype=torch.float32, device="cuda")
 
@@ -296,14 +296,14 @@ class FP8Adam(Optimizer):
         # NOTE: sanity check the entire params has at least one grad
         assert any(p.grad is not None for group in self.param_groups for p in group["params"])
         loggings = {}
-        
+
         self._is_overflow = False
-        
+
         for group in self.param_groups:
             for p in group["params"]:
                 if p.grad is None:
                     continue
-                
+
                 loggings[p] = {}
 
                 state = self.state[p]
@@ -317,7 +317,7 @@ class FP8Adam(Optimizer):
                 assert (isinstance(p, FP8Parameter) and p.dtype in FP8_DTYPES) or (
                     isinstance(p, torch.Tensor) and p.dtype == torch.float16
                 ), f"type(p)={type(p)}, p.dtype={p.dtype}"
-                
+
                 assert (isinstance(grad, FP8Tensor) and grad.dtype in FP8_DTYPES) or (
                     isinstance(grad, torch.Tensor) and grad.dtype == torch.float16
                 )
@@ -349,7 +349,7 @@ class FP8Adam(Optimizer):
                 state["step"] += 1
                 bias_correction1 = 1 - beta1 ** state["step"]
                 bias_correction2 = 1 - beta2 ** state["step"]
-                
+
                 loggings[p]["group:beta1"] = {"value": beta1}
                 loggings[p]["group:beta2"] = {"value": beta2}
                 loggings[p]["bias_correction1"] = {"value": bias_correction1}
@@ -366,10 +366,10 @@ class FP8Adam(Optimizer):
                 # it's easier to debug (u know which tensor is which)
                 fp16_p = self.mappping_fp8_to_master_weight[p]
                 loggings[p]["lp_p"] = compute_stas(fp16_p)
-                
+
                 assert fp16_p.dtype == torch.float16
                 fp32_p = convert_tensor_from_fp16(fp16_p, torch.float32)
-                # orig_fp32_p = fp32_p.clone() 
+                # orig_fp32_p = fp32_p.clone()
                 loggings[p]["hp_p"] = compute_stas(fp32_p)
 
                 assert fp32_p.dtype == torch.float32
@@ -389,7 +389,7 @@ class FP8Adam(Optimizer):
                 exp_avg, exp_avg_sq = state["exp_avg"], state["exp_avg_sq"]
                 # assert exp_avg.dtype == torch.uint8
                 # assert exp_avg_sq.dtype == torch.float16
-                
+
                 # loggings[p]["lp_exp_avg"] = compute_stas(exp_avg)
                 # loggings[p]["lp_exp_avg_sq"] = compute_stas(exp_avg_sq)
 
@@ -406,7 +406,7 @@ class FP8Adam(Optimizer):
                 # fp32_exp_avg_sq = convert_tensor_from_fp16(exp_avg_sq, torch.float32)
                 fp32_exp_avg = exp_avg
                 fp32_exp_avg_sq = exp_avg_sq
-                
+
                 loggings[p]["hp_exp_avg"] = compute_stas(fp32_exp_avg)
                 loggings[p]["hp_exp_avg_sq"] = compute_stas(fp32_exp_avg_sq)
 
@@ -431,13 +431,12 @@ class FP8Adam(Optimizer):
 
                 denom = (fp32_exp_avg_sq.sqrt() / math.sqrt(bias_correction2)).add_(group["eps"])
                 loggings[p]["denom"] = compute_stas(denom)
-                
+
                 # if p.ndim != 1:
                 #     print(f"[FP8Adam] denom: {denom[:2, :2]} \n")
 
                 step_size = group["lr"] / bias_correction1
-                
-                
+
                 loggings[p]["group:lr"] = {"value": group["lr"]}
                 loggings[p]["group:eps"] = {"value": group["eps"]}
                 loggings[p]["step_size"] = {"value": step_size}
@@ -488,7 +487,7 @@ class FP8Adam(Optimizer):
                 # print(f"[FP8Adam] updated_p_fp8: updated_p_fp8.data={updated_p_fp8.data[:2, :2]}, p_fp32_meta={p_fp32_meta} \n")
 
         self.loggings = loggings
-        
+
     def zero_grad(self):
         for group in self.param_groups:
             for p in group["params"]:

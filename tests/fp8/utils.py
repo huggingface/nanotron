@@ -1,7 +1,7 @@
-from contextlib import contextmanager
 import importlib
-from pathlib import Path
 import sys
+from contextlib import contextmanager
+from pathlib import Path
 
 import pytest
 
@@ -15,6 +15,7 @@ def fail_if_expect_to_fail(expect_to_fail: bool):
             pytest.xfail("Failed successfully")
         else:
             raise e
+
 
 def set_system_path():
     package = importlib.import_module("nanotron")

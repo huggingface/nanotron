@@ -2,18 +2,20 @@ from copy import deepcopy
 
 import msamp
 import torch
+import wandb
+from datasets import load_dataset
 from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.loss_scaler import LossScaler
 from nanotron.fp8.optim import FP8Adam
 from nanotron.fp8.utils import convert_to_fp8_module
 from torch import nn
 from torch.optim import Adam
-from datasets import load_dataset
 from torch.utils.data import DataLoader
-from transformers import AutoModelForCausalLM, AutoTokenizer
-from transformers import BloomConfig, BloomModel, BloomTokenizerFast, BloomForCausalLM
-
-import wandb
+from transformers import (
+    BloomConfig,
+    BloomForCausalLM,
+    BloomTokenizerFast,
+)
 
 
 def get_time_name():
@@ -25,6 +27,7 @@ def get_time_name():
 
 def l1_norm_diff(loss, ref_loss):
     return (loss - ref_loss).abs().mean()
+
 
 if __name__ == "__main__":
     BATCH_SIZE = 16
@@ -48,10 +51,10 @@ if __name__ == "__main__":
     #     ]
     # )
     # fp32_linear = fp32_linear[:-1]
-    
+
     torch.manual_seed(SEED)
     torch.cuda.empty_cache()
-    
+
     # config = BloomConfig(
     #     hidden_size=64,
     #     n_layer=5,
@@ -62,10 +65,10 @@ if __name__ == "__main__":
     # tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     tokenizer = BloomTokenizerFast.from_pretrained(MODEL_NAME)
     tokenizer.pad_token = tokenizer.eos_token
-    
+
     # fp32_linear = AutoModelForCausalLM.from_pretrained(MODEL_NAME).to("cuda")
     fp32_linear = BloomForCausalLM(config)
-    
+
     dataset = load_dataset(DATA_NAME)
     dataset = dataset.map(
         lambda x: tokenizer(x["inputs"], padding="max_length", truncation=True, max_length=512, return_tensors="pt")
@@ -80,7 +83,7 @@ if __name__ == "__main__":
     msamp_linear_with_scaler = deepcopy(fp32_linear)
 
     fp32_optim = Adam(fp32_linear.parameters(), lr=LR)
-    
+
     bf16_linear = bf16_linear.to(dtype=torch.bfloat16)
     bf16_optim = Adam(bf16_linear.parameters(), lr=LR)
 
@@ -97,7 +100,7 @@ if __name__ == "__main__":
 
     fp8_linear_with_scaler = convert_to_fp8_module(fp8_linear_with_scaler, accum_qtype=DTypes.KFLOAT16)
     fp8_optim_with_scaler = FP8Adam(fp8_linear_with_scaler.parameters(), lr=LR)
-    
+
     fp32_linear = fp32_linear.to("cuda")
     bf16_linear = bf16_linear.to("cuda")
     fp8_linear = fp8_linear.to("cuda")
@@ -129,11 +132,11 @@ if __name__ == "__main__":
         logits = outputs.logits
         logits = logits[:, :-1, :].contiguous()
         return func(logits.view(-1, logits.shape[-1]), targets.view(-1))
-    
+
     fp32_losses = []
     fp8_with_loss_scaler_losses = []
     msamp_with_loss_scaler_losses = []
-    
+
     for epoch in range(N_EPOCHS):
         for step, batch in enumerate(dataloaders):
             print(f"step: {step} /n /n")
@@ -147,7 +150,7 @@ if __name__ == "__main__":
             # fp32_loss = fp32_output.loss
             fp32_loss.backward()
             fp32_optim.step()
-            
+
             # bf16_optim.zero_grad()
             # bf16_output = bf16_linear(**batch)
             # bf16_loss = loss_func(bf16_output, batch["input_ids"])
@@ -189,7 +192,7 @@ if __name__ == "__main__":
 
             # l1_norm_diff_fp8_with_loss_scaler_relative_to_fp32 = l1_norm_diff(fp8_loss_with_scaler, fp32_loss)
             # l1_norm_diff_msamp_with_loss_scaler_relative_to_fp32 = l1_norm_diff(msamp_loss_with_scaler, fp32_loss)
-            
+
             # std_fp8_with_loss_scaler_relative_to_fp32 = (torch.tensor(fp8_with_loss_scaler_losses) - torch.tensor(fp32_losses)).std()
             # std_msamp_with_loss_scaler_relative_to_fp32 = (torch.tensor(msamp_with_loss_scaler_losses) - torch.tensor(fp32_losses)).std()
 
@@ -202,7 +205,9 @@ if __name__ == "__main__":
                     "msamp_o2_loss": msamp_loss.item(),
                     "msamp_o2_loss_with_scaler": msamp_loss_with_scaler.item(),
                     # "l1_norm_diff_fp8_with_loss_scaler_relative_to_fp32": l1_norm_diff(fp8_loss_with_scaler, fp32_loss).item(),
-                    "l1_norm_diff_msamp_with_loss_scaler_relative_to_fp32": l1_norm_diff(msamp_loss_with_scaler, fp32_loss).item(),
+                    "l1_norm_diff_msamp_with_loss_scaler_relative_to_fp32": l1_norm_diff(
+                        msamp_loss_with_scaler, fp32_loss
+                    ).item(),
                     # "l1_norm_diff_fp8_with_loss_scaler_relative_to_bf16": l1_norm_diff(fp8_loss_with_scaler, bf16_loss).item(),
                     # "l1_norm_diff_msamp_with_loss_scaler_relative_to_bf16": l1_norm_diff(msamp_loss_with_scaler, bf16_loss).item(),
                 }

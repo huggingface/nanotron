@@ -40,19 +40,18 @@ class LossScaler:
         return loss * self.scaling_value
 
     def step(self, optim: Optimizer, *args, **kwargs):
-        # def sanity_overflow(optim):            
-            # overflowed_params = []
-            # for group in optim.param_groups:
-            #     for p in group["params"]:
-            #         if p.grad is not None:
-            #             if is_overflow(p.grad):
-            #                 overflowed_params.append(overflowed_params)
-            
+        # def sanity_overflow(optim):
+        # overflowed_params = []
+        # for group in optim.param_groups:
+        #     for p in group["params"]:
+        #         if p.grad is not None:
+        #             if is_overflow(p.grad):
+        #                 overflowed_params.append(overflowed_params)
+
         #     for p in overflowed_params:
         #         param_to_name = {param: name for name, param in model.named_parameters()}
         #         print(param_to_name)
-        
-        
+
         # detected_overflow = False
         # for group in optim.param_groups:
         #     for p in group["params"]:
@@ -75,7 +74,7 @@ class LossScaler:
         #             self._unscale_param_(p)
 
         #     optim.step(*args, **kwargs)
-        
+
         for group in optim.param_groups:
             for p in group["params"]:
                 self._unscale_param_(p)
