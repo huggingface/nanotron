@@ -45,27 +45,29 @@ from nanotron.utils import checkpoint_method
 
 logger = logging.get_logger(__name__)
 
-USE_DETERMINISTIC_OPS = os.getenv("USE_DETERMINISTIC_OPS", False)
+USE_DETERMINISTIC_OPS = os.getenv("USE_DETERMINISTIC_OPS", "False") == "True"
 
 # TritonRMSNorm is faster but generate randomized results.
-if USE_DETERMINISTIC_OPS is True:
+if not USE_DETERMINISTIC_OPS:
     from nanotron.nn.layer_norm import TritonRMSNorm as RMSNorm
 # Replace TritonRMSNorm with RMSNorm for a deterministic output.
 else:
 
     class RMSNorm(nn.Module):
-        def __init__(self, hidden_size: int, eps: float = 1e-6):
+        def __init__(self, hidden_size, eps=1e-6):
+            """
+            LlamaRMSNorm is equivalent to T5LayerNorm
+            """
             super().__init__()
-            self.eps = eps
-            self.weight = nn.Parameter(torch.zeros(hidden_size))
+            self.weight = nn.Parameter(torch.ones(hidden_size))
+            self.variance_epsilon = eps
 
-        def _norm(self, input: torch.Tensor) -> torch.Tensor:
-            return input * torch.rsqrt(input.pow(2).mean(-1, keepdim=True) + self.eps)
-
-        def forward(self, input: torch.Tensor) -> torch.Tensor:
-            output = self._norm(input.float())
-            output = output * (1.0 + self.weight.float())
-            return output.type_as(input)
+        def forward(self, input):
+            input_dtype = input.dtype
+            input = input.to(torch.float32)
+            variance = input.pow(2).mean(-1, keepdim=True)
+            input = input * torch.rsqrt(variance + self.variance_epsilon)
+            return self.weight * input.to(input_dtype)
 
 
 class RotaryEmbedding(nn.Module):

@@ -22,12 +22,6 @@ from nanotron.config import (
     ParallelismArgs,
     get_config_from_file,
 )
-from nanotron.generation.decode import (
-    GenerationInput,
-    TokenizerConfig,
-    decode_text,
-    decode_tokenized,
-)
 from nanotron.logging import log_rank, set_ranks_logging_level
 from nanotron.models import build_model
 from nanotron.parallel import ParallelContext
@@ -44,7 +38,6 @@ from nanotron.random import (
     set_random_seed,
 )
 from nanotron.serialize import load_weights
-from nanotron.trainer import CONFIG_TO_MODEL_CLASS, mark_tied_parameters
 
 try:
     from transformers import AutoTokenizer
@@ -52,6 +45,19 @@ except ImportError:
     AutoTokenizer = None
 
 logger = logging.get_logger(__name__)
+
+
+def setup_environment_and_imports():
+    # Replace TritonRMSNorm with RMSNorm for a deterministic output.
+    os.environ["USE_DETERMINISTIC_OPS"] = "True"
+    global GenerationInput, TokenizerConfig, decode_text, decode_tokenized, CONFIG_TO_MODEL_CLASS, mark_tied_parameters
+    from nanotron.generation.decode import (
+        GenerationInput,
+        TokenizerConfig,
+        decode_text,
+        decode_tokenized,
+    )
+    from nanotron.trainer import CONFIG_TO_MODEL_CLASS, mark_tied_parameters
 
 
 def get_args():
@@ -65,6 +71,8 @@ def get_args():
 
 
 def main():
+    setup_environment_and_imports()
+
     args = get_args()
 
     assert args.ckpt_path.exists(), f"Checkpoint path {args.ckpt_path} does not exist"
@@ -164,6 +172,7 @@ def main():
                 tokenizer.add_special_tokens({"pad_token": "[PAD]"})
         tokenizer.padding_side = "left"
         tokenizer.truncation_side = "left"  # TODO @nouamane: do we want this?
+
         dummy_inputs = [
             # "Passage: Daniel went back to the garden. Mary travelled to the kitchen. Sandra journeyed to the kitchen. Sandra went to the hallway. John went to the bedroom. Mary went back to the garden. Where is Mary?\nAnswer:",
             "def fib(n)",
