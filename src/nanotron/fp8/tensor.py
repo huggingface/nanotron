@@ -19,7 +19,8 @@ class LowPrecisionTensor(torch.Tensor):
         tensor: torch.Tensor,
         dtype: Optional[DTypes] = None,
         interval: Optional[int] = 1,
-        is_dynamic_scaling: Optional[bool] = False,
+        # TODO(xrsrke): remove is_delayed_scaling, set it automatically based on the interval
+        # is_delayed_scaling: Optional[bool] = False,
         fp8_meta: Optional[FP8Meta] = None,
     ) -> torch.Tensor:
         assert isinstance(tensor, torch.Tensor), "tensor must be a tensor"
@@ -27,12 +28,13 @@ class LowPrecisionTensor(torch.Tensor):
         # TODO(xrsrke): if the tensor is on cpu, then bypass the quantization
         # because the current kernels only support gpu tensor
         assert tensor.device != torch.device("cpu"), "FP8Tensor only supports CUDA device"
+        # assert interval > 1 and is_delayed_scaling is True, "If the updating interval is greater than 1, then delayed scaling must be enabled"
 
         if fp8_meta is None:
             assert tensor.dtype not in FP8_DTYPES, "The tensor already quantized to FP8"
             assert dtype in [DTypes.FP8E4M3, DTypes.FP8E5M2, DTypes.KFLOAT16]
 
-            fp8_meta = cls._get_metadata(tensor, dtype, interval, is_dynamic_scaling)
+            fp8_meta = cls._get_metadata(tensor, dtype, interval)
             fp8_tensor = cls._quantize(tensor, fp8_meta)
         else:
             assert tensor.dtype in FP8_DTYPES
@@ -64,14 +66,14 @@ class LowPrecisionTensor(torch.Tensor):
     #     return super().__setattr__(__name, __value)
 
     @staticmethod
-    def _get_metadata(tensor: torch.Tensor, dtype: DTypes, interval: int, is_dynamic_scaling: bool) -> "FP8Meta":
+    def _get_metadata(tensor: torch.Tensor, dtype: DTypes, interval: int) -> "FP8Meta":
         # TODO(xrsrke): there is a circular import issue
         # between tensor.py and meta.py fix this
         from nanotron.fp8.meta import FP8Meta
 
         amax = tensor.abs().max().clone()
         scale = update_scaling_factor(amax, torch.tensor(INITIAL_SCALING_FACTOR, dtype=torch.float32), dtype)
-        fp8_meta = FP8Meta(amax, scale, dtype, interval, is_dynamic_scaling)
+        fp8_meta = FP8Meta(amax, scale, dtype, interval)
         return fp8_meta
 
     @abstractstaticmethod
@@ -124,16 +126,21 @@ class LowPrecisionTensor(torch.Tensor):
 
         self.data = quantized_data.data
         self.orig_data = quantized_data.orig_data
-        # NOTE: for delay scaling
-        new_amax = quantized_data.fp8_meta.amax
+        self.fp8_meta.add_amax(quantized_data.fp8_meta.amax)
 
-        self.fp8_meta.add_amax(new_amax)
-        # self.fp8_meta.scale = quantized_data.fp8_meta.scale
-        # self.fp8_meta.amax = quantized_data.fp8_meta.amax
-        # NOT_COPY_ATTRIBUTES = ["_amaxs", "_num_remaining_steps_until_rescale"]
-        # for key, value in quantized_data.fp8_meta.__dict__.items():
-        #     if key not in NOT_COPY_ATTRIBUTES:
-        #         setattr(self.fp8_meta, key, value)
+    @staticmethod
+    def from_metadata(data: torch.Tensor, metadata: "FP8Meta") -> Union[FP8Tensor, FP16Tensor]:
+        assert isinstance(data, (FP8Tensor, torch.Tensor)), "data must be a torch.Tensor or a FP8Tensor"
+        # if data.__class__ in [FP8Tensor, FP16Tensor]:
+        #     assert data.dtype == self.data.dtype, "The data must have the same dtype as the tensor, got {data.dtype}"
+        #     quantized_data = data
+        # else:
+        metadata = deepcopy(metadata)
+        metadata.add_amax(data.abs().max().clone())
+
+        quantized_data = FP8Tensor(data, metadata.dtype, metadata.interval)
+        quantized_data.fp8_meta = metadata
+        return quantized_data
 
     def transpose_fp8(self) -> FP8Tensor:
         """Transpose the tensor."""

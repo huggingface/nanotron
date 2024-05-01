@@ -11,7 +11,17 @@ from nanotron.fp8.dtypes import DTypes
 
 @dataclass
 class FP8Meta:
-    """Metadata for FP8Tensor."""
+    """
+    Metadata for FP8Tensor.
+
+    NOTE:
+    scale is the scaling factor for quantization, it doesn't not necessary represent the scaling factor
+    for the current tensor value, but rather a running scaling factor if we use delayed quantization
+
+    amax is the current absolute maximum value of the tensor
+
+    interval is the number of steps before we rescale the scaling factor
+    """
 
     amax: torch.Tensor
     scale: torch.Tensor
@@ -20,7 +30,7 @@ class FP8Meta:
     dtype: DTypes
     interval: int
     # TODO(xrsrke): change to is_delay_scaling
-    is_delayed_scaling: bool = False
+    # is_delayed_scaling: bool = False
 
     @property
     def te_dtype(self) -> tex.DType:
@@ -42,8 +52,8 @@ class FP8Meta:
             torch.float16,
         ], f"Expected amax to be of dtype torch.float32 or torch.float16, got {self.amax.dtype}"
 
-        if self.is_delayed_scaling is False and self.interval > 1:
-            raise ValueError("Interval must be 1 if not using delayed scaling because we scale every interval")
+        # if self.is_delayed_scaling is False and self.interval > 1:
+        #     raise ValueError("Interval must be 1 if not using delayed scaling because we scale every interval")
 
         # NOTE: transformer engine only accepts torch tensors
         self.amax = torch.tensor(self.amax, device="cuda") if not isinstance(self.amax, torch.Tensor) else self.amax
@@ -76,6 +86,7 @@ class FP8Meta:
             # NOTE: if amax is inf or nan, we use 0 as the new amax
             amax = torch.tensor(0.0, dtype=torch.float32, device="cuda")
 
+        self.amax = amax
         self._amaxs.append(amax)
 
         if is_overflowed:
@@ -84,11 +95,16 @@ class FP8Meta:
             self._num_remaining_steps_until_rescale -= 1
 
         if self.is_ready_to_scale:
+            print("not ready to scale")
             self.rescale()
 
     @property
     def amaxs(self) -> List[torch.Tensor]:
         return self._amaxs
+
+    @property
+    def is_delayed_scaling(self) -> bool:
+        return self.interval > 1
 
     @property
     def is_ready_to_scale(self) -> bool:
@@ -105,6 +121,8 @@ class FP8Meta:
     def rescale(self):
         assert self.is_ready_to_scale is True, "Cannot rescale if not ready to scale"
         from nanotron.fp8.tensor import update_scaling_factor
+
+        print("rescaling")
 
         max_amax = torch.max(torch.stack(self.amaxs))
         current_scale = self.scale

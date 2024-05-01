@@ -41,15 +41,26 @@ QTYPE_TO_DTYPE = {
 # input_grad.window_size = 1 (this one is the output of the backward pass)
 
 FP8LM_RECIPE = FP8TrainingRecipe(
+    # linear=FP8LinearRecipe(
+    #     accum_dtype=DTypes.KFLOAT16,
+    #     input=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=16, is_delayed_scaling=True),
+    #     weight=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=1, is_delayed_scaling=False),
+    #     bias=FP8TensorRecipe(dtype=DTypes.KFLOAT16, margin=0, interval=16, is_delayed_scaling=False),
+    #     # NOTE: these are the dtypes for the gradients
+    #     input_grad=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=16, is_delayed_scaling=True),
+    #     weight_grad=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=1, is_delayed_scaling=True),
+    #     output_grad=FP8TensorRecipe(dtype=DTypes.FP8E5M2, margin=0, interval=1, is_delayed_scaling=False),
+    #     split_accumulator=FP8SplitAccumulator(output=False, input_grad=True, weight_grad=True),
+    # ),
     linear=FP8LinearRecipe(
         accum_dtype=DTypes.KFLOAT16,
-        input=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=16, is_delayed_scaling=True),
-        weight=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=1, is_delayed_scaling=False),
-        bias=FP8TensorRecipe(dtype=DTypes.KFLOAT16, margin=0, interval=16, is_delayed_scaling=False),
+        input=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=16),
+        weight=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=1),
+        bias=FP8TensorRecipe(dtype=DTypes.KFLOAT16, margin=0, interval=16),
         # NOTE: these are the dtypes for the gradients
-        input_grad=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=16, is_delayed_scaling=True),
-        weight_grad=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=1, is_delayed_scaling=True),
-        output_grad=FP8TensorRecipe(dtype=DTypes.FP8E5M2, margin=0, interval=1, is_delayed_scaling=False),
+        input_grad=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=16),
+        weight_grad=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=1),
+        output_grad=FP8TensorRecipe(dtype=DTypes.FP8E5M2, margin=0, interval=1),
         split_accumulator=FP8SplitAccumulator(output=False, input_grad=True, weight_grad=True),
     ),
     optim=FP8OptimRecipe(
@@ -84,3 +95,12 @@ FP8_ATOL_THRESHOLD = 0.1
 
 FP16_RTOL_THRESHOLD = 0
 FP16_ATOL_THRESHOLD = 1e-03
+
+# NOTE: FP8-LM use RTOL is 0, and ATOL is 3e-4 for model weights
+FP8_WEIGHT_RTOL_THRESHOLD = 0
+FP8_WEIGHT_ATOL_THRESHOLD = 0.1
+
+FP8_1ST_OPTIM_STATE_RTOL_THRESHOLD = 0
+FP8_1ST_OPTIM_STATE_ATOL_THRESHOLD = 0.1
+FP8_2ND_OPTIM_STATE_RTOL_THRESHOLD = 0
+FP8_2ND_OPTIM_STATE_ATOL_THRESHOLD = 0.1

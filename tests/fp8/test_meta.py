@@ -11,16 +11,25 @@ def test_fp8_meta(dtype):
     AMAX = torch.randn(1, dtype=torch.float32) * 3
     SCALE = torch.randn(1, dtype=torch.float32)
     INTERVAL = 5
-    is_delayed_scaling = True
 
-    fp8_meta = FP8Meta(amax=AMAX, scale=SCALE, dtype=dtype, interval=INTERVAL, is_delayed_scaling=is_delayed_scaling)
+    fp8_meta = FP8Meta(amax=AMAX, scale=SCALE, dtype=dtype, interval=INTERVAL)
 
     assert torch.equal(fp8_meta.amax, AMAX)
     assert torch.equal(fp8_meta.scale, SCALE)
     assert torch.equal(fp8_meta.inverse_scale, 1 / fp8_meta.scale)
-    assert fp8_meta.is_delayed_scaling == is_delayed_scaling
     assert isinstance(fp8_meta.fp8_max, float)
     assert isinstance(fp8_meta.te_dtype, tex.DType)
+
+
+@pytest.mark.parametrize("interval", [1, 5])
+@pytest.mark.parametrize("dtype", [DTypes.FP8E4M3, DTypes.FP8E5M2, DTypes.KFLOAT16])
+def test_fp8_meta_for_delayed_scaling(interval, dtype):
+    AMAX = torch.randn(1, dtype=torch.float32) * 3
+    SCALE = torch.randn(1, dtype=torch.float32)
+
+    fp8_meta = FP8Meta(amax=AMAX, scale=SCALE, dtype=dtype, interval=interval)
+
+    assert fp8_meta.is_delayed_scaling is (interval > 1)
 
 
 @pytest.mark.parametrize("dtype", [DTypes.FP8E4M3, DTypes.FP8E5M2, DTypes.KFLOAT16])
@@ -32,7 +41,6 @@ def test_fp8_meta(dtype):
         {"amax": torch.randn(1, dtype=torch.float32)},
         {"scale": torch.randn(1, dtype=torch.float32)},
         {"dtype": True},
-        {"is_delayed_scaling": True},
     ],
 )
 def test_fp8_meta_equality(dtype, modifications):

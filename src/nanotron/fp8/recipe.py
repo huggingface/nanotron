@@ -12,7 +12,7 @@ class FP8TensorRecipe:
     dtype: DTypes
     margin: int
     interval: int
-    is_delayed_scaling: bool
+    # is_delayed_scaling: bool
 
 
 @dataclass

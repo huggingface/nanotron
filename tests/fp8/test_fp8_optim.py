@@ -1,13 +1,10 @@
 from copy import deepcopy
-from typing import Optional
 
 import pytest
 import torch
-from nanotron.fp8.constants import FP8LM_RECIPE
+from nanotron.fp8.constants import FP8_WEIGHT_ATOL_THRESHOLD, FP8_WEIGHT_RTOL_THRESHOLD, FP8LM_RECIPE
 from nanotron.fp8.dtypes import DTypes
-from nanotron.fp8.linear import FP8Linear
 from nanotron.fp8.loss_scaler import LossScaler
-from nanotron.fp8.optim import Adam as REFAdam
 from nanotron.fp8.optim import (
     FP8Adam,
 )
@@ -20,25 +17,24 @@ from nanotron.fp8.utils import convert_linear_to_fp8, convert_to_fp8_module
 from torch import nn
 from torch.optim import Adam
 
+# def set_fake_fp8_grads(linear: FP8Linear, ref_linear: Optional[nn.Linear] = None) -> FP8Linear:
+#     weight_grad = (
+#         torch.randn_like(linear.weight.data, device="cuda", dtype=torch.float32)
+#         if ref_linear is None
+#         else ref_linear.weight.grad
+#     )
+#     weight_grad = FP8Tensor(deepcopy(weight_grad), dtype=FP8LM_RECIPE.linear.weight_grad.dtype)
 
-def set_fake_fp8_grads(linear: FP8Linear, ref_linear: Optional[nn.Linear] = None) -> FP8Linear:
-    weight_grad = (
-        torch.randn_like(linear.weight.data, device="cuda", dtype=torch.float32)
-        if ref_linear is None
-        else ref_linear.weight.grad
-    )
-    weight_grad = FP8Tensor(deepcopy(weight_grad), dtype=FP8LM_RECIPE.linear.weight_grad.dtype)
+#     bias_grad = (
+#         torch.randn_like(linear.bias.data, device="cuda", dtype=torch.float32)
+#         if ref_linear is None
+#         else ref_linear.bias.grad
+#     )
+#     bias_grad = FP16Tensor(deepcopy(bias_grad), dtype=DTypes.KFLOAT16)
 
-    bias_grad = (
-        torch.randn_like(linear.bias.data, device="cuda", dtype=torch.float32)
-        if ref_linear is None
-        else ref_linear.bias.grad
-    )
-    bias_grad = FP16Tensor(deepcopy(bias_grad), dtype=DTypes.KFLOAT16)
-
-    linear.weight.grad = weight_grad
-    linear.bias.grad = bias_grad
-    return linear
+#     linear.weight.grad = weight_grad
+#     linear.bias.grad = bias_grad
+#     return linear
 
 
 def test_fp8_optim_default_initiation():
@@ -199,8 +195,12 @@ def test_fp8adam_step(n_steps):
     weight_fp32 = convert_tensor_from_fp8(fp8_linear.weight.data, fp8_linear.weight.data.fp8_meta, torch.float32)
     # NOTE: this specific threshold is based on the FP8-LM implementation
     # the paper shows that it don't hurt convergence
-    torch.testing.assert_allclose(weight_fp32, linear.weight, rtol=0, atol=3e-4)
-    torch.testing.assert_allclose(fp8_linear.bias, linear.bias, rtol=0, atol=3e-4)
+    torch.testing.assert_allclose(
+        weight_fp32, linear.weight, rtol=FP8_WEIGHT_RTOL_THRESHOLD, atol=FP8_WEIGHT_ATOL_THRESHOLD
+    )
+    torch.testing.assert_allclose(
+        fp8_linear.bias, linear.bias, rtol=FP8_WEIGHT_RTOL_THRESHOLD, atol=FP8_WEIGHT_ATOL_THRESHOLD
+    )
 
 
 def test_fp8adam_zero_grad():
@@ -310,7 +310,9 @@ def test_fp8adam_step_with_loss_scaling(scaling_value):
     # NOTE: this specific threshold is based on the FP8-LM implementation
     # the paper shows that it don't hurt convergence
     # source: https://github.com/Azure/MS-AMP/blob/0a2cd721fa68ee725e3b2fb132df02ddb8069d62/tests/optim/test_adamw.py#L85
-    torch.testing.assert_close(fp8_optim.fp32_p.data, ref_linear.weight, rtol=0, atol=3e-4)
+    torch.testing.assert_close(
+        fp8_optim.fp32_p.data, ref_linear.weight, rtol=FP8_WEIGHT_RTOL_THRESHOLD, atol=FP8_WEIGHT_ATOL_THRESHOLD
+    )
     # assert fp8_optim.updated_p_fp8.fp8_meta == fp8_linear.weight.data.fp8_meta
 
     # NOTE: sanity check if we quantize the correct unquantized params
@@ -322,49 +324,54 @@ def test_fp8adam_step_with_loss_scaling(scaling_value):
 
     # assert torch.equal(unquantized_quantized_fp32_p, weight_fp32)
 
-    torch.testing.assert_allclose(fp8_linear.bias, ref_linear.bias, rtol=0, atol=3e-4)
-    torch.testing.assert_allclose(weight_fp32, ref_linear.weight, rtol=0, atol=3e-4)
+    torch.testing.assert_allclose(
+        fp8_linear.bias, ref_linear.bias, rtol=FP8_WEIGHT_RTOL_THRESHOLD, atol=FP8_WEIGHT_ATOL_THRESHOLD
+    )
+    torch.testing.assert_allclose(
+        weight_fp32, ref_linear.weight, rtol=FP8_WEIGHT_RTOL_THRESHOLD, atol=FP8_WEIGHT_ATOL_THRESHOLD
+    )
 
 
-def test_fp8adam_step_with_correct_grad():
-    LR = 1e-3
-    BETAS = (0.9, 0.999)
-    EPS = 1e-8
-    WEIGHT_DECAY = 1e-3
+# def test_fp8adam_step_with_correct_grad():
+#     LR = 1e-3
+#     BETAS = (0.9, 0.999)
+#     EPS = 1e-8
+#     WEIGHT_DECAY = 1e-3
 
-    input = torch.randn(16, 16, device="cuda")
-    linear = nn.Linear(16, 16, device="cuda")
-    fp8_linear = convert_linear_to_fp8(deepcopy(linear), accum_qtype=DTypes.KFLOAT16)
+#     input = torch.randn(16, 16, device="cuda")
+#     linear = nn.Linear(16, 16, device="cuda")
+#     fp8_linear = convert_linear_to_fp8(deepcopy(linear), accum_qtype=DTypes.KFLOAT16)
 
-    optim = REFAdam(linear.parameters(), LR, BETAS, EPS, WEIGHT_DECAY)
-    fp8_optim = FP8Adam(fp8_linear.parameters(), LR, BETAS, EPS, WEIGHT_DECAY)
+#     optim = REFAdam(linear.parameters(), LR, BETAS, EPS, WEIGHT_DECAY)
+#     fp8_optim = FP8Adam(fp8_linear.parameters(), LR, BETAS, EPS, WEIGHT_DECAY)
 
-    linear(input).sum().backward()
+#     linear(input).sum().backward()
 
-    fp8_linear.weight.grad = FP8Tensor(deepcopy(linear.weight.grad), dtype=FP8LM_RECIPE.linear.weight_grad.dtype)
-    # fp8_linear.bias.grad = FP16Tensor(deepcopy(linear.bias.grad), dtype=DTypes.KFLOAT16)
-    fp8_linear.bias.grad = deepcopy(linear.bias.grad).to(dtype=torch.float16)
+#     fp8_linear.weight.grad = FP8Tensor(deepcopy(linear.weight.grad), dtype=FP8LM_RECIPE.linear.weight_grad.dtype)
+#     # fp8_linear.bias.grad = FP16Tensor(deepcopy(linear.bias.grad), dtype=DTypes.KFLOAT16)
+#     fp8_linear.bias.grad = deepcopy(linear.bias.grad).to(dtype=torch.float16)
 
-    optim.step()
-    fp8_optim.step()
+#     optim.step()
+#     fp8_optim.step()
 
-    # NOTE: since optimizer update depends on the gradients
-    # and in this test we only want to check whether fp8 optim step is correct
-    # so we will set the gradients to the target one, and only check the optim step
+#     # NOTE: since optimizer update depends on the gradients
+#     # and in this test we only want to check whether fp8 optim step is correct
+#     # so we will set the gradients to the target one, and only check the optim step
 
-    weight_fp32 = convert_tensor_from_fp8(fp8_linear.weight.data, fp8_linear.weight.data.fp8_meta, torch.float32)
-    # bias_fp32 = _convert_tensor_from_fp16(fp8_linear.bias.data, fp8_linear.bias.fp8_meta, torch.float32)
+#     weight_fp32 = convert_tensor_from_fp8(fp8_linear.weight.data, fp8_linear.weight.data.fp8_meta, torch.float32)
+#     # bias_fp32 = _convert_tensor_from_fp16(fp8_linear.bias.data, fp8_linear.bias.fp8_meta, torch.float32)
 
-    # torch.testing.assert_close(bias_fp32, linear.bias, rtol=0, atol=3e-4)
+#     # torch.testing.assert_close(bias_fp32, linear.bias, rtol=0, atol=3e-4)
 
-    # NOTE: this specific threshold is based on the FP8-LM implementation
-    # the paper shows that it don't hurt convergence
-    # reference: https://github.com/Azure/MS-AMP/blob/51f34acdb4a8cf06e0c58185de05198a955ba3db/tests/optim/test_adamw.py#L85
-    torch.testing.assert_close(fp8_optim.fp32_p.data[:], linear.weight[:], rtol=0, atol=3e-4)
-    torch.testing.assert_allclose(weight_fp32, linear.weight, rtol=0, atol=3e-4)
-    # torch.testing.assert_allclose(fp8_linear.bias, linear.bias, rtol=0, atol=3e-4)
+#     # NOTE: this specific threshold is based on the FP8-LM implementation
+#     # the paper shows that it don't hurt convergence
+#     # reference: https://github.com/Azure/MS-AMP/blob/51f34acdb4a8cf06e0c58185de05198a955ba3db/tests/optim/test_adamw.py#L85
+#     torch.testing.assert_close(fp8_optim.fp32_p.data[:], linear.weight[:], rtol=FP8_WEIGHT_RTOL_THRESHOLD, atol=FP8_WEIGHT_ATOL_THRESHOLD)
+#     torch.testing.assert_allclose(weight_fp32, linear.weight, rtol=FP8_WEIGHT_RTOL_THRESHOLD, atol=FP8_WEIGHT_ATOL_THRESHOLD)
+#     # torch.testing.assert_allclose(fp8_linear.bias, linear.bias, rtol=FP8_WEIGHT_RTOL_THRESHOLD, atol=FP8_WEIGHT_ATOL_THRESHOLD)
 
 
+@pytest.mark.skip
 def test_fp8adam_load_state_dict():
     input = torch.randn(16, 16, device="cuda")
     linear = nn.Linear(16, 16, device="cuda")

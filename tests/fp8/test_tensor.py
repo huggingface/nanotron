@@ -58,6 +58,31 @@ def test_quantize_and_dequantize_tensor_in_fp8(size, dtype):
     torch.testing.assert_close(tensor, ref_tensor, rtol=FP8_RTOL_THRESHOLD, atol=FP8_ATOL_THRESHOLD)
 
 
+# @pytest.mark.parametrize("interval", [1, 5])
+@pytest.mark.parametrize("dtype", [DTypes.FP8E4M3, DTypes.FP8E5M2])
+def test_create_fp8_tensor_from_metadata(dtype):
+    INTERVAL = 5
+    TOTAL_STEPS, REMAINING_STEPS = 20, 16
+    tensor = torch.randn((16, 16), dtype=torch.float32, device="cuda")
+    fp8_tensor = FP8Tensor(tensor, dtype=dtype, interval=INTERVAL)
+
+    new_values = [torch.randn((16, 16), dtype=torch.float32, device="cuda") for i in range(TOTAL_STEPS)]
+
+    for i in range(TOTAL_STEPS):
+        if TOTAL_STEPS - REMAINING_STEPS == i:
+            current_tensor = fp8_tensor.orig_data
+            fp8_meta = deepcopy(fp8_tensor.fp8_meta)
+
+        fp8_tensor.set_data(new_values[i])
+
+    resumed_fp8_tensor = FP8Tensor.from_metadata(current_tensor, fp8_meta)
+    for i in range(TOTAL_STEPS - REMAINING_STEPS, TOTAL_STEPS):
+        resumed_fp8_tensor.set_data(new_values[i])
+
+    # NOTE: we expect a resume tensor to have the state trajectory of the original tensor
+    assert resumed_fp8_tensor == fp8_tensor
+
+
 @pytest.mark.parametrize("size", [4, 8, 16, 64])
 def test_quantize_and_dequantize_tensor_in_fp16(size):
     tensor = torch.randn((size, size), dtype=torch.float32, device="cuda")
