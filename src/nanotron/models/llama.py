@@ -346,7 +346,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             config.max_position_embeddings
         )  # TODO @nouamane: compute based on free memory, because in rope we can surpass max_position_embeddings
 
-        self.n_segments = 4
+        self.n_segments = 16
         device = self.o_proj.weight.device
         dtype = self.o_proj.weight.dtype
 
@@ -462,18 +462,19 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         if prev_memory is None:
             return torch.zeros_like(query_states)
 
-        from einops import repeat
+        if self.n_repeats > 1:
+            from einops import repeat
 
-        prev_memory = repeat(
-            prev_memory,
-            "batch_size n_kv_heads d_k d_v -> batch_size (n_kv_heads n) d_k d_v",
-            n=self.n_repeats,
-        )
-        prev_normalization = repeat(
-            prev_normalization,
-            "batch_size n_kv_heads d_head -> batch_size (n_kv_heads n) d_head",
-            n=self.n_repeats,
-        )
+            prev_memory = repeat(
+                prev_memory,
+                "batch_size n_kv_heads d_k d_v -> batch_size (n_kv_heads n) d_k d_v",
+                n=self.n_repeats,
+            )
+            prev_normalization = repeat(
+                prev_normalization,
+                "batch_size n_kv_heads d_head -> batch_size (n_kv_heads n) d_head",
+                n=self.n_repeats,
+            )
 
         query_states = F.elu(query_states) + 1
         retrieved_memory = einsum(
