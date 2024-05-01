@@ -322,10 +322,18 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             contiguous_chunks=qkv_contiguous_chunks,
         )
         # TODO(kunhao): We want to have only one version per device and not one version per layer.
-        self.rotary_embedding = RotaryEmbedding(dim=self.d_qk, end=config.max_position_embeddings, theta=500000.0)
+        self.rotary_embedding = RotaryEmbedding(
+            dim=self.d_qk,
+            end=config.max_position_embeddings,
+            # theta=500000.0
+        )
 
         # NOTE: Only supported for training (TODO(fmom): position_ids not supported yet)
-        self.flash_rotary_embedding = FlashRotaryEmbedding(dim=self.d_qk, interleaved=True, base=500000.0)
+        self.flash_rotary_embedding = FlashRotaryEmbedding(
+            dim=self.d_qk,
+            interleaved=True,
+            # base=500000.0
+        )
 
         self.o_proj = TensorParallelRowLinear(
             config.num_attention_heads * self.d_qk,
@@ -346,6 +354,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             config.max_position_embeddings
         )  # TODO @nouamane: compute based on free memory, because in rope we can surpass max_position_embeddings
 
+        # self.n_segments = 16
         self.n_segments = 4
         device = self.o_proj.weight.device
         dtype = self.o_proj.weight.dtype
@@ -430,7 +439,10 @@ class CausalSelfAttention(nn.Module, AttachableStore):
 
             # assert torch.allclose(global_weights + local_weights, torch.ones_like(global_weights))
 
-            attention_output = global_weights * retrieved_memory + local_weights * local_attn_outputs
+            if retrieved_memory is None:
+                attention_output = local_weights * local_attn_outputs
+            else:
+                attention_output = global_weights * retrieved_memory + local_weights * local_attn_outputs
 
             # assert attention_output.shape == (batch_size, self.n_local_heads, segment_length, self.d_head)
 
@@ -460,7 +472,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
     def _retrieve_from_memory(self, query_states, prev_memory, prev_normalization):
         # return torch.zeros_like(query_states)
         if prev_memory is None:
-            return torch.zeros_like(query_states)
+            return None
 
         from einops import repeat
 

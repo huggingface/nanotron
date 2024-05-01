@@ -156,25 +156,27 @@ def lr_scheduler_builder(optimizer: Optimizer, lr_scheduler_args: LRSchedulerArg
         lmbda /= initial_lr  # Normalization for pytorch
         return lmbda
 
-    def get_lr_lambda_for_param_group(lr: float):
-        return partial(lr_lambda, initial_lr=lr)
+    # def get_lr_lambda_for_param_group(lr: float):
+    #     return partial(lr_lambda, initial_lr=lr)
 
-    # NOTE: get learning rate scheduler for each param group
-    lr_lambdas = []
-    for param_group in optimizer.get_base_optimizer().param_groups:
-        lr_lambdas.append(get_lr_lambda_for_param_group(lr=param_group["lr"]))
+    # # NOTE: get learning rate scheduler for each param group
+    # lr_lambdas = []
+    # for param_group in optimizer.get_base_optimizer().param_groups:
+    #     lr_lambdas.append(get_lr_lambda_for_param_group(lr=param_group["lr"]))
 
-    assert len(lr_lambdas) == len(
-        optimizer.get_base_optimizer().param_groups
-    ), "Custom learning rate functions dont match the number of param groups"
+    # assert len(lr_lambdas) == len(
+    #     optimizer.get_base_optimizer().param_groups
+    # ), "Custom learning rate functions dont match the number of param groups"
 
-    log_rank(
-        f"[Optimizer Building] There are total {len(lr_lambdas)} custom learning rate function for parameter groups",
-        logger=logger,
-        level=logging.DEBUG,
+    # log_rank(
+    #     f"[Optimizer Building] There are total {len(lr_lambdas)} custom learning rate function for parameter groups",
+    #     logger=logger,
+    #     level=logging.DEBUG,
+    # )
+    # lr_scheduler = LambdaLR(optimizer.get_base_optimizer(), lr_lambda=lr_lambdas)
+    lr_scheduler = LambdaLR(
+        optimizer.get_base_optimizer(), lr_lambda=partial(lr_lambda, initial_lr=lr_scheduler_args.learning_rate)
     )
-
-    lr_scheduler = LambdaLR(optimizer.get_base_optimizer(), lr_lambda=lr_lambdas)
     return lr_scheduler
 
 
@@ -216,6 +218,12 @@ def get_custom_lr_for_named_parameters(
         param,
     ) in named_parameters:
         learning_rate = learning_rate_mapper.get_lr(name, param)
+        log_rank(
+            f"[Optimizer Building] Parameter {name} has a learning rate of {learning_rate}",
+            logger=logger,
+            level=logging.DEBUG,
+        )
+
         assert isinstance(learning_rate, float), f"Expected a float, got {learning_rate} for parameter {name}"
         named_param_groups_with_custom_lr.append({"named_params": [(name, param)], "lr": learning_rate})
 
@@ -242,12 +250,13 @@ def init_optimizer_and_grad_accumulator(
     module_id_to_prefix[id(unwrapped_model)] = ""
 
     named_parameters = list(unwrapped_model.get_named_params_with_correct_tied())
-    named_param_groups = get_custom_lr_for_named_parameters(
-        parametrization_method=parametrization_method,
-        named_parameters=named_parameters,
-        model=unwrapped_model,
-        lr=optimizer_args.learning_rate_scheduler.learning_rate,
-    )
+    named_param_groups = named_parameters
+    # named_param_groups = get_custom_lr_for_named_parameters(
+    #     parametrization_method=parametrization_method,
+    #     named_parameters=named_parameters,
+    #     model=unwrapped_model,
+    #     lr=optimizer_args.learning_rate_scheduler.learning_rate,
+    # )
 
     # Basic optimizer builder
     def basic_optimizer_builder(named_param_groups):
