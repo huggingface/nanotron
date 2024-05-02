@@ -59,7 +59,6 @@ class FP8Meta:
         self.amax = torch.tensor(self.amax, device="cuda") if not isinstance(self.amax, torch.Tensor) else self.amax
         self._amaxs: List[torch.Tensor] = [self.amax]
         self._num_remaining_steps_until_rescale: int = self.interval - 1
-        # self._scale: torch.Tensor
 
     @property
     def fp8_max(self) -> float:
@@ -95,7 +94,6 @@ class FP8Meta:
             self._num_remaining_steps_until_rescale -= 1
 
         if self.is_ready_to_scale:
-            print("not ready to scale")
             self.rescale()
 
     @property
@@ -122,7 +120,7 @@ class FP8Meta:
         assert self.is_ready_to_scale is True, "Cannot rescale if not ready to scale"
         from nanotron.fp8.tensor import update_scaling_factor
 
-        print("rescaling")
+        # print("rescaling")
 
         max_amax = torch.max(torch.stack(self.amaxs))
         current_scale = self.scale

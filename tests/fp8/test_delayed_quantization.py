@@ -6,6 +6,8 @@ import torch
 import transformer_engine as te  # noqa
 from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.meta import FP8Meta
+from nanotron.fp8.optim import FP8Adam
+from nanotron.fp8.parameter import FP8Parameter
 from nanotron.fp8.tensor import FP8Tensor
 from nanotron.fp8.utils import convert_linear_to_fp8
 from torch import nn
@@ -57,7 +59,7 @@ def test_immediately_rescale_if_encounter_overflow_underflow(dtype, interval):
 
         fp8_tensor.set_data(temp_data)
 
-        if fp8_meta.is_delayed_scaling:
+        if interval > 1:
             if has_overflow is True:
                 # NOTE: this is right after or after overflow happens
                 if interval - 1 == i:
@@ -113,7 +115,7 @@ def test_delay_scaling_fp8_tensor(dtype, interval):
         new_data = new_data.clone() * 2
         fp8_tensor.set_data(new_data)
 
-        if fp8_meta.is_delayed_scaling:
+        if interval > 1:
             is_new_interval = i % interval == 0
             assert fp8_meta.is_ready_to_scale == (i - 1 % interval == 0)
             assert (fp8_meta.scale not in history_sf) is is_new_interval
@@ -180,10 +182,53 @@ def test_delay_scaling_fp8_tensor(dtype, interval):
 #     assert not torch.equal(fp8_meta.scale, current_scale)
 
 
-def test_fp8_linear_forward_pass():
-    input = torch.randn(16, 16, device="cuda")
-    linear = nn.Linear(16, 16, device="cuda")
-    fp8_linear = convert_linear_to_fp8(linear, accum_qtype=DTypes.KFLOAT32)
+@pytest.mark.parametrize("total_steps", [1, 5, 20, 25])
+def test_delayed_quantization_for_fp8_linear(total_steps):
+    def count_unique_values(xs):
+        # NOTE: sometimes, we compute a new scaling value
+        # but the value could be the same as the previous iterations
+        # but the memory address is different
+        return len({x.data_ptr() for x in xs})
 
-    for _ in range(16 * 2):
-        fp8_linear(input).sum().backward()
+    torch.randn(16, 16, device="cuda")
+    linear = nn.Linear(16, 16, device="cuda")
+    linear = convert_linear_to_fp8(linear, accum_qtype=DTypes.KFLOAT16)
+    optim = FP8Adam(linear.parameters(), lr=0.01)
+
+    # NOTE: this take the assumption of the fp8 recipe
+    # at the time writing this test
+    input_scales = []
+    weight_scales = []
+    input_grad_scales = []
+    weight_grad_scales = []
+    # output_grad_scales = []
+
+    # input_grad_ready_to_scales = []
+    # weight_ready_to_scales = []
+
+    for i in range(total_steps):
+        inputs = torch.randn(16, 16, device="cuda", requires_grad=True)
+        optim.zero_grad()
+        linear(inputs).sum().backward()
+        optim.step()
+
+        linear.weight = cast(FP8Parameter, linear.weight)
+
+        input_scales.append(linear.metadatas.input.scale)
+        weight_scales.append(linear.weight.fp8_meta.scale)
+        input_grad_scales.append(linear.metadatas.input_grad.scale)
+        weight_grad_scales.append(linear.metadatas.weight_grad.scale)
+
+        # input_grad_ready_to_scales.append(linear.metadatas.input_grad.is_ready_to_scale)
+        # weight_ready_to_scales.append(linear.metadatas.weight_grad.is_ready_to_scale)
+
+    # NOTE: we expect it computes a new scaling value only if it reaches the interval
+    # NOTE: plus 1 is taking into account the initial scaling value
+    assert count_unique_values(input_scales) == total_steps // linear.metadatas.input.interval + 1
+    assert count_unique_values(weight_scales) == total_steps // linear.weight.fp8_meta.interval
+    # NOTE: input grad's interval is 16, so the first step is a new scaling value,
+    # then 16th step is a new scaling value => n / 16 + 1
+    assert count_unique_values(input_grad_scales) == total_steps // linear.metadatas.input_grad.interval + 1
+    assert count_unique_values(weight_grad_scales) == total_steps // linear.metadatas.weight_grad.interval
+
+    # weight, input gradient, input

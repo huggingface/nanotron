@@ -31,13 +31,17 @@ class LowPrecisionTensor(torch.Tensor):
         # assert interval > 1 and is_delayed_scaling is True, "If the updating interval is greater than 1, then delayed scaling must be enabled"
 
         if fp8_meta is None:
-            assert tensor.dtype not in FP8_DTYPES, "The tensor already quantized to FP8"
+            # assert tensor.dtype not in FP8_DTYPES, "The tensor already quantized to FP8"
             assert dtype in [DTypes.FP8E4M3, DTypes.FP8E5M2, DTypes.KFLOAT16]
 
             fp8_meta = cls._get_metadata(tensor, dtype, interval)
+        # else:
+        #     assert tensor.dtype in FP8_DTYPES
+        #     # fp8_tensor = tensor
+
+        if tensor.dtype not in FP8_DTYPES:
             fp8_tensor = cls._quantize(tensor, fp8_meta)
         else:
-            assert tensor.dtype in FP8_DTYPES
             fp8_tensor = tensor
 
         # TODO(xrsrke): move update inverse scaling to FP8Meta's initialization
@@ -129,17 +133,20 @@ class LowPrecisionTensor(torch.Tensor):
         self.fp8_meta.add_amax(quantized_data.fp8_meta.amax)
 
     @staticmethod
+    @torch.no_grad()
     def from_metadata(data: torch.Tensor, metadata: "FP8Meta") -> Union[FP8Tensor, FP16Tensor]:
         assert isinstance(data, (FP8Tensor, torch.Tensor)), "data must be a torch.Tensor or a FP8Tensor"
         # if data.__class__ in [FP8Tensor, FP16Tensor]:
         #     assert data.dtype == self.data.dtype, "The data must have the same dtype as the tensor, got {data.dtype}"
         #     quantized_data = data
         # else:
-        metadata = deepcopy(metadata)
+        # metadata = deepcopy(metadata)
+        # NOTE: don't do deepcopy, because we reuse the same metadata
+        # for other iterations in fp8linear
         metadata.add_amax(data.abs().max().clone())
 
-        quantized_data = FP8Tensor(data, metadata.dtype, metadata.interval)
-        quantized_data.fp8_meta = metadata
+        quantized_data = FP8Tensor(data, metadata.dtype, metadata.interval, fp8_meta=metadata)
+        # quantized_data.fp8_meta = metadata
         return quantized_data
 
     def transpose_fp8(self) -> FP8Tensor:

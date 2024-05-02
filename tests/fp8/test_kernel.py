@@ -6,7 +6,8 @@ from nanotron.fp8.constants import QTYPE_TO_DTYPE
 from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.kernel import _fp8_matmul_kernel_2
 from nanotron.fp8.tensor import FP8Tensor
-from timm.models.layers import trunc_normal_
+
+# from timm.models.layers import trunc_normal_
 
 
 # @pytest.mark.parametrize(
@@ -60,7 +61,7 @@ def test_fp8_matmul_kernel(input, weight, transpose_a, transpose_b, dtype, accum
     # INTERDIM_SIZE = 64 * 4
 
     # trunc_normal_(input, std=0.02)
-    trunc_normal_(weight, std=0.02)
+    # trunc_normal_(weight, std=0.02)
     ref_weight = weight
 
     fp8_input = deepcopy(input)
