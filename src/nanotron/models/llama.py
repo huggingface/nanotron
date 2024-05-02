@@ -52,6 +52,9 @@ DISABLE_FLASH_ATTENTION = os.getenv("DISABLE_FLASH_ATTENTION", "0") == "1"
 
 if DISABLE_FLASH_ATTENTION:
     print("Warning: Flash attention was disabled!")
+    # FSDP
+    torch.backends.cuda.enable_mem_efficient_sdp(False)
+    torch.backends.cuda.enable_flash_sdp(False)
 
 
 RMSNorm = RMSNorm if DISABLE_FLASH_ATTENTION else TritonRMSNorm

@@ -1,5 +1,5 @@
 # Script to test correctness of training script by comparing loss value after 100th iteration with expected loss value
-# pytest -sv tests/test_train_llama.py or python tests/test_train_llama.py
+# pytest -sv tests/test_llama.py or python tests/test_train_llama.py
 
 import atexit
 import os
