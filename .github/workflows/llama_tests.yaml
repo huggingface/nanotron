@@ -51,5 +51,8 @@ jobs:
     - name: Show installed libraries and their versions
       run: pip freeze | tee installed.txt
 
-    - name: Run Llama loss tests
-      run: pytest -sv tests/test_train_llama.py
+    - name: Run Llama example
+      run: pytest --verbose tests/test_llama.py::test_tiny_llama
+
+    - name: Run Llama loss test
+      run: pytest --verbose tests/test_llama.py::test_train_llama

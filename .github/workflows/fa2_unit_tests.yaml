@@ -57,6 +57,3 @@ jobs:
       # NOTE: -m fa2 will only run the unit tests that have the mark
       # "fa2" (these are FA2-related tests)
       run: pytest -m fa2 --color=yes --durations=0 --ignore tests/fp8 --verbose tests/
-
-    - name: Run tiny Llama example
-      run: ./examples/train_tiny_llama.sh

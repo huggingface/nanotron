@@ -12,6 +12,9 @@ CREATE_CONFIG_FILE = "examples/config_train_llama.py"
 TRAIN_SCRIPT = "run_train.py"
 NUM_GPUS = 8
 
+TINY_LLLAMA_CONFIG_FILE = "examples/config_tiny_llama.yaml"
+TINY_LLLAMA_CREATE_CONFIG_FILE = "examples/config_tiny_llama.py"
+
 ## Experiment results:
 ## 100 steps: 3.28
 ## 160 steps: 2.83
@@ -42,7 +45,7 @@ def extract_loss(line):
         raise ValueError(f"Could not extract loss value from line: {line}")
 
 
-def test_tiny_llama():
+def test_train_llama():
     # create CONFIG_FILE
     cmd = f"python {CREATE_CONFIG_FILE}"
     subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
@@ -71,6 +74,30 @@ def test_tiny_llama():
             if re.search(rf"iteration: {CHECK_ITERATION_END} / ", line.decode("utf-8")):
                 loss = extract_loss(line)
                 assert loss < EXPECTED_LOSS_END
+
+    process.wait()  # Wait for the process to finish
+    assert process.returncode == 0
+
+
+# also run the tiny llama example. Only want to assert it can be ran.
+def test_tiny_llama():
+    # create CONFIG_FILE
+    cmd = f"python {TINY_LLLAMA_CREATE_CONFIG_FILE}"
+    subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+
+    # run training
+    # set DISABLE_FLASH_ATTENTION=1 to replace flash attention implementations
+    cmd = f'DISABLE_FLASH_ATTENTION=1 FI_PROVIDER="efa" CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node={NUM_GPUS} --rdzv_endpoint=localhost:29800  {TRAIN_SCRIPT} --config-file {TINY_LLLAMA_CONFIG_FILE}'
+    os.setpgrp()  # create new process group, become its leader
+    atexit.register(exit_with_children)  # kill all children processes when this process exits
+
+    process = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    while True:
+        line = process.stdout.readline()
+        if process.poll() is not None and line == b"":
+            break
+        if line:
+            print(line.decode("utf-8"), end="")
 
     process.wait()  # Wait for the process to finish
     assert process.returncode == 0
