@@ -10,9 +10,9 @@ data_stages:
       dataset_overwrite_cache: false
       dataset_processing_num_proc_per_process: 1
       hf_dataset_config_name: null
-      hf_dataset_or_datasets: HuggingFaceH4/testing_alpaca_small
+      hf_dataset_or_datasets: stas/openwebtext-10k
       hf_dataset_splits: train
-      text_column_name: completion
+      text_column_name: text
     num_loading_workers: 1
     seed: 42
   name: Stable Training Stage
@@ -22,9 +22,9 @@ data_stages:
       dataset_overwrite_cache: false
       dataset_processing_num_proc_per_process: 1
       hf_dataset_config_name: null
-      hf_dataset_or_datasets: HuggingFaceH4/testing_alpaca_small
+      hf_dataset_or_datasets: stas/openwebtext-10k
       hf_dataset_splits: train
-      text_column_name: completion
+      text_column_name: text
     num_loading_workers: 1
     seed: 42
   name: Annealing Phase
