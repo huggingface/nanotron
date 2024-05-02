@@ -43,6 +43,7 @@ jobs:
         python -m pip install --upgrade pip
         pip install packaging
         pip install wheel
+        pip install "flash-attn>=2.5.0" --no-build-isolation
         pip install -e .
         pip install -e .[dev]
         pip install -e .[test]
