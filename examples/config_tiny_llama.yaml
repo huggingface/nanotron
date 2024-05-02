@@ -73,7 +73,7 @@ optimizer:
   learning_rate_scheduler:
     learning_rate: 0.0003
     lr_decay_starting_step: null
-    lr_decay_steps: 48
+    lr_decay_steps: 8
     lr_decay_style: cosine
     lr_warmup_steps: 2
     lr_warmup_style: linear
@@ -105,5 +105,5 @@ tokens:
   limit_val_batches: 0
   micro_batch_size: 2
   sequence_length: 32
-  train_steps: 50
+  train_steps: 10
   val_check_interval: -1

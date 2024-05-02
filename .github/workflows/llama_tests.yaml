@@ -1,4 +1,4 @@
-name: Run Llama example and loss test
+name: Run Llama loss test
 
 on:
   push:
@@ -18,8 +18,8 @@ on:
 
 jobs:
   tests:
-    # NOTE: 8-a10 to run LLama
-    runs-on: [multi-gpu, nvidia-gpu, 4-a10, ci]
+    # NOTE: 8-t4 to run LLama
+    runs-on: [multi-gpu, nvidia-gpu, 8-t4, ci]
     container:
       image: runpod/pytorch:2.1.1-py3.10-cuda12.1.1-devel-ubuntu22.04
       ports:
@@ -43,7 +43,6 @@ jobs:
         python -m pip install --upgrade pip
         pip install packaging
         pip install wheel
-        pip install "flash-attn>=2.5.0"  --no-build-isolation
         pip install -e .
         pip install -e .[dev]
         pip install -e .[test]
@@ -51,9 +50,6 @@ jobs:
 
     - name: Show installed libraries and their versions
       run: pip freeze | tee installed.txt
-
-    - name: Run tiny Llama example
-      run: ./examples/train_tiny_llama.sh
 
     - name: Run Llama loss tests
       run: pytest -sv tests/test_train_llama.py

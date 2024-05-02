@@ -75,7 +75,7 @@ optimizer:
   weight_decay: 0.01
   zero_stage: 0
 parallelism:
-  dp: 2
+  dp: 4
   expert_parallel_size: 1
   pp: 1
   pp_engine: 1f1b
@@ -88,7 +88,7 @@ tokenizer:
   tokenizer_name_or_path: gpt2
   tokenizer_revision: null
 tokens:
-  batch_accumulation_per_replica: 8
+  batch_accumulation_per_replica: 4
   limit_test_batches: 0
   limit_val_batches: 0
   micro_batch_size: 128

@@ -78,7 +78,7 @@ def main():
         tp=args.tp or config.parallelism.tp,
         pp_engine=OneForwardOneBackwardPipelineEngine(),
         tp_mode=TensorParallelLinearMode.ALL_REDUCE,
-        tp_linear_async_communication=True,
+        tp_linear_async_communication=False,
     )
 
     # Initialise all process groups

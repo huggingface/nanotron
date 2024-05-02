@@ -1,9 +1,5 @@
-# """Script to test correctness of training script by comparing loss value after 100th iteration with expected loss value
-
-# ```bash
+# Script to test correctness of training script by comparing loss value after 100th iteration with expected loss value
 # pytest -sv tests/test_train_llama.py or python tests/test_train_llama.py
-# ```
-# """
 
 import atexit
 import os
@@ -14,15 +10,21 @@ import subprocess
 CONFIG_FILE = "examples/config_train_llama.yaml"
 CREATE_CONFIG_FILE = "examples/config_train_llama.py"
 TRAIN_SCRIPT = "run_train.py"
-NUM_GPUS = 4
+NUM_GPUS = 8
 
-## 100+ steps: lm_loss < 3.5
-## 200  steps: lm_loss < 3
+## Experiment results:
+## 100 steps: 3.28
+## 160 steps: 2.83
+## 200 steps: 2.75
 
-EXPECTED_LOSS = 3.5
+## Expect
+## 100+ steps: lm_loss < 3.4
+## 200  steps: lm_loss < 2.8
+
+EXPECTED_LOSS = 3.4
 CHECK_ITERATION = 100
 
-EXPECTED_LOSS_END = 3
+EXPECTED_LOSS_END = 2.8
 CHECK_ITERATION_END = 200
 
 
@@ -33,18 +35,21 @@ def exit_with_children():
 
 def extract_loss(line):
     """Extract loss value from the line"""
-    # extract loss value of the type | lm_loss: 5.33
+    # extract loss value of the type | lm_loss: 5.33 or lm_loss: 3
     try:
-        return float(re.search(r"lm_loss: (\d+.\d)", line.decode("utf-8")).group(1))
+        return float(re.search(r"lm_loss: (\d+(?:\.\d+)?)", line.decode("utf-8")).group(1))
     except AttributeError:
         raise ValueError(f"Could not extract loss value from line: {line}")
 
 
 def test_tiny_llama():
+    # create CONFIG_FILE
     cmd = f"python {CREATE_CONFIG_FILE}"
     subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
 
-    cmd = f'FI_PROVIDER="efa" CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node={NUM_GPUS} --rdzv_endpoint=localhost:29800  {TRAIN_SCRIPT} --config-file {CONFIG_FILE}'
+    # run training
+    # set DISABLE_FLASH_ATTENTION=1 to replace flash attention implementations
+    cmd = f'DISABLE_FLASH_ATTENTION=1 FI_PROVIDER="efa" CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node={NUM_GPUS} --rdzv_endpoint=localhost:29800  {TRAIN_SCRIPT} --config-file {CONFIG_FILE}'
     os.setpgrp()  # create new process group, become its leader
     atexit.register(exit_with_children)  # kill all children processes when this process exits
 
@@ -62,7 +67,7 @@ def test_tiny_llama():
                 if int(re.search(r"iteration: (\d+) / ", line.decode("utf-8")).group(1)) >= CHECK_ITERATION:
                     loss = extract_loss(line)
                     assert loss < EXPECTED_LOSS
-
+            # for iteration = CHECK_ITERATION_END, loss should be below EXPECTED_LOSS_END
             if re.search(rf"iteration: {CHECK_ITERATION_END} / ", line.decode("utf-8")):
                 loss = extract_loss(line)
                 assert loss < EXPECTED_LOSS_END
@@ -75,7 +80,9 @@ if __name__ == "__main__":
     cmd = f"python {CREATE_CONFIG_FILE}"
     subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
 
-    cmd = f'FI_PROVIDER="efa" CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node={NUM_GPUS} --rdzv_endpoint=localhost:29800  {TRAIN_SCRIPT} --config-file {CONFIG_FILE}'
+    # run training
+    # set DISABLE_FLASH_ATTENTION=1 to replace flash attention implementations
+    cmd = f'DISABLE_FLASH_ATTENTION=1 FI_PROVIDER="efa" CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node={NUM_GPUS} --rdzv_endpoint=localhost:29800  {TRAIN_SCRIPT} --config-file {CONFIG_FILE}'
     os.setpgrp()  # create new process group, become its leader
     atexit.register(exit_with_children)  # kill all children processes when this process exits
 

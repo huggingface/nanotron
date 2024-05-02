@@ -73,7 +73,7 @@ optimizer = OptimizerArgs(
 )
 
 parallelism = ParallelismArgs(
-    dp=2,
+    dp=4,
     pp=1,
     tp=2,
     pp_engine="1f1b",
@@ -81,8 +81,9 @@ parallelism = ParallelismArgs(
     tp_linear_async_communication=True,
 )
 
-# a global batch-size of 1M tokens.  micro_batch_size * dp * sequence_length * batch_accumulation_per_replica
-tokens = TokensArgs(sequence_length=512, train_steps=200, micro_batch_size=128, batch_accumulation_per_replica=8)
+# Tokens per batch = micro_batch_size * dp * sequence_length * batch_accumulation_per_replica
+# 128 * 4 * 512 * 4 = 1,048,576. A global batch-size of 1M tokens.
+tokens = TokensArgs(sequence_length=512, train_steps=200, micro_batch_size=128, batch_accumulation_per_replica=4)
 
 checkpoints_path = os.path.dirname(os.path.dirname(__file__)) + "/checkpoints"
 os.makedirs(checkpoints_path, exist_ok=True)
