@@ -590,7 +590,7 @@ class MLP(nn.Module):
             expert_parallel_size=self.expert_pg_size,
         )
 
-        self.w1 = ExpertParallel(
+        self.w3 = ExpertParallel(
             TensorParallelColumnLinear(
                 config.hidden_size,
                 config.intermediate_size * self.experts_per_rank,
@@ -606,7 +606,7 @@ class MLP(nn.Module):
 
     def forward(self, hidden_states, topo):  # [seq_length, batch_size, hidden_dim]
         merged_states = self.w1(hidden_states)
-        hidden_states = self.w2(self.act(merged_states))
+        hidden_states = self.w2(self.act(merged_states) * self.w3(hidden_states))
         return hidden_states
 
 
