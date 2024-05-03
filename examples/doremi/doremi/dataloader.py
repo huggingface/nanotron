@@ -336,7 +336,7 @@ def get_dataloader(trainer: DistributedTrainer, datasets) -> DataLoader:
         num_microbatches=trainer.n_micro_batches_per_batch,
         num_replicas=parallel_context.dp_pg.size(),
         rank=dist.get_rank(parallel_context.dp_pg),
-        seed=trainer.config.data.seed,
+        seed=trainer.config.data_stages[0].data.seed,
         drop_last=True,
         doremi_context=doremi_context,
         parallel_context=parallel_context,
@@ -348,7 +348,7 @@ def get_dataloader(trainer: DistributedTrainer, datasets) -> DataLoader:
         comebined_dataset,
         batch_sampler=sampler,
         collate_fn=data_collator,
-        num_workers=trainer.config.data.num_loading_workers,
+        num_workers=trainer.config.data_stages[0].data.num_loading_workers,
         pin_memory=True,
         worker_init_fn=get_dataloader_worker_init(dp_rank=dist.get_rank(parallel_context.dp_pg)),
     )

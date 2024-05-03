@@ -343,12 +343,12 @@ def _test_tied_weights_sync_with_grad_accum_in_fp32(
                 (
                     target,
                     (
-                        parallel_context.world_rank_matrix[
-                            dist.get_rank(parallel_context.expert_pg),
-                            get_pp_rank_of(target, module=mdl),
-                            dist.get_rank(parallel_context.dp_pg),
-                            dist.get_rank(parallel_context.tp_pg),
-                        ],
+                        parallel_context.get_global_rank(
+                            ep_rank=dist.get_rank(parallel_context.expert_pg),
+                            pp_rank=get_pp_rank_of(target, module=mdl),
+                            dp_rank=dist.get_rank(parallel_context.dp_pg),
+                            tp_rank=dist.get_rank(parallel_context.tp_pg),
+                        ),
                     ),
                 )
                 for target in [

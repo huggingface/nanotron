@@ -15,7 +15,8 @@
         <a href="#Core-Features">Core Features</a> •
         <a href="#Installation">Installation</a> •
         <a href="#Quick-examples">Usage</a> •
-        <a href="#Development-guidelines">Contributions</a>
+        <a href="#Development-guidelines">Contributions</a> •
+        <a href="docs/debugging.md">Debugging</a>
     <p>
 </h4>
 
@@ -43,6 +44,7 @@ We support the following:
  - ZeRO-1 optimizer
  - FP32 gradient accumulation
  - Parameter tying/sharding
+ - Spectral µTransfer parametrization for scaling up neural networks
 
 # Installation
 
@@ -71,7 +73,7 @@ In the `/examples` directory, you can find a few example configuration file, and
 
 You can run a sample training using:
 ```bash
-torchrun --nproc_per_node=8 run_train.py --config-file examples/debug_run_train.yaml
+torchrun --nproc_per_node=8 run_train.py --config-file examples/train_tiny_llama.sh
 ```
 
 And run a sample generation using:
@@ -91,6 +93,10 @@ pre-commit install
 pre-commit run --config .pre-commit-config.yaml --all-files
 ```
 
+*As a part of making sure we aren't slowed down as the codebase grows, we will not merge a PR if the features it introduces do not have test coverage.*
+
+We have extensions built on top of Nanotron, with their tests located in the `/examples` folder. Since VSCode defaults to discovering tests only in the `/tests` folder, please run tests from both `/examples` and `/tests` to ensure your PR does not break these extensions. Please run `make tests` to execute all the nanotron tests and the tests in the `/examples` directory that you need to pass.
+
 Features we would like to add:
 - [ ] Support `torch.compile`
 - [ ] More optimized kernels
@@ -100,6 +106,15 @@ Features we would like to add:
 - [ ] 3D Parallel MoEs
 - [ ] Supporting more architectures (Mamba..)
 - [ ] ...
+
+
+# Useful scripts
+- `scripts/log_lighteval_to_wandb.py`: logs the evaluation results of LightEval to wandb, including summary statistics.
+
+
+# Environment Variables
+- `NANOTRON_BENCHMARK=1`: if you want to log the throughput during training
+
 
 # Credits
 

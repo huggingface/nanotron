@@ -14,7 +14,7 @@
 # limitations under the License.
 """ PyTorch LLaMa MoE model."""
 import math
-from typing import Dict, Optional, Union
+from typing import Dict, Optional, Union, List
 
 import torch
 from config_llamoe import LlaMoEConfig
@@ -325,7 +325,6 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             # Double check that we use store only at inference time
             assert key_states.requires_grad is False
             assert value_states.requires_grad is False
-            print("Using store")
             if "position_offsets" in store:
                 old_position_offsets = store["position_offsets"]
                 position_ids = old_position_offsets[:, None] + sequence_mask
@@ -915,7 +914,7 @@ class LlaMoEForTraining(NanotronModel):
             else name
             for name, param in model.named_parameters()
         }, f"Somehow the initialized set of parameters don't match:\n - Expected: { {name for name, _ in model.named_parameters()} }\n - Got: {initialized_parameters}"
-
+    
     def get_block_compute_costs(self):
         """Computes the compute cost of each block in the model so that we can do a better job of load balancing."""
         return self.model.get_block_compute_costs()

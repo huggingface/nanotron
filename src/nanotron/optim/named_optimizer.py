@@ -2,7 +2,10 @@ from typing import Any, Callable, Dict, Iterable, Tuple, Union
 
 import torch
 
+from nanotron import logging
 from nanotron.optim.inherit_from_other_optimizer import InheritFromOtherOptimizer
+
+logger = logging.get_logger(__name__)
 
 
 class NamedOptimizer(InheritFromOtherOptimizer):
