@@ -22,7 +22,6 @@ from nanotron.config import (
 from nanotron.logging import human_format
 
 model_config = LlamaConfig(
-    # Config for a tiny model model with 1.62M parameters
     bos_token_id=1,
     eos_token_id=2,
     hidden_act="silu",
@@ -82,8 +81,9 @@ parallelism = ParallelismArgs(
 )
 
 # Tokens per batch = micro_batch_size * dp * sequence_length * batch_accumulation_per_replica
-# 128 * 4 * 512 * 4 = 1,048,576. A global batch-size of 1M tokens.
-tokens = TokensArgs(sequence_length=512, train_steps=200, micro_batch_size=128, batch_accumulation_per_replica=4)
+# 16 * 4 * 512 * 32 = 1,048,576. ->  A global batch-size of 1M tokens.
+# train 200 steps to observe the loss
+tokens = TokensArgs(sequence_length=512, train_steps=200, micro_batch_size=16, batch_accumulation_per_replica=32)
 
 checkpoints_path = os.path.dirname(os.path.dirname(__file__)) + "/checkpoints"
 os.makedirs(checkpoints_path, exist_ok=True)

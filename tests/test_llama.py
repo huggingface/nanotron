@@ -46,9 +46,19 @@ def extract_loss(line):
 
 
 def test_train_llama():
-    # create CONFIG_FILE
+    # create config file
     cmd = f"python {CREATE_CONFIG_FILE}"
-    subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    process = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    # Read and print output in real-time
+    while True:
+        line = process.stdout.readline()
+        if process.poll() is not None and line == b"":
+            break
+        if line:
+            print(line.decode("utf-8"), end="")
+
+    process.wait()  # Wait for the process to finish
+    assert process.returncode == 0
 
     # run training
     # set DISABLE_FLASH_ATTENTION=1 to replace flash attention implementations
@@ -81,9 +91,18 @@ def test_train_llama():
 
 # also run the tiny llama example. Only want to assert it can be ran.
 def test_tiny_llama():
-    # create CONFIG_FILE
+    # create config file
     cmd = f"python {TINY_LLLAMA_CREATE_CONFIG_FILE}"
-    subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    process = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    # Read and print output in real-time
+    while True:
+        line = process.stdout.readline()
+        if process.poll() is not None and line == b"":
+            break
+        if line:
+            print(line.decode("utf-8"), end="")
+    process.wait()  # Wait for the process to finish
+    assert process.returncode == 0
 
     # run training
     # set DISABLE_FLASH_ATTENTION=1 to replace flash attention implementations
@@ -104,8 +123,24 @@ def test_tiny_llama():
 
 
 if __name__ == "__main__":
+    # create config file
     cmd = f"python {CREATE_CONFIG_FILE}"
-    subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    process = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    try:
+        # Read and print output in real-time
+        while True:
+            line = process.stdout.readline()
+            if process.poll() is not None and line == b"":
+                break
+            if line:
+                print(line.decode("utf-8"), end="")
+        process.wait()  # Wait for the process to finish
+        assert process.returncode == 0
+    except AssertionError:
+        print("Command failed with exit code:", process.returncode)
+        exit()
+    else:
+        print("Config created successfully.")
 
     # run training
     # set DISABLE_FLASH_ATTENTION=1 to replace flash attention implementations

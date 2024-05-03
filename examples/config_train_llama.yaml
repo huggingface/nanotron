@@ -88,10 +88,10 @@ tokenizer:
   tokenizer_name_or_path: gpt2
   tokenizer_revision: null
 tokens:
-  batch_accumulation_per_replica: 4
+  batch_accumulation_per_replica: 32
   limit_test_batches: 0
   limit_val_batches: 0
-  micro_batch_size: 128
+  micro_batch_size: 16
   sequence_length: 512
   train_steps: 200
   val_check_interval: -1
