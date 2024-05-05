@@ -102,6 +102,11 @@ def get_dataloader_from_data_stage(
             tokenizer.pad_token = tokenizer.eos_token
             tokenizer.padding_side = "left"
 
+            # Check that tokenizer's vocab size is smaller than the model's vocab size
+            assert (
+                tokenizer.vocab_size <= trainer.model_config.vocab_size
+            ), f"Tokenizer's vocab size ({tokenizer.vocab_size}) is larger than the model's vocab size ({trainer.model_config.vocab_size})"
+
             # We apply the Causal Language Modeling preprocessing
             train_dataset = clm_process(
                 raw_dataset=raw_dataset,

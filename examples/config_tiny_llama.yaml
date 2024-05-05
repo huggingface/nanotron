@@ -1,6 +1,6 @@
 checkpoints:
   checkpoint_interval: 10
-  checkpoints_path: /fsx/nouamane/projects/nanotron/checkpoints
+  checkpoints_path: checkpoints
   checkpoints_path_is_shared_file_system: false
   resume_checkpoint_path: null
   save_initial_state: false
@@ -97,7 +97,7 @@ parallelism:
 profiler: null
 tokenizer:
   tokenizer_max_length: null
-  tokenizer_name_or_path: gpt2
+  tokenizer_name_or_path: robot-test/dummy-tokenizer-wordlevel
   tokenizer_revision: null
 tokens:
   batch_accumulation_per_replica: 1
