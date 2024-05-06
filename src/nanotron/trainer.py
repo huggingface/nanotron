@@ -270,6 +270,8 @@ class DistributedTrainer:
         # NOTE: the dataloader currently in use for the current training stage
         self.current_dataloader: Optional[DataLoader] = None
 
+        self.batch_gen = None
+
         self.post_init()
 
     def pre_init(self):
@@ -442,10 +444,16 @@ class DistributedTrainer:
         if self.iteration_step < 5:
             log_memory(logger=logger)
 
+        OVERFIT_ONE_BATCH = True
+        if OVERFIT_ONE_BATCH:
+            self.batch_gen = self.batch_gen or [next(dataloader)] * self.n_micro_batches_per_batch
+        else:
+            self.batch_gen = (next(dataloader) for _ in range(self.n_micro_batches_per_batch))
+
         outputs = self.pipeline_engine.train_batch_iter(
             model=self.model,
             pg=self.parallel_context.pp_pg,
-            batch=(next(dataloader) for _ in range(self.n_micro_batches_per_batch)),
+            batch=self.batch_gen,
             nb_microbatches=self.n_micro_batches_per_batch,
             grad_accumulator=self.grad_accumulator,
         )
@@ -495,6 +503,14 @@ class DistributedTrainer:
                 grad_accumulator=self.grad_accumulator,
                 max_norm=self.config.optimizer.clip_grad,
             )
+
+            # test_grad_norm_unclipped = clip_grad_norm(
+            #     mp_pg=self.parallel_context.mp_pg,
+            #     named_parameters=named_parameters,
+            #     grad_accumulator=self.grad_accumulator,
+            #     max_norm=self.config.optimizer.clip_grad,
+            # )
+            # torch.testing.assert_close(test_grad_norm_unclipped, torch.tensor(1.0, device=test_grad_norm_unclipped.device), atol=0.01, rtol=0.01)
 
         before_optim_step_sanity_checks(
             self.config, self.parallel_context, self.unwrapped_model, self.grad_accumulator

@@ -47,9 +47,9 @@ optimizer:
     lr_decay_starting_step: null
     lr_decay_steps: null
     lr_decay_style: cosine
-    lr_warmup_steps: 100 # 10% warm up of total training steps
+    lr_warmup_steps: 100000 # 10% warm up of total training steps
     lr_warmup_style: linear
-    min_decay_lr: 1.0e-04
+    min_decay_lr: 5.0e-04
   torch_adam_is_fused: true
   weight_decay: 0.1
   zero_stage: 1
@@ -105,7 +105,7 @@ tokens:
   batch_accumulation_per_replica: 1
   limit_test_batches: 0
   limit_val_batches: 0
-  micro_batch_size: 2
+  micro_batch_size: 4
   sequence_length: 4096
   train_steps: 10000
   val_check_interval: -1
