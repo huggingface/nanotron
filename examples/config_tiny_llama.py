@@ -102,7 +102,7 @@ data_stages = [
     ),
 ]
 
-checkpoints_path = os.path.dirname(os.path.dirname(__file__)) + "/checkpoints"
+checkpoints_path = "./checkpoints"
 os.makedirs(checkpoints_path, exist_ok=True)
 
 config = Config(
@@ -110,7 +110,7 @@ config = Config(
     checkpoints=CheckpointsArgs(checkpoints_path=checkpoints_path, checkpoint_interval=10),
     parallelism=parallelism,
     model=ModelArgs(init_method=RandomInit(std=0.025), model_config=model_config),
-    tokenizer=TokenizerArgs("gpt2"),
+    tokenizer=TokenizerArgs("robot-test/dummy-tokenizer-wordlevel"),
     optimizer=optimizer,
     logging=LoggingArgs(),
     tokens=tokens,
