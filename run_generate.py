@@ -4,7 +4,7 @@ Nanotron Inference Script
 Usage:
 ```
 export CUDA_DEVICE_MAX_CONNECTIONS=1 # important for some distributed operations
-torchrun --nproc_per_node=4 run_generate.py --ckpt-path checkpoints/test/4
+torchrun --nproc_per_node=4 run_generate.py --ckpt-path pretrained/llama3-8B-interleave --tp 4 --pp 1 --dp 1
 ```
 """
 
@@ -163,8 +163,9 @@ def main():
         tokenizer.padding_side = "left"
         tokenizer.truncation_side = "left"  # TODO @nouamane: do we want this?
         dummy_inputs = [
-            "The capital of France is",
-            "The capital of France is",
+            " " * 1000 + "The capital of France is",
+            " " * 1000 + "The capital of France is",
+            # "The capital of France is",
             # "Passage: Daniel went back to the garden. Mary travelled to the kitchen. Sandra journeyed to the kitchen. Sandra went to the hallway. John went to the bedroom. Mary went back to the garden. Where is Mary?\nAnswer:",
             # "This film was probably inspired by Godzilla",
         ]
