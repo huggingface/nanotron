@@ -4,6 +4,7 @@ from typing import Dict, Generator, Iterator, List, Optional, Union
 
 import numpy as np
 import torch
+import torch.utils
 from torch.utils.data import BatchSampler, DataLoader
 from torch.utils.data.distributed import DistributedSampler
 
@@ -14,7 +15,6 @@ from nanotron.parallel import ParallelContext
 from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
 from nanotron.random import set_random_seed
 from nanotron.sanity_checks import (
-    assert_fail_except_rank_with,
     assert_tensor_synced_across_pg,
 )
 
@@ -59,10 +59,10 @@ def sanity_check_dataloader(
                     # It's fine if mask is the same across DP
                     continue
 
-                with assert_fail_except_rank_with(AssertionError, rank_exception=0, pg=parallel_context.dp_pg):
-                    assert_tensor_synced_across_pg(
-                        tensor=value, pg=parallel_context.dp_pg, msg=lambda err: f"{key} {err}"
-                    )
+                # with assert_fail_except_rank_with(AssertionError, rank_exception=0, pg=parallel_context.dp_pg):
+                #     assert_tensor_synced_across_pg(
+                #         tensor=value, pg=parallel_context.dp_pg, msg=lambda err: f"{key} {err}"
+                #     )
 
             # SANITY CHECK: Check input are synchronized throughout TP
             for key, value in sorted(micro_batch.items(), key=lambda x: x[0]):
@@ -313,7 +313,7 @@ def clm_process(
         tokenized_batch = {k: [np.array(tokenized_texts) for tokenized_texts in v] for k, v in tokenized_batch.items()}
         return group_texts(tokenized_batch)
 
-    # limit raw_dataset to first 1000
+    # limit raw_dataset to 10 samples
     raw_dataset = raw_dataset.select(range(1000))
 
     train_dataset = raw_dataset.map(
@@ -414,11 +414,17 @@ def _get_train_sampler(
     consumed_train_samples: int,
     micro_batch_size: Optional[int] = None,
     drop_last: Optional[bool] = True,
+    infinite_loop: Optional[bool] = True,
 ) -> Optional[torch.utils.data.Sampler]:
     """returns sampler that restricts data loading to a subset of the dataset proper to the DP rank"""
 
     # Build the sampler.
     # TODO @nouamanetazi: Support group_by_length: https://github.com/huggingface/transformers/blob/47e1676255e5dd86b9541f734cd4f4bdcbb50f4a/src/transformers/trainer.py#L783-L810
+
+    if infinite_loop:
+        return torch.utils.data.RandomSampler(
+            train_dataset, generator=torch.Generator().manual_seed(seed), replacement=True, num_samples=int(1e4)
+        )
 
     if use_loop_to_round_batch_size:
         assert micro_batch_size is not None

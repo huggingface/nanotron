@@ -857,9 +857,8 @@ class Loss(nn.Module):
     ) -> Dict[str, torch.Tensor]:
         # Megatron by defaults cast everything in fp32. `--f16-lm-cross-entropy` is an option you can use to keep current precision.
         # https://github.com/NVIDIA/Megatron-LM/blob/f267e6186eae1d6e2055b412b00e2e545a8e896a/megatron/model/gpt_model.py#L38
-        import lovely_tensors as lt
 
-        lt.monkey_patch()  # noqa
+        # lt.monkey_patch()  # noqa
         loss = sharded_cross_entropy(
             sharded_logits, label_ids.transpose(0, 1).contiguous(), group=self.tp_pg, dtype=torch.float
         ).transpose(0, 1)
@@ -902,11 +901,10 @@ class LlamaForTraining(NanotronModel):
         label_ids: Union[torch.Tensor, TensorPointer],
         label_mask: Union[torch.Tensor, TensorPointer],
     ) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
-        from transformers import AutoTokenizer
 
-        tokenizer = AutoTokenizer.from_pretrained("meta-llama/Meta-Llama-3-8B")
-        tokenizer.decode(input_ids[0].cpu().numpy(), skip_special_tokens=True)
-        tokenizer.decode(label_ids[0].cpu().numpy(), skip_special_tokens=True)
+        # tokenizer = AutoTokenizer.from_pretrained("meta-llama/Meta-Llama-3-8B")
+        # tokenizer.decode(input_ids[0].cpu().numpy(), skip_special_tokens=True)
+        # tokenizer.decode(label_ids[0].cpu().numpy(), skip_special_tokens=True)
 
         sharded_logits = self.model(
             input_ids=input_ids,
