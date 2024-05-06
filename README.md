@@ -11,12 +11,10 @@
 
 <h4 align="center">
     <p>
-        <a href="#Philosophy">Philosophy</a> •
-        <a href="#Core-Features">Core Features</a> •
-        <a href="#Installation">Installation</a> •
-        <a href="#Quick-examples">Usage</a> •
-        <a href="#Development-guidelines">Contributions</a> •
-        <a href="docs/debugging.md">Debugging</a>
+        <a href="#installation">Installation</a> •
+        <a href="#quick-start">Quick Start</a> •
+        <a href="#features">Features</a> •
+        <a href="CONTRIBUTING.md">Contributing</a>
     <p>
 </h4>
 
@@ -61,9 +59,29 @@ CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node=8 run_train.py --config-
 
 ### Run generation from your checkpoint
 ```bash
-torchrun --nproc_per_node=1 run_generate.py --ckpt-path checkpoints/10/ --pp 1 --tp 1
+torchrun --nproc_per_node=1 run_generate.py --ckpt-path checkpoints/10/ --tp 1 --pp 1
+# We could set a larger TP for faster generation, and a larger PP in case of very large models.
 ```
-> [!TIP]
-> We could set a larger TP for faster generation, and a larger PP in case of very large models.
 
-## Config file description
+## Features
+We currently support the following features:
+- [x] 3D parallelism (DP+TP+PP)
+- [x] Expert parallelism for MoEs
+- [x] AFAB and 1F1B schedules for PP
+- [x] Explicit APIs for TP and PP which enables easy debugging
+- [x] ZeRO-1 optimizer
+- [x] FP32 gradient accumulation
+- [x] Parameter tying/sharding
+- [x] Custom module checkpointing for large models
+- [x] Spectral µTransfer parametrization for scaling up neural networks
+
+And we have on our roadmap:
+- [ ] FP8 training
+- [ ] ZeRO-3 optimizer (a.k.a FSDP)
+- [ ] `torch.compile` support
+- [ ] Ring attention
+- [ ] Mamba example
+- [ ] Interleaved 1f1b schedule
+
+## Credits
+We would like to thank everyone working on LLMs, especially those sharing their work openly from which we took great inspiration: Nvidia for `Megatron-LM/apex`, Microsoft for `DeepSpeed`, HazyResearch for `flash-attn`..
