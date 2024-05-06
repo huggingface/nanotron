@@ -1,10 +1,9 @@
 # Use a custom dataloader with Nanotron
 
-## Usage
-```
-export CUDA_DEVICE_MAX_CONNECTIONS=1 # important for some distributed operations
-torchrun --nproc_per_node=2 examples/custom-dataloader/run_train.py --config-file examples/custom-dataloader/config_custom_dl.yaml
-```
+This example shows how to use a custom dataloader with Nanotron. We will use a simple dataloader that loads a random tokenized dataset and feeds it to a Nanotron model.
+https://github.com/huggingface/nanotron/blob/2e21db0db46a40bedbd03714616dd0ae4ea75914/examples/custom-dataloader/run_train.py#L72-L84
+
+`DataCollatorForCLM` is a custom data collator that takes a list of input_ids and returns a dictionary with the input_ids and the labels on the ranks which need it. For example `input_ids` are only needed in the first PP rank, while `labels` are needed in the last PP rank.
 
 ## Troubleshooting
 
