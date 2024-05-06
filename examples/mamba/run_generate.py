@@ -13,6 +13,8 @@ import os
 from pathlib import Path
 
 import torch
+from config import MambaConfig, MambaModelConfig
+from mamba import MambaForTraining
 from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.config import (
@@ -43,7 +45,7 @@ from nanotron.random import (
     set_random_seed,
 )
 from nanotron.serialize import load_weights
-from nanotron.trainer import CONFIG_TO_MODEL_CLASS, mark_tied_parameters
+from nanotron.trainer import mark_tied_parameters
 
 try:
     from transformers import AutoTokenizer
@@ -68,7 +70,9 @@ def main():
 
     assert args.ckpt_path.exists(), f"Checkpoint path {args.ckpt_path} does not exist"
 
-    config = get_config_from_file((args.ckpt_path / "config.yaml").as_posix())
+    config = get_config_from_file(
+        (args.ckpt_path / "config.yaml").as_posix(), config_class=MambaConfig, model_config_class=MambaModelConfig
+    )
     model_config = config.model.model_config
     tokenizer_path = config.tokenizer.tokenizer_name_or_path
 
@@ -80,6 +84,8 @@ def main():
         tp_mode=TensorParallelLinearMode.ALL_REDUCE,
         tp_linear_async_communication=False,
     )
+
+    print(parallel_config)
 
     # Initialise all process groups
     parallel_context = ParallelContext(
@@ -100,16 +106,8 @@ def main():
     log_rank(f"model_config: {model_config}", logger=logger, level=logging.INFO, rank=0)
     log_rank(f"tokenizer_path: {tokenizer_path}", logger=logger, level=logging.INFO, rank=0)
 
-    dtype = torch.bfloat16
-
     # Set random states
     set_random_seed(42)
-
-    model_config_cls = model_config.__class__.__name__
-    if model_config_cls not in CONFIG_TO_MODEL_CLASS:
-        raise ValueError(
-            f"Unsupported model config {model_config_cls}. Only {CONFIG_TO_MODEL_CLASS.keys()} are supported"
-        )
 
     # Get synchronized random states
     if parallel_config.tp_mode is TensorParallelLinearMode.ALL_REDUCE:
@@ -121,16 +119,15 @@ def main():
         random_states = RandomStates({})
 
     model = build_model(
-        model_builder=lambda: CONFIG_TO_MODEL_CLASS[model_config_cls](
+        model_builder=lambda: MambaForTraining(
             config=model_config,
             parallel_context=parallel_context,
             parallel_config=parallel_config,
             random_states=random_states,
         ),
-        dtype=dtype,
+        dtype=getattr(torch, model_config.dtype),
         parallel_context=parallel_context,
     )
-
     # Mark some parameters as tied
     # TODO @nouamane: this is only needed for training, can we just mark params as NanotronParameter instead?
     mark_tied_parameters(model=model, parallel_context=parallel_context, parallel_config=parallel_config)
@@ -147,8 +144,8 @@ def main():
         rank=0,
     )
     load_weights(model=model, parallel_context=parallel_context, root_folder=checkpoint_path)
-
     model.eval()
+
     if AutoTokenizer is not None:
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
         # tokenizer.pad_token_id = tokenizer.eos_token_id
@@ -164,13 +161,13 @@ def main():
         tokenizer.padding_side = "left"
         tokenizer.truncation_side = "left"  # TODO @nouamane: do we want this?
         dummy_inputs = [
-            "The future of AI is",
-            "Passage: Daniel went back to the garden. Mary travelled to the kitchen. Sandra journeyed to the kitchen. Sandra went to the hallway. John went to the bedroom. Mary went back to the garden. Where is Mary?\nAnswer:",
-            "def fib(n)",
-            'Here is an extract from a webpage: "Have you ever experienced heel pain after a heavy physical activity, or even right after a long period of standing? If you regard this as something usual and normal, then think again. Miscalled as heel pain, plantar fasciitis causes these frequent mild pains experienced in the soles of the feet. It is the inflammation and enlargement the plantar fascia tissue that is located in the heels of the feet, stretching to the base of the toes. This tissue is responsible for absorbing shock in the feet and for supporting the arches. It also plays a vital role in foot movements during walking and standing. Many factors such as excessive walking, standing, and running trigger heel pain and plantar fasciitis. A sudden increase in intensity of activities, increase in weight, and abrupt change of footwear also cause the swelling of the ligament. Non-supportive footwear lacking arch cushions and improper and worn out running or training can also lead to the problem. It is also most evident among those". Write an extensive and detailed course unit suitable for a textbook targeted at college students, related to the given extract, within the context of "Medicine". Do not just list concepts, but develop each one in detail before moving to the next, as we prioritize depth of understanding and comprehensive exploration of the subject matter over breadth. Focus on: - Rigor: Ensure in-depth coverage of the concepts/sections. - Engagement: Write with an academic, professional and engaging tone that captivates interest. - Application: Incorporate specific, practical examples, such as proofs in calculus or critical dates and figures in history. Do not include a title or an introduction, simply write the content without headlines and introductory phrases. Do not use images.',
-            "Advancements in technology will lead to",
-            "Tomorrow's world is shaped by",
+            # "Passage: Daniel went back to the garden. Mary travelled to the kitchen. Sandra journeyed to the kitchen. Sandra went to the hallway. John went to the bedroom. Mary went back to the garden. Where is Mary?\nAnswer:",
+            # "This film was probably inspired by Godzilla",
+            "What is your "
         ]
+
+        log_rank("Setup Inference mode for mamba model", logger=logger, level=logging.INFO, rank=0)
+        # assert config.inference_params.max_batch_size == 1, "Only batch size 1 is supported for inference for now"
 
         outputs = decode_text(
             input_iter=(GenerationInput(text=text) for text in dummy_inputs),
@@ -183,6 +180,7 @@ def main():
             generation_config=GenerationArgs(sampler="greedy", use_cache=True),
             tokenizer_config=TokenizerConfig(max_input_length=None),
             is_bench=os.environ.get("USE_BENCH", "0") == "1",
+            logits_are_batch_first=False,
         )
         for output in outputs:
             input_ids = output.input_ids
@@ -212,6 +210,10 @@ def main():
                 level=logging.INFO,
                 rank=0,
             )
+
+        # Model ref
+        tokens = tokenizer(dummy_inputs, return_tensors="pt")
+        input_ids = tokens.input_ids.to(device="cuda")
     else:
         outputs = decode_tokenized(
             input_ids=torch.zeros(1, 1).to(dtype=torch.int64, device="cuda"),

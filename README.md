@@ -15,7 +15,8 @@
         <a href="#Core-Features">Core Features</a> •
         <a href="#Installation">Installation</a> •
         <a href="#Quick-examples">Usage</a> •
-        <a href="#Development-guidelines">Contributions</a>
+        <a href="#Development-guidelines">Contributions</a> •
+        <a href="docs/debugging.md">Debugging</a>
     <p>
 </h4>
 
@@ -43,6 +44,7 @@ We support the following:
  - ZeRO-1 optimizer
  - FP32 gradient accumulation
  - Parameter tying/sharding
+ - Spectral µTransfer parametrization for scaling up neural networks
 
 # Installation
 
@@ -71,7 +73,7 @@ In the `/examples` directory, you can find a few example configuration file, and
 
 You can run a sample training using:
 ```bash
-torchrun --nproc_per_node=8 run_train.py --config-file examples/debug_run_train.yaml
+torchrun --nproc_per_node=8 run_train.py --config-file examples/train_tiny_llama.sh
 ```
 
 And run a sample generation using:
@@ -108,6 +110,10 @@ Features we would like to add:
 
 # Useful scripts
 - `scripts/log_lighteval_to_wandb.py`: logs the evaluation results of LightEval to wandb, including summary statistics.
+
+
+# Environment Variables
+- `NANOTRON_BENCHMARK=1`: if you want to log the throughput during training
 
 
 # Credits
