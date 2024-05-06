@@ -16,16 +16,11 @@ import torch
 from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.config import (
+    Config,
     GenerationArgs,
     LoggingArgs,
     ParallelismArgs,
     get_config_from_file,
-)
-from nanotron.generation.decode import (
-    GenerationInput,
-    TokenizerConfig,
-    decode_text,
-    decode_tokenized,
 )
 from nanotron.logging import log_rank, set_ranks_logging_level
 from nanotron.models import build_model
@@ -43,7 +38,6 @@ from nanotron.random import (
     set_random_seed,
 )
 from nanotron.serialize import load_weights
-from nanotron.trainer import CONFIG_TO_MODEL_CLASS, mark_tied_parameters
 
 try:
     from transformers import AutoTokenizer
@@ -51,6 +45,19 @@ except ImportError:
     AutoTokenizer = None
 
 logger = logging.get_logger(__name__)
+
+
+def setup_environment_and_imports():
+    # Replace TritonRMSNorm with RMSNorm for a deterministic output.
+    os.environ["USE_DETERMINISTIC_OPS"] = "True"
+    global GenerationInput, TokenizerConfig, decode_text, decode_tokenized, CONFIG_TO_MODEL_CLASS, mark_tied_parameters
+    from nanotron.generation.decode import (
+        GenerationInput,
+        TokenizerConfig,
+        decode_text,
+        decode_tokenized,
+    )
+    from nanotron.trainer import CONFIG_TO_MODEL_CLASS, mark_tied_parameters
 
 
 def get_args():
@@ -64,18 +71,20 @@ def get_args():
 
 
 def main():
+    setup_environment_and_imports()
+
     args = get_args()
 
     assert args.ckpt_path.exists(), f"Checkpoint path {args.ckpt_path} does not exist"
 
-    config = get_config_from_file((args.ckpt_path / "config.yaml").as_posix())
+    config = get_config_from_file((args.ckpt_path / "config.yaml").as_posix(), config_class=Config)
     model_config = config.model.model_config
     tokenizer_path = config.tokenizer.tokenizer_name_or_path
 
     parallel_config = ParallelismArgs(
-        dp=args.dp or config.parallelism.dp,
-        pp=args.pp or config.parallelism.pp,
-        tp=args.tp or config.parallelism.tp,
+        dp=args.dp if args.dp != 0 else config.parallelism.dp,
+        pp=args.pp if args.pp != 0 else config.parallelism.pp,
+        tp=args.tp if args.tp != 0 else config.parallelism.tp,
         pp_engine=OneForwardOneBackwardPipelineEngine(),
         tp_mode=TensorParallelLinearMode.ALL_REDUCE,
         tp_linear_async_communication=False,
@@ -163,6 +172,7 @@ def main():
                 tokenizer.add_special_tokens({"pad_token": "[PAD]"})
         tokenizer.padding_side = "left"
         tokenizer.truncation_side = "left"  # TODO @nouamane: do we want this?
+
         dummy_inputs = [
             "The future of AI is",
             "Passage: Daniel went back to the garden. Mary travelled to the kitchen. Sandra journeyed to the kitchen. Sandra went to the hallway. John went to the bedroom. Mary went back to the garden. Where is Mary?\nAnswer:",

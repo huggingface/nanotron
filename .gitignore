@@ -162,4 +162,5 @@ cython_debug/
 .vscode
 
 checkpoints/
-wandb/
+
+**/wandb/**

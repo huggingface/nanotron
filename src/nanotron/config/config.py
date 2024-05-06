@@ -382,7 +382,10 @@ class Config:
 
 
 def get_config_from_dict(
-    config_dict: dict, config_class: Type = Config, skip_unused_config_keys: bool = False, skip_null_keys: bool = False
+    config_dict: dict,
+    config_class: Type = Config,
+    skip_unused_config_keys: bool = False,
+    skip_null_keys: bool = False,
 ):
     """Get a config object from a dictionary
 
@@ -416,7 +419,6 @@ def get_config_from_dict(
                 RecomputeGranularity: lambda x: RecomputeGranularity[x.upper()],
                 SamplerType: lambda x: SamplerType[x.upper()],
             },
-            # strict_unions_match=True,
             strict=True,
         ),
     )
