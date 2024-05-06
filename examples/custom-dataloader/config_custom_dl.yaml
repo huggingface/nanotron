@@ -6,7 +6,7 @@ checkpoints:
   save_initial_state: false
 data_stages:
 - data:
-    dataset: null
+    dataset: null # Custom dataloader will be used
     num_loading_workers: 1
     seed: 42
   name: Stable Training Stage

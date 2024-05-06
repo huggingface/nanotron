@@ -8,7 +8,7 @@ https://github.com/huggingface/nanotron/blob/2e21db0db46a40bedbd03714616dd0ae4ea
 And to test it out, you should fix your config to have: (example: [config_custom_dl.yaml](config_custom_dl.yaml))
 ```yaml
 - data:
-    dataset: null
+    dataset: null # Custom dataloader will be used
     num_loading_workers: 1
     seed: 42
   name: Stable Training Stage
