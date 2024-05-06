@@ -5,6 +5,16 @@ https://github.com/huggingface/nanotron/blob/2e21db0db46a40bedbd03714616dd0ae4ea
 
 `DataCollatorForCLM` is a custom data collator that takes a list of input_ids and returns a dictionary with the input_ids and the labels on the ranks which need it. For example `input_ids` are only needed in the first PP rank, while `labels` are needed in the last PP rank.
 
+And to test it out, you should fix your config to have: (example: [config_custom_dl.yaml](config_custom_dl.yaml))
+```yaml
+- data:
+    dataset: null
+    num_loading_workers: 1
+    seed: 42
+  name: Stable Training Stage
+  start_training_step: 1
+```
+
 To try it out you can run the following command:
 
 ```bash
