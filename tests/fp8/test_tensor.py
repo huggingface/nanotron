@@ -293,8 +293,13 @@ def test_clone_fp8_tensor(tensor_cls, dtype):
 def test_transpose_fp8_tensor(tensor_cls, dtype):
     tensor = torch.randn((16, 16), dtype=torch.float32, device="cuda:0")
     fp8_tensor = tensor_cls(deepcopy(tensor), dtype)
+    ref_fp8_tensor = tensor_cls(deepcopy(tensor), dtype)
 
     transposed_fp8_tensor = fp8_tensor.transpose_fp8()
+
+    # NOTE: we expect the original tensor to be the same
+    assert fp8_tensor == ref_fp8_tensor
+
     if tensor_cls == FP8Tensor:
         assert isinstance(transposed_fp8_tensor, FP8Tensor)
         ref_transposed = convert_tensor_from_fp8(fp8_tensor, fp8_tensor.fp8_meta, torch.float32).T

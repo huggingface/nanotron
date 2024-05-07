@@ -2,7 +2,8 @@ import nanotron.fp8.distributed as fp8_dist
 import pytest
 import torch
 import torch.distributed as dist
-from nanotron.fp8 import DTypes, FP8Tensor
+from nanotron.fp8.dtypes import DTypes
+from nanotron.fp8.tensor import FP8Tensor
 from nanotron.parallel import ParallelContext
 from utils import set_system_path
 

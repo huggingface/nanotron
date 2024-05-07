@@ -1,3 +1,5 @@
+from typing import Optional
+
 import torch
 import transformer_engine as te  # noqa
 import transformer_engine_extensions as tex
@@ -13,8 +15,9 @@ def fp8_matmul_kernel(
     transpose_a: bool,
     mat_b: FP8Tensor,
     transpose_b: bool,
-    use_split_accumulator: bool,
-    accum_qtype: DTypes,
+    output: Optional[torch.Tensor] = torch.Tensor,
+    use_split_accumulator: bool = False,
+    accum_qtype: DTypes = DTypes.KFLOAT16,
     # TODO(xrsrke): remove this flag
     is_backward: bool = False,
 ) -> torch.Tensor:
@@ -90,12 +93,11 @@ def fp8_matmul_kernel(
 
         # output = torch.empty(mat_a.T.shape[0], mat_b.shape[-1], device=device, dtype=out_torch_dtype)
 
-    if is_backward is False:
-        output = torch.empty(mat_b.shape[0], mat_a.shape[0], device=device, dtype=out_torch_dtype)
-        # output = torch.empty(mat_b.shape[-1], mat_a.shape[-1], device=device, dtype=out_torch_dtype)
-    else:
-        output = torch.empty(mat_b.shape[0], mat_a.shape[0], device=device, dtype=out_torch_dtype)
-        # output = torch.empty(mat_a.shape[-1], mat_b.shape[-1], device=device, dtype=out_torch_dtype)
+    # NOTE: i was using this before adding output tensor as an argument
+    # if is_backward is False:
+    #     output = torch.empty(mat_b.shape[0], mat_a.shape[0], device=device, dtype=out_torch_dtype)
+    # else:
+    #     output = torch.empty(mat_b.shape[0], mat_a.shape[0], device=device, dtype=out_torch_dtype)
 
     tex.te_gemm(
         mat_a,

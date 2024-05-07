@@ -12,6 +12,8 @@ from nanotron.fp8.meta import FP8Meta
 from nanotron.fp8.parameter import FP8Parameter
 from nanotron.fp8.tensor import FP8Tensor
 
+# import torch.nn.functional as F
+
 
 @dataclass
 class FP8LinearMeta:
@@ -54,39 +56,14 @@ class FP8Linear(nn.Linear):
         self.accum_qtype = accum_qtype
 
     def forward(self, input: Union[FP8Tensor, torch.Tensor]) -> torch.Tensor:
-        assert input.device != torch.device("cpu"), "FP8Linear only supports CUDA tensors"
+        import nanotron.fp8.functional as F
 
         # # NOTE: only do fp8 kernel if both input and weight are on CUDA device
         # if input.device == torch.device("cpu") or self.weight.device == torch.device("cpu"):
         #     # TODO(xrsrke): adjust the accumation precision
         #     return F.linear(input, self.weight, self.bias)
 
-        from einops import rearrange
-
-        seq_len = None
-        batch_size = None
-        is_input_flat = False
-        if input.ndim == 3:
-            batch_size = input.shape[0]
-            seq_len = input.shape[1]
-            is_input_flat = True
-            input = rearrange(input, "b n h -> (b n) h")
-        elif input.ndim > 3:
-            raise ValueError(f"Unsupported input shape: {input.shape}")
-
-        # NOTE: just a phony tensor to make pytorch trigger the backward pass
-        # because weight and bias's requires_grad are set to False
-        # so that we can compute the gradients using the fp8 kernels by ourselves
-        phony = torch.empty(0, device=input.device, requires_grad=True)
-        # print(f"name={self.name}")
-        output, _ = _FP8Matmul.apply(input, self.weight, phony, self.metadatas, self.accum_qtype)
-
-        # TODO(xrsrke): add support for adding bias in fp8
-        # TODO(xrsrke): support return an fp8 tensor as output
-        # since we will quantize it back to FP8 anyway in the next linear
-        output = output if self.bias is None else output + self.bias
-        output = rearrange(output, "(b n) h -> b n h", n=seq_len, b=batch_size) if is_input_flat is True else output
-        return output
+        return F.linear(input, self.weight.data, self.bias, self.accum_qtype, self.metadatas)
 
 
 class _FP8Matmul(torch.autograd.Function):
@@ -96,11 +73,16 @@ class _FP8Matmul(torch.autograd.Function):
         ctx,
         input: Union[FP8Tensor, torch.Tensor],
         weight: FP8Tensor,
+        output: torch.Tensor,
         phony: torch.Tensor,
         metadatas: FP8LinearMeta,
         accum_qtype: DTypes,
+        # is_weight_transposed: bool = False,
     ) -> torch.Tensor:
         assert not isinstance(input, FP8Tensor)
+
+        # NOTE: pad input shape to disibile by 16
+        # input = F.pad(input, (0, 0, 0, 16 - input.shape[1] % 16))
 
         if metadatas.input is None:
             fp8_input = FP8Tensor(
@@ -115,15 +97,21 @@ class _FP8Matmul(torch.autograd.Function):
 
         ctx.accum_qtype = accum_qtype
         ctx.metadatas = metadatas
-        ctx.save_for_backward(fp8_input, weight.data)
+        # ctx.is_weight_transposed = is_weight_transposed
+        ctx.save_for_backward(fp8_input, weight)
 
-        # NOTE: pass FP8Tensor instead of FP8Parameter
+        # if is_weight_transposed is False:
+        #     weight_temp = weight.transpose_fp8()
+        # else:
+        #     weight_temp = weight
+
         output = fp8_matmul_kernel(
             # NOTE: that works
-            mat_a=weight.data,
+            mat_a=weight,
             transpose_a=True,
             mat_b=fp8_input,
             transpose_b=False,
+            output=output,
             use_split_accumulator=FP8LM_RECIPE.linear.split_accumulator.output,
             accum_qtype=accum_qtype,
         )
@@ -189,13 +177,18 @@ class _FP8Matmul(torch.autograd.Function):
 
         # fp8_weight_transposed = tex.fp8_transpose(fp8_weight, fp8_weight.fp8_meta.te_dtype)
         # fp8_weight_transposed.fp8_meta = fp8_weight.fp8_meta
-        transposed_fp8_weight = fp8_weight.transpose_fp8()
+        if ctx.is_weight_transposed is False:
+            transposed_fp8_weight = fp8_weight.transpose_fp8()
 
+        grad_input_temp = torch.zeros(
+            fp8_grad_output.shape[0], transposed_fp8_weight.shape[0], device="cuda", dtype=QTYPE_TO_DTYPE[accum_qtype]
+        )
         grad_input = fp8_matmul_kernel(
             mat_a=transposed_fp8_weight,
             transpose_a=True,
             mat_b=fp8_grad_output,
             transpose_b=False,
+            output=grad_input_temp,
             use_split_accumulator=FP8LM_RECIPE.linear.split_accumulator.input_grad,
             accum_qtype=accum_qtype,
             is_backward=True,
@@ -209,11 +202,18 @@ class _FP8Matmul(torch.autograd.Function):
         transposed_fp8_grad_output = fp8_grad_output.transpose_fp8()
         transposed_fp8_input = fp8_input.transpose_fp8()
 
+        grad_weight_temp = torch.zeros(
+            transposed_fp8_input.shape[0],
+            transposed_fp8_grad_output.shape[0],
+            device="cuda",
+            dtype=QTYPE_TO_DTYPE[accum_qtype],
+        )
         grad_weight = fp8_matmul_kernel(
             mat_a=transposed_fp8_input,
             transpose_a=True,
             mat_b=transposed_fp8_grad_output,
             transpose_b=False,
+            output=grad_weight_temp,
             use_split_accumulator=FP8LM_RECIPE.linear.split_accumulator.weight_grad,
             accum_qtype=accum_qtype,
             # is_backward=True

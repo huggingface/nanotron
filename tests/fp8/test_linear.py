@@ -5,7 +5,7 @@ import pytest
 import torch
 from nanotron.fp8.constants import FP8_DTYPES, QTYPE_TO_DTYPE
 from nanotron.fp8.dtypes import DTypes
-from nanotron.fp8.linear import FP8Linear
+from nanotron.fp8.linear import FP8Linear, FP8LinearMeta
 from nanotron.fp8.loss_scaler import LossScaler
 from nanotron.fp8.parameter import FP8Parameter
 from nanotron.fp8.tensor import FP8Tensor, convert_tensor_from_fp8
@@ -23,6 +23,7 @@ def test_create_an_fp8_linear_parameters(bias, accum_qtype):
     assert isinstance(fp8_linear.weight, FP8Parameter)
     assert isinstance(fp8_linear.bias, torch.Tensor) if bias else True
     assert isinstance(fp8_linear.accum_qtype, DTypes)
+    assert isinstance(fp8_linear.metadatas, FP8LinearMeta)
 
 
 def test_fp8_linear_parameters():
@@ -230,6 +231,25 @@ def test_deplay_quantization(interval):
     for _ in range(N_STEPS):
         output = fp8_linear(input)
         output.sum().backward()
+
+
+@pytest.mark.parametrize("input_shape", [(16, 15), (15, 16), (15, 15)])
+@pytest.mark.parametrize("is_bias", [True, False])
+@pytest.mark.parametrize("accum_qtype", [DTypes.KFLOAT32, DTypes.KFLOAT16])
+def test_fp8_linear_padding(input_shape, is_bias, accum_qtype):
+    input = torch.randn(**input_shape)
+    ref_input = input.detach().clone()
+    ref_linear = nn.Linear(16, 16, bias=is_bias, device="cuda")
+    fp8_linear = convert_linear_to_fp8(deepcopy(ref_linear), accum_qtype)
+
+    ref_output = ref_linear(ref_input)
+    output = fp8_linear(input)
+
+    assert isinstance(output, torch.Tensor)
+    assert output.dtype == QTYPE_TO_DTYPE[accum_qtype]
+
+    # NOTE: this threshold is from fp8-lm, the paper shows that this is fine
+    torch.testing.assert_allclose(output, ref_output, rtol=0, atol=0.1)
 
 
 # TODO(xrsrke): test if FP8Linear has all the methods of a torch.nn.Linear
