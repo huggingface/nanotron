@@ -352,12 +352,12 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         # assert config.max_position_embeddings == 32768
 
         # NOTE: for 1b training
-        # self.segment_lengths = 2048
+        self.segment_lengths = 2048
 
         # NOTE: for sanity 200m training
         # prev 16
         # self.segment_lengths = 256
-        self.segment_lengths = 16
+        # self.segment_lengths = 16
 
         device = self.o_proj.weight.device
         dtype = self.o_proj.weight.dtype
@@ -381,8 +381,8 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         prev_memory,
         prev_normalization,
     ):
-        if self.layer_idx == 4:
-            assert 1 == 1
+        # if self.layer_idx == 4:
+        #     assert 1 == 1
 
         batch_size = hidden_states.shape[1]
         seq_len = hidden_states.shape[0]
