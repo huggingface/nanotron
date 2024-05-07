@@ -355,7 +355,9 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         # self.segment_lengths = 2048
 
         # NOTE: for sanity 200m training
-        self.segment_lengths = 256
+        # prev 16
+        # self.segment_lengths = 256
+        self.segment_lengths = 16
 
         device = self.o_proj.weight.device
         dtype = self.o_proj.weight.dtype
@@ -409,31 +411,32 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             )
 
             local_attn_outputs = attn_outputs["attention_output"]
-            query_states, key_states, value_states = attn_outputs["qkv_states"]
+            # query_states, key_states, value_states = attn_outputs["qkv_states"]
+            query_states, key_states, value_states = attn_outputs["qkv_states_without_pe"]
 
-            # if query_states.ndim == 3:
-            query_states = rearrange(
-                query_states,
-                "(batch_size seq_len) n_heads d_head -> batch_size n_heads seq_len d_head",
-                batch_size=batch_size,
-                # n_heads=self.n_local_heads,
-            )
+            if query_states.ndim == 3:
+                query_states = rearrange(
+                    query_states,
+                    "(batch_size seq_len) n_heads d_head -> batch_size n_heads seq_len d_head",
+                    batch_size=batch_size,
+                    # n_heads=self.n_local_heads,
+                )
 
-            # if key_states.ndim == 3:
-            key_states = rearrange(
-                key_states,
-                "(batch_size seq_len) n_heads d_head -> batch_size n_heads seq_len d_head",
-                batch_size=batch_size,
-                # n_heads=self.n_local_heads,
-            )
+            if key_states.ndim == 3:
+                key_states = rearrange(
+                    key_states,
+                    "(batch_size seq_len) n_heads d_head -> batch_size n_heads seq_len d_head",
+                    batch_size=batch_size,
+                    # n_heads=self.n_local_heads,
+                )
 
-            # if value_states.ndim == 3:
-            value_states = rearrange(
-                value_states,
-                "(batch_size seq_len) n_heads d_head -> batch_size n_heads seq_len d_head",
-                batch_size=batch_size,
-                # n_heads=self.n_local_heads,
-            )
+            if value_states.ndim == 3:
+                value_states = rearrange(
+                    value_states,
+                    "(batch_size seq_len) n_heads d_head -> batch_size n_heads seq_len d_head",
+                    batch_size=batch_size,
+                    # n_heads=self.n_local_heads,
+                )
 
             # NOTE: because in generation, the sequence length increases
             # assert query_states.shape == (batch_size, self.n_local_q_heads, segment_length, self.d_qk)
@@ -612,6 +615,16 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                 .permute(2, 1, 0, 3, 4)
                 .contiguous()
             )  # [3, batch_size, seq_length, n_local_q_heads, d_qk]
+
+        query_states_without_pe = rearrange(
+            query_states, "batch_size seq_len n_heads d_head -> batch_size n_heads seq_len d_head"
+        )
+        key_states_without_pe = rearrange(
+            key_states, "batch_size seq_len n_heads d_head -> batch_size n_heads seq_len d_head"
+        )
+        value_states_without_pe = rearrange(
+            value_states, "batch_size seq_len n_heads d_head -> batch_size n_heads seq_len d_head"
+        )
 
         store = self.get_local_store()
         if store is not None:  # Inference case
@@ -824,6 +837,11 @@ class CausalSelfAttention(nn.Module, AttachableStore):
 
         return_outputs = {"hidden_states": None, "sequence_mask": sequence_mask}
         return_outputs["qkv_states"] = (query_states, key_states, value_states) if return_qkv_states else ()
+        return_outputs["qkv_states_without_pe"] = (
+            query_states_without_pe,
+            key_states_without_pe,
+            value_states_without_pe,
+        )
         return_outputs["attention_output"] = attention_output
         return return_outputs
 
