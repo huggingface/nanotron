@@ -442,7 +442,10 @@ class DistributedTrainer:
                     self.save_checkpoint()
 
         dist.barrier()  # let's wait for everyone before leaving
-
+        
+        if self.config.checkpoints.save_final_state:
+            self.save_checkpoint()
+        
         self.post_training()
 
     def training_step(
