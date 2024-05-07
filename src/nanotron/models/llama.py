@@ -341,12 +341,22 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             parallel_config=parallel_config,
             layer_idx=layer_idx,
         )
+        self.layer_idx = layer_idx
 
         self.prefill_kv_len = (
             config.max_position_embeddings
         )  # TODO @nouamane: compute based on free memory, because in rope we can surpass max_position_embeddings
 
-        self.n_segments = 16
+        # self.n_segments = 16
+        # self.segment_lengths = config.max_position_embeddings // self.n_segments
+        # assert config.max_position_embeddings == 32768
+
+        # NOTE: for 1b training
+        # self.segment_lengths = 2048
+
+        # NOTE: for sanity 200m training
+        self.segment_lengths = 256
+
         device = self.o_proj.weight.device
         dtype = self.o_proj.weight.dtype
 
@@ -366,17 +376,29 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         self,
         hidden_states: TensorType["sharded_seq_length", "batch_size", "hidden_size"],
         sequence_mask: TensorType["batch_size", "seq_length"],
+        prev_memory,
+        prev_normalization,
     ):
+        if self.layer_idx == 4:
+            assert 1 == 1
+
         batch_size = hidden_states.shape[1]
         seq_len = hidden_states.shape[0]
-        segment_length = seq_len // self.n_segments
-        hidden_size = hidden_states.shape[2]
+        # assert seq_len % self.n_segments == 0
 
-        segment_hidden_states = torch.chunk(hidden_states, chunks=self.n_segments, dim=0)
-        segment_sequence_masks = torch.chunk(sequence_mask, chunks=self.n_segments, dim=1)
+        # segment_length = seq_len // self.n_segments
+        # hidden_size = hidden_states.shape[2]
+
+        n_segments = seq_len // self.segment_lengths
+
+        segment_hidden_states = torch.chunk(hidden_states, chunks=n_segments, dim=0)
+        segment_sequence_masks = torch.chunk(sequence_mask, chunks=n_segments, dim=1)
 
         memory = None
         normalization = None
+
+        # memory = prev_memory
+        # normalization = prev_normalization
 
         outputs = []
 
@@ -389,18 +411,23 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             local_attn_outputs = attn_outputs["attention_output"]
             query_states, key_states, value_states = attn_outputs["qkv_states"]
 
+            # if query_states.ndim == 3:
             query_states = rearrange(
                 query_states,
                 "(batch_size seq_len) n_heads d_head -> batch_size n_heads seq_len d_head",
                 batch_size=batch_size,
                 # n_heads=self.n_local_heads,
             )
+
+            # if key_states.ndim == 3:
             key_states = rearrange(
                 key_states,
                 "(batch_size seq_len) n_heads d_head -> batch_size n_heads seq_len d_head",
                 batch_size=batch_size,
                 # n_heads=self.n_local_heads,
             )
+
+            # if value_states.ndim == 3:
             value_states = rearrange(
                 value_states,
                 "(batch_size seq_len) n_heads d_head -> batch_size n_heads seq_len d_head",
@@ -408,7 +435,8 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                 # n_heads=self.n_local_heads,
             )
 
-            # assert query_states.shape == (batch_size, self.n_local_heads, segment_length, self.d_head)
+            # NOTE: because in generation, the sequence length increases
+            # assert query_states.shape == (batch_size, self.n_local_q_heads, segment_length, self.d_qk)
             # assert query_states.shape == key_states.shape == value_states.shape
 
             retrieved_memory = self._retrieve_from_memory(
@@ -432,7 +460,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
 
             attention_output = global_weights * retrieved_memory + local_weights * local_attn_outputs
 
-            # assert attention_output.shape == (batch_size, self.n_local_heads, segment_length, self.d_head)
+            # assert attention_output.shape == (batch_size, self.n_local_q_heads, segment_length, self.d_qk)
 
             attention_output = rearrange(
                 attention_output, "batch_size n_heads seq_len d_head -> seq_len batch_size (n_heads d_head)"
@@ -440,11 +468,10 @@ class CausalSelfAttention(nn.Module, AttachableStore):
 
             output = self.o_proj(attention_output)
 
-            assert output.shape == (segment_length, batch_size, hidden_size)
+            # assert output.shape == (segment_length, batch_size, hidden_size)
 
             memory, normalization = self._update_memory(memory, normalization, key_states, value_states)
-            # memory = memory.detach()
-            # normalization = normalization.detach()
+            # memory = prev_memory if prev_memory is not None else 0.detach()
 
             outputs.append(output)
 
@@ -454,7 +481,12 @@ class CausalSelfAttention(nn.Module, AttachableStore):
 
         # sequence_masks = torch.cat(sequence_masks, dim=1)
         # assert sequence_masks.shape == sequence_mask.shape
-        return_outputs = {"hidden_states": outputs, "sequence_mask": sequence_mask}
+        return_outputs = {
+            "hidden_states": outputs,
+            "sequence_mask": sequence_mask,
+            "memory": memory,
+            "normalization": normalization,
+        }
         return return_outputs
 
     def _retrieve_from_memory(self, query_states, prev_memory, prev_normalization):
@@ -476,15 +508,15 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                 n=self.n_repeats,
             )
 
-        query_states = F.elu(query_states) + 1
+        sigma_query_states = F.elu(query_states) + 1
         retrieved_memory = einsum(
-            query_states,
+            sigma_query_states,
             prev_memory,
             "batch_size n_heads seq_length d_k, batch_size n_heads d_k d_v -> batch_size n_heads seq_length d_v",
         )
 
         denominator = einsum(
-            query_states,
+            sigma_query_states,
             prev_normalization,
             "batch_size n_heads seq_length d_head, batch_size n_heads d_head -> batch_size n_heads seq_length",
         )
@@ -496,43 +528,40 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         return retrieved_memory
 
     def _update_memory(self, prev_memory, prev_normalization, key_states, value_states):
-        TYPE = "delta"
-        key_states = F.elu(key_states) + 1
+        sigma_key_states = F.elu(key_states) + 1
 
-        if TYPE == "linear":
-            # memory = torch.matmul(key_states.transpose(-2, -1), value_states)
+        # if TYPE == "linear":
+        #     # memory = torch.matmul(key_states.transpose(-2, -1), value_states)
+        #     new_value_states = value_states
+        # else:
+        if prev_memory is None or prev_normalization is None:
             new_value_states = value_states
         else:
-            if prev_memory is None or prev_normalization is None:
-                new_value_states = value_states
-            else:
-                numerator = einsum(
-                    key_states,
-                    prev_memory,
-                    "batch_size n_heads seq_length d_k, batch_size n_heads d_k d_v -> batch_size n_heads seq_length d_v",
-                )
+            numerator = einsum(
+                sigma_key_states,
+                prev_memory,
+                "batch_size n_heads seq_length d_k, batch_size n_heads d_k d_v -> batch_size n_heads seq_length d_v",
+            )
 
-                # denominator = einsum(
-                #     key_states, prev_normalization,
-                #     "batch_size n_heads seq_len d_head, batch_size n_heads d_head -> batch_size seq_len"
-                # )
-                denominator = einsum(
-                    key_states,
-                    prev_normalization,
-                    "batch_size n_heads seq_length d_k, batch_size n_heads d_k -> batch_size n_heads seq_length",
-                )
-                denominator = rearrange(
-                    denominator, "batch_size n_heads seq_length -> batch_size n_heads seq_length 1"
-                )
+            # denominator = einsum(
+            #     key_states, prev_normalization,
+            #     "batch_size n_heads seq_len d_head, batch_size n_heads d_head -> batch_size seq_len"
+            # )
+            denominator = einsum(
+                sigma_key_states,
+                prev_normalization,
+                "batch_size n_heads seq_length d_k, batch_size n_heads d_k -> batch_size n_heads seq_length",
+            )
+            denominator = rearrange(denominator, "batch_size n_heads seq_length -> batch_size n_heads seq_length 1")
 
-                prev_v = numerator / denominator
-                new_value_states = value_states - prev_v
+            prev_v = numerator / denominator
+            new_value_states = value_states - prev_v
 
-        memory = torch.matmul(key_states.transpose(-2, -1), new_value_states)
+        memory = torch.matmul(sigma_key_states.transpose(-2, -1), new_value_states)
 
         # memory = einsum(key_states, value_states, 'batch_size n_heads k_length d_head, batch_size n_heads v_length d_head -> batch_size n_heads k_length v_length')
         normalization = reduce(
-            key_states, "batch_size n_heads seq_length d_head -> batch_size n_heads d_head", reduction="sum"
+            sigma_key_states, "batch_size n_heads seq_length d_head -> batch_size n_heads d_head", reduction="sum"
         )
 
         memory += prev_memory if prev_memory is not None else 0
@@ -832,11 +861,18 @@ class LlamaDecoderLayer(nn.Module):
         self,
         hidden_states: Union[torch.Tensor, TensorPointer],
         sequence_mask: Union[torch.Tensor, TensorPointer],
+        memory: Optional[torch.Tensor] = None,
+        normalization: Optional[torch.Tensor] = None,
     ) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
 
-        output = self.attn(hidden_states=hidden_states, sequence_mask=sequence_mask)
+        output = self.attn(
+            hidden_states=hidden_states,
+            sequence_mask=sequence_mask,
+            prev_memory=memory,
+            prev_normalization=normalization,
+        )
         hidden_states = output["hidden_states"]
         hidden_states = hidden_states + residual
 
@@ -848,6 +884,8 @@ class LlamaDecoderLayer(nn.Module):
         return {
             "hidden_states": hidden_states,
             "sequence_mask": output["sequence_mask"],
+            "memory": output["memory"],
+            "normalization": output["normalization"],
         }
 
 
@@ -925,8 +963,8 @@ class LlamaModel(nn.Module):
                         "tp_pg": parallel_context.tp_pg,
                         "layer_idx": layer_idx,
                     },
-                    module_input_keys={"hidden_states", "sequence_mask"},
-                    module_output_keys={"hidden_states", "sequence_mask"},
+                    module_input_keys={"hidden_states", "sequence_mask", "memory", "normalization"},
+                    module_output_keys={"hidden_states", "sequence_mask", "memory", "normalization"},
                 )
                 for layer_idx in range(config.num_hidden_layers)
             ]
@@ -984,6 +1022,8 @@ class LlamaModel(nn.Module):
         hidden_encoder_states = {
             "hidden_states": output["input_embeds"],
             "sequence_mask": input_mask,
+            "memory": None,
+            "normalization": None,
         }
         for encoder_block in self.decoder:
             hidden_encoder_states = encoder_block(**hidden_encoder_states)

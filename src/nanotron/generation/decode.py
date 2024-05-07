@@ -88,6 +88,33 @@ def micro_batcher(
         input_ids: [max_micro_batch_size, max_input_length]
         input_masks: [max_micro_batch_size, max_input_length]
     """
+
+    def find_sequence_positions(tensor, sequence):
+        """
+        Find the positions of a specific sequence in a PyTorch tensor.
+
+        Args:
+            tensor (torch.Tensor): The input tensor to search in.
+            sequence (torch.Tensor): The sequence to search for.
+
+        Returns:
+            torch.Tensor: A tensor containing the indices of the matching positions.
+        """
+        # Check if the sequence length is greater than the tensor length
+        if len(sequence) > len(tensor):
+            return torch.empty(0, dtype=torch.long)
+
+        # Create sliding windows of size equal to the sequence length
+        windows = tensor.unfold(0, len(sequence), 1)
+
+        # Compare each window with the sequence
+        matches = torch.eq(windows, sequence).all(dim=1)
+
+        # Get the indices of the matching positions
+        indices = matches.nonzero(as_tuple=True)[0]
+
+        return indices
+
     if tokenizer_config.padding is None:
         tokenizer_config.padding = "max_length" if tokenizer_config.max_input_length is not None else True
     if tokenizer_config.truncation is None:
@@ -103,6 +130,11 @@ def micro_batcher(
             continue
 
         if dist.get_rank(parallel_context.pp_pg) == input_rank:
+
+            # tokenizer.eos_token_id = 2
+            # tokenizer.bos_token_id = 1
+            # tokenizer.pad_token_id = tokenizer.eos_token_id
+
             encodings = tokenizer(
                 [elt.text for elt in micro_batch],
                 return_tensors="pt",
@@ -112,6 +144,18 @@ def micro_batcher(
                 truncation=tokenizer_config.truncation,
                 # pad_to_multiple_of=8
             )
+
+            # encodings = tokenizer(
+            #     [elt.text for elt in micro_batch],
+            #     return_tensors="pt",
+            #     return_attention_mask=True,
+            #     padding="max_length",
+            #     max_length=32768,
+            #     truncation=False,
+            #     # pad_to_multiple_of=8
+            # )
+
+            # assert encodings["input_ids"][0].shape[0] == 32768
 
             encodings["attention_mask"] = encodings.attention_mask.to(dtype=torch.bool, device="cuda")
             encodings.to("cuda")

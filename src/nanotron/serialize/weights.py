@@ -212,6 +212,13 @@ def load_weights(
     """
     param_root_folder = root_folder / "model"
 
+    log_rank(
+        f"Loading model weights from {param_root_folder}",
+        logger=logger,
+        level=logging.INFO,
+        rank=0,
+    )
+
     module_id_to_prefix = {id(module): f"{module_name}." for module_name, module in model.named_modules()}
     # Fix the root_model
     module_id_to_prefix[id(model)] = ""
@@ -365,6 +372,13 @@ def get_checkpoint_paths_list(
         filtered_state_dict: state dict to load from (overrides model.state_dict()). if None, load from model.state_dict()
     """
     param_root_folder = root_folder / "model"
+
+    log_rank(
+        f"Loading model weights from {param_root_folder}",
+        logger=logger,
+        level=logging.INFO,
+        rank=0,
+    )
 
     module_id_to_prefix = {id(module): f"{module_name}." for module_name, module in model.named_modules()}
     # Fix the root_model

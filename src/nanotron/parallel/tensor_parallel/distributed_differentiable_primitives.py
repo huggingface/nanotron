@@ -102,7 +102,9 @@ class DifferentiableReduceScatterSum(torch.autograd.Function):
         unsharded_batch_size, *rest_size = tensor.shape
         if group is None:
             group = torch_dist.distributed_c10d._get_default_group()
-        assert unsharded_batch_size % group.size() == 0
+        assert (
+            unsharded_batch_size % group.size() == 0
+        ), f"Batch size {unsharded_batch_size} must be divisible by group size {group.size()}"
 
         # TODO @thomasw21: Collectives seem to require tensors to be contiguous
         # https://cs.github.com/pytorch/pytorch/blob/2b267fa7f28e18ca6ea1de4201d2541a40411457/torch/distributed/nn/functional.py#L305
