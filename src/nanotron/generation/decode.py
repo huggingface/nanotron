@@ -166,6 +166,7 @@ def decode_text(
     max_micro_batch_size: int,
     max_new_tokens: int,
     is_bench: bool = False,
+    logits_are_batch_first: bool = True,
 ) -> Generator[GenerationOutput, None, None]:
     """We assume the following:
     - Everyone receives ALL the input text. # TODO @thomasw21: technically only specific ranks need to receive input.
@@ -188,6 +189,14 @@ def decode_text(
     max_nb_microbatches = decoder_logit_rank - decoder_input_rank + 1
 
     p2p = model.p2p
+
+    # replicate input for n_samples times when using TOP_P or TOP_K samplers, in order to get diverse results
+    if generation_config and generation_config.n_samples:
+        if sampler_type != SamplerType.TOP_P and sampler_type != SamplerType.TOP_K:
+            raise ValueError("Only support n_samples for TOP_P and TOP_K sampler")
+        input_iter = [
+            GenerationInput(text=input.text) for input in input_iter for _ in range(generation_config.n_samples)
+        ]
 
     # That's annoying but I need this as soon as there's a change communication "cross"
     pipeline_state = PipelineEvalBatchState()
@@ -265,7 +274,7 @@ def decode_text(
                             input_mask=batch_generated_mask,
                         )
 
-                    if isinstance(sharded_logits, torch.Tensor):
+                    if isinstance(sharded_logits, torch.Tensor) and logits_are_batch_first:
                         sharded_logits = sharded_logits.transpose(0, 1)
                     # Communicate
                     # TODO @thomasw21: Make a diagram to show how this works

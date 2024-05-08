@@ -33,4 +33,4 @@ repos:
       - id: codespell
         args:
           - -w
-          - --ignore-words-list=nd,reacher,thist,ths,magent,ba,fo
+          - --ignore-words-list=nd,reacher,thist,ths,magent,ba,fo,doesnt

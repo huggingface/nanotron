@@ -31,11 +31,15 @@ from nanotron.config import (
     ExistingCheckpointInit,
     ParallelismArgs,
     RandomInit,
+    SpectralMupInit,
     get_config_from_file,
 )
+from nanotron.constants import MODEL_CONFIG_FILE_NAME
 from nanotron.dataloader import sanity_check_dataloader
 from nanotron.helpers import (
     _vocab_size_with_padding,
+    compute_remain_train_steps_of_a_data_stage_from_ckp,
+    get_consumed_train_samples_of_a_data_stage_from_ckp,
     get_profiler,
     init_optimizer_and_grad_accumulator,
     init_random_states,
@@ -78,6 +82,7 @@ from nanotron.sanity_checks import (
     before_optim_step_sanity_checks,
     before_tbi_sanity_checks,
 )
+from nanotron.scaling.parametrization import ParametrizationMethod
 from nanotron.serialize import (
     load_lr_scheduler,
     load_meta,
@@ -86,6 +91,7 @@ from nanotron.serialize import (
     save,
     save_random_states,
 )
+from nanotron.serialize.metadata import DataStageMetadata, TrainingMetadata
 from nanotron.serialize.optimizer import load_optimizer
 
 logger = logging.get_logger(__name__)
@@ -168,9 +174,19 @@ class DistributedTrainer:
             self.model.module if isinstance(self.model, DistributedDataParallel) else self.model
         )
 
+        # TODO: find a better way to handle this
+        parametrization_method = (
+            ParametrizationMethod.SPECTRAL_MUP
+            if hasattr(self.config.model.init_method, "use_mup") and self.config.model.init_method.use_mup
+            else ParametrizationMethod.STANDARD
+        )
+
         # Init optimizer
         self.optimizer, self.grad_accumulator = init_optimizer_and_grad_accumulator(
-            model=self.model, optimizer_args=self.config.optimizer, parallel_context=self.parallel_context
+            parametrization_method=parametrization_method,
+            model=self.model,
+            optimizer_args=self.config.optimizer,
+            parallel_context=self.parallel_context,
         )
         if self.init_checkpoint_path is not None:
             load_optimizer(
@@ -198,15 +214,23 @@ class DistributedTrainer:
             checkpoint_metadata = load_meta(
                 parallel_context=self.parallel_context, root_folder=self.init_checkpoint_path
             )
+            assert isinstance(checkpoint_metadata.metas, TrainingMetadata)
             log_rank(str(checkpoint_metadata), logger=logger, level=logging.INFO, rank=0)
-            self.start_iteration_step = checkpoint_metadata.metas["last_train_step"]
-            self.consumed_train_samples = checkpoint_metadata.metas["consumed_train_samples"]
+            self.metadata: TrainingMetadata = checkpoint_metadata.metas
+            # NOTE: we should not change data stages
             assert (
-                self.config.tokens.train_steps > self.start_iteration_step
-            ), f"Loaded checkpoint has already trained {self.start_iteration_step} batches, you need to specify a higher `config.tokens.train_steps`"
+                self.config.tokens.train_steps > self.metadata.last_train_step
+            ), f"Loaded checkpoint has already trained {self.metadata.last_train_step} batches, you need to specify a higher `config.tokens.train_steps`"
         else:
-            self.start_iteration_step = 0
-            self.consumed_train_samples = 0
+            data_stages = [
+                DataStageMetadata(
+                    name=stage.name, start_training_step=stage.start_training_step, consumed_train_samples=0
+                )
+                for stage in self.config.data_stages
+            ]
+            self.metadata: TrainingMetadata = TrainingMetadata(
+                consumed_train_samples=0, last_train_step=0, last_stage_idx=0, data_stages=data_stages
+            )
 
         # Setup tensorboard write and log writers on output rank
         self.logger_ranks = self.parallel_context.get_global_rank(
@@ -223,7 +247,7 @@ class DistributedTrainer:
             self.micro_batch_size * self.n_micro_batches_per_batch * self.parallel_context.dp_pg.size()
         )
         self.sequence_length = self.config.tokens.sequence_length
-        self.iteration_step = self.start_iteration_step
+        self.iteration_step = self.metadata.last_train_step
         self.limit_val_batches = self.config.tokens.limit_val_batches
         # NOTE: the dataloader currently in use for the current training stage
         self.current_dataloader: Optional[DataLoader] = None
@@ -239,8 +263,10 @@ class DistributedTrainer:
     def pre_training(self, *args, **kwargs):
         self._print_training_plan()
 
+        metadata: TrainingMetadata = self.metadata
+
         log_rank(
-            f"[Start training] datetime: {datetime.datetime.now()} | mbs: {self.micro_batch_size} | grad_accum: {self.n_micro_batches_per_batch} | global_batch_size: {self.global_batch_size} | sequence_length: {self.sequence_length} | train_steps: {self.config.tokens.train_steps} | start_iteration_step: {self.start_iteration_step} | consumed_train_samples: {self.consumed_train_samples}",  # noqa
+            f"[Start training] datetime: {datetime.datetime.now()} | mbs: {self.micro_batch_size} | grad_accum: {self.n_micro_batches_per_batch} | global_batch_size: {self.global_batch_size} | sequence_length: {self.sequence_length} | train_steps: {self.config.tokens.train_steps} | start_iteration_step: {metadata.last_train_step} | consumed_train_samples: {metadata.consumed_train_samples}",  # noqa
             logger=logger,
             level=logging.INFO,
             rank=0,
@@ -312,23 +338,45 @@ class DistributedTrainer:
             gc.collect()
 
         dataloader = None
-        for stage_id, stage in enumerate(self.config.data_stages):
+
+        def find_stage_idx_to_resume():
+            reversed_data_stages = sorted(self.config.data_stages, key=lambda x: x.start_training_step, reverse=True)
+            for idx, stage in enumerate(reversed_data_stages):
+                if self.iteration_step >= stage.start_training_step:
+                    return len(self.config.data_stages) - idx - 1
+            return None
+
+        stage_idx_to_resume = find_stage_idx_to_resume()
+
+        for stage_idx, stage in enumerate(self.config.data_stages):
+            if stage_idx < self.metadata.last_stage_idx:
+                continue
+
             stage = cast(DatasetStageArgs, stage)
 
-            if stage.start_training_step == self.iteration_step:
+            is_resume_from_training = self.current_dataloader is None and stage_idx_to_resume == stage_idx
+            if (stage.start_training_step == self.iteration_step) or is_resume_from_training:
                 if self.current_dataloader is not None:
-                    prev_stage_name = self.config.data_stages[stage_id - 1].name
+                    prev_stage_name = self.config.data_stages[stage_idx - 1].name
                     prev_dataloader = dataloaders[prev_stage_name]
+
                     if isinstance(prev_dataloader, DataLoader):
                         # NOTE: we don't need to clear dummy data generator from memory
                         clear_dataloader_from_memory(prev_dataloader, stage_name=stage.name)
 
-                log_rank(
-                    f"[Training Stage: {stage.name}] Switching to a new dataset {stage.data.dataset.hf_dataset_or_datasets}",
-                    logger=logger,
-                    level=logging.INFO,
-                    rank=0,
-                )
+                self.metadata.last_stage_idx = stage_idx
+
+                if is_resume_from_training:
+                    remaining_train_steps = compute_remain_train_steps_of_a_data_stage_from_ckp(
+                        stage, self.config, self.metadata
+                    )
+                    consumed_train_steps = get_consumed_train_samples_of_a_data_stage_from_ckp(stage, self.metadata)
+                    log_rank(
+                        f"Resuming training from stage {stage.name}, it has trained for {consumed_train_steps} samples and has {remaining_train_steps} remaining train steps",
+                        logger=logger,
+                        level=logging.INFO,
+                        rank=0,
+                    )
 
                 dataloader = dataloaders[stage.name]
                 # NOTE: if a dataloader is lazy initialized, we need to call it to initialize it
@@ -368,7 +416,7 @@ class DistributedTrainer:
         prof = get_profiler(config=self.config)
         torch.cuda.empty_cache()
         with prof:
-            for self.iteration_step in range(self.start_iteration_step + 1, self.config.tokens.train_steps + 1):
+            for self.iteration_step in range(self.metadata.last_train_step + 1, self.config.tokens.train_steps + 1):
                 if isinstance(prof, torch.profiler.profile):
                     prof.step()
 
@@ -380,7 +428,12 @@ class DistributedTrainer:
                 outputs, loss_avg = self.training_step(dataloader=self.current_dataloader)
 
                 # Training Logs
-                self.consumed_train_samples += self.global_batch_size
+                # TODO(xrsrke): refactor using callbacks would be better
+                self.metadata.consumed_train_samples += self.global_batch_size
+                self.metadata.last_train_step = self.iteration_step
+                self.metadata.data_stages[
+                    self.metadata.last_stage_idx
+                ].consumed_train_samples += self.global_batch_size
 
                 if (self.iteration_step - 1) % self.config.logging.iteration_step_info_interval == 0:
                     self.train_step_logs(outputs=outputs, loss_avg=loss_avg)
@@ -523,7 +576,9 @@ class DistributedTrainer:
             log_entries = [
                 # LogItem("consumed_samples", self.consumed_train_samples, "human_format"),  # , "12d"),
                 LogItem(
-                    "consumed_tokens", self.consumed_train_samples * self.config.tokens.sequence_length, "human_format"
+                    "consumed_tokens",
+                    self.metadata.consumed_train_samples * self.config.tokens.sequence_length,
+                    "human_format",
                 ),  # , "12d"),
                 LogItem("elapsed_time_per_iteration_ms", elapsed_time_per_iteration_ms, "human_format"),  # , ".1f"),
                 LogItem("tokens_per_sec", tokens_per_sec, "human_format"),  # , "1.6E"),
@@ -604,13 +659,9 @@ class DistributedTrainer:
                     rank=0,
                 )
             else:
-                log_rank(
-                    f"Setting max_position_embeddings to {self.config.tokens.sequence_length}. Previous value was {self.model_config.max_position_embeddings}.",
-                    logger=logger,
-                    level=logging.INFO,
-                    rank=0,
-                )
-                self.model_config.max_position_embeddings = self.config.tokens.sequence_length
+                assert (
+                    self.config.tokens.sequence_length == self.model_config.max_position_embeddings
+                ), "The tokenizer's sequence length does not match the model's maximum position embeddings."
 
         log_rank("Config:\n" + pformat(self.config), logger=logger, level=logging.INFO, rank=0)
         log_rank("Model Config:\n" + pformat(self.model_config), logger=logger, level=logging.INFO, rank=0)
@@ -657,13 +708,12 @@ class DistributedTrainer:
                     parallel_context=self.parallel_context,
                     root_folder=self.config.model.init_method.path,
                 )
-            elif isinstance(self.config.model.init_method, RandomInit):
-
+            elif isinstance(self.config.model.init_method, (RandomInit, SpectralMupInit)):
                 unwrapped_model.init_model_randomly(config=self.config)
 
                 # Synchronize parameters so that the model is consistent
                 # sync all params across dp
-                for name, param in sorted(model.named_parameters(), key=lambda x: x[0]):
+                for _, param in sorted(model.named_parameters(), key=lambda x: x[0]):
                     dist.all_reduce(param, op=dist.ReduceOp.AVG, group=self.parallel_context.dp_pg)
 
                 # sync tied params across tied groups
@@ -800,15 +850,10 @@ class DistributedTrainer:
         dist.barrier(self.parallel_context.world_pg)
 
         log_rank(f"Saving checkpoint at {checkpoint_path}", logger=logger, level=logging.WARNING, rank=0)
-        checkpoint_metadata = {
-            "last_train_step": self.iteration_step,
-            # TODO: @nouamanetazi: Add more metadata to the checkpoint to be able to resume dataloader states properly
-            "consumed_train_samples": self.consumed_train_samples,
-        }
 
         # Update step/samples numbers before we save the config
-        self.config.general.step = self.iteration_step
-        self.config.general.consumed_train_samples = self.consumed_train_samples
+        self.config.general.step = self.metadata.last_train_step
+        self.config.general.consumed_train_samples = self.metadata.consumed_train_samples
 
         save(
             model=self.unwrapped_model,
@@ -826,7 +871,7 @@ class DistributedTrainer:
             ),  # We only save the config on world_rank==0
             parallel_context=self.parallel_context,
             root_folder=checkpoint_path,
-            checkpoint_metadata=checkpoint_metadata,
+            training_metadata=self.metadata,
             config=self.config,
         )
         save_random_states(
@@ -836,9 +881,9 @@ class DistributedTrainer:
             fo.write(f"{self.iteration_step}")
 
         if hasattr(self.model_config, "to_json_file"):
-            self.model_config.to_json_file(checkpoint_path / "model_config.json")
+            self.model_config.to_json_file(checkpoint_path / MODEL_CONFIG_FILE_NAME)
         else:
-            with open(checkpoint_path / "model_config.json", mode="w") as fo:
+            with open(checkpoint_path / MODEL_CONFIG_FILE_NAME, mode="w") as fo:
                 fo.write(json.dumps(asdict(self.model_config)))
 
         self.post_save_checkpoint()

@@ -1,6 +1,6 @@
 from abc import ABCMeta, abstractmethod
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Callable, Iterator, List, Optional, Tuple
+from typing import TYPE_CHECKING, Callable, Dict, Iterator, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -65,12 +65,15 @@ class NanotronModel(nn.Module, metaclass=ABCMeta):
         """Tie custom parameters. For example for MQA marks kv heads as tied."""
         pass
 
-    @staticmethod
-    def get_embeddings_lm_head_tied_names() -> list[str]:
+    def get_embeddings_lm_head_tied_names(self) -> list[str]:
         """Returns the names of the embeddings and lm_head weights that are tied together. Returns empty list if not tied.
 
         Example for GPT2 model: ["model.token_position_embeddings.pp_block.token_embedding.weight", "model.lm_head.pp_block.weight"]
         """
+        return []
+    
+    def get_named_params_without_weight_decay(self) -> List[str]:
+        """Return a list of named parameters that should not have weight decay applied to them."""
         return []
 
     def before_tbi_sanity_checks(self) -> None:
@@ -98,6 +101,39 @@ class NanotronModel(nn.Module, metaclass=ABCMeta):
                 group=group,
                 rank=rank,
             )
+
+    @property
+    def named_modules_in_pp_rank(self) -> Dict[str, nn.Module]:
+        """Return the named modules that only belongs to the current pp rank.
+
+        An example output:
+        {
+            'module_name': module,
+            ...
+        }
+
+        NOTE: not include module_name.weight or bias, but only module_name
+        """
+
+        def get_leaf_modules(module: nn.Module) -> List[Tuple[str, nn.Module]]:
+            """
+            Return all the leaf modules (modules without any child modules) in a PyTorch module.
+            """
+            leaf_modules = []
+            for n, m in module.named_modules():
+                if not list(m.children()):
+                    leaf_modules.append((n, m))
+            return leaf_modules
+
+        modules = get_leaf_modules(self)
+        named_modules_in_current_pp_rank = {}
+        for name, module in modules:
+            if isinstance(module, PipelineBlock):
+                # NOTE: these are the modules that aren't belong to the current pp rank
+                continue
+            named_modules_in_current_pp_rank[name] = module
+
+        return named_modules_in_current_pp_rank
 
 
 class DTypeInvariantTensor(torch.Tensor):
@@ -171,7 +207,7 @@ def build_model(
         pp_size = len(target_pp_ranks)
 
     # Set rank for each pipeline block
-    log_rank("Setting PP block ranks..", logger=logger, level=logging.INFO, rank=0, group=parallel_context.world_pg)
+    log_rank("Setting PP block ranks...", logger=logger, level=logging.INFO, rank=0, group=parallel_context.world_pg)
     pipeline_blocks = [module for name, module in model.named_modules() if isinstance(module, PipelineBlock)]
     # "cuda" is already defaulted for each process to it's own cuda device
     with init_on_device_and_dtype(device=device, dtype=dtype):
