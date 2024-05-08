@@ -4,7 +4,8 @@ import pytest
 import torch
 from nanotron.fp8.constants import QTYPE_TO_DTYPE
 from nanotron.fp8.dtypes import DTypes
-from nanotron.fp8.kernel import _fp8_matmul_kernel_2
+
+# from nanotron.fp8.kernel import _fp8_matmul_kernel_2
 from nanotron.fp8.tensor import FP8Tensor
 
 # from timm.models.layers import trunc_normal_

@@ -40,7 +40,7 @@ from nanotron.parallel.tensor_parallel.functional import (
 )
 from nanotron.parallel.tied_parameters import create_tied_parameter
 
-BASE_LINEAR = FP8Linear if IS_FP8 is True else False
+BASE_LINEAR = FP8Linear if IS_FP8 is True else nn.Linear
 
 
 class TensorParallelColumnLinear(BASE_LINEAR):

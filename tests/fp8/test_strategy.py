@@ -1,7 +1,7 @@
 import pytest
 import torch
 from nanotron.fp8.strategy import (
-    DelayStrategy,
+    # DelayStrategy,
     IntimeStrategy,
     SkipOverflowStrategy,
     SkipZeroOnlyStrategy,

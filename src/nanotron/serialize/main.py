@@ -51,7 +51,7 @@ def save(
     config: "Config",
     model: nn.Module,
     optimizer: optim.BaseOptimizer,
-    lr_scheduler: torch.optim.lr_scheduler.LRScheduler,
+    lr_scheduler: "torch.optim.lr_scheduler.LRScheduler",
     parallel_context: ParallelContext,
     training_metadata: TrainingMetadata,
     root_folder: Path,

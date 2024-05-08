@@ -1,5 +1,9 @@
-from functools import cache
 from typing import Callable, Dict, Optional, Set
+
+try:
+    from functools import cache
+except ImportError:
+    from functools import lru_cache as cache
 
 import torch
 
