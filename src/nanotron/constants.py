@@ -13,4 +13,4 @@ MODEL_CONFIG_FILE_NAME = "model_config.json"
 
 
 # NOTE: hacky, remove after working
-IS_FP8: bool = False
+IS_FP8: bool = True
