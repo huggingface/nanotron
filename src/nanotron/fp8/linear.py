@@ -177,8 +177,8 @@ class _FP8Matmul(torch.autograd.Function):
 
         # fp8_weight_transposed = tex.fp8_transpose(fp8_weight, fp8_weight.fp8_meta.te_dtype)
         # fp8_weight_transposed.fp8_meta = fp8_weight.fp8_meta
-        if ctx.is_weight_transposed is False:
-            transposed_fp8_weight = fp8_weight.transpose_fp8()
+        # if ctx.is_weight_transposed is False:
+        transposed_fp8_weight = fp8_weight.transpose_fp8()
 
         grad_input_temp = torch.zeros(
             fp8_grad_output.shape[0], transposed_fp8_weight.shape[0], device="cuda", dtype=QTYPE_TO_DTYPE[accum_qtype]
@@ -270,4 +270,4 @@ class _FP8Matmul(torch.autograd.Function):
         fp8_weight.grad = fp8_weight_grad
         # NOTE: sanity check
         assert isinstance(fp8_weight.grad, FP8Tensor)
-        return grad_input, None, None, None, None
+        return grad_input, None, None, None, None, None

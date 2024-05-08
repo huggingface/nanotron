@@ -17,6 +17,7 @@ def mm(
 ):
     """
     It would be nicer to use output as argument name, but pytorch use "out", so to consistent with pytorch APIs, we use "out" here!
+    NOTE: we assume that mat2 is transposed, yea this is weird, will replace this with a triton kernel.
     """
     from einops import rearrange
 
@@ -56,6 +57,9 @@ def addmm(
     beta: Union[float, int] = 1,
     alpha: Union[float, int] = 1,
 ):
+    """
+    NOTE: we assume that mat2 is transposed, yea this is weird, will replace this with a triton kernel.
+    """
     assert beta == 1.0, "Currently only support beta=1."
     assert alpha == 1.0, "Currently only support alpha=1."
 
@@ -105,3 +109,7 @@ def linear(
     output = rearrange(output, "(b n) h -> b n h", n=seq_len, b=batch_size) if is_input_flat is True else output
     output = output if bias is None else output + bias
     return output
+
+    # output = torch.zeros(input.shape[0], weight.shape[1], device="cuda", dtype=QTYPE_TO_DTYPE[accum_qtype])
+    # output = addmm(input=bias, mat1=input, mat2=weight, output=output, accum_qtype=accum_qtype, metadatas=metadatas)
+    # return output

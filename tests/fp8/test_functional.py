@@ -15,7 +15,8 @@ def test_fp8_mm(accum_qtype):
     output = torch.zeros_like(ref_output, device="cuda", dtype=QTYPE_TO_DTYPE[accum_qtype])
     output = F.mm(
         input=input,
-        mat2=linear.weight.data.transpose_fp8(),
+        # mat2=linear.weight.data.transpose_fp8(),
+        mat2=linear.weight.data,
         out=output,
         accum_qtype=accum_qtype,
         metadatas=linear.metadatas,
@@ -36,7 +37,8 @@ def test_fp8_addmm(accum_qtype):
     output = F.addmm(
         input=linear.bias,
         mat1=input,
-        mat2=linear.weight.data.transpose_fp8(),
+        # mat2=linear.weight.data.transpose_fp8(),
+        mat2=linear.weight.data,
         output=output,
         beta=1.0,
         alpha=1.0,

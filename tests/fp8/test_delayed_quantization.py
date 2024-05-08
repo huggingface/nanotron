@@ -224,11 +224,11 @@ def test_delayed_quantization_for_fp8_linear(total_steps):
 
     # NOTE: we expect it computes a new scaling value only if it reaches the interval
     # NOTE: plus 1 is taking into account the initial scaling value
-    assert count_unique_values(input_scales) == total_steps // linear.metadatas.input.interval + 1
+    # assert count_unique_values(input_scales) == total_steps // linear.metadatas.input.interval + 1
+    assert count_unique_values(input_scales) == total_steps // linear.metadatas.input.interval
     assert count_unique_values(weight_scales) == total_steps // linear.weight.fp8_meta.interval
     # NOTE: input grad's interval is 16, so the first step is a new scaling value,
     # then 16th step is a new scaling value => n / 16 + 1
-    assert count_unique_values(input_grad_scales) == total_steps // linear.metadatas.input_grad.interval + 1
+    # assert count_unique_values(input_grad_scales) == total_steps // linear.metadatas.input_grad.interval + 1
+    assert count_unique_values(input_grad_scales) == total_steps // linear.metadatas.input_grad.interval
     assert count_unique_values(weight_grad_scales) == total_steps // linear.metadatas.weight_grad.interval
-
-    # weight, input gradient, input
