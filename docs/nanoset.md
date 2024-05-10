@@ -20,11 +20,10 @@ To use these datasets, first, we need to preprocess the data. The input format c
 The preprocessing is done using the [`tools/preprocess_data.py`](../tools/preprocess_data.py) script. Below we show an example for processing a corpus with the Llama2 tokenizer.
 
 <pre>
-python tools/preprocess_data.py \
+torchrun --nproc-per-node 16 tools/preprocess_data.py \
        --input data/my_corpus.json \
        --output-prefix data/processed-datasets/my-llama2-dataset \
-       --tokenizer-name-or-path meta-llama/Llama-2-7b-hf \
-       --num-workers 128
+       --tokenizer-name-or-path meta-llama/Llama-2-7b-hf
 </pre>
 
 In `--tokenizer-name-or-path`, we will have to specify a tokenizer in the same way as we do when using `AutoTokenizers.from_pretrained(...)`.

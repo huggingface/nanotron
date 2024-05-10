@@ -40,11 +40,8 @@ def test_build_nanoset_dataloader(tp: int, dp: int, pp: int, train_steps: int, s
     for idx, json_path in enumerate(json_paths):
         create_dummy_json_dataset(path_to_json=json_path, dummy_text=f"Nanoset {idx}!", n_samples=(idx + 1) * 50000)
 
-    # Preprocess dummy json datasets
-    for json_path in json_paths:
-        preprocess_dummy_dataset(path_to_json=json_path)
-
     init_distributed(tp=tp, dp=dp, pp=pp)(_test_build_nanoset_dataloader)(
+        json_paths=json_paths,
         path_to_mmap_files=mmap_dataset_paths,
         train_steps=train_steps,
         sequence_length=sequence_length,
@@ -53,6 +50,7 @@ def test_build_nanoset_dataloader(tp: int, dp: int, pp: int, train_steps: int, s
 
 def _test_build_nanoset_dataloader(
     parallel_context: ParallelContext,
+    json_paths: str,
     path_to_mmap_files: str,
     train_steps: int,
     sequence_length: int,
@@ -61,6 +59,10 @@ def _test_build_nanoset_dataloader(
     MICRO_BATCH_SIZE = 4
     N_MICRO_BATCHES_PER_BATCH = 8
     GLOBAL_BATCH_SIZE = MICRO_BATCH_SIZE * N_MICRO_BATCHES_PER_BATCH * parallel_context.dp_pg.size()
+
+    # Preprocess dummy json datasets
+    for json_path in json_paths:
+        preprocess_dummy_dataset(path_to_json=json_path)
 
     input_pp_rank, output_pp_rank = 0, int(parallel_context.pp_pg.size() - 1)
 
@@ -153,11 +155,8 @@ def test_recover_nanoset_dataloader(tp: int, dp: int, pp: int, skipped_batches: 
     for idx, json_path in enumerate(json_paths):
         create_dummy_json_dataset(path_to_json=json_path, dummy_text=f"Nanoset {idx}!", n_samples=(idx + 1) * 50000)
 
-    # Preprocess dummy json datasets
-    for json_path in json_paths:
-        preprocess_dummy_dataset(path_to_json=json_path)
-
     init_distributed(tp=tp, dp=dp, pp=pp)(_test_recover_nanoset_dataloader)(
+        json_paths=json_paths,
         path_to_mmap_files=mmap_dataset_paths,
         skipped_batches=skipped_batches,
     )
@@ -165,6 +164,7 @@ def test_recover_nanoset_dataloader(tp: int, dp: int, pp: int, skipped_batches: 
 
 def _test_recover_nanoset_dataloader(
     parallel_context: ParallelContext,
+    json_paths: str,
     path_to_mmap_files: str,
     skipped_batches: int,
 ):
@@ -174,6 +174,10 @@ def _test_recover_nanoset_dataloader(
     GLOBAL_BATCH_SIZE = MICRO_BATCH_SIZE * N_MICRO_BATCHES_PER_BATCH * parallel_context.dp_pg.size()
     SEQUENCE_LENGTH = 1024
     TRAIN_STEPS = 100
+
+    # Preprocess dummy json datasets
+    for json_path in json_paths:
+        preprocess_dummy_dataset(path_to_json=json_path)
 
     input_pp_rank, output_pp_rank = 0, int(parallel_context.pp_pg.size() - 1)
 
