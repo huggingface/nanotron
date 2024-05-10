@@ -28,7 +28,7 @@ torchrun --nproc-per-node 16 tools/preprocess_data.py \
        --tokenizer-name-or-path meta-llama/Llama-2-7b-hf
 </pre>
 
-The `--input` dataset can be either a Hugging Face Dataset from the Hub or a `.json` file. The processed dataset will be stored in *`--output-prefix`_input_ids.npy*. In `--tokenizer-name-or-path`, we will have to specify a tokenizer in the same way as we do when using `AutoTokenizers.from_pretrained(...)`.
+The preprocessing script has to be launched with `torchrun` in order to spawn `--nproc-per-node` workers that will preprocess the dataset concurrently. The `--input` dataset can be either a Hugging Face Dataset from the Hub or a `.json` file. The processed dataset will be stored in *`--output-prefix`_input_ids.npy*. In `--tokenizer-name-or-path`, we will have to specify a tokenizer in the same way as we do when using `AutoTokenizers.from_pretrained(...)`.
 
 The output will be one file named, in this case, `my-llama2-dataset_input_ids.npy`. We will then have to specify this file in the `dataset_path` field in the config file.
 
