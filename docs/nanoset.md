@@ -30,7 +30,7 @@ torchrun --nproc-per-node 16 tools/preprocess_data.py \
 
 The preprocessing script has to be launched with `torchrun` in order to spawn `--nproc-per-node` workers that will preprocess the dataset concurrently. The `--input` dataset can be either a Hugging Face Dataset from the Hub or a `.json` file. The processed dataset will be stored in *`--output-prefix`_input_ids.npy*. In `--tokenizer-name-or-path`, we will have to specify a tokenizer in the same way as we do when using `AutoTokenizers.from_pretrained(...)`.
 
-The output will be one file named, in this case, `my-llama2-dataset_input_ids.npy`. We will then have to specify this file in the `dataset_path` field in the config file.
+The output will be one file named, in this case, `datasets/testing_alpaca_small_input_ids.npy`. We will then have to specify this file in the `dataset_path` field in the config file.
 
 ## Working with Nanosets
 
@@ -43,7 +43,7 @@ To work with `Nanosets`, we just need to configure 1 argument:
         start_training_step: 1
         data:
           dataset:
-            dataset_path: nanosets/SlimPajama-6B_input_ids.npy
+            dataset_path: datasets/SlimPajama-6B_input_ids.npy
           num_loading_workers: 0
           seed: 1234
     ```
@@ -55,8 +55,8 @@ To work with `Nanosets`, we just need to configure 1 argument:
         data:
           dataset:
             dataset_path:
-            - nanoset/SlimPajama-6B_input_ids.npy
-            - nanoset/europarl_input_ids.npy
+            - datasets/SlimPajama-6B_input_ids.npy
+            - datasets/testing_alpaca_small_input_ids.npy
           num_loading_workers: 0
           seed: 1234
     ```
@@ -68,8 +68,8 @@ To work with `Nanosets`, we just need to configure 1 argument:
         data:
           dataset:
             dataset_path:
-              nanoset/SlimPajama-6B_input_ids.npy: 0.8
-              nanoset/europarl_input_ids.npy: 0.2
+              datasets/SlimPajama-6B_input_ids.npy: 0.8
+              datasets/testing_alpaca_small_input_ids.npy: 0.2
           num_loading_workers: 0
           seed: 1234
     ```
