@@ -37,6 +37,9 @@ class FP8Linear(nn.Linear):
         bias: bool = True,
         device: Optional[torch.device] = None,
         accum_qtype: DTypes = FP8LM_RECIPE.linear.accum_dtype,
+        # NOTE: placeholder for dtype in torch's nn.Linear
+        # TODO(xrsrke): remove this shit
+        **kwargs,
     ):
         """
         Args:

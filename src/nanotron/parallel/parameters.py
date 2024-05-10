@@ -112,7 +112,11 @@ class NanotronParameter(nn.Parameter):
     NANOTRON_PARAMETER_METADATA_SHARDED_KEY = "sharded"
 
     def __new__(cls, tensor: torch.Tensor, requires_grad: bool = True):
-        param = nn.Parameter.__new__(cls, data=tensor.data.detach(), requires_grad=requires_grad)
+        assert tensor.data.is_floating_point() or tensor.data.requires_grad is False
+
+        # NOTE: FP8 tensor has int dtype, you can't .detach() an integer tensor!
+        data = tensor.data.detach() if tensor.data.is_floating_point() else tensor.data
+        param = nn.Parameter.__new__(cls, data=data, requires_grad=requires_grad)
 
         if isinstance(tensor, NanotronParameter):
             # Check that we don't inherit a weird class
