@@ -18,6 +18,7 @@ class Nanoset(torch.utils.data.Dataset):
         dataset_paths (List[str]): List of paths to tokenized datasets
         dataset_weights (List[float]): List with the weights for weighted datasets. If None, consume all samples from all datasets without weighting. Weights are normalized in __init__
         sequence_length (int): Sequence length of the built samples
+        token_dtype (Union[np.uint16, np.int32]): dtype of the tokens stored in the processed dataset files. np.uin16 for vocab sizes < 65535, np.int32 otherwise
         train_split_num_samples (int): Number of samples the dataset needs. It's the training steps * global batch size
     """
 
@@ -26,6 +27,7 @@ class Nanoset(torch.utils.data.Dataset):
         dataset_paths: List[str],
         dataset_weights: Union[List[float], None],
         sequence_length: int,
+        token_dtype: Union[np.uint16, np.int32],
         train_split_num_samples: int,
         random_seed: int = 1234,
     ) -> None:
@@ -34,6 +36,7 @@ class Nanoset(torch.utils.data.Dataset):
         self.dataset_paths = dataset_paths
         self.dataset_weights = dataset_weights
         self.sequence_length = sequence_length
+        self.token_dtype = token_dtype
         self.train_split_num_samples = train_split_num_samples
         self.random_seed = random_seed
 
@@ -41,7 +44,7 @@ class Nanoset(torch.utils.data.Dataset):
         ## To build the index we need the length of each dataset
         self.dataset_lengths = []
         for dataset_path in self.dataset_paths:
-            self.dataset_buffer_mmap = np.memmap(dataset_path, mode="r", order="C", dtype=np.uint16)
+            self.dataset_buffer_mmap = np.memmap(dataset_path, mode="r", order="C", dtype=self.token_dtype)
             self.dataset_buffer = memoryview(self.dataset_buffer_mmap)
             dataset_tokens = int(len(self.dataset_buffer))
             number_of_samples = int(
@@ -84,13 +87,13 @@ class Nanoset(torch.utils.data.Dataset):
 
         # Rebuild the memmap in every access to free memory
         # https://stackoverflow.com/a/61472122
-        self.dataset_buffer_mmap = np.memmap(self.dataset_paths[dataset], mode="r", order="C", dtype=np.uint16)
+        self.dataset_buffer_mmap = np.memmap(self.dataset_paths[dataset], mode="r", order="C", dtype=self.token_dtype)
         self.dataset_buffer = memoryview(self.dataset_buffer_mmap)
 
-        # dtype=uint16, 2 bytes per token
-        offset = dataset_sample * self.sequence_length * 2
+        # uint16 -> 2 bytes per token, int32 -> 4 bytes per token
+        offset = dataset_sample * self.sequence_length * (np.iinfo(self.token_dtype).bits / 8)
         input_ids_tokens = np.frombuffer(
-            self.dataset_buffer, dtype=np.uint16, count=(self.sequence_length + 1), offset=offset
+            self.dataset_buffer, dtype=self.token_dtype, count=(self.sequence_length + 1), offset=int(offset)
         )
 
         # Return tokens as np.int32 as Torch can't handle uint16

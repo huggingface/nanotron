@@ -38,13 +38,13 @@ def create_dummy_json_dataset(path_to_json: str, dummy_text: str, n_samples: int
             json_file.write("\n")
 
 
-def preprocess_dummy_dataset(path_to_json: str):
+def preprocess_dummy_dataset(path_to_json: str, tokenizer: str):
     # Create args for preprocessing
     args = Namespace(
         input=path_to_json + ".json",
         column="text",
         output_prefix=path_to_json,
-        tokenizer_name_or_path="openai-community/gpt2",
+        tokenizer_name_or_path=tokenizer,
         add_special_tokens=False,
     )
 

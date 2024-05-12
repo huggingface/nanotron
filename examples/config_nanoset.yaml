@@ -1,6 +1,6 @@
 checkpoints:
   checkpoint_interval: 1000
-  checkpoints_path: /mloscratch/homes/solergib/nanotron/checkpoints
+  checkpoints_path: checkpoints/
   checkpoints_path_is_shared_file_system: false
   resume_checkpoint_path: null
   save_initial_state: false

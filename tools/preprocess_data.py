@@ -66,6 +66,7 @@ def main(args):
     ds = ds.select_columns(args.column)
 
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_name_or_path)
+    token_dtype = np.int32 if len(tokenizer) > np.iinfo(np.uint16).max + 1 else np.uint16
 
     # Create tmp directory for worker outputs
     tmp_folder = os.path.abspath(os.path.join(args.output_prefix, os.pardir, "tmp"))
@@ -83,7 +84,7 @@ def main(args):
 
     worker_input_ids_file = open(worker_output_file, "wb")
     for sample in ds:
-        np_array = np.array(sample["input_ids"], dtype=np.uint16)
+        np_array = np.array(sample["input_ids"], dtype=token_dtype)
         worker_input_ids_file.write(np_array.tobytes(order="C"))
     worker_input_ids_file.close()
 

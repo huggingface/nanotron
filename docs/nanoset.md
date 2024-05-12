@@ -73,6 +73,8 @@ To work with `Nanosets`, we just need to configure 1 argument:
           num_loading_workers: 0
           seed: 1234
     ```
+> [!IMPORTANT]
+> Remember to set the `tokenizer.tokenizer_name_or_path` in the config file to the tokenizer used to preprocess the documents and set the `model.model_config.vocab_size` accordingly.
 
 Finally, to use the `Nanosets`, launch the training with [`run_train.py`](../run_train.py).
 ```shell

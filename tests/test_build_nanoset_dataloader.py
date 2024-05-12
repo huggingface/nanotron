@@ -17,6 +17,7 @@ from nanotron.data.nanoset import Nanoset
 from nanotron.data.utils import count_dataset_indexes, normalize
 from nanotron.parallel import ParallelContext
 from nanotron.utils import main_rank_first
+from transformers import AutoTokenizer
 
 
 @pytest.mark.parametrize(
@@ -29,8 +30,11 @@ from nanotron.utils import main_rank_first
 )
 @pytest.mark.parametrize("train_steps", [5, 100])
 @pytest.mark.parametrize("sequence_length", [512, 8192])
+@pytest.mark.parametrize("tokenizer_name_or_path", ["openai-community/gpt2", "unsloth/llama-3-8b-bnb-4bit"])
 @rerun_if_address_is_in_use()
-def test_build_nanoset_dataloader(tp: int, dp: int, pp: int, train_steps: int, sequence_length: int):
+def test_build_nanoset_dataloader(
+    tp: int, dp: int, pp: int, train_steps: int, sequence_length: int, tokenizer_name_or_path: str
+):
     test_context = TestContext()
 
     # Create dataset files
@@ -45,6 +49,7 @@ def test_build_nanoset_dataloader(tp: int, dp: int, pp: int, train_steps: int, s
         path_to_mmap_files=mmap_dataset_paths,
         train_steps=train_steps,
         sequence_length=sequence_length,
+        tokenizer_name_or_path=tokenizer_name_or_path,
     )
 
 
@@ -54,6 +59,7 @@ def _test_build_nanoset_dataloader(
     path_to_mmap_files: str,
     train_steps: int,
     sequence_length: int,
+    tokenizer_name_or_path: str,
 ):
     SEED = 1234
     MICRO_BATCH_SIZE = 4
@@ -62,15 +68,21 @@ def _test_build_nanoset_dataloader(
 
     # Preprocess dummy json datasets
     for json_path in json_paths:
-        preprocess_dummy_dataset(path_to_json=json_path)
+        preprocess_dummy_dataset(path_to_json=json_path, tokenizer=tokenizer_name_or_path)
 
     input_pp_rank, output_pp_rank = 0, int(parallel_context.pp_pg.size() - 1)
+
+    # Get tokenizer cardinality
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name_or_path)
+    token_dtype = np.int32 if len(tokenizer) > np.iinfo(np.uint16).max + 1 else np.uint16
+    del tokenizer
 
     # Create Nanoset configs: 1. Normal 2. Blended 3. Blended with weights
     nanoset_config = {
         "dataset_paths": [path_to_mmap_files[0]],
         "dataset_weights": [1],
         "sequence_length": sequence_length,
+        "token_dtype": token_dtype,
         "train_split_num_samples": train_steps * GLOBAL_BATCH_SIZE,
         "random_seed": SEED,
     }
@@ -79,6 +91,7 @@ def _test_build_nanoset_dataloader(
         "dataset_paths": [path_to_mmap_files[0], path_to_mmap_files[1]],
         "dataset_weights": None,
         "sequence_length": sequence_length,
+        "token_dtype": token_dtype,
         "train_split_num_samples": train_steps * GLOBAL_BATCH_SIZE,
         "random_seed": SEED,
     }
@@ -87,6 +100,7 @@ def _test_build_nanoset_dataloader(
         "dataset_paths": [path_to_mmap_files[0], path_to_mmap_files[1]],
         "dataset_weights": [8, 2],
         "sequence_length": sequence_length,
+        "token_dtype": token_dtype,
         "train_split_num_samples": train_steps * GLOBAL_BATCH_SIZE,
         "random_seed": SEED,
     }
@@ -144,8 +158,9 @@ def _test_build_nanoset_dataloader(
     ],
 )
 @pytest.mark.parametrize("skipped_batches", [20, 50])
+@pytest.mark.parametrize("tokenizer_name_or_path", ["openai-community/gpt2", "unsloth/llama-3-8b-bnb-4bit"])
 @rerun_if_address_is_in_use()
-def test_recover_nanoset_dataloader(tp: int, dp: int, pp: int, skipped_batches: int):
+def test_recover_nanoset_dataloader(tp: int, dp: int, pp: int, skipped_batches: int, tokenizer_name_or_path: str):
     test_context = TestContext()
 
     # Create dataset files
@@ -159,6 +174,7 @@ def test_recover_nanoset_dataloader(tp: int, dp: int, pp: int, skipped_batches: 
         json_paths=json_paths,
         path_to_mmap_files=mmap_dataset_paths,
         skipped_batches=skipped_batches,
+        tokenizer_name_or_path=tokenizer_name_or_path,
     )
 
 
@@ -167,6 +183,7 @@ def _test_recover_nanoset_dataloader(
     json_paths: str,
     path_to_mmap_files: str,
     skipped_batches: int,
+    tokenizer_name_or_path: str,
 ):
     SEED = 1234
     MICRO_BATCH_SIZE = 4
@@ -177,15 +194,21 @@ def _test_recover_nanoset_dataloader(
 
     # Preprocess dummy json datasets
     for json_path in json_paths:
-        preprocess_dummy_dataset(path_to_json=json_path)
+        preprocess_dummy_dataset(path_to_json=json_path, tokenizer=tokenizer_name_or_path)
 
     input_pp_rank, output_pp_rank = 0, int(parallel_context.pp_pg.size() - 1)
+
+    # Get tokenizer cardinality
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name_or_path)
+    token_dtype = np.int32 if len(tokenizer) > np.iinfo(np.uint16).max + 1 else np.uint16
+    del tokenizer
 
     # Create Nanoset configs: 1. Normal 2. Blended 3. Blended with weights
     nanoset_config = {
         "dataset_paths": [path_to_mmap_files[0]],
         "dataset_weights": [1],
         "sequence_length": SEQUENCE_LENGTH,
+        "token_dtype": token_dtype,
         "train_split_num_samples": TRAIN_STEPS * GLOBAL_BATCH_SIZE,
         "random_seed": SEED,
     }
@@ -194,6 +217,7 @@ def _test_recover_nanoset_dataloader(
         "dataset_paths": [path_to_mmap_files[0], path_to_mmap_files[1]],
         "dataset_weights": None,
         "sequence_length": SEQUENCE_LENGTH,
+        "token_dtype": token_dtype,
         "train_split_num_samples": TRAIN_STEPS * GLOBAL_BATCH_SIZE,
         "random_seed": SEED,
     }
@@ -202,6 +226,7 @@ def _test_recover_nanoset_dataloader(
         "dataset_paths": [path_to_mmap_files[0], path_to_mmap_files[1]],
         "dataset_weights": [8, 2],
         "sequence_length": SEQUENCE_LENGTH,
+        "token_dtype": token_dtype,
         "train_split_num_samples": TRAIN_STEPS * GLOBAL_BATCH_SIZE,
         "random_seed": SEED,
     }
