@@ -4,7 +4,7 @@ Nanotron training script.
 Usage:
 ```
 export CUDA_DEVICE_MAX_CONNECTIONS=1 # important for some distributed operations
-torchrun --nproc_per_node=8 run_train.py --config-file examples/config_tiny_llama.yaml
+torchrun --nproc_per_node=2 run_train.py --config-file examples/config_tiny_llama.yaml
 ```
 """
 import argparse
