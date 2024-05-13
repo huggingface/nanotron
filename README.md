@@ -74,6 +74,7 @@ You can find more examples in the [`/examples`](/examples) directory:
 | `mamba` | Train an example Mamba model |
 | `moe` | Train an example Mixture-of-Experts (MoE) model |
 | `mup` | Use spectral µTransfer to scale up your model |
+
 We're working on adding more examples soon! Feel free to add a PR to add your own example. 🚀
 
 
