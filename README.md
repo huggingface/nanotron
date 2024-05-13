@@ -37,12 +37,13 @@ Nanotron is a library for pretraining transformer models. It provides a simple a
 # Requirements: Python>=3.10
 git clone https://github.com/huggingface/nanotron
 cd nanotron
+pip install --upgrade pip
 pip install --pre torch --index-url https://download.pytorch.org/whl/nightly/cu121
 pip install -e .
 
 # Install dependencies if you want to use the example scripts
 pip install datasets transformers
-pip install "flash-attn>=2.5.0" --no-build-isolation
+pip install triton "flash-attn>=2.5.0" --no-build-isolation
 ```
 > [!NOTE]
 > If you get `undefined symbol: ncclCommRegister` error you should install torch 2.1.2 instead: `pip install torch==2.1.2 --index-url https://download.pytorch.org/whl/cu121`
