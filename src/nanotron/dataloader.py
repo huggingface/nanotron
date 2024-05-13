@@ -22,6 +22,7 @@ try:
     import datasets
     from datasets import (
         Dataset,
+        IterableDataset,
         DatasetDict,
         Features,
         Sequence,
@@ -87,6 +88,7 @@ def get_datasets(
     hf_dataset_or_datasets: Union[dict, str],
     hf_dataset_config_name: Optional[str] = None,
     splits: Optional[Union[List[str], str]] = ["train", "test"],
+    streaming_hf: Optional[bool] = False
 ) -> "DatasetDict":
     """
     Function to load dataset directly from DataArguments.
@@ -121,6 +123,7 @@ def get_datasets(
                 # have to pass it as positional arguments!!
                 hf_dataset_config_name,
                 split=split,
+                streaming = streaming_hf # whether we should use an iterable streaming dataloader
             )
     else:
         raise ValueError(f"hf_dataset_or_datasets must be a dict or string but is {type(hf_dataset_or_datasets)}")
@@ -313,15 +316,16 @@ def clm_process(
         tokenized_batch = {k: [np.array(tokenized_texts) for tokenized_texts in v] for k, v in tokenized_batch.items()}
         return group_texts(tokenized_batch)
 
+    # some args not supported by the IterableDataset
+    additional_args = {"num_proc": dataset_processing_num_proc_per_process, "load_from_cache_file": not dataset_overwrite_cache, "desc": f"Grouping texts in chunks of {sequence_length+1}"} if not isinstance(raw_dataset, IterableDataset) else {}
+
     train_dataset = raw_dataset.map(
         _tokenize_and_group_texts,
         input_columns=text_column_name,
         remove_columns=raw_dataset.column_names,
         features=Features({"input_ids": Sequence(feature=Value(dtype="int64"), length=sequence_length + 1)}),
         batched=True,
-        num_proc=dataset_processing_num_proc_per_process,
-        load_from_cache_file=not dataset_overwrite_cache,
-        desc=f"Grouping texts in chunks of {sequence_length+1}",
+        **additional_args
     )
     return train_dataset
 
@@ -416,7 +420,10 @@ def _get_train_sampler(
 
     # Build the sampler.
     # TODO @nouamanetazi: Support group_by_length: https://github.com/huggingface/transformers/blob/47e1676255e5dd86b9541f734cd4f4bdcbb50f4a/src/transformers/trainer.py#L783-L810
-
+    if isinstance(train_dataset, IterableDataset):
+        # It's the task of the iterabledataset to use the rank info correctly.
+        return None
+    
     if use_loop_to_round_batch_size:
         assert micro_batch_size is not None
         # loops at the end back to the beginning of the shuffled samples to make each process have a round multiple of batch_size samples.
@@ -454,15 +461,20 @@ def get_train_dataloader(
     dataloader_pin_memory: bool = True,
     use_loop_to_round_batch_size: bool = False,
 ) -> DataLoader:
-    if not isinstance(train_dataset, datasets.Dataset):
-        raise ValueError(f"training requires a datasets.Dataset, but got {type(train_dataset)}")
+    #if type(datasets.Dataset) not in [datasets.Dataset, datasets.iterable_dataset.IterableDataset]:
+    #    raise ValueError(f"training requires a datasets.Dataset, but got {type(train_dataset)}")
 
     # Case of ranks requiring data
     if dist.get_rank(parallel_context.pp_pg) in [
         input_pp_rank,
         output_pp_rank,
     ]:
-        train_dataset = train_dataset.with_format(type="numpy", columns=["input_ids"], output_all_columns=True)
+        if isinstance(train_dataset, datasets.Dataset):
+            train_dataset = train_dataset.with_format(
+                type="numpy", columns=["input_ids"], output_all_columns=True
+            )
+        else:
+           train_dataset = train_dataset.with_format(type="torch")
 
     # Case of ranks not requiring data. We give them an infinite dummy dataloader
     else:

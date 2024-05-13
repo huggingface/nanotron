@@ -5,7 +5,7 @@ import os
 import random
 import socket
 from contextlib import ExitStack, contextmanager
-from typing import Callable, ContextManager, List, Optional
+from typing import Callable, ContextManager, List, Optional, Any
 
 import torch
 from packaging import version
@@ -141,3 +141,9 @@ def find_free_port(min_port: int = 2000, max_port: int = 65000) -> int:
                 return port
         except OSError:
             continue
+
+def has_length(dataset: Any):
+    try:
+        return len(dataset) is not None
+    except TypeError:
+        return False

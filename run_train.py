@@ -4,7 +4,7 @@ Nanotron training script.
 Usage:
 ```
 export CUDA_DEVICE_MAX_CONNECTIONS=1 # important for some distributed operations
-torchrun --nproc_per_node=2 run_train.py --config-file examples/config_tiny_llama.yaml
+python -u -m torch.distributed.run --nproc_per_node=2 run_train.py --config-file examples/tinyllama.yaml
 ```
 """
 import argparse
@@ -29,7 +29,7 @@ from nanotron.helpers import (
 from nanotron.logging import log_rank
 from nanotron.parallel.pipeline_parallel.utils import get_input_output_pp_ranks
 from nanotron.trainer import DistributedTrainer
-from nanotron.utils import main_rank_first
+from nanotron.utils import main_rank_first, has_length
 from torch.utils.data import DataLoader
 
 try:
@@ -96,6 +96,7 @@ def get_dataloader_from_data_stage(
                 hf_dataset_or_datasets=data.dataset.hf_dataset_or_datasets,
                 hf_dataset_config_name=data.dataset.hf_dataset_config_name,
                 splits=data.dataset.hf_dataset_splits,
+                streaming_hf = True # Testing an IterableDataset
             )["train"]
 
             tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
@@ -132,14 +133,15 @@ def get_dataloader_from_data_stage(
             )
 
             # Check if we have enough samples for train_steps
-            total_tokens_dataset = len(dataloader.dataset) * trainer.sequence_length
-            num_tokens_needed_for_training = (
-                num_remaining_train_steps * trainer.global_batch_size * trainer.sequence_length
-            )
-            assert num_tokens_needed_for_training <= total_tokens_dataset, (
-                f"Dataset is too small for steps ({total_tokens_dataset} < {num_tokens_needed_for_training}), "
-                f"Try train_steps<={len(dataloader.dataset) // trainer.global_batch_size + trainer.iteration_step}"
-            )
+            if has_length(train_dataset):
+                total_tokens_dataset = len(dataloader.dataset) * trainer.sequence_length
+                num_tokens_needed_for_training = (
+                    num_remaining_train_steps * trainer.global_batch_size * trainer.sequence_length
+                )
+                assert num_tokens_needed_for_training <= total_tokens_dataset, (
+                    f"Dataset is too small for steps ({total_tokens_dataset} < {num_tokens_needed_for_training}), "
+                    f"Try train_steps<={len(dataloader.dataset) // trainer.global_batch_size + trainer.iteration_step}"
+                )
     else:
         raise ValueError(f"Unhandled case of `self.config.data.dataset`. Got: {data.dataset}")
 
