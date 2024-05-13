@@ -13,8 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """PyTorch LLaMa model."""
-
-from typing import Dict, Optional, Union, List
+import os
+from typing import Dict, Optional, Union
 
 import torch
 from torch import nn
@@ -27,7 +27,7 @@ from nanotron.generation.generate_store import AttachableStore
 from nanotron.logging import log_rank
 from nanotron.models import NanotronModel
 from nanotron.nn.activations import ACT2FN
-from nanotron.nn.layer_norm import TritonRMSNorm
+from nanotron.nn.layer_norm import RMSNorm, TritonRMSNorm
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter
 from nanotron.parallel.pipeline_parallel.block import PipelineBlock, TensorPointer
@@ -44,6 +44,20 @@ from nanotron.scaling.parametrization import SpectralMupParametrizator, Standard
 from nanotron.utils import checkpoint_method
 
 logger = logging.get_logger(__name__)
+
+
+# Replace flash attention implementations
+# TritonRMSNorm + FlashRotaryEmbedding + CoreAttention -> Llama RMSNorm + RotaryEmbedding + SDPA
+DISABLE_FLASH_ATTENTION = os.getenv("DISABLE_FLASH_ATTENTION", "0") == "1"
+
+if DISABLE_FLASH_ATTENTION:
+    print("Warning: Flash attention was disabled!")
+    # FSDP
+    torch.backends.cuda.enable_mem_efficient_sdp(False)
+    torch.backends.cuda.enable_flash_sdp(False)
+
+
+RMSNorm = RMSNorm if DISABLE_FLASH_ATTENTION else TritonRMSNorm
 
 
 class RotaryEmbedding(nn.Module):
@@ -262,7 +276,6 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         tp_pg: dist.ProcessGroup,
         layer_idx: int,
     ):
-        from flash_attn.layers.rotary import RotaryEmbedding as FlashRotaryEmbedding
 
         super().__init__()
         # Tensor parallel considerations: We split tensors along head dimension
@@ -322,8 +335,22 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             end=config.max_position_embeddings,
         )
 
-        # NOTE: Only supported for training (TODO(fmom): position_ids not supported yet)
-        self.flash_rotary_embedding = FlashRotaryEmbedding(dim=self.d_qk, interleaved=True)
+        if not DISABLE_FLASH_ATTENTION:
+            from flash_attn.layers.rotary import RotaryEmbedding as FlashRotaryEmbedding
+
+            self.flash_rotary_embedding = FlashRotaryEmbedding(dim=self.d_qk, interleaved=True)
+            # NOTE: Only supported for training (TODO(fmom): position_ids not supported yet)
+            # forward( self, qkv: torch.Tensor, kv)
+            self.attention = CoreAttention(
+                config,
+                parallel_config=parallel_config,
+                layer_idx=layer_idx,
+            )
+        else:
+            self.flash_rotary_embedding = RotaryEmbedding(
+                dim=self.d_qk,
+                end=config.max_position_embeddings,
+            )
 
         self.o_proj = TensorParallelRowLinear(
             config.num_attention_heads * self.d_qk,
@@ -332,12 +359,6 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             mode=tp_mode,
             bias=False,
             async_communication=tp_linear_async_communication,
-        )
-
-        self.attention = CoreAttention(
-            config,
-            parallel_config=parallel_config,
-            layer_idx=layer_idx,
         )
 
         self.prefill_kv_len = (
@@ -558,12 +579,17 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             # NOTE: The layout is different from models/llama.py which is [batch_size, num_heads, seq_length, d_qk]
             # Here it is, [batch_size, seq_length, num_heads, d_qk]
             # [2, batch_size, seq_length, num_heads, d_qk]
-            key_value_states = torch.cat([key_states.unsqueeze(0), value_states.unsqueeze(0)], dim=0)
-            # [batch_size, seq_length, 2, num_heads, d_qk]
-            key_value_states = key_value_states.permute(1, 2, 0, 3, 4).contiguous()
-            query_states, key_value_states = self.flash_rotary_embedding(query_states, kv=key_value_states)
-            # [batch_size, seq_length, num_heads, d_qk]
-            key_states, value_states = torch.split(key_value_states, 1, dim=2)
+            if not DISABLE_FLASH_ATTENTION:
+                key_value_states = torch.cat([key_states.unsqueeze(0), value_states.unsqueeze(0)], dim=0)
+                # [batch_size, seq_length, 2, num_heads, d_qk]
+                key_value_states = key_value_states.permute(1, 2, 0, 3, 4).contiguous()
+                query_states, key_value_states = self.flash_rotary_embedding(query_states, kv=key_value_states)
+                # [batch_size, seq_length, num_heads, d_qk]
+                key_states, value_states = torch.split(key_value_states, 1, dim=2)
+            else:
+                position_ids = torch.cumsum(sequence_mask, dim=-1, dtype=torch.int32) - 1
+                query_states = self.flash_rotary_embedding(query_states, position_ids=position_ids)
+                key_states = self.flash_rotary_embedding(key_states, position_ids=position_ids)
 
             q_sequence_mask = sequence_mask
             kv_sequence_mask = sequence_mask
@@ -571,24 +597,45 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             kv_length = key_states.shape[1]
             # [batch_size, seq_length, num_heads, d_qk]
             # Shaping for use in `flash-attn` version of flash-attn: `flash_attn_unpadded_func`
-            query_states = query_states.view(
-                batch_size * q_length, self.n_local_q_heads, self.d_qk
-            )  # [batch_size * q_length, self.n_heads, d_qk]
+            if not DISABLE_FLASH_ATTENTION:
+                query_states = query_states.view(
+                    batch_size * q_length, self.n_local_q_heads, self.d_qk
+                )  # [batch_size * q_length, self.n_heads, d_qk]
+                key_states = key_states.view(
+                    batch_size * kv_length, self.n_local_kv_heads, self.d_qk
+                )  # [batch_size * kv_length, self.n_heads, d_qk]
+                value_states = value_states.view(
+                    batch_size * kv_length, self.n_local_kv_heads, self.d_v
+                )  # [batch_size * kv_length, self.n_heads, d_v]
+                attention_output = self.attention(
+                    query_states=query_states,
+                    key_states=key_states,
+                    value_states=value_states,
+                    q_sequence_mask=q_sequence_mask,
+                    kv_sequence_mask=kv_sequence_mask,
+                )
+            else:
+                # [batch_size, seq_length, n_local_q_heads, d_qk] -> [batch_size, n_local_q_heads, seq_length, d_qk]
+                query_states = query_states.transpose(1, 2)
+                key_states = key_states.transpose(1, 2)
+                value_states = value_states.transpose(1, 2)
 
-            key_states = key_states.view(
-                batch_size * kv_length, self.n_local_kv_heads, self.d_qk
-            )  # [batch_size * kv_length, self.n_heads, d_qk]
-            value_states = value_states.view(
-                batch_size * kv_length, self.n_local_kv_heads, self.d_v
-            )  # [batch_size * kv_length, self.n_heads, d_v]
+                # attention_output: [batch_size, n_local_q_heads, seq_length, d_v]
+                attention_output = torch.nn.functional.scaled_dot_product_attention(
+                    query_states,
+                    key_states,
+                    value_states,
+                    dropout_p=0.0,
+                    is_causal=True,
+                )
 
-            attention_output = self.attention(
-                query_states=query_states,
-                key_states=key_states,
-                value_states=value_states,
-                q_sequence_mask=q_sequence_mask,
-                kv_sequence_mask=kv_sequence_mask,
-            )
+                # In order to have the same shape as flash attention output
+                # [batch_size, n_local_q_heads, q_length, d_v] -> [batch_size * q_length, n_local_q_heads, d_v]
+                attention_output = (
+                    attention_output.transpose(1, 2)
+                    .contiguous()
+                    .view(batch_size * q_length, self.n_local_q_heads, self.d_v)
+                )
 
         attention_output = (
             attention_output.contiguous().view(batch_size, q_length, self.n_local_q_heads * self.d_v).transpose(0, 1)
@@ -607,7 +654,7 @@ class LlamaDecoderLayer(nn.Module):
         layer_idx: int,
     ):
         super().__init__()
-        self.input_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.input_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.attn = CausalSelfAttention(
             config=config,
             parallel_config=parallel_config,
@@ -615,7 +662,7 @@ class LlamaDecoderLayer(nn.Module):
             layer_idx=layer_idx,
         )
 
-        self.post_attention_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.post_attention_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.mlp = MLP(config=config, parallel_config=parallel_config, tp_pg=tp_pg)
 
     def forward(
@@ -724,7 +771,7 @@ class LlamaModel(nn.Module):
 
         self.final_layer_norm = PipelineBlock(
             p2p=self.p2p,
-            module_builder=TritonRMSNorm,
+            module_builder=RMSNorm,
             module_kwargs={"hidden_size": config.hidden_size, "eps": config.rms_norm_eps},
             module_input_keys={"input"},
             module_output_keys={"hidden_states"},

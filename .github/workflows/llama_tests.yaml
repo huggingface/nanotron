@@ -1,7 +1,6 @@
-name: Run FA2-related unit tests
+name: Run Llama loss test
 
 on:
-  workflow_dispatch:
   push:
     branches: [ main ]
     # Only run tests if we modify the following files
@@ -19,7 +18,8 @@ on:
 
 jobs:
   tests:
-    runs-on: [single-gpu, nvidia-gpu, a10, ci]
+    # NOTE: 8-t4 to run LLama
+    runs-on: [multi-gpu, nvidia-gpu, 8-t4, ci]
     container:
       image: runpod/pytorch:2.1.1-py3.10-cuda12.1.1-devel-ubuntu22.04
       ports:
@@ -27,7 +27,6 @@ jobs:
       options: --gpus all --shm-size "8G"
     steps:
     - uses: actions/checkout@v3
-
     - name: Python environment
       run: |
         which python
@@ -39,7 +38,7 @@ jobs:
         python -c "import torch; print('torch:', torch.__version__, torch)"
         python -c "import torch; print('CUDA available:', torch.cuda.is_available())"
 
-    - name: Install nanotron
+    - name: Install nanotron's dependencies
       run: |
         python -m pip install --upgrade pip
         pip install packaging
@@ -53,7 +52,8 @@ jobs:
     - name: Show installed libraries and their versions
       run: pip freeze | tee installed.txt
 
-    - name: Run tests
-      # NOTE: -m fa2 will only run the unit tests that have the mark
-      # "fa2" (these are FA2-related tests)
-      run: pytest -m fa2 --color=yes --durations=0 --ignore tests/fp8 --verbose tests/
+    - name: Run Llama example
+      run: pytest --verbose tests/test_llama.py::test_tiny_llama
+
+    - name: Run Llama loss test
+      run: pytest --verbose tests/test_llama.py::test_train_llama

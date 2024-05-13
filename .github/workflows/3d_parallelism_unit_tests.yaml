@@ -60,6 +60,7 @@ jobs:
         --durations=0 \
         --ignore tests/kernels \
         --ignore tests/fp8 \
+        --ignore tests/test_llama.py \
         --verbose \
         tests/
     # NOTE: T4 can't run FA2, DoReMi's LLaMa needs FÀ
