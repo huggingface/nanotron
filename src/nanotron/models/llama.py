@@ -188,9 +188,9 @@ class CoreAttention(nn.Module):
     @checkpoint_method(attr_name="checkpoint_attention")
     def forward(
         self,
-        query_states: torch.Tensor,  # [batch_size * q_length, n_local_q_heads, inner_dim]
-        key_states: torch.Tensor,  # [batch_size * kv_length, n_local_kv_heads, inner_dim]
-        value_states: torch.Tensor,  # [batch_size * kv_length, n_local_kv_heads, inner_dim]
+        query_states: torch.Tensor,  # [batch_size, q_length, n_local_q_heads, inner_dim]
+        key_states: torch.Tensor,  # [batch_size, kv_length, n_local_kv_heads, inner_dim]
+        value_states: torch.Tensor,  # [batch_size, kv_length, n_local_kv_heads, inner_dim]
     ):
         from flash_attn.flash_attn_interface import flash_attn_func
 
@@ -210,47 +210,6 @@ class CoreAttention(nn.Module):
         )
 
         return attn_output
-
-
-# class CoreAttentionWithoutVarlen(nn.Module):
-#     def __init__(self, config: LlamaConfig, parallel_config: Optional[ParallelismArgs], layer_idx: int):
-#         super().__init__()
-#         # TODO @thomasw21: GPT has a weird `d_kv` config which I'm guessing is essentically a `d_qkv`
-#         assert (
-#             config.hidden_size % config.num_attention_heads == 0
-#         ), f"Hidden size {config.hidden_size} must be divisible by number of attention heads {config.num_attention_heads}."
-#         self.d_qk = config.hidden_size // config.num_attention_heads
-#         self.d_v = config.hidden_size // config.num_attention_heads
-#         self.is_using_mup = config.is_using_mup
-
-#         self.checkpoint_attention = False  # Because flash_attn already does checkpointing
-
-#     @checkpoint_method(attr_name="checkpoint_attention")
-#     def forward(
-#         self,
-#         query_states: torch.Tensor,  # [batch_size * q_length, n_local_q_heads, inner_dim]
-#         key_states: torch.Tensor,  # [batch_size * kv_length, n_local_kv_heads, inner_dim]
-#         value_states: torch.Tensor,  # [batch_size * kv_length, n_local_kv_heads, inner_dim]
-#     ):
-#         from flash_attn.flash_attn_interface import flash_attn_func
-
-#         # for training
-#         causal = True
-
-#         # NOTE: this scale is for µTransfer,
-#         # in SP, we use sqrt(1/d_h)
-#         softmax_scale = 1 / query_states.shape[-1] if self.is_using_mup else None
-#         attn_output = flash_attn_func(
-#             q=query_states,
-#             k=key_states,
-#             v=value_states,
-#             dropout_p=0.0,
-#             softmax_scale=softmax_scale,
-#             causal=causal,
-#             return_attn_probs=False,
-#         )
-
-#         return attn_output
 
 
 def pad_to_right(tensor, mask, new_tensor=None):
