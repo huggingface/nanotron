@@ -14,7 +14,6 @@ import numpy as np
 from nanotron import logging
 from nanotron.config import DataArgs, DatasetStageArgs, NanosetDatasetsArgs, PretrainDatasetsArgs
 from nanotron.data.dataloader_builder import build_nanoset_dataloader
-from nanotron.data.nanoset import Nanoset
 from nanotron.dataloader import (
     clm_process,
     dummy_infinite_data_generator,
@@ -147,6 +146,8 @@ def get_dataloader_from_data_stage(
         token_dtype = np.int32 if len(tokenizer) > np.iinfo(np.uint16).max + 1 else np.uint16
         del tokenizer
         # Create Nanoset
+        from nanotron.data.nanoset import Nanoset
+
         with main_rank_first(trainer.parallel_context.world_pg):
             train_dataset = Nanoset(
                 dataset_paths=data.dataset.dataset_path,
