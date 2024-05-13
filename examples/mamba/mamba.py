@@ -226,7 +226,6 @@ class Mamba(nn.Module, AttachableStore):
                 return out
             else:
                 store["seqlen_offset"] += 1
-
         # We do matmul and transpose BLH -> HBL at the same time
         xz = self.in_proj(hidden_states).transpose(1, 2)
         A = -torch.exp(self.A_log.float())  # (d_inner, d_state)
