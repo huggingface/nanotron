@@ -25,7 +25,7 @@ torchrun --nproc-per-node 16 tools/preprocess_data.py \
        --split train \
        --column completion \
        --output-prefix datasets/testing_alpaca_small \
-       --tokenizer-name-or-path meta-llama/Llama-2-7b-hf
+       --tokenizer-name-or-path gpt2
 </pre>
 
 The preprocessing script has to be launched with `torchrun` in order to spawn `--nproc-per-node` workers that will preprocess the dataset concurrently. The `--input` dataset can be either a Hugging Face Dataset from the Hub or a `.json` file. The processed dataset will be stored in *`--output-prefix`_input_ids.npy*. In `--tokenizer-name-or-path`, we will have to specify a tokenizer in the same way as we do when using `AutoTokenizers.from_pretrained(...)`.
@@ -78,11 +78,11 @@ To work with `Nanosets`, we just need to configure 1 argument:
 
 Finally, to use the `Nanosets`, launch the training with [`run_train.py`](../run_train.py).
 ```shell
-torchrun --nproc-per-node 8 run_train.py --config configs/nanoset_llama2.yaml
+torchrun --nproc-per-node 8 run_train.py --config configs/config_nanoset.yaml
 ```
 
 ## Under the hood
-`Nanosets` are responsible of building samples of `sequence length + 1` tokens from the preprocessed dataset files. The `dataset lengths` of each dataset will be determined by the `number of total tokens / sequence length`, discarding the last sample since its length < `sequence length`.
+`Nanosets` are responsible of building samples of `sequence length + 1` tokens from the preprocessed dataset files. The `dataset lengths` of each dataset will be determined by the `number of total tokens / sequence length`, discarding the last sample if its length < `sequence length`.
 
 Based on the `dataset lengths`, the `dataset weights` and the `number of samples per epoch` (defined as the `sum(dataset lengths)`), we build the two indexes we need in order to extract samples from the `Nanoset`  ([build_nanoset_index_helper](../src/nanotron/data/nanoset.py)):
 - `dataset index`: Contains the index of the dataset from the list of `dataset paths` from which to extract the sample, respecting the established dataset weight.

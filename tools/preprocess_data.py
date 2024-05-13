@@ -1,3 +1,20 @@
+"""
+Example:
+
+torchrun --nproc-per-node 16 tools/preprocess_data.py \
+       --input yelp_review_full \
+       --split train \
+       --output-prefix datasets/yelp_review_full \
+       --tokenizer-name-or-path gpt2
+       
+torchrun --nproc-per-node 16 tools/preprocess_data.py \
+       --input HuggingFaceH4/testing_alpaca_small \
+       --split train \
+       --column completion \
+       --output-prefix datasets/testing_alpaca_small \
+       --tokenizer-name-or-path gpt2
+"""
+
 import argparse
 import os
 import shutil

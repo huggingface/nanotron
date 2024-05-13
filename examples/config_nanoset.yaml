@@ -88,7 +88,7 @@ optimizer:
   weight_decay: 0.01
   zero_stage: 0
 parallelism:
-  dp: 2
+  dp: 1
   expert_parallel_size: 1
   pp: 1
   pp_engine: 1f1b

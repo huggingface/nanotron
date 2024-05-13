@@ -45,6 +45,8 @@ We support the following:
  - FP32 gradient accumulation
  - Parameter tying/sharding
  - Spectral µTransfer parametrization for scaling up neural networks
+ - Megatron-style Dataset [[link]](./docs/nanoset.md)
+
 
 # Installation
 
