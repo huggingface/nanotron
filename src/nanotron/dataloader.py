@@ -19,9 +19,6 @@ from nanotron.sanity_checks import (
 )
 
 try:
-    from transformers import PreTrainedTokenizerBase
-    from transformers.trainer_pt_utils import DistributedSamplerWithLoop
-
     import datasets
     from datasets import (
         Dataset,
@@ -32,6 +29,8 @@ try:
         concatenate_datasets,
         load_dataset,
     )
+    from transformers import PreTrainedTokenizerBase
+    from transformers.trainer_pt_utils import DistributedSamplerWithLoop
 except ImportError:
     warnings.warn("Datasets and/or Transformers not installed, you'll be unable to use the dataloader.")
 
@@ -86,6 +85,7 @@ def sanity_check_dataloader(
 # Adapted from h4/src/h4/data/loading.py
 def get_datasets(
     hf_dataset_or_datasets: Union[dict, str],
+    hf_dataset_config_name: str,
     splits: Optional[Union[List[str], str]] = ["train", "test"],
 ) -> "DatasetDict":
     """
@@ -117,6 +117,7 @@ def get_datasets(
         for split in splits:
             raw_datasets[split] = load_dataset(
                 hf_dataset_or_datasets,
+                hf_dataset_config_name,
                 split=split,
             )
     else:
