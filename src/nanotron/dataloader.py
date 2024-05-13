@@ -297,12 +297,16 @@ def clm_process(
 
     def group_texts(examples: Dict[str, List[np.ndarray]]) -> Dict[str, List[np.ndarray]]:
         # Concatenate all texts.
+        #logger.info(f"len before group = {len(examples['input_ids'])}")
         concatenated_examples = {k: np.concatenate(v) for k, v in examples.items()}
         total_length = len(concatenated_examples[next(iter(examples.keys()))])
+        #logger.info(f"got total_length (which for one key is equal to input_id length) = {total_length} with keys = {examples.keys()} and seqlen = {sequence_length}")
         # WARNING: We drop the small remainder, we could add padding if the model supported it instead of this drop, you can
         # customize this part to your needs.
         if total_length >= sequence_length + 1:
             total_length = ((total_length - 1) // sequence_length) * sequence_length + 1
+            logger.info(f"adjusted total_length = {total_length}")
+     
         # Split by chunks of sequence_length.
         result = {
             k: [
@@ -310,16 +314,39 @@ def clm_process(
             ]
             for k, t in concatenated_examples.items()
         }
+
+        #firstk = result[list(result.keys())[0]]
+        #tmp = [len(t) for t in firstk]
+        #logger.info(f"after split length: {len(firstk)}")
+        #logger.info(str(tmp))
+        #logger.info(str(firstk))
+
         return result
 
     def _tokenize_and_group_texts(texts: List[str]) -> Dict[str, List[np.ndarray]]:
+        #logger.info(f"len(texts) = {len(texts)}")
         tokenized_batch = tokenizer.batch_encode_plus(texts, return_attention_mask=False, return_token_type_ids=False)
+        #logger.info(f"tokenized batch 1 keys = {tokenized_batch.keys()}")
+        #oneitem = tokenized_batch[list(tokenized_batch.keys())[0]][0] 
+        #logger.info(f"tokenized batch 1 example item type = {type(oneitem)}")
+        #logger.info(f"tokenized batch 1 example item = {oneitem}")
         tokenized_batch = {k: [np.array(tokenized_texts) for tokenized_texts in v] for k, v in tokenized_batch.items()}
+        #logger.info(f"tokenized batch 2 keys = {tokenized_batch.keys()}")
+        #oneitem = tokenized_batch[list(tokenized_batch.keys())[0]][0] 
+        #logger.info(f"tokenized batch 2 example item type = {type(oneitem)}")
+        #logger.info(f"tokenized batch 2 example item = {oneitem}")
         return group_texts(tokenized_batch)
 
     # some args not supported by the IterableDataset
     additional_args = {"num_proc": dataset_processing_num_proc_per_process, "load_from_cache_file": not dataset_overwrite_cache, "desc": f"Grouping texts in chunks of {sequence_length+1}"} if not isinstance(raw_dataset, IterableDataset) else {}
+    
+    # This is necessary to drop ("remove") the columns in the map call below
+    # Otherwise column_names is None, and then the old columns are kept,
+    # and they mismatch the length of the grouped texts.
+    if isinstance(raw_dataset, IterableDataset):
+        raw_dataset = raw_dataset._resolve_features()
 
+    logger.info(f"raw_dataset columns = {raw_dataset.column_names}")
     train_dataset = raw_dataset.map(
         _tokenize_and_group_texts,
         input_columns=text_column_name,
