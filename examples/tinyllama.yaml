@@ -88,10 +88,10 @@ parallelism:
 profiler: null
 tokenizer:
   tokenizer_max_length: null
-  tokenizer_name_or_path: gpt2
+  tokenizer_name_or_path: TinyLlama/TinyLlama-1.1B-Chat-v1.0
   tokenizer_revision: null
 tokens:
-  batch_accumulation_per_replica: 1
+  batch_accumulation_per_replica: 64
   limit_test_batches: 0
   limit_val_batches: 0
   micro_batch_size: 4

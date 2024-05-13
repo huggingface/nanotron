@@ -305,7 +305,7 @@ def clm_process(
         # customize this part to your needs.
         if total_length >= sequence_length + 1:
             total_length = ((total_length - 1) // sequence_length) * sequence_length + 1
-            logger.info(f"adjusted total_length = {total_length}")
+            #logger.info(f"adjusted total_length = {total_length}")
      
         # Split by chunks of sequence_length.
         result = {
