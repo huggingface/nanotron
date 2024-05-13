@@ -30,6 +30,7 @@ try:
         concatenate_datasets,
         load_dataset,
     )
+    from datasets.distributed import split_dataset_by_node
     from transformers import PreTrainedTokenizerBase
     from transformers.trainer_pt_utils import DistributedSamplerWithLoop
 except ImportError:
@@ -327,6 +328,7 @@ def clm_process(
         batched=True,
         **additional_args
     )
+
     return train_dataset
 
 
@@ -517,6 +519,10 @@ def get_train_dataloader(
         drop_last=dataloader_drop_last,
         consumed_train_samples=consumed_train_samples,
     )
+
+    if isinstance(train_dataset, IterableDataset):
+        logger.info(f"Rank {dp_rank} splitting dataset by node for ensure correct data parallel training with datasets.IterableDataset.")
+        train_dataset = split_dataset_by_node(train_dataset, world_size=dp_ranks_size, rank=dp_rank)
 
     return DataLoader(
         train_dataset,
