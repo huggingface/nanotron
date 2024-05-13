@@ -89,13 +89,13 @@ We currently support the following features:
 - [x] Parameter tying/sharding
 - [x] Custom module checkpointing for large models
 - [x] Spectral µTransfer parametrization for scaling up neural networks
+- [x] Mamba example
 
 And we have on our roadmap:
 - [ ] FP8 training
 - [ ] ZeRO-3 optimizer (a.k.a FSDP)
 - [ ] `torch.compile` support
 - [ ] Ring attention
-- [ ] Mamba example
 - [ ] Interleaved 1f1b schedule
 
 ## Credits
