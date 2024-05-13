@@ -46,10 +46,10 @@ class Nanoset(torch.utils.data.Dataset):
         for dataset_path in self.dataset_paths:
             self.dataset_buffer_mmap = np.memmap(dataset_path, mode="r", order="C", dtype=self.token_dtype)
             self.dataset_buffer = memoryview(self.dataset_buffer_mmap)
-            dataset_tokens = int(len(self.dataset_buffer))
+            dataset_number_of_tokens = int(len(self.dataset_buffer))
             number_of_samples = int(
-                dataset_tokens / sequence_length
-            )  # Discard last sample of length < sequence_length
+                (dataset_number_of_tokens - 1) / sequence_length
+            )  # Discard last sample if length < sequence_length
             self.dataset_lengths.append(number_of_samples)
         ## Set dataset weights
         if (
