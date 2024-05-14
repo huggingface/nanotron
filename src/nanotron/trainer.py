@@ -643,13 +643,14 @@ class DistributedTrainer:
                     rank=0,
                 )
             else:
-                log_rank(
-                    f"Setting max_position_embeddings to {self.config.tokens.sequence_length}. Previous value was {self.model_config.max_position_embeddings}.",
-                    logger=logger,
-                    level=logging.INFO,
-                    rank=0,
-                )
-                self.model_config.max_position_embeddings = self.config.tokens.sequence_length
+                # log_rank(
+                #     f"Setting max_position_embeddings to {self.config.tokens.sequence_length}. Previous value was {self.model_config.max_position_embeddings}.",
+                #     logger=logger,
+                #     level=logging.INFO,
+                #     rank=0,
+                # )
+                # self.model_config.max_position_embeddings = self.config.tokens.sequence_length
+                pass
 
         log_rank("Config:\n" + pformat(self.config), logger=logger, level=logging.INFO, rank=0)
         log_rank("Model Config:\n" + pformat(self.model_config), logger=logger, level=logging.INFO, rank=0)
