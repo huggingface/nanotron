@@ -646,7 +646,7 @@ class LlamaDecoderLayer(nn.Module):
         hidden_states: torch.Tensor,
         sequence_mask: torch.Tensor,
         ) -> List[torch.Tensor]:
-        return CheckpointFunction.apply(self._core_forward, hidden_states, sequence_mask)
+        return CheckpointFunction.apply(self._core_forward, True, hidden_states, sequence_mask)
 
     def forward(
         self,
@@ -654,7 +654,7 @@ class LlamaDecoderLayer(nn.Module):
         sequence_mask: Union[torch.Tensor, TensorPointer],
     ) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
         
-        if self.recompute_layer:
+        if self.recompute_layer and not isinstance(hidden_states, TensorPointer):
             hidden_states, sequence_mask = self._checkpointed_forward(hidden_states, sequence_mask)
         else:
             hidden_states, sequence_mask = self._core_forward(hidden_states, sequence_mask)
