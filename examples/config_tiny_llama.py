@@ -9,6 +9,7 @@ from nanotron.config import (
     DatasetStageArgs,
     GeneralArgs,
     LlamaConfig,
+    LlamaBitNetConfig,
     LoggingArgs,
     LRSchedulerArgs,
     ModelArgs,
@@ -40,6 +41,27 @@ model_config = LlamaConfig(
     use_cache=True,
     vocab_size=256,
 )
+
+# model_config = LlamaBitNetConfig(
+#     # Config for a tiny 1.58bit model model with 1.62M parameters
+#     bos_token_id=1,
+#     eos_token_id=2,
+#     hidden_act="silu",
+#     hidden_size=16,
+#     initializer_range=0.02,
+#     intermediate_size=64,
+#     is_bitnet_config=True,
+#     max_position_embeddings=256,
+#     num_attention_heads=4,
+#     num_hidden_layers=2,
+#     num_key_value_heads=4,
+#     pretraining_tp=1,
+#     rms_norm_eps=1e-05,
+#     rope_scaling=None,
+#     tie_word_embeddings=True,
+#     use_cache=True,
+#     vocab_size=256,
+# )
 
 num_params = human_format(
     model_config.vocab_size * model_config.hidden_size * 2

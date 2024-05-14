@@ -57,6 +57,7 @@ from nanotron.logging import (
 from nanotron.models import NanotronModel, build_model
 from nanotron.models.base import check_model_has_grad
 from nanotron.models.llama import LlamaForTraining, RotaryEmbedding
+from nanotron.models.llama_bitnet import LlamaForTrainingBitNet
 from nanotron.models.starcoder2 import Starcoder2ForTraining
 from nanotron.optim.clip_grads import clip_grad_norm
 from nanotron.parallel import ParallelContext
@@ -103,6 +104,7 @@ dist_logger.setLevel(logging.WARNING)
 CONFIG_TO_MODEL_CLASS = {
     "LlamaConfig": LlamaForTraining,
     "Starcoder2Config": Starcoder2ForTraining,
+    "LlamaBitNetConfig": LlamaForTrainingBitNet,
 }
 
 try:
@@ -133,6 +135,7 @@ class DistributedTrainer:
         self.config = get_config_from_file(
             config_or_config_file, config_class=config_class, model_config_class=model_config_class
         )
+
         self.model_config = self.config.model.model_config
         if model_class is not None:
             CONFIG_TO_MODEL_CLASS[self.model_config.__class__.__name__] = model_class
@@ -643,7 +646,6 @@ class DistributedTrainer:
             pg_size=self.parallel_context.tp_pg.size(),
             make_vocab_size_divisible_by=self.config.model.make_vocab_size_divisible_by,
         )
-
         if (
             getattr(self.model_config, "max_position_embeddings", None) is not None
             and self.model_config.max_position_embeddings != self.config.tokens.sequence_length
@@ -1004,3 +1006,5 @@ def mark_unsharded_params_as_tied_across_expert(
             tie_parameters(
                 root_module=model, ties=shared_weights, parallel_context=parallel_context, reduce_op=reduce_op
             )
+
+
