@@ -48,14 +48,14 @@ def read_context_files(tokenizer, soft_prompt, retrieval_question, target_cut_le
     return context
 
 
-def insert_needle(context, needle):
-    # Get the position to insert the needle
-    insertion_point = random.randint(0, len(context) - len(needle)) - 1
+# def insert_needle(context, needle):
+#     # Get the position to insert the needle
+#     insertion_point = random.randint(0, len(context) - len(needle)) - 1
 
-    # Insert the needle at the appropriate position
-    new_context = context[:insertion_point] + needle + context[insertion_point:]
+#     # Insert the needle at the appropriate position
+#     new_context = context[:insertion_point] + needle + context[insertion_point:]
 
-    return new_context
+#     return new_context
 
 
 def insert_needle_with_depth(needle, context, depth_percent, target_cut_length, tokenizer):
@@ -90,7 +90,7 @@ def insert_needle_with_depth(needle, context, depth_percent, target_cut_length, 
 
 
 def generate_needle_in_haystack_test(
-    needle, haystack_dir, soft_prompt: str, retrieval_question, context_length, depth_percent
+    needle, needle_prompt, haystack_dir, soft_prompt: str, retrieval_question, context_length, depth_percent
 ):
     # Load up the haystack context
     tokenizer = AutoTokenizer.from_pretrained("lvwerra/the-tokenizer-v1")
@@ -103,12 +103,12 @@ def generate_needle_in_haystack_test(
     # Insert the needle into the context at the specified depth percent
     # context_with_needle = insert_needle(context, needle)
 
-    context_with_needle = insert_needle_with_depth(needle, context, depth_percent, target_cut_length, tokenizer)
+    context_with_needle = insert_needle_with_depth(needle_prompt, context, depth_percent, target_cut_length, tokenizer)
 
     # Generate the prompt using the context with the needle
     prompt = f"{soft_prompt} {context_with_needle}. \n\n{retrieval_question}"
 
-    assert needle in context_with_needle, f"depth_percent: {depth_percent}"
+    assert str(needle) in context_with_needle, f"depth_percent: {depth_percent}"
     # assert abs(context_length - token_length(tokenizer, prompt)) <= 10
     # assert context_length - token_length(tokenizer, prompt)
 
@@ -124,7 +124,7 @@ def generate_needle_in_haystack_test(
         token_length(tokenizer, prompt) == context_length
     ), f"Token length: {token_length(tokenizer, prompt)}, Context length: {context_length}, depth_percent: {depth_percent}"
 
-    return prompt, needle
+    return prompt
 
 
 if __name__ == "__main__":
@@ -153,11 +153,17 @@ if __name__ == "__main__":
                             generated_pass_keys.add(pass_key)
                             break
 
-                    needle = f"The pass key is {pass_key}. Remember it. {pass_key} is the pass key. "
+                    needle_prompt = f". The pass key is {pass_key}. Remember it. {pass_key} is the pass key. "
                     retrieval_question = f"What is the pass key? The pass key is {pass_key}."
 
-                    prompt, _ = generate_needle_in_haystack_test(
-                        needle, haystack_dir, soft_prompt, retrieval_question, context_length, depth_percent
+                    prompt = generate_needle_in_haystack_test(
+                        pass_key,
+                        needle_prompt,
+                        haystack_dir,
+                        soft_prompt,
+                        retrieval_question,
+                        context_length,
+                        depth_percent,
                     )
 
                     while True:
@@ -180,4 +186,4 @@ if __name__ == "__main__":
 
     # Save the dataset to disk
     dataset.save_to_disk("needle_in_a_hay_stack_eval_dataset")
-    dataset.push_to_hub("nanotron/needle_in_a_hay_stack_eval_dataset")
+    dataset.push_to_hub("nanotron/needle_in_a_hay_stack_finetuning_dataset")
