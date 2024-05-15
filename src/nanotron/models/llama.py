@@ -14,7 +14,7 @@
 # limitations under the License.
 """PyTorch LLaMa model."""
 
-from typing import Dict, Optional, Union, List
+from typing import Dict, Optional, Union
 
 import torch
 from torch import nn
@@ -25,6 +25,7 @@ from nanotron.config import Config, LlamaConfig, ParallelismArgs
 from nanotron.config.models_config import RandomInit, SpectralMupInit
 from nanotron.generation.generate_store import AttachableStore
 from nanotron.logging import log_rank
+from nanotron.mod.mod import MixtureOfDepth
 from nanotron.models import NanotronModel
 from nanotron.nn.activations import ACT2FN
 from nanotron.nn.layer_norm import TritonRMSNorm
@@ -44,6 +45,15 @@ from nanotron.scaling.parametrization import SpectralMupParametrizator, Standard
 from nanotron.utils import checkpoint_method
 
 logger = logging.get_logger(__name__)
+
+CAPACITY = 50
+D_MODEL = 16
+
+
+def build_mod_block(*args, **kwargs):
+    block = LlamaDecoderLayer(*args, **kwargs)
+    mod = MixtureOfDepth(CAPACITY, D_MODEL, block)
+    return mod
 
 
 class RotaryEmbedding(nn.Module):
@@ -704,11 +714,20 @@ class LlamaModel(nn.Module):
             module_output_keys={"input_embeds"},
         )
 
+        # def build_mod_block(module_kwargs, block):
+        #     block = self.module_builder(**self.module_kwargs)
+
+        # NOTE: how make MixtureOfDepth block wrap around these blocks?
+
+        # CAPACITY = 50
+        # D_MODEL = config.hidden_size
+
         self.decoder = nn.ModuleList(
             [
                 PipelineBlock(
                     p2p=self.p2p,
-                    module_builder=LlamaDecoderLayer,
+                    # module_builder=LlamaDecoderLayer,
+                    module_builder=build_mod_block,
                     module_kwargs={
                         "config": config,
                         "parallel_config": parallel_config,
@@ -755,6 +774,8 @@ class LlamaModel(nn.Module):
             module_output_keys={"output"},
         )
 
+        # self.mod_blocks = []
+
     def forward(
         self,
         input_ids: Union[torch.Tensor, TensorPointer],  # [batch_size, seq_length]
@@ -794,6 +815,8 @@ class LlamaModel(nn.Module):
         block_compute_costs = {
             # CausalSelfAttention (qkv proj + attn out) + MLP
             LlamaDecoderLayer: 4 * model_config.num_attention_heads * d_qkv * model_config.hidden_size
+            + 3 * d_ff * model_config.hidden_size,
+            build_mod_block: 4 * model_config.num_attention_heads * d_qkv * model_config.hidden_size
             + 3 * d_ff * model_config.hidden_size,
             # This is the last lm_head
             TensorParallelColumnLinear: model_config.vocab_size * model_config.hidden_size,
