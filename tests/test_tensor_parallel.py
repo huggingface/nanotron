@@ -208,14 +208,19 @@ def _test_row_linear(parallel_context: ParallelContext, tp_mode: TensorParallelL
     random_input = torch.randn(batch_size, in_features, device="cuda")
     # synchronize random_input across tp
     dist.all_reduce(random_input, op=dist.ReduceOp.AVG, group=parallel_context.tp_pg)
-
+    random_input.requires_grad = True
     # Row linear receives as input sharded input
-    random_sharded_input = random_input[
-        :,
-        dist.get_rank(parallel_context.tp_pg)
-        * in_features_per_rank : (dist.get_rank(parallel_context.tp_pg) + 1)
-        * in_features_per_rank,
-    ]
+    random_sharded_input = (
+        random_input[
+            :,
+            dist.get_rank(parallel_context.tp_pg)
+            * in_features_per_rank : (dist.get_rank(parallel_context.tp_pg) + 1)
+            * in_features_per_rank,
+        ]
+        .detach()
+        .clone()
+    )
+    random_sharded_input.requires_grad = True
 
     # Test that we get the same output after forward pass
     # TODO @kunhao: We may want to have our custom error type
@@ -260,6 +265,16 @@ def _test_row_linear(parallel_context: ParallelContext, tp_mode: TensorParallelL
         )
     else:
         assert row_linear.bias is None
+
+    torch.testing.assert_close(
+        random_sharded_input.grad,
+        random_input.grad[
+            :,
+            dist.get_rank(parallel_context.tp_pg)
+            * in_features_per_rank : (dist.get_rank(parallel_context.tp_pg) + 1)
+            * in_features_per_rank,
+        ],
+    )
 
     parallel_context.destroy()
 
