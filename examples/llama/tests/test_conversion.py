@@ -126,7 +126,7 @@ def _test_nt_to_hf_with_files(parallel_context: ParallelContext, input_ids: torc
     model_hf = LlamaForCausalLM.from_pretrained(hf_path).cuda()
     logits_hf = model_hf(input_ids).logits
     assert logits_nt.size() == logits_hf.size()
-    assert torch.allclose(logits_nt, logits_hf, atol=ATOL), torch.mean(torch.abs(logits_nt - logits_hf))
+    torch.testing.assert_allclose(logits_nt, logits_hf, atol=ATOL)
 
 
 def test_nt_to_hf_with_files(input_ids: torch.Tensor):
