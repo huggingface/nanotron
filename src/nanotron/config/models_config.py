@@ -47,6 +47,7 @@ class LlamaConfig:
     pretraining_tp: int = 1
     rms_norm_eps: float = 1e-6
     rope_scaling: Optional[dict] = None
+    rope_theta: float = 10000.0
     tie_word_embeddings: bool = False
     use_cache: bool = True
     vocab_size: int = 32000
