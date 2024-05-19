@@ -1,3 +1,6 @@
+"""
+torchrun --nproc-per-node 1 generate_hf_predictions.py --pretrained-model-name-or-path hf_c/second  --tokenizer-name-or-path /mloscratch/homes/solergib/models/Meta-Llama-3-8B-Instruct
+"""
 import argparse
 import os
 

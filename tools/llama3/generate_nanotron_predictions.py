@@ -1,5 +1,9 @@
+"""
+torchrun --nproc-per-node 1 generate_nanotron_predictions.py --tp 1 --nanotron-checkpoint-path n_c/second  --tokenizer-name-or-path /mloscratch/homes/solergib/models/Meta-Llama-3-8B-Instruct
+"""
 import argparse
 import os
+from pathlib import Path
 
 import torch
 from nanotron.config import Config, ParallelismArgs, get_config_from_file
@@ -88,7 +92,7 @@ def main(args):
     sanity_check(root_module=model)
 
     # Load checkpoint directly in memory and then only keep the state dictionary
-    load_weights(model=model, parallel_context=parallel_context, root_folder=args.nanotron_checkpoint_path)
+    load_weights(model=model, parallel_context=parallel_context, root_folder=Path(args.nanotron_checkpoint_path))
 
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_name_or_path)
     tokens = tokenizer(TXT, return_tensors="pt", truncation=True, max_length=(SEQ_LENGTH + 1))["input_ids"].to("cuda")
@@ -97,7 +101,7 @@ def main(args):
     model.eval()
 
     with torch.no_grad():
-        output = model(inputs)
+        output = model.model(**inputs)
 
     predicted_tokens = [5, 27, 34]  # Index of the predictions to compare across models
     term_cols = int(os.get_terminal_size().columns / 3)
