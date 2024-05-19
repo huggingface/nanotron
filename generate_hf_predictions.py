@@ -1,4 +1,5 @@
 import argparse
+import os
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -24,7 +25,7 @@ def get_args():
 
 def main(args):
     # TODO Refractor with HF pipeline or .generate()?
-    hf_model = (
+    model = (
         AutoModelForCausalLM.from_pretrained(
             args.pretrained_model_name_or_path, torch_dtype=torch.bfloat16, attn_implementation="flash_attention_2"
         )
@@ -34,21 +35,24 @@ def main(args):
 
     tokenizer = AutoTokenizer.from_pretrained(args.pretrained_model_name_or_path)
     tokens = tokenizer(TXT, return_tensors="pt", truncation=True, max_length=(SEQ_LENGTH + 1))["input_ids"].to("cuda")
-    inputs_hf = tokens[:, :-1]
+    inputs = tokens[:, :-1]
 
     with torch.no_grad():
-        output_hf = hf_model(inputs_hf)
+        output = model(inputs)
 
     predicted_tokens = [5, 27, 34]  # Index of the predictions to compare across models
+    term_cols = int(os.get_terminal_size().columns / 3)
 
     for predicted_token in predicted_tokens:
-        next_tokens_hf = torch.softmax(output_hf.logits[0, predicted_token, :], -1)
-        hf_topk_next_tokens = torch.topk(next_tokens_hf, 10)
+
+        print("\n", "=" * term_cols, f"Predictions of token {predicted_token}", "=" * term_cols)
+        next_tokens = torch.softmax(output.logits[0, predicted_token, :], -1)
+        topk_next_tokens = torch.topk(next_tokens, 10)
 
         print(
             *[
                 f"[HF Model] Next token: {idx.item()}, probability: {prob}"
-                for idx, prob in zip(hf_topk_next_tokens.indices, hf_topk_next_tokens.values)
+                for idx, prob in zip(topk_next_tokens.indices, topk_next_tokens.values)
             ],
             sep="\n",
         )
