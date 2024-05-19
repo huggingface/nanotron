@@ -1,5 +1,5 @@
 """
-torchrun --nproc-per-node 1 tools/llama3/convert_nanotron_to_hf.py --tp 1 --nanotron-checkpoint-path nanotron_checkpoints/NanotronLlama38B --hugging-face-checkpoint-path hf_checkpoints/ConvertedNanotronLlama38B
+torchrun --nproc-per-node 1 tools/llama3/convert_nanotron_to_hf.py --nanotron-checkpoint-path nanotron_checkpoints/NanotronLlama38B --hugging-face-checkpoint-path hf_checkpoints/ConvertedNanotronLlama38B
 """
 import argparse
 import os
@@ -7,9 +7,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 import torch
-from nanotron import logging
 from nanotron.config import Config, ParallelismArgs, get_config_from_file
-from nanotron.logging import log_rank
 from nanotron.models import build_model
 from nanotron.models.llama import LlamaForTraining
 from nanotron.parallel import ParallelContext
@@ -18,16 +16,11 @@ from nanotron.parallel.pipeline_parallel.engine import AllForwardAllBackwardPipe
 from nanotron.parallel.tensor_parallel.nn import TensorParallelLinearMode
 from nanotron.serialize import load_weights
 from nanotron.trainer import mark_tied_parameters
+from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from transformers.models.llama import LlamaConfig as LlamaConfigHF
 
-logger = logging.get_logger(__name__)
-
-# TODO Currentyly just sopporting Llama8B that doesn't needs any kind of model parallelism
-DP = 1
-PP = 1
-
-DEVICE = torch.device("cuda")
+DEVICE = torch.device("cpu")
 TORCH_DTYPE = torch.bfloat16
 
 
@@ -40,9 +33,6 @@ def get_args():
         required=True,
         help="A path to a directory with a Nanotron Checkpoint",
     )
-
-    group = parser.add_argument_group(title="Nanotron Parallelism")
-    group.add_argument("--tp", type=int, required=True, help="Tensor Parallelism Degree of the Nanotron Checkpoint")
 
     group = parser.add_argument_group(title="HuggingFace Model")
     group.add_argument(
@@ -61,9 +51,9 @@ def get_args():
 def main(args):
     # Init Nanotron Parallel Utilities
     parallel_config = ParallelismArgs(
-        dp=DP,
-        pp=PP,
-        tp=args.tp,
+        dp=1,
+        pp=1,
+        tp=1,
         pp_engine=AllForwardAllBackwardPipelineEngine(),
         tp_mode=TensorParallelLinearMode.ALL_REDUCE,
         tp_linear_async_communication=False,
@@ -80,19 +70,14 @@ def main(args):
     )
 
     # Load Nanotron checkpoint config
-    log_rank(
-        f"Loading Nanotron checkpoint config file: {os.path.join(args.nanotron_checkpoint_path, 'config.yaml')}",
-        logger=logger,
-        level=logging.INFO,
-        rank=0,
-    )
+    print(f"Loading Nanotron checkpoint config file: {os.path.join(args.nanotron_checkpoint_path, 'config.yaml')}")
     nanotron_config = get_config_from_file(
         os.path.join(args.nanotron_checkpoint_path, "config.yaml"), config_class=Config, model_config_class=None
     )
     nanotron_llama_config = nanotron_config.model.model_config
 
     # Init Llama3-8B Nanotron model
-    log_rank("Init empty Nanotron Llama3 Model", logger=logger, level=logging.INFO, rank=0)
+    print("Init empty Nanotron Llama3 Model")
     nanotron_model = build_model(
         model_builder=lambda: LlamaForTraining(
             config=nanotron_config.model.model_config,
@@ -109,21 +94,23 @@ def main(args):
     sanity_check(root_module=nanotron_model)
 
     # Load Nanotron Checkpoint
+    print("Loading Nanotron Llama3 Model...")
     load_weights(
         model=nanotron_model, parallel_context=parallel_context, root_folder=Path(args.nanotron_checkpoint_path)
     )
 
     # Build empty HF Model
-    ## TODO This takes pretty long time
-    hf_model = AutoModelForCausalLM.from_config(
+    print("Init empty HF Llama3 Model")
+    hf_model = AutoModelForCausalLM.from_config(  # WARN This takes a long time
         config=LlamaConfigHF(**asdict(nanotron_llama_config)),
         torch_dtype=TORCH_DTYPE,
         attn_implementation="flash_attention_2",
     ).to(DEVICE)
 
     # Copy params from Nanotron to HF
-    log_rank("Copyng weights from Nanotron model to HF model...", logger=logger, level=logging.INFO, rank=0)
+    print("Copyng weights from Nanotron model to HF model...")
     # Token embeddings
+    print("Copyng Token Embeddings...")
     assert (
         nanotron_model.model.token_position_embeddings.pp_block.token_embedding.weight.shape
         == hf_model.model.embed_tokens.weight.shape
@@ -134,7 +121,11 @@ def main(args):
         )
 
     # Decoder layers
-    for i in range(nanotron_config.model.model_config.num_hidden_layers):
+    for i in tqdm(
+        range(nanotron_llama_config.num_hidden_layers),
+        desc="Copyng Hidden Layers",
+        total=nanotron_llama_config.num_hidden_layers,
+    ):
         # Input layer norm
         assert (
             hf_model.model.layers[i].input_layernorm.weight.shape
@@ -208,22 +199,26 @@ def main(args):
             )
 
     # Last layer norm
+    print("Copyng Final Layer Norm...")
     assert nanotron_model.model.final_layer_norm.pp_block.weight.shape == hf_model.model.norm.weight.shape
     with torch.no_grad():
         hf_model.model.norm.weight.copy_(nanotron_model.model.final_layer_norm.pp_block.weight)
 
     # LM_Head
+    print("Copyng LM Head...")
     assert nanotron_model.model.lm_head.pp_block.weight.shape == hf_model.lm_head.weight.shape
     with torch.no_grad():
         hf_model.lm_head.weight.copy_(nanotron_model.model.lm_head.pp_block.weight)
 
-    log_rank("Copied weights from Nanotron model to HF model!", logger=logger, level=logging.INFO, rank=0)
+    print("Copied weights from Nanotron model to HF model!")
     # Store weights
-    log_rank("Storing HF model Checkpoint and Tokenizer!", logger=logger, level=logging.INFO, rank=0)
+    print("Storing HF model Checkpoint and Tokenizer!")
     hf_model.save_pretrained(args.hugging_face_checkpoint_path, from_pt=True)
     # Store tokenizer
     tokenizer = AutoTokenizer.from_pretrained(nanotron_config.tokenizer.tokenizer_name_or_path)
     tokenizer.save_pretrained(args.hugging_face_checkpoint_path)
+
+    print(f"Checkpoint conversion finished, check {args.hugging_face_checkpoint_path}")
 
 
 if __name__ == "__main__":

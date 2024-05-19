@@ -1,5 +1,5 @@
 """
-torchrun --nproc-per-node 1 tools/llama3/convert_hf_to_nanotron.py --tp 1 --nanotron-checkpoint-path nanotron_checkpoints/NanotronLlama38B --pretrained-model-name-or-path /mloscratch/homes/solergib/models/Meta-Llama-3-8B-Instruct
+torchrun --nproc-per-node 1 tools/llama3/convert_hf_to_nanotron.py --nanotron-checkpoint-path nanotron_checkpoints/NanotronLlama38B --pretrained-model-name-or-path meta-llama/Meta-Llama-3-8B-Instruct
 """
 import argparse
 import json
@@ -8,11 +8,9 @@ from pathlib import Path
 
 import torch
 import yaml
-from nanotron import logging
 from nanotron.config import Config, GeneralArgs, ModelArgs, ParallelismArgs, TokenizerArgs
 from nanotron.config.models_config import ExistingCheckpointInit
 from nanotron.config.models_config import LlamaConfig as LlamaConfigNanotron
-from nanotron.logging import log_rank
 from nanotron.models import build_model
 from nanotron.models.llama import LlamaForTraining
 from nanotron.parallel import ParallelContext
@@ -22,15 +20,10 @@ from nanotron.parallel.tensor_parallel.nn import TensorParallelLinearMode
 from nanotron.serialize import TrainingMetadata, save_meta, save_weights
 from nanotron.serialize.metadata import DataStageMetadata
 from nanotron.trainer import mark_tied_parameters
+from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-logger = logging.get_logger(__name__)
-
-# TODO Currentyly just sopporting Llama8B that doesn't needs any kind of model parallelism
-DP = 1
-PP = 1
-
-DEVICE = torch.device("cuda")
+DEVICE = torch.device("cpu")
 TORCH_DTYPE = torch.bfloat16
 
 
@@ -43,9 +36,6 @@ def get_args():
         required=True,
         help="A path to a directory to store the converted Nanotron Checkpoint",
     )
-
-    group = parser.add_argument_group(title="Nanotron Parallelism")
-    group.add_argument("--tp", type=int, required=True, help="Tensor Parallelism Degree of the Nanotron Checkpoint")
 
     group = parser.add_argument_group(title="HuggingFace Model")
     group.add_argument(
@@ -63,9 +53,9 @@ def get_args():
 def main(args):
     # Init Nanotron Parallel Utilities
     parallel_config = ParallelismArgs(
-        dp=DP,
-        pp=PP,
-        tp=args.tp,
+        dp=1,
+        pp=1,
+        tp=1,
         pp_engine=AllForwardAllBackwardPipelineEngine(),
         tp_mode=TensorParallelLinearMode.ALL_REDUCE,
         tp_linear_async_communication=False,
@@ -82,12 +72,7 @@ def main(args):
     )
 
     # Load Llama3-8B HF model
-    log_rank(
-        f"Loading pretrained Llama3 Model: {args.pretrained_model_name_or_path}",
-        logger=logger,
-        level=logging.INFO,
-        rank=0,
-    )
+    print(f"Loading pretrained Llama3 Model: {args.pretrained_model_name_or_path}")
     hf_model = AutoModelForCausalLM.from_pretrained(
         args.pretrained_model_name_or_path, torch_dtype=TORCH_DTYPE, attn_implementation="flash_attention_2"
     ).to(DEVICE)
@@ -118,7 +103,7 @@ def main(args):
     )
 
     # Init Llama3-8B Nanotron model
-    log_rank("Init empty Nanotron Llama3 Model", logger=logger, level=logging.INFO, rank=0)
+    print("Init empty Nanotron Llama3 Model")
     nanotron_model = build_model(
         model_builder=lambda: LlamaForTraining(
             config=nanotron_llama_config,
@@ -135,8 +120,9 @@ def main(args):
     sanity_check(root_module=nanotron_model)
 
     # Copy params from HF to Nanotron
-    log_rank("Copyng weights from HF model to Nanotron model...", logger=logger, level=logging.INFO, rank=0)
+    print("Copyng weights from HF model to Nanotron model...")
     # Token embeddings
+    print("Copyng Token Embeddings...")
     assert (
         nanotron_model.model.token_position_embeddings.pp_block.token_embedding.weight.shape
         == hf_model.model.embed_tokens.weight.shape
@@ -147,7 +133,11 @@ def main(args):
         )
 
     # Decoder layers
-    for i in range(nanotron_llama_config.num_hidden_layers):
+    for i in tqdm(
+        range(nanotron_llama_config.num_hidden_layers),
+        desc="Copyng Hidden Layers",
+        total=nanotron_llama_config.num_hidden_layers,
+    ):
         # Input layer norm
         assert (
             hf_model.model.layers[i].input_layernorm.weight.shape
@@ -217,22 +207,24 @@ def main(args):
             )
 
     # Last layer norm
+    print("Copyng Final Layer Norm...")
     assert nanotron_model.model.final_layer_norm.pp_block.weight.shape == hf_model.model.norm.weight.shape
     with torch.no_grad():
         nanotron_model.model.final_layer_norm.pp_block.weight.copy_(hf_model.model.norm.weight)
 
     # LM_Head
+    print("Copyng LM Head...")
     assert nanotron_model.model.lm_head.pp_block.weight.shape == hf_model.lm_head.weight.shape
     with torch.no_grad():
         nanotron_model.model.lm_head.pp_block.weight.copy_(hf_model.lm_head.weight)
 
-    log_rank("Copied weights from HF model to Nanotron model!", logger=logger, level=logging.INFO, rank=0)
+    print("Copied weights from HF model to Nanotron model!")
     # Store weights
     nanotron_checkpoint_path = Path(args.nanotron_checkpoint_path)
     save_weights(model=nanotron_model, parallel_context=parallel_context, root_folder=nanotron_checkpoint_path)
 
     # Store metadata
-    log_rank("Storing Nanotron model Configs and Metadata!", logger=logger, level=logging.INFO, rank=0)
+    print("Storing Nanotron model Configs and Metadata!")
     training_metadata = TrainingMetadata(
         last_train_step=0,
         consumed_train_samples=0,
@@ -263,12 +255,7 @@ def main(args):
         print("Saving model config ...")
         json.dump(asdict(nanotron_llama_config), f)
 
-    log_rank(
-        f"Checkpoint conversion finished, check {args.nanotron_checkpoint_path}",
-        logger=logger,
-        level=logging.INFO,
-        rank=0,
-    )
+    print(f"Checkpoint conversion finished, check {args.nanotron_checkpoint_path}")
 
 
 if __name__ == "__main__":

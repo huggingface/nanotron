@@ -1,10 +1,12 @@
 """
-torchrun --nproc-per-node 1 tools/llama3/generate_nanotron_predictions.py --tp 1 --nanotron-checkpoint-path nanotron_checkpoints/NanotronLlama38B
+torchrun --nproc-per-node 2 tools/llama3/generate_nanotron_predictions.py --tp 2 --nanotron-checkpoint-path nanotron_checkpoints/NanotronLlama38B
 """
 import argparse
 import os
 from pathlib import Path
 
+import nanotron.distributed as dist
+import numpy as np
 import torch
 from nanotron.config import Config, ParallelismArgs, get_config_from_file
 from nanotron.models import build_model
@@ -15,14 +17,11 @@ from nanotron.parallel.pipeline_parallel.engine import AllForwardAllBackwardPipe
 from nanotron.parallel.tensor_parallel.nn import TensorParallelLinearMode
 from nanotron.serialize import load_weights
 from nanotron.trainer import mark_tied_parameters
+from sklearn.metrics import accuracy_score
 from transformers import AutoTokenizer
 
-# TODO Currentyly just sopporting Llama8B that doesn't needs any kind of model parallelism
-DP = 1
-PP = 1
-
-TXT = "The prologue of Romeo and Juliet calls the title characters “star-crossed lovers”—and the stars do seem to conspire against these young lovers.  Romeo is a Montague, and Juliet a Capulet. Their families are enmeshed in a feud, but the moment they meet—when Romeo and his friends attend a party at Juliets house in disguise—the two fall in love and quickly decide that they want to be married.  A friar secretly marries them, hoping to end the feud. Romeo and his companions almost immediately encounter Juliets cousin Tybalt, who challenges Romeo. When Romeo refuses to fight, Romeos friend Mercutio accepts the challenge and is killed. Romeo then kills Tybalt and is banished. He spends that night with Juliet and then leaves for Mantua.  Juliets father forces her into a marriage with Count Paris. To avoid this marriage, Juliet takes a potion, given her by the friar, that makes her appear dead. The friar will send Romeo word to be at her family tomb when she awakes. The plan goes awry, and Romeo learns instead that she is dead. In the tomb, Romeo kills himself. Juliet wakes, sees his body, and commits suicide. Their deaths appear finally to end the feud."
-SEQ_LENGTH = 256  # For truncating the TXT if GPU can't fit too many tokens
+TXT = "<|begin_of_text|><|start_header_id|>user<|end_header_id|>\n\nHello! Which is the capital of France? What can I visit over there if I go for a week vacation?<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\nBonjour! The capital of France is Paris, also known as the City of Light. Paris is a stunning city with a rich history, art, fashion, and cuisine. If you're planning a week-long vacation in Paris, you'll have plenty of time to explore its iconic landmarks, museums, and neighborhoods. Here's a suggested itinerary to get you started:  Day 1-2: Iconic Landmarks  The Eiffel Tower (Tour Eiffel): The iron lady offers breathtaking views of the city. You can take the stairs or elevator to the top. The Louvre Museum (Musée du Louvre): Home to the Mona Lisa, Venus de Milo, and many other famous artworks. Arc de Triomphe: A monumental arch honoring the soldiers who fought and died for France. Champs-Élysées: A famous avenue lined with cafes, shops, and theaters. Day 3: Montmartre and Sacré-Cœur  Explore the charming neighborhood of Montmartre, known for its bohemian vibe, street artists, and stunning views. Visit the Basilique du Sacré-Cœur, a beautiful white church perched on a hill."
+SEQ_LENGTH = 512  # For truncating the TXT if GPU can't fit too many tokens
 
 DEVICE = torch.device("cuda")
 TORCH_DTYPE = torch.bfloat16
@@ -49,8 +48,8 @@ def get_args():
 def main(args):
     # Init Nanotron Parallel Utilities
     parallel_config = ParallelismArgs(
-        dp=DP,
-        pp=PP,
+        dp=1,
+        pp=1,
         tp=args.tp,
         pp_engine=AllForwardAllBackwardPipelineEngine(),
         tp_mode=TensorParallelLinearMode.ALL_REDUCE,
@@ -66,6 +65,8 @@ def main(args):
         pipeline_parallel_size=parallel_config.pp,
         tensor_parallel_size=parallel_config.tp,
     )
+
+    RANK = dist.get_rank(parallel_context.world_pg)
 
     nanotron_config = get_config_from_file(
         os.path.join(args.nanotron_checkpoint_path, "config.yaml"), config_class=Config, model_config_class=None
@@ -98,22 +99,32 @@ def main(args):
     with torch.no_grad():
         output = model.model(**inputs)
 
-    predicted_tokens = [5, 27, 34]  # Index of the predictions to compare across models
-    term_cols = int(os.get_terminal_size().columns / 3)
+    if not RANK:
+        predicted_tokens = [5, 27, 34]  # Index of the predictions to compare across models
+        term_cols = int(os.get_terminal_size().columns / 3)
 
-    for predicted_token in predicted_tokens:
+        for predicted_token in predicted_tokens:
 
-        print("\n", "=" * term_cols, f"Predictions of token {predicted_token}", "=" * term_cols)
-        next_tokens = torch.softmax(output.transpose(0, 1)[0, predicted_token, :], -1)
-        topk_next_tokens = torch.topk(next_tokens, 10)
+            print("\n", "=" * term_cols, f"Predictions of token {predicted_token}", "=" * term_cols)
+            next_tokens = torch.softmax(output.transpose(0, 1)[0, predicted_token, :], -1)
+            topk_next_tokens = torch.topk(next_tokens, 10)
 
-        print(
-            *[
-                f"[Nanotron Model] Next token: {idx.item()}, probability: {prob}"
-                for idx, prob in zip(topk_next_tokens.indices, topk_next_tokens.values)
-            ],
-            sep="\n",
-        )
+            print(
+                *[
+                    f"[Nanotron Model] Next token: {idx.item()}, probability: {prob}"
+                    for idx, prob in zip(topk_next_tokens.indices, topk_next_tokens.values)
+                ],
+                sep="\n",
+            )
+
+        # Compute accuracy
+        predictions = np.argmax(output.transpose(0, 1).cpu(), axis=2).flatten().tolist()
+        labels = tokens.cpu().flatten()[1:].tolist()
+        print(f"\nAccuracy: {accuracy_score(labels, predictions)}")
+        # Results
+        ## Nanotron 8B, TP 1: 0.8272058823529411
+        ## Nanotron 8B, TP 2: 0.7720588235294118
+        ## Nanotron 70B, TP 2: 0.8272058823529411
 
 
 if __name__ == "__main__":
