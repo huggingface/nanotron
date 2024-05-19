@@ -1,5 +1,5 @@
 """
-torchrun --nproc-per-node 1 generate_nanotron_predictions.py --tp 1 --nanotron-checkpoint-path n_c/second  --tokenizer-name-or-path /mloscratch/homes/solergib/models/Meta-Llama-3-8B-Instruct
+torchrun --nproc-per-node 1 tools/llama3/generate_nanotron_predictions.py --tp 1 --nanotron-checkpoint-path nanotron_checkpoints/NanotronLlama38B
 """
 import argparse
 import os
@@ -17,12 +17,15 @@ from nanotron.serialize import load_weights
 from nanotron.trainer import mark_tied_parameters
 from transformers import AutoTokenizer
 
-# TODO Currentyly just sopporting Llama8B that doesn't needs any kind of parallelism
+# TODO Currentyly just sopporting Llama8B that doesn't needs any kind of model parallelism
 DP = 1
 PP = 1
 
 TXT = "The prologue of Romeo and Juliet calls the title characters “star-crossed lovers”—and the stars do seem to conspire against these young lovers.  Romeo is a Montague, and Juliet a Capulet. Their families are enmeshed in a feud, but the moment they meet—when Romeo and his friends attend a party at Juliets house in disguise—the two fall in love and quickly decide that they want to be married.  A friar secretly marries them, hoping to end the feud. Romeo and his companions almost immediately encounter Juliets cousin Tybalt, who challenges Romeo. When Romeo refuses to fight, Romeos friend Mercutio accepts the challenge and is killed. Romeo then kills Tybalt and is banished. He spends that night with Juliet and then leaves for Mantua.  Juliets father forces her into a marriage with Count Paris. To avoid this marriage, Juliet takes a potion, given her by the friar, that makes her appear dead. The friar will send Romeo word to be at her family tomb when she awakes. The plan goes awry, and Romeo learns instead that she is dead. In the tomb, Romeo kills himself. Juliet wakes, sees his body, and commits suicide. Their deaths appear finally to end the feud."
 SEQ_LENGTH = 256  # For truncating the TXT if GPU can't fit too many tokens
+
+DEVICE = torch.device("cuda")
+TORCH_DTYPE = torch.bfloat16
 
 
 def get_args():
@@ -38,21 +41,13 @@ def get_args():
     group = parser.add_argument_group(title="Nanotron Parallelism")
     group.add_argument("--tp", type=int, required=True, help="Tensor Parallelism Degree of the Nanotron Checkpoint")
 
-    group = parser.add_argument_group(title="Tokenizer")
-    group.add_argument(
-        "--tokenizer-name-or-path",
-        type=str,
-        required=True,
-        help="A path to a directory containing vocabulary files required by the tokenizer or the model id of a predefined tokenizer hosted inside a model repo on the Hugging Face Hub.",
-    )
-
     args = parser.parse_args()
 
     return args
 
 
 def main(args):
-
+    # Init Nanotron Parallel Utilities
     parallel_config = ParallelismArgs(
         dp=DP,
         pp=PP,
@@ -84,8 +79,8 @@ def main(args):
             random_states=None,
         ),
         parallel_context=parallel_context,
-        dtype=torch.bfloat16,
-        device=torch.device("cuda"),  # TODO Check with different parallelism
+        dtype=TORCH_DTYPE,
+        device=DEVICE,  # TODO Check with different parallelism if cpu is available
     )
 
     mark_tied_parameters(model=model, parallel_context=parallel_context)
@@ -94,9 +89,9 @@ def main(args):
     # Load checkpoint directly in memory and then only keep the state dictionary
     load_weights(model=model, parallel_context=parallel_context, root_folder=Path(args.nanotron_checkpoint_path))
 
-    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_name_or_path)
-    tokens = tokenizer(TXT, return_tensors="pt", truncation=True, max_length=(SEQ_LENGTH + 1))["input_ids"].to("cuda")
-    inputs = {"input_ids": tokens[:, :-1], "input_mask": torch.ones((1, SEQ_LENGTH), device="cuda")}
+    tokenizer = AutoTokenizer.from_pretrained(nanotron_config.tokenizer.tokenizer_name_or_path)
+    tokens = tokenizer(TXT, return_tensors="pt", truncation=True, max_length=(SEQ_LENGTH + 1))["input_ids"].to(DEVICE)
+    inputs = {"input_ids": tokens[:, :-1], "input_mask": torch.ones((1, SEQ_LENGTH), device=DEVICE)}
 
     model.eval()
 

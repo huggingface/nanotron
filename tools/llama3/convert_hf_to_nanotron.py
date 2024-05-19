@@ -1,5 +1,5 @@
 """
-torchrun --nproc-per-node 1 convert_hf_to_nanotron.py --tp 1 --nanotron-checkpoint-path n_c/second  --pretrained-model-name-or-path /mloscratch/homes/solergib/models/Meta-Llama-3-8B-Instruct
+torchrun --nproc-per-node 1 tools/llama3/convert_hf_to_nanotron.py --tp 1 --nanotron-checkpoint-path nanotron_checkpoints/NanotronLlama38B --pretrained-model-name-or-path /mloscratch/homes/solergib/models/Meta-Llama-3-8B-Instruct
 """
 import argparse
 import json
@@ -8,9 +8,11 @@ from pathlib import Path
 
 import torch
 import yaml
+from nanotron import logging
 from nanotron.config import Config, GeneralArgs, ModelArgs, ParallelismArgs, TokenizerArgs
 from nanotron.config.models_config import ExistingCheckpointInit
 from nanotron.config.models_config import LlamaConfig as LlamaConfigNanotron
+from nanotron.logging import log_rank
 from nanotron.models import build_model
 from nanotron.models.llama import LlamaForTraining
 from nanotron.parallel import ParallelContext
@@ -20,11 +22,16 @@ from nanotron.parallel.tensor_parallel.nn import TensorParallelLinearMode
 from nanotron.serialize import TrainingMetadata, save_meta, save_weights
 from nanotron.serialize.metadata import DataStageMetadata
 from nanotron.trainer import mark_tied_parameters
-from transformers import AutoModelForCausalLM
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
-# TODO Currentyly just sopporting Llama8B that doesn't needs any kind of parallelism
+logger = logging.get_logger(__name__)
+
+# TODO Currentyly just sopporting Llama8B that doesn't needs any kind of model parallelism
 DP = 1
 PP = 1
+
+DEVICE = torch.device("cuda")
+TORCH_DTYPE = torch.bfloat16
 
 
 def get_args():
@@ -54,10 +61,36 @@ def get_args():
 
 
 def main(args):
+    # Init Nanotron Parallel Utilities
+    parallel_config = ParallelismArgs(
+        dp=DP,
+        pp=PP,
+        tp=args.tp,
+        pp_engine=AllForwardAllBackwardPipelineEngine(),
+        tp_mode=TensorParallelLinearMode.ALL_REDUCE,
+        tp_linear_async_communication=False,
+    )
+    assert (
+        parallel_config.tp_mode == TensorParallelLinearMode.ALL_REDUCE
+        and parallel_config.tp_linear_async_communication is False
+    )
+
+    parallel_context = ParallelContext(
+        data_parallel_size=parallel_config.dp,
+        pipeline_parallel_size=parallel_config.pp,
+        tensor_parallel_size=parallel_config.tp,
+    )
+
     # Load Llama3-8B HF model
+    log_rank(
+        f"Loading pretrained Llama3 Model: {args.pretrained_model_name_or_path}",
+        logger=logger,
+        level=logging.INFO,
+        rank=0,
+    )
     hf_model = AutoModelForCausalLM.from_pretrained(
-        args.pretrained_model_name_or_path, torch_dtype=torch.bfloat16, attn_implementation="flash_attention_2"
-    ).to("cuda")
+        args.pretrained_model_name_or_path, torch_dtype=TORCH_DTYPE, attn_implementation="flash_attention_2"
+    ).to(DEVICE)
     hf_config = hf_model.config
 
     # Set Nanotron LlamaConfig
@@ -85,25 +118,7 @@ def main(args):
     )
 
     # Init Llama3-8B Nanotron model
-    parallel_config = ParallelismArgs(
-        dp=DP,
-        pp=PP,
-        tp=args.tp,
-        pp_engine=AllForwardAllBackwardPipelineEngine(),
-        tp_mode=TensorParallelLinearMode.ALL_REDUCE,
-        tp_linear_async_communication=False,
-    )
-    assert (
-        parallel_config.tp_mode == TensorParallelLinearMode.ALL_REDUCE
-        and parallel_config.tp_linear_async_communication is False
-    )
-
-    parallel_context = ParallelContext(
-        data_parallel_size=parallel_config.dp,
-        pipeline_parallel_size=parallel_config.pp,
-        tensor_parallel_size=parallel_config.tp,
-    )
-
+    log_rank("Init empty Nanotron Llama3 Model", logger=logger, level=logging.INFO, rank=0)
     nanotron_model = build_model(
         model_builder=lambda: LlamaForTraining(
             config=nanotron_llama_config,
@@ -112,14 +127,15 @@ def main(args):
             random_states=None,
         ),
         parallel_context=parallel_context,
-        dtype=torch.bfloat16,
-        device=torch.device("cuda"),
+        dtype=TORCH_DTYPE,
+        device=DEVICE,
     )
 
     mark_tied_parameters(model=nanotron_model, parallel_context=parallel_context)
     sanity_check(root_module=nanotron_model)
 
     # Copy params from HF to Nanotron
+    log_rank("Copyng weights from HF model to Nanotron model...", logger=logger, level=logging.INFO, rank=0)
     # Token embeddings
     assert (
         nanotron_model.model.token_position_embeddings.pp_block.token_embedding.weight.shape
@@ -210,11 +226,13 @@ def main(args):
     with torch.no_grad():
         nanotron_model.model.lm_head.pp_block.weight.copy_(hf_model.lm_head.weight)
 
+    log_rank("Copied weights from HF model to Nanotron model!", logger=logger, level=logging.INFO, rank=0)
     # Store weights
     nanotron_checkpoint_path = Path(args.nanotron_checkpoint_path)
     save_weights(model=nanotron_model, parallel_context=parallel_context, root_folder=nanotron_checkpoint_path)
 
     # Store metadata
+    log_rank("Storing Nanotron model Configs and Metadata!", logger=logger, level=logging.INFO, rank=0)
     training_metadata = TrainingMetadata(
         last_train_step=0,
         consumed_train_samples=0,
@@ -223,6 +241,9 @@ def main(args):
     save_meta(
         root_folder=nanotron_checkpoint_path, parallel_context=parallel_context, training_metadata=training_metadata
     )
+    # Store Tokenizer into Nanotron Checkpoint folder
+    tokenizer = AutoTokenizer.from_pretrained(args.pretrained_model_name_or_path)
+    tokenizer.save_pretrained(nanotron_checkpoint_path)
 
     # Store Config and Model Config files
     with open(nanotron_checkpoint_path / "config.yaml", "w") as f:
@@ -233,7 +254,7 @@ def main(args):
                 init_method=ExistingCheckpointInit(nanotron_checkpoint_path),
                 model_config=nanotron_llama_config,
             ),
-            tokenizer=TokenizerArgs(args.pretrained_model_name_or_path),
+            tokenizer=TokenizerArgs(nanotron_checkpoint_path),
         )
         print("Saving config ...")
         yaml.dump(config.as_dict(), f)
@@ -241,6 +262,13 @@ def main(args):
     with open(nanotron_checkpoint_path / "model_config.json", "w") as f:
         print("Saving model config ...")
         json.dump(asdict(nanotron_llama_config), f)
+
+    log_rank(
+        f"Checkpoint conversion finished, check {args.nanotron_checkpoint_path}",
+        logger=logger,
+        level=logging.INFO,
+        rank=0,
+    )
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 """
-torchrun --nproc-per-node 1 generate_hf_predictions.py --pretrained-model-name-or-path hf_c/second  --tokenizer-name-or-path /mloscratch/homes/solergib/models/Meta-Llama-3-8B-Instruct
+torchrun --nproc-per-node 1 tools/llama3/generate_hf_predictions.py --pretrained-model-name-or-path hf_checkpoints/ConvertedNanotronLlama38B
 """
 import argparse
 import os
@@ -9,6 +9,9 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 TXT = "The prologue of Romeo and Juliet calls the title characters “star-crossed lovers”—and the stars do seem to conspire against these young lovers.  Romeo is a Montague, and Juliet a Capulet. Their families are enmeshed in a feud, but the moment they meet—when Romeo and his friends attend a party at Juliets house in disguise—the two fall in love and quickly decide that they want to be married.  A friar secretly marries them, hoping to end the feud. Romeo and his companions almost immediately encounter Juliets cousin Tybalt, who challenges Romeo. When Romeo refuses to fight, Romeos friend Mercutio accepts the challenge and is killed. Romeo then kills Tybalt and is banished. He spends that night with Juliet and then leaves for Mantua.  Juliets father forces her into a marriage with Count Paris. To avoid this marriage, Juliet takes a potion, given her by the friar, that makes her appear dead. The friar will send Romeo word to be at her family tomb when she awakes. The plan goes awry, and Romeo learns instead that she is dead. In the tomb, Romeo kills himself. Juliet wakes, sees his body, and commits suicide. Their deaths appear finally to end the feud."
 SEQ_LENGTH = 256  # For truncating the TXT if GPU can't fit too many tokens
+
+DEVICE = torch.device("cuda")
+TORCH_DTYPE = torch.bfloat16
 
 
 def get_args():
@@ -28,16 +31,15 @@ def get_args():
 
 def main(args):
     # TODO Refractor with HF pipeline or .generate()?
-    model = (
-        AutoModelForCausalLM.from_pretrained(
-            args.pretrained_model_name_or_path, torch_dtype=torch.bfloat16, attn_implementation="flash_attention_2"
-        )
-        .to("cuda")
-        .eval()
-    )
+    model = AutoModelForCausalLM.from_pretrained(
+        args.pretrained_model_name_or_path,
+        torch_dtype=TORCH_DTYPE,
+        attn_implementation="flash_attention_2",
+        device=DEVICE,
+    ).eval()
 
     tokenizer = AutoTokenizer.from_pretrained(args.pretrained_model_name_or_path)
-    tokens = tokenizer(TXT, return_tensors="pt", truncation=True, max_length=(SEQ_LENGTH + 1))["input_ids"].to("cuda")
+    tokens = tokenizer(TXT, return_tensors="pt", truncation=True, max_length=(SEQ_LENGTH + 1))["input_ids"].to(DEVICE)
     inputs = tokens[:, :-1]
 
     with torch.no_grad():

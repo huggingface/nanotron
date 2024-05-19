@@ -1,5 +1,5 @@
 """
-torchrun --nproc-per-node 1 convert_nanotron_to_hf.py --tp 1 --nanotron-checkpoint-path n_c/second --hugging-face-checkpoint-path hf_c/second
+torchrun --nproc-per-node 1 tools/llama3/convert_nanotron_to_hf.py --tp 1 --nanotron-checkpoint-path nanotron_checkpoints/NanotronLlama38B --hugging-face-checkpoint-path hf_checkpoints/ConvertedNanotronLlama38B
 """
 import argparse
 import os
@@ -7,7 +7,9 @@ from dataclasses import asdict
 from pathlib import Path
 
 import torch
+from nanotron import logging
 from nanotron.config import Config, ParallelismArgs, get_config_from_file
+from nanotron.logging import log_rank
 from nanotron.models import build_model
 from nanotron.models.llama import LlamaForTraining
 from nanotron.parallel import ParallelContext
@@ -19,9 +21,14 @@ from nanotron.trainer import mark_tied_parameters
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from transformers.models.llama import LlamaConfig as LlamaConfigHF
 
-# TODO Currentyly just sopporting Llama8B that doesn't needs any kind of parallelism
+logger = logging.get_logger(__name__)
+
+# TODO Currentyly just sopporting Llama8B that doesn't needs any kind of model parallelism
 DP = 1
 PP = 1
+
+DEVICE = torch.device("cuda")
+TORCH_DTYPE = torch.bfloat16
 
 
 def get_args():
@@ -52,13 +59,7 @@ def get_args():
 
 
 def main(args):
-    # Load Nanotron checkpoint config
-    nanotron_config = get_config_from_file(
-        os.path.join(args.nanotron_checkpoint_path, "config.yaml"), config_class=Config, model_config_class=None
-    )
-    nanotron_llama_config = nanotron_config.model.model_config
-
-    # Init Llama3-8B Nanotron model
+    # Init Nanotron Parallel Utilities
     parallel_config = ParallelismArgs(
         dp=DP,
         pp=PP,
@@ -78,6 +79,20 @@ def main(args):
         tensor_parallel_size=parallel_config.tp,
     )
 
+    # Load Nanotron checkpoint config
+    log_rank(
+        f"Loading Nanotron checkpoint config file: {os.path.join(args.nanotron_checkpoint_path, 'config.yaml')}",
+        logger=logger,
+        level=logging.INFO,
+        rank=0,
+    )
+    nanotron_config = get_config_from_file(
+        os.path.join(args.nanotron_checkpoint_path, "config.yaml"), config_class=Config, model_config_class=None
+    )
+    nanotron_llama_config = nanotron_config.model.model_config
+
+    # Init Llama3-8B Nanotron model
+    log_rank("Init empty Nanotron Llama3 Model", logger=logger, level=logging.INFO, rank=0)
     nanotron_model = build_model(
         model_builder=lambda: LlamaForTraining(
             config=nanotron_config.model.model_config,
@@ -86,8 +101,8 @@ def main(args):
             random_states=None,
         ),
         parallel_context=parallel_context,
-        dtype=torch.bfloat16,
-        device=torch.device("cuda"),
+        dtype=TORCH_DTYPE,
+        device=DEVICE,
     )
 
     mark_tied_parameters(model=nanotron_model, parallel_context=parallel_context)
@@ -102,11 +117,12 @@ def main(args):
     ## TODO This takes pretty long time
     hf_model = AutoModelForCausalLM.from_config(
         config=LlamaConfigHF(**asdict(nanotron_llama_config)),
-        torch_dtype=torch.bfloat16,
+        torch_dtype=TORCH_DTYPE,
         attn_implementation="flash_attention_2",
-    ).to("cuda")
+    ).to(DEVICE)
 
     # Copy params from Nanotron to HF
+    log_rank("Copyng weights from Nanotron model to HF model...", logger=logger, level=logging.INFO, rank=0)
     # Token embeddings
     assert (
         nanotron_model.model.token_position_embeddings.pp_block.token_embedding.weight.shape
@@ -201,7 +217,9 @@ def main(args):
     with torch.no_grad():
         hf_model.lm_head.weight.copy_(nanotron_model.model.lm_head.pp_block.weight)
 
+    log_rank("Copied weights from Nanotron model to HF model!", logger=logger, level=logging.INFO, rank=0)
     # Store weights
+    log_rank("Storing HF model Checkpoint and Tokenizer!", logger=logger, level=logging.INFO, rank=0)
     hf_model.save_pretrained(args.hugging_face_checkpoint_path, from_pt=True)
     # Store tokenizer
     tokenizer = AutoTokenizer.from_pretrained(nanotron_config.tokenizer.tokenizer_name_or_path)
