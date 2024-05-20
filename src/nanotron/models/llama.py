@@ -320,10 +320,11 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         self.rotary_embedding = RotaryEmbedding(
             dim=self.d_qk,
             end=config.max_position_embeddings,
+            theta=config.rope_theta,
         )
 
         # NOTE: Only supported for training (TODO(fmom): position_ids not supported yet)
-        self.flash_rotary_embedding = FlashRotaryEmbedding(dim=self.d_qk, interleaved=True)
+        self.flash_rotary_embedding = FlashRotaryEmbedding(dim=self.d_qk, base=config.rope_theta, interleaved=True)
 
         self.o_proj = TensorParallelRowLinear(
             config.num_attention_heads * self.d_qk,
