@@ -114,9 +114,19 @@ class NanotronParameter(nn.Parameter):
     def __new__(cls, tensor: torch.Tensor, requires_grad: bool = True):
         assert tensor.data.is_floating_point() or tensor.data.requires_grad is False
 
-        # NOTE: FP8 tensor has int dtype, you can't .detach() an integer tensor!
-        data = tensor.data.detach() if tensor.data.is_floating_point() else tensor.data
-        param = nn.Parameter.__new__(cls, data=data, requires_grad=requires_grad)
+        # data = tensor.data.detach() if tensor.data.is_floating_point() else tensor.data
+        # requires_grad = requires_grad if data.is_floating_point() else False
+        
+        if tensor.data.is_floating_point():
+            data = tensor.data.detach()
+        else:
+            # NOTE: FP8 tensor has int dtype, you can't .detach() an integer tensor!
+            requires_grad = False
+            data = tensor.data
+        
+        # param = nn.Parameter.__new__(cls, data=data, requires_grad=requires_grad)
+        param = nn.Parameter._make_subclass(cls, data=data)
+        param.requires_grad = requires_grad
 
         if isinstance(tensor, NanotronParameter):
             # Check that we don't inherit a weird class
