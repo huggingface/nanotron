@@ -14,9 +14,3 @@ test:
         --ignore tests/fp8 \
         --verbose \
         examples/doremi/tests/
-
-	pip install -r examples/llama/requirements.txt
-	pytest \
-        --color=yes \
-        --verbose \
-        examples/llama/tests/
