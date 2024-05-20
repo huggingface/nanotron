@@ -20,7 +20,6 @@ from torch import nn
 from nanotron import distributed as dist
 from nanotron.constants import IS_FP8
 from nanotron.distributed import get_global_rank
-from nanotron.fp8.linear import FP8Linear
 from nanotron.parallel.parameters import NanotronParameter
 from nanotron.parallel.sharded_parameters import (
     SplitConfig,
@@ -40,7 +39,12 @@ from nanotron.parallel.tensor_parallel.functional import (
 )
 from nanotron.parallel.tied_parameters import create_tied_parameter
 
-BASE_LINEAR = FP8Linear if IS_FP8 is True else nn.Linear
+try:
+    from nanotron.fp8.linear import FP8Linear
+
+    BASE_LINEAR = FP8Linear if IS_FP8 is True else nn.Linear
+except ImportError:
+    BASE_LINEAR = nn.Linear
 
 
 class TensorParallelColumnLinear(BASE_LINEAR):
