@@ -1,4 +1,9 @@
+import sys
 from math import isclose
+from pathlib import Path
+
+package_path = Path(__file__).parent.parent
+sys.path.append(str(package_path))
 
 import numpy as np
 import pytest
