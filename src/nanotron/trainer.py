@@ -36,6 +36,7 @@ from nanotron.config import (
 )
 from nanotron.constants import LR_SCHEDULER_CKP_PATH, METADATA_CKP_PATH, OPTIMIZER_CKP_PATH
 from nanotron.dataloader import sanity_check_dataloader
+from nanotron.debug.monitor import monitor_nanotron_model
 from nanotron.helpers import (
     _vocab_size_with_padding,
     get_profiler,
@@ -189,13 +190,26 @@ class DistributedTrainer:
             # we might not have the optimizer state
             optim_ckp_path = OPTIMIZER_CKP_PATH.format(self.init_checkpoint_path)
             if os.path.exists(optim_ckp_path):
-                load_optimizer(
-                    optimizer=self.optimizer,
-                    parallel_context=self.parallel_context,
-                    root_folder=self.init_checkpoint_path,
-                    param_shard_metadata=self.param_shard_metadata,
-                    model=self.model,
-                )
+                # checkpoint_metadata = load_meta(
+                #     parallel_context=self.parallel_context, root_folder=self.init_checkpoint_path
+                # )
+
+                prev_config = get_config_from_file((self.init_checkpoint_path / "config.yaml").as_posix())
+                if (
+                    prev_config.optimizer.accumulate_grad_in_fp32 is False
+                    and self.config.optimizer.accumulate_grad_in_fp32 is True
+                ):
+                    # NOTE: if in the previous config, we didn't use fp32 accumulation
+                    # then we don't have the states for it, so we can't load it along with the optimizer
+                    pass
+                else:
+                    load_optimizer(
+                        optimizer=self.optimizer,
+                        parallel_context=self.parallel_context,
+                        root_folder=self.init_checkpoint_path,
+                        param_shard_metadata=self.param_shard_metadata,
+                        model=self.model,
+                    )
             else:
                 log_rank(
                     f"Can't find the optimizer state's checkpoint in {optim_ckp_path}, so we skip loading its checkpoint!",
@@ -258,6 +272,7 @@ class DistributedTrainer:
 
         # Log where each module is instantiated
         self.unwrapped_model.log_modules(level=logging.DEBUG, group=self.parallel_context.world_pg, rank=0)
+        self.nn_logs, self.nn_handles = monitor_nanotron_model(self.unwrapped_model, self.parallel_context)
 
         self.micro_batch_size = self.config.tokens.micro_batch_size
         self.n_micro_batches_per_batch = self.config.tokens.batch_accumulation_per_replica
@@ -295,6 +310,7 @@ class DistributedTrainer:
                 name=f"{current_time}_{self.config.general.run}",
                 config={"nanotron_config": self.config.as_dict()},
             )
+            # wandb.watch(self.model, log="all")
 
     def post_train_step(self):
         pass
@@ -411,6 +427,10 @@ class DistributedTrainer:
         torch.cuda.empty_cache()
         with prof:
             for self.iteration_step in range(self.start_iteration_step + 1, self.config.tokens.train_steps + 1):
+                from nanotron import constants
+
+                constants.GLOBAL_STEP = self.iteration_step
+
                 if isinstance(prof, torch.profiler.profile):
                     prof.step()
 
@@ -621,6 +641,11 @@ class DistributedTrainer:
                 os.system("scancel " + os.environ["SLURM_JOB_ID"])
             else:
                 exit(0)
+
+        if dist.get_rank(self.parallel_context.world_pg) == self.logger_ranks[0] and wandb is not None:
+            from nanotron.debug.monitor import convert_logs_to_flat_logs
+
+            wandb.log({**convert_logs_to_flat_logs(self.nn_logs), "iteration_step": self.iteration_step})
 
     def init_model(self) -> Union[NanotronModel, DistributedDataParallel]:
         """Initialize the model and load weights from checkpoint if needed."""
