@@ -1,11 +1,13 @@
 import dataclasses
-from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
 
 import torch
+from functorch.dim import tree_map
 from torch import nn
 
 from nanotron import distributed as dist
 from nanotron import logging
+from nanotron.fp8.tensor import FP8Tensor
 
 if TYPE_CHECKING:
     from nanotron.models import NanotronModel
@@ -92,6 +94,121 @@ class ShardedInfo:
         return set(dist.get_global_ranks(parallel_context.dp_pg)).issubset(set(self.global_ranks))
 
 
+# class NanotronParameter(nn.Parameter):
+#     """Base class for all parameters in Nanotronmodels
+
+#     A NanotronParameter can have specific properties:
+#      - sharded: the parameter is considered to be `sharded` across multiple devices
+#      - tied: the parameter is considered to be `tied` with other parameters. We sum gradients over those.
+
+#     .. note::
+#         Notes about tied weights:
+#         - Tied weights means weights that need to be synced only within the same DP rank, regardless if they are part of TP strategy or just shared weights between two layers.
+#         - Syncing tied weights usually require to sum gradients.
+#         - Some weights are synced without needing to reduce grads over ranks. They can be in the same device (ex: enc/dec embeds in the same PP stage) or they can be duplicated across TP and duplicate the workload across TP ranks (ex: LN using traditional TP)
+#         - Even if some weights don't need their grads to be reduced, it's still useful for them to be marked as tied. For example, current serialization format requires to mark them correctly.
+#     """
+
+#     NANOTRON_PARAMETER_METADATA_ATTRIBUTE_NAME = "__nanotron_metadata__"
+#     NANOTRON_PARAMETER_METADATA_TIED_KEY = "tied"
+#     NANOTRON_PARAMETER_METADATA_SHARDED_KEY = "sharded"
+
+#     def __new__(cls, tensor: torch.Tensor, requires_grad: bool = True):
+#         assert tensor.data.is_floating_point() or tensor.data.requires_grad is False
+
+#         # data = tensor.data.detach() if tensor.data.is_floating_point() else tensor.data
+#         # requires_grad = requires_grad if data.is_floating_point() else False
+
+#         if tensor.data.is_floating_point():
+#             data = tensor.data.detach()
+#         else:
+#             # NOTE: FP8 tensor has int dtype, you can't .detach() an integer tensor!
+#             requires_grad = False
+#             data = tensor.data
+
+#         # param = nn.Parameter.__new__(cls, data=data, requires_grad=requires_grad)
+#         # param.data =
+#         # NOTE: this somehow makes the param has the methods of NanotronParameter
+#         param = nn.Parameter._make_subclass(cls, data=data)
+#         param.requires_grad = requires_grad
+
+#         if isinstance(tensor, NanotronParameter):
+#             # Check that we don't inherit a weird class
+#             # We copy in order not to make in-place operation
+#             assert type(tensor) == NanotronParameter
+#             setattr(
+#                 param,
+#                 cls.NANOTRON_PARAMETER_METADATA_ATTRIBUTE_NAME,
+#                 getattr(tensor, cls.NANOTRON_PARAMETER_METADATA_ATTRIBUTE_NAME).copy(),
+#             )
+#         else:
+#             setattr(param, cls.NANOTRON_PARAMETER_METADATA_ATTRIBUTE_NAME, {})
+
+#         return param
+
+#     def _set_metadata(self, key: str, value: Any):
+#         metadata = getattr(self, self.NANOTRON_PARAMETER_METADATA_ATTRIBUTE_NAME)
+
+#         if key in metadata:
+#             raise ValueError(
+#                 f"We shouldn't override previous metadata. Key to be overridden: {key}, current metadata: {metadata}"
+#             )
+#         else:
+#             metadata[key] = value
+
+#     def mark_as_tied(
+#         self,
+#         name: str,
+#         global_ranks: Tuple[int, ...],
+#         reduce_op: Optional[dist.ReduceOp],
+#         root_module: "NanotronModel",
+#     ):
+#         self._set_metadata(
+#             self.NANOTRON_PARAMETER_METADATA_TIED_KEY,
+#             TiedInfo(name=name, global_ranks=global_ranks, reduce_op=reduce_op, root_module=root_module),
+#         )
+
+#     def get_tied_info(self) -> TiedInfo:
+#         return getattr(self, self.NANOTRON_PARAMETER_METADATA_ATTRIBUTE_NAME)[
+#             self.NANOTRON_PARAMETER_METADATA_TIED_KEY
+#         ]
+
+#     @property
+#     def is_tied(self) -> bool:
+#         return self.NANOTRON_PARAMETER_METADATA_TIED_KEY in getattr(
+#             self, self.NANOTRON_PARAMETER_METADATA_ATTRIBUTE_NAME
+#         )
+
+#     def mark_as_sharded(
+#         self,
+#         global_ranks: Tuple[int, ...],
+#         local_global_slices_pairs: Tuple[SlicesPair, ...],
+#         unsharded_shape: Tuple[int, ...],
+#     ):
+#         self._set_metadata(
+#             self.NANOTRON_PARAMETER_METADATA_SHARDED_KEY,
+#             ShardedInfo(
+#                 global_ranks=global_ranks,
+#                 local_global_slices_pairs=local_global_slices_pairs,
+#                 unsharded_shape=unsharded_shape,
+#             ),
+#         )
+
+#     def get_sharded_info(self) -> ShardedInfo:
+#         return getattr(self, self.NANOTRON_PARAMETER_METADATA_ATTRIBUTE_NAME)[
+#             self.NANOTRON_PARAMETER_METADATA_SHARDED_KEY
+#         ]
+
+#     @property
+#     def is_sharded(self) -> bool:
+#         return self.NANOTRON_PARAMETER_METADATA_SHARDED_KEY in getattr(
+#             self, self.NANOTRON_PARAMETER_METADATA_ATTRIBUTE_NAME
+#         )
+
+#     def __repr__(self):
+#         return f"NanotronParameter({super().__repr__()})"
+
+
 class NanotronParameter(nn.Parameter):
     """Base class for all parameters in Nanotronmodels
 
@@ -116,17 +233,17 @@ class NanotronParameter(nn.Parameter):
 
         # data = tensor.data.detach() if tensor.data.is_floating_point() else tensor.data
         # requires_grad = requires_grad if data.is_floating_point() else False
-        
+
         if tensor.data.is_floating_point():
             data = tensor.data.detach()
         else:
             # NOTE: FP8 tensor has int dtype, you can't .detach() an integer tensor!
-            requires_grad = False
             data = tensor.data
-        
+
         # param = nn.Parameter.__new__(cls, data=data, requires_grad=requires_grad)
-        param = nn.Parameter._make_subclass(cls, data=data)
-        param.requires_grad = requires_grad
+        # param.data =
+        # NOTE: this somehow makes the param has the methods of NanotronParameter
+        param = nn.Parameter._make_wrapper_subclass(cls, size=data.size())
 
         if isinstance(tensor, NanotronParameter):
             # Check that we don't inherit a weird class
@@ -141,6 +258,9 @@ class NanotronParameter(nn.Parameter):
             setattr(param, cls.NANOTRON_PARAMETER_METADATA_ATTRIBUTE_NAME, {})
 
         return param
+
+    def __init__(self, tensor: Union[torch.Tensor, FP8Tensor]):
+        self._data = tensor
 
     def _set_metadata(self, key: str, value: Any):
         metadata = getattr(self, self.NANOTRON_PARAMETER_METADATA_ATTRIBUTE_NAME)
@@ -200,6 +320,31 @@ class NanotronParameter(nn.Parameter):
         return self.NANOTRON_PARAMETER_METADATA_SHARDED_KEY in getattr(
             self, self.NANOTRON_PARAMETER_METADATA_ATTRIBUTE_NAME
         )
+
+    def __repr__(self):
+        return f"NanotronParameter({super().__repr__()})"
+
+    @classmethod
+    def __torch_dispatch__(cls, func, types, args=(), kwargs=None):
+        def unwrap(e):
+            return e._data if isinstance(e, NanotronParameter) else e
+
+        # def wrap(e):
+        #     # TODO(xrsrke): in some ops, the first metadata isn't related to the output
+        #     metadatas = tuple(a._data.fp8_meta for a in args if isinstance(a, NanotronParameter))
+        #     return cls(e, fp8_meta=metadatas[0]) if isinstance(e, torch.Tensor) else e
+
+        def wrap(e):
+            return cls(e) if not isinstance(e, NanotronParameter) else e
+
+        args = tree_map(unwrap, args)
+        kwargs = tree_map(unwrap, kwargs)
+
+        if func == torch.ops.aten.detach.default:
+            # NOTE: this is for parameter.data or parameter.detach()
+            return args[0].data
+        else:
+            return tree_map(wrap, func(*args, **kwargs))
 
 
 def sanity_check(root_module: nn.Module):

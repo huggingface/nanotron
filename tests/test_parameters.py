@@ -7,8 +7,11 @@ from helpers.utils import (
 )
 from nanotron.constants import CHECKPOINT_VERSION
 from nanotron.fp8.dtypes import DTypes
+from nanotron.fp8.meta import FP8Meta
 from nanotron.fp8.parameter import FP8Parameter
+from nanotron.fp8.tensor import FP8Tensor
 from nanotron.parallel import ParallelContext
+from nanotron.parallel.parameters import NanotronParameter
 from nanotron.parallel.sharded_parameters import SplitConfig, create_sharded_parameter_from_config
 from nanotron.serialize.metadata import TensorMetadata
 
@@ -24,6 +27,7 @@ def _test_create_sharded_fp8_parameter(parallel_context: ParallelContext, test_c
     # param = torch.nn.Parameter(torch.randn(16, 64))
     data = torch.randn(16, 64, device="cuda")
     param = FP8Parameter(data, dtype)
+    FP8Parameter(data, dtype)
 
     split_config = SplitConfig(
         split_dim=0,
@@ -31,6 +35,11 @@ def _test_create_sharded_fp8_parameter(parallel_context: ParallelContext, test_c
     )
     param = create_sharded_parameter_from_config(parameter=param, pg=parallel_context.tp_pg, split_config=split_config)
     sharded_info = param.get_sharded_info()
+
+    assert isinstance(param, NanotronParameter)
+    assert isinstance(param.data, FP8Tensor)
+    assert isinstance(param.data.fp8_meta, FP8Meta)
+
     metadata = TensorMetadata(
         version=CHECKPOINT_VERSION,
         local_global_slices_pairs=sharded_info.local_global_slices_pairs,
