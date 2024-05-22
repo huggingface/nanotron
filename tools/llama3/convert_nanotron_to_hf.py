@@ -7,18 +7,20 @@ from dataclasses import asdict
 from pathlib import Path
 
 import torch
-from nanotron.config import Config, ParallelismArgs, get_config_from_file
+from nanotron import logging
+from nanotron.config import Config, LoggingArgs, ParallelismArgs, get_config_from_file
+from nanotron.logging import log_rank, set_ranks_logging_level
 from nanotron.models import build_model
 from nanotron.models.llama import LlamaForTraining
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import sanity_check
-from nanotron.parallel.pipeline_parallel.engine import AllForwardAllBackwardPipelineEngine
-from nanotron.parallel.tensor_parallel.nn import TensorParallelLinearMode
 from nanotron.serialize import load_weights
 from nanotron.trainer import mark_tied_parameters
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from transformers.models.llama import LlamaConfig as LlamaConfigHF
+
+logger = logging.get_logger(__name__)
 
 DEVICE = torch.device("cpu")
 TORCH_DTYPE = torch.bfloat16
@@ -41,7 +43,6 @@ def get_args():
         required=True,
         help="A path to a directory to store the converted checkpoint",
     )
-    # TODO Add push to hub
 
     args = parser.parse_args()
 
@@ -50,18 +51,7 @@ def get_args():
 
 def main(args):
     # Init Nanotron Parallel Utilities
-    parallel_config = ParallelismArgs(
-        dp=1,
-        pp=1,
-        tp=1,
-        pp_engine=AllForwardAllBackwardPipelineEngine(),
-        tp_mode=TensorParallelLinearMode.ALL_REDUCE,
-        tp_linear_async_communication=False,
-    )
-    assert (
-        parallel_config.tp_mode == TensorParallelLinearMode.ALL_REDUCE
-        and parallel_config.tp_linear_async_communication is False
-    )
+    parallel_config = ParallelismArgs(dp=1, pp=1, tp=1)
 
     parallel_context = ParallelContext(
         data_parallel_size=parallel_config.dp,
@@ -69,15 +59,23 @@ def main(args):
         tensor_parallel_size=parallel_config.tp,
     )
 
+    set_ranks_logging_level(parallel_context=parallel_context, logging_config=LoggingArgs())
+
     # Load Nanotron checkpoint config
-    print(f"Loading Nanotron checkpoint config file: {os.path.join(args.nanotron_checkpoint_path, 'config.yaml')}")
+    log_rank(
+        f"Loading Nanotron checkpoint config file: {os.path.join(args.nanotron_checkpoint_path, 'config.yaml')}",
+        logger=logger,
+        level=logging.INFO,
+        rank=0,
+    )
     nanotron_config = get_config_from_file(
         os.path.join(args.nanotron_checkpoint_path, "config.yaml"), config_class=Config, model_config_class=None
     )
     nanotron_llama_config = nanotron_config.model.model_config
 
     # Init Llama3-8B Nanotron model
-    print("Init empty Nanotron Llama3 Model")
+    log_rank("Init empty Nanotron Llama3 Model", logger=logger, level=logging.INFO, rank=0)
+
     nanotron_model = build_model(
         model_builder=lambda: LlamaForTraining(
             config=nanotron_config.model.model_config,
@@ -94,13 +92,13 @@ def main(args):
     sanity_check(root_module=nanotron_model)
 
     # Load Nanotron Checkpoint
-    print("Loading Nanotron Llama3 Model...")
+    log_rank("Loading Nanotron Llama3 Model...", logger=logger, level=logging.INFO, rank=0)
     load_weights(
         model=nanotron_model, parallel_context=parallel_context, root_folder=Path(args.nanotron_checkpoint_path)
     )
 
     # Build empty HF Model
-    print("Init empty HF Llama3 Model")
+    log_rank("Init empty HF Llama3 Model", logger=logger, level=logging.INFO, rank=0)
     hf_model = AutoModelForCausalLM.from_config(  # WARN This takes a long time
         config=LlamaConfigHF(**asdict(nanotron_llama_config)),
         torch_dtype=TORCH_DTYPE,
@@ -108,9 +106,9 @@ def main(args):
     ).to(DEVICE)
 
     # Copy params from Nanotron to HF
-    print("Copyng weights from Nanotron model to HF model...")
+    log_rank("Copying weights from Nanotron model to HF model...", logger=logger, level=logging.INFO, rank=0)
     # Token embeddings
-    print("Copyng Token Embeddings...")
+    log_rank("Copying Token Embeddings...", logger=logger, level=logging.INFO, rank=0)
     assert (
         nanotron_model.model.token_position_embeddings.pp_block.token_embedding.weight.shape
         == hf_model.model.embed_tokens.weight.shape
@@ -123,7 +121,7 @@ def main(args):
     # Decoder layers
     for i in tqdm(
         range(nanotron_llama_config.num_hidden_layers),
-        desc="Copyng Hidden Layers",
+        desc="Copying Hidden Layers",
         total=nanotron_llama_config.num_hidden_layers,
     ):
         # Input layer norm
@@ -199,26 +197,31 @@ def main(args):
             )
 
     # Last layer norm
-    print("Copyng Final Layer Norm...")
+    log_rank("Copying Final Layer Norm...", logger=logger, level=logging.INFO, rank=0)
     assert nanotron_model.model.final_layer_norm.pp_block.weight.shape == hf_model.model.norm.weight.shape
     with torch.no_grad():
         hf_model.model.norm.weight.copy_(nanotron_model.model.final_layer_norm.pp_block.weight)
 
     # LM_Head
-    print("Copyng LM Head...")
+    log_rank("Copying LM Head...", logger=logger, level=logging.INFO, rank=0)
     assert nanotron_model.model.lm_head.pp_block.weight.shape == hf_model.lm_head.weight.shape
     with torch.no_grad():
         hf_model.lm_head.weight.copy_(nanotron_model.model.lm_head.pp_block.weight)
 
-    print("Copied weights from Nanotron model to HF model!")
+    log_rank("Copied weights from Nanotron model to HF model!", logger=logger, level=logging.INFO, rank=0)
     # Store weights
-    print("Storing HF model Checkpoint and Tokenizer!")
+    log_rank("Storing HF model Checkpoint and Tokenizer!", logger=logger, level=logging.INFO, rank=0)
     hf_model.save_pretrained(args.hugging_face_checkpoint_path, from_pt=True)
     # Store tokenizer
     tokenizer = AutoTokenizer.from_pretrained(nanotron_config.tokenizer.tokenizer_name_or_path)
     tokenizer.save_pretrained(args.hugging_face_checkpoint_path)
 
-    print(f"Checkpoint conversion finished, check {args.hugging_face_checkpoint_path}")
+    log_rank(
+        f"Checkpoint conversion finished, check {args.hugging_face_checkpoint_path}",
+        logger=logger,
+        level=logging.INFO,
+        rank=0,
+    )
 
 
 if __name__ == "__main__":
