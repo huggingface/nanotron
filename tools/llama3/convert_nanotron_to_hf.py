@@ -1,5 +1,5 @@
 """
-torchrun --nproc-per-node 1 tools/llama3/convert_nanotron_to_hf.py --nanotron-checkpoint-path nanotron_checkpoints/NanotronLlama38B --hugging-face-checkpoint-path hf_checkpoints/ConvertedNanotronLlama38B
+torchrun --nproc-per-node 1 tools/llama3/convert_nanotron_to_hf.py --nanotron-checkpoint-path nanotron_checkpoints/Nanotron-Llama-3-8B --hugging-face-checkpoint-path hf_checkpoints/Converted-Nanotron-Llama-3-8B
 """
 import argparse
 import os

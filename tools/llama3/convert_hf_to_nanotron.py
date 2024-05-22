@@ -1,5 +1,5 @@
 """
-torchrun --nproc-per-node 1 tools/llama3/convert_hf_to_nanotron.py --nanotron-checkpoint-path nanotron_checkpoints/NanotronLlama38B --pretrained-model-name-or-path meta-llama/Meta-Llama-3-8B-Instruct
+torchrun --nproc-per-node 1 tools/llama3/convert_hf_to_nanotron.py --nanotron-checkpoint-path nanotron_checkpoints/Nanotron-Llama-3-8B --pretrained-model-name-or-path meta-llama/Meta-Llama-3-8B-Instruct
 """
 import argparse
 import json
@@ -238,7 +238,7 @@ def main(args):
     # Store Config and Model Config files
     with open(nanotron_checkpoint_path / "config.yaml", "w") as f:
         config = Config(
-            general=GeneralArgs(project="conversion", run="Llama3-8B"),
+            general=GeneralArgs(project="Nanotron", run="Llama3"),
             parallelism=parallel_config,
             model=ModelArgs(
                 init_method=ExistingCheckpointInit(nanotron_checkpoint_path),
