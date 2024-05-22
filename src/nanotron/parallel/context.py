@@ -1,8 +1,9 @@
 import os
-from typing import Literal, Tuple, Annotated
+from typing import Literal, Tuple
 
 import numpy as np
 import torch
+from torch.distributed.device_mesh import init_device_mesh
 
 import nanotron.distributed as dist
 
@@ -43,8 +44,8 @@ class ParallelContext:
         self.data_parallel_size = data_parallel_size
         self.expert_parallel_size = expert_parallel_size
 
+        # Used nowhere, we can remove it
         self._groups = {}
-
         self.set_device()
 
         assert backend == "nccl", "Only nccl backend is supported for now."
@@ -61,6 +62,46 @@ class ParallelContext:
         self.world_pg = process_group
 
         self._init_parallel_groups()
+
+        # ==========
+
+        self.world_ranks_to_pg_dmesh = {}
+
+        # TODO(fmom): make everything self.
+        mesh_shape = (
+            self.expert_parallel_size,
+            self.pipeline_parallel_size,
+            self.data_parallel_size,
+            self.tensor_parallel_size,
+        )
+        device_mesh = init_device_mesh("cuda", mesh_shape, mesh_dim_names=("ep", "pp", "dp", "tp"))
+        # ep_dim, pp_dim, dp_dim, tp_dim = 0, 1, 2, 3
+
+        device_mesh.mesh.numpy()
+        device_mesh._get_or_create_default_group()
+
+        self.create_new_group_dmesh("ep")
+
+        # expert_pg = device_mesh.get_group(mesh_dim="ep")
+        # self.update_world_ranks_to_pg_dmesh(device_mesh.mesh.swapdims(-1, ep_dim).reshape(-1, self.expert_parallel_size))
+        # tp_pg = device_mesh.get_group(mesh_dim="tp")
+        # self.update_world_ranks_to_pg_dmesh(device_mesh.mesh.swapdims(-1, tp_dim).reshape(-1, self.tensor_parallel_size))
+        # dp_pg = device_mesh.get_group(mesh_dim="dp")
+        # self.update_world_ranks_to_pg_dmesh(device_mesh.mesh.swapdims(-1, dp_dim).reshape(-1, self.data_parallel_size))
+        # pp_pg = device_mesh.get_group(mesh_dim="pp")
+        # self.update_world_ranks_to_pg_dmesh(device_mesh.mesh.swapdims(-1, pp_dim).reshape(-1, self.pipeline_parallel_size))
+
+        # # model parallel group = combination of tp and pp and exp for a given dp rank
+        # mp_pg = self.create_new_group_dmesh([world_rank_matrix[:, :, dp_rank, :].reshape(-1) for dp_rank in range(self.data_parallel_size)])
+        # tp_and_expert_pg = self.create_new_group_dmesh(
+        #     [
+        #         world_rank_matrix[:, pp_rank, dp_rank, :].reshape(-1)
+        #         for pp_rank in range(self.pipeline_parallel_size)
+        #         for dp_rank in range(self.data_parallel_size)
+        #     ]
+        # )
+
+        print()
 
     def _init_parallel_groups(self):
         """Initialize 3D parallelism's all process groups."""
@@ -96,6 +137,29 @@ class ParallelContext:
         )
 
         self.world_rank_matrix: np.ndarray = ranks
+
+    def create_new_group_dmesh(self, mesh_dim_name: str):
+        dist.barrier()
+        # check if rank is in the group
+        lut = {
+            "ep": self.expert_parallel_size,
+            "pp": self.pipeline_parallel_size,
+            "dp": self.data_parallel_size,
+            "tp": self.tensor_parallel_size,
+        }
+
+        group = None
+        int(os.environ["RANK"])
+
+        if mesh_dim_name not in self.device_mesh.mesh_dim_names:
+            # Create new group
+            pass
+        else:
+            group = self.device_mesh.get_group(mesh_dim=mesh_dim_name)
+            dim = self.device_mesh.mesh_dim_names.index(mesh_dim_name)
+            self.device_mesh.mesh.swapdims(-1, dim).reshape(-1, lut[mesh_dim_name])
+        dist.barrier()
+        return group
 
     def create_new_group(self, all_groups_ranks: np.ndarray) -> dist.ProcessGroup:
         dist.barrier()
