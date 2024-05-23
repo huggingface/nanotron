@@ -16,6 +16,7 @@ from typing import Optional, Tuple
 
 import torch
 from torch import nn
+import torch.nn.functional as F
 
 from nanotron import distributed as dist
 from nanotron.distributed import get_global_rank
@@ -311,6 +312,17 @@ def activation_quant(x):
     y = (x * scale).round().clamp_(-128, 127) / scale
     return y
 
+def activation_quant_inference(x):
+    """Per−token quantization to 8 bits. No grouping is needed for quantization.
+    Args:
+    x: an activation tensor with shape [n, d]
+    Returns:
+    y: a quantized activation tensor with shape [n, d]
+    """
+    scale = 127.0 / x.abs().max(dim=-1, keepdim=True).values.clamp_(min=1e-5)
+    y = (x * scale).round().clamp_(-128, 127)
+    return y, scale
+
 def weight_quant(w):
     """Per−tensor quantization to 1.58 bits.
     Args:
@@ -328,6 +340,14 @@ def normalize_last_two_dimensions(tensor, eps=1e-6):
     normalized_tensor = (tensor - mean) / (std + eps)
     
     return normalized_tensor
+
+def normalize(x, dim, eps=1e-5) : 
+    scale = dim ** (-0.5)
+    #return F.normalize(x, dim=-1) * scale
+    norm_x = x.norm(2, dim=-1, keepdim=True)
+    rms_x = norm_x * scale
+    x_normed = x / (rms_x + eps)
+    return x_normed
 
 class TensorParallelColumnLinearBitNet(nn.Linear):
     def __init__(
@@ -367,6 +387,9 @@ class TensorParallelColumnLinearBitNet(nn.Linear):
             ), f"Sum of contiguous chunks ({sum(contiguous_chunks)}) must equal to out_features ({out_features})"
         split_config = SplitConfig(split_dim=0, contiguous_chunks=contiguous_chunks)
 
+        
+        self.register_parameter('weight_scale', None)
+        # self.is_model_inference = False
         mark_all_parameters_in_module_as_sharded(
             self,
             pg=self.pg,
@@ -374,20 +397,34 @@ class TensorParallelColumnLinearBitNet(nn.Linear):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        w = self.weight
-        x_norm = normalize_last_two_dimensions(x)
+        if not self.training : 
+            w = self.weight  # a weight tensor with shape [d, k]
+            w = w.to(torch.bfloat16)
+            w_scale = getattr(self, "weight_scale").data
+            x_norm = normalize(x, self.in_features)
+            x_quant, x_scale = activation_quant_inference(x_norm)
+            return column_linear(
+                input=x_quant,
+                weight=w,
+                bias=self.bias,
+                group=self.pg,
+                tp_mode=self.mode,
+                async_communication=self.async_communication,
+            ) / w_scale / x_scale
+        else : 
+            w = self.weight
+            x_norm = normalize(x, self.in_features)
+            x_quant = x_norm + (activation_quant(x_norm) - x_norm).detach()
+            w_quant = w + (weight_quant(w) - w).detach()
 
-        x_quant = x_norm + (activation_quant(x_norm) - x_norm).detach()
-        w_quant = w + (weight_quant(w) - w).detach()
-
-        return column_linear(
-            input=x_quant,
-            weight=w_quant,
-            bias=self.bias,
-            group=self.pg,
-            tp_mode=self.mode,
-            async_communication=self.async_communication,
-        )
+            return column_linear(
+                input=x_quant,
+                weight=w_quant,
+                bias=self.bias,
+                group=self.pg,
+                tp_mode=self.mode,
+                async_communication=self.async_communication,
+            )
 
     def extra_repr(self) -> str:
         return f"tp_rank={dist.get_rank(self.pg)}, {super().extra_repr()}, unsharded_out_features={self.out_features * self.world_size}"
@@ -436,6 +473,8 @@ class TensorParallelRowLinearBitNet(nn.Linear):
 
         split_config = SplitConfig(split_dim=1, contiguous_chunks=contiguous_chunks)
 
+        self.register_parameter('weight_scale', None)
+        # self.is_model_inference = False
         self._mark_all_parameters_in_module_as_sharded(split_config)
 
     def _mark_all_parameters_in_module_as_sharded(self, split_config: SplitConfig):
@@ -452,19 +491,34 @@ class TensorParallelRowLinearBitNet(nn.Linear):
             setattr(self, name, new_param)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        w = self.weight
-        x_norm = normalize_last_two_dimensions(x)
-
-        x_quant = x_norm + (activation_quant(x_norm) - x_norm).detach()
-        w_quant = w + (weight_quant(w) - w).detach()
-        return row_linear(
-            input=x_quant,
-            weight=w_quant,
-            bias=self.bias,
-            group=self.pg,
-            tp_mode=self.mode,
-            async_communication=self.async_communication,
-        )
+        if not self.training : 
+            w = self.weight  # a weight tensor with shape [d, k]
+            w = w.to(torch.bfloat16)
+            w_scale = getattr(self, "weight_scale").data
+            x_norm = normalize(x, self.in_features)
+            x_quant, x_scale = activation_quant_inference(x_norm)
+            # print("x_quant from row_linear: ",x_quant.shape)
+            return row_linear(
+                input=x_quant,
+                weight=w,
+                bias=self.bias,
+                group=self.pg,
+                tp_mode=self.mode,
+                async_communication=self.async_communication,
+            ) / w_scale / x_scale
+        else : 
+            w = self.weight
+            x_norm = normalize(x, self.in_features)
+            x_quant = x_norm + (activation_quant(x_norm) - x_norm).detach()
+            w_quant = w + (weight_quant(w) - w).detach()
+            return row_linear(
+                input=x_quant,
+                weight=w_quant,
+                bias=self.bias,
+                group=self.pg,
+                tp_mode=self.mode,
+                async_communication=self.async_communication,
+            )
 
     def extra_repr(self) -> str:
         return f"tp_rank={dist.get_rank(self.pg)}, {super().extra_repr()}, unsharded_in_features={self.in_features * self.world_size}"

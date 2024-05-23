@@ -608,7 +608,7 @@ class LlamaDecoderLayerBitNet(nn.Module):
         layer_idx: int,
     ):
         super().__init__()
-        self.input_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        #self.input_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.attn = CausalSelfAttentionBitNet(
             config=config,
             parallel_config=parallel_config,
@@ -616,8 +616,8 @@ class LlamaDecoderLayerBitNet(nn.Module):
             layer_idx=layer_idx,
         )
 
-        self.post_attention_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.mlp = MLPBitNet(config=config, parallel_config=parallel_config, tp_pg=tp_pg)
+        #self.post_attention_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.MLPBitNet = MLPBitNet(config=config, parallel_config=parallel_config, tp_pg=tp_pg)
 
     def forward(
         self,
@@ -625,15 +625,15 @@ class LlamaDecoderLayerBitNet(nn.Module):
         sequence_mask: Union[torch.Tensor, TensorPointer],
     ) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
         residual = hidden_states
-        hidden_states = self.input_layernorm(hidden_states)
+        #hidden_states = self.input_layernorm(hidden_states)
 
         output = self.attn(hidden_states=hidden_states, sequence_mask=sequence_mask)
         hidden_states = output["hidden_states"]
         hidden_states = hidden_states + residual
 
         residual = hidden_states
-        hidden_states = self.post_attention_layernorm(hidden_states)
-        hidden_states = self.mlp(hidden_states=hidden_states)["hidden_states"]
+        #hidden_states = self.post_attention_layernorm(hidden_states)
+        hidden_states = self.MLPBitNet(hidden_states=hidden_states)["hidden_states"]
         hidden_states = hidden_states + residual
 
         return {
