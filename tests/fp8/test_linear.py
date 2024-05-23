@@ -94,7 +94,7 @@ def test_fp8_linear_forward_pass(n_layers, input, is_bias, accum_qtype):
 #     ],
 # )
 # @pytest.mark.parametrize("is_bias", [True, False])
-@pytest.mark.skip
+# @pytest.mark.skip
 @pytest.mark.parametrize("with_scaler", [True, False])
 @pytest.mark.parametrize("accum_qtype", [DTypes.KFLOAT32, DTypes.KFLOAT16])
 def test_fp8_linear_backward_pass(n_layers, input, with_scaler, accum_qtype):

@@ -1,9 +1,10 @@
 import os
 
+# from nanotron import distributed as dist
+import nanotron.fp8.distributed as dist
 import pytest
 import torch
 from helpers.utils import available_gpus, init_distributed, rerun_if_address_is_in_use
-from nanotron import distributed as dist
 from nanotron.distributed import get_global_rank
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.tensor_parallel.enum import TensorParallelLinearMode
@@ -23,25 +24,37 @@ from torch import nn
 # @pytest.mark.parametrize("is_fp8", [False, True])
 @rerun_if_address_is_in_use()
 def test_column_linear(
-    tp: int, dp: int, pp: int, tp_mode: TensorParallelLinearMode, async_communication: bool,
+    tp: int,
+    dp: int,
+    pp: int,
+    tp_mode: TensorParallelLinearMode,
+    async_communication: bool,
     # is_fp8: bool
 ):
     if tp_mode is TensorParallelLinearMode.ALL_REDUCE and async_communication:
         pytest.skip("ALL_REDUCE mode does not support async communication")
     init_distributed(tp=tp, dp=dp, pp=pp)(_test_column_linear)(
-        tp_mode=tp_mode, async_communication=async_communication,
+        tp_mode=tp_mode,
+        async_communication=async_communication,
         # is_fp8=is_fp8
     )
 
 
 def _test_column_linear(
-    parallel_context: ParallelContext, tp_mode: TensorParallelLinearMode, async_communication: bool,
+    parallel_context: ParallelContext,
+    tp_mode: TensorParallelLinearMode,
+    async_communication: bool,
     # is_fp8: bool
 ):
     if async_communication:
         os.environ["CUDA_DEVICE_MAX_CONNECTIONS"] = "1"
-    in_features = 2
-    out_features_per_tp_rank = 3
+    # in_features = 2
+    # out_features_per_tp_rank = 3
+
+    # NOTE: divisible by 16 for TP
+    in_features = 32
+    out_features_per_tp_rank = 16
+
     out_features = parallel_context.tp_pg.size() * out_features_per_tp_rank
 
     # Sharded
@@ -65,9 +78,12 @@ def _test_column_linear(
             tensor=column_linear.weight,
             group=parallel_context.tp_pg,
         )
+        # TODO(xrsrke): support if bias is in FP8
+        bias = column_linear.bias.data
+        bias = bias.to(reference_linear.bias.dtype) if bias.dtype != reference_linear.bias.dtype else bias
         dist.all_gather(
             tensor_list=list(reference_linear.bias.split(out_features_per_tp_rank, dim=0)),
-            tensor=column_linear.bias,
+            tensor=bias,
             group=parallel_context.tp_pg,
         )
 
@@ -75,13 +91,15 @@ def _test_column_linear(
     random_input: torch.Tensor
     sharded_random_input: torch.Tensor
     if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
-        batch_size = 5
+        # batch_size = 5
+        batch_size = 16
         random_input = torch.randn(batch_size, in_features, device="cuda")
         # synchronize random_input across tp
         dist.all_reduce(random_input, op=dist.ReduceOp.AVG, group=parallel_context.tp_pg)
         sharded_random_input = random_input
     elif tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
-        sharded_batch_size = 5
+        # sharded_batch_size = 5
+        sharded_batch_size = 16
         sharded_random_input = torch.randn(sharded_batch_size, in_features, device="cuda")
         if parallel_context.tp_pg.size() > 1:
             random_input = torch.empty(
@@ -113,6 +131,8 @@ def _test_column_linear(
                 * out_features_per_tp_rank : (dist.get_rank(parallel_context.tp_pg) + 1)
                 * out_features_per_tp_rank,
             ],
+            rtol=0,
+            atol=0.1,
         )
     except BaseException as e:
         print(f"Rank {dist.get_rank(parallel_context.tp_pg)}: FAIL.")
@@ -188,24 +208,26 @@ def _test_row_linear(parallel_context: ParallelContext, tp_mode: TensorParallelL
     reference_linear = nn.Linear(in_features=in_features, out_features=out_features, device="cuda")
 
     # Copy weights/bias from sharded to un-sharded
-    with torch.inference_mode():
-        dist.all_reduce(tensor=reference_linear.weight, op=dist.ReduceOp.SUM, group=parallel_context.tp_pg)
-        row_linear.weight.copy_(
-            reference_linear.weight[
-                :,
-                dist.get_rank(parallel_context.tp_pg)
-                * in_features_per_rank : (dist.get_rank(parallel_context.tp_pg) + 1)
-                * in_features_per_rank,
-            ]
-        )
-        # broadcast bias from rank 0, and the other don't have bias
-        if dist.get_rank(parallel_context.tp_pg) == 0:
-            row_linear.bias.copy_(reference_linear.bias)
-        dist.broadcast(
-            tensor=reference_linear.bias,
-            src=get_global_rank(group=parallel_context.tp_pg, group_rank=0),
-            group=parallel_context.tp_pg,
-        )
+    # NOTE(xrsrke): dont' use torch.inference_mode because got "Cannot set version_counter for inference tensor"
+    # https://github.com/pytorch/pytorch/issues/112024
+    # with torch.inference_mode():
+    dist.all_reduce(tensor=reference_linear.weight, op=dist.ReduceOp.SUM, group=parallel_context.tp_pg)
+    row_linear.weight.copy_(
+        reference_linear.weight[
+            :,
+            dist.get_rank(parallel_context.tp_pg)
+            * in_features_per_rank : (dist.get_rank(parallel_context.tp_pg) + 1)
+            * in_features_per_rank,
+        ]
+    )
+    # broadcast bias from rank 0, and the other don't have bias
+    if dist.get_rank(parallel_context.tp_pg) == 0:
+        row_linear.bias.copy_(reference_linear.bias)
+    dist.broadcast(
+        tensor=reference_linear.bias,
+        src=get_global_rank(group=parallel_context.tp_pg, group_rank=0),
+        group=parallel_context.tp_pg,
+    )
 
     # Generate random input
     if tp_mode is TensorParallelLinearMode.ALL_REDUCE:

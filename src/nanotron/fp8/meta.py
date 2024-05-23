@@ -47,9 +47,12 @@ class FP8Meta:
         assert (
             self.scale.dtype == torch.float32
         ), f"Expected scale to be of dtype torch.float32, got {self.scale.dtype}"
+
+        # TODO(xrsrke): move these to a constant
         assert self.amax.dtype in [
             torch.float32,
             torch.float16,
+            torch.bfloat16,
         ], f"Expected amax to be of dtype torch.float32 or torch.float16, got {self.amax.dtype}"
 
         # if self.is_delayed_scaling is False and self.interval > 1:

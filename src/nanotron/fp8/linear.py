@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import Optional, Tuple, Union, cast
 
+import pydevd
 import torch
 import transformer_engine as te  # noqa
 from torch import nn
@@ -52,9 +53,11 @@ class FP8Linear(nn.Linear):
         super().__init__(in_features, out_features, bias, device, QTYPE_TO_DTYPE[accum_qtype])
         # TODO(xrsrke): don't fixed dtype, take it from the FP8 recipe
         # DTypes.FP8E4M3
-        self.weight = FP8Parameter(
+        quant_w = FP8Parameter(
             self.weight, dtype=FP8LM_RECIPE.linear.weight.dtype, interval=FP8LM_RECIPE.linear.weight.interval
         )
+        self.weight = quant_w
+        assert self.weight.data.dtype in [torch.uint8, torch.int8], f"got {self.weight.data.dtype}"
         self.metadatas = FP8LinearMeta()
         self.accum_qtype = accum_qtype
 
@@ -139,7 +142,7 @@ class _FP8Matmul(torch.autograd.Function):
         ∂L/∂W = Xᵀ @ ∂L/∂Y
         Reference: https://web.eecs.umich.edu/~justincj/teaching/eecs442/notes/linear-backprop.html
         """
-        # pydevd.settrace(suspend=False, trace_only_current_thread=True)
+        pydevd.settrace(suspend=False, trace_only_current_thread=True)
         fp8_input, fp8_weight = ctx.saved_tensors
         accum_qtype = ctx.accum_qtype
 

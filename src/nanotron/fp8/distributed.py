@@ -1,7 +1,33 @@
-import torch.distributed as dist
+from typing import List, Union
 
-from nanotron.fp8.tensor import FP8Tensor
+import torch
+import torch.distributed as dist
+from torch.distributed import *  # noqa
+
+from nanotron.fp8.tensor import FP8Tensor, convert_tensor_from_fp8
+from nanotron.parallel.parameters import NanotronParameter
 
 
 def all_reduce(tensor: FP8Tensor, op: dist.ReduceOp, group: dist.ProcessGroup, async_op: bool = False) -> FP8Tensor:
     pass
+
+
+def all_gather(
+    tensor_list: List[torch.Tensor],
+    tensor: Union[FP8Tensor, NanotronParameter],
+    group: dist.ProcessGroup,
+    async_op: bool = False,
+) -> torch.Tensor:
+    tensor = tensor.data if isinstance(tensor, NanotronParameter) else tensor
+    # assert isinstance(tensor, FP8Tensor) if isinstance(tensor, FP8Tensor) else isinstance(tensor, torch.Tensor)
+
+    if isinstance(tensor, FP8Tensor):
+        tensor = (
+            convert_tensor_from_fp8(tensor, tensor.fp8_meta, torch.float32)
+            if tensor_list[0].dtype != tensor.dtype
+            else tensor
+        )
+
+    dist.all_gather(tensor_list, tensor, group, async_op)
+
+    return tensor

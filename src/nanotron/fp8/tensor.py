@@ -431,7 +431,7 @@ def update_scaling_factor(
     """
     # TODO(xrsrke): sometimes we store some params in fp16
     # make this configurable
-    assert amax.dtype in [torch.float32, torch.float16]
+    assert amax.dtype in [torch.float32, torch.float16, torch.bfloat16], f"amax.dtype: {amax.dtype}"
     # TODO(xrsrke): can we use lower precision for scaling_factor?
     assert scaling_factor.dtype == torch.float32
 

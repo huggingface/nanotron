@@ -71,7 +71,6 @@ from nanotron.parallel.tensor_parallel.enum import TensorParallelLinearMode
 from nanotron.parallel.tensor_parallel.nn import TensorParallelRowLinear
 from nanotron.parallel.tied_parameters import (
     create_pg_for_tied_weights,
-    get_tied_id_to_param,
     sync_tied_weights_gradients,
     tie_parameters,
 )
@@ -174,6 +173,30 @@ class DistributedTrainer:
             self.model.module if isinstance(self.model, DistributedDataParallel) else self.model
         )
 
+        from torch import nn
+
+        from nanotron.fp8.tensor import FP8Tensor
+
+        # NOTE: sanity check if we quantize the model to FP8
+        def get_inheritance_classes(instance):
+            classes = [instance.__class__]
+            for cls in classes:
+                classes.extend(cls.__bases__)
+            return classes
+
+        for name, module in self.model.named_modules():
+            if isinstance(module, nn.Linear):
+                if hasattr(module, "weight"):
+                    assert isinstance(module.weight.data, FP8Tensor), f"name: {name}"
+                    assert module.weight.data.dtype in [
+                        torch.int8,
+                        torch.uint8,
+                    ], f"name: {name}, dtype: {module.weight.data.dtype}"
+
+                # if hasattr(module, "bias"):
+                #     assert isinstance(module.bias.data, FP8Tensor)
+                #     assert module.bias.dtype in [torch.int8, torch.uint8], f"name: {name}, dtype: {module.bias.dtype}"
+
         # TODO: find a better way to handle this
         parametrization_method = (
             ParametrizationMethod.SPECTRAL_MUP
@@ -272,13 +295,13 @@ class DistributedTrainer:
             rank=0,
         )
 
-        current_time = datetime.datetime.now().strftime("%d/%m/%Y_%H:%M:%S")
-        if dist.get_rank(self.parallel_context.world_pg) == self.logger_ranks[0] and wandb is not None:
-            wandb.init(
-                project=self.config.general.project,
-                name=f"{current_time}_{self.config.general.run}",
-                config={"nanotron_config": self.config.as_dict()},
-            )
+        datetime.datetime.now().strftime("%d/%m/%Y_%H:%M:%S")
+        # if dist.get_rank(self.parallel_context.world_pg) == self.logger_ranks[0] and wandb is not None:
+        #     wandb.init(
+        #         project=self.config.general.project,
+        #         name=f"{current_time}_{self.config.general.run}",
+        #         config={"nanotron_config": self.config.as_dict()},
+        #     )
 
     def post_train_step(self):
         pass
@@ -706,25 +729,29 @@ class DistributedTrainer:
                     root_folder=self.config.model.init_method.path,
                 )
             elif isinstance(self.config.model.init_method, (RandomInit, SpectralMupInit)):
-                unwrapped_model.init_model_randomly(config=self.config)
+                # unwrapped_model.init_model_randomly(config=self.config)
+                pass
 
                 # Synchronize parameters so that the model is consistent
                 # sync all params across dp
-                for _, param in sorted(model.named_parameters(), key=lambda x: x[0]):
-                    dist.all_reduce(param, op=dist.ReduceOp.AVG, group=self.parallel_context.dp_pg)
+                # TODO(xrsrke): uncomment this to support FP8 data parallelism
+                # for _, param in sorted(model.named_parameters(), key=lambda x: x[0]):
+                #     dist.all_reduce(param, op=dist.ReduceOp.AVG, group=self.parallel_context.dp_pg)
 
-                # sync tied params across tied groups
-                for (_, group_ranks), param in sorted(
-                    get_tied_id_to_param(
-                        parameters=model.parameters(),
-                        root_module=unwrapped_model,
-                    ).items(),
-                    key=lambda x: x[0],
-                ):
-                    group = self.parallel_context.world_ranks_to_pg[group_ranks]
-                    dist.all_reduce(param, op=dist.ReduceOp.AVG, group=group)
+                # # sync tied params across tied groups
+                # for (_, group_ranks), param in sorted(
+                #     get_tied_id_to_param(
+                #         parameters=model.parameters(),
+                #         root_module=unwrapped_model,
+                #     ).items(),
+                #     key=lambda x: x[0],
+                # ):
+                #     group = self.parallel_context.world_ranks_to_pg[group_ranks]
+                #     dist.all_reduce(param, op=dist.ReduceOp.AVG, group=group)
             else:
                 raise ValueError(f"Unsupported {self.config.model.init_method}")
+
+            assert 1 == 1
 
         return model
 

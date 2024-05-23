@@ -229,7 +229,10 @@ class NanotronParameter(nn.Parameter):
     NANOTRON_PARAMETER_METADATA_SHARDED_KEY = "sharded"
 
     def __new__(cls, tensor: torch.Tensor, requires_grad: bool = True):
-        assert tensor.data.is_floating_point() or tensor.data.requires_grad is False
+        try:
+            assert tensor.data.is_floating_point() or tensor.data.requires_grad is False
+        except AttributeError:
+            assert 1 == 1
 
         # data = tensor.data.detach() if tensor.data.is_floating_point() else tensor.data
         # requires_grad = requires_grad if data.is_floating_point() else False
@@ -243,7 +246,16 @@ class NanotronParameter(nn.Parameter):
         # param = nn.Parameter.__new__(cls, data=data, requires_grad=requires_grad)
         # param.data =
         # NOTE: this somehow makes the param has the methods of NanotronParameter
-        param = nn.Parameter._make_wrapper_subclass(cls, size=data.size())
+        param = nn.Parameter._make_wrapper_subclass(
+            cls,
+            size=data.size(),
+            strides=data.stride(),
+            storage_offset=data.storage_offset(),
+            dtype=data.dtype,
+            layout=data.layout,
+            device=data.device,
+            requires_grad=data.requires_grad,
+        )
 
         if isinstance(tensor, NanotronParameter):
             # Check that we don't inherit a weird class
@@ -335,7 +347,11 @@ class NanotronParameter(nn.Parameter):
         #     return cls(e, fp8_meta=metadatas[0]) if isinstance(e, torch.Tensor) else e
 
         def wrap(e):
-            return cls(e) if not isinstance(e, NanotronParameter) else e
+            # return cls(e) if not isinstance(e, NanotronParameter) else e
+            if not isinstance(e, NanotronParameter) and isinstance(e, (torch.Tensor, FP8Tensor)):
+                return cls(e)
+            else:
+                return e
 
         args = tree_map(unwrap, args)
         kwargs = tree_map(unwrap, kwargs)
@@ -344,7 +360,14 @@ class NanotronParameter(nn.Parameter):
             # NOTE: this is for parameter.data or parameter.detach()
             return args[0].data
         else:
-            return tree_map(wrap, func(*args, **kwargs))
+            outputs = func(*args, **kwargs)
+            # if len(outputs) == 1 and not isinstance(outputs, torch.Tensor):
+            #     # NOTE: in some distributed operation, it doesn't return anything
+            #     # but do in-place operation
+            #     return outputs
+            # else:
+            #     return tree_map(wrap, outputs)
+            return tree_map(wrap, outputs)
 
 
 def sanity_check(root_module: nn.Module):

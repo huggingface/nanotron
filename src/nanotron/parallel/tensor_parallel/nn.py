@@ -79,6 +79,8 @@ class TensorParallelColumnLinear(BASE_LINEAR):
         self.mode = mode
         self.async_communication = async_communication
 
+        assert self.weight.data.dtype in [torch.uint8, torch.int8], f"got {self.weight.data.dtype}"
+
         if contiguous_chunks is not None:
             assert (
                 sum(contiguous_chunks) == out_features
@@ -99,6 +101,7 @@ class TensorParallelColumnLinear(BASE_LINEAR):
             group=self.pg,
             tp_mode=self.mode,
             async_communication=self.async_communication,
+            metadatas=self.metadatas if isinstance(self, FP8Linear) else None,
         )
 
     def extra_repr(self) -> str:

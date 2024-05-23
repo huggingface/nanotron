@@ -51,7 +51,7 @@ def addmm(
     input,
     mat1,
     mat2,
-    output: torch.Tensor,
+    out: torch.Tensor,
     accum_qtype: DTypes,
     metadatas: FP8LinearMeta,
     beta: Union[float, int] = 1,
@@ -63,9 +63,9 @@ def addmm(
     assert beta == 1.0, "Currently only support beta=1."
     assert alpha == 1.0, "Currently only support alpha=1."
 
-    output = mm(input=mat1, mat2=mat2, out=output, accum_qtype=accum_qtype, metadatas=metadatas)
-    output = output if input is None else output + input
-    return output
+    out = mm(input=mat1, mat2=mat2, out=out, accum_qtype=accum_qtype, metadatas=metadatas)
+    out = out if input is None else out + input
+    return out
 
 
 def linear(

@@ -14,8 +14,8 @@
 # limitations under the License.
 """ PyTorch LLaMa model.
 """
-import math
 from typing import Dict, Optional, Union
+
 import torch
 from torch import nn
 
@@ -607,7 +607,8 @@ class LlamaDecoderLayer(nn.Module):
         layer_idx: int,
     ):
         super().__init__()
-        self.input_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        # self.input_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.input_layernorm = nn.LayerNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.attn = CausalSelfAttention(
             config=config,
             parallel_config=parallel_config,
@@ -615,7 +616,8 @@ class LlamaDecoderLayer(nn.Module):
             layer_idx=layer_idx,
         )
 
-        self.post_attention_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        # self.post_attention_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.post_attention_layernorm = nn.LayerNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.mlp = MLP(config=config, parallel_config=parallel_config, tp_pg=tp_pg)
 
     def forward(
@@ -945,7 +947,7 @@ class LlamaForTraining(NanotronModel):
                 continue
 
             module = model.get_submodule(module_name)
-            parametrizator.parametrize(param_name, module)
+            parametrizator.parametrize(full_param_name, module)
 
             assert full_param_name not in initialized_parameters
             initialized_parameters.add(full_param_name)

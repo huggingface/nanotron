@@ -39,7 +39,7 @@ def test_fp8_addmm(accum_qtype):
         mat1=input,
         # mat2=linear.weight.data.transpose_fp8(),
         mat2=linear.weight.data,
-        output=output,
+        out=output,
         beta=1.0,
         alpha=1.0,
         accum_qtype=accum_qtype,

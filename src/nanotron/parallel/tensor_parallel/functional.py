@@ -13,12 +13,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import math
+from functools import partial
 from typing import Optional
 
 import torch
 from torch.nn import functional as F
 
 import nanotron.distributed as dist
+import nanotron.fp8.functional as fp8_functional
+from nanotron.fp8.dtypes import DTypes
+from nanotron.fp8.linear import FP8LinearMeta
+from nanotron.fp8.tensor import FP8Tensor
 from nanotron.parallel.tensor_parallel.distributed_differentiable_primitives import (
     differentiable_all_gather,
     differentiable_all_reduce_sum,
@@ -121,10 +126,27 @@ class _ColumnLinearAsyncCommunication(torch.autograd.Function):
 
     @staticmethod
     @assert_cuda_max_connections_set_to_1
-    def forward(ctx, tensor, weight, bias, group, tp_mode):
+    def forward(ctx, tensor, weight, bias, group, tp_mode, metadatas: Optional[FP8LinearMeta] = None):
         ctx.use_bias = bias is not None
         ctx.tp_mode = tp_mode
         ctx.group = group
+
+        # mm = lambda *args, **kwargs: torch.mm(*args, **kwargs) if isinstance(weight.data, FP8Tensor) else partial(fp8_functional.mm, accum_qtype=DTypes.KFLOAT16, metadatas=metadatas)(*args, **kwargs)
+        # addmm = lambda *args, **kwargs: torch.addmm(*args, **kwargs) if isinstance(weight.data, FP8Tensor) else partial(fp8_functional.addmm, accum_qtype=DTypes.KFLOAT16, metadatas=metadatas)(*args, **kwargs)
+
+        def mm(*args, **kwargs):
+            return (
+                partial(fp8_functional.mm, accum_qtype=DTypes.KFLOAT16, metadatas=metadatas)(*args, **kwargs)
+                if isinstance(weight.data, FP8Tensor)
+                else torch.mm(*args, **kwargs)
+            )
+
+        def addmm(*args, **kwargs):
+            return (
+                partial(fp8_functional.addmm, accum_qtype=DTypes.KFLOAT16, metadatas=metadatas)(*args, **kwargs)
+                if isinstance(weight.data, FP8Tensor)
+                else torch.addmm(*args, **kwargs)
+            )
 
         if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
             gathered_tensor = tensor
@@ -189,16 +211,51 @@ class _ColumnLinearAsyncCommunication(torch.autograd.Function):
                 )
                 first_dims = math.prod([sharded_batch_size, *intermediate_size])
                 if bias is None:
-                    torch.mm(
+                    # if isinstance(weight, FP8Tensor):
+                    #     fp8_functional.mm(
+                    #         input=tensor.view(first_dims, hidden_size),
+                    #         # mat2=linear.weight.data.transpose_fp8(),
+                    #         mat2=weight,
+                    #         out=same_device_shard.view(first_dims, output_size),
+                    #         accum_qtype=DTypes.KFLOAT16,
+                    #         metadatas=metadatas,
+                    #     )
+                    # else:
+                    # torch.mm(
+                    #     input=tensor.view(first_dims, hidden_size),
+                    #     mat2=weight.t(),
+                    #     out=same_device_shard.view(first_dims, output_size),
+                    # )
+                    mm(
                         input=tensor.view(first_dims, hidden_size),
-                        mat2=weight.t(),
+                        # NOTE: because in the current implementation, fp8's mm takes raw weight without
+                        # the need to transpose it
+                        # mat2=weight.data if isinstance(weight.data, FP8Tensor) else weight.t(),
+                        mat2=weight.data.transpose_fp8() if isinstance(weight.data, FP8Tensor) else weight.t(),
                         out=same_device_shard.view(first_dims, output_size),
                     )
                 else:
-                    torch.addmm(
+                    # if isinstance(weight.data, FP8Tensor):
+                    #     output = fp8_functional.addmm(
+                    #         input=bias[None, :],
+                    #         mat1=tensor.view(first_dims, hidden_size),
+                    #         mat2=weight,
+                    #         out=output,
+                    #         accum_qtype=DTypes.KFLOAT16,
+                    #         metadatas=metadatas,
+                    #     )
+                    # else:
+                    #     torch.addmm(
+                    #         input=bias[None, :],
+                    #         mat1=tensor.view(first_dims, hidden_size),
+                    #         mat2=weight.t(),
+                    #         out=same_device_shard.view(first_dims, output_size),
+                    #     )
+                    addmm(
                         input=bias[None, :],
                         mat1=tensor.view(first_dims, hidden_size),
-                        mat2=weight.t(),
+                        # mat2=weight.data if isinstance(weight.data, FP8Tensor) else weight.t(),
+                        mat2=weight.data.transpose_fp8() if isinstance(weight.data, FP8Tensor) else weight.t(),
                         out=same_device_shard.view(first_dims, output_size),
                     )
 
@@ -217,35 +274,64 @@ class _ColumnLinearAsyncCommunication(torch.autograd.Function):
                 if before_shard.numel() > 0:
                     first_dims = math.prod(before_shard.shape[:-1])
                     if bias is None:
-                        torch.mm(
+                        # torch.mm(
+                        #     input=gathered_tensor[: sharded_batch_size * current_rank].view(first_dims, hidden_size),
+                        #     mat2=weight.t(),
+                        #     out=before_shard.view(first_dims, output_size),
+                        # )
+                        mm(
                             input=gathered_tensor[: sharded_batch_size * current_rank].view(first_dims, hidden_size),
-                            mat2=weight.t(),
+                            mat2=weight.data.transpose_fp8() if isinstance(weight.data, FP8Tensor) else weight.t(),
                             out=before_shard.view(first_dims, output_size),
                         )
                     else:
-                        torch.addmm(
+                        # torch.addmm(
+                        #     input=bias[None, :],
+                        #     mat1=gathered_tensor[: sharded_batch_size * current_rank].view(first_dims, hidden_size),
+                        #     mat2=weight.t(),
+                        #     out=before_shard.view(first_dims, output_size),
+                        # )
+                        addmm(
                             input=bias[None, :],
                             mat1=gathered_tensor[: sharded_batch_size * current_rank].view(first_dims, hidden_size),
-                            mat2=weight.t(),
+                            mat2=weight.data.transpose_fp8() if isinstance(weight.data, FP8Tensor) else weight.t(),
                             out=before_shard.view(first_dims, output_size),
                         )
+
                 if after_shard.numel() > 0:
                     first_dims = math.prod(after_shard.shape[:-1])
                     if bias is None:
-                        torch.mm(
+                        # torch.mm(
+                        #     input=gathered_tensor[sharded_batch_size * (current_rank + 1) :].view(
+                        #         first_dims, hidden_size
+                        #     ),
+                        #     mat2=weight.t(),
+                        #     out=after_shard.view(first_dims, output_size),
+                        # )
+
+                        mm(
                             input=gathered_tensor[sharded_batch_size * (current_rank + 1) :].view(
                                 first_dims, hidden_size
                             ),
-                            mat2=weight.t(),
+                            mat2=weight.data.transpose_fp8() if isinstance(weight.data, FP8Tensor) else weight.t(),
                             out=after_shard.view(first_dims, output_size),
                         )
                     else:
-                        torch.addmm(
+                        # torch.addmm(
+                        #     input=bias[None, :],
+                        #     mat1=gathered_tensor[sharded_batch_size * (current_rank + 1) :].view(
+                        #         first_dims, hidden_size
+                        #     ),
+                        #     mat2=weight.t(),
+                        #     out=after_shard.view(first_dims, output_size),
+                        # )
+
+                        addmm(
                             input=bias[None, :],
                             mat1=gathered_tensor[sharded_batch_size * (current_rank + 1) :].view(
                                 first_dims, hidden_size
                             ),
-                            mat2=weight.t(),
+                            mat2=weight.data.transpose_fp8() if isinstance(weight.data, FP8Tensor) else weight.t(),
                             out=after_shard.view(first_dims, output_size),
                         )
 
@@ -345,9 +431,10 @@ def column_linear(
     group: dist.ProcessGroup,
     tp_mode: TensorParallelLinearMode,
     async_communication: bool,
+    metadatas: Optional[FP8LinearMeta] = None,
 ):
     if async_communication:
-        return _ColumnLinearAsyncCommunication.apply(input, weight, bias, group, tp_mode)
+        return _ColumnLinearAsyncCommunication.apply(input, weight, bias, group, tp_mode, metadatas)
 
     if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
         input = differentiable_identity(input, group=group)
