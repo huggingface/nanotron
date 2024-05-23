@@ -147,6 +147,7 @@ class DistributedTrainer:
             pipeline_parallel_size=self.config.parallelism.pp,
             data_parallel_size=self.config.parallelism.dp,
             expert_parallel_size=self.config.parallelism.expert_parallel_size,
+            sequence_parallel_size=self.config.parallelism.sp,
         )
 
         self.pre_init()
@@ -234,7 +235,7 @@ class DistributedTrainer:
 
         # Setup tensorboard write and log writers on output rank
         self.logger_ranks = self.parallel_context.get_global_rank(
-            ep_rank=0, pp_rank=self.unwrapped_model.output_pp_rank, dp_rank=0, tp_rank=0
+            ep_rank=0, pp_rank=self.unwrapped_model.output_pp_rank, dp_rank=0, tp_rank=0, sp_rank=0
         ).flatten()
         self.loggerwriter = self.setup_log_writers()
 
@@ -440,7 +441,6 @@ class DistributedTrainer:
                 # Checkpoint
                 if self.iteration_step % self.config.checkpoints.checkpoint_interval == 0:
                     self.save_checkpoint()
-
         dist.barrier()  # let's wait for everyone before leaving
 
         self.post_training()
@@ -907,6 +907,7 @@ def mark_tied_parameters(
                 target,
                 (
                     parallel_context.get_global_rank(
+                        sp_rank=dist.get_rank(parallel_context.sp_pg),
                         ep_rank=dist.get_rank(parallel_context.expert_pg),
                         pp_rank=get_pp_rank_of(target, module=model),
                         dp_rank=dist.get_rank(parallel_context.dp_pg),
