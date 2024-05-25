@@ -110,19 +110,8 @@ def track_weight_and_grad_stats(name: str, module: nn.Module, parallel_context: 
 
 
 def monitor_model(model: NanotronModel, parallel_context: ParallelContext) -> Tuple[Dict[str, Union[torch.Tensor, float]], List]:
-    def get_leaf_modules(module: nn.Module) -> List[Tuple[str, nn.Module]]:
-        """
-        Return all the leaf modules (modules without any child modules) in a PyTorch module.
-        """
-        leaf_modules = []
-        for n, m in module.named_modules():
-            if not list(m.children()):
-                leaf_modules.append((n, m))
-        return leaf_modules
-
     logs = {}
     handles = []
-    # leaf_modules = get_leaf_modules(model)
     leaf_modules = [(name, module) for name, module in model.named_modules()]
 
     for name, module in leaf_modules:
