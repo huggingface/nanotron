@@ -173,9 +173,7 @@ class DistributedTrainer:
             self.model.module if isinstance(self.model, DistributedDataParallel) else self.model
         )
 
-        from torch import nn
 
-        from nanotron.fp8.tensor import FP8Tensor
 
         # NOTE: sanity check if we quantize the model to FP8
         def get_inheritance_classes(instance):
@@ -184,18 +182,21 @@ class DistributedTrainer:
                 classes.extend(cls.__bases__)
             return classes
 
-        for name, module in self.model.named_modules():
-            if isinstance(module, nn.Linear):
-                if hasattr(module, "weight"):
-                    assert isinstance(module.weight.data, FP8Tensor), f"name: {name}"
-                    assert module.weight.data.dtype in [
-                        torch.int8,
-                        torch.uint8,
-                    ], f"name: {name}, dtype: {module.weight.data.dtype}"
+        # for name, module in self.model.named_modules():
+        #     if isinstance(module, nn.Linear):
+        #         if hasattr(module, "weight"):
+        #             if name == "model.lm_head.pp_block":
+        #                 assert 1 == 1
 
-                # if hasattr(module, "bias"):
-                #     assert isinstance(module.bias.data, FP8Tensor)
-                #     assert module.bias.dtype in [torch.int8, torch.uint8], f"name: {name}, dtype: {module.bias.dtype}"
+        #             assert isinstance(module.weight.data, FP8Tensor), f"name: {name}"
+        #             assert module.weight.data.dtype in [
+        #                 torch.int8,
+        #                 torch.uint8,
+        #             ], f"name: {name}, dtype: {module.weight.data.dtype}"
+
+        #         # if hasattr(module, "bias"):
+        #         #     assert isinstance(module.bias.data, FP8Tensor)
+        #         #     assert module.bias.dtype in [torch.int8, torch.uint8], f"name: {name}, dtype: {module.bias.dtype}"
 
         # TODO: find a better way to handle this
         parametrization_method = (

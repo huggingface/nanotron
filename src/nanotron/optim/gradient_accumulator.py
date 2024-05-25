@@ -276,6 +276,10 @@ class FP32GradientAccumulator(GradientAccumulator):
         self._contiguous_fp32_grad_buffer.zero_()
 
     def get_parameter_for_optimizer(self, name: str) -> NanotronParameter:
+        # try:
+        #     return self.parameters[name]["fp32"]
+        # except KeyError:
+        #     assert  1 == 1
         return self.parameters[name]["fp32"]
 
     def get_grad_buffer(self, name: str) -> torch.Tensor:

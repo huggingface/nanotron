@@ -27,7 +27,6 @@ from nanotron.generation.generate_store import AttachableStore
 from nanotron.logging import log_rank
 from nanotron.models import NanotronModel
 from nanotron.nn.activations import ACT2FN
-from nanotron.nn.layer_norm import TritonRMSNorm
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter
 from nanotron.parallel.pipeline_parallel.block import PipelineBlock, TensorPointer
@@ -726,8 +725,10 @@ class LlamaModel(nn.Module):
 
         self.final_layer_norm = PipelineBlock(
             p2p=self.p2p,
-            module_builder=TritonRMSNorm,
-            module_kwargs={"hidden_size": config.hidden_size, "eps": config.rms_norm_eps},
+            # module_builder=TritonRMSNorm,
+            # module_kwargs={"hidden_size": config.hidden_size, "eps": config.rms_norm_eps},
+            module_builder=nn.LayerNorm,
+            module_kwargs={"normalized_shape": config.hidden_size, "eps": config.rms_norm_eps},
             module_input_keys={"input"},
             module_output_keys={"hidden_states"},
         )  # TODO
@@ -773,14 +774,14 @@ class LlamaModel(nn.Module):
 
         output = self.token_position_embeddings(input_ids=input_ids, input_mask=input_mask)
 
-        hidden_encoder_states = {
+        hidden_states = {
             "hidden_states": output["input_embeds"],
             "sequence_mask": input_mask,
         }
-        for encoder_block in self.decoder:
-            hidden_encoder_states = encoder_block(**hidden_encoder_states)
+        for decoder_block in self.decoder:
+            hidden_states = decoder_block(**hidden_states)
 
-        hidden_states = self.final_layer_norm(input=hidden_encoder_states["hidden_states"])["hidden_states"]
+        hidden_states = self.final_layer_norm(input=hidden_states["hidden_states"])["hidden_states"]
 
         sharded_logits = self.lm_head(x=hidden_states)["logits"]
 

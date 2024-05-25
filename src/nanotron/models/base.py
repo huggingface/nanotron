@@ -241,7 +241,7 @@ def build_model(
 @contextmanager
 def init_on_device_and_dtype(
     device: torch.device = torch.device("cpu"),
-    dtype: torch.dtype = torch.float,
+    dtype: torch.dtype = torch.float32,
 ):
     """
     A context manager under which models are initialized with all parameters on the specified device.
@@ -266,7 +266,10 @@ def init_on_device_and_dtype(
     def register_empty_parameter(module, name, param):
         old_register_parameter(module, name, param)
         if param is not None:
-            if isinstance(param, DTypeInvariantTensor):
+            # NOTE(xrsrke): FP8Linear automatically quantizes its parameters to FP8
+            # so no need to convert them to FP8 here, also we initialize them with FP32
+            # first
+            if isinstance(param, DTypeInvariantTensor) or dtype == torch.int8:
                 # if param is DTypeInvariantTensor we should avoid updating it
                 param.data = param.data.to(device)
             else:
@@ -275,7 +278,8 @@ def init_on_device_and_dtype(
     def register_empty_buffer(module, name, buffer, persistent=True):
         old_register_buffer(module, name, buffer, persistent=persistent)
         if buffer is not None:
-            if isinstance(buffer, DTypeInvariantTensor):
+            # NOTE(xrsrke): FP8-LM don't quantize its buffers to FP8
+            if isinstance(buffer, DTypeInvariantTensor) or dtype == torch.int8:
                 # if buffer is DTypeInvariantTensor we should avoid updating it
                 buffer.data = buffer.data.to(device)
             else:
@@ -289,8 +293,10 @@ def init_on_device_and_dtype(
 
     def patch_tensor_constructor(fn):
         def wrapper(*args, **kwargs):
+            # NOTE: nanotron automatically sets the device and dtype of the tensor
+            # but for FP8 training, we initializes with float16 first
             kwargs["device"] = device
-            kwargs["dtype"] = dtype
+            kwargs["dtype"] = torch.float16 if dtype == torch.int8 else dtype
             return fn(*args, **kwargs)
 
         return wrapper

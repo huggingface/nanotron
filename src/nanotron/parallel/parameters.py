@@ -356,18 +356,24 @@ class NanotronParameter(nn.Parameter):
         args = tree_map(unwrap, args)
         kwargs = tree_map(unwrap, kwargs)
 
+        OPS_THAT_RETURN_ORIGINAL_TENSOR = [torch.ops.aten.native_layer_norm.default]
+
         if func == torch.ops.aten.detach.default:
             # NOTE: this is for parameter.data or parameter.detach()
             return args[0].data
         else:
             outputs = func(*args, **kwargs)
-            # if len(outputs) == 1 and not isinstance(outputs, torch.Tensor):
-            #     # NOTE: in some distributed operation, it doesn't return anything
-            #     # but do in-place operation
-            #     return outputs
-            # else:
-            #     return tree_map(wrap, outputs)
-            return tree_map(wrap, outputs)
+
+            if func in OPS_THAT_RETURN_ORIGINAL_TENSOR:
+                return outputs
+            else:
+                # if len(outputs) == 1 and not isinstance(outputs, torch.Tensor):
+                #     # NOTE: in some distributed operation, it doesn't return anything
+                #     # but do in-place operation
+                #     return outputs
+                # else:
+                #     return tree_map(wrap, outputs)
+                return tree_map(wrap, outputs)
 
 
 def sanity_check(root_module: nn.Module):

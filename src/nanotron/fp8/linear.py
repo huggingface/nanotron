@@ -54,8 +54,9 @@ class FP8Linear(nn.Linear):
         # TODO(xrsrke): don't fixed dtype, take it from the FP8 recipe
         # DTypes.FP8E4M3
         quant_w = FP8Parameter(
-            self.weight, dtype=FP8LM_RECIPE.linear.weight.dtype, interval=FP8LM_RECIPE.linear.weight.interval
+            self.weight.data, dtype=FP8LM_RECIPE.linear.weight.dtype, interval=FP8LM_RECIPE.linear.weight.interval
         )
+        assert quant_w.dtype in [torch.uint8, torch.int8], f"got {self.weight.data.dtype}"
         self.weight = quant_w
         assert self.weight.data.dtype in [torch.uint8, torch.int8], f"got {self.weight.data.dtype}"
         self.metadatas = FP8LinearMeta()

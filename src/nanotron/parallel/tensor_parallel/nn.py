@@ -65,6 +65,9 @@ class TensorParallelColumnLinear(BASE_LINEAR):
 
         assert out_features % self.world_size == 0
 
+        if in_features == 16:
+            assert 1 == 1
+
         self.in_features = in_features
         self.out_features = out_features // self.world_size
 

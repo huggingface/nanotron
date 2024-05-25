@@ -331,7 +331,11 @@ def init_optimizer_and_grad_accumulator(
                     weight_decay=optimizer_args.weight_decay,
                     eps=optimizer_args.optimizer_factory.adam_eps,
                     betas=(optimizer_args.optimizer_factory.adam_beta1, optimizer_args.optimizer_factory.adam_beta2),
-                    fused=optimizer_args.optimizer_factory.torch_adam_is_fused,
+                    # fused=optimizer_args.optimizer_factory.torch_adam_is_fused,
+                    # NOTE: fused (bool, optional) – whether the fused implementation (CUDA only) is used.
+                    # Currently, torch.float64, torch.float32, torch.float16, and torch.bfloat16
+                    # in FP8 training, model parameters are INT8
+                    fused=False,
                 )
 
         elif optimizer_args.optimizer_factory.name == "sgd":
@@ -687,7 +691,7 @@ def compute_remain_train_steps_of_a_data_stage_from_ckp(
     else:
         next_stage = next((s for s in config.data_stages if s.start_training_step > stage.start_training_step), None)
         total_train_steps = next_stage.start_training_step
-    
+
     if metadata.last_train_step > stage.start_training_step:
         # NOTE: if the last_train_step is larger than the start_training_step of the current stage,
         # it means that the training has already passed this stage

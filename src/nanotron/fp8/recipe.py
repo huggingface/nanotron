@@ -54,5 +54,11 @@ class FP8OptimRecipe:
 
 @dataclass
 class FP8TrainingRecipe:
+    # TODO(xrsrke): add initialization dtype as a part of the recipe
+    # currently we use float32 for initialization, then quantize it
+
+    # TODO(xrsrke): allow disable FP8 for some specific layers like lm_head, mlp, etc.
+    # maybe specify fp8 in the modeling code!
+
     linear: FP8LinearRecipe
     optim: FP8OptimRecipe
