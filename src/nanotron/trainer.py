@@ -93,6 +93,8 @@ from nanotron.serialize import (
 )
 from nanotron.serialize.metadata import DataStageMetadata, TrainingMetadata
 from nanotron.serialize.optimizer import load_optimizer
+from nanotron.scaling.monitor import monitor_model, convert_logs_to_flat_logs
+
 
 logger = logging.get_logger(__name__)
 
@@ -209,6 +211,10 @@ class DistributedTrainer:
                 root_folder=self.init_checkpoint_path,
             )
 
+        ########################################
+        ## Setting up training states and data stages
+        ########################################
+        
         # Define iteration start state
         if self.init_checkpoint_path is not None:
             checkpoint_metadata = load_meta(
@@ -231,16 +237,7 @@ class DistributedTrainer:
             self.metadata: TrainingMetadata = TrainingMetadata(
                 consumed_train_samples=0, last_train_step=0, last_stage_idx=0, data_stages=data_stages
             )
-
-        # Setup tensorboard write and log writers on output rank
-        self.logger_ranks = self.parallel_context.get_global_rank(
-            ep_rank=0, pp_rank=self.unwrapped_model.output_pp_rank, dp_rank=0, tp_rank=0
-        ).flatten()
-        self.loggerwriter = self.setup_log_writers()
-
-        # Log where each module is instantiated
-        self.unwrapped_model.log_modules(level=logging.DEBUG, group=self.parallel_context.world_pg, rank=0)
-
+        
         self.micro_batch_size = self.config.tokens.micro_batch_size
         self.n_micro_batches_per_batch = self.config.tokens.batch_accumulation_per_replica
         self.global_batch_size = (
@@ -251,6 +248,27 @@ class DistributedTrainer:
         self.limit_val_batches = self.config.tokens.limit_val_batches
         # NOTE: the dataloader currently in use for the current training stage
         self.current_dataloader: Optional[DataLoader] = None
+        
+        ########################################
+        ## Setting up logging and debugging tools
+        ########################################
+
+        # Setup tensorboard write and log writers on output rank
+        self.logger_ranks = self.parallel_context.get_global_rank(
+            ep_rank=0, pp_rank=self.unwrapped_model.output_pp_rank, dp_rank=0, tp_rank=0
+        ).flatten()
+        self.loggerwriter = self.setup_log_writers()
+        
+        # Log where each module is instantiated
+        self.unwrapped_model.log_modules(level=logging.DEBUG, group=self.parallel_context.world_pg, rank=0)
+        
+        if self.config.logging.monitor_model_states is True:
+            log_rank(
+                f"You have activated monitor model states. This could cause a slowdown in training. Only use it for debugging.",  # noqa
+                logger=logger,
+                level=logging.WARNING,
+                rank=0,
+            )
 
         self.post_init()
 
@@ -422,6 +440,10 @@ class DistributedTrainer:
 
                 self.iteration_start_time = time.time()
                 self._update_dataloader_based_on_training_stages(dataloader_or_dls)
+                
+                is_ready_to_log = (self.iteration_step - 1) % self.config.logging.iteration_step_info_interval == 0
+                if is_ready_to_log is True and self.config.logging.monitor_model_states is True:
+                    nn_logs, state_handles = monitor_model(self.unwrapped_model, self.parallel_context)
 
                 # Training step
                 outputs, loss_avg = self.training_step(dataloader=self.current_dataloader)
@@ -434,12 +456,19 @@ class DistributedTrainer:
                     self.metadata.last_stage_idx
                 ].consumed_train_samples += self.global_batch_size
 
-                if (self.iteration_step - 1) % self.config.logging.iteration_step_info_interval == 0:
+                if is_ready_to_log is True:
                     self.train_step_logs(outputs=outputs, loss_avg=loss_avg)
+                    
+                    if self.config.logging.monitor_model_states is True and \
+                        dist.get_rank(self.parallel_context.world_pg) == self.logger_ranks[0] and wandb is not None:
+                        wandb.log({**convert_logs_to_flat_logs(nn_logs), "iteration_step": self.iteration_step})
 
                 # Checkpoint
                 if self.iteration_step % self.config.checkpoints.checkpoint_interval == 0:
                     self.save_checkpoint()
+                
+                for handle in state_handles:
+                    handle.remove()
 
         dist.barrier()  # let's wait for everyone before leaving
 
