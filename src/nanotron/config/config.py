@@ -40,10 +40,19 @@ class BenchArgs:
 
 @dataclass
 class LoggingArgs:
-    """Arguments related to logging"""
+    """
+    Arguments related to logging
+    
+    monitor_model_states: whether to monitor the model states including the statistics
+    of activations, input gradients, output gradients and model weights during training.
+    
+    # NOTE:
+    - You could use the `iteration_step_info_interval` to control the frequency of logging the model states.
+    """
 
     log_level: Optional[str] = None
     log_level_replica: Optional[str] = None
+    monitor_model_states: bool = False
     iteration_step_info_interval: Optional[int] = 1
 
     def __post_init__(self):
@@ -92,10 +101,26 @@ class PretrainDatasetsArgs:
 
 
 @dataclass
+class NanosetDatasetsArgs:
+    dataset_path: Union[str, dict, List[str]]
+
+    def __post_init__(self):
+        if isinstance(self.dataset_path, str):  # Case 1: 1 Dataset file
+            self.dataset_path = [self.dataset_path]
+            self.dataset_weights = [1]
+        elif isinstance(self.dataset_path, List):  # Case 2: > 1 Dataset file
+            self.dataset_weights = None  # Set to None so we consume all the samples randomly
+        elif isinstance(self.dataset_path, dict):  # Case 3: dict with > 1 dataset_path and weights
+            tmp_dataset_path = self.dataset_path.copy()
+            self.dataset_path = list(tmp_dataset_path.keys())
+            self.dataset_weights = list(tmp_dataset_path.values())
+
+
+@dataclass
 class DataArgs:
     """Arguments related to the data and data files processing"""
 
-    dataset: Optional[PretrainDatasetsArgs]
+    dataset: Union[PretrainDatasetsArgs, NanosetDatasetsArgs]
     seed: Optional[int]
     num_loading_workers: Optional[int] = 1
 

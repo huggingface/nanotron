@@ -2,17 +2,11 @@ checkpoints:
   checkpoint_interval: 10
   checkpoints_path: checkpoints
   checkpoints_path_is_shared_file_system: false
-  # resume_checkpoint_path: checkpoints
+  resume_checkpoint_path: null
   save_initial_state: false
 data_stages:
 - data:
-    dataset:
-      dataset_overwrite_cache: false
-      dataset_processing_num_proc_per_process: 1
-      hf_dataset_config_name: null
-      hf_dataset_or_datasets: stas/openwebtext-10k
-      hf_dataset_splits: train
-      text_column_name: text
+    dataset: null # Custom dataloader will be used
     num_loading_workers: 1
     seed: 42
   name: Stable Training Stage
@@ -42,10 +36,9 @@ logging:
   iteration_step_info_interval: 1
   log_level: info
   log_level_replica: info
-  monitor_model_states: true
 model:
   ddp_bucket_cap_mb: 25
-  dtype: float8
+  dtype: bfloat16
   init_method:
     std: 0.025
   make_vocab_size_divisible_by: 1
@@ -69,7 +62,7 @@ model:
     use_cache: true
     vocab_size: 256
 optimizer:
-  accumulate_grad_in_fp32: false
+  accumulate_grad_in_fp32: true
   clip_grad: 1.0
   learning_rate_scheduler:
     learning_rate: 0.0003
@@ -88,11 +81,11 @@ optimizer:
   weight_decay: 0.01
   zero_stage: 0
 parallelism:
-  dp: 1
+  dp: 2
   expert_parallel_size: 1
   pp: 1
   pp_engine: 1f1b
-  tp: 2
+  tp: 1
   tp_linear_async_communication: true
   tp_mode: REDUCE_SCATTER
 profiler: null
