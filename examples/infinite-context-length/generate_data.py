@@ -1,9 +1,9 @@
+import argparse
 import glob
 import os
 import random
 import uuid
 
-import numpy as np
 from datasets import Dataset
 from transformers import AutoTokenizer
 
@@ -94,15 +94,11 @@ def generate_needle_in_haystack_test(
 ):
     # Load up the haystack context
     tokenizer = AutoTokenizer.from_pretrained("lvwerra/the-tokenizer-v1")
-    # target_cut_length = context_length - token_length(tokenizer, soft_prompt) - token_length(tokenizer, retrieval_question)
-    # target_cut_length = context_length - token_length(tokenizer, f"{soft_prompt} 1. \n\n{retrieval_question}") - 1
     target_cut_length = context_length - token_length(tokenizer, PROMPT.format(soft_prompt, 1, retrieval_question)) - 1
 
     context = read_context_files(tokenizer, soft_prompt, retrieval_question, target_cut_length)
 
     # Insert the needle into the context at the specified depth percent
-    # context_with_needle = insert_needle(context, needle)
-
     context_with_needle = insert_needle_with_depth(needle_prompt, context, depth_percent, target_cut_length, tokenizer)
 
     # Generate the prompt using the context with the needle
@@ -127,56 +123,81 @@ def generate_needle_in_haystack_test(
     return prompt
 
 
+def get_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--context_length", type=int, required=True)
+    parser.add_argument("--depth_percent", type=int, required=True)
+    parser.add_argument("--id", type=int, required=True)
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
+    args = get_args()
+
+    context_length = args.context_length
+    depth_percent = args.depth_percent
+    id = args.id
+
     haystack_dir = "./"
+    # NOTE: depth_percent + 1 to avoid 0
+    start_range = 1000 * (depth_percent + 1) * id
+    end_range = start_range + start_range
+
+    print(
+        f"Generating prompts for context length: {context_length} and depth percent: {depth_percent} and id: {id} \n"
+    )
+    print(f"start_range: {start_range}, end_range: {end_range} \n")
 
     def generate_dataset():
-        num_prompts = 1
+        # num_prompts = 1700
+        num_prompts = 100
         # soft_prompt = "There is an important info hidden inside a lot of irrelevant text. Find it and memorize them. I will quiz you about the important information there."
-        soft_prompt = "There is a pass key hidden inside a lot of irrelevant text. Find it and memorize them. I will quiz you about what is the pass key."
-        context_lengths = [
-            32768,
-        ]
-        depth_percents = np.linspace(0, 100, num=21)
+        soft_prompt = "There is a pass key hidden inside a lot of irrelevant text. Find it and memorize them. I will quiz you about what is the pass key later on."
+        # context_lengths = [
+        #     32768,
+        # ]
+        # depth_percents = np.linspace(0, 100, num=21)
 
         dataset_dict = {"id": [], "prompt": [], "answer": [], "context_length": [], "depth_percent": []}
         generated_ids = set()
         generated_pass_keys = set()
 
-        for context_length in context_lengths:
-            print(f"Generating prompts for context length: {context_length} \n")
-            for depth_percent in depth_percents:
-                for _ in range(num_prompts):
-                    while True:
-                        pass_key = random.randint(10000, 50000)
-                        if pass_key not in generated_pass_keys:
-                            generated_pass_keys.add(pass_key)
-                            break
+        # for context_length in context_lengths:
+        #     print(f"Generating prompts for context length: {context_length} \n")
+        #     for depth_percent in depth_percents:
+        for i in range(num_prompts):
+            print(f"generating prompt {i} \n")
 
-                    needle_prompt = f". The pass key is {pass_key}. Remember it. {pass_key} is the pass key. "
-                    retrieval_question = f"What is the pass key? The pass key is {pass_key}."
+            while True:
+                pass_key = random.randint(start_range, end_range)
+                if pass_key not in generated_pass_keys:
+                    generated_pass_keys.add(pass_key)
+                    break
 
-                    prompt = generate_needle_in_haystack_test(
-                        pass_key,
-                        needle_prompt,
-                        haystack_dir,
-                        soft_prompt,
-                        retrieval_question,
-                        context_length,
-                        depth_percent,
-                    )
+            needle_prompt = f". The pass key is {pass_key}. Remember it. {pass_key} is the pass key. "
+            retrieval_question = f"What is the pass key? The pass key is {pass_key}."
 
-                    while True:
-                        text_id = str(uuid.uuid4())
-                        if text_id not in generated_ids:
-                            generated_ids.add(text_id)
-                            break
+            prompt = generate_needle_in_haystack_test(
+                pass_key,
+                needle_prompt,
+                haystack_dir,
+                soft_prompt,
+                retrieval_question,
+                context_length,
+                depth_percent,
+            )
 
-                    dataset_dict["id"].append(text_id)
-                    dataset_dict["prompt"].append(prompt)
-                    dataset_dict["answer"].append(pass_key)
-                    dataset_dict["context_length"].append(context_length)
-                    dataset_dict["depth_percent"].append(depth_percent)
+            while True:
+                text_id = str(uuid.uuid4())
+                if text_id not in generated_ids:
+                    generated_ids.add(text_id)
+                    break
+
+            dataset_dict["id"].append(text_id)
+            dataset_dict["prompt"].append(prompt)
+            dataset_dict["answer"].append(pass_key)
+            dataset_dict["context_length"].append(context_length)
+            dataset_dict["depth_percent"].append(depth_percent)
 
         dataset = Dataset.from_dict(dataset_dict)
         return dataset
@@ -185,5 +206,7 @@ if __name__ == "__main__":
     dataset = generate_dataset()
 
     # Save the dataset to disk
-    dataset.save_to_disk("needle_in_a_hay_stack_eval_dataset")
-    dataset.push_to_hub("nanotron/needle_in_a_hay_stack_finetuning_dataset")
+    dataset.save_to_disk(
+        f"/fsx/phuc/projects/nanotron/examples/infinite-context-length/needle_finetune_datasets/needle_finetuning_ctx_len_32768_and_depth_{depth_percent}_and_id_{id}"
+    )
+    # dataset.push_to_hub("nanotron/needle_in_a_hay_stack_finetuning_dataset")

@@ -163,3 +163,5 @@ cython_debug/
 
 checkpoints/
 wandb/
+*.pkl
+examples/infinite-context-length/*.txt

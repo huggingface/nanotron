@@ -2,6 +2,9 @@ from abc import ABC, abstractmethod
 from typing import Dict, Iterable, Optional, Union
 
 import torch
+from torch import nn as torch_nn
+from torch.nn.parallel import DistributedDataParallel
+
 from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.distributed import ProcessGroup
@@ -12,8 +15,6 @@ from nanotron.parallel.pipeline_parallel.context_manager import attach_pipeline_
 from nanotron.parallel.pipeline_parallel.state import PipelineTrainBatchState
 from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
 from nanotron.utils import ContextManagers
-from torch import nn as torch_nn
-from torch.nn.parallel import DistributedDataParallel
 
 logger = logging.get_logger(__name__)
 
@@ -222,6 +223,11 @@ class AllForwardAllBackwardPipelineEngine(PipelineEngine):
 class OneForwardOneBackwardPipelineEngine(PipelineEngine):
     def __init__(self):
         super().__init__()
+        self.idx = 0
+
+        from transformers import AutoTokenizer
+
+        self.tokenizer = AutoTokenizer.from_pretrained("lvwerra/the-tokenizer-v1")
 
     def train_batch_iter(
         self,
@@ -232,6 +238,9 @@ class OneForwardOneBackwardPipelineEngine(PipelineEngine):
         grad_accumulator: Optional[GradientAccumulator],
     ) -> Iterable[Dict[str, Union[torch.Tensor, TensorPointer]]]:
         """Check https://arxiv.org/abs/2104.04473 for diagrams for the pipeline engine"""
+
+        self.idx += 1
+
         self.nb_microbatches = nb_microbatches
         assert (
             self.nb_microbatches >= pg.size() - 1
@@ -274,6 +283,21 @@ class OneForwardOneBackwardPipelineEngine(PipelineEngine):
                 outputs.append(output)
 
             for micro_batch in batch:
+                if dist.get_rank() == 0:
+                    if self.idx == 1 or self.idx % 50 == 0:
+                        decoded_texts = self.tokenizer.batch_decode(micro_batch["input_ids"])
+
+                        with open(
+                            "/fsx/phuc/projects/nanotron/examples/infinite-context-length/configs/exp19/training_inputs.txt",
+                            "a",
+                        ) as file:
+                            # Write the self.idx number and the decoded text to the file
+                            file.write(f"idx: {self.idx}\n")
+
+                            for i, text in enumerate(decoded_texts):
+                                file.write(f"####### text_i = {i}\n")
+                                file.write(text + "\n\n\n")
+
                 context = self._get_fwd_context(model=model)
                 output = self.forward(context=context, state=state, micro_batch=micro_batch, model=model)
 

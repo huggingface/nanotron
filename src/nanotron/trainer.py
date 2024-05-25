@@ -272,7 +272,6 @@ class DistributedTrainer:
 
         # Log where each module is instantiated
         self.unwrapped_model.log_modules(level=logging.DEBUG, group=self.parallel_context.world_pg, rank=0)
-        self.nn_logs, self.nn_handles = monitor_nanotron_model(self.unwrapped_model, self.parallel_context)
 
         self.micro_batch_size = self.config.tokens.micro_batch_size
         self.n_micro_batches_per_batch = self.config.tokens.batch_accumulation_per_replica
@@ -434,6 +433,8 @@ class DistributedTrainer:
                 if isinstance(prof, torch.profiler.profile):
                     prof.step()
 
+                nn_logs, nn_handles = monitor_nanotron_model(self.model, self.parallel_context)
+
                 self.iteration_start_time = time.time()
                 self._update_dataloader_based_on_training_stages(dataloader_or_dls)
 
@@ -445,6 +446,14 @@ class DistributedTrainer:
 
                 if (self.iteration_step - 1) % self.config.logging.iteration_step_info_interval == 0:
                     self.train_step_logs(outputs=outputs, loss_avg=loss_avg)
+
+                if dist.get_rank(self.parallel_context.world_pg) == self.logger_ranks[0] and wandb is not None:
+                    from nanotron.debug.monitor import convert_logs_to_flat_logs
+
+                    wandb.log({**convert_logs_to_flat_logs(nn_logs), "iteration_step": self.iteration_step})
+
+                for handle in nn_handles:
+                    handle.remove()
 
                 # Checkpoint
                 if self.iteration_step % self.config.checkpoints.checkpoint_interval == 0:
@@ -642,10 +651,10 @@ class DistributedTrainer:
             else:
                 exit(0)
 
-        if dist.get_rank(self.parallel_context.world_pg) == self.logger_ranks[0] and wandb is not None:
-            from nanotron.debug.monitor import convert_logs_to_flat_logs
+        # if dist.get_rank(self.parallel_context.world_pg) == self.logger_ranks[0] and wandb is not None:
+        #     from nanotron.debug.monitor import convert_logs_to_flat_logs
 
-            wandb.log({**convert_logs_to_flat_logs(self.nn_logs), "iteration_step": self.iteration_step})
+        #     wandb.log({**convert_logs_to_flat_logs(self.nn_logs), "iteration_step": self.iteration_step})
 
     def init_model(self) -> Union[NanotronModel, DistributedDataParallel]:
         """Initialize the model and load weights from checkpoint if needed."""

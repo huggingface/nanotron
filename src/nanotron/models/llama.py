@@ -53,13 +53,15 @@ def compute_stas(tensor):
         )
 
     return {
-        "mean": tensor.mean().item(),
-        "std": tensor.std().item(),
-        "var": tensor.var().item(),
-        "norm": tensor.norm().item(),
-        "min": tensor.min().item(),
-        "max": tensor.max().item(),
-        "amax": tensor.abs().max().item(),
+        # "mean": tensor.mean().item(),
+        # "std": tensor.std().item(),
+        # "var": tensor.var().item(),
+        # "norm": tensor.norm().item(),
+        # "min": tensor.min().item(),
+        # "max": tensor.max().item(),
+        "amax": tensor.abs()
+        .max()
+        .item(),
     }
 
 
@@ -381,11 +383,12 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         # assert config.max_position_embeddings == 32768
 
         # NOTE: for 1b training
-        self.segment_lengths = 2048
+        # self.segment_lengths = 2048
+        # self.segment_lengths = 4096
 
         # NOTE: for sanity 200m training
         # prev 16
-        # self.segment_lengths = 256
+        self.segment_lengths = 256
         # self.segment_lengths = 16
 
         device = self.o_proj.weight.device
@@ -407,20 +410,24 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         self,
         hidden_states: TensorType["sharded_seq_length", "batch_size", "hidden_size"],
         sequence_mask: TensorType["batch_size", "seq_length"],
-        prev_memory,
-        prev_normalization,
     ):
         # if self.layer_idx == 4:
         #     assert 1 == 1
 
-        batch_size = hidden_states.shape[1]
-        seq_len = hidden_states.shape[0]
+        # batch_size = hidden_states.shape[1]
+        # seq_len = hidden_states.shape[0]
+
+        batch_size = hidden_states.shape[0]
+        seq_len = hidden_states.shape[1]
+
+        assert seq_len == 1024
+
         # assert seq_len % self.n_segments == 0
 
         # segment_length = seq_len // self.n_segments
         # hidden_size = hidden_states.shape[2]
 
-        if seq_len >= self.segment_lengths:
+        if seq_len > self.segment_lengths:
             # n_segments = seq_len // self.segment_lengths
             # segment_hidden_states = torch.chunk(hidden_states, chunks=n_segments, dim=0)
             # segment_sequence_masks = torch.chunk(sequence_mask, chunks=n_segments, dim=1)
@@ -431,9 +438,15 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             segment_lengths = [self.segment_lengths] * (n_segments - 1) + [
                 seq_len - (n_segments - 1) * self.segment_lengths
             ]
-            segment_hidden_states = torch.split(hidden_states, segment_lengths, dim=0)
+            assert sum(segment_lengths) == seq_len
+            # assert hidden_states.shape[0] == seq_len
+            assert hidden_states.shape[1] == seq_len
+            # segment_hidden_states = torch.split(hidden_states, segment_lengths, dim=0)
+            segment_hidden_states = torch.split(hidden_states, segment_lengths, dim=1)
             # NOTE: assume that mask are all the same
             # because we split across sequence length
+            # NOTE: take the assumption that all the masks are the same
+            assert torch.all(sequence_mask)
             segment_sequence_masks = torch.split(sequence_mask[:, :seq_len], segment_lengths, dim=1)
         else:
             segment_hidden_states = [hidden_states]
@@ -449,7 +462,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
 
         # sequence_masks = []
         idx = 0
-        # logs = {}
+        logs = {}
 
         for segment_hidden_state, segment_sequence_mask in zip(segment_hidden_states, segment_sequence_masks):
             # if idx == 1:
@@ -464,9 +477,9 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             # query_states, key_states, value_states = attn_outputs["qkv_states"]
             query_states, key_states, value_states = attn_outputs["qkv_states_without_pe"]
 
-            # logs[f"layer_{self.layer_idx}:seg_{idx}:query_states"] = compute_stas(query_states)
-            # logs[f"layer_{self.layer_idx}:seg_{idx}:key_states"] = compute_stas(key_states)
-            # logs[f"layer_{self.layer_idx}:seg_{idx}:value_states"] = compute_stas(value_states)
+            logs[f"layer_{self.layer_idx}:seg_{idx}:query_states"] = compute_stas(query_states)
+            logs[f"layer_{self.layer_idx}:seg_{idx}:key_states"] = compute_stas(key_states)
+            logs[f"layer_{self.layer_idx}:seg_{idx}:value_states"] = compute_stas(value_states)
 
             if query_states.ndim == 3:
                 query_states = rearrange(
@@ -563,14 +576,14 @@ class CausalSelfAttention(nn.Module, AttachableStore):
 
             output = self.o_proj(attention_output)
 
-            # if dist.get_rank() == 0:
-            #     logs[f"layer_{self.layer_idx}:seg_{idx}:global_weights"] = compute_stas(global_weights)
-            #     logs[f"layer_{self.layer_idx}:seg_{idx}:local_weights"] = compute_stas(local_weights)
-            #     logs[f"layer_{self.layer_idx}:seg_{idx}:local_attn_outputs"] = compute_stas(local_attn_outputs)
-            #     logs[f"layer_{self.layer_idx}:seg_{idx}:retrieved_memory"] = compute_stas(retrieved_memory)
-            #     logs[f"layer_{self.layer_idx}:seg_{idx}:output"] = compute_stas(output)
-            #     logs[f"layer_{self.layer_idx}:seg_{idx}:memory"] = compute_stas(memory)
-            #     logs[f"layer_{self.layer_idx}:seg_{idx}:normalization"] = compute_stas(normalization)
+            if dist.get_rank() == 0:
+                logs[f"layer_{self.layer_idx}:seg_{idx}:global_weights"] = compute_stas(global_weights)
+                logs[f"layer_{self.layer_idx}:seg_{idx}:local_weights"] = compute_stas(local_weights)
+                logs[f"layer_{self.layer_idx}:seg_{idx}:local_attn_outputs"] = compute_stas(local_attn_outputs)
+                logs[f"layer_{self.layer_idx}:seg_{idx}:retrieved_memory"] = compute_stas(retrieved_memory)
+                logs[f"layer_{self.layer_idx}:seg_{idx}:output"] = compute_stas(output)
+                logs[f"layer_{self.layer_idx}:seg_{idx}:memory"] = compute_stas(memory)
+                logs[f"layer_{self.layer_idx}:seg_{idx}:normalization"] = compute_stas(normalization)
 
             # assert output.shape == (segment_length, batch_size, hidden_size)
 
@@ -578,24 +591,29 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             # memory = prev_memory if prev_memory is not None else 0.detach()
 
             outputs.append(output)
+            # memory, normalization = memory.detach(), normalization.detach()
 
             idx += 1
 
             # NOTE: update memory
-        outputs = torch.cat(outputs, dim=0)  # concat along sequence dimension
+        # outputs = torch.cat(outputs, dim=0)  # concat along sequence dimension
+        outputs = torch.cat(outputs, dim=1)  # concat along sequence dimension
         assert outputs.shape == hidden_states.shape
 
-        # if dist.get_rank() == 0:
-        #     logs[f"layer_{self.layer_idx}:outputs"] = compute_stas(outputs)
-        #     wandb.log(logs)
+        if dist.get_rank() == 0:
+            import wandb
+            from nanotron import constants
+
+            logs[f"layer_{self.layer_idx}:outputs"] = compute_stas(outputs)
+            wandb.log({**logs, "iteration_step": constants.GLOBAL_STEP})
 
         # sequence_masks = torch.cat(sequence_masks, dim=1)
         # assert sequence_masks.shape == sequence_mask.shape
         return_outputs = {
             "hidden_states": outputs,
             "sequence_mask": sequence_mask,
-            "memory": memory,
-            "normalization": normalization,
+            # "memory": memory,
+            # "normalization": normalization,
         }
         return return_outputs
 
@@ -994,8 +1012,8 @@ class LlamaDecoderLayer(nn.Module):
         self,
         hidden_states: Union[torch.Tensor, TensorPointer],
         sequence_mask: Union[torch.Tensor, TensorPointer],
-        memory: Optional[torch.Tensor] = None,
-        normalization: Optional[torch.Tensor] = None,
+        # memory: Optional[torch.Tensor] = None,
+        # normalization: Optional[torch.Tensor] = None,
     ) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
@@ -1003,8 +1021,8 @@ class LlamaDecoderLayer(nn.Module):
         output = self.attn(
             hidden_states=hidden_states,
             sequence_mask=sequence_mask,
-            prev_memory=memory,
-            prev_normalization=normalization,
+            # prev_memory=memory,
+            # prev_normalization=normalization,
         )
         hidden_states = output["hidden_states"]
         hidden_states = hidden_states + residual
@@ -1017,8 +1035,8 @@ class LlamaDecoderLayer(nn.Module):
         return {
             "hidden_states": hidden_states,
             "sequence_mask": output["sequence_mask"],
-            "memory": output["memory"],
-            "normalization": output["normalization"],
+            # "memory": output["memory"],
+            # "normalization": output["normalization"],
         }
 
 
@@ -1047,7 +1065,7 @@ class Embedding(nn.Module, AttachableStore):
             store["past_length"] = past_length + cumsum_mask[:, -1]
 
         # Format input in `[seq_length, batch_size]` to support high TP with low batch_size
-        input_ids = input_ids.transpose(0, 1)
+        # input_ids = input_ids.transpose(0, 1)
         input_embeds = self.token_embedding(input_ids)
         return {"input_embeds": input_embeds}
 
@@ -1096,8 +1114,10 @@ class LlamaModel(nn.Module):
                         "tp_pg": parallel_context.tp_pg,
                         "layer_idx": layer_idx,
                     },
-                    module_input_keys={"hidden_states", "sequence_mask", "memory", "normalization"},
-                    module_output_keys={"hidden_states", "sequence_mask", "memory", "normalization"},
+                    # module_input_keys={"hidden_states", "sequence_mask", "memory", "normalization"},
+                    # module_output_keys={"hidden_states", "sequence_mask", "memory", "normalization"},
+                    module_input_keys={"hidden_states", "sequence_mask"},
+                    module_output_keys={"hidden_states", "sequence_mask"},
                 )
                 for layer_idx in range(config.num_hidden_layers)
             ]
@@ -1155,8 +1175,8 @@ class LlamaModel(nn.Module):
         hidden_encoder_states = {
             "hidden_states": output["input_embeds"],
             "sequence_mask": input_mask,
-            "memory": None,
-            "normalization": None,
+            # "memory": None,
+            # "normalization": None,
         }
         for encoder_block in self.decoder:
             hidden_encoder_states = encoder_block(**hidden_encoder_states)
@@ -1227,6 +1247,9 @@ class Loss(nn.Module):
         # Megatron by defaults cast everything in fp32. `--f16-lm-cross-entropy` is an option you can use to keep current precision.
         # https://github.com/NVIDIA/Megatron-LM/blob/f267e6186eae1d6e2055b412b00e2e545a8e896a/megatron/model/gpt_model.py#L38
 
+        # NOTE: because sharded_cross_entropy takes [seq_len, batch_size,...]
+        # so we have to transpose this
+        sharded_logits = sharded_logits.transpose(0, 1).contiguous()
         loss = sharded_cross_entropy(
             sharded_logits, label_ids.transpose(0, 1).contiguous(), group=self.tp_pg, dtype=torch.float
         ).transpose(0, 1)
