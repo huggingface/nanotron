@@ -146,6 +146,12 @@ def lr_scheduler_builder(optimizer: Optimizer, lr_scheduler_args: LRSchedulerArg
                     * (lr_decay_steps - (current_step - lr_decay_starting_step))
                     / lr_decay_steps
                 )
+            elif lr_scheduler_args.lr_decay_style == "1-sqrt":
+                lmbda = (
+                    lr_scheduler_args.min_decay_lr
+                    + (initial_lr - lr_scheduler_args.min_decay_lr)
+                    * (1 - math.sqrt((current_step - lr_decay_starting_step) / lr_decay_steps))
+                )
             else:
                 raise ValueError(f"Unknown decay style {lr_scheduler_args.lr_decay_style}")
 
