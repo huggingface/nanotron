@@ -19,8 +19,8 @@ from typing import Dict, Optional, Union
 import torch
 from torch import nn
 
+from nanotron import constants, logging
 from nanotron import distributed as dist
-from nanotron import logging
 from nanotron.config import Config, LlamaConfig, ParallelismArgs
 from nanotron.config.models_config import RandomInit, SpectralMupInit
 from nanotron.generation.generate_store import AttachableStore
@@ -59,7 +59,9 @@ def compute_stas(tensor):
         # "norm": tensor.norm().item(),
         # "min": tensor.min().item(),
         # "max": tensor.max().item(),
-        "amax": tensor.abs()
+        "amax": tensor.detach()
+        .cpu()
+        .abs()
         .max()
         .item(),
     }
@@ -352,6 +354,12 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         )
         # TODO(kunhao): We want to have only one version per device and not one version per layer.
         self.rotary_embedding = RotaryEmbedding(dim=self.d_qk, end=config.max_position_embeddings)
+        log_rank(
+            f"self.rotary_embedding.end is {self.rotary_embedding.end}",
+            logger=logger,
+            level=logging.INFO,
+            rank=0,
+        )
         # self.rotary_embedding = RotaryEmbedding(dim=self.d_qk, end=2048)
 
         # NOTE: Only supported for training (TODO(fmom): position_ids not supported yet)
@@ -383,12 +391,12 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         # assert config.max_position_embeddings == 32768
 
         # NOTE: for 1b training
-        # self.segment_lengths = 2048
+        self.segment_lengths = 2048
         # self.segment_lengths = 4096
 
         # NOTE: for sanity 200m training
         # prev 16
-        self.segment_lengths = 256
+        # self.segment_lengths = 256
         # self.segment_lengths = 16
 
         device = self.o_proj.weight.device
@@ -420,7 +428,8 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         batch_size = hidden_states.shape[0]
         seq_len = hidden_states.shape[1]
 
-        assert seq_len == 1024
+        # assert seq_len == 1024
+        # assert seq_len == 32768
 
         # assert seq_len % self.n_segments == 0
 
@@ -476,10 +485,6 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             local_attn_outputs = attn_outputs["attention_output"]
             # query_states, key_states, value_states = attn_outputs["qkv_states"]
             query_states, key_states, value_states = attn_outputs["qkv_states_without_pe"]
-
-            logs[f"layer_{self.layer_idx}:seg_{idx}:query_states"] = compute_stas(query_states)
-            logs[f"layer_{self.layer_idx}:seg_{idx}:key_states"] = compute_stas(key_states)
-            logs[f"layer_{self.layer_idx}:seg_{idx}:value_states"] = compute_stas(value_states)
 
             if query_states.ndim == 3:
                 query_states = rearrange(
@@ -576,14 +581,20 @@ class CausalSelfAttention(nn.Module, AttachableStore):
 
             output = self.o_proj(attention_output)
 
-            if dist.get_rank() == 0:
-                logs[f"layer_{self.layer_idx}:seg_{idx}:global_weights"] = compute_stas(global_weights)
-                logs[f"layer_{self.layer_idx}:seg_{idx}:local_weights"] = compute_stas(local_weights)
-                logs[f"layer_{self.layer_idx}:seg_{idx}:local_attn_outputs"] = compute_stas(local_attn_outputs)
-                logs[f"layer_{self.layer_idx}:seg_{idx}:retrieved_memory"] = compute_stas(retrieved_memory)
-                logs[f"layer_{self.layer_idx}:seg_{idx}:output"] = compute_stas(output)
-                logs[f"layer_{self.layer_idx}:seg_{idx}:memory"] = compute_stas(memory)
-                logs[f"layer_{self.layer_idx}:seg_{idx}:normalization"] = compute_stas(normalization)
+            if constants.GLOBAL_STEP is not None and (constants.GLOBAL_STEP - 1) % 50 == 0:
+                if dist.get_rank() == 0:
+                    logs[f"layer_{self.layer_idx}:seg_{idx}:query_states"] = compute_stas(query_states)
+                    logs[f"layer_{self.layer_idx}:seg_{idx}:key_states"] = compute_stas(key_states)
+                    logs[f"layer_{self.layer_idx}:seg_{idx}:value_states"] = compute_stas(value_states)
+
+                    logs[f"layer_{self.layer_idx}:seg_{idx}:global_weights"] = compute_stas(global_weights)
+                    logs[f"layer_{self.layer_idx}:seg_{idx}:local_weights"] = compute_stas(local_weights)
+                    logs[f"layer_{self.layer_idx}:seg_{idx}:local_attn_outputs"] = compute_stas(local_attn_outputs)
+                    logs[f"layer_{self.layer_idx}:seg_{idx}:retrieved_memory"] = compute_stas(retrieved_memory)
+                    logs[f"layer_{self.layer_idx}:seg_{idx}:attention_output"] = compute_stas(attention_output)
+                    logs[f"layer_{self.layer_idx}:seg_{idx}:output"] = compute_stas(output)
+                    logs[f"layer_{self.layer_idx}:seg_{idx}:memory"] = compute_stas(memory)
+                    logs[f"layer_{self.layer_idx}:seg_{idx}:normalization"] = compute_stas(normalization)
 
             # assert output.shape == (segment_length, batch_size, hidden_size)
 
@@ -600,12 +611,12 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         outputs = torch.cat(outputs, dim=1)  # concat along sequence dimension
         assert outputs.shape == hidden_states.shape
 
-        if dist.get_rank() == 0:
-            import wandb
-            from nanotron import constants
+        if constants.GLOBAL_STEP is not None and (constants.GLOBAL_STEP - 1) % 50 == 0:
+            if dist.get_rank() == 0:
+                import wandb
 
-            logs[f"layer_{self.layer_idx}:outputs"] = compute_stas(outputs)
-            wandb.log({**logs, "iteration_step": constants.GLOBAL_STEP})
+                logs[f"layer_{self.layer_idx}:outputs"] = compute_stas(outputs)
+                wandb.log({**logs, "iteration_step": constants.GLOBAL_STEP})
 
         # sequence_masks = torch.cat(sequence_masks, dim=1)
         # assert sequence_masks.shape == sequence_mask.shape
@@ -666,10 +677,6 @@ class CausalSelfAttention(nn.Module, AttachableStore):
 
         sigma_key_states = F.elu(key_states) + 1
 
-        # if TYPE == "linear":
-        #     # memory = torch.matmul(key_states.transpose(-2, -1), value_states)
-        #     new_value_states = value_states
-        # else:
         if prev_memory is None or prev_normalization is None:
             new_value_states = value_states
         else:
@@ -678,11 +685,6 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                 prev_memory,
                 "batch_size n_heads seq_length d_k, batch_size n_heads d_k d_v -> batch_size n_heads seq_length d_v",
             )
-
-            # denominator = einsum(
-            #     key_states, prev_normalization,
-            #     "batch_size n_heads seq_len d_head, batch_size n_heads d_head -> batch_size seq_len"
-            # )
             denominator = einsum(
                 sigma_key_states,
                 prev_normalization,
@@ -695,7 +697,6 @@ class CausalSelfAttention(nn.Module, AttachableStore):
 
         memory = torch.matmul(sigma_key_states.transpose(-2, -1), new_value_states)
 
-        # memory = einsum(key_states, value_states, 'batch_size n_heads k_length d_head, batch_size n_heads v_length d_head -> batch_size n_heads k_length v_length')
         normalization = reduce(
             sigma_key_states, "batch_size n_heads seq_length d_head -> batch_size n_heads d_head", reduction="sum"
         )
