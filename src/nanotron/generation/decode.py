@@ -315,6 +315,16 @@ def decode_text(
                             )
                     else:
                         if isinstance(state.new_input_ids, torch.Tensor):
+                            # if len(state.generation_ids) > 1:
+                            #     batch_generated_ids = torch.cat((state.generation_ids[0], state.generation_ids[1].squeeze().unsqueeze(dim=0)), dim=-1)
+                            # else:
+                            #     batch_generated_ids = torch.cat(state.generation_ids, dim=-1)
+
+                            # if len(state.generation_mask) > 1:
+                            #     batch_generated_mask = torch.cat((state.generation_mask[0], state.generation_mask[1].squeeze().unsqueeze(dim=0)), dim=-1)
+                            # else:
+                            #     batch_generated_mask = torch.cat(state.generation_mask, dim=-1)
+
                             batch_generated_ids = torch.cat(state.generation_ids, dim=-1)
                             batch_generated_mask = torch.cat(state.generation_mask, dim=-1)
                         else:
@@ -324,8 +334,13 @@ def decode_text(
                             input_ids=batch_generated_ids,
                             input_mask=batch_generated_mask,
                         )
+                        # sharded_logits = sharded_logits.transpose(0, 1)
+
+                        assert 1 == 1
 
                     if isinstance(sharded_logits, torch.Tensor) and logits_are_batch_first:
+                        # NOTE: consistent with megatron tp
+                        sharded_logits = sharded_logits.transpose(0, 1)
                         sharded_logits = sharded_logits.transpose(0, 1)
                     # Communicate
                     # TODO @thomasw21: Make a diagram to show how this works
@@ -500,6 +515,16 @@ def decode_text(
                     assert all(isinstance(elt, torch.Tensor) for elt in state.generation_ids)
                     batch_generated_ids = torch.cat(state.generation_ids, dim=-1)
                     batch_generated_mask = torch.cat(state.generation_mask, dim=-1)
+
+                    # if len(state.generation_ids) > 1:
+                    #     batch_generated_ids = torch.cat((state.generation_ids[0], state.generation_ids[1].squeeze().unsqueeze(dim=0)), dim=-1)
+                    # else:
+                    #     batch_generated_ids = torch.cat(state.generation_ids, dim=-1)
+
+                    # if len(state.generation_mask) > 1:
+                    #     batch_generated_mask = torch.cat((state.generation_mask[0], state.generation_mask[1].squeeze().unsqueeze(dim=0)), dim=-1)
+                    # else:
+                    #     batch_generated_mask = torch.cat(state.generation_mask, dim=-1)
                 else:
                     assert all(isinstance(elt, TensorPointer) for elt in state.generation_ids)
                     batch_generated_ids = TensorPointer(group_rank=decoder_input_rank)
@@ -634,6 +659,8 @@ def decode_tokenized(
                             input_mask=state.new_input_mask,
                         )
                         if isinstance(sharded_logits, torch.Tensor):
+                            # NOTE: consistent with megatron tp
+                            sharded_logits = sharded_logits.transpose(0, 1)
                             sharded_logits = sharded_logits.transpose(0, 1)
 
                     # Communicate
@@ -781,6 +808,16 @@ def decode_tokenized(
                     assert all(isinstance(elt, torch.Tensor) for elt in state.generation_ids)
                     batch_generated_ids = torch.cat(state.generation_ids, dim=-1)
                     batch_generated_mask = torch.cat(state.generation_mask, dim=-1)
+
+                    # if len(state.generation_ids) > 1:
+                    #     batch_generated_ids = torch.cat((state.generation_ids[0], state.generation_ids[1].squeeze().unsqueeze(dim=0)), dim=-1)
+                    # else:
+                    #     batch_generated_ids = torch.cat(state.generation_ids, dim=-1)
+
+                    # if len(state.generation_mask) > 1:
+                    #     batch_generated_mask = torch.cat((state.generation_mask[0], state.generation_mask[1].squeeze().unsqueeze(dim=0)), dim=-1)
+                    # else:
+                    #     batch_generated_mask = torch.cat(state.generation_mask, dim=-1)
                 else:
                     assert all(isinstance(elt, TensorPointer) for elt in state.generation_ids)
                     batch_generated_ids = TensorPointer(group_rank=decoder_input_rank)

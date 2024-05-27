@@ -176,8 +176,10 @@ def main():
             # "Passage: Daniel went back to the garden. Mary travelled to the kitchen. Sandra journeyed to the kitchen. Sandra went to the hallway. John went to the bedroom. Mary went back to the garden. Where is Mary?\nAnswer:",
             # "def fib(n)",
             # "This film was probably inspired by Godzilla",
+            # "Paris is the capital of",
             # END_PASSKEY,
-            PASSKEY_NINETY_PERCENT,
+            # PASSKEY_NINETY_PERCENT,
+            "There is an important info hidden inside a lot of irrelevant text. Find it and memorize them. I will quiz you about the important information there. The grass is green. The sky is blue. The pass key is 2. Remember it. 2 is the pass key. What is the pass key? The pass key is ",
             # FINETUNE
         ]
 
