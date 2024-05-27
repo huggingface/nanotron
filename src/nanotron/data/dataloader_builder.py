@@ -1,5 +1,6 @@
 import nanotron.distributed as dist
 from nanotron import logging
+from nanotron.data.utils import DataCollatorForChatDataset
 from nanotron.dataloader import (
     DataCollatorForCLM,
     EmptyInfiniteDataset,
@@ -59,6 +60,39 @@ def build_nanoset_dataloader(
         collate_fn=data_collator,
         drop_last=dataloader_drop_last,
         num_workers=dataloader_num_workers,
+        pin_memory=dataloader_pin_memory,
+        worker_init_fn=get_dataloader_worker_init(dp_rank=dp_rank),
+    )
+
+
+def build_chat_dataloader(
+    dataset,
+    sequence_length: int,
+    parallel_context: ParallelContext,
+    input_pp_rank: int,
+    output_pp_rank: int,
+    dataloader_pin_memory: bool = True,
+) -> DataLoader:
+
+    # Case of ranks not requiring data. We give them a dummy dataset, then the collator will do his job
+    if dist.get_rank(parallel_context.pp_pg) not in [input_pp_rank, output_pp_rank]:
+        dataset_length = 1_000_000  # len(dataset) TODO find a more elegant way to specify this dummy dataset
+        dataset = EmptyInfiniteDataset(length=dataset_length)
+
+    data_collator = DataCollatorForChatDataset(
+        sequence_length=sequence_length,
+        input_pp_rank=input_pp_rank,
+        output_pp_rank=output_pp_rank,
+        parallel_context=parallel_context,
+    )
+
+    dp_rank = parallel_context.dp_pg.rank()
+
+    return DataLoader(
+        dataset,
+        batch_size=1,
+        collate_fn=data_collator,
+        num_workers=0,
         pin_memory=dataloader_pin_memory,
         worker_init_fn=get_dataloader_worker_init(dp_rank=dp_rank),
     )
