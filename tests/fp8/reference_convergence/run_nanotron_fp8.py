@@ -10,7 +10,6 @@ from nanotron.fp8.constants import FP8LM_RECIPE
 from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.loss_scaler import LossScaler
 from nanotron.fp8.optim import Adam as RefAdam
-from nanotron.fp8.optim import FP8Adam
 from nanotron.fp8.utils import _log, convert_logs_to_flat_logs, convert_to_fp8_module
 from torch import nn
 from torch.optim import Adam

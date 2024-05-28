@@ -208,6 +208,8 @@ class LowPrecisionTensor(torch.Tensor):
             assert dtype in [DTypes.FP8E4M3, DTypes.FP8E5M2, DTypes.KFLOAT16]
 
             fp8_meta = cls._get_metadata(tensor, dtype, interval)
+
+        backup_fp8_meta = deepcopy(fp8_meta)
         # else:
         #     assert tensor.dtype in FP8_DTYPES
         #     # fp8_tensor = tensor
@@ -220,7 +222,7 @@ class LowPrecisionTensor(torch.Tensor):
         # TODO(xrsrke): move update inverse scaling to FP8Meta's initialization
         obj = torch.Tensor._make_subclass(cls, fp8_tensor)
         # TODO(xrsrke): use a different name, because FP16Tensor also has fp8_meta
-        obj.fp8_meta = fp8_meta
+        obj.fp8_meta = backup_fp8_meta
         obj.orig_data = tensor
         return obj
 

@@ -47,32 +47,35 @@ model:
   ddp_bucket_cap_mb: 25
   dtype: float8
   init_method:
-    std: 0.025
+    # std: 0.25 # sqrt(1/16)
+    # std: 0.125 # sqrt(1/64)
+    std: 0.04419417382415922 # sqrt(1/512)
   make_vocab_size_divisible_by: 1
   model_config:
     bos_token_id: 1
     eos_token_id: 2
-    hidden_act: silu
-    hidden_size: 16
+    # hidden_act: silu
+    hidden_act: gelu
+    hidden_size: 512
     initializer_range: 0.02
-    intermediate_size: 64
+    intermediate_size: 2048
     is_llama_config: true
     max_position_embeddings: 256
     num_attention_heads: 4
-    num_hidden_layers: 2
+    num_hidden_layers: 1
     num_key_value_heads: 4
     pad_token_id: null
     pretraining_tp: 1
     rms_norm_eps: 1.0e-05
     rope_scaling: null
-    tie_word_embeddings: true
+    tie_word_embeddings: false
     use_cache: true
     vocab_size: 256
 optimizer:
   accumulate_grad_in_fp32: false
-  clip_grad: 1.0
+  # clip_grad: 1.0
   learning_rate_scheduler:
-    learning_rate: 0.001
+    learning_rate: 0.01
     lr_decay_starting_step: null
     lr_decay_steps: 13
     lr_decay_style: linear
@@ -81,9 +84,9 @@ optimizer:
     min_decay_lr: 1.0e-05
   optimizer_factory:
     adam_beta1: 0.9
-    adam_beta2: 0.95
+    adam_beta2: 0.999
     adam_eps: 1.0e-08
-    name: adamW
+    name: adam
     torch_adam_is_fused: true
   weight_decay: 0.1
   zero_stage: 0
@@ -93,8 +96,12 @@ parallelism:
   pp: 1
   pp_engine: 1f1b
   tp: 2
-  tp_linear_async_communication: true
-  tp_mode: REDUCE_SCATTER
+  # tp_linear_async_communication: true
+  # tp_mode: REDUCE_SCATTER
+
+  tp_linear_async_communication: false
+  tp_mode: ALL_REDUCE
+
 profiler: null
 tokenizer:
   tokenizer_max_length: null

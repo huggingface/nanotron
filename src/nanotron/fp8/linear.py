@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import Optional, Tuple, Union, cast
 
-import pydevd
+# import pydevd
 import torch
 import transformer_engine as te  # noqa
 from torch import nn
@@ -58,6 +58,8 @@ class FP8Linear(nn.Linear):
         )
         assert quant_w.dtype in [torch.uint8, torch.int8], f"got {self.weight.data.dtype}"
         self.weight = quant_w
+        # assert self.weight.data.orig_data.abs().max() == quant_w.fp8_meta.amax
+
         assert self.weight.data.dtype in [torch.uint8, torch.int8], f"got {self.weight.data.dtype}"
         self.metadatas = FP8LinearMeta()
         self.accum_qtype = accum_qtype
@@ -71,6 +73,9 @@ class FP8Linear(nn.Linear):
         #     return F.linear(input, self.weight, self.bias)
 
         return F.linear(input, self.weight.data, self.bias, self.accum_qtype, self.metadatas)
+
+    def __repr__(self) -> str:
+        return f"FP8{super().__repr__()}"
 
 
 class _FP8Matmul(torch.autograd.Function):
@@ -143,7 +148,7 @@ class _FP8Matmul(torch.autograd.Function):
         ∂L/∂W = Xᵀ @ ∂L/∂Y
         Reference: https://web.eecs.umich.edu/~justincj/teaching/eecs442/notes/linear-backprop.html
         """
-        pydevd.settrace(suspend=False, trace_only_current_thread=True)
+        # pydevd.settrace(suspend=False, trace_only_current_thread=True)
         fp8_input, fp8_weight = ctx.saved_tensors
         accum_qtype = ctx.accum_qtype
 

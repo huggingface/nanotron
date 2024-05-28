@@ -40,6 +40,8 @@ QTYPE_TO_DTYPE = {
 # wgrad.window_size = 1, ograd.window_size = 16 (this one is the input of the backward pass),
 # input_grad.window_size = 1 (this one is the output of the backward pass)
 
+# TODO(xrsrke): differentiate the precision that you initializes model weight
+# and the accumulation precision in FP8 recipe
 FP8LM_RECIPE = FP8TrainingRecipe(
     # linear=FP8LinearRecipe(
     #     accum_dtype=DTypes.KFLOAT16,
@@ -74,7 +76,8 @@ FP8LM_RECIPE = FP8TrainingRecipe(
         input_grad=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=1),
         weight_grad=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=1),
         output_grad=FP8TensorRecipe(dtype=DTypes.FP8E5M2, margin=0, interval=1),
-        split_accumulator=FP8SplitAccumulator(output=False, input_grad=True, weight_grad=True),
+        # split_accumulator=FP8SplitAccumulator(output=False, input_grad=True, weight_grad=True), # NOTE: msamp use this
+        split_accumulator=FP8SplitAccumulator(output=True, input_grad=True, weight_grad=True),
     ),
     optim=FP8OptimRecipe(
         accum_dtype=DTypes.KFLOAT32,

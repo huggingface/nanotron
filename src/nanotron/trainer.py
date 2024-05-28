@@ -81,6 +81,7 @@ from nanotron.sanity_checks import (
     before_optim_step_sanity_checks,
     before_tbi_sanity_checks,
 )
+from nanotron.scaling.monitor import convert_logs_to_flat_logs, monitor_model
 from nanotron.scaling.parametrization import ParametrizationMethod
 from nanotron.serialize import (
     load_lr_scheduler,
@@ -92,8 +93,6 @@ from nanotron.serialize import (
 )
 from nanotron.serialize.metadata import DataStageMetadata, TrainingMetadata
 from nanotron.serialize.optimizer import load_optimizer
-from nanotron.scaling.monitor import monitor_model, convert_logs_to_flat_logs
-
 
 logger = logging.get_logger(__name__)
 
@@ -175,8 +174,6 @@ class DistributedTrainer:
             self.model.module if isinstance(self.model, DistributedDataParallel) else self.model
         )
 
-
-
         # NOTE: sanity check if we quantize the model to FP8
         def get_inheritance_classes(instance):
             classes = [instance.__class__]
@@ -238,7 +235,7 @@ class DistributedTrainer:
         ########################################
         ## Setting up training states and data stages
         ########################################
-        
+
         # Define iteration start state
         if self.init_checkpoint_path is not None:
             checkpoint_metadata = load_meta(
@@ -261,7 +258,7 @@ class DistributedTrainer:
             self.metadata: TrainingMetadata = TrainingMetadata(
                 consumed_train_samples=0, last_train_step=0, last_stage_idx=0, data_stages=data_stages
             )
-        
+
         self.micro_batch_size = self.config.tokens.micro_batch_size
         self.n_micro_batches_per_batch = self.config.tokens.batch_accumulation_per_replica
         self.global_batch_size = (
@@ -272,7 +269,7 @@ class DistributedTrainer:
         self.limit_val_batches = self.config.tokens.limit_val_batches
         # NOTE: the dataloader currently in use for the current training stage
         self.current_dataloader: Optional[DataLoader] = None
-        
+
         ########################################
         ## Setting up logging and debugging tools
         ########################################
@@ -282,10 +279,10 @@ class DistributedTrainer:
             ep_rank=0, pp_rank=self.unwrapped_model.output_pp_rank, dp_rank=0, tp_rank=0
         ).flatten()
         self.loggerwriter = self.setup_log_writers()
-        
+
         # Log where each module is instantiated
         self.unwrapped_model.log_modules(level=logging.DEBUG, group=self.parallel_context.world_pg, rank=0)
-        
+
         if self.config.logging.monitor_model_states is True:
             log_rank(
                 f"You have activated monitor model states. This could cause a slowdown in training. Only use it for debugging.",  # noqa
@@ -315,7 +312,7 @@ class DistributedTrainer:
         )
 
         datetime.datetime.now().strftime("%d/%m/%Y_%H:%M:%S")
-        # if dist.get_rank(self.parallel_context.world_pg) == self.logger_ranks[0] and wandb is not None:
+        # if dist.get_rank(self.parallel_context.world_pg) == 0 and wandb is not None:
         #     wandb.init(
         #         project=self.config.general.project,
         #         name=f"{current_time}_{self.config.general.run}",
@@ -464,10 +461,13 @@ class DistributedTrainer:
 
                 self.iteration_start_time = time.time()
                 self._update_dataloader_based_on_training_stages(dataloader_or_dls)
-                
+
                 is_ready_to_log = (self.iteration_step - 1) % self.config.logging.iteration_step_info_interval == 0
                 if is_ready_to_log is True and self.config.logging.monitor_model_states is True:
                     nn_logs, state_handles = monitor_model(self.unwrapped_model, self.parallel_context)
+                    from nanotron import constants
+
+                    constants.NN_STATES = nn_logs
 
                 # Training step
                 outputs, loss_avg = self.training_step(dataloader=self.current_dataloader)
@@ -482,15 +482,22 @@ class DistributedTrainer:
 
                 if is_ready_to_log is True:
                     self.train_step_logs(outputs=outputs, loss_avg=loss_avg)
-                    
-                    if self.config.logging.monitor_model_states is True and \
-                        dist.get_rank(self.parallel_context.world_pg) == self.logger_ranks[0] and wandb is not None:
+
+                    if (
+                        self.config.logging.monitor_model_states is True
+                        and dist.get_rank(self.parallel_context.world_pg) == 0
+                        and wandb is not None
+                    ):
                         wandb.log({**convert_logs_to_flat_logs(nn_logs), "iteration_step": self.iteration_step})
+
+                        from nanotron import constants
+
+                        constants.NN_STATES = None
 
                 # Checkpoint
                 if self.iteration_step % self.config.checkpoints.checkpoint_interval == 0:
                     self.save_checkpoint()
-                
+
                 for handle in state_handles:
                     handle.remove()
 
@@ -663,7 +670,7 @@ class DistributedTrainer:
                 )
 
             # NOTE: only one rank writes to wandb
-            if dist.get_rank(self.parallel_context.world_pg) == self.logger_ranks[0] and wandb is not None:
+            if dist.get_rank(self.parallel_context.world_pg) == 0 and wandb is not None:
                 wandb.log(
                     {
                         **{log_item.tag: log_item.scalar_value for log_item in log_entries},

@@ -443,7 +443,10 @@ def column_linear(
     else:
         raise ValueError(f"Got unexpected mode: {tp_mode}.")
 
-    return F.linear(input, weight, bias)
+    if isinstance(weight.data, FP8Tensor):
+        return fp8_functional.linear(input, weight.data, bias, accum_qtype=DTypes.KFLOAT16, metadatas=metadatas)
+    else:
+        return F.linear(input, weight, bias)
 
 
 class _RowLinearAsyncCommunication(torch.autograd.Function):
@@ -554,11 +557,17 @@ def row_linear(
     group: dist.ProcessGroup,
     tp_mode: TensorParallelLinearMode,
     async_communication: bool,
+    metadatas: Optional[FP8LinearMeta] = None,
 ):
     if async_communication:
         return _RowLinearAsyncCommunication.apply(input, weight, bias, group, tp_mode)
 
-    out = F.linear(input, weight, bias)
+    if isinstance(weight.data, FP8Tensor):
+        out = fp8_functional.linear(input, weight.data, bias, accum_qtype=DTypes.KFLOAT16, metadatas=metadatas)
+    else:
+        out = F.linear(input, weight, bias)
+
+    # out = F.linear(input, weight, bias)
 
     if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
         out = differentiable_all_reduce_sum(out, group=group)
