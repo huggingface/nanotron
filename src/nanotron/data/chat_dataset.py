@@ -77,9 +77,7 @@ class ChatDataset(IterableDataset):
             self.create_position_ids = build_position_ids_dummy
 
         # Todo delete (debug), just change the dict keys
-        self.debug_tokenizer = AutoTokenizer.from_pretrained(
-            tokenizer_name_or_path, token="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"
-        )  # TODO delete debug
+        self.debug_tokenizer = AutoTokenizer.from_pretrained(tokenizer_name_or_path)  # TODO delete debug
         self.debug_tokenizer.chat_template = "{% set loop_messages = messages %}{% for message in loop_messages %}{% set content = '<|start_header_id|>' + message['from'] + '<|end_header_id|>\n\n'+ message['value'] | trim + '<|eot_id|>' %}{% if loop.index0 == 0 %}{% set content = bos_token + content %}{% endif %}{{ content }}{% endfor %}{% if add_generation_prompt %}{{ '<|start_header_id|>assistant<|end_header_id|>' }}{% endif %}"
 
     def __iter__(self):
