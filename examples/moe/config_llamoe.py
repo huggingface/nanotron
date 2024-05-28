@@ -4,9 +4,11 @@ from dataclasses import dataclass
 from typing import Optional
 
 from nanotron.config import (
+    AdamWOptimizerArgs,
     CheckpointsArgs,
     Config,
     DataArgs,
+    DatasetStageArgs,
     GeneralArgs,
     LoggingArgs,
     LRSchedulerArgs,
@@ -98,11 +100,13 @@ optimizer = OptimizerArgs(
     weight_decay=0.01,
     clip_grad=1.0,
     accumulate_grad_in_fp32=False,
-    adam_eps=1e-08,
-    adam_beta1=0.9,
-    adam_beta2=0.95,
-    torch_adam_is_fused=True,
     learning_rate_scheduler=learning_rate,
+    optimizer_factory=AdamWOptimizerArgs(
+        adam_eps=1e-08,
+        adam_beta1=0.9,
+        adam_beta2=0.95,
+        torch_adam_is_fused=True,
+    ),
 )
 
 parallelism = ParallelismArgs(
@@ -151,7 +155,10 @@ config = Config(
     optimizer=optimizer,
     logging=LoggingArgs(),
     tokens=tokens,
-    data=data,
+    data_stages=[
+        DatasetStageArgs(name="Stable Training Stage", start_training_step=1, data=data),
+        DatasetStageArgs(name="Annealing Phase", start_training_step=10, data=data),
+    ],
 )
 
 if __name__ == "__main__":
