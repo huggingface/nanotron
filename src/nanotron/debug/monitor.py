@@ -22,15 +22,13 @@ def track_weight_and_grad_stats(name: str, module: nn.Module, parallel_context: 
 
             stats[key] = {}
             stats[key] = {
-                # "mean": tensor.mean().item(),
+                "mean": tensor.mean().item(),
                 # "std": tensor.std().item(),
                 # "var": tensor.var().item(),
                 # "norm": tensor.norm().item(),
                 # "min": tensor.min().item(),
                 # "max": tensor.max().item(),
-                "amax": tensor.abs()
-                .max()
-                .item(),
+                "amax": tensor.abs().max().item(),
             }
 
             # NOTE: now all reduce mean this across tp ranks

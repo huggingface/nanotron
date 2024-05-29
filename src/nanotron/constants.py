@@ -16,3 +16,5 @@ METADATA_CKP_PATH = "{}/checkpoint_metadata.json"
 NEEDLE = None
 
 GLOBAL_STEP: Optional[int] = None
+LOG_STATE_INTERVAL = 500
+CONFIG = None

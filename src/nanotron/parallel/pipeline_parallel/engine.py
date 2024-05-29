@@ -5,8 +5,8 @@ import torch
 from torch import nn as torch_nn
 from torch.nn.parallel import DistributedDataParallel
 
+from nanotron import constants, logging
 from nanotron import distributed as dist
-from nanotron import logging
 from nanotron.distributed import ProcessGroup
 from nanotron.logging import log_rank
 from nanotron.optim.gradient_accumulator import GradientAccumulator
@@ -284,19 +284,36 @@ class OneForwardOneBackwardPipelineEngine(PipelineEngine):
 
             for micro_batch in batch:
                 if dist.get_rank() == 0:
-                    if self.idx == 1 or self.idx % 50 == 0:
+                    # if self.idx == 1 or self.idx % 50 == 0:
+                    if (
+                        constants.GLOBAL_STEP is not None
+                        and (constants.GLOBAL_STEP - 1) % constants.LOG_STATE_INTERVAL == 0
+                    ):
                         decoded_texts = self.tokenizer.batch_decode(micro_batch["input_ids"])
+                        from typing import cast
+
+                        from nanotron.config import Config
+
+                        constants.CONFIG = cast(Config, constants.CONFIG)
+                        run_name = constants.CONFIG.general.run
+                        import random
+
+                        sample_index = random.randint(0, len(decoded_texts) - 1)
 
                         with open(
-                            "/fsx/phuc/projects/nanotron/examples/infinite-context-length/configs/exp19/training_inputs.txt",
+                            f"/fsx/phuc/projects/nanotron/examples/infinite-context-length/training_logs/{run_name}_data_logs.txt",
                             "a",
                         ) as file:
                             # Write the self.idx number and the decoded text to the file
-                            file.write(f"idx: {self.idx}\n")
+                            file.write(f"iteration_step: {constants.GLOBAL_STEP}\n")
 
-                            for i, text in enumerate(decoded_texts):
-                                file.write(f"####### text_i = {i}\n")
-                                file.write(text + "\n\n\n")
+                            # for i, text in enumerate(decoded_texts):
+                            text = decoded_texts[sample_index]
+                            file.write(
+                                f"####### sample_index = {sample_index}, num_tokens={len(micro_batch['input_ids'][sample_index])}\n"
+                            )
+                            file.write(f"raw_tokens: {micro_batch['input_ids'][sample_index].tolist()}" + "\n\n\n")
+                            file.write(f"decoded_text: {text}" + "\n\n\n")
 
                 context = self._get_fwd_context(model=model)
                 output = self.forward(context=context, state=state, micro_batch=micro_batch, model=model)

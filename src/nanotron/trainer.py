@@ -23,8 +23,8 @@ import torch
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
 
+from nanotron import constants, logging
 from nanotron import distributed as dist
-from nanotron import logging
 from nanotron.config import (
     Config,
     DatasetStageArgs,
@@ -131,6 +131,7 @@ class DistributedTrainer:
         self.config = get_config_from_file(
             config_or_config_file, config_class=config_class, model_config_class=model_config_class
         )
+        constants.CONFIG = self.config
         self.model_config = self.config.model.model_config
         if model_class is not None:
             CONFIG_TO_MODEL_CLASS[self.model_config.__class__.__name__] = model_class
@@ -194,7 +195,11 @@ class DistributedTrainer:
                 #     parallel_context=self.parallel_context, root_folder=self.init_checkpoint_path
                 # )
 
-                prev_config = get_config_from_file((self.init_checkpoint_path / "config.yaml").as_posix())
+                prev_config = get_config_from_file(
+                    (self.init_checkpoint_path / "config.yaml").as_posix(),
+                    config_class=config_class,
+                    model_config_class=model_config_class,
+                )
                 if (
                     prev_config.optimizer.accumulate_grad_in_fp32 is False
                     and self.config.optimizer.accumulate_grad_in_fp32 is True
@@ -426,14 +431,13 @@ class DistributedTrainer:
         torch.cuda.empty_cache()
         with prof:
             for self.iteration_step in range(self.start_iteration_step + 1, self.config.tokens.train_steps + 1):
-                from nanotron import constants
-
                 constants.GLOBAL_STEP = self.iteration_step
 
                 if isinstance(prof, torch.profiler.profile):
                     prof.step()
 
-                nn_logs, nn_handles = monitor_nanotron_model(self.model, self.parallel_context)
+                if (self.iteration_step - 1) % constants.LOG_STATE_INTERVAL == 0:
+                    nn_logs, nn_handles = monitor_nanotron_model(self.model, self.parallel_context)
 
                 self.iteration_start_time = time.time()
                 self._update_dataloader_based_on_training_stages(dataloader_or_dls)
@@ -447,13 +451,14 @@ class DistributedTrainer:
                 if (self.iteration_step - 1) % self.config.logging.iteration_step_info_interval == 0:
                     self.train_step_logs(outputs=outputs, loss_avg=loss_avg)
 
-                if dist.get_rank(self.parallel_context.world_pg) == self.logger_ranks[0] and wandb is not None:
+                if (self.iteration_step - 1) % constants.LOG_STATE_INTERVAL == 0:
                     from nanotron.debug.monitor import convert_logs_to_flat_logs
 
-                    wandb.log({**convert_logs_to_flat_logs(nn_logs), "iteration_step": self.iteration_step})
+                    if dist.get_rank(self.parallel_context.world_pg) == self.logger_ranks[0] and wandb is not None:
+                        wandb.log({**convert_logs_to_flat_logs(nn_logs), "iteration_step": self.iteration_step})
 
-                for handle in nn_handles:
-                    handle.remove()
+                    for handle in nn_handles:
+                        handle.remove()
 
                 # Checkpoint
                 if self.iteration_step % self.config.checkpoints.checkpoint_interval == 0:
@@ -471,10 +476,13 @@ class DistributedTrainer:
         if self.iteration_step < 5:
             log_memory(logger=logger)
 
+        train_batches = (next(dataloader) for _ in range(self.n_micro_batches_per_batch))
+        assert 1 == 1
+
         outputs = self.pipeline_engine.train_batch_iter(
             model=self.model,
             pg=self.parallel_context.pp_pg,
-            batch=(next(dataloader) for _ in range(self.n_micro_batches_per_batch)),
+            batch=train_batches,
             nb_microbatches=self.n_micro_batches_per_batch,
             grad_accumulator=self.grad_accumulator,
         )
@@ -677,6 +685,12 @@ class DistributedTrainer:
                     rank=0,
                 )
             else:
+                log_rank(
+                    f"max_position_embeddings is {self.model_config.max_position_embeddings} and sequence_length is {self.config.tokens.sequence_length}. But i don't set it here",
+                    logger=logger,
+                    level=logging.INFO,
+                    rank=0,
+                )
                 # log_rank(
                 #     f"Setting max_position_embeddings to {self.config.tokens.sequence_length}. Previous value was {self.model_config.max_position_embeddings}.",
                 #     logger=logger,
