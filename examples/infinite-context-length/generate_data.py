@@ -10,6 +10,20 @@ from transformers import AutoTokenizer
 PROMPT = "{} {}. \n\n{}"
 
 
+def get_keys_in_train_set():
+    from datasets import load_dataset
+
+    dataset = load_dataset("nanotron/needle_32k_finetuning_dataset")
+
+    unique_answers = set()
+    for split in dataset.keys():
+        for example in dataset[split]:
+            answer = example["answer"]
+            unique_answers.add(answer)
+
+    return unique_answers
+
+
 def token_length(tokenizer, text):
     # Exclude EOS token
     return len(tokenizer.encode(text))
@@ -143,6 +157,8 @@ if __name__ == "__main__":
     start_range = 1000 * (depth_percent + 1) * id
     end_range = start_range + start_range
 
+    keys_in_train_set = get_keys_in_train_set()
+
     print(
         f"Generating prompts for context length: {context_length} and depth percent: {depth_percent} and id: {id} \n"
     )
@@ -150,7 +166,7 @@ if __name__ == "__main__":
 
     def generate_dataset():
         # num_prompts = 1700
-        num_prompts = 100
+        num_prompts = 5
         # soft_prompt = "There is an important info hidden inside a lot of irrelevant text. Find it and memorize them. I will quiz you about the important information there."
         soft_prompt = "There is a pass key hidden inside a lot of irrelevant text. Find it and memorize them. I will quiz you about what is the pass key later on."
         # context_lengths = [
@@ -170,12 +186,12 @@ if __name__ == "__main__":
 
             while True:
                 pass_key = random.randint(start_range, end_range)
-                if pass_key not in generated_pass_keys:
+                if pass_key not in keys_in_train_set and pass_key not in generated_pass_keys:
                     generated_pass_keys.add(pass_key)
                     break
 
             needle_prompt = f". The pass key is {pass_key}. Remember it. {pass_key} is the pass key. "
-            retrieval_question = f"What is the pass key? The pass key is {pass_key}."
+            retrieval_question = "What is the pass key? The pass key is "
 
             prompt = generate_needle_in_haystack_test(
                 pass_key,
@@ -207,6 +223,6 @@ if __name__ == "__main__":
 
     # Save the dataset to disk
     dataset.save_to_disk(
-        f"/fsx/phuc/projects/nanotron/examples/infinite-context-length/needle_finetune_datasets/needle_finetuning_ctx_len_32768_and_depth_{depth_percent}_and_id_{id}"
+        f"/fsx/phuc/projects/nanotron/examples/infinite-context-length/needle_eval_datasets/needle_eval_ctx_len_32768_and_depth_{depth_percent}_and_id_{id}"
     )
     # dataset.push_to_hub("nanotron/needle_in_a_hay_stack_finetuning_dataset")
