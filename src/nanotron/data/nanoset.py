@@ -27,7 +27,7 @@ class Nanoset(torch.utils.data.Dataset):
         dataset_paths: List[str],
         dataset_weights: Union[List[float], None],
         sequence_length: int,
-        token_dtype: Union[np.uint16, np.int32, np.int64],
+        token_dtype: Union[np.uint16, np.int32],
         train_split_num_samples: int,
         random_seed: int = 1234,
     ) -> None:
@@ -97,9 +97,7 @@ class Nanoset(torch.utils.data.Dataset):
         )
 
         # Return tokens as np.int32 as Torch can't handle uint16
-        if self.token_dtype == np.uint16:
-            return {"input_ids": input_ids_tokens.astype(np.int32)}
-        return {"input_ids": input_ids_tokens.astype(self.token_dtype)}
+        return {"input_ids": input_ids_tokens.astype(np.int32)}
 
     def build_nanoset_index(self) -> np.ndarray:
         """

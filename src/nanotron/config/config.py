@@ -382,9 +382,10 @@ class Config:
                 for i in range(len(self.data_stages) - 1)
             ), "The stages are not sorted by start_training_step in increasing order"
 
-        # # if lighteval, we need tokenizer to be defined
-        # if self.checkpoints.lighteval is not None:
-        #     assert self.tokenizer.tokenizer_name_or_path is not None
+        # if self.lighteval is not None:
+        #     # assert self.tokenizer.tokenizer_name_or_path is not None
+        #     if self.lighteval.checkpoints_path is None:
+        #         self.lighteval.checkpoints_path = self.checkpoints.checkpoints_path
 
         if isinstance(self.kill_switch_path, str):
             self.kill_switch_path = Path(self.kill_switch_path)
