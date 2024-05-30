@@ -143,7 +143,7 @@ def get_dataloader_from_data_stage(
     elif isinstance(data.dataset, NanosetDatasetsArgs):
         # Get tokenizer cardinality
         tokenizer = AutoTokenizer.from_pretrained(trainer.config.tokenizer.tokenizer_name_or_path)
-        if len(tokenizer) > np.iinfo(np.uint32).max + 1:
+        if len(tokenizer) > np.iinfo(np.int32).max + 1:
             token_dtype = np.int64
         elif len(tokenizer) > np.iinfo(np.uint16).max + 1:
             token_dtype = np.int32
