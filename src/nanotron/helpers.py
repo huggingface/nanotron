@@ -340,18 +340,37 @@ def init_optimizer_and_grad_accumulator(
 
         elif optimizer_args.optimizer_factory.name == "adam":
 
+            # def optimizer(param_groups):
+            #     return torch.optim.Adam(
+            #         param_groups,
+            #         lr=optimizer_args.learning_rate_scheduler.learning_rate,
+            #         weight_decay=optimizer_args.weight_decay,
+            #         eps=optimizer_args.optimizer_factory.adam_eps,
+            #         betas=(optimizer_args.optimizer_factory.adam_beta1, optimizer_args.optimizer_factory.adam_beta2),
+            #         # fused=optimizer_args.optimizer_factory.torch_adam_is_fused,
+            #         # NOTE: fused (bool, optional) – whether the fused implementation (CUDA only) is used.
+            #         # Currently, torch.float64, torch.float32, torch.float16, and torch.bfloat16
+            #         # in FP8 training, model parameters are INT8
+            #         fused=False,
+            #     )
+
             def optimizer(param_groups):
-                return torch.optim.Adam(
+                from nanotron.fp8.optim import FP8Adam
+
+                log_rank(
+                    "Using FP8 Adam optimizer",
+                    logger=logger,
+                    level=logging.INFO,
+                    group=parallel_context.world_pg,
+                    rank=0,
+                )
+
+                return FP8Adam(
                     param_groups,
                     lr=optimizer_args.learning_rate_scheduler.learning_rate,
                     weight_decay=optimizer_args.weight_decay,
                     eps=optimizer_args.optimizer_factory.adam_eps,
                     betas=(optimizer_args.optimizer_factory.adam_beta1, optimizer_args.optimizer_factory.adam_beta2),
-                    # fused=optimizer_args.optimizer_factory.torch_adam_is_fused,
-                    # NOTE: fused (bool, optional) – whether the fused implementation (CUDA only) is used.
-                    # Currently, torch.float64, torch.float32, torch.float16, and torch.bfloat16
-                    # in FP8 training, model parameters are INT8
-                    fused=False,
                 )
 
         elif optimizer_args.optimizer_factory.name == "sgd":

@@ -553,10 +553,15 @@ class DistributedTrainer:
         # Clip gradients
         if self.config.optimizer.clip_grad is not None:
             # Unwrap DDP
+
+            # NOTE: in FP8, a tensor's requires_grad is set to False, because
+            # we don't want pytorch run autograd using its non-FP8 kernels.
+            from nanotron.fp8.tensor import FP8Tensor
+
             named_parameters = [
                 (name, param)
                 for name, param in self.unwrapped_model.get_named_params_with_correct_tied()
-                if param.requires_grad
+                if (param.data.__class__ == torch.Tensor and param.requires_grad) or param.data.__class__ == FP8Tensor
             ]
             self.grad_norm_unclipped = clip_grad_norm(
                 mp_pg=self.parallel_context.mp_pg,

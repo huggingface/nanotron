@@ -16,3 +16,5 @@ MODEL_CONFIG_FILE_NAME = "model_config.json"
 IS_FP8: bool = True
 
 NN_STATES = None
+
+TRACKING_FP8_PARAM = {}

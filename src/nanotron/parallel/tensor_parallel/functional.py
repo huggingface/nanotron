@@ -449,6 +449,11 @@ def column_linear(
         if bias is not None:
             bias = bias.data if isinstance(bias, NanotronParameter) else bias
 
+        from nanotron import constants
+
+        if name not in constants.TRACKING_FP8_PARAM:
+            constants.TRACKING_FP8_PARAM[name] = weight
+
         return fp8_functional.linear(
             input, weight.data, bias, accum_qtype=DTypes.KFLOAT16, metadatas=metadatas, name=name
         )

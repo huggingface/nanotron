@@ -336,6 +336,9 @@ class _FP8Matmul(torch.autograd.Function):
         #     assert 1 == 1
 
         fp8_weight.grad = fp8_weight_grad
+        # TODO(xrsrke): currently some after setting .grad, can't retrieve it
+        # so use ._temp_grad, remove this later on
+        fp8_weight._temp_grad = fp8_weight_grad
 
         # try:
         #     # NOTE: sanity check

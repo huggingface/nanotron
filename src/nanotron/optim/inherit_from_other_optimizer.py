@@ -41,7 +41,8 @@ class InheritFromOtherOptimizer(BaseOptimizer):
         return self.optimizer.load_state_dict(state_dict)
 
     def step(self, closure: Optional[Callable[[], float]] = None) -> Optional[float]:
-        return self.optimizer.step(closure=closure)
+        # return self.optimizer.step(closure=closure)
+        return self.optimizer.step()
 
     def get_base_optimizer(self):
         if isinstance(self.optimizer, torch.optim.Optimizer):

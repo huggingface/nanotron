@@ -296,7 +296,7 @@ def init_on_device_and_dtype(
             # NOTE: nanotron automatically sets the device and dtype of the tensor
             # but for FP8 training, we initializes with float16 first
             kwargs["device"] = device
-            kwargs["dtype"] = torch.float16 if dtype == torch.int8 else dtype
+            kwargs["dtype"] = torch.float32 if dtype == torch.int8 else dtype
             return fn(*args, **kwargs)
 
         return wrapper

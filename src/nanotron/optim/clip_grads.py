@@ -31,6 +31,8 @@ def clip_grad_norm(
         gradient of all tied weights.
     """
     named_parameters = list(named_parameters)
+    assert len(named_parameters) > 0, "There is no parameters to clip. Something has gone wrong."
+
     world_rank = dist.get_rank()
 
     # assert that all params require grad

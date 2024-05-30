@@ -15,6 +15,7 @@ from nanotron.fp8.tensor import (
     convert_tensor_from_fp16,
 )
 from nanotron.fp8.utils import compute_stas, is_overflow_underflow_nan
+from nanotron.parallel.parameters import NanotronParameter
 
 
 class Adam(Optimizer):
@@ -232,8 +233,12 @@ class FP8Adam(Optimizer):
                 # raw_data = p.data if p.ndim == 1 else p.orig_data
                 # TODO(xrsrke): remove orig_data after FP8 working
                 # raw_data = p.orig_data
-                raw_data = p.orig_data if hasattr(p, "orig_data") else p.data
-                assert raw_data.dtype == torch.float32
+
+                if isinstance(p, NanotronParameter):
+                    raw_data = p.data.orig_data if hasattr(p.data, "orig_data") else p.data
+                else:
+                    raw_data = p.orig_data if hasattr(p, "orig_data") else p.data
+                assert raw_data.dtype in [torch.float32]
 
                 # TODO(xrsrke): retrieve the dtype for master_weights from the recipe
                 fp16_p = FP16Tensor(raw_data, dtype=DTypes.KFLOAT16)
@@ -294,14 +299,28 @@ class FP8Adam(Optimizer):
     # @snoop
     def step(self):
         # NOTE: sanity check the entire params has at least one grad
-        assert any(p.grad is not None for group in self.param_groups for p in group["params"])
+        # assert any(p.grad is not None for group in self.param_groups for p in group["params"])
         loggings = {}
+
+        # TODO(xrsrke): remove this after debugging
+        num_param_has_grads = 0
+        for g in self.param_groups:
+            for p in g["params"]:
+                if p.data.__class__ == torch.Tensor:
+                    if p.grad is not None:
+                        num_param_has_grads += 1
+                elif p.data.__class__ == FP8Tensor:
+                    if p.data._temp_grad is not None:
+                        num_param_has_grads += 1
+
+        assert num_param_has_grads > 0
 
         self._is_overflow = False
 
         for group in self.param_groups:
             for p in group["params"]:
-                if p.grad is None:
+                # TODO(xrsrke): support skip gradient update for FP8Tensor
+                if p.data.__class__ == torch.Tensor and p.grad is None:
                     continue
 
                 loggings[p] = {}
@@ -310,13 +329,21 @@ class FP8Adam(Optimizer):
                 if len(state) == 0:
                     self._init_optim_states(state, p)
 
-                grad = p.grad
+                grad = p.data._temp_grad if p.data.__class__ == FP8Tensor else p.grad
                 # loggings[p]["lp_grad"] = compute_stas(grad)
 
                 # NOTE: sanity check
-                assert (isinstance(p, FP8Parameter) and p.dtype in FP8_DTYPES) or (
-                    isinstance(p, torch.Tensor) and p.dtype == torch.float16
-                ), f"type(p)={type(p)}, p.dtype={p.dtype}"
+
+                # param_data = p.data if p.__class__ == NanotronParameter else p
+
+                if p.__class__ == NanotronParameter:
+                    assert (isinstance(p.data, FP8Tensor) and p.data.dtype in FP8_DTYPES) or (
+                        isinstance(p, torch.Tensor) and p.dtype == torch.float16
+                    ), f"type(p)={type(p)}, p.dtype={p.dtype}"
+                else:
+                    assert (isinstance(p, FP8Parameter) and p.dtype in FP8_DTYPES) or (
+                        isinstance(p, torch.Tensor) and p.dtype == torch.float16
+                    ), f"type(p)={type(p)}, p.dtype={p.dtype}"
 
                 assert (isinstance(grad, FP8Tensor) and grad.dtype in FP8_DTYPES) or (
                     isinstance(grad, torch.Tensor) and grad.dtype == torch.float16
@@ -435,9 +462,14 @@ class FP8Adam(Optimizer):
                 # if p.ndim != 1:
                 #     print(f"[FP8Adam] denom: {denom[:2, :2]} \n")
 
-                step_size = group["lr"] / bias_correction1
+                if p.__class__ == NanotronParameter:
+                    lr = group["initial_lr"]
+                else:
+                    lr = group["lr"]
 
-                loggings[p]["group:lr"] = {"value": group["lr"]}
+                step_size = lr / bias_correction1
+
+                loggings[p]["group:lr"] = {"value": lr}
                 loggings[p]["group:eps"] = {"value": group["eps"]}
                 loggings[p]["step_size"] = {"value": step_size}
 
@@ -491,7 +523,15 @@ class FP8Adam(Optimizer):
     def zero_grad(self):
         for group in self.param_groups:
             for p in group["params"]:
-                if p.grad is None:
+                if (p.data.__class__ == FP8Tensor and p.data._temp_grad is None) or (
+                    p.data.__class__ == torch.Tensor and p.grad is None
+                ):
                     continue
 
-                p.grad.zero_()
+                # if p.grad is None:
+                #     continue
+
+                if p.data.__class__ == FP8Tensor:
+                    p.data._temp_grad.zero_()
+                else:
+                    p.grad.zero_()
