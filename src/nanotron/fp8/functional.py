@@ -74,6 +74,7 @@ def linear(
     bias: Optional[torch.Tensor] = None,
     accum_qtype: DTypes = None,
     metadatas: FP8LinearMeta = None,
+    name: Optional[str] = None,
 ):
     assert accum_qtype is not None, "accum_qtype must be specified"
     assert metadatas is not None, "metadatas must be specified"
@@ -101,7 +102,7 @@ def linear(
     # so that we can compute the gradients using the fp8 kernels by ourselves
     phony = torch.empty(0, device=input.device, requires_grad=True)
     output = torch.zeros(input.shape[0], weight.shape[0], device="cuda", dtype=QTYPE_TO_DTYPE[accum_qtype])
-    output, _ = _FP8Matmul.apply(input, weight, output, phony, metadatas, accum_qtype)
+    output, _ = _FP8Matmul.apply(input, weight, output, phony, metadatas, accum_qtype, name)
 
     # TODO(xrsrke): add support for adding bias in fp8
     # TODO(xrsrke): support return an fp8 tensor as output

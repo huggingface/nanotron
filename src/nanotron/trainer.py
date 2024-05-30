@@ -60,7 +60,6 @@ from nanotron.models.llama import LlamaForTraining, RotaryEmbedding
 from nanotron.models.starcoder2 import Starcoder2ForTraining
 from nanotron.optim.clip_grads import clip_grad_norm
 from nanotron.parallel import ParallelContext
-from nanotron.parallel.data_parallel.utils import sync_gradients_across_dp
 from nanotron.parallel.parameters import NanotronParameter, sanity_check
 from nanotron.parallel.pipeline_parallel.engine import (
     PipelineEngine,
@@ -71,7 +70,6 @@ from nanotron.parallel.tensor_parallel.enum import TensorParallelLinearMode
 from nanotron.parallel.tensor_parallel.nn import TensorParallelRowLinear
 from nanotron.parallel.tied_parameters import (
     create_pg_for_tied_weights,
-    sync_tied_weights_gradients,
     tie_parameters,
 )
 from nanotron.random import set_random_seed
@@ -81,7 +79,6 @@ from nanotron.sanity_checks import (
     before_optim_step_sanity_checks,
     before_tbi_sanity_checks,
 )
-from nanotron.scaling.monitor import convert_logs_to_flat_logs, monitor_model
 from nanotron.scaling.parametrization import ParametrizationMethod
 from nanotron.serialize import (
     load_lr_scheduler,
@@ -311,13 +308,13 @@ class DistributedTrainer:
             rank=0,
         )
 
-        datetime.datetime.now().strftime("%d/%m/%Y_%H:%M:%S")
-        # if dist.get_rank(self.parallel_context.world_pg) == 0 and wandb is not None:
-        #     wandb.init(
-        #         project=self.config.general.project,
-        #         name=f"{current_time}_{self.config.general.run}",
-        #         config={"nanotron_config": self.config.as_dict()},
-        #     )
+        current_time = datetime.datetime.now().strftime("%d/%m/%Y_%H:%M:%S")
+        if dist.get_rank(self.parallel_context.world_pg) == 0 and wandb is not None:
+            wandb.init(
+                project=self.config.general.project,
+                name=f"{current_time}_{self.config.general.run}",
+                config={"nanotron_config": self.config.as_dict()},
+            )
 
     def post_train_step(self):
         pass
@@ -464,10 +461,11 @@ class DistributedTrainer:
 
                 is_ready_to_log = (self.iteration_step - 1) % self.config.logging.iteration_step_info_interval == 0
                 if is_ready_to_log is True and self.config.logging.monitor_model_states is True:
-                    nn_logs, state_handles = monitor_model(self.unwrapped_model, self.parallel_context)
-                    from nanotron import constants
+                    # nn_logs, state_handles = monitor_model(self.unwrapped_model, self.parallel_context)
+                    # from nanotron import constants
 
-                    constants.NN_STATES = nn_logs
+                    # constants.NN_STATES = nn_logs
+                    pass
 
                 # Training step
                 outputs, loss_avg = self.training_step(dataloader=self.current_dataloader)
@@ -483,23 +481,23 @@ class DistributedTrainer:
                 if is_ready_to_log is True:
                     self.train_step_logs(outputs=outputs, loss_avg=loss_avg)
 
-                    if (
-                        self.config.logging.monitor_model_states is True
-                        and dist.get_rank(self.parallel_context.world_pg) == 0
-                        and wandb is not None
-                    ):
-                        wandb.log({**convert_logs_to_flat_logs(nn_logs), "iteration_step": self.iteration_step})
+                    # if (
+                    #     self.config.logging.monitor_model_states is True
+                    #     and dist.get_rank(self.parallel_context.world_pg) == 0
+                    #     and wandb is not None
+                    # ):
+                    #     wandb.log({**convert_logs_to_flat_logs(nn_logs), "iteration_step": self.iteration_step})
 
-                        from nanotron import constants
+                    #     from nanotron import constants
 
-                        constants.NN_STATES = None
+                    #     constants.NN_STATES = None
 
                 # Checkpoint
                 if self.iteration_step % self.config.checkpoints.checkpoint_interval == 0:
                     self.save_checkpoint()
 
-                for handle in state_handles:
-                    handle.remove()
+                # for handle in state_handles:
+                #     handle.remove()
 
         dist.barrier()  # let's wait for everyone before leaving
 
@@ -534,23 +532,23 @@ class DistributedTrainer:
             self.grad_accumulator.fp32_grads_allreduce_handle.wait()
 
         # Sync tied weights
-        if not isinstance(self.model, DistributedDataParallel):
-            # Manually sync across DP if it's not handled by DDP
-            sync_gradients_across_dp(
-                module=self.model,
-                dp_pg=self.parallel_context.dp_pg,
-                reduce_op=dist.ReduceOp.AVG,
-                # TODO @thomasw21: This is too memory hungry, instead we run all_reduce
-                reduce_scatter=False,  # optimizer.inherit_from(ZeroDistributedOptimizer),
-                grad_accumulator=self.grad_accumulator,
-            )
+        # if not isinstance(self.model, DistributedDataParallel):
+        #     # Manually sync across DP if it's not handled by DDP
+        #     sync_gradients_across_dp(
+        #         module=self.model,
+        #         dp_pg=self.parallel_context.dp_pg,
+        #         reduce_op=dist.ReduceOp.AVG,
+        #         # TODO @thomasw21: This is too memory hungry, instead we run all_reduce
+        #         reduce_scatter=False,  # optimizer.inherit_from(ZeroDistributedOptimizer),
+        #         grad_accumulator=self.grad_accumulator,
+        #     )
 
         # TODO @nouamane: Put this in hooks so we can overlap communication with gradient computation on the last backward pass.
-        sync_tied_weights_gradients(
-            module=self.unwrapped_model,
-            parallel_context=self.parallel_context,
-            grad_accumulator=self.grad_accumulator,
-        )
+        # sync_tied_weights_gradients(
+        #     module=self.unwrapped_model,
+        #     parallel_context=self.parallel_context,
+        #     grad_accumulator=self.grad_accumulator,
+        # )
 
         # Clip gradients
         if self.config.optimizer.clip_grad is not None:
@@ -677,6 +675,7 @@ class DistributedTrainer:
                         "iteration_step": self.iteration_step,
                     }
                 )
+                # pass
 
             self.loggerwriter.add_scalars_from_list(log_entries, self.iteration_step)
 

@@ -154,6 +154,7 @@ class MLP(nn.Module):
             bias=False,
             async_communication=tp_linear_async_communication,
             contiguous_chunks=gate_up_contiguous_chunks,
+            name="mlp.gate_up_proj",
         )
         self.down_proj = FP8TensorParallelRowLinear(
             config.intermediate_size,
@@ -162,6 +163,7 @@ class MLP(nn.Module):
             mode=tp_mode,
             bias=False,
             async_communication=tp_linear_async_communication and tp_mode is TensorParallelLinearMode.REDUCE_SCATTER,
+            name="mlp.down_proj",
         )
         # TODO @nouamane: why can't we torch.jit.script ActivationFunction?
         self.split_silu_mul = ActivationFunction(config.hidden_act)
@@ -315,6 +317,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             bias=False,
             async_communication=tp_linear_async_communication,
             contiguous_chunks=qkv_contiguous_chunks,
+            name="attn.qkv_proj"
             # is_fp8=True
         )
         # TODO(kunhao): We want to have only one version per device and not one version per layer.
@@ -334,6 +337,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             mode=tp_mode,
             bias=False,
             async_communication=tp_linear_async_communication,
+            name="attn.o_proj"
             # is_fp8=True
         )
 
@@ -753,6 +757,7 @@ class LlamaModel(nn.Module):
                 # TODO @thomasw21: refactor so that we store that default in a single place.
                 "mode": self.tp_mode,
                 "async_communication": tp_linear_async_communication,
+                "name": "lm_head",
             },
             module_input_keys={"x"},
             module_output_keys={"logits"},

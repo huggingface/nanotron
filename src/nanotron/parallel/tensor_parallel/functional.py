@@ -24,6 +24,7 @@ import nanotron.fp8.functional as fp8_functional
 from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.linear import FP8LinearMeta
 from nanotron.fp8.tensor import FP8Tensor
+from nanotron.parallel.parameters import NanotronParameter
 from nanotron.parallel.tensor_parallel.distributed_differentiable_primitives import (
     differentiable_all_gather,
     differentiable_all_reduce_sum,
@@ -432,6 +433,7 @@ def column_linear(
     tp_mode: TensorParallelLinearMode,
     async_communication: bool,
     metadatas: Optional[FP8LinearMeta] = None,
+    name: Optional[str] = None,
 ):
     if async_communication:
         return _ColumnLinearAsyncCommunication.apply(input, weight, bias, group, tp_mode, metadatas)
@@ -444,7 +446,12 @@ def column_linear(
         raise ValueError(f"Got unexpected mode: {tp_mode}.")
 
     if isinstance(weight.data, FP8Tensor):
-        return fp8_functional.linear(input, weight.data, bias, accum_qtype=DTypes.KFLOAT16, metadatas=metadatas)
+        if bias is not None:
+            bias = bias.data if isinstance(bias, NanotronParameter) else bias
+
+        return fp8_functional.linear(
+            input, weight.data, bias, accum_qtype=DTypes.KFLOAT16, metadatas=metadatas, name=name
+        )
     else:
         return F.linear(input, weight, bias)
 
@@ -558,12 +565,15 @@ def row_linear(
     tp_mode: TensorParallelLinearMode,
     async_communication: bool,
     metadatas: Optional[FP8LinearMeta] = None,
+    name: Optional[str] = None,
 ):
     if async_communication:
         return _RowLinearAsyncCommunication.apply(input, weight, bias, group, tp_mode)
 
     if isinstance(weight.data, FP8Tensor):
-        out = fp8_functional.linear(input, weight.data, bias, accum_qtype=DTypes.KFLOAT16, metadatas=metadatas)
+        out = fp8_functional.linear(
+            input, weight.data, bias, accum_qtype=DTypes.KFLOAT16, metadatas=metadatas, name=name
+        )
     else:
         out = F.linear(input, weight, bias)
 

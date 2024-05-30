@@ -1,7 +1,6 @@
 from dataclasses import dataclass
 from typing import Optional, Tuple, Union, cast
 
-# import pydevd
 import torch
 import transformer_engine as te  # noqa
 from torch import nn
@@ -89,6 +88,7 @@ class _FP8Matmul(torch.autograd.Function):
         phony: torch.Tensor,
         metadatas: FP8LinearMeta,
         accum_qtype: DTypes,
+        name: Optional[str] = None  # TODO(xrsrke): remove this shit after debugging
         # is_weight_transposed: bool = False,
     ) -> torch.Tensor:
         assert not isinstance(input, FP8Tensor)
@@ -111,6 +111,7 @@ class _FP8Matmul(torch.autograd.Function):
         ctx.metadatas = metadatas
         # ctx.is_weight_transposed = is_weight_transposed
         ctx.save_for_backward(fp8_input, weight)
+        ctx.name = name
 
         # if is_weight_transposed is False:
         #     weight_temp = weight.transpose_fp8()
@@ -149,6 +150,16 @@ class _FP8Matmul(torch.autograd.Function):
         Reference: https://web.eecs.umich.edu/~justincj/teaching/eecs442/notes/linear-backprop.html
         """
         # pydevd.settrace(suspend=False, trace_only_current_thread=True)
+        # assert isinstance(grad_output, torch.Tensor)
+        assert grad_output.__class__ == torch.Tensor
+        assert grad_output.dtype == torch.float16
+
+        if ctx.name == "mlp.down_proj":
+            assert 1 == 1
+
+        if ctx.name == "lm_head":
+            assert 1 == 1
+
         fp8_input, fp8_weight = ctx.saved_tensors
         accum_qtype = ctx.accum_qtype
 
@@ -158,11 +169,20 @@ class _FP8Matmul(torch.autograd.Function):
 
         ctx.metadatas = cast(FP8LinearMeta, ctx.metadatas)
         if ctx.metadatas.input_grad is None:
+            # try:
+            #     fp8_grad_output = FP8Tensor(
+            #         grad_output,
+            #         dtype=FP8LM_RECIPE.linear.input_grad.dtype,
+            #         interval=FP8LM_RECIPE.linear.input_grad.interval,
+            #     )
+            # except:
+            #     assert 1 == 1
             fp8_grad_output = FP8Tensor(
                 grad_output,
                 dtype=FP8LM_RECIPE.linear.input_grad.dtype,
                 interval=FP8LM_RECIPE.linear.input_grad.interval,
             )
+
             ctx.metadatas.input_grad = fp8_grad_output.fp8_meta
         else:
             fp8_grad_output = FP8Tensor.from_metadata(grad_output, ctx.metadatas.input_grad)
@@ -228,8 +248,29 @@ class _FP8Matmul(torch.autograd.Function):
             output=grad_weight_temp,
             use_split_accumulator=FP8LM_RECIPE.linear.split_accumulator.weight_grad,
             accum_qtype=accum_qtype,
-            # is_backward=True
+            is_backward=True,
         )
+
+        # NOTE: ∂L/∂W = Xᵀ @ ∂L/∂Y
+        # [m, n] x [n, p] = [m, p]
+        # so here we already transposed the input
+        # grad_weight_temp = torch.zeros(
+        #     transposed_fp8_input.shape[0],
+        #     transposed_fp8_grad_output.shape[0],
+        #     device="cuda",
+        #     dtype=QTYPE_TO_DTYPE[accum_qtype],
+        # )
+
+        # grad_weight = correct_fp8_matmul_kernel(
+        #     mat_a=fp8_input,
+        #     transpose_a=True,
+        #     mat_b=fp8_grad_output,
+        #     transpose_b=False,
+        #     # output=grad_weight_temp,
+        #     use_split_accumulator=FP8LM_RECIPE.linear.split_accumulator.weight_grad,
+        #     accum_qtype=accum_qtype,
+        #     # is_backward=True
+        # )
 
         # grad_input = _fp8_matmul_kernel_2(
         #     mat_a=grad_output,
@@ -269,7 +310,12 @@ class _FP8Matmul(torch.autograd.Function):
         assert grad_weight.dtype == QTYPE_TO_DTYPE[accum_qtype]
         # TODO(xrsrke): maintain a persistence metadata across training
 
+        if fp8_weight.shape != grad_weight.shape:
+            grad_weight = grad_weight.T
+
         if ctx.metadatas.weight_grad is None:
+            # NOTE: this is weird, i only add this when work with TP
+            # didn't encount the mismatch shape problem with non-tp
             fp8_weight_grad = FP8Tensor(
                 grad_weight,
                 dtype=FP8LM_RECIPE.linear.weight_grad.dtype,
@@ -279,7 +325,28 @@ class _FP8Matmul(torch.autograd.Function):
         else:
             fp8_weight_grad = FP8Tensor.from_metadata(grad_weight, ctx.metadatas.weight_grad)
 
+        # NOTE: grad_input.shape = [512, 512]
+        # NOTE: fp8_grad_output.shape = [512, 128]
+        # ∂L/∂W = Xᵀ @ ∂L/∂Y
+        # [512, 512] @  [512, 128] = [512, 128]
+
+        # try:
+        #     fp8_weight.grad = fp8_weight_grad
+        # except RuntimeError as e:
+        #     assert 1 == 1
+
         fp8_weight.grad = fp8_weight_grad
-        # NOTE: sanity check
+
+        # try:
+        #     # NOTE: sanity check
+        #     assert isinstance(fp8_weight.grad, FP8Tensor)
+        # except AssertionError as e:
+        #     assert 1 == 1
+
         assert isinstance(fp8_weight.grad, FP8Tensor)
-        return grad_input, None, None, None, None, None
+
+        # assert isinstance(grad_input, torch.Tensor)
+        assert grad_output.__class__ == torch.Tensor
+        assert grad_input.dtype == torch.float16
+
+        return grad_input, None, None, None, None, None, None

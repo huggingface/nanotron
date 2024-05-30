@@ -353,10 +353,49 @@ class NanotronParameter(nn.Parameter):
             else:
                 return e
 
+        # NOTE: if the args are FP8 tensor, then the output should be FP8 tensor
+        # otherwise use the default one
+
+        # raw_args = args
+        # raw_kwargs = kwargs
+        # args = tree_map(unwrap, args)
+        # kwargs = tree_map(unwrap, kwargs)
+
+        # if func == torch.ops.aten.detach.default:
+        #     # NOTE: this is for parameter.data or parameter.detach()
+        #     return args[0].data
+        # else:
+        #     is_fp8 = any([isinstance(e.data, FP8Tensor) for e in raw_args]) or any([isinstance(e.data, FP8Tensor) for e in raw_kwargs.values()])
+
+        #     if is_fp8 is True:
+        #         OPS_THAT_RETURN_ORIGINAL_TENSOR = [torch.ops.aten.native_layer_norm.default]
+
+        #         # if func == torch.ops.aten.detach.default:
+        #         #     # NOTE: this is for parameter.data or parameter.detach()
+        #         #     return args[0].data
+        #         # else:
+        #         outputs = func(*args, **kwargs)
+
+        #         if func in OPS_THAT_RETURN_ORIGINAL_TENSOR:
+        #             return outputs
+        #         else:
+        #             # if len(outputs) == 1 and not isinstance(outputs, torch.Tensor):
+        #             #     # NOTE: in some distributed operation, it doesn't return anything
+        #             #     # but do in-place operation
+        #             #     return outputs
+        #             # else:
+        #             #     return tree_map(wrap, outputs)
+        #             return tree_map(wrap, outputs)
+        #     else:
+        #         return func(*args, **kwargs)
+
         args = tree_map(unwrap, args)
         kwargs = tree_map(unwrap, kwargs)
 
-        OPS_THAT_RETURN_ORIGINAL_TENSOR = [torch.ops.aten.native_layer_norm.default]
+        OPS_THAT_RETURN_ORIGINAL_TENSOR = [
+            torch.ops.aten.native_layer_norm.default,
+            torch.ops.aten.native_layer_norm_backward.default,
+        ]
 
         if func == torch.ops.aten.detach.default:
             # NOTE: this is for parameter.data or parameter.detach()

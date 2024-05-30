@@ -224,6 +224,7 @@ class FP8TensorParallelColumnLinear(FP8Linear):
         dtype=None,
         async_communication: bool = False,
         contiguous_chunks: Optional[Tuple[int, ...]] = None,
+        name: Optional[str] = None,
         # is_fp8: bool = False,
     ):
         # base_class = FP8Linear if is_fp8 else nn.Linear
@@ -265,6 +266,7 @@ class FP8TensorParallelColumnLinear(FP8Linear):
         #         dtype=dtype,
         #     )
 
+        self.name = name
         self.mode = mode
         self.async_communication = async_communication
 
@@ -292,6 +294,7 @@ class FP8TensorParallelColumnLinear(FP8Linear):
             tp_mode=self.mode,
             async_communication=self.async_communication,
             metadatas=self.metadatas if isinstance(self, FP8Linear) else None,
+            name=self.name,
         )
 
     def extra_repr(self) -> str:
@@ -330,6 +333,7 @@ class FP8TensorParallelRowLinear(FP8Linear):
         dtype=None,
         async_communication: bool = False,
         contiguous_chunks: Optional[Tuple[int, ...]] = None,
+        name: Optional[str] = None,
         # is_fp8: bool = False
     ):
         # base_class = FP8Linear if is_fp8 else nn.Linear
@@ -345,6 +349,7 @@ class FP8TensorParallelRowLinear(FP8Linear):
 
         # No need to shard the bias term, only rank 0 would have it
         bias = dist.get_rank(self.pg) == 0 and bias
+        self.name = name
 
         super().__init__(
             in_features=self.in_features,
@@ -407,6 +412,7 @@ class FP8TensorParallelRowLinear(FP8Linear):
             tp_mode=self.mode,
             async_communication=self.async_communication,
             metadatas=self.metadatas if isinstance(self, FP8Linear) else None,
+            name=self.name,
         )
 
     def extra_repr(self) -> str:

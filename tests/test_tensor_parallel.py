@@ -9,7 +9,7 @@ from nanotron.distributed import get_global_rank
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.tensor_parallel.enum import TensorParallelLinearMode
 from nanotron.parallel.tensor_parallel.nn import (
-    TensorParallelColumnLinear,
+    FP8TensorParallelColumnLinear,
     TensorParallelEmbedding,
     TensorParallelRowLinear,
 )
@@ -19,8 +19,8 @@ from torch import nn
 @pytest.mark.parametrize("tp,dp,pp", [pytest.param(i, 1, 1) for i in range(1, min(4, available_gpus()) + 1)])
 # @pytest.mark.parametrize("tp_mode", list(TensorParallelLinearMode))
 # @pytest.mark.parametrize("async_communication", [False, True])
-@pytest.mark.parametrize("tp_mode", [TensorParallelLinearMode.REDUCE_SCATTER])
-@pytest.mark.parametrize("async_communication", [True])
+@pytest.mark.parametrize("tp_mode", [TensorParallelLinearMode.ALL_REDUCE])
+@pytest.mark.parametrize("async_communication", [False])
 # @pytest.mark.parametrize("is_fp8", [False, True])
 @rerun_if_address_is_in_use()
 def test_column_linear(
@@ -58,7 +58,7 @@ def _test_column_linear(
     out_features = parallel_context.tp_pg.size() * out_features_per_tp_rank
 
     # Sharded
-    column_linear = TensorParallelColumnLinear(
+    column_linear = FP8TensorParallelColumnLinear(
         in_features=in_features,
         out_features=out_features,
         pg=parallel_context.tp_pg,
@@ -125,12 +125,13 @@ def _test_column_linear(
     try:
         torch.testing.assert_close(
             sharded_output,
+            # TODO(xrsrke): retrieve accumulation precision from recipe
             reference_output[
                 :,
                 dist.get_rank(parallel_context.tp_pg)
                 * out_features_per_tp_rank : (dist.get_rank(parallel_context.tp_pg) + 1)
                 * out_features_per_tp_rank,
-            ],
+            ].to(torch.float16),
             rtol=0,
             atol=0.1,
         )
@@ -148,10 +149,22 @@ def _test_column_linear(
         dist.get_rank(parallel_context.tp_pg) * out_features_per_tp_rank,
         (dist.get_rank(parallel_context.tp_pg) + 1) * out_features_per_tp_rank,
     )
+    # torch.testing.assert_close(
+    #     column_linear.weight.grad,
+    #     reference_linear.weight.grad[hidden_dim_slice],
+    # )
+
+    # TODO(xrsrke): retrieve accumulation precision from recipe
+    assert sharded_output.dtype == torch.float16
+    # NOTE(xrsrke): we expect the output is a raw torch.Tensor, not FP8Paramter, or NanotronParameter
+    assert isinstance(sharded_output, torch.Tensor)
+    assert sharded_output.requires_grad is True
+
     torch.testing.assert_close(
-        column_linear.weight.grad,
+        column_linear.weight.data.grad,
         reference_linear.weight.grad[hidden_dim_slice],
     )
+
     torch.testing.assert_close(
         column_linear.bias.grad,
         reference_linear.bias.grad[hidden_dim_slice],
