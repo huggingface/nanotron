@@ -381,17 +381,17 @@ from torchtyping import TensorType
 #         )  # TODO @nouamane: compute based on free memory, because in rope we can surpass max_position_embeddings
 
 #         # self.n_segments = 16
-#         # self.segment_lengths = config.max_position_embeddings // self.n_segments
+#         # self.segment_length = config.max_position_embeddings // self.n_segments
 #         # assert config.max_position_embeddings == 32768
 
 #         # NOTE: for 1b training
-#         self.segment_lengths = 2048
-#         # self.segment_lengths = 4096
+#         self.segment_length = 2048
+#         # self.segment_length = 4096
 
 #         # NOTE: for sanity 200m training
 #         # prev 16
-#         # self.segment_lengths = 256
-#         # self.segment_lengths = 16
+#         # self.segment_length = 256
+#         # self.segment_length = 16
 
 #         device = self.o_proj.weight.device
 #         dtype = self.o_proj.weight.dtype
@@ -431,16 +431,16 @@ from torchtyping import TensorType
 #         # segment_length = seq_len // self.n_segments
 #         # hidden_size = hidden_states.shape[2]
 
-#         if seq_len > self.segment_lengths:
-#             # n_segments = seq_len // self.segment_lengths
+#         if seq_len > self.segment_length:
+#             # n_segments = seq_len // self.segment_length
 #             # segment_hidden_states = torch.chunk(hidden_states, chunks=n_segments, dim=0)
 #             # segment_sequence_masks = torch.chunk(sequence_mask, chunks=n_segments, dim=1)
 
 #             import math
 
-#             n_segments = math.ceil(seq_len / self.segment_lengths)
-#             segment_lengths = [self.segment_lengths] * (n_segments - 1) + [
-#                 seq_len - (n_segments - 1) * self.segment_lengths
+#             n_segments = math.ceil(seq_len / self.segment_length)
+#             segment_lengths = [self.segment_length] * (n_segments - 1) + [
+#                 seq_len - (n_segments - 1) * self.segment_length
 #             ]
 #             assert sum(segment_lengths) == seq_len
 #             # assert hidden_states.shape[0] == seq_len
@@ -482,13 +482,13 @@ from torchtyping import TensorType
 #             query_states, key_states, value_states = attn_outputs["qkv_states_without_pe"]
 
 #             # # NOTE: these are the shape for non-megatron-sp
-#             # assert query_states.shape[0] == self.segment_lengths
-#             # assert local_attn_outputs.shape[1] == self.segment_lengths
+#             # assert query_states.shape[0] == self.segment_length
+#             # assert local_attn_outputs.shape[1] == self.segment_length
 
 #             query_states = rearrange(
 #                 query_states,
 #                 "seq_len n_heads batch_size d_head -> batch_size n_heads seq_len d_head",
-#                 seq_len=self.segment_lengths,
+#                 seq_len=self.segment_length,
 #                 n_heads=self.n_local_q_heads,
 #                 d_head=self.d_qk,
 #             )
@@ -497,7 +497,7 @@ from torchtyping import TensorType
 #                 key_states,
 #                 "seq_len n_heads batch_size d_head -> batch_size n_heads seq_len d_head",
 #                 # batch_size=batch_size,
-#                 seq_len=self.segment_lengths,
+#                 seq_len=self.segment_length,
 #                 n_heads=self.n_local_kv_heads,
 #                 d_head=self.d_qk,
 #             )
@@ -506,7 +506,7 @@ from torchtyping import TensorType
 #                 value_states,
 #                 "seq_len n_heads batch_size d_head -> batch_size n_heads seq_len d_head",
 #                 # batch_size=batch_size,
-#                 seq_len=self.segment_lengths,
+#                 seq_len=self.segment_length,
 #                 n_heads=self.n_local_kv_heads,
 #                 d_head=self.d_qk,
 #             )
@@ -543,7 +543,7 @@ from torchtyping import TensorType
 #             local_attn_outputs = rearrange(
 #                 local_attn_outputs,
 #                 "batch_size seq_len (n_heads d_head) -> batch_size n_heads seq_len d_head",
-#                 seq_len=self.segment_lengths,
+#                 seq_len=self.segment_length,
 #                 d_head=self.d_qk,
 #             )
 
@@ -582,7 +582,7 @@ from torchtyping import TensorType
 #                 attention_output, "batch_size n_heads seq_len d_head -> seq_len batch_size (n_heads d_head)",
 #                 n_heads=self.n_local_q_heads,
 #                 d_head=self.d_qk,
-#                 seq_len=self.segment_lengths,
+#                 seq_len=self.segment_length,
 #             )
 
 #             output = self.o_proj(attention_output)
@@ -776,7 +776,7 @@ from torchtyping import TensorType
 #             value_states, "seq_len batch_size n_heads d_head -> seq_len n_heads batch_size d_head"
 #         )
 
-#         assert query_states_without_pe.shape[0] == self.segment_lengths
+#         assert query_states_without_pe.shape[0] == self.segment_length
 
 #         store = self.get_local_store()
 #         if store is not None:  # Inference case
@@ -1096,18 +1096,19 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         )  # TODO @nouamane: compute based on free memory, because in rope we can surpass max_position_embeddings
 
         # self.n_segments = 16
-        # self.segment_lengths = config.max_position_embeddings // self.n_segments
+        # self.segment_length = config.max_position_embeddings // self.n_segments
         # assert config.max_position_embeddings == 32768
 
         # NOTE: for 1b training
-        # self.segment_lengths = 2048
-        # self.segment_lengths = 4096
-        self.segment_lengths = 1024  # for 4096 context length
+        # self.segment_length = 2048
+        # self.segment_length = 4096
+        # self.segment_length = 1024  # for 4096 context length
+        self.segment_length = constants.CONFIG.infini_attention.segment_length  # for 1024 context length
 
         # NOTE: for sanity 200m training
         # prev 16
-        # self.segment_lengths = 256
-        # self.segment_lengths = 16
+        # self.segment_length = 256
+        # self.segment_length = 16
 
         device = self.o_proj.weight.device
         dtype = self.o_proj.weight.dtype
@@ -1122,6 +1123,13 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                 split_dim=0,
                 # contiguous_chunks=(self.n_local_heads, self.n_local_heads)
             ),
+        )
+
+        log_rank(
+            f"Segment length is {self.segment_length}, turn_on_memory: {constants.CONFIG.infini_attention.turn_on_memory is True}",
+            logger=logger,
+            level=logging.WARNING,
+            rank=0,
         )
 
     def forward(
@@ -1147,16 +1155,16 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         # segment_length = seq_len // self.n_segments
         # hidden_size = hidden_states.shape[2]
 
-        if seq_len > self.segment_lengths:
-            # n_segments = seq_len // self.segment_lengths
+        if seq_len > self.segment_length:
+            # n_segments = seq_len // self.segment_length
             # segment_hidden_states = torch.chunk(hidden_states, chunks=n_segments, dim=0)
             # segment_sequence_masks = torch.chunk(sequence_mask, chunks=n_segments, dim=1)
 
             import math
 
-            n_segments = math.ceil(seq_len / self.segment_lengths)
-            segment_lengths = [self.segment_lengths] * (n_segments - 1) + [
-                seq_len - (n_segments - 1) * self.segment_lengths
+            n_segments = math.ceil(seq_len / self.segment_length)
+            segment_lengths = [self.segment_length] * (n_segments - 1) + [
+                seq_len - (n_segments - 1) * self.segment_length
             ]
             assert sum(segment_lengths) == seq_len
             # assert hidden_states.shape[0] == seq_len
@@ -1198,13 +1206,13 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             query_states, key_states, value_states = attn_outputs["qkv_states_without_pe"]
 
             # # NOTE: these are the shape for non-megatron-sp
-            # assert query_states.shape[0] == self.segment_lengths
-            # assert local_attn_outputs.shape[1] == self.segment_lengths
+            # assert query_states.shape[0] == self.segment_length
+            # assert local_attn_outputs.shape[1] == self.segment_length
 
             query_states = rearrange(
                 query_states,
                 "seq_len n_heads batch_size d_head -> batch_size n_heads seq_len d_head",
-                # seq_len=self.segment_lengths,
+                # seq_len=self.segment_length,
                 n_heads=self.n_local_q_heads,
                 d_head=self.d_qk,
             )
@@ -1213,7 +1221,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                 key_states,
                 "seq_len n_heads batch_size d_head -> batch_size n_heads seq_len d_head",
                 # batch_size=batch_size,
-                # seq_len=self.segment_lengths,
+                # seq_len=self.segment_length,
                 n_heads=self.n_local_kv_heads,
                 d_head=self.d_qk,
             )
@@ -1222,7 +1230,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                 value_states,
                 "seq_len n_heads batch_size d_head -> batch_size n_heads seq_len d_head",
                 # batch_size=batch_size,
-                # seq_len=self.segment_lengths,
+                # seq_len=self.segment_length,
                 n_heads=self.n_local_kv_heads,
                 d_head=self.d_qk,
             )
@@ -1259,7 +1267,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             local_attn_outputs = rearrange(
                 local_attn_outputs,
                 "batch_size seq_len (n_heads d_head) -> batch_size n_heads seq_len d_head",
-                # seq_len=self.segment_lengths,
+                # seq_len=self.segment_length,
                 d_head=self.d_qk,
             )
 
@@ -1292,14 +1300,17 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             #     rank=0,
             # )
 
-            attention_output = global_weights * retrieved_memory + local_weights * local_attn_outputs
+            if constants.CONFIG.infini_attention.turn_on_memory is True:
+                attention_output = global_weights * retrieved_memory + local_weights * local_attn_outputs
+            else:
+                attention_output = local_weights * local_attn_outputs
 
             attention_output = rearrange(
                 attention_output,
                 "batch_size n_heads seq_len d_head -> batch_size seq_len (n_heads d_head)",
                 n_heads=self.n_local_q_heads,
                 d_head=self.d_qk,
-                # seq_len=self.segment_lengths,
+                # seq_len=self.segment_length,
             )
 
             output = self.o_proj(attention_output)
@@ -1379,7 +1390,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             sigma_query_states,
             prev_memory,
             "batch_size n_heads seq_len d_k, batch_size n_heads d_k d_v -> batch_size n_heads seq_len d_v",
-            # seq_len=self.segment_lengths,
+            # seq_len=self.segment_length,
             # n_heads=self.n_local_kv_heads,
             # d_k=self.d_qk,
         )
@@ -1390,13 +1401,13 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             "batch_size n_heads seq_len d_head, batch_size n_heads d_head -> batch_size n_heads seq_len",
             # n_heads=self.n_local_kv_heads,
             # d_head=self.d_qk,
-            # seq_len=self.segment_lengths,
+            # seq_len=self.segment_length,
         )
         denominator = rearrange(
             denominator,
             "batch_size n_heads seq_len -> batch_size n_heads seq_len 1",
             # n_heads=self.n_local_kv_heads,
-            # seq_len=self.segment_lengths,
+            # seq_len=self.segment_length,
         )
         # [batch_size, n_heads, seq_len, d_v] / [batch_size, n_heads, seq_len, 1], so each d_v is divide by the normalized value
 
@@ -1420,7 +1431,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                 "batch_size n_heads seq_len d_k, batch_size n_heads d_k d_v -> batch_size n_heads seq_len d_v",
                 # n_heads=self.n_local_kv_heads,
                 # d_k=self.d_qk,
-                # seq_len=self.segment_lengths,
+                # seq_len=self.segment_length,
             )
             denominator = einsum(
                 sigma_key_states,
@@ -1428,13 +1439,13 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                 "batch_size n_heads seq_len d_k, batch_size n_heads d_k -> batch_size n_heads seq_len",
                 # n_heads=self.n_local_kv_heads,
                 # d_k=self.d_qk,
-                # seq_len=self.segment_lengths,
+                # seq_len=self.segment_length,
             )
             denominator = rearrange(
                 denominator,
                 "batch_size n_heads seq_len -> batch_size n_heads seq_len 1",
                 # n_heads=self.n_local_kv_heads,
-                # seq_len=self.segment_lengths,
+                # seq_len=self.segment_length,
             )
 
             prev_v = numerator / denominator
@@ -1448,7 +1459,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             reduction="sum",
             n_heads=self.n_local_kv_heads,
             d_head=self.d_qk,
-            # seq_len=self.segment_lengths,
+            # seq_len=self.segment_length,
         )
 
         memory += prev_memory if prev_memory is not None else 0
@@ -1515,23 +1526,23 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         query_states_without_pe = rearrange(
             query_states,
             "seq_len batch_size n_heads d_head -> seq_len n_heads batch_size d_head",
-            # seq_len=self.segment_lengths,
+            # seq_len=self.segment_length,
             seq_len=seq_len,
         )
         key_states_without_pe = rearrange(
             key_states,
             "seq_len batch_size n_heads d_head -> seq_len n_heads batch_size d_head",
-            # seq_len=self.segment_lengths,
+            # seq_len=self.segment_length,
             seq_len=seq_len,
         )
         value_states_without_pe = rearrange(
             value_states,
             "seq_len batch_size n_heads d_head -> seq_len n_heads batch_size d_head",
-            # seq_len=self.segment_lengths,
+            # seq_len=self.segment_length,
             seq_len=seq_len,
         )
 
-        # assert query_states_without_pe.shape[0] == self.segment_lengths
+        # assert query_states_without_pe.shape[0] == self.segment_length
         assert query_states_without_pe.shape[0] == seq_len
 
         store = self.get_local_store()

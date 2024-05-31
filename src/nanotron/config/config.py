@@ -298,6 +298,12 @@ class GenerationArgs:
 
 
 @dataclass
+class InfiniAttentionArgs:
+    segment_length: int
+    turn_on_memory: bool
+
+
+@dataclass
 class Config:
     """Main configuration class"""
 
@@ -305,6 +311,7 @@ class Config:
     parallelism: ParallelismArgs
     model: ModelArgs
     tokenizer: TokenizerArgs
+    infini_attention: InfiniAttentionArgs
     checkpoints: Optional[CheckpointsArgs] = None
     logging: Optional[LoggingArgs] = None
     tokens: Optional[TokensArgs] = None

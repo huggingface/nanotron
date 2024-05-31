@@ -18,3 +18,5 @@ NEEDLE = None
 GLOBAL_STEP: Optional[int] = None
 LOG_STATE_INTERVAL = 500
 CONFIG = None
+
+TRAINING_CONFIG = None
