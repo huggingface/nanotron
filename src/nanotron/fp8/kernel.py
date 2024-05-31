@@ -92,6 +92,8 @@ def fp8_matmul_kernel(
         #     mat_b = tex.fp8_transpose(mat_b, mat_b_fp8_meta.te_dtype)
 
         # output = torch.empty(mat_a.T.shape[0], mat_b.shape[-1], device=device, dtype=out_torch_dtype)
+    else:
+        pass
 
     # NOTE: i was using this before adding output tensor as an argument
     # if is_backward is False:
@@ -178,9 +180,6 @@ def correct_fp8_matmul_kernel(
     TE_CONFIG_TRANSPOSE_B = False
     SCALE = AMAX = _empty_tensor
 
-    # mat_a = tex.fp8_transpose(mat_a, mat_a_fp8_meta.te_dtype) if transpose_a is False else mat_a
-    # mat_b = tex.fp8_transpose(mat_b, mat_b_fp8_meta.te_dtype) if transpose_b is True else mat_b
-
     if transpose_a is True:
         mat_a = mat_a
     else:
@@ -190,11 +189,7 @@ def correct_fp8_matmul_kernel(
         mat_b = tex.fp8_transpose(mat_b, mat_b_fp8_meta.te_dtype)
     else:
         mat_b = mat_b
-
-    if output is not None:
-        assert output.shape == (mat_a.shape[0], mat_b.shape[-1])
-    else:
-        output = torch.empty(mat_a.shape[0], mat_b.shape[-1], device=device, dtype=out_torch_dtype)
+    assert output is not None
 
     # NOTE: TE_CONFIG_TRANSPOSE_A is ask it do transpose or confirm that this matrix is already transposed?
     tex.te_gemm(
