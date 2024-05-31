@@ -131,9 +131,55 @@ def micro_batcher(
 
         if dist.get_rank(parallel_context.pp_pg) == input_rank:
 
-            # tokenizer.eos_token_id = 2
-            # tokenizer.bos_token_id = 1
-            # tokenizer.pad_token_id = tokenizer.eos_token_id
+            tokenizer.eos_token_id = 2
+            tokenizer.bos_token_id = 1
+            tokenizer.pad_token_id = tokenizer.eos_token_id
+
+            # encodings = tokenizer(
+            #     [elt.text for elt in micro_batch],
+            #     return_tensors="pt",
+            #     return_attention_mask=True,
+            #     padding=tokenizer_config.padding,
+            #     max_length=tokenizer_config.max_input_length,
+            #     truncation=tokenizer_config.truncation,
+            #     # pad_to_multiple_of=8
+            # )
+
+            # # encodings = tokenizer(
+            # #     [elt.text for elt in micro_batch],
+            # #     return_tensors="pt",
+            # #     return_attention_mask=True,
+            # #     padding="max_length",
+            # #     max_length=32768,
+            # #     truncation=False,
+            # #     # pad_to_multiple_of=8
+            # # )
+
+            # # TARGET_INPUT_IDS = tokenizer(["Daniel went back to the garden. Mary travelled to the kitchen. Sandra journeyed to the kitchen. Sandra went to the hallway. John went to the bedroom. Mary went back to the garden. Where is Mary?"], return_tensors="pt")["input_ids"][0]
+            # # LENGTH = TARGET_INPUT_IDS.shape[0]
+            # # assert encodings["input_ids"][0].shape[0] == 32768
+            # # encodings["input_ids"] = encodings["input_ids"][:, :2049]
+            # # encodings["attention_mask"] = encodings["attention_mask"][:, :2049]
+            # # encodings["input_ids"][:, 2048-LENGTH:2048] = TARGET_INPUT_IDS
+
+            # # import math
+            # # seq_len = encodings["input_ids"].shape[1]
+            # # segment_length = 2048
+
+            # # n_segments = math.ceil(seq_len / segment_length)
+            # # segment_lengths = [segment_length] * (n_segments - 1) + [seq_len - (n_segments - 1) * segment_length]
+            # # xs_input_ids = torch.split(encodings["input_ids"][0], segment_lengths, dim=0)
+
+            # # from nanotron.constants import NEEDLE
+            # # last_segment_text = tokenizer.decode(xs_input_ids[-1])
+            # # if str(NEEDLE) in last_segment_text:
+            # #     print(f"{NEEDLE} is in the last segment")
+            # # else:
+            # #     print(f"can't find the needle {NEEDLE} in the last segment")
+
+            # encodings["attention_mask"] = encodings.attention_mask.to(dtype=torch.bool, device="cuda")
+            # encodings.to("cuda")
+            # yield GenerationInputs(input_ids=encodings.input_ids, input_masks=encodings.attention_mask)
             encodings = tokenizer(
                 [elt.text for elt in micro_batch],
                 return_tensors="pt",
@@ -144,41 +190,10 @@ def micro_batcher(
                 # pad_to_multiple_of=8
             )
 
-            # encodings = tokenizer(
-            #     [elt.text for elt in micro_batch],
-            #     return_tensors="pt",
-            #     return_attention_mask=True,
-            #     padding="max_length",
-            #     max_length=32768,
-            #     truncation=False,
-            #     # pad_to_multiple_of=8
-            # )
-
-            # TARGET_INPUT_IDS = tokenizer(["Daniel went back to the garden. Mary travelled to the kitchen. Sandra journeyed to the kitchen. Sandra went to the hallway. John went to the bedroom. Mary went back to the garden. Where is Mary?"], return_tensors="pt")["input_ids"][0]
-            # LENGTH = TARGET_INPUT_IDS.shape[0]
-            # assert encodings["input_ids"][0].shape[0] == 32768
-            encodings["input_ids"] = encodings["input_ids"][:, :2049]
-            encodings["attention_mask"] = encodings["attention_mask"][:, :2049]
-            # encodings["input_ids"][:, 2048-LENGTH:2048] = TARGET_INPUT_IDS
-
-            # import math
-            # seq_len = encodings["input_ids"].shape[1]
-            # segment_length = 2048
-
-            # n_segments = math.ceil(seq_len / segment_length)
-            # segment_lengths = [segment_length] * (n_segments - 1) + [seq_len - (n_segments - 1) * segment_length]
-            # xs_input_ids = torch.split(encodings["input_ids"][0], segment_lengths, dim=0)
-
-            # from nanotron.constants import NEEDLE
-            # last_segment_text = tokenizer.decode(xs_input_ids[-1])
-            # if str(NEEDLE) in last_segment_text:
-            #     print(f"{NEEDLE} is in the last segment")
-            # else:
-            #     print(f"can't find the needle {NEEDLE} in the last segment")
-
             encodings["attention_mask"] = encodings.attention_mask.to(dtype=torch.bool, device="cuda")
             encodings.to("cuda")
             yield GenerationInputs(input_ids=encodings.input_ids, input_masks=encodings.attention_mask)
+
         else:
             yield GenerationInputs(
                 input_ids=TensorPointer(group_rank=input_rank), input_masks=TensorPointer(group_rank=input_rank)
@@ -334,7 +349,6 @@ def decode_text(
                             input_ids=batch_generated_ids,
                             input_mask=batch_generated_mask,
                         )
-                        # sharded_logits = sharded_logits.transpose(0, 1)
 
                         assert 1 == 1
 
