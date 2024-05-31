@@ -1115,22 +1115,23 @@ class CausalSelfAttention(nn.Module, AttachableStore):
 
         from nanotron.parallel.sharded_parameters import SplitConfig, create_sharded_parameter_from_config
 
-        balance_factors = nn.Parameter(torch.zeros(self.n_local_q_heads, device=device, dtype=dtype))
-        self.balance_factors = create_sharded_parameter_from_config(
-            parameter=balance_factors,
-            pg=tp_pg,
-            split_config=SplitConfig(
-                split_dim=0,
-                # contiguous_chunks=(self.n_local_heads, self.n_local_heads)
-            ),
-        )
+        if constants.CONFIG.infini_attention.turn_on_memory is True:
+            balance_factors = nn.Parameter(torch.zeros(self.n_local_q_heads, device=device, dtype=dtype))
+            self.balance_factors = create_sharded_parameter_from_config(
+                parameter=balance_factors,
+                pg=tp_pg,
+                split_config=SplitConfig(
+                    split_dim=0,
+                    # contiguous_chunks=(self.n_local_heads, self.n_local_heads)
+                ),
+            )
 
-        log_rank(
-            f"Segment length is {self.segment_length}, turn_on_memory: {constants.CONFIG.infini_attention.turn_on_memory is True}",
-            logger=logger,
-            level=logging.WARNING,
-            rank=0,
-        )
+            log_rank(
+                f"Segment length is {self.segment_length}, turn_on_memory: {constants.CONFIG.infini_attention.turn_on_memory is True}",
+                logger=logger,
+                level=logging.WARNING,
+                rank=0,
+            )
 
     def forward(
         self,
@@ -1235,30 +1236,6 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                 d_head=self.d_qk,
             )
 
-            # NOTE: because in generation, the sequence length increases
-            # assert query_states.shape == (batch_size, self.n_local_q_heads, segment_length, self.d_qk)
-            # assert query_states.shape == key_states.shape == value_states.shape
-            retrieved_memory = self._retrieve_from_memory(
-                query_states, prev_memory=memory, prev_normalization=normalization
-            )
-
-            # log_rank(
-            #     f"[idx={idx}] retrieved_memory.shape = {retrieved_memory.shape}, retrieve_memory is zero? {(retrieved_memory == 0).all()}",
-            #     logger=logger,
-            #     level=logging.INFO,
-            #     rank=0,
-            # )
-
-            # if memory is not None:
-            #     log_rank(
-            #         f"[idx={idx}] memory.shape = {memory.shape}, normalization.shape = {normalization.shape}",
-            #         logger=logger,
-            #         level=logging.INFO,
-            #         rank=0,
-            #     )
-
-            # retrieved_memory = retrieved_memory.detach()
-
             # local_attn_outputs = rearrange(
             #     local_attn_outputs,
             #     "seq_len batch_size (n_heads d_head) -> batch_size n_heads seq_len d_head",
@@ -1278,32 +1255,56 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             #     rank=0,
             # )
 
-            global_weights = F.sigmoid(self.balance_factors)
-            global_weights = rearrange(global_weights, "n_heads -> 1 n_heads 1 1")
-
-            local_weights = 1 - F.sigmoid(self.balance_factors)
-            local_weights = rearrange(local_weights, "n_heads -> 1 n_heads 1 1")
-
-            # assert torch.allclose(global_weights + local_weights, torch.ones_like(global_weights))
-
-            # log_rank(
-            #     f"[idx={idx}] global_weights.shape = {global_weights.shape}, global_weights: {global_weights}",
-            #     logger=logger,
-            #     level=logging.INFO,
-            #     rank=0,
-            # )
-
-            # log_rank(
-            #     f"[idx={idx}] local_weights.shape = {local_weights.shape}, local_weights: {local_weights}",
-            #     logger=logger,
-            #     level=logging.INFO,
-            #     rank=0,
-            # )
-
             if constants.CONFIG.infini_attention.turn_on_memory is True:
+                # NOTE: because in generation, the sequence length increases
+                # assert query_states.shape == (batch_size, self.n_local_q_heads, segment_length, self.d_qk)
+                # assert query_states.shape == key_states.shape == value_states.shape
+                retrieved_memory = self._retrieve_from_memory(
+                    query_states, prev_memory=memory, prev_normalization=normalization
+                )
+
+                # log_rank(
+                #     f"[idx={idx}] retrieved_memory.shape = {retrieved_memory.shape}, retrieve_memory is zero? {(retrieved_memory == 0).all()}",
+                #     logger=logger,
+                #     level=logging.INFO,
+                #     rank=0,
+                # )
+
+                # if memory is not None:
+                #     log_rank(
+                #         f"[idx={idx}] memory.shape = {memory.shape}, normalization.shape = {normalization.shape}",
+                #         logger=logger,
+                #         level=logging.INFO,
+                #         rank=0,
+                #     )
+
+                # retrieved_memory = retrieved_memory.detach()
+
+                global_weights = F.sigmoid(self.balance_factors)
+                global_weights = rearrange(global_weights, "n_heads -> 1 n_heads 1 1")
+
+                local_weights = 1 - F.sigmoid(self.balance_factors)
+                local_weights = rearrange(local_weights, "n_heads -> 1 n_heads 1 1")
+
+                # assert torch.allclose(global_weights + local_weights, torch.ones_like(global_weights))
+
+                # log_rank(
+                #     f"[idx={idx}] global_weights.shape = {global_weights.shape}, global_weights: {global_weights}",
+                #     logger=logger,
+                #     level=logging.INFO,
+                #     rank=0,
+                # )
+
+                # log_rank(
+                #     f"[idx={idx}] local_weights.shape = {local_weights.shape}, local_weights: {local_weights}",
+                #     logger=logger,
+                #     level=logging.INFO,
+                #     rank=0,
+                # )
+
                 attention_output = global_weights * retrieved_memory + local_weights * local_attn_outputs
             else:
-                attention_output = local_weights * local_attn_outputs
+                attention_output = local_attn_outputs
 
             attention_output = rearrange(
                 attention_output,
@@ -1315,25 +1316,29 @@ class CausalSelfAttention(nn.Module, AttachableStore):
 
             output = self.o_proj(attention_output)
 
-            if constants.GLOBAL_STEP is not None and (constants.GLOBAL_STEP - 1) % constants.LOG_STATE_INTERVAL == 0:
-                if dist.get_rank() == 0:
-                    logs[f"layer_{self.layer_idx}:seg_{idx}:query_states"] = compute_stas(query_states)
-                    logs[f"layer_{self.layer_idx}:seg_{idx}:key_states"] = compute_stas(key_states)
-                    logs[f"layer_{self.layer_idx}:seg_{idx}:value_states"] = compute_stas(value_states)
+            if constants.CONFIG.infini_attention.turn_on_memory is True:
+                if (
+                    constants.GLOBAL_STEP is not None
+                    and (constants.GLOBAL_STEP - 1) % constants.LOG_STATE_INTERVAL == 0
+                ):
+                    if dist.get_rank() == 0:
+                        logs[f"layer_{self.layer_idx}:seg_{idx}:query_states"] = compute_stas(query_states)
+                        logs[f"layer_{self.layer_idx}:seg_{idx}:key_states"] = compute_stas(key_states)
+                        logs[f"layer_{self.layer_idx}:seg_{idx}:value_states"] = compute_stas(value_states)
 
-                    logs[f"layer_{self.layer_idx}:seg_{idx}:global_weights"] = compute_stas(global_weights)
-                    logs[f"layer_{self.layer_idx}:seg_{idx}:local_weights"] = compute_stas(local_weights)
-                    logs[f"layer_{self.layer_idx}:seg_{idx}:local_attn_outputs"] = compute_stas(local_attn_outputs)
-                    logs[f"layer_{self.layer_idx}:seg_{idx}:retrieved_memory"] = compute_stas(retrieved_memory)
-                    logs[f"layer_{self.layer_idx}:seg_{idx}:attention_output"] = compute_stas(attention_output)
-                    logs[f"layer_{self.layer_idx}:seg_{idx}:output"] = compute_stas(output)
-                    logs[f"layer_{self.layer_idx}:seg_{idx}:memory"] = compute_stas(memory)
-                    logs[f"layer_{self.layer_idx}:seg_{idx}:normalization"] = compute_stas(normalization)
+                        logs[f"layer_{self.layer_idx}:seg_{idx}:global_weights"] = compute_stas(global_weights)
+                        logs[f"layer_{self.layer_idx}:seg_{idx}:local_weights"] = compute_stas(local_weights)
+                        logs[f"layer_{self.layer_idx}:seg_{idx}:local_attn_outputs"] = compute_stas(local_attn_outputs)
+                        logs[f"layer_{self.layer_idx}:seg_{idx}:retrieved_memory"] = compute_stas(retrieved_memory)
+                        logs[f"layer_{self.layer_idx}:seg_{idx}:attention_output"] = compute_stas(attention_output)
+                        logs[f"layer_{self.layer_idx}:seg_{idx}:output"] = compute_stas(output)
+                        logs[f"layer_{self.layer_idx}:seg_{idx}:memory"] = compute_stas(memory)
+                        logs[f"layer_{self.layer_idx}:seg_{idx}:normalization"] = compute_stas(normalization)
 
-            # assert output.shape == (segment_length, batch_size, hidden_size)
+                # assert output.shape == (segment_length, batch_size, hidden_size)
 
-            memory, normalization = self._update_memory(memory, normalization, key_states, value_states)
-            # memory = prev_memory if prev_memory is not None else 0.detach()
+                memory, normalization = self._update_memory(memory, normalization, key_states, value_states)
+                # memory = prev_memory if prev_memory is not None else 0.detach()
 
             outputs.append(output)
             # memory, normalization = memory.detach(), normalization.detach()
