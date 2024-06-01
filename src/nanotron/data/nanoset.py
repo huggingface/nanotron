@@ -19,7 +19,7 @@ class Nanoset(torch.utils.data.Dataset):
 
     Args:
         dataset_folders (List[str]): List of folders with tokenized datasets
-        dataset_weights (List[float]): List with the weights for weighted datasets. If None, consume all samples from all datasets without weighting. Weights are normalized in __init__
+        dataset_weights (Union[List[float], None]): List with the weights for weighted datasets. If None, consume all samples from all datasets without weighting. Weights are normalized in __init__
         sequence_length (int): Sequence length of the built samples
         token_size (int): Number of bytes for the tokens stored in the processed dataset files. 2 for vocab sizes < 65535, 4 otherwise
         train_split_num_samples (int): Number of samples the dataset needs. It's the training steps * global batch size
@@ -28,21 +28,20 @@ class Nanoset(torch.utils.data.Dataset):
     def __init__(
         self,
         dataset_folders: List[str],
-        dataset_weights: Union[List[float], None],
         sequence_length: int,
         token_size: int,
         train_split_num_samples: int,
+        dataset_weights: Union[List[float], None] = None,
         random_seed: int = 1234,
     ) -> None:
 
-        # Assertions
+        # Checks
         if isinstance(dataset_folders, str):
             warnings.warn("dataset_folders should be of type List[str] but str was provided. Converting to List[str]")
             dataset_folders = [dataset_folders]
 
         # Init
         self.dataset_folders = dataset_folders
-        self.dataset_weights = dataset_weights
         self.sequence_length = sequence_length
         self.token_size = token_size
         self.train_split_num_samples = train_split_num_samples
@@ -65,7 +64,7 @@ class Nanoset(torch.utils.data.Dataset):
         self.dataset_lengths = [len(datatrove_dataset) for datatrove_dataset in self.datatrove_datasets]
         ## Set dataset weights
         if (
-            self.dataset_weights is None
+            dataset_weights is None
         ):  # Case of training with > 1 datasets without weighting them: Consume both datasets entirely on each epoch
             self.dataset_weights = normalize(self.dataset_lengths)
         else:
