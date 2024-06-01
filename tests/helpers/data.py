@@ -3,6 +3,7 @@ import importlib
 import json
 import os
 import sys
+from argparse import Namespace
 from collections import OrderedDict
 from pathlib import Path
 
@@ -10,16 +11,14 @@ package = importlib.import_module("nanotron")
 package_path = Path(package.__file__).parent.parent.parent
 sys.path.append(str(package_path))
 
-
 import nanotron.distributed as dist
 import torch
-from datatrove.executor.local import LocalPipelineExecutor
-from datatrove.pipeline.readers import JsonlReader
-from datatrove.pipeline.tokens.tokenizer import DocumentTokenizer
 from nanotron.data.nanoset import Nanoset
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
 from nanotron.sanity_checks import assert_tensor_synced_across_pg
+
+from tools.preprocess_data import main
 
 
 def create_dataset_paths(tmp_dir: str, quantity: int):
@@ -39,24 +38,20 @@ def create_dummy_json_dataset(path_to_json: str, dummy_text: str, n_samples: int
 
 
 def preprocess_dummy_dataset(json_dataset_path: str, datatrove_tokenized_dataset_path: str, tokenizer: str):
-    tmp_dir = str(Path(json_dataset_path).parent.absolute())
-
-    # Datatrove tokenizing pipeline
-    dist_executor = LocalPipelineExecutor(
-        pipeline=[
-            JsonlReader(data_folder=json_dataset_path),
-            DocumentTokenizer(
-                output_folder=datatrove_tokenized_dataset_path,
-                local_working_dir=tmp_dir,
-                save_filename="dummy_dataset_tokenized",
-                tokenizer_name_or_path=tokenizer,
-                eos_token=None,
-            ),
-        ],
-        tasks=1,
-        workers=-1,
+    # Create args for preprocessing
+    args = Namespace(
+        readers="jsonl",
+        dataset=json_dataset_path,
+        column="text",
+        glob_pattern=None,
+        output_folder=datatrove_tokenized_dataset_path,
+        tokenizer_name_or_path=tokenizer,
+        eos_token=None,
+        n_tasks=1,
+        logging_dir=None,
     )
-    dist_executor.run()
+    # tools/preprocess_data.py main
+    main(args)
 
 
 def assert_batch_dataloader(
