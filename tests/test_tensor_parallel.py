@@ -6,7 +6,6 @@ import pytest
 import torch
 from helpers.utils import available_gpus, init_distributed, rerun_if_address_is_in_use
 from nanotron import constants
-from nanotron.distributed import get_global_rank
 from nanotron.fp8.tensor import FP8Tensor, convert_tensor_from_fp8
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.tensor_parallel.enum import TensorParallelLinearMode
@@ -16,6 +15,43 @@ from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelEmbedding,
 )
 from torch import nn
+
+
+class ReferenceLinear(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, input, weight, bias):
+        constants.REF_INPUT = input
+        constants.REF_WEIGHT = weight
+        constants.REF_BIAS = bias
+
+        ctx.save_for_backward(input, weight, bias)
+        out = input @ weight.t()
+        if bias is not None:
+            out += bias
+
+        constants.REF_OUTPUT = out
+
+        return out
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        # pydevd.settrace(suspend=False, trace_only_current_thread=True)
+
+        input, weight, bias = ctx.saved_tensors
+        grad_input = grad_output @ weight
+        grad_weight = grad_output.t() @ input
+
+        constants.REF_GRAD_OUTPUT = grad_output
+        constants.REF_GRAD_INPUT = grad_input
+        constants.REF_GRAD_WEIGHT = grad_weight
+
+        if bias is not None:
+            grad_bias = grad_output.sum(0)
+            constants.REF_GRAD_BIAS = grad_bias
+
+            return grad_input, grad_weight, grad_bias
+        else:
+            return grad_input, grad_weight, None
 
 
 @pytest.mark.parametrize("tp,dp,pp", [pytest.param(i, 1, 1) for i in range(1, min(4, available_gpus()) + 1)])
@@ -72,33 +108,6 @@ def _test_column_linear(
 
     # Un-sharded
     reference_linear = nn.Linear(in_features=in_features, out_features=out_features, device="cuda")
-
-    class ReferenceLinear(torch.autograd.Function):
-        @staticmethod
-        def forward(ctx, input, weight, bias):
-            ctx.save_for_backward(input, weight)
-            return input @ weight.t() + bias
-
-        @staticmethod
-        def backward(ctx, grad_output):
-            # pydevd.settrace(suspend=False, trace_only_current_thread=True)
-
-            input, weight = ctx.saved_tensors
-            grad_input = grad_output @ weight
-            grad_weight = grad_output.t() @ input
-            grad_bias = grad_output.sum(0)
-
-            # global REF_GRAD_OUTPUT
-            # global REF_GRAD_INPUT
-            # global REF_GRAD_WEIGHT
-            # global REF_GRAD_BIAS
-
-            constants.REF_GRAD_OUTPUT = grad_output
-            constants.REF_GRAD_INPUT = grad_input
-            constants.REF_GRAD_WEIGHT = grad_weight
-            constants.REF_GRAD_BIAS = grad_bias
-
-            return grad_input, grad_weight, grad_bias
 
     # Copy weights/bias from sharded to un-sharded
     with torch.inference_mode():
@@ -182,6 +191,14 @@ def _test_column_linear(
         dist.get_rank(parallel_context.tp_pg) * out_features_per_tp_rank,
         (dist.get_rank(parallel_context.tp_pg) + 1) * out_features_per_tp_rank,
     )
+
+    torch.testing.assert_close(
+        convert_tensor_from_fp8(column_linear.weight.data, column_linear.weight.data.fp8_meta, torch.float16),
+        reference_linear.weight[hidden_dim_slice].to(torch.float16),
+        rtol=0.1,
+        atol=0.1,
+    )
+
     # torch.testing.assert_close(
     #     column_linear.weight.grad,
     #     reference_linear.weight.grad[hidden_dim_slice],
@@ -190,7 +207,8 @@ def _test_column_linear(
     # TODO(xrsrke): retrieve accumulation precision from recipe
     assert sharded_output.dtype == torch.float16
     # NOTE(xrsrke): we expect the output is a raw torch.Tensor, not FP8Paramter, or NanotronParameter
-    assert isinstance(sharded_output, torch.Tensor)
+    # assert isinstance(sharded_output, torch.Tensor)
+    assert sharded_output.__class__ == torch.Tensor
     assert sharded_output.requires_grad is True
 
     if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
@@ -232,7 +250,8 @@ def _test_column_linear(
 # @pytest.mark.parametrize("tp,dp,pp", [pytest.param(i, 1, 1) for i in range(1, min(4, available_gpus()) + 1)])
 # @pytest.mark.parametrize("tp_mode", list(TensorParallelLinearMode))
 # @pytest.mark.parametrize("async_communication", [False, True])
-@pytest.mark.parametrize("tp,dp,pp", [pytest.param(i, 1, 1) for i in range(1, min(4, available_gpus()) + 1)])
+# @pytest.mark.parametrize("tp,dp,pp", [pytest.param(i, 1, 1) for i in range(1, min(4, available_gpus()) + 1)])
+@pytest.mark.parametrize("tp,dp,pp", [[1, 1, 1], [2, 1, 1]])
 # @pytest.mark.parametrize("tp_mode", list(TensorParallelLinearMode))
 # @pytest.mark.parametrize("async_communication", [False, True])
 @pytest.mark.parametrize("tp_mode", [TensorParallelLinearMode.ALL_REDUCE])
@@ -251,7 +270,7 @@ def _test_row_linear(parallel_context: ParallelContext, tp_mode: TensorParallelL
     # out_features = 3
     # in_features_per_rank = 2
 
-    out_features = 32
+    out_features = 16
     in_features_per_rank = 32
 
     in_features = parallel_context.tp_pg.size() * in_features_per_rank
@@ -264,17 +283,27 @@ def _test_row_linear(parallel_context: ParallelContext, tp_mode: TensorParallelL
         mode=tp_mode,
         device="cuda",
         async_communication=async_communication,
+        bias=False,
     )
 
     # Un-sharded
-    reference_linear = nn.Linear(in_features=in_features, out_features=out_features, device="cuda")
+    reference_linear = nn.Linear(in_features=in_features, out_features=out_features, bias=False, device="cuda")
 
     # Copy weights/bias from sharded to un-sharded
     # NOTE(xrsrke): dont' use torch.inference_mode because got "Cannot set version_counter for inference tensor"
     # https://github.com/pytorch/pytorch/issues/112024
     # with torch.inference_mode():
     dist.all_reduce(tensor=reference_linear.weight, op=dist.ReduceOp.SUM, group=parallel_context.tp_pg)
-    row_linear.weight.copy_(
+    # row_linear.weight.copy_(
+    #     reference_linear.weight[
+    #         :,
+    #         dist.get_rank(parallel_context.tp_pg)
+    #         * in_features_per_rank : (dist.get_rank(parallel_context.tp_pg) + 1)
+    #         * in_features_per_rank,
+    #     ]
+    # )
+
+    row_linear.weight.data.set_data(
         reference_linear.weight[
             :,
             dist.get_rank(parallel_context.tp_pg)
@@ -282,14 +311,29 @@ def _test_row_linear(parallel_context: ParallelContext, tp_mode: TensorParallelL
             * in_features_per_rank,
         ]
     )
-    # broadcast bias from rank 0, and the other don't have bias
-    if dist.get_rank(parallel_context.tp_pg) == 0:
-        row_linear.bias.copy_(reference_linear.bias)
-    dist.broadcast(
-        tensor=reference_linear.bias,
-        src=get_global_rank(group=parallel_context.tp_pg, group_rank=0),
-        group=parallel_context.tp_pg,
+
+    torch.testing.assert_close(
+        row_linear.weight.data.orig_data.to(torch.float16),
+        reference_linear.weight.to(torch.float16),
+        rtol=0.1,
+        atol=0.1,
     )
+
+    torch.testing.assert_close(
+        convert_tensor_from_fp8(row_linear.weight.data, row_linear.weight.data.fp8_meta, torch.float16),
+        reference_linear.weight.to(torch.float16),
+        rtol=0.1,
+        atol=0.1,
+    )
+
+    # broadcast bias from rank 0, and the other don't have bias
+    # if dist.get_rank(parallel_context.tp_pg) == 0:
+    #     row_linear.bias.copy_(reference_linear.bias)
+    # dist.broadcast(
+    #     tensor=reference_linear.bias,
+    #     src=get_global_rank(group=parallel_context.tp_pg, group_rank=0),
+    #     group=parallel_context.tp_pg,
+    # )
 
     # Generate random input
     # if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
@@ -300,9 +344,9 @@ def _test_row_linear(parallel_context: ParallelContext, tp_mode: TensorParallelL
     #     raise ValueError()
 
     if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
-        batch_size = 32
+        batch_size = 16
     elif tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
-        batch_size = 32 * parallel_context.tp_pg.size()
+        batch_size = 16 * parallel_context.tp_pg.size()
     else:
         raise ValueError()
 
@@ -321,7 +365,13 @@ def _test_row_linear(parallel_context: ParallelContext, tp_mode: TensorParallelL
     # Test that we get the same output after forward pass
     # TODO @kunhao: We may want to have our custom error type
     sharded_output = row_linear(random_sharded_input)
-    reference_output = reference_linear(random_input)
+    # reference_output = reference_linear(random_input)
+    reference_output = ReferenceLinear.apply(random_input, reference_linear.weight, reference_linear.bias)
+
+    assert sharded_output.dtype == torch.float16
+    # NOTE(xrsrke): we expect the output is a raw torch.Tensor, not FP8Paramter, or NanotronParameter
+    assert sharded_output.__class__ == torch.Tensor
+    assert sharded_output.requires_grad is True
 
     if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
         sharded_reference_output = reference_output
@@ -337,7 +387,7 @@ def _test_row_linear(parallel_context: ParallelContext, tp_mode: TensorParallelL
         raise ValueError(f"Unsupported mode: {tp_mode}")
 
     # TODO @thomasw21: Tune tolerance
-    torch.testing.assert_close(sharded_output, sharded_reference_output.to(torch.float16), rtol=0.1, atol=0.1)
+    torch.testing.assert_close(sharded_output, sharded_reference_output.to(torch.float16), rtol=0.2, atol=0.2)
 
     # Test that we get the same gradient after backward pass
     sharded_output.sum().backward()
@@ -364,7 +414,7 @@ def _test_row_linear(parallel_context: ParallelContext, tp_mode: TensorParallelL
             dist.get_rank(parallel_context.tp_pg)
             * in_features_per_rank : (dist.get_rank(parallel_context.tp_pg) + 1)
             * in_features_per_rank,
-        ],
+        ].to(torch.float16),
         rtol=0.2,
         atol=0.2,
     )

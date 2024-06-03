@@ -306,6 +306,8 @@ class _FP8Matmul(torch.autograd.Function):
     ) -> torch.Tensor:
         assert not isinstance(input, FP8Tensor)
 
+        constants.DEBUG_FP8_INPUT = input
+
         if metadatas.input is None:
             fp8_input = FP8Tensor(
                 input,
@@ -322,6 +324,8 @@ class _FP8Matmul(torch.autograd.Function):
         ctx.save_for_backward(fp8_input, weight)
         ctx.name = name
 
+        constants.DEBUG_FP8_WEIGHT = weight
+
         # NOTE: pass FP8Tensor instead of FP8Parameter
         output = fp8_matmul_kernel(
             # NOTE: that works
@@ -333,6 +337,8 @@ class _FP8Matmul(torch.autograd.Function):
             use_split_accumulator=FP8LM_RECIPE.linear.split_accumulator.output,
             accum_qtype=accum_qtype,
         )
+
+        constants.DEBUG_FP8_OUTPUT = output
 
         # output = _fp8_matmul_kernel_2(
         #     # NOTE: that works

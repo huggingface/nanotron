@@ -250,8 +250,10 @@ class LowPrecisionTensor(torch.Tensor):
         # between tensor.py and meta.py fix this
         from nanotron.fp8.meta import FP8Meta
 
-        amax = tensor.abs().max().clone()
+        # NOTE: detach from original computational graph
+        amax = tensor.abs().max().clone().detach()
         scale = update_scaling_factor(amax, torch.tensor(INITIAL_SCALING_FACTOR, dtype=torch.float32), dtype)
+        scale = scale.clone().detach()
         fp8_meta = FP8Meta(amax, scale, dtype, interval)
         return fp8_meta
 
@@ -301,7 +303,7 @@ class LowPrecisionTensor(torch.Tensor):
             assert data.dtype == self.data.dtype, "The data must have the same dtype as the tensor, got {data.dtype}"
             quantized_data = data
         else:
-            quantized_data = self.__class__(data, self.fp8_meta.dtype, self.fp8_meta.interval)
+            quantized_data = self.__class__(data, dtype=self.fp8_meta.dtype, interval=self.fp8_meta.interval)
 
         self.data = quantized_data.data
         self.orig_data = quantized_data.orig_data

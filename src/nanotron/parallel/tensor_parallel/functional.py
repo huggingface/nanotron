@@ -576,6 +576,9 @@ def row_linear(
         return _RowLinearAsyncCommunication.apply(input, weight, bias, group, tp_mode)
 
     if isinstance(weight.data, FP8Tensor):
+        if bias is not None:
+            bias = bias.data if isinstance(bias, NanotronParameter) else bias
+
         out = fp8_functional.linear(
             input, weight.data, bias, accum_qtype=DTypes.KFLOAT16, metadatas=metadatas, name=name
         )

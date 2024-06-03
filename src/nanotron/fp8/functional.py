@@ -2,6 +2,7 @@ from typing import Optional, Union
 
 import torch
 
+from nanotron import constants
 from nanotron.fp8.constants import QTYPE_TO_DTYPE
 from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.linear import FP8LinearMeta
@@ -110,6 +111,7 @@ def linear(
     # TODO(xrsrke): support return an fp8 tensor as output
     # since we will quantize it back to FP8 anyway in the next linear
     output = rearrange(output, "(b n) h -> b n h", n=seq_len, b=batch_size) if is_input_flat is True else output
+    constants.DEBUG_FP8_BIAS = bias
     output = output if bias is None else output + bias
     return output
 
