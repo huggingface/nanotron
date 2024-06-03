@@ -23,8 +23,8 @@ import torch
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
 
+from nanotron import constants, logging
 from nanotron import distributed as dist
-from nanotron import logging
 from nanotron.config import (
     Config,
     DatasetStageArgs,
@@ -79,6 +79,7 @@ from nanotron.sanity_checks import (
     before_optim_step_sanity_checks,
     before_tbi_sanity_checks,
 )
+from nanotron.scaling.monitor import convert_logs_to_flat_logs
 from nanotron.scaling.parametrization import ParametrizationMethod
 from nanotron.serialize import (
     load_lr_scheduler,
@@ -202,6 +203,11 @@ class DistributedTrainer:
         )
 
         # Init optimizer
+        # TODO(xrsrke): remove this after debugging
+        self.params_id_to_param_names = {
+            id(param): name for name, param in self.unwrapped_model.get_named_params_with_correct_tied()
+        }
+        constants.PARAM_ID_TO_PARAM_NAMES = self.params_id_to_param_names
         self.optimizer, self.grad_accumulator = init_optimizer_and_grad_accumulator(
             parametrization_method=parametrization_method,
             model=self.model,
@@ -287,6 +293,10 @@ class DistributedTrainer:
                 level=logging.WARNING,
                 rank=0,
             )
+
+        # TODO(xrsrke): remove this after debugging
+        # self.params_id_to_param_names = {id(param): name for name, param in self.unwrapped_model.get_named_params_with_correct_tied()}
+        # self.optimizer.optimizer.params_id_to_param_names = self.params_id_to_param_names
 
         self.post_init()
 
@@ -431,6 +441,13 @@ class DistributedTrainer:
         ],
         **kwargs,
     ) -> None:
+        def get_optim_logs(mappings, optim, prefix):
+            optim_loggings = {}
+            for p in optim.loggings:
+                param_name = mappings[id(p)]
+                optim_loggings[param_name] = optim.loggings[p]
+            return convert_logs_to_flat_logs(optim_loggings)
+
         self.pre_training(**kwargs)
 
         if self.config.checkpoints.save_initial_state and self.init_checkpoint_path is None:
@@ -460,12 +477,11 @@ class DistributedTrainer:
                 self._update_dataloader_based_on_training_stages(dataloader_or_dls)
 
                 is_ready_to_log = (self.iteration_step - 1) % self.config.logging.iteration_step_info_interval == 0
-                if is_ready_to_log is True and self.config.logging.monitor_model_states is True:
-                    # nn_logs, state_handles = monitor_model(self.unwrapped_model, self.parallel_context)
-                    # from nanotron import constants
+                # if is_ready_to_log is True and self.config.logging.monitor_model_states is True:
+                #     nn_logs, state_handles = monitor_model(self.unwrapped_model, self.parallel_context)
+                #     from nanotron import constants
 
-                    # constants.NN_STATES = nn_logs
-                    pass
+                #     constants.NN_STATES = nn_logs
 
                 # Training step
                 outputs, loss_avg = self.training_step(dataloader=self.current_dataloader)
@@ -481,6 +497,9 @@ class DistributedTrainer:
                 if is_ready_to_log is True:
                     self.train_step_logs(outputs=outputs, loss_avg=loss_avg)
 
+                    # for handle in state_handles:
+                    #     handle.remove()
+
                     # if (
                     #     self.config.logging.monitor_model_states is True
                     #     and dist.get_rank(self.parallel_context.world_pg) == 0
@@ -492,12 +511,17 @@ class DistributedTrainer:
 
                     #     constants.NN_STATES = None
 
+                    #     optim_logs = get_optim_logs(
+                    #         self.params_id_to_param_names, self.optimizer.optimizer, prefix=""
+                    #     )
+
+                    #     assert 1 == 1
+
+                    #     wandb.log({**optim_logs, "iteration_step": self.iteration_step})
+
                 # Checkpoint
                 if self.iteration_step % self.config.checkpoints.checkpoint_interval == 0:
                     self.save_checkpoint()
-
-                # for handle in state_handles:
-                #     handle.remove()
 
         dist.barrier()  # let's wait for everyone before leaving
 
@@ -672,7 +696,7 @@ class DistributedTrainer:
                     ]
                 )
 
-            # NOTE: only one rank writes to wandb
+            # # NOTE: only one rank writes to wandb
             if dist.get_rank(self.parallel_context.world_pg) == 0 and wandb is not None:
                 wandb.log(
                     {
@@ -680,7 +704,6 @@ class DistributedTrainer:
                         "iteration_step": self.iteration_step,
                     }
                 )
-                # pass
 
             self.loggerwriter.add_scalars_from_list(log_entries, self.iteration_step)
 

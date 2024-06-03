@@ -332,7 +332,13 @@ class LowPrecisionTensor(torch.Tensor):
 
     def __repr__(self) -> str:
         if hasattr(self, "fp8_meta"):
-            return f"FP8Tensor({repr(self.data)}, fp8_meta={self.fp8_meta})"
+            if self.__class__ == FP16Tensor:
+                return f"FP16Tensor({repr(self.data)}, fp8_meta={self.fp8_meta})"
+            elif self.__class__ == FP8Tensor:
+                return f"FP8Tensor({repr(self.data)}, fp8_meta={self.fp8_meta})"
+            else:
+                raise ValueError(f"Unknown tensor class: {self.__class__}")
+
         return super().__repr__()
 
     def clone(self) -> FP8Tensor:
@@ -349,6 +355,7 @@ class FP8Tensor(LowPrecisionTensor):
         assert isinstance(tensor, torch.Tensor)
         assert tensor.dtype not in FP8_DTYPES, "The tensor already quantized to FP8"
 
+        tensor = tensor.contiguous()
         return convert_tensor_to_fp8(tensor, fp8_meta)
 
     # def to(self, dtype: Union[torch.float16, torch.float32]):
@@ -365,6 +372,8 @@ class FP16Tensor(LowPrecisionTensor):
         assert isinstance(tensor, torch.Tensor)
         assert tensor.dtype != torch.float16, "You can't quantize a tensor to FP16 if it's already FP16"
 
+        tensor = tensor.contiguous()
+        # TODO(xrsrke): convert it to int8 format
         return (tensor * fp8_meta.scale).to(torch.float16)
 
 

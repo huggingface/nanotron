@@ -5,6 +5,7 @@ import torch
 from torch import nn
 from torch.optim import Optimizer
 
+from nanotron import constants
 from nanotron.fp8.constants import FP8_DTYPES, FP8LM_RECIPE
 from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.parameter import FP8Parameter
@@ -239,6 +240,11 @@ class FP8Adam(Optimizer):
                 else:
                     raw_data = p.orig_data if hasattr(p, "orig_data") else p.data
                 assert raw_data.dtype in [torch.float32]
+
+                # if isinstance(p, NanotronParameter):
+                #     assert 1 == 1
+                if "mlp.down_proj" in constants.PARAM_ID_TO_PARAM_NAMES[id(p)]:
+                    assert 1 == 1
 
                 # TODO(xrsrke): retrieve the dtype for master_weights from the recipe
                 fp16_p = FP16Tensor(raw_data, dtype=DTypes.KFLOAT16)

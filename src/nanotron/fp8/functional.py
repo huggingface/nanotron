@@ -21,7 +21,8 @@ def mm(
     """
     from einops import rearrange
 
-    from nanotron.fp8.linear import _FP8Matmul
+    # from nanotron.fp8.linear import _FP8Matmul
+    from nanotron.fp8.old_version import _FP8Matmul
 
     seq_len = None
     batch_size = None
@@ -84,7 +85,8 @@ def linear(
     # TODO(xrsrke): refactor this out, don't duplicate the code
     from einops import rearrange
 
-    from nanotron.fp8.linear import _FP8Matmul
+    # from nanotron.fp8.linear import _FP8Matmul, _FP8MatmulWithFixedShapeMismatch
+    from nanotron.fp8.old_version import _FP8Matmul
 
     seq_len = None
     batch_size = None

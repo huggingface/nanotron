@@ -45,8 +45,8 @@ general:
   benchmark_csv_path: null
   consumed_train_samples: null
   ignore_sanity_checks: true
-  project: debug
-  run: tiny_llama_%date_%jobid
+  project: fp8_for_nanotron
+  run: fp8
   seed: 42
   step: null
 lighteval: null
