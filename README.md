@@ -11,106 +11,93 @@
 
 <h4 align="center">
     <p>
-        <a href="#Philosophy">Philosophy</a> •
-        <a href="#Core-Features">Core Features</a> •
-        <a href="#Installation">Installation</a> •
-        <a href="#Quick-examples">Usage</a> •
-        <a href="#Development-guidelines">Contributions</a> •
-        <a href="docs/debugging.md">Debugging</a>
+        <a href="#installation">Installation</a> •
+        <a href="#quick-start">Quick Start</a> •
+        <a href="#features">Features</a> •
+        <a href="CONTRIBUTING.md">Contributing</a>
     <p>
 </h4>
 
 <h3 align="center">
     <a href="https://huggingface.co/nanotron"><img style="float: middle; padding: 10px 10px 10px 10px;" width="60" height="55" src="https://huggingface.co/datasets/huggingface/brand-assets/resolve/main/hf-logo.png" /></a>
 </h3>
+<h3 align="center">
+<p>Pretraining models made easy
+</h3>
 
 
+Nanotron is a library for pretraining transformer models. It provides a simple and flexible API to pretrain models on custom datasets. Nanotron is designed to be easy to use, fast, and scalable. It is built with the following principles in mind:
 
-#
+- **Simplicity**: Nanotron is designed to be easy to use. It provides a simple and flexible API to pretrain models on custom datasets.
+- **Performance**: Optimized for speed and scalability, Nanotron uses the latest techniques to train models faster and more efficiently.
 
-The objective of this library is to provide easy distributed primitives in order to train a variety of models efficiently using 3D parallelism. For more information about the internal design of the library or 3D parallelism in general, please check out [[docs.md]](./docs/docs.md) and [[3d_parallelism.md]](./docs/3d_parallelism.md).
+## Installation
 
-
-# Philosophy
-
-- Make it fast. At least as fast as other open source versions.
-- Make it minimal. We don't actually need to support all techniques and all versions of 3D parallelism. What matters is that we can efficiently use the "best" ones.
-- Make everything explicit instead of transparent. As we move forward, making things transparent works well when it works well but is a horrible debugging experience if one doesn't understand the implications of techniques used. In order to mitigate this, we choose to be explicit in the way it does things
-
-# Core Features
-
-We support the following:
- - 3D parallelism, including one-forward-one-backward pipeline engine
- - ZeRO-1 optimizer
- - FP32 gradient accumulation
- - Parameter tying/sharding
-
-# Installation
-
-Requirements:
- - Python >= 3.10
- - PyTorch >= 2.0.0
- - Flash-Attention >= 2.5.0
-
-To install (in a new env):
 ```bash
-pip install torch
-pip install packaging; pip install "flash-attn>=2.5.0"  --no-build-isolation
-pip install nanotron
+# Requirements: Python>=3.10
+git clone https://github.com/huggingface/nanotron
+cd nanotron
+pip install --upgrade pip
+pip install --pre torch --index-url https://download.pytorch.org/whl/nightly/cu121
+pip install -e .
+
+# Install dependencies if you want to use the example scripts
+pip install datasets transformers
+pip install triton "flash-attn>=2.5.0" --no-build-isolation
+```
+> [!NOTE]
+> If you get `undefined symbol: ncclCommRegister` error you should install torch 2.1.2 instead: `pip install torch==2.1.2 --index-url https://download.pytorch.org/whl/cu121`
+
+> [!TIP]
+> We log to wandb automatically if it's installed. For that you can use `pip install wandb`. If you don't want to use wandb, you can run `wandb disabled`.
+
+## Quick Start
+### Training a tiny Llama model
+The following command will train a tiny Llama model on a single node with 8 GPUs. The model will be saved in the `checkpoints` directory as specified in the config file.
+```bash
+CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node=8 run_train.py --config-file examples/config_tiny_llama.yaml
 ```
 
-Also nice to have: `pip install transformers datasets python-etcd tensorboardX`
-
-We also support a set of flavors that you can install using `pip install -e [$FLAVOR]`:
- - `dev`: Used is you are developping in `nanotron`. It installs in particular our linter mechanism. On top of that you have to run `pre-commit install` afterwards.
- - `test`: We use `pytest` in order to run out testing suite. In order to run tests in parallel, it will install `pytest-xdist`, which you can leverage by running `pytest -n 12 tests` (12 is the number of parallel test)
-
-
-# Quick examples
-
-In the `/examples` directory, you can find a few example configuration file, and a script to run it.
-
-You can run a sample training using:
+### Run generation from your checkpoint
 ```bash
-torchrun --nproc_per_node=8 run_train.py --config-file examples/train_tiny_llama.sh
+torchrun --nproc_per_node=1 run_generate.py --ckpt-path checkpoints/10/ --tp 1 --pp 1
+# We could set a larger TP for faster generation, and a larger PP in case of very large models.
 ```
 
-And run a sample generation using:
-```bash
-torchrun --nproc_per_node=8 run_generation.py --ckpt-path checkpoints/text/4
-```
+### Custom examples
+You can find more examples in the [`/examples`](/examples) directory:
+<!-- Make a table of the examples we support -->
+| Example | Description |
+| --- | --- |
+| `custom-dataloader` | Plug a custom dataloader to nanotron |
+| `datatrove` | Use the datatrove library to load data |
+| `doremi` | Use DoReMi to speed up training |
+| `mamba` | Train an example Mamba model |
+| `moe` | Train an example Mixture-of-Experts (MoE) model |
+| `mup` | Use spectral µTransfer to scale up your model |
 
-# Development guidelines
-
-If you plan on developing on `nanotron`, we suggest you install the `dev` flavor: `pip install -e ".[dev]"`
-
-We use pre-commit to run a bunch of callbacks on each commit, mostly normalization code in order for the codebase to stay consistent. Please do run `pre-commit install`.
-
-For the linting:
-```bash
-pre-commit install
-pre-commit run --config .pre-commit-config.yaml --all-files
-```
-
-*As a part of making sure we aren't slowed down as the codebase grows, we will not merge a PR if the features it introduces do not have test coverage.*
-
-We have extensions built on top of Nanotron, with their tests located in the `/examples` folder. Since VSCode defaults to discovering tests only in the `/tests` folder, please run tests from both `/examples` and `/tests` to ensure your PR does not break these extensions. Please run `make tests` to execute all the nanotron tests and the tests in the `/examples` directory that you need to pass.
-
-Features we would like to add:
-- [ ] Support `torch.compile`
-- [ ] More optimized kernels
-- [ ] Support Zero3
-- [ ] Other PP schedules (such as Interleaved 1f1b...)
-- [ ] Ring attention / Sequence Parallelism
-- [ ] 3D Parallel MoEs
-- [ ] Supporting more architectures (Mamba..)
-- [ ] ...
+We're working on adding more examples soon! Feel free to add a PR to add your own example. 🚀
 
 
-# Useful scripts
-- `scripts/log_lighteval_to_wandb.py`: logs the evaluation results of LightEval to wandb, including summary statistics.
+## Features
+We currently support the following features:
+- [x] 3D parallelism (DP+TP+PP)
+- [x] Expert parallelism for MoEs
+- [x] AFAB and 1F1B schedules for PP
+- [x] Explicit APIs for TP and PP which enables easy debugging
+- [x] ZeRO-1 optimizer
+- [x] FP32 gradient accumulation
+- [x] Parameter tying/sharding
+- [x] Custom module checkpointing for large models
+- [x] Spectral µTransfer parametrization for scaling up neural networks
+- [x] Mamba example
 
+And we have on our roadmap:
+- [ ] FP8 training
+- [ ] ZeRO-3 optimizer (a.k.a FSDP)
+- [ ] `torch.compile` support
+- [ ] Ring attention
+- [ ] Interleaved 1f1b schedule
 
-# Credits
-
-We would like to thank everyone working on LLMs, especially those sharing their work openly from which we took great inspiration: Nvidia for `Megatron-LM/apex`, Microsoft for `DeepSpeed`, HazyResearch for `flash-attn`
+## Credits
+We would like to thank everyone working on LLMs, especially those sharing their work openly from which we took great inspiration: Nvidia for `Megatron-LM/apex`, Microsoft for `DeepSpeed`, HazyResearch for `flash-attn`..

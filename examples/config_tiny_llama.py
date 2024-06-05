@@ -2,6 +2,7 @@
 import os
 
 from nanotron.config import (
+    AdamWOptimizerArgs,
     CheckpointsArgs,
     Config,
     DataArgs,
@@ -62,11 +63,13 @@ optimizer = OptimizerArgs(
     weight_decay=0.01,
     clip_grad=1.0,
     accumulate_grad_in_fp32=True,
-    adam_eps=1e-08,
-    adam_beta1=0.9,
-    adam_beta2=0.95,
-    torch_adam_is_fused=True,
     learning_rate_scheduler=learning_rate,
+    optimizer_factory=AdamWOptimizerArgs(
+        adam_eps=1e-08,
+        adam_beta1=0.9,
+        adam_beta2=0.95,
+        torch_adam_is_fused=True,
+    ),
 )
 
 parallelism = ParallelismArgs(
@@ -78,13 +81,28 @@ parallelism = ParallelismArgs(
     tp_linear_async_communication=True,
 )
 
-tokens = TokensArgs(sequence_length=32, train_steps=10, micro_batch_size=2, batch_accumulation_per_replica=1)
+tokens = TokensArgs(sequence_length=256, train_steps=15, micro_batch_size=2, batch_accumulation_per_replica=1)
 
-dataset = PretrainDatasetsArgs(
-    hf_dataset_or_datasets="HuggingFaceH4/testing_alpaca_small", text_column_name="completion"
-)
+data_stages = [
+    DatasetStageArgs(
+        name="Stable Training Stage",
+        start_training_step=1,
+        data=DataArgs(
+            dataset=PretrainDatasetsArgs(hf_dataset_or_datasets="stas/openwebtext-10k", text_column_name="text"),
+            seed=seed,
+        ),
+    ),
+    DatasetStageArgs(
+        name="Annealing Phase",
+        start_training_step=10,
+        data=DataArgs(
+            dataset=PretrainDatasetsArgs(hf_dataset_or_datasets="stas/openwebtext-10k", text_column_name="text"),
+            seed=seed,
+        ),
+    ),
+]
 
-checkpoints_path = os.path.dirname(os.path.dirname(__file__)) + "/checkpoints"
+checkpoints_path = "./checkpoints"
 os.makedirs(checkpoints_path, exist_ok=True)
 
 config = Config(
@@ -92,16 +110,11 @@ config = Config(
     checkpoints=CheckpointsArgs(checkpoints_path=checkpoints_path, checkpoint_interval=10),
     parallelism=parallelism,
     model=ModelArgs(init_method=RandomInit(std=0.025), model_config=model_config),
-    tokenizer=TokenizerArgs("gpt2"),
+    tokenizer=TokenizerArgs("robot-test/dummy-tokenizer-wordlevel"),
     optimizer=optimizer,
     logging=LoggingArgs(),
     tokens=tokens,
-    data_stages=[
-        DatasetStageArgs(
-            name="Stable Training Stage", start_training_step=1, data=DataArgs(dataset=dataset, seed=seed)
-        ),
-        DatasetStageArgs(name="Annealing Phase", start_training_step=10, data=DataArgs(dataset=dataset, seed=seed)),
-    ],
+    data_stages=data_stages,
     profiler=None,
 )
 
