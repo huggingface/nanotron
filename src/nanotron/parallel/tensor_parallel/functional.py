@@ -21,6 +21,7 @@ from torch.nn import functional as F
 
 import nanotron.distributed as dist
 import nanotron.fp8.functional as fp8_functional
+from nanotron import constants
 from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.linear import FP8LinearMeta
 from nanotron.fp8.tensor import FP8Tensor
@@ -447,7 +448,10 @@ def column_linear(
 
     if isinstance(weight.data, FP8Tensor):
         if bias is not None:
+            bias_requires_grad = bias.requires_grad
             bias = bias.data if isinstance(bias, NanotronParameter) else bias
+            # NOTE: hacky
+            bias.requires_grad = bias_requires_grad
 
         from nanotron import constants
 
@@ -593,5 +597,7 @@ def row_linear(
         out = differentiable_reduce_scatter_sum(out, group=group)
     else:
         raise ValueError(f"Got unexpected mode: {tp_mode}.")
+
+    constants.DEBUG_FP8_OUTPUT_AFTER_ALL_REDUCE = out
 
     return out

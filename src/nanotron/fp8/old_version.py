@@ -306,6 +306,9 @@ class _FP8Matmul(torch.autograd.Function):
     ) -> torch.Tensor:
         assert not isinstance(input, FP8Tensor)
 
+        orig_input_shape = input.shape
+        input = input.contiguous().view(-1).contiguous().view(orig_input_shape)
+
         constants.DEBUG_FP8_INPUT = input
 
         if metadatas.input is None:
@@ -324,21 +327,59 @@ class _FP8Matmul(torch.autograd.Function):
         ctx.save_for_backward(fp8_input, weight)
         ctx.name = name
 
-        constants.DEBUG_FP8_WEIGHT = weight
+        output = output.contiguous()
+        accum_output = torch.zeros(output.shape, dtype=torch.float16, device="cuda")
+
+        assert fp8_input.data.is_contiguous()
+        assert weight.data.is_contiguous()
+        assert accum_output.is_contiguous()
 
         # NOTE: pass FP8Tensor instead of FP8Parameter
+        # output = fp8_matmul_kernel(
+        #     # NOTE: that works
+        #     mat_a=weight,
+        #     transpose_a=True,
+        #     mat_b=fp8_input,
+        #     transpose_b=False,
+        #     output=accum_output,
+        #     use_split_accumulator=FP8LM_RECIPE.linear.split_accumulator.output,
+        #     accum_qtype=DTypes.KFLOAT16,
+        # )
+        # accum_output = torch.zeros(output.shape, dtype=torch.float16, device="cuda")
+        constants.DEBUG_FP8_OUTPUT_FOR_ACCUMULATION = accum_output.clone(memory_format=torch.preserve_format)
+
+        torch.cuda.synchronize()
+
+        constants.DEBUG_FP8_INPUT_AFTER_QUANT = fp8_input
+        constants.DEBUG_FP8_WEIGHT = weight
         output = fp8_matmul_kernel(
             # NOTE: that works
             mat_a=weight,
             transpose_a=True,
             mat_b=fp8_input,
             transpose_b=False,
-            output=output,
+            output=accum_output,
             use_split_accumulator=FP8LM_RECIPE.linear.split_accumulator.output,
-            accum_qtype=accum_qtype,
+            accum_qtype=DTypes.KFLOAT16,
         )
-
         constants.DEBUG_FP8_OUTPUT = output
+        constants.DEBUG_FP8_OUTPUT_COPY = output.clone(memory_format=torch.preserve_format)
+
+        torch.testing.assert_close(output, constants.DEBUG_FP8_OUTPUT_DIRECTLY_FROM_FP8_THAT_WORK, rtol=0.2, atol=0.2)
+
+        assert output.shape == accum_output.shape
+
+        from nanotron.fp8.tensor import convert_tensor_from_fp8
+
+        torch.testing.assert_close(
+            output,
+            (
+                constants.DEBUG_FP8_INPUT.to(torch.float16)
+                @ convert_tensor_from_fp8(weight, weight.fp8_meta, torch.float16).T
+            ),
+            rtol=0.1,
+            atol=0.1,
+        )
 
         # output = _fp8_matmul_kernel_2(
         #     # NOTE: that works

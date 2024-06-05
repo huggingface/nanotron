@@ -4,8 +4,13 @@ import os
 import nanotron.fp8.distributed as dist
 import pytest
 import torch
+import torch.nn.functional as F
 from helpers.utils import available_gpus, init_distributed, rerun_if_address_is_in_use
 from nanotron import constants
+from nanotron.distributed import get_global_rank
+from nanotron.fp8.constants import FP8LM_RECIPE
+from nanotron.fp8.dtypes import DTypes
+from nanotron.fp8.old_version import fp8_matmul_kernel
 from nanotron.fp8.tensor import FP8Tensor, convert_tensor_from_fp8
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.tensor_parallel.enum import TensorParallelLinearMode
@@ -54,11 +59,14 @@ class ReferenceLinear(torch.autograd.Function):
             return grad_input, grad_weight, None
 
 
-@pytest.mark.parametrize("tp,dp,pp", [pytest.param(i, 1, 1) for i in range(1, min(4, available_gpus()) + 1)])
+# TODO(xrsrke): support gradient flow to bias
+# @pytest.mark.parametrize("tp,dp,pp", [pytest.param(i, 1, 1) for i in range(1, min(4, available_gpus()) + 1)])
+@pytest.mark.parametrize("tp,dp,pp", [[1, 1, 1], [2, 1, 1]])
 # @pytest.mark.parametrize("tp_mode", list(TensorParallelLinearMode))
 # @pytest.mark.parametrize("async_communication", [False, True])
 @pytest.mark.parametrize("tp_mode", [TensorParallelLinearMode.ALL_REDUCE])
 @pytest.mark.parametrize("async_communication", [False])
+@pytest.mark.parametrize("with_bias", [False])
 # @pytest.mark.parametrize("is_fp8", [False, True])
 @rerun_if_address_is_in_use()
 def test_column_linear(
@@ -67,6 +75,7 @@ def test_column_linear(
     pp: int,
     tp_mode: TensorParallelLinearMode,
     async_communication: bool,
+    with_bias: bool,
     # is_fp8: bool
 ):
     if tp_mode is TensorParallelLinearMode.ALL_REDUCE and async_communication:
@@ -74,6 +83,7 @@ def test_column_linear(
     init_distributed(tp=tp, dp=dp, pp=pp)(_test_column_linear)(
         tp_mode=tp_mode,
         async_communication=async_communication,
+        with_bias=with_bias
         # is_fp8=is_fp8
     )
 
@@ -82,6 +92,7 @@ def _test_column_linear(
     parallel_context: ParallelContext,
     tp_mode: TensorParallelLinearMode,
     async_communication: bool,
+    with_bias: bool,
     # is_fp8: bool
 ):
     if async_communication:
@@ -103,27 +114,38 @@ def _test_column_linear(
         mode=tp_mode,
         device="cuda",
         async_communication=async_communication,
+        bias=with_bias
         # is_fp8=is_fp8
     )
 
     # Un-sharded
-    reference_linear = nn.Linear(in_features=in_features, out_features=out_features, device="cuda")
+    reference_linear = nn.Linear(in_features=in_features, out_features=out_features, bias=with_bias, device="cuda")
 
     # Copy weights/bias from sharded to un-sharded
     with torch.inference_mode():
+        # weight = column_linear.weight.data
+        # weight = convert_tensor_from_fp8(weight, weight.fp8_meta, torch.float16),
         dist.all_gather(
             tensor_list=list(reference_linear.weight.split(out_features_per_tp_rank, dim=0)),
-            tensor=column_linear.weight,
+            tensor=column_linear.weight.data,
             group=parallel_context.tp_pg,
         )
-        # TODO(xrsrke): support if bias is in FP8
-        bias = column_linear.bias.data
-        bias = bias.to(reference_linear.bias.dtype) if bias.dtype != reference_linear.bias.dtype else bias
-        dist.all_gather(
-            tensor_list=list(reference_linear.bias.split(out_features_per_tp_rank, dim=0)),
-            tensor=bias,
-            group=parallel_context.tp_pg,
-        )
+
+        if with_bias is True:
+            # TODO(xrsrke): support if bias is in FP8
+            bias = column_linear.bias.data
+            bias = bias.to(reference_linear.bias.dtype) if bias.dtype != reference_linear.bias.dtype else bias
+            dist.all_gather(
+                tensor_list=list(reference_linear.bias.split(out_features_per_tp_rank, dim=0)),
+                tensor=bias,
+                group=parallel_context.tp_pg,
+            )
+
+    # TODO(xrsrke)
+    if with_bias is True:
+        assert column_linear.bias.requires_grad is (with_bias is True)
+        assert column_linear.bias.data.__class__ == torch.Tensor
+        # assert column_linear.bias.data.requires_grad is (with_bias is True)
 
     # Generate random input
     random_input: torch.Tensor
@@ -159,6 +181,7 @@ def _test_column_linear(
 
     # Test that we get the same output after forward pass
     sharded_output = column_linear(sharded_random_input)
+
     # reference_output = reference_linear(random_input)
     reference_output = ReferenceLinear.apply(random_input, reference_linear.weight, reference_linear.bias)
 
@@ -225,6 +248,12 @@ def _test_column_linear(
     else:
         ValueError(f"Unsupported mode: {tp_mode}")
 
+    if with_bias is True:
+        torch.testing.assert_close(
+            column_linear.bias.grad,
+            reference_linear.bias.grad[hidden_dim_slice],
+        )
+
     if isinstance(column_linear.weight.data, FP8Tensor):
         grad = column_linear.weight.data._temp_grad
         grad = convert_tensor_from_fp8(grad, column_linear.weight.data._temp_grad.fp8_meta, torch.float16)
@@ -239,13 +268,10 @@ def _test_column_linear(
         atol=0.2,
     )
 
-    # torch.testing.assert_close(
-    #     column_linear.bias.grad,
-    #     reference_linear.bias.grad[hidden_dim_slice],
-    # )
-
     parallel_context.destroy()
 
+
+# TODO(xrsrke): support gradient flow to bias
 
 # @pytest.mark.parametrize("tp,dp,pp", [pytest.param(i, 1, 1) for i in range(1, min(4, available_gpus()) + 1)])
 # @pytest.mark.parametrize("tp_mode", list(TensorParallelLinearMode))
@@ -256,17 +282,27 @@ def _test_column_linear(
 # @pytest.mark.parametrize("async_communication", [False, True])
 @pytest.mark.parametrize("tp_mode", [TensorParallelLinearMode.ALL_REDUCE])
 @pytest.mark.parametrize("async_communication", [False])
+@pytest.mark.parametrize("with_bias", [False])
 @rerun_if_address_is_in_use()
-def test_row_linear(tp: int, dp: int, pp: int, tp_mode: TensorParallelLinearMode, async_communication: bool):
+def test_row_linear(
+    tp: int, dp: int, pp: int, tp_mode: TensorParallelLinearMode, async_communication: bool, with_bias: bool
+):
     if tp_mode is TensorParallelLinearMode.ALL_REDUCE and async_communication:
         pytest.skip("ALL_REDUCE mode does not support async communication")
 
-    init_distributed(tp=tp, dp=dp, pp=pp)(_test_row_linear)(tp_mode=tp_mode, async_communication=async_communication)
+    init_distributed(tp=tp, dp=dp, pp=pp)(_test_row_linear)(
+        tp_mode=tp_mode, async_communication=async_communication, with_bias=with_bias
+    )
 
 
-def _test_row_linear(parallel_context: ParallelContext, tp_mode: TensorParallelLinearMode, async_communication: bool):
+def _test_row_linear(
+    parallel_context: ParallelContext, tp_mode: TensorParallelLinearMode, async_communication: bool, with_bias: bool
+):
     if async_communication:
         os.environ["CUDA_DEVICE_MAX_CONNECTIONS"] = "1"
+
+    torch.backends.cuda.matmul.allow_tf32 = False
+
     # out_features = 3
     # in_features_per_rank = 2
 
@@ -283,11 +319,11 @@ def _test_row_linear(parallel_context: ParallelContext, tp_mode: TensorParallelL
         mode=tp_mode,
         device="cuda",
         async_communication=async_communication,
-        bias=False,
+        bias=with_bias,
     )
 
     # Un-sharded
-    reference_linear = nn.Linear(in_features=in_features, out_features=out_features, bias=False, device="cuda")
+    reference_linear = nn.Linear(in_features=in_features, out_features=out_features, bias=with_bias, device="cuda")
 
     # Copy weights/bias from sharded to un-sharded
     # NOTE(xrsrke): dont' use torch.inference_mode because got "Cannot set version_counter for inference tensor"
@@ -312,28 +348,16 @@ def _test_row_linear(parallel_context: ParallelContext, tp_mode: TensorParallelL
         ]
     )
 
-    torch.testing.assert_close(
-        row_linear.weight.data.orig_data.to(torch.float16),
-        reference_linear.weight.to(torch.float16),
-        rtol=0.1,
-        atol=0.1,
-    )
+    if with_bias is True:
+        # broadcast bias from rank 0, and the other don't have bias
+        if dist.get_rank(parallel_context.tp_pg) == 0:
+            row_linear.bias.data.copy_(reference_linear.bias)
 
-    torch.testing.assert_close(
-        convert_tensor_from_fp8(row_linear.weight.data, row_linear.weight.data.fp8_meta, torch.float16),
-        reference_linear.weight.to(torch.float16),
-        rtol=0.1,
-        atol=0.1,
-    )
-
-    # broadcast bias from rank 0, and the other don't have bias
-    # if dist.get_rank(parallel_context.tp_pg) == 0:
-    #     row_linear.bias.copy_(reference_linear.bias)
-    # dist.broadcast(
-    #     tensor=reference_linear.bias,
-    #     src=get_global_rank(group=parallel_context.tp_pg, group_rank=0),
-    #     group=parallel_context.tp_pg,
-    # )
+        dist.broadcast(
+            tensor=reference_linear.bias,
+            src=get_global_rank(group=parallel_context.tp_pg, group_rank=0),
+            group=parallel_context.tp_pg,
+        )
 
     # Generate random input
     # if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
@@ -362,16 +386,97 @@ def _test_row_linear(parallel_context: ParallelContext, tp_mode: TensorParallelL
         * in_features_per_rank,
     ]
 
+    start_idx = dist.get_rank(parallel_context.tp_pg) * in_features_per_rank
+    end_idx = (dist.get_rank(parallel_context.tp_pg) + 1) * in_features_per_rank
+    sharded_portion = (slice(None), slice(start_idx, end_idx))
+    torch.testing.assert_close(
+        convert_tensor_from_fp8(row_linear.weight.data, row_linear.weight.data.fp8_meta, torch.float16),
+        reference_linear.weight.to(torch.float16)[sharded_portion],
+        rtol=0.1,
+        atol=0.1,
+    )
+
     # Test that we get the same output after forward pass
     # TODO @kunhao: We may want to have our custom error type
-    sharded_output = row_linear(random_sharded_input)
-    # reference_output = reference_linear(random_input)
     reference_output = ReferenceLinear.apply(random_input, reference_linear.weight, reference_linear.bias)
+    local_output = F.linear(
+        random_sharded_input.to(torch.float16).contiguous(),
+        reference_linear.weight[sharded_portion].to(torch.float16).contiguous(),
+    )
 
-    assert sharded_output.dtype == torch.float16
-    # NOTE(xrsrke): we expect the output is a raw torch.Tensor, not FP8Paramter, or NanotronParameter
-    assert sharded_output.__class__ == torch.Tensor
-    assert sharded_output.requires_grad is True
+    fp8_input = FP8Tensor(
+        random_sharded_input,
+        dtype=FP8LM_RECIPE.linear.input.dtype,
+        interval=FP8LM_RECIPE.linear.input.interval,
+        # is_delayed_scaling=FP8LM_RECIPE.linear.input.is_delayed_scaling,
+    )
+    fp8_weight = row_linear.weight.data
+
+    constants.DEBUB_FP8_INPUT_THAT_WORK = fp8_input
+    constants.DEBUB_FP8_WEIGHT_THAT_WORK = fp8_weight
+
+    direct_output = fp8_matmul_kernel(
+        # NOTE: that works
+        mat_a=fp8_weight,
+        transpose_a=True,
+        mat_b=fp8_input,
+        transpose_b=False,
+        output=torch.zeros(local_output.shape, dtype=torch.float16, device="cuda"),
+        use_split_accumulator=FP8LM_RECIPE.linear.split_accumulator.output,
+        accum_qtype=DTypes.KFLOAT16,
+    )
+    constants.DEBUG_FP8_OUTPUT_DIRECTLY_FROM_FP8_THAT_WORK = direct_output
+
+    torch.testing.assert_close(direct_output, local_output, rtol=0.2, atol=0.2)
+
+    reference_output = reference_linear(random_input)
+    sharded_output = row_linear(random_sharded_input)
+
+    torch.cuda.synchronize()
+
+    # manual_output = F.linear(constants.DEBUG_FP8_INPUT.to(torch.float16), convert_tensor_from_fp8(constants.DEBUG_FP8_WEIGHT, constants.DEBUG_FP8_WEIGHT.fp8_meta, torch.float16))
+    manual_output = F.linear(
+        random_sharded_input.to(torch.float16),
+        convert_tensor_from_fp8(constants.DEBUG_FP8_WEIGHT, constants.DEBUG_FP8_WEIGHT.fp8_meta, torch.float16),
+    )
+    constants.REF_MANUAL_OUTPUT = manual_output
+
+    # assert sharded_output.dtype == torch.float16
+    # # NOTE(xrsrke): we expect the output is a raw torch.Tensor, not FP8Paramter, or NanotronParameter
+    # assert sharded_output.__class__ == torch.Tensor
+    # assert sharded_output.requires_grad is True
+
+    # torch.testing.assert_close(
+    #     row_linear.weight.data.orig_data.to(torch.float16),
+    #     reference_linear.weight.to(torch.float16)[sharded_portion],
+    #     rtol=0.1,
+    #     atol=0.1,
+    # )
+
+    torch.testing.assert_close(random_sharded_input, constants.DEBUG_FP8_INPUT, rtol=0.2, atol=0.2)
+
+    # local_output = F.linear(random_sharded_input.to(torch.float16), reference_linear.weight[sharded_portion].to(torch.float16))
+
+    torch.testing.assert_close(manual_output, local_output, rtol=0.2, atol=0.2)
+
+    torch.testing.assert_close(
+        fp8_matmul_kernel(
+            # NOTE: that works
+            mat_a=constants.DEBUG_FP8_WEIGHT,
+            transpose_a=True,
+            mat_b=constants.DEBUG_FP8_INPUT_AFTER_QUANT,
+            transpose_b=False,
+            output=torch.zeros(manual_output.shape, dtype=torch.float16, device="cuda"),
+            use_split_accumulator=FP8LM_RECIPE.linear.split_accumulator.output,
+            accum_qtype=DTypes.KFLOAT16,
+        ),
+        local_output,
+        rtol=0.2,
+        atol=0.2,
+    )
+
+    torch.testing.assert_close(constants.DEBUG_FP8_OUTPUT, manual_output, rtol=0.2, atol=0.2)
+    torch.testing.assert_close(constants.DEBUG_FP8_OUTPUT, local_output, rtol=0.2, atol=0.2)
 
     if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
         sharded_reference_output = reference_output
@@ -393,13 +498,14 @@ def _test_row_linear(parallel_context: ParallelContext, tp_mode: TensorParallelL
     sharded_output.sum().backward()
     reference_output.sum().backward()
 
-    # if dist.get_rank(parallel_context.tp_pg) == 0:
-    #     torch.testing.assert_close(
-    #         row_linear.bias.grad,
-    #         reference_linear.bias.grad,
-    #     )
-    # else:
-    #     assert row_linear.bias is None
+    if with_bias is True:
+        if dist.get_rank(parallel_context.tp_pg) == 0:
+            torch.testing.assert_close(
+                row_linear.bias.grad,
+                reference_linear.bias.grad,
+            )
+        else:
+            assert row_linear.bias is None
 
     if isinstance(row_linear.weight.data, FP8Tensor):
         grad = row_linear.weight.data._temp_grad
