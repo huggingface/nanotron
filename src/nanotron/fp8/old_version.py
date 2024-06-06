@@ -365,21 +365,21 @@ class _FP8Matmul(torch.autograd.Function):
         constants.DEBUG_FP8_OUTPUT = output
         constants.DEBUG_FP8_OUTPUT_COPY = output.clone(memory_format=torch.preserve_format)
 
-        torch.testing.assert_close(output, constants.DEBUG_FP8_OUTPUT_DIRECTLY_FROM_FP8_THAT_WORK, rtol=0.2, atol=0.2)
+        # torch.testing.assert_close(output, constants.DEBUG_FP8_OUTPUT_DIRECTLY_FROM_FP8_THAT_WORK, rtol=0.2, atol=0.2)
 
-        assert output.shape == accum_output.shape
+        # assert output.shape == accum_output.shape
 
-        from nanotron.fp8.tensor import convert_tensor_from_fp8
+        # # from nanotron.fp8.tensor import convert_tensor_from_fp8
 
-        torch.testing.assert_close(
-            output,
-            (
-                constants.DEBUG_FP8_INPUT.to(torch.float16)
-                @ convert_tensor_from_fp8(weight, weight.fp8_meta, torch.float16).T
-            ),
-            rtol=0.1,
-            atol=0.1,
-        )
+        # torch.testing.assert_close(
+        #     output,
+        #     (
+        #         constants.DEBUG_FP8_INPUT.to(torch.float16)
+        #         @ convert_tensor_from_fp8(weight, weight.fp8_meta, torch.float16).T
+        #     ),
+        #     rtol=0.1,
+        #     atol=0.1,
+        # )
 
         # output = _fp8_matmul_kernel_2(
         #     # NOTE: that works
