@@ -402,7 +402,9 @@ class NanotronParameter(nn.Parameter):
         unwrapped_kwargs = tree_map(unwrap, kwargs)
 
         OPS_THAT_RETURN_ORIGINAL_TENSOR = [
+            torch.ops.aten.embedding.default,
             torch.ops.aten.native_layer_norm.default,
+            torch.ops.aten.native_layer_norm_backward.default,
             torch.ops.aten.native_layer_norm_backward.default,
         ]
 

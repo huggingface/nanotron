@@ -55,3 +55,22 @@ def _test_create_sharded_fp8_parameter(parallel_context: ParallelContext, test_c
     assert metadata == metadata_from_str_dict
 
     parallel_context.destroy()
+
+
+@rerun_if_address_is_in_use()
+def test_set_new_data_for_nanotron_parameter():
+    init_distributed(tp=2, dp=1, pp=1)(_test_set_new_data_for_nanotron_parameter)()
+
+
+def _test_set_new_data_for_nanotron_parameter(parallel_context: ParallelContext):
+    param = torch.nn.Parameter(torch.randn(16, 64))
+
+    split_config = SplitConfig(
+        split_dim=0,
+        contiguous_chunks=(8, 8),
+    )
+    param = create_sharded_parameter_from_config(parameter=param, pg=parallel_context.tp_pg, split_config=split_config)
+    param.data = param.data.to(torch.float16)
+
+    assert param.dtype == torch.float16
+    assert param.data.dtype == torch.float16

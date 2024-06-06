@@ -118,20 +118,21 @@ optimizer:
   accumulate_grad_in_fp32: false
   # clip_grad: 1.0
   learning_rate_scheduler:
-    learning_rate: 0.0015 # note: 1/2 of pythia use this for a 400m model
+    # learning_rate: 0.0015 # note: 1/2 of pythia use this for a 400m model
+    learning_rate: 6.0e-4
     lr_decay_starting_step: null
     lr_decay_steps: null
     lr_decay_style: cosine
-    lr_warmup_steps: 2000 # 10% warm up of total training steps
+    lr_warmup_steps: 1000 # 10% warm up of total training steps
     lr_warmup_style: linear
-    min_decay_lr: 1.0e-05
+    min_decay_lr: 6.0e-5
   optimizer_factory:
     adam_beta1: 0.9
-    adam_beta2: 0.999
+    adam_beta2: 0.95
     adam_eps: 1.0e-08
     name: adam
     torch_adam_is_fused: true
-  weight_decay: 0
+  weight_decay: 0.1
   zero_stage: 0
 
 parallelism:
@@ -159,5 +160,5 @@ tokens:
   limit_val_batches: 0
   micro_batch_size: 256
   sequence_length: 256
-  train_steps: 10_000
+  train_steps: 50_000
   val_check_interval: -1

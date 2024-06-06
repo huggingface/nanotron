@@ -298,6 +298,13 @@ class DistributedTrainer:
         # self.params_id_to_param_names = {id(param): name for name, param in self.unwrapped_model.get_named_params_with_correct_tied()}
         # self.optimizer.optimizer.params_id_to_param_names = self.params_id_to_param_names
 
+        # MODULES_THAT_IN_FLOAT16 = [TensorParallelEmbedding, nn.LayerNorm]
+        # leaf_modules = get_leaf_modules(self.unwrapped_model.model)
+        # for n, module in leaf_modules:
+        #     if any(isinstance(module, m) for m in MODULES_THAT_IN_FLOAT16):
+        #         for p in module.parameters():
+        #             p.data = p.data.to(torch.float16)
+
         self.post_init()
 
     def pre_init(self):

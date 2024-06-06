@@ -239,6 +239,11 @@ class FP8Adam(Optimizer):
                     raw_data = p.data.orig_data if hasattr(p.data, "orig_data") else p.data
                 else:
                     raw_data = p.orig_data if hasattr(p, "orig_data") else p.data
+
+                if raw_data.dtype == torch.float16:
+                    # NOTE: only do mixed precision for parameters that quantize to FP8
+                    continue
+
                 assert raw_data.dtype in [torch.float32]
 
                 # if isinstance(p, NanotronParameter):
@@ -329,6 +334,8 @@ class FP8Adam(Optimizer):
                 if p.data.__class__ == torch.Tensor and p.grad is None:
                     continue
 
+                RAW_FP16 = False
+
                 loggings[p] = {}
 
                 state = self.state[p]
@@ -344,8 +351,8 @@ class FP8Adam(Optimizer):
 
                 if p.__class__ == NanotronParameter:
                     assert (isinstance(p.data, FP8Tensor) and p.data.dtype in FP8_DTYPES) or (
-                        isinstance(p, torch.Tensor) and p.dtype == torch.float16
-                    ), f"type(p)={type(p)}, p.dtype={p.dtype}"
+                        isinstance(p.data, torch.Tensor) and p.data.dtype == torch.float16
+                    ), f"type(p)={type(p)}, p.dtype={p.data.dtype}"
                 else:
                     assert (isinstance(p, FP8Parameter) and p.dtype in FP8_DTYPES) or (
                         isinstance(p, torch.Tensor) and p.dtype == torch.float16
@@ -358,11 +365,15 @@ class FP8Adam(Optimizer):
                 # if p.ndim != 1:
                 #     print(f"[FP8Adam] original grad: {grad[:2, :2]} \n")
 
+                # try:
                 fp32_grad = (
                     grad.to(torch.float32)
-                    if p.ndim == 1
+                    if (p.ndim == 1 or grad.dtype == torch.float16)
                     else convert_tensor_from_fp8(grad, grad.fp8_meta, torch.float32)
                 )
+                # except:
+                #     assert 1 == 1
+
                 loggings[p]["hp_grad"] = compute_stas(fp32_grad)
 
                 if is_overflow_underflow_nan(fp32_grad):
@@ -397,11 +408,23 @@ class FP8Adam(Optimizer):
                 # so we can't do the mapping, so now we map data_ptr to data_ptr
                 # TODO(xrsrke): ideally, we should map tensor to tensor
                 # it's easier to debug (u know which tensor is which)
-                fp16_p = self.mappping_fp8_to_master_weight[p]
+
+                if p in self.mappping_fp8_to_master_weight:
+                    fp16_p = self.mappping_fp8_to_master_weight[p]
+                else:
+                    assert p.data.dtype == torch.float16
+                    RAW_FP16 = True
+                    fp16_p = p
+
                 loggings[p]["lp_p"] = compute_stas(fp16_p)
 
                 assert fp16_p.dtype == torch.float16
-                fp32_p = convert_tensor_from_fp16(fp16_p, torch.float32)
+
+                if RAW_FP16 is True:
+                    fp32_p = fp16_p.to(torch.float32)
+                else:
+                    fp32_p = convert_tensor_from_fp16(fp16_p, torch.float32)
+
                 # orig_fp32_p = fp32_p.clone()
                 loggings[p]["hp_p"] = compute_stas(fp32_p)
 
@@ -501,9 +524,13 @@ class FP8Adam(Optimizer):
                 # it returns False even though p is FP8Parameter
                 self.mappping_fp8_to_master_weight[p] = FP16Tensor(fp32_p, dtype=DTypes.KFLOAT16)
 
-                if p.ndim != 1:
+                if p.ndim != 1 and RAW_FP16 is False:
                     self.fp32_p = fp32_p.clone()
-                    p.data.set_data(fp32_p)
+                    try:
+                        p.data.set_data(fp32_p)
+                    except:
+                        assert 1 == 1
+
                     self.updated_p_fp8 = p.data.data
 
                     # if p.ndim != 1:
