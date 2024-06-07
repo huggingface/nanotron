@@ -19,6 +19,8 @@ import torch
 from torch.nn import functional as F
 
 import nanotron.distributed as dist
+from nanotron import logging
+from nanotron.logging import log_rank
 from nanotron.parallel.tensor_parallel.distributed_differentiable_primitives import (
     differentiable_all_gather,
     differentiable_all_reduce_sum,
@@ -27,6 +29,8 @@ from nanotron.parallel.tensor_parallel.distributed_differentiable_primitives imp
 )
 from nanotron.parallel.tensor_parallel.enum import TensorParallelLinearMode
 from nanotron.parallel.utils import assert_cuda_max_connections_set_to_1
+
+logger = logging.get_logger(__name__)
 
 
 class _ShardedCrossEntropy(torch.autograd.Function):
@@ -37,6 +41,13 @@ class _ShardedCrossEntropy(torch.autograd.Function):
         target,  # (batch_size, length)
         group: dist.ProcessGroup,
     ):
+        log_rank(
+            f"sharded_logits input of _ShardedCrossEntropy: sharded_logits.shape={sharded_logits.shape}",
+            logger=logger,
+            level=logging.INFO,
+            rank=0,
+        )
+
         # Maximum value along last dimension across all GPUs.
         logits_max = torch.max(sharded_logits, dim=-1)[0]
         dist.all_reduce(logits_max, op=dist.ReduceOp.MAX, group=group)
@@ -89,10 +100,10 @@ class _ShardedCrossEntropy(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_output):
-        # Retreive tensors from the forward path.
+        # Retrieve tensors from the forward path.
         softmax, target_mask, masked_target_1d = ctx.saved_tensors
 
-        # All the inputs have softmax as thier gradient.
+        # All the inputs have softmax as their gradient.
         grad_input = softmax
         # For simplicity, work with the 2D gradient.
         sharded_hidden_size = softmax.size()[-1]

@@ -1,4 +1,4 @@
-from typing import Dict, List, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.distributed as dist
@@ -56,17 +56,6 @@ def track_weight_and_grad_stats(name: str, module: nn.Module, parallel_context: 
                 if stats is not None:
                     logs[name][param_name] = stats
 
-        # if hasattr(module, "weight") and module.weight is not None:
-        #     stats = compute_stats(name, module.weight.data)
-
-        #     if stats is not None:
-        #         logs[name]["weight"] = stats
-
-        # if hasattr(module, "bias") and module.bias is not None:
-        #     stats = compute_stats(name, module.bias)
-        #     if stats is not None:
-        #         logs[name]["bias"] = stats
-
         inputs = input if isinstance(input, tuple) else (input,)
         outputs = output if isinstance(output, tuple) else (output,)
 
@@ -82,13 +71,31 @@ def track_weight_and_grad_stats(name: str, module: nn.Module, parallel_context: 
             stats = compute_stats(name, inputs[0])
             if stats is not None:
                 logs[name]["input"] = stats
+
+        dp_rank = dist.get_rank(group=parallel_context.dp_pg)
+        tp_rank = dist.get_rank(group=parallel_context.tp_pg)
+        pp_rank = dist.get_rank(group=parallel_context.pp_pg)
+
+        def save(name, tensor):
+            import os
+
+            # from nanotron.constants import
+            DIR = "./debug/nn_states_after_fix/acts/"
+
+            os.makedirs(DIR, exist_ok=True)
+
+            if dp_rank == 0:
+                torch.save(tensor, f"{DIR}/{name}_dp_rank_{dp_rank}_and_pp_rank_{pp_rank}_and_tp_rank_{tp_rank}.pt")
+
         if len(outputs) > 1:
             for i, out in enumerate(outputs):
                 stats = compute_stats(name, out)
+                save(name, out)
                 if stats is not None:
                     logs[name][f"output:{i}"] = stats
         elif len(outputs) == 1:
             stats = compute_stats(name, outputs[0])
+            save(name, outputs[0])
             if stats is not None:
                 logs[name]["output"] = stats
 
@@ -124,7 +131,9 @@ def track_weight_and_grad_stats(name: str, module: nn.Module, parallel_context: 
     return logs, handles
 
 
-def monitor_nanotron_model(model: NanotronModel, parallel_context: ParallelContext):
+def monitor_nanotron_model(model: NanotronModel, parallel_context: Optional[ParallelContext] = None):
+    assert parallel_context is not None
+
     def get_leaf_modules(module: nn.Module) -> List[Tuple[str, nn.Module]]:
         """
         Return all the leaf modules (modules without any child modules) in a PyTorch module.
@@ -149,7 +158,7 @@ def monitor_nanotron_model(model: NanotronModel, parallel_context: ParallelConte
 
 
 def convert_logs_to_flat_logs(
-    logs: Dict[str, Dict[str, Dict[str, Union[torch.Tensor, float]]]]
+    logs: Dict[str, Dict[str, Dict[str, Union[torch.Tensor, float]]]],
 ) -> Dict[str, Union[torch.Tensor, float]]:
     flat_logs = {}
     for module_name, components in logs.items():

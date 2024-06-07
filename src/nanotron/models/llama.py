@@ -1126,14 +1126,14 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                 ),
             )
 
-            log_rank(
-                f"Segment length is {self.segment_length}, turn_on_memory: {constants.CONFIG.infini_attention.turn_on_memory is True}",
-                logger=logger,
-                level=logging.WARNING,
-                rank=0,
-            )
+            # log_rank(
+            #     f"Segment length is {self.segment_length}, turn_on_memory: {constants.CONFIG.infini_attention.turn_on_memory is True}",
+            #     logger=logger,
+            #     level=logging.WARNING,
+            #     rank=0,
+            # )
 
-    def forward(
+    def _forward(
         self,
         # hidden_states: TensorType["sharded_seq_len", "batch_size", "hidden_size"],
         hidden_states: TensorType["sharded_batch_size", "seq_len", "hidden_size"],
@@ -1350,12 +1350,12 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         outputs = torch.cat(outputs, dim=1)  # concat along sequence dimension
         assert outputs.shape == hidden_states.shape
 
-        if constants.GLOBAL_STEP is not None and (constants.GLOBAL_STEP - 1) % constants.LOG_STATE_INTERVAL == 0:
-            if dist.get_rank() == 0:
-                import wandb
+        # if constants.GLOBAL_STEP is not None and (constants.GLOBAL_STEP - 1) % constants.LOG_STATE_INTERVAL == 0:
+        #     if dist.get_rank() == 0:
+        #         import wandb
 
-                logs[f"layer_{self.layer_idx}:outputs"] = compute_stas(outputs)
-                wandb.log({**logs, "iteration_step": constants.GLOBAL_STEP})
+        #         logs[f"layer_{self.layer_idx}:outputs"] = compute_stas(outputs)
+        #         wandb.log({**logs, "iteration_step": constants.GLOBAL_STEP})
 
         # sequence_masks = torch.cat(sequence_masks, dim=1)
         # assert sequence_masks.shape == sequence_mask.shape
@@ -1472,11 +1472,11 @@ class CausalSelfAttention(nn.Module, AttachableStore):
 
         return memory, normalization
 
-    def forward_with_hidden_states(
+    def forward(
         self,
         hidden_states,  # [seq_len, batch_size, hidden_size]
         sequence_mask,  # [batch_size, seq_len]
-        return_qkv_states: bool = False,
+        # return_qkv_states: bool = False,
     ):
         from flash_attn import bert_padding
         from flash_attn.flash_attn_interface import (
@@ -1484,12 +1484,16 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             flash_attn_with_kvcache,
         )
 
-        seq_len = hidden_states.shape[1]
+        # seq_len = hidden_states.shape[1]
 
         qkv_states = self.qkv_proj(
             hidden_states
         )  # [seq_len, batch_size, n_local_q_heads * d_qk + 2 * n_local_kv_heads * d_qk]
-        q_length, batch_size, _ = qkv_states.shape
+
+        # qkv_states = qkv_states.transpose(0, 1)
+        # q_length, batch_size, _ = qkv_states.shape
+        # NOTE: this is the new splitting dimension
+        batch_size, q_length, _ = qkv_states.shape
 
         if self.is_gqa:
             query_states, key_states, value_states = torch.split(
@@ -1528,27 +1532,27 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         #     value_states, "batch_size seq_len n_heads d_head -> batch_size n_heads seq_len d_head"
         # )
 
-        query_states_without_pe = rearrange(
-            query_states,
-            "seq_len batch_size n_heads d_head -> seq_len n_heads batch_size d_head",
-            # seq_len=self.segment_length,
-            seq_len=seq_len,
-        )
-        key_states_without_pe = rearrange(
-            key_states,
-            "seq_len batch_size n_heads d_head -> seq_len n_heads batch_size d_head",
-            # seq_len=self.segment_length,
-            seq_len=seq_len,
-        )
-        value_states_without_pe = rearrange(
-            value_states,
-            "seq_len batch_size n_heads d_head -> seq_len n_heads batch_size d_head",
-            # seq_len=self.segment_length,
-            seq_len=seq_len,
-        )
+        # query_states_without_pe = rearrange(
+        #     query_states,
+        #     "seq_len batch_size n_heads d_head -> seq_len n_heads batch_size d_head",
+        #     # seq_len=self.segment_length,
+        #     seq_len=seq_len,
+        # )
+        # key_states_without_pe = rearrange(
+        #     key_states,
+        #     "seq_len batch_size n_heads d_head -> seq_len n_heads batch_size d_head",
+        #     # seq_len=self.segment_length,
+        #     seq_len=seq_len,
+        # )
+        # value_states_without_pe = rearrange(
+        #     value_states,
+        #     "seq_len batch_size n_heads d_head -> seq_len n_heads batch_size d_head",
+        #     # seq_len=self.segment_length,
+        #     seq_len=seq_len,
+        # )
 
         # assert query_states_without_pe.shape[0] == self.segment_length
-        assert query_states_without_pe.shape[0] == seq_len
+        # assert query_states_without_pe.shape[0] == seq_len
 
         store = self.get_local_store()
         if store is not None:  # Inference case
@@ -1756,18 +1760,19 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         attention_output = (
             attention_output.contiguous().view(batch_size, q_length, self.n_local_q_heads * self.d_v).transpose(0, 1)
         )
-        # output = self.o_proj(attention_output)
-        # return {"hidden_states": output, "sequence_mask": sequence_mask}
+        output = self.o_proj(attention_output)
+        output = output.transpose(0, 1)
+        return {"hidden_states": output, "sequence_mask": sequence_mask}
 
-        return_outputs = {"hidden_states": None, "sequence_mask": sequence_mask}
-        return_outputs["qkv_states"] = (query_states, key_states, value_states) if return_qkv_states else ()
-        return_outputs["qkv_states_without_pe"] = (
-            query_states_without_pe,
-            key_states_without_pe,
-            value_states_without_pe,
-        )
-        return_outputs["attention_output"] = attention_output
-        return return_outputs
+        # return_outputs = {"hidden_states": None, "sequence_mask": sequence_mask}
+        # return_outputs["qkv_states"] = (query_states, key_states, value_states) if return_qkv_states else ()
+        # return_outputs["qkv_states_without_pe"] = (
+        #     query_states_without_pe,
+        #     key_states_without_pe,
+        #     value_states_without_pe,
+        # )
+        # return_outputs["attention_output"] = attention_output
+        # return return_outputs
 
 
 class LlamaDecoderLayer(nn.Module):
@@ -1809,6 +1814,13 @@ class LlamaDecoderLayer(nn.Module):
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
 
+        # log_rank(
+        #     f"hidden_states after input_layernorm: hidden_states.shape={hidden_states.shape}",
+        #     logger=logger,
+        #     level=logging.INFO,
+        #     rank=0,
+        # )
+
         output = self.attn(
             hidden_states=hidden_states,
             sequence_mask=sequence_mask,
@@ -1816,11 +1828,35 @@ class LlamaDecoderLayer(nn.Module):
             # prev_normalization=normalization,
         )
         hidden_states = output["hidden_states"]
+
+        # log_rank(
+        #     f"hidden_states after attn: hidden_states.shape={hidden_states.shape}",
+        #     logger=logger,
+        #     level=logging.INFO,
+        #     rank=0,
+        # )
+
         hidden_states = hidden_states + residual
 
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
+
+        # log_rank(
+        #     f"hidden_states after post_attention_layernorm: hidden_states.shape={hidden_states.shape}",
+        #     logger=logger,
+        #     level=logging.INFO,
+        #     rank=0,
+        # )
+
         hidden_states = self.mlp(hidden_states=hidden_states)["hidden_states"]
+
+        # log_rank(
+        #     f"hidden_states after mlp: hidden_states.shape={hidden_states.shape}",
+        #     logger=logger,
+        #     level=logging.INFO,
+        #     rank=0,
+        # )
+
         hidden_states = hidden_states + residual
 
         return {
@@ -1960,8 +1996,20 @@ class LlamaModel(nn.Module):
         input_mask: Union[torch.Tensor, TensorPointer],  # [batch_size, seq_len]
     ):
         # all tensors are optional as most ranks don't need anything from the dataloader.
+        # log_rank(
+        #     f"Idxs of inputs: input_ids.shape={input_ids.shape}, input_mask.shape={input_mask.shape}",
+        #     logger=logger,
+        #     level=logging.INFO,
+        #     rank=0,
+        # )
 
         output = self.token_position_embeddings(input_ids=input_ids, input_mask=input_mask)
+        # log_rank(
+        #     f"output['input_embeds'] of token_position_embeddings: output['input_embeds'].shape={output['input_embeds'].shape}",
+        #     logger=logger,
+        #     level=logging.INFO,
+        #     rank=0,
+        # )
 
         hidden_encoder_states = {
             "hidden_states": output["input_embeds"],
@@ -1969,12 +2017,31 @@ class LlamaModel(nn.Module):
             # "memory": None,
             # "normalization": None,
         }
-        for encoder_block in self.decoder:
+        for i, encoder_block in enumerate(self.decoder):
+            # log_rank(
+            #     f"Starting transformer block {i}",
+            #     logger=logger,
+            #     level=logging.INFO,
+            #     rank=0,
+            # )
             hidden_encoder_states = encoder_block(**hidden_encoder_states)
 
         hidden_states = self.final_layer_norm(input=hidden_encoder_states["hidden_states"])["hidden_states"]
+        # log_rank(
+        #     f"hidden_states after final_layer_norm: hidden_states.shape={hidden_states.shape}",
+        #     logger=logger,
+        #     level=logging.INFO,
+        #     rank=0,
+        # )
 
         sharded_logits = self.lm_head(x=hidden_states)["logits"]
+
+        # log_rank(
+        #     f"sharded_logits after lm_head: sharded_logits.shape={sharded_logits.shape}",
+        #     logger=logger,
+        #     level=logging.INFO,
+        #     rank=0,
+        # )
 
         fp32_sharded_logits = self.cast_to_fp32(x=sharded_logits)["output"]
 
@@ -2142,9 +2209,9 @@ class LlamaForTraining(NanotronModel):
                 continue
 
             if "balance_factors" in param_name:
-                import torch.nn.init as init
 
-                init.normal_(param, mean=0.0, std=0.01)
+                # init.normal_(param, mean=0.0, std=0.01)
+                param.zero_()
             else:
                 module = model.get_submodule(module_name)
                 parametrizator.parametrize(param_name, module)
