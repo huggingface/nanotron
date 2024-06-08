@@ -79,7 +79,7 @@ from nanotron.sanity_checks import (
     before_optim_step_sanity_checks,
     before_tbi_sanity_checks,
 )
-from nanotron.scaling.monitor import convert_logs_to_flat_logs
+from nanotron.scaling.monitor import convert_logs_to_flat_logs, monitor_model
 from nanotron.scaling.parametrization import ParametrizationMethod
 from nanotron.serialize import (
     load_lr_scheduler,
@@ -295,8 +295,10 @@ class DistributedTrainer:
             )
 
         # TODO(xrsrke): remove this after debugging
-        # self.params_id_to_param_names = {id(param): name for name, param in self.unwrapped_model.get_named_params_with_correct_tied()}
-        # self.optimizer.optimizer.params_id_to_param_names = self.params_id_to_param_names
+        self.params_id_to_param_names = {
+            id(param): name for name, param in self.unwrapped_model.get_named_params_with_correct_tied()
+        }
+        self.optimizer.optimizer.params_id_to_param_names = self.params_id_to_param_names
 
         # MODULES_THAT_IN_FLOAT16 = [TensorParallelEmbedding, nn.LayerNorm]
         # leaf_modules = get_leaf_modules(self.unwrapped_model.model)
@@ -325,13 +327,13 @@ class DistributedTrainer:
             rank=0,
         )
 
-        current_time = datetime.datetime.now().strftime("%d/%m/%Y_%H:%M:%S")
-        if dist.get_rank(self.parallel_context.world_pg) == 0 and wandb is not None:
-            wandb.init(
-                project=self.config.general.project,
-                name=f"{current_time}_{self.config.general.run}",
-                config={"nanotron_config": self.config.as_dict()},
-            )
+        datetime.datetime.now().strftime("%d/%m/%Y_%H:%M:%S")
+        # if dist.get_rank(self.parallel_context.world_pg) == 0 and wandb is not None:
+        #     wandb.init(
+        #         project=self.config.general.project,
+        #         name=f"{current_time}_{self.config.general.run}",
+        #         config={"nanotron_config": self.config.as_dict()},
+        #     )
 
     def post_train_step(self):
         pass
@@ -484,11 +486,11 @@ class DistributedTrainer:
                 self._update_dataloader_based_on_training_stages(dataloader_or_dls)
 
                 is_ready_to_log = (self.iteration_step - 1) % self.config.logging.iteration_step_info_interval == 0
-                # if is_ready_to_log is True and self.config.logging.monitor_model_states is True:
-                #     nn_logs, state_handles = monitor_model(self.unwrapped_model, self.parallel_context)
-                #     from nanotron import constants
+                if is_ready_to_log is True and self.config.logging.monitor_model_states is True:
+                    nn_logs, state_handles = monitor_model(self.unwrapped_model, self.parallel_context)
+                    from nanotron import constants
 
-                #     constants.NN_STATES = nn_logs
+                    constants.NN_STATES = nn_logs
 
                 # Training step
                 outputs, loss_avg = self.training_step(dataloader=self.current_dataloader)
@@ -504,8 +506,8 @@ class DistributedTrainer:
                 if is_ready_to_log is True:
                     self.train_step_logs(outputs=outputs, loss_avg=loss_avg)
 
-                    # for handle in state_handles:
-                    #     handle.remove()
+                    for handle in state_handles:
+                        handle.remove()
 
                     # if (
                     #     self.config.logging.monitor_model_states is True
@@ -704,13 +706,13 @@ class DistributedTrainer:
                 )
 
             # # NOTE: only one rank writes to wandb
-            if dist.get_rank(self.parallel_context.world_pg) == 0 and wandb is not None:
-                wandb.log(
-                    {
-                        **{log_item.tag: log_item.scalar_value for log_item in log_entries},
-                        "iteration_step": self.iteration_step,
-                    }
-                )
+            # if dist.get_rank(self.parallel_context.world_pg) == 0 and wandb is not None:
+            #     wandb.log(
+            #         {
+            #             **{log_item.tag: log_item.scalar_value for log_item in log_entries},
+            #             "iteration_step": self.iteration_step,
+            #         }
+            #     )
 
             self.loggerwriter.add_scalars_from_list(log_entries, self.iteration_step)
 

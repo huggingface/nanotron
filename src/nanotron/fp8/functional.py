@@ -2,7 +2,6 @@ from typing import Optional, Union
 
 import torch
 
-from nanotron import constants
 from nanotron.fp8.constants import QTYPE_TO_DTYPE
 from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.linear import FP8LinearMeta
@@ -22,8 +21,7 @@ def mm(
     """
     from einops import rearrange
 
-    # from nanotron.fp8.linear import _FP8Matmul
-    from nanotron.fp8.old_version import _FP8Matmul
+    from nanotron.fp8.linear import _FP8Matmul
 
     seq_len = None
     batch_size = None
@@ -86,8 +84,7 @@ def linear(
     # TODO(xrsrke): refactor this out, don't duplicate the code
     from einops import rearrange
 
-    # from nanotron.fp8.linear import _FP8Matmul, _FP8MatmulWithFixedShapeMismatch
-    from nanotron.fp8.old_version import _FP8Matmul
+    from nanotron.fp8.linear import _FP8Matmul
 
     seq_len = None
     batch_size = None
@@ -111,10 +108,5 @@ def linear(
     # TODO(xrsrke): support return an fp8 tensor as output
     # since we will quantize it back to FP8 anyway in the next linear
     output = rearrange(output, "(b n) h -> b n h", n=seq_len, b=batch_size) if is_input_flat is True else output
-    constants.DEBUG_FP8_BIAS = bias
     output = output if bias is None else output + bias
     return output
-
-    # output = torch.zeros(input.shape[0], weight.shape[1], device="cuda", dtype=QTYPE_TO_DTYPE[accum_qtype])
-    # output = addmm(input=bias, mat1=input, mat2=weight, output=output, accum_qtype=accum_qtype, metadatas=metadatas)
-    # return output

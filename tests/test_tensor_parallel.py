@@ -5,7 +5,6 @@ import nanotron.fp8.distributed as dist
 import pytest
 import torch
 from helpers.utils import available_gpus, init_distributed, rerun_if_address_is_in_use
-from nanotron import constants
 from nanotron.distributed import get_global_rank
 from nanotron.fp8.tensor import FP8Tensor, convert_tensor_from_fp8
 from nanotron.parallel import ParallelContext
@@ -17,43 +16,6 @@ from nanotron.parallel.tensor_parallel.nn import (
 )
 from nanotron.sanity_checks import assert_tensor_synced_across_pg
 from torch import nn
-
-
-class ReferenceLinear(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, input, weight, bias):
-        constants.REF_INPUT = input
-        constants.REF_WEIGHT = weight
-        constants.REF_BIAS = bias
-
-        ctx.save_for_backward(input, weight, bias)
-        out = input @ weight.t()
-        if bias is not None:
-            out += bias
-
-        constants.REF_OUTPUT = out
-
-        return out
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        # pydevd.settrace(suspend=False, trace_only_current_thread=True)
-
-        input, weight, bias = ctx.saved_tensors
-        grad_input = grad_output @ weight
-        grad_weight = grad_output.t() @ input
-
-        constants.REF_GRAD_OUTPUT = grad_output
-        constants.REF_GRAD_INPUT = grad_input
-        constants.REF_GRAD_WEIGHT = grad_weight
-
-        if bias is not None:
-            grad_bias = grad_output.sum(0)
-            constants.REF_GRAD_BIAS = grad_bias
-
-            return grad_input, grad_weight, grad_bias
-        else:
-            return grad_input, grad_weight, None
 
 
 # TODO(xrsrke): support gradient flow to bias
@@ -183,8 +145,8 @@ def _test_column_linear(
     # Test that we get the same output after forward pass
     sharded_output = column_linear(sharded_random_input)
 
-    # reference_output = reference_linear(random_input)
-    reference_output = ReferenceLinear.apply(random_input, reference_linear.weight, reference_linear.bias)
+    reference_output = reference_linear(random_input)
+    # reference_output = ReferenceLinear.apply(random_input, reference_linear.weight, reference_linear.bias)
 
     # TODO @thomasw21: Tune tolerance
     try:
@@ -222,11 +184,6 @@ def _test_column_linear(
         rtol=0.1,
         atol=0.1,
     )
-
-    # torch.testing.assert_close(
-    #     column_linear.weight.grad,
-    #     reference_linear.weight.grad[hidden_dim_slice],
-    # )
 
     # TODO(xrsrke): retrieve accumulation precision from recipe
     assert sharded_output.dtype == torch.float16
@@ -302,16 +259,11 @@ def _test_row_linear(
     if async_communication:
         os.environ["CUDA_DEVICE_MAX_CONNECTIONS"] = "1"
 
-    # torch.backends.cuda.matmul.allow_tf32 = False
-
-    # out_features = 3
-    # in_features_per_rank = 2
-
     out_features = 16
     in_features_per_rank = 32
 
     in_features = parallel_context.tp_pg.size() * in_features_per_rank
-    tp_rank = dist.get_rank(parallel_context.tp_pg)
+    dist.get_rank(parallel_context.tp_pg)
 
     # Sharded
     row_linear = FP8TensorParallelRowLinear(
@@ -330,16 +282,7 @@ def _test_row_linear(
     # Copy weights/bias from sharded to un-sharded
     # NOTE(xrsrke): dont' use torch.inference_mode because got "Cannot set version_counter for inference tensor"
     # https://github.com/pytorch/pytorch/issues/112024
-    # with torch.inference_mode():
     dist.all_reduce(tensor=reference_linear.weight, op=dist.ReduceOp.SUM, group=parallel_context.tp_pg)
-    # row_linear.weight.copy_(
-    #     reference_linear.weight[
-    #         :,
-    #         dist.get_rank(parallel_context.tp_pg)
-    #         * in_features_per_rank : (dist.get_rank(parallel_context.tp_pg) + 1)
-    #         * in_features_per_rank,
-    #     ]
-    # )
 
     sharded_weight = reference_linear.weight[
         :,
@@ -347,7 +290,6 @@ def _test_row_linear(
         * in_features_per_rank : (dist.get_rank(parallel_context.tp_pg) + 1)
         * in_features_per_rank,
     ]
-    torch.save(sharded_weight, f"sharded_weight_{tp_rank}.pt")
     row_linear.weight.data.set_data(sharded_weight)
 
     if with_bias is True:
@@ -362,13 +304,6 @@ def _test_row_linear(
         )
 
     # Generate random input
-    # if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
-    #     batch_size = 5
-    # elif tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
-    #     batch_size = 5 * parallel_context.tp_pg.size()
-    # else:
-    #     raise ValueError()
-
     if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
         batch_size = 16
     elif tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
@@ -389,8 +324,6 @@ def _test_row_linear(
         * in_features_per_rank : (dist.get_rank(parallel_context.tp_pg) + 1)
         * in_features_per_rank,
     ]
-    torch.save(random_input, f"random_input_{tp_rank}.pt")
-    torch.save(random_sharded_input, f"random_sharded_input_tp{tp_rank}.pt")
 
     start_idx = dist.get_rank(parallel_context.tp_pg) * in_features_per_rank
     end_idx = (dist.get_rank(parallel_context.tp_pg) + 1) * in_features_per_rank
@@ -404,86 +337,14 @@ def _test_row_linear(
 
     # Test that we get the same output after forward pass
     # TODO @kunhao: We may want to have our custom error type
-    reference_output = ReferenceLinear.apply(random_input, reference_linear.weight, reference_linear.bias)
-    torch.save(reference_linear.weight, f"reference_weight_{tp_rank}.pt")
-    torch.save(reference_output, f"reference_output_{tp_rank}.pt")
-
-    # local_output = F.linear(
-    #     random_sharded_input.to(torch.float16).contiguous(),
-    #     reference_linear.weight[sharded_portion].to(torch.float16).contiguous(),
-    # )
-
-    # fp8_input = FP8Tensor(
-    #     random_sharded_input,
-    #     dtype=FP8LM_RECIPE.linear.input.dtype,
-    #     interval=FP8LM_RECIPE.linear.input.interval,
-    #     # is_delayed_scaling=FP8LM_RECIPE.linear.input.is_delayed_scaling,
-    # )
-    # fp8_weight = row_linear.weight.data
-
-    # constants.DEBUB_FP8_INPUT_THAT_WORK = fp8_input
-    # constants.DEBUB_FP8_WEIGHT_THAT_WORK = fp8_weight
-
-    # direct_output = fp8_matmul_kernel(
-    #     # NOTE: that works
-    #     mat_a=fp8_weight,
-    #     transpose_a=True,
-    #     mat_b=fp8_input,
-    #     transpose_b=False,
-    #     output=torch.zeros(local_output.shape, dtype=torch.float16, device="cuda"),
-    #     use_split_accumulator=FP8LM_RECIPE.linear.split_accumulator.output,
-    #     accum_qtype=DTypes.KFLOAT16,
-    # )
-    # constants.DEBUG_FP8_OUTPUT_DIRECTLY_FROM_FP8_THAT_WORK = direct_output
-
-    # torch.testing.assert_close(direct_output, local_output, rtol=0.2, atol=0.2)
-
-    # reference_output = reference_linear(random_input)
+    reference_output = reference_linear(random_input)
+    # reference_output = ReferenceLinear.apply(random_input, reference_linear.weight, reference_linear.bias)
     sharded_output = row_linear(random_sharded_input)
-    torch.save(sharded_output, f"sharded_output_{tp_rank}.pt")
-
-    # torch.cuda.synchronize()
-
-    # manual_output = F.linear(constants.DEBUG_FP8_INPUT.to(torch.float16), convert_tensor_from_fp8(constants.DEBUG_FP8_WEIGHT, constants.DEBUG_FP8_WEIGHT.fp8_meta, torch.float16))
-    # manual_output = F.linear(
-    #     random_sharded_input.to(torch.float16),
-    #     convert_tensor_from_fp8(constants.DEBUG_FP8_WEIGHT, constants.DEBUG_FP8_WEIGHT.fp8_meta, torch.float16),
-    # )
-    # constants.REF_MANUAL_OUTPUT = manual_output
 
     assert sharded_output.dtype == torch.float16
     # NOTE(xrsrke): we expect the output is a raw torch.Tensor, not FP8Paramter, or NanotronParameter
     assert sharded_output.__class__ == torch.Tensor
     assert sharded_output.requires_grad is True
-
-    # torch.testing.assert_close(
-    #     row_linear.weight.data.orig_data.to(torch.float16),
-    #     reference_linear.weight.to(torch.float16)[sharded_portion],
-    #     rtol=0.1,
-    #     atol=0.1,
-    # )
-
-    # torch.testing.assert_close(random_sharded_input, constants.DEBUG_FP8_INPUT, rtol=0.2, atol=0.2)
-
-    # local_output = F.linear(random_sharded_input.to(torch.float16), reference_linear.weight[sharded_portion].to(torch.float16))
-
-    # torch.testing.assert_close(manual_output, local_output, rtol=0.2, atol=0.2)
-
-    # torch.testing.assert_close(
-    #     fp8_matmul_kernel(
-    #         # NOTE: that works
-    #         mat_a=constants.DEBUG_FP8_WEIGHT,
-    #         transpose_a=True,
-    #         mat_b=constants.DEBUG_FP8_INPUT_AFTER_QUANT,
-    #         transpose_b=False,
-    #         output=torch.zeros(manual_output.shape, dtype=torch.float16, device="cuda"),
-    #         use_split_accumulator=FP8LM_RECIPE.linear.split_accumulator.output,
-    #         accum_qtype=DTypes.KFLOAT16,
-    #     ),
-    #     local_output,
-    #     rtol=0.2,
-    #     atol=0.2,
-    # )
 
     if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
         sharded_reference_output = reference_output
@@ -497,27 +358,6 @@ def _test_row_linear(
         ]
     else:
         raise ValueError(f"Unsupported mode: {tp_mode}")
-
-    # torch.testing.assert_close(
-    #     fp8_matmul_kernel(
-    #         # NOTE: that works
-    #         mat_a=constants.DEBUG_FP8_WEIGHT,
-    #         transpose_a=True,
-    #         mat_b=constants.DEBUG_FP8_INPUT_AFTER_QUANT,
-    #         transpose_b=False,
-    #         output=torch.zeros(reference_output.shape, dtype=torch.float16, device="cuda"),
-    #         use_split_accumulator=FP8LM_RECIPE.linear.split_accumulator.output,
-    #         accum_qtype=DTypes.KFLOAT16,
-    #     ),
-    #     reference_output,
-    #     rtol=0.2,
-    #     atol=0.2,
-    # )
-
-    # torch.testing.assert_close(constants.DEBUG_FP8_OUTPUT_COPY, reference_output.to(torch.float16), rtol=0.2, atol=0.2)
-    torch.save(constants.DEBUG_FP8_OUTPUT_COPY, f"sharded_output_before_allreduce_{tp_rank}.pt")
-    # torch.testing.assert_close(sharded_output, sharded_reference_output, rtol=0.2, atol=0.2)
-    # torch.testing.assert_close(constants.DEBUG_FP8_OUTPUT, local_output, rtol=0.2, atol=0.2)
 
     # TODO @thomasw21: Tune tolerance
     torch.testing.assert_close(sharded_output, sharded_reference_output.to(torch.float16), rtol=0.2, atol=0.2)
