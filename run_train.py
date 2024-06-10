@@ -12,8 +12,9 @@ from typing import Dict, cast
 
 import numpy as np
 from nanotron import logging
-from nanotron.config import DataArgs, DatasetStageArgs, NanosetDatasetsArgs, PretrainDatasetsArgs
-from nanotron.data.dataloader_builder import build_nanoset_dataloader
+from nanotron.config import ChatDatasetsArgs, DataArgs, DatasetStageArgs, NanosetDatasetsArgs, PretrainDatasetsArgs
+from nanotron.data.chat_dataset import ChatDataset
+from nanotron.data.dataloader_builder import build_chat_dataloader, build_nanoset_dataloader
 from nanotron.dataloader import (
     clm_process,
     dummy_infinite_data_generator,
@@ -172,6 +173,33 @@ def get_dataloader_from_data_stage(
         )
 
         return train_dataloader
+
+    # Case 4: Chat Datasets
+    elif isinstance(data.dataset, ChatDatasetsArgs):
+        with main_rank_first(trainer.parallel_context.world_pg):
+            train_dataset = ChatDataset(
+                dataset_path=data.dataset.hf_dataset,
+                tokenizer_name_or_path=trainer.config.tokenizer.tokenizer_name_or_path,
+                sequence_length=trainer.sequence_length,
+                train_on_completions_only=data.dataset.train_on_completions_only,
+                remove_cross_attention=data.dataset.remove_cross_attention,
+                split=data.dataset.hf_dataset_split,
+                conversation_column_name=data.dataset.conversation_column_name,
+                dp_rank=trainer.parallel_context.dp_pg.rank(),
+                dp_ranks_size=trainer.parallel_context.dp_pg.size(),
+            )
+
+        # Prepare dataloader
+        train_dataloader = build_chat_dataloader(
+            dataset=train_dataset,
+            sequence_length=trainer.sequence_length,
+            parallel_context=trainer.parallel_context,
+            input_pp_rank=input_pp_rank,
+            output_pp_rank=output_pp_rank,
+        )
+
+        return train_dataloader
+
     else:
         raise ValueError(f"Unhandled case of `self.config.data.dataset`. Got: {data.dataset}")
 
