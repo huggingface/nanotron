@@ -124,7 +124,7 @@ class ChatDataset(IterableDataset):
                     # TODO delete, just 4 switching the training only on completitions setting
                     labels = self.create_labels(sample_tokens, sample_completitions)
 
-                    # TODO delete, jjust 4 switching the remove cross-attention setting
+                    # TODO delete, just 4 switching the remove cross-attention setting
                     position_ids = self.create_position_ids(sample_lengths, self.sequence_length)
 
                     # TODO delete (debug)

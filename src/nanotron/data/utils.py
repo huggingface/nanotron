@@ -33,11 +33,11 @@ def count_dataset_indexes(dataset_idx: np.ndarray, n_datasets: int):
     return counts
 
 
-# TODO Find a more elegant way
+# TODO Find a more elegant way. e.g. extend instead of append. OK, so no extend
 # We could compute position ids after tokenizing each sample but we will still miss the last length of the padding tokens
 def build_position_ids(lengths, sequence_length) -> np.array:
-    lengths.append((sequence_length - sum(lengths)))  # Append length of the padding tokens
     position_ids = [list(range(length)) for length in lengths]  # Create position ids list
+    position_ids.append([0] * (sequence_length - sum(lengths)))  # Append position_ids of the padding tokens
     return np.array([x for xs in position_ids for x in xs], dtype=np.int32)  # Flatten list of position ids
 
 
