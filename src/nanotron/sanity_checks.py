@@ -64,7 +64,8 @@ def before_tbi_sanity_checks(
         for name, param in sorted(unwrapped_model.named_parameters(), key=lambda x: x[0]):
             assert_tensor_synced_across_pg(
                 tensor=param,
-                pg=parallel_context.dp_pg,
+                # pg=parallel_context.dp_pg,
+                pg=parallel_context.dp_sp_pg,
                 msg=lambda err: f"{name} are not synchronized across DP {err}",
             )
 
@@ -185,7 +186,8 @@ def before_optim_step_sanity_checks(
             assert grad is not None, f"Grad is None for {name}"
             assert_tensor_synced_across_pg(
                 tensor=grad,
-                pg=parallel_context.dp_pg,
+                # pg=parallel_context.dp_pg,
+                pg=parallel_context.dp_sp_pg,
                 msg=lambda err: f"[Before optimizer step] weights grads for {name} are not synchronized across DP. {err}",
             )
 
@@ -193,7 +195,8 @@ def before_optim_step_sanity_checks(
         for name, param in sorted(unwrapped_model.named_parameters(), key=lambda x: x[0]):
             assert_tensor_synced_across_pg(
                 tensor=param,
-                pg=parallel_context.dp_pg,
+                # pg=parallel_context.dp_pg,
+                pg=parallel_context.dp_sp_pg,
                 msg=lambda err: f"{name} are not synchronized across DP {err}",
             )
 

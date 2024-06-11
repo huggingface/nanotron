@@ -54,6 +54,73 @@ def ring_flash_attn_forward(
     return out, lse
 
 
+# # My one more buffer version
+# def ring_flash_attn_forward(
+#     process_group,
+#     q: torch.Tensor,
+#     k: torch.Tensor,
+#     v: torch.Tensor,
+#     softmax_scale,
+#     dropout_p=0,
+#     causal=True,
+#     window_size=(-1, -1),
+#     alibi_slopes=None,
+#     deterministic=False,
+# ):
+#     comm = RingComm(process_group)
+
+#     out = None
+#     lse = None
+
+#     next_k_even, next_v_even = None, None
+#     next_k_odd, next_v_odd = None, None
+
+#     for step in range(comm.world_size):
+#         if step + 1 != comm.world_size:
+#             if step==0:
+#                 # order is important. should wait for the odd
+#                 next_k_odd = comm.send_recv(k) # for 1st
+#                 next_v_odd = comm.send_recv(v)
+#                 next_k_even = comm.send_recv(k,next_next=True) # for 2nd step
+#                 next_v_even = comm.send_recv(v,next_next=True)
+#             else:
+#                 # for step+2
+#                 if step % 2 == 0:
+#                     next_k_even = comm.send_recv(next_k_odd)
+#                     next_v_even = comm.send_recv(next_v_odd)
+#                 else:
+#                     next_k_odd = comm.send_recv(next_k_even)
+#                     next_v_odd = comm.send_recv(next_v_even)
+#             comm.commit()
+
+#         if not causal or step <= comm.rank:
+#             block_out, _, _, _, _, block_lse, _, _ = _flash_attn_forward(
+#                 q,
+#                 k,
+#                 v,
+#                 dropout_p,
+#                 softmax_scale,
+#                 causal=causal and step == 0,
+#                 window_size=window_size,
+#                 alibi_slopes=alibi_slopes,
+#                 return_softmax=True and dropout_p > 0,
+#             )
+#             out, lse = update_out_and_lse(out, lse, block_out, block_lse)
+
+#         if step + 1 != comm.world_size:
+#             comm.wait()
+#             if step % 2 == 0:
+#                 k = next_k_odd
+#                 v = next_v_odd
+#             else:
+#                 k = next_k_even
+#                 v = next_v_even
+
+#     out = out.to(q.dtype)
+#     lse = lse.squeeze(dim=-1).transpose(1, 2)
+#     return out, lse
+
+
 def ring_flash_attn_backward(
     process_group,
     doubt,

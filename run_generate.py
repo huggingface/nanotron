@@ -59,7 +59,8 @@ def get_args():
     parser.add_argument("--dp", type=int, default=0)
     parser.add_argument("--pp", type=int, default=0)
     parser.add_argument("--tp", type=int, default=0)
-    parser.add_argument("--max-new-tokens", type=int, default=128, help="Maximum number of new tokens to generate")
+    parser.add_argument("--sp", type=int, default=0)
+    parser.add_argument("--max-new-tokens", type=int, default=50, help="Maximum number of new tokens to generate")
     return parser.parse_args()
 
 
@@ -76,6 +77,7 @@ def main():
         dp=args.dp or config.parallelism.dp,
         pp=args.pp or config.parallelism.pp,
         tp=args.tp or config.parallelism.tp,
+        sp=args.sp or config.parallelism.sp,
         pp_engine=OneForwardOneBackwardPipelineEngine(),
         tp_mode=TensorParallelLinearMode.ALL_REDUCE,
         tp_linear_async_communication=False,
@@ -86,6 +88,7 @@ def main():
         data_parallel_size=parallel_config.dp,
         pipeline_parallel_size=parallel_config.pp,
         tensor_parallel_size=parallel_config.tp,
+        sequence_parallel_size=parallel_config.sp,
     )
 
     # Set log levels
@@ -163,7 +166,30 @@ def main():
                 tokenizer.add_special_tokens({"pad_token": "[PAD]"})
         tokenizer.padding_side = "left"
         tokenizer.truncation_side = "left"  # TODO @nouamane: do we want this?
+
+        # PREFIX = "This is a very long story book: <book>"
+        # NEEDLE_FORMAT = "\nThe special magic Singapore number is: 353233.\n"
+        # book=f""
+        # QUESTION_STR = "</book>.\n Based on the content of the book, Question: What is the special magic Singapore number? Answer: The special magic Singapore number is:"
+
+        # some different length input file
+        # file_path = '/fsx/haojun/PaulGrahamEssays/13k.txt'
+        file_path = "/fsx/haojun/PaulGrahamEssays/11k.txt"
+        file_path_89 = "/fsx/haojun/PaulGrahamEssays/8900.txt"
+        file_path_81 = "/fsx/haojun/PaulGrahamEssays/8140.txt"
+
+        # Open and read the file
+        with open(file_path_89, "r") as file:
+            file.read()
+        with open(file_path, "r") as file:
+            file.read()
+        with open(file_path_81, "r") as file:
+            file.read()
+
         dummy_inputs = [
+            # long_text_110,
+            # long_text_89,
+            # long_text_81,
             "The future of AI is",
             "Passage: Daniel went back to the garden. Mary travelled to the kitchen. Sandra journeyed to the kitchen. Sandra went to the hallway. John went to the bedroom. Mary went back to the garden. Where is Mary?\nAnswer:",
             "def fib(n)",
@@ -193,18 +219,32 @@ def main():
             assert isinstance(generated_ids, torch.Tensor)
 
             log_rank(
-                f"input: {tokenizer.decode(input_ids, clean_up_tokenization_spaces=False)[:1000]}",
+                f"input: {tokenizer.decode(input_ids[:50], clean_up_tokenization_spaces=False)}",
                 logger=logger,
                 level=logging.INFO,
                 rank=0,
             )
 
             log_rank(
-                f"generation: {tokenizer.decode(generated_ids[len(input_ids) :], clean_up_tokenization_spaces=False)}",
+                f"Number of input tokens: {len(input_ids)}",
                 logger=logger,
                 level=logging.INFO,
                 rank=0,
             )
+
+            log_rank(
+                f"generation: {tokenizer.decode(generated_ids[len(input_ids) :], clean_up_tokenization_spaces=True)}",
+                logger=logger,
+                level=logging.INFO,
+                rank=0,
+            )
+
+            # log_rank(
+            #     f"generation token ids: {generated_ids[len(input_ids) :]}",
+            #     logger=logger,
+            #     level=logging.INFO,
+            #     rank=0,
+            # )
 
             log_rank(
                 "--------------------------------------------------",

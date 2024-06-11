@@ -441,6 +441,79 @@ class DistributedTrainer:
                 # Checkpoint
                 if self.iteration_step % self.config.checkpoints.checkpoint_interval == 0:
                     self.save_checkpoint()
+                #     ################# My test for saving and loading params #################
+                #     ####### load from checkpoint and compare with the model.
+                #     checkpoint_model = build_model(
+                #         model_builder=lambda: CONFIG_TO_MODEL_CLASS[self.model_config.__class__.__name__](
+                #             config=self.model_config,
+                #             parallel_context=self.parallel_context,
+                #             parallel_config=self.config.parallelism,
+                #             random_states=self.random_states,
+                #         ),
+                #         dtype=self.config.model.dtype,
+                #         parallel_context=self.parallel_context,
+                #     )
+
+                #     # Mark some parameters as tied
+                #     # TODO @nouamane: this is only needed for training, can we just mark params as NanotronParameter instead?
+                #     mark_tied_parameters(model=checkpoint_model, parallel_context=self.parallel_context, parallel_config=self.config.parallelism,)
+
+                #     # Sanity check model
+                #     sanity_check(root_module=checkpoint_model)
+
+                #     # Load checkpoint
+                #     checkpoints_path = self.config.checkpoints.checkpoints_path
+                #     checkpoint_path = checkpoints_path / f"{self.iteration_step}"
+                #     log_rank(
+                #         f"Loading checkpoint from {checkpoint_path}:",
+                #         logger=logger,
+                #         level=logging.INFO,
+                #         rank=0,
+                #     )
+                #     load_weights(model=checkpoint_model, parallel_context=self.parallel_context, root_folder=checkpoint_path)
+
+                #     ## compare keys firstly
+                #     model_state_dict = self.model.module.state_dict() if isinstance(self.model, DistributedDataParallel) else  self.model.state_dict()
+                #     checkpoint_state_dict = checkpoint_model.state_dict()
+
+                #     model_keys = set(model_state_dict.keys())
+                #     checkpoint_keys = set(checkpoint_state_dict.keys())
+
+                #     # Find keys that are in model but not in checkpoint
+                #     missing_in_checkpoint = model_keys - checkpoint_keys
+                #     # Find keys that are in checkpoint but not in model
+                #     missing_in_model = checkpoint_keys - model_keys
+
+                #     # # Print out the differences
+                #     # print("Keys in current model but not in checkpoint:", missing_in_checkpoint)
+                #     # print("Keys in checkpoint but not in current model:", missing_in_model)
+                #     # # print all the params
+                #     # print("self.model.state_dict().keys(): ",model_state_dict.keys(), "length: ", len(model_state_dict.keys()))
+                #     # print("checkpoint_model.state_dict().keys(): ",checkpoint_state_dict.keys(), "length: ", len(checkpoint_state_dict.keys()))
+
+                #     assert model_state_dict.keys() == checkpoint_state_dict.keys(), "Models have different structures."
+
+                #     # Compare parameters
+                #     all_params_same = True
+                #     for param_tensor in model_state_dict:
+                #         model_param = model_state_dict[param_tensor]
+                #         checkpoint_param = checkpoint_state_dict[param_tensor]
+                #         if not torch.equal(model_param, checkpoint_param):
+                #             all_params_same = False
+                #             break
+                #             num_different_elements = torch.sum(model_param != checkpoint_param).item()
+                #             total_elements = model_param.numel()
+                #             print(f"Mismatch found in parameter {param_tensor}: {num_different_elements}/{total_elements} elements are different.")
+                #         # else:
+                #         #     print(f"{param_tensor} is OK!")
+                #     if all_params_same:
+                #         print("All parameters are the same between the two models.")
+                #     else:
+                #         print("Parameters differ between the two models.")
+
+                # # stop_here = 1
+
+                # #################
         dist.barrier()  # let's wait for everyone before leaving
 
         self.post_training()
@@ -478,7 +551,8 @@ class DistributedTrainer:
             # Manually sync across DP if it's not handled by DDP
             sync_gradients_across_dp(
                 module=self.model,
-                dp_pg=self.parallel_context.dp_pg,
+                dp_pg=self.parallel_context.dp_sp_pg,
+                # dp_pg=self.parallel_context.dp_pg,
                 reduce_op=dist.ReduceOp.AVG,
                 # TODO @thomasw21: This is too memory hungry, instead we run all_reduce
                 reduce_scatter=False,  # optimizer.inherit_from(ZeroDistributedOptimizer),
@@ -517,8 +591,11 @@ class DistributedTrainer:
             loss_avg = torch.stack(
                 [output["loss"] for output in outputs]
             ).sum()  # already divided by n_micro_batches_per_batch
-            # sync loss across DP
-            handle = dist.all_reduce(loss_avg, group=self.parallel_context.dp_pg, async_op=True, op=dist.ReduceOp.AVG)
+            # sync loss across DP/SP
+            # handle = dist.all_reduce(loss_avg, group=self.parallel_context.dp_pg, async_op=True, op=dist.ReduceOp.AVG)
+            handle = dist.all_reduce(
+                loss_avg, group=self.parallel_context.dp_sp_pg, async_op=True, op=dist.ReduceOp.AVG
+            )
         else:
             loss_avg = None
             handle = None
@@ -798,9 +875,39 @@ class DistributedTrainer:
             # Check that the model has at least one grad. Necessary for DDP
             check_model_has_grad(model=model, parallel_context=parallel_context)
             # TODO @thomasw21: DDP doesn't support broadcasting complex buffers (and we don't really need that broadcasting anyway)
+
+            # ### debug
+            # tensor_names = [name for name in model.state_dict()]
+            # log_rank(
+            #     f"Params: {tensor_names}, length {len(tensor_names)}",
+            #     logger=logger,
+            #     level=logging.INFO,
+            #     rank=0,
+            # )
+            # log_rank(
+            #     f"Params: {tensor_names}, length {len(tensor_names)}",
+            #     logger=logger,
+            #     level=logging.INFO,
+            #     rank=1,
+            # )
+            # log_rank(
+            #     f"Params: {tensor_names}, length {len(tensor_names)}",
+            #     logger=logger,
+            #     level=logging.INFO,
+            #     rank=2,
+            # )
+            # log_rank(
+            #     f"Params: {tensor_names}, length {len(tensor_names)}",
+            #     logger=logger,
+            #     level=logging.INFO,
+            #     rank=3,
+            # )
+            # ###
+
             model = DistributedDataParallel(
                 model,
-                process_group=parallel_context.dp_pg,
+                # process_group=parallel_context.dp_pg,
+                process_group=parallel_context.dp_sp_pg,
                 broadcast_buffers=False,
                 bucket_cap_mb=config.model.ddp_bucket_cap_mb,
             )
