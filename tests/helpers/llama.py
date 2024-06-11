@@ -1,5 +1,8 @@
+from typing import Optional
+
 import torch
 from nanotron.config import (
+    AdamWOptimizerArgs,
     AllForwardAllBackwardPipelineEngine,
     CheckpointsArgs,
     Config,
@@ -46,7 +49,28 @@ TINY_LLAMA_CONFIG = LlamaConfig(
 )
 
 
-def get_llama_training_config(model_config: ModelArgs):
+def get_llama_training_config(model_config: ModelArgs, optimizer_config: Optional[OptimizerArgs] = None) -> Config:
+    DEFAULT_OPTIMIZER_CONFIG = OptimizerArgs(
+        zero_stage=0,
+        weight_decay=0.01,
+        clip_grad=1.0,
+        accumulate_grad_in_fp32=False,
+        learning_rate_scheduler=LRSchedulerArgs(
+            learning_rate=3e-4,
+            lr_warmup_steps=100,
+            lr_warmup_style="linear",
+            lr_decay_style="cosine",
+            min_decay_lr=1e-5,
+        ),
+        optimizer_factory=AdamWOptimizerArgs(
+            adam_beta1=0.9,
+            adam_beta2=0.95,
+            adam_eps=1e-08,
+            torch_adam_is_fused=True,
+        ),
+    )
+    optimizer_config = optimizer_config if optimizer_config is not None else DEFAULT_OPTIMIZER_CONFIG
+
     return Config(
         model=model_config,
         general=GeneralArgs(project="unittest", run="sanity_llama", seed=42),
@@ -64,23 +88,7 @@ def get_llama_training_config(model_config: ModelArgs):
             tp_linear_async_communication=False,
         ),
         tokenizer=TokenizerArgs("gpt2"),
-        optimizer=OptimizerArgs(
-            zero_stage=0,
-            weight_decay=0.01,
-            clip_grad=1.0,
-            accumulate_grad_in_fp32=False,
-            adam_eps=1e-08,
-            adam_beta1=0.9,
-            adam_beta2=0.95,
-            torch_adam_is_fused=True,
-            learning_rate_scheduler=LRSchedulerArgs(
-                learning_rate=3e-4,
-                lr_warmup_steps=100,
-                lr_warmup_style="linear",
-                lr_decay_style="cosine",
-                min_decay_lr=1e-5,
-            ),
-        ),
+        optimizer=optimizer_config,
         logging=LoggingArgs(),
         tokens=TokensArgs(sequence_length=16, train_steps=10, micro_batch_size=16, batch_accumulation_per_replica=1),
         data_stages=[

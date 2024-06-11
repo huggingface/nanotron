@@ -244,9 +244,9 @@ class FP8Adam(Optimizer):
                 else:
                     raw_data = p.orig_data if hasattr(p, "orig_data") else p.data
 
-                if raw_data.dtype == torch.float16:
-                    # NOTE: only do mixed precision for parameters that quantize to FP8
-                    continue
+                # if raw_data.dtype == torch.float16:
+                #     # NOTE: only do mixed precision for parameters that quantize to FP8
+                #     continue
 
                 assert raw_data.dtype in [torch.float32]
 
@@ -345,6 +345,9 @@ class FP8Adam(Optimizer):
 
                 IS_FP8 = p.data.__class__ == FP8Tensor
 
+                assert (
+                    p in self.mappping_fp8_to_master_weight if IS_FP8 else True
+                ), "FP8Tensor should have a master weight"
                 fp16_p = self.mappping_fp8_to_master_weight[p] if IS_FP8 else p
                 fp32_p = convert_tensor_from_fp16(fp16_p, torch.float32) if IS_FP8 else fp16_p.to(torch.float32)
 
@@ -422,7 +425,7 @@ class FP8Adam(Optimizer):
                 loggings[p]["denom"] = compute_stas(denom)
 
                 if p.__class__ == NanotronParameter:
-                    lr = group["initial_lr"]
+                    lr = group["initial_lr"] if "initial_lr" in group else group["lr"]
                 else:
                     lr = group["lr"]
 
@@ -445,10 +448,11 @@ class FP8Adam(Optimizer):
     def zero_grad(self):
         for group in self.param_groups:
             for p in group["params"]:
-                if (p.data.__class__ == FP8Tensor and p.data._temp_grad is None) or (
-                    p.data.__class__ == torch.Tensor and p.grad is None
-                ):
-                    continue
+                # NOTE: take the assumption that nanotron requires all parameters to have gradients
+                # if (p.data.__class__ == FP8Tensor or not hasattr(p.data, "_temp_grad")) or \
+                #     (p.data.__class__ == FP8Tensor and hasattr(p.data, "_temp_grad") and p.data._temp_grad is None) or \
+                #     (p.data.__class__ == torch.Tensor and p.grad is None):
+                #     continue
 
                 # if p.data.__class__ == FP8Tensor:
                 #     p.data._temp_grad.zero_()

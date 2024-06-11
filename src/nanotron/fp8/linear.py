@@ -47,7 +47,9 @@ class FP8Linear(nn.Linear):
         assert device != torch.device("cpu"), "FP8Linear only supports CUDA tensors"
         assert accum_qtype in DTypes
 
-        super().__init__(in_features, out_features, bias, device, QTYPE_TO_DTYPE[accum_qtype])
+        # super().__init__(in_features, out_features, bias, device, QTYPE_TO_DTYPE[accum_qtype])
+        # TODO(xrsrke): take initialization dtype from recipe
+        super().__init__(in_features, out_features, bias, device, torch.float32)
         # TODO(xrsrke): don't fixed dtype, take it from the FP8 recipe
         # DTypes.FP8E4M3
         weight_data = self.weight.data
@@ -135,6 +137,7 @@ class _FP8Matmul(torch.autograd.Function):
         ∂L/∂W = Xᵀ @ ∂L/∂Y
         Reference: https://web.eecs.umich.edu/~justincj/teaching/eecs442/notes/linear-backprop.html
         """
+        # import pydevd
         # pydevd.settrace(suspend=False, trace_only_current_thread=True)
         fp8_input, fp8_weight = ctx.saved_tensors
         accum_qtype = ctx.accum_qtype
