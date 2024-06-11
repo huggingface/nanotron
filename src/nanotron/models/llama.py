@@ -283,720 +283,6 @@ import torch.nn.functional as F
 from einops import einsum, rearrange, reduce
 from torchtyping import TensorType
 
-# class CausalSelfAttention(nn.Module, AttachableStore):
-#     def __init__(
-#         self,
-#         config: LlamaConfig,
-#         parallel_config: Optional[ParallelismArgs],
-#         tp_pg: dist.ProcessGroup,
-#         layer_idx: int,
-#     ):
-#         from flash_attn.layers.rotary import RotaryEmbedding as FlashRotaryEmbedding
-
-#         super().__init__()
-#         # Tensor parallel considerations: We split tensors along head dimension
-#         assert (
-#             config.num_attention_heads % tp_pg.size() == 0
-#         ), f"Number of attention heads ({config.num_attention_heads}) must be divisible by TP size ({tp_pg.size()})."
-#         try:
-#             assert (
-#                 config.num_key_value_heads % tp_pg.size() == 0
-#             ), f"Number of key/value heads ({config.num_key_value_heads}) must be divisible by TP size ({tp_pg.size()})."
-#         except AttributeError:
-#             log_rank(
-#                 "WARNING: num_key_value_heads not defined, assuming it is equal to num_attention_heads",
-#                 logger=logger,
-#                 level=logging.WARNING,
-#                 rank=0,
-#             )
-#             # If num_key_value_heads is not defined, we assume that it is equal to num_attention_heads
-#             config.num_key_value_heads = config.num_attention_heads
-#         assert (
-#             config.num_attention_heads % config.num_key_value_heads == 0
-#         ), f"Number of attention heads ({config.num_attention_heads}) must be divisible by number of key/value heads ({config.num_key_value_heads})."
-#         self.n_local_q_heads = config.num_attention_heads // tp_pg.size()
-#         self.n_local_kv_heads = config.num_key_value_heads // tp_pg.size()
-#         self.n_repeats = config.num_attention_heads // config.num_key_value_heads
-#         self.is_gqa = config.num_attention_heads != config.num_key_value_heads  # Whether we are using GQA or not
-#         self.d_qk = config.hidden_size // config.num_attention_heads
-#         self.d_v = config.hidden_size // config.num_attention_heads
-#         self.d_model = config.hidden_size
-#         self.is_using_mup = config.is_using_mup
-
-#         # TODO @thomasw21: refactor so that we store that default in a single place.
-#         tp_mode = parallel_config.tp_mode if parallel_config is not None else TensorParallelLinearMode.ALL_REDUCE
-#         tp_linear_async_communication = (
-#             parallel_config.tp_linear_async_communication if parallel_config is not None else False
-#         )
-
-#         # build the slice config for self.qkv for save/load
-#         # shard are done within the contiguous chunk
-#         qkv_contiguous_chunks = (
-#             config.num_attention_heads * self.d_qk,  # shape of q
-#             config.num_key_value_heads * self.d_qk,  # shape of k
-#             config.num_key_value_heads * self.d_qk,  # shape of v
-#         )
-#         self.config = config
-#         self.qkv_proj = TensorParallelColumnLinear(
-#             self.d_model,
-#             config.num_attention_heads * self.d_qk + 2 * config.num_key_value_heads * self.d_qk,
-#             pg=tp_pg,
-#             mode=tp_mode,
-#             bias=False,
-#             async_communication=tp_linear_async_communication,
-#             contiguous_chunks=qkv_contiguous_chunks,
-#         )
-#         # TODO(kunhao): We want to have only one version per device and not one version per layer.
-#         self.rotary_embedding = RotaryEmbedding(dim=self.d_qk, end=config.max_position_embeddings)
-#         log_rank(
-#             f"self.rotary_embedding.end is {self.rotary_embedding.end}",
-#             logger=logger,
-#             level=logging.INFO,
-#             rank=0,
-#         )
-#         # self.rotary_embedding = RotaryEmbedding(dim=self.d_qk, end=2048)
-
-#         # NOTE: Only supported for training (TODO(fmom): position_ids not supported yet)
-#         self.flash_rotary_embedding = FlashRotaryEmbedding(dim=self.d_qk, interleaved=True)
-
-#         self.o_proj = TensorParallelRowLinear(
-#             config.num_attention_heads * self.d_qk,
-#             self.d_model,
-#             pg=tp_pg,
-#             mode=tp_mode,
-#             bias=False,
-#             async_communication=tp_linear_async_communication,
-#         )
-
-#         self.attention = CoreAttention(
-#             config,
-#             parallel_config=parallel_config,
-#             layer_idx=layer_idx,
-#         )
-#         self.layer_idx = layer_idx
-
-#         self.prefill_kv_len = (
-#             config.max_position_embeddings
-#             # 2048
-#         )  # TODO @nouamane: compute based on free memory, because in rope we can surpass max_position_embeddings
-
-#         # self.n_segments = 16
-#         # self.segment_length = config.max_position_embeddings // self.n_segments
-#         # assert config.max_position_embeddings == 32768
-
-#         # NOTE: for 1b training
-#         self.segment_length = 2048
-#         # self.segment_length = 4096
-
-#         # NOTE: for sanity 200m training
-#         # prev 16
-#         # self.segment_length = 256
-#         # self.segment_length = 16
-
-#         device = self.o_proj.weight.device
-#         dtype = self.o_proj.weight.dtype
-
-#         from nanotron.parallel.sharded_parameters import SplitConfig, create_sharded_parameter_from_config
-
-#         balance_factors = nn.Parameter(torch.zeros(self.n_local_q_heads, device=device, dtype=dtype))
-#         self.balance_factors = create_sharded_parameter_from_config(
-#             parameter=balance_factors,
-#             pg=tp_pg,
-#             split_config=SplitConfig(
-#                 split_dim=0,
-#                 # contiguous_chunks=(self.n_local_heads, self.n_local_heads)
-#             ),
-#         )
-
-#     def forward(
-#         self,
-#         # hidden_states: TensorType["sharded_seq_len", "batch_size", "hidden_size"],
-#         hidden_states: TensorType["sharded_batch_size", "seq_len", "hidden_size"],
-#         sequence_mask: TensorType["batch_size", "seq_len"],
-#     ):
-#         # if self.layer_idx == 4:
-#         #     assert 1 == 1
-
-#         # batch_size = hidden_states.shape[1]
-#         # seq_len = hidden_states.shape[0]
-
-#         batch_size = hidden_states.shape[0]
-#         seq_len = hidden_states.shape[1]
-
-#         # assert seq_len == 1024
-#         # assert seq_len == 32768
-
-#         # assert seq_len % self.n_segments == 0
-
-#         # segment_length = seq_len // self.n_segments
-#         # hidden_size = hidden_states.shape[2]
-
-#         if seq_len > self.segment_length:
-#             # n_segments = seq_len // self.segment_length
-#             # segment_hidden_states = torch.chunk(hidden_states, chunks=n_segments, dim=0)
-#             # segment_sequence_masks = torch.chunk(sequence_mask, chunks=n_segments, dim=1)
-
-#             import math
-
-#             n_segments = math.ceil(seq_len / self.segment_length)
-#             segment_lengths = [self.segment_length] * (n_segments - 1) + [
-#                 seq_len - (n_segments - 1) * self.segment_length
-#             ]
-#             assert sum(segment_lengths) == seq_len
-#             # assert hidden_states.shape[0] == seq_len
-#             assert hidden_states.shape[1] == seq_len
-#             # segment_hidden_states = torch.split(hidden_states, segment_lengths, dim=0)
-#             segment_hidden_states = torch.split(hidden_states, segment_lengths, dim=1)
-#             # NOTE: assume that mask are all the same
-#             # because we split across sequence length
-#             # NOTE: take the assumption that all the masks are the same
-#             assert torch.all(sequence_mask)
-#             segment_sequence_masks = torch.split(sequence_mask[:, :seq_len], segment_lengths, dim=1)
-#         else:
-#             segment_hidden_states = [hidden_states]
-#             segment_sequence_masks = [sequence_mask]
-
-#         memory = None
-#         normalization = None
-
-#         # memory = prev_memory
-#         # normalization = prev_normalization
-
-#         outputs = []
-
-#         # sequence_masks = []
-#         idx = 0
-#         logs = {}
-
-#         for segment_hidden_state, segment_sequence_mask in zip(segment_hidden_states, segment_sequence_masks):
-#             # if idx == 1:
-#             #     memory = None
-#             #     normalization = None
-
-#             attn_outputs = self.forward_with_hidden_states(
-#                 hidden_states=segment_hidden_state, sequence_mask=segment_sequence_mask, return_qkv_states=True
-#             )
-
-#             local_attn_outputs = attn_outputs["attention_output"]
-#             # query_states, key_states, value_states = attn_outputs["qkv_states"]
-#             query_states, key_states, value_states = attn_outputs["qkv_states_without_pe"]
-
-#             # # NOTE: these are the shape for non-megatron-sp
-#             # assert query_states.shape[0] == self.segment_length
-#             # assert local_attn_outputs.shape[1] == self.segment_length
-
-#             query_states = rearrange(
-#                 query_states,
-#                 "seq_len n_heads batch_size d_head -> batch_size n_heads seq_len d_head",
-#                 seq_len=self.segment_length,
-#                 n_heads=self.n_local_q_heads,
-#                 d_head=self.d_qk,
-#             )
-
-#             key_states = rearrange(
-#                 key_states,
-#                 "seq_len n_heads batch_size d_head -> batch_size n_heads seq_len d_head",
-#                 # batch_size=batch_size,
-#                 seq_len=self.segment_length,
-#                 n_heads=self.n_local_kv_heads,
-#                 d_head=self.d_qk,
-#             )
-
-#             value_states = rearrange(
-#                 value_states,
-#                 "seq_len n_heads batch_size d_head -> batch_size n_heads seq_len d_head",
-#                 # batch_size=batch_size,
-#                 seq_len=self.segment_length,
-#                 n_heads=self.n_local_kv_heads,
-#                 d_head=self.d_qk,
-#             )
-
-#             # NOTE: because in generation, the sequence length increases
-#             # assert query_states.shape == (batch_size, self.n_local_q_heads, segment_length, self.d_qk)
-#             # assert query_states.shape == key_states.shape == value_states.shape
-#             retrieved_memory = self._retrieve_from_memory(
-#                 query_states, prev_memory=memory, prev_normalization=normalization
-#             )
-
-#             # log_rank(
-#             #     f"[idx={idx}] retrieved_memory.shape = {retrieved_memory.shape}, retrieve_memory is zero? {(retrieved_memory == 0).all()}",
-#             #     logger=logger,
-#             #     level=logging.INFO,
-#             #     rank=0,
-#             # )
-
-#             # if memory is not None:
-#             #     log_rank(
-#             #         f"[idx={idx}] memory.shape = {memory.shape}, normalization.shape = {normalization.shape}",
-#             #         logger=logger,
-#             #         level=logging.INFO,
-#             #         rank=0,
-#             #     )
-
-#             # retrieved_memory = retrieved_memory.detach()
-
-#             # local_attn_outputs = rearrange(
-#             #     local_attn_outputs,
-#             #     "seq_len batch_size (n_heads d_head) -> batch_size n_heads seq_len d_head",
-#             #     d_head=self.d_qk,
-#             # )
-#             local_attn_outputs = rearrange(
-#                 local_attn_outputs,
-#                 "batch_size seq_len (n_heads d_head) -> batch_size n_heads seq_len d_head",
-#                 seq_len=self.segment_length,
-#                 d_head=self.d_qk,
-#             )
-
-#             # log_rank(
-#             #     f"[idx={idx}] local_attn_outputs.shape = {local_attn_outputs.shape}, local_attn_outputs is zero? {(local_attn_outputs == 0).all()}",
-#             #     logger=logger,
-#             #     level=logging.INFO,
-#             #     rank=0,
-#             # )
-
-#             global_weights = F.sigmoid(self.balance_factors)
-#             global_weights = rearrange(global_weights, "n_heads -> 1 n_heads 1 1")
-
-#             local_weights = 1 - F.sigmoid(self.balance_factors)
-#             local_weights = rearrange(local_weights, "n_heads -> 1 n_heads 1 1")
-
-#             # assert torch.allclose(global_weights + local_weights, torch.ones_like(global_weights))
-
-#             # log_rank(
-#             #     f"[idx={idx}] global_weights.shape = {global_weights.shape}, global_weights: {global_weights}",
-#             #     logger=logger,
-#             #     level=logging.INFO,
-#             #     rank=0,
-#             # )
-
-#             # log_rank(
-#             #     f"[idx={idx}] local_weights.shape = {local_weights.shape}, local_weights: {local_weights}",
-#             #     logger=logger,
-#             #     level=logging.INFO,
-#             #     rank=0,
-#             # )
-
-#             attention_output = global_weights * retrieved_memory + local_weights * local_attn_outputs
-
-#             attention_output = rearrange(
-#                 attention_output, "batch_size n_heads seq_len d_head -> seq_len batch_size (n_heads d_head)",
-#                 n_heads=self.n_local_q_heads,
-#                 d_head=self.d_qk,
-#                 seq_len=self.segment_length,
-#             )
-
-#             output = self.o_proj(attention_output)
-
-#             if constants.GLOBAL_STEP is not None and (constants.GLOBAL_STEP - 1) % 50 == 0:
-#                 if dist.get_rank() == 0:
-#                     logs[f"layer_{self.layer_idx}:seg_{idx}:query_states"] = compute_stas(query_states)
-#                     logs[f"layer_{self.layer_idx}:seg_{idx}:key_states"] = compute_stas(key_states)
-#                     logs[f"layer_{self.layer_idx}:seg_{idx}:value_states"] = compute_stas(value_states)
-
-#                     logs[f"layer_{self.layer_idx}:seg_{idx}:global_weights"] = compute_stas(global_weights)
-#                     logs[f"layer_{self.layer_idx}:seg_{idx}:local_weights"] = compute_stas(local_weights)
-#                     logs[f"layer_{self.layer_idx}:seg_{idx}:local_attn_outputs"] = compute_stas(local_attn_outputs)
-#                     logs[f"layer_{self.layer_idx}:seg_{idx}:retrieved_memory"] = compute_stas(retrieved_memory)
-#                     logs[f"layer_{self.layer_idx}:seg_{idx}:attention_output"] = compute_stas(attention_output)
-#                     logs[f"layer_{self.layer_idx}:seg_{idx}:output"] = compute_stas(output)
-#                     logs[f"layer_{self.layer_idx}:seg_{idx}:memory"] = compute_stas(memory)
-#                     logs[f"layer_{self.layer_idx}:seg_{idx}:normalization"] = compute_stas(normalization)
-
-#             # assert output.shape == (segment_length, batch_size, hidden_size)
-
-#             memory, normalization = self._update_memory(memory, normalization, key_states, value_states)
-#             # memory = prev_memory if prev_memory is not None else 0.detach()
-
-#             outputs.append(output)
-#             # memory, normalization = memory.detach(), normalization.detach()
-
-#             idx += 1
-
-#             # NOTE: update memory
-#         # outputs = torch.cat(outputs, dim=0)  # concat along sequence dimension
-#         outputs = torch.cat(outputs, dim=2)  # concat along sequence dimension
-#         assert outputs.shape == hidden_states.shape
-
-#         if constants.GLOBAL_STEP is not None and (constants.GLOBAL_STEP - 1) % 50 == 0:
-#             if dist.get_rank() == 0:
-#                 import wandb
-
-#                 logs[f"layer_{self.layer_idx}:outputs"] = compute_stas(outputs)
-#                 wandb.log({**logs, "iteration_step": constants.GLOBAL_STEP})
-
-#         # sequence_masks = torch.cat(sequence_masks, dim=1)
-#         # assert sequence_masks.shape == sequence_mask.shape
-#         return_outputs = {
-#             "hidden_states": outputs,
-#             "sequence_mask": sequence_mask,
-#             # "memory": memory,
-#             # "normalization": normalization,
-#         }
-#         return return_outputs
-
-#     def _retrieve_from_memory(self, query_states, prev_memory, prev_normalization):
-#         # return torch.zeros_like(query_states)
-#         if prev_memory is None or prev_normalization is None:
-#             return torch.zeros_like(query_states)
-
-#         assert (prev_memory is None and prev_normalization is None) or (
-#             prev_memory is not None and prev_normalization is not None
-#         )
-
-#         if self.n_repeats > 1:
-#             from einops import repeat
-
-#             prev_memory = repeat(
-#                 prev_memory,
-#                 "batch_size n_kv_heads d_k d_v -> batch_size (n_kv_heads n) d_k d_v",
-#                 n=self.n_repeats,
-#             )
-#             prev_normalization = repeat(
-#                 prev_normalization,
-#                 "batch_size n_kv_heads d_head -> batch_size (n_kv_heads n) d_head",
-#                 n=self.n_repeats,
-#             )
-
-#         sigma_query_states = F.elu(query_states) + 1
-#         retrieved_memory = einsum(
-#             sigma_query_states,
-#             prev_memory,
-#             "batch_size n_heads seq_len d_k, batch_size n_heads d_k d_v -> batch_size n_heads seq_len d_v",
-#         )
-
-#         denominator = einsum(
-#             sigma_query_states,
-#             prev_normalization,
-#             "batch_size n_heads seq_len d_head, batch_size n_heads d_head -> batch_size n_heads seq_len",
-#         )
-#         denominator = rearrange(denominator, "batch_size n_heads seq_len -> batch_size n_heads seq_len 1")
-#         # [batch_size, n_heads, seq_len, d_v] / [batch_size, n_heads, seq_len, 1], so each d_v is divide by the normalized value
-
-#         # NOTE: because normalization is the sum of all the keys, so each word should have the same normalization
-#         retrieved_memory = retrieved_memory / denominator
-#         return retrieved_memory
-
-#     def _update_memory(self, prev_memory, prev_normalization, key_states, value_states):
-#         assert (prev_memory is None and prev_normalization is None) or (
-#             prev_memory is not None and prev_normalization is not None
-#         )
-
-#         sigma_key_states = F.elu(key_states) + 1
-
-#         if prev_memory is None or prev_normalization is None:
-#             new_value_states = value_states
-#         else:
-#             numerator = einsum(
-#                 sigma_key_states,
-#                 prev_memory,
-#                 "batch_size n_heads seq_len d_k, batch_size n_heads d_k d_v -> batch_size n_heads seq_len d_v",
-#             )
-#             denominator = einsum(
-#                 sigma_key_states,
-#                 prev_normalization,
-#                 "batch_size n_heads seq_len d_k, batch_size n_heads d_k -> batch_size n_heads seq_len",
-#             )
-#             denominator = rearrange(denominator, "batch_size n_heads seq_len -> batch_size n_heads seq_len 1")
-
-#             prev_v = numerator / denominator
-#             new_value_states = value_states - prev_v
-
-#         memory = torch.matmul(sigma_key_states.transpose(-2, -1), new_value_states)
-
-#         normalization = reduce(
-#             sigma_key_states, "batch_size n_heads seq_len d_head -> batch_size n_heads d_head", reduction="sum"
-#         )
-
-#         memory += prev_memory if prev_memory is not None else 0
-#         normalization += prev_normalization if prev_normalization is not None else 0
-
-#         return memory, normalization
-
-#     def forward_with_hidden_states(
-#         self,
-#         hidden_states,  # [seq_len, batch_size, hidden_size]
-#         sequence_mask,  # [batch_size, seq_len]
-#         return_qkv_states: bool = False,
-#     ):
-#         from flash_attn import bert_padding
-#         from flash_attn.flash_attn_interface import (
-#             flash_attn_varlen_func,
-#             flash_attn_with_kvcache,
-#         )
-
-#         qkv_states = self.qkv_proj(
-#             hidden_states
-#         )  # [seq_len, batch_size, n_local_q_heads * d_qk + 2 * n_local_kv_heads * d_qk]
-#         q_length, batch_size, _ = qkv_states.shape
-
-#         if self.is_gqa:
-#             query_states, key_states, value_states = torch.split(
-#                 qkv_states,
-#                 [
-#                     self.n_local_q_heads * self.d_qk,
-#                     self.n_local_kv_heads * self.d_qk,
-#                     self.n_local_kv_heads * self.d_qk,
-#                 ],
-#                 dim=-1,
-#             )
-
-#             query_states = (
-#                 query_states.transpose(0, 1).contiguous().view(batch_size, q_length, self.n_local_q_heads, self.d_qk)
-#             )
-#             key_states = (
-#                 key_states.transpose(0, 1).contiguous().view(batch_size, q_length, self.n_local_kv_heads, self.d_qk)
-#             )
-#             value_states = (
-#                 value_states.transpose(0, 1).contiguous().view(batch_size, q_length, self.n_local_kv_heads, self.d_qk)
-#             )
-#         else:
-#             query_states, key_states, value_states = (
-#                 qkv_states.view(q_length, batch_size, 3, self.n_local_q_heads, self.d_qk)
-#                 .permute(2, 1, 0, 3, 4)
-#                 .contiguous()
-#             )  # [3, batch_size, seq_len, n_local_q_heads, d_qk]
-
-#         # query_states_without_pe = rearrange(
-#         #     query_states, "batch_size seq_len n_heads d_head -> batch_size n_heads seq_len d_head"
-#         # )
-#         # key_states_without_pe = rearrange(
-#         #     key_states, "batch_size seq_len n_heads d_head -> batch_size n_heads seq_len d_head"
-#         # )
-#         # value_states_without_pe = rearrange(
-#         #     value_states, "batch_size seq_len n_heads d_head -> batch_size n_heads seq_len d_head"
-#         # )
-
-#         query_states_without_pe = rearrange(
-#             query_states, "seq_len batch_size n_heads d_head -> seq_len n_heads batch_size d_head"
-#         )
-#         key_states_without_pe = rearrange(
-#             key_states, "seq_len batch_size n_heads d_head -> seq_len n_heads batch_size d_head"
-#         )
-#         value_states_without_pe = rearrange(
-#             value_states, "seq_len batch_size n_heads d_head -> seq_len n_heads batch_size d_head"
-#         )
-
-#         assert query_states_without_pe.shape[0] == self.segment_length
-
-#         store = self.get_local_store()
-#         if store is not None:  # Inference case
-#             # Double check that we use store only at inference time
-#             assert key_states.requires_grad is False
-#             assert value_states.requires_grad is False
-#             if "position_offsets" in store:
-#                 old_position_offsets = store["position_offsets"]
-#                 position_ids = old_position_offsets[:, None] + sequence_mask
-#             else:
-#                 position_ids = torch.cumsum(sequence_mask, dim=-1, dtype=torch.int32) - 1
-#             position_offsets = position_ids[:, -1]
-
-#             # Compute rotary embeddings
-#             # Note: keep track of old rotary embedding end to check if we need to enlarge k_cache and v_cache
-#             old_rotary_embed_end = self.rotary_embedding.end
-#             query_states = self.rotary_embedding(query_states, position_ids=position_ids)
-#             key_states = self.rotary_embedding(key_states, position_ids=position_ids)
-
-#             if "key" not in store:
-#                 # First inference iteration (Prefill)
-#                 # TODO @nouamane: support custom masking
-#                 # assert that [ False, False, False, False,  True,  True,  True,  True,  True,  True] is accepted
-#                 # but [ False, False, False, False,  True,  True,  False,  False,  True,  True] is not (can't mask in the middle of sequence)
-#                 assert ~(
-#                     sequence_mask[:, :-1] & (~sequence_mask[:, 1:])  # True is never followed by False
-#                 ).any(), "Can't mask in the middle of sequence, please make sure that pads are at the left of the sequence if existing"
-
-#                 # preallocate k_cache, v_cache to self.prefill_kv_len
-#                 k_cache = torch.zeros(
-#                     (
-#                         batch_size,
-#                         self.prefill_kv_len,
-#                         self.n_local_kv_heads,
-#                         self.d_qk,
-#                     ),
-#                     dtype=query_states.dtype,
-#                     device=query_states.device,
-#                 )
-#                 v_cache = torch.zeros(
-#                     (batch_size, self.prefill_kv_len, self.n_local_kv_heads, self.d_v),
-#                     dtype=query_states.dtype,
-#                     device=query_states.device,
-#                 )
-#                 # Remove pad tokens from key_states and concatenate samples in key_unpad
-#                 # cu_seqlens_k is the cumulative sequence lengths of key_states
-#                 (query_unpad, indices_q, cu_seqlens_q, max_seqlen_q) = bert_padding.unpad_input(
-#                     query_states,
-#                     sequence_mask,
-#                 )
-#                 (key_unpad, indices_k, cu_seqlens_k, max_seqlen_k) = bert_padding.unpad_input(
-#                     key_states, sequence_mask
-#                 )
-#                 (value_unpad, _, _, _) = bert_padding.unpad_input(value_states, sequence_mask)
-
-#                 # NOTE: this scale is for µTransfer,
-#                 # in SP, we use sqrt(1/d_h)
-#                 softmax_scale = 1 / query_states.shape[-1] if self.is_using_mup else None
-#                 output_unpad = flash_attn_varlen_func(
-#                     q=query_unpad,  # (total_q, n_local_q_heads, d_qk)
-#                     k=key_unpad,  # (total_kv, n_local_kv_heads, d_qk)
-#                     v=value_unpad,  # (total_kv, n_local_kv_heads, d_v)
-#                     cu_seqlens_q=cu_seqlens_q,
-#                     cu_seqlens_k=cu_seqlens_k,
-#                     max_seqlen_q=max_seqlen_q,
-#                     max_seqlen_k=max_seqlen_k,
-#                     dropout_p=0.0,
-#                     softmax_scale=softmax_scale,
-#                     causal=True,  # True in prefill phase, False in subsequent phases
-#                     return_attn_probs=False,
-#                 )  # (total_unpadded, n_local_q_heads, d_v)
-
-#                 attention_output = bert_padding.pad_input(
-#                     output_unpad, indices_q, batch_size, q_length
-#                 )  # (batch_size, q_length, n_local_q_heads, d_v)
-
-#                 pad_to_right(key_states, sequence_mask, new_tensor=k_cache)
-#                 pad_to_right(value_states, sequence_mask, new_tensor=v_cache)
-
-#             else:
-#                 # Pull pre-computed key/value states
-#                 # Subsequent inference iterations (q_length=1)
-#                 k_cache = store["key"]
-#                 v_cache = store["value"]
-
-#                 # NOTE(fmom): According to flash_attn_with_kvcache, "If you pass in k / v, you must make sure that the cache is large enough to hold the new values"
-#                 # Since rotary embedding has changed (to enable larger context), we need to enlarge k_cache and v_cache
-#                 if self.rotary_embedding.end > old_rotary_embed_end:
-#                     k_cache = torch.cat(
-#                         [
-#                             k_cache,
-#                             torch.zeros(
-#                                 (
-#                                     batch_size,
-#                                     self.rotary_embedding.end - old_rotary_embed_end,
-#                                     self.n_local_kv_heads,
-#                                     self.d_qk,
-#                                 ),
-#                                 dtype=query_states.dtype,
-#                                 device=query_states.device,
-#                             ),
-#                         ],
-#                         dim=1,
-#                     )
-
-#                     v_cache = torch.cat(
-#                         [
-#                             v_cache,
-#                             torch.zeros(
-#                                 (
-#                                     batch_size,
-#                                     self.rotary_embedding.end - old_rotary_embed_end,
-#                                     self.n_local_kv_heads,
-#                                     self.d_v,
-#                                 ),
-#                                 dtype=query_states.dtype,
-#                                 device=query_states.device,
-#                             ),
-#                         ],
-#                         dim=1,
-#                     )
-
-#                 assert (
-#                     k_cache.shape[1] == self.rotary_embedding.end
-#                 ), f"Cache size {k_cache.shape[1]} is smaller than rotary embedding end {self.rotary_embedding.end}"
-#                 assert (
-#                     v_cache.shape[1] == self.rotary_embedding.end
-#                 ), f"Cache size {v_cache.shape[1]} is smaller than rotary embedding end {self.rotary_embedding.end}"
-
-#                 # [batch_size, seq_len, num_heads, d_qk]
-#                 query_states = query_states.view(
-#                     batch_size, q_length, self.n_local_q_heads, self.d_qk
-#                 )  # [batch_size, q_length, self.n_heads, d_qk]
-#                 kv_length = key_states.shape[1]
-#                 key_states = key_states.view(
-#                     batch_size, kv_length, self.n_local_kv_heads, self.d_qk
-#                 )  # [batch_size, kv_length, self.n_heads, d_qk]
-#                 value_states = value_states.view(
-#                     batch_size, kv_length, self.n_local_kv_heads, self.d_v
-#                 )  # [batch_size, kv_length, self.n_heads, d_v]
-
-#                 # NOTE: this scale is for µTransfer,
-#                 # in SP, we use sqrt(1/d_h)
-#                 softmax_scale = 1 / query_states.shape[-1] if self.is_using_mup else None
-#                 attention_output = flash_attn_with_kvcache(
-#                     query_states,
-#                     k_cache,
-#                     v_cache,
-#                     key_states,
-#                     value_states,
-#                     rotary_cos=None,
-#                     rotary_sin=None,
-#                     # TODO @nouamane: seems like this doesn't help to indicate padding in (for first iteration it's just 0)
-#                     cache_seqlens=position_offsets.contiguous(),
-#                     softmax_scale=softmax_scale,
-#                     causal=True,
-#                     rotary_interleaved=False,  # GPT-NeoX style
-#                 )
-
-#             store.update(
-#                 {
-#                     "key": k_cache,  # flash-attn has updated with new key_states using cache_seqlens
-#                     "value": v_cache,
-#                     "position_offsets": position_offsets,
-#                 }
-#             )
-
-#         else:  # Training case
-#             # Apply rotary embeddings to query/key states
-#             # NOTE: The layout is different from models/llama.py which is [batch_size, num_heads, seq_len, d_qk]
-#             # Here it is, [batch_size, seq_len, num_heads, d_qk]
-#             # [2, batch_size, seq_len, num_heads, d_qk]
-#             key_value_states = torch.cat([key_states.unsqueeze(0), value_states.unsqueeze(0)], dim=0)
-#             # [batch_size, seq_len, 2, num_heads, d_qk]
-#             key_value_states = key_value_states.permute(1, 2, 0, 3, 4).contiguous()
-#             query_states, key_value_states = self.flash_rotary_embedding(query_states, kv=key_value_states)
-#             # [batch_size, seq_len, num_heads, d_qk]
-#             key_states, value_states = torch.split(key_value_states, 1, dim=2)
-
-#             q_sequence_mask = sequence_mask
-#             kv_sequence_mask = sequence_mask
-
-#             kv_length = key_states.shape[1]
-#             # [batch_size, seq_len, num_heads, d_qk]
-#             # Shaping for use in `flash-attn` version of flash-attn: `flash_attn_unpadded_func`
-#             query_states = query_states.view(
-#                 batch_size * q_length, self.n_local_q_heads, self.d_qk
-#             )  # [batch_size * q_length, self.n_heads, d_qk]
-
-#             key_states = key_states.view(
-#                 batch_size * kv_length, self.n_local_kv_heads, self.d_qk
-#             )  # [batch_size * kv_length, self.n_heads, d_qk]
-#             value_states = value_states.view(
-#                 batch_size * kv_length, self.n_local_kv_heads, self.d_v
-#             )  # [batch_size * kv_length, self.n_heads, d_v]
-
-#             attention_output = self.attention(
-#                 query_states=query_states,
-#                 key_states=key_states,
-#                 value_states=value_states,
-#                 q_sequence_mask=q_sequence_mask,
-#                 kv_sequence_mask=kv_sequence_mask,
-#             )
-
-#         attention_output = (
-#             attention_output.contiguous().view(batch_size, q_length, self.n_local_q_heads * self.d_v).transpose(0, 1)
-#         )
-#         # output = self.o_proj(attention_output)
-#         # return {"hidden_states": output, "sequence_mask": sequence_mask}
-
-#         return_outputs = {"hidden_states": None, "sequence_mask": sequence_mask}
-#         return_outputs["qkv_states"] = (query_states, key_states, value_states) if return_qkv_states else ()
-#         return_outputs["qkv_states_without_pe"] = (
-#             query_states_without_pe,
-#             key_states_without_pe,
-#             value_states_without_pe,
-#         )
-#         return_outputs["attention_output"] = attention_output
-#         return return_outputs
-
 
 class CausalSelfAttention(nn.Module, AttachableStore):
     def __init__(
@@ -1029,6 +315,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         assert (
             config.num_attention_heads % config.num_key_value_heads == 0
         ), f"Number of attention heads ({config.num_attention_heads}) must be divisible by number of key/value heads ({config.num_key_value_heads})."
+        self.tp_pg = tp_pg
         self.n_local_q_heads = config.num_attention_heads // tp_pg.size()
         self.n_local_kv_heads = config.num_key_value_heads // tp_pg.size()
         self.n_repeats = config.num_attention_heads // config.num_key_value_heads
@@ -1490,10 +777,16 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             hidden_states
         )  # [seq_len, batch_size, n_local_q_heads * d_qk + 2 * n_local_kv_heads * d_qk]
 
-        # qkv_states = qkv_states.transpose(0, 1)
-        # q_length, batch_size, _ = qkv_states.shape
+        # log_rank(
+        #     f"qkv_states after qkv_proj: qkv_states.shape={qkv_states.shape}",
+        #     logger=logger,
+        #     level=logging.INFO,
+        # )
+
+        qkv_states = qkv_states.transpose(0, 1)
+        q_length, batch_size, _ = qkv_states.shape
         # NOTE: this is the new splitting dimension
-        batch_size, q_length, _ = qkv_states.shape
+        # batch_size, q_length, _ = qkv_states.shape
 
         if self.is_gqa:
             query_states, key_states, value_states = torch.split(
@@ -1521,6 +814,31 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                 .permute(2, 1, 0, 3, 4)
                 .contiguous()
             )  # [3, batch_size, seq_len, n_local_q_heads, d_qk]
+
+        # import os
+
+        # os.makedirs(DEBUG_PATH, exist_ok=True)
+        # tp_rank = dist.get_rank(group=self.tp_pg)
+
+        # torch.save(query_states, f"{DEBUG_PATH}/query_states_before_pos_tp_rank_{tp_rank}.pt")
+        # torch.save(key_states, f"{DEBUG_PATH}/query_states_before_pos_tp_rank_{tp_rank}.pt")
+        # torch.save(value_states, f"{DEBUG_PATH}/query_states_before_pos_tp_rank_{tp_rank}.pt")
+
+        # log_rank(
+        #     f"query_states: query_states.shape={query_states.shape}",
+        #     logger=logger,
+        #     level=logging.INFO,
+        # )
+        # log_rank(
+        #     f"key_states: key_states.shape={key_states.shape}",
+        #     logger=logger,
+        #     level=logging.INFO,
+        # )
+        # log_rank(
+        #     f"value_states: value_states.shape={value_states.shape}",
+        #     logger=logger,
+        #     level=logging.INFO,
+        # )
 
         # query_states_without_pe = rearrange(
         #     query_states, "batch_size seq_len n_heads d_head -> batch_size n_heads seq_len d_head"
@@ -1749,6 +1067,10 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                 batch_size * kv_length, self.n_local_kv_heads, self.d_v
             )  # [batch_size * kv_length, self.n_heads, d_v]
 
+            # torch.save(query_states, f"{DEBUG_PATH}/query_states_after_pos_tp_rank_{tp_rank}.pt")
+            # torch.save(key_states, f"{DEBUG_PATH}/query_states_after_pos_tp_rank_{tp_rank}.pt")
+            # torch.save(value_states, f"{DEBUG_PATH}/query_states_after_pos_tp_rank_{tp_rank}.pt")
+
             attention_output = self.attention(
                 query_states=query_states,
                 key_states=key_states,
@@ -1757,9 +1079,14 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                 kv_sequence_mask=kv_sequence_mask,
             )
 
+            # torch.save(attention_output, f"{DEBUG_PATH}/attention_output_before_reshape_{tp_rank}.pt")
+
         attention_output = (
             attention_output.contiguous().view(batch_size, q_length, self.n_local_q_heads * self.d_v).transpose(0, 1)
         )
+
+        # torch.save(attention_output, f"{DEBUG_PATH}/attention_output_after_reshape_{tp_rank}.pt")
+
         output = self.o_proj(attention_output)
         output = output.transpose(0, 1)
         return {"hidden_states": output, "sequence_mask": sequence_mask}

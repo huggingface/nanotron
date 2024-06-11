@@ -48,11 +48,19 @@ class _ShardedCrossEntropy(torch.autograd.Function):
             rank=0,
         )
 
+        # import os
+        # os.makedirs(DEBUG_PATH, exist_ok=True)
+        # tp_rank = dist.get_rank(group=group)
+        # torch.save(sharded_logits, f"{DEBUG_PATH}/step1_sharded_logits_tp_rank_{tp_rank}.pt")
+
         # Maximum value along last dimension across all GPUs.
         logits_max = torch.max(sharded_logits, dim=-1)[0]
         dist.all_reduce(logits_max, op=dist.ReduceOp.MAX, group=group)
         # Subtract the maximum value.
         sharded_logits = sharded_logits - logits_max.unsqueeze(dim=-1)
+
+        # torch.save(logits_max, f"{DEBUG_PATH}/logits_max_tp_rank_{tp_rank}.pt")
+        # torch.save(sharded_logits, f"{DEBUG_PATH}/step2_sharded_logits_tp_rank_{tp_rank}.pt")
 
         # Get the shard's indices
         sharded_hidden_size = sharded_logits.shape[-1]
@@ -81,14 +89,20 @@ class _ShardedCrossEntropy(torch.autograd.Function):
         # All reduce is needed to get the chunks from other GPUs.
         dist.all_reduce(predicted_logits, op=dist.ReduceOp.SUM, group=group)
 
+        # torch.save(predicted_logits, f"{DEBUG_PATH}/predicted_logits_tp_rank_{tp_rank}.pt")
+
         # Sum of exponential of logits along vocab dimension across all GPUs.
         exp_logits = sharded_logits
         torch.exp(sharded_logits, out=exp_logits)
         sum_exp_logits = exp_logits.sum(dim=-1)
         dist.all_reduce(sum_exp_logits, op=dist.ReduceOp.SUM, group=group)
 
+        # torch.save(sum_exp_logits, f"{DEBUG_PATH}/sum_exp_logits_tp_rank_{tp_rank}.pt")
+
         # Loss = log(sum(exp(logits))) - predicted-logit.
         loss = torch.log(sum_exp_logits) - predicted_logits
+
+        # torch.save(loss, f"{DEBUG_PATH}/loss_tp_rank_{tp_rank}.pt")
 
         # Normalize and optionally smooth logits
         exp_logits.div_(sum_exp_logits.unsqueeze(dim=-1))
