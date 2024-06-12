@@ -1,10 +1,10 @@
-import torch
 import nanotron
+import torch
 from nanotron.config import LlamaConfig as NanotronLlamaConfig
+from nanotron.config import ParallelismArgs
 from nanotron.models.llama import LlamaForTraining
 from nanotron.parallel import ParallelContext
 from nanotron.trainer import mark_tied_parameters
-from nanotron.config import ParallelismArgs
 
 CONFIG = NanotronLlamaConfig(
     **{
@@ -45,6 +45,7 @@ def make_parallel_config(
         tp_linear_async_communication=False,
     )
     return parallel_config
+
 
 def create_nanotron_model(parallel_context: ParallelContext, dtype: torch.dtype = torch.bfloat16) -> LlamaForTraining:
     parallel_config = make_parallel_config(

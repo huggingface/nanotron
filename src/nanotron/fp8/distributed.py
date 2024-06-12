@@ -4,6 +4,7 @@ import torch
 import torch.distributed as dist
 from torch.distributed import *  # noqa
 
+from nanotron.fp8.parameter import FP8Parameter
 from nanotron.fp8.tensor import FP8Tensor, convert_tensor_from_fp8
 from nanotron.parallel.parameters import NanotronParameter
 
@@ -17,7 +18,7 @@ def all_gather(
     group: dist.ProcessGroup,
     async_op: bool = False,
 ) -> torch.Tensor:
-    tensor = tensor.data if tensor.__class__ == NanotronParameter else tensor
+    tensor = tensor.data if tensor.__class__ == FP8Parameter else tensor
     # assert isinstance(tensor, FP8Tensor) if isinstance(tensor, FP8Tensor) else isinstance(tensor, torch.Tensor)
 
     if tensor.__class__ == FP8Tensor:

@@ -538,6 +538,17 @@ class TensorParallelEmbedding(nn.Embedding):
             masked_input = input_ids
         out = super().forward(masked_input)
 
+        # from torch.nn import functional as F
+        # out = F.embedding(
+        #     masked_input,
+        #     self.weight._data if hasattr(self.weight, "_data") else self.weight,
+        #     self.padding_idx,
+        #     self.max_norm,
+        #     self.norm_type,
+        #     self.scale_grad_by_freq,
+        #     self.sparse,
+        # )
+
         if self.pg.size() > 1:
             out = out * (~input_mask[..., None])
 

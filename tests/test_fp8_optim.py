@@ -139,24 +139,42 @@ def _test_parameters_change_after_fp8_adam_step(
         optimizer_args=DEFAULT_OPTIMIZER_CONFIG,
         parallel_context=parallel_context,
     )
-    param_data_before_step = [param.data.clone() for param in nanotron_model.parameters()]
+
+    param_data_before_step = []
+    for p in nanotron_model.parameters():
+        if p.data.__class__ == FP8Tensor:
+            data = p.data.clone()
+        else:
+            data = p._data if hasattr(p, "_data") else p.data
+
+        param_data_before_step.append(data)
+
+    # param_data_before_step = [param.data.clone() for param in nanotron_model.parameters()]
 
     logits = nanotron_model.model(input_ids, input_mask)
     logits.sum().backward()
     optimizer.step()
 
-    param_data_after_step = [param.data.clone() for param in nanotron_model.parameters()]
+    # param_data_after_step = [param.data.clone() for param in nanotron_model.parameters()]
+    param_data_after_step = []
+    for p in nanotron_model.parameters():
+        if p.data.__class__ == FP8Tensor:
+            data = p.data.clone()
+        else:
+            data = p._data if hasattr(p, "_data") else p.data
 
-    allclose_params = []
+        param_data_after_step.append(data)
+
     for p1, p2 in zip(param_data_before_step, param_data_after_step):
         if p1.data.__class__ == FP8Tensor:
             fp32_p1 = convert_tensor_from_fp8(p1, p1.fp8_meta, torch.float32)
             fp32_p2 = convert_tensor_from_fp8(p2, p2.fp8_meta, torch.float32)
             assert not torch.allclose(fp32_p1, fp32_p2)
         else:
-            try:
-                assert not torch.allclose(p1, p2)
-            except AssertionError:
-                allclose_params.append((p1, p2))
+            assert not torch.allclose(p1, p2)
+            # try:
+            #     assert not torch.allclose(p1, p2)
+            # except AssertionError:
+            #     allclose_params.append((p1, p2))
 
     assert 1 == 1

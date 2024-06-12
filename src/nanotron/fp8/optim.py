@@ -345,16 +345,43 @@ class FP8Adam(Optimizer):
 
                 IS_FP8 = p.data.__class__ == FP8Tensor
 
+                if IS_FP8 is False:
+                    assert 1 == 1
+
                 assert (
                     p in self.mappping_fp8_to_master_weight if IS_FP8 else True
                 ), "FP8Tensor should have a master weight"
-                fp16_p = self.mappping_fp8_to_master_weight[p] if IS_FP8 else p
-                fp32_p = convert_tensor_from_fp16(fp16_p, torch.float32) if IS_FP8 else fp16_p.to(torch.float32)
+                # p = self.mappping_fp8_to_master_weight[p] if IS_FP8 else p.data
 
-                grad = p.data._temp_grad if IS_FP8 else p.grad
-                fp32_grad = (
-                    convert_tensor_from_fp8(grad, grad.fp8_meta, torch.float32) if IS_FP8 else grad.to(torch.float32)
-                )
+                if IS_FP8:
+                    fp16_data = self.mappping_fp8_to_master_weight[p]
+                    fp32_data = convert_tensor_from_fp16(fp16_data, torch.float32)
+                    grad = p.data._temp_grad
+                    fp32_grad = convert_tensor_from_fp8(grad, grad.fp8_meta, torch.float32)
+                else:
+                    # fp16_data = p._data if hasattr(p, "_data") else p
+                    fp16_data = p.data
+                    fp32_data = fp16_data.to(torch.float32)
+                    grad = p.grad
+                    fp32_grad = grad.to(torch.float32)
+
+                # fp16_data = self.mappping_fp8_to_master_weight[p] if IS_FP8 else (p._data if hasattr(p, "_data") else p)
+                # fp32_p = convert_tensor_from_fp16(fp16_p, torch.float32) if IS_FP8 else fp16_p.to(torch.float32)
+
+                # grad = p.data._temp_grad if IS_FP8 else p.grad
+
+                # try:
+                #     fp32_grad = (
+                #         convert_tensor_from_fp8(grad, grad.fp8_meta, torch.float32) if IS_FP8 else grad.to(torch.float32)
+                #     )
+                # except AttributeError:
+                #     assert 1 == 1
+                # fp32_grad = (
+                #     convert_tensor_from_fp8(grad, grad.fp8_meta, torch.float32) if IS_FP8 else grad.to(torch.float32)
+                # )
+
+                if IS_FP8 is False:
+                    assert 1 == 1
 
                 if p.__class__ == NanotronParameter:
                     if IS_FP8:
@@ -395,17 +422,17 @@ class FP8Adam(Optimizer):
                 # so we can't do the mapping, so now we map data_ptr to data_ptr
                 # TODO(xrsrke): ideally, we should map tensor to tensor
                 # it's easier to debug (u know which tensor is which)
-                loggings[p]["lp_p"] = compute_stas(fp16_p)
+                loggings[p]["lp_p"] = compute_stas(fp16_data)
 
-                assert fp16_p.dtype == torch.float16
+                assert fp16_data.dtype == torch.float16
 
-                loggings[p]["hp_p"] = compute_stas(fp32_p)
+                loggings[p]["hp_p"] = compute_stas(fp32_data)
 
-                assert fp32_p.dtype == torch.float32
+                assert fp32_data.dtype == torch.float32
                 assert fp32_grad.dtype == torch.float32
 
                 if group["weight_decay"] != 0:
-                    fp32_grad = fp32_grad.add(group["weight_decay"], fp32_p)
+                    fp32_grad = fp32_grad.add(group["weight_decay"], fp32_data)
 
                 # Decay the first and second moment running average coefficient
                 fp32_exp_avg, fp32_exp_avg_sq = state["exp_avg"], state["exp_avg_sq"]
@@ -435,13 +462,21 @@ class FP8Adam(Optimizer):
                 loggings[p]["group:eps"] = {"value": group["eps"]}
                 loggings[p]["step_size"] = {"value": step_size}
 
-                fp32_p = fp32_p - step_size * (fp32_exp_avg / denom)
+                new_fp32 = fp32_data - step_size * (fp32_exp_avg / denom)
+
+                assert not torch.allclose(new_fp32, fp32_data)
 
                 if IS_FP8:
-                    self.mappping_fp8_to_master_weight[p] = FP16Tensor(fp32_p, dtype=DTypes.KFLOAT16)
-                    p.data.set_data(fp32_p)
+                    self.mappping_fp8_to_master_weight[p] = FP16Tensor(new_fp32, dtype=DTypes.KFLOAT16)
+                    p.data.set_data(new_fp32)
                 else:
-                    p.data = fp32_p.to(torch.float16)
+                    # NOTE: there is a bug that if you set p.data = new_value, p doesn't change
+                    # its value
+                    new_fp16 = new_fp32.to(torch.float16)
+                    # TODO(xrsrke): support p.data
+                    p.data = new_fp16
+                    assert torch.allclose(p.data, new_fp16)
+                    # assert not torch.allclose(p.data, fp16_p)
 
         self.loggings = loggings
 

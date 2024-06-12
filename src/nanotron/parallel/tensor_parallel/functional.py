@@ -462,6 +462,10 @@ def column_linear(
             input, weight.data, bias, accum_qtype=DTypes.KFLOAT16, metadatas=metadatas, name=name
         )
     else:
+        # try:
+        #     return F.linear(input, weight, bias)
+        # except RuntimeError:
+        #     assert 1 == 1
         return F.linear(input, weight, bias)
 
 

@@ -24,10 +24,8 @@ def test_create_sharded_fp8_parameter(dtype):
 
 
 def _test_create_sharded_fp8_parameter(parallel_context: ParallelContext, test_context: TestContext, dtype: DTypes):
-    # param = torch.nn.Parameter(torch.randn(16, 64))
     data = torch.randn(16, 64, device="cuda")
     param = FP8Parameter(data, dtype)
-    FP8Parameter(data, dtype)
 
     split_config = SplitConfig(
         split_dim=0,

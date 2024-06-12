@@ -615,6 +615,7 @@ class LlamaDecoderLayer(nn.Module):
     ):
         super().__init__()
         # self.input_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.normalized_shape = (config.hidden_size,)
         self.input_layernorm = nn.LayerNorm(config.hidden_size, eps=config.rms_norm_eps)
         # self.input_layernorm = nn.Identity()
         self.attn = CausalSelfAttention(
@@ -636,6 +637,10 @@ class LlamaDecoderLayer(nn.Module):
     ) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
+        # NOTE: use F.layernorm instead of self.input_layernorm, but use the learnable parameters
+        # from self.input_layernorm
+        # input_ln_weight = self.input_layernorm.weight._data if hasattr(self.input_layernorm.weight, "_data") else self.input_layernorm.weight
+        # hidden_states = F.layer_norm(hidden_states, self.normalized_shape, input_ln_weight, self.input_layernorm.bias, eps=self.input_layernorm.eps)
 
         output = self.attn(hidden_states=hidden_states, sequence_mask=sequence_mask)
         hidden_states = output["hidden_states"]
@@ -643,6 +648,8 @@ class LlamaDecoderLayer(nn.Module):
 
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
+        # post_attention_ln_weight = self.post_attention_layernorm.weight._data if hasattr(self.post_attention_layernorm.weight, "_data") else self.post_attention_layernorm.weight
+        # hidden_states = F.layer_norm(hidden_states, self.normalized_shape, post_attention_ln_weight, self.post_attention_layernorm.bias, eps=self.post_attention_layernorm.eps)
         # NOTE: got nan starts from here in 1st layer
         hidden_states = self.mlp(hidden_states=hidden_states)["hidden_states"]
         hidden_states = hidden_states + residual
@@ -681,6 +688,12 @@ class Embedding(nn.Module, AttachableStore):
         input_ids = input_ids.transpose(0, 1)
         input_embeds = self.token_embedding(input_ids)
         return {"input_embeds": input_embeds}
+
+
+# class LayerNormBlock(nn.LayerNorm):
+#     def forward(self, input):
+#         weight = self.weight._data if hasattr(self.weight, "_data") else self.weight
+#         return F.layer_norm(input, self.normalized_shape, weight, self.bias, self.eps)
 
 
 class LlamaModel(nn.Module):
@@ -797,6 +810,8 @@ class LlamaModel(nn.Module):
             hidden_states = decoder_block(**hidden_states)
 
         hidden_states = self.final_layer_norm(input=hidden_states["hidden_states"])["hidden_states"]
+        # final_ln_weight = self.final_layer_norm.weight._data if hasattr(self.final_layer_norm.weight, "_data") else self.final_layer_norm.weight
+        # hidden_states = F.layer_norm(hidden_states["hidden_states"], self.final_layer_norm.normalized_shape, final_ln_weight, self.final_layer_norm.bias, eps=self.final_layer_norm.eps)["hidden_states"]
 
         sharded_logits = self.lm_head(x=hidden_states)["logits"]
 
@@ -844,7 +859,7 @@ class LlamaModel(nn.Module):
 
 @torch.jit.script
 def masked_mean(loss, label_mask, dtype):
-    # type: (Tensor, Tensor, torch.dtype) -> Tensor
+    # type: (torch.Tensor, torch.Tensor, torch.dtype) -> torch.Tensor
     return (loss * label_mask).sum(dtype=dtype) / label_mask.sum()
 
 

@@ -79,7 +79,7 @@ from nanotron.sanity_checks import (
     before_optim_step_sanity_checks,
     before_tbi_sanity_checks,
 )
-from nanotron.scaling.monitor import convert_logs_to_flat_logs, monitor_model
+from nanotron.scaling.monitor import convert_logs_to_flat_logs
 from nanotron.scaling.parametrization import ParametrizationMethod
 from nanotron.serialize import (
     load_lr_scheduler,

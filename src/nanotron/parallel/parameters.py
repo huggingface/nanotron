@@ -345,70 +345,42 @@ class NanotronParameter(nn.Parameter):
     def __repr__(self):
         return f"NanotronParameter({super().__repr__()})"
 
+    @property
+    def data(self):
+        return self._data.data if self._data.__class__ == FP8Parameter else self._data
+
+    @data.setter
+    def data(self, data):
+        self._data = data
+
     @classmethod
     def __torch_dispatch__(cls, func, types, args=(), kwargs=None):
         def unwrap(e):
-            return e._data if isinstance(e, NanotronParameter) else e
-
-        # def wrap(e):
-        #     # TODO(xrsrke): in some ops, the first metadata isn't related to the output
-        #     metadatas = tuple(a._data.fp8_meta for a in args if isinstance(a, NanotronParameter))
-        #     return cls(e, fp8_meta=metadatas[0]) if isinstance(e, torch.Tensor) else e
+            return e._data if e.__class__ == NanotronParameter else e
 
         def wrap(e):
-            # return cls(e) if not isinstance(e, NanotronParameter) else e
-            if not isinstance(e, NanotronParameter) and isinstance(e, (torch.Tensor, FP8Tensor)):
+            if not e.__class__ == NanotronParameter and e.__class__ in [torch.Tensor, FP8Tensor]:
                 return cls(e)
             else:
                 return e
-
-        # NOTE: if the args are FP8 tensor, then the output should be FP8 tensor
-        # otherwise use the default one
-
-        # raw_args = args
-        # raw_kwargs = kwargs
-        # args = tree_map(unwrap, args)
-        # kwargs = tree_map(unwrap, kwargs)
-
-        # if func == torch.ops.aten.detach.default:
-        #     # NOTE: this is for parameter.data or parameter.detach()
-        #     return args[0].data
-        # else:
-        #     is_fp8 = any([isinstance(e.data, FP8Tensor) for e in raw_args]) or any([isinstance(e.data, FP8Tensor) for e in raw_kwargs.values()])
-
-        #     if is_fp8 is True:
-        #         OPS_THAT_RETURN_ORIGINAL_TENSOR = [torch.ops.aten.native_layer_norm.default]
-
-        #         # if func == torch.ops.aten.detach.default:
-        #         #     # NOTE: this is for parameter.data or parameter.detach()
-        #         #     return args[0].data
-        #         # else:
-        #         outputs = func(*args, **kwargs)
-
-        #         if func in OPS_THAT_RETURN_ORIGINAL_TENSOR:
-        #             return outputs
-        #         else:
-        #             # if len(outputs) == 1 and not isinstance(outputs, torch.Tensor):
-        #             #     # NOTE: in some distributed operation, it doesn't return anything
-        #             #     # but do in-place operation
-        #             #     return outputs
-        #             # else:
-        #             #     return tree_map(wrap, outputs)
-        #             return tree_map(wrap, outputs)
-        #     else:
-        #         return func(*args, **kwargs)
 
         unwrapped_args = tree_map(unwrap, args)
         unwrapped_kwargs = tree_map(unwrap, kwargs)
 
         OPS_THAT_RETURN_ORIGINAL_TENSOR = [
+            # NOTE: transpose operation
+            torch.ops.aten.t.default,
+            torch.ops.aten.view.default,
+            torch.ops.aten.detach.default,
+            # NOTE: F.embedding()
             torch.ops.aten.embedding.default,
+            # NOTE: F.layer_norm()
             torch.ops.aten.native_layer_norm.default,
             torch.ops.aten.native_layer_norm_backward.default,
             torch.ops.aten.native_layer_norm_backward.default,
         ]
 
-        if func == torch.ops.aten.detach.default:
+        if func == torch.ops.aten.detach.default and unwrapped_args[0].__class__ == FP8Parameter:
             # NOTE: this is for parameter.data or parameter.detach()
             # NOTE: because we already retrieved the data from unwrap, we don't need to do it again
             # data = args[0].data
@@ -425,12 +397,6 @@ class NanotronParameter(nn.Parameter):
             if func in OPS_THAT_RETURN_ORIGINAL_TENSOR:
                 return outputs
             else:
-                # if len(outputs) == 1 and not isinstance(outputs, torch.Tensor):
-                #     # NOTE: in some distributed operation, it doesn't return anything
-                #     # but do in-place operation
-                #     return outputs
-                # else:
-                #     return tree_map(wrap, outputs)
                 return tree_map(wrap, outputs)
 
 
