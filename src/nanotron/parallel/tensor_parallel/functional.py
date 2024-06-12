@@ -20,7 +20,6 @@ from torch.nn import functional as F
 
 import nanotron.distributed as dist
 from nanotron import logging
-from nanotron.logging import log_rank
 from nanotron.parallel.tensor_parallel.distributed_differentiable_primitives import (
     differentiable_all_gather,
     differentiable_all_reduce_sum,
@@ -41,12 +40,12 @@ class _ShardedCrossEntropy(torch.autograd.Function):
         target,  # (batch_size, length)
         group: dist.ProcessGroup,
     ):
-        log_rank(
-            f"sharded_logits input of _ShardedCrossEntropy: sharded_logits.shape={sharded_logits.shape}",
-            logger=logger,
-            level=logging.INFO,
-            rank=0,
-        )
+        # log_rank(
+        #     f"sharded_logits input of _ShardedCrossEntropy: sharded_logits.shape={sharded_logits.shape}",
+        #     logger=logger,
+        #     level=logging.INFO,
+        #     rank=0,
+        # )
 
         # import os
         # os.makedirs(DEBUG_PATH, exist_ok=True)

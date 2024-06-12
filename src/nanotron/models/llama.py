@@ -413,14 +413,14 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                 ),
             )
 
-            # log_rank(
-            #     f"Segment length is {self.segment_length}, turn_on_memory: {constants.CONFIG.infini_attention.turn_on_memory is True}",
-            #     logger=logger,
-            #     level=logging.WARNING,
-            #     rank=0,
-            # )
+            log_rank(
+                f"Segment length is {self.segment_length}, turn_on_memory: {constants.CONFIG.infini_attention.turn_on_memory is True}",
+                logger=logger,
+                level=logging.WARNING,
+                rank=0,
+            )
 
-    def _forward(
+    def forward(
         self,
         # hidden_states: TensorType["sharded_seq_len", "batch_size", "hidden_size"],
         hidden_states: TensorType["sharded_batch_size", "seq_len", "hidden_size"],
@@ -602,6 +602,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             )
 
             output = self.o_proj(attention_output)
+            output = output.transpose(0, 1)
 
             if constants.CONFIG.infini_attention.turn_on_memory is True:
                 if (
@@ -637,12 +638,12 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         outputs = torch.cat(outputs, dim=1)  # concat along sequence dimension
         assert outputs.shape == hidden_states.shape
 
-        # if constants.GLOBAL_STEP is not None and (constants.GLOBAL_STEP - 1) % constants.LOG_STATE_INTERVAL == 0:
-        #     if dist.get_rank() == 0:
-        #         import wandb
+        if constants.GLOBAL_STEP is not None and (constants.GLOBAL_STEP - 1) % constants.LOG_STATE_INTERVAL == 0:
+            if dist.get_rank() == 0:
+                import wandb
 
-        #         logs[f"layer_{self.layer_idx}:outputs"] = compute_stas(outputs)
-        #         wandb.log({**logs, "iteration_step": constants.GLOBAL_STEP})
+                logs[f"layer_{self.layer_idx}:outputs"] = compute_stas(outputs)
+                wandb.log({**logs, "iteration_step": constants.GLOBAL_STEP})
 
         # sequence_masks = torch.cat(sequence_masks, dim=1)
         # assert sequence_masks.shape == sequence_mask.shape
@@ -759,11 +760,11 @@ class CausalSelfAttention(nn.Module, AttachableStore):
 
         return memory, normalization
 
-    def forward(
+    def forward_with_hidden_states(
         self,
         hidden_states,  # [seq_len, batch_size, hidden_size]
         sequence_mask,  # [batch_size, seq_len]
-        # return_qkv_states: bool = False,
+        return_qkv_states: bool = False,
     ):
         from flash_attn import bert_padding
         from flash_attn.flash_attn_interface import (
@@ -840,33 +841,41 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         #     level=logging.INFO,
         # )
 
-        # query_states_without_pe = rearrange(
-        #     query_states, "batch_size seq_len n_heads d_head -> batch_size n_heads seq_len d_head"
-        # )
-        # key_states_without_pe = rearrange(
-        #     key_states, "batch_size seq_len n_heads d_head -> batch_size n_heads seq_len d_head"
-        # )
-        # value_states_without_pe = rearrange(
-        #     value_states, "batch_size seq_len n_heads d_head -> batch_size n_heads seq_len d_head"
-        # )
+        ############ START EXP33 #####
+        query_states_without_pe = rearrange(
+            query_states,
+            "batch_size seq_len n_heads d_head -> batch_size n_heads seq_len d_head",
+            seq_len=self.segment_length,
+        )
+        key_states_without_pe = rearrange(
+            key_states,
+            "batch_size seq_len n_heads d_head -> batch_size n_heads seq_len d_head",
+            seq_len=self.segment_length,
+        )
+        value_states_without_pe = rearrange(
+            value_states,
+            "batch_size seq_len n_heads d_head -> batch_size n_heads seq_len d_head",
+            seq_len=self.segment_length,
+        )
+        ############ END EXP32 ############
 
         # query_states_without_pe = rearrange(
         #     query_states,
-        #     "seq_len batch_size n_heads d_head -> seq_len n_heads batch_size d_head",
-        #     # seq_len=self.segment_length,
-        #     seq_len=seq_len,
+        #     "batch_size seq_len n_heads d_head -> seq_len n_heads batch_size d_head",
+        #     seq_len=self.segment_length,
+        #     # seq_len=seq_len,
         # )
         # key_states_without_pe = rearrange(
         #     key_states,
-        #     "seq_len batch_size n_heads d_head -> seq_len n_heads batch_size d_head",
-        #     # seq_len=self.segment_length,
-        #     seq_len=seq_len,
+        #     "batch_size seq_len n_heads d_head -> seq_len n_heads batch_size d_head",
+        #     seq_len=self.segment_length,
+        #     # seq_len=seq_len,
         # )
         # value_states_without_pe = rearrange(
         #     value_states,
-        #     "seq_len batch_size n_heads d_head -> seq_len n_heads batch_size d_head",
-        #     # seq_len=self.segment_length,
-        #     seq_len=seq_len,
+        #     "batch_size seq_len n_heads d_head -> seq_len n_heads batch_size d_head",
+        #     seq_len=self.segment_length,
+        #     # seq_len=seq_len,
         # )
 
         # assert query_states_without_pe.shape[0] == self.segment_length
@@ -1087,19 +1096,19 @@ class CausalSelfAttention(nn.Module, AttachableStore):
 
         # torch.save(attention_output, f"{DEBUG_PATH}/attention_output_after_reshape_{tp_rank}.pt")
 
-        output = self.o_proj(attention_output)
-        output = output.transpose(0, 1)
-        return {"hidden_states": output, "sequence_mask": sequence_mask}
+        # output = self.o_proj(attention_output)
+        # output = output.transpose(0, 1)
+        # return {"hidden_states": output, "sequence_mask": sequence_mask}
 
-        # return_outputs = {"hidden_states": None, "sequence_mask": sequence_mask}
-        # return_outputs["qkv_states"] = (query_states, key_states, value_states) if return_qkv_states else ()
-        # return_outputs["qkv_states_without_pe"] = (
-        #     query_states_without_pe,
-        #     key_states_without_pe,
-        #     value_states_without_pe,
-        # )
-        # return_outputs["attention_output"] = attention_output
-        # return return_outputs
+        return_outputs = {"hidden_states": None, "sequence_mask": sequence_mask}
+        return_outputs["qkv_states"] = (query_states, key_states, value_states) if return_qkv_states else ()
+        return_outputs["qkv_states_without_pe"] = (
+            query_states_without_pe,
+            key_states_without_pe,
+            value_states_without_pe,
+        )
+        return_outputs["attention_output"] = attention_output
+        return return_outputs
 
 
 class LlamaDecoderLayer(nn.Module):

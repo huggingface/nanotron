@@ -435,8 +435,10 @@ class DistributedTrainer:
                 if isinstance(prof, torch.profiler.profile):
                     prof.step()
 
-                # if (self.iteration_step - 1) % constants.LOG_STATE_INTERVAL == 0:
-                #     nn_logs, nn_handles = monitor_nanotron_model(self.model, self.parallel_context)
+                if (self.iteration_step - 1) % constants.LOG_STATE_INTERVAL == 0:
+                    from nanotron.debug.monitor import monitor_nanotron_model
+
+                    nn_logs, nn_handles = monitor_nanotron_model(self.model, self.parallel_context)
 
                 self.iteration_start_time = time.time()
                 self._update_dataloader_based_on_training_stages(dataloader_or_dls)
@@ -450,14 +452,14 @@ class DistributedTrainer:
                 if (self.iteration_step - 1) % self.config.logging.iteration_step_info_interval == 0:
                     self.train_step_logs(outputs=outputs, loss_avg=loss_avg)
 
-                # if (self.iteration_step - 1) % constants.LOG_STATE_INTERVAL == 0:
-                #     from nanotron.debug.monitor import convert_logs_to_flat_logs
+                if (self.iteration_step - 1) % constants.LOG_STATE_INTERVAL == 0:
+                    from nanotron.debug.monitor import convert_logs_to_flat_logs
 
-                #     if dist.get_rank(self.parallel_context.world_pg) == self.logger_ranks[0] and wandb is not None:
-                #         wandb.log({**convert_logs_to_flat_logs(nn_logs), "iteration_step": self.iteration_step})
+                    if dist.get_rank(self.parallel_context.world_pg) == self.logger_ranks[0] and wandb is not None:
+                        wandb.log({**convert_logs_to_flat_logs(nn_logs), "iteration_step": self.iteration_step})
 
-                #     for handle in nn_handles:
-                #         handle.remove()
+                    for handle in nn_handles:
+                        handle.remove()
 
                 # Checkpoint
                 if self.iteration_step % self.config.checkpoints.checkpoint_interval == 0:

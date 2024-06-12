@@ -2,6 +2,7 @@ from typing import Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.distributed as dist
+from nanotron.constants import DEBUG_PATH
 from nanotron.models.base import NanotronModel
 from nanotron.parallel import ParallelContext
 from torch import nn
@@ -22,13 +23,13 @@ def track_weight_and_grad_stats(name: str, module: nn.Module, parallel_context: 
 
             stats[key] = {}
             stats[key] = {
-                "mean": tensor.mean().item(),
+                "mean": tensor.cpu().mean().item(),
                 # "std": tensor.std().item(),
                 # "var": tensor.var().item(),
                 # "norm": tensor.norm().item(),
                 # "min": tensor.min().item(),
                 # "max": tensor.max().item(),
-                "amax": tensor.abs().max().item(),
+                "amax": tensor.cpu().abs().max().item(),
             }
 
             # NOTE: now all reduce mean this across tp ranks
@@ -80,12 +81,14 @@ def track_weight_and_grad_stats(name: str, module: nn.Module, parallel_context: 
             import os
 
             # from nanotron.constants import
-            DIR = "./debug/nn_states_after_fix/acts/"
+            # DIR = "./debug/nn_states_with_bs_1/acts/"
 
-            os.makedirs(DIR, exist_ok=True)
+            os.makedirs(DEBUG_PATH, exist_ok=True)
 
             if dp_rank == 0:
-                torch.save(tensor, f"{DIR}/{name}_dp_rank_{dp_rank}_and_pp_rank_{pp_rank}_and_tp_rank_{tp_rank}.pt")
+                torch.save(
+                    tensor, f"{DEBUG_PATH}/{name}_dp_rank_{dp_rank}_and_pp_rank_{pp_rank}_and_tp_rank_{tp_rank}.pt"
+                )
 
         if len(outputs) > 1:
             for i, out in enumerate(outputs):

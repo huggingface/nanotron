@@ -16,7 +16,10 @@ METADATA_CKP_PATH = "{}/checkpoint_metadata.json"
 NEEDLE = None
 
 GLOBAL_STEP: Optional[int] = None
-LOG_STATE_INTERVAL = 500
+LOG_STATE_INTERVAL = 5000
 CONFIG = None
 
 TRAINING_CONFIG = None
+
+
+DEBUG_PATH = "./debug/nn_states_with_bs_2_and_transpose_qkv/acts/"
