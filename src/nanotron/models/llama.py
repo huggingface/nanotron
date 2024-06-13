@@ -379,23 +379,10 @@ class CausalSelfAttention(nn.Module, AttachableStore):
 
         self.prefill_kv_len = (
             config.max_position_embeddings
-            # 2048
         )  # TODO @nouamane: compute based on free memory, because in rope we can surpass max_position_embeddings
 
-        # self.n_segments = 16
-        # self.segment_length = config.max_position_embeddings // self.n_segments
         # assert config.max_position_embeddings == 32768
-
-        # NOTE: for 1b training
-        # self.segment_length = 2048
-        # self.segment_length = 4096
-        # self.segment_length = 1024  # for 4096 context length
         self.segment_length = constants.CONFIG.infini_attention.segment_length  # for 1024 context length
-
-        # NOTE: for sanity 200m training
-        # prev 16
-        # self.segment_length = 256
-        # self.segment_length = 16
 
         device = self.o_proj.weight.device
         dtype = self.o_proj.weight.dtype
@@ -426,28 +413,10 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         hidden_states: TensorType["sharded_batch_size", "seq_len", "hidden_size"],
         sequence_mask: TensorType["batch_size", "seq_len"],
     ):
-        # if self.layer_idx == 4:
-        #     assert 1 == 1
-
-        # batch_size = hidden_states.shape[1]
-        # seq_len = hidden_states.shape[0]
-
         hidden_states.shape[0]
         seq_len = hidden_states.shape[1]
 
-        # assert seq_len == 1024
-        # assert seq_len == 32768
-
-        # assert seq_len % self.n_segments == 0
-
-        # segment_length = seq_len // self.n_segments
-        # hidden_size = hidden_states.shape[2]
-
         if seq_len > self.segment_length:
-            # n_segments = seq_len // self.segment_length
-            # segment_hidden_states = torch.chunk(hidden_states, chunks=n_segments, dim=0)
-            # segment_sequence_masks = torch.chunk(sequence_mask, chunks=n_segments, dim=1)
-
             import math
 
             n_segments = math.ceil(seq_len / self.segment_length)
@@ -455,9 +424,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                 seq_len - (n_segments - 1) * self.segment_length
             ]
             assert sum(segment_lengths) == seq_len
-            # assert hidden_states.shape[0] == seq_len
             assert hidden_states.shape[1] == seq_len
-            # segment_hidden_states = torch.split(hidden_states, segment_lengths, dim=0)
             segment_hidden_states = torch.split(hidden_states, segment_lengths, dim=1)
             # NOTE: assume that mask are all the same
             # because we split across sequence length
@@ -471,67 +438,26 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         memory = None
         normalization = None
 
-        # memory = prev_memory
-        # normalization = prev_normalization
-
         outputs = []
 
-        # sequence_masks = []
         idx = 0
         logs = {}
 
         for segment_hidden_state, segment_sequence_mask in zip(segment_hidden_states, segment_sequence_masks):
-            # if idx == 1:
-            #     memory = None
-            #     normalization = None
-
             attn_outputs = self.forward_with_hidden_states(
                 hidden_states=segment_hidden_state, sequence_mask=segment_sequence_mask, return_qkv_states=True
             )
 
             local_attn_outputs = attn_outputs["attention_output"]
-            # query_states, key_states, value_states = attn_outputs["qkv_states"]
             query_states, key_states, value_states = attn_outputs["qkv_states_without_pe"]
-
-            # # NOTE: these are the shape for non-megatron-sp
-            # assert query_states.shape[0] == self.segment_length
-            # assert local_attn_outputs.shape[1] == self.segment_length
-
-            query_states = rearrange(
-                query_states,
-                "seq_len n_heads batch_size d_head -> batch_size n_heads seq_len d_head",
-                # seq_len=self.segment_length,
-                n_heads=self.n_local_q_heads,
-                d_head=self.d_qk,
-            )
-
-            key_states = rearrange(
-                key_states,
-                "seq_len n_heads batch_size d_head -> batch_size n_heads seq_len d_head",
-                # batch_size=batch_size,
-                # seq_len=self.segment_length,
-                n_heads=self.n_local_kv_heads,
-                d_head=self.d_qk,
-            )
-
-            value_states = rearrange(
-                value_states,
-                "seq_len n_heads batch_size d_head -> batch_size n_heads seq_len d_head",
-                # batch_size=batch_size,
-                # seq_len=self.segment_length,
-                n_heads=self.n_local_kv_heads,
-                d_head=self.d_qk,
-            )
-
-            # local_attn_outputs = rearrange(
-            #     local_attn_outputs,
-            #     "seq_len batch_size (n_heads d_head) -> batch_size n_heads seq_len d_head",
-            #     d_head=self.d_qk,
-            # )
+            q_bs = query_states.shape[0]
+            q_length = query_states.shape[2]
             local_attn_outputs = rearrange(
                 local_attn_outputs,
-                "batch_size seq_len (n_heads d_head) -> batch_size n_heads seq_len d_head",
+                "seq_len batch_size (n_heads d_head) -> batch_size n_heads seq_len d_head",
                 # seq_len=self.segment_length,
+                batch_size=q_bs,
+                seq_len=q_length,
                 d_head=self.d_qk,
             )
 
@@ -544,8 +470,6 @@ class CausalSelfAttention(nn.Module, AttachableStore):
 
             if constants.CONFIG.infini_attention.turn_on_memory is True:
                 # NOTE: because in generation, the sequence length increases
-                # assert query_states.shape == (batch_size, self.n_local_q_heads, segment_length, self.d_qk)
-                # assert query_states.shape == key_states.shape == value_states.shape
                 retrieved_memory = self._retrieve_from_memory(
                     query_states, prev_memory=memory, prev_normalization=normalization
                 )
@@ -565,15 +489,11 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                 #         rank=0,
                 #     )
 
-                # retrieved_memory = retrieved_memory.detach()
-
                 global_weights = F.sigmoid(self.balance_factors)
                 global_weights = rearrange(global_weights, "n_heads -> 1 n_heads 1 1")
 
                 local_weights = 1 - F.sigmoid(self.balance_factors)
                 local_weights = rearrange(local_weights, "n_heads -> 1 n_heads 1 1")
-
-                # assert torch.allclose(global_weights + local_weights, torch.ones_like(global_weights))
 
                 # log_rank(
                 #     f"[idx={idx}] global_weights.shape = {global_weights.shape}, global_weights: {global_weights}",
@@ -598,11 +518,10 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                 "batch_size n_heads seq_len d_head -> batch_size seq_len (n_heads d_head)",
                 n_heads=self.n_local_q_heads,
                 d_head=self.d_qk,
-                # seq_len=self.segment_length,
+                seq_len=q_length,
             )
 
             output = self.o_proj(attention_output)
-            output = output.transpose(0, 1)
 
             if constants.CONFIG.infini_attention.turn_on_memory is True:
                 if (
@@ -623,18 +542,16 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                         logs[f"layer_{self.layer_idx}:seg_{idx}:memory"] = compute_stas(memory)
                         logs[f"layer_{self.layer_idx}:seg_{idx}:normalization"] = compute_stas(normalization)
 
-                # assert output.shape == (segment_length, batch_size, hidden_size)
+                if idx >= 1:
+                    assert 1 == 1
 
                 memory, normalization = self._update_memory(memory, normalization, key_states, value_states)
-                # memory = prev_memory if prev_memory is not None else 0.detach()
 
             outputs.append(output)
-            # memory, normalization = memory.detach(), normalization.detach()
 
             idx += 1
 
             # NOTE: update memory
-        # outputs = torch.cat(outputs, dim=0)  # concat along sequence dimension
         outputs = torch.cat(outputs, dim=1)  # concat along sequence dimension
         assert outputs.shape == hidden_states.shape
 
@@ -645,38 +562,19 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                 logs[f"layer_{self.layer_idx}:outputs"] = compute_stas(outputs)
                 wandb.log({**logs, "iteration_step": constants.GLOBAL_STEP})
 
-        # sequence_masks = torch.cat(sequence_masks, dim=1)
-        # assert sequence_masks.shape == sequence_mask.shape
         return_outputs = {
             "hidden_states": outputs,
             "sequence_mask": sequence_mask,
-            # "memory": memory,
-            # "normalization": normalization,
         }
         return return_outputs
 
     def _retrieve_from_memory(self, query_states, prev_memory, prev_normalization):
-        # return torch.zeros_like(query_states)
         if prev_memory is None or prev_normalization is None:
             return torch.zeros_like(query_states)
 
         assert (prev_memory is None and prev_normalization is None) or (
             prev_memory is not None and prev_normalization is not None
         )
-
-        # if self.n_repeats > 1:
-        #     from einops import repeat
-
-        #     prev_memory = repeat(
-        #         prev_memory,
-        #         "batch_size n_kv_heads d_k d_v -> batch_size (n_kv_heads n) d_k d_v",
-        #         n=self.n_repeats,
-        #     )
-        #     prev_normalization = repeat(
-        #         prev_normalization,
-        #         "batch_size n_kv_heads d_head -> batch_size (n_kv_heads n) d_head",
-        #         n=self.n_repeats,
-        #     )
 
         sigma_query_states = F.elu(query_states) + 1
         retrieved_memory = einsum(
@@ -787,7 +685,6 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         qkv_states = qkv_states.transpose(0, 1)
         q_length, batch_size, _ = qkv_states.shape
         # NOTE: this is the new splitting dimension
-        # batch_size, q_length, _ = qkv_states.shape
 
         if self.is_gqa:
             query_states, key_states, value_states = torch.split(
@@ -841,45 +738,30 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         #     level=logging.INFO,
         # )
 
-        ############ START EXP33 #####
         query_states_without_pe = rearrange(
             query_states,
             "batch_size seq_len n_heads d_head -> batch_size n_heads seq_len d_head",
-            seq_len=self.segment_length,
+            batch_size=batch_size,
+            seq_len=q_length,
+            n_heads=self.n_local_q_heads,
+            d_head=self.d_qk,
         )
         key_states_without_pe = rearrange(
             key_states,
             "batch_size seq_len n_heads d_head -> batch_size n_heads seq_len d_head",
-            seq_len=self.segment_length,
+            batch_size=batch_size,
+            seq_len=q_length,
+            n_heads=self.n_local_kv_heads,
+            d_head=self.d_qk,
         )
         value_states_without_pe = rearrange(
             value_states,
             "batch_size seq_len n_heads d_head -> batch_size n_heads seq_len d_head",
-            seq_len=self.segment_length,
+            batch_size=batch_size,
+            seq_len=q_length,
+            n_heads=self.n_local_kv_heads,
+            d_head=self.d_qk,
         )
-        ############ END EXP32 ############
-
-        # query_states_without_pe = rearrange(
-        #     query_states,
-        #     "batch_size seq_len n_heads d_head -> seq_len n_heads batch_size d_head",
-        #     seq_len=self.segment_length,
-        #     # seq_len=seq_len,
-        # )
-        # key_states_without_pe = rearrange(
-        #     key_states,
-        #     "batch_size seq_len n_heads d_head -> seq_len n_heads batch_size d_head",
-        #     seq_len=self.segment_length,
-        #     # seq_len=seq_len,
-        # )
-        # value_states_without_pe = rearrange(
-        #     value_states,
-        #     "batch_size seq_len n_heads d_head -> seq_len n_heads batch_size d_head",
-        #     seq_len=self.segment_length,
-        #     # seq_len=seq_len,
-        # )
-
-        # assert query_states_without_pe.shape[0] == self.segment_length
-        # assert query_states_without_pe.shape[0] == seq_len
 
         store = self.get_local_store()
         if store is not None:  # Inference case
