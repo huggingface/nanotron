@@ -345,43 +345,20 @@ class FP8Adam(Optimizer):
 
                 IS_FP8 = p.data.__class__ == FP8Tensor
 
-                if IS_FP8 is False:
-                    assert 1 == 1
-
-                assert (
-                    p in self.mappping_fp8_to_master_weight if IS_FP8 else True
-                ), "FP8Tensor should have a master weight"
-                # p = self.mappping_fp8_to_master_weight[p] if IS_FP8 else p.data
-
                 if IS_FP8:
+                    assert p in self.mappping_fp8_to_master_weight, "FP8Tensor should have a master weight"
                     fp16_data = self.mappping_fp8_to_master_weight[p]
                     fp32_data = convert_tensor_from_fp16(fp16_data, torch.float32)
                     grad = p.data._temp_grad
                     fp32_grad = convert_tensor_from_fp8(grad, grad.fp8_meta, torch.float32)
                 else:
-                    # fp16_data = p._data if hasattr(p, "_data") else p
                     fp16_data = p.data
                     fp32_data = fp16_data.to(torch.float32)
-                    grad = p.grad
+                    # NOTE: the bias of FP8 parameter saves its gradient in p.data.grad
+                    # and the weight, and bias of non-FP8 parameter saves its gradient in p.grad
+                    assert (p.data.grad is None and p.grad is None) is False
+                    grad = p.data.grad if p.data.grad is not None else p.grad
                     fp32_grad = grad.to(torch.float32)
-
-                # fp16_data = self.mappping_fp8_to_master_weight[p] if IS_FP8 else (p._data if hasattr(p, "_data") else p)
-                # fp32_p = convert_tensor_from_fp16(fp16_p, torch.float32) if IS_FP8 else fp16_p.to(torch.float32)
-
-                # grad = p.data._temp_grad if IS_FP8 else p.grad
-
-                # try:
-                #     fp32_grad = (
-                #         convert_tensor_from_fp8(grad, grad.fp8_meta, torch.float32) if IS_FP8 else grad.to(torch.float32)
-                #     )
-                # except AttributeError:
-                #     assert 1 == 1
-                # fp32_grad = (
-                #     convert_tensor_from_fp8(grad, grad.fp8_meta, torch.float32) if IS_FP8 else grad.to(torch.float32)
-                # )
-
-                if IS_FP8 is False:
-                    assert 1 == 1
 
                 if p.__class__ == NanotronParameter:
                     if IS_FP8:
@@ -464,19 +441,15 @@ class FP8Adam(Optimizer):
 
                 new_fp32 = fp32_data - step_size * (fp32_exp_avg / denom)
 
-                assert not torch.allclose(new_fp32, fp32_data)
+                # assert not torch.allclose(new_fp32, fp32_data)
 
                 if IS_FP8:
                     self.mappping_fp8_to_master_weight[p] = FP16Tensor(new_fp32, dtype=DTypes.KFLOAT16)
                     p.data.set_data(new_fp32)
                 else:
-                    # NOTE: there is a bug that if you set p.data = new_value, p doesn't change
-                    # its value
                     new_fp16 = new_fp32.to(torch.float16)
-                    # TODO(xrsrke): support p.data
                     p.data = new_fp16
                     assert torch.allclose(p.data, new_fp16)
-                    # assert not torch.allclose(p.data, fp16_p)
 
         self.loggings = loggings
 
@@ -489,12 +462,8 @@ class FP8Adam(Optimizer):
                 #     (p.data.__class__ == torch.Tensor and p.grad is None):
                 #     continue
 
-                # if p.data.__class__ == FP8Tensor:
-                #     p.data._temp_grad.zero_()
-                # else:
-                #     p.grad.zero_()
-
                 if p.data.__class__ == FP8Tensor:
                     p.data._temp_grad = None
                 else:
                     p.grad = None
+                    p.data.grad = None

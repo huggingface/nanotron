@@ -393,6 +393,7 @@ def test_fp8adam_load_state_dict():
             torch.testing.assert_allclose(state_new[key], state_saved[key])
 
 
+@pytest.mark.skip("added to nanotron")
 def test_fp8adam_not_change_memory_address():
     input = torch.randn(16, 16, device="cuda")
     linear = nn.Sequential(*[layer for _ in range(5) for layer in (nn.Linear(16, 16, device="cuda"), nn.ReLU())])

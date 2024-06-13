@@ -1,19 +1,21 @@
 import nanotron
 import torch
+from nanotron.config import AdamOptimizerArgs, LRSchedulerArgs, OptimizerArgs, ParallelismArgs
 from nanotron.config import LlamaConfig as NanotronLlamaConfig
-from nanotron.config import ParallelismArgs
 from nanotron.models.llama import LlamaForTraining
 from nanotron.parallel import ParallelContext
 from nanotron.trainer import mark_tied_parameters
 
-CONFIG = NanotronLlamaConfig(
+DEFAULT_LLAMA_CONFIG = NanotronLlamaConfig(
     **{
         "bos_token_id": 1,
         "eos_token_id": 2,
         "hidden_act": "silu",
-        "hidden_size": 16,
+        # NOTE: make sure sharded hidden size is divisible by 16
+        # for FP8 gemm to run
+        "hidden_size": 32,
         "initializer_range": 0.02,
-        "intermediate_size": 64,
+        "intermediate_size": 128,
         "is_llama_config": True,
         "max_position_embeddings": 128,
         "num_attention_heads": 8,
@@ -27,6 +29,28 @@ CONFIG = NanotronLlamaConfig(
         "use_cache": True,
         "vocab_size": 4096,
     }
+)
+
+
+DEFAULT_OPTIMIZER_CONFIG = OptimizerArgs(
+    zero_stage=0,
+    weight_decay=0.1,
+    clip_grad=1.0,
+    accumulate_grad_in_fp32=False,
+    learning_rate_scheduler=LRSchedulerArgs(
+        # NOTE(xrsrke): use a high learning rate to make changes in the weights more visible
+        learning_rate=0.001,
+        lr_warmup_steps=100,
+        lr_warmup_style="linear",
+        lr_decay_style="cosine",
+        min_decay_lr=1e-5,
+    ),
+    optimizer_factory=AdamOptimizerArgs(
+        adam_beta1=0.9,
+        adam_beta2=0.95,
+        adam_eps=1e-08,
+        torch_adam_is_fused=False,
+    ),
 )
 
 
@@ -55,7 +79,7 @@ def create_nanotron_model(parallel_context: ParallelContext, dtype: torch.dtype 
     )
     nanotron_model = nanotron.models.build_model(
         model_builder=lambda: LlamaForTraining(
-            config=CONFIG,
+            config=DEFAULT_LLAMA_CONFIG,
             parallel_context=parallel_context,
             parallel_config=parallel_config,
             random_states=None,
