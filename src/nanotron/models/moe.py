@@ -16,7 +16,6 @@ from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.config import LlamaConfig as Config
 from nanotron.config import ParallelismArgs
-from nanotron.config.models_config import LlamaConfig
 from nanotron.nn.activations import ACT2FN
 from nanotron.parallel.context import ParallelContext
 from nanotron.parallel.sharded_parameters import (
@@ -39,48 +38,24 @@ except ImportError:
 logger = logging.get_logger(__name__)
 
 
-_LOAD_BALANCING_LOSS = []
-
-
-def save_load_balancing_stats(loss):
-    global _LOAD_BALANCING_LOSS
-    _LOAD_BALANCING_LOSS.append(loss)
-
-
-def get_load_balancing_stats():
-    global _LOAD_BALANCING_LOSS
-    return _LOAD_BALANCING_LOSS
-
-
-def clear_load_balancing_stats():
-    global _LOAD_BALANCING_LOSS
-    _LOAD_BALANCING_LOSS.clear()
-
-
-def batched_load_balancing_loss(
-    # from config
-    config: LlamaConfig,
-):
-    tokens_per_expert, expert_scores = zip(*get_load_balancing_stats())
-    # tokens_per_expert[i].shape = (num_experts)
-    # expert_scores[i].shape = (tokens, num_experts)
+def load_balancing_loss(tokens_per_expert, expert_scores, config: Config):
+    # tokens_per_expert.shape = (num_experts)
+    # expert_scores.shape = (tokens, num_experts)
     num_hidden_layers = config.num_hidden_layers
     moe_num_experts = config.moe_num_experts
     moe_loss_weight = config.moe_loss_weight
     num_experts_per_token = config.num_experts_per_tok
 
     # Verify the shape of the tokens_per_expert and expert_scores tensors.
-    assert all(x.ndim == 1 and x.numel() == moe_num_experts for x in tokens_per_expert)
+    assert tokens_per_expert.ndim == 1 and tokens_per_expert.numel() == moe_num_experts
 
-    tokens = expert_scores[0].shape[0]
-    assert all((x.ndim == 2 and x.shape[1] == moe_num_experts and x.shape[0] == tokens) for x in expert_scores)
+    tokens = expert_scores.shape[0]
+    assert expert_scores.ndim == 2 and expert_scores.shape[1] == moe_num_experts
 
-    # Concatenate the contributions of each layer and convert to
-    # the correct types and formats for the dot product.
     # TODO @haeggee: conversion to float before mean?
-    # expert_scores = torch.cat(expert_scores, dim=1).float().mean(dim=0)
-    expert_scores = torch.cat(expert_scores, dim=1).mean(dim=0)
-    tokens_per_expert = torch.cat(tokens_per_expert).to(expert_scores.dtype)
+    # expert_scores = expert_scores.float().mean(dim=0)
+    expert_scores = expert_scores.mean(dim=0)
+    tokens_per_expert = tokens_per_expert.to(expert_scores.dtype)
 
     # Calculate the total scale across all factors.
     # loss_weight * num_experts / (num_layers * tokens * top_k)
@@ -130,8 +105,11 @@ class dMoE(torch.nn.Module):
         scores, expert_weights, top_experts = self.gate(x)
 
         # Compute the experts.
-        x = self.experts(x, scores, expert_weights, top_experts)
-        return {"hidden_states": x.reshape(batch_size, sequence_length, -1)}
+        x, aux_loss = self.experts(x, scores, expert_weights, top_experts)
+        return {
+            "hidden_states": x.reshape(batch_size, sequence_length, -1),
+            "aux_loss": aux_loss,
+        }
 
 
 # Adapted from megablocks.layers.router.LearnedRouter
@@ -374,11 +352,13 @@ class ParallelDroplessMLP(torch.nn.Module):
         # Compute the experts.
         x, tokens_per_expert = self.forward_fn(x, expert_weights.flatten(), top_experts.flatten())
         if self.training:
-            save_load_balancing_stats((tokens_per_expert, scores))
+            aux_loss = load_balancing_loss(tokens_per_expert, scores, self.config)
+        else:
+            aux_loss = torch.zeros(1, device=x.device)
 
         if self.use_bias:
             return x + self.bias
-        return x
+        return x, aux_loss
 
     def permute_and_compute(
         self,

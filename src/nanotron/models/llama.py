@@ -14,7 +14,7 @@
 # limitations under the License.
 """PyTorch LLaMa model."""
 
-from typing import Dict, Optional, Union, List
+from typing import Dict, Optional, Union
 
 import torch
 from torch import nn
@@ -27,8 +27,6 @@ from nanotron.generation.generate_store import AttachableStore
 from nanotron.logging import log_rank
 from nanotron.models import NanotronModel
 from nanotron.models.moe import (
-    batched_load_balancing_loss,
-    clear_load_balancing_stats,
     dMoE,
 )
 from nanotron.nn.activations import ACT2FN
@@ -45,7 +43,10 @@ from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelRowLinear,
 )
 from nanotron.random import RandomStates
-from nanotron.scaling.parametrization import SpectralMupParametrizator, StandardParametrizator
+from nanotron.scaling.parametrization import (
+    SpectralMupParametrizator,
+    StandardParametrizator,
+)
 from nanotron.utils import checkpoint_method
 
 logger = logging.get_logger(__name__)
@@ -652,13 +653,16 @@ class LlamaDecoderLayer(nn.Module):
                 parallel_config=parallel_config,
                 parallel_context=parallel_context,
             )
+            self._is_moe = True
         else:
             self.mlp = MLP(config=config, parallel_config=parallel_config, tp_pg=tp_pg)
+            self._is_moe = False
 
     def forward(
         self,
         hidden_states: Union[torch.Tensor, TensorPointer],
         sequence_mask: Union[torch.Tensor, TensorPointer],
+        aux_loss: Union[torch.Tensor, TensorPointer],
     ) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
@@ -672,9 +676,13 @@ class LlamaDecoderLayer(nn.Module):
         mlp_output = self.mlp(hidden_states=hidden_states)
         hidden_states = mlp_output["hidden_states"] + residual
 
+        if self._is_moe:
+            aux_loss = aux_loss + mlp_output["aux_loss"]
+
         return {
             "hidden_states": hidden_states,
             "sequence_mask": output["sequence_mask"],
+            "aux_loss": aux_loss,
         }
 
 
@@ -710,7 +718,9 @@ class Embedding(nn.Module, AttachableStore):
         # Format input in `[seq_length, batch_size]` to support high TP with low batch_size
         input_ids = input_ids.transpose(0, 1)
         input_embeds = self.token_embedding(input_ids)
-        return {"input_embeds": input_embeds}
+        return {
+            "input_embeds": input_embeds,
+        }
 
 
 class LlamaModel(nn.Module):
@@ -758,8 +768,8 @@ class LlamaModel(nn.Module):
                         "parallel_context": parallel_context,
                         "layer_idx": layer_idx,
                     },
-                    module_input_keys={"hidden_states", "sequence_mask"},
-                    module_output_keys={"hidden_states", "sequence_mask"},
+                    module_input_keys={"hidden_states", "sequence_mask", "aux_loss"},
+                    module_output_keys={"hidden_states", "sequence_mask", "aux_loss"},
                 )
                 for layer_idx in range(config.num_hidden_layers)
             ]
@@ -805,22 +815,34 @@ class LlamaModel(nn.Module):
         self,
         input_ids: Union[torch.Tensor, TensorPointer],  # [batch_size, seq_length]
         input_mask: Union[torch.Tensor, TensorPointer],  # [batch_size, seq_length]
+        aux_loss: Union[torch.Tensor, TensorPointer],
     ):
-        return self.forward_with_hidden_states(input_ids=input_ids, input_mask=input_mask)[0]
+        sharded_logits, hidden_states, aux_loss = self.forward_with_hidden_states(
+            input_ids=input_ids,
+            input_mask=input_mask,
+            aux_loss=aux_loss,
+        )
+        return {"sharded_logits": sharded_logits, "aux_loss": aux_loss}
 
     def forward_with_hidden_states(
         self,
         input_ids: Union[torch.Tensor, TensorPointer],  # [batch_size, seq_length]
         input_mask: Union[torch.Tensor, TensorPointer],  # [batch_size, seq_length]
+        aux_loss: Union[torch.Tensor, TensorPointer],
     ):
         # all tensors are optional as most ranks don't need anything from the dataloader.
 
-        output = self.token_position_embeddings(input_ids=input_ids, input_mask=input_mask)
+        output = self.token_position_embeddings(
+            input_ids=input_ids,
+            input_mask=input_mask,
+        )
 
         hidden_encoder_states = {
             "hidden_states": output["input_embeds"],
             "sequence_mask": input_mask,
+            "aux_loss": aux_loss,
         }
+
         for encoder_block in self.decoder:
             hidden_encoder_states = encoder_block(**hidden_encoder_states)
 
@@ -830,7 +852,7 @@ class LlamaModel(nn.Module):
 
         fp32_sharded_logits = self.cast_to_fp32(x=sharded_logits)["output"]
 
-        return fp32_sharded_logits, hidden_states
+        return fp32_sharded_logits, hidden_states, hidden_encoder_states["aux_loss"]
 
     def get_block_compute_costs(self):
         """Computes the compute cost of each block in the model so that we can do a better job of load balancing."""
@@ -943,19 +965,18 @@ class LlamaForTraining(NanotronModel):
         label_ids: Union[torch.Tensor, TensorPointer],
         label_mask: Union[torch.Tensor, TensorPointer],
     ) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
-        sharded_logits = self.model(
-            input_ids=input_ids,
-            input_mask=input_mask,
+        init_zero_aux_loss = (  # aux_loss is used for load balancing
+            torch.zeros(1, device=input_ids.device)
+            if not isinstance(input_ids, TensorPointer)
+            else TensorPointer(self.input_pp_rank)
         )
+        output = self.model(input_ids=input_ids, input_mask=input_mask, aux_loss=init_zero_aux_loss)
         loss = self.loss(
-            sharded_logits=sharded_logits,
+            sharded_logits=output["sharded_logits"],
             label_ids=label_ids,
             label_mask=label_mask,
         )
-        if self.config.moe_num_experts > 1:
-            aux_loss = batched_load_balancing_loss(self.config)
-            loss["load_balancing_loss"] = aux_loss
-            clear_load_balancing_stats()
+        loss["load_balancing_loss"] = output["aux_loss"]
         return loss
 
     @torch.no_grad()
