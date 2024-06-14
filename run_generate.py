@@ -169,11 +169,11 @@ def main():
         tokenizer.truncation_side = "left"  # TODO @nouamane: do we want this?
         dummy_inputs = [
             # "Passage: Daniel went back to the garden. Mary travelled to the kitchen. Sandra journeyed to the kitchen. Sandra went to the hallway. John went to the bedroom. Mary went back to the garden. Where is Mary?\nAnswer:",
-            "def fib(n)",
-            "def fib(n)",
+            # "def fib(n)",
+            # "def fib(n)",
             # "This film was probably inspired by Godzilla",
             # "Paris is the capital of"
-            # "There is an important info hidden inside a lot of irrelevant text. Find it and memorize them. I will quiz you about the important information there. The grass is green. The sky is blue. The pass key is 24. Remember it. 24 is the pass key. What is the pass key? The pass key is ",
+            "There is an important info hidden inside a lot of irrelevant text. Find it and memorize them. I will quiz you about the important information there. The grass is green. The sky is blue. The pass key is 24. Remember it. 24 is the pass key. What is the pass key? The pass key is ",
         ]
 
         outputs = decode_text(
