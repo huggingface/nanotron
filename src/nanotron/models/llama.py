@@ -42,6 +42,8 @@ from nanotron.parallel.tensor_parallel.nn import (
 from nanotron.random import RandomStates
 from nanotron.scaling.parametrization import SpectralMupParametrizator, StandardParametrizator
 from nanotron.utils import checkpoint_method
+from nanotron.constants import DEBUG_PATH
+
 
 logger = logging.get_logger(__name__)
 
@@ -299,6 +301,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         tp_linear_async_communication = (
             parallel_config.tp_linear_async_communication if parallel_config is not None else False
         )
+        self.tp_pg = tp_pg
 
         # build the slice config for self.qkv for save/load
         # shard are done within the contiguous chunk
@@ -386,6 +389,15 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                 .permute(2, 1, 0, 3, 4)
                 .contiguous()
             )  # [3, batch_size, seq_length, n_local_q_heads, d_qk]
+
+        import os
+
+        os.makedirs(DEBUG_PATH, exist_ok=True)
+        tp_rank = dist.get_rank(group=self.tp_pg)
+
+        torch.save(query_states, f"{DEBUG_PATH}/query_states_before_pos_tp_rank_{tp_rank}.pt")
+        torch.save(key_states, f"{DEBUG_PATH}/query_states_before_pos_tp_rank_{tp_rank}.pt")
+        torch.save(value_states, f"{DEBUG_PATH}/query_states_before_pos_tp_rank_{tp_rank}.pt")
 
         store = self.get_local_store()
         if store is not None:  # Inference case
@@ -582,6 +594,10 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                 batch_size * kv_length, self.n_local_kv_heads, self.d_v
             )  # [batch_size * kv_length, self.n_heads, d_v]
 
+            torch.save(query_states, f"{DEBUG_PATH}/query_states_after_pos_tp_rank_{tp_rank}.pt")
+            torch.save(key_states, f"{DEBUG_PATH}/query_states_after_pos_tp_rank_{tp_rank}.pt")
+            torch.save(value_states, f"{DEBUG_PATH}/query_states_after_pos_tp_rank_{tp_rank}.pt")
+
             attention_output = self.attention(
                 query_states=query_states,
                 key_states=key_states,
@@ -590,9 +606,12 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                 kv_sequence_mask=kv_sequence_mask,
             )
 
+            torch.save(attention_output, f"{DEBUG_PATH}/attention_output_before_reshape_{tp_rank}.pt")
+
         attention_output = (
             attention_output.contiguous().view(batch_size, q_length, self.n_local_q_heads * self.d_v).transpose(0, 1)
         )
+        torch.save(attention_output, f"{DEBUG_PATH}/attention_output_after_reshape_{tp_rank}.pt")
         output = self.o_proj(attention_output)
 
         return {"hidden_states": output, "sequence_mask": sequence_mask}
@@ -623,16 +642,54 @@ class LlamaDecoderLayer(nn.Module):
         hidden_states: Union[torch.Tensor, TensorPointer],
         sequence_mask: Union[torch.Tensor, TensorPointer],
     ) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
+        # log_rank(
+        #     f"hidden_states input to a LlamaDecoderLayer: hidden_states.shape={hidden_states.shape}",
+        #     logger=logger,
+        #     level=logging.INFO,
+        #     rank=0,
+        # )
+    
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
 
+        # log_rank(
+        #     f"hidden_states after input_layernorm: hidden_states.shape={hidden_states.shape}",
+        #     logger=logger,
+        #     level=logging.INFO,
+        #     rank=0,
+        # )
+
         output = self.attn(hidden_states=hidden_states, sequence_mask=sequence_mask)
         hidden_states = output["hidden_states"]
+
+        # log_rank(
+        #     f"hidden_states after attn: hidden_states.shape={hidden_states.shape}",
+        #     logger=logger,
+        #     level=logging.INFO,
+        #     rank=0,
+        # )
+
         hidden_states = hidden_states + residual
 
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
+
+        # log_rank(
+        #     f"hidden_states after post_attention_layernorm: hidden_states.shape={hidden_states.shape}",
+        #     logger=logger,
+        #     level=logging.INFO,
+        #     rank=0,
+        # )
+
         hidden_states = self.mlp(hidden_states=hidden_states)["hidden_states"]
+        
+        # log_rank(
+        #     f"hidden_states after mlp: hidden_states.shape={hidden_states.shape}",
+        #     logger=logger,
+        #     level=logging.INFO,
+        #     rank=0,
+        # )
+
         hidden_states = hidden_states + residual
 
         return {
@@ -769,18 +826,50 @@ class LlamaModel(nn.Module):
     ):
         # all tensors are optional as most ranks don't need anything from the dataloader.
 
+        # log_rank(
+        #     f"Idxs of inputs: input_ids.shape={input_ids.shape}, input_mask.shape={input_mask.shape}",
+        #     logger=logger,
+        #     level=logging.INFO,
+        #     rank=0,
+        # )
         output = self.token_position_embeddings(input_ids=input_ids, input_mask=input_mask)
+        # log_rank(
+        #     f"output['input_embeds'] of token_position_embeddings: output['input_embeds'].shape={output['input_embeds'].shape}",
+        #     logger=logger,
+        #     level=logging.INFO,
+        #     rank=0,
+        # )
 
         hidden_encoder_states = {
             "hidden_states": output["input_embeds"],
             "sequence_mask": input_mask,
         }
-        for encoder_block in self.decoder:
+        for i, encoder_block in enumerate(self.decoder):
+            # log_rank(
+            #     f"Starting transformer block {i}",
+            #     logger=logger,
+            #     level=logging.INFO,
+            #     rank=0,
+            # )
+            
             hidden_encoder_states = encoder_block(**hidden_encoder_states)
 
         hidden_states = self.final_layer_norm(input=hidden_encoder_states["hidden_states"])["hidden_states"]
+        # log_rank(
+        #     f"hidden_states after final_layer_norm: hidden_states.shape={hidden_states.shape}",
+        #     logger=logger,
+        #     level=logging.INFO,
+        #     rank=0,
+        # )
 
         sharded_logits = self.lm_head(x=hidden_states)["logits"]
+
+        # log_rank(
+        #     f"sharded_logits after lm_head: sharded_logits.shape={sharded_logits.shape}",
+        #     logger=logger,
+        #     level=logging.INFO,
+        #     rank=0,
+        # )
 
         fp32_sharded_logits = self.cast_to_fp32(x=sharded_logits)["output"]
 

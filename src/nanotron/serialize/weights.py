@@ -263,6 +263,9 @@ def load_weights(
                 is_expert_sharded=is_expert_sharded,
             )
 
+            path = str(path).replace("model_model_weight.safetensors.safetensors", "model_weight.safetensors")
+            path = Path(path)
+            
             if path.exists():
                 with safe_open(path, framework="pt", device=str(param.device)) as fi:
                     # TODO @thomasw21: Choose only a slice if we switch the TP topology
@@ -312,16 +315,21 @@ def load_weights(
                             current_checkpoint_version == checkpoint_version
                         ), f"Checkpoint version mismatch at {shards_path[0]}."
 
-                if checkpoint_version <= CHECKPOINT_VERSION:
-                    load_sharded_param_latest(
-                        param_or_buffer=param_or_buffer,
-                        sharded_info=sharded_info,
-                        shards_path=shards_path,
-                        param_shard_metadata=param_shard_metadata[name],
-                    )
-                else:
-                    raise ValueError(f"Unsupported checkpoint version {checkpoint_version}")
-
+                # if checkpoint_version <= CHECKPOINT_VERSION:
+                #     load_sharded_param_latest(
+                #         param_or_buffer=param_or_buffer,
+                #         sharded_info=sharded_info,
+                #         shards_path=shards_path,
+                #         param_shard_metadata=param_shard_metadata[name],
+                #     )
+                # else:
+                #     raise ValueError(f"Unsupported checkpoint version {checkpoint_version}")
+                load_sharded_param_latest(
+                    param_or_buffer=param_or_buffer,
+                    sharded_info=sharded_info,
+                    shards_path=shards_path,
+                    param_shard_metadata=param_shard_metadata[name],
+                )
         else:
             raise NotImplementedError(f"Parameters {param} should be a NanotronParameter")
 

@@ -376,6 +376,9 @@ class DistributedTrainer:
         # Fix the root_model
         self.unwrapped_model.module_id_to_prefix[id(self.unwrapped_model)] = ""
 
+        from nanotron.debug.monitor import monitor_nanotron_model
+        monitor_nanotron_model(model=self.unwrapped_model, parallel_context=self.parallel_context)
+
         prof = get_profiler(config=self.config)
         torch.cuda.empty_cache()
         with prof:

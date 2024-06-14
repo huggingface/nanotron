@@ -78,7 +78,7 @@ def main():
         tp=args.tp or config.parallelism.tp,
         pp_engine=OneForwardOneBackwardPipelineEngine(),
         tp_mode=TensorParallelLinearMode.ALL_REDUCE,
-        tp_linear_async_communication=True,
+        tp_linear_async_communication=False,
     )
 
     # Initialise all process groups
@@ -149,6 +149,10 @@ def main():
     load_weights(model=model, parallel_context=parallel_context, root_folder=checkpoint_path)
 
     model.eval()
+
+    # from nanotron.debug.monitor import monitor_nanotron_model
+    # monitor_nanotron_model(model=model, parallel_context=parallel_context)
+    
     if AutoTokenizer is not None:
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
         # tokenizer.pad_token_id = tokenizer.eos_token_id
@@ -166,7 +170,10 @@ def main():
         dummy_inputs = [
             # "Passage: Daniel went back to the garden. Mary travelled to the kitchen. Sandra journeyed to the kitchen. Sandra went to the hallway. John went to the bedroom. Mary went back to the garden. Where is Mary?\nAnswer:",
             "def fib(n)",
+            "def fib(n)",
             # "This film was probably inspired by Godzilla",
+            # "Paris is the capital of"
+            # "There is an important info hidden inside a lot of irrelevant text. Find it and memorize them. I will quiz you about the important information there. The grass is green. The sky is blue. The pass key is 24. Remember it. 24 is the pass key. What is the pass key? The pass key is ",
         ]
 
         outputs = decode_text(
@@ -177,7 +184,7 @@ def main():
             parallel_context=parallel_context,
             max_new_tokens=args.max_new_tokens,
             max_micro_batch_size=2,
-            generation_config=GenerationArgs(sampler="greedy", use_cache=True),
+            generation_config=GenerationArgs(sampler="greedy", use_cache=False),
             tokenizer_config=TokenizerConfig(max_input_length=None),
             is_bench=os.environ.get("USE_BENCH", "0") == "1",
         )
@@ -215,7 +222,7 @@ def main():
             input_mask=torch.ones(1, 1).to(dtype=torch.bool, device="cuda"),
             model=model.model,
             parallel_context=parallel_context,
-            generation_config=GenerationArgs(sampler="greedy", use_cache=True),
+            generation_config=GenerationArgs(sampler="greedy", use_cache=False),
             max_micro_batch_size=1,
             max_new_tokens=12,
             returns_logits=False,
