@@ -128,38 +128,6 @@ def test_delay_scaling_fp8_tensor(dtype, interval):
         history_sf.append(fp8_meta.scale)
 
 
-# @pytest.mark.parametrize("dtype", [DTypes.FP8E4M3, DTypes.FP8E5M2])
-# @pytest.mark.parametrize("interval", [1, 5, 10])
-# @pytest.mark.parametrize("is_delayed_scaling", [True, False])
-# def test_fp8_dynamic_quantization(dtype, interval, is_delayed_scaling):
-#     tensor = torch.randn((4, 4), dtype=torch.float32, device="cuda")
-
-#     fp8_tensor = FP8Tensor(tensor, dtype=dtype, interval=interval, is_delayed_scaling=is_delayed_scaling)
-#     fp8_meta = cast(FP8Meta, fp8_tensor.fp8_meta)
-
-#     history_sf = []
-#     history_sf.append(fp8_meta.scale)
-#     new_data = deepcopy(tensor)
-
-#     for i in range(2, interval + 1):
-#         new_data = new_data.clone() * 2
-#         fp8_tensor.set_data(new_data)
-
-#         if is_delayed_scaling:
-#             is_new_interval = i % interval == 0
-
-#             if is_new_interval:
-#                 assert fp8_meta.scale not in history_sf
-#             else:
-#                 assert fp8_meta.scale in history_sf
-#         else:
-#             # NOTE: if it's not dynamic quantization, then we should get new scaling
-#             # value for every new data changes
-#             assert fp8_meta.scale not in history_sf
-
-#         history_sf.append(fp8_meta.scale)
-
-
 # # TODO(xrsrke): handling overflow before warmup
 # @pytest.mark.parametrize("dtype", [DTypes.FP8E4M3, DTypes.FP8E5M2])
 # @pytest.mark.parametrize("interval", [5, 10])

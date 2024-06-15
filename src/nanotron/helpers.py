@@ -96,7 +96,7 @@ def lr_scheduler_builder(optimizer: Optimizer, lr_scheduler_args: LRSchedulerArg
     def lr_lambda(current_step: int, initial_lr: float):
         """
         current_step: current training step
-        initial_lr: the learning rate of a parameter group
+        initial_lr: the peak learning rate (or the learning rate that you enter in the config)
 
         More info on initial_lr:
         And in standard parameterization, lr_lambda only takes a single learning rate.

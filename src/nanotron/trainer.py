@@ -327,7 +327,7 @@ class DistributedTrainer:
             rank=0,
         )
 
-        # current_time = datetime.datetime.now().strftime("%d/%m/%Y_%H:%M:%S")
+        datetime.datetime.now().strftime("%d/%m/%Y_%H:%M:%S")
         if dist.get_rank(self.parallel_context.world_pg) == 0 and wandb is not None:
             wandb.init(
                 project=self.config.general.project,
@@ -484,10 +484,12 @@ class DistributedTrainer:
                     prof.step()
 
                 self.iteration_start_time = time.time()
+                torch.cuda.empty_cache()
                 self._update_dataloader_based_on_training_stages(dataloader_or_dls)
 
                 is_ready_to_log = (self.iteration_step - 1) % self.config.logging.iteration_step_info_interval == 0
                 # if is_ready_to_log is True and self.config.logging.monitor_model_states is True:
+                #     from nanotron.scaling.monitor import monitor_model
                 #     nn_logs, state_handles = monitor_model(self.unwrapped_model, self.parallel_context)
                 #     from nanotron import constants
 
@@ -524,9 +526,6 @@ class DistributedTrainer:
                     #     optim_logs = get_optim_logs(
                     #         self.params_id_to_param_names, self.optimizer.optimizer, prefix=""
                     #     )
-
-                    #     assert 1 == 1
-
                     #     wandb.log({**optim_logs, "iteration_step": self.iteration_step})
 
                 # Checkpoint

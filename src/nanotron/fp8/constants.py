@@ -64,7 +64,7 @@ FP8LM_RECIPE = FP8TrainingRecipe(
         input_grad=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=16),
         weight_grad=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=1),
         output_grad=FP8TensorRecipe(dtype=DTypes.FP8E5M2, margin=0, interval=1),
-        split_accumulator=FP8SplitAccumulator(output=False, input_grad=True, weight_grad=True),
+        split_accumulator=FP8SplitAccumulator(output=True, input_grad=True, weight_grad=True),
     ),
     # NOTE: works for 8B
     # linear=FP8LinearRecipe(
