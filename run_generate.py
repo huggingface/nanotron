@@ -20,6 +20,7 @@ from nanotron.config import (
     ParallelismArgs,
     get_config_from_file,
 )
+from nanotron.distributed import get_global_rank
 from nanotron.generation.decode import (
     GenerationInput,
     GenerationInputs,
@@ -27,6 +28,7 @@ from nanotron.generation.decode import (
     decode_text,
     decode_tokenized,
 )
+from nanotron.generation.sampler import BasicSampler, GreedySampler, SamplerType, TopKSampler, TopPSampler
 from nanotron.logging import log_rank, set_ranks_logging_level
 from nanotron.models import build_model
 from nanotron.parallel import ParallelContext
@@ -50,8 +52,11 @@ try:
 except ImportError:
     AutoTokenizer = None
 
+import lovely_tensors as lt
 from nanotron.parallel.pipeline_parallel.context_manager import attach_pipeline_state_to_model
 from nanotron.parallel.pipeline_parallel.state import PipelineEvalBatchState
+
+lt.monkey_patch()
 
 logger = logging.get_logger(__name__)
 
@@ -176,7 +181,14 @@ def main():
         ]
 
         if os.environ.get("REFACTO", "0") == "1":
-            refactor_decode_text(args, parallel_context, model, tokenizer, dummy_inputs)
+            refactor_decode_text(
+                args,
+                parallel_context,
+                model,
+                tokenizer,
+                dummy_inputs,
+                generation_config=GenerationArgs(sampler="greedy", use_cache=False),
+            )
         # print("==================================================")
         else:
             outputs = decode_text(
@@ -282,6 +294,7 @@ def run_one_inference_step(model, batch, parallel_context, device):
         output_tensor = model.model(batch2use.input_ids, batch2use.input_masks)
 
         # TODO: Check if we need to send only 2
+
         nb_send = len(pipeline_state.microbatches_activations_to_send)
         assert nb_send <= 2
         for _ in range(nb_send):
@@ -292,13 +305,26 @@ def run_one_inference_step(model, batch, parallel_context, device):
             logits = output_tensor
 
         # Wait for all the communication to complete.
-        dist.barrier(group=parallel_context.pp_pg)
+        dist.barrier(group=parallel_context.world_pg)
 
         return logits
 
 
-def refactor_decode_text(args, parallel_context, model, tokenizer, dummy_inputs):
+def refactor_decode_text(args, parallel_context, model, tokenizer, dummy_inputs, generation_config):
     device = torch.cuda.current_device()
+
+    if generation_config:
+        if isinstance(generation_config.sampler, str):
+            sampler_type = SamplerType(generation_config.sampler.upper())
+        else:
+            sampler_type = generation_config.sampler
+    else:
+        sampler_type = SamplerType.GREEDY
+
+    # TODO: add batch inference
+    # TODO: add decoded_tokenize
+    # TODO: add benchmark
+
     tokenized_prompts = tokenizer(
         dummy_inputs,
         return_tensors="pt",
@@ -319,14 +345,26 @@ def refactor_decode_text(args, parallel_context, model, tokenizer, dummy_inputs)
 
         # Sample new token
         if parallel_context.is_pipeline_last_stage:
-            assert logits is not None
+            assert logits is not None and isinstance(logits, torch.Tensor)
+
             # TODO(fmom): dont transpose if it is mamba. Add if "logits_are_batch_first" flag
             logits = logits.transpose(0, 1)
-            # TODO: Choose between more sampler
-            next_token = torch.argmax(logits[:, -1], dim=-1)
-            tokenized_prompts["input_ids"] = torch.cat(
-                [tokenized_prompts["input_ids"], next_token.unsqueeze(-1)], dim=-1
-            )
+
+            # TODO: Use cache
+            if sampler_type == SamplerType.GREEDY:
+                sampler = GreedySampler(pg=parallel_context.tp_pg)
+            elif sampler_type == SamplerType.TOP_K:
+                sampler = TopKSampler(pg=parallel_context.tp_pg)
+            elif sampler_type == SamplerType.TOP_P:
+                sampler = TopPSampler(pg=parallel_context.tp_pg)
+            elif sampler_type == SamplerType.BASIC:
+                sampler = BasicSampler(pg=parallel_context.tp_pg)
+            else:
+                raise NotImplementedError(f"Sampler type {sampler_type} is not implemented")
+
+            next_token = sampler(sharded_logits=logits[:, -1])
+
+            tokenized_prompts["input_ids"] = torch.cat([tokenized_prompts["input_ids"], next_token], dim=-1)
             tokenized_prompts["attention_mask"] = torch.cat(
                 [
                     tokenized_prompts["attention_mask"],
@@ -335,6 +373,7 @@ def refactor_decode_text(args, parallel_context, model, tokenizer, dummy_inputs)
                 dim=-1,
             )
         else:
+            # Extend the tokenized prompts to receive the new token
             tokenized_prompts["input_ids"] = torch.zeros(
                 (tokenized_prompts["input_ids"].shape[0], tokenized_prompts["input_ids"].shape[1] + 1),
                 dtype=torch.int64,
@@ -346,26 +385,28 @@ def refactor_decode_text(args, parallel_context, model, tokenizer, dummy_inputs)
                 device=device,
             )
 
+        # Broadcast the new token to all the pipeline stages
         dist.broadcast(
             tokenized_prompts["input_ids"],
-            src=parallel_context.pipeline_parallel_last_rank,
+            src=get_global_rank(group=parallel_context.pp_pg, group_rank=parallel_context.pipeline_parallel_last_rank),
             group=parallel_context.pp_pg,
         )
         dist.broadcast(
             tokenized_prompts["attention_mask"],
-            src=parallel_context.pipeline_parallel_last_rank,
+            src=get_global_rank(group=parallel_context.pp_pg, group_rank=parallel_context.pipeline_parallel_last_rank),
             group=parallel_context.pp_pg,
         )
 
-    if parallel_context.is_pipeline_last_stage:
+    if dist.get_rank() == 0:
         for i, prompt in enumerate(dummy_inputs):
             tokenized_outputs = tokenized_prompts["input_ids"][
                 i, tokenized_prompts["input_ids"].shape[1] - args.max_new_tokens :
             ]
             outputs = tokenizer.decode(tokenized_outputs, clean_up_tokenization_spaces=False)
 
-            print(f"Input: {prompt}")
-            print(f"Output: {outputs}")
+            # Convert with log_rank
+            log_rank(f"Input: {prompt}", logger=logger, level=logging.INFO, rank=0)
+            log_rank(f"Output: {outputs}", logger=logger, level=logging.INFO, rank=0)
 
 
 if __name__ == "__main__":
