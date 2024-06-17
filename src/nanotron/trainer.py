@@ -483,6 +483,9 @@ class DistributedTrainer:
                 if isinstance(prof, torch.profiler.profile):
                     prof.step()
 
+                if constants.ITERATION_STEP == 2:
+                    assert 1 == 1
+
                 self.iteration_start_time = time.time()
                 torch.cuda.empty_cache()
                 self._update_dataloader_based_on_training_stages(dataloader_or_dls)
@@ -491,8 +494,6 @@ class DistributedTrainer:
                 # if is_ready_to_log is True and self.config.logging.monitor_model_states is True:
                 #     from nanotron.scaling.monitor import monitor_model
                 #     nn_logs, state_handles = monitor_model(self.unwrapped_model, self.parallel_context)
-                #     from nanotron import constants
-
                 #     constants.NN_STATES = nn_logs
 
                 # Training step
@@ -518,9 +519,6 @@ class DistributedTrainer:
                     #     and wandb is not None
                     # ):
                     #     wandb.log({**convert_logs_to_flat_logs(nn_logs), "iteration_step": self.iteration_step})
-
-                    #     from nanotron import constants
-
                     #     constants.NN_STATES = None
 
                     #     optim_logs = get_optim_logs(
@@ -531,6 +529,8 @@ class DistributedTrainer:
                 # Checkpoint
                 if self.iteration_step % self.config.checkpoints.checkpoint_interval == 0:
                     self.save_checkpoint()
+
+                # constants.ITERATION_STEP += 1
 
         dist.barrier()  # let's wait for everyone before leaving
 

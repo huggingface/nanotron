@@ -1,10 +1,26 @@
 import pytest
 import torch
+from nanotron.constants import CHECKPOINT_VERSION
 from nanotron.fp8.constants import FP8_DTYPES
 from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.meta import FP8Meta
 from nanotron.fp8.parameter import FP8Parameter
 from nanotron.fp8.tensor import FP8Tensor
+from nanotron.parallel import ParallelContext
+from nanotron.parallel.parameters import NanotronParameter
+from nanotron.parallel.sharded_parameters import SplitConfig, create_sharded_parameter_from_config
+from nanotron.serialize.metadata import TensorMetadata
+from nanotron.testing.parallel import init_distributed, rerun_if_address_is_in_use
+from torch import nn
+
+
+def create_sharded_fp8_parameter(param: nn.Parameter, parallel_context: ParallelContext):
+    split_config = SplitConfig(
+        split_dim=0,
+        contiguous_chunks=(8, 8),
+    )
+    param = create_sharded_parameter_from_config(parameter=param, pg=parallel_context.tp_pg, split_config=split_config)
+    return param
 
 
 @pytest.mark.parametrize("dtype", [DTypes.FP8E4M3, DTypes.FP8E5M2])
@@ -89,12 +105,38 @@ def test_set_gradient_in_fp8_parameter(dtype):
     assert fp8_parameter.data.grad is fp8_parameter.grad
 
 
-# def test_fp8_parameter_track_amaxs():
-#     pass
+@pytest.mark.parametrize("dtype", [DTypes.FP8E4M3, DTypes.FP8E5M2])
+@rerun_if_address_is_in_use()
+def test_create_sharded_fp8_parameter(dtype):
+    init_distributed(tp=2, dp=1, pp=1)(_test_create_sharded_fp8_parameter)(dtype=dtype)
 
 
-# def test_fp8_parameter_delay_scaling_factor_update():
-#     pass
+def _test_create_sharded_fp8_parameter(parallel_context: ParallelContext, dtype: DTypes):
+    data = torch.randn(16, 64, device="cuda")
+    param = FP8Parameter(data, dtype)
+
+    param = create_sharded_fp8_parameter(param, parallel_context)
+    sharded_info = param.get_sharded_info()
+
+    assert isinstance(param, NanotronParameter)
+    assert isinstance(param.data, FP8Tensor)
+    assert isinstance(param.data.fp8_meta, FP8Meta)
+
+    metadata = TensorMetadata(
+        version=CHECKPOINT_VERSION,
+        local_global_slices_pairs=sharded_info.local_global_slices_pairs,
+        unsharded_shape=sharded_info.unsharded_shape,
+    )
+    metadata_str_dict = metadata.to_str_dict()
+    # Assert metadata_str_dict is Dict[str, str]
+    assert isinstance(metadata_str_dict, dict)
+    assert all(isinstance(key, str) for key in metadata_str_dict.keys())
+    assert all(isinstance(value, str) for value in metadata_str_dict.values())
+
+    metadata_from_str_dict = TensorMetadata.from_str_dict(metadata_str_dict)
+    assert metadata == metadata_from_str_dict
+
+    parallel_context.destroy()
 
 
 # TODO(xrsrke): add test for preventing torch autograd do the backward pass

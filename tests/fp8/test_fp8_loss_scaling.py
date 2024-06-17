@@ -1,12 +1,11 @@
-
 import pytest
 import torch
 import transformer_engine as te  # noqa
-from helpers.utils import init_distributed, rerun_if_address_is_in_use
 from nanotron.fp8.loss_scaler import LossScaler
 from nanotron.helpers import init_optimizer_and_grad_accumulator
 from nanotron.parallel import ParallelContext
 from nanotron.scaling.parametrization import ParametrizationMethod
+from nanotron.testing.parallel import init_distributed, rerun_if_address_is_in_use
 from nanotron.testing.utils import DEFAULT_OPTIMIZER_CONFIG, create_nanotron_model
 
 

@@ -57,3 +57,5 @@ REF_GRAD_OUTPUT: Optional[torch.Tensor] = None
 REF_GRAD_INPUT: Optional[torch.Tensor] = None
 REF_GRAD_WEIGHT: Optional[torch.Tensor] = None
 REF_GRAD_BIAS: Optional[torch.Tensor] = None
+
+ITERATION_STEP: int = 1

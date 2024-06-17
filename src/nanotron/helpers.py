@@ -7,7 +7,7 @@ import time
 from datetime import datetime
 from functools import partial
 from math import ceil
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -290,18 +290,22 @@ def merge_named_param_groups(
 
 def init_optimizer_and_grad_accumulator(
     parametrization_method: ParametrizationMethod,
-    model: nn.Module,
+    model: Union[nn.Module, NanotronModel],
     optimizer_args: OptimizerArgs,
     parallel_context: ParallelContext,
 ) -> Tuple[BaseOptimizer, GradientAccumulator]:
     # Unwrap DDP
     unwrapped_model: NanotronModel = model.module if isinstance(model, DistributedDataParallel) else model
 
+    # if isinstance(unwrapped_model, NanotronModel):
+    #     named_parameters = list(unwrapped_model.get_named_params_with_correct_tied())
+    # else:
+    #     named_parameters =
+    named_parameters = list(unwrapped_model.get_named_params_with_correct_tied())
+
     module_id_to_prefix = {id(module): f"{module_name}." for module_name, module in unwrapped_model.named_modules()}
     # Fix the root_model
     module_id_to_prefix[id(unwrapped_model)] = ""
-
-    named_parameters = list(unwrapped_model.get_named_params_with_correct_tied())
 
     named_param_groups_with_lr = get_custom_lr_for_named_parameters(
         parametrization_method=parametrization_method,

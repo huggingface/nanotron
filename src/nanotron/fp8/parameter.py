@@ -4,6 +4,7 @@ from typing import Optional, Union
 import torch
 from torch import nn
 
+from nanotron import constants
 from nanotron.fp8.constants import FP8_DTYPES, FP8LM_RECIPE, INITIAL_AMAX, INITIAL_SCALING_FACTOR
 from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.meta import FP8Meta
@@ -39,7 +40,9 @@ class FP8Parameter(nn.Parameter):
             self = torch.Tensor._make_subclass(cls, data, requires_grad)
             self._data = FP8Tensor(data, dtype=dtype, interval=interval)
             # TODO(xrsrke): don't store fp32 raw data in memory after quantization
-            self.orig_data = data.data
+
+            if constants.ITERATION_STEP == 1:
+                self.orig_data = data.data
 
             # TODO(xrsrke): don't fixed these, take it from the FP8 recipe
             fp8e4m3_scale = update_scaling_factor(

@@ -1,9 +1,12 @@
+from typing import Optional
+
 import nanotron
 import torch
 from nanotron.config import AdamOptimizerArgs, LRSchedulerArgs, OptimizerArgs, ParallelismArgs
 from nanotron.config import LlamaConfig as NanotronLlamaConfig
 from nanotron.models.llama import LlamaForTraining
 from nanotron.parallel import ParallelContext
+from nanotron.random import RandomState
 from nanotron.trainer import mark_tied_parameters
 
 DEFAULT_LLAMA_CONFIG = NanotronLlamaConfig(
@@ -71,7 +74,9 @@ def make_parallel_config(
     return parallel_config
 
 
-def create_nanotron_model(parallel_context: ParallelContext, dtype: torch.dtype = torch.bfloat16) -> LlamaForTraining:
+def create_nanotron_model(
+    parallel_context: ParallelContext, dtype: torch.dtype = torch.bfloat16, random_states: Optional[RandomState] = None
+) -> LlamaForTraining:
     parallel_config = make_parallel_config(
         tp=parallel_context.tensor_parallel_size,
         dp=parallel_context.data_parallel_size,
@@ -82,7 +87,7 @@ def create_nanotron_model(parallel_context: ParallelContext, dtype: torch.dtype 
             config=DEFAULT_LLAMA_CONFIG,
             parallel_context=parallel_context,
             parallel_config=parallel_config,
-            random_states=None,
+            random_states=random_states,
         ),
         parallel_context=parallel_context,
         dtype=dtype,
@@ -90,3 +95,17 @@ def create_nanotron_model(parallel_context: ParallelContext, dtype: torch.dtype 
     )
     mark_tied_parameters(model=nanotron_model, parallel_context=parallel_context)
     return nanotron_model
+
+
+def available_gpus():
+    if not torch.cuda.is_available():
+        return 0
+
+    device_properties = [torch.cuda.get_device_properties(i) for i in range(torch.cuda.device_count())]
+
+    # We filter out
+    blacklisted_gpu_names = {"NVIDIA DGX Display"}
+    device_properties = [property_ for property_ in device_properties if property_.name not in blacklisted_gpu_names]
+
+    # TODO @thomasw21: Can we do this cross node
+    return len(device_properties)

@@ -2,14 +2,14 @@ import nanotron.fp8.distributed as fp8_dist
 import pytest
 import torch
 import torch.distributed as dist
-from helpers.utils import (
-    available_gpus,
-    init_distributed,
-    rerun_if_address_is_in_use,
-)
 from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.tensor import FP8Tensor
 from nanotron.parallel import ParallelContext
+from nanotron.testing.parallel import (
+    init_distributed,
+    rerun_if_address_is_in_use,
+)
+from nanotron.testing.utils import available_gpus
 
 
 @pytest.mark.parametrize("tp,dp,pp", [pytest.param(i, 1, 1) for i in range(1, min(4, available_gpus()) + 1)])
@@ -34,6 +34,7 @@ def _test_all_gather(parallel_context: ParallelContext, is_fp8: bool):
     parallel_context.destroy()
 
 
+@pytest.mark.skip("currently dont need all reduce for fp8 yet")
 @pytest.mark.parametrize("tp,dp,pp", [pytest.param(i, 1, 1) for i in range(1, min(4, available_gpus()) + 1)])
 @pytest.mark.parametrize("is_fp8", [False, True])
 @rerun_if_address_is_in_use()

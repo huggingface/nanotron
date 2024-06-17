@@ -1,10 +1,10 @@
 import pytest
 import torch
-from helpers.utils import init_distributed, rerun_if_address_is_in_use
 from nanotron.fp8.tensor import FP8Tensor
 from nanotron.fp8.utils import get_leaf_modules
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.tensor_parallel.nn import FP8TensorParallelColumnLinear, FP8TensorParallelRowLinear
+from nanotron.testing.parallel import init_distributed, rerun_if_address_is_in_use
 from nanotron.testing.utils import create_nanotron_model
 
 MODULE_NAME_TO_FP8_MODULE = {

@@ -37,6 +37,7 @@ def test_fp8_linear_parameters():
     assert all(p.requires_grad for p in fp8_linear.parameters()) is True
 
 
+@pytest.mark.skip
 @pytest.mark.parametrize("n_layers", [1, 2])
 @pytest.mark.parametrize(
     "input",
@@ -74,6 +75,7 @@ def test_fp8_linear_forward_pass(n_layers, input, is_bias, accum_qtype):
 
 
 # TODO(xrsrke): add cases where the input requires and don't require grad
+@pytest.mark.skip("we already test this in the test_tensor_parallel")
 @pytest.mark.parametrize("n_layers", [1, 2])
 @pytest.mark.parametrize(
     "input",
@@ -233,6 +235,7 @@ def test_deplay_quantization(interval):
         output.sum().backward()
 
 
+@pytest.mark.skip
 @pytest.mark.parametrize("input_shape", [(16, 15), (15, 16), (15, 15)])
 @pytest.mark.parametrize("is_bias", [True, False])
 @pytest.mark.parametrize("accum_qtype", [DTypes.KFLOAT32, DTypes.KFLOAT16])

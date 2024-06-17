@@ -1,5 +1,5 @@
 checkpoints:
-  checkpoint_interval: 1000
+  checkpoint_interval: 50000
   checkpoints_path: checkpoints
   checkpoints_path_is_shared_file_system: false
   # resume_checkpoint_path: checkpoints
@@ -46,7 +46,7 @@ general:
   consumed_train_samples: null
   ignore_sanity_checks: true
   project: fp8_for_nanotron
-  run: fp8_2_layers_and_seq_len_16_and_micro_batch_256_and_lr_6e-4
+  run: fp8_2_layers_and_seq_len_16_and_micro_batch_256_and_lr_2.0e-4
   seed: 42
   step: null
 lighteval: null
@@ -73,9 +73,9 @@ model:
     intermediate_size: 2048
     is_llama_config: true
     max_position_embeddings: 256
-    num_attention_heads: 4
+    num_attention_heads: 16
     num_hidden_layers: 2
-    num_key_value_heads: 4
+    num_key_value_heads: 16
     pad_token_id: null
     pretraining_tp: 1
     rms_norm_eps: 1.0e-05
@@ -119,7 +119,7 @@ optimizer:
   # clip_grad: 1.0
   learning_rate_scheduler:
     # learning_rate: 0.0015 # note: 1/2 of pythia use this for a 400m model
-    learning_rate: 6.0e-4
+    learning_rate: 2.0e-4
     lr_decay_starting_step: null
     lr_decay_steps: null
     lr_decay_style: cosine
@@ -140,7 +140,7 @@ parallelism:
   expert_parallel_size: 1
   pp: 1
   pp_engine: 1f1b
-  tp: 2
+  tp: 8
   # tp_linear_async_communication: true
   # tp_mode: REDUCE_SCATTER
 
