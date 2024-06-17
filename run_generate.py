@@ -181,7 +181,8 @@ def main():
 
         log_rank(f"Using cache for generation: {args.use_cache}", logger=logger, level=logging.INFO, rank=0)
 
-        # This doesn't support micro-batches and batch inference yet
+        # NOTE: This doesn't support micro-batches and batch inference yet
+
         if os.environ.get("REFACTO", "0") == "1":
 
             device = torch.cuda.current_device()
@@ -213,17 +214,17 @@ def main():
             for i in range(args.max_new_tokens):
 
                 if generation_config.use_cache:
-
+                    # Prepare the batch prompts
                     batch_prompts = GenerationStates(
-                        new_input_ids=tokenized_prompts["input_ids"],
-                        new_input_mask=tokenized_prompts["attention_mask"],
+                        new_input_ids=tokenized_prompts["input_ids"]
+                        if i == 0
+                        else tokenized_prompts["input_ids"][:, -1].unsqueeze(0),
+                        new_input_mask=tokenized_prompts["attention_mask"]
+                        if i == 0
+                        else tokenized_prompts["attention_mask"][:, -1].unsqueeze(0),
                         store=store,
-                        generation_ids=[tokenized_prompts["input_ids"]]
-                        if i == 0
-                        else batch_prompts.generation_ids + [tokenized_prompts["input_ids"]],
-                        generation_mask=[tokenized_prompts["attention_mask"]]
-                        if i == 0
-                        else batch_prompts.generation_mask + [tokenized_prompts["attention_mask"]],
+                        generation_ids=tokenized_prompts["input_ids"],
+                        generation_mask=tokenized_prompts["attention_mask"],
                     )
                 else:
                     batch_prompts = GenerationInputs(
@@ -257,51 +258,32 @@ def main():
                     # Predict next token
                     next_token = sampler(sharded_logits=logits[:, -1])
 
-                    if generation_config.use_cache:
-                        tokenized_prompts["input_ids"] = next_token
-                        tokenized_prompts["attention_mask"] = torch.ones(
-                            (next_token.shape[0], 1), dtype=torch.bool, device=device
-                        )
-                    else:
-                        tokenized_prompts["input_ids"] = torch.cat(
-                            [tokenized_prompts["input_ids"], next_token], dim=-1
-                        )
-                        tokenized_prompts["attention_mask"] = torch.cat(
-                            [
-                                tokenized_prompts["attention_mask"],
-                                torch.ones(
-                                    (tokenized_prompts["attention_mask"].shape[0], 1), dtype=torch.bool, device=device
-                                ),
-                            ],
-                            dim=-1,
-                        )
+                    # Extend the tokenized prompts to insert the new token
+                    tokenized_prompts["input_ids"] = torch.cat([tokenized_prompts["input_ids"], next_token], dim=-1)
+                    tokenized_prompts["attention_mask"] = torch.cat(
+                        [
+                            tokenized_prompts["attention_mask"],
+                            torch.ones(
+                                (tokenized_prompts["attention_mask"].shape[0], 1), dtype=torch.bool, device=device
+                            ),
+                        ],
+                        dim=-1,
+                    )
                 else:
                     # Extend the tokenized prompts to receive the new token
-                    if generation_config.use_cache:
-                        tokenized_prompts["input_ids"] = torch.zeros(
-                            (tokenized_prompts["input_ids"].shape[0], 1),
-                            dtype=torch.int64,
-                            device=device,
-                        )
-                        tokenized_prompts["attention_mask"] = torch.zeros(
-                            (tokenized_prompts["attention_mask"].shape[0], 1),
-                            dtype=torch.bool,
-                            device=device,
-                        )
-                    else:
-                        tokenized_prompts["input_ids"] = torch.zeros(
-                            (tokenized_prompts["input_ids"].shape[0], tokenized_prompts["input_ids"].shape[1] + 1),
-                            dtype=torch.int64,
-                            device=device,
-                        )
-                        tokenized_prompts["attention_mask"] = torch.zeros(
-                            (
-                                tokenized_prompts["attention_mask"].shape[0],
-                                tokenized_prompts["attention_mask"].shape[1] + 1,
-                            ),
-                            dtype=torch.bool,
-                            device=device,
-                        )
+                    tokenized_prompts["input_ids"] = torch.zeros(
+                        (tokenized_prompts["input_ids"].shape[0], tokenized_prompts["input_ids"].shape[1] + 1),
+                        dtype=torch.int64,
+                        device=device,
+                    )
+                    tokenized_prompts["attention_mask"] = torch.zeros(
+                        (
+                            tokenized_prompts["attention_mask"].shape[0],
+                            tokenized_prompts["attention_mask"].shape[1] + 1,
+                        ),
+                        dtype=torch.bool,
+                        device=device,
+                    )
 
                 # Broadcast the new token to all the pipeline stages
                 dist.broadcast(
