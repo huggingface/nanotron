@@ -24,10 +24,12 @@ from nanotron.distributed import get_global_rank
 from nanotron.generation.decode import (
     GenerationInput,
     GenerationInputs,
+    GenerationStates,
     TokenizerConfig,
     decode_text,
-    decode_tokenized,
+    run_one_inference_step,
 )
+from nanotron.generation.generate_store import Store
 from nanotron.generation.sampler import BasicSampler, GreedySampler, SamplerType, TopKSampler, TopPSampler
 from nanotron.logging import log_rank, set_ranks_logging_level
 from nanotron.models import build_model
@@ -52,11 +54,6 @@ try:
 except ImportError:
     AutoTokenizer = None
 
-import lovely_tensors as lt
-from nanotron.parallel.pipeline_parallel.context_manager import attach_pipeline_state_to_model
-from nanotron.parallel.pipeline_parallel.state import PipelineEvalBatchState
-
-lt.monkey_patch()
 
 logger = logging.get_logger(__name__)
 
@@ -68,6 +65,7 @@ def get_args():
     parser.add_argument("--pp", type=int, default=1)
     parser.add_argument("--tp", type=int, default=1)
     parser.add_argument("--max-new-tokens", type=int, default=128, help="Maximum number of new tokens to generate")
+    parser.add_argument("--use-cache", action="store_true", help="Use cache for generation")
     return parser.parse_args()
 
 
@@ -171,6 +169,7 @@ def main():
                 tokenizer.add_special_tokens({"pad_token": "[PAD]"})
         tokenizer.padding_side = "left"
         tokenizer.truncation_side = "left"  # TODO @nouamane: do we want this?
+
         dummy_inputs = [
             "The future of AI is",
             # "Passage: Daniel went back to the garden. Mary travelled to the kitchen. Sandra journeyed to the kitchen. Sandra went to the hallway. John went to the bedroom. Mary went back to the garden. Where is Mary?\nAnswer:",
@@ -180,16 +179,161 @@ def main():
             # "Tomorrow's world is shaped by",
         ]
 
+        log_rank(f"Using cache for generation: {args.use_cache}", logger=logger, level=logging.INFO, rank=0)
+
+        # This doesn't support micro-batches and batch inference yet
         if os.environ.get("REFACTO", "0") == "1":
-            refactor_decode_text(
-                args,
-                parallel_context,
-                model,
-                tokenizer,
+
+            device = torch.cuda.current_device()
+            generation_config = GenerationArgs(sampler="greedy", use_cache=args.use_cache)
+            logits_are_batch_first = True
+
+            if generation_config:
+                if isinstance(generation_config.sampler, str):
+                    sampler_type = SamplerType(generation_config.sampler.upper())
+                else:
+                    sampler_type = generation_config.sampler
+            else:
+                sampler_type = SamplerType.GREEDY
+
+            tokenized_prompts = tokenizer(
                 dummy_inputs,
-                generation_config=GenerationArgs(sampler="greedy", use_cache=False),
+                return_tensors="pt",
+                return_attention_mask=True,
+                padding=True,
             )
-        # print("==================================================")
+            tokenized_prompts["input_ids"] = tokenized_prompts["input_ids"].to(device)
+            tokenized_prompts["attention_mask"] = tokenized_prompts["attention_mask"].to(
+                dtype=torch.bool, device=device
+            )
+
+            store = Store()
+            batch_prompts = None
+
+            for i in range(args.max_new_tokens):
+
+                if generation_config.use_cache:
+
+                    batch_prompts = GenerationStates(
+                        new_input_ids=tokenized_prompts["input_ids"],
+                        new_input_mask=tokenized_prompts["attention_mask"],
+                        store=store,
+                        generation_ids=[tokenized_prompts["input_ids"]]
+                        if i == 0
+                        else batch_prompts.generation_ids + [tokenized_prompts["input_ids"]],
+                        generation_mask=[tokenized_prompts["attention_mask"]]
+                        if i == 0
+                        else batch_prompts.generation_mask + [tokenized_prompts["attention_mask"]],
+                    )
+                else:
+                    batch_prompts = GenerationInputs(
+                        input_ids=tokenized_prompts["input_ids"],
+                        input_masks=tokenized_prompts["attention_mask"],
+                    )
+
+                logits = run_one_inference_step(
+                    model, batch_prompts, parallel_context, device, use_cache=generation_config.use_cache, store=store
+                )
+
+                # Sample new token
+                if parallel_context.is_pipeline_last_stage:
+                    assert logits is not None and isinstance(logits, torch.Tensor)
+
+                    # Get sampler
+                    if sampler_type == SamplerType.GREEDY:
+                        sampler = GreedySampler(pg=parallel_context.tp_pg)
+                    elif sampler_type == SamplerType.TOP_K:
+                        sampler = TopKSampler(pg=parallel_context.tp_pg)
+                    elif sampler_type == SamplerType.TOP_P:
+                        sampler = TopPSampler(pg=parallel_context.tp_pg)
+                    elif sampler_type == SamplerType.BASIC:
+                        sampler = BasicSampler(pg=parallel_context.tp_pg)
+                    else:
+                        raise NotImplementedError(f"Sampler type {sampler_type} is not implemented")
+
+                    if logits_are_batch_first:
+                        logits = logits.transpose(0, 1)
+
+                    # Predict next token
+                    next_token = sampler(sharded_logits=logits[:, -1])
+
+                    if generation_config.use_cache:
+                        tokenized_prompts["input_ids"] = next_token
+                        tokenized_prompts["attention_mask"] = torch.ones(
+                            (next_token.shape[0], 1), dtype=torch.bool, device=device
+                        )
+                    else:
+                        tokenized_prompts["input_ids"] = torch.cat(
+                            [tokenized_prompts["input_ids"], next_token], dim=-1
+                        )
+                        tokenized_prompts["attention_mask"] = torch.cat(
+                            [
+                                tokenized_prompts["attention_mask"],
+                                torch.ones(
+                                    (tokenized_prompts["attention_mask"].shape[0], 1), dtype=torch.bool, device=device
+                                ),
+                            ],
+                            dim=-1,
+                        )
+                else:
+                    # Extend the tokenized prompts to receive the new token
+                    if generation_config.use_cache:
+                        tokenized_prompts["input_ids"] = torch.zeros(
+                            (tokenized_prompts["input_ids"].shape[0], 1),
+                            dtype=torch.int64,
+                            device=device,
+                        )
+                        tokenized_prompts["attention_mask"] = torch.zeros(
+                            (tokenized_prompts["attention_mask"].shape[0], 1),
+                            dtype=torch.bool,
+                            device=device,
+                        )
+                    else:
+                        tokenized_prompts["input_ids"] = torch.zeros(
+                            (tokenized_prompts["input_ids"].shape[0], tokenized_prompts["input_ids"].shape[1] + 1),
+                            dtype=torch.int64,
+                            device=device,
+                        )
+                        tokenized_prompts["attention_mask"] = torch.zeros(
+                            (
+                                tokenized_prompts["attention_mask"].shape[0],
+                                tokenized_prompts["attention_mask"].shape[1] + 1,
+                            ),
+                            dtype=torch.bool,
+                            device=device,
+                        )
+
+                # Broadcast the new token to all the pipeline stages
+                dist.broadcast(
+                    tokenized_prompts["input_ids"],
+                    src=get_global_rank(
+                        group=parallel_context.pp_pg, group_rank=parallel_context.pipeline_parallel_last_rank
+                    ),
+                    group=parallel_context.pp_pg,
+                )
+                dist.broadcast(
+                    tokenized_prompts["attention_mask"],
+                    src=get_global_rank(
+                        group=parallel_context.pp_pg, group_rank=parallel_context.pipeline_parallel_last_rank
+                    ),
+                    group=parallel_context.pp_pg,
+                )
+
+            if dist.get_rank() == 0:
+                for i, prompt in enumerate(dummy_inputs):
+                    if generation_config.use_cache:
+                        tokenized_outputs = torch.cat(
+                            [tokens.view(1, -1) for tokens in batch_prompts.generation_ids], dim=1
+                        )
+                        outputs = tokenizer.decode(tokenized_outputs[0], clean_up_tokenization_spaces=False)
+                    else:
+                        tokenized_outputs = tokenized_prompts["input_ids"][
+                            i, tokenized_prompts["input_ids"].shape[1] - args.max_new_tokens :
+                        ]
+                        outputs = tokenizer.decode(tokenized_outputs, clean_up_tokenization_spaces=False)
+
+                    log_rank(f"Input: {prompt}", logger=logger, level=logging.INFO, rank=0)
+                    log_rank(f"Output: {outputs}", logger=logger, level=logging.INFO, rank=0)
         else:
             outputs = decode_text(
                 input_iter=(GenerationInput(text=text) for text in dummy_inputs),
@@ -198,8 +342,8 @@ def main():
                 model=model.model,
                 parallel_context=parallel_context,
                 max_new_tokens=args.max_new_tokens,
-                max_micro_batch_size=2,
-                generation_config=GenerationArgs(sampler="greedy", use_cache=False),
+                max_micro_batch_size=1,
+                generation_config=GenerationArgs(sampler="greedy", use_cache=args.use_cache),
                 tokenizer_config=TokenizerConfig(max_input_length=None),
                 is_bench=os.environ.get("USE_BENCH", "0") == "1",
             )
@@ -232,181 +376,7 @@ def main():
                     level=logging.INFO,
                     rank=0,
                 )
-    else:
-        outputs = decode_tokenized(
-            input_ids=torch.zeros(1, 1).to(dtype=torch.int64, device="cuda"),
-            input_mask=torch.ones(1, 1).to(dtype=torch.bool, device="cuda"),
-            model=model.model,
-            parallel_context=parallel_context,
-            generation_config=GenerationArgs(sampler="greedy", use_cache=True),
-            max_micro_batch_size=1,
-            max_new_tokens=12,
-            returns_logits=False,
-        )
-        for output in outputs:
-            input_ids = output.input_ids
-            generated_ids = output.generation_ids
-            if isinstance(input_ids, TensorPointer):
-                assert isinstance(generated_ids, TensorPointer)
-                continue
-            assert isinstance(generated_ids, torch.Tensor)
-            log_rank(
-                f"generation: {generated_ids[len(input_ids) :]}",
-                logger=logger,
-                level=logging.INFO,
-                rank=0,
-            )
-
-            log_rank(
-                "--------------------------------------------------",
-                logger=logger,
-                level=logging.INFO,
-                rank=0,
-            )
-
     dist.barrier()
-
-
-def run_one_inference_step(model, batch, parallel_context, device):
-    if dist.get_world_size(group=parallel_context.pp_pg) == 1:
-        return model.model(batch.input_ids, batch.input_masks)
-
-    pipeline_state = PipelineEvalBatchState()
-    with attach_pipeline_state_to_model(model=model, pipeline_state=pipeline_state):
-
-        batch_size = batch.input_ids.shape[0]
-        seq_len = batch.input_ids.shape[1]
-
-        # Preallocate memory for output logits.
-        logits = None
-        if parallel_context.is_pipeline_last_stage:
-            logits = torch.empty((seq_len, batch_size, model.config.vocab_size), dtype=torch.float32, device=device)
-
-        batch2use = GenerationInputs(
-            input_ids=batch.input_ids
-            if parallel_context.is_pipeline_first_stage
-            else TensorPointer(group_rank=parallel_context.pipeline_parallel_prev_rank),
-            input_masks=batch.input_masks
-            if parallel_context.is_pipeline_first_stage
-            else TensorPointer(group_rank=parallel_context.pipeline_parallel_prev_rank),
-        )
-
-        output_tensor = model.model(batch2use.input_ids, batch2use.input_masks)
-
-        # TODO: Check if we need to send only 2
-
-        nb_send = len(pipeline_state.microbatches_activations_to_send)
-        assert nb_send <= 2
-        for _ in range(nb_send):
-            pipeline_state.run_communication()
-
-        # Copy logits.
-        if parallel_context.is_pipeline_last_stage:
-            logits = output_tensor
-
-        # Wait for all the communication to complete.
-        dist.barrier(group=parallel_context.world_pg)
-
-        return logits
-
-
-def refactor_decode_text(args, parallel_context, model, tokenizer, dummy_inputs, generation_config):
-    device = torch.cuda.current_device()
-
-    if generation_config:
-        if isinstance(generation_config.sampler, str):
-            sampler_type = SamplerType(generation_config.sampler.upper())
-        else:
-            sampler_type = generation_config.sampler
-    else:
-        sampler_type = SamplerType.GREEDY
-
-    # TODO: add batch inference
-    # TODO: add decoded_tokenize
-    # TODO: add benchmark
-
-    tokenized_prompts = tokenizer(
-        dummy_inputs,
-        return_tensors="pt",
-        return_attention_mask=True,
-        padding=True,
-    )
-
-    tokenized_prompts["input_ids"] = tokenized_prompts["input_ids"].to(device)
-    tokenized_prompts["attention_mask"] = tokenized_prompts["attention_mask"].to(dtype=torch.bool, device=device)
-
-    for _ in range(args.max_new_tokens):
-        batch_prompts = GenerationInputs(
-            input_ids=tokenized_prompts["input_ids"],
-            input_masks=tokenized_prompts["attention_mask"],
-        )
-
-        logits = run_one_inference_step(model, batch_prompts, parallel_context, device)
-
-        # Sample new token
-        if parallel_context.is_pipeline_last_stage:
-            assert logits is not None and isinstance(logits, torch.Tensor)
-
-            # TODO(fmom): dont transpose if it is mamba. Add if "logits_are_batch_first" flag
-            logits = logits.transpose(0, 1)
-
-            # TODO: Use cache
-            if sampler_type == SamplerType.GREEDY:
-                sampler = GreedySampler(pg=parallel_context.tp_pg)
-            elif sampler_type == SamplerType.TOP_K:
-                sampler = TopKSampler(pg=parallel_context.tp_pg)
-            elif sampler_type == SamplerType.TOP_P:
-                sampler = TopPSampler(pg=parallel_context.tp_pg)
-            elif sampler_type == SamplerType.BASIC:
-                sampler = BasicSampler(pg=parallel_context.tp_pg)
-            else:
-                raise NotImplementedError(f"Sampler type {sampler_type} is not implemented")
-
-            next_token = sampler(sharded_logits=logits[:, -1])
-
-            tokenized_prompts["input_ids"] = torch.cat([tokenized_prompts["input_ids"], next_token], dim=-1)
-            tokenized_prompts["attention_mask"] = torch.cat(
-                [
-                    tokenized_prompts["attention_mask"],
-                    torch.ones((tokenized_prompts["attention_mask"].shape[0], 1), dtype=torch.int64, device=device),
-                ],
-                dim=-1,
-            )
-        else:
-            # Extend the tokenized prompts to receive the new token
-            tokenized_prompts["input_ids"] = torch.zeros(
-                (tokenized_prompts["input_ids"].shape[0], tokenized_prompts["input_ids"].shape[1] + 1),
-                dtype=torch.int64,
-                device=device,
-            )
-            tokenized_prompts["attention_mask"] = torch.zeros(
-                (tokenized_prompts["attention_mask"].shape[0], tokenized_prompts["attention_mask"].shape[1] + 1),
-                dtype=torch.int64,
-                device=device,
-            )
-
-        # Broadcast the new token to all the pipeline stages
-        dist.broadcast(
-            tokenized_prompts["input_ids"],
-            src=get_global_rank(group=parallel_context.pp_pg, group_rank=parallel_context.pipeline_parallel_last_rank),
-            group=parallel_context.pp_pg,
-        )
-        dist.broadcast(
-            tokenized_prompts["attention_mask"],
-            src=get_global_rank(group=parallel_context.pp_pg, group_rank=parallel_context.pipeline_parallel_last_rank),
-            group=parallel_context.pp_pg,
-        )
-
-    if dist.get_rank() == 0:
-        for i, prompt in enumerate(dummy_inputs):
-            tokenized_outputs = tokenized_prompts["input_ids"][
-                i, tokenized_prompts["input_ids"].shape[1] - args.max_new_tokens :
-            ]
-            outputs = tokenizer.decode(tokenized_outputs, clean_up_tokenization_spaces=False)
-
-            # Convert with log_rank
-            log_rank(f"Input: {prompt}", logger=logger, level=logging.INFO, rank=0)
-            log_rank(f"Output: {outputs}", logger=logger, level=logging.INFO, rank=0)
 
 
 if __name__ == "__main__":
