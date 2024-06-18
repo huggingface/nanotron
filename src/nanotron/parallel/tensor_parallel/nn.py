@@ -66,9 +66,6 @@ class TensorParallelColumnLinear(nn.Linear):
 
         assert out_features % self.world_size == 0
 
-        if in_features == 16:
-            assert 1 == 1
-
         self.in_features = in_features
         self.out_features = out_features // self.world_size
 
@@ -184,35 +181,7 @@ class TensorParallelRowLinear(nn.Linear):
         return f"tp_rank={dist.get_rank(self.pg)}, {super().extra_repr()}, unsharded_in_features={self.in_features * self.world_size}"
 
 
-# class TensorParallelColumnLinearMeta(type):
-#     def __new__(cls, name, bases, attrs, **kwargs):
-#         is_fp8 = kwargs.pop('is_fp8', False)
-#         base_class = FP8Linear if is_fp8 else nn.Linear
-#         return super().__new__(cls, name, (base_class,), attrs)
-
-
-# def dynamic_class_factory(is_fp8):
-#     if is_fp8 is True:
-#         return type('DynamicClass', (FP8Linear,), {})
-#     else:
-#         return type('DynamicClass', (nn.Linear,), {})
-
-
 class FP8TensorParallelColumnLinear(FP8Linear):
-    # # def __new__(cls, *args, **kwargs):
-    # #     is_fp8 = kwargs.pop('is_fp8', False)
-    # #     base_class = FP8Linear if is_fp8 else nn.Linear
-    # #     instance = super().__new__(base_class)
-    # #     instance.__init__(*args, **kwargs)
-    #     return instance
-
-    # def __new__(cls, *args, **kwargs):
-    #     is_fp8 = kwargs.pop('is_fp8', False)
-    #     DynamicClass = dynamic_class_factory(is_fp8)
-    #     instance = super(TensorParallelColumnLinear, cls).__new__(DynamicClass)
-    #     DynamicClass.__init__(instance, *args, **kwargs)
-    #     return instance
-
     def __init__(
         self,
         in_features,
@@ -225,18 +194,11 @@ class FP8TensorParallelColumnLinear(FP8Linear):
         async_communication: bool = False,
         contiguous_chunks: Optional[Tuple[int, ...]] = None,
         name: Optional[str] = None,
-        # is_fp8: bool = False,
     ):
-        # base_class = FP8Linear if is_fp8 else nn.Linear
-        # self.__class__ = type(self.__class__.__name__, (base_class,), dict(self.__class__.__dict__))
-
         self.pg = pg
         self.world_size = pg.size()
 
         assert out_features % self.world_size == 0
-
-        if in_features == 16:
-            assert 1 == 1
 
         self.in_features = in_features
         self.out_features = out_features // self.world_size
@@ -249,28 +211,10 @@ class FP8TensorParallelColumnLinear(FP8Linear):
             dtype=dtype,
         )
 
-        # if is_fp8 is True:
-        #     super(FP8Linear, self).__init__(
-        #         in_features=self.in_features,
-        #         out_features=self.out_features,
-        #         bias=bias,
-        #         device=device,
-        #         dtype=dtype,
-        #     )
-        # else:
-        #     super(nn.Linear, self).__init__(
-        #         in_features=self.in_features,
-        #         out_features=self.out_features,
-        #         bias=bias,
-        #         device=device,
-        #         dtype=dtype,
-        #     )
-
         self.name = name
         self.mode = mode
         self.async_communication = async_communication
 
-        # if isinstance(self.weight.data, FP8Tensor):
         assert self.weight.data.dtype in [torch.uint8, torch.int8], f"got {self.weight.data.dtype}"
 
         if contiguous_chunks is not None:
@@ -306,22 +250,7 @@ class FP8TensorParallelColumnLinear(FP8Linear):
         return f"tp_rank={dist.get_rank(self.pg)}, {super().extra_repr()}, unsharded_out_features={self.out_features * self.world_size}, {extra}"
 
 
-# class TensorParallelRowLinear(BASE_LINEAR):
 class FP8TensorParallelRowLinear(FP8Linear):
-    # def __new__(cls, *args, **kwargs):
-    #     is_fp8 = kwargs.pop('is_fp8', False)
-    #     base_class = FP8Linear if is_fp8 else nn.Linear
-    #     instance = super().__new__(base_class)
-    #     instance.__init__(*args, **kwargs)
-    #     return instance
-
-    # def __new__(cls, *args, **kwargs):
-    #     is_fp8 = kwargs.pop('is_fp8', False)
-    #     DynamicClass = dynamic_class_factory(is_fp8)
-    #     instance = super(TensorParallelRowLinear, cls).__new__(DynamicClass)
-    #     DynamicClass.__init__(instance, *args, **kwargs)
-    #     return instance
-
     def __init__(
         self,
         in_features,
@@ -334,11 +263,7 @@ class FP8TensorParallelRowLinear(FP8Linear):
         async_communication: bool = False,
         contiguous_chunks: Optional[Tuple[int, ...]] = None,
         name: Optional[str] = None,
-        # is_fp8: bool = False
     ):
-        # base_class = FP8Linear if is_fp8 else nn.Linear
-        # self.__class__ = type(self.__class__.__name__, (base_class,), dict(self.__class__.__dict__))
-
         self.pg = pg
         self.world_size = pg.size()
 
@@ -358,23 +283,6 @@ class FP8TensorParallelRowLinear(FP8Linear):
             device=device,
             dtype=dtype,
         )
-
-        # if is_fp8 is True:
-        #     super(FP8Linear, self).__init__(
-        #         in_features=self.in_features,
-        #         out_features=self.out_features,
-        #         bias=bias,
-        #         device=device,
-        #         dtype=dtype,
-        #     )
-        # else:
-        #     super(nn.Linear, self).__init__(
-        #         in_features=self.in_features,
-        #         out_features=self.out_features,
-        #         bias=bias,
-        #         device=device,
-        #         dtype=dtype,
-        #     )
 
         self.mode = mode
         self.async_communication = async_communication

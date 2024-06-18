@@ -20,8 +20,6 @@ class LowPrecisionTensor(torch.Tensor):
         tensor: torch.Tensor,
         dtype: Optional[DTypes] = None,
         interval: Optional[int] = 1,
-        # TODO(xrsrke): remove is_delayed_scaling, set it automatically based on the interval
-        # is_delayed_scaling: Optional[bool] = False,
         fp8_meta: Optional[FP8Meta] = None,
     ) -> torch.Tensor:
         assert isinstance(tensor, torch.Tensor), "tensor must be a tensor"
@@ -29,19 +27,13 @@ class LowPrecisionTensor(torch.Tensor):
         # TODO(xrsrke): if the tensor is on cpu, then bypass the quantization
         # because the current kernels only support gpu tensor
         assert tensor.device != torch.device("cpu"), "FP8Tensor only supports CUDA device"
-        # assert interval > 1 and is_delayed_scaling is True, "If the updating interval is greater than 1, then delayed scaling must be enabled"
 
         if fp8_meta is None:
-            # assert tensor.dtype not in FP8_DTYPES, "The tensor already quantized to FP8"
             assert dtype in [DTypes.FP8E4M3, DTypes.FP8E5M2, DTypes.KFLOAT16]
 
             fp8_meta = cls._get_metadata(tensor, dtype, interval)
 
         backup_fp8_meta = deepcopy(fp8_meta)
-        # else:
-        #     assert tensor.dtype in FP8_DTYPES
-        #     # fp8_tensor = tensor
-
         if tensor.dtype not in FP8_DTYPES:
             fp8_tensor = cls._quantize(tensor, fp8_meta)
         else:

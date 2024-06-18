@@ -8,9 +8,6 @@ from nanotron.fp8.parameter import FP8Parameter
 from nanotron.fp8.tensor import FP8Tensor, convert_tensor_from_fp8
 from nanotron.parallel.parameters import NanotronParameter
 
-# def all_reduce(tensor: FP8Tensor, op: dist.ReduceOp, group: dist.ProcessGroup, async_op: bool = False) -> FP8Tensor:
-#     pass
-
 
 def all_gather(
     tensor_list: List[torch.Tensor],

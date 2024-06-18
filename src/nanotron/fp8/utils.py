@@ -10,8 +10,6 @@ from nanotron.fp8.linear import FP8Linear
 from nanotron.fp8.meta import FP8Meta
 from nanotron.fp8.parameter import FP8Parameter
 
-# from nanotron.fp8.optim import FP8Adam
-
 
 def is_fp8_available() -> bool:
     """Check if FP8 is available on the current device."""
@@ -152,11 +150,6 @@ def track_module_statistics(name: str, module: nn.Linear, logging: Dict[str, Dic
             logging[name]["output"] = compute_stas(outputs[0])
 
     def _save_grad_stats(module: nn.Linear, grad_input, grad_output: torch.Tensor):
-        # import pydevd
-        # pydevd.settrace(suspend=False, trace_only_current_thread=True)
-        # logging[name][f"weight_grad"] = _collect_stats(module.weight.grad.orig_data)
-        # logging[name][f"bias_grad"] = _collect_stats(module.bias.grad)
-
         if isinstance(grad_output, tuple):
             for i, grad in enumerate(grad_output):
                 if grad is None:
@@ -176,10 +169,8 @@ def track_module_statistics(name: str, module: nn.Linear, logging: Dict[str, Dic
 
     handles = []
     handles.append(module.register_forward_hook(_save_output_stats))
-    # module.register_full_backward_pre_hook(_save_grad_stats)
     handles.append(module.register_backward_hook(_save_grad_stats))
     return handles
-    # module.register_module_full_backward_hook(_save_grad_stats)
 
 
 def _log(model: nn.Module):
@@ -200,15 +191,3 @@ def convert_logs_to_flat_logs(logs, prefix):
                 flat_logs[f"{prefix}:{module_name}:{component_name}:{stat_name}"] = value
 
     return flat_logs
-
-
-def track_optimizer(optim: "FP8Adam"):
-    # logs = {}
-    # def _track(optim, args, kwargs):
-    #     pydevd.settrace(suspend=False, trace_only_current_thread=True)
-    #     assert 1 == 1
-
-    # optim.register_step_post_hook(_track)
-
-    # return logs
-    pass

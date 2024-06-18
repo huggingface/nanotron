@@ -47,7 +47,6 @@ class FP8Linear(nn.Linear):
         assert device != torch.device("cpu"), "FP8Linear only supports CUDA tensors"
         assert accum_qtype in DTypes
 
-        # super().__init__(in_features, out_features, bias, device, QTYPE_TO_DTYPE[accum_qtype])
         # TODO(xrsrke): take initialization dtype from recipe
         super().__init__(in_features, out_features, bias, device, torch.float32)
         # TODO(xrsrke): don't fixed dtype, take it from the FP8 recipe
@@ -99,7 +98,6 @@ class _FP8Matmul(torch.autograd.Function):
                 input,
                 dtype=FP8LM_RECIPE.linear.input.dtype,
                 interval=FP8LM_RECIPE.linear.input.interval,
-                # is_delayed_scaling=FP8LM_RECIPE.linear.input.is_delayed_scaling,
             )
             metadatas.input = fp8_input.fp8_meta
         else:

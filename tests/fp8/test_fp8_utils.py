@@ -2,7 +2,6 @@ import pytest
 import torch
 from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.linear import FP8Linear
-from nanotron.fp8.optim import FP8Adam
 from nanotron.fp8.parameter import FP8Parameter
 from nanotron.fp8.utils import (
     _log,
@@ -10,7 +9,6 @@ from nanotron.fp8.utils import (
     convert_to_fp8_module,
     get_leaf_modules,
     is_overflow_underflow_nan,
-    track_optimizer,
 )
 from torch import nn
 
@@ -110,18 +108,18 @@ def test_track_module_statistics():
     }
 
 
-@pytest.mark.skip
-def test_track_fp8_optimizer():
-    input = torch.randn(16, 16, device="cuda")
-    linear = nn.Linear(16, 16, device="cuda")
-    fp8_linear = convert_linear_to_fp8(linear, accum_qtype=DTypes.KFLOAT16)
-    fp8_optim = FP8Adam(fp8_linear.parameters())
+# @pytest.mark.skip
+# def test_track_fp8_optimizer():
+#     input = torch.randn(16, 16, device="cuda")
+#     linear = nn.Linear(16, 16, device="cuda")
+#     fp8_linear = convert_linear_to_fp8(linear, accum_qtype=DTypes.KFLOAT16)
+#     fp8_optim = FP8Adam(fp8_linear.parameters())
 
-    logs = track_optimizer(fp8_optim)
+#     logs = track_optimizer(fp8_optim)
 
-    for _ in range(1):
-        fp8_linear(input).sum().backward()
-        fp8_optim.step()
-        fp8_optim.zero_grad()
+#     for _ in range(1):
+#         fp8_linear(input).sum().backward()
+#         fp8_optim.step()
+#         fp8_optim.zero_grad()
 
-    assert logs.keys() == ["master_weights", "optimizer_states"]
+#     assert logs.keys() == ["master_weights", "optimizer_states"]

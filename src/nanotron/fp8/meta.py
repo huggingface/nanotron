@@ -29,8 +29,6 @@ class FP8Meta:
     # TODO(xrsrke): change to Literal[torch.int8, torch.uint8]
     dtype: DTypes
     interval: int
-    # TODO(xrsrke): change to is_delay_scaling
-    # is_delayed_scaling: bool = False
 
     @property
     def te_dtype(self) -> tex.DType:
@@ -54,9 +52,6 @@ class FP8Meta:
             torch.float16,
             torch.bfloat16,
         ], f"Expected amax to be of dtype torch.float32 or torch.float16, got {self.amax.dtype}"
-
-        # if self.is_delayed_scaling is False and self.interval > 1:
-        #     raise ValueError("Interval must be 1 if not using delayed scaling because we scale every interval")
 
         # NOTE: transformer engine only accepts torch tensors
         self.amax = torch.tensor(self.amax, device="cuda") if not isinstance(self.amax, torch.Tensor) else self.amax
@@ -122,8 +117,6 @@ class FP8Meta:
     def rescale(self):
         assert self.is_ready_to_scale is True, "Cannot rescale if not ready to scale"
         from nanotron.fp8.tensor import update_scaling_factor
-
-        # print("rescaling")
 
         max_amax = torch.max(torch.stack(self.amaxs))
         current_scale = self.scale
