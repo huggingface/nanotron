@@ -1,4 +1,4 @@
-from typing import Dict, List, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.distributed as dist
@@ -8,7 +8,14 @@ from torch import nn
 from torch.distributed import ReduceOp
 
 
-def track_weight_and_grad_stats(name: str, module: nn.Module, parallel_context: ParallelContext):
+def track_weight_and_grad_stats(
+    name: str,
+    module: nn.Module,
+    save_weights: bool,
+    save_grads: bool,
+    save_acts: bool,
+    parallel_context: ParallelContext,
+):
     def compute_stats(tensors, metrics: List[str] = ["amax"]):
         NAME_TO_FUNC = {
             "mean": lambda x: x.mean().item(),
@@ -109,13 +116,28 @@ def track_weight_and_grad_stats(name: str, module: nn.Module, parallel_context: 
     return logs, handles
 
 
-def monitor_model(model: NanotronModel, parallel_context: ParallelContext) -> Tuple[Dict[str, Union[torch.Tensor, float]], List]:
+def monitor_model(
+    model: NanotronModel,
+    save_weights: bool = False,
+    save_grads: bool = False,
+    save_acts: bool = False,
+    parallel_context: Optional[ParallelContext] = None,
+) -> Tuple[Dict[str, Union[torch.Tensor, float]], List]:
+    assert parallel_context is not None
+
     logs = {}
     handles = []
     leaf_modules = [(name, module) for name, module in model.named_modules()]
 
     for name, module in leaf_modules:
-        module_logs, module_handles = track_weight_and_grad_stats(name, module, parallel_context)
+        module_logs, module_handles = track_weight_and_grad_stats(
+            name=name,
+            module=module,
+            save_weights=save_weights,
+            save_grads=save_grads,
+            save_acts=save_acts,
+            parallel_context=parallel_context,
+        )
         logs.update(module_logs)
         handles.extend(module_handles)
 
@@ -123,12 +145,12 @@ def monitor_model(model: NanotronModel, parallel_context: ParallelContext) -> Tu
 
 
 def convert_logs_to_flat_logs(
-        logs: Dict[str, Dict[str, Dict[str, Union[torch.Tensor, float]]]]
-    ) -> Dict[str, Union[torch.Tensor, float]]:
-        flat_logs = {}
-        for module_name, components in logs.items():
-            for component_name, stats in components.items():
-                for metric_name, metric_value in stats.items():
-                    flat_logs[f"{module_name}:{component_name}:{metric_name}"] = metric_value
+    logs: Dict[str, Dict[str, Dict[str, Union[torch.Tensor, float]]]]
+) -> Dict[str, Union[torch.Tensor, float]]:
+    flat_logs = {}
+    for module_name, components in logs.items():
+        for component_name, stats in components.items():
+            for metric_name, metric_value in stats.items():
+                flat_logs[f"{module_name}:{component_name}:{metric_name}"] = metric_value
 
-        return flat_logs
+    return flat_logs
