@@ -62,35 +62,21 @@ def read_context_files(tokenizer, soft_prompt, retrieval_question, target_cut_le
     return context
 
 
-# def insert_needle(context, needle):
-#     # Get the position to insert the needle
-#     insertion_point = random.randint(0, len(context) - len(needle)) - 1
-
-#     # Insert the needle at the appropriate position
-#     new_context = context[:insertion_point] + needle + context[insertion_point:]
-
-#     return new_context
-
-
 def insert_needle_with_depth(needle, context, depth_percent, target_cut_length, tokenizer):
     content_ids = tokenizer.encode(context)
-    # content_length = len(content_ids)
     needle_ids = tokenizer.encode(needle)
 
     if depth_percent == 100:
         # If depth percent is 100, place the needle at the end
-        # new_context = context[: len(context) - len(needle)] + needle
         new_context_ids = content_ids[: len(content_ids) - len(needle_ids)] + needle_ids
     else:
         # Get the position to insert the needle
-        # insertion_point = int(context_length * (depth_percent / 100))
         insertion_point = int(len(content_ids) * (depth_percent / 100))
 
         # Find the nearest period to the insertion point
         while context[insertion_point] != "." and insertion_point > 0:
             insertion_point -= 1
 
-        # Insert the needle at the appropriate position
         # new_context = context[:insertion_point] + needle + context[insertion_point:content_length]
         new_context_ids = (
             content_ids[:insertion_point]
@@ -98,16 +84,21 @@ def insert_needle_with_depth(needle, context, depth_percent, target_cut_length, 
             + content_ids[insertion_point : (target_cut_length - len(needle_ids))]
         )
 
-    new_content = tokenizer.decode(new_context_ids)
+    new_content = tokenizer.decode(new_context_ids, skip_special_tokens=True, clean_up_tokenization_spaces=True)
 
     return new_content
 
 
 def generate_needle_in_haystack_test(
-    needle, needle_prompt, haystack_dir, soft_prompt: str, retrieval_question, context_length, depth_percent
+    needle,
+    needle_prompt,
+    soft_prompt: str,
+    retrieval_question,
+    context_length,
+    depth_percent,
+    tokenizer,
+    is_padding: bool,
 ):
-    # Load up the haystack context
-    tokenizer = AutoTokenizer.from_pretrained("lvwerra/the-tokenizer-v1")
     target_cut_length = context_length - token_length(tokenizer, PROMPT.format(soft_prompt, 1, retrieval_question)) - 1
 
     context = read_context_files(tokenizer, soft_prompt, retrieval_question, target_cut_length)
@@ -119,20 +110,21 @@ def generate_needle_in_haystack_test(
     prompt = f"{soft_prompt} {context_with_needle}. \n\n{retrieval_question}"
 
     assert str(needle) in context_with_needle, f"depth_percent: {depth_percent}"
-    # assert abs(context_length - token_length(tokenizer, prompt)) <= 10
-    # assert context_length - token_length(tokenizer, prompt)
 
-    # remaining_tokens = context_length - token_length(tokenizer, prompt)
     # NOTE: now add `.` to soft_prompt so that the token length is exactly equal to context_length
-    while (
-        token_length(tokenizer, PROMPT.format(soft_prompt, context_with_needle, retrieval_question)) < context_length
-    ):
-        soft_prompt += "."
+    if is_padding is True:
+        while (
+            token_length(tokenizer, PROMPT.format(soft_prompt, context_with_needle, retrieval_question))
+            < context_length
+        ):
+            soft_prompt += "."
 
     prompt = PROMPT.format(soft_prompt, context_with_needle, retrieval_question)
-    assert (
-        token_length(tokenizer, prompt) == context_length
-    ), f"Token length: {token_length(tokenizer, prompt)}, Context length: {context_length}, depth_percent: {depth_percent}"
+
+    if is_padding is True:
+        assert (
+            token_length(tokenizer, prompt) == context_length
+        ), f"Token length: {token_length(tokenizer, prompt)}, Context length: {context_length}, depth_percent: {depth_percent}"
 
     return prompt
 
@@ -141,66 +133,85 @@ def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--context_length", type=int, required=True)
     parser.add_argument("--depth_percent", type=int, required=True)
+    parser.add_argument("--num_prompts", type=int, default=5)
+    parser.add_argument(
+        "--tokenizer_path", type=str, default="/fsx/haojun/lighteval_evaluation_model/NanotronLlama3-8B"
+    )
     parser.add_argument("--id", type=int, required=True)
+    parser.add_argument("--haystack_dir", type=str, default="./haystack_txt/")
+    parser.add_argument("--is_push_to_hub", type=bool, default=False)
+    parser.add_argument("--is_exact_context_length", type=int, default=1)  # 1 is True, 0 is False
+    parser.add_argument("--is_padding", type=int, default=1)  # 1 is True, 0 is False
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = get_args()
 
+    for key, value in vars(args).items():
+        print(f"{key}: {value}")
+
     context_length = args.context_length
     depth_percent = args.depth_percent
+    tokenizer_path = args.tokenizer_path
+    num_prompts = args.num_prompts
     id = args.id
+    haystack_dir = args.haystack_dir
+    is_push_to_hub = args.is_push_to_hub
+    # is_exact_context_length = args.is_exact_context_length
+    is_exact_context_length = False if args.is_exact_context_length == 0 else True
+    is_padding = False if args.is_padding == 0 else True
 
-    haystack_dir = "./"
+    gen_context_length = context_length if is_exact_context_length is True else context_length - random.randint(0, 700)
+
     # NOTE: depth_percent + 1 to avoid 0
-    start_range = 1000 * (depth_percent + 1) * id
-    end_range = start_range + start_range
-
-    keys_in_train_set = get_keys_in_train_set()
+    RANGE = 500
+    start_range = 30 * (depth_percent + 1) * id
+    end_range = start_range + RANGE
 
     print(
-        f"Generating prompts for context length: {context_length} and depth percent: {depth_percent} and id: {id} \n"
+        f"Generating prompts for context length: {gen_context_length} (original {context_length}) and depth percent: {depth_percent} and id: {id} \n"
     )
     print(f"start_range: {start_range}, end_range: {end_range} \n")
 
-    def generate_dataset():
-        # num_prompts = 1700
-        num_prompts = 5
-        # soft_prompt = "There is an important info hidden inside a lot of irrelevant text. Find it and memorize them. I will quiz you about the important information there."
-        soft_prompt = "There is a pass key hidden inside a lot of irrelevant text. Find it and memorize them. I will quiz you about what is the pass key later on."
-        # context_lengths = [
-        #     32768,
-        # ]
-        # depth_percents = np.linspace(0, 100, num=21)
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
 
-        dataset_dict = {"id": [], "prompt": [], "answer": [], "context_length": [], "depth_percent": []}
+    def generate_dataset():
+        soft_prompt = "There is a pass key hidden inside a lot of irrelevant text. Find it and memorize them. I will quiz you about what is the pass key later on."
+
+        dataset_dict = {
+            "id": [],
+            "prompt": [],
+            "answer": [],
+            "context_length": [],
+            "num_tokens": [],
+            "depth_percent": [],
+        }
         generated_ids = set()
         generated_pass_keys = set()
 
-        # for context_length in context_lengths:
-        #     print(f"Generating prompts for context length: {context_length} \n")
-        #     for depth_percent in depth_percents:
         for i in range(num_prompts):
             print(f"generating prompt {i} \n")
 
             while True:
                 pass_key = random.randint(start_range, end_range)
-                if pass_key not in keys_in_train_set and pass_key not in generated_pass_keys:
+                if pass_key not in generated_pass_keys:
                     generated_pass_keys.add(pass_key)
                     break
 
             needle_prompt = f". The pass key is {pass_key}. Remember it. {pass_key} is the pass key. "
+            # retrieval_question = f"What is the pass key? The pass key is {pass_key}"
             retrieval_question = "What is the pass key? The pass key is "
 
             prompt = generate_needle_in_haystack_test(
-                pass_key,
-                needle_prompt,
-                haystack_dir,
-                soft_prompt,
-                retrieval_question,
-                context_length,
-                depth_percent,
+                needle=pass_key,
+                needle_prompt=needle_prompt,
+                soft_prompt=soft_prompt,
+                retrieval_question=retrieval_question,
+                context_length=gen_context_length,
+                depth_percent=depth_percent,
+                tokenizer=tokenizer,
+                is_padding=is_padding,
             )
 
             while True:
@@ -213,6 +224,7 @@ if __name__ == "__main__":
             dataset_dict["prompt"].append(prompt)
             dataset_dict["answer"].append(pass_key)
             dataset_dict["context_length"].append(context_length)
+            dataset_dict["num_tokens"].append(token_length(tokenizer, prompt))
             dataset_dict["depth_percent"].append(depth_percent)
 
         dataset = Dataset.from_dict(dataset_dict)
@@ -223,6 +235,7 @@ if __name__ == "__main__":
 
     # Save the dataset to disk
     dataset.save_to_disk(
-        f"/fsx/phuc/projects/nanotron/examples/infinite-context-length/needle_eval_datasets/needle_eval_ctx_len_32768_and_depth_{depth_percent}_and_id_{id}"
+        f"/fsx/phuc/projects/nanotron/examples/infinite-context-length/data/exp34/eval_data/needle_eval_and_{context_length}_ctx_and_depth_{depth_percent}_and_id_{id}"
     )
-    # dataset.push_to_hub("nanotron/needle_in_a_hay_stack_finetuning_dataset")
+    if is_push_to_hub:
+        dataset.push_to_hub("nanotron/llama3-16k-passkey-retrieval-eval")
