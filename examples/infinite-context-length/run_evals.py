@@ -2815,23 +2815,6 @@ def main():
         dataset = dataset.filter(lambda x: x["context_length"] == 32768 and x["depth_percent"] == depth_percent)
         df = df.filter(lambda x: x["context_length"] == 32768 and x["depth_percent"] == depth_percent)
 
-        # # Filter and select the first 2 samples for each unique 'depth_percent' value
-        # dataset = dataset.group_by("depth_percent").select(keep_from_disk=True, indices=lambda group: group[:2])
-        # df = df.group_by("depth_percent").select(keep_from_disk=True, indices=lambda group: group[:2])
-
-        # # NOTE: only take 2 sample for each unique depth_percent
-        # dataset = dataset.groupby('depth_percent').head(2)
-        # df = df.groupby('depth_percent').head(2)
-
-        # dataset = dataset.select(range(len(dataset)-1, -1, -1))
-        # df = df.select(range(len(df)-1, -1, -1))
-
-        # nOTE: only take 10 samples
-        # dataset = dataset.select(range(10))
-        # df = df.select(range(10))
-
-        # NOTE: now reverse these dataset
-
         dataloader = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=False)
 
         df.set_format("pandas")

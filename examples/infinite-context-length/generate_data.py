@@ -4,17 +4,13 @@ import os
 import random
 import uuid
 
-from datasets import Dataset
+from datasets import Dataset, load_dataset
 from transformers import AutoTokenizer
 
 PROMPT = "{} {}. \n\n{}"
 
 
-def get_keys_in_train_set():
-    from datasets import load_dataset
-
-    dataset = load_dataset("nanotron/needle_32k_finetuning_dataset")
-
+def get_keys_in_train_set(dataset):
     unique_answers = set()
     for split in dataset.keys():
         for example in dataset[split]:
@@ -142,6 +138,9 @@ def get_args():
     parser.add_argument("--is_push_to_hub", type=bool, default=False)
     parser.add_argument("--is_exact_context_length", type=int, default=1)  # 1 is True, 0 is False
     parser.add_argument("--is_padding", type=int, default=1)  # 1 is True, 0 is False
+    parser.add_argument("--is_eval", type=int, default=1)  # 1 is True, 0 is False
+    parser.add_argument("--check_key_in_dataset", type=str, default=None)  # 1 is True, 0 is False
+    parser.add_argument("--save_path", type=str, required=True)  # 1 is True, 0 is False
     return parser.parse_args()
 
 
@@ -161,8 +160,23 @@ if __name__ == "__main__":
     # is_exact_context_length = args.is_exact_context_length
     is_exact_context_length = False if args.is_exact_context_length == 0 else True
     is_padding = False if args.is_padding == 0 else True
+    is_eval = False if args.is_eval == 0 else True
+    check_key_in_dataset = args.check_key_in_dataset
+    save_path = args.save_path
 
-    gen_context_length = context_length if is_exact_context_length is True else context_length - random.randint(0, 700)
+    assert save_path is not None
+
+    if check_key_in_dataset is not None:
+        eval_dataset = load_dataset(check_key_in_dataset)
+        eval_keys = get_keys_in_train_set(eval_dataset)
+
+    if context_length >= 2000:
+        # NOTE: don't minus short context
+        gen_context_length = (
+            context_length if is_exact_context_length is True else context_length - random.randint(0, 700)
+        )
+    else:
+        gen_context_length = context_length
 
     # NOTE: depth_percent + 1 to avoid 0
     RANGE = 500
@@ -196,12 +210,19 @@ if __name__ == "__main__":
             while True:
                 pass_key = random.randint(start_range, end_range)
                 if pass_key not in generated_pass_keys:
+                    if check_key_in_dataset is not None:
+                        if str(pass_key) in eval_keys:
+                            continue
+
                     generated_pass_keys.add(pass_key)
                     break
 
             needle_prompt = f". The pass key is {pass_key}. Remember it. {pass_key} is the pass key. "
-            # retrieval_question = f"What is the pass key? The pass key is {pass_key}"
-            retrieval_question = "What is the pass key? The pass key is "
+
+            if is_eval is True:
+                retrieval_question = "What is the pass key? The pass key is "
+            else:
+                retrieval_question = f"What is the pass key? The pass key is {pass_key}."
 
             prompt = generate_needle_in_haystack_test(
                 needle=pass_key,
@@ -235,7 +256,7 @@ if __name__ == "__main__":
 
     # Save the dataset to disk
     dataset.save_to_disk(
-        f"/fsx/phuc/projects/nanotron/examples/infinite-context-length/data/exp34/eval_data/needle_eval_and_{context_length}_ctx_and_depth_{depth_percent}_and_id_{id}"
+        f"{save_path}/needle_finetune_data_and_{context_length}_ctx_and_depth_{depth_percent}_and_id_{id}"
     )
-    if is_push_to_hub:
-        dataset.push_to_hub("nanotron/llama3-16k-passkey-retrieval-eval")
+    # if is_push_to_hub:
+    #     dataset.push_to_hub("nanotron/llama3-16k-passkey-retrieval-eval")
