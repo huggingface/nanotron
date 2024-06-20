@@ -450,8 +450,8 @@ class DistributedTrainer:
     ) -> Tuple[Iterable[Dict], Optional[torch.Tensor]]:
         before_tbi_sanity_checks(self.config, self.parallel_context, self.unwrapped_model, self.grad_accumulator)
 
-        if self.iteration_step < 5:
-            log_memory(logger=logger)
+        # if self.iteration_step < 5:
+        log_memory(logger=logger)
 
         outputs = self.pipeline_engine.train_batch_iter(
             model=self.model,
