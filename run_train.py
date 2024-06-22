@@ -8,6 +8,7 @@ torchrun --nproc_per_node=8 run_train.py --config-file examples/config_tiny_llam
 ```
 """
 import argparse
+import subprocess
 from typing import Dict, cast
 
 import numpy as np
@@ -39,6 +40,16 @@ except ImportError:
     tf_version = None
 
 logger = logging.get_logger(__name__)
+
+
+def run_comms_benchmark():
+    result = subprocess.run(
+        ["mpirun", "-np", "2", "python", "scripts/comms_benchmark.py"], capture_output=True, text=True
+    )
+    output_lines = result.stdout.strip().split("\n")
+    # Print only the first two lines of the output
+    for line in output_lines[:2]:
+        print(line)
 
 
 def get_dataloader_from_data_stage(
@@ -228,6 +239,8 @@ def get_args():
 if __name__ == "__main__":
     args = get_args()
     config_file = args.config_file
+
+    run_comms_benchmark()
 
     # Load trainer and data
     trainer = DistributedTrainer(config_file)
