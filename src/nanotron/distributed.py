@@ -8,7 +8,7 @@ from packaging import version
 from torch import distributed as dist
 from torch.distributed import *  # noqa
 from torch.distributed.distributed_c10d import ProcessGroup
-
+import numpy as np
 from nanotron.utils import find_free_port
 
 torch_version_above_1_13 = version.parse(torch.__version__) >= version.parse("1.13.0")
@@ -21,7 +21,8 @@ def new_group(  # pylint: disable=function-redefined
 ) -> ProcessGroup:
     if len(ranks) == 0:
         raise ValueError("Cannot create a group with not ranks inside it")
-
+    if isinstance(ranks, np.ndarray):
+        ranks = ranks.tolist()
     return dist.new_group(ranks=ranks, timeout=timeout, backend=backend, pg_options=pg_options)
 
 
