@@ -481,7 +481,15 @@ def get_profiler(config: Config):
             on_trace_ready = None
         prof = profile(
             activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
-            schedule=torch.profiler.schedule(wait=1, warmup=1, active=1, repeat=1, skip_first=3),
+            # schedule=torch.profiler.schedule(wait=1, warmup=1, active=1, repeat=1, skip_first=3),
+            # In this example with wait=1, warmup=1, active=2, repeat=1,
+            # profiler will skip the first step/iteration,
+            # start warming up on the second, record
+            # the third, forth, fifth iterations,
+            # after which the trace will become available
+            # and on_trace_ready (when set) is called;
+            # the cycle repeats starting with the next step
+            schedule=torch.profiler.schedule(wait=1, warmup=1, active=3, repeat=1, skip_first=2),
             on_trace_ready=on_trace_ready,
             # record_shapes=True,
             # profile_memory=True,

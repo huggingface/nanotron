@@ -417,7 +417,7 @@ class DistributedTrainer:
         torch.cuda.empty_cache()
         with prof:
             for self.iteration_step in range(self.metadata.last_train_step + 1, self.config.tokens.train_steps + 1):
-                if isinstance(prof, torch.profiler.profile) and self.iteration_step < 6: # Only profile the first 6 steps
+                if isinstance(prof, torch.profiler.profile):
                     prof.step()
 
                 self.iteration_start_time = time.time()
