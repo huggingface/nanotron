@@ -475,7 +475,7 @@ def get_profiler(config: Config):
     if config.profiler is not None:
         if config.profiler.profiler_export_path is not None:
             on_trace_ready = tensorboard_trace_handler(
-                config.profiler.profiler_export_path / datetime.now().strftime("%Y%m%d-%H%M%S")
+                config.profiler.profiler_export_path / "profiler"
             )
         else:
             on_trace_ready = None
