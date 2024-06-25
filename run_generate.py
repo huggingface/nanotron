@@ -7,9 +7,7 @@ export CUDA_DEVICE_MAX_CONNECTIONS=1 # important for some distributed operations
 torchrun --nproc_per_node=4 run_generate.py ---ckpt-path checkpoints/test/4
 ```
 """
-
 import argparse
-import os
 from pathlib import Path
 
 import torch
@@ -21,12 +19,14 @@ from nanotron.config import (
     ParallelismArgs,
     get_config_from_file,
 )
+from nanotron.distributed import get_global_rank
 from nanotron.generation.decode import (
-    GenerationInput,
-    TokenizerConfig,
-    decode_text,
-    decode_tokenized,
+    GenerationInputs,
+    GenerationStates,
+    run_one_inference_step,
 )
+from nanotron.generation.generate_store import Store
+from nanotron.generation.sampler import BasicSampler, GreedySampler, SamplerType, TopKSampler, TopPSampler
 from nanotron.logging import log_rank, set_ranks_logging_level
 from nanotron.models import build_model
 from nanotron.parallel import ParallelContext
@@ -34,7 +34,6 @@ from nanotron.parallel.parameters import sanity_check
 from nanotron.parallel.pipeline_parallel.engine import (
     OneForwardOneBackwardPipelineEngine,
 )
-from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
 from nanotron.parallel.tensor_parallel.enum import TensorParallelLinearMode
 from nanotron.random import (
     RandomStates,
@@ -50,6 +49,7 @@ try:
 except ImportError:
     AutoTokenizer = None
 
+
 logger = logging.get_logger(__name__)
 
 
@@ -57,9 +57,10 @@ def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--ckpt-path", type=Path, required=True, help="Checkpoint path")
     parser.add_argument("--dp", type=int, default=1)
-    parser.add_argument("--pp", type=int, default=0)
-    parser.add_argument("--tp", type=int, default=0)
+    parser.add_argument("--pp", type=int, default=1)
+    parser.add_argument("--tp", type=int, default=1)
     parser.add_argument("--max-new-tokens", type=int, default=128, help="Maximum number of new tokens to generate")
+    parser.add_argument("--use-cache", action="store_true", help="Use cache for generation")
     return parser.parse_args()
 
 
@@ -73,9 +74,9 @@ def main():
     tokenizer_path = config.tokenizer.tokenizer_name_or_path
 
     parallel_config = ParallelismArgs(
-        dp=args.dp or config.parallelism.dp,
-        pp=args.pp or config.parallelism.pp,
-        tp=args.tp or config.parallelism.tp,
+        dp=args.dp,
+        pp=args.pp,
+        tp=args.tp,
         pp_engine=OneForwardOneBackwardPipelineEngine(),
         tp_mode=TensorParallelLinearMode.ALL_REDUCE,
         tp_linear_async_communication=False,
@@ -163,86 +164,147 @@ def main():
                 tokenizer.add_special_tokens({"pad_token": "[PAD]"})
         tokenizer.padding_side = "left"
         tokenizer.truncation_side = "left"  # TODO @nouamane: do we want this?
+
         dummy_inputs = [
             "The future of AI is",
             # "Passage: Daniel went back to the garden. Mary travelled to the kitchen. Sandra journeyed to the kitchen. Sandra went to the hallway. John went to the bedroom. Mary went back to the garden. Where is Mary?\nAnswer:",
-            "def fib(n)",
+            # "def fib(n)",
             # 'Here is an extract from a webpage: "Have you ever experienced heel pain after a heavy physical activity, or even right after a long period of standing? If you regard this as something usual and normal, then think again. Miscalled as heel pain, plantar fasciitis causes these frequent mild pains experienced in the soles of the feet. It is the inflammation and enlargement the plantar fascia tissue that is located in the heels of the feet, stretching to the base of the toes. This tissue is responsible for absorbing shock in the feet and for supporting the arches. It also plays a vital role in foot movements during walking and standing. Many factors such as excessive walking, standing, and running trigger heel pain and plantar fasciitis. A sudden increase in intensity of activities, increase in weight, and abrupt change of footwear also cause the swelling of the ligament. Non-supportive footwear lacking arch cushions and improper and worn out running or training can also lead to the problem. It is also most evident among those". Write an extensive and detailed course unit suitable for a textbook targeted at college students, related to the given extract, within the context of "Medicine". Do not just list concepts, but develop each one in detail before moving to the next, as we prioritize depth of understanding and comprehensive exploration of the subject matter over breadth. Focus on: - Rigor: Ensure in-depth coverage of the concepts/sections. - Engagement: Write with an academic, professional and engaging tone that captivates interest. - Application: Incorporate specific, practical examples, such as proofs in calculus or critical dates and figures in history. Do not include a title or an introduction, simply write the content without headlines and introductory phrases. Do not use images.',
             # "Advancements in technology will lead to",
             # "Tomorrow's world is shaped by",
         ]
 
-        outputs = decode_text(
-            input_iter=(GenerationInput(text=text) for text in dummy_inputs),
-            tokenizer=tokenizer,
-            # TODO @thomasw21: From ModelWithLoss extract the model.
-            model=model.model,
-            parallel_context=parallel_context,
-            max_new_tokens=args.max_new_tokens,
-            max_micro_batch_size=2,
-            generation_config=GenerationArgs(sampler="greedy", use_cache=True),
-            tokenizer_config=TokenizerConfig(max_input_length=None),
-            is_bench=os.environ.get("USE_BENCH", "0") == "1",
+        log_rank(f"Using cache for generation: {args.use_cache}", logger=logger, level=logging.INFO, rank=0)
+
+        # NOTE: This doesn't support micro-batches and batch inference
+        device = torch.cuda.current_device()
+        generation_config = GenerationArgs(sampler="greedy", use_cache=args.use_cache)
+        logits_are_batch_first = True
+
+        if generation_config:
+            if isinstance(generation_config.sampler, str):
+                sampler_type = SamplerType(generation_config.sampler.upper())
+            else:
+                sampler_type = generation_config.sampler
+        else:
+            sampler_type = SamplerType.GREEDY
+
+        tokenized_prompts = tokenizer(
+            dummy_inputs,
+            return_tensors="pt",
+            return_attention_mask=True,
+            padding=True,
         )
-        for output in outputs:
-            input_ids = output.input_ids
-            generated_ids = output.generation_ids
-            if isinstance(input_ids, TensorPointer):
-                assert isinstance(generated_ids, TensorPointer)
-                continue
-            assert isinstance(generated_ids, torch.Tensor)
+        tokenized_prompts["input_ids"] = tokenized_prompts["input_ids"].to(device)
+        tokenized_prompts["attention_mask"] = tokenized_prompts["attention_mask"].to(dtype=torch.bool, device=device)
 
-            log_rank(
-                f"input: {tokenizer.decode(input_ids, clean_up_tokenization_spaces=False)[:1000]}",
-                logger=logger,
-                level=logging.INFO,
-                rank=0,
-            )
+        store = Store()
+        batch_prompts = None
 
-            log_rank(
-                f"generation: {tokenizer.decode(generated_ids[len(input_ids) :], clean_up_tokenization_spaces=False)}",
-                logger=logger,
-                level=logging.INFO,
-                rank=0,
-            )
+        for i in range(args.max_new_tokens):
 
-            log_rank(
-                "--------------------------------------------------",
-                logger=logger,
-                level=logging.INFO,
-                rank=0,
-            )
-    else:
-        outputs = decode_tokenized(
-            input_ids=torch.zeros(1, 1).to(dtype=torch.int64, device="cuda"),
-            input_mask=torch.ones(1, 1).to(dtype=torch.bool, device="cuda"),
-            model=model.model,
-            parallel_context=parallel_context,
-            generation_config=GenerationArgs(sampler="greedy", use_cache=True),
-            max_micro_batch_size=1,
-            max_new_tokens=12,
-            returns_logits=False,
-        )
-        for output in outputs:
-            input_ids = output.input_ids
-            generated_ids = output.generation_ids
-            if isinstance(input_ids, TensorPointer):
-                assert isinstance(generated_ids, TensorPointer)
-                continue
-            assert isinstance(generated_ids, torch.Tensor)
-            log_rank(
-                f"generation: {generated_ids[len(input_ids) :]}",
-                logger=logger,
-                level=logging.INFO,
-                rank=0,
+            if generation_config.use_cache:
+                # Prepare the batch prompts
+                batch_prompts = GenerationStates(
+                    new_input_ids=tokenized_prompts["input_ids"]
+                    if i == 0
+                    else tokenized_prompts["input_ids"][:, -1].unsqueeze(0),
+                    new_input_mask=tokenized_prompts["attention_mask"]
+                    if i == 0
+                    else tokenized_prompts["attention_mask"][:, -1].unsqueeze(0),
+                    store=store,
+                    generation_ids=tokenized_prompts["input_ids"],
+                    generation_mask=tokenized_prompts["attention_mask"],
+                )
+            else:
+                batch_prompts = GenerationInputs(
+                    input_ids=tokenized_prompts["input_ids"],
+                    input_masks=tokenized_prompts["attention_mask"],
+                )
+
+            logits = run_one_inference_step(
+                model, batch_prompts, parallel_context, device, use_cache=generation_config.use_cache, store=store
             )
 
-            log_rank(
-                "--------------------------------------------------",
-                logger=logger,
-                level=logging.INFO,
-                rank=0,
+            # Sample new token
+            if parallel_context.is_pipeline_last_stage:
+                assert logits is not None and isinstance(logits, torch.Tensor)
+
+                # Get sampler
+                if sampler_type == SamplerType.GREEDY:
+                    sampler = GreedySampler(pg=parallel_context.tp_pg)
+                elif sampler_type == SamplerType.TOP_K:
+                    sampler = TopKSampler(pg=parallel_context.tp_pg)
+                elif sampler_type == SamplerType.TOP_P:
+                    sampler = TopPSampler(pg=parallel_context.tp_pg)
+                elif sampler_type == SamplerType.BASIC:
+                    sampler = BasicSampler(pg=parallel_context.tp_pg)
+                else:
+                    raise NotImplementedError(f"Sampler type {sampler_type} is not implemented")
+
+                if logits_are_batch_first:
+                    logits = logits.transpose(0, 1)
+
+                # Predict next token
+                next_token = sampler(sharded_logits=logits[:, -1])
+
+                # Extend the tokenized prompts to insert the new token
+                tokenized_prompts["input_ids"] = torch.cat([tokenized_prompts["input_ids"], next_token], dim=-1)
+                tokenized_prompts["attention_mask"] = torch.cat(
+                    [
+                        tokenized_prompts["attention_mask"],
+                        torch.ones((tokenized_prompts["attention_mask"].shape[0], 1), dtype=torch.bool, device=device),
+                    ],
+                    dim=-1,
+                )
+            else:
+                # Extend the tokenized prompts to receive the new token
+                tokenized_prompts["input_ids"] = torch.zeros(
+                    (tokenized_prompts["input_ids"].shape[0], tokenized_prompts["input_ids"].shape[1] + 1),
+                    dtype=torch.int64,
+                    device=device,
+                )
+                tokenized_prompts["attention_mask"] = torch.zeros(
+                    (
+                        tokenized_prompts["attention_mask"].shape[0],
+                        tokenized_prompts["attention_mask"].shape[1] + 1,
+                    ),
+                    dtype=torch.bool,
+                    device=device,
+                )
+
+            # Broadcast the new token to all the pipeline stages
+            dist.broadcast(
+                tokenized_prompts["input_ids"],
+                src=get_global_rank(
+                    group=parallel_context.pp_pg, group_rank=parallel_context.pipeline_parallel_last_rank
+                ),
+                group=parallel_context.pp_pg,
             )
+            dist.broadcast(
+                tokenized_prompts["attention_mask"],
+                src=get_global_rank(
+                    group=parallel_context.pp_pg, group_rank=parallel_context.pipeline_parallel_last_rank
+                ),
+                group=parallel_context.pp_pg,
+            )
+
+        # Decode the generated text
+        if dist.get_rank() == 0:
+            for i, prompt in enumerate(dummy_inputs):
+                if generation_config.use_cache:
+                    tokenized_outputs = torch.cat(
+                        [tokens.view(1, -1) for tokens in batch_prompts.generation_ids], dim=1
+                    )
+                    outputs = tokenizer.decode(tokenized_outputs[0], clean_up_tokenization_spaces=False)
+                else:
+                    tokenized_outputs = tokenized_prompts["input_ids"][
+                        i, tokenized_prompts["input_ids"].shape[1] - args.max_new_tokens :
+                    ]
+                    outputs = tokenizer.decode(tokenized_outputs, clean_up_tokenization_spaces=False)
+
+                log_rank(f"Input: {prompt}", logger=logger, level=logging.INFO, rank=0)
+                log_rank(f"Output: {outputs}", logger=logger, level=logging.INFO, rank=0)
 
     dist.barrier()
 

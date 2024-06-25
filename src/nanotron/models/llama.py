@@ -14,7 +14,7 @@
 # limitations under the License.
 """PyTorch LLaMa model."""
 
-from typing import Dict, Optional, Union, List
+from typing import Dict, Optional, Union
 
 import torch
 from torch import nn
@@ -46,75 +46,71 @@ from nanotron.utils import checkpoint_method
 logger = logging.get_logger(__name__)
 
 
+def rotate_half(x, interleaved):
+    if interleaved:
+        x1, x2 = x[..., ::2], x[..., 1::2]
+    else:
+        split = x.shape[-1] // 2
+        x1, x2 = x[..., :split], x[..., split:]
+    return torch.cat((-x2, x1), dim=-1)
+
+
 class RotaryEmbedding(nn.Module):
-    def __init__(self, dim: int, end: int, theta: float = 10000.0):
+    def __init__(self, dim: int, end: int, theta: float = 500000.0):
         super().__init__()
-        assert dim % 2 == 0
         self.dim = dim
         self.end = end
         self.theta = theta
-        # TODO @nouamane: Figure out why we can't set `DTypeInvariantTensor` ...
-        # TODO @thomasw21: Complex buffers break DDP, instead we store float and view them as complex
-        self.freqs_cis: torch.Tensor
-        self._initialized_buffer = False
+        self.init_rotary_embeddings()
 
     def init_rotary_embeddings(self):
-        if self._initialized_buffer is True:
-            # Buffer if already initialized
-            return
-        self.register_buffer(
-            "freqs_cis",
-            torch.empty(self.end, self.dim // 2, 2, dtype=torch.float, device="cuda"),
-            persistent=False,
-        )
-        assert self.freqs_cis.device.type == "cuda"
-        # TODO @nouamane: One we figure out how to do the DTypeInvariantTensor, this can be removed and changed to an assert
-        if self.freqs_cis.dtype != torch.float:
-            self.freqs_cis = self.freqs_cis.to(torch.float)
-        assert self.freqs_cis.dtype == torch.float
-        freqs = 1.0 / (
-            self.theta
-            ** (torch.arange(0, self.dim, 2, dtype=torch.float, device="cuda")[: (self.dim // 2)] / self.dim)
-        )
-        t = torch.arange(self.end, device="cuda")
-        freqs = torch.outer(t, freqs).float()
-        complex_freqs = torch.polar(torch.ones_like(freqs), freqs)
-        freqs = torch.view_as_real(complex_freqs)
-        self.freqs_cis.copy_(freqs)
-        self._initialized_buffer = True
+        inv_freq = 1.0 / (self.theta ** (torch.arange(0, self.dim, 2, dtype=torch.float, device="cuda") / self.dim))
+        self.register_buffer("inv_freq", inv_freq, persistent=False)
 
+    @torch.no_grad()
     def forward(
         self,
         x: torch.Tensor,  # [batch_size, seq_length, num_heads, d_qk]
         position_ids: Optional[torch.LongTensor],  # [batch_size, seq_length]
     ):
-        batch_size, seq_length, num_heads, inner_dim = x.shape
-        while (
-            position_ids is not None and position_ids[-1, -1] >= self.end
-        ) or seq_length >= self.end:  # TODO @nouamane: check if this causes cpu-gpu sync
-            self.end *= 2
-            self._initialized_buffer = False
-        if self._initialized_buffer is False:
-            print(f"Initializing rotary embeddings with end={self.end}")
-            self.init_rotary_embeddings()
-        dtype = x.dtype
-        assert inner_dim % 2 == 0
-        x = x.view(
-            batch_size, seq_length, num_heads, inner_dim // 2, 2
-        )  # [batch_size, q_length, num_heads, inner_dim]
-        if x.dtype == torch.bfloat16:
-            x = x.float()
-        complex_x = torch.view_as_complex(x)  # [batch_size, q_length, num_heads, inner_dim // 2]
-        if position_ids is None:
-            freqs_cis = self.freqs_cis[None, :seq_length, None, :]
-        else:
-            # TODO(kunhao): Should None follow the num_heads dimension?
-            if position_ids[-1, -1] < 0 or position_ids[-1, -1] >= self.end:  # Quick test hopefully
-                raise ValueError(f"Position ids must be in the range [0, {self.end}), but got {position_ids}")
-            freqs_cis = self.freqs_cis[position_ids][:, :, None, :]
-        complex_freqs = torch.view_as_complex(freqs_cis)
-        x_out = torch.view_as_real(complex_x * complex_freqs).view(batch_size, seq_length, num_heads, inner_dim)
-        return x_out.type(dtype)
+        # x: [bs, num_attention_heads, seq_len, head_size]
+        # print("rotary")
+        inv_freq_expanded = self.inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1)
+        position_ids_expanded = position_ids[:, None, :].float()
+        # Force float32 since bfloat16 loses precision on long contexts
+        # See https://github.com/huggingface/transformers/pull/29285
+        device_type = x.device.type
+        device_type = device_type if isinstance(device_type, str) and device_type != "mps" else "cpu"
+        with torch.autocast(device_type=device_type, enabled=False):
+            freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)
+            emb = torch.cat((freqs, freqs), dim=-1)
+            cos = emb.cos()
+            sin = emb.sin()
+        return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
+
+
+def apply_rotary_pos_emb(q, k, cos, sin, interleaved, unsqueeze_dim=2):
+    """Applies Rotary Position Embedding to the query and key tensors.
+    Args:
+        q (`torch.Tensor`): The query tensor.
+        k (`torch.Tensor`): The key tensor.
+        cos (`torch.Tensor`): The cosine part of the rotary embedding.
+        sin (`torch.Tensor`): The sine part of the rotary embedding.
+        unsqueeze_dim (`int`, *optional*, defaults to 1):
+            The 'unsqueeze_dim' argument specifies the dimension along which to unsqueeze cos[position_ids] and
+            sin[position_ids] so that they can be properly broadcasted to the dimensions of q and k. For example, note
+            that cos[position_ids] and sin[position_ids] have the shape [batch_size, seq_len, head_dim]. Then, if q and
+            k have the shape [batch_size, heads, seq_len, head_dim], then setting unsqueeze_dim=1 makes
+            cos[position_ids] and sin[position_ids] broadcastable to the shapes of q and k. Similarly, if q and k have
+            the shape [batch_size, seq_len, heads, head_dim], then set unsqueeze_dim=2.
+    Returns:
+        `tuple(torch.Tensor)` comprising of the query and key tensors rotated using the Rotary Position Embedding.
+    """
+    cos = cos.unsqueeze(unsqueeze_dim)
+    sin = sin.unsqueeze(unsqueeze_dim)
+    q_embed = (q * cos) + (rotate_half(q, interleaved) * sin)
+    k_embed = (k * cos) + (rotate_half(k, interleaved) * sin)
+    return q_embed, k_embed
 
 
 class GLUActivation(nn.Module):
@@ -322,9 +318,12 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             end=config.max_position_embeddings,
             theta=config.rope_theta,
         )
+        self.rope_interleaved = config.rope_interleaved
 
         # NOTE: Only supported for training (TODO(fmom): position_ids not supported yet)
-        self.flash_rotary_embedding = FlashRotaryEmbedding(dim=self.d_qk, base=config.rope_theta, interleaved=True)
+        self.flash_rotary_embedding = FlashRotaryEmbedding(
+            dim=self.d_qk, base=config.rope_theta, interleaved=config.rope_interleaved
+        )
 
         self.o_proj = TensorParallelRowLinear(
             config.num_attention_heads * self.d_qk,
@@ -403,8 +402,12 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             # Compute rotary embeddings
             # Note: keep track of old rotary embedding end to check if we need to enlarge k_cache and v_cache
             old_rotary_embed_end = self.rotary_embedding.end
-            query_states = self.rotary_embedding(query_states, position_ids=position_ids)
-            key_states = self.rotary_embedding(key_states, position_ids=position_ids)
+            # query_states = self.rotary_embedding(query_states, position_ids=position_ids)
+            # key_states = self.rotary_embedding(key_states, position_ids=position_ids)
+            cos, sin = self.rotary_embedding(value_states, position_ids)
+            query_states, key_states = apply_rotary_pos_emb(
+                query_states, key_states, cos, sin, interleaved=self.rope_interleaved
+            )
 
             if "key" not in store:
                 # First inference iteration (Prefill)
