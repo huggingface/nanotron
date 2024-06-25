@@ -772,6 +772,67 @@ def decode_tokenized(
                         )
 
 
+@torch.inference_mode()
+def run_one_inference_step(model, batch, parallel_context, device, use_cache, store):
+    if dist.get_world_size(group=parallel_context.pp_pg) == 1:
+        if use_cache:
+            with attach_store(model=model, store=store):
+                return model.model(batch.new_input_ids, batch.new_input_mask)
+        return model.model(batch.input_ids, batch.input_masks)
+
+    pipeline_state = PipelineEvalBatchState()
+    with attach_pipeline_state_to_model(model=model, pipeline_state=pipeline_state):
+        batch_size = batch.new_input_ids.shape[0] if use_cache else batch.input_ids.shape[0]
+        seq_len = batch.new_input_ids.shape[1] if use_cache else batch.input_ids.shape[1]
+
+        # Preallocate memory for output logits.
+        logits = None
+        if parallel_context.is_pipeline_last_stage:
+            logits = torch.empty((seq_len, batch_size, model.config.vocab_size), dtype=torch.float32, device=device)
+
+        if use_cache:
+            batch2use = GenerationStates(
+                new_input_ids=batch.new_input_ids
+                if parallel_context.is_pipeline_first_stage
+                else TensorPointer(group_rank=parallel_context.pipeline_parallel_prev_rank),
+                new_input_mask=batch.new_input_mask
+                if parallel_context.is_pipeline_first_stage
+                else TensorPointer(group_rank=parallel_context.pipeline_parallel_prev_rank),
+                store=store,
+                generation_ids=batch.generation_ids,
+                generation_mask=batch.generation_mask,
+            )
+            with attach_store(model=model, store=store):
+                output_tensor = model.model(batch2use.new_input_ids, batch2use.new_input_mask)
+        else:
+            batch2use = GenerationInputs(
+                input_ids=batch.input_ids
+                if parallel_context.is_pipeline_first_stage
+                else TensorPointer(group_rank=parallel_context.pipeline_parallel_prev_rank),
+                input_masks=batch.input_masks
+                if parallel_context.is_pipeline_first_stage
+                else TensorPointer(group_rank=parallel_context.pipeline_parallel_prev_rank),
+            )
+
+            output_tensor = model.model(batch2use.input_ids, batch2use.input_masks)
+
+        nb_send = len(pipeline_state.microbatches_activations_to_send)
+        assert nb_send <= 2
+        for _ in range(nb_send):
+            # Send activations to the next stage
+            # Send attention_mask to the next stage
+            pipeline_state.run_communication()
+
+        # Copy logits.
+        if parallel_context.is_pipeline_last_stage:
+            logits = output_tensor
+
+        # Wait for all the communication to complete.
+        dist.barrier(group=parallel_context.world_pg)
+
+        return logits
+
+
 # Distributed utilities
 def broadcast_tensors(
     tensors: List[Union[torch.Tensor, TensorPointer]], group_src: int, group: Optional[ProcessGroup] = None
