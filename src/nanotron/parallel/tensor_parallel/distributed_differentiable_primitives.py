@@ -103,7 +103,9 @@ class DifferentiableReduceScatterSum(torch.autograd.Function):
         # https://cs.github.com/pytorch/pytorch/blob/2b267fa7f28e18ca6ea1de4201d2541a40411457/torch/distributed/nn/functional.py#L305
         tensor = tensor.contiguous()
 
-        sharded_tensor = MemoryBuffer().get("dist", (unsharded_batch_size//group.size(), *rest_size), dtype=tensor.dtype)
+        sharded_tensor = MemoryBuffer().get(
+            "dist", (unsharded_batch_size // group.size(), *rest_size), dtype=tensor.dtype
+        )
         dist.reduce_scatter_tensor(sharded_tensor, tensor, group=group, op=dist.ReduceOp.SUM)
         return sharded_tensor
 
