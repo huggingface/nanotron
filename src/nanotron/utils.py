@@ -15,6 +15,23 @@ from torch.utils.checkpoint import checkpoint
 from nanotron import distributed as dist
 
 
+class Singleton(type):
+    """
+    Singleton metaclass.
+    Create objects using this class as the metaclass to enable singleton behaviour.
+    For instance:
+    ```
+    class Logger(metaclass=Singleton):
+      ...
+    ```
+    """
+    _instances = {}
+    def __call__(cls, *args, **kwargs):
+        if cls not in cls._instances:
+            cls._instances[cls] = super(Singleton, cls).__call__(*args, **kwargs)
+        return cls._instances[cls]
+
+
 class ContextManagers:
     """
     Wrapper for `contextlib.ExitStack` which enters a collection of context managers. Adaptation of `ContextManagers`

@@ -19,6 +19,7 @@ from torch import distributed as torch_dist
 
 from nanotron import distributed as dist
 from nanotron.distributed import ProcessGroup
+from nanotron.parallel.utils import MemoryBuffer
 
 
 class DifferentiableIdentity(torch.autograd.Function):
@@ -67,13 +68,7 @@ class DifferentiableAllGather(torch.autograd.Function):
             group = torch_dist.distributed_c10d._get_default_group()
         unsharded_batch_size = sharded_batch_size * group.size()
 
-        unsharded_tensor = torch.empty(
-            unsharded_batch_size,
-            *rest_size,
-            device=tensor.device,
-            dtype=tensor.dtype,
-            requires_grad=tensor.requires_grad,
-        )
+        unsharded_tensor = MemoryBuffer().get("dist", (unsharded_batch_size, *rest_size), dtype=tensor.dtype)
 
         # `tensor` can sometimes not be contiguous
         # https://cs.github.com/pytorch/pytorch/blob/2b267fa7f28e18ca6ea1de4201d2541a40411457/torch/distributed/nn/functional.py#L317
@@ -108,13 +103,7 @@ class DifferentiableReduceScatterSum(torch.autograd.Function):
         # https://cs.github.com/pytorch/pytorch/blob/2b267fa7f28e18ca6ea1de4201d2541a40411457/torch/distributed/nn/functional.py#L305
         tensor = tensor.contiguous()
 
-        sharded_tensor = torch.empty(
-            unsharded_batch_size // group.size(),
-            *rest_size,
-            device=tensor.device,
-            dtype=tensor.dtype,
-            requires_grad=tensor.requires_grad,
-        )
+        sharded_tensor = MemoryBuffer().get("dist", (unsharded_batch_size//group.size(), *rest_size), dtype=tensor.dtype)
         dist.reduce_scatter_tensor(sharded_tensor, tensor, group=group, op=dist.ReduceOp.SUM)
         return sharded_tensor
 
