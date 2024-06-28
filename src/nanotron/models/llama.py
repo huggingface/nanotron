@@ -46,21 +46,29 @@ from nanotron.utils import checkpoint_method
 logger = logging.get_logger(__name__)
 
 
-def compute_stas(tensor):
+def compute_stas(tensor, log_tensor: bool = False, save_tensor: bool = False):
     if tensor is None:
         tensor = torch.zeros(
             1,
         )
 
-    return {
-        "mean": tensor.mean().item(),
-        # "std": tensor.std().item(),
+    logs = {
+        "mean": tensor.detach().mean().item(),
+        "std": tensor.detach().std().item(),
         # "var": tensor.var().item(),
-        # "norm": tensor.norm().item(),
+        "norm": tensor.norm().item(),
         # "min": tensor.min().item(),
         # "max": tensor.max().item(),
-        "amax": tensor.detach().cpu().abs().max().item(),
+        "amax": tensor.detach().abs().max().item(),
     }
+    # if log_tensor:
+    #     import torchshow as ts
+    #     import wandb
+    #     data = tensor.detach().cpu().tolist()
+    #     data = [[s] for s in data]
+    #     logs["data"] = wandb.plot.histogram(wandb.Table(data=data, columns=["value"]), "values", title="DATA")
+
+    return logs
 
 
 def convert_logs_to_flat_logs(logs, prefix):
@@ -71,6 +79,72 @@ def convert_logs_to_flat_logs(logs, prefix):
                 flat_logs[f"{prefix}:{module_name}:{component_name}:{stat_name}"] = value
 
     return flat_logs
+
+
+def rotate_half(x):
+    """Rotates half the hidden dims of the input."""
+    x1 = x[..., : x.shape[-1] // 2]
+    x2 = x[..., x.shape[-1] // 2 :]
+    return torch.cat((-x2, x1), dim=-1)
+
+
+### llama
+class LlamaRotaryEmbedding(nn.Module):
+    def __init__(self, dim: int, end: int, theta: float = 500000.0):
+        super().__init__()
+        self.dim = dim
+        self.end = end
+        self.theta = theta
+        self.init_rotary_embeddings()
+
+    def init_rotary_embeddings(self):
+        inv_freq = 1.0 / (self.theta ** (torch.arange(0, self.dim, 2, dtype=torch.float, device="cuda") / self.dim))
+        self.register_buffer("inv_freq", inv_freq, persistent=False)
+
+    @torch.no_grad()
+    def forward(
+        self,
+        x: torch.Tensor,  # [batch_size, seq_length, num_heads, d_qk]
+        position_ids: Optional[torch.LongTensor],  # [batch_size, seq_length]
+    ):
+        # x: [bs, num_attention_heads, seq_len, head_size]
+        # print("rotary")
+        inv_freq_expanded = self.inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1)
+        position_ids_expanded = position_ids[:, None, :].float()
+        # Force float32 since bfloat16 loses precision on long contexts
+        # See https://github.com/huggingface/transformers/pull/29285
+        device_type = x.device.type
+        device_type = device_type if isinstance(device_type, str) and device_type != "mps" else "cpu"
+        with torch.autocast(device_type=device_type, enabled=False):
+            freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)
+            emb = torch.cat((freqs, freqs), dim=-1)
+            cos = emb.cos()
+            sin = emb.sin()
+        return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
+
+
+def apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=2):
+    """Applies Rotary Position Embedding to the query and key tensors.
+    Args:
+        q (`torch.Tensor`): The query tensor.
+        k (`torch.Tensor`): The key tensor.
+        cos (`torch.Tensor`): The cosine part of the rotary embedding.
+        sin (`torch.Tensor`): The sine part of the rotary embedding.
+        unsqueeze_dim (`int`, *optional*, defaults to 1):
+            The 'unsqueeze_dim' argument specifies the dimension along which to unsqueeze cos[position_ids] and
+            sin[position_ids] so that they can be properly broadcasted to the dimensions of q and k. For example, note
+            that cos[position_ids] and sin[position_ids] have the shape [batch_size, seq_len, head_dim]. Then, if q and
+            k have the shape [batch_size, heads, seq_len, head_dim], then setting unsqueeze_dim=1 makes
+            cos[position_ids] and sin[position_ids] broadcastable to the shapes of q and k. Similarly, if q and k have
+            the shape [batch_size, seq_len, heads, head_dim], then set unsqueeze_dim=2.
+    Returns:
+        `tuple(torch.Tensor)` comprising of the query and key tensors rotated using the Rotary Position Embedding.
+    """
+    cos = cos.unsqueeze(unsqueeze_dim)
+    sin = sin.unsqueeze(unsqueeze_dim)
+    q_embed = (q * cos) + (rotate_half(q) * sin)
+    k_embed = (k * cos) + (rotate_half(k) * sin)
+    return q_embed, k_embed
 
 
 class RotaryEmbedding(nn.Module):
@@ -349,7 +423,17 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             contiguous_chunks=qkv_contiguous_chunks,
         )
         # TODO(kunhao): We want to have only one version per device and not one version per layer.
-        self.rotary_embedding = RotaryEmbedding(dim=self.d_qk, end=config.max_position_embeddings)
+
+        if config.rope_interleaved:
+            self.rotary_embedding = RotaryEmbedding(
+                dim=self.d_qk, end=config.max_position_embeddings, theta=config.rope_theta
+            )
+        else:
+            self.rotary_embedding = LlamaRotaryEmbedding(
+                dim=self.d_qk, end=config.max_position_embeddings, theta=config.rope_theta
+            )
+
+        # self.rotary_embedding = RotaryEmbedding(dim=self.d_qk, end=config.max_position_embeddings)
         log_rank(
             f"self.rotary_embedding.end is {self.rotary_embedding.end}",
             logger=logger,
@@ -359,7 +443,9 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         # self.rotary_embedding = RotaryEmbedding(dim=self.d_qk, end=2048)
 
         # NOTE: Only supported for training (TODO(fmom): position_ids not supported yet)
-        self.flash_rotary_embedding = FlashRotaryEmbedding(dim=self.d_qk, interleaved=True)
+        self.flash_rotary_embedding = FlashRotaryEmbedding(
+            dim=self.d_qk, interleaved=config.rope_interleaved, base=config.rope_theta
+        )
 
         self.o_proj = TensorParallelRowLinear(
             config.num_attention_heads * self.d_qk,
@@ -385,12 +471,16 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         self.segment_length = constants.CONFIG.infini_attention.segment_length  # for 1024 context length
 
         device = self.o_proj.weight.device
-        dtype = self.o_proj.weight.dtype
 
         from nanotron.parallel.sharded_parameters import SplitConfig, create_sharded_parameter_from_config
 
         if constants.CONFIG.infini_attention.turn_on_memory is True:
-            balance_factors = nn.Parameter(torch.zeros(self.n_local_q_heads, device=device, dtype=dtype))
+
+            balance_factors = nn.Parameter(
+                torch.zeros(self.n_local_q_heads, device=device, dtype=torch.float32)
+                # torch.randn(self.n_local_q_heads, device=device, dtype=torch.float32).normal_(mean=0.0, std=1/math.sqrt(config.num_attention_heads))
+                # torch.randn(self.n_local_q_heads, device=device, dtype=torch.float32).normal_(mean=0.0, std=1/math.sqrt(self.n_local_q_heads))
+            )
             self.balance_factors = create_sharded_parameter_from_config(
                 parameter=balance_factors,
                 pg=tp_pg,
@@ -400,12 +490,12 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                 ),
             )
 
-            log_rank(
-                f"Segment length is {self.segment_length}, turn_on_memory: {constants.CONFIG.infini_attention.turn_on_memory is True}",
-                logger=logger,
-                level=logging.WARNING,
-                rank=0,
-            )
+        log_rank(
+            f"Segment length is {self.segment_length}, turn_on_memory: {constants.CONFIG.infini_attention.turn_on_memory is True}",
+            logger=logger,
+            level=logging.WARNING,
+            rank=0,
+        )
 
     def forward(
         self,
@@ -415,6 +505,10 @@ class CausalSelfAttention(nn.Module, AttachableStore):
     ):
         hidden_states.shape[0]
         seq_len = hidden_states.shape[1]
+        # print(f"seq_len: {seq_len}")
+
+        # if seq_len > 64:
+        #     assert 1 == 1
 
         if seq_len > self.segment_length:
             import math
@@ -442,6 +536,34 @@ class CausalSelfAttention(nn.Module, AttachableStore):
 
         idx = 0
         logs = {}
+
+        if constants.GLOBAL_STEP == 11 and constants.IS_RANK_TO_MONITOR is True:
+            assert 1 == 1
+
+        raw_global_weights = F.sigmoid(self.balance_factors)
+
+        # raw_global_weights = F.tanh(self.balance_factors).abs()
+        # raw_global_weights = raw_global_weights * raw_global_weights.mean()
+
+        # def sigmoid_range(x, lo, hi): return torch.sigmoid(x) * (hi-lo) + lo
+        # raw_global_weights = sigmoid_range(self.balance_factors, 0, 5.5)
+
+        # raw_global_weights = F.softmax(self.balance_factors, dim=0)
+
+        # raw_global_weights = F.sigmoid(self.balance_factors)
+        global_weights = raw_global_weights
+        orig_global_weights = rearrange(global_weights, "n_heads -> 1 n_heads 1 1")
+        # + torch.randn(1, device=global_weights.device, dtype=global_weights.dtype)
+
+        # local_weights = 1 - global_weights
+        # local_weights = rearrange(local_weights, "n_heads -> 1 n_heads 1 1")
+        orig_local_weights = 1 - orig_global_weights
+
+        # global_weights = orig_global_weights.to(torch.bfloat16)
+        # local_weights = orig_local_weights.to(torch.bfloat16)
+
+        global_weights = orig_global_weights
+        local_weights = orig_local_weights
 
         for segment_hidden_state, segment_sequence_mask in zip(segment_hidden_states, segment_sequence_masks):
             attn_outputs = self.forward_with_hidden_states(
@@ -489,12 +611,6 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                 #         rank=0,
                 #     )
 
-                global_weights = F.sigmoid(self.balance_factors)
-                global_weights = rearrange(global_weights, "n_heads -> 1 n_heads 1 1")
-
-                local_weights = 1 - F.sigmoid(self.balance_factors)
-                local_weights = rearrange(local_weights, "n_heads -> 1 n_heads 1 1")
-
                 # log_rank(
                 #     f"[idx={idx}] global_weights.shape = {global_weights.shape}, global_weights: {global_weights}",
                 #     logger=logger,
@@ -527,14 +643,19 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                 if (
                     constants.GLOBAL_STEP is not None
                     and (constants.GLOBAL_STEP - 1) % constants.LOG_STATE_INTERVAL == 0
+                    and constants.IS_RANK_TO_MONITOR is True
                 ):
                     if dist.get_rank() == 0:
                         logs[f"layer_{self.layer_idx}:seg_{idx}:query_states"] = compute_stas(query_states)
                         logs[f"layer_{self.layer_idx}:seg_{idx}:key_states"] = compute_stas(key_states)
                         logs[f"layer_{self.layer_idx}:seg_{idx}:value_states"] = compute_stas(value_states)
 
-                        logs[f"layer_{self.layer_idx}:seg_{idx}:global_weights"] = compute_stas(global_weights)
-                        logs[f"layer_{self.layer_idx}:seg_{idx}:local_weights"] = compute_stas(local_weights)
+                        logs[f"layer_{self.layer_idx}:seg_{idx}:global_weights"] = compute_stas(
+                            orig_global_weights, log_tensor=True
+                        )
+                        logs[f"layer_{self.layer_idx}:seg_{idx}:local_weights"] = compute_stas(
+                            orig_local_weights, log_tensor=True
+                        )
                         logs[f"layer_{self.layer_idx}:seg_{idx}:local_attn_outputs"] = compute_stas(local_attn_outputs)
                         logs[f"layer_{self.layer_idx}:seg_{idx}:retrieved_memory"] = compute_stas(retrieved_memory)
                         logs[f"layer_{self.layer_idx}:seg_{idx}:attention_output"] = compute_stas(attention_output)
@@ -542,9 +663,8 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                         logs[f"layer_{self.layer_idx}:seg_{idx}:memory"] = compute_stas(memory)
                         logs[f"layer_{self.layer_idx}:seg_{idx}:normalization"] = compute_stas(normalization)
 
-                if idx >= 1:
-                    assert 1 == 1
-
+                # if idx >= 1:
+                #     assert 1 == 1
                 memory, normalization = self._update_memory(memory, normalization, key_states, value_states)
 
             outputs.append(output)
@@ -556,8 +676,12 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         assert outputs.shape == hidden_states.shape
 
         if constants.GLOBAL_STEP is not None and (constants.GLOBAL_STEP - 1) % constants.LOG_STATE_INTERVAL == 0:
-            if dist.get_rank() == 0:
+            if constants.IS_RANK_TO_MONITOR is True:
                 import wandb
+
+                for i in range(raw_global_weights.shape[0]):
+                    logs[f"layer_{self.layer_idx}:global_weights:head_{i}"] = raw_global_weights[i].item()
+                    logs[f"layer_{self.layer_idx}:balance_factors:head_{i}"] = self.balance_factors[i].item()
 
                 logs[f"layer_{self.layer_idx}:outputs"] = compute_stas(outputs)
                 wandb.log({**logs, "iteration_step": constants.GLOBAL_STEP})
@@ -566,6 +690,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             "hidden_states": outputs,
             "sequence_mask": sequence_mask,
         }
+
         return return_outputs
 
     def _retrieve_from_memory(self, query_states, prev_memory, prev_normalization):
@@ -575,6 +700,20 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         assert (prev_memory is None and prev_normalization is None) or (
             prev_memory is not None and prev_normalization is not None
         )
+
+        if self.n_repeats > 1:
+            from einops import repeat
+
+            prev_memory = repeat(
+                prev_memory,
+                "batch_size n_kv_heads d_k d_v -> batch_size (n_kv_heads n) d_k d_v",
+                n=self.n_repeats,
+            )
+            prev_normalization = repeat(
+                prev_normalization,
+                "batch_size n_kv_heads d_head -> batch_size (n_kv_heads n) d_head",
+                n=self.n_repeats,
+            )
 
         sigma_query_states = F.elu(query_states) + 1
         retrieved_memory = einsum(
@@ -669,8 +808,6 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             flash_attn_varlen_func,
             flash_attn_with_kvcache,
         )
-
-        # seq_len = hidden_states.shape[1]
 
         qkv_states = self.qkv_proj(
             hidden_states
@@ -1429,7 +1566,8 @@ class LlamaForTraining(NanotronModel):
             if "balance_factors" in param_name:
 
                 # init.normal_(param, mean=0.0, std=0.01)
-                param.zero_()
+                # param.zero_()
+                pass
             else:
                 module = model.get_submodule(module_name)
                 parametrizator.parametrize(param_name, module)
