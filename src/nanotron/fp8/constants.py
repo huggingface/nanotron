@@ -25,7 +25,7 @@ DTYPE_TO_FP8_MAX = {DTypes.FP8E4M3: 448.0, DTypes.FP8E5M2: 57344.0, DTypes.KFLOA
 QTYPE_TO_DTYPE = {
     # DTypes.FP8E4M3: torch.int8,
     # TODO(xrsrke): FP8E4M3 stores as uint8?
-    DTypes.FP8E4M3: torch.uint8,
+    DTypes.FP8E4M3: torch.int8,
     DTypes.FP8E5M2: torch.uint8,
     DTypes.KFLOAT16: torch.float16,
     DTypes.KFLOAT32: torch.float32,
@@ -54,7 +54,7 @@ FP8LM_RECIPE = FP8TrainingRecipe(
     #     output_grad=FP8TensorRecipe(dtype=DTypes.FP8E5M2, margin=0, interval=1, is_delayed_scaling=False),
     #     split_accumulator=FP8SplitAccumulator(output=False, input_grad=True, weight_grad=True),
     # ),
-    # # NOTE: FP8-LM recipe
+    # # # NOTE: FP8-LM recipe
     # linear=FP8LinearRecipe(
     #     accum_dtype=DTypes.KFLOAT16,
     #     input=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=16),
@@ -66,19 +66,31 @@ FP8LM_RECIPE = FP8TrainingRecipe(
     #     output_grad=FP8TensorRecipe(dtype=DTypes.FP8E5M2, margin=0, interval=1),
     #     split_accumulator=FP8SplitAccumulator(output=True, input_grad=True, weight_grad=True),
     # ),
-    # NOTE: works for 8B
+    # # NOTE: FP8-LM recipe
     linear=FP8LinearRecipe(
         accum_dtype=DTypes.KFLOAT16,
-        input=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=1),
+        input=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=16),
         weight=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=1),
-        bias=FP8TensorRecipe(dtype=DTypes.KFLOAT16, margin=0, interval=1),
+        bias=FP8TensorRecipe(dtype=DTypes.KFLOAT16, margin=0, interval=16),
         # NOTE: these are the dtypes for the gradients
-        input_grad=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=1),
+        input_grad=FP8TensorRecipe(dtype=DTypes.FP8E5M2, margin=0, interval=16),  # NOTE: this is output_grad
         weight_grad=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=1),
-        output_grad=FP8TensorRecipe(dtype=DTypes.FP8E5M2, margin=0, interval=1),
-        # split_accumulator=FP8SplitAccumulator(output=False, input_grad=True, weight_grad=True), # NOTE: msamp use this
+        output_grad=FP8TensorRecipe(dtype=DTypes.FP8E5M2, margin=0, interval=16),
         split_accumulator=FP8SplitAccumulator(output=True, input_grad=True, weight_grad=True),
     ),
+    # NOTE: works for 8B
+    # linear=FP8LinearRecipe(
+    #     accum_dtype=DTypes.KFLOAT16,
+    #     input=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=1),
+    #     weight=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=1),
+    #     bias=FP8TensorRecipe(dtype=DTypes.KFLOAT16, margin=0, interval=1),
+    #     # NOTE: these are the dtypes for the gradients
+    #     input_grad=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=1),
+    #     weight_grad=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=1),
+    #     output_grad=FP8TensorRecipe(dtype=DTypes.FP8E5M2, margin=0, interval=1),
+    #     # split_accumulator=FP8SplitAccumulator(output=False, input_grad=True, weight_grad=True), # NOTE: msamp use this
+    #     split_accumulator=FP8SplitAccumulator(output=True, input_grad=True, weight_grad=True),
+    # ),
     optim=FP8OptimRecipe(
         accum_dtype=DTypes.KFLOAT32,
         master_weight_dtype=DTypes.KFLOAT16,

@@ -140,7 +140,7 @@ parallelism:
   expert_parallel_size: 1
   pp: 1
   pp_engine: 1f1b
-  tp: 2
+  tp: 4
   # tp_linear_async_communication: true
   # tp_mode: REDUCE_SCATTER
 
@@ -158,7 +158,7 @@ tokens:
   batch_accumulation_per_replica: 1
   limit_test_batches: 0
   limit_val_batches: 0
-  micro_batch_size: 1 # 256
+  micro_batch_size: 128 # 256
   # micro_batch_size: 1
   sequence_length: 256
   train_steps: 24376
