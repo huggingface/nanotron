@@ -23,8 +23,8 @@ import torch
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
 
+from nanotron import constants, logging
 from nanotron import distributed as dist
-from nanotron import logging
 from nanotron.config import (
     Config,
     DatasetStageArgs,
@@ -60,7 +60,6 @@ from nanotron.models.llama import LlamaForTraining, RotaryEmbedding
 from nanotron.models.starcoder2 import Starcoder2ForTraining
 from nanotron.optim.clip_grads import clip_grad_norm
 from nanotron.parallel import ParallelContext
-from nanotron.parallel.data_parallel.utils import sync_gradients_across_dp
 from nanotron.parallel.parameters import NanotronParameter, sanity_check
 from nanotron.parallel.pipeline_parallel.engine import (
     PipelineEngine,
@@ -71,8 +70,6 @@ from nanotron.parallel.tensor_parallel.enum import TensorParallelLinearMode
 from nanotron.parallel.tensor_parallel.nn import TensorParallelRowLinear
 from nanotron.parallel.tied_parameters import (
     create_pg_for_tied_weights,
-    get_tied_id_to_param,
-    sync_tied_weights_gradients,
     tie_parameters,
 )
 from nanotron.random import set_random_seed
@@ -82,6 +79,7 @@ from nanotron.sanity_checks import (
     before_optim_step_sanity_checks,
     before_tbi_sanity_checks,
 )
+from nanotron.scaling.monitor import convert_logs_to_flat_logs
 from nanotron.scaling.parametrization import ParametrizationMethod
 from nanotron.serialize import (
     load_lr_scheduler,
@@ -174,6 +172,13 @@ class DistributedTrainer:
             self.model.module if isinstance(self.model, DistributedDataParallel) else self.model
         )
 
+        # NOTE: sanity check if we quantize the model to FP8
+        def get_inheritance_classes(instance):
+            classes = [instance.__class__]
+            for cls in classes:
+                classes.extend(cls.__bases__)
+            return classes
+
         # TODO: find a better way to handle this
         parametrization_method = (
             ParametrizationMethod.SPECTRAL_MUP
@@ -182,6 +187,11 @@ class DistributedTrainer:
         )
 
         # Init optimizer
+        # TODO(xrsrke): remove this after debugging
+        self.params_id_to_param_names = {
+            id(param): name for name, param in self.unwrapped_model.get_named_params_with_correct_tied()
+        }
+        constants.PARAM_ID_TO_PARAM_NAMES = self.params_id_to_param_names
         self.optimizer, self.grad_accumulator = init_optimizer_and_grad_accumulator(
             parametrization_method=parametrization_method,
             model=self.model,
@@ -209,6 +219,10 @@ class DistributedTrainer:
                 root_folder=self.init_checkpoint_path,
             )
 
+        ########################################
+        ## Setting up training states and data stages
+        ########################################
+
         # Define iteration start state
         if self.init_checkpoint_path is not None:
             checkpoint_metadata = load_meta(
@@ -232,15 +246,6 @@ class DistributedTrainer:
                 consumed_train_samples=0, last_train_step=0, last_stage_idx=0, data_stages=data_stages
             )
 
-        # Setup tensorboard write and log writers on output rank
-        self.logger_ranks = self.parallel_context.get_global_rank(
-            ep_rank=0, pp_rank=self.unwrapped_model.output_pp_rank, dp_rank=0, tp_rank=0
-        ).flatten()
-        self.loggerwriter = self.setup_log_writers()
-
-        # Log where each module is instantiated
-        self.unwrapped_model.log_modules(level=logging.DEBUG, group=self.parallel_context.world_pg, rank=0)
-
         self.micro_batch_size = self.config.tokens.micro_batch_size
         self.n_micro_batches_per_batch = self.config.tokens.batch_accumulation_per_replica
         self.global_batch_size = (
@@ -251,6 +256,40 @@ class DistributedTrainer:
         self.limit_val_batches = self.config.tokens.limit_val_batches
         # NOTE: the dataloader currently in use for the current training stage
         self.current_dataloader: Optional[DataLoader] = None
+
+        ########################################
+        ## Setting up logging and debugging tools
+        ########################################
+
+        # Setup tensorboard write and log writers on output rank
+        self.logger_ranks = self.parallel_context.get_global_rank(
+            ep_rank=0, pp_rank=self.unwrapped_model.output_pp_rank, dp_rank=0, tp_rank=0
+        ).flatten()
+        self.loggerwriter = self.setup_log_writers()
+
+        # Log where each module is instantiated
+        self.unwrapped_model.log_modules(level=logging.DEBUG, group=self.parallel_context.world_pg, rank=0)
+
+        if self.config.logging.monitor_model_states is True:
+            log_rank(
+                f"You have activated monitor model states. This could cause a slowdown in training. Only use it for debugging.",  # noqa
+                logger=logger,
+                level=logging.WARNING,
+                rank=0,
+            )
+
+        # TODO(xrsrke): remove this after debugging
+        self.params_id_to_param_names = {
+            id(param): name for name, param in self.unwrapped_model.get_named_params_with_correct_tied()
+        }
+        self.optimizer.optimizer.params_id_to_param_names = self.params_id_to_param_names
+
+        # MODULES_THAT_IN_FLOAT16 = [TensorParallelEmbedding, nn.LayerNorm]
+        # leaf_modules = get_leaf_modules(self.unwrapped_model.model)
+        # for n, module in leaf_modules:
+        #     if any(isinstance(module, m) for m in MODULES_THAT_IN_FLOAT16):
+        #         for p in module.parameters():
+        #             p.data = p.data.to(torch.float16)
 
         self.post_init()
 
@@ -272,11 +311,12 @@ class DistributedTrainer:
             rank=0,
         )
 
-        current_time = datetime.datetime.now().strftime("%d/%m/%Y_%H:%M:%S")
-        if dist.get_rank(self.parallel_context.world_pg) == self.logger_ranks[0] and wandb is not None:
+        datetime.datetime.now().strftime("%d/%m/%Y_%H:%M:%S")
+        if dist.get_rank(self.parallel_context.world_pg) == 0 and wandb is not None:
             wandb.init(
                 project=self.config.general.project,
-                name=f"{current_time}_{self.config.general.run}",
+                # name=f"{current_time}_{self.config.general.run}",
+                name=f"{self.config.general.run}",
                 config={"nanotron_config": self.config.as_dict()},
             )
 
@@ -395,6 +435,13 @@ class DistributedTrainer:
         ],
         **kwargs,
     ) -> None:
+        def get_optim_logs(mappings, optim, prefix):
+            optim_loggings = {}
+            for p in optim.loggings:
+                param_name = mappings[id(p)]
+                optim_loggings[param_name] = optim.loggings[p]
+            return convert_logs_to_flat_logs(optim_loggings)
+
         self.pre_training(**kwargs)
 
         if self.config.checkpoints.save_initial_state and self.init_checkpoint_path is None:
@@ -420,8 +467,18 @@ class DistributedTrainer:
                 if isinstance(prof, torch.profiler.profile):
                     prof.step()
 
+                if constants.ITERATION_STEP == 2:
+                    assert 1 == 1
+
                 self.iteration_start_time = time.time()
+                torch.cuda.empty_cache()
                 self._update_dataloader_based_on_training_stages(dataloader_or_dls)
+
+                is_ready_to_log = (self.iteration_step - 1) % self.config.logging.iteration_step_info_interval == 0
+                # if is_ready_to_log is True and self.config.logging.monitor_model_states is True:
+                #     from nanotron.scaling.monitor import monitor_model
+                #     nn_logs, state_handles = monitor_model(self.unwrapped_model, self.parallel_context)
+                #     constants.NN_STATES = nn_logs
 
                 # Training step
                 outputs, loss_avg = self.training_step(dataloader=self.current_dataloader)
@@ -434,12 +491,30 @@ class DistributedTrainer:
                     self.metadata.last_stage_idx
                 ].consumed_train_samples += self.global_batch_size
 
-                if (self.iteration_step - 1) % self.config.logging.iteration_step_info_interval == 0:
+                if is_ready_to_log is True:
                     self.train_step_logs(outputs=outputs, loss_avg=loss_avg)
+
+                    # for handle in state_handles:
+                    #     handle.remove()
+
+                    # if (
+                    #     self.config.logging.monitor_model_states is True
+                    #     and dist.get_rank(self.parallel_context.world_pg) == 0
+                    #     and wandb is not None
+                    # ):
+                    #     wandb.log({**convert_logs_to_flat_logs(nn_logs), "iteration_step": self.iteration_step})
+                    #     constants.NN_STATES = None
+
+                    #     optim_logs = get_optim_logs(
+                    #         self.params_id_to_param_names, self.optimizer.optimizer, prefix=""
+                    #     )
+                    #     wandb.log({**optim_logs, "iteration_step": self.iteration_step})
 
                 # Checkpoint
                 if self.iteration_step % self.config.checkpoints.checkpoint_interval == 0:
                     self.save_checkpoint()
+
+                # constants.ITERATION_STEP += 1
 
         dist.barrier()  # let's wait for everyone before leaving
 
@@ -474,31 +549,36 @@ class DistributedTrainer:
             self.grad_accumulator.fp32_grads_allreduce_handle.wait()
 
         # Sync tied weights
-        if not isinstance(self.model, DistributedDataParallel):
-            # Manually sync across DP if it's not handled by DDP
-            sync_gradients_across_dp(
-                module=self.model,
-                dp_pg=self.parallel_context.dp_pg,
-                reduce_op=dist.ReduceOp.AVG,
-                # TODO @thomasw21: This is too memory hungry, instead we run all_reduce
-                reduce_scatter=False,  # optimizer.inherit_from(ZeroDistributedOptimizer),
-                grad_accumulator=self.grad_accumulator,
-            )
+        # if not isinstance(self.model, DistributedDataParallel):
+        #     # Manually sync across DP if it's not handled by DDP
+        #     sync_gradients_across_dp(
+        #         module=self.model,
+        #         dp_pg=self.parallel_context.dp_pg,
+        #         reduce_op=dist.ReduceOp.AVG,
+        #         # TODO @thomasw21: This is too memory hungry, instead we run all_reduce
+        #         reduce_scatter=False,  # optimizer.inherit_from(ZeroDistributedOptimizer),
+        #         grad_accumulator=self.grad_accumulator,
+        #     )
 
         # TODO @nouamane: Put this in hooks so we can overlap communication with gradient computation on the last backward pass.
-        sync_tied_weights_gradients(
-            module=self.unwrapped_model,
-            parallel_context=self.parallel_context,
-            grad_accumulator=self.grad_accumulator,
-        )
+        # sync_tied_weights_gradients(
+        #     module=self.unwrapped_model,
+        #     parallel_context=self.parallel_context,
+        #     grad_accumulator=self.grad_accumulator,
+        # )
 
         # Clip gradients
         if self.config.optimizer.clip_grad is not None:
             # Unwrap DDP
+
+            # NOTE: in FP8, a tensor's requires_grad is set to False, because
+            # we don't want pytorch run autograd using its non-FP8 kernels.
+            from nanotron.fp8.tensor import FP8Tensor
+
             named_parameters = [
                 (name, param)
                 for name, param in self.unwrapped_model.get_named_params_with_correct_tied()
-                if param.requires_grad
+                if (param.data.__class__ == torch.Tensor and param.requires_grad) or param.data.__class__ == FP8Tensor
             ]
             self.grad_norm_unclipped = clip_grad_norm(
                 mp_pg=self.parallel_context.mp_pg,
@@ -610,7 +690,7 @@ class DistributedTrainer:
                 )
 
             # NOTE: only one rank writes to wandb
-            if dist.get_rank(self.parallel_context.world_pg) == self.logger_ranks[0] and wandb is not None:
+            if dist.get_rank(self.parallel_context.world_pg) == 0 and wandb is not None:
                 wandb.log(
                     {
                         **{log_item.tag: log_item.scalar_value for log_item in log_entries},
@@ -706,25 +786,29 @@ class DistributedTrainer:
                     root_folder=self.config.model.init_method.path,
                 )
             elif isinstance(self.config.model.init_method, (RandomInit, SpectralMupInit)):
-                unwrapped_model.init_model_randomly(config=self.config)
+                # unwrapped_model.init_model_randomly(config=self.config)
+                pass
 
                 # Synchronize parameters so that the model is consistent
                 # sync all params across dp
-                for _, param in sorted(model.named_parameters(), key=lambda x: x[0]):
-                    dist.all_reduce(param, op=dist.ReduceOp.AVG, group=self.parallel_context.dp_pg)
+                # TODO(xrsrke): uncomment this to support FP8 data parallelism
+                # for _, param in sorted(model.named_parameters(), key=lambda x: x[0]):
+                #     dist.all_reduce(param, op=dist.ReduceOp.AVG, group=self.parallel_context.dp_pg)
 
-                # sync tied params across tied groups
-                for (_, group_ranks), param in sorted(
-                    get_tied_id_to_param(
-                        parameters=model.parameters(),
-                        root_module=unwrapped_model,
-                    ).items(),
-                    key=lambda x: x[0],
-                ):
-                    group = self.parallel_context.world_ranks_to_pg[group_ranks]
-                    dist.all_reduce(param, op=dist.ReduceOp.AVG, group=group)
+                # # sync tied params across tied groups
+                # for (_, group_ranks), param in sorted(
+                #     get_tied_id_to_param(
+                #         parameters=model.parameters(),
+                #         root_module=unwrapped_model,
+                #     ).items(),
+                #     key=lambda x: x[0],
+                # ):
+                #     group = self.parallel_context.world_ranks_to_pg[group_ranks]
+                #     dist.all_reduce(param, op=dist.ReduceOp.AVG, group=group)
             else:
                 raise ValueError(f"Unsupported {self.config.model.init_method}")
+
+            assert 1 == 1
 
         return model
 

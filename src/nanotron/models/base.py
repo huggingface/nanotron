@@ -12,6 +12,7 @@ from nanotron.distributed import ProcessGroup
 from nanotron.logging import log_rank
 from nanotron.parallel.context import ParallelContext
 from nanotron.parallel.pipeline_parallel.block import PipelineBlock
+from nanotron.parallel.tensor_parallel.nn import TensorParallelEmbedding
 
 if TYPE_CHECKING:
     from nanotron.config import NanotronConfigs
@@ -65,13 +66,13 @@ class NanotronModel(nn.Module, metaclass=ABCMeta):
         """Tie custom parameters. For example for MQA marks kv heads as tied."""
         pass
 
-    def get_embeddings_lm_head_tied_names(self) -> list[str]:
+    def get_embeddings_lm_head_tied_names(self) -> List[str]:
         """Returns the names of the embeddings and lm_head weights that are tied together. Returns empty list if not tied.
 
         Example for GPT2 model: ["model.token_position_embeddings.pp_block.token_embedding.weight", "model.lm_head.pp_block.weight"]
         """
         return []
-    
+
     def get_named_params_without_weight_decay(self) -> List[str]:
         """Return a list of named parameters that should not have weight decay applied to them."""
         return []
@@ -241,7 +242,7 @@ def build_model(
 @contextmanager
 def init_on_device_and_dtype(
     device: torch.device = torch.device("cpu"),
-    dtype: torch.dtype = torch.float,
+    dtype: torch.dtype = torch.float32,
 ):
     """
     A context manager under which models are initialized with all parameters on the specified device.
@@ -263,23 +264,47 @@ def init_on_device_and_dtype(
     old_register_parameter = nn.Module.register_parameter
     old_register_buffer = nn.Module.register_buffer
 
+    MODULES_THAT_IN_FLOAT16 = [TensorParallelEmbedding, nn.LayerNorm]
+
     def register_empty_parameter(module, name, param):
         old_register_parameter(module, name, param)
         if param is not None:
-            if isinstance(param, DTypeInvariantTensor):
+            # NOTE(xrsrke): FP8Linear automatically quantizes its parameters to FP8
+            # so no need to convert them to FP8 here, also we initialize them with FP32
+            # first
+            IS_CONVERT_TO_FLOAT16 = False
+            if any(isinstance(module, m) for m in MODULES_THAT_IN_FLOAT16):
+                IS_CONVERT_TO_FLOAT16 = True
+
+            new_dtype = dtype
+
+            if IS_CONVERT_TO_FLOAT16:
+                new_dtype = torch.float16
+
+            if isinstance(param, DTypeInvariantTensor) or new_dtype == torch.int8:
                 # if param is DTypeInvariantTensor we should avoid updating it
                 param.data = param.data.to(device)
             else:
-                param.data = param.data.to(device, dtype)
+                param.data = param.data.to(device, new_dtype)
 
     def register_empty_buffer(module, name, buffer, persistent=True):
         old_register_buffer(module, name, buffer, persistent=persistent)
         if buffer is not None:
-            if isinstance(buffer, DTypeInvariantTensor):
+            IS_CONVERT_TO_FLOAT16 = False
+            if any(isinstance(module, m) for m in MODULES_THAT_IN_FLOAT16):
+                IS_CONVERT_TO_FLOAT16 = True
+
+            new_dtype = dtype
+
+            if IS_CONVERT_TO_FLOAT16:
+                new_dtype = torch.float16
+
+            # NOTE(xrsrke): FP8-LM don't quantize its buffers to FP8
+            if isinstance(buffer, DTypeInvariantTensor) or new_dtype == torch.int8:
                 # if buffer is DTypeInvariantTensor we should avoid updating it
                 buffer.data = buffer.data.to(device)
             else:
-                module._buffers[name] = module._buffers[name].to(device, dtype)
+                module._buffers[name] = module._buffers[name].to(device, new_dtype)
 
     # Patch tensor creation
     tensor_constructors_to_patch = {
@@ -289,8 +314,10 @@ def init_on_device_and_dtype(
 
     def patch_tensor_constructor(fn):
         def wrapper(*args, **kwargs):
+            # NOTE: nanotron automatically sets the device and dtype of the tensor
+            # but for FP8 training, we initializes with float16 first
             kwargs["device"] = device
-            kwargs["dtype"] = dtype
+            kwargs["dtype"] = torch.float32 if dtype == torch.int8 else dtype
             return fn(*args, **kwargs)
 
         return wrapper

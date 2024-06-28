@@ -55,15 +55,15 @@ class SelectiveScanFn(torch.autograd.Function):
             return out_z if not return_last_state else (out_z, last_state)
 
     @staticmethod
-    def backward(ctx, dout, *args):
+    def backward(ctx, doubt, *args):
         if not ctx.has_z:
             u, delta, A, B, C, D, delta_bias, x = ctx.saved_tensors
             z = None
             out = None
         else:
             u, delta, A, B, C, D, z, delta_bias, x, out = ctx.saved_tensors
-        if dout.stride(-1) != 1:
-            dout = dout.contiguous()
+        if doubt.stride(-1) != 1:
+            doubt = doubt.contiguous()
         # The kernel supports passing in a pre-allocated dz (e.g., in case we want to fuse the
         # backward of selective_scan_cuda with the backward of chunk).
         # Here we just pass in None and dz will be allocated in the C++ code.
@@ -76,7 +76,7 @@ class SelectiveScanFn(torch.autograd.Function):
             D,
             z,
             delta_bias,
-            dout,
+            doubt,
             x,
             out,
             None,
@@ -314,8 +314,8 @@ class MambaInnerFn(torch.autograd.Function):
 
     @staticmethod
     @custom_bwd
-    def backward(ctx, dout):
-        # dout: (batch, seqlen, dim)
+    def backward(ctx, doubt):
+        # doubt: (batch, seqlen, dim)
         (
             xz,
             conv1d_weight,
@@ -356,10 +356,10 @@ class MambaInnerFn(torch.autograd.Function):
         dx = dx.squeeze(2)
         dz = dz.squeeze(2)
 
-        dout = rearrange(dout, "b l e -> b e l")
+        doubt = rearrange(doubt, "b l e -> b e l")
 
-        if dout.stride(-1) != 1:
-            dout = dout.contiguous()
+        if doubt.stride(-1) != 1:
+            doubt = doubt.contiguous()
 
         (dconv1d_out, ddelta, dA, dB, dC, dD, ddelta_bias, dz, out_z,) = selective_scan_cuda.bwd(
             conv1d_out,
@@ -370,7 +370,7 @@ class MambaInnerFn(torch.autograd.Function):
             D,
             z,
             delta_bias,
-            dout,
+            doubt,
             scan_intermediates,
             out,
             dz,

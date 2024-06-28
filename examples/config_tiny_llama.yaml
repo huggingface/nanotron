@@ -2,7 +2,7 @@ checkpoints:
   checkpoint_interval: 10
   checkpoints_path: checkpoints
   checkpoints_path_is_shared_file_system: false
-  resume_checkpoint_path: null
+  # resume_checkpoint_path: checkpoints
   save_initial_state: false
 data_stages:
 - data:
@@ -42,9 +42,10 @@ logging:
   iteration_step_info_interval: 1
   log_level: info
   log_level_replica: info
+  monitor_model_states: true
 model:
   ddp_bucket_cap_mb: 25
-  dtype: bfloat16
+  dtype: float8
   init_method:
     std: 0.025
   make_vocab_size_divisible_by: 1
@@ -68,15 +69,15 @@ model:
     use_cache: true
     vocab_size: 256
 optimizer:
-  accumulate_grad_in_fp32: true
+  accumulate_grad_in_fp32: false
   clip_grad: 1.0
   learning_rate_scheduler:
-    learning_rate: 0.0003
+    learning_rate: 0.001
     lr_decay_starting_step: null
     lr_decay_steps: 13
-    lr_decay_style: cosine
+    lr_decay_style: linear
     lr_warmup_steps: 2
-    lr_warmup_style: linear
+    lr_warmup_style: constant
     min_decay_lr: 1.0e-05
   optimizer_factory:
     adam_beta1: 0.9
@@ -84,12 +85,12 @@ optimizer:
     adam_eps: 1.0e-08
     name: adamW
     torch_adam_is_fused: true
-  weight_decay: 0.01
+  weight_decay: 0.1
   zero_stage: 0
 parallelism:
-  dp: 2
+  dp: 1
   expert_parallel_size: 1
-  pp: 2
+  pp: 1
   pp_engine: 1f1b
   tp: 2
   tp_linear_async_communication: true

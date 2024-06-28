@@ -10,6 +10,29 @@ def test_nanotron_parameter_does_not_override_some_parameter_variable():
     assert not hasattr(param, NanotronParameter.NANOTRON_PARAMETER_METADATA_ATTRIBUTE_NAME)
 
 
+def test_create_nanotron_parameter():
+    data = torch.randn(3)
+    param = nn.Parameter(data)
+    param = NanotronParameter(param)
+
+    assert isinstance(param.data, torch.Tensor)
+    assert torch.allclose(param, data)
+    assert torch.allclose(param.data, data)
+
+
+def test_set_new_value_for_nanotron_parameter():
+    param = nn.Parameter(torch.randn(3))
+    param = NanotronParameter(param)
+
+    before_data = param.data.clone()
+    new_data = torch.randn_like(param.data)
+    param.data = new_data.clone()
+
+    assert isinstance(param, NanotronParameter)
+    assert not torch.allclose(before_data, param.data)
+    assert torch.allclose(param.data, new_data)
+
+
 def test_uncastable_tensor():
     # Test that we can create an DTypeInvariantTensor
     x = DTypeInvariantTensor(torch.randn(3, 3))

@@ -40,10 +40,19 @@ class BenchArgs:
 
 @dataclass
 class LoggingArgs:
-    """Arguments related to logging"""
+    """
+    Arguments related to logging
+
+    monitor_model_states: whether to monitor the model states including the statistics
+    of activations, input gradients, output gradients and model weights during training.
+
+    # NOTE:
+    - You could use the `iteration_step_info_interval` to control the frequency of logging the model states.
+    """
 
     log_level: Optional[str] = None
     log_level_replica: Optional[str] = None
+    monitor_model_states: bool = False
     iteration_step_info_interval: Optional[int] = 1
 
     def __post_init__(self):
@@ -293,10 +302,19 @@ class AdamWOptimizerArgs:
 
 
 @dataclass
+class AdamOptimizerArgs:
+    adam_eps: float
+    adam_beta1: float
+    adam_beta2: float
+    torch_adam_is_fused: bool
+    name: str = "adam"
+
+
+@dataclass
 class OptimizerArgs:
     """Arguments related to the optimizer and learning rate"""
 
-    optimizer_factory: Union[SGDOptimizerArgs, AdamWOptimizerArgs]
+    optimizer_factory: Union[SGDOptimizerArgs, AdamOptimizerArgs, AdamWOptimizerArgs]
     zero_stage: int
     weight_decay: float
     clip_grad: Optional[float]

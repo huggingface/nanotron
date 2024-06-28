@@ -2,6 +2,7 @@ import dataclasses
 from typing import List, Sequence, Tuple
 
 import torch
+
 from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.utils import get_untyped_storage, tensor_from_untyped_storage
@@ -399,7 +400,7 @@ class BatchTensorSendRecvState:
     def add_recv(self, from_rank: int, tag: int = 0) -> int:
         """
         Only add p2p ops for the first operation, as `_recv_second_metadata` and `_recv_data_p2p_op`
-        require results from the first metadata to be transfered first.
+        require results from the first metadata to be transferred first.
         Return: index of the recv_buffer in `self.recv_first_metadata_buffers`
         """
         buffer, recv_op = self.p2p._recv_first_metadata_p2p_op(from_rank=from_rank, tag=tag)

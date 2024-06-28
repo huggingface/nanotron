@@ -19,6 +19,11 @@ import torch
 from torch.nn import functional as F
 
 import nanotron.distributed as dist
+import nanotron.fp8.functional as fp8_functional
+from nanotron.fp8.dtypes import DTypes
+from nanotron.fp8.linear import FP8LinearMeta
+from nanotron.fp8.tensor import FP8Tensor
+from nanotron.parallel.parameters import NanotronParameter
 from nanotron.parallel.tensor_parallel.distributed_differentiable_primitives import (
     differentiable_all_gather,
     differentiable_all_reduce_sum,
@@ -89,10 +94,10 @@ class _ShardedCrossEntropy(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_output):
-        # Retreive tensors from the forward path.
+        # Retrieve tensors from the forward path.
         softmax, target_mask, masked_target_1d = ctx.saved_tensors
 
-        # All the inputs have softmax as thier gradient.
+        # All the inputs have softmax as their gradient.
         grad_input = softmax
         # For simplicity, work with the 2D gradient.
         sharded_hidden_size = softmax.size()[-1]
@@ -121,7 +126,7 @@ class _ColumnLinearAsyncCommunication(torch.autograd.Function):
 
     @staticmethod
     @assert_cuda_max_connections_set_to_1
-    def forward(ctx, tensor, weight, bias, group, tp_mode):
+    def forward(ctx, tensor, weight, bias, group, tp_mode, metadatas: Optional[FP8LinearMeta] = None):
         ctx.use_bias = bias is not None
         ctx.tp_mode = tp_mode
         ctx.group = group
@@ -229,6 +234,7 @@ class _ColumnLinearAsyncCommunication(torch.autograd.Function):
                             mat2=weight.t(),
                             out=before_shard.view(first_dims, output_size),
                         )
+
                 if after_shard.numel() > 0:
                     first_dims = math.prod(after_shard.shape[:-1])
                     if bias is None:
@@ -345,9 +351,11 @@ def column_linear(
     group: dist.ProcessGroup,
     tp_mode: TensorParallelLinearMode,
     async_communication: bool,
+    metadatas: Optional[FP8LinearMeta] = None,
+    name: Optional[str] = None,
 ):
     if async_communication:
-        return _ColumnLinearAsyncCommunication.apply(input, weight, bias, group, tp_mode)
+        return _ColumnLinearAsyncCommunication.apply(input, weight, bias, group, tp_mode, metadatas)
 
     if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
         input = differentiable_identity(input, group=group)
@@ -356,7 +364,23 @@ def column_linear(
     else:
         raise ValueError(f"Got unexpected mode: {tp_mode}.")
 
-    return F.linear(input, weight, bias)
+    if isinstance(weight.data, FP8Tensor):
+        if bias is not None:
+            bias_requires_grad = bias.requires_grad
+            bias = bias.data if isinstance(bias, NanotronParameter) else bias
+            # NOTE: hacky
+            bias.requires_grad = bias_requires_grad
+
+        from nanotron import constants
+
+        if name not in constants.TRACKING_FP8_PARAM:
+            constants.TRACKING_FP8_PARAM[name] = weight
+
+        return fp8_functional.linear(
+            input, weight.data, bias, accum_qtype=DTypes.KFLOAT16, metadatas=metadatas, name=name
+        )
+    else:
+        return F.linear(input, weight, bias)
 
 
 class _RowLinearAsyncCommunication(torch.autograd.Function):
@@ -467,11 +491,21 @@ def row_linear(
     group: dist.ProcessGroup,
     tp_mode: TensorParallelLinearMode,
     async_communication: bool,
+    metadatas: Optional[FP8LinearMeta] = None,
+    name: Optional[str] = None,
 ):
     if async_communication:
         return _RowLinearAsyncCommunication.apply(input, weight, bias, group, tp_mode)
 
-    out = F.linear(input, weight, bias)
+    if isinstance(weight.data, FP8Tensor):
+        if bias is not None:
+            bias = bias.data if isinstance(bias, NanotronParameter) else bias
+
+        out = fp8_functional.linear(
+            input, weight.data, bias, accum_qtype=DTypes.KFLOAT16, metadatas=metadatas, name=name
+        )
+    else:
+        out = F.linear(input, weight, bias)
 
     if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
         out = differentiable_all_reduce_sum(out, group=group)

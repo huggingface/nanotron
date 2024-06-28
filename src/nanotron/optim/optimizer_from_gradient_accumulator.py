@@ -1,5 +1,9 @@
-from functools import cache
 from typing import Any, Callable, Dict, Iterable, Optional, Set, Tuple, Union
+
+try:
+    from functools import cache
+except ImportError:
+    from functools import lru_cache as cache
 
 import torch
 

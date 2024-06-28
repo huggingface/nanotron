@@ -8,12 +8,9 @@ torchrun --nproc_per_node=4 examples/doremi/train_doremi.py --config-file exampl
 """
 import argparse
 
-from nanotron.config import get_config_from_file
-
 from doremi.config import DoReMiConfig
 from doremi.dataloader import get_dataloader, get_datasets
 from doremi.trainer import DoReMiTrainer
-
 
 def get_args():
     parser = argparse.ArgumentParser()

@@ -10,12 +10,12 @@ torchrun --nproc_per_node=4 examples/doremi/train_doremi.py --config-file exampl
 import argparse
 
 import torch
+from nanotron.config import get_config_from_file
+
 from doremi.config import DoReMiConfig
 from doremi.dataloader import get_dataloader, get_datasets
 from doremi.trainer import ReferenceTrainer
 from doremi.utils import compute_domain_weights_based_on_token_count
-
-from nanotron.config import get_config_from_file
 
 
 def get_args():
