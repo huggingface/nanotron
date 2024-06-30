@@ -22,10 +22,10 @@ from torch import nn as torch_nn
 from torch.nn.parallel import DistributedDataParallel
 
 
-@pytest.mark.parametrize("tp,dp,pp", [pytest.param(1, i, 1) for i in range(1, min(4, available_gpus()) + 1)])
+@pytest.mark.parametrize("tp,dp,pp,sp", [pytest.param(1, i, 1, 1) for i in range(1, min(4, available_gpus()) + 1)])
 @rerun_if_address_is_in_use()
-def test_zero_optimizer(tp: int, dp: int, pp: int):
-    init_distributed(pp=pp, dp=dp, tp=tp)(_test_zero_optimizer)()
+def test_zero_optimizer(tp: int, dp: int, pp: int, sp: int):
+    init_distributed(pp=pp, dp=dp, tp=tp, sp=sp)(_test_zero_optimizer)()
 
 
 def _test_zero_optimizer(parallel_context: ParallelContext):
@@ -198,16 +198,16 @@ def _test_zero_optimizer(parallel_context: ParallelContext):
     parallel_context.destroy()
 
 
-@pytest.mark.parametrize("tp,dp,pp", [pytest.param(2, i, 1) for i in range(1, available_gpus() // 2 + 1)])
+@pytest.mark.parametrize("tp,dp,pp,sp", [pytest.param(2, i, 1, 1) for i in range(1, available_gpus() // 2 + 1)])
 @pytest.mark.parametrize("tp_mode", list(TensorParallelLinearMode))
 @pytest.mark.parametrize("async_communication", [False, True])
 @rerun_if_address_is_in_use()
 def test_zero_optimizer_with_tp(
-    tp: int, dp: int, pp: int, tp_mode: TensorParallelLinearMode, async_communication: bool
+    tp: int, dp: int, pp: int, sp: int, tp_mode: TensorParallelLinearMode, async_communication: bool
 ):
     if tp_mode is TensorParallelLinearMode.ALL_REDUCE and async_communication:
         pytest.skip("ALL_REDUCE mode does not support async communication")
-    init_distributed(pp=pp, dp=dp, tp=tp)(_test_zero_optimizer_with_tp)(
+    init_distributed(pp=pp, dp=dp, tp=tp, sp=sp)(_test_zero_optimizer_with_tp)(
         tp_mode=tp_mode, async_communication=async_communication
     )
 

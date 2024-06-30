@@ -9,14 +9,14 @@ from nanotron.parallel.pipeline_parallel.block import PipelineBlock
 from torch import nn
 
 
-@pytest.mark.parametrize("tp,dp,pp", [(1, 1, 1), (2, 2, 2)])
+@pytest.mark.parametrize("tp,dp,pp,sp", [(1, 1, 1, 1), (2, 2, 2, 1)])
 @pytest.mark.skip
 @rerun_if_address_is_in_use()
-def test_get_named_modules_in_pp_rank(tp: int, dp: int, pp: int):
+def test_get_named_modules_in_pp_rank(tp: int, dp: int, pp: int, sp: int):
     model_args = ModelArgs(init_method=RandomInit(std=1.0), model_config=TINY_LLAMA_CONFIG)
     config = get_llama_training_config(model_args)
 
-    init_distributed(tp=tp, dp=dp, pp=pp)(_test_get_named_modules_in_pp_rank)(config=config)
+    init_distributed(tp=tp, dp=dp, pp=pp, sp=sp)(_test_get_named_modules_in_pp_rank)(config=config)
 
 
 def _test_get_named_modules_in_pp_rank(
