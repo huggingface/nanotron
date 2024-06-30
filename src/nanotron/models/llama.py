@@ -121,6 +121,7 @@ class RotaryEmbedding(nn.Module):
         return x_out.type(dtype)
 
 
+## Copy from transformers. Non interleaved version of RoPE. Will be refactored later
 def rotate_half(x):
     """Rotates half the hidden dims of the input."""
     x1 = x[..., : x.shape[-1] // 2]
@@ -128,13 +129,13 @@ def rotate_half(x):
     return torch.cat((-x2, x1), dim=-1)
 
 
-### llama
 class LlamaRotaryEmbedding(nn.Module):
     def __init__(self, dim: int, end: int, theta: float = 500000.0):
         super().__init__()
         self.dim = dim
         self.end = end
         self.theta = theta
+        log_rank(f"Initialize LlamaRotaryEmbedding: RoPE Theta = {theta}", logger=logger, level=logging.DEBUG, rank=0)
         self.init_rotary_embeddings()
 
     def init_rotary_embeddings(self):
@@ -264,8 +265,6 @@ class RingFlashAttention(nn.Module):
         local_v: torch.Tensor,  # [batch_size, kv_length, n_local_kv_heads, inner_dim]
     ):
         # NOTE: this scale is for µTransfer,
-        # in SP, we use sqrt(1/d_h)
-        # softmax_scale = 1 / local_q.shape[-1] if self.is_using_mup else None
         causal = True
 
         if zigzag:
@@ -294,7 +293,6 @@ class RingFlashAttention(nn.Module):
                 return_attn_probs=True,
                 group=self.pg,
             )
-        assert ring_out.requires_grad
         return ring_out
 
 
@@ -448,11 +446,13 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             self.rotary_embedding = RotaryEmbedding(
                 dim=self.d_qk,
                 end=config.max_position_embeddings,
+                theta=config.rope_theta,
             )
         else:
             self.rotary_embedding = LlamaRotaryEmbedding(
                 dim=self.d_qk,
                 end=config.max_position_embeddings,
+                theta=config.rope_theta,
             )
         self.rope_interleaved = config.rope_interleaved
 
@@ -469,7 +469,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             bias=False,
             async_communication=tp_linear_async_communication,
         )
-
+        # Normal attention when Sequence parallelism group size = 1
         if not sp_pg.size() > 1:
             self.attention = CoreAttention(
                 config,
@@ -547,15 +547,11 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             # Note: keep track of old rotary embedding end to check if we need to enlarge k_cache and v_cache
             old_rotary_embed_end = self.rotary_embedding.end
 
-            # Rotate half rotary_embedding
-            # cos, sin = self.rotary_embedding(value_states, position_ids)
-            # query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
-
-            # interleaved
+            # interleaved version.
             if self.rope_interleaved:
                 query_states = self.rotary_embedding(query_states, position_ids=position_ids)
                 key_states = self.rotary_embedding(key_states, position_ids=position_ids)
-            # llama rotary position embedding
+            # non interleaved version.
             else:
                 cos, sin = self.rotary_embedding(value_states, position_ids)
                 query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
@@ -709,16 +705,13 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             )
 
         else:  # Training case
-            # # # # test my implementation. will delete later
-            # cos, sin = self.rotary_embedding(value_states, position_ids)
-            # query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
-
             # apply rotary embedding. Will adapt to flash rotary embedding later
+            # interleaved version.
             if self.sp_pg.size() > 1:
                 if self.rope_interleaved:
                     query_states = self.rotary_embedding(query_states, position_ids=position_ids)
                     key_states = self.rotary_embedding(key_states, position_ids=position_ids)
-                # llama rotary position embedding
+                # non interleaved version.
                 else:
                     cos, sin = self.rotary_embedding(value_states, position_ids)
                     query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
@@ -735,7 +728,6 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                 key_states, value_states = torch.split(key_value_states, 1, dim=2)
 
             kv_length = key_states.shape[1]
-
             ## ring attention
             if self.sp_pg.size() > 1:
                 key_states = key_states.view(batch_size, kv_length, self.n_local_kv_heads, self.d_qk)
@@ -746,7 +738,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                     key_states,
                     value_states,
                 )
-                assert attention_output.requires_grad
+            # flash attention
             else:
                 query_states = query_states.view(batch_size * q_length, self.n_local_q_heads, self.d_qk)
                 key_states = key_states.view(batch_size * kv_length, self.n_local_kv_heads, self.d_qk)
@@ -854,9 +846,6 @@ class LlamaModel(nn.Module):
         parallel_config: Optional[ParallelismArgs],
     ):
         super().__init__()
-
-        if parallel_context.sp_pg.size() > 1:
-            log_rank("Using ring attention", logger=logger, level=logging.INFO, rank=0)
 
         # Declare all the nodes
         self.p2p = P2P(parallel_context.pp_pg, device=torch.device("cuda"))
@@ -1053,7 +1042,6 @@ class Loss(nn.Module):
             # normal split
             else:
                 label_ids, label_mask = normal_split(rank, world_size, label_ids, label_mask)
-
         loss = sharded_cross_entropy(
             sharded_logits, label_ids.transpose(0, 1).contiguous(), group=self.tp_pg, dtype=torch.float
         ).transpose(0, 1)
@@ -1061,7 +1049,6 @@ class Loss(nn.Module):
         loss = masked_mean(loss, label_mask, dtype=torch.float)
         # I think indexing causes a sync we don't actually want
         # loss = loss[label_mask].sum()
-
         return {"loss": loss}
 
 
