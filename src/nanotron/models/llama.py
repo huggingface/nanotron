@@ -53,13 +53,13 @@ def compute_stas(tensor, log_tensor: bool = False, save_tensor: bool = False):
         )
 
     logs = {
-        "mean": tensor.detach().mean().item(),
-        "std": tensor.detach().std().item(),
+        "mean": tensor.cpu().mean().item(),
+        "std": tensor.cpu().std().item(),
         # "var": tensor.var().item(),
-        "norm": tensor.norm().item(),
+        "norm": tensor.cpu().norm().item(),
         # "min": tensor.min().item(),
         # "max": tensor.max().item(),
-        "amax": tensor.detach().abs().max().item(),
+        "amax": tensor.cpu().amax().item(),
     }
     # if log_tensor:
     #     import torchshow as ts
@@ -474,21 +474,60 @@ class CausalSelfAttention(nn.Module, AttachableStore):
 
         from nanotron.parallel.sharded_parameters import SplitConfig, create_sharded_parameter_from_config
 
-        if constants.CONFIG.infini_attention.turn_on_memory is True:
+        # if constants.CONFIG.infini_attention.turn_on_memory is True:
 
-            balance_factors = nn.Parameter(
-                torch.zeros(self.n_local_q_heads, device=device, dtype=torch.float32)
-                # torch.randn(self.n_local_q_heads, device=device, dtype=torch.float32).normal_(mean=0.0, std=1/math.sqrt(config.num_attention_heads))
-                # torch.randn(self.n_local_q_heads, device=device, dtype=torch.float32).normal_(mean=0.0, std=1/math.sqrt(self.n_local_q_heads))
-            )
-            self.balance_factors = create_sharded_parameter_from_config(
-                parameter=balance_factors,
-                pg=tp_pg,
-                split_config=SplitConfig(
-                    split_dim=0,
-                    # contiguous_chunks=(self.n_local_heads, self.n_local_heads)
-                ),
-            )
+        #     # balance_factors = nn.Parameter(
+        #     #     torch.zeros(self.n_local_q_heads, device=device, dtype=torch.float32)
+        #     #     # torch.randn(self.n_local_q_heads, device=device, dtype=torch.float32).normal_(mean=0.0, std=1/math.sqrt(config.num_attention_heads))
+        #     #     # torch.randn(self.n_local_q_heads, device=device, dtype=torch.float32).normal_(mean=0.0, std=1/math.sqrt(self.n_local_q_heads))
+        #     # )
+        #     pass
+
+        if constants.CONFIG.infini_attention.balance_init_type == "zeros":
+            log_rank("Zero initialized balance factors", logger=logger, level=logging.WARNING, rank=0)
+            balance_factors = nn.Parameter(torch.zeros(self.n_local_q_heads, device=device, dtype=torch.float32))
+        elif constants.CONFIG.infini_attention.balance_init_type == "normal_randn":
+            log_rank("normal_randn initialized balance factors", logger=logger, level=logging.WARNING, rank=0)
+            balance_factors = nn.Parameter(torch.randn(self.n_local_q_heads, device=device, dtype=torch.float32))
+        else:
+            raise ValueError(f"balance_init_type {constants.CONFIG.infini_attention.balance_init_type} not supported")
+
+        self.balance_factors = create_sharded_parameter_from_config(
+            parameter=balance_factors,
+            pg=tp_pg,
+            split_config=SplitConfig(
+                split_dim=0,
+                # contiguous_chunks=(self.n_local_heads, self.n_local_heads)
+            ),
+        )
+
+        if constants.CONFIG.infini_attention.balance_act_type == "orig_sigmoid":
+            balance_act_func = F.sigmoid
+        elif constants.CONFIG.infini_attention.balance_act_type == "orig_tanh":
+            balance_act_func = F.tanh
+        elif constants.CONFIG.infini_attention.balance_act_type == "hard_sigmoid":
+
+            def hard_sigmoid(x):
+                return torch.clamp(x * 0.2 + 0.5, min=0.0, max=1.0)
+
+            balance_act_func = hard_sigmoid
+        elif constants.CONFIG.infini_attention.balance_act_type == "tanh_abs":
+
+            def tanh_abs(x):
+                return torch.tanh(x).abs()
+
+            balance_act_func = tanh_abs
+        else:
+            raise ValueError(f"balance_act_type {constants.CONFIG.infini_attention.balance_act_type} not supported")
+
+        log_rank(
+            f"Balance act func is {balance_act_func}",
+            logger=logger,
+            level=logging.WARNING,
+            rank=0,
+        )
+
+        self.balance_act_func = balance_act_func
 
         log_rank(
             f"Segment length is {self.segment_length}, turn_on_memory: {constants.CONFIG.infini_attention.turn_on_memory is True}",
@@ -540,7 +579,21 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         if constants.GLOBAL_STEP == 11 and constants.IS_RANK_TO_MONITOR is True:
             assert 1 == 1
 
-        raw_global_weights = F.sigmoid(self.balance_factors)
+        # if constants.CONFIG.infini_attention.balance_act_type == "orig_sigmoid":
+        #     raw_global_weights = F.sigmoid(self.balance_factors)
+        # elif constants.CONFIG.infini_attention.balance_act_type == "orig_tanh":
+        #     raw_global_weights = F.tanh(self.balance_factors)
+        # elif constants.CONFIG.infini_attention.balance_act_type == "hard_sigmoid":
+        #     def hard_sigmoid(x):
+        #         return torch.clamp(x * 0.2 + 0.5, min=0.0, max=1.0)
+        #     raw_global_weights = hard_sigmoid(self.balance_factors)
+        # elif constants.CONFIG.infini_attention.balance_act_type == "tanh_abs":
+        #     def tanh_abs(x):
+        #         return torch.tanh(x).abs()
+        #     raw_global_weights = tanh_abs(self.balance_factors)
+        # else:
+        #     raise ValueError(f"balance_act_type {constants.CONFIG.infini_attention.balance_act_type} not supported")
+        raw_global_weights = self.balance_act_func(self.balance_factors)
 
         # raw_global_weights = F.tanh(self.balance_factors).abs()
         # raw_global_weights = raw_global_weights * raw_global_weights.mean()
@@ -650,12 +703,6 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                         logs[f"layer_{self.layer_idx}:seg_{idx}:key_states"] = compute_stas(key_states)
                         logs[f"layer_{self.layer_idx}:seg_{idx}:value_states"] = compute_stas(value_states)
 
-                        logs[f"layer_{self.layer_idx}:seg_{idx}:global_weights"] = compute_stas(
-                            orig_global_weights, log_tensor=True
-                        )
-                        logs[f"layer_{self.layer_idx}:seg_{idx}:local_weights"] = compute_stas(
-                            orig_local_weights, log_tensor=True
-                        )
                         logs[f"layer_{self.layer_idx}:seg_{idx}:local_attn_outputs"] = compute_stas(local_attn_outputs)
                         logs[f"layer_{self.layer_idx}:seg_{idx}:retrieved_memory"] = compute_stas(retrieved_memory)
                         logs[f"layer_{self.layer_idx}:seg_{idx}:attention_output"] = compute_stas(attention_output)
@@ -680,6 +727,8 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                 import wandb
 
                 for i in range(raw_global_weights.shape[0]):
+                    logs[f"layer_{self.layer_idx}:global_weights"] = compute_stas(orig_global_weights, log_tensor=True)
+                    logs[f"layer_{self.layer_idx}:local_weights"] = compute_stas(orig_local_weights, log_tensor=True)
                     logs[f"layer_{self.layer_idx}:global_weights:head_{i}"] = raw_global_weights[i].item()
                     logs[f"layer_{self.layer_idx}:balance_factors:head_{i}"] = self.balance_factors[i].item()
 

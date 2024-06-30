@@ -227,7 +227,8 @@ class OneForwardOneBackwardPipelineEngine(PipelineEngine):
 
         from transformers import AutoTokenizer
 
-        self.tokenizer = AutoTokenizer.from_pretrained("lvwerra/the-tokenizer-v1")
+        # self.tokenizer = AutoTokenizer.from_pretrained("lvwerra/the-tokenizer-v1")
+        self.tokenizer = AutoTokenizer.from_pretrained("/fsx/haojun/lighteval_evaluation_model/NanotronLlama3-8B")
 
     def train_batch_iter(
         self,

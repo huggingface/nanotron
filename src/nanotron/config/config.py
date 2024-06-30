@@ -301,6 +301,9 @@ class GenerationArgs:
 class InfiniAttentionArgs:
     segment_length: int
     turn_on_memory: bool
+    balance_factor_lr: float
+    balance_act_type: str
+    balance_init_type: str
 
 
 @dataclass

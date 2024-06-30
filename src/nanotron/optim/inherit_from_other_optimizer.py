@@ -49,6 +49,13 @@ class InheritFromOtherOptimizer(BaseOptimizer):
     def param_groups(self):
         return self.optimizer.param_groups
 
+    # @property
+    # def param_index_to_name(self):
+    #     state_id_to_name = {id(state): self.id_to_name[id(param)] for param, state in self.optimizer.state.items()}
+    #     optim_state_dict["names"] = {
+    #         index: state_id_to_name[id(state)] for index, state in optim_state_dict["state"].items()
+    #     }
+
     def inherit_from(self, cls):
         if isinstance(self, cls):
             return True

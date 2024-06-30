@@ -172,10 +172,16 @@ class DistributedTrainer:
             self.model.module if isinstance(self.model, DistributedDataParallel) else self.model
         )
 
+        # parametrization_method = (
+        #     ParametrizationMethod.STANDARD
+        #     if isinstance(self.config.model.init_method, RandomInit)
+        #     else ParametrizationMethod.SPECTRAL_MUP
+        # )
+
         parametrization_method = (
-            ParametrizationMethod.STANDARD
-            if isinstance(self.config.model.init_method, RandomInit)
-            else ParametrizationMethod.SPECTRAL_MUP
+            ParametrizationMethod.SPECTRAL_MUP
+            if isinstance(self.config.model.init_method, SpectralMupInit)
+            else ParametrizationMethod.STANDARD
         )
 
         # Init optimizer
@@ -306,11 +312,12 @@ class DistributedTrainer:
             rank=0,
         )
 
-        current_time = datetime.datetime.now().strftime("%d/%m/%Y_%H:%M:%S")
+        datetime.datetime.now().strftime("%d/%m/%Y_%H:%M:%S")
         if dist.get_rank(self.parallel_context.world_pg) == self.logger_ranks[0] and wandb is not None:
             wandb.init(
                 project=self.config.general.project,
-                name=f"{current_time}_{self.config.general.run}",
+                # name=f"{current_time}_{self.config.general.run}",
+                name=f"{self.config.general.run}",
                 config={"nanotron_config": self.config.as_dict()},
             )
             # wandb.watch(self.model, log="all")
@@ -428,6 +435,12 @@ class DistributedTrainer:
 
         prof = get_profiler(config=self.config)
         torch.cuda.empty_cache()
+        rank_to_monitor = (
+            dist.get_rank(group=self.parallel_context.dp_pg) == 0
+            and dist.get_rank(group=self.parallel_context.tp_pg) == 0
+        )
+        constants.IS_RANK_TO_MONITOR = rank_to_monitor
+
         with prof:
             for self.iteration_step in range(self.start_iteration_step + 1, self.config.tokens.train_steps + 1):
                 constants.GLOBAL_STEP = self.iteration_step
@@ -435,10 +448,14 @@ class DistributedTrainer:
                 if isinstance(prof, torch.profiler.profile):
                     prof.step()
 
-                if (self.iteration_step - 1) % constants.LOG_STATE_INTERVAL == 0:
+                if (
+                    self.iteration_step - 1
+                ) % constants.LOG_STATE_INTERVAL == 0 and constants.IS_RANK_TO_MONITOR is True:
                     from nanotron.debug.monitor import monitor_nanotron_model
 
-                    nn_logs, nn_handles = monitor_nanotron_model(self.model, self.parallel_context)
+                    nn_logs, nn_handles = monitor_nanotron_model(
+                        run_name=self.config.general.run, model=self.model, parallel_context=self.parallel_context
+                    )
 
                 self.iteration_start_time = time.time()
                 self._update_dataloader_based_on_training_stages(dataloader_or_dls)
@@ -452,7 +469,9 @@ class DistributedTrainer:
                 if (self.iteration_step - 1) % self.config.logging.iteration_step_info_interval == 0:
                     self.train_step_logs(outputs=outputs, loss_avg=loss_avg)
 
-                if (self.iteration_step - 1) % constants.LOG_STATE_INTERVAL == 0:
+                if (
+                    self.iteration_step - 1
+                ) % constants.LOG_STATE_INTERVAL == 0 and constants.IS_RANK_TO_MONITOR is True:
                     from nanotron.debug.monitor import convert_logs_to_flat_logs
 
                     if dist.get_rank(self.parallel_context.world_pg) == self.logger_ranks[0] and wandb is not None:
