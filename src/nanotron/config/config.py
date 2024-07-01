@@ -249,7 +249,7 @@ class LRSchedulerArgs:
 
     lr_warmup_steps: number of steps to warmup the learning rate
     lr_warmup_style: linear or constant
-    lr_decay_style: linear or cosine
+    lr_decay_style: linear, cosine or 1-sqrt
     min_decay_lr: minimum learning rate after decay
     lr_decay_steps: optional number of steps to decay the learning rate otherwise will default to train_steps - lr_warmup_steps
     lr_decay_starting_step: optional number of steps to decay the learning rate otherwise will default to train_steps - lr_warmup_steps
@@ -272,9 +272,9 @@ class LRSchedulerArgs:
             self.lr_warmup_style = "linear"
         if self.lr_decay_style is None:
             self.lr_decay_style = "linear"
-        if self.lr_decay_style not in ["linear", "cosine"]:
+        if self.lr_decay_style not in ["linear", "cosine", "1-sqrt"]:
             raise ValueError(
-                f"lr_decay_style should be a string selected in ['linear', 'cosine'] and not {self.lr_decay_style}"
+                f"lr_decay_style should be a string selected in ['linear', 'cosine', '1-sqrt'] and not {self.lr_decay_style}"
             )
         if self.min_decay_lr is None:
             self.min_decay_lr = self.learning_rate
