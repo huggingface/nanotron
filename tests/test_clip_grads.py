@@ -34,7 +34,7 @@ from torch import nn
 @pytest.mark.parametrize("norm_type", [math.inf, 1.0, 2.0])
 @rerun_if_address_is_in_use()
 def test_clip_grads_with_pp(norm_type: float):
-    init_distributed(tp=1, dp=1, pp=2)(_test_clip_grads_with_pp)(norm_type=norm_type)
+    init_distributed(tp=1, dp=1, pp=2, sp=1)(_test_clip_grads_with_pp)(norm_type=norm_type)
 
 
 def _test_clip_grads_with_pp(parallel_context: ParallelContext, norm_type: float):
@@ -203,7 +203,7 @@ def _test_clip_grads_with_pp(parallel_context: ParallelContext, norm_type: float
 @pytest.mark.parametrize("norm_type", [math.inf, 1.0, 2.0])
 @rerun_if_address_is_in_use()
 def test_clip_grads_with_tp(tp_mode: TensorParallelLinearMode, async_communication: bool, norm_type: float):
-    init_distributed(tp=2, dp=1, pp=1)(_test_clip_grads_with_tp)(
+    init_distributed(tp=2, dp=1, pp=1, sp=1)(_test_clip_grads_with_tp)(
         tp_mode=tp_mode, async_communication=async_communication, norm_type=norm_type
     )
 
@@ -345,7 +345,7 @@ def _test_clip_grads_with_tp(
 @pytest.mark.parametrize("norm_type", [math.inf, 1.0, 2.0])
 @rerun_if_address_is_in_use()
 def test_clip_grads_tied_weights(norm_type: float):
-    init_distributed(tp=1, dp=1, pp=2)(_test_clip_grads_tied_weights)(norm_type=norm_type)
+    init_distributed(tp=1, dp=1, pp=2, sp=1)(_test_clip_grads_tied_weights)(norm_type=norm_type)
 
 
 def _test_clip_grads_tied_weights(parallel_context: ParallelContext, norm_type: float):
@@ -438,7 +438,7 @@ def _test_clip_grads_tied_weights(parallel_context: ParallelContext, norm_type: 
 @pytest.mark.parametrize("norm_type", [math.inf, 1.0, 2.0])
 @rerun_if_address_is_in_use()
 def test_clip_grads_fp32_accumulator(norm_type: float, half_precision: torch.dtype):
-    init_distributed(tp=1, dp=1, pp=2)(_test_clip_grads_fp32_accumulator)(
+    init_distributed(tp=1, dp=1, pp=2, sp=1)(_test_clip_grads_fp32_accumulator)(
         norm_type=norm_type, half_precision=half_precision
     )
 

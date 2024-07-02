@@ -4,7 +4,7 @@ from helpers.context import TestContext
 from helpers.dummy import dummy_infinite_data_loader, init_dummy_model
 from helpers.utils import (
     available_gpus,
-    get_all_3d_configurations,
+    get_all_4d_configurations,
     init_distributed,
     is_dict_equal,
     rerun_if_address_is_in_use,
@@ -42,18 +42,18 @@ def test_save_and_load_with_changed_topolgy():
 
 
 @pytest.mark.parametrize(
-    "tp,dp,pp",
+    "tp,dp,pp,sp",
     [
-        pytest.param(*all_3d_configs)
+        pytest.param(*all_4d_configs)
         for gpus in range(1, min(available_gpus(), 4) + 1)
-        for all_3d_configs in get_all_3d_configurations(gpus)
+        for all_4d_configs in get_all_4d_configurations(gpus)
     ],
 )
 @rerun_if_address_is_in_use()
-def test_save_and_load_model(tp: int, dp: int, pp: int):
+def test_save_and_load_model(tp: int, dp: int, pp: int, sp: int):
     test_context = TestContext()
     # We use DP=2 as we're interested in testing that one
-    init_distributed(tp=tp, dp=dp, pp=pp)(_test_save_and_load_model)(test_context=test_context)
+    init_distributed(tp=tp, dp=dp, pp=pp, sp=sp)(_test_save_and_load_model)(test_context=test_context)
 
 
 def _test_save_and_load_model(parallel_context: ParallelContext, test_context: TestContext):
@@ -84,18 +84,18 @@ def _test_save_and_load_model(parallel_context: ParallelContext, test_context: T
 
 
 @pytest.mark.parametrize(
-    "tp,dp,pp",
+    "tp,dp,pp,sp",
     [
-        pytest.param(*all_3d_configs)
+        pytest.param(*all_4d_configs)
         for gpus in range(1, min(available_gpus(), 4) + 1)
-        for all_3d_configs in get_all_3d_configurations(gpus)
+        for all_4d_configs in get_all_4d_configurations(gpus)
     ],
 )
 @rerun_if_address_is_in_use()
-def test_save_and_load_optimizer(tp: int, dp: int, pp: int):
+def test_save_and_load_optimizer(tp: int, dp: int, pp: int, sp: int):
     test_context = TestContext()
     # We use DP=2 as we're interested in testing that one
-    init_distributed(tp=tp, dp=dp, pp=pp)(_test_save_and_load_optimizer)(test_context=test_context)
+    init_distributed(tp=tp, dp=dp, pp=pp, sp=sp)(_test_save_and_load_optimizer)(test_context=test_context)
 
 
 def _test_save_and_load_optimizer(parallel_context: ParallelContext, test_context: TestContext):
@@ -149,18 +149,20 @@ def _test_save_and_load_optimizer(parallel_context: ParallelContext, test_contex
 
 
 @pytest.mark.parametrize(
-    "tp,dp,pp",
+    "tp,dp,pp,sp",
     [
-        pytest.param(*all_3d_configs)
+        pytest.param(*all_4d_configs)
         for gpus in range(1, min(available_gpus(), 4) + 1)
-        for all_3d_configs in get_all_3d_configurations(gpus)
+        for all_4d_configs in get_all_4d_configurations(gpus)
     ],
 )
 @rerun_if_address_is_in_use()
-def test_save_zero_optimizer_and_load_optimizer(tp: int, dp: int, pp: int):
+def test_save_zero_optimizer_and_load_optimizer(tp: int, dp: int, pp: int, sp: int):
     test_context = TestContext()
     # We use DP=2 as we're interested in testing that one
-    init_distributed(tp=tp, dp=dp, pp=pp)(_test_save_zero_optimizer_and_load_optimizer)(test_context=test_context)
+    init_distributed(tp=tp, dp=dp, pp=pp, sp=sp)(_test_save_zero_optimizer_and_load_optimizer)(
+        test_context=test_context
+    )
 
 
 def _test_save_zero_optimizer_and_load_optimizer(parallel_context: ParallelContext, test_context: TestContext):
@@ -223,18 +225,18 @@ def _test_save_zero_optimizer_and_load_optimizer(parallel_context: ParallelConte
 
 @pytest.mark.skip(reason="Assumption that zero and non zero optimizer have the same serialization format doesn't hold")
 @pytest.mark.parametrize(
-    "tp,dp,pp",
+    "tp,dp,pp,sp",
     [
-        pytest.param(*all_3d_configs)
+        pytest.param(*all_4d_configs)
         for gpus in range(1, min(available_gpus(), 4) + 1)
-        for all_3d_configs in get_all_3d_configurations(gpus)
+        for all_4d_configs in get_all_4d_configurations(gpus)
     ],
 )
 @rerun_if_address_is_in_use()
-def test_save_zero_optimizer_and_load_data_parallel_optimizer(tp: int, dp: int, pp: int):
+def test_save_zero_optimizer_and_load_data_parallel_optimizer(tp: int, dp: int, pp: int, sp: int):
     test_context = TestContext()
     # We use DP=2 as we're interested in testing that one
-    init_distributed(tp=tp, dp=dp, pp=pp)(_test_save_zero_optimizer_and_load_data_parallel_optimizer)(
+    init_distributed(tp=tp, dp=dp, pp=pp, sp=sp)(_test_save_zero_optimizer_and_load_data_parallel_optimizer)(
         test_context=test_context
     )
 
@@ -294,18 +296,18 @@ def _test_save_zero_optimizer_and_load_data_parallel_optimizer(
 
 @pytest.mark.skip(reason="Assumption that zero and non zero optimizer have the same serialization format doesn't hold")
 @pytest.mark.parametrize(
-    "tp,dp,pp",
+    "tp,dp,pp,sp",
     [
-        pytest.param(*all_3d_configs)
+        pytest.param(*all_4d_configs)
         for gpus in range(1, min(available_gpus(), 4) + 1)
-        for all_3d_configs in get_all_3d_configurations(gpus)
+        for all_4d_configs in get_all_4d_configurations(gpus)
     ],
 )
 @rerun_if_address_is_in_use()
-def test_save_data_parallel_optimizer_and_load_zero_optimizer(tp: int, dp: int, pp: int):
+def test_save_data_parallel_optimizer_and_load_zero_optimizer(tp: int, dp: int, pp: int, sp: int):
     test_context = TestContext()
     # We use DP=2 as we're interested in testing that one
-    init_distributed(tp=tp, dp=dp, pp=pp)(_test_save_data_parallel_optimizer_and_load_zero_optimizer)(
+    init_distributed(tp=tp, dp=dp, pp=pp, sp=sp)(_test_save_data_parallel_optimizer_and_load_zero_optimizer)(
         test_context=test_context
     )
 
@@ -361,18 +363,18 @@ def _test_save_data_parallel_optimizer_and_load_zero_optimizer(
 
 
 @pytest.mark.parametrize(
-    "tp,dp,pp",
+    "tp,dp,pp,sp",
     [
-        pytest.param(*all_3d_configs)
+        pytest.param(*all_4d_configs)
         for gpus in range(1, min(available_gpus(), 4) + 1)
-        for all_3d_configs in get_all_3d_configurations(gpus)
+        for all_4d_configs in get_all_4d_configurations(gpus)
     ],
 )
 @rerun_if_address_is_in_use()
-def test_save_optimizer_with_additional_state_dict_keys(tp: int, dp: int, pp: int):
+def test_save_optimizer_with_additional_state_dict_keys(tp: int, dp: int, pp: int, sp: int):
     test_context = TestContext()
     # We use DP=2 as we're interested in testing that one
-    init_distributed(tp=tp, dp=dp, pp=pp)(_test_save_optimizer_with_additional_state_dict_keys)(
+    init_distributed(tp=tp, dp=dp, pp=pp, sp=sp)(_test_save_optimizer_with_additional_state_dict_keys)(
         test_context=test_context
     )
 
@@ -480,7 +482,7 @@ def _test_save_optimizer_with_additional_state_dict_keys(parallel_context: Paral
 def test_save_and_load_random_states():
     test_context = TestContext()
     # We use DP=2 as we're interested in testing
-    init_distributed(tp=2, dp=1, pp=1)(_test_save_and_load_random_states)(test_context=test_context)
+    init_distributed(tp=2, dp=1, pp=1, sp=1)(_test_save_and_load_random_states)(test_context=test_context)
 
 
 def _test_save_and_load_random_states(parallel_context: ParallelContext, test_context: TestContext):
@@ -519,7 +521,7 @@ def _test_save_and_load_random_states(parallel_context: ParallelContext, test_co
 @rerun_if_address_is_in_use()
 def test_serialize_deserialize_tensormetadata():
     test_context = TestContext()
-    init_distributed(tp=2, dp=1, pp=1)(_test_serialize_deserialize_tensormetadata)(test_context=test_context)
+    init_distributed(tp=2, dp=1, pp=1, sp=1)(_test_serialize_deserialize_tensormetadata)(test_context=test_context)
 
 
 def _test_serialize_deserialize_tensormetadata(parallel_context: ParallelContext, test_context: TestContext):

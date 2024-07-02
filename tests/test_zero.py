@@ -504,7 +504,7 @@ def _test_zero_optimizer_with_tp(
 
 @rerun_if_address_is_in_use()
 def test_sliced_flat_tensor():
-    init_distributed(1, 1, 1)(_test_sliced_flat_tensor)()
+    init_distributed(1, 1, 1, 1)(_test_sliced_flat_tensor)()
 
 
 def _test_sliced_flat_tensor(parallel_context: ParallelContext):

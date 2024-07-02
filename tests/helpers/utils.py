@@ -107,8 +107,8 @@ def is_dict_equal(first: Dict, second: Dict, sub_paths: Optional[List[str]] = No
     return True, None
 
 
-def get_all_3d_configurations(gpus: int) -> List[Tuple[int, int, int]]:
-    """Given a number of gpus, we want all 3d configurations possible such that pp * dp * tp = gpus"""
+def get_all_4d_configurations(gpus: int) -> List[Tuple[int, int, int, int]]:
+    """Given a number of gpus, we want all 4d configurations possible such that pp * dp * tp * sp = gpus"""
     result = []
     for tp in range(1, gpus + 1):
         if gpus % tp != 0:
@@ -121,8 +121,10 @@ def get_all_3d_configurations(gpus: int) -> List[Tuple[int, int, int]]:
             for pp in range(1, gpus_left_after_dp + 1):
                 if gpus_left_after_dp % pp != 0:
                     continue
-                if tp * dp * pp == gpus:
-                    result.append((pp, dp, tp))
+                gpus_left_after_pp = gpus_left_after_dp // pp
+                for sp in range(1, gpus_left_after_pp + 1):
+                    if tp * dp * pp * sp == gpus:
+                        result.append((tp, dp, pp, sp))
     return result
 
 
