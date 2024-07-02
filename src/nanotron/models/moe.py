@@ -38,9 +38,28 @@ except ImportError:
 logger = logging.get_logger(__name__)
 
 
-def load_balancing_loss(tokens_per_expert, expert_scores, config: Config):
-    # tokens_per_expert.shape = (num_experts)
-    # expert_scores.shape = (tokens, num_experts)
+def log_mean(x, dim):
+    return torch.logsumexp(x, dim=dim) - torch.log(torch.tensor(x.shape[dim], dtype=torch.float32))
+
+
+def load_balancing_loss(router_logits, tokens_per_expert, config: Config) -> torch.Tensor:
+    """Computes auxiliary load balancing loss as in Switch Transformer.
+
+    See Switch Transformer (https://arxiv.org/abs/2101.03961). This function
+    implements the loss function presented in equations (4) - (6). It aims to
+    penalize those cases where the routing between experts is unbalanced.
+
+    Args:
+      logits: logits assigned to each expert per token. Shape:
+        <float32>[batch_size * sequence_length, num_experts].
+      tokens_per_expert: <int>[num_selected_experts]
+
+      config: Config
+
+    Returns:
+      The auxiliary loss.
+    """
+    # tokens = batch_size * sequence_length
     num_hidden_layers = config.num_hidden_layers
     moe_num_experts = config.moe_num_experts
     moe_loss_weight = config.moe_loss_weight
@@ -49,12 +68,16 @@ def load_balancing_loss(tokens_per_expert, expert_scores, config: Config):
     # Verify the shape of the tokens_per_expert and expert_scores tensors.
     assert tokens_per_expert.ndim == 1 and tokens_per_expert.numel() == moe_num_experts
 
-    tokens = expert_scores.shape[0]
-    assert expert_scores.ndim == 2 and expert_scores.shape[1] == moe_num_experts
+    tokens = router_logits.shape[0]
+    assert router_logits.ndim == 2 and router_logits.shape[1] == moe_num_experts
 
-    # TODO @haeggee: conversion to float before mean?
-    # expert_scores = expert_scores.float().mean(dim=0)
-    expert_scores = expert_scores.mean(dim=0)
+    # compute router probability per expert in log space for numerical stability
+    logprobs = F.log_softmax(router_logits, dim=-1)
+    # take mean probability over batch
+    # shape [num_experts]
+    logprobs = log_mean(logprobs, dim=0)
+    expert_scores = torch.exp(logprobs)
+
     tokens_per_expert = tokens_per_expert.to(expert_scores.dtype)
 
     # Calculate the total scale across all factors.
@@ -63,6 +86,34 @@ def load_balancing_loss(tokens_per_expert, expert_scores, config: Config):
     scale_denominator = num_hidden_layers * tokens * num_experts_per_token
     scale = scale_numerator / scale_denominator
     return scale * torch.dot(tokens_per_expert, expert_scores)
+
+
+def router_z_loss(router_logits, config: Config) -> torch.Tensor:
+    """
+     The router z-loss was introduced in ST-MoE
+     (https://arxiv.org/abs/2202.08906). It encourages router logits to remain
+     small in an effort to improve stability.
+
+    Args:
+      router_logits: <float>[batch_size * sequence_length, num_experts]
+        router logits
+      config: Config
+
+    Returns:
+      Scalar router z-loss.
+    """
+    num_hidden_layers = config.num_hidden_layers
+    tokens = router_logits.shape[0]
+    z_loss_weight = config.moe_z_loss_weight
+
+    log_z = torch.logsumexp(router_logits, dim=-1)
+    z_loss = log_z**2
+
+    scale_numerator = z_loss_weight
+    scale_denominator = num_hidden_layers * tokens
+    scale = scale_numerator / scale_denominator
+
+    return scale * z_loss.sum(dim=0)
 
 
 class dMoE(torch.nn.Module):
@@ -102,10 +153,10 @@ class dMoE(torch.nn.Module):
         # TODO: support sequence parallelism
         batch_size, sequence_length, _ = hidden_states.size()
         x = hidden_states.view(-1, self.config.hidden_size)
-        scores, expert_weights, top_experts = self.gate(x)
+        router_logits, expert_weights, top_experts = self.gate(x)
 
         # Compute the experts.
-        x, aux_loss = self.experts(x, scores, expert_weights, top_experts)
+        x, aux_loss = self.experts(x, router_logits, expert_weights, top_experts)
         return {
             "hidden_states": x.reshape(batch_size, sequence_length, -1),
             "aux_loss": aux_loss,
@@ -124,9 +175,9 @@ class LearnedRouter(torch.nn.Module):
         scores = F.softmax(router_logits, dim=-1, dtype=torch.float32)  # TODO: fuse?
 
         if self.config.num_experts_per_tok == 1:
-            expert_weights, expert_indices = router_logits.max(dim=-1, keepdim=True)
+            expert_weights, expert_indices = scores.max(dim=-1, keepdim=True)
         else:
-            expert_weights, expert_indices = torch.topk(router_logits, self.config.num_experts_per_tok, dim=-1)
+            expert_weights, expert_indices = torch.topk(scores, self.config.num_experts_per_tok, dim=-1)
             # IMPORTANT step to normalize, otherwise weights are very low
             expert_weights = expert_weights / torch.norm(
                 expert_weights,
@@ -134,7 +185,7 @@ class LearnedRouter(torch.nn.Module):
                 dim=-1,
                 keepdim=True,
             )
-        return scores, expert_weights, expert_indices.int()
+        return router_logits, expert_weights, expert_indices.int()
 
 
 # Adapted from megablocks.layers.mlp.ParallelDroplessMLP
@@ -341,18 +392,19 @@ class ParallelDroplessMLP(torch.nn.Module):
         )
         return x, tokens_per_expert.flatten()
 
-    def forward(self, x, scores, expert_weights, top_experts):
+    def forward(self, x, router_logits, expert_weights, top_experts):
         """
         Args:
             x: input tensor of shape [sequence_length, batch_size, hidden_size]
-            scores: tensor of shape [sequence_length * batch_size, n_experts]
+            router_logits: tensor of shape [sequence_length * batch_size, n_experts]
             expert_weights: tensor of shape [sequence_length * batch_size, num_experts_per_tok]
             top_experts: tensor of shape [sequence_length * batch_size, num_experts_per_tok]
         """
         # Compute the experts.
         x, tokens_per_expert = self.forward_fn(x, expert_weights.flatten(), top_experts.flatten())
         if self.training:
-            aux_loss = load_balancing_loss(tokens_per_expert, scores, self.config)
+            aux_loss = load_balancing_loss(router_logits, tokens_per_expert, self.config)
+            # z_loss = router_z_loss(router_logits, self.config)
         else:
             aux_loss = torch.zeros(1, device=x.device)
 
