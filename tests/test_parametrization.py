@@ -10,17 +10,17 @@ from nanotron.parallel import ParallelContext
 from nanotron.scaling.parametrization import ParametrizationMethod
 
 
-@pytest.mark.parametrize("tp,dp,pp", [(2, 1, 1)])
+@pytest.mark.parametrize("tp,dp,pp,sp", [(2, 1, 1, 1)])
 @pytest.mark.parametrize("parametrization_method", [ParametrizationMethod.SPECTRAL_MUP])
 @pytest.mark.skip
 @rerun_if_address_is_in_use()
-def test_parametrization(tp: int, dp: int, pp: int, parametrization_method: ParametrizationMethod):
+def test_parametrization(tp: int, dp: int, pp: int, sp: int, parametrization_method: ParametrizationMethod):
     if parametrization_method == ParametrizationMethod.STANDARD:
         init_method = RandomInit(std=1.0)
     elif parametrization_method == ParametrizationMethod.SPECTRAL_MUP:
         init_method = SpectralMupInit(use_mup=True)
 
-    init_distributed(tp=tp, dp=dp, pp=pp)(_test_parametrization)(
+    init_distributed(tp=tp, dp=dp, pp=pp, sp=sp)(_test_parametrization)(
         init_method=init_method,
         parametrization_method=parametrization_method,
     )

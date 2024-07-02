@@ -32,7 +32,7 @@ def save_weights(model: nn.Module, parallel_context: ParallelContext, root_folde
 
     # We save only `dist.get_rank(parallel_context.dp_pg) == 0`
     # TODO @thomasw21: Figure how this works with Zero-3
-    if dist.get_rank(parallel_context.dp_pg) != 0:
+    if dist.get_rank(parallel_context.dp_pg) != 0 or dist.get_rank(parallel_context.sp_pg) != 0:
         return
 
     module_id_to_prefix = {id(module): f"{module_name}." for module_name, module in model.named_modules()}

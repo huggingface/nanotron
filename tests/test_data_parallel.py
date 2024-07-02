@@ -17,7 +17,7 @@ from torch.distributed import GradBucket
 @pytest.mark.parametrize("accumulation_steps", [1, 3])
 @rerun_if_address_is_in_use()
 def test_ddp_with_afab(accumulation_steps):
-    init_distributed(tp=1, dp=2, pp=1)(_test_ddp_with_afab)(accumulation_steps=accumulation_steps)
+    init_distributed(tp=1, dp=2, pp=1, sp=1)(_test_ddp_with_afab)(accumulation_steps=accumulation_steps)
 
 
 def _test_ddp_with_afab(parallel_context: ParallelContext, accumulation_steps: int):

@@ -496,7 +496,7 @@ def test_optimizer_grad_accumulation_lr_weight_decay_multiple_group(
 def test_ddp_optimizer_grad_accumulation_lr_weight_decay_multiple_group(
     half_precision: torch.dtype, accumulation_steps: int
 ):
-    init_distributed(tp=1, dp=2, pp=1)(_test_ddp_optimizer_grad_accumulation_lr_weight_decay_multiple_group)(
+    init_distributed(tp=1, dp=2, pp=1, sp=1)(_test_ddp_optimizer_grad_accumulation_lr_weight_decay_multiple_group)(
         half_precision=half_precision,
         accumulation_steps=accumulation_steps,
     )

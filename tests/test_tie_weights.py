@@ -15,7 +15,7 @@ from torch import nn
 
 @rerun_if_address_is_in_use()
 def test_tie_weight_in_same_device():
-    init_distributed(tp=1, dp=1, pp=1)(_test_tie_weight_in_same_device)()
+    init_distributed(tp=1, dp=1, pp=1, sp=1)(_test_tie_weight_in_same_device)()
 
 
 def _test_tie_weight_in_same_device(parallel_context: ParallelContext):
@@ -49,7 +49,7 @@ def _test_tie_weight_in_same_device(parallel_context: ParallelContext):
 
 @rerun_if_address_is_in_use()
 def test_tie_weight_in_different_device():
-    init_distributed(tp=1, dp=1, pp=2)(_test_tie_weight_in_different_device)()
+    init_distributed(tp=1, dp=1, pp=2, sp=1)(_test_tie_weight_in_different_device)()
 
 
 def _test_tie_weight_in_different_device(parallel_context: ParallelContext):
@@ -120,7 +120,7 @@ def _test_tie_weight_in_different_device(parallel_context: ParallelContext):
 
 @rerun_if_address_is_in_use()
 def test_tie_weight_across_dp_is_impossible():
-    init_distributed(tp=1, dp=2, pp=1)(_test_tie_weight_across_dp_is_impossible)()
+    init_distributed(tp=1, dp=2, pp=1, sp=1)(_test_tie_weight_across_dp_is_impossible)()
 
 
 def _test_tie_weight_across_dp_is_impossible(parallel_context: ParallelContext):
@@ -158,7 +158,7 @@ def _test_tie_weight_across_dp_is_impossible(parallel_context: ParallelContext):
 
 @rerun_if_address_is_in_use()
 def test_tie_weight_in_different_device_have_gradients_synchronized():
-    init_distributed(tp=1, dp=1, pp=2)(_test_tie_weight_in_different_device_have_gradients_synchronized)()
+    init_distributed(tp=1, dp=1, pp=2, sp=1)(_test_tie_weight_in_different_device_have_gradients_synchronized)()
 
 
 def _test_tie_weight_in_different_device_have_gradients_synchronized(parallel_context: ParallelContext):

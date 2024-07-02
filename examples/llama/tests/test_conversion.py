@@ -105,7 +105,7 @@ def _test_nt_to_hf(parallel_context: ParallelContext, input_ids: torch.Tensor):
 
 
 def test_nt_to_hf(input_ids: torch.Tensor):
-    init_distributed(tp=1, dp=1, pp=1)(_test_nt_to_hf)(input_ids=input_ids)
+    init_distributed(tp=1, dp=1, pp=1, sp=1)(_test_nt_to_hf)(input_ids=input_ids)
 
 
 def _test_nt_to_hf_with_files(parallel_context: ParallelContext, input_ids: torch.Tensor, test_context: TestContext):
@@ -130,7 +130,9 @@ def _test_nt_to_hf_with_files(parallel_context: ParallelContext, input_ids: torc
 
 
 def test_nt_to_hf_with_files(input_ids: torch.Tensor):
-    init_distributed(tp=1, dp=1, pp=1)(_test_nt_to_hf_with_files)(input_ids=input_ids, test_context=TestContext())
+    init_distributed(tp=1, dp=1, pp=1, sp=1)(_test_nt_to_hf_with_files)(
+        input_ids=input_ids, test_context=TestContext()
+    )
 
 
 def _test_hf_to_nt(parallel_context: ParallelContext, input_ids: torch.Tensor):
@@ -141,11 +143,11 @@ def _test_hf_to_nt(parallel_context: ParallelContext, input_ids: torch.Tensor):
     logits_nt = model_nt.model(input_ids, input_mask).permute(1, 0, 2)
     logits_hf = model_hf(input_ids).logits
     assert logits_nt.size() == logits_hf.size()
-    torch.testing.assert_allclose(logits_hf, logits_nt, atol=ATOL)  
+    torch.testing.assert_allclose(logits_hf, logits_nt, atol=ATOL)
 
 
 def test_hf_to_nt(input_ids: torch.Tensor):
-    init_distributed(tp=1, dp=1, pp=1)(_test_hf_to_nt)(input_ids=input_ids)
+    init_distributed(tp=1, dp=1, pp=1, sp=1)(_test_hf_to_nt)(input_ids=input_ids)
 
 
 def _test_hf_to_nt_with_files(parallel_context: ParallelContext, input_ids: torch.Tensor, test_context: TestContext):
@@ -168,7 +170,9 @@ def _test_hf_to_nt_with_files(parallel_context: ParallelContext, input_ids: torc
 
 
 def test_hf_to_nt_with_files(input_ids: torch.Tensor):
-    init_distributed(tp=1, dp=1, pp=1)(_test_hf_to_nt_with_files)(input_ids=input_ids, test_context=TestContext())
+    init_distributed(tp=1, dp=1, pp=1, sp=1)(_test_hf_to_nt_with_files)(
+        input_ids=input_ids, test_context=TestContext()
+    )
 
 
 def _test_composed_conversion(parallel_context: ParallelContext):
@@ -196,7 +200,7 @@ def _test_composed_conversion(parallel_context: ParallelContext):
 
 
 def test_composed_conversion():
-    init_distributed(tp=1, dp=1, pp=1)(_test_composed_conversion)()
+    init_distributed(tp=1, dp=1, pp=1, sp=1)(_test_composed_conversion)()
 
 
 def _save_parallel_nanotron(parallel_context: ParallelContext, input_ids: torch.Tensor, nt_path: Path):
@@ -239,9 +243,11 @@ def test_tensor_parallel_conversion(input_ids: torch.Tensor):
     hf_path = root / "nanotron"
 
     # Launch both parts.
-    init_distributed(tp=2, dp=1, pp=1)(_save_parallel_nanotron)(input_ids=input_ids, nt_path=nt_path)
+    init_distributed(tp=2, dp=1, pp=1, sp=1)(_save_parallel_nanotron)(input_ids=input_ids, nt_path=nt_path)
     assert (nt_path / "logits.pt").exists()
-    init_distributed(tp=1, dp=1, pp=1)(_convert_from_parallel)(input_ids=input_ids, nt_path=nt_path, hf_path=hf_path)
+    init_distributed(tp=1, dp=1, pp=1, sp=1)(_convert_from_parallel)(
+        input_ids=input_ids, nt_path=nt_path, hf_path=hf_path
+    )
     assert (hf_path / "logits.pt").exists()
 
     # Load logits and verify they match.

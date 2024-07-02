@@ -12,11 +12,11 @@ from nanotron.random import (
 
 
 @pytest.mark.skipif(available_gpus() < 2, reason="Testing test_random_state_sync requires at least 2 gpus")
-@pytest.mark.parametrize("tp,dp,pp", [(2, 1, 1), (1, 2, 1), (1, 1, 2)])
+@pytest.mark.parametrize("tp,dp,pp,sp", [(2, 1, 1, 1), (1, 2, 1, 1), (1, 1, 2, 1)])
 @rerun_if_address_is_in_use()
-def test_random_state_sync(tp: int, dp: int, pp: int):
+def test_random_state_sync(tp: int, dp: int, pp: int, sp: int):
     # TODO @nouamane: Make a test with 4 gpus (2 in one pg, 2 in other pg)
-    init_distributed(tp=tp, dp=dp, pp=pp)(_test_random_state_sync)()
+    init_distributed(tp=tp, dp=dp, pp=pp, sp=sp)(_test_random_state_sync)()
 
 
 def _test_random_state_sync(parallel_context: ParallelContext):
