@@ -93,18 +93,18 @@ class PretrainDatasetsArgs:
 
 @dataclass
 class NanosetDatasetsArgs:
-    dataset_path: Union[str, dict, List[str]]
+    dataset_folder: Union[str, dict, List[str]]
 
     def __post_init__(self):
-        if isinstance(self.dataset_path, str):  # Case 1: 1 Dataset file
-            self.dataset_path = [self.dataset_path]
+        if isinstance(self.dataset_folder, str):  # Case 1: 1 Dataset file
+            self.dataset_folder = [self.dataset_folder]
             self.dataset_weights = [1]
-        elif isinstance(self.dataset_path, List):  # Case 2: > 1 Dataset file
+        elif isinstance(self.dataset_folder, List):  # Case 2: > 1 Dataset file
             self.dataset_weights = None  # Set to None so we consume all the samples randomly
-        elif isinstance(self.dataset_path, dict):  # Case 3: dict with > 1 dataset_path and weights
-            tmp_dataset_path = self.dataset_path.copy()
-            self.dataset_path = list(tmp_dataset_path.keys())
-            self.dataset_weights = list(tmp_dataset_path.values())
+        elif isinstance(self.dataset_folder, dict):  # Case 3: dict with > 1 dataset_folder and weights
+            tmp_dataset_folder = self.dataset_folder.copy()
+            self.dataset_folder = list(tmp_dataset_folder.keys())
+            self.dataset_weights = list(tmp_dataset_folder.values())
 
 
 @dataclass
@@ -161,6 +161,7 @@ class GeneralArgs:
 
     Args:
         project: Name of the project (a project gather several runs in common tensorboard/hub-folders)
+        entity: Weights and bias entity name (optional)
         run: Name of the run
         step: Global step (updated when we save the checkpoint)
         consumed_train_samples: Number of samples consumed during training (should be actually just step*batch_size)
@@ -168,6 +169,7 @@ class GeneralArgs:
     """
 
     project: str
+    entity: Optional[str] = None
     run: Optional[str] = None
     seed: Optional[int] = None
     step: Optional[int] = None
@@ -247,7 +249,7 @@ class LRSchedulerArgs:
 
     lr_warmup_steps: number of steps to warmup the learning rate
     lr_warmup_style: linear or constant
-    lr_decay_style: linear or cosine
+    lr_decay_style: linear, cosine or 1-sqrt
     min_decay_lr: minimum learning rate after decay
     lr_decay_steps: optional number of steps to decay the learning rate otherwise will default to train_steps - lr_warmup_steps
     lr_decay_starting_step: optional number of steps to decay the learning rate otherwise will default to train_steps - lr_warmup_steps
@@ -270,9 +272,9 @@ class LRSchedulerArgs:
             self.lr_warmup_style = "linear"
         if self.lr_decay_style is None:
             self.lr_decay_style = "linear"
-        if self.lr_decay_style not in ["linear", "cosine"]:
+        if self.lr_decay_style not in ["linear", "cosine", "1-sqrt"]:
             raise ValueError(
-                f"lr_decay_style should be a string selected in ['linear', 'cosine'] and not {self.lr_decay_style}"
+                f"lr_decay_style should be a string selected in ['linear', 'cosine', '1-sqrt'] and not {self.lr_decay_style}"
             )
         if self.min_decay_lr is None:
             self.min_decay_lr = self.learning_rate

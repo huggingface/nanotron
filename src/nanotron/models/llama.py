@@ -306,6 +306,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         self.rotary_embedding = RotaryEmbedding(
             dim=self.d_qk,
             end=config.max_position_embeddings,
+            theta=config.rope_theta,
         )
 
         # NOTE: Only supported for training (TODO(fmom): position_ids not supported yet)

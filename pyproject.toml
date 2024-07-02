@@ -49,7 +49,7 @@ fast-modeling = [
 
 nanosets = [
      "transformers",
-     "datasets",
+     "datatrove[io,processing]@git+https://github.com/huggingface/datatrove",
      "numba",
 ]
 
