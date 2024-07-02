@@ -143,17 +143,17 @@ def get_dataloader_from_data_stage(
     elif isinstance(data.dataset, NanosetDatasetsArgs):
         # Get tokenizer cardinality
         tokenizer = AutoTokenizer.from_pretrained(trainer.config.tokenizer.tokenizer_name_or_path)
-        token_dtype = np.int32 if len(tokenizer) > np.iinfo(np.uint16).max + 1 else np.uint16
+        token_size = 4 if len(tokenizer) > np.iinfo(np.uint16).max + 1 else 2
         del tokenizer
         # Create Nanoset
         from nanotron.data.nanoset import Nanoset
 
         with main_rank_first(trainer.parallel_context.world_pg):
             train_dataset = Nanoset(
-                dataset_paths=data.dataset.dataset_path,
+                dataset_folders=data.dataset.dataset_folder,
                 dataset_weights=data.dataset.dataset_weights,
                 sequence_length=trainer.sequence_length,
-                token_dtype=token_dtype,
+                token_size=token_size,
                 train_split_num_samples=trainer.config.tokens.train_steps * trainer.global_batch_size,
                 random_seed=data.seed,
             )

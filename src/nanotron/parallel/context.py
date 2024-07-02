@@ -26,8 +26,8 @@ class ParallelContext:
             world_size % data_parallel_size == 0
         ), "The total number of processes must be divisible by the data parallel size."
         assert world_size % num_gpus_per_model == 0, (
-            "The total number of processes must be divisible by"
-            "the number of GPUs per model (tensor_parallel_size * pipeline_parallel_size)."
+            f"The total number of processes ({world_size}) must be divisible by "
+            f"the number of GPUs per model ({num_gpus_per_model}, i.e. tensor_parallel_size * pipeline_parallel_size)."
         )
         if num_gpus_per_model * data_parallel_size != world_size:
             raise ValueError(

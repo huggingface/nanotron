@@ -1,7 +1,7 @@
 import nanotron.distributed as dist
 from nanotron import logging
+from nanotron.data.collator import NanosetDataCollatorForCLM
 from nanotron.dataloader import (
-    DataCollatorForCLM,
     EmptyInfiniteDataset,
     get_dataloader_worker_init,
     get_sampler,
@@ -32,7 +32,7 @@ def build_nanoset_dataloader(
         # No need to spawn a lot of workers, we can just use main
         dataloader_num_workers = 0
 
-    data_collator = DataCollatorForCLM(
+    data_collator = NanosetDataCollatorForCLM(
         sequence_length=sequence_length,
         input_pp_rank=input_pp_rank,
         output_pp_rank=output_pp_rank,

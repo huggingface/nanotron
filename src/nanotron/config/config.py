@@ -93,18 +93,18 @@ class PretrainDatasetsArgs:
 
 @dataclass
 class NanosetDatasetsArgs:
-    dataset_path: Union[str, dict, List[str]]
+    dataset_folder: Union[str, dict, List[str]]
 
     def __post_init__(self):
-        if isinstance(self.dataset_path, str):  # Case 1: 1 Dataset file
-            self.dataset_path = [self.dataset_path]
+        if isinstance(self.dataset_folder, str):  # Case 1: 1 Dataset file
+            self.dataset_folder = [self.dataset_folder]
             self.dataset_weights = [1]
-        elif isinstance(self.dataset_path, List):  # Case 2: > 1 Dataset file
+        elif isinstance(self.dataset_folder, List):  # Case 2: > 1 Dataset file
             self.dataset_weights = None  # Set to None so we consume all the samples randomly
-        elif isinstance(self.dataset_path, dict):  # Case 3: dict with > 1 dataset_path and weights
-            tmp_dataset_path = self.dataset_path.copy()
-            self.dataset_path = list(tmp_dataset_path.keys())
-            self.dataset_weights = list(tmp_dataset_path.values())
+        elif isinstance(self.dataset_folder, dict):  # Case 3: dict with > 1 dataset_folder and weights
+            tmp_dataset_folder = self.dataset_folder.copy()
+            self.dataset_folder = list(tmp_dataset_folder.keys())
+            self.dataset_weights = list(tmp_dataset_folder.values())
 
 
 @dataclass
@@ -161,6 +161,7 @@ class GeneralArgs:
 
     Args:
         project: Name of the project (a project gather several runs in common tensorboard/hub-folders)
+        entity: Weights and bias entity name (optional)
         run: Name of the run
         step: Global step (updated when we save the checkpoint)
         consumed_train_samples: Number of samples consumed during training (should be actually just step*batch_size)
@@ -168,6 +169,7 @@ class GeneralArgs:
     """
 
     project: str
+    entity: Optional[str] = None
     run: Optional[str] = None
     seed: Optional[int] = None
     step: Optional[int] = None

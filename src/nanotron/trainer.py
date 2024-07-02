@@ -276,7 +276,8 @@ class DistributedTrainer:
         if dist.get_rank(self.parallel_context.world_pg) == self.logger_ranks[0] and wandb is not None:
             wandb.init(
                 project=self.config.general.project,
-                name=f"{current_time}_{self.config.general.run}",
+                name=f"{current_time}_{self.config.general.project}_{self.config.general.run}",
+                entity=self.config.general.entity,
                 config={"nanotron_config": self.config.as_dict()},
             )
 
