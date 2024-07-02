@@ -57,8 +57,9 @@ def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--ckpt-path", type=Path, required=True, help="Checkpoint path")
     parser.add_argument("--dp", type=int, default=1)
-    parser.add_argument("--pp", type=int, default=0)
-    parser.add_argument("--tp", type=int, default=0)
+    parser.add_argument("--pp", type=int, default=1)
+    parser.add_argument("--tp", type=int, default=1)
+    parser.add_argument("--ep", type=int, default=1)
     parser.add_argument("--max-new-tokens", type=int, default=128, help="Maximum number of new tokens to generate")
     return parser.parse_args()
 
@@ -79,6 +80,7 @@ def main():
         pp_engine=OneForwardOneBackwardPipelineEngine(),
         tp_mode=TensorParallelLinearMode.ALL_REDUCE,
         tp_linear_async_communication=False,
+        expert_parallel_size=args.ep or config.parallelism.expert_parallel_size,
     )
 
     # Initialise all process groups
@@ -86,6 +88,7 @@ def main():
         data_parallel_size=parallel_config.dp,
         pipeline_parallel_size=parallel_config.pp,
         tensor_parallel_size=parallel_config.tp,
+        expert_parallel_size=parallel_config.expert_parallel_size,
     )
 
     # Set log levels

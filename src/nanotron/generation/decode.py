@@ -257,7 +257,8 @@ def decode_text(
                             sharded_logits = model(
                                 input_ids=state.new_input_ids,
                                 input_mask=state.new_input_mask,
-                            )
+                                aux_loss=torch.zeros(1, device=state.new_input_ids.device),
+                            )["sharded_logits"]
                     else:
                         if isinstance(state.new_input_ids, torch.Tensor):
                             batch_generated_ids = torch.cat(state.generation_ids, dim=-1)
@@ -268,7 +269,8 @@ def decode_text(
                         sharded_logits = model(
                             input_ids=batch_generated_ids,
                             input_mask=batch_generated_mask,
-                        )
+                            aux_loss=torch.zeros(1, device=state.new_input_ids.device),
+                        )["sharded_logits"]
 
                     if isinstance(sharded_logits, torch.Tensor) and logits_are_batch_first:
                         sharded_logits = sharded_logits.transpose(0, 1)
