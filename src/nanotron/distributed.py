@@ -23,6 +23,9 @@ def new_group(  # pylint: disable=function-redefined
         raise ValueError("Cannot create a group with not ranks inside it")
     if isinstance(ranks, np.ndarray):
         ranks = ranks.tolist()
+    elif isinstance(ranks, tuple):
+        ranks = [int(rank) for rank in ranks]
+
     return dist.new_group(ranks=ranks, timeout=timeout, backend=backend, pg_options=pg_options)
 
 
