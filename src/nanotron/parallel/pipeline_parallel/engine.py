@@ -2,18 +2,21 @@ from abc import ABC, abstractmethod
 from typing import Dict, Iterable, Optional, Union
 
 import torch
+from torch import nn as torch_nn
+from torch.nn.parallel import DistributedDataParallel
+
 from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.distributed import ProcessGroup
 from nanotron.logging import log_rank
 from nanotron.optim.gradient_accumulator import GradientAccumulator
 from nanotron.parallel.data_parallel.utils import ddp_trigger_sync_in_bwd
-from nanotron.parallel.pipeline_parallel.context_manager import attach_pipeline_state_to_model
+from nanotron.parallel.pipeline_parallel.context_manager import (
+    attach_pipeline_state_to_model,
+)
 from nanotron.parallel.pipeline_parallel.state import PipelineTrainBatchState
 from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
 from nanotron.utils import ContextManagers
-from torch import nn as torch_nn
-from torch.nn.parallel import DistributedDataParallel
 
 logger = logging.get_logger(__name__)
 
@@ -48,9 +51,16 @@ class PipelineEngine(ABC):
             output = {"loss": output}
 
         # We normalize our loss
-        if not isinstance(output["loss"], TensorPointer):
-            output["loss"] = output["loss"] / self.nb_microbatches
+        for k, v in output.items():
+            if not isinstance(v, TensorPointer):
+                output[k] = v / self.nb_microbatches
 
+        # inside the model, we can have load balancing losses for some pipeline
+        # ranks without the final loss. still need to backpropagate through them
+        # TODO @haeggee just loop over all keys and check if they are TensorPointer?
+        if "load_balancing_loss" in output and not isinstance(output["load_balancing_loss"], TensorPointer):
+            assert output["load_balancing_loss"].requires_grad
+            state.register_activation_requiring_backward(output["load_balancing_loss"])
         # Add output as activations that require backward pass
         if not isinstance(output["loss"], TensorPointer):
             assert output["loss"].requires_grad
@@ -65,7 +75,10 @@ class PipelineEngine(ABC):
         return context
 
     def backward(
-        self, context: ContextManagers, state: PipelineTrainBatchState, grad_accumulator: Optional[GradientAccumulator]
+        self,
+        context: ContextManagers,
+        state: PipelineTrainBatchState,
+        grad_accumulator: Optional[GradientAccumulator],
     ):
         # Increment the number of backwards
         state.nb_backwards += 1
@@ -157,6 +170,8 @@ class PipelineEngine(ABC):
                 # Store the loss for each microbatch
                 if not isinstance(output["loss"], TensorPointer):
                     output = {k: v.detach() for k, v in output.items()}
+                if "load_balancing_loss" in output and not isinstance(output["load_balancing_loss"], TensorPointer):
+                    output["load_balancing_loss"] = output["load_balancing_loss"].detach()
                 outputs.append(output)
 
         return outputs
@@ -269,8 +284,9 @@ class OneForwardOneBackwardPipelineEngine(PipelineEngine):
                     send_activation()
 
                 # Store the loss for each microbatch
-                if not isinstance(output["loss"], TensorPointer):
-                    output = {k: v.detach() for k, v in output.items()}
+                for k, v in output.items():
+                    if not isinstance(v, TensorPointer):
+                        output[k] = v.detach()
                 outputs.append(output)
 
             for micro_batch in batch:
@@ -282,8 +298,9 @@ class OneForwardOneBackwardPipelineEngine(PipelineEngine):
                     output = {"loss": output}
 
                 # Store the loss for each microbatch
-                if not isinstance(output["loss"], TensorPointer):
-                    output = {k: v.detach() for k, v in output.items()}
+                for k, v in output.items():
+                    if not isinstance(v, TensorPointer):
+                        output[k] = v.detach()
                 outputs.append(output)
 
                 # One backward

@@ -161,6 +161,7 @@ class GeneralArgs:
 
     Args:
         project: Name of the project (a project gather several runs in common tensorboard/hub-folders)
+        entity: Weights and bias entity name (optional)
         run: Name of the run
         step: Global step (updated when we save the checkpoint)
         consumed_train_samples: Number of samples consumed during training (should be actually just step*batch_size)
@@ -168,6 +169,7 @@ class GeneralArgs:
     """
 
     project: str
+    entity: Optional[str] = None
     run: Optional[str] = None
     seed: Optional[int] = None
     step: Optional[int] = None
