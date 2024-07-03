@@ -103,14 +103,18 @@ def router_z_loss(router_logits, config: Config) -> torch.Tensor:
       Scalar router z-loss.
     """
     num_hidden_layers = config.num_hidden_layers
+    moe_num_experts = config.moe_num_experts
+
     tokens = router_logits.shape[0]
+    assert router_logits.ndim == 2 and router_logits.shape[1] == moe_num_experts
+
     z_loss_weight = config.moe_z_loss_weight
 
     log_z = torch.logsumexp(router_logits, dim=-1)
     z_loss = log_z**2
 
     scale_numerator = z_loss_weight
-    scale_denominator = num_hidden_layers * tokens
+    scale_denominator = num_hidden_layers * tokens * moe_num_experts
     scale = scale_numerator / scale_denominator
 
     return scale * z_loss.sum(dim=0)
