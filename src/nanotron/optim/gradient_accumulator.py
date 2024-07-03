@@ -262,20 +262,22 @@ class FP32GradientAccumulator(GradientAccumulator):
         if (constants.GLOBAL_STEP - 1) % constants.LOG_STATE_INTERVAL == 0 and constants.IS_RANK_TO_MONITOR is True:
             from nanotron import constants
 
-            # save_tensor(
-            #     name=f"{name}.grad",
-            #     tensor=fp32_param.grad,
-            #     path=f"{constants.MONITOR_STATE_PATH}/{constants.CONFIG.general.run}/{constants.GLOBAL_STEP}/grads"
-            # )
+            if constants.CONFIG.infini_attention.log_grad is True:
+                # save_tensor(
+                #     name=f"{name}.grad",
+                #     tensor=fp32_param.grad,
+                #     path=f"{constants.MONITOR_STATE_PATH}/{constants.CONFIG.general.run}/{constants.GLOBAL_STEP}/grads"
+                # )
 
-            wandb.log(
-                {
-                    f"{name}:grad:mean": fp32_param.grad.detach().mean().item(),
-                    f"{name}:grad:std": fp32_param.grad.detach().std().item(),
-                    f"{name}:grad:norm": fp32_param.grad.detach().norm().item(),
-                    "iteration_step": constants.GLOBAL_STEP,
-                }
-            )
+                if "balance_factor" in name:
+                    wandb.log(
+                        {
+                            f"{name}:grad:mean": fp32_param.grad.detach().mean().item(),
+                            f"{name}:grad:std": fp32_param.grad.detach().std().item(),
+                            f"{name}:grad:norm": fp32_param.grad.detach().norm().item(),
+                            "iteration_step": constants.GLOBAL_STEP,
+                        }
+                    )
 
     @contextmanager
     def no_sync(self):

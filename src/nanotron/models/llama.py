@@ -486,8 +486,8 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         if constants.CONFIG.infini_attention.balance_init_type == "zeros":
             log_rank("Zero initialized balance factors", logger=logger, level=logging.WARNING, rank=0)
             balance_factors = nn.Parameter(torch.zeros(self.n_local_q_heads, device=device, dtype=torch.float32))
-        elif constants.CONFIG.infini_attention.balance_init_type == "normal_randn":
-            log_rank("normal_randn initialized balance factors", logger=logger, level=logging.WARNING, rank=0)
+        elif constants.CONFIG.infini_attention.balance_init_type == "randn":
+            log_rank("randn initialized balance factors", logger=logger, level=logging.WARNING, rank=0)
             balance_factors = nn.Parameter(torch.randn(self.n_local_q_heads, device=device, dtype=torch.float32))
         else:
             raise ValueError(f"balance_init_type {constants.CONFIG.infini_attention.balance_init_type} not supported")
@@ -695,8 +695,9 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             if constants.CONFIG.infini_attention.turn_on_memory is True:
                 if (
                     constants.GLOBAL_STEP is not None
-                    and (constants.GLOBAL_STEP - 1) % constants.LOG_STATE_INTERVAL == 0
+                    and (constants.GLOBAL_STEP - 1) % constants.CONFIG.infini_attention.logging_interval == 0
                     and constants.IS_RANK_TO_MONITOR is True
+                    and constants.CONFIG.infini_attention.log_segment_acts is True
                 ):
                     if dist.get_rank() == 0:
                         logs[f"layer_{self.layer_idx}:seg_{idx}:query_states"] = compute_stas(query_states)
@@ -722,7 +723,10 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         outputs = torch.cat(outputs, dim=1)  # concat along sequence dimension
         assert outputs.shape == hidden_states.shape
 
-        if constants.GLOBAL_STEP is not None and (constants.GLOBAL_STEP - 1) % constants.LOG_STATE_INTERVAL == 0:
+        if (
+            constants.GLOBAL_STEP is not None
+            and (constants.GLOBAL_STEP - 1) % constants.CONFIG.infini_attention.logging_interval == 0
+        ):
             if constants.IS_RANK_TO_MONITOR is True:
                 import wandb
 

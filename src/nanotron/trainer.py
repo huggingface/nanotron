@@ -438,7 +438,7 @@ class DistributedTrainer:
         rank_to_monitor = (
             dist.get_rank(group=self.parallel_context.dp_pg) == 0
             and dist.get_rank(group=self.parallel_context.tp_pg) == 0
-        )
+        ) and constants.CONFIG.infini_attention.logging is True
         constants.IS_RANK_TO_MONITOR = rank_to_monitor
 
         with prof:
@@ -449,8 +449,9 @@ class DistributedTrainer:
                     prof.step()
 
                 if (
-                    self.iteration_step - 1
-                ) % constants.LOG_STATE_INTERVAL == 0 and constants.IS_RANK_TO_MONITOR is True:
+                    (self.iteration_step - 1) % constants.CONFIG.infini_attention.logging_interval == 0
+                    and constants.IS_RANK_TO_MONITOR is True
+                ):
                     from nanotron.debug.monitor import monitor_nanotron_model
 
                     nn_logs, nn_handles = monitor_nanotron_model(
@@ -470,8 +471,9 @@ class DistributedTrainer:
                     self.train_step_logs(outputs=outputs, loss_avg=loss_avg)
 
                 if (
-                    self.iteration_step - 1
-                ) % constants.LOG_STATE_INTERVAL == 0 and constants.IS_RANK_TO_MONITOR is True:
+                    (self.iteration_step - 1) % constants.CONFIG.infini_attention.logging_interval == 0
+                    and constants.IS_RANK_TO_MONITOR is True
+                ):
                     from nanotron.debug.monitor import convert_logs_to_flat_logs
 
                     if dist.get_rank(self.parallel_context.world_pg) == self.logger_ranks[0] and wandb is not None:

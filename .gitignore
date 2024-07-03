@@ -165,3 +165,8 @@ checkpoints/
 wandb/
 *.pkl
 examples/infinite-context-length/*.txt
+
+*.json
+*.arrow
+*.txt
+*.out

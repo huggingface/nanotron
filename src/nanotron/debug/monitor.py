@@ -72,12 +72,13 @@ def track_weight_and_grad_stats(
     def _save_output_stats(module: nn.Module, input: torch.Tensor, output: torch.Tensor):
         param_names = [name for name, _ in module.named_parameters()]
         for param_name in param_names:
-            if hasattr(module, param_name):
-                param = getattr(module, param_name)
-                stats = compute_stats(name, param.data)
-                if stats is not None:
-                    logs[name][param_name] = stats
-                    # save_tensor(f"{name}.{param_name}", param.data, path=f"{save_path}/weights/")
+            if "balance_factor" in param_name:
+                if hasattr(module, param_name):
+                    param = getattr(module, param_name)
+                    stats = compute_stats(name, param.data)
+                    if stats is not None:
+                        logs[name][param_name] = stats
+                        # save_tensor(f"{name}.{param_name}", param.data, path=f"{save_path}/weights/")
 
         # inputs = input if isinstance(input, tuple) else (input,)
         # outputs = output if isinstance(output, tuple) else (output,)
@@ -116,35 +117,37 @@ def track_weight_and_grad_stats(
         #         # except:
         #         #     assert 1 == 1
 
-    # def _save_grad_stats(module: nn.Linear, grad_input, grad_output: torch.Tensor):
-    #     if isinstance(grad_output, tuple):
-    #         for i, grad in enumerate(grad_output):
-    #             if grad is None:
-    #                 continue
+    def _save_grad_stats(module: nn.Linear, grad_input, grad_output: torch.Tensor):
+        if isinstance(grad_output, tuple):
+            for i, grad in enumerate(grad_output):
+                if grad is None:
+                    continue
 
-    #             stats = compute_stats(name, grad)
-    #             if stats is not None:
-    #                 logs[name][f"grad_output:{i}"] = stats
-    #     else:
-    #         stats = compute_stats(name, grad_output)
-    #         if stats is not None:
-    #             logs[name]["grad_output"] = stats
+                stats = compute_stats(name, grad)
+                if stats is not None:
+                    logs[name][f"grad_output:{i}"] = stats
+        else:
+            stats = compute_stats(name, grad_output)
+            if stats is not None:
+                logs[name]["grad_output"] = stats
 
-    #     if isinstance(grad_input, tuple):
-    #         for i, grad in enumerate(grad_input):
-    #             if grad is not None:
-    #                 stats = compute_stats(name, grad)
-    #                 if stats is not None:
-    #                     logs[name][f"grad_input:{i}"] = stats
-    #     else:
-    #         if grad_input is not None:
-    #             stats = compute_stats(name, grad_input)
-    #             if stats is not None:
-    #                 logs[name]["grad_input"] = stats
+        # if isinstance(grad_input, tuple):
+        #     for i, grad in enumerate(grad_input):
+        #         if grad is not None:
+        #             stats = compute_stats(name, grad)
+        #             if stats is not None:
+        #                 logs[name][f"grad_input:{i}"] = stats
+        # else:
+        #     if grad_input is not None:
+        #         stats = compute_stats(name, grad_input)
+        #         if stats is not None:
+        #             logs[name]["grad_input"] = stats
 
     handles = []
     handles.append(module.register_forward_hook(_save_output_stats))
-    # handles.append(module.register_backward_hook(_save_grad_stats))
+
+    # if constants.CONFIG.infini_attention.log_grad is True:
+    #     handles.append(module.register_backward_hook(_save_grad_stats))
     return logs, handles
 
 
@@ -170,7 +173,7 @@ def monitor_nanotron_model(run_name: str, model: NanotronModel, parallel_context
     leaf_modules = [(name, module) for name, module in model.named_modules()]
 
     for name, module in leaf_modules:
-        if "balance_factors" in name:
+        if "balance_factor" in name or "attn" in name:
             module_logs, module_handles = track_weight_and_grad_stats(
                 name=name,
                 module=module,

@@ -304,6 +304,11 @@ class InfiniAttentionArgs:
     balance_factor_lr: float
     balance_act_type: str
     balance_init_type: str
+    logging: bool
+    logging_interval: int
+    log_grad: bool
+    log_segment_acts: bool
+    balance_factor_weight_decay: Optional[float] = None
 
 
 @dataclass

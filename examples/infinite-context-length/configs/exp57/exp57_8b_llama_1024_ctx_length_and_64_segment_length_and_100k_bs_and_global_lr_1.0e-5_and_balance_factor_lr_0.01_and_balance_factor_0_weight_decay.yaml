@@ -1,0 +1,179 @@
+checkpoints:
+  checkpoint_interval: 1000
+  checkpoints_path: /fsx/phuc/new_workspace/experiments/exp57_8b_llama_1024_ctx_length_and_64_segment_length_and_100k_bs_and_global_lr_1.0e-5_and_balance_factor_lr_0.01_and_balance_factor_0_weight_decay/checkpoints
+  checkpoints_path_is_shared_file_system: true
+  resume_checkpoint_path: /fsx/phuc/new_workspace/experiments/infini_attention_8b_llama/exp57_8b_llama_1024_ctx_length_and_64_segment_length_and_100k_bs_and_global_lr_1.0e-5_and_balance_factor_lr_0.01_and_balance_factor_0_weight_decay/checkpoints
+  save_initial_state: false
+general:
+  benchmark_csv_path: null
+  consumed_train_samples: null
+  ignore_sanity_checks: true
+  project: infini_attention_8b_llama
+  run: exp57_8b_llama_1024_ctx_length_and_64_segment_length_and_100k_bs_and_global_lr_1.0e-5_and_balance_factor_lr_0.01_and_balance_factor_0_weight_decay
+  seed: 42
+  step: null
+logging:
+  iteration_step_info_interval: 1
+  log_level: info
+  log_level_replica: info
+model:
+  ddp_bucket_cap_mb: 25
+  dtype: bfloat16
+  init_method:
+    path: /fsx/phuc/projects/infini-attention/llama3-ckps/haojun-8b-llama-nanotron-ckp/NanotronLlama3-8B
+  make_vocab_size_divisible_by: 1
+  model_config:
+    bos_token_id: 128000
+    eos_token_id: 128001
+    hidden_act: silu
+    hidden_size: 4096
+    initializer_range: 0.02
+    intermediate_size: 14336
+    is_llama_config: true
+    max_position_embeddings: 8192
+    num_attention_heads: 32
+    num_hidden_layers: 32
+    num_key_value_heads: 8
+    pad_token_id: null
+    pretraining_tp: 1
+    rms_norm_eps: 1.0e-05
+    rope_interleaved: false
+    rope_scaling: null
+    rope_theta: 500000.0
+    tie_word_embeddings: false
+    use_cache: true
+    vocab_size: 128256
+
+optimizer:
+  accumulate_grad_in_fp32: false
+  adam_beta1: 0.9
+  adam_beta2: 0.95
+  adam_eps: 1.0e-08
+  torch_adam_is_fused: true
+  clip_grad: 1.0
+
+  # NOTE: old
+  # learning_rate_scheduler:
+  #   learning_rate: 0.00015 # note: 1/2 of pythia use this for a 400m model
+  #   lr_decay_starting_step: null
+  #   lr_decay_steps: null
+  #   lr_decay_style: cosine
+  #   lr_warmup_steps: 14000 # 10% warm up of total training steps
+  #   lr_warmup_style: linear
+  #   min_decay_lr: 1.0e-05
+  # optimizer_factory:
+  #   adam_beta1: 0.9
+  #   adam_beta2: 0.95
+  #   adam_eps: 1.0e-08
+  #   name: adamW
+  #   torch_adam_is_fused: true
+
+  learning_rate_scheduler:
+    learning_rate: 1.0e-5
+    lr_decay_starting_step: null
+    lr_decay_steps: 23500
+    lr_decay_style: cosine
+    lr_warmup_steps: 1500 # 10% warm up of total training steps
+    lr_warmup_style: linear
+    min_decay_lr: 1.0e-6
+  weight_decay: 0.1
+  zero_stage: 0
+
+parallelism:
+  dp: 6
+  tp: 4
+  expert_parallel_size: 1
+  pp: 1
+  pp_engine: 1f1b
+  tp_linear_async_communication: false
+  tp_mode: ALL_REDUCE
+profiler: null
+tokenizer:
+  tokenizer_max_length: null
+  tokenizer_name_or_path: /fsx/haojun/lighteval_evaluation_model/NanotronLlama3-8B
+  tokenizer_revision: null
+tokens:
+  batch_accumulation_per_replica: 1 # batch_accumulation_per_replica * micro_batch_size * sequence_length * dp = 1 * 1 * 16384 * 3 = 49k
+  limit_test_batches: 0
+  limit_val_batches: 0
+  micro_batch_size: 16
+  sequence_length: 1024 # 8192 x 2 = 16384
+  train_steps: 25_000
+  val_check_interval: -1
+
+
+data:
+  dataset:
+    dataloader_type: single
+    dataset_max_tokens: null
+    dataset_weights:
+    - 0.3
+    - 0.3
+    - 0.45
+    - 0.15
+    - 0.08
+    - 0.02
+    datasets:
+    - filename_pattern: .*.ds
+      folder: s3://huggingface-llm-datasets/stack_full_v21-8k/tokenized-llama3/long/
+      dtype: uint32
+      skip_tokens: 0
+    - filename_pattern: .*.ds
+      folder: s3://huggingface-llm-datasets/stack_full_v21-8k/tokenized-llama3/short/
+      dtype: uint32
+      skip_tokens: 0
+    - filename_pattern: .*.ds
+      folder: s3://huggingface-llm-datasets/fineweb-v1-8k/tokenized-llama3/long/CC-MAIN-2024-10
+      dtype: uint32
+      skip_tokens: 0
+    - filename_pattern: .*.ds
+      folder: s3://huggingface-llm-datasets/fineweb-v1-8k/tokenized-llama3/short/CC-MAIN-2024-10
+      dtype: uint32
+      skip_tokens: 0
+    - filename_pattern: .*.ds
+      folder: s3://huggingface-llm-datasets/project-gutenberg/tokenized-llama3/
+      dtype: uint32
+      skip_tokens: 0
+    - filename_pattern: .*.ds
+      folder: s3://huggingface-llm-datasets/OpenHermes-2-5/tokenized-llama3
+      dtype: uint32
+      skip_tokens: 0
+
+    pad_samples_to_global_batch_size: false
+    skip_in_stream: true
+  num_loading_workers: 0
+  seed: 42
+
+logging:
+  iteration_step_info_interval: 1
+  log_level: info
+  log_level_replica: info
+
+s3_upload:
+  remove_after_upload: true
+  s5cmd_concurrency: 5
+  s5cmd_numworkers: 16
+  upload_s3_path: s3://phuc-experiments/infini-attention/8b-llama/exp57_8b_llama_1024_ctx_length_and_64_segment_length_and_100k_bs_and_global_lr_1.0e-5_and_balance_factor_lr_0.01_and_balance_factor_0_weight_decay/
+
+experiment_logger:
+  tensorboard_logger:
+    flush_secs: 30
+    tensorboard_dir: /fsx/phuc/project_data/infini_attention/tb_logs
+  wandb_logger:
+    wandb_entity: null
+    wandb_project: infini_attention_8b_llama
+
+infini_attention:
+  segment_length: 64 # 64 * 16 rollouts = 1024
+  turn_on_memory: true
+  balance_factor_lr: 0.01
+  balance_act_type: orig_sigmoid
+  balance_init_type: zeros
+  logging: true
+  # logging_interval: 250
+  logging_interval: 250
+  log_grad: false
+  log_segment_acts: false
+  balance_factor_weight_decay: 0.
+  # log_balance_factor: true
+  # log_other_weight: false
