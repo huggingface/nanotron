@@ -992,8 +992,9 @@ class LlamaForTraining(NanotronModel):
         )
 
         # add all aux_losses to the main loss dictionary
-        for key, value in output["aux_losses"].items():
-            loss[key] = value
+        if self.config.moe_num_experts > 1:
+            for key, value in output["aux_losses"].items():
+                loss[key] = value
         return loss
 
     @torch.no_grad()
