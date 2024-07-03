@@ -55,16 +55,14 @@ class PipelineEngine(ABC):
             if not isinstance(v, TensorPointer):
                 output[k] = v / self.nb_microbatches
 
-        # inside the model, we can have load balancing losses for some pipeline
-        # ranks without the final loss. still need to backpropagate through them
-        # TODO @haeggee just loop over all keys and check if they are TensorPointer?
-        if "load_balancing_loss" in output and not isinstance(output["load_balancing_loss"], TensorPointer):
-            assert output["load_balancing_loss"].requires_grad
-            state.register_activation_requiring_backward(output["load_balancing_loss"])
-        # Add output as activations that require backward pass
-        if not isinstance(output["loss"], TensorPointer):
-            assert output["loss"].requires_grad
-            state.register_activation_requiring_backward(output["loss"])
+        # the outputs are either
+        # - token prediction loss ["loss"]
+        # - auxiliary losses ["load_balancing_loss", "z_loss"]
+        # that we need to backpropagate through, so register activations
+        for loss_key, output_tensor in output.items():
+            if not isinstance(output_tensor, TensorPointer):
+                assert output_tensor.requires_grad
+                state.register_activation_requiring_backward(output_tensor)
         return output
 
     @staticmethod
@@ -167,11 +165,9 @@ class PipelineEngine(ABC):
                 if not isinstance(output, dict):
                     output = {"loss": output}
 
-                # Store the loss for each microbatch
+                # Store the loss(es) for each microbatch
                 if not isinstance(output["loss"], TensorPointer):
                     output = {k: v.detach() for k, v in output.items()}
-                if "load_balancing_loss" in output and not isinstance(output["load_balancing_loss"], TensorPointer):
-                    output["load_balancing_loss"] = output["load_balancing_loss"].detach()
                 outputs.append(output)
 
         return outputs

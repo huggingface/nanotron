@@ -156,10 +156,11 @@ class dMoE(torch.nn.Module):
         router_logits, expert_weights, top_experts = self.gate(x)
 
         # Compute the experts.
-        x, aux_loss = self.experts(x, router_logits, expert_weights, top_experts)
+        x, lbl_loss, z_loss = self.experts(x, router_logits, expert_weights, top_experts)
         return {
             "hidden_states": x.reshape(batch_size, sequence_length, -1),
-            "aux_loss": aux_loss,
+            "load_balancing_loss": lbl_loss,
+            "z_loss": z_loss,
         }
 
 
@@ -403,14 +404,15 @@ class ParallelDroplessMLP(torch.nn.Module):
         # Compute the experts.
         x, tokens_per_expert = self.forward_fn(x, expert_weights.flatten(), top_experts.flatten())
         if self.training:
-            aux_loss = load_balancing_loss(router_logits, tokens_per_expert, self.config)
-            # z_loss = router_z_loss(router_logits, self.config)
+            lbl_loss = load_balancing_loss(router_logits, tokens_per_expert, self.config)
+            z_loss = router_z_loss(router_logits, self.config)
         else:
-            aux_loss = torch.zeros(1, device=x.device)
+            lbl_loss = torch.zeros(1, device=x.device)
+            z_loss = torch.zeros(1, device=x.device)
 
         if self.use_bias:
             return x + self.bias
-        return x, aux_loss
+        return x, lbl_loss, z_loss
 
     def permute_and_compute(
         self,
