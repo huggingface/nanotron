@@ -418,7 +418,10 @@ class DistributedTrainer:
         with prof:
             for self.iteration_step in range(self.metadata.last_train_step + 1, self.config.tokens.train_steps + 1):
                 if isinstance(prof, torch.profiler.profile):
-                    prof.step()
+                    if dist.get_rank() == 0:
+                        prof.step()
+                    # NOTE: If we don't wait, other ranks will proceed in the code and may timeout at nccl primitives by waiting for rank 0 to finish the profiling step 
+                    dist.barrier()
 
                 self.iteration_start_time = time.time()
                 self._update_dataloader_based_on_training_stages(dataloader_or_dls)

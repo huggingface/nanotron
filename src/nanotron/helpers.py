@@ -479,27 +479,23 @@ def get_profiler(config: Config):
             )
         else:
             on_trace_ready = None
-        if dist.get_rank() == 0:
-            prof = profile(
-                activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
-                # schedule=torch.profiler.schedule(wait=1, warmup=1, active=1, repeat=1, skip_first=3),
-                # In this example with wait=1, warmup=1, active=2, repeat=1,
-                # profiler will skip the first step/iteration,
-                # start warming up on the second, record
-                # the third, forth, fifth iterations,
-                # after which the trace will become available
-                # and on_trace_ready (when set) is called;
-                # the cycle repeats starting with the next step
-                schedule=torch.profiler.schedule(wait=1, warmup=1, active=3, repeat=1, skip_first=2),
+        
+        prof = profile(
+            activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+            schedule=torch.profiler.schedule(wait=1, warmup=1, active=3, repeat=1, skip_first=2),
+                # - Iterations 1-2: Skipped (skip_first=2)
+                # - Iteration 3: Wait (wait=1)
+                # - Iteration 4: Warmup (warmup=1)
+                # - Iterations 5-6-7: Active profiling (active=3)
+                # - After iteration 7: Profiling complete (repeat=1), so it will not start a new cycle after the 7th iteration.
                 on_trace_ready=on_trace_ready,
                 # record_shapes=True,
                 # profile_memory=True,
                 with_stack=True,
             )
-        else:
-            prof = contextlib.nullcontext()
     else:
         prof = contextlib.nullcontext()
+    
     return prof
 
 
