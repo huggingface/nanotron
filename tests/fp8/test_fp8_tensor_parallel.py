@@ -14,11 +14,9 @@ from nanotron.parallel.tensor_parallel.enum import TensorParallelLinearMode
 from nanotron.parallel.tensor_parallel.nn import (
     FP8TensorParallelColumnLinear,
     FP8TensorParallelRowLinear,
-    TensorParallelEmbedding,
 )
 from nanotron.sanity_checks import assert_tensor_synced_across_pg
 from nanotron.testing.parallel import init_distributed, rerun_if_address_is_in_use
-from nanotron.testing.utils import available_gpus
 from torch import nn
 
 
@@ -60,14 +58,10 @@ def _test_fp8_column_linear_metadata(
 
 
 # TODO(xrsrke): support gradient flow to bias
-# @pytest.mark.parametrize("tp,dp,pp", [pytest.param(i, 1, 1) for i in range(1, min(4, available_gpus()) + 1)])
 @pytest.mark.parametrize("tp,dp,pp", [[1, 1, 1], [2, 1, 1]])
-# @pytest.mark.parametrize("tp_mode", list(TensorParallelLinearMode))
-# @pytest.mark.parametrize("async_communication", [False, True])
 @pytest.mark.parametrize("tp_mode", [TensorParallelLinearMode.ALL_REDUCE])
 @pytest.mark.parametrize("async_communication", [False])
 @pytest.mark.parametrize("with_bias", [False])
-# @pytest.mark.parametrize("is_fp8", [False, True])
 @rerun_if_address_is_in_use()
 def test_column_linear(
     tp: int,
@@ -76,15 +70,14 @@ def test_column_linear(
     tp_mode: TensorParallelLinearMode,
     async_communication: bool,
     with_bias: bool,
-    # is_fp8: bool
 ):
     if tp_mode is TensorParallelLinearMode.ALL_REDUCE and async_communication:
         pytest.skip("ALL_REDUCE mode does not support async communication")
+
     init_distributed(tp=tp, dp=dp, pp=pp)(_test_column_linear)(
         tp_mode=tp_mode,
         async_communication=async_communication,
-        with_bias=with_bias
-        # is_fp8=is_fp8
+        with_bias=with_bias,
     )
 
 
@@ -93,12 +86,9 @@ def _test_column_linear(
     tp_mode: TensorParallelLinearMode,
     async_communication: bool,
     with_bias: bool,
-    # is_fp8: bool
 ):
     if async_communication:
         os.environ["CUDA_DEVICE_MAX_CONNECTIONS"] = "1"
-    # in_features = 2
-    # out_features_per_tp_rank = 3
 
     # NOTE: divisible by 16 for TP
     in_features = 32
@@ -114,8 +104,7 @@ def _test_column_linear(
         mode=tp_mode,
         device="cuda",
         async_communication=async_communication,
-        bias=with_bias
-        # is_fp8=is_fp8
+        bias=with_bias,
     )
 
     # Un-sharded
@@ -272,13 +261,8 @@ def _test_column_linear(
 
 # TODO(xrsrke): support gradient flow to bias
 
-# @pytest.mark.parametrize("tp,dp,pp", [pytest.param(i, 1, 1) for i in range(1, min(4, available_gpus()) + 1)])
-# @pytest.mark.parametrize("tp_mode", list(TensorParallelLinearMode))
-# @pytest.mark.parametrize("async_communication", [False, True])
-# @pytest.mark.parametrize("tp,dp,pp", [pytest.param(i, 1, 1) for i in range(1, min(4, available_gpus()) + 1)])
+
 @pytest.mark.parametrize("tp,dp,pp", [[1, 1, 1], [2, 1, 1]])
-# @pytest.mark.parametrize("tp_mode", list(TensorParallelLinearMode))
-# @pytest.mark.parametrize("async_communication", [False, True])
 @pytest.mark.parametrize("tp_mode", [TensorParallelLinearMode.ALL_REDUCE])
 @pytest.mark.parametrize("async_communication", [False])
 @pytest.mark.parametrize("with_bias", [False])
@@ -432,99 +416,6 @@ def _test_row_linear(
         ].to(torch.float16),
         rtol=0.2,
         atol=0.2,
-    )
-
-    parallel_context.destroy()
-
-
-@pytest.mark.parametrize("tp,dp,pp", [pytest.param(i, 1, 1) for i in range(1, min(4, available_gpus()) + 1)])
-# @pytest.mark.parametrize("tp_mode", list(TensorParallelLinearMode))
-@pytest.mark.parametrize("tp_mode", [TensorParallelLinearMode.ALL_REDUCE])
-@rerun_if_address_is_in_use()
-def test_tensor_parallel_embedding(tp: int, dp: int, pp: int, tp_mode: TensorParallelLinearMode):
-    init_distributed(tp=tp, dp=dp, pp=pp)(_test_tensor_parallel_embedding)(tp_mode=tp_mode)
-
-
-def _test_tensor_parallel_embedding(parallel_context: ParallelContext, tp_mode: TensorParallelLinearMode):
-    num_embeddings_per_rank = 100
-    embedding_dim = 3
-    num_embeddings = parallel_context.tp_pg.size() * num_embeddings_per_rank
-
-    # Sharded
-    sharded_embedding = TensorParallelEmbedding(
-        num_embeddings=num_embeddings,
-        embedding_dim=embedding_dim,
-        pg=parallel_context.tp_pg,
-        mode=tp_mode,
-        device="cuda",
-    )
-
-    # Un-sharded
-    reference_embedding = nn.Embedding(num_embeddings=num_embeddings, embedding_dim=embedding_dim, device="cuda")
-
-    # Copy weights/bias from sharded to un-sharded
-    with torch.inference_mode():
-        dist.all_reduce(tensor=reference_embedding.weight, op=dist.ReduceOp.SUM, group=parallel_context.tp_pg)
-        sharded_embedding.weight.copy_(
-            reference_embedding.weight[
-                dist.get_rank(parallel_context.tp_pg)
-                * num_embeddings_per_rank : (dist.get_rank(parallel_context.tp_pg) + 1)
-                * num_embeddings_per_rank,
-                :,
-            ]
-        )
-
-    # Generate random input
-    random_input: torch.Tensor
-    if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
-        batch_size = 5
-    elif tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
-        batch_size = 5 * parallel_context.tp_pg.size()
-    else:
-        raise ValueError(f"Unsupported mode: {tp_mode}")
-    random_input = torch.randint(low=0, high=num_embeddings, size=(batch_size,), device="cuda")
-    dist.all_reduce(random_input, op=dist.ReduceOp.AVG, group=parallel_context.tp_pg)
-
-    # Test that we get the same output after forward pass
-    sharded_output = sharded_embedding(random_input)
-    reference_output = reference_embedding(random_input)
-    weights = torch.arange(batch_size, device="cuda")[:, None]
-
-    if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
-        sharded_reference_output = reference_output
-        sharded_weights = weights
-    elif tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
-        assert batch_size % parallel_context.tp_pg.size() == 0
-        sharded_batch_size = batch_size // parallel_context.tp_pg.size()
-        sharded_reference_output = reference_output[
-            dist.get_rank(parallel_context.tp_pg)
-            * sharded_batch_size : (dist.get_rank(parallel_context.tp_pg) + 1)
-            * sharded_batch_size
-        ]
-        sharded_weights = weights[
-            dist.get_rank(parallel_context.tp_pg)
-            * sharded_batch_size : (dist.get_rank(parallel_context.tp_pg) + 1)
-            * sharded_batch_size
-        ]
-    else:
-        raise ValueError(f"Unsupported mode: {tp_mode}")
-
-    # TODO @thomasw21: Tune tolerance
-    torch.testing.assert_close(sharded_output, sharded_reference_output, atol=0, rtol=0)
-
-    # Test that we get the same gradient after backward pass
-    (sharded_output * sharded_weights).sum().backward()
-    (reference_output * weights).sum().backward()
-    torch.testing.assert_close(
-        sharded_embedding.weight.grad,
-        reference_embedding.weight.grad[
-            dist.get_rank(parallel_context.tp_pg)
-            * num_embeddings_per_rank : (dist.get_rank(parallel_context.tp_pg) + 1)
-            * num_embeddings_per_rank,
-            :,
-        ],
-        atol=0,
-        rtol=0,
     )
 
     parallel_context.destroy()

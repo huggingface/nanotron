@@ -34,10 +34,12 @@ from nanotron.parallel.pipeline_parallel.p2p import P2P
 from nanotron.parallel.tensor_parallel.functional import sharded_cross_entropy
 from nanotron.parallel.tensor_parallel.nn import (
     # TensorParallelColumnLinear,
-    FP8TensorParallelColumnLinear,
-    FP8TensorParallelRowLinear,
+    # TensorParallelColumnLinear,
+    # TensorParallelRowLinear,
+    TensorParallelColumnLinear,
     TensorParallelEmbedding,
     TensorParallelLinearMode,
+    TensorParallelRowLinear,
 )
 from nanotron.random import RandomStates
 from nanotron.scaling.parametrization import SpectralMupParametrizator, StandardParametrizator
@@ -146,7 +148,7 @@ class MLP(nn.Module):
             config.intermediate_size,  # shape of gate_linear
             config.intermediate_size,  # shape of up_linear
         )
-        self.gate_up_proj = FP8TensorParallelColumnLinear(
+        self.gate_up_proj = TensorParallelColumnLinear(
             config.hidden_size,
             2 * config.intermediate_size,
             pg=tp_pg,
@@ -154,16 +156,16 @@ class MLP(nn.Module):
             bias=False,
             async_communication=tp_linear_async_communication,
             contiguous_chunks=gate_up_contiguous_chunks,
-            name="mlp.gate_up_proj",
+            # name="mlp.gate_up_proj",
         )
-        self.down_proj = FP8TensorParallelRowLinear(
+        self.down_proj = TensorParallelRowLinear(
             config.intermediate_size,
             config.hidden_size,
             pg=tp_pg,
             mode=tp_mode,
             bias=False,
             async_communication=tp_linear_async_communication and tp_mode is TensorParallelLinearMode.REDUCE_SCATTER,
-            name="mlp.down_proj",
+            # name="mlp.down_proj",
         )
         # TODO @nouamane: why can't we torch.jit.script ActivationFunction?
         self.split_silu_mul = ActivationFunction(config.hidden_act)
@@ -309,7 +311,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             config.num_key_value_heads * self.d_qk,  # shape of k
             config.num_key_value_heads * self.d_qk,  # shape of v
         )
-        self.qkv_proj = FP8TensorParallelColumnLinear(
+        self.qkv_proj = TensorParallelColumnLinear(
             self.d_model,
             config.num_attention_heads * self.d_qk + 2 * config.num_key_value_heads * self.d_qk,
             pg=tp_pg,
@@ -317,7 +319,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             bias=False,
             async_communication=tp_linear_async_communication,
             contiguous_chunks=qkv_contiguous_chunks,
-            name="attn.qkv_proj"
+            # name="attn.qkv_proj"
             # is_fp8=True
         )
         # TODO(kunhao): We want to have only one version per device and not one version per layer.
@@ -330,14 +332,14 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         # NOTE: Only supported for training (TODO(fmom): position_ids not supported yet)
         self.flash_rotary_embedding = FlashRotaryEmbedding(dim=self.d_qk, base=config.rope_theta, interleaved=True)
 
-        self.o_proj = FP8TensorParallelRowLinear(
+        self.o_proj = TensorParallelRowLinear(
             config.num_attention_heads * self.d_qk,
             self.d_model,
             pg=tp_pg,
             mode=tp_mode,
             bias=False,
             async_communication=tp_linear_async_communication,
-            name="attn.o_proj"
+            # name="attn.o_proj"
             # is_fp8=True
         )
 
@@ -761,7 +763,7 @@ class LlamaModel(nn.Module):
         self.lm_head = PipelineBlock(
             p2p=self.p2p,
             # Understand that this means that we return sharded logits that are going to need to be gathered
-            module_builder=FP8TensorParallelColumnLinear,
+            module_builder=TensorParallelColumnLinear,
             module_kwargs={
                 "in_features": config.hidden_size,
                 "out_features": config.vocab_size,
@@ -770,7 +772,7 @@ class LlamaModel(nn.Module):
                 # TODO @thomasw21: refactor so that we store that default in a single place.
                 "mode": self.tp_mode,
                 "async_communication": tp_linear_async_communication,
-                "name": "lm_head",
+                # "name": "lm_head",
             },
             module_input_keys={"x"},
             module_output_keys={"logits"},
@@ -829,7 +831,7 @@ class LlamaModel(nn.Module):
             LlamaDecoderLayer: 4 * model_config.num_attention_heads * d_qkv * model_config.hidden_size
             + 3 * d_ff * model_config.hidden_size,
             # This is the last lm_head
-            FP8TensorParallelColumnLinear: model_config.vocab_size * model_config.hidden_size,
+            TensorParallelColumnLinear: model_config.vocab_size * model_config.hidden_size,
         }
         return block_compute_costs
 

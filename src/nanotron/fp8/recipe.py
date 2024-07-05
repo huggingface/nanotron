@@ -33,6 +33,8 @@ class FP8LinearRecipe:
     # NOTE: for the gradients
     input_grad: FP8TensorRecipe
     weight_grad: FP8TensorRecipe
+    # TODO(xrsrke): we don't need this, because the output gradients of a layer
+    # is the input gradients of the other layer
     output_grad: FP8TensorRecipe
 
     # TODO(xrsrke): this is a low-level implementation details

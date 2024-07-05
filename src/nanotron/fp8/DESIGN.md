@@ -16,3 +16,6 @@
 
 ### Tips
 - FP8 gives a net positive if the model is large.
+
+
+- In the FP8 recipe, when you set quantize an input to FP8, that means after an FP8 gemm operation, we will store the outputs as FP8, communicate it using the FP8 format, but if you set an input to float16, that means we store it as float16, but we will also need to quantize it to FP8 in order to performs

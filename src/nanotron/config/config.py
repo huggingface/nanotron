@@ -10,6 +10,7 @@ import yaml
 from dacite import from_dict
 from yaml.loader import SafeLoader
 
+from nanotron.config.fp8_config import FP8Args
 from nanotron.config.lighteval_config import LightEvalConfig
 from nanotron.config.models_config import ExistingCheckpointInit, NanotronConfigs, RandomInit, SpectralMupInit
 from nanotron.config.parallelism_config import ParallelismArgs
@@ -355,6 +356,7 @@ class Config:
     data_stages: Optional[List[DatasetStageArgs]] = None
     profiler: Optional[ProfilerArgs] = None
     lighteval: Optional[LightEvalConfig] = None
+    fp8: Optional[FP8Args] = None
 
     @classmethod
     def create_empty(cls):
@@ -438,6 +440,9 @@ def get_config_from_dict(
             for k, v in config_dict.items()
             if v is not None
         }
+
+    from nanotron.fp8.recipe import DTypes
+
     return from_dict(
         data_class=config_class,
         data=config_dict,
@@ -449,6 +454,7 @@ def get_config_from_dict(
                 TensorParallelLinearMode: lambda x: TensorParallelLinearMode[x.upper()],
                 RecomputeGranularity: lambda x: RecomputeGranularity[x.upper()],
                 SamplerType: lambda x: SamplerType[x.upper()],
+                DTypes: lambda x: DTypes[x.upper()],  # Add this line
             },
             # strict_unions_match=True,
             strict=True,

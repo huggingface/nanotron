@@ -67,7 +67,7 @@ from nanotron.parallel.pipeline_parallel.engine import (
 )
 from nanotron.parallel.pipeline_parallel.utils import get_pp_rank_of
 from nanotron.parallel.tensor_parallel.enum import TensorParallelLinearMode
-from nanotron.parallel.tensor_parallel.nn import TensorParallelRowLinear
+from nanotron.parallel.tensor_parallel.nn import FP8TensorParallelRowLinear, TensorParallelRowLinear
 from nanotron.parallel.tied_parameters import (
     create_pg_for_tied_weights,
     tie_parameters,
@@ -311,14 +311,14 @@ class DistributedTrainer:
             rank=0,
         )
 
-        datetime.datetime.now().strftime("%d/%m/%Y_%H:%M:%S")
-        if dist.get_rank(self.parallel_context.world_pg) == 0 and wandb is not None:
-            wandb.init(
-                project=self.config.general.project,
-                # name=f"{current_time}_{self.config.general.run}",
-                name=f"{self.config.general.run}",
-                config={"nanotron_config": self.config.as_dict()},
-            )
+        # datetime.datetime.now().strftime("%d/%m/%Y_%H:%M:%S")
+        # if dist.get_rank(self.parallel_context.world_pg) == 0 and wandb is not None:
+        #     wandb.init(
+        #         project=self.config.general.project,
+        #         # name=f"{current_time}_{self.config.general.run}",
+        #         name=f"{self.config.general.run}",
+        #         config={"nanotron_config": self.config.as_dict()},
+        #     )
 
     def post_train_step(self):
         pass
@@ -1032,7 +1032,7 @@ def mark_unsharded_params_as_tied_across_tp(
                     if sharded_info.is_tp_sharded(parallel_context=parallel_context):
                         continue
 
-            if isinstance(module, TensorParallelRowLinear) and "bias" == param_name:
+            if isinstance(module, (TensorParallelRowLinear, FP8TensorParallelRowLinear)) and "bias" == param_name:
                 # bias for TensorParallelRowLinear only exists on TP=0 so we don't need to tie it
                 continue
 

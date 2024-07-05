@@ -20,6 +20,18 @@ def test_create_nanotron_parameter():
     assert torch.allclose(param.data, data)
 
 
+def test_gradients_flow_to_nanotron_parameter():
+    data = torch.randn(3)
+    param = nn.Parameter(data)
+    param = NanotronParameter(param)
+
+    x = torch.randn(3)
+    output = torch.sum(param * x)
+    output.backward()
+
+    assert torch.allclose(param.data.grad, x)
+
+
 def test_set_new_value_for_nanotron_parameter():
     param = nn.Parameter(torch.randn(3))
     param = NanotronParameter(param)

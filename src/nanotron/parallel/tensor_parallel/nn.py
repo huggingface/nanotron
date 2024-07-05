@@ -18,6 +18,7 @@ import torch
 from torch import nn
 
 from nanotron import distributed as dist
+from nanotron._utils.helpers import post_init
 from nanotron.constants import IS_FP8
 from nanotron.distributed import get_global_rank
 from nanotron.fp8.tensor import FP8Tensor
@@ -48,7 +49,28 @@ except ImportError:
     BASE_LINEAR = nn.Linear
 
 
-class TensorParallelColumnLinear(nn.Linear):
+# class DynamicInheritance(type):
+#     def __new__(cls, name, bases, attrs, **kwargs):
+#         is_fp8 = attrs.get('is_fp8', False)
+#         parent_class = FP8Linear if is_fp8 else nn.Linear
+
+#         # Create a new class
+#         new_class = super().__new__(cls, name, (parent_class,), attrs)
+
+#         # Define a new __new__ method for the class
+#         def __new__(cls, *args, **kwargs):
+#             is_fp8 = kwargs.pop('is_fp8', False)
+#             parent_class = FP8Linear if is_fp8 else nn.Linear
+#             instance = parent_class(*args, **kwargs)
+#             instance.__class__ = cls
+#             return instance
+
+#         new_class.__new__ = staticmethod(__new__)
+#         return new_class
+
+
+@post_init
+class _BaseTensorParallelColumnLinear:
     def __init__(
         self,
         in_features,
@@ -60,6 +82,7 @@ class TensorParallelColumnLinear(nn.Linear):
         dtype=None,
         async_communication: bool = False,
         contiguous_chunks: Optional[Tuple[int, ...]] = None,
+        name: Optional[str] = None,
     ):
         self.pg = pg
         self.world_size = pg.size()
@@ -68,6 +91,7 @@ class TensorParallelColumnLinear(nn.Linear):
 
         self.in_features = in_features
         self.out_features = out_features // self.world_size
+        self.name = name
 
         super().__init__(
             in_features=self.in_features,
@@ -79,8 +103,6 @@ class TensorParallelColumnLinear(nn.Linear):
 
         self.mode = mode
         self.async_communication = async_communication
-
-        # assert self.weight.data.dtype in [torch.uint8, torch.int8], f"got {self.weight.data.dtype}"
 
         if contiguous_chunks is not None:
             assert (
@@ -102,14 +124,14 @@ class TensorParallelColumnLinear(nn.Linear):
             group=self.pg,
             tp_mode=self.mode,
             async_communication=self.async_communication,
-            # metadatas=self.metadatas if isinstance(self, FP8Linear) else None,
         )
 
     def extra_repr(self) -> str:
         return f"tp_rank={dist.get_rank(self.pg)}, {super().extra_repr()}, unsharded_out_features={self.out_features * self.world_size}"
 
 
-class TensorParallelRowLinear(nn.Linear):
+@post_init
+class _BaseTensorParallelRowLinear:
     def __init__(
         self,
         in_features,
@@ -121,6 +143,7 @@ class TensorParallelRowLinear(nn.Linear):
         dtype=None,
         async_communication: bool = False,
         contiguous_chunks: Optional[Tuple[int, ...]] = None,
+        name: Optional[str] = None,
     ):
         self.pg = pg
         self.world_size = pg.size()
@@ -129,6 +152,7 @@ class TensorParallelRowLinear(nn.Linear):
 
         self.in_features = in_features // self.world_size
         self.out_features = out_features
+        self.name = name
 
         # No need to shard the bias term, only rank 0 would have it
         bias = dist.get_rank(self.pg) == 0 and bias
@@ -181,65 +205,175 @@ class TensorParallelRowLinear(nn.Linear):
         return f"tp_rank={dist.get_rank(self.pg)}, {super().extra_repr()}, unsharded_in_features={self.in_features * self.world_size}"
 
 
-class FP8TensorParallelColumnLinear(FP8Linear):
-    def __init__(
-        self,
-        in_features,
-        out_features,
-        pg: dist.ProcessGroup,
-        mode: TensorParallelLinearMode,
-        bias=True,
-        device=None,
-        dtype=None,
-        async_communication: bool = False,
-        contiguous_chunks: Optional[Tuple[int, ...]] = None,
-        name: Optional[str] = None,
-    ):
-        self.pg = pg
-        self.world_size = pg.size()
+# class FP8TensorParallelColumnLinear(FP8Linear):
+#     def __init__(
+#         self,
+#         in_features,
+#         out_features,
+#         pg: dist.ProcessGroup,
+#         mode: TensorParallelLinearMode,
+#         bias=True,
+#         device=None,
+#         dtype=None,
+#         async_communication: bool = False,
+#         contiguous_chunks: Optional[Tuple[int, ...]] = None,
+#         name: Optional[str] = None,
+#     ):
+#         self.pg = pg
+#         self.world_size = pg.size()
 
-        assert out_features % self.world_size == 0
+#         assert out_features % self.world_size == 0
 
-        self.in_features = in_features
-        self.out_features = out_features // self.world_size
+#         self.in_features = in_features
+#         self.out_features = out_features // self.world_size
 
-        super().__init__(
-            in_features=self.in_features,
-            out_features=self.out_features,
-            bias=bias,
-            device=device,
-            dtype=dtype,
-        )
+#         super().__init__(
+#             in_features=self.in_features,
+#             out_features=self.out_features,
+#             bias=bias,
+#             device=device,
+#             dtype=dtype,
+#         )
 
-        self.name = name
-        self.mode = mode
-        self.async_communication = async_communication
+#         self.name = name
+#         self.mode = mode
+#         self.async_communication = async_communication
 
+#         assert self.weight.data.dtype in [torch.uint8, torch.int8], f"got {self.weight.data.dtype}"
+
+#         if contiguous_chunks is not None:
+#             assert (
+#                 sum(contiguous_chunks) == out_features
+#             ), f"Sum of contiguous chunks ({sum(contiguous_chunks)}) must equal to out_features ({out_features})"
+#         split_config = SplitConfig(split_dim=0, contiguous_chunks=contiguous_chunks)
+
+#         mark_all_parameters_in_module_as_sharded(
+#             self,
+#             pg=self.pg,
+#             split_config=split_config,
+#         )
+
+#     def forward(self, x: torch.Tensor) -> torch.Tensor:
+#         return column_linear(
+#             input=x,
+#             weight=self.weight,
+#             bias=self.bias,
+#             group=self.pg,
+#             tp_mode=self.mode,
+#             async_communication=self.async_communication,
+#             metadatas=self.metadatas if isinstance(self, FP8Linear) else None,
+#             name=self.name,
+#         )
+
+#     def extra_repr(self) -> str:
+#         extra = ""
+
+#         if isinstance(self.weight.data, FP8Tensor):
+#             extra = f"{self.weight.data.fp8_meta}"
+
+#         return f"tp_rank={dist.get_rank(self.pg)}, {super().extra_repr()}, unsharded_out_features={self.out_features * self.world_size}, {extra}"
+
+
+# class FP8TensorParallelRowLinear(FP8Linear):
+#     def __init__(
+#         self,
+#         in_features,
+#         out_features,
+#         pg: dist.ProcessGroup,
+#         mode: TensorParallelLinearMode,
+#         bias=True,
+#         device=None,
+#         dtype=None,
+#         async_communication: bool = False,
+#         contiguous_chunks: Optional[Tuple[int, ...]] = None,
+#         name: Optional[str] = None,
+#     ):
+#         self.pg = pg
+#         self.world_size = pg.size()
+
+#         assert in_features % self.world_size == 0
+
+#         self.in_features = in_features // self.world_size
+#         self.out_features = out_features
+
+#         # No need to shard the bias term, only rank 0 would have it
+#         bias = dist.get_rank(self.pg) == 0 and bias
+#         self.name = name
+
+#         super().__init__(
+#             in_features=self.in_features,
+#             out_features=self.out_features,
+#             bias=bias,
+#             device=device,
+#             dtype=dtype,
+#         )
+
+#         self.mode = mode
+#         self.async_communication = async_communication
+#         if self.mode is TensorParallelLinearMode.ALL_REDUCE and self.async_communication:
+#             raise ValueError("async_communication is not supported for ALL_REDUCE mode")
+
+#         if contiguous_chunks is not None:
+#             assert (
+#                 sum(contiguous_chunks) == in_features
+#             ), f"Sum of contiguous chunks ({sum(contiguous_chunks)}) must equal to in_features ({in_features})"
+
+#         split_config = SplitConfig(split_dim=1, contiguous_chunks=contiguous_chunks)
+
+#         self._mark_all_parameters_in_module_as_sharded(split_config)
+
+#     def _mark_all_parameters_in_module_as_sharded(self, split_config: SplitConfig):
+#         for name, param in list(self.named_parameters()):
+#             if name == "bias":
+#                 # `bias` only exists in rank 0 because it's not sharded
+#                 new_param = NanotronParameter(tensor=param)
+#             else:
+#                 new_param = create_sharded_parameter_from_config(
+#                     parameter=param,
+#                     pg=self.pg,
+#                     split_config=split_config,
+#                 )
+#             setattr(self, name, new_param)
+
+#     def forward(self, x: torch.Tensor) -> torch.Tensor:
+#         return row_linear(
+#             input=x,
+#             weight=self.weight,
+#             bias=self.bias,
+#             group=self.pg,
+#             tp_mode=self.mode,
+#             async_communication=self.async_communication,
+#             metadatas=self.metadatas if isinstance(self, FP8Linear) else None,
+#             name=self.name,
+#         )
+
+#     def extra_repr(self) -> str:
+#         extra = ""
+
+#         if isinstance(self.weight.data, FP8Tensor):
+#             extra = f"{self.weight.data.fp8_meta}"
+
+#         return f"tp_rank={dist.get_rank(self.pg)}, {super().extra_repr()}, unsharded_in_features={self.in_features * self.world_size}, {extra}"
+
+
+class TensorParallelColumnLinear(_BaseTensorParallelColumnLinear, nn.Linear):
+    """Non-quantized tensor parallel column linear layer."""
+
+    pass
+
+
+class TensorParallelRowLinear(_BaseTensorParallelRowLinear, nn.Linear):
+    """Non-quantized tensor parallel row linear layer."""
+
+    pass
+
+
+class FP8TensorParallelColumnLinear(_BaseTensorParallelColumnLinear, FP8Linear):
+    def __post_init__(self):
         assert self.weight.data.dtype in [torch.uint8, torch.int8], f"got {self.weight.data.dtype}"
-
-        if contiguous_chunks is not None:
-            assert (
-                sum(contiguous_chunks) == out_features
-            ), f"Sum of contiguous chunks ({sum(contiguous_chunks)}) must equal to out_features ({out_features})"
-        split_config = SplitConfig(split_dim=0, contiguous_chunks=contiguous_chunks)
-
-        mark_all_parameters_in_module_as_sharded(
-            self,
-            pg=self.pg,
-            split_config=split_config,
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return column_linear(
-            input=x,
-            weight=self.weight,
-            bias=self.bias,
-            group=self.pg,
-            tp_mode=self.mode,
-            async_communication=self.async_communication,
-            metadatas=self.metadatas if isinstance(self, FP8Linear) else None,
-            name=self.name,
-        )
+        assert (
+            self.metadatas is not None
+        ), "It seems like something went wrong in the initialization of FP8TensorParallelColumnLinear"
 
     def extra_repr(self) -> str:
         extra = ""
@@ -249,67 +383,25 @@ class FP8TensorParallelColumnLinear(FP8Linear):
 
         return f"tp_rank={dist.get_rank(self.pg)}, {super().extra_repr()}, unsharded_out_features={self.out_features * self.world_size}, {extra}"
 
-
-class FP8TensorParallelRowLinear(FP8Linear):
-    def __init__(
-        self,
-        in_features,
-        out_features,
-        pg: dist.ProcessGroup,
-        mode: TensorParallelLinearMode,
-        bias=True,
-        device=None,
-        dtype=None,
-        async_communication: bool = False,
-        contiguous_chunks: Optional[Tuple[int, ...]] = None,
-        name: Optional[str] = None,
-    ):
-        self.pg = pg
-        self.world_size = pg.size()
-
-        assert in_features % self.world_size == 0
-
-        self.in_features = in_features // self.world_size
-        self.out_features = out_features
-
-        # No need to shard the bias term, only rank 0 would have it
-        bias = dist.get_rank(self.pg) == 0 and bias
-        self.name = name
-
-        super().__init__(
-            in_features=self.in_features,
-            out_features=self.out_features,
-            bias=bias,
-            device=device,
-            dtype=dtype,
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return column_linear(
+            input=x,
+            weight=self.weight,
+            bias=self.bias,
+            group=self.pg,
+            tp_mode=self.mode,
+            async_communication=self.async_communication,
+            metadatas=self.metadatas,
+            name=self.name,
         )
 
-        self.mode = mode
-        self.async_communication = async_communication
-        if self.mode is TensorParallelLinearMode.ALL_REDUCE and self.async_communication:
-            raise ValueError("async_communication is not supported for ALL_REDUCE mode")
 
-        if contiguous_chunks is not None:
-            assert (
-                sum(contiguous_chunks) == in_features
-            ), f"Sum of contiguous chunks ({sum(contiguous_chunks)}) must equal to in_features ({in_features})"
-
-        split_config = SplitConfig(split_dim=1, contiguous_chunks=contiguous_chunks)
-
-        self._mark_all_parameters_in_module_as_sharded(split_config)
-
-    def _mark_all_parameters_in_module_as_sharded(self, split_config: SplitConfig):
-        for name, param in list(self.named_parameters()):
-            if name == "bias":
-                # `bias` only exists in rank 0 because it's not sharded
-                new_param = NanotronParameter(tensor=param)
-            else:
-                new_param = create_sharded_parameter_from_config(
-                    parameter=param,
-                    pg=self.pg,
-                    split_config=split_config,
-                )
-            setattr(self, name, new_param)
+class FP8TensorParallelRowLinear(_BaseTensorParallelRowLinear, FP8Linear):
+    def __post_init__(self):
+        assert self.weight.data.dtype in [torch.uint8, torch.int8], f"got {self.weight.data.dtype}"
+        assert (
+            self.metadatas is not None
+        ), "It seems like something went wrong in the initialization of FP8TensorParallelColumnLinear"
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return row_linear(
@@ -319,7 +411,7 @@ class FP8TensorParallelRowLinear(FP8Linear):
             group=self.pg,
             tp_mode=self.mode,
             async_communication=self.async_communication,
-            metadatas=self.metadatas if isinstance(self, FP8Linear) else None,
+            metadatas=self.metadatas,
             name=self.name,
         )
 
@@ -330,6 +422,22 @@ class FP8TensorParallelRowLinear(FP8Linear):
             extra = f"{self.weight.data.fp8_meta}"
 
         return f"tp_rank={dist.get_rank(self.pg)}, {super().extra_repr()}, unsharded_in_features={self.in_features * self.world_size}, {extra}"
+
+
+# # TODO(xrsrke): use concrete args instead of *args, **kwargs
+# def TensorParallelRowLinear(*args, is_fp8: bool = False, **kwargs):
+#     if is_fp8:
+#         return FP8TensorParallelRowLinear(*args, **kwargs, is_fp8=is_fp8)
+#     else:
+#         return BF16TensorParallelRowLinear(*args, **kwargs, is_fp8=is_fp8)
+
+
+# # TODO(xrsrke): use concrete args instead of *args, **kwargs
+# def TensorParallelColumnLinear(*args, is_fp8: bool = False, **kwargs):
+#     if is_fp8:
+#         return FP8TensorParallelColumnLinear(*args, **kwargs, is_fp8=is_fp8)
+#     else:
+#         return BF16TensorParallelColumnLinear(*args, **kwargs, is_fp8=is_fp8)
 
 
 class TiedLinear(nn.Linear):
