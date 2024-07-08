@@ -21,6 +21,8 @@ from nanotron import distributed as dist
 from nanotron._utils.helpers import post_init
 from nanotron.constants import IS_FP8
 from nanotron.distributed import get_global_rank
+from nanotron.fp8.constants import FP8LM_LINEAR_RECIPE
+from nanotron.fp8.recipe import FP8LinearRecipe
 from nanotron.fp8.tensor import FP8Tensor
 from nanotron.parallel.parameters import NanotronParameter
 from nanotron.parallel.sharded_parameters import (
@@ -83,6 +85,7 @@ class _BaseTensorParallelColumnLinear:
         async_communication: bool = False,
         contiguous_chunks: Optional[Tuple[int, ...]] = None,
         name: Optional[str] = None,
+        recipe: Optional[FP8LinearRecipe] = None,
     ):
         self.pg = pg
         self.world_size = pg.size()
@@ -93,13 +96,17 @@ class _BaseTensorParallelColumnLinear:
         self.out_features = out_features // self.world_size
         self.name = name
 
-        super().__init__(
-            in_features=self.in_features,
-            out_features=self.out_features,
-            bias=bias,
-            device=device,
-            dtype=dtype,
-        )
+        init_args = {
+            "in_features": self.in_features,
+            "out_features": self.out_features,
+            "bias": bias,
+            "device": device,
+            "dtype": dtype,
+        }
+        if self.__class__ is FP8TensorParallelColumnLinear:
+            init_args["recipe"] = recipe
+
+        super().__init__(**init_args)
 
         self.mode = mode
         self.async_communication = async_communication
@@ -144,6 +151,8 @@ class _BaseTensorParallelRowLinear:
         async_communication: bool = False,
         contiguous_chunks: Optional[Tuple[int, ...]] = None,
         name: Optional[str] = None,
+        # TODO(xrsrke): remove this from base class
+        recipe: Optional[FP8LinearRecipe] = None,
     ):
         self.pg = pg
         self.world_size = pg.size()
@@ -157,13 +166,17 @@ class _BaseTensorParallelRowLinear:
         # No need to shard the bias term, only rank 0 would have it
         bias = dist.get_rank(self.pg) == 0 and bias
 
-        super().__init__(
-            in_features=self.in_features,
-            out_features=self.out_features,
-            bias=bias,
-            device=device,
-            dtype=dtype,
-        )
+        init_args = {
+            "in_features": self.in_features,
+            "out_features": self.out_features,
+            "bias": bias,
+            "device": device,
+            "dtype": dtype,
+        }
+        if self.__class__ is FP8TensorParallelRowLinear:
+            init_args["recipe"] = recipe
+
+        super().__init__(**init_args)
         self.mode = mode
         self.async_communication = async_communication
         if self.mode is TensorParallelLinearMode.ALL_REDUCE and self.async_communication:
@@ -205,157 +218,6 @@ class _BaseTensorParallelRowLinear:
         return f"tp_rank={dist.get_rank(self.pg)}, {super().extra_repr()}, unsharded_in_features={self.in_features * self.world_size}"
 
 
-# class FP8TensorParallelColumnLinear(FP8Linear):
-#     def __init__(
-#         self,
-#         in_features,
-#         out_features,
-#         pg: dist.ProcessGroup,
-#         mode: TensorParallelLinearMode,
-#         bias=True,
-#         device=None,
-#         dtype=None,
-#         async_communication: bool = False,
-#         contiguous_chunks: Optional[Tuple[int, ...]] = None,
-#         name: Optional[str] = None,
-#     ):
-#         self.pg = pg
-#         self.world_size = pg.size()
-
-#         assert out_features % self.world_size == 0
-
-#         self.in_features = in_features
-#         self.out_features = out_features // self.world_size
-
-#         super().__init__(
-#             in_features=self.in_features,
-#             out_features=self.out_features,
-#             bias=bias,
-#             device=device,
-#             dtype=dtype,
-#         )
-
-#         self.name = name
-#         self.mode = mode
-#         self.async_communication = async_communication
-
-#         assert self.weight.data.dtype in [torch.uint8, torch.int8], f"got {self.weight.data.dtype}"
-
-#         if contiguous_chunks is not None:
-#             assert (
-#                 sum(contiguous_chunks) == out_features
-#             ), f"Sum of contiguous chunks ({sum(contiguous_chunks)}) must equal to out_features ({out_features})"
-#         split_config = SplitConfig(split_dim=0, contiguous_chunks=contiguous_chunks)
-
-#         mark_all_parameters_in_module_as_sharded(
-#             self,
-#             pg=self.pg,
-#             split_config=split_config,
-#         )
-
-#     def forward(self, x: torch.Tensor) -> torch.Tensor:
-#         return column_linear(
-#             input=x,
-#             weight=self.weight,
-#             bias=self.bias,
-#             group=self.pg,
-#             tp_mode=self.mode,
-#             async_communication=self.async_communication,
-#             metadatas=self.metadatas if isinstance(self, FP8Linear) else None,
-#             name=self.name,
-#         )
-
-#     def extra_repr(self) -> str:
-#         extra = ""
-
-#         if isinstance(self.weight.data, FP8Tensor):
-#             extra = f"{self.weight.data.fp8_meta}"
-
-#         return f"tp_rank={dist.get_rank(self.pg)}, {super().extra_repr()}, unsharded_out_features={self.out_features * self.world_size}, {extra}"
-
-
-# class FP8TensorParallelRowLinear(FP8Linear):
-#     def __init__(
-#         self,
-#         in_features,
-#         out_features,
-#         pg: dist.ProcessGroup,
-#         mode: TensorParallelLinearMode,
-#         bias=True,
-#         device=None,
-#         dtype=None,
-#         async_communication: bool = False,
-#         contiguous_chunks: Optional[Tuple[int, ...]] = None,
-#         name: Optional[str] = None,
-#     ):
-#         self.pg = pg
-#         self.world_size = pg.size()
-
-#         assert in_features % self.world_size == 0
-
-#         self.in_features = in_features // self.world_size
-#         self.out_features = out_features
-
-#         # No need to shard the bias term, only rank 0 would have it
-#         bias = dist.get_rank(self.pg) == 0 and bias
-#         self.name = name
-
-#         super().__init__(
-#             in_features=self.in_features,
-#             out_features=self.out_features,
-#             bias=bias,
-#             device=device,
-#             dtype=dtype,
-#         )
-
-#         self.mode = mode
-#         self.async_communication = async_communication
-#         if self.mode is TensorParallelLinearMode.ALL_REDUCE and self.async_communication:
-#             raise ValueError("async_communication is not supported for ALL_REDUCE mode")
-
-#         if contiguous_chunks is not None:
-#             assert (
-#                 sum(contiguous_chunks) == in_features
-#             ), f"Sum of contiguous chunks ({sum(contiguous_chunks)}) must equal to in_features ({in_features})"
-
-#         split_config = SplitConfig(split_dim=1, contiguous_chunks=contiguous_chunks)
-
-#         self._mark_all_parameters_in_module_as_sharded(split_config)
-
-#     def _mark_all_parameters_in_module_as_sharded(self, split_config: SplitConfig):
-#         for name, param in list(self.named_parameters()):
-#             if name == "bias":
-#                 # `bias` only exists in rank 0 because it's not sharded
-#                 new_param = NanotronParameter(tensor=param)
-#             else:
-#                 new_param = create_sharded_parameter_from_config(
-#                     parameter=param,
-#                     pg=self.pg,
-#                     split_config=split_config,
-#                 )
-#             setattr(self, name, new_param)
-
-#     def forward(self, x: torch.Tensor) -> torch.Tensor:
-#         return row_linear(
-#             input=x,
-#             weight=self.weight,
-#             bias=self.bias,
-#             group=self.pg,
-#             tp_mode=self.mode,
-#             async_communication=self.async_communication,
-#             metadatas=self.metadatas if isinstance(self, FP8Linear) else None,
-#             name=self.name,
-#         )
-
-#     def extra_repr(self) -> str:
-#         extra = ""
-
-#         if isinstance(self.weight.data, FP8Tensor):
-#             extra = f"{self.weight.data.fp8_meta}"
-
-#         return f"tp_rank={dist.get_rank(self.pg)}, {super().extra_repr()}, unsharded_in_features={self.in_features * self.world_size}, {extra}"
-
-
 class TensorParallelColumnLinear(_BaseTensorParallelColumnLinear, nn.Linear):
     """Non-quantized tensor parallel column linear layer."""
 
@@ -369,6 +231,10 @@ class TensorParallelRowLinear(_BaseTensorParallelRowLinear, nn.Linear):
 
 
 class FP8TensorParallelColumnLinear(_BaseTensorParallelColumnLinear, FP8Linear):
+    def __init__(self, *args, recipe: FP8LinearRecipe = FP8LM_LINEAR_RECIPE, **kwargs):
+        super().__init__(*args, **kwargs, recipe=recipe)
+        self.recipe = recipe
+
     def __post_init__(self):
         assert self.weight.data.dtype in [torch.uint8, torch.int8], f"got {self.weight.data.dtype}"
         assert (
@@ -393,10 +259,15 @@ class FP8TensorParallelColumnLinear(_BaseTensorParallelColumnLinear, FP8Linear):
             async_communication=self.async_communication,
             metadatas=self.metadatas,
             name=self.name,
+            recipe=self.recipe,
         )
 
 
 class FP8TensorParallelRowLinear(_BaseTensorParallelRowLinear, FP8Linear):
+    def __init__(self, *args, recipe: FP8LinearRecipe = FP8LM_LINEAR_RECIPE, **kwargs):
+        super().__init__(*args, **kwargs, recipe=recipe)
+        self.recipe = recipe
+
     def __post_init__(self):
         assert self.weight.data.dtype in [torch.uint8, torch.int8], f"got {self.weight.data.dtype}"
         assert (
@@ -413,6 +284,7 @@ class FP8TensorParallelRowLinear(_BaseTensorParallelRowLinear, FP8Linear):
             async_communication=self.async_communication,
             metadatas=self.metadatas,
             name=self.name,
+            recipe=self.recipe,
         )
 
     def extra_repr(self) -> str:
@@ -553,17 +425,6 @@ class TensorParallelEmbedding(nn.Embedding):
         else:
             masked_input = input_ids
         out = super().forward(masked_input)
-
-        # from torch.nn import functional as F
-        # out = F.embedding(
-        #     masked_input,
-        #     self.weight._data if hasattr(self.weight, "_data") else self.weight,
-        #     self.padding_idx,
-        #     self.max_norm,
-        #     self.norm_type,
-        #     self.scale_grad_by_freq,
-        #     self.sparse,
-        # )
 
         if self.pg.size() > 1:
             out = out * (~input_mask[..., None])

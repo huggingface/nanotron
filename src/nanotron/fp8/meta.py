@@ -23,6 +23,7 @@ class FP8Meta:
     interval is the number of steps before we rescale the scaling factor
     """
 
+    # TODO(xrsrke): add "margin"
     amax: torch.Tensor
     scale: torch.Tensor
 
@@ -124,4 +125,4 @@ class FP8Meta:
         self._num_remaining_steps_until_rescale = self.interval
 
     def __repr__(self) -> str:
-        return f"FP8Meta(amax={self.amax}, scale={self.scale}, inverse_scale={self.inverse_scale}, dtype={self.dtype})"
+        return f"FP8Meta(amax={self.amax}, scale={self.scale}, inverse_scale={self.inverse_scale}, dtype={self.dtype}, interval={self.interval}"

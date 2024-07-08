@@ -1,9 +1,11 @@
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import torch
 import transformer_engine as te  # noqa
 from torch import nn
 
+from nanotron.config import Config
+from nanotron.config.fp8_config import FP8LayerArgs
 from nanotron.fp8.constants import FP8_GPU_NAMES, FP8LM_RECIPE, QTYPE_TO_DTYPE
 from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.linear import FP8Linear
@@ -191,3 +193,10 @@ def convert_logs_to_flat_logs(logs, prefix):
                 flat_logs[f"{prefix}:{module_name}:{component_name}:{stat_name}"] = value
 
     return flat_logs
+
+
+def find_fp8_config_by_module_name(config: Config, target_module_name: str) -> Optional[FP8LayerArgs]:
+    for layer_args in config.fp8.model:
+        if layer_args.module_name == target_module_name:
+            return layer_args
+    return None

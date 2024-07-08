@@ -1,7 +1,8 @@
 from dataclasses import dataclass
 from typing import List, Literal, Union
 
-from nanotron.fp8.constants import DTypes, FP8OptimRecipe, FP8SplitAccumulator, FP8TensorRecipe
+from nanotron.fp8.constants import DTypes
+from nanotron.fp8.recipe import FP8Accumulate, FP8OptimRecipe, FP8SplitAccumulator, FP8TensorRecipe
 from nanotron.logging import get_logger
 
 logger = get_logger(__name__)
@@ -27,6 +28,7 @@ class FP8LayerArgs:
     weight_grad: Union[FP8TensorRecipe, TorchDtype]
     output_grad: Union[FP8TensorRecipe, TorchDtype]
     split_accumulator: FP8SplitAccumulator
+    accumulate: FP8Accumulate
 
 
 @dataclass

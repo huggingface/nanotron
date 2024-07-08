@@ -5,11 +5,11 @@ import torch
 import transformer_engine as te  # noqa
 from torch import nn
 
-from nanotron.fp8.constants import FP8LM_RECIPE, QTYPE_TO_DTYPE
-from nanotron.fp8.dtypes import DTypes
+from nanotron.fp8.constants import FP8LM_LINEAR_RECIPE, QTYPE_TO_DTYPE
 from nanotron.fp8.kernel import fp8_matmul_kernel
 from nanotron.fp8.meta import FP8Meta
 from nanotron.fp8.parameter import FP8Parameter
+from nanotron.fp8.recipe import FP8LinearRecipe
 from nanotron.fp8.tensor import FP8Tensor
 
 
@@ -34,7 +34,8 @@ class FP8Linear(nn.Linear):
         out_features: int,
         bias: bool = True,
         device: Optional[torch.device] = None,
-        accum_qtype: DTypes = FP8LM_RECIPE.linear.accum_dtype,
+        # accum_qtype: DTypes = FP8LM_RECIPE.linear.accum_dtype,
+        recipe: FP8LinearRecipe = FP8LM_LINEAR_RECIPE,
         # NOTE: placeholder for dtype in torch's nn.Linear
         # TODO(xrsrke): remove this shit
         **kwargs,
@@ -45,30 +46,31 @@ class FP8Linear(nn.Linear):
         """
 
         assert device != torch.device("cpu"), "FP8Linear only supports CUDA tensors"
-        assert accum_qtype in DTypes
+        # assert accum_qtype in DTypes
 
         # TODO(xrsrke): take initialization dtype from recipe
-        super().__init__(in_features, out_features, bias, device, torch.float32)
+        super().__init__(in_features, out_features, bias, device, dtype=QTYPE_TO_DTYPE[recipe.accum_dtype])
         # TODO(xrsrke): don't fixed dtype, take it from the FP8 recipe
         # DTypes.FP8E4M3
         weight_data = self.weight.data
         orig_w_shape = weight_data.shape
         weight_data = weight_data.contiguous().view(-1).contiguous().reshape(orig_w_shape)
-        quant_w = FP8Parameter(
-            weight_data, dtype=FP8LM_RECIPE.linear.weight.dtype, interval=FP8LM_RECIPE.linear.weight.interval
-        )
+        quant_w = FP8Parameter(weight_data, dtype=recipe.weight.dtype, interval=recipe.weight.interval)
         assert quant_w.dtype in [torch.uint8, torch.int8], f"got {self.weight.data.dtype}"
         self.weight = quant_w
         # assert self.weight.data.orig_data.abs().max() == quant_w.fp8_meta.amax
 
         assert self.weight.data.dtype in [torch.uint8, torch.int8], f"got {self.weight.data.dtype}"
         self.metadatas = FP8LinearMeta()
-        self.accum_qtype = accum_qtype
+        # self.accum_qtype = accum_qtype
+        self.recipe = recipe
 
     def forward(self, input: Union[FP8Tensor, torch.Tensor]) -> torch.Tensor:
         import nanotron.fp8.functional as F
 
-        return F.linear(input, self.weight.data, self.bias, self.accum_qtype, self.metadatas)
+        return F.linear(
+            input=input, weight=self.weight.data, bias=self.bias, metadatas=self.metadatas, recipe=self.recipe
+        )
 
     def __repr__(self) -> str:
         return f"FP8{super().__repr__()}"
@@ -85,7 +87,8 @@ class _FP8Matmul(torch.autograd.Function):
         output: torch.Tensor,
         phony: torch.Tensor,
         metadatas: FP8LinearMeta,
-        accum_qtype: DTypes,
+        # accum_qtype: DTypes,
+        recipe: FP8LinearRecipe,
         name,
     ) -> torch.Tensor:
         assert not isinstance(input, FP8Tensor)
@@ -96,20 +99,21 @@ class _FP8Matmul(torch.autograd.Function):
         if metadatas.input is None:
             fp8_input = FP8Tensor(
                 input,
-                dtype=FP8LM_RECIPE.linear.input.dtype,
-                interval=FP8LM_RECIPE.linear.input.interval,
+                dtype=recipe.input.dtype,
+                interval=recipe.input.interval,
             )
             metadatas.input = fp8_input.fp8_meta
         else:
             fp8_input = FP8Tensor.from_metadata(input, metadatas.input)
 
-        ctx.accum_qtype = accum_qtype
-        ctx.metadatas = metadatas
+        # ctx.accum_qtype = accum_qtype
         ctx.save_for_backward(fp8_input, weight)
+        ctx.metadatas = metadatas
         ctx.name = name
+        ctx.recipe = recipe
 
-        output = output.contiguous()
-        accum_output = torch.zeros(output.shape, dtype=torch.float16, device="cuda")
+        accum_output = output.contiguous()
+        # accum_output = torch.zeros(output.shape, dtype=torch.float16, device="cuda")
 
         assert fp8_input.data.is_contiguous()
         assert weight.data.is_contiguous()
@@ -122,8 +126,10 @@ class _FP8Matmul(torch.autograd.Function):
             mat_b=fp8_input,
             transpose_b=False,
             output=accum_output,
-            use_split_accumulator=FP8LM_RECIPE.linear.split_accumulator.output,
-            accum_qtype=accum_qtype,
+            use_split_accumulator=recipe.split_accumulator.output,
+            accumulate=recipe.accumulate.output,
+            accum_qtype=recipe.accum_dtype,
+            recipe=recipe,
         )
         return output, phony
 
@@ -138,7 +144,9 @@ class _FP8Matmul(torch.autograd.Function):
         # import pydevd
         # pydevd.settrace(suspend=False, trace_only_current_thread=True)
         fp8_input, fp8_weight = ctx.saved_tensors
-        accum_qtype = ctx.accum_qtype
+        recipe = ctx.recipe
+        recipe = cast(FP8LinearRecipe, recipe)
+        # accum_qtype = ctx.accum_qtype
 
         fp8_input = cast(FP8Tensor, fp8_input)
         fp8_weight = cast(FP8Tensor, fp8_weight)
@@ -148,8 +156,8 @@ class _FP8Matmul(torch.autograd.Function):
         if ctx.metadatas.input_grad is None:
             fp8_grad_output = FP8Tensor(
                 grad_output,
-                dtype=FP8LM_RECIPE.linear.input_grad.dtype,
-                interval=FP8LM_RECIPE.linear.input_grad.interval,
+                dtype=recipe.input_grad.dtype,
+                interval=recipe.input_grad.interval,
             )
             ctx.metadatas.input_grad = fp8_grad_output.fp8_meta
         else:
@@ -158,7 +166,10 @@ class _FP8Matmul(torch.autograd.Function):
         transposed_fp8_weight = fp8_weight.transpose_fp8()
 
         grad_input_temp = torch.zeros(
-            fp8_grad_output.shape[0], transposed_fp8_weight.shape[0], device="cuda", dtype=QTYPE_TO_DTYPE[accum_qtype]
+            fp8_grad_output.shape[0],
+            transposed_fp8_weight.shape[0],
+            device="cuda",
+            dtype=QTYPE_TO_DTYPE[recipe.accum_dtype],
         )
         grad_input = fp8_matmul_kernel(
             mat_a=transposed_fp8_weight,
@@ -166,9 +177,11 @@ class _FP8Matmul(torch.autograd.Function):
             mat_b=fp8_grad_output,
             transpose_b=False,
             output=grad_input_temp,
-            use_split_accumulator=FP8LM_RECIPE.linear.split_accumulator.input_grad,
-            accum_qtype=accum_qtype,
+            use_split_accumulator=recipe.split_accumulator.input_grad,
+            accum_qtype=recipe.accum_dtype,
+            accumulate=recipe.accumulate.input_grad,
             is_backward=True,
+            recipe=recipe,
         )
 
         transposed_fp8_grad_output = fp8_grad_output.transpose_fp8()
@@ -178,7 +191,7 @@ class _FP8Matmul(torch.autograd.Function):
             transposed_fp8_input.shape[0],
             transposed_fp8_grad_output.shape[0],
             device="cuda",
-            dtype=QTYPE_TO_DTYPE[accum_qtype],
+            dtype=QTYPE_TO_DTYPE[recipe.accum_dtype],
         )
         grad_weight = fp8_matmul_kernel(
             mat_a=transposed_fp8_input,
@@ -186,13 +199,15 @@ class _FP8Matmul(torch.autograd.Function):
             mat_b=transposed_fp8_grad_output,
             transpose_b=False,
             output=grad_weight_temp,
-            use_split_accumulator=FP8LM_RECIPE.linear.split_accumulator.weight_grad,
-            accum_qtype=accum_qtype,
+            use_split_accumulator=recipe.split_accumulator.weight_grad,
+            accumulate=recipe.accumulate.weight_grad,
+            accum_qtype=recipe.accum_dtype,
             # is_backward=True
+            recipe=recipe,
         )
 
-        assert grad_input.dtype == QTYPE_TO_DTYPE[accum_qtype]
-        assert grad_weight.dtype == QTYPE_TO_DTYPE[accum_qtype]
+        assert grad_input.dtype == QTYPE_TO_DTYPE[recipe.accum_dtype]
+        assert grad_weight.dtype == QTYPE_TO_DTYPE[recipe.accum_dtype]
         # TODO(xrsrke): maintain a persistence metadata across training
 
         grad_weight = grad_weight.T.contiguous()
@@ -202,8 +217,8 @@ class _FP8Matmul(torch.autograd.Function):
         if ctx.metadatas.weight_grad is None:
             fp8_weight_grad = FP8Tensor(
                 grad_weight,
-                dtype=FP8LM_RECIPE.linear.weight_grad.dtype,
-                interval=FP8LM_RECIPE.linear.weight_grad.interval,
+                dtype=recipe.weight_grad.dtype,
+                interval=recipe.weight_grad.interval,
             )
             ctx.metadatas.weight_grad = fp8_weight_grad.fp8_meta
         else:

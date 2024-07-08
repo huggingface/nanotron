@@ -5,6 +5,7 @@ import torch
 from nanotron.fp8.constants import QTYPE_TO_DTYPE
 from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.linear import FP8LinearMeta
+from nanotron.fp8.recipe import FP8LinearRecipe
 from nanotron.fp8.tensor import FP8Tensor
 
 
@@ -72,12 +73,14 @@ def linear(
     input: torch.Tensor,
     weight: FP8Tensor,
     bias: Optional[torch.Tensor] = None,
-    accum_qtype: DTypes = None,
+    # accum_qtype: DTypes = None,
     metadatas: FP8LinearMeta = None,
+    recipe: FP8LinearRecipe = None,
     name: Optional[str] = None,
 ):
-    assert accum_qtype is not None, "accum_qtype must be specified"
+    # assert accum_qtype is not None, "accum_qtype must be specified"
     assert metadatas is not None, "metadatas must be specified"
+    assert recipe is not None, "recipe must be specified"
     assert input.device != torch.device("cpu"), "FP8Linear only supports CUDA tensors"
     # return addmm(input=bias, mat1=input, mat2=weight.transpose_fp8(), output=output, accum_qtype=accum_qtype, metadatas=metadatas)
 
@@ -101,8 +104,8 @@ def linear(
     # because weight and bias's requires_grad are set to False
     # so that we can compute the gradients using the fp8 kernels by ourselves
     phony = torch.empty(0, device=input.device, requires_grad=True)
-    output = torch.zeros(input.shape[0], weight.shape[0], device="cuda", dtype=QTYPE_TO_DTYPE[accum_qtype])
-    output, _ = _FP8Matmul.apply(input, weight, output, phony, metadatas, accum_qtype, name)
+    output = torch.zeros(input.shape[0], weight.shape[0], device="cuda", dtype=QTYPE_TO_DTYPE[recipe.accum_dtype])
+    output, _ = _FP8Matmul.apply(input, weight, output, phony, metadatas, recipe, name)
 
     # TODO(xrsrke): add support for adding bias in fp8
     # TODO(xrsrke): support return an fp8 tensor as output

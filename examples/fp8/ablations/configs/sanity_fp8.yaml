@@ -166,34 +166,68 @@ tokens:
 
 fp8:
   model:
-  - module_name: attn.qkv_proj
+  - module_name: model.decoder.0.mlp.down_proj
     accum_dtype: KFLOAT16
     input:
       dtype: float16
     weight:
       dtype: FP8E4M3
-      margin: 1
+      margin: 0
       interval: 1
     bias:
       dtype: float16
     input_grad:
-      dtype: FP8E4M3
-      margin: 1
+      dtype: FP8E5M2
+      margin: 0
       interval: 1
     weight_grad:
-      dtype: FP8E4M3
-      margin: 1
+      dtype: FP8E5M2
+      margin: 0
       interval: 1
     output_grad:
-      dtype: FP8E4M3
-      margin: 1
+      dtype: FP8E5M2
+      margin: 0
       interval: 1
     split_accumulator:
+      output: true
+      input_grad: true
+      weight_grad: true
+    accumulate:
+      output: true
+      input_grad: true
+      weight_grad: true
+  - module_name: model.decoder.1.attn.qkv_proj
+    accum_dtype: KFLOAT16
+    input:
+      dtype: float16
+    weight:
+      dtype: FP8E4M3
+      margin: 0
+      interval: 1
+    bias:
+      dtype: float16
+    input_grad:
+      dtype: FP8E5M2
+      margin: 0
+      interval: 1
+    weight_grad:
+      dtype: FP8E5M2
+      margin: 0
+      interval: 1
+    output_grad:
+      dtype: FP8E5M2
+      margin: 0
+      interval: 1
+    split_accumulator:
+      output: true
+      input_grad: true
+      weight_grad: true
+    accumulate:
       output: true
       input_grad: true
       weight_grad: true
   optim:
     master_weight_dtype: KFLOAT32
     accum_dtype: KFLOAT32
-    exp_avg_dtype: FP8E4M3
-    exp_avg_sq_dtype: FP8E4M3
+    exp_avg_dtype: KFLOAT32
+    exp_avg_sq_dtype: KFLOAT32

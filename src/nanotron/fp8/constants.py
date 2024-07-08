@@ -42,6 +42,28 @@ QTYPE_TO_DTYPE = {
 
 # TODO(xrsrke): differentiate the precision that you initializes model weight
 # and the accumulation precision in FP8 recipe
+
+FP8LM_LINEAR_RECIPE = FP8LinearRecipe(
+    accum_dtype=DTypes.KFLOAT16,
+    input=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=16),
+    weight=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=1),
+    bias=FP8TensorRecipe(dtype=DTypes.KFLOAT16, margin=0, interval=16),
+    # NOTE: these are the dtypes for the gradients
+    input_grad=FP8TensorRecipe(dtype=DTypes.FP8E5M2, margin=0, interval=16),  # NOTE: this is output_grad
+    weight_grad=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=1),
+    output_grad=FP8TensorRecipe(dtype=DTypes.FP8E5M2, margin=0, interval=16),
+    split_accumulator=FP8SplitAccumulator(output=True, input_grad=True, weight_grad=True),
+    # NOTE: tested, and it works
+    # accumulate=FP8SplitAccumulator(output=False, input_grad=False, weight_grad=False),
+    accumulate=FP8SplitAccumulator(output=True, input_grad=True, weight_grad=True),
+)
+FP8LM_OPTIM_RECIPE = FP8OptimRecipe(
+    accum_dtype=DTypes.KFLOAT32,
+    master_weight_dtype=DTypes.KFLOAT16,
+    exp_avg_dtype=DTypes.FP8E4M3,
+    exp_avg_sq_dtype=DTypes.KFLOAT16,
+)
+
 FP8LM_RECIPE = FP8TrainingRecipe(
     # linear=FP8LinearRecipe(
     #     accum_dtype=DTypes.KFLOAT16,
@@ -67,17 +89,7 @@ FP8LM_RECIPE = FP8TrainingRecipe(
     #     split_accumulator=FP8SplitAccumulator(output=True, input_grad=True, weight_grad=True),
     # ),
     # # NOTE: FP8-LM recipe
-    linear=FP8LinearRecipe(
-        accum_dtype=DTypes.KFLOAT16,
-        input=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=16),
-        weight=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=1),
-        bias=FP8TensorRecipe(dtype=DTypes.KFLOAT16, margin=0, interval=16),
-        # NOTE: these are the dtypes for the gradients
-        input_grad=FP8TensorRecipe(dtype=DTypes.FP8E5M2, margin=0, interval=16),  # NOTE: this is output_grad
-        weight_grad=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=1),
-        output_grad=FP8TensorRecipe(dtype=DTypes.FP8E5M2, margin=0, interval=16),
-        split_accumulator=FP8SplitAccumulator(output=True, input_grad=True, weight_grad=True),
-    ),
+    linear=FP8LM_LINEAR_RECIPE,
     # NOTE: works for 8B
     # linear=FP8LinearRecipe(
     #     accum_dtype=DTypes.KFLOAT16,
@@ -91,12 +103,7 @@ FP8LM_RECIPE = FP8TrainingRecipe(
     #     # split_accumulator=FP8SplitAccumulator(output=False, input_grad=True, weight_grad=True), # NOTE: msamp use this
     #     split_accumulator=FP8SplitAccumulator(output=True, input_grad=True, weight_grad=True),
     # ),
-    optim=FP8OptimRecipe(
-        accum_dtype=DTypes.KFLOAT32,
-        master_weight_dtype=DTypes.KFLOAT16,
-        exp_avg_dtype=DTypes.FP8E4M3,
-        exp_avg_sq_dtype=DTypes.KFLOAT16,
-    ),
+    optim=FP8LM_OPTIM_RECIPE,
 )
 
 ### FOR DYNAMIC LOSS SCALING ###

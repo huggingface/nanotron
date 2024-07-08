@@ -23,11 +23,19 @@ class FP8SplitAccumulator:
 
 
 @dataclass
+class FP8Accumulate:
+    output: bool
+    input_grad: bool
+    weight_grad: bool
+
+
+@dataclass
 class FP8LinearRecipe:
     accum_dtype: DTypes
 
     input: FP8TensorRecipe
     weight: FP8TensorRecipe
+    # TODO(xrsrke): remove bias recipe, because we don't quantize bias
     bias: FP8TensorRecipe
 
     # NOTE: for the gradients
@@ -40,6 +48,7 @@ class FP8LinearRecipe:
     # TODO(xrsrke): this is a low-level implementation details
     # we should hide this from high-level apis later on
     split_accumulator: FP8SplitAccumulator
+    accumulate: FP8Accumulate
 
 
 @dataclass

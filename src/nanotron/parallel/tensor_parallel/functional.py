@@ -20,8 +20,8 @@ from torch.nn import functional as F
 
 import nanotron.distributed as dist
 import nanotron.fp8.functional as fp8_functional
-from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.linear import FP8LinearMeta
+from nanotron.fp8.recipe import FP8LinearRecipe
 from nanotron.fp8.tensor import FP8Tensor
 from nanotron.parallel.parameters import NanotronParameter
 from nanotron.parallel.tensor_parallel.distributed_differentiable_primitives import (
@@ -453,6 +453,7 @@ def column_linear(
     async_communication: bool,
     metadatas: Optional[FP8LinearMeta] = None,
     name: Optional[str] = None,
+    recipe: Optional[FP8LinearRecipe] = None,
 ):
     weight = weight.data
     if bias is not None:
@@ -471,12 +472,13 @@ def column_linear(
         raise ValueError(f"Got unexpected mode: {tp_mode}.")
 
     if isinstance(weight, FP8Tensor):
+        assert recipe is not None, "recipe must be provided for column_linear"
         from nanotron import constants
 
         if name not in constants.TRACKING_FP8_PARAM:
             constants.TRACKING_FP8_PARAM[name] = weight
 
-        return fp8_functional.linear(input, weight, bias, accum_qtype=DTypes.KFLOAT16, metadatas=metadatas, name=name)
+        return fp8_functional.linear(input, weight, bias, metadatas=metadatas, recipe=recipe, name=name)
     else:
         return F.linear(input, weight, bias)
 
@@ -489,6 +491,7 @@ def row_linear(
     tp_mode: TensorParallelLinearMode,
     async_communication: bool,
     metadatas: Optional[FP8LinearMeta] = None,
+    recipe: Optional[FP8LinearRecipe] = None,
     name: Optional[str] = None,
 ):
     weight = weight.data
@@ -499,7 +502,8 @@ def row_linear(
         return _RowLinearAsyncCommunication.apply(input, weight, bias, group, tp_mode)
 
     if isinstance(weight, FP8Tensor):
-        out = fp8_functional.linear(input, weight, bias, accum_qtype=DTypes.KFLOAT16, metadatas=metadatas, name=name)
+        assert recipe is not None, "recipe must be provided for row_linear"
+        out = fp8_functional.linear(input, weight, bias, metadatas=metadatas, recipe=recipe, name=name)
     else:
         out = F.linear(input, weight, bias)
 
