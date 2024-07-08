@@ -264,7 +264,11 @@ def init_on_device_and_dtype(
     old_register_parameter = nn.Module.register_parameter
     old_register_buffer = nn.Module.register_buffer
 
-    MODULES_THAT_IN_FLOAT16 = [TensorParallelEmbedding, nn.LayerNorm]
+    # TODO(xrsrke): refactor this shit
+    if dtype == torch.int8:
+        MODULES_THAT_IN_FLOAT16 = [TensorParallelEmbedding, nn.LayerNorm]
+    else:
+        MODULES_THAT_IN_FLOAT16 = []
 
     def register_empty_parameter(module, name, param):
         old_register_parameter(module, name, param)

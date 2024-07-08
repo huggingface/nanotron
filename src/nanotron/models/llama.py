@@ -173,7 +173,7 @@ class MLP(nn.Module):
             TensorParallelColumnLinear, f"model.decoder.{layer_idx}.mlp.gate_up_proj", constants.CONFIG
         )
         gate_down_cls, gate_down_additional_args = get_cls_and_additional_args(
-            TensorParallelColumnLinear, f"model.decoder.{layer_idx}.mlp.down_proj", constants.CONFIG
+            TensorParallelRowLinear, f"model.decoder.{layer_idx}.mlp.down_proj", constants.CONFIG
         )
 
         self.gate_up_proj = gate_up_cls(

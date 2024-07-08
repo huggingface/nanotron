@@ -196,7 +196,8 @@ def convert_logs_to_flat_logs(logs, prefix):
 
 
 def find_fp8_config_by_module_name(config: Config, target_module_name: str) -> Optional[FP8LayerArgs]:
-    for layer_args in config.fp8.model:
-        if layer_args.module_name == target_module_name:
-            return layer_args
+    if hasattr(config, "fp8") and hasattr(config.fp8, "model"):
+        for layer_args in config.fp8.model:
+            if layer_args.module_name == target_module_name:
+                return layer_args
     return None
