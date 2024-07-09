@@ -167,7 +167,8 @@ class Adam(Optimizer):
                 #     print(f"[Ref Adam] exp_avg: {exp_avg[:2, :2]} \n")
                 #     print(f"[Ref Adam] denom: {denom[:2, :2]} \n")
 
-                p.data.addcdiv_(-step_size, exp_avg, denom)
+                # p.data.addcdiv_(-step_size, exp_avg, denom)
+                p.data = p.data - step_size * (exp_avg / denom)
 
                 # if p.ndim != 1:
                 #     print(f"[Ref Adam] updated p: {p.data[:2, :2]} \n")
