@@ -73,124 +73,71 @@ class Adam(Optimizer):
         loggings = {}
         for group in self.param_groups:
             for p in group["params"]:
-                # if p.grad is None:
-                #     continue
+                state = self.state[p]
+                data = p.data
+                assert isinstance(data, torch.Tensor)
+
+                if len(state) == 0:
+                    state["step"] = torch.tensor(0.0, dtype=data.dtype)
+                    state["exp_avg"] = torch.zeros_like(data, memory_format=torch.preserve_format)
+                    state["exp_avg_sq"] = torch.zeros_like(data, memory_format=torch.preserve_format)
 
                 loggings[p] = {}
 
                 assert (p.grad is not None and p.data.grad is not None) is False
                 grad = p.grad if p.grad is not None else p.data.grad
-                data = p.data
-
                 assert isinstance(grad, torch.Tensor)
-                loggings[p]["hp_grad"] = compute_stas(grad)
-                loggings[p]["hp_p"] = compute_stas(grad)
-
-                # try:
-                #     assert isinstance(grad, torch.Tensor)
-                # except:
-                #     assert 1 == 1
-
-                # if p.ndim != 1:
-                #     print(f"[Ref Adam] original grad: {grad[:2, :2]} \n")
-
-                # if grad.is_sparse:
-                #     raise RuntimeError("Adam does not support sparse gradients, please consider SparseAdam instead")
-                amsgrad = group["amsgrad"]
-
-                state = self.state[p]
-
-                # State initialization
-                if len(state) == 0:
-                    state["step"] = torch.tensor(0.0, dtype=torch.float32)
-                    # Exponential moving average of gradient values
-                    state["exp_avg"] = torch.zeros_like(data, memory_format=torch.preserve_format)
-                    # Exponential moving average of squared gradient values
-                    state["exp_avg_sq"] = torch.zeros_like(data, memory_format=torch.preserve_format)
-                    if amsgrad:
-                        # Maintains max of all exp. moving avg. of sq. grad. values
-                        state["max_exp_avg_sq"] = torch.zeros_like(data, memory_format=torch.preserve_format)
 
                 exp_avg, exp_avg_sq = state["exp_avg"], state["exp_avg_sq"]
-
-                loggings[p]["hp_exp_avg"] = compute_stas(exp_avg)
-                loggings[p]["hp_exp_avg_sq"] = compute_stas(exp_avg_sq)
-
-                if amsgrad:
-                    max_exp_avg_sq = state["max_exp_avg_sq"]
                 beta1, beta2 = group["betas"]
 
-                loggings[p]["group:beta1"] = {"value": beta1}
-                loggings[p]["group:beta2"] = {"value": beta2}
-                loggings[p]["group:lr"] = {"value": group["lr"]}
-                loggings[p]["group:eps"] = {"value": group["eps"]}
-
-                # if p.ndim != 1:
-                #     print(
-                #         f"[Ref Adam] original exp_avg: exp_avg.data={exp_avg.data[:2, :2]}, exp_avg.dtype={exp_avg.dtype} \n"
-                #     )
-                #     print(
-                #         f"[Ref Adam] original exp_avg_sq: exp_avg_sq.data={exp_avg_sq.data[:2, :2]}, exp_avg_sq.dtype={exp_avg_sq.dtype} \n"
-                #     )
-                #     print(f"[Ref Adam] beta1: {beta1}, beta2: {beta2}")
-
-                state["step"] += 1
-                bias_correction1 = 1 - beta1 ** state["step"]
-                bias_correction2 = 1 - beta2 ** state["step"]
-
-                loggings[p]["bias_correction1"] = {"value": bias_correction1}
-                loggings[p]["bias_correction2"] = {"value": bias_correction2}
-
-                # if p.ndim != 1:
-                #     print(f"[Ref Adam]: bias_correction1: {bias_correction1}, bias_correction2: {bias_correction2}")
-
-                if group["weight_decay"] != 0:
-                    grad = grad.add(group["weight_decay"], data)
-                    # if p.ndim != 1:
-                    #     print(f"[Ref Adam] grad after weight decay: {grad[:2, :2]} \n")
+                # if group["weight_decay"] != 0:
+                #     grad = grad.add(group["weight_decay"], data)
 
                 # Decay the first and second moment running average coefficient
-                exp_avg.mul_(beta1).add_(1 - beta1, grad)
-                exp_avg_sq.mul_(beta2).addcmul_(1 - beta2, grad, grad)
+                # exp_avg.mul_(beta1).add_(1 - beta1, grad)
+                # exp_avg_sq.mul_(beta2).addcmul_(1 - beta2, grad, grad)
 
-                # if p.ndim != 1:
-                #     print(f"[Ref Adam] after mul and add: exp_avg: {exp_avg[:2, :2]} \n")
-                #     print(f"[Ref Adam] after mul and add: exp_avg_sq: {exp_avg_sq[:2, :2]} \n")
+                exp_avg = beta1 * exp_avg + (1 - beta1) * grad
+                exp_avg_sq = beta2 * exp_avg_sq + (1 - beta2) * grad.pow(2)
 
-                if amsgrad:
-                    # Maintains the maximum of all 2nd moment running avg. till now
-                    torch.max(max_exp_avg_sq, exp_avg_sq, out=max_exp_avg_sq)
-                    # Use the max. for normalizing running avg. of gradient
-                    denom = (max_exp_avg_sq.sqrt() / math.sqrt(bias_correction2)).add_(group["eps"])
-                else:
-                    denom = (exp_avg_sq.sqrt() / math.sqrt(bias_correction2)).add_(group["eps"])
+                step = state["step"]
+                step += 1
+                bias_correction1 = 1 - (beta1**step)
+                bias_correction2 = 1 - (beta2**step)
 
-                    # if p.ndim != 1:
-                    #     print(f"[Ref Adam] exp_avg_sq.sqrt(): {exp_avg_sq.sqrt()[:2, :2]} \n")
-                    #     print(f"[Ref Adam] math.sqrt(bias_correction2)): {math.sqrt(bias_correction2)} \n")
-                    #     print(f"[Ref Adam] group['eps']: {group['eps']} \n")
+                exp_avg = exp_avg / bias_correction1
+                exp_avg_sq = exp_avg_sq / bias_correction2
 
-                step_size = group["lr"] / bias_correction1
-                loggings[p]["denom"] = compute_stas(denom)
-                loggings[p]["step_size"] = {"value": step_size}
+                # denom = (exp_avg_sq.sqrt() / math.sqrt(bias_correction2)).add_(group["eps"])
+                denom = exp_avg_sq.sqrt() + group["eps"]
+                normalized_grad = exp_avg / denom
 
-                # if p.ndim != 1:
-                #     print(f"[Ref Adam] step_size: {step_size} \n")
-                #     print(f"[Ref Adam] exp_avg: {exp_avg[:2, :2]} \n")
-                #     print(f"[Ref Adam] denom: {denom[:2, :2]} \n")
-
+                lr = group["lr"]
                 # p.data.addcdiv_(-step_size, exp_avg, denom)
-                new_data = data - step_size * (exp_avg / denom)
+                new_data = data - lr * normalized_grad
                 new_data.requires_grad = True
                 p.data = new_data
 
                 assert p.data is new_data
 
-                # if p.ndim != 1:
-                #     print(f"[Ref Adam] updated p: {p.data[:2, :2]} \n")
+                state["exp_avg"] = exp_avg
+                state["exp_avg_sq"] = exp_avg_sq
+                state["step"] = step
 
-            #     break
-            # break
+                loggings[p]["hp_grad"] = compute_stas(grad)
+                loggings[p]["hp_p"] = compute_stas(p)
+                loggings[p]["group:lr"] = {"value": lr}
+                loggings[p]["group:eps"] = {"value": group["eps"]}
+                loggings[p]["hp_exp_avg"] = compute_stas(exp_avg)
+                loggings[p]["hp_exp_avg_sq"] = compute_stas(exp_avg_sq)
+                loggings[p]["group:beta1"] = {"value": beta1}
+                loggings[p]["group:beta2"] = {"value": beta2}
+
+                loggings[p]["bias_correction1"] = {"value": bias_correction1}
+                loggings[p]["bias_correction2"] = {"value": bias_correction2}
+                loggings[p]["denom"] = compute_stas(denom)
+                loggings[p]["normalized_grad"] = compute_stas(normalized_grad)
 
         self.loggings = loggings
 

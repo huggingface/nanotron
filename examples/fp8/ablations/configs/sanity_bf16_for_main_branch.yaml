@@ -22,7 +22,7 @@ general:
   consumed_train_samples: null
   ignore_sanity_checks: true
   project: fp8_for_nanotron
-  run: bfloat16_2_layers_and_seq_len_256_and_micro_batch_128_and_lr_2.0e-4_and_minipile_overfitting_and_main_branch_and_layernorm
+  run: bfloat16_2_layers_and_seq_len_256_and_micro_batch_128_and_lr_2.0e-4_and_minipile_overfitting_and_main_branch_and_layernorm_and_no_weight_decay_and_no_warmup
   seed: 42
   step: null
 lighteval: null
@@ -98,7 +98,7 @@ optimizer:
     lr_decay_starting_step: null
     lr_decay_steps: null
     lr_decay_style: cosine
-    lr_warmup_steps: 200 # 10% warm up of total training steps
+    lr_warmup_steps: 0 # 10% warm up of total training steps
     lr_warmup_style: linear
     min_decay_lr: 0.00006
   optimizer_factory:
@@ -107,7 +107,7 @@ optimizer:
     adam_eps: 1.0e-08
     name: adamW
     torch_adam_is_fused: true
-  weight_decay: 0.1
+  weight_decay: 0.
   zero_stage: 0
 
 parallelism:
@@ -115,7 +115,7 @@ parallelism:
   expert_parallel_size: 1
   pp: 1
   pp_engine: 1f1b
-  tp: 2
+  tp: 1
   tp_linear_async_communication: false
   tp_mode: ALL_REDUCE
 
