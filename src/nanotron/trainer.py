@@ -60,7 +60,6 @@ from nanotron.models.llama import LlamaForTraining, RotaryEmbedding
 from nanotron.models.starcoder2 import Starcoder2ForTraining
 from nanotron.optim.clip_grads import clip_grad_norm
 from nanotron.parallel import ParallelContext
-from nanotron.parallel.data_parallel.utils import sync_gradients_across_dp
 from nanotron.parallel.parameters import NanotronParameter, sanity_check
 from nanotron.parallel.pipeline_parallel.engine import (
     PipelineEngine,
@@ -72,7 +71,6 @@ from nanotron.parallel.tensor_parallel.nn import TensorParallelRowLinear
 from nanotron.parallel.tied_parameters import (
     create_pg_for_tied_weights,
     get_tied_id_to_param,
-    sync_tied_weights_gradients,
     tie_parameters,
 )
 from nanotron.random import set_random_seed
@@ -272,11 +270,11 @@ class DistributedTrainer:
             rank=0,
         )
 
-        current_time = datetime.datetime.now().strftime("%d/%m/%Y_%H:%M:%S")
+        datetime.datetime.now().strftime("%d/%m/%Y_%H:%M:%S")
         if dist.get_rank(self.parallel_context.world_pg) == self.logger_ranks[0] and wandb is not None:
             wandb.init(
                 project=self.config.general.project,
-                name=f"{current_time}_{self.config.general.run}",
+                name=f"{self.config.general.run}",
                 config={"nanotron_config": self.config.as_dict()},
             )
 
@@ -474,23 +472,23 @@ class DistributedTrainer:
             self.grad_accumulator.fp32_grads_allreduce_handle.wait()
 
         # Sync tied weights
-        if not isinstance(self.model, DistributedDataParallel):
-            # Manually sync across DP if it's not handled by DDP
-            sync_gradients_across_dp(
-                module=self.model,
-                dp_pg=self.parallel_context.dp_pg,
-                reduce_op=dist.ReduceOp.AVG,
-                # TODO @thomasw21: This is too memory hungry, instead we run all_reduce
-                reduce_scatter=False,  # optimizer.inherit_from(ZeroDistributedOptimizer),
-                grad_accumulator=self.grad_accumulator,
-            )
+        # if not isinstance(self.model, DistributedDataParallel):
+        #     # Manually sync across DP if it's not handled by DDP
+        #     sync_gradients_across_dp(
+        #         module=self.model,
+        #         dp_pg=self.parallel_context.dp_pg,
+        #         reduce_op=dist.ReduceOp.AVG,
+        #         # TODO @thomasw21: This is too memory hungry, instead we run all_reduce
+        #         reduce_scatter=False,  # optimizer.inherit_from(ZeroDistributedOptimizer),
+        #         grad_accumulator=self.grad_accumulator,
+        #     )
 
         # TODO @nouamane: Put this in hooks so we can overlap communication with gradient computation on the last backward pass.
-        sync_tied_weights_gradients(
-            module=self.unwrapped_model,
-            parallel_context=self.parallel_context,
-            grad_accumulator=self.grad_accumulator,
-        )
+        # sync_tied_weights_gradients(
+        #     module=self.unwrapped_model,
+        #     parallel_context=self.parallel_context,
+        #     grad_accumulator=self.grad_accumulator,
+        # )
 
         # Clip gradients
         if self.config.optimizer.clip_grad is not None:

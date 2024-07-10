@@ -37,6 +37,7 @@ class StandardParametrizator(Parametrizator):
             TensorParallelColumnLinear: self._parametrize_column_linear,
             TensorParallelRowLinear: self._parametrize_row_linear,
             TritonRMSNorm: self._parametrize_layer_norm,
+            nn.LayerNorm: self._parametrize_layer_norm,
             TensorParallelEmbedding: self._parametrize_embedding,
         }
 

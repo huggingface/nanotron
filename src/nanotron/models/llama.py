@@ -14,7 +14,7 @@
 # limitations under the License.
 """PyTorch LLaMa model."""
 
-from typing import Dict, Optional, Union, List
+from typing import Dict, Optional, Union
 
 import torch
 from torch import nn
@@ -27,7 +27,6 @@ from nanotron.generation.generate_store import AttachableStore
 from nanotron.logging import log_rank
 from nanotron.models import NanotronModel
 from nanotron.nn.activations import ACT2FN
-from nanotron.nn.layer_norm import TritonRMSNorm
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter
 from nanotron.parallel.pipeline_parallel.block import PipelineBlock, TensorPointer
@@ -608,7 +607,8 @@ class LlamaDecoderLayer(nn.Module):
         layer_idx: int,
     ):
         super().__init__()
-        self.input_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        # self.input_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.input_layernorm = nn.LayerNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.attn = CausalSelfAttention(
             config=config,
             parallel_config=parallel_config,
@@ -616,7 +616,8 @@ class LlamaDecoderLayer(nn.Module):
             layer_idx=layer_idx,
         )
 
-        self.post_attention_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        # self.post_attention_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.post_attention_layernorm = nn.LayerNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.mlp = MLP(config=config, parallel_config=parallel_config, tp_pg=tp_pg)
 
     def forward(
@@ -725,8 +726,10 @@ class LlamaModel(nn.Module):
 
         self.final_layer_norm = PipelineBlock(
             p2p=self.p2p,
-            module_builder=TritonRMSNorm,
-            module_kwargs={"hidden_size": config.hidden_size, "eps": config.rms_norm_eps},
+            # module_builder=TritonRMSNorm,
+            # module_kwargs={"hidden_size": config.hidden_size, "eps": config.rms_norm_eps},
+            module_builder=nn.LayerNorm,
+            module_kwargs={"normalized_shape": config.hidden_size, "eps": config.rms_norm_eps},
             module_input_keys={"input"},
             module_output_keys={"hidden_states"},
         )  # TODO

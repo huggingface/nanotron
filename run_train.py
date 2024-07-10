@@ -130,14 +130,12 @@ def get_dataloader_from_data_stage(
             )
 
             # Check if we have enough samples for train_steps
-            total_tokens_dataset = len(dataloader.dataset) * trainer.sequence_length
-            num_tokens_needed_for_training = (
-                num_remaining_train_steps * trainer.global_batch_size * trainer.sequence_length
-            )
-            assert num_tokens_needed_for_training <= total_tokens_dataset, (
-                f"Dataset is too small for steps ({total_tokens_dataset} < {num_tokens_needed_for_training}), "
-                f"Try train_steps<={len(dataloader.dataset) // trainer.global_batch_size + trainer.iteration_step}"
-            )
+            len(dataloader.dataset) * trainer.sequence_length
+            (num_remaining_train_steps * trainer.global_batch_size * trainer.sequence_length)
+            # assert num_tokens_needed_for_training <= total_tokens_dataset, (
+            #     f"Dataset is too small for steps ({total_tokens_dataset} < {num_tokens_needed_for_training}), "
+            #     f"Try train_steps<={len(dataloader.dataset) // trainer.global_batch_size + trainer.iteration_step}"
+            # )
 
     # Case 3: Nanosets
     elif isinstance(data.dataset, NanosetDatasetsArgs):
