@@ -1,5 +1,8 @@
+import pytest
 import torch
 from helpers.exception import assert_fail_with
+from nanotron.fp8.dtypes import DTypes
+from nanotron.fp8.tensor import FP8Tensor, convert_tensor_from_fp8
 from nanotron.models.base import DTypeInvariantTensor, init_on_device_and_dtype
 from nanotron.parallel.parameters import NanotronParameter
 from torch import nn
@@ -20,16 +23,21 @@ def test_create_nanotron_parameter():
     assert torch.allclose(param.data, data)
 
 
-def test_gradients_flow_to_nanotron_parameter():
-    data = torch.randn(3)
+@pytest.mark.parametrize("is_fp8", [False, True])
+def test_gradients_flow_to_nanotron_parameter(is_fp8):
+    data = torch.randn(3, device="cuda")
+    data = FP8Tensor(data, dtype=DTypes.FP8E4M3) if is_fp8 else data
     param = nn.Parameter(data)
     param = NanotronParameter(param)
 
-    x = torch.randn(3)
-    output = torch.sum(param * x)
+    x = torch.randn(3, device="cuda")
+    data = param.data
+    fp32_data = convert_tensor_from_fp8(data, data.fp8_meta, torch.float32) if is_fp8 else data
+    output = torch.sum(fp32_data * x)
     output.backward()
 
-    assert torch.allclose(param.data.grad, x)
+    assert torch.allclose(param.grad, x)
+    # assert torch.allclose(param.data.grad, x)
 
 
 def test_set_new_value_for_nanotron_parameter():

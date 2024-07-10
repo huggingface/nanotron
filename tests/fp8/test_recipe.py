@@ -29,6 +29,7 @@ def test_fp8_training_recipe():
             weight_grad=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=16),
             output_grad=FP8TensorRecipe(dtype=DTypes.FP8E5M2, margin=0, interval=1),
             split_accumulator=FP8SplitAccumulator(output=False, input_grad=True, weight_grad=True),
+            accumulate=FP8SplitAccumulator(output=True, input_grad=True, weight_grad=True),
         ),
         optim=FP8OptimRecipe(
             accum_dtype=DTypes.KFLOAT32,

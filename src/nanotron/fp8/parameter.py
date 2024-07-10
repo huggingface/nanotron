@@ -97,10 +97,12 @@ class FP8Parameter(nn.Parameter):
     @property
     def grad(self) -> Optional[Union[torch.Tensor, FP8Tensor]]:
         return self.data._grad
+        # return self.data.grad
 
     @grad.setter
     def grad(self, value: Optional[Union[torch.Tensor, FP8Tensor]]):
         self.data._grad = value
+        # self.data.grad = value
 
     @property
     def dtype(self) -> torch.dtype:

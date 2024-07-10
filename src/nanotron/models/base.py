@@ -238,6 +238,79 @@ def build_model(
     return model
 
 
+old_register_parameter = nn.Module.register_parameter
+old_register_buffer = nn.Module.register_buffer
+
+
+def _get_modules_not_in_fp16():
+    from nanotron import constants
+
+    if constants.CONFIG is not None and hasattr(constants.CONFIG, "fp8"):
+        name_of_modules_not_in_fp16 = [x.module_name for x in constants.CONFIG.fp8.model]
+    else:
+        name_of_modules_not_in_fp16 = []
+    return name_of_modules_not_in_fp16
+
+
+def _register_empty_parameter_for_fp8(module, name, param):
+    old_register_parameter(module, name, param)
+
+    MODULES_THAT_IN_FLOAT16 = [TensorParallelEmbedding, nn.LayerNorm]
+    name_of_modules_not_in_fp16 = _get_modules_not_in_fp16()
+
+    if param is not None:
+        IS_CONVERT_TO_FLOAT16 = False
+
+        if any(isinstance(module, m) for m in MODULES_THAT_IN_FLOAT16) or (
+            hasattr(module, "name") and module.name not in name_of_modules_not_in_fp16
+        ):
+            IS_CONVERT_TO_FLOAT16 = True
+
+        if IS_CONVERT_TO_FLOAT16:
+            param.data = param.data.to(torch.device("cuda"), torch.float16)
+        else:
+            param.data = param.data.to(torch.device("cuda"))
+
+
+def _register_empty_buffer_for_fp8(module, name, buffer, persistent=True):
+    old_register_buffer(module, name, buffer, persistent=persistent)
+
+    MODULES_THAT_IN_FLOAT16 = [TensorParallelEmbedding, nn.LayerNorm]
+    name_of_modules_not_in_fp16 = _get_modules_not_in_fp16()
+
+    if buffer is not None:
+        IS_CONVERT_TO_FLOAT16 = False
+        if any(isinstance(module, m) for m in MODULES_THAT_IN_FLOAT16) or (
+            hasattr(module, "name") and module.name not in name_of_modules_not_in_fp16
+        ):
+            IS_CONVERT_TO_FLOAT16 = True
+
+        if IS_CONVERT_TO_FLOAT16:
+            module._buffers[name] = module._buffers[name].to(torch.device("cuda"), torch.float16)
+        else:
+            buffer.data = buffer.data.to(torch.device("cuda"))
+
+
+def _register_empty_parameter(module, name, param):
+    old_register_parameter(module, name, param)
+    if param is not None:
+        if isinstance(param, DTypeInvariantTensor):
+            # if param is DTypeInvariantTensor we should avoid updating it
+            param.data = param.data.to(torch.device("cuda"))
+        else:
+            param.data = param.data.to(torch.device("cuda"), torch.bfloat16)
+
+
+def _register_empty_buffer(module, name, buffer, persistent=True):
+    old_register_buffer(module, name, buffer, persistent=persistent)
+    if buffer is not None:
+        if isinstance(buffer, DTypeInvariantTensor):
+            # if buffer is DTypeInvariantTensor we should avoid updating it
+            buffer.data = buffer.data.to(torch.device("cuda"))
+        else:
+            module._buffers[name] = module._buffers[name].to(torch.device("cuda"), torch.bfloat16)
+
+
 # TODO @thomasw21: Should this option override user defined options? Maybe not ... right now it does.
 @contextmanager
 def init_on_device_and_dtype(
@@ -265,50 +338,20 @@ def init_on_device_and_dtype(
     old_register_buffer = nn.Module.register_buffer
 
     # TODO(xrsrke): refactor this shit
-    if dtype == torch.int8:
-        MODULES_THAT_IN_FLOAT16 = [TensorParallelEmbedding, nn.LayerNorm]
-    else:
-        MODULES_THAT_IN_FLOAT16 = []
+    # if dtype == torch.int8:
+    #     from nanotron import constants
+    #     if constants.CONFIG is not None and hasattr(constants.CONFIG, "fp8"):
+    #         name_of_modules_not_in_fp16 = [x.module_name for x in constants.CONFIG.fp8.model]
+    #     else:
+    #         name_of_modules_not_in_fp16 = []
 
-    def register_empty_parameter(module, name, param):
-        old_register_parameter(module, name, param)
-        if param is not None:
-            # NOTE(xrsrke): FP8Linear automatically quantizes its parameters to FP8
-            # so no need to convert them to FP8 here, also we initialize them with FP32
-            # first
-            IS_CONVERT_TO_FLOAT16 = False
-            if any(isinstance(module, m) for m in MODULES_THAT_IN_FLOAT16):
-                IS_CONVERT_TO_FLOAT16 = True
+    #     MODULES_THAT_IN_FLOAT16 = [TensorParallelEmbedding, nn.LayerNorm]
+    # else:
+    #     MODULES_THAT_IN_FLOAT16 = []
+    #     name_of_modules_not_in_fp16 = []
 
-            new_dtype = dtype
-
-            if IS_CONVERT_TO_FLOAT16:
-                new_dtype = torch.float16
-
-            if isinstance(param, DTypeInvariantTensor) or new_dtype == torch.int8:
-                # if param is DTypeInvariantTensor we should avoid updating it
-                param.data = param.data.to(device)
-            else:
-                param.data = param.data.to(device, new_dtype)
-
-    def register_empty_buffer(module, name, buffer, persistent=True):
-        old_register_buffer(module, name, buffer, persistent=persistent)
-        if buffer is not None:
-            IS_CONVERT_TO_FLOAT16 = False
-            if any(isinstance(module, m) for m in MODULES_THAT_IN_FLOAT16):
-                IS_CONVERT_TO_FLOAT16 = True
-
-            new_dtype = dtype
-
-            if IS_CONVERT_TO_FLOAT16:
-                new_dtype = torch.float16
-
-            # NOTE(xrsrke): FP8-LM don't quantize its buffers to FP8
-            if isinstance(buffer, DTypeInvariantTensor) or new_dtype == torch.int8:
-                # if buffer is DTypeInvariantTensor we should avoid updating it
-                buffer.data = buffer.data.to(device)
-            else:
-                module._buffers[name] = module._buffers[name].to(device, new_dtype)
+    register_empty_parameter = _register_empty_parameter_for_fp8 if dtype == torch.int8 else _register_empty_parameter
+    register_empty_buffer = _register_empty_buffer_for_fp8 if dtype == torch.int8 else _register_empty_buffer
 
     # Patch tensor creation
     tensor_constructors_to_patch = {

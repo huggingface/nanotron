@@ -289,7 +289,7 @@ class SlicedFlatTensor(torch.Tensor):
         self.sliced_flat_tensor = self.get_sliced_flat_tensor(
             data=data, start_offset=start_offset, end_offset=end_offset
         )
-        self.orig_data = data
+        self._data = data
         self.start_offset = start_offset
         self.end_offset = end_offset
 
@@ -305,10 +305,10 @@ class SlicedFlatTensor(torch.Tensor):
         return tree_map(never_wrap, func(*tree_map(unwrap, args), **tree_map(unwrap, kwargs)))
 
     def _get_grad(self):
-        if self.orig_data.grad is None:
+        if self._data.grad is None:
             return None
         with torch.no_grad():
-            return self.orig_data.grad.view(-1)[self.start_offset : self.end_offset]
+            return self._data.grad.view(-1)[self.start_offset : self.end_offset]
 
     def _set_grad(self, grad):
         if grad is not None:
@@ -325,7 +325,7 @@ class SlicedFlatTensor(torch.Tensor):
             msg="You're setting a `SlicedTensor` gradient to None. We're going to assume you meant to set the original tensor gradient to None.",
             rank=0,
         )
-        self.orig_data.grad = None
+        self._data.grad = None
 
     def _del_grad(self):
         raise NotImplementedError

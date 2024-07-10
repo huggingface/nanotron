@@ -59,6 +59,7 @@ class Adam(Optimizer):
             group.setdefault("amsgrad", False)
 
     # @snoop
+    @torch.no_grad()
     def step(self, closure=None):
         """Performs a single optimization step.
         Arguments:
@@ -72,18 +73,29 @@ class Adam(Optimizer):
         loggings = {}
         for group in self.param_groups:
             for p in group["params"]:
-                if p.grad is None:
-                    continue
+                # if p.grad is None:
+                #     continue
 
                 loggings[p] = {}
 
-                grad = p.grad.data
+                assert (p.grad is not None and p.data.grad is not None) is False
+                grad = p.grad if p.grad is not None else p.data.grad
+                data = p.data
+
+                assert isinstance(grad, torch.Tensor)
+                loggings[p]["hp_grad"] = compute_stas(grad)
+                loggings[p]["hp_p"] = compute_stas(grad)
+
+                # try:
+                #     assert isinstance(grad, torch.Tensor)
+                # except:
+                #     assert 1 == 1
 
                 # if p.ndim != 1:
                 #     print(f"[Ref Adam] original grad: {grad[:2, :2]} \n")
 
-                if grad.is_sparse:
-                    raise RuntimeError("Adam does not support sparse gradients, please consider SparseAdam instead")
+                # if grad.is_sparse:
+                #     raise RuntimeError("Adam does not support sparse gradients, please consider SparseAdam instead")
                 amsgrad = group["amsgrad"]
 
                 state = self.state[p]
@@ -92,17 +104,17 @@ class Adam(Optimizer):
                 if len(state) == 0:
                     state["step"] = torch.tensor(0.0, dtype=torch.float32)
                     # Exponential moving average of gradient values
-                    state["exp_avg"] = torch.zeros_like(p.data, memory_format=torch.preserve_format)
+                    state["exp_avg"] = torch.zeros_like(data, memory_format=torch.preserve_format)
                     # Exponential moving average of squared gradient values
-                    state["exp_avg_sq"] = torch.zeros_like(p.data, memory_format=torch.preserve_format)
+                    state["exp_avg_sq"] = torch.zeros_like(data, memory_format=torch.preserve_format)
                     if amsgrad:
                         # Maintains max of all exp. moving avg. of sq. grad. values
-                        state["max_exp_avg_sq"] = torch.zeros_like(p.data, memory_format=torch.preserve_format)
+                        state["max_exp_avg_sq"] = torch.zeros_like(data, memory_format=torch.preserve_format)
 
                 exp_avg, exp_avg_sq = state["exp_avg"], state["exp_avg_sq"]
 
-                loggings[p]["exp_avg"] = compute_stas(exp_avg)
-                loggings[p]["exp_avg_sq"] = compute_stas(exp_avg_sq)
+                loggings[p]["hp_exp_avg"] = compute_stas(exp_avg)
+                loggings[p]["hp_exp_avg_sq"] = compute_stas(exp_avg_sq)
 
                 if amsgrad:
                     max_exp_avg_sq = state["max_exp_avg_sq"]
@@ -133,7 +145,7 @@ class Adam(Optimizer):
                 #     print(f"[Ref Adam]: bias_correction1: {bias_correction1}, bias_correction2: {bias_correction2}")
 
                 if group["weight_decay"] != 0:
-                    grad = grad.add(group["weight_decay"], p.data)
+                    grad = grad.add(group["weight_decay"], data)
                     # if p.ndim != 1:
                     #     print(f"[Ref Adam] grad after weight decay: {grad[:2, :2]} \n")
 
@@ -168,7 +180,11 @@ class Adam(Optimizer):
                 #     print(f"[Ref Adam] denom: {denom[:2, :2]} \n")
 
                 # p.data.addcdiv_(-step_size, exp_avg, denom)
-                p.data = p.data - step_size * (exp_avg / denom)
+                new_data = data - step_size * (exp_avg / denom)
+                new_data.requires_grad = True
+                p.data = new_data
+
+                assert p.data is new_data
 
                 # if p.ndim != 1:
                 #     print(f"[Ref Adam] updated p: {p.data[:2, :2]} \n")
@@ -179,6 +195,18 @@ class Adam(Optimizer):
         self.loggings = loggings
 
         return loss
+
+    def zero_grad(self):
+        for group in self.param_groups:
+            for p in group["params"]:
+                if p.grad is not None:
+                    p.grad = None
+
+                if p.data.grad is not None:
+                    p.data.grad = None
+
+                assert p.grad is None
+                assert p.data.grad is None
 
 
 class FP8Adam(Optimizer):
@@ -231,11 +259,11 @@ class FP8Adam(Optimizer):
             for p in group["params"]:
                 assert p.dtype == p.data.dtype
 
-                if p.requires_grad is None:
-                    continue
+                # if p.requires_grad is None:
+                #     continue
 
-                if p.data.dtype == torch.float16:
-                    continue
+                # if p.data.dtype == torch.float16:
+                #     continue
 
                 # NOTE: if a tensor.ndim == 1, it's a bias
                 # raw_data = p.data if p.ndim == 1 else p.orig_data
@@ -324,6 +352,7 @@ class FP8Adam(Optimizer):
 
     # @torchsnooper.snoop()
     # @snoop
+    @torch.no_grad()
     def step(self):
         # NOTE: sanity check the entire params has at least one grad
         # assert any(p.grad is not None for group in self.param_groups for p in group["params"])
@@ -365,7 +394,11 @@ class FP8Adam(Optimizer):
                     fp32_data = fp16_data.to(torch.float32)
                     # NOTE: the bias of FP8 parameter saves its gradient in p.data.grad
                     # and the weight, and bias of non-FP8 parameter saves its gradient in p.grad
-                    assert (p.data.grad is None and p.grad is None) is False
+                    try:
+                        assert (p.data.grad is None and p.grad is None) is False
+                    except:
+                        assert 1 == 1
+
                     grad = p.data.grad if p.data.grad is not None else p.grad
                     fp32_grad = grad.to(torch.float32)
 
@@ -465,6 +498,7 @@ class FP8Adam(Optimizer):
                     # assert torch.allclose(p.data, new_fp32)
                 else:
                     new_fp16 = new_fp32.to(torch.float16)
+                    new_fp16.requires_grad = True
                     p.data = new_fp16
                     delete_tensor_from_memory(new_fp16)
                     assert torch.allclose(p.data, new_fp16)

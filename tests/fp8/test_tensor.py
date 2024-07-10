@@ -16,6 +16,7 @@ from nanotron.fp8.constants import (
 from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.meta import FP8Meta
 from nanotron.fp8.tensor import FP8Tensor, FP16Tensor, convert_tensor_from_fp8, convert_tensor_from_fp16
+from nanotron.testing.context import TestContext
 from utils import fail_if_expect_to_fail
 
 
@@ -447,3 +448,19 @@ def test_fp8_and_fp16_tensor_equality_based_on_tensor_value(is_meta_the_same, dt
 # TODO(xrsrke): test it has all the methods of torch.Tensor
 
 # TODO(xrsrke): test it has all the attributes of its input tensor
+
+
+@pytest.mark.parametrize(
+    "tensor_cls, dtype", [(FP8Tensor, DTypes.FP8E4M3), (FP8Tensor, DTypes.FP8E5M2), (FP16Tensor, DTypes.KFLOAT16)]
+)
+def test_serialize_fp8_tensor(tensor_cls, dtype):
+    test_context = TestContext()
+    store_folder = test_context.get_auto_remove_tmp_dir()
+    tensor = torch.randn((4, 4), dtype=torch.float32, device="cuda")
+
+    fp8_tensor = tensor_cls(tensor, dtype=dtype)
+
+    torch.save(fp8_tensor, f"{store_folder}/fp8_tensor.pt")
+    torch.load(f"{store_folder}/fp8_tensor.pt")
+
+    assert 1 == 1

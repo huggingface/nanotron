@@ -5,36 +5,12 @@ checkpoints:
   # resume_checkpoint_path: checkpoints
   save_initial_state: false
 data_stages:
-# - data:
-#     dataset:
-#       dataset_overwrite_cache: false
-#       dataset_processing_num_proc_per_process: 1
-#       hf_dataset_config_name: null
-#       hf_dataset_or_datasets: roneneldan/TinyStories
-#       hf_dataset_splits: train
-#       text_column_name: text
-#     num_loading_workers: 1
-#     seed: 42
-#   name: Stable Training Stage
-#   start_training_step: 1
-# - data:
-#     dataset:
-#       dataset_overwrite_cache: false
-#       dataset_processing_num_proc_per_process: 1
-#       hf_dataset_config_name: null
-#       hf_dataset_or_datasets: stas/openwebtext-10k
-#       hf_dataset_splits: train
-#       text_column_name: text
-#     num_loading_workers: 1
-#     seed: 42
-#   name: Annealing Phase
-#   start_training_step: 10
 - data:
     dataset:
       dataset_overwrite_cache: false
       dataset_processing_num_proc_per_process: 1
       hf_dataset_config_name: null
-      hf_dataset_or_datasets: JeanKaddour/minipile
+      hf_dataset_or_datasets: nanotron/minipile_100_samples
       hf_dataset_splits: train
       text_column_name: text
     num_loading_workers: 1
@@ -46,7 +22,7 @@ general:
   consumed_train_samples: null
   ignore_sanity_checks: true
   project: fp8_for_nanotron
-  run: bfloat16_2_layers_and_seq_len_16_and_micro_batch_256_and_lr_2.0e-4
+  run: bfloat16_2_layers_and_seq_len_256_and_micro_batch_128_and_lr_2.0e-4_and_minipile_overfitting_and_fp8_branch_and_layernorm_and_custom_adam_and_tp_1_and_lr_1.0
   seed: 42
   step: null
 lighteval: null
@@ -54,7 +30,7 @@ logging:
   iteration_step_info_interval: 1
   log_level: info
   log_level_replica: info
-  monitor_model_states: true
+  monitor_model_states: false
 model:
   ddp_bucket_cap_mb: 25
   dtype: bfloat16
@@ -83,43 +59,11 @@ model:
     tie_word_embeddings: false
     use_cache: true
     vocab_size: 49152
-# optimizer:
-#   accumulate_grad_in_fp32: false
-#   clip_grad: 1.0
-#   # learning_rate_scheduler:
-#   #   learning_rate: 0.01
-#   #   lr_decay_starting_step: null
-#   #   lr_decay_steps: 13
-#   #   lr_decay_style: linear
-#   #   lr_warmup_steps: 2
-#   #   lr_warmup_style: constant
-#   #   min_decay_lr: 1.0e-05
-
-#   # learning_rate_scheduler:
-#   #   learning_rate: 0.00015
-#   #   lr_decay_starting_step: null
-#   #   # lr_decay_steps: null
-#   #   lr_decay_style: linear
-#   #   lr_warmup_steps: 60
-#   #   lr_warmup_style: constant
-#   #   min_decay_lr: 1.0e-05
-
-#   optimizer_factory:
-#     adam_beta1: 0.9
-#     adam_beta2: 0.999
-#     adam_eps: 1.0e-08
-#     name: adam
-#     torch_adam_is_fused: true
-#   weight_decay: 0.1
-#   zero_stage: 0
-
 
 optimizer:
   accumulate_grad_in_fp32: false
-  # clip_grad: 1.0
   learning_rate_scheduler:
-    # learning_rate: 0.0015 # note: 1/2 of pythia use this for a 400m model
-    learning_rate: 0.0006
+    learning_rate: 1.0
     lr_decay_starting_step: null
     lr_decay_steps: null
     lr_decay_style: cosine
@@ -130,7 +74,7 @@ optimizer:
     adam_beta1: 0.9
     adam_beta2: 0.95
     adam_eps: 1.0e-08
-    name: adam
+    name: custom_adam
     torch_adam_is_fused: true
   weight_decay: 0.1
   zero_stage: 0
@@ -140,10 +84,7 @@ parallelism:
   expert_parallel_size: 1
   pp: 1
   pp_engine: 1f1b
-  tp: 2
-  # tp_linear_async_communication: true
-  # tp_mode: REDUCE_SCATTER
-
+  tp: 1
   tp_linear_async_communication: false
   tp_mode: ALL_REDUCE
 
@@ -153,13 +94,10 @@ tokenizer:
   tokenizer_name_or_path: lvwerra/the-tokenizer-v1
   tokenizer_revision: null
 tokens:
-  # NOTE: micro_batch_size * sequence_length * batch_accumulation_per_replica
-  # = 128 * 256 * 1 = 16384
   batch_accumulation_per_replica: 1
   limit_test_batches: 0
   limit_val_batches: 0
   micro_batch_size: 128 # 256
-  # micro_batch_size: 1
   sequence_length: 256
-  train_steps: 24376
+  train_steps: 1000
   val_check_interval: -1

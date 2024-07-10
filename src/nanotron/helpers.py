@@ -342,10 +342,10 @@ def init_optimizer_and_grad_accumulator(
                     fused=False,
                 )
 
-        elif optimizer_args.optimizer_factory.name == "adam":
+        elif optimizer_args.optimizer_factory.name == "custom_adam":
             from nanotron import constants
 
-            if constants.CONFIG.model.dtype == torch.int8:
+            if constants.CONFIG is not None and constants.CONFIG.model.dtype == torch.int8:
 
                 def optimizer(param_groups):
                     from nanotron.fp8.optim import FP8Adam

@@ -457,9 +457,9 @@ def column_linear(
 ):
     weight = weight.data
     if bias is not None:
-        bias_requires_grad = bias.requires_grad
+        # bias_requires_grad = bias.requires_grad
         bias = bias.data if isinstance(bias, NanotronParameter) else bias
-        bias.requires_grad = bias_requires_grad
+        # bias.requires_grad = bias_requires_grad
 
     if async_communication:
         return _ColumnLinearAsyncCommunication.apply(input, weight, bias, group, tp_mode)

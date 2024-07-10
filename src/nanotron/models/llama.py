@@ -185,6 +185,7 @@ class MLP(nn.Module):
             async_communication=tp_linear_async_communication,
             contiguous_chunks=gate_up_contiguous_chunks,
             # name="mlp.gate_up_proj",
+            name=f"model.decoder.{layer_idx}.mlp.gate_up_proj",
             **gate_up_additional_args,
         )
         self.down_proj = gate_down_cls(
@@ -195,6 +196,7 @@ class MLP(nn.Module):
             bias=False,
             async_communication=tp_linear_async_communication and tp_mode is TensorParallelLinearMode.REDUCE_SCATTER,
             # name="mlp.down_proj",
+            name=f"model.decoder.{layer_idx}.mlp.down_proj",
             **gate_down_additional_args,
         )
         # TODO @nouamane: why can't we torch.jit.script ActivationFunction?
@@ -357,6 +359,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             bias=False,
             async_communication=tp_linear_async_communication,
             contiguous_chunks=qkv_contiguous_chunks,
+            name=f"model.decoder.{layer_idx}.attn.qkv_proj",
             **qkv_additional_args,
         )
         # TODO(kunhao): We want to have only one version per device and not one version per layer.
@@ -378,6 +381,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             async_communication=tp_linear_async_communication,
             # name="attn.o_proj"
             # is_fp8=True
+            name=f"model.decoder.{layer_idx}.attn.o_proj",
             **output_additional_args,
         )
 
@@ -709,6 +713,7 @@ class Embedding(nn.Module, AttachableStore):
             padding_idx=config.pad_token_id,
             pg=tp_pg,
             mode=parallel_config.tp_mode if parallel_config is not None else TensorParallelLinearMode.ALL_REDUCE,
+            name="model.token_embedding",
         )
         self.pg = tp_pg
 
@@ -813,6 +818,7 @@ class LlamaModel(nn.Module):
                 # TODO @thomasw21: refactor so that we store that default in a single place.
                 "mode": self.tp_mode,
                 "async_communication": tp_linear_async_communication,
+                "name": "model.lm_head",
                 **lm_head_additional_args,
                 # "name": "lm_head",
             },

@@ -227,6 +227,10 @@ class NanotronParameter(nn.Parameter):
     def data(self, data):
         self._data = data
 
+    # @property
+    # def grad(self):
+    #     return self.data.grad if self.grad is None else self.grad
+
     @classmethod
     def __torch_dispatch__(cls, func, types, args=(), kwargs=None):
         def unwrap(e):

@@ -312,15 +312,6 @@ class DistributedTrainer:
             rank=0,
         )
 
-        datetime.datetime.now().strftime("%d/%m/%Y_%H:%M:%S")
-        if dist.get_rank(self.parallel_context.world_pg) == 0 and wandb is not None:
-            wandb.init(
-                project=self.config.general.project,
-                # name=f"{current_time}_{self.config.general.run}",
-                name=f"{self.config.general.run}",
-                config={"nanotron_config": self.config.as_dict()},
-            )
-
     def post_train_step(self):
         pass
 
@@ -436,6 +427,17 @@ class DistributedTrainer:
         ],
         **kwargs,
     ) -> None:
+        datetime.datetime.now().strftime("%d/%m/%Y_%H:%M:%S")
+        if dist.get_rank(self.parallel_context.world_pg) == 0 and wandb is not None:
+            wandb.init(
+                project=self.config.general.project,
+                # name=f"{current_time}_{self.config.general.run}",
+                name=f"{self.config.general.run}",
+                config={"nanotron_config": self.config.as_dict()},
+                # NOTE: FP8 takes more time to initialize, so we increase the wait time
+                settings=wandb.Settings(_service_wait=30000),
+            )
+
         def get_optim_logs(mappings, optim, prefix):
             optim_loggings = {}
             for p in optim.loggings:
@@ -476,10 +478,11 @@ class DistributedTrainer:
                 self._update_dataloader_based_on_training_stages(dataloader_or_dls)
 
                 is_ready_to_log = (self.iteration_step - 1) % self.config.logging.iteration_step_info_interval == 0
-                # if is_ready_to_log is True and self.config.logging.monitor_model_states is True:
-                #     from nanotron.scaling.monitor import monitor_model
-                #     nn_logs, state_handles = monitor_model(self.unwrapped_model, self.parallel_context)
-                #     constants.NN_STATES = nn_logs
+                if is_ready_to_log is True and self.config.logging.monitor_model_states is True:
+                    from nanotron.scaling.monitor import monitor_model
+
+                    nn_logs, state_handles = monitor_model(self.unwrapped_model, self.parallel_context)
+                    constants.NN_STATES = nn_logs
 
                 # Training step
                 outputs, loss_avg = self.training_step(dataloader=self.current_dataloader)
@@ -495,27 +498,42 @@ class DistributedTrainer:
                 if is_ready_to_log is True:
                     self.train_step_logs(outputs=outputs, loss_avg=loss_avg)
 
-                    # for handle in state_handles:
-                    #     handle.remove()
+                    if (
+                        self.config.logging.monitor_model_states is True
+                        and dist.get_rank(self.parallel_context.world_pg) == 0
+                        and wandb is not None
+                    ):
+                        for handle in state_handles:
+                            handle.remove()
 
-                    # if (
-                    #     self.config.logging.monitor_model_states is True
-                    #     and dist.get_rank(self.parallel_context.world_pg) == 0
-                    #     and wandb is not None
-                    # ):
-                    #     wandb.log({**convert_logs_to_flat_logs(nn_logs), "iteration_step": self.iteration_step})
-                    #     constants.NN_STATES = None
+                        detailed_logs = {}
+                        optim_logs = get_optim_logs(self.params_id_to_param_names, self.optimizer.optimizer, prefix="")
+                        detailed_logs.update(convert_logs_to_flat_logs(nn_logs))
+                        detailed_logs.update(optim_logs)
+                        # NOTE: convert tensor to float for logging
+                        detailed_logs = {
+                            k: v.item() if isinstance(v, torch.Tensor) else v for k, v in detailed_logs.items()
+                        }
 
-                    #     optim_logs = get_optim_logs(
-                    #         self.params_id_to_param_names, self.optimizer.optimizer, prefix=""
-                    #     )
-                    #     wandb.log({**optim_logs, "iteration_step": self.iteration_step})
+                        # NOTE: save the detailed logs, path/{run_name}/{iteration_step}/logs.json
+                        PATH = "/fsx/phuc/temp/temp3_env_for_fp8/nanotron/debug/runs"
+                        SAVE_PATH = f"{PATH}/{self.config.general.run}/{self.iteration_step}"
+                        import os
+
+                        if not os.path.exists(SAVE_PATH):
+                            os.makedirs(SAVE_PATH)
+
+                        with open(f"{SAVE_PATH}/logs.json", "w") as f:
+                            json.dump(detailed_logs, f)
+
+                        constants.NN_STATES = None
+                        wandb.log({**detailed_logs, "iteration_step": self.iteration_step})
 
                 # Checkpoint
                 if self.iteration_step % self.config.checkpoints.checkpoint_interval == 0:
                     self.save_checkpoint()
 
-                # constants.ITERATION_STEP += 1
+                constants.ITERATION_STEP += 1
 
         dist.barrier()  # let's wait for everyone before leaving
 
@@ -603,6 +621,18 @@ class DistributedTrainer:
         else:
             loss_avg = None
             handle = None
+
+        # param_with_no_grads = [n for n, x in self.model.named_parameters() if not isinstance(x.grad, torch.Tensor)]
+
+        # assert all([isinstance(x.grad, torch.Tensor) for x in self.model.parameters()])
+
+        if self.iteration_step == 2:
+            [
+                n
+                for n, x in self.model.named_parameters()
+                if not (isinstance(x.grad, torch.Tensor) or isinstance(x.data.grad, torch.Tensor))
+            ]
+            assert 1 == 1
 
         # Apply gradient
         self.optimizer.step()

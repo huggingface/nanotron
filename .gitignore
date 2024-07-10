@@ -170,3 +170,5 @@ wandb/
 *.pt
 *.ipynb
 tests/.test_cache/*
+
+debug/*

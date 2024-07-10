@@ -376,12 +376,14 @@ class TensorParallelEmbedding(nn.Embedding):
         device=None,
         dtype=None,
         contiguous_chunks: Optional[Tuple[int, ...]] = None,
+        name: Optional[str] = None,
     ):
         self.pg = pg
         self.rank = dist.get_rank(self.pg)
         self.world_size = pg.size()
 
         self.original_num_embeddings = num_embeddings
+        self.name = name
 
         # TODO @thomasw21: Fix and remove that constraint. Typically there's no reason to have such a constraint.
         assert num_embeddings % self.world_size == 0

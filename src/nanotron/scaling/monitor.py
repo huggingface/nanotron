@@ -9,7 +9,7 @@ from torch.distributed import ReduceOp
 
 
 def track_weight_and_grad_stats(name: str, module: nn.Module, parallel_context: ParallelContext):
-    def compute_stats(tensors, metrics: List[str] = ["amax"]):
+    def compute_stats(tensors, metrics: List[str] = ["amax", "mean", "std", "var", "norm"]):
         NAME_TO_FUNC = {
             "mean": lambda x: x.mean().item(),
             "std": lambda x: x.std().item(),
@@ -109,7 +109,9 @@ def track_weight_and_grad_stats(name: str, module: nn.Module, parallel_context: 
     return logs, handles
 
 
-def monitor_model(model: NanotronModel, parallel_context: ParallelContext) -> Tuple[Dict[str, Union[torch.Tensor, float]], List]:
+def monitor_model(
+    model: NanotronModel, parallel_context: ParallelContext
+) -> Tuple[Dict[str, Union[torch.Tensor, float]], List]:
     logs = {}
     handles = []
     leaf_modules = [(name, module) for name, module in model.named_modules()]
@@ -123,12 +125,12 @@ def monitor_model(model: NanotronModel, parallel_context: ParallelContext) -> Tu
 
 
 def convert_logs_to_flat_logs(
-        logs: Dict[str, Dict[str, Dict[str, Union[torch.Tensor, float]]]]
-    ) -> Dict[str, Union[torch.Tensor, float]]:
-        flat_logs = {}
-        for module_name, components in logs.items():
-            for component_name, stats in components.items():
-                for metric_name, metric_value in stats.items():
-                    flat_logs[f"{module_name}:{component_name}:{metric_name}"] = metric_value
+    logs: Dict[str, Dict[str, Dict[str, Union[torch.Tensor, float]]]]
+) -> Dict[str, Union[torch.Tensor, float]]:
+    flat_logs = {}
+    for module_name, components in logs.items():
+        for component_name, stats in components.items():
+            for metric_name, metric_value in stats.items():
+                flat_logs[f"{module_name}:{component_name}:{metric_name}"] = metric_value
 
-        return flat_logs
+    return flat_logs
