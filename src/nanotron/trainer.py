@@ -131,7 +131,9 @@ class DistributedTrainer:
 
         super().__init__()
         self.config = get_config_from_file(
-            config_or_config_file, config_class=config_class, model_config_class=model_config_class
+            config_or_config_file,
+            config_class=config_class,
+            model_config_class=model_config_class,
         )
         self.model_config = self.config.model.model_config
         if model_class is not None:
@@ -212,7 +214,8 @@ class DistributedTrainer:
         # Define iteration start state
         if self.init_checkpoint_path is not None:
             checkpoint_metadata = load_meta(
-                parallel_context=self.parallel_context, root_folder=self.init_checkpoint_path
+                parallel_context=self.parallel_context,
+                root_folder=self.init_checkpoint_path,
             )
             assert isinstance(checkpoint_metadata.metas, TrainingMetadata)
             log_rank(str(checkpoint_metadata), logger=logger, level=logging.INFO, rank=0)
@@ -276,7 +279,8 @@ class DistributedTrainer:
         if dist.get_rank(self.parallel_context.world_pg) == self.logger_ranks[0] and wandb is not None:
             wandb.init(
                 project=self.config.general.project,
-                name=f"{current_time}_{self.config.general.run}",
+                name=f"{current_time}_{self.config.general.project}_{self.config.general.run}",
+                entity=self.config.general.entity,
                 config={"nanotron_config": self.config.as_dict()},
             )
 
@@ -307,7 +311,9 @@ class DistributedTrainer:
                 else:
                     dataloader = dataloaders
                 self.current_dataloader = sanity_check_dataloader(
-                    dataloader=dataloader, parallel_context=self.parallel_context, config=self.config
+                    dataloader=dataloader,
+                    parallel_context=self.parallel_context,
+                    config=self.config,
                 )
             return
         elif isinstance(dataloaders, Generator):
@@ -385,13 +391,19 @@ class DistributedTrainer:
 
         if dataloader is not None:
             self.current_dataloader = sanity_check_dataloader(
-                dataloader=dataloader, parallel_context=self.parallel_context, config=self.config
+                dataloader=dataloader,
+                parallel_context=self.parallel_context,
+                config=self.config,
             )
 
     def train(
         self,
         dataloader_or_dls: Dict[
-            str, Union[Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]], Tuple[Iterator, ...]]
+            str,
+            Union[
+                Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]],
+                Tuple[Iterator, ...],
+            ],
         ],
         **kwargs,
     ) -> None:
@@ -424,7 +436,7 @@ class DistributedTrainer:
                 self._update_dataloader_based_on_training_stages(dataloader_or_dls)
 
                 # Training step
-                outputs, loss_avg = self.training_step(dataloader=self.current_dataloader)
+                outputs, loss_avg, aux_losses = self.training_step(dataloader=self.current_dataloader)
 
                 # Training Logs
                 # TODO(xrsrke): refactor using callbacks would be better
@@ -435,7 +447,11 @@ class DistributedTrainer:
                 ].consumed_train_samples += self.global_batch_size
 
                 if (self.iteration_step - 1) % self.config.logging.iteration_step_info_interval == 0:
-                    self.train_step_logs(outputs=outputs, loss_avg=loss_avg)
+                    self.train_step_logs(
+                        outputs=outputs,
+                        loss_avg=loss_avg,
+                        aux_losses=aux_losses,
+                    )
 
                 # Checkpoint
                 if self.iteration_step % self.config.checkpoints.checkpoint_interval == 0:
@@ -448,7 +464,12 @@ class DistributedTrainer:
     def training_step(
         self, dataloader: Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]]
     ) -> Tuple[Iterable[Dict], Optional[torch.Tensor]]:
-        before_tbi_sanity_checks(self.config, self.parallel_context, self.unwrapped_model, self.grad_accumulator)
+        before_tbi_sanity_checks(
+            self.config,
+            self.parallel_context,
+            self.unwrapped_model,
+            self.grad_accumulator,
+        )
 
         if self.iteration_step < 5:
             log_memory(logger=logger)
@@ -464,7 +485,12 @@ class DistributedTrainer:
         if self.iteration_step < 5:
             log_memory(logger=logger)
 
-        after_tbi_sanity_checks(self.config, self.parallel_context, self.unwrapped_model, self.grad_accumulator)
+        after_tbi_sanity_checks(
+            self.config,
+            self.parallel_context,
+            self.unwrapped_model,
+            self.grad_accumulator,
+        )
 
         if isinstance(self.model, DistributedDataParallel) and self.grad_accumulator is not None:
             # Wait for fp32 grads allreduce to finish to make sure grads are synced across DP
@@ -508,9 +534,13 @@ class DistributedTrainer:
             )
 
         before_optim_step_sanity_checks(
-            self.config, self.parallel_context, self.unwrapped_model, self.grad_accumulator
+            self.config,
+            self.parallel_context,
+            self.unwrapped_model,
+            self.grad_accumulator,
         )
 
+        aux_losses = {}
         # Compute DP average loss and overlap with optimizer step
         if isinstance(outputs[0]["loss"], torch.Tensor):
             # This is an average on only one data rank.
@@ -518,7 +548,24 @@ class DistributedTrainer:
                 [output["loss"] for output in outputs]
             ).sum()  # already divided by n_micro_batches_per_batch
             # sync loss across DP
-            handle = dist.all_reduce(loss_avg, group=self.parallel_context.dp_pg, async_op=True, op=dist.ReduceOp.AVG)
+            handle = dist.all_reduce(
+                loss_avg,
+                group=self.parallel_context.dp_pg,
+                async_op=True,
+                op=dist.ReduceOp.AVG,
+            )
+            for k in outputs[0].keys():
+                if k != "loss":
+                    aux_losses[k] = torch.stack(
+                        [output[k] for output in outputs]
+                    ).sum()  # already divided by n_micro_batches_per_batch
+                    # sync loss across DP
+                    handle = dist.all_reduce(
+                        aux_losses[k],
+                        group=self.parallel_context.dp_pg,
+                        async_op=True,
+                        op=dist.ReduceOp.AVG,
+                    )
         else:
             loss_avg = None
             handle = None
@@ -530,14 +577,19 @@ class DistributedTrainer:
         # Update the learning rate
         self.lr_scheduler.step()
 
-        after_optim_step_sanity_checks(self.config, self.parallel_context, self.unwrapped_model, self.grad_accumulator)
+        after_optim_step_sanity_checks(
+            self.config,
+            self.parallel_context,
+            self.unwrapped_model,
+            self.grad_accumulator,
+        )
 
         if handle is not None:
             handle.wait()
 
         self.post_train_step()
 
-        return outputs, loss_avg
+        return outputs, loss_avg, aux_losses
 
     def validation_step(self, dataloader: Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]]) -> Iterable[Dict]:
         outputs = self.pipeline_engine.validate_batch_iter(
@@ -551,6 +603,7 @@ class DistributedTrainer:
         self,
         outputs: Iterable[Dict[str, Union[torch.Tensor, TensorPointer]]],
         loss_avg: Optional[torch.Tensor],
+        aux_losses: Optional[dict] = {},
     ) -> None:
         # TODO @nouamanetazi: Megatron-LM seems to be using a barrier to report their interval time. Check if this is necessary. https://github.com/NouamaneTazi/Megatron-LM/blob/e241a96c3085b18e36c6cee1d68a8155de77b5a6/megatron/training.py#L607
         dist.barrier()
@@ -577,13 +630,20 @@ class DistributedTrainer:
                     self.metadata.consumed_train_samples * self.config.tokens.sequence_length,
                     "human_format",
                 ),  # , "12d"),
-                LogItem("elapsed_time_per_iteration_ms", elapsed_time_per_iteration_ms, "human_format"),  # , ".1f"),
+                LogItem(
+                    "elapsed_time_per_iteration_ms",
+                    elapsed_time_per_iteration_ms,
+                    "human_format",
+                ),  # , ".1f"),
                 LogItem("tokens_per_sec", tokens_per_sec, "human_format"),  # , "1.6E"),
                 LogItem(
-                    "tokens_per_sec_per_gpu", tokens_per_sec / self.parallel_context.world_pg.size(), "human_format"
+                    "tokens_per_sec_per_gpu",
+                    tokens_per_sec / self.parallel_context.world_pg.size(),
+                    "human_format",
                 ),  # , "1.6E"),
                 LogItem("global_batch_size", self.global_batch_size, "human_format"),  # , "5d"),
                 LogItem("lm_loss", loss_avg.item(), "human_format"),  # , "1.6E"),
+                *[LogItem(k, v.item(), "human_format") for k, v in aux_losses.items()],
                 LogItem("lr", lr, "human_format"),  # , ".3E"),
                 LogItem("model_tflops_per_gpu", model_tflops, "human_format"),  # , ".2f"),
                 LogItem("hardware_tflops_per_gpu", hardware_tflops, "human_format"),  # , ".2f"),
@@ -598,10 +658,14 @@ class DistributedTrainer:
                 log_entries.extend(
                     [
                         LogItem(
-                            "cuda_memory_allocated", torch.cuda.memory_allocated(), "human_format"
+                            "cuda_memory_allocated",
+                            torch.cuda.memory_allocated(),
+                            "human_format",
                         ),  #  / 1024**2, ".2f"),
                         LogItem(
-                            "cuda_max_memory_reserved", torch.cuda.max_memory_reserved(), "human_format"
+                            "cuda_max_memory_reserved",
+                            torch.cuda.max_memory_reserved(),
+                            "human_format",
                         ),  #  / 1024**2, ".2f"),
                         LogItem("hd_total_memory_tb", total, "human_format"),  #  / (2**40), ".2f"),
                         LogItem("hd_used_memory_tb", used, "human_format"),  #  / (2**40), ".2f"),
@@ -691,9 +755,16 @@ class DistributedTrainer:
         reloaded_from_checkpoint = False
         if self.init_checkpoint_path is not None:
             # Reload from a training checkpoint
-            log_rank(f"Loading weights from {self.init_checkpoint_path}", logger=logger, level=logging.INFO, rank=0)
+            log_rank(
+                f"Loading weights from {self.init_checkpoint_path}",
+                logger=logger,
+                level=logging.INFO,
+                rank=0,
+            )
             self.param_shard_metadata = load_weights(
-                model=unwrapped_model, parallel_context=self.parallel_context, root_folder=self.init_checkpoint_path
+                model=unwrapped_model,
+                parallel_context=self.parallel_context,
+                root_folder=self.init_checkpoint_path,
             )
             reloaded_from_checkpoint = True
         if not reloaded_from_checkpoint:
@@ -756,17 +827,41 @@ class DistributedTrainer:
             module.init_rotary_embeddings()
 
         # Mark some parameters as tied
-        self._mark_tied_parameters(model=model, parallel_context=parallel_context, parallel_config=parallel_config)
+        self._mark_tied_parameters(
+            model=model,
+            parallel_context=parallel_context,
+            parallel_config=parallel_config,
+        )
 
         # count number of parameters
         num_params = sum(p.numel() for p in model.parameters())
         size_params = sum(p.numel() * p.element_size() for p in model.parameters())
         total_params = torch.tensor(num_params, device="cuda")
         total_size = torch.tensor(size_params, device="cuda")
-        dist.all_reduce(total_params, group=parallel_context.tp_pg, async_op=False, op=dist.ReduceOp.SUM)  # TP
-        dist.all_reduce(total_params, group=parallel_context.pp_pg, async_op=False, op=dist.ReduceOp.SUM)  # PP
-        dist.all_reduce(total_size, group=parallel_context.tp_pg, async_op=False, op=dist.ReduceOp.SUM)
-        dist.all_reduce(total_size, group=parallel_context.pp_pg, async_op=False, op=dist.ReduceOp.SUM)
+        dist.all_reduce(
+            total_params,
+            group=parallel_context.tp_pg,
+            async_op=False,
+            op=dist.ReduceOp.SUM,
+        )  # TP
+        dist.all_reduce(
+            total_params,
+            group=parallel_context.pp_pg,
+            async_op=False,
+            op=dist.ReduceOp.SUM,
+        )  # PP
+        dist.all_reduce(
+            total_size,
+            group=parallel_context.tp_pg,
+            async_op=False,
+            op=dist.ReduceOp.SUM,
+        )
+        dist.all_reduce(
+            total_size,
+            group=parallel_context.pp_pg,
+            async_op=False,
+            op=dist.ReduceOp.SUM,
+        )
 
         # TODO @nouamanetazi: better memory logs
         log_rank(
@@ -872,7 +967,9 @@ class DistributedTrainer:
             config=self.config,
         )
         save_random_states(
-            random_states=self.random_states, parallel_context=self.parallel_context, root_folder=checkpoint_path
+            random_states=self.random_states,
+            parallel_context=self.parallel_context,
+            root_folder=checkpoint_path,
         )
         with open(checkpoints_path / "latest.txt", mode="w") as fo:
             fo.write(f"{self.iteration_step}")
@@ -893,11 +990,17 @@ class DistributedTrainer:
         parallel_context: ParallelContext,
         parallel_config: Optional[ParallelismArgs] = None,
     ):
-        mark_tied_parameters(model=model, parallel_context=parallel_context, parallel_config=parallel_config)
+        mark_tied_parameters(
+            model=model,
+            parallel_context=parallel_context,
+            parallel_config=parallel_config,
+        )
 
 
 def mark_tied_parameters(
-    model: NanotronModel, parallel_context: ParallelContext, parallel_config: Optional[ParallelismArgs] = None
+    model: NanotronModel,
+    parallel_context: ParallelContext,
+    parallel_config: Optional[ParallelismArgs] = None,
 ):
     # Tie embeddings
     embeddings_lm_head_tied_names = model.get_embeddings_lm_head_tied_names()
@@ -917,7 +1020,10 @@ def mark_tied_parameters(
             for target in embeddings_lm_head_tied_names
         ]
         tie_parameters(
-            root_module=model, ties=shared_embeddings, parallel_context=parallel_context, reduce_op=dist.ReduceOp.SUM
+            root_module=model,
+            ties=shared_embeddings,
+            parallel_context=parallel_context,
+            reduce_op=dist.ReduceOp.SUM,
         )
 
     # Tie custom params
@@ -932,7 +1038,9 @@ def mark_tied_parameters(
 
 
 def mark_unsharded_params_as_tied_across_tp(
-    model: NanotronModel, parallel_context: ParallelContext, parallel_config: "ParallelismArgs"
+    model: NanotronModel,
+    parallel_context: ParallelContext,
+    parallel_config: "ParallelismArgs",
 ):
     for module_name, module in model.named_modules():
         for param_name, param in module.named_parameters(recurse=False):
@@ -968,12 +1076,17 @@ def mark_unsharded_params_as_tied_across_tp(
                 reduce_op = dist.ReduceOp.SUM
 
             tie_parameters(
-                root_module=model, ties=shared_weights, parallel_context=parallel_context, reduce_op=reduce_op
+                root_module=model,
+                ties=shared_weights,
+                parallel_context=parallel_context,
+                reduce_op=reduce_op,
             )
 
 
 def mark_unsharded_params_as_tied_across_expert(
-    model: NanotronModel, parallel_context: ParallelContext, parallel_config: "ParallelismArgs"
+    model: NanotronModel,
+    parallel_context: ParallelContext,
+    parallel_config: "ParallelismArgs",
 ):
     for module_name, module in model.named_modules():
         for param_name, param in module.named_parameters(recurse=False):
@@ -1002,5 +1115,8 @@ def mark_unsharded_params_as_tied_across_expert(
             reduce_op = None
 
             tie_parameters(
-                root_module=model, ties=shared_weights, parallel_context=parallel_context, reduce_op=reduce_op
+                root_module=model,
+                ties=shared_weights,
+                parallel_context=parallel_context,
+                reduce_op=reduce_op,
             )

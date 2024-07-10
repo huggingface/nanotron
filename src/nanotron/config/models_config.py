@@ -51,6 +51,11 @@ class LlamaConfig:
     tie_word_embeddings: bool = False
     use_cache: bool = True
     vocab_size: int = 32000
+    # MoE specific
+    moe_num_experts: int = 1
+    num_experts_per_tok: int = 1
+    moe_loss_weight: float = 0.01
+    moe_z_loss_weight: float = 0.001
 
     def __post_init__(self):
         # NOTE: user don't set self._init_method, ModelArgs will set it
