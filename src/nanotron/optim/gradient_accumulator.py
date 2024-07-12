@@ -9,7 +9,7 @@ from torch.distributed import GradBucket
 
 import nanotron.distributed as dist
 from nanotron import logging
-from nanotron.parallel.parameters import NanotronParameter
+from nanotron.parallel.parameters import NanotronParameter, get_data_from_param, get_grad_from_parameter
 from nanotron.utils import get_untyped_storage, tensor_from_untyped_storage
 
 logger = logging.get_logger(__name__)
@@ -181,10 +181,11 @@ class FP32GradientAccumulator(GradientAccumulator):
             if not param.requires_grad:
                 continue
 
-            assert param.dtype != torch.float, f"Expected {name} not to be float"
-            assert param.is_contiguous(), f"Expected {name} to be contiguous"
+            _p_data = get_data_from_param(param)
+            assert _p_data.dtype != torch.float32, f"Expected {name} not to be float"
+            assert _p_data.is_contiguous(), f"Expected {name} to be contiguous"
 
-            next_offset = offset + param.numel() * element_size
+            next_offset = offset + _p_data.numel() * element_size
 
             fp32_grad_buffer = tensor_from_untyped_storage(
                 untyped_storage=untyped_storage[offset:next_offset], dtype=torch.float
@@ -211,12 +212,14 @@ class FP32GradientAccumulator(GradientAccumulator):
 
     def _accumulate_grad(self, name: str, half_param: NanotronParameter) -> None:
         """Accumulate grad in fp32 and set the fp32 grad to the fp32 grad buffer, so that optimizer can update fp32 weights afterwards"""
-        assert half_param.grad is not None, f"Expected param {name} to have gradient."
+        # assert half_param.grad is not None, f"Expected param {name} to have gradient."
+        assert get_grad_from_parameter(half_param) is not None, f"Expected param {name} to have gradient."
         fp32_grad = self.get_grad_buffer(name=name)
 
         if self._is_accumulation_sync_step is False:
             # WARNING: We assume fp32_grad_bucket is already zeroed
-            fp32_grad.add_(half_param.grad)
+            # fp32_grad.add_(half_param.grad)
+            fp32_grad.add_(get_grad_from_parameter(half_param))
             # In case _is_accumulation_sync_step = True: no need to add half gradients, because it's done in the allreduce hook
 
         # TODO @thomasw21: Is it better to set to zero instead?
@@ -276,6 +279,10 @@ class FP32GradientAccumulator(GradientAccumulator):
         self._contiguous_fp32_grad_buffer.zero_()
 
     def get_parameter_for_optimizer(self, name: str) -> NanotronParameter:
+        # try:
+        #     return self.parameters[name]["fp32"]
+        # except KeyError:
+        #     assert  1 == 1
         return self.parameters[name]["fp32"]
 
     def get_grad_buffer(self, name: str) -> torch.Tensor:

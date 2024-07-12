@@ -7,7 +7,7 @@ import time
 from datetime import datetime
 from functools import partial
 from math import ceil
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -96,7 +96,7 @@ def lr_scheduler_builder(optimizer: Optimizer, lr_scheduler_args: LRSchedulerArg
     def lr_lambda(current_step: int, initial_lr: float):
         """
         current_step: current training step
-        initial_lr: the learning rate of a parameter group
+        initial_lr: the peak learning rate (or the learning rate that you enter in the config)
 
         More info on initial_lr:
         And in standard parameterization, lr_lambda only takes a single learning rate.
@@ -296,18 +296,22 @@ def merge_named_param_groups(
 
 def init_optimizer_and_grad_accumulator(
     parametrization_method: ParametrizationMethod,
-    model: nn.Module,
+    model: Union[nn.Module, NanotronModel],
     optimizer_args: OptimizerArgs,
     parallel_context: ParallelContext,
 ) -> Tuple[BaseOptimizer, GradientAccumulator]:
     # Unwrap DDP
     unwrapped_model: NanotronModel = model.module if isinstance(model, DistributedDataParallel) else model
 
+    # if isinstance(unwrapped_model, NanotronModel):
+    #     named_parameters = list(unwrapped_model.get_named_params_with_correct_tied())
+    # else:
+    #     named_parameters =
+    named_parameters = list(unwrapped_model.get_named_params_with_correct_tied())
+
     module_id_to_prefix = {id(module): f"{module_name}." for module_name, module in unwrapped_model.named_modules()}
     # Fix the root_model
     module_id_to_prefix[id(unwrapped_model)] = ""
-
-    named_parameters = list(unwrapped_model.get_named_params_with_correct_tied())
 
     named_param_groups_with_lr = get_custom_lr_for_named_parameters(
         parametrization_method=parametrization_method,
@@ -337,8 +341,70 @@ def init_optimizer_and_grad_accumulator(
                     weight_decay=optimizer_args.weight_decay,
                     eps=optimizer_args.optimizer_factory.adam_eps,
                     betas=(optimizer_args.optimizer_factory.adam_beta1, optimizer_args.optimizer_factory.adam_beta2),
-                    fused=optimizer_args.optimizer_factory.torch_adam_is_fused,
+                    # fused=optimizer_args.optimizer_factory.torch_adam_is_fused,
+                    # NOTE: fused (bool, optional) – whether the fused implementation (CUDA only) is used.
+                    # Currently, torch.float64, torch.float32, torch.float16, and torch.bfloat16
+                    # in FP8 training, model parameters are INT8
+                    fused=False,
                 )
+
+        elif optimizer_args.optimizer_factory.name == "custom_adam":
+            from nanotron import constants
+
+            if constants.CONFIG is not None and constants.CONFIG.model.dtype == torch.int8:
+
+                def optimizer(param_groups):
+                    from nanotron.fp8.optim import FP8Adam
+
+                    log_rank(
+                        "Using FP8 Adam optimizer",
+                        logger=logger,
+                        level=logging.INFO,
+                        group=parallel_context.world_pg,
+                        rank=0,
+                    )
+
+                    return FP8Adam(
+                        param_groups,
+                        lr=optimizer_args.learning_rate_scheduler.learning_rate,
+                        weight_decay=optimizer_args.weight_decay,
+                        eps=optimizer_args.optimizer_factory.adam_eps,
+                        betas=(
+                            optimizer_args.optimizer_factory.adam_beta1,
+                            optimizer_args.optimizer_factory.adam_beta2,
+                        ),
+                    )
+
+            else:
+
+                def optimizer(param_groups):
+                    # return torch.optim.Adam(
+                    #     param_groups,
+                    #     lr=optimizer_args.learning_rate_scheduler.learning_rate,
+                    #     weight_decay=optimizer_args.weight_decay,
+                    #     eps=optimizer_args.optimizer_factory.adam_eps,
+                    #     betas=(
+                    #         optimizer_args.optimizer_factory.adam_beta1,
+                    #         optimizer_args.optimizer_factory.adam_beta2,
+                    #     ),
+                    #     # fused=optimizer_args.optimizer_factory.torch_adam_is_fused,
+                    #     # NOTE: fused (bool, optional) – whether the fused implementation (CUDA only) is used.
+                    #     # Currently, torch.float64, torch.float32, torch.float16, and torch.bfloat16
+                    #     # in FP8 training, model parameters are INT8
+                    #     fused=False,
+                    # )
+                    from nanotron.fp8.optim import Adam
+
+                    return Adam(
+                        param_groups,
+                        lr=optimizer_args.learning_rate_scheduler.learning_rate,
+                        weight_decay=optimizer_args.weight_decay,
+                        eps=optimizer_args.optimizer_factory.adam_eps,
+                        betas=(
+                            optimizer_args.optimizer_factory.adam_beta1,
+                            optimizer_args.optimizer_factory.adam_beta2,
+                        ),
+                    )
 
         elif optimizer_args.optimizer_factory.name == "sgd":
 
@@ -693,7 +759,7 @@ def compute_remain_train_steps_of_a_data_stage_from_ckp(
     else:
         next_stage = next((s for s in config.data_stages if s.start_training_step > stage.start_training_step), None)
         total_train_steps = next_stage.start_training_step
-    
+
     if metadata.last_train_step > stage.start_training_step:
         # NOTE: if the last_train_step is larger than the start_training_step of the current stage,
         # it means that the training has already passed this stage

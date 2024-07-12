@@ -6,6 +6,7 @@ from helpers.utils import available_gpus, init_distributed, rerun_if_address_is_
 from nanotron import distributed as dist
 from nanotron.distributed import get_global_rank
 from nanotron.parallel import ParallelContext
+from nanotron.parallel.parameters import get_grad_from_parameter
 from nanotron.parallel.tensor_parallel.enum import TensorParallelLinearMode
 from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelColumnLinear,
@@ -86,7 +87,7 @@ def _test_column_linear(
             random_input = sharded_random_input
     else:
         ValueError(f"Unsupported mode: {tp_mode}")
-    # It's important that `random_input` and `sharded_random_input` are two seperate tensors with seperate storage
+    # It's important that `random_input` and `sharded_random_input` are two separate tensors with separate storage
     sharded_random_input = sharded_random_input.clone()
     random_input.requires_grad = True
     sharded_random_input.requires_grad = True
@@ -120,11 +121,13 @@ def _test_column_linear(
         (dist.get_rank(parallel_context.tp_pg) + 1) * out_features_per_tp_rank,
     )
     torch.testing.assert_close(
-        column_linear.weight.grad,
+        # column_linear.weight.data.grad,
+        get_grad_from_parameter(column_linear.weight),
         reference_linear.weight.grad[hidden_dim_slice],
     )
     torch.testing.assert_close(
-        column_linear.bias.grad,
+        # column_linear.bias.data.grad,
+        get_grad_from_parameter(column_linear.bias),
         reference_linear.bias.grad[hidden_dim_slice],
     )
     if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
@@ -161,6 +164,7 @@ def test_row_linear(tp: int, dp: int, pp: int, tp_mode: TensorParallelLinearMode
 def _test_row_linear(parallel_context: ParallelContext, tp_mode: TensorParallelLinearMode, async_communication: bool):
     if async_communication:
         os.environ["CUDA_DEVICE_MAX_CONNECTIONS"] = "1"
+
     out_features = 3
     in_features_per_rank = 2
     in_features = parallel_context.tp_pg.size() * in_features_per_rank
@@ -245,7 +249,8 @@ def _test_row_linear(parallel_context: ParallelContext, tp_mode: TensorParallelL
     sharded_output.sum().backward()
     reference_output.sum().backward()
     torch.testing.assert_close(
-        row_linear.weight.grad,
+        # row_linear.weight.data.grad,
+        get_grad_from_parameter(row_linear.weight),
         reference_linear.weight.grad[
             :,
             dist.get_rank(parallel_context.tp_pg)
@@ -255,7 +260,8 @@ def _test_row_linear(parallel_context: ParallelContext, tp_mode: TensorParallelL
     )
     if dist.get_rank(parallel_context.tp_pg) == 0:
         torch.testing.assert_close(
-            row_linear.bias.grad,
+            # row_linear.bias.data.grad,
+            get_grad_from_parameter(row_linear.bias),
             reference_linear.bias.grad,
         )
     else:

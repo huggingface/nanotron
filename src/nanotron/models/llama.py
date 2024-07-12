@@ -12,28 +12,33 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""PyTorch LLaMa model."""
-
-from typing import Dict, Optional, Union, List
+""" PyTorch LLaMa model.
+"""
+from typing import Dict, Optional, Union
 
 import torch
 from torch import nn
 
+from nanotron import constants, logging
 from nanotron import distributed as dist
-from nanotron import logging
 from nanotron.config import Config, LlamaConfig, ParallelismArgs
 from nanotron.config.models_config import RandomInit, SpectralMupInit
+from nanotron.fp8.utils import find_fp8_config_by_module_name
 from nanotron.generation.generate_store import AttachableStore
 from nanotron.logging import log_rank
 from nanotron.models import NanotronModel
 from nanotron.nn.activations import ACT2FN
-from nanotron.nn.layer_norm import TritonRMSNorm
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter
 from nanotron.parallel.pipeline_parallel.block import PipelineBlock, TensorPointer
 from nanotron.parallel.pipeline_parallel.p2p import P2P
 from nanotron.parallel.tensor_parallel.functional import sharded_cross_entropy
 from nanotron.parallel.tensor_parallel.nn import (
+    FP8TensorParallelColumnLinear,
+    FP8TensorParallelRowLinear,
+    # TensorParallelColumnLinear,
+    # TensorParallelColumnLinear,
+    # TensorParallelRowLinear,
     TensorParallelColumnLinear,
     TensorParallelEmbedding,
     TensorParallelLinearMode,
@@ -44,6 +49,23 @@ from nanotron.scaling.parametrization import SpectralMupParametrizator, Standard
 from nanotron.utils import checkpoint_method
 
 logger = logging.get_logger(__name__)
+
+
+def get_cls_and_additional_args(linear_cls, module_name, config):
+    recipe = find_fp8_config_by_module_name(config, module_name)
+    new_linear_cls = linear_cls
+    additional_args = {}
+    if linear_cls == TensorParallelColumnLinear:
+        if recipe is not None:
+            new_linear_cls = FP8TensorParallelColumnLinear
+    elif linear_cls == TensorParallelRowLinear:
+        if recipe is not None:
+            new_linear_cls = FP8TensorParallelRowLinear
+
+    if recipe is not None:
+        additional_args = {"recipe": recipe}
+
+    return new_linear_cls, additional_args
 
 
 class RotaryEmbedding(nn.Module):
@@ -117,7 +139,7 @@ class RotaryEmbedding(nn.Module):
         return x_out.type(dtype)
 
 
-class GLUActivation(nn.Module):
+class ActivationFunction(nn.Module):
     def __init__(self, act_fn_name: str):
         super().__init__()
         self.act = ACT2FN[act_fn_name]
@@ -133,6 +155,7 @@ class MLP(nn.Module):
         config: LlamaConfig,
         parallel_config: Optional[ParallelismArgs],
         tp_pg: dist.ProcessGroup,
+        layer_idx: int,
     ):
         super().__init__()
 
@@ -146,7 +169,14 @@ class MLP(nn.Module):
             config.intermediate_size,  # shape of gate_linear
             config.intermediate_size,  # shape of up_linear
         )
-        self.gate_up_proj = TensorParallelColumnLinear(
+        gate_up_cls, gate_up_additional_args = get_cls_and_additional_args(
+            TensorParallelColumnLinear, f"model.decoder.{layer_idx}.mlp.gate_up_proj", constants.CONFIG
+        )
+        gate_down_cls, gate_down_additional_args = get_cls_and_additional_args(
+            TensorParallelRowLinear, f"model.decoder.{layer_idx}.mlp.down_proj", constants.CONFIG
+        )
+
+        self.gate_up_proj = gate_up_cls(
             config.hidden_size,
             2 * config.intermediate_size,
             pg=tp_pg,
@@ -154,17 +184,23 @@ class MLP(nn.Module):
             bias=False,
             async_communication=tp_linear_async_communication,
             contiguous_chunks=gate_up_contiguous_chunks,
+            # name="mlp.gate_up_proj",
+            name=f"model.decoder.{layer_idx}.mlp.gate_up_proj",
+            **gate_up_additional_args,
         )
-        self.down_proj = TensorParallelRowLinear(
+        self.down_proj = gate_down_cls(
             config.intermediate_size,
             config.hidden_size,
             pg=tp_pg,
             mode=tp_mode,
             bias=False,
             async_communication=tp_linear_async_communication and tp_mode is TensorParallelLinearMode.REDUCE_SCATTER,
+            # name="mlp.down_proj",
+            name=f"model.decoder.{layer_idx}.mlp.down_proj",
+            **gate_down_additional_args,
         )
-        # TODO @nouamane: why can't we torch.jit.script GLUActivation?
-        self.split_silu_mul = GLUActivation(config.hidden_act)
+        # TODO @nouamane: why can't we torch.jit.script ActivationFunction?
+        self.split_silu_mul = ActivationFunction(config.hidden_act)
 
     def forward(self, hidden_states):  # [seq_length, batch_size, hidden_dim]
         merged_states = self.gate_up_proj(hidden_states)
@@ -307,7 +343,15 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             config.num_key_value_heads * self.d_qk,  # shape of k
             config.num_key_value_heads * self.d_qk,  # shape of v
         )
-        self.qkv_proj = TensorParallelColumnLinear(
+
+        qkv_cls, qkv_additional_args = get_cls_and_additional_args(
+            TensorParallelColumnLinear, f"model.decoder.{layer_idx}.attn.qkv_proj", constants.CONFIG
+        )
+        output_cls, output_additional_args = get_cls_and_additional_args(
+            TensorParallelRowLinear, f"model.decoder.{layer_idx}.attn.o_proj", constants.CONFIG
+        )
+
+        self.qkv_proj = qkv_cls(
             self.d_model,
             config.num_attention_heads * self.d_qk + 2 * config.num_key_value_heads * self.d_qk,
             pg=tp_pg,
@@ -315,6 +359,8 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             bias=False,
             async_communication=tp_linear_async_communication,
             contiguous_chunks=qkv_contiguous_chunks,
+            name=f"model.decoder.{layer_idx}.attn.qkv_proj",
+            **qkv_additional_args,
         )
         # TODO(kunhao): We want to have only one version per device and not one version per layer.
         self.rotary_embedding = RotaryEmbedding(
@@ -326,13 +372,17 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         # NOTE: Only supported for training (TODO(fmom): position_ids not supported yet)
         self.flash_rotary_embedding = FlashRotaryEmbedding(dim=self.d_qk, base=config.rope_theta, interleaved=True)
 
-        self.o_proj = TensorParallelRowLinear(
+        self.o_proj = output_cls(
             config.num_attention_heads * self.d_qk,
             self.d_model,
             pg=tp_pg,
             mode=tp_mode,
             bias=False,
             async_communication=tp_linear_async_communication,
+            # name="attn.o_proj"
+            # is_fp8=True
+            name=f"model.decoder.{layer_idx}.attn.o_proj",
+            **output_additional_args,
         )
 
         self.attention = CoreAttention(
@@ -608,7 +658,10 @@ class LlamaDecoderLayer(nn.Module):
         layer_idx: int,
     ):
         super().__init__()
-        self.input_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        # self.input_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.normalized_shape = (config.hidden_size,)
+        self.input_layernorm = nn.LayerNorm(config.hidden_size, eps=config.rms_norm_eps)
+        # self.input_layernorm = nn.Identity()
         self.attn = CausalSelfAttention(
             config=config,
             parallel_config=parallel_config,
@@ -616,8 +669,10 @@ class LlamaDecoderLayer(nn.Module):
             layer_idx=layer_idx,
         )
 
-        self.post_attention_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.mlp = MLP(config=config, parallel_config=parallel_config, tp_pg=tp_pg)
+        # self.post_attention_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.post_attention_layernorm = nn.LayerNorm(config.hidden_size, eps=config.rms_norm_eps)
+        # self.post_attention_layernorm = nn.Identity()
+        self.mlp = MLP(config=config, parallel_config=parallel_config, tp_pg=tp_pg, layer_idx=layer_idx)
 
     def forward(
         self,
@@ -626,6 +681,10 @@ class LlamaDecoderLayer(nn.Module):
     ) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
+        # NOTE: use F.layernorm instead of self.input_layernorm, but use the learnable parameters
+        # from self.input_layernorm
+        # input_ln_weight = self.input_layernorm.weight._data if hasattr(self.input_layernorm.weight, "_data") else self.input_layernorm.weight
+        # hidden_states = F.layer_norm(hidden_states, self.normalized_shape, input_ln_weight, self.input_layernorm.bias, eps=self.input_layernorm.eps)
 
         output = self.attn(hidden_states=hidden_states, sequence_mask=sequence_mask)
         hidden_states = output["hidden_states"]
@@ -633,6 +692,9 @@ class LlamaDecoderLayer(nn.Module):
 
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
+        # post_attention_ln_weight = self.post_attention_layernorm.weight._data if hasattr(self.post_attention_layernorm.weight, "_data") else self.post_attention_layernorm.weight
+        # hidden_states = F.layer_norm(hidden_states, self.normalized_shape, post_attention_ln_weight, self.post_attention_layernorm.bias, eps=self.post_attention_layernorm.eps)
+        # NOTE: got nan starts from here in 1st layer
         hidden_states = self.mlp(hidden_states=hidden_states)["hidden_states"]
         hidden_states = hidden_states + residual
 
@@ -651,6 +713,7 @@ class Embedding(nn.Module, AttachableStore):
             padding_idx=config.pad_token_id,
             pg=tp_pg,
             mode=parallel_config.tp_mode if parallel_config is not None else TensorParallelLinearMode.ALL_REDUCE,
+            name="model.token_embedding",
         )
         self.pg = tp_pg
 
@@ -670,6 +733,12 @@ class Embedding(nn.Module, AttachableStore):
         input_ids = input_ids.transpose(0, 1)
         input_embeds = self.token_embedding(input_ids)
         return {"input_embeds": input_embeds}
+
+
+# class LayerNormBlock(nn.LayerNorm):
+#     def forward(self, input):
+#         weight = self.weight._data if hasattr(self.weight, "_data") else self.weight
+#         return F.layer_norm(input, self.normalized_shape, weight, self.bias, self.eps)
 
 
 class LlamaModel(nn.Module):
@@ -725,16 +794,22 @@ class LlamaModel(nn.Module):
 
         self.final_layer_norm = PipelineBlock(
             p2p=self.p2p,
-            module_builder=TritonRMSNorm,
-            module_kwargs={"hidden_size": config.hidden_size, "eps": config.rms_norm_eps},
+            # module_builder=TritonRMSNorm,
+            # module_kwargs={"hidden_size": config.hidden_size, "eps": config.rms_norm_eps},
+            module_builder=nn.LayerNorm,
+            # module_builder=nn.Identity,
+            module_kwargs={"normalized_shape": config.hidden_size, "eps": config.rms_norm_eps},
             module_input_keys={"input"},
             module_output_keys={"hidden_states"},
         )  # TODO
 
+        lm_head_cls, lm_head_additional_args = get_cls_and_additional_args(
+            TensorParallelColumnLinear, "model.lm_head", constants.CONFIG
+        )
         self.lm_head = PipelineBlock(
             p2p=self.p2p,
             # Understand that this means that we return sharded logits that are going to need to be gathered
-            module_builder=TensorParallelColumnLinear,
+            module_builder=lm_head_cls,
             module_kwargs={
                 "in_features": config.hidden_size,
                 "out_features": config.vocab_size,
@@ -743,6 +818,9 @@ class LlamaModel(nn.Module):
                 # TODO @thomasw21: refactor so that we store that default in a single place.
                 "mode": self.tp_mode,
                 "async_communication": tp_linear_async_communication,
+                "name": "model.lm_head",
+                **lm_head_additional_args,
+                # "name": "lm_head",
             },
             module_input_keys={"x"},
             module_output_keys={"logits"},
@@ -770,17 +848,18 @@ class LlamaModel(nn.Module):
     ):
         # all tensors are optional as most ranks don't need anything from the dataloader.
 
+        # NOTE: a sanity check that amax of the initialize weight should be in the normal distribution
+
         output = self.token_position_embeddings(input_ids=input_ids, input_mask=input_mask)
 
-        hidden_encoder_states = {
+        hidden_states = {
             "hidden_states": output["input_embeds"],
             "sequence_mask": input_mask,
         }
-        for encoder_block in self.decoder:
-            hidden_encoder_states = encoder_block(**hidden_encoder_states)
+        for decoder_block in self.decoder:
+            hidden_states = decoder_block(**hidden_states)
 
-        hidden_states = self.final_layer_norm(input=hidden_encoder_states["hidden_states"])["hidden_states"]
-
+        hidden_states = self.final_layer_norm(input=hidden_states["hidden_states"])["hidden_states"]
         sharded_logits = self.lm_head(x=hidden_states)["logits"]
 
         fp32_sharded_logits = self.cast_to_fp32(x=sharded_logits)["output"]
@@ -827,7 +906,7 @@ class LlamaModel(nn.Module):
 
 @torch.jit.script
 def masked_mean(loss, label_mask, dtype):
-    # type: (Tensor, Tensor, torch.dtype) -> Tensor
+    # type: (torch.Tensor, torch.Tensor, torch.dtype) -> torch.Tensor
     return (loss * label_mask).sum(dtype=dtype) / label_mask.sum()
 
 
@@ -946,7 +1025,7 @@ class LlamaForTraining(NanotronModel):
                 continue
 
             module = model.get_submodule(module_name)
-            parametrizator.parametrize(param_name, module)
+            parametrizator.parametrize(full_param_name, module)
 
             assert full_param_name not in initialized_parameters
             initialized_parameters.add(full_param_name)

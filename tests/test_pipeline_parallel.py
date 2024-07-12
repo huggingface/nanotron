@@ -624,7 +624,6 @@ def _test_pipeline_forward_without_engine(parallel_context: ParallelContext):
 @rerun_if_address_is_in_use()
 def test_pipeline_engine_diamond(pipeline_engine: PipelineEngine):
     init_distributed(pp=4, dp=1, tp=1)(_test_pipeline_engine_diamond)(pipeline_engine=pipeline_engine)
-    pass
 
 
 def _test_pipeline_engine_diamond(parallel_context: ParallelContext, pipeline_engine: PipelineEngine):

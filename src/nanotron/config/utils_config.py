@@ -62,6 +62,11 @@ str_to_dtype = {
     "bfloat16": torch.bfloat16,
     "uint8": torch.uint8,
     "int8": torch.int8,
+    # NOTE: in the config, we set "float8" for FP8 training
+    # because it is more clean, but technically we currently use int8
+    # we consider this as an implementation detail, so we don't explicitly
+    # expose it in the config
+    "float8": torch.int8,
     "int16": torch.int16,
     "int32": torch.int32,
     "int64": torch.int64,
@@ -77,6 +82,7 @@ dtype_to_str = {
     torch.bfloat16: "bfloat16",
     torch.uint8: "uint8",
     torch.int8: "int8",
+    # torch.int8: "float8",
     torch.int16: "int16",
     torch.int32: "int32",
     torch.int64: "int64",

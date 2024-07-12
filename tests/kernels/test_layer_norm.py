@@ -1,8 +1,7 @@
 import pytest
 import torch
-from torch.nn import LayerNorm
-
 from nanotron.nn.layer_norm import TritonLayerNorm
+from torch.nn import LayerNorm
 
 
 @pytest.mark.fa2

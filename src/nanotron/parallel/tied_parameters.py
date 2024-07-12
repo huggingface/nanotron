@@ -8,7 +8,7 @@ from nanotron import logging
 from nanotron.logging import log_rank
 from nanotron.optim.gradient_accumulator import GradientAccumulator
 from nanotron.parallel import ParallelContext
-from nanotron.parallel.parameters import NanotronParameter
+from nanotron.parallel.parameters import NanotronParameter, get_grad_from_parameter
 from nanotron.utils import get_parameter_and_parent_module
 
 logger = logging.get_logger(__name__)
@@ -147,7 +147,8 @@ def sync_tied_weights_gradients(
         if grad_accumulator is not None:
             tied_grad = grad_accumulator.get_grad_buffer(name=name)
         else:
-            tied_grad = tied_param.grad
+            # tied_grad = tied_param.grad
+            tied_grad = get_grad_from_parameter(tied_param)
         log_rank(
             f"Syncing tied weights {name} across ranks {group_ranks} ...",
             logger=logger,

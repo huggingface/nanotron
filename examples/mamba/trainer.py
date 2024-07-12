@@ -1,10 +1,9 @@
 from typing import Optional, Type, Union
 
 from config import ExistingCheckpointInit, MambaConfig, MambaInit
-from torch.nn.parallel import DistributedDataParallel
-
 from nanotron import logging
 from nanotron.trainer import DistributedTrainer
+from torch.nn.parallel import DistributedDataParallel
 
 logger = logging.get_logger(__name__)
 

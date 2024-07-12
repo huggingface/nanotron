@@ -1161,7 +1161,8 @@ class GPTBlock(nn.Module):
         layer_idx: int,
     ):
         super(GPTBlock, self).__init__()
-        self.ln_1 = TritonLayerNorm(config.hidden_size, eps=config.layer_norm_epsilon)
+        # self.ln_1 = TritonLayerNorm(config.hidden_size, eps=config.layer_norm_epsilon)
+        self.ln_1 = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_epsilon)
         if config.multi_query is True:
             self.attn = CausalSelfMQA(
                 config=config,
@@ -1180,7 +1181,8 @@ class GPTBlock(nn.Module):
             raise ValueError("Either `multi_query` or `grouped_query` must be True")  # TODO: @nouamane not necessarily
         self.attn_dropout = config.attn_pdrop
 
-        self.ln_2 = TritonLayerNorm(config.hidden_size, eps=config.layer_norm_epsilon)
+        # self.ln_2 = TritonLayerNorm(config.hidden_size, eps=config.layer_norm_epsilon)
+        self.ln_2 = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_epsilon)
         self.ff = MLP(config=config, parallel_config=parallel_config, tp_pg=tp_pg)
         self.ff_dropout = config.resid_pdrop
 

@@ -1,0 +1,237 @@
+checkpoints:
+  checkpoint_interval: 50000
+  checkpoints_path: checkpoints
+  checkpoints_path_is_shared_file_system: false
+  # resume_checkpoint_path: checkpoints
+  save_initial_state: false
+data_stages:
+# - data:
+#     dataset:
+#       dataset_overwrite_cache: false
+#       dataset_processing_num_proc_per_process: 1
+#       hf_dataset_config_name: null
+#       hf_dataset_or_datasets: roneneldan/TinyStories
+#       hf_dataset_splits: train
+#       text_column_name: text
+#     num_loading_workers: 1
+#     seed: 42
+#   name: Stable Training Stage
+#   start_training_step: 1
+# - data:
+#     dataset:
+#       dataset_overwrite_cache: false
+#       dataset_processing_num_proc_per_process: 1
+#       hf_dataset_config_name: null
+#       hf_dataset_or_datasets: stas/openwebtext-10k
+#       hf_dataset_splits: train
+#       text_column_name: text
+#     num_loading_workers: 1
+#     seed: 42
+#   name: Annealing Phase
+#   start_training_step: 10
+- data:
+    dataset:
+      dataset_overwrite_cache: false
+      dataset_processing_num_proc_per_process: 1
+      hf_dataset_config_name: null
+      hf_dataset_or_datasets: JeanKaddour/minipile
+      hf_dataset_splits: train
+      text_column_name: text
+    num_loading_workers: 1
+    seed: 42
+  name: Stable Training Stage
+  start_training_step: 1
+general:
+  benchmark_csv_path: null
+  consumed_train_samples: null
+  ignore_sanity_checks: true
+  project: fp8_for_nanotron
+  run: fp8_2_layers_and_seq_len_16_and_micro_batch_256_and_lr_2.0e-4
+  seed: 42
+  step: null
+lighteval: null
+logging:
+  iteration_step_info_interval: 1
+  log_level: info
+  log_level_replica: info
+  monitor_model_states: true
+model:
+  ddp_bucket_cap_mb: 25
+  dtype: float8
+  init_method:
+    # std: 0.25 # sqrt(1/16)
+    # std: 0.125 # sqrt(1/64)
+    std: 0.04419417382415922 # sqrt(1/512)
+  make_vocab_size_divisible_by: 1
+  model_config:
+    bos_token_id: 1
+    eos_token_id: 2
+    # hidden_act: silu
+    hidden_act: gelu
+    hidden_size: 512
+    initializer_range: 0.02
+    intermediate_size: 2048
+    is_llama_config: true
+    max_position_embeddings: 256
+    num_attention_heads: 4
+    num_hidden_layers: 2
+    num_key_value_heads: 4
+    pad_token_id: null
+    pretraining_tp: 1
+    rms_norm_eps: 1.0e-05
+    rope_scaling: null
+    tie_word_embeddings: false
+    use_cache: true
+    vocab_size: 49152
+# optimizer:
+#   accumulate_grad_in_fp32: false
+#   clip_grad: 1.0
+#   # learning_rate_scheduler:
+#   #   learning_rate: 0.01
+#   #   lr_decay_starting_step: null
+#   #   lr_decay_steps: 13
+#   #   lr_decay_style: linear
+#   #   lr_warmup_steps: 2
+#   #   lr_warmup_style: constant
+#   #   min_decay_lr: 1.0e-05
+
+#   # learning_rate_scheduler:
+#   #   learning_rate: 0.00015
+#   #   lr_decay_starting_step: null
+#   #   # lr_decay_steps: null
+#   #   lr_decay_style: linear
+#   #   lr_warmup_steps: 60
+#   #   lr_warmup_style: constant
+#   #   min_decay_lr: 1.0e-05
+
+#   optimizer_factory:
+#     adam_beta1: 0.9
+#     adam_beta2: 0.999
+#     adam_eps: 1.0e-08
+#     name: adam
+#     torch_adam_is_fused: true
+#   weight_decay: 0.1
+#   zero_stage: 0
+
+
+optimizer:
+  accumulate_grad_in_fp32: false
+  # clip_grad: 1.0
+  learning_rate_scheduler:
+    # learning_rate: 0.0015 # note: 1/2 of pythia use this for a 400m model
+    learning_rate: 0.0006
+    lr_decay_starting_step: null
+    lr_decay_steps: null
+    lr_decay_style: cosine
+    lr_warmup_steps: 1000 # 10% warm up of total training steps
+    lr_warmup_style: linear
+    min_decay_lr: 0.00006
+  optimizer_factory:
+    adam_beta1: 0.9
+    adam_beta2: 0.95
+    adam_eps: 1.0e-08
+    name: adam
+    torch_adam_is_fused: true
+  weight_decay: 0.1
+  zero_stage: 0
+
+parallelism:
+  dp: 1
+  expert_parallel_size: 1
+  pp: 1
+  pp_engine: 1f1b
+  tp: 2
+  # tp_linear_async_communication: true
+  # tp_mode: REDUCE_SCATTER
+
+  tp_linear_async_communication: false
+  tp_mode: ALL_REDUCE
+
+profiler: null
+tokenizer:
+  tokenizer_max_length: null
+  tokenizer_name_or_path: lvwerra/the-tokenizer-v1
+  tokenizer_revision: null
+tokens:
+  # NOTE: micro_batch_size * sequence_length * batch_accumulation_per_replica
+  # = 128 * 256 * 1 = 16384
+  batch_accumulation_per_replica: 1
+  limit_test_batches: 0
+  limit_val_batches: 0
+  micro_batch_size: 256 # 256
+  # micro_batch_size: 1
+  sequence_length: 256
+  train_steps: 24376
+  val_check_interval: -1
+
+fp8:
+  model:
+  - module_name: model.decoder.0.mlp.down_proj
+    accum_dtype: KFLOAT16
+    input:
+      dtype: FP8E4M3
+      margin: 0
+      interval: 1
+    weight:
+      dtype: FP8E4M3
+      margin: 0
+      interval: 1
+    bias:
+      dtype: float16
+    input_grad:
+      dtype: FP8E5M2
+      margin: 0
+      interval: 1
+    weight_grad:
+      dtype: FP8E5M2
+      margin: 0
+      interval: 1
+    output_grad:
+      dtype: FP8E5M2
+      margin: 0
+      interval: 1
+    split_accumulator:
+      output: true
+      input_grad: true
+      weight_grad: true
+    accumulate:
+      output: true
+      input_grad: true
+      weight_grad: true
+  - module_name: model.decoder.1.attn.qkv_proj
+    accum_dtype: KFLOAT16
+    input:
+      dtype: FP8E4M3
+      margin: 0
+      interval: 1
+    weight:
+      dtype: FP8E4M3
+      margin: 0
+      interval: 1
+    bias:
+      dtype: float16
+    input_grad:
+      dtype: FP8E5M2
+      margin: 0
+      interval: 1
+    weight_grad:
+      dtype: FP8E5M2
+      margin: 0
+      interval: 1
+    output_grad:
+      dtype: FP8E5M2
+      margin: 0
+      interval: 1
+    split_accumulator:
+      output: true
+      input_grad: true
+      weight_grad: true
+    accumulate:
+      output: true
+      input_grad: true
+      weight_grad: true
+  optim:
+    master_weight_dtype: KFLOAT32
+    accum_dtype: KFLOAT32
+    exp_avg_dtype: KFLOAT32
+    exp_avg_sq_dtype: KFLOAT32

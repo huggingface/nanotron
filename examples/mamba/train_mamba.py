@@ -4,9 +4,8 @@ import sys
 
 from config import MambaModelConfig
 from mamba import MambaForTraining
-from trainer import MambaTrainer
-
 from nanotron import logging
+from trainer import MambaTrainer
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", ".."))
 

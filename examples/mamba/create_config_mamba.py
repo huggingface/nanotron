@@ -86,7 +86,8 @@ norm_f = model_config.d_model
 num_params = human_format(
     (
         tie_embedding
-        + model_config.num_hidden_layers * (A_log + D + in_proj + conv1d + x_proj + dt_proj + out_proj + norm + norm_f)
+        + model_config.num_hidden_layers * (A_log + D + in_proj + conv1d + x_proj + dt_proj + out_proj + norm)
+        + norm_f
     )
 ).replace(".", "p")
 

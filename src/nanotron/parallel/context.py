@@ -1,5 +1,5 @@
 import os
-from typing import Literal, Tuple, Annotated
+from typing import Literal, Tuple
 
 import numpy as np
 import torch

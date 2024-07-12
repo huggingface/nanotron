@@ -4,6 +4,7 @@ from typing import Optional
 import torch
 from nanotron import distributed as dist
 from nanotron.optim.gradient_accumulator import GradientAccumulator
+from nanotron.parallel.parameters import get_grad_from_parameter
 from torch import nn
 
 
@@ -48,4 +49,5 @@ def sync_gradients_across_dp(
 
     # Sync gradients
     for name, param in module.named_parameters():
-        dist.all_reduce(param.grad, op=reduce_op, group=dp_pg)
+        # dist.all_reduce(param.grad, op=reduce_op, group=dp_pg)
+        dist.all_reduce(get_grad_from_parameter(param), op=reduce_op, group=dp_pg)

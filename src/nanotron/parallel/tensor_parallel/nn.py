@@ -18,7 +18,12 @@ import torch
 from torch import nn
 
 from nanotron import distributed as dist
+from nanotron._utils.helpers import post_init
+from nanotron.constants import IS_FP8
 from nanotron.distributed import get_global_rank
+from nanotron.fp8.constants import FP8LM_LINEAR_RECIPE
+from nanotron.fp8.recipe import FP8LinearRecipe
+from nanotron.fp8.tensor import FP8Tensor
 from nanotron.parallel.parameters import NanotronParameter
 from nanotron.parallel.sharded_parameters import (
     SplitConfig,
@@ -38,8 +43,36 @@ from nanotron.parallel.tensor_parallel.functional import (
 )
 from nanotron.parallel.tied_parameters import create_tied_parameter
 
+try:
+    from nanotron.fp8.linear import FP8Linear
 
-class TensorParallelColumnLinear(nn.Linear):
+    BASE_LINEAR = FP8Linear if IS_FP8 is True else nn.Linear
+except ImportError:
+    BASE_LINEAR = nn.Linear
+
+
+# class DynamicInheritance(type):
+#     def __new__(cls, name, bases, attrs, **kwargs):
+#         is_fp8 = attrs.get('is_fp8', False)
+#         parent_class = FP8Linear if is_fp8 else nn.Linear
+
+#         # Create a new class
+#         new_class = super().__new__(cls, name, (parent_class,), attrs)
+
+#         # Define a new __new__ method for the class
+#         def __new__(cls, *args, **kwargs):
+#             is_fp8 = kwargs.pop('is_fp8', False)
+#             parent_class = FP8Linear if is_fp8 else nn.Linear
+#             instance = parent_class(*args, **kwargs)
+#             instance.__class__ = cls
+#             return instance
+
+#         new_class.__new__ = staticmethod(__new__)
+#         return new_class
+
+
+@post_init
+class _BaseTensorParallelColumnLinear:
     def __init__(
         self,
         in_features,
@@ -51,6 +84,8 @@ class TensorParallelColumnLinear(nn.Linear):
         dtype=None,
         async_communication: bool = False,
         contiguous_chunks: Optional[Tuple[int, ...]] = None,
+        name: Optional[str] = None,
+        recipe: Optional[FP8LinearRecipe] = None,
     ):
         self.pg = pg
         self.world_size = pg.size()
@@ -59,14 +94,19 @@ class TensorParallelColumnLinear(nn.Linear):
 
         self.in_features = in_features
         self.out_features = out_features // self.world_size
+        self.name = name
 
-        super().__init__(
-            in_features=self.in_features,
-            out_features=self.out_features,
-            bias=bias,
-            device=device,
-            dtype=dtype,
-        )
+        init_args = {
+            "in_features": self.in_features,
+            "out_features": self.out_features,
+            "bias": bias,
+            "device": device,
+            "dtype": dtype,
+        }
+        if self.__class__ is FP8TensorParallelColumnLinear:
+            init_args["recipe"] = recipe
+
+        super().__init__(**init_args)
 
         self.mode = mode
         self.async_communication = async_communication
@@ -97,7 +137,8 @@ class TensorParallelColumnLinear(nn.Linear):
         return f"tp_rank={dist.get_rank(self.pg)}, {super().extra_repr()}, unsharded_out_features={self.out_features * self.world_size}"
 
 
-class TensorParallelRowLinear(nn.Linear):
+@post_init
+class _BaseTensorParallelRowLinear:
     def __init__(
         self,
         in_features,
@@ -109,6 +150,9 @@ class TensorParallelRowLinear(nn.Linear):
         dtype=None,
         async_communication: bool = False,
         contiguous_chunks: Optional[Tuple[int, ...]] = None,
+        name: Optional[str] = None,
+        # TODO(xrsrke): remove this from base class
+        recipe: Optional[FP8LinearRecipe] = None,
     ):
         self.pg = pg
         self.world_size = pg.size()
@@ -117,17 +161,22 @@ class TensorParallelRowLinear(nn.Linear):
 
         self.in_features = in_features // self.world_size
         self.out_features = out_features
+        self.name = name
 
         # No need to shard the bias term, only rank 0 would have it
         bias = dist.get_rank(self.pg) == 0 and bias
 
-        super().__init__(
-            in_features=self.in_features,
-            out_features=self.out_features,
-            bias=bias,
-            device=device,
-            dtype=dtype,
-        )
+        init_args = {
+            "in_features": self.in_features,
+            "out_features": self.out_features,
+            "bias": bias,
+            "device": device,
+            "dtype": dtype,
+        }
+        if self.__class__ is FP8TensorParallelRowLinear:
+            init_args["recipe"] = recipe
+
+        super().__init__(**init_args)
         self.mode = mode
         self.async_communication = async_communication
         if self.mode is TensorParallelLinearMode.ALL_REDUCE and self.async_communication:
@@ -167,6 +216,100 @@ class TensorParallelRowLinear(nn.Linear):
 
     def extra_repr(self) -> str:
         return f"tp_rank={dist.get_rank(self.pg)}, {super().extra_repr()}, unsharded_in_features={self.in_features * self.world_size}"
+
+
+class TensorParallelColumnLinear(_BaseTensorParallelColumnLinear, nn.Linear):
+    """Non-quantized tensor parallel column linear layer."""
+
+    pass
+
+
+class TensorParallelRowLinear(_BaseTensorParallelRowLinear, nn.Linear):
+    """Non-quantized tensor parallel row linear layer."""
+
+    pass
+
+
+class FP8TensorParallelColumnLinear(_BaseTensorParallelColumnLinear, FP8Linear):
+    def __init__(self, *args, recipe: FP8LinearRecipe = FP8LM_LINEAR_RECIPE, **kwargs):
+        super().__init__(*args, **kwargs, recipe=recipe)
+        self.recipe = recipe
+
+    def __post_init__(self):
+        assert self.weight.data.dtype in [torch.uint8, torch.int8], f"got {self.weight.data.dtype}"
+        assert (
+            self.metadatas is not None
+        ), "It seems like something went wrong in the initialization of FP8TensorParallelColumnLinear"
+
+    def extra_repr(self) -> str:
+        extra = ""
+
+        if isinstance(self.weight.data, FP8Tensor):
+            extra = f"{self.weight.data.fp8_meta}"
+
+        return f"tp_rank={dist.get_rank(self.pg)}, {super().extra_repr()}, unsharded_out_features={self.out_features * self.world_size}, {extra}"
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return column_linear(
+            input=x,
+            weight=self.weight,
+            bias=self.bias,
+            group=self.pg,
+            tp_mode=self.mode,
+            async_communication=self.async_communication,
+            metadatas=self.metadatas,
+            name=self.name,
+            recipe=self.recipe,
+        )
+
+
+class FP8TensorParallelRowLinear(_BaseTensorParallelRowLinear, FP8Linear):
+    def __init__(self, *args, recipe: FP8LinearRecipe = FP8LM_LINEAR_RECIPE, **kwargs):
+        super().__init__(*args, **kwargs, recipe=recipe)
+        self.recipe = recipe
+
+    def __post_init__(self):
+        assert self.weight.data.dtype in [torch.uint8, torch.int8], f"got {self.weight.data.dtype}"
+        assert (
+            self.metadatas is not None
+        ), "It seems like something went wrong in the initialization of FP8TensorParallelColumnLinear"
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return row_linear(
+            input=x,
+            weight=self.weight,
+            bias=self.bias,
+            group=self.pg,
+            tp_mode=self.mode,
+            async_communication=self.async_communication,
+            metadatas=self.metadatas,
+            name=self.name,
+            recipe=self.recipe,
+        )
+
+    def extra_repr(self) -> str:
+        extra = ""
+
+        if isinstance(self.weight.data, FP8Tensor):
+            extra = f"{self.weight.data.fp8_meta}"
+
+        return f"tp_rank={dist.get_rank(self.pg)}, {super().extra_repr()}, unsharded_in_features={self.in_features * self.world_size}, {extra}"
+
+
+# # TODO(xrsrke): use concrete args instead of *args, **kwargs
+# def TensorParallelRowLinear(*args, is_fp8: bool = False, **kwargs):
+#     if is_fp8:
+#         return FP8TensorParallelRowLinear(*args, **kwargs, is_fp8=is_fp8)
+#     else:
+#         return BF16TensorParallelRowLinear(*args, **kwargs, is_fp8=is_fp8)
+
+
+# # TODO(xrsrke): use concrete args instead of *args, **kwargs
+# def TensorParallelColumnLinear(*args, is_fp8: bool = False, **kwargs):
+#     if is_fp8:
+#         return FP8TensorParallelColumnLinear(*args, **kwargs, is_fp8=is_fp8)
+#     else:
+#         return BF16TensorParallelColumnLinear(*args, **kwargs, is_fp8=is_fp8)
 
 
 class TiedLinear(nn.Linear):
@@ -233,12 +376,14 @@ class TensorParallelEmbedding(nn.Embedding):
         device=None,
         dtype=None,
         contiguous_chunks: Optional[Tuple[int, ...]] = None,
+        name: Optional[str] = None,
     ):
         self.pg = pg
         self.rank = dist.get_rank(self.pg)
         self.world_size = pg.size()
 
         self.original_num_embeddings = num_embeddings
+        self.name = name
 
         # TODO @thomasw21: Fix and remove that constraint. Typically there's no reason to have such a constraint.
         assert num_embeddings % self.world_size == 0

@@ -505,7 +505,13 @@ def get_train_dataloader(
         consumed_train_samples=consumed_train_samples,
     )
 
-    return DataLoader(
+    class CyclingDataLoader(DataLoader):
+        def __iter__(self):
+            import itertools
+
+            return itertools.cycle(super().__iter__())
+
+    return CyclingDataLoader(
         train_dataset,
         batch_size=micro_batch_size,
         sampler=train_sampler,

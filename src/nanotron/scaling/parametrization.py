@@ -5,6 +5,7 @@ from typing import Dict
 
 from nanotron.config import ModelArgs
 from nanotron.nn.layer_norm import TritonRMSNorm
+from nanotron.parallel.parameters import get_data_from_param
 from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelColumnLinear,
     TensorParallelEmbedding,
@@ -25,7 +26,7 @@ class Parametrizator:
 
     def parametrize(self, param_name: str, module: nn.Module):
         if not isinstance(module, tuple(self.MODULE_TO_PARAMETRIZE.keys())):
-            raise Exception(f"Parameter {param_name} was not initialized")
+            raise Exception(f"Parameter {param_name} wasn't defined in the parametrization method.")
 
         return self.MODULE_TO_PARAMETRIZE[type(module)](param_name, module)
 
@@ -37,6 +38,7 @@ class StandardParametrizator(Parametrizator):
             TensorParallelColumnLinear: self._parametrize_column_linear,
             TensorParallelRowLinear: self._parametrize_row_linear,
             TritonRMSNorm: self._parametrize_layer_norm,
+            nn.LayerNorm: self._parametrize_layer_norm,
             TensorParallelEmbedding: self._parametrize_embedding,
         }
 
@@ -44,36 +46,46 @@ class StandardParametrizator(Parametrizator):
         self.num_layers = config.model_config.num_hidden_layers
 
     def _parametrize_column_linear(self, param_name: str, module: nn.Module):
-        assert param_name in ["weight", "bias"]
+        # assert param_name in ["weight", "bias"]
+        assert any(x in param_name for x in ["weight", "bias"])
 
-        if "weight" == param_name:
-            init.normal_(module.weight, mean=0.0, std=self.std)
-        elif "bias" == param_name:
-            module.bias.zero_()
+        if "weight" in param_name:
+            # init.normal_(module.weight, mean=0.0, std=self.std)
+            init.normal_(get_data_from_param(module.weight), mean=0.0, std=self.std)
+        elif "bias" in param_name:
+            # module.bias.zero_()
+            get_data_from_param(module.bias).zero_()
 
     def _parametrize_row_linear(self, param_name: str, module: nn.Module):
-        assert param_name in ["weight", "bias"]
+        # assert param_name in ["weight", "bias"]
+        assert any(x in param_name for x in ["weight", "bias"])
 
-        if "weight" == param_name:
+        if "weight" in param_name:
             std = self.std / math.sqrt(2 * self.num_layers)
-            init.normal_(module.weight, mean=0.0, std=std)
-        elif "bias" == param_name:
-            module.bias.zero_()
+            # init.normal_(module.weight, mean=0.0, std=std)
+            init.normal_(get_data_from_param(module.weight), mean=0.0, std=std)
+        elif "bias" in param_name:
+            # module.bias.zero_()
+            get_data_from_param(module.bias).zero_()
 
     def _parametrize_layer_norm(self, param_name: str, module: nn.Module):
-        assert param_name in ["weight", "bias"]
+        # assert param_name in ["weight", "bias"]
+        assert any(x in param_name for x in ["weight", "bias"])
 
-        if "weight" == param_name:
+        if "weight" in param_name:
             # TODO @thomasw21: Sometimes we actually want 0
-            module.weight.fill_(1)
-        elif "bias" == param_name:
-            module.bias.zero_()
+            # module.weight.fill_(1)
+            get_data_from_param(module.weight).fill_(1)
+        elif "bias" in param_name:
+            get_data_from_param(module.bias).zero_()
 
     def _parametrize_embedding(self, param_name: str, module: nn.Module):
-        assert param_name in ["weight"]
+        # assert param_name in ["weight"]
+        assert "weight" in param_name
 
-        if "weight" == param_name:
-            init.normal_(module.weight, mean=0.0, std=self.std)
+        if "weight" in param_name:
+            # init.normal_(module.weight, mean=0.0, std=self.std)
+            init.normal_(get_data_from_param(module.weight), mean=0.0, std=self.std)
 
 
 class SpectralMupParametrizator(Parametrizator):

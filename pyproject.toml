@@ -9,7 +9,6 @@ authors = [
     {name = "Thomas Wolf", email="thomas@huggingface.co"},
 ]
 readme = "README.md"
-requires-python = "~=3.10"
 classifiers = [
     "Topic :: Software Development"
 ]

@@ -23,8 +23,14 @@ def create_sharded_parameter(
     local_global_slices_pairs: Tuple[SlicesPair, ...],
     unsharded_shape: Tuple[int, ...],
 ) -> NanotronParameter:
-    if not isinstance(parameter, NanotronParameter):
+
+    # NOTE: somehow if do isinstance(parameter, NanotronParameter)
+    # it returns False even the class of parameter is torch.nn.Parameter
+
+    # if not isinstance(parameter, NanotronParameter):
+    if parameter.__class__ != NanotronParameter:
         parameter = NanotronParameter(tensor=parameter)
+
     parameter.mark_as_sharded(
         global_ranks=global_ranks,
         local_global_slices_pairs=local_global_slices_pairs,

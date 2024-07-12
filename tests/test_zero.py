@@ -7,11 +7,12 @@ from helpers.dummy import dummy_infinite_data_loader, init_dummy_model
 from helpers.exception import assert_fail_with
 from helpers.utils import available_gpus, init_distributed, rerun_if_address_is_in_use
 from nanotron import distributed as dist
+from nanotron.fp8.optim import Adam as CustomAdam
 from nanotron.optim import NamedOptimizer, ZeroDistributedOptimizer
 from nanotron.optim.zero import SlicedFlatTensor
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.data_parallel.utils import sync_gradients_across_dp
-from nanotron.parallel.parameters import NanotronParameter
+from nanotron.parallel.parameters import NanotronParameter, get_data_from_param, get_grad_from_parameter
 from nanotron.parallel.pipeline_parallel.engine import AllForwardAllBackwardPipelineEngine
 from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
 from nanotron.parallel.tensor_parallel import nn
@@ -201,19 +202,40 @@ def _test_zero_optimizer(parallel_context: ParallelContext):
 @pytest.mark.parametrize("tp,dp,pp", [pytest.param(2, i, 1) for i in range(1, available_gpus() // 2 + 1)])
 @pytest.mark.parametrize("tp_mode", list(TensorParallelLinearMode))
 @pytest.mark.parametrize("async_communication", [False, True])
+@pytest.mark.parametrize(
+    "nanotron_optim_cls, ref_optim_cls",
+    [
+        (torch.optim.AdamW, torch.optim.AdamW),
+        (CustomAdam, torch.optim.Adam),
+    ],
+)
 @rerun_if_address_is_in_use()
 def test_zero_optimizer_with_tp(
-    tp: int, dp: int, pp: int, tp_mode: TensorParallelLinearMode, async_communication: bool
+    tp: int,
+    dp: int,
+    pp: int,
+    tp_mode: TensorParallelLinearMode,
+    async_communication: bool,
+    nanotron_optim_cls,
+    ref_optim_cls,
 ):
     if tp_mode is TensorParallelLinearMode.ALL_REDUCE and async_communication:
         pytest.skip("ALL_REDUCE mode does not support async communication")
+
     init_distributed(pp=pp, dp=dp, tp=tp)(_test_zero_optimizer_with_tp)(
-        tp_mode=tp_mode, async_communication=async_communication
+        tp_mode=tp_mode,
+        async_communication=async_communication,
+        nanotron_optim_cls=nanotron_optim_cls,
+        ref_optim_cls=ref_optim_cls,
     )
 
 
 def _test_zero_optimizer_with_tp(
-    parallel_context: ParallelContext, tp_mode: TensorParallelLinearMode, async_communication: bool
+    parallel_context: ParallelContext,
+    tp_mode: TensorParallelLinearMode,
+    async_communication: bool,
+    nanotron_optim_cls,
+    ref_optim_cls,
 ):
     if async_communication:
         os.environ["CUDA_DEVICE_MAX_CONNECTIONS"] = "1"
@@ -241,7 +263,7 @@ def _test_zero_optimizer_with_tp(
         named_params_or_groups=model.named_parameters(),
         optimizer_builder=lambda named_param_groups: NamedOptimizer(
             named_params_or_groups=named_param_groups,
-            optimizer_builder=lambda param_groups: torch.optim.AdamW(param_groups),
+            optimizer_builder=lambda param_groups: nanotron_optim_cls(param_groups),
         ),
         dp_pg=parallel_context.dp_pg,
     )
@@ -258,14 +280,15 @@ def _test_zero_optimizer_with_tp(
         for name, param in module.named_parameters(recurse=False):
             setattr(module, name, NanotronParameter(param))
 
-    reference_optimizer = torch.optim.AdamW(reference_model.parameters())
+    reference_optimizer = ref_optim_cls(reference_model.parameters())
     # TODO @thomasw21: This is a hack to obtain `AdamW` index in it's state.
     name_to_index = {name: index for index, (name, _) in enumerate(reference_model.named_parameters())}
 
     # sync parameters
     with torch.no_grad():
         for ref_name, ref_param in reference_model.named_parameters():
-            dist.all_reduce(ref_param, op=dist.ReduceOp.AVG, group=parallel_context.world_pg)
+            # dist.all_reduce(ref_param, op=dist.ReduceOp.AVG, group=parallel_context.world_pg)
+            dist.all_reduce(get_data_from_param(ref_param), op=dist.ReduceOp.AVG, group=parallel_context.world_pg)
 
         for (name, param), (ref_name, ref_param) in zip(model.named_parameters(), reference_model.named_parameters()):
             assert name == ref_name
@@ -276,9 +299,12 @@ def _test_zero_optimizer_with_tp(
                 for local_global_slices_pair in sharded_info.local_global_slices_pairs:
                     local_slices = local_global_slices_pair.local_slices
                     global_slices = local_global_slices_pair.global_slices
-                    param[local_slices].copy_(ref_param[global_slices])
+
+                    # param[local_slices].copy_(ref_param[global_slices])
+                    get_data_from_param(param)[local_slices].copy_(get_data_from_param(ref_param)[global_slices])
             else:
-                param.copy_(ref_param)
+                # param.copy_(ref_param)
+                get_data_from_param(param).copy_(get_data_from_param(ref_param))
 
     # Get infinite dummy data iterator, it has to be synced across TP
     random_states = RandomStates(
@@ -299,7 +325,10 @@ def _test_zero_optimizer_with_tp(
     # Model training loop
     for i, batch in enumerate(batches):
         # store original reference parameter
-        old_named_params = {name: param.detach().clone() for name, param in model.named_parameters()}
+        # old_named_params = {name: param.detach().clone() for name, param in model.named_parameters()}
+        old_named_params = {
+            name: get_data_from_param(param).detach().clone() for name, param in model.named_parameters()
+        }
 
         # Run forward pass
         if tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
@@ -354,9 +383,11 @@ def _test_zero_optimizer_with_tp(
 
         # Check gradients are synced across DP
         for name, param in model.named_parameters():
-            assert_tensor_equal_over_group(param.grad, group=parallel_context.dp_pg)
+            # assert_tensor_equal_over_group(param.grad, group=parallel_context.dp_pg)
+            assert_tensor_equal_over_group(get_grad_from_parameter(param), group=parallel_context.dp_pg)
         for ref_name, ref_param in reference_model.named_parameters():
-            assert_tensor_equal_over_group(ref_param.grad, group=parallel_context.dp_pg)
+            # assert_tensor_equal_over_group(ref_param.grad, group=parallel_context.dp_pg)
+            assert_tensor_equal_over_group(get_grad_from_parameter(ref_param), group=parallel_context.dp_pg)
 
         # Check gradients are the same with reference_model
         for (name, param), (ref_name, ref_param) in zip(model.named_parameters(), reference_model.named_parameters()):
@@ -367,13 +398,25 @@ def _test_zero_optimizer_with_tp(
                 for local_global_slices_pair in sharded_info.local_global_slices_pairs:
                     local_slices = local_global_slices_pair.local_slices
                     global_slices = local_global_slices_pair.global_slices
+                    # torch.testing.assert_close(
+                    #     param.grad[local_slices],
+                    #     ref_param.grad[global_slices],
+                    #     msg=lambda msg: f"At iteration {i}, {msg}",
+                    # )
+
                     torch.testing.assert_close(
-                        param.grad[local_slices],
-                        ref_param.grad[global_slices],
+                        get_grad_from_parameter(param)[local_slices],
+                        get_grad_from_parameter(ref_param)[global_slices],
                         msg=lambda msg: f"At iteration {i}, {msg}",
                     )
+
             else:
-                torch.testing.assert_close(param.grad, ref_param.grad, msg=lambda msg: f"At iteration {i}, {msg}")
+                # torch.testing.assert_close(param.grad, ref_param.grad, msg=lambda msg: f"At iteration {i}, {msg}")
+                torch.testing.assert_close(
+                    get_grad_from_parameter(param),
+                    get_grad_from_parameter(ref_param),
+                    msg=lambda msg: f"At iteration {i}, {msg}",
+                )
 
         with torch.no_grad():
             optim_param_id_to_param = {id(param): param for param in optimizer.param_groups[0]["params"]}
@@ -388,7 +431,8 @@ def _test_zero_optimizer_with_tp(
                 offsets = optimizer.param_name_to_dp_rank_offsets[name][dist.get_rank(parallel_context.dp_pg)]
 
                 # Check that weights share the same storage
-                expected_slice = param.view(-1)[slice(*offsets)].view_as(sliced_param)
+                # expected_slice = param.view(-1)[slice(*offsets)].view_as(sliced_param)
+                expected_slice = get_data_from_param(param).view(-1)[slice(*offsets)].view_as(sliced_param)
                 torch.testing.assert_close(
                     expected_slice,
                     sliced_param,
@@ -401,10 +445,13 @@ def _test_zero_optimizer_with_tp(
                 ), "Parameters should actually share the same data pointer"
 
                 # Check that gradients share the same storage
-                expected_slice = param.grad.view(-1)[slice(*offsets)].view_as(sliced_param.grad)
+                # expected_slice = param.grad.view(-1)[slice(*offsets)].view_as(sliced_param.grad)
+                expected_slice = get_grad_from_parameter(param).view(-1)[slice(*offsets)].view_as(sliced_param.grad)
+
                 assert (
                     expected_slice.data_ptr() == sliced_param.grad.data_ptr()
                 ), "Parameters should actually share the same data pointer"
+
                 torch.testing.assert_close(
                     expected_slice,
                     sliced_param.grad,
@@ -427,7 +474,8 @@ def _test_zero_optimizer_with_tp(
         # Check that gradients are reset
         for ref_name, ref_param in reference_model.named_parameters():
             assert_tensor_equal_over_group(ref_param, group=parallel_context.dp_pg)
-            assert ref_param.grad is None
+            # assert ref_param.grad is None
+            assert get_grad_from_parameter(ref_param) is None
         for param_group in optimizer.param_groups:
             for param in param_group["params"]:
                 assert param.grad is None
@@ -440,11 +488,21 @@ def _test_zero_optimizer_with_tp(
                 for local_global_slices_pair in sharded_info.local_global_slices_pairs:
                     local_slices = local_global_slices_pair.local_slices
                     global_slices = local_global_slices_pair.global_slices
+                    # torch.testing.assert_close(
+                    #     param[local_slices], ref_param[global_slices], msg=lambda msg: f"At iteration {i}, {msg}"
+                    # )
                     torch.testing.assert_close(
-                        param[local_slices], ref_param[global_slices], msg=lambda msg: f"At iteration {i}, {msg}"
+                        get_data_from_param(param)[local_slices],
+                        get_data_from_param(ref_param)[global_slices],
+                        msg=lambda msg: f"At iteration {i}, {msg}",
                     )
             else:
-                torch.testing.assert_close(param, ref_param, msg=lambda msg: f"At iteration {i}, {msg}")
+                # torch.testing.assert_close(param, ref_param, msg=lambda msg: f"At iteration {i}, {msg}")
+                torch.testing.assert_close(
+                    get_data_from_param(param),
+                    get_data_from_param(ref_param),
+                    msg=lambda msg: f"At iteration {i}, {msg}",
+                )
 
         # Check params have been updated correctly:
         for (name, param) in model.named_parameters():
@@ -480,6 +538,8 @@ def _test_zero_optimizer_with_tp(
             for key in ["exp_avg", "exp_avg_sq"]:
                 value = optim_state[key]
                 ref_value = ref_optim_state[key]
+                ref_value = get_data_from_param(ref_value) if ref_value.__class__ == NanotronParameter else ref_value
+
                 if param.is_sharded:
                     sharded_info = param.get_sharded_info()
 

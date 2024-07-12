@@ -1,3 +1,5 @@
+from typing import Union, cast
+
 import pytest
 import torch
 from helpers.context import TestContext
@@ -11,6 +13,10 @@ from helpers.utils import (
 )
 from nanotron import distributed as dist
 from nanotron.constants import CHECKPOINT_VERSION
+from nanotron.fp8.dtypes import DTypes
+from nanotron.fp8.meta import FP8Meta
+from nanotron.fp8.parameter import FP8Parameter
+from nanotron.fp8.tensor import FP8Tensor
 from nanotron.optim.gradient_accumulator import FP32GradientAccumulator
 from nanotron.optim.named_optimizer import NamedOptimizer
 from nanotron.optim.optimizer_from_gradient_accumulator import (
@@ -18,6 +24,7 @@ from nanotron.optim.optimizer_from_gradient_accumulator import (
 )
 from nanotron.optim.zero import ZeroDistributedOptimizer
 from nanotron.parallel import ParallelContext
+from nanotron.parallel.parameters import NanotronParameter
 from nanotron.parallel.pipeline_parallel.engine import (
     AllForwardAllBackwardPipelineEngine,
 )
@@ -33,6 +40,7 @@ from nanotron.serialize import (
     save_weights,
 )
 from nanotron.serialize.metadata import TensorMetadata
+from torch import nn
 from torch.nn.parallel import DistributedDataParallel
 
 
@@ -516,19 +524,52 @@ def _test_save_and_load_random_states(parallel_context: ParallelContext, test_co
     parallel_context.destroy()
 
 
+@pytest.mark.parametrize(
+    "param_cls, tensor_cls, dtype",
+    [
+        (nn.Parameter, torch.Tensor, torch.float32),
+        (FP8Parameter, FP8Tensor, DTypes.FP8E4M3),
+        (FP8Parameter, FP8Tensor, DTypes.FP8E5M2),
+    ],
+)
 @rerun_if_address_is_in_use()
-def test_serialize_deserialize_tensormetadata():
-    test_context = TestContext()
-    init_distributed(tp=2, dp=1, pp=1)(_test_serialize_deserialize_tensormetadata)(test_context=test_context)
+def test_serialize_deserialize_tensormetadata(param_cls, tensor_cls, dtype):
+    init_distributed(tp=2, dp=1, pp=1)(_test_serialize_deserialize_tensormetadata)(
+        param_cls=param_cls, tensor_cls=tensor_cls, dtype=dtype
+    )
 
 
-def _test_serialize_deserialize_tensormetadata(parallel_context: ParallelContext, test_context: TestContext):
-    param = torch.nn.Parameter(torch.randn(16, 64))
+def _test_serialize_deserialize_tensormetadata(
+    parallel_context: ParallelContext,
+    param_cls: Union[nn.Parameter, FP8Parameter],
+    tensor_cls: Union[torch.Tensor, FP8Tensor],
+    dtype: Union[torch.dtype, DTypes],
+):
+    param = (
+        param_cls(
+            torch.randn(
+                (
+                    16,
+                    64,
+                ),
+                dtype=dtype,
+            )
+        )
+        if param_cls == nn.Parameter
+        else param_cls(torch.randn(16, 64, device="cuda"), dtype)
+    )
     split_config = SplitConfig(
         split_dim=0,
         contiguous_chunks=(8, 8),
     )
     param = create_sharded_parameter_from_config(parameter=param, pg=parallel_context.tp_pg, split_config=split_config)
+
+    assert isinstance(param, NanotronParameter)
+    assert isinstance(param.data, tensor_cls)
+    if param_cls == FP8Parameter:
+        param.data = cast(FP8Tensor, param.data)
+        assert isinstance(param.data.fp8_meta, FP8Meta)
+
     sharded_info = param.get_sharded_info()
     metadata = TensorMetadata(
         version=CHECKPOINT_VERSION,
@@ -536,6 +577,7 @@ def _test_serialize_deserialize_tensormetadata(parallel_context: ParallelContext
         unsharded_shape=sharded_info.unsharded_shape,
     )
     metadata_str_dict = metadata.to_str_dict()
+
     # Assert metadata_str_dict is Dict[str, str]
     assert isinstance(metadata_str_dict, dict)
     assert all(isinstance(key, str) for key in metadata_str_dict.keys())
