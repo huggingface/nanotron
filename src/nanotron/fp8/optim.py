@@ -17,7 +17,15 @@ from nanotron.fp8.tensor import (
     convert_tensor_from_fp16,
 )
 from nanotron.fp8.utils import compute_stas, is_overflow_underflow_nan
-from nanotron.parallel.parameters import NanotronParameter
+from nanotron.parallel.parameters import (
+    NanotronParameter,
+    get_data_from_param,
+    get_data_from_sliced_or_param,
+    get_grad_from_parameter,
+    get_grad_from_sliced_or_param,
+    set_data_for_sliced_or_param,
+    set_grad_none_for_sliced_or_param,
+)
 
 
 class Adam(Optimizer):
@@ -74,7 +82,8 @@ class Adam(Optimizer):
         for group in self.param_groups:
             for p in group["params"]:
                 state = self.state[p]
-                data = p.data
+                # data = p.data
+                data = get_data_from_param(p)
                 assert isinstance(data, torch.Tensor)
 
                 if len(state) == 0:
@@ -84,8 +93,23 @@ class Adam(Optimizer):
 
                 loggings[p] = {}
 
-                assert (p.grad is not None and p.data.grad is not None) is False
-                grad = p.grad if p.grad is not None else p.data.grad
+                # assert (p.grad is not None and p.data.grad is not None) is False
+                # grad = p.grad if p.grad is not None else p.data.grad
+                # grad = get_grad_from_parameter(p)
+                grad = get_grad_from_sliced_or_param(p)
+
+                from nanotron import constants
+                from nanotron.constants import get_debug_save_path
+
+                # debug_save_path = constants.DEBUG_SAVE_PATH.format(constants.CONFIG.general.run, constants.ITERATION_STEP)
+                debug_save_path = get_debug_save_path(constants.CONFIG.general.run, constants.ITERATION_STEP)
+
+                if constants.is_ready_to_log is True and constants.CONFIG.logging.monitor_model_states is True:
+                    torch.save(grad, f"{debug_save_path}/{self.params_id_to_param_names[id(p)]}_before_update_grad.pt")
+                    torch.save(
+                        data, f"{debug_save_path}/{self.params_id_to_param_names[id(p)]}_before_update_weight.pt"
+                    )
+
                 assert isinstance(grad, torch.Tensor)
 
                 exp_avg, exp_avg_sq = state["exp_avg"], state["exp_avg_sq"]
@@ -110,16 +134,19 @@ class Adam(Optimizer):
                 exp_avg_sq = exp_avg_sq / bias_correction2
 
                 # denom = (exp_avg_sq.sqrt() / math.sqrt(bias_correction2)).add_(group["eps"])
-                denom = exp_avg_sq.sqrt() + group["eps"]
+                denom = (exp_avg_sq + group["eps"]).sqrt()
                 normalized_grad = exp_avg / denom
 
                 lr = group["lr"]
                 # p.data.addcdiv_(-step_size, exp_avg, denom)
-                new_data = data - lr * normalized_grad
+                new_data = data - lr * (normalized_grad + (group["weight_decay"] * data))
                 new_data.requires_grad = True
-                p.data = new_data
 
-                assert p.data is new_data
+                # p.data = new_data
+                # assert p.data is new_data
+
+                set_data_for_sliced_or_param(p, new_data)
+                assert get_data_from_sliced_or_param(p) is new_data
 
                 state["exp_avg"] = exp_avg
                 state["exp_avg_sq"] = exp_avg_sq
@@ -146,11 +173,13 @@ class Adam(Optimizer):
     def zero_grad(self):
         for group in self.param_groups:
             for p in group["params"]:
-                if p.grad is not None:
-                    p.grad = None
+                # if p.grad is not None:
+                #     p.grad = None
 
-                if p.data.grad is not None:
-                    p.data.grad = None
+                # if p.data.grad is not None:
+                #     p.data.grad = None
+                # set_grad_none_for_param(p)
+                set_grad_none_for_sliced_or_param(p)
 
                 assert p.grad is None
                 assert p.data.grad is None
@@ -308,12 +337,15 @@ class FP8Adam(Optimizer):
         num_param_has_grads = 0
         for g in self.param_groups:
             for p in g["params"]:
-                if p.data.__class__ == torch.Tensor:
-                    if p.grad is not None:
-                        num_param_has_grads += 1
-                elif p.data.__class__ == FP8Tensor:
-                    if hasattr(p.data, "_temp_grad") and p.data._temp_grad is not None:
-                        num_param_has_grads += 1
+                # if p.data.__class__ == torch.Tensor:
+                #     if p.grad is not None:
+                #         num_param_has_grads += 1
+                # elif p.data.__class__ == FP8Tensor:
+                #     if hasattr(p.data, "_temp_grad") and p.data._temp_grad is not None:
+                #         num_param_has_grads += 1
+                grad = get_grad_from_parameter(p)
+                if p is not None:
+                    num_param_has_grads += 1
 
         assert num_param_has_grads > 0
 
@@ -341,12 +373,14 @@ class FP8Adam(Optimizer):
                     fp32_data = fp16_data.to(torch.float32)
                     # NOTE: the bias of FP8 parameter saves its gradient in p.data.grad
                     # and the weight, and bias of non-FP8 parameter saves its gradient in p.grad
-                    try:
-                        assert (p.data.grad is None and p.grad is None) is False
-                    except:
-                        assert 1 == 1
+                    # try:
+                    #     assert (p.data.grad is None and p.grad is None) is False
+                    # except:
+                    #     assert 1 == 1
+                    # assert (p.data.grad is None and p.grad is None) is False
 
-                    grad = p.data.grad if p.data.grad is not None else p.grad
+                    # grad = p.data.grad if p.data.grad is not None else p.grad
+                    grad = get_grad_from_parameter(p)
                     fp32_grad = grad.to(torch.float32)
 
                 if p.__class__ == NanotronParameter:

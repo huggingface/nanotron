@@ -105,7 +105,7 @@ def track_weight_and_grad_stats(name: str, module: nn.Module, parallel_context: 
 
     handles = []
     handles.append(module.register_forward_hook(_save_output_stats))
-    handles.append(module.register_backward_hook(_save_grad_stats))
+    # handles.append(module.register_backward_hook(_save_grad_stats))
     return logs, handles
 
 

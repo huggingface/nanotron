@@ -4,9 +4,22 @@ import torch
 import torch.distributed as dist
 from torch.distributed import *  # noqa
 
+from nanotron.distributed import *
 from nanotron.fp8.parameter import FP8Parameter
 from nanotron.fp8.tensor import FP8Tensor, convert_tensor_from_fp8
-from nanotron.parallel.parameters import NanotronParameter
+from nanotron.parallel.parameters import NanotronParameter, get_data_from_param
+
+
+def all_reduce(
+    tensor: Union[torch.Tensor, NanotronParameter],
+    op: dist.ReduceOp = dist.ReduceOp.SUM,
+    group: Optional[dist.ProcessGroup] = None,
+    async_op: bool = False,
+):
+    assert tensor.__class__ in [torch.Tensor, NanotronParameter]
+    data = get_data_from_param(tensor) if tensor.__class__ == NanotronParameter else tensor
+
+    dist.all_reduce(data, op=op, group=group, async_op=async_op)
 
 
 def all_gather(

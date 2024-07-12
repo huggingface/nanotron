@@ -11,6 +11,7 @@ from nanotron.fp8.meta import FP8Meta
 from nanotron.fp8.parameter import FP8Parameter
 from nanotron.fp8.recipe import FP8LinearRecipe
 from nanotron.fp8.tensor import FP8Tensor
+from nanotron.parallel.parameters import get_data_from_param
 
 
 @dataclass
@@ -68,8 +69,15 @@ class FP8Linear(nn.Linear):
     def forward(self, input: Union[FP8Tensor, torch.Tensor]) -> torch.Tensor:
         import nanotron.fp8.functional as F
 
+        # return F.linear(
+        #     input=input, weight=self.weight.data, bias=self.bias, metadatas=self.metadatas, recipe=self.recipe
+        # )
         return F.linear(
-            input=input, weight=self.weight.data, bias=self.bias, metadatas=self.metadatas, recipe=self.recipe
+            input=input,
+            weight=get_data_from_param(self.weight),
+            bias=get_data_from_param(self.bias),
+            metadatas=self.metadatas,
+            recipe=self.recipe,
         )
 
     def __repr__(self) -> str:

@@ -49,6 +49,7 @@ DEFAULT_OPTIMIZER_CONFIG = OptimizerArgs(
         min_decay_lr=1e-5,
     ),
     optimizer_factory=AdamOptimizerArgs(
+        name="custom_adam",
         adam_beta1=0.9,
         adam_beta2=0.95,
         adam_eps=1e-08,

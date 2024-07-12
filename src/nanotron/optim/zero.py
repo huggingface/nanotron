@@ -17,7 +17,7 @@ from nanotron.logging import human_format, log_rank, warn_once
 from nanotron.optim.base import BaseOptimizer
 from nanotron.optim.inherit_from_other_optimizer import InheritFromOtherOptimizer
 from nanotron.parallel import ParallelContext
-from nanotron.parallel.parameters import NanotronParameter
+from nanotron.parallel.parameters import NanotronParameter, get_grad_from_parameter, set_grad_none_for_param
 
 logger = logging.get_logger(__name__)
 
@@ -304,11 +304,24 @@ class SlicedFlatTensor(torch.Tensor):
 
         return tree_map(never_wrap, func(*tree_map(unwrap, args), **tree_map(unwrap, kwargs)))
 
+    # def _get_data(self):
+    #     if self._data.__class__ == NanotronParameter:
+    #         return self._data.data
+
     def _get_grad(self):
-        if self._data.grad is None:
+        # if self._data.grad is None:
+        #     return None
+        # with torch.no_grad():
+        #     return self._data.grad.view(-1)[self.start_offset : self.end_offset]
+
+        if self._data.__class__ == NanotronParameter:
+            grad = get_grad_from_parameter(self._data)
+
+        if grad is None:
             return None
+
         with torch.no_grad():
-            return self._data.grad.view(-1)[self.start_offset : self.end_offset]
+            return grad.view(-1)[self.start_offset : self.end_offset]
 
     def _set_grad(self, grad):
         if grad is not None:
@@ -325,7 +338,10 @@ class SlicedFlatTensor(torch.Tensor):
             msg="You're setting a `SlicedTensor` gradient to None. We're going to assume you meant to set the original tensor gradient to None.",
             rank=0,
         )
-        self._data.grad = None
+        if self._data.__class__ == NanotronParameter:
+            set_grad_none_for_param(self._data)
+        else:
+            self._data.grad = None
 
     def _del_grad(self):
         raise NotImplementedError

@@ -256,6 +256,11 @@ class NanotronParameter(nn.Parameter):
             torch.ops.aten.native_layer_norm.default,
             torch.ops.aten.native_layer_norm_backward.default,
             torch.ops.aten.native_layer_norm_backward.default,
+            # NOTE: nn.Linear
+            torch.ops.aten.addmm.default,
+            torch.ops.aten.linear.default,
+            # NOTE: x.to(device)
+            torch.ops.aten._to_copy.default,
         ]
 
         if func == torch.ops.aten.detach.default and unwrapped_args[0].__class__ == FP8Parameter:
@@ -289,3 +294,75 @@ def sanity_check(root_module: nn.Module):
             raise ValueError(
                 f"Nanotronrequires model to be in Nanotronformat, ie all parameters are required to be a NanotronParameter. {name} isn't."
             )
+
+
+def get_grad_from_parameter(p: NanotronParameter):
+    assert p.__class__ == NanotronParameter
+    assert (p.grad is not None and p.data.grad is not None) is False
+    grad = p.grad if p.grad is not None else p.data.grad
+    return grad
+
+
+def get_grad_from_sliced_or_param(p):
+    from nanotron.optim.zero import SlicedFlatTensor
+
+    assert p.__class__ in [SlicedFlatTensor, NanotronParameter]
+
+    if p.__class__ == SlicedFlatTensor:
+        return p.grad
+    else:
+        return get_grad_from_parameter(p)
+
+
+def get_tensor(t):
+    # assert p.__class__ == NanotronParameter
+    # if isinstance(t, NanotronParameter):
+    #     _t = t
+    #     t = _t.data
+    #     t.requires_grad = _t.requires_grad
+    # return t
+    raise RuntimeError
+
+
+def get_data_from_param(p: NanotronParameter):
+    assert p.__class__ == NanotronParameter
+    return p.data
+
+
+def set_grad_none_for_param(p: NanotronParameter):
+    assert p.__class__ == NanotronParameter
+    p.grad = None
+    p.data.grad = None
+
+
+def set_data_for_sliced_or_param(p, data):
+    from nanotron.optim.zero import SlicedFlatTensor
+
+    assert p.__class__ in [SlicedFlatTensor, NanotronParameter]
+
+    if p.__class__ == SlicedFlatTensor:
+        p._data.data = data
+    else:
+        p.data = data
+
+
+def get_data_from_sliced_or_param(p):
+    from nanotron.optim.zero import SlicedFlatTensor
+
+    assert p.__class__ in [SlicedFlatTensor, NanotronParameter]
+
+    if p.__class__ == SlicedFlatTensor:
+        return p._data.data
+    else:
+        return p.data
+
+
+def set_grad_none_for_sliced_or_param(p):
+    from nanotron.optim.zero import SlicedFlatTensor
+
+    assert p.__class__ in [SlicedFlatTensor, NanotronParameter]
+
+    if p.__class__ == SlicedFlatTensor:
+        set_grad_none_for_param(p._data)
+    else:
+        set_grad_none_for_param(p)

@@ -23,7 +23,7 @@ import nanotron.fp8.functional as fp8_functional
 from nanotron.fp8.linear import FP8LinearMeta
 from nanotron.fp8.recipe import FP8LinearRecipe
 from nanotron.fp8.tensor import FP8Tensor
-from nanotron.parallel.parameters import NanotronParameter
+from nanotron.parallel.parameters import get_data_from_param
 from nanotron.parallel.tensor_parallel.distributed_differentiable_primitives import (
     differentiable_all_gather,
     differentiable_all_reduce_sum,
@@ -455,10 +455,12 @@ def column_linear(
     name: Optional[str] = None,
     recipe: Optional[FP8LinearRecipe] = None,
 ):
-    weight = weight.data
+    # weight = weight.data
+    weight = get_data_from_param(weight)
     if bias is not None:
         # bias_requires_grad = bias.requires_grad
-        bias = bias.data if isinstance(bias, NanotronParameter) else bias
+        # bias = bias.data if isinstance(bias, NanotronParameter) else bias
+        bias = get_data_from_param(bias)
         # bias.requires_grad = bias_requires_grad
 
     if async_communication:
@@ -494,9 +496,11 @@ def row_linear(
     recipe: Optional[FP8LinearRecipe] = None,
     name: Optional[str] = None,
 ):
-    weight = weight.data
+    # weight = weight.data
+    weight = get_data_from_param(weight)
     if bias is not None:
-        bias = bias.data if isinstance(bias, NanotronParameter) else bias
+        # bias = bias.data if isinstance(bias, NanotronParameter) else bias
+        bias = get_data_from_param(bias)
 
     if async_communication:
         return _RowLinearAsyncCommunication.apply(input, weight, bias, group, tp_mode)

@@ -1,5 +1,5 @@
 checkpoints:
-  checkpoint_interval: 50000
+  checkpoint_interval: 100
   checkpoints_path: checkpoints
   checkpoints_path_is_shared_file_system: false
   # resume_checkpoint_path: checkpoints
@@ -22,7 +22,7 @@ general:
   consumed_train_samples: null
   ignore_sanity_checks: true
   project: fp8_for_nanotron
-  run: bfloat16_2_layers_and_seq_len_256_and_micro_batch_128_and_lr_2.0e-4_and_minipile_overfitting_and_main_branch_and_layernorm_and_no_weight_decay_and_no_warmup
+  run: bfloat16_2_layers_and_seq_len_256_and_micro_batch_128_and_lr_2.0e-4_and_minipile_overfitting_and_main_branch_and_layernorm_and_no_weight_decay_and_no_warmup_and_without_zerograd
   seed: 42
   step: null
 lighteval: null
@@ -92,13 +92,12 @@ model:
 
 optimizer:
   accumulate_grad_in_fp32: false
-  # clip_grad: 1.0
   learning_rate_scheduler:
     learning_rate: 0.0006
     lr_decay_starting_step: null
-    lr_decay_steps: null
+    lr_decay_steps: 800
     lr_decay_style: cosine
-    lr_warmup_steps: 0 # 10% warm up of total training steps
+    lr_warmup_steps: 200 # 10% warm up of total training steps
     lr_warmup_style: linear
     min_decay_lr: 0.00006
   optimizer_factory:

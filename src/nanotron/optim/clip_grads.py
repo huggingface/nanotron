@@ -5,7 +5,7 @@ import torch
 import nanotron.distributed as dist
 from nanotron import logging
 from nanotron.optim.gradient_accumulator import GradientAccumulator
-from nanotron.parallel.parameters import NanotronParameter
+from nanotron.parallel.parameters import NanotronParameter, get_grad_from_parameter
 
 logger = logging.get_logger(__name__)
 
@@ -40,8 +40,13 @@ def clip_grad_norm(
         assert p.requires_grad, "clip_grad_norm_ only supports Tensors that require grad"
 
     if grad_accumulator is None:
+        # grads = [
+        #     p.grad for _, p in named_parameters if not p.is_tied or world_rank == p.get_tied_info().global_ranks[0]
+        # ]
         grads = [
-            p.grad for _, p in named_parameters if not p.is_tied or world_rank == p.get_tied_info().global_ranks[0]
+            get_grad_from_parameter(p)
+            for _, p in named_parameters
+            if not p.is_tied or world_rank == p.get_tied_info().global_ranks[0]
         ]
     else:
         # In case of FP32 Grad Accum, We need to clip all fp32 grads
@@ -81,18 +86,27 @@ def clip_grad_norm(
     # when the gradients do not reside in CPU memory.
     clip_coef_clamped = torch.clamp(clip_coef, max=1.0)
 
+    # devices = {
+    #     param.grad.device if grad_accumulator is None else grad_accumulator.get_grad_buffer(name).device
+    #     for name, param in named_parameters
+    # }
     devices = {
-        param.grad.device if grad_accumulator is None else grad_accumulator.get_grad_buffer(name).device
+        get_grad_from_parameter(param).device
+        if grad_accumulator is None
+        else grad_accumulator.get_grad_buffer(name).device
         for name, param in named_parameters
     }
     device_to_clip_coef_clamped = {device: clip_coef_clamped.to(device) for device in devices}
 
-    for name, param in named_parameters:
-        if grad_accumulator is None:
-            param.grad.detach().mul_(device_to_clip_coef_clamped[param.grad.device])
-        else:
-            grad_accumulator.get_grad_buffer(name).detach().mul_(
-                device_to_clip_coef_clamped[grad_accumulator.get_grad_buffer(name).device]
-            )
+    with torch.no_grad():
+        for name, param in named_parameters:
+            if grad_accumulator is None:
+                # param.grad.detach().mul_(device_to_clip_coef_clamped[param.grad.device])
+                get_grad_from_parameter(param).mul_(device_to_clip_coef_clamped[get_grad_from_parameter(param).device])
+                assert 1 == 1
+            else:
+                grad_accumulator.get_grad_buffer(name).mul_(
+                    device_to_clip_coef_clamped[grad_accumulator.get_grad_buffer(name).device]
+                )
 
     return total_norm

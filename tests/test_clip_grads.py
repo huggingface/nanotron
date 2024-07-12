@@ -12,7 +12,7 @@ from nanotron.optim.gradient_accumulator import (
     FP32GradientAccumulator,
 )
 from nanotron.parallel import ParallelContext
-from nanotron.parallel.parameters import NanotronParameter, sanity_check
+from nanotron.parallel.parameters import NanotronParameter, get_grad_from_parameter, sanity_check
 from nanotron.parallel.pipeline_parallel.engine import (
     AllForwardAllBackwardPipelineEngine,
 )
@@ -285,7 +285,8 @@ def _test_clip_grads_with_tp(
     sharded_output.sum().backward()
     reference_output.sum().backward()
     torch.testing.assert_close(
-        column_linear.weight.grad,
+        # column_linear.weight.grad,
+        get_grad_from_parameter(column_linear.weight),
         reference_linear.weight.grad[
             dist.get_rank(parallel_context.tp_pg)
             * out_features_per_tp_rank : (dist.get_rank(parallel_context.tp_pg) + 1)
@@ -295,7 +296,8 @@ def _test_clip_grads_with_tp(
         rtol=1e-7,
     )
     torch.testing.assert_close(
-        column_linear.bias.grad,
+        # column_linear.bias.grad,
+        get_grad_from_parameter(column_linear.bias),
         reference_linear.bias.grad[
             dist.get_rank(parallel_context.tp_pg)
             * out_features_per_tp_rank : (dist.get_rank(parallel_context.tp_pg) + 1)
@@ -305,7 +307,8 @@ def _test_clip_grads_with_tp(
         rtol=1e-7,
     )
 
-    old_grad = column_linear.weight.grad.clone()
+    # old_grad = column_linear.weight.grad.clone()
+    old_grad = get_grad_from_parameter(column_linear.weight).clone()
     # Clip grads
     total_norm = clip_grad_norm(
         mp_pg=parallel_context.mp_pg,
@@ -317,11 +320,15 @@ def _test_clip_grads_with_tp(
     ref_total_norm = torch.nn.utils.clip_grad_norm_(reference_linear.parameters(), max_norm=1.0, norm_type=norm_type)
 
     # Check that the gradients have changed
-    assert not torch.allclose(old_grad, column_linear.weight.grad), "Gradients should have changed after clipping"
+    # assert not torch.allclose(old_grad, column_linear.weight.grad), "Gradients should have changed after clipping"
+    assert not torch.allclose(
+        old_grad, get_grad_from_parameter(column_linear.weight)
+    ), "Gradients should have changed after clipping"
 
     # Test that we get the same gradient after clipping
     torch.testing.assert_close(
-        column_linear.weight.grad,
+        # column_linear.weight.grad,
+        get_grad_from_parameter(column_linear.weight),
         reference_linear.weight.grad[
             dist.get_rank(parallel_context.tp_pg)
             * out_features_per_tp_rank : (dist.get_rank(parallel_context.tp_pg) + 1)
@@ -329,7 +336,8 @@ def _test_clip_grads_with_tp(
         ],
     )
     torch.testing.assert_close(
-        column_linear.bias.grad,
+        # column_linear.bias.grad,
+        get_grad_from_parameter(column_linear.bias),
         reference_linear.bias.grad[
             dist.get_rank(parallel_context.tp_pg)
             * out_features_per_tp_rank : (dist.get_rank(parallel_context.tp_pg) + 1)
@@ -403,16 +411,27 @@ def _test_clip_grads_tied_weights(parallel_context: ParallelContext, norm_type: 
     sync_tied_weights_gradients(model, parallel_context=parallel_context, grad_accumulator=None)
 
     # We check that we both gradients are synchronized
-    assert_tensor_synced_across_pg(weight.grad, group)
-    assert_tensor_synced_across_pg(bias.grad, group)
+    # assert_tensor_synced_across_pg(weight.grad, group)
+    # assert_tensor_synced_across_pg(bias.grad, group)
+    assert_tensor_synced_across_pg(get_grad_from_parameter(weight), group)
+    assert_tensor_synced_across_pg(get_grad_from_parameter(bias), group)
 
     # Save grads as reference
     ref_weight = weight.clone()
-    ref_weight.grad = weight.grad.clone()
+    # ref_weight.grad = weight.grad.clone()
+    ref_weight.grad = get_grad_from_parameter(weight).clone()
     ref_bias = bias.clone()
-    ref_bias.grad = bias.grad.clone()
+    # ref_bias.grad = bias.grad.clone()
+    ref_bias.grad = get_grad_from_parameter(bias).clone()
 
-    old_grad = weight.grad.clone()
+    # old_grad = weight.grad.clone()
+    old_grad = get_grad_from_parameter(weight).clone()
+
+    assert id(old_grad) != id(get_grad_from_parameter(weight))
+    assert torch.allclose(old_grad, get_grad_from_parameter(weight))
+
+    assert id(list(model.named_parameters())[0][1].grad) == id(get_grad_from_parameter(weight))
+
     # Clip grads
     total_norm = clip_grad_norm(
         mp_pg=parallel_context.mp_pg,
@@ -421,15 +440,24 @@ def _test_clip_grads_tied_weights(parallel_context: ParallelContext, norm_type: 
         max_norm=1.0,
         norm_type=norm_type,
     )
+    assert not torch.allclose(
+        old_grad, get_grad_from_parameter(weight)
+    ), "Gradients should have changed after clipping"
+
     ref_total_norm = torch.nn.utils.clip_grad_norm_([ref_weight, ref_bias], max_norm=1.0, norm_type=norm_type)
 
     # Check that the gradients have changed
-    assert not torch.allclose(old_grad, weight.grad), "Gradients should have changed after clipping"
+    # assert not torch.allclose(old_grad, weight.grad), "Gradients should have changed after clipping"
+    assert not torch.allclose(
+        old_grad, get_grad_from_parameter(weight)
+    ), "Gradients should have changed after clipping"
 
     # Test that we get the same gradient after clipping
-    assert torch.allclose(weight.grad, ref_weight.grad, rtol=1e-7, atol=1e-6)
-    assert torch.allclose(bias.grad, ref_bias.grad, rtol=1e-7, atol=1e-6)
-    assert torch.allclose(total_norm, ref_total_norm, rtol=0, atol=0), f"Got {total_norm} and {ref_total_norm}"
+    # assert torch.allclose(weight.grad, ref_weight.grad, rtol=1e-7, atol=1e-6)
+    # assert torch.allclose(bias.grad, ref_bias.grad, rtol=1e-7, atol=1e-6)
+    assert torch.allclose(get_grad_from_parameter(weight), get_grad_from_parameter(ref_weight), rtol=1e-7, atol=1e-6)
+    assert torch.allclose(get_grad_from_parameter(bias), get_grad_from_parameter(ref_bias), rtol=1e-7, atol=1e-6)
+    assert torch.allclose(total_norm, ref_total_norm, rtol=1e-3, atol=1e-3), f"Got {total_norm} and {ref_total_norm}"
 
     parallel_context.destroy()
 

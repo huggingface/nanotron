@@ -4,7 +4,7 @@ from helpers.exception import assert_fail_with
 from helpers.utils import init_distributed, rerun_if_address_is_in_use
 from nanotron import distributed as dist
 from nanotron.parallel import ParallelContext
-from nanotron.parallel.parameters import NanotronParameter
+from nanotron.parallel.parameters import NanotronParameter, get_grad_from_parameter
 from nanotron.parallel.tied_parameters import (
     get_tied_id_to_param,
     sync_tied_weights_gradients,
@@ -209,12 +209,23 @@ def _test_tie_weight_in_different_device_have_gradients_synchronized(parallel_co
     assert not assert_tensor_equal_over_group(weight, group=group, assert_=False)
     assert not assert_tensor_equal_over_group(bias, group=group, assert_=False)
 
+    # import torch.nn.functional as F
+
     # Compute gradient
     input_ = torch.randn(13, 10, device="cuda")
     if dist.get_rank(parallel_context.pp_pg) == 0:
         out = model.dense0(input_)
+        assert 1 == 1
+        # out = F.linear(model.weight.data, )
     else:
         out = model.dense1(input_)
+
+    # if isinstance(out, NanotronParameter):
+    #     _out = out
+    #     out = out.data
+    #     out.requires_grad = _out.requires_grad
+
+    # out = get_tensor(out)
     out.sum().backward()
 
     # sync gradients
@@ -222,11 +233,11 @@ def _test_tie_weight_in_different_device_have_gradients_synchronized(parallel_co
     sync_tied_weights_gradients(model, parallel_context=parallel_context, grad_accumulator=None)
 
     # Check that we have gradient
-    assert weight.grad is not None
-    assert bias.grad is not None
+    assert get_grad_from_parameter(weight) is not None
+    assert get_grad_from_parameter(bias) is not None
 
     # We check that we both gradients are synchronized
-    assert_tensor_equal_over_group(weight.grad, group=group)
-    assert_tensor_equal_over_group(bias.grad, group=group)
+    assert_tensor_equal_over_group(get_grad_from_parameter(weight), group=group)
+    assert_tensor_equal_over_group(get_grad_from_parameter(bias), group=group)
 
     parallel_context.destroy()

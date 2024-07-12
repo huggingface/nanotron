@@ -10,6 +10,7 @@ from nanotron.logging import get_logger, log_rank
 from nanotron.models import NanotronModel
 from nanotron.optim.gradient_accumulator import GradientAccumulator
 from nanotron.parallel import ParallelContext
+from nanotron.parallel.parameters import get_data_from_param, get_grad_from_parameter
 from nanotron.parallel.tied_parameters import get_tied_id_to_param
 
 logger = get_logger(__name__)
@@ -63,7 +64,8 @@ def before_tbi_sanity_checks(
         # SANITY CHECK: Check that the model params are synchronized across dp
         for name, param in sorted(unwrapped_model.named_parameters(), key=lambda x: x[0]):
             assert_tensor_synced_across_pg(
-                tensor=param,
+                # tensor=param,
+                tensor=get_data_from_param(param),
                 pg=parallel_context.dp_pg,
                 msg=lambda err: f"{name} are not synchronized across DP {err}",
             )
@@ -79,7 +81,8 @@ def before_tbi_sanity_checks(
         for (name, group_ranks), param in tied_params_list:
             group = parallel_context.world_ranks_to_pg[group_ranks]
             assert_tensor_synced_across_pg(
-                tensor=param,
+                # tensor=param,
+                tensor=get_data_from_param(param),
                 pg=group,
                 msg=lambda err: f"[Before train] Tied weights {name} are not synchronized. {err}",
             )
@@ -123,7 +126,8 @@ def after_tbi_sanity_checks(
             if grad_accumulator is not None:
                 grad = grad_accumulator.get_grad_buffer(name=name)
             else:
-                grad = param.grad
+                # grad = param.grad
+                grad = get_grad_from_parameter(param)
 
             if torch.isnan(grad).any() or torch.isinf(grad).any():
                 raise ValueError("Gradient is nan or inf")
@@ -150,13 +154,16 @@ def before_optim_step_sanity_checks(
             get_tied_id_to_param(parameters=unwrapped_model.parameters(), root_module=unwrapped_model).items(),
             key=lambda x: x[0],
         ):
-            if not param.requires_grad:
-                continue
+            assert param.requires_grad is True
+            assert get_data_from_param(param).requires_grad is True
+            # if not param.requires_grad:
+            #     continue
 
             if grad_accumulator is not None:
                 grad = grad_accumulator.get_grad_buffer(name=name)
             else:
-                grad = param.grad
+                # grad = param.grad
+                grad = get_grad_from_parameter(param)
 
             assert grad is not None, f"Grad is None for {name}"
             group = parallel_context.world_ranks_to_pg[group_ranks]
@@ -168,8 +175,10 @@ def before_optim_step_sanity_checks(
 
         # SANITY CHECK: Test gradients are synchronized across DP
         for name, param in sorted(unwrapped_model.named_parameters(), key=lambda x: x[0]):
-            if not param.requires_grad:
-                continue
+            # if not param.requires_grad:
+            #     continue
+            assert param.requires_grad is True
+            assert get_data_from_param(param).requires_grad is True
 
             if param.is_tied:
                 tied_info = param.get_tied_info()
@@ -180,7 +189,8 @@ def before_optim_step_sanity_checks(
             if grad_accumulator is not None:
                 grad = grad_accumulator.get_grad_buffer(name=name)
             else:
-                grad = param.grad
+                # grad = param.grad
+                grad = get_grad_from_parameter(param)
 
             assert grad is not None, f"Grad is None for {name}"
             assert_tensor_synced_across_pg(
@@ -192,7 +202,8 @@ def before_optim_step_sanity_checks(
         # SANITY CHECK: Check that the model params are synchronized across dp
         for name, param in sorted(unwrapped_model.named_parameters(), key=lambda x: x[0]):
             assert_tensor_synced_across_pg(
-                tensor=param,
+                # tensor=param,
+                tensor=get_data_from_param(param),
                 pg=parallel_context.dp_pg,
                 msg=lambda err: f"{name} are not synchronized across DP {err}",
             )
@@ -206,7 +217,8 @@ def before_optim_step_sanity_checks(
         for (name, group_ranks), param in tied_params_list:
             group = parallel_context.world_ranks_to_pg[group_ranks]
             assert_tensor_synced_across_pg(
-                tensor=param,
+                # tensor=param,
+                tensor=get_data_from_param(param),
                 pg=group,
                 msg=lambda err: f"[Before optimizer step] Tied weights {name} are not synchronized. {err}",
             )
@@ -224,10 +236,13 @@ def after_optim_step_sanity_checks(
     if not config.general.ignore_sanity_checks:
         # SANITY CHECK: Check that gradients is cleared
         for name, param in unwrapped_model.named_parameters():
-            if not param.requires_grad:
-                continue
+            assert param.requires_grad is True
+            assert get_data_from_param(param).requires_grad is True
+            # if not param.requires_grad:
+            #     continue
 
-            if param.grad is not None:
+            # if param.grad is not None:
+            if get_grad_from_parameter(param) is not None:
                 log_rank(
                     f"Process rank { dist.get_rank(parallel_context.world_pg)}/{parallel_context.world_pg.size()}: {name} still has gradient despite having ran the optimizer",
                     logger=logger,

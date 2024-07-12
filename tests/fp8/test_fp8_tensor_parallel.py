@@ -12,7 +12,7 @@ from nanotron.fp8.linear import FP8LinearMeta
 from nanotron.fp8.recipe import FP8Accumulate, FP8LinearRecipe, FP8SplitAccumulator, FP8TensorRecipe
 from nanotron.fp8.tensor import FP8Tensor, convert_tensor_from_fp8
 from nanotron.parallel import ParallelContext
-from nanotron.parallel.parameters import NanotronParameter
+from nanotron.parallel.parameters import NanotronParameter, get_grad_from_parameter
 from nanotron.parallel.tensor_parallel.enum import TensorParallelLinearMode
 from nanotron.parallel.tensor_parallel.nn import (
     FP8TensorParallelColumnLinear,
@@ -171,10 +171,12 @@ def _test_fp8_column_recipe(
 
     output.sum().backward()
 
-    check_fp8_tensor_based_on_recipe(linear.weight.data.grad, recipe.weight_grad)
+    # check_fp8_tensor_based_on_recipe(linear.weight.data.grad, recipe.weight_grad)
+    check_fp8_tensor_based_on_recipe(get_grad_from_parameter(linear.weight), recipe.weight_grad)
     if bias is True:
         if not (linear_cls is FP8TensorParallelRowLinear and dist.get_rank(linear.pg) != 0):
-            assert linear.bias.data.grad.dtype == QTYPE_TO_DTYPE[recipe.accum_dtype]
+            # assert linear.bias.data.grad.dtype == QTYPE_TO_DTYPE[recipe.accum_dtype]
+            assert get_grad_from_parameter(linear.bias) == QTYPE_TO_DTYPE[recipe.accum_dtype]
 
     parallel_context.destroy()
 
