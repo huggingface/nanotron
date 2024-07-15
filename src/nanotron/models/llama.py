@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """PyTorch LLaMa model."""
-
+import os
 from typing import Dict, Optional, Union, List
 
 import torch
@@ -96,7 +96,6 @@ class RotaryEmbedding(nn.Module):
             self.end *= 2
             self._initialized_buffer = False
         if self._initialized_buffer is False:
-            print(f"Initializing rotary embeddings with end={self.end}")
             self.init_rotary_embeddings()
         dtype = x.dtype
         assert inner_dim % 2 == 0
@@ -391,6 +390,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
 
         store = self.get_local_store()
         if store is not None:  # Inference case
+            
             # Double check that we use store only at inference time
             assert key_states.requires_grad is False
             assert value_states.requires_grad is False
@@ -600,6 +600,22 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         return {"hidden_states": output, "sequence_mask": sequence_mask}
 
 
+class LlamaRMSNorm(nn.Module):
+    def __init__(self, hidden_size, eps=1e-6):
+        """
+        LlamaRMSNorm is equivalent to T5LayerNorm
+        """
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(hidden_size))
+        self.variance_epsilon = eps
+
+    def forward(self, input):
+        input_dtype = input.dtype
+        input = input.to(torch.float32)
+        variance = input.pow(2).mean(-1, keepdim=True)
+        input = input * torch.rsqrt(variance + self.variance_epsilon)
+        return self.weight * input.to(input_dtype)
+
 class LlamaDecoderLayer(nn.Module):
     def __init__(
         self,
@@ -609,7 +625,8 @@ class LlamaDecoderLayer(nn.Module):
         layer_idx: int,
     ):
         super().__init__()
-        self.input_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        # self.input_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.input_layernorm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.attn = CausalSelfAttention(
             config=config,
             parallel_config=parallel_config,
@@ -617,7 +634,8 @@ class LlamaDecoderLayer(nn.Module):
             layer_idx=layer_idx,
         )
 
-        self.post_attention_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        # self.post_attention_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.post_attention_layernorm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.mlp = MLP(config=config, parallel_config=parallel_config, tp_pg=tp_pg)
         
         self.recompute_layer = parallel_config.recompute_layer
@@ -747,7 +765,8 @@ class LlamaModel(nn.Module):
 
         self.final_layer_norm = PipelineBlock(
             p2p=self.p2p,
-            module_builder=TritonRMSNorm,
+            # module_builder=TritonRMSNorm,
+            module_builder=LlamaRMSNorm,
             module_kwargs={"hidden_size": config.hidden_size, "eps": config.rms_norm_eps},
             module_input_keys={"input"},
             module_output_keys={"hidden_states"},
@@ -800,7 +819,7 @@ class LlamaModel(nn.Module):
         }
         for encoder_block in self.decoder:
             hidden_encoder_states = encoder_block(**hidden_encoder_states)
-
+            
         hidden_states = self.final_layer_norm(input=hidden_encoder_states["hidden_states"])["hidden_states"]
 
         sharded_logits = self.lm_head(x=hidden_states)["logits"]
