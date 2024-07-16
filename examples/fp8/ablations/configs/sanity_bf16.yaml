@@ -22,7 +22,7 @@ general:
   consumed_train_samples: null
   ignore_sanity_checks: false
   project: fp8_for_nanotron
-  run: bfloat16_2_layers_and_seq_len_256_and_micro_batch_128_and_lr_0.01_and_minipile_overfitting_and_fp8_branch_and_layernorm_and_custom_adam_and_tp_1_and_no_weight_decay_after_fixing_init_without_zero_grad
+  run: bfloat16_2_layers_and_seq_len_256_and_micro_batch_128_and_lr_0.01_and_minipile_overfitting_and_fp8_branch_and_layernorm_and_custom_adam_and_tp_1_and_no_weight_decay_after_fixing_wrong_momentum
   seed: 42
   step: null
 lighteval: null
@@ -30,7 +30,7 @@ logging:
   iteration_step_info_interval: 1
   log_level: info
   log_level_replica: info
-  monitor_model_states: true
+  monitor_model_states: false
 model:
   ddp_bucket_cap_mb: 25
   dtype: bfloat16
@@ -63,7 +63,7 @@ model:
 optimizer:
   accumulate_grad_in_fp32: false
   learning_rate_scheduler:
-    learning_rate: 0.0004
+    learning_rate: 0.0006
     lr_decay_starting_step: null
     lr_decay_steps: 800
     lr_decay_style: cosine
@@ -86,9 +86,9 @@ optimizer:
     adam_eps: 1.0e-08
     name: custom_adam
     torch_adam_is_fused: true
-  weight_decay: 0.1
+  weight_decay: 0
   zero_stage: 0
-  clip_grad: 1.0
+  # clip_grad: 1.0
 
 parallelism:
   dp: 1

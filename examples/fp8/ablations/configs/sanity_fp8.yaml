@@ -140,7 +140,7 @@ parallelism:
   expert_parallel_size: 1
   pp: 1
   pp_engine: 1f1b
-  tp: 2
+  tp: 1
   # tp_linear_async_communication: true
   # tp_mode: REDUCE_SCATTER
 

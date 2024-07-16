@@ -98,15 +98,16 @@ def clip_grad_norm(
     }
     device_to_clip_coef_clamped = {device: clip_coef_clamped.to(device) for device in devices}
 
-    with torch.no_grad():
-        for name, param in named_parameters:
-            if grad_accumulator is None:
-                # param.grad.detach().mul_(device_to_clip_coef_clamped[param.grad.device])
-                get_grad_from_parameter(param).mul_(device_to_clip_coef_clamped[get_grad_from_parameter(param).device])
-                assert 1 == 1
-            else:
-                grad_accumulator.get_grad_buffer(name).mul_(
-                    device_to_clip_coef_clamped[grad_accumulator.get_grad_buffer(name).device]
-                )
+    for name, param in named_parameters:
+        if grad_accumulator is None:
+            # param.grad.detach().mul_(device_to_clip_coef_clamped[param.grad.device])
+            get_grad_from_parameter(param).detach().mul_(
+                device_to_clip_coef_clamped[get_grad_from_parameter(param).device]
+            )
+            assert 1 == 1
+        else:
+            grad_accumulator.get_grad_buffer(name).detach().mul_(
+                device_to_clip_coef_clamped[grad_accumulator.get_grad_buffer(name).device]
+            )
 
     return total_norm

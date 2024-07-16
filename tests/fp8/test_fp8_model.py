@@ -17,13 +17,15 @@ MODULE_NAME_TO_FP8_MODULE = {
 
 
 @pytest.mark.parametrize("tp,dp,pp", [[1, 1, 1], [2, 1, 1]])
+@pytest.mark.parametrize("is_fp8", [True, False])
 @rerun_if_address_is_in_use()
-def test_initialize_fp8_model(tp: int, dp: int, pp: int):
-    init_distributed(tp=tp, dp=dp, pp=pp)(_test_initialize_fp8_model)()
+def test_initialize_fp8_model(tp: int, dp: int, pp: int, is_fp8: bool):
+    dtype = torch.int8 if is_fp8 else torch.bfloat16
+    init_distributed(tp=tp, dp=dp, pp=pp)(_test_initialize_fp8_model)(dtype=dtype)
 
 
-def _test_initialize_fp8_model(parallel_context: ParallelContext):
-    model = create_nanotron_model(parallel_context, dtype=torch.int8)
+def _test_initialize_fp8_model(parallel_context: ParallelContext, dtype: torch.dtype):
+    model = create_nanotron_model(parallel_context, dtype=dtype)
     modules = get_leaf_modules(model)
 
     for module_name, module in modules:

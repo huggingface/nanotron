@@ -101,10 +101,10 @@ class Adam(Optimizer):
                 from nanotron import constants
                 from nanotron.constants import get_debug_save_path
 
-                # debug_save_path = constants.DEBUG_SAVE_PATH.format(constants.CONFIG.general.run, constants.ITERATION_STEP)
-                debug_save_path = get_debug_save_path(constants.CONFIG.general.run, constants.ITERATION_STEP)
-
                 if constants.is_ready_to_log is True and constants.CONFIG.logging.monitor_model_states is True:
+                    # debug_save_path = constants.DEBUG_SAVE_PATH.format(constants.CONFIG.general.run, constants.ITERATION_STEP)
+                    debug_save_path = get_debug_save_path(constants.CONFIG.general.run, constants.ITERATION_STEP)
+
                     torch.save(grad, f"{debug_save_path}/{self.params_id_to_param_names[id(p)]}_before_update_grad.pt")
                     torch.save(
                         data, f"{debug_save_path}/{self.params_id_to_param_names[id(p)]}_before_update_weight.pt"
@@ -115,8 +115,9 @@ class Adam(Optimizer):
                 exp_avg, exp_avg_sq = state["exp_avg"], state["exp_avg_sq"]
                 beta1, beta2 = group["betas"]
 
-                # if group["weight_decay"] != 0:
-                #     grad = grad.add(group["weight_decay"], data)
+                if group["weight_decay"] != 0:
+                    # grad = grad.add(group["weight_decay"], data)
+                    grad = grad + group["weight_decay"] * data
 
                 # Decay the first and second moment running average coefficient
                 # exp_avg.mul_(beta1).add_(1 - beta1, grad)
@@ -130,16 +131,25 @@ class Adam(Optimizer):
                 bias_correction1 = 1 - (beta1**step)
                 bias_correction2 = 1 - (beta2**step)
 
-                exp_avg = exp_avg / bias_correction1
-                exp_avg_sq = exp_avg_sq / bias_correction2
+                # exp_avg = exp_avg / bias_correction1
+                # exp_avg_sq = exp_avg_sq / bias_correction2
+
+                unbiased_exp_avg = exp_avg / bias_correction1
+                unbiased_exp_avg_sq = exp_avg_sq / bias_correction2
 
                 # denom = (exp_avg_sq.sqrt() / math.sqrt(bias_correction2)).add_(group["eps"])
-                denom = (exp_avg_sq + group["eps"]).sqrt()
-                normalized_grad = exp_avg / denom
+                denom = unbiased_exp_avg_sq.sqrt() + group["eps"]
+                normalized_grad = unbiased_exp_avg / denom
 
                 lr = group["lr"]
                 # p.data.addcdiv_(-step_size, exp_avg, denom)
-                new_data = data - lr * (normalized_grad + (group["weight_decay"] * data))
+                # new_data = data - lr * (normalized_grad + (group["weight_decay"] * data))
+
+                if group["weight_decay"] != 0:
+                    new_data = data - lr * (normalized_grad + (group["weight_decay"] * data))
+                else:
+                    new_data = data - lr * normalized_grad
+
                 new_data.requires_grad = True
 
                 # p.data = new_data

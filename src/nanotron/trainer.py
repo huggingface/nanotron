@@ -430,15 +430,15 @@ class DistributedTrainer:
         **kwargs,
     ) -> None:
         datetime.datetime.now().strftime("%d/%m/%Y_%H:%M:%S")
-        # if dist.get_rank(self.parallel_context.world_pg) == 0 and wandb is not None:
-        #     wandb.init(
-        #         project=self.config.general.project,
-        #         # name=f"{current_time}_{self.config.general.run}",
-        #         name=f"{self.config.general.run}",
-        #         config={"nanotron_config": self.config.as_dict()},
-        #         # NOTE: FP8 takes more time to initialize, so we increase the wait time
-        #         settings=wandb.Settings(_service_wait=30000),
-        #     )
+        if dist.get_rank(self.parallel_context.world_pg) == 0 and wandb is not None:
+            wandb.init(
+                project=self.config.general.project,
+                # name=f"{current_time}_{self.config.general.run}",
+                name=f"{self.config.general.run}",
+                config={"nanotron_config": self.config.as_dict()},
+                # NOTE: FP8 takes more time to initialize, so we increase the wait time
+                settings=wandb.Settings(_service_wait=30000),
+            )
 
         def get_optim_logs(mappings, optim, prefix):
             optim_loggings = {}
@@ -532,7 +532,7 @@ class DistributedTrainer:
                             json.dump(detailed_logs, f)
 
                         constants.NN_STATES = None
-                        # wandb.log({**detailed_logs, "iteration_step": self.iteration_step})
+                        wandb.log({**detailed_logs, "iteration_step": self.iteration_step})
 
                 # Checkpoint
                 if self.iteration_step % self.config.checkpoints.checkpoint_interval == 0:
@@ -734,13 +734,13 @@ class DistributedTrainer:
                 )
 
             # NOTE: only one rank writes to wandb
-            # if dist.get_rank(self.parallel_context.world_pg) == 0 and wandb is not None:
-            #     wandb.log(
-            #         {
-            #             **{log_item.tag: log_item.scalar_value for log_item in log_entries},
-            #             "iteration_step": self.iteration_step,
-            #         }
-            #     )
+            if dist.get_rank(self.parallel_context.world_pg) == 0 and wandb is not None:
+                wandb.log(
+                    {
+                        **{log_item.tag: log_item.scalar_value for log_item in log_entries},
+                        "iteration_step": self.iteration_step,
+                    }
+                )
 
             self.loggerwriter.add_scalars_from_list(log_entries, self.iteration_step)
 

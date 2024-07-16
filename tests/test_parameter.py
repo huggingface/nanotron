@@ -24,6 +24,17 @@ def test_create_nanotron_parameter():
 
 
 @pytest.mark.parametrize("is_fp8", [False, True])
+def test_get_data_from_nanotron_parameter(is_fp8):
+    data = torch.randn(3, device="cuda")
+    data = FP8Tensor(data, dtype=DTypes.FP8E4M3) if is_fp8 else data
+    param = nn.Parameter(data)
+    param = NanotronParameter(param)
+
+    assert 1 == 1
+    assert param.data.__class__ == nn.Parameter
+
+
+@pytest.mark.parametrize("is_fp8", [False, True])
 def test_gradients_flow_to_nanotron_parameter(is_fp8):
     data = torch.randn(3, device="cuda")
     data = FP8Tensor(data, dtype=DTypes.FP8E4M3) if is_fp8 else data
