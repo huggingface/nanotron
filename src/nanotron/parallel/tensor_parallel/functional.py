@@ -26,6 +26,7 @@ from nanotron.parallel.tensor_parallel.distributed_differentiable_primitives imp
     differentiable_reduce_scatter_sum,
 )
 from nanotron.parallel.tensor_parallel.enum import TensorParallelLinearMode
+from nanotron.parallel.tensor_parallel.column_linear import column_linear_context_parallel
 from nanotron.parallel.utils import assert_cuda_max_connections_set_to_1
 
 
@@ -352,7 +353,7 @@ def column_linear(
     if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
         input = differentiable_identity(input, group=group)
     elif tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
-        input = differentiable_all_gather(input, group=group)
+        return column_linear_context_parallel(input, weight, bias, group)
     else:
         raise ValueError(f"Got unexpected mode: {tp_mode}.")
 
@@ -473,6 +474,7 @@ def row_linear(
 
     out = F.linear(input, weight, bias)
 
+    #print("Calling row linear")
     if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
         out = differentiable_all_reduce_sum(out, group=group)
     elif tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:

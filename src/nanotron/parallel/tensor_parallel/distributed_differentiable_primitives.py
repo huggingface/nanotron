@@ -19,7 +19,6 @@ from torch import distributed as torch_dist
 
 from nanotron import distributed as dist
 from nanotron.distributed import ProcessGroup
-from nanotron.parallel.utils import MemoryBuffer
 
 
 class DifferentiableIdentity(torch.autograd.Function):
@@ -68,7 +67,13 @@ class DifferentiableAllGather(torch.autograd.Function):
             group = torch_dist.distributed_c10d._get_default_group()
         unsharded_batch_size = sharded_batch_size * group.size()
 
-        unsharded_tensor = MemoryBuffer().get("dist", (unsharded_batch_size, *rest_size), dtype=tensor.dtype)
+        unsharded_tensor = torch.empty(
+            unsharded_batch_size,
+            *rest_size,
+            device=tensor.device,
+            dtype=tensor.dtype,
+            requires_grad=tensor.requires_grad,
+        )
 
         # `tensor` can sometimes not be contiguous
         # https://cs.github.com/pytorch/pytorch/blob/2b267fa7f28e18ca6ea1de4201d2541a40411457/torch/distributed/nn/functional.py#L317
@@ -79,8 +84,11 @@ class DifferentiableAllGather(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_output):
+        #print(f"{torch.distributed.get_rank()} grad_output: {grad_output}")
         group = ctx.group
-        return DifferentiableReduceScatterSum.apply(grad_output, group), None
+        out = DifferentiableReduceScatterSum.apply(grad_output, group)
+        #print(f"{torch.distributed.get_rank()} grad_grad: {out}")
+        return out, None, None
 
 
 class DifferentiableReduceScatterSum(torch.autograd.Function):
@@ -103,8 +111,12 @@ class DifferentiableReduceScatterSum(torch.autograd.Function):
         # https://cs.github.com/pytorch/pytorch/blob/2b267fa7f28e18ca6ea1de4201d2541a40411457/torch/distributed/nn/functional.py#L305
         tensor = tensor.contiguous()
 
-        sharded_tensor = MemoryBuffer().get(
-            "dist", (unsharded_batch_size // group.size(), *rest_size), dtype=tensor.dtype
+        sharded_tensor = torch.empty(
+            unsharded_batch_size // group.size(),
+            *rest_size,
+            device=tensor.device,
+            dtype=tensor.dtype,
+            requires_grad=False,
         )
         dist.reduce_scatter_tensor(sharded_tensor, tensor, group=group, op=dist.ReduceOp.SUM)
         return sharded_tensor
@@ -112,7 +124,8 @@ class DifferentiableReduceScatterSum(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_output):
         group = ctx.group
-        return DifferentiableAllGather.apply(grad_output, group), None
+        #print(f"{torch.distributed.get_rank()} Calling AllGather because of backward of reducescatter")
+        return DifferentiableAllGather.apply(grad_output, group, False), None
 
 
 # -----------------
@@ -128,7 +141,7 @@ def differentiable_all_reduce_sum(tensor, group: Optional[ProcessGroup] = None):
     return DifferentiableAllReduceSum.apply(tensor, group)
 
 
-def differentiable_all_gather(tensor, group: Optional[ProcessGroup] = None):
+def differentiable_all_gather(tensor, group: Optional[ProcessGroup] = None)
     return DifferentiableAllGather.apply(tensor, group)
 
 
