@@ -474,7 +474,6 @@ def row_linear(
 
     out = F.linear(input, weight, bias)
 
-    #print("Calling row linear")
     if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
         out = differentiable_all_reduce_sum(out, group=group)
     elif tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:

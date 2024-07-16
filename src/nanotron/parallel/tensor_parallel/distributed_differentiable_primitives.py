@@ -84,10 +84,8 @@ class DifferentiableAllGather(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_output):
-        #print(f"{torch.distributed.get_rank()} grad_output: {grad_output}")
         group = ctx.group
         out = DifferentiableReduceScatterSum.apply(grad_output, group)
-        #print(f"{torch.distributed.get_rank()} grad_grad: {out}")
         return out, None, None
 
 
@@ -124,7 +122,6 @@ class DifferentiableReduceScatterSum(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_output):
         group = ctx.group
-        #print(f"{torch.distributed.get_rank()} Calling AllGather because of backward of reducescatter")
         return DifferentiableAllGather.apply(grad_output, group, False), None
 
 
