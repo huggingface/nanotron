@@ -96,10 +96,10 @@ class NanosetDatasetsArgs:
     dataset_folder: Union[str, dict, List[str]]
 
     def __post_init__(self):
-        if isinstance(self.dataset_folder, str):  # Case 1: 1 Dataset file
+        if isinstance(self.dataset_folder, str):  # Case 1: 1 Dataset folder
             self.dataset_folder = [self.dataset_folder]
             self.dataset_weights = [1]
-        elif isinstance(self.dataset_folder, List):  # Case 2: > 1 Dataset file
+        elif isinstance(self.dataset_folder, List):  # Case 2: > 1 Dataset folder
             self.dataset_weights = None  # Set to None so we consume all the samples randomly
         elif isinstance(self.dataset_folder, dict):  # Case 3: dict with > 1 dataset_folder and weights
             tmp_dataset_folder = self.dataset_folder.copy()
