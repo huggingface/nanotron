@@ -51,7 +51,7 @@ class TensorParallelColumnLinear(nn.Linear):
         dtype=None,
         async_communication: bool = False,
         contiguous_chunks: Optional[Tuple[int, ...]] = None,
-        tp_recompute_allgather: bool = False,
+        tp_recompute_allgather: bool = True,
     ):
         self.pg = pg
         self.world_size = pg.size()
