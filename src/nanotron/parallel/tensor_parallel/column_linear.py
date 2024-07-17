@@ -16,8 +16,12 @@ class ColumnLinearContextParallel(torch.autograd.Function):
 
     @staticmethod
     def forward(
-        ctx, input: torch.Tensor, weight: torch.Tensor, bias: Optional[torch.Tensor], group: dist.ProcessGroup,
-        tp_recompute_allgather: bool
+        ctx,
+        input: torch.Tensor,
+        weight: torch.Tensor,
+        bias: Optional[torch.Tensor],
+        group: dist.ProcessGroup,
+        tp_recompute_allgather: bool,
     ):
 
         # Do allgather.
@@ -67,7 +71,9 @@ class ColumnLinearContextParallel(torch.autograd.Function):
         # Compute gradients.
         grad_weight = grad_output.T @ total_input
         grad_input = grad_output @ weight
-        sub_grad_input = torch.empty(input_size, dtype=total_input.dtype, device=total_input.device, requires_grad=False)
+        sub_grad_input = torch.empty(
+            input_size, dtype=total_input.dtype, device=total_input.device, requires_grad=False
+        )
         dist.reduce_scatter_tensor(sub_grad_input, grad_input, group=group, op=dist.ReduceOp.SUM)
         grad_bias = torch.sum(grad_output, dim=0) if bias is not None else None
 
@@ -75,7 +81,10 @@ class ColumnLinearContextParallel(torch.autograd.Function):
 
 
 def column_linear_context_parallel(
-    input: torch.Tensor, weight: torch.Tensor, bias: Optional[torch.Tensor], group: dist.ProcessGroup,
-    tp_recompute_allgather: bool = False
+    input: torch.Tensor,
+    weight: torch.Tensor,
+    bias: Optional[torch.Tensor],
+    group: dist.ProcessGroup,
+    tp_recompute_allgather: bool = True,
 ):
     return ColumnLinearContextParallel.apply(input, weight, bias, group, tp_recompute_allgather)
