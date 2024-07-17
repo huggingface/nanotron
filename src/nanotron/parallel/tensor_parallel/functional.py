@@ -21,6 +21,7 @@ from torch.nn import functional as F
 import nanotron.distributed as dist
 from nanotron.parallel.tensor_parallel.column_linear import column_linear_context_parallel
 from nanotron.parallel.tensor_parallel.distributed_differentiable_primitives import (
+    differentiable_all_gather,
     differentiable_all_reduce_sum,
     differentiable_identity,
     differentiable_reduce_scatter_sum,
@@ -345,6 +346,7 @@ def column_linear(
     group: dist.ProcessGroup,
     tp_mode: TensorParallelLinearMode,
     async_communication: bool,
+    tp_recompute_allgather: bool = True
 ):
     if async_communication:
         return _ColumnLinearAsyncCommunication.apply(input, weight, bias, group, tp_mode)
@@ -352,7 +354,7 @@ def column_linear(
     if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
         input = differentiable_identity(input, group=group)
     elif tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
-        return column_linear_context_parallel(input, weight, bias, group)
+        return column_linear_context_parallel(input, weight, bias, group, tp_recompute_allgather)
     else:
         raise ValueError(f"Got unexpected mode: {tp_mode}.")
 

@@ -32,6 +32,8 @@ class ParallelismArgs:
     tp_mode: Optional[TensorParallelLinearMode] = None
     tp_linear_async_communication: Optional[bool] = None
 
+    tp_recompute_allgather: bool = False
+
     expert_parallel_size: int = 1
 
     def __post_init__(self):
