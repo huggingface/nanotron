@@ -13,9 +13,11 @@ class ColumnLinearContextParallel(torch.autograd.Function):
     enabled (i.e. tp_mode = TensorParallelLinearMode.REDUCE_SCATTER) and
     async communication disabled.
     """
+
     @staticmethod
-    def forward(ctx, input: torch.Tensor, weight: torch.Tensor,
-                bias: Optional[torch.Tensor], group: dist.ProcessGroup):
+    def forward(
+        ctx, input: torch.Tensor, weight: torch.Tensor, bias: Optional[torch.Tensor], group: dist.ProcessGroup
+    ):
 
         # Prepare context.
         ctx.save_for_backward(input, weight, bias)
@@ -57,6 +59,8 @@ class ColumnLinearContextParallel(torch.autograd.Function):
 
         return sub_grad_input, grad_weight, grad_bias, None
 
-def column_linear_context_parallel(input: torch.Tensor, weight: torch.Tensor, bias: Optional[torch.Tensor],
-                                   group: dist.ProcessGroup):
+
+def column_linear_context_parallel(
+    input: torch.Tensor, weight: torch.Tensor, bias: Optional[torch.Tensor], group: dist.ProcessGroup
+):
     return ColumnLinearContextParallel.apply(input, weight, bias, group)
