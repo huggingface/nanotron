@@ -86,7 +86,7 @@ class DifferentiableAllGather(torch.autograd.Function):
     def backward(ctx, grad_output):
         group = ctx.group
         out = DifferentiableReduceScatterSum.apply(grad_output, group)
-        return out, None, None
+        return out, None
 
 
 class DifferentiableReduceScatterSum(torch.autograd.Function):
@@ -122,7 +122,7 @@ class DifferentiableReduceScatterSum(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_output):
         group = ctx.group
-        return DifferentiableAllGather.apply(grad_output, group, False), None
+        return DifferentiableAllGather.apply(grad_output, group), None
 
 
 # -----------------
@@ -138,7 +138,7 @@ def differentiable_all_reduce_sum(tensor, group: Optional[ProcessGroup] = None):
     return DifferentiableAllReduceSum.apply(tensor, group)
 
 
-def differentiable_all_gather(tensor, group: Optional[ProcessGroup] = None)
+def differentiable_all_gather(tensor, group: Optional[ProcessGroup] = None):
     return DifferentiableAllGather.apply(tensor, group)
 
 
