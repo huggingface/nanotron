@@ -23,6 +23,7 @@ class ParallelismArgs:
         pp_engine: Pipeline engine to use between "1f1b" and "afab"
         tp_mode: TP mode to use between "all_reduce" and "reduce_scatter": all_reduce is normal, reduce_scatter activate sequence parallelism
         tp_linear_async_communication: Whether to use async communication in TP linear layers
+        recompute_layer: Whether to recompute each Transformer layer to save memory.
     """
 
     dp: int
@@ -32,6 +33,7 @@ class ParallelismArgs:
     pp_engine: Optional[PipelineEngine] = None
     tp_mode: Optional[TensorParallelLinearMode] = None
     tp_linear_async_communication: Optional[bool] = None
+    recompute_layer: bool = False
 
     expert_parallel_size: int = 1
 
