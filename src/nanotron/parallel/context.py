@@ -20,9 +20,7 @@ class ParallelContext:
         backend: DistributedBackend = "nccl",
     ):
         """Initialize parallel context."""
-        num_gpus_per_model = (
-            tensor_parallel_size * pipeline_parallel_size * expert_parallel_size * sequence_parallel_size
-        )
+        num_gpus_per_model = tensor_parallel_size * pipeline_parallel_size * expert_parallel_size
         world_size = int(os.environ["WORLD_SIZE"])
 
         assert (
@@ -30,11 +28,11 @@ class ParallelContext:
         ), "The total number of processes must be divisible by the data parallel size."
         assert world_size % num_gpus_per_model == 0, (
             "The total number of processes must be divisible by"
-            "the number of GPUs per model (tensor_parallel_size * pipeline_parallel_size)."
+            f"the number of GPUs per model (tensor_parallel_size * pipeline_parallel_size). Got {world_size} and {num_gpus_per_model}."
         )
-        if num_gpus_per_model * data_parallel_size != world_size:
+        if num_gpus_per_model * data_parallel_size * sequence_parallel_size != world_size:
             raise ValueError(
-                f"The number of process requires to run all replicas ({num_gpus_per_model * data_parallel_size})",
+                f"The number of process requires to run all replicas ({num_gpus_per_model * data_parallel_size * sequence_parallel_size })",
                 f"must be equal to the world size ({world_size}).",
             )
 

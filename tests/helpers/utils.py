@@ -255,11 +255,12 @@ def global_wrapper(rank, func, tp, pp, dp, sp, port, kwargs):
         os.environ["MASTER_ADDR"] = "localhost"
         os.environ["MASTER_PORT"] = str(port)
 
-    world_size = tp * pp * dp
+    world_size = tp * pp * dp * sp
     setup_dist_env(rank, world_size, port)
     parallel_context = ParallelContext(
         data_parallel_size=dp, pipeline_parallel_size=pp, tensor_parallel_size=tp, sequence_parallel_size=sp
     )
+    print("world_size: ", world_size)
     func(parallel_context, **kwargs)
 
 
