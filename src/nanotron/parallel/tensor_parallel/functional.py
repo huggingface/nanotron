@@ -120,10 +120,12 @@ class _ColumnLinearAsyncCommunication(torch.autograd.Function):
 
     @staticmethod
     @assert_cuda_max_connections_set_to_1
-    def forward(ctx, tensor, weight, bias, group, tp_mode):
+    def forward(ctx, tensor, weight, bias, group, tp_mode, tp_recompute_allgather):
         ctx.use_bias = bias is not None
         ctx.tp_mode = tp_mode
         ctx.group = group
+        ctx.tp_recompute_allgather = tp_recompute_allgather
+        ctx.tensor_shape = tensor.size()
 
         if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
             gathered_tensor = tensor
@@ -140,7 +142,7 @@ class _ColumnLinearAsyncCommunication(torch.autograd.Function):
                 # `tensor` can sometimes not be contiguous
                 # https://cs.github.com/pytorch/pytorch/blob/2b267fa7f28e18ca6ea1de4201d2541a40411457/torch/distributed/nn/functional.py#L317
                 tensor = tensor.contiguous()
-                ctx.save_for_backward(tensor, weight)
+                # ctx.save_for_backward(tensor, weight)
 
                 # TODO @thomasw21: gather along another dimension
                 sharded_batch_size, *intermediate_size, hidden_size = tensor.shape
@@ -148,9 +150,19 @@ class _ColumnLinearAsyncCommunication(torch.autograd.Function):
                     group = dist.distributed_c10d._get_default_group()
                 gathered_batch_size = sharded_batch_size * group.size()
 
-                gathered_tensor = MemoryBuffer().get(
-                    "allgather", (gathered_batch_size, *intermediate_size, hidden_size), dtype=tensor.dtype
-                )
+                if tp_recompute_allgather:
+                    gathered_tensor = MemoryBuffer().get(
+                        "allgather", (gathered_batch_size, *intermediate_size, hidden_size), dtype=tensor.dtype
+                    )
+                else:
+                    gathered_tensor = torch.empty(
+                        gathered_batch_size,
+                        *intermediate_size,
+                        hidden_size,
+                        device=tensor.device,
+                        dtype=tensor.dtype,
+                        requires_grad=False,
+                    )
 
                 handle = dist.all_gather_into_tensor(gathered_tensor, tensor, group=group, async_op=True)
 
@@ -198,6 +210,10 @@ class _ColumnLinearAsyncCommunication(torch.autograd.Function):
 
                 # Wait communication
                 handle.wait()
+                if tp_recompute_allgather:
+                    ctx.save_for_backward(tensor, weight)
+                else:
+                    ctx.save_for_backward(gathered_tensor, weight)
 
                 # Compute all the other shards that are obtained from AllGather
                 # weights: w0 w1 w2 w3
@@ -256,7 +272,7 @@ class _ColumnLinearAsyncCommunication(torch.autograd.Function):
         tp_mode = ctx.tp_mode
 
         handle1: Optional[dist.Work] = None
-        if tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
+        if tp_mode is TensorParallelLinearMode.REDUCE_SCATTER and ctx.tp_recompute_allgather:
             # TODO @thomasw21: gather along another dimension
             sharded_batch_size, *rest_size = tensor.shape
             if group is None:
@@ -296,7 +312,7 @@ class _ColumnLinearAsyncCommunication(torch.autograd.Function):
                 sub_grad_tensor = grad_tensor
             else:
                 sub_grad_tensor = torch.empty(
-                    tensor.shape, dtype=grad_tensor.dtype, device=grad_tensor.device, requires_grad=False
+                    ctx.tensor_shape, dtype=grad_tensor.dtype, device=grad_tensor.device, requires_grad=False
                 )
                 # reduce_scatter
                 handle2 = dist.reduce_scatter_tensor(sub_grad_tensor, grad_tensor, group=group, async_op=True)
@@ -322,9 +338,9 @@ class _ColumnLinearAsyncCommunication(torch.autograd.Function):
             handle2.wait()
 
         if tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
-            return sub_grad_tensor, grad_weight, grad_bias, None, None
+            return sub_grad_tensor, grad_weight, grad_bias, None, None, None
         elif tp_mode is TensorParallelLinearMode.ALL_REDUCE:
-            return grad_tensor, grad_weight, grad_bias, None, None
+            return grad_tensor, grad_weight, grad_bias, None, None, None
         else:
             raise ValueError(f"Got unexpected mode: {tp_mode}.")
 
@@ -412,7 +428,7 @@ def column_linear(
     tp_recompute_allgather: bool = True,
 ):
     if async_communication:
-        return _ColumnLinearAsyncCommunication.apply(input, weight, bias, group, tp_mode)
+        return _ColumnLinearAsyncCommunication.apply(input, weight, bias, group, tp_mode, tp_recompute_allgather)
 
     if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
         input = differentiable_identity(input, group=group)
