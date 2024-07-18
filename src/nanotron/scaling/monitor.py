@@ -23,7 +23,9 @@ def track_weight_and_grad_stats(name: str, module: nn.Module, parallel_context: 
         stats = {}
 
         for key, tensor in tensors.items():
-            if tensor.dtype == torch.long or tensor.dtype == torch.int or tensor.dtype == torch.bool:
+            # if tensor.dtype == torch.long or tensor.dtype == torch.int or tensor.dtype == torch.bool:
+            #     continue
+            if tensor.is_floating_point() is False:
                 continue
 
             stats[key] = {}

@@ -233,7 +233,6 @@ class _FP8Matmul(torch.autograd.Function):
             fp8_weight_grad = FP8Tensor.from_metadata(grad_weight, ctx.metadatas.weight_grad)
 
         fp8_weight.grad = fp8_weight_grad
-        fp8_weight._temp_grad = fp8_weight_grad
 
         # NOTE: sanity check
         assert isinstance(fp8_weight.grad, FP8Tensor)

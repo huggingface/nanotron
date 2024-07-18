@@ -1,8 +1,6 @@
-import math
 from typing import Any, Dict, List, Tuple, Union
 
 import torch
-import torch.distributed as dist
 from torch import nn
 from torch.optim import Optimizer
 
@@ -22,7 +20,6 @@ from nanotron.parallel.parameters import (
     get_data_from_param,
     get_data_from_sliced_or_param,
     get_grad_from_parameter,
-    get_grad_from_sliced_or_param,
     set_data_for_sliced_or_param,
     set_grad_none_for_sliced_or_param,
 )
@@ -96,7 +93,7 @@ class Adam(Optimizer):
                 # assert (p.grad is not None and p.data.grad is not None) is False
                 # grad = p.grad if p.grad is not None else p.data.grad
                 # grad = get_grad_from_parameter(p)
-                grad = get_grad_from_sliced_or_param(p)
+                grad = get_grad_from_parameter(p)
 
                 from nanotron import constants
                 from nanotron.constants import get_debug_save_path
@@ -195,6 +192,18 @@ class Adam(Optimizer):
                 assert p.data.grad is None
 
 
+def write_to_file(content, filename="output.txt"):
+    """
+    Writes content to a file, appending each new piece of content on a new line.
+
+    Args:
+    content (str): The text to be written to the file.
+    filename (str): The name of the file to write to. Defaults to "output.txt".
+    """
+    with open(filename, "a") as file:
+        file.write(content + "\n")
+
+
 class FP8Adam(Optimizer):
     """
     FP8 Adam optimizer.
@@ -243,13 +252,12 @@ class FP8Adam(Optimizer):
 
         for group in self.param_groups:
             for p in group["params"]:
-                assert p.dtype == p.data.dtype
+                data = get_data_from_param(p)
+                # NOTE: this parameter we don't convert to FP8, so no need master weight
+                if data.__class__ != FP8Tensor:
+                    continue
 
-                # if p.requires_grad is None:
-                #     continue
-
-                # if p.data.dtype == torch.float16:
-                #     continue
+                assert p.dtype == data.dtype
 
                 # NOTE: if a tensor.ndim == 1, it's a bias
                 # raw_data = p.data if p.ndim == 1 else p.orig_data
@@ -261,16 +269,7 @@ class FP8Adam(Optimizer):
                 else:
                     raw_data = p.orig_data if hasattr(p, "orig_data") else p.data
 
-                # if raw_data.dtype == torch.float16:
-                #     # NOTE: only do mixed precision for parameters that quantize to FP8
-                #     continue
-
-                assert raw_data.dtype in [torch.float32]
-
-                # if isinstance(p, NanotronParameter):
-                #     assert 1 == 1
-                # if "mlp.down_proj" in constants.PARAM_ID_TO_PARAM_NAMES[id(p)]:
-                #     assert 1 == 1
+                assert raw_data.dtype in [torch.float32], f"raw_data.dtype={raw_data.dtype}"
 
                 # TODO(xrsrke): retrieve the dtype for master_weights from the recipe
                 fp16_p = FP16Tensor(raw_data, dtype=DTypes.KFLOAT16)
@@ -286,9 +285,6 @@ class FP8Adam(Optimizer):
                 if hasattr(p.data, "orig_data"):
                     p.data.orig_data = None
 
-                # if p.data.dtype == torch.float16:
-                #     assert 1 == 1
-
         assert len(self.master_weights) == len(self.fp8_weights)
         # TODO(xrsrke): auto free fp32 weights from memory
 
@@ -300,17 +296,12 @@ class FP8Adam(Optimizer):
         for group in self.param_groups:
             group.setdefault("amsgrad", False)
 
-    # def _set_logging(self):
-    #     pass
-
     def _init_optim_states(
         self,
         state: Dict[str, Any],
         p: nn.Parameter,
         # amsgrad: bool
     ) -> None:
-        # TODO(xrsrke): move this to constants.py
-
         # TODO(xrsrke): only cast to FP8Tensor if the dtype is FP8
         # state["exp_avg"] = FP8Tensor(torch.zeros(p.data.shape, memory_format=torch.preserve_format), dtype=self.exp_avg_dtype)
 
@@ -320,11 +311,6 @@ class FP8Adam(Optimizer):
         # exp_avg = torch.zeros(p.data.shape, dtype=torch.float32, device="cuda")
         # exp_avg = FP8Tensor(exp_avg, dtype=self.exp_avg_dtype)
 
-        # Exponential moving average of squared gradient values
-        # TODO(xrsrke): don't fixed the dtype to fp16
-        # exp_avg_sq = torch.zeros(p.data.shape, dtype=torch.float32, device="cuda")
-        # exp_avg_sq = FP16Tensor(exp_avg_sq, dtype=DTypes.KFLOAT16)
-
         exp_avg = torch.zeros(p.data.shape, dtype=torch.float32, device="cuda")
         exp_avg_sq = torch.zeros(p.data.shape, dtype=torch.float32, device="cuda")
 
@@ -332,28 +318,15 @@ class FP8Adam(Optimizer):
         state["exp_avg"] = exp_avg
         state["exp_avg_sq"] = exp_avg_sq
 
-        # if amsgrad:
-        #     # Maintains max of all exp. moving avg. of sq. grad. values
-        #     state["max_exp_avg_sq"] = torch.zeros_like(p.data, memory_format=torch.preserve_format)
-
-    # @torchsnooper.snoop()
-    # @snoop
     @torch.no_grad()
     def step(self):
         # NOTE: sanity check the entire params has at least one grad
-        # assert any(p.grad is not None for group in self.param_groups for p in group["params"])
-
         # TODO(xrsrke): remove this after debugging
         num_param_has_grads = 0
         for g in self.param_groups:
             for p in g["params"]:
-                # if p.data.__class__ == torch.Tensor:
-                #     if p.grad is not None:
-                #         num_param_has_grads += 1
-                # elif p.data.__class__ == FP8Tensor:
-                #     if hasattr(p.data, "_temp_grad") and p.data._temp_grad is not None:
-                #         num_param_has_grads += 1
                 grad = get_grad_from_parameter(p)
+                assert grad is not None
                 if p is not None:
                     num_param_has_grads += 1
 
@@ -365,137 +338,103 @@ class FP8Adam(Optimizer):
         for i, group in enumerate(self.param_groups):
             for p in group["params"]:
                 loggings[p] = {}
-
                 state = self.state[p]
                 if len(state) == 0:
                     self._init_optim_states(state, p)
 
-                IS_FP8 = p.data.__class__ == FP8Tensor
+                data = get_data_from_param(p)
+                IS_FP8 = data.__class__ == FP8Tensor
+
+                if "0.pp_block.mlp.down_proj.weight" in self.params_id_to_param_names[id(p)]:
+                    assert 1 == 1
 
                 if IS_FP8:
                     assert p in self.mappping_fp8_to_master_weight, "FP8Tensor should have a master weight"
                     fp16_data = self.mappping_fp8_to_master_weight[p]
                     fp32_data = convert_tensor_from_fp16(fp16_data, torch.float32)
-                    grad = p.data._temp_grad
+                    grad = get_grad_from_parameter(p)
+                    assert grad is not None
                     fp32_grad = convert_tensor_from_fp8(grad, grad.fp8_meta, torch.float32)
                 else:
-                    fp16_data = p.data
-                    fp32_data = fp16_data.to(torch.float32)
-                    # NOTE: the bias of FP8 parameter saves its gradient in p.data.grad
-                    # and the weight, and bias of non-FP8 parameter saves its gradient in p.grad
-                    # try:
-                    #     assert (p.data.grad is None and p.grad is None) is False
-                    # except:
-                    #     assert 1 == 1
-                    # assert (p.data.grad is None and p.grad is None) is False
-
-                    # grad = p.data.grad if p.data.grad is not None else p.grad
+                    fp32_data = data.to(torch.float32)
                     grad = get_grad_from_parameter(p)
+                    assert grad is not None
                     fp32_grad = grad.to(torch.float32)
 
-                if p.__class__ == NanotronParameter:
-                    if IS_FP8:
-                        assert p.data.dtype in FP8_DTYPES
-                    else:
-                        assert p.data.dtype == torch.float16
+                if IS_FP8:
+                    assert data.dtype in FP8_DTYPES
+                    assert grad.dtype in FP8_DTYPES
                 else:
-                    assert (isinstance(p, FP8Parameter) and p.dtype in FP8_DTYPES) or (
-                        isinstance(p, torch.Tensor) and p.dtype == torch.float16
-                    ), f"type(p)={type(p)}, p.dtype={p.dtype}"
+                    assert data.dtype == torch.float16
+                    assert grad.dtype == torch.float16
 
-                assert (isinstance(grad, FP8Tensor) and grad.dtype in FP8_DTYPES) or (
-                    isinstance(grad, torch.Tensor) and grad.dtype == torch.float16
-                )
-
-                loggings[p]["hp_grad"] = compute_stas(fp32_grad)
+                assert fp32_data.dtype == torch.float32
+                assert fp32_grad.dtype == torch.float32
 
                 if is_overflow_underflow_nan(fp32_grad):
                     self._is_overflow = True
                     raise ValueError("Overflow, underflow, or NaN detected in the gradients")
 
-                if fp32_grad.is_sparse:
-                    raise RuntimeError("FP8Adam does not support sparse gradients!")
+                fp32_exp_avg, fp32_exp_avg_sq = state["exp_avg"], state["exp_avg_sq"]
+                assert fp32_exp_avg.dtype == torch.float32
+                assert fp32_exp_avg_sq.dtype == torch.float32
 
                 beta1, beta2 = group["betas"]
+                lr = group["lr"]
+                step = state["step"]
+                step += 1
 
-                state["step"] += 1
-                bias_correction1 = 1 - beta1 ** state["step"]
-                bias_correction2 = 1 - beta2 ** state["step"]
+                param_name = self.params_id_to_param_names[id(p)]
+                if "0.pp_block.mlp.down_proj.weight" in param_name or "lm_head" in param_name:
+                    from nanotron import constants
+
+                    write_to_file(
+                        f"step={constants.ITERATION_STEP}, param={param_name}, lr={group['lr']}, initial_lr={group['initial_lr']}",
+                        filename="/fsx/phuc/temp/temp3_env_for_fp8/nanotron/lr_logs.txt",
+                    )
+
+                fp32_exp_avg = beta1 * fp32_exp_avg + (1 - beta1) * fp32_grad
+                fp32_exp_avg_sq = beta2 * fp32_exp_avg_sq + (1 - beta2) * fp32_grad.pow(2)
+
+                bias_correction1 = 1 - (beta1**step)
+                bias_correction2 = 1 - (beta2**step)
+
+                unbiased_fp32_exp_avg = fp32_exp_avg / bias_correction1
+                unbiased_fp32_exp_avg_sq = fp32_exp_avg_sq / bias_correction2
+
+                denom = unbiased_fp32_exp_avg_sq.sqrt() + group["eps"]
+                normalized_grad = unbiased_fp32_exp_avg / denom
+                new_fp32_data = fp32_data - lr * normalized_grad
+
+                if IS_FP8:
+                    self.mappping_fp8_to_master_weight[p] = FP16Tensor(new_fp32_data, dtype=DTypes.KFLOAT16)
+                    p.data.set_data(new_fp32_data)
+                else:
+                    new_fp16 = new_fp32_data.to(torch.float16)
+                    new_fp16.requires_grad = True
+                    p.data = new_fp16
+                    assert get_data_from_param(p) is new_fp16
+
+                # delete_tensor_from_memory(new_fp32_data)
+                # delete_tensor_from_memory(denom)
+
+                state["exp_avg"] = fp32_exp_avg
+                state["exp_avg_sq"] = fp32_exp_avg_sq
+                state["step"] = step
+
+                loggings[p]["hp_grad"] = compute_stas(fp32_grad)
+                loggings[p]["group:lr"] = {"value": lr}
+                loggings[p]["group:eps"] = {"value": group["eps"]}
 
                 loggings[p]["group:beta1"] = {"value": beta1}
                 loggings[p]["group:beta2"] = {"value": beta2}
                 loggings[p]["bias_correction1"] = {"value": bias_correction1}
                 loggings[p]["bias_correction2"] = {"value": bias_correction2}
 
-                # TODO(xrsrke): can we do all calculations in fp8?
-                # NOTE: somehow the view of bias changed, but the storage is the same
-                # so we can't do the mapping, so now we map data_ptr to data_ptr
-                # TODO(xrsrke): ideally, we should map tensor to tensor
-                # it's easier to debug (u know which tensor is which)
-                # loggings[p]["lp_p"] = compute_stas(fp16_data)
-
-                assert fp16_data.dtype == torch.float16
-
-                loggings[p]["hp_p"] = compute_stas(fp32_data)
-
-                assert fp32_data.dtype == torch.float32
-                assert fp32_grad.dtype == torch.float32
-
-                if group["weight_decay"] != 0:
-                    fp32_grad = fp32_grad.add(group["weight_decay"], fp32_data)
-
-                # Decay the first and second moment running average coefficient
-                fp32_exp_avg, fp32_exp_avg_sq = state["exp_avg"], state["exp_avg_sq"]
-                assert fp32_exp_avg.dtype == torch.float32
-                assert fp32_exp_avg_sq.dtype == torch.float32
-
                 loggings[p]["hp_exp_avg"] = compute_stas(fp32_exp_avg)
                 loggings[p]["hp_exp_avg_sq"] = compute_stas(fp32_exp_avg_sq)
-
-                assert fp32_exp_avg.dtype == torch.float32
-                assert fp32_exp_avg_sq.dtype == torch.float32
-
-                fp32_exp_avg.mul_(beta1).add_(1 - beta1, fp32_grad)
-                fp32_exp_avg_sq.mul_(beta2).addcmul_(1 - beta2, fp32_grad, fp32_grad)
-
-                denom = (fp32_exp_avg_sq.sqrt() / math.sqrt(bias_correction2)).add_(group["eps"])
+                loggings[p]["hp_p"] = compute_stas(fp32_data)
                 loggings[p]["denom"] = compute_stas(denom)
-
-                if i == 4 and dist.get_rank() == 0:
-                    assert 1 == 1
-
-                # if p.__class__ == NanotronParameter:
-                #     # NOTE: "initial_lr" is the peak lr
-                #     # "lr" is the current lr based on scheduler
-                #     # lr = group["initial_lr"] if "initial_lr" in group else group["lr"]
-                #     lr = group["lr"]
-                # else:
-                #     lr = group["lr"]
-
-                lr = group["lr"]
-                step_size = lr / bias_correction1
-
-                loggings[p]["group:lr"] = {"value": lr}
-                loggings[p]["group:eps"] = {"value": group["eps"]}
-                loggings[p]["step_size"] = {"value": step_size}
-
-                new_fp32 = fp32_data - step_size * (fp32_exp_avg / denom)
-
-                # assert not torch.allclose(new_fp32, fp32_data)
-
-                if IS_FP8:
-                    self.mappping_fp8_to_master_weight[p] = FP16Tensor(new_fp32, dtype=DTypes.KFLOAT16)
-                    p.data.set_data(new_fp32)
-                    # assert torch.allclose(p.data, new_fp32)
-                else:
-                    new_fp16 = new_fp32.to(torch.float16)
-                    new_fp16.requires_grad = True
-                    p.data = new_fp16
-                    delete_tensor_from_memory(new_fp16)
-                    assert torch.allclose(p.data, new_fp16)
-
-                delete_tensor_from_memory(new_fp32)
-                delete_tensor_from_memory(denom)
 
         self.loggings = loggings
 
@@ -503,20 +442,20 @@ class FP8Adam(Optimizer):
         for group in self.param_groups:
             for p in group["params"]:
                 # NOTE: take the assumption that nanotron requires all parameters to have gradients
-                # if (p.data.__class__ == FP8Tensor or not hasattr(p.data, "_temp_grad")) or \
-                #     (p.data.__class__ == FP8Tensor and hasattr(p.data, "_temp_grad") and p.data._temp_grad is None) or \
-                #     (p.data.__class__ == torch.Tensor and p.grad is None):
-                #     continue
+                # if p.data.__class__ == FP8Tensor:
+                #     if hasattr(p.data, "_temp_grad") and p.data._temp_grad is not None:
+                #         delete_tensor_from_memory(p.data._temp_grad)
+                #         p.data._temp_grad = None
+                # else:
+                # if p.grad is not None:
+                #     delete_tensor_from_memory(p.grad)
+                #     p.grad = None
 
-                if p.data.__class__ == FP8Tensor:
-                    if hasattr(p.data, "_temp_grad") and p.data._temp_grad is not None:
-                        delete_tensor_from_memory(p.data._temp_grad)
-                        p.data._temp_grad = None
-                else:
-                    if p.grad is not None:
-                        delete_tensor_from_memory(p.grad)
-                        p.grad = None
+                # if p.data.grad is not None:
+                #     delete_tensor_from_memory(p.data.grad)
+                #     p.data.grad = None
 
-                    if p.data.grad is not None:
-                        delete_tensor_from_memory(p.data.grad)
-                        p.data.grad = None
+                set_grad_none_for_sliced_or_param(p)
+
+                assert p.grad is None
+                assert p.data.grad is None

@@ -326,7 +326,13 @@ def get_tensor(t):
 
 def get_data_from_param(p: NanotronParameter):
     assert p.__class__ == NanotronParameter
+    # NOTE: this return the data that gradients can flow into
     return p.data
+    # if p.data.__class__ == nn.Parameter:
+    #     # NOTE: this is non-fp8 parameters
+    #     return p.data.data
+    # else:
+    #     return p.data
 
 
 def set_grad_none_for_param(p: NanotronParameter):

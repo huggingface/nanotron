@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import List, Literal, Union
+from typing import List, Literal, Optional, Union
 
 from nanotron.fp8.constants import DTypes
 from nanotron.fp8.recipe import FP8Accumulate, FP8OptimRecipe, FP8SplitAccumulator, FP8TensorRecipe
@@ -33,5 +33,5 @@ class FP8LayerArgs:
 
 @dataclass
 class FP8Args:
-    model: List[FP8LayerArgs]
-    optim: FP8OptimRecipe
+    model: Optional[List[FP8LayerArgs]] = None
+    optim: Optional[FP8OptimRecipe] = None

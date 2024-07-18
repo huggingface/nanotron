@@ -2,10 +2,10 @@ from typing import List, Union
 
 import torch
 import torch.distributed as dist
+from torch import nn
 from torch.distributed import *  # noqa
 
 from nanotron.distributed import *
-from nanotron.fp8.parameter import FP8Parameter
 from nanotron.fp8.tensor import FP8Tensor, convert_tensor_from_fp8
 from nanotron.parallel.parameters import NanotronParameter, get_data_from_param
 
@@ -16,7 +16,7 @@ def all_reduce(
     group: Optional[dist.ProcessGroup] = None,
     async_op: bool = False,
 ):
-    assert tensor.__class__ in [torch.Tensor, NanotronParameter]
+    assert tensor.__class__ in [torch.Tensor, nn.Parameter, NanotronParameter]
     data = get_data_from_param(tensor) if tensor.__class__ == NanotronParameter else tensor
 
     dist.all_reduce(data, op=op, group=group, async_op=async_op)
@@ -28,7 +28,8 @@ def all_gather(
     group: dist.ProcessGroup,
     async_op: bool = False,
 ) -> torch.Tensor:
-    tensor = tensor.data if tensor.__class__ == FP8Parameter else tensor
+    # tensor = tensor.data if tensor.__class__ == FP8Parameter else tensor
+    tensor = get_data_from_param(tensor) if tensor.__class__ == NanotronParameter else tensor
     # assert isinstance(tensor, FP8Tensor) if isinstance(tensor, FP8Tensor) else isinstance(tensor, torch.Tensor)
 
     if tensor.__class__ == FP8Tensor:
@@ -39,6 +40,4 @@ def all_gather(
             else tensor
         )
 
-    dist.all_gather(tensor_list, tensor, group, async_op)
-
-    return tensor
+    dist.all_gather(tensor_list=tensor_list, tensor=tensor, group=group, async_op=async_op)

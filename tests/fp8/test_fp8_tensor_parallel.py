@@ -12,7 +12,7 @@ from nanotron.fp8.linear import FP8LinearMeta
 from nanotron.fp8.recipe import FP8Accumulate, FP8LinearRecipe, FP8SplitAccumulator, FP8TensorRecipe
 from nanotron.fp8.tensor import FP8Tensor, convert_tensor_from_fp8
 from nanotron.parallel import ParallelContext
-from nanotron.parallel.parameters import NanotronParameter, get_grad_from_parameter
+from nanotron.parallel.parameters import NanotronParameter, get_data_from_param, get_grad_from_parameter
 from nanotron.parallel.tensor_parallel.enum import TensorParallelLinearMode
 from nanotron.parallel.tensor_parallel.nn import (
     FP8TensorParallelColumnLinear,
@@ -154,16 +154,17 @@ def _test_fp8_column_recipe(
 
     # NOTE: assert the bias dtype = accum_dtype
     # assert the metadata config
-    check_fp8_tensor_based_on_recipe(linear.weight.data, recipe.weight)
+    # check_fp8_tensor_based_on_recipe(linear.weight.data, recipe.weight)
+    check_fp8_tensor_based_on_recipe(get_data_from_param(linear.weight), recipe.weight)
     if bias is True:
         if linear_cls is FP8TensorParallelRowLinear and dist.get_rank(linear.pg) != 0:
             # NOTE: in row linear, only rank 0 has bias
             assert linear.bias is None
         else:
-            assert 1 == 1
-            # check_fp8_tensor_based_on_recipe(linear.bias.data, QTYPE_TO_DTYPE[recipe.accum_dtype])
-            assert linear.bias.data.data.data.__class__ == torch.Tensor
-            assert linear.bias.data.data.data.dtype == QTYPE_TO_DTYPE[recipe.accum_dtype]
+            # assert linear.bias.data.data.data.__class__ == torch.Tensor
+            # assert linear.bias.data.data.data.dtype == QTYPE_TO_DTYPE[recipe.accum_dtype]
+            assert get_data_from_param(linear.bias).__class__ == nn.Parameter
+            assert get_data_from_param(linear.bias).dtype == QTYPE_TO_DTYPE[recipe.accum_dtype]
 
     output = linear(input)
 
@@ -176,7 +177,7 @@ def _test_fp8_column_recipe(
     if bias is True:
         if not (linear_cls is FP8TensorParallelRowLinear and dist.get_rank(linear.pg) != 0):
             # assert linear.bias.data.grad.dtype == QTYPE_TO_DTYPE[recipe.accum_dtype]
-            assert get_grad_from_parameter(linear.bias) == QTYPE_TO_DTYPE[recipe.accum_dtype]
+            assert get_grad_from_parameter(linear.bias).dtype == QTYPE_TO_DTYPE[recipe.accum_dtype]
 
     parallel_context.destroy()
 
@@ -211,7 +212,8 @@ def _test_fp8_column_linear_metadata(
     )
 
     assert isinstance(column_linear.weight, NanotronParameter)
-    assert isinstance(column_linear.weight.data, FP8Tensor)
+    # assert isinstance(column_linear.weight.data, FP8Tensor)
+    assert isinstance(get_data_from_param(column_linear.weight), FP8Tensor)
     assert isinstance(column_linear.recipe, FP8LinearRecipe)
     assert isinstance(column_linear.metadatas, FP8LinearMeta)
 
@@ -277,13 +279,15 @@ def _test_column_linear(
         # weight = convert_tensor_from_fp8(weight, weight.fp8_meta, torch.float16),
         dist.all_gather(
             tensor_list=list(reference_linear.weight.split(out_features_per_tp_rank, dim=0)),
-            tensor=column_linear.weight.data,
+            # tensor=column_linear.weight.data,
+            tensor=get_data_from_param(column_linear.weight),
             group=parallel_context.tp_pg,
         )
 
         if with_bias is True:
             # TODO(xrsrke): support if bias is in FP8
-            bias = column_linear.bias.data
+            # bias = column_linear.bias.data
+            bias = get_data_from_param(column_linear.bias)
             bias = bias.to(reference_linear.bias.dtype) if bias.dtype != reference_linear.bias.dtype else bias
             dist.all_gather(
                 tensor_list=list(reference_linear.bias.split(out_features_per_tp_rank, dim=0)),
@@ -294,7 +298,8 @@ def _test_column_linear(
     # TODO(xrsrke)
     if with_bias is True:
         assert column_linear.bias.requires_grad is (with_bias is True)
-        assert column_linear.bias.data.__class__ == torch.Tensor
+        # assert column_linear.bias.data.__class__ == torch.Tensor
+        assert get_data_from_param(column_linear.bias).__class__ == nn.Parameter
         # assert column_linear.bias.data.requires_grad is (with_bias is True)
 
     # Generate random input
@@ -370,7 +375,12 @@ def _test_column_linear(
     )
 
     torch.testing.assert_close(
-        convert_tensor_from_fp8(column_linear.weight.data, column_linear.weight.data.fp8_meta, torch.float16),
+        # convert_tensor_from_fp8(column_linear.weight.data, column_linear.weight.data.fp8_meta, torch.float16),
+        convert_tensor_from_fp8(
+            get_data_from_param(column_linear.weight),
+            get_data_from_param(column_linear.weight).fp8_meta,
+            torch.float16,
+        ),
         reference_linear.weight[hidden_dim_slice].to(torch.float16),
         rtol=0.1,
         atol=0.1,
@@ -403,11 +413,14 @@ def _test_column_linear(
             reference_linear.bias.grad[hidden_dim_slice],
         )
 
-    if isinstance(column_linear.weight.data, FP8Tensor):
-        grad = column_linear.weight.data._temp_grad
-        grad = convert_tensor_from_fp8(grad, column_linear.weight.data._temp_grad.fp8_meta, torch.float16)
+    if isinstance(get_data_from_param(column_linear.weight), FP8Tensor):
+        # grad = column_linear.weight.data._temp_grad
+        # grad = convert_tensor_from_fp8(grad, column_linear.weight.data._temp_grad.fp8_meta, torch.float16)
+        grad = get_grad_from_parameter(column_linear.weight)
+        grad = convert_tensor_from_fp8(grad, grad.fp8_meta, torch.float16)
     else:
-        grad = column_linear.weight.grad
+        # grad = column_linear.weight.grad
+        grad = get_grad_from_parameter(column_linear.weight)
 
     torch.testing.assert_close(
         grad,
@@ -476,12 +489,14 @@ def _test_row_linear(
         * in_features_per_rank : (dist.get_rank(parallel_context.tp_pg) + 1)
         * in_features_per_rank,
     ]
-    row_linear.weight.data.set_data(sharded_weight)
+    # row_linear.weight.data.set_data(sharded_weight)
+    get_data_from_param(row_linear.weight).set_data(sharded_weight)
 
     if with_bias is True:
         # broadcast bias from rank 0, and the other don't have bias
         if dist.get_rank(parallel_context.tp_pg) == 0:
-            row_linear.bias.data.copy_(reference_linear.bias)
+            # row_linear.bias.data.copy_(reference_linear.bias)
+            get_data_from_param(row_linear.bias).copy_(reference_linear.bias)
 
         dist.broadcast(
             tensor=reference_linear.bias,
@@ -515,7 +530,10 @@ def _test_row_linear(
     end_idx = (dist.get_rank(parallel_context.tp_pg) + 1) * in_features_per_rank
     sharded_portion = (slice(None), slice(start_idx, end_idx))
     torch.testing.assert_close(
-        convert_tensor_from_fp8(row_linear.weight.data, row_linear.weight.data.fp8_meta, torch.float16),
+        # convert_tensor_from_fp8(row_linear.weight.data, row_linear.weight.data.fp8_meta, torch.float16),
+        convert_tensor_from_fp8(
+            get_data_from_param(row_linear.weight), get_data_from_param(row_linear.weight).fp8_meta, torch.float16
+        ),
         reference_linear.weight.to(torch.float16)[sharded_portion],
         rtol=0.1,
         atol=0.1,
@@ -561,11 +579,15 @@ def _test_row_linear(
         else:
             assert row_linear.bias is None
 
-    if isinstance(row_linear.weight.data, FP8Tensor):
-        grad = row_linear.weight.data._temp_grad
-        grad = convert_tensor_from_fp8(grad, row_linear.weight.data._temp_grad.fp8_meta, torch.float16)
+    # if isinstance(row_linear.weight.data, FP8Tensor):
+    if isinstance(get_data_from_param(row_linear.weight), FP8Tensor):
+        # grad = row_linear.weight.data._temp_grad
+        # grad = convert_tensor_from_fp8(grad, row_linear.weight.data._temp_grad.fp8_meta, torch.float16)
+        grad = get_grad_from_parameter(row_linear.weight)
+        grad = convert_tensor_from_fp8(grad, grad.fp8_meta, torch.float16)
     else:
-        grad = row_linear.weight.grad
+        # grad = row_linear.weight.grad
+        grad = get_grad_from_parameter(row_linear.weight)
 
     torch.testing.assert_close(
         grad,

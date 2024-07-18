@@ -71,15 +71,6 @@ optimizer:
     lr_warmup_style: linear
     min_decay_lr: 0.00006
 
-  # learning_rate_scheduler:
-  #   learning_rate: 0.01
-  #   lr_decay_starting_step: null
-  #   lr_decay_steps: null
-  #   lr_decay_style: cosine
-  #   lr_warmup_steps: 0 # 10% warm up of total training steps
-  #   lr_warmup_style: linear
-  #   min_decay_lr: 0.00006
-
   optimizer_factory:
     adam_beta1: 0.9
     adam_beta2: 0.95
