@@ -110,7 +110,6 @@ def micro_batcher(
                 padding=tokenizer_config.padding,
                 max_length=tokenizer_config.max_input_length,
                 truncation=tokenizer_config.truncation,
-                # pad_to_multiple_of=8
             )
 
             encodings["attention_mask"] = encodings.attention_mask.to(dtype=torch.bool, device="cuda")
@@ -239,7 +238,6 @@ def decode_text(
                 start_time, elapsed_time_first_iteration = time.perf_counter(), 0
 
             for generation_iter in range(max_new_tokens):
-
                 if is_bench and generation_iter == 0:
                     torch.cuda.synchronize()
                     elapsed_time_first_iteration = start_time - time.perf_counter()
@@ -489,6 +487,146 @@ def decode_text(
                             input_ids=TensorPointer(group_rank=decoder_input_rank),
                             generation_ids=TensorPointer(group_rank=decoder_input_rank),
                         )
+
+
+def adjust_padding(input_ids, attention_mask, pad_token_id=128001, pad_to_multiple_of=4, padding_left=True):
+    """
+    This function pad or remove paddiings to make the sequence length a multiple of "pad_to_multiple_of"
+    two modes: padding on the left or right.
+    Use with decode_text_simple for 1M tokens context length.
+    """
+    # Count the number of padding tokens on the left side
+    padding_tokens_count = (input_ids == pad_token_id).sum(dim=1).item()
+    # padding_tokens_count = (input_ids == pad_token_id).sum(dim=1).item()
+    input_length = input_ids.size(1)
+
+    # Calculate the required padding to make the length a multiple of pad_to_multiple_of
+    padding_length = (pad_to_multiple_of - input_length % pad_to_multiple_of) % pad_to_multiple_of
+
+    if (
+        padding_tokens_count >= pad_to_multiple_of - padding_length
+    ):  # pad k tokens = remove 8-k tokens, if pad_to_multiple_of = 8
+        # Remove excessive padding tokens to make the length a multiple of pad_to_multiple_of
+        excess_padding = pad_to_multiple_of - padding_length
+        ## padding is on the left or right.
+        if padding_left:
+            input_ids = input_ids[:, excess_padding:]
+            attention_mask = attention_mask[:, excess_padding:]
+        else:
+            input_ids = input_ids[:, :-excess_padding]
+            attention_mask = attention_mask[:, :-excess_padding]
+    else:
+        # Add padding tokens to the left side
+        if padding_length > 0:
+            padding = torch.full((input_ids.size(0), padding_length), pad_token_id, dtype=torch.long).to(
+                "cuda"
+            )  # [batch_size, padding_length]
+            if padding_left:
+                input_ids = torch.cat([padding, input_ids], dim=1)
+                attention_mask = torch.cat([torch.zeros_like(padding), attention_mask], dim=1)
+            else:
+                input_ids = torch.cat([input_ids, padding], dim=1)
+                attention_mask = torch.cat([attention_mask, torch.zeros_like(padding)], dim=1)
+    return input_ids, attention_mask
+
+
+@torch.inference_mode()
+def decode_text_simple(
+    input_texts: List[str],
+    tokenizer: "PreTrainedTokenizer",
+    model: LlamaModel,
+    parallel_context: ParallelContext,
+    max_new_tokens: int,
+    pad_to_multiple_of: Optional[int] = 8,
+    padding_left: Optional[bool] = False,
+):
+    """
+    Use this function only when dealing with long context.
+    A simpler decode text function without PP aims to support long context(e.g. 1M tokens) inference by adjust padding.
+    For sequence length = 1M, TP=8(reduce scatter mode) and SP=2 is needed. For sequence length <= 512K, TP=8(reduce scatter mode) and SP=1 is enough.
+    Specifically, SP need padding on the right for now(faster with flash_attn_func and easier to implement).
+    TODO: Only tested when batch size = 1.  KV cache is not implemented yet. For faster inference, consider using decode_text.
+    """
+    assert parallel_context.sp_pg.size() == 1 or (
+        parallel_context.sp_pg.size() > 1 and not padding_left
+    ), "For SP, should use padding right for inference."
+    output_texts = []
+    pad_token_id = tokenizer.pad_token_id
+    sampler = GreedySampler(
+        pg=parallel_context.tp_pg
+    )  # Notice that the logics for gathering sharded logits(last dim) are implemented in the sampler.
+    for input_text in input_texts:
+        inputs = tokenizer(input_text, return_tensors="pt").to("cuda")
+        input_ids, attention_mask = inputs["input_ids"], inputs["attention_mask"]
+        num_input_tokens = attention_mask.sum().item()
+        sp_world_size = dist.get_world_size(parallel_context.sp_pg)
+        sp_rank = dist.get_rank(parallel_context.sp_pg)
+        # Generate output
+        for i in range(max_new_tokens):
+            input_ids, attention_mask = adjust_padding(
+                input_ids,
+                attention_mask,
+                pad_token_id,
+                pad_to_multiple_of=pad_to_multiple_of,
+                padding_left=padding_left,
+            )
+            if parallel_context.sp_pg.size() > 1:
+                assert (
+                    input_ids.size(1) % (2 * sp_world_size) == 0
+                ), "The sequence length should be a multiple of 2*world_size. Check padding function"
+                chunk_size = input_ids.size(1) // (2 * sp_world_size)  # chunk size
+            local_outputs = model(input_ids=input_ids, input_mask=attention_mask).transpose(
+                0, 1
+            )  # batch_size x seq_length/sp x vocab_size/tp
+            # I don't gather the output along the sequnce level for SP. Because it takes way too much memory.
+            if parallel_context.sp_pg.size() > 1:
+                last_token = attention_mask.sum(dim=1).item() - 1  # the last token before padding
+                last_token_chunk = last_token // chunk_size  # the chunk index of the last token
+                GPU_idx = (
+                    last_token_chunk if last_token_chunk < sp_world_size else 2 * sp_world_size - 1 - last_token_chunk
+                )  # the GPU index of the last token among the SP group
+                last_token_idx = (
+                    last_token % chunk_size + chunk_size
+                    if last_token_chunk >= sp_world_size
+                    else last_token % chunk_size
+                )  # the token index in the GPU
+                if sp_rank == GPU_idx:
+                    next_token_id = sampler(sharded_logits=local_outputs[:, last_token_idx, :])
+                else:
+                    next_token_id = torch.zeros((input_ids.size(0), 1), dtype=torch.long).to("cuda")
+                dist.barrier(group=parallel_context.sp_pg)  # all process have to wait for the sampler to finish
+                dist.broadcast(
+                    next_token_id,
+                    src=dist.get_global_rank(parallel_context.sp_pg, GPU_idx),
+                    group=parallel_context.sp_pg,
+                )  # broadcast the generated token to all process.  Source rank on global process group (regardless of group argument).
+                # replace the padding with generated token(padding on the right side)
+                if last_token + 1 < input_ids.size(1):  # replace the padding with generated token
+                    input_ids[:, last_token + 1] = next_token_id
+                    attention_mask[:, last_token + 1] = 1
+                else:  # insert the generated token when there is no padding to replace
+                    input_ids = torch.cat([input_ids, next_token_id], dim=1)
+                    attention_mask = torch.cat([attention_mask, torch.ones_like(next_token_id)], dim=1)
+            # without SP. We can just use sampler to generate the next token.
+            else:
+                if padding_left:
+                    last_token = -1
+                    next_token_id = sampler(sharded_logits=local_outputs[:, last_token, :])  # batch_size x 1
+                    input_ids = torch.cat([input_ids, next_token_id], dim=1)
+                    attention_mask = torch.cat([attention_mask, torch.ones_like(next_token_id)], dim=1)
+                else:
+                    last_token = attention_mask.sum(dim=1).item() - 1  # the last token before padding
+                    next_token_id = sampler(sharded_logits=local_outputs[:, last_token, :])
+                    if last_token + 1 < input_ids.size(1):  # replace the padding with generated token
+                        input_ids[:, last_token + 1] = next_token_id
+                        attention_mask[:, last_token + 1] = 1
+                    else:  # insert the generated token when there is no padding to replace
+                        input_ids = torch.cat([input_ids, next_token_id], dim=1)
+                        attention_mask = torch.cat([attention_mask, torch.ones_like(next_token_id)], dim=1)
+
+        generation = tokenizer.decode(input_ids[0, num_input_tokens:], skip_special_tokens=True)
+        output_texts.append({"prompt": input_text, "generation": generation})
+    return output_texts
 
 
 @torch.inference_mode()

@@ -130,3 +130,33 @@ def normal_split(rank: int, world_size: int, *args: torch.Tensor, dim=1) -> Tupl
         local_value = value.chunk(world_size, dim=dim)[rank]
         local_values.append(local_value)
     return tuple(local_values)
+
+
+## a function to merge the tensor in a zigzag way. inverse of zigzag_split
+def zigzag_merge(
+    rank: int, world_size: int, local_tensor: torch.Tensor, process_group: dist.ProcessGroup, dim: int = 1
+) -> Tuple[torch.Tensor, ...]:
+
+    # Split the local tensor into two chunks
+    chunk1, chunk2 = local_tensor.chunk(2, dim=dim)
+
+    # Create placeholders for all chunks
+    all_chunks = [torch.zeros_like(chunk1) for _ in range(2 * world_size)]
+
+    # Gather all chunks from all processes
+    dist.all_gather(all_chunks[:world_size], chunk1, group=process_group)
+    dist.all_gather(all_chunks[world_size:], chunk2, group=process_group)
+
+    # Reverse the order of the second half of chunks
+    all_chunks[world_size:] = all_chunks[world_size:][::-1]
+
+    del chunk1, chunk2
+    torch.cuda.empty_cache()
+
+    # Concatenate all chunks to form the full tensor
+    merged_tensor = torch.cat(all_chunks, dim=dim)
+
+    del all_chunks
+    torch.cuda.empty_cache()
+
+    return merged_tensor

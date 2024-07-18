@@ -40,13 +40,11 @@ from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelRowLinear,
 )
 from nanotron.random import RandomStates
-from nanotron.ring_flash_attn.ring_flash_attn import ring_flash_attn_func
-from nanotron.ring_flash_attn.utils import normal_split, zigzag_split
+from nanotron.ring_flash_attn.utils import zigzag_split
 from nanotron.ring_flash_attn.zigzag_ring_flash_attn import zigzag_ring_flash_attn_func
 from nanotron.scaling.parametrization import SpectralMupParametrizator, StandardParametrizator
 from nanotron.utils import checkpoint_method
 
-zigzag = True
 logger = logging.get_logger(__name__)
 
 
@@ -99,7 +97,6 @@ class RotaryEmbedding(nn.Module):
             self.end *= 2
             self._initialized_buffer = False
         if self._initialized_buffer is False:
-            print(f"Initializing rotary embeddings with end={self.end}")
             self.init_rotary_embeddings()
         dtype = x.dtype
         assert inner_dim % 2 == 0
@@ -135,7 +132,6 @@ class LlamaRotaryEmbedding(nn.Module):
         self.dim = dim
         self.end = end
         self.theta = theta
-        log_rank(f"Initialize LlamaRotaryEmbedding: RoPE Theta = {theta}", logger=logger, level=logging.DEBUG, rank=0)
         self.init_rotary_embeddings()
 
     def init_rotary_embeddings(self):
@@ -247,52 +243,30 @@ class MLP(nn.Module):
 class RingFlashAttention(nn.Module):
     def __init__(self, config: LlamaConfig, pg: dist.ProcessGroup):
         super().__init__()
-        # TODO @thomasw21: GPT has a weird `d_kv` config which I'm guessing is essentically a `d_qkv`
-        assert (
-            config.hidden_size % config.num_attention_heads == 0
-        ), f"Hidden size {config.hidden_size} must be divisible by number of attention heads {config.num_attention_heads}."
-        self.d_qk = config.hidden_size // config.num_attention_heads
-        self.d_v = config.hidden_size // config.num_attention_heads
-        self.is_using_mup = config.is_using_mup
-        self.checkpoint_attention = False  # Because flash_attn already does checkpointing
+        assert config.hidden_size % config.num_attention_heads == 0
+        assert config.hidden_size % config.num_key_value_heads == 0
+        assert dist.get_world_size(pg) > 1, "Ring attention process group size must be greater than 1"
         self.pg = pg
 
-    @checkpoint_method(attr_name="checkpoint_attention")
     def forward(
         self,
         local_q: torch.Tensor,  # [batch_size, q_length, n_local_q_heads, inner_dim]
         local_k: torch.Tensor,  # [batch_size, kv_length, n_local_kv_heads, inner_dim]
         local_v: torch.Tensor,  # [batch_size, kv_length, n_local_kv_heads, inner_dim]
     ):
-        # NOTE: this scale is for µTransfer,
         causal = True
-
-        if zigzag:
-            ring_out, _, _ = zigzag_ring_flash_attn_func(
-                local_q,
-                local_k,
-                local_v,
-                dropout_p=0.0,
-                causal=causal,
-                window_size=(-1, -1),
-                alibi_slopes=None,
-                deterministic=False,
-                return_attn_probs=True,
-                group=self.pg,
-            )
-        else:
-            ring_out, _, _ = ring_flash_attn_func(
-                local_q,
-                local_k,
-                local_v,
-                dropout_p=0.0,
-                causal=causal,
-                window_size=(-1, -1),
-                alibi_slopes=None,
-                deterministic=False,
-                return_attn_probs=True,
-                group=self.pg,
-            )
+        ring_out, _, _ = zigzag_ring_flash_attn_func(
+            local_q,
+            local_k,
+            local_v,
+            dropout_p=0.0,
+            causal=causal,
+            window_size=(-1, -1),
+            alibi_slopes=None,
+            deterministic=False,
+            return_attn_probs=True,
+            group=self.pg,
+        )
         return ring_out
 
 
@@ -486,6 +460,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         self.prefill_kv_len = (
             config.max_position_embeddings
         )  # TODO @nouamane: compute based on free memory, because in rope we can surpass max_position_embeddings
+        self.layer_idx = layer_idx
 
     def forward(
         self,
@@ -777,6 +752,7 @@ class LlamaDecoderLayer(nn.Module):
             sp_pg=sp_pg,
             layer_idx=layer_idx,
         )
+        self.layer_idx = layer_idx
 
         self.post_attention_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.mlp = MLP(config=config, parallel_config=parallel_config, tp_pg=tp_pg)
@@ -868,7 +844,7 @@ class LlamaModel(nn.Module):
             module_input_keys={"input_ids", "input_mask"},
             module_output_keys={"input_embeds"},
         )
-
+        log_rank(f"Initialize RoPE Theta = {config.rope_theta}", logger=logger, level=logging.INFO, rank=0)
         self.decoder = nn.ModuleList(
             [
                 PipelineBlock(
@@ -912,7 +888,6 @@ class LlamaModel(nn.Module):
             module_input_keys={"x"},
             module_output_keys={"logits"},
         )
-
         self.cast_to_fp32 = PipelineBlock(
             p2p=self.p2p,
             module_builder=lambda: lambda x: x.float(),
@@ -935,22 +910,14 @@ class LlamaModel(nn.Module):
     ):
         if isinstance(input_ids, torch.Tensor):
             batch_size, seq_length = input_ids.shape
-            position_ids = torch.arange(seq_length, device=input_ids.device).unsqueeze(0).expand(batch_size, -1)
+            position_ids = torch.cumsum(input_mask, dim=-1, dtype=torch.int32) - 1
             # split input if using ring attention
             if self.parallel_context.sp_pg.size() > 1:
                 world_size = self.parallel_context.sp_pg.size()
                 rank = dist.get_rank(self.parallel_context.sp_pg)
-
-                # zigzag split
-                if zigzag:
-                    input_ids, input_mask, position_ids = zigzag_split(
-                        rank, world_size, input_ids, input_mask, position_ids
-                    )
-                # normal split
-                else:
-                    input_ids, input_mask, position_ids = normal_split(
-                        rank, world_size, input_ids, input_mask, position_ids
-                    )
+                input_ids, input_mask, position_ids = zigzag_split(
+                    rank, world_size, input_ids, input_mask, position_ids
+                )
         else:
             position_ids = TensorPointer(input_ids.group_rank)
         # all tensors are optional as most ranks don't need anything from the dataloader.
@@ -1031,17 +998,11 @@ class Loss(nn.Module):
         # Megatron by defaults cast everything in fp32. `--f16-lm-cross-entropy` is an option you can use to keep current precision.
         # https://github.com/NVIDIA/Megatron-LM/blob/f267e6186eae1d6e2055b412b00e2e545a8e896a/megatron/model/gpt_model.py#L38
 
-        # ring attention: split the label
+        # ring attention: split the label as well
         if isinstance(label_ids, torch.Tensor) and self.sp_pg.size() > 1:
             world_size = self.sp_pg.size()
             rank = dist.get_rank(self.sp_pg)
-
-            # zigzag split
-            if zigzag:
-                label_ids, label_mask = zigzag_split(rank, world_size, label_ids, label_mask)
-            # normal split
-            else:
-                label_ids, label_mask = normal_split(rank, world_size, label_ids, label_mask)
+            label_ids, label_mask = zigzag_split(rank, world_size, label_ids, label_mask)
         loss = sharded_cross_entropy(
             sharded_logits, label_ids.transpose(0, 1).contiguous(), group=self.tp_pg, dtype=torch.float
         ).transpose(0, 1)
