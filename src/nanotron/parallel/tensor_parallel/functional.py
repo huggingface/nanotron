@@ -19,14 +19,13 @@ import torch
 from torch.nn import functional as F
 
 import nanotron.distributed as dist
-from nanotron.parallel.utils import MemoryBuffer
 from nanotron.parallel.tensor_parallel.distributed_differentiable_primitives import (
     differentiable_all_reduce_sum,
     differentiable_identity,
     differentiable_reduce_scatter_sum,
 )
 from nanotron.parallel.tensor_parallel.enum import TensorParallelLinearMode
-from nanotron.parallel.utils import assert_cuda_max_connections_set_to_1
+from nanotron.parallel.utils import MemoryBuffer, assert_cuda_max_connections_set_to_1
 
 
 class _ShardedCrossEntropy(torch.autograd.Function):
@@ -149,7 +148,9 @@ class _ColumnLinearAsyncCommunication(torch.autograd.Function):
                     group = dist.distributed_c10d._get_default_group()
                 gathered_batch_size = sharded_batch_size * group.size()
 
-                gathered_tensor = MemoryBuffer().get("allgather", (gathered_batch_size, *intermediate_size, hidden_size), dtype=tensor.dtype)
+                gathered_tensor = MemoryBuffer().get(
+                    "allgather", (gathered_batch_size, *intermediate_size, hidden_size), dtype=tensor.dtype
+                )
 
                 handle = dist.all_gather_into_tensor(gathered_tensor, tensor, group=group, async_op=True)
 
@@ -266,7 +267,9 @@ class _ColumnLinearAsyncCommunication(torch.autograd.Function):
             else:
                 unsharded_batch_size = sharded_batch_size * group.size()
 
-                unsharded_tensor = MemoryBuffer().get("allgather", (unsharded_batch_size, *rest_size), dtype=tensor.dtype)
+                unsharded_tensor = MemoryBuffer().get(
+                    "allgather", (unsharded_batch_size, *rest_size), dtype=tensor.dtype
+                )
                 handle1 = dist.all_gather_into_tensor(unsharded_tensor, tensor, group=group, async_op=True)
                 # Here we rely on CUDA_DEVICE_MAX_CONNECTIONS=1 to ensure that the
                 # gather is scheduled before the tensor gradient computation
@@ -399,7 +402,6 @@ class _ColumnLinearContextParallelNoAsync(torch.autograd.Function):
         return sub_grad_input, grad_weight, grad_bias, None, None
 
 
-
 def column_linear(
     input: torch.Tensor,
     weight: torch.Tensor,
@@ -460,7 +462,9 @@ class _RowLinearAsyncCommunication(torch.autograd.Function):
         else:
             unsharded_batch_size = sharded_batch_size * group.size()
 
-            total_grad_output = MemoryBuffer().get("allgather2", (unsharded_batch_size, *rest_size), dtype=tensor.dtype)
+            total_grad_output = MemoryBuffer().get(
+                "allgather2", (unsharded_batch_size, *rest_size), dtype=tensor.dtype
+            )
 
             # Doing gather + slicing during the NeMo forward pass can make this tensor
             # not be contiguous. PyTorch only checks if the tensor is contiguous, and only
