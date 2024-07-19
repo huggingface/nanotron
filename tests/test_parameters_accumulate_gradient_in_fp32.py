@@ -348,6 +348,7 @@ def _test_tied_weights_sync_with_grad_accum_in_fp32(
                             pp_rank=get_pp_rank_of(target, module=mdl),
                             dp_rank=dist.get_rank(parallel_context.dp_pg),
                             tp_rank=dist.get_rank(parallel_context.tp_pg),
+                            sp_rank=dist.get_rank(parallel_context.sp_pg),
                         ),
                     ),
                 )
