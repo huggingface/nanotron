@@ -260,7 +260,6 @@ def global_wrapper(rank, func, tp, pp, dp, sp, port, kwargs):
     parallel_context = ParallelContext(
         data_parallel_size=dp, pipeline_parallel_size=pp, tensor_parallel_size=tp, sequence_parallel_size=sp
     )
-    print("world_size: ", world_size)
     func(parallel_context, **kwargs)
 
 

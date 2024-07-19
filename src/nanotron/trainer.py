@@ -479,7 +479,6 @@ class DistributedTrainer:
             sync_gradients_across_dp(
                 module=self.model,
                 dp_pg=self.parallel_context.dp_sp_pg,
-                # dp_pg=self.parallel_context.dp_pg,
                 reduce_op=dist.ReduceOp.AVG,
                 # TODO @thomasw21: This is too memory hungry, instead we run all_reduce
                 reduce_scatter=False,  # optimizer.inherit_from(ZeroDistributedOptimizer),
@@ -519,7 +518,6 @@ class DistributedTrainer:
                 [output["loss"] for output in outputs]
             ).sum()  # already divided by n_micro_batches_per_batch
             # sync loss across DP/SP
-            # handle = dist.all_reduce(loss_avg, group=self.parallel_context.dp_pg, async_op=True, op=dist.ReduceOp.AVG)
             handle = dist.all_reduce(
                 loss_avg, group=self.parallel_context.dp_sp_pg, async_op=True, op=dist.ReduceOp.AVG
             )
@@ -715,7 +713,7 @@ class DistributedTrainer:
                 # Synchronize parameters so that the model is consistent
                 # sync all params across dp
                 for _, param in sorted(model.named_parameters(), key=lambda x: x[0]):
-                    dist.all_reduce(param, op=dist.ReduceOp.AVG, group=self.parallel_context.dp_pg)
+                    dist.all_reduce(param, op=dist.ReduceOp.AVG, group=self.parallel_context.dp_sp_pg)
 
                 # sync tied params across tied groups
                 for (_, group_ranks), param in sorted(
@@ -802,38 +800,8 @@ class DistributedTrainer:
             # Check that the model has at least one grad. Necessary for DDP
             check_model_has_grad(model=model, parallel_context=parallel_context)
             # TODO @thomasw21: DDP doesn't support broadcasting complex buffers (and we don't really need that broadcasting anyway)
-
-            # ### debug
-            # tensor_names = [name for name in model.state_dict()]
-            # log_rank(
-            #     f"Params: {tensor_names}, length {len(tensor_names)}",
-            #     logger=logger,
-            #     level=logging.INFO,
-            #     rank=0,
-            # )
-            # log_rank(
-            #     f"Params: {tensor_names}, length {len(tensor_names)}",
-            #     logger=logger,
-            #     level=logging.INFO,
-            #     rank=1,
-            # )
-            # log_rank(
-            #     f"Params: {tensor_names}, length {len(tensor_names)}",
-            #     logger=logger,
-            #     level=logging.INFO,
-            #     rank=2,
-            # )
-            # log_rank(
-            #     f"Params: {tensor_names}, length {len(tensor_names)}",
-            #     logger=logger,
-            #     level=logging.INFO,
-            #     rank=3,
-            # )
-            # ###
-
             model = DistributedDataParallel(
                 model,
-                # process_group=parallel_context.dp_pg,
                 process_group=parallel_context.dp_sp_pg,
                 broadcast_buffers=False,
                 bucket_cap_mb=config.model.ddp_bucket_cap_mb,

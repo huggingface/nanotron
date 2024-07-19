@@ -385,7 +385,7 @@ def init_optimizer_and_grad_accumulator(
             named_params_or_groups=named_param_groups,
             # TODO @thomasw21: We need a better API for gradient accumulation/zero etc ...
             optimizer_builder=optimizer_builder,
-            dp_pg=parallel_context.dp_sp_pg,  # sequence parallel and data parallel process group
+            dp_pg=parallel_context.dp_pg,  # TODO: add sequence parallel support. This will change the topology of the current OS checkpoint.
         )
 
         # SANITY CHECK: assert that optimizer's named_params point to model's params (check only the first one)
@@ -411,7 +411,7 @@ def init_optimizer_and_grad_accumulator(
         assert isinstance(grad_accumulator, FP32GradientAccumulator)
         grad_accumulator.assign_param_offsets(
             dp_rank=dist.get_rank(
-                parallel_context.dp_sp_pg
+                parallel_context.dp_pg
             ),  # sequence parallel and data parallel process group will synchronize the gradient together
             param_name_to_offsets=param_name_to_dp_rank_offsets,
         )

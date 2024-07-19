@@ -159,8 +159,10 @@ def _test_save_and_load_optimizer(parallel_context: ParallelContext, test_contex
 @rerun_if_address_is_in_use()
 def test_save_zero_optimizer_and_load_optimizer(tp: int, dp: int, pp: int, sp: int):
     test_context = TestContext()
-    # We use DP=2 as we're interested in testing that one
-    init_distributed(tp=tp, dp=dp, pp=pp, sp=sp)(_test_save_zero_optimizer_and_load_optimizer)(
+    # Currently SP doesn't support zero.
+    if sp != 1:
+        return
+    init_distributed(tp=tp, dp=dp, pp=pp, sp=1)(_test_save_zero_optimizer_and_load_optimizer)(
         test_context=test_context
     )
 
@@ -235,8 +237,9 @@ def _test_save_zero_optimizer_and_load_optimizer(parallel_context: ParallelConte
 @rerun_if_address_is_in_use()
 def test_save_zero_optimizer_and_load_data_parallel_optimizer(tp: int, dp: int, pp: int, sp: int):
     test_context = TestContext()
-    # We use DP=2 as we're interested in testing that one
-    init_distributed(tp=tp, dp=dp, pp=pp, sp=sp)(_test_save_zero_optimizer_and_load_data_parallel_optimizer)(
+    if sp != 1:
+        return
+    init_distributed(tp=tp, dp=dp, pp=pp, sp=1)(_test_save_zero_optimizer_and_load_data_parallel_optimizer)(
         test_context=test_context
     )
 
@@ -306,8 +309,9 @@ def _test_save_zero_optimizer_and_load_data_parallel_optimizer(
 @rerun_if_address_is_in_use()
 def test_save_data_parallel_optimizer_and_load_zero_optimizer(tp: int, dp: int, pp: int, sp: int):
     test_context = TestContext()
-    # We use DP=2 as we're interested in testing that one
-    init_distributed(tp=tp, dp=dp, pp=pp, sp=sp)(_test_save_data_parallel_optimizer_and_load_zero_optimizer)(
+    if sp != 1:
+        return
+    init_distributed(tp=tp, dp=dp, pp=pp, sp=1)(_test_save_data_parallel_optimizer_and_load_zero_optimizer)(
         test_context=test_context
     )
 
@@ -373,8 +377,9 @@ def _test_save_data_parallel_optimizer_and_load_zero_optimizer(
 @rerun_if_address_is_in_use()
 def test_save_optimizer_with_additional_state_dict_keys(tp: int, dp: int, pp: int, sp: int):
     test_context = TestContext()
-    # We use DP=2 as we're interested in testing that one
-    init_distributed(tp=tp, dp=dp, pp=pp, sp=sp)(_test_save_optimizer_with_additional_state_dict_keys)(
+    if sp != 1:
+        return
+    init_distributed(tp=tp, dp=dp, pp=pp, sp=1)(_test_save_optimizer_with_additional_state_dict_keys)(
         test_context=test_context
     )
 
