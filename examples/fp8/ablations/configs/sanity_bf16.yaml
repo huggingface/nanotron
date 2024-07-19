@@ -22,7 +22,7 @@ general:
   consumed_train_samples: null
   ignore_sanity_checks: false
   project: fp8_for_nanotron
-  run: bfloat16_2_layers_and_seq_len_256_and_micro_batch_128_and_lr_0.01_and_minipile_overfitting_and_fp8_branch_and_layernorm_and_custom_adam_and_tp_1_and_no_weight_decay_after_fixing_wrong_momentum
+  run: fp8_branch_use_bfloat16_code
   seed: 42
   step: null
 lighteval: null

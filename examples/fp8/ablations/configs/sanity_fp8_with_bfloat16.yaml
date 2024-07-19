@@ -46,7 +46,7 @@ general:
   consumed_train_samples: null
   ignore_sanity_checks: true
   project: fp8_for_nanotron
-  run: fp8_2_layers_and_seq_len_16_and_micro_batch_256_and_lr_0.0006_and_warmup_200_and_decay_800_and_no_weight_decay_and_quantize_only_model.decoder.0.mlp.down_proj
+  run: fp8_but_pure_bfloat16_only_with_sp_init
   seed: 42
   step: null
 lighteval: null
@@ -141,9 +141,6 @@ parallelism:
   pp: 1
   pp_engine: 1f1b
   tp: 1
-  # tp_linear_async_communication: true
-  # tp_mode: REDUCE_SCATTER
-
   tp_linear_async_communication: false
   tp_mode: ALL_REDUCE
 
@@ -153,15 +150,12 @@ tokenizer:
   tokenizer_name_or_path: lvwerra/the-tokenizer-v1
   tokenizer_revision: null
 tokens:
-  # NOTE: micro_batch_size * sequence_length * batch_accumulation_per_replica
-  # = 128 * 256 * 1 = 16384
   batch_accumulation_per_replica: 1
   limit_test_batches: 0
   limit_val_batches: 0
-  micro_batch_size: 256 # 256
-  # micro_batch_size: 1
+  micro_batch_size: 128 # 256
   sequence_length: 256
-  train_steps: 24376
+  train_steps: 1000
   val_check_interval: -1
 
 fp8:

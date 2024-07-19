@@ -372,7 +372,7 @@ class FP8Adam(Optimizer):
                         master_data = self.mappping_fp8_to_master_weight[p]
                         fp32_data = (
                             master_data.to(self.self.optim_accum_dtype)
-                            if master_data.dtype != selfself.optim_accum_dtype
+                            if master_data.dtype != self.optim_accum_dtype
                             else master_data
                         )
 

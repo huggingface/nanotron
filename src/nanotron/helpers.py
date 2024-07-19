@@ -327,6 +327,12 @@ def init_optimizer_and_grad_accumulator(
         optimizer = None
 
         if optimizer_args.optimizer_factory.name == "adamW":
+            log_rank(
+                "Using torch.optim.AdamW as optimizer",
+                logger=logger,
+                level=logging.INFO,
+                rank=0,
+            )
 
             def optimizer(param_groups):
                 return torch.optim.AdamW(
@@ -342,64 +348,51 @@ def init_optimizer_and_grad_accumulator(
                     fused=False,
                 )
 
+        elif optimizer_args.optimizer_factory.name == "custom_fp8_adam":
+            log_rank(
+                "Using nanotron.fp8.optim.FP8Adam as optimizer",
+                logger=logger,
+                level=logging.INFO,
+                rank=0,
+            )
+
+            def optimizer(param_groups):
+                from nanotron import constants
+                from nanotron.fp8.optim import FP8Adam
+
+                return FP8Adam(
+                    param_groups,
+                    lr=optimizer_args.learning_rate_scheduler.learning_rate,
+                    weight_decay=optimizer_args.weight_decay,
+                    eps=optimizer_args.optimizer_factory.adam_eps,
+                    betas=(
+                        optimizer_args.optimizer_factory.adam_beta1,
+                        optimizer_args.optimizer_factory.adam_beta2,
+                    ),
+                    recipe=constants.CONFIG.fp8.optim,
+                )
+
         elif optimizer_args.optimizer_factory.name == "custom_adam":
-            from nanotron import constants
+            log_rank(
+                "Using nanotron.fp8.optim.Adam as optimizer",
+                logger=logger,
+                level=logging.INFO,
+                rank=0,
+            )
 
-            if constants.CONFIG is not None and constants.CONFIG.model.dtype == torch.int8:
+            def optimizer(param_groups):
+                from nanotron.fp8.optim import Adam
 
-                def optimizer(param_groups):
-                    from nanotron.fp8.optim import FP8Adam
-
-                    log_rank(
-                        "Using FP8 Adam optimizer",
-                        logger=logger,
-                        level=logging.INFO,
-                        group=parallel_context.world_pg,
-                        rank=0,
-                    )
-
-                    return FP8Adam(
-                        param_groups,
-                        lr=optimizer_args.learning_rate_scheduler.learning_rate,
-                        weight_decay=optimizer_args.weight_decay,
-                        eps=optimizer_args.optimizer_factory.adam_eps,
-                        betas=(
-                            optimizer_args.optimizer_factory.adam_beta1,
-                            optimizer_args.optimizer_factory.adam_beta2,
-                        ),
-                        recipe=constants.CONFIG.fp8.optim,
-                    )
-
-            else:
-
-                def optimizer(param_groups):
-                    # return torch.optim.Adam(
-                    #     param_groups,
-                    #     lr=optimizer_args.learning_rate_scheduler.learning_rate,
-                    #     weight_decay=optimizer_args.weight_decay,
-                    #     eps=optimizer_args.optimizer_factory.adam_eps,
-                    #     betas=(
-                    #         optimizer_args.optimizer_factory.adam_beta1,
-                    #         optimizer_args.optimizer_factory.adam_beta2,
-                    #     ),
-                    #     # fused=optimizer_args.optimizer_factory.torch_adam_is_fused,
-                    #     # NOTE: fused (bool, optional) – whether the fused implementation (CUDA only) is used.
-                    #     # Currently, torch.float64, torch.float32, torch.float16, and torch.bfloat16
-                    #     # in FP8 training, model parameters are INT8
-                    #     fused=False,
-                    # )
-                    from nanotron.fp8.optim import Adam
-
-                    return Adam(
-                        param_groups,
-                        lr=optimizer_args.learning_rate_scheduler.learning_rate,
-                        weight_decay=optimizer_args.weight_decay,
-                        eps=optimizer_args.optimizer_factory.adam_eps,
-                        betas=(
-                            optimizer_args.optimizer_factory.adam_beta1,
-                            optimizer_args.optimizer_factory.adam_beta2,
-                        ),
-                    )
+                return Adam(
+                    param_groups,
+                    lr=optimizer_args.learning_rate_scheduler.learning_rate,
+                    weight_decay=optimizer_args.weight_decay,
+                    eps=optimizer_args.optimizer_factory.adam_eps,
+                    betas=(
+                        optimizer_args.optimizer_factory.adam_beta1,
+                        optimizer_args.optimizer_factory.adam_beta2,
+                    ),
+                )
 
         elif optimizer_args.optimizer_factory.name == "sgd":
 

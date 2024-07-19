@@ -45,6 +45,9 @@ def fp8_matmul_kernel(
     elif accum_qtype == torch.float16:
         out_dtype = getattr(tex.DType, "kFloat16")
         out_torch_dtype = torch.float16
+    elif accum_qtype == torch.bfloat16:
+        out_dtype = getattr(tex.DType, "kBFloat16")
+        out_torch_dtype = torch.bfloat16
     else:
         raise ValueError(f"Unsupported accumulation dtype: {accum_qtype}")
 

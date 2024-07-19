@@ -3,7 +3,9 @@ from abc import abstractmethod
 from enum import Enum, auto
 from typing import Dict
 
+import torch
 from nanotron.config import ModelArgs
+from nanotron.fp8.tensor import FP8Tensor
 from nanotron.nn.layer_norm import TritonRMSNorm
 from nanotron.parallel.parameters import get_data_from_param
 from nanotron.parallel.tensor_parallel.nn import (
@@ -49,16 +51,30 @@ class StandardParametrizator(Parametrizator):
         self.std = config.init_method.std
         self.num_layers = config.model_config.num_hidden_layers
 
+    # def _init_weight_from_normal_dist(self, param):
+    #     pass
+
     def _parametrize_column_linear(self, param_name: str, module: nn.Module):
         # assert param_name in ["weight", "bias"]
         assert any(x in param_name for x in ["weight", "bias"])
 
         if "weight" in param_name:
-            # init.normal_(module.weight, mean=0.0, std=self.std)
-            init.normal_(get_data_from_param(module.weight), mean=0.0, std=self.std)
+            data = get_data_from_param(module.weight)
+            if data.__class__ != FP8Tensor:
+                init.normal_(data, mean=0.0, std=self.std)
+            else:
+                new_data = torch.normal(
+                    mean=0.0, std=self.std, size=data.size(), dtype=torch.float32, device=data.device
+                )
+                data.set_data(new_data)
+
         elif "bias" in param_name:
-            # module.bias.zero_()
-            get_data_from_param(module.bias).zero_()
+            data = get_data_from_param(module.bias)
+            if data.__class__ != FP8Tensor:
+                data.zero_()
+            else:
+                new_data = torch.zeros_like(data)
+                data.set_data(new_data)
 
     def _parametrize_row_linear(self, param_name: str, module: nn.Module):
         # assert param_name in ["weight", "bias"]
@@ -66,11 +82,23 @@ class StandardParametrizator(Parametrizator):
 
         if "weight" in param_name:
             std = self.std / math.sqrt(2 * self.num_layers)
+            data = get_data_from_param(module.weight)
             # init.normal_(module.weight, mean=0.0, std=std)
-            init.normal_(get_data_from_param(module.weight), mean=0.0, std=std)
+            if data.__class__ != FP8Tensor:
+                init.normal_(data, mean=0.0, std=std)
+            else:
+                new_data = torch.normal(mean=0.0, std=std, size=data.size(), dtype=torch.float32, device=data.device)
+                data.set_data(new_data)
         elif "bias" in param_name:
             # module.bias.zero_()
             get_data_from_param(module.bias).zero_()
+
+            data = get_data_from_param(module.bias)
+            if data.__class__ != FP8Tensor:
+                data.zero_()
+            else:
+                new_data = torch.zeros_like(data)
+                data.set_data(new_data)
 
     def _parametrize_layer_norm(self, param_name: str, module: nn.Module):
         # assert param_name in ["weight", "bias"]

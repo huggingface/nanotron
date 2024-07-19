@@ -1012,38 +1012,51 @@ class LlamaForTraining(NanotronModel):
         # Fix the root_model
         module_id_to_prefix[id(model)] = ""
 
-        from nanotron import constants
+        # if constants.CONFIG.model.dtype == torch.int8 and constants.CONFIG.fp8.model is not None:
+        #     log_rank(
+        #         "Skipping initialize model parameters",
+        #         logger=logger,
+        #         level=logging.INFO,
+        #         rank=0,
+        #     )
+        #     return
 
-        if not constants.CONFIG.model.dtype == torch.int8:
-            for param_name, param in model.named_parameters():
-                assert isinstance(param, NanotronParameter)
+        log_rank(
+            "Initializing model parameters",
+            logger=logger,
+            level=logging.INFO,
+            rank=0,
+        )
 
-                module_name, param_name = param_name.rsplit(".", 1)
+        for param_name, param in model.named_parameters():
+            assert isinstance(param, NanotronParameter)
 
-                if param.is_tied:
-                    tied_info = param.get_tied_info()
-                    full_param_name = tied_info.get_full_name_from_module_id_to_prefix(
-                        module_id_to_prefix=module_id_to_prefix
-                    )
-                else:
-                    full_param_name = f"{module_name}.{param_name}"
+            module_name, param_name = param_name.rsplit(".", 1)
 
-                if full_param_name in initialized_parameters:
-                    # Already initialized
-                    continue
+            if param.is_tied:
+                tied_info = param.get_tied_info()
+                full_param_name = tied_info.get_full_name_from_module_id_to_prefix(
+                    module_id_to_prefix=module_id_to_prefix
+                )
+            else:
+                full_param_name = f"{module_name}.{param_name}"
 
-                module = model.get_submodule(module_name)
-                parametrizator.parametrize(full_param_name, module)
+            if full_param_name in initialized_parameters:
+                # Already initialized
+                continue
 
-                assert full_param_name not in initialized_parameters
-                initialized_parameters.add(full_param_name)
+            module = model.get_submodule(module_name)
+            parametrizator.parametrize(full_param_name, module)
 
-            assert initialized_parameters == {
-                param.get_tied_info().get_full_name_from_module_id_to_prefix(module_id_to_prefix=module_id_to_prefix)
-                if param.is_tied
-                else name
-                for name, param in model.named_parameters()
-            }, f"Somehow the initialized set of parameters don't match:\n - Expected: { {name for name, _ in model.named_parameters()} }\n - Got: {initialized_parameters}"
+            assert full_param_name not in initialized_parameters
+            initialized_parameters.add(full_param_name)
+
+        assert initialized_parameters == {
+            param.get_tied_info().get_full_name_from_module_id_to_prefix(module_id_to_prefix=module_id_to_prefix)
+            if param.is_tied
+            else name
+            for name, param in model.named_parameters()
+        }, f"Somehow the initialized set of parameters don't match:\n - Expected: { {name for name, _ in model.named_parameters()} }\n - Got: {initialized_parameters}"
 
     def get_embeddings_lm_head_tied_names(self):
         """Get the names of the tied embeddings and lm_head weights"""
