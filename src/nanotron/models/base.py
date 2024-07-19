@@ -246,7 +246,10 @@ def _get_modules_not_in_fp16():
     from nanotron import constants
 
     if constants.CONFIG is not None and hasattr(constants.CONFIG, "fp8"):
-        name_of_modules_not_in_fp16 = [x.module_name for x in constants.CONFIG.fp8.model]
+        if constants.CONFIG.fp8.model is None:
+            name_of_modules_not_in_fp16 = []
+        else:
+            name_of_modules_not_in_fp16 = [x.module_name for x in constants.CONFIG.fp8.model]
     else:
         name_of_modules_not_in_fp16 = []
     return name_of_modules_not_in_fp16
@@ -267,7 +270,13 @@ def _register_empty_parameter_for_fp8(module, name, param):
             IS_CONVERT_TO_FLOAT16 = True
 
         if IS_CONVERT_TO_FLOAT16:
-            param.data = param.data.to(torch.device("cuda"), torch.float16)
+            from typing import cast
+
+            from nanotron import constants
+            from nanotron.config.fp8_config import FP8Args
+
+            fp8_config = cast(FP8Args, constants.CONFIG.fp8)
+            param.data = param.data.to(torch.device("cuda"), fp8_config.accum_dtype)
         else:
             param.data = param.data.to(torch.device("cuda"))
 
@@ -286,7 +295,14 @@ def _register_empty_buffer_for_fp8(module, name, buffer, persistent=True):
             IS_CONVERT_TO_FLOAT16 = True
 
         if IS_CONVERT_TO_FLOAT16:
-            module._buffers[name] = module._buffers[name].to(torch.device("cuda"), torch.float16)
+            from typing import cast
+
+            from nanotron import constants
+            from nanotron.config.fp8_config import FP8Args
+
+            fp8_config = cast(FP8Args, constants.CONFIG.fp8)
+            # module._buffers[name] = module._buffers[name].to(torch.device("cuda"), torch.float16)
+            module._buffers[name] = module._buffers[name].to(torch.device("cuda"), fp8_config.accum_dtype)
         else:
             buffer.data = buffer.data.to(torch.device("cuda"))
 
@@ -332,6 +348,8 @@ def init_on_device_and_dtype(
     from accelerate import init_on_device
     with init_on_device_and_dtype(device=torch.device("cuda")):
         tst = nn.Liner(100, 100)  # on `cuda` device
+
+    NOTE: in order to initialize an hybrid fp8 properly, you should use this context manager
     ```
     """
     from functools import wraps

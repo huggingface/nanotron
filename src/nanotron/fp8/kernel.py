@@ -2,7 +2,6 @@ import torch
 import transformer_engine as te  # noqa
 import transformer_engine_extensions as tex
 
-from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.meta import FP8Meta
 from nanotron.fp8.tensor import FP8Tensor
 
@@ -16,7 +15,7 @@ def fp8_matmul_kernel(
     output,
     use_split_accumulator: bool,
     accumulate: bool,
-    accum_qtype: DTypes,
+    accum_qtype: torch.dtype,
     # TODO(xrsrke): remove this flag
     is_backward: bool = False,
     recipe=None,
@@ -24,16 +23,26 @@ def fp8_matmul_kernel(
     assert (
         mat_a.device != "cpu" and mat_b.device != "cpu"
     ), "The tensors must be on a CUDA device in order to use the FP8 kernel!!"
-    assert isinstance(accum_qtype, DTypes)
+    # assert isinstance(accum_qtype, DTypes)
+    assert isinstance(accum_qtype, torch.dtype)
 
     device = mat_a.device
 
     # NOTE: this is the accumulation precision dtype
     # TODO(xrsrke): move this mapping to constants
-    if accum_qtype == DTypes.KFLOAT32:
+    # if accum_qtype == DTypes.KFLOAT32:
+    #     out_dtype = getattr(tex.DType, "kFloat32")
+    #     out_torch_dtype = torch.float32
+    # elif accum_qtype == DTypes.KFLOAT16:
+    #     out_dtype = getattr(tex.DType, "kFloat16")
+    #     out_torch_dtype = torch.float16
+    # else:
+    #     raise ValueError(f"Unsupported accumulation dtype: {accum_qtype}")
+
+    if accum_qtype == torch.float32:
         out_dtype = getattr(tex.DType, "kFloat32")
         out_torch_dtype = torch.float32
-    elif accum_qtype == DTypes.KFLOAT16:
+    elif accum_qtype == torch.float16:
         out_dtype = getattr(tex.DType, "kFloat16")
         out_torch_dtype = torch.float16
     else:

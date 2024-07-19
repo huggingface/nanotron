@@ -2,7 +2,6 @@ from typing import Optional, Union
 
 import torch
 
-from nanotron.fp8.constants import QTYPE_TO_DTYPE
 from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.linear import FP8LinearMeta
 from nanotron.fp8.recipe import FP8LinearRecipe
@@ -104,7 +103,7 @@ def linear(
     # because weight and bias's requires_grad are set to False
     # so that we can compute the gradients using the fp8 kernels by ourselves
     phony = torch.empty(0, device=input.device, requires_grad=True)
-    output = torch.zeros(input.shape[0], weight.shape[0], device="cuda", dtype=QTYPE_TO_DTYPE[recipe.accum_dtype])
+    output = torch.zeros(input.shape[0], weight.shape[0], device="cuda", dtype=recipe.accum_dtype)
     output, _ = _FP8Matmul.apply(input, weight, output, phony, metadatas, recipe, name)
 
     # TODO(xrsrke): add support for adding bias in fp8

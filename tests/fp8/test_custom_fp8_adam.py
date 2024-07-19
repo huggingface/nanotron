@@ -1,10 +1,10 @@
-
 # from nanotron import distributed as dist
 import nanotron.fp8.distributed as dist
 import pytest
 import torch
 from nanotron.fp8 import constants
 from nanotron.fp8.optim import FP8Adam
+from nanotron.fp8.recipe import FP8OptimRecipe
 from nanotron.fp8.tensor import convert_tensor_from_fp8
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import get_data_from_param
@@ -13,6 +13,7 @@ from nanotron.parallel.tensor_parallel.nn import (
     FP8TensorParallelColumnLinear,
 )
 from nanotron.sanity_checks import assert_tensor_synced_across_pg
+from nanotron.testing.fp8 import OPTIM_RECIPES
 from nanotron.testing.parallel import init_distributed, rerun_if_address_is_in_use
 from torch import nn
 from torch.optim import Adam
@@ -23,12 +24,18 @@ from torch.optim import Adam
 @pytest.mark.parametrize("with_bias", [False, True])
 @pytest.mark.parametrize("lr", [0.001])  # [0.1, 0.001, 0.0004]
 @pytest.mark.parametrize("steps", [1, 5, 10, 20, 50])
+@pytest.mark.parametrize("optim_recipe", OPTIM_RECIPES)
+# @pytest.mark.parametrize("linear_recipe", LINEAR_RECIPES)
 @rerun_if_address_is_in_use()
-def test_fp8_adam(tp: int, dp: int, pp: int, with_bias: bool, lr: float, steps: int):
-    init_distributed(tp=tp, dp=dp, pp=pp)(_test_fp8_adam)(with_bias=with_bias, lr=lr, steps=steps)
+def test_fp8_adam(tp: int, dp: int, pp: int, with_bias: bool, lr: float, steps: int, optim_recipe: FP8OptimRecipe):
+    init_distributed(tp=tp, dp=dp, pp=pp)(_test_fp8_adam)(
+        with_bias=with_bias, lr=lr, steps=steps, optim_recipe=optim_recipe
+    )
 
 
-def _test_fp8_adam(parallel_context: ParallelContext, with_bias: bool, lr: float, steps: int):
+def _test_fp8_adam(
+    parallel_context: ParallelContext, with_bias: bool, lr: float, steps: int, optim_recipe: FP8OptimRecipe
+):
     # NOTE: divisible by 16 for TP
     in_features = 32
     out_features_per_tp_rank = 16
@@ -43,6 +50,7 @@ def _test_fp8_adam(parallel_context: ParallelContext, with_bias: bool, lr: float
         device="cuda",
         async_communication=False,
         bias=with_bias,
+        # recipe=linear_recipe
     )
     reference_linear = nn.Linear(in_features=in_features, out_features=out_features, bias=with_bias, device="cuda")
 
@@ -71,7 +79,9 @@ def _test_fp8_adam(parallel_context: ParallelContext, with_bias: bool, lr: float
     random_input.requires_grad = True
     sharded_random_input.requires_grad = True
 
-    optim = FP8Adam(column_linear.parameters(), lr=lr, betas=(0.9, 0.95), eps=1e-8, weight_decay=0)
+    optim = FP8Adam(
+        column_linear.parameters(), lr=lr, betas=(0.9, 0.95), eps=1e-8, weight_decay=0, recipe=optim_recipe
+    )
     ref_optim = Adam(reference_linear.parameters(), lr=lr, betas=(0.9, 0.95), eps=1e-8, weight_decay=0)
 
     assert sum(len(group["params"]) for group in optim.param_groups) == sum(

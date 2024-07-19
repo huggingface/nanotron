@@ -43,11 +43,25 @@ QTYPE_TO_DTYPE = {
 # TODO(xrsrke): differentiate the precision that you initializes model weight
 # and the accumulation precision in FP8 recipe
 
+# FP8LM_LINEAR_RECIPE = FP8LinearRecipe(
+#     accum_dtype=DTypes.KFLOAT16,
+#     input=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=16),
+#     weight=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=1),
+#     bias=FP8TensorRecipe(dtype=DTypes.KFLOAT16, margin=0, interval=16),
+#     # NOTE: these are the dtypes for the gradients
+#     input_grad=FP8TensorRecipe(dtype=DTypes.FP8E5M2, margin=0, interval=16),  # NOTE: this is output_grad
+#     weight_grad=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=1),
+#     output_grad=FP8TensorRecipe(dtype=DTypes.FP8E5M2, margin=0, interval=16),
+#     split_accumulator=FP8SplitAccumulator(output=True, input_grad=True, weight_grad=True),
+#     # NOTE: tested, and it works
+#     # accumulate=FP8SplitAccumulator(output=False, input_grad=False, weight_grad=False),
+#     accumulate=FP8SplitAccumulator(output=True, input_grad=True, weight_grad=True),
+# )
 FP8LM_LINEAR_RECIPE = FP8LinearRecipe(
-    accum_dtype=DTypes.KFLOAT16,
+    accum_dtype=torch.float16,
     input=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=16),
     weight=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=1),
-    bias=FP8TensorRecipe(dtype=DTypes.KFLOAT16, margin=0, interval=16),
+    bias=torch.float16,
     # NOTE: these are the dtypes for the gradients
     input_grad=FP8TensorRecipe(dtype=DTypes.FP8E5M2, margin=0, interval=16),  # NOTE: this is output_grad
     weight_grad=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=1),
@@ -57,11 +71,18 @@ FP8LM_LINEAR_RECIPE = FP8LinearRecipe(
     # accumulate=FP8SplitAccumulator(output=False, input_grad=False, weight_grad=False),
     accumulate=FP8SplitAccumulator(output=True, input_grad=True, weight_grad=True),
 )
+
+# FP8LM_OPTIM_RECIPE = FP8OptimRecipe(
+#     accum_dtype=DTypes.KFLOAT32,
+#     master_weight_dtype=DTypes.KFLOAT16,
+#     exp_avg_dtype=DTypes.FP8E4M3,
+#     exp_avg_sq_dtype=DTypes.KFLOAT16,
+# )
 FP8LM_OPTIM_RECIPE = FP8OptimRecipe(
-    accum_dtype=DTypes.KFLOAT32,
-    master_weight_dtype=DTypes.KFLOAT16,
-    exp_avg_dtype=DTypes.FP8E4M3,
-    exp_avg_sq_dtype=DTypes.KFLOAT16,
+    accum_dtype=torch.float32,
+    master_weight_dtype=torch.float32,
+    exp_avg_dtype=torch.float32,
+    exp_avg_sq_dtype=torch.float32,
 )
 
 FP8LM_RECIPE = FP8TrainingRecipe(

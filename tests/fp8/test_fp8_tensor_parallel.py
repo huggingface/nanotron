@@ -7,9 +7,8 @@ import pytest
 import torch
 from nanotron.distributed import get_global_rank
 from nanotron.fp8.constants import QTYPE_TO_DTYPE
-from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.linear import FP8LinearMeta
-from nanotron.fp8.recipe import FP8Accumulate, FP8LinearRecipe, FP8SplitAccumulator, FP8TensorRecipe
+from nanotron.fp8.recipe import FP8LinearRecipe, FP8TensorRecipe
 from nanotron.fp8.tensor import FP8Tensor, convert_tensor_from_fp8
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter, get_data_from_param, get_grad_from_parameter
@@ -19,6 +18,7 @@ from nanotron.parallel.tensor_parallel.nn import (
     FP8TensorParallelRowLinear,
 )
 from nanotron.sanity_checks import assert_tensor_synced_across_pg
+from nanotron.testing.fp8 import LINEAR_RECIPES
 from nanotron.testing.parallel import init_distributed, rerun_if_address_is_in_use
 from torch import nn
 
@@ -28,35 +28,36 @@ from torch import nn
 @pytest.mark.parametrize("linear_cls", [FP8TensorParallelColumnLinear, FP8TensorParallelRowLinear])
 @pytest.mark.parametrize("tp,dp,pp", [[1, 1, 1], [2, 1, 1]])
 @pytest.mark.parametrize("bias", [False, True])
-@pytest.mark.parametrize("accum_dtype", [DTypes.KFLOAT16, DTypes.KFLOAT32])
-@pytest.mark.parametrize(
-    "input_grad_recipe, weight_grad_recipe, output_grad_recipe",
-    [
-        [
-            FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=1),
-            FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=1),
-            FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=1),
-        ],
-        [
-            FP8TensorRecipe(dtype=DTypes.FP8E5M2, margin=0, interval=1),
-            FP8TensorRecipe(dtype=DTypes.FP8E5M2, margin=0, interval=1),
-            FP8TensorRecipe(dtype=DTypes.FP8E5M2, margin=0, interval=1),
-        ],
-    ],
-)
-@pytest.mark.parametrize(
-    "split_accumulator, accumulate",
-    [
-        [
-            FP8SplitAccumulator(output=True, input_grad=True, weight_grad=True),
-            FP8Accumulate(output=True, input_grad=True, weight_grad=True),
-        ],
-        [
-            FP8SplitAccumulator(output=False, input_grad=False, weight_grad=False),
-            FP8SplitAccumulator(output=False, input_grad=False, weight_grad=False),
-        ],
-    ],
-)
+# @pytest.mark.parametrize("accum_dtype", [DTypes.KFLOAT16, DTypes.KFLOAT32])
+# @pytest.mark.parametrize(
+#     "input_grad_recipe, weight_grad_recipe, output_grad_recipe",
+#     [
+#         [
+#             FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=1),
+#             FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=1),
+#             FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=1),
+#         ],
+#         [
+#             FP8TensorRecipe(dtype=DTypes.FP8E5M2, margin=0, interval=1),
+#             FP8TensorRecipe(dtype=DTypes.FP8E5M2, margin=0, interval=1),
+#             FP8TensorRecipe(dtype=DTypes.FP8E5M2, margin=0, interval=1),
+#         ],
+#     ],
+# )
+# @pytest.mark.parametrize(
+#     "split_accumulator, accumulate",
+#     [
+#         [
+#             FP8SplitAccumulator(output=True, input_grad=True, weight_grad=True),
+#             FP8Accumulate(output=True, input_grad=True, weight_grad=True),
+#         ],
+#         [
+#             FP8SplitAccumulator(output=False, input_grad=False, weight_grad=False),
+#             FP8SplitAccumulator(output=False, input_grad=False, weight_grad=False),
+#         ],
+#     ],
+# )
+@pytest.mark.parametrize("recipe", LINEAR_RECIPES)
 @rerun_if_address_is_in_use()
 def test_fp8_column_recipe(
     linear_cls: Union[FP8TensorParallelColumnLinear, FP8TensorParallelRowLinear],
@@ -64,15 +65,16 @@ def test_fp8_column_recipe(
     dp: int,
     pp: int,
     bias: bool,
-    accum_dtype: DTypes,
-    input_grad_recipe: FP8TensorRecipe,
-    weight_grad_recipe: FP8TensorRecipe,
-    output_grad_recipe: FP8TensorRecipe,
-    split_accumulator: FP8SplitAccumulator,
-    accumulate: FP8Accumulate,
+    # accum_dtype: DTypes,
+    # input_grad_recipe: FP8TensorRecipe,
+    # weight_grad_recipe: FP8TensorRecipe,
+    # output_grad_recipe: FP8TensorRecipe,
+    # split_accumulator: FP8SplitAccumulator,
+    # accumulate: FP8Accumulate,
+    recipe: FP8LinearRecipe,
 ):
-    input_recipe = FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=1)
-    weight_recipe = FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=1)
+    # input_recipe = FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=1)
+    # weight_recipe = FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=1)
 
     batch_size = 16
 
@@ -89,17 +91,17 @@ def test_fp8_column_recipe(
 
     input = torch.randn(batch_size, in_features, dtype=QTYPE_TO_DTYPE[accum_dtype])
 
-    recipe = FP8LinearRecipe(
-        accum_dtype=accum_dtype,
-        input=input_recipe,
-        weight=weight_recipe,
-        bias=FP8TensorRecipe(dtype=DTypes.KFLOAT16, margin=0, interval=0),
-        input_grad=input_grad_recipe,
-        weight_grad=weight_grad_recipe,
-        output_grad=output_grad_recipe,
-        split_accumulator=split_accumulator,
-        accumulate=accumulate,
-    )
+    # recipe = FP8LinearRecipe(
+    #     accum_dtype=accum_dtype,
+    #     input=input_recipe,
+    #     weight=weight_recipe,
+    #     bias=FP8TensorRecipe(dtype=DTypes.KFLOAT16, margin=0, interval=0),
+    #     input_grad=input_grad_recipe,
+    #     weight_grad=weight_grad_recipe,
+    #     output_grad=output_grad_recipe,
+    #     split_accumulator=split_accumulator,
+    #     accumulate=accumulate,
+    # )
     init_distributed(tp=tp, dp=dp, pp=pp)(_test_fp8_column_recipe)(
         input=input,
         in_features=(in_features, in_features_per_rank),

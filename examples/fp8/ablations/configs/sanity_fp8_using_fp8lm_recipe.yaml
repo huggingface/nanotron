@@ -165,14 +165,13 @@ tokens:
   val_check_interval: -1
 
 fp8:
-  accum_dtype: bfloat16
   model:
   - module_name: model.decoder.0.mlp.down_proj
-    accum_dtype: bfloat16
+    accum_dtype: float16
     input:
       dtype: fp8e4m3
       margin: 0
-      interval: 1
+      interval: 16
     weight:
       dtype: fp8e4m3
       margin: 0
@@ -181,15 +180,15 @@ fp8:
     input_grad:
       dtype: fp8e5m2
       margin: 0
-      interval: 1
+      interval: 16
     weight_grad:
-      dtype: fp8e5m2
+      dtype: fp8e4m3
       margin: 0
       interval: 1
     output_grad:
       dtype: fp8e5m2
       margin: 0
-      interval: 1
+      interval: 16
     split_accumulator:
       output: true
       input_grad: true
@@ -199,10 +198,6 @@ fp8:
       input_grad: true
       weight_grad: true
   optim:
-    # master_weight_dtype: KFLOAT32
-    # accum_dtype: KFLOAT32
-    # exp_avg_dtype: KFLOAT32
-    # exp_avg_sq_dtype: KFLOAT32
     master_weight_dtype: float32
     accum_dtype: float32
     exp_avg_dtype: float32

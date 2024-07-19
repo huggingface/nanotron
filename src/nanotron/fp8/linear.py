@@ -5,7 +5,7 @@ import torch
 import transformer_engine as te  # noqa
 from torch import nn
 
-from nanotron.fp8.constants import FP8LM_LINEAR_RECIPE, QTYPE_TO_DTYPE
+from nanotron.fp8.constants import FP8LM_LINEAR_RECIPE
 from nanotron.fp8.kernel import fp8_matmul_kernel
 from nanotron.fp8.meta import FP8Meta
 from nanotron.fp8.parameter import FP8Parameter
@@ -68,8 +68,8 @@ class FP8Linear(nn.Linear):
 
         if self.bias is not None:
             # self.bias = self.bias.to(dtype=QTYPE_TO_DTYPE[recipe.accum_dtype])
-            self.bias = nn.Parameter(self.bias.to(QTYPE_TO_DTYPE[recipe.accum_dtype]))
-            assert self.bias.dtype == QTYPE_TO_DTYPE[recipe.accum_dtype]
+            self.bias = nn.Parameter(self.bias.to(recipe.accum_dtype))
+            assert self.bias.dtype == recipe.accum_dtype
         self.metadatas = FP8LinearMeta()
         # self.accum_qtype = accum_qtype
         self.recipe = recipe
@@ -185,7 +185,8 @@ class _FP8Matmul(torch.autograd.Function):
             fp8_grad_output.shape[0],
             transposed_fp8_weight.shape[0],
             device="cuda",
-            dtype=QTYPE_TO_DTYPE[recipe.accum_dtype],
+            # dtype=QTYPE_TO_DTYPE[recipe.accum_dtype],
+            dtype=recipe.accum_dtype,
         )
         grad_input = fp8_matmul_kernel(
             mat_a=transposed_fp8_weight,
@@ -207,7 +208,8 @@ class _FP8Matmul(torch.autograd.Function):
             transposed_fp8_input.shape[0],
             transposed_fp8_grad_output.shape[0],
             device="cuda",
-            dtype=QTYPE_TO_DTYPE[recipe.accum_dtype],
+            # dtype=QTYPE_TO_DTYPE[recipe.accum_dtype],
+            dtype=recipe.accum_dtype,
         )
         grad_weight = fp8_matmul_kernel(
             mat_a=transposed_fp8_input,
@@ -222,8 +224,10 @@ class _FP8Matmul(torch.autograd.Function):
             recipe=recipe,
         )
 
-        assert grad_input.dtype == QTYPE_TO_DTYPE[recipe.accum_dtype]
-        assert grad_weight.dtype == QTYPE_TO_DTYPE[recipe.accum_dtype]
+        # assert grad_input.dtype == QTYPE_TO_DTYPE[recipe.accum_dtype]
+        # assert grad_weight.dtype == QTYPE_TO_DTYPE[recipe.accum_dtype]
+        assert grad_input.dtype == recipe.accum_dtype
+        assert grad_weight.dtype == recipe.accum_dtype
         # TODO(xrsrke): maintain a persistence metadata across training
 
         grad_weight = grad_weight.T.contiguous()

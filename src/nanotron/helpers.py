@@ -367,6 +367,7 @@ def init_optimizer_and_grad_accumulator(
                             optimizer_args.optimizer_factory.adam_beta1,
                             optimizer_args.optimizer_factory.adam_beta2,
                         ),
+                        recipe=constants.CONFIG.fp8.optim,
                     )
 
             else:

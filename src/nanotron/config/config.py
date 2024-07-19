@@ -443,6 +443,8 @@ def get_config_from_dict(
 
     from nanotron.fp8.recipe import DTypes
 
+    # from nanotron.config.fp8_config import TorchDtype
+
     return from_dict(
         data_class=config_class,
         data=config_dict,
@@ -454,7 +456,8 @@ def get_config_from_dict(
                 TensorParallelLinearMode: lambda x: TensorParallelLinearMode[x.upper()],
                 RecomputeGranularity: lambda x: RecomputeGranularity[x.upper()],
                 SamplerType: lambda x: SamplerType[x.upper()],
-                DTypes: lambda x: DTypes[x.upper()],  # Add this line
+                DTypes: lambda x: DTypes[x.upper()],  # Add this line,
+                # TorchDtype: lambda x: TorchDtype[x.upper()],
             },
             # strict_unions_match=True,
             strict=True,

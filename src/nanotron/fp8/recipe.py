@@ -31,19 +31,20 @@ class FP8Accumulate:
 
 @dataclass
 class FP8LinearRecipe:
-    accum_dtype: DTypes
+    accum_dtype: torch.dtype
 
-    input: FP8TensorRecipe
-    weight: FP8TensorRecipe
+    input: Union[FP8TensorRecipe, torch.dtype]
+    weight: Union[FP8TensorRecipe, torch.dtype]
     # TODO(xrsrke): remove bias recipe, because we don't quantize bias
-    bias: FP8TensorRecipe
+    bias: Union[FP8TensorRecipe, torch.dtype]
+    # gemm_accum_dtype: DTypes
 
     # NOTE: for the gradients
-    input_grad: FP8TensorRecipe
-    weight_grad: FP8TensorRecipe
+    input_grad: Union[FP8TensorRecipe, torch.dtype]
+    weight_grad: Union[FP8TensorRecipe, torch.dtype]
     # TODO(xrsrke): we don't need this, because the output gradients of a layer
     # is the input gradients of the other layer
-    output_grad: FP8TensorRecipe
+    output_grad: Union[FP8TensorRecipe, torch.dtype]
 
     # TODO(xrsrke): this is a low-level implementation details
     # we should hide this from high-level apis later on
@@ -56,11 +57,11 @@ class FP8OptimRecipe:
     # NOTE: these are just storage dtypes
     # not FP8Tensor that need to dynamically change
     # during training
-    master_weight_dtype: DTypes
-    accum_dtype: Union[torch.dtype, DTypes]
+    master_weight_dtype: Union[DTypes, torch.dtype]
+    accum_dtype: torch.dtype
 
-    exp_avg_dtype: DTypes
-    exp_avg_sq_dtype: DTypes
+    exp_avg_dtype: Union[DTypes, torch.dtype]
+    exp_avg_sq_dtype: Union[DTypes, torch.dtype]
 
 
 @dataclass
@@ -71,5 +72,6 @@ class FP8TrainingRecipe:
     # TODO(xrsrke): allow disable FP8 for some specific layers like lm_head, mlp, etc.
     # maybe specify fp8 in the modeling code!
 
+    # NOTE: precision dtype for non-fp8 modules
     linear: FP8LinearRecipe
     optim: FP8OptimRecipe
