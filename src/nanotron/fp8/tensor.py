@@ -197,7 +197,7 @@ class FP16Tensor(LowPrecisionTensor):
     @staticmethod
     def _quantize(tensor: torch.Tensor, fp8_meta: "FP8Meta") -> torch.Tensor:
         assert isinstance(tensor, torch.Tensor)
-        assert tensor.dtype != torch.float16, "You can't quantize a tensor to FP16 if it's already FP16"
+        # assert tensor.dtype != torch.float16, "You can't quantize a tensor to FP16 if it's already FP16"
 
         tensor = tensor.contiguous()
         # TODO(xrsrke): convert it to int8 format

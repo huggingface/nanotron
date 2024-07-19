@@ -50,7 +50,9 @@ class FP8Linear(nn.Linear):
         # assert accum_qtype in DTypes
 
         # TODO(xrsrke): take initialization dtype from recipe
-        super().__init__(in_features, out_features, bias, device, dtype=QTYPE_TO_DTYPE[recipe.accum_dtype])
+        # super().__init__(in_features, out_features, bias, device, dtype=QTYPE_TO_DTYPE[recipe.accum_dtype])
+        # NOTE: initialize in float32
+        super().__init__(in_features, out_features, bias, device, dtype=torch.float32)
         # TODO(xrsrke): don't fixed dtype, take it from the FP8 recipe
         # DTypes.FP8E4M3
         weight_data = self.weight.data
@@ -62,6 +64,12 @@ class FP8Linear(nn.Linear):
         # assert self.weight.data.orig_data.abs().max() == quant_w.fp8_meta.amax
 
         assert self.weight.data.dtype in [torch.uint8, torch.int8], f"got {self.weight.data.dtype}"
+        # assert get_data_from_param(self.weight).dtype in [torch.uint8, torch.int8], f"got {self.weight.data.dtype}"
+
+        if self.bias is not None:
+            # self.bias = self.bias.to(dtype=QTYPE_TO_DTYPE[recipe.accum_dtype])
+            self.bias = nn.Parameter(self.bias.to(QTYPE_TO_DTYPE[recipe.accum_dtype]))
+            assert self.bias.dtype == QTYPE_TO_DTYPE[recipe.accum_dtype]
         self.metadatas = FP8LinearMeta()
         # self.accum_qtype = accum_qtype
         self.recipe = recipe

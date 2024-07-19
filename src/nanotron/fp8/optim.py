@@ -345,28 +345,29 @@ class FP8Adam(Optimizer):
                 data = get_data_from_param(p)
                 IS_FP8 = data.__class__ == FP8Tensor
 
-                if "0.pp_block.mlp.down_proj.weight" in self.params_id_to_param_names[id(p)]:
-                    assert 1 == 1
+                if hasattr(self, "params_id_to_param_names"):
+                    if "0.pp_block.mlp.down_proj.weight" in self.params_id_to_param_names[id(p)]:
+                        assert 1 == 1
 
                 if IS_FP8:
+                    assert data.dtype in FP8_DTYPES
                     assert p in self.mappping_fp8_to_master_weight, "FP8Tensor should have a master weight"
+
+                    # NOTE: sanity check
+
                     fp16_data = self.mappping_fp8_to_master_weight[p]
                     fp32_data = convert_tensor_from_fp16(fp16_data, torch.float32)
                     grad = get_grad_from_parameter(p)
                     assert grad is not None
+                    assert grad.dtype in FP8_DTYPES
                     fp32_grad = convert_tensor_from_fp8(grad, grad.fp8_meta, torch.float32)
                 else:
+                    assert data.dtype == torch.float16
                     fp32_data = data.to(torch.float32)
                     grad = get_grad_from_parameter(p)
                     assert grad is not None
-                    fp32_grad = grad.to(torch.float32)
-
-                if IS_FP8:
-                    assert data.dtype in FP8_DTYPES
-                    assert grad.dtype in FP8_DTYPES
-                else:
-                    assert data.dtype == torch.float16
                     assert grad.dtype == torch.float16
+                    fp32_grad = grad.to(torch.float32)
 
                 assert fp32_data.dtype == torch.float32
                 assert fp32_grad.dtype == torch.float32
@@ -384,14 +385,15 @@ class FP8Adam(Optimizer):
                 step = state["step"]
                 step += 1
 
-                param_name = self.params_id_to_param_names[id(p)]
-                if "0.pp_block.mlp.down_proj.weight" in param_name or "lm_head" in param_name:
-                    from nanotron import constants
+                if hasattr(self, "params_id_to_param_names"):
+                    param_name = self.params_id_to_param_names[id(p)]
+                    if "0.pp_block.mlp.down_proj.weight" in param_name or "lm_head" in param_name:
+                        from nanotron import constants
 
-                    write_to_file(
-                        f"step={constants.ITERATION_STEP}, param={param_name}, lr={group['lr']}, initial_lr={group['initial_lr']}",
-                        filename="/fsx/phuc/temp/temp3_env_for_fp8/nanotron/lr_logs.txt",
-                    )
+                        write_to_file(
+                            f"step={constants.ITERATION_STEP}, param={param_name}, lr={group['lr']}, initial_lr={group['initial_lr']}",
+                            filename="/fsx/phuc/temp/temp3_env_for_fp8/nanotron/lr_logs.txt",
+                        )
 
                 fp32_exp_avg = beta1 * fp32_exp_avg + (1 - beta1) * fp32_grad
                 fp32_exp_avg_sq = beta2 * fp32_exp_avg_sq + (1 - beta2) * fp32_grad.pow(2)

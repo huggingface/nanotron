@@ -46,7 +46,7 @@ general:
   consumed_train_samples: null
   ignore_sanity_checks: true
   project: fp8_for_nanotron
-  run: fp8_2_layers_and_seq_len_16_and_micro_batch_256_and_lr_2.0e-6
+  run: fp8_2_layers_and_seq_len_16_and_micro_batch_256_and_lr_0.0006_and_warmup_200_and_decay_800_and_no_weight_decay_and_quantize_only_model.decoder.0.mlp.down_proj
   seed: 42
   step: null
 lighteval: null
@@ -166,38 +166,38 @@ tokens:
 
 fp8:
   model:
-  # - module_name: model.decoder.0.mlp.down_proj
-  #   accum_dtype: KFLOAT16
-  #   input:
-  #     dtype: FP8E4M3
-  #     margin: 0
-  #     interval: 1
-  #   weight:
-  #     dtype: FP8E4M3
-  #     margin: 0
-  #     interval: 1
-  #   bias:
-  #     dtype: float16
-  #   input_grad:
-  #     dtype: FP8E5M2
-  #     margin: 0
-  #     interval: 1
-  #   weight_grad:
-  #     dtype: FP8E5M2
-  #     margin: 0
-  #     interval: 1
-  #   output_grad:
-  #     dtype: FP8E5M2
-  #     margin: 0
-  #     interval: 1
-  #   split_accumulator:
-  #     output: true
-  #     input_grad: true
-  #     weight_grad: true
-  #   accumulate:
-  #     output: true
-  #     input_grad: true
-  #     weight_grad: true
+  - module_name: model.decoder.0.mlp.down_proj
+    accum_dtype: KFLOAT16
+    input:
+      dtype: FP8E4M3
+      margin: 0
+      interval: 1
+    weight:
+      dtype: FP8E4M3
+      margin: 0
+      interval: 1
+    bias:
+      dtype: float16
+    input_grad:
+      dtype: FP8E5M2
+      margin: 0
+      interval: 1
+    weight_grad:
+      dtype: FP8E5M2
+      margin: 0
+      interval: 1
+    output_grad:
+      dtype: FP8E5M2
+      margin: 0
+      interval: 1
+    split_accumulator:
+      output: true
+      input_grad: true
+      weight_grad: true
+    accumulate:
+      output: true
+      input_grad: true
+      weight_grad: true
   # - module_name: model.decoder.1.attn.qkv_proj
   #   accum_dtype: KFLOAT16
   #   input:
@@ -230,8 +230,8 @@ fp8:
   #     output: true
   #     input_grad: true
   #     weight_grad: true
-  # optim:
-  #   master_weight_dtype: KFLOAT32
-  #   accum_dtype: KFLOAT32
-  #   exp_avg_dtype: KFLOAT32
-  #   exp_avg_sq_dtype: KFLOAT32
+  optim:
+    master_weight_dtype: KFLOAT32
+    accum_dtype: KFLOAT32
+    exp_avg_dtype: KFLOAT32
+    exp_avg_sq_dtype: KFLOAT32
