@@ -381,7 +381,9 @@ class FP8Adam(Optimizer):
                     assert grad.dtype in FP8_DTYPES
                     fp32_grad = convert_tensor_from_fp8(grad, grad.fp8_meta, self.optim_accum_dtype)
                 else:
-                    assert data.dtype == non_fp8_accum_dtype
+                    assert (
+                        data.dtype == non_fp8_accum_dtype
+                    ), f"data.dtype={data.dtype}, non_fp8_accum_dtype={non_fp8_accum_dtype}"
                     fp32_data = data.to(self.optim_accum_dtype) if data.dtype != self.optim_accum_dtype else data
                     grad = get_grad_from_parameter(p)
                     assert grad is not None

@@ -1,13 +1,14 @@
 from abc import ABCMeta, abstractmethod
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Callable, Dict, Iterator, List, Optional, Tuple
+from typing import TYPE_CHECKING, Callable, Dict, Iterator, List, Optional, Tuple, cast
 
 import numpy as np
 import torch
 from torch import nn
 
+from nanotron import constants, logging
 from nanotron import distributed as dist
-from nanotron import logging
+from nanotron.config.fp8_config import FP8Args
 from nanotron.distributed import ProcessGroup
 from nanotron.logging import log_rank
 from nanotron.parallel.context import ParallelContext
@@ -264,17 +265,22 @@ def _register_empty_parameter_for_fp8(module, name, param):
     if param is not None:
         IS_CONVERT_TO_FLOAT16 = False
 
-        if any(isinstance(module, m) for m in MODULES_THAT_IN_FLOAT16) or (
-            hasattr(module, "name") and module.name not in name_of_modules_not_in_fp16
-        ):
-            IS_CONVERT_TO_FLOAT16 = True
+        # if any(isinstance(module, m) for m in MODULES_THAT_IN_FLOAT16) or (
+        #     hasattr(module, "name") and module.name not in name_of_modules_not_in_fp16
+        # ):
+        #     # NOTE: if we don't specify which models in FP16, we convert all models to FP8
+        #     if constants.CONFIG.fp8.model is not None:
+        #         IS_CONVERT_TO_FLOAT16 = True
+        if constants.CONFIG.fp8.model is None:
+            if any(isinstance(module, m) for m in MODULES_THAT_IN_FLOAT16):
+                IS_CONVERT_TO_FLOAT16 = True
+        else:
+            if any(isinstance(module, m) for m in MODULES_THAT_IN_FLOAT16) or (
+                hasattr(module, "name") and module.name not in name_of_modules_not_in_fp16
+            ):
+                IS_CONVERT_TO_FLOAT16 = True
 
         if IS_CONVERT_TO_FLOAT16:
-            from typing import cast
-
-            from nanotron import constants
-            from nanotron.config.fp8_config import FP8Args
-
             fp8_config = cast(FP8Args, constants.CONFIG.fp8)
             param.data = param.data.to(torch.device("cuda"), fp8_config.accum_dtype)
         else:
@@ -289,15 +295,22 @@ def _register_empty_buffer_for_fp8(module, name, buffer, persistent=True):
 
     if buffer is not None:
         IS_CONVERT_TO_FLOAT16 = False
-        if any(isinstance(module, m) for m in MODULES_THAT_IN_FLOAT16) or (
-            hasattr(module, "name") and module.name not in name_of_modules_not_in_fp16
-        ):
-            IS_CONVERT_TO_FLOAT16 = True
+
+        # NOTE: convert all modules in FP8 except MODULES_THAT_IN_FLOAT16
+        # if fp8.model is None
+        if constants.CONFIG.fp8.model is None:
+            if any(isinstance(module, m) for m in MODULES_THAT_IN_FLOAT16):
+                IS_CONVERT_TO_FLOAT16 = True
+        else:
+            if any(isinstance(module, m) for m in MODULES_THAT_IN_FLOAT16) or (
+                hasattr(module, "name") and module.name not in name_of_modules_not_in_fp16
+            ):
+                IS_CONVERT_TO_FLOAT16 = True
 
         if IS_CONVERT_TO_FLOAT16:
             from typing import cast
 
-            from nanotron import constants
+            # from nanotron import constants
             from nanotron.config.fp8_config import FP8Args
 
             fp8_config = cast(FP8Args, constants.CONFIG.fp8)

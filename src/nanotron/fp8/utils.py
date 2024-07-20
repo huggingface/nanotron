@@ -201,4 +201,9 @@ def find_fp8_config_by_module_name(config: Config, target_module_name: str) -> O
             for layer_args in config.fp8.model:
                 if layer_args.module_name == target_module_name:
                     return layer_args
+        else:
+            # NOTE: return default recipe
+            from nanotron.fp8.constants import FP8LM_LINEAR_RECIPE
+
+            return FP8LM_LINEAR_RECIPE
     return None
