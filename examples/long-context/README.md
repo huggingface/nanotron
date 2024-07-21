@@ -23,4 +23,4 @@ Then for training, you only need to execute: `sbatch launch_training.slurm`
 
 ## Experiment results
 We successfully extended the model's context length to 1M tokens using less than 0.3B tokens and 50 training steps, achieving 100% accuracy in the needle-in-a-haystack experiment.
-![1M Context Length Example](https://github.com/huggingface/nanotron/raw/main/examples/long-context/images/1M.png)
+![1M Context Length Example](./images/1M.png)
