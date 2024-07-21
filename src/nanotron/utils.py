@@ -1,11 +1,10 @@
 import functools
 import inspect
-import math
 import os
 import random
 import socket
 from contextlib import ExitStack, contextmanager
-from typing import Callable, ContextManager, List, Optional
+from typing import ContextManager, List, Optional
 
 import torch
 from packaging import version
@@ -52,7 +51,7 @@ def main_rank_first(group: dist.ProcessGroup):
 @contextmanager
 def local_ranks_zero_first(group: Optional[dist.ProcessGroup] = None):
     """Context manager that executes the code in the context with all the local rank zero of the group going first.
-    Usefull to run only once per node first (e.g. to create local files, etc)
+    Useful to run only once per node first (e.g. to create local files, etc)
     """
     is_main = int(os.environ.get("LOCAL_RANK", 0)) == 0
     if is_main:
@@ -123,6 +122,7 @@ def get_untyped_storage(tensor: torch.Tensor) -> torch.UntypedStorage:
     else:
         return tensor.storage().untyped()
 
+
 def tensor_from_untyped_storage(untyped_storage: torch.UntypedStorage, dtype: torch.dtype):
     # TODO @thomasw21: Figure out what's the best Pytorch way of building a tensor from a storage.
     device = untyped_storage.device
@@ -141,3 +141,26 @@ def find_free_port(min_port: int = 2000, max_port: int = 65000) -> int:
                 return port
         except OSError:
             continue
+
+
+def supports_flash_attention():
+    """
+    Check if a GPU supports FlashAttention based on its architecture.
+
+    Parameters:
+    device_id (int): The ID of the GPU device to check.
+
+    Returns:
+    bool: True if the GPU supports FlashAttention, False otherwise.
+    """
+    if not torch.cuda.is_available():
+        return False
+
+    device_id = torch.cuda.current_device()
+    major, minor = torch.cuda.get_device_capability(device_id)
+
+    # Check if the GPU architecture is Ampere (SM 8.x) or newer (SM 9.0)
+    is_sm8x = major == 8 and minor >= 0
+    is_sm90 = major == 9 and minor == 0
+
+    return is_sm8x or is_sm90

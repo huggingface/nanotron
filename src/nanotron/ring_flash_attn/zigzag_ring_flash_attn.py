@@ -4,7 +4,7 @@ from flash_attn.flash_attn_interface import _flash_attn_backward, _flash_attn_fo
 from .utils import RingComm, update_out_and_lse
 
 
-# copy from https://github.com/zhuzilin/ring-flash-attention
+# reference: https://github.com/zhuzilin/ring-flash-attention
 def zigzag_ring_flash_attn_forward(
     process_group,
     q: torch.Tensor,
