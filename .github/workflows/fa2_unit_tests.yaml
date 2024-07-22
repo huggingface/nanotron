@@ -39,7 +39,7 @@ jobs:
         python -c "import torch; print('torch:', torch.__version__, torch)"
         python -c "import torch; print('CUDA available:', torch.cuda.is_available())"
 
-    - name: Instal nanotron
+    - name: Install nanotron
       run: |
         python -m pip install --upgrade pip
         pip install packaging
@@ -55,4 +55,4 @@ jobs:
     - name: Run tests
       # NOTE: -m fa2 will only run the unit tests that have the mark
       # "fa2" (these are FA2-related tests)
-      run: pytest -m fa2 --color=yes --durations=0 --ignore tests/fp8 --verbose tests/
+      run: pytest -m fa2 --color=yes --durations=0 --ignore tests/fp8 --ignore tests/nanoset --verbose tests/
