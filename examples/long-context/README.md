@@ -24,3 +24,7 @@ Then for training, you only need to execute: `sbatch launch_training.slurm`
 ## Experiment results
 We successfully extended the model's context length to 1M tokens using less than 0.3B tokens and 50 training steps, achieving 100% accuracy in the needle-in-a-haystack experiment.
 ![1M Context Length Example](./images/1M.png)
+
+To demonstrate how quickly the model can adapt to long contexts, we created a GIF that shows how the model completes a needle-in-a-haystack test over a 64K context length in 10 steps of training.
+
+![64K revolution gif](./images/theta=22p4M.gif)
