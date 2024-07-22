@@ -28,3 +28,7 @@ We successfully extended the model's context length to 1M tokens using less than
 To demonstrate how quickly the model can adapt to long contexts, we created a GIF that shows how the model completes a needle-in-a-haystack test over a 64K context length in 10 steps of training.
 
 ![64K revolution gif](./images/theta=22p4M.gif)
+
+The setting of the base value is crucial. An example of incorrect setting is setting the base value to 1M and then training for 15 steps. The resulting model can hardly complete the needle-in-a-haystack task.
+
+![ablation study](./images/theta=1M_15steps.jpeg)
