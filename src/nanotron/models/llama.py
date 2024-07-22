@@ -33,6 +33,7 @@ from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter
 from nanotron.parallel.pipeline_parallel.block import PipelineBlock, TensorPointer
 from nanotron.parallel.pipeline_parallel.p2p import P2P
+from nanotron.parallel.ring_flash_attn.utils import zigzag_split
 from nanotron.parallel.tensor_parallel.functional import sharded_cross_entropy
 from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelColumnLinear,
@@ -41,7 +42,6 @@ from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelRowLinear,
 )
 from nanotron.random import RandomStates
-from nanotron.ring_flash_attn.utils import zigzag_split
 from nanotron.scaling.parametrization import SpectralMupParametrizator, StandardParametrizator
 from nanotron.utils import checkpoint_method, supports_flash_attention
 
@@ -53,7 +53,7 @@ if supports_flash_attention():
     )
     from flash_attn.layers.rotary import RotaryEmbedding as FlashRotaryEmbedding
 
-    from nanotron.ring_flash_attn.zigzag_ring_flash_attn import zigzag_ring_flash_attn_func
+    from nanotron.parallel.ring_flash_attn.zigzag_ring_flash_attn import zigzag_ring_flash_attn_func
 
 
 logger = logging.get_logger(__name__)
