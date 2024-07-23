@@ -358,11 +358,14 @@ class _ColumnLinearContextParallelNoAsync(torch.autograd.Function):
         # Do allgather.
         sharded_batch_size, *rest_size = input.shape
         unsharded_batch_size = sharded_batch_size * group.size()
-        if tp_recompute_allgather:
+        if group.size() == 1:
+            total_input = input.contiguous()
+        elif tp_recompute_allgather:
             total_input = MemoryBuffer().get("allgather", (unsharded_batch_size, *rest_size), dtype=input.dtype)
+            dist.all_gather_into_tensor(total_input, input.contiguous(), group=group)
         else:
             total_input = torch.empty(unsharded_batch_size, *rest_size, dtype=input.dtype, device=input.device)
-        dist.all_gather_into_tensor(total_input, input.contiguous(), group=group)
+            dist.all_gather_into_tensor(total_input, input.contiguous(), group=group)
 
         # Prepare context.
         ctx.group = group
@@ -383,21 +386,22 @@ class _ColumnLinearContextParallelNoAsync(torch.autograd.Function):
         group = ctx.group
         tp_recompute_allgather = ctx.tp_recompute_allgather
         input_size = ctx.input_size
-        if tp_recompute_allgather:
+        if group.size() == 1 or not tp_recompute_allgather:
+            total_input, weight, bias = ctx.saved_tensors
+        else:
             input, weight, bias = ctx.saved_tensors
             sharded_batch_size, *rest_size = input.shape
             total_input = sharded_batch_size * group.size()
             unsharded_batch_size = sharded_batch_size * group.size()
             total_input = MemoryBuffer().get("allgather", (unsharded_batch_size, *rest_size), dtype=input.dtype)
             dist.all_gather_into_tensor(total_input, input.contiguous(), group=group)
-        else:
-            total_input, weight, bias = ctx.saved_tensors
 
-        # Get the grad_output and total_input on the correct views to be able to transpose them below.
+        # Convert the tensor shapes to 2D for execution compatibility
         grad_output = grad_output.contiguous()
-        assert grad_output.dim() == 3
-        grad_output = grad_output.view(grad_output.size(0) * grad_output.size(1), grad_output.size(2))
-        total_input = total_input.view(total_input.size(0) * total_input.size(1), total_input.size(2))
+        grad_output_first_dims, grad_output_last_dim = grad_output.shape[:-1], grad_output.shape[-1]
+        total_tensor_first_dims, total_tensor_last_dim = total_tensor.shape[:-1], total_tensor.shape[-1]
+        grad_output = grad_output.view(math.prod(grad_output_first_dims), grad_output_last_dim)
+        total_tensor = total_tensor.view(math.prod(total_tensor_first_dims), total_tensor_last_dim)
 
         # Compute gradients.
         grad_weight = grad_output.T @ total_input
