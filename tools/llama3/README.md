@@ -1,6 +1,19 @@
 # Llama3 Weight conversion tool
 This directory contains the scripts to convert the Llama3 checkpoints from HuggingFace to Nanotron and vice versa.
 
+## Downloading Llama3 weights
+We will use the Llama3 checkpoints stored in the HuggingFace Hub for the conversion. Despite being able to download the checkpoints setting `--pretrained-model-name-or-pathmeta-llama/Meta-Llama-3-8B-Instruct`, this is not recommended since it will download the pretrained weights to the [HuggingFace Cache](https://huggingface.co/docs/huggingface_hub/package_reference/environment_variables#hfhubcache). We encourage to download the checkpoints explicityly to a folder with the following script:
+```python
+from huggingface_hub import snapshot_download
+
+snapshot_download(repo_id="meta-llama/Meta-Llama-3-8B",
+                  local_dir = "models/Meta-Llama-3-8B",
+                  local_dir_use_symlinks=False,
+                  ignore_patterns=["original/*"]) # Llama3 models in the Hub contain the original checkpoints. We just want the HF checkpoint stored in the safetensor format
+```
+
+## Conversion
+
 - Convert from HuggingFace to Nanotron
 
 `torchrun --nproc-per-node 1 tools/llama3/convert_hf_to_nanotron.py --nanotron-checkpoint-path nanotron_checkpoints/Nanotron-Llama-3-8B --pretrained-model-name-or-path meta-llama/Meta-Llama-3-8B-Instruct`
