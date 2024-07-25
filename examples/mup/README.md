@@ -32,3 +32,8 @@ We trained a 350m model with spectral µTransfer and standard parametrization us
 Please check the directory [[./examples/mup/configs]](/examples/mup/configs) for the configurations we used to reproduce the experiments.
 
 ![LLaMA](./assets/llama.png)
+
+
+#### Thoughts
+
+For Spectral MuP, the experiments we used it on MLP only [link] and 300m LLaMA [link] (there are links to the experiment config in the mup readme). However, when we tested it on 1B/8B models iirc, the loss blew up for some reasons. So, we'd recommend they try μTransfer, not spectral μTransfer.
