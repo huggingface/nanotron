@@ -235,6 +235,28 @@ class FP32GradientAccumulator(GradientAccumulator):
                 grad = fp32_grad
             fp32_param.grad = grad
 
+        from nanotron import constants
+
+        if (constants.GLOBAL_STEP - 1) % constants.LOG_STATE_INTERVAL == 0 and constants.IS_RANK_TO_MONITOR is True:
+            import wandb
+            from nanotron import constants
+            from nanotron.scaling.monitor import save_tensor
+
+            save_tensor(
+                name=f"{name}.grad",
+                tensor=fp32_param.grad,
+                path=f"{constants.MONITOR_STATE_PATH}/{constants.CONFIG.general.run}/{constants.GLOBAL_STEP}/grads",
+            )
+
+            wandb.log(
+                {
+                    f"{name}:grad:mean": fp32_param.grad.detach().mean().item(),
+                    f"{name}:grad:std": fp32_param.grad.detach().std().item(),
+                    f"{name}:grad:norm": fp32_param.grad.detach().norm().item(),
+                    "iteration_step": constants.GLOBAL_STEP,
+                }
+            )
+
     @contextmanager
     def no_sync(self):
         """A context manager to disable gradient synchronizations across

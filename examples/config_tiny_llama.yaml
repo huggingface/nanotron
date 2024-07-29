@@ -2,7 +2,7 @@ checkpoints:
   checkpoint_interval: 10
   checkpoints_path: checkpoints
   checkpoints_path_is_shared_file_system: false
-  resume_checkpoint_path: null
+  # resume_checkpoint_path: checkpoints
   save_initial_state: false
 data_stages:
 - data:
@@ -42,6 +42,7 @@ logging:
   iteration_step_info_interval: 1
   log_level: info
   log_level_replica: info
+  monitor_model_states: true
 model:
   ddp_bucket_cap_mb: 25
   dtype: bfloat16
@@ -87,9 +88,9 @@ optimizer:
   weight_decay: 0.01
   zero_stage: 0
 parallelism:
-  dp: 2
+  dp: 1
   expert_parallel_size: 1
-  pp: 2
+  pp: 1
   pp_engine: 1f1b
   tp: 2
   tp_linear_async_communication: true
