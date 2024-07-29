@@ -170,3 +170,8 @@ examples/infinite-context-length/*.txt
 *.arrow
 *.txt
 *.out
+debug/
+llama3_8b_generated_from_brrr/
+llama3_8b_generated_from_brrr_tp_8/
+llama3_8b_generated_from_brrr_with_pp_4/
+examples/infinite-context-length/configs/exp59/

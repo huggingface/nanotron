@@ -60,9 +60,13 @@ def get_args():
     parser.add_argument("--dp", type=int, default=0)
     parser.add_argument("--pp", type=int, default=0)
     parser.add_argument("--tp", type=int, default=0)
-    parser.add_argument("--max-new-tokens", type=int, default=20, help="Maximum number of new tokens to generate")
-    # parser.add_argument("--depth_percent", type=int, required=True)
+    parser.add_argument("--max-new-tokens", type=int, default=15, help="Maximum number of new tokens to generate")
     parser.add_argument("--save_path", type=str, required=True)
+    parser.add_argument("--eval_dataset_path", type=str, required=True)
+    parser.add_argument("--num_shots", type=int, required=True)
+    parser.add_argument("--num_digits", type=int, default=0)
+    parser.add_argument("--seed", type=int, required=True)
+    parser.add_argument("--num_samples", type=int, required=True)
     return parser.parse_args()
 
 
@@ -111,10 +115,46 @@ def generate(args, model, tokenizer, inputs, parallel_context):
     return responses, answer_idxs
 
 
+def load_and_filter_dataset(eval_dataset_path, depth_percent, num_shots, num_digits, seed, num_samples):
+    import random
+
+    from datasets import load_dataset
+
+    # Set seeds for reproducibility
+    random.seed(seed)
+
+    # Load the dataset
+    dataset = load_dataset(eval_dataset_path, split="train")
+
+    # Filter the dataset
+    filtered_dataset = dataset.filter(lambda x: x["depth_percent"] == depth_percent and x["num_shots"] == num_shots)
+    if num_digits > 0:
+        filtered_dataset = filtered_dataset.filter(lambda x: x["num_digits"] == num_digits)
+
+    # filtered_dataset = dataset.filter(
+    #     lambda x: x["depth_percent"] == depth_percent and
+    #             x["num_shots"] == num_shots and
+    #             x["num_digits"] == num_digits
+    # )
+
+    # Shuffle the dataset deterministically
+    shuffled_dataset = filtered_dataset.shuffle(seed=seed)
+
+    # Select only the first 10 samples
+    final_dataset = shuffled_dataset.select(range(min(num_samples, len(shuffled_dataset))))
+
+    return final_dataset
+
+
 def main():
     args = get_args()
     # depth_percent = args.depth_percent
     save_path = args.save_path
+    eval_dataset_path = args.eval_dataset_path
+    num_shots = args.num_shots
+    num_digits = args.num_digits
+    seed = args.seed
+    num_samples = args.num_samples
 
     assert args.ckpt_path.exists(), f"Checkpoint path {args.ckpt_path} does not exist"
 
@@ -232,16 +272,23 @@ def main():
                 rank=0,
             )
 
-            from datasets import load_dataset
+            # from datasets import load_dataset
 
-            dataset = load_dataset("nanotron/llama3-16k-passkey-retrieval-eval", split="train")
-            df = load_dataset("nanotron/llama3-16k-passkey-retrieval-eval", split="train")
+            # # dataset = load_dataset("nanotron/llama3-16k-passkey-retrieval-eval", split="train")
+            # # df = load_dataset("nanotron/llama3-16k-passkey-retrieval-eval", split="train")
 
-            dataset = dataset.filter(lambda x: x["depth_percent"] == depth_percent)
-            df = df.filter(lambda x: x["depth_percent"] == depth_percent)
+            # dataset = load_dataset(eval_dataset_path, split="train")
+            # df = load_dataset(eval_dataset_path, split="train")
 
-            # dataset = dataset.select([0])
-            # df = df.select([0])
+            # dataset = dataset.filter(lambda x: x["depth_percent"] == depth_percent and x["num_shots"] == num_shots and x["num_digits"] == num_digits)
+            # df = df.filter(lambda x: x["depth_percent"] == depth_percent and x["num_shots"] == num_shots and x["num_digits"] == num_digits)
+
+            dataset = load_and_filter_dataset(
+                eval_dataset_path, depth_percent, num_shots, num_digits, seed=seed, num_samples=num_samples
+            )
+            df = load_and_filter_dataset(
+                eval_dataset_path, depth_percent, num_shots, num_digits, seed=seed, num_samples=num_samples
+            )
 
             dataloader = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=False)
 
@@ -286,7 +333,9 @@ def main():
             df["generation_text"] = responses
             df["generation_ids"] = answer_idxs
 
-            df.to_pickle(f"{save_path}/passkey_eval_results_for_{depth_percent}_depth.pkl")
+            df.to_pickle(
+                f"{save_path}/passkey_eval_results_for_{depth_percent}_depth_and_num_shots_{num_shots}_and_num_samples_{num_samples}_and_num_digits_{num_digits}_and_seed_{seed}.pkl"
+            )
 
 
 if __name__ == "__main__":
