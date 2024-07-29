@@ -245,31 +245,27 @@ old_register_buffer = nn.Module.register_buffer
 def _register_empty_parameter_for_fp8(module, name, param):
     old_register_parameter(module, name, param)
 
-    from nanotron.fp8.constant_recipe import MODULES_THAT_IN_FLOAT16
-    from nanotron.fp8.utils import get_modules_not_in_fp16
+    # from nanotron.fp8.constant_recipe import MODULES_THAT_IN_FLOAT16
+    # from nanotron.fp8.utils import get_modules_not_in_fp16
 
     # MODULES_THAT_IN_FLOAT16 = [TensorParallelEmbedding, nn.LayerNorm]
-    name_of_modules_not_in_fp16 = get_modules_not_in_fp16()
+    # name_of_modules_not_in_fp16 = get_modules_not_in_fp16()
 
     if param is not None:
-        IS_CONVERT_TO_FLOAT16 = False
+        from nanotron.fp8.utils import is_convert_to_fp16
 
-        # if any(isinstance(module, m) for m in MODULES_THAT_IN_FLOAT16) or (
-        #     hasattr(module, "name") and module.name not in name_of_modules_not_in_fp16
-        # ):
-        #     # NOTE: if we don't specify which models in FP16, we convert all models to FP8
-        #     if constants.CONFIG.fp8.model is not None:
+        # IS_CONVERT_TO_FLOAT16 = False
+        # if constants.CONFIG.fp8.model is None:
+        #     if any(isinstance(module, m) for m in MODULES_THAT_IN_FLOAT16):
         #         IS_CONVERT_TO_FLOAT16 = True
-        if constants.CONFIG.fp8.model is None:
-            if any(isinstance(module, m) for m in MODULES_THAT_IN_FLOAT16):
-                IS_CONVERT_TO_FLOAT16 = True
-        else:
-            if any(isinstance(module, m) for m in MODULES_THAT_IN_FLOAT16) or (
-                hasattr(module, "name") and module.name not in name_of_modules_not_in_fp16
-            ):
-                IS_CONVERT_TO_FLOAT16 = True
+        # else:
+        #     if any(isinstance(module, m) for m in MODULES_THAT_IN_FLOAT16) or (
+        #         hasattr(module, "name") and module.name not in name_of_modules_not_in_fp16
+        #     ):
+        #         IS_CONVERT_TO_FLOAT16 = True
+        is_convert_to_float16 = is_convert_to_fp16(module)
 
-        if IS_CONVERT_TO_FLOAT16:
+        if is_convert_to_float16:
             fp8_config = cast(FP8Args, constants.CONFIG.fp8)
             param.data = param.data.to(torch.device("cuda"), fp8_config.accum_dtype)
         else:
@@ -279,26 +275,30 @@ def _register_empty_parameter_for_fp8(module, name, param):
 def _register_empty_buffer_for_fp8(module, name, buffer, persistent=True):
     old_register_buffer(module, name, buffer, persistent=persistent)
 
-    from nanotron.fp8.constant_recipe import MODULES_THAT_IN_FLOAT16
-    from nanotron.fp8.utils import get_modules_not_in_fp16
+    # from nanotron.fp8.constant_recipe import MODULES_THAT_IN_FLOAT16
+    # from nanotron.fp8.utils import get_modules_not_in_fp16
 
-    name_of_modules_not_in_fp16 = get_modules_not_in_fp16()
+    # name_of_modules_not_in_fp16 = get_modules_not_in_fp16()
 
     if buffer is not None:
-        IS_CONVERT_TO_FLOAT16 = False
+        # IS_CONVERT_TO_FLOAT16 = False
 
-        # NOTE: convert all modules in FP8 except MODULES_THAT_IN_FLOAT16
-        # if fp8.model is None
-        if constants.CONFIG.fp8.model is None:
-            if any(isinstance(module, m) for m in MODULES_THAT_IN_FLOAT16):
-                IS_CONVERT_TO_FLOAT16 = True
-        else:
-            if any(isinstance(module, m) for m in MODULES_THAT_IN_FLOAT16) or (
-                hasattr(module, "name") and module.name not in name_of_modules_not_in_fp16
-            ):
-                IS_CONVERT_TO_FLOAT16 = True
+        # # NOTE: convert all modules in FP8 except MODULES_THAT_IN_FLOAT16
+        # # if fp8.model is None
+        # if constants.CONFIG.fp8.model is None:
+        #     if any(isinstance(module, m) for m in MODULES_THAT_IN_FLOAT16):
+        #         IS_CONVERT_TO_FLOAT16 = True
+        # else:
+        #     if any(isinstance(module, m) for m in MODULES_THAT_IN_FLOAT16) or (
+        #         hasattr(module, "name") and module.name not in name_of_modules_not_in_fp16
+        #     ):
+        #         IS_CONVERT_TO_FLOAT16 = True
 
-        if IS_CONVERT_TO_FLOAT16:
+        from nanotron.fp8.utils import is_convert_to_fp16
+
+        is_convert_to_float16 = is_convert_to_fp16(module)
+
+        if is_convert_to_float16:
             from typing import cast
 
             # from nanotron import constants

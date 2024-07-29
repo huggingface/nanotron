@@ -226,3 +226,28 @@ def get_modules_not_in_fp16():
     else:
         name_of_modules_not_in_fp16 = []
     return name_of_modules_not_in_fp16
+
+
+def is_convert_to_fp16(module) -> bool:
+    from nanotron import constants
+    from nanotron.fp8.constant_recipe import MODULE_NAMES_THAT_NOT_FP8, MODULES_THAT_IN_FLOAT16
+
+    IS_CONVERT_TO_FLOAT16 = False
+    name_of_modules_not_in_fp16 = get_modules_not_in_fp16()
+
+    if hasattr(module, "name") and "lm_head" in module.name:
+        assert 1 == 1
+
+    if constants.CONFIG.fp8.model is None:
+        if any(isinstance(module, m) for m in MODULES_THAT_IN_FLOAT16):
+            IS_CONVERT_TO_FLOAT16 = True
+        else:
+            if hasattr(module, "name") and any(n in module.name for n in MODULE_NAMES_THAT_NOT_FP8):
+                IS_CONVERT_TO_FLOAT16 = True
+    else:
+        if any(isinstance(module, m) for m in MODULES_THAT_IN_FLOAT16) or (
+            hasattr(module, "name") and module.name not in name_of_modules_not_in_fp16
+        ):
+            IS_CONVERT_TO_FLOAT16 = True
+
+    return IS_CONVERT_TO_FLOAT16
