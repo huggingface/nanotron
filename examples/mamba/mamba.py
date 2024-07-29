@@ -181,7 +181,6 @@ class Mamba(nn.Module, AttachableStore):
         self.A_log = create_sharded_parameter_from_config(
             parameter=A_log, pg=self.tp_pg, split_config=SplitConfig(split_dim=0)
         )
-        self.A_log._no_weight_decay = True
 
         # D "skip" parameter
         self.D = create_sharded_parameter_from_config(
@@ -189,7 +188,6 @@ class Mamba(nn.Module, AttachableStore):
             pg=self.tp_pg,
             split_config=SplitConfig(split_dim=0),
         )
-        self.D._no_weight_decay = True
 
         # self.out_proj = nn.Linear(self.d_inner, self.d_model, bias=bias, **factory_kwargs)
         self.out_proj = TensorParallelRowLinear(
@@ -228,7 +226,6 @@ class Mamba(nn.Module, AttachableStore):
                 return out
             else:
                 store["seqlen_offset"] += 1
-
         # We do matmul and transpose BLH -> HBL at the same time
         xz = self.in_proj(hidden_states).transpose(1, 2)
         A = -torch.exp(self.A_log.float())  # (d_inner, d_state)
@@ -664,7 +661,7 @@ class MambaModel(nn.Module):
 
     def get_flops_per_sec(self, iteration_time_in_sec, sequence_length, global_batch_size):
         """
-        Get flops per second for a Mamba model. 
+        Get flops per second for a Mamba model.
         Terms such as nonlinearities, biases, and layer normalization are omitted (https://arxiv.org/pdf/2001.08361.pdf)
         """
         # world_size = self.parallel_context.world_pg.size()
@@ -807,6 +804,14 @@ class MambaForTraining(NanotronModel):
             label_mask=label_mask,
         )["loss"]
         return {"loss": loss}
+    
+    def get_named_params_without_weight_decay(self):
+        # get full name with "A_log", "D"
+        named_param_without_weight_decay = []
+        for name, _ in self.model.named_parameters():
+            if "A_log" in name or "D" in name:
+                named_param_without_weight_decay.append(name)
+        return named_param_without_weight_decay
 
     @torch.no_grad()
     def init_model_randomly(self, config):
@@ -917,11 +922,7 @@ class MambaForTraining(NanotronModel):
                     raise ValueError(f"Who the fuck is {param_name}?")
 
             elif isinstance(module, Mamba):
-                # NOTE(fmom): nn.Parameter are initialized in Mamba __init__
-                # In Mamba, only those 3 parameters don't have weight decay.
-                if param_name in ["dt_bias", "A_log", "D"]:
-                    param._no_weight_decay = True
-
+                pass
             else:
                 raise Exception(f"Parameter {full_param_name} was not initialized")
 

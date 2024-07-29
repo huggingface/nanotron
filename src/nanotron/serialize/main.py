@@ -1,17 +1,25 @@
 from pathlib import Path
-from typing import Optional
+from typing import Optional, cast
 
 import torch
 from torch import nn
 from torch.nn.parallel import DistributedDataParallel
+from torch.optim.lr_scheduler import LambdaLR
 
 from nanotron import distributed as dist
 from nanotron import logging
 from nanotron import optim as optim
 from nanotron.config import Config
+from nanotron.constants import MODEL_CONFIG_FILE_NAME
+from nanotron.distributed import get_global_rank
 from nanotron.logging import log_rank
 from nanotron.parallel import ParallelContext
-from nanotron.serialize.metadata import CheckpointMetadata, load_meta, save_meta
+from nanotron.parallel.parameters import NanotronParameter
+from nanotron.sanity_checks import (
+    assert_tensor_synced_across_pg,
+    check_optim_state_in_sync,
+)
+from nanotron.serialize.metadata import CheckpointMetadata, TrainingMetadata, load_meta, save_meta
 from nanotron.serialize.optimizer import (
     load_lr_scheduler,
     load_optimizer,
@@ -45,16 +53,15 @@ def save(
     optimizer: optim.BaseOptimizer,
     lr_scheduler: torch.optim.lr_scheduler.LRScheduler,
     parallel_context: ParallelContext,
+    training_metadata: TrainingMetadata,
     root_folder: Path,
     should_save_config: bool = True,
     should_save_model: bool = True,
     should_save_optimizer: bool = True,
     should_save_lr_scheduler: bool = True,
-    checkpoint_metadata: dict = None,
     sanity_checks: bool = True,
 ) -> None:
-    if checkpoint_metadata is None:
-        checkpoint_metadata = {}
+    assert isinstance(training_metadata, TrainingMetadata)
 
     try:
         if should_save_config:
@@ -92,6 +99,11 @@ def save(
         raise e
     try:
         if should_save_lr_scheduler:
+            lr_scheduler = cast(LambdaLR, lr_scheduler)
+            assert len(lr_scheduler.lr_lambdas) == len(
+                optimizer.param_groups
+            ), "The number of lambdas functions in the scheduler should be equal to the number of parameter groups in the optimizer."
+
             save_lr_scheduler(
                 lr_scheduler=lr_scheduler,
                 parallel_context=parallel_context,
@@ -106,7 +118,7 @@ def save(
         )
         raise e
 
-    save_meta(root_folder=root_folder, parallel_context=parallel_context, checkpoint_metadata=checkpoint_metadata)
+    save_meta(root_folder=root_folder, parallel_context=parallel_context, training_metadata=training_metadata)
 
     # TODO @thomas21: sanity check, not sure whether that needs to happen at testing or now (depends how much it costs)
     ###
@@ -181,14 +193,13 @@ def save(
     #                 group=group,
     #             )
 
-    #             torch.testing.assert_close(
-    #                 tensor,
-    #                 reference_tensor,
-    #                 atol=0,
-    #                 rtol=0,
-    #                 msg=lambda msg: f"tensor at {current_state_dict['names'][index]} doesn't match with our reference. Optimizer key: {name}\nCur: {tensor}\nRef: {reference_tensor}\n{msg}",
-    #             )
-    #     ###
+                torch.testing.assert_close(
+                    tensor,
+                    reference_tensor,
+                    atol=0,
+                    rtol=0,
+                    msg=lambda msg: f"tensor at {current_state_dict['names'][index]} doesn't match with our reference. Optimizer key: {name}\nCur: {tensor}\nRef: {reference_tensor}\n{msg}",
+                )
 
     dist.barrier(parallel_context.world_pg)
 
@@ -250,7 +261,7 @@ def parse_ckpt_path(config: Config) -> Optional[Path]:
             load_from_candidate = int(fi.read())
         checkpoint_path = config.checkpoints.resume_checkpoint_path / str(load_from_candidate)
 
-    elif (config.checkpoints.resume_checkpoint_path / "model_config.json").exists():
+    elif (config.checkpoints.resume_checkpoint_path / MODEL_CONFIG_FILE_NAME).exists():
         # we assume that the checkpoint path is a path to a checkpoint
         checkpoint_path = config.checkpoints.resume_checkpoint_path
 

@@ -14,10 +14,11 @@
 # limitations under the License.
 """PyTorch LLaMa model."""
 
-from typing import Dict, Optional, Union
+from typing import Dict, List, Optional, Union
 
 import torch
 from torch import nn
+from torch.utils.checkpoint import CheckpointFunction
 
 from nanotron import constants, logging
 from nanotron import distributed as dist
@@ -1212,7 +1213,9 @@ class LlamaDecoderLayer(nn.Module):
         self.post_attention_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.mlp = MLP(config=config, parallel_config=parallel_config, tp_pg=tp_pg)
 
-    def forward(
+        self.recompute_layer = parallel_config.recompute_layer
+
+    def _core_forward(
         self,
         hidden_states: Union[torch.Tensor, TensorPointer],
         sequence_mask: Union[torch.Tensor, TensorPointer],
@@ -1266,6 +1269,26 @@ class LlamaDecoderLayer(nn.Module):
         # )
 
         hidden_states = hidden_states + residual
+
+        return hidden_states, output["sequence_mask"]
+
+    def _checkpointed_forward(
+        self,
+        hidden_states: torch.Tensor,
+        sequence_mask: torch.Tensor,
+    ) -> List[torch.Tensor]:
+        return CheckpointFunction.apply(self._core_forward, True, hidden_states, sequence_mask)
+
+    def forward(
+        self,
+        hidden_states: Union[torch.Tensor, TensorPointer],
+        sequence_mask: Union[torch.Tensor, TensorPointer],
+    ) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
+
+        if self.recompute_layer and not isinstance(hidden_states, TensorPointer):
+            hidden_states, sequence_mask = self._checkpointed_forward(hidden_states, sequence_mask)
+        else:
+            hidden_states, sequence_mask = self._core_forward(hidden_states, sequence_mask)
 
         return {
             "hidden_states": hidden_states,

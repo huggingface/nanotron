@@ -658,7 +658,7 @@ Convexity, minima, and saddle points: A function is convex if no chord (line seg
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--ckpt-path", type=Path, required=True, help="Checkpoint path")
-    parser.add_argument("--dp", type=int, default=0)
+    parser.add_argument("--dp", type=int, default=1)
     parser.add_argument("--pp", type=int, default=0)
     parser.add_argument("--tp", type=int, default=0)
     parser.add_argument("--max-new-tokens", type=int, default=40, help="Maximum number of new tokens to generate")
@@ -776,113 +776,12 @@ def main():
         tokenizer.padding_side = "left"
         tokenizer.truncation_side = "left"  # TODO @nouamane: do we want this?
         dummy_inputs = [
-            # "Passage: Daniel went back to the garden. Mary travelled to the kitchen. Sandra journeyed to the kitchen. Sandra went to the hallway. John went to the bedroom. Mary went back to the garden. Daniel walked to the living room. Sandra moved to the dining room. John traveled to the kitchen. Daniel journeyed to the hallway. Where is Mary?\nAnswer:",
-            # "Passage: Daniel went back to the garden. Mary travelled to the kitchen. Sandra journeyed to the kitchen. Sandra went to the hallway. John went to the bedroom. Mary went back to the garden. Where is Mary? Mary is in ",
-            # """
-            # Passage: Ethan walked to the library. Olivia moved to the living room. Sophia headed to the living room. Sophia went to the balcony. James went to the office. Olivia returned to the library. Where is Olivia? Olivia is in the library.
-            # Passage: Daniel went back to the garden. Mary travelled to the kitchen. Sandra journeyed to the kitchen. Sandra went to the hallway. John went to the bedroom. Mary went back to the garden. Where is Daniel? Daniel is in
-            # """,
-            # """
-            # Passage: The password is 93. Remember it. 93 is the password. The grass is green. The sky is blue The grass is green. The sky is blue. The grass is green. The sky is blue. The grass is green. The sky is blue. The grass is green. The sky is blue. What is the password? The password is 93.
-            # Passage: The pass key is 24. Remember it. 24 is the pass key. The grass is green. The sky is blue The grass is green. The sky is blue. The grass is green. The sky is blue. The grass is green. The sky is blue. The grass is green. The sky is blue. What is the pass key? The pass key is 24.
-            # Passage: The gatecode is 312. Remember it. 312 is the gatecode. The grass is green. The sky is blue The grass is green. The sky is blue. The grass is green. The sky is blue. The grass is green. The sky is blue. The grass is green. The sky is blue. The grass is green. The sky is blue The grass is green. The sky is blue. The grass is green. The sky is blue. The grass is green. The sky is blue. The grass is green. The sky is blue. . What is the gatecode? The gatecode is 312.
-            # Passage: The vault key is 4124. Remember it. 4124 is the vault key. The grass is green. The sky is blue The grass is green. The sky is blue. The grass is green. The sky is blue. The grass is green. The sky is blue. The grass is green. The sky is blue. The grass is green. The sky is blue The grass is green. The sky is blue. The grass is green. The sky is blue. The grass is green. The sky is blue. The grass is green. The sky is blue. . What is the vault key? The vault key is 4124.
-            # Passage: The encrypted message is 515. Remember it. 515 is encrypted message. The grass is green. The sky is blue The grass is green. The sky is blue. The grass is green. The sky is blue. The grass is green. The sky is blue. The grass is green. The sky is blue. The grass is green. The sky is blue The grass is green. The sky is blue. The grass is green. The sky is blue. The grass is green. The sky is blue. The grass is green. The sky is blue. What is the encrypted message? The encrypted message is 515.
-            # Passage: The password is 76. Remember it. 76 is the password. The grass is green. The sky is blue. The grass is green. The sky is blue. The grass is green. The sky is blue. The grass is green. The sky is blue. The grass is green. The sky is blue. The grass is green. The grass is green. The sky is blue. The grass is green. The sky is blue. What is the password? The password is
-            # """
-            # """
-            # Passage: The password is 93. Remember it. 93 is the password. The grass is green. The sky is blue The grass is green. The sky is blue. The grass is green. The sky is blue. The grass is green. The sky is blue. The grass is green. The sky is blue. What is the password? The password is 93.
-            # Passage: The password is 76. Remember it. 76 is the password. The grass is green. The sky is blue. The grass is green. The sky is blue. The grass is green. The sky is blue. The grass is green. The sky is blue. The grass is green. The sky is blue. The grass is green. The grass is green. The sky is blue. The grass is green. The sky is blue. What is the password? The password is
-            # """,
-            """
-            Passage: The special magic Singapore number is 144. The grass is green. The sky is blue The grass is green. The sky is blue. The grass is green. The sky is blue. The grass is green. The sky is blue. The grass is green. The sky is blue. Based on the content of the passage, Question: What is the special magic Singapore number? Answer: The special magic Singapore number is 144.
-
-            Passage: The special magic Netherland number is 931. The grass is green. The sky is blue. The grass is green. The sky is blue. The grass is green.Question: What is the special magic Netherland number? Answer: The special magic Netherland number is
-            """
-            # "Passage: The password is 94. Remember it. 94 is the password. The grass is green. The sky is blue The grass is green. The sky is blue. The grass is green. The sky is blue. The grass is green. The sky is blue. The grass is green. The sky is blue. What is the password? The password is "
-            # "This is a math lesson. Answer the question. What is the result of 1 + 1? The result is ",
-            # "This is a math lesson. Answer the question. What is the result of 1 + 1? The result is ",
-            # "def fib(n)",
-            # "def fib(x)",
-            # "This film was probably inspired by Godzilla, ",
-            # "This film was probably inspired by Godzilla, ",
-            # "Paris is the capital of ",
-            # "Paris is the capital of ",
-            # END_PASSKEY_EXTACT_32K_TOKENS,
-            # END_PASSKEY_EXTACT_32K_TOKENS,
-            # PASSKEY_NINETY_PERCENT,
-            # "The pass key is 24. Remember it. 24 is the pass key. The grass is green. The sky is blue The grass is green. The sky is blue. The grass is green. The sky is blue. The grass is green. The sky is blue. The grass is green. The sky is blue. What is the pass key? The pass key is ",
-            # "There is an important info hidden inside a lot of irrelevant text. Find it and memorize them. I will quiz you about the important information there. The grass is green. The sky is blue. The pass key is 24. Remember it. 24 is the pass key. What is the pass key? The pass key is ",
-            # "There is an important info hidden inside a lot of irrelevant text. Find it and memorize them. I will quiz you about the important information there. The grass is green. The sky is blue. The best thing to do in San Francisco is eat a sandwich and sit in Dolores Park on a sunny day. The grass is green. The sky is blue. The grass is green. The sky is blue. The grass is green. The sky is blue. The best thing to do in San Francisco is ",
-            # NEEDLE_TEXT_16K_CTX_AND_0_DEPTH,
-            # NEEDLE_TEXT_1K_CTX_AND_0_DEPTH,
-            # NEEDLE_TEXT_16K_CTX_AND_0_DEPTH,
-            # MATH_TEXT_256_TOKENS,
-            # "The pass key is 24. Remember it. 24 is the pass key. The grass is green. The sky is blue. What is the pass key? The pass key is ",
-            # "The pass key is 25. Remember it. 25 is the pass key. The grass is green. The sky is blue. What is the pass key? The pass key is ",
-            # "The pass key is 41. Remember it. 41 is the pass key. The grass is green. The sky is blue. What is the pass key? The pass key is ",
-            # "The pass key is 214. Remember it. 214 is the pass key. The grass is green. The sky is blue. What is the pass key? The pass key is ",
-            # "Remmeber the pass key. The pass key is 24. Remember it. 24 is the pass key. The grass is green. The sky is blue. The grass is green. The sky is blue. The grass is green. The sky is blue. The grass is green. The sky is blue.The grass is green. The sky is blue. The grass is green. What is the pass key? The pass key is ",
-            # "Remmeber the pass key. The pass key is 214. Remember it. 214 is the pass key. The grass is green. The sky is blue. The grass is green. The sky is blue. The grass is green. The sky is blue. The grass is green. The sky is blue.The grass is green. The sky is blue. The grass is green. What is the pass key? The pass key is ",
-            # "The grass is green. The sky is blue. The grass is green. The sky is blue. The grass is green. The sky is blue. The grass is green. Remmeber the pass key. The pass key is 214. Remember it. 214 is the pass key....... What is the pass key? The pass key is ",
-            # "What is the pass key? The pass key is 214. Remmeber the pass key. The pass key is 214. Remember it. 214 is the pass key. The grass is green. The sky is blue. The grass is green. The sky is blue. The grass is green. The sky is blue. The grass is green. The sky is blue.The grass is green. The sky is blue. The grass is green. What is the pass key? The pass key is ",
-            # "The grass is green. "
-            # "There is an important info hidden inside a lot of irrelevant text. Find it and memorize them. I will quiz you about the important information there. The secret color is red. Remember it. The secret color is red. The streets are alive with people. Horns honk and engines roar. The urban jungle never sleeps.\nThe mountains stand tall and proud. What is the secret color? The secret color is",
-            # "There is an important info hidden inside a lot of irrelevant text. Find it and memorize them. I will quiz you about what is the pass key later on. The pass key is 54. Remember it. The pass key is 54. The grass is green. The sky is blue. The grass is green. The sky is blue. The grass is green. The sky is blue. What is the pass key? The pass key is ",
-            # "The best thing to do in Tokyo is climb a tree in Shinjuku Gyoen. The grass is green. The sky is blue. What is the best thing to do in Tokyo? The best thing to do in Tokyo is "
-            # "There is an important info hidden inside a lot of irrelevant text. Find it and memorize them. I will quiz you about what is the best thing to do in Tokyo later on? The best thing to do in Tokyo is climb a tree in Shinjuku Gyoen. The grass is green. The sky is blue. The sun is yellow. Here we go. The grass is green. The sky is blue. The sun is yellow. Here we go. The grass is green. The sky is blue. The sun is yellow. Here we go. The grass is green. The sky is blue. The sun is yellow. Here we go. What is the best thing to do in Tokyo? The best thing to do in Tokyo is "
-            # "Sara's favorite snack is Hot Cheetos. The grass is green. The sky is blue. What is Sara's favorite snack? Sara's favorite snack is ",
-            # "What is Sara's favorite snack? Sara's favorite snack is Hot Cheetos. Sara's favorite snack is Hot Cheetos. The grass is green. The sky is blue. The grass is green. The sky is blue. What is Sara's favorite snack? Sara's favorite snack is ",
-            # "The topic is the study of the social sciences. The grass is green. The sky is blue. The grass is green. The sky is blue. The grass is green. The sky is blue. What is the topic? She studies the topic about ",
-            # "Sara studies at the University of California, Berkeley. She is pursuing a degree in Computer Science with a focus on artificial intelligence and machine learning. Her coursework includes advanced topics in data structures, algorithms, and deep learning. Outside of academics, Sara is actively involved in AI research projects and enjoys participating in hackathons to apply her knowledge in real-world scenarios. Where does Sara study at? Sara studies at the "
-            # "There is an important info hidden inside a lot of irrelevant text. Find it and memorize them. I will quiz you about what is the pass key later on, Lisa works at Google. She is a software engineer focusing on cloud computing and infrastructure. Her responsibilities include developing scalable cloud solutions, optimizing server performance, and ensuring data security. Outside of work, Lisa is actively involved in open-source projects and enjoys contributing to tech communities. Based on the previous information, where does Lisa work? Lisa works at "
-            # PASSKEY_256_CTX_AND_0_DEPTH,
-            # 200 tokens
-            # "The grass is green. The sky is blue. The grass is green. The sky is blue. The grass is green. The sky is blue",
-            # "The pass key is 24. Remember it. 24 is the pass key. The grass is green. The sky is blue. The grass is green. The sky is blue. The grass is green. The sky is blue. The grass is green. The sky is blue.The grass is green. The sky is blue The grass is green. The sky is blue.The grass is green. The sky is blue The grass is green. The sky is blue.The grass is green. The sky is blue The grass is green. The sky is blue.The grass is green. The sky is blue The grass is green. The sky is blue. The grass is green. The sky is blue. The grass is green. The sky is blue. The grass is green. The sky is blue. The grass is green. The sky is blue.The grass is green. The sky is blue The grass is green. The sky is blue.The grass is green. The sky is blue The grass is green. The sky is blue. What is the pass key? The pass key is ",
-            # FINETUNE,
-            # "1234",
-            # "1234",
-            # "Hi there, I'm from the USA, my name is ",
-            # "Hi there, I'm from the USA, my name is ",
-            # NOTE: training data
-            # "InterruptEnumeration of all the interrupts. This enum is seldom used in application or library crates. It is present primarily for",
-            # "InterruptEnumeration of all the interrupts. This enum is seldom used in application or library crates. It is present primarily for",
-            # "If the parser encounters a syntax error, an error event value incl. a description and input position will be produced (but no JS error will be thrown) and the entire ",
-            # "If the parser encounters a syntax error, an error event value incl. a description and input position will be produced (but no JS error will be thrown) and the entire ",
-            # "This work introduces an efficient method to scale Transformer-based ",
-            # "This work introduces an efficient method to scale Transformer-based Large Language Models (LLMs) to infinitely long inputs with bounded memory and computation. A key component in our proposed approach is a new attention technique dubbed Infini-attention. The Infini-attention incorporates a compressive memory into the vanilla attention mechanism and builds in both masked local attention and long-term linear attention mechanisms in a single Transformer block. We demonstrate the effectiveness of our approach on long-context language modeling benchmarks, 1M sequence length passkey context block retrieval and 500K length book summarization tasks with 1B and 8B LLMs. Our approach introduces minimal bounded memory parameters and enables fast streaming inference for "
-            # "This work introduces an efficient method to scale Transformer-based "
-            # NOTE: last training data
-            # "Effectively managing student enquiries lies at the heart of successful real estate and investment education. Through leveraging diverse resources such as FAQs, online enquiry ",
-            # TRAINING_DATA_4K,
-            # TRAINING_DATA_4K,
-            # PASSKEY_1024_CTX_AND_0_DEPTH,
-            # PASSKEY_1024_CTX_AND_0_DEPTH
-            # PASSKEY_1024_CTX_AND_90_DEPTH,
-            # PASSKEY_1024_CTX_AND_90_DEPTH,
-            # MATH_TEXT_256_TOKENS,
-            # "Neuroscientists are the cartographers of the brain’s diverse domains and territories — the features and activities that define them, the roads and highways that connect ",
-            # "Professor Cathy Drennan introduces this series of lectures about basic chemical principles. She describes her path to becoming a chemist and reveals her first impression of the discipline of chemistry. ",
-            # "Professor Cathy Drennan introduces this series of lectures about basic chemical principles. She describes her path to becoming a chemist and reveals her first impression of the discipline of chemistry. ",
-            # "Professor Cathy Drennan introduces this series of lectures about basic chemical principles. She describes her path to becoming a chemist and reveals her first impression of the discipline of chemistry. Goals for students of this material are presented as well as some examples about how real world problems can be solved through the applications of chemical principles. Teaching assistants for the course are introduced. What is the professor's name? The professor's name is Cathy ",
-            # "Gravity is most accurately described by the general theory of relativity, proposed by Albert Einstein in",
-            # "The Standard Model of particle physics is the theory describing three of the four known fundamental forces in the universe and classifying all known elementary particles. It was developed in ",
-            # "In a direct democracy, the people have the direct authority to deliberate and decide legislation. In a representative democracy, the people choose",
-            #             """
-            #             Neural networks comprise of layers/modules that perform operations on data. The torch.nn namespace provides all the building blocks you need to build your own neural network. Every module in PyTorch subclasses the nn.Module. A neural network is a module itself that consists of other modules (layers). This nested structure allows for building and managing complex architectures easily.
-            # In the following sections, we’ll build a neural network to classify images in the FashionMNIST dataset.
-            # import os
-            # import torch
-            # from torch import nn
-            #             """,
-            # NEEDLE_16K_CTX_AND_0_DEPTH,
-            # NEEDLE_16K_CTX_AND_100_DEPTH
-            # "_grad"
-            # "Neel Nanda helped show how neural networks that had grokked modular arithmetic transformed the numbers using complicated mathematics. ",
-            # "Earth is the third planet from the Sun and the only astronomical object known to harbor life. This is enabled by Earth being an ocean world, the only one in the Solar System sustaining liquid surface water. Almost all of Earth's water is contained ",
-            # AI_TEXT_16K,
-            # "This past Monday, about a dozen engineers and executives at data science and AI company Databricks gathered in conference rooms connected via Zoom to learn if they had succeeded in building a top artificial intelligence language model. The team had spent months, and about $\$ 10$ million, training DBRX, a large language model similar in design to the one behind OpenAl's ChatGPT. But they wouldn't know how powerful their creation was until results came back from the final tests of its abilities."
+            "The future of AI is",
+            # "Passage: Daniel went back to the garden. Mary travelled to the kitchen. Sandra journeyed to the kitchen. Sandra went to the hallway. John went to the bedroom. Mary went back to the garden. Where is Mary?\nAnswer:",
+            "def fib(n)",
+            # 'Here is an extract from a webpage: "Have you ever experienced heel pain after a heavy physical activity, or even right after a long period of standing? If you regard this as something usual and normal, then think again. Miscalled as heel pain, plantar fasciitis causes these frequent mild pains experienced in the soles of the feet. It is the inflammation and enlargement the plantar fascia tissue that is located in the heels of the feet, stretching to the base of the toes. This tissue is responsible for absorbing shock in the feet and for supporting the arches. It also plays a vital role in foot movements during walking and standing. Many factors such as excessive walking, standing, and running trigger heel pain and plantar fasciitis. A sudden increase in intensity of activities, increase in weight, and abrupt change of footwear also cause the swelling of the ligament. Non-supportive footwear lacking arch cushions and improper and worn out running or training can also lead to the problem. It is also most evident among those". Write an extensive and detailed course unit suitable for a textbook targeted at college students, related to the given extract, within the context of "Medicine". Do not just list concepts, but develop each one in detail before moving to the next, as we prioritize depth of understanding and comprehensive exploration of the subject matter over breadth. Focus on: - Rigor: Ensure in-depth coverage of the concepts/sections. - Engagement: Write with an academic, professional and engaging tone that captivates interest. - Application: Incorporate specific, practical examples, such as proofs in calculus or critical dates and figures in history. Do not include a title or an introduction, simply write the content without headlines and introductory phrases. Do not use images.',
+            # "Advancements in technology will lead to",
+            # "Tomorrow's world is shaped by",
         ]
 
         outputs = decode_text(

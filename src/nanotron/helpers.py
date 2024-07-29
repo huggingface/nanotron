@@ -13,13 +13,12 @@ import numpy as np
 import torch
 from torch import nn
 from torch.nn.parallel import DistributedDataParallel
-from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
 from torch.profiler import ProfilerActivity, profile, tensorboard_trace_handler
 
 from nanotron import distributed as dist
 from nanotron import logging
-from nanotron.config import Config, LRSchedulerArgs, OptimizerArgs, ParallelismArgs
+from nanotron.config import Config, DatasetStageArgs, LRSchedulerArgs, OptimizerArgs, ParallelismArgs
 from nanotron.distributed import ProcessGroup
 from nanotron.logging import LogItem, log_rank
 from nanotron.models.base import NanotronModel
@@ -43,6 +42,7 @@ from nanotron.random import (
     get_synced_random_state,
 )
 from nanotron.scaling.parametrization import LearningRateForSP, LearningRateForSpectralMup, ParametrizationMethod
+from nanotron.serialize.metadata import TrainingMetadata
 
 logger = logging.get_logger(__name__)
 
@@ -152,6 +152,10 @@ def _get_lr_lambda_in_training(
                 * (lr_decay_steps - (current_step - lr_decay_starting_step))
                 / lr_decay_steps
             )
+        elif lr_scheduler_args.lr_decay_style == "1-sqrt":
+            lmbda = lr_scheduler_args.min_decay_lr + (initial_lr - lr_scheduler_args.min_decay_lr) * (
+                1 - math.sqrt((current_step - lr_decay_starting_step) / lr_decay_steps)
+            )
         else:
             raise ValueError(f"Unknown decay style {lr_scheduler_args.lr_decay_style}")
 
@@ -190,6 +194,41 @@ def lr_scheduler_builder(optimizer: Optimizer, lr_scheduler_args: LRSchedulerArg
 
     lr_scheduler = LambdaLR(optimizer.get_base_optimizer(), lr_lambda=lr_lambdas)
     return lr_scheduler
+
+
+def get_custom_weight_decay_for_named_parameters(
+    named_parameters: Iterable[Tuple[str, torch.Tensor]],
+    model: NanotronModel,
+    module_id_to_prefix: Dict[int, str],
+    weight_decay: float,
+) -> List[Dict[str, Any]]:
+    """
+    Apply weight decay to all parameters except the ones that are in the named_param_without_weight_decay list.
+    """
+
+    named_param_groups_with_custom_weight_decay = []
+
+    exclude_named_params = model.get_named_params_without_weight_decay()
+
+    for name, param in named_parameters:
+        if param.is_tied:
+            param.get_tied_info().get_full_name_from_module_id_to_prefix(module_id_to_prefix=module_id_to_prefix)
+        else:
+            pass
+
+        if any(name.endswith(substring) for substring in exclude_named_params):
+            named_param_groups_with_custom_weight_decay.append({"named_params": [(name, param)], "weight_decay": 0.0})
+        else:
+            named_param_groups_with_custom_weight_decay.append(
+                {"named_params": [(name, param)], "weight_decay": weight_decay}
+            )
+
+    log_rank(
+        f"[Optimizer Building] Creating {len(named_param_groups_with_custom_weight_decay)} param groups with custom weight decay",
+        logger=logger,
+        level=logging.DEBUG,
+    )
+    return named_param_groups_with_custom_weight_decay
 
 
 def get_custom_lr_for_named_parameters(
@@ -255,6 +294,31 @@ def get_custom_lr_for_named_parameters(
     return named_param_groups_with_custom_lr
 
 
+def merge_named_param_groups(
+    named_param_groups_with_lr: List[Dict[str, Any]],
+    named_param_groups_with_weight_decay: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+
+    assert len(named_param_groups_with_lr) == len(
+        named_param_groups_with_weight_decay
+    ), "Named param groups don't match in length"
+
+    named_param_groups = []
+    for group_with_lr, group_with_weight_decay in zip(
+        named_param_groups_with_lr, named_param_groups_with_weight_decay
+    ):
+        assert group_with_lr["named_params"] == group_with_weight_decay["named_params"]
+        named_param_groups.append(
+            {
+                "named_params": group_with_lr["named_params"],
+                "lr": group_with_lr["lr"],
+                "weight_decay": group_with_weight_decay["weight_decay"],
+            }
+        )
+
+    return named_param_groups
+
+
 def init_optimizer_and_grad_accumulator(
     parametrization_method: ParametrizationMethod,
     model: nn.Module,
@@ -269,28 +333,53 @@ def init_optimizer_and_grad_accumulator(
     module_id_to_prefix[id(unwrapped_model)] = ""
 
     named_parameters = list(unwrapped_model.get_named_params_with_correct_tied())
-    named_param_groups = get_custom_lr_for_named_parameters(
+
+    named_param_groups_with_lr = get_custom_lr_for_named_parameters(
         parametrization_method=parametrization_method,
         named_parameters=named_parameters,
         model=unwrapped_model,
         lr=optimizer_args.learning_rate_scheduler.learning_rate,
     )
+    named_param_groups_with_weight_decay = get_custom_weight_decay_for_named_parameters(
+        named_parameters=named_parameters,
+        model=unwrapped_model,
+        module_id_to_prefix=module_id_to_prefix,
+        weight_decay=optimizer_args.weight_decay,
+    )
 
-    assert 1 == 1
+    named_param_groups = merge_named_param_groups(named_param_groups_with_lr, named_param_groups_with_weight_decay)
 
     # Basic optimizer builder
     def basic_optimizer_builder(named_param_groups):
+        optimizer = None
+
+        if optimizer_args.optimizer_factory.name == "adamW":
+
+            def optimizer(param_groups):
+                return torch.optim.AdamW(
+                    param_groups,
+                    lr=optimizer_args.learning_rate_scheduler.learning_rate,
+                    weight_decay=optimizer_args.weight_decay,
+                    eps=optimizer_args.optimizer_factory.adam_eps,
+                    betas=(optimizer_args.optimizer_factory.adam_beta1, optimizer_args.optimizer_factory.adam_beta2),
+                    fused=optimizer_args.optimizer_factory.torch_adam_is_fused,
+                )
+
+        elif optimizer_args.optimizer_factory.name == "sgd":
+
+            def optimizer(param_groups):
+                return torch.optim.SGD(
+                    param_groups,
+                    lr=optimizer_args.learning_rate_scheduler.learning_rate,
+                    weight_decay=optimizer_args.weight_decay,
+                )
+
+        else:
+            raise ValueError(f"Optimizer {optimizer_args.optimizer_factory.name} is not supported")
+
         return NamedOptimizer(
             named_params_or_groups=named_param_groups,
-            optimizer_builder=lambda param_groups: AdamW(  # pylint: disable=E0601
-                param_groups,
-                # NOTE: don't apply global weight if balance_factor_weight_decay is set
-                # weight_decay=optimizer_args.weight_decay if constants.CONFIG.infini_attention.balance_factor_weight_decay is None else None,
-                lr=optimizer_args.learning_rate_scheduler.learning_rate,
-                eps=optimizer_args.adam_eps,
-                betas=(optimizer_args.adam_beta1, optimizer_args.adam_beta2),
-                fused=optimizer_args.torch_adam_is_fused,
-            ),
+            optimizer_builder=optimizer,
         )
 
     optimizer_builder = basic_optimizer_builder
@@ -612,3 +701,39 @@ def log_throughput(
 
     if dist.get_rank(parallel_context.world_pg) == 0:
         write_to_csv(config.general.benchmark_csv_path, table_log, model_tflops, slurm_job_id)
+
+
+def compute_remain_train_steps_of_a_data_stage_from_ckp(
+    stage: DatasetStageArgs, config: Config, metadata: TrainingMetadata
+) -> int:
+    def is_last_stage():
+        sorted_stages = sorted(config.data_stages, key=lambda x: x.start_training_step)
+        return sorted_stages[-1].start_training_step == stage.start_training_step
+
+    def is_resume_from_training():
+        return metadata.last_train_step > 0
+
+    if is_last_stage() is True:
+        total_train_steps = config.tokens.train_steps
+    else:
+        next_stage = next((s for s in config.data_stages if s.start_training_step > stage.start_training_step), None)
+        total_train_steps = next_stage.start_training_step
+
+    if metadata.last_train_step > stage.start_training_step:
+        # NOTE: if the last_train_step is larger than the start_training_step of the current stage,
+        # it means that the training has already passed this stage
+        # so there is no remaining steps
+        return 0
+    else:
+        last_train_steps = metadata.last_train_step if is_resume_from_training() else stage.start_training_step
+        return total_train_steps - last_train_steps
+
+
+def get_consumed_train_samples_of_a_data_stage_from_ckp(
+    stage: DatasetStageArgs, metadata: TrainingMetadata
+) -> Optional[int]:
+    start_training_step = stage.start_training_step
+    return next(
+        (s.consumed_train_samples for s in metadata.data_stages if s.start_training_step == start_training_step),
+        None,
+    )

@@ -85,7 +85,7 @@ def sanity_check_dataloader(
 # Adapted from h4/src/h4/data/loading.py
 def get_datasets(
     hf_dataset_or_datasets: Union[dict, str],
-    hf_dataset_config_name: Optional[str] = None,
+    hf_dataset_config_name: str,
     splits: Optional[Union[List[str], str]] = ["train", "test"],
 ) -> "DatasetDict":
     """
@@ -117,8 +117,6 @@ def get_datasets(
         for split in splits:
             raw_datasets[split] = load_dataset(
                 hf_dataset_or_datasets,
-                # NOTE: weird shit, I can't pass config_name=config_name
-                # have to pass it as positional arguments!!
                 hf_dataset_config_name,
                 split=split,
             )
@@ -351,10 +349,10 @@ class DataCollatorForCLM:
         ]:
             assert all(len(example) == 0 for example in examples)
             return {
-                "input_ids": TensorPointer(self.input_pp_rank),
-                "input_mask": TensorPointer(self.input_pp_rank),
-                "label_ids": TensorPointer(self.output_pp_rank),
-                "label_mask": TensorPointer(self.output_pp_rank),
+                "input_ids": TensorPointer(group_rank=self.input_pp_rank),
+                "input_mask": TensorPointer(group_rank=self.input_pp_rank),
+                "label_ids": TensorPointer(group_rank=self.output_pp_rank),
+                "label_mask": TensorPointer(group_rank=self.output_pp_rank),
             }
 
         # Make sure we load only what's necessary, ie we only load a `input_ids` column.
@@ -402,15 +400,16 @@ class DataCollatorForCLM:
 
 
 # Adapted from https://github.com/huggingface/transformers/blob/47e1676255e5dd86b9541f734cd4f4bdcbb50f4a/src/transformers/trainer.py#L763-L835
-def _get_train_sampler(
+def get_sampler(
     dl_ranks_size: int,
     dl_rank: int,
-    train_dataset: "Dataset",
-    seed: int,
-    use_loop_to_round_batch_size: bool,
+    train_dataset: Union["Dataset", torch.utils.data.Dataset],
     consumed_train_samples: int,
+    seed: int = 42,
+    use_loop_to_round_batch_size: bool = False,
     micro_batch_size: Optional[int] = None,
     drop_last: Optional[bool] = True,
+    shuffle: bool = True,
 ) -> Optional[torch.utils.data.Sampler]:
     """returns sampler that restricts data loading to a subset of the dataset proper to the DP rank"""
 
@@ -430,7 +429,7 @@ def _get_train_sampler(
         )
     else:
         sampler = DistributedSampler(
-            train_dataset, num_replicas=dl_ranks_size, rank=dl_rank, seed=seed, drop_last=drop_last
+            train_dataset, num_replicas=dl_ranks_size, rank=dl_rank, seed=seed, drop_last=drop_last, shuffle=shuffle
         )
 
     if consumed_train_samples > 0:
@@ -495,7 +494,7 @@ def get_train_dataloader(
     # TODO @nouamanetazi: Remove unused columns: https://github.com/huggingface/transformers/blob/47e1676255e5dd86b9541f734cd4f4bdcbb50f4a/src/transformers/trainer.py#L852
     # TODO @nouamanetazi: Support torch.utils.data.IterableDataset: https://github.com/huggingface/transformers/blob/47e1676255e5dd86b9541f734cd4f4bdcbb50f4a/src/transformers/trainer.py#L855-L872
 
-    train_sampler = _get_train_sampler(
+    train_sampler = get_sampler(
         dl_rank=dp_rank,
         dl_ranks_size=dp_ranks_size,
         train_dataset=train_dataset,
