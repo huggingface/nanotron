@@ -197,6 +197,14 @@ class LearningRateForSpectralMup(LearningRateForParametrizator):
         # NOTE: param_name should be like 'model.token_position_embeddings.pp_block.token_embedding.weight'
         # since names_to_modules map module_name to module
         # so we remove the .weight and .bias from param_name to get the module_name
-        module_name = param_name.rsplit(".", 1)[0]
-        module = self.names_to_modules[module_name]
+
+        # NOTE: the purpose if remove ".weight" or ".bias" from module_name.weight
+        # so we get the module name
+        if "weight" or "bias" in param_name:
+            module_name = param_name.rsplit(".", 1)[0]
+
+        try:
+            module = self.names_to_modules[module_name]
+        except Exception:
+            raise Exception(f"Can't find {module_name} in {self.names_to_modules.keys()}")
         return self.MODULE_TO_PARAMETRIZE[type(module)](param, module)

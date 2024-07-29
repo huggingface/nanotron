@@ -1,0 +1,209 @@
+checkpoints:
+  checkpoint_interval: 663
+  checkpoints_path: /fsx/phuc/new_workspace/experiments/infini_attention_8b_llama/exp35_8b_llama_16384_ctx_length_and_8192_segment_length_and_2m_bs_and_needle_finetuning/checkpoints
+  checkpoints_path_is_shared_file_system: true
+  resume_checkpoint_path: /fsx/phuc/new_workspace/experiments/infini_attention_8b_llama/exp35_8b_llama_16384_ctx_length_and_8192_segment_length_and_2m_bs_and_needle_finetuning/checkpoints
+  save_initial_state: false
+general:
+  benchmark_csv_path: null
+  consumed_train_samples: null
+  ignore_sanity_checks: true
+  project: infini_attention_8b_llama
+  run: exp35_8b_llama_16384_ctx_length_and_8192_segment_length_and_2m_bs_and_needle_finetuning_and_lr_1.0e-5
+  seed: 42
+  step: null
+logging:
+  iteration_step_info_interval: 1
+  log_level: info
+  log_level_replica: info
+# infini_attention:
+#   segment_length: 256
+#   turn_on_memory: true
+model:
+  ddp_bucket_cap_mb: 25
+  dtype: bfloat16
+  init_method:
+    # path: /fsx/phuc/projects/infini-attention/llama3-ckps/haojun-8b-llama-nanotron-ckp/NanotronLlama3-8B
+    path: /fsx/phuc/new_workspace/experiments/infini_attention_8b_llama/exp35_8b_llama_16384_ctx_length_and_8192_segment_length_and_2m_bs/checkpoints/19500
+  make_vocab_size_divisible_by: 1
+  model_config:
+    bos_token_id: 128000
+    eos_token_id: 128001
+    hidden_act: silu
+    hidden_size: 4096
+    initializer_range: 0.02
+    intermediate_size: 14336
+    is_llama_config: true
+    max_position_embeddings: 8192
+    num_attention_heads: 32
+    num_hidden_layers: 32
+    num_key_value_heads: 8
+    pad_token_id: null
+    pretraining_tp: 1
+    rms_norm_eps: 1.0e-05
+    rope_interleaved: false
+    rope_scaling: null
+    rope_theta: 500000.0
+    tie_word_embeddings: false
+    use_cache: true
+    vocab_size: 128256
+
+optimizer:
+  accumulate_grad_in_fp32: false
+  adam_beta1: 0.9
+  adam_beta2: 0.95
+  adam_eps: 1.0e-08
+  torch_adam_is_fused: true
+  clip_grad: 1.0
+
+  # NOTE: old
+  # learning_rate_scheduler:
+  #   learning_rate: 0.00015 # note: 1/2 of pythia use this for a 400m model
+  #   lr_decay_starting_step: null
+  #   lr_decay_steps: null
+  #   lr_decay_style: cosine
+  #   lr_warmup_steps: 14000 # 10% warm up of total training steps
+  #   lr_warmup_style: linear
+  #   min_decay_lr: 1.0e-05
+  # optimizer_factory:
+  #   adam_beta1: 0.9
+  #   adam_beta2: 0.95
+  #   adam_eps: 1.0e-08
+  #   name: adamW
+  #   torch_adam_is_fused: true
+
+  learning_rate_scheduler:
+    learning_rate: 1.0e-5
+    lr_decay_starting_step: null
+    lr_decay_steps: 3976
+    lr_decay_style: cosine
+    lr_warmup_steps: 1994 # 10% warm up of total training steps
+    lr_warmup_style: linear
+    min_decay_lr: 1.0e-6
+  weight_decay: 0.01
+  zero_stage: 0
+
+parallelism:
+  dp: 4
+  tp: 4
+  expert_parallel_size: 1
+  pp: 1
+  pp_engine: 1f1b
+  tp_linear_async_communication: false
+  tp_mode: ALL_REDUCE
+profiler: null
+tokenizer:
+  tokenizer_max_length: null
+  tokenizer_name_or_path: /fsx/haojun/lighteval_evaluation_model/NanotronLlama3-8B
+  tokenizer_revision: null
+tokens:
+  batch_accumulation_per_replica: 4 # batch_accumulation_per_replica * micro_batch_size * sequence_length * dp = 8 * 1 * 16384 * 4 = 2m
+  limit_test_batches: 0
+  limit_val_batches: 0
+  micro_batch_size: 1
+  sequence_length: 16384 # 8192 x 2 = 16384
+  train_steps: 5970 # 1990 per epoch, 1990*3=5970
+  val_check_interval: -1
+
+
+# data:
+#   dataset:
+#     dataloader_type: single
+#     dataset_max_tokens: null
+#     dataset_weights:
+#     - 0.3
+#     - 0.3
+#     - 0.45
+#     - 0.15
+#     - 0.08
+#     - 0.02
+#     datasets:
+#     - filename_pattern: .*.ds
+#       folder: s3://huggingface-llm-datasets/stack_full_v21-8k/tokenized-llama3/long/
+#       dtype: uint32
+#       skip_tokens: 0
+#     - filename_pattern: .*.ds
+#       folder: s3://huggingface-llm-datasets/stack_full_v21-8k/tokenized-llama3/short/
+#       dtype: uint32
+#       skip_tokens: 0
+#     - filename_pattern: .*.ds
+#       folder: s3://huggingface-llm-datasets/fineweb-v1-8k/tokenized-llama3/long/CC-MAIN-2024-10
+#       dtype: uint32
+#       skip_tokens: 0
+#     - filename_pattern: .*.ds
+#       folder: s3://huggingface-llm-datasets/fineweb-v1-8k/tokenized-llama3/short/CC-MAIN-2024-10
+#       dtype: uint32
+#       skip_tokens: 0
+#     - filename_pattern: .*.ds
+#       folder: s3://huggingface-llm-datasets/project-gutenberg/tokenized-llama3/
+#       dtype: uint32
+#       skip_tokens: 0
+#     - filename_pattern: .*.ds
+#       folder: s3://huggingface-llm-datasets/OpenHermes-2-5/tokenized-llama3
+#       dtype: uint32
+#       skip_tokens: 0
+#     pad_samples_to_global_batch_size: false
+#     skip_in_stream: true
+#   num_loading_workers: 0
+#   seed: 42
+
+data_stages:
+  - name: Needle Finetuning, Epoch 1
+    start_training_step: 1
+    data:
+      dataset:
+        dataset_overwrite_cache: false
+        dataset_processing_num_proc_per_process: 1
+        hf_dataset_config_name: null
+        hf_dataset_or_datasets: nanotron/llama3-16k-passkey-retrieval-finetuning
+        hf_dataset_splits: train
+        text_column_name: prompt
+      num_loading_workers: 1
+      seed: 42
+  - name: Needle Finetuning, Epoch 2
+    start_training_step: 1991
+    data:
+      dataset:
+        dataset_overwrite_cache: false
+        dataset_processing_num_proc_per_process: 1
+        hf_dataset_config_name: null
+        hf_dataset_or_datasets: nanotron/llama3-16k-passkey-retrieval-finetuning
+        hf_dataset_splits: train
+        text_column_name: prompt
+      num_loading_workers: 1
+      seed: 42
+  - name: Needle Finetuning, Epoch 3
+    start_training_step: 3981
+    data:
+      dataset:
+        dataset_overwrite_cache: false
+        dataset_processing_num_proc_per_process: 1
+        hf_dataset_config_name: null
+        hf_dataset_or_datasets: nanotron/llama3-16k-passkey-retrieval-finetuning
+        hf_dataset_splits: train
+        text_column_name: prompt
+      num_loading_workers: 1
+      seed: 42
+
+logging:
+  iteration_step_info_interval: 1
+  log_level: info
+  log_level_replica: info
+
+# s3_upload:
+#   remove_after_upload: true
+#   s5cmd_concurrency: 5
+#   s5cmd_numworkers: 16
+#   upload_s3_path: s3://phuc-experiments/infini-attention/8b-llama/exp35_8b_llama_16384_ctx_length_and_8192_segment_length_and_2m_bs/
+
+# experiment_logger:
+#   tensorboard_logger:
+#     flush_secs: 30
+#     tensorboard_dir: /fsx/phuc/project_data/infini_attention/tb_logs
+#   wandb_logger:
+#     wandb_entity: null
+#     wandb_project: infini_attention_8b_llama
+
+infini_attention:
+  segment_length: 8192
+  turn_on_memory: true

@@ -88,6 +88,33 @@ def micro_batcher(
         input_ids: [max_micro_batch_size, max_input_length]
         input_masks: [max_micro_batch_size, max_input_length]
     """
+
+    def find_sequence_positions(tensor, sequence):
+        """
+        Find the positions of a specific sequence in a PyTorch tensor.
+
+        Args:
+            tensor (torch.Tensor): The input tensor to search in.
+            sequence (torch.Tensor): The sequence to search for.
+
+        Returns:
+            torch.Tensor: A tensor containing the indices of the matching positions.
+        """
+        # Check if the sequence length is greater than the tensor length
+        if len(sequence) > len(tensor):
+            return torch.empty(0, dtype=torch.long)
+
+        # Create sliding windows of size equal to the sequence length
+        windows = tensor.unfold(0, len(sequence), 1)
+
+        # Compare each window with the sequence
+        matches = torch.eq(windows, sequence).all(dim=1)
+
+        # Get the indices of the matching positions
+        indices = matches.nonzero(as_tuple=True)[0]
+
+        return indices
+
     if tokenizer_config.padding is None:
         tokenizer_config.padding = "max_length" if tokenizer_config.max_input_length is not None else True
     if tokenizer_config.truncation is None:
@@ -103,6 +130,56 @@ def micro_batcher(
             continue
 
         if dist.get_rank(parallel_context.pp_pg) == input_rank:
+
+            tokenizer.eos_token_id = 2
+            tokenizer.bos_token_id = 1
+            tokenizer.pad_token_id = tokenizer.eos_token_id
+
+            # encodings = tokenizer(
+            #     [elt.text for elt in micro_batch],
+            #     return_tensors="pt",
+            #     return_attention_mask=True,
+            #     padding=tokenizer_config.padding,
+            #     max_length=tokenizer_config.max_input_length,
+            #     truncation=tokenizer_config.truncation,
+            #     # pad_to_multiple_of=8
+            # )
+
+            # # encodings = tokenizer(
+            # #     [elt.text for elt in micro_batch],
+            # #     return_tensors="pt",
+            # #     return_attention_mask=True,
+            # #     padding="max_length",
+            # #     max_length=32768,
+            # #     truncation=False,
+            # #     # pad_to_multiple_of=8
+            # # )
+
+            # # TARGET_INPUT_IDS = tokenizer(["Daniel went back to the garden. Mary travelled to the kitchen. Sandra journeyed to the kitchen. Sandra went to the hallway. John went to the bedroom. Mary went back to the garden. Where is Mary?"], return_tensors="pt")["input_ids"][0]
+            # # LENGTH = TARGET_INPUT_IDS.shape[0]
+            # # assert encodings["input_ids"][0].shape[0] == 32768
+            # # encodings["input_ids"] = encodings["input_ids"][:, :2049]
+            # # encodings["attention_mask"] = encodings["attention_mask"][:, :2049]
+            # # encodings["input_ids"][:, 2048-LENGTH:2048] = TARGET_INPUT_IDS
+
+            # # import math
+            # # seq_len = encodings["input_ids"].shape[1]
+            # # segment_length = 2048
+
+            # # n_segments = math.ceil(seq_len / segment_length)
+            # # segment_lengths = [segment_length] * (n_segments - 1) + [seq_len - (n_segments - 1) * segment_length]
+            # # xs_input_ids = torch.split(encodings["input_ids"][0], segment_lengths, dim=0)
+
+            # # from nanotron.constants import NEEDLE
+            # # last_segment_text = tokenizer.decode(xs_input_ids[-1])
+            # # if str(NEEDLE) in last_segment_text:
+            # #     print(f"{NEEDLE} is in the last segment")
+            # # else:
+            # #     print(f"can't find the needle {NEEDLE} in the last segment")
+
+            # encodings["attention_mask"] = encodings.attention_mask.to(dtype=torch.bool, device="cuda")
+            # encodings.to("cuda")
+            # yield GenerationInputs(input_ids=encodings.input_ids, input_masks=encodings.attention_mask)
             encodings = tokenizer(
                 [elt.text for elt in micro_batch],
                 return_tensors="pt",
@@ -116,6 +193,7 @@ def micro_batcher(
             encodings["attention_mask"] = encodings.attention_mask.to(dtype=torch.bool, device="cuda")
             encodings.to("cuda")
             yield GenerationInputs(input_ids=encodings.input_ids, input_masks=encodings.attention_mask)
+
         else:
             yield GenerationInputs(
                 input_ids=TensorPointer(group_rank=input_rank), input_masks=TensorPointer(group_rank=input_rank)
@@ -260,6 +338,16 @@ def decode_text(
                             )
                     else:
                         if isinstance(state.new_input_ids, torch.Tensor):
+                            # if len(state.generation_ids) > 1:
+                            #     batch_generated_ids = torch.cat((state.generation_ids[0], state.generation_ids[1].squeeze().unsqueeze(dim=0)), dim=-1)
+                            # else:
+                            #     batch_generated_ids = torch.cat(state.generation_ids, dim=-1)
+
+                            # if len(state.generation_mask) > 1:
+                            #     batch_generated_mask = torch.cat((state.generation_mask[0], state.generation_mask[1].squeeze().unsqueeze(dim=0)), dim=-1)
+                            # else:
+                            #     batch_generated_mask = torch.cat(state.generation_mask, dim=-1)
+
                             batch_generated_ids = torch.cat(state.generation_ids, dim=-1)
                             batch_generated_mask = torch.cat(state.generation_mask, dim=-1)
                         else:
@@ -270,7 +358,11 @@ def decode_text(
                             input_mask=batch_generated_mask,
                         )
 
+                        assert 1 == 1
+
                     if isinstance(sharded_logits, torch.Tensor) and logits_are_batch_first:
+                        # NOTE: consistent with megatron tp
+                        sharded_logits = sharded_logits.transpose(0, 1)
                         sharded_logits = sharded_logits.transpose(0, 1)
                     # Communicate
                     # TODO @thomasw21: Make a diagram to show how this works
@@ -445,6 +537,16 @@ def decode_text(
                     assert all(isinstance(elt, torch.Tensor) for elt in state.generation_ids)
                     batch_generated_ids = torch.cat(state.generation_ids, dim=-1)
                     batch_generated_mask = torch.cat(state.generation_mask, dim=-1)
+
+                    # if len(state.generation_ids) > 1:
+                    #     batch_generated_ids = torch.cat((state.generation_ids[0], state.generation_ids[1].squeeze().unsqueeze(dim=0)), dim=-1)
+                    # else:
+                    #     batch_generated_ids = torch.cat(state.generation_ids, dim=-1)
+
+                    # if len(state.generation_mask) > 1:
+                    #     batch_generated_mask = torch.cat((state.generation_mask[0], state.generation_mask[1].squeeze().unsqueeze(dim=0)), dim=-1)
+                    # else:
+                    #     batch_generated_mask = torch.cat(state.generation_mask, dim=-1)
                 else:
                     assert all(isinstance(elt, TensorPointer) for elt in state.generation_ids)
                     batch_generated_ids = TensorPointer(group_rank=decoder_input_rank)
@@ -579,6 +681,8 @@ def decode_tokenized(
                             input_mask=state.new_input_mask,
                         )
                         if isinstance(sharded_logits, torch.Tensor):
+                            # NOTE: consistent with megatron tp
+                            sharded_logits = sharded_logits.transpose(0, 1)
                             sharded_logits = sharded_logits.transpose(0, 1)
 
                     # Communicate
@@ -726,6 +830,16 @@ def decode_tokenized(
                     assert all(isinstance(elt, torch.Tensor) for elt in state.generation_ids)
                     batch_generated_ids = torch.cat(state.generation_ids, dim=-1)
                     batch_generated_mask = torch.cat(state.generation_mask, dim=-1)
+
+                    # if len(state.generation_ids) > 1:
+                    #     batch_generated_ids = torch.cat((state.generation_ids[0], state.generation_ids[1].squeeze().unsqueeze(dim=0)), dim=-1)
+                    # else:
+                    #     batch_generated_ids = torch.cat(state.generation_ids, dim=-1)
+
+                    # if len(state.generation_mask) > 1:
+                    #     batch_generated_mask = torch.cat((state.generation_mask[0], state.generation_mask[1].squeeze().unsqueeze(dim=0)), dim=-1)
+                    # else:
+                    #     batch_generated_mask = torch.cat(state.generation_mask, dim=-1)
                 else:
                     assert all(isinstance(elt, TensorPointer) for elt in state.generation_ids)
                     batch_generated_ids = TensorPointer(group_rank=decoder_input_rank)

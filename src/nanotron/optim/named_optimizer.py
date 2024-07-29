@@ -3,6 +3,7 @@ from typing import Any, Callable, Dict, Iterable, Tuple, Union
 import torch
 
 from nanotron import logging
+from nanotron.logging import log_rank
 from nanotron.optim.inherit_from_other_optimizer import InheritFromOtherOptimizer
 
 logger = logging.get_logger(__name__)
@@ -45,6 +46,25 @@ class NamedOptimizer(InheritFromOtherOptimizer):
             for param in _params:
                 # https://github.com/pytorch/pytorch/issues/100701
                 assert param.numel() > 0
+
+        assert 1 == 1
+        # NOTE: apply custom weight decay
+        from nanotron import constants
+
+        # if constants.CONFIG.infini_attention.balance_factor_weight_decay is not None:
+        for param_group in params:
+            for param in param_group["params"]:
+                if "balance_factor" in id_to_name[id(param)]:
+                    param_group["weight_decay"] = constants.CONFIG.infini_attention.balance_factor_weight_decay
+                else:
+                    param_group["weight_decay"] = constants.CONFIG.optimizer.weight_decay
+
+                log_rank(
+                    f"[INFO] Parameter {id_to_name[id(param)]} has weight decay {param_group['weight_decay']}, and learning rate {param_group['lr']}",
+                    logger=logger,
+                    level=logging.WARNING,
+                    rank=0,
+                )
 
         super().__init__(optimizer=optimizer_builder(params), id_to_name=id_to_name)
 

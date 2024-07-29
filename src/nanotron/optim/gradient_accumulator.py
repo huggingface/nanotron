@@ -211,12 +211,29 @@ class FP32GradientAccumulator(GradientAccumulator):
 
     def _accumulate_grad(self, name: str, half_param: NanotronParameter) -> None:
         """Accumulate grad in fp32 and set the fp32 grad to the fp32 grad buffer, so that optimizer can update fp32 weights afterwards"""
+        # TODO(xrsrke): if we set accumulate_grad_in_fp32 to False,
+        # then if a parameter don't have grad, it doesn't raise what is the parameter name
+        # like here => add raise parameter name in accumulate_grad_in_fp32=False
         assert half_param.grad is not None, f"Expected param {name} to have gradient."
         fp32_grad = self.get_grad_buffer(name=name)
 
+        # if "balance_factor" in name:
+        #     # with torch.no_grad():
+        #     #     fp32_grad = fp32_grad * 10**3
+        #     assert 1 == 1
+
         if self._is_accumulation_sync_step is False:
             # WARNING: We assume fp32_grad_bucket is already zeroed
+            # import torch.nn.functional as F
+            # # NOTE: normalzie the gradient
+            # if "balance_factor" in name:
+            #     _grad = F.normalize(half_param.grad.unsqueeze(dim=0)) / 10
+            #     _grad = _grad.squeeze(dim=0)
+            #     fp32_grad.add_(_grad)
+            # else:
+            #     fp32_grad.add_(half_param.grad)
             fp32_grad.add_(half_param.grad)
+
             # In case _is_accumulation_sync_step = True: no need to add half gradients, because it's done in the allreduce hook
 
         # TODO @thomasw21: Is it better to set to zero instead?
@@ -224,6 +241,9 @@ class FP32GradientAccumulator(GradientAccumulator):
 
         # In the case an optimizer decides to set it to None, we need to re-assign previous buffer
         if name in self.parameters:
+            if "balance_factor" in name:
+                assert 1 == 1
+
             fp32_param = self.parameters[name]["fp32"]
             if hasattr(self, "param_name_to_offsets"):
                 if name not in self.param_name_to_offsets:
@@ -234,6 +254,30 @@ class FP32GradientAccumulator(GradientAccumulator):
             else:
                 grad = fp32_grad
             fp32_param.grad = grad
+
+        # if "balance_factor" in name:
+        import wandb
+        from nanotron import constants
+
+        if (constants.GLOBAL_STEP - 1) % constants.LOG_STATE_INTERVAL == 0 and constants.IS_RANK_TO_MONITOR is True:
+            from nanotron import constants
+
+            if constants.CONFIG.infini_attention.log_grad is True:
+                # save_tensor(
+                #     name=f"{name}.grad",
+                #     tensor=fp32_param.grad,
+                #     path=f"{constants.MONITOR_STATE_PATH}/{constants.CONFIG.general.run}/{constants.GLOBAL_STEP}/grads"
+                # )
+
+                if "balance_factor" in name:
+                    wandb.log(
+                        {
+                            f"{name}:grad:mean": fp32_param.grad.detach().mean().item(),
+                            f"{name}:grad:std": fp32_param.grad.detach().std().item(),
+                            f"{name}:grad:norm": fp32_param.grad.detach().norm().item(),
+                            "iteration_step": constants.GLOBAL_STEP,
+                        }
+                    )
 
     @contextmanager
     def no_sync(self):

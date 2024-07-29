@@ -323,6 +323,20 @@ class GenerationArgs:
 
 
 @dataclass
+class InfiniAttentionArgs:
+    segment_length: int
+    turn_on_memory: bool
+    balance_factor_lr: float
+    balance_act_type: str
+    balance_init_type: str
+    logging: bool
+    logging_interval: int
+    log_grad: bool
+    log_segment_acts: bool
+    balance_factor_weight_decay: Optional[float] = None
+
+
+@dataclass
 class Config:
     """Main configuration class"""
 
@@ -330,6 +344,7 @@ class Config:
     parallelism: ParallelismArgs
     model: ModelArgs
     tokenizer: TokenizerArgs
+    infini_attention: InfiniAttentionArgs
     checkpoints: Optional[CheckpointsArgs] = None
     logging: Optional[LoggingArgs] = None
     tokens: Optional[TokensArgs] = None

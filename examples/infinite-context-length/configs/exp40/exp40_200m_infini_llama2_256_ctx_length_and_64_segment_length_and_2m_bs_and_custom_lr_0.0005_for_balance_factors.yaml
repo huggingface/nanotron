@@ -1,0 +1,241 @@
+checkpoints:
+  checkpoint_interval: 5000
+  checkpoints_path: /fsx/phuc/new_workspace/experiments/infini_attention_8b_llama/exp40_200m_infini_llama2_256_ctx_length_and_64_segment_length_and_2m_bs_and_custom_lr_0.0005_for_balance_factors/checkpoints
+  checkpoints_path_is_shared_file_system: false
+  resume_checkpoint_path: /fsx/phuc/new_workspace/experiments/infini_attention_8b_llama/exp40_200m_infini_llama2_256_ctx_length_and_64_segment_length_and_2m_bs_and_custom_lr_0.0005_for_balance_factors/checkpoints
+  save_initial_state: false
+general:
+  benchmark_csv_path: null
+  consumed_train_samples: null
+  ignore_sanity_checks: true
+  project: infini_attention_8b_llama
+  run: exp40_200m_infini_llama2_256_ctx_length_and_64_segment_length_and_2m_bs_and_custom_lr_0.0005_for_balance_factors
+  seed: 42
+  step: null
+logging:
+  iteration_step_info_interval: 1
+  log_level: info
+  log_level_replica: info
+# infini_attention:
+#   segment_length: 256
+#   turn_on_memory: true
+model:
+  ddp_bucket_cap_mb: 120
+  dtype: bfloat16
+  init_method:
+    # std: 0.025 # original
+    std: 0.03125 # 1/sqrt(1024)=0.03125
+    # std: 0.022097086912079608 # 1/sqrt(2048)=0.022097086912079608
+  make_vocab_size_divisible_by: 1
+  model_config:
+    bos_token_id: 1
+    eos_token_id: 2
+    hidden_act: silu
+    initializer_range: 0.02
+
+    # NOTE: 250m
+    # hidden_size: 1024
+    # intermediate_size: 4096
+    # num_hidden_layers: 10
+
+    hidden_size: 1024
+    intermediate_size: 4096
+    num_hidden_layers: 6
+
+    is_llama_config: true
+    max_position_embeddings: 64
+    num_attention_heads: 8
+    num_key_value_heads: 8
+    pad_token_id: null
+    pretraining_tp: 1
+    rms_norm_eps: 1.0e-05
+    rope_scaling: null
+    # tie_word_embeddings: true
+    tie_word_embeddings: false # original use true
+    use_cache: true
+    vocab_size: 49152
+
+
+optimizer:
+  accumulate_grad_in_fp32: true
+  adam_beta1: 0.9
+  adam_beta2: 0.95
+  adam_eps: 1.0e-08
+  torch_adam_is_fused: true
+  clip_grad: 1.0
+  learning_rate_scheduler:
+    learning_rate: 0.00015 # note: 1/2 of pythia use this for a 400m model
+    lr_decay_starting_step: null
+    lr_decay_steps: null
+    lr_decay_style: cosine
+    lr_warmup_steps: 5000 # 10% warm up of total training steps
+    lr_warmup_style: linear
+    min_decay_lr: 1.0e-05
+  # optimizer_factory:
+  #   adam_beta1: 0.9
+  #   adam_beta2: 0.95
+  #   adam_eps: 1.0e-08
+  #   name: adamW
+  #   torch_adam_is_fused: true
+  weight_decay: 0.1
+  zero_stage: 0
+
+parallelism:
+  dp: 20
+  tp: 2
+  expert_parallel_size: 1
+  pp: 1
+  pp_engine: 1f1b
+  tp_linear_async_communication: false
+  tp_mode: ALL_REDUCE
+profiler: null
+tokenizer:
+  tokenizer_max_length: null
+  tokenizer_name_or_path: lvwerra/the-tokenizer-v1
+  tokenizer_revision: null
+tokens:
+  batch_accumulation_per_replica: 1 # batch_accumulation_per_replica * micro_batch_size * sequence_length * dp = 1 * 128 * 1024 * 20 = 2m
+  limit_test_batches: 0
+  limit_val_batches: 0
+  micro_batch_size: 448
+  sequence_length: 256
+  train_steps: 50000
+  val_check_interval: -1
+
+
+data:
+  dataset:
+    dataloader_type: single
+    dataset_max_tokens: null
+    dataset_weights:
+    - 0.6
+    - 0.2
+    - 0.1
+    - 0.1
+    - 0.1
+    - 0.1
+    - 0.1
+    - 0.1
+    - 0.1
+    - 0.1
+    - 0.1
+    - 0.1
+    - 0.1
+    - 0.1
+    - 0.1
+    - 0.1
+    datasets:
+    - filename_pattern: .*/tokenized-v1/standard/.*.ds
+      folder: s3://huggingface-llm-datasets/fineweb/
+      skip_tokens: 0
+    - filename_pattern: tokenized-v1/standard/.*.ds
+      folder: s3://huggingface-llm-datasets/stack_full/
+      skip_tokens: 0
+    - filename_pattern: tokenized-v1/standard/.*.ds
+      folder: s3://huggingface-llm-datasets/c4/
+      skip_tokens: 0
+    - filename_pattern: tokenized-v1/standard/.*.ds
+      folder: s3://huggingface-llm-datasets/arxiv/
+      skip_tokens: 0
+    - filename_pattern: tokenized-v1/standard/.*.ds
+      folder: s3://huggingface-llm-datasets/synthetic-data/
+      skip_tokens: 0
+    - filename_pattern: tokenized-v1/standard/.*.ds
+      folder: s3://huggingface-llm-datasets/stack-pull-requests/
+      skip_tokens: 0
+    - filename_pattern: tokenized-v1/standard/.*.ds
+      folder: s3://huggingface-llm-datasets/stack-jupyter-scripts/
+      skip_tokens: 0
+    - filename_pattern: tokenized-v1/standard/.*.ds
+      folder: s3://huggingface-llm-datasets/stack-jupyter-structured/
+      skip_tokens: 0
+    - filename_pattern: tokenized-v1/standard/.*.ds
+      folder: s3://huggingface-llm-datasets/open-web-math/
+      skip_tokens: 0
+    - filename_pattern: tokenized-v1/standard/.*.ds
+      folder: s3://huggingface-llm-datasets/stack-issues/
+      skip_tokens: 0
+    - filename_pattern: tokenized-v1/standard/.*.ds
+      folder: s3://huggingface-llm-datasets/stackoverflow/
+      skip_tokens: 0
+    - filename_pattern: tokenized-v1/standard/.*.ds
+      folder: s3://huggingface-llm-datasets/wikipedia/
+      skip_tokens: 0
+    - filename_pattern: tokenized-v1/standard/.*.ds
+      folder: s3://huggingface-llm-datasets/project-gutenberg/
+      skip_tokens: 0
+    - filename_pattern: tokenized-v1/standard/.*.ds
+      folder: s3://huggingface-llm-datasets/deepmind-math/
+      skip_tokens: 0
+    - filename_pattern: tokenized-v1/standard/.*.ds
+      folder: s3://huggingface-llm-datasets/stack-kaggle-scripts/
+      skip_tokens: 0
+    - filename_pattern: tokenized-v1/standard/.*.ds
+      folder: s3://huggingface-llm-datasets/stack-documentation/
+      skip_tokens: 0
+    pad_samples_to_global_batch_size: false
+    skip_in_stream: true
+  num_loading_workers: 0
+  seed: 42
+
+
+
+# lighteval:
+#   batch_size: 16
+#   checkpoints_path: null
+#   generation: null
+#   logging:
+#     hub_repo_details: null
+#     hub_repo_results: null
+#     hub_repo_tensorboard: HuggingFaceBR4/8b_llama3_evals
+#     local_output_path: /fsx/phuc/new_workspace/experiments/8b_llama3/evals_of_the_released_ckp/logs
+#     push_details_to_hub: null
+#     push_results_to_hub: null
+#     push_results_to_tensorboard: true
+#     tensorboard_metric_prefix: e
+#   parallelism:
+#     dp: 8
+#     pp: 1
+#     pp_engine: 1f1b
+#     tp: 1
+#     tp_linear_async_communication: false
+#     tp_mode: ALL_REDUCE
+#   slurm_script_dir: /fsx/phuc/new_workspace/experiments/infini_attention_8b_llama/exp6_llama3_8b_config/lighteval/slurm_scripts
+#   slurm_template: /fsx/phuc/new_workspace/experiments/infini_attention_8b_llama/exp6_llama3_8b_config/run_eval.slurm.jinja
+#   tasks:
+#     custom_tasks:
+#     dataset_loading_processes: 8
+#     max_samples: 1000
+#     multichoice_continuations_start_space: null
+#     no_multichoice_continuations_start_space: null
+#     num_fewshot_seeds: null
+#     tasks: early-signal
+#   wandb:
+#     wandb_project: infini_attention_8b_llama
+#     wandb_entity: null
+#     wandb_run_name: exp6_llama3_8b_config
+
+
+logging:
+  iteration_step_info_interval: 1
+  log_level: info
+  log_level_replica: info
+
+s3_upload:
+  remove_after_upload: true
+  s5cmd_concurrency: 5
+  s5cmd_numworkers: 16
+  upload_s3_path: s3://phuc-experiments/infini-attention/8b-llama/exp40_200m_infini_llama2_256_ctx_length_and_64_segment_length_and_2m_bs_and_custom_lr_0.0005_for_balance_factors/
+
+experiment_logger:
+  tensorboard_logger:
+    flush_secs: 30
+    tensorboard_dir: /fsx/phuc/project_data/infini_attention/tb_logs
+  wandb_logger:
+    wandb_entity: null
+    wandb_project: infini_attention_8b_llama
+
+infini_attention:
+  segment_length: 64
+  turn_on_memory: true
+  balance_factor_lr: 0.0005

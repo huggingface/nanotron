@@ -75,7 +75,33 @@ def init_random_states(parallel_config: ParallelismArgs, tp_pg: ProcessGroup):
     return random_states
 
 
-def lr_scheduler_builder(optimizer: Optimizer, lr_scheduler_args: LRSchedulerArgs, total_training_steps: int):
+def _get_lr_lambda_in_training(
+    current_step: int,
+    initial_lr: float,
+    # lr_decay_steps: int,
+    # lr_decay_starting_step: int,
+    total_training_steps: int,
+    lr_scheduler_args: LRSchedulerArgs,
+):
+    """
+    current_step: current training step
+    initial_lr: the learning rate of a parameter group
+
+    More info on initial_lr:
+    And in standard parameterization, lr_lambda only takes a single learning rate.
+    But in µTransfer, each parameter has a custom learning rate (custom_lr = lr_scheduler_args.learning_rate * scaling_factor),
+    so each parameter group has a custom lr_lambda function.
+
+    LR Scheduling function, it has from 2 up to 4 phases:
+    - warmup,
+    - optional: constant (if lr_decay_starting_step is set)
+    - decay
+    - optional: constant (if lr_decay_steps and/or lr_decay_starting_step are set)
+    Warmup starts at lr=0 and ends at `lr=lr`
+    Then it stays constant at lr if lr_decay_starting_step is set and larger than lr_warmup_steps
+    Then it decays until `min_decay_lr` for lr_decay_steps if set, else: (total_training_steps - lr_warmup_steps or lr_decay_starting_step)
+    Then it stays constant at min_decay_lr if lr_decay_starting_step is set and total_training_steps is larger)
+    """
     if lr_scheduler_args.lr_decay_steps is None:
         lr_decay_steps = total_training_steps
         if lr_scheduler_args.lr_warmup_steps is not None:
@@ -93,77 +119,63 @@ def lr_scheduler_builder(optimizer: Optimizer, lr_scheduler_args: LRSchedulerArg
     else:
         lr_decay_starting_step = lr_scheduler_args.lr_decay_starting_step
 
-    def lr_lambda(current_step: int, initial_lr: float):
-        """
-        current_step: current training step
-        initial_lr: the learning rate of a parameter group
+    # No warmup or decay
+    if lr_scheduler_args.lr_warmup_steps == 0 and lr_decay_steps == 0:
+        return initial_lr
 
-        More info on initial_lr:
-        And in standard parameterization, lr_lambda only takes a single learning rate.
-        But in µTransfer, each parameter has a custom learning rate (custom_lr = lr_scheduler_args.learning_rate * scaling_factor),
-        so each parameter group has a custom lr_lambda function.
-
-        LR Scheduling function, it has from 2 up to 4 phases:
-        - warmup,
-        - optional: constant (if lr_decay_starting_step is set)
-        - decay
-        - optional: constant (if lr_decay_steps and/or lr_decay_starting_step are set)
-        Warmup starts at lr=0 and ends at `lr=lr`
-        Then it stays constant at lr if lr_decay_starting_step is set and larger than lr_warmup_steps
-        Then it decays until `min_decay_lr` for lr_decay_steps if set, else: (total_training_steps - lr_warmup_steps or lr_decay_starting_step)
-        Then it stays constant at min_decay_lr if lr_decay_starting_step is set and total_training_steps is larger)
-        """
-        # No warmup or decay
-        if lr_scheduler_args.lr_warmup_steps == 0 and lr_decay_steps == 0:
-            return initial_lr
-
-        # Warmup phase
-        elif lr_scheduler_args.lr_warmup_style is not None and current_step <= lr_scheduler_args.lr_warmup_steps:
-            if lr_scheduler_args.lr_warmup_style == "linear":
-                lmbda = initial_lr * current_step / max(lr_scheduler_args.lr_warmup_steps, 1)
-            elif lr_scheduler_args.lr_warmup_style == "constant":
-                lmbda = lr_scheduler_args.learning_rate
-            else:
-                raise ValueError(f"Unknown warmup style {lr_scheduler_args.lr_warmup_style}")
-
-        # Optional constant phase at learning_rate
-        elif current_step < lr_decay_starting_step:
-            lmbda = initial_lr
-
-        # Decay phase
-        elif lr_scheduler_args.lr_decay_style is not None and current_step < lr_decay_starting_step + lr_decay_steps:
-            if lr_scheduler_args.lr_decay_style == "cosine":
-                lmbda = (
-                    lr_scheduler_args.min_decay_lr
-                    + (initial_lr - lr_scheduler_args.min_decay_lr)
-                    * (1 + math.cos(math.pi * (current_step - lr_decay_starting_step) / lr_decay_steps))
-                    / 2
-                )
-            elif lr_scheduler_args.lr_decay_style == "linear":
-                lmbda = (
-                    lr_scheduler_args.min_decay_lr
-                    + (initial_lr - lr_scheduler_args.min_decay_lr)
-                    * (lr_decay_steps - (current_step - lr_decay_starting_step))
-                    / lr_decay_steps
-                )
-            elif lr_scheduler_args.lr_decay_style == "1-sqrt":
-                lmbda = (
-                    lr_scheduler_args.min_decay_lr
-                    + (initial_lr - lr_scheduler_args.min_decay_lr)
-                    * (1 - math.sqrt((current_step - lr_decay_starting_step) / lr_decay_steps))
-                )
-            else:
-                raise ValueError(f"Unknown decay style {lr_scheduler_args.lr_decay_style}")
-
-        # Optional constant phase at min_decay_lr
+    # Warmup phase
+    elif lr_scheduler_args.lr_warmup_style is not None and current_step <= lr_scheduler_args.lr_warmup_steps:
+        if lr_scheduler_args.lr_warmup_style == "linear":
+            lmbda = initial_lr * current_step / max(lr_scheduler_args.lr_warmup_steps, 1)
+        elif lr_scheduler_args.lr_warmup_style == "constant":
+            lmbda = lr_scheduler_args.learning_rate
         else:
-            lmbda = lr_scheduler_args.min_decay_lr
+            raise ValueError(f"Unknown warmup style {lr_scheduler_args.lr_warmup_style}")
 
-        lmbda /= initial_lr  # Normalization for pytorch
-        return lmbda
+    # Optional constant phase at learning_rate
+    elif current_step < lr_decay_starting_step:
+        lmbda = initial_lr
 
+    # Decay phase
+    elif lr_scheduler_args.lr_decay_style is not None and current_step < lr_decay_starting_step + lr_decay_steps:
+        if lr_scheduler_args.lr_decay_style == "cosine":
+            lmbda = (
+                lr_scheduler_args.min_decay_lr
+                + (initial_lr - lr_scheduler_args.min_decay_lr)
+                * (1 + math.cos(math.pi * (current_step - lr_decay_starting_step) / lr_decay_steps))
+                / 2
+            )
+        elif lr_scheduler_args.lr_decay_style == "linear":
+            lmbda = (
+                lr_scheduler_args.min_decay_lr
+                + (initial_lr - lr_scheduler_args.min_decay_lr)
+                * (lr_decay_steps - (current_step - lr_decay_starting_step))
+                / lr_decay_steps
+            )
+        elif lr_scheduler_args.lr_decay_style == "1-sqrt":
+            lmbda = lr_scheduler_args.min_decay_lr + (initial_lr - lr_scheduler_args.min_decay_lr) * (
+                1 - math.sqrt((current_step - lr_decay_starting_step) / lr_decay_steps)
+            )
+        else:
+            raise ValueError(f"Unknown decay style {lr_scheduler_args.lr_decay_style}")
+
+    # Optional constant phase at min_decay_lr
+    else:
+        lmbda = lr_scheduler_args.min_decay_lr
+
+    lmbda /= initial_lr  # Normalization for pytorch
+    return lmbda
+
+
+def lr_scheduler_builder(optimizer: Optimizer, lr_scheduler_args: LRSchedulerArgs, total_training_steps: int):
     def get_lr_lambda_for_param_group(lr: float):
-        return partial(lr_lambda, initial_lr=lr)
+        # return partial(_get_lr_lambda_in_training, initial_lr=lr, lr_decay_steps=lr_decay_steps, lr_decay_starting_step=lr_decay_starting_step, lr_scheduler_args=lr_scheduler_args)
+        return partial(
+            _get_lr_lambda_in_training,
+            initial_lr=lr,
+            total_training_steps=total_training_steps,
+            lr_scheduler_args=lr_scheduler_args,
+        )
 
     # NOTE: get learning rate scheduler for each param group
     lr_lambdas = []
@@ -256,7 +268,20 @@ def get_custom_lr_for_named_parameters(
         name,
         param,
     ) in named_parameters:
-        learning_rate = learning_rate_mapper.get_lr(name, param)
+
+        if "balance_factors" in name:
+            from nanotron import constants
+
+            learning_rate = constants.CONFIG.infini_attention.balance_factor_lr
+        else:
+            learning_rate = learning_rate_mapper.get_lr(name, param)
+
+        log_rank(
+            f"[Optimizer Building] Parameter {name} has a learning rate of {learning_rate}",
+            logger=logger,
+            level=logging.INFO,
+        )
+
         assert isinstance(learning_rate, float), f"Expected a float, got {learning_rate} for parameter {name}"
         named_param_groups_with_custom_lr.append({"named_params": [(name, param)], "lr": learning_rate})
 
@@ -693,7 +718,7 @@ def compute_remain_train_steps_of_a_data_stage_from_ckp(
     else:
         next_stage = next((s for s in config.data_stages if s.start_training_step > stage.start_training_step), None)
         total_train_steps = next_stage.start_training_step
-    
+
     if metadata.last_train_step > stage.start_training_step:
         # NOTE: if the last_train_step is larger than the start_training_step of the current stage,
         # it means that the training has already passed this stage

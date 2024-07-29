@@ -23,8 +23,8 @@ import torch
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
 
+from nanotron import constants, logging
 from nanotron import distributed as dist
-from nanotron import logging
 from nanotron.config import (
     Config,
     DatasetStageArgs,
@@ -34,7 +34,7 @@ from nanotron.config import (
     SpectralMupInit,
     get_config_from_file,
 )
-from nanotron.constants import MODEL_CONFIG_FILE_NAME
+from nanotron.constants import LR_SCHEDULER_CKP_PATH, METADATA_CKP_PATH, MODEL_CONFIG_FILE_NAME, OPTIMIZER_CKP_PATH
 from nanotron.dataloader import sanity_check_dataloader
 from nanotron.helpers import (
     _vocab_size_with_padding,
@@ -133,6 +133,7 @@ class DistributedTrainer:
         self.config = get_config_from_file(
             config_or_config_file, config_class=config_class, model_config_class=model_config_class
         )
+        constants.CONFIG = self.config
         self.model_config = self.config.model.model_config
         if model_class is not None:
             CONFIG_TO_MODEL_CLASS[self.model_config.__class__.__name__] = model_class
@@ -174,11 +175,17 @@ class DistributedTrainer:
             self.model.module if isinstance(self.model, DistributedDataParallel) else self.model
         )
 
+        # parametrization_method = (
+        #     ParametrizationMethod.STANDARD
+        #     if isinstance(self.config.model.init_method, RandomInit)
+        #     else ParametrizationMethod.SPECTRAL_MUP
+        # )
+
         # TODO: find a better way to handle this
         parametrization_method = (
-            ParametrizationMethod.SPECTRAL_MUP
-            if hasattr(self.config.model.init_method, "use_mup") and self.config.model.init_method.use_mup
-            else ParametrizationMethod.STANDARD
+            ParametrizationMethod.STANDARD
+            if isinstance(self.config.model.init_method, RandomInit)
+            else ParametrizationMethod.SPECTRAL_MUP
         )
 
         # Init optimizer
@@ -189,13 +196,41 @@ class DistributedTrainer:
             parallel_context=self.parallel_context,
         )
         if self.init_checkpoint_path is not None:
-            load_optimizer(
-                optimizer=self.optimizer,
-                parallel_context=self.parallel_context,
-                root_folder=self.init_checkpoint_path,
-                param_shard_metadata=self.param_shard_metadata,
-                model=self.model,
-            )
+            # NOTE: in some cases where we convert hf checkpoints to nanotron checkpoints,
+            # we might not have the optimizer state
+            optim_ckp_path = OPTIMIZER_CKP_PATH.format(self.init_checkpoint_path)
+            if os.path.exists(optim_ckp_path):
+                # checkpoint_metadata = load_meta(
+                #     parallel_context=self.parallel_context, root_folder=self.init_checkpoint_path
+                # )
+
+                prev_config = get_config_from_file(
+                    (self.init_checkpoint_path / "config.yaml").as_posix(),
+                    config_class=config_class,
+                    model_config_class=model_config_class,
+                )
+                if (
+                    prev_config.optimizer.accumulate_grad_in_fp32 is False
+                    and self.config.optimizer.accumulate_grad_in_fp32 is True
+                ):
+                    # NOTE: if in the previous config, we didn't use fp32 accumulation
+                    # then we don't have the states for it, so we can't load it along with the optimizer
+                    pass
+                else:
+                    load_optimizer(
+                        optimizer=self.optimizer,
+                        parallel_context=self.parallel_context,
+                        root_folder=self.init_checkpoint_path,
+                        param_shard_metadata=self.param_shard_metadata,
+                        model=self.model,
+                    )
+            else:
+                log_rank(
+                    f"Can't find the optimizer state's checkpoint in {optim_ckp_path}, so we skip loading its checkpoint!",
+                    logger=logger,
+                    level=logging.INFO,
+                    rank=0,
+                )
 
         # Init learning rate scheduler
         self.lr_scheduler = lr_scheduler_builder(
@@ -204,13 +239,24 @@ class DistributedTrainer:
             total_training_steps=self.config.tokens.train_steps,
         )
         if self.init_checkpoint_path is not None:
-            load_lr_scheduler(
-                lr_scheduler=self.lr_scheduler,
-                root_folder=self.init_checkpoint_path,
-            )
+            lr_scheduler_ckp_path = LR_SCHEDULER_CKP_PATH.format(self.init_checkpoint_path)
+            if os.path.exists(lr_scheduler_ckp_path):
+                load_lr_scheduler(
+                    lr_scheduler=self.lr_scheduler,
+                    root_folder=self.init_checkpoint_path,
+                )
+            else:
+                log_rank(
+                    f"Can't find the LR scheduler's checkpoint in {lr_scheduler_ckp_path}, so we skip loading its checkpoint!",
+                    logger=logger,
+                    level=logging.INFO,
+                    rank=0,
+                )
 
         # Define iteration start state
-        if self.init_checkpoint_path is not None:
+        metadata_ckp_path = METADATA_CKP_PATH.format(self.init_checkpoint_path)
+        is_ckp_meta_data_exists = os.path.exists(metadata_ckp_path)
+        if self.init_checkpoint_path is not None and is_ckp_meta_data_exists:
             checkpoint_metadata = load_meta(
                 parallel_context=self.parallel_context, root_folder=self.init_checkpoint_path
             )
@@ -222,6 +268,14 @@ class DistributedTrainer:
                 self.config.tokens.train_steps > self.metadata.last_train_step
             ), f"Loaded checkpoint has already trained {self.metadata.last_train_step} batches, you need to specify a higher `config.tokens.train_steps`"
         else:
+            if self.init_checkpoint_path is not None and not is_ckp_meta_data_exists:
+                log_rank(
+                    f"Can't find the checkpoint metadata in {metadata_ckp_path}, so we skip loading it!",
+                    logger=logger,
+                    level=logging.INFO,
+                    rank=0,
+                )
+
             data_stages = [
                 DataStageMetadata(
                     name=stage.name, start_training_step=stage.start_training_step, consumed_train_samples=0
@@ -272,13 +326,15 @@ class DistributedTrainer:
             rank=0,
         )
 
-        current_time = datetime.datetime.now().strftime("%d/%m/%Y_%H:%M:%S")
+        datetime.datetime.now().strftime("%d/%m/%Y_%H:%M:%S")
         if dist.get_rank(self.parallel_context.world_pg) == self.logger_ranks[0] and wandb is not None:
             wandb.init(
                 project=self.config.general.project,
-                name=f"{current_time}_{self.config.general.run}",
+                # name=f"{current_time}_{self.config.general.run}",
+                name=f"{self.config.general.run}",
                 config={"nanotron_config": self.config.as_dict()},
             )
+            # wandb.watch(self.model, log="all")
 
     def post_train_step(self):
         pass
@@ -415,10 +471,28 @@ class DistributedTrainer:
 
         prof = get_profiler(config=self.config)
         torch.cuda.empty_cache()
+        rank_to_monitor = (
+            dist.get_rank(group=self.parallel_context.dp_pg) == 0
+            and dist.get_rank(group=self.parallel_context.tp_pg) == 0
+        ) and constants.CONFIG.infini_attention.logging is True
+        constants.IS_RANK_TO_MONITOR = rank_to_monitor
+
         with prof:
-            for self.iteration_step in range(self.metadata.last_train_step + 1, self.config.tokens.train_steps + 1):
+            for self.iteration_step in range(self.start_iteration_step + 1, self.config.tokens.train_steps + 1):
+                constants.GLOBAL_STEP = self.iteration_step
+
                 if isinstance(prof, torch.profiler.profile):
                     prof.step()
+
+                if (
+                    (self.iteration_step - 1) % constants.CONFIG.infini_attention.logging_interval == 0
+                    and constants.IS_RANK_TO_MONITOR is True
+                ):
+                    from nanotron.debug.monitor import monitor_nanotron_model
+
+                    nn_logs, nn_handles = monitor_nanotron_model(
+                        run_name=self.config.general.run, model=self.model, parallel_context=self.parallel_context
+                    )
 
                 self.iteration_start_time = time.time()
                 self._update_dataloader_based_on_training_stages(dataloader_or_dls)
@@ -437,6 +511,18 @@ class DistributedTrainer:
                 if (self.iteration_step - 1) % self.config.logging.iteration_step_info_interval == 0:
                     self.train_step_logs(outputs=outputs, loss_avg=loss_avg)
 
+                if (
+                    (self.iteration_step - 1) % constants.CONFIG.infini_attention.logging_interval == 0
+                    and constants.IS_RANK_TO_MONITOR is True
+                ):
+                    from nanotron.debug.monitor import convert_logs_to_flat_logs
+
+                    if dist.get_rank(self.parallel_context.world_pg) == self.logger_ranks[0] and wandb is not None:
+                        wandb.log({**convert_logs_to_flat_logs(nn_logs), "iteration_step": self.iteration_step})
+
+                    for handle in nn_handles:
+                        handle.remove()
+
                 # Checkpoint
                 if self.iteration_step % self.config.checkpoints.checkpoint_interval == 0:
                     self.save_checkpoint()
@@ -453,10 +539,13 @@ class DistributedTrainer:
         if self.iteration_step < 5:
             log_memory(logger=logger)
 
+        train_batches = (next(dataloader) for _ in range(self.n_micro_batches_per_batch))
+        assert 1 == 1
+
         outputs = self.pipeline_engine.train_batch_iter(
             model=self.model,
             pg=self.parallel_context.pp_pg,
-            batch=(next(dataloader) for _ in range(self.n_micro_batches_per_batch)),
+            batch=train_batches,
             nb_microbatches=self.n_micro_batches_per_batch,
             grad_accumulator=self.grad_accumulator,
         )
@@ -635,6 +724,11 @@ class DistributedTrainer:
             else:
                 exit(0)
 
+        # if dist.get_rank(self.parallel_context.world_pg) == self.logger_ranks[0] and wandb is not None:
+        #     from nanotron.debug.monitor import convert_logs_to_flat_logs
+
+        #     wandb.log({**convert_logs_to_flat_logs(self.nn_logs), "iteration_step": self.iteration_step})
+
     def init_model(self) -> Union[NanotronModel, DistributedDataParallel]:
         """Initialize the model and load weights from checkpoint if needed."""
         # TODO: add max_position_embeddings
@@ -656,9 +750,13 @@ class DistributedTrainer:
                     rank=0,
                 )
             else:
-                assert (
-                    self.config.tokens.sequence_length == self.model_config.max_position_embeddings
-                ), "The tokenizer's sequence length does not match the model's maximum position embeddings."
+                log_rank(
+                    f"Setting max_position_embeddings to {self.config.tokens.sequence_length}. Previous value was {self.model_config.max_position_embeddings}.",
+                    logger=logger,
+                    level=logging.INFO,
+                    rank=0,
+                )
+                self.model_config.max_position_embeddings = self.config.tokens.sequence_length
 
         log_rank("Config:\n" + pformat(self.config), logger=logger, level=logging.INFO, rank=0)
         log_rank("Model Config:\n" + pformat(self.model_config), logger=logger, level=logging.INFO, rank=0)

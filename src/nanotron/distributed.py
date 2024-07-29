@@ -13,7 +13,7 @@ from nanotron.utils import find_free_port
 
 torch_version_above_1_13 = version.parse(torch.__version__) >= version.parse("1.13.0")
 Work = dist.Work if torch_version_above_1_13 else dist._Work
-default_pg_timeout = datetime.timedelta(minutes=10)
+default_pg_timeout = datetime.timedelta(minutes=1000)
 
 
 def new_group(  # pylint: disable=function-redefined

@@ -192,6 +192,7 @@ def load_weights(
     parallel_context: ParallelContext,
     root_folder: Path,
     filtered_state_dict: Optional[Dict[str, Any]] = None,
+    strict: bool = False,
 ):
     """Load weights from a checkpoint
 
@@ -200,8 +201,17 @@ def load_weights(
         parallel_context: distributed process groups
         root_folder: root folder of the checkpoint
         filtered_state_dict: state dict to load from (overrides model.state_dict()). if None, load from model.state_dict()
+        strict: whether to strictly enforce that the keys in the state_dict match the keys returned by this module's state_dict() function
+        if you set strict to False, we will skip loading the parameters that can't find the checkpoint file.
     """
     param_root_folder = root_folder / "model"
+
+    log_rank(
+        f"Loading model weights from {param_root_folder}",
+        logger=logger,
+        level=logging.INFO,
+        rank=0,
+    )
 
     module_id_to_prefix = {id(module): f"{module_name}." for module_name, module in model.named_modules()}
     # Fix the root_model
@@ -264,10 +274,18 @@ def load_weights(
                     param_or_buffer[:] = fi.get_tensor("data")
 
             elif not path.parent.exists():
-                raise ValueError(
-                    f"Checkpoint is empty or checkpoint structure is not matching the model architecture."
-                    f"Couldn't find folder {path.parent} in checkpoint at {root_folder}"
-                )
+                if strict is False:
+                    log_rank(
+                        f"We can't find the checkpoint for parameter {name} at {path.parent}. Skipping it.",
+                        logger=logger,
+                        level=logging.WARNING,
+                        rank=0,
+                    )
+                else:
+                    raise ValueError(
+                        f"Checkpoint is empty or checkpoint structure is not matching the model architecture."
+                        f"Couldn't find folder {path.parent} in checkpoint at {root_folder}"
+                    )
             else:
                 # Let's assume that the topology changed and the param is sharded.
                 # We search for all the files from the shards, concatenate the "unsharded" tensor
@@ -281,10 +299,19 @@ def load_weights(
                 suffix = base_name.rsplit(".", 1)[-1]
                 shards_path = list(path.parent.glob(f"{ObjectType.MODEL.value}_{suffix}*.safetensors"))
                 if len(shards_path) <= 0:
-                    raise ValueError(
-                        f"Could not find any shards {ObjectType.MODEL.value}_{suffix}*.safetensors in {path.parent}."
-                        f"If you notice `.safetensors` in the middle of the name of some of the checkpoints files. You need to run `scripts/fix_checkpoint_bad_naming.py`."
-                    )
+                    if strict is False:
+                        log_rank(
+                            f"We can't find the checkpoint for parameter {name} at {path}. Skipping it.",
+                            logger=logger,
+                            level=logging.WARNING,
+                            rank=0,
+                        )
+                        continue
+                    else:
+                        raise ValueError(
+                            f"Could not find any shards {ObjectType.MODEL.value}_{suffix}*.safetensors in {path.parent}."
+                            f"If you notice `.safetensors` in the middle of the name of some of the checkpoints files. You need to run `scripts/fix_checkpoint_bad_naming.py`."
+                        )
 
                 if checkpoint_version is None:
                     checkpoint_version = get_checkpoint_version(
@@ -304,15 +331,21 @@ def load_weights(
                             current_checkpoint_version == checkpoint_version
                         ), f"Checkpoint version mismatch at {shards_path[0]}."
 
-                if checkpoint_version <= CHECKPOINT_VERSION:
-                    load_sharded_param_latest(
-                        param_or_buffer=param_or_buffer,
-                        sharded_info=sharded_info,
-                        shards_path=shards_path,
-                        param_shard_metadata=param_shard_metadata[name],
-                    )
-                else:
-                    raise ValueError(f"Unsupported checkpoint version {checkpoint_version}")
+                # if checkpoint_version <= CHECKPOINT_VERSION:
+                #     load_sharded_param_latest(
+                #         param_or_buffer=param_or_buffer,
+                #         sharded_info=sharded_info,
+                #         shards_path=shards_path,
+                #         param_shard_metadata=param_shard_metadata[name],
+                #     )
+                # else:
+                #     raise ValueError(f"Unsupported checkpoint version {checkpoint_version}")
+                load_sharded_param_latest(
+                    param_or_buffer=param_or_buffer,
+                    sharded_info=sharded_info,
+                    shards_path=shards_path,
+                    param_shard_metadata=param_shard_metadata[name],
+                )
 
         else:
             raise NotImplementedError(f"Parameters {param} should be a NanotronParameter")
@@ -337,6 +370,13 @@ def get_checkpoint_paths_list(
         filtered_state_dict: state dict to load from (overrides model.state_dict()). if None, load from model.state_dict()
     """
     param_root_folder = root_folder / "model"
+
+    log_rank(
+        f"Loading model weights from {param_root_folder}",
+        logger=logger,
+        level=logging.INFO,
+        rank=0,
+    )
 
     module_id_to_prefix = {id(module): f"{module_name}." for module_name, module in model.named_modules()}
     # Fix the root_model
