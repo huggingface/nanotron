@@ -96,6 +96,9 @@ class _BaseTensorParallelColumnLinear:
         self.out_features = out_features // self.world_size
         self.name = name
 
+        if name == "model.lm_head":
+            assert 1 == 1
+
         init_args = {
             "in_features": self.in_features,
             "out_features": self.out_features,

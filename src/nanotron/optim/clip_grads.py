@@ -10,6 +10,7 @@ from nanotron.parallel.parameters import NanotronParameter, get_grad_from_parame
 logger = logging.get_logger(__name__)
 
 
+@torch.no_grad()
 def clip_grad_norm(
     mp_pg: dist.ProcessGroup,
     named_parameters: Iterable[Tuple[str, NanotronParameter]],
@@ -101,12 +102,10 @@ def clip_grad_norm(
     for name, param in named_parameters:
         if grad_accumulator is None:
             # param.grad.detach().mul_(device_to_clip_coef_clamped[param.grad.device])
-            get_grad_from_parameter(param).detach().mul_(
-                device_to_clip_coef_clamped[get_grad_from_parameter(param).device]
-            )
+            get_grad_from_parameter(param).mul_(device_to_clip_coef_clamped[get_grad_from_parameter(param).device])
             assert 1 == 1
         else:
-            grad_accumulator.get_grad_buffer(name).detach().mul_(
+            grad_accumulator.get_grad_buffer(name).mul_(
                 device_to_clip_coef_clamped[grad_accumulator.get_grad_buffer(name).device]
             )
 

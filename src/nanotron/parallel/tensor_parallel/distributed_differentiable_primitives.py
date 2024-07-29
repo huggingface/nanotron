@@ -19,6 +19,7 @@ from torch import distributed as torch_dist
 
 from nanotron import distributed as dist
 from nanotron.distributed import ProcessGroup
+from nanotron.fp8.tensor import FP8Tensor
 
 
 class DifferentiableIdentity(torch.autograd.Function):
@@ -31,7 +32,12 @@ class DifferentiableIdentity(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_output):
+        # pydevd.settrace(suspend=False, trace_only_current_thread=True)
         group = ctx.group
+
+        if grad_output.__class__ == FP8Tensor:
+            assert 1 == 1
+
         return DifferentiableAllReduceSum.apply(grad_output, group), None
 
 
@@ -48,6 +54,7 @@ class DifferentiableAllReduceSum(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_output):
+        # pydevd.settrace(suspend=False, trace_only_current_thread=True)
         return grad_output, None
 
 
@@ -84,6 +91,10 @@ class DifferentiableAllGather(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_output):
+        # pydevd.settrace(suspend=False, trace_only_current_thread=True)
+        if grad_output.__class__ == FP8Tensor:
+            assert 1 == 1
+
         group = ctx.group
         return DifferentiableReduceScatterSum.apply(grad_output, group), None
 
@@ -120,6 +131,7 @@ class DifferentiableReduceScatterSum(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_output):
+        # pydevd.settrace(suspend=False, trace_only_current_thread=True)
         group = ctx.group
         return DifferentiableAllGather.apply(grad_output, group), None
 

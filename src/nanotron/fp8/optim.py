@@ -4,6 +4,7 @@ import torch
 from torch import nn
 from torch.optim import Optimizer
 
+from nanotron import logging
 from nanotron._utils.memory import delete_tensor_from_memory
 from nanotron.fp8.constants import FP8_DTYPES, FP8LM_RECIPE
 from nanotron.fp8.dtypes import DTypes
@@ -16,6 +17,7 @@ from nanotron.fp8.tensor import (
     convert_tensor_from_fp16,
 )
 from nanotron.fp8.utils import compute_stas, is_overflow_underflow_nan
+from nanotron.logging import log_rank
 from nanotron.parallel.parameters import (
     NanotronParameter,
     get_data_from_param,
@@ -24,6 +26,8 @@ from nanotron.parallel.parameters import (
     set_data_for_sliced_or_param,
     set_grad_none_for_sliced_or_param,
 )
+
+logger = logging.get_logger(__name__)
 
 
 class Adam(Optimizer):
@@ -236,14 +240,10 @@ class FP8Adam(Optimizer):
 
         # TODO(xrsrke): make FP8Adam take a FP8Recipe
         # then retrieve the exp_avg_dtype from the recipe
-        self.exp_avg_dtype = FP8LM_RECIPE.optim.exp_avg_dtype
-        self.exp_avg_sq_dtype = FP8LM_RECIPE.optim.exp_avg_sq_dtype
-        # self.accum_dtype = accum_dtype
         self.recipe = recipe
         self.master_weight_dtype = recipe.master_weight_dtype
         self.optim_accum_dtype = recipe.accum_dtype
 
-        # self.master_weights: List[FP16Tensor] = []
         # NOTE: torch.Tensor is bias
         self.fp8_weights: List[Union[FP8Parameter, torch.Tensor]] = []
         # NOTE: use to map fp8 param to master weights
@@ -427,7 +427,27 @@ class FP8Adam(Optimizer):
 
                 denom = unbiased_fp32_exp_avg_sq.sqrt() + group["eps"]
                 normalized_grad = unbiased_fp32_exp_avg / denom
-                new_fp32_data = fp32_data - lr * normalized_grad
+
+                if step >= 10:
+                    rms = (fp32_grad.pow(2) / unbiased_fp32_exp_avg_sq).mean().sqrt()
+                else:
+                    rms = torch.tensor(1.0, dtype=self.optim_accum_dtype, device="cuda")
+
+                if constants.CONFIG.optimizer.update_clipping is True and step >= 10:
+                    update_lr = lr / torch.max(torch.tensor(1.0, dtype=self.optim_accum_dtype, device="cuda"), rms)
+                    log_rank(
+                        f"[Gradient clipping] datetime: The RMS is {rms}, original lr is {lr}, new lr is {update_lr}",  # noqa
+                        logger=logger,
+                        level=logging.INFO,
+                        rank=0,
+                    )
+                else:
+                    update_lr = lr
+
+                if group["weight_decay"] != 0:
+                    new_fp32_data = fp32_data - update_lr * (normalized_grad + group["weight_decay"] * fp32_data)
+                else:
+                    new_fp32_data = fp32_data - update_lr * normalized_grad
 
                 if IS_FP8:
                     # self.mappping_fp8_to_master_weight[p] = FP16Tensor(new_fp32_data, dtype=DTypes.KFLOAT16)
@@ -467,11 +487,10 @@ class FP8Adam(Optimizer):
                 # delete_tensor_from_memory(new_fp32_data)
                 # delete_tensor_from_memory(denom)
 
-                state["exp_avg"] = fp32_exp_avg
-                state["exp_avg_sq"] = fp32_exp_avg_sq
                 state["step"] = step
+                state["fp32_exp_avg"] = fp32_exp_avg
+                state["fp32_exp_avg"] = fp32_exp_avg_sq
 
-                loggings[p]["hp_grad"] = compute_stas(fp32_grad)
                 loggings[p]["group:lr"] = {"value": lr}
                 loggings[p]["group:eps"] = {"value": group["eps"]}
 
@@ -480,10 +499,12 @@ class FP8Adam(Optimizer):
                 loggings[p]["bias_correction1"] = {"value": bias_correction1}
                 loggings[p]["bias_correction2"] = {"value": bias_correction2}
 
-                loggings[p]["hp_exp_avg"] = compute_stas(fp32_exp_avg)
-                loggings[p]["hp_exp_avg_sq"] = compute_stas(fp32_exp_avg_sq)
-                loggings[p]["hp_p"] = compute_stas(fp32_data)
+                loggings[p]["normalized_grad"] = compute_stas(normalized_grad)
                 loggings[p]["denom"] = compute_stas(denom)
+                loggings[p]["grad_rms"] = {"value": rms}
+
+                loggings[p]["fp32_p"] = compute_stas(fp32_data)
+                loggings[p]["fp32_grad"] = compute_stas(fp32_grad)
 
         self.loggings = loggings
 

@@ -13,7 +13,6 @@ from nanotron.distributed import ProcessGroup
 from nanotron.logging import log_rank
 from nanotron.parallel.context import ParallelContext
 from nanotron.parallel.pipeline_parallel.block import PipelineBlock
-from nanotron.parallel.tensor_parallel.nn import TensorParallelEmbedding
 
 if TYPE_CHECKING:
     from nanotron.config import NanotronConfigs
@@ -243,24 +242,14 @@ old_register_parameter = nn.Module.register_parameter
 old_register_buffer = nn.Module.register_buffer
 
 
-def _get_modules_not_in_fp16():
-    from nanotron import constants
-
-    if constants.CONFIG is not None and hasattr(constants.CONFIG, "fp8"):
-        if constants.CONFIG.fp8.model is None:
-            name_of_modules_not_in_fp16 = []
-        else:
-            name_of_modules_not_in_fp16 = [x.module_name for x in constants.CONFIG.fp8.model]
-    else:
-        name_of_modules_not_in_fp16 = []
-    return name_of_modules_not_in_fp16
-
-
 def _register_empty_parameter_for_fp8(module, name, param):
     old_register_parameter(module, name, param)
 
-    MODULES_THAT_IN_FLOAT16 = [TensorParallelEmbedding, nn.LayerNorm]
-    name_of_modules_not_in_fp16 = _get_modules_not_in_fp16()
+    from nanotron.fp8.constant_recipe import MODULES_THAT_IN_FLOAT16
+    from nanotron.fp8.utils import get_modules_not_in_fp16
+
+    # MODULES_THAT_IN_FLOAT16 = [TensorParallelEmbedding, nn.LayerNorm]
+    name_of_modules_not_in_fp16 = get_modules_not_in_fp16()
 
     if param is not None:
         IS_CONVERT_TO_FLOAT16 = False
@@ -290,8 +279,10 @@ def _register_empty_parameter_for_fp8(module, name, param):
 def _register_empty_buffer_for_fp8(module, name, buffer, persistent=True):
     old_register_buffer(module, name, buffer, persistent=persistent)
 
-    MODULES_THAT_IN_FLOAT16 = [TensorParallelEmbedding, nn.LayerNorm]
-    name_of_modules_not_in_fp16 = _get_modules_not_in_fp16()
+    from nanotron.fp8.constant_recipe import MODULES_THAT_IN_FLOAT16
+    from nanotron.fp8.utils import get_modules_not_in_fp16
+
+    name_of_modules_not_in_fp16 = get_modules_not_in_fp16()
 
     if buffer is not None:
         IS_CONVERT_TO_FLOAT16 = False

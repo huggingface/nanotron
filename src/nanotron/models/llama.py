@@ -865,6 +865,10 @@ class LlamaModel(nn.Module):
             hidden_states = decoder_block(**hidden_states)
 
         hidden_states = self.final_layer_norm(input=hidden_states["hidden_states"])["hidden_states"]
+
+        # if hidden_states.dtype != self.lm_head.pp_block.weight.data.dtype:
+        #     _hidden_states = hidden_states.to(self.lm_head.pp_block.weight.data.dtype)
+
         sharded_logits = self.lm_head(x=hidden_states)["logits"]
 
         fp32_sharded_logits = self.cast_to_fp32(x=sharded_logits)["output"]

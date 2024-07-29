@@ -46,7 +46,7 @@ general:
   consumed_train_samples: null
   ignore_sanity_checks: true
   project: fp8_for_nanotron
-  run: fp8_2_layers_and_seq_len_16_and_micro_batch_256_and_lr_0.0006_and_warmup_200_and_decay_800_and_no_weight_decay_and_quantize_only_model.decoder.0.mlp.down_proj
+  run: fp8_1b_and_full_fp8_linears
   seed: 42
   step: null
 lighteval: null
@@ -59,23 +59,22 @@ model:
   ddp_bucket_cap_mb: 25
   dtype: float8
   init_method:
-    # std: 0.25 # sqrt(1/16)
-    # std: 0.125 # sqrt(1/64)
-    std: 0.04419417382415922 # sqrt(1/512)
+    std: 0.022097086912079608 # 1/sqrt(2048)=0.022097086912079608
   make_vocab_size_divisible_by: 1
   model_config:
     bos_token_id: 1
     eos_token_id: 2
-    # hidden_act: silu
-    hidden_act: gelu
-    hidden_size: 512
+    hidden_act: silu
     initializer_range: 0.02
-    intermediate_size: 2048
+
+    hidden_size: 2048
+    intermediate_size: 8192
+    num_hidden_layers: 14
+
     is_llama_config: true
     max_position_embeddings: 256
-    num_attention_heads: 16
-    num_hidden_layers: 2
-    num_key_value_heads: 16
+    num_attention_heads: 8
+    num_key_value_heads: 4
     pad_token_id: null
     pretraining_tp: 1
     rms_norm_eps: 1.0e-05
@@ -83,47 +82,16 @@ model:
     tie_word_embeddings: false
     use_cache: true
     vocab_size: 49152
-# optimizer:
-#   accumulate_grad_in_fp32: false
-#   clip_grad: 1.0
-#   # learning_rate_scheduler:
-#   #   learning_rate: 0.01
-#   #   lr_decay_starting_step: null
-#   #   lr_decay_steps: 13
-#   #   lr_decay_style: linear
-#   #   lr_warmup_steps: 2
-#   #   lr_warmup_style: constant
-#   #   min_decay_lr: 1.0e-05
-
-#   # learning_rate_scheduler:
-#   #   learning_rate: 0.00015
-#   #   lr_decay_starting_step: null
-#   #   # lr_decay_steps: null
-#   #   lr_decay_style: linear
-#   #   lr_warmup_steps: 60
-#   #   lr_warmup_style: constant
-#   #   min_decay_lr: 1.0e-05
-
-#   optimizer_factory:
-#     adam_beta1: 0.9
-#     adam_beta2: 0.999
-#     adam_eps: 1.0e-08
-#     name: adam
-#     torch_adam_is_fused: true
-#   weight_decay: 0.1
-#   zero_stage: 0
-
-
 optimizer:
   accumulate_grad_in_fp32: false
   learning_rate_scheduler:
-    learning_rate: 0.0006
+    learning_rate: 0.00015 # note: 1/2 of pythia use this for a 400m model
     lr_decay_starting_step: null
-    lr_decay_steps: 800
+    lr_decay_steps: null
     lr_decay_style: cosine
-    lr_warmup_steps: 200 # 10% warm up of total training steps
+    lr_warmup_steps: 1000 # 10% warm up of total training steps
     lr_warmup_style: linear
-    min_decay_lr: 0.00006
+    min_decay_lr: 0.000015
 
   optimizer_factory:
     adam_beta1: 0.9
@@ -131,17 +99,16 @@ optimizer:
     adam_eps: 1.0e-08
     name: custom_fp8_adam
     torch_adam_is_fused: true
-  weight_decay: 0.1
+  weight_decay: 0
   zero_stage: 0
   # clip_grad: 1.0
-  update_clipping: True
 
 parallelism:
   dp: 1
   expert_parallel_size: 1
   pp: 1
   pp_engine: 1f1b
-  tp: 2
+  tp: 4
   # tp_linear_async_communication: true
   # tp_mode: REDUCE_SCATTER
 
@@ -162,7 +129,7 @@ tokens:
   micro_batch_size: 128 # 256
   # micro_batch_size: 1
   sequence_length: 256
-  train_steps: 1000
+  train_steps: 20_000
   val_check_interval: -1
 
 fp8:

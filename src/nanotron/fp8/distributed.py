@@ -19,6 +19,10 @@ def all_reduce(
     assert tensor.__class__ in [torch.Tensor, nn.Parameter, NanotronParameter]
     data = get_data_from_param(tensor) if tensor.__class__ == NanotronParameter else tensor
 
+    # if data.__class__ == FP8Tensor:
+    #     dist.all_reduce(data, op=op, group=group, async_op=async_op)
+    # else:
+    #     dist.all_reduce(data, op=op, group=group, async_op=async_op)
     dist.all_reduce(data, op=op, group=group, async_op=async_op)
 
 

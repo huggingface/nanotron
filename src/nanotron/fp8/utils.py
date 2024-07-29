@@ -202,8 +202,27 @@ def find_fp8_config_by_module_name(config: Config, target_module_name: str) -> O
                 if layer_args.module_name == target_module_name:
                     return layer_args
         else:
-            # NOTE: return default recipe
+            from nanotron.fp8.constant_recipe import MODULE_NAMES_THAT_NOT_FP8
             from nanotron.fp8.constants import FP8LM_LINEAR_RECIPE
 
-            return FP8LM_LINEAR_RECIPE
+            if any(module_name in target_module_name for module_name in MODULE_NAMES_THAT_NOT_FP8):
+                return None
+            else:
+                # NOTE: return default recipe
+                return FP8LM_LINEAR_RECIPE
     return None
+
+
+def get_modules_not_in_fp16():
+    from nanotron import constants
+    from nanotron.fp8.constant_recipe import MODULE_NAMES_THAT_NOT_FP8
+
+    if constants.CONFIG is not None and hasattr(constants.CONFIG, "fp8"):
+        if constants.CONFIG.fp8.model is None:
+            # NOTE: convert all modules to fp8 axcept
+            name_of_modules_not_in_fp16 = MODULE_NAMES_THAT_NOT_FP8
+        else:
+            name_of_modules_not_in_fp16 = [x.module_name for x in constants.CONFIG.fp8.model]
+    else:
+        name_of_modules_not_in_fp16 = []
+    return name_of_modules_not_in_fp16
