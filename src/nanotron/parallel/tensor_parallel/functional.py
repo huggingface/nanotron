@@ -19,14 +19,13 @@ import torch
 from torch.nn import functional as F
 
 import nanotron.distributed as dist
-from nanotron.parallel.utils import MemoryBuffer
 from nanotron.parallel.tensor_parallel.distributed_differentiable_primitives import (
     differentiable_all_reduce_sum,
     differentiable_identity,
     differentiable_reduce_scatter_sum,
 )
 from nanotron.parallel.tensor_parallel.enum import TensorParallelLinearMode
-from nanotron.parallel.utils import assert_cuda_max_connections_set_to_1
+from nanotron.parallel.utils import MemoryBuffer, assert_cuda_max_connections_set_to_1
 
 
 class _ShardedCrossEntropy(torch.autograd.Function):
@@ -399,21 +398,23 @@ class _ColumnLinearContextParallelNoAsync(torch.autograd.Function):
         # Convert the tensor shapes to 2D for execution compatibility
         grad_output = grad_output.contiguous()
         grad_output_first_dims, grad_output_last_dim = grad_output.shape[:-1], grad_output.shape[-1]
-        total_tensor_first_dims, total_tensor_last_dim = total_tensor.shape[:-1], total_tensor.shape[-1]
+        total_input_first_dims, total_input_last_dim = total_input.shape[:-1], total_input.shape[-1]
         grad_output = grad_output.view(math.prod(grad_output_first_dims), grad_output_last_dim)
-        total_tensor = total_tensor.view(math.prod(total_tensor_first_dims), total_tensor_last_dim)
+        total_input = total_input.view(math.prod(total_input_first_dims), total_input_last_dim)
 
         # Compute gradients.
         grad_weight = grad_output.T @ total_input
         grad_input = grad_output @ weight
-        sub_grad_input = torch.empty(
-            input_size, dtype=total_input.dtype, device=total_input.device, requires_grad=False
-        )
-        dist.reduce_scatter_tensor(sub_grad_input, grad_input, group=group, op=dist.ReduceOp.SUM)
+        if group.size() == 1:
+            sub_grad_input = grad_input
+        else:
+            sub_grad_input = torch.empty(
+                input_size, dtype=total_input.dtype, device=total_input.device, requires_grad=False
+            )
+            dist.reduce_scatter_tensor(sub_grad_input, grad_input, group=group, op=dist.ReduceOp.SUM)
         grad_bias = torch.sum(grad_output, dim=0) if bias is not None else None
 
         return sub_grad_input, grad_weight, grad_bias, None, None
-
 
 
 def column_linear(
