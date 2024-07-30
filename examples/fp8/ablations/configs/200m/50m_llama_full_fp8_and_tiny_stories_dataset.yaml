@@ -22,7 +22,7 @@ general:
   consumed_train_samples: null
   ignore_sanity_checks: true
   project: fp8_for_nanotron
-  run: 50m_llama_full_fp8_and_tiny_stories_dataset
+  run: 50m_llama_full_fp8_and_tiny_stories_dataset_with_1k_warmup_and_update_clipping_and_0.1_weight_decay_and_512_batch_size
   seed: 42
   step: null
 lighteval: null
@@ -48,7 +48,7 @@ model:
     initializer_range: 0.02
     intermediate_size: 2048
     is_llama_config: true
-    max_position_embeddings: 256
+    max_position_embeddings: 128
     num_attention_heads: 16
     num_hidden_layers: 2
     num_key_value_heads: 16
@@ -95,9 +95,9 @@ optimizer:
   learning_rate_scheduler:
     learning_rate: 0.0006
     lr_decay_starting_step: null
-    lr_decay_steps: 800
+    lr_decay_steps: null
     lr_decay_style: cosine
-    lr_warmup_steps: 200 # 10% warm up of total training steps
+    lr_warmup_steps: 1000 # 10% warm up of total training steps
     lr_warmup_style: linear
     min_decay_lr: 0.00006
 
@@ -107,9 +107,10 @@ optimizer:
     adam_eps: 1.0e-08
     name: custom_fp8_adam
     torch_adam_is_fused: true
-  weight_decay: 0
+  weight_decay: 0.1
   zero_stage: 0
   # clip_grad: 1.0
+  update_clipping: true
 
 parallelism:
   dp: 1
@@ -134,9 +135,9 @@ tokens:
   batch_accumulation_per_replica: 1
   limit_test_batches: 0
   limit_val_batches: 0
-  micro_batch_size: 256 # 256
+  micro_batch_size: 512 # 256
   # micro_batch_size: 1
-  sequence_length: 256
+  sequence_length: 128
   train_steps: 24376
   val_check_interval: -1
 

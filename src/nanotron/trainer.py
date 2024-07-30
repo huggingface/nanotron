@@ -451,7 +451,6 @@ class DistributedTrainer:
 
         for n, p in self.model.named_parameters():
             log_rank(f"name: {n}, dtype: {get_data_from_param(p).dtype}", logger=logger, level=logging.INFO, rank=0)
-
         if self.config.checkpoints.save_initial_state and self.init_checkpoint_path is None:
             self.save_checkpoint()
 
@@ -515,9 +514,9 @@ class DistributedTrainer:
                             handle.remove()
 
                         detailed_logs = {}
-                        # optim_logs = get_optim_logs(self.params_id_to_param_names, self.optimizer.optimizer, prefix="")
+                        optim_logs = get_optim_logs(self.params_id_to_param_names, self.optimizer.optimizer, prefix="")
                         detailed_logs.update(convert_logs_to_flat_logs(nn_logs))
-                        # detailed_logs.update(optim_logs)
+                        detailed_logs.update(optim_logs)
                         # NOTE: convert tensor to float for logging
                         detailed_logs = {
                             k: v.item() if isinstance(v, torch.Tensor) else v for k, v in detailed_logs.items()

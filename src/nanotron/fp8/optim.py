@@ -321,6 +321,20 @@ class FP8Adam(Optimizer):
         state["exp_avg"] = exp_avg
         state["exp_avg_sq"] = exp_avg_sq
 
+    def _calculate_mean_sqrt_ignoring_nans(self, numerator, denominator):
+        # Calculate the division, ignoring division by zero
+        division_result = torch.where(denominator != 0, numerator / denominator, torch.zeros_like(numerator))
+
+        # Calculate the mean, ignoring NaN values
+        valid_values = division_result[~torch.isnan(division_result)]
+
+        if valid_values.numel() > 0:
+            mean_result = valid_values.mean()
+            return torch.sqrt(mean_result)
+        else:
+            raise ValueError("All values are NaN")
+            # return torch.tensor(0.0)  # Return 0 if all values are NaN
+
     @torch.no_grad()
     def step(self):
         # NOTE: sanity check the entire params has at least one grad
@@ -428,19 +442,40 @@ class FP8Adam(Optimizer):
                 denom = unbiased_fp32_exp_avg_sq.sqrt() + group["eps"]
                 normalized_grad = unbiased_fp32_exp_avg / denom
 
-                if step >= 10:
-                    rms = (fp32_grad.pow(2) / unbiased_fp32_exp_avg_sq).mean().sqrt()
-                else:
-                    rms = torch.tensor(1.0, dtype=self.optim_accum_dtype, device="cuda")
+                # if step >= 10:
+                #     if "0.pp_block.mlp.down_proj.weight" in self.params_id_to_param_names[id(p)]:
+                #         assert 1 == 1
 
-                if constants.CONFIG.optimizer.update_clipping is True and step >= 10:
+                #     # rms = (fp32_grad.pow(2) / unbiased_fp32_exp_avg_sq).mean().sqrt()
+                #     rms = self._calculate_mean_sqrt_ignoring_nans(fp32_grad, unbiased_fp32_exp_avg_sq).sqrt()
+                # else:
+                #     rms = torch.tensor(1.0, dtype=self.optim_accum_dtype, device="cuda")
+
+                if "0.pp_block.mlp.down_proj.weight" in self.params_id_to_param_names[id(p)]:
+                    assert 1 == 1
+
+                if step >= 10:
+                    if "0.pp_block.mlp.down_proj.weight" in self.params_id_to_param_names[id(p)]:
+                        assert 1 == 1
+
+                rms = self._calculate_mean_sqrt_ignoring_nans(fp32_grad.pow(2), unbiased_fp32_exp_avg_sq)
+
+                # log_rank(
+                #     f"[Gradient clipping] The RMS is {rms}",  # noqa
+                #     logger=logger,
+                #     level=logging.INFO,
+                #     rank=0,
+                # )
+
+                if constants.CONFIG.optimizer.update_clipping is True:
                     update_lr = lr / torch.max(torch.tensor(1.0, dtype=self.optim_accum_dtype, device="cuda"), rms)
-                    log_rank(
-                        f"[Gradient clipping] datetime: The RMS is {rms}, original lr is {lr}, new lr is {update_lr}",  # noqa
-                        logger=logger,
-                        level=logging.INFO,
-                        rank=0,
-                    )
+                    if rms > 1:
+                        log_rank(
+                            f"[Gradient clipping] param_name={self.params_id_to_param_names[id(p)]}, RMS is {rms}, original lr is {lr}, new lr is {update_lr}",  # noqa
+                            logger=logger,
+                            level=logging.INFO,
+                            rank=0,
+                        )
                 else:
                     update_lr = lr
 
@@ -488,8 +523,8 @@ class FP8Adam(Optimizer):
                 # delete_tensor_from_memory(denom)
 
                 state["step"] = step
-                state["fp32_exp_avg"] = fp32_exp_avg
-                state["fp32_exp_avg"] = fp32_exp_avg_sq
+                state["exp_avg"] = fp32_exp_avg
+                state["exp_avg_sq"] = fp32_exp_avg_sq
 
                 loggings[p]["group:lr"] = {"value": lr}
                 loggings[p]["group:eps"] = {"value": group["eps"]}
