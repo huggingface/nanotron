@@ -94,7 +94,7 @@ def init_dummy_model(parallel_context: ParallelContext, dtype: torch.dtype = tor
     initial_sync(model=model, parallel_context=parallel_context)
 
     if len(list(model.named_parameters())) > 0:
-        model = DistributedDataParallel(model, process_group=parallel_context.dp_pg)
+        model = DistributedDataParallel(model, process_group=parallel_context.dp_sp_pg)
     else:
         # No parameters, so no need to use DDP to sync parameters gradients
         model = model

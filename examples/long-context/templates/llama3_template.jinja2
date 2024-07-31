@@ -1,0 +1,114 @@
+checkpoints:
+  checkpoint_interval: {{ checkpoint_interval }}
+  checkpoints_path: "{{ checkpoints_path }}"
+  checkpoints_path_is_shared_file_system: false
+  resume_checkpoint_path: "{{ resume_checkpoint_path }}"
+  save_initial_state: false
+
+data_stages:
+- data:
+    dataset:
+      dataloader_type: cyclic
+      dataset_max_tokens: null
+      dataset_weights: null
+      datasets:
+      - filename_pattern: '.*\.ds'
+        folder: {{ dataset_folder}}
+        seed: null
+        shuffle: false
+        skip_tokens: 0
+      pad_samples_to_global_batch_size: false
+      skip_in_stream: true
+    num_loading_workers: 0
+    seed: 42
+  name: long context
+  start_training_step: 1
+
+
+general:
+  benchmark_csv_path: null
+  consumed_train_samples: null
+  ignore_sanity_checks: true
+  project: debug
+  run: tiny_llama_%date_%jobid
+  seed: 42
+  step: null
+lighteval: null
+logging:
+  iteration_step_info_interval: 1
+  log_level: info
+  log_level_replica: info
+
+model:
+  ddp_bucket_cap_mb: 25
+  dtype: bfloat16
+  init_method:
+    path: {{ init_weights_path }}
+  make_vocab_size_divisible_by: 1
+  model_config:
+    bos_token_id: 128000
+    eos_token_id: 128001
+    hidden_act: silu
+    hidden_size: 4096
+    initializer_range: 0.02
+    intermediate_size: 14336
+    is_llama_config: true
+    max_position_embeddings: {{ sequence_length }}
+    num_attention_heads: 32
+    num_hidden_layers: 32
+    num_key_value_heads: 8
+    pad_token_id: null
+    pretraining_tp: 1
+    rms_norm_eps: 1.0e-05
+    rope_interleaved: false
+    rope_scaling: null
+    rope_theta: {{ rope_theta }}
+    tie_word_embeddings: false
+    use_cache: true
+    vocab_size: 128256
+
+optimizer:
+  accumulate_grad_in_fp32: true
+  clip_grad: 1.0
+  learning_rate_scheduler:
+    learning_rate: {{ learning_rate }}
+    lr_decay_starting_step: null
+    lr_decay_steps: {{ lr_decay_steps }}
+    lr_decay_style: cosine
+    lr_warmup_steps: {{ lr_warmup_steps }}
+    lr_warmup_style: linear
+    min_decay_lr: {{ min_decay_lr }}
+  optimizer_factory:
+    adam_beta1: 0.9
+    adam_beta2: 0.95
+    adam_eps: 1.0e-08
+    name: adamW
+    torch_adam_is_fused: true
+  weight_decay: 0.01
+  zero_stage: 0
+
+parallelism:
+  dp: 1
+  expert_parallel_size: 1
+  pp: 1
+  pp_engine: 1f1b
+  sp: {{ sp }}
+  tp: {{ tp }}
+  tp_linear_async_communication: false
+  tp_mode: REDUCE_SCATTER
+
+profiler: null
+
+tokenizer:
+  tokenizer_max_length: null
+  tokenizer_name_or_path: {{ tokenizer_path }}
+  tokenizer_revision: null
+
+tokens:
+  batch_accumulation_per_replica: {{ batch_accumulation_per_replica }}
+  limit_test_batches: 0
+  limit_val_batches: 0
+  micro_batch_size: {{ micro_batch_size }}
+  sequence_length: {{ sequence_length }}
+  train_steps: {{ train_steps }}
+  val_check_interval: -1

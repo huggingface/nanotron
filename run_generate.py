@@ -59,7 +59,8 @@ def get_args():
     parser.add_argument("--dp", type=int, default=1)
     parser.add_argument("--pp", type=int, default=0)
     parser.add_argument("--tp", type=int, default=0)
-    parser.add_argument("--max-new-tokens", type=int, default=128, help="Maximum number of new tokens to generate")
+    parser.add_argument("--sp", type=int, default=0)
+    parser.add_argument("--max-new-tokens", type=int, default=50, help="Maximum number of new tokens to generate")
     return parser.parse_args()
 
 
@@ -76,6 +77,7 @@ def main():
         dp=args.dp or config.parallelism.dp,
         pp=args.pp or config.parallelism.pp,
         tp=args.tp or config.parallelism.tp,
+        sp=args.sp or config.parallelism.sp,
         pp_engine=OneForwardOneBackwardPipelineEngine(),
         tp_mode=TensorParallelLinearMode.ALL_REDUCE,
         tp_linear_async_communication=False,
@@ -86,6 +88,7 @@ def main():
         data_parallel_size=parallel_config.dp,
         pipeline_parallel_size=parallel_config.pp,
         tensor_parallel_size=parallel_config.tp,
+        sequence_parallel_size=parallel_config.sp,
     )
 
     # Set log levels
@@ -179,7 +182,7 @@ def main():
             model=model.model,
             parallel_context=parallel_context,
             max_new_tokens=args.max_new_tokens,
-            max_micro_batch_size=2,
+            max_micro_batch_size=1,
             generation_config=GenerationArgs(sampler="greedy", use_cache=True),
             tokenizer_config=TokenizerConfig(max_input_length=None),
             is_bench=os.environ.get("USE_BENCH", "0") == "1",

@@ -143,7 +143,7 @@ def test_optimizer_can_step_gradient_in_fp32(half_precision: torch.dtype):
 @pytest.mark.parametrize("train_iterations", [1, 3])
 @rerun_if_address_is_in_use()
 def test_ddp_with_grad_accum_in_fp32(half_precision: torch.dtype, accumulation_steps: int, train_iterations: int):
-    init_distributed(tp=1, dp=2, pp=1)(_test_ddp_with_grad_accum_in_fp32)(
+    init_distributed(tp=1, dp=2, pp=1, sp=1)(_test_ddp_with_grad_accum_in_fp32)(
         half_precision=half_precision,
         accumulation_steps=accumulation_steps,
         train_iterations=train_iterations,
@@ -257,7 +257,7 @@ def _test_ddp_with_grad_accum_in_fp32(
         accumulator.backward(loss_fp32_accum)
 
         for name, param in model_ddp_fp32_accum.named_parameters():
-            # Check that half grads has been set to None in sync step, to avoid it being uncorrectly used
+            # Check that half grads has been set to None in sync step, to avoid it being incorrectly used
             half_grad = param.grad
             assert half_grad is None, f"{half_grad} != None"
 
@@ -310,7 +310,7 @@ def _test_ddp_with_grad_accum_in_fp32(
 @pytest.mark.parametrize("reduce_scatter", [True, False])
 @rerun_if_address_is_in_use()
 def test_tied_weights_sync_with_grad_accum_in_fp32(pipeline_engine: PipelineEngine, reduce_scatter: bool):
-    init_distributed(tp=1, dp=2, pp=2)(_test_tied_weights_sync_with_grad_accum_in_fp32)(
+    init_distributed(tp=1, dp=2, pp=2, sp=1)(_test_tied_weights_sync_with_grad_accum_in_fp32)(
         pipeline_engine=pipeline_engine, reduce_scatter=reduce_scatter
     )
 
@@ -348,6 +348,7 @@ def _test_tied_weights_sync_with_grad_accum_in_fp32(
                             pp_rank=get_pp_rank_of(target, module=mdl),
                             dp_rank=dist.get_rank(parallel_context.dp_pg),
                             tp_rank=dist.get_rank(parallel_context.tp_pg),
+                            sp_rank=dist.get_rank(parallel_context.sp_pg),
                         ),
                     ),
                 )

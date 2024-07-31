@@ -29,6 +29,7 @@ class ParallelismArgs:
     dp: int
     pp: int
     tp: int
+    sp: int
     pp_engine: Optional[PipelineEngine] = None
     tp_mode: Optional[TensorParallelLinearMode] = None
     tp_linear_async_communication: Optional[bool] = None

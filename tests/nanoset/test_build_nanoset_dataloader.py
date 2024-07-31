@@ -2,9 +2,6 @@ import sys
 from math import isclose
 from pathlib import Path
 
-package_path = Path(__file__).parent.parent
-sys.path.append(str(package_path))
-
 import numpy as np
 import pytest
 from helpers.context import TestContext
@@ -16,7 +13,7 @@ from helpers.data import (
     create_dummy_json_dataset,
     preprocess_dummy_dataset,
 )
-from helpers.utils import available_gpus, get_all_3d_configurations, init_distributed, rerun_if_address_is_in_use
+from helpers.utils import available_gpus, get_all_4d_configurations, init_distributed, rerun_if_address_is_in_use
 from nanotron.data.dataloader_builder import build_nanoset_dataloader
 from nanotron.data.nanoset import Nanoset
 from nanotron.data.utils import count_dataset_indexes, normalize
@@ -24,13 +21,16 @@ from nanotron.parallel import ParallelContext
 from nanotron.utils import main_rank_first
 from transformers import AutoTokenizer
 
+package_path = Path(__file__).parent.parent
+sys.path.append(str(package_path))
+
 
 @pytest.mark.parametrize(
-    "tp,dp,pp",
+    "tp,dp,pp,sp",
     [
-        pytest.param(*all_3d_configs)
+        pytest.param(*all_4d_configs)
         for gpus in range(1, min(available_gpus(), 4) + 1)
-        for all_3d_configs in get_all_3d_configurations(gpus)
+        for all_4d_configs in get_all_4d_configurations(gpus)
     ],
 )
 @pytest.mark.parametrize("train_steps", [5, 100])
@@ -38,7 +38,7 @@ from transformers import AutoTokenizer
 @pytest.mark.parametrize("tokenizer_name_or_path", ["openai-community/gpt2", "unsloth/llama-3-8b-bnb-4bit"])
 @rerun_if_address_is_in_use()
 def test_build_nanoset_dataloader(
-    tp: int, dp: int, pp: int, train_steps: int, sequence_length: int, tokenizer_name_or_path: str
+    tp: int, dp: int, pp: int, sp: int, train_steps: int, sequence_length: int, tokenizer_name_or_path: str
 ):
     test_context = TestContext()
 
@@ -49,7 +49,7 @@ def test_build_nanoset_dataloader(
     for idx, json_path in enumerate(json_paths):
         create_dummy_json_dataset(path_to_json=json_path, dummy_text=f"Nanoset {idx}!", n_samples=(idx + 1) * 50000)
 
-    init_distributed(tp=tp, dp=dp, pp=pp)(_test_build_nanoset_dataloader)(
+    init_distributed(tp=tp, dp=dp, pp=pp, sp=sp)(_test_build_nanoset_dataloader)(
         json_paths=json_paths,
         path_to_mmap_files=mmap_dataset_paths,
         train_steps=train_steps,
@@ -155,17 +155,19 @@ def _test_build_nanoset_dataloader(
 
 
 @pytest.mark.parametrize(
-    "tp,dp,pp",
+    "tp,dp,pp,sp",
     [
-        pytest.param(*all_3d_configs)
+        pytest.param(*all_4d_configs)
         for gpus in range(1, min(available_gpus(), 4) + 1)
-        for all_3d_configs in get_all_3d_configurations(gpus)
+        for all_4d_configs in get_all_4d_configurations(gpus)
     ],
 )
 @pytest.mark.parametrize("skipped_batches", [20, 50])
 @pytest.mark.parametrize("tokenizer_name_or_path", ["openai-community/gpt2", "unsloth/llama-3-8b-bnb-4bit"])
 @rerun_if_address_is_in_use()
-def test_recover_nanoset_dataloader(tp: int, dp: int, pp: int, skipped_batches: int, tokenizer_name_or_path: str):
+def test_recover_nanoset_dataloader(
+    tp: int, dp: int, pp: int, sp: int, skipped_batches: int, tokenizer_name_or_path: str
+):
     test_context = TestContext()
 
     # Create dataset files
@@ -175,7 +177,7 @@ def test_recover_nanoset_dataloader(tp: int, dp: int, pp: int, skipped_batches: 
     for idx, json_path in enumerate(json_paths):
         create_dummy_json_dataset(path_to_json=json_path, dummy_text=f"Nanoset {idx}!", n_samples=(idx + 1) * 50000)
 
-    init_distributed(tp=tp, dp=dp, pp=pp)(_test_recover_nanoset_dataloader)(
+    init_distributed(tp=tp, dp=dp, pp=pp, sp=sp)(_test_recover_nanoset_dataloader)(
         json_paths=json_paths,
         path_to_mmap_files=mmap_dataset_paths,
         skipped_batches=skipped_batches,

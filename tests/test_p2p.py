@@ -14,7 +14,7 @@ from nanotron.parallel.pipeline_parallel.p2p import P2P
 @pytest.mark.parametrize("full", [True, False])
 @rerun_if_address_is_in_use()
 def test_check_send_recv_tensor(send_contiguous: bool, full: bool):
-    init_distributed(tp=1, dp=1, pp=2)(_test_check_send_recv_tensor)(send_contiguous=send_contiguous, full=full)
+    init_distributed(tp=1, dp=1, pp=2, sp=1)(_test_check_send_recv_tensor)(send_contiguous=send_contiguous, full=full)
 
 
 def _test_check_send_recv_tensor(parallel_context: ParallelContext, send_contiguous: bool, full: bool):

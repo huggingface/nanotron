@@ -147,6 +147,7 @@ class DistributedTrainer:
             pipeline_parallel_size=self.config.parallelism.pp,
             data_parallel_size=self.config.parallelism.dp,
             expert_parallel_size=self.config.parallelism.expert_parallel_size,
+            sequence_parallel_size=self.config.parallelism.sp,
         )
 
         self.pre_init()
@@ -234,7 +235,7 @@ class DistributedTrainer:
 
         # Setup tensorboard write and log writers on output rank
         self.logger_ranks = self.parallel_context.get_global_rank(
-            ep_rank=0, pp_rank=self.unwrapped_model.output_pp_rank, dp_rank=0, tp_rank=0
+            ep_rank=0, pp_rank=self.unwrapped_model.output_pp_rank, dp_rank=0, tp_rank=0, sp_rank=0
         ).flatten()
         self.loggerwriter = self.setup_log_writers()
 
@@ -440,7 +441,6 @@ class DistributedTrainer:
                 # Checkpoint
                 if self.iteration_step % self.config.checkpoints.checkpoint_interval == 0:
                     self.save_checkpoint()
-
         dist.barrier()  # let's wait for everyone before leaving
 
         self.post_training()
@@ -478,7 +478,7 @@ class DistributedTrainer:
             # Manually sync across DP if it's not handled by DDP
             sync_gradients_across_dp(
                 module=self.model,
-                dp_pg=self.parallel_context.dp_pg,
+                dp_pg=self.parallel_context.dp_sp_pg,
                 reduce_op=dist.ReduceOp.AVG,
                 # TODO @thomasw21: This is too memory hungry, instead we run all_reduce
                 reduce_scatter=False,  # optimizer.inherit_from(ZeroDistributedOptimizer),
@@ -517,8 +517,10 @@ class DistributedTrainer:
             loss_avg = torch.stack(
                 [output["loss"] for output in outputs]
             ).sum()  # already divided by n_micro_batches_per_batch
-            # sync loss across DP
-            handle = dist.all_reduce(loss_avg, group=self.parallel_context.dp_pg, async_op=True, op=dist.ReduceOp.AVG)
+            # sync loss across DP/SP
+            handle = dist.all_reduce(
+                loss_avg, group=self.parallel_context.dp_sp_pg, async_op=True, op=dist.ReduceOp.AVG
+            )
         else:
             loss_avg = None
             handle = None
@@ -711,7 +713,7 @@ class DistributedTrainer:
                 # Synchronize parameters so that the model is consistent
                 # sync all params across dp
                 for _, param in sorted(model.named_parameters(), key=lambda x: x[0]):
-                    dist.all_reduce(param, op=dist.ReduceOp.AVG, group=self.parallel_context.dp_pg)
+                    dist.all_reduce(param, op=dist.ReduceOp.AVG, group=self.parallel_context.dp_sp_pg)
 
                 # sync tied params across tied groups
                 for (_, group_ranks), param in sorted(
@@ -800,7 +802,7 @@ class DistributedTrainer:
             # TODO @thomasw21: DDP doesn't support broadcasting complex buffers (and we don't really need that broadcasting anyway)
             model = DistributedDataParallel(
                 model,
-                process_group=parallel_context.dp_pg,
+                process_group=parallel_context.dp_sp_pg,
                 broadcast_buffers=False,
                 bucket_cap_mb=config.model.ddp_bucket_cap_mb,
             )
@@ -907,6 +909,7 @@ def mark_tied_parameters(
                 target,
                 (
                     parallel_context.get_global_rank(
+                        sp_rank=dist.get_rank(parallel_context.sp_pg),
                         ep_rank=dist.get_rank(parallel_context.expert_pg),
                         pp_rank=get_pp_rank_of(target, module=model),
                         dp_rank=dist.get_rank(parallel_context.dp_pg),

@@ -147,10 +147,8 @@ def lr_scheduler_builder(optimizer: Optimizer, lr_scheduler_args: LRSchedulerArg
                     / lr_decay_steps
                 )
             elif lr_scheduler_args.lr_decay_style == "1-sqrt":
-                lmbda = (
-                    lr_scheduler_args.min_decay_lr
-                    + (initial_lr - lr_scheduler_args.min_decay_lr)
-                    * (1 - math.sqrt((current_step - lr_decay_starting_step) / lr_decay_steps))
+                lmbda = lr_scheduler_args.min_decay_lr + (initial_lr - lr_scheduler_args.min_decay_lr) * (
+                    1 - math.sqrt((current_step - lr_decay_starting_step) / lr_decay_steps)
                 )
             else:
                 raise ValueError(f"Unknown decay style {lr_scheduler_args.lr_decay_style}")
@@ -387,7 +385,7 @@ def init_optimizer_and_grad_accumulator(
             named_params_or_groups=named_param_groups,
             # TODO @thomasw21: We need a better API for gradient accumulation/zero etc ...
             optimizer_builder=optimizer_builder,
-            dp_pg=parallel_context.dp_pg,
+            dp_pg=parallel_context.dp_pg,  # TODO: add sequence parallel support. This will change the topology of the current OS checkpoint.
         )
 
         # SANITY CHECK: assert that optimizer's named_params point to model's params (check only the first one)
@@ -412,7 +410,9 @@ def init_optimizer_and_grad_accumulator(
 
         assert isinstance(grad_accumulator, FP32GradientAccumulator)
         grad_accumulator.assign_param_offsets(
-            dp_rank=dist.get_rank(parallel_context.dp_pg),
+            dp_rank=dist.get_rank(
+                parallel_context.dp_pg
+            ),  # sequence parallel and data parallel process group will synchronize the gradient together
             param_name_to_offsets=param_name_to_dp_rank_offsets,
         )
 
@@ -421,7 +421,7 @@ def init_optimizer_and_grad_accumulator(
         assert isinstance(grad_accumulator, FP32GradientAccumulator)
         model.register_comm_hook(
             state=FP32GradBucketManager(
-                dp_pg=parallel_context.dp_pg,
+                dp_pg=parallel_context.dp_sp_pg,  # sequence parallel and data parallel process group will synchronize the gradient together
                 accumulator=grad_accumulator,
                 param_id_to_name={
                     id(param): param.get_tied_info().get_full_name_from_module_id_to_prefix(
@@ -693,7 +693,7 @@ def compute_remain_train_steps_of_a_data_stage_from_ckp(
     else:
         next_stage = next((s for s in config.data_stages if s.start_training_step > stage.start_training_step), None)
         total_train_steps = next_stage.start_training_step
-    
+
     if metadata.last_train_step > stage.start_training_step:
         # NOTE: if the last_train_step is larger than the start_training_step of the current stage,
         # it means that the training has already passed this stage

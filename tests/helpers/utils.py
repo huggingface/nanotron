@@ -107,8 +107,8 @@ def is_dict_equal(first: Dict, second: Dict, sub_paths: Optional[List[str]] = No
     return True, None
 
 
-def get_all_3d_configurations(gpus: int) -> List[Tuple[int, int, int]]:
-    """Given a number of gpus, we want all 3d configurations possible such that pp * dp * tp = gpus"""
+def get_all_4d_configurations(gpus: int) -> List[Tuple[int, int, int, int]]:
+    """Given a number of gpus, we want all 4d configurations possible such that pp * dp * tp * sp = gpus"""
     result = []
     for tp in range(1, gpus + 1):
         if gpus % tp != 0:
@@ -121,8 +121,10 @@ def get_all_3d_configurations(gpus: int) -> List[Tuple[int, int, int]]:
             for pp in range(1, gpus_left_after_dp + 1):
                 if gpus_left_after_dp % pp != 0:
                     continue
-                if tp * dp * pp == gpus:
-                    result.append((pp, dp, tp))
+                gpus_left_after_pp = gpus_left_after_dp // pp
+                for sp in range(1, gpus_left_after_pp + 1):
+                    if tp * dp * pp * sp == gpus:
+                        result.append((tp, dp, pp, sp))
     return result
 
 
@@ -243,7 +245,7 @@ def rerun_on_exception(exception_type: Exception = Exception, pattern: str = Non
     return _wrapper
 
 
-def global_wrapper(rank, func, tp, pp, dp, port, kwargs):
+def global_wrapper(rank, func, tp, pp, dp, sp, port, kwargs):
     def setup_dist_env(rank, world_size, port):
         os.environ["WORLD_SIZE"] = str(world_size)
         os.environ["RANK"] = str(rank)
@@ -253,22 +255,24 @@ def global_wrapper(rank, func, tp, pp, dp, port, kwargs):
         os.environ["MASTER_ADDR"] = "localhost"
         os.environ["MASTER_PORT"] = str(port)
 
-    world_size = tp * pp * dp
+    world_size = tp * pp * dp * sp
     setup_dist_env(rank, world_size, port)
-    parallel_context = ParallelContext(data_parallel_size=dp, pipeline_parallel_size=pp, tensor_parallel_size=tp)
+    parallel_context = ParallelContext(
+        data_parallel_size=dp, pipeline_parallel_size=pp, tensor_parallel_size=tp, sequence_parallel_size=sp
+    )
     func(parallel_context, **kwargs)
 
 
-def init_distributed(tp: int, dp: int, pp: int):
+def init_distributed(tp: int, dp: int, pp: int, sp: int):
     def _init_distributed(func):
         def wrapper(**kwargs):
             from nanotron.utils import find_free_port
 
-            world_size = tp * pp * dp
+            world_size = tp * pp * dp * sp
             port = find_free_port()
 
             # Note that kwargs needs to be passed as part of args in a way that can be unpacked
-            args = (func, tp, pp, dp, port, kwargs)
+            args = (func, tp, pp, dp, sp, port, kwargs)
             mp.spawn(global_wrapper, args=args, nprocs=world_size)
 
         return wrapper

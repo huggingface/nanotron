@@ -23,10 +23,10 @@ def assert_cuda_max_connections_set_to_1(func):
 
 
 def initial_sync(model: nn.Module, parallel_context: ParallelContext):
-    # Synchronize across dp: basic assumption
+    # Synchronize across dp/sp: basic assumption
     sorted_name_params = sorted(model.named_parameters(), key=lambda x: x[0])
     for name, param in sorted_name_params:
-        dist.all_reduce(param, op=dist.ReduceOp.AVG, group=parallel_context.dp_pg)
+        dist.all_reduce(param, op=dist.ReduceOp.AVG, group=parallel_context.dp_sp_pg)
 
     # Synchronize across tied weights: basic assumption
     for (_, group_ranks), param in sorted(

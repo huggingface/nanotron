@@ -1,5 +1,5 @@
 import os
-from typing import Literal, Tuple, Annotated
+from typing import Literal, Tuple
 
 import numpy as np
 import torch
@@ -15,6 +15,7 @@ class ParallelContext:
         tensor_parallel_size: int,
         pipeline_parallel_size: int,
         data_parallel_size: int,
+        sequence_parallel_size: int,
         expert_parallel_size: int = 1,
         backend: DistributedBackend = "nccl",
     ):
@@ -27,11 +28,11 @@ class ParallelContext:
         ), "The total number of processes must be divisible by the data parallel size."
         assert world_size % num_gpus_per_model == 0, (
             "The total number of processes must be divisible by"
-            "the number of GPUs per model (tensor_parallel_size * pipeline_parallel_size)."
+            f"the number of GPUs per model (tensor_parallel_size * pipeline_parallel_size). Got {world_size} and {num_gpus_per_model}."
         )
-        if num_gpus_per_model * data_parallel_size != world_size:
+        if num_gpus_per_model * data_parallel_size * sequence_parallel_size != world_size:
             raise ValueError(
-                f"The number of process requires to run all replicas ({num_gpus_per_model * data_parallel_size})",
+                f"The number of process requires to run all replicas ({num_gpus_per_model * data_parallel_size * sequence_parallel_size })",
                 f"must be equal to the world size ({world_size}).",
             )
 
@@ -41,6 +42,7 @@ class ParallelContext:
         self.tensor_parallel_size = tensor_parallel_size
         self.pipeline_parallel_size = pipeline_parallel_size
         self.data_parallel_size = data_parallel_size
+        self.sequence_parallel_size = sequence_parallel_size
         self.expert_parallel_size = expert_parallel_size
 
         self._groups = {}
@@ -68,6 +70,7 @@ class ParallelContext:
         world_size = int(os.environ["WORLD_SIZE"])
         ranks = np.arange(0, world_size).reshape(
             (
+                self.sequence_parallel_size,
                 self.expert_parallel_size,
                 self.pipeline_parallel_size,
                 self.data_parallel_size,
@@ -77,24 +80,29 @@ class ParallelContext:
         self.world_ranks_to_pg = {}
 
         # Relevant process groups containing the current rank
-        self.tp_pg = self.create_new_group(ranks.transpose((0, 1, 2, 3)).reshape((-1, self.tensor_parallel_size)))
-        self.dp_pg = self.create_new_group(ranks.transpose((3, 0, 1, 2)).reshape((-1, self.data_parallel_size)))
-        self.pp_pg = self.create_new_group(ranks.transpose((2, 3, 0, 1)).reshape((-1, self.pipeline_parallel_size)))
-        self.expert_pg = self.create_new_group(ranks.transpose((1, 2, 3, 0)).reshape((-1, self.expert_parallel_size)))
 
-        # model parallel group = combination of tp and pp and exp for a given dp rank
-        self.mp_pg = self.create_new_group(
-            [ranks[:, :, dp_rank, :].reshape(-1) for dp_rank in range(self.data_parallel_size)]
+        self.tp_pg = self.create_new_group(ranks.transpose((0, 1, 2, 3, 4)).reshape((-1, self.tensor_parallel_size)))
+        self.sp_pg = self.create_new_group(ranks.transpose((1, 2, 3, 4, 0)).reshape((-1, self.sequence_parallel_size)))
+        # Create a group DP+SP. Sync gradient/avg loss/shard optimizer between this group. things related to dp_pg get changed. But don't need to load different data.
+        self.dp_sp_pg = self.create_new_group(
+            ranks.transpose((1, 4, 2, 0, 3)).reshape((-1, self.data_parallel_size * self.sequence_parallel_size))
+        )  # the last two dimension should correspond to sp and dp.
+        self.dp_pg = self.create_new_group(ranks.transpose((4, 0, 1, 2, 3)).reshape((-1, self.data_parallel_size)))
+        self.pp_pg = self.create_new_group(ranks.transpose((3, 4, 0, 1, 2)).reshape((-1, self.pipeline_parallel_size)))
+        self.expert_pg = self.create_new_group(
+            ranks.transpose((2, 3, 4, 0, 1)).reshape((-1, self.expert_parallel_size))
         )
-
+        self.mp_pg = self.create_new_group(
+            [ranks[:, :, :, dp_rank, :].reshape(-1) for dp_rank in range(self.data_parallel_size)]
+        )
         self.tp_and_expert_pg = self.create_new_group(
             [
-                ranks[:, pp_rank, dp_rank, :].reshape(-1)
+                ranks[sp_rank, :, pp_rank, dp_rank, :].reshape(-1)
                 for pp_rank in range(self.pipeline_parallel_size)
                 for dp_rank in range(self.data_parallel_size)
+                for sp_rank in range(self.sequence_parallel_size)
             ]
         )
-
         self.world_rank_matrix: np.ndarray = ranks
 
     def create_new_group(self, all_groups_ranks: np.ndarray) -> dist.ProcessGroup:
@@ -137,6 +145,7 @@ class ParallelContext:
 
     def get_global_rank(
         self,
+        sp_rank: int,
         ep_rank: int,
         pp_rank: int,
         dp_rank: int,
@@ -152,4 +161,4 @@ class ParallelContext:
 
         :return: numpy.int64, The global rank.
         """
-        return self.world_rank_matrix[ep_rank, pp_rank, dp_rank, tp_rank]
+        return self.world_rank_matrix[sp_rank, ep_rank, pp_rank, dp_rank, tp_rank]

@@ -41,11 +41,15 @@ def save_optimizer(
     root_folder: Path,
 ):
     """Saves optimizer states
-    - If Zero-0 is used, optimizer states are replicated across all DPs. Only DP-0 saves the states
+    - If Zero-0 is used, optimizer states are replicated across all DPs. Only DP-0 and SP-0 saves the states
     - If Zero-1 is used, optimizer states are sharded across all DPs. Each DP saves its own states
     """
-    if (not optimizer.inherit_from(optim.ZeroDistributedOptimizer)) and dist.get_rank(parallel_context.dp_pg) > 0:
-        # this is Zero-0, so only DP-0 saves the optimizer states
+    if (
+        (not optimizer.inherit_from(optim.ZeroDistributedOptimizer))
+        and dist.get_rank(parallel_context.dp_pg) > 0
+        and dist.get_rank(parallel_context.sp_pg) > 0
+    ):
+        # this is Zero-0, so only DP-0 and SP-0 saves the optimizer states
         return
 
     # TODO: Figure out if I need to save param groups. Right now I'm assuming no as we only store what's trainable
