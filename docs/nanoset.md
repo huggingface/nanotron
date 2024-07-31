@@ -79,7 +79,7 @@ To work with `Nanosets`, we just need to configure 1 argument:
 
 Finally, to use the `Nanosets`, launch the training with [`run_train.py`](../run_train.py).
 ```shell
-torchrun --nproc-per-node 8 run_train.py --config configs/config_nanoset.yaml
+torchrun --nproc-per-node 1 run_train.py --config examples/config_nanoset.yaml
 ```
 
 ## Under the hood
