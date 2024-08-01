@@ -101,8 +101,31 @@ def convert_to_fp8_module(module: nn.Module, accum_qtype: DTypes = FP8LM_RECIPE.
     return module
 
 
+def calculate_kurtosis(X):
+    # Calculate s
+    s = torch.sqrt(torch.mean(X**2, dim=0))
+
+    # Calculate m4 and m2
+    m4 = torch.mean(s**4)
+    m2 = torch.mean(s**2)
+
+    # Calculate kurtosis
+    kurtosis = m4 / (m2**2)
+
+    if torch.isnan(kurtosis) and not torch.all(torch.eq(X, 0)).item():
+        assert 1 == 1
+
+    return kurtosis
+
+
 def compute_stas(tensor):
     from nanotron.fp8.tensor import FP8Tensor, FP16Tensor
+
+    def compute_snr(tensor):
+        mean = torch.mean(tensor)
+        std = torch.std(tensor)
+        snr = mean / std
+        return snr
 
     if isinstance(tensor, FP8Tensor) or isinstance(tensor, FP16Tensor):
         return {
@@ -114,10 +137,14 @@ def compute_stas(tensor):
             "mean": tensor.mean().item(),
             "std": tensor.std().item(),
             "var": tensor.var().item(),
-            "norm": tensor.norm().item(),
+            "l1_norm": tensor.norm(p=1).item(),
+            "l2_norm": tensor.norm(p=2).item(),
             "min": tensor.min().item(),
             "max": tensor.max().item(),
             "amax": tensor.abs().max().item(),
+            "abs_mean": tensor.abs().mean().item(),
+            "kurtosis": calculate_kurtosis(tensor),
+            "snr": compute_snr(tensor),
         }
 
 

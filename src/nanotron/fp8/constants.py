@@ -29,6 +29,10 @@ QTYPE_TO_DTYPE = {
     DTypes.FP8E5M2: torch.uint8,
     DTypes.KFLOAT16: torch.float16,
     DTypes.KFLOAT32: torch.float32,
+    DTypes.KBFLOAT16: torch.bfloat16,
+    torch.float16: torch.float16,
+    torch.float32: torch.float32,
+    torch.bfloat16: torch.bfloat16,
 }
 
 # NOTE: the training recipe of the FP8-LM paper

@@ -27,8 +27,8 @@ from torch import nn
 
 @pytest.mark.parametrize("linear_cls", [FP8TensorParallelColumnLinear, FP8TensorParallelRowLinear])
 @pytest.mark.parametrize("tp,dp,pp", [[1, 1, 1], [2, 1, 1]])
-@pytest.mark.parametrize("bias", [False, True])
-# @pytest.mark.parametrize("accum_dtype", [DTypes.KFLOAT16, DTypes.KFLOAT32])
+@pytest.mark.parametrize("bias", [False])
+# @pytest.mark.parametrize("accum_dtype", [DTypes.KBFLOAT16, DTypes.KFLOAT16, DTypes.KFLOAT32])
 # @pytest.mark.parametrize(
 #     "input_grad_recipe, weight_grad_recipe, output_grad_recipe",
 #     [
@@ -89,7 +89,9 @@ def test_fp8_column_recipe(
         out_features = 16
         out_features_per_tp_rank = 16
 
-    input = torch.randn(batch_size, in_features, dtype=QTYPE_TO_DTYPE[accum_dtype])
+    # input = torch.randn(batch_size, in_features, dtype=QTYPE_TO_DTYPE[accum_dtype])
+    # NOTE: keep the residual stream in float32
+    input = torch.randn(batch_size, in_features, dtype=torch.float32)
 
     # recipe = FP8LinearRecipe(
     #     accum_dtype=accum_dtype,

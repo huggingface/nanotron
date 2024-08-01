@@ -68,6 +68,15 @@ class Adam(Optimizer):
         for group in self.param_groups:
             group.setdefault("amsgrad", False)
 
+    def _get_optim_logs(self):
+        from nanotron.scaling.monitor import convert_logs_to_flat_logs
+
+        optim_loggings = {}
+        for p in self.loggings:
+            param_name = self.params_id_to_param_names[id(p)]
+            optim_loggings[param_name] = self.loggings[p]
+        return convert_logs_to_flat_logs(optim_loggings)
+
     # @snoop
     @torch.no_grad()
     def step(self, closure=None):
@@ -179,6 +188,8 @@ class Adam(Optimizer):
                 loggings[p]["normalized_grad"] = compute_stas(normalized_grad)
 
         self.loggings = loggings
+
+        self.loggings = self._get_optim_logs()
 
         return loss
 
@@ -335,6 +346,15 @@ class FP8Adam(Optimizer):
             raise ValueError("All values are NaN")
             # return torch.tensor(0.0)  # Return 0 if all values are NaN
 
+    def _get_optim_logs(self):
+        from nanotron.scaling.monitor import convert_logs_to_flat_logs
+
+        optim_loggings = {}
+        for p in self.loggings:
+            param_name = self.params_id_to_param_names[id(p)]
+            optim_loggings[param_name] = self.loggings[p]
+        return convert_logs_to_flat_logs(optim_loggings)
+
     @torch.no_grad()
     def step(self):
         # NOTE: sanity check the entire params has at least one grad
@@ -433,11 +453,11 @@ class FP8Adam(Optimizer):
                 fp32_exp_avg = beta1 * fp32_exp_avg + (1 - beta1) * fp32_grad
                 fp32_exp_avg_sq = beta2 * fp32_exp_avg_sq + (1 - beta2) * fp32_grad.pow(2)
 
-                bias_correction1 = 1 - (beta1**step)
-                bias_correction2 = 1 - (beta2**step)
+                bias_correction1 = 1 / (1 - (beta1**step))
+                bias_correction2 = 1 / (1 - (beta2**step))
 
-                unbiased_fp32_exp_avg = fp32_exp_avg / bias_correction1
-                unbiased_fp32_exp_avg_sq = fp32_exp_avg_sq / bias_correction2
+                unbiased_fp32_exp_avg = fp32_exp_avg * bias_correction1
+                unbiased_fp32_exp_avg_sq = fp32_exp_avg_sq * bias_correction2
 
                 denom = unbiased_fp32_exp_avg_sq.sqrt() + group["eps"]
                 normalized_grad = unbiased_fp32_exp_avg / denom
@@ -471,7 +491,7 @@ class FP8Adam(Optimizer):
                     update_lr = lr / torch.max(torch.tensor(1.0, dtype=self.optim_accum_dtype, device="cuda"), rms)
                     if rms > 1:
                         log_rank(
-                            f"[Gradient clipping] param_name={self.params_id_to_param_names[id(p)]}, RMS is {rms}, original lr is {lr}, new lr is {update_lr}",  # noqa
+                            f"[Gradient clipping] param_name={self.params_id_to_param_names[id(p)]}, grad_norm: {fp32_grad.norm(p=2)}, RMS is {rms}, original lr is {lr}, new lr is {update_lr}",  # noqa
                             logger=logger,
                             level=logging.INFO,
                             rank=0,
@@ -519,6 +539,8 @@ class FP8Adam(Optimizer):
                     p.data = new_fp16
                     assert get_data_from_param(p) is new_fp16
 
+                    torch.testing.assert_allclose(get_data_from_param(p), new_fp16)
+
                 # delete_tensor_from_memory(new_fp32_data)
                 # delete_tensor_from_memory(denom)
 
@@ -526,22 +548,35 @@ class FP8Adam(Optimizer):
                 state["exp_avg"] = fp32_exp_avg
                 state["exp_avg_sq"] = fp32_exp_avg_sq
 
+                assert state["step"] == step
+                assert state["exp_avg"] is fp32_exp_avg
+                assert state["exp_avg_sq"] is fp32_exp_avg_sq
+
+                loggings[p]["step"] = {"value": step}
                 loggings[p]["group:lr"] = {"value": lr}
                 loggings[p]["group:eps"] = {"value": group["eps"]}
-
                 loggings[p]["group:beta1"] = {"value": beta1}
                 loggings[p]["group:beta2"] = {"value": beta2}
+
                 loggings[p]["bias_correction1"] = {"value": bias_correction1}
                 loggings[p]["bias_correction2"] = {"value": bias_correction2}
+                loggings[p]["fp32_exp_avg"] = compute_stas(fp32_exp_avg)
+                loggings[p]["fp32_exp_avg_sq"] = compute_stas(fp32_exp_avg_sq)
 
                 loggings[p]["normalized_grad"] = compute_stas(normalized_grad)
                 loggings[p]["denom"] = compute_stas(denom)
                 loggings[p]["grad_rms"] = {"value": rms}
+                loggings[p]["update_lr"] = {"value": update_lr}
 
                 loggings[p]["fp32_p"] = compute_stas(fp32_data)
                 loggings[p]["fp32_grad"] = compute_stas(fp32_grad)
 
         self.loggings = loggings
+
+        self.loggings = self._get_optim_logs()
+
+        # NOTE: grouping statistics by layer
+        assert 1 == 1
 
     def zero_grad(self):
         for group in self.param_groups:

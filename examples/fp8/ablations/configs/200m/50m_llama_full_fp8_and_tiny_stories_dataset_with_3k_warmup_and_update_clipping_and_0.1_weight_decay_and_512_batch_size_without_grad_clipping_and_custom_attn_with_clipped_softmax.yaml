@@ -22,7 +22,7 @@ general:
   consumed_train_samples: null
   ignore_sanity_checks: true
   project: fp8_for_nanotron
-  run: 50m_llama_full_fp8_and_tiny_stories_dataset_with_3k_warmup_and_update_clipping_and_0.1_weight_decay_and_512_batch_size_without_grad_clipping_and_custom_attn
+  run: 50m_llama_full_fp8_and_tiny_stories_dataset_with_3k_warmup_and_update_clipping_and_0.1_weight_decay_and_512_batch_size_without_grad_clipping_and_custom_attn_with_clipped_softmax_zeta_1.3_gamma_-0.03
   seed: 42
   step: null
 lighteval: null
@@ -148,3 +148,7 @@ fp8:
     accum_dtype: float32
     exp_avg_dtype: float32
     exp_avg_sq_dtype: float32
+
+  clipped_softmax: true
+  clipped_softmax_zeta: 1.3
+  clipped_softmax_gamma: -0.03

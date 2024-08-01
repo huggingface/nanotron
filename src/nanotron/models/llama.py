@@ -213,6 +213,80 @@ class MLP(nn.Module):
         return {"hidden_states": hidden_states}
 
 
+def self_attention_with_causal_mask(
+    query_states: torch.Tensor,  # [batch_size * q_length, n_local_q_heads, inner_dim]
+    key_states: torch.Tensor,  # [batch_size * kv_length, n_local_kv_heads, inner_dim]
+    value_states: torch.Tensor,  # [batch_size * kv_length, n_local_kv_heads, inner_dim]
+    batch_size: int,
+    q_length: int,
+    kv_length: int,
+):
+    """
+    Compute self-attention with causal masking, adapted for the given tensor shapes.
+
+    Args:
+    - query_states: Tensor of shape [batch_size * q_length, n_local_q_heads, inner_dim]
+    - key_states: Tensor of shape [batch_size * kv_length, n_local_kv_heads, inner_dim]
+    - value_states: Tensor of shape [batch_size * kv_length, n_local_kv_heads, inner_dim]
+    - batch_size: Number of batches
+    - q_length: Length of query sequence
+    - kv_length: Length of key/value sequence
+
+    Returns:
+    - output: Tensor of shape [batch_size * q_length, n_local_q_heads, inner_dim]
+    """
+    import torch.nn.functional as F
+
+    # Get dimensions
+    n_local_q_heads = query_states.size(1)
+    n_local_kv_heads = key_states.size(1)
+    inner_dim = query_states.size(2)
+
+    # Reshape tensors to separate batch and sequence length dimensions
+    query_states = query_states.view(batch_size, q_length, n_local_q_heads, inner_dim)
+    key_states = key_states.view(batch_size, kv_length, n_local_kv_heads, inner_dim)
+    value_states = value_states.view(batch_size, kv_length, n_local_kv_heads, inner_dim)
+
+    # Transpose to get dimensions [batch_size, n_heads, seq_len, inner_dim]
+    query_states = query_states.transpose(1, 2)
+    key_states = key_states.transpose(1, 2)
+    value_states = value_states.transpose(1, 2)
+
+    # Compute attention scores
+    attn_weights = torch.matmul(query_states, key_states.transpose(-1, -2))
+    attn_weights = attn_weights / (inner_dim**0.5)
+
+    # Create causal mask
+    causal_mask = torch.triu(torch.ones(q_length, kv_length, dtype=torch.bool, device=query_states.device), diagonal=1)
+    causal_mask = causal_mask.unsqueeze(0).unsqueeze(0)  # Add batch and head dimensions
+
+    # Apply causal mask
+    attn_weights = attn_weights.masked_fill(causal_mask, float("-inf"))
+
+    # Apply softmax to get attention weights
+    raw_attn_probs = F.softmax(attn_weights, dim=-1)
+    from nanotron.constants import CONFIG
+
+    if CONFIG.fp8.clipped_softmax is True:
+        zeta = CONFIG.fp8.clipped_softmax_zeta
+        gamma = CONFIG.fp8.clipped_softmax_gamma
+        attn_probs = torch.clip((zeta - gamma) * raw_attn_probs + gamma, 0.0, 1.0)
+        log_rank(
+            f"Using clipped softmax, zeta={zeta}, gamma={gamma}, l2_diff = {(attn_probs-raw_attn_probs).norm(p=2)}",
+            logger=logger,
+            level=logging.INFO,
+            rank=0,
+        )
+
+    # Compute output
+    output = torch.matmul(attn_probs, value_states)
+
+    # Reshape output to match input shape
+    output = output.transpose(1, 2).contiguous().view(batch_size * q_length, n_local_q_heads, inner_dim)
+
+    return output
+
+
 class CoreAttention(nn.Module):
     def __init__(self, config: LlamaConfig, parallel_config: Optional[ParallelismArgs], layer_idx: int):
         super().__init__()
@@ -235,7 +309,6 @@ class CoreAttention(nn.Module):
         q_sequence_mask: torch.Tensor,  # torch.BoolTensor [batch_size, q_length] (can be broadcasted to that size)
         kv_sequence_mask: torch.Tensor,  # torch.BoolTensor [batch_size, kv_length] (can be broadcasted to that size)
     ):
-        from flash_attn.flash_attn_interface import flash_attn_varlen_func
 
         # TODO @thomasw21: Compute once, instead of computing for each layers.
         cu_seqlens_q = torch.zeros((q_sequence_mask.shape[0] + 1), dtype=torch.int32, device=query_states.device)
@@ -245,23 +318,33 @@ class CoreAttention(nn.Module):
 
         # TODO(kunhao): flash attn's causal means that the query can only attend to the keys before it. This is not
         # what we want if we are using kv cache. This is a hack as we always have q_length == 1 when using kv cache.
-        causal = False if q_sequence_mask.shape[1] == 1 else True
+        False if q_sequence_mask.shape[1] == 1 else True
 
         # NOTE: this scale is for µTransfer,
         # in SP, we use sqrt(1/d_h)
-        softmax_scale = 1 / query_states.shape[-1] if self.is_using_mup else None
-        attn_output = flash_attn_varlen_func(
-            q=query_states,
-            k=key_states,
-            v=value_states,
-            cu_seqlens_q=cu_seqlens_q,
-            cu_seqlens_k=cu_seqlens_k,
-            max_seqlen_q=q_sequence_mask.shape[1],
-            max_seqlen_k=kv_sequence_mask.shape[1],
-            dropout_p=0.0,
-            softmax_scale=softmax_scale,
-            causal=causal,
-            return_attn_probs=False,
+        1 / query_states.shape[-1] if self.is_using_mup else None
+        # attn_output = flash_attn_varlen_func(
+        #     q=query_states,
+        #     k=key_states,
+        #     v=value_states,
+        #     cu_seqlens_q=cu_seqlens_q,
+        #     cu_seqlens_k=cu_seqlens_k,
+        #     max_seqlen_q=q_sequence_mask.shape[1],
+        #     max_seqlen_k=kv_sequence_mask.shape[1],
+        #     dropout_p=0.0,
+        #     softmax_scale=softmax_scale,
+        #     causal=causal,
+        #     return_attn_probs=False,
+        # )
+        batch_size = query_states.shape[0] // constants.CONFIG.tokens.sequence_length
+
+        attn_output = self_attention_with_causal_mask(
+            query_states=query_states,
+            key_states=key_states,
+            value_states=value_states,
+            batch_size=batch_size,
+            q_length=constants.CONFIG.tokens.sequence_length,
+            kv_length=constants.CONFIG.tokens.sequence_length,
         )
 
         return attn_output
@@ -295,6 +378,43 @@ def pad_to_right(tensor, mask, new_tensor=None):
     return new_tensor, right_padded_mask
 
 
+def _compute_attention_entropy(q, k):
+    """
+    x: [batch_size, seq_len, d_model]
+    q: [batch_size * q_length, n_heads, d_qk]
+    k: [batch_size * kv_length, n_heads, d_qk]
+    """
+    import math
+
+    import torch.nn.functional as F
+
+    from nanotron import constants
+
+    # Reshape q and k to separate batch_size and seq_len dimensions
+    batch_size = q.shape[0] // constants.CONFIG.tokens.sequence_length
+
+    q = q.view(batch_size, -1, q.shape[1], q.shape[2])  # [batch_size, q_length, n_heads, d_qk]
+    k = k.view(batch_size, -1, k.shape[1], k.shape[2])  # [batch_size, kv_length, n_heads, d_qk]
+
+    # Compute attention scores
+    scores = torch.einsum("bqhd,bkhd->bhqk", q, k)  # [batch_size, n_heads, q_length, kv_length]
+    scores /= math.sqrt(q.shape[2])
+
+    # Apply softmax to get probabilities
+    probs = F.softmax(scores, dim=-1)
+
+    # Compute entropy
+    ent = -probs * torch.log(probs + 1e-9)  # Add small epsilon to avoid log(0)
+
+    # Compute the entropy of each word's probs
+    ent = ent.sum(dim=-1)  # [batch_size, n_heads, q_length]
+
+    # Compute the mean entropy across heads and words
+    ent = ent.mean(dim=(-2, -1))  # [batch_size]
+
+    return ent
+
+
 class CausalSelfAttention(nn.Module, AttachableStore):
     def __init__(
         self,
@@ -302,6 +422,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         parallel_config: Optional[ParallelismArgs],
         tp_pg: dist.ProcessGroup,
         layer_idx: int,
+        name: str = None,
     ):
         from flash_attn.layers.rotary import RotaryEmbedding as FlashRotaryEmbedding
 
@@ -334,6 +455,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         self.d_v = config.hidden_size // config.num_attention_heads
         self.d_model = config.hidden_size
         self.is_using_mup = config.is_using_mup
+        self.name = name
 
         # TODO @thomasw21: refactor so that we store that default in a single place.
         tp_mode = parallel_config.tp_mode if parallel_config is not None else TensorParallelLinearMode.ALL_REDUCE
@@ -650,6 +772,22 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             attention_output.contiguous().view(batch_size, q_length, self.n_local_q_heads * self.d_v).transpose(0, 1)
         )
         output = self.o_proj(attention_output)
+        attn_entropy = _compute_attention_entropy(query_states, key_states)  # [seq_length, ]
+
+        def mean_ignore_nan(tensor):
+            # Remove NaN values
+            tensor_without_nan = tensor[~torch.isnan(tensor)]
+
+            # Calculate mean if there are non-NaN values, otherwise return NaN
+            return torch.mean(tensor_without_nan)
+
+        # attn_entropy = attn_entropy.mean()
+        attn_entropy = mean_ignore_nan(attn_entropy)
+
+        # if not self.name in constants.NN_STATES:
+        #     constants.NN_STATES[self.name] = {}
+
+        constants.NN_STATES[self.name]["attn_entropy"] = {"value": attn_entropy}
 
         return {"hidden_states": output, "sequence_mask": sequence_mask}
 
@@ -672,6 +810,8 @@ class LlamaDecoderLayer(nn.Module):
             parallel_config=parallel_config,
             tp_pg=tp_pg,
             layer_idx=layer_idx,
+            # name=f"model.decoder.{layer_idx}.attn",
+            name=f"model.decoder.{layer_idx}.pp_block.attn",
         )
 
         # self.post_attention_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)

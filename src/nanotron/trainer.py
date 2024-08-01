@@ -440,12 +440,12 @@ class DistributedTrainer:
                 settings=wandb.Settings(_service_wait=30000),
             )
 
-        def get_optim_logs(mappings, optim, prefix):
-            optim_loggings = {}
-            for p in optim.loggings:
-                param_name = mappings[id(p)]
-                optim_loggings[param_name] = optim.loggings[p]
-            return convert_logs_to_flat_logs(optim_loggings)
+        # def get_optim_logs(mappings, optim, prefix):
+        #     optim_loggings = {}
+        #     for p in optim.loggings:
+        #         param_name = mappings[id(p)]
+        #         optim_loggings[param_name] = optim.loggings[p]
+        #     return convert_logs_to_flat_logs(optim_loggings)
 
         self.pre_training(**kwargs)
 
@@ -514,9 +514,13 @@ class DistributedTrainer:
                             handle.remove()
 
                         detailed_logs = {}
-                        optim_logs = get_optim_logs(self.params_id_to_param_names, self.optimizer.optimizer, prefix="")
+
+                        # optim_logs = get_optim_logs(self.params_id_to_param_names, self.optimizer.optimizer, prefix="")
+                        if hasattr(self.optimizer.optimizer, "loggings"):
+                            optim_logs = self.optimizer.optimizer.loggings
+                            detailed_logs.update(optim_logs)
+
                         detailed_logs.update(convert_logs_to_flat_logs(nn_logs))
-                        detailed_logs.update(optim_logs)
                         # NOTE: convert tensor to float for logging
                         detailed_logs = {
                             k: v.item() if isinstance(v, torch.Tensor) else v for k, v in detailed_logs.items()

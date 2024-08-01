@@ -47,3 +47,8 @@ class FP8Args:
     accum_dtype: torch.dtype
     model: Optional[List[FP8LayerArgs]] = None
     optim: Optional[FP8OptimRecipe] = None
+
+    clipped_softmax: bool = False
+    clipped_softmax_zeta: Optional[float] = None
+    clipped_softmax_gamma: Optional[float] = None
+    gated_attention: bool = False

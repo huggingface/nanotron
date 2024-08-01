@@ -5,7 +5,7 @@ from nanotron.fp8.recipe import FP8Accumulate, FP8LinearRecipe, FP8OptimRecipe, 
 
 def generate_linear_recipes():
     # accum_dtypes = [DTypes.KFLOAT16, DTypes.KFLOAT32]
-    accum_dtypes = [torch.float16, torch.float32]
+    accum_dtypes = [torch.bfloat16, torch.float16, torch.float32]
 
     fp8_recipes = [
         [

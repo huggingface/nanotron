@@ -10,15 +10,21 @@ from torch.distributed import ReduceOp
 
 def track_weight_and_grad_stats(name: str, module: nn.Module, parallel_context: ParallelContext):
     def compute_stats(tensors, metrics: List[str] = ["amax", "mean", "std", "var", "norm"]):
-        NAME_TO_FUNC = {
-            "mean": lambda x: x.mean().item(),
-            "std": lambda x: x.std().item(),
-            "var": lambda x: x.var().item(),
-            "norm": lambda x: x.norm().item(),
-            "min": lambda x: x.min().item(),
-            "max": lambda x: x.max().item(),
-            "amax": lambda x: x.abs().max().item(),
-        }
+        from nanotron.fp8.utils import compute_stas
+
+        # NAME_TO_FUNC = {
+        #     "mean": lambda x: x.mean().item(),
+        #     "std": lambda x: x.std().item(),
+        #     "var": lambda x: x.var().item(),
+        #     # "norm": lambda x: x.norm().item(),
+        #     "l1_norm": lambda x: x.norm(p=1).item(),
+        #     "l2_norm": lambda x: x.norm(p=2).item(),
+        #     "min": lambda x: x.min().item(),
+        #     "max": lambda x: x.max().item(),
+        #     "amax": lambda x: x.abs().max().item(),
+        #     "abs_mean": lambda x: x.abs().mean().item(),
+        #     "kurtosis": lambda x: calculate_kurtosis(x),
+        # }
         tensors = {"tensor": tensors} if not isinstance(tensors, dict) else tensors
         stats = {}
 
@@ -28,9 +34,10 @@ def track_weight_and_grad_stats(name: str, module: nn.Module, parallel_context: 
             if tensor.is_floating_point() is False:
                 continue
 
-            stats[key] = {}
-            for metric in metrics:
-                stats[key][metric] = NAME_TO_FUNC[metric](tensor)
+            # stats[key] = {}
+            # for metric in metrics:
+            #     stats[key][metric] = NAME_TO_FUNC[metric](tensor)
+            stats[key] = compute_stas(tensor)
 
             # NOTE: now all reduce mean this across tp ranks
             tp_group = parallel_context.tp_pg
