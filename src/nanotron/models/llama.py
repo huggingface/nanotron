@@ -474,15 +474,6 @@ class CausalSelfAttention(nn.Module, AttachableStore):
 
         from nanotron.parallel.sharded_parameters import SplitConfig, create_sharded_parameter_from_config
 
-        # if constants.CONFIG.infini_attention.turn_on_memory is True:
-
-        #     # balance_factors = nn.Parameter(
-        #     #     torch.zeros(self.n_local_q_heads, device=device, dtype=torch.float32)
-        #     #     # torch.randn(self.n_local_q_heads, device=device, dtype=torch.float32).normal_(mean=0.0, std=1/math.sqrt(config.num_attention_heads))
-        #     #     # torch.randn(self.n_local_q_heads, device=device, dtype=torch.float32).normal_(mean=0.0, std=1/math.sqrt(self.n_local_q_heads))
-        #     # )
-        #     pass
-
         if constants.CONFIG.infini_attention.balance_init_type == "zeros":
             log_rank("Zero initialized balance factors", logger=logger, level=logging.WARNING, rank=0)
             balance_factors = nn.Parameter(torch.zeros(self.n_local_q_heads, device=device, dtype=torch.float32))
@@ -538,7 +529,6 @@ class CausalSelfAttention(nn.Module, AttachableStore):
 
     def forward(
         self,
-        # hidden_states: TensorType["sharded_seq_len", "batch_size", "hidden_size"],
         hidden_states: TensorType["sharded_batch_size", "seq_len", "hidden_size"],
         sequence_mask: TensorType["batch_size", "seq_len"],
     ):
@@ -567,9 +557,6 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         normalization = None
 
         outputs = []
-
-        idx = 0
-        logs = {}
         raw_global_weights = self.balance_act_func(self.balance_factors)
         global_weights = raw_global_weights
         orig_global_weights = rearrange(global_weights, "n_heads -> 1 n_heads 1 1")
@@ -615,49 +602,10 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             output = self.o_proj(attention_output)
 
             if constants.CONFIG.infini_attention.turn_on_memory is True:
-                if (
-                    constants.GLOBAL_STEP is not None
-                    and (constants.GLOBAL_STEP - 1) % constants.CONFIG.infini_attention.logging_interval == 0
-                    and constants.IS_RANK_TO_MONITOR is True
-                    and constants.CONFIG.infini_attention.log_segment_acts is True
-                ):
-                    if dist.get_rank() == 0:
-                        logs[f"layer_{self.layer_idx}:seg_{idx}:query_states"] = compute_stas(query_states)
-                        logs[f"layer_{self.layer_idx}:seg_{idx}:key_states"] = compute_stas(key_states)
-                        logs[f"layer_{self.layer_idx}:seg_{idx}:value_states"] = compute_stas(value_states)
-
-                        logs[f"layer_{self.layer_idx}:seg_{idx}:local_attn_outputs"] = compute_stas(local_attn_outputs)
-                        logs[f"layer_{self.layer_idx}:seg_{idx}:retrieved_memory"] = compute_stas(retrieved_memory)
-                        logs[f"layer_{self.layer_idx}:seg_{idx}:attention_output"] = compute_stas(attention_output)
-                        logs[f"layer_{self.layer_idx}:seg_{idx}:output"] = compute_stas(output)
-                        logs[f"layer_{self.layer_idx}:seg_{idx}:memory"] = compute_stas(memory)
-                        logs[f"layer_{self.layer_idx}:seg_{idx}:normalization"] = compute_stas(normalization)
-
                 memory, normalization = self._update_memory(memory, normalization, key_states, value_states)
 
             outputs.append(output)
-
-            idx += 1
-
-            # NOTE: update memory
         outputs = torch.cat(outputs, dim=1)  # concat along sequence dimension
-        assert outputs.shape == hidden_states.shape
-
-        if (
-            constants.GLOBAL_STEP is not None
-            and (constants.GLOBAL_STEP - 1) % constants.CONFIG.infini_attention.logging_interval == 0
-        ):
-            if constants.IS_RANK_TO_MONITOR is True:
-                import wandb
-
-                for i in range(raw_global_weights.shape[0]):
-                    logs[f"layer_{self.layer_idx}:global_weights"] = compute_stas(orig_global_weights, log_tensor=True)
-                    logs[f"layer_{self.layer_idx}:local_weights"] = compute_stas(orig_local_weights, log_tensor=True)
-                    logs[f"layer_{self.layer_idx}:global_weights:head_{i}"] = raw_global_weights[i].item()
-                    logs[f"layer_{self.layer_idx}:balance_factors:head_{i}"] = self.balance_factors[i].item()
-
-                logs[f"layer_{self.layer_idx}:outputs"] = compute_stas(outputs)
-                wandb.log({**logs, "iteration_step": constants.GLOBAL_STEP})
 
         return_outputs = {
             "hidden_states": outputs,
