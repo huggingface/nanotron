@@ -20,13 +20,12 @@ from torch.nn import functional as F
 
 import nanotron.distributed as dist
 from nanotron.parallel.tensor_parallel.distributed_differentiable_primitives import (
-    differentiable_all_gather,
     differentiable_all_reduce_sum,
     differentiable_identity,
     differentiable_reduce_scatter_sum,
 )
 from nanotron.parallel.tensor_parallel.enum import TensorParallelLinearMode
-from nanotron.parallel.utils import assert_cuda_max_connections_set_to_1
+from nanotron.parallel.utils import MemoryBuffer, assert_cuda_max_connections_set_to_1
 
 
 class _ShardedCrossEntropy(torch.autograd.Function):
@@ -89,10 +88,10 @@ class _ShardedCrossEntropy(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_output):
-        # Retreive tensors from the forward path.
+        # Retrieve tensors from the forward path.
         softmax, target_mask, masked_target_1d = ctx.saved_tensors
 
-        # All the inputs have softmax as thier gradient.
+        # All the inputs have softmax as their gradient.
         grad_input = softmax
         # For simplicity, work with the 2D gradient.
         sharded_hidden_size = softmax.size()[-1]
@@ -338,6 +337,89 @@ class _ColumnLinearAsyncCommunication(torch.autograd.Function):
             raise ValueError(f"Got unexpected mode: {tp_mode}.")
 
 
+class _ColumnLinearNoAsyncCommunicationReduceScatterMode(torch.autograd.Function):
+    """
+    Column linear with memory_buffer for the allgather, context parallel
+    enabled (i.e. tp_mode = TensorParallelLinearMode.REDUCE_SCATTER) and
+    async communication disabled.
+    """
+
+    @staticmethod
+    def forward(
+        ctx,
+        input: torch.Tensor,
+        weight: torch.Tensor,
+        bias: Optional[torch.Tensor],
+        group: dist.ProcessGroup,
+        tp_recompute_allgather: bool,
+    ):
+
+        # Do allgather.
+        sharded_batch_size, *rest_size = input.shape
+        unsharded_batch_size = sharded_batch_size * group.size()
+        if group.size() == 1:
+            total_input = input.contiguous()
+        elif tp_recompute_allgather:
+            total_input = MemoryBuffer().get("allgather", (unsharded_batch_size, *rest_size), dtype=input.dtype)
+            dist.all_gather_into_tensor(total_input, input.contiguous(), group=group)
+        else:
+            total_input = torch.empty(unsharded_batch_size, *rest_size, dtype=input.dtype, device=input.device)
+            dist.all_gather_into_tensor(total_input, input.contiguous(), group=group)
+
+        # Prepare context.
+        ctx.group = group
+        ctx.tp_recompute_allgather = tp_recompute_allgather
+        ctx.input_size = input.shape
+        if tp_recompute_allgather:
+            ctx.save_for_backward(input, weight, bias)
+        else:
+            ctx.save_for_backward(total_input, weight, bias)
+
+        # Get linear output.
+        out = F.linear(total_input, weight, bias)
+        return out
+
+    @staticmethod
+    def backward(ctx, grad_output: torch.Tensor):
+        # Either allgather the inputs again or get them from context.
+        group = ctx.group
+        tp_recompute_allgather = ctx.tp_recompute_allgather
+        input_size = ctx.input_size
+        if group.size() == 1 or not tp_recompute_allgather:
+            total_input, weight, bias = ctx.saved_tensors
+        else:
+            input, weight, bias = ctx.saved_tensors
+            sharded_batch_size, *rest_size = input.shape
+            total_input = sharded_batch_size * group.size()
+            unsharded_batch_size = sharded_batch_size * group.size()
+            total_input = MemoryBuffer().get("allgather", (unsharded_batch_size, *rest_size), dtype=input.dtype)
+            dist.all_gather_into_tensor(total_input, input.contiguous(), group=group)
+
+        # Convert the tensor shapes to 2D for execution compatibility
+        grad_output = grad_output.contiguous()
+        grad_output_first_dims, grad_output_last_dim = grad_output.shape[:-1], grad_output.shape[-1]
+        total_input_first_dims, total_input_last_dim = total_input.shape[:-1], total_input.shape[-1]
+        grad_output = grad_output.view(math.prod(grad_output_first_dims), grad_output_last_dim)
+        total_input = total_input.view(math.prod(total_input_first_dims), total_input_last_dim)
+
+        # Compute gradients.
+        grad_weight = grad_output.T @ total_input
+        grad_input = grad_output @ weight
+        if group.size() == 1:
+            sub_grad_input = grad_input
+        else:
+            # Seems that `reduce_scatter` need contiguous tensors: https://github.com/pytorch/pytorch/blob/2b267fa7f28e18ca6ea1de4201d2541a40411457/torch/distributed/nn/functional.py#L305
+            # We set grad_input to be contiguous in case it isn't already.
+            grad_input = grad_input.contiguous()
+            sub_grad_input = torch.empty(
+                input_size, dtype=total_input.dtype, device=total_input.device, requires_grad=False
+            )
+            dist.reduce_scatter_tensor(sub_grad_input, grad_input, group=group, op=dist.ReduceOp.SUM)
+        grad_bias = torch.sum(grad_output, dim=0) if bias is not None else None
+
+        return sub_grad_input, grad_weight, grad_bias, None, None
+
+
 def column_linear(
     input: torch.Tensor,
     weight: torch.Tensor,
@@ -345,18 +427,19 @@ def column_linear(
     group: dist.ProcessGroup,
     tp_mode: TensorParallelLinearMode,
     async_communication: bool,
+    tp_recompute_allgather: bool = True,
 ):
     if async_communication:
         return _ColumnLinearAsyncCommunication.apply(input, weight, bias, group, tp_mode)
 
     if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
         input = differentiable_identity(input, group=group)
-    elif tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
-        input = differentiable_all_gather(input, group=group)
-    else:
-        raise ValueError(f"Got unexpected mode: {tp_mode}.")
-
-    return F.linear(input, weight, bias)
+        return F.linear(input, weight, bias)
+    if tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
+        return _ColumnLinearNoAsyncCommunicationReduceScatterMode.apply(
+            input, weight, bias, group, tp_recompute_allgather
+        )
+    raise ValueError(f"Got unexpected mode: {tp_mode}.")
 
 
 class _RowLinearAsyncCommunication(torch.autograd.Function):

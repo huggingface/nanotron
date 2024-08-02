@@ -111,7 +111,7 @@ class NanosetDatasetsArgs:
 class DataArgs:
     """Arguments related to the data and data files processing"""
 
-    dataset: Union[PretrainDatasetsArgs, NanosetDatasetsArgs]
+    dataset: Optional[Union[PretrainDatasetsArgs, NanosetDatasetsArgs]]
     seed: Optional[int]
     num_loading_workers: Optional[int] = 1
 
