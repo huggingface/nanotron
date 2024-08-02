@@ -115,7 +115,7 @@ def sharded_cross_entropy(sharded_logits, target, group: dist.ProcessGroup, dtyp
     return _ShardedCrossEntropy.apply(sharded_logits, target, group)
 
 
-class _ColumnLinearAsyncCommunication(torch.autograd.Function):
+class _ColumnLinearNoAsyncCommunicationReduceScatterMode(torch.autograd.Function):
     """Adapted from https://github.com/NVIDIA/Megatron-LM/blob/e6d7e09845590d0a36bc7f29eb28db974fb8da4e/megatron/core/tensor_parallel/layers.py#L215"""
 
     @staticmethod
@@ -408,6 +408,9 @@ class _ColumnLinearContextParallelNoAsync(torch.autograd.Function):
         if group.size() == 1:
             sub_grad_input = grad_input
         else:
+            # Seems that `reduce_scatter` need contiguous tensors: https://github.com/pytorch/pytorch/blob/2b267fa7f28e18ca6ea1de4201d2541a40411457/torch/distributed/nn/functional.py#L305
+            # We set grad_input to be contiguous in case it isn't already.
+            grad_input = grad_input.contiguous()
             sub_grad_input = torch.empty(
                 input_size, dtype=total_input.dtype, device=total_input.device, requires_grad=False
             )
@@ -427,16 +430,14 @@ def column_linear(
     tp_recompute_allgather: bool = True,
 ):
     if async_communication:
-        return _ColumnLinearAsyncCommunication.apply(input, weight, bias, group, tp_mode)
+        return _ColumnLinearNoAsyncCommunicationReduceScatterMode.apply(input, weight, bias, group, tp_mode)
 
     if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
         input = differentiable_identity(input, group=group)
-    elif tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
+        return F.linear(input, weight, bias)
+    if tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
         return _ColumnLinearContextParallelNoAsync.apply(input, weight, bias, group, tp_recompute_allgather)
-    else:
-        raise ValueError(f"Got unexpected mode: {tp_mode}.")
-
-    return F.linear(input, weight, bias)
+    raise ValueError(f"Got unexpected mode: {tp_mode}.")
 
 
 class _RowLinearAsyncCommunication(torch.autograd.Function):
