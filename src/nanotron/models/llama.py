@@ -544,11 +544,6 @@ class CausalSelfAttention(nn.Module, AttachableStore):
     ):
         hidden_states.shape[0]
         seq_len = hidden_states.shape[1]
-        # print(f"seq_len: {seq_len}")
-
-        # if seq_len > 64:
-        #     assert 1 == 1
-
         if seq_len > self.segment_length:
             import math
 
@@ -575,45 +570,10 @@ class CausalSelfAttention(nn.Module, AttachableStore):
 
         idx = 0
         logs = {}
-
-        if constants.GLOBAL_STEP == 11 and constants.IS_RANK_TO_MONITOR is True:
-            assert 1 == 1
-
-        # if constants.CONFIG.infini_attention.balance_act_type == "orig_sigmoid":
-        #     raw_global_weights = F.sigmoid(self.balance_factors)
-        # elif constants.CONFIG.infini_attention.balance_act_type == "orig_tanh":
-        #     raw_global_weights = F.tanh(self.balance_factors)
-        # elif constants.CONFIG.infini_attention.balance_act_type == "hard_sigmoid":
-        #     def hard_sigmoid(x):
-        #         return torch.clamp(x * 0.2 + 0.5, min=0.0, max=1.0)
-        #     raw_global_weights = hard_sigmoid(self.balance_factors)
-        # elif constants.CONFIG.infini_attention.balance_act_type == "tanh_abs":
-        #     def tanh_abs(x):
-        #         return torch.tanh(x).abs()
-        #     raw_global_weights = tanh_abs(self.balance_factors)
-        # else:
-        #     raise ValueError(f"balance_act_type {constants.CONFIG.infini_attention.balance_act_type} not supported")
         raw_global_weights = self.balance_act_func(self.balance_factors)
-
-        # raw_global_weights = F.tanh(self.balance_factors).abs()
-        # raw_global_weights = raw_global_weights * raw_global_weights.mean()
-
-        # def sigmoid_range(x, lo, hi): return torch.sigmoid(x) * (hi-lo) + lo
-        # raw_global_weights = sigmoid_range(self.balance_factors, 0, 5.5)
-
-        # raw_global_weights = F.softmax(self.balance_factors, dim=0)
-
-        # raw_global_weights = F.sigmoid(self.balance_factors)
         global_weights = raw_global_weights
         orig_global_weights = rearrange(global_weights, "n_heads -> 1 n_heads 1 1")
-        # + torch.randn(1, device=global_weights.device, dtype=global_weights.dtype)
-
-        # local_weights = 1 - global_weights
-        # local_weights = rearrange(local_weights, "n_heads -> 1 n_heads 1 1")
         orig_local_weights = 1 - orig_global_weights
-
-        # global_weights = orig_global_weights.to(torch.bfloat16)
-        # local_weights = orig_local_weights.to(torch.bfloat16)
 
         global_weights = orig_global_weights
         local_weights = orig_local_weights
@@ -630,54 +590,16 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             local_attn_outputs = rearrange(
                 local_attn_outputs,
                 "seq_len batch_size (n_heads d_head) -> batch_size n_heads seq_len d_head",
-                # seq_len=self.segment_length,
                 batch_size=q_bs,
                 seq_len=q_length,
                 d_head=self.d_qk,
             )
-
-            # log_rank(
-            #     f"[idx={idx}] local_attn_outputs.shape = {local_attn_outputs.shape}, local_attn_outputs is zero? {(local_attn_outputs == 0).all()}",
-            #     logger=logger,
-            #     level=logging.INFO,
-            #     rank=0,
-            # )
 
             if constants.CONFIG.infini_attention.turn_on_memory is True:
                 # NOTE: because in generation, the sequence length increases
                 retrieved_memory = self._retrieve_from_memory(
                     query_states, prev_memory=memory, prev_normalization=normalization
                 )
-
-                # log_rank(
-                #     f"[idx={idx}] retrieved_memory.shape = {retrieved_memory.shape}, retrieve_memory is zero? {(retrieved_memory == 0).all()}",
-                #     logger=logger,
-                #     level=logging.INFO,
-                #     rank=0,
-                # )
-
-                # if memory is not None:
-                #     log_rank(
-                #         f"[idx={idx}] memory.shape = {memory.shape}, normalization.shape = {normalization.shape}",
-                #         logger=logger,
-                #         level=logging.INFO,
-                #         rank=0,
-                #     )
-
-                # log_rank(
-                #     f"[idx={idx}] global_weights.shape = {global_weights.shape}, global_weights: {global_weights}",
-                #     logger=logger,
-                #     level=logging.INFO,
-                #     rank=0,
-                # )
-
-                # log_rank(
-                #     f"[idx={idx}] local_weights.shape = {local_weights.shape}, local_weights: {local_weights}",
-                #     logger=logger,
-                #     level=logging.INFO,
-                #     rank=0,
-                # )
-
                 attention_output = global_weights * retrieved_memory + local_weights * local_attn_outputs
             else:
                 attention_output = local_attn_outputs
@@ -711,8 +633,6 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                         logs[f"layer_{self.layer_idx}:seg_{idx}:memory"] = compute_stas(memory)
                         logs[f"layer_{self.layer_idx}:seg_{idx}:normalization"] = compute_stas(normalization)
 
-                # if idx >= 1:
-                #     assert 1 == 1
                 memory, normalization = self._update_memory(memory, normalization, key_states, value_states)
 
             outputs.append(output)
@@ -773,24 +693,16 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             sigma_query_states,
             prev_memory,
             "batch_size n_heads seq_len d_k, batch_size n_heads d_k d_v -> batch_size n_heads seq_len d_v",
-            # seq_len=self.segment_length,
-            # n_heads=self.n_local_kv_heads,
-            # d_k=self.d_qk,
         )
 
         denominator = einsum(
             sigma_query_states,
             prev_normalization,
             "batch_size n_heads seq_len d_head, batch_size n_heads d_head -> batch_size n_heads seq_len",
-            # n_heads=self.n_local_kv_heads,
-            # d_head=self.d_qk,
-            # seq_len=self.segment_length,
         )
         denominator = rearrange(
             denominator,
             "batch_size n_heads seq_len -> batch_size n_heads seq_len 1",
-            # n_heads=self.n_local_kv_heads,
-            # seq_len=self.segment_length,
         )
         # [batch_size, n_heads, seq_len, d_v] / [batch_size, n_heads, seq_len, 1], so each d_v is divide by the normalized value
 
@@ -812,23 +724,15 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                 sigma_key_states,
                 prev_memory,
                 "batch_size n_heads seq_len d_k, batch_size n_heads d_k d_v -> batch_size n_heads seq_len d_v",
-                # n_heads=self.n_local_kv_heads,
-                # d_k=self.d_qk,
-                # seq_len=self.segment_length,
             )
             denominator = einsum(
                 sigma_key_states,
                 prev_normalization,
                 "batch_size n_heads seq_len d_k, batch_size n_heads d_k -> batch_size n_heads seq_len",
-                # n_heads=self.n_local_kv_heads,
-                # d_k=self.d_qk,
-                # seq_len=self.segment_length,
             )
             denominator = rearrange(
                 denominator,
                 "batch_size n_heads seq_len -> batch_size n_heads seq_len 1",
-                # n_heads=self.n_local_kv_heads,
-                # seq_len=self.segment_length,
             )
 
             prev_v = numerator / denominator
@@ -842,7 +746,6 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             reduction="sum",
             n_heads=self.n_local_kv_heads,
             d_head=self.d_qk,
-            # seq_len=self.segment_length,
         )
 
         memory += prev_memory if prev_memory is not None else 0
@@ -865,12 +768,6 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         qkv_states = self.qkv_proj(
             hidden_states
         )  # [seq_len, batch_size, n_local_q_heads * d_qk + 2 * n_local_kv_heads * d_qk]
-
-        # log_rank(
-        #     f"qkv_states after qkv_proj: qkv_states.shape={qkv_states.shape}",
-        #     logger=logger,
-        #     level=logging.INFO,
-        # )
 
         qkv_states = qkv_states.transpose(0, 1)
         q_length, batch_size, _ = qkv_states.shape
@@ -902,31 +799,6 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                 .permute(2, 1, 0, 3, 4)
                 .contiguous()
             )  # [3, batch_size, seq_len, n_local_q_heads, d_qk]
-
-        # import os
-
-        # os.makedirs(DEBUG_PATH, exist_ok=True)
-        # tp_rank = dist.get_rank(group=self.tp_pg)
-
-        # torch.save(query_states, f"{DEBUG_PATH}/query_states_before_pos_tp_rank_{tp_rank}.pt")
-        # torch.save(key_states, f"{DEBUG_PATH}/query_states_before_pos_tp_rank_{tp_rank}.pt")
-        # torch.save(value_states, f"{DEBUG_PATH}/query_states_before_pos_tp_rank_{tp_rank}.pt")
-
-        # log_rank(
-        #     f"query_states: query_states.shape={query_states.shape}",
-        #     logger=logger,
-        #     level=logging.INFO,
-        # )
-        # log_rank(
-        #     f"key_states: key_states.shape={key_states.shape}",
-        #     logger=logger,
-        #     level=logging.INFO,
-        # )
-        # log_rank(
-        #     f"value_states: value_states.shape={value_states.shape}",
-        #     logger=logger,
-        #     level=logging.INFO,
-        # )
 
         query_states_without_pe = rearrange(
             query_states,
@@ -1148,10 +1020,6 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                 batch_size * kv_length, self.n_local_kv_heads, self.d_v
             )  # [batch_size * kv_length, self.n_heads, d_v]
 
-            # torch.save(query_states, f"{DEBUG_PATH}/query_states_after_pos_tp_rank_{tp_rank}.pt")
-            # torch.save(key_states, f"{DEBUG_PATH}/query_states_after_pos_tp_rank_{tp_rank}.pt")
-            # torch.save(value_states, f"{DEBUG_PATH}/query_states_after_pos_tp_rank_{tp_rank}.pt")
-
             attention_output = self.attention(
                 query_states=query_states,
                 key_states=key_states,
@@ -1160,18 +1028,9 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                 kv_sequence_mask=kv_sequence_mask,
             )
 
-            # torch.save(attention_output, f"{DEBUG_PATH}/attention_output_before_reshape_{tp_rank}.pt")
-
         attention_output = (
             attention_output.contiguous().view(batch_size, q_length, self.n_local_q_heads * self.d_v).transpose(0, 1)
         )
-
-        # torch.save(attention_output, f"{DEBUG_PATH}/attention_output_after_reshape_{tp_rank}.pt")
-
-        # output = self.o_proj(attention_output)
-        # output = output.transpose(0, 1)
-        # return {"hidden_states": output, "sequence_mask": sequence_mask}
-
         return_outputs = {"hidden_states": None, "sequence_mask": sequence_mask}
         return_outputs["qkv_states"] = (query_states, key_states, value_states) if return_qkv_states else ()
         return_outputs["qkv_states_without_pe"] = (
