@@ -115,7 +115,7 @@ def sharded_cross_entropy(sharded_logits, target, group: dist.ProcessGroup, dtyp
     return _ShardedCrossEntropy.apply(sharded_logits, target, group)
 
 
-class _ColumnLinearNoAsyncCommunicationReduceScatterMode(torch.autograd.Function):
+class _ColumnLinearAsyncCommunication(torch.autograd.Function):
     """Adapted from https://github.com/NVIDIA/Megatron-LM/blob/e6d7e09845590d0a36bc7f29eb28db974fb8da4e/megatron/core/tensor_parallel/layers.py#L215"""
 
     @staticmethod
@@ -337,7 +337,7 @@ class _ColumnLinearNoAsyncCommunicationReduceScatterMode(torch.autograd.Function
             raise ValueError(f"Got unexpected mode: {tp_mode}.")
 
 
-class _ColumnLinearContextParallelNoAsync(torch.autograd.Function):
+class _ColumnLinearNoAsyncCommunicationReduceScatterMode(torch.autograd.Function):
     """
     Column linear with memory_buffer for the allgather, context parallel
     enabled (i.e. tp_mode = TensorParallelLinearMode.REDUCE_SCATTER) and
@@ -430,13 +430,15 @@ def column_linear(
     tp_recompute_allgather: bool = True,
 ):
     if async_communication:
-        return _ColumnLinearNoAsyncCommunicationReduceScatterMode.apply(input, weight, bias, group, tp_mode)
+        return _ColumnLinearAsyncCommunication.apply(input, weight, bias, group, tp_mode)
 
     if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
         input = differentiable_identity(input, group=group)
         return F.linear(input, weight, bias)
     if tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
-        return _ColumnLinearContextParallelNoAsync.apply(input, weight, bias, group, tp_recompute_allgather)
+        return _ColumnLinearNoAsyncCommunicationReduceScatterMode.apply(
+            input, weight, bias, group, tp_recompute_allgather
+        )
     raise ValueError(f"Got unexpected mode: {tp_mode}.")
 
 
