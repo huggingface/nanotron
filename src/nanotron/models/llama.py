@@ -557,13 +557,9 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         normalization = None
 
         outputs = []
-        raw_global_weights = self.balance_act_func(self.balance_factors)
-        global_weights = raw_global_weights
-        orig_global_weights = rearrange(global_weights, "n_heads -> 1 n_heads 1 1")
-        orig_local_weights = 1 - orig_global_weights
-
-        global_weights = orig_global_weights
-        local_weights = orig_local_weights
+        global_weights = self.balance_act_func(self.balance_factors)
+        global_weights = rearrange(global_weights, "n_heads -> 1 n_heads 1 1")
+        local_weights = 1 - global_weights
 
         for segment_hidden_state, segment_sequence_mask in zip(segment_hidden_states, segment_sequence_masks):
             attn_outputs = self.forward_with_hidden_states(
