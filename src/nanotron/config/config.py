@@ -145,6 +145,7 @@ class CheckpointsArgs:
     checkpoints_path: Path
     checkpoint_interval: int
     save_initial_state: Optional[bool] = False
+    save_final_state: Optional[bool] = False
     resume_checkpoint_path: Optional[Path] = None
     checkpoints_path_is_shared_file_system: Optional[bool] = False
 
