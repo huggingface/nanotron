@@ -338,6 +338,9 @@ class Config:
     data_stages: Optional[List[DatasetStageArgs]] = None
     profiler: Optional[ProfilerArgs] = None
     lighteval: Optional[LightEvalConfig] = None
+    # If you want to signal the training script to stop, you just need to touch the following file
+    # We force users to set one in order to programmatically be able to remove it.
+    kill_switch_path: Optional[Path] = None
 
     @classmethod
     def create_empty(cls):
@@ -346,6 +349,9 @@ class Config:
 
     def __post_init__(self):
         # Some final sanity checks across separate arguments sections:
+        if self.general is not None and os.environ.get("SLURM_JOB_ID", None) is not None:
+            self.run = self.general.run.replace("%j", os.environ["SLURM_JOB_ID"])
+
         if self.profiler is not None and self.profiler.profiler_export_path is not None:
             assert self.tokens.train_steps < 10
 
@@ -377,9 +383,13 @@ class Config:
                 for i in range(len(self.data_stages) - 1)
             ), "The stages are not sorted by start_training_step in increasing order"
 
-        # # if lighteval, we need tokenizer to be defined
-        # if self.checkpoints.lighteval is not None:
-        #     assert self.tokenizer.tokenizer_name_or_path is not None
+        # if self.lighteval is not None:
+        #     # assert self.tokenizer.tokenizer_name_or_path is not None
+        #     if self.lighteval.checkpoints_path is None:
+        #         self.lighteval.checkpoints_path = self.checkpoints.checkpoints_path
+
+        if isinstance(self.kill_switch_path, str):
+            self.kill_switch_path = Path(self.kill_switch_path)
 
     @property
     def global_batch_size(self):
