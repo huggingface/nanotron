@@ -1,5 +1,5 @@
 import os
-from typing import Literal, Tuple, Annotated
+from typing import Literal, Tuple
 
 import numpy as np
 import torch
@@ -61,6 +61,25 @@ class ParallelContext:
         self.world_pg = process_group
 
         self._init_parallel_groups()
+
+        self.pipeline_parallel_last_rank = self.pipeline_parallel_size - 1
+        self.is_pipeline_first_stage = self.pp_pg.rank() == 0
+        self.is_pipeline_last_stage = self.pp_pg.rank() == self.pipeline_parallel_last_rank
+        self.pipeline_parallel_next_rank = (
+            None
+            if self.is_pipeline_last_stage
+            else self.get_global_rank(
+                self.expert_pg.rank(), self.pp_pg.rank() + 1, self.dp_pg.rank(), self.tp_pg.rank()
+            )
+        )
+
+        self.pipeline_parallel_prev_rank = (
+            None
+            if self.is_pipeline_first_stage
+            else self.get_global_rank(
+                self.expert_pg.rank(), self.pp_pg.rank() - 1, self.dp_pg.rank(), self.tp_pg.rank()
+            )
+        )
 
     def _init_parallel_groups(self):
         """Initialize 3D parallelism's all process groups."""
