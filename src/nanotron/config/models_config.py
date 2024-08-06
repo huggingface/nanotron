@@ -48,6 +48,9 @@ class LlamaConfig:
     rms_norm_eps: float = 1e-6
     rope_scaling: Optional[dict] = None
     rope_theta: float = 10000.0
+    rope_interleaved: bool = (
+        True  # The default value has been True, but for loading Llama3 checkpoints you have to set it to False
+    )
     tie_word_embeddings: bool = False
     use_cache: bool = True
     vocab_size: int = 32000
