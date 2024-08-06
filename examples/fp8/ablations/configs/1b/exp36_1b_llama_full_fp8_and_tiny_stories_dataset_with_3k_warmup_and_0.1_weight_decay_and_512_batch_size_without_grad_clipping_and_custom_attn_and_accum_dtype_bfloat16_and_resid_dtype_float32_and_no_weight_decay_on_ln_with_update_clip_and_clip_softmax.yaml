@@ -22,7 +22,7 @@ general:
   consumed_train_samples: null
   ignore_sanity_checks: true
   project: fp8_for_nanotron
-  run: fp8_1b_and_full_fp8_linears_and_tiny_stories_dataset_and_weight_decay_0.1
+  run: exp36_1b_llama_full_fp8_and_tiny_stories_dataset_with_3k_warmup_and_0.1_weight_decay_and_512_batch_size_without_grad_clipping_and_custom_attn_and_accum_dtype_bfloat16_and_resid_dtype_float32_and_no_weight_decay_on_ln_with_update_clip_and_clip_softmax
   seed: 42
   step: null
 lighteval: null
@@ -77,7 +77,7 @@ optimizer:
     torch_adam_is_fused: true
   weight_decay: 0.1
   zero_stage: 0
-  update_clipping: false
+  update_clipping: true
   # clip_grad: 1.0
 
 parallelism:
@@ -98,15 +98,20 @@ tokens:
   batch_accumulation_per_replica: 1
   limit_test_batches: 0
   limit_val_batches: 0
-  micro_batch_size: 128 # 256
+  micro_batch_size: 64 # 256
   sequence_length: 1024
   train_steps: 20_000
   val_check_interval: -1
 
 fp8:
-  accum_dtype: float16
+  resid_dtype: float32
+  accum_dtype: bfloat16
   optim:
     master_weight_dtype: float32
     accum_dtype: float32
     exp_avg_dtype: float32
     exp_avg_sq_dtype: float32
+
+  clipped_softmax: true
+  clipped_softmax_zeta: 1.3
+  clipped_softmax_gamma: -0.03

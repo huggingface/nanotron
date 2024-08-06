@@ -277,6 +277,8 @@ def self_attention_with_causal_mask(
             level=logging.INFO,
             rank=0,
         )
+    else:
+        attn_probs = raw_attn_probs
 
     # Compute output
     output = torch.matmul(attn_probs, value_states)
@@ -781,13 +783,14 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             # Calculate mean if there are non-NaN values, otherwise return NaN
             return torch.mean(tensor_without_nan)
 
-        # attn_entropy = attn_entropy.mean()
-        attn_entropy = mean_ignore_nan(attn_entropy)
+        if constants.CONFIG.logging.monitor_model_states is True:
+            # attn_entropy = attn_entropy.mean()
+            attn_entropy = mean_ignore_nan(attn_entropy)
 
-        # if not self.name in constants.NN_STATES:
-        #     constants.NN_STATES[self.name] = {}
+            # if not self.name in constants.NN_STATES:
+            #     constants.NN_STATES[self.name] = {}
 
-        constants.NN_STATES[self.name]["attn_entropy"] = {"value": attn_entropy}
+            constants.NN_STATES[self.name]["attn_entropy"] = {"value": attn_entropy}
 
         return {"hidden_states": output, "sequence_mask": sequence_mask}
 

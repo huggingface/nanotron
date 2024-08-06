@@ -43,12 +43,17 @@ class FP8LayerArgs(FP8LinearRecipe):
 
 @dataclass
 class FP8Args:
-    # NOTE: dtype for non-fp8 modules
+    # NOTE: this is the datatype for residual stream (aka: non-fp8 operation)
+    resid_dtype: torch.dtype
+    # NOTE: the datatype for fp8 operation's accumulation
     accum_dtype: torch.dtype
+
     model: Optional[List[FP8LayerArgs]] = None
     optim: Optional[FP8OptimRecipe] = None
 
     clipped_softmax: bool = False
     clipped_softmax_zeta: Optional[float] = None
     clipped_softmax_gamma: Optional[float] = None
+
     gated_attention: bool = False
+    layer_scale: bool = False

@@ -267,7 +267,7 @@ def _register_empty_parameter_for_fp8(module, name, param):
 
         if is_convert_to_float16:
             fp8_config = cast(FP8Args, constants.CONFIG.fp8)
-            param.data = param.data.to(torch.device("cuda"), fp8_config.accum_dtype)
+            param.data = param.data.to(torch.device("cuda"), fp8_config.resid_dtype)
         else:
             param.data = param.data.to(torch.device("cuda"))
 

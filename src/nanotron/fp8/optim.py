@@ -378,10 +378,11 @@ class FP8Adam(Optimizer):
         from nanotron.config.fp8_config import FP8Args
 
         fp8_config = cast(FP8Args, constants.CONFIG.fp8)
-        non_fp8_accum_dtype = fp8_config.accum_dtype
+        non_fp8_accum_dtype = fp8_config.resid_dtype
 
         for i, group in enumerate(self.param_groups):
             for p in group["params"]:
+                p_name = self.params_id_to_param_names[id(p)]
                 loggings[p] = {}
                 state = self.state[p]
                 if len(state) == 0:
@@ -391,7 +392,7 @@ class FP8Adam(Optimizer):
                 IS_FP8 = data.__class__ == FP8Tensor
 
                 if hasattr(self, "params_id_to_param_names"):
-                    if "0.pp_block.mlp.down_proj.weight" in self.params_id_to_param_names[id(p)]:
+                    if "0.pp_block.mlp.down_proj.weight" in p_name:
                         assert 1 == 1
 
                 if IS_FP8:
@@ -441,12 +442,12 @@ class FP8Adam(Optimizer):
                 step += 1
 
                 if hasattr(self, "params_id_to_param_names"):
-                    param_name = self.params_id_to_param_names[id(p)]
-                    if "0.pp_block.mlp.down_proj.weight" in param_name or "lm_head" in param_name:
+                    # param_name = self.params_id_to_param_names[id(p)]
+                    if "0.pp_block.mlp.down_proj.weight" in p_name or "lm_head" in p_name:
                         from nanotron import constants
 
                         write_to_file(
-                            f"step={constants.ITERATION_STEP}, param={param_name}, lr={group['lr']}, initial_lr={group['initial_lr']}",
+                            f"step={constants.ITERATION_STEP}, param={p_name}, lr={group['lr']}, initial_lr={group['initial_lr']}",
                             filename="/fsx/phuc/temp/temp3_env_for_fp8/nanotron/lr_logs.txt",
                         )
 
@@ -471,11 +472,11 @@ class FP8Adam(Optimizer):
                 # else:
                 #     rms = torch.tensor(1.0, dtype=self.optim_accum_dtype, device="cuda")
 
-                if "0.pp_block.mlp.down_proj.weight" in self.params_id_to_param_names[id(p)]:
+                if "0.pp_block.mlp.down_proj.weight" in p_name:
                     assert 1 == 1
 
                 if step >= 10:
-                    if "0.pp_block.mlp.down_proj.weight" in self.params_id_to_param_names[id(p)]:
+                    if "0.pp_block.mlp.down_proj.weight" in p_name:
                         assert 1 == 1
 
                 rms = self._calculate_mean_sqrt_ignoring_nans(fp32_grad.pow(2), unbiased_fp32_exp_avg_sq)
@@ -491,7 +492,7 @@ class FP8Adam(Optimizer):
                     update_lr = lr / torch.max(torch.tensor(1.0, dtype=self.optim_accum_dtype, device="cuda"), rms)
                     if rms > 1:
                         log_rank(
-                            f"[Gradient clipping] param_name={self.params_id_to_param_names[id(p)]}, grad_norm: {fp32_grad.norm(p=2)}, RMS is {rms}, original lr is {lr}, new lr is {update_lr}",  # noqa
+                            f"[Gradient clipping] param_name={p_name}, grad_norm: {fp32_grad.norm(p=2)}, RMS is {rms}, original lr is {lr}, new lr is {update_lr}",  # noqa
                             logger=logger,
                             level=logging.INFO,
                             rank=0,
@@ -499,8 +500,10 @@ class FP8Adam(Optimizer):
                 else:
                     update_lr = lr
 
-                if group["weight_decay"] != 0:
-                    new_fp32_data = fp32_data - update_lr * (normalized_grad + group["weight_decay"] * fp32_data)
+                weight_decay_factor = group["weight_decay"] if data.ndim >= 2 else 0.
+
+                if weight_decay_factor != 0:
+                    new_fp32_data = fp32_data - update_lr * (normalized_grad + weight_decay_factor * fp32_data)
                 else:
                     new_fp32_data = fp32_data - update_lr * normalized_grad
 
