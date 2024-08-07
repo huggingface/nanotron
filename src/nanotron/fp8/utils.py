@@ -133,16 +133,29 @@ def compute_stas(tensor):
             "scale": tensor.fp8_meta.scale,
         }
     else:
+        # return {
+        #     "mean": tensor.mean().item(),
+        #     "std": tensor.std().item(),
+        #     "var": tensor.var().item(),
+        #     "l1_norm": tensor.norm(p=1).item(),
+        #     "l2_norm": tensor.norm(p=2).item(),
+        #     "min": tensor.min().item(),
+        #     "max": tensor.max().item(),
+        #     "amax": tensor.abs().max().item(),
+        #     "abs_mean": tensor.abs().mean().item(),
+        #     "kurtosis": calculate_kurtosis(tensor),
+        #     "snr": compute_snr(tensor),
+        # }
         return {
-            "mean": tensor.mean().item(),
-            "std": tensor.std().item(),
-            "var": tensor.var().item(),
-            "l1_norm": tensor.norm(p=1).item(),
-            "l2_norm": tensor.norm(p=2).item(),
-            "min": tensor.min().item(),
-            "max": tensor.max().item(),
-            "amax": tensor.abs().max().item(),
-            "abs_mean": tensor.abs().mean().item(),
+            "mean": tensor.mean(),
+            "std": tensor.std(),
+            "var": tensor.var(),
+            "l1_norm": tensor.norm(p=1),
+            "l2_norm": tensor.norm(p=2),
+            "min": tensor.min(),
+            "max": tensor.max(),
+            "amax": tensor.abs().max(),
+            "abs_mean": tensor.abs().mean(),
             "kurtosis": calculate_kurtosis(tensor),
             "snr": compute_snr(tensor),
         }

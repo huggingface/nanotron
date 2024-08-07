@@ -112,7 +112,8 @@ class Adam(Optimizer):
                 from nanotron import constants
                 from nanotron.constants import get_debug_save_path
 
-                if constants.is_ready_to_log is True and constants.CONFIG.logging.monitor_model_states is True:
+                # if constants.is_ready_to_log is True and constants.CONFIG.logging.monitor_model_states is True:
+                if constants.is_ready_to_log is True:
                     # debug_save_path = constants.DEBUG_SAVE_PATH.format(constants.CONFIG.general.run, constants.ITERATION_STEP)
                     debug_save_path = get_debug_save_path(constants.CONFIG.general.run, constants.ITERATION_STEP)
 
@@ -479,7 +480,13 @@ class FP8Adam(Optimizer):
                     if "0.pp_block.mlp.down_proj.weight" in p_name:
                         assert 1 == 1
 
-                rms = self._calculate_mean_sqrt_ignoring_nans(fp32_grad.pow(2), unbiased_fp32_exp_avg_sq)
+                rms = self._calculate_mean_sqrt_ignoring_nans(
+                    fp32_grad.pow(2),
+                    torch.max(
+                        unbiased_fp32_exp_avg_sq,
+                        torch.tensor(group["eps"], dtype=self.optim_accum_dtype, device="cuda").pow(2),
+                    ),
+                )
 
                 # log_rank(
                 #     f"[Gradient clipping] The RMS is {rms}",  # noqa
@@ -500,12 +507,14 @@ class FP8Adam(Optimizer):
                 else:
                     update_lr = lr
 
-                weight_decay_factor = group["weight_decay"] if data.ndim >= 2 else 0.
+                weight_decay_factor = group["weight_decay"] if data.ndim >= 2 else 0.0
 
                 if weight_decay_factor != 0:
-                    new_fp32_data = fp32_data - update_lr * (normalized_grad + weight_decay_factor * fp32_data)
+                    fp32_new_changes_in_p = update_lr * (normalized_grad + weight_decay_factor * fp32_data)
                 else:
-                    new_fp32_data = fp32_data - update_lr * normalized_grad
+                    fp32_new_changes_in_p = update_lr * normalized_grad
+
+                new_fp32_data = fp32_data - fp32_new_changes_in_p
 
                 if IS_FP8:
                     # self.mappping_fp8_to_master_weight[p] = FP16Tensor(new_fp32_data, dtype=DTypes.KFLOAT16)
@@ -555,24 +564,30 @@ class FP8Adam(Optimizer):
                 assert state["exp_avg"] is fp32_exp_avg
                 assert state["exp_avg_sq"] is fp32_exp_avg_sq
 
-                loggings[p]["step"] = {"value": step}
-                loggings[p]["group:lr"] = {"value": lr}
-                loggings[p]["group:eps"] = {"value": group["eps"]}
-                loggings[p]["group:beta1"] = {"value": beta1}
-                loggings[p]["group:beta2"] = {"value": beta2}
+                if constants.is_ready_to_log is True:
+                    loggings[p]["step"] = {"value": step}
+                    loggings[p]["group:lr"] = {"value": lr}
+                    loggings[p]["group:eps"] = {"value": group["eps"]}
+                    loggings[p]["group:beta1"] = {"value": beta1}
+                    loggings[p]["group:beta2"] = {"value": beta2}
 
-                loggings[p]["bias_correction1"] = {"value": bias_correction1}
-                loggings[p]["bias_correction2"] = {"value": bias_correction2}
-                loggings[p]["fp32_exp_avg"] = compute_stas(fp32_exp_avg)
-                loggings[p]["fp32_exp_avg_sq"] = compute_stas(fp32_exp_avg_sq)
+                    loggings[p]["bias_correction1"] = {"value": bias_correction1}
+                    loggings[p]["bias_correction2"] = {"value": bias_correction2}
+                    loggings[p]["fp32_exp_avg"] = compute_stas(fp32_exp_avg)
+                    loggings[p]["fp32_exp_avg_sq"] = compute_stas(fp32_exp_avg_sq)
 
-                loggings[p]["normalized_grad"] = compute_stas(normalized_grad)
-                loggings[p]["denom"] = compute_stas(denom)
-                loggings[p]["grad_rms"] = {"value": rms}
-                loggings[p]["update_lr"] = {"value": update_lr}
+                    loggings[p]["normalized_grad"] = compute_stas(normalized_grad)
+                    loggings[p]["denom"] = compute_stas(denom)
+                    loggings[p]["grad_rms"] = {"value": rms}
+                    loggings[p]["update_lr"] = {"value": update_lr}
 
-                loggings[p]["fp32_p"] = compute_stas(fp32_data)
-                loggings[p]["fp32_grad"] = compute_stas(fp32_grad)
+                    loggings[p]["fp32_p"] = compute_stas(fp32_data)
+                    loggings[p]["fp32_new_changes_in_p"] = {
+                        "abs_total": fp32_new_changes_in_p.abs().sum(),
+                        "abs_mean": fp32_new_changes_in_p.abs().mean(),
+                    }
+                    loggings[p]["fp32_grad"] = compute_stas(fp32_grad)
+                    loggings[p]["update_lr"] = {"value": update_lr}
 
         self.loggings = loggings
 

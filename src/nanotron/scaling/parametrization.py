@@ -4,8 +4,10 @@ from enum import Enum, auto
 from typing import Dict
 
 import torch
+from nanotron import logging
 from nanotron.config import ModelArgs
 from nanotron.fp8.tensor import FP8Tensor
+from nanotron.logging import log_rank
 from nanotron.nn.layer_norm import TritonRMSNorm
 from nanotron.parallel.parameters import get_data_from_param
 from nanotron.parallel.tensor_parallel.nn import (
@@ -17,6 +19,8 @@ from nanotron.parallel.tensor_parallel.nn import (
 )
 from torch import nn
 from torch.nn import init
+
+logger = logging.get_logger(__name__)
 
 
 class ParametrizationMethod(Enum):
@@ -30,7 +34,15 @@ class Parametrizator:
 
     def parametrize(self, param_name: str, module: nn.Module):
         if not isinstance(module, tuple(self.MODULE_TO_PARAMETRIZE.keys())):
-            raise Exception(f"Parameter {param_name} wasn't defined in the parametrization method.")
+            log_rank(
+                f"Skipping parametrization of {module.__class__.__name__}, param_name: {param_name}",
+                logger=logger,
+                level=logging.INFO,
+                rank=0,
+            )
+            return
+
+            # raise Exception(f"Parameter {param_name} wasn't defined in the parametrization method.")
 
         return self.MODULE_TO_PARAMETRIZE[type(module)](param_name, module)
 

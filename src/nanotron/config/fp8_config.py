@@ -57,3 +57,4 @@ class FP8Args:
 
     gated_attention: bool = False
     layer_scale: bool = False
+    layer_scale_init: Optional[str] = None

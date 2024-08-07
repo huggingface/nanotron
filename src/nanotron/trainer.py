@@ -473,7 +473,12 @@ class DistributedTrainer:
             for self.iteration_step in range(self.metadata.last_train_step + 1, self.config.tokens.train_steps + 1):
                 from nanotron import constants
 
-                is_ready_to_log = (self.iteration_step - 1) % self.config.logging.iteration_step_info_interval == 0
+                is_ready_to_log = (
+                    ((self.iteration_step - 1) % self.config.logging.iteration_step_info_interval == 0)
+                    and (self.config.logging.monitor_model_states is True)
+                    and (dist.get_rank(self.parallel_context.world_pg) == 0)
+                )
+
                 constants.is_ready_to_log = is_ready_to_log
 
                 if isinstance(prof, torch.profiler.profile):
@@ -485,11 +490,14 @@ class DistributedTrainer:
                 self.iteration_start_time = time.time()
                 torch.cuda.empty_cache()
                 self._update_dataloader_based_on_training_stages(dataloader_or_dls)
-                if is_ready_to_log is True and self.config.logging.monitor_model_states is True:
+                if is_ready_to_log is True:
                     from nanotron.scaling.monitor import monitor_model
 
-                    nn_logs, state_handles = monitor_model(self.unwrapped_model, self.parallel_context)
-                    constants.NN_STATES = nn_logs
+                    if self.config.logging.monitor_model_states_using_hooks is True:
+                        # nn_logs, state_handles = monitor_model(self.unwrapped_model, self.parallel_context)
+                        state_handles = monitor_model(self.unwrapped_model, self.parallel_context)
+
+                    # constants.NN_STATES = nn_logs
 
                 # Training step
                 outputs, loss_avg = self.training_step(dataloader=self.current_dataloader)
@@ -510,8 +518,9 @@ class DistributedTrainer:
                         and dist.get_rank(self.parallel_context.world_pg) == 0
                         and wandb is not None
                     ):
-                        for handle in state_handles:
-                            handle.remove()
+                        if self.config.logging.monitor_model_states_using_hooks is True:
+                            for handle in state_handles:
+                                handle.remove()
 
                         detailed_logs = {}
 
@@ -520,7 +529,10 @@ class DistributedTrainer:
                             optim_logs = self.optimizer.optimizer.loggings
                             detailed_logs.update(optim_logs)
 
-                        detailed_logs.update(convert_logs_to_flat_logs(nn_logs))
+                        from nanotron import constants
+
+                        # detailed_logs.update(convert_logs_to_flat_logs(nn_logs))
+                        detailed_logs.update(convert_logs_to_flat_logs(constants.NN_STATES))
                         # NOTE: convert tensor to float for logging
                         detailed_logs = {
                             k: v.item() if isinstance(v, torch.Tensor) else v for k, v in detailed_logs.items()
@@ -528,17 +540,16 @@ class DistributedTrainer:
 
                         # NOTE: save the detailed logs, path/{run_name}/{iteration_step}/logs.json
 
-                        from nanotron.constants import get_debug_save_path
 
                         # DEBUG_SAVE_PATH = DEBUG_SAVE_PATH.format(self.config.general.run, self.iteration_step)
 
-                        debug_save_path = get_debug_save_path(self.config.general.run, self.iteration_step)
+                        # debug_save_path = get_debug_save_path(self.config.general.run, self.iteration_step)
 
-                        with open(f"{debug_save_path}/logs.json", "w") as f:
-                            json.dump(detailed_logs, f)
+                        # with open(f"{debug_save_path}/logs.json", "w") as f:
+                        #     json.dump(detailed_logs, f)
 
-                        constants.NN_STATES = None
                         wandb.log({**detailed_logs, "iteration_step": self.iteration_step})
+                        constants.NN_STATES = {}
 
                 # Checkpoint
                 if self.iteration_step % self.config.checkpoints.checkpoint_interval == 0:

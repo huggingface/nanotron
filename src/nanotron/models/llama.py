@@ -45,6 +45,7 @@ from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelRowLinear,
 )
 from nanotron.random import RandomStates
+from nanotron.scaling.monitor import log_to_nn_state_dict
 from nanotron.scaling.parametrization import SpectralMupParametrizator, StandardParametrizator
 from nanotron.utils import checkpoint_method
 
@@ -213,6 +214,38 @@ class MLP(nn.Module):
         return {"hidden_states": hidden_states}
 
 
+# def _compute_attention_entropy(probs):
+#     # Compute entropy
+#     ent = -probs * torch.log(probs)  # Add small epsilon to avoid log(0)
+
+#     # Compute the entropy of each word's probs
+#     ent = ent.sum(dim=-1)  # [batch_size, n_heads, q_length]
+
+#     # Compute the mean entropy across heads and words
+#     ent = ent.mean(dim=(-2, -1))  # [batch_size]
+
+#     return ent
+
+
+def calculate_attention_entropy(attention_probs):
+    # attention_probs.shape = [batch_size, n_heads, seq_len, seq_len]
+    # batch_size, n_heads, seq_len, _ = attention_probs.shape
+
+    # Calculate entropy for each row
+    row_entropy = -torch.sum(attention_probs * torch.log(attention_probs + 1e-7), dim=-1)
+    # row_entropy.shape = [batch_size, n_heads, seq_len]
+
+    # Average entropy across sequence length
+    avg_entropy_per_head = torch.mean(row_entropy, dim=-1)
+    # avg_entropy_per_head.shape = [batch_size, n_heads]
+
+    # Average entropy across heads
+    avg_entropy = torch.mean(avg_entropy_per_head, dim=-1)
+    # avg_entropy.shape = [batch_size]
+
+    return avg_entropy
+
+
 def self_attention_with_causal_mask(
     query_states: torch.Tensor,  # [batch_size * q_length, n_local_q_heads, inner_dim]
     key_states: torch.Tensor,  # [batch_size * kv_length, n_local_kv_heads, inner_dim]
@@ -286,7 +319,7 @@ def self_attention_with_causal_mask(
     # Reshape output to match input shape
     output = output.transpose(1, 2).contiguous().view(batch_size * q_length, n_local_q_heads, inner_dim)
 
-    return output
+    return (attn_weights, raw_attn_probs, attn_probs, output)
 
 
 class CoreAttention(nn.Module):
@@ -300,6 +333,7 @@ class CoreAttention(nn.Module):
         self.d_v = config.hidden_size // config.num_attention_heads
         self.is_using_mup = config.is_using_mup
 
+        self.layer_idx = layer_idx
         self.checkpoint_attention = False  # Because flash_attn already does checkpointing
 
     @checkpoint_method(attr_name="checkpoint_attention")
@@ -340,7 +374,8 @@ class CoreAttention(nn.Module):
         # )
         batch_size = query_states.shape[0] // constants.CONFIG.tokens.sequence_length
 
-        attn_output = self_attention_with_causal_mask(
+        # attn_weights, raw_attn_probs, attn_probs, output
+        attn_weights, raw_attn_probs, attn_probs, attn_output = self_attention_with_causal_mask(
             query_states=query_states,
             key_states=key_states,
             value_states=value_states,
@@ -348,6 +383,37 @@ class CoreAttention(nn.Module):
             q_length=constants.CONFIG.tokens.sequence_length,
             kv_length=constants.CONFIG.tokens.sequence_length,
         )
+
+        from nanotron.fp8.utils import compute_stas
+
+        if constants.is_ready_to_log is True:
+            log_to_nn_state_dict(
+                f"model.decoder.{self.layer_idx}.pp_block.attn.attn_weights", compute_stas(attn_weights)
+            )
+            log_to_nn_state_dict(
+                f"model.decoder.{self.layer_idx}.pp_block.attn.raw_attn_probs", compute_stas(raw_attn_probs)
+            )
+            log_to_nn_state_dict(f"model.decoder.{self.layer_idx}.pp_block.attn.attn_probs", compute_stas(attn_probs))
+
+            # def mean_ignore_nan(tensor):
+            #     tensor_without_nan = tensor[~torch.isnan(tensor)]
+            #     return torch.mean(tensor_without_nan)
+
+            # attn_entropy = _compute_attention_entropy(attn_probs)  # [seq_length, ]
+            # attn_entropy = mean_ignore_nan(attn_entropy)
+            raw_attn_entropy = calculate_attention_entropy(raw_attn_probs).mean()
+            log_to_nn_state_dict(
+                f"model.decoder.{self.layer_idx}.pp_block.attn.raw_attn_entropy", {"value": raw_attn_entropy}
+            )
+
+            from nanotron.constants import CONFIG
+
+            if CONFIG.fp8.clipped_softmax is True:
+                clipped_attn_entropy = calculate_attention_entropy(attn_probs).mean()
+                log_to_nn_state_dict(
+                    f"model.decoder.{self.layer_idx}.pp_block.attn.clipped_attn_entropy",
+                    {"value": clipped_attn_entropy},
+                )
 
         return attn_output
 
@@ -378,43 +444,6 @@ def pad_to_right(tensor, mask, new_tensor=None):
     # We fill the new tensor with the useful values
     new_tensor[:, : right_padded_mask.shape[1], :, :][right_padded_mask] = useful_values
     return new_tensor, right_padded_mask
-
-
-def _compute_attention_entropy(q, k):
-    """
-    x: [batch_size, seq_len, d_model]
-    q: [batch_size * q_length, n_heads, d_qk]
-    k: [batch_size * kv_length, n_heads, d_qk]
-    """
-    import math
-
-    import torch.nn.functional as F
-
-    from nanotron import constants
-
-    # Reshape q and k to separate batch_size and seq_len dimensions
-    batch_size = q.shape[0] // constants.CONFIG.tokens.sequence_length
-
-    q = q.view(batch_size, -1, q.shape[1], q.shape[2])  # [batch_size, q_length, n_heads, d_qk]
-    k = k.view(batch_size, -1, k.shape[1], k.shape[2])  # [batch_size, kv_length, n_heads, d_qk]
-
-    # Compute attention scores
-    scores = torch.einsum("bqhd,bkhd->bhqk", q, k)  # [batch_size, n_heads, q_length, kv_length]
-    scores /= math.sqrt(q.shape[2])
-
-    # Apply softmax to get probabilities
-    probs = F.softmax(scores, dim=-1)
-
-    # Compute entropy
-    ent = -probs * torch.log(probs + 1e-9)  # Add small epsilon to avoid log(0)
-
-    # Compute the entropy of each word's probs
-    ent = ent.sum(dim=-1)  # [batch_size, n_heads, q_length]
-
-    # Compute the mean entropy across heads and words
-    ent = ent.mean(dim=(-2, -1))  # [batch_size]
-
-    return ent
 
 
 class CausalSelfAttention(nn.Module, AttachableStore):
@@ -774,23 +803,6 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             attention_output.contiguous().view(batch_size, q_length, self.n_local_q_heads * self.d_v).transpose(0, 1)
         )
         output = self.o_proj(attention_output)
-        attn_entropy = _compute_attention_entropy(query_states, key_states)  # [seq_length, ]
-
-        def mean_ignore_nan(tensor):
-            # Remove NaN values
-            tensor_without_nan = tensor[~torch.isnan(tensor)]
-
-            # Calculate mean if there are non-NaN values, otherwise return NaN
-            return torch.mean(tensor_without_nan)
-
-        if constants.CONFIG.logging.monitor_model_states is True:
-            # attn_entropy = attn_entropy.mean()
-            attn_entropy = mean_ignore_nan(attn_entropy)
-
-            # if not self.name in constants.NN_STATES:
-            #     constants.NN_STATES[self.name] = {}
-
-            constants.NN_STATES[self.name]["attn_entropy"] = {"value": attn_entropy}
 
         return {"hidden_states": output, "sequence_mask": sequence_mask}
 
@@ -805,6 +817,7 @@ class LlamaDecoderLayer(nn.Module):
     ):
         super().__init__()
         # self.input_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.layer_idx = layer_idx
         self.normalized_shape = (config.hidden_size,)
         self.input_layernorm = nn.LayerNorm(config.hidden_size, eps=config.rms_norm_eps)
         # self.input_layernorm = nn.Identity()
@@ -822,6 +835,18 @@ class LlamaDecoderLayer(nn.Module):
         # self.post_attention_layernorm = nn.Identity()
         self.mlp = MLP(config=config, parallel_config=parallel_config, tp_pg=tp_pg, layer_idx=layer_idx)
 
+        from nanotron.constants import CONFIG
+
+        if CONFIG.fp8.layer_scale is True:
+            if CONFIG.fp8.layer_scale_init == "zeros":
+                attn_layer_scale_init = torch.zeros(config.hidden_size)
+                mlp_layer_scale_init = torch.zeros(config.hidden_size)
+            else:
+                raise NotImplementedError(f"Unsupported layer_scale_init: {CONFIG.fp8.layer_scale_init}")
+
+            self.attn_layer_scale = torch.nn.Parameter(attn_layer_scale_init)
+            self.mlp_layer_scale = torch.nn.Parameter(mlp_layer_scale_init)
+
     def forward(
         self,
         hidden_states: Union[torch.Tensor, TensorPointer],
@@ -836,6 +861,40 @@ class LlamaDecoderLayer(nn.Module):
 
         output = self.attn(hidden_states=hidden_states, sequence_mask=sequence_mask)
         hidden_states = output["hidden_states"]
+
+        from einops import rearrange
+
+        from nanotron.constants import CONFIG
+        from nanotron.fp8.utils import compute_stas
+
+        if constants.is_ready_to_log is True:
+            log_to_nn_state_dict(
+                f"model.decoder.{self.layer_idx}.pp_block.attn.without_resid.before_layerscale",
+                compute_stas(hidden_states),
+            )
+            log_to_nn_state_dict(f"model.decoder.{self.layer_idx}.pp_block.attn.resid", compute_stas(residual))
+            log_to_nn_state_dict(
+                f"model.decoder.{self.layer_idx}.pp_block.attn_and_resid_ratio.before_layerscale",
+                {"value": hidden_states.norm(p=2) / residual.norm(p=2)},
+            )
+
+        if CONFIG.fp8.layer_scale is True:
+            hidden_states = hidden_states * rearrange(self.attn_layer_scale.data, "f -> 1 1 f")
+            if constants.is_ready_to_log is True:
+                # NN_STATES[f"model.decoder.{self.layer_idx}.pp_block.attn.layerscale"] = {"absmax": self.attn_layer_scale.abs().max()}
+                log_to_nn_state_dict(
+                    f"model.decoder.{self.layer_idx}.pp_block.attn.layerscale",
+                    compute_stas(self.attn_layer_scale.data),
+                )
+                log_to_nn_state_dict(
+                    f"model.decoder.{self.layer_idx}.pp_block.attn.without_resid.after_layerscale",
+                    compute_stas(hidden_states),
+                )
+                log_to_nn_state_dict(
+                    f"model.decoder.{self.layer_idx}.pp_block.attn_and_resid_ratio.after_layerscale",
+                    {"value": hidden_states.norm(p=2) / residual.norm(p=2)},
+                )
+
         hidden_states = hidden_states + residual
 
         residual = hidden_states
@@ -844,6 +903,38 @@ class LlamaDecoderLayer(nn.Module):
         # hidden_states = F.layer_norm(hidden_states, self.normalized_shape, post_attention_ln_weight, self.post_attention_layernorm.bias, eps=self.post_attention_layernorm.eps)
         # NOTE: got nan starts from here in 1st layer
         hidden_states = self.mlp(hidden_states=hidden_states)["hidden_states"]
+
+        if constants.is_ready_to_log is True:
+            log_to_nn_state_dict(
+                f"model.decoder.{self.layer_idx}.pp_block.mlp.without_resid.before_layerscale",
+                compute_stas(hidden_states),
+            )
+            log_to_nn_state_dict(f"model.decoder.{self.layer_idx}.pp_block.mlp.resid", compute_stas(residual))
+            log_to_nn_state_dict(
+                f"model.decoder.{self.layer_idx}.pp_block.mlp_and_resid_ratio.before_layerscale",
+                {"value": hidden_states.norm(p=2) / residual.norm(p=2)},
+            )
+
+        from nanotron.constants import CONFIG
+
+        if CONFIG.fp8.layer_scale is True:
+            hidden_states = hidden_states * rearrange(self.mlp_layer_scale.data, "f -> 1 1 f")
+
+            if constants.is_ready_to_log is True:
+                # NN_STATES[f"model.decoder.{self.layer_idx}.pp_block.mlp.layerscale"] = {"absmax": self.mlp_layer_scale.abs().max()}
+                log_to_nn_state_dict(
+                    f"model.decoder.{self.layer_idx}.pp_block.mlp.layerscale",
+                    {"absmax": self.mlp_layer_scale.abs().max()},
+                )
+                log_to_nn_state_dict(
+                    f"model.decoder.{self.layer_idx}.pp_block.mlp.without_resid.after_layerscale",
+                    compute_stas(hidden_states),
+                )
+                log_to_nn_state_dict(
+                    f"model.decoder.{self.layer_idx}.pp_block.mlp_and_resid_ratio.after_layerscale",
+                    {"value": hidden_states.norm(p=2) / residual.norm(p=2)},
+                )
+
         hidden_states = hidden_states + residual
 
         return {
