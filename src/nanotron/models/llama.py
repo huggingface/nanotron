@@ -155,6 +155,7 @@ class MLP(nn.Module):
             bias=False,
             async_communication=tp_linear_async_communication,
             contiguous_chunks=gate_up_contiguous_chunks,
+            tp_recompute_allgather=parallel_config.tp_recompute_allgather,
         )
         self.down_proj = TensorParallelRowLinear(
             config.intermediate_size,
@@ -164,8 +165,7 @@ class MLP(nn.Module):
             bias=False,
             async_communication=tp_linear_async_communication and tp_mode is TensorParallelLinearMode.REDUCE_SCATTER,
         )
-        # TODO @nouamane: why can't we torch.jit.script GLUActivation?
-        self.split_silu_mul = GLUActivation(config.hidden_act)
+        self.split_silu_mul = torch.compile(GLUActivation(config.hidden_act))
 
     def forward(self, hidden_states):  # [seq_length, batch_size, hidden_dim]
         merged_states = self.gate_up_proj(hidden_states)
@@ -316,6 +316,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             bias=False,
             async_communication=tp_linear_async_communication,
             contiguous_chunks=qkv_contiguous_chunks,
+            tp_recompute_allgather=parallel_config.tp_recompute_allgather,
         )
         # TODO(kunhao): We want to have only one version per device and not one version per layer.
         self.rotary_embedding = RotaryEmbedding(
@@ -765,6 +766,7 @@ class LlamaModel(nn.Module):
                 # TODO @thomasw21: refactor so that we store that default in a single place.
                 "mode": self.tp_mode,
                 "async_communication": tp_linear_async_communication,
+                "tp_recompute_allgather": parallel_config.tp_recompute_allgather,
             },
             module_input_keys={"x"},
             module_output_keys={"logits"},

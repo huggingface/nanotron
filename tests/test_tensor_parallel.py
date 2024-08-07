@@ -18,17 +18,30 @@ from torch import nn as torch_nn
 @pytest.mark.parametrize("tp,dp,pp", [pytest.param(i, 1, 1) for i in range(1, min(4, available_gpus()) + 1)])
 @pytest.mark.parametrize("tp_mode", list(TensorParallelLinearMode))
 @pytest.mark.parametrize("async_communication", [False, True])
+@pytest.mark.parametrize("tp_recompute_allgather", [False, True])
 @rerun_if_address_is_in_use()
-def test_column_linear(tp: int, dp: int, pp: int, tp_mode: TensorParallelLinearMode, async_communication: bool):
+def test_column_linear(
+    tp: int,
+    dp: int,
+    pp: int,
+    tp_mode: TensorParallelLinearMode,
+    async_communication: bool,
+    tp_recompute_allgather: bool,
+):
     if tp_mode is TensorParallelLinearMode.ALL_REDUCE and async_communication:
         pytest.skip("ALL_REDUCE mode does not support async communication")
+    if tp_mode is TensorParallelLinearMode.ALL_REDUCE and tp_recompute_allgather:
+        pytest.skip("ALL_REDUCE mode is unaffected by tp_recompute_allgather")
     init_distributed(tp=tp, dp=dp, pp=pp)(_test_column_linear)(
-        tp_mode=tp_mode, async_communication=async_communication
+        tp_mode=tp_mode, async_communication=async_communication, tp_recompute_allgather=tp_recompute_allgather
     )
 
 
 def _test_column_linear(
-    parallel_context: ParallelContext, tp_mode: TensorParallelLinearMode, async_communication: bool
+    parallel_context: ParallelContext,
+    tp_mode: TensorParallelLinearMode,
+    async_communication: bool,
+    tp_recompute_allgather: bool,
 ):
     if async_communication:
         os.environ["CUDA_DEVICE_MAX_CONNECTIONS"] = "1"
@@ -44,6 +57,7 @@ def _test_column_linear(
         mode=tp_mode,
         device="cuda",
         async_communication=async_communication,
+        tp_recompute_allgather=tp_recompute_allgather,
     )
 
     # Un-sharded
@@ -86,7 +100,7 @@ def _test_column_linear(
             random_input = sharded_random_input
     else:
         ValueError(f"Unsupported mode: {tp_mode}")
-    # It's important that `random_input` and `sharded_random_input` are two seperate tensors with seperate storage
+    # It's important that `random_input` and `sharded_random_input` are two separate tensors with separate storage
     sharded_random_input = sharded_random_input.clone()
     random_input.requires_grad = True
     sharded_random_input.requires_grad = True
@@ -150,15 +164,32 @@ def _test_column_linear(
 @pytest.mark.parametrize("tp,dp,pp", [pytest.param(i, 1, 1) for i in range(1, min(4, available_gpus()) + 1)])
 @pytest.mark.parametrize("tp_mode", list(TensorParallelLinearMode))
 @pytest.mark.parametrize("async_communication", [False, True])
+@pytest.mark.parametrize("tp_recompute_allgather", [False, True])
 @rerun_if_address_is_in_use()
-def test_row_linear(tp: int, dp: int, pp: int, tp_mode: TensorParallelLinearMode, async_communication: bool):
+def test_row_linear(
+    tp: int,
+    dp: int,
+    pp: int,
+    tp_mode: TensorParallelLinearMode,
+    async_communication: bool,
+    tp_recompute_allgather: bool,
+):
     if tp_mode is TensorParallelLinearMode.ALL_REDUCE and async_communication:
         pytest.skip("ALL_REDUCE mode does not support async communication")
+    if tp_mode is TensorParallelLinearMode.ALL_REDUCE and tp_recompute_allgather:
+        pytest.skip("ALL_REDUCE mode is not affected by tp_recompute_allgather")
 
-    init_distributed(tp=tp, dp=dp, pp=pp)(_test_row_linear)(tp_mode=tp_mode, async_communication=async_communication)
+    init_distributed(tp=tp, dp=dp, pp=pp)(_test_row_linear)(
+        tp_mode=tp_mode, async_communication=async_communication, tp_recompute_allgather=tp_recompute_allgather
+    )
 
 
-def _test_row_linear(parallel_context: ParallelContext, tp_mode: TensorParallelLinearMode, async_communication: bool):
+def _test_row_linear(
+    parallel_context: ParallelContext,
+    tp_mode: TensorParallelLinearMode,
+    async_communication: bool,
+    tp_recompute_allgather: bool,
+):
     if async_communication:
         os.environ["CUDA_DEVICE_MAX_CONNECTIONS"] = "1"
     out_features = 3
@@ -208,14 +239,19 @@ def _test_row_linear(parallel_context: ParallelContext, tp_mode: TensorParallelL
     random_input = torch.randn(batch_size, in_features, device="cuda")
     # synchronize random_input across tp
     dist.all_reduce(random_input, op=dist.ReduceOp.AVG, group=parallel_context.tp_pg)
-
+    random_input.requires_grad = True
     # Row linear receives as input sharded input
-    random_sharded_input = random_input[
-        :,
-        dist.get_rank(parallel_context.tp_pg)
-        * in_features_per_rank : (dist.get_rank(parallel_context.tp_pg) + 1)
-        * in_features_per_rank,
-    ]
+    random_sharded_input = (
+        random_input[
+            :,
+            dist.get_rank(parallel_context.tp_pg)
+            * in_features_per_rank : (dist.get_rank(parallel_context.tp_pg) + 1)
+            * in_features_per_rank,
+        ]
+        .detach()
+        .clone()
+    )
+    random_sharded_input.requires_grad = True
 
     # Test that we get the same output after forward pass
     # TODO @kunhao: We may want to have our custom error type
@@ -260,6 +296,16 @@ def _test_row_linear(parallel_context: ParallelContext, tp_mode: TensorParallelL
         )
     else:
         assert row_linear.bias is None
+
+    torch.testing.assert_close(
+        random_sharded_input.grad,
+        random_input.grad[
+            :,
+            dist.get_rank(parallel_context.tp_pg)
+            * in_features_per_rank : (dist.get_rank(parallel_context.tp_pg) + 1)
+            * in_features_per_rank,
+        ],
+    )
 
     parallel_context.destroy()
 

@@ -20,13 +20,12 @@ from torch.nn import functional as F
 
 import nanotron.distributed as dist
 from nanotron.parallel.tensor_parallel.distributed_differentiable_primitives import (
-    differentiable_all_gather,
     differentiable_all_reduce_sum,
     differentiable_identity,
     differentiable_reduce_scatter_sum,
 )
 from nanotron.parallel.tensor_parallel.enum import TensorParallelLinearMode
-from nanotron.parallel.utils import assert_cuda_max_connections_set_to_1
+from nanotron.parallel.utils import MemoryBuffer, assert_cuda_max_connections_set_to_1
 
 
 class _ShardedCrossEntropy(torch.autograd.Function):
@@ -89,10 +88,10 @@ class _ShardedCrossEntropy(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_output):
-        # Retreive tensors from the forward path.
+        # Retrieve tensors from the forward path.
         softmax, target_mask, masked_target_1d = ctx.saved_tensors
 
-        # All the inputs have softmax as thier gradient.
+        # All the inputs have softmax as their gradient.
         grad_input = softmax
         # For simplicity, work with the 2D gradient.
         sharded_hidden_size = softmax.size()[-1]
@@ -121,10 +120,12 @@ class _ColumnLinearAsyncCommunication(torch.autograd.Function):
 
     @staticmethod
     @assert_cuda_max_connections_set_to_1
-    def forward(ctx, tensor, weight, bias, group, tp_mode):
+    def forward(ctx, tensor, weight, bias, group, tp_mode, tp_recompute_allgather):
         ctx.use_bias = bias is not None
         ctx.tp_mode = tp_mode
         ctx.group = group
+        ctx.tp_recompute_allgather = tp_recompute_allgather
+        ctx.tensor_shape = tensor.size()
 
         if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
             gathered_tensor = tensor
@@ -141,7 +142,7 @@ class _ColumnLinearAsyncCommunication(torch.autograd.Function):
                 # `tensor` can sometimes not be contiguous
                 # https://cs.github.com/pytorch/pytorch/blob/2b267fa7f28e18ca6ea1de4201d2541a40411457/torch/distributed/nn/functional.py#L317
                 tensor = tensor.contiguous()
-                ctx.save_for_backward(tensor, weight)
+                # ctx.save_for_backward(tensor, weight)
 
                 # TODO @thomasw21: gather along another dimension
                 sharded_batch_size, *intermediate_size, hidden_size = tensor.shape
@@ -149,14 +150,19 @@ class _ColumnLinearAsyncCommunication(torch.autograd.Function):
                     group = dist.distributed_c10d._get_default_group()
                 gathered_batch_size = sharded_batch_size * group.size()
 
-                gathered_tensor = torch.empty(
-                    gathered_batch_size,
-                    *intermediate_size,
-                    hidden_size,
-                    device=tensor.device,
-                    dtype=tensor.dtype,
-                    requires_grad=tensor.requires_grad,
-                )
+                if tp_recompute_allgather:
+                    gathered_tensor = MemoryBuffer().get(
+                        "allgather", (gathered_batch_size, *intermediate_size, hidden_size), dtype=tensor.dtype
+                    )
+                else:
+                    gathered_tensor = torch.empty(
+                        gathered_batch_size,
+                        *intermediate_size,
+                        hidden_size,
+                        device=tensor.device,
+                        dtype=tensor.dtype,
+                        requires_grad=False,
+                    )
 
                 handle = dist.all_gather_into_tensor(gathered_tensor, tensor, group=group, async_op=True)
 
@@ -204,6 +210,10 @@ class _ColumnLinearAsyncCommunication(torch.autograd.Function):
 
                 # Wait communication
                 handle.wait()
+                if tp_recompute_allgather:
+                    ctx.save_for_backward(tensor, weight)
+                else:
+                    ctx.save_for_backward(gathered_tensor, weight)
 
                 # Compute all the other shards that are obtained from AllGather
                 # weights: w0 w1 w2 w3
@@ -261,8 +271,8 @@ class _ColumnLinearAsyncCommunication(torch.autograd.Function):
         use_bias = ctx.use_bias
         tp_mode = ctx.tp_mode
 
-        handle: Optional[dist.Work] = None
-        if tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
+        handle1: Optional[dist.Work] = None
+        if tp_mode is TensorParallelLinearMode.REDUCE_SCATTER and ctx.tp_recompute_allgather:
             # TODO @thomasw21: gather along another dimension
             sharded_batch_size, *rest_size = tensor.shape
             if group is None:
@@ -273,14 +283,10 @@ class _ColumnLinearAsyncCommunication(torch.autograd.Function):
             else:
                 unsharded_batch_size = sharded_batch_size * group.size()
 
-                unsharded_tensor = torch.empty(
-                    unsharded_batch_size,
-                    *rest_size,
-                    device=tensor.device,
-                    dtype=tensor.dtype,
-                    requires_grad=False,
+                unsharded_tensor = MemoryBuffer().get(
+                    "allgather", (unsharded_batch_size, *rest_size), dtype=tensor.dtype
                 )
-                handle = dist.all_gather_into_tensor(unsharded_tensor, tensor, group=group, async_op=True)
+                handle1 = dist.all_gather_into_tensor(unsharded_tensor, tensor, group=group, async_op=True)
                 # Here we rely on CUDA_DEVICE_MAX_CONNECTIONS=1 to ensure that the
                 # gather is scheduled before the tensor gradient computation
                 total_tensor = unsharded_tensor
@@ -288,9 +294,6 @@ class _ColumnLinearAsyncCommunication(torch.autograd.Function):
             total_tensor = tensor
 
         grad_tensor = grad_output.matmul(weight)
-
-        if handle is not None:
-            handle.wait()
 
         # Doing gather + slicing during the NeMo forward pass can make this tensor
         # not be contiguous. PyTorch only checks if the tensor is contiguous, and only
@@ -303,39 +306,126 @@ class _ColumnLinearAsyncCommunication(torch.autograd.Function):
         grad_output = grad_output.view(math.prod(grad_output_first_dims), grad_output_last_dim)
         total_tensor = total_tensor.view(math.prod(total_tensor_first_dims), total_tensor_last_dim)
 
-        handle: Optional[dist.Work] = None
+        handle2: Optional[dist.Work] = None
         if tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
             if group.size() == 1:
                 sub_grad_tensor = grad_tensor
             else:
                 sub_grad_tensor = torch.empty(
-                    tensor.shape, dtype=grad_tensor.dtype, device=grad_tensor.device, requires_grad=False
+                    ctx.tensor_shape, dtype=grad_tensor.dtype, device=grad_tensor.device, requires_grad=False
                 )
                 # reduce_scatter
-                handle = dist.reduce_scatter_tensor(sub_grad_tensor, grad_tensor, group=group, async_op=True)
+                handle2 = dist.reduce_scatter_tensor(sub_grad_tensor, grad_tensor, group=group, async_op=True)
                 # Here we rely on CUDA_DEVICE_MAX_CONNECTIONS=1 to ensure that the
                 # reduce scatter is scheduled before the weight gradient computation
         elif tp_mode is TensorParallelLinearMode.ALL_REDUCE:
             # Asynchronous all-reduce
-            handle = dist.all_reduce(grad_tensor, group=group, async_op=True)
+            handle2 = dist.all_reduce(grad_tensor, group=group, async_op=True)
             # Here we rely on CUDA_DEVICE_MAX_CONNECTIONS=1 to ensure that the
             # all-reduce is scheduled before the weight gradient computation
         else:
             raise ValueError()
 
-        # TODO @thomasw21: This sounds like we don't have the optimal physical layout
-        grad_weight = grad_output.t().matmul(total_tensor)
         grad_bias = grad_output.sum(dim=0) if use_bias else None
 
-        if handle is not None:
-            handle.wait()
+        if handle1 is not None:
+            handle1.wait()
+
+        # TODO @thomasw21: This sounds like we don't have the optimal physical layout
+        grad_weight = grad_output.t().matmul(total_tensor)
+
+        if handle2 is not None:
+            handle2.wait()
 
         if tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
-            return sub_grad_tensor, grad_weight, grad_bias, None, None
+            return sub_grad_tensor, grad_weight, grad_bias, None, None, None
         elif tp_mode is TensorParallelLinearMode.ALL_REDUCE:
-            return grad_tensor, grad_weight, grad_bias, None, None
+            return grad_tensor, grad_weight, grad_bias, None, None, None
         else:
             raise ValueError(f"Got unexpected mode: {tp_mode}.")
+
+
+class _ColumnLinearNoAsyncCommunicationReduceScatterMode(torch.autograd.Function):
+    """
+    Column linear with memory_buffer for the allgather, context parallel
+    enabled (i.e. tp_mode = TensorParallelLinearMode.REDUCE_SCATTER) and
+    async communication disabled.
+    """
+
+    @staticmethod
+    def forward(
+        ctx,
+        input: torch.Tensor,
+        weight: torch.Tensor,
+        bias: Optional[torch.Tensor],
+        group: dist.ProcessGroup,
+        tp_recompute_allgather: bool,
+    ):
+
+        # Do allgather.
+        sharded_batch_size, *rest_size = input.shape
+        unsharded_batch_size = sharded_batch_size * group.size()
+        if group.size() == 1:
+            total_input = input.contiguous()
+        elif tp_recompute_allgather:
+            total_input = MemoryBuffer().get("allgather", (unsharded_batch_size, *rest_size), dtype=input.dtype)
+            dist.all_gather_into_tensor(total_input, input.contiguous(), group=group)
+        else:
+            total_input = torch.empty(unsharded_batch_size, *rest_size, dtype=input.dtype, device=input.device)
+            dist.all_gather_into_tensor(total_input, input.contiguous(), group=group)
+
+        # Prepare context.
+        ctx.group = group
+        ctx.tp_recompute_allgather = tp_recompute_allgather
+        ctx.input_size = input.shape
+        if tp_recompute_allgather:
+            ctx.save_for_backward(input, weight, bias)
+        else:
+            ctx.save_for_backward(total_input, weight, bias)
+
+        # Get linear output.
+        out = F.linear(total_input, weight, bias)
+        return out
+
+    @staticmethod
+    def backward(ctx, grad_output: torch.Tensor):
+        # Either allgather the inputs again or get them from context.
+        group = ctx.group
+        tp_recompute_allgather = ctx.tp_recompute_allgather
+        input_size = ctx.input_size
+        if group.size() == 1 or not tp_recompute_allgather:
+            total_input, weight, bias = ctx.saved_tensors
+        else:
+            input, weight, bias = ctx.saved_tensors
+            sharded_batch_size, *rest_size = input.shape
+            total_input = sharded_batch_size * group.size()
+            unsharded_batch_size = sharded_batch_size * group.size()
+            total_input = MemoryBuffer().get("allgather", (unsharded_batch_size, *rest_size), dtype=input.dtype)
+            dist.all_gather_into_tensor(total_input, input.contiguous(), group=group)
+
+        # Convert the tensor shapes to 2D for execution compatibility
+        grad_output = grad_output.contiguous()
+        grad_output_first_dims, grad_output_last_dim = grad_output.shape[:-1], grad_output.shape[-1]
+        total_input_first_dims, total_input_last_dim = total_input.shape[:-1], total_input.shape[-1]
+        grad_output = grad_output.view(math.prod(grad_output_first_dims), grad_output_last_dim)
+        total_input = total_input.view(math.prod(total_input_first_dims), total_input_last_dim)
+
+        # Compute gradients.
+        grad_weight = grad_output.T @ total_input
+        grad_input = grad_output @ weight
+        if group.size() == 1:
+            sub_grad_input = grad_input
+        else:
+            # Seems that `reduce_scatter` need contiguous tensors: https://github.com/pytorch/pytorch/blob/2b267fa7f28e18ca6ea1de4201d2541a40411457/torch/distributed/nn/functional.py#L305
+            # We set grad_input to be contiguous in case it isn't already.
+            grad_input = grad_input.contiguous()
+            sub_grad_input = torch.empty(
+                input_size, dtype=total_input.dtype, device=total_input.device, requires_grad=False
+            )
+            dist.reduce_scatter_tensor(sub_grad_input, grad_input, group=group, op=dist.ReduceOp.SUM)
+        grad_bias = torch.sum(grad_output, dim=0) if bias is not None else None
+
+        return sub_grad_input, grad_weight, grad_bias, None, None
 
 
 def column_linear(
@@ -345,18 +435,19 @@ def column_linear(
     group: dist.ProcessGroup,
     tp_mode: TensorParallelLinearMode,
     async_communication: bool,
+    tp_recompute_allgather: bool = True,
 ):
     if async_communication:
-        return _ColumnLinearAsyncCommunication.apply(input, weight, bias, group, tp_mode)
+        return _ColumnLinearAsyncCommunication.apply(input, weight, bias, group, tp_mode, tp_recompute_allgather)
 
     if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
         input = differentiable_identity(input, group=group)
-    elif tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
-        input = differentiable_all_gather(input, group=group)
-    else:
-        raise ValueError(f"Got unexpected mode: {tp_mode}.")
-
-    return F.linear(input, weight, bias)
+        return F.linear(input, weight, bias)
+    if tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
+        return _ColumnLinearNoAsyncCommunicationReduceScatterMode.apply(
+            input, weight, bias, group, tp_recompute_allgather
+        )
+    raise ValueError(f"Got unexpected mode: {tp_mode}.")
 
 
 class _RowLinearAsyncCommunication(torch.autograd.Function):
@@ -387,8 +478,7 @@ class _RowLinearAsyncCommunication(torch.autograd.Function):
         group = ctx.group
         use_bias = ctx.use_bias
 
-        handle_0: Optional[dist.Work] = None
-        handle_1: Optional[dist.Work] = None
+        handle: Optional[dist.Work] = None
 
         # TODO @thomasw21: gather along another dimension
         sharded_batch_size, *rest_size = grad_output.shape
@@ -398,12 +488,8 @@ class _RowLinearAsyncCommunication(torch.autograd.Function):
         else:
             unsharded_batch_size = sharded_batch_size * group.size()
 
-            total_grad_output = torch.empty(
-                unsharded_batch_size,
-                *rest_size,
-                device=grad_output.device,
-                dtype=grad_output.dtype,
-                requires_grad=False,
+            total_grad_output = MemoryBuffer().get(
+                "allgather2", (unsharded_batch_size, *rest_size), dtype=tensor.dtype
             )
 
             # Doing gather + slicing during the NeMo forward pass can make this tensor
@@ -412,31 +498,69 @@ class _RowLinearAsyncCommunication(torch.autograd.Function):
             # https://github.com/pytorch/pytorch/blob/c47cf9bc7f9e02f649ab4ed53fe4d35732c92ab6/torch/_refs/__init__.py#L2761
             grad_output = grad_output.contiguous()
 
-            handle_0 = dist.all_gather_into_tensor(total_grad_output, grad_output, group=group, async_op=True)
+            handle = dist.all_gather_into_tensor(total_grad_output, grad_output, group=group, async_op=True)
 
-        grad_tensor = grad_output.matmul(weight)
-
-        # wait for the first all_gather to finish before starting the second all_gather
-        if handle_0 is not None:
-            handle_0.wait()
-
-        # TODO @thomasw21: gather along another dimension
-        sharded_batch_size, *rest_size = grad_tensor.shape
+        # total_grad_output: [b, s, h_out]
+        # weight: [h_out, h_in/n]
+        # total_grad_tensor: [b, s, h_in/n]
+        # grad_output: [b/n, s, h_out]
+        sharded_batch_size, *rest_size_grad_output = grad_output.shape
+        rest_size_grad_tensor = rest_size_grad_output[:-1] + [weight.shape[1]]
 
         if group.size() == 1:
-            total_grad_tensor = grad_tensor
+            total_grad_tensor = grad_output.matmul(weight)
         else:
             unsharded_batch_size = sharded_batch_size * group.size()
-
             total_grad_tensor = torch.empty(
                 unsharded_batch_size,
-                *rest_size,
-                device=grad_tensor.device,
-                dtype=grad_tensor.dtype,
+                *rest_size_grad_tensor,
+                device=grad_output.device,
+                dtype=grad_output.dtype,
                 requires_grad=False,
             )
+            before_shard_grad_tensor, same_device_shard_grad_tensor, after_shard_grad_tensor = torch.split(
+                total_grad_tensor,
+                split_size_or_sections=[
+                    sharded_batch_size * dist.get_rank(group),
+                    sharded_batch_size,
+                    sharded_batch_size * (group.size() - dist.get_rank(group) - 1),
+                ],
+                dim=0,
+            )
+            # compute local shard
+            torch.mm(
+                input=grad_output.view(-1, grad_output.shape[-1]),
+                mat2=weight,
+                out=same_device_shard_grad_tensor.view(-1, weight.shape[1]),
+            )
 
-            handle_1 = dist.all_gather_into_tensor(total_grad_tensor, grad_tensor, group=group, async_op=True)
+            if handle is not None:
+                handle.wait()
+
+            before_shard_grad_output, _, after_shard_grad_output = torch.split(
+                total_grad_output,
+                split_size_or_sections=[
+                    sharded_batch_size * dist.get_rank(group),
+                    sharded_batch_size,
+                    sharded_batch_size * (group.size() - dist.get_rank(group) - 1),
+                ],
+                dim=0,
+            )
+
+            # before shard compute
+            if before_shard_grad_tensor.numel() > 0:
+                torch.mm(
+                    input=before_shard_grad_output.view(-1, before_shard_grad_output.shape[-1]),
+                    mat2=weight,
+                    out=before_shard_grad_tensor.view(-1, weight.shape[1]),
+                )
+            # after shard compute
+            if after_shard_grad_tensor.numel() > 0:
+                torch.mm(
+                    input=after_shard_grad_output.view(-1, after_shard_grad_output.shape[-1]),
+                    mat2=weight,
+                    out=after_shard_grad_tensor.view(-1, weight.shape[1]),
+                )
 
         # Convert the tensor shapes to 2D for execution compatibility
         tensor = tensor.contiguous()
@@ -453,9 +577,6 @@ class _RowLinearAsyncCommunication(torch.autograd.Function):
         # TODO @thomasw21: This sounds like we don't have the optimal physical layout
         grad_weight = total_grad_output.t().matmul(tensor)
         grad_bias = total_grad_output.sum(dim=0) if use_bias else None
-
-        if handle_1 is not None:
-            handle_1.wait()
 
         return total_grad_tensor, grad_weight, grad_bias, None, None
 

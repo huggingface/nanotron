@@ -3,14 +3,13 @@ import importlib
 import json
 import os
 import sys
+from argparse import Namespace
 from collections import OrderedDict
 from pathlib import Path
 
 package = importlib.import_module("nanotron")
 package_path = Path(package.__file__).parent.parent.parent
 sys.path.append(str(package_path))
-
-from argparse import Namespace
 
 import nanotron.distributed as dist
 import torch
@@ -23,31 +22,34 @@ from tools.preprocess_data import main
 
 
 def create_dataset_paths(tmp_dir: str, quantity: int):
-    json_dataset_path = [os.path.join(tmp_dir, f"pytest_{i}") for i in range(quantity)]
-    mmap_dataset_path = [f"{path}_input_ids.npy" for path in json_dataset_path]
+    json_dataset_path = [os.path.join(tmp_dir, f"pytest_{i}.json") for i in range(quantity)]
+    datatrove_tokenized_dataset_paths = [os.path.join(tmp_dir, f"tokenized_documents_{i}") for i in range(quantity)]
 
-    return json_dataset_path, mmap_dataset_path
+    return json_dataset_path, datatrove_tokenized_dataset_paths
 
 
 def create_dummy_json_dataset(path_to_json: str, dummy_text: str, n_samples: int = 50000):
 
-    with open(path_to_json + ".json", "a") as json_file:
+    with open(path_to_json, "a") as json_file:
         for sample in range(n_samples):
             sample_dict = {"text": f"[{sample}] Hello! Im sample {sample}! And this is my dummy text: {dummy_text}"}
             json_file.write(json.dumps(sample_dict))
             json_file.write("\n")
 
 
-def preprocess_dummy_dataset(path_to_json: str, tokenizer: str):
+def preprocess_dummy_dataset(json_dataset_path: str, datatrove_tokenized_dataset_path: str, tokenizer: str):
     # Create args for preprocessing
     args = Namespace(
-        input=path_to_json + ".json",
+        readers="jsonl",
+        dataset=json_dataset_path,
         column="text",
-        output_prefix=path_to_json,
+        glob_pattern=None,
+        output_folder=datatrove_tokenized_dataset_path,
         tokenizer_name_or_path=tokenizer,
-        add_special_tokens=False,
+        eos_token=None,
+        n_tasks=1,
+        logging_dir=None,
     )
-
     # tools/preprocess_data.py main
     main(args)
 
@@ -122,7 +124,7 @@ def assert_nanoset_sync_across_all_ranks(nanoset: Nanoset, parallel_context: Par
     IDX_SAMPLE = 23
 
     nanoset_identifiers = OrderedDict()
-    nanoset_identifiers["dataset_paths"] = nanoset.dataset_paths
+    nanoset_identifiers["dataset_folders"] = nanoset.dataset_folders
     nanoset_identifiers["dataset_weights"] = nanoset.dataset_weights.tolist()
     nanoset_identifiers["sequence_length"] = nanoset.sequence_length
     nanoset_identifiers["train_split_num_samples"] = nanoset.train_split_num_samples
@@ -131,6 +133,7 @@ def assert_nanoset_sync_across_all_ranks(nanoset: Nanoset, parallel_context: Par
     nanoset_identifiers["input_ids"] = nanoset[IDX_SAMPLE]["input_ids"].tolist()
     nanoset_identifiers["dataset_index"] = nanoset.dataset_index.tolist()
     nanoset_identifiers["dataset_sample_index"] = nanoset.dataset_sample_index.tolist()
+    nanoset_identifiers["token_size"] = nanoset.token_size
 
     unique_description_hash = compute_hash(nanoset_identifiers)
     assert_tensor_synced_across_pg(
