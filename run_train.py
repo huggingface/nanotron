@@ -11,8 +11,9 @@ import argparse
 from typing import Dict, cast
 
 import numpy as np
+import os
 from nanotron import logging
-from nanotron.config import DataArgs, DatasetStageArgs, NanosetDatasetsArgs, PretrainDatasetsArgs
+from nanotron.config import DataArgs, DatasetStageArgs, NanosetDatasetsArgs, PretrainDatasetsArgs, MixteraDatasetArgs
 from nanotron.data.dataloader_builder import build_nanoset_dataloader
 from nanotron.dataloader import (
     clm_process,
@@ -40,6 +41,8 @@ except ImportError:
 
 logger = logging.get_logger(__name__)
 
+# Query execution in Mixtera takes long, and NCCL would time out otherwise.
+os.environ["NCCL_TIMEOUT"] = str(30 * 60 * 1000)
 
 def get_dataloader_from_data_stage(
     trainer: DistributedTrainer,
@@ -94,7 +97,7 @@ def get_dataloader_from_data_stage(
                 hf_dataset_or_datasets=data.dataset.hf_dataset_or_datasets,
                 hf_dataset_config_name=data.dataset.hf_dataset_config_name,
                 splits=data.dataset.hf_dataset_splits,
-                streaming_hf = True # Testing an IterableDataset
+                streaming_hf = data.dataset.use_streaming_interface
             )["train"]
 
             tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
@@ -174,6 +177,92 @@ def get_dataloader_from_data_stage(
         )
 
         return train_dataloader
+    
+    # Case 4: Mixtera
+    elif isinstance(data.dataset, MixteraDatasetArgs):
+        # Query execution in Mixtera takes long, and NCCL would time out otherwise.
+        os.environ["NCCL_TIMEOUT"] = str(30 * 60 * 1000)
+        tokenizer_path = trainer.config.tokenizer.tokenizer_name_or_path
+        log_rank(
+            f"Loading tokenizer from {tokenizer_path} and transformers/hf_hub versions {tf_version, hf_hub_version}",
+            logger=logger,
+            level=logging.INFO,
+            rank=0,
+        )
+        
+        from mixtera.hf import MixteraHFDataset
+        from mixtera.core.client import MixteraClient, QueryExecutionArgs, ResultStreamingArgs
+        from mixtera.core.query import Query, ArbitraryMixture
+
+        if data.dataset.port:
+            client = MixteraClient.from_remote(data.dataset.path, data.dataset.port)
+        else:
+            client = MixteraClient.from_directory(data.dataset.path)
+        
+        job_id = data.dataset.job_id
+        chunk_size = data.dataset.chunk_size
+        tunnel_via_server = data.dataset.tunnel_via_server
+        chunk_reading_degree_of_parallelism = data.dataset.chunk_reading_degree_of_parallelism
+        chunk_reading_per_window_mixture = data.dataset.chunk_reading_per_window_mixture
+        chunk_reading_window_size = data.dataset.chunk_reading_window_size
+
+        total_nodes = trainer.parallel_context.world_pg.size()
+        data_parallel_size = trainer.parallel_context.data_parallel_size
+        assert data_parallel_size == trainer.parallel_context.dp_pg.size(), f"num_nodes_per_dp_group = {data_parallel_size} != trainer.parallel_context.dp_pg.size() = {trainer.parallel_context.dp_pg.size()}"
+        assert total_nodes % data_parallel_size == 0, f"total_nodes = {total_nodes} is not a multiple of data_parallel_size = {data_parallel_size}"
+        nodes_per_dp_group = total_nodes // data_parallel_size
+        assert nodes_per_dp_group == trainer.parallel_context.mp_pg.size(), f"nodes_per_dp_group = {nodes_per_dp_group} != trainer.parallel_context.mp_pg.size() = {trainer.parallel_context.mp_pg.size()}"
+        dp_group_id = trainer.parallel_context.dp_pg.rank()
+        assert dp_group_id < nodes_per_dp_group, f"dp_group_id = {dp_group_id} NOT < nodes_per_dp_group = {nodes_per_dp_group}"
+        node_id = trainer.parallel_context.mp_pg.rank()
+        logger.info(f"There are {total_nodes} total nodes, {data_parallel_size} dp size => {nodes_per_dp_group} nodes per DP group. My dp group is {dp_group_id}, my node id is {node_id}")
+        assert node_id < nodes_per_dp_group, f"node_id = {node_id} NOT < nodes_per_dp_group = {nodes_per_dp_group}"
+
+        query_execution_args = QueryExecutionArgs(mixture=ArbitraryMixture(chunk_size), dp_groups=data_parallel_size, nodes_per_group=nodes_per_dp_group, num_workers=data.num_loading_workers)
+        streaming_args = ResultStreamingArgs(job_id=job_id, dp_group_id=dp_group_id, node_id=node_id, tunnel_via_server=tunnel_via_server, chunk_reading_degree_of_parallelism=chunk_reading_degree_of_parallelism, chunk_reading_per_window_mixture=chunk_reading_per_window_mixture, chunk_reading_window_size=chunk_reading_window_size)
+
+        query = Query.for_job(job_id)
+        if data.dataset.query is not None and data.dataset.query.strip() != "":
+            query = query.select(tuple(data.dataset.query.split(" ")))
+        else:
+            query = query.select(None)
+
+        raw_dataset = MixteraHFDataset(client, query, query_execution_args, streaming_args)
+
+        # The following is mostly copy&pasted from the huggingface case above, since `MixteraHFDataset` is a datasets.IterableDataset
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
+        tokenizer.pad_token = tokenizer.eos_token
+        tokenizer.padding_side = "left"
+
+        # Check that tokenizer's vocab size is smaller than the model's vocab size
+        assert (
+            tokenizer.vocab_size <= trainer.model_config.vocab_size
+        ), f"Tokenizer's vocab size ({tokenizer.vocab_size}) is larger than the model's vocab size ({trainer.model_config.vocab_size})"
+
+        # We apply the Causal Language Modeling preprocessing
+        train_dataset = clm_process(
+            raw_dataset=raw_dataset,
+            tokenizer=tokenizer,
+            text_column_name="text", # by MixteraHFDataset implementation
+            dataset_processing_num_proc_per_process=-1, # will be ignored
+            dataset_overwrite_cache=False, # will be ignored
+            sequence_length=trainer.sequence_length,
+        )
+
+        # We load the processed dataset on the ranks requiring it
+        dataloader = get_train_dataloader(
+            train_dataset=train_dataset,
+            sequence_length=trainer.sequence_length,
+            parallel_context=trainer.parallel_context,
+            input_pp_rank=input_pp_rank,
+            output_pp_rank=output_pp_rank,
+            micro_batch_size=trainer.micro_batch_size,
+            consumed_train_samples=consumed_train_samples, # TODO the whole restarting/checkpoint thing is not supported currently in Mixtera. Not sure what happens currently.
+            dataloader_num_workers=data.num_loading_workers,
+            seed_worker=data.seed,
+            dataloader_drop_last=True,
+        )
+
     else:
         raise ValueError(f"Unhandled case of `self.config.data.dataset`. Got: {data.dataset}")
 

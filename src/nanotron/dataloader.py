@@ -449,7 +449,9 @@ def get_sampler(
     # Build the sampler.
     # TODO @nouamanetazi: Support group_by_length: https://github.com/huggingface/transformers/blob/47e1676255e5dd86b9541f734cd4f4bdcbb50f4a/src/transformers/trainer.py#L783-L810
     if isinstance(train_dataset, IterableDataset):
-        # It's the task of the iterabledataset to use the rank info correctly.
+        # It's the task of the IterableDataset to use the rank info correctly.
+        # This currently is implemented correctly for Mixtera, but when using hf IterableDataset, this currently is wrong
+        # since we need to drop samples here.
         return None
     
     if use_loop_to_round_batch_size:

@@ -83,6 +83,7 @@ class PretrainDatasetsArgs:
     dataset_processing_num_proc_per_process: Optional[int] = 1
     dataset_overwrite_cache: Optional[bool] = False
     text_column_name: Optional[str] = None
+    use_streaming_interface: bool = False
 
     def __post_init__(self):
         if self.text_column_name is None:
@@ -106,12 +107,23 @@ class NanosetDatasetsArgs:
             self.dataset_path = list(tmp_dataset_path.keys())
             self.dataset_weights = list(tmp_dataset_path.values())
 
+@dataclass
+class MixteraDatasetArgs:
+    path: Union[str, Path]
+    port: Optional[int]
+    job_id: str
+    chunk_size: int
+    tunnel_via_server: bool
+    query: None | str = ""
+    chunk_reading_degree_of_parallelism: int = 0
+    chunk_reading_per_window_mixture: bool = False
+    chunk_reading_window_size: int = 128
 
 @dataclass
 class DataArgs:
     """Arguments related to the data and data files processing"""
 
-    dataset: Union[PretrainDatasetsArgs, NanosetDatasetsArgs]
+    dataset: Union[PretrainDatasetsArgs, NanosetDatasetsArgs, MixteraDatasetArgs]
     seed: Optional[int]
     num_loading_workers: Optional[int] = 1
 
