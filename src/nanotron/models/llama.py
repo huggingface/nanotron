@@ -358,7 +358,7 @@ class CoreAttention(nn.Module):
 
         # NOTE: this scale is for µTransfer,
         # in SP, we use sqrt(1/d_h)
-        1 / query_states.shape[-1] if self.is_using_mup else None
+        # 1 / query_states.shape[-1] if self.is_using_mup else None
         # attn_output = flash_attn_varlen_func(
         #     q=query_states,
         #     k=key_states,
@@ -416,6 +416,24 @@ class CoreAttention(nn.Module):
                 )
 
         return attn_output
+
+
+class CohereLayerNorm(nn.Module):
+    def __init__(self, hidden_size=None, eps=1e-5, bias=False):
+        """The hidden size can be a tuple or an int. The tuple is used for QKNorm to normalize across head_dim"""
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(hidden_size))
+        self.variance_epsilon = eps
+
+    def forward(self, hidden_states):
+        input_dtype = hidden_states.dtype
+        hidden_states = hidden_states.to(torch.float32)
+        mean = hidden_states.mean(-1, keepdim=True)
+        variance = (hidden_states - mean).pow(2).mean(-1, keepdim=True)
+        hidden_states = (hidden_states - mean) * torch.rsqrt(variance + self.variance_epsilon)
+        # hidden_states = self.weight.to(torch.float32) * hidden_states
+        hidden_states = self.weight.data * hidden_states
+        return hidden_states.to(input_dtype)
 
 
 def pad_to_right(tensor, mask, new_tensor=None):
@@ -552,6 +570,18 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         self.prefill_kv_len = (
             config.max_position_embeddings
         )  # TODO @nouamane: compute based on free memory, because in rope we can surpass max_position_embeddings
+
+        if constants.CONFIG.fp8.qk_norm is True or constants.CONFIG.fp8.qk_norm_before_pos is True:
+            # self.q_norm = nn.LayerNorm(normalized_shape=(config.num_attention_heads, self.d_qk), eps=constants.CONFIG.model.model_config.rms_norm_eps)
+            # self.k_norm = nn.LayerNorm(normalized_shape=(config.num_key_value_heads, self.d_qk), eps=constants.CONFIG.model.model_config.rms_norm_eps)
+            self.q_norm = CohereLayerNorm(
+                hidden_size=(config.num_attention_heads, self.d_qk),
+                eps=constants.CONFIG.model.model_config.rms_norm_eps,
+            )
+            self.k_norm = CohereLayerNorm(
+                hidden_size=(config.num_key_value_heads, self.d_qk),
+                eps=constants.CONFIG.model.model_config.rms_norm_eps,
+            )
 
     def forward(
         self,
@@ -767,6 +797,10 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             # NOTE: The layout is different from models/llama.py which is [batch_size, num_heads, seq_length, d_qk]
             # Here it is, [batch_size, seq_length, num_heads, d_qk]
             # [2, batch_size, seq_length, num_heads, d_qk]
+            if constants.CONFIG.fp8.qk_norm_before_pos is True:
+                query_states = self.q_norm(query_states)
+                key_states = self.k_norm(key_states)
+
             key_value_states = torch.cat([key_states.unsqueeze(0), value_states.unsqueeze(0)], dim=0)
             # [batch_size, seq_length, 2, num_heads, d_qk]
             key_value_states = key_value_states.permute(1, 2, 0, 3, 4).contiguous()
@@ -790,6 +824,10 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             value_states = value_states.view(
                 batch_size * kv_length, self.n_local_kv_heads, self.d_v
             )  # [batch_size * kv_length, self.n_heads, d_v]
+
+            if constants.CONFIG.fp8.qk_norm is True:
+                query_states = self.q_norm(query_states)
+                key_states = self.k_norm(key_states)
 
             attention_output = self.attention(
                 query_states=query_states,

@@ -540,7 +540,6 @@ class DistributedTrainer:
 
                         # NOTE: save the detailed logs, path/{run_name}/{iteration_step}/logs.json
 
-
                         # DEBUG_SAVE_PATH = DEBUG_SAVE_PATH.format(self.config.general.run, self.iteration_step)
 
                         # debug_save_path = get_debug_save_path(self.config.general.run, self.iteration_step)

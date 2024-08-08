@@ -50,6 +50,8 @@ class Parametrizator:
 class StandardParametrizator(Parametrizator):
     def __init__(self, config: ModelArgs):
         super().__init__(config)
+        from nanotron.models.llama import CohereLayerNorm
+
         self.MODULE_TO_PARAMETRIZE = {
             TensorParallelColumnLinear: self._parametrize_column_linear,
             TensorParallelRowLinear: self._parametrize_row_linear,
@@ -57,6 +59,7 @@ class StandardParametrizator(Parametrizator):
             FP8TensorParallelRowLinear: self._parametrize_row_linear,
             TritonRMSNorm: self._parametrize_layer_norm,
             nn.LayerNorm: self._parametrize_layer_norm,
+            CohereLayerNorm: self._parametrize_layer_norm,
             TensorParallelEmbedding: self._parametrize_embedding,
         }
 
