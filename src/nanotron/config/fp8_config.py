@@ -38,7 +38,10 @@ DEFAULT_GENERATION_SEED = 42
 #     accumulate: FP8Accumulate
 @dataclass
 class FP8LayerArgs(FP8LinearRecipe):
-    module_name: str
+    module_name: Optional[str] = None
+
+    def __post_init__(self):
+        assert self.module_name is not None, "module_name must be specified"
 
 
 @dataclass
@@ -62,8 +65,11 @@ class FP8Args:
     qk_norm: bool = False
     qk_norm_before_pos: bool = False
 
-    smooth_quant: bool = False
+    smooth_quant: Optional[bool] = None
     stochastic_rounding: bool = False
+    update_clipping: bool = False
+    skip_param_update_if_nan: bool = False
 
     def __post_init__(self):
-        pass
+        assert 1 == 1
+        # NOTE: if not specified model, then we based on smooth_quant as the global setting

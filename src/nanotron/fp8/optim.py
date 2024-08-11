@@ -447,7 +447,16 @@ class FP8Adam(Optimizer):
 
                 if is_overflow_underflow_nan(fp32_grad):
                     self._is_overflow = True
-                    raise ValueError("Overflow, underflow, or NaN detected in the gradients")
+
+                    if constants.CONFIG.fp8.skip_param_update_if_nan is True:
+                        log_rank(
+                            f"[Optim] param_name={p_name}, skipping update due to overflow/underflow/nan",  # noqa
+                            logger=logger,
+                            level=logging.INFO,
+                        )
+                        continue
+                    else:
+                        raise ValueError("Overflow, underflow, or NaN detected in the gradients")
 
                 fp32_exp_avg, fp32_exp_avg_sq = state["exp_avg"], state["exp_avg_sq"]
                 assert fp32_exp_avg.dtype == self.optim_accum_dtype
@@ -511,7 +520,7 @@ class FP8Adam(Optimizer):
                 #     rank=0,
                 # )
 
-                if constants.CONFIG.optimizer.update_clipping is True:
+                if constants.CONFIG.fp8.update_clipping is True:
                     if rms > 1:
                         # NOTE: only scale down the lr, not scale it up
                         update_lr = lr / torch.max(torch.tensor(1.0, dtype=self.optim_accum_dtype, device="cuda"), rms)

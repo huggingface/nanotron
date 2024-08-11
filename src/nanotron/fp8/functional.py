@@ -97,14 +97,8 @@ def linear(
     recipe: FP8LinearRecipe = None,
     name: Optional[str] = None,
 ):
-    if recipe.actsmooth is True:
-        _orig_input = input
-        _orig_weight = weight
+    if recipe.smooth_quant is True:
         input, weight = smooth_quant(input, weight)
-
-        # input.requires_grad = _orig_input.requires_grad
-        # if input.requires_grad:
-        #     input.grad_fn = _orig_input.grad_fn
 
     # assert accum_qtype is not None, "accum_qtype must be specified"
     assert metadatas is not None, "metadatas must be specified"

@@ -4,6 +4,7 @@ import torch
 import transformer_engine as te  # noqa
 from torch import nn
 
+from nanotron import logging
 from nanotron.config import Config
 from nanotron.config.fp8_config import FP8LayerArgs
 from nanotron.fp8.constants import FP8_GPU_NAMES, FP8LM_RECIPE, QTYPE_TO_DTYPE
@@ -11,6 +12,9 @@ from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.linear import FP8Linear
 from nanotron.fp8.meta import FP8Meta
 from nanotron.fp8.parameter import FP8Parameter
+from nanotron.logging import log_rank
+
+logger = logging.get_logger(__name__)
 
 
 def is_fp8_available() -> bool:
@@ -249,7 +253,18 @@ def find_fp8_config_by_module_name(config: Config, target_module_name: str) -> O
                 return None
             else:
                 # NOTE: return default recipe
-                return FP8LM_LINEAR_RECIPE
+                # NOTE: based on the global setting smooth_quant to decide whether to do smooth quantization
+                # or not
+                recipe = FP8LM_LINEAR_RECIPE
+                recipe.smooth_quant = config.fp8.smooth_quant
+                log_rank(
+                    f"target_module_name={target_module_name}, smooth_quant={recipe.smooth_quant}",
+                    logger=logger,
+                    level=logging.INFO,
+                    rank=0,
+                )
+
+                return recipe
     return None
 
 

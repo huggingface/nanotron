@@ -50,7 +50,7 @@ class FP8LinearRecipe:
     # we should hide this from high-level apis later on
     split_accumulator: FP8SplitAccumulator
     accumulate: FP8Accumulate
-    actsmooth: bool = False
+    smooth_quant: bool = False
 
 
 @dataclass

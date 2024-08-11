@@ -473,12 +473,12 @@ class DistributedTrainer:
             for self.iteration_step in range(self.metadata.last_train_step + 1, self.config.tokens.train_steps + 1):
                 from nanotron import constants
 
-                is_ready_to_log = (
-                    ((self.iteration_step - 1) % self.config.logging.iteration_step_info_interval == 0)
-                    and (self.config.logging.monitor_model_states is True)
-                    and (dist.get_rank(self.parallel_context.world_pg) == 0)
-                )
+                is_ready_for_normal_log = (
+                    (self.iteration_step - 1) % self.config.logging.iteration_step_info_interval == 0
+                ) and (dist.get_rank(self.parallel_context.world_pg) == 0)
+                is_ready_to_log = is_ready_for_normal_log and self.config.logging.monitor_model_states is True
 
+                self.is_ready_for_normal_log = is_ready_for_normal_log
                 constants.is_ready_to_log = is_ready_to_log
 
                 if isinstance(prof, torch.profiler.profile):
@@ -510,9 +510,9 @@ class DistributedTrainer:
                     self.metadata.last_stage_idx
                 ].consumed_train_samples += self.global_batch_size
 
-                if is_ready_to_log is True:
-                    self.train_step_logs(outputs=outputs, loss_avg=loss_avg)
+                self.train_step_logs(outputs=outputs, loss_avg=loss_avg)
 
+                if is_ready_to_log is True:
                     if (
                         self.config.logging.monitor_model_states is True
                         and dist.get_rank(self.parallel_context.world_pg) == 0
@@ -752,7 +752,9 @@ class DistributedTrainer:
                 )
 
             # NOTE: only one rank writes to wandb
-            if dist.get_rank(self.parallel_context.world_pg) == 0 and wandb is not None:
+
+            # if dist.get_rank(self.parallel_context.world_pg) == 0 and wandb is not None:
+            if self.is_ready_for_normal_log is True:
                 wandb.log(
                     {
                         **{log_item.tag: log_item.scalar_value for log_item in log_entries},
