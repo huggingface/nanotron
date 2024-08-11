@@ -97,10 +97,7 @@ def linear(
     recipe: FP8LinearRecipe = None,
     name: Optional[str] = None,
 ):
-    assert 1 == 1
-    from nanotron.constants import CONFIG
-
-    if CONFIG.fp8.smooth_quant:
+    if recipe.actsmooth is True:
         _orig_input = input
         _orig_weight = weight
         input, weight = smooth_quant(input, weight)

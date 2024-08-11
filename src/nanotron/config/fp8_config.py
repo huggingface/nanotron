@@ -39,7 +39,6 @@ DEFAULT_GENERATION_SEED = 42
 @dataclass
 class FP8LayerArgs(FP8LinearRecipe):
     module_name: str
-    actsmooth: Optional[bool] = None
 
 
 @dataclass
