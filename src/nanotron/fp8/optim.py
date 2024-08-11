@@ -30,6 +30,25 @@ from nanotron.parallel.parameters import (
 logger = logging.get_logger(__name__)
 
 
+def copy_stochastic_(target: torch.Tensor, source: torch.Tensor):
+    # create a random 16 bit integer
+    result = torch.randint_like(
+        source,
+        dtype=torch.int32,
+        low=0,
+        high=(1 << 16),
+    )
+
+    # add the random number to the lower 16 bit of the mantissa
+    result.add_(source.view(dtype=torch.int32))
+
+    # mask off the lower 16 bit of the mantissa
+    result.bitwise_and_(-65536)  # -65536 = FFFF0000 as a signed int32
+
+    # copy the higher 16 bit into the target tensor
+    target.copy_(result.view(dtype=torch.float32))
+
+
 class Adam(Optimizer):
     r"""Implements Adam algorithm.
     It has been proposed in `Adam: A Method for Stochastic Optimization`_.
@@ -109,27 +128,24 @@ class Adam(Optimizer):
                 # grad = get_grad_from_parameter(p)
                 grad = get_grad_from_parameter(p)
 
-                from nanotron import constants
-                from nanotron.constants import get_debug_save_path
-
                 # if constants.is_ready_to_log is True and constants.CONFIG.logging.monitor_model_states is True:
-                if constants.is_ready_to_log is True:
-                    # debug_save_path = constants.DEBUG_SAVE_PATH.format(constants.CONFIG.general.run, constants.ITERATION_STEP)
-                    debug_save_path = get_debug_save_path(constants.CONFIG.general.run, constants.ITERATION_STEP)
+                # if constants.is_ready_to_log is True:
+                #     # debug_save_path = constants.DEBUG_SAVE_PATH.format(constants.CONFIG.general.run, constants.ITERATION_STEP)
+                #     debug_save_path = get_debug_save_path(constants.CONFIG.general.run, constants.ITERATION_STEP)
 
-                    torch.save(grad, f"{debug_save_path}/{self.params_id_to_param_names[id(p)]}_before_update_grad.pt")
-                    torch.save(
-                        data, f"{debug_save_path}/{self.params_id_to_param_names[id(p)]}_before_update_weight.pt"
-                    )
+                #     torch.save(grad, f"{debug_save_path}/{self.params_id_to_param_names[id(p)]}_before_update_grad.pt")
+                #     torch.save(
+                #         data, f"{debug_save_path}/{self.params_id_to_param_names[id(p)]}_before_update_weight.pt"
+                #     )
 
                 assert isinstance(grad, torch.Tensor)
 
                 exp_avg, exp_avg_sq = state["exp_avg"], state["exp_avg_sq"]
                 beta1, beta2 = group["betas"]
 
-                if group["weight_decay"] != 0:
-                    # grad = grad.add(group["weight_decay"], data)
-                    grad = grad + group["weight_decay"] * data
+                # if group["weight_decay"] != 0:
+                #     # grad = grad.add(group["weight_decay"], data)
+                #     grad = grad + group["weight_decay"] * data
 
                 # Decay the first and second moment running average coefficient
                 # exp_avg.mul_(beta1).add_(1 - beta1, grad)
@@ -174,19 +190,19 @@ class Adam(Optimizer):
                 state["exp_avg_sq"] = exp_avg_sq
                 state["step"] = step
 
-                loggings[p]["hp_grad"] = compute_stas(grad)
-                loggings[p]["hp_p"] = compute_stas(p)
-                loggings[p]["group:lr"] = {"value": lr}
-                loggings[p]["group:eps"] = {"value": group["eps"]}
-                loggings[p]["hp_exp_avg"] = compute_stas(exp_avg)
-                loggings[p]["hp_exp_avg_sq"] = compute_stas(exp_avg_sq)
-                loggings[p]["group:beta1"] = {"value": beta1}
-                loggings[p]["group:beta2"] = {"value": beta2}
+                # loggings[p]["hp_grad"] = compute_stas(grad)
+                # loggings[p]["hp_p"] = compute_stas(p)
+                # loggings[p]["group:lr"] = {"value": lr}
+                # loggings[p]["group:eps"] = {"value": group["eps"]}
+                # loggings[p]["hp_exp_avg"] = compute_stas(exp_avg)
+                # loggings[p]["hp_exp_avg_sq"] = compute_stas(exp_avg_sq)
+                # loggings[p]["group:beta1"] = {"value": beta1}
+                # loggings[p]["group:beta2"] = {"value": beta2}
 
-                loggings[p]["bias_correction1"] = {"value": bias_correction1}
-                loggings[p]["bias_correction2"] = {"value": bias_correction2}
-                loggings[p]["denom"] = compute_stas(denom)
-                loggings[p]["normalized_grad"] = compute_stas(normalized_grad)
+                # loggings[p]["bias_correction1"] = {"value": bias_correction1}
+                # loggings[p]["bias_correction2"] = {"value": bias_correction2}
+                # loggings[p]["denom"] = compute_stas(denom)
+                # loggings[p]["normalized_grad"] = compute_stas(normalized_grad)
 
         self.loggings = loggings
 
@@ -496,14 +512,17 @@ class FP8Adam(Optimizer):
                 # )
 
                 if constants.CONFIG.optimizer.update_clipping is True:
-                    update_lr = lr / torch.max(torch.tensor(1.0, dtype=self.optim_accum_dtype, device="cuda"), rms)
                     if rms > 1:
+                        # NOTE: only scale down the lr, not scale it up
+                        update_lr = lr / torch.max(torch.tensor(1.0, dtype=self.optim_accum_dtype, device="cuda"), rms)
                         log_rank(
                             f"[Gradient clipping] param_name={p_name}, grad_norm: {fp32_grad.norm(p=2)}, RMS is {rms}, original lr is {lr}, new lr is {update_lr}",  # noqa
                             logger=logger,
                             level=logging.INFO,
                             rank=0,
                         )
+                    else:
+                        update_lr = lr
                 else:
                     update_lr = lr
 
@@ -542,13 +561,20 @@ class FP8Adam(Optimizer):
                     )
 
                 else:
-                    new_fp16 = (
-                        new_fp32_data.to(non_fp8_accum_dtype)
-                        if new_fp32_data.dtype != non_fp8_accum_dtype
-                        else new_fp32_data
-                    )
+                    if constants.CONFIG.fp8.stochastic_rounding is True:
+                        assert non_fp8_accum_dtype is torch.bfloat16, "only support stochastic rounding for bfloat16"
+                        new_fp16 = torch.full_like(new_fp32_data, 0.0, dtype=non_fp8_accum_dtype)
+                        copy_stochastic_(target=new_fp16, source=new_fp32_data)
+                    else:
+                        new_fp16 = (
+                            new_fp32_data.to(non_fp8_accum_dtype)
+                            if new_fp32_data.dtype != non_fp8_accum_dtype
+                            else new_fp32_data
+                        )
+
                     new_fp16.requires_grad = True
                     p.data = new_fp16
+
                     assert get_data_from_param(p) is new_fp16
 
                     torch.testing.assert_allclose(get_data_from_param(p), new_fp16)

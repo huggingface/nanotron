@@ -39,6 +39,7 @@ DEFAULT_GENERATION_SEED = 42
 @dataclass
 class FP8LayerArgs(FP8LinearRecipe):
     module_name: str
+    actsmooth: Optional[bool] = None
 
 
 @dataclass
@@ -61,3 +62,9 @@ class FP8Args:
 
     qk_norm: bool = False
     qk_norm_before_pos: bool = False
+
+    smooth_quant: bool = False
+    stochastic_rounding: bool = False
+
+    def __post_init__(self):
+        pass

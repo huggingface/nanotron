@@ -68,6 +68,26 @@ def addmm(
     return out
 
 
+def smooth_quant(input, weight, alpha=0.5):
+    # Compute smoothing factor
+    # s = torch.max(torch.abs(X), dim=-1)[0].pow(alpha) / torch.max(torch.abs(W), dim=-1)[0].pow(1-alpha)
+    input_s = torch.amax(torch.abs(input), dim=(0, 1), keepdim=True)
+    w_s = torch.amax(torch.abs(weight._orig_data_after_set_data), dim=0)
+
+    s = input_s.squeeze().pow(0.5) / w_s.pow(1 - 0.5)
+
+    # Apply smoothing
+    X_smoothed = input.detach() / s.unsqueeze(dim=0).unsqueeze(dim=0)
+    # X_smoothed.requires_grad = input.requires_grad
+    X_smoothed.requires_grad_()
+
+    with torch.no_grad():
+        W_smoothed = weight._orig_data_after_set_data * s.unsqueeze(0)
+    weight.set_data(W_smoothed)
+
+    return X_smoothed, weight
+
+
 def linear(
     input: torch.Tensor,
     weight: FP8Tensor,
@@ -77,6 +97,18 @@ def linear(
     recipe: FP8LinearRecipe = None,
     name: Optional[str] = None,
 ):
+    assert 1 == 1
+    from nanotron.constants import CONFIG
+
+    if CONFIG.fp8.smooth_quant:
+        _orig_input = input
+        _orig_weight = weight
+        input, weight = smooth_quant(input, weight)
+
+        # input.requires_grad = _orig_input.requires_grad
+        # if input.requires_grad:
+        #     input.grad_fn = _orig_input.grad_fn
+
     # assert accum_qtype is not None, "accum_qtype must be specified"
     assert metadatas is not None, "metadatas must be specified"
     assert recipe is not None, "recipe must be specified"

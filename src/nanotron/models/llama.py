@@ -300,7 +300,7 @@ def self_attention_with_causal_mask(
     raw_attn_probs = F.softmax(attn_weights, dim=-1)
     from nanotron.constants import CONFIG
 
-    if CONFIG.fp8.clipped_softmax is True:
+    if CONFIG.fp8 is not None and CONFIG.fp8.clipped_softmax is True:
         zeta = CONFIG.fp8.clipped_softmax_zeta
         gamma = CONFIG.fp8.clipped_softmax_gamma
         attn_probs = torch.clip((zeta - gamma) * raw_attn_probs + gamma, 0.0, 1.0)
@@ -408,7 +408,7 @@ class CoreAttention(nn.Module):
 
             from nanotron.constants import CONFIG
 
-            if CONFIG.fp8.clipped_softmax is True:
+            if CONFIG.fp8 is not None and CONFIG.fp8.clipped_softmax is True:
                 clipped_attn_entropy = calculate_attention_entropy(attn_probs).mean()
                 log_to_nn_state_dict(
                     f"model.decoder.{self.layer_idx}.pp_block.attn.clipped_attn_entropy",
@@ -571,7 +571,9 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             config.max_position_embeddings
         )  # TODO @nouamane: compute based on free memory, because in rope we can surpass max_position_embeddings
 
-        if constants.CONFIG.fp8.qk_norm is True or constants.CONFIG.fp8.qk_norm_before_pos is True:
+        if constants.CONFIG.fp8 is not None and (
+            constants.CONFIG.fp8.qk_norm is True or constants.CONFIG.fp8.qk_norm_before_pos is True
+        ):
             # self.q_norm = nn.LayerNorm(normalized_shape=(config.num_attention_heads, self.d_qk), eps=constants.CONFIG.model.model_config.rms_norm_eps)
             # self.k_norm = nn.LayerNorm(normalized_shape=(config.num_key_value_heads, self.d_qk), eps=constants.CONFIG.model.model_config.rms_norm_eps)
             self.q_norm = CohereLayerNorm(
@@ -797,7 +799,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             # NOTE: The layout is different from models/llama.py which is [batch_size, num_heads, seq_length, d_qk]
             # Here it is, [batch_size, seq_length, num_heads, d_qk]
             # [2, batch_size, seq_length, num_heads, d_qk]
-            if constants.CONFIG.fp8.qk_norm_before_pos is True:
+            if constants.CONFIG.fp8 is not None and constants.CONFIG.fp8.qk_norm_before_pos is True:
                 query_states = self.q_norm(query_states)
                 key_states = self.k_norm(key_states)
 
@@ -825,7 +827,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                 batch_size * kv_length, self.n_local_kv_heads, self.d_v
             )  # [batch_size * kv_length, self.n_heads, d_v]
 
-            if constants.CONFIG.fp8.qk_norm is True:
+            if constants.CONFIG.fp8 is not None and constants.CONFIG.fp8.qk_norm is True:
                 query_states = self.q_norm(query_states)
                 key_states = self.k_norm(key_states)
 
@@ -875,7 +877,7 @@ class LlamaDecoderLayer(nn.Module):
 
         from nanotron.constants import CONFIG
 
-        if CONFIG.fp8.layer_scale is True:
+        if CONFIG.fp8 is not None and CONFIG.fp8.layer_scale is True:
             if CONFIG.fp8.layer_scale_init == "zeros":
                 attn_layer_scale_init = torch.zeros(config.hidden_size)
                 mlp_layer_scale_init = torch.zeros(config.hidden_size)
@@ -916,7 +918,7 @@ class LlamaDecoderLayer(nn.Module):
                 {"value": hidden_states.norm(p=2) / residual.norm(p=2)},
             )
 
-        if CONFIG.fp8.layer_scale is True:
+        if CONFIG.fp8 is not None and CONFIG.fp8.layer_scale is True:
             hidden_states = hidden_states * rearrange(self.attn_layer_scale.data, "f -> 1 1 f")
             if constants.is_ready_to_log is True:
                 # NN_STATES[f"model.decoder.{self.layer_idx}.pp_block.attn.layerscale"] = {"absmax": self.attn_layer_scale.abs().max()}
@@ -955,7 +957,7 @@ class LlamaDecoderLayer(nn.Module):
 
         from nanotron.constants import CONFIG
 
-        if CONFIG.fp8.layer_scale is True:
+        if CONFIG.fp8 is not None and CONFIG.fp8.layer_scale is True:
             hidden_states = hidden_states * rearrange(self.mlp_layer_scale.data, "f -> 1 1 f")
 
             if constants.is_ready_to_log is True:

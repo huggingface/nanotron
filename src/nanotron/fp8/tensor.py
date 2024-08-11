@@ -128,6 +128,7 @@ class LowPrecisionTensor(torch.Tensor):
             quantized_data = self.__class__(data, dtype=self.fp8_meta.dtype, interval=self.fp8_meta.interval)
 
         self.data = quantized_data.data
+        self._orig_data_after_set_data = data
 
         if constants.ITERATION_STEP == 1:
             self.orig_data = quantized_data.orig_data

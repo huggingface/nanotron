@@ -588,20 +588,19 @@ class DistributedTrainer:
             ), "No fp32_grads_allreduce_handle maybe you're using only a single training process"
             self.grad_accumulator.fp32_grads_allreduce_handle.wait()
 
-        from nanotron.parallel.data_parallel.utils import sync_gradients_across_dp
         from nanotron.parallel.tied_parameters import sync_tied_weights_gradients
 
         # Sync tied weights
-        if not isinstance(self.model, DistributedDataParallel):
-            # Manually sync across DP if it's not handled by DDP
-            sync_gradients_across_dp(
-                module=self.model,
-                dp_pg=self.parallel_context.dp_pg,
-                reduce_op=dist.ReduceOp.AVG,
-                # TODO @thomasw21: This is too memory hungry, instead we run all_reduce
-                reduce_scatter=False,  # optimizer.inherit_from(ZeroDistributedOptimizer),
-                grad_accumulator=self.grad_accumulator,
-            )
+        # if not isinstance(self.model, DistributedDataParallel):
+        #     # Manually sync across DP if it's not handled by DDP
+        #     sync_gradients_across_dp(
+        #         module=self.model,
+        #         dp_pg=self.parallel_context.dp_pg,
+        #         reduce_op=dist.ReduceOp.AVG,
+        #         # TODO @thomasw21: This is too memory hungry, instead we run all_reduce
+        #         reduce_scatter=False,  # optimizer.inherit_from(ZeroDistributedOptimizer),
+        #         grad_accumulator=self.grad_accumulator,
+        #     )
 
         # TODO @nouamane: Put this in hooks so we can overlap communication with gradient computation on the last backward pass.
         sync_tied_weights_gradients(

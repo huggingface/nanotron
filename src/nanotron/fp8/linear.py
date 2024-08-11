@@ -80,6 +80,7 @@ class FP8Linear(nn.Linear):
         # return F.linear(
         #     input=input, weight=self.weight.data, bias=self.bias, metadatas=self.metadatas, recipe=self.recipe
         # )
+
         return F.linear(
             input=input,
             weight=get_data_from_param(self.weight),
