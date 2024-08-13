@@ -32,9 +32,7 @@ def all_gather(
     group: dist.ProcessGroup,
     async_op: bool = False,
 ) -> torch.Tensor:
-    # tensor = tensor.data if tensor.__class__ == FP8Parameter else tensor
     tensor = get_data_from_param(tensor) if tensor.__class__ == NanotronParameter else tensor
-    # assert isinstance(tensor, FP8Tensor) if isinstance(tensor, FP8Tensor) else isinstance(tensor, torch.Tensor)
 
     if tensor.__class__ == FP8Tensor:
         # TODO(xrsrke): convert to the dtype of the first tensor in the list

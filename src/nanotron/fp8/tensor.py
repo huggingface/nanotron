@@ -48,24 +48,6 @@ class LowPrecisionTensor(torch.Tensor):
 
         return obj
 
-    # @property
-    # def data(self) -> torch.Tensor:
-    #     # return self.__dict__['data']
-    #     return super().data
-
-    # @data.setter
-    # def data(self, data: Union[torch.Tensor, FP8Tensor]):
-    #     assert isinstance(data, FP8Tensor)
-    #     assert data.dtype == self.dtype, "The data must have the same dtype as the tensor"
-    #     self.__dict__['data'] = data.data
-    #     self.fp8_meta = data.fp8_meta
-
-    # def __setattr__(self, __name: str, __value: torch.Any) -> None:
-    #     if __name == "data":
-    #         assert 1 == 1
-
-    #     return super().__setattr__(__name, __value)
-
     @staticmethod
     def _get_metadata(tensor: torch.Tensor, dtype: DTypes, interval: int) -> "FP8Meta":
         # TODO(xrsrke): there is a circular import issue
@@ -139,17 +121,11 @@ class LowPrecisionTensor(torch.Tensor):
     @torch.no_grad()
     def from_metadata(data: torch.Tensor, metadata: "FP8Meta") -> Union[FP8Tensor, FP16Tensor]:
         assert isinstance(data, (FP8Tensor, torch.Tensor)), "data must be a torch.Tensor or a FP8Tensor"
-        # if data.__class__ in [FP8Tensor, FP16Tensor]:
-        #     assert data.dtype == self.data.dtype, "The data must have the same dtype as the tensor, got {data.dtype}"
-        #     quantized_data = data
-        # else:
-        # metadata = deepcopy(metadata)
         # NOTE: don't do deepcopy, because we reuse the same metadata
         # for other iterations in fp8linear
         metadata.add_amax(data.abs().max().clone())
 
         quantized_data = FP8Tensor(data, metadata.dtype, metadata.interval, fp8_meta=metadata)
-        # quantized_data.fp8_meta = metadata
         return quantized_data
 
     def transpose_fp8(self) -> FP8Tensor:
@@ -185,9 +161,6 @@ class FP8Tensor(LowPrecisionTensor):
 
         tensor = tensor.contiguous()
         return convert_tensor_to_fp8(tensor, fp8_meta)
-
-    # def to(self, dtype: Union[torch.float16, torch.float32]):
-    #     assert dtype in [torch.float16, torch.float32], "FP8Tensor only supports casting to FP16 or FP32"
 
 
 class FP16Tensor(LowPrecisionTensor):

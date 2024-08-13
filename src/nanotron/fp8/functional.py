@@ -1,4 +1,4 @@
-from typing import Optional, Union
+from typing import Optional, Tuple, Union
 
 import torch
 
@@ -68,17 +68,20 @@ def addmm(
     return out
 
 
-def smooth_quant(input, weight, alpha=0.5):
+def smooth_quant(input: torch.Tensor, weight: FP8Tensor, alpha: float) -> Tuple[torch.Tensor, FP8Tensor]:
+    """
+    An implementation of SmoothQuant: Accurate and Efficient Post-Training Quantization for Large Language Models
+    https://arxiv.org/abs/2211.10438
+    """
     # Compute smoothing factor
-    # s = torch.max(torch.abs(X), dim=-1)[0].pow(alpha) / torch.max(torch.abs(W), dim=-1)[0].pow(1-alpha)
     input_s = torch.amax(torch.abs(input), dim=(0, 1), keepdim=True)
     w_s = torch.amax(torch.abs(weight._orig_data_after_set_data), dim=0)
 
-    s = input_s.squeeze().pow(0.5) / w_s.pow(1 - 0.5)
+    s = input_s.squeeze().pow(alpha) / w_s.pow(1 - alpha)
 
-    # Apply smoothing
+    # NOTE: create a smoothed tensor without adding the smoothing operations
+    # to computational graph, and keep the original computational graph
     X_smoothed = input.detach() / s.unsqueeze(dim=0).unsqueeze(dim=0)
-    # X_smoothed.requires_grad = input.requires_grad
     X_smoothed.requires_grad_()
 
     with torch.no_grad():
@@ -92,19 +95,16 @@ def linear(
     input: torch.Tensor,
     weight: FP8Tensor,
     bias: Optional[torch.Tensor] = None,
-    # accum_qtype: DTypes = None,
     metadatas: FP8LinearMeta = None,
     recipe: FP8LinearRecipe = None,
     name: Optional[str] = None,
 ):
     if recipe.smooth_quant is True:
-        input, weight = smooth_quant(input, weight)
+        input, weight = smooth_quant(input, weight, alpha=0.5)
 
-    # assert accum_qtype is not None, "accum_qtype must be specified"
     assert metadatas is not None, "metadatas must be specified"
     assert recipe is not None, "recipe must be specified"
     assert input.device != torch.device("cpu"), "FP8Linear only supports CUDA tensors"
-    # return addmm(input=bias, mat1=input, mat2=weight.transpose_fp8(), output=output, accum_qtype=accum_qtype, metadatas=metadatas)
 
     # TODO(xrsrke): refactor this out, don't duplicate the code
     from einops import rearrange

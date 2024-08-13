@@ -45,12 +45,9 @@ class FP8Linear(nn.Linear):
         Args:
             qtype (DTypes, optional): This is accumulation precision dtype
         """
-
         assert device != torch.device("cpu"), "FP8Linear only supports CUDA tensors"
-        # assert accum_qtype in DTypes
 
         # TODO(xrsrke): take initialization dtype from recipe
-        # super().__init__(in_features, out_features, bias, device, dtype=QTYPE_TO_DTYPE[recipe.accum_dtype])
         # NOTE: initialize in float32
         super().__init__(in_features, out_features, bias, device, dtype=torch.float32)
         # TODO(xrsrke): don't fixed dtype, take it from the FP8 recipe
@@ -61,25 +58,17 @@ class FP8Linear(nn.Linear):
         quant_w = FP8Parameter(weight_data, dtype=recipe.weight.dtype, interval=recipe.weight.interval)
         assert quant_w.dtype in [torch.uint8, torch.int8], f"got {self.weight.data.dtype}"
         self.weight = quant_w
-        # assert self.weight.data.orig_data.abs().max() == quant_w.fp8_meta.amax
 
         assert self.weight.data.dtype in [torch.uint8, torch.int8], f"got {self.weight.data.dtype}"
-        # assert get_data_from_param(self.weight).dtype in [torch.uint8, torch.int8], f"got {self.weight.data.dtype}"
 
         if self.bias is not None:
-            # self.bias = self.bias.to(dtype=QTYPE_TO_DTYPE[recipe.accum_dtype])
             self.bias = nn.Parameter(self.bias.to(recipe.accum_dtype))
             assert self.bias.dtype == recipe.accum_dtype
         self.metadatas = FP8LinearMeta()
-        # self.accum_qtype = accum_qtype
         self.recipe = recipe
 
     def forward(self, input: Union[FP8Tensor, torch.Tensor]) -> torch.Tensor:
         import nanotron.fp8.functional as F
-
-        # return F.linear(
-        #     input=input, weight=self.weight.data, bias=self.bias, metadatas=self.metadatas, recipe=self.recipe
-        # )
 
         return F.linear(
             input=input,
@@ -93,7 +82,6 @@ class FP8Linear(nn.Linear):
         return f"FP8{super().__repr__()}"
 
 
-# NOTE: original version
 class _FP8Matmul(torch.autograd.Function):
     @staticmethod
     @torch.no_grad()
@@ -123,7 +111,6 @@ class _FP8Matmul(torch.autograd.Function):
         else:
             fp8_input = FP8Tensor.from_metadata(input, metadatas.input)
 
-        # ctx.accum_qtype = accum_qtype
         ctx.save_for_backward(fp8_input, weight)
         ctx.metadatas = metadatas
         ctx.name = name
@@ -186,7 +173,6 @@ class _FP8Matmul(torch.autograd.Function):
             fp8_grad_output.shape[0],
             transposed_fp8_weight.shape[0],
             device="cuda",
-            # dtype=QTYPE_TO_DTYPE[recipe.accum_dtype],
             dtype=recipe.accum_dtype,
         )
         grad_input = fp8_matmul_kernel(
@@ -209,7 +195,6 @@ class _FP8Matmul(torch.autograd.Function):
             transposed_fp8_input.shape[0],
             transposed_fp8_grad_output.shape[0],
             device="cuda",
-            # dtype=QTYPE_TO_DTYPE[recipe.accum_dtype],
             dtype=recipe.accum_dtype,
         )
         grad_weight = fp8_matmul_kernel(
@@ -221,12 +206,9 @@ class _FP8Matmul(torch.autograd.Function):
             use_split_accumulator=recipe.split_accumulator.weight_grad,
             accumulate=recipe.accumulate.weight_grad,
             accum_qtype=recipe.accum_dtype,
-            # is_backward=True
             recipe=recipe,
         )
 
-        # assert grad_input.dtype == QTYPE_TO_DTYPE[recipe.accum_dtype]
-        # assert grad_weight.dtype == QTYPE_TO_DTYPE[recipe.accum_dtype]
         assert grad_input.dtype == recipe.accum_dtype
         assert grad_weight.dtype == recipe.accum_dtype
         # TODO(xrsrke): maintain a persistence metadata across training
