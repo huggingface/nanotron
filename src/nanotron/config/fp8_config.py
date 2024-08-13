@@ -41,3 +41,5 @@ class FP8Args:
     stochastic_rounding: bool = False
     update_clipping: bool = False
     skip_param_update_if_nan: bool = False
+
+    sync_amax_in_wgrad: bool = False

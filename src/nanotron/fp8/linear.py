@@ -217,15 +217,17 @@ class _FP8Matmul(torch.autograd.Function):
         orig_shape = grad_weight.shape
         grad_weight = grad_weight.contiguous().t().contiguous().view(-1).contiguous().reshape(orig_shape)
 
+        from nanotron import constants
+
+        sync = constants.CONFIG.fp8.sync_amax_in_wgrad
+
         if ctx.metadatas.weight_grad is None:
             fp8_weight_grad = FP8Tensor(
-                grad_weight,
-                dtype=recipe.weight_grad.dtype,
-                interval=recipe.weight_grad.interval,
+                grad_weight, dtype=recipe.weight_grad.dtype, interval=recipe.weight_grad.interval, sync=sync
             )
             ctx.metadatas.weight_grad = fp8_weight_grad.fp8_meta
         else:
-            fp8_weight_grad = FP8Tensor.from_metadata(grad_weight, ctx.metadatas.weight_grad)
+            fp8_weight_grad = FP8Tensor.from_metadata(grad_weight, ctx.metadatas.weight_grad, sync=sync)
 
         fp8_weight.grad = fp8_weight_grad
 

@@ -467,12 +467,14 @@ class DistributedTrainer:
         # Fix the root_model
         self.unwrapped_model.module_id_to_prefix[id(self.unwrapped_model)] = ""
 
+        from nanotron import constants
+
+        constants.PARALLEL_CONTEXT = self.parallel_context
+
         prof = get_profiler(config=self.config)
         torch.cuda.empty_cache()
         with prof:
             for self.iteration_step in range(self.metadata.last_train_step + 1, self.config.tokens.train_steps + 1):
-                from nanotron import constants
-
                 is_ready_for_normal_log = (
                     (self.iteration_step - 1) % self.config.logging.iteration_step_info_interval == 0
                 ) and (dist.get_rank(self.parallel_context.world_pg) == 0)

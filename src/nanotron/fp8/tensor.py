@@ -8,10 +8,30 @@ import torch
 import transformer_engine as te  # noqa
 import transformer_engine_extensions as tex
 
-from nanotron import constants
+from nanotron import constants, logging
 from nanotron.fp8.constants import DTYPE_TO_FP8_MAX, FP8_DTYPES, INITIAL_SCALING_FACTOR
 from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.meta import FP8Meta
+from nanotron.logging import log_rank
+
+logger = logging.get_logger(__name__)
+
+
+def get_amax(tensor: torch.Tensor, sync: bool) -> torch.Tensor:
+    amax = tensor.abs().max().clone().detach()
+    if sync is True:
+        import torch.distributed as dist
+
+        from nanotron import constants
+
+        world_size = dist.get_world_size(group=constants.PARALLEL_CONTEXT.tp_pg)
+
+        if world_size > 1:
+            log_rank(f"Local amax is {amax}", logger=logger, level=logging.INFO)
+            dist.all_reduce(amax, op=dist.ReduceOp.MAX, group=constants.PARALLEL_CONTEXT.tp_pg)
+            log_rank(f"Global amax is {amax}", logger=logger, level=logging.INFO)
+
+    return amax
 
 
 class LowPrecisionTensor(torch.Tensor):
@@ -21,6 +41,7 @@ class LowPrecisionTensor(torch.Tensor):
         dtype: Optional[DTypes] = None,
         interval: Optional[int] = 1,
         fp8_meta: Optional[FP8Meta] = None,
+        sync: bool = False,
     ) -> torch.Tensor:
         assert isinstance(tensor, torch.Tensor), "tensor must be a tensor"
 
@@ -31,7 +52,7 @@ class LowPrecisionTensor(torch.Tensor):
         if fp8_meta is None:
             assert dtype in [DTypes.FP8E4M3, DTypes.FP8E5M2, DTypes.KFLOAT16]
 
-            fp8_meta = cls._get_metadata(tensor, dtype, interval)
+            fp8_meta = cls._get_metadata(tensor, dtype, interval, sync=sync)
 
         backup_fp8_meta = deepcopy(fp8_meta)
         if tensor.dtype not in FP8_DTYPES:
@@ -49,13 +70,15 @@ class LowPrecisionTensor(torch.Tensor):
         return obj
 
     @staticmethod
-    def _get_metadata(tensor: torch.Tensor, dtype: DTypes, interval: int) -> "FP8Meta":
+    def _get_metadata(tensor: torch.Tensor, dtype: DTypes, interval: int, sync: bool) -> "FP8Meta":
         # TODO(xrsrke): there is a circular import issue
         # between tensor.py and meta.py fix this
         from nanotron.fp8.meta import FP8Meta
 
         # NOTE: detach from original computational graph
-        amax = tensor.abs().max().clone().detach()
+        # amax = tensor.abs().max().clone().detach()
+        amax = get_amax(tensor, sync)
+
         scale = update_scaling_factor(amax, torch.tensor(INITIAL_SCALING_FACTOR, dtype=torch.float32), dtype)
         scale = scale.clone().detach()
         fp8_meta = FP8Meta(amax, scale, dtype, interval)
@@ -119,13 +142,15 @@ class LowPrecisionTensor(torch.Tensor):
 
     @staticmethod
     @torch.no_grad()
-    def from_metadata(data: torch.Tensor, metadata: "FP8Meta") -> Union[FP8Tensor, FP16Tensor]:
+    def from_metadata(data: torch.Tensor, metadata: "FP8Meta", sync: bool = False) -> Union[FP8Tensor, FP16Tensor]:
         assert isinstance(data, (FP8Tensor, torch.Tensor)), "data must be a torch.Tensor or a FP8Tensor"
         # NOTE: don't do deepcopy, because we reuse the same metadata
         # for other iterations in fp8linear
-        metadata.add_amax(data.abs().max().clone())
+        # metadata.add_amax(data.abs().max().clone())
+        amax = get_amax(data, sync)
+        metadata.add_amax(amax)
 
-        quantized_data = FP8Tensor(data, metadata.dtype, metadata.interval, fp8_meta=metadata)
+        quantized_data = FP8Tensor(data, metadata.dtype, metadata.interval, fp8_meta=metadata, sync=sync)
         return quantized_data
 
     def transpose_fp8(self) -> FP8Tensor:
