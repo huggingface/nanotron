@@ -12,8 +12,24 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""PyTorch LLaMa model."""
+"""
+The LLaMA model that match the transformers LLaMA model by doing the following changes:
+1 Merged QKV            -> Separate QKV
+2 Merged Gate/Up        -> Separate Gate/Up
+3 Triton RMSNorm        -> LLaMA RMSNorm
+4 Flash RoPR(training)  -> RoPE
+5 Interleaved RoPE      -> Non interleaved RoPE
+6 Core attention        -> flash_attn_func
+7 Same computation device as transformers (CPU then CUDA)
+8 Fix precision bug
+-> Exact logits match during generation.
 
+All the others are the same as the llama.py
+Note: It's yet not clear which one should be kept in the future. What's the trade-off between the performance gain and the precision loss.
+
+"""
+
+import math
 from typing import Dict, List, Optional, Union
 
 import torch
@@ -27,12 +43,14 @@ from nanotron.config.models_config import RandomInit, SpectralMupInit
 from nanotron.generation.generate_store import AttachableStore
 from nanotron.logging import log_rank
 from nanotron.models import NanotronModel
+from nanotron.models.llama import LlamaRotaryEmbedding, RotaryEmbedding, apply_rotary_pos_emb
 from nanotron.nn.activations import ACT2FN
-from nanotron.nn.layer_norm import TritonRMSNorm
+from nanotron.nn.layer_norm import RMSNorm
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter
 from nanotron.parallel.pipeline_parallel.block import PipelineBlock, TensorPointer
 from nanotron.parallel.pipeline_parallel.p2p import P2P
+from nanotron.parallel.ring_flash_attn.utils import zigzag_split
 from nanotron.parallel.tensor_parallel.functional import sharded_cross_entropy
 from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelColumnLinear,
@@ -42,169 +60,42 @@ from nanotron.parallel.tensor_parallel.nn import (
 )
 from nanotron.random import RandomStates
 from nanotron.scaling.parametrization import SpectralMupParametrizator, StandardParametrizator
-from nanotron.utils import checkpoint_method
+from nanotron.utils import supports_flash_attention
+
+if supports_flash_attention():
+    from flash_attn import bert_padding
+    from flash_attn.flash_attn_interface import (
+        flash_attn_func,
+        flash_attn_varlen_func,
+        flash_attn_with_kvcache,
+    )
+    from flash_attn.layers.rotary import RotaryEmbedding as FlashRotaryEmbedding
+
+    from nanotron.parallel.ring_flash_attn.zigzag_ring_flash_attn import zigzag_ring_flash_attn_func
+
 
 logger = logging.get_logger(__name__)
 
 
-class RotaryEmbedding(nn.Module):
-    def __init__(self, dim: int, end: int, theta: float = 10000.0):
-        super().__init__()
-        assert dim % 2 == 0
-        self.dim = dim
-        self.end = end
-        self.theta = theta
-        # TODO @nouamane: Figure out why we can't set `DTypeInvariantTensor` ...
-        # TODO @thomasw21: Complex buffers break DDP, instead we store float and view them as complex
-        self.freqs_cis: torch.Tensor
-        self._initialized_buffer = False
-
-    def init_rotary_embeddings(self):
-        if self._initialized_buffer is True:
-            # Buffer if already initialized
-            return
-        self.register_buffer(
-            "freqs_cis",
-            torch.empty(self.end, self.dim // 2, 2, dtype=torch.float, device="cuda"),
-            persistent=False,
-        )
-        assert self.freqs_cis.device.type == "cuda"
-        # TODO @nouamane: One we figure out how to do the DTypeInvariantTensor, this can be removed and changed to an assert
-        if self.freqs_cis.dtype != torch.float:
-            self.freqs_cis = self.freqs_cis.to(torch.float)
-        assert self.freqs_cis.dtype == torch.float
-        freqs = 1.0 / (
-            self.theta ** (torch.arange(0, self.dim, 2, dtype=torch.float, device="cpu")[: (self.dim // 2)] / self.dim)
-        ).to(
-            "cuda"
-        )  # should be computed on CPU, otherwise different results with Transformers.
-        t = torch.arange(self.end, device="cuda")
-        freqs = torch.outer(t, freqs).float()
-        complex_freqs = torch.polar(torch.ones_like(freqs), freqs)
-        freqs = torch.view_as_real(complex_freqs)
-        self.freqs_cis.copy_(freqs)
-        self._initialized_buffer = True
-
-    def forward(
-        self,
-        x: torch.Tensor,  # [batch_size, seq_length, num_heads, d_qk]
-        position_ids: Optional[torch.LongTensor],  # [batch_size, seq_length]
-    ):
-        batch_size, seq_length, num_heads, inner_dim = x.shape
-        while (
-            position_ids is not None and position_ids[-1, -1] >= self.end
-        ) or seq_length >= self.end:  # TODO @nouamane: check if this causes cpu-gpu sync
-            self.end *= 2
-            self._initialized_buffer = False
-        if self._initialized_buffer is False:
-            print(f"Initializing rotary embeddings with end={self.end}")
-            self.init_rotary_embeddings()
-        dtype = x.dtype
-        assert inner_dim % 2 == 0
-        x = x.view(
-            batch_size, seq_length, num_heads, inner_dim // 2, 2
-        )  # [batch_size, q_length, num_heads, inner_dim]
-        if x.dtype == torch.bfloat16:
-            x = x.float()
-        complex_x = torch.view_as_complex(x)  # [batch_size, q_length, num_heads, inner_dim // 2]
-        if position_ids is None:
-            freqs_cis = self.freqs_cis[None, :seq_length, None, :]
+def apply_scaling(freqs: torch.Tensor):
+    # Values obtained from grid search
+    scale_factor = 8
+    low_freq_factor = 1
+    high_freq_factor = 4
+    old_context_len = 8192  # original llama3 length
+    low_freq_wavelen = old_context_len / low_freq_factor
+    high_freq_wavelen = old_context_len / high_freq_factor
+    new_freqs = []
+    for freq in freqs:
+        wavelen = 2 * math.pi / freq
+        if wavelen < high_freq_wavelen:
+            new_freqs.append(freq)
+        elif wavelen > low_freq_wavelen:
+            new_freqs.append(freq / scale_factor)
         else:
-            # TODO(kunhao): Should None follow the num_heads dimension?
-            if position_ids[-1, -1] < 0 or position_ids[-1, -1] >= self.end:  # Quick test hopefully
-                raise ValueError(f"Position ids must be in the range [0, {self.end}), but got {position_ids}")
-            freqs_cis = self.freqs_cis[position_ids][:, :, None, :]
-        complex_freqs = torch.view_as_complex(freqs_cis)
-        x_out = torch.view_as_real(complex_x * complex_freqs).view(batch_size, seq_length, num_heads, inner_dim)
-        return x_out.type(dtype)
-
-
-## Copy from transformers. Non interleaved version of RoPE. Will be refactored later
-def rotate_half(x):
-    """Rotates half the hidden dims of the input."""
-    x1 = x[..., : x.shape[-1] // 2]
-    x2 = x[..., x.shape[-1] // 2 :]
-    return torch.cat((-x2, x1), dim=-1)
-
-
-class LlamaRotaryEmbedding(nn.Module):
-    def __init__(self, dim: int, end: int, theta: float = 500000.0):
-        super().__init__()
-        self.dim = dim
-        self.end = end
-        self.theta = theta
-        self.init_rotary_embeddings()
-
-    def init_rotary_embeddings(self):
-        inv_freq = 1.0 / (
-            self.theta ** (torch.arange(0, self.dim, 2, dtype=torch.float, device="cpu") / self.dim)
-        )  # important to compute on CPU
-        # inv_freq = apply_scaling(inv_freq)  # if LLaMA 3.1
-        self.register_buffer(
-            "inv_freq", torch.empty(self.dim // 2, dtype=torch.float, device="cuda"), persistent=False
-        )
-        self.inv_freq = self.inv_freq.to(
-            torch.float
-        )  # make it float32 before copy to avoid precision loss during copy_
-        self.inv_freq.copy_(inv_freq)
-
-        saved_inv_freq = torch.load("/fsx/haojun/LLaMA/.cache/activation_values/inv_freq.pt")
-        assert torch.equal(self.inv_freq.cpu(), saved_inv_freq), "inv_freq mismatch."
-
-    @torch.no_grad()
-    def forward(
-        self,
-        x: torch.Tensor,  # [batch_size, seq_length, num_heads, d_qk]
-        position_ids: Optional[torch.LongTensor],  # [batch_size, seq_length]
-    ):
-        # x: [bs, num_attention_heads, seq_len, head_size]
-        inv_freq_expanded = self.inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1)
-        position_ids_expanded = position_ids[:, None, :].float()
-        # Force float32 since bfloat16 loses precision on long contexts
-        # See https://github.com/huggingface/transformers/pull/29285
-        device_type = x.device.type
-        device_type = device_type if isinstance(device_type, str) and device_type != "mps" else "cpu"
-        with torch.autocast(device_type=device_type, enabled=False):
-            freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)
-            emb = torch.cat((freqs, freqs), dim=-1)
-            cos = emb.cos()
-            sin = emb.sin()
-        return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
-
-
-def apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=2):
-    """Applies Rotary Position Embedding to the query and key tensors.
-
-    Args:
-        q (`torch.Tensor`): The query tensor.
-        k (`torch.Tensor`): The key tensor.
-        cos (`torch.Tensor`): The cosine part of the rotary embedding.
-        sin (`torch.Tensor`): The sine part of the rotary embedding.
-        unsqueeze_dim (`int`, *optional*, defaults to 1):
-            The 'unsqueeze_dim' argument specifies the dimension along which to unsqueeze cos[position_ids] and
-            sin[position_ids] so that they can be properly broadcasted to the dimensions of q and k. For example, note
-            that cos[position_ids] and sin[position_ids] have the shape [batch_size, seq_len, head_dim]. Then, if q and
-            k have the shape [batch_size, heads, seq_len, head_dim], then setting unsqueeze_dim=1 makes
-            cos[position_ids] and sin[position_ids] broadcastable to the shapes of q and k. Similarly, if q and k have
-            the shape [batch_size, seq_len, heads, head_dim], then set unsqueeze_dim=2.
-    Returns:
-        `tuple(torch.Tensor)` comprising of the query and key tensors rotated using the Rotary Position Embedding.
-    """
-    cos = cos.unsqueeze(unsqueeze_dim)
-    sin = sin.unsqueeze(unsqueeze_dim)
-    q_embed = (q * cos) + (rotate_half(q) * sin)
-    k_embed = (k * cos) + (rotate_half(k) * sin)
-    return q_embed, k_embed
-
-
-class GLUActivation(nn.Module):
-    def __init__(self, act_fn_name: str):
-        super().__init__()
-        self.act = ACT2FN[act_fn_name]
-
-    def forward(self, merged_states: torch.Tensor):
-        gate_states, up_states = torch.split(merged_states, merged_states.shape[-1] // 2, dim=-1)
-        return self.act(gate_states) * up_states
+            smooth = (old_context_len / wavelen - low_freq_factor) / (high_freq_factor - low_freq_factor)
+            new_freqs.append((1 - smooth) * freq / scale_factor + smooth * freq)
+    return torch.tensor(new_freqs, dtype=freqs.dtype, device=freqs.device)
 
 
 class MLP(nn.Module):
@@ -222,19 +113,21 @@ class MLP(nn.Module):
             parallel_config.tp_linear_async_communication if parallel_config is not None else False
         )
 
-        gate_up_contiguous_chunks = (
-            config.intermediate_size,  # shape of gate_linear
-            config.intermediate_size,  # shape of up_linear
-        )
-        self.gate_up_proj = TensorParallelColumnLinear(
+        self.gate_proj = TensorParallelColumnLinear(
             config.hidden_size,
-            2 * config.intermediate_size,
+            config.intermediate_size,
             pg=tp_pg,
             mode=tp_mode,
             bias=False,
             async_communication=tp_linear_async_communication,
-            contiguous_chunks=gate_up_contiguous_chunks,
-            tp_recompute_allgather=parallel_config.tp_recompute_allgather,
+        )
+        self.up_proj = TensorParallelColumnLinear(
+            config.hidden_size,
+            config.intermediate_size,
+            pg=tp_pg,
+            mode=tp_mode,
+            bias=False,
+            async_communication=tp_linear_async_communication,
         )
         self.down_proj = TensorParallelRowLinear(
             config.intermediate_size,
@@ -244,66 +137,42 @@ class MLP(nn.Module):
             bias=False,
             async_communication=tp_linear_async_communication and tp_mode is TensorParallelLinearMode.REDUCE_SCATTER,
         )
-        self.split_silu_mul = torch.compile(GLUActivation(config.hidden_act))
+        self.act = ACT2FN[config.hidden_act]
 
     def forward(self, hidden_states):  # [seq_length, batch_size, hidden_dim]
-        merged_states = self.gate_up_proj(hidden_states)
-        hidden_states = self.down_proj(self.split_silu_mul(merged_states))
+        gate_states, up_states = self.gate_proj(hidden_states), self.up_proj(hidden_states)
+        hidden_states = self.down_proj(self.act(gate_states) * up_states)
         return {"hidden_states": hidden_states}
 
 
-class CoreAttention(nn.Module):
-    def __init__(self, config: LlamaConfig, parallel_config: Optional[ParallelismArgs], layer_idx: int):
+class RingFlashAttention(nn.Module):
+    def __init__(self, config: LlamaConfig, pg: dist.ProcessGroup):
         super().__init__()
-        # TODO @thomasw21: GPT has a weird `d_kv` config which I'm guessing is essentically a `d_qkv`
-        assert (
-            config.hidden_size % config.num_attention_heads == 0
-        ), f"Hidden size {config.hidden_size} must be divisible by number of attention heads {config.num_attention_heads}."
-        self.d_qk = config.hidden_size // config.num_attention_heads
-        self.d_v = config.hidden_size // config.num_attention_heads
-        self.is_using_mup = config.is_using_mup
+        assert config.hidden_size % config.num_attention_heads == 0
+        assert config.hidden_size % config.num_key_value_heads == 0
+        assert dist.get_world_size(pg) > 1, "Ring attention process group size must be greater than 1"
+        self.pg = pg
 
-        self.checkpoint_attention = False  # Because flash_attn already does checkpointing
-
-    @checkpoint_method(attr_name="checkpoint_attention")
     def forward(
         self,
-        query_states: torch.Tensor,  # [batch_size * q_length, n_local_q_heads, inner_dim]
-        key_states: torch.Tensor,  # [batch_size * kv_length, n_local_kv_heads, inner_dim]
-        value_states: torch.Tensor,  # [batch_size * kv_length, n_local_kv_heads, inner_dim]
-        q_sequence_mask: torch.Tensor,  # torch.BoolTensor [batch_size, q_length] (can be broadcasted to that size)
-        kv_sequence_mask: torch.Tensor,  # torch.BoolTensor [batch_size, kv_length] (can be broadcasted to that size)
+        local_q: torch.Tensor,  # [batch_size, q_length, n_local_q_heads, inner_dim]
+        local_k: torch.Tensor,  # [batch_size, kv_length, n_local_kv_heads, inner_dim]
+        local_v: torch.Tensor,  # [batch_size, kv_length, n_local_kv_heads, inner_dim]
     ):
-        from flash_attn.flash_attn_interface import flash_attn_varlen_func
-
-        # TODO @thomasw21: Compute once, instead of computing for each layers.
-        cu_seqlens_q = torch.zeros((q_sequence_mask.shape[0] + 1), dtype=torch.int32, device=query_states.device)
-        cu_seqlens_k = torch.zeros((kv_sequence_mask.shape[0] + 1), dtype=torch.int32, device=query_states.device)
-        torch.cumsum(q_sequence_mask.sum(-1, dtype=torch.int32), dim=0, dtype=torch.int32, out=cu_seqlens_q[1:])
-        torch.cumsum(kv_sequence_mask.sum(-1, dtype=torch.int32), dim=0, dtype=torch.int32, out=cu_seqlens_k[1:])
-
-        # TODO(kunhao): flash attn's causal means that the query can only attend to the keys before it. This is not
-        # what we want if we are using kv cache. This is a hack as we always have q_length == 1 when using kv cache.
-        causal = False if q_sequence_mask.shape[1] == 1 else True
-
-        # NOTE: this scale is for µTransfer,
-        # in SP, we use sqrt(1/d_h)
-        softmax_scale = 1 / query_states.shape[-1] if self.is_using_mup else None
-        attn_output = flash_attn_varlen_func(
-            q=query_states,
-            k=key_states,
-            v=value_states,
-            cu_seqlens_q=cu_seqlens_q,
-            cu_seqlens_k=cu_seqlens_k,
-            max_seqlen_q=q_sequence_mask.shape[1],
-            max_seqlen_k=kv_sequence_mask.shape[1],
+        causal = True
+        ring_out, _, _ = zigzag_ring_flash_attn_func(
+            local_q,
+            local_k,
+            local_v,
             dropout_p=0.0,
-            softmax_scale=softmax_scale,
             causal=causal,
-            return_attn_probs=False,
+            window_size=(-1, -1),
+            alibi_slopes=None,
+            deterministic=False,
+            return_attn_probs=True,
+            group=self.pg,
         )
-
-        return attn_output
+        return ring_out
 
 
 def pad_to_right(tensor, mask, new_tensor=None):
@@ -340,9 +209,9 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         config: LlamaConfig,
         parallel_config: Optional[ParallelismArgs],
         tp_pg: dist.ProcessGroup,
+        sp_pg: dist.ProcessGroup,
         layer_idx: int,
     ):
-        from flash_attn.layers.rotary import RotaryEmbedding as FlashRotaryEmbedding
 
         super().__init__()
         # Tensor parallel considerations: We split tensors along head dimension
@@ -380,32 +249,50 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             parallel_config.tp_linear_async_communication if parallel_config is not None else False
         )
 
-        # build the slice config for self.qkv for save/load
-        # shard are done within the contiguous chunk
-        qkv_contiguous_chunks = (
-            config.num_attention_heads * self.d_qk,  # shape of q
-            config.num_key_value_heads * self.d_qk,  # shape of k
-            config.num_key_value_heads * self.d_qk,  # shape of v
-        )
-        self.qkv_proj = TensorParallelColumnLinear(
+        self.q_proj = TensorParallelColumnLinear(
             self.d_model,
-            config.num_attention_heads * self.d_qk + 2 * config.num_key_value_heads * self.d_qk,
+            config.num_attention_heads * self.d_qk,
             pg=tp_pg,
             mode=tp_mode,
             bias=False,
             async_communication=tp_linear_async_communication,
-            contiguous_chunks=qkv_contiguous_chunks,
-            tp_recompute_allgather=parallel_config.tp_recompute_allgather,
+        )
+        self.k_proj = TensorParallelColumnLinear(
+            self.d_model,
+            config.num_key_value_heads * self.d_qk,
+            pg=tp_pg,
+            mode=tp_mode,
+            bias=False,
+            async_communication=tp_linear_async_communication,
+        )
+        self.v_proj = TensorParallelColumnLinear(
+            self.d_model,
+            config.num_key_value_heads * self.d_qk,
+            pg=tp_pg,
+            mode=tp_mode,
+            bias=False,
+            async_communication=tp_linear_async_communication,
         )
         # TODO(kunhao): We want to have only one version per device and not one version per layer.
-        self.rotary_embedding = RotaryEmbedding(
-            dim=self.d_qk,
-            end=config.max_position_embeddings,
-            theta=config.rope_theta,
-        )
+        # config.rope_interleaved = True
+        if config.rope_interleaved:
+            self.rotary_embedding = RotaryEmbedding(
+                dim=self.d_qk,
+                end=config.max_position_embeddings,
+                theta=config.rope_theta,
+            )
+        else:
+            self.rotary_embedding = LlamaRotaryEmbedding(
+                dim=self.d_qk,
+                end=config.max_position_embeddings,
+                theta=config.rope_theta,
+            )
+        self.rope_interleaved = config.rope_interleaved
 
         # NOTE: Only supported for training (TODO(fmom): position_ids not supported yet)
-        self.flash_rotary_embedding = FlashRotaryEmbedding(dim=self.d_qk, base=config.rope_theta, interleaved=True)
+        self.flash_rotary_embedding = FlashRotaryEmbedding(
+            dim=self.d_qk, interleaved=config.rope_interleaved, base=config.rope_theta
+        )
 
         self.o_proj = TensorParallelRowLinear(
             config.num_attention_heads * self.d_qk,
@@ -415,59 +302,43 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             bias=False,
             async_communication=tp_linear_async_communication,
         )
-
-        self.attention = CoreAttention(
-            config,
-            parallel_config=parallel_config,
-            layer_idx=layer_idx,
-        )
-
+        # Normal attention when Sequence parallelism group size = 1
+        if sp_pg.size() > 1:
+            self.attention = RingFlashAttention(
+                config,
+                pg=sp_pg,
+            )
+        self.sp_pg = sp_pg
         self.prefill_kv_len = (
             config.max_position_embeddings
         )  # TODO @nouamane: compute based on free memory, because in rope we can surpass max_position_embeddings
+        self.layer_idx = layer_idx
 
     def forward(
         self,
         hidden_states,  # [seq_length, batch_size, hidden_size]
         sequence_mask,  # [batch_size, seq_length]
+        position_ids: Optional[torch.LongTensor] = None,
     ):
-        from flash_attn import bert_padding
-        from flash_attn.flash_attn_interface import (
-            flash_attn_varlen_func,
-            flash_attn_with_kvcache,
-        )
-
-        qkv_states = self.qkv_proj(
-            hidden_states
-        )  # [seq_length, batch_size, n_local_q_heads * d_qk + 2 * n_local_kv_heads * d_qk]
-        q_length, batch_size, _ = qkv_states.shape
-
-        if self.is_gqa:
-            query_states, key_states, value_states = torch.split(
-                qkv_states,
-                [
-                    self.n_local_q_heads * self.d_qk,
-                    self.n_local_kv_heads * self.d_qk,
-                    self.n_local_kv_heads * self.d_qk,
-                ],
-                dim=-1,
-            )
-
-            query_states = (
-                query_states.transpose(0, 1).contiguous().view(batch_size, q_length, self.n_local_q_heads, self.d_qk)
-            )
-            key_states = (
-                key_states.transpose(0, 1).contiguous().view(batch_size, q_length, self.n_local_kv_heads, self.d_qk)
-            )
-            value_states = (
-                value_states.transpose(0, 1).contiguous().view(batch_size, q_length, self.n_local_kv_heads, self.d_qk)
-            )
-        else:
-            query_states, key_states, value_states = (
-                qkv_states.view(q_length, batch_size, 3, self.n_local_q_heads, self.d_qk)
-                .permute(2, 1, 0, 3, 4)
-                .contiguous()
-            )  # [3, batch_size, seq_length, n_local_q_heads, d_qk]
+        q_length, batch_size, _ = hidden_states.shape
+        query_states = (
+            self.q_proj(hidden_states)
+            .transpose(0, 1)
+            .contiguous()
+            .view(batch_size, q_length, self.n_local_q_heads, self.d_qk)
+        )  # [batch_size, q_length, n_local_q_heads, d_qk]
+        key_states = (
+            self.k_proj(hidden_states)
+            .transpose(0, 1)
+            .contiguous()
+            .view(batch_size, q_length, self.n_local_kv_heads, self.d_qk)
+        )  # [batch_size, q_length, n_local_kv_heads, d_qk]
+        value_states = (
+            self.v_proj(hidden_states)
+            .transpose(0, 1)
+            .contiguous()
+            .view(batch_size, q_length, self.n_local_kv_heads, self.d_qk)
+        )  # [batch_size, q_length, n_local_kv_heads, d_qk]
 
         store = self.get_local_store()
         if store is not None:  # Inference case
@@ -484,8 +355,15 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             # Compute rotary embeddings
             # Note: keep track of old rotary embedding end to check if we need to enlarge k_cache and v_cache
             old_rotary_embed_end = self.rotary_embedding.end
-            query_states = self.rotary_embedding(query_states, position_ids=position_ids)
-            key_states = self.rotary_embedding(key_states, position_ids=position_ids)
+
+            # interleaved version.
+            if self.rope_interleaved:
+                query_states = self.rotary_embedding(query_states, position_ids=position_ids)
+                key_states = self.rotary_embedding(key_states, position_ids=position_ids)
+            # non interleaved version.
+            else:
+                cos, sin = self.rotary_embedding(value_states, position_ids)
+                query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
 
             if "key" not in store:
                 # First inference iteration (Prefill)
@@ -636,41 +514,31 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             )
 
         else:  # Training case
-            # Apply rotary embeddings to query/key states
-            # NOTE: The layout is different from models/llama.py which is [batch_size, num_heads, seq_length, d_qk]
-            # Here it is, [batch_size, seq_length, num_heads, d_qk]
-            # [2, batch_size, seq_length, num_heads, d_qk]
-            key_value_states = torch.cat([key_states.unsqueeze(0), value_states.unsqueeze(0)], dim=0)
-            # [batch_size, seq_length, 2, num_heads, d_qk]
-            key_value_states = key_value_states.permute(1, 2, 0, 3, 4).contiguous()
-            query_states, key_value_states = self.flash_rotary_embedding(query_states, kv=key_value_states)
-            # [batch_size, seq_length, num_heads, d_qk]
-            key_states, value_states = torch.split(key_value_states, 1, dim=2)
+            # apply rotary embedding.
 
-            q_sequence_mask = sequence_mask
-            kv_sequence_mask = sequence_mask
+            if self.rope_interleaved:
+                # interleaved version.
+                query_states = self.rotary_embedding(query_states, position_ids=position_ids)
+                key_states = self.rotary_embedding(key_states, position_ids=position_ids)
+            # non interleaved version.
+            else:
+                cos, sin = self.rotary_embedding(value_states, position_ids)
+                query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
 
             kv_length = key_states.shape[1]
-            # [batch_size, seq_length, num_heads, d_qk]
-            # Shaping for use in `flash-attn` version of flash-attn: `flash_attn_unpadded_func`
-            query_states = query_states.view(
-                batch_size * q_length, self.n_local_q_heads, self.d_qk
-            )  # [batch_size * q_length, self.n_heads, d_qk]
+            ## ring attention
+            if self.sp_pg.size() > 1:
+                key_states = key_states.view(batch_size, kv_length, self.n_local_kv_heads, self.d_qk)
+                value_states = value_states.view(batch_size, kv_length, self.n_local_kv_heads, self.d_v)
 
-            key_states = key_states.view(
-                batch_size * kv_length, self.n_local_kv_heads, self.d_qk
-            )  # [batch_size * kv_length, self.n_heads, d_qk]
-            value_states = value_states.view(
-                batch_size * kv_length, self.n_local_kv_heads, self.d_v
-            )  # [batch_size * kv_length, self.n_heads, d_v]
-
-            attention_output = self.attention(
-                query_states=query_states,
-                key_states=key_states,
-                value_states=value_states,
-                q_sequence_mask=q_sequence_mask,
-                kv_sequence_mask=kv_sequence_mask,
-            )
+                attention_output = self.attention(
+                    query_states,
+                    key_states,
+                    value_states,
+                )
+            ## flash attention
+            else:
+                attention_output = flash_attn_func(query_states, key_states, value_states, causal=True)
 
         attention_output = (
             attention_output.contiguous().view(batch_size, q_length, self.n_local_q_heads * self.d_v).transpose(0, 1)
@@ -686,18 +554,21 @@ class LlamaDecoderLayer(nn.Module):
         config: LlamaConfig,
         parallel_config: Optional[ParallelismArgs],
         tp_pg: dist.ProcessGroup,
+        sp_pg: dist.ProcessGroup,
         layer_idx: int,
     ):
         super().__init__()
-        self.input_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.input_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.attn = CausalSelfAttention(
             config=config,
             parallel_config=parallel_config,
             tp_pg=tp_pg,
+            sp_pg=sp_pg,
             layer_idx=layer_idx,
         )
+        self.layer_idx = layer_idx
 
-        self.post_attention_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.post_attention_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.mlp = MLP(config=config, parallel_config=parallel_config, tp_pg=tp_pg)
 
         self.recompute_layer = parallel_config.recompute_layer
@@ -706,11 +577,12 @@ class LlamaDecoderLayer(nn.Module):
         self,
         hidden_states: Union[torch.Tensor, TensorPointer],
         sequence_mask: Union[torch.Tensor, TensorPointer],
+        position_ids: Optional[torch.LongTensor] = None,
     ) -> List[Union[torch.Tensor, TensorPointer]]:
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
 
-        output = self.attn(hidden_states=hidden_states, sequence_mask=sequence_mask)
+        output = self.attn(hidden_states=hidden_states, sequence_mask=sequence_mask, position_ids=position_ids)
         hidden_states = output["hidden_states"]
         hidden_states = hidden_states + residual
 
@@ -719,29 +591,34 @@ class LlamaDecoderLayer(nn.Module):
         hidden_states = self.mlp(hidden_states=hidden_states)["hidden_states"]
         hidden_states = hidden_states + residual
 
-        return hidden_states, output["sequence_mask"]
+        return hidden_states, output["sequence_mask"], position_ids
 
     def _checkpointed_forward(
         self,
         hidden_states: torch.Tensor,
         sequence_mask: torch.Tensor,
+        position_ids: Optional[torch.LongTensor] = None,
     ) -> List[torch.Tensor]:
-        return CheckpointFunction.apply(self._core_forward, True, hidden_states, sequence_mask)
+        return CheckpointFunction.apply(self._core_forward, True, hidden_states, sequence_mask, position_ids)
 
     def forward(
         self,
         hidden_states: Union[torch.Tensor, TensorPointer],
         sequence_mask: Union[torch.Tensor, TensorPointer],
+        position_ids: Optional[torch.LongTensor] = None,
     ) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
 
         if self.recompute_layer and not isinstance(hidden_states, TensorPointer):
-            hidden_states, sequence_mask = self._checkpointed_forward(hidden_states, sequence_mask)
+            hidden_states, sequence_mask, position_ids = self._checkpointed_forward(
+                hidden_states, sequence_mask, position_ids
+            )
         else:
-            hidden_states, sequence_mask = self._core_forward(hidden_states, sequence_mask)
+            hidden_states, sequence_mask, position_ids = self._core_forward(hidden_states, sequence_mask, position_ids)
 
         return {
             "hidden_states": hidden_states,
             "sequence_mask": sequence_mask,
+            "position_ids": position_ids,
         }
 
 
@@ -795,6 +672,7 @@ class LlamaModel(nn.Module):
         tp_linear_async_communication = (
             parallel_config.tp_linear_async_communication if parallel_config is not None else False
         )
+        log_rank("Initializing LLama 3.1", logger=logger, level=logging.INFO, rank=0)
 
         self.token_position_embeddings = PipelineBlock(
             p2p=self.p2p,
@@ -807,7 +685,7 @@ class LlamaModel(nn.Module):
             module_input_keys={"input_ids", "input_mask"},
             module_output_keys={"input_embeds"},
         )
-
+        log_rank(f"Initialize RoPE Theta = {config.rope_theta}", logger=logger, level=logging.INFO, rank=0)
         self.decoder = nn.ModuleList(
             [
                 PipelineBlock(
@@ -817,10 +695,11 @@ class LlamaModel(nn.Module):
                         "config": config,
                         "parallel_config": parallel_config,
                         "tp_pg": parallel_context.tp_pg,
+                        "sp_pg": parallel_context.sp_pg,
                         "layer_idx": layer_idx,
                     },
-                    module_input_keys={"hidden_states", "sequence_mask"},
-                    module_output_keys={"hidden_states", "sequence_mask"},
+                    module_input_keys={"hidden_states", "sequence_mask", "position_ids"},
+                    module_output_keys={"hidden_states", "sequence_mask", "position_ids"},
                 )
                 for layer_idx in range(config.num_hidden_layers)
             ]
@@ -828,7 +707,7 @@ class LlamaModel(nn.Module):
 
         self.final_layer_norm = PipelineBlock(
             p2p=self.p2p,
-            module_builder=TritonRMSNorm,
+            module_builder=RMSNorm,
             module_kwargs={"hidden_size": config.hidden_size, "eps": config.rms_norm_eps},
             module_input_keys={"input"},
             module_output_keys={"hidden_states"},
@@ -846,12 +725,10 @@ class LlamaModel(nn.Module):
                 # TODO @thomasw21: refactor so that we store that default in a single place.
                 "mode": self.tp_mode,
                 "async_communication": tp_linear_async_communication,
-                "tp_recompute_allgather": parallel_config.tp_recompute_allgather,
             },
             module_input_keys={"x"},
             module_output_keys={"logits"},
         )
-
         self.cast_to_fp32 = PipelineBlock(
             p2p=self.p2p,
             module_builder=lambda: lambda x: x.float(),
@@ -872,13 +749,25 @@ class LlamaModel(nn.Module):
         input_ids: Union[torch.Tensor, TensorPointer],  # [batch_size, seq_length]
         input_mask: Union[torch.Tensor, TensorPointer],  # [batch_size, seq_length]
     ):
+        if isinstance(input_ids, torch.Tensor):
+            batch_size, seq_length = input_ids.shape
+            position_ids = torch.cumsum(input_mask, dim=-1, dtype=torch.int32) - 1
+            # split input if using ring attention
+            if self.parallel_context.sp_pg.size() > 1:
+                world_size = self.parallel_context.sp_pg.size()
+                rank = dist.get_rank(self.parallel_context.sp_pg)
+                input_ids, input_mask, position_ids = zigzag_split(
+                    rank, world_size, input_ids, input_mask, position_ids
+                )
+        else:
+            position_ids = TensorPointer(input_ids.group_rank)
         # all tensors are optional as most ranks don't need anything from the dataloader.
-
         output = self.token_position_embeddings(input_ids=input_ids, input_mask=input_mask)
 
         hidden_encoder_states = {
             "hidden_states": output["input_embeds"],
             "sequence_mask": input_mask,
+            "position_ids": position_ids,
         }
         for encoder_block in self.decoder:
             hidden_encoder_states = encoder_block(**hidden_encoder_states)
@@ -936,9 +825,10 @@ def masked_mean(loss, label_mask, dtype):
 
 
 class Loss(nn.Module):
-    def __init__(self, tp_pg: dist.ProcessGroup):
+    def __init__(self, tp_pg: dist.ProcessGroup, sp_pg: dist.ProcessGroup):
         super().__init__()
         self.tp_pg = tp_pg
+        self.sp_pg = sp_pg
 
     def forward(
         self,
@@ -949,6 +839,11 @@ class Loss(nn.Module):
         # Megatron by defaults cast everything in fp32. `--f16-lm-cross-entropy` is an option you can use to keep current precision.
         # https://github.com/NVIDIA/Megatron-LM/blob/f267e6186eae1d6e2055b412b00e2e545a8e896a/megatron/model/gpt_model.py#L38
 
+        # ring attention: split the label as well
+        if isinstance(label_ids, torch.Tensor) and self.sp_pg.size() > 1:
+            world_size = self.sp_pg.size()
+            rank = dist.get_rank(self.sp_pg)
+            label_ids, label_mask = zigzag_split(rank, world_size, label_ids, label_mask)
         loss = sharded_cross_entropy(
             sharded_logits, label_ids.transpose(0, 1).contiguous(), group=self.tp_pg, dtype=torch.float
         ).transpose(0, 1)
@@ -972,7 +867,7 @@ class LlamaForTraining(NanotronModel):
         self.loss = PipelineBlock(
             p2p=self.model.p2p,
             module_builder=Loss,
-            module_kwargs={"tp_pg": parallel_context.tp_pg},
+            module_kwargs={"tp_pg": parallel_context.tp_pg, "sp_pg": parallel_context.sp_pg},
             module_input_keys={
                 "sharded_logits",
                 "label_ids",

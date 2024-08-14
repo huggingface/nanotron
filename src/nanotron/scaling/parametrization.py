@@ -4,7 +4,7 @@ from enum import Enum, auto
 from typing import Dict
 
 from nanotron.config import ModelArgs
-from nanotron.nn.layer_norm import TritonRMSNorm
+from nanotron.nn.layer_norm import RMSNorm, TritonRMSNorm
 from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelColumnLinear,
     TensorParallelEmbedding,
@@ -37,6 +37,7 @@ class StandardParametrizator(Parametrizator):
             TensorParallelColumnLinear: self._parametrize_column_linear,
             TensorParallelRowLinear: self._parametrize_row_linear,
             TritonRMSNorm: self._parametrize_layer_norm,
+            RMSNorm: self._parametrize_layer_norm,
             TensorParallelEmbedding: self._parametrize_embedding,
         }
 
@@ -88,6 +89,7 @@ class SpectralMupParametrizator(Parametrizator):
             TensorParallelColumnLinear: self._parametrize_mup_weight,
             TensorParallelRowLinear: self._parametrize_mup_weight,
             TritonRMSNorm: self._parametrize_layer_norm,
+            RMSNorm: self._parametrize_layer_norm,
             TensorParallelEmbedding: self._parametrize_embedding,
         }
         self.std = 1.0
