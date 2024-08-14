@@ -54,6 +54,11 @@ class FP8LinearRecipe:
 
 @dataclass
 class FP8OptimRecipe:
+    """
+    master_weight_dtype, exp_avg_dtype, exp_avg_sq_dtype are just storage dtypes
+    accum_dtype is the dtype for calculations, we have to cast other dtypes to this dtype
+    """
+
     # NOTE: these are just storage dtypes
     # not FP8Tensor that need to dynamically change
     # during training

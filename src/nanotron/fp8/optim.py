@@ -323,6 +323,18 @@ class FP8Adam(Optimizer):
         for group in self.param_groups:
             group.setdefault("amsgrad", False)
 
+    # TODO(xrsrke): this is similar with master weight func, remove this
+    def _create_optim_state(self, tensor, dtype):
+        if dtype == DTypes.FP8E4M3 or dtype == DTypes.FP8E5M2:
+            tensor = FP8Tensor(tensor, dtype=dtype)
+        elif dtype == DTypes.KFLOAT16:
+            tensor = FP16Tensor(tensor, dtype=DTypes.KFLOAT16)
+        elif isinstance(dtype, torch.dtype):
+            tensor = tensor.to(dtype) if tensor.dtype != dtype else tensor
+        else:
+            raise ValueError(f"supported dtype={dtype}")
+        return tensor
+
     def _init_optim_states(
         self,
         state: Dict[str, Any],
@@ -340,6 +352,9 @@ class FP8Adam(Optimizer):
         # exp_avg_sq = torch.zeros(p.data.shape, dtype=torch.float32, device="cuda")
         exp_avg = torch.zeros(p.data.shape, dtype=self.optim_accum_dtype, device="cuda")
         exp_avg_sq = torch.zeros(p.data.shape, dtype=self.optim_accum_dtype, device="cuda")
+
+        exp_avg = self._create_optim_state(exp_avg, self.recipe.exp_avg_dtype)
+        exp_avg_sq = self._create_optim_state(exp_avg_sq, self.recipe.exp_avg_sq_dtype)
 
         # state["step"] = torch.tensor(0.0, dtype=torch.float32, device="cuda")
         state["step"] = torch.tensor(0.0, dtype=self.optim_accum_dtype, device="cuda")
@@ -412,7 +427,6 @@ class FP8Adam(Optimizer):
                     assert data.dtype in FP8_DTYPES
                     assert p in self.mappping_fp8_to_master_weight, "FP8Tensor should have a master weight"
 
-                    # NOTE: sanity check
                     if self.master_weight_dtype == DTypes.KFLOAT16:
                         master_data = self.mappping_fp8_to_master_weight[p]
                         fp32_data = convert_tensor_from_fp16(master_data, self.optim_accum_dtype)
@@ -454,7 +468,23 @@ class FP8Adam(Optimizer):
                     else:
                         raise ValueError("Overflow, underflow, or NaN detected in the gradients")
 
-                fp32_exp_avg, fp32_exp_avg_sq = state["exp_avg"], state["exp_avg_sq"]
+                exp_avg, exp_avg_sq = state["exp_avg"], state["exp_avg_sq"]
+
+                if exp_avg.__class__ == FP8Tensor:
+                    assert exp_avg.fp8_meta.dtype == DTypes.FP8E4M3
+                    fp32_exp_avg = convert_tensor_from_fp8(exp_avg, exp_avg.fp8_meta, self.optim_accum_dtype)
+                elif exp_avg.dtype == self.optim_accum_dtype:
+                    fp32_exp_avg = exp_avg
+                else:
+                    raise ValueError(f"not support exp_avg.dtype={exp_avg.dtype}")
+
+                if exp_avg_sq.__class__ == FP16Tensor:
+                    fp32_exp_avg_sq = convert_tensor_from_fp16(exp_avg_sq, self.optim_accum_dtype)
+                elif exp_avg_sq.dtype == self.optim_accum_dtype:
+                    fp32_exp_avg_sq = exp_avg_sq
+                else:
+                    raise ValueError(f"not support exp_avg_sq.dtype={exp_avg_sq.dtype}")
+
                 assert fp32_exp_avg.dtype == self.optim_accum_dtype
                 assert fp32_exp_avg_sq.dtype == self.optim_accum_dtype
 
@@ -463,7 +493,11 @@ class FP8Adam(Optimizer):
                 step = state["step"]
                 step += 1
 
-                if constants.is_ready_to_log is True and hasattr(self, "params_id_to_param_names"):
+                if (
+                    constants.is_ready_to_log is True
+                    and hasattr(self, "params_id_to_param_names")
+                    and constants.CONFIG.fp8.run_fp8_sanity_check is True
+                ):
                     if "0.pp_block.mlp.down_proj.weight" in p_name or "lm_head" in p_name:
                         from nanotron import constants
 
@@ -564,13 +598,16 @@ class FP8Adam(Optimizer):
                 # delete_tensor_from_memory(new_fp32_data)
                 # delete_tensor_from_memory(denom)
 
+                exp_avg = self._create_optim_state(fp32_exp_avg, self.recipe.exp_avg_dtype)
+                exp_avg_sq = self._create_optim_state(fp32_exp_avg_sq, self.recipe.exp_avg_sq_dtype)
+
                 state["step"] = step
-                state["exp_avg"] = fp32_exp_avg
-                state["exp_avg_sq"] = fp32_exp_avg_sq
+                state["exp_avg"] = exp_avg
+                state["exp_avg_sq"] = exp_avg_sq
 
                 assert state["step"] == step
-                assert state["exp_avg"] is fp32_exp_avg
-                assert state["exp_avg_sq"] is fp32_exp_avg_sq
+                assert state["exp_avg"] is exp_avg
+                assert state["exp_avg_sq"] is exp_avg_sq
 
                 if constants.is_ready_to_log is True:
                     loggings[p]["step"] = {"value": step}

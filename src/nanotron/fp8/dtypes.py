@@ -7,6 +7,6 @@ from enum import Enum
 class DTypes(Enum):
     FP8E4M3 = "FP8E4M3"
     FP8E5M2 = "FP8E5M2"
-    KFLOAT16 = "KFLOAT16"
+    KFLOAT16 = "kfloat16"
     KFLOAT32 = "KFLOAT32"
-    KBFLOAT16 = "KBFLOAT16"
+    KBFLOAT16 = "kbfloat16"
