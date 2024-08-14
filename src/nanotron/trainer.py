@@ -148,6 +148,7 @@ class DistributedTrainer:
             data_parallel_size=self.config.parallelism.dp,
             expert_parallel_size=self.config.parallelism.expert_parallel_size,
         )
+        constants.PARALLEL_CONTEXT = self.parallel_context
 
         self.pre_init()
 
@@ -468,8 +469,6 @@ class DistributedTrainer:
         self.unwrapped_model.module_id_to_prefix[id(self.unwrapped_model)] = ""
 
         from nanotron import constants
-
-        constants.PARALLEL_CONTEXT = self.parallel_context
 
         prof = get_profiler(config=self.config)
         torch.cuda.empty_cache()

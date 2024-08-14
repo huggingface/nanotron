@@ -42,4 +42,7 @@ class FP8Args:
     update_clipping: bool = False
     skip_param_update_if_nan: bool = False
 
+    sync_amax_in_input: bool = False
+    sync_amax_in_weight: bool = False
+    sync_amax_in_igrad: bool = False
     sync_amax_in_wgrad: bool = False

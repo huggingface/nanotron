@@ -12,7 +12,6 @@ from nanotron import constants, logging
 from nanotron.fp8.constants import DTYPE_TO_FP8_MAX, FP8_DTYPES, INITIAL_SCALING_FACTOR
 from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.meta import FP8Meta
-from nanotron.logging import log_rank
 
 logger = logging.get_logger(__name__)
 
@@ -27,9 +26,9 @@ def get_amax(tensor: torch.Tensor, sync: bool) -> torch.Tensor:
         world_size = dist.get_world_size(group=constants.PARALLEL_CONTEXT.tp_pg)
 
         if world_size > 1:
-            log_rank(f"Local amax is {amax}", logger=logger, level=logging.INFO)
+            # log_rank(f"Local amax is {amax}", logger=logger, level=logging.INFO)
             dist.all_reduce(amax, op=dist.ReduceOp.MAX, group=constants.PARALLEL_CONTEXT.tp_pg)
-            log_rank(f"Global amax is {amax}", logger=logger, level=logging.INFO)
+            # log_rank(f"Global amax is {amax}", logger=logger, level=logging.INFO)
 
     return amax
 
@@ -124,13 +123,15 @@ class LowPrecisionTensor(torch.Tensor):
         return True if self.fp8_meta == other.fp8_meta and torch.equal(self.data, other.data) else False
 
     # TODO(xrsrke): directly set a tensor data using tensor.data = new_data
-    def set_data(self, data: Union[torch.Tensor, LowPrecisionTensor, None]):
+    def set_data(self, data: Union[torch.Tensor, LowPrecisionTensor, None], sync: bool = False):
         assert isinstance(data, (self.__class__, torch.Tensor)), f"data must be a torch.Tensor or a {self.__class__}"
         if data.__class__ in [FP8Tensor, FP16Tensor]:
             assert data.dtype == self.data.dtype, "The data must have the same dtype as the tensor, got {data.dtype}"
             quantized_data = data
         else:
-            quantized_data = self.__class__(data, dtype=self.fp8_meta.dtype, interval=self.fp8_meta.interval)
+            quantized_data = self.__class__(
+                data, dtype=self.fp8_meta.dtype, interval=self.fp8_meta.interval, sync=sync
+            )
 
         self.data = quantized_data.data
         self._orig_data_after_set_data = data

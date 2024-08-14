@@ -551,8 +551,13 @@ class FP8Adam(Optimizer):
                 new_fp32_data = fp32_data - fp32_new_changes_in_p
 
                 if IS_FP8:
+                    from nanotron.config.fp8_config import FP8Args
+
+                    fp8_config = cast(FP8Args, constants.CONFIG.fp8)
+                    sync_amax_in_weight = fp8_config.sync_amax_in_weight
+
                     self.mappping_fp8_to_master_weight[p] = self._create_master_weight(new_fp32_data)
-                    p.data.set_data(new_fp32_data)
+                    p.data.set_data(new_fp32_data, sync=sync_amax_in_weight)
 
                     # NOTE: SANITY CHECK
                     if constants.CONFIG.fp8.run_fp8_sanity_check is True:

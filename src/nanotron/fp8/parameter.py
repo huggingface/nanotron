@@ -33,12 +33,19 @@ class FP8Parameter(nn.Parameter):
         assert data.device != torch.device("cpu"), "FP8Parameter only supports CUDA tensors"
 
         with torch.no_grad():
+            from typing import cast
+
+            from nanotron.config.fp8_config import FP8Args
+
+            fp8_config = cast(FP8Args, constants.CONFIG.fp8)
+            sync_amax_in_weight = fp8_config.sync_amax_in_weight
+
             # TODO(xrsrke): support take an FP8 Tensor as data
             # currently we can't only quantize a tensor to FP8 after the parameter is created
             # because it raise "Only Tensors of floating point and complex dtype can require gradients"
             # TODO(xrsrke): delete this fp32 tensor from memory after quantization
             self = torch.Tensor._make_subclass(cls, data, requires_grad)
-            self._data = FP8Tensor(data, dtype=dtype, interval=interval)
+            self._data = FP8Tensor(data, dtype=dtype, interval=interval, sync=sync_amax_in_weight)
             # TODO(xrsrke): don't store fp32 raw data in memory after quantization
 
             if constants.ITERATION_STEP == 1:
