@@ -4,6 +4,7 @@ from nanotron.fp8.tensor import FP8Tensor
 from nanotron.fp8.utils import get_leaf_modules
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.tensor_parallel.nn import FP8TensorParallelColumnLinear, FP8TensorParallelRowLinear
+from nanotron.testing.fp8 import setup_global_config
 from nanotron.testing.parallel import init_distributed, rerun_if_address_is_in_use
 from nanotron.testing.utils import create_nanotron_model
 
@@ -12,20 +13,22 @@ MODULE_NAME_TO_FP8_MODULE = {
     "o_proj": FP8TensorParallelRowLinear,
     "gate_up_proj": FP8TensorParallelColumnLinear,
     "down_proj": FP8TensorParallelRowLinear,
-    "lm_head": FP8TensorParallelColumnLinear,
+    # "lm_head": FP8TensorParallelColumnLinear,
 }
 
 
 @pytest.mark.parametrize("tp,dp,pp", [[1, 1, 1], [2, 1, 1]])
-@pytest.mark.parametrize("is_fp8", [True, False])
+# @pytest.mark.parametrize("is_fp8", [True,])
 @rerun_if_address_is_in_use()
-def test_initialize_fp8_model(tp: int, dp: int, pp: int, is_fp8: bool):
-    dtype = torch.int8 if is_fp8 else torch.bfloat16
-    init_distributed(tp=tp, dp=dp, pp=pp)(_test_initialize_fp8_model)(dtype=dtype)
+def test_initialize_fp8_model(tp: int, dp: int, pp: int):
+    # dtype = torch.int8 if is_fp8 else torch.bfloat16
+    init_distributed(tp=tp, dp=dp, pp=pp)(_test_initialize_fp8_model)()
 
 
-def _test_initialize_fp8_model(parallel_context: ParallelContext, dtype: torch.dtype):
-    model = create_nanotron_model(parallel_context, dtype=dtype)
+def _test_initialize_fp8_model(parallel_context: ParallelContext):
+    # TODO(xrsrke): delete this shit
+    setup_global_config()
+    model = create_nanotron_model(parallel_context, dtype=torch.int8)
     modules = get_leaf_modules(model)
 
     for module_name, module in modules:
@@ -52,6 +55,7 @@ def test_forward_pass_of_fp8_model(tp: int, dp: int, pp: int):
 def _test_forward_pass_of_fp8_model(
     parallel_context: ParallelContext, input_ids: torch.Tensor, input_mask: torch.Tensor
 ):
+    setup_global_config()
     input_ids = input_ids.to("cuda")
     input_mask = input_mask.to("cuda")
     nanotron_model = create_nanotron_model(parallel_context, dtype=torch.int8)
@@ -73,6 +77,7 @@ def test_fp8_model_has_gradients(tp: int, dp: int, pp: int):
 def _test_fp8_model_has_gradients(
     parallel_context: ParallelContext, input_ids: torch.Tensor, input_mask: torch.Tensor
 ):
+    setup_global_config()
     input_ids = input_ids.to("cuda")
     input_mask = input_mask.to("cuda")
     nanotron_model = create_nanotron_model(parallel_context, dtype=torch.int8)

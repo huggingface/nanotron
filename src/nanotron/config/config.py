@@ -347,10 +347,11 @@ class GenerationArgs:
 class Config:
     """Main configuration class"""
 
-    general: GeneralArgs
-    parallelism: ParallelismArgs
-    model: ModelArgs
-    tokenizer: TokenizerArgs
+    # NOTE: hacky the first four should not be optional
+    general: Optional[GeneralArgs] = None
+    parallelism: Optional[ParallelismArgs] = None
+    model: Optional[ModelArgs] = None
+    tokenizer: Optional[TokenizerArgs] = None
     checkpoints: Optional[CheckpointsArgs] = None
     logging: Optional[LoggingArgs] = None
     tokens: Optional[TokensArgs] = None

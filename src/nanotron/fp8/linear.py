@@ -98,18 +98,24 @@ class _FP8Matmul(torch.autograd.Function):
     ) -> torch.Tensor:
         assert not isinstance(input, FP8Tensor)
 
+        from nanotron import constants
+        from nanotron.config.fp8_config import FP8Args
+
+        # dist.monitored_barrier(wait_all_ranks=True)
+
+        fp8_config = cast(FP8Args, constants.CONFIG.fp8)
+        sync_amax_in_input = fp8_config.sync_amax_in_input
+
         orig_input_shape = input.shape
         input = input.contiguous().view(-1).contiguous().view(orig_input_shape)
 
         if metadatas.input is None:
             fp8_input = FP8Tensor(
-                input,
-                dtype=recipe.input.dtype,
-                interval=recipe.input.interval,
+                input, dtype=recipe.input.dtype, interval=recipe.input.interval, sync=sync_amax_in_input
             )
             metadatas.input = fp8_input.fp8_meta
         else:
-            fp8_input = FP8Tensor.from_metadata(input, metadatas.input)
+            fp8_input = FP8Tensor.from_metadata(input, metadatas.input, sync=sync_amax_in_input)
 
         ctx.save_for_backward(fp8_input, weight)
         ctx.metadatas = metadatas
@@ -122,6 +128,8 @@ class _FP8Matmul(torch.autograd.Function):
         assert fp8_input.data.is_contiguous()
         assert weight.data.is_contiguous()
         assert accum_output.is_contiguous()
+
+        # dist.monitored_barrier(wait_all_ranks=True)
 
         output = fp8_matmul_kernel(
             # NOTE: that works
@@ -145,6 +153,17 @@ class _FP8Matmul(torch.autograd.Function):
         ∂L/∂W = Xᵀ @ ∂L/∂Y
         Reference: https://web.eecs.umich.edu/~justincj/teaching/eecs442/notes/linear-backprop.html
         """
+        from typing import cast
+
+        from nanotron import constants
+        from nanotron.config.fp8_config import FP8Args
+
+        # dist.monitored_barrier(wait_all_ranks=True)
+
+        fp8_config = cast(FP8Args, constants.CONFIG.fp8)
+        sync_amax_in_igrad = fp8_config.sync_amax_in_igrad
+        sync_amax_in_wgrad = fp8_config.sync_amax_in_wgrad
+
         # import pydevd
         # pydevd.settrace(suspend=False, trace_only_current_thread=True)
         fp8_input, fp8_weight = ctx.saved_tensors
@@ -162,10 +181,11 @@ class _FP8Matmul(torch.autograd.Function):
                 grad_output,
                 dtype=recipe.input_grad.dtype,
                 interval=recipe.input_grad.interval,
+                sync=sync_amax_in_igrad,
             )
             ctx.metadatas.input_grad = fp8_grad_output.fp8_meta
         else:
-            fp8_grad_output = FP8Tensor.from_metadata(grad_output, ctx.metadatas.input_grad)
+            fp8_grad_output = FP8Tensor.from_metadata(grad_output, ctx.metadatas.input_grad, sync=sync_amax_in_igrad)
 
         transposed_fp8_weight = fp8_weight.transpose_fp8()
 
@@ -217,17 +237,16 @@ class _FP8Matmul(torch.autograd.Function):
         orig_shape = grad_weight.shape
         grad_weight = grad_weight.contiguous().t().contiguous().view(-1).contiguous().reshape(orig_shape)
 
-        from nanotron import constants
-
-        sync = constants.CONFIG.fp8.sync_amax_in_wgrad
-
         if ctx.metadatas.weight_grad is None:
             fp8_weight_grad = FP8Tensor(
-                grad_weight, dtype=recipe.weight_grad.dtype, interval=recipe.weight_grad.interval, sync=sync
+                grad_weight,
+                dtype=recipe.weight_grad.dtype,
+                interval=recipe.weight_grad.interval,
+                sync=sync_amax_in_wgrad,
             )
             ctx.metadatas.weight_grad = fp8_weight_grad.fp8_meta
         else:
-            fp8_weight_grad = FP8Tensor.from_metadata(grad_weight, ctx.metadatas.weight_grad, sync=sync)
+            fp8_weight_grad = FP8Tensor.from_metadata(grad_weight, ctx.metadatas.weight_grad, sync=sync_amax_in_wgrad)
 
         fp8_weight.grad = fp8_weight_grad
 

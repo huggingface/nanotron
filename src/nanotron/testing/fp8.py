@@ -66,7 +66,34 @@ OPTIM_RECIPES = [
     FP8OptimRecipe(
         master_weight_dtype=DTypes.KFLOAT16,
         accum_dtype=torch.float32,
-        exp_avg_dtype=torch.float32,
-        exp_avg_sq_dtype=torch.float32,
+        exp_avg_dtype=DTypes.FP8E4M3,
+        exp_avg_sq_dtype=DTypes.KFLOAT16,
     ),
 ]
+
+
+def setup_global_config(
+    optim_recipe=OPTIM_RECIPES[1], model_recipe=None, resid_dtype=torch.float32, accum_dtype=torch.bfloat16
+):
+    from nanotron import constants
+    from nanotron.config import Config, TokensArgs
+    from nanotron.config.fp8_config import FP8Args
+
+    config = Config(
+        fp8=FP8Args(
+            resid_dtype=resid_dtype,
+            accum_dtype=accum_dtype,
+            model=model_recipe,
+            optim=optim_recipe,
+        ),
+        tokens=TokensArgs(
+            batch_accumulation_per_replica=1,
+            limit_test_batches=0,
+            limit_val_batches=0,
+            micro_batch_size=16,
+            sequence_length=64,
+            train_steps=10,
+            val_check_interval=-1,
+        ),
+    )
+    constants.CONFIG = config
