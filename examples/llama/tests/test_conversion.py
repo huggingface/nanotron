@@ -37,7 +37,7 @@ CONFIG = NanotronLlamaConfig(
         "max_position_embeddings": 128,
         "num_attention_heads": 8,
         "num_hidden_layers": 4,
-        "num_key_value_heads": 4,
+        "num_key_value_heads": 8,
         "pad_token_id": None,
         "pretraining_tp": 1,
         "rms_norm_eps": 1e-06,
@@ -141,7 +141,7 @@ def _test_hf_to_nt(parallel_context: ParallelContext, input_ids: torch.Tensor):
     logits_nt = model_nt.model(input_ids, input_mask).permute(1, 0, 2)
     logits_hf = model_hf(input_ids).logits
     assert logits_nt.size() == logits_hf.size()
-    torch.testing.assert_allclose(logits_hf, logits_nt, atol=ATOL)  
+    torch.testing.assert_allclose(logits_hf, logits_nt, atol=ATOL)
 
 
 def test_hf_to_nt(input_ids: torch.Tensor):

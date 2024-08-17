@@ -383,6 +383,19 @@ class FP8Adam(Optimizer):
             optim_loggings[param_name] = self.loggings[p]
         return convert_logs_to_flat_logs(optim_loggings)
 
+    def _dequantize_optim_state(self, state):
+        if state.__class__ == FP8Tensor:
+            assert state.fp8_meta.dtype == DTypes.FP8E4M3
+            fp32_state = convert_tensor_from_fp8(state, state.fp8_meta, self.optim_accum_dtype)
+        elif state.__class__ == FP16Tensor:
+            fp32_state = convert_tensor_from_fp16(state, self.optim_accum_dtype)
+        elif state.dtype == self.optim_accum_dtype:
+            fp32_state = state
+        elif isinstance(state.dtype, torch.dtype):
+            fp32_state = state.to(self.optim_accum_dtype) if state.dtype != self.optim_accum_dtype else state
+
+        return fp32_state
+
     @torch.no_grad()
     def step(self):
         # NOTE: sanity check the entire params has at least one grad
@@ -427,13 +440,12 @@ class FP8Adam(Optimizer):
                     assert data.dtype in FP8_DTYPES
                     assert p in self.mappping_fp8_to_master_weight, "FP8Tensor should have a master weight"
 
+                    master_data = self.mappping_fp8_to_master_weight[p]
                     if self.master_weight_dtype == DTypes.KFLOAT16:
-                        master_data = self.mappping_fp8_to_master_weight[p]
                         fp32_data = convert_tensor_from_fp16(master_data, self.optim_accum_dtype)
                     else:
-                        master_data = self.mappping_fp8_to_master_weight[p]
                         fp32_data = (
-                            master_data.to(self.self.optim_accum_dtype)
+                            master_data.to(self.optim_accum_dtype)
                             if master_data.dtype != self.optim_accum_dtype
                             else master_data
                         )
@@ -470,20 +482,22 @@ class FP8Adam(Optimizer):
 
                 exp_avg, exp_avg_sq = state["exp_avg"], state["exp_avg_sq"]
 
-                if exp_avg.__class__ == FP8Tensor:
-                    assert exp_avg.fp8_meta.dtype == DTypes.FP8E4M3
-                    fp32_exp_avg = convert_tensor_from_fp8(exp_avg, exp_avg.fp8_meta, self.optim_accum_dtype)
-                elif exp_avg.dtype == self.optim_accum_dtype:
-                    fp32_exp_avg = exp_avg
-                else:
-                    raise ValueError(f"not support exp_avg.dtype={exp_avg.dtype}")
+                # if exp_avg.__class__ == FP8Tensor:
+                #     assert exp_avg.fp8_meta.dtype == DTypes.FP8E4M3
+                #     fp32_exp_avg = convert_tensor_from_fp8(exp_avg, exp_avg.fp8_meta, self.optim_accum_dtype)
+                # elif exp_avg.dtype == self.optim_accum_dtype:
+                #     fp32_exp_avg = exp_avg
+                # else:
+                #     raise ValueError(f"not support exp_avg.dtype={exp_avg.dtype}")
 
-                if exp_avg_sq.__class__ == FP16Tensor:
-                    fp32_exp_avg_sq = convert_tensor_from_fp16(exp_avg_sq, self.optim_accum_dtype)
-                elif exp_avg_sq.dtype == self.optim_accum_dtype:
-                    fp32_exp_avg_sq = exp_avg_sq
-                else:
-                    raise ValueError(f"not support exp_avg_sq.dtype={exp_avg_sq.dtype}")
+                # if exp_avg_sq.__class__ == FP16Tensor:
+                #     fp32_exp_avg_sq = convert_tensor_from_fp16(exp_avg_sq, self.optim_accum_dtype)
+                # elif exp_avg_sq.dtype == self.optim_accum_dtype:
+                #     fp32_exp_avg_sq = exp_avg_sq
+                # else:
+                #     raise ValueError(f"not support exp_avg_sq.dtype={exp_avg_sq.dtype}")
+                fp32_exp_avg = self._dequantize_optim_state(exp_avg)
+                fp32_exp_avg_sq = self._dequantize_optim_state(exp_avg_sq)
 
                 assert fp32_exp_avg.dtype == self.optim_accum_dtype
                 assert fp32_exp_avg_sq.dtype == self.optim_accum_dtype
@@ -515,16 +529,29 @@ class FP8Adam(Optimizer):
                 unbiased_fp32_exp_avg = fp32_exp_avg * bias_correction1
                 unbiased_fp32_exp_avg_sq = fp32_exp_avg_sq * bias_correction2
 
-                denom = unbiased_fp32_exp_avg_sq.sqrt() + group["eps"]
-                normalized_grad = unbiased_fp32_exp_avg / denom
+                if fp8_config.adam_atan2 is True:
+                    from torch import atan2
 
-                rms = self._calculate_mean_sqrt_ignoring_nans(
-                    fp32_grad.pow(2),
-                    torch.max(
+                    adam_atan2_lambda = fp8_config.adam_atan2_lambda
+                    normalized_grad = adam_atan2_lambda * atan2(
+                        unbiased_fp32_exp_avg, adam_atan2_lambda * unbiased_fp32_exp_avg_sq.sqrt()
+                    )
+
+                    rms = self._calculate_mean_sqrt_ignoring_nans(
+                        fp32_grad.pow(2),
                         unbiased_fp32_exp_avg_sq,
-                        torch.tensor(group["eps"], dtype=self.optim_accum_dtype, device="cuda").pow(2),
-                    ),
-                )
+                    )
+                else:
+                    denom = unbiased_fp32_exp_avg_sq.sqrt() + group["eps"]
+                    normalized_grad = unbiased_fp32_exp_avg / denom
+
+                    rms = self._calculate_mean_sqrt_ignoring_nans(
+                        fp32_grad.pow(2),
+                        torch.max(
+                            unbiased_fp32_exp_avg_sq,
+                            torch.tensor(group["eps"], dtype=self.optim_accum_dtype, device="cuda").pow(2),
+                        ),
+                    )
 
                 if constants.CONFIG.fp8.update_clipping is True:
                     if rms > 1:
@@ -551,9 +578,6 @@ class FP8Adam(Optimizer):
                 new_fp32_data = fp32_data - fp32_new_changes_in_p
 
                 if IS_FP8:
-                    from nanotron.config.fp8_config import FP8Args
-
-                    fp8_config = cast(FP8Args, constants.CONFIG.fp8)
                     sync_amax_in_weight = fp8_config.sync_amax_in_weight
 
                     self.mappping_fp8_to_master_weight[p] = self._create_master_weight(new_fp32_data)

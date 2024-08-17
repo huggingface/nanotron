@@ -29,8 +29,8 @@ logging:
   iteration_step_info_interval: 1
   log_level: info
   log_level_replica: info
-  monitor_model_states: true
-  monitor_model_states_using_hooks: true
+  monitor_model_states: false
+  monitor_model_states_using_hooks: false
 model:
   ddp_bucket_cap_mb: 25
   dtype: float8

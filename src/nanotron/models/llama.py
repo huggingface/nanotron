@@ -599,6 +599,18 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         qkv_states = self.qkv_proj(
             hidden_states
         )  # [seq_length, batch_size, n_local_q_heads * d_qk + 2 * n_local_kv_heads * d_qk]
+
+        from typing import cast
+
+        from nanotron import constants
+        from nanotron.config.fp8_config import FP8Args
+
+        fp8_config = cast(FP8Args, constants.CONFIG.fp8)
+
+        if fp8_config.qkv_clipping is True:
+            qkv_clipping_factor = fp8_config.qkv_clipping_factor
+            qkv_states = qkv_states.clamp(min=-qkv_clipping_factor, max=qkv_clipping_factor)
+
         q_length, batch_size, _ = qkv_states.shape
 
         if self.is_gqa:
