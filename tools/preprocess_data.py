@@ -8,7 +8,7 @@ To process Jsonl files:
 import argparse
 
 from datatrove.executor.local import LocalPipelineExecutor
-from datatrove.pipeline.readers import HuggingFaceDatasetReader, JsonlReader
+from datatrove.pipeline.readers import HuggingFaceDatasetReader, JsonlReader, ParquetReader
 from datatrove.pipeline.tokens import DocumentTokenizer
 
 
@@ -43,11 +43,14 @@ def get_args():
     group.add_argument(
         "--n-tasks", type=int, default=8, help="Total number of tasks to run the preprocessing step. Default: 8"
     )
+    group.add_argument(
+        "--shuffle", type=bool, default=False, help="Shuffle or not the dataset. Default: True"
+    )
     # Subparsers for processing either Hugging Face datasets or jsonl files
     sp = parser.add_subparsers(
         dest="readers",
         required=True,
-        description="Type of dataset to process. It can be either a Hugging Face Dataset loaded with datasets.load_data ('hf') or a .jsonl dataset ('jsonl')",
+        description="Type of dataset to process. It can be either a Hugging Face Dataset loaded with datasets.load_data ('hf'), a .jsonl dataset ('jsonl') or a .parquet dataset ('parquet')",
     )
 
     p1 = sp.add_parser(name="hf")
@@ -72,6 +75,16 @@ def get_args():
         "--glob-pattern", type=str, default=None, help="A glob pattern to filter files to read. Default: None"
     )
 
+    p3 = sp.add_parser(name="parquet")
+    p3.add_argument(
+        "--dataset",
+        type=str,
+        required=True,
+        help="Path to a .parquet file or a folder containing parquet .jsonl files",
+    )
+    p3.add_argument("--column", type=str, default="text", help="Column to preprocess from the Dataset. Default: text")
+    p3.add_argument("--glob-pattern", type=str, default=None, help="A glob pattern to filter files to read. Default: None")
+
     args = parser.parse_args()
 
     return args
@@ -85,9 +98,21 @@ def main(args):
             text_key=args.column,
             dataset_options={"split": args.split},
         )
-    else:
-        datatrove_reader = JsonlReader(data_folder=args.dataset, text_key=args.column, glob_pattern=args.glob_pattern)
+    if args.readers == "jsonl":
+        datatrove_reader = JsonlReader(
+            data_folder=args.dataset, 
+            glob_pattern=args.glob_pattern,
+            text_key=args.column, 
+            )
 
+    elif args.readers == "parquet":
+        datatrove_reader = ParquetReader(
+            data_folder=args.dataset, 
+            glob_pattern=args.glob_pattern,
+            text_key=args.column, 
+        )
+    else: 
+        raise Exception(f"args.readers define to {args.readers}, must be in [hf,jsonl,parquet]")
     preprocess_executor = LocalPipelineExecutor(
         pipeline=[
             datatrove_reader,
@@ -95,7 +120,7 @@ def main(args):
                 output_folder=args.output_folder,
                 tokenizer_name_or_path=args.tokenizer_name_or_path,
                 eos_token=args.eos_token,
-                shuffle=False,
+                shuffle=args.shuffle,
                 max_tokens_per_file=1e9,
             ),
         ],
