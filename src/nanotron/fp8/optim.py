@@ -385,7 +385,7 @@ class FP8Adam(Optimizer):
 
     def _dequantize_optim_state(self, state):
         if state.__class__ == FP8Tensor:
-            assert state.fp8_meta.dtype == DTypes.FP8E4M3
+            # assert state.fp8_meta.dtype == DTypes.FP8E4M3
             fp32_state = convert_tensor_from_fp8(state, state.fp8_meta, self.optim_accum_dtype)
         elif state.__class__ == FP16Tensor:
             fp32_state = convert_tensor_from_fp16(state, self.optim_accum_dtype)
@@ -496,6 +496,7 @@ class FP8Adam(Optimizer):
                 #     fp32_exp_avg_sq = exp_avg_sq
                 # else:
                 #     raise ValueError(f"not support exp_avg_sq.dtype={exp_avg_sq.dtype}")
+
                 fp32_exp_avg = self._dequantize_optim_state(exp_avg)
                 fp32_exp_avg_sq = self._dequantize_optim_state(exp_avg_sq)
 
@@ -507,18 +508,21 @@ class FP8Adam(Optimizer):
                 step = state["step"]
                 step += 1
 
-                if (
-                    constants.is_ready_to_log is True
-                    and hasattr(self, "params_id_to_param_names")
-                    and constants.CONFIG.fp8.run_fp8_sanity_check is True
-                ):
-                    if "0.pp_block.mlp.down_proj.weight" in p_name or "lm_head" in p_name:
-                        from nanotron import constants
+                if step == 10:
+                    assert 1 == 1
 
-                        write_to_file(
-                            f"step={constants.ITERATION_STEP}, param={p_name}, lr={group['lr']}, initial_lr={group['initial_lr']}",
-                            filename="/fsx/phuc/temp/temp3_env_for_fp8/nanotron/lr_logs.txt",
-                        )
+                # if (
+                #     constants.is_ready_to_log is True
+                #     and hasattr(self, "params_id_to_param_names")
+                #     and constants.CONFIG.fp8.run_fp8_sanity_check is True
+                # ):
+                #     if "0.pp_block.mlp.down_proj.weight" in p_name or "lm_head" in p_name:
+                #         from nanotron import constants
+
+                #         write_to_file(
+                #             f"step={constants.ITERATION_STEP}, param={p_name}, lr={group['lr']}, initial_lr={group['initial_lr']}",
+                #             filename="/fsx/phuc/temp/temp3_env_for_fp8/nanotron/lr_logs.txt",
+                #         )
 
                 fp32_exp_avg = beta1 * fp32_exp_avg + (1 - beta1) * fp32_grad
                 fp32_exp_avg_sq = beta2 * fp32_exp_avg_sq + (1 - beta2) * fp32_grad.pow(2)
@@ -651,7 +655,10 @@ class FP8Adam(Optimizer):
                     loggings[p]["fp32_exp_avg_sq"] = compute_stas(fp32_exp_avg_sq)
 
                     loggings[p]["normalized_grad"] = compute_stas(normalized_grad)
-                    loggings[p]["denom"] = compute_stas(denom)
+
+                    if fp8_config.adam_atan2 is False:
+                        loggings[p]["denom"] = compute_stas(denom)
+
                     loggings[p]["grad_rms"] = {"value": rms}
                     loggings[p]["update_lr"] = {"value": update_lr}
 
