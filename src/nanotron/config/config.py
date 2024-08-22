@@ -2,6 +2,7 @@ import datetime
 import os
 from dataclasses import dataclass, fields
 from pathlib import Path
+from datasets.download.streaming_download_manager import xPath
 from typing import List, Optional, Type, Union
 
 import dacite
@@ -90,6 +91,22 @@ class PretrainDatasetsArgs:
         if self.hf_dataset_splits is None:
             self.hf_dataset_splits = "train"
 
+
+@dataclass
+class S3UploadArgs:
+    """Arguments related to uploading checkpoints on s3"""
+
+    upload_s3_path: xPath
+    remove_after_upload: bool
+    s5cmd_numworkers: Optional[int]
+    s5cmd_concurrency: Optional[int]
+    s5cmd_path: Optional[xPath]
+
+    def __post_init__(self):
+        if isinstance(self.upload_s3_path, str):
+            self.upload_s3_path = xPath(self.upload_s3_path)
+        if isinstance(self.s5cmd_path, str):
+            self.s5cmd_path = xPath(self.s5cmd_path)
 
 @dataclass
 class NanosetDatasetsArgs:
@@ -338,6 +355,7 @@ class Config:
     data_stages: Optional[List[DatasetStageArgs]] = None
     profiler: Optional[ProfilerArgs] = None
     lighteval: Optional[LightEvalConfig] = None
+    s3_upload : Optional[S3UploadArgs] = None
 
     @classmethod
     def create_empty(cls):
@@ -345,6 +363,10 @@ class Config:
         return cls(**{f.name: None for f in cls_fields})
 
     def __post_init__(self):
+        
+        if self.s3_upload is not None:
+            self.s3_upload.__post_init__()
+
         # Some final sanity checks across separate arguments sections:
         if self.profiler is not None and self.profiler.profiler_export_path is not None:
             assert self.tokens.train_steps < 10
