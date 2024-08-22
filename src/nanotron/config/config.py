@@ -163,14 +163,14 @@ class CheckpointsArgs:
     checkpoint_interval: int
     save_initial_state: Optional[bool] = False
     save_final_state: Optional[bool] = False
-    resume_checkpoint_path: Optional[Path] = None
+    resume_checkpoint_path: Optional[xPath] = None
     checkpoints_path_is_shared_file_system: Optional[bool] = False
 
     def __post_init__(self):
         if isinstance(self.checkpoints_path, str):
-            self.checkpoints_path = Path(self.checkpoints_path)
+            self.checkpoints_path = xPath(self.checkpoints_path)
         if isinstance(self.resume_checkpoint_path, str):
-            self.resume_checkpoint_path = Path(self.resume_checkpoint_path)
+            self.resume_checkpoint_path = xPath(self.resume_checkpoint_path)
 
 
 @dataclass

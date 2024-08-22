@@ -150,11 +150,12 @@ class DistributedTrainer:
             data_parallel_size=self.config.parallelism.dp,
             expert_parallel_size=self.config.parallelism.expert_parallel_size,
         )
+        
+        self.pre_init()
 
         # Set log levels
         set_ranks_logging_level(parallel_context=self.parallel_context, logging_config=self.config.logging)
 
-        self.pre_init()
 
 
         # Log benchmark info
@@ -258,9 +259,7 @@ class DistributedTrainer:
         self.post_init()
 
     def pre_init(self):
-        print("in pre init")
-        self.init_checkpoint_path = parse_ckpt_path(config=self.config)
-        print(self.init_checkpoint_path)
+        self.init_checkpoint_path = parse_ckpt_path(config=self.config, parallel_context=self.parallel_context)
 
     def post_init(self):
         # S3 Mover and save initial state
