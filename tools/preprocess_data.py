@@ -131,8 +131,6 @@ def main(args):
             tasks=args.n_tasks,
             logging_dir=args.logging_dir,
             workers=args.n_workers,
-            mail_user=args.email,
-
         )
     preprocess_executor.run()
 
