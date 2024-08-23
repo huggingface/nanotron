@@ -321,8 +321,4 @@ def parse_ckpt_path(config: Config, parallel_context: ParallelContext) -> Option
             s3_mover.start_downloading()
             s3_mover.distributed_wait_for_completion(parallel_context.world_pg)
 
-            # Replace S3 path with local path in config
         return checkpoint_path
-        # else:
-        #     raise Exception(f"{load_from_candidate} should be either a local link or a s3 link.")
-        #     return None
