@@ -91,6 +91,23 @@ class PretrainDatasetsArgs:
         if self.hf_dataset_splits is None:
             self.hf_dataset_splits = "train"
 
+@dataclass
+class SlurmArgs:
+    gpu_partition: str
+    job_name: str
+    nodes: int
+    logs_path: Path
+    n_tasks_per_node: Optional[int] = 1
+    cpus_per_task: Optional[int] = 32
+    n_gpu: Optional[int] = 8
+    email: Optional[str] = None
+    qos: Optional[str]
+    array: Optional[str]
+    slurm_logs_path: Optional[str] = None
+    evals_logs_path: Optional[str] = None
+    config_logs_path: Optional[str] = None
+        
+
 
 @dataclass
 class S3UploadArgs:
@@ -356,6 +373,7 @@ class Config:
     profiler: Optional[ProfilerArgs] = None
     lighteval: Optional[LightEvalConfig] = None
     s3_upload : Optional[S3UploadArgs] = None
+    slurm: Optional[SlurmArgs] = None
 
     @classmethod
     def create_empty(cls):
@@ -399,6 +417,26 @@ class Config:
                 for i in range(len(self.data_stages) - 1)
             ), "The stages are not sorted by start_training_step in increasing order"
 
+        if self.slurm is not None:
+            job_folder = os.path.join(self.logs_path, self.job_name)
+            os.makedirs(job_folder, exist_ok=True)
+
+            subfolders = ['configs', 'evals', 'slurm']
+            logs_paths = {}
+
+            for subfolder in subfolders:
+                specific_path = getattr(self.slurm, f"{subfolder}_logs_path", None)
+                if specific_path is None:
+                    folder_path = os.path.join(job_folder, subfolder)
+                else:
+                    folder_path = specific_path
+                os.makedirs(folder_path, exist_ok=True)
+                logs_paths[subfolder] = folder_path
+
+            self.slurm.config_logs_path = logs_paths['configs']
+            self.slurm.evals_logs_path = logs_paths['evals']
+            self.slurm.slurm_logs_path = logs_paths['slurm']
+            
         # # if lighteval, we need tokenizer to be defined
         # if self.checkpoints.lighteval is not None:
         #     assert self.tokenizer.tokenizer_name_or_path is not None
