@@ -4,8 +4,9 @@ To process HuggingFace Datasets:
 To process Jsonl files:
     python3 tools/preprocess_data.py --tokenizer-name-or-path meta-llama/Meta-Llama-3-8B --output-folder datasets/c4-es --n-tasks 16 --reader jsonl --dataset raw_datasets/c4-es-json-files
 Full example comming from examples/nanotron/smollm with Parquet and Slurm (need to specify the partition):
-    python3 tools/preprocess_data.py --tokenizer-name-or-path HuggingFaceTB/cosmo2-tokenizer --output-folder datasets/cosmopedia-v2 --n-tasks 100 --reader parquet --dataset hf://datasets/HuggingFaceTB/smollm-corpus/cosmopedia-v2 --column text --slurm --partition "insert_cpu_partition_name"
+    python3 tools/preprocess_data.py --tokenizer-name-or-path HuggingFaceTB/cosmo2-tokenizer --output-folder datasets/cosmopedia-v2 --n-tasks 100 --reader parquet --dataset hf://datasets/HuggingFaceTB/smollm-corpus/cosmopedia-v2 --column text --shuffle True --slurm --partition "insert_cpu_partition_name"
 """
+
 
 import argparse
 
@@ -58,7 +59,7 @@ def get_args():
                         help="Maximal time for a the job. Default: 20:00:00")
     parser.add_argument("--email", type=str, default=None,
                         help="Get an email notification when the job is finish. Default: None")
-    parser.add_argument("--cpus_per_task", type=int, default=1,
+    parser.add_argument("--cpus-per-task", type=int, default=1,
                         help="how many cpus to give each task. should be 1 except when you need to give each task more memory. Default: 1")
     return parser.parse_args()
 
