@@ -20,7 +20,6 @@ from typing import (
 )
 
 from nanotron.s3_checkpoints import S3Mover, check_path_is_local
-from nanotron.utils import check_path_is_s3
 import torch
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
