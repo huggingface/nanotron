@@ -161,8 +161,3 @@ def find_free_port(min_port: int = 2000, max_port: int = 65000) -> int:
                 return port
         except OSError:
             continue
-
-def check_path_is_s3(path:str) -> bool:
-    #TODO maybe replace by a better method ? 
-    s3_pattern = r'^s3://|^https?://[\w\-\.]+\.s3\.amazonaws\.com/|^https?://s3\.amazonaws\.com/[\w\-\.]+'
-    return bool(re.match(s3_pattern, path))
