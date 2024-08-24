@@ -52,7 +52,6 @@ def _vocab_size_with_padding(orig_vocab_size: int, pg_size: int, make_vocab_size
 
     multiple = make_vocab_size_divisible_by * pg_size
     after = int(ceil(orig_vocab_size / multiple) * multiple)
-    print("hello")
     if after != orig_vocab_size:
         print("i'm in")
         log_rank(

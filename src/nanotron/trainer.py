@@ -20,13 +20,13 @@ from typing import (
 )
 
 from nanotron.s3_checkpoints import S3Mover, check_path_is_local
-from nanotron.utils import check_path_is_s3
 import torch
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
 
 from nanotron import distributed as dist
 from nanotron import logging
+from nanotron.lighteval import LightEvalRunner
 from nanotron.config import (
     Config,
     DatasetStageArgs,
@@ -278,6 +278,12 @@ class DistributedTrainer:
             )
         else:
             self.s3_mover = None
+        if self.config.lighteval is not None and dist.get_rank(self.parallel_context.world_pg) == 0:
+            # We only start evaluation runs once on the first node
+            if self.s3_mover is None:
+                raise ValueError("lighteval requires s3 upload of checkpoints to be enabled")
+            self.lighteval_runner = LightEvalRunner(config=self.config, parallel_context=self.parallel_context)
+            self.s3_mover.post_upload_callback = self.lighteval_runner.eval_single_checkpoint
 
     def pre_training(self, *args, **kwargs):
         self._print_training_plan()
@@ -860,7 +866,7 @@ class DistributedTrainer:
             self.s3_mover.distributed_wait_for_completion(self.parallel_context.world_pg)
             if self.s3_mover.post_upload_callback_outputs is not None:
                 slurm_job_id, slurm_log = self.s3_mover.post_upload_callback_outputs
-                self.log_object({"job_id": slurm_job_id, "log": slurm_log}, "slurm_eval")
+                log_rank(f"launching eval job: job_id={slurm_job_id} log at {slurm_log} slurm_eval", logger=logger, level=logging.INFO, rank=0)
 
     def post_save_checkpoint(self):
         # Upload to S3

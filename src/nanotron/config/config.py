@@ -93,19 +93,23 @@ class PretrainDatasetsArgs:
 
 @dataclass
 class SlurmArgs:
-    gpu_partition: str
     job_name: str
     nodes: int
     logs_path: Path
+    # TODO: @elibak: Add a way to handle different virtual environments (conda, venv, uv, etc) For now, we assume conda and user can modify the slurm template if they use something else.
+    conda_path: str
+    conda_env_path : str
+    gpu_partition: Optional[str] = None
     n_tasks_per_node: Optional[int] = 1
     cpus_per_task: Optional[int] = 32
-    n_gpu: Optional[int] = 8
-    email: Optional[str] = None
-    qos: Optional[str]
-    array: Optional[str]
+    gpu_per_node: Optional[int] = 8
+    mail: Optional[str] = None
+    qos: Optional[str] = "high"
+    array: Optional[str] = "1-1%1"
     slurm_logs_path: Optional[str] = None
     evals_logs_path: Optional[str] = None
     config_logs_path: Optional[str] = None
+
         
 
 
@@ -203,6 +207,8 @@ class GeneralArgs:
     """
 
     project: str
+    repo_id: Optional[str] = None
+    temp_dir: Optional[str] = None
     run: Optional[str] = None
     seed: Optional[int] = None
     step: Optional[int] = None
@@ -418,10 +424,13 @@ class Config:
             ), "The stages are not sorted by start_training_step in increasing order"
 
         if self.slurm is not None:
-            job_folder = os.path.join(self.logs_path, self.job_name)
+            job_folder = os.path.join(self.slurm.logs_path, self.slurm.job_name)
             os.makedirs(job_folder, exist_ok=True)
 
-            subfolders = ['configs', 'evals', 'slurm']
+            subfolders = ['configs', 'slurm']
+            if self.lighteval is not None and self.s3_upload is not None:
+                subfolders.append('evals')
+            
             logs_paths = {}
 
             for subfolder in subfolders:
@@ -433,9 +442,15 @@ class Config:
                 os.makedirs(folder_path, exist_ok=True)
                 logs_paths[subfolder] = folder_path
 
+                if subfolder == 'evals':
+                    for evals_subfolder in ['launch-config', 'logs']:
+                        evals_subfolder_path = os.path.join(folder_path, evals_subfolder)
+                        os.makedirs(evals_subfolder_path, exist_ok=True)
+
             self.slurm.config_logs_path = logs_paths['configs']
-            self.slurm.evals_logs_path = logs_paths['evals']
             self.slurm.slurm_logs_path = logs_paths['slurm']
+            if self.lighteval is not None:
+                self.slurm.evals_logs_path = logs_paths['evals']
             
         # # if lighteval, we need tokenizer to be defined
         # if self.checkpoints.lighteval is not None:
