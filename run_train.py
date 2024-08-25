@@ -37,9 +37,7 @@ try:
 except ImportError:
     hf_hub_version = None
     tf_version = None
-    
-import torch._dynamo
-torch._dynamo.config.suppress_errors = True
+
 logger = logging.get_logger(__name__)
 
 

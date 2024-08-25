@@ -1,7 +1,7 @@
 # flake8: noqa: C901
 import argparse
 
-from lighteval.main import main
+from lighteval.main_nanotron import main
 
 from nanotron.config import Config
 
@@ -32,4 +32,4 @@ def get_parser():
 if __name__ == "__main__":
     parser = get_parser()
     args, unknowns = parser.parse_known_args()
-    main(args.checkpoint_config_path, args.lighteval_override, args.cache_dir, config_cls=Config)
+    main(args.checkpoint_config_path, args.lighteval_override, args.cache_dir)
