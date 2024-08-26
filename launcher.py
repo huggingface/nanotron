@@ -197,7 +197,7 @@ if __name__ == "__main__":
     )
 
     parallelism = ParallelismArgs(
-        dp=16,
+        dp=8,
         pp=1,
         tp=1,
         pp_engine="1f1b",
@@ -267,16 +267,16 @@ if __name__ == "__main__":
     )
 
     tokenizer = TokenizerArgs(
-        tokenizer_name_or_path="lvwerra/the-tokenizer-v1",
+        tokenizer_name_or_path="HuggingFaceTB/cosmo2-tokenizer",
     )
 
-    s3_upload = S3UploadArgs(
-        upload_s3_path=f"s3://elie-exp/debug_nanotron/test/",
-        remove_after_upload=True,
-        s5cmd_numworkers=16,
-        s5cmd_concurrency=5,
-        s5cmd_path=os.path.join(slurm.conda_env_path, "bin/s5cmd"),
-    )
+    # s3_upload = S3UploadArgs(
+    #     upload_s3_path=f"s3://elie-exp/debug_nanotron/test/",
+    #     remove_after_upload=True,
+    #     s5cmd_numworkers=16,
+    #     s5cmd_concurrency=5,
+    #     s5cmd_path=os.path.join(slurm.conda_env_path, "bin/s5cmd"),
+    # )
 
     data_stages=[
         DatasetStageArgs(
@@ -302,62 +302,76 @@ if __name__ == "__main__":
         tokens=tokens,
         optimizer=optimizer,
         data_stages=data_stages,
-        s3_upload=s3_upload,
+        # s3_upload=s3_upload,
         lighteval=lighteval,
-        slurm=slurm,
+        # slurm=slurm,
     )
 
     print(f"""
 🏋️  Model Parameters:
-┌───────────────────────┬───────────────────────────┐
-│ Total Parameters      │ {num_params:>25} │
-│ Layers                │ {model_config.num_hidden_layers:>25d} │
-│ Attention Heads       │ {model_config.num_attention_heads:>25d} │
-│ Hidden Size           │ {model_config.hidden_size:>25d} │
-│ Intermediate Size     │ {model_config.intermediate_size:>25d} │
-│ Context Length        │ {model_config.max_position_embeddings:>25d} │
-│ Tokenizer             │ {tokenizer.tokenizer_name_or_path[:25]:>25} │
-│ Vocab Size            │ {model_config.vocab_size:>25d} │
-└───────────────────────┴───────────────────────────┘
+┌───────────────────────┬────────────────────────┐
+│ Total Parameters      │ {num_params:>22} │
+│ Layers                │ {model_config.num_hidden_layers:>22d} │
+│ Attention Heads       │ {model_config.num_attention_heads:>22d} │
+│ Hidden Size           │ {model_config.hidden_size:>22d} │
+│ Intermediate Size     │ {model_config.intermediate_size:>22d} │
+│ Context Length        │ {model_config.max_position_embeddings:>22d} │
+│ Tokenizer             │ {tokenizer.tokenizer_name_or_path[:22]:>22} │
+│ Vocab Size            │ {model_config.vocab_size:>22d} │
+└───────────────────────┴────────────────────────┘
 """)
 
+    num_nodes = slurm.nodes if args.slurm else torch.cuda.device_count()
     print(f"""
 🤖 Parallelism Configuration:
-┌───────────────────────┬───────────────────┐
-│ Nodes                 │ {slurm.nodes:>17d} │
-│ Total GPUs            │ {parallelism.dp*parallelism.pp*parallelism.tp:>17d} │
-│ Data Parallel (DP)    │ {parallelism.dp:>17d} │
-│ Pipeline Parallel (PP)│ {parallelism.pp:>17d} │
-│ Tensor Parallel (TP)  │ {parallelism.tp:>17d} │
-└───────────────────────┴───────────────────┘
+┌───────────────────────┬────────────────────────┐
+│ Nodes                 │ {num_nodes:>22d} │
+│ Total GPUs            │ {parallelism.dp*parallelism.pp*parallelism.tp:>22d} │
+│ Data Parallel (DP)    │ {parallelism.dp:>22d} │
+│ Pipeline Parallel (PP)│ {parallelism.pp:>22d} │
+│ Tensor Parallel (TP)  │ {parallelism.tp:>22d} │
+└───────────────────────┴────────────────────────┘
 """)
 
     print(f"""
 📙 Training Configuration:
-┌───────────────────────┬───────────────────┐
-│ Total Tokens          │ {total_tokens_billions:>16.2f}B │
-│ Global Batch Size     │ {GBS:>17,d} │
-│ Batch Size (per GPU)  │ {BS:>17,d} │
-└───────────────────────┴───────────────────┘
+┌───────────────────────┬────────────────────────┐
+│ Total Tokens          │ {total_tokens_billions:>21.2f}B │
+│ Global Batch Size     │ {GBS:>22,d} │
+│ Batch Size (per GPU)  │ {BS:>22,d} │
+└───────────────────────┴────────────────────────┘
 """)
 
     print(f"""
 📊 Learning Rate Schedule:
-┌───────────────────────┬───────────────────┐
-│ Initial LR            │ {lr_initial:>17.2e} │
-│ Warmup Style          │ {learning_rate_scheduler.lr_warmup_style[:17]:>17} │
-│ Warmup Steps          │ {lr_warmup_steps:>17d} │
-│ Decay Style           │ {lr_decay_style[:17]:>17} │
-│ Decay Start Step      │ {lr_decay_start:>17d} │
-│ Decay Steps           │ {lr_decay_steps:>17d} │
-│ Final LR              │ {lr_min:>17.2e} │
-└───────────────────────┴───────────────────┘
+┌───────────────────────┬────────────────────────┐
+│ Initial LR            │ {lr_initial:>22.2e} │
+│ Warmup Style          │ {learning_rate_scheduler.lr_warmup_style[:22]:>22} │
+│ Warmup Steps          │ {lr_warmup_steps:>22d} │
+│ Decay Style           │ {lr_decay_style[:22]:>22} │
+│ Decay Start Step      │ {lr_decay_start:>22d} │
+│ Decay Steps           │ {lr_decay_steps:>22d} │
+│ Final LR              │ {lr_min:>22.2e} │
+└───────────────────────┴────────────────────────┘
+""")
+    print(f"""
+🔧 Optimization Configuration:
+┌───────────────────────┬────────────────────────┐
+│ Optimizer             │ {optimizer.optimizer_factory.__class__.__name__:>22} │
+│ Weight Decay          │ {optimizer.weight_decay:>22.2e} │
+│ Gradient Clipping     │ {optimizer.clip_grad:>22.2f} │
+│ Adam Epsilon          │ {optimizer.optimizer_factory.adam_eps:>22.2e} │
+│ Adam Beta1            │ {optimizer.optimizer_factory.adam_beta1:>22.2f} │
+│ Adam Beta2            │ {optimizer.optimizer_factory.adam_beta2:>22.2f} │
+│ ZeRO Stage            │ {optimizer.zero_stage:>22d} │
+│ FP32 Grad Accumulation│ {str(optimizer.accumulate_grad_in_fp32):>22} │
+└───────────────────────┴────────────────────────┘
 """)
 
-    if slurm is not None:
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    if args.slurm:
         dir = os.path.dirname(__file__)
         
-        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         os.makedirs(config.slurm.config_logs_path, exist_ok=True)
         config_path_yaml = f"{config.slurm.config_logs_path}/{timestamp}.yaml"
         config.save_as_yaml(config_path_yaml)
@@ -458,3 +472,41 @@ echo "END TIME: $(date)"
         """
 
         print(f"Slurm job launched with id={launch_slurm_job(sbatch_script)}")
+    else:
+        # Check if running on an interactive node
+        try:
+            gpu_count = torch.cuda.device_count()
+            is_interactive = gpu_count > 0
+        except:
+            is_interactive = False
+
+        if is_interactive:
+            print("Running on an interactive node with GPUs.")
+            
+            # Check if the parallelism configuration matches the available GPUs
+            total_gpus = gpu_count
+            config_gpus = parallelism.dp * parallelism.tp * parallelism.pp
+            
+            if total_gpus != config_gpus:
+                raise ValueError(f"The parallelism configuration (dp={parallelism.dp}, tp={parallelism.tp}, pp={parallelism.pp}) "
+                                 f"doesn't match the number of available GPUs ({total_gpus}). "
+                                 f"Please adjust your configuration to match the available resources.")
+            
+            # Save config
+            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            os.makedirs("/fsx/elie_bakouch/nanotron/config_logs", exist_ok=True)
+            config_path_yaml = f"/fsx/elie_bakouch/nanotron/config_logs/{timestamp}.yaml"
+            config.save_as_yaml(config_path_yaml)
+
+            # Prepare command
+            trainer_python_file = "/fsx/elie_bakouch/nanotron/run_train.py"
+            cmd = f"{trainer_python_file} --config-file {config_path_yaml}"
+
+            # Launch job
+            launch_cmd = f"torchrun --nproc_per_node {gpu_count} {cmd}"
+            print(f"Launching interactive job with command: {launch_cmd}")
+            
+            # Execute the command
+            subprocess.run(launch_cmd, shell=True, check=True)
+        else:
+            print("Not running on a Slurm cluster or an interactive node with GPUs. Please submit a Slurm job or use an interactive node with GPUs.")

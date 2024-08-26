@@ -3,7 +3,7 @@ import os
 from dataclasses import dataclass, fields
 from pathlib import Path
 from datasets.download.streaming_download_manager import xPath
-from typing import List, Optional, Type, Union
+from typing import List, Optional, Type, Union, Dict
 
 import dacite
 import torch
@@ -93,25 +93,62 @@ class PretrainDatasetsArgs:
 
 @dataclass
 class SlurmArgs:
+    """
+    Arguments for configuring SLURM job submission.
+
+    Attributes:
+        gpu_partition (str): SLURM partition (queue) for GPU jobs.
+        job_name (str): Name of the SLURM job.
+        nodes (int): Number of nodes to allocate for the job.
+        logs_path (str): Base directory for storing log files.
+        conda_path (str): Path to the Conda installation script.
+        conda_env_path (str): Path to the Conda environment to be used.
+        n_tasks_per_node (int): Number of tasks to run per node. Default is 1.
+        cpus_per_task (int): Number of CPUs to allocate per task. Default is 32.
+        gpu_per_node (int): Number of GPUs to allocate per node. Default is 8.
+        array (Optional[str]): Job array specification, allowing multiple similar jobs to be submitted as a group.
+        qos (Optional[str]): Quality of Service, used to define job priority or resource limits.
+        mail_type (Optional[str]): Specifies when to send email notifications about the job (e.g., BEGIN, END, FAIL). Default is FAIL.
+        mail_user (Optional[str]): Email address to receive job notifications.
+        exclude_nodes (Optional[List[str]]): List of nodes to exclude from job allocation.
+        time (Optional[str]): Maximum time limit for the job.
+        mem (Optional[str]): Memory requirement for the job.
+        constraint (Optional[str]): Specifies node features required for the job.
+        account (Optional[str]): Account to charge for the job's resource usage.
+        reservation (Optional[str]): Name of a reservation to use for the job.
+        begin (Optional[str]): Earliest time the job can start.
+        torchrun_args (Optional[Dict[str, str]]): Additional arguments for torchrun command.
+        slurm_logs_path (Optional[str]): Specific path for SLURM output logs.
+        config_logs_path (Optional[str]): Path for storing configuration logs.
+    """
+
+    gpu_partition: str
     job_name: str
     nodes: int
-    logs_path: Path
-    # TODO: @elibak: Add a way to handle different virtual environments (conda, venv, uv, etc) For now, we assume conda and user can modify the slurm template if they use something else.
+    logs_path: str
     conda_path: str
-    conda_env_path : str
-    gpu_partition: Optional[str] = None
-    n_tasks_per_node: Optional[int] = 1
-    cpus_per_task: Optional[int] = 32
-    gpu_per_node: Optional[int] = 8
-    mail: Optional[str] = None
-    qos: Optional[str] = "high"
-    array: Optional[str] = "1-1%1"
+    conda_env_path: str
+    n_tasks_per_node: int = 1
+    cpus_per_task: int = 32
+    gpu_per_node: int = 8
+    array: Optional[str] = None
+    qos: Optional[str] = None
+    mail_user: Optional[str] = None
+    mail_type: Optional[str] = None
+    exclude_nodes: Optional[List[str]] = None
+    time: Optional[str] = None
+    mem: Optional[str] = None
+    constraint: Optional[str] = None
+    account: Optional[str] = None
+    reservation: Optional[str] = None
+    begin: Optional[str] = None
+    torchrun_args: Optional[Dict[str, str]] = None
     slurm_logs_path: Optional[str] = None
-    evals_logs_path: Optional[str] = None
     config_logs_path: Optional[str] = None
 
-        
-
+    def __post_init__(self):
+        if self.mail_type is None and self.mail_user is not None:
+            self.mail_type = "FAIL"
 
 @dataclass
 class S3UploadArgs:
