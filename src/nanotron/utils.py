@@ -1,11 +1,10 @@
 import functools
 import inspect
-import math
 import os
 import random
 import socket
 from contextlib import ExitStack, contextmanager
-from typing import Callable, ContextManager, List, Optional
+from typing import ContextManager, List, Optional
 
 import torch
 from packaging import version
@@ -13,6 +12,25 @@ from torch import nn
 from torch.utils.checkpoint import checkpoint
 
 from nanotron import distributed as dist
+
+
+class Singleton(type):
+    """
+    Singleton metaclass.
+    Create objects using this class as the metaclass to enable singleton behaviour.
+    For instance:
+    ```
+    class Logger(metaclass=Singleton):
+      ...
+    ```
+    """
+
+    _instances = {}
+
+    def __call__(cls, *args, **kwargs):
+        if cls not in cls._instances:
+            cls._instances[cls] = super(Singleton, cls).__call__(*args, **kwargs)
+        return cls._instances[cls]
 
 
 class ContextManagers:
@@ -52,7 +70,7 @@ def main_rank_first(group: dist.ProcessGroup):
 @contextmanager
 def local_ranks_zero_first(group: Optional[dist.ProcessGroup] = None):
     """Context manager that executes the code in the context with all the local rank zero of the group going first.
-    Usefull to run only once per node first (e.g. to create local files, etc)
+    Useful to run only once per node first (e.g. to create local files, etc)
     """
     is_main = int(os.environ.get("LOCAL_RANK", 0)) == 0
     if is_main:
@@ -122,6 +140,7 @@ def get_untyped_storage(tensor: torch.Tensor) -> torch.UntypedStorage:
         return tensor.untyped_storage()
     else:
         return tensor.storage().untyped()
+
 
 def tensor_from_untyped_storage(untyped_storage: torch.UntypedStorage, dtype: torch.dtype):
     # TODO @thomasw21: Figure out what's the best Pytorch way of building a tensor from a storage.

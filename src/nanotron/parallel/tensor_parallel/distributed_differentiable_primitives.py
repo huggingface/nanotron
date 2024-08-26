@@ -85,7 +85,8 @@ class DifferentiableAllGather(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_output):
         group = ctx.group
-        return DifferentiableReduceScatterSum.apply(grad_output, group), None
+        out = DifferentiableReduceScatterSum.apply(grad_output, group)
+        return out, None
 
 
 class DifferentiableReduceScatterSum(torch.autograd.Function):
@@ -113,7 +114,7 @@ class DifferentiableReduceScatterSum(torch.autograd.Function):
             *rest_size,
             device=tensor.device,
             dtype=tensor.dtype,
-            requires_grad=tensor.requires_grad,
+            requires_grad=False,
         )
         dist.reduce_scatter_tensor(sharded_tensor, tensor, group=group, op=dist.ReduceOp.SUM)
         return sharded_tensor
