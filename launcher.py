@@ -6,6 +6,7 @@ import math
 import torch
 
 import argparse
+from typing import Any, Dict
 
 from nanotron.logging import human_format
 from nanotron.models.llama import LlamaConfig
@@ -49,6 +50,14 @@ def launch_slurm_job(launch_file_contents, *args):
         f.flush()
         return subprocess.check_output(["sbatch", *args, f.name]).decode("utf-8").split()[-1]
 
+def set_nested_attribute(obj, path, value):
+    parts = path.split('.')
+    for part in parts[:-1]:
+        if not hasattr(obj, part):
+            setattr(obj, part, type('', (), {})())  # Create empty object if attribute doesn't exist
+        obj = getattr(obj, part)
+    setattr(obj, parts[-1], value)
+
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
@@ -57,6 +66,8 @@ if __name__ == "__main__":
     parser.add_argument("--name", help="run name", type=str, default=None)
     parser.add_argument("--seed", help="seed", type=int, default=8)
     parser.add_argument("--priority", "--qos", "-p", help="qos to use", type=str, default="normal")
+    parser.add_argument("--override", nargs="+", metavar="KEY=VALUE",
+                        help="Override config values. Use dot notation for nested keys.")
     args = parser.parse_args()
 
     PROJECT = args.project
@@ -64,27 +75,6 @@ if __name__ == "__main__":
         RUN = f"{PROJECT}-{args.name}-{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
     else:
         RUN = f"{PROJECT}-{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
-
-    ## FOR SANITY CHECK LATER
-    # from dataclasses import fields, is_dataclass
-
-    # def print_differences(target, updates):
-    #     if not is_dataclass(target) or not is_dataclass(updates):
-    #         raise ValueError("Both target and updates should be dataclass instances")
-
-    #     for field in fields(target):
-    #         update_value = getattr(updates, field.name)
-
-    #         if update_value is not None:
-    #             if is_dataclass(update_value):
-    #                 print_differences(getattr(target, field.name), update_value)
-    #             else:
-    #                 target_value = getattr(target, field.name)
-    #                 if update_value != target_value:
-    #                     if update_value.__class__.__module__ != "builtins":
-    #                         continue
-    #                     print(f"{field.name}: {target_value} -> {update_value}")
-
 
     general = GeneralArgs(
         project=PROJECT,
@@ -213,11 +203,6 @@ if __name__ == "__main__":
         train_steps=100,
         val_check_interval=-1,
     )
-    BS = tokens.micro_batch_size*tokens.batch_accumulation_per_replica*tokens.sequence_length
-    GBS = BS * parallelism.dp
-    
-    total_tokens = tokens.train_steps * GBS
-    total_tokens_billions = total_tokens / 1e9
 
     model = ModelArgs(
         model_config=model_config,
@@ -244,13 +229,7 @@ if __name__ == "__main__":
         lr_decay_starting_step= 80,
         min_decay_lr=0,
     )
-    # Calculate and print learning rate and global batch size information
-    lr_initial = learning_rate_scheduler.learning_rate
-    lr_min = learning_rate_scheduler.min_decay_lr
-    lr_warmup_steps = learning_rate_scheduler.lr_warmup_steps
-    lr_decay_steps = learning_rate_scheduler.lr_decay_steps
-    lr_decay_start = learning_rate_scheduler.lr_decay_starting_step
-    lr_decay_style = learning_rate_scheduler.lr_decay_style
+
     
     optimizer = OptimizerArgs(
         zero_stage=0,
@@ -307,6 +286,39 @@ if __name__ == "__main__":
         # slurm=slurm,
     )
 
+    # Parse and apply overrides
+    if args.override:
+        for item in args.override:
+            if '=' not in item:
+                raise ValueError(f"Invalid override format: {item}. Use KEY=VALUE.")
+            key, value = item.split('=', 1)
+            try:
+                # Try to evaluate the value as a Python literal
+                value = eval(value)
+            except:
+                # If eval fails, treat it as a string
+                pass
+            
+            set_nested_attribute(config, key, value)
+
+        print("Applied overrides:")
+        for item in args.override:
+            print(f"  {item}")
+        
+    # Calculate and print learning rate and global batch size information
+    lr_initial = learning_rate_scheduler.learning_rate
+    lr_min = learning_rate_scheduler.min_decay_lr
+    lr_warmup_steps = learning_rate_scheduler.lr_warmup_steps
+    lr_decay_steps = learning_rate_scheduler.lr_decay_steps
+    lr_decay_start = learning_rate_scheduler.lr_decay_starting_step
+    lr_decay_style = learning_rate_scheduler.lr_decay_style
+
+    BS = tokens.micro_batch_size*tokens.batch_accumulation_per_replica*tokens.sequence_length
+    GBS = BS * parallelism.dp
+    
+    total_tokens = tokens.train_steps * GBS
+    total_tokens_billions = total_tokens / 1e9
+
     print(f"""
 🏋️  Model Parameters:
 ┌───────────────────────┬────────────────────────┐
@@ -329,7 +341,7 @@ if __name__ == "__main__":
 │ Total GPUs            │ {parallelism.dp*parallelism.pp*parallelism.tp:>22d} │
 │ Data Parallel (DP)    │ {parallelism.dp:>22d} │
 │ Pipeline Parallel (PP)│ {parallelism.pp:>22d} │
-│ Tensor Parallel (TP)  │ {parallelism.tp:>22d} │
+│ Tensor Parallel (TP)  │ {parallelism.tp:>22d} 
 └───────────────────────┴────────────────────────┘
 """)
 
@@ -352,7 +364,7 @@ if __name__ == "__main__":
 │ Decay Start Step      │ {lr_decay_start:>22d} │
 │ Decay Steps           │ {lr_decay_steps:>22d} │
 │ Final LR              │ {lr_min:>22.2e} │
-└───────────────────────┴────────────────────────┘
+└──────────────────────┴────────────────────────┘
 """)
     print(f"""
 🔧 Optimization Configuration:
