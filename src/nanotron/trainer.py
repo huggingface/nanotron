@@ -280,10 +280,11 @@ class DistributedTrainer:
             self.s3_mover = None
         if self.config.lighteval is not None and dist.get_rank(self.parallel_context.world_pg) == 0:
             # We only start evaluation runs once on the first node
-            if self.s3_mover is None:
-                raise ValueError("lighteval requires s3 upload of checkpoints to be enabled")
-            self.lighteval_runner = LightEvalRunner(config=self.config, parallel_context=self.parallel_context)
-            self.s3_mover.post_upload_callback = self.lighteval_runner.eval_single_checkpoint
+            if self.s3_mover is not None and self.slurm is not None:
+                self.lighteval_runner = LightEvalRunner(config=self.config, parallel_context=self.parallel_context)
+                self.s3_mover.post_upload_callback = self.lighteval_runner.eval_single_checkpoint
+            else:
+                log_rank("LightEval is enabled but s3 upload is not enabled, skipping evaluation", logger=logger, level=logging.INFO, rank=0)
 
     def pre_training(self, *args, **kwargs):
         self._print_training_plan()
