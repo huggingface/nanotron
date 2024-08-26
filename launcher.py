@@ -515,7 +515,7 @@ echo "END TIME: $(date)"
             cmd = f"{trainer_python_file} --config-file {config_path_yaml}"
 
             # Launch job
-            launch_cmd = f"torchrun --nproc_per_node {gpu_count} {cmd}"
+            launch_cmd = f"CUDA_DEVICE_MAX_CONNECTIONS='1' torchrun --nproc_per_node {gpu_count} {cmd}"
             print(f"Launching interactive job with command: {launch_cmd}")
             
             # Execute the command
