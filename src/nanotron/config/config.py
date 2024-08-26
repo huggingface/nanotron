@@ -100,7 +100,6 @@ class SlurmArgs:
         gpu_partition (str): SLURM partition (queue) for GPU jobs.
         job_name (str): Name of the SLURM job.
         nodes (int): Number of nodes to allocate for the job.
-        logs_path (str): Base directory for storing log files.
         conda_path (str): Path to the Conda installation script.
         conda_env_path (str): Path to the Conda environment to be used.
         n_tasks_per_node (int): Number of tasks to run per node. Default is 1.
@@ -118,14 +117,11 @@ class SlurmArgs:
         reservation (Optional[str]): Name of a reservation to use for the job.
         begin (Optional[str]): Earliest time the job can start.
         torchrun_args (Optional[Dict[str, str]]): Additional arguments for torchrun command.
-        slurm_logs_path (Optional[str]): Specific path for SLURM output logs.
-        config_logs_path (Optional[str]): Path for storing configuration logs.
     """
 
     gpu_partition: str
     job_name: str
     nodes: int
-    logs_path: str
     conda_path: str
     conda_env_path: str
     n_tasks_per_node: int = 1
@@ -143,8 +139,6 @@ class SlurmArgs:
     reservation: Optional[str] = None
     begin: Optional[str] = None
     torchrun_args: Optional[Dict[str, str]] = None
-    slurm_logs_path: Optional[str] = None
-    config_logs_path: Optional[str] = None
 
     def __post_init__(self):
         if self.mail_type is None and self.mail_user is not None:
@@ -244,6 +238,9 @@ class GeneralArgs:
     """
 
     project: str
+    logs_path: Optional[str] = "./logs"
+    slurm_logs_path: Optional[str] = None
+    config_logs_path: Optional[str] = None
     repo_id: Optional[str] = None
     temp_dir: Optional[str] = None
     run: Optional[str] = None
@@ -252,6 +249,7 @@ class GeneralArgs:
     consumed_train_samples: Optional[int] = None
     benchmark_csv_path: Optional[Path] = None
     ignore_sanity_checks: bool = True
+    name: Optional[str] = None
 
     def __post_init__(self):
         if self.seed is None:
@@ -265,6 +263,8 @@ class GeneralArgs:
             self.run = "%date_%jobid"
         self.run.replace("%date", datetime.datetime.now().strftime("%Y%m%d_%H%M%S"))
         self.run.replace("%jobid", os.environ.get("SLURM_JOB_ID", "local"))
+        if self.name is None:
+            self.name = f"{self.project}-{self.run}"
 
 
 @dataclass
@@ -415,7 +415,7 @@ class Config:
     data_stages: Optional[List[DatasetStageArgs]] = None
     profiler: Optional[ProfilerArgs] = None
     lighteval: Optional[LightEvalConfig] = None
-    s3_upload : Optional[S3UploadArgs] = None
+    s3_upload: Optional[S3UploadArgs] = None
     slurm: Optional[SlurmArgs] = None
 
     @classmethod
@@ -424,7 +424,6 @@ class Config:
         return cls(**{f.name: None for f in cls_fields})
 
     def __post_init__(self):
-        
         if self.s3_upload is not None:
             self.s3_upload.__post_init__()
 
@@ -460,38 +459,37 @@ class Config:
                 for i in range(len(self.data_stages) - 1)
             ), "The stages are not sorted by start_training_step in increasing order"
 
-        if self.slurm is not None:
-            job_folder = os.path.join(self.slurm.logs_path, self.slurm.job_name)
-            os.makedirs(job_folder, exist_ok=True)
+        log_folder = os.path.join(self.general.logs_path, self.general.name)
+        os.makedirs(log_folder, exist_ok=True)
 
-            subfolders = ['configs', 'slurm']
+        # Create config folder for all jobs
+        config_folder = os.path.join(log_folder, 'configs')
+        os.makedirs(config_folder, exist_ok=True)
+        self.general.config_folder_path = config_folder
+
+        if self.slurm is not None:
+            subfolders = ['slurm']
             if self.lighteval is not None and self.s3_upload is not None:
                 subfolders.append('evals')
             
-            logs_paths = {}
-
             for subfolder in subfolders:
-                specific_path = getattr(self.slurm, f"{subfolder}_logs_path", None)
-                if specific_path is None:
-                    folder_path = os.path.join(job_folder, subfolder)
-                else:
-                    folder_path = specific_path
+                folder_path = os.path.join(log_folder, subfolder)
                 os.makedirs(folder_path, exist_ok=True)
-                logs_paths[subfolder] = folder_path
+                setattr(self.general, f"{subfolder}_logs_path", folder_path)
 
                 if subfolder == 'evals':
                     for evals_subfolder in ['launch-config', 'logs']:
                         evals_subfolder_path = os.path.join(folder_path, evals_subfolder)
                         os.makedirs(evals_subfolder_path, exist_ok=True)
 
-            self.slurm.config_logs_path = logs_paths['configs']
-            self.slurm.slurm_logs_path = logs_paths['slurm']
-            if self.lighteval is not None:
-                self.slurm.evals_logs_path = logs_paths['evals']
-            
-        # # if lighteval, we need tokenizer to be defined
-        # if self.checkpoints.lighteval is not None:
-        #     assert self.tokenizer.tokenizer_name_or_path is not None
+            # Create launch-script folder
+            launch_script_folder = os.path.join(log_folder, 'launch-script')
+            os.makedirs(launch_script_folder, exist_ok=True)
+            self.general.launch_script_path = launch_script_folder
+
+        # if lighteval, we need tokenizer to be defined
+        if self.lighteval is not None:
+            assert self.tokenizer.tokenizer_name_or_path is not None
 
     @property
     def global_batch_size(self):

@@ -280,7 +280,8 @@ class DistributedTrainer:
             self.s3_mover = None
         if self.config.lighteval is not None and dist.get_rank(self.parallel_context.world_pg) == 0:
             # We only start evaluation runs once on the first node
-            if self.s3_mover is not None and self.slurm is not None:
+            #TODO @eliebak add the support of lighteval locally
+            if self.s3_mover is not None and self.config.slurm is not None: 
                 self.lighteval_runner = LightEvalRunner(config=self.config, parallel_context=self.parallel_context)
                 self.s3_mover.post_upload_callback = self.lighteval_runner.eval_single_checkpoint
             else:
