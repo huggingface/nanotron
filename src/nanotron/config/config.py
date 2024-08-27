@@ -239,8 +239,10 @@ class GeneralArgs:
 
     project: str
     logs_path: Optional[str] = "./logs"
+    launch_script_path: Optional[str] = None
     slurm_logs_path: Optional[str] = None
     config_logs_path: Optional[str] = None
+    evals_logs_path: Optional[str] = None
     repo_id: Optional[str] = None
     temp_dir: Optional[str] = None
     run: Optional[str] = None
@@ -424,6 +426,9 @@ class Config:
         return cls(**{f.name: None for f in cls_fields})
 
     def __post_init__(self):
+        if hasattr(self, '_post_init_done'):
+            return
+        self._post_init_done = True
         if self.s3_upload is not None:
             self.s3_upload.__post_init__()
 
@@ -459,19 +464,19 @@ class Config:
                 for i in range(len(self.data_stages) - 1)
             ), "The stages are not sorted by start_training_step in increasing order"
 
+
         log_folder = os.path.join(self.general.logs_path, self.general.name)
         os.makedirs(log_folder, exist_ok=True)
 
         # Create config folder for all jobs
         config_folder = os.path.join(log_folder, 'configs')
         os.makedirs(config_folder, exist_ok=True)
-        self.general.config_folder_path = config_folder
+        self.general.config_logs_path = config_folder
 
         if self.slurm is not None:
             subfolders = ['slurm']
             if self.lighteval is not None and self.s3_upload is not None:
                 subfolders.append('evals')
-            
             for subfolder in subfolders:
                 folder_path = os.path.join(log_folder, subfolder)
                 os.makedirs(folder_path, exist_ok=True)
@@ -486,6 +491,7 @@ class Config:
             launch_script_folder = os.path.join(log_folder, 'launch-script')
             os.makedirs(launch_script_folder, exist_ok=True)
             self.general.launch_script_path = launch_script_folder
+        
 
         # if lighteval, we need tokenizer to be defined
         if self.lighteval is not None:

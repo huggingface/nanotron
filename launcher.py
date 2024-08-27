@@ -161,11 +161,11 @@ if __name__ == "__main__":
     if config.slurm:
         dir = os.path.dirname(__file__)
         
-        os.makedirs(config.slurm.config_logs_path, exist_ok=True)
-        config_path_yaml = f"{config.slurm.config_logs_path}/{timestamp}.yaml"
+        os.makedirs(config.general.config_logs_path, exist_ok=True)
+        config_path_yaml = f"{config.general.config_logs_path}/{timestamp}.yaml"
         config.save_as_yaml(config_path_yaml)
     
-        os.makedirs(f"{config.slurm.slurm_logs_path}/", exist_ok=True)
+        os.makedirs(f"{config.general.slurm_logs_path}/", exist_ok=True)
 
         def format_sbatch_option(option, value):
             return f"#SBATCH --{option}={value}" if value is not None else ""
@@ -181,7 +181,7 @@ if __name__ == "__main__":
 {format_sbatch_option("cpus-per-task", config.slurm.cpus_per_task)}
 {format_sbatch_option("gres", f"gpu:{config.slurm.gpu_per_node}")}
 {format_sbatch_option("partition", config.slurm.gpu_partition)}
-{format_sbatch_option("output", f"{config.slurm.slurm_logs_path}/train-{timestamp}-%x-%j.out")}
+{format_sbatch_option("output", f"{config.general.slurm_logs_path}/train-{timestamp}-%x-%j.out")}
 {format_sbatch_option("array", config.slurm.array)}
 {format_sbatch_option("qos", config.slurm.qos)}
 {format_sbatch_option("mail-type", config.slurm.mail_type)}
@@ -259,6 +259,17 @@ srun $SRUN_ARGS -u bash -c "$LAUNCHER --node_rank $SLURM_PROCID --role $SLURMD_N
 
 echo "END TIME: $(date)"
         """
+        # Save the Slurm script
+        if config.general.launch_script_path:
+            os.makedirs(config.general.launch_script_path, exist_ok=True)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            script_filename = f"slurm_script_{timestamp}.slurm"
+            script_path = os.path.join(config.general.launch_script_path, script_filename)
+            
+            with open(script_path, 'w') as f:
+                f.write(sbatch_script)
+            
+            print(f"Slurm script saved to: {script_path}")
 
         print(f"Slurm job launched with id={launch_slurm_job(sbatch_script)}")
     else:

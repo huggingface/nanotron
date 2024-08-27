@@ -145,7 +145,7 @@ if __name__ == "__main__":
     )
 
     parallelism = ParallelismArgs(
-        dp=8,
+        dp=16,
         pp=1,
         tp=1,
         pp_engine="1f1b",
@@ -208,7 +208,7 @@ if __name__ == "__main__":
     )
 
     s3_upload = S3UploadArgs(
-        upload_s3_path=f"s3://elie-exp/debug_nanotron/test/",
+        upload_s3_path=f"s3://elie-exp/debug_nanotron/test_eval/",
         remove_after_upload=True,
         s5cmd_numworkers=16,
         s5cmd_concurrency=5,
@@ -245,8 +245,8 @@ if __name__ == "__main__":
     )
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     dir = os.path.dirname(__file__)    
-    os.makedirs(config.general.config_folder_path, exist_ok=True)
-    config_path_yaml = f"{config.general.config_folder_path}/{timestamp}.yaml"
+    os.makedirs(config.general.config_logs_path, exist_ok=True)
+    config_path_yaml = f"{config.general.config_logs_path}/{timestamp}.yaml"
     config.save_as_yaml(config_path_yaml)
 
     os.makedirs(f"{config.general.slurm_logs_path}/", exist_ok=True)
