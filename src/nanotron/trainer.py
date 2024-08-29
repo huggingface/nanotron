@@ -2,6 +2,7 @@ import datetime
 import json
 import os
 import shutil
+import sys
 import time
 from dataclasses import asdict
 from pathlib import Path
@@ -281,7 +282,12 @@ class DistributedTrainer:
             )
 
     def post_train_step(self):
-        pass
+        # Kill switch
+        self.check_kill_switch(save_ckpt=True)
+
+        # # Update our background upload/removal of checkpoints
+        # if self.s3_mover is not None:
+        #     self.s3_mover.update()
 
     def post_training(self):
         pass
@@ -897,6 +903,21 @@ class DistributedTrainer:
         parallel_config: Optional[ParallelismArgs] = None,
     ):
         mark_tied_parameters(model=model, parallel_context=parallel_context, parallel_config=parallel_config)
+
+    def check_kill_switch(self, save_ckpt: bool):
+        if self.config.kill_switch_path and self.config.kill_switch_path.exists():
+            log_rank(
+                f"Detected kill switch at {self.config.kill_switch_path}. Exiting",
+                logger=logger,
+                level=logging.INFO,
+                rank=0,
+            )
+
+            # Save checkpoint
+            if save_ckpt:
+                self.save_checkpoint()
+            dist.barrier()
+            sys.exit(0)
 
 
 def mark_tied_parameters(
