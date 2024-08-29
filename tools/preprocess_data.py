@@ -61,6 +61,8 @@ def get_args():
                         help="Get an email notification when the job is finish. Default: None")
     parser.add_argument("--cpus-per-task", type=int, default=1,
                         help="how many cpus to give each task. should be 1 except when you need to give each task more memory. Default: 1")
+    parser.add_argument("--mem-per-cpu-gb", type=int, default=2,
+                        help="how many memory to give each task. should be 1 except when you need to give each task more memory. Default: 2")
     return parser.parse_args()
 
 def main(args):
@@ -115,6 +117,7 @@ def main(args):
             cpus_per_task=args.cpus_per_task,
             qos=args.qos,
             mail_user=args.email,
+            mem_per_cpu_gb=args.mem_per_cpu_gb,
         )
     else:
         #run in interactive node
