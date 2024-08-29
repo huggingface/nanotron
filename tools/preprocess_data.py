@@ -93,7 +93,7 @@ def main(args):
             text_key=args.column, 
         )
     else: 
-        raise Exception(f"args.readers define to {args.readers}, must be in [hf,jsonl,parquet]")
+        raise Exception(f"args.reader define to {args.reader}, must be in [hf,jsonl,parquet]")
 
     if args.slurm==True:
         #launch a job in a slurm cluster, [!] do not launch tasks from within a compute node/from another slurm task!
