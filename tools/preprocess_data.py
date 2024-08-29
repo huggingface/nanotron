@@ -79,7 +79,7 @@ def main(args):
             text_key=args.column,
             dataset_options={"split": args.split},
         )
-    if args.reader == "jsonl":
+    elif args.reader == "jsonl":
         datatrove_reader = JsonlReader(
             data_folder=args.dataset, 
             glob_pattern=args.glob_pattern,
