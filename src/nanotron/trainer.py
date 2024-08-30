@@ -269,7 +269,6 @@ class DistributedTrainer:
             self.s3_mover = S3Mover(
                 local_path=self.config.checkpoints.checkpoints_path,
                 s3_path=self.config.s3_upload.upload_s3_path,
-                # duplicate_checkpoint_path=self.config.checkpoints.resume_checkpoint_path,
                 remove_after_upload=self.config.s3_upload.remove_after_upload,
                 s5cmd_numworkers=self.config.s3_upload.s5cmd_numworkers,
                 s5cmd_concurrency=self.config.s3_upload.s5cmd_concurrency,
@@ -278,14 +277,28 @@ class DistributedTrainer:
             )
         else:
             self.s3_mover = None
+
         if self.config.lighteval is not None and dist.get_rank(self.parallel_context.world_pg) == 0:
             # We only start evaluation runs once on the first node
-            #TODO @eliebak add the support of lighteval locally
-            if self.s3_mover is not None and self.config.slurm is not None: 
-                self.lighteval_runner = LightEvalRunner(config=self.config, parallel_context=self.parallel_context)
+            self.lighteval_runner = LightEvalRunner(config=self.config, parallel_context=self.parallel_context)
+            if self.s3_mover is not None and self.config.slurm is not None:
                 self.s3_mover.post_upload_callback = self.lighteval_runner.eval_single_checkpoint
+            elif self.config.slurm is not None and self.s3_mover is None:
+                # Use the no_s3 version of the evaluation function
+                self.post_checkpoint_callback = self.lighteval_runner.eval_single_checkpoint_no_s3
             else:
-                log_rank("LightEval is enabled but s3 upload is not enabled, skipping evaluation", logger=logger, level=logging.INFO, rank=0)
+                log_rank("LightEval is enabled but Slurm is not configured, skipping evaluation", logger=logger, level=logging.INFO, rank=0)
+        else:
+            self.post_checkpoint_callback = None
+
+    def post_save_checkpoint(self):
+        # Upload to S3
+        if self.s3_mover is not None:
+            self.s3_mover.start_uploading()
+        elif self.post_checkpoint_callback is not None:
+            # If we're not using S3, but we have a post-checkpoint callback, execute it
+            checkpoint_path = self.config.checkpoints.checkpoints_path / f"{self.iteration_step}"
+            self.post_checkpoint_callback(checkpoint_path)
 
     def pre_training(self, *args, **kwargs):
         self._print_training_plan()
@@ -733,7 +746,7 @@ class DistributedTrainer:
             reloaded_from_checkpoint=True
         if not reloaded_from_checkpoint:
             # TODO @eliebak add s3 support also here
-            log_rank("No checkpoint path provided.", logger=logger, level=logging.INFO)
+            log_rank("No checkpoint path provided.", logger=logger, level=logging.INFO, rank=0)
             if isinstance(self.config.model.init_method, ExistingCheckpointInit):
                 # Initialize model from an pretrained model checkpoint (without optimizer, lr_scheduler...)
                 self.param_shard_metadata = load_weights(
@@ -874,7 +887,10 @@ class DistributedTrainer:
         # Upload to S3
         if self.s3_mover is not None:
             self.s3_mover.start_uploading()
-
+        elif self.post_checkpoint_callback is not None:
+            # If we're not using S3, but we have a post-checkpoint callback, execute it
+            checkpoint_path = self.config.checkpoints.checkpoints_path / f"{self.iteration_step}"
+            self.post_checkpoint_callback(checkpoint_path)
 
     def save_checkpoint(self) -> Path:
         self.pre_save_checkpoint()

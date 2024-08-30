@@ -14,7 +14,7 @@
 #SBATCH --time=01:00:00
 
 
-LOCAL_DOWNLOAD_CHECKPOINT_FOLDER={{ local_path }}
+CHECKPOINT_FOLDER={{ ckpt_local_path }}
 
 set -x -e
 echo "START TIME: $(date)"
@@ -46,10 +46,6 @@ export CUDA_DEVICE_MAX_CONNECTIONS="1"
 echo go $COUNT_NODE
 echo $HOSTNAMES
 
-# Copying checkpoint from s3 to the node on node
-mkdir -p $LOCAL_DOWNLOAD_CHECKPOINT_FOLDER
-s5cmd cp --exclude "optimizer/*" {{ model_checkpoint_path }}* $LOCAL_DOWNLOAD_CHECKPOINT_FOLDER
-
 torch_dist_args="--nproc_per_node 8 \
     --nnodes $COUNT_NODE \
     --max_restarts 0 \
@@ -59,7 +55,7 @@ torch_dist_args="--nproc_per_node 8 \
 
 launch_args="$torch_dist_args \
     /fsx/elie_bakouch/nanotron/src/nanotron/lighteval/run_evals.py \
-    --checkpoint-config-path ${LOCAL_DOWNLOAD_CHECKPOINT_FOLDER}/config.yaml \
+    --checkpoint-config-path ${CHECKPOINT_FOLDER}/config.yaml \
     --hf-user-or-org {{ hf_user_or_org }} \
     "
 

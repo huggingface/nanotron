@@ -32,4 +32,8 @@ def get_parser():
 if __name__ == "__main__":
     parser = get_parser()
     args, unknowns = parser.parse_known_args()
-    main(args.checkpoint_config_path, args.lighteval_override, args.cache_dir)
+    main(
+        checkpoint_config_path=args.checkpoint_config_path, 
+        lighteval_config_path=args.lighteval_override, 
+        cache_dir=args.cache_dir,
+    )

@@ -11,7 +11,7 @@ from nanotron import logging
 from nanotron.logging import log_rank
 from nanotron.parallel import ParallelContext
 
-from nanotron.config import Config, LightEvalConfig
+from nanotron.config import Config
 
 logger = logging.get_logger(__name__)
 
@@ -21,6 +21,30 @@ class LightEvalRunner:
         self.config = config
         self.lighteval_config = config.lighteval
         self.parallel_context = parallel_context
+
+    def eval_single_checkpoint_no_s3(self, checkpoints_folder, current_step) -> Tuple[str, str]:
+        current_checkpoint_folder = os.path.join(checkpoints_folder, str(current_step))
+        checkpoint_path = os.path.join(current_checkpoint_folder, "config.yaml")
+        if not os.path.exists(checkpoint_path):
+            log_rank(
+                f"Checkpoint path does not exist: {checkpoint_path}. Unable to evaluate.",
+                logger=logger,
+                level=logging.ERROR,
+                group=self.parallel_context.dp_pg if self.parallel_context is not None else None,
+                rank=0,
+            )
+            return None, None
+
+        slurm_job_id, slurm_log = run_slurm_one_job(
+            config = self.config,
+            slurm_template=self.lighteval_config.slurm_template,
+            model_checkpoint_path=checkpoint_path,
+            current_step=self.config.general.step,
+            checkpoint_local_path=current_checkpoint_folder,
+            s3=False,
+        )
+
+        return slurm_job_id, slurm_log
 
     def eval_single_checkpoint(self, uploaded_files: List[dict]) -> Tuple[str, str]:
         """Run light evaluation on uploaded files."""
@@ -53,6 +77,8 @@ class LightEvalRunner:
             config = self.config,
             slurm_template=self.lighteval_config.slurm_template,
             model_checkpoint_path=checkpoint_path,
+            current_step=self.config.general.step,
+            s3=True,
         )
 
         return slurm_job_id, slurm_log
@@ -62,6 +88,9 @@ def run_slurm_one_job(
     config: Config,
     model_checkpoint_path: str,
     slurm_template: str,
+    current_step: int,
+    s3: bool = True,
+    checkpoint_local_path: str = None,
     slurm_name: Optional[str] = "eval",
     slurm_kwargs: Optional[dict] = None, #add slurm_kwargs and modify the jinja template in case you need to adapt it to your slurm cluster.
 ):
@@ -71,8 +100,11 @@ def run_slurm_one_job(
         mapping: Mapping to use for the job script (see SLURM_ONE_JOB_MAPPING)
     """
 
-    eval_launch_script_path=os.path.join(config.slurm.evals_logs_path, "launch-config")
-    eval_logs_path= os.path.join(config.slurm.evals_logs_path, "logs")
+    eval_launch_script_path = os.path.join(config.general.evals_logs_path, "launch-config", str(current_step))
+    eval_logs_path = os.path.join(config.general.evals_logs_path, "logs", str(current_step))
+
+    os.makedirs(eval_launch_script_path, exist_ok=True)
+    os.makedirs(eval_logs_path, exist_ok=True)
 
     environment = jinja2.Environment(
         comment_start_string="{=",
@@ -81,21 +113,32 @@ def run_slurm_one_job(
 
     with open(slurm_template, "r") as f:
         SLURM_JOBS_ARRAY_TEMPLATE = environment.from_string(f.read())
-
-    launch_string = SLURM_JOBS_ARRAY_TEMPLATE.render(
-        model_checkpoint_path=model_checkpoint_path,
-        job_name=f"{slurm_name}-eval",
-        n_tasks_per_node=config.slurm.n_tasks_per_node,
-        partition=config.slurm.gpu_partition,
-        gpu_per_node=config.slurm.gpu_per_node,
-        cpus_per_task=config.slurm.cpus_per_task,
-        eval_path=eval_logs_path,
-        mail=config.slurm.mail,
-        conda_path=config.slurm.conda_path,
-        conda_env_path=config.slurm.conda_env_path,
-        local_path=config.checkpoints.checkpoints_path,
-        **(slurm_kwargs if slurm_kwargs else {}),
-    )
+    if s3:
+        launch_string = SLURM_JOBS_ARRAY_TEMPLATE.render(
+            model_checkpoint_path=model_checkpoint_path,
+            job_name=f"{slurm_name}",
+            n_tasks_per_node=config.slurm.n_tasks_per_node,
+            partition=config.slurm.gpu_partition,
+            gpu_per_node=config.slurm.gpu_per_node,
+            cpus_per_task=config.slurm.cpus_per_task,
+            eval_path=eval_logs_path,
+            mail=config.slurm.mail_user,
+            local_path=config.lighteval.temp_dir,
+            **(slurm_kwargs if slurm_kwargs else {}),
+        )
+    else:
+        launch_string = SLURM_JOBS_ARRAY_TEMPLATE.render(
+            model_checkpoint_path=model_checkpoint_path,
+            job_name=f"{slurm_name}",
+            n_tasks_per_node=config.slurm.n_tasks_per_node,
+            partition=config.slurm.gpu_partition,
+            gpu_per_node=config.slurm.gpu_per_node,
+            cpus_per_task=config.slurm.cpus_per_task,
+            eval_path=eval_logs_path,
+            mail=config.slurm.mail_user,
+            ckpt_local_path=checkpoint_local_path,
+            **(slurm_kwargs if slurm_kwargs else {}),
+        )
 
     match = re.match(r"#SBATCH --output=(.*)", launch_string)
     slurm_output_path = match.group(1) if match else ""

@@ -32,19 +32,29 @@ class GenerationArgs:
 @dataclass
 class LightEvalLoggingArgs:
     """Arguments related to logging for LightEval"""
-
     local_output_path: Optional[Path] = None
+    private: Optional[bool] = True
     push_results_to_hub: Optional[bool] = None
     push_details_to_hub: Optional[bool] = None
     push_results_to_tensorboard: Optional[bool] = None
-    hub_repo_results: Optional[str] = None
-    hub_repo_details: Optional[str] = None
+    hf_user_or_org: Optional[str] = None 
+    hub_repo_results: Optional[str] = None #path is hf_user_or_org/hub_repo_results
+    hub_repo_details: Optional[str] = None #path is hf_user_or_org/hub_repo_details
     hub_repo_tensorboard: Optional[str] = None
     tensorboard_metric_prefix: Optional[str] = None
 
     def __post_init__(self):
         if isinstance(self.local_output_path, str):
             self.local_output_path = Path(self.local_output_path)
+        if self.push_results_to_hub is not None and self.hf_user_or_org is None:
+            raise ValueError("hf_user_or_org must be specified if push_results_to_hub is set")
+        if self.push_details_to_hub is not None and self.hf_user_or_org is None:
+            raise ValueError("hf_user_or_org must be specified if push_details_to_hub is set")
+        if self.hf_user_or_org is not None:
+            if self.push_results_to_hub is not None and self.hub_repo_results is None:
+                self.hub_repo_results = "evals-results"
+            if self.push_details_to_hub is not None and self.hub_repo_details is None:
+                self.hub_repo_details = "evals-details"
 
 
 @dataclass
@@ -83,7 +93,7 @@ class LightEvalConfig:
 
     slurm_template: Optional[str] = None
     slurm_script_dir: Optional[str] = None
-
+    temp_dir: Optional[str] = None
     checkpoints_path: Optional[str] = None
     parallelism: Optional[ParallelismArgs] = None
     batch_size: Optional[int] = None

@@ -100,8 +100,6 @@ class SlurmArgs:
         gpu_partition (str): SLURM partition (queue) for GPU jobs.
         job_name (str): Name of the SLURM job.
         nodes (int): Number of nodes to allocate for the job.
-        conda_path (str): Path to the Conda installation script.
-        conda_env_path (str): Path to the Conda environment to be used.
         n_tasks_per_node (int): Number of tasks to run per node. Default is 1.
         cpus_per_task (int): Number of CPUs to allocate per task. Default is 32.
         gpu_per_node (int): Number of GPUs to allocate per node. Default is 8.
@@ -122,8 +120,6 @@ class SlurmArgs:
     gpu_partition: str
     job_name: str
     nodes: int
-    conda_path: str
-    conda_env_path: str
     n_tasks_per_node: int = 1
     cpus_per_task: int = 32
     gpu_per_node: int = 8
@@ -238,20 +234,18 @@ class GeneralArgs:
     """
 
     project: str
+    run: str
     logs_path: Optional[str] = "./logs"
     launch_script_path: Optional[str] = None
     slurm_logs_path: Optional[str] = None
     config_logs_path: Optional[str] = None
     evals_logs_path: Optional[str] = None
-    repo_id: Optional[str] = None
     temp_dir: Optional[str] = None
-    run: Optional[str] = None
     seed: Optional[int] = None
     step: Optional[int] = None
     consumed_train_samples: Optional[int] = None
     benchmark_csv_path: Optional[Path] = None
     ignore_sanity_checks: bool = True
-    name: Optional[str] = None
 
     def __post_init__(self):
         if self.seed is None:
@@ -265,8 +259,6 @@ class GeneralArgs:
             self.run = "%date_%jobid"
         self.run.replace("%date", datetime.datetime.now().strftime("%Y%m%d_%H%M%S"))
         self.run.replace("%jobid", os.environ.get("SLURM_JOB_ID", "local"))
-        if self.name is None:
-            self.name = f"{self.project}-{self.run}"
 
 
 @dataclass
@@ -429,6 +421,7 @@ class Config:
         if hasattr(self, '_post_init_done'):
             return
         self._post_init_done = True
+        self.general.__post_init__()
         if self.s3_upload is not None:
             self.s3_upload.__post_init__()
 
@@ -465,7 +458,10 @@ class Config:
             ), "The stages are not sorted by start_training_step in increasing order"
 
 
-        log_folder = os.path.join(self.general.logs_path, self.general.name)
+        project_log_folder = Path(self.general.logs_path) 
+        os.makedirs(project_log_folder, exist_ok=True)
+
+        log_folder = os.path.join(project_log_folder, f"{self.general.run}-{self.general.project}")
         os.makedirs(log_folder, exist_ok=True)
 
         # Create config folder for all jobs
@@ -496,6 +492,7 @@ class Config:
         # if lighteval, we need tokenizer to be defined
         if self.lighteval is not None:
             assert self.tokenizer.tokenizer_name_or_path is not None
+
 
     @property
     def global_batch_size(self):

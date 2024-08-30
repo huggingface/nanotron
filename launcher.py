@@ -2,14 +2,11 @@ import os
 import subprocess
 import tempfile
 from datetime import datetime
-import math
 import torch
 
 import argparse
-from typing import Any, Dict
 
 from nanotron.logging import human_format
-from nanotron.models.llama import LlamaConfig
 
 from nanotron.config import (
     Config,
@@ -162,7 +159,7 @@ if __name__ == "__main__":
         dir = os.path.dirname(__file__)
         
         os.makedirs(config.general.config_logs_path, exist_ok=True)
-        config_path_yaml = f"{config.general.config_logs_path}/{timestamp}.yaml"
+        config_path_yaml = f"{config.general.config_logs_path}/{timestamp}_launch.yaml"
         config.save_as_yaml(config_path_yaml)
     
         os.makedirs(f"{config.general.slurm_logs_path}/", exist_ok=True)
@@ -181,8 +178,8 @@ if __name__ == "__main__":
 {format_sbatch_option("cpus-per-task", config.slurm.cpus_per_task)}
 {format_sbatch_option("gres", f"gpu:{config.slurm.gpu_per_node}")}
 {format_sbatch_option("partition", config.slurm.gpu_partition)}
-{format_sbatch_option("output", f"{config.general.slurm_logs_path}/train-{timestamp}-%x-%j.out")}
-{format_sbatch_option("array", config.slurm.array)}
+{format_sbatch_option("output", f"{config.general.slurm_logs_path}/train-{timestamp}-%j.out")}
+{format_sbatch_option("error", f"{config.general.slurm_logs_path}/train-{timestamp}-%j.err")}
 {format_sbatch_option("qos", config.slurm.qos)}
 {format_sbatch_option("mail-type", config.slurm.mail_type)}
 {format_sbatch_option("mail-user", config.slurm.mail_user)}
@@ -198,13 +195,11 @@ set -x -e
 
 TRAINER_PYTHON_FILE=/fsx/elie_bakouch/nanotron/run_train.py
 nvidia-smi
-source ~/.bashrc
-source /fsx/elie_bakouch/miniconda3/etc/profile.d/conda.sh
-conda activate {config.slurm.conda_env_path} #Modify this line if you use something different than conda
 
 
 #Show some environment variables
 echo python3 version = `python3 --version`
+echo "Python path: $(which python3)"
 echo "NCCL version: $(python -c "import torch;print(torch.cuda.nccl.version())")"
 echo "CUDA version: $(python -c "import torch;print(torch.version.cuda)")"
 
@@ -232,9 +227,8 @@ echo $HOSTNAMES
 
 ##### MOVE TO YAML ######
 
-CMD=" \
-    $TRAINER_PYTHON_FILE \
-    --config-file {config_path_yaml}
+CMD=" $TRAINER_PYTHON_FILE \
+    --config-file {config_path_yaml} \
     "
 export LAUNCHER="torchrun \
     --nproc_per_node {config.slurm.gpu_per_node} \
@@ -260,6 +254,7 @@ srun $SRUN_ARGS -u bash -c "$LAUNCHER --node_rank $SLURM_PROCID --role $SLURMD_N
 echo "END TIME: $(date)"
         """
         # Save the Slurm script
+        print(f"🚀 Slurm job launched with id={launch_slurm_job(sbatch_script)}")
         if config.general.launch_script_path:
             os.makedirs(config.general.launch_script_path, exist_ok=True)
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -269,9 +264,8 @@ echo "END TIME: $(date)"
             with open(script_path, 'w') as f:
                 f.write(sbatch_script)
             
-            print(f"Slurm script saved to: {script_path}")
+        print(f"    💾 Logs are saved to : {config.general.logs_path}")
 
-        print(f"Slurm job launched with id={launch_slurm_job(sbatch_script)}")
     else:
         # Check if running on an interactive node
         try:
@@ -281,7 +275,7 @@ echo "END TIME: $(date)"
             is_interactive = False
 
         if is_interactive:
-            print("Running on an interactive node with GPUs.")
+            print("💻 Running on an interactive node with GPUs.")
             
             # Check if the parallelism configuration matches the available GPUs
             total_gpus = gpu_count
@@ -304,9 +298,9 @@ echo "END TIME: $(date)"
 
             # Launch job
             launch_cmd = f"CUDA_DEVICE_MAX_CONNECTIONS='1' torchrun --nproc_per_node {gpu_count} {cmd}"
-            print(f"Launching interactive job with command: {launch_cmd}")
+            print(f"🚀 Launching interactive job with command: {launch_cmd}")
             
             # Execute the command
             subprocess.run(launch_cmd, shell=True, check=True)
         else:
-            print("Not running on a Slurm cluster or an interactive node with GPUs. Please submit a Slurm job or use an interactive node with GPUs.")
+            print("❌ Not running on a Slurm cluster or an interactive node with GPUs. Please submit a Slurm job or use an interactive node with GPUs.")

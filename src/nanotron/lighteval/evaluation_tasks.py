@@ -3,16 +3,15 @@
 Custom evaluation tasks for lighteval
 
 This file generally create just a TASKS_TABLE and TASKS_GROUPS which are then imported by LightEval.
-Edit this file to add your own task if needed
 """
 import re
 from dataclasses import asdict
 from typing import Dict, List, Tuple
 
-from lighteval.metrics.metrics import Metrics
+from lighteval.metrics import Metrics
 from lighteval.tasks.lighteval_task import LightevalTaskConfig
 from lighteval.tasks.requests import Doc
-from lighteval.tasks.default_prompts import LETTER_INDICES
+from lighteval.tasks.tasks_prompt_formatting import LETTER_INDICES
 
 _TASKS_STRINGS: List[Tuple[LightevalTaskConfig, str]] = []
 _TASKS: List[LightevalTaskConfig] = []
@@ -628,7 +627,6 @@ OPEN_LLM_LEADERBOARD_STRING = [
 
 
 ## HUMAN EVAL ##
-#TODO @eliebak add human eval again
 # human_eval = LightevalTaskConfig(
 #         name="human_eval",
 #         prompt_function="human_eval",
@@ -640,9 +638,8 @@ OPEN_LLM_LEADERBOARD_STRING = [
 EARLY_SIGNAL_TASKS = ",".join([t[1] for t in COMMON_SENSE_REASONING_STRING] + [t[1] for t in MMLU_STRING])
 
 # Convert to dict for lighteval
-TASKS_TABLE = [asdict(task) for task in _TASKS]
+TASKS_TABLE = [task.as_dict() for task in _TASKS]
 # You can have a few pre-organised groups of tasks
-# TODO @eliebak add math and code here 
 TASKS_GROUPS = {
     "all": ",".join(t[1] for t in _TASKS_STRINGS),
     "early-signal": EARLY_SIGNAL_TASKS,

@@ -31,52 +31,44 @@ from nanotron.config import (
     RandomInit,
     TokenizerArgs,
     TokensArgs,
-    LightEvalWandbLoggerConfig,
     DatasetStageArgs,
 )
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("project", help="project name", type=str)
+    parser.add_argument("--project", help="project name", type=str, required=True)
+    parser.add_argument("--run", help="run name", type=str, required=True)
     parser.add_argument("--slurm", help="use slurm", action="store_true")
-    parser.add_argument("--name", help="run name", type=str, default=None)
     parser.add_argument("--seed", help="seed", type=int, default=8)
-    parser.add_argument("--priority", "--qos", "-p", help="qos to use", type=str, default="normal")
+    parser.add_argument("--priority", "--qos", "-p", help="qos to use", type=str, default="high")
     parser.add_argument("--override", nargs="+", metavar="KEY=VALUE",
                         help="Override config values. Use dot notation for nested keys.")
     parser.add_argument("--launch", action="store_true", help="Launch the configuration immediately")
     args = parser.parse_args()
 
-    if args.name is not None:
-        run = f"{args.project}-{args.name}-{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
-    else:
-        run = f"{args.project}-{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
 
     general = GeneralArgs(
         project=args.project,
-        run=run,
-        repo_id="HuggingFaceSmol/test-nanotron",
+        run=args.run,
         logs_path="/fsx/elie_bakouch/nanotron/debug",
         seed=args.seed,
         temp_dir="/scratch",
     )
     
     if args.slurm:
-        job_name=f"{args.project}-{args.name}" if args.name is not None else f"{args.project}"
+        job_name=f"{args.project}-{args.run}"
         slurm = SlurmArgs(
             gpu_partition="hopper-prod",
-            job_name=f"{args.project}-{args.name}",
-            nodes=2,
-            conda_path="/fsx/elie_bakouch/miniconda3/etc/profile.d/conda.sh",
-            conda_env_path="/fsx/elie_bakouch/miniconda3/envs/smollm",
-            exclude_nodes=["ip-26-0-161-138", "ip-26-0-161-178"],
+            job_name=job_name,
+            nodes=1,
             torchrun_args={
                 "rdzv_backend": "etcd-v2",
                 "rdzv_endpoint": "etcd.hpc-cluster-hopper.hpc.internal.huggingface.tech:2379",
                 "rdzv_id": "$SLURM_JOB_ID"
             },
-            qos="normal",
-            begin="now+0minutes"
+            qos="high",
+            begin="now+0minutes",
+            time="01:00:00",
         )
     else:
         slurm = None
@@ -117,27 +109,27 @@ if __name__ == "__main__":
             tp_linear_async_communication=False,
         ),
         batch_size=16,
-        wandb=LightEvalWandbLoggerConfig(
-            wandb_project=args.project,
-            wandb_entity="eliebak",
-            wandb_run_name=f"{run}_evals",
-        ),
         logging=LightEvalLoggingArgs(
-            local_output_path=f"{general.temp_dir}/lighteval/{run}",
-            push_details_to_hub=False,
+            local_output_path=f"/fsx/elie_bakouch/lighteval-logs/{general.project}-{general.run}",
+            #local_output_path=PATH_TO_LOCAL_LOG,
+            private=True,
+            push_details_to_hub=True,
             push_results_to_hub=True,
             push_results_to_tensorboard=True,
-            #hub_repo_details=REPO_ID,
-            hub_repo_results=general.repo_id,
-            hub_repo_tensorboard=general.repo_id,
-            tensorboard_metric_prefix="e",
+            hf_user_or_org="eliebak",
+            #hf_user_or_org="USER_OR_ORG",
+            hub_repo_results="lighteval-results",
+            hub_repo_details="lighteval-details",
+            hub_repo_tensorboard="smollm-evals-visualization",
+            tensorboard_metric_prefix="eval",
         ),
         slurm_template="/fsx/elie_bakouch/nanotron/src/nanotron/lighteval/run_eval.slurm.jinja",
     )
 
 
     checkpoints = CheckpointsArgs(
-        checkpoints_path=f"checkpoints/{run}",
+        checkpoints_path=f"/scratch/elie_bakouch/checkpoints/{general.project}-{general.run}",
+        #checkpoints_path="CHECKPOINTS_PATH",
         checkpoints_path_is_shared_file_system=False,
         resume_checkpoint_path=None,
         checkpoint_interval=20,
@@ -145,14 +137,13 @@ if __name__ == "__main__":
     )
 
     parallelism = ParallelismArgs(
-        dp=16,
+        dp=8,
         pp=1,
         tp=1,
         pp_engine="1f1b",
         tp_mode="REDUCE_SCATTER",
         tp_linear_async_communication=True,
     )
-    #Add sanity check for the number of GPUs and the number of nodes ?
 
     tokens = TokensArgs(
         batch_accumulation_per_replica=8,
@@ -164,7 +155,6 @@ if __name__ == "__main__":
 
     model = ModelArgs(
         model_config=model_config,
-        make_vocab_size_divisible_by=1,
         init_method=RandomInit(
             std=math.sqrt(model_config.hidden_size),
         ),
@@ -179,7 +169,7 @@ if __name__ == "__main__":
     )
 
     learning_rate_scheduler = LRSchedulerArgs(
-        learning_rate=1e-4, #llama one
+        learning_rate=1e-4,
         lr_warmup_steps=10,
         lr_warmup_style="linear",
         lr_decay_style="linear",            
@@ -208,7 +198,7 @@ if __name__ == "__main__":
     )
 
     s3_upload = S3UploadArgs(
-        upload_s3_path=f"s3://elie-exp/debug_nanotron/test_eval/",
+        upload_s3_path=f"s3://elie-exp/debug_nanotron/eval-vf-hope/",
         remove_after_upload=True,
         s5cmd_numworkers=16,
         s5cmd_concurrency=5,
@@ -246,12 +236,12 @@ if __name__ == "__main__":
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     dir = os.path.dirname(__file__)    
     os.makedirs(config.general.config_logs_path, exist_ok=True)
-    config_path_yaml = f"{config.general.config_logs_path}/{timestamp}.yaml"
+    config_path_yaml = f"{config.general.config_logs_path}/{timestamp}_create.yaml"
     config.save_as_yaml(config_path_yaml)
 
     os.makedirs(f"{config.general.slurm_logs_path}/", exist_ok=True)
 
-    print(f"Configuration saved to: {config_path_yaml}")
+    print(f"💾 Configuration saved to: {config_path_yaml}")
 
     if args.launch:
         launcher_path = os.path.join(dir, "launcher.py")
