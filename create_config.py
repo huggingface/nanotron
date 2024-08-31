@@ -1,14 +1,12 @@
 import os
+from pathlib import Path
 import subprocess
-import tempfile
 from datetime import datetime
 import math
 import torch
 
 import argparse
-from typing import Any, Dict
 
-from nanotron.logging import human_format
 from nanotron.models.llama import LlamaConfig
 
 from nanotron.config import (
@@ -16,7 +14,6 @@ from nanotron.config import (
     DataArgs,
     NanosetDatasetsArgs,
     S3UploadArgs,
-    SlurmArgs,
     CheckpointsArgs,
     GeneralArgs,
     LightEvalConfig,
@@ -38,40 +35,23 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--project", help="project name", type=str, required=True)
     parser.add_argument("--run", help="run name", type=str, required=True)
-    parser.add_argument("--slurm", help="use slurm", action="store_true")
     parser.add_argument("--seed", help="seed", type=int, default=8)
     parser.add_argument("--priority", "--qos", "-p", help="qos to use", type=str, default="high")
     parser.add_argument("--override", nargs="+", metavar="KEY=VALUE",
                         help="Override config values. Use dot notation for nested keys.")
     parser.add_argument("--launch", action="store_true", help="Launch the configuration immediately")
+    parser.add_argument("--slurm", help="use slurm", action="store_true")
+    parser.add_argument("--nodes", help="specify the number of nodes", type=int)
     args = parser.parse_args()
 
 
     general = GeneralArgs(
         project=args.project,
         run=args.run,
-        logs_path="/fsx/elie_bakouch/nanotron/debug",
+        logs_path="/fsx/elie_bakouch/nanotron/refactor-logs",
         seed=args.seed,
         temp_dir="/scratch",
     )
-    
-    if args.slurm:
-        job_name=f"{args.project}-{args.run}"
-        slurm = SlurmArgs(
-            gpu_partition="hopper-prod",
-            job_name=job_name,
-            nodes=1,
-            torchrun_args={
-                "rdzv_backend": "etcd-v2",
-                "rdzv_endpoint": "etcd.hpc-cluster-hopper.hpc.internal.huggingface.tech:2379",
-                "rdzv_id": "$SLURM_JOB_ID"
-            },
-            qos="high",
-            begin="now+0minutes",
-            time="01:00:00",
-        )
-    else:
-        slurm = None
 
     model_config = LlamaConfig(
         bos_token_id=0,
@@ -123,7 +103,7 @@ if __name__ == "__main__":
             hub_repo_tensorboard="smollm-evals-visualization",
             tensorboard_metric_prefix="eval",
         ),
-        slurm_template="/fsx/elie_bakouch/nanotron/src/nanotron/lighteval/run_eval.slurm.jinja",
+        slurm_template="/fsx/elie_bakouch/nanotron/src/nanotron/slurm/run_eval.slurm.jinja",
     )
 
 
@@ -132,12 +112,12 @@ if __name__ == "__main__":
         #checkpoints_path="CHECKPOINTS_PATH",
         checkpoints_path_is_shared_file_system=False,
         resume_checkpoint_path=None,
-        checkpoint_interval=20,
+        checkpoint_interval=500,
         save_initial_state=False,
     )
 
     parallelism = ParallelismArgs(
-        dp=8,
+        dp=32,
         pp=1,
         tp=1,
         pp_engine="1f1b",
@@ -146,17 +126,17 @@ if __name__ == "__main__":
     )
 
     tokens = TokensArgs(
-        batch_accumulation_per_replica=8,
+        batch_accumulation_per_replica=2,
         micro_batch_size=16,
         sequence_length=2048,
-        train_steps=100,
+        train_steps=1500,
         val_check_interval=-1,
     )
 
     model = ModelArgs(
         model_config=model_config,
         init_method=RandomInit(
-            std=math.sqrt(model_config.hidden_size),
+            std=1/math.sqrt(model_config.hidden_size),
         ),
         dtype=torch.bfloat16,
     )
@@ -170,11 +150,11 @@ if __name__ == "__main__":
 
     learning_rate_scheduler = LRSchedulerArgs(
         learning_rate=1e-4,
-        lr_warmup_steps=10,
+        lr_warmup_steps=100,
         lr_warmup_style="linear",
         lr_decay_style="linear",            
-        lr_decay_steps = 20,
-        lr_decay_starting_step= 80,
+        lr_decay_steps = 200,
+        lr_decay_starting_step= 1300,
         min_decay_lr=0,
     )
 
@@ -198,7 +178,7 @@ if __name__ == "__main__":
     )
 
     s3_upload = S3UploadArgs(
-        upload_s3_path=f"s3://elie-exp/debug_nanotron/eval-vf-hope/",
+        upload_s3_path=f"s3://elie-exp/debug_nanotron/better_init",
         remove_after_upload=True,
         s5cmd_numworkers=16,
         s5cmd_concurrency=5,
@@ -231,17 +211,22 @@ if __name__ == "__main__":
         data_stages=data_stages,
         s3_upload=s3_upload,
         lighteval=lighteval,
-        slurm=slurm,
     )
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    dir = os.path.dirname(__file__)    
-    os.makedirs(config.general.config_logs_path, exist_ok=True)
+    dir = os.path.dirname(__file__)
+    
+    # Create the necessary directories
+    project_log_folder = Path(general.logs_path)
+    log_folder = project_log_folder / f"{general.run}-{general.project}"
+    config_folder = log_folder / 'configs'
+    config_folder.mkdir(parents=True, exist_ok=True)
+
+    config.general.config_logs_path = str(config_folder)
+
     config_path_yaml = f"{config.general.config_logs_path}/{timestamp}_create.yaml"
     config.save_as_yaml(config_path_yaml)
 
-    os.makedirs(f"{config.general.slurm_logs_path}/", exist_ok=True)
-
-    print(f"💾 Configuration saved to: {config_path_yaml}")
+    print(f"💾 Configuration saved in: {config.general.config_logs_path}")
 
     if args.launch:
         launcher_path = os.path.join(dir, "launcher.py")
@@ -250,15 +235,14 @@ if __name__ == "__main__":
             config_path_yaml,
         ]
         
-        if args.override:
-            launch_command.extend(["--override"] + args.override)
+        if args.slurm:
+            launch_command.append("--slurm")
+    
+        if args.nodes:
+            launch_command.extend(["--nodes", str(args.nodes)])
         
-        print(f"Launching configuration with command: {' '.join(launch_command)}")
+        print(f"🧪 Launching configuration with command: {' '.join(launch_command)}")
         subprocess.run(launch_command, check=True)
     else:
         print("To launch this configuration, run:")
-        print(f"python {os.path.join(dir, 'launcher.py')} {config_path_yaml} "
-              f"--override general.config_path={config_path_yaml}")
-        
-        if args.override:
-            print(f" {' '.join(args.override)}")
+        print(f"python {os.path.join(dir, 'launcher.py')} {config_path_yaml}")

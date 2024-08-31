@@ -1,0 +1,28 @@
+{
+  "job_name": "",
+  "n_tasks_per_node": 1,
+  "cpus_per_task": 32,
+  "gpus_per_node": 8,
+  "partition": "hopper-prod",
+  "qos": "high",
+  "mail_type": null,
+  "mail_user": null,
+  "exclude_nodes": null,
+  "time": "1:00:00",
+  "constraint": null,
+  "account": null,
+  "reservation": null,
+  "torchrun_args": {
+    "rdzv_backend": "etcd-v2",
+    "rdzv_endpoint": "etcd.hpc-cluster-hopper.hpc.internal.huggingface.tech:2379",
+    "rdzv_id": "$SLURM_JOB_ID",
+    "node_rank": "$SLURM_PROCID",
+    "role": "$SLURMD_NODENAME",
+    "max_restarts": 0,
+    "tee": 3
+  },
+  "array": null,
+  "mem": null,
+  "begin": null
+  }
+  

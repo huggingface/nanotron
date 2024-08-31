@@ -1,10 +1,12 @@
 import os
+from pathlib import Path
 import subprocess
 import tempfile
 from datetime import datetime
 import torch
-
 import argparse
+import json
+from jinja2 import Template
 
 from nanotron.logging import human_format
 
@@ -32,7 +34,7 @@ def set_nested_attribute(obj, path, value):
     parts = path.split('.')
     for part in parts[:-1]:
         if not hasattr(obj, part):
-            setattr(obj, part, type('', (), {})())  # Create empty object if attribute doesn't exist
+            setattr(obj, part, type('', (), {})()) 
         obj = getattr(obj, part)
     setattr(obj, parts[-1], value)
 
@@ -42,7 +44,13 @@ if __name__ == "__main__":
     parser.add_argument("config_path", help="path to the configuration file", type=str)
     parser.add_argument("--override", nargs="+", metavar="KEY=VALUE",
                         help="Override config values. Use dot notation for nested keys.")
+    parser.add_argument("--slurm", action="store_true", help="Launch the job on Slurm")
+    parser.add_argument("--nodes", type=int, help="Number of nodes to use for the job")
     args = parser.parse_args()
+
+    if args.slurm:
+        if args.nodes is None:
+            raise ValueError("When using Slurm (--slurm), you must specify the number of nodes (--nodes)")
 
     # Load the configuration using get_config_from_file
     config = get_config_from_file(args.config_path, config_class=Config)
@@ -107,9 +115,9 @@ if __name__ == "__main__":
 └───────────────────────┴────────────────────────┘
 """)
 
-    num_nodes = config.slurm.nodes if config.slurm else torch.cuda.device_count()
+    num_nodes = args.nodes if args.slurm else 1
     print(f"""
-🤖 Parallelism Configuration:
+🎛️ Parallelism Configuration:
 ┌───────────────────────┬────────────────────────┐
 │ Nodes                 │ {num_nodes:>22d} │
 │ Total GPUs            │ {config.parallelism.dp*config.parallelism.pp*config.parallelism.tp:>22d} │
@@ -155,116 +163,97 @@ if __name__ == "__main__":
 """)
 
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    if config.slurm:
-        dir = os.path.dirname(__file__)
+    if args.slurm:
         
-        os.makedirs(config.general.config_logs_path, exist_ok=True)
-        config_path_yaml = f"{config.general.config_logs_path}/{timestamp}_launch.yaml"
-        config.save_as_yaml(config_path_yaml)
-    
-        os.makedirs(f"{config.general.slurm_logs_path}/", exist_ok=True)
+        nodes = args.nodes
 
-        def format_sbatch_option(option, value):
-            return f"#SBATCH --{option}={value}" if value is not None else ""
+        launch_slurm_config_path = os.path.join(os.path.dirname(__file__), "src/nanotron/slurm/launch_slurm_config.json")
+        eval_slurm_config_path = os.path.join(os.path.dirname(__file__), "src/nanotron/slurm/eval_slurm_config.json")
+        
+        with open(launch_slurm_config_path, 'r') as f:
+            launch_slurm_config = json.load(f)
+        
+        with open(eval_slurm_config_path, 'r') as f:
+            eval_slurm_config = json.load(f)
+        
+            
+        total_gpus = config.parallelism.dp * config.parallelism.pp * config.parallelism.tp
+        gpus_per_node = launch_slurm_config.get('gpus_per_node')
+        required_nodes = (total_gpus + gpus_per_node - 1) // gpus_per_node  # Ceiling division
+
+        if args.nodes != required_nodes:
+            raise ValueError(f"Number of nodes in config ({args.nodes}) does not match the required number of nodes ({required_nodes}) based on the parallelism configuration.")
+
+            
+        # Create necessary folders
+        project_log_folder = Path(config.general.logs_path)
+        log_folder = project_log_folder / f"{config.general.run}-{config.general.project}"
+        subfolders = ['launch-script', 'slurm']
+        if hasattr(config, 'lighteval') and config.lighteval is not None:
+            subfolders.append('evals')
+
+        for subfolder in subfolders:
+            folder_path = os.path.join(log_folder, subfolder)
+            os.makedirs(folder_path, exist_ok=True)
+            if subfolder == 'launch-script':
+                config.general.launch_script_path = folder_path
+            elif subfolder == 'slurm':
+                config.general.slurm_logs_path = folder_path
+            elif subfolder == 'evals':
+                config.general.evals_logs_path = folder_path
+                for evals_subfolder in ['launch-config', 'logs']:
+                    evals_subfolder_path = os.path.join(config.general.evals_logs_path, evals_subfolder)
+                    os.makedirs(evals_subfolder_path, exist_ok=True)
+        
         
         torchrun_args = ""
-        if hasattr(config.slurm, 'torchrun_args') and config.slurm.torchrun_args:
-            torchrun_args = " ".join([f"--{k} {v}" for k, v in config.slurm.torchrun_args.items()])
+        if 'torchrun_args' in launch_slurm_config and launch_slurm_config['torchrun_args']:
+            torchrun_args = " ".join([f"--{k} {v}" for k, v in launch_slurm_config['torchrun_args'].items()])
+        
+        launch_slurm_config.update({
+            "job_name": f"{config.general.project}-{config.general.run}",
+            "nodes": args.nodes,
+            "slurm_logs_path": config.general.slurm_logs_path,
+            "timestamp": timestamp,
+            "path_to_trainer_python_file": os.path.join(os.path.dirname(__file__), "run_train.py"),
+            "config_path_yaml": f"{config.general.config_logs_path}/{timestamp}_launch.yaml",
+            "torchrun_args": torchrun_args,
+        })
 
-        sbatch_script = f"""#!/bin/bash
-{format_sbatch_option("job-name", config.slurm.job_name)}
-{format_sbatch_option("nodes", config.slurm.nodes)}
-{format_sbatch_option("ntasks-per-node", config.slurm.n_tasks_per_node)}
-{format_sbatch_option("cpus-per-task", config.slurm.cpus_per_task)}
-{format_sbatch_option("gres", f"gpu:{config.slurm.gpu_per_node}")}
-{format_sbatch_option("partition", config.slurm.gpu_partition)}
-{format_sbatch_option("output", f"{config.general.slurm_logs_path}/train-{timestamp}-%j.out")}
-{format_sbatch_option("error", f"{config.general.slurm_logs_path}/train-{timestamp}-%j.err")}
-{format_sbatch_option("qos", config.slurm.qos)}
-{format_sbatch_option("mail-type", config.slurm.mail_type)}
-{format_sbatch_option("mail-user", config.slurm.mail_user)}
-{format_sbatch_option("exclude", ",".join(config.slurm.exclude_nodes) if config.slurm.exclude_nodes else None)}
-{format_sbatch_option("time", config.slurm.time)}
-{format_sbatch_option("mem", config.slurm.mem)}
-{format_sbatch_option("constraint", config.slurm.constraint)}
-{format_sbatch_option("account", config.slurm.account)}
-{format_sbatch_option("reservation", config.slurm.reservation)}
-{format_sbatch_option("begin", config.slurm.begin)}
+        # Load Jinja2 template
+        template_path = os.path.join(os.path.dirname(__file__), "src/nanotron/slurm/launch_training.slurm.jinja")
+        with open(template_path, 'r') as f:
+            template = Template(f.read())
 
-set -x -e
+        # Render the template
+        sbatch_script = template.render(**launch_slurm_config)
 
-TRAINER_PYTHON_FILE=/fsx/elie_bakouch/nanotron/run_train.py
-nvidia-smi
+        config.general.launch_slurm_config = launch_slurm_config
+        config.general.eval_slurm_config = eval_slurm_config
 
+        config.save_as_yaml(launch_slurm_config["config_path_yaml"])
+        
+        # Launch the Slurm job
+        job_id = launch_slurm_job(sbatch_script)
+        print(f"🚀 Slurm job launched with id={job_id}")
 
-#Show some environment variables
-echo python3 version = `python3 --version`
-echo "Python path: $(which python3)"
-echo "NCCL version: $(python -c "import torch;print(torch.cuda.nccl.version())")"
-echo "CUDA version: $(python -c "import torch;print(torch.version.cuda)")"
-
-echo "START TIME: $(date)"
-secs_to_human(){{
-    echo "$(( ${{1}} / 3600 )):$(( (${{1}} / 60) % 60 )):$(( ${{1}} % 60 ))"
-}}
-start=$(date +%s)
-echo "$(date -d @${{start}} "+%Y-%m-%d %H:%M:%S"): ${{SLURM_JOB_NAME}} start id=${{SLURM_JOB_ID}}\n"
-
-
-# SLURM stuff
-export HOSTNAMES=`scontrol show hostnames "$SLURM_JOB_NODELIST"`
-export MASTER_ADDR=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)
-export MASTER_PORT=6000
-export COUNT_NODE=`scontrol show hostnames "$SLURM_JOB_NODELIST" | wc -l`
-
-export TMPDIR=/scratch
-export CUDA_DEVICE_MAX_CONNECTIONS="1"
-
-module load cuda/12.1
-
-echo go $COUNT_NODE
-echo $HOSTNAMES
-
-##### MOVE TO YAML ######
-
-CMD=" $TRAINER_PYTHON_FILE \
-    --config-file {config_path_yaml} \
-    "
-export LAUNCHER="torchrun \
-    --nproc_per_node {config.slurm.gpu_per_node} \
-    --nnodes $COUNT_NODE \
-    {torchrun_args} \
-    --node_rank $SLURM_PROCID \
-    --role $SLURMD_NODENAME: \
-    --max_restarts 0 \
-    --tee 3 \
-    "
-
-# Wait a random number between 0 and 1000 (milliseconds) to avoid too many concurrent requests to the hub
-random_milliseconds=$(( RANDOM % 1001 ))
-sleep_time=$(bc <<< "scale=3; $random_milliseconds / 1000")
-echo "Sleeping for $sleep_time seconds..."
-sleep $sleep_time
-
-launch_args="srun $SRUN_ARGS -u bash -c $LAUNCHER --node_rank $SLURM_PROCID --role $SLURMD_NODENAME: $CMD"
-
-srun $SRUN_ARGS -u bash -c "$LAUNCHER --node_rank $SLURM_PROCID --role $SLURMD_NODENAME: $CMD"
-
-
-echo "END TIME: $(date)"
-        """
-        # Save the Slurm script
-        print(f"🚀 Slurm job launched with id={launch_slurm_job(sbatch_script)}")
+        # Save the Slurm script if a path is provided
         if config.general.launch_script_path:
             os.makedirs(config.general.launch_script_path, exist_ok=True)
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             script_filename = f"slurm_script_{timestamp}.slurm"
             script_path = os.path.join(config.general.launch_script_path, script_filename)
             
             with open(script_path, 'w') as f:
                 f.write(sbatch_script)
             
-        print(f"    💾 Logs are saved to : {config.general.logs_path}")
+        print(f"    💾 Logs are saved to : {config.general.logs_path}/{config.general.run}-{config.general.project}")
+        print(f"    🤖 Slurm Configuration Details:")
+
+        slurm_config_keys = ['qos', 'gpus_per_node', 'cpus_per_task', 'constraint', 'account', 'reservation']
+        for key in slurm_config_keys:
+            if key in launch_slurm_config:
+                if launch_slurm_config[key] is not None:
+                    print(f"        {key}: {launch_slurm_config[key]}")
 
     else:
         # Check if running on an interactive node

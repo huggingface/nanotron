@@ -1,0 +1,86 @@
+#!/bin/bash
+#SBATCH --job-name={{ job_name }}
+#SBATCH --nodes={{ nodes }}
+#SBATCH --ntasks-per-node={{ n_tasks_per_node }}
+#SBATCH --gres=gpu:{{ gpus_per_node }}
+{% if cpus_per_task %}
+#SBATCH --cpus-per-task={{ cpus_per_task }}
+{% endif %}
+#SBATCH --partition={{ partition }}
+#SBATCH --output={{ eval_path }}/%x-%n-%j.out
+#SBATCH --error={{ eval_path }}/%x-%n-%j.err
+{% if qos %}
+#SBATCH --qos={{ qos }}
+{% endif %}
+{% if mail_type %}
+#SBATCH --mail-type={{ mail_type }}
+{% endif %}
+{% if mail_user %}
+#SBATCH --mail-user={{ mail_user }}
+{% endif %}
+{% if exclude_nodes %}
+#SBATCH --exclude={{ exclude_nodes|join(',') }}
+{% endif %}
+{% if time %}
+#SBATCH --time={{ time }}
+{% endif %}
+{% if constraint %}
+#SBATCH --constraint={{ constraint }}
+{% endif %}
+{% if account %}
+#SBATCH --account={{ account }}
+{% endif %}
+{% if reservation %}
+#SBATCH --reservation={{ reservation }}
+{% endif %}
+
+LOCAL_DOWNLOAD_CHECKPOINT_FOLDER={{ local_path }}
+
+set -e
+echo "START TIME: $(date)"
+#Show some environment variables
+echo python3 version = `python3 --version`
+echo "NCCL version: $(python -c "import torch;print(torch.cuda.nccl.version())")"
+echo "CUDA version: $(python -c "import torch;print(torch.version.cuda)")"
+
+# SLURM stuff
+export HOSTNAMES=`scontrol show hostnames "$SLURM_JOB_NODELIST"`
+export MASTER_ADDR=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)
+export MASTER_PORT=6000
+export COUNT_NODE=`scontrol show hostnames "$SLURM_JOB_NODELIST" | wc -l`
+
+# Hugging Face token
+if [ -z "$HUGGING_FACE_HUB_TOKEN" ]; then
+  # Attempt to read the token from the cache
+  if TOKEN=$(cat ~/.cache/huggingface/token 2>/dev/null); then
+    export HUGGING_FACE_HUB_TOKEN=$TOKEN
+  else
+    echo "Error: The environment variable HUGGING_FACE_HUB_TOKEN is not set and the token cache could not be read."
+    exit 1
+  fi
+fi
+
+export CUBLAS_WORKSPACE_CONFIG=":4096:8"
+export CUDA_DEVICE_MAX_CONNECTIONS="1"
+
+echo go $COUNT_NODE
+echo $HOSTNAMES
+
+# Copying checkpoint from s3 to the node on node
+mkdir -p $LOCAL_DOWNLOAD_CHECKPOINT_FOLDER
+s5cmd cp --exclude "optimizer/*" {{ model_checkpoint_path }}* $LOCAL_DOWNLOAD_CHECKPOINT_FOLDER
+
+torch_dist_args="--nproc_per_node 8 \
+    --nnodes $COUNT_NODE \
+    --max_restarts 0 \
+    --tee 3 \
+    --node_rank $SLURM_PROCID \
+    --role $SLURMD_NODENAME: "
+
+launch_args="$torch_dist_args \
+    /fsx/elie_bakouch/nanotron/src/nanotron/lighteval/run_evals.py \
+    --checkpoint-config-path ${LOCAL_DOWNLOAD_CHECKPOINT_FOLDER}/config.yaml \
+    --hf-user-or-org {{ hf_user_or_org }} \
+    "
+
+srun -u bash -c "python3 -u -m torch.distributed.run ${launch_args}"

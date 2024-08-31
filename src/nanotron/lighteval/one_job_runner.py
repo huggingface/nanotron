@@ -5,13 +5,14 @@ import os
 import re
 import subprocess
 from typing import List, Optional, Tuple, Union
+import copy
 
 import jinja2
 from nanotron import logging
 from nanotron.logging import log_rank
 from nanotron.parallel import ParallelContext
 
-from nanotron.config import Config
+from nanotron.config import Config, LightEvalConfig
 
 logger = logging.get_logger(__name__)
 
@@ -75,6 +76,7 @@ class LightEvalRunner:
 
         slurm_job_id, slurm_log = run_slurm_one_job(
             config = self.config,
+            lighteval_config = self.lighteval_config,
             slurm_template=self.lighteval_config.slurm_template,
             model_checkpoint_path=checkpoint_path,
             current_step=self.config.general.step,
@@ -86,13 +88,13 @@ class LightEvalRunner:
 
 def run_slurm_one_job(
     config: Config,
+    lighteval_config: LightEvalConfig,
     model_checkpoint_path: str,
     slurm_template: str,
     current_step: int,
     s3: bool = True,
     checkpoint_local_path: str = None,
     slurm_name: Optional[str] = "eval",
-    slurm_kwargs: Optional[dict] = None, #add slurm_kwargs and modify the jinja template in case you need to adapt it to your slurm cluster.
 ):
     """Launch a single job on Slurm with the given mapping
     Args:
@@ -113,32 +115,27 @@ def run_slurm_one_job(
 
     with open(slurm_template, "r") as f:
         SLURM_JOBS_ARRAY_TEMPLATE = environment.from_string(f.read())
-    if s3:
-        launch_string = SLURM_JOBS_ARRAY_TEMPLATE.render(
-            model_checkpoint_path=model_checkpoint_path,
-            job_name=f"{slurm_name}",
-            n_tasks_per_node=config.slurm.n_tasks_per_node,
-            partition=config.slurm.gpu_partition,
-            gpu_per_node=config.slurm.gpu_per_node,
-            cpus_per_task=config.slurm.cpus_per_task,
-            eval_path=eval_logs_path,
-            mail=config.slurm.mail_user,
-            local_path=config.lighteval.temp_dir,
-            **(slurm_kwargs if slurm_kwargs else {}),
-        )
-    else:
-        launch_string = SLURM_JOBS_ARRAY_TEMPLATE.render(
-            model_checkpoint_path=model_checkpoint_path,
-            job_name=f"{slurm_name}",
-            n_tasks_per_node=config.slurm.n_tasks_per_node,
-            partition=config.slurm.gpu_partition,
-            gpu_per_node=config.slurm.gpu_per_node,
-            cpus_per_task=config.slurm.cpus_per_task,
-            eval_path=eval_logs_path,
-            mail=config.slurm.mail_user,
-            ckpt_local_path=checkpoint_local_path,
-            **(slurm_kwargs if slurm_kwargs else {}),
-        )
+
+    #Not sure if this is the best way to do it. Maybe we need to add a copy or deepcopy somewhere.
+    eval_slurm_config = config.general.eval_slurm_config
+
+    # Update the config with additional required parameters
+    # Calculate the number of nodes based on parallelism config and gpus_per_node
+    total_gpus_needed = lighteval_config.parallelism.dp * lighteval_config.parallelism.pp * lighteval_config.parallelism.tp
+    gpus_per_node = eval_slurm_config.get('gpus_per_node')
+    nodes = (total_gpus_needed + gpus_per_node - 1) // gpus_per_node  # Ceiling division
+    
+    eval_slurm_config.update({
+        'nodes': nodes,  # Assuming we want to run on a single node
+        'job_name': f"eval-{current_step}",
+        'eval_path': eval_logs_path,
+        'local_path': config.lighteval.temp_dir if s3 else checkpoint_local_path,
+        'hf_user_or_org': config.logging.hf_user_or_org if hasattr(config.logging, 'hf_user_or_org') else None,
+        "model_checkpoint_path": model_checkpoint_path,
+    })
+
+
+    launch_string = SLURM_JOBS_ARRAY_TEMPLATE.render(**eval_slurm_config)
 
     match = re.match(r"#SBATCH --output=(.*)", launch_string)
     slurm_output_path = match.group(1) if match else ""

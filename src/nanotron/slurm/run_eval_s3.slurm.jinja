@@ -1,0 +1,62 @@
+#!/bin/bash
+#SBATCH --job-name={{ job_name }}
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node={{ n_tasks_per_node }}
+#SBATCH --partition={{ partition }}
+#SBATCH --gres=gpu:{{ gpu_per_node }}
+#SBATCH --cpus-per-task={{ cpus_per_task}}
+#SBATCH --output={{ eval_path }}/%x-%n-%j.out
+#SBATCH --error={{ eval_path }}/%x-%n-%j.err
+#SBATCH --qos=high
+#SBATCH --dependency=singleton
+#SBATCH --mail-type=FAIL
+#SBATCH --mail-user={{ mail }}  
+#SBATCH --time=01:00:00
+
+
+CHECKPOINT_FOLDER={{ ckpt_local_path }}
+
+set -x -e
+echo "START TIME: $(date)"
+#Show some environment variables
+echo python3 version = `python3 --version`
+echo "NCCL version: $(python -c "import torch;print(torch.cuda.nccl.version())")"
+echo "CUDA version: $(python -c "import torch;print(torch.version.cuda)")"
+
+# SLURM stuff
+export HOSTNAMES=`scontrol show hostnames "$SLURM_JOB_NODELIST"`
+export MASTER_ADDR=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)
+export MASTER_PORT=6000
+export COUNT_NODE=`scontrol show hostnames "$SLURM_JOB_NODELIST" | wc -l`
+
+# Hugging Face token
+if [ -z "$HUGGING_FACE_HUB_TOKEN" ]; then
+  # Attempt to read the token from the cache
+  if TOKEN=$(cat ~/.cache/huggingface/token 2>/dev/null); then
+    export HUGGING_FACE_HUB_TOKEN=$TOKEN
+  else
+    echo "Error: The environment variable HUGGING_FACE_HUB_TOKEN is not set and the token cache could not be read."
+    exit 1
+  fi
+fi
+
+export CUBLAS_WORKSPACE_CONFIG=":4096:8"
+export CUDA_DEVICE_MAX_CONNECTIONS="1"
+
+echo go $COUNT_NODE
+echo $HOSTNAMES
+
+torch_dist_args="--nproc_per_node 8 \
+    --nnodes $COUNT_NODE \
+    --max_restarts 0 \
+    --tee 3 \
+    --node_rank $SLURM_PROCID \
+    --role $SLURMD_NODENAME: "
+
+launch_args="$torch_dist_args \
+    /fsx/elie_bakouch/nanotron/src/nanotron/lighteval/run_evals.py \
+    --checkpoint-config-path ${CHECKPOINT_FOLDER}/config.yaml \
+    --hf-user-or-org {{ hf_user_or_org }} \
+    "
+
+srun -u bash -c "python3 -u -m torch.distributed.run ${launch_args}"

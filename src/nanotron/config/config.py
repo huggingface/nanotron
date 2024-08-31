@@ -90,56 +90,6 @@ class PretrainDatasetsArgs:
             self.text_column_name = "text"
         if self.hf_dataset_splits is None:
             self.hf_dataset_splits = "train"
-
-@dataclass
-class SlurmArgs:
-    """
-    Arguments for configuring SLURM job submission.
-
-    Attributes:
-        gpu_partition (str): SLURM partition (queue) for GPU jobs.
-        job_name (str): Name of the SLURM job.
-        nodes (int): Number of nodes to allocate for the job.
-        n_tasks_per_node (int): Number of tasks to run per node. Default is 1.
-        cpus_per_task (int): Number of CPUs to allocate per task. Default is 32.
-        gpu_per_node (int): Number of GPUs to allocate per node. Default is 8.
-        array (Optional[str]): Job array specification, allowing multiple similar jobs to be submitted as a group.
-        qos (Optional[str]): Quality of Service, used to define job priority or resource limits.
-        mail_type (Optional[str]): Specifies when to send email notifications about the job (e.g., BEGIN, END, FAIL). Default is FAIL.
-        mail_user (Optional[str]): Email address to receive job notifications.
-        exclude_nodes (Optional[List[str]]): List of nodes to exclude from job allocation.
-        time (Optional[str]): Maximum time limit for the job.
-        mem (Optional[str]): Memory requirement for the job.
-        constraint (Optional[str]): Specifies node features required for the job.
-        account (Optional[str]): Account to charge for the job's resource usage.
-        reservation (Optional[str]): Name of a reservation to use for the job.
-        begin (Optional[str]): Earliest time the job can start.
-        torchrun_args (Optional[Dict[str, str]]): Additional arguments for torchrun command.
-    """
-
-    gpu_partition: str
-    job_name: str
-    nodes: int
-    n_tasks_per_node: int = 1
-    cpus_per_task: int = 32
-    gpu_per_node: int = 8
-    array: Optional[str] = None
-    qos: Optional[str] = None
-    mail_user: Optional[str] = None
-    mail_type: Optional[str] = None
-    exclude_nodes: Optional[List[str]] = None
-    time: Optional[str] = None
-    mem: Optional[str] = None
-    constraint: Optional[str] = None
-    account: Optional[str] = None
-    reservation: Optional[str] = None
-    begin: Optional[str] = None
-    torchrun_args: Optional[Dict[str, str]] = None
-
-    def __post_init__(self):
-        if self.mail_type is None and self.mail_user is not None:
-            self.mail_type = "FAIL"
-
 @dataclass
 class S3UploadArgs:
     """Arguments related to uploading checkpoints on s3"""
@@ -236,6 +186,8 @@ class GeneralArgs:
     project: str
     run: str
     logs_path: Optional[str] = "./logs"
+    launch_slurm_config: Optional[dict] = None
+    eval_slurm_config: Optional[dict] = None
     launch_script_path: Optional[str] = None
     slurm_logs_path: Optional[str] = None
     config_logs_path: Optional[str] = None
@@ -410,7 +362,6 @@ class Config:
     profiler: Optional[ProfilerArgs] = None
     lighteval: Optional[LightEvalConfig] = None
     s3_upload: Optional[S3UploadArgs] = None
-    slurm: Optional[SlurmArgs] = None
 
     @classmethod
     def create_empty(cls):
@@ -457,36 +408,6 @@ class Config:
                 for i in range(len(self.data_stages) - 1)
             ), "The stages are not sorted by start_training_step in increasing order"
 
-
-        project_log_folder = Path(self.general.logs_path) 
-        os.makedirs(project_log_folder, exist_ok=True)
-
-        log_folder = os.path.join(project_log_folder, f"{self.general.run}-{self.general.project}")
-        os.makedirs(log_folder, exist_ok=True)
-
-        # Create config folder for all jobs
-        config_folder = os.path.join(log_folder, 'configs')
-        os.makedirs(config_folder, exist_ok=True)
-        self.general.config_logs_path = config_folder
-
-        if self.slurm is not None:
-            subfolders = ['slurm']
-            if self.lighteval is not None and self.s3_upload is not None:
-                subfolders.append('evals')
-            for subfolder in subfolders:
-                folder_path = os.path.join(log_folder, subfolder)
-                os.makedirs(folder_path, exist_ok=True)
-                setattr(self.general, f"{subfolder}_logs_path", folder_path)
-
-                if subfolder == 'evals':
-                    for evals_subfolder in ['launch-config', 'logs']:
-                        evals_subfolder_path = os.path.join(folder_path, evals_subfolder)
-                        os.makedirs(evals_subfolder_path, exist_ok=True)
-
-            # Create launch-script folder
-            launch_script_folder = os.path.join(log_folder, 'launch-script')
-            os.makedirs(launch_script_folder, exist_ok=True)
-            self.general.launch_script_path = launch_script_folder
         
 
         # if lighteval, we need tokenizer to be defined
