@@ -1,6 +1,7 @@
 from dataclasses import fields
 from enum import Enum, auto
 from pathlib import Path
+from datasets.download.streaming_download_manager import xPath
 
 import torch
 
@@ -31,6 +32,8 @@ def serialize(data) -> dict:
         value = getattr(data, field.name)
         if hasattr(value, "__dataclass_fields__"):
             result[field.name] = serialize(value)
+        elif isinstance(value, xPath):
+            result[field.name] = str(value)
         elif isinstance(value, Path):
             result[field.name] = str(value)
         elif isinstance(value, PipelineEngine):

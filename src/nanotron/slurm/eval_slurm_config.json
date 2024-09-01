@@ -21,6 +21,7 @@
     "max_restarts": 0,
     "tee": 3
   },
+  "hf_cache": "/fsx/elie_bakouch/.cache",
   "array": null,
   "mem": null,
   "begin": null

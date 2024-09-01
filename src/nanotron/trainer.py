@@ -262,8 +262,8 @@ class DistributedTrainer:
         self.init_checkpoint_path = parse_ckpt_path(config=self.config, parallel_context=self.parallel_context)
 
     def post_init(self):
-        # S3 Mover and save initial state
-        if self.config.s3_upload is not None:
+        # S3 Mover and save initial state (only if we need to upload checkpoints on s3)
+        if self.config.s3_upload is not None and self.config.s3_upload.upload_s3_path is not None:
             # Only local rank 0 should upload
             dummy = bool(int(os.environ.get("LOCAL_RANK", None)) != 0)
             self.s3_mover = S3Mover(
@@ -277,29 +277,22 @@ class DistributedTrainer:
             )
         else:
             self.s3_mover = None
-
-        if self.config.lighteval is not None and dist.get_rank(self.parallel_context.world_pg) == 0:
-            # We only start evaluation runs once on the first node
-            self.lighteval_runner = LightEvalRunner(config=self.config, parallel_context=self.parallel_context)
-            if self.s3_mover is not None and self.config.general.eval_slurm_config is not None:
-                self.s3_mover.post_upload_callback = self.lighteval_runner.eval_single_checkpoint
-            elif self.config.general.eval_slurm_config is not None and self.s3_mover is None:
-                # Use the no_s3 version of the evaluation function
-                self.post_checkpoint_callback = self.lighteval_runner.eval_single_checkpoint_no_s3
+        if dist.get_rank(self.parallel_context.world_pg) == 0:
+            # check if slurm is configured
+            # TODO @eliebak rewrite the logic by self.slurm + there can be s3upload AND checkpoint path local which is not support for now
+            if self.config.lighteval is not None and self.config.general.eval_slurm_config is not None:
+                self.lighteval_runner = LightEvalRunner(config=self.config, parallel_context=self.parallel_context)
+                if self.s3_mover is not None:
+                    self.s3_mover.post_upload_callback = self.lighteval_runner.eval_single_checkpoint
+                    self.post_checkpoint_callback = None
+                else:
+                    # Use the no_s3 version of the evaluation function
+                    # TODO: make it one function + make it automatic to switch to the right jinja template         
+                    self.post_checkpoint_callback = self.lighteval_runner.eval_single_checkpoint_no_s3
             else:
-                log_rank("LightEval is enabled but Slurm is not configured, skipping evaluation", logger=logger, level=logging.INFO, rank=0)
+                self.post_checkpoint_callback = None
         else:
             self.post_checkpoint_callback = None
-
-    def post_save_checkpoint(self):
-        # Upload to S3
-        if self.s3_mover is not None:
-            self.s3_mover.start_uploading()
-        elif self.post_checkpoint_callback is not None:
-            # If we're not using S3, but we have a post-checkpoint callback, execute it
-            checkpoint_path = self.config.checkpoints.checkpoints_path / f"{self.iteration_step}"
-            self.post_checkpoint_callback(checkpoint_path)
-
     def pre_training(self, *args, **kwargs):
         self._print_training_plan()
 
@@ -319,12 +312,22 @@ class DistributedTrainer:
                 name=f"{current_time}_{self.config.general.run}",
                 config={"nanotron_config": self.config.as_dict()},
             )
-            # In case we resume from another run
-            initial_step = getattr(self.config.general, 'step', None)
-            if initial_step is not None:
-                wandb.run.step = initial_step
-            else:
-                wandb.run.step = 0  # Start from 0, will become 1 on first log
+            # Define tokens metric as x-axis for all metrics
+            wandb.define_metric("Tokens")
+            wandb.define_metric("*", step_metric="Tokens")
+            
+            # Handle resuming from a previous run
+            initial_step = getattr(self.config.general, 'step', 0)
+            if initial_step is None:
+                initial_step = 0
+        
+            initial_tokens = initial_step * self.global_batch_size
+            
+            # Log initial tokens to set the starting point
+            wandb.log({"Tokens": initial_tokens})
+            
+            print(f"Initial Tokens: {initial_tokens}")
+
             
     def post_train_step(self):
 
@@ -625,11 +628,11 @@ class DistributedTrainer:
 
             log_entries = [
                 # LogItem("consumed_samples", self.consumed_train_samples, "human_format"),  # , "12d"),
-                LogItem(
-                    "consumed_tokens",
-                    self.metadata.consumed_train_samples * self.config.tokens.sequence_length,
-                    "human_format",
-                ),  # , "12d"),
+                # LogItem(
+                #     "consumed_tokens",
+                #     self.metadata.consumed_train_samples * self.config.tokens.sequence_length,
+                #     "human_format",
+                # ),  # , "12d"),
                 LogItem("elapsed_time_per_iteration_ms", elapsed_time_per_iteration_ms, "human_format"),  # , ".1f"),
                 LogItem("tokens_per_sec", tokens_per_sec, "human_format"),  # , "1.6E"),
                 LogItem(
@@ -668,6 +671,7 @@ class DistributedTrainer:
                     {
                         **{log_item.tag: log_item.scalar_value for log_item in log_entries},
                         "iteration_step": self.iteration_step,
+                        "Tokens": self.metadata.consumed_train_samples * self.config.tokens.sequence_length,
                     }
                 )
 
@@ -901,9 +905,10 @@ class DistributedTrainer:
         # Upload to S3
         if self.s3_mover is not None:
             self.s3_mover.start_uploading()
+
         elif self.post_checkpoint_callback is not None:
-            # If we're not using S3, but we have a post-checkpoint callback, execute it
-            checkpoint_path = self.config.checkpoints.checkpoints_path / f"{self.iteration_step}"
+            # If we're not using S3, but we have a post-checkpoint callback for evals
+            checkpoint_path = self.config.checkpoints.checkpoints_path / f"{self.config.general.step}"
             self.post_checkpoint_callback(checkpoint_path)
 
         

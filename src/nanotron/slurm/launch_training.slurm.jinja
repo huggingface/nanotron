@@ -61,6 +61,11 @@ export COUNT_NODE=`scontrol show hostnames "$SLURM_JOB_NODELIST" | wc -l`
 export TMPDIR=/scratch
 export CUDA_DEVICE_MAX_CONNECTIONS="1"
 
+export HUGGINGFACE_HUB_CACHE={{ hf_cache }}
+export HF_DATASETS_CACHE={{ hf_cache }}
+export HF_MODULES_CACHE={{ hf_cache }}
+export HF_HOME={{ hf_cache }}
+
 module load cuda/12.1
 
 echo go $COUNT_NODE

@@ -1,6 +1,7 @@
 import datetime
 import os
 from dataclasses import dataclass, fields
+import pathlib
 from pathlib import Path
 from datasets.download.streaming_download_manager import xPath
 from typing import List, Optional, Type, Union, Dict
@@ -20,6 +21,7 @@ from nanotron.config.utils_config import (
     cast_str_to_torch_dtype,
     serialize,
 )
+from nanotron.s3_checkpoints import check_path_is_local
 from nanotron.generation.sampler import SamplerType
 from nanotron.logging import get_logger
 from nanotron.parallel.pipeline_parallel.engine import PipelineEngine
@@ -94,17 +96,17 @@ class PretrainDatasetsArgs:
 class S3UploadArgs:
     """Arguments related to uploading checkpoints on s3"""
 
-    upload_s3_path: xPath
+    upload_s3_path: Optional[str] = None #set to None if we want to use S3UploadArgs to download checkpoints from s3 but not upload checkpoints on s3
     remove_after_upload: bool
     s5cmd_numworkers: Optional[int]
     s5cmd_concurrency: Optional[int]
-    s5cmd_path: Optional[xPath]
+    s5cmd_path: Optional[str]
 
     def __post_init__(self):
-        if isinstance(self.upload_s3_path, str):
+        if isinstance(self.upload_s3_path, str) and self.upload_s3_path is not None:
             self.upload_s3_path = xPath(self.upload_s3_path)
         if isinstance(self.s5cmd_path, str):
-            self.s5cmd_path = xPath(self.s5cmd_path)
+            self.s5cmd_path = Path(self.s5cmd_path)
 
 @dataclass
 class NanosetDatasetsArgs:
@@ -157,18 +159,21 @@ class CheckpointsArgs:
 
     """
 
-    checkpoints_path: Path
+    checkpoints_path: str
     checkpoint_interval: int
     save_initial_state: Optional[bool] = False
     save_final_state: Optional[bool] = False
-    resume_checkpoint_path: Optional[xPath] = None
+    resume_checkpoint_path: Optional[str] = None
     checkpoints_path_is_shared_file_system: Optional[bool] = False
 
     def __post_init__(self):
         if isinstance(self.checkpoints_path, str):
-            self.checkpoints_path = xPath(self.checkpoints_path)
+            self.checkpoints_path = Path(self.checkpoints_path)
         if isinstance(self.resume_checkpoint_path, str):
-            self.resume_checkpoint_path = xPath(self.resume_checkpoint_path)
+            if check_path_is_local(self.resume_checkpoint_path):
+                self.resume_checkpoint_path = Path(self.resume_checkpoint_path)
+            else:
+                self.resume_checkpoint_path = xPath(self.resume_checkpoint_path)
 
 
 @dataclass
@@ -421,7 +426,9 @@ class Config:
     def global_batch_size(self):
         return self.tokens.micro_batch_size * self.tokens.batch_accumulation_per_replica * self.parallelism.dp
 
+    
     def save_as_yaml(self, file_path: str):
+
         config_dict = serialize(self)
         file_path = str(file_path)
         with open(file_path, "w") as f:
@@ -492,9 +499,10 @@ def get_config_from_file(
         skip_unused_config_keys: whether to skip unused first-nesting-level keys in the config file (for config with additional sections)
         skip_null_keys: whether to skip keys with value None at first and second nesting level
     """
-    # Open the file and load the file
+        
     with open(config_path) as f:
         config_dict = yaml.load(f, Loader=SafeLoader)
+
 
     config = get_config_from_dict(
         config_dict,

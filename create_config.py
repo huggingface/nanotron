@@ -44,7 +44,7 @@ if __name__ == "__main__":
     parser.add_argument("--nodes", help="specify the number of nodes", type=int)
     args = parser.parse_args()
 
-
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     general = GeneralArgs(
         project=args.project,
         run=args.run,
@@ -90,7 +90,7 @@ if __name__ == "__main__":
         ),
         batch_size=16,
         logging=LightEvalLoggingArgs(
-            local_output_path=f"/fsx/elie_bakouch/lighteval-logs/{general.project}-{general.run}",
+            local_output_path=f"/fsx/elie_bakouch/refactor-lighteval-logs/{general.project}-{general.run}",
             #local_output_path=PATH_TO_LOCAL_LOG,
             private=True,
             push_details_to_hub=True,
@@ -108,16 +108,16 @@ if __name__ == "__main__":
 
 
     checkpoints = CheckpointsArgs(
-        checkpoints_path=f"/scratch/elie_bakouch/checkpoints/{general.project}-{general.run}",
+        checkpoints_path=f"/fsx/elie_bakouch/refactor-checkpoints/{general.project}-{general.run}",
         #checkpoints_path="CHECKPOINTS_PATH",
         checkpoints_path_is_shared_file_system=False,
         resume_checkpoint_path=None,
-        checkpoint_interval=500,
+        checkpoint_interval=20,
         save_initial_state=False,
     )
 
     parallelism = ParallelismArgs(
-        dp=32,
+        dp=8,
         pp=1,
         tp=1,
         pp_engine="1f1b",
@@ -126,10 +126,10 @@ if __name__ == "__main__":
     )
 
     tokens = TokensArgs(
-        batch_accumulation_per_replica=2,
+        batch_accumulation_per_replica=8,
         micro_batch_size=16,
         sequence_length=2048,
-        train_steps=1500,
+        train_steps=100,
         val_check_interval=-1,
     )
 
@@ -150,11 +150,11 @@ if __name__ == "__main__":
 
     learning_rate_scheduler = LRSchedulerArgs(
         learning_rate=1e-4,
-        lr_warmup_steps=100,
+        lr_warmup_steps=10,
         lr_warmup_style="linear",
         lr_decay_style="linear",            
-        lr_decay_steps = 200,
-        lr_decay_starting_step= 1300,
+        lr_decay_steps = 20,
+        lr_decay_starting_step= 80,
         min_decay_lr=0,
     )
 
@@ -177,14 +177,14 @@ if __name__ == "__main__":
         tokenizer_name_or_path="HuggingFaceTB/cosmo2-tokenizer",
     )
 
-    s3_upload = S3UploadArgs(
-        upload_s3_path=f"s3://elie-exp/debug_nanotron/better_init",
-        remove_after_upload=True,
-        s5cmd_numworkers=16,
-        s5cmd_concurrency=5,
-        s5cmd_path="/fsx/elie_bakouch/miniconda3/envs/smollm/bin/s5cmd",
-    )
-
+    # s3_upload = S3UploadArgs(
+    #     upload_s3_path=f"s3://elie-exp/debug_nanotron/{general.project}-{general.run}-{timestamp}",
+    #     remove_after_upload=True,
+    #     s5cmd_numworkers=16,
+    #     s5cmd_concurrency=5,
+    #     s5cmd_path="/fsx/elie_bakouch/miniconda3/envs/smollm/bin/s5cmd",
+    # )
+    s3_upload = None
     data_stages=[
         DatasetStageArgs(
             data=DataArgs(
@@ -212,7 +212,6 @@ if __name__ == "__main__":
         s3_upload=s3_upload,
         lighteval=lighteval,
     )
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     dir = os.path.dirname(__file__)
     
     # Create the necessary directories

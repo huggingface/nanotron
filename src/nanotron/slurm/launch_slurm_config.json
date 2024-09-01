@@ -1,14 +1,14 @@
 {
   "job_name": "",
   "n_tasks_per_node": 1,
-  "cpus_per_task": 32,
+  "cpus_per_task": 60,
   "gpus_per_node": 8,
   "partition": "hopper-prod",
   "qos": "high",
   "mail_type": null,
   "mail_user": null,
-  "exclude_nodes": null,
-  "time": "1:00:00",
+  "exclude_nodes": ["ip-26-0-161-138"],
+  "time": "01:30:00",
   "constraint": null,
   "account": null,
   "reservation": null,
@@ -21,6 +21,7 @@
     "max_restarts": 0,
     "tee": 3
   },
+  "hf_cache": "/fsx/elie_bakouch/.cache",
   "array": null,
   "mem": null,
   "begin": null

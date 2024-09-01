@@ -23,9 +23,7 @@ class LightEvalRunner:
         self.lighteval_config = config.lighteval
         self.parallel_context = parallel_context
 
-    def eval_single_checkpoint_no_s3(self, checkpoints_folder, current_step) -> Tuple[str, str]:
-        current_checkpoint_folder = os.path.join(checkpoints_folder, str(current_step))
-        checkpoint_path = os.path.join(current_checkpoint_folder, "config.yaml")
+    def eval_single_checkpoint_no_s3(self, checkpoint_path: str) -> Tuple[str, str]:
         if not os.path.exists(checkpoint_path):
             log_rank(
                 f"Checkpoint path does not exist: {checkpoint_path}. Unable to evaluate.",
@@ -38,10 +36,10 @@ class LightEvalRunner:
 
         slurm_job_id, slurm_log = run_slurm_one_job(
             config = self.config,
+            lighteval_config = self.lighteval_config,
             slurm_template=self.lighteval_config.slurm_template,
             model_checkpoint_path=checkpoint_path,
             current_step=self.config.general.step,
-            checkpoint_local_path=current_checkpoint_folder,
             s3=False,
         )
 
@@ -93,7 +91,6 @@ def run_slurm_one_job(
     slurm_template: str,
     current_step: int,
     s3: bool = True,
-    checkpoint_local_path: str = None,
     slurm_name: Optional[str] = "eval",
 ):
     """Launch a single job on Slurm with the given mapping
@@ -125,14 +122,23 @@ def run_slurm_one_job(
     gpus_per_node = eval_slurm_config.get('gpus_per_node')
     nodes = (total_gpus_needed + gpus_per_node - 1) // gpus_per_node  # Ceiling division
     
-    eval_slurm_config.update({
-        'nodes': nodes,  # Assuming we want to run on a single node
-        'job_name': f"eval-{current_step}",
-        'eval_path': eval_logs_path,
-        'local_path': config.lighteval.temp_dir if s3 else checkpoint_local_path,
-        'hf_user_or_org': config.logging.hf_user_or_org if hasattr(config.logging, 'hf_user_or_org') else None,
-        "model_checkpoint_path": model_checkpoint_path,
-    })
+    if s3:
+        eval_slurm_config.update({
+            'nodes': nodes,  # Assuming we want to run on a single node
+            'job_name': f"eval-{current_step}",
+            'eval_path': eval_logs_path,
+            'local_path': config.lighteval.temp_dir,
+            'hf_user_or_org': config.logging.hf_user_or_org if hasattr(config.logging, 'hf_user_or_org') else None,
+            "model_checkpoint_path": model_checkpoint_path,
+        })
+    else:
+        eval_slurm_config.update({
+            'nodes': nodes,  # Assuming we want to run on a single node
+            'job_name': f"eval-{current_step}",
+            'eval_path': eval_logs_path,
+            'hf_user_or_org': config.logging.hf_user_or_org if hasattr(config.logging, 'hf_user_or_org') else None,
+            "model_checkpoint_path": model_checkpoint_path,
+        })
 
 
     launch_string = SLURM_JOBS_ARRAY_TEMPLATE.render(**eval_slurm_config)
