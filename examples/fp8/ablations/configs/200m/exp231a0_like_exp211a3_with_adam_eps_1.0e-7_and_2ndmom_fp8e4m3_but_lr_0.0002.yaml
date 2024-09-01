@@ -1,0 +1,1688 @@
+checkpoints:
+  checkpoint_interval: 50000
+  checkpoints_path: checkpoints
+  checkpoints_path_is_shared_file_system: false
+  save_initial_state: false
+data_stages:
+- data:
+    dataset:
+      dataset_overwrite_cache: false
+      dataset_processing_num_proc_per_process: 1
+      hf_dataset_config_name: null
+      hf_dataset_or_datasets: roneneldan/TinyStories
+      hf_dataset_splits: train
+      text_column_name: text
+    num_loading_workers: 1
+    seed: 42
+  name: Stable Training Stage
+  start_training_step: 1
+general:
+  benchmark_csv_path: null
+  consumed_train_samples: null
+  ignore_sanity_checks: true
+  project: fp8_for_nanotron
+  run: exp231a0_like_exp211a3_with_adam_eps_1.0e-7_and_2ndmom_fp8e4m3_but_lr_0.0002
+  seed: 42
+  step: null
+lighteval: null
+logging:
+  iteration_step_info_interval: 1
+  log_level: info
+  log_level_replica: info
+  monitor_model_states: true
+  monitor_model_states_using_hooks: false
+model:
+  ddp_bucket_cap_mb: 25
+  dtype: float8
+  init_method:
+    # std: 0.25 # sqrt(1/16)
+    # std: 0.125 # sqrt(1/64)
+    # std: 0.04419417382415922 # sqrt(1/512)
+    std: 0.02209708691207961 # sqrt(1/2048)
+  make_vocab_size_divisible_by: 1
+  model_config:
+    bos_token_id: 1
+    eos_token_id: 2
+    hidden_act: silu
+    initializer_range: 0.02
+
+    hidden_size: 2048
+    intermediate_size: 8192
+    num_hidden_layers: 14
+
+    is_llama_config: true
+    max_position_embeddings: 128
+    num_attention_heads: 16
+    num_key_value_heads: 16
+    pad_token_id: null
+    pretraining_tp: 1
+    rms_norm_eps: 1.0e-05
+    rope_scaling: null
+    tie_word_embeddings: false
+    use_cache: true
+    vocab_size: 49152
+
+optimizer:
+  accumulate_grad_in_fp32: false
+  learning_rate_scheduler:
+    learning_rate: 0.0002
+    lr_decay_starting_step: null
+    lr_decay_steps: null
+    lr_decay_style: cosine
+    lr_warmup_steps: 5000 # 10% warm up of total training steps
+    lr_warmup_style: linear
+    min_decay_lr: 0.00002
+
+  optimizer_factory:
+    adam_beta1: 0.9
+    adam_beta2: 0.95
+    adam_eps: 1.0e-07
+    name: custom_fp8_adam
+    torch_adam_is_fused: true
+  weight_decay: 0.1
+  zero_stage: 0
+  # update_clipping: true
+
+parallelism:
+  dp: 1
+  expert_parallel_size: 1
+  pp: 1
+  pp_engine: 1f1b
+  tp: 1
+  tp_linear_async_communication: false
+  tp_mode: ALL_REDUCE
+
+profiler: null
+tokenizer:
+  tokenizer_max_length: null
+  tokenizer_name_or_path: lvwerra/the-tokenizer-v1
+  tokenizer_revision: null
+tokens:
+  # NOTE: micro_batch_size * sequence_length * batch_accumulation_per_replica
+  # = 128 * 256 * 1 = 16384
+  batch_accumulation_per_replica: 1
+  limit_test_batches: 0
+  limit_val_batches: 0
+  micro_batch_size: 64 # 256
+  # micro_batch_size: 1
+  sequence_length: 128
+  train_steps: 48000
+  val_check_interval: -1
+
+fp8:
+  resid_dtype: float32
+  accum_dtype: bfloat16
+  model:
+  - module_name: model.decoder.1.attn.qkv_proj
+    accum_dtype: bfloat16
+    input:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 16
+    weight:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    bias: bfloat16
+    input_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    weight_grad:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    output_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    split_accumulator:
+      output: true
+      input_grad: true
+      weight_grad: true
+    accumulate:
+      output: true
+      input_grad: true
+      weight_grad: true
+    smooth_quant: true
+  - module_name: model.decoder.1.attn.o_proj
+    accum_dtype: bfloat16
+    input:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 16
+    weight:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    bias: bfloat16
+    input_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    weight_grad:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    output_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    split_accumulator:
+      output: true
+      input_grad: true
+      weight_grad: true
+    accumulate:
+      output: true
+      input_grad: true
+      weight_grad: true
+    smooth_quant: true
+  - module_name: model.decoder.1.mlp.gate_up_proj
+    accum_dtype: bfloat16
+    input:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 16
+    weight:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    bias: bfloat16
+    input_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    weight_grad:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    output_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    split_accumulator:
+      output: true
+      input_grad: true
+      weight_grad: true
+    accumulate:
+      output: true
+      input_grad: true
+      weight_grad: true
+    smooth_quant: true
+  - module_name: model.decoder.1.mlp.down_proj
+    accum_dtype: bfloat16
+    input:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 16
+    weight:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    bias: bfloat16
+    input_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    weight_grad:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    output_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    split_accumulator:
+      output: true
+      input_grad: true
+      weight_grad: true
+    accumulate:
+      output: true
+      input_grad: true
+      weight_grad: true
+    smooth_quant: true
+
+  # NOTE: layer 2
+  - module_name: model.decoder.2.attn.qkv_proj
+    accum_dtype: bfloat16
+    input:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 16
+    weight:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    bias: bfloat16
+    input_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    weight_grad:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    output_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    split_accumulator:
+      output: true
+      input_grad: true
+      weight_grad: true
+    accumulate:
+      output: true
+      input_grad: true
+      weight_grad: true
+    smooth_quant: true
+  - module_name: model.decoder.2.attn.o_proj
+    accum_dtype: bfloat16
+    input:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 16
+    weight:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    bias: bfloat16
+    input_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    weight_grad:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    output_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    split_accumulator:
+      output: true
+      input_grad: true
+      weight_grad: true
+    accumulate:
+      output: true
+      input_grad: true
+      weight_grad: true
+    smooth_quant: true
+  - module_name: model.decoder.2.mlp.gate_up_proj
+    accum_dtype: bfloat16
+    input:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 16
+    weight:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    bias: bfloat16
+    input_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    weight_grad:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    output_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    split_accumulator:
+      output: true
+      input_grad: true
+      weight_grad: true
+    accumulate:
+      output: true
+      input_grad: true
+      weight_grad: true
+    smooth_quant: true
+  - module_name: model.decoder.2.mlp.down_proj
+    accum_dtype: bfloat16
+    input:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 16
+    weight:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    bias: bfloat16
+    input_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    weight_grad:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    output_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    split_accumulator:
+      output: true
+      input_grad: true
+      weight_grad: true
+    accumulate:
+      output: true
+      input_grad: true
+      weight_grad: true
+    smooth_quant: true
+  # NOTE: layer 3
+  - module_name: model.decoder.3.attn.qkv_proj
+    accum_dtype: bfloat16
+    input:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 16
+    weight:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    bias: bfloat16
+    input_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    weight_grad:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    output_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    split_accumulator:
+      output: true
+      input_grad: true
+      weight_grad: true
+    accumulate:
+      output: true
+      input_grad: true
+      weight_grad: true
+    smooth_quant: true
+  - module_name: model.decoder.3.attn.o_proj
+    accum_dtype: bfloat16
+    input:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 16
+    weight:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    bias: bfloat16
+    input_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    weight_grad:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    output_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    split_accumulator:
+      output: true
+      input_grad: true
+      weight_grad: true
+    accumulate:
+      output: true
+      input_grad: true
+      weight_grad: true
+    smooth_quant: true
+  - module_name: model.decoder.3.mlp.gate_up_proj
+    accum_dtype: bfloat16
+    input:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 16
+    weight:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    bias: bfloat16
+    input_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    weight_grad:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    output_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    split_accumulator:
+      output: true
+      input_grad: true
+      weight_grad: true
+    accumulate:
+      output: true
+      input_grad: true
+      weight_grad: true
+    smooth_quant: true
+  - module_name: model.decoder.3.mlp.down_proj
+    accum_dtype: bfloat16
+    input:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 16
+    weight:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    bias: bfloat16
+    input_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    weight_grad:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    output_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    split_accumulator:
+      output: true
+      input_grad: true
+      weight_grad: true
+    accumulate:
+      output: true
+      input_grad: true
+      weight_grad: true
+    smooth_quant: true
+
+  # NOTE: layer 4
+  - module_name: model.decoder.4.attn.qkv_proj
+    accum_dtype: bfloat16
+    input:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 16
+    weight:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    bias: bfloat16
+    input_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    weight_grad:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    output_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    split_accumulator:
+      output: true
+      input_grad: true
+      weight_grad: true
+    accumulate:
+      output: true
+      input_grad: true
+      weight_grad: true
+    smooth_quant: true
+  - module_name: model.decoder.4.attn.o_proj
+    accum_dtype: bfloat16
+    input:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 16
+    weight:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    bias: bfloat16
+    input_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    weight_grad:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    output_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    split_accumulator:
+      output: true
+      input_grad: true
+      weight_grad: true
+    accumulate:
+      output: true
+      input_grad: true
+      weight_grad: true
+    smooth_quant: true
+  - module_name: model.decoder.4.mlp.gate_up_proj
+    accum_dtype: bfloat16
+    input:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 16
+    weight:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    bias: bfloat16
+    input_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    weight_grad:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    output_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    split_accumulator:
+      output: true
+      input_grad: true
+      weight_grad: true
+    accumulate:
+      output: true
+      input_grad: true
+      weight_grad: true
+    smooth_quant: true
+  - module_name: model.decoder.4.mlp.down_proj
+    accum_dtype: bfloat16
+    input:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 16
+    weight:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    bias: bfloat16
+    input_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    weight_grad:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    output_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    split_accumulator:
+      output: true
+      input_grad: true
+      weight_grad: true
+    accumulate:
+      output: true
+      input_grad: true
+      weight_grad: true
+    smooth_quant: true
+
+  # NOTE: layer 5
+  - module_name: model.decoder.5.attn.qkv_proj
+    accum_dtype: bfloat16
+    input:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 16
+    weight:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    bias: bfloat16
+    input_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    weight_grad:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    output_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    split_accumulator:
+      output: true
+      input_grad: true
+      weight_grad: true
+    accumulate:
+      output: true
+      input_grad: true
+      weight_grad: true
+    smooth_quant: true
+  - module_name: model.decoder.5.attn.o_proj
+    accum_dtype: bfloat16
+    input:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 16
+    weight:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    bias: bfloat16
+    input_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    weight_grad:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    output_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    split_accumulator:
+      output: true
+      input_grad: true
+      weight_grad: true
+    accumulate:
+      output: true
+      input_grad: true
+      weight_grad: true
+    smooth_quant: true
+  - module_name: model.decoder.5.mlp.gate_up_proj
+    accum_dtype: bfloat16
+    input:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 16
+    weight:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    bias: bfloat16
+    input_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    weight_grad:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    output_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    split_accumulator:
+      output: true
+      input_grad: true
+      weight_grad: true
+    accumulate:
+      output: true
+      input_grad: true
+      weight_grad: true
+    smooth_quant: true
+  - module_name: model.decoder.5.mlp.down_proj
+    accum_dtype: bfloat16
+    input:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 16
+    weight:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    bias: bfloat16
+    input_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    weight_grad:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    output_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    split_accumulator:
+      output: true
+      input_grad: true
+      weight_grad: true
+    accumulate:
+      output: true
+      input_grad: true
+      weight_grad: true
+    smooth_quant: true
+
+  # NOTE: layer 6
+  - module_name: model.decoder.6.attn.qkv_proj
+    accum_dtype: bfloat16
+    input:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 16
+    weight:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    bias: bfloat16
+    input_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    weight_grad:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    output_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    split_accumulator:
+      output: true
+      input_grad: true
+      weight_grad: true
+    accumulate:
+      output: true
+      input_grad: true
+      weight_grad: true
+    smooth_quant: true
+  - module_name: model.decoder.6.attn.o_proj
+    accum_dtype: bfloat16
+    input:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 16
+    weight:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    bias: bfloat16
+    input_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    weight_grad:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    output_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    split_accumulator:
+      output: true
+      input_grad: true
+      weight_grad: true
+    accumulate:
+      output: true
+      input_grad: true
+      weight_grad: true
+    smooth_quant: true
+  - module_name: model.decoder.6.mlp.gate_up_proj
+    accum_dtype: bfloat16
+    input:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 16
+    weight:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    bias: bfloat16
+    input_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    weight_grad:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    output_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    split_accumulator:
+      output: true
+      input_grad: true
+      weight_grad: true
+    accumulate:
+      output: true
+      input_grad: true
+      weight_grad: true
+    smooth_quant: true
+  - module_name: model.decoder.6.mlp.down_proj
+    accum_dtype: bfloat16
+    input:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 16
+    weight:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    bias: bfloat16
+    input_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    weight_grad:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    output_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    split_accumulator:
+      output: true
+      input_grad: true
+      weight_grad: true
+    accumulate:
+      output: true
+      input_grad: true
+      weight_grad: true
+    smooth_quant: true
+  # NOTE: layer 7
+  - module_name: model.decoder.7.attn.qkv_proj
+    accum_dtype: bfloat16
+    input:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 16
+    weight:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    bias: bfloat16
+    input_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    weight_grad:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    output_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    split_accumulator:
+      output: true
+      input_grad: true
+      weight_grad: true
+    accumulate:
+      output: true
+      input_grad: true
+      weight_grad: true
+    smooth_quant: true
+  - module_name: model.decoder.7.attn.o_proj
+    accum_dtype: bfloat16
+    input:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 16
+    weight:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    bias: bfloat16
+    input_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    weight_grad:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    output_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    split_accumulator:
+      output: true
+      input_grad: true
+      weight_grad: true
+    accumulate:
+      output: true
+      input_grad: true
+      weight_grad: true
+    smooth_quant: true
+  - module_name: model.decoder.7.mlp.gate_up_proj
+    accum_dtype: bfloat16
+    input:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 16
+    weight:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    bias: bfloat16
+    input_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    weight_grad:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    output_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    split_accumulator:
+      output: true
+      input_grad: true
+      weight_grad: true
+    accumulate:
+      output: true
+      input_grad: true
+      weight_grad: true
+    smooth_quant: true
+  - module_name: model.decoder.7.mlp.down_proj
+    accum_dtype: bfloat16
+    input:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 16
+    weight:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    bias: bfloat16
+    input_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    weight_grad:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    output_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    split_accumulator:
+      output: true
+      input_grad: true
+      weight_grad: true
+    accumulate:
+      output: true
+      input_grad: true
+      weight_grad: true
+    smooth_quant: true
+  # NOTE: layer 8
+  - module_name: model.decoder.8.attn.qkv_proj
+    accum_dtype: bfloat16
+    input:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 16
+    weight:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    bias: bfloat16
+    input_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    weight_grad:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    output_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    split_accumulator:
+      output: true
+      input_grad: true
+      weight_grad: true
+    accumulate:
+      output: true
+      input_grad: true
+      weight_grad: true
+    smooth_quant: true
+  - module_name: model.decoder.8.attn.o_proj
+    accum_dtype: bfloat16
+    input:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 16
+    weight:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    bias: bfloat16
+    input_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    weight_grad:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    output_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    split_accumulator:
+      output: true
+      input_grad: true
+      weight_grad: true
+    accumulate:
+      output: true
+      input_grad: true
+      weight_grad: true
+    smooth_quant: true
+  - module_name: model.decoder.8.mlp.gate_up_proj
+    accum_dtype: bfloat16
+    input:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 16
+    weight:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    bias: bfloat16
+    input_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    weight_grad:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    output_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    split_accumulator:
+      output: true
+      input_grad: true
+      weight_grad: true
+    accumulate:
+      output: true
+      input_grad: true
+      weight_grad: true
+    smooth_quant: true
+  - module_name: model.decoder.8.mlp.down_proj
+    accum_dtype: bfloat16
+    input:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 16
+    weight:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    bias: bfloat16
+    input_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    weight_grad:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    output_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    split_accumulator:
+      output: true
+      input_grad: true
+      weight_grad: true
+    accumulate:
+      output: true
+      input_grad: true
+      weight_grad: true
+    smooth_quant: true
+
+  # NOTE: layer 9
+  - module_name: model.decoder.9.attn.qkv_proj
+    accum_dtype: bfloat16
+    input:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 16
+    weight:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    bias: bfloat16
+    input_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    weight_grad:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    output_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    split_accumulator:
+      output: true
+      input_grad: true
+      weight_grad: true
+    accumulate:
+      output: true
+      input_grad: true
+      weight_grad: true
+    smooth_quant: true
+  - module_name: model.decoder.9.attn.o_proj
+    accum_dtype: bfloat16
+    input:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 16
+    weight:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    bias: bfloat16
+    input_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    weight_grad:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    output_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    split_accumulator:
+      output: true
+      input_grad: true
+      weight_grad: true
+    accumulate:
+      output: true
+      input_grad: true
+      weight_grad: true
+    smooth_quant: true
+  - module_name: model.decoder.9.mlp.gate_up_proj
+    accum_dtype: bfloat16
+    input:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 16
+    weight:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    bias: bfloat16
+    input_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    weight_grad:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    output_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    split_accumulator:
+      output: true
+      input_grad: true
+      weight_grad: true
+    accumulate:
+      output: true
+      input_grad: true
+      weight_grad: true
+    smooth_quant: true
+  - module_name: model.decoder.9.mlp.down_proj
+    accum_dtype: bfloat16
+    input:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 16
+    weight:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    bias: bfloat16
+    input_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    weight_grad:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    output_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    split_accumulator:
+      output: true
+      input_grad: true
+      weight_grad: true
+    accumulate:
+      output: true
+      input_grad: true
+      weight_grad: true
+    smooth_quant: true
+
+  # NOTE: layer 10
+  - module_name: model.decoder.10.attn.qkv_proj
+    accum_dtype: bfloat16
+    input:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 16
+    weight:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    bias: bfloat16
+    input_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    weight_grad:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    output_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    split_accumulator:
+      output: true
+      input_grad: true
+      weight_grad: true
+    accumulate:
+      output: true
+      input_grad: true
+      weight_grad: true
+    smooth_quant: true
+  - module_name: model.decoder.10.attn.o_proj
+    accum_dtype: bfloat16
+    input:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 16
+    weight:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    bias: bfloat16
+    input_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    weight_grad:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    output_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    split_accumulator:
+      output: true
+      input_grad: true
+      weight_grad: true
+    accumulate:
+      output: true
+      input_grad: true
+      weight_grad: true
+    smooth_quant: true
+  - module_name: model.decoder.10.mlp.gate_up_proj
+    accum_dtype: bfloat16
+    input:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 16
+    weight:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    bias: bfloat16
+    input_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    weight_grad:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    output_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    split_accumulator:
+      output: true
+      input_grad: true
+      weight_grad: true
+    accumulate:
+      output: true
+      input_grad: true
+      weight_grad: true
+    smooth_quant: true
+  - module_name: model.decoder.10.mlp.down_proj
+    accum_dtype: bfloat16
+    input:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 16
+    weight:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    bias: bfloat16
+    input_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    weight_grad:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    output_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    split_accumulator:
+      output: true
+      input_grad: true
+      weight_grad: true
+    accumulate:
+      output: true
+      input_grad: true
+      weight_grad: true
+    smooth_quant: true
+
+  # NOTE: layer 11
+  - module_name: model.decoder.11.attn.qkv_proj
+    accum_dtype: bfloat16
+    input:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 16
+    weight:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    bias: bfloat16
+    input_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    weight_grad:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    output_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    split_accumulator:
+      output: true
+      input_grad: true
+      weight_grad: true
+    accumulate:
+      output: true
+      input_grad: true
+      weight_grad: true
+    smooth_quant: true
+  - module_name: model.decoder.11.attn.o_proj
+    accum_dtype: bfloat16
+    input:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 16
+    weight:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    bias: bfloat16
+    input_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    weight_grad:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    output_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    split_accumulator:
+      output: true
+      input_grad: true
+      weight_grad: true
+    accumulate:
+      output: true
+      input_grad: true
+      weight_grad: true
+    smooth_quant: true
+  - module_name: model.decoder.11.mlp.gate_up_proj
+    accum_dtype: bfloat16
+    input:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 16
+    weight:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    bias: bfloat16
+    input_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    weight_grad:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    output_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    split_accumulator:
+      output: true
+      input_grad: true
+      weight_grad: true
+    accumulate:
+      output: true
+      input_grad: true
+      weight_grad: true
+    smooth_quant: true
+  - module_name: model.decoder.11.mlp.down_proj
+    accum_dtype: bfloat16
+    input:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 16
+    weight:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    bias: bfloat16
+    input_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    weight_grad:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    output_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    split_accumulator:
+      output: true
+      input_grad: true
+      weight_grad: true
+    accumulate:
+      output: true
+      input_grad: true
+      weight_grad: true
+    smooth_quant: true
+
+  # NOTE: layer 12
+  - module_name: model.decoder.12.attn.qkv_proj
+    accum_dtype: bfloat16
+    input:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 16
+    weight:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    bias: bfloat16
+    input_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    weight_grad:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    output_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    split_accumulator:
+      output: true
+      input_grad: true
+      weight_grad: true
+    accumulate:
+      output: true
+      input_grad: true
+      weight_grad: true
+    smooth_quant: true
+  - module_name: model.decoder.12.attn.o_proj
+    accum_dtype: bfloat16
+    input:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 16
+    weight:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    bias: bfloat16
+    input_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    weight_grad:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    output_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    split_accumulator:
+      output: true
+      input_grad: true
+      weight_grad: true
+    accumulate:
+      output: true
+      input_grad: true
+      weight_grad: true
+    smooth_quant: true
+  - module_name: model.decoder.12.mlp.gate_up_proj
+    accum_dtype: bfloat16
+    input:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 16
+    weight:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    bias: bfloat16
+    input_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    weight_grad:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    output_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    split_accumulator:
+      output: true
+      input_grad: true
+      weight_grad: true
+    accumulate:
+      output: true
+      input_grad: true
+      weight_grad: true
+    smooth_quant: true
+  - module_name: model.decoder.12.mlp.down_proj
+    accum_dtype: bfloat16
+    input:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 16
+    weight:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    bias: bfloat16
+    input_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    weight_grad:
+      dtype: fp8e4m3
+      margin: 0
+      interval: 1
+    output_grad:
+      dtype: fp8e5m2
+      margin: 0
+      interval: 16
+    split_accumulator:
+      output: true
+      input_grad: true
+      weight_grad: true
+    accumulate:
+      output: true
+      input_grad: true
+      weight_grad: true
+    smooth_quant: true
+
+  optim:
+    master_weight_dtype: kfloat16
+    accum_dtype: float32
+    exp_avg_dtype: fp8e4m3
+    exp_avg_sq_dtype: fp8e4m3
+
+  clipped_softmax: true
+  clipped_softmax_zeta: 1.3
+  clipped_softmax_gamma: -0.03
+
+  layer_scale: true
+  layer_scale_init: zeros
+
+  qk_norm_before_pos: false
+  smooth_quant: true
+  update_clipping: true
+  skip_param_update_if_nan: true

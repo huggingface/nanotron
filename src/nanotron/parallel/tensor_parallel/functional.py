@@ -467,7 +467,8 @@ def column_linear(
         return _ColumnLinearAsyncCommunication.apply(input, weight, bias, group, tp_mode)
 
     if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
-        input = differentiable_identity(input, group=group)
+        is_fp8 = True if isinstance(weight, FP8Tensor) else False
+        input = differentiable_identity(input, group=group, is_fp8=is_fp8, name=name)
     elif tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
         input = differentiable_all_gather(input, group=group)
     else:

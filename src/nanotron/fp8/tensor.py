@@ -17,18 +17,20 @@ logger = logging.get_logger(__name__)
 
 
 def get_amax(tensor: torch.Tensor, sync: bool) -> torch.Tensor:
-    amax = tensor.abs().max().clone().detach()
+    amax = tensor.abs().max().clone()
     if sync is True:
         import torch.distributed as dist
 
         from nanotron import constants
 
-        world_size = dist.get_world_size(group=constants.PARALLEL_CONTEXT.tp_pg)
-
-        if world_size > 1:
-            # log_rank(f"Local amax is {amax}", logger=logger, level=logging.INFO)
-            dist.all_reduce(amax, op=dist.ReduceOp.MAX, group=constants.PARALLEL_CONTEXT.tp_pg)
-            # log_rank(f"Global amax is {amax}", logger=logger, level=logging.INFO)
+        if constants.CONFIG.fp8.sync_amax_func == "default":
+            world_size = dist.get_world_size(group=constants.PARALLEL_CONTEXT.tp_pg)
+            if world_size > 1:
+                # log_rank(f"Local amax is {amax}", logger=logger, level=logging.INFO)
+                dist.all_reduce(amax, op=dist.ReduceOp.MAX, group=constants.PARALLEL_CONTEXT.tp_pg)
+                # log_rank(f"Global amax is {amax}", logger=logger, level=logging.INFO)
+        else:
+            raise ValueError(f"Unknown sync_amax_func: {constants.CONFIG.fp8.sync_amax_func}")
 
     return amax
 
@@ -212,10 +214,6 @@ def convert_torch_dtype_to_te_dtype(dtype: torch.dtype) -> tex.DType:
         torch.float32: "kFloat32",
         torch.float16: "kFloat16",
         torch.bfloat16: "kBFloat16",
-        # torch.fp8e5m2: "kFloat8E5M2",
-        # torch.fp8e4m3: "kFloat8E4M3",
-        # torch.int8: "kFloat8E5M2",
-        # torch.uint8: "kFloat8E4M3",
         DTypes.FP8E4M3: "kFloat8E4M3",
         DTypes.FP8E5M2: "kFloat8E5M2",
         DTypes.KFLOAT16: "kFloat16",

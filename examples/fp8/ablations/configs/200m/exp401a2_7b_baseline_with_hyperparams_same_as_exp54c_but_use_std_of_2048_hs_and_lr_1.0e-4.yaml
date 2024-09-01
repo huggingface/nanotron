@@ -21,7 +21,7 @@ general:
   consumed_train_samples: null
   ignore_sanity_checks: true
   project: fp8_for_nanotron
-  run: exp54c1_baseline_with_correct_init_std
+  run: exp401a2_7b_baseline_with_hyperparams_same_as_exp54c_but_use_std_of_2048_hs_and_lr_1.0e-4
   seed: 42
   step: null
 lighteval: null
@@ -38,7 +38,7 @@ model:
     # std: 0.25 # sqrt(1/16)
     # std: 0.125 # sqrt(1/64)
     # std: 0.04419417382415922 # sqrt(1/512)
-    std: 0.02209708691207961 # sqrt(1/2048)
+    std: 0.022205779584216375 # sqrt(1/2048)
   make_vocab_size_divisible_by: 1
   model_config:
     bos_token_id: 1
@@ -46,9 +46,9 @@ model:
     hidden_act: silu
     initializer_range: 0.02
 
-    hidden_size: 2048
-    intermediate_size: 8192
-    num_hidden_layers: 14
+    hidden_size: 4096
+    intermediate_size: 16384
+    num_hidden_layers: 26
 
     is_llama_config: true
     max_position_embeddings: 128
@@ -65,13 +65,13 @@ model:
 optimizer:
   accumulate_grad_in_fp32: false
   learning_rate_scheduler:
-    learning_rate: 0.00015
+    learning_rate: 0.0001
     lr_decay_starting_step: null
     lr_decay_steps: null
     lr_decay_style: cosine
     lr_warmup_steps: 5000 # 10% warm up of total training steps
     lr_warmup_style: linear
-    min_decay_lr: 0.00006
+    min_decay_lr: 0.00001
 
   optimizer_factory:
     adam_beta1: 0.9
@@ -88,7 +88,7 @@ parallelism:
   expert_parallel_size: 1
   pp: 1
   pp_engine: 1f1b
-  tp: 8
+  tp: 4
   tp_linear_async_communication: false
   tp_mode: ALL_REDUCE
 
@@ -103,7 +103,7 @@ tokens:
   batch_accumulation_per_replica: 1
   limit_test_batches: 0
   limit_val_batches: 0
-  micro_batch_size: 16 # 256
+  micro_batch_size: 64 # 256
   # micro_batch_size: 1
   sequence_length: 128
   train_steps: 48000

@@ -46,9 +46,12 @@ class FP8Args:
     sync_amax_in_weight: bool = False
     sync_amax_in_igrad: bool = False
     sync_amax_in_wgrad: bool = False
+    sync_amax_func: str = "default"
+    weight_decay_without_lr_decay: bool = False
 
     adam_atan2: bool = False
     adam_atan2_lambda: Optional[float] = None
 
     qkv_clipping: bool = False
     qkv_clipping_factor: Optional[float] = None
+    is_debugging: bool = False

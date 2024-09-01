@@ -1,7 +1,8 @@
 checkpoints:
-  checkpoint_interval: 50000
-  checkpoints_path: checkpoints
+  checkpoint_interval: 10
+  checkpoints_path: /fsx/phuc/temp/data_stages_env/nanotron/checkpoints/runs/exp300a2_100m_14_layers_bfloat16_ref_branch_tp_1_run_2
   checkpoints_path_is_shared_file_system: false
+  # resume_checkpoint_path: checkpoints
   save_initial_state: false
 data_stages:
 - data:
@@ -21,7 +22,7 @@ general:
   consumed_train_samples: null
   ignore_sanity_checks: true
   project: fp8_for_nanotron
-  run: exp54c1_baseline_with_correct_init_std
+  run: exp300a2_100m_14_layers_bfloat16_ref_branch_tp_1_run_2
   seed: 42
   step: null
 lighteval: null
@@ -29,30 +30,28 @@ logging:
   iteration_step_info_interval: 1
   log_level: info
   log_level_replica: info
-  # monitor_model_states: false
-  # monitor_model_states_using_hooks: false
+  # monitor_model_states: true
+  # monitor_model_states_using_hooks: true
 model:
   ddp_bucket_cap_mb: 25
   dtype: bfloat16
   init_method:
     # std: 0.25 # sqrt(1/16)
     # std: 0.125 # sqrt(1/64)
-    # std: 0.04419417382415922 # sqrt(1/512)
-    std: 0.02209708691207961 # sqrt(1/2048)
+    std: 0.04419417382415922 # sqrt(1/512)
   make_vocab_size_divisible_by: 1
   model_config:
     bos_token_id: 1
     eos_token_id: 2
-    hidden_act: silu
+    # hidden_act: silu
+    hidden_act: gelu
+    hidden_size: 512
     initializer_range: 0.02
-
-    hidden_size: 2048
-    intermediate_size: 8192
-    num_hidden_layers: 14
-
+    intermediate_size: 2048
     is_llama_config: true
     max_position_embeddings: 128
     num_attention_heads: 16
+    num_hidden_layers: 2
     num_key_value_heads: 16
     pad_token_id: null
     pretraining_tp: 1
@@ -61,11 +60,41 @@ model:
     tie_word_embeddings: false
     use_cache: true
     vocab_size: 49152
+# optimizer:
+#   accumulate_grad_in_fp32: false
+#   clip_grad: 1.0
+#   # learning_rate_scheduler:
+#   #   learning_rate: 0.01
+#   #   lr_decay_starting_step: null
+#   #   lr_decay_steps: 13
+#   #   lr_decay_style: linear
+#   #   lr_warmup_steps: 2
+#   #   lr_warmup_style: constant
+#   #   min_decay_lr: 1.0e-05
+
+#   # learning_rate_scheduler:
+#   #   learning_rate: 0.00015
+#   #   lr_decay_starting_step: null
+#   #   # lr_decay_steps: null
+#   #   lr_decay_style: linear
+#   #   lr_warmup_steps: 60
+#   #   lr_warmup_style: constant
+#   #   min_decay_lr: 1.0e-05
+
+#   optimizer_factory:
+#     adam_beta1: 0.9
+#     adam_beta2: 0.999
+#     adam_eps: 1.0e-08
+#     name: adam
+#     torch_adam_is_fused: true
+#   weight_decay: 0.1
+#   zero_stage: 0
+
 
 optimizer:
   accumulate_grad_in_fp32: false
   learning_rate_scheduler:
-    learning_rate: 0.00015
+    learning_rate: 0.0006
     lr_decay_starting_step: null
     lr_decay_steps: null
     lr_decay_style: cosine
@@ -81,14 +110,18 @@ optimizer:
     torch_adam_is_fused: true
   weight_decay: 0.1
   zero_stage: 0
-  # update_clipping: true
+  # clip_grad: 1.0
+  # update_clipping: false
 
 parallelism:
   dp: 1
   expert_parallel_size: 1
   pp: 1
   pp_engine: 1f1b
-  tp: 8
+  tp: 1
+  # tp_linear_async_communication: true
+  # tp_mode: REDUCE_SCATTER
+
   tp_linear_async_communication: false
   tp_mode: ALL_REDUCE
 
@@ -103,8 +136,8 @@ tokens:
   batch_accumulation_per_replica: 1
   limit_test_batches: 0
   limit_val_batches: 0
-  micro_batch_size: 16 # 256
+  micro_batch_size: 128 # 256
   # micro_batch_size: 1
   sequence_length: 128
-  train_steps: 48000
+  train_steps: 100
   val_check_interval: -1

@@ -37,8 +37,11 @@ class FP8Parameter(nn.Parameter):
 
             from nanotron.config.fp8_config import FP8Args
 
-            fp8_config = cast(FP8Args, constants.CONFIG.fp8)
-            sync_amax_in_weight = fp8_config.sync_amax_in_weight
+            if constants.CONFIG is None:
+                sync_amax_in_weight = False
+            else:
+                fp8_config = cast(FP8Args, constants.CONFIG.fp8)
+                sync_amax_in_weight = fp8_config.sync_amax_in_weight
 
             # TODO(xrsrke): support take an FP8 Tensor as data
             # currently we can't only quantize a tensor to FP8 after the parameter is created

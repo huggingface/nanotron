@@ -201,7 +201,13 @@ class DistributedTrainer:
             optimizer_args=self.config.optimizer,
             parallel_context=self.parallel_context,
         )
-        self.optimizer.optimizer.params_id_to_param_names = self.params_id_to_param_names
+        from nanotron.optim.optimizer_from_gradient_accumulator import OptimizerFromGradientAccumulator
+
+        if self.optimizer.__class__ == OptimizerFromGradientAccumulator:
+            self.optimizer.optimizer.optimizer.params_id_to_param_names = self.params_id_to_param_names
+            self.optimizer.optimizer.optimizer.grad_accumulator = self.grad_accumulator
+        else:
+            self.optimizer.optimizer.params_id_to_param_names = self.params_id_to_param_names
         if self.init_checkpoint_path is not None:
             load_optimizer(
                 optimizer=self.optimizer,
@@ -240,12 +246,15 @@ class DistributedTrainer:
                 self.config.tokens.train_steps > self.metadata.last_train_step
             ), f"Loaded checkpoint has already trained {self.metadata.last_train_step} batches, you need to specify a higher `config.tokens.train_steps`"
         else:
-            data_stages = [
-                DataStageMetadata(
-                    name=stage.name, start_training_step=stage.start_training_step, consumed_train_samples=0
-                )
-                for stage in self.config.data_stages
-            ]
+            if self.config.data_stages is not None:
+                data_stages = [
+                    DataStageMetadata(
+                        name=stage.name, start_training_step=stage.start_training_step, consumed_train_samples=0
+                    )
+                    for stage in self.config.data_stages
+                ]
+            else:
+                data_stages = [DataStageMetadata(name="default", start_training_step=0, consumed_train_samples=0)]
             self.metadata: TrainingMetadata = TrainingMetadata(
                 consumed_train_samples=0, last_train_step=0, last_stage_idx=0, data_stages=data_stages
             )
@@ -296,6 +305,8 @@ class DistributedTrainer:
         #             p.data = p.data.to(torch.float16)
 
         self.post_init()
+
+        self.consumed_train_samples = 0
 
     def pre_init(self):
         pass
@@ -510,6 +521,7 @@ class DistributedTrainer:
                 self.metadata.data_stages[
                     self.metadata.last_stage_idx
                 ].consumed_train_samples += self.global_batch_size
+                self.consumed_train_samples += self.global_batch_size
 
                 self.train_step_logs(outputs=outputs, loss_avg=loss_avg)
 
@@ -550,6 +562,17 @@ class DistributedTrainer:
 
                         wandb.log({**detailed_logs, "iteration_step": self.iteration_step})
                         constants.NN_STATES = {}
+
+                        if self.grad_accumulator is not None:
+                            for _, elt in self.grad_accumulator.fp32_grad_buffers.items():
+                                fp32_grad_buffer = elt["fp32_grad"]
+                                torch.testing.assert_close(
+                                    fp32_grad_buffer,
+                                    torch.zeros_like(fp32_grad_buffer),
+                                    atol=0,
+                                    rtol=0,
+                                    msg="Grad accumulator buffers must be zeroed in first accumulation step.",
+                                )
 
                 # Checkpoint
                 if self.iteration_step % self.config.checkpoints.checkpoint_interval == 0:

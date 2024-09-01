@@ -607,7 +607,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
 
         fp8_config = cast(FP8Args, constants.CONFIG.fp8)
 
-        if fp8_config.qkv_clipping is True:
+        if fp8_config is not None and fp8_config.qkv_clipping is True:
             qkv_clipping_factor = fp8_config.qkv_clipping_factor
             qkv_states = qkv_states.clamp(min=-qkv_clipping_factor, max=qkv_clipping_factor)
 

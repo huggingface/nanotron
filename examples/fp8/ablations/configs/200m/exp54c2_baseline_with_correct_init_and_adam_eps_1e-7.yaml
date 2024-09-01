@@ -21,7 +21,7 @@ general:
   consumed_train_samples: null
   ignore_sanity_checks: true
   project: fp8_for_nanotron
-  run: exp54c1_baseline_with_correct_init_std
+  run: exp54c2_baseline_with_correct_init_and_adam_eps_1e-7
   seed: 42
   step: null
 lighteval: null
@@ -76,7 +76,7 @@ optimizer:
   optimizer_factory:
     adam_beta1: 0.9
     adam_beta2: 0.95
-    adam_eps: 1.0e-08
+    adam_eps: 1.0e-07
     name: adamW
     torch_adam_is_fused: true
   weight_decay: 0.1
@@ -88,7 +88,7 @@ parallelism:
   expert_parallel_size: 1
   pp: 1
   pp_engine: 1f1b
-  tp: 8
+  tp: 1
   tp_linear_async_communication: false
   tp_mode: ALL_REDUCE
 
@@ -103,7 +103,7 @@ tokens:
   batch_accumulation_per_replica: 1
   limit_test_batches: 0
   limit_val_batches: 0
-  micro_batch_size: 16 # 256
+  micro_batch_size: 64 # 256
   # micro_batch_size: 1
   sequence_length: 128
   train_steps: 48000

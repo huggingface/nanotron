@@ -143,6 +143,7 @@ def compute_stas(tensor):
             "var": tensor.var(),
             "l1_norm": tensor.norm(p=1),
             "l2_norm": tensor.norm(p=2),
+            "rms": tensor.pow(2).mean().sqrt(),
             "min": tensor.min(),
             "max": tensor.max(),
             "amax": tensor.abs().max(),

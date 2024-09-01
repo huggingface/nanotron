@@ -207,6 +207,7 @@ class _FP8Matmul(torch.autograd.Function):
             is_backward=True,
             recipe=recipe,
         )
+        grad_input.__debug_is_from_fp8 = True
 
         transposed_fp8_grad_output = fp8_grad_output.transpose_fp8()
         transposed_fp8_input = fp8_input.transpose_fp8()

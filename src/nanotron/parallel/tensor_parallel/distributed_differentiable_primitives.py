@@ -14,9 +14,11 @@
 
 from typing import Optional
 
+import pydevd
 import torch
 from torch import distributed as torch_dist
 
+from nanotron import constants
 from nanotron import distributed as dist
 from nanotron.distributed import ProcessGroup
 from nanotron.fp8.tensor import FP8Tensor
@@ -26,19 +28,37 @@ class DifferentiableIdentity(torch.autograd.Function):
     """All-reduce gradients in a differentiable fashion"""
 
     @staticmethod
-    def forward(ctx, tensor, group: Optional[ProcessGroup]):
+    def forward(ctx, tensor, group: Optional[ProcessGroup], is_fp8: bool = False, name: str = None):
         ctx.group = group
+        ctx.is_fp8 = is_fp8
+        ctx.name = name
+
         return tensor
 
     @staticmethod
     def backward(ctx, grad_output):
-        # pydevd.settrace(suspend=False, trace_only_current_thread=True)
+        if constants.CONFIG.fp8 is not None and constants.CONFIG.fp8.is_debugging is True:
+            pydevd.settrace(suspend=False, trace_only_current_thread=True)
+
         group = ctx.group
 
         if grad_output.__class__ == FP8Tensor:
             assert 1 == 1
 
-        return DifferentiableAllReduceSum.apply(grad_output, group), None
+        if hasattr(grad_output, "__debug_is_from_fp8"):
+            assert 1 == 1
+
+        if ctx.is_fp8 is True:
+            if constants.ITERATION_STEP == 20:
+                if ctx.name == "model.decoder.12.mlp.gate_up_proj":
+                    assert 1 == 1
+
+        if constants.ITERATION_STEP > 50:
+            if ctx.name == "model.decoder.12.mlp.gate_up_proj":
+                assert 1 == 1
+            assert 1 == 1
+
+        return DifferentiableAllReduceSum.apply(grad_output, group), None, None, None
 
 
 class DifferentiableAllReduceSum(torch.autograd.Function):
@@ -54,7 +74,9 @@ class DifferentiableAllReduceSum(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_output):
-        # pydevd.settrace(suspend=False, trace_only_current_thread=True)
+        if constants.CONFIG.fp8 is not None and constants.CONFIG.fp8.is_debugging is True:
+            pydevd.settrace(suspend=False, trace_only_current_thread=True)
+
         return grad_output, None
 
 
@@ -91,7 +113,9 @@ class DifferentiableAllGather(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_output):
-        # pydevd.settrace(suspend=False, trace_only_current_thread=True)
+        if constants.CONFIG.fp8 is not None and constants.CONFIG.fp8.is_debugging is True:
+            pydevd.settrace(suspend=False, trace_only_current_thread=True)
+
         if grad_output.__class__ == FP8Tensor:
             assert 1 == 1
 
@@ -131,7 +155,9 @@ class DifferentiableReduceScatterSum(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_output):
-        # pydevd.settrace(suspend=False, trace_only_current_thread=True)
+        if constants.CONFIG.fp8 is not None and constants.CONFIG.fp8.is_debugging is True:
+            pydevd.settrace(suspend=False, trace_only_current_thread=True)
+
         group = ctx.group
         return DifferentiableAllGather.apply(grad_output, group), None
 
@@ -141,8 +167,8 @@ class DifferentiableReduceScatterSum(torch.autograd.Function):
 # -----------------
 
 
-def differentiable_identity(tensor, group: Optional[ProcessGroup] = None):
-    return DifferentiableIdentity.apply(tensor, group)
+def differentiable_identity(tensor, group: Optional[ProcessGroup] = None, is_fp8: bool = False, name: str = None):
+    return DifferentiableIdentity.apply(tensor, group, is_fp8, name)
 
 
 def differentiable_all_reduce_sum(tensor, group: Optional[ProcessGroup] = None):

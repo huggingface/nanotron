@@ -21,7 +21,7 @@ general:
   consumed_train_samples: null
   ignore_sanity_checks: true
   project: fp8_for_nanotron
-  run: exp54c1_baseline_with_correct_init_std
+  run: exp302a2_like_exp54c_baseline_but_tp_8
   seed: 42
   step: null
 lighteval: null
@@ -37,8 +37,7 @@ model:
   init_method:
     # std: 0.25 # sqrt(1/16)
     # std: 0.125 # sqrt(1/64)
-    # std: 0.04419417382415922 # sqrt(1/512)
-    std: 0.02209708691207961 # sqrt(1/2048)
+    std: 0.04419417382415922 # sqrt(1/512)
   make_vocab_size_divisible_by: 1
   model_config:
     bos_token_id: 1
@@ -103,7 +102,7 @@ tokens:
   batch_accumulation_per_replica: 1
   limit_test_batches: 0
   limit_val_batches: 0
-  micro_batch_size: 16 # 256
+  micro_batch_size: 64 # 256
   # micro_batch_size: 1
   sequence_length: 128
   train_steps: 48000

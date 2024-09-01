@@ -244,13 +244,8 @@ class FP8Adam(Optimizer):
         betas: Tuple[float, float] = (0.9, 0.999),
         eps: float = 1e-8,
         weight_decay: float = 0,
-        # amsgrad: bool = False,
-        # accum_dtype: Union[DTypes, torch.dtype] = FP8LM_RECIPE.optim.accum_dtype,
         recipe: FP8OptimRecipe = FP8LM_RECIPE,
     ):
-        # TODO(xrsrke): add this back, after fp8 working
-        # assert [isinstance(p, FP8Parameter) for p in params], "All parameters should be FP8Parameter"
-
         if not 0.0 <= lr:
             raise ValueError("Invalid learning rate: {}".format(lr))
         if not 0.0 <= eps:
@@ -259,8 +254,6 @@ class FP8Adam(Optimizer):
             raise ValueError("Invalid beta parameter at index 0: {}".format(betas[0]))
         if not 0.0 <= betas[1] < 1.0:
             raise ValueError("Invalid beta parameter at index 1: {}".format(betas[1]))
-
-        # assert accum_dtype in [DTypes] or isinstance(accum_dtype, torch.dtype), f"Please provide an accumulation precision format, accum_dtype: {accum_dtype}"
 
         defaults = {"lr": lr, "betas": betas, "eps": eps, "weight_decay": weight_decay, "amsgrad": False}
 
@@ -340,16 +333,6 @@ class FP8Adam(Optimizer):
         state: Dict[str, Any],
         p: nn.Parameter,
     ) -> None:
-        # TODO(xrsrke): only cast to FP8Tensor if the dtype is FP8
-        # state["exp_avg"] = FP8Tensor(torch.zeros(p.data.shape, memory_format=torch.preserve_format), dtype=self.exp_avg_dtype)
-
-        # Exponential moving average of gradient values
-        # TODO(xrsrke): maybe initialize a lower precision then cast to FP8Tensor
-        # because zeros fp16 = zeros fp32?
-        # exp_avg = torch.zeros(p.data.shape, dtype=torch.float32, device="cuda")
-        # exp_avg = FP8Tensor(exp_avg, dtype=self.exp_avg_dtype)
-        # exp_avg = torch.zeros(p.data.shape, dtype=torch.float32, device="cuda")
-        # exp_avg_sq = torch.zeros(p.data.shape, dtype=torch.float32, device="cuda")
         exp_avg = torch.zeros(p.data.shape, dtype=self.optim_accum_dtype, device="cuda")
         exp_avg_sq = torch.zeros(p.data.shape, dtype=self.optim_accum_dtype, device="cuda")
 
@@ -385,7 +368,6 @@ class FP8Adam(Optimizer):
 
     def _dequantize_optim_state(self, state):
         if state.__class__ == FP8Tensor:
-            # assert state.fp8_meta.dtype == DTypes.FP8E4M3
             fp32_state = convert_tensor_from_fp8(state, state.fp8_meta, self.optim_accum_dtype)
         elif state.__class__ == FP16Tensor:
             fp32_state = convert_tensor_from_fp16(state, self.optim_accum_dtype)
@@ -432,9 +414,22 @@ class FP8Adam(Optimizer):
                 data = get_data_from_param(p)
                 IS_FP8 = data.__class__ == FP8Tensor
 
-                if hasattr(self, "params_id_to_param_names"):
-                    if "0.pp_block.mlp.down_proj.weight" in p_name:
-                        assert 1 == 1
+                # NOTE: if use gradient accumulation, after the backward pass
+                # we set the param.grad to None, so we need to retrieve it from accumulator
+                if constants.CONFIG.optimizer.accumulate_grad_in_fp32 is True:
+                    fp32_grad = self.grad_accumulator.get_grad_buffer(name=p_name)
+                else:
+                    grad = get_grad_from_parameter(p)
+                    assert grad is not None
+
+                    if IS_FP8 is True:
+                        assert grad.dtype in FP8_DTYPES
+                        fp32_grad = convert_tensor_from_fp8(grad, grad.fp8_meta, self.optim_accum_dtype)
+                    else:
+                        assert grad.dtype == non_fp8_accum_dtype
+                        fp32_grad = grad.to(self.optim_accum_dtype) if grad.dtype != self.optim_accum_dtype else grad
+
+                assert fp32_grad.dtype == self.optim_accum_dtype
 
                 if IS_FP8:
                     assert data.dtype in FP8_DTYPES
@@ -449,23 +444,13 @@ class FP8Adam(Optimizer):
                             if master_data.dtype != self.optim_accum_dtype
                             else master_data
                         )
-
-                    grad = get_grad_from_parameter(p)
-                    assert grad is not None
-                    assert grad.dtype in FP8_DTYPES
-                    fp32_grad = convert_tensor_from_fp8(grad, grad.fp8_meta, self.optim_accum_dtype)
                 else:
                     assert (
                         data.dtype == non_fp8_accum_dtype
                     ), f"data.dtype={data.dtype}, non_fp8_accum_dtype={non_fp8_accum_dtype}"
                     fp32_data = data.to(self.optim_accum_dtype) if data.dtype != self.optim_accum_dtype else data
-                    grad = get_grad_from_parameter(p)
-                    assert grad is not None
-                    assert grad.dtype == non_fp8_accum_dtype
-                    fp32_grad = grad.to(self.optim_accum_dtype) if grad.dtype != self.optim_accum_dtype else grad
 
                 assert fp32_data.dtype == self.optim_accum_dtype
-                assert fp32_grad.dtype == self.optim_accum_dtype
 
                 if is_overflow_underflow_nan(fp32_grad):
                     self._is_overflow = True
@@ -482,21 +467,6 @@ class FP8Adam(Optimizer):
 
                 exp_avg, exp_avg_sq = state["exp_avg"], state["exp_avg_sq"]
 
-                # if exp_avg.__class__ == FP8Tensor:
-                #     assert exp_avg.fp8_meta.dtype == DTypes.FP8E4M3
-                #     fp32_exp_avg = convert_tensor_from_fp8(exp_avg, exp_avg.fp8_meta, self.optim_accum_dtype)
-                # elif exp_avg.dtype == self.optim_accum_dtype:
-                #     fp32_exp_avg = exp_avg
-                # else:
-                #     raise ValueError(f"not support exp_avg.dtype={exp_avg.dtype}")
-
-                # if exp_avg_sq.__class__ == FP16Tensor:
-                #     fp32_exp_avg_sq = convert_tensor_from_fp16(exp_avg_sq, self.optim_accum_dtype)
-                # elif exp_avg_sq.dtype == self.optim_accum_dtype:
-                #     fp32_exp_avg_sq = exp_avg_sq
-                # else:
-                #     raise ValueError(f"not support exp_avg_sq.dtype={exp_avg_sq.dtype}")
-
                 fp32_exp_avg = self._dequantize_optim_state(exp_avg)
                 fp32_exp_avg_sq = self._dequantize_optim_state(exp_avg_sq)
 
@@ -507,22 +477,6 @@ class FP8Adam(Optimizer):
                 lr = group["lr"]
                 step = state["step"]
                 step += 1
-
-                if step == 10:
-                    assert 1 == 1
-
-                # if (
-                #     constants.is_ready_to_log is True
-                #     and hasattr(self, "params_id_to_param_names")
-                #     and constants.CONFIG.fp8.run_fp8_sanity_check is True
-                # ):
-                #     if "0.pp_block.mlp.down_proj.weight" in p_name or "lm_head" in p_name:
-                #         from nanotron import constants
-
-                #         write_to_file(
-                #             f"step={constants.ITERATION_STEP}, param={p_name}, lr={group['lr']}, initial_lr={group['initial_lr']}",
-                #             filename="/fsx/phuc/temp/temp3_env_for_fp8/nanotron/lr_logs.txt",
-                #         )
 
                 fp32_exp_avg = beta1 * fp32_exp_avg + (1 - beta1) * fp32_grad
                 fp32_exp_avg_sq = beta2 * fp32_exp_avg_sq + (1 - beta2) * fp32_grad.pow(2)
@@ -575,10 +529,22 @@ class FP8Adam(Optimizer):
                 weight_decay_factor = group["weight_decay"] if data.ndim >= 2 else 0.0
 
                 if weight_decay_factor != 0:
-                    fp32_new_changes_in_p = update_lr * (normalized_grad + weight_decay_factor * fp32_data)
-                else:
-                    fp32_new_changes_in_p = update_lr * normalized_grad
+                    fp32_new_changes_from_grad = update_lr * normalized_grad
+                    fp32_weight_decay_grad = weight_decay_factor * fp32_data
 
+                    if constants.CONFIG.fp8.weight_decay_without_lr_decay is False:
+                        fp32_new_changes_from_weight_decay = update_lr * fp32_weight_decay_grad
+                    else:
+                        fp32_new_changes_from_weight_decay = (
+                            constants.CONFIG.optimizer.learning_rate_scheduler.learning_rate * fp32_weight_decay_grad
+                        )
+                else:
+                    fp32_new_changes_from_grad = update_lr * normalized_grad
+                    fp32_new_changes_from_weight_decay = 0
+
+                    # fp32_new_changes_in_p = update_lr * normalized_grad
+
+                fp32_new_changes_in_p = fp32_new_changes_from_grad + fp32_new_changes_from_weight_decay
                 new_fp32_data = fp32_data - fp32_new_changes_in_p
 
                 if IS_FP8:
@@ -628,9 +594,6 @@ class FP8Adam(Optimizer):
                     if constants.CONFIG.fp8.run_fp8_sanity_check is True:
                         torch.testing.assert_allclose(get_data_from_param(p), new_fp16)
 
-                # delete_tensor_from_memory(new_fp32_data)
-                # delete_tensor_from_memory(denom)
-
                 exp_avg = self._create_optim_state(fp32_exp_avg, self.recipe.exp_avg_dtype)
                 exp_avg_sq = self._create_optim_state(fp32_exp_avg_sq, self.recipe.exp_avg_sq_dtype)
 
@@ -664,11 +627,32 @@ class FP8Adam(Optimizer):
 
                     loggings[p]["fp32_p"] = compute_stas(fp32_data)
                     loggings[p]["fp32_new_changes_in_p"] = {
-                        "abs_total": fp32_new_changes_in_p.abs().sum(),
-                        "abs_mean": fp32_new_changes_in_p.abs().mean(),
+                        # "abs_total": fp32_new_changes_in_p.abs().sum(),
+                        # "abs_mean": fp32_new_changes_in_p.abs().mean(),
+                        "rms": fp32_new_changes_in_p.pow(2)
+                        .mean()
+                        .sqrt(),
                     }
+                    loggings[p]["fp32_new_changes_from_grad"] = {
+                        "rms": fp32_new_changes_from_grad.pow(2).mean().sqrt(),
+                    }
+
                     loggings[p]["fp32_grad"] = compute_stas(fp32_grad)
                     loggings[p]["update_lr"] = {"value": update_lr}
+                    loggings[p]["weight_norm_and_normalized_grad_norm_ratio"] = {
+                        "value": fp32_data.norm() / normalized_grad.norm()
+                    }
+                    loggings[p]["weight_norm_and_weight_update_norm_ratio"] = {
+                        "value": fp32_data.norm() / fp32_new_changes_in_p.norm()
+                    }
+
+                    if weight_decay_factor != 0:
+                        loggings[p]["fp32_new_changes_from_weight_decay"] = {
+                            "rms": fp32_new_changes_from_weight_decay.pow(2).mean().sqrt(),
+                        }
+                        loggings[p]["weight_norm_and_weight_decay_grad_norm_ratio"] = {
+                            "value": fp32_data.norm() / fp32_weight_decay_grad.norm()
+                        }
 
         if constants.is_ready_to_log is True:
             self.loggings = loggings
