@@ -313,13 +313,19 @@ class DistributedTrainer:
         )
 
         current_time = datetime.datetime.now().strftime("%d/%m/%Y_%H:%M:%S")
-        if dist.get_rank(self.parallel_context.world_pg) == self.logger_ranks[0] and wandb is not None:
+        if dist.get_rank(self.parallel_context.world_pg) == 0 and wandb is not None:
             wandb.init(
                 project=self.config.general.project,
                 name=f"{current_time}_{self.config.general.run}",
                 config={"nanotron_config": self.config.as_dict()},
             )
-
+            # In case we resume from another run
+            initial_step = getattr(self.config.general, 'step', None)
+            if initial_step is not None:
+                wandb.run.step = initial_step
+            else:
+                wandb.run.step = 0  # Start from 0, will become 1 on first log
+            
     def post_train_step(self):
 
         # Update our background upload/removal of checkpoints
@@ -877,6 +883,14 @@ class DistributedTrainer:
         return loggerwriter
 
     def pre_save_checkpoint(self) -> Path:
+        if wandb is not None and dist.get_rank(self.parallel_context.dp_pg) == 0:
+            if self.config.general.wandb_id is None:       
+                self.config.general.wandb_id = wandb.run.id
+                self.config.general.wandb_project = wandb.run.project
+            elif self.config.general.wandb_id is not None and self.config.general.wandb_id!= wandb.run.id:
+                log_rank("Update the wandb run due too resume from checkpoint", logger=logger, level=logging.WARNING, rank=0)
+                self.config.general.wandb_id = wandb.run.id
+                self.config.general.wandb_project = wandb.run.project
         if self.s3_mover is not None:
             self.s3_mover.distributed_wait_for_completion(self.parallel_context.world_pg)
             if self.s3_mover.post_upload_callback_outputs is not None:
@@ -891,6 +905,8 @@ class DistributedTrainer:
             # If we're not using S3, but we have a post-checkpoint callback, execute it
             checkpoint_path = self.config.checkpoints.checkpoints_path / f"{self.iteration_step}"
             self.post_checkpoint_callback(checkpoint_path)
+
+        
 
     def save_checkpoint(self) -> Path:
         self.pre_save_checkpoint()

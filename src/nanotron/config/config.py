@@ -198,6 +198,8 @@ class GeneralArgs:
     consumed_train_samples: Optional[int] = None
     benchmark_csv_path: Optional[Path] = None
     ignore_sanity_checks: bool = True
+    wandb_id: Optional[str] = None
+    wandb_project: Optional[str] = None
 
     def __post_init__(self):
         if self.seed is None:
