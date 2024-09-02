@@ -51,6 +51,7 @@ class TensorParallelColumnLinear(nn.Linear):
         dtype=None,
         async_communication: bool = False,
         contiguous_chunks: Optional[Tuple[int, ...]] = None,
+        tp_recompute_allgather: bool = True,
     ):
         self.pg = pg
         self.world_size = pg.size()
@@ -59,6 +60,7 @@ class TensorParallelColumnLinear(nn.Linear):
 
         self.in_features = in_features
         self.out_features = out_features // self.world_size
+        self.tp_recompute_allgather = tp_recompute_allgather
 
         super().__init__(
             in_features=self.in_features,
@@ -91,6 +93,7 @@ class TensorParallelColumnLinear(nn.Linear):
             group=self.pg,
             tp_mode=self.mode,
             async_communication=self.async_communication,
+            tp_recompute_allgather=self.tp_recompute_allgather,
         )
 
     def extra_repr(self) -> str:
