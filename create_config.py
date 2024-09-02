@@ -33,22 +33,21 @@ from nanotron.config import (
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--project", help="project name", type=str, required=True)
-    parser.add_argument("--run", help="run name", type=str, required=True)
+    parser.add_argument("--save-path", help="path to save the configuration file", type=str, required=True)
     parser.add_argument("--seed", help="seed", type=int, default=8)
     parser.add_argument("--priority", "--qos", "-p", help="qos to use", type=str, default="high")
     parser.add_argument("--override", nargs="+", metavar="KEY=VALUE",
                         help="Override config values. Use dot notation for nested keys.")
     parser.add_argument("--launch", action="store_true", help="Launch the configuration immediately")
+    parser.add_argument("--run", help="name of the run", type=str)
+    parser.add_argument("--logs-path", help="path to the logs folder", type=str)
     parser.add_argument("--slurm", help="use slurm", action="store_true")
     parser.add_argument("--nodes", help="specify the number of nodes", type=int)
     args = parser.parse_args()
 
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     general = GeneralArgs(
-        project=args.project,
-        run=args.run,
-        logs_path="/fsx/elie_bakouch/nanotron/refactor-logs",
+        project="smollm",
         seed=args.seed,
         temp_dir="/scratch",
     )
@@ -103,7 +102,7 @@ if __name__ == "__main__":
             hub_repo_tensorboard="smollm-evals-visualization",
             tensorboard_metric_prefix="eval",
         ),
-        slurm_template="/fsx/elie_bakouch/nanotron/src/nanotron/slurm/run_eval.slurm.jinja",
+        slurm_template="/fsx/elie_bakouch/nanotron/slurm/run_eval.slurm.jinja",
     )
 
 
@@ -184,7 +183,6 @@ if __name__ == "__main__":
     #     s5cmd_concurrency=5,
     #     s5cmd_path="/fsx/elie_bakouch/miniconda3/envs/smollm/bin/s5cmd",
     # )
-    s3_upload = None
     data_stages=[
         DatasetStageArgs(
             data=DataArgs(
@@ -209,36 +207,42 @@ if __name__ == "__main__":
         tokens=tokens,
         optimizer=optimizer,
         data_stages=data_stages,
-        s3_upload=s3_upload,
         lighteval=lighteval,
     )
-    dir = os.path.dirname(__file__)
-    
-    # Create the necessary directories
-    project_log_folder = Path(general.logs_path)
-    log_folder = project_log_folder / f"{general.run}-{general.project}"
-    config_folder = log_folder / 'configs'
-    config_folder.mkdir(parents=True, exist_ok=True)
 
-    config.general.config_logs_path = str(config_folder)
+    save_path= Path(args.save_path)
+    save_path.mkdir(parents=True, exist_ok=True)
 
-    config_path_yaml = f"{config.general.config_logs_path}/{timestamp}_create.yaml"
+    config_path_yaml = save_path / f"{args.run}-{timestamp}.yaml"
     config.save_as_yaml(config_path_yaml)
 
-    print(f"💾 Configuration saved in: {config.general.config_logs_path}")
+    print(f"💾 Configuration saved in: {str(save_path)}")
 
     if args.launch:
-        launcher_path = os.path.join(dir, "launcher.py")
+        # Change the launcher_path
+        # Sanity check for logs_path and run
+        if not args.logs_path:
+            raise ValueError("--logs_path must be defined. Please provide a path for the logs.")
+        if not args.run:
+            raise ValueError("--run must be defined. Please provide a name for the run.")
+
+        launcher_path = Path("launcher.py")
+        if not launcher_path.exists():
+            raise FileNotFoundError(f"Launcher not found at {launcher_path}. Please ensure the file exists or change the launcher path in the create_config.py file.")
         launch_command = [
-            "python", launcher_path,
-            config_path_yaml,
+            "python", str(launcher_path),
+            "--config-path", str(config_path_yaml),
         ]
-        
+        launch_command.extend([
+            "--logs-path", args.logs_path,
+            "--run", args.run
+        ])
         if args.slurm:
             launch_command.append("--slurm")
     
         if args.nodes:
             launch_command.extend(["--nodes", str(args.nodes)])
+        
         
         print(f"🧪 Launching configuration with command: {' '.join(launch_command)}")
         subprocess.run(launch_command, check=True)

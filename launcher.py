@@ -15,6 +15,9 @@ from nanotron.config import (
     get_config_from_file,
 )
 
+def count_subdirectories(path):
+    return sum(os.path.isdir(os.path.join(path, item)) for item in os.listdir(path))
+
 def launch_slurm_job(launch_file_contents, *args):
     """
         Small helper function to save a sbatch script and call it.
@@ -41,7 +44,9 @@ def set_nested_attribute(obj, path, value):
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("config_path", help="path to the configuration file", type=str)
+    parser.add_argument("--config-path", help="path to the configuration file", type=str,required=True)
+    parser.add_argument("--run", help="name of the run", type=str, required=True)
+    parser.add_argument("--logs-path", help="path to the logs folder", type=str, default=None)
     parser.add_argument("--override", nargs="+", metavar="KEY=VALUE",
                         help="Override config values. Use dot notation for nested keys.")
     parser.add_argument("--slurm", action="store_true", help="Launch the job on Slurm")
@@ -54,6 +59,9 @@ if __name__ == "__main__":
 
     # Load the configuration using get_config_from_file
     config = get_config_from_file(args.config_path, config_class=Config)
+
+    if config.general.logs_path is None and args.logs_path is None:
+        raise ValueError("Please provide a logs path")
 
     if config.model.model_config.tie_word_embeddings ==True:
         tie_word_embeddings_multiplier = 1
@@ -162,19 +170,31 @@ if __name__ == "__main__":
 └───────────────────────┴────────────────────────┘
 """)
 
+    config.general.logs_path = args.logs_path
+    config.general.run = args.run
+
+    path = Path(args.logs_path) / f"{args.run}"
+    path.mkdir(parents=True, exist_ok=True)
+
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    run_number = count_subdirectories(f"{args.logs_path}/{args.run}") + 1
+    timestamp_with_run = f"run{run_number:03d}_{timestamp}"
+
+    config.general.config_logs_path = f"{config.general.logs_path}/{args.run}/{timestamp_with_run}/config"
+    Path(config.general.config_logs_path).mkdir(parents=True, exist_ok=True)
+    
+
+    #making sure the logs path folder exists
+
     if args.slurm:
         
         nodes = args.nodes
 
-        launch_slurm_config_path = os.path.join(os.path.dirname(__file__), "src/nanotron/slurm/launch_slurm_config.json")
-        eval_slurm_config_path = os.path.join(os.path.dirname(__file__), "src/nanotron/slurm/eval_slurm_config.json")
+        launch_slurm_config_path = Path("./slurm/launch_slurm_config.json")
+        eval_slurm_config_path = Path("./slurm/eval_slurm_config.json")
         
         with open(launch_slurm_config_path, 'r') as f:
             launch_slurm_config = json.load(f)
-        
-        with open(eval_slurm_config_path, 'r') as f:
-            eval_slurm_config = json.load(f)
         
             
         total_gpus = config.parallelism.dp * config.parallelism.pp * config.parallelism.tp
@@ -187,8 +207,8 @@ if __name__ == "__main__":
             
         # Create necessary folders
         project_log_folder = Path(config.general.logs_path)
-        log_folder = project_log_folder / f"{config.general.run}-{config.general.project}"
-        subfolders = ['launch-script', 'slurm']
+        log_folder = project_log_folder / f"{args.run}"/ f"{timestamp_with_run}"
+        subfolders = ['launch-script', 'slurm-logs']
         if hasattr(config, 'lighteval') and config.lighteval is not None:
             subfolders.append('evals')
 
@@ -197,7 +217,7 @@ if __name__ == "__main__":
             os.makedirs(folder_path, exist_ok=True)
             if subfolder == 'launch-script':
                 config.general.launch_script_path = folder_path
-            elif subfolder == 'slurm':
+            elif subfolder == 'slurm-logs':
                 config.general.slurm_logs_path = folder_path
             elif subfolder == 'evals':
                 config.general.evals_logs_path = folder_path
@@ -214,22 +234,26 @@ if __name__ == "__main__":
             "job_name": f"{config.general.project}-{config.general.run}",
             "nodes": args.nodes,
             "slurm_logs_path": config.general.slurm_logs_path,
-            "timestamp": timestamp,
             "path_to_trainer_python_file": os.path.join(os.path.dirname(__file__), "run_train.py"),
-            "config_path_yaml": f"{config.general.config_logs_path}/{timestamp}_launch.yaml",
+            "config_path_yaml": f"{config.general.config_logs_path}/launch.yaml",
             "torchrun_args": torchrun_args,
         })
 
         # Load Jinja2 template
-        template_path = os.path.join(os.path.dirname(__file__), "src/nanotron/slurm/launch_training.slurm.jinja")
+        template_path = Path("slurm/launch_training.slurm.jinja")
         with open(template_path, 'r') as f:
             template = Template(f.read())
 
         # Render the template
         sbatch_script = template.render(**launch_slurm_config)
-
-        config.general.launch_slurm_config = launch_slurm_config
-        config.general.eval_slurm_config = eval_slurm_config
+        if launch_slurm_config_path.exists():
+            config.general.launch_slurm_config = str(launch_slurm_config_path.resolve())
+        else:
+            config.general.launch_slurm_config = None
+        if eval_slurm_config_path.exists():
+            config.general.eval_slurm_config = str(eval_slurm_config_path.resolve())
+        else:
+            config.general.eval_slurm_config = None
 
         config.save_as_yaml(launch_slurm_config["config_path_yaml"])
         
@@ -240,7 +264,7 @@ if __name__ == "__main__":
         # Save the Slurm script if a path is provided
         if config.general.launch_script_path:
             os.makedirs(config.general.launch_script_path, exist_ok=True)
-            script_filename = f"slurm_script_{timestamp}.slurm"
+            script_filename = f"slurm_launch_script.slurm"
             script_path = os.path.join(config.general.launch_script_path, script_filename)
             
             with open(script_path, 'w') as f:
@@ -266,7 +290,6 @@ if __name__ == "__main__":
         if is_interactive:
             print("💻 Running on an interactive node with GPUs.")
             
-            # Check if the parallelism configuration matches the available GPUs
             total_gpus = gpu_count
             config_gpus = config.parallelism.dp * config.parallelism.tp * config.parallelism.pp
             
@@ -275,21 +298,16 @@ if __name__ == "__main__":
                                  f"doesn't match the number of available GPUs ({total_gpus}). "
                                  f"Please adjust your configuration to match the available resources.")
             
-            # Save config
-            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            os.makedirs("/fsx/elie_bakouch/nanotron/config_logs", exist_ok=True)
-            config_path_yaml = f"/fsx/elie_bakouch/nanotron/config_logs/{timestamp}.yaml"
+            config_path_yaml = f"{config.general.config_logs_path}/launch.yaml"
+            os.makedirs("config.general.config_logs_path", exist_ok=True)
             config.save_as_yaml(config_path_yaml)
 
-            # Prepare command
-            trainer_python_file = "/fsx/elie_bakouch/nanotron/run_train.py"
+            trainer_python_file = "run_train.py"
             cmd = f"{trainer_python_file} --config-file {args.config_path}"
 
-            # Launch job
             launch_cmd = f"CUDA_DEVICE_MAX_CONNECTIONS='1' torchrun --nproc_per_node {gpu_count} {cmd}"
             print(f"🚀 Launching interactive job with command: {launch_cmd}")
             
-            # Execute the command
             subprocess.run(launch_cmd, shell=True, check=True)
         else:
             print("❌ Not running on a Slurm cluster or an interactive node with GPUs. Please submit a Slurm job or use an interactive node with GPUs.")

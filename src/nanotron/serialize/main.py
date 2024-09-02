@@ -256,7 +256,7 @@ def parse_ckpt_path(config: Config, parallel_context: ParallelContext) -> Option
     load_from_candidate = config.checkpoints.resume_checkpoint_path
     if load_from_candidate is not None:
         if check_path_is_local(load_from_candidate):
-            latest_meta_path: xPath = config.checkpoints.resume_checkpoint_path / "latest.txt"
+            latest_meta_path: Path = config.checkpoints.resume_checkpoint_path / "latest.txt"
             if latest_meta_path.exists():
                 with fs_open(config.checkpoints.resume_checkpoint_path / "latest.txt", mode="r") as fi:
                     # TODO @thomasw21: make a better structure system so that we get typing correct
@@ -283,10 +283,10 @@ def parse_ckpt_path(config: Config, parallel_context: ParallelContext) -> Option
                 rank=0,
             )
         else:
-        # elif check_path_is_s3(str(load_from_candidate)):
+            #We assume that the checkpoint path is from s3 (maybe add more cases later ?)
             latest_meta_path = config.checkpoints.resume_checkpoint_path / "latest.txt"
             if latest_meta_path.exists():
-                # if latest.txt exists, we assume that the checkpoint path is a path to a folder containing the checkpoint
+                
                 with fs_open(latest_meta_path, mode="r") as fi:
                     latest_iteration = int(fi.read())
                 s3_path = config.checkpoints.resume_checkpoint_path / str(latest_iteration)  # load_path

@@ -96,11 +96,11 @@ class PretrainDatasetsArgs:
 class S3UploadArgs:
     """Arguments related to uploading checkpoints on s3"""
 
-    upload_s3_path: Optional[str] = None #set to None if we want to use S3UploadArgs to download checkpoints from s3 but not upload checkpoints on s3
     remove_after_upload: bool
-    s5cmd_numworkers: Optional[int]
-    s5cmd_concurrency: Optional[int]
-    s5cmd_path: Optional[str]
+    upload_s3_path: Optional[str] = None  # set to None if we want to use S3UploadArgs to download checkpoints from s3 but not upload checkpoints on s3
+    s5cmd_numworkers: Optional[int] = None
+    s5cmd_concurrency: Optional[int] = None
+    s5cmd_path: Optional[str] = None
 
     def __post_init__(self):
         if isinstance(self.upload_s3_path, str) and self.upload_s3_path is not None:
@@ -189,10 +189,10 @@ class GeneralArgs:
     """
 
     project: str
-    run: str
+    run: Optional[str] = None
     logs_path: Optional[str] = "./logs"
-    launch_slurm_config: Optional[dict] = None
-    eval_slurm_config: Optional[dict] = None
+    launch_slurm_config: Optional[str] = None
+    eval_slurm_config: Optional[str] = None
     launch_script_path: Optional[str] = None
     slurm_logs_path: Optional[str] = None
     config_logs_path: Optional[str] = None

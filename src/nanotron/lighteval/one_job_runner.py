@@ -6,7 +6,7 @@ import re
 import subprocess
 from typing import List, Optional, Tuple, Union
 import copy
-
+import json
 import jinja2
 from nanotron import logging
 from nanotron.logging import log_rank
@@ -102,6 +102,9 @@ def run_slurm_one_job(
     eval_launch_script_path = os.path.join(config.general.evals_logs_path, "launch-config", str(current_step))
     eval_logs_path = os.path.join(config.general.evals_logs_path, "logs", str(current_step))
 
+    with open(config.general.eval_slurm_config, 'r') as f:
+        eval_slurm_config = json.load(f)
+
     os.makedirs(eval_launch_script_path, exist_ok=True)
     os.makedirs(eval_logs_path, exist_ok=True)
 
@@ -112,9 +115,6 @@ def run_slurm_one_job(
 
     with open(slurm_template, "r") as f:
         SLURM_JOBS_ARRAY_TEMPLATE = environment.from_string(f.read())
-
-    #Not sure if this is the best way to do it. Maybe we need to add a copy or deepcopy somewhere.
-    eval_slurm_config = config.general.eval_slurm_config
 
     # Update the config with additional required parameters
     # Calculate the number of nodes based on parallelism config and gpus_per_node
