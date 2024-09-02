@@ -22,6 +22,8 @@ class TritonLayerNorm(nn.LayerNorm):
         )
 
 
+# This is equivalent to LLaMA RMSNorm
+# https://github.com/huggingface/transformers/blob/28952248b19db29ca25ccf34a5eec413376494a9/src/transformers/models/llama/modeling_llama.py#L112
 class TritonRMSNorm(nn.Module):
     def __init__(self, hidden_size, eps=1e-5, device=None, dtype=None):
         factory_kwargs = {"device": device, "dtype": dtype}
@@ -51,21 +53,3 @@ class TritonRMSNorm(nn.Module):
             is_rms_norm=True,
             return_dropout_mask=return_dropout_mask,
         )
-
-
-# equivalent to TritonRMSNorm
-class RMSNorm(nn.Module):
-    def __init__(self, hidden_size, eps=1e-5):
-        """
-        LlamaRMSNorm is equivalent to T5LayerNorm
-        """
-        super().__init__()
-        self.weight = nn.Parameter(torch.ones(hidden_size))
-        self.variance_epsilon = eps
-
-    def forward(self, input):
-        input_dtype = input.dtype
-        input = input.to(torch.float32)
-        variance = input.pow(2).mean(-1, keepdim=True)
-        input = input * torch.rsqrt(variance + self.variance_epsilon)
-        return self.weight * input.to(input_dtype)

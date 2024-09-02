@@ -139,7 +139,6 @@ class LlamaRotaryEmbedding(nn.Module):
         inv_freq = 1.0 / (
             self.theta ** (torch.arange(0, self.dim, 2, dtype=torch.float, device="cpu") / self.dim)
         )  # important to compute on CPU
-        # inv_freq = apply_scaling(inv_freq)  # if LLaMA 3.1
         self.register_buffer(
             "inv_freq", torch.empty(self.dim // 2, dtype=torch.float, device="cuda"), persistent=False
         )
@@ -147,9 +146,6 @@ class LlamaRotaryEmbedding(nn.Module):
             torch.float
         )  # make it float32 before copy to avoid precision loss during copy_
         self.inv_freq.copy_(inv_freq)
-
-        saved_inv_freq = torch.load("/fsx/haojun/LLaMA/.cache/activation_values/inv_freq.pt")
-        assert torch.equal(self.inv_freq.cpu(), saved_inv_freq), "inv_freq mismatch."
 
     @torch.no_grad()
     def forward(
@@ -807,7 +803,14 @@ class LlamaModel(nn.Module):
             module_input_keys={"input_ids", "input_mask"},
             module_output_keys={"input_embeds"},
         )
-
+        log_rank(f"Initialize RoPE Theta = {config.rope_theta}", logger=logger, level=logging.INFO, rank=0)
+        if config.rope_interleaved:
+            log_rank(
+                "The RoPE interleaved version differs from the Transformers implementation. It's better to set rope_interleaved=False if you need to convert the weights to Transformers",
+                logger=logger,
+                level=logging.INFO,
+                rank=0,
+            )
         self.decoder = nn.ModuleList(
             [
                 PipelineBlock(
