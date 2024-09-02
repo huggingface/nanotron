@@ -110,7 +110,7 @@ if __name__ == "__main__":
         checkpoints_path=f"/fsx/elie_bakouch/refactor-checkpoints/{general.project}-{general.run}",
         #checkpoints_path="CHECKPOINTS_PATH",
         checkpoints_path_is_shared_file_system=False,
-        resume_checkpoint_path=None,
+        resume_checkpoint_path="/fsx/elie_bakouch/refactor-checkpoints/smollm-%date_%jobid/60",
         checkpoint_interval=20,
         save_initial_state=False,
     )

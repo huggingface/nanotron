@@ -44,7 +44,8 @@ def set_nested_attribute(obj, path, value):
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config-path", help="path to the configuration file", type=str,required=True)
+    parser.add_argument("--config-path", help="path to the configuration file", type=str, default=None)
+    parser.add_argument("--base-config", help="base config to use", type=str, default=None)
     parser.add_argument("--run", help="name of the run", type=str, required=True)
     parser.add_argument("--logs-path", help="path to the logs folder", type=str, default=None)
     parser.add_argument("--override", nargs="+", metavar="KEY=VALUE",
@@ -52,6 +53,20 @@ if __name__ == "__main__":
     parser.add_argument("--slurm", action="store_true", help="Launch the job on Slurm")
     parser.add_argument("--nodes", type=int, help="Number of nodes to use for the job")
     args = parser.parse_args()
+
+    supported_base_configs = {
+        'llama-1B': "path_to_the_config",
+    }
+
+    if args.base_config is None and args.config_path is None:
+        raise ValueError("Please provide a base config or a config path")
+
+    if args.base_config not in supported_base_configs.keys():
+        raise ValueError(f"Base config {args.base_config} is not supported. Please choose one of the following: {supported_base_configs}")
+
+    if args.config_path is not None and args.base_config is not None:
+        print("Both config_path and base_config are provided. Using config_path and ignoring base_config.")
+        args.base_config = None
 
     if args.slurm:
         if args.nodes is None:
@@ -179,6 +194,7 @@ if __name__ == "__main__":
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     run_number = count_subdirectories(f"{args.logs_path}/{args.run}") + 1
     timestamp_with_run = f"run{run_number:03d}_{timestamp}"
+    config.general.timestamp_with_run = timestamp_with_run
 
     config.general.config_logs_path = f"{config.general.logs_path}/{args.run}/{timestamp_with_run}/config"
     Path(config.general.config_logs_path).mkdir(parents=True, exist_ok=True)

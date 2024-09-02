@@ -1,7 +1,7 @@
 {
   "job_name": "",
   "n_tasks_per_node": 1,
-  "cpus_per_task": 60,
+  "cpus_per_task": 88,
   "gpus_per_node": 8,
   "partition": "hopper-prod",
   "qos": "high",

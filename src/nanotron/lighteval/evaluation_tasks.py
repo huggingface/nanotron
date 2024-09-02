@@ -16,6 +16,8 @@ from lighteval.tasks.tasks_prompt_formatting import LETTER_INDICES
 _TASKS_STRINGS: List[Tuple[LightevalTaskConfig, str]] = []
 _TASKS: List[LightevalTaskConfig] = []
 
+trust_remote_code = True
+
 ## COMMON_SENSE_REASONING_TASKS ##
 COMMON_SENSE_REASONING_TASKS = [
     LightevalTaskConfig(
@@ -24,6 +26,7 @@ COMMON_SENSE_REASONING_TASKS = [
         hf_repo="hellaswag",
         hf_subset="default",
         metric=["loglikelihood_acc", "loglikelihood_acc_norm_nospace"],
+        trust_dataset=True,
     ),
     LightevalTaskConfig(
         name="winogrande",
@@ -31,6 +34,7 @@ COMMON_SENSE_REASONING_TASKS = [
         hf_repo="winogrande",
         hf_subset="winogrande_xl",
         metric=["loglikelihood_acc", "loglikelihood_acc_norm_nospace"],
+        trust_dataset=trust_remote_code,
     ),
     LightevalTaskConfig(
         name="piqa",
@@ -38,6 +42,7 @@ COMMON_SENSE_REASONING_TASKS = [
         hf_repo="piqa",
         hf_subset="plain_text",
         metric=["loglikelihood_acc", "loglikelihood_acc_norm_nospace"],
+        trust_dataset=trust_remote_code,
     ),
     LightevalTaskConfig(
         name="siqa",
@@ -46,6 +51,7 @@ COMMON_SENSE_REASONING_TASKS = [
         hf_subset="default",
         hf_avail_splits=["train", "validation"],
         metric=["loglikelihood_acc", "loglikelihood_acc_norm_nospace"],
+        trust_dataset=trust_remote_code,
     ),
     LightevalTaskConfig(
         name="openbookqa",
@@ -53,6 +59,7 @@ COMMON_SENSE_REASONING_TASKS = [
         hf_repo="openbookqa",
         hf_subset="main",
         metric=["loglikelihood_acc", "loglikelihood_acc_norm_nospace"],
+        trust_dataset=trust_remote_code,
     ),
     LightevalTaskConfig(
         name="arc:easy",
@@ -62,6 +69,7 @@ COMMON_SENSE_REASONING_TASKS = [
         evaluation_splits=["test"],
         generation_size=1,
         metric=["loglikelihood_acc", "loglikelihood_acc_norm_nospace"],
+        trust_dataset=trust_remote_code,
     ),
     LightevalTaskConfig(
         name="arc:challenge",
@@ -71,6 +79,7 @@ COMMON_SENSE_REASONING_TASKS = [
         evaluation_splits=["test"],
         generation_size=1,
         metric=["loglikelihood_acc", "loglikelihood_acc_norm_nospace"],
+        trust_dataset=trust_remote_code,
     ),
     LightevalTaskConfig(
         name="commonsense_qa",
@@ -78,6 +87,7 @@ COMMON_SENSE_REASONING_TASKS = [
         hf_repo="commonsense_qa",
         hf_subset="default",
         metric=["loglikelihood_acc", "loglikelihood_acc_norm_nospace"],
+        trust_dataset=trust_remote_code,
     ),
 ]
 
@@ -138,6 +148,7 @@ WORLD_KNOWLEDGE_TASKS = [
         metric=[Metrics.quasi_exact_match],
         generation_size=20,
         stop_sequence=["\n", ".", ","],
+        trust_dataset=trust_remote_code,
     ),
     LightevalTaskConfig(
         name="natural_questions",
@@ -147,6 +158,7 @@ WORLD_KNOWLEDGE_TASKS = [
         metric=[Metrics.quasi_exact_match],
         generation_size=20,
         stop_sequence=["\n", ".", ","],
+        trust_dataset=trust_remote_code,
     ),
 ]
 
@@ -175,6 +187,7 @@ READING_COMP_TASKS = [
         hf_repo="super_glue",
         hf_subset="boolq",
         metric=["target_perplexity"],
+        trust_dataset=trust_remote_code,
     ),
     LightevalTaskConfig(
         name="quac",
@@ -184,6 +197,7 @@ READING_COMP_TASKS = [
         metric=[Metrics.quasi_exact_match],
         generation_size=20,
         stop_sequence=["\n", ".", ","],
+        trust_dataset=trust_remote_code,
     ),
 ]
 
@@ -221,7 +235,8 @@ class CustomMathEvaluationTask(LightevalTaskConfig):
         generation_size=40,
         stop_sequence=None,
         output_regex=None,
-        frozen=False,
+        frozen=False,   
+        trust_dataset=trust_remote_code,
     ):
         super().__init__(
             name=name,
@@ -238,6 +253,7 @@ class CustomMathEvaluationTask(LightevalTaskConfig):
             stop_sequence=stop_sequence,
             output_regex=output_regex,
             frozen=frozen,
+            trust_dataset=trust_dataset,
         )
 
 
@@ -260,6 +276,7 @@ GSM8K = LightevalTaskConfig(
     metric=[Metrics.perfect_exact_match],
     generation_size=10,
     stop_sequence=["\n"],
+    trust_dataset=trust_remote_code,
 )
 
 
@@ -289,6 +306,7 @@ class CustomMMLUEvaluationTask(LightevalTaskConfig):
         stop_sequence=None,
         output_regex=None,
         frozen=False,
+        trust_dataset=trust_remote_code,
     ):
         super().__init__(
             name=name,
@@ -305,6 +323,7 @@ class CustomMMLUEvaluationTask(LightevalTaskConfig):
             stop_sequence=stop_sequence,
             output_regex=output_regex,
             frozen=frozen,
+            trust_dataset=trust_dataset,
         )
 
 
@@ -431,6 +450,7 @@ class CustomBBHEvaluationTask(LightevalTaskConfig):
         stop_sequence=None,
         output_regex=None,
         frozen=False,
+        trust_dataset=trust_remote_code,
     ):
         super().__init__(
             name=name,
@@ -447,6 +467,7 @@ class CustomBBHEvaluationTask(LightevalTaskConfig):
             stop_sequence=stop_sequence,
             output_regex=output_regex,
             frozen=frozen,
+            trust_dataset=trust_dataset,
         )
 
 
@@ -523,6 +544,7 @@ class CustomAGIEvalEvaluationTask(LightevalTaskConfig):
         stop_sequence=None,
         output_regex=None,
         frozen=False,
+        trust_dataset=trust_remote_code,
     ):
         super().__init__(
             name=name,
@@ -539,6 +561,7 @@ class CustomAGIEvalEvaluationTask(LightevalTaskConfig):
             stop_sequence=stop_sequence,
             output_regex=output_regex,
             frozen=frozen,
+            trust_dataset=trust_dataset,
         )
 
 

@@ -193,6 +193,7 @@ class GeneralArgs:
     logs_path: Optional[str] = "./logs"
     launch_slurm_config: Optional[str] = None
     eval_slurm_config: Optional[str] = None
+    timestamp_with_run: Optional[str] = None
     launch_script_path: Optional[str] = None
     slurm_logs_path: Optional[str] = None
     config_logs_path: Optional[str] = None

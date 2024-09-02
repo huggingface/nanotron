@@ -309,7 +309,7 @@ class DistributedTrainer:
         if dist.get_rank(self.parallel_context.world_pg) == 0 and wandb is not None:
             wandb.init(
                 project=self.config.general.project,
-                name=f"{current_time}_{self.config.general.run}",
+                name=f"{self.config.general.run}_{self.config.general.timestamp_with_run}",
                 config={"nanotron_config": self.config.as_dict()},
             )
             # Define tokens metric as x-axis for all metrics
@@ -338,6 +338,13 @@ class DistributedTrainer:
     def post_training(self):
         if self.s3_mover is not None:
             self.s3_mover.distributed_wait_for_completion(group=self.parallel_context.world_pg)
+    def post_training(self):
+        if self.s3_mover is not None:
+            self.s3_mover.distributed_wait_for_completion(group=self.parallel_context.world_pg)
+        
+        if dist.get_rank(self.parallel_context.world_pg) == 0 and wandb is not None:
+            wandb.finish()
+
     
     def _print_training_plan(self):
         if hasattr(self.config, "data_stages") and self.config.data_stages is not None:
