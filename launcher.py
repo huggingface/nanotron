@@ -58,6 +58,7 @@ if __name__ == "__main__":
         "smollm-1700M-8nodes": "examples/smollm/configs/yaml/smollm-1700M-8nodes.yaml",
         "smollm-360M-4nodes": "examples/smollm/configs/yaml/smollm-360M-4nodes.yaml",
         "smollm-135M-4nodes": "examples/smollm/configs/yaml/smollm-135M-4nodes.yaml",
+        "smollm-135M-1gpu": "examples/smollm/configs/yaml/smollm-135M-1gpu.yaml",
     } # add your base configs here {name: path}
 
     if args.base_config is None and args.config_path is None:
