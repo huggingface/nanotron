@@ -190,7 +190,7 @@ class GeneralArgs:
 
     project: str
     run: Optional[str] = None
-    logs_path: Optional[str] = "./logs"
+    logs_path: Optional[str] = "logs"
     launch_slurm_config: Optional[str] = None
     eval_slurm_config: Optional[str] = None
     timestamp_with_run: Optional[str] = None

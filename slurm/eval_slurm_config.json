@@ -13,15 +13,12 @@
   "account": null,
   "reservation": null,
   "torchrun_args": {
-    "rdzv_backend": "etcd-v2",
-    "rdzv_endpoint": "etcd.hpc-cluster-hopper.hpc.internal.huggingface.tech:2379",
-    "rdzv_id": "$SLURM_JOB_ID",
     "node_rank": "$SLURM_PROCID",
     "role": "$SLURMD_NODENAME",
     "max_restarts": 0,
     "tee": 3
   },
-  "hf_cache": "/fsx/elie_bakouch/.cache",
+  "hf_cache": "~/.cache",
   "array": null,
   "mem": null,
   "begin": null

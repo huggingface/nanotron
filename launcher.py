@@ -55,8 +55,10 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     supported_base_configs = {
-        'llama-1B': "path_to_the_config",
-    }
+        "smollm-1700M-8nodes": "examples/smollm/configs/yaml/smollm-1700M-8nodes.yaml",
+        "smollm-360M-4nodes": "examples/smollm/configs/yaml/smollm-360M-4nodes.yaml",
+        "smollm-135M-4nodes": "examples/smollm/configs/yaml/smollm-135M-4nodes.yaml",
+    } # add your base configs here {name: path}
 
     if args.base_config is None and args.config_path is None:
         raise ValueError("Please provide a base config or a config path")
@@ -78,35 +80,23 @@ if __name__ == "__main__":
     if config.general.logs_path is None and args.logs_path is None:
         raise ValueError("Please provide a logs path")
 
-    if config.model.model_config.tie_word_embeddings ==True:
-        tie_word_embeddings_multiplier = 1
-    else:
-        tie_word_embeddings_multiplier = 2
-
     num_params = human_format(
-        config.model.model_config.vocab_size * config.model.model_config.hidden_size * tie_word_embeddings_multiplier
-        + config.model.model_config.num_hidden_layers
-        * (
-            3 * config.model.model_config.hidden_size * config.model.model_config.intermediate_size
-            + 4 * config.model.model_config.hidden_size * config.model.model_config.hidden_size
-        )
-    ).replace(".", "p")
-    # Apply overrides
+        config.model.model_config.get_llama_param_count()
+    ).replace(".", ",")
+
     if args.override:
         for item in args.override:
             if '=' not in item:
                 raise ValueError(f"Invalid override format: {item}. Use KEY=VALUE.")
             key, value = item.split('=', 1)
             try:
-                # Try to evaluate the value as a Python literal
                 value = eval(value)
             except:
-                # If eval fails, treat it as a string
                 pass
             
             set_nested_attribute(config, key, value)
 
-        print("Applied overrides:")
+        print("⇄ Applied overrides:")
         for item in args.override:
             print(f"  {item}")
         
@@ -122,7 +112,7 @@ if __name__ == "__main__":
     GBS = BS * config.parallelism.dp
     
     total_tokens = config.tokens.train_steps * GBS
-    total_tokens_billions = total_tokens / 1e9
+    total_tokens_billions = human_format(total_tokens).replace(".", ",")
 
     print(f"""
 🏋️  Model Parameters:
@@ -153,7 +143,7 @@ if __name__ == "__main__":
     print(f"""
 📙 Training Configuration:
 ┌───────────────────────┬────────────────────────┐
-│ Total Tokens          │ {total_tokens_billions:>21.2f}B │
+│ Total Tokens          │ {total_tokens_billions:>22} │
 │ Global Batch Size     │ {GBS:>22,d} │
 │ Batch Size (per GPU)  │ {BS:>22,d} │
 └───────────────────────┴────────────────────────┘
