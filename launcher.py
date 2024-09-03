@@ -47,7 +47,7 @@ if __name__ == "__main__":
     parser.add_argument("--config-path", help="path to the configuration file", type=str, default=None)
     parser.add_argument("--base-config", help="base config to use", type=str, default=None)
     parser.add_argument("--run", help="name of the run", type=str, required=True)
-    parser.add_argument("--logs-path", help="path to the logs folder", type=str, default=None)
+    parser.add_argument("--logs-path", help="path to the logs folder", type=str, default="logs")
     parser.add_argument("--override", nargs="+", metavar="KEY=VALUE",
                         help="Override config values. Use dot notation for nested keys.")
     parser.add_argument("--slurm", action="store_true", help="Launch the job on Slurm")
@@ -64,12 +64,15 @@ if __name__ == "__main__":
     if args.base_config is None and args.config_path is None:
         raise ValueError("Please provide a base config or a config path")
 
-    if args.base_config not in supported_base_configs.keys():
-        raise ValueError(f"Base config {args.base_config} is not supported. Please choose one of the following: {supported_base_configs}")
 
     if args.config_path is not None and args.base_config is not None:
         print("Both config_path and base_config are provided. Using config_path and ignoring base_config.")
         args.base_config = None
+
+    if args.base_config not in supported_base_configs.keys():
+        raise ValueError(f"Base config {args.base_config} is not supported. Please choose one of the following: {supported_base_configs}")
+    else:
+        args.config_path = supported_base_configs[args.base_config]
 
     if args.slurm:
         if args.nodes is None:
@@ -197,8 +200,8 @@ if __name__ == "__main__":
         
         nodes = args.nodes
 
-        launch_slurm_config_path = Path("./slurm/launch_slurm_config.json")
-        eval_slurm_config_path = Path("./slurm/eval_slurm_config.json")
+        launch_slurm_config_path = Path("slurm/launch_slurm_config.json")
+        eval_slurm_config_path = Path("slurm/eval_slurm_config.json")
         
         with open(launch_slurm_config_path, 'r') as f:
             launch_slurm_config = json.load(f)
@@ -276,8 +279,6 @@ if __name__ == "__main__":
             
             with open(script_path, 'w') as f:
                 f.write(sbatch_script)
-            
-        print(f"    💾 Logs are saved to : {config.general.logs_path}/{config.general.run}-{config.general.project}")
         print(f"    🤖 Slurm Configuration Details:")
 
         slurm_config_keys = ['qos', 'gpus_per_node', 'cpus_per_task', 'constraint', 'account', 'reservation']
@@ -285,6 +286,20 @@ if __name__ == "__main__":
             if key in launch_slurm_config:
                 if launch_slurm_config[key] is not None:
                     print(f"        {key}: {launch_slurm_config[key]}")
+                    
+        print("        ")
+        print("    📁 Log structure:")
+        print(f"    {config.general.logs_path}/{config.general.run}/")
+        print(f"    └── {timestamp_with_run}/")
+        print("        ├── config/")
+        print("        ├── launch-script/")
+        print("        ├── slurm-logs/")
+        if hasattr(config, 'lighteval') and config.lighteval is not None:
+            print("        └── evals/")
+            print("            ├── launch-config/")
+            print("            └── logs/")
+        else:
+            print("        └── (No evals folder)")
 
     else:
         # Check if running on an interactive node
