@@ -762,7 +762,6 @@ class DistributedTrainer:
                 )
             reloaded_from_checkpoint=True
         if not reloaded_from_checkpoint:
-            # TODO @eliebak add s3 support also here
             log_rank("No checkpoint path provided.", logger=logger, level=logging.INFO, rank=0)
             if isinstance(self.config.model.init_method, ExistingCheckpointInit):
                 # Initialize model from an pretrained model checkpoint (without optimizer, lr_scheduler...)
