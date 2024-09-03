@@ -45,6 +45,8 @@ class LoggingArgs:
     log_level: Optional[str] = None
     log_level_replica: Optional[str] = None
     iteration_step_info_interval: Optional[int] = 1
+    monitor_fwd_states: bool = False
+    monitor_optim_states: bool = False
 
     def __post_init__(self):
         if self.log_level is None:

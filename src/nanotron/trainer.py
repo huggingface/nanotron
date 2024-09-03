@@ -39,6 +39,7 @@ from nanotron.dataloader import sanity_check_dataloader
 from nanotron.helpers import (
     _vocab_size_with_padding,
     compute_remain_train_steps_of_a_data_stage_from_ckp,
+    convert_logs_to_flat_logs,
     get_consumed_train_samples_of_a_data_stage_from_ckp,
     get_profiler,
     init_optimizer_and_grad_accumulator,
@@ -252,6 +253,17 @@ class DistributedTrainer:
 
         self.post_init()
 
+        self.params_id_to_param_names = {
+            id(param): name for name, param in self.unwrapped_model.get_named_params_with_correct_tied()
+        }
+        from nanotron.optim.optimizer_from_gradient_accumulator import OptimizerFromGradientAccumulator
+
+        if self.optimizer.__class__ == OptimizerFromGradientAccumulator:
+            self.optimizer.optimizer.optimizer.params_id_to_param_names = self.params_id_to_param_names
+            self.optimizer.optimizer.optimizer.grad_accumulator = self.grad_accumulator
+        else:
+            self.optimizer.optimizer.params_id_to_param_names = self.params_id_to_param_names
+
     def pre_init(self):
         pass
 
@@ -411,12 +423,26 @@ class DistributedTrainer:
         # Fix the root_model
         self.unwrapped_model.module_id_to_prefix[id(self.unwrapped_model)] = ""
 
+        from nanotron import constants
+
+        is_ready_for_normal_log = (
+            (self.iteration_step - 1) % self.config.logging.iteration_step_info_interval == 0
+        ) and (dist.get_rank(self.parallel_context.world_pg) == 0)
+
         prof = get_profiler(config=self.config)
         torch.cuda.empty_cache()
         with prof:
             for self.iteration_step in range(self.metadata.last_train_step + 1, self.config.tokens.train_steps + 1):
                 if isinstance(prof, torch.profiler.profile):
                     prof.step()
+
+                is_ready_to_log = is_ready_for_normal_log and self.config.logging.monitor_fwd_states is True
+                constants.is_ready_to_log = is_ready_to_log
+
+                if is_ready_to_log is True:
+                    from nanotron.helpers import monitor_model
+
+                    state_handles = monitor_model(self.unwrapped_model, self.parallel_context)
 
                 self.iteration_start_time = time.time()
                 self._update_dataloader_based_on_training_stages(dataloader_or_dls)
@@ -434,6 +460,39 @@ class DistributedTrainer:
 
                 if (self.iteration_step - 1) % self.config.logging.iteration_step_info_interval == 0:
                     self.train_step_logs(outputs=outputs, loss_avg=loss_avg)
+
+                if is_ready_to_log is True:
+                    if wandb is not None:
+                        for handle in state_handles:
+                            handle.remove()
+
+                        detailed_logs = {}
+
+                        # optim_logs = get_optim_logs(self.params_id_to_param_names, self.optimizer.optimizer, prefix="")
+                        if hasattr(self.optimizer.optimizer, "loggings"):
+                            optim_logs = self.optimizer.optimizer.loggings
+                            detailed_logs.update(optim_logs)
+
+                        from nanotron import constants
+
+                        detailed_logs.update(convert_logs_to_flat_logs(constants.NN_STATES))
+                        # NOTE: convert tensor to float for logging
+                        detailed_logs = {
+                            k: v.item() if isinstance(v, torch.Tensor) else v for k, v in detailed_logs.items()
+                        }
+
+                        # NOTE: save the detailed logs, path/{run_name}/{iteration_step}/logs.json
+
+                        # DEBUG_SAVE_PATH = DEBUG_SAVE_PATH.format(self.config.general.run, self.iteration_step)
+                        # debug_save_path = get_debug_save_path(self.config.general.run, self.iteration_step)
+                        # with open(f"{debug_save_path}/logs.json", "w") as f:
+                        #     json.dump(detailed_logs, f)
+
+                        wandb.log({**detailed_logs, "iteration_step": self.iteration_step})
+                        constants.NN_STATES = {}
+
+                        if hasattr(self.optimizer.optimizer, "loggings"):
+                            self.optimizer.optimizer.loggings = {}
 
                 # Checkpoint
                 if self.iteration_step % self.config.checkpoints.checkpoint_interval == 0:
