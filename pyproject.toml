@@ -53,6 +53,16 @@ nanosets = [
      "numba",
 ]
 
+s3 = [
+    "boto3",
+    "s3fs",
+    "s5cmd",
+]
+
+lighteval = [
+    "lighteval@git+https://github.com/eliebak/lighteval.git@current-nanotron",
+]
+
 [build-system]
 requires = [
     "setuptools",

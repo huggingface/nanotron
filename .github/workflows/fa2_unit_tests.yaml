@@ -48,6 +48,9 @@ jobs:
         pip install -e .
         pip install -e .[dev]
         pip install -e .[test]
+        pip install -e .[nanosets]
+        pip install -e .[s3]
+        pip install -e .[lighteval]
 
     - name: Show installed libraries and their versions
       run: pip freeze | tee installed.txt
