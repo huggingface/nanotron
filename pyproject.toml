@@ -21,6 +21,7 @@ dependencies = [
     "safetensors",
     "dacite",
     "tqdm",
+    "datasets",
 ]
 
 [tool.setuptools.packages.find]
@@ -51,6 +52,12 @@ nanosets = [
      "transformers",
      "datatrove[io,processing]@git+https://github.com/huggingface/datatrove",
      "numba",
+]
+
+s3 = [
+    "boto3",
+    "s3fs",
+    "s5cmd",
 ]
 
 [build-system]
