@@ -865,8 +865,10 @@ class DistributedTrainer:
             ),  # We only save the weights on DP==0
             should_save_optimizer=True,
             should_save_lr_scheduler=bool(
-                dist.get_rank(self.parallel_context.dp_pg) == 0 and dist.get_rank(self.parallel_context.tp_pg)
-            ),  # We only save the lr_scheduler on DP==0 && TP==0
+                dist.get_rank(self.parallel_context.dp_pg) == 0
+                and dist.get_rank(self.parallel_context.tp_pg) == 0
+                and dist.get_rank(self.parallel_context.expert_pg) == 0
+            ),  # We only save the lr_scheduler on DP==0 && TP==0 && EP==0
             should_save_config=bool(
                 dist.get_rank(self.parallel_context.world_pg) == 0
             ),  # We only save the config on world_rank==0
