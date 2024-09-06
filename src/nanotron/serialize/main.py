@@ -65,7 +65,92 @@ def save(
 
     try:
         if should_save_config:
-            config.save_as_yaml(root_folder / "config.yaml")
+            from copy import deepcopy
+            from dataclasses import fields, is_dataclass
+            from typing import Any
+
+            # def reverse_map_dtypes(dtype_obj):
+            #     if isinstance(dtype_obj, DTypes):
+            #         return dtype_obj.name
+            #     else:
+            #         return dtype_obj
+            #     # return str(dtype_obj).upper()
+            # def _reverse_map_dtypes(obj):
+            #     if isinstance(obj, DTypes):
+            #         return obj.name
+            #     elif is_dataclass(obj):
+            #         return modify_config(obj)
+            #     elif isinstance(obj, dict):
+            #         return {k: _reverse_map_dtypes(v) for k, v in obj.items()}
+            #     elif isinstance(obj, list):
+            #         return [_reverse_map_dtypes(item) for item in obj]
+            #     else:
+            #         return obj
+            # # serializable_config = {}
+            # # for key, value in config.items():
+            # #     if isinstance(value, DTypes):
+            # #         serializable_config[key] = reverse_map_dtypes(value)
+            # #     else:
+            # #         serializable_config[key] = value
+            # from typing import Any
+            # from dataclasses import fields, is_dataclass
+            # # def reverse_map_dtypes(obj: Any) -> Any:
+            # #     if isinstance(obj, DTypes):
+            # #         return obj.name
+            # #     elif is_dataclass(obj):
+            # #         return {field.name: reverse_map_dtypes(getattr(obj, field.name)) for field in fields(obj)}
+            # #     elif isinstance(obj, dict):
+            # #         return {k: reverse_map_dtypes(v) for k, v in obj.items()}
+            # #     elif isinstance(obj, list):
+            # #         return [reverse_map_dtypes(item) for item in obj]
+            # #     else:
+            # #         return obj
+            # def modify_config(config):
+            #     if not is_dataclass(config):
+            #         raise ValueError("Input must be a dataclass")
+            #     for field in fields(config):
+            #         current_value = getattr(config, field.name)
+            #         if isinstance(current_value, DTypes):
+            #             new_value = reverse_map_dtypes(current_value)
+            #         else:
+            #             new_value = current_value
+            #         setattr(config, field.name, new_value)
+            #     return config
+            # config.save_as_yaml(root_folder / "config.yaml")
+            # serializable_config = reverse_map_dtypes(config)
+            from nanotron.fp8.dtypes import DTypes
+
+            def reverse_map_dtypes(obj: Any) -> Any:
+                if isinstance(obj, DTypes):
+                    return obj.name
+                elif isinstance(obj, str):
+                    # return obj.upper()
+                    return obj
+                elif isinstance(obj, (int, float, bool)):
+                    return obj
+                elif is_dataclass(obj):
+                    return modify_config(obj)
+                elif isinstance(obj, dict):
+                    return {k: reverse_map_dtypes(v) for k, v in obj.items()}
+                elif isinstance(obj, list):
+                    return [reverse_map_dtypes(item) for item in obj]
+                else:
+                    return obj
+
+            def modify_config(config):
+                if not is_dataclass(config):
+                    raise ValueError("Input must be a dataclass")
+
+                for field in fields(config):
+                    current_value = getattr(config, field.name)
+                    new_value = reverse_map_dtypes(current_value)
+                    setattr(config, field.name, new_value)
+
+                return config
+
+            # NOTE: not modifying the original config object
+            serializable_config = modify_config(deepcopy(config))
+            serializable_config.save_as_yaml(root_folder / "config.yaml")
     except Exception as e:
         # TODO @nouamane: catch full disk error
         log_rank(

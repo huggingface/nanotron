@@ -96,6 +96,22 @@ def save_weights(model: nn.Module, parallel_context: ParallelContext, root_folde
             path.parent.mkdir(exist_ok=True, parents=True)
             try:
                 tensors = {"data": param_or_buffer}
+                if "model.decoder.1.pp_block.attn.qkv_proj.weight" in name:
+                    assert 1 == 1
+
+                from nanotron.fp8.tensor import FP8Tensor
+                from nanotron.parallel.parameters import get_data_from_param
+
+                if get_data_from_param(param).__class__ == FP8Tensor:
+                    assert param_or_buffer.dtype in [torch.int8, torch.uint8]
+
+                    # NOTE: save metadata along with the tensor
+                    import pickle
+
+                    with open(path.with_name(path.stem + "_metadata").with_suffix(".pkl"), "wb") as file:
+                        pickle.dump(get_data_from_param(param).fp8_meta, file)
+                    # tensors["fp8_meta"] = get_data_from_param(param).fp8_meta
+
                 save_file(tensors=tensors, filename=path, metadata=metadata)
             except Exception as e:
                 log_rank(

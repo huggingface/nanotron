@@ -57,3 +57,6 @@ class FP8Args:
     is_debugging: bool = False
     is_save_grad_for_accum_debugging: bool = False
     is_directly_keep_accum_grad_of_fp8: bool = False
+
+    def __post_init__(self):
+        assert 1 == 1
