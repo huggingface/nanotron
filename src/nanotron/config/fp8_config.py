@@ -55,3 +55,5 @@ class FP8Args:
     qkv_clipping: bool = False
     qkv_clipping_factor: Optional[float] = None
     is_debugging: bool = False
+    is_save_grad_for_accum_debugging: bool = False
+    is_directly_keep_accum_grad_of_fp8: bool = False

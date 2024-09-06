@@ -931,6 +931,13 @@ class LlamaDecoderLayer(nn.Module):
             )
 
         if CONFIG.fp8 is not None and CONFIG.fp8.layer_scale is True:
+
+            if self.layer_idx == 0:
+                assert 1 == 1
+
+            if self.layer_idx == 8:
+                assert 1 == 1
+
             hidden_states = hidden_states * rearrange(self.attn_layer_scale.data, "f -> 1 1 f")
             if constants.is_ready_to_log is True:
                 # NN_STATES[f"model.decoder.{self.layer_idx}.pp_block.attn.layerscale"] = {"absmax": self.attn_layer_scale.abs().max()}

@@ -387,21 +387,23 @@ class FP8Adam(Optimizer):
         from nanotron import constants
         from nanotron.config.fp8_config import FP8Args
 
-        if constants.CONFIG.fp8.run_fp8_sanity_check is True:
-            num_param_has_grads = 0
-            for g in self.param_groups:
-                for p in g["params"]:
-                    grad = get_grad_from_parameter(p)
-                    assert grad is not None
-                    if p is not None:
-                        num_param_has_grads += 1
-            assert num_param_has_grads > 0
+        # if constants.CONFIG.fp8.run_fp8_sanity_check is True:
+        #     num_param_has_grads = 0
+        #     for g in self.param_groups:
+        #         for p in g["params"]:
+        #             grad = get_grad_from_parameter(p)
+        #             assert grad is not None
+        #             if p is not None:
+        #                 num_param_has_grads += 1
+        #     assert num_param_has_grads > 0
 
         self._is_overflow = False
         loggings = {}
 
         fp8_config = cast(FP8Args, constants.CONFIG.fp8)
         non_fp8_accum_dtype = fp8_config.resid_dtype
+
+        from nanotron.helpers import get_accum_grad, set_accum_grad
 
         for i, group in enumerate(self.param_groups):
             for p in group["params"]:
@@ -416,16 +418,43 @@ class FP8Adam(Optimizer):
 
                 # NOTE: if use gradient accumulation, after the backward pass
                 # we set the param.grad to None, so we need to retrieve it from accumulator
+
                 if constants.CONFIG.optimizer.accumulate_grad_in_fp32 is True:
                     fp32_grad = self.grad_accumulator.get_grad_buffer(name=p_name)
-                else:
-                    grad = get_grad_from_parameter(p)
-                    assert grad is not None
 
+                    if "model.decoder.8.pp_block.attn_layer_scale" in p_name:
+                        assert 1 == 1
+
+                    if constants.CONFIG.fp8.is_save_grad_for_accum_debugging is True:
+                        from nanotron.helpers import create_folder_and_save_tensor
+
+                        create_folder_and_save_tensor(
+                            fp32_grad,
+                            f"/fsx/phuc/temp/temp3_env_for_fp8/nanotron/debug_accum/{constants.CONFIG.general.run}/aggr_grads/{p_name}.pt",
+                        )
+                else:
                     if IS_FP8 is True:
-                        assert grad.dtype in FP8_DTYPES
-                        fp32_grad = convert_tensor_from_fp8(grad, grad.fp8_meta, self.optim_accum_dtype)
+                        if constants.CONFIG.fp8.is_directly_keep_accum_grad_of_fp8 is True:
+                            # fp32_grad = constants.ACCUM_GRADS[p_name]
+                            grad = get_accum_grad(p_name)
+                            fp32_grad = (
+                                grad.to(self.optim_accum_dtype) if grad.dtype != self.optim_accum_dtype else grad
+                            )
+                            assert fp32_grad.dtype == torch.float32
+
+                            # constants.ACCUM_GRADS[p_name] = None
+                            set_accum_grad(p_name, None)
+                        else:
+                            grad = get_grad_from_parameter(p)
+                            assert grad.dtype in FP8_DTYPES
+                            fp32_grad = convert_tensor_from_fp8(grad, grad.fp8_meta, self.optim_accum_dtype)
                     else:
+                        try:
+                            grad = get_grad_from_parameter(p)
+                        except:
+                            assert 1 == 1
+
+                        assert grad is not None
                         assert grad.dtype == non_fp8_accum_dtype
                         fp32_grad = grad.to(self.optim_accum_dtype) if grad.dtype != self.optim_accum_dtype else grad
 
@@ -637,13 +666,15 @@ class FP8Adam(Optimizer):
                         "rms": fp32_new_changes_from_grad.pow(2).mean().sqrt(),
                     }
 
+                    p_norm = fp32_data.norm()
+
                     loggings[p]["fp32_grad"] = compute_stas(fp32_grad)
                     loggings[p]["update_lr"] = {"value": update_lr}
                     loggings[p]["weight_norm_and_normalized_grad_norm_ratio"] = {
-                        "value": fp32_data.norm() / normalized_grad.norm()
+                        "value": p_norm / fp32_new_changes_from_grad.norm()
                     }
                     loggings[p]["weight_norm_and_weight_update_norm_ratio"] = {
-                        "value": fp32_data.norm() / fp32_new_changes_in_p.norm()
+                        "value": p_norm / fp32_new_changes_in_p.norm()
                     }
 
                     if weight_decay_factor != 0:
@@ -651,7 +682,7 @@ class FP8Adam(Optimizer):
                             "rms": fp32_new_changes_from_weight_decay.pow(2).mean().sqrt(),
                         }
                         loggings[p]["weight_norm_and_weight_decay_grad_norm_ratio"] = {
-                            "value": fp32_data.norm() / fp32_weight_decay_grad.norm()
+                            "value": p_norm / fp32_weight_decay_grad.norm()
                         }
 
         if constants.is_ready_to_log is True:

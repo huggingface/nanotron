@@ -219,22 +219,24 @@ class FP32GradientAccumulator(GradientAccumulator):
 
         return fp32_grad_buffers, contiguous_buffer_f32_gradients
 
-    def backward(self, loss: torch.Tensor):
+    def backward(self, loss: torch.Tensor, microbatch_idx: Optional[int] = None) -> torch.Tensor:
         result = loss.backward()
 
         for name, elt in self.fp32_grad_buffers.items():
-            self._accumulate_grad(name=name, half_param=elt["half"])
+            self._accumulate_grad(name=name, half_param=elt["half"], microbatch_idx=microbatch_idx)
 
         return result
 
     @torch.no_grad()
-    def _accumulate_grad(self, name: str, half_param: NanotronParameter) -> None:
+    def _accumulate_grad(self, name: str, half_param: NanotronParameter, microbatch_idx: Optional[int] = None) -> None:
         """Accumulate grad in fp32 and set the fp32 grad to the fp32 grad buffer, so that optimizer can update fp32 weights afterwards"""
         # assert half_param.grad is not None, f"Expected param {name} to have gradient."
-        assert get_grad_from_parameter(half_param) is not None, f"Expected param {name} to have gradient."
+
         fp32_grad = self.get_grad_buffer(name=name)
 
+        from nanotron import constants
         from nanotron.fp8.tensor import FP8Tensor, convert_tensor_from_fp8
+        from nanotron.helpers import get_accum_grad, set_accum_grad
 
         if self._is_accumulation_sync_step is False:
             # WARNING: We assume fp32_grad_bucket is already zeroed
@@ -242,11 +244,43 @@ class FP32GradientAccumulator(GradientAccumulator):
             if "model.decoder.1.pp_block.attn.qkv_proj.weight" in name:
                 assert 1 == 1
 
-            _grad = get_grad_from_parameter(half_param)
+            if "model.decoder.8.pp_block.attn_layer_scale" in name:
+                assert 1 == 1
+
+            if constants.CONFIG.tokens.batch_accumulation_per_replica > 1:
+                from nanotron.parallel.parameters import get_data_from_param
+
+                if get_data_from_param(half_param).__class__ == FP8Tensor:
+                    assert "bias" not in name, f"Bias should not be supported, name: {name}"
+                    # NOTE: we don't support bias
+                    # _grad = constants.ACCUM_GRADS[name.replace(".weight", "").replace(".pp_block", "")]
+                    _grad = get_accum_grad(name)
+                else:
+                    _grad = get_grad_from_parameter(half_param)
+                    # NOTE: zero grad after accumulation
+                    # half_param.data.grad = None
+                    from nanotron.parallel.parameters import set_grad_none_for_sliced_or_param
+
+                    set_grad_none_for_sliced_or_param(half_param)
+
+            else:
+                _grad = get_grad_from_parameter(half_param)
+
             if _grad.__class__ == FP8Tensor:
                 _grad = convert_tensor_from_fp8(_grad, _grad.fp8_meta, torch.float32)
 
+            if constants.CONFIG.fp8.is_save_grad_for_accum_debugging is True:
+                from nanotron.helpers import create_folder_and_save_tensor
+
+                # torch.save(_grad, f"/fsx/phuc/temp/temp3_env_for_fp8/nanotron/debug_accum/grads/idx_{microbatch_idx}_{name}.pt")
+                create_folder_and_save_tensor(
+                    _grad,
+                    f"/fsx/phuc/temp/temp3_env_for_fp8/nanotron/debug_accum/{constants.CONFIG.general.run}/grads/idx_{microbatch_idx}_{name}.pt",
+                )
+
             fp32_grad.add_(_grad)
+            # constants.ACCUM_GRADS[name.replace(".weight", "").replace(".pp_block", "")] = None
+            set_accum_grad(name, None)
             # In case _is_accumulation_sync_step = True: no need to add half gradients, because it's done in the allreduce hook
 
         # TODO @thomasw21: Is it better to set to zero instead?

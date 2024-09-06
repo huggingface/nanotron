@@ -41,3 +41,5 @@ def get_debug_save_path(name, iteration_step):
 is_ready_to_log = False
 
 PARALLEL_CONTEXT = None
+
+ACCUM_GRADS = {}

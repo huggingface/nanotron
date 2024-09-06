@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import Optional, Tuple, Union, cast
 
+import pydevd
 import torch
 import transformer_engine as te  # noqa
 from torch import nn
@@ -158,14 +159,15 @@ class _FP8Matmul(torch.autograd.Function):
         from nanotron import constants
         from nanotron.config.fp8_config import FP8Args
 
+        if constants.CONFIG.fp8 is not None and constants.CONFIG.fp8.is_debugging is True:
+            pydevd.settrace(suspend=False, trace_only_current_thread=True)
+
         # dist.monitored_barrier(wait_all_ranks=True)
 
         fp8_config = cast(FP8Args, constants.CONFIG.fp8)
         sync_amax_in_igrad = fp8_config.sync_amax_in_igrad
         sync_amax_in_wgrad = fp8_config.sync_amax_in_wgrad
 
-        # import pydevd
-        # pydevd.settrace(suspend=False, trace_only_current_thread=True)
         fp8_input, fp8_weight = ctx.saved_tensors
         recipe = ctx.recipe
         recipe = cast(FP8LinearRecipe, recipe)
@@ -238,19 +240,38 @@ class _FP8Matmul(torch.autograd.Function):
         orig_shape = grad_weight.shape
         grad_weight = grad_weight.contiguous().t().contiguous().view(-1).contiguous().reshape(orig_shape)
 
-        if ctx.metadatas.weight_grad is None:
-            fp8_weight_grad = FP8Tensor(
-                grad_weight,
-                dtype=recipe.weight_grad.dtype,
-                interval=recipe.weight_grad.interval,
-                sync=sync_amax_in_wgrad,
-            )
-            ctx.metadatas.weight_grad = fp8_weight_grad.fp8_meta
+        # NOTE: if use gradient accumulation, then directly keep the high precision weights for later accumulate
+        if (
+            constants.CONFIG.tokens.batch_accumulation_per_replica > 1
+            or constants.CONFIG.fp8.is_directly_keep_accum_grad_of_fp8 is True
+        ):
+
+            # NOTE: if do fp8_weight.grad = grad_weight, then the following error will be raised:
+            # Traceback (most recent call last):
+            #   File "<string>", line 1, in <module>
+            #   File "/fsx/phuc/temp/temp3_env_for_fp8/env/lib/python3.10/site-packages/torch/_tensor.py", line 1386, in __torch_function__
+            #     ret = func(*args, **kwargs)
+            # RuntimeError: attempting to assign a gradient with dtype 'c10::BFloat16' to a tensor with dtype 'unsigned char'. Please ensure that the gradient and the tensor have the same dtype
+            fp8_weight.__accum_grad = grad_weight
+            assert fp8_weight.__accum_grad.dtype in [torch.float16, torch.bfloat16, torch.float32]
+            constants.ACCUM_GRADS[ctx.name] = grad_weight
         else:
-            fp8_weight_grad = FP8Tensor.from_metadata(grad_weight, ctx.metadatas.weight_grad, sync=sync_amax_in_wgrad)
+            if ctx.metadatas.weight_grad is None:
+                fp8_weight_grad = FP8Tensor(
+                    grad_weight,
+                    dtype=recipe.weight_grad.dtype,
+                    interval=recipe.weight_grad.interval,
+                    sync=sync_amax_in_wgrad,
+                )
+                ctx.metadatas.weight_grad = fp8_weight_grad.fp8_meta
+            else:
+                fp8_weight_grad = FP8Tensor.from_metadata(
+                    grad_weight, ctx.metadatas.weight_grad, sync=sync_amax_in_wgrad
+                )
 
-        fp8_weight.grad = fp8_weight_grad
+            fp8_weight.grad = fp8_weight_grad
 
-        # NOTE: sanity check
-        assert isinstance(fp8_weight.grad, FP8Tensor)
+            # NOTE: sanity check
+            assert isinstance(fp8_weight.grad, FP8Tensor)
+
         return grad_input.contiguous(), None, None, None, None, None, None

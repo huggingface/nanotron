@@ -766,3 +766,24 @@ def get_consumed_train_samples_of_a_data_stage_from_ckp(
         (s.consumed_train_samples for s in metadata.data_stages if s.start_training_step == start_training_step),
         None,
     )
+
+
+def create_folder_and_save_tensor(tensor, path):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    torch.save(tensor, path)
+
+
+def get_accum_grad(param_name):
+    from nanotron import constants
+
+    assert "bias" not in param_name
+    # return constants.ACCUM_GRADS[param_name.replace("weight", "")]
+    return constants.ACCUM_GRADS[param_name.replace(".weight", "").replace(".pp_block", "")]
+
+
+def set_accum_grad(param_name, value):
+    from nanotron import constants
+
+    assert "bias" not in param_name
+    # constants.ACCUM_GRADS[param_name.replace("weight", "")] = value
+    constants.ACCUM_GRADS[param_name.replace(".weight", "").replace(".pp_block", "")] = value

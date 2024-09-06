@@ -20,7 +20,6 @@ from typing import (
 )
 
 import torch
-from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
 
 from nanotron import constants, logging
@@ -36,6 +35,9 @@ from nanotron.config import (
 )
 from nanotron.constants import MODEL_CONFIG_FILE_NAME
 from nanotron.dataloader import sanity_check_dataloader
+
+# from torch.nn.parallel import DistributedDataParallel
+from nanotron.fp8.data_parallel import DistributedDataParallel
 from nanotron.helpers import (
     _vocab_size_with_padding,
     compute_remain_train_steps_of_a_data_stage_from_ckp,
@@ -55,10 +57,10 @@ from nanotron.logging import (
     set_ranks_logging_level,
 )
 from nanotron.models import NanotronModel, build_model
-from nanotron.models.base import check_model_has_grad
 from nanotron.models.llama import LlamaForTraining, RotaryEmbedding
 from nanotron.models.starcoder2 import Starcoder2ForTraining
 from nanotron.optim.clip_grads import clip_grad_norm
+from nanotron.optim.optimizer_from_gradient_accumulator import OptimizerFromGradientAccumulator
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter, get_data_from_param, sanity_check
 from nanotron.parallel.pipeline_parallel.engine import (
@@ -201,7 +203,6 @@ class DistributedTrainer:
             optimizer_args=self.config.optimizer,
             parallel_context=self.parallel_context,
         )
-        from nanotron.optim.optimizer_from_gradient_accumulator import OptimizerFromGradientAccumulator
 
         if self.optimizer.__class__ == OptimizerFromGradientAccumulator:
             self.optimizer.optimizer.optimizer.params_id_to_param_names = self.params_id_to_param_names
@@ -481,6 +482,11 @@ class DistributedTrainer:
 
         from nanotron import constants
 
+        # NOTE: we need to make sure that the grad_accumulator's fp32_grad_buffers are the same as the model's parameters
+        if constants.CONFIG.tokens.batch_accumulation_per_replica > 1:
+            for name, param in self.unwrapped_model.named_parameters():
+                assert self.grad_accumulator.fp32_grad_buffers[name]["half"] is param
+
         prof = get_profiler(config=self.config)
         torch.cuda.empty_cache()
         with prof:
@@ -538,7 +544,11 @@ class DistributedTrainer:
                         detailed_logs = {}
 
                         # optim_logs = get_optim_logs(self.params_id_to_param_names, self.optimizer.optimizer, prefix="")
-                        if hasattr(self.optimizer.optimizer, "loggings"):
+                        if self.optimizer.__class__ == OptimizerFromGradientAccumulator:
+                            if hasattr(self.optimizer.optimizer.optimizer, "loggings"):
+                                optim_logs = self.optimizer.optimizer.optimizer.loggings
+                                detailed_logs.update(optim_logs)
+                        elif hasattr(self.optimizer.optimizer, "loggings"):
                             optim_logs = self.optimizer.optimizer.loggings
                             detailed_logs.update(optim_logs)
 
@@ -677,6 +687,51 @@ class DistributedTrainer:
         # param_with_no_grads = [n for n, x in self.model.named_parameters() if not isinstance(x.grad, torch.Tensor)]
 
         # assert all([isinstance(x.grad, torch.Tensor) for x in self.model.parameters()])
+
+        with torch.no_grad():
+            if self.parallel_context.data_parallel_size > 1:
+
+                from nanotron.fp8.tensor import FP8Tensor
+                from nanotron.helpers import get_accum_grad, set_accum_grad
+                from nanotron.parallel.parameters import (
+                    get_data_from_param,
+                    get_grad_from_parameter,
+                    set_grad_for_nonfp8_param,
+                )
+
+                assert (
+                    constants.CONFIG.fp8.is_directly_keep_accum_grad_of_fp8 is True
+                ), "for data parallelism, have to enable is_directly_keep_accum_grad_of_fp8"
+
+                for p_name, p in self.model.named_parameters():
+                    _p_data = get_data_from_param(p)
+                    _grad = get_grad_from_parameter(p)
+
+                    # old_grad = deepcopy(_grad)
+                    if _p_data.__class__ == FP8Tensor:
+                        # _fp32_grad = convert_tensor_from_fp8(
+                        #     _grad, _grad.fp8_meta, torch.float32
+                        # )
+                        _fp32_grad = get_accum_grad(p_name)
+                    else:
+                        _fp32_grad = _grad
+
+                    dist.all_reduce(_fp32_grad, op=dist.ReduceOp.SUM, group=self.parallel_context.dp_pg)
+                    _fp32_grad = _fp32_grad / self.parallel_context.data_parallel_size
+
+                    if _p_data.__class__ == FP8Tensor:
+                        # assert not "bias" in name
+                        # constants.ACCUM_GRADS[name.replace("weight", "")] = _fp32_grad
+                        set_accum_grad(p_name, _fp32_grad)
+                        assert get_accum_grad(p_name) is _fp32_grad
+                    else:
+                        # p.grad = _fp32_grad
+                        # try:
+                        #     assert get_grad_from_parameter(p) is _fp32_grad
+                        # except:
+                        #     assert 1 == 1
+                        set_grad_for_nonfp8_param(p, _fp32_grad)
+                        assert get_grad_from_parameter(p) is _fp32_grad
 
         if self.iteration_step == 2:
             # [
@@ -911,9 +966,6 @@ class DistributedTrainer:
         parallel_context = self.parallel_context
 
         parallel_config = config.parallelism
-        make_ddp = parallel_context.data_parallel_size > 1 and not (
-            config.optimizer.accumulate_grad_in_fp32 and config.optimizer.zero_stage > 0
-        )
 
         # Build model and set pp ranks
         model = build_model(
@@ -968,16 +1020,20 @@ class DistributedTrainer:
         )
 
         # Model make it DDP
-        if make_ddp is True:
-            # Check that the model has at least one grad. Necessary for DDP
-            check_model_has_grad(model=model, parallel_context=parallel_context)
-            # TODO @thomasw21: DDP doesn't support broadcasting complex buffers (and we don't really need that broadcasting anyway)
-            model = DistributedDataParallel(
-                model,
-                process_group=parallel_context.dp_pg,
-                broadcast_buffers=False,
-                bucket_cap_mb=config.model.ddp_bucket_cap_mb,
-            )
+        # if make_ddp is True:
+        #     # Check that the model has at least one grad. Necessary for DDP
+        #     check_model_has_grad(model=model, parallel_context=parallel_context)
+        #     # TODO @thomasw21: DDP doesn't support broadcasting complex buffers (and we don't really need that broadcasting anyway)
+        #     # model = DistributedDataParallel(
+        #     #     model,
+        #     #     process_group=parallel_context.dp_pg,
+        #     #     broadcast_buffers=False,
+        #     #     bucket_cap_mb=config.model.ddp_bucket_cap_mb,
+        #     # )
+        #     model = DistributedDataParallel(
+        #         model,
+        #         parallel_context=self.parallel_context,
+        #     )
 
         # Sanity check the model, all parameters must be NanotronParameter (either tied or sharded)
         sanity_check(root_module=model)

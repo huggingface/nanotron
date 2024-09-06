@@ -299,7 +299,17 @@ def sanity_check(root_module: nn.Module):
 def get_grad_from_parameter(p: NanotronParameter):
     assert p.__class__ == NanotronParameter
     assert (p.grad is not None and p.data.grad is not None) is False
-    grad = p.grad if p.grad is not None else p.data.grad
+
+    from nanotron import constants
+
+    if constants.CONFIG.tokens.batch_accumulation_per_replica > 1:
+        if hasattr(p, "grad"):
+            grad = p.grad if p.grad is not None else p.data.grad
+        else:
+            grad = p.__accum_grad if p.__accum_grad is not None else p.data.__accum_grad
+    else:
+        grad = p.grad if p.grad is not None else p.data.grad
+
     return grad
 
 
@@ -339,6 +349,8 @@ def set_grad_none_for_param(p: NanotronParameter):
     assert p.__class__ == NanotronParameter
     p.grad = None
     p.data.grad = None
+    p.__accum_grad = None
+    p.data.__accum_grad = None
 
 
 def set_data_for_sliced_or_param(p, data):
@@ -372,3 +384,11 @@ def set_grad_none_for_sliced_or_param(p):
         set_grad_none_for_param(p._data)
     else:
         set_grad_none_for_param(p)
+
+
+def set_grad_for_nonfp8_param(p, grad):
+    assert (p.grad is not None and p.data.grad is not None) is False
+    if p.grad is not None:
+        p.grad = grad
+    else:
+        p.data.grad = grad

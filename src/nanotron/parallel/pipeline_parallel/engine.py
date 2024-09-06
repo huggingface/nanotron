@@ -66,7 +66,11 @@ class PipelineEngine(ABC):
         return context
 
     def backward(
-        self, context: ContextManagers, state: PipelineTrainBatchState, grad_accumulator: Optional[GradientAccumulator]
+        self,
+        context: ContextManagers,
+        state: PipelineTrainBatchState,
+        grad_accumulator: Optional[GradientAccumulator],
+        microbatch_idx: Optional[int] = None,
     ):
         # Increment the number of backwards
         state.nb_backwards += 1
@@ -84,7 +88,7 @@ class PipelineEngine(ABC):
             if grad_accumulator is None:
                 sum(activations).backward()
             else:
-                grad_accumulator.backward(sum(activations))
+                grad_accumulator.backward(sum(activations), microbatch_idx=microbatch_idx)
 
         # TODO @nouamane: this fixes interleaved afab but makes 1f1b hang
         # with context:
@@ -274,7 +278,7 @@ class OneForwardOneBackwardPipelineEngine(PipelineEngine):
                     output = {k: v.detach() for k, v in output.items()}
                 outputs.append(output)
 
-            for micro_batch in batch:
+            for i, micro_batch in enumerate(batch):
                 context = self._get_fwd_context(model=model)
                 output = self.forward(context=context, state=state, micro_batch=micro_batch, model=model)
 
@@ -293,7 +297,7 @@ class OneForwardOneBackwardPipelineEngine(PipelineEngine):
                     nb_backwards=state.nb_backwards,
                     grad_accumulator=grad_accumulator,
                 )
-                self.backward(context=context, state=state, grad_accumulator=grad_accumulator)
+                self.backward(context=context, state=state, grad_accumulator=grad_accumulator, microbatch_idx=i)
 
             # Check figure in paper: The remain blocks are all backward and there is only `pg.size() - current_pp_rank - 1` blocks left
             assert len(state.microbatches_activations_requiring_backward) == pg.size() - current_pp_rank - 1
