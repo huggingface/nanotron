@@ -132,6 +132,10 @@ class DistributedTrainer:
         self.config = get_config_from_file(
             config_or_config_file, config_class=config_class, model_config_class=model_config_class
         )
+        from nanotron import constants
+
+        constants.CONFIG = self.config
+
         self.model_config = self.config.model.model_config
         if model_class is not None:
             CONFIG_TO_MODEL_CLASS[self.model_config.__class__.__name__] = model_class

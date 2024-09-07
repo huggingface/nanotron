@@ -13,3 +13,4 @@ MODEL_CONFIG_FILE_NAME = "model_config.json"
 
 is_ready_to_log = False
 NN_STATES = {}
+CONFIG = None

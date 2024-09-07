@@ -1,7 +1,6 @@
 import torch
 from torch.optim.optimizer import Optimizer
 
-from nanotron import constants
 from nanotron.helpers import compute_tensor_stats
 
 
@@ -54,14 +53,27 @@ class CustomAdamW(Optimizer):
         for group in self.param_groups:
             group.setdefault("amsgrad", False)
 
-    def _get_optim_logs(self):
+    def _get_optim_logs(self, loggings):
         from nanotron.helpers import convert_logs_to_flat_logs
 
         optim_loggings = {}
-        for p in self.loggings:
+        for p in loggings:
             param_name = self.params_id_to_param_names[id(p)]
-            optim_loggings[param_name] = self.loggings[p]
+            optim_loggings[param_name] = loggings[p]
         return convert_logs_to_flat_logs(optim_loggings)
+
+    def _calculate_mean_sqrt_ignoring_nans(self, numerator, denominator):
+        # Calculate the division, ignoring division by zero
+        division_result = torch.where(denominator != 0, numerator / denominator, torch.zeros_like(numerator))
+
+        # Calculate the mean, ignoring NaN values
+        valid_values = division_result[~torch.isnan(division_result)]
+
+        if valid_values.numel() > 0:
+            mean_result = valid_values.mean()
+            return torch.sqrt(mean_result)
+        else:
+            raise ValueError("All values are NaN")
 
     @torch.no_grad()
     def step(self, closure=None):
@@ -113,7 +125,15 @@ class CustomAdamW(Optimizer):
                 weight_decay_grad = group["weight_decay"] * p.data
 
                 new_weight_changes_from_grad = group["lr"] * normalized_grad
-                new_weight_changes_from_weight_decay = group["lr"] * weight_decay_grad
+
+                from nanotron import constants
+
+                if constants.CONFIG.logging.weight_decay_without_lr_decay is False:
+                    new_weight_changes_from_weight_decay = group["lr"] * weight_decay_grad
+                else:
+                    new_weight_changes_from_weight_decay = (
+                        constants.CONFIG.optimizer.learning_rate_scheduler.learning_rate * weight_decay_grad
+                    )
 
                 total_new_weight_changes = new_weight_changes_from_grad + new_weight_changes_from_weight_decay
 
@@ -123,53 +143,68 @@ class CustomAdamW(Optimizer):
                 weight_norm_and_weight_decay_update_norm_ratio = p_norm / new_weight_changes_from_weight_decay.norm()
                 weight_norm_and_total_weight_update_norm_ratio = p_norm / total_new_weight_changes.norm()
 
+                momentums_rms_without_eps = self._calculate_mean_sqrt_ignoring_nans(
+                    grad.pow(2),
+                    torch.max(
+                        exp_avg_sq_hat,
+                        torch.tensor(group["eps"], dtype=exp_avg_sq_hat.dtype, device="cuda").pow(2),
+                    ),
+                )
+
+                momentums_rms_with_eps = self._calculate_mean_sqrt_ignoring_nans(
+                    grad.pow(2), exp_avg_sq_hat + torch.tensor(group["eps"], dtype=grad.dtype, device="cuda")
+                )
+
                 p.data = p.data - total_new_weight_changes
 
                 state["exp_avg"] = exp_avg
                 state["exp_avg_sq"] = exp_avg_sq
 
+                if constants.is_ready_to_log is True:
+                    loggings[p]["step"] = {"value": state["step"]}
+
+                    loggings[p]["group:lr"] = {"value": group["lr"]}
+                    loggings[p]["group:eps"] = {"value": group["eps"]}
+                    loggings[p]["group:beta1"] = {"value": beta1}
+                    loggings[p]["group:beta2"] = {"value": beta2}
+
+                    loggings[p]["bias_correction1"] = {"value": bias_correction1}
+                    loggings[p]["bias_correction2"] = {"value": bias_correction2}
+
+                    loggings[p]["exp_avg"] = compute_tensor_stats(exp_avg)
+                    loggings[p]["exp_avg_sq"] = compute_tensor_stats(exp_avg_sq)
+                    loggings[p]["exp_avg_hat"] = compute_tensor_stats(exp_avg_hat)
+                    loggings[p]["exp_avg_sq_hat"] = compute_tensor_stats(exp_avg_sq_hat)
+
+                    loggings[p]["normalized_grad"] = compute_tensor_stats(normalized_grad)
+                    loggings[p]["normalized_grad_without_adam_eps"] = compute_tensor_stats(
+                        normalized_grad_without_adam_eps
+                    )
+                    loggings[p]["weight_decay_grad"] = compute_tensor_stats(weight_decay_grad)
+
+                    loggings[p]["fp32_p"] = compute_tensor_stats(p.data)
+                    loggings[p]["fp32_new_changes_in_p"] = compute_tensor_stats(total_new_weight_changes)
+                    loggings[p]["fp32_new_changes_from_grad"] = compute_tensor_stats(new_weight_changes_from_grad)
+
+                    loggings[p]["fp32_grad"] = compute_tensor_stats(grad)
+                    loggings[p]["weight_norm_and_normalized_grad_update_norm_ratio"] = {
+                        "value": weight_norm_and_normalized_grad_update_norm_ratio
+                    }
+                    loggings[p]["weight_norm_and_total_weight_update_norm_ratio"] = {
+                        "value": weight_norm_and_total_weight_update_norm_ratio
+                    }
+                    loggings[p]["momentums_rms_without_eps"] = {"value": momentums_rms_without_eps}
+                    loggings[p]["momentums_rms_with_eps"] = {"value": momentums_rms_with_eps}
+
+                    if group["weight_decay"] != 0:
+                        loggings[p]["fp32_new_changes_from_weight_decay"] = compute_tensor_stats(
+                            new_weight_changes_from_weight_decay
+                        )
+                        loggings[p]["weight_norm_and_weight_decay_update_norm_ratio"] = {
+                            "value": weight_norm_and_weight_decay_update_norm_ratio
+                        }
+
         if constants.is_ready_to_log is True:
-            loggings[p]["step"] = {"value": state["step"]}
-
-            loggings[p]["group:lr"] = {"value": group["lr"]}
-            loggings[p]["group:eps"] = {"value": group["eps"]}
-            loggings[p]["group:beta1"] = {"value": beta1}
-            loggings[p]["group:beta2"] = {"value": beta2}
-
-            loggings[p]["bias_correction1"] = {"value": bias_correction1}
-            loggings[p]["bias_correction2"] = {"value": bias_correction2}
-
-            loggings[p]["exp_avg"] = compute_tensor_stats(exp_avg)
-            loggings[p]["exp_avg_sq"] = compute_tensor_stats(exp_avg_sq)
-            loggings[p]["exp_avg_hat"] = compute_tensor_stats(exp_avg_hat)
-            loggings[p]["exp_avg_sq_hat"] = compute_tensor_stats(exp_avg_sq_hat)
-
-            loggings[p]["normalized_grad"] = compute_tensor_stats(normalized_grad)
-            loggings[p]["normalized_grad_without_adam_eps"] = compute_tensor_stats(normalized_grad_without_adam_eps)
-            loggings[p]["weight_decay_grad"] = compute_tensor_stats(weight_decay_grad)
-
-            loggings[p]["fp32_p"] = compute_tensor_stats(p.data)
-            loggings[p]["fp32_new_changes_in_p"] = compute_tensor_stats(total_new_weight_changes)
-            loggings[p]["fp32_new_changes_from_grad"] = compute_tensor_stats(new_weight_changes_from_grad)
-
-            loggings[p]["fp32_grad"] = compute_tensor_stats(grad)
-            loggings[p]["weight_norm_and_normalized_grad_update_norm_ratio"] = {
-                "value": weight_norm_and_normalized_grad_update_norm_ratio
-            }
-            loggings[p]["weight_norm_and_total_weight_update_norm_ratio"] = {
-                "value": weight_norm_and_total_weight_update_norm_ratio
-            }
-
-            if group["weight_decay"] != 0:
-                loggings[p]["fp32_new_changes_from_weight_decay"] = compute_tensor_stats(
-                    new_weight_changes_from_weight_decay
-                )
-                loggings[p]["weight_norm_and_weight_decay_update_norm_ratio"] = {
-                    "value": weight_norm_and_weight_decay_update_norm_ratio
-                }
-
-        if constants.is_ready_to_log is True:
-            self.loggings = loggings
-            self.loggings = self._get_optim_logs()
+            self.loggings = self._get_optim_logs(loggings)
 
         return loss

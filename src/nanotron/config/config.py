@@ -47,6 +47,7 @@ class LoggingArgs:
     iteration_step_info_interval: Optional[int] = 1
     monitor_fwd_states: bool = False
     monitor_optim_states: bool = False
+    weight_decay_without_lr_decay: bool = False
 
     def __post_init__(self):
         if self.log_level is None:
