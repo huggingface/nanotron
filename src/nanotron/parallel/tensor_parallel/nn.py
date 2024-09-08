@@ -275,15 +275,12 @@ class TensorParallelEmbedding(nn.Embedding):
         mark_all_parameters_in_module_as_sharded(self, pg=self.pg, split_config=split_config)
 
     def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
-        if self.pg.size() > 1:
-            # `0` if input is in the correct interval, else `1`
-            input_mask = torch.logical_or(self.min_id > input_ids, input_ids >= self.max_id)
-            # translate for [0, self.max_id - self.min_id[
-            masked_input = input_ids.clone() - self.min_id
-            # default all out of bounds values to `0`
-            masked_input[input_mask] = 0
-        else:
-            masked_input = input_ids
+        # `0` if input is in the correct interval, else `1`
+        input_mask = torch.logical_or(self.min_id > input_ids, input_ids >= self.max_id)
+        # translate for [0, self.max_id - self.min_id[
+        masked_input = input_ids.clone() - self.min_id
+        # default all out of bounds values to `0`
+        masked_input[input_mask] = 0
         out = super().forward(masked_input)
 
         if self.pg.size() > 1:
