@@ -3,7 +3,6 @@ import inspect
 import os
 import random
 import socket
-import re
 from contextlib import ExitStack, contextmanager
 from typing import ContextManager, List, Optional
 
