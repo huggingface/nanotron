@@ -1,10 +1,9 @@
+import os
 from pathlib import Path
 from typing import Optional, cast
-from datasets.download.streaming_download_manager import xPath
-import os
 
-from nanotron.s3_checkpoints import S3Mover, check_path_is_local, fs_open
 import torch
+from datasets.download.streaming_download_manager import xPath
 from torch import nn
 from torch.nn.parallel import DistributedDataParallel
 from torch.optim.lr_scheduler import LambdaLR
@@ -13,11 +12,11 @@ from nanotron import distributed as dist
 from nanotron import logging
 from nanotron import optim as optim
 from nanotron.config import Config
-from nanotron.constants import MODEL_CONFIG_FILE_NAME
 from nanotron.distributed import get_global_rank
 from nanotron.logging import log_rank
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter
+from nanotron.s3_checkpoints import S3Mover, check_path_is_local, fs_open
 from nanotron.sanity_checks import (
     assert_tensor_synced_across_pg,
     check_optim_state_in_sync,
@@ -43,7 +42,7 @@ Current way of thinking:
 
 Version 1:
  - serialize -> dumps every process weights in individual files
- - load -> assume topology is exactly the same
+ - load -> assume topology is exactly the same.
 """
 
 

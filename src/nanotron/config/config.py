@@ -2,13 +2,13 @@ import datetime
 import os
 from dataclasses import dataclass, fields
 from pathlib import Path
-from datasets.download.streaming_download_manager import xPath
 from typing import List, Optional, Type, Union
 
 import dacite
 import torch
 import yaml
 from dacite import from_dict
+from datasets.download.streaming_download_manager import xPath
 from yaml.loader import SafeLoader
 
 from nanotron.config.lighteval_config import LightEvalConfig
@@ -108,6 +108,7 @@ class S3UploadArgs:
         if isinstance(self.s5cmd_path, str):
             self.s5cmd_path = xPath(self.s5cmd_path)
 
+
 @dataclass
 class NanosetDatasetsArgs:
     dataset_folder: Union[str, List[str]]
@@ -151,7 +152,6 @@ class CheckpointsArgs:
     checkpoints_path: where to save the checkpoints
     checkpoint_interval: how often to save the checkpoints
     resume_checkpoint_path: if you want to load from a specific checkpoint path
-
     """
 
     checkpoints_path: Path
@@ -350,7 +350,7 @@ class Config:
     data_stages: Optional[List[DatasetStageArgs]] = None
     profiler: Optional[ProfilerArgs] = None
     lighteval: Optional[LightEvalConfig] = None
-    s3_upload : Optional[S3UploadArgs] = None
+    s3_upload: Optional[S3UploadArgs] = None
 
     @classmethod
     def create_empty(cls):
@@ -358,7 +358,7 @@ class Config:
         return cls(**{f.name: None for f in cls_fields})
 
     def __post_init__(self):
-        
+
         if self.s3_upload is not None:
             self.s3_upload.__post_init__()
 
