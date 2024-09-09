@@ -69,7 +69,7 @@ def init_random_states(parallel_config: ParallelismArgs, tp_pg: ProcessGroup):
             {"tp_synced": get_synced_random_state(random_state=get_current_random_state(), pg=tp_pg)}
         )
     else:
-        # We don't need to sync across TP when using sequence parallel (REDUCE_SCATTER)
+        # NOTE: We don't need to sync across TP when using sequence parallel (REDUCE_SCATTER)
         random_states = RandomStates({})
     return random_states
 

@@ -19,7 +19,6 @@ from typing import (
     cast,
 )
 
-from nanotron.s3_checkpoints import S3Mover, check_path_is_local
 import torch
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
@@ -77,6 +76,7 @@ from nanotron.parallel.tied_parameters import (
     tie_parameters,
 )
 from nanotron.random import set_random_seed
+from nanotron.s3_checkpoints import S3Mover, check_path_is_local
 from nanotron.sanity_checks import (
     after_optim_step_sanity_checks,
     after_tbi_sanity_checks,
@@ -149,13 +149,11 @@ class DistributedTrainer:
             data_parallel_size=self.config.parallelism.dp,
             expert_parallel_size=self.config.parallelism.expert_parallel_size,
         )
-        
+
         self.pre_init()
 
         # Set log levels
         set_ranks_logging_level(parallel_context=self.parallel_context, logging_config=self.config.logging)
-
-
 
         # Log benchmark info
         if os.environ.get("NANOTRON_BENCHMARK", "0") == "1":
@@ -263,12 +261,11 @@ class DistributedTrainer:
     def post_init(self):
         # S3 Mover and save initial state
         if self.config.s3_upload is not None:
-            # Only local rank 0 should upload
+            # NOTE: Only local rank 0 should upload
             dummy = bool(int(os.environ.get("LOCAL_RANK", None)) != 0)
             self.s3_mover = S3Mover(
                 local_path=self.config.checkpoints.checkpoints_path,
                 s3_path=self.config.s3_upload.upload_s3_path,
-                # duplicate_checkpoint_path=self.config.checkpoints.resume_checkpoint_path,
                 remove_after_upload=self.config.s3_upload.remove_after_upload,
                 s5cmd_numworkers=self.config.s3_upload.s5cmd_numworkers,
                 s5cmd_concurrency=self.config.s3_upload.s5cmd_concurrency,
@@ -307,7 +304,7 @@ class DistributedTrainer:
     def post_training(self):
         if self.s3_mover is not None:
             self.s3_mover.distributed_wait_for_completion(group=self.parallel_context.world_pg)
-    
+
     def _print_training_plan(self):
         if hasattr(self.config, "data_stages") and self.config.data_stages is not None:
             stages_info = "".join(
@@ -464,10 +461,10 @@ class DistributedTrainer:
                     self.save_checkpoint()
 
         dist.barrier()  # let's wait for everyone before leaving
-        
+
         if self.config.checkpoints.save_final_state:
             self.save_checkpoint()
-        
+
         self.post_training()
 
     def training_step(
@@ -711,17 +708,21 @@ class DistributedTrainer:
     def _load_model_checkpoint(self, model: NanotronModel) -> NanotronModel:
         unwrapped_model = model.module if isinstance(model, DistributedDataParallel) else model
 
-        # Load or initialize model weights 
+        # Load or initialize model weights
         reloaded_from_checkpoint = False
         if self.init_checkpoint_path is not None:
-            # Load from a pre existing checkpoint 
+            # Load from a pre existing checkpoint
             if check_path_is_local(self.init_checkpoint_path):
-                # Reload from a training checkpoint 
-                log_rank(f"Loading weights from {self.init_checkpoint_path}", logger=logger, level=logging.INFO, rank=0)
-                self.param_shard_metadata = load_weights(
-                    model=unwrapped_model, parallel_context=self.parallel_context, root_folder=self.init_checkpoint_path
+                # Reload from a training checkpoint
+                log_rank(
+                    f"Loading weights from {self.init_checkpoint_path}", logger=logger, level=logging.INFO, rank=0
                 )
-            reloaded_from_checkpoint=True
+                self.param_shard_metadata = load_weights(
+                    model=unwrapped_model,
+                    parallel_context=self.parallel_context,
+                    root_folder=self.init_checkpoint_path,
+                )
+            reloaded_from_checkpoint = True
         if not reloaded_from_checkpoint:
             log_rank("No checkpoint path provided.", logger=logger, level=logging.INFO, rank=0)
             if isinstance(self.config.model.init_method, ExistingCheckpointInit):
@@ -864,7 +865,6 @@ class DistributedTrainer:
         # Upload to S3
         if self.s3_mover is not None:
             self.s3_mover.start_uploading()
-
 
     def save_checkpoint(self) -> Path:
         self.pre_save_checkpoint()
