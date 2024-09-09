@@ -2,6 +2,7 @@ import datetime
 import os
 from dataclasses import dataclass, fields
 from pathlib import Path
+from datasets.download.streaming_download_manager import xPath
 from typing import List, Optional, Type, Union
 
 import dacite
@@ -92,6 +93,22 @@ class PretrainDatasetsArgs:
 
 
 @dataclass
+class S3UploadArgs:
+    """Arguments related to uploading checkpoints on s3"""
+
+    upload_s3_path: xPath
+    remove_after_upload: bool
+    s5cmd_numworkers: Optional[int]
+    s5cmd_concurrency: Optional[int]
+    s5cmd_path: Optional[xPath]
+
+    def __post_init__(self):
+        if isinstance(self.upload_s3_path, str):
+            self.upload_s3_path = xPath(self.upload_s3_path)
+        if isinstance(self.s5cmd_path, str):
+            self.s5cmd_path = xPath(self.s5cmd_path)
+
+@dataclass
 class NanosetDatasetsArgs:
     dataset_folder: Union[str, List[str]]
     dataset_weights: Optional[List[float]] = None
@@ -141,14 +158,14 @@ class CheckpointsArgs:
     checkpoint_interval: int
     save_initial_state: Optional[bool] = False
     save_final_state: Optional[bool] = False
-    resume_checkpoint_path: Optional[Path] = None
+    resume_checkpoint_path: Optional[xPath] = None
     checkpoints_path_is_shared_file_system: Optional[bool] = False
 
     def __post_init__(self):
         if isinstance(self.checkpoints_path, str):
-            self.checkpoints_path = Path(self.checkpoints_path)
+            self.checkpoints_path = xPath(self.checkpoints_path)
         if isinstance(self.resume_checkpoint_path, str):
-            self.resume_checkpoint_path = Path(self.resume_checkpoint_path)
+            self.resume_checkpoint_path = xPath(self.resume_checkpoint_path)
 
 
 @dataclass
@@ -333,6 +350,7 @@ class Config:
     data_stages: Optional[List[DatasetStageArgs]] = None
     profiler: Optional[ProfilerArgs] = None
     lighteval: Optional[LightEvalConfig] = None
+    s3_upload : Optional[S3UploadArgs] = None
 
     @classmethod
     def create_empty(cls):
@@ -340,6 +358,10 @@ class Config:
         return cls(**{f.name: None for f in cls_fields})
 
     def __post_init__(self):
+        
+        if self.s3_upload is not None:
+            self.s3_upload.__post_init__()
+
         # Some final sanity checks across separate arguments sections:
         if self.profiler is not None and self.profiler.profiler_export_path is not None:
             assert self.tokens.train_steps < 10
