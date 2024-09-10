@@ -44,8 +44,7 @@ def set_nested_attribute(obj, path, value):
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config-path", help="path to the configuration file", type=str, default=None)
-    parser.add_argument("--base-config", help="base config to use", type=str, default=None)
+    parser.add_argument("--config-path", help="path to the configuration file", type=str, default=None, required=True)
     parser.add_argument("--run", help="name of the run", type=str, required=True)
     parser.add_argument("--logs-path", help="path to the logs folder", type=str, default="logs")
     parser.add_argument("--override", nargs="+", metavar="KEY=VALUE",
@@ -54,25 +53,8 @@ if __name__ == "__main__":
     parser.add_argument("--nodes", type=int, help="Number of nodes to use for the job")
     args = parser.parse_args()
 
-    supported_base_configs = {
-        "smollm-1700M-8nodes": "examples/smollm/configs/yaml/smollm-1700M-8nodes.yaml",
-        "smollm-360M-4nodes": "examples/smollm/configs/yaml/smollm-360M-4nodes.yaml",
-        "smollm-135M-4nodes": "examples/smollm/configs/yaml/smollm-135M-4nodes.yaml",
-        "smollm-135M-1gpu": "examples/smollm/configs/yaml/smollm-135M-1gpu.yaml",
-    } # add your base configs here {name: path}
-
-    if args.base_config is None and args.config_path is None:
-        raise ValueError("Please provide a base config or a config path")
-
-
-    if args.config_path is not None and args.base_config is not None:
-        print("Both config_path and base_config are provided. Using config_path and ignoring base_config.")
-        args.base_config = None
-
-    if args.base_config not in supported_base_configs.keys():
-        raise ValueError(f"Base config {args.base_config} is not supported. Please choose one of the following: {supported_base_configs}")
-    else:
-        args.config_path = supported_base_configs[args.base_config]
+    if args.config_path is None:
+        raise ValueError("Please provide a config path")
 
     if args.slurm:
         if args.nodes is None:
