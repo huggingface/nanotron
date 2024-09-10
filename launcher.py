@@ -94,10 +94,15 @@ if __name__ == "__main__":
     lr_decay_start = config.optimizer.learning_rate_scheduler.lr_decay_starting_step
     lr_decay_style = config.optimizer.learning_rate_scheduler.lr_decay_style
 
-    BS = config.tokens.micro_batch_size*config.tokens.batch_accumulation_per_replica*config.tokens.sequence_length
-    GBS = BS * config.parallelism.dp
-    
-    total_tokens = config.tokens.train_steps * GBS
+    # Sample/Token per GPU (at once)
+    bs_gpu_sample = config.tokens.micro_batch_size
+    bs_gpu_token = bs_gpu_sample * config.tokens.sequence_length
+
+    # Sample/Token in one step
+    gbs_sample = bs_gpu_sample * config.parallelism.dp*config.tokens.batch_accumulation_per_replica
+    gbs_token = gbs_sample * config.tokens.sequence_length
+
+    total_tokens = config.tokens.train_steps * gbs_token
     total_tokens_billions = human_format(total_tokens).replace(".", ",")
 
     print(f"""
@@ -130,8 +135,8 @@ if __name__ == "__main__":
 📙 Training Configuration:
 ┌───────────────────────┬────────────────────────┐
 │ Total Tokens          │ {total_tokens_billions:>22} │
-│ Global Batch Size     │ {GBS:>22,d} │
-│ Batch Size (per GPU)  │ {BS:>22,d} │
+│ Batch Size (per GPU)  │ {bs_gpu_token:>15,d} Tokens │
+│ Global Batch Size     │ {gbs_token:>15,d} Tokens │
 └───────────────────────┴────────────────────────┘
 """)
 
