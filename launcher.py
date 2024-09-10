@@ -311,14 +311,18 @@ if __name__ == "__main__":
 
         if is_interactive:
             print("💻 Running on an interactive node with GPUs.")
-            
-            total_gpus = gpu_count
-            config_gpus = config.parallelism.dp * config.parallelism.tp * config.parallelism.pp
-            
-            if total_gpus != config_gpus:
-                raise ValueError(f"The parallelism configuration (dp={config.parallelism.dp}, tp={config.parallelism.tp}, pp={config.parallelism.pp}) "
-                                 f"doesn't match the number of available GPUs ({total_gpus}). "
-                                 f"Please adjust your configuration to match the available resources.")
+            gpu_config = config.parallelism.dp * config.parallelism.tp * config.parallelism.pp
+            if gpu_count < gpu_config:
+                raise ValueError(f"Error: Your configuration (dp={config.parallelism.dp}, tp={config.parallelism.tp}, pp={config.parallelism.pp}) "
+                                 f"requires {gpu_config} GPUs, but only {gpu_count} are available.")
+            elif gpu_count == gpu_config:
+                print(f"🚀 Running on {gpu_count} GPUs, which matches your configuration (dp={config.parallelism.dp}, tp={config.parallelism.tp}, pp={config.parallelism.pp})")
+                total_gpus= gpu_count
+            elif gpu_count > gpu_config:
+                total_gpus= gpu_config
+                print(f"⚠️  Warning: Your configuration (dp={config.parallelism.dp}, tp={config.parallelism.tp}, pp={config.parallelism.pp}) "
+                      f"uses {total_gpus} GPUs, but {gpu_count} are available. "
+                      f"You are not fully utilizing all available GPUs on this device.")
             
             config_path_yaml = f"{config.general.config_logs_path}/launch.yaml"
             os.makedirs("config.general.config_logs_path", exist_ok=True)
@@ -327,7 +331,7 @@ if __name__ == "__main__":
             trainer_python_file = "run_train.py"
             cmd = f"{trainer_python_file} --config-file {args.config_path}"
 
-            launch_cmd = f"CUDA_DEVICE_MAX_CONNECTIONS='1' torchrun --nproc_per_node {gpu_count} {cmd}"
+            launch_cmd = f"CUDA_DEVICE_MAX_CONNECTIONS='1' torchrun --nproc_per_node {total_gpus} {cmd}"
             print(f"🚀 Launching interactive job with command: {launch_cmd}")
             
             subprocess.run(launch_cmd, shell=True, check=True)
