@@ -10,6 +10,7 @@ from typing import Optional, Union
 import torch
 from datasets.download.streaming_download_manager import xPath
 from filelock import FileLock, Timeout
+
 from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.distributed import ProcessGroup
@@ -19,7 +20,7 @@ logger = logging.get_logger(__name__)
 
 
 class S3Mover:
-    #TODO @eliebak update the doc to state that it also the function use to download it to the disk with start_downloading
+    # TODO @eliebak update the doc to state that it also the function use to download it to the disk with start_downloading
     """Take care of uploading a checkpoint to S3 in the background and remove it from the disk.
 
     Args:
@@ -70,7 +71,6 @@ class S3Mover:
         self,
         local_path: xPath,
         s3_path: xPath,
-        # duplicate_checkpoint_path: Optional[xPath] = None,
         post_upload_callback: Optional[callable] = None,
         remove_after_upload: Optional[bool] = True,
         s5cmd_numworkers: Optional[int] = None,
@@ -219,7 +219,7 @@ class S3Mover:
                 self._warning(
                     f"[S3] Waiting {self.state.value}: {all_saved} / {group.size()}. Stdout: {len(stdout_lines)} end: {stdout_lines[-1:]}",
                 )
-            # sync all our saves on NCCL we could do a dist barrier later but this helps us not loosing NCCL connections down the line
+            # sync all our saves on NCCL we could do a dist barrier later but this helps us not losing NCCL connections down the line
             test_tensor = torch.tensor([self.is_previous_save_finished()], device=torch.device("cuda"))
             test_tensor_list = [torch.zeros_like(test_tensor) for _ in range(group.size())]
             dist.all_gather(test_tensor_list, test_tensor, group=group, async_op=False)

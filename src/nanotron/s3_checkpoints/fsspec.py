@@ -19,7 +19,7 @@ def fs_open(
     file: Union[str, Path],
     mode="r",
 ):
-    # TODO @thomasw21: pass storage options
+    # TODO @thomasw21: pass storage options.
     fs, path = get_filesystem_and_path(file)
     with fs.open(path, mode=mode) as f:
         yield f

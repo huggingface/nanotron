@@ -78,6 +78,7 @@ from nanotron.parallel.tied_parameters import (
     tie_parameters,
 )
 from nanotron.random import set_random_seed
+from nanotron.s3_checkpoints import S3Mover, check_path_is_local
 from nanotron.sanity_checks import (
     after_optim_step_sanity_checks,
     after_tbi_sanity_checks,
@@ -330,7 +331,6 @@ class DistributedTrainer:
 
             
     def post_train_step(self):
-
         # Update our background upload/removal of checkpoints
         if self.s3_mover is not None:
             self.s3_mover.update()
@@ -338,12 +338,10 @@ class DistributedTrainer:
     def post_training(self):
         if self.s3_mover is not None:
             self.s3_mover.distributed_wait_for_completion(group=self.parallel_context.world_pg)
+    
     def post_training(self):
         if self.s3_mover is not None:
             self.s3_mover.distributed_wait_for_completion(group=self.parallel_context.world_pg)
-        
-        if dist.get_rank(self.parallel_context.world_pg) == 0 and wandb is not None:
-            wandb.finish()
 
     
     def _print_training_plan(self):
@@ -502,10 +500,10 @@ class DistributedTrainer:
                     self.save_checkpoint()
 
         dist.barrier()  # let's wait for everyone before leaving
-        
+
         if self.config.checkpoints.save_final_state:
             self.save_checkpoint()
-        
+
         self.post_training()
 
     def training_step(
@@ -761,6 +759,7 @@ class DistributedTrainer:
                     model=unwrapped_model, parallel_context=self.parallel_context, root_folder=self.init_checkpoint_path
                 )
             reloaded_from_checkpoint=True
+
         if not reloaded_from_checkpoint:
             log_rank("No checkpoint path provided.", logger=logger, level=logging.INFO, rank=0)
             if isinstance(self.config.model.init_method, ExistingCheckpointInit):
@@ -893,6 +892,7 @@ class DistributedTrainer:
         return loggerwriter
 
     def pre_save_checkpoint(self) -> Path:
+
         if wandb is not None and dist.get_rank(self.parallel_context.dp_pg) == 0:
             if self.config.general.wandb_id is None:       
                 self.config.general.wandb_id = wandb.run.id
@@ -916,8 +916,6 @@ class DistributedTrainer:
             # If we're not using S3, but we have a post-checkpoint callback for evals
             checkpoint_path = self.config.checkpoints.checkpoints_path / f"{self.config.general.step}"
             self.post_checkpoint_callback(checkpoint_path)
-
-        
 
     def save_checkpoint(self) -> Path:
         self.pre_save_checkpoint()

@@ -10,6 +10,7 @@ import dacite
 import torch
 import yaml
 from dacite import from_dict
+from datasets.download.streaming_download_manager import xPath
 from yaml.loader import SafeLoader
 
 from nanotron.config.lighteval_config import LightEvalConfig
@@ -109,19 +110,31 @@ class S3UploadArgs:
             self.s5cmd_path = Path(self.s5cmd_path)
 
 @dataclass
+class S3UploadArgs:
+    """Arguments related to uploading checkpoints on s3"""
+
+    upload_s3_path: xPath
+    remove_after_upload: bool
+    s5cmd_numworkers: Optional[int]
+    s5cmd_concurrency: Optional[int]
+    s5cmd_path: Optional[xPath]
+
+    def __post_init__(self):
+        if isinstance(self.upload_s3_path, str):
+            self.upload_s3_path = xPath(self.upload_s3_path)
+        if isinstance(self.s5cmd_path, str):
+            self.s5cmd_path = xPath(self.s5cmd_path)
+
+
+@dataclass
 class NanosetDatasetsArgs:
-    dataset_folder: Union[str, dict, List[str]]
+    dataset_folder: Union[str, List[str]]
+    dataset_weights: Optional[List[float]] = None
 
     def __post_init__(self):
         if isinstance(self.dataset_folder, str):  # Case 1: 1 Dataset folder
             self.dataset_folder = [self.dataset_folder]
             self.dataset_weights = [1]
-        elif isinstance(self.dataset_folder, List):  # Case 2: > 1 Dataset folder
-            self.dataset_weights = None  # Set to None so we consume all the samples randomly
-        elif isinstance(self.dataset_folder, dict):  # Case 3: dict with > 1 dataset_folder and weights
-            tmp_dataset_folder = self.dataset_folder.copy()
-            self.dataset_folder = list(tmp_dataset_folder.keys())
-            self.dataset_weights = list(tmp_dataset_folder.values())
 
 
 @dataclass
@@ -156,7 +169,6 @@ class CheckpointsArgs:
     checkpoints_path: where to save the checkpoints
     checkpoint_interval: how often to save the checkpoints
     resume_checkpoint_path: if you want to load from a specific checkpoint path
-
     """
 
     checkpoints_path: str
@@ -168,7 +180,7 @@ class CheckpointsArgs:
 
     def __post_init__(self):
         if isinstance(self.checkpoints_path, str):
-            self.checkpoints_path = Path(self.checkpoints_path)
+            self.checkpoints_path = xPath(self.checkpoints_path)
         if isinstance(self.resume_checkpoint_path, str):
             if check_path_is_local(self.resume_checkpoint_path):
                 self.resume_checkpoint_path = Path(self.resume_checkpoint_path)
@@ -377,10 +389,12 @@ class Config:
         return cls(**{f.name: None for f in cls_fields})
 
     def __post_init__(self):
+      
         if hasattr(self, '_post_init_done'):
             return
         self._post_init_done = True
         self.general.__post_init__()
+
         if self.s3_upload is not None:
             self.s3_upload.__post_init__()
 

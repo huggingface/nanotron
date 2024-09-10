@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from typing import Optional, cast
 from datasets.download.streaming_download_manager import xPath
@@ -5,6 +6,7 @@ import os
 
 from nanotron.s3_checkpoints import S3Mover, check_path_is_local, fs_open
 import torch
+from datasets.download.streaming_download_manager import xPath
 from torch import nn
 from torch.nn.parallel import DistributedDataParallel
 from torch.optim.lr_scheduler import LambdaLR
@@ -13,11 +15,11 @@ from nanotron import distributed as dist
 from nanotron import logging
 from nanotron import optim as optim
 from nanotron.config import Config
-from nanotron.constants import MODEL_CONFIG_FILE_NAME
 from nanotron.distributed import get_global_rank
 from nanotron.logging import log_rank
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter
+from nanotron.s3_checkpoints import S3Mover, check_path_is_local, fs_open
 from nanotron.sanity_checks import (
     assert_tensor_synced_across_pg,
     check_optim_state_in_sync,
@@ -43,7 +45,7 @@ Current way of thinking:
 
 Version 1:
  - serialize -> dumps every process weights in individual files
- - load -> assume topology is exactly the same
+ - load -> assume topology is exactly the same.
 """
 
 
@@ -283,10 +285,9 @@ def parse_ckpt_path(config: Config, parallel_context: ParallelContext) -> Option
                 rank=0,
             )
         else:
-            #We assume that the checkpoint path is from s3 (maybe add more cases later ?)
             latest_meta_path = config.checkpoints.resume_checkpoint_path / "latest.txt"
             if latest_meta_path.exists():
-                
+                # if latest.txt exists, we assume that the checkpoint path is a path to a folder containing the checkpoint
                 with fs_open(latest_meta_path, mode="r") as fi:
                     latest_iteration = int(fi.read())
                 s3_path = config.checkpoints.resume_checkpoint_path / str(latest_iteration)  # load_path
@@ -322,8 +323,4 @@ def parse_ckpt_path(config: Config, parallel_context: ParallelContext) -> Option
             s3_mover.start_downloading()
             s3_mover.distributed_wait_for_completion(parallel_context.world_pg)
 
-            # Replace S3 path with local path in config
         return checkpoint_path
-        # else:
-        #     raise Exception(f"{load_from_candidate} should be either a local link or a s3 link.")
-        #     return None

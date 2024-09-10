@@ -63,7 +63,6 @@ s3 = [
 lighteval = [
     "lighteval@git+https://github.com/eliebak/lighteval.git@current-nanotron",
 ]
-
 [build-system]
 requires = [
     "setuptools",
