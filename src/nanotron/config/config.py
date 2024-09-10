@@ -171,8 +171,8 @@ class CheckpointsArgs:
     resume_checkpoint_path: if you want to load from a specific checkpoint path
     """
 
-    checkpoints_path: str
     checkpoint_interval: int
+    checkpoints_path: Optional[str] = None
     save_initial_state: Optional[bool] = False
     save_final_state: Optional[bool] = False
     resume_checkpoint_path: Optional[str] = None
@@ -210,7 +210,7 @@ class GeneralArgs:
     slurm_logs_path: Optional[str] = None
     config_logs_path: Optional[str] = None
     evals_logs_path: Optional[str] = None
-    temp_dir: Optional[str] = None
+    temp_dir: Optional[str] = "temp_dir"
     seed: Optional[int] = None
     step: Optional[int] = None
     consumed_train_samples: Optional[int] = None

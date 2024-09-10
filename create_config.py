@@ -13,6 +13,7 @@ from nanotron.config import (
     Config,
     DataArgs,
     NanosetDatasetsArgs,
+    PretrainDatasetsArgs,
     S3UploadArgs,
     CheckpointsArgs,
     GeneralArgs,
@@ -80,7 +81,7 @@ if __name__ == "__main__":
         vocab_size=49152, 
     )
 
-
+    # Uncomment to evaluate the model on a set of tasks with lighteval during the training.
     # lighteval = LightEvalConfig(
     #     tasks=LightEvalTasksArgs(
     #         tasks="early-signal",  # "generatives", "all"
@@ -110,6 +111,7 @@ if __name__ == "__main__":
     #         hub_repo_tensorboard="smollm-evals-visualization",
     #         tensorboard_metric_prefix="eval",
     #     ),
+    #     temp_dir = "temp_dir",
     #     slurm_template="slurm/run_eval.slurm.jinja",
     #     # slurm_template="slurm/run_eval_s3.slurm.jinja", if s3 
 
@@ -118,9 +120,9 @@ if __name__ == "__main__":
     lighteval = None
 
     checkpoints = CheckpointsArgs(
-        checkpoints_path="checkpoints",
+        # checkpoints_path="checkpoints",
         checkpoints_path_is_shared_file_system=False,
-        # resume_checkpoint_path="",
+        # resume_checkpoint_path="local_path/to/checkpoint" or s3_path,
         checkpoint_interval=CHECKPOINT_INTERVAL,
         save_initial_state=False,
     )
@@ -161,7 +163,7 @@ if __name__ == "__main__":
         learning_rate=3e-3,
         lr_warmup_steps=10,
         lr_warmup_style="linear",
-        lr_decay_style="1-sqrt",
+        lr_decay_style="linear",
         lr_decay_steps = 20,
         lr_decay_starting_step=80 ,
         min_decay_lr=0,
@@ -198,11 +200,19 @@ if __name__ == "__main__":
     data_stages=[
         DatasetStageArgs(
             data=DataArgs(
-                dataset=NanosetDatasetsArgs(
-                    dataset_folder="datasets/cosmopedia-v2",
+                # 1. Un-tokenized dataset from HuggingFace
+                dataset=PretrainDatasetsArgs(
+                    hf_dataset_or_datasets="HuggingFaceTB/smollm-corpus", # feel free to replace it by a smaller one if you don't have enough memory
+                    hf_dataset_splits="train",
+                    hf_dataset_config_name="cosmopedia-v2",
+                    text_column_name="text",
                 ),
-                num_loading_workers=0,
-                seed=general.seed,
+                # 2. Pre-tokenized local dataset with Nanoset
+                # dataset=NanosetDatasetsArgs(
+                #     dataset_folder="datasets/cosmopedia-v2",
+                # ),
+                # num_loading_workers=0,
+                # seed=general.seed,
             ),
             name="training stage",
             start_training_step=1,

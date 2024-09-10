@@ -93,7 +93,7 @@ class LightEvalConfig:
 
     slurm_template: Optional[str] = None
     slurm_script_dir: Optional[str] = None
-    temp_dir: Optional[str] = None
+    temp_dir: Optional[str] = "temp_dir"
     checkpoints_path: Optional[str] = None
     parallelism: Optional[ParallelismArgs] = None
     batch_size: Optional[int] = None

@@ -177,11 +177,13 @@ if __name__ == "__main__":
     timestamp_with_run = f"run{run_number:03d}_{timestamp}"
     config.general.timestamp_with_run = timestamp_with_run
 
-    config.general.config_logs_path = f"{config.general.logs_path}/{args.run}/{timestamp_with_run}/config"
+    config.general.config_logs_path = str(Path(config.general.logs_path) / args.run / timestamp_with_run / "config")
     Path(config.general.config_logs_path).mkdir(parents=True, exist_ok=True)
-    
 
-    #making sure the logs path folder exists
+    if config.checkpoints.checkpoints_path is None:
+        config.checkpoints.checkpoints_path = str(Path(config.general.logs_path) / args.run / timestamp_with_run / "checkpoints")
+        Path(config.checkpoints.checkpoints_path).mkdir(parents=True, exist_ok=True)
+
 
     if args.slurm:
         
@@ -210,19 +212,24 @@ if __name__ == "__main__":
             subfolders.append('evals')
 
         for subfolder in subfolders:
-            folder_path = os.path.join(log_folder, subfolder)
-            os.makedirs(folder_path, exist_ok=True)
+            folder_path = str(log_folder / subfolder)
+            Path(folder_path).mkdir(parents=True, exist_ok=True)
             if subfolder == 'launch-script':
                 config.general.launch_script_path = folder_path
             elif subfolder == 'slurm-logs':
                 config.general.slurm_logs_path = folder_path
             elif subfolder == 'evals':
                 config.general.evals_logs_path = folder_path
-                for evals_subfolder in ['launch-config', 'logs']:
-                    evals_subfolder_path = os.path.join(config.general.evals_logs_path, evals_subfolder)
-                    os.makedirs(evals_subfolder_path, exist_ok=True)
-        
-        
+                for evals_subfolder in ['launch-config', 'logs',"lighteval-logs"]:
+                    if evals_subfolder == "lighteval-logs":
+                        if config.lighteval.logging.local_output_path is None:
+                            evals_subfolder_path = str(Path(config.general.evals_logs_path) / evals_subfolder)
+                            Path(evals_subfolder_path).mkdir(parents=True, exist_ok=True)
+                            config.lighteval.logging.local_output_path = evals_subfolder_path
+                    else:
+                        evals_subfolder_path = str(Path(config.general.evals_logs_path) / evals_subfolder)
+                        Path(evals_subfolder_path).mkdir(parents=True, exist_ok=True)
+
         torchrun_args = ""
         if 'torchrun_args' in launch_slurm_config and launch_slurm_config['torchrun_args']:
             torchrun_args = " ".join([f"--{k} {v}" for k, v in launch_slurm_config['torchrun_args'].items()])
@@ -252,7 +259,9 @@ if __name__ == "__main__":
         else:
             config.general.eval_slurm_config = None
 
-        config.save_as_yaml(launch_slurm_config["config_path_yaml"])
+        config_path_yaml = str(Path(config.general.config_logs_path) / "launch.yaml")
+        Path(config.general.config_logs_path).mkdir(parents=True, exist_ok=True)
+        config.save_as_yaml(config_path_yaml)
         
         # Launch the Slurm job
         job_id = launch_slurm_job(sbatch_script)
@@ -260,8 +269,9 @@ if __name__ == "__main__":
 
         # Save the Slurm script if a path is provided
         if config.general.launch_script_path:
-            os.makedirs(config.general.launch_script_path, exist_ok=True)
+            Path(config.general.launch_script_path).mkdir(parents=True, exist_ok=True)
             script_filename = f"slurm_launch_script.slurm"
+            script_path = str(Path(config.general.launch_script_path) / script_filename)
             script_path = os.path.join(config.general.launch_script_path, script_filename)
             
             with open(script_path, 'w') as f:
@@ -278,6 +288,8 @@ if __name__ == "__main__":
         print("    📁 Log structure:")
         print(f"    {config.general.logs_path}/{config.general.run}/")
         print(f"    └── {timestamp_with_run}/")
+        if config.checkpoints.checkpoints_path == str(Path(config.general.logs_path) / args.run / timestamp_with_run / "checkpoints"):
+            print("        ├── checkpoints/")
         print("        ├── config/")
         print("        ├── launch-script/")
         print("        ├── slurm-logs/")
@@ -285,8 +297,8 @@ if __name__ == "__main__":
             print("        └── evals/")
             print("            ├── launch-config/")
             print("            └── logs/")
-        else:
-            print("        └── (No evals folder)")
+            if config.lighteval.logging.local_output_path== str(Path(config.general.evals_logs_path) / "lighteval-logs"):
+                print("            └── lighteval-logs/")
 
     else:
         # Check if running on an interactive node
@@ -311,8 +323,8 @@ if __name__ == "__main__":
                       f"uses {total_gpus} GPUs, but {gpu_count} are available. "
                       f"You are not fully utilizing all available GPUs on this device.")
             
-            config_path_yaml = f"{config.general.config_logs_path}/launch.yaml"
-            os.makedirs("config.general.config_logs_path", exist_ok=True)
+            config_path_yaml = str(Path(config.general.config_logs_path) / "launch.yaml")
+            os.makedirs(config.general.config_logs_path, exist_ok=True)
             config.save_as_yaml(config_path_yaml)
 
             trainer_python_file = "run_train.py"
