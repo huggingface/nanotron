@@ -23,8 +23,8 @@ import torch
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
 
+from nanotron import constants, logging
 from nanotron import distributed as dist
-from nanotron import logging
 from nanotron.config import (
     Config,
     DatasetStageArgs,
@@ -134,6 +134,7 @@ class DistributedTrainer:
         self.config = get_config_from_file(
             config_or_config_file, config_class=config_class, model_config_class=model_config_class
         )
+        constants.CONFIG = self.config
         self.model_config = self.config.model.model_config
         if model_class is not None:
             CONFIG_TO_MODEL_CLASS[self.model_config.__class__.__name__] = model_class
@@ -210,6 +211,10 @@ class DistributedTrainer:
                 root_folder=self.init_checkpoint_path,
             )
 
+        ########################################
+        ## Setting up training states and data stages
+        ########################################
+
         # Define iteration start state
         if self.init_checkpoint_path is not None:
             checkpoint_metadata = load_meta(
@@ -233,15 +238,6 @@ class DistributedTrainer:
                 consumed_train_samples=0, last_train_step=0, last_stage_idx=0, data_stages=data_stages
             )
 
-        # Setup tensorboard write and log writers on output rank
-        self.logger_ranks = self.parallel_context.get_global_rank(
-            ep_rank=0, pp_rank=self.unwrapped_model.output_pp_rank, dp_rank=0, tp_rank=0
-        ).flatten()
-        self.loggerwriter = self.setup_log_writers()
-
-        # Log where each module is instantiated
-        self.unwrapped_model.log_modules(level=logging.DEBUG, group=self.parallel_context.world_pg, rank=0)
-
         self.micro_batch_size = self.config.tokens.micro_batch_size
         self.n_micro_batches_per_batch = self.config.tokens.batch_accumulation_per_replica
         self.global_batch_size = (
@@ -252,6 +248,27 @@ class DistributedTrainer:
         self.limit_val_batches = self.config.tokens.limit_val_batches
         # NOTE: the dataloader currently in use for the current training stage
         self.current_dataloader: Optional[DataLoader] = None
+
+        ########################################
+        ## Setting up logging and debugging tools
+        ########################################
+
+        # Setup tensorboard write and log writers on output rank
+        self.logger_ranks = self.parallel_context.get_global_rank(
+            ep_rank=0, pp_rank=self.unwrapped_model.output_pp_rank, dp_rank=0, tp_rank=0
+        ).flatten()
+        self.loggerwriter = self.setup_log_writers()
+
+        # Log where each module is instantiated
+        self.unwrapped_model.log_modules(level=logging.DEBUG, group=self.parallel_context.world_pg, rank=0)
+
+        if self.config.logging.monitor_model_states is True:
+            log_rank(
+                f"You have activated monitor model states. This could cause a slowdown in training. Only use it for debugging.",  # noqa
+                logger=logger,
+                level=logging.WARNING,
+                rank=0,
+            )
 
         self.post_init()
 
@@ -287,11 +304,12 @@ class DistributedTrainer:
             rank=0,
         )
 
-        current_time = datetime.datetime.now().strftime("%d/%m/%Y_%H:%M:%S")
+        datetime.datetime.now().strftime("%d/%m/%Y_%H:%M:%S")
         if dist.get_rank(self.parallel_context.world_pg) == self.logger_ranks[0] and wandb is not None:
             wandb.init(
                 project=self.config.general.project,
-                name=f"{current_time}_{self.config.general.run}",
+                # name=f"{current_time}_{self.config.general.run}",
+                name=f"{self.config.general.run}",
                 config={"nanotron_config": self.config.as_dict()},
             )
 
@@ -407,6 +425,74 @@ class DistributedTrainer:
                 dataloader=dataloader, parallel_context=self.parallel_context, config=self.config
             )
 
+    # def train(
+    #     self,
+    #     dataloader_or_dls: Dict[
+    #         str, Union[Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]], Tuple[Iterator, ...]]
+    #     ],
+    #     **kwargs,
+    # ) -> None:
+    #     self.pre_training(**kwargs)
+
+    #     if self.config.checkpoints.save_initial_state and self.init_checkpoint_path is None:
+    #         self.save_checkpoint()
+
+    #     self.pipeline_engine: PipelineEngine = self.config.parallelism.pp_engine
+
+    #     self.pipeline_engine.nb_microbatches = self.n_micro_batches_per_batch
+
+    #     # TODO @nouamanetazi: refactor this
+    #     # Useful mapping
+    #     self.unwrapped_model = self.model.module if isinstance(self.model, DistributedDataParallel) else self.model
+    #     self.unwrapped_model.module_id_to_prefix = {
+    #         id(module): f"{module_name}." for module_name, module in self.unwrapped_model.named_modules()
+    #     }
+    #     # Fix the root_model
+    #     self.unwrapped_model.module_id_to_prefix[id(self.unwrapped_model)] = ""
+
+    #     prof = get_profiler(config=self.config)
+    #     torch.cuda.empty_cache()
+    #     with prof:
+    #         for self.iteration_step in range(self.metadata.last_train_step + 1, self.config.tokens.train_steps + 1):
+    #             if isinstance(prof, torch.profiler.profile):
+    #                 prof.step()
+
+    #             self.iteration_start_time = time.time()
+    #             self._update_dataloader_based_on_training_stages(dataloader_or_dls)
+
+    #             is_ready_to_log = (self.iteration_step - 1) % self.config.logging.iteration_step_info_interval == 0
+    #             if is_ready_to_log is True and self.config.logging.monitor_model_states is True:
+    #                 nn_logs, state_handles = monitor_model(self.unwrapped_model, self.parallel_context)
+
+    #             # Training step
+    #             outputs, loss_avg = self.training_step(dataloader=self.current_dataloader)
+
+    #             # Training Logs
+    #             # TODO(xrsrke): refactor using callbacks would be better
+    #             self.metadata.consumed_train_samples += self.global_batch_size
+    #             self.metadata.last_train_step = self.iteration_step
+    #             self.metadata.data_stages[
+    #                 self.metadata.last_stage_idx
+    #             ].consumed_train_samples += self.global_batch_size
+
+    #             if is_ready_to_log is True:
+    #                 self.train_step_logs(outputs=outputs, loss_avg=loss_avg)
+
+    #                 if self.config.logging.monitor_model_states is True and \
+    #                     dist.get_rank(self.parallel_context.world_pg) == self.logger_ranks[0] and wandb is not None:
+    #                     wandb.log({**convert_logs_to_flat_logs(nn_logs), "iteration_step": self.iteration_step})
+
+    #             # Checkpoint
+    #             if self.iteration_step % self.config.checkpoints.checkpoint_interval == 0:
+    #                 self.save_checkpoint()
+
+    #             for handle in state_handles:
+    #                 handle.remove()
+
+    #     dist.barrier()  # let's wait for everyone before leaving
+
+    #     self.post_training()
+
     def train(
         self,
         dataloader_or_dls: Dict[
@@ -434,10 +520,27 @@ class DistributedTrainer:
 
         prof = get_profiler(config=self.config)
         torch.cuda.empty_cache()
+        rank_to_monitor = (
+            dist.get_rank(group=self.parallel_context.dp_pg) == 0
+            and dist.get_rank(group=self.parallel_context.tp_pg) == 0
+        )
+        constants.IS_RANK_TO_MONITOR = rank_to_monitor
+
         with prof:
-            for self.iteration_step in range(self.metadata.last_train_step + 1, self.config.tokens.train_steps + 1):
+            for self.iteration_step in range(self.iteration_step + 1, self.config.tokens.train_steps + 1):
+                constants.GLOBAL_STEP = self.iteration_step
+
                 if isinstance(prof, torch.profiler.profile):
                     prof.step()
+
+                if (
+                    self.iteration_step - 1
+                ) % constants.LOG_STATE_INTERVAL == 0 and constants.IS_RANK_TO_MONITOR is True:
+                    from nanotron.scaling.monitor import monitor_nanotron_model
+
+                    nn_logs, nn_handles = monitor_nanotron_model(
+                        run_name=self.config.general.run, model=self.model, parallel_context=self.parallel_context
+                    )
 
                 self.iteration_start_time = time.time()
                 self._update_dataloader_based_on_training_stages(dataloader_or_dls)
@@ -445,16 +548,19 @@ class DistributedTrainer:
                 # Training step
                 outputs, loss_avg = self.training_step(dataloader=self.current_dataloader)
 
-                # Training Logs
-                # TODO(xrsrke): refactor using callbacks would be better
-                self.metadata.consumed_train_samples += self.global_batch_size
-                self.metadata.last_train_step = self.iteration_step
-                self.metadata.data_stages[
-                    self.metadata.last_stage_idx
-                ].consumed_train_samples += self.global_batch_size
-
                 if (self.iteration_step - 1) % self.config.logging.iteration_step_info_interval == 0:
                     self.train_step_logs(outputs=outputs, loss_avg=loss_avg)
+
+                if (
+                    self.iteration_step - 1
+                ) % constants.LOG_STATE_INTERVAL == 0 and constants.IS_RANK_TO_MONITOR is True:
+                    from nanotron.scaling.monitor import convert_logs_to_flat_logs
+
+                    if dist.get_rank(self.parallel_context.world_pg) == self.logger_ranks[0] and wandb is not None:
+                        wandb.log({**convert_logs_to_flat_logs(nn_logs), "iteration_step": self.iteration_step})
+
+                    for handle in nn_handles:
+                        handle.remove()
 
                 # Checkpoint
                 if self.iteration_step % self.config.checkpoints.checkpoint_interval == 0:
