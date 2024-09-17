@@ -742,6 +742,17 @@ class DistributedTrainer:
                 random_states=self.random_states,
             ),
         )
+
+        for p in model.model.token_position_embeddings.parameters():
+            p.mup_type = "weight"
+            # NOTE: https://github.com/graphcore-research/unit-scaling/blob/50ea961f1c0f2939a4bd7c8b9ada41acf9a583e4/examples/demo.ipynb
+            # line 8
+            p.mup_scaling_depth = None
+
+        for p in model.model.lm_head.parameters():
+            p.mup_type = "output"
+            p.mup_scaling_depth = None
+        
         return model
 
     def _load_model_checkpoint(self, model: NanotronModel) -> NanotronModel:

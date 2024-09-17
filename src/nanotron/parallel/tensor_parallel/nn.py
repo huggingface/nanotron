@@ -37,6 +37,8 @@ from nanotron.parallel.tensor_parallel.functional import (
     row_linear,
 )
 from nanotron.parallel.tied_parameters import create_tied_parameter
+import unit_scaling as uu
+import unit_scaling.functional as U
 
 
 class TensorParallelColumnLinear(nn.Linear):
@@ -51,6 +53,7 @@ class TensorParallelColumnLinear(nn.Linear):
         dtype=None,
         async_communication: bool = False,
         contiguous_chunks: Optional[Tuple[int, ...]] = None,
+        weight_mup_type: str = None
     ):
         self.pg = pg
         self.world_size = pg.size()
@@ -59,6 +62,10 @@ class TensorParallelColumnLinear(nn.Linear):
 
         self.in_features = in_features
         self.out_features = out_features // self.world_size
+        
+        self._orig_in_features = in_features
+        self._orig_out_features = out_features
+        self.weight_mup_type = weight_mup_type
 
         super().__init__(
             in_features=self.in_features,
@@ -91,6 +98,9 @@ class TensorParallelColumnLinear(nn.Linear):
             group=self.pg,
             tp_mode=self.mode,
             async_communication=self.async_communication,
+            orig_in_features=self._orig_in_features,
+            orig_out_features=self._orig_out_features,
+            weight_mup_type=self.weight_mup_type
         )
 
     def extra_repr(self) -> str:
@@ -109,6 +119,7 @@ class TensorParallelRowLinear(nn.Linear):
         dtype=None,
         async_communication: bool = False,
         contiguous_chunks: Optional[Tuple[int, ...]] = None,
+        weight_mup_type: str = None
     ):
         self.pg = pg
         self.world_size = pg.size()
@@ -117,6 +128,10 @@ class TensorParallelRowLinear(nn.Linear):
 
         self.in_features = in_features // self.world_size
         self.out_features = out_features
+        
+        self._orig_in_features = in_features
+        self._orig_out_features = out_features
+        self.weight_mup_type = weight_mup_type
 
         # No need to shard the bias term, only rank 0 would have it
         bias = dist.get_rank(self.pg) == 0 and bias
@@ -163,6 +178,9 @@ class TensorParallelRowLinear(nn.Linear):
             group=self.pg,
             tp_mode=self.mode,
             async_communication=self.async_communication,
+            orig_in_features=self._orig_in_features,
+            orig_out_features=self._orig_out_features,
+            weight_mup_type=self.weight_mup_type
         )
 
     def extra_repr(self) -> str:
@@ -217,7 +235,7 @@ class TiedLinear(nn.Linear):
         return y
 
 
-class TensorParallelEmbedding(nn.Embedding):
+class TensorParallelEmbedding(uu.Embedding):
     def __init__(
         self,
         num_embeddings,
@@ -281,7 +299,17 @@ class TensorParallelEmbedding(nn.Embedding):
             masked_input[input_mask] = 0
         else:
             masked_input = input_ids
-        out = super().forward(masked_input)
+        
+        # out = super().forward(masked_input)
+        out = U.embedding(
+            masked_input,
+            self.weight,
+            self.padding_idx,
+            self.max_norm,
+            self.norm_type,
+            self.scale_grad_by_freq,
+            self.sparse,
+        )
 
         if self.pg.size() > 1:
             out = out * (~input_mask[..., None])

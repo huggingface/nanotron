@@ -305,22 +305,24 @@ def init_optimizer_and_grad_accumulator(
     # Fix the root_model
     module_id_to_prefix[id(unwrapped_model)] = ""
 
-    named_parameters = list(unwrapped_model.get_named_params_with_correct_tied())
+    # named_parameters = list(unwrapped_model.get_named_params_with_correct_tied())
 
-    named_param_groups_with_lr = get_custom_lr_for_named_parameters(
-        parametrization_method=parametrization_method,
-        named_parameters=named_parameters,
-        model=unwrapped_model,
-        lr=optimizer_args.learning_rate_scheduler.learning_rate,
-    )
-    named_param_groups_with_weight_decay = get_custom_weight_decay_for_named_parameters(
-        named_parameters=named_parameters,
-        model=unwrapped_model,
-        module_id_to_prefix=module_id_to_prefix,
-        weight_decay=optimizer_args.weight_decay,
-    )
+    # named_param_groups_with_lr = get_custom_lr_for_named_parameters(
+    #     parametrization_method=parametrization_method,
+    #     named_parameters=named_parameters,
+    #     model=unwrapped_model,
+    #     lr=optimizer_args.learning_rate_scheduler.learning_rate,
+    # )
+    # named_param_groups_with_weight_decay = get_custom_weight_decay_for_named_parameters(
+    #     named_parameters=named_parameters,
+    #     model=unwrapped_model,
+    #     module_id_to_prefix=module_id_to_prefix,
+    #     weight_decay=optimizer_args.weight_decay,
+    # )
 
-    named_param_groups = merge_named_param_groups(named_param_groups_with_lr, named_param_groups_with_weight_decay)
+    # named_param_groups = merge_named_param_groups(named_param_groups_with_lr, named_param_groups_with_weight_decay)
+    named_parameters = unwrapped_model.named_parameters()
+    named_param_groups = named_parameters
 
     # Basic optimizer builder
     def basic_optimizer_builder(named_param_groups):

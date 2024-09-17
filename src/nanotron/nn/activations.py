@@ -145,8 +145,10 @@ class SiLUActivation(nn.Module):
     later.
     """
 
-    def forward(self, input: Tensor) -> Tensor:
-        return nn.functional.silu(input)
+    def forward(self, *args, **kwargs) -> Tensor:
+        import unit_scaling.functional as U
+        # return nn.functional.silu(input)
+        return U.silu_glu(*args, **kwargs)
 
 
 class MishActivation(nn.Module):

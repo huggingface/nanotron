@@ -345,6 +345,9 @@ def column_linear(
     group: dist.ProcessGroup,
     tp_mode: TensorParallelLinearMode,
     async_communication: bool,
+    orig_in_features: Optional[int] = None,
+    orig_out_features: Optional[int] = None,
+    weight_mup_type: Optional[str] = None,
 ):
     if async_communication:
         return _ColumnLinearAsyncCommunication.apply(input, weight, bias, group, tp_mode)
@@ -356,7 +359,15 @@ def column_linear(
     else:
         raise ValueError(f"Got unexpected mode: {tp_mode}.")
 
-    return F.linear(input, weight, bias)
+    # return F.linear(input, weight, bias)
+    from nanotron.scaling.unit_mup import linear
+    from nanotron.unit_mup.constants import WEIGHT_TYPE_TO_SCALE_POWER
+    return linear(
+        input, weight, bias,
+        orig_shape=(orig_in_features, orig_out_features),
+        # scale_power=(0.5, 0.5, 0.5),
+        scale_power=WEIGHT_TYPE_TO_SCALE_POWER[weight_mup_type]
+    )
 
 
 class _RowLinearAsyncCommunication(torch.autograd.Function):
@@ -467,11 +478,23 @@ def row_linear(
     group: dist.ProcessGroup,
     tp_mode: TensorParallelLinearMode,
     async_communication: bool,
+    orig_in_features: Optional[int] = None,
+    orig_out_features: Optional[int] = None,
+    weight_mup_type: Optional[str] = None,
 ):
     if async_communication:
         return _RowLinearAsyncCommunication.apply(input, weight, bias, group, tp_mode)
 
-    out = F.linear(input, weight, bias)
+    # out = F.linear(input, weight, bias)
+    
+    from nanotron.scaling.unit_mup import linear
+    from nanotron.unit_mup.constants import WEIGHT_TYPE_TO_SCALE_POWER
+    out = linear(
+        input, weight, bias,
+        orig_shape=(orig_in_features, orig_out_features),
+        # scale_power=(0.5, 0.5, 0.5),
+        scale_power=WEIGHT_TYPE_TO_SCALE_POWER[weight_mup_type]
+    )
 
     if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
         out = differentiable_all_reduce_sum(out, group=group)

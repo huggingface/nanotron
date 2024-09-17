@@ -44,7 +44,20 @@ class CustomAdamW(Optimizer):
         if not 0.0 <= betas[1] < 1.0:
             raise ValueError("Invalid beta parameter at index 1: {}".format(betas[1]))
         defaults = {"lr": lr, "betas": betas, "eps": eps, "weight_decay": weight_decay, "amsgrad": False}
-        super().__init__(params, defaults)
+        # super().__init__(params, defaults)
+        
+        from unit_scaling.optim import scaled_parameters, lr_scale_func_adam
+        
+        params = scaled_parameters(
+            params,
+            lr_scale_func_adam,
+            lr=lr,
+            weight_decay=weight_decay,
+            independent_weight_decay=True,
+            allow_non_unit_scaling_params=False,
+        )
+        super().__init__(params, defaults=defaults)
+        
 
         self.loggings = {}
 
@@ -102,7 +115,7 @@ class CustomAdamW(Optimizer):
                 state = self.state[p]
 
                 if len(state) == 0:
-                    state["step"] = 0
+                    state["step"] = torch.tensor(0, dtype=grad.dtype, device=grad.device)
                     state["exp_avg"] = torch.zeros_like(p.data)
                     state["exp_avg_sq"] = torch.zeros_like(p.data)
 

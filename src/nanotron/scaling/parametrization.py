@@ -138,6 +138,52 @@ class SpectralMupParametrizator(Parametrizator):
             init.normal_(module.weight, mean=0.0, std=self.std)
 
 
+class UnitMupParametrizator(Parametrizator):
+    def __init__(self, config: ModelArgs):
+        super().__init__(config)
+        self.MODULE_TO_PARAMETRIZE = {
+            TensorParallelColumnLinear: self._parametrize_column_linear,
+            TensorParallelRowLinear: self._parametrize_row_linear,
+            TritonRMSNorm: self._parametrize_layer_norm,
+            nn.LayerNorm: self._parametrize_layer_norm,
+            TensorParallelEmbedding: self._parametrize_embedding,
+        }
+
+        self.std = config.init_method.std
+        self.num_layers = config.model_config.num_hidden_layers
+
+    def _parametrize_column_linear(self, param_name: str, module: nn.Module):
+        assert param_name in ["weight", "bias"]
+
+        if "weight" == param_name:
+            init.normal_(module.weight)
+        elif "bias" == param_name:
+            module.bias.zero_()
+
+    def _parametrize_row_linear(self, param_name: str, module: nn.Module):
+        assert param_name in ["weight", "bias"]
+
+        if "weight" == param_name:
+            init.normal_(module.weight)
+        elif "bias" == param_name:
+            module.bias.zero_()
+
+    def _parametrize_layer_norm(self, param_name: str, module: nn.Module):
+        assert param_name in ["weight", "bias"]
+
+        if "weight" == param_name:
+            # TODO @thomasw21: Sometimes we actually want 0
+            module.weight.fill_(1)
+        elif "bias" == param_name:
+            module.bias.zero_()
+
+    def _parametrize_embedding(self, param_name: str, module: nn.Module):
+        assert param_name in ["weight"]
+
+        if "weight" == param_name:
+            init.normal_(module.weight)
+    
+
 class LearningRateForParametrizator:
     def __init__(self, lr: float, names_to_modules: Dict[str, nn.Module]):
         self.lr = lr
