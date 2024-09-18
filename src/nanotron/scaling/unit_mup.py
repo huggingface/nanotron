@@ -12,8 +12,10 @@ def linear(
     weight: Tensor,
     bias: Optional[Tensor],
     orig_shape: Tuple[int, int],
-    constraint: Optional[str] = "to_output_scale",
-    scale_power: Tuple[float, float, float] = (0.5, 0.5, 0.5),
+    scale_power,
+    # constraint: Optional[str] = "to_output_scale",
+    constraint: Optional[str],
+    # scale_power: Tuple[float, float, float] = (0.5, 0.5, 0.5),
 ) -> Tensor:
     # fan_out, fan_in = weight.shape
     fan_in, fan_out = orig_shape
@@ -26,6 +28,9 @@ def linear(
     output_scale = 1 / fan_in ** scale_power[0]
     grad_input_scale = 1 / fan_out ** scale_power[1]
     grad_weight_scale = grad_bias_scale = 1 / batch_size ** scale_power[2]
+
+    if constraint is None:
+        assert 1 == 1
 
     output_scale, grad_input_scale = apply_constraint(
         constraint, output_scale, grad_input_scale

@@ -124,6 +124,9 @@ class CustomAdamW(Optimizer):
 
                 state["step"] += 1
 
+                if state["step"] == 100:
+                    assert 1 == 1
+
                 exp_avg = beta1 * exp_avg + (1 - beta1) * grad
                 exp_avg_sq = beta2 * exp_avg_sq + (1 - beta2) * grad.pow(2)
 

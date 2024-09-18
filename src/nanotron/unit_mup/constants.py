@@ -6,3 +6,9 @@ WEIGHT_TYPE_TO_SCALE_POWER = {
     "hidden": HIDDEN_WEIGHT_SCALE_POWER,
     "output": LM_HEAD_SCALE_POWER,
 }
+
+WEIGHT_TYPE_TO_CONSTRAINT = {
+    "hidden": "to_output_scale",
+    # "output": None
+    "output": None,
+}

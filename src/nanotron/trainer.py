@@ -57,7 +57,8 @@ from nanotron.logging import (
 )
 from nanotron.models import NanotronModel, build_model
 from nanotron.models.base import check_model_has_grad
-from nanotron.models.llama import LlamaForTraining, RotaryEmbedding
+# from nanotron.models.llama import LlamaForTraining, RotaryEmbedding
+from nanotron.models.unit_llama import LlamaForTraining
 from nanotron.models.starcoder2 import Starcoder2ForTraining
 from nanotron.optim.clip_grads import clip_grad_norm
 from nanotron.parallel import ParallelContext
@@ -435,6 +436,10 @@ class DistributedTrainer:
 
         prof = get_profiler(config=self.config)
         torch.cuda.empty_cache()
+
+        for n, p in self.unwrapped_model.named_parameters():
+            print(f"name: {n}, p.mup_type: {p.mup_type}, p.mup_scaling_depth={p.mup_scaling_depth}, std: {p.std()}, var: {p.var()}")
+
         with prof:
             for self.iteration_step in range(self.metadata.last_train_step + 1, self.config.tokens.train_steps + 1):
                 if isinstance(prof, torch.profiler.profile):
@@ -743,15 +748,15 @@ class DistributedTrainer:
             ),
         )
 
-        for p in model.model.token_position_embeddings.parameters():
-            p.mup_type = "weight"
-            # NOTE: https://github.com/graphcore-research/unit-scaling/blob/50ea961f1c0f2939a4bd7c8b9ada41acf9a583e4/examples/demo.ipynb
-            # line 8
-            p.mup_scaling_depth = None
+        # for p in model.model.token_position_embeddings.parameters():
+        #     p.mup_type = "weight"
+        #     # NOTE: https://github.com/graphcore-research/unit-scaling/blob/50ea961f1c0f2939a4bd7c8b9ada41acf9a583e4/examples/demo.ipynb
+        #     # line 8
+        #     p.mup_scaling_depth = None
 
-        for p in model.model.lm_head.parameters():
-            p.mup_type = "output"
-            p.mup_scaling_depth = None
+        # for p in model.model.lm_head.parameters():
+        #     p.mup_type = "output"
+        #     p.mup_scaling_depth = None
         
         return model
 
@@ -778,7 +783,8 @@ class DistributedTrainer:
                     root_folder=self.config.model.init_method.path,
                 )
             elif isinstance(self.config.model.init_method, (RandomInit, SpectralMupInit)):
-                unwrapped_model.init_model_randomly(config=self.config)
+                # NOTE: keep unit_scaling's default init
+                # unwrapped_model.init_model_randomly(config=self.config)
 
                 # Synchronize parameters so that the model is consistent
                 # sync all params across dp
@@ -821,11 +827,13 @@ class DistributedTrainer:
             model_builder=model_builder,
         )
 
+        assert 1 == 1
+
         # Initialize rotary embeddings
-        for module in model.modules():
-            if not isinstance(module, RotaryEmbedding):
-                continue
-            module.init_rotary_embeddings()
+        # for module in model.modules():
+        #     if not isinstance(module, RotaryEmbedding):
+        #         continue
+        #     module.init_rotary_embeddings()
 
         # Mark some parameters as tied
         self._mark_tied_parameters(model=model, parallel_context=parallel_context, parallel_config=parallel_config)

@@ -125,7 +125,14 @@ class NanotronParameter(nn.Parameter):
             )
         else:
             setattr(param, cls.NANOTRON_PARAMETER_METADATA_ATTRIBUTE_NAME, {})
-
+        
+        # NOTE:
+        unit_scaling_attrs = ["mup_type", "mup_scaling_depth"]
+        # NOTE: copy all the attributes from the tensor to the parameter
+        for attr in unit_scaling_attrs:
+            if hasattr(tensor, attr):
+                setattr(param, attr, getattr(tensor, attr))
+        
         return param
 
     def _set_metadata(self, key: str, value: Any):

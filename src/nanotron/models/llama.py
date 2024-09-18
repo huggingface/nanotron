@@ -177,7 +177,7 @@ class MLP(nn.Module):
             pg=tp_pg,
             mode=tp_mode,
             bias=False,
-            async_communication=tp_linear_async_communication,
+            async_communication=False,
             # contiguous_chunks=gate_up_contiguous_chunks,
             weight_mup_type="hidden",
         )
@@ -188,7 +188,8 @@ class MLP(nn.Module):
             pg=tp_pg,
             mode=tp_mode,
             bias=False,
-            async_communication=tp_linear_async_communication and tp_mode is TensorParallelLinearMode.REDUCE_SCATTER,
+            # async_communication=tp_linear_async_communication and tp_mode is TensorParallelLinearMode.REDUCE_SCATTER,
+            async_communication=False,
             weight_mup_type="hidden"
         )
         # TODO @nouamane: why can't we torch.jit.script GLUActivation?
@@ -450,7 +451,8 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             pg=tp_pg,
             mode=tp_mode,
             bias=False,
-            async_communication=tp_linear_async_communication,
+            # async_communication=tp_linear_async_communication,
+            async_communication=False,
             contiguous_chunks=qkv_contiguous_chunks,
             weight_mup_type="hidden"
         )
@@ -470,7 +472,8 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             pg=tp_pg,
             mode=tp_mode,
             bias=False,
-            async_communication=tp_linear_async_communication,
+            # async_communication=tp_linear_async_communication,
+            async_communication=False,
             weight_mup_type="hidden"
         )
 
@@ -797,7 +800,7 @@ class LlamaDecoderLayer(nn.Module):
         hidden_states = self.mlp_norm(hidden_states)
         hidden_states = self.mlp(hidden_states=hidden_states)["hidden_states"]
         # hidden_states = hidden_states + skip
-        hidden_states = U.residual_add(input=hidden_states, skip=skip, tau=self.mlp_tau)
+        hidden_states = U.residual_add(residual=hidden_states, skip=skip, tau=self.mlp_tau)
 
         return {
             "hidden_states": hidden_states,
@@ -909,8 +912,9 @@ class LlamaModel(nn.Module):
                 "bias": False,
                 # TODO @thomasw21: refactor so that we store that default in a single place.
                 "mode": self.tp_mode,
-                "async_communication": tp_linear_async_communication,
-                "weight_mup_type": "output"
+                # "async_communication": tp_linear_async_communication,
+                "async_communication": False,
+                "weight_mup_type": "output",
             },
             module_input_keys={"x"},
             module_output_keys={"logits"},

@@ -361,11 +361,12 @@ def column_linear(
 
     # return F.linear(input, weight, bias)
     from nanotron.scaling.unit_mup import linear
-    from nanotron.unit_mup.constants import WEIGHT_TYPE_TO_SCALE_POWER
+    from nanotron.unit_mup.constants import WEIGHT_TYPE_TO_SCALE_POWER, WEIGHT_TYPE_TO_CONSTRAINT
     return linear(
         input, weight, bias,
         orig_shape=(orig_in_features, orig_out_features),
         # scale_power=(0.5, 0.5, 0.5),
+        constraint=WEIGHT_TYPE_TO_CONSTRAINT[weight_mup_type],
         scale_power=WEIGHT_TYPE_TO_SCALE_POWER[weight_mup_type]
     )
 
@@ -488,11 +489,12 @@ def row_linear(
     # out = F.linear(input, weight, bias)
     
     from nanotron.scaling.unit_mup import linear
-    from nanotron.unit_mup.constants import WEIGHT_TYPE_TO_SCALE_POWER
+    from nanotron.unit_mup.constants import WEIGHT_TYPE_TO_SCALE_POWER, WEIGHT_TYPE_TO_CONSTRAINT
     out = linear(
         input, weight, bias,
         orig_shape=(orig_in_features, orig_out_features),
         # scale_power=(0.5, 0.5, 0.5),
+        constraint=WEIGHT_TYPE_TO_CONSTRAINT[weight_mup_type],
         scale_power=WEIGHT_TYPE_TO_SCALE_POWER[weight_mup_type]
     )
 

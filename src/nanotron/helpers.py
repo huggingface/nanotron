@@ -360,6 +360,27 @@ def init_optimizer_and_grad_accumulator(
                     betas=(optimizer_args.optimizer_factory.adam_beta1, optimizer_args.optimizer_factory.adam_beta2),
                     # fused=optimizer_args.optimizer_factory.torch_adam_is_fused,
                 )
+        
+        elif optimizer_args.optimizer_factory.name == "unit_mup_adamW":
+            from unit_scaling.optim import AdamW
+
+            log_rank(
+                "[DEBUGGING] Using unitmup's AdamW",
+                logger=logger,
+                level=logging.WARNING,
+                group=parallel_context.world_pg,
+                rank=0,
+            )
+
+            def optimizer(param_groups):
+                return AdamW(
+                    param_groups,
+                    lr=optimizer_args.learning_rate_scheduler.learning_rate,
+                    weight_decay=optimizer_args.weight_decay,
+                    eps=optimizer_args.optimizer_factory.adam_eps,
+                    betas=(optimizer_args.optimizer_factory.adam_beta1, optimizer_args.optimizer_factory.adam_beta2),
+                    # fused=optimizer_args.optimizer_factory.torch_adam_is_fused,
+                )
 
         elif optimizer_args.optimizer_factory.name == "sgd":
 
@@ -925,7 +946,7 @@ def track_weight_and_grad_stats(name: str, module: nn.Module, parallel_context: 
 
     handles = []
     handles.append(module.register_forward_hook(_save_output_stats))
-    # handles.append(module.register_backward_hook(_save_grad_stats))
+    handles.append(module.register_backward_hook(_save_grad_stats))
     # return logs, handles
     return handles
 
