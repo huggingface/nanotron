@@ -54,11 +54,22 @@ class CustomAdamW(Optimizer):
             group.setdefault("amsgrad", False)
 
     def _get_optim_logs(self, loggings):
+        def _find_param_name(p):
+            if hasattr(self, "grad_accumulator"):
+                for name in self.grad_accumulator.parameters:
+                    if self.grad_accumulator.parameters[name]["fp32"] is p:
+                        return name
+            else:
+                return self.params_id_to_param_names[id(p)]
+
+            raise ValueError("Could not find the parameter name")
+
         from nanotron.helpers import convert_logs_to_flat_logs
 
         optim_loggings = {}
         for p in loggings:
-            param_name = self.params_id_to_param_names[id(p)]
+            # param_name = self.params_id_to_param_names[id(p)]
+            param_name = _find_param_name(p)
             optim_loggings[param_name] = loggings[p]
         return convert_logs_to_flat_logs(optim_loggings)
 
@@ -171,22 +182,26 @@ class CustomAdamW(Optimizer):
                     loggings[p]["bias_correction1"] = {"value": bias_correction1}
                     loggings[p]["bias_correction2"] = {"value": bias_correction2}
 
-                    loggings[p]["exp_avg"] = compute_tensor_stats(exp_avg)
-                    loggings[p]["exp_avg_sq"] = compute_tensor_stats(exp_avg_sq)
-                    loggings[p]["exp_avg_hat"] = compute_tensor_stats(exp_avg_hat)
-                    loggings[p]["exp_avg_sq_hat"] = compute_tensor_stats(exp_avg_sq_hat)
+                    loggings[p]["exp_avg"] = compute_tensor_stats(exp_avg, self.parallel_context)
+                    loggings[p]["exp_avg_sq"] = compute_tensor_stats(exp_avg_sq, self.parallel_context)
+                    loggings[p]["exp_avg_hat"] = compute_tensor_stats(exp_avg_hat, self.parallel_context)
+                    loggings[p]["exp_avg_sq_hat"] = compute_tensor_stats(exp_avg_sq_hat, self.parallel_context)
 
-                    loggings[p]["normalized_grad"] = compute_tensor_stats(normalized_grad)
+                    loggings[p]["normalized_grad"] = compute_tensor_stats(normalized_grad, self.parallel_context)
                     loggings[p]["normalized_grad_without_adam_eps"] = compute_tensor_stats(
-                        normalized_grad_without_adam_eps
+                        normalized_grad_without_adam_eps, self.parallel_context
                     )
-                    loggings[p]["weight_decay_grad"] = compute_tensor_stats(weight_decay_grad)
+                    loggings[p]["weight_decay_grad"] = compute_tensor_stats(weight_decay_grad, self.parallel_context)
 
-                    loggings[p]["fp32_p"] = compute_tensor_stats(p.data)
-                    loggings[p]["fp32_new_changes_in_p"] = compute_tensor_stats(total_new_weight_changes)
-                    loggings[p]["fp32_new_changes_from_grad"] = compute_tensor_stats(new_weight_changes_from_grad)
+                    loggings[p]["fp32_p"] = compute_tensor_stats(p.data, self.parallel_context)
+                    loggings[p]["fp32_new_changes_in_p"] = compute_tensor_stats(
+                        total_new_weight_changes, self.parallel_context
+                    )
+                    loggings[p]["fp32_new_changes_from_grad"] = compute_tensor_stats(
+                        new_weight_changes_from_grad, self.parallel_context
+                    )
 
-                    loggings[p]["fp32_grad"] = compute_tensor_stats(grad)
+                    loggings[p]["fp32_grad"] = compute_tensor_stats(grad, self.parallel_context)
                     loggings[p]["weight_norm_and_normalized_grad_update_norm_ratio"] = {
                         "value": weight_norm_and_normalized_grad_update_norm_ratio
                     }
@@ -198,7 +213,7 @@ class CustomAdamW(Optimizer):
 
                     if group["weight_decay"] != 0:
                         loggings[p]["fp32_new_changes_from_weight_decay"] = compute_tensor_stats(
-                            new_weight_changes_from_weight_decay
+                            new_weight_changes_from_weight_decay, self.parallel_context
                         )
                         loggings[p]["weight_norm_and_weight_decay_update_norm_ratio"] = {
                             "value": weight_norm_and_weight_decay_update_norm_ratio

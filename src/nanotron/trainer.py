@@ -257,17 +257,6 @@ class DistributedTrainer:
 
         self.post_init()
 
-        self.params_id_to_param_names = {
-            id(param): name for name, param in self.unwrapped_model.get_named_params_with_correct_tied()
-        }
-        from nanotron.optim.optimizer_from_gradient_accumulator import OptimizerFromGradientAccumulator
-
-        if self.optimizer.__class__ == OptimizerFromGradientAccumulator:
-            self.optimizer.optimizer.optimizer.params_id_to_param_names = self.params_id_to_param_names
-            self.optimizer.optimizer.optimizer.grad_accumulator = self.grad_accumulator
-        else:
-            self.optimizer.optimizer.params_id_to_param_names = self.params_id_to_param_names
-
     def pre_init(self):
         pass
 
@@ -411,6 +400,19 @@ class DistributedTrainer:
     ) -> None:
         self.pre_training(**kwargs)
 
+        self.params_id_to_param_names = {
+            id(param): name for name, param in self.unwrapped_model.get_named_params_with_correct_tied()
+        }
+        from nanotron.optim.optimizer_from_gradient_accumulator import OptimizerFromGradientAccumulator
+
+        if self.optimizer.__class__ == OptimizerFromGradientAccumulator:
+            self.optimizer.optimizer.optimizer.params_id_to_param_names = self.params_id_to_param_names
+            self.optimizer.optimizer.optimizer.grad_accumulator = self.grad_accumulator
+            self.optimizer.optimizer.optimizer.parallel_context = self.parallel_context
+        else:
+            self.optimizer.optimizer.params_id_to_param_names = self.params_id_to_param_names
+            self.optimizer.optimizer.parallel_context = self.parallel_context
+
         if self.config.checkpoints.save_initial_state and self.init_checkpoint_path is None:
             self.save_checkpoint()
 
@@ -431,7 +433,9 @@ class DistributedTrainer:
 
         is_ready_for_normal_log = (
             (self.iteration_step - 1) % self.config.logging.iteration_step_info_interval == 0
-        ) and (dist.get_rank(self.parallel_context.world_pg) == 0)
+        ) and (
+            dist.get_rank(self.parallel_context.dp_pg) == 0
+        )  # NOTE: only log the first dp rank
 
         prof = get_profiler(config=self.config)
         torch.cuda.empty_cache()
@@ -440,7 +444,9 @@ class DistributedTrainer:
                 if isinstance(prof, torch.profiler.profile):
                     prof.step()
 
-                is_ready_to_log = is_ready_for_normal_log and self.config.logging.monitor_fwd_states is True
+                is_ready_to_log = (
+                    is_ready_for_normal_log and self.config.logging.monitor_fwd_states is True and wandb is not None
+                )
                 constants.is_ready_to_log = is_ready_to_log
 
                 if is_ready_to_log is True:
@@ -466,37 +472,44 @@ class DistributedTrainer:
                     self.train_step_logs(outputs=outputs, loss_avg=loss_avg)
 
                 if is_ready_to_log is True:
-                    if wandb is not None:
-                        for handle in state_handles:
-                            handle.remove()
+                    for handle in state_handles:
+                        handle.remove()
 
-                        detailed_logs = {}
+                    detailed_logs = {}
 
-                        # optim_logs = get_optim_logs(self.params_id_to_param_names, self.optimizer.optimizer, prefix="")
-                        if hasattr(self.optimizer.optimizer, "loggings"):
-                            optim_logs = self.optimizer.optimizer.loggings
-                            detailed_logs.update(optim_logs)
+                    # optim_logs = get_optim_logs(self.params_id_to_param_names, self.optimizer.optimizer, prefix="")
+                    if self.optimizer.__class__ == OptimizerFromGradientAccumulator:
+                        optim_logs = self.optimizer.optimizer.optimizer.loggings
+                        detailed_logs.update(optim_logs)
+                    elif hasattr(self.optimizer.optimizer, "loggings"):
+                        optim_logs = self.optimizer.optimizer.loggings
+                        detailed_logs.update(optim_logs)
 
-                        from nanotron import constants
+                    from nanotron import constants
 
-                        detailed_logs.update(convert_logs_to_flat_logs(constants.NN_STATES))
-                        # NOTE: convert tensor to float for logging
-                        detailed_logs = {
-                            k: v.item() if isinstance(v, torch.Tensor) else v for k, v in detailed_logs.items()
-                        }
+                    detailed_logs.update(convert_logs_to_flat_logs(constants.NN_STATES))
+                    # NOTE: convert tensor to float for logging
+                    detailed_logs = {
+                        k: v.item() if isinstance(v, torch.Tensor) else v for k, v in detailed_logs.items()
+                    }
 
-                        # NOTE: save the detailed logs, path/{run_name}/{iteration_step}/logs.json
+                    # NOTE: save the detailed logs, path/{run_name}/{iteration_step}/logs.json
 
-                        # DEBUG_SAVE_PATH = DEBUG_SAVE_PATH.format(self.config.general.run, self.iteration_step)
-                        # debug_save_path = get_debug_save_path(self.config.general.run, self.iteration_step)
-                        # with open(f"{debug_save_path}/logs.json", "w") as f:
-                        #     json.dump(detailed_logs, f)
+                    # DEBUG_SAVE_PATH = DEBUG_SAVE_PATH.format(self.config.general.run, self.iteration_step)
+                    # debug_save_path = get_debug_save_path(self.config.general.run, self.iteration_step)
+                    # with open(f"{debug_save_path}/logs.json", "w") as f:
+                    #     json.dump(detailed_logs, f)
 
+                    if dist.get_rank(self.parallel_context.world_pg) == 0:
+                        # NOTE: all ranks has the same stats, only rank 0 logs it
                         wandb.log({**detailed_logs, "iteration_step": self.iteration_step})
-                        constants.NN_STATES = {}
 
-                        if hasattr(self.optimizer.optimizer, "loggings"):
-                            self.optimizer.optimizer.loggings = {}
+                    constants.NN_STATES = {}
+
+                    if self.optimizer.__class__ == OptimizerFromGradientAccumulator:
+                        self.optimizer.optimizer.optimizer.loggings = {}
+                    elif hasattr(self.optimizer.optimizer, "loggings"):
+                        self.optimizer.optimizer.loggings = {}
 
                 # Checkpoint
                 if self.iteration_step % self.config.checkpoints.checkpoint_interval == 0:

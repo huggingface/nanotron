@@ -750,26 +750,105 @@ def calculate_kurtosis(X):
     return kurtosis
 
 
-def compute_tensor_stats(tensor):
+def compute_kurtosis_from_global_values(tensor, global_mean, global_var, tp_group):
+    """
+    Compute kurtosis using global mean and variance across distributed ranks.
+
+    Arguments:
+    - tensor: local tensor on this rank.
+    - global_mean: the global mean after all-reduce sum.
+    - global_var: the global variance after all-reduce sum.
+    - tp_group: the process group for all-reduce operations.
+
+    Returns:
+    - kurtosis: the global kurtosis.
+    """
+    # Step 1: Compute the fourth central moment (E[(X - global_mean)^4])
+    central_diff = tensor - global_mean
+    fourth_moment = torch.mean(central_diff**4)
+
+    # Perform all-reduce to get the global fourth moment sum
+    dist.all_reduce(fourth_moment, op=dist.ReduceOp.SUM, group=tp_group)
+
+    # Normalize the fourth moment across all ranks
+    global_fourth_moment = fourth_moment / tensor.numel()
+
+    # Step 2: Compute the global kurtosis
+    global_kurtosis = global_fourth_moment / (global_var**2)
+
+    # Handle edge case where the variance is zero
+    if torch.isnan(global_kurtosis):
+        global_kurtosis = torch.tensor(0.0)
+
+    return global_kurtosis
+
+
+def compute_tensor_stats(tensor, parallel_context=None):
     def compute_snr(tensor):
         mean = torch.mean(tensor)
         std = torch.std(tensor)
         snr = mean / std
         return snr
 
+    def compute_snr_from_global_mean_and_std(mean, std):
+        snr = mean / std
+        return snr
+
+    # mean = tensor.mean()
+    # dist.all_reduce(mean, op=dist.ReduceOp.SUM, group=parallel_context.world_pg)
+    mean = tensor.mean()
+    std = tensor.std()
+    var = tensor.var()
+    l1_norm = tensor.norm(p=1)
+    l2_norm = tensor.norm(p=2)
+    rms = tensor.pow(2).mean().sqrt()
+    min = tensor.min()
+    max = tensor.max()
+    abs_max = tensor.abs().max()
+
+    # NOTE: global mean
+    if parallel_context is not None:
+        tp_group = parallel_context.tp_pg
+        dist.all_reduce(mean, op=dist.ReduceOp.SUM, group=tp_group)
+        dist.all_reduce(std, op=dist.ReduceOp.SUM, group=tp_group)
+        dist.all_reduce(var, op=dist.ReduceOp.SUM, group=tp_group)
+        dist.all_reduce(l1_norm, op=dist.ReduceOp.SUM, group=tp_group)
+        dist.all_reduce(l2_norm, op=dist.ReduceOp.SUM, group=tp_group)
+        dist.all_reduce(rms, op=dist.ReduceOp.SUM, group=tp_group)
+        dist.all_reduce(min, op=dist.ReduceOp.MIN, group=tp_group)
+        dist.all_reduce(max, op=dist.ReduceOp.MAX, group=tp_group)
+        dist.all_reduce(abs_max, op=dist.ReduceOp.MAX, group=tp_group)
+
+    snr = compute_snr_from_global_mean_and_std(mean, std)
+    kurtosis = compute_kurtosis_from_global_values(tensor, mean, var, tp_group)
+
+    # return {
+    #     "mean": tensor.mean(),
+    #     "std": tensor.std(),
+    #     "var": tensor.var(),
+    #     "l1_norm": tensor.norm(p=1),
+    #     "l2_norm": tensor.norm(p=2),
+    #     "rms": tensor.pow(2).mean().sqrt(),
+    #     "min": tensor.min(),
+    #     "max": tensor.max(),
+    #     "amax": tensor.abs().max(),
+    #     # "abs_mean": tensor.abs().mean(),
+    #     "kurtosis": calculate_kurtosis(tensor),
+    #     "snr": compute_snr(tensor),
+    # }
     return {
-        "mean": tensor.mean(),
-        "std": tensor.std(),
-        "var": tensor.var(),
-        "l1_norm": tensor.norm(p=1),
-        "l2_norm": tensor.norm(p=2),
-        "rms": tensor.pow(2).mean().sqrt(),
-        "min": tensor.min(),
-        "max": tensor.max(),
-        "amax": tensor.abs().max(),
-        "abs_mean": tensor.abs().mean(),
-        "kurtosis": calculate_kurtosis(tensor),
-        "snr": compute_snr(tensor),
+        "mean": mean,
+        "std": std,
+        "var": var,
+        "l1_norm": l1_norm,
+        "l2_norm": l2_norm,
+        "rms": rms,
+        "min": min,
+        "max": max,
+        "amax": abs_max,
+        # "abs_mean": tensor.abs().mean(),
+        "kurtosis": kurtosis,
+        "snr": snr,
     }
 
 
@@ -832,15 +911,15 @@ def track_weight_and_grad_stats(name: str, module: nn.Module, parallel_context: 
             # stats[key] = {}
             # for metric in metrics:
             #     stats[key][metric] = NAME_TO_FUNC[metric](tensor)
-            stats[key] = compute_tensor_stats(tensor)
+            stats[key] = compute_tensor_stats(tensor, parallel_context)
 
             # NOTE: now all reduce mean this across tp ranks
-            from torch.distributed import ReduceOp
+            # from torch.distributed import ReduceOp
 
-            tp_group = parallel_context.tp_pg
-            for metric_name, metric_value in stats[key].items():
-                stats[key][metric_name] = torch.tensor(metric_value, device=tensor.device, dtype=tensor.dtype)
-                dist.all_reduce(stats[key][metric_name], op=ReduceOp.MAX, group=tp_group)
+            # tp_group = parallel_context.tp_pg
+            # for metric_name, metric_value in stats[key].items():
+            #     stats[key][metric_name] = torch.tensor(metric_value, device=tensor.device, dtype=tensor.dtype)
+            #     # dist.all_reduce(stats[key][metric_name], op=ReduceOp.MAX, group=tp_group)
 
         return stats[list(stats.keys())[0]] if len(stats) == 1 else stats
 

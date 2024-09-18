@@ -68,7 +68,7 @@ model:
     use_cache: true
     vocab_size: 256
 optimizer:
-  accumulate_grad_in_fp32: true
+  accumulate_grad_in_fp32: false
   clip_grad: 1.0
   learning_rate_scheduler:
     learning_rate: 0.0003
@@ -87,9 +87,9 @@ optimizer:
   weight_decay: 0.01
   zero_stage: 0
 parallelism:
-  dp: 2
+  dp: 1
   expert_parallel_size: 1
-  pp: 2
+  pp: 1
   pp_engine: 1f1b
   tp: 2
   tp_linear_async_communication: true
