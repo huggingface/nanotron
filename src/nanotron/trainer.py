@@ -192,6 +192,8 @@ class DistributedTrainer:
             optimizer_args=self.config.optimizer,
             parallel_context=self.parallel_context,
         )
+
+
         if self.init_checkpoint_path is not None:
             load_optimizer(
                 optimizer=self.optimizer,
@@ -440,11 +442,22 @@ class DistributedTrainer:
         for n, p in self.unwrapped_model.named_parameters():
             print(f"name: {n}, p.mup_type: {p.mup_type}, p.mup_scaling_depth={p.mup_scaling_depth}, std: {p.std()}, var: {p.var()}")
 
+        for idx, param_group in enumerate(self.optimizer.param_groups):
+            print(f"param_group: {idx} \n \n")
+            for k, v in param_group.items():
+                if k == "params":
+                    continue
+                print(f"{k}: {v}")
+
+        for param in param_group['params']:
+            print(f"name: {self.optimizer.optimizer.params_id_to_param_names[id(param)]}")
+
+
         with prof:
             for self.iteration_step in range(self.metadata.last_train_step + 1, self.config.tokens.train_steps + 1):
                 if isinstance(prof, torch.profiler.profile):
                     prof.step()
-
+                
                 is_ready_to_log = is_ready_for_normal_log and self.config.logging.monitor_fwd_states is True
                 constants.is_ready_to_log = is_ready_to_log
 
@@ -496,6 +509,10 @@ class DistributedTrainer:
                         # debug_save_path = get_debug_save_path(self.config.general.run, self.iteration_step)
                         # with open(f"{debug_save_path}/logs.json", "w") as f:
                         #     json.dump(detailed_logs, f)
+
+                        for _, param_group in enumerate(self.optimizer.param_groups):
+                            for param in param_group['params']:
+                                detailed_logs[self.optimizer.optimizer.params_id_to_param_names[id(param)] + ":lr"] = {"lr": param_group["lr"], "initial_lr": param_group["initial_lr"]}
 
                         wandb.log({**detailed_logs, "iteration_step": self.iteration_step})
                         constants.NN_STATES = {}
