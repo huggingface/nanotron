@@ -75,17 +75,26 @@ echo $HOSTNAMES
 mkdir -p $LOCAL_DOWNLOAD_CHECKPOINT_FOLDER
 s5cmd cp --exclude "optimizer/*" {{ model_checkpoint_path }}* $LOCAL_DOWNLOAD_CHECKPOINT_FOLDER
 
-torch_dist_args="--nproc_per_node 8 \
-    --nnodes $COUNT_NODE \
-    --max_restarts 0 \
-    --tee 3 \
-    --node_rank $SLURM_PROCID \
-    --role $SLURMD_NODENAME: "
-
-launch_args="$torch_dist_args \
-    /fsx/elie_bakouch/nanotron/src/nanotron/lighteval/run_evals.py \
-    --checkpoint-config-path ${LOCAL_DOWNLOAD_CHECKPOINT_FOLDER}/config.yaml \
-    --hf-user-or-org {{ hf_user_or_org }} \
+CMD="/fsx/elie_bakouch/nanotron/src/nanotron/lighteval/run_evals.py \
+    --checkpoint-config-path $LOCAL_DOWNLOAD_CHECKPOINT_FOLDER/config.yaml \
+    --lighteval-config-path {{ lighteval_config_path }} \
     "
 
-srun -u bash -c "python3 -u -m torch.distributed.run ${launch_args}"
+export LAUNCHER="torchrun \
+    --nproc_per_node {{ gpus_per_node }} \
+    --nnodes $COUNT_NODE \
+    --node_rank $SLURM_PROCID \
+    --role $SLURMD_NODENAME: \
+    --max_restarts 0 \
+    --tee 3 \
+    "
+
+# Wait a random number between 0 and 1000 (milliseconds) to avoid too many concurrent requests to the hub
+random_milliseconds=$(( RANDOM % 1001 ))
+sleep_time=$(bc <<< "scale=3; $random_milliseconds / 1000")
+echo "Sleeping for $sleep_time seconds..."
+sleep $sleep_time
+
+launch_args="srun $SRUN_ARGS -u bash -c $LAUNCHER --node_rank $SLURM_PROCID --role $SLURMD_NODENAME: $CMD"
+
+srun $SRUN_ARGS -u bash -c "$LAUNCHER --node_rank $SLURM_PROCID --role $SLURMD_NODENAME: $CMD"

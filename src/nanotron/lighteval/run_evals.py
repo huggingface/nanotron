@@ -15,9 +15,10 @@ def get_parser():
         help="Path to the Nanotron checkpoint YAML or python config file, potentially on S3",
     )
     parser.add_argument(
-        "--lighteval-override",
+        "--lighteval-config-path",
         type=str,
-        help="Path to an optional YAML or python Lighteval config to override part of the checkpoint Lighteval config",
+        required=True,
+        help="Path to an optional YAML or python Lighteval config",
     )
     parser.add_argument(
         "--cache-dir",
@@ -25,7 +26,6 @@ def get_parser():
         default=None,
         help="Cache directory",
     )
-
     return parser
 
 
@@ -33,7 +33,7 @@ if __name__ == "__main__":
     parser = get_parser()
     args, unknowns = parser.parse_known_args()
     main(
-        checkpoint_config_path=args.checkpoint_config_path, 
-        lighteval_config_path=args.lighteval_override, 
+        checkpoint_config_path=args.checkpoint_config_path,
+        lighteval_config_path=args.lighteval_config_path,
         cache_dir=args.cache_dir,
     )

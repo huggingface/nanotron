@@ -1,18 +1,16 @@
 import datetime
 import os
 from dataclasses import dataclass, fields
-import pathlib
 from pathlib import Path
-from datasets.download.streaming_download_manager import xPath
-from typing import List, Optional, Type, Union, Dict
+from typing import List, Optional, Type, Union
 
 import dacite
 import torch
 import yaml
 from dacite import from_dict
-from datasets.download.streaming_download_manager import xPath
 from yaml.loader import SafeLoader
 
+from datasets.download.streaming_download_manager import xPath
 from nanotron.config.lighteval_config import LightEvalConfig
 from nanotron.config.models_config import ExistingCheckpointInit, NanotronConfigs, RandomInit, SpectralMupInit
 from nanotron.config.parallelism_config import ParallelismArgs
@@ -22,11 +20,11 @@ from nanotron.config.utils_config import (
     cast_str_to_torch_dtype,
     serialize,
 )
-from nanotron.s3_checkpoints import check_path_is_local
 from nanotron.generation.sampler import SamplerType
 from nanotron.logging import get_logger
 from nanotron.parallel.pipeline_parallel.engine import PipelineEngine
 from nanotron.parallel.tensor_parallel.nn import TensorParallelLinearMode
+from nanotron.s3_checkpoints import check_path_is_local
 
 logger = get_logger(__name__)
 
@@ -93,12 +91,16 @@ class PretrainDatasetsArgs:
             self.text_column_name = "text"
         if self.hf_dataset_splits is None:
             self.hf_dataset_splits = "train"
+
+
 @dataclass
 class S3UploadArgs:
     """Arguments related to uploading checkpoints on s3"""
 
     remove_after_upload: bool
-    upload_s3_path: Optional[str] = None  # set to None if we want to use S3UploadArgs to download checkpoints from s3 but not upload checkpoints on s3
+    upload_s3_path: Optional[
+        str
+    ] = None  # set to None if we want to use S3UploadArgs to download checkpoints from s3 but not upload checkpoints on s3
     s5cmd_numworkers: Optional[int] = None
     s5cmd_concurrency: Optional[int] = None
     s5cmd_path: Optional[str] = None
@@ -108,6 +110,7 @@ class S3UploadArgs:
             self.upload_s3_path = xPath(self.upload_s3_path)
         if isinstance(self.s5cmd_path, str):
             self.s5cmd_path = Path(self.s5cmd_path)
+
 
 @dataclass
 class S3UploadArgs:
@@ -200,17 +203,20 @@ class GeneralArgs:
         ignore_sanity_checks: Whether to ignore sanity checks
     """
 
-    project: str
+    project: Optional[str] = None
     run: Optional[str] = None
-    logs_path: Optional[str] = "logs"
+    logs_path: Optional[str] = None
     launch_slurm_config: Optional[str] = None
     eval_slurm_config: Optional[str] = None
+    eval_slurm_template: Optional[str] = None
+    lighteval_config_path: Optional[str] = None
+    is_s3_available: Optional[bool] = None
     timestamp_with_run: Optional[str] = None
     launch_script_path: Optional[str] = None
     slurm_logs_path: Optional[str] = None
     config_logs_path: Optional[str] = None
     evals_logs_path: Optional[str] = None
-    temp_dir: Optional[str] = "temp_dir"
+    temp_dir: Optional[str] = None
     seed: Optional[int] = None
     step: Optional[int] = None
     consumed_train_samples: Optional[int] = None
@@ -389,15 +395,18 @@ class Config:
         return cls(**{f.name: None for f in cls_fields})
 
     def __post_init__(self):
-      
-        if hasattr(self, '_post_init_done'):
+
+        if hasattr(self, "_post_init_done"):
             return
         self._post_init_done = True
         self.general.__post_init__()
 
         if self.s3_upload is not None:
             self.s3_upload.__post_init__()
+            self.general.is_s3_available = True
 
+        else:
+            self.general.is_s3_available = False
         # Some final sanity checks across separate arguments sections:
         if self.profiler is not None and self.profiler.profiler_export_path is not None:
             assert self.tokens.train_steps < 10
@@ -430,18 +439,14 @@ class Config:
                 for i in range(len(self.data_stages) - 1)
             ), "The stages are not sorted by start_training_step in increasing order"
 
-        
-
         # if lighteval, we need tokenizer to be defined
         if self.lighteval is not None:
             assert self.tokenizer.tokenizer_name_or_path is not None
-
 
     @property
     def global_batch_size(self):
         return self.tokens.micro_batch_size * self.tokens.batch_accumulation_per_replica * self.parallelism.dp
 
-    
     def save_as_yaml(self, file_path: str):
 
         config_dict = serialize(self)
@@ -514,10 +519,9 @@ def get_config_from_file(
         skip_unused_config_keys: whether to skip unused first-nesting-level keys in the config file (for config with additional sections)
         skip_null_keys: whether to skip keys with value None at first and second nesting level
     """
-        
+
     with open(config_path) as f:
         config_dict = yaml.load(f, Loader=SafeLoader)
-
 
     config = get_config_from_dict(
         config_dict,
@@ -532,3 +536,14 @@ def get_config_from_file(
             )
         config.model.model_config = model_config_class(**config.model.model_config)
     return config
+
+
+def save_as_yaml(config, config_class, file_path: str):
+
+    config_dict = serialize(config)
+    file_path = str(file_path)
+    with open(file_path, "w") as f:
+        yaml.dump(config_dict, f)
+
+    # Sanity test config can be reloaded
+    _ = get_config_from_file(file_path, config_class=config_class)

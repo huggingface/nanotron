@@ -19,14 +19,12 @@ from typing import (
     cast,
 )
 
-from nanotron.s3_checkpoints import S3Mover, check_path_is_local
 import torch
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
 
 from nanotron import distributed as dist
 from nanotron import logging
-from nanotron.lighteval import LightEvalRunner
 from nanotron.config import (
     Config,
     DatasetStageArgs,
@@ -48,6 +46,7 @@ from nanotron.helpers import (
     log_throughput,
     lr_scheduler_builder,
 )
+from nanotron.lighteval import LightEvalRunner
 from nanotron.logging import (
     LoggerWriter,
     LogItem,
@@ -151,13 +150,11 @@ class DistributedTrainer:
             data_parallel_size=self.config.parallelism.dp,
             expert_parallel_size=self.config.parallelism.expert_parallel_size,
         )
-        
+
         self.pre_init()
 
         # Set log levels
         set_ranks_logging_level(parallel_context=self.parallel_context, logging_config=self.config.logging)
-
-
 
         # Log benchmark info
         if os.environ.get("NANOTRON_BENCHMARK", "0") == "1":
@@ -288,12 +285,13 @@ class DistributedTrainer:
                     self.post_checkpoint_callback = None
                 else:
                     # Use the no_s3 version of the evaluation function
-                    # TODO: make it one function + make it automatic to switch to the right jinja template         
+                    # TODO: make it one function + make it automatic to switch to the right jinja template
                     self.post_checkpoint_callback = self.lighteval_runner.eval_single_checkpoint_no_s3
             else:
                 self.post_checkpoint_callback = None
         else:
             self.post_checkpoint_callback = None
+
     def pre_training(self, *args, **kwargs):
         self._print_training_plan()
 
@@ -306,7 +304,7 @@ class DistributedTrainer:
             rank=0,
         )
 
-        current_time = datetime.datetime.now().strftime("%d/%m/%Y_%H:%M:%S")
+        datetime.datetime.now().strftime("%d/%m/%Y_%H:%M:%S")
         if dist.get_rank(self.parallel_context.world_pg) == 0 and wandb is not None:
             wandb.init(
                 project=self.config.general.project,
@@ -316,20 +314,19 @@ class DistributedTrainer:
             # Define tokens metric as x-axis for all metrics
             wandb.define_metric("Tokens")
             wandb.define_metric("*", step_metric="Tokens")
-            
+
             # Handle resuming from a previous run
-            initial_step = getattr(self.config.general, 'step', 0)
+            initial_step = getattr(self.config.general, "step", 0)
             if initial_step is None:
                 initial_step = 0
-        
+
             initial_tokens = initial_step * self.global_batch_size
-            
+
             # Log initial tokens to set the starting point
             wandb.log({"Tokens": initial_tokens})
-            
+
             print(f"Initial Tokens: {initial_tokens}")
 
-            
     def post_train_step(self):
         # Update our background upload/removal of checkpoints
         if self.s3_mover is not None:
@@ -338,12 +335,11 @@ class DistributedTrainer:
     def post_training(self):
         if self.s3_mover is not None:
             self.s3_mover.distributed_wait_for_completion(group=self.parallel_context.world_pg)
-    
+
     def post_training(self):
         if self.s3_mover is not None:
             self.s3_mover.distributed_wait_for_completion(group=self.parallel_context.world_pg)
 
-    
     def _print_training_plan(self):
         if hasattr(self.config, "data_stages") and self.config.data_stages is not None:
             stages_info = "".join(
@@ -748,17 +744,21 @@ class DistributedTrainer:
     def _load_model_checkpoint(self, model: NanotronModel) -> NanotronModel:
         unwrapped_model = model.module if isinstance(model, DistributedDataParallel) else model
 
-        # Load or initialize model weights 
+        # Load or initialize model weights
         reloaded_from_checkpoint = False
         if self.init_checkpoint_path is not None:
-            # Load from a pre existing checkpoint 
+            # Load from a pre existing checkpoint
             if check_path_is_local(self.init_checkpoint_path):
-                # Reload from a training checkpoint 
-                log_rank(f"Loading weights from {self.init_checkpoint_path}", logger=logger, level=logging.INFO, rank=0)
-                self.param_shard_metadata = load_weights(
-                    model=unwrapped_model, parallel_context=self.parallel_context, root_folder=self.init_checkpoint_path
+                # Reload from a training checkpoint
+                log_rank(
+                    f"Loading weights from {self.init_checkpoint_path}", logger=logger, level=logging.INFO, rank=0
                 )
-            reloaded_from_checkpoint=True
+                self.param_shard_metadata = load_weights(
+                    model=unwrapped_model,
+                    parallel_context=self.parallel_context,
+                    root_folder=self.init_checkpoint_path,
+                )
+            reloaded_from_checkpoint = True
 
         if not reloaded_from_checkpoint:
             log_rank("No checkpoint path provided.", logger=logger, level=logging.INFO, rank=0)
@@ -894,18 +894,25 @@ class DistributedTrainer:
     def pre_save_checkpoint(self) -> Path:
 
         if wandb is not None and dist.get_rank(self.parallel_context.dp_pg) == 0:
-            if self.config.general.wandb_id is None:       
+            if self.config.general.wandb_id is None:
                 self.config.general.wandb_id = wandb.run.id
                 self.config.general.wandb_project = wandb.run.project
-            elif self.config.general.wandb_id is not None and self.config.general.wandb_id!= wandb.run.id:
-                log_rank("Update the wandb run due too resume from checkpoint", logger=logger, level=logging.WARNING, rank=0)
+            elif self.config.general.wandb_id is not None and self.config.general.wandb_id != wandb.run.id:
+                log_rank(
+                    "Update the wandb run due too resume from checkpoint", logger=logger, level=logging.WARNING, rank=0
+                )
                 self.config.general.wandb_id = wandb.run.id
                 self.config.general.wandb_project = wandb.run.project
         if self.s3_mover is not None:
             self.s3_mover.distributed_wait_for_completion(self.parallel_context.world_pg)
             if self.s3_mover.post_upload_callback_outputs is not None:
                 slurm_job_id, slurm_log = self.s3_mover.post_upload_callback_outputs
-                log_rank(f"launching eval job: job_id={slurm_job_id} log at {slurm_log} slurm_eval", logger=logger, level=logging.INFO, rank=0)
+                log_rank(
+                    f"launching eval job: job_id={slurm_job_id} log at {slurm_log} slurm_eval",
+                    logger=logger,
+                    level=logging.INFO,
+                    rank=0,
+                )
 
     def post_save_checkpoint(self):
         # Upload to S3
@@ -914,14 +921,15 @@ class DistributedTrainer:
 
         elif self.post_checkpoint_callback is not None:
             # If we're not using S3, but we have a post-checkpoint callback for evals
-            checkpoint_path = self.config.checkpoints.checkpoints_path / f"{self.config.general.step}"
+            checkpoint_path = Path(self.config.checkpoints.checkpoints_path) / f"{self.config.general.step}"
             self.post_checkpoint_callback(checkpoint_path)
 
     def save_checkpoint(self) -> Path:
         self.pre_save_checkpoint()
-
         checkpoints_path = self.config.checkpoints.checkpoints_path
-        checkpoint_path = checkpoints_path / f"{self.iteration_step}"
+        print(f"config: {self.config}")
+        print(f"checkpoints_path: {checkpoints_path}")
+        checkpoint_path = Path(checkpoints_path) / f"{self.iteration_step}"
         if self.config.checkpoints.checkpoints_path_is_shared_file_system:
             should_mkdir = dist.get_rank(self.parallel_context.world_pg) == 0
         else:

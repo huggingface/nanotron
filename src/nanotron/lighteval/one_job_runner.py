@@ -1,18 +1,18 @@
 """ Mostly complete a SLURM template with a link to a single checkpoint on s3 and launch it
 """
 import datetime
+import json
 import os
 import re
 import subprocess
-from typing import List, Optional, Tuple, Union
-import copy
-import json
+from typing import List, Optional, Tuple
+
 import jinja2
+
 from nanotron import logging
+from nanotron.config import Config, LightEvalConfig
 from nanotron.logging import log_rank
 from nanotron.parallel import ParallelContext
-
-from nanotron.config import Config, LightEvalConfig
 
 logger = logging.get_logger(__name__)
 
@@ -35,12 +35,11 @@ class LightEvalRunner:
             return None, None
 
         slurm_job_id, slurm_log = run_slurm_one_job(
-            config = self.config,
-            lighteval_config = self.lighteval_config,
-            slurm_template=self.lighteval_config.slurm_template,
+            config=self.config,
+            lighteval_config=self.lighteval_config,
+            slurm_template=self.config.general.eval_slurm_template,
             model_checkpoint_path=checkpoint_path,
             current_step=self.config.general.step,
-            s3=False,
         )
 
         return slurm_job_id, slurm_log
@@ -73,12 +72,11 @@ class LightEvalRunner:
         checkpoint_path = config_files[0]["destination"].replace("config.yaml", "")
 
         slurm_job_id, slurm_log = run_slurm_one_job(
-            config = self.config,
-            lighteval_config = self.lighteval_config,
-            slurm_template=self.lighteval_config.slurm_template,
+            config=self.config,
+            lighteval_config=self.lighteval_config,
+            slurm_template=self.config.general.eval_slurm_template,
             model_checkpoint_path=checkpoint_path,
             current_step=self.config.general.step,
-            s3=True,
         )
 
         return slurm_job_id, slurm_log
@@ -90,7 +88,6 @@ def run_slurm_one_job(
     model_checkpoint_path: str,
     slurm_template: str,
     current_step: int,
-    s3: bool = True,
     slurm_name: Optional[str] = "eval",
 ):
     """Launch a single job on Slurm with the given mapping
@@ -98,11 +95,11 @@ def run_slurm_one_job(
         slurm_config: Slurm configuration
         mapping: Mapping to use for the job script (see SLURM_ONE_JOB_MAPPING)
     """
-
+    s3 = config.general.is_s3_available
     eval_launch_script_path = os.path.join(config.general.evals_logs_path, "launch-config", str(current_step))
     eval_logs_path = os.path.join(config.general.evals_logs_path, "logs", str(current_step))
 
-    with open(config.general.eval_slurm_config, 'r') as f:
+    with open(config.general.eval_slurm_config, "r") as f:
         eval_slurm_config = json.load(f)
 
     os.makedirs(eval_launch_script_path, exist_ok=True)
@@ -118,28 +115,33 @@ def run_slurm_one_job(
 
     # Update the config with additional required parameters
     # Calculate the number of nodes based on parallelism config and gpus_per_node
-    total_gpus_needed = lighteval_config.parallelism.dp * lighteval_config.parallelism.pp * lighteval_config.parallelism.tp
-    gpus_per_node = eval_slurm_config.get('gpus_per_node')
+    total_gpus_needed = (
+        lighteval_config.parallelism.dp * lighteval_config.parallelism.pp * lighteval_config.parallelism.tp
+    )
+    gpus_per_node = eval_slurm_config.get("gpus_per_node")
     nodes = (total_gpus_needed + gpus_per_node - 1) // gpus_per_node  # Ceiling division
-    
-    if s3:
-        eval_slurm_config.update({
-            'nodes': nodes,  # Assuming we want to run on a single node
-            'job_name': f"eval-{current_step}",
-            'eval_path': eval_logs_path,
-            'local_path': config.lighteval.temp_dir,
-            'hf_user_or_org': config.logging.hf_user_or_org if hasattr(config.logging, 'hf_user_or_org') else None,
-            "model_checkpoint_path": model_checkpoint_path,
-        })
-    else:
-        eval_slurm_config.update({
-            'nodes': nodes,  # Assuming we want to run on a single node
-            'job_name': f"eval-{current_step}",
-            'eval_path': eval_logs_path,
-            'hf_user_or_org': config.logging.hf_user_or_org if hasattr(config.logging, 'hf_user_or_org') else None,
-            "model_checkpoint_path": model_checkpoint_path,
-        })
 
+    if s3:
+        eval_slurm_config.update(
+            {
+                "nodes": nodes,  # Assuming we want to run on a single node
+                "job_name": f"eval-{current_step}",
+                "eval_path": eval_logs_path,
+                "local_path": f"{config.general.temp_dir}/eval_{config.general.timestamp_with_run}/{current_step}",
+                "model_checkpoint_path": model_checkpoint_path,
+                "lighteval_config_path": config.general.lighteval_config_path,
+            }
+        )
+    else:
+        eval_slurm_config.update(
+            {
+                "nodes": nodes,  # Assuming we want to run on a single node
+                "job_name": f"eval-{current_step}",
+                "eval_path": eval_logs_path,
+                "model_checkpoint_path": model_checkpoint_path,
+                "lighteval_config_path": config.general.lighteval_config_path,
+            }
+        )
 
     launch_string = SLURM_JOBS_ARRAY_TEMPLATE.render(**eval_slurm_config)
 
@@ -164,20 +166,14 @@ def run_slurm_one_job(
 
     # Preserve important environment variables
     env = {
-        'PATH': os.environ['PATH'],
-        'LD_LIBRARY_PATH': os.environ.get('LD_LIBRARY_PATH', ''),
-        'HOME': os.path.expanduser("~"),
+        "PATH": os.environ["PATH"],
+        "LD_LIBRARY_PATH": os.environ.get("LD_LIBRARY_PATH", ""),
+        "HOME": os.path.expanduser("~"),
     }
 
     try:
         # Use subprocess.run instead of check_output for better error handling
-        result = subprocess.run(
-            ["sbatch", launch_script_path],
-            env=env,
-            check=True,
-            capture_output=True,
-            text=True
-        )
+        result = subprocess.run(["sbatch", launch_script_path], env=env, check=True, capture_output=True, text=True)
         output = result.stdout
         job_ids = output.split()[-1]
         output_log = (

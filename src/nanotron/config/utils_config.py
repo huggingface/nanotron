@@ -1,10 +1,10 @@
 from dataclasses import fields
 from enum import Enum, auto
 from pathlib import Path
-from datasets.download.streaming_download_manager import xPath
 
 import torch
 
+from datasets.download.streaming_download_manager import xPath
 from nanotron.generation.sampler import SamplerType
 from nanotron.parallel.pipeline_parallel.engine import (
     AllForwardAllBackwardPipelineEngine,

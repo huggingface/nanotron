@@ -61,7 +61,7 @@ s3 = [
 ]
 
 lighteval = [
-    "lighteval[nanotron]@git+https://github.com/huggingface/lighteval.git@nanotron-compatible",
+    "lighteval[nanotron]@git+https://github.com/huggingface/lighteval.git",
 ]
 [build-system]
 requires = [

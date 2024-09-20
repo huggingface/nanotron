@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Dict, Optional, Union
 
 from nanotron.config.parallelism_config import ParallelismArgs
@@ -32,55 +31,28 @@ class GenerationArgs:
 @dataclass
 class LightEvalLoggingArgs:
     """Arguments related to logging for LightEval"""
-    local_output_path: Optional[Path] = None
-    private: Optional[bool] = True
-    push_results_to_hub: Optional[bool] = None
-    push_details_to_hub: Optional[bool] = None
-    push_results_to_tensorboard: Optional[bool] = None
-    hf_user_or_org: Optional[str] = None 
-    hub_repo_results: Optional[str] = None #path is hf_user_or_org/hub_repo_results
-    hub_repo_details: Optional[str] = None #path is hf_user_or_org/hub_repo_details
-    hub_repo_tensorboard: Optional[str] = None
-    tensorboard_metric_prefix: Optional[str] = None
 
-    def __post_init__(self):
-        if isinstance(self.local_output_path, str):
-            self.local_output_path = Path(self.local_output_path)
-        if self.push_results_to_hub is not None and self.hf_user_or_org is None:
-            raise ValueError("hf_user_or_org must be specified if push_results_to_hub is set")
-        if self.push_details_to_hub is not None and self.hf_user_or_org is None:
-            raise ValueError("hf_user_or_org must be specified if push_details_to_hub is set")
-        if self.hf_user_or_org is not None:
-            if self.push_results_to_hub is not None and self.hub_repo_results is None:
-                self.hub_repo_results = "evals-results"
-            if self.push_details_to_hub is not None and self.hub_repo_details is None:
-                self.hub_repo_details = "evals-details"
+    output_dir: Optional[str] = None
+    save_details: bool = True
+    push_to_hub: bool = False
+    push_to_tensorboard: bool = False
+    public_run: bool = False
+    results_org: str | None = None
+    tensorboard_metric_prefix: str = "eval"
 
 
 @dataclass
 class LightEvalTasksArgs:
     """Arguments related to tasks for LightEval"""
 
-    tasks: Optional[str] = None
+    tasks: str
     custom_tasks: Optional[str] = None
     max_samples: Optional[int] = None
     num_fewshot_seeds: Optional[int] = None
 
-    dataset_loading_processes: Optional[int] = 8
+    dataset_loading_processes: int = 8
     multichoice_continuations_start_space: Optional[bool] = None
-    no_multichoice_continuations_start_space: Optional[bool] = None
-
-
-@dataclass
-class LightEvalWandbLoggerConfig:
-    """Arguments related to the local Wandb logger"""
-
-    wandb_project: str = ""
-    wandb_entity: Optional[str] = None
-    wandb_run_name: Optional[str] = None
-
-    def __post_init__(self):
-        assert self.wandb_project != "", "Please specify a wandb_project"
+    pair_wise_tokenization: bool = False
 
 
 @dataclass
@@ -91,13 +63,8 @@ class LightEvalConfig:
     the saved config when running LightEval after training.
     """
 
-    slurm_template: Optional[str] = None
-    slurm_script_dir: Optional[str] = None
-    temp_dir: Optional[str] = "temp_dir"
-    checkpoints_path: Optional[str] = None
-    parallelism: Optional[ParallelismArgs] = None
-    batch_size: Optional[int] = None
+    logging: LightEvalLoggingArgs
+    tasks: LightEvalTasksArgs
+    parallelism: ParallelismArgs
+    batch_size: int = 0
     generation: Optional[Union[GenerationArgs, Dict[str, GenerationArgs]]] = None
-    tasks: Optional[LightEvalTasksArgs] = None
-    logging: Optional[LightEvalLoggingArgs] = None
-    wandb: Optional[LightEvalWandbLoggerConfig] = None
