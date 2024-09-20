@@ -336,10 +336,6 @@ class DistributedTrainer:
         if self.s3_mover is not None:
             self.s3_mover.distributed_wait_for_completion(group=self.parallel_context.world_pg)
 
-    def post_training(self):
-        if self.s3_mover is not None:
-            self.s3_mover.distributed_wait_for_completion(group=self.parallel_context.world_pg)
-
     def _print_training_plan(self):
         if hasattr(self.config, "data_stages") and self.config.data_stages is not None:
             stages_info = "".join(
@@ -927,8 +923,6 @@ class DistributedTrainer:
     def save_checkpoint(self) -> Path:
         self.pre_save_checkpoint()
         checkpoints_path = self.config.checkpoints.checkpoints_path
-        print(f"config: {self.config}")
-        print(f"checkpoints_path: {checkpoints_path}")
         checkpoint_path = Path(checkpoints_path) / f"{self.iteration_step}"
         if self.config.checkpoints.checkpoints_path_is_shared_file_system:
             should_mkdir = dist.get_rank(self.parallel_context.world_pg) == 0
