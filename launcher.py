@@ -13,7 +13,6 @@ from nanotron.config import (
     get_config_from_file,
     save_as_yaml,
 )
-from nanotron.config.lighteval_config import LightEvalConfig
 from nanotron.logging import human_format
 
 
@@ -91,8 +90,8 @@ if __name__ == "__main__":
             key, value = item.split("=", 1)
             try:
                 value = eval(value)
-            except:
-                pass
+            except Exception as e:
+                print(f"Warning: Could not evaluate '{value}': {e}")
 
             set_nested_attribute(config, key, value)
 
@@ -304,7 +303,7 @@ if __name__ == "__main__":
             lighteval_config = config.lighteval
             Path(config.general.config_logs_path).mkdir(parents=True, exist_ok=True)
             config.general.lighteval_config_path = str(Path(config.general.config_logs_path) / "lighteval_config.yaml")
-            save_as_yaml(lighteval_config, LightEvalConfig, config.general.lighteval_config_path)
+            save_as_yaml(lighteval_config, config.general.lighteval_config_path)
 
         config_path_yaml = str(Path(config.general.config_logs_path) / "launch_config.yaml")
         Path(config.general.config_logs_path).mkdir(parents=True, exist_ok=True)
@@ -354,7 +353,8 @@ if __name__ == "__main__":
         try:
             gpu_count = torch.cuda.device_count()
             is_interactive = gpu_count > 0
-        except:
+        except Exception as e:
+            print(f"Warning: Could not get GPU count: {e}")
             is_interactive = False
 
         if is_interactive:

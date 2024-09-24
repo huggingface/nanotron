@@ -97,7 +97,7 @@ class PretrainDatasetsArgs:
 class S3UploadArgs:
     """Arguments related to uploading checkpoints on s3"""
 
-    remove_after_upload: bool
+    remove_after_upload: Optional[bool] = True
     upload_s3_path: Optional[
         str
     ] = None  # set to None if we want to use S3UploadArgs to download checkpoints from s3 but not upload checkpoints on s3
@@ -110,23 +110,6 @@ class S3UploadArgs:
             self.upload_s3_path = xPath(self.upload_s3_path)
         if isinstance(self.s5cmd_path, str):
             self.s5cmd_path = Path(self.s5cmd_path)
-
-
-@dataclass
-class S3UploadArgs:
-    """Arguments related to uploading checkpoints on s3"""
-
-    upload_s3_path: xPath
-    remove_after_upload: bool
-    s5cmd_numworkers: Optional[int]
-    s5cmd_concurrency: Optional[int]
-    s5cmd_path: Optional[xPath]
-
-    def __post_init__(self):
-        if isinstance(self.upload_s3_path, str):
-            self.upload_s3_path = xPath(self.upload_s3_path)
-        if isinstance(self.s5cmd_path, str):
-            self.s5cmd_path = xPath(self.s5cmd_path)
 
 
 @dataclass
@@ -222,8 +205,6 @@ class GeneralArgs:
     consumed_train_samples: Optional[int] = None
     benchmark_csv_path: Optional[Path] = None
     ignore_sanity_checks: bool = True
-    wandb_id: Optional[str] = None
-    wandb_project: Optional[str] = None
 
     def __post_init__(self):
         if self.seed is None:
@@ -395,10 +376,6 @@ class Config:
         return cls(**{f.name: None for f in cls_fields})
 
     def __post_init__(self):
-
-        if hasattr(self, "_post_init_done"):
-            return
-        self._post_init_done = True
         self.general.__post_init__()
 
         if self.s3_upload is not None:
@@ -538,8 +515,8 @@ def get_config_from_file(
     return config
 
 
-def save_as_yaml(config, config_class, file_path: str):
-
+def save_as_yaml(config: Union[Config, LightEvalConfig], file_path: str):
+    config_class = type(config)
     config_dict = serialize(config)
     file_path = str(file_path)
     with open(file_path, "w") as f:

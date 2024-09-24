@@ -1,12 +1,8 @@
 import os
 from pathlib import Path
 from typing import Optional, cast
-from datasets.download.streaming_download_manager import xPath
-import os
 
-from nanotron.s3_checkpoints import S3Mover, check_path_is_local, fs_open
 import torch
-from datasets.download.streaming_download_manager import xPath
 from torch import nn
 from torch.nn.parallel import DistributedDataParallel
 from torch.optim.lr_scheduler import LambdaLR

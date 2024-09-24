@@ -2,12 +2,10 @@ import functools
 import inspect
 import os
 import random
-import socket
 import re
+import socket
 from contextlib import ExitStack, contextmanager
 from typing import ContextManager, List, Optional
-import json
-import os
 
 import torch
 from packaging import version
@@ -164,7 +162,8 @@ def find_free_port(min_port: int = 2000, max_port: int = 65000) -> int:
         except OSError:
             continue
 
-def check_path_is_s3(path:str) -> bool:
-    #TODO maybe replace by a better method ? 
-    s3_pattern = r'^s3://|^https?://[\w\-\.]+\.s3\.amazonaws\.com/|^https?://s3\.amazonaws\.com/[\w\-\.]+'
+
+def check_path_is_s3(path: str) -> bool:
+    # TODO maybe replace by a better method ?
+    s3_pattern = r"^s3://|^https?://[\w\-\.]+\.s3\.amazonaws\.com/|^https?://s3\.amazonaws\.com/[\w\-\.]+"
     return bool(re.match(s3_pattern, path))

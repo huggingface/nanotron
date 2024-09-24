@@ -304,7 +304,6 @@ class DistributedTrainer:
             rank=0,
         )
 
-        datetime.datetime.now().strftime("%d/%m/%Y_%H:%M:%S")
         if dist.get_rank(self.parallel_context.world_pg) == 0 and wandb is not None:
             wandb.init(
                 project=self.config.general.project,
@@ -324,8 +323,6 @@ class DistributedTrainer:
 
             # Log initial tokens to set the starting point
             wandb.log({"Tokens": initial_tokens})
-
-            print(f"Initial Tokens: {initial_tokens}")
 
     def post_train_step(self):
         # Update our background upload/removal of checkpoints
@@ -888,17 +885,6 @@ class DistributedTrainer:
         return loggerwriter
 
     def pre_save_checkpoint(self) -> Path:
-
-        if wandb is not None and dist.get_rank(self.parallel_context.dp_pg) == 0:
-            if self.config.general.wandb_id is None:
-                self.config.general.wandb_id = wandb.run.id
-                self.config.general.wandb_project = wandb.run.project
-            elif self.config.general.wandb_id is not None and self.config.general.wandb_id != wandb.run.id:
-                log_rank(
-                    "Update the wandb run due too resume from checkpoint", logger=logger, level=logging.WARNING, rank=0
-                )
-                self.config.general.wandb_id = wandb.run.id
-                self.config.general.wandb_project = wandb.run.project
         if self.s3_mover is not None:
             self.s3_mover.distributed_wait_for_completion(self.parallel_context.world_pg)
             if self.s3_mover.post_upload_callback_outputs is not None:

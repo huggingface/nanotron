@@ -94,7 +94,7 @@ if __name__ == "__main__":
     #     ),
     # )
 
-    # lighteval = None
+    lighteval = None
 
     checkpoints = CheckpointsArgs(
         # checkpoints_path="checkpoints",
