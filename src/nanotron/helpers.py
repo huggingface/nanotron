@@ -146,6 +146,10 @@ def lr_scheduler_builder(optimizer: Optimizer, lr_scheduler_args: LRSchedulerArg
                     * (lr_decay_steps - (current_step - lr_decay_starting_step))
                     / lr_decay_steps
                 )
+            elif lr_scheduler_args.lr_decay_style == "1-sqrt":
+                lmbda = lr_scheduler_args.min_decay_lr + (initial_lr - lr_scheduler_args.min_decay_lr) * (
+                    1 - math.sqrt((current_step - lr_decay_starting_step) / lr_decay_steps)
+                )
             else:
                 raise ValueError(f"Unknown decay style {lr_scheduler_args.lr_decay_style}")
 
@@ -192,7 +196,14 @@ def get_custom_weight_decay_for_named_parameters(
 
     exclude_named_params = model.get_named_params_without_weight_decay()
 
+    from nanotron import constants
+
     for name, param in named_parameters:
+        if "layer_scale" in name and constants.CONFIG.fp8.layer_scale_wdecay is not None:
+            wd_value = constants.CONFIG.fp8.layer_scale_wdecay
+        else:
+            wd_value = weight_decay
+
         if param.is_tied:
             param.get_tied_info().get_full_name_from_module_id_to_prefix(module_id_to_prefix=module_id_to_prefix)
         else:
@@ -202,7 +213,7 @@ def get_custom_weight_decay_for_named_parameters(
             named_param_groups_with_custom_weight_decay.append({"named_params": [(name, param)], "weight_decay": 0.0})
         else:
             named_param_groups_with_custom_weight_decay.append(
-                {"named_params": [(name, param)], "weight_decay": weight_decay}
+                {"named_params": [(name, param)], "weight_decay": wd_value}
             )
 
     log_rank(

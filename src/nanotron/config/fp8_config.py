@@ -31,13 +31,18 @@ class FP8Args:
     clipped_softmax_gamma: Optional[float] = None
 
     gated_attention: bool = False
+
     layer_scale: bool = False
     layer_scale_init: Optional[str] = None
+    layer_scale_lr: Optional[float] = None
+    layer_scale_wdecay: Optional[float] = None
 
     qk_norm: bool = False
     qk_norm_before_pos: bool = False
 
     smooth_quant: Optional[bool] = None
+    smooth_quant_migration_strength: Optional[float] = 0.5
+
     stochastic_rounding: bool = False
     update_clipping: bool = False
     skip_param_update_if_nan: bool = False
@@ -54,9 +59,13 @@ class FP8Args:
 
     qkv_clipping: bool = False
     qkv_clipping_factor: Optional[float] = None
-    is_debugging: bool = False
     is_save_grad_for_accum_debugging: bool = False
     is_directly_keep_accum_grad_of_fp8: bool = False
+
+    triton_rms_norm: bool = False
+
+    is_debugging: bool = False
+    is_sanity_logging: bool = False
 
     def __post_init__(self):
         assert 1 == 1

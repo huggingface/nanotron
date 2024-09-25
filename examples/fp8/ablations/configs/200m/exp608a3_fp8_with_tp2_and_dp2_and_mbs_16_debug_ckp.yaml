@@ -1,7 +1,8 @@
 checkpoints:
-  checkpoint_interval: 50000
+  checkpoint_interval: 5
   checkpoints_path: checkpoints
   checkpoints_path_is_shared_file_system: false
+  resume_checkpoint_path: /fsx/phuc/temp/temp3_env_for_fp8/nanotron/checkpoints/5
   save_initial_state: false
 data_stages:
 - data:
@@ -21,7 +22,7 @@ general:
   consumed_train_samples: null
   ignore_sanity_checks: true
   project: fp8_for_nanotron
-  run: exp600a0_grad_accum_debug_with_accum_2_mbs_16_after_zero_grad
+  run: exp608a0_fp8_with_tp2_and_dp2_and_mbs_16
   seed: 42
   step: null
 lighteval: null
@@ -29,8 +30,8 @@ logging:
   iteration_step_info_interval: 1
   log_level: info
   log_level_replica: info
-  monitor_model_states: true
-  monitor_model_states_using_hooks: true
+  monitor_model_states: false
+  monitor_model_states_using_hooks: false
 model:
   ddp_bucket_cap_mb: 25
   dtype: float8
@@ -61,13 +62,13 @@ model:
     vocab_size: 49152
 
 optimizer:
-  accumulate_grad_in_fp32: true
+  accumulate_grad_in_fp32: false
   learning_rate_scheduler:
     learning_rate: 0.0006
     lr_decay_starting_step: null
     lr_decay_steps: null
     lr_decay_style: cosine
-    lr_warmup_steps: 5000 # 10% warm up of total training steps
+    lr_warmup_steps: 70_000 # 10% warm up of total training steps
     lr_warmup_style: linear
     min_decay_lr: 0.00006
 
@@ -82,11 +83,11 @@ optimizer:
   # update_clipping: true
 
 parallelism:
-  dp: 1
+  dp: 2
   expert_parallel_size: 1
   pp: 1
   pp_engine: 1f1b
-  tp: 1
+  tp: 2
   tp_linear_async_communication: false
   tp_mode: ALL_REDUCE
 
@@ -98,13 +99,13 @@ tokenizer:
 tokens:
   # NOTE: micro_batch_size * sequence_length * batch_accumulation_per_replica
   # = 128 * 256 * 1 = 16384
-  batch_accumulation_per_replica: 2
+  batch_accumulation_per_replica: 1
   limit_test_batches: 0
   limit_val_batches: 0
   micro_batch_size: 16
   # micro_batch_size: 1
   sequence_length: 64
-  train_steps: 1
+  train_steps: 10
   val_check_interval: -1
 
 fp8:
@@ -1685,5 +1686,4 @@ fp8:
   update_clipping: true
 
   skip_param_update_if_nan: true
-  is_debugging: false
-  is_save_grad_for_accum_debugging: true
+  is_directly_keep_accum_grad_of_fp8: true

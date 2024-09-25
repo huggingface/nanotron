@@ -37,18 +37,29 @@ def clip_grad_norm(
     world_rank = dist.get_rank()
 
     # assert that all params require grad
-    for _, p in named_parameters:
-        assert p.requires_grad, "clip_grad_norm_ only supports Tensors that require grad"
+    # for _, p in named_parameters:
+    #     assert p.requires_grad, "clip_grad_norm_ only supports Tensors that require grad"
 
     if grad_accumulator is None:
         # grads = [
         #     p.grad for _, p in named_parameters if not p.is_tied or world_rank == p.get_tied_info().global_ranks[0]
         # ]
-        grads = [
-            get_grad_from_parameter(p)
-            for _, p in named_parameters
-            if not p.is_tied or world_rank == p.get_tied_info().global_ranks[0]
-        ]
+
+        from nanotron.fp8.tensor import FP8Tensor
+        from nanotron.helpers import get_accum_grad
+
+        # grads = [
+        #     get_grad_from_parameter(p)
+        #     for _, p in named_parameters
+        #     if not p.is_tied or world_rank == p.get_tied_info().global_ranks[0]
+        # ]
+
+        grads = []
+        for n, p in named_parameters:
+            if p.data.__class__ == FP8Tensor:
+                grads.append(get_accum_grad(n))
+            else:
+                grads.append(get_grad_from_parameter(p))
     else:
         # In case of FP32 Grad Accum, We need to clip all fp32 grads
         grads = [
@@ -87,26 +98,41 @@ def clip_grad_norm(
     # when the gradients do not reside in CPU memory.
     clip_coef_clamped = torch.clamp(clip_coef, max=1.0)
 
+    assert 1 == 1
+
     # devices = {
     #     param.grad.device if grad_accumulator is None else grad_accumulator.get_grad_buffer(name).device
     #     for name, param in named_parameters
     # }
-    devices = {
-        get_grad_from_parameter(param).device
-        if grad_accumulator is None
-        else grad_accumulator.get_grad_buffer(name).device
-        for name, param in named_parameters
-    }
-    device_to_clip_coef_clamped = {device: clip_coef_clamped.to(device) for device in devices}
+    # devices = {
+    #     get_grad_from_parameter(param).device
+    #     if grad_accumulator is None
+    #     else grad_accumulator.get_grad_buffer(name).device
+    #     for name, param in named_parameters
+    # }
+    # device_to_clip_coef_clamped = {device: clip_coef_clamped.to(device) for device in devices}
 
+    # for name, param in named_parameters:
+    #     if grad_accumulator is None:
+    #         # param.grad.detach().mul_(device_to_clip_coef_clamped[param.grad.device])
+    #         get_grad_from_parameter(param).mul_(device_to_clip_coef_clamped[get_grad_from_parameter(param).device])
+    #         assert 1 == 1
+    #     else:
+    #         grad_accumulator.get_grad_buffer(name).mul_(
+    #             device_to_clip_coef_clamped[grad_accumulator.get_grad_buffer(name).device]
+    #         )
     for name, param in named_parameters:
         if grad_accumulator is None:
             # param.grad.detach().mul_(device_to_clip_coef_clamped[param.grad.device])
-            get_grad_from_parameter(param).mul_(device_to_clip_coef_clamped[get_grad_from_parameter(param).device])
-            assert 1 == 1
+            # get_grad_from_parameter(param).mul_(clip_coef_clamped)
+            if param.data.__class__ == FP8Tensor:
+                get_accum_grad(name).mul_(clip_coef_clamped)
+            else:
+                get_grad_from_parameter(param).mul_(clip_coef_clamped)
         else:
-            grad_accumulator.get_grad_buffer(name).mul_(
-                device_to_clip_coef_clamped[grad_accumulator.get_grad_buffer(name).device]
-            )
+            raise NotImplementedError
+            # grad_accumulator.get_grad_buffer(name).mul_(
+            #     device_to_clip_coef_clamped[grad_accumulator.get_grad_buffer(name).device]
+            # )
 
     return total_norm

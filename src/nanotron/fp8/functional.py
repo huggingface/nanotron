@@ -99,8 +99,15 @@ def linear(
     recipe: FP8LinearRecipe = None,
     name: Optional[str] = None,
 ):
+    from typing import cast
+
+    from nanotron import constants
+    from nanotron.config.fp8_config import FP8Args
+
     if recipe.smooth_quant is True:
-        input, weight = smooth_quant(input, weight, alpha=0.5)
+        fp8_config = cast(FP8Args, constants.CONFIG.fp8)
+        migration_strength = fp8_config.smooth_quant_migration_strength
+        input, weight = smooth_quant(input, weight, alpha=migration_strength)
 
     assert metadatas is not None, "metadatas must be specified"
     assert recipe is not None, "recipe must be specified"

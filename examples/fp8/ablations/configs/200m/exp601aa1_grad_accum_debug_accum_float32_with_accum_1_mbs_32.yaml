@@ -104,7 +104,7 @@ tokens:
   micro_batch_size: 32
   # micro_batch_size: 1
   sequence_length: 64
-  train_steps: 1
+  train_steps: 100
   val_check_interval: -1
 
 fp8:

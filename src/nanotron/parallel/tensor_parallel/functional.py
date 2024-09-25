@@ -481,6 +481,17 @@ def column_linear(
         if name not in constants.TRACKING_FP8_PARAM:
             constants.TRACKING_FP8_PARAM[name] = weight
 
+        if constants.CONFIG.fp8 is not None and constants.CONFIG.fp8.is_sanity_logging is True:
+            from nanotron import logging
+            from nanotron.logging import log_rank
+
+            logger = logging.get_logger(__name__)
+            log_rank(
+                f"[iteration_step: {constants.ITERATION_STEP}]name = {name}, doing fp8 kernel",
+                logger=logger,
+                level=logging.INFO,
+            )
+
         return fp8_functional.linear(input, weight, bias, metadatas=metadatas, recipe=recipe, name=name)
     else:
         return F.linear(input, weight, bias)

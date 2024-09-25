@@ -28,6 +28,7 @@ from nanotron.generation.generate_store import AttachableStore
 from nanotron.logging import log_rank
 from nanotron.models import NanotronModel
 from nanotron.nn.activations import ACT2FN
+from nanotron.nn.layer_norm import TritonRMSNorm
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter
 from nanotron.parallel.pipeline_parallel.block import PipelineBlock, TensorPointer
@@ -322,7 +323,7 @@ def self_attention_with_causal_mask(
     return (attn_weights, raw_attn_probs, attn_probs, output)
 
 
-class CoreAttention(nn.Module):
+class CoreClippedAttention(nn.Module):
     def __init__(self, config: LlamaConfig, parallel_config: Optional[ParallelismArgs], layer_idx: int):
         super().__init__()
         # TODO @thomasw21: GPT has a weird `d_kv` config which I'm guessing is essentically a `d_qkv`
@@ -414,6 +415,60 @@ class CoreAttention(nn.Module):
                     f"model.decoder.{self.layer_idx}.pp_block.attn.clipped_attn_entropy",
                     {"value": clipped_attn_entropy},
                 )
+
+        return attn_output
+
+
+class CoreAttention(nn.Module):
+    def __init__(self, config: LlamaConfig, parallel_config: Optional[ParallelismArgs], layer_idx: int):
+        super().__init__()
+        # TODO @thomasw21: GPT has a weird `d_kv` config which I'm guessing is essentically a `d_qkv`
+        assert (
+            config.hidden_size % config.num_attention_heads == 0
+        ), f"Hidden size {config.hidden_size} must be divisible by number of attention heads {config.num_attention_heads}."
+        self.d_qk = config.hidden_size // config.num_attention_heads
+        self.d_v = config.hidden_size // config.num_attention_heads
+        self.is_using_mup = config.is_using_mup
+
+        self.checkpoint_attention = False  # Because flash_attn already does checkpointing
+
+    @checkpoint_method(attr_name="checkpoint_attention")
+    def forward(
+        self,
+        query_states: torch.Tensor,  # [batch_size * q_length, n_local_q_heads, inner_dim]
+        key_states: torch.Tensor,  # [batch_size * kv_length, n_local_kv_heads, inner_dim]
+        value_states: torch.Tensor,  # [batch_size * kv_length, n_local_kv_heads, inner_dim]
+        q_sequence_mask: torch.Tensor,  # torch.BoolTensor [batch_size, q_length] (can be broadcasted to that size)
+        kv_sequence_mask: torch.Tensor,  # torch.BoolTensor [batch_size, kv_length] (can be broadcasted to that size)
+    ):
+        from flash_attn.flash_attn_interface import flash_attn_varlen_func
+
+        # TODO @thomasw21: Compute once, instead of computing for each layers.
+        cu_seqlens_q = torch.zeros((q_sequence_mask.shape[0] + 1), dtype=torch.int32, device=query_states.device)
+        cu_seqlens_k = torch.zeros((kv_sequence_mask.shape[0] + 1), dtype=torch.int32, device=query_states.device)
+        torch.cumsum(q_sequence_mask.sum(-1, dtype=torch.int32), dim=0, dtype=torch.int32, out=cu_seqlens_q[1:])
+        torch.cumsum(kv_sequence_mask.sum(-1, dtype=torch.int32), dim=0, dtype=torch.int32, out=cu_seqlens_k[1:])
+
+        # TODO(kunhao): flash attn's causal means that the query can only attend to the keys before it. This is not
+        # what we want if we are using kv cache. This is a hack as we always have q_length == 1 when using kv cache.
+        causal = False if q_sequence_mask.shape[1] == 1 else True
+
+        # NOTE: this scale is for µTransfer,
+        # in SP, we use sqrt(1/d_h)
+        softmax_scale = 1 / query_states.shape[-1] if self.is_using_mup else None
+        attn_output = flash_attn_varlen_func(
+            q=query_states,
+            k=key_states,
+            v=value_states,
+            cu_seqlens_q=cu_seqlens_q,
+            cu_seqlens_k=cu_seqlens_k,
+            max_seqlen_q=q_sequence_mask.shape[1],
+            max_seqlen_k=kv_sequence_mask.shape[1],
+            dropout_p=0.0,
+            softmax_scale=softmax_scale,
+            causal=causal,
+            return_attn_probs=False,
+        )
 
         return attn_output
 
@@ -561,11 +616,18 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             **output_additional_args,
         )
 
-        self.attention = CoreAttention(
-            config,
-            parallel_config=parallel_config,
-            layer_idx=layer_idx,
-        )
+        if constants.CONFIG.fp8 is not None and constants.CONFIG.fp8.clipped_softmax is True:
+            self.attention = CoreClippedAttention(
+                config,
+                parallel_config=parallel_config,
+                layer_idx=layer_idx,
+            )
+        else:
+            self.attention = CoreAttention(
+                config,
+                parallel_config=parallel_config,
+                layer_idx=layer_idx,
+            )
 
         self.prefill_kv_len = (
             config.max_position_embeddings
@@ -843,6 +905,15 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                 query_states = self.q_norm(query_states)
                 key_states = self.k_norm(key_states)
 
+            if constants.CONFIG.fp8.clipped_softmax is False:
+                query_states = (
+                    query_states.to(torch.bfloat16) if query_states.dtype != torch.bfloat16 else query_states
+                )
+                key_states = key_states.to(torch.bfloat16) if key_states.dtype != torch.bfloat16 else key_states
+                value_states = (
+                    value_states.to(torch.bfloat16) if value_states.dtype != torch.bfloat16 else value_states
+                )
+
             attention_output = self.attention(
                 query_states=query_states,
                 key_states=key_states,
@@ -851,9 +922,16 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                 kv_sequence_mask=kv_sequence_mask,
             )
 
+            assert 1 == 1
+
         attention_output = (
             attention_output.contiguous().view(batch_size, q_length, self.n_local_q_heads * self.d_v).transpose(0, 1)
         )
+        # NOTE: if this layer isn't quantized to FP8, then cast the attn_output to
+        # to the dtype that we keep non-quantized layers in
+        if self.o_proj.__class__ == TensorParallelRowLinear:
+            attention_output = attention_output.to(torch.float32)
+
         output = self.o_proj(attention_output)
 
         return {"hidden_states": output, "sequence_mask": sequence_mask}
@@ -868,10 +946,14 @@ class LlamaDecoderLayer(nn.Module):
         layer_idx: int,
     ):
         super().__init__()
-        # self.input_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.layer_idx = layer_idx
         self.normalized_shape = (config.hidden_size,)
-        self.input_layernorm = nn.LayerNorm(config.hidden_size, eps=config.rms_norm_eps)
+
+        if constants.CONFIG.fp8 is not None and constants.CONFIG.fp8.triton_rms_norm is False:
+            self.input_layernorm = nn.LayerNorm(config.hidden_size, eps=config.rms_norm_eps)
+        else:
+            self.input_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+
         # self.input_layernorm = nn.Identity()
         self.attn = CausalSelfAttention(
             config=config,
@@ -882,8 +964,11 @@ class LlamaDecoderLayer(nn.Module):
             name=f"model.decoder.{layer_idx}.pp_block.attn",
         )
 
-        # self.post_attention_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.post_attention_layernorm = nn.LayerNorm(config.hidden_size, eps=config.rms_norm_eps)
+        if constants.CONFIG.fp8 is not None and constants.CONFIG.fp8.triton_rms_norm is False:
+            self.post_attention_layernorm = nn.LayerNorm(config.hidden_size, eps=config.rms_norm_eps)
+        else:
+            self.post_attention_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+
         # self.post_attention_layernorm = nn.Identity()
         self.mlp = MLP(config=config, parallel_config=parallel_config, tp_pg=tp_pg, layer_idx=layer_idx)
 
@@ -916,6 +1001,7 @@ class LlamaDecoderLayer(nn.Module):
 
         from einops import rearrange
 
+        from nanotron import constants
         from nanotron.constants import CONFIG
         from nanotron.fp8.utils import compute_stas
 
@@ -1090,16 +1176,25 @@ class LlamaModel(nn.Module):
             ]
         )
 
-        self.final_layer_norm = PipelineBlock(
-            p2p=self.p2p,
-            # module_builder=TritonRMSNorm,
-            # module_kwargs={"hidden_size": config.hidden_size, "eps": config.rms_norm_eps},
-            module_builder=nn.LayerNorm,
-            # module_builder=nn.Identity,
-            module_kwargs={"normalized_shape": config.hidden_size, "eps": config.rms_norm_eps},
-            module_input_keys={"input"},
-            module_output_keys={"hidden_states"},
-        )  # TODO
+        if constants.CONFIG.fp8 is not None and constants.CONFIG.fp8.triton_rms_norm is False:
+            self.final_layer_norm = PipelineBlock(
+                p2p=self.p2p,
+                # module_builder=TritonRMSNorm,
+                # module_kwargs={"hidden_size": config.hidden_size, "eps": config.rms_norm_eps},
+                module_builder=nn.LayerNorm,
+                # module_builder=nn.Identity,
+                module_kwargs={"normalized_shape": config.hidden_size, "eps": config.rms_norm_eps},
+                module_input_keys={"input"},
+                module_output_keys={"hidden_states"},
+            )  # TODO
+        else:
+            self.final_layer_norm = PipelineBlock(
+                p2p=self.p2p,
+                module_builder=TritonRMSNorm,
+                module_kwargs={"hidden_size": config.hidden_size, "eps": config.rms_norm_eps},
+                module_input_keys={"input"},
+                module_output_keys={"hidden_states"},
+            )  # TODO
 
         lm_head_cls, lm_head_additional_args = get_cls_and_additional_args(
             TensorParallelColumnLinear, "model.lm_head", constants.CONFIG

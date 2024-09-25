@@ -1,8 +1,11 @@
 checkpoints:
-  checkpoint_interval: 50000
-  checkpoints_path: checkpoints
+  checkpoint_interval: 2500
+  checkpoints_path: /fsx/phuc/new_workspace/experiments/fp8_for_nanotron/exp608ba1_100m_fp8_like_exp602ah01_with_fp8_optim_and_adam_epsilon_1.0e-5_and_smol_ds_but_tp8_and_dp10_and_mbs_2560_and_gbs_1.6m_and_100b_tokens_and_70k_steps/checkpoints/
   checkpoints_path_is_shared_file_system: false
+  # resume_checkpoint_path: /fsx/phuc/new_workspace/experiments/fp8_for_nanotron/exp608ba1_100m_fp8_like_exp602ah01_with_fp8_optim_and_adam_epsilon_1.0e-5_and_smol_ds_but_tp8_and_dp10_and_mbs_2560_and_gbs_1.6m_and_100b_tokens_and_70k_steps.6m_and_100b_tokens_and_70k_steps/checkpoints/
   save_initial_state: false
+
+# NOTE: the old one
 data_stages:
 - data:
     dataset:
@@ -16,12 +19,42 @@ data_stages:
     seed: 42
   name: Stable Training Stage
   start_training_step: 1
+
+
+# data_stages:
+# - data:
+#     dataset:
+#       dataloader_type: single
+#       dataset_max_tokens: null
+#       dataset_weights:
+#       - 0.5
+#       - 0.4
+#       - 0.1
+#       datasets:
+#       - filename_pattern: .*.ds
+#         folder: /fsx/loubna/tokenized_for_exps/fw_edu/fineweb-edu-full-cosmo2_merged
+#         skip_tokens: 0
+#       - filename_pattern: .*.ds
+#         # NOTE: lobuna deleted it
+#         # folder: /fsx/loubna/tokenized_for_exps/fw_edu/dclm-3T-cosmo2_merged
+#         folder: /fsx/phuc/datasets/100b_smol_ds/fw_edu_dclm_subset
+#         skip_tokens: 0
+#       - filename_pattern: .*.ds
+#         folder: /fsx/loubna/tokenized_for_exps/fw_edu/starcoderdata-full-cosmo_merged
+#         skip_tokens: 0
+#       pad_samples_to_global_batch_size: false
+#       skip_in_stream: true
+#     num_loading_workers: 0
+#     seed: 42
+#   name: Stable Training Stage
+#   start_training_step: 1
+
 general:
   benchmark_csv_path: null
   consumed_train_samples: null
   ignore_sanity_checks: true
   project: fp8_for_nanotron
-  run: exp600a0_grad_accum_debug_with_accum_2_mbs_16_after_zero_grad
+  run: exp608ba1_100m_fp8_like_exp602ah01_with_fp8_optim_and_adam_epsilon_1.0e-5_and_smol_ds_but_tp8_and_dp10_and_mbs_2560_and_gbs_1.6m_and_100b_tokens_and_70k_steps
   seed: 42
   step: null
 lighteval: null
@@ -29,8 +62,8 @@ logging:
   iteration_step_info_interval: 1
   log_level: info
   log_level_replica: info
-  monitor_model_states: true
-  monitor_model_states_using_hooks: true
+  monitor_model_states: false
+  monitor_model_states_using_hooks: false
 model:
   ddp_bucket_cap_mb: 25
   dtype: float8
@@ -61,13 +94,13 @@ model:
     vocab_size: 49152
 
 optimizer:
-  accumulate_grad_in_fp32: true
+  accumulate_grad_in_fp32: false
   learning_rate_scheduler:
     learning_rate: 0.0006
     lr_decay_starting_step: null
     lr_decay_steps: null
     lr_decay_style: cosine
-    lr_warmup_steps: 5000 # 10% warm up of total training steps
+    lr_warmup_steps: 15_000 # 10% warm up of total training steps
     lr_warmup_style: linear
     min_decay_lr: 0.00006
 
@@ -79,14 +112,18 @@ optimizer:
     torch_adam_is_fused: true
   weight_decay: 0.1
   zero_stage: 0
+  clip_grad: 1.0
   # update_clipping: true
 
 parallelism:
+  # large batch training
+  # dp: 10
+  # tp: 8
   dp: 1
+  tp: 2
   expert_parallel_size: 1
   pp: 1
   pp_engine: 1f1b
-  tp: 1
   tp_linear_async_communication: false
   tp_mode: ALL_REDUCE
 
@@ -98,13 +135,14 @@ tokenizer:
 tokens:
   # NOTE: micro_batch_size * sequence_length * batch_accumulation_per_replica
   # = 128 * 256 * 1 = 16384
-  batch_accumulation_per_replica: 2
+  batch_accumulation_per_replica: 1
   limit_test_batches: 0
   limit_val_batches: 0
+  # large batch training
+  # micro_batch_size: 2560 # 2560 * 64 * 10 = 1.6M tokens per batch
   micro_batch_size: 16
-  # micro_batch_size: 1
   sequence_length: 64
-  train_steps: 1
+  train_steps: 70_000
   val_check_interval: -1
 
 fp8:
@@ -1685,5 +1723,20 @@ fp8:
   update_clipping: true
 
   skip_param_update_if_nan: true
-  is_debugging: false
-  is_save_grad_for_accum_debugging: true
+  is_directly_keep_accum_grad_of_fp8: true
+
+# s3_upload:
+#   remove_after_upload: true
+#   s5cmd_concurrency: 5
+#   s5cmd_numworkers: 16
+#   s5cmd_path: /fsx/nouamane/miniconda/envs/2-1-cu121/bin/s5cmd
+#   upload_s3_path: s3://phuc-experiments/fp8_for_nanotron/exp608ba1_100m_fp8_like_exp602ah01_with_fp8_optim_and_adam_epsilon_1.0e-5_and_smol_ds_but_tp8_and_dp10_and_mbs_2560_and_gbs_1.6m_and_100b_tokens_and_70k_steps
+
+# experiment_logger:
+#   # id: exp608bb0_100m_bfloat16_with_adam_epsilon_1.0e-8_and_smol_ds_but_tp8_and_dp2_and_grad_accum5_and_mbs_2560_and_gbs_1.6m_and_100b_tokens_and_70k_steps
+#   tensorboard_logger:
+#     flush_secs: 30
+#     tensorboard_dir: /fsx/phuc/new_workspace/experiments/fp8_for_nanotron/exp608ba1_100m_fp8_like_exp602ah01_with_fp8_optim_and_adam_epsilon_1.0e-5_and_smol_ds_but_tp8_and_dp10_and_mbs_2560_and_gbs_1.6m_and_100b_tokens_and_70k_steps/logs/tb_logs
+#   wandb_logger:
+#     wandb_entity: neuralink
+#     wandb_project: fp8_for_nanotron

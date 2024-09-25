@@ -281,9 +281,13 @@ class LRSchedulerArgs:
             self.lr_warmup_style = "linear"
         if self.lr_decay_style is None:
             self.lr_decay_style = "linear"
-        if self.lr_decay_style not in ["linear", "cosine"]:
+        # if self.lr_decay_style not in ["linear", "cosine"]:
+        #     raise ValueError(
+        #         f"lr_decay_style should be a string selected in ['linear', 'cosine'] and not {self.lr_decay_style}"
+        #     )
+        if self.lr_decay_style not in ["linear", "cosine", "1-sqrt"]:
             raise ValueError(
-                f"lr_decay_style should be a string selected in ['linear', 'cosine'] and not {self.lr_decay_style}"
+                f"lr_decay_style should be a string selected in ['linear', 'cosine', '1-sqrt'] and not {self.lr_decay_style}"
             )
         if self.min_decay_lr is None:
             self.min_decay_lr = self.learning_rate

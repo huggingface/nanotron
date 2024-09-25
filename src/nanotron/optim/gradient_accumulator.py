@@ -237,6 +237,7 @@ class FP32GradientAccumulator(GradientAccumulator):
         from nanotron import constants
         from nanotron.fp8.tensor import FP8Tensor, convert_tensor_from_fp8
         from nanotron.helpers import get_accum_grad, set_accum_grad
+        from nanotron.parallel.parameters import get_data_from_param
 
         if self._is_accumulation_sync_step is False:
             # WARNING: We assume fp32_grad_bucket is already zeroed
@@ -248,20 +249,19 @@ class FP32GradientAccumulator(GradientAccumulator):
                 assert 1 == 1
 
             if constants.CONFIG.tokens.batch_accumulation_per_replica > 1:
-                from nanotron.parallel.parameters import get_data_from_param
-
                 if get_data_from_param(half_param).__class__ == FP8Tensor:
                     assert "bias" not in name, f"Bias should not be supported, name: {name}"
                     # NOTE: we don't support bias
                     # _grad = constants.ACCUM_GRADS[name.replace(".weight", "").replace(".pp_block", "")]
                     _grad = get_accum_grad(name)
+                    set_accum_grad(name, None)
                 else:
                     _grad = get_grad_from_parameter(half_param)
                     # NOTE: zero grad after accumulation
                     # half_param.data.grad = None
-                    from nanotron.parallel.parameters import set_grad_none_for_sliced_or_param
+                    # from nanotron.parallel.parameters import set_grad_none_for_sliced_or_param
 
-                    set_grad_none_for_sliced_or_param(half_param)
+                    # set_grad_none_for_sliced_or_param(half_param)
 
             else:
                 _grad = get_grad_from_parameter(half_param)
@@ -280,7 +280,8 @@ class FP32GradientAccumulator(GradientAccumulator):
 
             fp32_grad.add_(_grad)
             # constants.ACCUM_GRADS[name.replace(".weight", "").replace(".pp_block", "")] = None
-            set_accum_grad(name, None)
+
+            # set_accum_grad(name, None)
             # In case _is_accumulation_sync_step = True: no need to add half gradients, because it's done in the allreduce hook
 
         # TODO @thomasw21: Is it better to set to zero instead?
@@ -288,6 +289,11 @@ class FP32GradientAccumulator(GradientAccumulator):
         from nanotron.parallel.parameters import set_grad_none_for_sliced_or_param
 
         set_grad_none_for_sliced_or_param(half_param)
+
+        assert get_grad_from_parameter(half_param) is None
+        if constants.CONFIG.tokens.batch_accumulation_per_replica > 1:
+            if get_data_from_param(half_param).__class__ == FP8Tensor:
+                assert get_accum_grad(name) is None
 
         # In the case an optimizer decides to set it to None, we need to re-assign previous buffer
         # if name in self.parameters:

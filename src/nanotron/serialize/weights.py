@@ -330,6 +330,9 @@ def load_weights(
                 else:
                     raise ValueError(f"Unsupported checkpoint version {checkpoint_version}")
 
+                if "model.decoder.1.pp_block.attn.qkv_proj.weight" in name:
+                    assert 1 == 1
+
         else:
             raise NotImplementedError(f"Parameters {param} should be a NanotronParameter")
 

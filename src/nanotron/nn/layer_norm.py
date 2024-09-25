@@ -6,9 +6,9 @@ class TritonLayerNorm(nn.LayerNorm):
     def forward(
         self, input, residual=None, dropout_p=0.0, prenorm=False, residual_in_fp32=False, return_dropout_mask=False
     ):
-        from flash_attn.ops.triton.layer_norm import layer_norm_fn
+        # from flash_attn.ops.triton.layer_norm import layer_norm_fn
 
-        return layer_norm_fn(
+        return rms_norm_fn(
             input,
             self.weight,
             self.bias,
@@ -35,11 +35,14 @@ class TritonRMSNorm(nn.Module):
         nn.init.ones_(self.weight)
 
     def forward(
-        self, input, residual=None, dropout_p=0.0, prenorm=False, residual_in_fp32=False, return_dropout_mask=False
+        self, input, residual=None, dropout_p=0.0, prenorm=False, residual_in_fp32=True, return_dropout_mask=False
     ):
-        from flash_attn.ops.triton.layer_norm import layer_norm_fn
 
-        return layer_norm_fn(
+        # from flash_attn.ops.triton.layer_norm import layer_norm_fn
+        # NOTE: fa=2.4.2
+        from flash_attn.ops.triton.layernorm import rms_norm_fn
+
+        return rms_norm_fn(
             input,
             self.weight,
             None,
@@ -48,6 +51,6 @@ class TritonRMSNorm(nn.Module):
             dropout_p=dropout_p,
             prenorm=prenorm,
             residual_in_fp32=residual_in_fp32,
-            is_rms_norm=True,
+            # is_rms_norm=True, # NOTE: fa=2.4.2 don't use this? wtf dao
             return_dropout_mask=return_dropout_mask,
         )

@@ -499,6 +499,19 @@ class DistributedTrainer:
                 self.is_ready_for_normal_log = is_ready_for_normal_log
                 constants.is_ready_to_log = is_ready_to_log
 
+                if self.config.fp8 is not None and self.config.fp8.is_sanity_logging is True:
+                    log_rank(
+                        f"ITERATION_STEP: {self.iteration_step} \n \n ####### SANITY CHECKS ####### \n",
+                        logger=logger,
+                        level=logging.INFO,
+                    )
+                    for n, p in self.model.named_parameters():
+                        log_rank(
+                            f"ITERATION_STEP: {self.iteration_step}, name: {n}, dtype: {get_data_from_param(p).dtype}",
+                            logger=logger,
+                            level=logging.INFO,
+                        )
+
                 if isinstance(prof, torch.profiler.profile):
                     prof.step()
 
@@ -646,20 +659,21 @@ class DistributedTrainer:
         # Clip gradients
         if self.config.optimizer.clip_grad is not None:
             # Unwrap DDP
+            from nanotron.fp8.tensor import FP8Tensor
 
             # NOTE: in FP8, a tensor's requires_grad is set to False, because
             # we don't want pytorch run autograd using its non-FP8 kernels.
 
-            # named_parameters = [
-            #     (name, param)
-            #     for name, param in self.unwrapped_model.get_named_params_with_correct_tied()
-            #     if (param.data.__class__ == torch.Tensor and param.requires_grad) or param.data.__class__ == FP8Tensor
-            # ]
             named_parameters = [
                 (name, param)
                 for name, param in self.unwrapped_model.get_named_params_with_correct_tied()
-                if param.requires_grad
+                if param.requires_grad or param.data.__class__ == FP8Tensor
             ]
+            # named_parameters = [
+            #     (name, param)
+            #     for name, param in self.unwrapped_model.get_named_params_with_correct_tied()
+            #     if param.requires_grad
+            # ]
 
             self.grad_norm_unclipped = clip_grad_norm(
                 mp_pg=self.parallel_context.mp_pg,

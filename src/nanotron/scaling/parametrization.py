@@ -210,6 +210,13 @@ class LearningRateForSP(LearningRateForParametrizator):
     """All parameters get the same learning rate."""
 
     def get_lr(self, param_name: str, param: nn.Module) -> float:
+        # NOTE: hacky code
+        if "layer_scale" in param_name:
+            from nanotron import constants
+
+            if constants.CONFIG.fp8.layer_scale_lr is not None:
+                return constants.CONFIG.fp8.layer_scale_lr
+
         return self.lr
 
 
