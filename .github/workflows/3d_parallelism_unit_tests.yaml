@@ -18,7 +18,8 @@ on:
 
 jobs:
   tests:
-    runs-on: [multi-gpu, nvidia-gpu, 8-t4, ci]
+    runs-on:
+      group: aws-g4dn-metal
     container:
       image: runpod/pytorch:2.1.1-py3.10-cuda12.1.1-devel-ubuntu22.04
       ports:
