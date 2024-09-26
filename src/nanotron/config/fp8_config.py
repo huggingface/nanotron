@@ -66,6 +66,9 @@ class FP8Args:
 
     is_debugging: bool = False
     is_sanity_logging: bool = False
+    is_post_scaling_all_reduce: bool = True
+    # NOTE: 1.0e-6 was the default
+    gradient_clipping_eps: float = 1.0e-6
 
     def __post_init__(self):
         assert 1 == 1

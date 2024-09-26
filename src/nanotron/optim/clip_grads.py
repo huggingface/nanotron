@@ -45,19 +45,29 @@ def clip_grad_norm(
         #     p.grad for _, p in named_parameters if not p.is_tied or world_rank == p.get_tied_info().global_ranks[0]
         # ]
 
-        from nanotron.fp8.tensor import FP8Tensor
-        from nanotron.helpers import get_accum_grad
-
         # grads = [
         #     get_grad_from_parameter(p)
         #     for _, p in named_parameters
         #     if not p.is_tied or world_rank == p.get_tied_info().global_ranks[0]
         # ]
+        # fp8_param_and_fp32_grads = []
+        from nanotron import constants
+        from nanotron.fp8.tensor import FP8Tensor
+        from nanotron.helpers import get_accum_grad
 
         grads = []
         for n, p in named_parameters:
             if p.data.__class__ == FP8Tensor:
-                grads.append(get_accum_grad(n))
+                from nanotron.fp8.tensor import convert_tensor_from_fp8
+
+                if constants.CONFIG.fp8.is_directly_keep_accum_grad_of_fp8 is True:
+                    _g = get_accum_grad(n)
+                    g = _g
+                else:
+                    _g = get_grad_from_parameter(p)
+                    g = convert_tensor_from_fp8(_g, _g.fp8_meta, torch.float32)
+                grads.append(g)
+                # fp8_param_and_fp32_grads.append((p, g))
             else:
                 grads.append(get_grad_from_parameter(p))
     else:
@@ -92,7 +102,7 @@ def clip_grad_norm(
         total_norm.pow_(1.0 / norm_type)
 
     # Scale gradients
-    clip_coef = max_norm / (total_norm + 1.0e-6)
+    clip_coef = max_norm / (total_norm + constants.CONFIG.fp8.gradient_clipping_eps)
     # Note: multiplying by the clamped coef is redundant when the coef is clamped to 1, but doing so
     # avoids a `if clip_coef < 1:` conditional which can require a CPU <=> device synchronization
     # when the gradients do not reside in CPU memory.
@@ -126,7 +136,21 @@ def clip_grad_norm(
             # param.grad.detach().mul_(device_to_clip_coef_clamped[param.grad.device])
             # get_grad_from_parameter(param).mul_(clip_coef_clamped)
             if param.data.__class__ == FP8Tensor:
-                get_accum_grad(name).mul_(clip_coef_clamped)
+                if constants.CONFIG.fp8.is_directly_keep_accum_grad_of_fp8 is True:
+                    get_accum_grad(name).mul_(clip_coef_clamped)
+                else:
+                    from nanotron.parallel.parameters import get_data_from_param
+
+                    _g = get_grad_from_parameter(param)
+                    fp32_grad = convert_tensor_from_fp8(_g, _g.fp8_meta, torch.float32)
+                    fp32_grad.mul_(clip_coef_clamped)
+                    clipped_fp8_grad = FP8Tensor.from_metadata(fp32_grad, _g.fp8_meta)
+                    p_data = get_data_from_param(param)
+                    p_data.grad = clipped_fp8_grad
+
+                    assert get_grad_from_parameter(param) is clipped_fp8_grad
+                    # get_grad_from_parameter(param)
+                    assert 1 == 1
             else:
                 get_grad_from_parameter(param).mul_(clip_coef_clamped)
         else:
@@ -134,5 +158,8 @@ def clip_grad_norm(
             # grad_accumulator.get_grad_buffer(name).mul_(
             #     device_to_clip_coef_clamped[grad_accumulator.get_grad_buffer(name).device]
             # )
+
+    # NOTE: copy the fp32 grads back to the fp8 grads
+    # assert 1 == 1
 
     return total_norm

@@ -713,31 +713,46 @@ class DistributedTrainer:
                     set_grad_for_nonfp8_param,
                 )
 
-                assert (
-                    constants.CONFIG.fp8.is_directly_keep_accum_grad_of_fp8 is True
-                ), "for data parallelism, have to enable is_directly_keep_accum_grad_of_fp8"
+                # assert (
+                #     constants.CONFIG.fp8.is_directly_keep_accum_grad_of_fp8 is True
+                # ), "for data parallelism, have to enable is_directly_keep_accum_grad_of_fp8"
 
                 for p_name, p in self.model.named_parameters():
                     _p_data = get_data_from_param(p)
                     _grad = get_grad_from_parameter(p)
 
-                    # old_grad = deepcopy(_grad)
                     if _p_data.__class__ == FP8Tensor:
-                        # _fp32_grad = convert_tensor_from_fp8(
-                        #     _grad, _grad.fp8_meta, torch.float32
-                        # )
-                        _fp32_grad = get_accum_grad(p_name)
+                        if constants.CONFIG.fp8.is_directly_keep_accum_grad_of_fp8 is True:
+                            _fp32_grad = get_accum_grad(p_name)
+                        else:
+                            from nanotron.fp8.tensor import convert_tensor_from_fp8
+
+                            _fp32_grad = convert_tensor_from_fp8(_grad, _grad.fp8_meta, torch.float32)
                     else:
                         _fp32_grad = _grad
 
-                    dist.all_reduce(_fp32_grad, op=dist.ReduceOp.SUM, group=self.parallel_context.dp_pg)
-                    _fp32_grad = _fp32_grad / self.parallel_context.data_parallel_size
+                    from copy import deepcopy
+
+                    deepcopy(_fp32_grad)
+
+                    if _p_data.__class__ == FP8Tensor:
+                        assert 1 == 1
+
+                    if constants.CONFIG.fp8.is_post_scaling_all_reduce is True:
+                        dist.all_reduce(_fp32_grad, op=dist.ReduceOp.SUM, group=self.parallel_context.dp_pg)
+                        _fp32_grad = _fp32_grad / self.parallel_context.data_parallel_size
+                    else:
+                        dist.all_reduce(_fp32_grad, op=dist.ReduceOp.AVG, group=self.parallel_context.dp_pg)
 
                     if _p_data.__class__ == FP8Tensor:
                         # assert not "bias" in name
                         # constants.ACCUM_GRADS[name.replace("weight", "")] = _fp32_grad
-                        set_accum_grad(p_name, _fp32_grad)
-                        assert get_accum_grad(p_name) is _fp32_grad
+
+                        if constants.CONFIG.fp8.is_directly_keep_accum_grad_of_fp8 is True:
+                            set_accum_grad(p_name, _fp32_grad)
+                            assert get_accum_grad(p_name) is _fp32_grad
+                        else:
+                            assert 1 == 1
                     else:
                         # p.grad = _fp32_grad
                         # try:
