@@ -917,8 +917,9 @@ class LlamaModel(nn.Module):
         d_qkv = model_config.hidden_size // model_config.num_attention_heads
         block_compute_costs = {
             # CausalSelfAttention (qkv proj + attn out) + MLP
-            LlamaDecoderLayer: 4 * model_config.num_attention_heads * d_qkv * model_config.hidden_size
-            + 3 * d_ff * model_config.hidden_size,
+            LlamaDecoderLayer: 2 * model_config.num_attention_heads * d_qkv * model_config.hidden_size # Q output projection
+            + 2 * model_config.num_key_value_heads * d_qkv * model_config.hidden_size # KV 
+            + 3 * d_ff * model_config.hidden_size, # for the MLP (3 because of the gated mechanism)
             # This is the last lm_head
             TensorParallelColumnLinear: model_config.vocab_size * model_config.hidden_size,
         }
@@ -1132,6 +1133,7 @@ def get_flops(
         2 * num_layers * batch_size * seq_len * (hidden_size) * num_heads * hidden_size_per_head
         + 2 * num_layers * batch_size * seq_len * (hidden_size) * 2 * num_key_value_heads * hidden_size_per_head
     )
+
     ## qk logits
     decoder_qk_logits_flops_fwd = 2 * num_layers * batch_size * num_heads * seq_len * (hidden_size_per_head) * seq_len
     ## v logits
@@ -1146,6 +1148,10 @@ def get_flops(
     ## 2nd layer
     decoder_ffn_2_flops_fwd = 2 * num_layers * batch_size * seq_len * (ffn_hidden_size) * hidden_size
 
+    # Layer Norm (RMSNorm for LLaMA)
+    # There are typically 2 layer norms per transformer layer, plus one at the end
+    layer_norm_flops_fwd = (2 * num_layers + 1) * batch_size * seq_len * hidden_size * 2  # multiply by 2 for division and square root (square root take significatively more time ?)
+    
     decoder_flops_fwd = (
         decoder_qkv_proj_flops_fwd
         + decoder_qk_logits_flops_fwd
@@ -1153,6 +1159,7 @@ def get_flops(
         + decoder_attn_out_flops_fwd
         + decoder_ffn_1_flops_fwd
         + decoder_ffn_2_flops_fwd
+        + layer_norm_flops_fwd
     )
 
     # lm head
