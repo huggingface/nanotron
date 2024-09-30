@@ -30,9 +30,9 @@ def optimizer_filename(parallel_context: ParallelContext, is_zero: bool):
         return f"{ObjectType.OPTIMIZER.value}_pp-{dist.get_rank(parallel_context.pp_pg)}-of-{parallel_context.pp_pg.size()}_tp-{dist.get_rank(parallel_context.tp_pg)}-of-{parallel_context.tp_pg.size()}_exp-{dist.get_rank(parallel_context.expert_pg)}-of-{parallel_context.expert_parallel_size}.pt"
 
 
-def lr_scheduler_filename():
+def lr_scheduler_filename(parallel_context: ParallelContext):
     """The lr_scheduler is the same for all processes."""
-    return f"{ObjectType.LR_SCHEDULER.value}.pt"
+    return f"{ObjectType.LR_SCHEDULER.value}_pp-{dist.get_rank(parallel_context.pp_pg)}-of-{parallel_context.pp_pg.size()}.pt"
 
 
 def save_optimizer(
@@ -109,9 +109,6 @@ def save_lr_scheduler(
     root_folder: Path,
 ):
     """Saves lr scheduler states"""
-    if dist.get_rank(parallel_context.world_pg) > 0:
-        # Only WORLD-RANK 0 saves the lr scheduler state
-        return
 
     root_folder = root_folder / "lr_scheduler"
     root_folder.mkdir(exist_ok=True, parents=True)
@@ -119,7 +116,7 @@ def save_lr_scheduler(
     # We dump the optimizer state using `torch.save`
     torch.save(
         lr_scheduler.state_dict(),
-        root_folder / lr_scheduler_filename(),
+        root_folder / lr_scheduler_filename(parallel_context),
     )
 
 
@@ -313,9 +310,10 @@ def load_optimizer(
 
 def load_lr_scheduler(
     lr_scheduler,
+    parallel_context: ParallelContext,
     root_folder: Path,
 ):
     root_folder = root_folder / "lr_scheduler"
 
-    state_dict = torch.load(root_folder / lr_scheduler_filename())
+    state_dict = torch.load(root_folder / lr_scheduler_filename(parallel_context))
     lr_scheduler.load_state_dict(state_dict)
