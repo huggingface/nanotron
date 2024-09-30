@@ -463,7 +463,14 @@ class DistributedTrainer:
         self.pre_training(**kwargs)
 
         for n, p in self.model.named_parameters():
-            log_rank(f"name: {n}, dtype: {get_data_from_param(p).dtype}", logger=logger, level=logging.INFO, rank=0)
+            log_rank(
+                f"name: {n}, dtype: {get_data_from_param(p).dtype}",
+                logger=logger,
+                level=logging.INFO,
+                rank=0,
+                group=self.parallel_context.dp_pg,
+            )
+
         if self.config.checkpoints.save_initial_state and self.init_checkpoint_path is None:
             self.save_checkpoint()
 

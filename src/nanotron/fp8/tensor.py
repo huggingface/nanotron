@@ -17,7 +17,8 @@ logger = logging.get_logger(__name__)
 
 
 def get_amax(tensor: torch.Tensor, sync: bool) -> torch.Tensor:
-    amax = tensor.abs().max().clone()
+    # amax = tensor.abs().max().clone()
+    amax = tensor.amax().clone()
     if sync is True:
         import torch.distributed as dist
 

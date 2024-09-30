@@ -103,6 +103,7 @@ def clip_grad_norm(
 
     # Scale gradients
     clip_coef = max_norm / (total_norm + constants.CONFIG.fp8.gradient_clipping_eps)
+    # print(f"using constants.CONFIG.fp8.gradient_clipping_eps: {constants.CONFIG.fp8.gradient_clipping_eps}")
     # Note: multiplying by the clamped coef is redundant when the coef is clamped to 1, but doing so
     # avoids a `if clip_coef < 1:` conditional which can require a CPU <=> device synchronization
     # when the gradients do not reside in CPU memory.

@@ -70,5 +70,5 @@ class FP8Args:
     # NOTE: 1.0e-6 was the default
     gradient_clipping_eps: float = 1.0e-6
 
-    def __post_init__(self):
-        assert 1 == 1
+    is_quant_all_except_first_and_last: Optional[bool] = None
+    fp8_linear_config_temp: Optional[FP8LayerArgs] = None

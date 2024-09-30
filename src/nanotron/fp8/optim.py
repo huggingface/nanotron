@@ -529,6 +529,7 @@ class FP8Adam(Optimizer):
                     denom = unbiased_fp32_exp_avg_sq.sqrt() + group["eps"]
                     normalized_grad = unbiased_fp32_exp_avg / denom
 
+                if constants.CONFIG.fp8.update_clipping is True:
                     rms = self._calculate_mean_sqrt_ignoring_nans(
                         fp32_grad.pow(2),
                         torch.max(
@@ -537,7 +538,6 @@ class FP8Adam(Optimizer):
                         ),
                     )
 
-                if constants.CONFIG.fp8.update_clipping is True:
                     if rms > 1:
                         # NOTE: only scale down the lr, not scale it up
                         update_lr = lr / torch.max(torch.tensor(1.0, dtype=self.optim_accum_dtype, device="cuda"), rms)
@@ -648,7 +648,6 @@ class FP8Adam(Optimizer):
                     if fp8_config.adam_atan2 is False:
                         loggings[p]["denom"] = compute_stas(denom)
 
-                    loggings[p]["grad_rms"] = {"value": rms}
                     loggings[p]["update_lr"] = {"value": update_lr}
 
                     loggings[p]["fp32_p"] = compute_stas(fp32_data)
@@ -681,6 +680,9 @@ class FP8Adam(Optimizer):
                         loggings[p]["weight_norm_and_weight_decay_grad_norm_ratio"] = {
                             "value": p_norm / fp32_weight_decay_grad.norm()
                         }
+
+                    if constants.CONFIG.fp8.update_clipping is True:
+                        loggings[p]["grad_rms"] = {"value": rms}
 
         if constants.is_ready_to_log is True:
             self.loggings = loggings

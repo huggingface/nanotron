@@ -30,7 +30,8 @@ def get_tensor_fp8_metadata(tensor: torch.Tensor, dtype: DTypes) -> FP8Meta:
     from nanotron.fp8.constants import INITIAL_SCALING_FACTOR
     from nanotron.fp8.tensor import update_scaling_factor
 
-    amax = tensor.abs().max().clone()
+    # amax = tensor.abs().max().clone()
+    amax = tensor.amax().clone()
     assert amax.dtype == torch.float32
 
     scale = update_scaling_factor(amax, torch.tensor(INITIAL_SCALING_FACTOR, dtype=torch.float32), dtype)
@@ -229,10 +230,41 @@ def convert_logs_to_flat_logs(logs, prefix):
 
 def find_fp8_config_by_module_name(config: Config, target_module_name: str) -> Optional[FP8LayerArgs]:
     if hasattr(config, "fp8") and hasattr(config.fp8, "model"):
+        # NOTE: either model or is_quant_all_except_first_and_last must be specified, not both
+        assert config.fp8.model is not None or config.fp8.is_quant_all_except_first_and_last is not None
+
         if config.fp8.model is not None:
             for layer_args in config.fp8.model:
                 if layer_args.module_name == target_module_name:
                     return layer_args
+        elif config.fp8.is_quant_all_except_first_and_last:
+
+            def match_layer_pattern(name, layer_idxs):
+                patterns = [
+                    "model.decoder.{}.attn.qkv_proj",
+                    "model.decoder.{}.attn.o_proj",
+                    "model.decoder.{}.mlp.down_proj",
+                    "model.decoder.{}.mlp.up_proj",
+                ]
+
+                for idx in layer_idxs:
+                    for pattern in patterns:
+                        if name == pattern.format(idx):
+                            return True
+
+                return False
+
+            num_layers = config.model.model_config.num_hidden_layers
+            assert num_layers > 2, "num_hidden_layers must be greater than 2"
+            assert config.fp8.fp8_linear_config_temp is not None
+
+            quant_layer_idxs = list(range(1, num_layers - 1))
+            if match_layer_pattern(target_module_name, quant_layer_idxs) is True:
+                from copy import deepcopy
+
+                config_temp = deepcopy(config.fp8.fp8_linear_config_temp)
+                config_temp.module_name = target_module_name
+                return config_temp
         else:
             from nanotron.fp8.constant_recipe import MODULE_NAMES_THAT_NOT_FP8
             from nanotron.fp8.constants import FP8LM_LINEAR_RECIPE
