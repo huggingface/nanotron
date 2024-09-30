@@ -30,8 +30,10 @@ def get_tensor_fp8_metadata(tensor: torch.Tensor, dtype: DTypes) -> FP8Meta:
     from nanotron.fp8.constants import INITIAL_SCALING_FACTOR
     from nanotron.fp8.tensor import update_scaling_factor
 
-    # amax = tensor.abs().max().clone()
-    amax = tensor.amax().clone()
+    # NOTE: do .clone() somehow fixes nan grad,
+    # check `exp801_fp8_nan_debug` for more details
+    amax = tensor.abs().max().clone()
+    # amax = tensor.amax().clone()
     assert amax.dtype == torch.float32
 
     scale = update_scaling_factor(amax, torch.tensor(INITIAL_SCALING_FACTOR, dtype=torch.float32), dtype)
@@ -244,7 +246,8 @@ def find_fp8_config_by_module_name(config: Config, target_module_name: str) -> O
                     "model.decoder.{}.attn.qkv_proj",
                     "model.decoder.{}.attn.o_proj",
                     "model.decoder.{}.mlp.down_proj",
-                    "model.decoder.{}.mlp.up_proj",
+                    # "model.decoder.{}.mlp.up_proj",
+                    "model.decoder.{}.mlp.gate_up_proj",
                 ]
 
                 for idx in layer_idxs:

@@ -17,8 +17,11 @@ logger = logging.get_logger(__name__)
 
 
 def get_amax(tensor: torch.Tensor, sync: bool) -> torch.Tensor:
-    # amax = tensor.abs().max().clone()
-    amax = tensor.amax().clone()
+
+    # NOTE: do .clone() somehow fixes nan grad,
+    # check `exp801_fp8_nan_debug` for more details
+    amax = tensor.abs().max().clone()
+    # amax = tensor.amax().clone()
     if sync is True:
         import torch.distributed as dist
 
