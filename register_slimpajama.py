@@ -19,5 +19,5 @@ if __name__ == "__main__":
     
     # Registering the dataset with the client.
     client.register_dataset(
-        "slimpajama_benchmark", "/scratch/maximilian.boether/mixtera/slimpajama", JSONLDataset, parsing_func, "SLIMPAJAMA_PARSER"
+        "slimpajama_benchmark", "/scratch/maximilian.boether/datasets/slimpajama", JSONLDataset, parsing_func, "SLIMPAJAMA_PARSER"
     )
