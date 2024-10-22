@@ -22,6 +22,8 @@ class TritonLayerNorm(nn.LayerNorm):
         )
 
 
+# This is equivalent to LLaMA RMSNorm
+# https://github.com/huggingface/transformers/blob/28952248b19db29ca25ccf34a5eec413376494a9/src/transformers/models/llama/modeling_llama.py#L112
 class TritonRMSNorm(nn.Module):
     def __init__(self, hidden_size, eps=1e-5, device=None, dtype=None):
         factory_kwargs = {"device": device, "dtype": dtype}
