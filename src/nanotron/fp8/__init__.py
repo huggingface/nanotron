@@ -7,6 +7,6 @@ from nanotron.fp8.tensor import FP8Tensor  # noqa
 
 try:
     import transformer_engine as te  # noqa
-    import transformer_engine_extensions as tex  # noqa
+    import transformer_engine_torch as tex  # noqa
 except ImportError:
     warnings.warn("Please install Transformer engine for FP8 training!")

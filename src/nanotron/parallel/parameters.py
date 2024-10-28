@@ -199,3 +199,9 @@ def sanity_check(root_module: nn.Module):
             raise ValueError(
                 f"Nanotronrequires model to be in Nanotronformat, ie all parameters are required to be a NanotronParameter. {name} isn't."
             )
+
+
+def get_data_from_param(p: NanotronParameter):
+    assert p.__class__ == NanotronParameter
+    # NOTE: this return the data that gradients can flow into
+    return p.data

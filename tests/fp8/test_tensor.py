@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 import torch
 import transformer_engine as te  # noqa
-import transformer_engine_extensions as tex
+import transformer_engine_torch as tex
 from nanotron.fp8.constants import (
     FP8_ATOL_THRESHOLD,
     FP8_RTOL_THRESHOLD,
@@ -16,7 +16,7 @@ from nanotron.fp8.constants import (
 from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.meta import FP8Meta
 from nanotron.fp8.tensor import FP8Tensor, FP16Tensor, convert_tensor_from_fp8, convert_tensor_from_fp16
-from nanotron.testing.context import TestContext
+from nanotron.testing.utils import TestContext
 from utils import fail_if_expect_to_fail
 
 

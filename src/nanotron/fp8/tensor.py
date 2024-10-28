@@ -6,7 +6,7 @@ from typing import Optional, Union, cast
 
 import torch
 import transformer_engine as te  # noqa
-import transformer_engine_extensions as tex
+import transformer_engine_torch as tex
 
 from nanotron import constants, logging
 from nanotron.fp8.constants import DTYPE_TO_FP8_MAX, FP8_DTYPES, INITIAL_SCALING_FACTOR
