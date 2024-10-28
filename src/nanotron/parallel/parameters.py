@@ -202,6 +202,8 @@ def sanity_check(root_module: nn.Module):
 
 
 def get_data_from_param(p: NanotronParameter):
-    assert p.__class__ == NanotronParameter
+    from nanotron.fp8.parameter import FP8Parameter
+
+    assert p.__class__ in [NanotronParameter, FP8Parameter]
     # NOTE: this return the data that gradients can flow into
     return p.data

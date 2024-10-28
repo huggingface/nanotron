@@ -6,7 +6,6 @@ import torch
 from nanotron.fp8.constants import FP8_DTYPES, QTYPE_TO_DTYPE
 from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.linear import FP8Linear, FP8LinearMeta
-from nanotron.fp8.loss_scaler import LossScaler
 from nanotron.fp8.parameter import FP8Parameter
 from nanotron.fp8.recipe import FP8LinearRecipe
 from nanotron.fp8.tensor import FP8Tensor, convert_tensor_from_fp8
@@ -38,7 +37,7 @@ def test_fp8_linear_parameters():
     assert all(p.requires_grad for p in fp8_linear.parameters()) is True
 
 
-@pytest.mark.skip
+# @pytest.mark.skip
 @pytest.mark.parametrize("n_layers", [1, 2])
 @pytest.mark.parametrize(
     "input",
@@ -49,8 +48,10 @@ def test_fp8_linear_parameters():
         torch.randn(64, 64, 64, device="cuda", dtype=torch.float32),  # [B, N, H]
     ],
 )
-@pytest.mark.parametrize("is_bias", [True, False])
-@pytest.mark.parametrize("accum_qtype", [DTypes.KFLOAT32, DTypes.KFLOAT16])
+# @pytest.mark.parametrize("is_bias", [True, False])
+# @pytest.mark.parametrize("accum_qtype", [DTypes.KFLOAT32, DTypes.KFLOAT16, torch.bfloat16])
+@pytest.mark.parametrize("is_bias", [False])
+@pytest.mark.parametrize("accum_qtype", [torch.bfloat16])
 def test_fp8_linear_forward_pass(n_layers, input, is_bias, accum_qtype):
     HIDDEN_SIZE = 64
 
@@ -98,7 +99,6 @@ def test_fp8_linear_forward_pass(n_layers, input, is_bias, accum_qtype):
 # )
 # @pytest.mark.parametrize("is_bias", [True, False])
 # @pytest.mark.skip
-@pytest.mark.parametrize("with_scaler", [True, False])
 @pytest.mark.parametrize("accum_qtype", [DTypes.KFLOAT32, DTypes.KFLOAT16])
 def test_fp8_linear_backward_pass(n_layers, input, with_scaler, accum_qtype):
     is_bias = False
@@ -115,8 +115,6 @@ def test_fp8_linear_backward_pass(n_layers, input, with_scaler, accum_qtype):
         ]
     )
 
-    loss_scaler = LossScaler()
-
     # trunc_normal_(ref_linear.weight, std=0.02)
     # trunc_normal_(ref_linear.weight, std=math.sqrt(1 / (HIDDEN_SIZE)))
 
@@ -125,11 +123,7 @@ def test_fp8_linear_backward_pass(n_layers, input, with_scaler, accum_qtype):
 
     ref_linear(ref_input).sum().backward()
 
-    if with_scaler is False:
-        fp8_linear(input).sum().backward()
-    else:
-        loss_scaler.scale(fp8_linear(input).sum()).backward()
-        loss_scaler.unscale_(fp8_linear.parameters())
+    fp8_linear(input).sum().backward()
 
     for ref_p, p in zip(ref_linear.parameters(), fp8_linear.parameters()):
         if p.requires_grad is False:

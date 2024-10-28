@@ -14,3 +14,4 @@ MODEL_CONFIG_FILE_NAME = "model_config.json"
 
 # TODO(xrsrke): remove this shit
 ITERATION_STEP = 1
+CONFIG = None

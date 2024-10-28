@@ -48,7 +48,7 @@ QTYPE_TO_DTYPE = {
 # and the accumulation precision in FP8 recipe
 
 FP8LM_LINEAR_RECIPE = FP8LinearRecipe(
-    accum_dtype=torch.float16,
+    accum_dtype=torch.bfloat16,
     input=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=16),
     weight=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=1),
     bias=torch.float16,

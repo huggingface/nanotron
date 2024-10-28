@@ -74,7 +74,7 @@ class FP8Linear(nn.Linear):
         return F.linear(
             input=input,
             weight=get_data_from_param(self.weight),
-            bias=get_data_from_param(self.bias),
+            bias=None if self.bias is None else get_data_from_param(self.bias),
             metadatas=self.metadatas,
             recipe=self.recipe,
         )
@@ -104,7 +104,11 @@ class _FP8Matmul(torch.autograd.Function):
 
         # dist.monitored_barrier(wait_all_ranks=True)
 
-        fp8_config = cast(FP8Args, constants.CONFIG.fp8)
+        if constants.CONFIG is None:
+            fp8_config = FP8Args()
+        else:
+            fp8_config = cast(FP8Args, constants.CONFIG.fp8)
+
         sync_amax_in_input = fp8_config.sync_amax_in_input
 
         orig_input_shape = input.shape
@@ -159,7 +163,11 @@ class _FP8Matmul(torch.autograd.Function):
         from nanotron import constants
         from nanotron.config.fp8_config import FP8Args
 
-        if constants.CONFIG.fp8 is not None and constants.CONFIG.fp8.is_debugging is True:
+        if (
+            constants.CONFIG is not None
+            and constants.CONFIG.fp8 is not None
+            and constants.CONFIG.fp8.is_debugging is True
+        ):
             pydevd.settrace(suspend=False, trace_only_current_thread=True)
 
         # dist.monitored_barrier(wait_all_ranks=True)
