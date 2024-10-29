@@ -1,11 +1,14 @@
 import dataclasses
-from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
 
 import torch
+from functorch.dim import tree_map
 from torch import nn
 
 from nanotron import distributed as dist
 from nanotron import logging
+from nanotron.fp8.parameter import FP8Parameter
+from nanotron.fp8.tensor import FP8Tensor
 
 if TYPE_CHECKING:
     from nanotron.models import NanotronModel
@@ -93,7 +96,7 @@ class ShardedInfo:
 
 
 class NanotronParameter(nn.Parameter):
-    """Base class for all parameters in Nanotronmodels
+    """Base class for all parameters in Nanotron models
 
     A NanotronParameter can have specific properties:
      - sharded: the parameter is considered to be `sharded` across multiple devices
@@ -112,7 +115,30 @@ class NanotronParameter(nn.Parameter):
     NANOTRON_PARAMETER_METADATA_SHARDED_KEY = "sharded"
 
     def __new__(cls, tensor: torch.Tensor, requires_grad: bool = True):
-        param = nn.Parameter.__new__(cls, data=tensor.data.detach(), requires_grad=requires_grad)
+        assert tensor.data.is_floating_point() or tensor.data.requires_grad is False
+
+        if tensor.data.is_floating_point():
+            if tensor.__class__ == nn.Parameter:
+                data = tensor.data
+                data.requires_grad = requires_grad
+            else:
+                data = tensor
+        else:
+            # NOTE: FP8 tensor has int dtype, you can't .detach() an integer tensor!
+            data = tensor.data
+            requires_grad = False
+
+        # NOTE: this somehow makes the param has the methods of NanotronParameter
+        param = nn.Parameter._make_wrapper_subclass(
+            cls,
+            size=data.size(),
+            strides=data.stride(),
+            storage_offset=data.storage_offset(),
+            dtype=data.dtype,
+            layout=data.layout,
+            device=data.device,
+            requires_grad=requires_grad,
+        )
 
         if isinstance(tensor, NanotronParameter):
             # Check that we don't inherit a weird class
@@ -127,6 +153,9 @@ class NanotronParameter(nn.Parameter):
             setattr(param, cls.NANOTRON_PARAMETER_METADATA_ATTRIBUTE_NAME, {})
 
         return param
+
+    def __init__(self, tensor: Union[torch.Tensor, FP8Tensor]):
+        self._data = tensor
 
     def _set_metadata(self, key: str, value: Any):
         metadata = getattr(self, self.NANOTRON_PARAMETER_METADATA_ATTRIBUTE_NAME)
@@ -187,6 +216,72 @@ class NanotronParameter(nn.Parameter):
             self, self.NANOTRON_PARAMETER_METADATA_ATTRIBUTE_NAME
         )
 
+    def __repr__(self):
+        return f"NanotronParameter({super().__repr__()})"
+
+    @property
+    def data(self):
+        return self._data.data if self._data.__class__ == FP8Parameter else self._data
+
+    @data.setter
+    def data(self, data):
+        self._data = data
+
+    # @property
+    # def grad(self):
+    #     return self.data.grad if self.grad is None else self.grad
+
+    @classmethod
+    def __torch_dispatch__(cls, func, types, args=(), kwargs=None):
+        def unwrap(e):
+            return e._data if e.__class__ == NanotronParameter else e
+
+        def wrap(e):
+            if not e.__class__ == NanotronParameter and e.__class__ in [torch.Tensor, FP8Tensor]:
+                return cls(e)
+            else:
+                return e
+
+        unwrapped_args = tree_map(unwrap, args)
+        unwrapped_kwargs = tree_map(unwrap, kwargs)
+
+        OPS_THAT_RETURN_ORIGINAL_TENSOR = [
+            # NOTE: transpose operation
+            torch.ops.aten.t.default,
+            torch.ops.aten.view.default,
+            torch.ops.aten.detach.default,
+            # NOTE: F.embedding()
+            torch.ops.aten.embedding.default,
+            # NOTE: F.layer_norm()
+            torch.ops.aten.native_layer_norm.default,
+            torch.ops.aten.native_layer_norm_backward.default,
+            torch.ops.aten.native_layer_norm_backward.default,
+            # NOTE: nn.Linear
+            torch.ops.aten.addmm.default,
+            torch.ops.aten.linear.default,
+            # NOTE: x.to(device)
+            torch.ops.aten._to_copy.default,
+        ]
+
+        if func == torch.ops.aten.detach.default and unwrapped_args[0].__class__ == FP8Parameter:
+            # NOTE: this is for parameter.data or parameter.detach()
+            # NOTE: because we already retrieved the data from unwrap, we don't need to do it again
+            # data = args[0].data
+            # data.requires_grad = args[0].requires_grad
+            data = unwrapped_args[0]
+            if data.__class__ == FP8Parameter or data.__class__ == nn.Parameter:
+                data = data.data
+                # data.requires_grad = unwrapped_args[0].requires_grad
+
+            return data
+        else:
+            outputs = func(*unwrapped_args, **unwrapped_kwargs)
+
+            if func in OPS_THAT_RETURN_ORIGINAL_TENSOR:
+                return outputs
+            else:
+                return tree_map(wrap, outputs)
+
 
 def sanity_check(root_module: nn.Module):
     """Makes sure that the module is in Nanotronformat
@@ -207,3 +302,20 @@ def get_data_from_param(p: NanotronParameter):
     assert p.__class__ in [NanotronParameter, FP8Parameter]
     # NOTE: this return the data that gradients can flow into
     return p.data
+
+
+def get_grad_from_parameter(p: NanotronParameter):
+    assert p.__class__ == NanotronParameter
+    assert (p.grad is not None and p.data.grad is not None) is False
+
+    from nanotron import constants
+
+    if constants.CONFIG is not None and constants.CONFIG.tokens.batch_accumulation_per_replica > 1:
+        if hasattr(p, "grad"):
+            grad = p.grad if p.grad is not None else p.data.grad
+        else:
+            grad = p.__accum_grad if p.__accum_grad is not None else p.data.__accum_grad
+    else:
+        grad = p.grad if p.grad is not None else p.data.grad
+
+    return grad

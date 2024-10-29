@@ -57,7 +57,8 @@ class LowPrecisionTensor(torch.Tensor):
         if fp8_meta is None:
             assert dtype in [DTypes.FP8E4M3, DTypes.FP8E5M2, DTypes.KFLOAT16]
 
-            fp8_meta = cls._get_metadata(tensor, dtype, interval, sync=sync)
+            with torch.no_grad():
+                fp8_meta = cls._get_metadata(tensor, dtype, interval, sync=sync)
 
         backup_fp8_meta = deepcopy(fp8_meta)
         if tensor.dtype not in FP8_DTYPES:

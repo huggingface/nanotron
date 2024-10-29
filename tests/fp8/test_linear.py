@@ -77,7 +77,7 @@ def test_fp8_linear_forward_pass(n_layers, input, is_bias, accum_qtype):
 
 
 # TODO(xrsrke): add cases where the input requires and don't require grad
-@pytest.mark.skip("we already test this in the test_tensor_parallel")
+# @pytest.mark.skip("we already test this in the test_tensor_parallel")
 @pytest.mark.parametrize("n_layers", [1, 2])
 @pytest.mark.parametrize(
     "input",
@@ -99,8 +99,9 @@ def test_fp8_linear_forward_pass(n_layers, input, is_bias, accum_qtype):
 # )
 # @pytest.mark.parametrize("is_bias", [True, False])
 # @pytest.mark.skip
-@pytest.mark.parametrize("accum_qtype", [DTypes.KFLOAT32, DTypes.KFLOAT16])
-def test_fp8_linear_backward_pass(n_layers, input, with_scaler, accum_qtype):
+# @pytest.mark.parametrize("accum_qtype", [DTypes.KFLOAT32, DTypes.KFLOAT16])
+@pytest.mark.parametrize("accum_qtype", [torch.bfloat16])
+def test_fp8_linear_backward_pass(n_layers, input, accum_qtype):
     is_bias = False
 
     HIDDEN_SIZE = 64

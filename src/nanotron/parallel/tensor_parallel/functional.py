@@ -19,6 +19,9 @@ import torch
 from torch.nn import functional as F
 
 import nanotron.distributed as dist
+from nanotron.fp8.linear import FP8LinearMeta
+from nanotron.fp8.recipe import FP8LinearRecipe
+from nanotron.parallel.parameters import get_data_from_param
 from nanotron.parallel.tensor_parallel.distributed_differentiable_primitives import (
     differentiable_all_reduce_sum,
     differentiable_identity,
@@ -436,18 +439,55 @@ def column_linear(
     tp_mode: TensorParallelLinearMode,
     async_communication: bool,
     tp_recompute_allgather: bool = True,
+    metadatas: Optional[FP8LinearMeta] = None,
+    name: Optional[str] = None,
+    recipe: Optional[FP8LinearRecipe] = None,
 ):
+    weight = get_data_from_param(weight)
+
+    if bias is not None:
+        bias = get_data_from_param(bias)
+
     if async_communication:
         return _ColumnLinearAsyncCommunication.apply(input, weight, bias, group, tp_mode, tp_recompute_allgather)
 
     if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
+        import nanotron.fp8.functional as fp8_functional
+        from nanotron.fp8.tensor import FP8Tensor
+
         input = differentiable_identity(input, group=group)
-        return F.linear(input, weight, bias)
-    if tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
+
+        if isinstance(weight, FP8Tensor):
+            assert recipe is not None, "recipe must be provided for column_linear"
+            from nanotron import constants
+
+            # if name not in constants.TRACKING_FP8_PARAM:
+            #     constants.TRACKING_FP8_PARAM[name] = weight
+
+            if (
+                constants.CONFIG is not None
+                and constants.CONFIG.fp8 is not None
+                and constants.CONFIG.fp8.is_sanity_logging is True
+            ):
+                from nanotron import logging
+                from nanotron.logging import log_rank
+
+                logger = logging.get_logger(__name__)
+                log_rank(
+                    f"[iteration_step: {constants.ITERATION_STEP}]name = {name}, doing fp8 kernel",
+                    logger=logger,
+                    level=logging.INFO,
+                )
+
+            return fp8_functional.linear(input, weight, bias, metadatas=metadatas, recipe=recipe, name=name)
+        else:
+            return F.linear(input, weight, bias)
+    elif tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
         return _ColumnLinearNoAsyncCommunicationReduceScatterMode.apply(
             input, weight, bias, group, tp_recompute_allgather
         )
-    raise ValueError(f"Got unexpected mode: {tp_mode}.")
+    else:
+        raise ValueError(f"Got unexpected mode: {tp_mode}.")
 
 
 class _RowLinearAsyncCommunication(torch.autograd.Function):
@@ -588,11 +628,26 @@ def row_linear(
     group: dist.ProcessGroup,
     tp_mode: TensorParallelLinearMode,
     async_communication: bool,
+    metadatas: Optional[FP8LinearMeta] = None,
+    recipe: Optional[FP8LinearRecipe] = None,
+    name: Optional[str] = None,
 ):
+    weight = get_data_from_param(weight)
+    if bias is not None:
+        bias = get_data_from_param(bias)
+
     if async_communication:
         return _RowLinearAsyncCommunication.apply(input, weight, bias, group, tp_mode)
 
-    out = F.linear(input, weight, bias)
+    # out = F.linear(input, weight, bias)
+    import nanotron.fp8.functional as fp8_functional
+    from nanotron.fp8.tensor import FP8Tensor
+
+    if isinstance(weight, FP8Tensor):
+        assert recipe is not None, "recipe must be provided for row_linear"
+        out = fp8_functional.linear(input, weight, bias, metadatas=metadatas, recipe=recipe, name=name)
+    else:
+        out = F.linear(input, weight, bias)
 
     if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
         out = differentiable_all_reduce_sum(out, group=group)

@@ -172,7 +172,11 @@ class _FP8Matmul(torch.autograd.Function):
 
         # dist.monitored_barrier(wait_all_ranks=True)
 
-        fp8_config = cast(FP8Args, constants.CONFIG.fp8)
+        if constants.CONFIG is None:
+            fp8_config = FP8Args()
+        else:
+            fp8_config = cast(FP8Args, constants.CONFIG.fp8)
+
         sync_amax_in_igrad = fp8_config.sync_amax_in_igrad
         sync_amax_in_wgrad = fp8_config.sync_amax_in_wgrad
 
@@ -249,7 +253,7 @@ class _FP8Matmul(torch.autograd.Function):
         grad_weight = grad_weight.contiguous().t().contiguous().view(-1).contiguous().reshape(orig_shape)
 
         # NOTE: if use gradient accumulation, then directly keep the high precision weights for later accumulate
-        if (
+        if constants.CONFIG is not None and (
             constants.CONFIG.tokens.batch_accumulation_per_replica > 1
             or constants.CONFIG.fp8.is_directly_keep_accum_grad_of_fp8 is True
         ):
