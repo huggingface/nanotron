@@ -1,7 +1,7 @@
 # Configuration for 1.1B tinyllama model
 
 checkpoints:
-  checkpoint_interval: 100000
+  checkpoint_interval: 20
   checkpoints_path: nanotron_checkpoints
   checkpoints_path_is_shared_file_system: false
   resume_checkpoint_path: null
@@ -9,12 +9,15 @@ checkpoints:
 data_stages:
 - data:
     dataset:
-      path: /scratch/maximilian.boether/mixtera/local
-      job_id: nanotron_test2
-      chunk_size: 100
-      query: language == JavaScript
+      path: localhost
+      port: 8888
+      job_id: checkpont_test
+      chunk_size: 8096
       tunnel_via_server: false
-    num_loading_workers: 0
+      chunk_reading_degree_of_parallelism: 4
+      chunk_reading_per_window_mixture: False
+      chunk_reading_window_size: 512
+    num_loading_workers: 4
     seed: 42
   name: Stable Training Stage
   start_training_step: 1
@@ -76,7 +79,7 @@ optimizer:
   weight_decay: 0.01
   zero_stage: 0
 parallelism:
-  dp: 1
+  dp: 2
   pp: 1
   pp_engine: 1f1b
   tp: 1 # required accorcing to xiaozhe, and we can do at most 2 currently
@@ -93,5 +96,5 @@ tokens:
   limit_val_batches: 0
   micro_batch_size: 4
   sequence_length: 24 # 2048
-  train_steps: 10000
+  train_steps: 160
   val_check_interval: -1 

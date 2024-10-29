@@ -228,7 +228,7 @@ def get_dataloader_from_data_stage(
         else:
             query = query.select(None)
 
-        raw_dataset = MixteraHFDataset(client, query, query_execution_args, streaming_args)
+        raw_dataset = MixteraHFDataset(client, query, query_execution_args, streaming_args, checkpoint_path=trainer.config.checkpoints.resume_checkpoint_path)
 
         # The following is mostly copy&pasted from the huggingface case above, since `MixteraHFDataset` is a datasets.IterableDataset
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)

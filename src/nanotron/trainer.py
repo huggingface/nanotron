@@ -96,6 +96,8 @@ from nanotron.serialize import (
 from nanotron.serialize.metadata import DataStageMetadata, TrainingMetadata
 from nanotron.serialize.optimizer import load_optimizer
 
+from mixtera.utils.checkpoint import handle_mixtera_checkpoint
+
 logger = logging.get_logger(__name__)
 
 # Reduce the logging noise from torch.distributed when creating new process groups
@@ -917,6 +919,8 @@ class DistributedTrainer:
         else:
             with open(checkpoint_path / MODEL_CONFIG_FILE_NAME, mode="w") as fo:
                 fo.write(json.dumps(asdict(self.model_config)))
+
+        handle_mixtera_checkpoint(self.current_dataloader, checkpoint_path, self.parallel_context.dp_pg.rank(), self.parallel_context.mp_pg.rank(), False)
 
         self.post_save_checkpoint()
 
