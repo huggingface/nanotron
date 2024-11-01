@@ -41,142 +41,10 @@ from nanotron.parallel.tensor_parallel.functional import (
     row_linear,
 )
 from nanotron.parallel.tied_parameters import create_tied_parameter
-from nanotron.utils import post_init
 
-# class TensorParallelColumnLinear(nn.Linear):
-#     def __init__(
-#         self,
-#         in_features,
-#         out_features,
-#         pg: dist.ProcessGroup,
-#         mode: TensorParallelLinearMode,
-#         bias=True,
-#         device=None,
-#         dtype=None,
-#         async_communication: bool = False,
-#         contiguous_chunks: Optional[Tuple[int, ...]] = None,
-#         tp_recompute_allgather: bool = True,
-#     ):
-#         self.pg = pg
-#         self.world_size = pg.size()
+# from nanotron.utils import post_init
 
-#         assert out_features % self.world_size == 0
-
-#         self.in_features = in_features
-#         self.out_features = out_features // self.world_size
-#         self.tp_recompute_allgather = tp_recompute_allgather
-
-#         super().__init__(
-#             in_features=self.in_features,
-#             out_features=self.out_features,
-#             bias=bias,
-#             device=device,
-#             dtype=dtype,
-#         )
-
-#         self.mode = mode
-#         self.async_communication = async_communication
-
-#         if contiguous_chunks is not None:
-#             assert (
-#                 sum(contiguous_chunks) == out_features
-#             ), f"Sum of contiguous chunks ({sum(contiguous_chunks)}) must equal to out_features ({out_features})"
-#         split_config = SplitConfig(split_dim=0, contiguous_chunks=contiguous_chunks)
-
-#         mark_all_parameters_in_module_as_sharded(
-#             self,
-#             pg=self.pg,
-#             split_config=split_config,
-#         )
-
-#     def forward(self, x: torch.Tensor) -> torch.Tensor:
-#         return column_linear(
-#             input=x,
-#             weight=self.weight,
-#             bias=self.bias,
-#             group=self.pg,
-#             tp_mode=self.mode,
-#             async_communication=self.async_communication,
-#             tp_recompute_allgather=self.tp_recompute_allgather,
-#         )
-
-#     def extra_repr(self) -> str:
-#         return f"tp_rank={dist.get_rank(self.pg)}, {super().extra_repr()}, unsharded_out_features={self.out_features * self.world_size}"
-
-
-# class TensorParallelRowLinear(nn.Linear):
-#     def __init__(
-#         self,
-#         in_features,
-#         out_features,
-#         pg: dist.ProcessGroup,
-#         mode: TensorParallelLinearMode,
-#         bias=True,
-#         device=None,
-#         dtype=None,
-#         async_communication: bool = False,
-#         contiguous_chunks: Optional[Tuple[int, ...]] = None,
-#     ):
-#         self.pg = pg
-#         self.world_size = pg.size()
-
-#         assert in_features % self.world_size == 0
-
-#         self.in_features = in_features // self.world_size
-#         self.out_features = out_features
-
-#         # No need to shard the bias term, only rank 0 would have it
-#         bias = dist.get_rank(self.pg) == 0 and bias
-
-#         super().__init__(
-#             in_features=self.in_features,
-#             out_features=self.out_features,
-#             bias=bias,
-#             device=device,
-#             dtype=dtype,
-#         )
-#         self.mode = mode
-#         self.async_communication = async_communication
-#         if self.mode is TensorParallelLinearMode.ALL_REDUCE and self.async_communication:
-#             raise ValueError("async_communication is not supported for ALL_REDUCE mode")
-
-#         if contiguous_chunks is not None:
-#             assert (
-#                 sum(contiguous_chunks) == in_features
-#             ), f"Sum of contiguous chunks ({sum(contiguous_chunks)}) must equal to in_features ({in_features})"
-
-#         split_config = SplitConfig(split_dim=1, contiguous_chunks=contiguous_chunks)
-
-#         self._mark_all_parameters_in_module_as_sharded(split_config)
-
-#     def _mark_all_parameters_in_module_as_sharded(self, split_config: SplitConfig):
-#         for name, param in list(self.named_parameters()):
-#             if name == "bias":
-#                 # `bias` only exists in rank 0 because it's not sharded
-#                 new_param = NanotronParameter(tensor=param)
-#             else:
-#                 new_param = create_sharded_parameter_from_config(
-#                     parameter=param,
-#                     pg=self.pg,
-#                     split_config=split_config,
-#                 )
-#             setattr(self, name, new_param)
-
-#     def forward(self, x: torch.Tensor) -> torch.Tensor:
-#         return row_linear(
-#             input=x,
-#             weight=self.weight,
-#             bias=self.bias,
-#             group=self.pg,
-#             tp_mode=self.mode,
-#             async_communication=self.async_communication,
-#         )
-
-#     def extra_repr(self) -> str:
-#         return f"tp_rank={dist.get_rank(self.pg)}, {super().extra_repr()}, unsharded_in_features={self.in_features * self.world_size}"
-
-
-@post_init
+# @post_init
 class _BaseTensorParallelColumnLinear:
     def __init__(
         self,
@@ -184,9 +52,9 @@ class _BaseTensorParallelColumnLinear:
         out_features,
         pg: dist.ProcessGroup,
         mode: TensorParallelLinearMode,
-        bias=True,
-        device=None,
-        dtype=None,
+        bias: bool = True,
+        device: Optional[torch.device] = None,
+        dtype: torch.dtype = None,
         async_communication: bool = False,
         contiguous_chunks: Optional[Tuple[int, ...]] = None,
         name: Optional[str] = None,
@@ -200,9 +68,6 @@ class _BaseTensorParallelColumnLinear:
         self.in_features = in_features
         self.out_features = out_features // self.world_size
         self.name = name
-
-        if name == "model.lm_head":
-            assert 1 == 1
 
         init_args = {
             "in_features": self.in_features,
@@ -245,7 +110,7 @@ class _BaseTensorParallelColumnLinear:
         return f"tp_rank={dist.get_rank(self.pg)}, {super().extra_repr()}, unsharded_out_features={self.out_features * self.world_size}"
 
 
-@post_init
+# @post_init
 class _BaseTensorParallelRowLinear:
     def __init__(
         self,
@@ -253,9 +118,9 @@ class _BaseTensorParallelRowLinear:
         out_features,
         pg: dist.ProcessGroup,
         mode: TensorParallelLinearMode,
-        bias=True,
-        device=None,
-        dtype=None,
+        bias: bool = True,
+        device: Optional[torch.device] = None,
+        dtype: torch.dtype = None,
         async_communication: bool = False,
         contiguous_chunks: Optional[Tuple[int, ...]] = None,
         name: Optional[str] = None,

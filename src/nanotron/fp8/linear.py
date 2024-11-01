@@ -51,12 +51,7 @@ class FP8Linear(nn.Linear):
         # TODO(xrsrke): take initialization dtype from recipe
         # NOTE: initialize in float32
         super().__init__(in_features, out_features, bias, device, dtype=torch.float32)
-        # TODO(xrsrke): don't fixed dtype, take it from the FP8 recipe
-        # DTypes.FP8E4M3
-        weight_data = self.weight.data
-        # orig_w_shape = weight_data.shape
-        # weight_data = weight_data.contiguous().view(-1).contiguous().reshape(orig_w_shape)
-        quant_w = FP8Parameter(weight_data, dtype=recipe.weight.dtype, interval=recipe.weight.interval)
+        quant_w = FP8Parameter(self.weight.data, dtype=recipe.weight.dtype, interval=recipe.weight.interval)
         assert quant_w.dtype in [torch.uint8, torch.int8], f"got {self.weight.data.dtype}"
         self.weight = quant_w
 
@@ -65,6 +60,7 @@ class FP8Linear(nn.Linear):
         if self.bias is not None:
             self.bias = nn.Parameter(self.bias.to(recipe.accum_dtype))
             assert self.bias.dtype == recipe.accum_dtype
+
         self.metadatas = FP8LinearMeta()
         self.recipe = recipe
 
@@ -93,7 +89,6 @@ class _FP8Matmul(torch.autograd.Function):
         output: torch.Tensor,
         phony: torch.Tensor,
         metadatas: FP8LinearMeta,
-        # accum_qtype: DTypes,
         recipe: FP8LinearRecipe,
         name,
     ) -> torch.Tensor:
@@ -102,19 +97,12 @@ class _FP8Matmul(torch.autograd.Function):
         from nanotron import constants
         from nanotron.config.fp8_config import FP8Args
 
-        # dist.monitored_barrier(wait_all_ranks=True)
-
         if constants.CONFIG is None:
             fp8_config = FP8Args()
         else:
             fp8_config = cast(FP8Args, constants.CONFIG.fp8)
 
         sync_amax_in_input = fp8_config.sync_amax_in_input
-
-        # orig_input_shape = input.shape
-        # input = input.contiguous().view(-1).contiguous().view(orig_input_shape)
-
-        # input = input.contiguous()
 
         if metadatas.input is None:
             fp8_input = FP8Tensor(
@@ -129,15 +117,7 @@ class _FP8Matmul(torch.autograd.Function):
         ctx.name = name
         ctx.recipe = recipe
 
-        # accum_output = output.contiguous()
         accum_output = output
-        # accum_output = torch.zeros(output.shape, dtype=torch.float16, device="cuda")
-
-        # assert fp8_input.data.is_contiguous()
-        # assert weight.data.is_contiguous()
-        # assert accum_output.is_contiguous()
-
-        # dist.monitored_barrier(wait_all_ranks=True)
 
         output = fp8_matmul_kernel(
             # NOTE: that works
@@ -190,7 +170,7 @@ class _FP8Matmul(torch.autograd.Function):
 
         fp8_input = cast(FP8Tensor, fp8_input)
         fp8_weight = cast(FP8Tensor, fp8_weight)
-        grad_output = grad_output.contiguous()
+        # grad_output = grad_output.contiguous()
 
         ctx.metadatas = cast(FP8LinearMeta, ctx.metadatas)
         if ctx.metadatas.input_grad is None:
@@ -206,7 +186,7 @@ class _FP8Matmul(torch.autograd.Function):
 
         transposed_fp8_weight = fp8_weight.transpose_fp8()
 
-        grad_input_temp = torch.zeros(
+        grad_input_temp = torch.empty(
             fp8_grad_output.shape[0],
             transposed_fp8_weight.shape[0],
             device="cuda",
@@ -229,7 +209,7 @@ class _FP8Matmul(torch.autograd.Function):
         transposed_fp8_grad_output = fp8_grad_output.transpose_fp8()
         transposed_fp8_input = fp8_input.transpose_fp8()
 
-        grad_weight_temp = torch.zeros(
+        grad_weight_temp = torch.empty(
             transposed_fp8_input.shape[0],
             transposed_fp8_grad_output.shape[0],
             device="cuda",
@@ -251,16 +231,6 @@ class _FP8Matmul(torch.autograd.Function):
         assert grad_weight.dtype == recipe.accum_dtype
         # TODO(xrsrke): maintain a persistence metadata across training
 
-        # grad_weight = grad_weight.T.contiguous()
-        # orig_shape = grad_weight.shape
-        # grad_weight = grad_weight.contiguous().t().contiguous().view(-1).contiguous().reshape(orig_shape)
-
-        # grad_weight = grad_weight.T
-        # orig_shape = grad_weight.shape
-        # grad_weight = grad_weight.t().view(-1).reshape(orig_shape)
-
-        # NOTE: works
-        # grad_weight = grad_weight.reshape(grad_weight.T.shape)
         grad_weight = grad_weight.reshape(grad_weight.shape[::-1])
 
         # NOTE: if use gradient accumulation, then directly keep the high precision weights for later accumulate
@@ -299,5 +269,4 @@ class _FP8Matmul(torch.autograd.Function):
             # NOTE: sanity check
             assert isinstance(fp8_weight.grad, FP8Tensor)
 
-        # return grad_input.contiguous(), None, None, None, None, None, None
         return grad_input, None, None, None, None, None, None

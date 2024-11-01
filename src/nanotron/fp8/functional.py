@@ -72,7 +72,7 @@ def linear(
     # because weight and bias's requires_grad are set to False
     # so that we can compute the gradients using the fp8 kernels by ourselves
     phony = torch.empty(0, device=input.device, requires_grad=True)
-    output = torch.zeros(input.shape[0], weight.shape[0], device="cuda", dtype=recipe.accum_dtype)
+    output = torch.empty(input.shape[0], weight.shape[0], device="cuda", dtype=recipe.accum_dtype)
     output, _ = _FP8Matmul.apply(input, weight, output, phony, metadatas, recipe, name)
 
     # TODO(xrsrke): add support for adding bias in fp8
