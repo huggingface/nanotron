@@ -251,9 +251,14 @@ class _FP8Matmul(torch.autograd.Function):
         # grad_weight = grad_weight.T.contiguous()
         # orig_shape = grad_weight.shape
         # grad_weight = grad_weight.contiguous().t().contiguous().view(-1).contiguous().reshape(orig_shape)
-        grad_weight = grad_weight.T
-        orig_shape = grad_weight.shape
-        grad_weight = grad_weight.t().view(-1).reshape(orig_shape)
+
+        # grad_weight = grad_weight.T
+        # orig_shape = grad_weight.shape
+        # grad_weight = grad_weight.t().view(-1).reshape(orig_shape)
+
+        # NOTE: works
+        # grad_weight = grad_weight.reshape(grad_weight.T.shape)
+        grad_weight = grad_weight.reshape(grad_weight.shape[::-1])
 
         # NOTE: if use gradient accumulation, then directly keep the high precision weights for later accumulate
         if constants.CONFIG is not None and (
