@@ -20,6 +20,8 @@ def fp8_matmul_kernel(
     is_backward: bool = False,
     recipe=None,
 ) -> torch.Tensor:
+    # from nanotron.fp8.constants import _empty_tensor, workspace
+
     assert (
         mat_a.device != "cpu" and mat_b.device != "cpu"
     ), "The tensors must be on a CUDA device in order to use the FP8 kernel!!"

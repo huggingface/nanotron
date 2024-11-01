@@ -33,7 +33,7 @@ def benchmark_fn_in_sec(f, *args, **kwargs):
     return measurement.mean
 
 
-def run_fp8_linear(input, M, N, K, parallel_context):
+def run_fp8_linear(input, M, N, K, parallel_context, include_backward=False):
     # input = torch.randn(M, K, device="cuda", requires_grad=False)
     column_linear = FP8TensorParallelColumnLinear(
         in_features=K,
@@ -46,12 +46,14 @@ def run_fp8_linear(input, M, N, K, parallel_context):
     )
 
     sharded_output = column_linear(input)
-    sharded_output.sum().backward()
 
-    return sharded_output
+    if include_backward is True:
+        sharded_output.sum().backward()
+
+    # return sharded_output
 
 
-def run_linear(input, M, N, K, parallel_context):
+def run_linear(input, M, N, K, parallel_context, include_backward=False):
     # input = torch.randn(M, K, device="cuda", requires_grad=False)
     with init_on_device_and_dtype(device="cuda", dtype=torch.bfloat16):
         column_linear = TensorParallelColumnLinear(
@@ -65,9 +67,12 @@ def run_linear(input, M, N, K, parallel_context):
         )
 
     sharded_output = column_linear(input)
-    sharded_output.sum().backward()
-    assert sharded_output.dtype == torch.bfloat16, f"Expected bfloat16, got {sharded_output.dtype}"
-    return sharded_output
+
+    if include_backward is True:
+        sharded_output.sum().backward()
+
+    # assert sharded_output.dtype == torch.bfloat16, f"Expected bfloat16, got {sharded_output.dtype}"
+    # return sharded_output
 
 
 def parse_args():
@@ -83,19 +88,19 @@ def parse_args():
     return parser.parse_args()
 
 
-def benchmark_linear_operations(M, N, K, parallel_context):
+def benchmark_linear_operations(M, N, K, parallel_context, include_backward):
     input = torch.randn(M, K, device="cuda", requires_grad=False)
     bfloat16_input = torch.randn(M, K, device="cuda", requires_grad=False, dtype=torch.bfloat16)
 
     # Benchmark FP8
-    fp8_time = benchmark_fn_in_sec(run_fp8_linear, input, M, N, K, parallel_context)
+    fp8_time = benchmark_fn_in_sec(run_fp8_linear, input, M, N, K, parallel_context, include_backward)
 
     # Benchmark BFloat16
-    bfloat16_time = benchmark_fn_in_sec(run_linear, bfloat16_input, M, N, K, parallel_context)
+    bfloat16_time = benchmark_fn_in_sec(run_linear, bfloat16_input, M, N, K, parallel_context, include_backward)
 
     # Calculate FLOPS
     # Each linear operation performs 2*M*N*K FLOPs (multiply-add)
-    total_flops = 2 * M * N * K
+    total_flops = 2 * M * N * K // parallel_context.tensor_parallel_size
 
     fp8_tflops = (total_flops / fp8_time) / 1e12
     bfloat16_tflops = (total_flops / bfloat16_time) / 1e12
@@ -108,6 +113,7 @@ def benchmark_linear_operations(M, N, K, parallel_context):
         "M": M,
         "N": N,
         "K": K,
+        "Include_Backward": include_backward,
         "FP8_time_ms": fp8_time * 1000,
         "BF16_time_ms": bfloat16_time * 1000,
         "FP8_TFLOPS": fp8_tflops,
@@ -137,16 +143,26 @@ if __name__ == "__main__":
     i = 0
     for M, N, K in itertools.product(dimensions, dimensions, dimensions):
         i += 1
-        result = benchmark_linear_operations(M, N, K, parallel_context)
+        # result = benchmark_linear_operations(M, N, K, parallel_context)
+        # results.append(result)
+        # print(f"Experiment {i}/{total} complete")
+
+        # Run forward-only case
+        result = benchmark_linear_operations(M, N, K, parallel_context, include_backward=False)
         results.append(result)
-        print(f"Experiment {i}/{total} complete")
+        print(f"Experiment {i}/{total} complete (Forward-only)")
+
+        # Run forward+backward case
+        result = benchmark_linear_operations(M, N, K, parallel_context, include_backward=True)
+        results.append(result)
+        print(f"Experiment {i}/{total} complete (Forward+Backward)")
 
     # Create DataFrame
     df = pd.DataFrame(results)
     df = df.round(2)  # Round to 2 decimal places
 
     # Sort by matrix size for better readability
-    df = df.sort_values(by=["M", "N", "K"])
+    df = df.sort_values(by=["M", "N", "K", "Include_Backward"])
 
-    print("\nBenchmark Results:")
+    print("\nBenchmark Results: (tp_size={})".format(TP_SIZE))
     print(df.to_string(index=False))

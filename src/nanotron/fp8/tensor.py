@@ -16,25 +16,28 @@ from nanotron.fp8.meta import FP8Meta
 logger = logging.get_logger(__name__)
 
 
+# @torch.no_grad()
+@torch.jit.script
 def get_amax(tensor: torch.Tensor, sync: bool) -> torch.Tensor:
 
     # NOTE: do .clone() somehow fixes nan grad,
     # check `exp801_fp8_nan_debug` for more details
     amax = tensor.abs().max().clone()
     # amax = tensor.amax().clone()
-    if sync is True:
-        import torch.distributed as dist
 
-        from nanotron import constants
+    # if sync is True:
+    #     import torch.distributed as dist
 
-        if constants.CONFIG.fp8.sync_amax_func == "default":
-            world_size = dist.get_world_size(group=constants.PARALLEL_CONTEXT.tp_pg)
-            if world_size > 1:
-                # log_rank(f"Local amax is {amax}", logger=logger, level=logging.INFO)
-                dist.all_reduce(amax, op=dist.ReduceOp.MAX, group=constants.PARALLEL_CONTEXT.tp_pg)
-                # log_rank(f"Global amax is {amax}", logger=logger, level=logging.INFO)
-        else:
-            raise ValueError(f"Unknown sync_amax_func: {constants.CONFIG.fp8.sync_amax_func}")
+    #     from nanotron import constants
+
+    #     if constants.CONFIG.fp8.sync_amax_func == "default":
+    #         world_size = dist.get_world_size(group=constants.PARALLEL_CONTEXT.tp_pg)
+    #         if world_size > 1:
+    #             # log_rank(f"Local amax is {amax}", logger=logger, level=logging.INFO)
+    #             dist.all_reduce(amax, op=dist.ReduceOp.MAX, group=constants.PARALLEL_CONTEXT.tp_pg)
+    #             # log_rank(f"Global amax is {amax}", logger=logger, level=logging.INFO)
+    #     else:
+    #         raise ValueError(f"Unknown sync_amax_func: {constants.CONFIG.fp8.sync_amax_func}")
 
     return amax
 
@@ -76,6 +79,7 @@ class LowPrecisionTensor(torch.Tensor):
         return obj
 
     @staticmethod
+    # @torch.no_grad()
     def _get_metadata(tensor: torch.Tensor, dtype: DTypes, interval: int, sync: bool) -> "FP8Meta":
         # TODO(xrsrke): there is a circular import issue
         # between tensor.py and meta.py fix this
@@ -83,7 +87,8 @@ class LowPrecisionTensor(torch.Tensor):
 
         # NOTE: detach from original computational graph
         # amax = tensor.abs().max().clone().detach()
-        amax = get_amax(tensor, sync)
+        # amax = get_amax(tensor, sync)
+        amax = tensor.amax().clone()
 
         scale = update_scaling_factor(amax, torch.tensor(INITIAL_SCALING_FACTOR, dtype=torch.float32), dtype)
         scale = scale.clone().detach()
@@ -263,6 +268,7 @@ def _convert_tensor_from_fp16(tensor: FP16Tensor, fp8_meta, dtype: torch.dtype) 
     return torch.tensor(tensor, dtype=dtype).squeeze(dim=0)
 
 
+# @torch.jit.script
 def update_scaling_factor(
     amax: torch.Tensor, scaling_factor: torch.Tensor, dtype: DTypes, margin: float = 0
 ) -> torch.Tensor:
@@ -278,11 +284,13 @@ def update_scaling_factor(
 
     # NOTE: Since fp8_max is a fixed number based on two FP8 data types,
     # we prefer not to take fp8_max in the input arguments.
+    # NOTE: create cuda tensor slows down by 7%
     fp8_max = torch.tensor(DTYPE_TO_FP8_MAX[dtype], dtype=torch.float32)
 
     # NOTE: torch.jit only take a concrete value rather than a DTYPE_TO_FP8_MAX[dtype],
     # so we create an inner function to bypass that
-    # @torch.jit.script
+
+    @torch.jit.script
     def _inner(amax: torch.Tensor, fp8_max: torch.Tensor, scaling_factor: torch.Tensor, margin: float):
         # NOTE: calculate the number of bits to shift the exponent
         ratio = fp8_max / amax

@@ -27,7 +27,7 @@ def run_experiment(exp_name, M, N, K, TP_SIZE, parallel_context):
         activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
         on_trace_ready=torch.profiler.tensorboard_trace_handler(f"./log/{exp_name}"),
         record_shapes=True,
-        profile_memory=True,
+        # profile_memory=True,
         with_stack=True,
         with_modules=True,
         experimental_config=torch._C._profiler._ExperimentalConfig(verbose=True),
@@ -47,10 +47,13 @@ def print_profiling_table(prof, sort_by="cpu_time_total"):
         prof.key_averages(group_by_stack_n=100).table(
             sort_by=sort_by,
             row_limit=20,
-            max_src_column_width=2000,  # Increase source column width
             top_level_events_only=False,
-            max_name_column_width=2000,
-            max_shapes_column_width=1000,
+            # max_src_column_width=2000,  # Increase source column width
+            # max_name_column_width=2000,
+            # max_shapes_column_width=1000,
+            max_src_column_width=100,  # Increase source column width
+            max_name_column_width=30,
+            max_shapes_column_width=100,
         )
     )
 
@@ -110,6 +113,7 @@ if __name__ == "__main__":
         if dist.get_rank() == 0:
             print_profiling_table(prof, sort_by="cpu_time_total")
             print_profiling_table(prof, sort_by="cuda_time_total")
+            print_profiling_table(prof, sort_by="self_cuda_time_total")
             # explore_event_values(table)
 
             # Get top 5 operations by CPU time
