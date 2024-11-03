@@ -135,7 +135,7 @@ class _FP8Matmul(torch.autograd.Function):
         return output, phony
 
     @staticmethod
-    @torch.no_grad()
+    @torch.no_grad()  # NOTE: drop 5% speed up in fwd only, and add 2% speed up in fwd+bwd
     def backward(ctx, grad_output: torch.Tensor, grad_phony: torch.Tensor) -> Tuple[torch.Tensor, None, None, None]:
         """
         ∂L/∂X = ∂L/∂Y @ Wᵀ
@@ -185,9 +185,9 @@ class _FP8Matmul(torch.autograd.Function):
         else:
             fp8_grad_output = FP8Tensor.from_metadata(grad_output, ctx.metadatas.input_grad, sync=sync_amax_in_igrad)
 
-        transposed_fp8_weight = fp8_weight.transpose_fp8()
-
         if ctx.is_input_require_grad:
+            transposed_fp8_weight = fp8_weight.transpose_fp8()
+
             grad_input_temp = torch.empty(
                 fp8_grad_output.shape[0],
                 transposed_fp8_weight.shape[0],
@@ -203,13 +203,14 @@ class _FP8Matmul(torch.autograd.Function):
                 use_split_accumulator=recipe.split_accumulator.input_grad,
                 accum_qtype=recipe.accum_dtype,
                 accumulate=recipe.accumulate.input_grad,
-                is_backward=True,
+                # is_backward=True,
                 recipe=recipe,
             )
             grad_input.__debug_is_from_fp8 = True
         else:
             grad_input = None
 
+        # TODO(xrsrke): fuse cast and transpose
         transposed_fp8_grad_output = fp8_grad_output.transpose_fp8()
         transposed_fp8_input = fp8_input.transpose_fp8()
 

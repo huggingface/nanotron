@@ -62,9 +62,9 @@ def fp8_matmul_kernel(
     TE_CONFIG_TRANSPOSE_B = False
     SCALE = AMAX = _empty_tensor
 
-    if is_backward is False:
-        mat_a = tex.fp8_transpose(mat_a, mat_a_fp8_meta.te_dtype) if transpose_a is False else mat_a
-        mat_b = tex.fp8_transpose(mat_b, mat_b_fp8_meta.te_dtype) if transpose_b is True else mat_b
+    # if is_backward is False:
+    #     mat_a = tex.fp8_transpose(mat_a, mat_a_fp8_meta.te_dtype) if transpose_a is False else mat_a
+    #     mat_b = tex.fp8_transpose(mat_b, mat_b_fp8_meta.te_dtype) if transpose_b is True else mat_b
 
     tex.te_gemm(
         mat_a,
