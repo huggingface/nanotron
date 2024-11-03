@@ -113,6 +113,7 @@ class _FP8Matmul(torch.autograd.Function):
             fp8_input = FP8Tensor.from_metadata(input, metadatas.input, sync=sync_amax_in_input)
 
         ctx.save_for_backward(fp8_input, weight)
+        ctx.is_input_require_grad = input.requires_grad
         ctx.metadatas = metadatas
         ctx.name = name
         ctx.recipe = recipe
@@ -186,25 +187,28 @@ class _FP8Matmul(torch.autograd.Function):
 
         transposed_fp8_weight = fp8_weight.transpose_fp8()
 
-        grad_input_temp = torch.empty(
-            fp8_grad_output.shape[0],
-            transposed_fp8_weight.shape[0],
-            device="cuda",
-            dtype=recipe.accum_dtype,
-        )
-        grad_input = fp8_matmul_kernel(
-            mat_a=transposed_fp8_weight,
-            transpose_a=True,
-            mat_b=fp8_grad_output,
-            transpose_b=False,
-            output=grad_input_temp,
-            use_split_accumulator=recipe.split_accumulator.input_grad,
-            accum_qtype=recipe.accum_dtype,
-            accumulate=recipe.accumulate.input_grad,
-            is_backward=True,
-            recipe=recipe,
-        )
-        grad_input.__debug_is_from_fp8 = True
+        if ctx.is_input_require_grad:
+            grad_input_temp = torch.empty(
+                fp8_grad_output.shape[0],
+                transposed_fp8_weight.shape[0],
+                device="cuda",
+                dtype=recipe.accum_dtype,
+            )
+            grad_input = fp8_matmul_kernel(
+                mat_a=transposed_fp8_weight,
+                transpose_a=True,
+                mat_b=fp8_grad_output,
+                transpose_b=False,
+                output=grad_input_temp,
+                use_split_accumulator=recipe.split_accumulator.input_grad,
+                accum_qtype=recipe.accum_dtype,
+                accumulate=recipe.accumulate.input_grad,
+                is_backward=True,
+                recipe=recipe,
+            )
+            grad_input.__debug_is_from_fp8 = True
+        else:
+            grad_input = None
 
         transposed_fp8_grad_output = fp8_grad_output.transpose_fp8()
         transposed_fp8_input = fp8_input.transpose_fp8()
@@ -227,7 +231,9 @@ class _FP8Matmul(torch.autograd.Function):
             recipe=recipe,
         )
 
-        assert grad_input.dtype == recipe.accum_dtype
+        if ctx.is_input_require_grad:
+            assert grad_input.dtype == recipe.accum_dtype
+
         assert grad_weight.dtype == recipe.accum_dtype
         # TODO(xrsrke): maintain a persistence metadata across training
 

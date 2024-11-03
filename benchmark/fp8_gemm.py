@@ -220,15 +220,15 @@ def benchmark_linear_operations(a, b):
         "BF16_time_ms": bfloat16_time * 1000,
         "FP8_TFLOPS": fp8_tflops,
         "BF16_TFLOPS": bfloat16_tflops,
-        "FP8_efficiency_%": fp8_efficiency,
-        "BF16_efficiency_%": bfloat16_efficiency,
+        "FP8_eff%": fp8_efficiency,
+        "BF16_eff%": bfloat16_efficiency,
         "Speedup": bfloat16_time / fp8_time,
     }
 
 
 if __name__ == "__main__":
-    a = torch.randn(128, 128).cuda()
-    b = torch.randn(128, 128).cuda()
+    # a = torch.randn(128, 128).cuda()
+    # b = torch.randn(128, 128).cuda()
     # qa = cast_from_fp8(fa, tex.DType.kFloat32)
     # qb = cast_from_fp8(fb, tex.DType.kFloat32)
     # qc = torch.matmul(qa, qb)
@@ -251,6 +251,6 @@ if __name__ == "__main__":
         return df
 
     # Example usage:
-    sizes = [4096, 8192, 16384, 32768, 65536]
+    sizes = [4096, 16384, 32768, 28672, 49152]
     benchmark_table = create_benchmark_table(sizes)
     print(benchmark_table)

@@ -14,14 +14,6 @@ h100_peak_flops_float32 = 67e12
 h100_peak_flops_fp16_tc = 989e12
 h100_peak_tops_float8_tc = 1979e12
 
-dtype_to_peak_tops = {
-    torch.float32: h100_peak_flops_float32,
-    torch.float16: h100_peak_flops_fp16_tc,
-    torch.bfloat16: h100_peak_flops_fp16_tc,
-    torch.float8_e4m3fn: h100_peak_tops_float8_tc,
-    torch.float8_e5m2: h100_peak_tops_float8_tc,
-}
-
 
 def benchmark_fn_in_sec(f, *args, **kwargs):
     # Manual warmup
@@ -34,7 +26,6 @@ def benchmark_fn_in_sec(f, *args, **kwargs):
 
 
 def run_fp8_linear(input, M, N, K, parallel_context, include_backward=False):
-    # input = torch.randn(M, K, device="cuda", requires_grad=False)
     column_linear = FP8TensorParallelColumnLinear(
         in_features=K,
         out_features=N,
@@ -50,11 +41,8 @@ def run_fp8_linear(input, M, N, K, parallel_context, include_backward=False):
     if include_backward is True:
         sharded_output.sum().backward()
 
-    # return sharded_output
-
 
 def run_linear(input, M, N, K, parallel_context, include_backward=False):
-    # input = torch.randn(M, K, device="cuda", requires_grad=False)
     with init_on_device_and_dtype(device="cuda", dtype=torch.bfloat16):
         column_linear = TensorParallelColumnLinear(
             in_features=K,
@@ -70,9 +58,6 @@ def run_linear(input, M, N, K, parallel_context, include_backward=False):
 
     if include_backward is True:
         sharded_output.sum().backward()
-
-    # assert sharded_output.dtype == torch.bfloat16, f"Expected bfloat16, got {sharded_output.dtype}"
-    # return sharded_output
 
 
 def parse_args():
@@ -143,10 +128,6 @@ if __name__ == "__main__":
     i = 0
     for M, N, K in itertools.product(dimensions, dimensions, dimensions):
         i += 1
-        # result = benchmark_linear_operations(M, N, K, parallel_context)
-        # results.append(result)
-        # print(f"Experiment {i}/{total} complete")
-
         # Run forward-only case
         result = benchmark_linear_operations(M, N, K, parallel_context, include_backward=False)
         results.append(result)
@@ -157,11 +138,8 @@ if __name__ == "__main__":
         results.append(result)
         print(f"Experiment {i}/{total} complete (Forward+Backward)")
 
-    # Create DataFrame
     df = pd.DataFrame(results)
     df = df.round(2)  # Round to 2 decimal places
-
-    # Sort by matrix size for better readability
     df = df.sort_values(by=["M", "N", "K", "Include_Backward"])
 
     print("\nBenchmark Results: (tp_size={})".format(TP_SIZE))

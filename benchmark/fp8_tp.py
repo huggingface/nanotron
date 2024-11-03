@@ -23,6 +23,8 @@ def run_experiment(exp_name, M, N, K, TP_SIZE, parallel_context):
         bias=False,
     )
 
+    sharded_output = column_linear(input)
+
     with torch.profiler.profile(
         activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
         on_trace_ready=torch.profiler.tensorboard_trace_handler(f"./log/{exp_name}"),
@@ -34,10 +36,8 @@ def run_experiment(exp_name, M, N, K, TP_SIZE, parallel_context):
         use_cuda=True,
     ) as prof:
         prof.step()
-        sharded_output = column_linear(input)
         sharded_output.sum().backward()
 
-    torch.cuda.synchronize()
     return prof
 
 
