@@ -123,14 +123,11 @@ class _FP8Matmul(torch.autograd.Function):
         output = fp8_matmul_kernel(
             # NOTE: that works
             mat_a=weight,
-            transpose_a=True,
             mat_b=fp8_input,
-            transpose_b=False,
             output=accum_output,
             use_split_accumulator=recipe.split_accumulator.output,
             accumulate=recipe.accumulate.output,
             accum_qtype=recipe.accum_dtype,
-            recipe=recipe,
         )
         return output, phony
 
@@ -167,11 +164,9 @@ class _FP8Matmul(torch.autograd.Function):
         fp8_input, fp8_weight = ctx.saved_tensors
         recipe = ctx.recipe
         recipe = cast(FP8LinearRecipe, recipe)
-        # accum_qtype = ctx.accum_qtype
 
         fp8_input = cast(FP8Tensor, fp8_input)
         fp8_weight = cast(FP8Tensor, fp8_weight)
-        # grad_output = grad_output.contiguous()
 
         ctx.metadatas = cast(FP8LinearMeta, ctx.metadatas)
         if ctx.metadatas.input_grad is None:
@@ -187,7 +182,6 @@ class _FP8Matmul(torch.autograd.Function):
 
         if ctx.is_input_require_grad:
             transposed_fp8_weight = fp8_weight.transpose_fp8()
-
             grad_input_temp = torch.empty(
                 fp8_grad_output.shape[0],
                 transposed_fp8_weight.shape[0],
@@ -196,15 +190,11 @@ class _FP8Matmul(torch.autograd.Function):
             )
             grad_input = fp8_matmul_kernel(
                 mat_a=transposed_fp8_weight,
-                transpose_a=True,
                 mat_b=fp8_grad_output,
-                transpose_b=False,
                 output=grad_input_temp,
                 use_split_accumulator=recipe.split_accumulator.input_grad,
                 accum_qtype=recipe.accum_dtype,
                 accumulate=recipe.accumulate.input_grad,
-                # is_backward=True,
-                recipe=recipe,
             )
             grad_input.__debug_is_from_fp8 = True
         else:
@@ -222,14 +212,11 @@ class _FP8Matmul(torch.autograd.Function):
         )
         grad_weight = fp8_matmul_kernel(
             mat_a=transposed_fp8_input,
-            transpose_a=True,
             mat_b=transposed_fp8_grad_output,
-            transpose_b=False,
             output=grad_weight_temp,
             use_split_accumulator=recipe.split_accumulator.weight_grad,
             accumulate=recipe.accumulate.weight_grad,
             accum_qtype=recipe.accum_dtype,
-            recipe=recipe,
         )
 
         if ctx.is_input_require_grad:

@@ -9,22 +9,18 @@ from nanotron.fp8.tensor import FP8Tensor
 @torch.no_grad()
 def fp8_matmul_kernel(
     mat_a: FP8Tensor,
-    transpose_a: bool,
     mat_b: FP8Tensor,
-    transpose_b: bool,
     output,
     use_split_accumulator: bool,
     accumulate: bool,
     accum_qtype: torch.dtype,
     # TODO(xrsrke): remove this flag
-    is_backward: bool = False,
-    recipe=None,
 ) -> torch.Tensor:
     # from nanotron.fp8.constants import _empty_tensor, workspace
 
     assert (
         mat_a.device != "cpu" and mat_b.device != "cpu"
-    ), "The tensors must be on a CUDA device in order to use the FP8 kernel!!"
+    ), "The tensors must be on a CUDA device in order to use FP8!!"
     # assert isinstance(accum_qtype, DTypes)
     assert isinstance(accum_qtype, torch.dtype)
 
@@ -44,9 +40,7 @@ def fp8_matmul_kernel(
         raise ValueError(f"Unsupported accumulation dtype: {accum_qtype}")
 
     _empty_tensor = torch.Tensor()
-
     workspace = torch.empty(33_554_432, dtype=torch.int8, device=device)
-    # accumulate = False
 
     # NOTE: currently TE don't support adding bias in FP8
     # along with matmul, it only takes an empty bias
@@ -61,10 +55,6 @@ def fp8_matmul_kernel(
     TE_CONFIG_TRANSPOSE_A = True
     TE_CONFIG_TRANSPOSE_B = False
     SCALE = AMAX = _empty_tensor
-
-    # if is_backward is False:
-    #     mat_a = tex.fp8_transpose(mat_a, mat_a_fp8_meta.te_dtype) if transpose_a is False else mat_a
-    #     mat_b = tex.fp8_transpose(mat_b, mat_b_fp8_meta.te_dtype) if transpose_b is True else mat_b
 
     tex.te_gemm(
         mat_a,
