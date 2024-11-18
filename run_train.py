@@ -178,44 +178,48 @@ def get_dataloader_from_data_stage(
     return dataloader
 
 
-def get_dataloader(trainer: DistributedTrainer) -> Dict[str, DataLoader]:
+def get_dataloader(trainer: DistributedTrainer,
+                   data_stages_fieldname: str,
+                   metadata_fieldname: str) -> Dict[str, DataLoader]:
     dataloaders = {}
+    data_stages = getattr(trainer.config, data_stages_fieldname)
+    if data_stages:
+        metadata = getattr(trainer, metadata_fieldname)
+        for stage_idx, stage in enumerate(data_stages):
+            # NOTE: we only create the dataloader for the first stage,
+            # then we lazy initialize the dataloader for the other stages
+            stage = cast(DatasetStageArgs, stage)
+            consumed_train_samples = get_consumed_train_samples_of_a_data_stage_from_ckp(stage, metadata)
+            assert (
+                consumed_train_samples is not None
+            ), f"Cannot find consumed_train_samples for stage {stage.start_training_step} in the checkpoint"
 
-    for stage_idx, stage in enumerate(trainer.config.data_stages):
-        # NOTE: we only create the dataloader for the first stage,
-        # then we lazy initialize the dataloader for the other stages
-        stage = cast(DatasetStageArgs, stage)
-        consumed_train_samples = get_consumed_train_samples_of_a_data_stage_from_ckp(stage, trainer.metadata)
-        assert (
-            consumed_train_samples is not None
-        ), f"Cannot find consumed_train_samples for stage {stage.start_training_step} in the checkpoint"
-
-        num_remaining_train_steps = compute_remain_train_steps_of_a_data_stage_from_ckp(
-            stage, trainer.config, trainer.metadata
-        )
-        log_rank(
-            f"[Training Plan] Stage {stage.name} has {num_remaining_train_steps} remaining training steps and has consumed {consumed_train_samples} samples",
-            logger=logger,
-            level=logging.INFO,
-            rank=0,
-        )
-
-        dataloader = (
-            get_dataloader_from_data_stage(
-                trainer,
-                stage.data,
-                consumed_train_samples=consumed_train_samples,
-                num_remaining_train_steps=num_remaining_train_steps,
+            num_remaining_train_steps = compute_remain_train_steps_of_a_data_stage_from_ckp(
+                stage, trainer.config, metadata
             )
-            if stage_idx == 0
-            else lambda stage=stage: get_dataloader_from_data_stage(
-                trainer,
-                stage.data,
-                consumed_train_samples=consumed_train_samples,
-                num_remaining_train_steps=num_remaining_train_steps,
+            log_rank(
+                f"[Training Plan] Stage {stage.name} has {num_remaining_train_steps} remaining training steps and has consumed {consumed_train_samples} samples",
+                logger=logger,
+                level=logging.INFO,
+                rank=0,
             )
-        )
-        dataloaders[stage.name] = dataloader
+
+            dataloader = (
+                get_dataloader_from_data_stage(
+                    trainer,
+                    stage.data,
+                    consumed_train_samples=consumed_train_samples,
+                    num_remaining_train_steps=num_remaining_train_steps,
+                )
+                if stage_idx == 0
+                else lambda stage=stage: get_dataloader_from_data_stage(
+                    trainer,
+                    stage.data,
+                    consumed_train_samples=consumed_train_samples,
+                    num_remaining_train_steps=num_remaining_train_steps,
+                )
+            )
+            dataloaders[stage.name] = dataloader
     return dataloaders
 
 
@@ -231,7 +235,9 @@ if __name__ == "__main__":
 
     # Load trainer and data
     trainer = DistributedTrainer(config_file)
-    dataloader = get_dataloader(trainer)
+    dataloader_train = get_dataloader(trainer, "data_stages", "metadata")
+    dataloader_valid = get_dataloader(trainer, "valid_data_stages", "valid_metadata")
 
     # Train
-    trainer.train(dataloader)
+    trainer.train(dataloader_train, dataloader_valid)
+    print("Done")

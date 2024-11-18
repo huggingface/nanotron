@@ -348,6 +348,7 @@ class Config:
     tokens: Optional[TokensArgs] = None
     optimizer: Optional[OptimizerArgs] = None
     data_stages: Optional[List[DatasetStageArgs]] = None
+    valid_data_stages: Optional[List[DatasetStageArgs]] = None
     profiler: Optional[ProfilerArgs] = None
     lighteval: Optional[LightEvalConfig] = None
     s3_upload: Optional[S3UploadArgs] = None

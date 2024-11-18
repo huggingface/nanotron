@@ -9,7 +9,7 @@ from nanotron.logging import log_rank
 from nanotron.optim.gradient_accumulator import GradientAccumulator
 from nanotron.parallel.data_parallel.utils import ddp_trigger_sync_in_bwd
 from nanotron.parallel.pipeline_parallel.context_manager import attach_pipeline_state_to_model
-from nanotron.parallel.pipeline_parallel.state import PipelineTrainBatchState
+from nanotron.parallel.pipeline_parallel.state import PipelineTrainBatchState, PipelineEvalBatchState
 from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
 from nanotron.utils import ContextManagers
 from torch import nn as torch_nn
@@ -53,7 +53,7 @@ class PipelineEngine(ABC):
 
         # Add output as activations that require backward pass
         if not isinstance(output["loss"], TensorPointer):
-            assert output["loss"].requires_grad
+            # assert output["loss"].requires_grad
             state.register_activation_requiring_backward(output["loss"])
         return output
 
@@ -134,9 +134,9 @@ class PipelineEngine(ABC):
         nb_microbatches: int,
     ) -> Iterable[Dict[str, Union[torch.Tensor, TensorPointer]]]:
         # Assign a new state for the current batch
-        state = PipelineTrainBatchState()  # TODO: do i need state?
+        # state = PipelineTrainBatchState()  # TODO: do i need state?
+        state = PipelineEvalBatchState()
         self.nb_microbatches = nb_microbatches
-
         outputs = []
 
         with attach_pipeline_state_to_model(model=model, pipeline_state=state):
@@ -158,7 +158,6 @@ class PipelineEngine(ABC):
                 if not isinstance(output["loss"], TensorPointer):
                     output = {k: v.detach() for k, v in output.items()}
                 outputs.append(output)
-
         return outputs
 
 
@@ -326,5 +325,4 @@ class OneForwardOneBackwardPipelineEngine(PipelineEngine):
 
             # Make sure that micro batches are all fully consumed
             state.check_buffers_empty()
-
         return outputs

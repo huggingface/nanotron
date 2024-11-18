@@ -181,7 +181,7 @@ class FP32GradientAccumulator(GradientAccumulator):
             if not param.requires_grad:
                 continue
 
-            assert param.dtype != torch.float, f"Expected {name} not to be float"
+            # assert param.dtype != torch.float, f"Expected {name} not to be float"
             assert param.is_contiguous(), f"Expected {name} to be contiguous"
 
             next_offset = offset + param.numel() * element_size

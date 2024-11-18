@@ -3,7 +3,11 @@ import json
 import os
 import shutil
 import time
+import gc
+
 from dataclasses import asdict
+from collections.abc import Generator
+
 from pathlib import Path
 from pprint import pformat
 from typing import (
@@ -94,6 +98,8 @@ from nanotron.serialize import (
 )
 from nanotron.serialize.metadata import DataStageMetadata, TrainingMetadata
 from nanotron.serialize.optimizer import load_optimizer
+dataloader_arg = Dict[str, Union[Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]], Tuple[Iterator, ...]]]
+
 
 logger = logging.get_logger(__name__)
 
@@ -232,7 +238,19 @@ class DistributedTrainer:
             self.metadata: TrainingMetadata = TrainingMetadata(
                 consumed_train_samples=0, last_train_step=0, last_stage_idx=0, data_stages=data_stages
             )
-
+            # if hasattr(self.config, "valid_data_stages"):
+            if self.config.valid_data_stages:
+                valid_data_stages = [
+                    DataStageMetadata(
+                        name=stage.name, start_training_step=stage.start_training_step, consumed_train_samples=0
+                    )
+                    for stage in self.config.valid_data_stages
+                ]
+                self.valid_metadata: TrainingMetadata = TrainingMetadata(
+                    consumed_train_samples=0, last_train_step=0, last_stage_idx=0, data_stages=valid_data_stages
+                )
+            else:
+                self.valid_metadata = None
         # Setup tensorboard write and log writers on output rank
         self.logger_ranks = self.parallel_context.get_global_rank(
             ep_rank=0, pp_rank=self.unwrapped_model.output_pp_rank, dp_rank=0, tp_rank=0
@@ -250,8 +268,11 @@ class DistributedTrainer:
         self.sequence_length = self.config.tokens.sequence_length
         self.iteration_step = self.metadata.last_train_step
         self.limit_val_batches = self.config.tokens.limit_val_batches
+        self.val_check_interval = self.config.tokens.val_check_interval
+
         # NOTE: the dataloader currently in use for the current training stage
         self.current_dataloader: Optional[DataLoader] = None
+        self.current_valid_dataloader: Optional[DataLoader] = None
 
         self.post_init()
 
@@ -296,7 +317,6 @@ class DistributedTrainer:
             )
 
     def post_train_step(self):
-
         # Update our background upload/removal of checkpoints
         if self.s3_mover is not None:
             self.s3_mover.update()
@@ -316,9 +336,20 @@ class DistributedTrainer:
             )
             log_rank(full_log_message, logger=logger, level=logging.INFO, rank=0)
 
-    def _update_dataloader_based_on_training_stages(self, dataloaders: Union[List[DataLoader], DataLoader]):
-        from collections.abc import Generator
+    def _clear_dataloader_from_memory(self, dataloader: DataLoader, stage_name: str):
+        log_rank(
+            f"[Training Stage: {stage_name}] Clearing the previous training stage's dataloader and datasets from memory",
+            logger=logger,
+            level=logging.INFO,
+        )
+        # NOTE: Clear dataloader from memory
+        del dataloader.dataset
+        del dataloader.sampler
+        del dataloader.batch_sampler
 
+        gc.collect()
+
+    def _update_train_dataloader_based_on_training_stages(self, dataloaders: Union[List[DataLoader], DataLoader]):
         if not hasattr(self.config, "data_stages") or self.config.data_stages is None:
             if self.current_dataloader is None:
                 if isinstance(dataloaders, tuple):
@@ -336,25 +367,7 @@ class DistributedTrainer:
             return
 
         assert len(dataloaders) > 0, "No dataloaders provided"
-        assert len(dataloaders) == len(
-            self.config.data_stages
-        ), "Number of dataloaders should match the number of dataset stages"
-
-        def clear_dataloader_from_memory(dataloader: DataLoader, stage_name: str):
-            import gc
-
-            log_rank(
-                f"[Training Stage: {stage_name}] Clearing the previous training stage's dataloader and datasets from memory",
-                logger=logger,
-                level=logging.INFO,
-            )
-
-            # NOTE: Clear dataloader from memory
-            del dataloader.dataset
-            del dataloader.sampler
-            del dataloader.batch_sampler
-
-            gc.collect()
+        assert len(dataloaders) == len(self.config.data_stages), "Number of dataloaders should match the number of dataset stages"
 
         dataloader = None
 
@@ -370,7 +383,6 @@ class DistributedTrainer:
         for stage_idx, stage in enumerate(self.config.data_stages):
             if stage_idx < self.metadata.last_stage_idx:
                 continue
-
             stage = cast(DatasetStageArgs, stage)
 
             is_resume_from_training = self.current_dataloader is None and stage_idx_to_resume == stage_idx
@@ -381,7 +393,7 @@ class DistributedTrainer:
 
                     if isinstance(prev_dataloader, DataLoader):
                         # NOTE: we don't need to clear dummy data generator from memory
-                        clear_dataloader_from_memory(prev_dataloader, stage_name=stage.name)
+                        self._clear_dataloader_from_memory(prev_dataloader, stage_name=stage.name)
 
                 self.metadata.last_stage_idx = stage_idx
 
@@ -407,20 +419,71 @@ class DistributedTrainer:
                 dataloader=dataloader, parallel_context=self.parallel_context, config=self.config
             )
 
+    def _update_valid_dataloader_based_on_training_stages(self, dataloaders: Union[List[DataLoader], DataLoader]):
+        if not hasattr(self.config, "valid_data_stages") or self.config.valid_data_stages is None:
+            if self.current_valid_dataloader is None:
+                if isinstance(dataloaders, tuple):
+                    dataloader = dataloaders[0]
+                else:
+                    dataloader = dataloaders
+                self.current_valid_dataloader = sanity_check_dataloader(
+                    dataloader=dataloader, parallel_context=self.parallel_context, config=self.config
+                )
+            return
+
+        assert len(dataloaders) > 0, "No dataloaders provided"
+        assert len(dataloaders) == len(self.config.valid_data_stages), "Number of dataloaders should match the number of dataset stages"
+
+        dataloader = None
+
+        def find_stage_idx_to_resume():
+            reversed_data_stages = sorted(self.config.valid_data_stages, key=lambda x: x.start_training_step, reverse=True)
+            for idx, stage in enumerate(reversed_data_stages):
+                if self.iteration_step >= stage.start_training_step:
+                    return len(self.config.valid_data_stages) - idx - 1
+            return None
+
+        stage_idx_to_resume = find_stage_idx_to_resume()
+
+        for stage_idx, stage in enumerate(self.config.valid_data_stages):
+            if stage_idx < self.valid_metadata.last_stage_idx:
+                continue
+
+            stage = cast(DatasetStageArgs, stage)
+
+            is_resume_from_training = self.current_dataloader is None and stage_idx_to_resume == stage_idx
+            if (stage.start_training_step == self.iteration_step) or is_resume_from_training:
+                if self.current_valid_dataloader is not None:
+                    prev_stage_name = self.config.valid_data_stages[stage_idx - 1].name
+                    prev_dataloader = dataloaders[prev_stage_name]
+                    if isinstance(prev_dataloader, DataLoader):
+                        # NOTE: we don't need to clear dummy data generator from memory
+                        self._clear_dataloader_from_memory(prev_dataloader, stage_name=stage.name)
+
+                self.valid_metadata.last_stage_idx = stage_idx
+
+                print(f"{self.iteration_step } -> changing dataloader to '{stage.name}'")
+                dataloader = dataloaders[stage.name]
+                dataloader = dataloader() if callable(dataloader) else dataloader
+                break
+
+        if dataloader is not None:
+            self.current_valid_dataloader = sanity_check_dataloader(
+                dataloader=dataloader, parallel_context=self.parallel_context, config=self.config
+            )
+
     def train(
         self,
-        dataloader_or_dls: Dict[
-            str, Union[Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]], Tuple[Iterator, ...]]
-        ],
+        dataloader_train: dataloader_arg,
+        dataloader_valid: dataloader_arg,
         **kwargs,
     ) -> None:
         self.pre_training(**kwargs)
-
+        skip_validation = (dataloader_valid == {})
         if self.config.checkpoints.save_initial_state and self.init_checkpoint_path is None:
             self.save_checkpoint()
 
         self.pipeline_engine: PipelineEngine = self.config.parallelism.pp_engine
-
         self.pipeline_engine.nb_microbatches = self.n_micro_batches_per_batch
 
         # TODO @nouamanetazi: refactor this
@@ -440,7 +503,7 @@ class DistributedTrainer:
                     prof.step()
 
                 self.iteration_start_time = time.time()
-                self._update_dataloader_based_on_training_stages(dataloader_or_dls)
+                self._update_train_dataloader_based_on_training_stages(dataloader_train)
 
                 # Training step
                 outputs, loss_avg = self.training_step(dataloader=self.current_dataloader)
@@ -449,12 +512,32 @@ class DistributedTrainer:
                 # TODO(xrsrke): refactor using callbacks would be better
                 self.metadata.consumed_train_samples += self.global_batch_size
                 self.metadata.last_train_step = self.iteration_step
-                self.metadata.data_stages[
-                    self.metadata.last_stage_idx
-                ].consumed_train_samples += self.global_batch_size
+                self.metadata.data_stages[self.metadata.last_stage_idx].consumed_train_samples += self.global_batch_size
 
                 if (self.iteration_step - 1) % self.config.logging.iteration_step_info_interval == 0:
                     self.train_step_logs(outputs=outputs, loss_avg=loss_avg)
+
+                if (not skip_validation) and (self.iteration_step - 1) % self.val_check_interval == 0:
+                    self._update_valid_dataloader_based_on_training_stages(dataloader_valid)
+                    valid_outputs = self.validation_step(dataloader=self.current_valid_dataloader)
+
+                    if isinstance(valid_outputs[0]["loss"], torch.Tensor):
+                        loss_avg = torch.stack([_["loss"] for _ in valid_outputs]).sum()
+                        handle = dist.all_reduce(loss_avg, group=self.parallel_context.dp_pg, async_op=True,
+                                                 op=dist.ReduceOp.AVG)
+                    else:
+                        loss_avg = None
+                        handle = None
+
+                    if handle is not None:
+                        handle.wait()
+
+                    self.valid_metadata.consumed_train_samples += self.global_batch_size
+                    self.valid_metadata.last_train_step = self.iteration_step
+                    self.valid_metadata.data_stages[self.valid_metadata.last_stage_idx].consumed_train_samples += self.global_batch_size
+
+                    log_entries = [LogItem("validation_loss_avg", loss_avg, "human_format")]
+                    self.loggerwriter.add_scalars_from_list(log_entries, self.iteration_step)
 
                 # Checkpoint
                 if self.iteration_step % self.config.checkpoints.checkpoint_interval == 0:
@@ -567,6 +650,15 @@ class DistributedTrainer:
             batch=(next(dataloader) for _ in range(self.limit_val_batches)),
             nb_microbatches=self.limit_val_batches,
         )
+        """
+        outputs = self.pipeline_engine.train_batch_iter(
+            model=self.model,
+            pg=self.parallel_context.pp_pg,
+            batch=(next(dataloader) for _ in range(self.n_micro_batches_per_batch)),
+            nb_microbatches=self.n_micro_batches_per_batch,
+            grad_accumulator=self.grad_accumulator,
+        )
+        """
         return outputs
 
     def train_step_logs(
@@ -574,7 +666,8 @@ class DistributedTrainer:
         outputs: Iterable[Dict[str, Union[torch.Tensor, TensorPointer]]],
         loss_avg: Optional[torch.Tensor],
     ) -> None:
-        # TODO @nouamanetazi: Megatron-LM seems to be using a barrier to report their interval time. Check if this is necessary. https://github.com/NouamaneTazi/Megatron-LM/blob/e241a96c3085b18e36c6cee1d68a8155de77b5a6/megatron/training.py#L607
+        # TODO @nouamanetazi: Megatron-LM seems to be using a barrier to report their interval time.
+        #  Check if this is necessary. https://github.com/NouamaneTazi/Megatron-LM/blob/e241a96c3085b18e36c6cee1d68a8155de77b5a6/megatron/training.py#L607
         dist.barrier()
         torch.cuda.synchronize()
         elapsed_time_per_iteration_ms = (time.time() - self.iteration_start_time) * 1000
@@ -589,7 +682,6 @@ class DistributedTrainer:
 
         if dist.get_rank(self.parallel_context.world_pg) in self.logger_ranks:
             assert self.loggerwriter is not None, "loggerwriter should be defined on logger ranks"
-
             lr = self.lr_scheduler.get_last_lr()[0]
 
             log_entries = [

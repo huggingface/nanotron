@@ -6,7 +6,10 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
 
 import numpy as np
 import torch.optim
-from functorch.dim import tree_map
+try:
+    from functorch.dim import tree_map
+except:
+    from torch.utils._pytree import tree_map
 from torch import nn
 from tqdm import tqdm
 
