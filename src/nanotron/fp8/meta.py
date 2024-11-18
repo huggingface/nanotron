@@ -30,6 +30,7 @@ class FP8Meta:
     # TODO(xrsrke): change to Literal[torch.int8, torch.uint8]
     dtype: DTypes
     interval: int
+    sync_amax: bool = False
 
     @property
     def te_dtype(self) -> tex.DType:

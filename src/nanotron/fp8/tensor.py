@@ -78,6 +78,16 @@ class LowPrecisionTensor(torch.Tensor):
 
         return obj
 
+    def __init__(
+        self,
+        tensor: torch.Tensor,
+        dtype: Optional[DTypes] = None,
+        interval: Optional[int] = 1,
+        fp8_meta: Optional[FP8Meta] = None,
+        sync: bool = False,
+    ) -> None:
+        pass
+
     @staticmethod
     # @torch.no_grad()
     def _get_metadata(tensor: torch.Tensor, dtype: DTypes, interval: int, sync: bool) -> "FP8Meta":
@@ -187,6 +197,20 @@ class LowPrecisionTensor(torch.Tensor):
         tensor = super().clone()
         tensor.fp8_meta = deepcopy(self.fp8_meta)
         return tensor
+
+    # def __torch_function__(self, func, types, args=(), kwargs=None):
+    #     return super().__torch_function__(func, types, args, kwargs)
+
+    # @classmethod
+    # def __torch_function__(cls, func, types, args, kwargs=None):
+    #     kwargs = kwargs or {}
+    #     if func is torch.transpose:
+    #         assert type(args[0]) == cls
+    #         assert type(args[1]) == type(args[2]) == int
+    #         # return CustomMaskedSum.apply(*args, **kwargs)
+    #         assert 1 == 1
+    #     else:
+    #         super().__torch_function__(func, types, args, kwargs)
 
 
 class FP8Tensor(LowPrecisionTensor):

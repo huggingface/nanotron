@@ -35,10 +35,10 @@ from nanotron.parallel.pipeline_parallel.block import PipelineBlock, TensorPoint
 from nanotron.parallel.pipeline_parallel.p2p import P2P
 from nanotron.parallel.tensor_parallel.functional import sharded_cross_entropy
 from nanotron.parallel.tensor_parallel.nn import (
-    TensorParallelColumnLinear,
+    FP8TensorParallelColumnLinear,
+    FP8TensorParallelRowLinear,
     TensorParallelEmbedding,
     TensorParallelLinearMode,
-    TensorParallelRowLinear,
 )
 from nanotron.random import RandomStates
 from nanotron.scaling.parametrization import SpectralMupParametrizator, StandardParametrizator
@@ -207,6 +207,7 @@ class MLP(nn.Module):
         config: LlamaConfig,
         parallel_config: Optional[ParallelismArgs],
         tp_pg: dist.ProcessGroup,
+        layer_idx: int,
     ):
         super().__init__()
 
@@ -220,7 +221,8 @@ class MLP(nn.Module):
             config.intermediate_size,  # shape of gate_linear
             config.intermediate_size,  # shape of up_linear
         )
-        self.gate_up_proj = TensorParallelColumnLinear(
+        # self.gate_up_proj = TensorParallelColumnLinear(
+        self.gate_up_proj = FP8TensorParallelColumnLinear(
             config.hidden_size,
             2 * config.intermediate_size,
             pg=tp_pg,
@@ -228,15 +230,18 @@ class MLP(nn.Module):
             bias=False,
             async_communication=tp_linear_async_communication,
             contiguous_chunks=gate_up_contiguous_chunks,
-            tp_recompute_allgather=parallel_config.tp_recompute_allgather,
+            name=f"model.decoder.{layer_idx}.mlp.gate_up_proj",
+            # tp_recompute_allgather=parallel_config.tp_recompute_allgather,
         )
-        self.down_proj = TensorParallelRowLinear(
+        # self.down_proj = TensorParallelRowLinear(
+        self.down_proj = FP8TensorParallelRowLinear(
             config.intermediate_size,
             config.hidden_size,
             pg=tp_pg,
             mode=tp_mode,
             bias=False,
             async_communication=tp_linear_async_communication and tp_mode is TensorParallelLinearMode.REDUCE_SCATTER,
+            name=f"model.decoder.{layer_idx}.mlp.down_proj",
         )
         self.split_silu_mul = GLUActivation(config.hidden_act)
 
@@ -381,7 +386,8 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             config.num_key_value_heads * self.d_qk,  # shape of k
             config.num_key_value_heads * self.d_qk,  # shape of v
         )
-        self.qkv_proj = TensorParallelColumnLinear(
+        # self.qkv_proj = TensorParallelColumnLinear(
+        self.qkv_proj = FP8TensorParallelColumnLinear(
             self.d_model,
             config.num_attention_heads * self.d_qk + 2 * config.num_key_value_heads * self.d_qk,
             pg=tp_pg,
@@ -389,7 +395,8 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             bias=False,
             async_communication=tp_linear_async_communication,
             contiguous_chunks=qkv_contiguous_chunks,
-            tp_recompute_allgather=parallel_config.tp_recompute_allgather,
+            name=f"model.decoder.{layer_idx}.attention.qkv_proj",
+            # tp_recompute_allgather=parallel_config.tp_recompute_allgather,
         )
         # TODO(kunhao): We want to have only one version per device and not one version per layer.
         if config.rope_interleaved:
@@ -411,13 +418,15 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             dim=self.d_qk, base=config.rope_theta, interleaved=config.rope_interleaved
         )
 
-        self.o_proj = TensorParallelRowLinear(
+        # self.o_proj = TensorParallelRowLinear(
+        self.o_proj = FP8TensorParallelRowLinear(
             config.num_attention_heads * self.d_qk,
             self.d_model,
             pg=tp_pg,
             mode=tp_mode,
             bias=False,
             async_communication=tp_linear_async_communication,
+            name=f"model.decoder.{layer_idx}.attention.o_proj",
         )
 
         self.attention = CoreAttention(
@@ -710,7 +719,7 @@ class LlamaDecoderLayer(nn.Module):
         )
 
         self.post_attention_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.mlp = MLP(config=config, parallel_config=parallel_config, tp_pg=tp_pg)
+        self.mlp = MLP(config=config, parallel_config=parallel_config, tp_pg=tp_pg, layer_idx=layer_idx)
 
         self.recompute_layer = parallel_config.recompute_layer
 
@@ -856,7 +865,8 @@ class LlamaModel(nn.Module):
         self.lm_head = PipelineBlock(
             p2p=self.p2p,
             # Understand that this means that we return sharded logits that are going to need to be gathered
-            module_builder=TensorParallelColumnLinear,
+            # module_builder=TensorParallelColumnLinear,
+            module_builder=FP8TensorParallelColumnLinear,
             module_kwargs={
                 "in_features": config.hidden_size,
                 "out_features": config.vocab_size,
@@ -865,7 +875,7 @@ class LlamaModel(nn.Module):
                 # TODO @thomasw21: refactor so that we store that default in a single place.
                 "mode": self.tp_mode,
                 "async_communication": tp_linear_async_communication,
-                "tp_recompute_allgather": parallel_config.tp_recompute_allgather,
+                # "tp_recompute_allgather": parallel_config.tp_recompute_allgather,
             },
             module_input_keys={"x"},
             module_output_keys={"logits"},
@@ -920,7 +930,8 @@ class LlamaModel(nn.Module):
             LlamaDecoderLayer: 4 * model_config.num_attention_heads * d_qkv * model_config.hidden_size
             + 3 * d_ff * model_config.hidden_size,
             # This is the last lm_head
-            TensorParallelColumnLinear: model_config.vocab_size * model_config.hidden_size,
+            # TensorParallelColumnLinear: model_config.vocab_size * model_config.hidden_size,
+            FP8TensorParallelColumnLinear: model_config.vocab_size * model_config.hidden_size,
         }
         return block_compute_costs
 

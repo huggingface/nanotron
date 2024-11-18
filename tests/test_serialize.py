@@ -1,6 +1,5 @@
 import pytest
 import torch
-from helpers.context import TestContext
 from helpers.dummy import dummy_infinite_data_loader, init_dummy_model
 from helpers.utils import (
     available_gpus,
@@ -33,6 +32,7 @@ from nanotron.serialize import (
     save_weights,
 )
 from nanotron.serialize.metadata import TensorMetadata
+from nanotron.testing.utils import TestContext
 from torch.nn.parallel import DistributedDataParallel
 
 

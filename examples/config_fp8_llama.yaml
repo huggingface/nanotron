@@ -44,7 +44,7 @@ logging:
   log_level_replica: info
 model:
   ddp_bucket_cap_mb: 25
-  dtype: float8
+  dtype: int8
   init_method:
     std: 0.025
   make_vocab_size_divisible_by: 1
@@ -89,11 +89,11 @@ optimizer:
 parallelism:
   dp: 2
   expert_parallel_size: 1
-  pp: 2
+  pp: 1
   pp_engine: 1f1b
-  tp: 2
-  tp_linear_async_communication: true
-  tp_mode: REDUCE_SCATTER
+  tp: 4
+  tp_linear_async_communication: false
+  tp_mode: ALL_REDUCE
 profiler: null
 tokenizer:
   tokenizer_max_length: null

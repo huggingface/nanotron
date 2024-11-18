@@ -313,10 +313,10 @@ def is_convert_to_fp16(module) -> bool:
     IS_CONVERT_TO_FLOAT16 = False
     name_of_modules_not_in_fp16 = get_modules_not_in_fp16()
 
-    if hasattr(module, "name") and "lm_head" in module.name:
-        assert 1 == 1
+    # if hasattr(module, "name") and "lm_head" in module.name:
+    #     assert 1 == 1
 
-    if constants.CONFIG.fp8.model is None:
+    if constants.CONFIG is not None and constants.CONFIG.fp8.model is None:
         if any(isinstance(module, m) for m in MODULES_THAT_IN_FLOAT16):
             IS_CONVERT_TO_FLOAT16 = True
         else:

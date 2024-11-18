@@ -71,7 +71,7 @@ class NanotronModel(nn.Module, metaclass=ABCMeta):
         Example for GPT2 model: ["model.token_position_embeddings.pp_block.token_embedding.weight", "model.lm_head.pp_block.weight"]
         """
         return []
-    
+
     def get_named_params_without_weight_decay(self) -> List[str]:
         """Return a list of named parameters that should not have weight decay applied to them."""
         return []
@@ -237,11 +237,118 @@ def build_model(
     return model
 
 
+old_register_parameter = nn.Module.register_parameter
+old_register_buffer = nn.Module.register_buffer
+
+
+def _register_empty_parameter_for_fp8(module, name, param):
+    old_register_parameter(module, name, param)
+
+    # from nanotron.fp8.constant_recipe import MODULES_THAT_IN_FLOAT16
+    # from nanotron.fp8.utils import get_modules_not_in_fp16
+
+    # MODULES_THAT_IN_FLOAT16 = [TensorParallelEmbedding, nn.LayerNorm]
+    # name_of_modules_not_in_fp16 = get_modules_not_in_fp16()
+
+    if param is not None:
+        from nanotron.fp8.utils import is_convert_to_fp16
+
+        # IS_CONVERT_TO_FLOAT16 = False
+        # if constants.CONFIG.fp8.model is None:
+        #     if any(isinstance(module, m) for m in MODULES_THAT_IN_FLOAT16):
+        #         IS_CONVERT_TO_FLOAT16 = True
+        # else:
+        #     if any(isinstance(module, m) for m in MODULES_THAT_IN_FLOAT16) or (
+        #         hasattr(module, "name") and module.name not in name_of_modules_not_in_fp16
+        #     ):
+        #         IS_CONVERT_TO_FLOAT16 = True
+        is_convert_to_float16 = is_convert_to_fp16(module)
+
+        if is_convert_to_float16:
+            import nanotron
+            from nanotron import constants
+
+            if constants.CONFIG is not None:
+                from typing import cast
+
+                from nanotron.config.fp8_config import FP8Args
+
+                fp8_config = cast(FP8Args, constants.CONFIG.fp8)
+                resid_dtype = fp8_config.resid_dtype
+            else:
+                resid_dtype = nanotron.fp8.constants.FP8LM_LINEAR_RECIPE.accum_dtype
+
+            param.data = param.data.to(torch.device("cuda"), resid_dtype)
+        else:
+            param.data = param.data.to(torch.device("cuda"))
+
+
+def _register_empty_buffer_for_fp8(module, name, buffer, persistent=True):
+    old_register_buffer(module, name, buffer, persistent=persistent)
+
+    # from nanotron.fp8.constant_recipe import MODULES_THAT_IN_FLOAT16
+    # from nanotron.fp8.utils import get_modules_not_in_fp16
+
+    # name_of_modules_not_in_fp16 = get_modules_not_in_fp16()
+
+    if buffer is not None:
+        # IS_CONVERT_TO_FLOAT16 = False
+
+        # # NOTE: convert all modules in FP8 except MODULES_THAT_IN_FLOAT16
+        # # if fp8.model is None
+        # if constants.CONFIG.fp8.model is None:
+        #     if any(isinstance(module, m) for m in MODULES_THAT_IN_FLOAT16):
+        #         IS_CONVERT_TO_FLOAT16 = True
+        # else:
+        #     if any(isinstance(module, m) for m in MODULES_THAT_IN_FLOAT16) or (
+        #         hasattr(module, "name") and module.name not in name_of_modules_not_in_fp16
+        #     ):
+        #         IS_CONVERT_TO_FLOAT16 = True
+
+        from nanotron.fp8.utils import is_convert_to_fp16
+
+        is_convert_to_float16 = is_convert_to_fp16(module)
+
+        if is_convert_to_float16:
+
+            # from nanotron import constants
+            from nanotron.fp8 import constants
+
+            # fp8_config = cast(FP8Args, constants.CONFIG.fp8)
+            # fp8_config = cast(FP8Args, constants.CONFIG.fp8)
+            # module._buffers[name] = module._buffers[name].to(torch.device("cuda"), torch.float16)
+            module._buffers[name] = module._buffers[name].to(
+                torch.device("cuda"), constants.FP8LM_LINEAR_RECIPE.accum_dtype
+            )
+        else:
+            buffer.data = buffer.data.to(torch.device("cuda"))
+
+
+def _register_empty_parameter(module, name, param, device, dtype):
+    old_register_parameter(module, name, param)
+    if param is not None:
+        if isinstance(param, DTypeInvariantTensor):
+            # if param is DTypeInvariantTensor we should avoid updating it
+            param.data = param.data.to(device)
+        else:
+            param.data = param.data.to(device, dtype)
+
+
+def _register_empty_buffer(module, name, buffer, device, dtype, persistent=True):
+    old_register_buffer(module, name, buffer, persistent=persistent)
+    if buffer is not None:
+        if isinstance(buffer, DTypeInvariantTensor):
+            # if buffer is DTypeInvariantTensor we should avoid updating it
+            buffer.data = buffer.data.to(device)
+        else:
+            module._buffers[name] = module._buffers[name].to(device, dtype)
+
+
 # TODO @thomasw21: Should this option override user defined options? Maybe not ... right now it does.
 @contextmanager
 def init_on_device_and_dtype(
     device: torch.device = torch.device("cpu"),
-    dtype: torch.dtype = torch.float,
+    dtype: torch.dtype = torch.float32,
 ):
     """
     A context manager under which models are initialized with all parameters on the specified device.
@@ -258,28 +365,32 @@ def init_on_device_and_dtype(
     from accelerate import init_on_device
     with init_on_device_and_dtype(device=torch.device("cuda")):
         tst = nn.Liner(100, 100)  # on `cuda` device
+
+    NOTE: in order to initialize an hybrid fp8 properly, you should use this context manager
     ```
     """
+    from functools import wraps
+
+    def method_partial(func, *args, **kwargs):
+        @wraps(func)
+        def wrapper(self, *fargs, **fkwargs):
+            return func(self, *args, *fargs, **kwargs, **fkwargs)
+
+        return wrapper
+
     old_register_parameter = nn.Module.register_parameter
     old_register_buffer = nn.Module.register_buffer
 
-    def register_empty_parameter(module, name, param):
-        old_register_parameter(module, name, param)
-        if param is not None:
-            if isinstance(param, DTypeInvariantTensor):
-                # if param is DTypeInvariantTensor we should avoid updating it
-                param.data = param.data.to(device)
-            else:
-                param.data = param.data.to(device, dtype)
-
-    def register_empty_buffer(module, name, buffer, persistent=True):
-        old_register_buffer(module, name, buffer, persistent=persistent)
-        if buffer is not None:
-            if isinstance(buffer, DTypeInvariantTensor):
-                # if buffer is DTypeInvariantTensor we should avoid updating it
-                buffer.data = buffer.data.to(device)
-            else:
-                module._buffers[name] = module._buffers[name].to(device, dtype)
+    register_empty_parameter = (
+        _register_empty_parameter_for_fp8
+        if dtype == torch.int8
+        else method_partial(_register_empty_parameter, device=device, dtype=dtype)
+    )
+    register_empty_buffer = (
+        _register_empty_buffer_for_fp8
+        if dtype == torch.int8
+        else method_partial(_register_empty_buffer, device=device, dtype=dtype)
+    )
 
     # Patch tensor creation
     tensor_constructors_to_patch = {
@@ -289,8 +400,10 @@ def init_on_device_and_dtype(
 
     def patch_tensor_constructor(fn):
         def wrapper(*args, **kwargs):
+            # NOTE: nanotron automatically sets the device and dtype of the tensor
+            # but for FP8 training, we initializes with float16 first
             kwargs["device"] = device
-            kwargs["dtype"] = dtype
+            kwargs["dtype"] = torch.float32 if dtype == torch.int8 else dtype
             return fn(*args, **kwargs)
 
         return wrapper
@@ -306,6 +419,77 @@ def init_on_device_and_dtype(
         nn.Module.register_buffer = old_register_buffer
         for torch_function_name, old_torch_function in tensor_constructors_to_patch.items():
             setattr(torch, torch_function_name, old_torch_function)
+
+
+# TODO @thomasw21: Should this option override user defined options? Maybe not ... right now it does.
+# @contextmanager
+# def init_on_device_and_dtype(
+#     device: torch.device = torch.device("cpu"),
+#     dtype: torch.dtype = torch.float,
+# ):
+#     """
+#     A context manager under which models are initialized with all parameters on the specified device.
+#     Args:
+#         device (`torch.device` defaults to `cpu`):
+#             Device to initialize all parameters on.
+#         dtype (`torch.dtype` defaults to `torch.float`):
+#             Dtype to initialize all parameters on.
+#         include_buffers (`bool`, defaults to `False`):
+#             Whether or not to also default all buffers constructors given previous arguments.
+#     Example:
+#     ```python
+#     import torch.nn as nn
+#     from accelerate import init_on_device
+#     with init_on_device_and_dtype(device=torch.device("cuda")):
+#         tst = nn.Liner(100, 100)  # on `cuda` device
+#     ```
+#     """
+#     old_register_parameter = nn.Module.register_parameter
+#     old_register_buffer = nn.Module.register_buffer
+
+#     def register_empty_parameter(module, name, param):
+#         old_register_parameter(module, name, param)
+#         if param is not None:
+#             if isinstance(param, DTypeInvariantTensor):
+#                 # if param is DTypeInvariantTensor we should avoid updating it
+#                 param.data = param.data.to(device)
+#             else:
+#                 param.data = param.data.to(device, dtype)
+
+#     def register_empty_buffer(module, name, buffer, persistent=True):
+#         old_register_buffer(module, name, buffer, persistent=persistent)
+#         if buffer is not None:
+#             if isinstance(buffer, DTypeInvariantTensor):
+#                 # if buffer is DTypeInvariantTensor we should avoid updating it
+#                 buffer.data = buffer.data.to(device)
+#             else:
+#                 module._buffers[name] = module._buffers[name].to(device, dtype)
+
+#     # Patch tensor creation
+#     tensor_constructors_to_patch = {
+#         torch_function_name: getattr(torch, torch_function_name)
+#         for torch_function_name in ["empty", "zeros", "ones", "full"]
+#     }
+
+#     def patch_tensor_constructor(fn):
+#         def wrapper(*args, **kwargs):
+#             kwargs["device"] = device
+#             kwargs["dtype"] = dtype
+#             return fn(*args, **kwargs)
+
+#         return wrapper
+
+#     try:
+#         nn.Module.register_parameter = register_empty_parameter
+#         nn.Module.register_buffer = register_empty_buffer
+#         for torch_function_name in tensor_constructors_to_patch.keys():
+#             setattr(torch, torch_function_name, patch_tensor_constructor(getattr(torch, torch_function_name)))
+#         yield
+#     finally:
+#         nn.Module.register_parameter = old_register_parameter
+#         nn.Module.register_buffer = old_register_buffer
+#         for torch_function_name, old_torch_function in tensor_constructors_to_patch.items():
+#             setattr(torch, torch_function_name, old_torch_function)
 
 
 def check_model_has_grad(model: NanotronModel, parallel_context: "ParallelContext"):

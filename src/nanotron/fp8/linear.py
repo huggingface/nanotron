@@ -12,7 +12,6 @@ from nanotron.fp8.meta import FP8Meta
 from nanotron.fp8.parameter import FP8Parameter
 from nanotron.fp8.recipe import FP8LinearRecipe
 from nanotron.fp8.tensor import FP8Tensor
-from nanotron.parallel.parameters import get_data_from_param
 
 
 @dataclass
@@ -55,7 +54,10 @@ class FP8Linear(nn.Linear):
         assert quant_w.dtype in [torch.uint8, torch.int8], f"got {self.weight.data.dtype}"
         self.weight = quant_w
 
-        assert self.weight.data.dtype in [torch.uint8, torch.int8], f"got {self.weight.data.dtype}"
+        if self.name == "model.decoder.0.attention.qkv_proj":
+            assert 1 == 1
+
+        assert self.weight.data.dtype in [torch.uint8, torch.int8], f"got {self.weight.data.dtype}, name: {self.name}"
 
         if self.bias is not None:
             self.bias = nn.Parameter(self.bias.to(recipe.accum_dtype))
@@ -66,6 +68,7 @@ class FP8Linear(nn.Linear):
 
     def forward(self, input: Union[FP8Tensor, torch.Tensor]) -> torch.Tensor:
         import nanotron.fp8.functional as F
+        from nanotron.parallel.parameters import get_data_from_param
 
         return F.linear(
             input=input,

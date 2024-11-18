@@ -15,6 +15,7 @@ from nanotron.config import LlamaConfig as NanotronLlamaConfig
 from nanotron.models.base import init_on_device_and_dtype
 from nanotron.models.llama import LlamaForTraining
 from nanotron.parallel import ParallelContext
+from nanotron.testing.utils import TestContext
 from nanotron.trainer import mark_tied_parameters
 
 from examples.llama.convert_hf_to_nanotron import convert_checkpoint_and_save as convert_hf_to_nt_and_save
@@ -22,7 +23,6 @@ from examples.llama.convert_hf_to_nanotron import convert_hf_to_nt
 from examples.llama.convert_nanotron_to_hf import convert_checkpoint_and_save as convert_nt_to_hf_and_save
 from examples.llama.convert_nanotron_to_hf import convert_nt_to_hf, get_hf_config
 from examples.llama.convert_weights import load_nanotron_model, make_parallel_config
-from tests.helpers.context import TestContext
 from tests.helpers.utils import init_distributed
 
 CONFIG = NanotronLlamaConfig(
@@ -141,7 +141,7 @@ def _test_hf_to_nt(parallel_context: ParallelContext, input_ids: torch.Tensor):
     logits_nt = model_nt.model(input_ids, input_mask).permute(1, 0, 2)
     logits_hf = model_hf(input_ids).logits
     assert logits_nt.size() == logits_hf.size()
-    torch.testing.assert_allclose(logits_hf, logits_nt, atol=ATOL)  
+    torch.testing.assert_allclose(logits_hf, logits_nt, atol=ATOL)
 
 
 def test_hf_to_nt(input_ids: torch.Tensor):
