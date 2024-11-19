@@ -195,7 +195,7 @@ class DistributedTrainer:
                 parallel_context=self.parallel_context,
                 root_folder=self.init_checkpoint_path,
                 param_shard_metadata=self.param_shard_metadata,
-                model=self.model,
+                model=self.unwrapped_model,
             )
 
         # Init learning rate scheduler
