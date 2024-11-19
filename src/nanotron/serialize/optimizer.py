@@ -174,18 +174,23 @@ def load_optimizer(
             # NOTE: if the checkpoint is from a Zero-0 optimizer, then we don't need to merge the shards
             # across data parallel dimension, just directly load the checkpoints
             shard_paths = list(
-                root_folder.glob(f"{ObjectType.OPTIMIZER.value}_pp-*-of-{ckp_pp_size}_tp-*-of-{ckp_tp_size}.pt")
+                root_folder.glob(
+                    f"{ObjectType.OPTIMIZER.value}_pp-*-of-{ckp_pp_size}_tp-*-of-{ckp_tp_size}.pt"
+                )  # WARN: wildcard here after tp can hold `0-of-1_exp-0`
             )
 
             ckp_sharded_optim_states = {}
             for shard_path in shard_paths:
                 pp_rank, tp_rank = extract_parallel_ranks_from_shard_path(shard_path, is_zero1=False)
-                ckp_sharded_optim_states[(pp_rank, tp_rank)] = torch.load(shard_path, map_location=map_location)
+                ckp_sharded_optim_states[(pp_rank, tp_rank)] = torch.load(
+                    shard_path, map_location=map_location
+                )  # load all optim states in mem
 
         model_state_dict = model.state_dict()
         new_optim_state_dict = optimizer.state_dict()
         # TODO: this does not handle the edge case of different pipeline parallel optimizer state shards saving different state keys
         OPTIMIZER_STATE_NAMES = sorted(ckp_sharded_optim_states[(0, 0)]["state"][0].keys() - ["step"])
+        OPTIMIZER_STATE_DTYPE = ckp_sharded_optim_states[(0, 0)]["state"][0][OPTIMIZER_STATE_NAMES[0]].dtype
         # NOTE: because we can only resume training with the same optimizer type
         # (0, 0) = (pp_rank, tp_rank)
         # NOTE: also we don't merge "step" because it's just a scalar
@@ -230,8 +235,9 @@ def load_optimizer(
                 for state_key in OPTIMIZER_STATE_NAMES:
                     # TODO(xrsrke): free the memory of the shards that isn't
                     # corresponding to the current rank
-                    buffer = torch.zeros_like(param, device="cuda")
-                    unsharded_buffer = torch.empty(new_unshared_shape, device="cuda")
+                    # TODO: maybe better to allocate memory for all states at once
+                    buffer = torch.zeros_like(param, device="cuda", dtype=OPTIMIZER_STATE_DTYPE)
+                    unsharded_buffer = torch.empty(new_unshared_shape, device="cuda", dtype=OPTIMIZER_STATE_DTYPE)
 
                     for (pp_rank, tp_rank), ckp_optim_state in ckp_sharded_optim_states.items():
                         old_optim_state_index = find_optim_index_from_param_name(
@@ -278,6 +284,8 @@ def load_optimizer(
                         if step is not None:
                             new_optim_state_dict["state"][param_index]["step"] = step
 
+                        # NOTE: we throw away ckp_optim_state['gradient_accumulator'] which has fp32 grads
+
         new_optim_state_dict["names"] = new_optim_state_param_names
         state_dict = new_optim_state_dict
     else:
@@ -319,3 +327,4 @@ def load_lr_scheduler(
 
     state_dict = torch.load(root_folder / lr_scheduler_filename())
     lr_scheduler.load_state_dict(state_dict)
+    lr_scheduler._initial_step()  # NOTE: this is required to set the initial learning rate

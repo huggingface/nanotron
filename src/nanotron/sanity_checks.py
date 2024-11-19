@@ -58,6 +58,7 @@ def before_tbi_sanity_checks(
     parallel_context: ParallelContext,
     unwrapped_model: NanotronModel,
     grad_accumulator: GradientAccumulator,
+    lr_scheduler: torch.optim.lr_scheduler.LRScheduler,
 ) -> None:
     if not config.general.ignore_sanity_checks:
         # SANITY CHECK: Check that the model params are synchronized across dp
@@ -84,6 +85,17 @@ def before_tbi_sanity_checks(
                 msg=lambda err: f"[Before train] Tied weights {name} are not synchronized. {err}",
             )
 
+        # SANITY CHECK: Check that model grads are zeroed or None
+        for name, param in unwrapped_model.named_parameters():
+            if param.grad is not None:
+                torch.testing.assert_close(
+                    param.grad,
+                    torch.zeros_like(param.grad),
+                    atol=0,
+                    rtol=0,
+                    msg="Model half precision grads must be zeroed or None in first accumulation step.",
+                )
+
         # SANITY CHECK: Check that the grad accumulator buffers are ready for DDP
         if grad_accumulator is not None:
             for _, elt in grad_accumulator.fp32_grad_buffers.items():
@@ -95,6 +107,15 @@ def before_tbi_sanity_checks(
                     rtol=0,
                     msg="Grad accumulator buffers must be zeroed in first accumulation step.",
                 )
+
+            # TODO: add checks for memory contiguousness
+
+        # SANITY CHECK: Check that optimizer's lr is synchronized with lr_scheduler
+        for i, group in enumerate(lr_scheduler.optimizer.param_groups):
+            assert (
+                group["lr"] == lr_scheduler.get_last_lr()[i]
+            ), f"Optimizer and LR scheduler are not in sync. Got {group['lr']} and {lr_scheduler.get_last_lr()[i]}"
+            break
 
         # SANITY CHECK: run model specific sanity checks
         unwrapped_model.before_tbi_sanity_checks()
@@ -210,6 +231,10 @@ def before_optim_step_sanity_checks(
                 pg=group,
                 msg=lambda err: f"[Before optimizer step] Tied weights {name} are not synchronized. {err}",
             )
+
+        # SANITY CHECK: optimizer's lr is synchronized with lr_scheduler
+        for group in unwrapped_model.optimizer.param_groups:
+            assert group["lr"] == unwrapped_model.lr_scheduler.get_last_lr()[0]
 
         # SANITY CHECK: run model specific sanity checks
         unwrapped_model.before_optim_step_sanity_checks()
