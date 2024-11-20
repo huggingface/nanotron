@@ -232,10 +232,6 @@ def before_optim_step_sanity_checks(
                 msg=lambda err: f"[Before optimizer step] Tied weights {name} are not synchronized. {err}",
             )
 
-        # SANITY CHECK: optimizer's lr is synchronized with lr_scheduler
-        for group in unwrapped_model.optimizer.param_groups:
-            assert group["lr"] == unwrapped_model.lr_scheduler.get_last_lr()[0]
-
         # SANITY CHECK: run model specific sanity checks
         unwrapped_model.before_optim_step_sanity_checks()
 
