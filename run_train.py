@@ -248,6 +248,7 @@ def get_dataloader_from_data_stage(
             dataset_processing_num_proc_per_process=-1, # will be ignored
             dataset_overwrite_cache=False, # will be ignored
             sequence_length=trainer.sequence_length,
+            batch_size=chunk_size // 4 # We set the batch size to 25% of chunk size. We don't want this to be higher than the chunk size because otherwise we will prefetch chunks implicitly!
         )
 
         # We load the processed dataset on the ranks requiring it

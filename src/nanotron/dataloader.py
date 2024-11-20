@@ -289,6 +289,7 @@ def clm_process(
     dataset_processing_num_proc_per_process: int,
     dataset_overwrite_cache: bool,
     sequence_length: int,
+    batch_size: int | None = None
 ):
     """Concatenate all texts from raw_dataset and generate chunks of `sequence_length + 1`, where chunks overlap by a single token."""
     # Adapted from https://github.com/huggingface/transformers/blob/47e1676255e5dd86b9541f734cd4f4bdcbb50f4a/examples/pytorch/language-modeling/run_clm.py#L391-L439
@@ -343,6 +344,16 @@ def clm_process(
     # and they mismatch the length of the grouped texts.
     if isinstance(raw_dataset, IterableDataset):
         raw_dataset = raw_dataset._resolve_features()
+        if batch_size is None:
+            logger.warning("You're using an IterableDataset but did not adjust the batch_size of `clm_process`. You probably want to reduce the number of samples prefetched and tokenized.")
+
+    if batch_size is not None:
+        # We allow users to configure the batch size here.
+        # Huggingface defaults to 1000, i.e., 1000 samples are fetches at the same time and tokenized
+        # For the standard case this does not matter, but in the streaming case, if we fetch 1000 very long samples,
+        # we have a quite long prefetch (because a single sample can be tokenized into potentially many many sequences if it contains many tokens).
+        # Hence, for the streaming case you probably want to lower this
+        additional_args["batch_size"] = batch_size
 
     logger.info(f"raw_dataset columns = {raw_dataset.column_names}")
     train_dataset = raw_dataset.map(
