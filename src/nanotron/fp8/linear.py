@@ -12,6 +12,7 @@ from nanotron.fp8.meta import FP8Meta
 from nanotron.fp8.parameter import FP8Parameter
 from nanotron.fp8.recipe import FP8LinearRecipe
 from nanotron.fp8.tensor import FP8Tensor
+from nanotron.parallel.parameters import NanotronParameter
 
 
 @dataclass
@@ -36,7 +37,7 @@ class FP8Linear(nn.Linear):
         bias: bool = True,
         device: Optional[torch.device] = None,
         # accum_qtype: DTypes = FP8LM_RECIPE.linear.accum_dtype,
-        recipe: FP8LinearRecipe = FP8LM_LINEAR_RECIPE,
+        # recipe: FP8LinearRecipe = FP8LM_LINEAR_RECIPE,
         # NOTE: placeholder for dtype in torch's nn.Linear
         # TODO(xrsrke): remove this shit
         **kwargs,
@@ -50,19 +51,26 @@ class FP8Linear(nn.Linear):
         # TODO(xrsrke): take initialization dtype from recipe
         # NOTE: initialize in float32
         super().__init__(in_features, out_features, bias, device, dtype=torch.float32)
+        self._quantize_weights()
+
+        assert self.bias is None
+        # if self.bias is not None:
+        #     self.bias = nn.Parameter(self.bias.to(recipe.accum_dtype))
+        #     assert self.bias.dtype == recipe.accum_dtype
+
+        # self.metadatas = FP8LinearMeta()
+        # self.recipe = recipe
+    
+    def _quantize_weights(self, recipe: FP8LinearRecipe = FP8LM_LINEAR_RECIPE):
         quant_w = FP8Parameter(self.weight.data, dtype=recipe.weight.dtype, interval=recipe.weight.interval)
-        assert quant_w.dtype in [torch.uint8, torch.int8], f"got {self.weight.data.dtype}"
-        self.weight = quant_w
+        # assert quant_w.dtype in [torch.uint8, torch.int8], f"got {self.weight.data.dtype}"
+        # self.weight = quant_w
+        setattr(self.weight, "data", quant_w)
 
         if self.name == "model.decoder.0.attention.qkv_proj":
             assert 1 == 1
 
-        assert self.weight.data.dtype in [torch.uint8, torch.int8], f"got {self.weight.data.dtype}, name: {self.name}"
-
-        if self.bias is not None:
-            self.bias = nn.Parameter(self.bias.to(recipe.accum_dtype))
-            assert self.bias.dtype == recipe.accum_dtype
-
+        # NOTE: assume each time we requantize the weights, we reset the metadata
         self.metadatas = FP8LinearMeta()
         self.recipe = recipe
 
@@ -72,14 +80,16 @@ class FP8Linear(nn.Linear):
 
         return F.linear(
             input=input,
-            weight=get_data_from_param(self.weight),
-            bias=None if self.bias is None else get_data_from_param(self.bias),
+            # weight=get_data_from_param(self.weight),
+            # bias=None if self.bias is None else get_data_from_param(self.bias),
+            weight=self.weight,
+            bias=None,
             metadatas=self.metadatas,
             recipe=self.recipe,
         )
 
-    def __repr__(self) -> str:
-        return f"FP8{super().__repr__()}"
+    # def __repr__(self) -> str:
+    #     return f"FP8{super().__repr__()}"
 
 
 class _FP8Matmul(torch.autograd.Function):
@@ -88,7 +98,7 @@ class _FP8Matmul(torch.autograd.Function):
     def forward(
         ctx,
         input: Union[FP8Tensor, torch.Tensor],
-        weight: FP8Tensor,
+        weight: NanotronParameter,
         output: torch.Tensor,
         phony: torch.Tensor,
         metadatas: FP8LinearMeta,
@@ -96,6 +106,7 @@ class _FP8Matmul(torch.autograd.Function):
         name,
     ) -> torch.Tensor:
         assert not isinstance(input, FP8Tensor)
+        assert isinstance(weight, NanotronParameter)
 
         from nanotron import constants
         from nanotron.config.fp8_config import FP8Args
@@ -125,7 +136,8 @@ class _FP8Matmul(torch.autograd.Function):
 
         output = fp8_matmul_kernel(
             # NOTE: that works
-            mat_a=weight,
+            # mat_a=weight, # i used weight before removing get_data_from_param
+            mat_a=weight.data,
             mat_b=fp8_input,
             output=accum_output,
             use_split_accumulator=recipe.split_accumulator.output,
@@ -147,6 +159,7 @@ class _FP8Matmul(torch.autograd.Function):
         from nanotron import constants
         from nanotron.config.fp8_config import FP8Args
 
+        # pydevd.settrace(suspend=False, trace_only_current_thread=True)
         if (
             constants.CONFIG is not None
             and constants.CONFIG.fp8 is not None
@@ -164,7 +177,8 @@ class _FP8Matmul(torch.autograd.Function):
         sync_amax_in_igrad = fp8_config.sync_amax_in_igrad
         sync_amax_in_wgrad = fp8_config.sync_amax_in_wgrad
 
-        fp8_input, fp8_weight = ctx.saved_tensors
+        fp8_input, fp8_weight_param = ctx.saved_tensors
+        fp8_weight = fp8_weight_param.data
         recipe = ctx.recipe
         recipe = cast(FP8LinearRecipe, recipe)
 
@@ -261,9 +275,9 @@ class _FP8Matmul(torch.autograd.Function):
                     grad_weight, ctx.metadatas.weight_grad, sync=sync_amax_in_wgrad
                 )
 
-            fp8_weight.grad = fp8_weight_grad
+            fp8_weight_param.grad = fp8_weight_grad
 
             # NOTE: sanity check
-            assert isinstance(fp8_weight.grad, FP8Tensor)
+            assert isinstance(fp8_weight_param.grad, FP8Tensor)
 
         return grad_input, None, None, None, None, None, None

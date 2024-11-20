@@ -68,7 +68,7 @@ from nanotron.parallel.pipeline_parallel.engine import (
 )
 from nanotron.parallel.pipeline_parallel.utils import get_pp_rank_of
 from nanotron.parallel.tensor_parallel.enum import TensorParallelLinearMode
-from nanotron.parallel.tensor_parallel.nn import TensorParallelRowLinear
+from nanotron.parallel.tensor_parallel.nn import TensorParallelRowLinear, TensorParallelColumnLinear
 from nanotron.parallel.tied_parameters import (
     create_pg_for_tied_weights,
     get_tied_id_to_param,
@@ -134,6 +134,8 @@ class DistributedTrainer:
         self.config = get_config_from_file(
             config_or_config_file, config_class=config_class, model_config_class=model_config_class
         )
+        from nanotron import constants
+        constants.CONFIG = self.config
         self.model_config = self.config.model.model_config
         if model_class is not None:
             CONFIG_TO_MODEL_CLASS[self.model_config.__class__.__name__] = model_class
@@ -189,6 +191,41 @@ class DistributedTrainer:
             optimizer_args=self.config.optimizer,
             parallel_context=self.parallel_context,
         )
+
+        from nanotron.fp8.utils import get_leaf_modules
+        def print_sanity_params(model):
+            for n, p in model.named_parameters():
+                print(n, p.__class__.__name__, p.requires_grad, p.data.dtype)
+        
+        print("before quantize")
+        print_sanity_params(self.model)
+
+        assert 1 == 1
+        # NOTE: convert to FP8
+        from nanotron.parallel.tensor_parallel.nn import FP8TensorParallelColumnLinear, FP8TensorParallelRowLinear
+        from nanotron.parallel.parameters import NanotronParameter
+        from nanotron.fp8.tensor import FP8Tensor
+
+        TP_LINEAR_CLS_TO_FP8_LINEAR_CLS = {
+            TensorParallelColumnLinear: FP8TensorParallelColumnLinear,
+            TensorParallelRowLinear: FP8TensorParallelRowLinear,
+        }
+        if self.config.model.dtype is torch.int8:
+            for name, module in get_leaf_modules(self.model):
+                if isinstance(module, (TensorParallelColumnLinear, TensorParallelRowLinear)):
+                    print(f"Converting {name} to FP8")
+                    module.__class__ = TP_LINEAR_CLS_TO_FP8_LINEAR_CLS[module.__class__]
+                    # TODO(xrsrke): retrieve custom recipe
+                    module._quantize_weights()
+                    
+                    assert isinstance(module.weight, NanotronParameter)
+                    assert isinstance(module.weight.data, FP8Tensor)
+                    assert module.weight.data.dtype in [torch.uint8, torch.int8], f"got {module.weight.data.dtype}, name: {name}"
+
+        print("after quantize")
+        print_sanity_params(self.model)
+        assert 1 == 1
+
         if self.init_checkpoint_path is not None:
             load_optimizer(
                 optimizer=self.optimizer,

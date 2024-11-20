@@ -229,7 +229,7 @@ class MLP(nn.Module):
             bias=False,
             async_communication=tp_linear_async_communication,
             contiguous_chunks=gate_up_contiguous_chunks,
-            # name=f"model.decoder.{layer_idx}.mlp.gate_up_proj",
+            name=f"model.decoder.{layer_idx}.mlp.gate_up_proj",
             # tp_recompute_allgather=parallel_config.tp_recompute_allgather,
         )
         self.down_proj = TensorParallelRowLinear(
@@ -239,6 +239,7 @@ class MLP(nn.Module):
             mode=tp_mode,
             bias=False,
             async_communication=tp_linear_async_communication and tp_mode is TensorParallelLinearMode.REDUCE_SCATTER,
+            name=f"model.decoder.{layer_idx}.mlp.down_proj",
         )
         self.split_silu_mul = GLUActivation(config.hidden_act)
 
@@ -392,7 +393,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             bias=False,
             async_communication=tp_linear_async_communication,
             contiguous_chunks=qkv_contiguous_chunks,
-            # name=f"model.decoder.{layer_idx}.attention.qkv_proj",
+            name=f"model.decoder.{layer_idx}.attention.qkv_proj",
             # tp_recompute_allgather=parallel_config.tp_recompute_allgather,
         )
         # TODO(kunhao): We want to have only one version per device and not one version per layer.
@@ -422,7 +423,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             mode=tp_mode,
             bias=False,
             async_communication=tp_linear_async_communication,
-            # name=f"model.decoder.{layer_idx}.attention.o_proj",
+            name=f"model.decoder.{layer_idx}.attention.o_proj",
         )
 
         self.attention = CoreAttention(
@@ -681,6 +682,13 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                 batch_size * kv_length, self.n_local_kv_heads, self.d_v
             )  # [batch_size * kv_length, self.n_heads, d_v]
 
+            # NOTE: even though in some cases, we accumulate fp8 gemm in bfloat16,
+            # but since the layer norm are in float32, the resulting output will be in float32
+            # and flash attention don't support float32 qkv, so we have to cast it back to bfloat16
+            query_states = query_states.to(torch.bfloat16)
+            key_states = key_states.to(torch.bfloat16)
+            value_states = value_states.to(torch.bfloat16)
+            
             attention_output = self.attention(
                 query_states=query_states,
                 key_states=key_states,
@@ -877,6 +885,7 @@ class LlamaModel(nn.Module):
                 # TODO @thomasw21: refactor so that we store that default in a single place.
                 "mode": self.tp_mode,
                 "async_communication": tp_linear_async_communication,
+                "name": "model.lm_head",
                 # "tp_recompute_allgather": parallel_config.tp_recompute_allgather,
             },
             module_input_keys={"x"},

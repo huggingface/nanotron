@@ -16,6 +16,8 @@ class FP8LayerArgs(FP8LinearRecipe):
 
 @dataclass
 class FP8Args:
+    # NOTE: this is the datatype of model initialization, before casting to fp8
+    init_dtype: torch.dtype = torch.float32
     # NOTE: this is the datatype for residual stream (aka: non-fp8 operation)
     resid_dtype: torch.dtype = torch.float32
     # NOTE: the datatype for fp8 operation's accumulation

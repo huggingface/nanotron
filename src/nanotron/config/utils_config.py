@@ -62,6 +62,7 @@ str_to_dtype = {
     "bfloat16": torch.bfloat16,
     "uint8": torch.uint8,
     "int8": torch.int8,
+    "float8": torch.int8,
     "int16": torch.int16,
     "int32": torch.int32,
     "int64": torch.int64,

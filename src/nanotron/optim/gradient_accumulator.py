@@ -154,6 +154,11 @@ class FP32GradientAccumulator(GradientAccumulator):
         else:
             dist.all_reduce(self._contiguous_fp32_grad_buffer, op=reduce_op, group=dp_pg)
 
+    @classmethod
+    def _is_accumulate_param(cls, param: NanotronParameter) -> bool:
+        from nanotron.fp8.tensor import FP8Tensor
+        return param.requires_grad or param.data.__class__ == FP8Tensor
+    
     @staticmethod
     def build_grad_buffers(
         named_parameters: Iterator[Tuple[str, NanotronParameter]],
@@ -166,7 +171,7 @@ class FP32GradientAccumulator(GradientAccumulator):
         Note:
             In ZeRO-1, we need to accumulate grads for all parameters, because we need to allreduce all parameters' grads across DP at each sync step.
         """
-        named_parameters = [(name, param) for name, param in named_parameters if param.requires_grad]
+        named_parameters = [(name, param) for name, param in named_parameters if FP32GradientAccumulator._is_accumulate_param(param)]
 
         needed_buffer_size = sum(param.numel() for _, param in named_parameters)
         # important to have grads zeroed initially (see `self._accumulate_grad`)
@@ -178,16 +183,19 @@ class FP32GradientAccumulator(GradientAccumulator):
         fp32_grad_buffers = OrderedDict()  # keeps order of insertion
         offset = 0
         for name, param in named_parameters:
-            if not param.requires_grad:
+            # NOTE: because fp8 parameter by default has `requires_grad=False`,
+            # but we still need to accumulate grads for it
+            # if not param.requires_grad:
+            if FP32GradientAccumulator._is_accumulate_param(param) is False:
                 continue
 
-            assert param.dtype != torch.float, f"Expected {name} not to be float"
+            # assert param.dtype != torch.float, f"Expected {name} not to be float"
             assert param.is_contiguous(), f"Expected {name} to be contiguous"
 
             next_offset = offset + param.numel() * element_size
 
             fp32_grad_buffer = tensor_from_untyped_storage(
-                untyped_storage=untyped_storage[offset:next_offset], dtype=torch.float
+                untyped_storage=untyped_storage[offset:next_offset], dtype=torch.float32
             )
 
             fp32_grad_buffers[name] = {

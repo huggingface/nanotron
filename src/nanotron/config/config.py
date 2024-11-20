@@ -11,6 +11,7 @@ from dacite import from_dict
 from datasets.download.streaming_download_manager import xPath
 from yaml.loader import SafeLoader
 
+from nanotron.config.fp8_config import FP8Args
 from nanotron.config.lighteval_config import LightEvalConfig
 from nanotron.config.models_config import ExistingCheckpointInit, NanotronConfigs, RandomInit, SpectralMupInit
 from nanotron.config.parallelism_config import ParallelismArgs
@@ -351,6 +352,7 @@ class Config:
     profiler: Optional[ProfilerArgs] = None
     lighteval: Optional[LightEvalConfig] = None
     s3_upload: Optional[S3UploadArgs] = None
+    fp8: Optional[FP8Args] = None
 
     @classmethod
     def create_empty(cls):
@@ -397,6 +399,10 @@ class Config:
         # # if lighteval, we need tokenizer to be defined
         # if self.checkpoints.lighteval is not None:
         #     assert self.tokenizer.tokenizer_name_or_path is not None
+
+        if self.model.dtype == torch.int8:
+            if self.fp8 is None:
+                self.fp8 = FP8Args()
 
     @property
     def global_batch_size(self):

@@ -227,6 +227,14 @@ class NanotronParameter(nn.Parameter):
     def data(self, data):
         self._data = data
 
+    @property
+    def grad(self):
+        return self._grad
+    
+    @grad.setter
+    def grad(self, grad):
+        self._grad = grad
+
     # @property
     # def grad(self):
     #     return self.data.grad if self.grad is None else self.grad
@@ -269,9 +277,9 @@ class NanotronParameter(nn.Parameter):
             # data = args[0].data
             # data.requires_grad = args[0].requires_grad
             data = unwrapped_args[0]
-            if data.__class__ == FP8Parameter or data.__class__ == nn.Parameter:
-                data = data.data
-                # data.requires_grad = unwrapped_args[0].requires_grad
+            # if data.__class__ == FP8Parameter or data.__class__ == nn.Parameter:
+            #     data = data.data
+            #     # data.requires_grad = unwrapped_args[0].requires_grad
 
             return data
         else:

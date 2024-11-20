@@ -369,6 +369,22 @@ def init_on_device_and_dtype(
     NOTE: in order to initialize an hybrid fp8 properly, you should use this context manager
     ```
     """
+    from typing import cast
+    from nanotron import constants
+    from nanotron.config.fp8_config import FP8Args
+
+    # NOTE: the reason we do float32 init here because my educated guess is that
+    # if we initially initialize models weight in float32, we have a more accurate representation
+    # of the target normal distribution rather than int8 (didn't do ablation study on this)
+
+    # NOTE: if the model's training dtype is float8, then we retrieve
+    # the initialization dtype from the fp8 config
+    if constants.CONFIG is not None and dtype is torch.int8:
+        training_config = cast(FP8Args, constants.CONFIG.fp8)
+        init_dtype = training_config.init_dtype
+    else:
+        init_dtype = dtype
+
     from functools import wraps
 
     def method_partial(func, *args, **kwargs):
@@ -403,7 +419,8 @@ def init_on_device_and_dtype(
             # NOTE: nanotron automatically sets the device and dtype of the tensor
             # but for FP8 training, we initializes with float16 first
             kwargs["device"] = device
-            kwargs["dtype"] = torch.float32 if dtype == torch.int8 else dtype
+            # kwargs["dtype"] = torch.float32 if dtype == torch.int8 else dtype
+            kwargs["dtype"] = init_dtype
             return fn(*args, **kwargs)
 
         return wrapper

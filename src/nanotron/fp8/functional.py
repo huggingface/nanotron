@@ -5,6 +5,7 @@ import torch
 from nanotron.fp8.linear import FP8LinearMeta
 from nanotron.fp8.recipe import FP8LinearRecipe
 from nanotron.fp8.tensor import FP8Tensor
+from nanotron.parallel.parameters import NanotronParameter
 
 
 def smooth_quant(input: torch.Tensor, weight: FP8Tensor, alpha: float) -> Tuple[torch.Tensor, FP8Tensor]:
@@ -32,12 +33,13 @@ def smooth_quant(input: torch.Tensor, weight: FP8Tensor, alpha: float) -> Tuple[
 
 def linear(
     input: torch.Tensor,
-    weight: FP8Tensor,
+    weight: NanotronParameter,
     bias: Optional[torch.Tensor] = None,
     metadatas: FP8LinearMeta = None,
     recipe: FP8LinearRecipe = None,
     name: Optional[str] = None,
 ):
+    assert isinstance(weight, NanotronParameter)
     from typing import cast
 
     from nanotron import constants

@@ -456,7 +456,8 @@ def column_linear(
 
         input = differentiable_identity(input, group=group)
 
-        if isinstance(weight, FP8Tensor):
+        # if isinstance(weight, FP8Tensor): # i used weight before removing get_data_from_param
+        if isinstance(weight.data, FP8Tensor):
             assert recipe is not None, "recipe must be provided for column_linear"
             from nanotron import constants
 
@@ -642,7 +643,8 @@ def row_linear(
     import nanotron.fp8.functional as fp8_functional
     from nanotron.fp8.tensor import FP8Tensor
 
-    if isinstance(weight, FP8Tensor):
+    # if isinstance(weight, FP8Tensor): # i used weight before removing get_data_from_param
+    if isinstance(weight.data, FP8Tensor):
         assert recipe is not None, "recipe must be provided for row_linear"
         out = fp8_functional.linear(input, weight, bias, metadatas=metadatas, recipe=recipe, name=name)
     else:
