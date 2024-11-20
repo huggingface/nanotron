@@ -21,7 +21,6 @@ from torch.nn import functional as F
 import nanotron.distributed as dist
 from nanotron.fp8.linear import FP8LinearMeta
 from nanotron.fp8.recipe import FP8LinearRecipe
-from nanotron.parallel.parameters import get_data_from_param
 from nanotron.parallel.tensor_parallel.distributed_differentiable_primitives import (
     differentiable_all_reduce_sum,
     differentiable_identity,
@@ -443,10 +442,10 @@ def column_linear(
     name: Optional[str] = None,
     recipe: Optional[FP8LinearRecipe] = None,
 ):
-    weight = get_data_from_param(weight)
+    # weight = get_data_from_param(weight)
 
-    if bias is not None:
-        bias = get_data_from_param(bias)
+    # if bias is not None:
+    #     bias = get_data_from_param(bias)
 
     if async_communication:
         return _ColumnLinearAsyncCommunication.apply(input, weight, bias, group, tp_mode, tp_recompute_allgather)
@@ -632,9 +631,9 @@ def row_linear(
     recipe: Optional[FP8LinearRecipe] = None,
     name: Optional[str] = None,
 ):
-    weight = get_data_from_param(weight)
-    if bias is not None:
-        bias = get_data_from_param(bias)
+    # weight = get_data_from_param(weight)
+    # if bias is not None:
+    #     bias = get_data_from_param(bias)
 
     if async_communication:
         return _RowLinearAsyncCommunication.apply(input, weight, bias, group, tp_mode)

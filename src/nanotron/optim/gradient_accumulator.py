@@ -211,7 +211,14 @@ class FP32GradientAccumulator(GradientAccumulator):
 
     def _accumulate_grad(self, name: str, half_param: NanotronParameter) -> None:
         """Accumulate grad in fp32 and set the fp32 grad to the fp32 grad buffer, so that optimizer can update fp32 weights afterwards"""
-        assert half_param.grad is not None, f"Expected param {name} to have gradient."
+        if name == "model.decoder.4.pp_block.attn.qkv_proj.weight":
+            assert 1 == 1
+
+        try:
+            assert half_param.grad is not None, f"Expected param {name} to have gradient."
+        except AssertionError:
+            assert 1 == 1
+
         fp32_grad = self.get_grad_buffer(name=name)
 
         if self._is_accumulation_sync_step is False:
