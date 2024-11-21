@@ -18,16 +18,11 @@ from torch.profiler import ProfilerActivity, profile, tensorboard_trace_handler
 
 from nanotron import distributed as dist
 from nanotron import logging
-from nanotron.config import (
-    Config,
-    LRSchedulerArgs,
-    OptimizerArgs,
-    ParallelismArgs,
-)
+from nanotron.config import Config, LRSchedulerArgs, OptimizerArgs, ParallelismArgs
 from nanotron.distributed import ProcessGroup
 from nanotron.logging import LogItem, log_rank
 from nanotron.models.base import NanotronModel
-from nanotron.optim.base import BaseOptimizer, Optimizer
+from nanotron.optim.base import BaseOptimizer, Optimizer, custom_load_state_dict
 from nanotron.optim.gradient_accumulator import (
     FP32GradBucketManager,
     FP32GradientAccumulator,
@@ -40,9 +35,7 @@ from nanotron.optim.optimizer_from_gradient_accumulator import (
 )
 from nanotron.optim.zero import ZeroDistributedOptimizer
 from nanotron.parallel import ParallelContext
-from nanotron.parallel.tensor_parallel.nn import (
-    TensorParallelLinearMode,
-)
+from nanotron.parallel.tensor_parallel.nn import TensorParallelLinearMode
 from nanotron.random import (
     RandomStates,
     get_current_random_state,
@@ -171,16 +164,24 @@ def init_optimizer_and_grad_accumulator(
 
     # Basic optimizer builder
     def basic_optimizer_builder(named_param_groups):
-        return NamedOptimizer(
-            named_params_or_groups=named_param_groups,
-            optimizer_builder=lambda param_groups: AdamW(  # pylint: disable=E0601
+        def _optimizer_builder(param_groups):
+            base_optimizer = AdamW(
                 param_groups,
                 lr=optimizer_args.learning_rate_scheduler.learning_rate,
                 weight_decay=optimizer_args.weight_decay,
                 eps=optimizer_args.adam_eps,
                 betas=(optimizer_args.adam_beta1, optimizer_args.adam_beta2),
                 fused=optimizer_args.torch_adam_is_fused,
-            ),
+            )
+            # Replace the load_state_dict method with our custom implementation that enables CPU offload
+            base_optimizer.load_state_dict = lambda state_dict, map_location=None: custom_load_state_dict(
+                base_optimizer, state_dict, map_location=map_location
+            )
+            return base_optimizer
+
+        return NamedOptimizer(
+            named_params_or_groups=named_param_groups,
+            optimizer_builder=_optimizer_builder,
         )
 
     optimizer_builder = basic_optimizer_builder
