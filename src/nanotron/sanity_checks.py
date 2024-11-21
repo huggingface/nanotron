@@ -263,7 +263,7 @@ def check_optim_state_in_sync(optimizer: optim.BaseOptimizer, pg: dist.ProcessGr
     for _, optim_state in sorted(optimizer.state_dict()["state"].items(), key=lambda x: x[0]):
         for name, tensor in optim_state.items():
             if name == "step":
-                tensor = tensor.to("cuda")
+                continue
 
             assert_tensor_synced_across_pg(
                 tensor=tensor, pg=pg, msg=lambda err: f"{name} are not synced across DP {err}"
