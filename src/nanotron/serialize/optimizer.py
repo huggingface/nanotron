@@ -1,4 +1,5 @@
 import json
+import warnings
 from collections import defaultdict
 from pathlib import Path
 from typing import Optional, Tuple
@@ -148,6 +149,9 @@ def load_optimizer(
     if int(ckp_tp_size) != int(parallel_context.tp_pg.size()) or int(ckp_pp_size) != int(
         parallel_context.pp_pg.size()
     ):
+        warnings.warn(
+            "You are resuming in a different PP size, so optimizer states need to be checked. Feel free to open a PR if you work on this!"
+        )
         assert (
             param_shard_metadata is not None
         ), f"You have to pass how the original parameters are sharded in order to resume in a different tensor parallel size, ckp_tp_size: {ckp_tp_size}, current tp_size: {parallel_context.tp_pg.size()}"
