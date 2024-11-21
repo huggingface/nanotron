@@ -236,7 +236,7 @@ def warn_once(
 def human_format(num: float, billions: bool = False, divide_by_1024: bool = False) -> str:
     if abs(num) < 1:
         return "{:.3g}".format(num)
-    SIZES = ["", "K", "M", "G", "T", "P", "E"]
+    SIZES = ["", "K", "M", "B", "T", "P", "E"]
     num = float("{:.3g}".format(num))
     magnitude = 0
     i = 0

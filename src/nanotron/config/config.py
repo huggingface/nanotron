@@ -8,9 +8,9 @@ import dacite
 import torch
 import yaml
 from dacite import from_dict
-from datasets.download.streaming_download_manager import xPath
 from yaml.loader import SafeLoader
 
+from datasets.download.streaming_download_manager import xPath
 from nanotron.config.lighteval_config import LightEvalConfig
 from nanotron.config.models_config import ExistingCheckpointInit, NanotronConfigs, RandomInit, SpectralMupInit
 from nanotron.config.parallelism_config import ParallelismArgs
@@ -24,6 +24,7 @@ from nanotron.generation.sampler import SamplerType
 from nanotron.logging import get_logger
 from nanotron.parallel.pipeline_parallel.engine import PipelineEngine
 from nanotron.parallel.tensor_parallel.nn import TensorParallelLinearMode
+from nanotron.s3_checkpoints import check_path_is_local
 
 logger = get_logger(__name__)
 
@@ -96,17 +97,19 @@ class PretrainDatasetsArgs:
 class S3UploadArgs:
     """Arguments related to uploading checkpoints on s3"""
 
-    upload_s3_path: xPath
-    remove_after_upload: bool
-    s5cmd_numworkers: Optional[int]
-    s5cmd_concurrency: Optional[int]
-    s5cmd_path: Optional[xPath]
+    remove_after_upload: Optional[bool] = True
+    upload_s3_path: Optional[
+        str
+    ] = None  # set to None if we want to use S3UploadArgs to download checkpoints from s3 but not upload checkpoints on s3
+    s5cmd_numworkers: Optional[int] = None
+    s5cmd_concurrency: Optional[int] = None
+    s5cmd_path: Optional[str] = None
 
     def __post_init__(self):
-        if isinstance(self.upload_s3_path, str):
+        if isinstance(self.upload_s3_path, str) and self.upload_s3_path is not None:
             self.upload_s3_path = xPath(self.upload_s3_path)
         if isinstance(self.s5cmd_path, str):
-            self.s5cmd_path = xPath(self.s5cmd_path)
+            self.s5cmd_path = Path(self.s5cmd_path)
 
 
 @dataclass
@@ -154,18 +157,21 @@ class CheckpointsArgs:
     resume_checkpoint_path: if you want to load from a specific checkpoint path
     """
 
-    checkpoints_path: Path
     checkpoint_interval: int
+    checkpoints_path: Optional[str] = None
     save_initial_state: Optional[bool] = False
     save_final_state: Optional[bool] = False
-    resume_checkpoint_path: Optional[xPath] = None
+    resume_checkpoint_path: Optional[str] = None
     checkpoints_path_is_shared_file_system: Optional[bool] = False
 
     def __post_init__(self):
         if isinstance(self.checkpoints_path, str):
             self.checkpoints_path = xPath(self.checkpoints_path)
         if isinstance(self.resume_checkpoint_path, str):
-            self.resume_checkpoint_path = xPath(self.resume_checkpoint_path)
+            if check_path_is_local(self.resume_checkpoint_path):
+                self.resume_checkpoint_path = Path(self.resume_checkpoint_path)
+            else:
+                self.resume_checkpoint_path = xPath(self.resume_checkpoint_path)
 
 
 @dataclass
@@ -180,8 +186,20 @@ class GeneralArgs:
         ignore_sanity_checks: Whether to ignore sanity checks
     """
 
-    project: str
+    project: Optional[str] = None
     run: Optional[str] = None
+    logs_path: Optional[str] = None
+    launch_slurm_config: Optional[str] = None
+    eval_slurm_config: Optional[str] = None
+    eval_slurm_template: Optional[str] = None
+    lighteval_config_path: Optional[str] = None
+    is_s3_available: Optional[bool] = None
+    timestamp_with_run: Optional[str] = None
+    launch_script_path: Optional[str] = None
+    slurm_logs_path: Optional[str] = None
+    config_logs_path: Optional[str] = None
+    evals_logs_path: Optional[str] = None
+    temp_dir: Optional[str] = None
     seed: Optional[int] = None
     step: Optional[int] = None
     consumed_train_samples: Optional[int] = None
@@ -358,10 +376,14 @@ class Config:
         return cls(**{f.name: None for f in cls_fields})
 
     def __post_init__(self):
+        self.general.__post_init__()
 
         if self.s3_upload is not None:
             self.s3_upload.__post_init__()
+            self.general.is_s3_available = True
 
+        else:
+            self.general.is_s3_available = False
         # Some final sanity checks across separate arguments sections:
         if self.profiler is not None and self.profiler.profiler_export_path is not None:
             assert self.tokens.train_steps < 10
@@ -394,15 +416,16 @@ class Config:
                 for i in range(len(self.data_stages) - 1)
             ), "The stages are not sorted by start_training_step in increasing order"
 
-        # # if lighteval, we need tokenizer to be defined
-        # if self.checkpoints.lighteval is not None:
-        #     assert self.tokenizer.tokenizer_name_or_path is not None
+        # if lighteval, we need tokenizer to be defined
+        if self.lighteval is not None:
+            assert self.tokenizer.tokenizer_name_or_path is not None
 
     @property
     def global_batch_size(self):
         return self.tokens.micro_batch_size * self.tokens.batch_accumulation_per_replica * self.parallelism.dp
 
     def save_as_yaml(self, file_path: str):
+
         config_dict = serialize(self)
         file_path = str(file_path)
         with open(file_path, "w") as f:
@@ -473,7 +496,7 @@ def get_config_from_file(
         skip_unused_config_keys: whether to skip unused first-nesting-level keys in the config file (for config with additional sections)
         skip_null_keys: whether to skip keys with value None at first and second nesting level
     """
-    # Open the file and load the file
+
     with open(config_path) as f:
         config_dict = yaml.load(f, Loader=SafeLoader)
 
@@ -490,3 +513,14 @@ def get_config_from_file(
             )
         config.model.model_config = model_config_class(**config.model.model_config)
     return config
+
+
+def save_as_yaml(config: Union[Config, LightEvalConfig], file_path: str):
+    config_class = type(config)
+    config_dict = serialize(config)
+    file_path = str(file_path)
+    with open(file_path, "w") as f:
+        yaml.dump(config_dict, f)
+
+    # Sanity test config can be reloaded
+    _ = get_config_from_file(file_path, config_class=config_class)
