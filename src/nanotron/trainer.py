@@ -195,7 +195,7 @@ class DistributedTrainer:
                 parallel_context=self.parallel_context,
                 root_folder=self.init_checkpoint_path,
                 param_shard_metadata=self.param_shard_metadata,
-                model=self.model,
+                model=self.unwrapped_model,
             )
 
         # Init learning rate scheduler
@@ -470,7 +470,9 @@ class DistributedTrainer:
     def training_step(
         self, dataloader: Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]]
     ) -> Tuple[Iterable[Dict], Optional[torch.Tensor]]:
-        before_tbi_sanity_checks(self.config, self.parallel_context, self.unwrapped_model, self.grad_accumulator)
+        before_tbi_sanity_checks(
+            self.config, self.parallel_context, self.unwrapped_model, self.grad_accumulator, self.lr_scheduler
+        )
 
         if self.iteration_step < 5:
             log_memory(logger=logger)
