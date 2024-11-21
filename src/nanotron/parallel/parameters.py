@@ -1,4 +1,6 @@
 import dataclasses
+import hashlib
+import os
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
 
@@ -8,13 +10,22 @@ from torch import nn
 
 from nanotron import distributed as dist
 from nanotron import logging
-from nanotron.fp8.parameter import FP8Parameter
-from nanotron.fp8.tensor import FP8Tensor
+
+# from nanotron.fp8.tensor import FP8Tensor
 
 if TYPE_CHECKING:
     from nanotron.models import NanotronModel
 
 logger = logging.get_logger(__name__)
+
+
+def _generate_random_hash():
+    # Generate 64 bytes of random data
+    random_data = os.urandom(64)
+    # Hash the random data using SHA-256
+    hash_object = hashlib.sha256(random_data)
+    # Convert the hash object to a hexadecimal string
+    return hash_object.hexdigest()
 
 
 @dataclasses.dataclass
@@ -113,6 +124,7 @@ class NanotronParameter(nn.Parameter):
 
     # __torch_function__ = torch._C._disabled_torch_function_impl
 
+    NANOTRON_PARAMETER_HASH_ATTRIBUTE_NAME = "__nanotron_hash__"
     NANOTRON_PARAMETER_METADATA_ATTRIBUTE_NAME = "__nanotron_metadata__"
     NANOTRON_PARAMETER_METADATA_TIED_KEY = "tied"
     NANOTRON_PARAMETER_METADATA_SHARDED_KEY = "sharded"
@@ -157,8 +169,9 @@ class NanotronParameter(nn.Parameter):
 
         return param
 
-    def __init__(self, tensor: Union[torch.Tensor, FP8Tensor]):
+    def __init__(self, tensor: Union[torch.Tensor, "FP8Tensor"]):
         self._data = tensor
+        setattr(self, self.NANOTRON_PARAMETER_HASH_ATTRIBUTE_NAME, _generate_random_hash())
 
     def _set_metadata(self, key: str, value: Any):
         metadata = getattr(self, self.NANOTRON_PARAMETER_METADATA_ATTRIBUTE_NAME)
@@ -215,6 +228,7 @@ class NanotronParameter(nn.Parameter):
 
     @classmethod
     def create_param_that_share_metadata(cls, tensor: torch.Tensor, param: "NanotronParameter"):
+        """Create a new parameter that shares the metadata and hash of the given parameter"""
         # TODO(xrsrke): support deepcopy for tied parameter's metadata, because it includes an all-reduce
         # which if we do deepcopy, it raises an error
         metadata = deepcopy(getattr(param, NanotronParameter.NANOTRON_PARAMETER_METADATA_ATTRIBUTE_NAME, {}))
@@ -222,6 +236,11 @@ class NanotronParameter(nn.Parameter):
         # Copy metadata to the new parameter
         new_param = NanotronParameter(tensor)
         setattr(new_param, NanotronParameter.NANOTRON_PARAMETER_METADATA_ATTRIBUTE_NAME, metadata)
+        setattr(
+            new_param,
+            NanotronParameter.NANOTRON_PARAMETER_HASH_ATTRIBUTE_NAME,
+            getattr(param, cls.NANOTRON_PARAMETER_HASH_ATTRIBUTE_NAME),
+        )
         return new_param
 
     @property
@@ -235,7 +254,9 @@ class NanotronParameter(nn.Parameter):
 
     @property
     def data(self):
-        return self._data.data if self._data.__class__ == FP8Parameter else self._data
+        # from nanotron.fp8.parameter import FP8Parameter
+        # return self._data.data if self._data.__class__ == FP8Parameter else self._data
+        return self._data
 
     @data.setter
     def data(self, data):
@@ -259,6 +280,8 @@ class NanotronParameter(nn.Parameter):
             return e._data if e.__class__ == NanotronParameter else e
 
         def wrap(e):
+            from nanotron.fp8.tensor import FP8Tensor
+
             if not e.__class__ == NanotronParameter and e.__class__ in [torch.Tensor, FP8Tensor]:
                 return cls(e)
             else:

@@ -20,6 +20,8 @@ from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.config import Config, DatasetStageArgs, LRSchedulerArgs, OptimizerArgs, ParallelismArgs
 from nanotron.distributed import ProcessGroup
+from nanotron.fp8.optim import FP8AdamW
+from nanotron.fp8.tensor import FP8Tensor
 from nanotron.logging import LogItem, log_rank
 from nanotron.models.base import NanotronModel
 from nanotron.optim.base import BaseOptimizer, Optimizer
@@ -326,21 +328,42 @@ def init_optimizer_and_grad_accumulator(
         optimizer = None
 
         if optimizer_args.optimizer_factory.name == "adamW":
+            from nanotron import constants
+
+            def has_fp8_params(param_groups):
+                return any(isinstance(p.data, FP8Tensor) for group in param_groups for p in group["params"])
 
             def optimizer(param_groups):
-                return torch.optim.AdamW(
-                    param_groups,
-                    lr=optimizer_args.learning_rate_scheduler.learning_rate,
-                    weight_decay=optimizer_args.weight_decay,
-                    eps=optimizer_args.optimizer_factory.adam_eps,
-                    betas=(optimizer_args.optimizer_factory.adam_beta1, optimizer_args.optimizer_factory.adam_beta2),
-                    # NOTE: if there are some FP8 parameters, then it raises:
-                    # "RuntimeError("`fused=True` requires all the params to be floating point Tensors of "
-                    # RuntimeError: `fused=True` requires all the params to be floating point Tensors of
-                    # supported devices: ['cuda', 'xpu', 'privateuseone']."
-                    # fused=optimizer_args.optimizer_factory.torch_adam_is_fused,
-                    fused=False,
-                )
+                # if has_fp8_params(param_groups) is False:
+                if constants.CONFIG.model.dtype != torch.int8:
+                    return torch.optim.AdamW(
+                        param_groups,
+                        lr=optimizer_args.learning_rate_scheduler.learning_rate,
+                        weight_decay=optimizer_args.weight_decay,
+                        eps=optimizer_args.optimizer_factory.adam_eps,
+                        betas=(
+                            optimizer_args.optimizer_factory.adam_beta1,
+                            optimizer_args.optimizer_factory.adam_beta2,
+                        ),
+                        # NOTE: if there are some FP8 parameters, then it raises:
+                        # "RuntimeError("`fused=True` requires all the params to be floating point Tensors of "
+                        # RuntimeError: `fused=True` requires all the params to be floating point Tensors of
+                        # supported devices: ['cuda', 'xpu', 'privateuseone']."
+                        # fused=optimizer_args.optimizer_factory.torch_adam_is_fused,
+                        fused=False,
+                    )
+                else:
+                    return FP8AdamW(
+                        param_groups,
+                        lr=optimizer_args.learning_rate_scheduler.learning_rate,
+                        weight_decay=optimizer_args.weight_decay,
+                        eps=optimizer_args.optimizer_factory.adam_eps,
+                        betas=(
+                            optimizer_args.optimizer_factory.adam_beta1,
+                            optimizer_args.optimizer_factory.adam_beta2,
+                        ),
+                        recipe=constants.CONFIG.fp8.optim,
+                    )
 
         elif optimizer_args.optimizer_factory.name == "sgd":
 
