@@ -1,4 +1,5 @@
 import json
+from collections import defaultdict
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -188,6 +189,7 @@ def load_optimizer(
 
         model_state_dict = model.state_dict()
         new_optim_state_dict = optimizer.state_dict()
+        new_optim_state_dict["state"] = defaultdict(dict)
         # TODO: this does not handle the edge case of different pipeline parallel optimizer state shards saving different state keys
         OPTIMIZER_STATE_NAMES = sorted(ckp_sharded_optim_states[(0, 0)]["state"][0].keys() - ["step"])
         OPTIMIZER_STATE_DTYPE = ckp_sharded_optim_states[(0, 0)]["state"][0][OPTIMIZER_STATE_NAMES[0]].dtype
@@ -229,7 +231,6 @@ def load_optimizer(
                 # from an unsharded optimizer state's shape
                 new_shard_metadata = param.get_sharded_info()
                 new_unshared_shape = new_shard_metadata.unsharded_shape
-                new_optim_state_dict["state"][param_index] = {}
                 # NOTE: restore each state tensor (e.g. exg_avg) by iterating through
                 # the optimizer state shards saved using the previous topology
                 for state_key in OPTIMIZER_STATE_NAMES:
@@ -272,19 +273,34 @@ def load_optimizer(
                             ],
                             new_shard_metadata,
                         )
+            else:
+                # Handle non-sharded params (e.g. layernorm)
+                for (pp_rank, tp_rank), ckp_optim_state in ckp_sharded_optim_states.items():
+                    old_optim_state_index = find_optim_index_from_param_name(
+                        base_name, ckp_sharded_optim_states, is_zero1=False, pp_rank=pp_rank
+                    )
+                    if old_optim_state_index is None:
+                        continue  # Param not in this PP shard
 
-                        if ckp_optim_type == ZeroDistributedOptimizer.__name__:
-                            # NOTE: flatten the optimizer states
-                            new_optim_state_dict["state"][param_index][state_key] = new_optim_state_dict["state"][
-                                param_index
-                            ][state_key].flatten()
-                        # NOTE: a bit awkward, but while we're already reading this (pp,tp) shard for whatever state_key,
-                        # try to get the step value as well.
-                        step = ckp_optim_state["state"][old_optim_state_index].get("step")
-                        if step is not None:
-                            new_optim_state_dict["state"][param_index]["step"] = step
+                    # For non-sharded params, just copy over the state directly
+                    for state_key in OPTIMIZER_STATE_NAMES:
+                        new_optim_state_dict["state"][param_index][state_key] = ckp_optim_state["state"][
+                            old_optim_state_index
+                        ][state_key]
 
-                        # NOTE: we throw away ckp_optim_state['gradient_accumulator'] which has fp32 grads
+            if ckp_optim_type == ZeroDistributedOptimizer.__name__:
+                # NOTE: flatten the optimizer states
+                new_optim_state_dict["state"][param_index][state_key] = new_optim_state_dict["state"][param_index][
+                    state_key
+                ].flatten()
+
+            # NOTE: a bit awkward, but while we're already reading this (pp,tp) shard for whatever state_key,
+            # try to get the step value as well.
+            step = ckp_optim_state["state"][old_optim_state_index].get("step")
+            if step is not None:
+                new_optim_state_dict["state"][param_index]["step"] = step
+
+            # NOTE: we throw away ckp_optim_state['gradient_accumulator'] which has fp32 grads
 
         new_optim_state_dict["names"] = new_optim_state_param_names
         state_dict = new_optim_state_dict
