@@ -45,35 +45,45 @@ class StandardParametrizator(Parametrizator):
         self.num_layers = config.model_config.num_hidden_layers
 
     def _parametrize_column_linear(self, param_name: str, module: nn.Module):
-        assert param_name in ["weight", "bias"]
+        # assert param_name in ["weight", "bias"]
+        assert any(x in param_name for x in ["weight", "bias"])
 
-        if "weight" == param_name:
+        if "weight" in param_name:
             init.normal_(module.weight, mean=0.0, std=self.std)
         elif "bias" == param_name:
             module.bias.zero_()
 
     def _parametrize_row_linear(self, param_name: str, module: nn.Module):
-        assert param_name in ["weight", "bias"]
+        # assert param_name in ["weight", "bias"]
+        assert any(x in param_name for x in ["weight", "bias"])
 
-        if "weight" == param_name:
+        if "weight" in param_name:
             std = self.std / math.sqrt(2 * self.num_layers)
             init.normal_(module.weight, mean=0.0, std=std)
-        elif "bias" == param_name:
+        elif "bias" in param_name:
             module.bias.zero_()
 
     def _parametrize_layer_norm(self, param_name: str, module: nn.Module):
-        assert param_name in ["weight", "bias"]
+        # assert param_name in ["weight", "bias"]
 
-        if "weight" == param_name:
+        # if "weight" == param_name:
+        #     # TODO @thomasw21: Sometimes we actually want 0
+        #     module.weight.fill_(1)
+        # elif "bias" == param_name:
+        #     module.bias.zero_()
+        assert any(x in param_name for x in ["weight", "bias"])
+        if "weight" in param_name:
             # TODO @thomasw21: Sometimes we actually want 0
             module.weight.fill_(1)
-        elif "bias" == param_name:
+        elif "bias" in param_name:
             module.bias.zero_()
 
     def _parametrize_embedding(self, param_name: str, module: nn.Module):
-        assert param_name in ["weight"]
+        # assert param_name in ["weight"]
+        assert "weight" in param_name
 
-        if "weight" == param_name:
+        # if "weight" == param_name:
+        if "weight" in param_name:
             init.normal_(module.weight, mean=0.0, std=self.std)
 
 

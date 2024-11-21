@@ -334,7 +334,12 @@ def init_optimizer_and_grad_accumulator(
                     weight_decay=optimizer_args.weight_decay,
                     eps=optimizer_args.optimizer_factory.adam_eps,
                     betas=(optimizer_args.optimizer_factory.adam_beta1, optimizer_args.optimizer_factory.adam_beta2),
-                    fused=optimizer_args.optimizer_factory.torch_adam_is_fused,
+                    # NOTE: if there are some FP8 parameters, then it raises:
+                    # "RuntimeError("`fused=True` requires all the params to be floating point Tensors of "
+                    # RuntimeError: `fused=True` requires all the params to be floating point Tensors of
+                    # supported devices: ['cuda', 'xpu', 'privateuseone']."
+                    # fused=optimizer_args.optimizer_factory.torch_adam_is_fused,
+                    fused=False,
                 )
 
         elif optimizer_args.optimizer_factory.name == "sgd":

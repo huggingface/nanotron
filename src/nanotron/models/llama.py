@@ -688,7 +688,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             query_states = query_states.to(torch.bfloat16)
             key_states = key_states.to(torch.bfloat16)
             value_states = value_states.to(torch.bfloat16)
-            
+
             attention_output = self.attention(
                 query_states=query_states,
                 key_states=key_states,
@@ -1091,7 +1091,8 @@ class LlamaForTraining(NanotronModel):
                 continue
 
             module = model.get_submodule(module_name)
-            parametrizator.parametrize(param_name, module)
+            # parametrizator.parametrize(param_name, module)
+            parametrizator.parametrize(full_param_name, module)
 
             assert full_param_name not in initialized_parameters
             initialized_parameters.add(full_param_name)

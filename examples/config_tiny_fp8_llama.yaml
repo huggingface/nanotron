@@ -64,11 +64,11 @@ model:
     pretraining_tp: 1
     rms_norm_eps: 1.0e-05
     rope_scaling: null
-    tie_word_embeddings: true
+    tie_word_embeddings: false
     use_cache: true
     vocab_size: 1024
 optimizer:
-  accumulate_grad_in_fp32: true
+  accumulate_grad_in_fp32: false
   clip_grad: 1.0
   learning_rate_scheduler:
     learning_rate: 0.0003

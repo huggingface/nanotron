@@ -9,6 +9,7 @@ from torch.distributed import GradBucket
 
 import nanotron.distributed as dist
 from nanotron import logging
+from nanotron.fp8.tensor import FP8Tensor
 from nanotron.parallel.parameters import NanotronParameter
 from nanotron.utils import get_untyped_storage, tensor_from_untyped_storage
 
@@ -83,7 +84,10 @@ class FP32GradientAccumulator(GradientAccumulator):
         segment_index = {}
         length = 0
         for name, param in named_parameters:
-            if not param.requires_grad:
+            # NOTE: FP8 Parameter by default has requires_grad=False,
+            # because we want to do the backward ourself, so here we only skip
+            # if the parameter isn't fp8, and doesn't require grad
+            if not isinstance(param.data, FP8Tensor) and not param.requires_grad:
                 continue
 
             start = length
@@ -157,8 +161,9 @@ class FP32GradientAccumulator(GradientAccumulator):
     @classmethod
     def _is_accumulate_param(cls, param: NanotronParameter) -> bool:
         from nanotron.fp8.tensor import FP8Tensor
+
         return param.requires_grad or param.data.__class__ == FP8Tensor
-    
+
     @staticmethod
     def build_grad_buffers(
         named_parameters: Iterator[Tuple[str, NanotronParameter]],
@@ -171,7 +176,9 @@ class FP32GradientAccumulator(GradientAccumulator):
         Note:
             In ZeRO-1, we need to accumulate grads for all parameters, because we need to allreduce all parameters' grads across DP at each sync step.
         """
-        named_parameters = [(name, param) for name, param in named_parameters if FP32GradientAccumulator._is_accumulate_param(param)]
+        named_parameters = [
+            (name, param) for name, param in named_parameters if FP32GradientAccumulator._is_accumulate_param(param)
+        ]
 
         needed_buffer_size = sum(param.numel() for _, param in named_parameters)
         # important to have grads zeroed initially (see `self._accumulate_grad`)
@@ -222,10 +229,11 @@ class FP32GradientAccumulator(GradientAccumulator):
         if name == "model.decoder.4.pp_block.attn.qkv_proj.weight":
             assert 1 == 1
 
-        try:
-            assert half_param.grad is not None, f"Expected param {name} to have gradient."
-        except AssertionError:
-            assert 1 == 1
+        # try:
+        #     assert half_param.grad is not None, f"Expected param {name} to have gradient."
+        # except AssertionError:
+        #     assert 1 == 1
+        assert half_param.grad is not None, f"Expected param {name} to have gradient."
 
         fp32_grad = self.get_grad_buffer(name=name)
 

@@ -9,7 +9,6 @@ from torch import nn
 from nanotron.fp8.constants import FP8LM_LINEAR_RECIPE
 from nanotron.fp8.kernel import fp8_matmul_kernel
 from nanotron.fp8.meta import FP8Meta
-from nanotron.fp8.parameter import FP8Parameter
 from nanotron.fp8.recipe import FP8LinearRecipe
 from nanotron.fp8.tensor import FP8Tensor
 from nanotron.parallel.parameters import NanotronParameter
@@ -60,12 +59,19 @@ class FP8Linear(nn.Linear):
 
         # self.metadatas = FP8LinearMeta()
         # self.recipe = recipe
-    
+
     def _quantize_weights(self, recipe: FP8LinearRecipe = FP8LM_LINEAR_RECIPE):
-        quant_w = FP8Parameter(self.weight.data, dtype=recipe.weight.dtype, interval=recipe.weight.interval)
+        # quant_w = FP8Parameter(self.weight.data, dtype=recipe.weight.dtype, interval=recipe.weight.interval)
+        quant_w = FP8Tensor(self.weight.data, dtype=recipe.weight.dtype, interval=recipe.weight.interval)
+
         # assert quant_w.dtype in [torch.uint8, torch.int8], f"got {self.weight.data.dtype}"
         # self.weight = quant_w
-        setattr(self.weight, "data", quant_w)
+        # setattr(self.weight, "data", quant_w)
+        # NOTE: if we create a new parameter, then we can have that new quantized parameter
+        # in [torch.int8, torch.uint8] dtype, then we can assign int|uint8 gradient to it
+        # TODO(xrsrke): keep the metadata of the original NanotronParameter
+        # setattr(self, "weight", NanotronParameter(tensor=quant_w))
+        setattr(self, "weight", NanotronParameter.create_param_that_share_metadata(quant_w, self.weight))
 
         if self.name == "model.decoder.0.attention.qkv_proj":
             assert 1 == 1
@@ -76,7 +82,6 @@ class FP8Linear(nn.Linear):
 
     def forward(self, input: Union[FP8Tensor, torch.Tensor]) -> torch.Tensor:
         import nanotron.fp8.functional as F
-        from nanotron.parallel.parameters import get_data_from_param
 
         return F.linear(
             input=input,
@@ -94,7 +99,7 @@ class FP8Linear(nn.Linear):
 
 class _FP8Matmul(torch.autograd.Function):
     @staticmethod
-    @torch.no_grad()
+    # @torch.no_grad()
     def forward(
         ctx,
         input: Union[FP8Tensor, torch.Tensor],
@@ -147,7 +152,7 @@ class _FP8Matmul(torch.autograd.Function):
         return output, phony
 
     @staticmethod
-    @torch.no_grad()  # NOTE: drop 5% speed up in fwd only, and add 2% speed up in fwd+bwd
+    # @torch.no_grad()  # NOTE: drop 5% speed up in fwd only, and add 2% speed up in fwd+bwd
     def backward(ctx, grad_output: torch.Tensor, grad_phony: torch.Tensor) -> Tuple[torch.Tensor, None, None, None]:
         """
         ∂L/∂X = ∂L/∂Y @ Wᵀ
@@ -280,4 +285,4 @@ class _FP8Matmul(torch.autograd.Function):
             # NOTE: sanity check
             assert isinstance(fp8_weight_param.grad, FP8Tensor)
 
-        return grad_input, None, None, None, None, None, None
+        return grad_input, fp8_weight_grad, None, None, None, None, None

@@ -370,6 +370,7 @@ def init_on_device_and_dtype(
     ```
     """
     from typing import cast
+
     from nanotron import constants
     from nanotron.config.fp8_config import FP8Args
 

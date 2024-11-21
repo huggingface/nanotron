@@ -1,4 +1,5 @@
 import dataclasses
+from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
 
 import torch
@@ -110,6 +111,8 @@ class NanotronParameter(nn.Parameter):
         - Even if some weights don't need their grads to be reduced, it's still useful for them to be marked as tied. For example, current serialization format requires to mark them correctly.
     """
 
+    # __torch_function__ = torch._C._disabled_torch_function_impl
+
     NANOTRON_PARAMETER_METADATA_ATTRIBUTE_NAME = "__nanotron_metadata__"
     NANOTRON_PARAMETER_METADATA_TIED_KEY = "tied"
     NANOTRON_PARAMETER_METADATA_SHARDED_KEY = "sharded"
@@ -210,6 +213,17 @@ class NanotronParameter(nn.Parameter):
             self.NANOTRON_PARAMETER_METADATA_SHARDED_KEY
         ]
 
+    @classmethod
+    def create_param_that_share_metadata(cls, tensor: torch.Tensor, param: "NanotronParameter"):
+        # TODO(xrsrke): support deepcopy for tied parameter's metadata, because it includes an all-reduce
+        # which if we do deepcopy, it raises an error
+        metadata = deepcopy(getattr(param, NanotronParameter.NANOTRON_PARAMETER_METADATA_ATTRIBUTE_NAME, {}))
+
+        # Copy metadata to the new parameter
+        new_param = NanotronParameter(tensor)
+        setattr(new_param, NanotronParameter.NANOTRON_PARAMETER_METADATA_ATTRIBUTE_NAME, metadata)
+        return new_param
+
     @property
     def is_sharded(self) -> bool:
         return self.NANOTRON_PARAMETER_METADATA_SHARDED_KEY in getattr(
@@ -227,13 +241,13 @@ class NanotronParameter(nn.Parameter):
     def data(self, data):
         self._data = data
 
-    @property
-    def grad(self):
-        return self._grad
-    
-    @grad.setter
-    def grad(self, grad):
-        self._grad = grad
+    # @property
+    # def grad(self):
+    #     return self._igrad
+
+    # @grad.setter
+    # def grad(self, grad):
+    #     self._igrad = grad
 
     # @property
     # def grad(self):
