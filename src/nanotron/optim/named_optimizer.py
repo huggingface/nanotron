@@ -1,4 +1,4 @@
-from typing import Any, Callable, Dict, Iterable, Tuple, Union
+from typing import Any, Callable, Dict, Iterable, Optional, Tuple, Union
 
 import torch
 
@@ -58,7 +58,7 @@ class NamedOptimizer(InheritFromOtherOptimizer):
         }
         return optim_state_dict
 
-    def load_state_dict(self, state_dict: dict) -> None:
+    def load_state_dict(self, state_dict: dict, map_location: Optional[Union[str, torch.device]] = None) -> None:
         assert set(self.id_to_name.values()) == set(
             state_dict["names"].values()
         ), f"Elements don't match:\n - Elements in `self.id_to_name` that aren't in the other one: {set(self.id_to_name.values()) - set(state_dict['names'].values())}\n - Elements in `state_dict[\"names\"]` that aren't in the other one: {set(state_dict['names'].values()) - set(self.id_to_name.values())}"
@@ -71,4 +71,4 @@ class NamedOptimizer(InheritFromOtherOptimizer):
                     key in state
                 ), f"Key {key} not found in state dict: {state} which corresponds to param_name: {state_dict['names'][k]}"
 
-        return super().load_state_dict(state_dict)
+        return super().load_state_dict(state_dict, map_location=map_location)

@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Dict, List, Optional, Set, TypeVar
+from typing import Any, Callable, Dict, List, Optional, Set, TypeVar, Union
 
 import torch
 
@@ -34,7 +34,7 @@ class BaseOptimizer(ABC):
         ...
 
     @abstractmethod
-    def load_state_dict(self, state_dict: dict) -> None:
+    def load_state_dict(self, state_dict: dict, map_location: Optional[Union[str, torch.device]] = None) -> None:
         ...
 
     @abstractmethod

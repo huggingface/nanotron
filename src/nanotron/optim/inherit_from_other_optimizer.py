@@ -1,5 +1,5 @@
 from functools import cache
-from typing import Callable, Dict, Optional, Set
+from typing import Callable, Dict, Optional, Set, Union
 
 import torch
 
@@ -33,8 +33,8 @@ class InheritFromOtherOptimizer(BaseOptimizer):
     def state_dict(self) -> dict:
         return self.optimizer.state_dict()
 
-    def load_state_dict(self, state_dict: dict) -> None:
-        return self.optimizer.load_state_dict(state_dict)
+    def load_state_dict(self, state_dict: dict, map_location: Optional[Union[str, torch.device]] = None) -> None:
+        return self.optimizer.load_state_dict(state_dict, map_location=map_location)
 
     def step(self, closure: Optional[Callable[[], float]] = None) -> Optional[float]:
         return self.optimizer.step(closure=closure)

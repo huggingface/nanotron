@@ -2,7 +2,7 @@ import json
 import warnings
 from collections import defaultdict
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 import torch
 from torch import nn
@@ -19,7 +19,6 @@ from nanotron.optim.zero import (
 )
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter
-from nanotron.sanity_checks import check_optim_state_in_sync
 from nanotron.serialize.metadata import TensorMetadata
 from nanotron.serialize.utils import ObjectType, merge_and_shard_tp_tensors
 
@@ -125,18 +124,34 @@ def save_lr_scheduler(
     )
 
 
+# Helper functions to move optimizer states
+@torch.no_grad()
+def state_dict_to_device(state_dict: Dict, device: str) -> Dict:
+    assert (
+        state_dict["state"][0]["exp_avg"].device.type == "cpu"
+    ), "Optimizer states should be on CPU to avoid extra memory usage when loading from checkpoint"
+    torch.cuda.empty_cache()
+
+    for _, optim_state in sorted(state_dict["state"].items(), key=lambda x: x[0]):
+        for name, tensor in optim_state.items():
+            optim_state[name] = tensor.to(device)
+
+    assert (
+        state_dict["state"][0]["exp_avg"].device.type == "cuda"
+    ), "Optimizer states should be on GPU because model is on GPU"
+    torch.cuda.empty_cache()
+
+
 @torch.no_grad()
 def load_optimizer(
     optimizer: optim.BaseOptimizer,
     parallel_context: ParallelContext,
     root_folder: Path,
-    map_location: Optional[str] = None,
+    map_location: Optional[str] = "cpu",
     param_shard_metadata: Tuple[Tuple[int, int], TensorMetadata] = None,  # (pp_rank, tp_rank) -> TensorMetadata
     model: Optional[nn.Module] = None,
 ):
     root_folder = root_folder / "optimizer"
-    # `load_state_dict` copies the state dict which can be very large in case of Zero-0 so we load to cpu and then move to the right device
-    map_location = "cpu" if not optimizer.inherit_from(optim.ZeroDistributedOptimizer) else map_location
     ckp_optimizer_config_path = root_folder / "optimizer_config.json"
     with open(ckp_optimizer_config_path, "r") as file:
         ckp_optimizer_config = json.load(file)
@@ -149,9 +164,10 @@ def load_optimizer(
     if int(ckp_tp_size) != int(parallel_context.tp_pg.size()) or int(ckp_pp_size) != int(
         parallel_context.pp_pg.size()
     ):
-        warnings.warn(
-            "You are resuming in a different PP size, so optimizer states need to be checked. Feel free to open a PR if you work on this!"
-        )
+        if int(ckp_pp_size) != int(parallel_context.pp_pg.size()):
+            warnings.warn(
+                "You are resuming in a different PP size, so optimizer states need to be checked. Feel free to open a PR if you work on this!"
+            )
         assert (
             param_shard_metadata is not None
         ), f"You have to pass how the original parameters are sharded in order to resume in a different tensor parallel size, ckp_tp_size: {ckp_tp_size}, current tp_size: {parallel_context.tp_pg.size()}"
@@ -241,8 +257,10 @@ def load_optimizer(
                     # TODO(xrsrke): free the memory of the shards that isn't
                     # corresponding to the current rank
                     # TODO: maybe better to allocate memory for all states at once
-                    buffer = torch.zeros_like(param, device="cuda", dtype=OPTIMIZER_STATE_DTYPE)
-                    unsharded_buffer = torch.empty(new_unshared_shape, device="cuda", dtype=OPTIMIZER_STATE_DTYPE)
+                    buffer = torch.zeros_like(param, device=map_location, dtype=OPTIMIZER_STATE_DTYPE)
+                    unsharded_buffer = torch.empty(
+                        new_unshared_shape, device=map_location, dtype=OPTIMIZER_STATE_DTYPE
+                    )
 
                     for (pp_rank, tp_rank), ckp_optim_state in ckp_sharded_optim_states.items():
                         old_optim_state_index = find_optim_index_from_param_name(
@@ -333,10 +351,7 @@ def load_optimizer(
                     )
                     state_dict["state"][param_index][state_name] = sliced_tensor
 
-    optimizer.load_state_dict(state_dict)
-
-    if not optimizer.inherit_from(optim.ZeroDistributedOptimizer):
-        check_optim_state_in_sync(optimizer, parallel_context.dp_pg)
+    optimizer.load_state_dict(state_dict, map_location="cpu")
 
 
 def load_lr_scheduler(
