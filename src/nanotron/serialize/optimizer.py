@@ -147,7 +147,7 @@ def load_optimizer(
     optimizer: optim.BaseOptimizer,
     parallel_context: ParallelContext,
     root_folder: Path,
-    map_location: Optional[str] = "cpu",
+    map_location: Optional[str] = None,
     param_shard_metadata: Tuple[Tuple[int, int], TensorMetadata] = None,  # (pp_rank, tp_rank) -> TensorMetadata
     model: Optional[nn.Module] = None,
 ):
