@@ -351,7 +351,7 @@ def load_optimizer(
                     )
                     state_dict["state"][param_index][state_name] = sliced_tensor
 
-    optimizer.load_state_dict(state_dict, map_location="cpu")
+    optimizer.load_state_dict(state_dict, map_location=map_location)
 
 
 def load_lr_scheduler(
