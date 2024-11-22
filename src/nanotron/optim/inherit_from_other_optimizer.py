@@ -21,7 +21,6 @@ class InheritFromOtherOptimizer(BaseOptimizer):
                 if map_location is not None
                 else original_load_state_dict(state_dict)
             )
-
         self.optimizer: Optimizer = optimizer
 
     def __getstate__(self):
