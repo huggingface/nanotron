@@ -3,6 +3,7 @@ from torch import nn
 from nanotron.parallel.tensor_parallel.nn import TensorParallelEmbedding
 
 MODULE_NAMES_THAT_NOT_FP8 = [
+    "rotary_embedding",
     "token_embedding",
     "input_layernorm",
     "post_attention_layernorm",

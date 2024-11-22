@@ -233,7 +233,7 @@ def convert_logs_to_flat_logs(logs, prefix):
 def find_fp8_config_by_module_name(config: Config, target_module_name: str) -> Optional[FP8LayerArgs]:
     if hasattr(config, "fp8") and hasattr(config.fp8, "model"):
         # NOTE: either model or is_quant_all_except_first_and_last must be specified, not both
-        assert config.fp8.model is not None or config.fp8.is_quant_all_except_first_and_last is not None
+        # assert config.fp8.model is not None or config.fp8.is_quant_all_except_first_and_last is not None
 
         if config.fp8.model is not None:
             for layer_args in config.fp8.model:

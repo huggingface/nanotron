@@ -185,6 +185,16 @@ class DistributedTrainer:
             else ParametrizationMethod.STANDARD
         )
 
+        from nanotron.fp8.utils import find_fp8_config_by_module_name, get_leaf_modules
+
+        for module_name, module in get_leaf_modules(self.model):
+            if any(p.numel() > 0 for p in module.parameters()) is False:
+                continue
+
+            recipe = find_fp8_config_by_module_name(constants.CONFIG, module_name)
+            if recipe is not None:
+                module.weight._is_future_fp8 = True
+
         # Init optimizer
         self.optimizer, self.grad_accumulator = init_optimizer_and_grad_accumulator(
             parametrization_method=parametrization_method,
@@ -193,8 +203,38 @@ class DistributedTrainer:
             parallel_context=self.parallel_context,
         )
 
-        # self._convert_model_to_fp8(self.model)
+        # NOTE: sanity check all hash are different
+        param_hash = []
+        for p in self.model.parameters():
+            assert hash(p) not in param_hash
+            param_hash.append(hash(p))
+
+        # NOTE: if we cast model to FP8 before wrapping it with NanotronParameter,
+        # then we can create a NanotronParameter that has dtype=[torch.int8, torch.uint8]
+        # which then it allows us to assign [torch.int8, torch.uint8] gradients to the parameter
+        # otherwise, it would raise:
+        # "attempting to assign a gradient with dtype
+        # 'unsigned char' to a tensor with dtype 'float'.
+        # Please ensure that the gradient and the tensor have the same dtype"
+        # NOTE: the reason that we cast after initializing the optimizer is that
+        # we want to create some master weights for fp8 parameters, before quantizing them
         assert 1 == 1
+        self._convert_model_to_fp8(self.model)
+        assert 1 == 1
+
+        # TODO(xrsrke): sanity check that _is_future_fp8 is consistent with the dtype of the parameter
+
+        if constants.CONFIG.model.dtype is torch.int8:
+            from nanotron.fp8.optim import FP8AdamW
+            from nanotron.fp8.tensor import FP8Tensor
+
+            assert self.optimizer.optimizer.__class__ == FP8AdamW
+            num_fp8_params = sum(1 for p in self.model.parameters() if isinstance(p.data, FP8Tensor))
+            master_weights_mapping = self.optimizer.optimizer.mappping_fp8_to_master_weight
+            assert num_fp8_params == len(master_weights_mapping)
+            assert all(
+                constants.CONFIG.fp8.optim.master_weight_dtype == p.dtype for p in master_weights_mapping.values()
+            )
 
         if self.init_checkpoint_path is not None:
             load_optimizer(
@@ -288,7 +328,16 @@ class DistributedTrainer:
         }
         if self.config.model.dtype is torch.int8:
             for name, module in get_leaf_modules(model):
-                if isinstance(module, (TensorParallelColumnLinear, TensorParallelRowLinear)):
+                if any(p.numel() > 0 for p in module.parameters()) is False:
+                    continue
+
+                from nanotron import constants
+                from nanotron.fp8.utils import find_fp8_config_by_module_name
+
+                recipe = find_fp8_config_by_module_name(constants.CONFIG, name)
+
+                # if isinstance(module, (TensorParallelColumnLinear, TensorParallelRowLinear)):
+                if recipe is not None:
                     print(f"Converting {name} to FP8")
                     module.__class__ = TP_LINEAR_CLS_TO_FP8_LINEAR_CLS[module.__class__]
                     # TODO(xrsrke): retrieve custom recipe
@@ -739,17 +788,6 @@ class DistributedTrainer:
 
         model = self._init_model_instance()
         model = self._load_model_checkpoint(model)
-
-        # NOTE: if we cast model to FP8 before wrapping it with NanotronParameter,
-        # then we can create a NanotronParameter that has dtype=[torch.int8, torch.uint8]
-        # which then it allows us to assign [torch.int8, torch.uint8] gradients to the parameter
-        # otherwise, it would raise:
-        # "attempting to assign a gradient with dtype
-        # 'unsigned char' to a tensor with dtype 'float'.
-        # Please ensure that the gradient and the tensor have the same dtype"
-        assert 1 == 1
-        self._convert_model_to_fp8(model)
-        assert 1 == 1
 
         return model
 

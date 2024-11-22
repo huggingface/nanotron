@@ -22,9 +22,11 @@ def _test_random_hash_nanotron_parameter(parallel_context: ParallelContext):
         contiguous_chunks=(8, 8),
     )
     param = create_sharded_parameter_from_config(parameter=param, pg=parallel_context.tp_pg, split_config=split_config)
-    hash = getattr(param, NanotronParameter.NANOTRON_PARAMETER_HASH_ATTRIBUTE_NAME)
+    # hash = getattr(param, NanotronParameter.NANOTRON_PARAMETER_HASH_ATTRIBUTE_NAME)
 
-    assert type(hash) == str
+    # assert type(hash) == str
+    assert hash(param) is not None
+    assert type(hash(param)) == int
 
 
 def test_nanotron_parameter_does_not_override_some_parameter_variable():
@@ -105,9 +107,10 @@ def _test_create_param_that_share_metadata(parallel_context: ParallelContext):
         assert p1_k == p2_k
         assert p1_v == p2_v
 
-    orig_hash = getattr(orig_param, NanotronParameter.NANOTRON_PARAMETER_HASH_ATTRIBUTE_NAME)
-    new_hash = getattr(new_param, NanotronParameter.NANOTRON_PARAMETER_HASH_ATTRIBUTE_NAME)
+    # orig_hash = getattr(orig_param, NanotronParameter.NANOTRON_PARAMETER_HASH_ATTRIBUTE_NAME)
+    # new_hash = getattr(new_param, NanotronParameter.NANOTRON_PARAMETER_HASH_ATTRIBUTE_NAME)
 
-    assert new_hash == orig_hash
+    # assert new_hash == orig_hash
+    assert hash(new_param) == hash(orig_param)
 
     parallel_context.destroy()

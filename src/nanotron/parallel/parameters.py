@@ -171,7 +171,11 @@ class NanotronParameter(nn.Parameter):
 
     def __init__(self, tensor: Union[torch.Tensor, "FP8Tensor"]):
         self._data = tensor
-        setattr(self, self.NANOTRON_PARAMETER_HASH_ATTRIBUTE_NAME, _generate_random_hash())
+        # NOTE: whether we will quantize this parameter
+        # because we need to know a parameter will be in fp8 or not
+        # so we create master weights of the fp32 parameters before quantizing
+        self._is_future_fp8 = False
+        setattr(self, self.NANOTRON_PARAMETER_HASH_ATTRIBUTE_NAME, hash(_generate_random_hash()))
 
     def _set_metadata(self, key: str, value: Any):
         metadata = getattr(self, self.NANOTRON_PARAMETER_METADATA_ATTRIBUTE_NAME)
@@ -326,6 +330,10 @@ class NanotronParameter(nn.Parameter):
                 return outputs
             else:
                 return tree_map(wrap, outputs)
+
+    def __hash__(self):
+        # Combine the attributes to compute a unique hash value
+        return getattr(self, self.NANOTRON_PARAMETER_HASH_ATTRIBUTE_NAME)
 
 
 def sanity_check(root_module: nn.Module):

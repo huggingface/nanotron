@@ -3,6 +3,7 @@ from typing import List, Optional
 
 import torch
 
+from nanotron.fp8.constants import FP8LM_OPTIM_RECIPE
 from nanotron.fp8.recipe import FP8LinearRecipe, FP8OptimRecipe
 
 
@@ -24,7 +25,7 @@ class FP8Args:
     accum_dtype: torch.dtype = torch.bfloat16
 
     model: Optional[List[FP8LayerArgs]] = None
-    optim: Optional[FP8OptimRecipe] = None
+    optim: Optional[FP8OptimRecipe] = FP8LM_OPTIM_RECIPE
 
     run_fp8_sanity_check: bool = False
 

@@ -143,3 +143,9 @@ def _test_create_sharded_fp8_parameter(parallel_context: ParallelContext, dtype:
 # on a FP8Parameter
 
 # TODO(xrsrke): test CPU parameter
+
+
+# TODO(xrsrke): test convert model to FP8
+# include the FP8's NanotronParameter's dtype and requires_grad
+
+# TODO(xrsrke): test set FP8 gradients to FP8 NanotronParameter
