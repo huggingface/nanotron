@@ -164,6 +164,7 @@ def before_optim_step_sanity_checks(
     parallel_context: ParallelContext,
     unwrapped_model: NanotronModel,
     grad_accumulator: GradientAccumulator,
+    optimizer: optim.BaseOptimizer,
 ) -> None:
     if not config.general.ignore_sanity_checks:
         # SANITY CHECK: Test tied weights gradients are synchronized
@@ -232,6 +233,9 @@ def before_optim_step_sanity_checks(
                 msg=lambda err: f"[Before optimizer step] Tied weights {name} are not synchronized. {err}",
             )
 
+        # SANITY CHECK: Check that optimizer states are synchronized across DP
+        check_optim_state_in_sync(optimizer.state_dict(), parallel_context.dp_pg)
+
         # SANITY CHECK: run model specific sanity checks
         unwrapped_model.before_optim_step_sanity_checks()
 
@@ -259,12 +263,11 @@ def after_optim_step_sanity_checks(
         unwrapped_model.after_optim_step_sanity_checks()
 
 
-def check_optim_state_in_sync(optimizer: optim.BaseOptimizer, pg: dist.ProcessGroup):
-    for _, optim_state in sorted(optimizer.state_dict()["state"].items(), key=lambda x: x[0]):
+def check_optim_state_in_sync(optim_state_dict: dict, pg: dist.ProcessGroup):
+    for _, optim_state in sorted(optim_state_dict["state"].items(), key=lambda x: x[0]):
         for name, tensor in optim_state.items():
             if name == "step":
-                tensor = tensor.to("cuda")
-
+                continue
             assert_tensor_synced_across_pg(
                 tensor=tensor, pg=pg, msg=lambda err: f"{name} are not synced across DP {err}"
             )

@@ -67,7 +67,7 @@ class OptimizerFromGradientAccumulator(InheritFromOtherOptimizer):
         state_dict["gradient_accumulator"] = self.gradient_accumulator.state_dict()
         return state_dict
 
-    def load_state_dict(self, state_dict: dict) -> None:
+    def load_state_dict(self, state_dict: dict, map_location: Optional[Union[str, torch.device]] = None) -> None:
         gradient_accumulator_state_dict = state_dict.pop("gradient_accumulator")
-        super().load_state_dict(state_dict)
+        super().load_state_dict(state_dict, map_location=map_location)
         self.gradient_accumulator.load_state_dict(gradient_accumulator_state_dict)
