@@ -7,14 +7,7 @@ import time
 from datetime import datetime
 from functools import partial
 from math import ceil
-from typing import (
-    Any,
-    Dict,
-    Iterable,
-    List,
-    Optional,
-    Tuple,
-)
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -29,7 +22,7 @@ from nanotron.config import Config, DatasetStageArgs, LRSchedulerArgs, Optimizer
 from nanotron.distributed import ProcessGroup
 from nanotron.logging import LogItem, log_rank
 from nanotron.models.base import NanotronModel
-from nanotron.optim.base import BaseOptimizer, Optimizer, custom_load_state_dict
+from nanotron.optim.base import BaseOptimizer, Optimizer
 from nanotron.optim.gradient_accumulator import (
     FP32GradBucketManager,
     FP32GradientAccumulator,
@@ -335,7 +328,7 @@ def init_optimizer_and_grad_accumulator(
         if optimizer_args.optimizer_factory.name == "adamW":
 
             def optimizer(param_groups):
-                base_optimizer = torch.optim.AdamW(
+                return torch.optim.AdamW(
                     param_groups,
                     lr=optimizer_args.learning_rate_scheduler.learning_rate,
                     weight_decay=optimizer_args.weight_decay,
@@ -343,11 +336,6 @@ def init_optimizer_and_grad_accumulator(
                     betas=(optimizer_args.optimizer_factory.adam_beta1, optimizer_args.optimizer_factory.adam_beta2),
                     fused=optimizer_args.optimizer_factory.torch_adam_is_fused,
                 )
-                # Replace the load_state_dict method with our custom implementation that enables CPU offload
-                base_optimizer.load_state_dict = lambda state_dict, map_location=None: custom_load_state_dict(
-                    base_optimizer, state_dict, map_location=map_location
-                )
-                return base_optimizer
 
         elif optimizer_args.optimizer_factory.name == "sgd":
 

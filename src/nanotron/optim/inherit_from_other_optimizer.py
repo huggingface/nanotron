@@ -3,13 +3,20 @@ from typing import Callable, Dict, Optional, Set, Union
 
 import torch
 
-from nanotron.optim.base import BaseOptimizer, Optimizer
+from nanotron.optim.base import BaseOptimizer, Optimizer, custom_load_state_dict
 
 
 class InheritFromOtherOptimizer(BaseOptimizer):
     def __init__(self, optimizer: Optimizer, id_to_name: Dict[int, str]):
-        self.optimizer: Optimizer = optimizer
         self.id_to_name = id_to_name
+
+        # if self.optimizer is from torch we replace load_state_dict with the one from torch
+        if isinstance(optimizer, torch.optim.Optimizer):
+            # Replace the load_state_dict method with our custom implementation that enables CPU offload
+            optimizer.load_state_dict = lambda state_dict, map_location=None: custom_load_state_dict(
+                optimizer, state_dict, map_location=map_location
+            )
+        self.optimizer: Optimizer = optimizer
 
     def __getstate__(self):
         return self.optimizer.__getstate__()
