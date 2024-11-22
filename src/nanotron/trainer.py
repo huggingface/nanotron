@@ -341,7 +341,7 @@ class DistributedTrainer:
                     print(f"Converting {name} to FP8")
                     module.__class__ = TP_LINEAR_CLS_TO_FP8_LINEAR_CLS[module.__class__]
                     # TODO(xrsrke): retrieve custom recipe
-                    module._quantize_weights()
+                    module._set_and_quantize_weights()
 
                     assert isinstance(module.weight, NanotronParameter)
                     assert isinstance(module.weight.data, FP8Tensor)
@@ -645,6 +645,20 @@ class DistributedTrainer:
         else:
             loss_avg = None
             handle = None
+
+        # NOTE: sanity check that non-fp8 parameters's gradients have
+        # the same datatype of the residual stream's dtype
+        for p in self.model.parameters():
+            from nanotron import constants
+            from nanotron.fp8.tensor import FP8Tensor
+
+            if isinstance(p.data, FP8Tensor):
+                assert p.grad.dtype in [torch.uint8, torch.int8], f"got {p.data.dtype}"
+            else:
+                if p.requires_grad is False:
+                    continue
+
+                assert p.grad.dtype == constants.CONFIG.fp8.resid_dtype
 
         # Apply gradient
         self.optimizer.step()

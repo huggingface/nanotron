@@ -11,6 +11,25 @@ from torch import nn
 
 
 @rerun_if_address_is_in_use()
+def test_get_parameter_data():
+    init_distributed(tp=2, dp=1, pp=1)(_test_get_parameter_data)()
+
+
+def _test_get_parameter_data(parallel_context: ParallelContext):
+    param = torch.nn.Parameter(torch.randn(16, 64))
+    split_config = SplitConfig(
+        split_dim=0,
+        contiguous_chunks=(8, 8),
+    )
+    param = create_sharded_parameter_from_config(parameter=param, pg=parallel_context.tp_pg, split_config=split_config)
+
+    new_data = torch.randn(16, 64)
+    param.data = new_data
+
+    assert param.data is new_data
+
+
+@rerun_if_address_is_in_use()
 def test_random_hash_nanotron_parameter():
     init_distributed(tp=2, dp=1, pp=1)(_test_random_hash_nanotron_parameter)()
 
@@ -22,9 +41,7 @@ def _test_random_hash_nanotron_parameter(parallel_context: ParallelContext):
         contiguous_chunks=(8, 8),
     )
     param = create_sharded_parameter_from_config(parameter=param, pg=parallel_context.tp_pg, split_config=split_config)
-    # hash = getattr(param, NanotronParameter.NANOTRON_PARAMETER_HASH_ATTRIBUTE_NAME)
 
-    # assert type(hash) == str
     assert hash(param) is not None
     assert type(hash(param)) == int
 

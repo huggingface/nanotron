@@ -231,7 +231,7 @@ class NanotronParameter(nn.Parameter):
         ]
 
     @classmethod
-    def create_param_that_share_metadata(cls, tensor: torch.Tensor, param: "NanotronParameter"):
+    def create_param_that_share_metadata(cls, tensor: torch.Tensor, param: Union[nn.Parameter, "NanotronParameter"]):
         """Create a new parameter that shares the metadata and hash of the given parameter"""
         # TODO(xrsrke): support deepcopy for tied parameter's metadata, because it includes an all-reduce
         # which if we do deepcopy, it raises an error
@@ -240,11 +240,19 @@ class NanotronParameter(nn.Parameter):
         # Copy metadata to the new parameter
         new_param = NanotronParameter(tensor)
         setattr(new_param, NanotronParameter.NANOTRON_PARAMETER_METADATA_ATTRIBUTE_NAME, metadata)
-        setattr(
-            new_param,
-            NanotronParameter.NANOTRON_PARAMETER_HASH_ATTRIBUTE_NAME,
-            getattr(param, cls.NANOTRON_PARAMETER_HASH_ATTRIBUTE_NAME),
-        )
+
+        # NOTE: if the param is a nn.Parameter, then we don't need to sync the hash
+        if isinstance(param, NanotronParameter):
+            setattr(
+                new_param,
+                NanotronParameter.NANOTRON_PARAMETER_HASH_ATTRIBUTE_NAME,
+                getattr(param, cls.NANOTRON_PARAMETER_HASH_ATTRIBUTE_NAME),
+            )
+
+        # TODO(xrsrke): sync all the attributes in the param
+        # to the new parameter? in case, user sets some attributes
+        # then the new parameter is kinda lost it
+
         return new_param
 
     @property
@@ -349,26 +357,26 @@ def sanity_check(root_module: nn.Module):
             )
 
 
-def get_data_from_param(p: NanotronParameter):
-    from nanotron.fp8.parameter import FP8Parameter
+# def get_data_from_param(p: NanotronParameter):
+#     from nanotron.fp8.parameter import FP8Parameter
 
-    assert p.__class__ in [NanotronParameter, FP8Parameter]
-    # NOTE: this return the data that gradients can flow into
-    return p.data
+#     assert p.__class__ in [NanotronParameter, FP8Parameter]
+#     # NOTE: this return the data that gradients can flow into
+#     return p.data
 
 
-def get_grad_from_parameter(p: NanotronParameter):
-    assert p.__class__ == NanotronParameter
-    assert (p.grad is not None and p.data.grad is not None) is False
+# def get_grad_from_parameter(p: NanotronParameter):
+#     assert p.__class__ == NanotronParameter
+#     assert (p.grad is not None and p.data.grad is not None) is False
 
-    from nanotron import constants
+#     from nanotron import constants
 
-    if constants.CONFIG is not None and constants.CONFIG.tokens.batch_accumulation_per_replica > 1:
-        if hasattr(p, "grad"):
-            grad = p.grad if p.grad is not None else p.data.grad
-        else:
-            grad = p.__accum_grad if p.__accum_grad is not None else p.data.__accum_grad
-    else:
-        grad = p.grad if p.grad is not None else p.data.grad
+#     if constants.CONFIG is not None and constants.CONFIG.tokens.batch_accumulation_per_replica > 1:
+#         if hasattr(p, "grad"):
+#             grad = p.grad if p.grad is not None else p.data.grad
+#         else:
+#             grad = p.__accum_grad if p.__accum_grad is not None else p.data.__accum_grad
+#     else:
+#         grad = p.grad if p.grad is not None else p.data.grad
 
-    return grad
+#     return grad

@@ -59,7 +59,7 @@ class FP8AdamW(Optimizer):
         # NOTE: torch.Tensor is bias
         self.fp8_weights: List[Union[FP8Parameter, torch.Tensor]] = []
         # NOTE: create master weights for FP8 Parameter
-        self.mappping_fp8_to_master_weight: Dict[FP8Tensor, Union[FP16Tensor, torch.Tensor]] = {}
+        self.mappping_fp8_to_master_weight: Dict[str, Union[FP16Tensor, torch.Tensor]] = {}
 
         for group in self.param_groups:
             for p in group["params"]:
@@ -259,23 +259,19 @@ class FP8AdamW(Optimizer):
                 assert fp32_grad.dtype == self.optim_accum_dtype
 
                 if isinstance(p.data, FP8Tensor):
-                    assert data.dtype in FP8_DTYPES
-                    assert p in self.mappping_fp8_to_master_weight, "FP8Tensor should have a master weight"
+                    assert p.data.dtype in FP8_DTYPES
+                    assert hash(p) in self.mappping_fp8_to_master_weight, "Can't find master weight for FP8 parameter"
 
-                    master_data = self.mappping_fp8_to_master_weight[p]
+                    master_data = self.mappping_fp8_to_master_weight[hash(p)]
                     if self.master_weight_dtype == DTypes.KFLOAT16:
                         fp32_data = convert_tensor_from_fp16(master_data, self.optim_accum_dtype)
                     else:
-                        fp32_data = (
-                            master_data.to(self.optim_accum_dtype)
-                            if master_data.dtype != self.optim_accum_dtype
-                            else master_data
-                        )
+                        fp32_data = master_data.to(self.optim_accum_dtype)
                 else:
                     assert (
-                        data.dtype == non_fp8_accum_dtype
-                    ), f"data.dtype={data.dtype}, non_fp8_accum_dtype={non_fp8_accum_dtype}"
-                    fp32_data = data.to(self.optim_accum_dtype) if data.dtype != self.optim_accum_dtype else data
+                        p.data.dtype == non_fp8_accum_dtype
+                    ), f"data.dtype={p.data.dtype}, non_fp8_accum_dtype={non_fp8_accum_dtype}"
+                    fp32_data = p.data.to(self.optim_accum_dtype)
 
                 assert fp32_data.dtype == self.optim_accum_dtype
 
@@ -284,7 +280,7 @@ class FP8AdamW(Optimizer):
 
                     if constants.CONFIG.fp8.skip_param_update_if_nan is True:
                         log_rank(
-                            f"[Optim] param_name={p_name}, skipping update due to overflow/underflow/nan",  # noqa
+                            f"[Optim] param_name, skipping update due to overflow/underflow/nan",  # noqa
                             logger=logger,
                             level=logging.INFO,
                         )
@@ -343,7 +339,7 @@ class FP8AdamW(Optimizer):
                         # NOTE: only scale down the lr, not scale it up
                         update_lr = lr / torch.max(torch.tensor(1.0, dtype=self.optim_accum_dtype, device="cuda"), rms)
                         log_rank(
-                            f"[Gradient clipping] param_name={p_name}, grad_norm: {fp32_grad.norm(p=2)}, RMS is {rms}, original lr is {lr}, new lr is {update_lr}",  # noqa
+                            f"[Gradient clipping] param_name=, grad_norm: {fp32_grad.norm(p=2)}, RMS is {rms}, original lr is {lr}, new lr is {update_lr}",  # noqa
                             logger=logger,
                             level=logging.INFO,
                             rank=0,
@@ -353,7 +349,10 @@ class FP8AdamW(Optimizer):
                 else:
                     update_lr = lr
 
-                weight_decay_factor = group["weight_decay"] if data.ndim >= 2 else 0.0
+                # NOTE: keep weight decay for biases
+                # TODO(xrsrke): we should explicitly set weight_decay_factor to 0 for biases
+                # in optimizer's param_groups
+                weight_decay_factor = group["weight_decay"] if p.data.ndim >= 2 else 0.0
 
                 if weight_decay_factor != 0:
                     fp32_new_changes_from_grad = update_lr * normalized_grad
@@ -374,7 +373,7 @@ class FP8AdamW(Optimizer):
                 fp32_new_changes_in_p = fp32_new_changes_from_grad + fp32_new_changes_from_weight_decay
                 new_fp32_data = fp32_data - fp32_new_changes_in_p
 
-                if IS_FP8:
+                if isinstance(p.data, FP8Tensor):
                     sync_amax_in_weight = fp8_config.sync_amax_in_weight
 
                     self.mappping_fp8_to_master_weight[p] = self._create_master_weight(new_fp32_data)
@@ -388,7 +387,8 @@ class FP8AdamW(Optimizer):
                             )
                             torch.testing.assert_allclose(_dequant_master_data, new_fp32_data)
 
-                        _quant_new_fp32_data = get_data_from_param(p)
+                        # _quant_new_fp32_data = get_data_from_param(p)
+                        _quant_new_fp32_data = p.data
                         _dequant_new_fp32_data = convert_tensor_from_fp8(
                             _quant_new_fp32_data, _quant_new_fp32_data.fp8_meta, torch.float32
                         )
@@ -403,26 +403,29 @@ class FP8AdamW(Optimizer):
 
                 else:
                     if constants.CONFIG.fp8.stochastic_rounding is True:
+                        raise NotImplementedError("stochastic_rounding is not implemented")
                         assert non_fp8_accum_dtype is torch.bfloat16, "only support stochastic rounding for bfloat16"
                         new_fp16 = torch.full_like(new_fp32_data, 0.0, dtype=non_fp8_accum_dtype)
                         copy_stochastic_(target=new_fp16, source=new_fp32_data)
                     else:
-                        new_fp16 = (
-                            new_fp32_data.to(non_fp8_accum_dtype)
-                            if new_fp32_data.dtype != non_fp8_accum_dtype
-                            else new_fp32_data
-                        )
+                        # new_fp16 = (
+                        #     new_fp32_data.to(non_fp8_accum_dtype)
+                        #     if new_fp32_data.dtype != non_fp8_accum_dtype
+                        #     else new_fp32_data
+                        # )
+                        new_fp16 = new_fp32_data.to(non_fp8_accum_dtype)
 
-                    new_fp16.requires_grad = True
-                    p.data = new_fp16
+                    # new_fp16.requires_grad = True
+                    # p.data = new_fp16
 
-                    assert get_data_from_param(p) is new_fp16
+                    # assert p.data is new_fp16
 
-                    if constants.CONFIG.fp8.run_fp8_sanity_check is True:
-                        torch.testing.assert_allclose(get_data_from_param(p), new_fp16)
+                    # if constants.CONFIG.fp8.run_fp8_sanity_check is True:
+                    #     # torch.testing.assert_allclose(get_data_from_param(p), new_fp16)
+                    #     torch.testing.assert_allclose(p.data, new_fp16)
 
-                exp_avg = self._create_optim_state(fp32_exp_avg, self.recipe.exp_avg_dtype)
-                exp_avg_sq = self._create_optim_state(fp32_exp_avg_sq, self.recipe.exp_avg_sq_dtype)
+                exp_avg = self._quantize_optim_state(fp32_exp_avg, self.recipe.exp_avg_dtype)
+                exp_avg_sq = self._quantize_optim_state(fp32_exp_avg_sq, self.recipe.exp_avg_sq_dtype)
 
                 state["step"] = step
                 state["exp_avg"] = exp_avg

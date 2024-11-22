@@ -11,7 +11,7 @@ from nanotron.fp8.linear import FP8LinearMeta
 from nanotron.fp8.recipe import FP8LinearRecipe
 from nanotron.fp8.tensor import FP8Tensor, convert_tensor_from_fp8
 from nanotron.parallel import ParallelContext
-from nanotron.parallel.parameters import NanotronParameter, get_data_from_param, get_grad_from_parameter
+from nanotron.parallel.parameters import NanotronParameter
 from nanotron.parallel.tensor_parallel.enum import TensorParallelLinearMode
 from nanotron.parallel.tensor_parallel.nn import (
     FP8TensorParallelColumnLinear,
@@ -55,7 +55,7 @@ def _test_fp8_column_linear_metadata(
 
     assert isinstance(column_linear.weight, NanotronParameter)
     # assert isinstance(column_linear.weight.data, FP8Tensor)
-    assert isinstance(get_data_from_param(column_linear.weight), FP8Tensor)
+    assert isinstance(column_linear.weight.data, FP8Tensor)
     assert isinstance(column_linear.recipe, FP8LinearRecipe)
     assert isinstance(column_linear.metadatas, FP8LinearMeta)
 
@@ -122,14 +122,14 @@ def _test_column_linear(
         dist.all_gather(
             tensor_list=list(reference_linear.weight.split(out_features_per_tp_rank, dim=0)),
             # tensor=column_linear.weight.data,
-            tensor=get_data_from_param(column_linear.weight),
+            tensor=column_linear.weight.data,
             group=parallel_context.tp_pg,
         )
 
         if with_bias is True:
             # TODO(xrsrke): support if bias is in FP8
             # bias = column_linear.bias.data
-            bias = get_data_from_param(column_linear.bias)
+            bias = column_linear.bias.data
             bias = bias.to(reference_linear.bias.dtype) if bias.dtype != reference_linear.bias.dtype else bias
             dist.all_gather(
                 tensor_list=list(reference_linear.bias.split(out_features_per_tp_rank, dim=0)),
@@ -141,7 +141,8 @@ def _test_column_linear(
     if with_bias is True:
         assert column_linear.bias.requires_grad is (with_bias is True)
         # assert column_linear.bias.data.__class__ == torch.Tensor
-        assert get_data_from_param(column_linear.bias).__class__ == nn.Parameter
+        # assert get_data_from_param(column_linear.bias).__class__ == nn.Parameter
+        assert isinstance(column_linear.bias, nn.Parameter)
         # assert column_linear.bias.data.requires_grad is (with_bias is True)
 
     # Generate random input
@@ -182,8 +183,27 @@ def _test_column_linear(
 
     # Test that we get the same output after forward pass
     sharded_output = column_linear(sharded_random_input)
-
     reference_output = reference_linear(random_input)
+
+    hidden_dim_slice = slice(
+        dist.get_rank(parallel_context.tp_pg) * out_features_per_tp_rank,
+        (dist.get_rank(parallel_context.tp_pg) + 1) * out_features_per_tp_rank,
+    )
+
+    torch.testing.assert_close(
+        # convert_tensor_from_fp8(column_linear.weight.data, column_linear.weight.data.fp8_meta, torch.bfloat16),
+        convert_tensor_from_fp8(
+            # get_data_from_param(column_linear.weight),
+            # get_data_from_param(column_linear.weight).fp8_meta,
+            column_linear.weight.data,
+            column_linear.weight.data.fp8_meta,
+            torch.bfloat16,
+        ),
+        reference_linear.weight[hidden_dim_slice].to(torch.bfloat16),
+        rtol=0.1,
+        atol=0.1,
+    )
+
     # reference_output = ReferenceLinear.apply(random_input, reference_linear.weight, reference_linear.bias)
 
     # TODO @thomasw21: Tune tolerance
@@ -192,12 +212,13 @@ def _test_column_linear(
             sharded_output,
             # TODO(xrsrke): retrieve accumulation precision from recipe
             # NOTE: before the reference_output.to(torch.bfloat16)
-            reference_output[
-                :,
-                dist.get_rank(parallel_context.tp_pg)
-                * out_features_per_tp_rank : (dist.get_rank(parallel_context.tp_pg) + 1)
-                * out_features_per_tp_rank,
-            ].to(torch.bfloat16),
+            # reference_output[
+            #     :,
+            #     dist.get_rank(parallel_context.tp_pg)
+            #     * out_features_per_tp_rank : (dist.get_rank(parallel_context.tp_pg) + 1)
+            #     * out_features_per_tp_rank,
+            # ].to(torch.bfloat16),
+            reference_output[:, hidden_dim_slice].to(torch.bfloat16),
             rtol=0,
             atol=0.1,
         )
@@ -212,22 +233,6 @@ def _test_column_linear(
     # Test that we get the same gradient after backward pass
     sharded_output.sum().backward()
     reference_output.sum().backward()
-    hidden_dim_slice = slice(
-        dist.get_rank(parallel_context.tp_pg) * out_features_per_tp_rank,
-        (dist.get_rank(parallel_context.tp_pg) + 1) * out_features_per_tp_rank,
-    )
-
-    torch.testing.assert_close(
-        # convert_tensor_from_fp8(column_linear.weight.data, column_linear.weight.data.fp8_meta, torch.bfloat16),
-        convert_tensor_from_fp8(
-            get_data_from_param(column_linear.weight),
-            get_data_from_param(column_linear.weight).fp8_meta,
-            torch.bfloat16,
-        ),
-        reference_linear.weight[hidden_dim_slice].to(torch.bfloat16),
-        rtol=0.1,
-        atol=0.1,
-    )
 
     # TODO(xrsrke): retrieve accumulation precision from recipe
     assert sharded_output.dtype == torch.bfloat16
@@ -256,14 +261,14 @@ def _test_column_linear(
             reference_linear.bias.grad[hidden_dim_slice],
         )
 
-    if isinstance(get_data_from_param(column_linear.weight), FP8Tensor):
-        # grad = column_linear.weight.data._temp_grad
-        # grad = convert_tensor_from_fp8(grad, column_linear.weight.data._temp_grad.fp8_meta, torch.bfloat16)
-        grad = get_grad_from_parameter(column_linear.weight)
-        grad = convert_tensor_from_fp8(grad, grad.fp8_meta, torch.bfloat16)
-    else:
-        # grad = column_linear.weight.grad
-        grad = get_grad_from_parameter(column_linear.weight)
+    # if isinstance(column_linear.weight.data, FP8Tensor):
+    #     # grad = column_linear.weight.data._temp_grad
+    #     # grad = convert_tensor_from_fp8(grad, column_linear.weight.data._temp_grad.fp8_meta, torch.bfloat16)
+    #     grad = convert_tensor_from_fp8(column_linear.weight.grad, column_linear.weight.grad.fp8_meta, torch.bfloat16)
+    # else:
+    #     # grad = column_linear.weight.grad
+    #     grad = column_linear.weight.grad
+    grad = convert_tensor_from_fp8(column_linear.weight.grad, column_linear.weight.grad.fp8_meta, torch.bfloat16)
 
     torch.testing.assert_close(
         grad,
@@ -333,13 +338,15 @@ def _test_row_linear(
         * in_features_per_rank,
     ]
     # row_linear.weight.data.set_data(sharded_weight)
-    get_data_from_param(row_linear.weight).set_data(sharded_weight)
+    # get_data_from_param(row_linear.weight).set_data(sharded_weight)
+    row_linear._set_and_quantize_weights(sharded_weight)
 
     if with_bias is True:
         # broadcast bias from rank 0, and the other don't have bias
         if dist.get_rank(parallel_context.tp_pg) == 0:
             # row_linear.bias.data.copy_(reference_linear.bias)
-            get_data_from_param(row_linear.bias).copy_(reference_linear.bias)
+            # get_data_from_param(row_linear.bias).copy_(reference_linear.bias)
+            row_linear.bias.data.copy_(reference_linear.bias.data)
 
         dist.broadcast(
             tensor=reference_linear.bias,
@@ -375,7 +382,10 @@ def _test_row_linear(
     torch.testing.assert_close(
         # convert_tensor_from_fp8(row_linear.weight.data, row_linear.weight.data.fp8_meta, torch.bfloat16),
         convert_tensor_from_fp8(
-            get_data_from_param(row_linear.weight), get_data_from_param(row_linear.weight).fp8_meta, torch.bfloat16
+            # get_data_from_param(row_linear.weight), get_data_from_param(row_linear.weight).fp8_meta, torch.bfloat16
+            row_linear.weight.data,
+            row_linear.weight.data.fp8_meta,
+            torch.bfloat16,
         ),
         reference_linear.weight.to(torch.bfloat16)[sharded_portion],
         rtol=0.1,
@@ -423,14 +433,16 @@ def _test_row_linear(
             assert row_linear.bias is None
 
     # if isinstance(row_linear.weight.data, FP8Tensor):
-    if isinstance(get_data_from_param(row_linear.weight), FP8Tensor):
-        # grad = row_linear.weight.data._temp_grad
-        # grad = convert_tensor_from_fp8(grad, row_linear.weight.data._temp_grad.fp8_meta, torch.bfloat16)
-        grad = get_grad_from_parameter(row_linear.weight)
-        grad = convert_tensor_from_fp8(grad, grad.fp8_meta, torch.bfloat16)
-    else:
-        # grad = row_linear.weight.grad
-        grad = get_grad_from_parameter(row_linear.weight)
+    # if isinstance(get_data_from_param(row_linear.weight), FP8Tensor):
+    #     # grad = row_linear.weight.data._temp_grad
+    #     # grad = convert_tensor_from_fp8(grad, row_linear.weight.data._temp_grad.fp8_meta, torch.bfloat16)
+    #     # grad = get_grad_from_parameter(row_linear.weight)
+    #     # grad = row_linear.weight.grad
+    #     grad = convert_tensor_from_fp8(row_linear.weight.grad, row_linear.weight.grad.fp8_meta, torch.bfloat16)
+    # else:
+    #     # grad = row_linear.weight.grad
+    #     grad = get_grad_from_parameter(row_linear.weight)
+    grad = convert_tensor_from_fp8(row_linear.weight.grad, row_linear.weight.grad.fp8_meta, torch.bfloat16)
 
     torch.testing.assert_close(
         grad,

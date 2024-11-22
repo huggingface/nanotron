@@ -1,4 +1,3 @@
-from dataclasses import dataclass
 from typing import Optional, Union
 
 import torch
@@ -9,15 +8,6 @@ from nanotron.fp8.constants import FP8_DTYPES, FP8LM_RECIPE, INITIAL_AMAX, INITI
 from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.meta import FP8Meta
 from nanotron.fp8.tensor import FP8Tensor, update_scaling_factor
-
-
-@dataclass
-class FP8GradMeta:
-    """FP8 metadata for FP8Linear."""
-
-    input_grad: FP8Meta
-    weight_grad: FP8Meta
-    output_grad: FP8Meta
 
 
 class FP8Parameter(nn.Parameter):

@@ -11,7 +11,6 @@ from nanotron.fp8.constants import FP8_GPU_NAMES, FP8LM_RECIPE, QTYPE_TO_DTYPE
 from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.linear import FP8Linear
 from nanotron.fp8.meta import FP8Meta
-from nanotron.fp8.parameter import FP8Parameter
 from nanotron.logging import log_rank
 
 logger = logging.get_logger(__name__)
@@ -62,10 +61,12 @@ def convert_linear_to_fp8(linear: nn.Linear, accum_qtype: DTypes = FP8LM_RECIPE.
     fp8_linear = FP8Linear(
         in_features, out_features, bias=is_bias, device=linear.weight.device, accum_qtype=accum_qtype
     )
-    fp8_linear.weight = FP8Parameter(linear.weight.data.clone(), FP8LM_RECIPE.linear.weight.dtype)
+    # TODO(xrsrke): do we need clone?
+    fp8_linear._set_and_quantize_weights(linear.weight.data.clone())
+    # fp8_linear.weight = FP8Parameter(linear.weight.data.clone(), FP8LM_RECIPE.linear.weight.dtype)
 
     if is_bias:
-        fp8_linear.bias.orig_data = linear.bias.data.clone()
+        # fp8_linear.bias.orig_data = linear.bias.data.clone()
         fp8_linear.bias.data = linear.bias.data.to(QTYPE_TO_DTYPE[accum_qtype])
 
     return fp8_linear

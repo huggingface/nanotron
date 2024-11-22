@@ -50,9 +50,9 @@ class FP8Linear(nn.Linear):
         # TODO(xrsrke): take initialization dtype from recipe
         # NOTE: initialize in float32
         super().__init__(in_features, out_features, bias, device, dtype=torch.float32)
-        self._quantize_weights()
+        self._set_and_quantize_weights(self.weight.data)
 
-        assert self.bias is None
+        # assert self.bias is None
         # if self.bias is not None:
         #     self.bias = nn.Parameter(self.bias.to(recipe.accum_dtype))
         #     assert self.bias.dtype == recipe.accum_dtype
@@ -60,9 +60,13 @@ class FP8Linear(nn.Linear):
         # self.metadatas = FP8LinearMeta()
         # self.recipe = recipe
 
-    def _quantize_weights(self, recipe: FP8LinearRecipe = FP8LM_LINEAR_RECIPE):
+    def _set_and_quantize_weights(self, data: Optional[torch.Tensor], recipe: FP8LinearRecipe = FP8LM_LINEAR_RECIPE):
+        """
+        data: if set to None, then we quantize the module's current weights, otherwise, we quantize
+        the provided tensor
+        """
         # quant_w = FP8Parameter(self.weight.data, dtype=recipe.weight.dtype, interval=recipe.weight.interval)
-        quant_w = FP8Tensor(self.weight.data, dtype=recipe.weight.dtype, interval=recipe.weight.interval)
+        quant_w = FP8Tensor(data, dtype=recipe.weight.dtype, interval=recipe.weight.interval)
 
         # assert quant_w.dtype in [torch.uint8, torch.int8], f"got {self.weight.data.dtype}"
         # self.weight = quant_w
@@ -73,8 +77,8 @@ class FP8Linear(nn.Linear):
         # setattr(self, "weight", NanotronParameter(tensor=quant_w))
         setattr(self, "weight", NanotronParameter.create_param_that_share_metadata(quant_w, self.weight))
 
-        if self.name == "model.decoder.0.attention.qkv_proj":
-            assert 1 == 1
+        # if self.name == "model.decoder.0.attention.qkv_proj":
+        #     assert 1 == 1
 
         # NOTE: assume each time we requantize the weights, we reset the metadata
         self.metadatas = FP8LinearMeta()
@@ -88,7 +92,7 @@ class FP8Linear(nn.Linear):
             # weight=get_data_from_param(self.weight),
             # bias=None if self.bias is None else get_data_from_param(self.bias),
             weight=self.weight,
-            bias=None,
+            bias=self.bias,
             metadatas=self.metadatas,
             recipe=self.recipe,
         )

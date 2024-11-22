@@ -6,10 +6,10 @@ import torch
 from nanotron.fp8.constants import FP8_DTYPES, QTYPE_TO_DTYPE
 from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.linear import FP8Linear, FP8LinearMeta
+from nanotron.fp8.parameter import FP8Parameter
 from nanotron.fp8.recipe import FP8LinearRecipe
 from nanotron.fp8.tensor import FP8Tensor, convert_tensor_from_fp8
 from nanotron.fp8.utils import convert_linear_to_fp8, convert_to_fp8_module, is_overflow_underflow_nan
-from nanotron.parallel.parameters import NanotronParameter
 
 # from timm.models.layers import trunc_normal_
 from torch import nn
@@ -20,35 +20,23 @@ from torch import nn
 def test_create_an_fp8_linear_parameters(bias, accum_qtype):
     fp8_linear = FP8Linear(64, 64, bias=bias, device="cuda", accum_qtype=accum_qtype)
 
-    assert isinstance(fp8_linear.weight, NanotronParameter)
-    if bias:
-        assert isinstance(fp8_linear.bias, torch.Tensor)
-        assert fp8_linear.bias.requires_grad is True
-
+    assert isinstance(fp8_linear.weight, FP8Parameter)
+    assert isinstance(fp8_linear.bias, torch.Tensor) if bias else True
     assert isinstance(fp8_linear.recipe, FP8LinearRecipe)
     assert isinstance(fp8_linear.metadatas, FP8LinearMeta)
 
-    for p in fp8_linear.parameters():
-        if p.ndim == 1:
-            # NOTE: not quantize biases
-            assert isinstance(p.data, torch.Tensor)
-        else:
-            assert isinstance(p.data, FP8Tensor)
+
+def test_fp8_linear_parameters():
+    ref_linear = nn.Linear(16, 16, device="cuda")
+    fp8_linear = convert_linear_to_fp8(deepcopy(ref_linear), accum_qtype=DTypes.KFLOAT32)
+
+    assert len(list(ref_linear.parameters())) == len(list(fp8_linear.parameters()))
+    assert all(p is not None for p in fp8_linear.parameters())
+    assert isinstance(fp8_linear.weight, FP8Parameter)
+    assert isinstance(fp8_linear.bias, torch.Tensor)
+    assert all(p.requires_grad for p in fp8_linear.parameters()) is True
 
 
-# def test_fp8_linear_parameters():
-#     ref_linear = nn.Linear(16, 16, device="cuda")
-#     fp8_linear = convert_linear_to_fp8(deepcopy(ref_linear), accum_qtype=DTypes.KFLOAT32)
-
-#     assert len(list(ref_linear.parameters())) == len(list(fp8_linear.parameters()))
-#     assert all(p is not None for p in fp8_linear.parameters())
-#     # assert isinstance(fp8_linear.weight, FP8Parameter)
-#     # assert isinstance(fp8_linear.bias, torch.Tensor)
-#     assert all(p.requires_grad for p in fp8_linear.parameters()) is True
-
-
-# NOTE: sometimes the assert output just fails, if you rerun it,
-# then it will pass, i also observed this in the FP8-LM implementation
 # @pytest.mark.skip
 @pytest.mark.parametrize("n_layers", [1, 2])
 @pytest.mark.parametrize(
@@ -135,37 +123,21 @@ def test_fp8_linear_backward_pass(n_layers, input, accum_qtype):
     fp8_linear = convert_to_fp8_module(deepcopy(ref_linear), accum_qtype)
 
     ref_linear(ref_input).sum().backward()
+
     fp8_linear(input).sum().backward()
 
     for ref_p, p in zip(ref_linear.parameters(), fp8_linear.parameters()):
+        if p.requires_grad is False:
+            assert p.grad is None
+            continue
 
-        if isinstance(p.data, FP8Tensor):
-            # NOTE: bypass torch autograd for FP8Tensor
-            # so we can compute the gradients ourself
-            assert p.requires_grad is False
+        if isinstance(p, FP8Parameter):
             assert isinstance(p.grad, FP8Tensor)
             assert p.grad.dtype in FP8_DTYPES
+            grad = convert_tensor_from_fp8(p.grad, p.grad.fp8_meta, torch.float32)
         else:
-            assert p.requires_grad is True
             assert isinstance(p.grad, torch.Tensor)
             assert p.grad.dtype == QTYPE_TO_DTYPE[accum_qtype]
-
-        # if p.requires_grad is False:
-        #     if isinstance(p.data, FP8Tensor):
-        #         assert isinstance(p.grad, FP8Tensor)
-        #     else:
-        #         assert p.grad is None
-
-        # if isinstance(p.data, FP8Tensor):
-        #     # assert isinstance(p.grad, FP8Tensor)
-        #     grad = convert_tensor_from_fp8(p.grad, p.grad.fp8_meta, torch.float32)
-        # else:
-        #     # assert isinstance(p.grad, torch.Tensor)
-        grad = (
-            convert_tensor_from_fp8(p.grad, p.grad.fp8_meta, torch.float32)
-            if isinstance(p.data, FP8Tensor)
-            else p.grad
-        )
 
         assert is_overflow_underflow_nan(grad) is False
         if p.ndim > 1:
