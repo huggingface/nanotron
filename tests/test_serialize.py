@@ -139,9 +139,7 @@ def _test_save_and_load_optimizer(parallel_context: ParallelContext, test_contex
         pass
     else:
         assert not match, "Newly initialised optimizer should not match."
-    load_optimizer(
-        optimizer=new_optimizer, parallel_context=parallel_context, root_folder=store_folder, map_location=None
-    )
+    load_optimizer(optimizer=new_optimizer, parallel_context=parallel_context, root_folder=store_folder)
 
     # Assert the optimizer states are exactly the same after loading.
     match, msg = is_dict_equal(optimizer.state_dict(), new_optimizer.state_dict())
