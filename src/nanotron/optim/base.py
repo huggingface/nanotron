@@ -105,9 +105,7 @@ def _process_value_according_to_param_policy(
 
 # Modified from torch.optim.Optimizer.load_state_dict
 @torch._disable_dynamo
-def custom_load_state_dict(
-    self, state_dict: StateDict, map_location: Optional[Union[str, torch.device]] = "cpu"
-) -> None:
+def custom_load_state_dict(self, state_dict: StateDict, map_location: Union[str, torch.device]) -> None:
     r"""Loads the optimizer state.
 
     Args:
