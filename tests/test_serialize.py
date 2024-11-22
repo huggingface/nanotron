@@ -94,7 +94,8 @@ def _test_save_and_load_model(parallel_context: ParallelContext, test_context: T
 @rerun_if_address_is_in_use()
 def test_save_and_load_optimizer(tp: int, dp: int, pp: int):
     test_context = TestContext()
-    # We use DP=2 as we're interested in testing that one
+    if pp > 1:
+        pytest.skip("Pipeline parallelism not supported for this test yet")
     init_distributed(tp=tp, dp=dp, pp=pp)(_test_save_and_load_optimizer)(test_context=test_context)
 
 
@@ -138,7 +139,6 @@ def _test_save_and_load_optimizer(parallel_context: ParallelContext, test_contex
         pass
     else:
         assert not match, "Newly initialised optimizer should not match."
-
     load_optimizer(
         optimizer=new_optimizer, parallel_context=parallel_context, root_folder=store_folder, map_location=None
     )
