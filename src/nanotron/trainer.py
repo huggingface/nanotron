@@ -576,10 +576,8 @@ class DistributedTrainer:
             loss_avg = None
             handle = None
 
-        # TODO (MaxiBoether): In which group should we perform all reduce here?!
-        # Collect per-domain statistics from the Loss module
+        # TODO (MaxiBoether): In which group should we perform all reduce here?! The loss only lives on the output stages of the pipeline, and we might use tensor parallelism.
         losses_per_domain, counts_per_domain = self.unwrapped_model.loss.get_per_domain_stats()
-        # Reset per-domain statistics in the Loss module
         self.unwrapped_model.loss.reset_per_domain_stats()
         domain_ids = list(losses_per_domain.keys())
         local_max_domain_id = max(domain_ids) if domain_ids else -1

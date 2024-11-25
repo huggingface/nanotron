@@ -967,7 +967,7 @@ class Loss(nn.Module):
         sharded_logits: torch.Tensor,  # [seq_length, batch_size, logits]
         label_ids: torch.Tensor,  # [batch_size, seq_length]
         label_mask: torch.Tensor,  # [batch_size, seq_length]
-        domain_ids: Optional[torch.Tensor] = None
+        key_ids: Optional[torch.Tensor] = None
     ) -> Dict[str, torch.Tensor]:
         # Megatron by defaults cast everything in fp32. `--f16-lm-cross-entropy` is an option you can use to keep current precision.
         # https://github.com/NVIDIA/Megatron-LM/blob/f267e6186eae1d6e2055b412b00e2e545a8e896a/megatron/model/gpt_model.py#L38
@@ -976,16 +976,14 @@ class Loss(nn.Module):
             sharded_logits, label_ids.transpose(0, 1).contiguous(), group=self.tp_pg, dtype=torch.float
         ).transpose(0, 1)
         # TODO @thomasw21: It's unclear what kind of normalization we want to do.
-        loss = masked_mean(loss, label_mask, dtype=torch.float)
+        final_loss = masked_mean(loss, label_mask, dtype=torch.float)
 
         # TODO(MaxiBoether): How about tensor parallelism here? Do we need to do sth about it?
-
         # BEGIN CHANGES FOR PER-KEY LOSS
-        if domain_ids is not None:
-            per_token_loss = loss * label_mask
+        if key_ids is not None:
             # Flatten tensors
-            per_token_loss_flat = per_token_loss.view(-1)  # [(batch_size * seq_length)]
-            domain_ids_flat = domain_ids.view(-1)
+            per_token_loss_flat = loss.view(-1)  # [(batch_size * seq_length)]
+            domain_ids_flat = key_ids.view(-1)
             label_mask_flat = label_mask.view(-1)
 
             # Only consider valid positions (where label_mask is 1)
@@ -1007,7 +1005,7 @@ class Loss(nn.Module):
 
         # I think indexing causes a sync we don't actually want
         # loss = loss[label_mask].sum()
-        return {"loss": loss}
+        return {"loss": final_loss}
     
     def get_per_domain_stats(self):
         # Return copies to avoid mutation
