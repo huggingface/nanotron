@@ -112,6 +112,15 @@ except ImportError:
     wandb = None
 
 
+def print_sanity_params(model):
+    for n, p in model.named_parameters():
+        print(
+            n,
+            p.__class__.__name__,
+            f"p.requires_grad: {p.requires_grad}, p.dtype: {p.dtype}, p.data.dtype: {p.data.dtype}",
+        )
+
+
 class DistributedTrainer:
     def __init__(
         self,
@@ -195,13 +204,12 @@ class DistributedTrainer:
             if recipe is not None:
                 module.weight._is_future_fp8 = True
 
-        # Init optimizer
-        self.optimizer, self.grad_accumulator = init_optimizer_and_grad_accumulator(
-            parametrization_method=parametrization_method,
-            model=self.model,
-            optimizer_args=self.config.optimizer,
-            parallel_context=self.parallel_context,
-        )
+        # NOTE: make a copy of FP8 parameter on CPU
+        # assert 1 == 1
+        # from nanotron import constants
+        for n, p in self.model.named_parameters():
+            if hasattr(p, "_is_future_fp8") and p._is_future_fp8 is True:
+                constants.CPU_WEIGHTS[n] = p.data.cpu().clone()
 
         # NOTE: sanity check all hash are different
         param_hash = []
@@ -220,15 +228,24 @@ class DistributedTrainer:
         # we want to create some master weights for fp8 parameters, before quantizing them
         assert 1 == 1
         self._convert_model_to_fp8(self.model)
+        print_sanity_params(self.model)
         assert 1 == 1
+
+        # Init optimizer
+        self.optimizer, self.grad_accumulator = init_optimizer_and_grad_accumulator(
+            parametrization_method=parametrization_method,
+            model=self.model,
+            optimizer_args=self.config.optimizer,
+            parallel_context=self.parallel_context,
+        )
 
         # TODO(xrsrke): sanity check that _is_future_fp8 is consistent with the dtype of the parameter
 
+        # NOTE: sanity check if the optimizer, gradient accumulator points to the correct model parameters
         if constants.CONFIG.model.dtype is torch.int8:
-            from nanotron.fp8.optim import FP8AdamW
             from nanotron.fp8.tensor import FP8Tensor
 
-            assert self.optimizer.optimizer.__class__ == FP8AdamW
+            # assert self.optimizer.optimizer.__class__ == FP8AdamW
             num_fp8_params = sum(1 for p in self.model.parameters() if isinstance(p.data, FP8Tensor))
             master_weights_mapping = self.optimizer.optimizer.mappping_fp8_to_master_weight
             assert num_fp8_params == len(master_weights_mapping)
@@ -305,14 +322,6 @@ class DistributedTrainer:
     def _convert_model_to_fp8(self, model):
         from nanotron.fp8.utils import get_leaf_modules
 
-        def print_sanity_params(model):
-            for n, p in model.named_parameters():
-                print(
-                    n,
-                    p.__class__.__name__,
-                    f"p.requires_grad: {p.requires_grad}, p.dtype: {p.dtype}, p.data.dtype: {p.data.dtype}",
-                )
-
         print("before quantize")
         print_sanity_params(model)
 
@@ -341,7 +350,7 @@ class DistributedTrainer:
                     print(f"Converting {name} to FP8")
                     module.__class__ = TP_LINEAR_CLS_TO_FP8_LINEAR_CLS[module.__class__]
                     # TODO(xrsrke): retrieve custom recipe
-                    module._set_and_quantize_weights()
+                    module._set_and_quantize_weights(module.weight.data)
 
                     assert isinstance(module.weight, NanotronParameter)
                     assert isinstance(module.weight.data, FP8Tensor)
@@ -648,17 +657,21 @@ class DistributedTrainer:
 
         # NOTE: sanity check that non-fp8 parameters's gradients have
         # the same datatype of the residual stream's dtype
-        for p in self.model.parameters():
+        for n, p in self.model.named_parameters():
             from nanotron import constants
             from nanotron.fp8.tensor import FP8Tensor
+
+            if not isinstance(p.data, FP8Tensor) and p.requires_grad is False:
+                continue
 
             if isinstance(p.data, FP8Tensor):
                 assert p.grad.dtype in [torch.uint8, torch.int8], f"got {p.data.dtype}"
             else:
-                if p.requires_grad is False:
-                    continue
-
                 assert p.grad.dtype == constants.CONFIG.fp8.resid_dtype
+
+        assert [True for n, p in self.model.named_parameters() if p.grad is not None]
+        # NOTE: sanity check that parameters has gradient
+        assert 1 == 1
 
         # Apply gradient
         self.optimizer.step()

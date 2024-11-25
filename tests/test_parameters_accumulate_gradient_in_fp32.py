@@ -57,6 +57,11 @@ def test_gradient_promoting_in_fp32(half_precision: torch.dtype):
         torch.testing.assert_close(model.weight.grad, torch.zeros_like(model.weight.grad), atol=1e-6, rtol=1e-7)
 
 
+# TODO: test gradient accumulator skips creating master weights for fp32 parameters
+# TODO: test gradient accumulator creates master weights for FP8 parameter
+# TODO: test the number of master weights created for an fp8 model
+
+
 @pytest.mark.parametrize("half_precision", [torch.float16, torch.bfloat16])
 def test_gradient_accumulated_in_fp32(half_precision: torch.dtype):
     model = nn.Linear(3, 2, bias=False, dtype=half_precision, device="cuda")
@@ -257,7 +262,7 @@ def _test_ddp_with_grad_accum_in_fp32(
         accumulator.backward(loss_fp32_accum)
 
         for name, param in model_ddp_fp32_accum.named_parameters():
-            # Check that half grads has been set to None in sync step, to avoid it being uncorrectly used
+            # Check that half grads has been set to None in sync step, to avoid it being incorrectly used
             half_grad = param.grad
             assert half_grad is None, f"{half_grad} != None"
 

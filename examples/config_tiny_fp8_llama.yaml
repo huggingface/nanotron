@@ -32,7 +32,7 @@ data_stages:
 general:
   benchmark_csv_path: null
   consumed_train_samples: null
-  ignore_sanity_checks: true
+  ignore_sanity_checks: false
   project: debug
   run: tiny_llama_%date_%jobid
   seed: 42
@@ -68,7 +68,7 @@ model:
     use_cache: true
     vocab_size: 1024
 optimizer:
-  accumulate_grad_in_fp32: false
+  accumulate_grad_in_fp32: true
   clip_grad: 1.0
   learning_rate_scheduler:
     learning_rate: 0.0003

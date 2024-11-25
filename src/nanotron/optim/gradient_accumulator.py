@@ -83,11 +83,16 @@ class FP32GradientAccumulator(GradientAccumulator):
         # Assign big buffer for weights + grad in fp32
         segment_index = {}
         length = 0
+        fp32_params = []
         for name, param in named_parameters:
             # NOTE: FP8 Parameter by default has requires_grad=False,
             # because we want to do the backward ourself, so here we only skip
             # if the parameter isn't fp8, and doesn't require grad
-            if not isinstance(param.data, FP8Tensor) and not param.requires_grad:
+
+            # if not isinstance(param.data, FP8Tensor) and not param.requires_grad:
+            #     continue
+            if self._is_not_required_master_weights(param):
+                fp32_params.append((name, param))
                 continue
 
             start = length
@@ -104,6 +109,19 @@ class FP32GradientAccumulator(GradientAccumulator):
             }
             for name, (start_weight, end_weight, param) in segment_index.items()
         }
+        self.parameters.update(
+            {
+                name: {
+                    "fp32": param,
+                    "half": param,
+                }
+                for name, param in fp32_params
+            }
+        )
+
+        # NOTE: and since we pass gradient accumulator around
+        # and other objects access parameter from .get_parameter_for_optimizer()
+        # so we will keep
 
         with torch.inference_mode():
             for _, elt in self.parameters.items():
@@ -114,7 +132,26 @@ class FP32GradientAccumulator(GradientAccumulator):
                 assert fp32_param.stride() == half_param.stride()
 
                 # Copy weights from half precision to full precision
-                fp32_param.copy_(half_param)
+                if not isinstance(half_param.data, FP8Tensor):
+                    fp32_param.copy_(half_param)
+                else:
+                    from nanotron import constants
+
+                    def find_param_name(param, named_parameters):
+                        for name, p in named_parameters:
+                            if p is param:
+                                return name
+                        return None
+
+                    p_name = find_param_name(half_param, named_parameters)
+                    assert p_name is not None
+                    p_data = constants.CPU_WEIGHTS[p_name]
+                    assert p_data.dtype == torch.float32
+
+                    fp32_param.copy_(constants.CPU_WEIGHTS[p_name])
+
+                    del constants.CPU_WEIGHTS[p_name]
+                    del p_name
 
                 # Set requires_grad=True
                 fp32_param.requires_grad = True
@@ -122,6 +159,18 @@ class FP32GradientAccumulator(GradientAccumulator):
         self._is_accumulation_sync_step = False
         # We need the last allreduce handle to make sure it finishes before the optimizer step
         self.fp32_grads_allreduce_handle: Optional[torch.futures.Future] = None
+
+    def _is_not_required_master_weights(self, param: NanotronParameter):
+        # NOTE: There are two scenarios that we don't create master weights
+        # Scenario 1: Scthe first is if a parameter don't require grad
+        # Scenario 2: In case of fp8 training, some non-fp8 parameters are in float32
+        # so there are no needed master weights
+        if not isinstance(param.data, FP8Tensor) and not param.requires_grad:
+            return True
+        elif param.data.dtype is torch.float32:
+            return True
+        else:
+            return False
 
     def assign_param_offsets(self, param_name_to_offsets: Dict[str, Dict[int, Tuple[int, int]]], dp_rank: int):
         """To use only when you use with ZeRODistributedOptimizer"""

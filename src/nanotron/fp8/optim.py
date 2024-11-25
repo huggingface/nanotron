@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Tuple, Union
+from typing import Any, Dict, List, Tuple
 
 import torch
 from torch import nn
@@ -9,7 +9,6 @@ from nanotron import logging
 # from nanotron._utils.memory import delete_tensor_from_memory
 from nanotron.fp8.constants import FP8_DTYPES, FP8LM_RECIPE
 from nanotron.fp8.dtypes import DTypes
-from nanotron.fp8.parameter import FP8Parameter
 from nanotron.fp8.recipe import FP8OptimRecipe
 from nanotron.fp8.tensor import (
     FP8Tensor,
@@ -57,44 +56,48 @@ class FP8AdamW(Optimizer):
         self.optim_accum_dtype = recipe.accum_dtype
 
         # NOTE: torch.Tensor is bias
-        self.fp8_weights: List[Union[FP8Parameter, torch.Tensor]] = []
-        # NOTE: create master weights for FP8 Parameter
-        self.mappping_fp8_to_master_weight: Dict[str, Union[FP16Tensor, torch.Tensor]] = {}
+        # self.fp8_weights: List[Union[FP8Parameter, torch.Tensor]] = []
 
-        for group in self.param_groups:
-            for p in group["params"]:
-                # data = get_data_from_param(p)
-                # if p.data.__class__ != FP8Tensor:
-                #     continue
-                # # NOTE: this parameter we don't convert to FP8, so no need master weight
-                # if not isinstance(p.data, FP8Tensor):
-                #     continue
+        # NOTE: move to gradient accumulator
+        # # NOTE: create master weights for FP8 Parameter
+        # self.mappping_fp8_to_master_weight: Dict[str, Union[FP16Tensor, torch.Tensor]] = {}
 
-                assert 1 == 1
-                if p._is_future_fp8 is not True:
-                    continue
+        # for group in self.param_groups:
+        #     for p in group["params"]:
+        #         # data = get_data_from_param(p)
+        #         # if p.data.__class__ != FP8Tensor:
+        #         #     continue
+        #         # # NOTE: this parameter we don't convert to FP8, so no need master weight
+        #         # if not isinstance(p.data, FP8Tensor):
+        #         #     continue
 
-                # assert p.dtype == data.dtype
+        #         assert 1 == 1
+        #         # if p._is_future_fp8 is not True:
+        #         #     continue
+        #         if not isinstance(p.data, FP8Tensor):
+        #             continue
 
-                # if isinstance(p, NanotronParameter):
-                #     raw_data = p.data.orig_data if hasattr(p.data, "orig_data") else p.data
-                # else:
-                #     raw_data = p.orig_data if hasattr(p, "orig_data") else p.data
-                # assert raw_data.dtype in [torch.float32], f"raw_data.dtype={raw_data.dtype}"
+        #         # assert p.dtype == data.dtype
 
-                assert p.data.dtype in [torch.float32], f"raw_data.dtype={p.data.dtype}"
-                self.mappping_fp8_to_master_weight[hash(p)] = self._create_master_weight(p.data)
+        #         # if isinstance(p, NanotronParameter):
+        #         #     raw_data = p.data.orig_data if hasattr(p.data, "orig_data") else p.data
+        #         # else:
+        #         #     raw_data = p.orig_data if hasattr(p, "orig_data") else p.data
+        #         # assert raw_data.dtype in [torch.float32], f"raw_data.dtype={raw_data.dtype}"
 
-                # self.fp8_weights.append(p.data)
+        #         assert p.data.dtype in [torch.float32], f"raw_data.dtype={p.data.dtype}"
+        #         self.mappping_fp8_to_master_weight[hash(p)] = self._create_master_weight(p.data)
 
-                # delete_tensor_from_memory(raw_data)
+        #         # self.fp8_weights.append(p.data)
 
-                # p.orig_data = None
-                # if hasattr(p.data, "orig_data"):
-                #     p.data.orig_data = None
+        #         # delete_tensor_from_memory(raw_data)
 
-        # assert len(self.mappping_fp8_to_master_weight) == len(self.fp8_weights)
-        # TODO(xrsrke): auto free fp32 weights from memory
+        #         # p.orig_data = None
+        #         # if hasattr(p.data, "orig_data"):
+        #         #     p.data.orig_data = None
+
+        # # assert len(self.mappping_fp8_to_master_weight) == len(self.fp8_weights)
+        # # TODO(xrsrke): auto free fp32 weights from memory
 
         self.loggings = []
         self._is_overflow = False
@@ -207,6 +210,15 @@ class FP8AdamW(Optimizer):
 
         for i, group in enumerate(self.param_groups):
             for p in group["params"]:
+
+                if not isinstance(p.data, FP8Tensor) and p.requires_grad is False:
+                    continue
+
+                try:
+                    assert p.grad is not None
+                except:
+                    assert 1 == 1
+
                 # p_name = self.params_id_to_param_names[id(p)]
                 # loggings[p] = {}
                 state = self.state[p]
@@ -253,7 +265,11 @@ class FP8AdamW(Optimizer):
                         # grad = get_grad_from_parameter(p)
 
                         # assert grad is not None
-                        assert p.grad.dtype == non_fp8_accum_dtype
+                        try:
+                            assert p.grad.dtype == non_fp8_accum_dtype
+                        except:
+                            assert 1 == 1
+
                         fp32_grad = p.grad.to(self.optim_accum_dtype)
 
                 assert fp32_grad.dtype == self.optim_accum_dtype
@@ -435,6 +451,7 @@ class FP8AdamW(Optimizer):
                 assert state["exp_avg"] is exp_avg
                 assert state["exp_avg_sq"] is exp_avg_sq
 
+                # NOTE: remove this shit
                 if constants.is_ready_to_log is True:
                     loggings[p]["step"] = {"value": step}
                     loggings[p]["group:lr"] = {"value": lr}
@@ -496,7 +513,8 @@ class FP8AdamW(Optimizer):
         for group in self.param_groups:
             for p in group["params"]:
                 # NOTE: take the assumption that nanotron requires all parameters to have gradients
-                set_grad_none_for_sliced_or_param(p)
+                # set_grad_none_for_sliced_or_param(p)
+                p.grad = None
 
                 assert p.grad is None
                 assert p.data.grad is None

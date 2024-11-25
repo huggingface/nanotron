@@ -249,6 +249,9 @@ class NanotronParameter(nn.Parameter):
                 getattr(param, cls.NANOTRON_PARAMETER_HASH_ATTRIBUTE_NAME),
             )
 
+        # NOTE: copy all custom attributes of the "param" to the new parameter
+        # new_param._is_future_fp8 = getattr(param, "_is_future_fp8", False)
+
         # TODO(xrsrke): sync all the attributes in the param
         # to the new parameter? in case, user sets some attributes
         # then the new parameter is kinda lost it

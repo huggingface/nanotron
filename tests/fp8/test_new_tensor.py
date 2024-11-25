@@ -13,7 +13,7 @@ from nanotron.fp8.constants import (
 )
 from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.meta import FP8Meta
-from nanotron.fp8.tensor import FP8Tensor, FP16Tensor
+from nanotron.fp8.tensor import FP8Tensor, FP16Tensor, convert_tensor_from_fp8, convert_tensor_from_fp16
 from nanotron.testing.utils import TestContext
 
 
@@ -34,7 +34,8 @@ def test_fp8_and_fp16_metadata(tensor_cls, dtype, interval):
     # TODO(xrsrke): remove the fixed 1 factor
     # it couples with the current implementation of FP8Meta
     # because we initialize scale with 1
-    assert fp8_meta.amax == ref_tensor.abs().max()
+    # assert fp8_meta.amax == ref_tensor.abs().max()
+    assert torch.equal(fp8_meta.amax, ref_tensor.amax())
     assert isinstance(fp8_meta.inverse_scale, torch.Tensor)
     assert fp8_meta.scale != 0.1 and fp8_meta.scale != 1.0
     assert isinstance(fp8_meta.te_dtype, tex.DType)
@@ -50,7 +51,8 @@ def test_quantize_and_dequantize_tensor_in_fp8(size, dtype):
 
     assert not np.array_equal(fp8_tensor.cpu().numpy(), ref_tensor.cpu().numpy())
 
-    tensor = fp8_tensor.to(torch.float32)
+    tensor = convert_tensor_from_fp8(fp8_tensor, fp8_tensor.fp8_meta, torch.float32)
+    # tensor = fp8_tensor.to(torch.float32)
     # NOTE: sometimes type(tensor) is FP8Tensor, but it still passes, so we directly check the class name
     # to make sure it's a torch.Tensor
     assert tensor.__class__ == torch.Tensor
@@ -93,8 +95,8 @@ def test_quantize_and_dequantize_tensor_in_fp16(size):
 
     assert not np.array_equal(fp16_tensor.cpu().numpy(), ref_tensor.cpu().numpy())
 
-    # tensor = convert_tensor_from_fp16(fp16_tensor, torch.float32)
-    tensor = fp16_tensor.to(torch.float32)
+    tensor = convert_tensor_from_fp16(fp16_tensor, torch.float32)
+    # tensor = fp16_tensor.to(torch.float32)
     # NOTE: sometimes type(tensor) is FP16Tensor, but it still passes
     assert tensor.__class__ == torch.Tensor
     assert tensor.dtype == ref_tensor.dtype

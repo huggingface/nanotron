@@ -60,13 +60,18 @@ class FP8Linear(nn.Linear):
         # self.metadatas = FP8LinearMeta()
         # self.recipe = recipe
 
-    def _set_and_quantize_weights(self, data: Optional[torch.Tensor], recipe: FP8LinearRecipe = FP8LM_LINEAR_RECIPE):
+    def _set_and_quantize_weights(self, data: torch.Tensor, recipe: FP8LinearRecipe = FP8LM_LINEAR_RECIPE):
         """
         data: if set to None, then we quantize the module's current weights, otherwise, we quantize
         the provided tensor
         """
+        assert data is None or isinstance(data, torch.Tensor)
         # quant_w = FP8Parameter(self.weight.data, dtype=recipe.weight.dtype, interval=recipe.weight.interval)
         quant_w = FP8Tensor(data, dtype=recipe.weight.dtype, interval=recipe.weight.interval)
+        # try:
+        #     quant_w = FP8Tensor(data, dtype=recipe.weight.dtype, interval=recipe.weight.interval)
+        # except Exception as e:
+        #     assert 1 == 1
 
         # assert quant_w.dtype in [torch.uint8, torch.int8], f"got {self.weight.data.dtype}"
         # self.weight = quant_w

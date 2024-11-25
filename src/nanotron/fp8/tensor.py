@@ -8,7 +8,7 @@ import torch
 import transformer_engine as te  # noqa
 import transformer_engine_torch as tex
 
-from nanotron import constants, logging
+from nanotron import logging
 from nanotron.fp8.constants import DTYPE_TO_FP8_MAX, FP8_DTYPES, INITIAL_SCALING_FACTOR
 from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.meta import FP8Meta
@@ -73,8 +73,8 @@ class LowPrecisionTensor(torch.Tensor):
         obj = torch.Tensor._make_subclass(cls, fp8_tensor)
         # TODO(xrsrke): use a different name, because FP16Tensor also has fp8_meta
         obj.fp8_meta = backup_fp8_meta
-        if constants.ITERATION_STEP == 1:
-            obj.orig_data = tensor
+        # if constants.ITERATION_STEP == 1:
+        #     obj.orig_data = tensor
 
         return obj
 
@@ -158,8 +158,8 @@ class LowPrecisionTensor(torch.Tensor):
         self.data = quantized_data.data
         self._orig_data_after_set_data = data
 
-        if constants.ITERATION_STEP == 1:
-            self.orig_data = quantized_data.orig_data
+        # if constants.ITERATION_STEP == 1:
+        #     self.orig_data = quantized_data.orig_data
 
         self.fp8_meta.add_amax(quantized_data.fp8_meta.amax)
 
