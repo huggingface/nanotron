@@ -60,6 +60,9 @@ s3 = [
     "s5cmd",
 ]
 
+lighteval = [
+    "lighteval[nanotron]@git+https://github.com/huggingface/lighteval.git",
+]
 [build-system]
 requires = [
     "setuptools",
