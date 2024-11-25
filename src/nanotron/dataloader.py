@@ -295,46 +295,43 @@ def clm_process(
     # Adapted from https://github.com/huggingface/transformers/blob/47e1676255e5dd86b9541f734cd4f4bdcbb50f4a/examples/pytorch/language-modeling/run_clm.py#L391-L439
 
     def group_texts(examples: Dict[str, List[np.ndarray]]) -> Dict[str, List[np.ndarray]]:
-        # Concatenate all texts.
-        #logger.info(f"len before group = {len(examples['input_ids'])}")
-        concatenated_examples = {k: np.concatenate(v) for k, v in examples.items()}
-        total_length = len(concatenated_examples[next(iter(examples.keys()))])
-        #logger.info(f"got total_length (which for one key is equal to input_id length) = {total_length} with keys = {examples.keys()} and seqlen = {sequence_length}")
+        total_length = len(examples["input_ids"])
         # WARNING: We drop the small remainder, we could add padding if the model supported it instead of this drop, you can
         # customize this part to your needs.
         if total_length >= sequence_length + 1:
             total_length = ((total_length - 1) // sequence_length) * sequence_length + 1
-            #logger.info(f"adjusted total_length = {total_length}")
      
         # Split by chunks of sequence_length.
-        result = {
-            k: [
-                t[i : i + sequence_length + 1] for i in range(0, total_length - (sequence_length + 1), sequence_length)
-            ]
-            for k, t in concatenated_examples.items()
-        }
-
-        #firstk = result[list(result.keys())[0]]
-        #tmp = [len(t) for t in firstk]
-        #logger.info(f"after split length: {len(firstk)}")
-        #logger.info(str(tmp))
-        #logger.info(str(firstk))
-
+        result = {}
+        for k in examples:
+            arr = examples[k][:total_length]
+            # Reshape into sequences
+            arr = arr.reshape(-1, sequence_length + 1)
+            # Convert arrays back to lists
+            result[k] = arr.tolist()
         return result
 
-    def _tokenize_and_group_texts(texts: List[str]) -> Dict[str, List[np.ndarray]]:
-        #logger.info(f"len(texts) = {len(texts)}")
+    def _tokenize_and_group_texts(texts: List[str], keys: List[int] = None) -> Dict[str, List[np.ndarray]]:
+        if keys is None:
+            keys = [0] * len(texts)
+
         tokenized_batch = tokenizer.batch_encode_plus(texts, return_attention_mask=False, return_token_type_ids=False)
-        #logger.info(f"tokenized batch 1 keys = {tokenized_batch.keys()}")
-        #oneitem = tokenized_batch[list(tokenized_batch.keys())[0]][0] 
-        #logger.info(f"tokenized batch 1 example item type = {type(oneitem)}")
-        #logger.info(f"tokenized batch 1 example item = {oneitem}")
-        tokenized_batch = {k: [np.array(tokenized_texts) for tokenized_texts in v] for k, v in tokenized_batch.items()}
-        #logger.info(f"tokenized batch 2 keys = {tokenized_batch.keys()}")
-        #oneitem = tokenized_batch[list(tokenized_batch.keys())[0]][0] 
-        #logger.info(f"tokenized batch 2 example item type = {type(oneitem)}")
-        #logger.info(f"tokenized batch 2 example item = {oneitem}")
-        return group_texts(tokenized_batch)
+        # At this point, tokenized_batch is a dictionary with keys like 'input_ids', 'attention_mask' etc.
+        # tokenized_batch['input_ids'] is a list of lists, where each inner list contains token IDs for one input text.
+        input_ids_list = tokenized_batch['input_ids']
+        input_ids_array = np.concatenate([np.array(ids) for ids in input_ids_list])
+        # Similarly, create domain_ids_array using vectorized operations
+        lengths = np.array([len(ids) for ids in input_ids_list])
+        keys_array = np.array(keys)
+        domain_ids_array = np.repeat(keys_array, lengths)
+
+        examples = {
+            "input_ids": input_ids_array,
+            "key_ids": domain_ids_array,
+        }
+        grouped = group_texts(examples)
+        return grouped
+
 
     # some args not supported by the IterableDataset
     additional_args = {"num_proc": dataset_processing_num_proc_per_process, "load_from_cache_file": not dataset_overwrite_cache, "desc": f"Grouping texts in chunks of {sequence_length+1}"} if not isinstance(raw_dataset, IterableDataset) else {}
@@ -355,12 +352,22 @@ def clm_process(
         # Hence, for the streaming case you probably want to lower this
         additional_args["batch_size"] = batch_size
 
-    logger.info(f"raw_dataset columns = {raw_dataset.column_names}")
+    input_columns = [text_column_name]
+    def mapping_function(texts):
+        return _tokenize_and_group_texts(texts)
+    
+    if "key_id" in raw_dataset.column_names:
+        # Provided by e.g. Mixtera.
+        input_columns = [text_column_name, 'key_id']
+        def mapping_function(texts, keys):
+            return _tokenize_and_group_texts(texts, keys)
+
     train_dataset = raw_dataset.map(
-        _tokenize_and_group_texts,
-        input_columns=text_column_name,
+        mapping_function,
+        input_columns=input_columns,
         remove_columns=raw_dataset.column_names,
-        features=Features({"input_ids": Sequence(feature=Value(dtype="int64"), length=sequence_length + 1)}),
+        features=Features({"input_ids": Sequence(feature=Value(dtype="int64"), length=sequence_length + 1),
+                           "key_ids": Sequence(feature=Value(dtype="int64"), length=sequence_length + 1)}),
         batched=True,
         **additional_args
     )
@@ -397,14 +404,18 @@ class DataCollatorForCLM:
                 "input_mask": TensorPointer(group_rank=self.input_pp_rank),
                 "label_ids": TensorPointer(group_rank=self.output_pp_rank),
                 "label_mask": TensorPointer(group_rank=self.output_pp_rank),
+                "key_ids": TensorPointer(group_rank=self.output_pp_rank)
             }
 
         # Make sure we load only what's necessary, ie we only load a `input_ids` column.
-        assert all(list(example.keys()) == ["input_ids"] for example in examples)
+        assert all(list(example.keys()) == ["input_ids", "key_ids"] for example in examples)
 
         # TODO @nouamanetazi: Is it better to have examples as np.array or torch.Tensor?
         input_ids = np.vstack([examples[i]["input_ids"] for i in range(len(examples))])  # (b, s)
+        key_ids = np.vstack([example["key_ids"] for example in examples])
         batch_size, expanded_input_length = input_ids.shape
+
+        assert input_ids.shape == key_ids.shape, f"input_ids.shape = {input_ids.shape} != key_ids.shape = {key_ids.shape}"
 
         result: Dict[str, Union[np.ndarray, TensorPointer]] = {}
 
@@ -412,6 +423,7 @@ class DataCollatorForCLM:
         result["input_mask"] = TensorPointer(group_rank=self.input_pp_rank)
         result["label_ids"] = TensorPointer(group_rank=self.output_pp_rank)
         result["label_mask"] = TensorPointer(group_rank=self.output_pp_rank)
+        result["key_ids"] = TensorPointer(group_rank=self.output_pp_rank)
 
         assert (
             expanded_input_length == self.sequence_length + 1
@@ -422,10 +434,11 @@ class DataCollatorForCLM:
             result["input_ids"] = input_ids[:, :-1]
             result["input_mask"] = np.ones((batch_size, self.sequence_length), dtype=np.bool_)
 
-        # Process labels: shift them to the left
+        # Process labels and domains: shift them to the left
         if current_pp_rank == self.output_pp_rank:
             result["label_ids"] = input_ids[:, 1:]
             result["label_mask"] = np.ones((batch_size, self.sequence_length), dtype=np.bool_)
+            result["key_ids"] = key_ids[:, 1:]
 
         if isinstance(result["input_ids"], torch.Tensor) and result["input_ids"].shape[-1] != self.sequence_length:
             raise ValueError(
@@ -437,7 +450,11 @@ class DataCollatorForCLM:
                 f"`labels` are incorrectly preprocessed. `labels` length is {result['label_ids'].shape[-1]}, but should be"
                 f" {self.sequence_length}."
             )
-
+        if isinstance(result["key_ids"], torch.Tensor) and result["key_ids"].shape[-1] != self.sequence_length:
+            raise ValueError(
+                f"`keys` are incorrectly preprocessed. `keys` length is {result['key_ids'].shape[-1]}, but should be"
+                f" {self.sequence_length}."
+            )
         # Cast np.array to torch.Tensor
         result = {k: v if isinstance(v, TensorPointer) else torch.from_numpy(v) for k, v in result.items()}
         return result
@@ -512,7 +529,7 @@ def get_train_dataloader(
     ]:
         if isinstance(train_dataset, datasets.Dataset):
             train_dataset = train_dataset.with_format(
-                type="numpy", columns=["input_ids"], output_all_columns=True
+                type="numpy", columns=["input_ids", "key_ids"], output_all_columns=True
             )
         else:
            train_dataset = train_dataset.with_format(type="torch")
@@ -520,15 +537,15 @@ def get_train_dataloader(
     # Case of ranks not requiring data. We give them an infinite dummy dataloader
     else:
         #
-        assert train_dataset.column_names == ["input_ids"], (
-            f"Dataset has to have a single column, with `input_ids` as the column name. "
+        assert train_dataset.column_names == ["input_ids", "key_ids"], (
+            f"Dataset has to have 2 columns, with `input_ids` and `key_ids` as the column name. "
             f"Current dataset: {train_dataset}"
         )
         dataset_length = len(train_dataset)
-        train_dataset = train_dataset.remove_columns(column_names="input_ids")
+        train_dataset = train_dataset.remove_columns(column_names=["input_ids", "key_ids"])
         assert (
             len(train_dataset) == 0
-        ), f"Dataset has to be empty after removing the `input_ids` column. Current dataset: {train_dataset}"
+        ), f"Dataset has to be empty after removing the `input_ids` and `key_ids` column. Current dataset: {train_dataset}"
         # HACK as if we remove the last column of a train_dataset, it becomes empty and it's number of rows becomes empty.
         train_dataset = EmptyInfiniteDataset(length=dataset_length)
         # No need to spawn a lot of workers, we can just use main
