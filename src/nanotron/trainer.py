@@ -470,7 +470,7 @@ class DistributedTrainer:
         dist.barrier()  # let's wait for everyone before leaving
 
         if self.config.checkpoints.save_final_state:
-            self.save_checkpoint()
+            self.save_checkpoint(final=True)
 
         self.post_training()
 
@@ -897,7 +897,7 @@ class DistributedTrainer:
         if self.s3_mover is not None:
             self.s3_mover.start_uploading()
 
-    def save_checkpoint(self) -> Path:
+    def save_checkpoint(self, final: bool = False) -> Path:
         self.pre_save_checkpoint()
 
         checkpoints_path = self.config.checkpoints.checkpoints_path
@@ -947,7 +947,8 @@ class DistributedTrainer:
             with open(checkpoint_path / MODEL_CONFIG_FILE_NAME, mode="w") as fo:
                 fo.write(json.dumps(asdict(self.model_config)))
 
-        handle_mixtera_checkpoint(self.current_dataloader, checkpoint_path, self.parallel_context.dp_pg.rank(), self.parallel_context.mp_pg.rank(), False)
+        if not final:
+            handle_mixtera_checkpoint(self.current_dataloader, checkpoint_path, self.parallel_context.dp_pg.rank(), self.parallel_context.mp_pg.rank(), False)
 
         self.post_save_checkpoint()
 
