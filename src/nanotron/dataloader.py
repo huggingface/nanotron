@@ -302,13 +302,12 @@ def clm_process(
             total_length = ((total_length - 1) // sequence_length) * sequence_length + 1
      
         # Split by chunks of sequence_length.
-        result = {}
-        for k in examples:
-            arr = examples[k][:total_length]
-            # Reshape into sequences
-            arr = arr.reshape(-1, sequence_length + 1)
-            # Convert arrays back to lists
-            result[k] = arr.tolist()
+        result = {
+            k: [
+                t[i : i + sequence_length + 1] for i in range(0, total_length - (sequence_length + 1), sequence_length)
+            ]
+            for k, t in examples.items()
+        }
         return result
 
     def _tokenize_and_group_texts(texts: List[str], keys: List[int] = None) -> Dict[str, List[np.ndarray]]:
