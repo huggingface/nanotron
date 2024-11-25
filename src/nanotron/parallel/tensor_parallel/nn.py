@@ -16,6 +16,7 @@ from typing import Optional, Tuple
 
 import torch
 from torch import nn
+import torch.nn.functional as F
 
 from nanotron import distributed as dist
 from nanotron.distributed import get_global_rank
@@ -300,3 +301,227 @@ class TensorParallelEmbedding(nn.Embedding):
 
     def extra_repr(self) -> str:
         return f"tp_rank={dist.get_rank(self.pg)}, {super().extra_repr()}, unsharded_num_embeddings={self.original_num_embeddings}"
+
+
+
+def activation_quant(x):
+    """Per−token quantization to 8 bits. No grouping is needed for quantization.
+    Args:
+    x: an activation tensor with shape [n, d]
+    Returns:
+    y: a quantized activation tensor with shape [n, d]
+    """
+    scale = 127.0 / x.abs().max(dim=-1, keepdim=True).values.clamp_(min=1e-5)
+    y = (x * scale).round().clamp_(-128, 127) / scale
+    return y
+
+def activation_quant_inference(x):
+    """Per−token quantization to 8 bits. No grouping is needed for quantization.
+    Args:
+    x: an activation tensor with shape [n, d]
+    Returns:
+    y: a quantized activation tensor with shape [n, d]
+    """
+    scale = 127.0 / x.abs().max(dim=-1, keepdim=True).values.clamp_(min=1e-5)
+    y = (x * scale).round().clamp_(-128, 127)
+    return y, scale
+
+def weight_quant(w):
+    """Per−tensor quantization to 1.58 bits.
+    Args:
+    w: a weight tensor with shape [d, k]
+    Returns:
+    u: a quantized weight with shape [d, k]
+    """
+    scale = 1.0 / w.abs().mean().clamp_(min=1e-5)
+    u = (w * scale).round().clamp_(-1, 1) / scale
+    return u
+    
+def normalize_last_two_dimensions(tensor, eps=1e-6):
+    mean = tensor.mean(dim=(-2, -1), keepdim=True)
+    std = tensor.std(dim=(-2, -1), keepdim=True)
+    normalized_tensor = (tensor - mean) / (std + eps)
+    
+    return normalized_tensor
+
+def normalize(x, dim, eps=1e-5) : 
+    scale = dim ** (-0.5)
+    #return F.normalize(x, dim=-1) * scale
+    norm_x = x.norm(2, dim=-1, keepdim=True)
+    rms_x = norm_x * scale
+    x_normed = x / (rms_x + eps)
+    return x_normed
+
+class TensorParallelColumnLinearBitNet(nn.Linear):
+    def __init__(
+        self,
+        in_features,
+        out_features,
+        pg: dist.ProcessGroup,
+        mode: TensorParallelLinearMode,
+        bias=True,
+        device=None,
+        dtype=None,
+        async_communication: bool = False,
+        contiguous_chunks: Optional[Tuple[int, ...]] = None,
+    ):
+        self.pg = pg
+        self.world_size = pg.size()
+
+        assert out_features % self.world_size == 0
+
+        self.in_features = in_features
+        self.out_features = out_features // self.world_size
+
+        super().__init__(
+            in_features=self.in_features,
+            out_features=self.out_features,
+            bias=bias,
+            device=device,
+            dtype=dtype,
+        )
+
+        self.mode = mode
+        self.async_communication = async_communication
+        self.device = device
+        if contiguous_chunks is not None:
+            assert (
+                sum(contiguous_chunks) == out_features
+            ), f"Sum of contiguous chunks ({sum(contiguous_chunks)}) must equal to out_features ({out_features})"
+        split_config = SplitConfig(split_dim=0, contiguous_chunks=contiguous_chunks)
+
+        
+        self.register_parameter('weight_scale', None)
+        # self.is_model_inference = False
+        mark_all_parameters_in_module_as_sharded(
+            self,
+            pg=self.pg,
+            split_config=split_config,
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if not self.training : 
+            w = self.weight  # a weight tensor with shape [d, k]
+            w = w.to(torch.bfloat16)
+            w_scale = getattr(self, "weight_scale").data
+            x_norm = normalize(x, self.in_features)
+            x_quant, x_scale = activation_quant_inference(x_norm)
+            return column_linear(
+                input=x_quant,
+                weight=w,
+                bias=self.bias,
+                group=self.pg,
+                tp_mode=self.mode,
+                async_communication=self.async_communication,
+            ) / w_scale / x_scale
+        else : 
+            w = self.weight
+            x_norm = normalize(x, self.in_features)
+            x_quant = x_norm + (activation_quant(x_norm) - x_norm).detach()
+            w_quant = w + (weight_quant(w) - w).detach()
+
+            return column_linear(
+                input=x_quant,
+                weight=w_quant,
+                bias=self.bias,
+                group=self.pg,
+                tp_mode=self.mode,
+                async_communication=self.async_communication,
+            )
+
+    def extra_repr(self) -> str:
+        return f"tp_rank={dist.get_rank(self.pg)}, {super().extra_repr()}, unsharded_out_features={self.out_features * self.world_size}"
+
+
+class TensorParallelRowLinearBitNet(nn.Linear):
+    def __init__(
+        self,
+        in_features,
+        out_features,
+        pg: dist.ProcessGroup,
+        mode: TensorParallelLinearMode,
+        bias=True,
+        device=None,
+        dtype=None,
+        async_communication: bool = False,
+        contiguous_chunks: Optional[Tuple[int, ...]] = None,
+    ):
+        self.pg = pg
+        self.world_size = pg.size()
+
+        assert in_features % self.world_size == 0
+
+        self.in_features = in_features // self.world_size
+        self.out_features = out_features
+
+        # No need to shard the bias term, only rank 0 would have it
+        bias = dist.get_rank(self.pg) == 0 and bias
+
+        super().__init__(
+            in_features=self.in_features,
+            out_features=self.out_features,
+            bias=bias,
+            device=device,
+            dtype=dtype,
+        )
+        self.mode = mode
+        self.async_communication = async_communication
+        if self.mode is TensorParallelLinearMode.ALL_REDUCE and self.async_communication:
+            raise ValueError("async_communication is not supported for ALL_REDUCE mode")
+
+        if contiguous_chunks is not None:
+            assert (
+                sum(contiguous_chunks) == in_features
+            ), f"Sum of contiguous chunks ({sum(contiguous_chunks)}) must equal to in_features ({in_features})"
+
+        split_config = SplitConfig(split_dim=1, contiguous_chunks=contiguous_chunks)
+
+        self.register_parameter('weight_scale', None)
+        # self.is_model_inference = False
+        self._mark_all_parameters_in_module_as_sharded(split_config)
+
+    def _mark_all_parameters_in_module_as_sharded(self, split_config: SplitConfig):
+        for name, param in list(self.named_parameters()):
+            if name == "bias":
+                # `bias` only exists in rank 0 because it's not sharded
+                new_param = NanotronParameter(tensor=param)
+            else:
+                new_param = create_sharded_parameter_from_config(
+                    parameter=param,
+                    pg=self.pg,
+                    split_config=split_config,
+                )
+            setattr(self, name, new_param)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if not self.training : 
+            w = self.weight  # a weight tensor with shape [d, k]
+            w = w.to(torch.bfloat16)
+            w_scale = getattr(self, "weight_scale").data
+            x_norm = normalize(x, self.in_features)
+            x_quant, x_scale = activation_quant_inference(x_norm)
+            # print("x_quant from row_linear: ",x_quant.shape)
+            return row_linear(
+                input=x_quant,
+                weight=w,
+                bias=self.bias,
+                group=self.pg,
+                tp_mode=self.mode,
+                async_communication=self.async_communication,
+            ) / w_scale / x_scale
+        else : 
+            w = self.weight
+            x_norm = normalize(x, self.in_features)
+            x_quant = x_norm + (activation_quant(x_norm) - x_norm).detach()
+            w_quant = w + (weight_quant(w) - w).detach()
+            return row_linear(
+                input=x_quant,
+                weight=w_quant,
+                bias=self.bias,
+                group=self.pg,
+                tp_mode=self.mode,
+                async_communication=self.async_communication,
+            )
+
+    def extra_repr(self) -> str:
+        return f"tp_rank={dist.get_rank(self.pg)}, {super().extra_repr()}, unsharded_in_features={self.in_features * self.world_size}"
