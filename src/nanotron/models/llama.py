@@ -14,6 +14,7 @@
 # limitations under the License.
 """PyTorch LLaMa model."""
 
+from collections import defaultdict
 from typing import Dict, List, Optional, Union
 
 import torch
@@ -958,12 +959,15 @@ class Loss(nn.Module):
     def __init__(self, tp_pg: dist.ProcessGroup):
         super().__init__()
         self.tp_pg = tp_pg
+        self.losses_per_domain = defaultdict(float)
+        self.counts_per_domain = defaultdict(int)
 
     def forward(
         self,
         sharded_logits: torch.Tensor,  # [seq_length, batch_size, logits]
         label_ids: torch.Tensor,  # [batch_size, seq_length]
         label_mask: torch.Tensor,  # [batch_size, seq_length]
+        domain_ids: Optional[torch.Tensor] = None
     ) -> Dict[str, torch.Tensor]:
         # Megatron by defaults cast everything in fp32. `--f16-lm-cross-entropy` is an option you can use to keep current precision.
         # https://github.com/NVIDIA/Megatron-LM/blob/f267e6186eae1d6e2055b412b00e2e545a8e896a/megatron/model/gpt_model.py#L38
@@ -973,9 +977,48 @@ class Loss(nn.Module):
         ).transpose(0, 1)
         # TODO @thomasw21: It's unclear what kind of normalization we want to do.
         loss = masked_mean(loss, label_mask, dtype=torch.float)
+
+        # TODO(MaxiBoether): How about tensor parallelism here? Do we need to do sth about it?
+
+        # BEGIN CHANGES FOR PER-KEY LOSS
+        if domain_ids is not None:
+            per_token_loss = loss * label_mask
+            # Flatten tensors
+            per_token_loss_flat = per_token_loss.view(-1)  # [(batch_size * seq_length)]
+            domain_ids_flat = domain_ids.view(-1)
+            label_mask_flat = label_mask.view(-1)
+
+            # Only consider valid positions (where label_mask is 1)
+            valid_positions = label_mask_flat.bool()
+            per_token_loss_flat = per_token_loss_flat[valid_positions]
+            domain_ids_flat = domain_ids_flat[valid_positions]
+
+            # Gather unique domain_ids
+            unique_domain_ids = domain_ids_flat.unique()
+
+            # Compute per-domain losses and counts
+            for domain_id in unique_domain_ids:
+                domain_mask = domain_ids_flat == domain_id
+                domain_loss = per_token_loss_flat[domain_mask].sum()
+                domain_count = domain_mask.sum()
+                self.losses_per_domain[domain_id.item()] += domain_loss.item()
+                self.counts_per_domain[domain_id.item()] += domain_count.item()
+        # END CHANGES FOR PER-KEY LOSS
+
         # I think indexing causes a sync we don't actually want
         # loss = loss[label_mask].sum()
         return {"loss": loss}
+    
+    def get_per_domain_stats(self):
+        # Return copies to avoid mutation
+        return (
+            self.losses_per_domain.copy(),
+            self.counts_per_domain.copy(),
+        )
+
+    def reset_per_domain_stats(self):
+        self.losses_per_domain.clear()
+        self.counts_per_domain.clear()
 
 
 class LlamaForTraining(NanotronModel):
@@ -996,6 +1039,7 @@ class LlamaForTraining(NanotronModel):
                 "sharded_logits",
                 "label_ids",
                 "label_mask",
+                "key_ids"
             },
             module_output_keys={"loss"},
         )
@@ -1009,7 +1053,10 @@ class LlamaForTraining(NanotronModel):
         input_mask: Union[torch.Tensor, TensorPointer],
         label_ids: Union[torch.Tensor, TensorPointer],
         label_mask: Union[torch.Tensor, TensorPointer],
+        **kwargs
     ) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
+        key_ids = kwargs.get("key_ids", None)
+
         sharded_logits = self.model(
             input_ids=input_ids,
             input_mask=input_mask,
@@ -1018,6 +1065,7 @@ class LlamaForTraining(NanotronModel):
             sharded_logits=sharded_logits,
             label_ids=label_ids,
             label_mask=label_mask,
+            key_ids=key_ids
         )["loss"]
         return {"loss": loss}
 

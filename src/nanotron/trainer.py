@@ -576,6 +576,31 @@ class DistributedTrainer:
             loss_avg = None
             handle = None
 
+        # TODO (MaxiBoether): In which group should we perform all reduce here?!
+        # Collect per-domain statistics from the Loss module
+        losses_per_domain, counts_per_domain = self.unwrapped_model.loss.get_per_domain_stats()
+        # Reset per-domain statistics in the Loss module
+        self.unwrapped_model.loss.reset_per_domain_stats()
+        domain_ids = list(losses_per_domain.keys())
+        local_max_domain_id = max(domain_ids) if domain_ids else -1
+        local_max_id_tensor = torch.tensor([local_max_domain_id], device='cuda')
+        global_max_id_tensor = local_max_id_tensor.clone()
+        dist.all_reduce(global_max_id_tensor, op=dist.ReduceOp.MAX, group=self.parallel_context.world_pg)
+        max_domain_id = global_max_id_tensor.item()
+
+        if max_domain_id >= 0:
+            losses_tensor = torch.zeros(max_domain_id + 1, device='cuda')
+            counts_tensor = torch.zeros(max_domain_id + 1, device='cuda')
+
+            for domain_id in domain_ids:
+                losses_tensor[domain_id] = losses_per_domain[domain_id]
+                counts_tensor[domain_id] = counts_per_domain[domain_id]
+
+            dist.all_reduce(losses_tensor, op=dist.ReduceOp.SUM, group=self.parallel_context.world_pg)
+            dist.all_reduce(counts_tensor, op=dist.ReduceOp.SUM, group=self.parallel_context.world_pg)
+
+            log_rank(f"losses_tensor = {losses_tensor}\ncounts_tensor = {counts_tensor}", logger=logger, level=logging.WARNING, group=self.parallel_context.world_pg, rank=0)
+
         # Apply gradient
         self.optimizer.step()
         self.optimizer.zero_grad()
