@@ -447,7 +447,10 @@ class DistributedTrainer:
                 self._update_dataloader_based_on_training_stages(dataloader_or_dls)
 
                 # Training step
-                outputs, loss_avg = self.training_step(dataloader=self.current_dataloader)
+                outputs, loss_avg, done_training = self.training_step(dataloader=self.current_dataloader)
+                if done_training: # If any process has run out of data, exit the loop gracefully
+                    log_rank("Exiting training since some process has run out of data.", logger=logger, level=logging.WARNING, rank=0)
+                    break
 
                 # Training Logs
                 # TODO(xrsrke): refactor using callbacks would be better
@@ -473,7 +476,7 @@ class DistributedTrainer:
 
     def training_step(
         self, dataloader: Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]]
-    ) -> Tuple[Iterable[Dict], Optional[torch.Tensor]]:
+    ) -> Tuple[Iterable[Dict], Optional[torch.Tensor], bool]:
         before_tbi_sanity_checks(
             self.config, self.parallel_context, self.unwrapped_model, self.grad_accumulator, self.lr_scheduler
         )
@@ -481,10 +484,32 @@ class DistributedTrainer:
         if self.iteration_step < 5:
             log_memory(logger=logger)
 
+        batches = []
+        has_data = 1 # Flag indicating if the current process has data
+        for _ in range(self.n_micro_batches_per_batch):
+            try:
+                batch = next(dataloader)
+                batches.append(batch)
+            except StopIteration:
+                log_rank("Process has run out of data!", logger=logger, level=logging.WARNING)
+                has_data = 0
+                break
+        
+        # Communicate across all processes to check if any process has run out of data
+        has_data_tensor = torch.tensor([has_data], dtype=torch.int32, device='cuda')
+        dist.all_reduce(has_data_tensor, op=dist.ReduceOp.MIN, group=self.parallel_context.world_pg)
+        if has_data_tensor.item() == 0: # If any process has no data, return
+            done_training = True
+            outputs = None
+            loss_avg = None
+            return outputs, loss_avg, done_training
+        else:
+            done_training = False
+
         outputs = self.pipeline_engine.train_batch_iter(
             model=self.model,
             pg=self.parallel_context.pp_pg,
-            batch=(next(dataloader) for _ in range(self.n_micro_batches_per_batch)),
+            batch=iter(batches),
             nb_microbatches=self.n_micro_batches_per_batch,
             grad_accumulator=self.grad_accumulator,
         )
@@ -565,7 +590,7 @@ class DistributedTrainer:
 
         self.post_train_step()
 
-        return outputs, loss_avg
+        return outputs, loss_avg, done_training
 
     def validation_step(self, dataloader: Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]]) -> Iterable[Dict]:
         outputs = self.pipeline_engine.validate_batch_iter(
