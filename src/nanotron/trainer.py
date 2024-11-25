@@ -577,8 +577,9 @@ class DistributedTrainer:
             handle = None
 
         # TODO (MaxiBoether): In which group should we perform all reduce here?! The loss only lives on the output stages of the pipeline, and we might use tensor parallelism.
-        losses_per_domain, counts_per_domain = self.unwrapped_model.pp_block.loss.get_per_domain_stats()
-        self.unwrapped_model.loss.reset_per_domain_stats()
+        # It seems super fishy to access loss.pp_block and not sure whether this works with 3D parallelism.
+        losses_per_domain, counts_per_domain = self.unwrapped_model.loss.pp_block.get_per_domain_stats()
+        self.unwrapped_model.loss.pp_block.reset_per_domain_stats()
         domain_ids = list(losses_per_domain.keys())
         local_max_domain_id = max(domain_ids) if domain_ids else -1
         local_max_id_tensor = torch.tensor([local_max_domain_id], device='cuda')
