@@ -206,6 +206,7 @@ class DistributedTrainer:
         if self.init_checkpoint_path is not None:
             load_lr_scheduler(
                 lr_scheduler=self.lr_scheduler,
+                is_zero=self.config.optimizer.zero_stage,
                 parallel_context=self.parallel_context,
                 root_folder=self.init_checkpoint_path,
             )
@@ -864,11 +865,7 @@ class DistributedTrainer:
                 dist.get_rank(self.parallel_context.dp_pg) == 0
             ),  # We only save the weights on DP==0
             should_save_optimizer=True,
-            should_save_lr_scheduler=bool(
-                dist.get_rank(self.parallel_context.dp_pg) == 0
-                and dist.get_rank(self.parallel_context.tp_pg) == 0
-                and dist.get_rank(self.parallel_context.expert_pg) == 0
-            ),  # We only save the lr_scheduler on DP==0 && TP==0 && EP==0
+            should_save_lr_scheduler=True,
             should_save_config=bool(
                 dist.get_rank(self.parallel_context.world_pg) == 0
             ),  # We only save the config on world_rank==0
