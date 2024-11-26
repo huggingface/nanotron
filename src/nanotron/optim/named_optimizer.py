@@ -1,4 +1,4 @@
-from typing import Any, Callable, Dict, Iterable, Tuple, Union
+from typing import Any, Callable, Dict, Iterable, Optional, Tuple, Union
 
 import torch
 
@@ -45,7 +45,6 @@ class NamedOptimizer(InheritFromOtherOptimizer):
             for param in _params:
                 # https://github.com/pytorch/pytorch/issues/100701
                 assert param.numel() > 0
-
         super().__init__(optimizer=optimizer_builder(params), id_to_name=id_to_name)
 
     def state_dict(self) -> dict:
@@ -59,10 +58,19 @@ class NamedOptimizer(InheritFromOtherOptimizer):
         }
         return optim_state_dict
 
-    def load_state_dict(self, state_dict: dict) -> None:
-        # TODO @thomasw21: Make a more robust test
+    def load_state_dict(self, state_dict: dict, map_location: Optional[Union[str, torch.device]] = None) -> None:
         assert set(self.id_to_name.values()) == set(
             state_dict["names"].values()
         ), f"Elements don't match:\n - Elements in `self.id_to_name` that aren't in the other one: {set(self.id_to_name.values()) - set(state_dict['names'].values())}\n - Elements in `state_dict[\"names\"]` that aren't in the other one: {set(state_dict['names'].values()) - set(self.id_to_name.values())}"
+        assert len(state_dict["state"]) == len(
+            state_dict["names"]
+        ), f"Number of params in loaded state dict ({len(state_dict['state'])}) doesn't match number of names ({len(state_dict['names'])})"
+        assert len(state_dict["state"]) > 0, "Loading empty state dict"
+        OPTIMIZER_STATE_KEYS = sorted(state_dict["state"][0].keys() - {"step"})
+        for key in OPTIMIZER_STATE_KEYS:
+            for k, state in state_dict["state"].items():
+                assert (
+                    key in state
+                ), f"Key {key} not found in state dict: {state} which corresponds to param_name: {state_dict['names'][k]}"
 
-        return super().load_state_dict(state_dict)
+        return super().load_state_dict(state_dict, map_location=map_location)
