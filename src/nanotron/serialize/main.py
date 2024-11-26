@@ -236,7 +236,7 @@ def load(
     load_optimizer(optimizer=optimizer, parallel_context=parallel_context, root_folder=root_folder)
     load_lr_scheduler(
         lr_scheduler=lr_scheduler,
-        is_zero=not optimizer.inherit_from(optim.ZeroDistributedOptimizer),
+        is_zero=optimizer.inherit_from(optim.ZeroDistributedOptimizer),
         parallel_context=parallel_context,
         root_folder=root_folder,
     )
