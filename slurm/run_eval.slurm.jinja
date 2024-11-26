@@ -1,0 +1,95 @@
+#!/bin/bash
+#SBATCH --job-name={{ job_name }}
+#SBATCH --nodes={{ nodes }}
+#SBATCH --ntasks-per-node={{ n_tasks_per_node }}
+#SBATCH --gres=gpu:{{ gpus_per_node }}
+{% if cpus_per_task %}
+#SBATCH --cpus-per-task={{ cpus_per_task }}
+{% endif %}
+#SBATCH --partition={{ partition }}
+#SBATCH --output={{ eval_path }}/%x-%n-%j.out
+#SBATCH --error={{ eval_path }}/%x-%n-%j.err
+{% if qos %}
+#SBATCH --qos={{ qos }}
+{% endif %}
+{% if mail_type %}
+#SBATCH --mail-type={{ mail_type }}
+{% endif %}
+{% if mail_user %}
+#SBATCH --mail-user={{ mail_user }}
+{% endif %}
+{% if exclude_nodes %}
+#SBATCH --exclude={{ exclude_nodes|join(',') }}
+{% endif %}
+{% if time %}
+#SBATCH --time={{ time }}
+{% endif %}
+{% if constraint %}
+#SBATCH --constraint={{ constraint }}
+{% endif %}
+{% if account %}
+#SBATCH --account={{ account }}
+{% endif %}
+{% if reservation %}
+#SBATCH --reservation={{ reservation }}
+{% endif %}
+
+set -e
+echo "START TIME: $(date)"
+#Show some environment variables
+echo python3 version = `python3 --version`
+echo "NCCL version: $(python -c "import torch;print(torch.cuda.nccl.version())")"
+echo "CUDA version: $(python -c "import torch;print(torch.version.cuda)")"
+
+# SLURM stuff
+export HOSTNAMES=`scontrol show hostnames "$SLURM_JOB_NODELIST"`
+export MASTER_ADDR=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)
+export MASTER_PORT=6000
+export COUNT_NODE=`scontrol show hostnames "$SLURM_JOB_NODELIST" | wc -l`
+
+# Hugging Face token
+if [ -z "$HUGGING_FACE_HUB_TOKEN" ]; then
+  # Attempt to read the token from the cache
+  if TOKEN=$(cat ~/.cache/huggingface/token 2>/dev/null); then
+    export HUGGING_FACE_HUB_TOKEN=$TOKEN
+  else
+    echo "Error: The environment variable HUGGING_FACE_HUB_TOKEN is not set and the token cache could not be read."
+    exit 1
+  fi
+fi
+
+export CUBLAS_WORKSPACE_CONFIG=":4096:8"
+export CUDA_DEVICE_MAX_CONNECTIONS="1"
+
+export HUGGINGFACE_HUB_CACHE={{ hf_cache }}
+export HF_DATASETS_CACHE={{ hf_cache }}
+export HF_MODULES_CACHE={{ hf_cache }}
+export HF_HOME={{ hf_cache }}
+
+echo go $COUNT_NODE
+echo $HOSTNAMES
+
+
+CMD="/fsx/elie_bakouch/nanotron/src/nanotron/lighteval/run_evals.py \
+    --checkpoint-config-path {{ model_checkpoint_path }}/config.yaml \
+    --lighteval-config-path {{ lighteval_config_path }} \
+    "
+
+export LAUNCHER="torchrun \
+    --nproc_per_node {{ gpus_per_node }} \
+    --nnodes $COUNT_NODE \
+    --node_rank $SLURM_PROCID \
+    --role $SLURMD_NODENAME: \
+    --max_restarts 0 \
+    --tee 3 \
+    "
+
+# Wait a random number between 0 and 1000 (milliseconds) to avoid too many concurrent requests to the hub
+random_milliseconds=$(( RANDOM % 1001 ))
+sleep_time=$(bc <<< "scale=3; $random_milliseconds / 1000")
+echo "Sleeping for $sleep_time seconds..."
+sleep $sleep_time
+
+launch_args="srun $SRUN_ARGS -u bash -c $LAUNCHER --node_rank $SLURM_PROCID --role $SLURMD_NODENAME: $CMD"
+
+srun $SRUN_ARGS -u bash -c "$LAUNCHER --node_rank $SLURM_PROCID --role $SLURMD_NODENAME: $CMD"

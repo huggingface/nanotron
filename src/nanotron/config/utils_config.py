@@ -4,6 +4,7 @@ from pathlib import Path
 
 import torch
 
+from datasets.download.streaming_download_manager import xPath
 from nanotron.generation.sampler import SamplerType
 from nanotron.parallel.pipeline_parallel.engine import (
     AllForwardAllBackwardPipelineEngine,
@@ -31,6 +32,8 @@ def serialize(data) -> dict:
         value = getattr(data, field.name)
         if hasattr(value, "__dataclass_fields__"):
             result[field.name] = serialize(value)
+        elif isinstance(value, xPath):
+            result[field.name] = str(value)
         elif isinstance(value, Path):
             result[field.name] = str(value)
         elif isinstance(value, PipelineEngine):

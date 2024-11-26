@@ -47,6 +47,7 @@ from nanotron.helpers import (
     log_throughput,
     lr_scheduler_builder,
 )
+from nanotron.lighteval import LightEvalRunner
 from nanotron.logging import (
     LoggerWriter,
     LogItem,
@@ -263,9 +264,9 @@ class DistributedTrainer:
         self.init_checkpoint_path = parse_ckpt_path(config=self.config, parallel_context=self.parallel_context)
 
     def post_init(self):
-        # S3 Mover and save initial state
-        if self.config.s3_upload is not None:
-            # NOTE: Only local rank 0 should upload
+        # S3 Mover and save initial state (only if we need to upload checkpoints on s3)
+        if self.config.s3_upload is not None and self.config.s3_upload.upload_s3_path is not None:
+            # Only local rank 0 should upload
             dummy = bool(int(os.environ.get("LOCAL_RANK", None)) != 0)
             self.s3_mover = S3Mover(
                 local_path=self.config.checkpoints.checkpoints_path,
@@ -278,6 +279,22 @@ class DistributedTrainer:
             )
         else:
             self.s3_mover = None
+        if dist.get_rank(self.parallel_context.world_pg) == 0:
+            # check if slurm is configured
+            # TODO @eliebak rewrite the logic by self.slurm + there can be s3upload AND checkpoint path local which is not support for now
+            if self.config.lighteval is not None and self.config.general.eval_slurm_config is not None:
+                self.lighteval_runner = LightEvalRunner(config=self.config, parallel_context=self.parallel_context)
+                if self.s3_mover is not None:
+                    self.s3_mover.post_upload_callback = self.lighteval_runner.eval_single_checkpoint
+                    self.post_checkpoint_callback = None
+                else:
+                    # Use the no_s3 version of the evaluation function
+                    # TODO: make it one function + make it automatic to switch to the right jinja template
+                    self.post_checkpoint_callback = self.lighteval_runner.eval_single_checkpoint_no_s3
+            else:
+                self.post_checkpoint_callback = None
+        else:
+            self.post_checkpoint_callback = None
 
     def pre_training(self, *args, **kwargs):
         self._print_training_plan()
@@ -291,16 +308,27 @@ class DistributedTrainer:
             rank=0,
         )
 
-        current_time = datetime.datetime.now().strftime("%d/%m/%Y_%H:%M:%S")
-        if dist.get_rank(self.parallel_context.world_pg) == self.logger_ranks[0] and wandb is not None:
+        if dist.get_rank(self.parallel_context.world_pg) == 0 and wandb is not None:
             wandb.init(
                 project=self.config.general.project,
-                name=f"{current_time}_{self.config.general.run}",
+                name=f"{self.config.general.run}_{self.config.general.timestamp_with_run}",
                 config={"nanotron_config": self.config.as_dict()},
             )
+            # Define tokens metric as x-axis for all metrics
+            wandb.define_metric("Tokens")
+            wandb.define_metric("*", step_metric="Tokens")
+
+            # Handle resuming from a previous run
+            initial_step = getattr(self.config.general, "step", 0)
+            if initial_step is None:
+                initial_step = 0
+
+            initial_tokens = initial_step * self.global_batch_size
+
+            # Log initial tokens to set the starting point
+            wandb.log({"Tokens": initial_tokens})
 
     def post_train_step(self):
-
         # Update our background upload/removal of checkpoints
         if self.s3_mover is not None:
             self.s3_mover.update()
@@ -608,7 +636,7 @@ class DistributedTrainer:
             lr = self.lr_scheduler.get_last_lr()[0]
 
             log_entries = [
-                # LogItem("consumed_samples", self.consumed_train_samples, "human_format"),  # , "12d"),
+                # LogItem("consumed_samples", self.metadata.consumed_train_samples, "human_format"),  # , "12d"),
                 LogItem(
                     "consumed_tokens",
                     self.metadata.consumed_train_samples * self.config.tokens.sequence_length,
@@ -652,6 +680,7 @@ class DistributedTrainer:
                     {
                         **{log_item.tag: log_item.scalar_value for log_item in log_entries},
                         "iteration_step": self.iteration_step,
+                        "Tokens": self.metadata.consumed_train_samples * self.config.tokens.sequence_length,
                     }
                 )
 
@@ -738,6 +767,7 @@ class DistributedTrainer:
                     root_folder=self.init_checkpoint_path,
                 )
             reloaded_from_checkpoint = True
+
         if not reloaded_from_checkpoint:
             log_rank("No checkpoint path provided.", logger=logger, level=logging.INFO, rank=0)
             if isinstance(self.config.model.init_method, ExistingCheckpointInit):
@@ -874,18 +904,27 @@ class DistributedTrainer:
             self.s3_mover.distributed_wait_for_completion(self.parallel_context.world_pg)
             if self.s3_mover.post_upload_callback_outputs is not None:
                 slurm_job_id, slurm_log = self.s3_mover.post_upload_callback_outputs
-                self.log_object({"job_id": slurm_job_id, "log": slurm_log}, "slurm_eval")
+                log_rank(
+                    f"launching eval job: job_id={slurm_job_id} log at {slurm_log} slurm_eval",
+                    logger=logger,
+                    level=logging.INFO,
+                    rank=0,
+                )
 
     def post_save_checkpoint(self):
         # Upload to S3
         if self.s3_mover is not None:
             self.s3_mover.start_uploading()
 
+        elif self.post_checkpoint_callback is not None:
+            # If we're not using S3, but we have a post-checkpoint callback for evals
+            checkpoint_path = Path(self.config.checkpoints.checkpoints_path) / f"{self.config.general.step}"
+            self.post_checkpoint_callback(checkpoint_path)
+
     def save_checkpoint(self) -> Path:
         self.pre_save_checkpoint()
-
         checkpoints_path = self.config.checkpoints.checkpoints_path
-        checkpoint_path = checkpoints_path / f"{self.iteration_step}"
+        checkpoint_path = Path(checkpoints_path) / f"{self.iteration_step}"
         if self.config.checkpoints.checkpoints_path_is_shared_file_system:
             should_mkdir = dist.get_rank(self.parallel_context.world_pg) == 0
         else:

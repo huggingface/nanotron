@@ -3,7 +3,6 @@ from pathlib import Path
 from typing import Optional, cast
 
 import torch
-from datasets.download.streaming_download_manager import xPath
 from torch import nn
 from torch.optim.lr_scheduler import LambdaLR
 
@@ -215,7 +214,7 @@ def parse_ckpt_path(config: Config, parallel_context: ParallelContext) -> Option
     load_from_candidate = config.checkpoints.resume_checkpoint_path
     if load_from_candidate is not None:
         if check_path_is_local(load_from_candidate):
-            latest_meta_path: xPath = config.checkpoints.resume_checkpoint_path / "latest.txt"
+            latest_meta_path: Path = config.checkpoints.resume_checkpoint_path / "latest.txt"
             if latest_meta_path.exists():
                 with fs_open(config.checkpoints.resume_checkpoint_path / "latest.txt", mode="r") as fi:
                     # TODO @thomasw21: make a better structure system so that we get typing correct
