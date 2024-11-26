@@ -203,7 +203,7 @@ def save(
     dist.barrier(parallel_context.world_pg)
 
 
-ckpt_path(config: Config, parallel_context: ParallelContext) -> Optional[Path]:
+def parse_ckpt_path(config: Config, parallel_context: ParallelContext) -> Optional[Path]:
     """Parse checkpoint path from config and download checkpoint from S3 if needed.
 
     Args:
