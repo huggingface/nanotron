@@ -14,6 +14,7 @@ def create_config(
     seq_len: int,
     micro_batch_size: int = 1,
     base_config_path: str = "examples/config_tiny_llama.yaml",
+    zero_stage: int = 0,
 ) -> dict:
     """Create a config with the specified parallelism settings."""
     # Load base config
@@ -31,10 +32,16 @@ def create_config(
     # Modify batch and sequence settings
     config["tokens"]["batch_accumulation_per_replica"] = batch_accum
     config["tokens"]["sequence_length"] = seq_len
+    config["model"]["model_config"]["max_position_embeddings"] = seq_len
     config["tokens"]["micro_batch_size"] = micro_batch_size
 
+    # modify zero stage
+    config["optimizer"]["zero_stage"] = zero_stage
+
     # Update run name to reflect configuration
-    config["general"]["run"] = f"dp{dp}_tp{tp}_pp{pp}_acc{batch_accum}_mbs{micro_batch_size}_seq{seq_len}"
+    config["general"][
+        "run"
+    ] = f"dp{dp}_tp{tp}_pp{pp}_acc{batch_accum}_mbs{micro_batch_size}_seq{seq_len}_zero{zero_stage}"
 
     # Update benchmark CSV path
     config["general"]["benchmark_csv_path"] = "bench.csv"
@@ -116,9 +123,11 @@ def main():
         # (2, 4, 1, 1, 2048, 1),
         # (8, 1, 1, 1, 2048, 1),
         # (16, 1, 1, 1, 2048, 1),
-        # *[(2**i, 1, 1, 1, 2048, 1) for i in range(3, 8)],
-        *[(2**i, 1, 1, 1, 2048, 8) for i in range(0, 7)],
+        *[(2**i, 1, 1, 1, 2048, 1) for i in range(0, 8)],
+        *[(2**i, 8, 1, 1, 2048, 1) for i in range(0, 7)],
         *[(2**i, 8, 1, 1, 2048, 8) for i in range(0, 7)],
+        # 64k seq len
+        *[(2**i, 8, 1, 1, 65536, 1) for i in range(0, 7)],  # 64 nodes max
     ]
 
     # Validate configurations

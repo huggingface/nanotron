@@ -606,8 +606,10 @@ def create_table_log(
         LogItem("hTFLOPs", hardware_tflops, ".2f"),
         LogItem("tok/s/gpu", tokens_per_sec / parallel_context.world_pg.size(), ".2f"),
         LogItem("AllReduce (GB/s)", bandwidth["all_reduce"], ".2f"),
+        LogItem("AllGather (GB/s)", bandwidth["all_gather"], ".2f"),
         LogItem("ReduceScatter (GB/s)", bandwidth["reduce_scatter"], ".2f"),
         LogItem("AR Intra-node (GB/s)", bandwidth["all_reduce_intranode"], ".2f"),
+        LogItem("AG Intra-node (GB/s)", bandwidth["all_gather_intranode"], ".2f"),
         LogItem("RS Intra-node (GB/s)", bandwidth["reduce_scatter_intranode"], ".2f"),
         LogItem("Mem Alloc (GB)", torch.cuda.max_memory_allocated() / 1024**3, ".2f"),
         LogItem("Mem Res (GB)", torch.cuda.max_memory_reserved() / 1024**3, ".2f"),
@@ -627,8 +629,10 @@ def create_table_output(table_log, column_widths):
     return f"{header_row}\n{separator_row}\n{data_row}"
 
 
-def write_to_csv(csv_filename, table_log, model_tflops, slurm_job_id):
-    """Write benchmark results to a CSV file with file locking."""
+def write_to_csv(csv_filename, table_log, model_tflops, slurm_job_id, config):
+    """Write benchmark results to a CSV file with file locking using fcntl."""
+    import fcntl
+
     try:
         # Check if csv_filename is valid
         if not csv_filename:
@@ -644,40 +648,49 @@ def write_to_csv(csv_filename, table_log, model_tflops, slurm_job_id):
         header = [item.tag for item in table_log]
         row = [f"{item.scalar_value:{item.log_format}}" for item in table_log]
 
-        # Use file locking to handle concurrent writes
-        lock_file = f"{csv_filename}.lock"
+        # Use fcntl for file locking
         max_attempts = 10
         attempt = 0
-
         while attempt < max_attempts:
             try:
-                # Try to create lock file
-                with open(lock_file, "x") as _:
+                # Open file in append mode (will create if doesn't exist)
+                with open(csv_filename, mode="a+", newline="") as f:
+                    # Get exclusive lock
+                    fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
                     try:
-                        # We got the lock, do the write
-                        write_mode = "w" if not os.path.exists(csv_filename) else "a"
-                        with open(csv_filename, mode=write_mode, newline="") as f:
+                        # Check if file is empty/new
+                        f.seek(0)
+                        first_char = f.read(1)
+                        if not first_char:  # Empty file
                             writer = csv.writer(f)
-                            if write_mode == "w":
-                                writer.writerow(header)
-                            writer.writerow(row)
-                            f.flush()
-                            os.fsync(f.fileno())
+                            writer.writerow(header)
+
+                        # Go to end of file for append
+                        f.seek(0, os.SEEK_END)
+                        writer = csv.writer(f)
+                        writer.writerow(row)
+                        f.flush()
+                        os.fsync(f.fileno())
                         break
                     finally:
-                        # Always remove lock file
-                        os.remove(lock_file)
-            except FileExistsError:
+                        # Release lock
+                        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+            except BlockingIOError:
                 # Another process has the lock, wait and retry
                 attempt += 1
                 time.sleep(0.1)  # Wait 100ms before retrying
+            except IOError as e:
+                logger.error(f"IOError while writing to {csv_filename}: {str(e)}")
+                return
 
         if attempt == max_attempts:
             logger.error(f"Failed to acquire lock for {csv_filename} after {max_attempts} attempts")
 
     except OSError as e:
         logger.error(f"Failed to write benchmark results to {csv_filename}: {str(e)}")
-        # Don't raise the error - just log it and continue
+        return
+    except Exception as e:
+        logger.error(f"Unexpected error writing to {csv_filename}: {str(e)}")
         return
 
 
@@ -687,7 +700,14 @@ def log_throughput(
     model_tflops=0,
     hardware_tflops=0,
     tokens_per_sec=0,
-    bandwidth={"all_reduce": 0, "reduce_scatter": 0, "all_reduce_intranode": 0, "reduce_scatter_intranode": 0},
+    bandwidth={
+        "all_reduce": 0,
+        "reduce_scatter": 0,
+        "all_gather": 0,
+        "all_reduce_intranode": 0,
+        "reduce_scatter_intranode": 0,
+        "all_gather_intranode": 0,
+    },
 ):
     slurm_job_id = os.environ.get("SLURM_JOB_ID", "N/A")
 
@@ -705,7 +725,7 @@ def log_throughput(
     )
 
     if dist.get_rank(parallel_context.world_pg) == 0:
-        write_to_csv(config.general.benchmark_csv_path, table_log, model_tflops, slurm_job_id)
+        write_to_csv(config.general.benchmark_csv_path, table_log, model_tflops, slurm_job_id, config)
     dist.barrier(group=parallel_context.world_pg)
 
 

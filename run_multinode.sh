@@ -36,7 +36,7 @@ export WORLD_SIZE=$(($NNODES * $GPUS_PER_NODE))
 
 # Set some environment variables for better distributed training
 export CUDA_DEVICE_MAX_CONNECTIONS=1
-export NCCL_DEBUG=INFO
+# export NCCL_DEBUG=INFO
 
 # Nanotron specific
 export NANOTRON_BENCHMARK=1
