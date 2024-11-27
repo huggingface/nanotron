@@ -157,8 +157,8 @@ class DistributedTrainer:
         set_ranks_logging_level(parallel_context=self.parallel_context, logging_config=self.config.logging)
 
         # Log benchmark info
-        if os.environ.get("NANOTRON_BENCHMARK", "0") == "1":
-            log_throughput(self.config, self.parallel_context)
+        # if os.environ.get("NANOTRON_BENCHMARK", "0") == "1":
+        #     log_throughput(self.config, self.parallel_context)
 
         ########################################
         ## Setting up our model, optimizers, schedulers, etc.
@@ -259,6 +259,9 @@ class DistributedTrainer:
 
     def pre_init(self):
         self.init_checkpoint_path = parse_ckpt_path(config=self.config, parallel_context=self.parallel_context)
+
+        # Calculate cluster bandwidth
+        self.BANDWIDTHS = measure_bandwidth(self.parallel_context)
 
     def post_init(self):
         # S3 Mover and save initial state
@@ -663,6 +666,7 @@ class DistributedTrainer:
                 model_tflops,
                 hardware_tflops,
                 tokens_per_sec,
+                bandwidth=self.BANDWIDTHS,
             )
             log_rank("Throughput logging complete", logger=logger, level=logging.INFO)
             if "SLURM_JOB_ID" in os.environ:
@@ -1050,3 +1054,117 @@ def mark_unsharded_params_as_tied_across_expert(
             tie_parameters(
                 root_module=model, ties=shared_weights, parallel_context=parallel_context, reduce_op=reduce_op
             )
+
+
+def measure_bandwidth(parallel_context: ParallelContext):
+    """Measure inter-GPU and intra-node bandwidth using NCCL all_reduce and reduce_scatter."""
+    import time
+
+    import torch
+    import torch.distributed as dist
+
+    # Size of data to transfer (256MB in elements)
+    size = 256 * 1024 * 1024  # Number of elements
+    tensor = torch.ones(size).cuda()
+    element_size = tensor.element_size()  # Size of each element in bytes
+    data_size_bytes = size * element_size  # Total data size in bytes
+
+    # For reduce_scatter, we need a tensor list where each GPU gets a chunk
+    world_size = dist.get_world_size(parallel_context.world_pg)
+    local_world_size = dist.get_world_size(parallel_context.local_pg)
+    chunk_size = size // world_size
+    local_chunk_size = size // local_world_size
+    tensor_rs = torch.ones(size).cuda()
+    output_rs = torch.empty(chunk_size, dtype=tensor_rs.dtype, device=tensor_rs.device)
+    output_rs_local = torch.empty(local_chunk_size, dtype=tensor_rs.dtype, device=tensor_rs.device)
+
+    # Get process groups for inter and intra node communication
+    inter_node_group = parallel_context.world_pg
+    intra_node_group = parallel_context.local_pg
+
+    dist.barrier(group=inter_node_group)
+    dist.barrier(group=intra_node_group)
+
+    # Warmup both operations for both inter and intra node
+    for _ in range(5):
+        # Inter-node warmup
+        dist.all_reduce(tensor.clone(), group=inter_node_group)
+        dist.reduce_scatter(output_rs, list(tensor_rs.split(chunk_size)), group=inter_node_group)
+
+        # Intra-node warmup
+        dist.all_reduce(tensor.clone(), group=intra_node_group)
+        dist.reduce_scatter(output_rs_local, list(tensor_rs.split(local_chunk_size)), group=intra_node_group)
+
+    torch.cuda.synchronize()
+    dist.barrier(group=inter_node_group)
+
+    # Measure inter-node all_reduce bandwidth
+    tic = time.time()
+    iters = 10
+
+    for _ in range(iters):
+        dist.all_reduce(tensor, group=inter_node_group)
+
+    torch.cuda.synchronize()
+    dist.barrier(group=inter_node_group)
+    toc = time.time()
+
+    # Calculate inter-node all_reduce bandwidth in GB/s
+    # Include algorithm factor in bandwidth calculation
+    ar_algo_factor = 2 * (world_size - 1) / world_size
+    ar_bandwidth = ar_algo_factor * data_size_bytes * iters / (toc - tic) / 1e9
+
+    dist.barrier(group=inter_node_group)
+
+    # Measure inter-node reduce_scatter bandwidth
+    tic = time.time()
+
+    for _ in range(iters):
+        dist.reduce_scatter(output_rs, list(tensor_rs.split(chunk_size)), group=inter_node_group)
+
+    torch.cuda.synchronize()
+    dist.barrier(group=inter_node_group)
+    toc = time.time()
+
+    # Calculate inter-node reduce_scatter bandwidth in GB/s
+    rs_algo_factor = (world_size - 1) / world_size
+    rs_bandwidth = rs_algo_factor * data_size_bytes * iters / (toc - tic) / 1e9
+
+    dist.barrier(group=intra_node_group)
+
+    # Measure intra-node all_reduce bandwidth
+    tic = time.time()
+
+    for _ in range(iters):
+        dist.all_reduce(tensor, group=intra_node_group)
+
+    torch.cuda.synchronize()
+    dist.barrier(group=intra_node_group)
+    toc = time.time()
+
+    # Calculate intra-node all_reduce bandwidth in GB/s
+    ar_local_algo_factor = 2 * (local_world_size - 1) / local_world_size
+    ar_bandwidth_intra = ar_local_algo_factor * data_size_bytes * iters / (toc - tic) / 1e9
+
+    dist.barrier(group=intra_node_group)
+
+    # Measure intra-node reduce_scatter bandwidth
+    tic = time.time()
+
+    for _ in range(iters):
+        dist.reduce_scatter(output_rs_local, list(tensor_rs.split(local_chunk_size)), group=intra_node_group)
+
+    torch.cuda.synchronize()
+    dist.barrier(group=intra_node_group)
+    toc = time.time()
+
+    # Calculate intra-node reduce_scatter bandwidth in GB/s
+    rs_local_algo_factor = (local_world_size - 1) / local_world_size
+    rs_bandwidth_intra = rs_local_algo_factor * data_size_bytes * iters / (toc - tic) / 1e9
+
+    return {
+        "all_reduce": ar_bandwidth,
+        "reduce_scatter": rs_bandwidth,
+        "all_reduce_intranode": ar_bandwidth_intra,
+        "reduce_scatter_intranode": rs_bandwidth_intra,
+    }

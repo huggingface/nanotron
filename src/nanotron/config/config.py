@@ -364,7 +364,7 @@ class Config:
 
         # Some final sanity checks across separate arguments sections:
         if self.profiler is not None and self.profiler.profiler_export_path is not None:
-            assert self.tokens.train_steps < 10
+            assert self.tokens.train_steps < 11
 
         if self.optimizer is not None and self.optimizer.learning_rate_scheduler.lr_decay_steps is None:
             self.optimizer.learning_rate_scheduler.lr_decay_steps = (
