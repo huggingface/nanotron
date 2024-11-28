@@ -211,7 +211,8 @@ class FP32GradientAccumulator(GradientAccumulator):
     def _is_accumulate_param(cls, param: NanotronParameter) -> bool:
         from nanotron.fp8.tensor import FP8Tensor
 
-        return param.requires_grad or param.data.__class__ == FP8Tensor
+        # return param.requires_grad or param.data.__class__ == FP8Tensor
+        return param.requires_grad or isinstance(param.data, FP8Tensor)
 
     @staticmethod
     def build_grad_buffers(
@@ -224,6 +225,7 @@ class FP32GradientAccumulator(GradientAccumulator):
 
         Note:
             In ZeRO-1, we need to accumulate grads for all parameters, because we need to allreduce all parameters' grads across DP at each sync step.
+            Unlike master weights, we create fp32 gradient buffers for both fp8 parameters and non-fp8 parameters.
         """
         named_parameters = [
             (name, param) for name, param in named_parameters if FP32GradientAccumulator._is_accumulate_param(param)
@@ -288,7 +290,14 @@ class FP32GradientAccumulator(GradientAccumulator):
 
         if self._is_accumulation_sync_step is False:
             # WARNING: We assume fp32_grad_bucket is already zeroed
-            fp32_grad.add_(half_param.grad)
+            if not isinstance(half_param.data, FP8Tensor):
+                fp32_grad.add_(half_param.grad)
+            else:
+                from nanotron.fp8.tensor import convert_tensor_from_fp8
+
+                assert half_param.grad.dtype in [torch.int8, torch.uint8]
+                # TODO(xrsrke): move .convert_tensor_from_fp8 to .to(dtype), so we have an unified API
+                fp32_grad.add_(convert_tensor_from_fp8(half_param.grad, half_param.grad.fp8_meta, torch.float32))
             # In case _is_accumulation_sync_step = True: no need to add half gradients, because it's done in the allreduce hook
 
         # TODO @thomasw21: Is it better to set to zero instead?

@@ -3,12 +3,12 @@ from contextlib import nullcontext
 import pytest
 import torch
 from helpers.exception import assert_fail_except_rank_with
-from helpers.utils import available_gpus, init_distributed, rerun_if_address_is_in_use
 from nanotron import distributed as dist
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.data_parallel.utils import ddp_trigger_sync_in_bwd
 from nanotron.parallel.parameters import NanotronParameter
 from nanotron.sanity_checks import assert_tensor_synced_across_pg
+from nanotron.testing.utils import available_gpus, init_distributed, rerun_if_address_is_in_use
 from torch import nn
 from torch.distributed import GradBucket
 

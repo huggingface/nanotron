@@ -1,13 +1,6 @@
 import pytest
 import torch
 from helpers.dummy import dummy_infinite_data_loader, init_dummy_model
-from helpers.utils import (
-    available_gpus,
-    get_all_3d_configurations,
-    init_distributed,
-    is_dict_equal,
-    rerun_if_address_is_in_use,
-)
 from nanotron import distributed as dist
 from nanotron.constants import CHECKPOINT_VERSION
 from nanotron.optim.gradient_accumulator import FP32GradientAccumulator
@@ -32,7 +25,14 @@ from nanotron.serialize import (
     save_weights,
 )
 from nanotron.serialize.metadata import TensorMetadata
-from nanotron.testing.utils import TestContext
+from nanotron.testing.utils import (
+    TestContext,
+    available_gpus,
+    get_all_3d_configurations,
+    init_distributed,
+    is_dict_equal,
+    rerun_if_address_is_in_use,
+)
 from torch.nn.parallel import DistributedDataParallel
 
 

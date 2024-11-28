@@ -73,7 +73,7 @@ def test_create_fp8_tensor_from_metadata(dtype):
 
     for i in range(TOTAL_STEPS):
         if TOTAL_STEPS - REMAINING_STEPS == i:
-            current_tensor = fp8_tensor.orig_data
+            current_tensor = new_values[i - 1]
             fp8_meta = deepcopy(fp8_tensor.fp8_meta)
 
         fp8_tensor.data = new_values[i]
@@ -83,6 +83,7 @@ def test_create_fp8_tensor_from_metadata(dtype):
         resumed_fp8_tensor.data = new_values[i]
 
     # NOTE: we expect a resume tensor to have the state trajectory of the original tensor
+    assert resumed_fp8_tensor.fp8_meta == fp8_tensor.fp8_meta
     assert resumed_fp8_tensor == fp8_tensor
 
 
@@ -296,15 +297,19 @@ def test_clone_fp8_tensor(tensor_cls, dtype):
 )
 def test_transpose_fp8_tensor(tensor_cls, dtype):
     tensor = torch.randn((16, 16), dtype=torch.float32, device="cuda:0")
-    ref_transposed_tensor = deepcopy(tensor).transpose()
+    ref_transposed_tensor = deepcopy(tensor).T
     fp8_tensor = tensor_cls(tensor, dtype)
 
-    transposed_fp8_tensor = fp8_tensor.transpose()
+    transposed_fp8_tensor = fp8_tensor.transpose_fp8()
 
     assert isinstance(transposed_fp8_tensor, FP8Tensor)
 
-    dequant_transposed_fp8_tensor = transposed_fp8_tensor.to(torch.float32)
-    torch.testing.assert_close(dequant_transposed_fp8_tensor, ref_transposed_tensor)
+    dequant_transposed_fp8_tensor = convert_tensor_from_fp8(
+        transposed_fp8_tensor, transposed_fp8_tensor.fp8_meta, torch.float32
+    )
+    torch.testing.assert_close(
+        dequant_transposed_fp8_tensor, ref_transposed_tensor, rtol=FP8_RTOL_THRESHOLD, atol=FP8_ATOL_THRESHOLD
+    )
 
 
 @pytest.mark.parametrize(
@@ -452,3 +457,7 @@ def test_serialize_fp8_tensor(tensor_cls, dtype):
 
     torch.save(fp8_tensor, f"{store_folder}/fp8_tensor.pt")
     torch.load(f"{store_folder}/fp8_tensor.pt")
+
+
+# TODO(xrsrke): add test for fp8_tensor.transpose() API
+# TODO(xrsrke): add test for fp8_tensor.to(dtype) API

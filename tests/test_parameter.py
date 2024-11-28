@@ -1,12 +1,12 @@
 import torch
 from helpers.exception import assert_fail_with
-from helpers.utils import init_distributed, rerun_if_address_is_in_use
 from nanotron.models.base import DTypeInvariantTensor, init_on_device_and_dtype
 
 # from nanotron.testing.utils import TestContext
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter
 from nanotron.parallel.sharded_parameters import SplitConfig, create_sharded_parameter_from_config
+from nanotron.testing.utils import init_distributed, rerun_if_address_is_in_use
 from torch import nn
 
 

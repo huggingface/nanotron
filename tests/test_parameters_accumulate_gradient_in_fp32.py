@@ -5,7 +5,6 @@ import pytest
 import torch
 from helpers.dummy import DummyModel, dummy_infinite_data_loader
 from helpers.exception import assert_fail_except_rank_with, timeout_after
-from helpers.utils import available_gpus, init_distributed, rerun_if_address_is_in_use
 from nanotron.models import init_on_device_and_dtype
 from nanotron.optim import ZeroDistributedOptimizer
 from nanotron.optim.gradient_accumulator import FP32GradBucketManager, FP32GradientAccumulator, get_fp32_accum_hook
@@ -29,6 +28,7 @@ from nanotron.parallel.tied_parameters import (
 )
 from nanotron.parallel.utils import initial_sync
 from nanotron.sanity_checks import assert_tensor_synced_across_pg
+from nanotron.testing.utils import available_gpus, init_distributed, rerun_if_address_is_in_use
 from nanotron.utils import ContextManagers
 from torch import nn
 

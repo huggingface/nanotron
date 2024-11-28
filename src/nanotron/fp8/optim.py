@@ -214,10 +214,7 @@ class FP8AdamW(Optimizer):
                 if not isinstance(p.data, FP8Tensor) and p.requires_grad is False:
                     continue
 
-                try:
-                    assert p.grad is not None
-                except:
-                    assert 1 == 1
+                assert p.grad is not None
 
                 # p_name = self.params_id_to_param_names[id(p)]
                 # loggings[p] = {}
@@ -231,46 +228,53 @@ class FP8AdamW(Optimizer):
                 # NOTE: if use gradient accumulation, after the backward pass
                 # we set the param.grad to None, so we need to retrieve it from accumulator
 
-                if constants.CONFIG.optimizer.accumulate_grad_in_fp32 is True:
-                    # fp32_grad = self.grad_accumulator.get_grad_buffer(name=p_name)
+                # if constants.CONFIG.optimizer.accumulate_grad_in_fp32 is True:
+                #     # fp32_grad = self.grad_accumulator.get_grad_buffer(name=p_name)
 
-                    # if "model.decoder.8.pp_block.attn_layer_scale" in p_name:
-                    #     assert 1 == 1
+                #     # if "model.decoder.8.pp_block.attn_layer_scale" in p_name:
+                #     #     assert 1 == 1
 
-                    # if constants.CONFIG.fp8.is_save_grad_for_accum_debugging is True:
-                    #     from nanotron.helpers import create_folder_and_save_tensor
+                #     # if constants.CONFIG.fp8.is_save_grad_for_accum_debugging is True:
+                #     #     from nanotron.helpers import create_folder_and_save_tensor
 
-                    #     create_folder_and_save_tensor(
-                    #         fp32_grad,
-                    #         f"/fsx/phuc/temp/temp3_env_for_fp8/nanotron/debug_accum/{constants.CONFIG.general.run}/aggr_grads/{p_name}.pt",
-                    #     )
-                    raise NotImplementedError("accumulate_grad_in_fp32 is not implemented")
+                #     #     create_folder_and_save_tensor(
+                #     #         fp32_grad,
+                #     #         f"/fsx/phuc/temp/temp3_env_for_fp8/nanotron/debug_accum/{constants.CONFIG.general.run}/aggr_grads/{p_name}.pt",
+                #     #     )
+                #     raise NotImplementedError("accumulate_grad_in_fp32 is not implemented")
+                # else:
+                #     if isinstance(p.data, FP8Tensor):
+                #         if constants.CONFIG.fp8.is_directly_keep_accum_grad_of_fp8 is True:
+                #             # fp32_grad = constants.ACCUM_GRADS[p_name]
+                #             # grad = get_accum_grad(p_name)
+                #             # fp32_grad = (
+                #             #     grad.to(self.optim_accum_dtype) if grad.dtype != self.optim_accum_dtype else grad
+                #             # )
+                #             # assert fp32_grad.dtype == torch.float32
+
+                #             # # constants.ACCUM_GRADS[p_name] = None
+                #             # set_accum_grad(p_name, None)
+                #             raise NotImplementedError("is_directly_keep_accum_grad_of_fp8 is not implemented")
+                #         else:
+                #             assert p.grad.dtype in FP8_DTYPES
+                #             fp32_grad = convert_tensor_from_fp8(p.grad, p.grad.fp8_meta, self.optim_accum_dtype)
+                #     else:
+                #         # grad = get_grad_from_parameter(p)
+
+                #         # assert grad is not None
+                #         assert p.grad.dtype == non_fp8_accum_dtype
+
+                #         fp32_grad = p.grad.to(self.optim_accum_dtype)
+
+                # NOTE: Case 1: With gradient accumulator => the grad is already in the correct dtype
+                # Case 2: Without gradient accumulator =>
+                # 2.1 Non-FP8 parameter => cast the grad to the correct dtype
+                # 2.2 FP8 parameter => dequantize the grad to the correct dtype
+                grad = p.grad
+                if isinstance(p.data, FP8Tensor):
+                    fp32_grad = convert_tensor_from_fp8(grad, grad.fp8_meta, self.optim_accum_dtype)
                 else:
-                    if isinstance(p.data, FP8Tensor):
-                        if constants.CONFIG.fp8.is_directly_keep_accum_grad_of_fp8 is True:
-                            # fp32_grad = constants.ACCUM_GRADS[p_name]
-                            # grad = get_accum_grad(p_name)
-                            # fp32_grad = (
-                            #     grad.to(self.optim_accum_dtype) if grad.dtype != self.optim_accum_dtype else grad
-                            # )
-                            # assert fp32_grad.dtype == torch.float32
-
-                            # # constants.ACCUM_GRADS[p_name] = None
-                            # set_accum_grad(p_name, None)
-                            raise NotImplementedError("is_directly_keep_accum_grad_of_fp8 is not implemented")
-                        else:
-                            assert p.grad.dtype in FP8_DTYPES
-                            fp32_grad = convert_tensor_from_fp8(p.grad, p.grad.fp8_meta, self.optim_accum_dtype)
-                    else:
-                        # grad = get_grad_from_parameter(p)
-
-                        # assert grad is not None
-                        try:
-                            assert p.grad.dtype == non_fp8_accum_dtype
-                        except:
-                            assert 1 == 1
-
-                        fp32_grad = p.grad.to(self.optim_accum_dtype)
+                    fp32_grad = grad.to(self.optim_accum_dtype)
 
                 assert fp32_grad.dtype == self.optim_accum_dtype
 

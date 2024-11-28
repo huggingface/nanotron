@@ -6,7 +6,7 @@ from torch.distributed import *  # noqa
 
 from nanotron.distributed import *
 from nanotron.fp8.tensor import FP8Tensor, convert_tensor_from_fp8
-from nanotron.parallel.parameters import NanotronParameter, get_data_from_param
+from nanotron.parallel.parameters import NanotronParameter
 
 
 def all_reduce(

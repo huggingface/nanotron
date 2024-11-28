@@ -5,13 +5,13 @@ import transformer_engine as te  # noqa
 from torch import nn
 
 from nanotron import logging
-from nanotron.config import Config
-from nanotron.config.fp8_config import FP8LayerArgs
+from nanotron.config.fp8_config import FP8Args, FP8LayerArgs
 from nanotron.fp8.constants import FP8_GPU_NAMES, FP8LM_RECIPE, QTYPE_TO_DTYPE
 from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.linear import FP8Linear
 from nanotron.fp8.meta import FP8Meta
 from nanotron.logging import log_rank
+from nanotron.models.base import NanotronModel
 
 logger = logging.get_logger(__name__)
 
@@ -231,64 +231,65 @@ def convert_logs_to_flat_logs(logs, prefix):
     return flat_logs
 
 
-def find_fp8_config_by_module_name(config: Config, target_module_name: str) -> Optional[FP8LayerArgs]:
-    if hasattr(config, "fp8") and hasattr(config.fp8, "model"):
-        # NOTE: either model or is_quant_all_except_first_and_last must be specified, not both
-        # assert config.fp8.model is not None or config.fp8.is_quant_all_except_first_and_last is not None
+def find_fp8_config_by_module_name(target_module_name: str, config: FP8Args) -> Optional[FP8LayerArgs]:
+    # NOTE: either model or is_quant_all_except_first_and_last must be specified, not both
+    # assert config.fp8.model is not None or config.fp8.is_quant_all_except_first_and_last is not None
 
-        if config.fp8.model is not None:
-            for layer_args in config.fp8.model:
-                if layer_args.module_name == target_module_name:
-                    return layer_args
-        elif config.fp8.is_quant_all_except_first_and_last:
+    # TODO(xrsrke): remove config.is_quant_all_except_first_and_last
 
-            def match_layer_pattern(name, layer_idxs):
-                patterns = [
-                    "model.decoder.{}.attn.qkv_proj",
-                    "model.decoder.{}.attn.o_proj",
-                    "model.decoder.{}.mlp.down_proj",
-                    # "model.decoder.{}.mlp.up_proj",
-                    "model.decoder.{}.mlp.gate_up_proj",
-                ]
+    if config.model is not None:
+        for layer_args in config.model:
+            if layer_args.module_name == target_module_name:
+                return layer_args
+    elif config.is_quant_all_except_first_and_last:
 
-                for idx in layer_idxs:
-                    for pattern in patterns:
-                        if name == pattern.format(idx):
-                            return True
+        def match_layer_pattern(name, layer_idxs):
+            patterns = [
+                "model.decoder.{}.attn.qkv_proj",
+                "model.decoder.{}.attn.o_proj",
+                "model.decoder.{}.mlp.down_proj",
+                # "model.decoder.{}.mlp.up_proj",
+                "model.decoder.{}.mlp.gate_up_proj",
+            ]
 
-                return False
+            for idx in layer_idxs:
+                for pattern in patterns:
+                    if name == pattern.format(idx):
+                        return True
 
-            num_layers = config.model.model_config.num_hidden_layers
-            assert num_layers > 2, "num_hidden_layers must be greater than 2"
-            assert config.fp8.fp8_linear_config_temp is not None
+            return False
 
-            quant_layer_idxs = list(range(1, num_layers - 1))
-            if match_layer_pattern(target_module_name, quant_layer_idxs) is True:
-                from copy import deepcopy
+        num_layers = config.model.model_config.num_hidden_layers
+        assert num_layers > 2, "num_hidden_layers must be greater than 2"
+        assert config.fp8_linear_config_temp is not None
 
-                config_temp = deepcopy(config.fp8.fp8_linear_config_temp)
-                config_temp.module_name = target_module_name
-                return config_temp
+        quant_layer_idxs = list(range(1, num_layers - 1))
+        if match_layer_pattern(target_module_name, quant_layer_idxs) is True:
+            from copy import deepcopy
+
+            config_temp = deepcopy(config.fp8_linear_config_temp)
+            config_temp.module_name = target_module_name
+            return config_temp
+    else:
+        from nanotron.fp8.constant_recipe import MODULE_NAMES_THAT_NOT_FP8
+        from nanotron.fp8.constants import FP8LM_LINEAR_RECIPE
+
+        if any(module_name in target_module_name for module_name in MODULE_NAMES_THAT_NOT_FP8):
+            return None
         else:
-            from nanotron.fp8.constant_recipe import MODULE_NAMES_THAT_NOT_FP8
-            from nanotron.fp8.constants import FP8LM_LINEAR_RECIPE
+            # NOTE: return default recipe
+            # NOTE: based on the global setting smooth_quant to decide whether to do smooth quantization
+            # or not
+            recipe = FP8LM_LINEAR_RECIPE
+            recipe.smooth_quant = config.smooth_quant
+            log_rank(
+                f"target_module_name={target_module_name}, smooth_quant={recipe.smooth_quant}",
+                logger=logger,
+                level=logging.INFO,
+                rank=0,
+            )
 
-            if any(module_name in target_module_name for module_name in MODULE_NAMES_THAT_NOT_FP8):
-                return None
-            else:
-                # NOTE: return default recipe
-                # NOTE: based on the global setting smooth_quant to decide whether to do smooth quantization
-                # or not
-                recipe = FP8LM_LINEAR_RECIPE
-                recipe.smooth_quant = config.fp8.smooth_quant
-                log_rank(
-                    f"target_module_name={target_module_name}, smooth_quant={recipe.smooth_quant}",
-                    logger=logger,
-                    level=logging.INFO,
-                    rank=0,
-                )
-
-                return recipe
+            return recipe
     return None
 
 
@@ -330,3 +331,52 @@ def is_convert_to_fp16(module) -> bool:
             IS_CONVERT_TO_FLOAT16 = True
 
     return IS_CONVERT_TO_FLOAT16
+
+
+def convert_model_to_fp8(model: NanotronModel, config: FP8Args) -> NanotronModel:
+    from nanotron.fp8.utils import get_leaf_modules
+
+    assert 1 == 1
+    # NOTE: convert to FP8
+    from nanotron.fp8.tensor import FP8Tensor
+
+    # from nanotron import constants
+    from nanotron.fp8.utils import find_fp8_config_by_module_name
+    from nanotron.parallel.parameters import NanotronParameter
+    from nanotron.parallel.tensor_parallel.nn import (
+        FP8TensorParallelColumnLinear,
+        FP8TensorParallelRowLinear,
+        TensorParallelColumnLinear,
+        TensorParallelRowLinear,
+    )
+
+    TP_LINEAR_CLS_TO_FP8_LINEAR_CLS = {
+        TensorParallelColumnLinear: FP8TensorParallelColumnLinear,
+        TensorParallelRowLinear: FP8TensorParallelRowLinear,
+    }
+    for name, module in get_leaf_modules(model):
+        if any(p.numel() > 0 for p in module.parameters()) is False:
+            continue
+
+        recipe = find_fp8_config_by_module_name(name, config)
+
+        # if isinstance(module, (TensorParallelColumnLinear, TensorParallelRowLinear)):
+        if recipe is not None:
+            print(f"Converting {name} to FP8")
+            module.__class__ = TP_LINEAR_CLS_TO_FP8_LINEAR_CLS[module.__class__]
+            # TODO(xrsrke): retrieve custom recipe
+            module._set_and_quantize_weights(module.weight.data)
+
+            assert isinstance(module.weight, NanotronParameter)
+            assert isinstance(module.weight.data, FP8Tensor)
+            assert module.weight.data.dtype in [
+                torch.uint8,
+                torch.int8,
+            ], f"got {module.weight.data.dtype}, name: {name}"
+        else:
+            # NOTE: convert it to the residual stream's dtype
+            # for p in module.parameters():
+            #     p.data = p.data.to(self.config.model.dtype)
+            module.to(dtype=config.resid_dtype)
+
+    return model
