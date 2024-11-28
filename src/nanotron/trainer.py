@@ -215,7 +215,7 @@ class DistributedTrainer:
             )
 
         # Define iteration start state
-        if self.init_checkpoint_path is not None:
+        if self.init_checkpoint_path is not None and self.config.checkpoints.load_lr_scheduler:
             checkpoint_metadata = load_meta(
                 parallel_context=self.parallel_context, root_folder=self.init_checkpoint_path
             )
@@ -553,7 +553,11 @@ class DistributedTrainer:
             handle = None
 
         # Move optimizer states back to GPU before optimizer step
-        if self.init_checkpoint_path is not None and self.iteration_step == self.initial_iter_step:
+        if (
+            self.init_checkpoint_path is not None
+            and self.config.checkpoints.load_optimizer
+            and self.iteration_step == self.initial_iter_step
+        ):
             state_dict_to_device(self.optimizer.state_dict(), "cuda")
 
         before_optim_step_sanity_checks(
