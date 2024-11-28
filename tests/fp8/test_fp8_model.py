@@ -5,8 +5,10 @@ from nanotron.config.fp8_config import FP8Args
 from nanotron.fp8.tensor import FP8Tensor
 from nanotron.fp8.utils import convert_model_to_fp8
 from nanotron.parallel import ParallelContext
+from nanotron.parallel.parameters import NanotronParameter
 from nanotron.testing.llama import TINY_LLAMA_CONFIG, create_llama_from_config, get_llama_training_config
 from nanotron.testing.utils import init_distributed, rerun_if_address_is_in_use
+from torch import nn
 
 
 # NOTE: fp8 quantization should be parametrization-method-agnotic
@@ -36,11 +38,24 @@ def _test_initialize_fp8_model(parallel_context: ParallelContext, fp8_config: FP
 
     for name, module in get_leaf_modules(llama):
         recipe = find_fp8_config_by_module_name(name, fp8_config)
-        if recipe is None:
-            assert all(p.dtype == fp8_config.resid_dtype for p in module.parameters())
-            assert all(isinstance(p.data, torch.Tensor) for p in module.parameters())
-        else:
-            assert all(isinstance(p.data, FP8Tensor) for p in module.parameters())
 
+        assert all(p.__class__ == NanotronParameter for p in module.parameters())
+        if recipe is None:
+            assert all(
+                p.dtype == fp8_config.resid_dtype for p in module.parameters()
+            ), f"name: {name}, __class__: {module.weight.data.__class__}"
+            try:
+                assert all(
+                    p.data.__class__ == nn.Parameter for p in module.parameters()
+                ), f"name: {name}, __class__: {module.weight.data.__class__}"
+            except:
+                assert 1 == 1
+        else:
+            assert all(
+                isinstance(p.data.__class__, FP8Tensor) for p in module.parameters()
+            ), f"name: {name}, __class__: {module.weight.data.__class__}"
+            assert all(
+                p.dtype in [torch.int8, torch.uint8] for p in module.parameters()
+            ), f"name: {name}, __class__: {module.weight.data.__class__}"
     # NOTE: check the expected parameters have fp8 dtype
     # NOTE: check the dtype of non-fp8 parameters

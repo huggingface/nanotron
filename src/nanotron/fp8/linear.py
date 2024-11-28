@@ -80,7 +80,8 @@ class FP8Linear(nn.Linear):
         # in [torch.int8, torch.uint8] dtype, then we can assign int|uint8 gradient to it
         # TODO(xrsrke): keep the metadata of the original NanotronParameter
         # setattr(self, "weight", NanotronParameter(tensor=quant_w))
-        setattr(self, "weight", NanotronParameter.create_param_that_share_metadata(quant_w, self.weight))
+        new_param = NanotronParameter.create_param_that_share_metadata(quant_w, param=self.weight)
+        setattr(self, "weight", new_param)
 
         # if self.name == "model.decoder.0.attention.qkv_proj":
         #     assert 1 == 1

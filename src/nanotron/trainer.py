@@ -230,7 +230,7 @@ class DistributedTrainer:
         assert 1 == 1
         print("before quantize")
         print_sanity_params(self.model)
-        self.model = convert_model_to_fp8(self.model)
+        self.model = convert_model_to_fp8(self.model, config=constants.CONFIG.fp8)
         print("after quantize")
         print_sanity_params(self.model)
         assert 1 == 1

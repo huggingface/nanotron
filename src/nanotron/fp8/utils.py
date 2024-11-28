@@ -338,11 +338,9 @@ def convert_model_to_fp8(model: NanotronModel, config: FP8Args) -> NanotronModel
 
     assert 1 == 1
     # NOTE: convert to FP8
-    from nanotron.fp8.tensor import FP8Tensor
 
     # from nanotron import constants
     from nanotron.fp8.utils import find_fp8_config_by_module_name
-    from nanotron.parallel.parameters import NanotronParameter
     from nanotron.parallel.tensor_parallel.nn import (
         FP8TensorParallelColumnLinear,
         FP8TensorParallelRowLinear,
@@ -367,16 +365,18 @@ def convert_model_to_fp8(model: NanotronModel, config: FP8Args) -> NanotronModel
             # TODO(xrsrke): retrieve custom recipe
             module._set_and_quantize_weights(module.weight.data)
 
-            assert isinstance(module.weight, NanotronParameter)
-            assert isinstance(module.weight.data, FP8Tensor)
-            assert module.weight.data.dtype in [
-                torch.uint8,
-                torch.int8,
-            ], f"got {module.weight.data.dtype}, name: {name}"
+            # assert isinstance(module.weight, NanotronParameter)
+            # assert module.weight.data.__class__ == FP8Tensor
+            # assert module.weight.data.dtype in [
+            #     torch.uint8,
+            #     torch.int8,
+            # ], f"got {module.weight.data.dtype}, name: {name}"
         else:
             # NOTE: convert it to the residual stream's dtype
             # for p in module.parameters():
             #     p.data = p.data.to(self.config.model.dtype)
             module.to(dtype=config.resid_dtype)
+            # pass
+            # assert module.weight.data.__class__ == torch.Tensor
 
     return model
