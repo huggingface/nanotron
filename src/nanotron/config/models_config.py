@@ -50,7 +50,7 @@ class LlamaConfig:
     rope_theta: float = 10000.0
     rope_interleaved: bool = (
         False  # The default value has been True, but for loading Llama3 checkpoints you have to set it to False
-    )
+    ) # TODO(tj.solergibert) Depreciate this arg
     tie_word_embeddings: bool = False
     use_cache: bool = True
     vocab_size: int = 32000
