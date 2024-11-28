@@ -57,7 +57,7 @@ from nanotron.logging import (
 )
 from nanotron.models import NanotronModel, build_model
 from nanotron.models.base import check_model_has_grad
-from nanotron.models.llama import LlamaForTraining, RotaryEmbedding
+from nanotron.models.llama import LlamaForTraining
 from nanotron.models.starcoder2 import Starcoder2ForTraining
 from nanotron.optim.clip_grads import clip_grad_norm
 from nanotron.parallel import ParallelContext
@@ -190,7 +190,7 @@ class DistributedTrainer:
             optimizer_args=self.config.optimizer,
             parallel_context=self.parallel_context,
         )
-        if self.init_checkpoint_path is not None:
+        if self.init_checkpoint_path is not None and self.config.checkpoints.load_optimizer:
             load_optimizer(
                 optimizer=self.optimizer,
                 parallel_context=self.parallel_context,
@@ -206,7 +206,7 @@ class DistributedTrainer:
             lr_scheduler_args=self.config.optimizer.learning_rate_scheduler,
             total_training_steps=self.config.tokens.train_steps,
         )
-        if self.init_checkpoint_path is not None:
+        if self.init_checkpoint_path is not None and self.config.checkpoints.load_lr_scheduler:
             load_lr_scheduler(
                 lr_scheduler=self.lr_scheduler,
                 is_zero=self.config.optimizer.zero_stage,
@@ -215,7 +215,7 @@ class DistributedTrainer:
             )
 
         # Define iteration start state
-        if self.init_checkpoint_path is not None:
+        if self.init_checkpoint_path is not None and self.config.checkpoints.load_optimizer:
             checkpoint_metadata = load_meta(
                 parallel_context=self.parallel_context, root_folder=self.init_checkpoint_path
             )
@@ -553,7 +553,7 @@ class DistributedTrainer:
             handle = None
 
         # Move optimizer states back to GPU before optimizer step
-        if self.init_checkpoint_path is not None and self.iteration_step == self.initial_iter_step:
+        if self.init_checkpoint_path is not None and self.iteration_step == self.initial_iter_step and self.config.checkpoints.load_optimizer:
             state_dict_to_device(self.optimizer.state_dict(), "cuda")
 
         before_optim_step_sanity_checks(
@@ -790,12 +790,6 @@ class DistributedTrainer:
             target_pp_ranks=target_pp_ranks,
             model_builder=model_builder,
         )
-
-        # Initialize rotary embeddings
-        for module in model.modules():
-            if not isinstance(module, RotaryEmbedding):
-                continue
-            module.init_rotary_embeddings()
 
         # Mark some parameters as tied
         self._mark_tied_parameters(model=model, parallel_context=parallel_context, parallel_config=parallel_config)
