@@ -48,16 +48,18 @@ model:
   ddp_bucket_cap_mb: 120
   dtype: bfloat16
   init_method:
-    std: 0.03125 # 1/sqrt(1024)=0.022097086912079608
+    init_std: 0.08
   make_vocab_size_divisible_by: 1
   model_config:
     bos_token_id: 1
     eos_token_id: 2
     hidden_act: silu
-    initializer_range: 0.02
-    hidden_size: 1024
-    intermediate_size: 4096
-    num_hidden_layers: 14
+    initializer_range: 0.08
+
+    hidden_size: 256
+    intermediate_size: 1024
+    num_hidden_layers: 18
+
     is_llama_config: true
     max_position_embeddings: 1024
     num_attention_heads: 8
@@ -76,7 +78,7 @@ optimizer:
   adam_eps: 1.0e-08
   clip_grad: 1.0
   learning_rate_scheduler:
-    learning_rate: 0.001
+    learning_rate: 0.006
     lr_decay_starting_step: null
     lr_decay_steps: null
     lr_decay_style: cosine

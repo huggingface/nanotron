@@ -208,7 +208,7 @@ class CoreAttention(nn.Module):
 
         # NOTE: this scale is for µTransfer,
         # in SP, we use sqrt(1/d_h)
-        softmax_scale = 1 / query_states.shape[-1] if self.is_using_mup else None
+        softmax_scale = 1 / self.d_qk if self.is_using_mup else None
         attn_output = flash_attn_varlen_func(
             q=query_states,
             k=key_states,
@@ -443,7 +443,8 @@ class CausalSelfAttention(nn.Module, AttachableStore):
 
                 # NOTE: this scale is for µTransfer,
                 # in SP, we use sqrt(1/d_h)
-                softmax_scale = 1 / query_states.shape[-1] if self.is_using_mup else None
+                # softmax_scale = 1 / query_states.shape[-1] if self.is_using_mup else None
+                softmax_scale = 1 / self.d_qk if self.is_using_mup else None
                 output_unpad = flash_attn_varlen_func(
                     q=query_unpad,  # (total_q, n_local_q_heads, d_qk)
                     k=key_unpad,  # (total_kv, n_local_kv_heads, d_qk)
@@ -529,7 +530,8 @@ class CausalSelfAttention(nn.Module, AttachableStore):
 
                 # NOTE: this scale is for µTransfer,
                 # in SP, we use sqrt(1/d_h)
-                softmax_scale = 1 / query_states.shape[-1] if self.is_using_mup else None
+                # softmax_scale = 1 / query_states.shape[-1] if self.is_using_mup else None
+                softmax_scale = 1 / self.d_qk if self.is_using_mup else None
                 attention_output = flash_attn_with_kvcache(
                     query_states,
                     k_cache,
@@ -772,9 +774,12 @@ class LlamaModel(nn.Module):
 
         output = self.token_position_embeddings(input_ids=input_ids, input_mask=input_mask)
         output = output["input_embeds"]
+        
         if self.is_using_mup:
+            # with torch.no_grad():
             from nanotron.scaling.parametrization import NAME_TO_MULTIPLIER_MAPPING
-            output = output * torch.tensor(NAME_TO_MULTIPLIER_MAPPING["token_embedding"], device=output.device, dtype=output.dtype)
+            # output = output.mul_(torch.tensor(NAME_TO_MULTIPLIER_MAPPING["token_embedding"], device=output.device, dtype=output.dtype))
+            output = output.mul_(torch.tensor(14.6, device=output.device, dtype=output.dtype))
 
         hidden_encoder_states = {
             "hidden_states": output,
@@ -797,13 +802,13 @@ class LlamaModel(nn.Module):
         hidden_states = self.final_layer_norm(input=hidden_encoder_states["hidden_states"])["hidden_states"]
 
         sharded_logits = self.lm_head(x=hidden_states)["logits"]
-        
-        if self.is_using_mup:
-            from nanotron.scaling.parametrization import NAME_TO_MULTIPLIER_MAPPING, WIDTH_MULTIPLIER
-            
-            sharded_logits = sharded_logits * torch.tensor(1/WIDTH_MULTIPLIER, device=output.device, dtype=output.dtype)
 
         fp32_sharded_logits = self.cast_to_fp32(x=sharded_logits)["output"]
+        
+        if self.is_using_mup:
+            # with torch.no_grad():
+            from nanotron.scaling.parametrization import NAME_TO_MULTIPLIER_MAPPING, WIDTH_MULTIPLIER
+            fp32_sharded_logits = fp32_sharded_logits.mul_(torch.tensor(0.22200000000000003, device=output.device, dtype=output.dtype))
 
         return fp32_sharded_logits, hidden_states
 
