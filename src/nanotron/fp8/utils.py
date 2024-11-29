@@ -375,8 +375,14 @@ def convert_model_to_fp8(model: NanotronModel, config: FP8Args) -> NanotronModel
             # NOTE: convert it to the residual stream's dtype
             # for p in module.parameters():
             #     p.data = p.data.to(self.config.model.dtype)
-            module.to(dtype=config.resid_dtype)
+            # for p in module.parameters():
+            #     p.data = p.data.to(dtype=config.resid_dtype) if p.data
             # pass
             # assert module.weight.data.__class__ == torch.Tensor
+            # module.to(dtype=config.resid_dtype)
+            # pass
+            # assert module.weight.data.__class__ == torch.Tensor
+            # NOTE: this causes param.data == NanotronParameter
+            assert config.resid_dtype == torch.float32, "not support datatype conversion, because of error 8"
 
     return model

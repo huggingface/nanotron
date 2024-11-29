@@ -264,8 +264,9 @@ class NanotronParameter(nn.Parameter):
             self, self.NANOTRON_PARAMETER_METADATA_ATTRIBUTE_NAME
         )
 
-    # def __repr__(self):
-    #     return f"NanotronParameter({super().__repr__()})"
+    def __repr__(self):
+        # return f"NanotronParameter({super().__repr__()})"
+        return "NanotronParameter()"
 
     @property
     def data(self):
@@ -293,13 +294,13 @@ class NanotronParameter(nn.Parameter):
     def __torch_dispatch__(cls, func, types, args=(), kwargs=None):
         from nanotron.fp8.tensor import FP8Tensor
 
-        print(f"__torch_dispatch__ called with func: {func}, args: {args}, kwargs: {kwargs}")
+        # print(f"__torch_dispatch__ called with func: {func}, args: {args}, kwargs: {kwargs}")
 
-        if func in {torch._tensor_str._str, repr}:
-            return super().__torch_dispatch__(func, types, args, kwargs)
+        # if func in {torch._tensor_str._str, repr}:
+        #     return super().__torch_dispatch__(func, types, args, kwargs)
 
         def unwrap(e):
-            print(f"Unwrapping: {e} (type: {type(e)})")
+            # print(f"Unwrapping: {e} (type: {type(e)})")
             return e._data if e.__class__ == NanotronParameter else e
 
         def wrap(e):

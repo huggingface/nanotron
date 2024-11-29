@@ -44,12 +44,15 @@ def _test_initialize_fp8_model(parallel_context: ParallelContext, fp8_config: FP
             assert all(
                 p.dtype == fp8_config.resid_dtype for p in module.parameters()
             ), f"name: {name}, __class__: {module.weight.data.__class__}"
-            try:
-                assert all(
-                    p.data.__class__ == nn.Parameter for p in module.parameters()
-                ), f"name: {name}, __class__: {module.weight.data.__class__}"
-            except:
-                assert 1 == 1
+            # try:
+            #     assert all(
+            #         p.data.__class__ == nn.Parameter for p in module.parameters()
+            #     ), f"name: {name}, __class__: {module.weight.data.__class__}"
+            # except:
+            #     assert 1 == 1
+            assert all(
+                p.data.__class__ == nn.Parameter for p in module.parameters()
+            ), f"name: {name}, __class__: {module.weight.data.__class__}"
         else:
             assert all(
                 isinstance(p.data.__class__, FP8Tensor) for p in module.parameters()
