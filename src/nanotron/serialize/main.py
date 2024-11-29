@@ -60,6 +60,7 @@ def save(
     should_save_lr_scheduler: bool = True,
     sanity_checks: bool = True,
 ) -> None:
+
     assert isinstance(training_metadata, TrainingMetadata)
 
     try:
@@ -107,6 +108,7 @@ def save(
                 lr_scheduler=lr_scheduler,
                 parallel_context=parallel_context,
                 root_folder=root_folder,
+                is_zero=config.optimizer.zero_stage
             )
     except Exception as e:
         log_rank(
