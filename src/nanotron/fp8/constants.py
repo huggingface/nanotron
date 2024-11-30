@@ -57,11 +57,11 @@ FP8LM_LINEAR_RECIPE = FP8LinearRecipe(
     weight_grad=FP8TensorRecipe(dtype=DTypes.FP8E4M3, margin=0, interval=1),
     output_grad=FP8TensorRecipe(dtype=DTypes.FP8E5M2, margin=0, interval=16),
     # NOTE: tested, and it works
-    # split_accumulator=FP8SplitAccumulator(output=True, input_grad=True, weight_grad=True),
-    # accumulate=FP8SplitAccumulator(output=True, input_grad=True, weight_grad=True),
-    # NOTE: passes the test with 4% speed up relative to the above
-    split_accumulator=FP8SplitAccumulator(output=False, input_grad=True, weight_grad=True),
-    accumulate=FP8SplitAccumulator(output=False, input_grad=False, weight_grad=True),
+    split_accumulator=FP8SplitAccumulator(output=True, input_grad=True, weight_grad=True),
+    accumulate=FP8SplitAccumulator(output=True, input_grad=True, weight_grad=True),
+    # # NOTE: passes the test with 4% speed up relative to the above
+    # split_accumulator=FP8SplitAccumulator(output=False, input_grad=True, weight_grad=True),
+    # accumulate=FP8SplitAccumulator(output=False, input_grad=False, weight_grad=True),
 )
 
 FP8LM_OPTIM_RECIPE = FP8OptimRecipe(

@@ -10,7 +10,6 @@ from nanotron.fp8.constants import FP8_GPU_NAMES, FP8LM_RECIPE, QTYPE_TO_DTYPE
 from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.linear import FP8Linear
 from nanotron.fp8.meta import FP8Meta
-from nanotron.logging import log_rank
 from nanotron.models.base import NanotronModel
 
 logger = logging.get_logger(__name__)
@@ -236,20 +235,22 @@ def find_fp8_config_by_module_name(target_module_name: str, config: FP8Args) -> 
     # assert config.fp8.model is not None or config.fp8.is_quant_all_except_first_and_last is not None
 
     # TODO(xrsrke): remove config.is_quant_all_except_first_and_last
+    from nanotron.fp8.constants import FP8LM_LINEAR_RECIPE
 
     if config.model is not None:
         for layer_args in config.model:
             if layer_args.module_name == target_module_name:
                 return layer_args
-    elif config.is_quant_all_except_first_and_last:
+    # elif config.is_quant_all_except_first_and_last:
+    else:
 
         def match_layer_pattern(name, layer_idxs):
             patterns = [
-                "model.decoder.{}.attn.qkv_proj",
-                "model.decoder.{}.attn.o_proj",
-                "model.decoder.{}.mlp.down_proj",
+                "model.decoder.{}.pp_block.attn.qkv_proj",
+                "model.decoder.{}.pp_block.attn.o_proj",
+                "model.decoder.{}.pp_block.mlp.down_proj",
                 # "model.decoder.{}.mlp.up_proj",
-                "model.decoder.{}.mlp.gate_up_proj",
+                "model.decoder.{}.pp_block.mlp.gate_up_proj",
             ]
 
             for idx in layer_idxs:
@@ -259,38 +260,40 @@ def find_fp8_config_by_module_name(target_module_name: str, config: FP8Args) -> 
 
             return False
 
-        num_layers = config.model.model_config.num_hidden_layers
+        from nanotron import constants
+
+        num_layers = constants.CONFIG.model.model_config.num_hidden_layers
         assert num_layers > 2, "num_hidden_layers must be greater than 2"
-        assert config.fp8_linear_config_temp is not None
+        # assert config.fp8_linear_config_temp is not None
 
         quant_layer_idxs = list(range(1, num_layers - 1))
         if match_layer_pattern(target_module_name, quant_layer_idxs) is True:
             from copy import deepcopy
 
-            config_temp = deepcopy(config.fp8_linear_config_temp)
-            config_temp.module_name = target_module_name
+            # config_temp = deepcopy(config.fp8_linear_config_temp)
+            config_temp = deepcopy(FP8LM_LINEAR_RECIPE)
+            # config_temp.module_name = target_module_name
             return config_temp
-    else:
-        from nanotron.fp8.constant_recipe import MODULE_NAMES_THAT_NOT_FP8
-        from nanotron.fp8.constants import FP8LM_LINEAR_RECIPE
+    # else:
+    #     from nanotron.fp8.constant_recipe import MODULE_NAMES_THAT_NOT_FP8
 
-        if any(module_name in target_module_name for module_name in MODULE_NAMES_THAT_NOT_FP8):
-            return None
-        else:
-            # NOTE: return default recipe
-            # NOTE: based on the global setting smooth_quant to decide whether to do smooth quantization
-            # or not
-            recipe = FP8LM_LINEAR_RECIPE
-            recipe.smooth_quant = config.smooth_quant
-            log_rank(
-                f"target_module_name={target_module_name}, smooth_quant={recipe.smooth_quant}",
-                logger=logger,
-                level=logging.INFO,
-                rank=0,
-            )
+    #     if any(module_name in target_module_name for module_name in MODULE_NAMES_THAT_NOT_FP8):
+    #         return None
+    #     else:
+    #         # NOTE: return default recipe
+    #         # NOTE: based on the global setting smooth_quant to decide whether to do smooth quantization
+    #         # or not
+    #         recipe = FP8LM_LINEAR_RECIPE
+    #         recipe.smooth_quant = config.smooth_quant
+    #         log_rank(
+    #             f"target_module_name={target_module_name}, smooth_quant={recipe.smooth_quant}",
+    #             logger=logger,
+    #             level=logging.INFO,
+    #             rank=0,
+    #         )
 
-            return recipe
-    return None
+    #         return recipe
+    # return None
 
 
 def get_modules_not_in_fp16():

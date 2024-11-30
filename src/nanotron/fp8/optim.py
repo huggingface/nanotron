@@ -55,50 +55,6 @@ class FP8AdamW(Optimizer):
         self.master_weight_dtype = recipe.master_weight_dtype
         self.optim_accum_dtype = recipe.accum_dtype
 
-        # NOTE: torch.Tensor is bias
-        # self.fp8_weights: List[Union[FP8Parameter, torch.Tensor]] = []
-
-        # NOTE: move to gradient accumulator
-        # # NOTE: create master weights for FP8 Parameter
-        # self.mappping_fp8_to_master_weight: Dict[str, Union[FP16Tensor, torch.Tensor]] = {}
-
-        # for group in self.param_groups:
-        #     for p in group["params"]:
-        #         # data = get_data_from_param(p)
-        #         # if p.data.__class__ != FP8Tensor:
-        #         #     continue
-        #         # # NOTE: this parameter we don't convert to FP8, so no need master weight
-        #         # if not isinstance(p.data, FP8Tensor):
-        #         #     continue
-
-        #         assert 1 == 1
-        #         # if p._is_future_fp8 is not True:
-        #         #     continue
-        #         if not isinstance(p.data, FP8Tensor):
-        #             continue
-
-        #         # assert p.dtype == data.dtype
-
-        #         # if isinstance(p, NanotronParameter):
-        #         #     raw_data = p.data.orig_data if hasattr(p.data, "orig_data") else p.data
-        #         # else:
-        #         #     raw_data = p.orig_data if hasattr(p, "orig_data") else p.data
-        #         # assert raw_data.dtype in [torch.float32], f"raw_data.dtype={raw_data.dtype}"
-
-        #         assert p.data.dtype in [torch.float32], f"raw_data.dtype={p.data.dtype}"
-        #         self.mappping_fp8_to_master_weight[hash(p)] = self._create_master_weight(p.data)
-
-        #         # self.fp8_weights.append(p.data)
-
-        #         # delete_tensor_from_memory(raw_data)
-
-        #         # p.orig_data = None
-        #         # if hasattr(p.data, "orig_data"):
-        #         #     p.data.orig_data = None
-
-        # # assert len(self.mappping_fp8_to_master_weight) == len(self.fp8_weights)
-        # # TODO(xrsrke): auto free fp32 weights from memory
-
         self.loggings = []
         self._is_overflow = False
 
@@ -278,6 +234,19 @@ class FP8AdamW(Optimizer):
 
                 assert fp32_grad.dtype == self.optim_accum_dtype
 
+                if is_overflow_underflow_nan(fp32_grad):
+                    self._is_overflow = True
+
+                    if constants.CONFIG.fp8.skip_param_update_if_nan is True:
+                        log_rank(
+                            f"[Optim] param_name, skipping update due to overflow/underflow/nan",  # noqa
+                            logger=logger,
+                            level=logging.INFO,
+                        )
+                        continue
+                    else:
+                        raise ValueError("Overflow, underflow, or NaN detected in the gradients")
+
                 if isinstance(p.data, FP8Tensor):
                     assert p.data.dtype in FP8_DTYPES
                     assert hash(p) in self.mappping_fp8_to_master_weight, "Can't find master weight for FP8 parameter"
@@ -294,19 +263,6 @@ class FP8AdamW(Optimizer):
                     fp32_data = p.data.to(self.optim_accum_dtype)
 
                 assert fp32_data.dtype == self.optim_accum_dtype
-
-                if is_overflow_underflow_nan(fp32_grad):
-                    self._is_overflow = True
-
-                    if constants.CONFIG.fp8.skip_param_update_if_nan is True:
-                        log_rank(
-                            f"[Optim] param_name, skipping update due to overflow/underflow/nan",  # noqa
-                            logger=logger,
-                            level=logging.INFO,
-                        )
-                        continue
-                    else:
-                        raise ValueError("Overflow, underflow, or NaN detected in the gradients")
 
                 exp_avg, exp_avg_sq = state["exp_avg"], state["exp_avg_sq"]
 

@@ -285,19 +285,28 @@ class FP32GradientAccumulator(GradientAccumulator):
         # except AssertionError:
         #     assert 1 == 1
         assert half_param.grad is not None, f"Expected param {name} to have gradient."
+        from nanotron.fp8.tensor import convert_tensor_from_fp8
+
+        if isinstance(half_param.data, FP8Tensor):
+            grad = convert_tensor_from_fp8(half_param.grad, half_param.grad.fp8_meta, torch.float32)
+        else:
+            grad = half_param.grad
+
+        from nanotron.fp8.utils import is_overflow_underflow_nan
+
+        assert is_overflow_underflow_nan(grad) is False
 
         fp32_grad = self.get_grad_buffer(name=name)
 
         if self._is_accumulation_sync_step is False:
             # WARNING: We assume fp32_grad_bucket is already zeroed
-            if not isinstance(half_param.data, FP8Tensor):
-                fp32_grad.add_(half_param.grad)
-            else:
-                from nanotron.fp8.tensor import convert_tensor_from_fp8
-
-                assert half_param.grad.dtype in [torch.int8, torch.uint8]
-                # TODO(xrsrke): move .convert_tensor_from_fp8 to .to(dtype), so we have an unified API
-                fp32_grad.add_(convert_tensor_from_fp8(half_param.grad, half_param.grad.fp8_meta, torch.float32))
+            # if not isinstance(half_param.data, FP8Tensor):
+            #     fp32_grad.add_(grad)
+            # else:
+            #     assert grad.dtype in [torch.int8, torch.uint8]
+            #     # TODO(xrsrke): move .convert_tensor_from_fp8 to .to(dtype), so we have an unified API
+            #     fp32_grad.add_(grad)
+            fp32_grad.add_(grad)
             # In case _is_accumulation_sync_step = True: no need to add half gradients, because it's done in the allreduce hook
 
         # TODO @thomasw21: Is it better to set to zero instead?

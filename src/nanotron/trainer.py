@@ -36,7 +36,7 @@ from nanotron.config import (
 )
 from nanotron.constants import MODEL_CONFIG_FILE_NAME
 from nanotron.dataloader import sanity_check_dataloader
-from nanotron.fp8.utils import convert_model_to_fp8
+from nanotron.fp8.utils import convert_model_to_fp8, is_overflow_underflow_nan
 from nanotron.helpers import (
     _vocab_size_with_padding,
     compute_remain_train_steps_of_a_data_stage_from_ckp,
@@ -649,6 +649,7 @@ class DistributedTrainer:
                     assert p.grad.dtype in [torch.uint8, torch.int8], f"got {p.grad.dtype}"
                 else:
                     assert p.grad.dtype == constants.CONFIG.fp8.resid_dtype
+                    assert is_overflow_underflow_nan(p.grad) is False
 
         # NOTE: sanity check that parameters has gradient
         assert 1 == 1
