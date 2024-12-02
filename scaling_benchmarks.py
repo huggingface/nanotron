@@ -1,9 +1,18 @@
-#!/usr/bin/env python3
+# python scaling_benchmarks.py
 import argparse
 import math
 import os
 
 import yaml
+from nanotron.logging import human_format
+
+VOCAB_SIZE = 32768
+
+
+def estimate_num_params(layers, hidden_size, heads, intermediate_size, tie_word_embeddings):
+    # params = 2*V*h + l(3*h*H + 4*h*h) = (2)Vh + 16lh^2
+    vocab = VOCAB_SIZE * hidden_size if tie_word_embeddings else 2 * VOCAB_SIZE * hidden_size
+    return vocab + layers * (3 * hidden_size * intermediate_size + 4 * hidden_size * hidden_size)
 
 
 def create_config(
@@ -15,6 +24,9 @@ def create_config(
     micro_batch_size: int = 1,
     base_config_path: str = "examples/config_tiny_llama.yaml",
     zero_stage: int = 0,
+    num_layers: int = 24,
+    hidden_size: int = 2048,
+    num_attention_heads: int = 16,
 ) -> dict:
     """Create a config with the specified parallelism settings."""
     # Load base config
@@ -35,16 +47,37 @@ def create_config(
     config["model"]["model_config"]["max_position_embeddings"] = seq_len
     config["tokens"]["micro_batch_size"] = micro_batch_size
 
+    # Modify model architecture settings
+    config["model"]["model_config"]["num_hidden_layers"] = num_layers
+    config["model"]["model_config"]["hidden_size"] = hidden_size
+    config["model"]["model_config"]["num_attention_heads"] = num_attention_heads
+    config["model"]["model_config"]["num_key_value_heads"] = num_attention_heads  # No GQA / MQA
+    config["model"]["model_config"]["intermediate_size"] = 4 * hidden_size
+    # config["model"]["model_config"]["tie_word_embeddings"] = True if hidden_size < 3000 else False
+
+    # Set vocab_size to 32k to reduce memory usage
+    config["model"]["model_config"]["vocab_size"] = VOCAB_SIZE
+
     # modify zero stage
     config["optimizer"]["zero_stage"] = zero_stage
+
+    N = human_format(
+        estimate_num_params(
+            num_layers,
+            hidden_size,
+            num_attention_heads,
+            config["model"]["model_config"]["intermediate_size"],
+            config["model"]["model_config"]["tie_word_embeddings"],
+        )
+    )
 
     # Update run name to reflect configuration
     config["general"][
         "run"
-    ] = f"dp{dp}_tp{tp}_pp{pp}_acc{batch_accum}_mbs{micro_batch_size}_seq{seq_len}_zero{zero_stage}"
+    ] = f"{N}_dp{dp}_tp{tp}_pp{pp}_acc{batch_accum}_mbs{micro_batch_size}_seq{seq_len}_zero{zero_stage}_l{num_layers}_h{hidden_size}_heads{num_attention_heads}"
 
     # Update benchmark CSV path
-    config["general"]["benchmark_csv_path"] = "bench.csv"
+    config["general"]["benchmark_csv_path"] = "bench_dp.csv"
 
     return config
 
@@ -104,6 +137,7 @@ def main():
     )
     parser.add_argument("--base-script", type=str, default="run_multinode.sh", help="Base SLURM script to use")
     parser.add_argument("--run", action="store_true", help="Automatically submit all generated SLURM scripts")
+    parser.add_argument("--debug", action="store_true", help="Debug mode")
     args = parser.parse_args()
 
     # Validate input files exist
@@ -116,34 +150,69 @@ def main():
     for directory in [args.configs_dir, args.scripts_dir]:
         os.makedirs(directory, exist_ok=True)
 
+    # Define model configurations
+    model_configs = {
+        # params = 2*V*h + l(3*h*H + 4*h*h) = (2)Vh + 16lh^2
+        # (layers, hidden_size, heads)
+        # "138M": (12, 768, 12),
+        # "200M": (12, 1024, 16),
+        # "500M": (12, 1536, 16),
+        # "1000M": (15, 2048, 16),
+        "1700M": (24, 2048, 16),  # (layers, hidden_size, heads)
+        "4300M": (28, 3072, 20),
+        "8700M": (32, 4096, 32),
+        "11B": (42, 4096, 32),
+    }
+
     # Define configurations to test
-    configurations = [
-        # (dp, tp, pp, batch_accum, seq_len, mbs)
-        # (1, 8, 1, 1, 2048, 1),    # Base configuration
-        # (2, 4, 1, 1, 2048, 1),
-        # (8, 1, 1, 1, 2048, 1),
-        # (16, 1, 1, 1, 2048, 1),
-        *[(2**i, 1, 1, 1, 2048, 1) for i in range(0, 8)],
-        *[(2**i, 8, 1, 1, 2048, 1) for i in range(0, 7)],
-        *[(2**i, 8, 1, 1, 2048, 8) for i in range(0, 7)],
-        # 64k seq len
-        *[(2**i, 8, 1, 1, 65536, 1) for i in range(0, 7)],  # 64 nodes max
-    ]
+    configurations = []
+
+    # For each model size, test different GPU configurations
+    for model_name, (num_layers, hidden_size, num_heads) in model_configs.items():
+        # Test each model with different GPU counts while maintaining 4M tokens/step
+        model_configs = [
+            # Format: (dp, tp, pp, batch_accum, seq_len, mbs, ...)
+            # (8, 1, 1, 1, 4096, 1, num_layers, hidden_size, num_heads),
+            # 128 GPU configuration
+            (128, 1, 1, 4, 4096, 2, num_layers, hidden_size, num_heads),
+            # 512 GPU configuration
+            (512, 1, 1, 1, 4096, 2, num_layers, hidden_size, num_heads),
+        ]
+        configurations.extend(model_configs)
+
+    if args.debug:
+        print("Debug mode: only running 1 configuration")
+        configurations = configurations[:1]
 
     # Validate configurations
-    for dp, tp, pp, batch_accum, seq_len, mbs in configurations:
+    for dp, tp, pp, batch_accum, seq_len, mbs, num_layers, hidden_size, num_heads in configurations:
         total_gpus = dp * tp * pp
-        if total_gpus > 64:  # Assuming maximum of 8 nodes with 8 GPUs each
+        if total_gpus > 512:
             print(
                 f"Warning: Configuration dp={dp}, tp={tp}, pp={pp} requires {total_gpus} GPUs, which might be too many"
             )
 
+        # Calculate tokens per step to verify batch size
+        tokens_per_step = dp * tp * pp * mbs * batch_accum * seq_len
+        print(f"Model {hidden_size}H_{num_layers}L: {total_gpus} GPUs, " f"{tokens_per_step:,} GBS")
+
     # Generate configs and scripts
-    generated_scripts = []  # Keep track of generated script paths
-    for dp, tp, pp, batch_accum, seq_len, mbs in configurations:
+    generated_scripts = []
+    for dp, tp, pp, batch_accum, seq_len, mbs, num_layers, hidden_size, num_heads in configurations:
         try:
             # Create config
-            config = create_config(dp, tp, pp, batch_accum, seq_len, mbs, base_config_path=args.base_config)
+            config = create_config(
+                dp=dp,
+                tp=tp,
+                pp=pp,
+                batch_accum=batch_accum,
+                seq_len=seq_len,
+                micro_batch_size=mbs,
+                base_config_path=args.base_config,
+                num_layers=num_layers,
+                hidden_size=hidden_size,
+                num_attention_heads=num_heads,
+            )
 
             # Save config
             config_path = os.path.join(args.configs_dir, f"config_{config['general']['run']}.yaml")

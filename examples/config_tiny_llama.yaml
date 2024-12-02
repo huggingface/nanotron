@@ -1,5 +1,5 @@
 # /fsx/nouamane/miniconda/envs/2-1-cu121/bin/torchrun --nproc_per_node=8 run_train.py --config-file examples/config_tiny_llama.yaml
-# NANOTRON_BENCHMARK=1 CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node=8 run_train.py --config-file examples/config_tiny_llama.yaml
+# NANOTRON_BENCHMARK=1 CUDA_DEVICE_MAX_CONNECTIONS=1 /fsx/nouamane/miniconda/envs/2-1-cu121/bin/torchrun --nproc_per_node=8 run_train.py --config-file examples/config_tiny_llama.yaml
 checkpoints:
   checkpoint_interval: 10000
   checkpoints_path: checkpoints

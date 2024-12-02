@@ -5,11 +5,11 @@
 #SBATCH --partition=hopper-prod
 #SBATCH --qos=high
 
-#SBATCH -o /fsx/nouamane/projects/nanotron/logs/%x-%j.out
+#SBATCH -o /fsx/nouamane/projects/nanotron/logs/%j-%x.out
 
 #SBATCH --nodes=2                 # Number of nodes (modify as needed)
 #SBATCH --ntasks-per-node=1       # Number of tasks per node
-#SBATCH --cpus-per-task=80         # CPU cores per task
+#SBATCH --cpus-per-task=60         # CPU cores per task
 #SBATCH --gres=gpu:8              # Number of GPUs per node
 #SBATCH --exclusive               # Exclusive use of nodes
 
