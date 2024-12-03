@@ -1,4 +1,4 @@
-# python scaling_benchmarks.py
+# python scaling_benchmarks.py --base-config elie.yaml --debug
 import argparse
 import math
 import os
@@ -6,7 +6,11 @@ import os
 import yaml
 from nanotron.logging import human_format
 
-VOCAB_SIZE = 32768
+VOCAB_SIZE = 128256
+NUM_KEY_VALUE_HEADS = 8
+TIE_WORD_EMBEDDINGS = True
+ZERO_STAGE = 0
+TP_MODE = "ALL_REDUCE"
 
 
 def estimate_num_params(layers, hidden_size, heads, intermediate_size, tie_word_embeddings):
@@ -23,10 +27,12 @@ def create_config(
     seq_len: int,
     micro_batch_size: int = 1,
     base_config_path: str = "examples/config_tiny_llama.yaml",
-    zero_stage: int = 0,
+    zero_stage: int = ZERO_STAGE,
     num_layers: int = 24,
     hidden_size: int = 2048,
     num_attention_heads: int = 16,
+    intermediate_size=None,
+    tp_mode: str = TP_MODE,
 ) -> dict:
     """Create a config with the specified parallelism settings."""
     # Load base config
@@ -51,15 +57,23 @@ def create_config(
     config["model"]["model_config"]["num_hidden_layers"] = num_layers
     config["model"]["model_config"]["hidden_size"] = hidden_size
     config["model"]["model_config"]["num_attention_heads"] = num_attention_heads
-    config["model"]["model_config"]["num_key_value_heads"] = num_attention_heads  # No GQA / MQA
-    config["model"]["model_config"]["intermediate_size"] = 4 * hidden_size
-    # config["model"]["model_config"]["tie_word_embeddings"] = True if hidden_size < 3000 else False
+    config["model"]["model_config"]["num_key_value_heads"] = (
+        NUM_KEY_VALUE_HEADS if NUM_KEY_VALUE_HEADS is not None else num_attention_heads
+    )
+    config["model"]["model_config"]["intermediate_size"] = (
+        intermediate_size if intermediate_size is not None else 4 * hidden_size
+    )
+    config["model"]["model_config"]["tie_word_embeddings"] = TIE_WORD_EMBEDDINGS
 
     # Set vocab_size to 32k to reduce memory usage
     config["model"]["model_config"]["vocab_size"] = VOCAB_SIZE
 
     # modify zero stage
     config["optimizer"]["zero_stage"] = zero_stage
+
+    # modify tp mode
+    config["parallelism"]["tp_mode"] = tp_mode
+    config["parallelism"]["tp_linear_async_communication"] = True if tp_mode == "REDUCE_SCATTER" else False
 
     N = human_format(
         estimate_num_params(
@@ -77,7 +91,7 @@ def create_config(
     ] = f"{N}_dp{dp}_tp{tp}_pp{pp}_acc{batch_accum}_mbs{micro_batch_size}_seq{seq_len}_zero{zero_stage}_l{num_layers}_h{hidden_size}_heads{num_attention_heads}"
 
     # Update benchmark CSV path
-    config["general"]["benchmark_csv_path"] = "bench_dp.csv"
+    config["general"]["benchmark_csv_path"] = "bench_elie.csv"
 
     return config
 
@@ -153,30 +167,47 @@ def main():
     # Define model configurations
     model_configs = {
         # params = 2*V*h + l(3*h*H + 4*h*h) = (2)Vh + 16lh^2
-        # (layers, hidden_size, heads)
-        # "138M": (12, 768, 12),
-        # "200M": (12, 1024, 16),
-        # "500M": (12, 1536, 16),
-        # "1000M": (15, 2048, 16),
-        "1700M": (24, 2048, 16),  # (layers, hidden_size, heads)
-        "4300M": (28, 3072, 20),
-        "8700M": (32, 4096, 32),
-        "11B": (42, 4096, 32),
+        # (layers, hidden_size, heads, intermediate_size)
+        # "138M": (12, 768, 12, 3072),
+        # "200M": (12, 1024, 16, 4096),
+        # "500M": (12, 1536, 16, 6144),
+        # "1000M": (15, 2048, 16, 8192),
+        # "1700M": (24, 2048, 16, 8192),  # (layers, hidden_size, heads, intermediate_size)
+        # "4300M": (28, 3072, 20, 12288),
+        # "8700M": (32, 4096, 32, 16384),
+        # "11B": (42, 4096, 32, 16384),
+        "3500M": (28, 3072, 24, 8192)
     }
 
     # Define configurations to test
     configurations = []
 
     # For each model size, test different GPU configurations
-    for model_name, (num_layers, hidden_size, num_heads) in model_configs.items():
+    for model_name, (num_layers, hidden_size, num_heads, intermediate_size) in model_configs.items():
         # Test each model with different GPU counts while maintaining 4M tokens/step
         model_configs = [
             # Format: (dp, tp, pp, batch_accum, seq_len, mbs, ...)
-            # (8, 1, 1, 1, 4096, 1, num_layers, hidden_size, num_heads),
-            # 128 GPU configuration
-            (128, 1, 1, 4, 4096, 2, num_layers, hidden_size, num_heads),
-            # 512 GPU configuration
-            (512, 1, 1, 1, 4096, 2, num_layers, hidden_size, num_heads),
+            # (1, 1, 1, 8, 2048, 1, num_layers, hidden_size, num_heads, intermediate_size),
+            # (1, 2, 1, 1, 4096, 2, num_layers, hidden_size, num_heads, intermediate_size),
+            # (1, 4, 1, 1, 4096, 2, num_layers, hidden_size, num_heads, intermediate_size),
+            # (1, 8, 1, 1, 4096, 2, num_layers, hidden_size, num_heads, intermediate_size),
+            # find best tput on 16 nodes with 4GBS
+            # Format: (dp, tp, pp, batch_accum, seq_len, mbs, ...)
+            # (1, 8, 1, 1, 2048, 16, num_layers, hidden_size, num_heads, intermediate_size), # test max MBS
+            # (16, 8, 1, 1, 2048, 16, num_layers, hidden_size, num_heads, intermediate_size), # ideal run i guess
+            # (32, 4, 1, 1, 2048, 8, num_layers, hidden_size, num_heads, intermediate_size), # TP=4
+            # (64, 2, 1, 1, 2048, 4, num_layers, hidden_size, num_heads, intermediate_size), # TP=2
+            # (128, 1, 1, 1, 2048, 2, num_layers, hidden_size, num_heads, intermediate_size), # TP=1
+            # # same for 8 nodes
+            (8, 8, 1, 1, 2048, 16, num_layers, hidden_size, num_heads, intermediate_size),
+            (16, 4, 1, 1, 2048, 8, num_layers, hidden_size, num_heads, intermediate_size),
+            (32, 2, 1, 1, 2048, 4, num_layers, hidden_size, num_heads, intermediate_size),
+            (64, 1, 1, 1, 2048, 2, num_layers, hidden_size, num_heads, intermediate_size),
+            # same for 4 nodes
+            # (4, 8, 1, 1, 2048, 16, num_layers, hidden_size, num_heads, intermediate_size),
+            # (8, 4, 1, 1, 2048, 8, num_layers, hidden_size, num_heads, intermediate_size),
+            # (16, 2, 1, 1, 2048, 4, num_layers, hidden_size, num_heads, intermediate_size),
+            # (32, 1, 1, 1, 2048, 2, num_layers, hidden_size, num_heads, intermediate_size),
         ]
         configurations.extend(model_configs)
 
@@ -185,7 +216,7 @@ def main():
         configurations = configurations[:1]
 
     # Validate configurations
-    for dp, tp, pp, batch_accum, seq_len, mbs, num_layers, hidden_size, num_heads in configurations:
+    for dp, tp, pp, batch_accum, seq_len, mbs, num_layers, hidden_size, num_heads, intermediate_size in configurations:
         total_gpus = dp * tp * pp
         if total_gpus > 512:
             print(
@@ -198,7 +229,7 @@ def main():
 
     # Generate configs and scripts
     generated_scripts = []
-    for dp, tp, pp, batch_accum, seq_len, mbs, num_layers, hidden_size, num_heads in configurations:
+    for dp, tp, pp, batch_accum, seq_len, mbs, num_layers, hidden_size, num_heads, intermediate_size in configurations:
         try:
             # Create config
             config = create_config(
@@ -212,6 +243,7 @@ def main():
                 num_layers=num_layers,
                 hidden_size=hidden_size,
                 num_attention_heads=num_heads,
+                intermediate_size=intermediate_size,
             )
 
             # Save config
@@ -231,7 +263,7 @@ def main():
             # Make script executable
             os.chmod(script_path, 0o755)
 
-            print(f"Successfully generated config and script for {config['general']['run']}")
+            print(f"Successfully generated config and script for {config_path}")
             generated_scripts.append(script_path)
 
         except Exception as e:
