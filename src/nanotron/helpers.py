@@ -20,7 +20,7 @@ from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.config import Config, DatasetStageArgs, LRSchedulerArgs, OptimizerArgs, ParallelismArgs
 from nanotron.distributed import ProcessGroup
-from nanotron.logging import LogItem, log_rank
+from nanotron.logging import LogItem, human_format, log_rank
 from nanotron.models.base import NanotronModel
 from nanotron.optim.base import BaseOptimizer, Optimizer
 from nanotron.optim.gradient_accumulator import (
@@ -480,8 +480,8 @@ def get_profiler(config: Config):
             activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
             schedule=torch.profiler.schedule(wait=1, warmup=1, active=1, repeat=1, skip_first=3),
             on_trace_ready=on_trace_ready,
-            # record_shapes=True,
-            # profile_memory=True,
+            record_shapes=True,
+            profile_memory=True,
             with_stack=True,
         )
     else:
@@ -592,8 +592,11 @@ def create_table_log(
     hardware_tflops,
     tokens_per_sec,
     bandwidth,
+    num_params,
     slurm_job_id,
 ):
+    print("num_params")
+    print(num_params)
     return [
         LogItem("job_id", slurm_job_id, "s"),
         LogItem("name", config.general.run, "s"),
@@ -613,7 +616,35 @@ def create_table_log(
         LogItem("RS Intra-node (GB/s)", bandwidth["reduce_scatter_intranode"], ".2f"),
         LogItem("Mem Alloc (GB)", torch.cuda.max_memory_allocated() / 1024**3, ".2f"),
         LogItem("Mem Res (GB)", torch.cuda.max_memory_reserved() / 1024**3, ".2f"),
+        # Important config columns
+        LogItem("dp", config.parallelism.dp, "d"),
+        LogItem("pp", config.parallelism.pp, "d"),
+        LogItem("tp", config.parallelism.tp, "d"),
+        LogItem("pp_engine", str(config.parallelism.pp_engine), "s"),
+        LogItem("tp_mode", config.parallelism.tp_mode, "s"),
+        LogItem("tp_async_comm", str(config.parallelism.tp_linear_async_communication), "s"),
+        LogItem("hidden_size", config.model.model_config.hidden_size, "d"),
+        LogItem("hidden_act", config.model.model_config.hidden_act, "s"),
+        LogItem("num_layers", config.model.model_config.num_hidden_layers, "d"),
+        LogItem("num_heads", config.model.model_config.num_attention_heads, "d"),
+        LogItem("num_kv_heads", config.model.model_config.num_key_value_heads, "d"),
+        LogItem("max_pos", config.model.model_config.max_position_embeddings, "d"),
+        LogItem("vocab_size", config.model.model_config.vocab_size, "d"),
+        LogItem("tie_word_embeddings", str(config.model.model_config.tie_word_embeddings), "s"),
+        LogItem("dtype", str(config.model.dtype), "s"),
+        LogItem("zero_stage", config.optimizer.zero_stage, "d"),
+        LogItem("ddp_bucket_cap_mb", config.model.ddp_bucket_cap_mb, "d"),
+        LogItem("accumulate_grad_in_fp32", str(config.optimizer.accumulate_grad_in_fp32), "s"),
+        # Params
+        LogItem("Total Params", num_params["total"], "human_format"),
+        LogItem("Local Params", num_params["local"], "human_format"),
     ]
+
+
+def get_formatted_value(item):
+    if item.log_format == "human_format":
+        return human_format(item.scalar_value)
+    return f"{item.scalar_value:{item.log_format}}"
 
 
 def create_table_output(table_log, column_widths):
@@ -621,15 +652,13 @@ def create_table_output(table_log, column_widths):
     separator_row = "| " + " | ".join(["-" * width for width in column_widths]) + " |"
     data_row = (
         "| "
-        + " | ".join(
-            [f"{item.scalar_value:{item.log_format}}".ljust(width) for item, width in zip(table_log, column_widths)]
-        )
+        + " | ".join([get_formatted_value(item).ljust(width) for item, width in zip(table_log, column_widths)])
         + " |"
     )
     return f"{header_row}\n{separator_row}\n{data_row}"
 
 
-def write_to_csv(csv_filename, table_log, model_tflops, slurm_job_id, config):
+def write_to_csv(csv_filename, table_log, model_tflops, slurm_job_id):
     """Write benchmark results to a CSV file with file locking using fcntl."""
     import fcntl
 
@@ -646,7 +675,7 @@ def write_to_csv(csv_filename, table_log, model_tflops, slurm_job_id, config):
 
         # Format row data
         header = [item.tag for item in table_log]
-        row = [f"{item.scalar_value:{item.log_format}}" for item in table_log]
+        row = [get_formatted_value(item) for item in table_log]
 
         # Use fcntl for file locking
         max_attempts = 10
@@ -708,13 +737,14 @@ def log_throughput(
         "reduce_scatter_intranode": 0,
         "all_gather_intranode": 0,
     },
+    num_params={"total": 0, "local": 0},
 ):
     slurm_job_id = os.environ.get("SLURM_JOB_ID", "N/A")
 
     table_log = create_table_log(
-        config, parallel_context, model_tflops, hardware_tflops, tokens_per_sec, bandwidth, slurm_job_id
+        config, parallel_context, model_tflops, hardware_tflops, tokens_per_sec, bandwidth, num_params, slurm_job_id
     )
-    column_widths = [max(len(item.tag), len(f"{item.scalar_value:{item.log_format}}")) for item in table_log]
+    column_widths = [max(len(item.tag), len(get_formatted_value(item))) for item in table_log]
     table_output = create_table_output(table_log, column_widths)
 
     log_rank(
@@ -725,7 +755,7 @@ def log_throughput(
     )
 
     if dist.get_rank(parallel_context.world_pg) == 0:
-        write_to_csv(config.general.benchmark_csv_path, table_log, model_tflops, slurm_job_id, config)
+        write_to_csv(config.general.benchmark_csv_path, table_log, model_tflops, slurm_job_id)
     dist.barrier(group=parallel_context.world_pg)
 
 

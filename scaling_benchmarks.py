@@ -1,4 +1,5 @@
 # python scaling_benchmarks.py --base-config elie.yaml --debug
+# python scaling_benchmarks.py --debug
 import argparse
 import math
 import os
@@ -6,11 +7,13 @@ import os
 import yaml
 from nanotron.logging import human_format
 
-VOCAB_SIZE = 128256
-NUM_KEY_VALUE_HEADS = 8
+VOCAB_SIZE = 32768
+NUM_KEY_VALUE_HEADS = None
 TIE_WORD_EMBEDDINGS = True
 ZERO_STAGE = 0
-TP_MODE = "ALL_REDUCE"
+# TP_MODE = "REDUCE_SCATTER" # "REDUCE_SCATTER" "ALL_REDUCE"
+TP_MODE = "ALL_REDUCE"  # "REDUCE_SCATTER" "ALL_REDUCE"
+PROFILE = True
 
 
 def estimate_num_params(layers, hidden_size, heads, intermediate_size, tie_word_embeddings):
@@ -26,7 +29,7 @@ def create_config(
     batch_accum: int,
     seq_len: int,
     micro_batch_size: int = 1,
-    base_config_path: str = "examples/config_tiny_llama.yaml",
+    base_config_path: str = "examples/config_tiny_llama_bench.yaml",
     zero_stage: int = ZERO_STAGE,
     num_layers: int = 24,
     hidden_size: int = 2048,
@@ -88,10 +91,15 @@ def create_config(
     # Update run name to reflect configuration
     config["general"][
         "run"
-    ] = f"{N}_dp{dp}_tp{tp}_pp{pp}_acc{batch_accum}_mbs{micro_batch_size}_seq{seq_len}_zero{zero_stage}_l{num_layers}_h{hidden_size}_heads{num_attention_heads}"
+    ] = f"{N}_dp{dp}_tp{tp}_pp{pp}_acc{batch_accum}_mbs{micro_batch_size}_seq{seq_len}_zero{zero_stage}_tpmode{tp_mode[:3]}_l{num_layers}_h{hidden_size}_heads{num_attention_heads}"
 
     # Update benchmark CSV path
-    config["general"]["benchmark_csv_path"] = "bench_elie.csv"
+    config["general"]["benchmark_csv_path"] = "bench_tp.csv"
+
+    if PROFILE:
+        config["profiler"] = {}
+        config["profiler"]["profiler_export_path"] = "./tb_logs"
+        config["tokens"]["train_steps"] = 10
 
     return config
 
@@ -192,22 +200,24 @@ def main():
             # (1, 4, 1, 1, 4096, 2, num_layers, hidden_size, num_heads, intermediate_size),
             # (1, 8, 1, 1, 4096, 2, num_layers, hidden_size, num_heads, intermediate_size),
             # find best tput on 16 nodes with 4GBS
-            # Format: (dp, tp, pp, batch_accum, seq_len, mbs, ...)
-            # (1, 8, 1, 1, 2048, 16, num_layers, hidden_size, num_heads, intermediate_size), # test max MBS
-            # (16, 8, 1, 1, 2048, 16, num_layers, hidden_size, num_heads, intermediate_size), # ideal run i guess
-            # (32, 4, 1, 1, 2048, 8, num_layers, hidden_size, num_heads, intermediate_size), # TP=4
-            # (64, 2, 1, 1, 2048, 4, num_layers, hidden_size, num_heads, intermediate_size), # TP=2
-            # (128, 1, 1, 1, 2048, 2, num_layers, hidden_size, num_heads, intermediate_size), # TP=1
-            # # same for 8 nodes
-            (8, 8, 1, 1, 2048, 16, num_layers, hidden_size, num_heads, intermediate_size),
-            (16, 4, 1, 1, 2048, 8, num_layers, hidden_size, num_heads, intermediate_size),
-            (32, 2, 1, 1, 2048, 4, num_layers, hidden_size, num_heads, intermediate_size),
-            (64, 1, 1, 1, 2048, 2, num_layers, hidden_size, num_heads, intermediate_size),
+            (1, 8, 1, 1, 4096, 8, num_layers, hidden_size, num_heads, intermediate_size),  # test max MBS
+            # (8, 1, 1, 1, 4096, 1, num_layers, hidden_size, num_heads, intermediate_size), # test max MBS
+            # (1, 8, 1, 1, 4096, 64, num_layers, hidden_size, num_heads, intermediate_size), # test max MBS
+            # (16, 8, 1, 1, 4096, 16, num_layers, hidden_size, num_heads, intermediate_size), # ideal run i guess
+            # (32, 4, 1, 1, 4096, 8, num_layers, hidden_size, num_heads, intermediate_size), # TP=4
+            # (64, 2, 1, 1, 4096, 4, num_layers, hidden_size, num_heads, intermediate_size), # TP=2
+            # (128, 1, 1, 1, 4096, 2, num_layers, hidden_size, num_heads, intermediate_size), # TP=1
+            # find best tput on 8 nodes with 1GBS
+            # (8, 8, 1, 1, 4096, 32, num_layers, hidden_size, num_heads, intermediate_size),
+            # (8, 8, 1, 2, 4096, 16, num_layers, hidden_size, num_heads, intermediate_size),
+            # (16, 4, 1, 2, 4096, 8, num_layers, hidden_size, num_heads, intermediate_size),
+            # (32, 2, 1, 2, 4096, 4, num_layers, hidden_size, num_heads, intermediate_size),
+            # (64, 1, 1, 2, 4096, 2, num_layers, hidden_size, num_heads, intermediate_size),
             # same for 4 nodes
-            # (4, 8, 1, 1, 2048, 16, num_layers, hidden_size, num_heads, intermediate_size),
-            # (8, 4, 1, 1, 2048, 8, num_layers, hidden_size, num_heads, intermediate_size),
-            # (16, 2, 1, 1, 2048, 4, num_layers, hidden_size, num_heads, intermediate_size),
-            # (32, 1, 1, 1, 2048, 2, num_layers, hidden_size, num_heads, intermediate_size),
+            # (4, 8, 1, 1, 4096, 16, num_layers, hidden_size, num_heads, intermediate_size),
+            # (8, 4, 1, 1, 4096, 8, num_layers, hidden_size, num_heads, intermediate_size),
+            # (16, 2, 1, 1, 4096, 4, num_layers, hidden_size, num_heads, intermediate_size),
+            # (32, 1, 1, 1, 4096, 2, num_layers, hidden_size, num_heads, intermediate_size),
         ]
         configurations.extend(model_configs)
 

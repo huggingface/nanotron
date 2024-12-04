@@ -487,6 +487,9 @@ class DistributedTrainer:
         if self.iteration_step < self.initial_iter_step + 5:
             log_memory(logger=logger)
 
+        # if self.iteration_step == self.initial_iter_step and dist.get_rank(self.parallel_context.world_pg) == 0:
+        #     torch.cuda.memory._record_memory_history(max_entries=100000)
+
         outputs = self.pipeline_engine.train_batch_iter(
             model=self.model,
             pg=self.parallel_context.pp_pg,
@@ -494,6 +497,12 @@ class DistributedTrainer:
             nb_microbatches=self.n_micro_batches_per_batch,
             grad_accumulator=self.grad_accumulator,
         )
+
+        # if self.iteration_step == self.initial_iter_step and dist.get_rank(self.parallel_context.world_pg) == 0:
+        #     snapshot_save_path = "snapshots/" + os.environ["SLURM_JOB_ID"] + "_" + self.config.general.run + "_memory_snapshot.pkl"
+        #     log_rank(f"Dumping memory snapshot to {snapshot_save_path}", logger=logger, level=logging.INFO)
+        #     torch.cuda.memory._dump_snapshot(snapshot_save_path)
+        #     torch.cuda.memory._record_memory_history(enabled=None)
 
         if self.iteration_step < self.initial_iter_step + 5:
             log_memory(logger=logger)
@@ -667,12 +676,14 @@ class DistributedTrainer:
                 hardware_tflops,
                 tokens_per_sec,
                 bandwidth=self.BANDWIDTHS,
+                num_params=self.num_params,
             )
             log_rank("Throughput logging complete", logger=logger, level=logging.INFO)
-            if "SLURM_JOB_ID" in os.environ:
-                os.system("scancel " + os.environ["SLURM_JOB_ID"])
-            else:
-                exit(0)
+            if not self.config.profiler:
+                if "SLURM_JOB_ID" in os.environ:
+                    os.system("scancel " + os.environ["SLURM_JOB_ID"])
+                else:
+                    exit(0)
 
     def init_model(self) -> Union[NanotronModel, DistributedDataParallel]:
         """Initialize the model and load weights from checkpoint if needed."""
@@ -811,10 +822,12 @@ class DistributedTrainer:
         dist.all_reduce(total_params, group=parallel_context.pp_pg, async_op=False, op=dist.ReduceOp.SUM)  # PP
         dist.all_reduce(total_size, group=parallel_context.tp_pg, async_op=False, op=dist.ReduceOp.SUM)
         dist.all_reduce(total_size, group=parallel_context.pp_pg, async_op=False, op=dist.ReduceOp.SUM)
+        total_params = total_params.item()
+        self.num_params = {"total": total_params, "local": num_params}
 
         # TODO @nouamanetazi: better memory logs
         log_rank(
-            f"Total number of parameters: {human_format(total_params.item())} ({total_size.item() / 1024**2:.2f}MiB)",
+            f"Total number of parameters: {human_format(total_params)} ({total_size.item() / 1024**2:.2f}MiB)",
             logger=logger,
             level=logging.INFO,
             group=parallel_context.world_pg,
