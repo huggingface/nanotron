@@ -34,7 +34,7 @@ Nanotron is a library for pretraining transformer models. It provides a simple a
 ## Installation
 
 ```bash
-# Requirements: Python>=3.10
+# Requirements: Python>=3.10,<3.12
 git clone https://github.com/huggingface/nanotron
 cd nanotron
 pip install --upgrade pip
