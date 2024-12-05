@@ -16,7 +16,7 @@ classifiers = [
 dependencies = [
     "torch>=1.13.1",
     "pyyaml",
-    "numpy",
+    "numpy<2",
     "packaging",
     "safetensors",
     "dacite",
@@ -45,7 +45,7 @@ test = [
 ]
 
 fast-modeling = [
-    "flash-attn>=2.5.0",
+    "flash-attn>=2.5.0,<2.7.0",
 ]
 
 nanosets = [
