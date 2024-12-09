@@ -22,13 +22,39 @@ from nanotron.parallel.parameters import NanotronParameter
 from nanotron.serialize.metadata import TensorMetadata
 from nanotron.serialize.utils import ObjectType, merge_and_shard_tp_tensors
 
-
 # TODO(xrsrke): take rank instead of parallel_context
-def optimizer_filename(parallel_context: ParallelContext, is_zero: bool):
+# def optimizer_filename(parallel_context: ParallelContext, is_zero: bool):
+#     if is_zero is True:
+#         return f"{ObjectType.OPTIMIZER.value}_pp-{dist.get_rank(parallel_context.pp_pg)}-of-{parallel_context.pp_pg.size()}_dp-{dist.get_rank(parallel_context.dp_pg)}-of-{parallel_context.dp_pg.size()}_tp-{dist.get_rank(parallel_context.tp_pg)}-of-{parallel_context.tp_pg.size()}_exp-{dist.get_rank(parallel_context.expert_pg)}-of-{parallel_context.expert_parallel_size}.pt"
+#     else:
+#         return f"{ObjectType.OPTIMIZER.value}_pp-{dist.get_rank(parallel_context.pp_pg)}-of-{parallel_context.pp_pg.size()}_tp-{dist.get_rank(parallel_context.tp_pg)}-of-{parallel_context.tp_pg.size()}_exp-{dist.get_rank(parallel_context.expert_pg)}-of-{parallel_context.expert_parallel_size}.pt"
+
+
+def get_optimizer_filename(
+    tp_topology: Tuple[int, int],
+    pp_topology: Tuple[int, int],
+    dp_topology: Optional[Tuple[int, int]] = None,
+    exp_topology: Optional[Tuple[int, int]] = None,
+    is_zero: Optional[bool] = None,
+):
+    """
+    tp_topology: Tuple[int, int] = (rank, size)
+    pp_topology: Tuple[int, int] = (rank, size)
+    dp_topology: Tuple[int, int] = (rank, size)
+
+    NOTE: sometimes we get the checkpoint from a different topology (not the current parallel_context)
+    """
+    assert exp_topology is not None, "exp_topology is required"
+    assert is_zero is not None, "is_zero is required"
+    pp_rank, pp_size = pp_topology
+    tp_rank, tp_size = tp_topology
+    exp_rank, exp_size = exp_topology
+
     if is_zero is True:
-        return f"{ObjectType.OPTIMIZER.value}_pp-{dist.get_rank(parallel_context.pp_pg)}-of-{parallel_context.pp_pg.size()}_dp-{dist.get_rank(parallel_context.dp_pg)}-of-{parallel_context.dp_pg.size()}_tp-{dist.get_rank(parallel_context.tp_pg)}-of-{parallel_context.tp_pg.size()}_exp-{dist.get_rank(parallel_context.expert_pg)}-of-{parallel_context.expert_parallel_size}.pt"
+        dp_rank, dp_size = dp_topology
+        return f"{ObjectType.OPTIMIZER.value}_pp-{pp_rank}-of-{pp_size}_dp-{dp_rank}-of-{dp_size}_tp-{tp_rank}-of-{tp_size}_exp-{exp_rank}-of-{exp_size}.pt"
     else:
-        return f"{ObjectType.OPTIMIZER.value}_pp-{dist.get_rank(parallel_context.pp_pg)}-of-{parallel_context.pp_pg.size()}_tp-{dist.get_rank(parallel_context.tp_pg)}-of-{parallel_context.tp_pg.size()}_exp-{dist.get_rank(parallel_context.expert_pg)}-of-{parallel_context.expert_parallel_size}.pt"
+        return f"{ObjectType.OPTIMIZER.value}_pp-{pp_rank}-of-{pp_size}_tp-{tp_rank}-of-{tp_size}_exp-{exp_rank}-of-{exp_size}.pt"
 
 
 def lr_scheduler_filename(parallel_context: ParallelContext, is_zero: bool):
@@ -102,7 +128,14 @@ def save_optimizer(
     torch.save(
         optimizer.state_dict(),
         root_folder
-        / optimizer_filename(parallel_context, is_zero=optimizer.inherit_from(optim.ZeroDistributedOptimizer)),
+        # / optimizer_filename(parallel_context, is_zero=optimizer.inherit_from(optim.ZeroDistributedOptimizer)),
+        / get_optimizer_filename(
+            tp_topology=(dist.get_rank(parallel_context.tp_pg), parallel_context.tp_pg.size()),
+            pp_topology=(dist.get_rank(parallel_context.pp_pg), parallel_context.pp_pg.size()),
+            dp_topology=(dist.get_rank(parallel_context.dp_pg), parallel_context.dp_pg.size()),
+            exp_topology=(dist.get_rank(parallel_context.expert_pg), parallel_context.expert_parallel_size),
+            is_zero=optimizer.inherit_from(optim.ZeroDistributedOptimizer),
+        ),
     )
 
 
@@ -330,16 +363,58 @@ def load_optimizer(
         new_optim_state_dict["names"] = new_optim_state_param_names
         state_dict = new_optim_state_dict
     else:
+        # NOTE: if you resume from training
+
+        def round_robin_map(numbers, min_val, max_val):
+            """
+            Maps a list of numbers to a round-robin pattern within a configurable range.
+
+            Args:
+                numbers (list): List of numbers to map.
+                min_val (int): Minimum value in the round-robin range.
+                max_val (int): Maximum value in the round-robin range.
+
+            Returns:
+                list: Mapped list of numbers.
+            """
+            range_size = max_val - min_val + 1
+            return [(num - 1) % range_size + min_val for num in numbers]
+
+        # if int(ckp_dp_size) != int(parallel_context.dp_pg.size()):
+        #     pass
+        # else:
+
         # TODO @thomasw21: Load optimizer type and check that it's compatible otherwise we might be be loading something else completely
+        # state_dict = torch.load(
+        #     root_folder
+        #     / optimizer_filename(parallel_context, is_zero=optimizer.inherit_from(optim.ZeroDistributedOptimizer)),
+        #     map_location=map_location,
+        # )
+        # NOTE: since here we only load the optimizer states,
+        # then we shard it according to the current data parallel dimension
+
         state_dict = torch.load(
             root_folder
-            / optimizer_filename(parallel_context, is_zero=optimizer.inherit_from(optim.ZeroDistributedOptimizer)),
+            / get_optimizer_filename(
+                tp_topology=(dist.get_rank(parallel_context.tp_pg), parallel_context.tp_pg.size()),
+                pp_topology=(dist.get_rank(parallel_context.pp_pg), parallel_context.pp_pg.size()),
+                # NOTE(xrsrke): suppose we initially have dp world size of 4,
+                # then we change to dp world size of 8, then we need to load the optimizer states
+                # now we do a round-robin mapping of the optimizer states to the new dp world size
+                # dp=8's ranks: [0, 1, 2, 3, 4, 5, 6, 7]
+                # maps to: [0, 1, 2, 3, 0, 1, 2, 3]
+                dp_topology=(int(dist.get_rank(parallel_context.pp_pg)) // int(ckp_dp_size), ckp_dp_size),
+                exp_topology=(dist.get_rank(parallel_context.expert_pg), parallel_context.expert_parallel_size),
+                is_zero=optimizer.inherit_from(optim.ZeroDistributedOptimizer),
+            ),
             map_location=map_location,
         )
 
     if isinstance(optimizer, ZeroDistributedOptimizer):
+
+        # NOTE: optimizer state topology-agnostic loading
         # NOTE: only reshard after merging tp shards
-        # or we get a new dp_Size
+        # or we get a new dp_size
         if int(ckp_tp_size) != parallel_context.tp_pg.size() or int(ckp_dp_size) != parallel_context.dp_pg.size():
             # NOTE: if the optimizer is ZeRO-1, now we shard the optimizer states across data parallel dimension
             current_dp_rank = dist.get_rank(parallel_context.dp_pg)
@@ -353,6 +428,20 @@ def load_optimizer(
                         end_offset=optimizer.param_name_to_dp_rank_offsets[param_name][current_dp_rank][1],
                     )
                     state_dict["state"][param_index][state_name] = sliced_tensor
+
+        # NOTE: reshard gradient_accumulator if different dp size from checkpoint
+        if int(ckp_dp_size) != parallel_context.dp_pg.size():
+            merged_grad_accumulator = {}
+            for name, param in state_dict["gradient_accumulator"].items():
+                # NOTE: assume that we shard a parameter evenly across all DPs
+                # TODO: ideally refactor a map between sharding and resharding, so
+                # we don't have to assume things
+                # merged_p = torch.zeros(param.numel()*int(ckp_dp_size), device="cuda")
+                merged_p = [torch.zeros_like(param) for _ in range(int(ckp_dp_size))]
+                dist.all_gather(merged_p, param.to("cuda"), group=parallel_context.dp_pg)
+                merged_grad_accumulator[name] = torch.cat(merged_p, dim=-1).to(map_location)
+
+        assert 1 == 1
 
     optimizer.load_state_dict(state_dict, map_location=map_location)
 

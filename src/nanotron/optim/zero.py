@@ -62,6 +62,7 @@ class ZeroDistributedOptimizer(InheritFromOtherOptimizer):
         # partition model's params across DP ranks.
         # `self.param_name_to_dp_rank_offsets` sets mapping between each param inside self.named_params and its rank
         # NOTE: some param_groups may have no params in the current rank. we still keep them in self.optimizer.param_groups
+        # TODO: maybe not shard layernorm params in zero-1, because it is small anyway
         self.param_name_to_dp_rank_offsets = self._partition_parameters()
 
         current_dp_rank = dist.get_rank(self.dp_pg)
@@ -171,6 +172,8 @@ class ZeroDistributedOptimizer(InheritFromOtherOptimizer):
         for name, param in named_params:
             # We assume parameter to be contiguous in order to have an easy way of sharding it.
             assert param.is_contiguous(), f"Parameter {name} is not contiguous"
+            if name == "model.final_layer_norm.pp_block.weight":
+                assert 1 == 1
 
             numel = param.numel()
             padded_numel_per_dp = (numel - 1) // self.dp_pg.size() + 1
@@ -262,13 +265,18 @@ class SlicedFlatTensor(torch.Tensor):
     __torch_function__ = torch._C._disabled_torch_function_impl
 
     @staticmethod
-    def get_sliced_flat_tensor(data, start_offset, end_offset):
-        with torch.no_grad():
-            return data.view(-1)[start_offset:end_offset]
+    def get_sliced_flat_tensor(data, start_offset: int, end_offset: int, is_sharded: bool):
+        if is_sharded is False:
+            with torch.no_grad():
+                return data.view(-1)[start_offset:end_offset]
+        else:
+            return data
 
     @staticmethod
-    def __new__(cls, data, start_offset, end_offset):
-        sliced_tensor = cls.get_sliced_flat_tensor(data=data, start_offset=start_offset, end_offset=end_offset)
+    def __new__(cls, data, start_offset: int, end_offset: int, is_sharded: bool):
+        sliced_tensor = cls.get_sliced_flat_tensor(
+            data=data, start_offset=start_offset, end_offset=end_offset, is_sharded=is_sharded
+        )
 
         result = torch.Tensor._make_wrapper_subclass(  # type: ignore[attr-defined]
             cls,
@@ -283,11 +291,16 @@ class SlicedFlatTensor(torch.Tensor):
         )
         return result
 
-    def __init__(self, data, start_offset, end_offset):
+    def __init__(self, data, start_offset: int, end_offset: int, is_sharded: bool):
+        """
+        is_sharded: whether a tensor is sharded or not
+        Sometimes we already shard a tensor, and just want to wrap it in a `SlicedFlatTensor`
+        so we can save the sharding metadata cleanly.
+        """
         super().__init__()
         # TODO @thomasw21: Make is so that you can never update this value
         self.sliced_flat_tensor = self.get_sliced_flat_tensor(
-            data=data, start_offset=start_offset, end_offset=end_offset
+            data=data, start_offset=start_offset, end_offset=end_offset, is_sharded=is_sharded
         )
         self.orig_data = data
         self.start_offset = start_offset
@@ -337,9 +350,9 @@ class SlicedFlatTensor(torch.Tensor):
     grad = property(_get_grad, _set_grad, _del_grad)
 
 
-def get_sliced_tensor(param: NanotronParameter, start_offset: int, end_offset: int):
+def get_sliced_tensor(param: NanotronParameter, start_offset: int, end_offset: int, is_sharded: bool = False):
     # This allows us to create a leaf tensor, despite sharing the underlying storage
-    result = SlicedFlatTensor(data=param, start_offset=start_offset, end_offset=end_offset)
+    result = SlicedFlatTensor(data=param, start_offset=start_offset, end_offset=end_offset, is_sharded=is_sharded)
     return result
 
 

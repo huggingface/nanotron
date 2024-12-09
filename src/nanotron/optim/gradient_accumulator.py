@@ -2,13 +2,14 @@ import dataclasses
 from abc import ABC, abstractmethod
 from collections import OrderedDict
 from contextlib import contextmanager
-from typing import Callable, Dict, Iterator, Optional, Tuple
+from typing import Callable, Dict, Iterator, Optional, Tuple, cast
 
 import torch
 from torch.distributed import GradBucket
 
 import nanotron.distributed as dist
 from nanotron import logging
+from nanotron.optim.zero import SlicedFlatTensor, get_sliced_tensor
 from nanotron.parallel.parameters import NanotronParameter
 from nanotron.utils import get_untyped_storage, tensor_from_untyped_storage
 
@@ -68,7 +69,11 @@ class FP32GradientAccumulator(GradientAccumulator):
             grad_buckets_named_params: The parameters to accumulate gradients for. If None it defaults to `named_parameters`. In case of Zero 1, this should be all the parameters in the model.
 
         Note: We use `grad_buckets_named_params` to keep grad buffers for all parameters even when Zero 1 is used. This is because we need to accumulate gradients for all parameters without having to reduce in every accumulation step.
-        Note: We make a fp32 copy of parameters during initialization. Therefore parameters need to be initialized or loaded from a checkpoint before constructing this gradient accumulator
+        Note: We make a fp32 copy of parameters during initialization. Therefore parameters need to be initialized or loaded from a checkpoint before constructing this gradient accumulator.
+
+        "self.parameters"
+        - .fp32: the pointer to the full precision weights
+        - .half: the pointer to the half precision weights
         """
         if grad_buckets_named_params is None:
             named_parameters = list(named_parameters)
@@ -86,20 +91,57 @@ class FP32GradientAccumulator(GradientAccumulator):
             if not param.requires_grad:
                 continue
 
-            start = length
-            end_weight = start + param.numel()
+            global_buffer_start_idx = length
+            global_buffer_end_idx = global_buffer_start_idx + param.numel()
+
             assert name not in segment_index
-            segment_index[name] = (start, end_weight, param)
-            length = end_weight
+            param = cast(SlicedFlatTensor, param)
+            segment_index[name] = (
+                (global_buffer_start_idx, global_buffer_end_idx),
+                (param.start_offset, param.end_offset),
+                param,
+            )
+            length = global_buffer_end_idx
 
         big_flat_buffer = torch.empty(length, dtype=torch.float, device="cuda")
-        self.parameters = {
-            name: {
-                "fp32": big_flat_buffer[start_weight:end_weight].view_as(param),
+
+        self.parameters = {}
+        for name, (
+            (global_start_idx, global_end_idx),
+            (dp_weight_start_idx, dp_weight_end_idx),
+            param,
+        ) in segment_index.items():
+            if name == "model.final_layer_norm.pp_block.weight":
+                assert 1 == 1
+
+            fp32_p = big_flat_buffer[global_start_idx:global_end_idx].view_as(param)
+            sliced_fp32_p = get_sliced_tensor(
+                fp32_p,
+                start_offset=dp_weight_start_idx,
+                end_offset=dp_weight_end_idx,
+                is_sharded=True,
+            )
+            assert (
+                sliced_fp32_p.numel() == param.numel()
+            ), f"Expected {name} to have the same number of elements, dp_weight_start_idx: {dp_weight_start_idx}, dp_weight_end_idx: {dp_weight_end_idx}, param.numel(): {param.numel()}, sliced_fp32_p.numel(): {sliced_fp32_p.numel()}"
+            self.parameters[name] = {
+                "fp32": sliced_fp32_p,
                 "half": param,
             }
-            for name, (start_weight, end_weight, param) in segment_index.items()
-        }
+
+        # self.parameters = {
+        #     name: {
+        #         # "fp32": big_flat_buffer[global_start_idx:global_end_idx].view_as(param),
+        #         # NOTE: save the way we shard stuff in dp for zero-1, so we can reshard it
+        #         "fp32": get_sliced_tensor(
+        #             big_flat_buffer[global_start_idx:global_end_idx].view_as(param),
+        #             start_offset=dp_weight_start_idx,
+        #             end_offset=dp_weight_end_idx,
+        #         ),
+        #         "half": param,
+        #     }
+        #     for name, ((global_start_idx, global_end_idx), (dp_weight_start_idx, dp_weight_end_idx), param) in segment_index.items()
+        # }
 
         with torch.inference_mode():
             for _, elt in self.parameters.items():
@@ -108,6 +150,9 @@ class FP32GradientAccumulator(GradientAccumulator):
 
                 # Check that fp32 weights have the same memory representation as half precision weights
                 assert fp32_param.stride() == half_param.stride()
+                assert (
+                    fp32_param.numel() == half_param.numel()
+                ), f"There is a size mismatch of {name}, fp32_param: {fp32_param.numel()}, half_param: {half_param.numel()}"
 
                 # Copy weights from half precision to full precision
                 fp32_param.copy_(half_param)
@@ -288,6 +333,10 @@ class FP32GradientAccumulator(GradientAccumulator):
 
     def load_state_dict(self, state_dict: Dict[str, torch.Tensor]):
         assert set(state_dict.keys()) == set(self.parameters.keys())
+
+        # NOTE: double check if the dp size in the checkpoint
+        # is differ from the current dp size, then we merge the states
+        # and reshard them again
 
         with torch.inference_mode():
             for name, elt in self.parameters.items():
