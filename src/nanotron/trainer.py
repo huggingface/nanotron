@@ -173,21 +173,6 @@ class DistributedTrainer:
         )
         self.model = self.init_model()  # Defines self.model
 
-        # from torch import nn
-        # def get_leaf_modules(module: nn.Module) -> List[Tuple[str, nn.Module]]:
-        #     """
-        #     Return all the leaf modules (modules without any child modules) in a PyTorch module.
-        #     """
-        #     leaf_modules = []
-        #     for n, m in module.named_modules():
-        #         if not list(m.children()):
-        #             leaf_modules.append((n, m))
-        #     return leaf_modules
-
-        # leaf_modules = get_leaf_modules(self.model)
-        # for name, param in self.model.named_parameters():
-        #     print(name, param.shape)
-
         self.unwrapped_model: NanotronModel = (
             self.model.module if isinstance(self.model, DistributedDataParallel) else self.model
         )

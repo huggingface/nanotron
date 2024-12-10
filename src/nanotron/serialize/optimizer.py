@@ -23,13 +23,6 @@ from nanotron.parallel.parameters import NanotronParameter
 from nanotron.serialize.metadata import TensorMetadata
 from nanotron.serialize.utils import ObjectType, merge_and_shard_tp_tensors
 
-# TODO(xrsrke): take rank instead of parallel_context
-# def optimizer_filename(parallel_context: ParallelContext, is_zero: bool):
-#     if is_zero is True:
-#         return f"{ObjectType.OPTIMIZER.value}_pp-{dist.get_rank(parallel_context.pp_pg)}-of-{parallel_context.pp_pg.size()}_dp-{dist.get_rank(parallel_context.dp_pg)}-of-{parallel_context.dp_pg.size()}_tp-{dist.get_rank(parallel_context.tp_pg)}-of-{parallel_context.tp_pg.size()}_exp-{dist.get_rank(parallel_context.expert_pg)}-of-{parallel_context.expert_parallel_size}.pt"
-#     else:
-#         return f"{ObjectType.OPTIMIZER.value}_pp-{dist.get_rank(parallel_context.pp_pg)}-of-{parallel_context.pp_pg.size()}_tp-{dist.get_rank(parallel_context.tp_pg)}-of-{parallel_context.tp_pg.size()}_exp-{dist.get_rank(parallel_context.expert_pg)}-of-{parallel_context.expert_parallel_size}.pt"
-
 
 def get_optimizer_filename(
     tp_topology: Tuple[int, int],
@@ -129,7 +122,6 @@ def save_optimizer(
     torch.save(
         optimizer.state_dict(),
         root_folder
-        # / optimizer_filename(parallel_context, is_zero=optimizer.inherit_from(optim.ZeroDistributedOptimizer)),
         / get_optimizer_filename(
             tp_topology=(dist.get_rank(parallel_context.tp_pg), parallel_context.tp_pg.size()),
             pp_topology=(dist.get_rank(parallel_context.pp_pg), parallel_context.pp_pg.size()),
@@ -385,19 +377,9 @@ def load_optimizer(
             range_size = max_val - min_val + 1
             return [(num - 1) % range_size + min_val for num in numbers]
 
-        # if int(ckp_dp_size) != int(parallel_context.dp_pg.size()):
-        #     pass
-        # else:
-
-        # TODO @thomasw21: Load optimizer type and check that it's compatible otherwise we might be be loading something else completely
-        # state_dict = torch.load(
-        #     root_folder
-        #     / optimizer_filename(parallel_context, is_zero=optimizer.inherit_from(optim.ZeroDistributedOptimizer)),
-        #     map_location=map_location,
-        # )
         # NOTE: since here we only load the optimizer states,
         # then we shard it according to the current data parallel dimension
-
+        # TODO @thomasw21: Load optimizer type and check that it's compatible otherwise we might be be loading something else completely
         state_dict = torch.load(
             root_folder
             / get_optimizer_filename(
@@ -416,24 +398,6 @@ def load_optimizer(
         )
 
     if isinstance(optimizer, ZeroDistributedOptimizer):
-
-        # NOTE: optimizer state topology-agnostic loading
-        # NOTE: only reshard after merging tp shards
-        # or we get a new dp_size
-        # if int(ckp_tp_size) != parallel_context.tp_pg.size() or int(ckp_dp_size) != parallel_context.dp_pg.size():
-        #     # NOTE: if the optimizer is ZeRO-1, now we shard the optimizer states across data parallel dimension
-        #     current_dp_rank = dist.get_rank(parallel_context.dp_pg)
-        #     OPTIMIZER_STATE_NAMES = state_dict["state"][0].keys() - ["step"]
-        #     for param_index in state_dict["state"]:
-        #         param_name = [name for idx, name in state_dict["names"].items() if idx == param_index][0]
-        #         for state_name in OPTIMIZER_STATE_NAMES:
-        #             sliced_tensor = get_sliced_tensor(
-        #                 param=state_dict["state"][param_index][state_name],
-        #                 start_offset=optimizer.param_name_to_dp_rank_offsets[param_name][current_dp_rank][0],
-        #                 end_offset=optimizer.param_name_to_dp_rank_offsets[param_name][current_dp_rank][1],
-        #             )
-        #             state_dict["state"][param_index][state_name] = sliced_tensor
-
         shard_paths = list(
             root_folder.glob(
                 f"{ObjectType.OPTIMIZER.value}_pp-*-of-{ckp_pp_size}_dp-*-of-{ckp_dp_size}_tp-*-of-{ckp_tp_size}_exp-*-of-{ckpt_expert_parallel_size}.pt"
@@ -474,8 +438,6 @@ def load_optimizer(
                             (int(tp_rank), int(dp_rank))
                         ][p_idx][key]
 
-            assert 1 == 1
-
             # NOTE: now merge optimizer states across data parallel dimension
             for param_index in state_dict["state"]:
                 param_name = [name for idx, name in state_dict["names"].items() if idx == param_index][0]
@@ -493,27 +455,6 @@ def load_optimizer(
         # NOTE: reshard gradient_accumulator if different dp size from checkpoint
         if int(ckp_dp_size) != parallel_context.dp_pg.size():
             assert int(ckp_tp_size) == parallel_context.tp_pg.size(), "Don't support changing TP size for ZeRO-1"
-            # merged_grad_accumulator = {}
-            # for name, param in state_dict["gradient_accumulator"].items():
-            #     # NOTE: assume that we shard a parameter evenly across all DPs
-            #     # TODO: ideally refactor a map between sharding and resharding, so
-            #     # we don't have to assume things
-            #     # merged_p = torch.zeros(param.numel()*int(ckp_dp_size), device="cuda")
-            #     # merged_p = [torch.zeros_like(param) for _ in range(int(ckp_dp_size))]
-            #     # dist.all_gather(merged_p, param.to("cuda"), group=parallel_context.dp_pg)
-            #     # merged_grad_accumulator[name] = torch.cat(merged_p, dim=-1).to(map_location)
-
-            #     merged_p_shape = ckp_optimizer_config["configs"]["orig_param_shapes"][name]
-            #     merged_p_shape = tuple(int(x) for x in merged_p_shape)
-            #     merged_p = torch.zeros(merged_p_shape).view(-1)
-            #     dp_rank = dist.get_rank(parallel_context.dp_pg)
-            #     dp_offset = ckp_optimizer_config["configs"]["param_name_to_dp_rank_offsets"][name][str(dp_rank)]
-            #     merged_p[int(dp_offset[0]):int(dp_offset[1])] = param.view(-1)
-            #     dist.all_reduce(merged_p, group=parallel_context.dp_pg)
-            #     merged_p = merged_p.view(merged_p_shape)
-            #     merged_grad_accumulator[name] = merged_p.to(map_location)
-
-            assert 1 == 1
             ckp_sharded_grad_accum = {}
             for shard_path in shard_paths:
                 pp_rank, dp_rank, tp_rank = extract_parallel_ranks_from_shard_path(shard_path, is_zero1=True)
@@ -546,26 +487,7 @@ def load_optimizer(
                 int(new_offset[0]) : int(new_offset[1])
             ]
 
-        # NOTE: reshard the gradient_accumulator
-
-    try:
-        assert state_dict["state"][0]["exp_avg"].numel() > 0
-    except:
-        assert 1 == 1
-
     optimizer.load_state_dict(state_dict, map_location=map_location)
-
-    try:
-        assert state_dict["state"][0]["exp_avg"].numel() > 0
-    except:
-        assert 1 == 1
-
-    try:
-        assert optimizer.state_dict()["state"][0]["exp_avg"].numel() > 0
-    except:
-        assert 1 == 1
-
-    assert 1 == 1
 
 
 def load_lr_scheduler(
