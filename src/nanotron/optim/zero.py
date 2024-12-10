@@ -305,6 +305,7 @@ class SlicedFlatTensor(torch.Tensor):
         self.orig_data = data
         self.start_offset = start_offset
         self.end_offset = end_offset
+        self.is_sharded = is_sharded
 
     @classmethod
     def __torch_dispatch__(cls, func, types, args=(), kwargs=None):
@@ -320,17 +321,24 @@ class SlicedFlatTensor(torch.Tensor):
     def _get_grad(self):
         if self.orig_data.grad is None:
             return None
+
         with torch.no_grad():
-            return self.orig_data.grad.view(-1)[self.start_offset : self.end_offset]
+            if self.is_sharded is False:
+                return self.orig_data.grad.view(-1)[self.start_offset : self.end_offset]
+            else:
+                return self.orig_data.grad
 
     def _set_grad(self, grad):
         if grad is not None:
-            orig_grad = self._get_grad()
-            if orig_grad is None:
-                raise NotImplementedError(
-                    "Trying to set gradient on a sliced tensor when the original tensor hasn't allocated the buffer for the gradient"
-                )
-            orig_grad.copy_(grad)
+            if self.is_sharded is False:
+                orig_grad = self._get_grad()
+                if orig_grad is None:
+                    raise NotImplementedError(
+                        "Trying to set gradient on a sliced tensor when the original tensor hasn't allocated the buffer for the gradient"
+                    )
+                orig_grad.copy_(grad)
+            else:
+                self.orig_data.grad = grad
             return
         # TODO @thomasw21: This is unfortunately necessary since we might pass `SliceTensor` to the optimizer.
         warn_once(

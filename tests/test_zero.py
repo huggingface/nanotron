@@ -543,3 +543,46 @@ def _test_sliced_flat_tensor(parallel_context: ParallelContext):
     assert not isinstance(c, SlicedFlatTensor)
 
     parallel_context.destroy()
+
+
+@rerun_if_address_is_in_use()
+def test_wrap_slice_tensor_around_a_sharded_tensor():
+    init_distributed(1, 1, 1)(_test_wrap_slice_tensor_around_a_sharded_tensor)()
+
+
+def _test_wrap_slice_tensor_around_a_sharded_tensor(parallel_context: ParallelContext):
+    a = torch.randn(2, 3, requires_grad=True)
+    grad = torch.randn(2, 3)
+    a.grad = grad
+
+    start_offset, end_offset = 1, 5
+    b = SlicedFlatTensor(a, start_offset=start_offset, end_offset=end_offset)
+
+    torch.testing.assert_close(a.grad, grad, atol=0, rtol=0)
+    torch.testing.assert_close(b.grad, grad.view(-1)[start_offset:end_offset])
+
+    # Deallocate the gradient by setting it to None
+    a.grad = None
+
+    assert a.grad is None
+    assert b.grad is None
+
+    # Setting gradient to None on the sliced tensor works
+    a.grad = grad
+    assert a.grad is not None
+    assert b.grad is not None
+    b.grad = None
+    assert b.grad is None
+    assert a.grad is None
+
+    with assert_fail_with(NotImplementedError):
+        b.grad = torch.randn(1, 5)
+
+    with assert_fail_with(NotImplementedError):
+        del b.grad
+
+    c = b[:3]
+    # It's important not to contaminate everyone.
+    assert not isinstance(c, SlicedFlatTensor)
+
+    parallel_context.destroy()
