@@ -62,6 +62,7 @@ class ZeroDistributedOptimizer(InheritFromOtherOptimizer):
         # partition model's params across DP ranks.
         # `self.param_name_to_dp_rank_offsets` sets mapping between each param inside self.named_params and its rank
         # NOTE: some param_groups may have no params in the current rank. we still keep them in self.optimizer.param_groups
+        # TODO: maybe not shard layernorm params in zero-1, because it is small anyway
         self.param_name_to_dp_rank_offsets = self._partition_parameters()
 
         current_dp_rank = dist.get_rank(self.dp_pg)
@@ -171,6 +172,8 @@ class ZeroDistributedOptimizer(InheritFromOtherOptimizer):
         for name, param in named_params:
             # We assume parameter to be contiguous in order to have an easy way of sharding it.
             assert param.is_contiguous(), f"Parameter {name} is not contiguous"
+            if name == "model.final_layer_norm.pp_block.weight":
+                assert 1 == 1
 
             numel = param.numel()
             padded_numel_per_dp = (numel - 1) // self.dp_pg.size() + 1
@@ -368,25 +371,25 @@ def extract_parallel_ranks_from_shard_path(
 ) -> Union[Tuple[int, int, int], Tuple[int, int]]:
     """Extract parallel ranks from shard path
 
-    For example, if the shard path is:
-    + For ZeRO-1: /path/to/optimizer_pp-0-of-1_dp-0-of-2_tp-0-of-1.pt
-    then the function will return (0, 0, 0) (pp_rank, dp_rank, tp_rank)
+    For example:
+    - ZeRO-1: /path/to/optimizer_pp-0-of-1_dp-0-of-2_tp-0-of-2_exp-0-of-1.pt
+      Returns: (0, 0, 0) (pp_rank, dp_rank, tp_rank)
 
-    For ZeRO-0: /path/to/optimizer_pp-0-of-1_tp-0-of-1.pt
-    then the function will return (0, 0) (pp_rank, tp_rank)
+    - ZeRO-0: /path/to/optimizer_pp-0-of-1_tp-0-of-2_exp-0-of-1.pt
+      Returns: (0, 0) (pp_rank, tp_rank)
     """
-    if is_zero1 is True:
-        # TODO(xrsrke): use the same pattern as weight checkpoints
-        # in weight checkpoints, we do pp-rank-.... but here we only do pp-...
-        # TODO(xrsrke): don't hardcode this
-        pattern = r"optimizer_pp-(\d+)-of-\d+_dp-(\d+)-of-\d+_tp-(\d+)-of-\d+\.pt"
+    if is_zero1:
+        pattern = r"optimizer_pp-(\d+)-of-\d+_dp-(\d+)-of-\d+_tp-(\d+)-of-\d+_exp-\d+-of-\d+\.pt"
         match = re.search(pattern, str(shard_path))
+        if not match:
+            raise ValueError(f"Invalid shard path format: {shard_path}")
         pp_rank, dp_rank, tp_rank = match.groups()
         return int(pp_rank), int(dp_rank), int(tp_rank)
     else:
-        # NOTE: this is zero0 checkpoint
-        pattern = r"pp-(\d+)-of-\d+_tp-(\d+)-of-\d+"
+        pattern = r"optimizer_pp-(\d+)-of-\d+_tp-(\d+)-of-\d+_exp-\d+-of-\d+\.pt"
         match = re.search(pattern, str(shard_path))
+        if not match:
+            raise ValueError(f"Invalid shard path format: {shard_path}")
         pp_rank, tp_rank = match.groups()
         return int(pp_rank), int(tp_rank)
 
