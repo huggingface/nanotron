@@ -265,18 +265,13 @@ class SlicedFlatTensor(torch.Tensor):
     __torch_function__ = torch._C._disabled_torch_function_impl
 
     @staticmethod
-    def get_sliced_flat_tensor(data, start_offset: int, end_offset: int, is_sharded: bool):
-        if is_sharded is False:
-            with torch.no_grad():
-                return data.view(-1)[start_offset:end_offset]
-        else:
-            return data
+    def get_sliced_flat_tensor(data, start_offset, end_offset):
+        with torch.no_grad():
+            return data.view(-1)[start_offset:end_offset]
 
     @staticmethod
-    def __new__(cls, data, start_offset: int, end_offset: int, is_sharded: bool):
-        sliced_tensor = cls.get_sliced_flat_tensor(
-            data=data, start_offset=start_offset, end_offset=end_offset, is_sharded=is_sharded
-        )
+    def __new__(cls, data, start_offset, end_offset):
+        sliced_tensor = cls.get_sliced_flat_tensor(data=data, start_offset=start_offset, end_offset=end_offset)
 
         result = torch.Tensor._make_wrapper_subclass(  # type: ignore[attr-defined]
             cls,
@@ -291,21 +286,15 @@ class SlicedFlatTensor(torch.Tensor):
         )
         return result
 
-    def __init__(self, data, start_offset: int, end_offset: int, is_sharded: bool):
-        """
-        is_sharded: whether a tensor is sharded or not
-        Sometimes we already shard a tensor, and just want to wrap it in a `SlicedFlatTensor`
-        so we can save the sharding metadata cleanly.
-        """
+    def __init__(self, data, start_offset, end_offset):
         super().__init__()
         # TODO @thomasw21: Make is so that you can never update this value
         self.sliced_flat_tensor = self.get_sliced_flat_tensor(
-            data=data, start_offset=start_offset, end_offset=end_offset, is_sharded=is_sharded
+            data=data, start_offset=start_offset, end_offset=end_offset
         )
         self.orig_data = data
         self.start_offset = start_offset
         self.end_offset = end_offset
-        self.is_sharded = is_sharded
 
     @classmethod
     def __torch_dispatch__(cls, func, types, args=(), kwargs=None):
@@ -321,24 +310,17 @@ class SlicedFlatTensor(torch.Tensor):
     def _get_grad(self):
         if self.orig_data.grad is None:
             return None
-
         with torch.no_grad():
-            if self.is_sharded is False:
-                return self.orig_data.grad.view(-1)[self.start_offset : self.end_offset]
-            else:
-                return self.orig_data.grad
+            return self.orig_data.grad.view(-1)[self.start_offset : self.end_offset]
 
     def _set_grad(self, grad):
         if grad is not None:
-            if self.is_sharded is False:
-                orig_grad = self._get_grad()
-                if orig_grad is None:
-                    raise NotImplementedError(
-                        "Trying to set gradient on a sliced tensor when the original tensor hasn't allocated the buffer for the gradient"
-                    )
-                orig_grad.copy_(grad)
-            else:
-                self.orig_data.grad = grad
+            orig_grad = self._get_grad()
+            if orig_grad is None:
+                raise NotImplementedError(
+                    "Trying to set gradient on a sliced tensor when the original tensor hasn't allocated the buffer for the gradient"
+                )
+            orig_grad.copy_(grad)
             return
         # TODO @thomasw21: This is unfortunately necessary since we might pass `SliceTensor` to the optimizer.
         warn_once(
@@ -358,9 +340,9 @@ class SlicedFlatTensor(torch.Tensor):
     grad = property(_get_grad, _set_grad, _del_grad)
 
 
-def get_sliced_tensor(param: NanotronParameter, start_offset: int, end_offset: int, is_sharded: bool = False):
+def get_sliced_tensor(param: NanotronParameter, start_offset: int, end_offset: int):
     # This allows us to create a leaf tensor, despite sharing the underlying storage
-    result = SlicedFlatTensor(data=param, start_offset=start_offset, end_offset=end_offset, is_sharded=is_sharded)
+    result = SlicedFlatTensor(data=param, start_offset=start_offset, end_offset=end_offset)
     return result
 
 
@@ -389,25 +371,25 @@ def extract_parallel_ranks_from_shard_path(
 ) -> Union[Tuple[int, int, int], Tuple[int, int]]:
     """Extract parallel ranks from shard path
 
-    For example, if the shard path is:
-    + For ZeRO-1: /path/to/optimizer_pp-0-of-1_dp-0-of-2_tp-0-of-1.pt
-    then the function will return (0, 0, 0) (pp_rank, dp_rank, tp_rank)
+    For example:
+    - ZeRO-1: /path/to/optimizer_pp-0-of-1_dp-0-of-2_tp-0-of-2_exp-0-of-1.pt
+      Returns: (0, 0, 0) (pp_rank, dp_rank, tp_rank)
 
-    For ZeRO-0: /path/to/optimizer_pp-0-of-1_tp-0-of-1.pt
-    then the function will return (0, 0) (pp_rank, tp_rank)
+    - ZeRO-0: /path/to/optimizer_pp-0-of-1_tp-0-of-2_exp-0-of-1.pt
+      Returns: (0, 0) (pp_rank, tp_rank)
     """
-    if is_zero1 is True:
-        # TODO(xrsrke): use the same pattern as weight checkpoints
-        # in weight checkpoints, we do pp-rank-.... but here we only do pp-...
-        # TODO(xrsrke): don't hardcode this
-        pattern = r"optimizer_pp-(\d+)-of-\d+_dp-(\d+)-of-\d+_tp-(\d+)-of-\d+\.pt"
+    if is_zero1:
+        pattern = r"optimizer_pp-(\d+)-of-\d+_dp-(\d+)-of-\d+_tp-(\d+)-of-\d+_exp-\d+-of-\d+\.pt"
         match = re.search(pattern, str(shard_path))
+        if not match:
+            raise ValueError(f"Invalid shard path format: {shard_path}")
         pp_rank, dp_rank, tp_rank = match.groups()
         return int(pp_rank), int(dp_rank), int(tp_rank)
     else:
-        # NOTE: this is zero0 checkpoint
-        pattern = r"pp-(\d+)-of-\d+_tp-(\d+)-of-\d+"
+        pattern = r"optimizer_pp-(\d+)-of-\d+_tp-(\d+)-of-\d+_exp-\d+-of-\d+\.pt"
         match = re.search(pattern, str(shard_path))
+        if not match:
+            raise ValueError(f"Invalid shard path format: {shard_path}")
         pp_rank, tp_rank = match.groups()
         return int(pp_rank), int(tp_rank)
 

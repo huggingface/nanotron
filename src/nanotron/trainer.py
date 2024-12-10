@@ -185,8 +185,8 @@ class DistributedTrainer:
         #     return leaf_modules
 
         # leaf_modules = get_leaf_modules(self.model)
-        for name, param in self.model.named_parameters():
-            print(name, param.shape)
+        # for name, param in self.model.named_parameters():
+        #     print(name, param.shape)
 
         self.unwrapped_model: NanotronModel = (
             self.model.module if isinstance(self.model, DistributedDataParallel) else self.model
@@ -459,6 +459,11 @@ class DistributedTrainer:
         # free memory
         gc.collect()
         torch.cuda.empty_cache()
+
+        # Move optimizer states back to GPU before optimizer step
+        if self.init_checkpoint_path is not None and self.config.checkpoints.load_optimizer:
+            state_dict_to_device(self.optimizer.state_dict(), "cuda")
+
         with prof:
             for self.iteration_step in range(self.initial_iter_step, self.last_iter_step + 1):
                 if isinstance(prof, torch.profiler.profile):
@@ -567,14 +572,6 @@ class DistributedTrainer:
         else:
             loss_avg = None
             handle = None
-
-        # Move optimizer states back to GPU before optimizer step
-        if (
-            self.init_checkpoint_path is not None
-            and self.config.checkpoints.load_optimizer
-            and self.iteration_step == self.initial_iter_step
-        ):
-            state_dict_to_device(self.optimizer.state_dict(), "cuda")
 
         before_optim_step_sanity_checks(
             self.config, self.parallel_context, self.unwrapped_model, self.grad_accumulator, self.optimizer

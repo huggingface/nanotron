@@ -9,7 +9,7 @@ from torch.distributed import GradBucket
 
 import nanotron.distributed as dist
 from nanotron import logging
-from nanotron.optim.zero import SlicedFlatTensor, get_sliced_tensor
+from nanotron.optim.zero import SlicedFlatTensor
 from nanotron.parallel.parameters import NanotronParameter
 from nanotron.utils import get_untyped_storage, tensor_from_untyped_storage
 
@@ -111,21 +111,21 @@ class FP32GradientAccumulator(GradientAccumulator):
             (dp_weight_start_idx, dp_weight_end_idx),
             param,
         ) in segment_index.items():
-            if name == "model.final_layer_norm.pp_block.weight":
-                assert 1 == 1
+            # if name == "model.final_layer_norm.pp_block.weight":
+            #     assert 1 == 1
 
             fp32_p = big_flat_buffer[global_start_idx:global_end_idx].view_as(param)
-            sliced_fp32_p = get_sliced_tensor(
-                fp32_p,
-                start_offset=dp_weight_start_idx,
-                end_offset=dp_weight_end_idx,
-                is_sharded=True,
-            )
-            assert (
-                sliced_fp32_p.numel() == param.numel()
-            ), f"Expected {name} to have the same number of elements, dp_weight_start_idx: {dp_weight_start_idx}, dp_weight_end_idx: {dp_weight_end_idx}, param.numel(): {param.numel()}, sliced_fp32_p.numel(): {sliced_fp32_p.numel()}"
+            # sliced_fp32_p = get_sliced_tensor(
+            #     fp32_p,
+            #     start_offset=dp_weight_start_idx,
+            #     end_offset=dp_weight_end_idx,
+            #     is_sharded=True,
+            # )
+            # assert (
+            #     sliced_fp32_p.numel() == param.numel()
+            # ), f"Expected {name} to have the same number of elements, dp_weight_start_idx: {dp_weight_start_idx}, dp_weight_end_idx: {dp_weight_end_idx}, param.numel(): {param.numel()}, sliced_fp32_p.numel(): {sliced_fp32_p.numel()}"
             self.parameters[name] = {
-                "fp32": sliced_fp32_p,
+                "fp32": fp32_p,
                 "half": param,
             }
 
