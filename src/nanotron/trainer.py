@@ -2,6 +2,7 @@ import datetime
 import gc
 import json
 import os
+import random
 import shutil
 import time
 from dataclasses import asdict
@@ -156,10 +157,6 @@ class DistributedTrainer:
         # Set log levels
         set_ranks_logging_level(parallel_context=self.parallel_context, logging_config=self.config.logging)
 
-        # Log benchmark info
-        # if os.environ.get("NANOTRON_BENCHMARK", "0") == "1":
-        #     log_throughput(self.config, self.parallel_context)
-
         ########################################
         ## Setting up our model, optimizers, schedulers, etc.
         ########################################
@@ -259,9 +256,17 @@ class DistributedTrainer:
 
     def pre_init(self):
         self.init_checkpoint_path = parse_ckpt_path(config=self.config, parallel_context=self.parallel_context)
-
         # Calculate cluster bandwidth
+        # TODO: fix in case of dp=3 tp=8
         self.BANDWIDTHS = measure_bandwidth(self.parallel_context)
+        # self.BANDWIDTHS = {
+        #     "all_reduce": 0.0,
+        #     "reduce_scatter": 0.0,
+        #     "all_gather": 0.0,
+        #     "all_reduce_intranode": 0.0,
+        #     "reduce_scatter_intranode": 0.0,
+        #     "all_gather_intranode": 0.0,
+        # }
 
     def post_init(self):
         # S3 Mover and save initial state
@@ -441,6 +446,12 @@ class DistributedTrainer:
         self.last_iter_step = self.config.tokens.train_steps
 
         prof = get_profiler(config=self.config)
+
+        # Random wait between 0-5 seconds
+        wait_time = random.Random().randint(13, 17)  # Use a new generator instance each time
+        log_rank(f"Waiting for {wait_time} seconds", logger=logger, level=logging.INFO, rank=0)
+        time.sleep(wait_time)
+
         # free memory
         gc.collect()
         torch.cuda.empty_cache()
@@ -1075,6 +1086,14 @@ def measure_bandwidth(parallel_context: ParallelContext):
 
     import torch
     import torch.distributed as dist
+
+    # Log that we're measuring bandwidth
+    log_rank(
+        "Measuring inter-GPU and intra-node bandwidth...",
+        logger=logger,
+        level=logging.INFO,
+        rank=0,
+    )
 
     # Size of data to transfer (256MB in elements)
     size = 256 * 1024 * 1024  # Number of elements

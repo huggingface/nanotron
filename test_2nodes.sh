@@ -1,14 +1,13 @@
 #!/bin/bash
 
-#SBATCH --job-name=smolm2-bench    # Job name
-#SBATCH --time=00:02:00
+#SBATCH --job-name=bench_stress_test   # Job name
+#SBATCH --time=00:01:01
 #SBATCH --partition=hopper-prod
 #SBATCH --qos=high
-#SBATCH --reservation=huggingface_37
 
 #SBATCH -o /fsx/nouamane/projects/nanotron/logs/%j-%x.out
 
-#SBATCH --nodes=2                 # Number of nodes (modify as needed)
+#SBATCH --nodes=1                 # Number of nodes (modify as needed)
 #SBATCH --ntasks-per-node=1       # Number of tasks per node
 #SBATCH --cpus-per-task=60         # CPU cores per task
 #SBATCH --gres=gpu:8              # Number of GPUs per node
@@ -37,10 +36,15 @@ export WORLD_SIZE=$(($NNODES * $GPUS_PER_NODE))
 
 # Set some environment variables for better distributed training
 export CUDA_DEVICE_MAX_CONNECTIONS=1
-# export NCCL_DEBUG=INFO
+export NCCL_DEBUG=INFO
 
 # Nanotron specific
 export NANOTRON_BENCHMARK=1
+
+# Print GPU topology information
+echo "=== GPU Topology ==="
+nvidia-smi topo -m
+echo "=================="
 
 
 # Print some debugging information
@@ -55,6 +59,5 @@ srun torchrun \
     --rdzv_id=$SLURM_JOB_ID \
     --rdzv_backend=c10d \
     --rdzv_endpoint=$MASTER_NODE:$MASTER_PORT \
-    stress_test.py \
-    # run_train.py \
-    # --config-file examples/config_tiny_llama.yaml
+    /fsx/nouamane/projects/nanotron/run_train.py \
+    --config-file benchmark/configs/config_1.14G_dp4_tp2_pp1_acc256_mbs2_seq2048_zero1_tpmodeRED_vocab32k.yaml

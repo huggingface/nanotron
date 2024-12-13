@@ -595,8 +595,6 @@ def create_table_log(
     num_params,
     slurm_job_id,
 ):
-    print("num_params")
-    print(num_params)
     return [
         LogItem("job_id", slurm_job_id, "s"),
         LogItem("name", config.general.run, "s"),
@@ -680,12 +678,22 @@ def write_to_csv(csv_filename, table_log, model_tflops, slurm_job_id):
         # Use fcntl for file locking
         max_attempts = 10
         attempt = 0
+        log_rank(
+            f"Attempting to write benchmark results to CSV file: {csv_filename}",
+            logger=logger,
+            level=logging.INFO,
+        )
         while attempt < max_attempts:
             try:
                 # Open file in append mode (will create if doesn't exist)
                 with open(csv_filename, mode="a+", newline="") as f:
                     # Get exclusive lock
                     fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    log_rank(
+                        f"Acquired lock for CSV file: {csv_filename}",
+                        logger=logger,
+                        level=logging.INFO,
+                    )
                     try:
                         # Check if file is empty/new
                         f.seek(0)
@@ -704,8 +712,18 @@ def write_to_csv(csv_filename, table_log, model_tflops, slurm_job_id):
                     finally:
                         # Release lock
                         fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                        log_rank(
+                            f"Successfully wrote to CSV file: {csv_filename}. Releasing lock...",
+                            logger=logger,
+                            level=logging.INFO,
+                        )
             except BlockingIOError:
                 # Another process has the lock, wait and retry
+                log_rank(
+                    f"Another process has the lock for CSV file: {csv_filename}, waiting and retrying attempt {attempt + 1} of {max_attempts}...",
+                    logger=logger,
+                    level=logging.INFO,
+                )
                 attempt += 1
                 time.sleep(0.1)  # Wait 100ms before retrying
             except IOError as e:
