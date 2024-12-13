@@ -26,6 +26,7 @@ from nanotron.helpers import (
 )
 from nanotron.logging import log_rank
 from nanotron.parallel.pipeline_parallel.utils import get_input_output_pp_ranks
+from nanotron.serialize import DataStageMetadata
 from nanotron.trainer import DistributedTrainer
 from nanotron.utils import main_rank_first
 from torch.utils.data import DataLoader
@@ -186,9 +187,23 @@ def get_dataloader(trainer: DistributedTrainer) -> Dict[str, DataLoader]:
         # then we lazy initialize the dataloader for the other stages
         stage = cast(DatasetStageArgs, stage)
         consumed_train_samples = get_consumed_train_samples_of_a_data_stage_from_ckp(stage, trainer.metadata)
-        assert (
-            consumed_train_samples is not None
-        ), f"Cannot find consumed_train_samples for stage {stage.start_training_step} in the checkpoint"
+        if consumed_train_samples is None:
+            # If stage not found in metadata, ensure we haven't passed this stage's start step
+            assert (
+                trainer.metadata.last_train_step < stage.start_training_step
+            ), f"Stage {stage.name} starting at step {stage.start_training_step} not found in checkpoint metadata, but last_train_step ({trainer.metadata.last_train_step}) >= start_training_step"
+            consumed_train_samples = 0
+
+            # Add new stage to metadata
+            if trainer.metadata.data_stages is None:
+                trainer.metadata.data_stages = []
+            trainer.metadata.data_stages.append(
+                DataStageMetadata(
+                    name=stage.name,
+                    start_training_step=stage.start_training_step,
+                    consumed_train_samples=consumed_train_samples,
+                )
+            )
 
         num_remaining_train_steps = compute_remain_train_steps_of_a_data_stage_from_ckp(
             stage, trainer.config, trainer.metadata
