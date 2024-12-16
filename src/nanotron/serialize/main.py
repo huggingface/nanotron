@@ -106,7 +106,6 @@ def save(
 
             save_lr_scheduler(
                 lr_scheduler=lr_scheduler,
-                is_zero=config.optimizer.zero_stage,
                 parallel_context=parallel_context,
                 root_folder=root_folder,
                 is_zero=config.optimizer.zero_stage
