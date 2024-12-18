@@ -239,18 +239,23 @@ def find_fp8_config_by_module_name(target_module_name: str, config: FP8Args) -> 
 
     if config.model is not None:
         for layer_args in config.model:
-            if layer_args.module_name == target_module_name:
+            if layer_args.module_name == target_module_name.replace("pp_block.", "").replace("module.", ""):
                 return layer_args
     # elif config.is_quant_all_except_first_and_last:
     else:
 
         def match_layer_pattern(name, layer_idxs):
+            # patterns = [
+            #     "model.decoder.{}.pp_block.attn.qkv_proj",
+            #     "model.decoder.{}.pp_block.attn.o_proj",
+            #     "model.decoder.{}.pp_block.mlp.down_proj",
+            #     "model.decoder.{}.pp_block.mlp.gate_up_proj",
+            # ]
             patterns = [
-                "model.decoder.{}.pp_block.attn.qkv_proj",
-                "model.decoder.{}.pp_block.attn.o_proj",
-                "model.decoder.{}.pp_block.mlp.down_proj",
-                # "model.decoder.{}.mlp.up_proj",
-                "model.decoder.{}.pp_block.mlp.gate_up_proj",
+                "model.decoder.{}.attn.qkv_proj",
+                "model.decoder.{}.attn.o_proj",
+                "model.decoder.{}.mlp.down_proj",
+                "model.decoder.{}.mlp.gate_up_proj",
             ]
 
             for idx in layer_idxs:
@@ -267,12 +272,13 @@ def find_fp8_config_by_module_name(target_module_name: str, config: FP8Args) -> 
         # assert config.fp8_linear_config_temp is not None
 
         quant_layer_idxs = list(range(1, num_layers - 1))
-        if match_layer_pattern(target_module_name, quant_layer_idxs) is True:
+        # NOTE: remove ".pp_block" from module name
+        if match_layer_pattern(target_module_name.replace(".pp_block", ""), quant_layer_idxs) is True:
             from copy import deepcopy
 
             # config_temp = deepcopy(config.fp8_linear_config_temp)
             config_temp = deepcopy(FP8LM_LINEAR_RECIPE)
-            # config_temp.module_name = target_module_name
+            config_temp.module_name = target_module_name
             return config_temp
     # else:
     #     from nanotron.fp8.constant_recipe import MODULE_NAMES_THAT_NOT_FP8

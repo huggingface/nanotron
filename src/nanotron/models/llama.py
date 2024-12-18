@@ -24,6 +24,7 @@ from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.config import Config, LlamaConfig, ParallelismArgs
 from nanotron.config.models_config import RandomInit, SpectralMupInit
+from nanotron.fp8.utils import is_overflow_underflow_nan
 from nanotron.generation.generate_store import AttachableStore
 from nanotron.logging import log_rank
 from nanotron.models import NanotronModel
@@ -431,6 +432,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             parallel_config=parallel_config,
             layer_idx=layer_idx,
         )
+        self.layer_idx = layer_idx
 
         self.prefill_kv_len = (
             config.max_position_embeddings
@@ -451,6 +453,8 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             hidden_states
         )  # [seq_length, batch_size, n_local_q_heads * d_qk + 2 * n_local_kv_heads * d_qk]
         q_length, batch_size, _ = qkv_states.shape
+
+        assert is_overflow_underflow_nan(qkv_states) is False, f"layer_idx: {self.layer_idx}"
 
         if self.is_gqa:
             query_states, key_states, value_states = torch.split(
@@ -661,6 +665,10 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             key_value_states = torch.cat([key_states.unsqueeze(0), value_states.unsqueeze(0)], dim=0)
             # [batch_size, seq_length, 2, num_heads, d_qk]
             key_value_states = key_value_states.permute(1, 2, 0, 3, 4).contiguous()
+
+            assert is_overflow_underflow_nan(query_states) is False, f"layer_idx: {self.layer_idx}"
+            assert is_overflow_underflow_nan(key_value_states) is False, f"layer_idx: {self.layer_idx}"
+
             query_states, key_value_states = self.flash_rotary_embedding(query_states, kv=key_value_states)
             # [batch_size, seq_length, num_heads, d_qk]
             key_states, value_states = torch.split(key_value_states, 1, dim=2)
@@ -685,9 +693,18 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             # NOTE: even though in some cases, we accumulate fp8 gemm in bfloat16,
             # but since the layer norm are in float32, the resulting output will be in float32
             # and flash attention don't support float32 qkv, so we have to cast it back to bfloat16
+
+            assert is_overflow_underflow_nan(query_states) is False, f"layer_idx: {self.layer_idx}"
+            assert is_overflow_underflow_nan(key_states) is False, f"layer_idx: {self.layer_idx}"
+            assert is_overflow_underflow_nan(value_states) is False, f"layer_idx: {self.layer_idx}"
+
             query_states = query_states.to(torch.bfloat16)
             key_states = key_states.to(torch.bfloat16)
             value_states = value_states.to(torch.bfloat16)
+
+            assert is_overflow_underflow_nan(query_states) is False, f"layer_idx: {self.layer_idx}"
+            assert is_overflow_underflow_nan(key_states) is False, f"layer_idx: {self.layer_idx}"
+            assert is_overflow_underflow_nan(value_states) is False, f"layer_idx: {self.layer_idx}"
 
             attention_output = self.attention(
                 query_states=query_states,
@@ -700,6 +717,14 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         attention_output = (
             attention_output.contiguous().view(batch_size, q_length, self.n_local_q_heads * self.d_v).transpose(0, 1)
         )
+        from nanotron import constants
+
+        if attention_output.dtype != constants.CONFIG.fp8.resid_dtype:
+            assert is_overflow_underflow_nan(attention_output) is False, f"layer_idx: {self.layer_idx}"
+            attention_output = attention_output.to(constants.CONFIG.fp8.resid_dtype)
+            assert is_overflow_underflow_nan(attention_output) is False, f"layer_idx: {self.layer_idx}"
+
+        assert is_overflow_underflow_nan(attention_output) is False, f"layer_idx: {self.layer_idx}"
         output = self.o_proj(attention_output)
 
         return {"hidden_states": output, "sequence_mask": sequence_mask}
@@ -730,6 +755,7 @@ class LlamaDecoderLayer(nn.Module):
         self.mlp = MLP(config=config, parallel_config=parallel_config, tp_pg=tp_pg, layer_idx=layer_idx)
 
         self.recompute_layer = parallel_config.recompute_layer
+        self.layer_idx = layer_idx
 
     def _core_forward(
         self,
@@ -738,15 +764,22 @@ class LlamaDecoderLayer(nn.Module):
     ) -> List[Union[torch.Tensor, TensorPointer]]:
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
+        assert is_overflow_underflow_nan(hidden_states) is False, f"layer_idx: {self.layer_idx}"
 
         output = self.attn(hidden_states=hidden_states, sequence_mask=sequence_mask)
         hidden_states = output["hidden_states"]
+        assert is_overflow_underflow_nan(hidden_states) is False, f"layer_idx: {self.layer_idx}"
         hidden_states = hidden_states + residual
+        assert is_overflow_underflow_nan(hidden_states) is False, f"layer_idx: {self.layer_idx}"
 
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
+        assert is_overflow_underflow_nan(hidden_states) is False, f"layer_idx: {self.layer_idx}"
+
         hidden_states = self.mlp(hidden_states=hidden_states)["hidden_states"]
+        assert is_overflow_underflow_nan(hidden_states) is False, f"layer_idx: {self.layer_idx}"
         hidden_states = hidden_states + residual
+        assert is_overflow_underflow_nan(hidden_states) is False, f"layer_idx: {self.layer_idx}"
 
         return hidden_states, output["sequence_mask"]
 
@@ -920,14 +953,20 @@ class LlamaModel(nn.Module):
             "hidden_states": output["input_embeds"],
             "sequence_mask": input_mask,
         }
+        assert is_overflow_underflow_nan(hidden_encoder_states["hidden_states"]) is False
+
         for encoder_block in self.decoder:
             hidden_encoder_states = encoder_block(**hidden_encoder_states)
+            assert is_overflow_underflow_nan(hidden_encoder_states["hidden_states"]) is False
 
         hidden_states = self.final_layer_norm(input=hidden_encoder_states["hidden_states"])["hidden_states"]
+        assert is_overflow_underflow_nan(hidden_states) is False
 
         sharded_logits = self.lm_head(x=hidden_states)["logits"]
+        assert is_overflow_underflow_nan(sharded_logits) is False
 
         fp32_sharded_logits = self.cast_to_fp32(x=sharded_logits)["output"]
+        assert is_overflow_underflow_nan(fp32_sharded_logits) is False
 
         return fp32_sharded_logits, hidden_states
 

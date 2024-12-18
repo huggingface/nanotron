@@ -5,6 +5,7 @@ import torch
 from nanotron.fp8.linear import FP8LinearMeta
 from nanotron.fp8.recipe import FP8LinearRecipe
 from nanotron.fp8.tensor import FP8Tensor
+from nanotron.fp8.utils import is_overflow_underflow_nan
 from nanotron.parallel.parameters import NanotronParameter
 
 
@@ -74,8 +75,13 @@ def linear(
     # because weight and bias's requires_grad are set to False
     # so that we can compute the gradients using the fp8 kernels by ourselves
     phony = torch.empty(0, device=input.device, requires_grad=True)
-    output = torch.empty(input.shape[0], weight.shape[0], device="cuda", dtype=recipe.accum_dtype)
+    # NOTE: interesting that if i initialize the output buffer as torch.empty
+    # it leads to nan matmul, so i do torch.zeros instead
+    # output = torch.empty(input.shape[0], weight.shape[0], device="cuda", dtype=recipe.accum_dtype)
+    output = torch.zeros(input.shape[0], weight.shape[0], device="cuda", dtype=recipe.accum_dtype)
     output, _ = _FP8Matmul.apply(input, weight, output, phony, metadatas, recipe, name)
+    if is_overflow_underflow_nan(output) is True:
+        assert 1 == 1
 
     # TODO(xrsrke): add support for adding bias in fp8
     # TODO(xrsrke): support return an fp8 tensor as output

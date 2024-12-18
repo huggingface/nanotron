@@ -294,7 +294,7 @@ class FP32GradientAccumulator(GradientAccumulator):
 
         from nanotron.fp8.utils import is_overflow_underflow_nan
 
-        assert is_overflow_underflow_nan(grad) is False
+        assert is_overflow_underflow_nan(grad) is False, f"name: {name}"
 
         fp32_grad = self.get_grad_buffer(name=name)
 
@@ -324,6 +324,7 @@ class FP32GradientAccumulator(GradientAccumulator):
             else:
                 grad = fp32_grad
             fp32_param.grad = grad
+            assert is_overflow_underflow_nan(fp32_param.grad) is False
 
     @contextmanager
     def no_sync(self):

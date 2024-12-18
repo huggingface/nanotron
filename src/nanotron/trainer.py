@@ -210,7 +210,7 @@ class DistributedTrainer:
         # from nanotron import constants
         for n, p in self.model.named_parameters():
             if hasattr(p, "_is_future_fp8") and p._is_future_fp8 is True:
-                constants.CPU_WEIGHTS[n] = p.data.cpu().clone()
+                constants.CPU_WEIGHTS[n.replace("module.", "")] = p.data.cpu().clone()
 
         # NOTE: sanity check all hash are different
         param_hash = []

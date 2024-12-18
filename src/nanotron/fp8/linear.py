@@ -173,6 +173,7 @@ class _FP8Matmul(torch.autograd.Function):
 
         from nanotron import constants
         from nanotron.config.fp8_config import FP8Args
+        from nanotron.fp8.utils import is_overflow_underflow_nan
 
         # pydevd.settrace(suspend=False, trace_only_current_thread=True)
         if (
@@ -200,6 +201,8 @@ class _FP8Matmul(torch.autograd.Function):
         fp8_input = cast(FP8Tensor, fp8_input)
         fp8_weight = cast(FP8Tensor, fp8_weight)
 
+        assert is_overflow_underflow_nan(grad_output) is False, f"name: {ctx.name}"
+
         ctx.metadatas = cast(FP8LinearMeta, ctx.metadatas)
         if ctx.metadatas.input_grad is None:
             fp8_grad_output = FP8Tensor(
@@ -214,7 +217,8 @@ class _FP8Matmul(torch.autograd.Function):
 
         if ctx.is_input_require_grad:
             transposed_fp8_weight = fp8_weight.transpose_fp8()
-            grad_input_temp = torch.empty(
+            # NOTE: same reason as output buffer in .forward
+            grad_input_temp = torch.zeros(
                 fp8_grad_output.shape[0],
                 transposed_fp8_weight.shape[0],
                 device="cuda",
@@ -232,11 +236,14 @@ class _FP8Matmul(torch.autograd.Function):
         else:
             grad_input = None
 
+        assert is_overflow_underflow_nan(grad_input) is False
+
         # TODO(xrsrke): fuse cast and transpose
         transposed_fp8_grad_output = fp8_grad_output.transpose_fp8()
         transposed_fp8_input = fp8_input.transpose_fp8()
 
-        grad_weight_temp = torch.empty(
+        # NOTE: same reason as output buffer in .forward
+        grad_weight_temp = torch.zeros(
             transposed_fp8_input.shape[0],
             transposed_fp8_grad_output.shape[0],
             device="cuda",
@@ -250,6 +257,7 @@ class _FP8Matmul(torch.autograd.Function):
             accumulate=recipe.accumulate.weight_grad,
             accum_qtype=recipe.accum_dtype,
         )
+        assert is_overflow_underflow_nan(grad_weight) is False
 
         if ctx.is_input_require_grad:
             assert grad_input.dtype == recipe.accum_dtype
@@ -272,8 +280,8 @@ class _FP8Matmul(torch.autograd.Function):
             #   File "/fsx/phuc/temp/temp3_env_for_fp8/env/lib/python3.10/site-packages/torch/_tensor.py", line 1386, in __torch_function__
             #     ret = func(*args, **kwargs)
             # RuntimeError: attempting to assign a gradient with dtype 'c10::BFloat16' to a tensor with dtype 'unsigned char'. Please ensure that the gradient and the tensor have the same dtype
-            fp8_weight.__accum_grad = grad_weight
-            assert fp8_weight.__accum_grad.dtype in [torch.float16, torch.bfloat16, torch.float32]
+            # fp8_weight.__accum_grad = grad_weight
+            # assert fp8_weight.__accum_grad.dtype in [torch.float16, torch.bfloat16, torch.float32]
             # constants.ACCUM_GRADS[ctx.name] = grad_weight
             set_accum_grad(ctx.name, grad_weight)
         else:
@@ -295,4 +303,4 @@ class _FP8Matmul(torch.autograd.Function):
             # NOTE: sanity check
             assert isinstance(fp8_weight_param.grad, FP8Tensor)
 
-        return grad_input, fp8_weight_grad, None, None, None, None, None
+        return grad_input, None, None, None, None, None, None

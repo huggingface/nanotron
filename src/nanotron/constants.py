@@ -22,3 +22,4 @@ is_ready_to_log = False
 
 # TODO(xrsrke): refactor
 CPU_WEIGHTS = {}
+ACCUM_GRADS = {}
