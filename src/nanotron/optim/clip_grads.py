@@ -4,6 +4,7 @@ import torch
 
 import nanotron.distributed as dist
 from nanotron import logging
+from nanotron.fp8.tensor import FP8Tensor
 from nanotron.optim.gradient_accumulator import GradientAccumulator
 from nanotron.parallel.parameters import NanotronParameter
 
@@ -35,7 +36,9 @@ def clip_grad_norm(
 
     # assert that all params require grad
     for _, p in named_parameters:
-        assert p.requires_grad, "clip_grad_norm_ only supports Tensors that require grad"
+        assert p.requires_grad or isinstance(
+            p.data, FP8Tensor
+        ), "clip_grad_norm_ only supports Tensors that require grad"
 
     if grad_accumulator is None:
         grads = [

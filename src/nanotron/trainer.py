@@ -36,6 +36,8 @@ from nanotron.config import (
 )
 from nanotron.constants import MODEL_CONFIG_FILE_NAME
 from nanotron.dataloader import sanity_check_dataloader
+from nanotron.fp8.parallel import DistributedDataParallel as FP8DistributedDataParallel
+from nanotron.fp8.tensor import FP8Tensor
 from nanotron.fp8.utils import convert_model_to_fp8, is_overflow_underflow_nan
 from nanotron.helpers import (
     _vocab_size_with_padding,
@@ -589,10 +591,11 @@ class DistributedTrainer:
         # Clip gradients
         if self.config.optimizer.clip_grad is not None:
             # Unwrap DDP
+            # NOTE: FP8 parameter's requires_grad is set to False by default
             named_parameters = [
                 (name, param)
                 for name, param in self.unwrapped_model.get_named_params_with_correct_tied()
-                if param.requires_grad
+                if param.requires_grad or isinstance(param.data, FP8Tensor)
             ]
             self.grad_norm_unclipped = clip_grad_norm(
                 mp_pg=self.parallel_context.mp_pg,
@@ -640,7 +643,8 @@ class DistributedTrainer:
         # assert [True for n, p in self.model.named_parameters() if p.grad is not None]
 
         from nanotron import constants
-        from nanotron.fp8.tensor import FP8Tensor
+
+        # from nanotron.fp8.tensor import FP8Tensor
 
         for pg in self.optimizer.param_groups:
             for p in pg["params"]:
@@ -936,12 +940,16 @@ class DistributedTrainer:
             # Check that the model has at least one grad. Necessary for DDP
             check_model_has_grad(model=model, parallel_context=parallel_context)
             # TODO @thomasw21: DDP doesn't support broadcasting complex buffers (and we don't really need that broadcasting anyway)
-            model = DistributedDataParallel(
-                model,
-                process_group=parallel_context.dp_pg,
-                broadcast_buffers=False,
-                bucket_cap_mb=config.model.ddp_bucket_cap_mb,
-            )
+            if self.config.model.dtype == torch.int8:
+                raise NotImplementedError
+                model = FP8DistributedDataParallel(model, self.parallel_context)
+            else:
+                model = DistributedDataParallel(
+                    model,
+                    process_group=parallel_context.dp_pg,
+                    broadcast_buffers=False,
+                    bucket_cap_mb=config.model.ddp_bucket_cap_mb,
+                )
 
         # Sanity check the model, all parameters must be NanotronParameter (either tied or sharded)
         sanity_check(root_module=model)
