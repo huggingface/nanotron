@@ -2,7 +2,6 @@ import datetime
 import gc
 import json
 import os
-import random
 import shutil
 import time
 from dataclasses import asdict
@@ -447,11 +446,6 @@ class DistributedTrainer:
 
         prof = get_profiler(config=self.config)
 
-        # Random wait between 0-5 seconds
-        wait_time = random.Random().randint(13, 17)  # Use a new generator instance each time
-        log_rank(f"Waiting for {wait_time} seconds", logger=logger, level=logging.INFO, rank=0)
-        time.sleep(wait_time)
-
         # free memory
         gc.collect()
         torch.cuda.empty_cache()
@@ -689,12 +683,9 @@ class DistributedTrainer:
                 bandwidth=self.BANDWIDTHS,
                 num_params=self.num_params,
             )
-            log_rank("Throughput logging complete", logger=logger, level=logging.INFO)
+            log_rank("Throughput logging complete", logger=logger, level=logging.INFO, rank=0)
             if not self.config.profiler:
-                if "SLURM_JOB_ID" in os.environ:
-                    os.system("scancel " + os.environ["SLURM_JOB_ID"])
-                else:
-                    exit(0)
+                exit(1)  # exit with non-zero exit code to trigger fast termination --kill-on-bad-exit=1
 
     def init_model(self) -> Union[NanotronModel, DistributedDataParallel]:
         """Initialize the model and load weights from checkpoint if needed."""
@@ -1082,10 +1073,6 @@ def mark_unsharded_params_as_tied_across_expert(
 
 def measure_bandwidth(parallel_context: ParallelContext):
     """Measure inter-GPU and intra-node bandwidth using NCCL all_reduce, reduce_scatter, and all_gather."""
-    import time
-
-    import torch
-    import torch.distributed as dist
 
     # Log that we're measuring bandwidth
     log_rank(

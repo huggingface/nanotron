@@ -1,10 +1,11 @@
 #!/bin/bash
 
-#SBATCH --job-name=smolm2-bench    # Job name
+#SBATCH --job-name=smolm2-bench   # Job name
 #SBATCH --time=00:02:00
 #SBATCH --partition=hopper-prod
 #SBATCH --qos=high
-#SBATCH --reservation=huggingface_37
+#SBATCH --reservation=nouamane_weekend_32
+#SBATCH --exclude=ip-26-0-160-192,ip-26-0-171-102
 
 #SBATCH -o /fsx/nouamane/projects/nanotron/logs/%j-%x.out
 
@@ -13,6 +14,7 @@
 #SBATCH --cpus-per-task=60         # CPU cores per task
 #SBATCH --gres=gpu:8              # Number of GPUs per node
 #SBATCH --exclusive               # Exclusive use of nodes
+#SBATCH --wait-all-nodes=1        # fail if any node is not ready
 
 set -x -e
 
@@ -37,10 +39,18 @@ export WORLD_SIZE=$(($NNODES * $GPUS_PER_NODE))
 
 # Set some environment variables for better distributed training
 export CUDA_DEVICE_MAX_CONNECTIONS=1
-# export NCCL_DEBUG=INFO
+export NCCL_DEBUG=WARN # INFO
 
 # Nanotron specific
 export NANOTRON_BENCHMARK=1
+# Disable wandb
+export WANDB_MODE=disabled
+
+
+# Print GPU topology information
+echo "=== GPU Topology ==="
+nvidia-smi topo -m
+echo "=================="
 
 
 # Print some debugging information
@@ -49,12 +59,13 @@ echo "All nodes: $NODELIST"
 echo "World size: $WORLD_SIZE"
 
 # Launch the training script using srun
-srun torchrun \
+srun --wait=0 --kill-on-bad-exit=1 torchrun \
     --nnodes=$NNODES \
     --nproc_per_node=$GPUS_PER_NODE \
     --rdzv_id=$SLURM_JOB_ID \
     --rdzv_backend=c10d \
     --rdzv_endpoint=$MASTER_NODE:$MASTER_PORT \
-    stress_test.py \
-    # run_train.py \
-    # --config-file examples/config_tiny_llama.yaml
+    --max_restarts 0 \
+    --rdzv_conf timeout=60 \
+    /fsx/nouamane/projects/nanotron/run_train.py \
+    --config-file examples/config_tiny_llama.yaml

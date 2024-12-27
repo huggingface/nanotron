@@ -1,4 +1,5 @@
 import torch
+
 from nanotron import logging
 from nanotron.parallel.pipeline_parallel.p2p import P2P
 from nanotron.parallel.pipeline_parallel.state import PipelineBatchState
@@ -33,6 +34,8 @@ class SendTensorToPipelineBuffer(torch.autograd.Function):
         p2p = ctx.p2p
         to_rank = ctx.to_rank
         pipeline_state = ctx.pipeline_state
+
+        logger.debug("Backward SendTensorToPipelineBuffer")
 
         # send a gradient and store it in buffer
         pipeline_state.register_recv_grad(from_rank=to_rank, p2p=p2p)
@@ -69,6 +72,7 @@ class SendTensorWithoutGradientToPipelineBuffer(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_tensor):
         pipeline_state = ctx.pipeline_state
+        logger.debug("Backward SendTensorWithoutGradientToPipelineBuffer")
 
         # send only the activations
         pipeline_state.run_communication(send_only_activation=True)
@@ -111,9 +115,11 @@ class RecvTensorFromPipelineBuffer(torch.autograd.Function):
         return None, None, None, None
 
 
-def recv_from_pipeline_state_buffer(from_rank: int, p2p: P2P, pipeline_state: PipelineBatchState):
+def recv_from_pipeline_state_buffer(
+    from_rank: int, p2p: P2P, pipeline_state: PipelineBatchState, run_communication: bool = True
+):
     pipeline_state.register_recv_activation(from_rank=from_rank, p2p=p2p)
-    if len(pipeline_state.activations_buffer) == 0:
+    if run_communication:
         pipeline_state.run_communication()
     activation = pipeline_state.activations_buffer.popleft()
     return RecvTensorFromPipelineBuffer.apply(activation, from_rank, p2p, pipeline_state)

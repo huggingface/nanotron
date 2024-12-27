@@ -1,8 +1,12 @@
+# fmt: off
+
+#  black --preview --line-length 99999 scaling_benchmarks.py
 # python scaling_benchmarks.py --base-config elie.yaml --debug
 # python scaling_benchmarks.py --debug
 import argparse
 import math
 import os
+from datetime import datetime
 
 import pandas as pd
 import yaml
@@ -10,10 +14,18 @@ from nanotron.logging import human_format
 from tqdm import tqdm
 
 ACCUMULATE_GRAD_IN_FP32 = True
-NUM_KEY_VALUE_HEADS = 8
+NUM_KEY_VALUE_HEADS = None  # Although it's necessary to reduce 450B to 400B model, we can't bench tp>8 if we use 8 KV heads
 
 
-def estimate_num_params(layers, hidden_size, heads, intermediate_size, tie_word_embeddings, vocab, kv_heads=None):
+def estimate_num_params(
+    layers,
+    hidden_size,
+    heads,
+    intermediate_size,
+    tie_word_embeddings,
+    vocab,
+    kv_heads=None,
+):
     # params = 2*V*h + l(3*h*H + (2 + 2*q/kv_ratio)*h*h)
     # For GQA with 8 KV heads and 32 attention heads (4x ratio), it's: 2*V*h + l(3*h*H + (2 + 2/4)*h*h)
     vocab = vocab * hidden_size if tie_word_embeddings else 2 * vocab * hidden_size
@@ -28,6 +40,7 @@ def create_config(
     pp: int,
     batch_accum: int,
     seq_len: int,
+    benchmark_csv_path,
     micro_batch_size: int = 1,
     base_config_path: str = "examples/config_tiny_llama_bench.yaml",
     zero_stage: int = 0,
@@ -38,7 +51,6 @@ def create_config(
     tp_mode: str = "REDUCE_SCATTER",
     vocab_size: int = 32768,
     profile: bool = False,
-    benchmark_csv_path: str = "benchmark/results/bench_final.csv",
 ) -> dict:
     """Create a config with the specified parallelism settings."""
     # Load base config
@@ -63,15 +75,9 @@ def create_config(
     config["model"]["model_config"]["num_hidden_layers"] = num_layers
     config["model"]["model_config"]["hidden_size"] = hidden_size
     config["model"]["model_config"]["num_attention_heads"] = num_attention_heads
-    config["model"]["model_config"]["num_key_value_heads"] = (
-        NUM_KEY_VALUE_HEADS if NUM_KEY_VALUE_HEADS is not None else num_attention_heads
-    )
-    config["model"]["model_config"]["intermediate_size"] = (
-        intermediate_size if intermediate_size is not None else 4 * hidden_size
-    )
-    config["model"]["model_config"]["tie_word_embeddings"] = (
-        True if intermediate_size < 10_000 else False
-    )  # model < 4B
+    config["model"]["model_config"]["num_key_value_heads"] = NUM_KEY_VALUE_HEADS if NUM_KEY_VALUE_HEADS is not None else num_attention_heads
+    config["model"]["model_config"]["intermediate_size"] = intermediate_size if intermediate_size is not None else 4 * hidden_size
+    config["model"]["model_config"]["tie_word_embeddings"] = True if intermediate_size < 10_000 else False  # model < 4B
 
     # Set vocab_size
     config["model"]["model_config"]["vocab_size"] = vocab_size
@@ -94,9 +100,7 @@ def create_config(
     N = human_format(num_params)
 
     # Update run name to reflect configuration
-    config["general"][
-        "run"
-    ] = f"{N}_dp{dp}_tp{tp}_pp{pp}_acc{batch_accum}_mbs{micro_batch_size}_seq{seq_len}_zero{zero_stage}_tpmode{tp_mode[:3]}_vocab{vocab_size//1000}k"
+    config["general"]["run"] = f"{N}_dp{dp}_tp{tp}_pp{pp}_acc{batch_accum}_mbs{micro_batch_size}_seq{seq_len}_zero{zero_stage}_tpmode{tp_mode[:3]}_vocab{vocab_size//1000}k"
 
     # Update benchmark CSV path
     config["general"]["benchmark_csv_path"] = benchmark_csv_path
@@ -118,6 +122,7 @@ def generate_slurm_script(
     time: str = "00:02:00",
     partition: str = "hopper-prod",
     base_script_path: str = "run_multinode.sh",
+    use_bash: bool = False,
 ) -> str:
     """Generate a SLURM script for the given configuration."""
     # Check if base script exists
@@ -136,37 +141,42 @@ def generate_slurm_script(
     # Replace SLURM parameters
     replacements = {
         "--nodes=2": f"--nodes={num_nodes}",
+        # "export SLURM_NNODES=2": f"export SLURM_NNODES={num_nodes}",
         "--time=00:02:00": f"--time={time}",
         "--partition=hopper-prod": f"--partition={partition}",
         "--job-name=smolm2-bench": f"--job-name=bench_{config['general']['run']}",
+        'JOBNAME="smolm2-bench"': f'JOBNAME="bench_{config["general"]["run"]}"',
         "examples/config_tiny_llama.yaml": f"benchmark/configs/config_{config['general']['run']}.yaml",
     }
 
     for old, new in replacements.items():
         if old not in script:
-            print(f"Warning: Could not find '{old}' in base script")
+            raise ValueError(f"Could not find '{old}' in base script")
         script = script.replace(old, new)
 
     return script
 
 
 def check_params(model_configs):
-    for model_name, (num_layers, hidden_size, num_heads, intermediate_size) in model_configs.items():
+    for model_name, (
+        num_layers,
+        hidden_size,
+        num_heads,
+        intermediate_size,
+    ) in model_configs.items():
         print(f"{model_name} model parameters:")
         tie = True if intermediate_size < 10_000 else False
-        print(
-            f"  Embedding params: {human_format(estimate_num_params(num_layers, hidden_size, num_heads, intermediate_size, tie, 131072, 8))}"
-        )
+        print(f"  Embedding params: {human_format(estimate_num_params(num_layers, hidden_size, num_heads, intermediate_size, tie, 131072, 8))}")
         print()
 
     exit()
 
 
-def save_experiment_configs(configs, output_path):
+def save_experiment_configs(configs, output_path, job_ids=None):
     """Save core experiment configurations for tracking"""
     records = []
 
-    for config in configs:
+    for i, config in enumerate(configs):
         # Calculate total params
         tie_word_embeddings = True if config["model"]["model_config"]["intermediate_size"] < 10_000 else False
         estimate_num_params(
@@ -179,24 +189,23 @@ def save_experiment_configs(configs, output_path):
             NUM_KEY_VALUE_HEADS,
         )
         record = {
+            "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "name": config["general"]["run"],
             "nodes": config["parallelism"]["dp"] * config["parallelism"]["tp"] * config["parallelism"]["pp"] / 8,
             "seq_len": config["tokens"]["sequence_length"],
             "mbs": config["tokens"]["micro_batch_size"],
             "batch_accum": config["tokens"]["batch_accumulation_per_replica"],
-            "gbs": config["tokens"]["sequence_length"]
-            * config["tokens"]["micro_batch_size"]
-            * config["tokens"]["batch_accumulation_per_replica"]
-            * config["parallelism"]["dp"],
+            "gbs": config["tokens"]["sequence_length"] * config["tokens"]["micro_batch_size"] * config["tokens"]["batch_accumulation_per_replica"] * config["parallelism"]["dp"],
             "dp": config["parallelism"]["dp"],
             "pp": config["parallelism"]["pp"],
             "tp": config["parallelism"]["tp"],
-            "tp_mode": f"TensorParallelLinearMode.{config['parallelism']['tp_mode']}",
+            "tp_mode": f"{config['parallelism']['tp_mode']}",
             "hidden_size": config["model"]["model_config"]["hidden_size"],
             "num_layers": config["model"]["model_config"]["num_hidden_layers"],
             "num_heads": config["model"]["model_config"]["num_attention_heads"],
             "vocab_size": config["model"]["model_config"]["vocab_size"],
             "zero_stage": config["optimizer"]["zero_stage"],
+            "job_id": job_ids[i] if job_ids else None,
         }
         records.append(record)
 
@@ -216,36 +225,68 @@ def save_experiment_configs(configs, output_path):
 def main():
     parser = argparse.ArgumentParser(description="Run scaling benchmarks with different parallelism configurations")
     parser.add_argument(
-        "--configs-dir", type=str, default="benchmark/configs", help="Directory to store generated configs"
+        "--configs-dir",
+        type=str,
+        default="benchmark/configs",
+        help="Directory to store generated configs",
     )
     parser.add_argument(
-        "--scripts-dir", type=str, default="benchmark/scripts", help="Directory to store generated SLURM scripts"
+        "--scripts-dir",
+        type=str,
+        default="benchmark/scripts",
+        help="Directory to store generated SLURM scripts",
     )
     parser.add_argument("--partition", type=str, default="hopper-prod", help="SLURM partition to use")
-    parser.add_argument("--time", type=str, default="00:10:00", help="Time limit for each job")
+    parser.add_argument("--time", type=str, default="01:10:00", help="Time limit for each job")
     parser.add_argument(
         "--base-config",
         type=str,
         default="examples/config_tiny_llama_bench.yaml",
         help="Base configuration file to use",
     )
-    parser.add_argument("--base-script", type=str, default="run_multinode.sh", help="Base SLURM script to use")
+    parser.add_argument(
+        "--base-script",
+        type=str,
+        default="run_multinode.sh",
+        help="Base SLURM script to use",
+    )
     parser.add_argument(
         "--pending-csv",
         type=str,
-        default="benchmark/results/pending_experiments_stress.csv",
+        default="benchmark/results/pending_experiments2.csv",
         help="CSV file to store pending experiments",
     )
     parser.add_argument(
         "--benchmark-csv",
         type=str,
-        default="benchmark/results/bench_final_stress.csv",
+        default="benchmark/results/bench_final2.csv",
         help="CSV file to store benchmark results",
     )
-    parser.add_argument("--run", action="store_true", help="Automatically submit all generated SLURM scripts")
+    parser.add_argument(
+        "--run",
+        action="store_true",
+        help="Automatically submit all generated SLURM scripts",
+    )
     parser.add_argument("--debug", action="store_true", help="Debug mode")
+    parser.add_argument(
+        "--limit",
+        type=str,
+        default=None,
+        help="Limit the number of configurations to run (e.g. 100:200)",
+    )
     parser.add_argument("--profile", action="store_true", help="Enable profiling")
+    parser.add_argument("--use-bash", action="store_true", help="Use bash instead of sbatch")
     args = parser.parse_args()
+
+    # Parse limit argument if provided
+    if args.limit is not None:
+        if ":" in args.limit:
+            start, end = args.limit.split(":")
+            start = int(start) if start else None
+            end = int(end) if end else None
+            args.limit = slice(start, end)
+        else:
+            args.limit = slice(int(args.limit))
 
     # Validate input files exist
     if not os.path.exists(args.base_config):
@@ -260,165 +301,134 @@ def main():
     # Define model configurations
     model_configs = {
         # (layers, hidden_size, heads, intermediate_size)
-        # "1B": (16, 2048, 32, 8192), # 1.2G
-        # "3B": (28, 3072, 24, 8192), # 3.2G
-        "8B": (32, 4096, 32, 14336),  # 8.0G
-        # "70B": (80, 8192, 64, 28672), # 70G
-        # "405B": (126, 16384, 128, 53248), # 406G
+        # "1B": (16, 2048, 32, 8192),  # 1.2G
+        # "3B": (28, 3072, 32, 8192),  # 3.57G  24heads -> 32heads
+        # "8B": (32, 4096, 32, 14336),  # 8.0G
+        "70B": (80, 8192, 64, 28672),  # 70G
+        # "405B": (126, 16384, 128, 53248),  # 406G
     }
 
     # Define configurations to test
     configurations = []
 
     # For each model size, test different GPU configurations
-    for model_name, (num_layers, hidden_size, num_heads, intermediate_size) in model_configs.items():
-        vocab_size = 32768
-        zero_stage = 0
-        tp_mode = "REDUCE_SCATTER"
-        configs = [  # 64 nodes max
-            # 2k, 8k, 32k
-            # GBS: 1M, 4M
-            # Format: (dp, tp, pp, batch_accum, seq_len, mbs, ...)
-            # Using SP what's the biggest seqlen we can fit?
-            # (1, 8, 1, 1, 2048, 1, num_layers, hidden_size, num_heads, intermediate_size, vocab_size, zero_stage, tp_mode),
-            # (1, 8, 1, 1, 2048, 2, num_layers, hidden_size, num_heads, intermediate_size, vocab_size, zero_stage, tp_mode),
-            # (1, 8, 1, 1, 2048, 8, num_layers, hidden_size, num_heads, intermediate_size, vocab_size, zero_stage, tp_mode),
-            # (1, 8, 1, 1, 2048, 32, num_layers, hidden_size, num_heads, intermediate_size, vocab_size, zero_stage, tp_mode),
-            # best run
-            (
-                2,
-                8,
-                1,
-                1,
-                2048,
-                512,
-                num_layers,
-                hidden_size,
-                num_heads,
-                intermediate_size,
-                vocab_size,
-                zero_stage,
-                tp_mode,
-            ),
-            # test zero
-            # (3, 8, 1, 1, 2048, 64, num_layers, hidden_size, num_heads, intermediate_size, vocab_size, 0, tp_mode),
-            # (3, 8, 1, 1, 2048, 64, num_layers, hidden_size, num_heads, intermediate_size, vocab_size, 1, tp_mode),
-            # (24, 1, 1, 1, 2048, 8, num_layers, hidden_size, num_heads, intermediate_size, vocab_size, 0, tp_mode),
-            # (24, 1, 1, 1, 2048, 8, num_layers, hidden_size, num_heads, intermediate_size, vocab_size, 1, tp_mode),
-            # test tp mode
-            # (1, 8, 1, 1, 2048, 64, num_layers, hidden_size, num_heads, intermediate_size, vocab_size, zero_stage, "ALL_REDUCE"),
-            # test pp
-            # (1, 1, 8, 1, 2048, 64, num_layers, hidden_size, num_heads, intermediate_size, vocab_size, zero_stage, tp_mode),
-            # (1, 8, 2, 1, 2048, 64, num_layers, hidden_size, num_heads, intermediate_size, vocab_size, zero_stage, tp_mode),
-            # (1, 1, 8, 8, 2048, 8, num_layers, hidden_size, num_heads, intermediate_size, vocab_size, zero_stage, tp_mode),
-            # (1, 2, 8, 8, 2048, 8, num_layers, hidden_size, num_heads, intermediate_size, vocab_size, zero_stage, tp_mode),
-            # (1, 2, 64, 8, 2048, 8, num_layers, hidden_size, num_heads, intermediate_size, vocab_size, zero_stage, tp_mode),
-            # (1, 2, 16, 8, 2048, 8, num_layers, hidden_size, num_heads, intermediate_size, vocab_size, zero_stage, tp_mode),
-        ]
-        configurations.extend(configs)
+    # for model_name, (num_layers, hidden_size, num_heads, intermediate_size) in model_configs.items():
+    #     vocab_size = 32768
+    #     zero_stage = 0
+    #     tp_mode = "REDUCE_SCATTER"
+    #     configs = [  # 64 nodes max
+    #         # 2k, 8k, 32k
+    #         # GBS: 1M, 4M
+    #         # Format: (dp, tp, pp, batch_accum, seq_len, mbs, ...)
+    #         # Using SP what's the biggest seqlen we can fit?
+    #         # (1, 8, 1, 1, 2048, 1, num_layers, hidden_size, num_heads, intermediate_size, vocab_size, zero_stage, tp_mode),
+    #         # (1, 8, 1, 1, 2048, 2, num_layers, hidden_size, num_heads, intermediate_size, vocab_size, zero_stage, tp_mode),
+    #         # (1, 8, 1, 1, 2048, 8, num_layers, hidden_size, num_heads, intermediate_size, vocab_size, zero_stage, tp_mode),
+    #         # (1, 8, 1, 1, 2048, 32, num_layers, hidden_size, num_heads, intermediate_size, vocab_size, zero_stage, tp_mode),
+    #         # best run
+    #         # (1, 8, 1, 1, 2048, 64, num_layers, hidden_size, num_heads, intermediate_size, vocab_size, 0, tp_mode),
 
-    # Duplicate configurations 100 times
-    # configurations = configurations * 5000
+    #         # test zero
+    #         # (3, 8, 1, 1, 2048, 64, num_layers, hidden_size, num_heads, intermediate_size, vocab_size, 0, tp_mode),
+    #         # (3, 8, 1, 1, 2048, 64, num_layers, hidden_size, num_heads, intermediate_size, vocab_size, 1, tp_mode),
+    #         # (24, 1, 1, 1, 2048, 8, num_layers, hidden_size, num_heads, intermediate_size, vocab_size, 0, tp_mode),
+    #         # (24, 1, 1, 1, 2048, 8, num_layers, hidden_size, num_heads, intermediate_size, vocab_size, 1, tp_mode),
+    #         # test tp mode
+    #         # (1, 8, 1, 1, 2048, 64, num_layers, hidden_size, num_heads, intermediate_size, vocab_size, zero_stage, "ALL_REDUCE"),
+    #         # test pp
+    #         # (1, 1, 8, 1, 2048, 64, num_layers, hidden_size, num_heads, intermediate_size, vocab_size, zero_stage, tp_mode),
+    #         # (1, 8, 2, 1, 2048, 64, num_layers, hidden_size, num_heads, intermediate_size, vocab_size, zero_stage, tp_mode),
+    #         # (1, 1, 8, 8, 2048, 8, num_layers, hidden_size, num_heads, intermediate_size, vocab_size, zero_stage, tp_mode),
+    #         # (1, 2, 8, 8, 2048, 8, num_layers, hidden_size, num_heads, intermediate_size, vocab_size, zero_stage, tp_mode),
+    #         # (1, 2, 64, 8, 2048, 8, num_layers, hidden_size, num_heads, intermediate_size, vocab_size, zero_stage, tp_mode),
+    #         # (1, 2, 16, 8, 2048, 8, num_layers, hidden_size, num_heads, intermediate_size, vocab_size, zero_stage, tp_mode),
+    #     ]
+    #     configurations.extend(configs)
 
     # Method 2: Parameter combinations
-    PARALLEL_CONFIGS = [
-        (dp, tp, pp)
-        for dp in [1, 2, 4, 8, 16, 32, 64, 128, 256, 512]
-        for tp in [1, 2, 4, 8, 16, 32, 64, 128, 256, 512]
-        for pp in [1, 2, 4, 8, 16, 32, 64, 128, 256, 512]
-    ]  # Max 64 nodes
+    # Method 2: Parameter combinations
+    PARALLEL_CONFIGS = [(pp, tp, dp)
+                        for dp in [1, 2, 4, 8, 16, 32, 64, 128, 256, 512]
+                        for tp in [1, 2, 4, 8, 16, 32]
+                        for pp in [1]]
     # Sort PARALLEL_CONFIGS by total GPU count (dp*tp*pp) ascending
     PARALLEL_CONFIGS = sorted(PARALLEL_CONFIGS, key=lambda x: x[0] * x[1] * x[2])
+    SEQUENCE_LENGTHS = [4096]
+    MBS = [1, 2, 4, 8, 16, 32, 64, 128, 256]  # ~1M, 4M
+    GRAD_ACCUM_STEPS = [1, 2, 4, 8, 16, 32, 64, 128, 256]  # ~1M, 4M
+    VOCAB_SIZES = [131072]
+    ZERO_STAGES = [1]
+    TP_MODES = ["REDUCE_SCATTER"]
+    GBS = [512 * 2048]  # 1M
+    MAX_NODES = 64
 
-    # for pp, tp, dp in PARALLEL_CONFIGS:
-    #     for model_name, (num_layers, hidden_size, num_heads, intermediate_size) in model_configs.items():
-    #         for seq_len in SEQUENCE_LENGTHS:
-    #             for mbs in MBS:
-    #                 for batch_accum in GRAD_ACCUM_STEPS:
-    #                     for vocab_size in VOCAB_SIZES:
-    #                         for zero_stage in ZERO_STAGES:
-    #                             for tp_mode in TP_MODES:
-    #                                 # Optional: Add conditions to filter out unwanted combinations
-    #                                 total_gpus = dp * tp * pp
-    #                                 if total_gpus < 8 or total_gpus/8 > 64: # max 64 nodes
-    #                                     continue
+    time = 0
+    TIME_PER_CONFIG = 2  # 2 minutes per config
+    counter = 0
+    configurations = []
+    for pp, tp, dp in PARALLEL_CONFIGS:
+        for model_name, (num_layers, hidden_size, num_heads, intermediate_size) in model_configs.items():
+            for seq_len in SEQUENCE_LENGTHS:
+                for mbs in MBS:
+                    for batch_accum in GRAD_ACCUM_STEPS:
+                        for vocab_size in VOCAB_SIZES:
+                            for zero_stage in ZERO_STAGES:
+                                for tp_mode in TP_MODES:
+                                    # Optional: Add conditions to filter out unwanted combinations
+                                    total_gpus = dp * tp * pp
+                                    if not 4 <= total_gpus / 8 <= 64:
+                                        continue
 
-    #                                 tokens_per_step = dp * mbs * batch_accum * seq_len
-    #                                 if not tokens_per_step in [512*2048, 2048*2048]:
-    #                                     continue
+                                    tokens_per_step = dp * mbs * batch_accum * seq_len
+                                    if tokens_per_step not in GBS:
+                                        continue
 
-    #                                 # if dp=1 skip zero stage 1
-    #                                 if dp == 1 and zero_stage == 1:
-    #                                     continue
+                                    # if dp=1 skip zero stage 1
+                                    if dp == 1 and zero_stage == 1:
+                                        continue
 
-    #                                 # if tp=1 skip tp_mode=ALL_REDUCE
-    #                                 if tp == 1 and tp_mode == "ALL_REDUCE":
-    #                                     continue
+                                    # if tp=1 skip tp_mode=ALL_REDUCE
+                                    if tp == 1 and tp_mode == "ALL_REDUCE":
+                                        continue
 
-    #                                 configurations.append((
-    #                                     dp, tp, pp,
-    #                                     batch_accum, seq_len, mbs,
-    #                                     num_layers, hidden_size, num_heads, intermediate_size,
-    #                                     vocab_size, zero_stage, tp_mode
-    #                                 ))
-    #                                 time += total_gpus * 1.5 / 8 / 64 # 1.5 minutes per config
+                                    if batch_accum < pp - 1:
+                                        continue
 
+                                    config = (dp, tp, pp, batch_accum, seq_len, mbs, num_layers, hidden_size, num_heads, intermediate_size, vocab_size, zero_stage, tp_mode)
+                                    if config not in configurations:
+                                        counter += 1
+                                        time += total_gpus * TIME_PER_CONFIG / 8 / MAX_NODES  # 2 minutes per config
+                                        configurations.append(config)
+
+    # print(f"experiments: {counter}")
+    # print(f"time (days): {time/60/24} | {time/60:.2f} hours")
     # print(len(configurations))
-    # each config takes 1.5 minutes to run, print how many days
-    # print(f"{time / 60 / 24:.2f} days ({time/60:.2f} hours)")
+
+    # Load configs from pickle file
+    import pickle
+    with open('configs.pkl', 'rb') as f:
+        configurations = pickle.load(f)
+
     # exit()
 
     if args.debug:
         print("Debug mode: only running 1 configuration")
         configurations = configurations[:1]
 
+    if isinstance(args.limit, slice):
+        print(f"Limiting to {args.limit} configurations")
+        configurations = configurations[args.limit]
+    elif isinstance(args.limit, int):
+        print(f"Limiting to {args.limit} configurations")
+        configurations = configurations[: args.limit]
+
     # run first 100 configurations
     # configurations = configurations[:120+5000]
-
-    # Validate configurations
-    for (
-        dp,
-        tp,
-        pp,
-        batch_accum,
-        seq_len,
-        mbs,
-        num_layers,
-        hidden_size,
-        num_heads,
-        intermediate_size,
-        vocab_size,
-        zero_stage,
-        tp_mode,
-    ) in configurations:
-        total_gpus = dp * tp * pp
-        if total_gpus > 512:
-            print(
-                f"Warning: Configuration dp={dp}, tp={tp}, pp={pp} requires {total_gpus} GPUs, which might be too many"
-            )
-
-        # Calculate tokens per step to verify batch size
-        # tokens_per_step = human_format(dp * mbs * batch_accum * seq_len)
-        # print(f"Model {hidden_size}H_{num_layers}L: {total_gpus} GPUs, " f"{tokens_per_step} GBS")
 
     # Generate configs and scripts
     generated_scripts = []
     configs = []
-    for (
-        dp,
-        tp,
-        pp,
-        batch_accum,
-        seq_len,
-        mbs,
-        num_layers,
-        hidden_size,
-        num_heads,
-        intermediate_size,
-        vocab_size,
-        zero_stage,
-        tp_mode,
-    ) in tqdm(configurations, desc="Generating configs and scripts"):
+    for dp, tp, pp, batch_accum, seq_len, mbs, num_layers, hidden_size, num_heads, intermediate_size, vocab_size, zero_stage, tp_mode in tqdm(configurations, desc="Generating configs and scripts"):
         try:
             # Create config
             config = create_config(
@@ -446,9 +456,7 @@ def main():
                 yaml.dump(config, f, default_flow_style=False)
 
             # Generate and save SLURM script
-            script = generate_slurm_script(
-                config, dp, tp, pp, time=args.time, partition=args.partition, base_script_path=args.base_script
-            )
+            script = generate_slurm_script(config, dp, tp, pp, time=args.time, partition=args.partition, base_script_path=args.base_script, use_bash=args.use_bash)
 
             script_path = os.path.join(args.scripts_dir, f"run_{config['general']['run']}.sh")
             with open(script_path, "w") as f:
@@ -463,23 +471,42 @@ def main():
         except Exception as e:
             print(f"Error processing configuration (dp={dp}, tp={tp}, pp={pp}): {str(e)}")
 
-    save_experiment_configs(configs, args.pending_csv)
-
     # Submit jobs if requested
+    job_ids = []
     if args.run:
         import subprocess
 
         print("\nSubmitting jobs...")
-        for script_path in tqdm(generated_scripts, desc="Submitting jobs"):
+        for script_path, config in tqdm(zip(generated_scripts, configs), desc="Submitting jobs"):
             try:
-                result = subprocess.run(["sbatch", script_path], check=True, capture_output=True, text=True)
-                print(f"Submitted {script_path}: {result.stdout.strip()}")
+                if args.use_bash:
+                    env = os.environ.copy()
+                    salloc_jobid = os.environ.get("SALLOC_JOBID")
+                    if not salloc_jobid:
+                        raise ValueError("SALLOC_JOBID environment variable is required but not set. Please define it in your environment.")
+                    env["SALLOC_JOBID"] = os.environ.get("SALLOC_JOBID")
+                    env["NNODES"] = str(config["parallelism"]["dp"] * config["parallelism"]["tp"] * config["parallelism"]["pp"] // 8)
+                    result = subprocess.run(["bash", script_path], check=True, env=env)
+                    job_id = None  # No job ID for bash execution
+                    print(f"bash {script_path}")
+                else:
+                    result = subprocess.run(["sbatch", script_path], check=True, capture_output=True, text=True)
+                    # Extract job ID from sbatch output (format: "Submitted batch job 123456")
+                    job_id = result.stdout.strip().split()[-1]
+                    print(f"sbatch {script_path}: {result.stdout.strip()}")
+                job_ids.append(job_id)
             except subprocess.CalledProcessError as e:
-                print(f"Error submitting {script_path}: {e.stderr}")
+                print(f"Error {'running' if args.use_bash else 'submitting'} {script_path}: {e.stderr}")
+                job_ids.append(None)
+
+        # Save configs with job IDs
+        save_experiment_configs(configs, args.pending_csv, job_ids=job_ids)
+
     else:
         print("\nTo run individual jobs:")
         for script_path in generated_scripts:
             print(f"sbatch {script_path}")
+            job_ids.append(None)
 
 
 if __name__ == "__main__":

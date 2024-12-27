@@ -2,6 +2,9 @@ from abc import ABC, abstractmethod
 from typing import Dict, Iterable, Optional, Union
 
 import torch
+from torch import nn as torch_nn
+from torch.nn.parallel import DistributedDataParallel
+
 from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.distributed import ProcessGroup
@@ -12,13 +15,17 @@ from nanotron.parallel.pipeline_parallel.context_manager import attach_pipeline_
 from nanotron.parallel.pipeline_parallel.state import PipelineTrainBatchState
 from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
 from nanotron.utils import ContextManagers
-from torch import nn as torch_nn
-from torch.nn.parallel import DistributedDataParallel
 
 logger = logging.get_logger(__name__)
 
 
 class PipelineEngine(ABC):
+    def __str__(self):
+        return self.__class__.__name__
+
+    def __format__(self, format_spec):
+        return str(self)
+
     def __init__(self):
         self.nb_microbatches: Optional[int] = None
         pass
@@ -30,10 +37,11 @@ class PipelineEngine(ABC):
         micro_batch: Dict[str, Union[torch.Tensor, TensorPointer]],
         model: torch_nn.Module,
     ) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
-        # Increment the number of backwards
+        # Increment the number of forwards
         state.nb_forwards += 1
+        state.str_history.append(f"F{state.nb_forwards}")
         log_rank(
-            f"Forward micro batch id: {state.nb_forwards}",
+            f"Forward micro batch. {' '.join(state.str_history)}",
             logger=logger,
             level=logging.DEBUG,
         )
@@ -69,8 +77,9 @@ class PipelineEngine(ABC):
     ):
         # Increment the number of backwards
         state.nb_backwards += 1
+        state.str_history.append(f"B{state.nb_backwards}")
         log_rank(
-            f"Backward micro batch id: {state.nb_forwards}",
+            f"Backward micro batch. {' '.join(state.str_history)}",
             logger=logger,
             level=logging.DEBUG,
         )
@@ -79,20 +88,13 @@ class PipelineEngine(ABC):
         if len(activations) == 0:
             return
 
+        # TODO @nouamane: Ideally i want to backward SendTensorToPipelineBuffer first then SendTensorWithoutGradientToPipelineBuffer
         with context:
             if grad_accumulator is None:
-                sum(activations).backward()
+                for activation in activations:
+                    activation.backward()
             else:
-                grad_accumulator.backward(sum(activations))
-
-        # TODO @nouamane: this fixes interleaved afab but makes 1f1b hang
-        # with context:
-        #     if grad_accumulator is None:
-        #         for activation in reversed(activations): #TODO @nouamane: need to bwd only 2nd chunk
-        #             activation.backward()
-        #     else:
-        #         for activation in reversed(activations):
-        #             grad_accumulator.backward(activation)
+                grad_accumulator.backward(activations)
 
     def _get_bwd_context(
         self,
@@ -239,6 +241,9 @@ class OneForwardOneBackwardPipelineEngine(PipelineEngine):
 
         state = PipelineTrainBatchState()
 
+        # Clear P2P history at the start of each batch
+        model.p2p.clear_history()
+
         outputs = []
         batch = iter(batch)
 
@@ -274,6 +279,7 @@ class OneForwardOneBackwardPipelineEngine(PipelineEngine):
                 outputs.append(output)
 
             for micro_batch in batch:
+                # One forward
                 context = self._get_fwd_context(model=model)
                 output = self.forward(context=context, state=state, micro_batch=micro_batch, model=model)
 
@@ -326,5 +332,8 @@ class OneForwardOneBackwardPipelineEngine(PipelineEngine):
 
             # Make sure that micro batches are all fully consumed
             state.check_buffers_empty()
+
+            # Log final P2P history at the end of batch
+            logger.debug(f"Rank {current_pp_rank} P2P History: {model.p2p.get_history_str()}")
 
         return outputs

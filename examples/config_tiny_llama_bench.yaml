@@ -24,8 +24,8 @@ general:
 lighteval: null
 logging:
   iteration_step_info_interval: 1
-  log_level: info
-  log_level_replica: info
+  log_level: warning
+  log_level_replica: warning
 model:
   ddp_bucket_cap_mb: 25
   dtype: bfloat16

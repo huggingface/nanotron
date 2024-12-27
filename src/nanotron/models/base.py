@@ -71,7 +71,7 @@ class NanotronModel(nn.Module, metaclass=ABCMeta):
         Example for GPT2 model: ["model.token_position_embeddings.pp_block.token_embedding.weight", "model.lm_head.pp_block.weight"]
         """
         return []
-    
+
     def get_named_params_without_weight_decay(self) -> List[str]:
         """Return a list of named parameters that should not have weight decay applied to them."""
         return []
@@ -95,7 +95,7 @@ class NanotronModel(nn.Module, metaclass=ABCMeta):
             if not isinstance(module, PipelineBlock):
                 continue
             log_rank(
-                f"module_name: {name} | PP: {module.rank}/{self.parallel_context.pp_pg.size()}",
+                f"module_name: {name} | PP: {module.rank}/{self.parallel_context.pp_pg.size()} | Block rank: {module.block_rank}",
                 logger=logger,
                 level=level,
                 group=group,
@@ -209,7 +209,6 @@ def build_model(
     # Set rank for each pipeline block
     log_rank("Setting PP block ranks...", logger=logger, level=logging.INFO, rank=0, group=parallel_context.world_pg)
     pipeline_blocks = [module for name, module in model.named_modules() if isinstance(module, PipelineBlock)]
-    # "cuda" is already defaulted for each process to it's own cuda device
     with init_on_device_and_dtype(device=device, dtype=dtype):
         # TODO: https://github.com/huggingface/nanotron/issues/65
 
@@ -225,15 +224,51 @@ def build_model(
         thresholds = [block_cumulative_costs[-1] * ((rank + 1) / pp_size) for rank in range(pp_size)]
         assert thresholds[-1] >= block_cumulative_costs[-1]
         target_pp_rank_idx = 0
+        block_rank_counter = 0
         for block, cumulative_cost in zip(pipeline_blocks, block_cumulative_costs):
             assert target_pp_rank_idx < pp_size
-            block.build_and_set_rank(target_pp_ranks[target_pp_rank_idx])
 
+            block.build_and_set_rank(target_pp_ranks[target_pp_rank_idx], block_rank_counter)
+
+            block_rank_counter += 1
             if cumulative_cost > thresholds[target_pp_rank_idx]:
                 target_pp_rank_idx += 1
+                block_rank_counter = 0
 
         model.input_pp_rank = target_pp_ranks[0]
         model.output_pp_rank = target_pp_ranks[target_pp_rank_idx]
+
+    # "cuda" is already defaulted for each process to it's own cuda device
+    # with init_on_device_and_dtype(device=device, dtype=dtype):
+    #     # First two blocks go to the first rank
+    #     pipeline_blocks[0].build_and_set_rank(target_pp_ranks[0], 0)
+    #     if len(pipeline_blocks) > 1:
+    #         pipeline_blocks[1].build_and_set_rank(target_pp_ranks[0], 1)
+
+    #     # Last 5 blocks go to the last rank
+    #     num_blocks = len(pipeline_blocks)
+    #     for i, block in enumerate(pipeline_blocks):
+    #         if i >= max(0, num_blocks - 5):
+    #             block.build_and_set_rank(target_pp_ranks[-1], i - max(0, num_blocks - 5))
+
+    #     # Distribute remaining blocks
+    #     middle_blocks = pipeline_blocks[2:max(0, num_blocks - 5)]
+    #     middle_ranks = target_pp_ranks[1:-1]
+
+    #     if len(middle_blocks) > 0 and len(middle_ranks) > 0:
+    #         blocks_per_rank = len(middle_blocks) / len(middle_ranks)
+    #         block_rank_counter = 0
+    #         current_rank_idx = 0
+    #         for i, block in enumerate(middle_blocks):
+    #             if i >= blocks_per_rank * (current_rank_idx + 1) and current_rank_idx < len(middle_ranks) - 1:
+    #                 current_rank_idx += 1
+    #                 block_rank_counter = 0
+    #             block.build_and_set_rank(middle_ranks[current_rank_idx], block_rank_counter)
+    #             block_rank_counter += 1
+
+    #     model.input_pp_rank = target_pp_ranks[0]
+    #     model.output_pp_rank = target_pp_ranks[-1]
+
     return model
 
 

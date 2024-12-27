@@ -2,7 +2,7 @@ import dataclasses
 from abc import ABC, abstractmethod
 from collections import OrderedDict
 from contextlib import contextmanager
-from typing import Callable, Dict, Iterator, Optional, Tuple
+from typing import Callable, Dict, Iterator, List, Optional, Tuple, Union
 
 import torch
 from torch.distributed import GradBucket
@@ -201,8 +201,13 @@ class FP32GradientAccumulator(GradientAccumulator):
 
         return fp32_grad_buffers, contiguous_buffer_f32_gradients
 
-    def backward(self, loss: torch.Tensor):
-        result = loss.backward()
+    def backward(self, loss_or_losses: Union[torch.Tensor, List[torch.Tensor]]):
+        if hasattr(loss_or_losses, "__iter__"):
+            for loss in loss_or_losses:
+                loss.backward()
+            result = None
+        else:
+            result = loss_or_losses.backward()
 
         for name, elt in self.fp32_grad_buffers.items():
             self._accumulate_grad(name=name, half_param=elt["half"])

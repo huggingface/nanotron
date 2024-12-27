@@ -1,7 +1,11 @@
 import dataclasses
+import os
+import time
+from enum import Enum
 from typing import List, Sequence, Tuple
 
 import torch
+
 from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.utils import get_untyped_storage, tensor_from_untyped_storage
@@ -30,6 +34,14 @@ ID_TO_REQUIRES_GRAD = [True, False]
 REQUIRES_GRAD_TO_ID = {value: id_ for id_, value in enumerate(ID_TO_REQUIRES_GRAD)}
 ID_TO_IS_CONTIGUOUS = [True, False]
 IS_CONTIGUOUS_TO_ID = {value: id_ for id_, value in enumerate(ID_TO_IS_CONTIGUOUS)}
+
+COMMS_TIMEOUT = 60 * 20  # 20 minutes timeout
+
+
+class P2PCommunicationError(Exception):
+    """Raised when P2P communication fails"""
+
+    pass
 
 
 @dataclasses.dataclass
@@ -134,39 +146,76 @@ def view_as_contiguous(tensor: torch.Tensor):
     return buffer
 
 
+class MessageType(Enum):
+    GRAD = 0
+    ACK = 1
+
+
 class P2P:
     def __init__(self, pg: dist.ProcessGroup, device: torch.device):
+        super().__init__()
         self.pg = pg
         self.device = device
+
+        # Add history tracking
+        self.history = []
+        self.send_counter = 0
+        self.recv_counter = 0
+
+        # Log communication configuration
+        self.p2p_enabled = os.environ.get("NCCL_P2P_DISABLE", "0") != "1"
+        logger.info(
+            f"[INIT] P2P Communication: {'enabled' if self.p2p_enabled else 'disabled'}, "
+            f"Device: {device}, Group: {pg}"
+        )
+
         self.first_metadata = torch.empty(FIRST_METADATA_SIZE, dtype=torch.long, device=self.device)
         self.second_metadata = torch.empty(SECOND_METADATA_SIZE, dtype=torch.long, device=self.device)
+        self.ack_metadata = torch.empty(2, dtype=torch.long, device=self.device)  # [message_type, grad_id]
+        self.grad_id_counter = 0
+
+    def _record_operation(self, op_type: str):
+        """Record a send or receive operation in history"""
+        if op_type == "S":
+            self.send_counter += 1
+            counter = self.send_counter
+        elif op_type == "R":
+            self.recv_counter += 1
+            counter = self.recv_counter
+        self.history.append(f"{op_type}{counter}")
+        logger.debug(f"P2P History: {' '.join(self.history)}")
 
     def _send_first_metadata_p2p_op(self, tensor: torch.Tensor, to_rank: int, tag: int = 0) -> dist.P2POp:
         first_metadata = P2PTensorMetaData.to_first_metadata(tensor=tensor, device=self.device)
+        raise Exception("Experimental: Don't use this")
+        self._record_operation("S")
         return dist.P2POp(
             op=dist.isend,
             tensor=first_metadata,
-            peer=dist.get_global_rank(group=self.pg, group_rank=to_rank),
+            peer=to_rank,
             group=self.pg,
             tag=tag,
         )
 
     def _recv_first_metadata_p2p_op(self, from_rank: int, tag: int = 0) -> Tuple[torch.Tensor, dist.P2POp]:
-        first_metadata_buffer = torch.empty((FIRST_METADATA_SIZE,), dtype=torch.long, device=self.device)
-        return first_metadata_buffer, dist.P2POp(
+        self._record_operation("R")
+        raise Exception("Experimental: Don't use this")
+        return self.first_metadata, dist.P2POp(
             op=dist.irecv,
-            tensor=first_metadata_buffer,
-            peer=dist.get_global_rank(group=self.pg, group_rank=from_rank),
+            tensor=self.first_metadata,
+            peer=from_rank,
             group=self.pg,
             tag=tag,
         )
 
     def _send_second_metadata_p2p_op(self, tensor: torch.Tensor, to_rank: int, tag: int = 0) -> dist.P2POp:
         second_metadata = P2PTensorMetaData.to_second_metadata(tensor=tensor, device=self.device)
+        self._record_operation("S")
+        raise Exception("Experimental: Don't use this")
         return dist.P2POp(
             op=dist.isend,
             tensor=second_metadata,
-            peer=dist.get_global_rank(group=self.pg, group_rank=to_rank),
+            peer=to_rank,
             group=self.pg,
             tag=tag,
         )
@@ -174,119 +223,223 @@ class P2P:
     def _recv_second_metadata_p2p_op(
         self, shape_length: int, stride_length: int, from_rank: int, tag: int = 0
     ) -> Tuple[torch.Tensor, dist.P2POp]:
-        second_metadata_buffer = torch.empty((shape_length + stride_length,), dtype=torch.long, device=self.device)
-        return second_metadata_buffer, dist.P2POp(
+        self._record_operation("R")
+        raise Exception("Experimental: Don't use this")
+        return self.second_metadata, dist.P2POp(
             op=dist.irecv,
-            tensor=second_metadata_buffer,
-            peer=dist.get_global_rank(group=self.pg, group_rank=from_rank),
+            tensor=self.second_metadata,
+            peer=from_rank,
             group=self.pg,
             tag=tag,
         )
 
     def _send_data_p2p_op(self, tensor: torch.Tensor, to_rank: int, tag: int = 0) -> dist.P2POp:
+        self._record_operation("S")
+        raise Exception("Experimental: Don't use this")
         return dist.P2POp(
             op=dist.isend,
             tensor=tensor,
             peer=dist.get_global_rank(group=self.pg, group_rank=to_rank),
-            group=self.pg,
-            tag=tag,
+            # group=self.pg,
+            # tag=tag,
         )
 
     def _recv_data_p2p_op(
         self, tensor_metadata: P2PTensorMetaData, from_rank: int, tag: int = 0
     ) -> Tuple[torch.Tensor, dist.P2POp]:
         tensor_buffer = tensor_metadata.create_empty_storage(self.device)
+        raise Exception("Experimental: Don't use this")
+        self._record_operation("R")
         return tensor_buffer, dist.P2POp(
             op=dist.irecv,
             tensor=tensor_buffer,
             peer=dist.get_global_rank(group=self.pg, group_rank=from_rank),
-            group=self.pg,
-            tag=tag,
+            # group=self.pg,
+            # tag=tag,
         )
 
-    def _send_meta(self, tensor: torch.Tensor, to_rank: int, tag: int):
-        cpu_tensor = torch.tensor(
-            [
-                len(tensor.shape),
-                len(tensor.stride()),
-                IS_CONTIGUOUS_TO_ID[tensor.is_contiguous()],
-                get_untyped_storage(tensor).size(),
-                tensor.storage_offset(),
-                DTYPE_TO_ID[tensor.dtype],
-                REQUIRES_GRAD_TO_ID[tensor.requires_grad],
-            ],
-            dtype=torch.long,
-        )
-        self.first_metadata.copy_(cpu_tensor)
-        dist.send(
-            self.first_metadata,
-            dst=dist.get_global_rank(group=self.pg, group_rank=to_rank),
-            group=self.pg,
-            tag=tag,
-        )
+    def _send_meta(self, tensor: torch.Tensor, to_rank: int, tag: int, timeout: float = COMMS_TIMEOUT):
+        """Send tensor metadata with timeout"""
+        current_rank = dist.get_rank(self.pg)
+        start_time = time.time()
 
-        second_metadata = tensor.shape + tensor.stride()
-        assert len(tensor.shape) == self.first_metadata[0]
-        assert len(tensor.stride()) == self.first_metadata[1]
+        logger.debug(f"[SEND META] Rank {current_rank}: Starting metadata send to {to_rank} ")
 
-        # increase buffer size
-        if len(second_metadata) > len(self.second_metadata):
-            self.second_metadata = torch.empty(len(second_metadata), dtype=torch.long, device=self.device)
+        try:
+            # Send first metadata
+            cpu_tensor = torch.tensor(
+                [
+                    len(tensor.shape),
+                    len(tensor.stride()),
+                    IS_CONTIGUOUS_TO_ID[tensor.is_contiguous()],
+                    get_untyped_storage(tensor).size(),
+                    tensor.storage_offset(),
+                    DTYPE_TO_ID[tensor.dtype],
+                    REQUIRES_GRAD_TO_ID[tensor.requires_grad],
+                ],
+                dtype=torch.long,
+            )
+            self.first_metadata.copy_(cpu_tensor)
 
-        self.second_metadata[: len(second_metadata)].copy_(torch.tensor(second_metadata, dtype=torch.long))
+            # Send with timeout check
+            self._record_operation("S")
+            work = dist.isend(
+                self.first_metadata,
+                dst=dist.get_global_rank(group=self.pg, group_rank=to_rank),
+                # group=self.pg,
+                # tag=tag,
+            )
 
-        dist.send(
-            self.second_metadata[: len(second_metadata)],
-            dst=dist.get_global_rank(group=self.pg, group_rank=to_rank),
-            group=self.pg,
-            tag=tag,
-        )
+            while not work.is_completed():
+                if time.time() - start_time > timeout:
+                    logger.warning(
+                        f"[SEND META] Rank {current_rank}: First metadata send to rank {to_rank} "
+                        f"timed out after {timeout}s"
+                    )
+                    work.abort()
+                    raise P2PCommunicationError(f"First metadata send timed out to rank {to_rank}")
+                time.sleep(0.1)
 
-    def _recv_meta(self, from_rank: int, tag: int) -> P2PTensorMetaData:
-        dist.recv(
-            self.first_metadata,
-            src=dist.get_global_rank(group=self.pg, group_rank=from_rank),
-            group=self.pg,
-            tag=tag,
-        )
-        (
-            num_shape,
-            num_stride,
-            is_contiguous,
-            untyped_storage_size,
-            storage_offset,
-            dtype_id,
-            requires_grad_id,
-        ) = self.first_metadata
+            elapsed = time.time() - start_time
+            logger.debug(
+                f"[SEND META] Rank {current_rank}: First metadata sent in {elapsed:.3f}s " f"to rank {to_rank}"
+            )
 
-        # self.pg.recv([second], from_rank, 0).wait() # more direct API
-        second_metadata_num_elements = num_shape + num_stride
+            # Prepare and send second metadata
+            second_metadata = tensor.shape + tensor.stride()
+            assert len(tensor.shape) == self.first_metadata[0]
+            assert len(tensor.stride()) == self.first_metadata[1]
 
-        # increase buffer size
-        if second_metadata_num_elements > len(self.second_metadata):
-            self.second_metadata = torch.empty(second_metadata_num_elements, dtype=torch.long, device=self.device)
+            # increase buffer size if needed
+            if len(second_metadata) > len(self.second_metadata):
+                self.second_metadata = torch.empty(len(second_metadata), dtype=torch.long, device=self.device)
 
-        dist.recv(
-            self.second_metadata[:second_metadata_num_elements],
-            src=dist.get_global_rank(group=self.pg, group_rank=from_rank),
-            group=self.pg,
-            tag=tag,
-        )
+            self.second_metadata[: len(second_metadata)].copy_(torch.tensor(second_metadata, dtype=torch.long))
 
-        shape = self.second_metadata[:num_shape]
-        stride = self.second_metadata[num_shape:second_metadata_num_elements]
+            # Send second metadata with timeout check
+            start_time = time.time()
+            self._record_operation("S")
+            work = dist.isend(
+                self.second_metadata[: len(second_metadata)],
+                dst=dist.get_global_rank(group=self.pg, group_rank=to_rank),
+                # group=self.pg,
+                # tag=tag,
+            )
 
-        return P2PTensorMetaData(
-            dtype=ID_TO_DTYPE[dtype_id],
-            requires_grad=ID_TO_REQUIRES_GRAD[requires_grad_id],
-            shape=shape,
-            stride=stride,
-            is_contiguous=ID_TO_IS_CONTIGUOUS[is_contiguous],
-            untyped_storage_size=untyped_storage_size,
-            storage_offset=storage_offset,
-        )
+            while not work.is_completed():
+                if time.time() - start_time > timeout:
+                    logger.warning(
+                        f"[SEND META] Rank {current_rank}: Second metadata send to rank {to_rank} "
+                        f"timed out after {timeout}s"
+                    )
+                    work.abort()
+                    raise P2PCommunicationError(f"Second metadata send timed out to rank {to_rank}")
+                time.sleep(0.1)
+
+            total_elapsed = time.time() - start_time
+            logger.debug(
+                f"[SEND META] Rank {current_rank}: All metadata sent in {total_elapsed:.3f}s " f"to rank {to_rank}"
+            )
+
+        except Exception as e:
+            logger.error(f"[SEND META] Rank {current_rank}: Failed to send metadata to rank {to_rank}: {str(e)}")
+            raise P2PCommunicationError(f"Failed to send metadata to rank {to_rank}: {str(e)}")
+
+    def _recv_meta(self, from_rank: int, tag: int):
+        current_rank = dist.get_rank(self.pg)
+        timeout = COMMS_TIMEOUT  # seconds timeout
+
+        logger.debug(f"[RECV META] Rank {current_rank}: Starting receive from {from_rank} ")
+
+        try:
+            start_time = time.time()
+
+            # Add work handle to allow timeout checking
+            self._record_operation("R")
+            work = dist.irecv(
+                self.first_metadata,
+                src=dist.get_global_rank(group=self.pg, group_rank=from_rank),
+                # group=self.pg,
+                # tag=tag,
+            )
+
+            # Wait with timeout
+            while not work.is_completed():
+                if time.time() - start_time > timeout:
+                    logger.warning(
+                        f"[RECV META] Rank {current_rank}: First metadata receive from rank {from_rank} "
+                        f"timed out after {timeout}s"
+                    )
+                    # Try to abort the hanging communication
+                    work.abort()
+                    raise P2PCommunicationError(f"First metadata receive timed out from rank {from_rank}")
+                time.sleep(0.1)  # Small sleep to prevent tight loop
+
+            elapsed = time.time() - start_time
+            logger.debug(
+                f"[RECV META] Rank {current_rank}: Received first metadata in {elapsed:.3f}s " f"from rank {from_rank}"
+            )
+
+            (
+                num_shape,
+                num_stride,
+                is_contiguous,
+                untyped_storage_size,
+                storage_offset,
+                dtype_id,
+                requires_grad_id,
+            ) = self.first_metadata.tolist()
+
+            second_metadata_num_elements = num_shape + num_stride
+            logger.debug(
+                f"[RECV META] Rank {current_rank}: Expecting second metadata of size {second_metadata_num_elements}"
+            )
+
+            start_time = time.time()
+            self._record_operation("R")
+            work = dist.irecv(
+                self.second_metadata[:second_metadata_num_elements],
+                src=dist.get_global_rank(group=self.pg, group_rank=from_rank),
+                # group=self.pg,
+                # tag=tag,
+            )
+            while not work.is_completed():
+                if time.time() - start_time > timeout:
+                    logger.warning(
+                        f"[RECV META] Rank {current_rank}: Second metadata receive from rank {from_rank} "
+                        f"timed out after {timeout}s"
+                    )
+                    work.abort()
+                    raise P2PCommunicationError(f"Second metadata receive timed out from rank {from_rank}")
+                time.sleep(0.1)
+            logger.debug(f"[RECV META] Rank {current_rank}: Second metadata received successfully")
+
+            shape = self.second_metadata[:num_shape].tolist()
+            stride = self.second_metadata[num_shape:second_metadata_num_elements].tolist()
+
+            logger.debug(
+                f"[RECV META] Rank {current_rank}: Metadata complete - "
+                f"shape={shape}, stride={stride}, dtype={ID_TO_DTYPE[dtype_id]}, "
+                f"requires_grad={ID_TO_REQUIRES_GRAD[requires_grad_id]}"
+            )
+
+            return P2PTensorMetaData(
+                shape=shape,
+                stride=stride,
+                is_contiguous=ID_TO_IS_CONTIGUOUS[is_contiguous],
+                untyped_storage_size=untyped_storage_size,
+                storage_offset=storage_offset,
+                dtype=ID_TO_DTYPE[dtype_id],
+                requires_grad=ID_TO_REQUIRES_GRAD[requires_grad_id],
+            )
+        except Exception as e:
+            logger.error(
+                f"[RECV META] Rank {current_rank}: Failed to receive metadata from rank {from_rank}: {str(e)}"
+            )
+            raise P2PCommunicationError(f"Failed to receive metadata from rank {from_rank}: {str(e)}")
 
     def isend_tensors(self, tensors: List[torch.Tensor], to_rank: int, tag: int = 0) -> List[dist.Work]:
+        logger.debug(f"Starting send operation from rank {dist.get_rank(self.pg)} to {to_rank}")
         futures = []
         current_rank = dist.get_rank(self.pg)
         logger.debug(f"Current rank {current_rank} sending to rank {to_rank}. Nb_tensors: {len(tensors)}")
@@ -301,17 +454,18 @@ class P2P:
 
                 # TODO @thomasw21: Find the issue with send/recv complex tensors
                 buffer = torch.view_as_real(buffer) if buffer.is_complex() else buffer
-
+                self._record_operation("S")
                 futures.append(
                     dist.isend(
                         buffer,
                         dst=dist.get_global_rank(group=self.pg, group_rank=to_rank),
-                        group=self.pg,
-                        tag=tag,
+                        # group=self.pg,
+                        # tag=tag,
                     )
                 )
             else:
                 raise ValueError("Tried sending tensor to itself")
+        logger.debug(f"Completed send operation from rank {dist.get_rank(self.pg)} to {to_rank}")
         return futures
 
     def irecv_tensors(
@@ -320,28 +474,31 @@ class P2P:
         futures = []
         buffers = []
         current_rank = dist.get_rank(self.pg)
+        logger.debug(f"Starting receive operation on rank {current_rank} from rank {from_rank}")
         logger.debug(f"Current rank {current_rank} receiving from rank {from_rank}. Nb_tensors: {num_tensors}")
-        for _ in range(num_tensors):
+        for i in range(num_tensors):
             if from_rank != current_rank:
+                logger.debug(f"Receiving metadata for tensor {i+1}/{num_tensors}")
                 meta = self._recv_meta(from_rank=from_rank, tag=tag)
+                logger.debug(f"Metadata received: shape={meta.shape}, dtype={meta.dtype}")
 
                 buffer = meta.create_empty_storage(device=self.device)
+                logger.debug(f"Created receive buffer of size {buffer.numel()}")
 
-                futures.append(
-                    dist.irecv(
-                        buffer,
-                        src=dist.get_global_rank(group=self.pg, group_rank=from_rank),
-                        group=self.pg,
-                        tag=tag,
-                    )
+                self._record_operation("R")
+                future = dist.irecv(
+                    buffer,
+                    src=dist.get_global_rank(group=self.pg, group_rank=from_rank),
+                    # group=self.pg,
+                    # tag=tag,
                 )
+                futures.append(future)
+                logger.debug(f"Started async receive for tensor {i+1}")
 
                 buffer = meta.reshape(buffer=buffer)
-
-                # Add to the list
                 buffers.append(buffer)
-            else:
-                raise ValueError("Tried receiving tensor from itself")
+
+        logger.debug(f"Completed receive setup on rank {current_rank} from rank {from_rank}")
         return buffers, futures
 
     def send_tensors(self, tensors: List[torch.Tensor], to_rank: int, tag: int = 0):
@@ -349,11 +506,33 @@ class P2P:
         for future in futures:
             future.wait()
 
-    def recv_tensors(self, num_tensors: int, from_rank: int, tag: int = 0) -> List[torch.Tensor]:
+    def recv_tensors(
+        self, num_tensors: int, from_rank: int, tag: int = 0, timeout: float = COMMS_TIMEOUT
+    ) -> List[torch.Tensor]:
         buffers, futures = self.irecv_tensors(num_tensors=num_tensors, from_rank=from_rank, tag=tag)
-        for future in futures:
-            future.wait()
+
+        start_time = time.time()
+        for i, future in enumerate(futures):
+            remaining_time = timeout - (time.time() - start_time)
+            if remaining_time <= 0:
+                logger.error(f"Timeout while waiting for tensor {i+1}/{len(futures)} from rank {from_rank}")
+                raise TimeoutError(f"Receive operation timed out after {timeout} seconds")
+
+            if not future.wait(timeout=remaining_time):
+                logger.error(f"Failed to receive tensor {i+1}/{len(futures)} from rank {from_rank}")
+                raise RuntimeError(f"Receive operation failed for tensor {i+1}")
+
         return buffers
+
+    def get_history_str(self) -> str:
+        """Get the history of operations as a space-separated string"""
+        return " ".join(self.history)
+
+    def clear_history(self):
+        """Clear the operation history"""
+        self.history = []
+        self.send_counter = 0
+        self.recv_counter = 0
 
 
 class BatchTensorSendRecvState:
@@ -386,20 +565,29 @@ class BatchTensorSendRecvState:
         return f"BatchTensorSendRecvState(first_metadata_p2p_ops={len(self.first_metadata_p2p_ops)}, second_metadata_p2p_ops={len(self.second_metadata_p2p_ops)}, data_p2p_ops={len(self.data_p2p_ops)}, recv_first_metadata_buffers={len(self.recv_first_metadata_buffers)}, recv_from_ranks={self.recv_from_ranks})"
 
     def add_send(self, tensor: torch.Tensor, to_rank: int, tag: int = 0):
-        self.first_metadata_p2p_ops.append(
-            self.p2p._send_first_metadata_p2p_op(tensor=tensor, to_rank=to_rank, tag=tag)
-        )
-        self.second_metadata_p2p_ops.append(
-            self.p2p._send_second_metadata_p2p_op(tensor=tensor, to_rank=to_rank, tag=tag)
-        )
-        self.data_p2p_ops.append(
-            self.p2p._send_data_p2p_op(tensor=view_as_contiguous(tensor), to_rank=to_rank, tag=tag)
-        )
+        current_rank = dist.get_rank(self.p2p.pg)
+        logger.debug(f"[SEND] Rank {current_rank}: Adding send operation to rank {to_rank}")
+        logger.debug(f"[SEND] Rank {current_rank}: Tensor info - shape={tensor.shape}, dtype={tensor.dtype}")
+
+        try:
+            self.first_metadata_p2p_ops.append(
+                self.p2p._send_first_metadata_p2p_op(tensor=tensor, to_rank=to_rank, tag=tag)
+            )
+            self.second_metadata_p2p_ops.append(
+                self.p2p._send_second_metadata_p2p_op(tensor=tensor, to_rank=to_rank, tag=tag)
+            )
+            self.data_p2p_ops.append(
+                self.p2p._send_data_p2p_op(tensor=view_as_contiguous(tensor), to_rank=to_rank, tag=tag)
+            )
+            logger.debug(f"[SEND] Rank {current_rank}: Successfully added send operations")
+        except Exception as e:
+            logger.error(f"[SEND] Rank {current_rank}: Failed to add send operations: {str(e)}")
+            raise
 
     def add_recv(self, from_rank: int, tag: int = 0) -> int:
         """
         Only add p2p ops for the first operation, as `_recv_second_metadata` and `_recv_data_p2p_op`
-        require results from the first metadata to be transfered first.
+        require results from the first metadata to be transferred first.
         Return: index of the recv_buffer in `self.recv_first_metadata_buffers`
         """
         buffer, recv_op = self.p2p._recv_first_metadata_p2p_op(from_rank=from_rank, tag=tag)
@@ -452,7 +640,8 @@ class BatchTensorSendRecvState:
         # Send/Recv tensor data
         futures = dist.batch_isend_irecv(self.data_p2p_ops + recv_data_ops)
         for future in futures:
-            future.wait()
+            if not future.wait(timeout=COMMS_TIMEOUT):  # 1 minute timeout
+                raise TimeoutError("P2P communication timeout")
 
         # Format tensor by setting the stride
         return [
@@ -460,43 +649,51 @@ class BatchTensorSendRecvState:
             for recv_data_buffer, tensor_metadata in zip(recv_data_buffers, tensor_metadatas)
         ]
 
-    def flush(self) -> List[torch.Tensor]:
-        """
-        Run all communication in a batch.
-        Return `torch.Tensor` in the case of recv.
-        """
-        assert len(self.recv_first_metadata_buffers) == len(
-            self.recv_from_ranks
-        ), f"len(self.recv_first_metadata_buffers)={len(self.recv_first_metadata_buffers)}, len(self.recv_from_ranks)={len(self.recv_from_ranks)} but should be equal."
+    def flush(self):
+        current_rank = dist.get_rank(self.p2p.pg)
+        # logger.debug(
+        #     f"[FLUSH] Rank {current_rank}: Starting flush - "
+        #     f"first_meta_ops={len(self.first_metadata_p2p_ops)}, "
+        #     f"second_meta_ops={len(self.second_metadata_p2p_ops)}, "
+        #     f"data_ops={len(self.data_p2p_ops)}, "
+        #     f"recv_buffers={len(self.recv_first_metadata_buffers)}"
+        # )
 
-        # If there is no communication, return
         if len(self.first_metadata_p2p_ops) == 0:
+            # logger.debug(f"[FLUSH] Rank {current_rank}: No operations to flush")
             return []
 
-        # If there is no recv
-        if len(self.recv_first_metadata_buffers) == 0:
-            reqs = dist.batch_isend_irecv(
-                self.first_metadata_p2p_ops + self.second_metadata_p2p_ops + self.data_p2p_ops
-            )
-            for req in reqs:
-                req.wait()
+        try:
+            if len(self.recv_first_metadata_buffers) == 0:
+                logger.debug(f"[FLUSH] Rank {current_rank}: Processing send-only operations")
+                reqs = dist.batch_isend_irecv(
+                    self.first_metadata_p2p_ops + self.second_metadata_p2p_ops + self.data_p2p_ops
+                )
+                for i, req in enumerate(reqs):
+                    logger.debug(f"[FLUSH] Rank {current_rank}: Waiting for operation {i+1}/{len(reqs)}")
+                    req.wait()
+                logger.debug(f"[FLUSH] Rank {current_rank}: All send operations completed")
+            else:
+                logger.debug(f"[FLUSH] Rank {current_rank}: Processing send/receive operations")
+                first_metadatas = self._send_recv_first_metadata()
+                logger.debug(f"[FLUSH] Rank {current_rank}: First metadata exchange complete")
+
+                second_metadatas = self._send_recv_second_metadata(first_metadatas)
+                logger.debug(f"[FLUSH] Rank {current_rank}: Second metadata exchange complete")
+
+                tensor_metadatas = [
+                    P2PTensorMetaData.from_metadata(first_metadata, second_metadata)
+                    for first_metadata, second_metadata in zip(first_metadatas, second_metadatas)
+                ]
+
+                recv_tensors = self._send_recv_data(tensor_metadatas)
+                logger.debug(f"[FLUSH] Rank {current_rank}: Data exchange complete")
+
+                self._reset()
+                return recv_tensors
+        except Exception as e:
+            logger.error(f"[FLUSH] Rank {current_rank}: Failed during flush: {str(e)}")
+            raise
+        finally:
+            logger.debug(f"[FLUSH] Rank {current_rank}: Flush operation complete")
             self._reset()
-            return []
-
-        # Send/Recv first metadata
-        logger.debug(f"First metadata: {[p2pop.op for p2pop in self.first_metadata_p2p_ops]}")
-        # TODO(kunhao): We could actually send all at once like the above no recv case. But I need to benchmark the performance.
-        first_metadatas = self._send_recv_first_metadata()
-        # Send/Recv second metadata
-        second_metadatas = self._send_recv_second_metadata(first_metadatas)
-
-        tensor_metadatas = [
-            P2PTensorMetaData.from_metadata(first_metadata, second_metadata)
-            for first_metadata, second_metadata in zip(first_metadatas, second_metadatas)
-        ]
-
-        recv_tensors = self._send_recv_data(tensor_metadatas)
-        # Reset state
-        self._reset()
-
-        return recv_tensors

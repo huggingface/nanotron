@@ -988,6 +988,7 @@ class LlamaForTraining(NanotronModel):
     ):
         super().__init__()
         self.model = LlamaModel(config=config, parallel_context=parallel_context, parallel_config=parallel_config)
+        self.p2p = self.model.p2p
         self.loss = PipelineBlock(
             p2p=self.model.p2p,
             module_builder=Loss,

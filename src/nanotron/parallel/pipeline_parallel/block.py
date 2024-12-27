@@ -4,6 +4,7 @@ import torch
 from torch import nn
 
 from nanotron import distributed as dist
+from nanotron import logging
 from nanotron.parallel.pipeline_parallel.functional import (
     recv_from_pipeline_state_buffer,
     send_to_pipeline_state_buffer,
@@ -11,6 +12,8 @@ from nanotron.parallel.pipeline_parallel.functional import (
 from nanotron.parallel.pipeline_parallel.p2p import P2P, BatchTensorSendRecvState
 from nanotron.parallel.pipeline_parallel.state import PipelineBatchState, PipelineTrainBatchState
 from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
+
+logger = logging.get_logger(__name__)
 
 
 class PipelineBlock(nn.Module):
@@ -43,10 +46,17 @@ class PipelineBlock(nn.Module):
         self.module_input_keys = set(module_input_keys)
         self.module_output_keys = set(module_output_keys)
 
-    def build_and_set_rank(self, pp_rank: int):
+        # Track block's position within its PP rank
+        self.block_rank = None
+
+    def build_and_set_rank(self, pp_rank: int, block_rank: Optional[int] = None):
         """This method is used to define on which rank computation is going to happen"""
         assert pp_rank < self.p2p.pg.size()
         self.rank = pp_rank
+
+        # Set block_rank as None initially
+        self.block_rank = block_rank
+
         if pp_rank == dist.get_rank(self.p2p.pg):
             # Instantiate the module
             self.pp_block = self.module_builder(**self.module_kwargs)
@@ -76,7 +86,6 @@ class PipelineBlock(nn.Module):
         if dist.get_rank(self.p2p.pg) != self.rank:
             # TODO(kunhao): A better design is to pop this up for both if else branches.
             batch_send_recv = BatchTensorSendRecvState(self.p2p)
-            # Send activations from other devices to local rank
             for name, tensor in sorted_kwargs:
                 if isinstance(tensor, TensorPointer):
                     # Current rank is neither the rank holding the data nor the rank responsible for computing block
@@ -127,6 +136,7 @@ class PipelineBlock(nn.Module):
                         from_rank=tensor.group_rank,
                         p2p=self.p2p,
                         pipeline_state=self.pipeline_state,
+                        run_communication=len(self.pipeline_state.activations_buffer) == 0,
                     )
                     continue
 
