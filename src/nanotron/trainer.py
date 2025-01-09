@@ -38,7 +38,7 @@ from nanotron.constants import MODEL_CONFIG_FILE_NAME
 from nanotron.dataloader import sanity_check_dataloader
 from nanotron.fp8.parallel import DistributedDataParallel as FP8DistributedDataParallel
 from nanotron.fp8.tensor import FP8Tensor
-from nanotron.fp8.utils import convert_model_to_fp8, is_overflow_underflow_nan
+from nanotron.fp8.utils import convert_model_to_fp8
 from nanotron.helpers import (
     _vocab_size_with_padding,
     compute_remain_train_steps_of_a_data_stage_from_ckp,
@@ -63,6 +63,7 @@ from nanotron.models.llama import LlamaForTraining, RotaryEmbedding
 from nanotron.models.starcoder2 import Starcoder2ForTraining
 from nanotron.optim.clip_grads import clip_grad_norm
 from nanotron.parallel import ParallelContext
+from nanotron.parallel.data_parallel.utils import sync_gradients_across_dp
 from nanotron.parallel.parameters import NanotronParameter, sanity_check
 from nanotron.parallel.pipeline_parallel.engine import (
     PipelineEngine,
@@ -211,7 +212,6 @@ class DistributedTrainer:
                 module.weight._is_future_fp8 = True
 
         # NOTE: make a copy of FP8 parameter on CPU
-        # assert 1 == 1
         # from nanotron import constants
         for n, p in self.model.named_parameters():
             if hasattr(p, "_is_future_fp8") and p._is_future_fp8 is True:
@@ -232,13 +232,7 @@ class DistributedTrainer:
         # Please ensure that the gradient and the tensor have the same dtype"
         # NOTE: the reason that we cast after initializing the optimizer is that
         # we want to create some master weights for fp8 parameters, before quantizing them
-        assert 1 == 1
-        # print("before quantize")
-        # print_sanity_params(self.model)
         self.model = convert_model_to_fp8(self.model, config=constants.CONFIG.fp8)
-        # print("after quantize")
-        # print_sanity_params(self.model)
-        assert 1 == 1
 
         # NOTE: convert non-fp8 parameters to the residual stream's dtype
 
@@ -249,21 +243,6 @@ class DistributedTrainer:
             optimizer_args=self.config.optimizer,
             parallel_context=self.parallel_context,
         )
-
-        # TODO(xrsrke): sanity check that _is_future_fp8 is consistent with the dtype of the parameter
-
-        # NOTE: sanity check if the optimizer, gradient accumulator points to the correct model parameters
-        # if constants.CONFIG.model.dtype is torch.int8:
-        #     from nanotron.fp8.tensor import FP8Tensor
-
-        #     # assert self.optimizer.optimizer.__class__ == FP8AdamW
-        #     num_fp8_params = sum(1 for p in self.model.parameters() if isinstance(p.data, FP8Tensor))
-        #     # master_weights_mapping = self.optimizer.optimizer.mappping_fp8_to_master_weight
-        #     assert num_fp8_params == len(master_weights_mapping)
-        #     assert all(
-        #         constants.CONFIG.fp8.optim.master_weight_dtype == p.dtype for p in master_weights_mapping.values()
-        #     )
-
         if self.init_checkpoint_path is not None:
             load_optimizer(
                 optimizer=self.optimizer,
@@ -558,8 +537,6 @@ class DistributedTrainer:
             grad_accumulator=self.grad_accumulator,
         )
 
-        assert 1 == 1
-
         if self.iteration_step < 5:
             log_memory(logger=logger)
 
@@ -573,16 +550,16 @@ class DistributedTrainer:
             self.grad_accumulator.fp32_grads_allreduce_handle.wait()
 
         # Sync tied weights
-        # if not isinstance(self.model, DistributedDataParallel):
-        #     # Manually sync across DP if it's not handled by DDP
-        #     sync_gradients_across_dp(
-        #         module=self.model,
-        #         dp_pg=self.parallel_context.dp_pg,
-        #         reduce_op=dist.ReduceOp.AVG,
-        #         # TODO @thomasw21: This is too memory hungry, instead we run all_reduce
-        #         reduce_scatter=False,  # optimizer.inherit_from(ZeroDistributedOptimizer),
-        #         grad_accumulator=self.grad_accumulator,
-        #     )
+        if not isinstance(self.model, DistributedDataParallel):
+            # Manually sync across DP if it's not handled by DDP
+            sync_gradients_across_dp(
+                module=self.model,
+                dp_pg=self.parallel_context.dp_pg,
+                reduce_op=dist.ReduceOp.AVG,
+                # TODO @thomasw21: This is too memory hungry, instead we run all_reduce
+                reduce_scatter=False,  # optimizer.inherit_from(ZeroDistributedOptimizer),
+                grad_accumulator=self.grad_accumulator,
+            )
 
         # TODO @nouamane: Put this in hooks so we can overlap communication with gradient computation on the last backward pass.
         sync_tied_weights_gradients(
@@ -623,46 +600,8 @@ class DistributedTrainer:
             loss_avg = None
             handle = None
 
-        # NOTE: we should sanity the gradients of parameters that optimizer points
-        # to because in the case of gradient accumulator, after accumulating gradients
-        # we set half_param.grad = None, and this also makes sense because
-        # optimizer's parameters' gradients are the one that affects updated weights
-
-        # NOTE: sanity check that non-fp8 parameters's gradients have
-        # the same datatype of the residual stream's dtype
-        assert 1 == 1
-        # for n, p in self.model.named_parameters():
-        #     from nanotron import constants
-        #     from nanotron.fp8.tensor import FP8Tensor
-
-        #     if not isinstance(p.data, FP8Tensor) and p.requires_grad is False:
-        #         continue
-
-        #     if isinstance(p.data, FP8Tensor):
-        #         assert p.grad.dtype in [torch.uint8, torch.int8], f"got {p.grad.dtype}"
-        #     else:
-        #         assert p.grad.dtype == constants.CONFIG.fp8.resid_dtype
-
-        # assert [True for n, p in self.model.named_parameters() if p.grad is not None]
-
-        from nanotron import constants
-
-        # from nanotron.fp8.tensor import FP8Tensor
-
-        for pg in self.optimizer.param_groups:
-            for p in pg["params"]:
-                assert p.grad is not None
-                if isinstance(p.data, FP8Tensor):
-                    assert p.grad.dtype in [torch.uint8, torch.int8], f"got {p.grad.dtype}"
-                else:
-                    assert p.grad.dtype == constants.CONFIG.fp8.resid_dtype
-                    assert is_overflow_underflow_nan(p.grad) is False
-
         # NOTE: sanity check that parameters has gradient
-        assert 1 == 1
-
         # Apply gradient
-        assert len(list(self.model.named_parameters())) == len(self.optimizer.optimizer.param_groups)
         self.optimizer.step()
         self.optimizer.zero_grad()
 

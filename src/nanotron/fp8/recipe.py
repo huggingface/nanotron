@@ -36,7 +36,6 @@ class FP8LinearRecipe:
     weight: Union[FP8TensorRecipe, torch.dtype]
     # TODO(xrsrke): remove bias recipe, because we don't quantize bias
     bias: Union[FP8TensorRecipe, torch.dtype]
-    # gemm_accum_dtype: DTypes
 
     # NOTE: for the gradients
     input_grad: Union[FP8TensorRecipe, torch.dtype]

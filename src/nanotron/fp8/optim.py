@@ -5,8 +5,6 @@ from torch import nn
 from torch.optim import Optimizer
 
 from nanotron import logging
-
-# from nanotron._utils.memory import delete_tensor_from_memory
 from nanotron.fp8.constants import FP8LM_RECIPE
 from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.recipe import FP8OptimRecipe
@@ -146,27 +144,13 @@ class FP8AdamW(Optimizer):
         from nanotron import constants
         from nanotron.config.fp8_config import FP8Args
 
-        # if constants.CONFIG.fp8.run_fp8_sanity_check is True:
-        #     num_param_has_grads = 0
-        #     for g in self.param_groups:
-        #         for p in g["params"]:
-        #             grad = get_grad_from_parameter(p)
-        #             assert grad is not None
-        #             if p is not None:
-        #                 num_param_has_grads += 1
-        #     assert num_param_has_grads > 0
-
-        self._is_overflow = False
-
-        fp8_config = cast(FP8Args, constants.CONFIG.fp8)
-
-        # from nanotron.helpers import get_accum_grad, set_accum_grad
+        cast(FP8Args, constants.CONFIG.fp8)
 
         for i, group in enumerate(self.param_groups):
             for p in group["params"]:
 
-                # if not isinstance(p.data, FP8Tensor) and p.requires_grad is False:
-                #     continue
+                if not isinstance(p.data, FP8Tensor) and p.requires_grad is False:
+                    continue
 
                 assert p.grad is not None
 
@@ -179,13 +163,10 @@ class FP8AdamW(Optimizer):
                 # 2.1 Non-FP8 parameter => cast the grad to the correct dtype
                 # 2.2 FP8 parameter => dequantize the grad to the correct dtype
 
-                # grad = p.grad
-                # if isinstance(p.data, FP8Tensor):
-                #     fp32_grad = convert_tensor_from_fp8(grad, grad.fp8_meta, self.optim_accum_dtype)
-                # else:
-                #     fp32_grad = grad.to(self.optim_accum_dtype)
                 fp32_grad = p.grad
+                fp32_data = p.data
                 assert fp32_grad.dtype == self.optim_accum_dtype
+                assert p.data.dtype == torch.float32
 
                 if is_overflow_underflow_nan(fp32_grad):
                     self._is_overflow = True
@@ -199,25 +180,6 @@ class FP8AdamW(Optimizer):
                         continue
                     else:
                         raise ValueError("Overflow, underflow, or NaN detected in the gradients")
-
-                # if isinstance(p.data, FP8Tensor):
-                #     assert p.data.dtype in FP8_DTYPES
-                #     assert hash(p) in self.mappping_fp8_to_master_weight, "Can't find master weight for FP8 parameter"
-
-                #     master_data = self.mappping_fp8_to_master_weight[hash(p)]
-                #     if self.master_weight_dtype == DTypes.KFLOAT16:
-                #         fp32_data = convert_tensor_from_fp16(master_data, self.optim_accum_dtype)
-                #     else:
-                #         fp32_data = master_data.to(self.optim_accum_dtype)
-                # else:
-                #     assert (
-                #         p.data.dtype == non_fp8_accum_dtype
-                #     ), f"data.dtype={p.data.dtype}, non_fp8_accum_dtype={non_fp8_accum_dtype}"
-                #     fp32_data = p.data.to(self.optim_accum_dtype)
-
-                # assert fp32_data.dtype == self.optim_accum_dtype
-                assert p.data.dtype == torch.float32
-                fp32_data = p.data
 
                 exp_avg, exp_avg_sq = state["exp_avg"], state["exp_avg_sq"]
 
@@ -241,21 +203,8 @@ class FP8AdamW(Optimizer):
                 unbiased_fp32_exp_avg = fp32_exp_avg * bias_correction1
                 unbiased_fp32_exp_avg_sq = fp32_exp_avg_sq * bias_correction2
 
-                if fp8_config.adam_atan2 is True:
-                    from torch import atan2
-
-                    adam_atan2_lambda = fp8_config.adam_atan2_lambda
-                    normalized_grad = adam_atan2_lambda * atan2(
-                        unbiased_fp32_exp_avg, adam_atan2_lambda * unbiased_fp32_exp_avg_sq.sqrt()
-                    )
-
-                    rms = self._calculate_mean_sqrt_ignoring_nans(
-                        fp32_grad.pow(2),
-                        unbiased_fp32_exp_avg_sq,
-                    )
-                else:
-                    denom = unbiased_fp32_exp_avg_sq.sqrt() + group["eps"]
-                    normalized_grad = unbiased_fp32_exp_avg / denom
+                denom = unbiased_fp32_exp_avg_sq.sqrt() + group["eps"]
+                normalized_grad = unbiased_fp32_exp_avg / denom
 
                 if constants.CONFIG.fp8.update_clipping is True:
                     rms = self._calculate_mean_sqrt_ignoring_nans(
@@ -299,53 +248,10 @@ class FP8AdamW(Optimizer):
                     fp32_new_changes_from_grad = update_lr * normalized_grad
                     fp32_new_changes_from_weight_decay = 0
 
-                    # fp32_new_changes_in_p = update_lr * normalized_grad
-
                 fp32_new_changes_in_p = fp32_new_changes_from_grad + fp32_new_changes_from_weight_decay
                 new_fp32_data = fp32_data - fp32_new_changes_in_p
 
                 p.data = new_fp32_data
-
-                # NOTE: move param.data = new_data to FP32GradientAccumulator.step
-                # if isinstance(p.data, FP8Tensor):
-                #     sync_amax_in_weight = fp8_config.sync_amax_in_weight
-
-                #     self.mappping_fp8_to_master_weight[p] = self._create_master_weight(new_fp32_data)
-                #     p.data.set_data(new_fp32_data, sync=sync_amax_in_weight)
-
-                #     # NOTE: SANITY CHECK
-                #     if constants.CONFIG.fp8.run_fp8_sanity_check is True:
-                #         if self.master_weight_dtype == DTypes.KFLOAT16:
-                #             _dequant_master_data = convert_tensor_from_fp16(
-                #                 self.mappping_fp8_to_master_weight[p], DTypes.KFLOAT16, torch.float32
-                #             )
-                #             torch.testing.assert_allclose(_dequant_master_data, new_fp32_data)
-
-                #         # _quant_new_fp32_data = get_data_from_param(p)
-                #         _quant_new_fp32_data = p.data
-                #         _dequant_new_fp32_data = convert_tensor_from_fp8(
-                #             _quant_new_fp32_data, _quant_new_fp32_data.fp8_meta, torch.float32
-                #         )
-                #         from nanotron.fp8.constants import FP8_WEIGHT_ATOL_THRESHOLD, FP8_WEIGHT_RTOL_THRESHOLD
-
-                #         torch.testing.assert_allclose(
-                #             _dequant_new_fp32_data,
-                #             new_fp32_data,
-                #             rtol=FP8_WEIGHT_RTOL_THRESHOLD,
-                #             atol=FP8_WEIGHT_ATOL_THRESHOLD,
-                #         )
-
-                # else:
-                #     new_fp16 = new_fp32_data.to(non_fp8_accum_dtype)
-
-                # new_fp16.requires_grad = True
-                # p.data = new_fp16
-
-                # assert p.data is new_fp16
-
-                # if constants.CONFIG.fp8.run_fp8_sanity_check is True:
-                #     # torch.testing.assert_allclose(get_data_from_param(p), new_fp16)
-                #     torch.testing.assert_allclose(p.data, new_fp16)
 
                 exp_avg = self._quantize_optim_state(fp32_exp_avg, self.recipe.exp_avg_dtype)
                 exp_avg_sq = self._quantize_optim_state(fp32_exp_avg_sq, self.recipe.exp_avg_sq_dtype)
@@ -415,13 +321,11 @@ class FP8AdamW(Optimizer):
         # if constants.is_ready_to_log is True:
         #     self.loggings = loggings
         #     self.loggings = self._get_optim_logs()
-        assert 1 == 1
 
     def zero_grad(self):
         for group in self.param_groups:
             for p in group["params"]:
                 # NOTE: take the assumption that nanotron requires all parameters to have gradients
-                # set_grad_none_for_sliced_or_param(p)
                 p.grad = None
 
                 assert p.grad is None

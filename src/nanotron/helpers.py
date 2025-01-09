@@ -21,7 +21,6 @@ from nanotron import logging
 from nanotron.config import Config, DatasetStageArgs, LRSchedulerArgs, OptimizerArgs, ParallelismArgs
 from nanotron.distributed import ProcessGroup
 from nanotron.fp8.optim import FP8AdamW
-from nanotron.fp8.tensor import FP8Tensor
 from nanotron.logging import LogItem, log_rank
 from nanotron.models.base import NanotronModel
 from nanotron.optim.base import BaseOptimizer, Optimizer
@@ -330,9 +329,6 @@ def init_optimizer_and_grad_accumulator(
         if optimizer_args.optimizer_factory.name == "adamW":
             from nanotron import constants
 
-            def has_fp8_params(param_groups):
-                return any(isinstance(p.data, FP8Tensor) for group in param_groups for p in group["params"])
-
             def optimizer(param_groups):
                 # if has_fp8_params(param_groups) is False:
                 if constants.CONFIG.model.dtype != torch.int8:
@@ -345,12 +341,7 @@ def init_optimizer_and_grad_accumulator(
                             optimizer_args.optimizer_factory.adam_beta1,
                             optimizer_args.optimizer_factory.adam_beta2,
                         ),
-                        # NOTE: if there are some FP8 parameters, then it raises:
-                        # "RuntimeError("`fused=True` requires all the params to be floating point Tensors of "
-                        # RuntimeError: `fused=True` requires all the params to be floating point Tensors of
-                        # supported devices: ['cuda', 'xpu', 'privateuseone']."
-                        # fused=optimizer_args.optimizer_factory.torch_adam_is_fused,
-                        fused=False,
+                        fused=optimizer_args.optimizer_factory.torch_adam_is_fused,
                     )
                 else:
                     return FP8AdamW(
@@ -737,19 +728,3 @@ def get_consumed_train_samples_of_a_data_stage_from_ckp(
         (s.consumed_train_samples for s in metadata.data_stages if s.start_training_step == start_training_step),
         None,
     )
-
-
-def get_accum_grad(param_name):
-    from nanotron import constants
-
-    assert "bias" not in param_name
-    # return constants.ACCUM_GRADS[param_name.replace("weight", "")]
-    return constants.ACCUM_GRADS[param_name.replace(".weight", "").replace(".pp_block", "")]
-
-
-def set_accum_grad(param_name, value):
-    from nanotron import constants
-
-    assert "bias" not in param_name
-    # constants.ACCUM_GRADS[param_name.replace("weight", "")] = value
-    constants.ACCUM_GRADS[param_name.replace(".weight", "").replace(".pp_block", "")] = value

@@ -1,35 +1,10 @@
-from typing import Optional, Tuple
+from typing import Optional
 
 import torch
 
 from nanotron.fp8.linear import FP8LinearMeta
 from nanotron.fp8.recipe import FP8LinearRecipe
-from nanotron.fp8.tensor import FP8Tensor
-from nanotron.fp8.utils import is_overflow_underflow_nan
 from nanotron.parallel.parameters import NanotronParameter
-
-
-def smooth_quant(input: torch.Tensor, weight: FP8Tensor, alpha: float) -> Tuple[torch.Tensor, FP8Tensor]:
-    """
-    An implementation of SmoothQuant: Accurate and Efficient Post-Training Quantization for Large Language Models
-    https://arxiv.org/abs/2211.10438
-    """
-    # Compute smoothing factor
-    input_s = torch.amax(torch.abs(input), dim=(0, 1), keepdim=True)
-    w_s = torch.amax(torch.abs(weight._orig_data_after_set_data), dim=0)
-
-    s = input_s.squeeze().pow(alpha) / w_s.pow(1 - alpha)
-
-    # NOTE: create a smoothed tensor without adding the smoothing operations
-    # to computational graph, and keep the original computational graph
-    X_smoothed = input.detach() / s.unsqueeze(dim=0).unsqueeze(dim=0)
-    X_smoothed.requires_grad_()
-
-    with torch.no_grad():
-        W_smoothed = weight._orig_data_after_set_data * s.unsqueeze(0)
-    weight.set_data(W_smoothed)
-
-    return X_smoothed, weight
 
 
 def linear(
@@ -45,11 +20,6 @@ def linear(
 
     from nanotron import constants
     from nanotron.config.fp8_config import FP8Args
-
-    if recipe.smooth_quant is True:
-        fp8_config = cast(FP8Args, constants.CONFIG.fp8)
-        migration_strength = fp8_config.smooth_quant_migration_strength
-        input, weight = smooth_quant(input, weight, alpha=migration_strength)
 
     assert metadatas is not None, "metadatas must be specified"
     assert recipe is not None, "recipe must be specified"
@@ -80,8 +50,6 @@ def linear(
     # output = torch.empty(input.shape[0], weight.shape[0], device="cuda", dtype=recipe.accum_dtype)
     output = torch.zeros(input.shape[0], weight.shape[0], device="cuda", dtype=recipe.accum_dtype)
     output, _ = _FP8Matmul.apply(input, weight, output, phony, metadatas, recipe, name)
-    if is_overflow_underflow_nan(output) is True:
-        assert 1 == 1
 
     # TODO(xrsrke): add support for adding bias in fp8
     # TODO(xrsrke): support return an fp8 tensor as output

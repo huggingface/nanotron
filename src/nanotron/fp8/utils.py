@@ -31,7 +31,6 @@ def get_tensor_fp8_metadata(tensor: torch.Tensor, dtype: DTypes) -> FP8Meta:
     # NOTE: do .clone() somehow fixes nan grad,
     # check `exp801_fp8_nan_debug` for more details
     amax = tensor.abs().max().clone()
-    # amax = tensor.amax().clone()
     assert amax.dtype == torch.float32
 
     scale = update_scaling_factor(amax, torch.tensor(INITIAL_SCALING_FACTOR, dtype=torch.float32), dtype)
@@ -62,10 +61,8 @@ def convert_linear_to_fp8(linear: nn.Linear, accum_qtype: DTypes = FP8LM_RECIPE.
     )
     # TODO(xrsrke): do we need clone?
     fp8_linear._set_and_quantize_weights(linear.weight.data.clone())
-    # fp8_linear.weight = FP8Parameter(linear.weight.data.clone(), FP8LM_RECIPE.linear.weight.dtype)
 
     if is_bias:
-        # fp8_linear.bias.orig_data = linear.bias.data.clone()
         fp8_linear.bias.data = linear.bias.data.to(QTYPE_TO_DTYPE[accum_qtype])
 
     return fp8_linear

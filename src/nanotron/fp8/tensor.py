@@ -16,32 +16,6 @@ from nanotron.fp8.meta import FP8Meta
 logger = logging.get_logger(__name__)
 
 
-# @torch.no_grad()
-@torch.jit.script
-def get_amax(tensor: torch.Tensor, sync: bool) -> torch.Tensor:
-
-    # NOTE: do .clone() somehow fixes nan grad,
-    # check `exp801_fp8_nan_debug` for more details
-    amax = tensor.abs().max().clone()
-    # amax = tensor.amax().clone()
-
-    # if sync is True:
-    #     import torch.distributed as dist
-
-    #     from nanotron import constants
-
-    #     if constants.CONFIG.fp8.sync_amax_func == "default":
-    #         world_size = dist.get_world_size(group=constants.PARALLEL_CONTEXT.tp_pg)
-    #         if world_size > 1:
-    #             # log_rank(f"Local amax is {amax}", logger=logger, level=logging.INFO)
-    #             dist.all_reduce(amax, op=dist.ReduceOp.MAX, group=constants.PARALLEL_CONTEXT.tp_pg)
-    #             # log_rank(f"Global amax is {amax}", logger=logger, level=logging.INFO)
-    #     else:
-    #         raise ValueError(f"Unknown sync_amax_func: {constants.CONFIG.fp8.sync_amax_func}")
-
-    return amax
-
-
 class LowPrecisionTensor(torch.Tensor):
     def __new__(
         cls,
@@ -73,8 +47,6 @@ class LowPrecisionTensor(torch.Tensor):
         obj = torch.Tensor._make_subclass(cls, fp8_tensor)
         # TODO(xrsrke): use a different name, because FP16Tensor also has fp8_meta
         obj.fp8_meta = backup_fp8_meta
-        # if constants.ITERATION_STEP == 1:
-        #     obj.orig_data = tensor
 
         return obj
 
@@ -86,7 +58,7 @@ class LowPrecisionTensor(torch.Tensor):
         fp8_meta: Optional[FP8Meta] = None,
         sync: bool = False,
     ) -> None:
-        pass
+        raise NotImplementedError()
 
     @staticmethod
     # @torch.no_grad()
@@ -96,8 +68,6 @@ class LowPrecisionTensor(torch.Tensor):
         from nanotron.fp8.meta import FP8Meta
 
         # NOTE: detach from original computational graph
-        # amax = tensor.abs().max().clone().detach()
-        # amax = get_amax(tensor, sync)
         amax = tensor.amax().clone()
 
         scale = update_scaling_factor(amax, torch.tensor(INITIAL_SCALING_FACTOR, dtype=torch.float32), dtype)
@@ -158,9 +128,6 @@ class LowPrecisionTensor(torch.Tensor):
         self.data = quantized_data.data
         self._orig_data_after_set_data = data
 
-        # if constants.ITERATION_STEP == 1:
-        #     self.orig_data = quantized_data.orig_data
-
         self.fp8_meta.add_amax(quantized_data.fp8_meta.amax)
 
     @staticmethod
@@ -169,8 +136,7 @@ class LowPrecisionTensor(torch.Tensor):
         assert isinstance(data, (FP8Tensor, torch.Tensor)), "data must be a torch.Tensor or a FP8Tensor"
         # NOTE: don't do deepcopy, because we reuse the same metadata
         # for other iterations in fp8linear
-        # metadata.add_amax(data.abs().max().clone())
-        amax = get_amax(data, sync)
+        amax = data.abs().max().clone()
         metadata.add_amax(amax)
 
         quantized_data = FP8Tensor(data, metadata.dtype, metadata.interval, fp8_meta=metadata, sync=sync)
@@ -198,20 +164,6 @@ class LowPrecisionTensor(torch.Tensor):
         tensor.fp8_meta = deepcopy(self.fp8_meta)
         return tensor
 
-    # def __torch_function__(self, func, types, args=(), kwargs=None):
-    #     return super().__torch_function__(func, types, args, kwargs)
-
-    # @classmethod
-    # def __torch_function__(cls, func, types, args, kwargs=None):
-    #     kwargs = kwargs or {}
-    #     if func is torch.transpose:
-    #         assert type(args[0]) == cls
-    #         assert type(args[1]) == type(args[2]) == int
-    #         # return CustomMaskedSum.apply(*args, **kwargs)
-    #         assert 1 == 1
-    #     else:
-    #         super().__torch_function__(func, types, args, kwargs)
-
 
 class FP8Tensor(LowPrecisionTensor):
     """FP8 Tensor."""
@@ -233,7 +185,6 @@ class FP16Tensor(LowPrecisionTensor):
     @staticmethod
     def _quantize(tensor: torch.Tensor, fp8_meta: "FP8Meta") -> torch.Tensor:
         assert isinstance(tensor, torch.Tensor)
-        # assert tensor.dtype != torch.float16, "You can't quantize a tensor to FP16 if it's already FP16"
 
         tensor = tensor.contiguous()
         # TODO(xrsrke): convert it to int8 format

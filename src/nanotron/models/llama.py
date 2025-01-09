@@ -385,7 +385,6 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             config.num_key_value_heads * self.d_qk,  # shape of k
             config.num_key_value_heads * self.d_qk,  # shape of v
         )
-        # self.qkv_proj = FP8TensorParallelColumnLinear(
         self.qkv_proj = TensorParallelColumnLinear(
             self.d_model,
             config.num_attention_heads * self.d_qk + 2 * config.num_key_value_heads * self.d_qk,
@@ -395,7 +394,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             async_communication=tp_linear_async_communication,
             contiguous_chunks=qkv_contiguous_chunks,
             name=f"model.decoder.{layer_idx}.attention.qkv_proj",
-            # tp_recompute_allgather=parallel_config.tp_recompute_allgather,
+            tp_recompute_allgather=parallel_config.tp_recompute_allgather,
         )
         # TODO(kunhao): We want to have only one version per device and not one version per layer.
         if config.rope_interleaved:
@@ -908,7 +907,6 @@ class LlamaModel(nn.Module):
         self.lm_head = PipelineBlock(
             p2p=self.p2p,
             # Understand that this means that we return sharded logits that are going to need to be gathered
-            # module_builder=FP8TensorParallelColumnLinear,
             module_builder=TensorParallelColumnLinear,
             module_kwargs={
                 "in_features": config.hidden_size,
@@ -919,7 +917,7 @@ class LlamaModel(nn.Module):
                 "mode": self.tp_mode,
                 "async_communication": tp_linear_async_communication,
                 "name": "model.lm_head",
-                # "tp_recompute_allgather": parallel_config.tp_recompute_allgather,
+                "tp_recompute_allgather": parallel_config.tp_recompute_allgather,
             },
             module_input_keys={"x"},
             module_output_keys={"logits"},
@@ -981,7 +979,6 @@ class LlamaModel(nn.Module):
             + 3 * d_ff * model_config.hidden_size,
             # This is the last lm_head
             TensorParallelColumnLinear: model_config.vocab_size * model_config.hidden_size,
-            # FP8TensorParallelColumnLinear: model_config.vocab_size * model_config.hidden_size,
         }
         return block_compute_costs
 

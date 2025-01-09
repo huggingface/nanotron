@@ -7,9 +7,11 @@ from nanotron import distributed as dist
 from nanotron import logging, optim
 from nanotron.config import Config
 from nanotron.fp8.tensor import FP8Tensor
+from nanotron.fp8.utils import is_overflow_underflow_nan
 from nanotron.logging import get_logger, log_rank
 from nanotron.models import NanotronModel
 from nanotron.optim.gradient_accumulator import GradientAccumulator
+from nanotron.optim.optimizer_from_gradient_accumulator import OptimizerFromGradientAccumulator
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.tied_parameters import get_tied_id_to_param
 
@@ -60,6 +62,10 @@ def before_tbi_sanity_checks(
     unwrapped_model: NanotronModel,
     grad_accumulator: GradientAccumulator,
 ) -> None:
+
+    # TODO(xrsrke): sanity check that _is_future_fp8 is consistent with the dtype of the parameter
+    # TODO(xrsrke): sanity check if the optimizer, gradient accumulator points to the correct model parameters
+
     if not config.general.ignore_sanity_checks:
         # SANITY CHECK: Check that the model params are synchronized across dp
         for name, param in sorted(unwrapped_model.named_parameters(), key=lambda x: x[0]):
@@ -143,8 +149,26 @@ def before_optim_step_sanity_checks(
     config: Config,
     parallel_context: ParallelContext,
     unwrapped_model: NanotronModel,
+    optim: OptimizerFromGradientAccumulator,
     grad_accumulator: GradientAccumulator,
 ) -> None:
+
+    # NOTE: sanity check that non-fp8 parameters's gradients have
+    # the same datatype of the residual stream's dtype
+    for pg in optim.param_groups:
+        for p in pg["params"]:
+            assert p.grad is not None
+            if isinstance(p.data, FP8Tensor):
+                assert p.grad.dtype in [torch.uint8, torch.int8], f"got {p.grad.dtype}"
+            else:
+                assert p.grad.dtype == config.fp8.resid_dtype
+                assert is_overflow_underflow_nan(p.grad) is False
+
+    # TODO(xrsrke): we should sanity the gradients of parameters that optimizer points
+    # to because in the case of gradient accumulator, after accumulating gradients
+    # we set half_param.grad = None, and this also makes sense because
+    # optimizer's parameters' gradients are the one that affects updated weights
+
     if not config.general.ignore_sanity_checks:
         # SANITY CHECK: Test tied weights gradients are synchronized
         for (name, group_ranks), param in sorted(

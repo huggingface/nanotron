@@ -11,8 +11,6 @@ from torch import nn
 from nanotron import distributed as dist
 from nanotron import logging
 
-# from nanotron.fp8.tensor import FP8Tensor
-
 if TYPE_CHECKING:
     from nanotron.models import NanotronModel
 
@@ -249,9 +247,6 @@ class NanotronParameter(nn.Parameter):
                 getattr(param, cls.NANOTRON_PARAMETER_HASH_ATTRIBUTE_NAME),
             )
 
-        # NOTE: copy all custom attributes of the "param" to the new parameter
-        # new_param._is_future_fp8 = getattr(param, "_is_future_fp8", False)
-
         # TODO(xrsrke): sync all the attributes in the param
         # to the new parameter? in case, user sets some attributes
         # then the new parameter is kinda lost it
@@ -271,36 +266,17 @@ class NanotronParameter(nn.Parameter):
     @property
     def data(self):
         # from nanotron.fp8.parameter import FP8Parameter
-        # return self._data.data if self._data.__class__ == FP8Parameter else self._data
         return self._data
 
     @data.setter
     def data(self, data):
         self._data = data
 
-    # @property
-    # def grad(self):
-    #     return self._igrad
-
-    # @grad.setter
-    # def grad(self, grad):
-    #     self._igrad = grad
-
-    # @property
-    # def grad(self):
-    #     return self.data.grad if self.grad is None else self.grad
-
     @classmethod
     def __torch_dispatch__(cls, func, types, args=(), kwargs=None):
         from nanotron.fp8.tensor import FP8Tensor
 
-        # print(f"__torch_dispatch__ called with func: {func}, args: {args}, kwargs: {kwargs}")
-
-        # if func in {torch._tensor_str._str, repr}:
-        #     return super().__torch_dispatch__(func, types, args, kwargs)
-
         def unwrap(e):
-            # print(f"Unwrapping: {e} (type: {type(e)})")
             return e._data if e.__class__ == NanotronParameter else e
 
         def wrap(e):
@@ -333,13 +309,7 @@ class NanotronParameter(nn.Parameter):
         if func == torch.ops.aten.detach.default and unwrapped_args[0].__class__ == FP8Tensor:
             # NOTE: this is for parameter.data or parameter.detach()
             # NOTE: because we already retrieved the data from unwrap, we don't need to do it again
-            # data = args[0].data
-            # data.requires_grad = args[0].requires_grad
             data = unwrapped_args[0]
-            # if data.__class__ == FP8Parameter or data.__class__ == nn.Parameter:
-            #     data = data.data
-            #     # data.requires_grad = unwrapped_args[0].requires_grad
-
             return data
         else:
             outputs = func(*unwrapped_args, **unwrapped_kwargs)
@@ -365,28 +335,3 @@ def sanity_check(root_module: nn.Module):
             raise ValueError(
                 f"Nanotronrequires model to be in Nanotronformat, ie all parameters are required to be a NanotronParameter. {name} isn't."
             )
-
-
-# def get_data_from_param(p: NanotronParameter):
-#     from nanotron.fp8.parameter import FP8Parameter
-
-#     assert p.__class__ in [NanotronParameter, FP8Parameter]
-#     # NOTE: this return the data that gradients can flow into
-#     return p.data
-
-
-# def get_grad_from_parameter(p: NanotronParameter):
-#     assert p.__class__ == NanotronParameter
-#     assert (p.grad is not None and p.data.grad is not None) is False
-
-#     from nanotron import constants
-
-#     if constants.CONFIG is not None and constants.CONFIG.tokens.batch_accumulation_per_replica > 1:
-#         if hasattr(p, "grad"):
-#             grad = p.grad if p.grad is not None else p.data.grad
-#         else:
-#             grad = p.__accum_grad if p.__accum_grad is not None else p.data.__accum_grad
-#     else:
-#         grad = p.grad if p.grad is not None else p.data.grad
-
-#     return grad
