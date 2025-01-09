@@ -146,7 +146,7 @@ class FP32GradientAccumulator(GradientAccumulator):
                     p_name = find_param_name(half_param, named_parameters)
                     assert p_name is not None
                     p_data = constants.CPU_WEIGHTS[p_name]
-                    assert p_data.dtype == torch.float32
+                    assert p_data.dtype == torch.float32, f"Expected {p_name} to be float32, but got {p_data.dtype}"
 
                     fp32_param.copy_(constants.CPU_WEIGHTS[p_name])
 
@@ -349,9 +349,13 @@ class FP32GradientAccumulator(GradientAccumulator):
         for name in self.parameters.keys():
             fp32_param = self.parameters[name]["fp32"]
             half_param = self.parameters[name]["half"]
+
             # TODO @nouamane: should we use a fused kernel to copy?
             # Copy weights from full precision to half precision
-            half_param.copy_(fp32_param)
+            if half_param.data.__class__ == FP8Tensor:
+                half_param.data.set_data(fp32_param, sync=False)
+            else:
+                half_param.copy_(fp32_param)
 
     def zero_grad(self):
         # Full precision gradients are reset to zero/none after the underlying `optimiser.step`, so no need to reset.

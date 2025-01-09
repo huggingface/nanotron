@@ -89,6 +89,9 @@ def clip_grad_norm(
     device_to_clip_coef_clamped = {device: clip_coef_clamped.to(device) for device in devices}
 
     for name, param in named_parameters:
+        if "model.decoder.13.pp_block.attn.o_proj.weight" in name:
+            assert 1 == 1
+
         if grad_accumulator is None:
             param.grad.detach().mul_(device_to_clip_coef_clamped[param.grad.device])
         else:

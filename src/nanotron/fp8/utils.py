@@ -237,7 +237,7 @@ def find_fp8_config_by_module_name(target_module_name: str, config: FP8Args) -> 
     # TODO(xrsrke): remove config.is_quant_all_except_first_and_last
     from nanotron.fp8.constants import FP8LM_LINEAR_RECIPE
 
-    if config.model is not None:
+    if hasattr(config, "model") and config.model is not None:
         for layer_args in config.model:
             if layer_args.module_name == target_module_name.replace("pp_block.", "").replace("module.", ""):
                 return layer_args

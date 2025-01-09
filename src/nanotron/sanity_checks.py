@@ -6,6 +6,7 @@ import torch
 from nanotron import distributed as dist
 from nanotron import logging, optim
 from nanotron.config import Config
+from nanotron.fp8.tensor import FP8Tensor
 from nanotron.logging import get_logger, log_rank
 from nanotron.models import NanotronModel
 from nanotron.optim.gradient_accumulator import GradientAccumulator
@@ -111,7 +112,7 @@ def after_tbi_sanity_checks(
         # SANITY CHECK: Check that all parameters that required gradients, have actually a gradient
         # SANITY CHECK: Check for nan/inf
         for name, param in unwrapped_model.named_parameters():
-            if not param.requires_grad:
+            if not param.requires_grad and not isinstance(param.data, FP8Tensor):
                 continue
 
             if param.is_tied:
@@ -150,7 +151,7 @@ def before_optim_step_sanity_checks(
             get_tied_id_to_param(parameters=unwrapped_model.parameters(), root_module=unwrapped_model).items(),
             key=lambda x: x[0],
         ):
-            if not param.requires_grad:
+            if not param.requires_grad and not isinstance(param.data, FP8Tensor):
                 continue
 
             if grad_accumulator is not None:
@@ -224,7 +225,7 @@ def after_optim_step_sanity_checks(
     if not config.general.ignore_sanity_checks:
         # SANITY CHECK: Check that gradients is cleared
         for name, param in unwrapped_model.named_parameters():
-            if not param.requires_grad:
+            if not param.requires_grad and not isinstance(param.data, FP8Tensor):
                 continue
 
             if param.grad is not None:

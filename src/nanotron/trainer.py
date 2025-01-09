@@ -63,7 +63,6 @@ from nanotron.models.llama import LlamaForTraining, RotaryEmbedding
 from nanotron.models.starcoder2 import Starcoder2ForTraining
 from nanotron.optim.clip_grads import clip_grad_norm
 from nanotron.parallel import ParallelContext
-from nanotron.parallel.data_parallel.utils import sync_gradients_across_dp
 from nanotron.parallel.parameters import NanotronParameter, sanity_check
 from nanotron.parallel.pipeline_parallel.engine import (
     PipelineEngine,
@@ -146,6 +145,9 @@ class DistributedTrainer:
         self.config = get_config_from_file(
             config_or_config_file, config_class=config_class, model_config_class=model_config_class
         )
+        assert (
+            self.config.model.dtype == torch.int8 and self.config.optimizer.accumulate_grad_in_fp32 is True
+        ), "FP8 training must enable gradient accumulation"
         from nanotron import constants
 
         constants.CONFIG = self.config
@@ -166,6 +168,7 @@ class DistributedTrainer:
         )
 
         self.pre_init()
+        self.init_checkpoint_path = parse_ckpt_path(config=self.config, parallel_context=self.parallel_context)
 
         # Set log levels
         set_ranks_logging_level(parallel_context=self.parallel_context, logging_config=self.config.logging)
@@ -230,11 +233,11 @@ class DistributedTrainer:
         # NOTE: the reason that we cast after initializing the optimizer is that
         # we want to create some master weights for fp8 parameters, before quantizing them
         assert 1 == 1
-        print("before quantize")
-        print_sanity_params(self.model)
+        # print("before quantize")
+        # print_sanity_params(self.model)
         self.model = convert_model_to_fp8(self.model, config=constants.CONFIG.fp8)
-        print("after quantize")
-        print_sanity_params(self.model)
+        # print("after quantize")
+        # print_sanity_params(self.model)
         assert 1 == 1
 
         # NOTE: convert non-fp8 parameters to the residual stream's dtype
@@ -328,7 +331,7 @@ class DistributedTrainer:
         self.post_init()
 
     def pre_init(self):
-        self.init_checkpoint_path = parse_ckpt_path(config=self.config, parallel_context=self.parallel_context)
+        pass
 
     def post_init(self):
         # S3 Mover and save initial state
@@ -570,16 +573,16 @@ class DistributedTrainer:
             self.grad_accumulator.fp32_grads_allreduce_handle.wait()
 
         # Sync tied weights
-        if not isinstance(self.model, DistributedDataParallel):
-            # Manually sync across DP if it's not handled by DDP
-            sync_gradients_across_dp(
-                module=self.model,
-                dp_pg=self.parallel_context.dp_pg,
-                reduce_op=dist.ReduceOp.AVG,
-                # TODO @thomasw21: This is too memory hungry, instead we run all_reduce
-                reduce_scatter=False,  # optimizer.inherit_from(ZeroDistributedOptimizer),
-                grad_accumulator=self.grad_accumulator,
-            )
+        # if not isinstance(self.model, DistributedDataParallel):
+        #     # Manually sync across DP if it's not handled by DDP
+        #     sync_gradients_across_dp(
+        #         module=self.model,
+        #         dp_pg=self.parallel_context.dp_pg,
+        #         reduce_op=dist.ReduceOp.AVG,
+        #         # TODO @thomasw21: This is too memory hungry, instead we run all_reduce
+        #         reduce_scatter=False,  # optimizer.inherit_from(ZeroDistributedOptimizer),
+        #         grad_accumulator=self.grad_accumulator,
+        #     )
 
         # TODO @nouamane: Put this in hooks so we can overlap communication with gradient computation on the last backward pass.
         sync_tied_weights_gradients(
@@ -659,6 +662,7 @@ class DistributedTrainer:
         assert 1 == 1
 
         # Apply gradient
+        assert len(list(self.model.named_parameters())) == len(self.optimizer.optimizer.param_groups)
         self.optimizer.step()
         self.optimizer.zero_grad()
 
