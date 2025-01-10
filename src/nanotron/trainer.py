@@ -218,10 +218,10 @@ class DistributedTrainer:
                 constants.CPU_WEIGHTS[n.replace("module.", "")] = p.data.cpu().clone()
 
         # NOTE: sanity check all hash are different
-        param_hash = []
-        for p in self.model.parameters():
-            assert hash(p) not in param_hash
-            param_hash.append(hash(p))
+        # param_hash = []
+        # for p in self.model.parameters():
+        #     assert hash(p) not in param_hash
+        #     param_hash.append(hash(p))
 
         # NOTE: if we cast model to FP8 before wrapping it with NanotronParameter,
         # then we can create a NanotronParameter that has dtype=[torch.int8, torch.uint8]
@@ -585,7 +585,7 @@ class DistributedTrainer:
             )
 
         before_optim_step_sanity_checks(
-            self.config, self.parallel_context, self.unwrapped_model, self.grad_accumulator
+            self.config, self.parallel_context, self.unwrapped_model, self.optimizer, self.grad_accumulator
         )
 
         # Compute DP average loss and overlap with optimizer step

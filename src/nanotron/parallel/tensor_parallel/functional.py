@@ -442,11 +442,6 @@ def column_linear(
     name: Optional[str] = None,
     recipe: Optional[FP8LinearRecipe] = None,
 ):
-    # weight = get_data_from_param(weight)
-
-    # if bias is not None:
-    #     bias = get_data_from_param(bias)
-
     if async_communication:
         return _ColumnLinearAsyncCommunication.apply(input, weight, bias, group, tp_mode, tp_recompute_allgather)
 
@@ -456,29 +451,8 @@ def column_linear(
 
         input = differentiable_identity(input, group=group)
 
-        # if isinstance(weight, FP8Tensor): # i used weight before removing get_data_from_param
         if isinstance(weight.data, FP8Tensor):
             assert recipe is not None, "recipe must be provided for column_linear"
-            from nanotron import constants
-
-            # if name not in constants.TRACKING_FP8_PARAM:
-            #     constants.TRACKING_FP8_PARAM[name] = weight
-
-            if (
-                constants.CONFIG is not None
-                and constants.CONFIG.fp8 is not None
-                and constants.CONFIG.fp8.is_sanity_logging is True
-            ):
-                from nanotron import logging
-                from nanotron.logging import log_rank
-
-                logger = logging.get_logger(__name__)
-                log_rank(
-                    f"[iteration_step: {constants.ITERATION_STEP}]name = {name}, doing fp8 kernel",
-                    logger=logger,
-                    level=logging.INFO,
-                )
-
             return fp8_functional.linear(input, weight, bias, metadatas=metadatas, recipe=recipe, name=name)
         else:
             return F.linear(input, weight, bias)
@@ -632,18 +606,12 @@ def row_linear(
     recipe: Optional[FP8LinearRecipe] = None,
     name: Optional[str] = None,
 ):
-    # weight = get_data_from_param(weight)
-    # if bias is not None:
-    #     bias = get_data_from_param(bias)
-
     if async_communication:
         return _RowLinearAsyncCommunication.apply(input, weight, bias, group, tp_mode)
 
-    # out = F.linear(input, weight, bias)
     import nanotron.fp8.functional as fp8_functional
     from nanotron.fp8.tensor import FP8Tensor
 
-    # if isinstance(weight, FP8Tensor): # i used weight before removing get_data_from_param
     if isinstance(weight.data, FP8Tensor):
         assert recipe is not None, "recipe must be provided for row_linear"
         out = fp8_functional.linear(input, weight, bias, metadatas=metadatas, recipe=recipe, name=name)

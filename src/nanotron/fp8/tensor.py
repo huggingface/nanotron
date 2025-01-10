@@ -58,7 +58,7 @@ class LowPrecisionTensor(torch.Tensor):
         fp8_meta: Optional[FP8Meta] = None,
         sync: bool = False,
     ) -> None:
-        raise NotImplementedError()
+        pass
 
     @staticmethod
     # @torch.no_grad()

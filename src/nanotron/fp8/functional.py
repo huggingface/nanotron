@@ -16,10 +16,6 @@ def linear(
     name: Optional[str] = None,
 ):
     assert isinstance(weight, NanotronParameter)
-    from typing import cast
-
-    from nanotron import constants
-    from nanotron.config.fp8_config import FP8Args
 
     assert metadatas is not None, "metadatas must be specified"
     assert recipe is not None, "recipe must be specified"

@@ -1,7 +1,6 @@
 from dataclasses import dataclass
 from typing import Optional, Tuple, Union, cast
 
-import pydevd
 import torch
 import transformer_engine as te  # noqa
 from torch import nn
@@ -142,16 +141,6 @@ class _FP8Matmul(torch.autograd.Function):
         from nanotron import constants
         from nanotron.config.fp8_config import FP8Args
         from nanotron.fp8.utils import is_overflow_underflow_nan
-
-        # pydevd.settrace(suspend=False, trace_only_current_thread=True)
-        if (
-            constants.CONFIG is not None
-            and constants.CONFIG.fp8 is not None
-            and constants.CONFIG.fp8.is_debugging is True
-        ):
-            pydevd.settrace(suspend=False, trace_only_current_thread=True)
-
-        # dist.monitored_barrier(wait_all_ranks=True)
 
         if constants.CONFIG is None:
             fp8_config = FP8Args()

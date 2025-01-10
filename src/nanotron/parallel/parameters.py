@@ -1,6 +1,4 @@
 import dataclasses
-import hashlib
-import os
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
 
@@ -15,15 +13,6 @@ if TYPE_CHECKING:
     from nanotron.models import NanotronModel
 
 logger = logging.get_logger(__name__)
-
-
-def _generate_random_hash():
-    # Generate 64 bytes of random data
-    random_data = os.urandom(64)
-    # Hash the random data using SHA-256
-    hash_object = hashlib.sha256(random_data)
-    # Convert the hash object to a hexadecimal string
-    return hash_object.hexdigest()
 
 
 @dataclasses.dataclass
@@ -122,7 +111,6 @@ class NanotronParameter(nn.Parameter):
 
     # __torch_function__ = torch._C._disabled_torch_function_impl
 
-    NANOTRON_PARAMETER_HASH_ATTRIBUTE_NAME = "__nanotron_hash__"
     NANOTRON_PARAMETER_METADATA_ATTRIBUTE_NAME = "__nanotron_metadata__"
     NANOTRON_PARAMETER_METADATA_TIED_KEY = "tied"
     NANOTRON_PARAMETER_METADATA_SHARDED_KEY = "sharded"
@@ -173,7 +161,6 @@ class NanotronParameter(nn.Parameter):
         # because we need to know a parameter will be in fp8 or not
         # so we create master weights of the fp32 parameters before quantizing
         self._is_future_fp8 = False
-        setattr(self, self.NANOTRON_PARAMETER_HASH_ATTRIBUTE_NAME, hash(_generate_random_hash()))
 
     def _set_metadata(self, key: str, value: Any):
         metadata = getattr(self, self.NANOTRON_PARAMETER_METADATA_ATTRIBUTE_NAME)
@@ -239,18 +226,9 @@ class NanotronParameter(nn.Parameter):
         new_param = NanotronParameter(tensor)
         setattr(new_param, NanotronParameter.NANOTRON_PARAMETER_METADATA_ATTRIBUTE_NAME, metadata)
 
-        # NOTE: if the param is a nn.Parameter, then we don't need to sync the hash
-        if isinstance(param, NanotronParameter):
-            setattr(
-                new_param,
-                NanotronParameter.NANOTRON_PARAMETER_HASH_ATTRIBUTE_NAME,
-                getattr(param, cls.NANOTRON_PARAMETER_HASH_ATTRIBUTE_NAME),
-            )
-
         # TODO(xrsrke): sync all the attributes in the param
         # to the new parameter? in case, user sets some attributes
         # then the new parameter is kinda lost it
-
         return new_param
 
     @property
@@ -318,10 +296,6 @@ class NanotronParameter(nn.Parameter):
                 return outputs
             else:
                 return tree_map(wrap, outputs)
-
-    def __hash__(self):
-        # Combine the attributes to compute a unique hash value
-        return getattr(self, self.NANOTRON_PARAMETER_HASH_ATTRIBUTE_NAME)
 
 
 def sanity_check(root_module: nn.Module):

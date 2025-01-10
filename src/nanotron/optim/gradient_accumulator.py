@@ -10,6 +10,7 @@ from torch.distributed import GradBucket
 import nanotron.distributed as dist
 from nanotron import logging
 from nanotron.fp8.tensor import FP8Tensor
+from nanotron.fp8.utils import is_overflow_underflow_nan
 from nanotron.parallel.parameters import NanotronParameter
 from nanotron.utils import get_untyped_storage, tensor_from_untyped_storage
 
@@ -89,8 +90,6 @@ class FP32GradientAccumulator(GradientAccumulator):
             # because we want to do the backward ourself, so here we only skip
             # if the parameter isn't fp8, and doesn't require grad
 
-            # if not isinstance(param.data, FP8Tensor) and not param.requires_grad:
-            #     continue
             if self._is_not_required_master_weights(param):
                 fp32_params.append((name, param))
                 continue
@@ -277,13 +276,6 @@ class FP32GradientAccumulator(GradientAccumulator):
 
     def _accumulate_grad(self, name: str, half_param: NanotronParameter) -> None:
         """Accumulate grad in fp32 and set the fp32 grad to the fp32 grad buffer, so that optimizer can update fp32 weights afterwards"""
-        if name == "model.decoder.4.pp_block.attn.qkv_proj.weight":
-            assert 1 == 1
-
-        # try:
-        #     assert half_param.grad is not None, f"Expected param {name} to have gradient."
-        # except AssertionError:
-        #     assert 1 == 1
         assert half_param.grad is not None, f"Expected param {name} to have gradient."
         from nanotron.fp8.tensor import convert_tensor_from_fp8
 
@@ -292,20 +284,12 @@ class FP32GradientAccumulator(GradientAccumulator):
         else:
             grad = half_param.grad
 
-        from nanotron.fp8.utils import is_overflow_underflow_nan
-
-        assert is_overflow_underflow_nan(grad) is False, f"name: {name}"
+        assert is_overflow_underflow_nan(grad) is False, f"Detected overflow/underflow/nan in {name} grad"
 
         fp32_grad = self.get_grad_buffer(name=name)
 
         if self._is_accumulation_sync_step is False:
             # WARNING: We assume fp32_grad_bucket is already zeroed
-            # if not isinstance(half_param.data, FP8Tensor):
-            #     fp32_grad.add_(grad)
-            # else:
-            #     assert grad.dtype in [torch.int8, torch.uint8]
-            #     # TODO(xrsrke): move .convert_tensor_from_fp8 to .to(dtype), so we have an unified API
-            #     fp32_grad.add_(grad)
             fp32_grad.add_(grad)
             # In case _is_accumulation_sync_step = True: no need to add half gradients, because it's done in the allreduce hook
 

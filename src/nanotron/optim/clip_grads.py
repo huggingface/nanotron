@@ -34,7 +34,6 @@ def clip_grad_norm(
     named_parameters = list(named_parameters)
     world_rank = dist.get_rank()
 
-    # assert that all params require grad
     for _, p in named_parameters:
         assert p.requires_grad or isinstance(
             p.data, FP8Tensor
@@ -89,9 +88,6 @@ def clip_grad_norm(
     device_to_clip_coef_clamped = {device: clip_coef_clamped.to(device) for device in devices}
 
     for name, param in named_parameters:
-        if "model.decoder.13.pp_block.attn.o_proj.weight" in name:
-            assert 1 == 1
-
         if grad_accumulator is None:
             param.grad.detach().mul_(device_to_clip_coef_clamped[param.grad.device])
         else:

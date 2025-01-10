@@ -42,9 +42,7 @@ from nanotron.parallel.tensor_parallel.functional import (
 )
 from nanotron.parallel.tied_parameters import create_tied_parameter
 
-# from nanotron.utils import post_init
 
-# @post_init
 class _BaseTensorParallelColumnLinear:
     def __init__(
         self,
@@ -110,7 +108,6 @@ class _BaseTensorParallelColumnLinear:
         return f"tp_rank={dist.get_rank(self.pg)}, {super().extra_repr()}, unsharded_out_features={self.out_features * self.world_size}"
 
 
-# @post_init
 class _BaseTensorParallelRowLinear:
     def __init__(
         self,
