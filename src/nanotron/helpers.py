@@ -20,7 +20,6 @@ from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.config import Config, DatasetStageArgs, LRSchedulerArgs, OptimizerArgs, ParallelismArgs
 from nanotron.distributed import ProcessGroup
-from nanotron.fp8.optim import FP8AdamW
 from nanotron.logging import LogItem, log_rank
 from nanotron.models.base import NanotronModel
 from nanotron.optim.base import BaseOptimizer, Optimizer
@@ -295,6 +294,7 @@ def merge_named_param_groups(
 def init_optimizer_and_grad_accumulator(
     parametrization_method: ParametrizationMethod,
     model: nn.Module,
+    master_weight_dtype: torch.dtype,
     optimizer_args: OptimizerArgs,
     parallel_context: ParallelContext,
 ) -> Tuple[BaseOptimizer, GradientAccumulator]:
@@ -327,34 +327,44 @@ def init_optimizer_and_grad_accumulator(
         optimizer = None
 
         if optimizer_args.optimizer_factory.name == "adamW":
-            from nanotron import constants
 
             def optimizer(param_groups):
                 # if has_fp8_params(param_groups) is False:
-                if constants.CONFIG.model.dtype != torch.int8:
-                    return torch.optim.AdamW(
-                        param_groups,
-                        lr=optimizer_args.learning_rate_scheduler.learning_rate,
-                        weight_decay=optimizer_args.weight_decay,
-                        eps=optimizer_args.optimizer_factory.adam_eps,
-                        betas=(
-                            optimizer_args.optimizer_factory.adam_beta1,
-                            optimizer_args.optimizer_factory.adam_beta2,
-                        ),
-                        fused=optimizer_args.optimizer_factory.torch_adam_is_fused,
-                    )
-                else:
-                    return FP8AdamW(
-                        param_groups,
-                        lr=optimizer_args.learning_rate_scheduler.learning_rate,
-                        weight_decay=optimizer_args.weight_decay,
-                        eps=optimizer_args.optimizer_factory.adam_eps,
-                        betas=(
-                            optimizer_args.optimizer_factory.adam_beta1,
-                            optimizer_args.optimizer_factory.adam_beta2,
-                        ),
-                        recipe=constants.CONFIG.fp8.optim,
-                    )
+                # if constants.CONFIG.model.dtype != torch.int8:
+                #     return torch.optim.AdamW(
+                #         param_groups,
+                #         lr=optimizer_args.learning_rate_scheduler.learning_rate,
+                #         weight_decay=optimizer_args.weight_decay,
+                #         eps=optimizer_args.optimizer_factory.adam_eps,
+                #         betas=(
+                #             optimizer_args.optimizer_factory.adam_beta1,
+                #             optimizer_args.optimizer_factory.adam_beta2,
+                #         ),
+                #         fused=optimizer_args.optimizer_factory.torch_adam_is_fused,
+                #     )
+                # else:
+                #     return FP8AdamW(
+                #         param_groups,
+                #         lr=optimizer_args.learning_rate_scheduler.learning_rate,
+                #         weight_decay=optimizer_args.weight_decay,
+                #         eps=optimizer_args.optimizer_factory.adam_eps,
+                #         betas=(
+                #             optimizer_args.optimizer_factory.adam_beta1,
+                #             optimizer_args.optimizer_factory.adam_beta2,
+                #         ),
+                #         recipe=constants.CONFIG.fp8.optim,
+                #     )
+                return torch.optim.AdamW(
+                    param_groups,
+                    lr=optimizer_args.learning_rate_scheduler.learning_rate,
+                    weight_decay=optimizer_args.weight_decay,
+                    eps=optimizer_args.optimizer_factory.adam_eps,
+                    betas=(
+                        optimizer_args.optimizer_factory.adam_beta1,
+                        optimizer_args.optimizer_factory.adam_beta2,
+                    ),
+                    fused=optimizer_args.optimizer_factory.torch_adam_is_fused,
+                )
 
         elif optimizer_args.optimizer_factory.name == "sgd":
 
@@ -384,6 +394,7 @@ def init_optimizer_and_grad_accumulator(
                 gradient_accumulator_builder=lambda named_params: FP32GradientAccumulator(
                     named_parameters=named_params,
                     grad_buckets_named_params=named_parameters,
+                    master_dtype=master_weight_dtype,
                 ),
                 named_params_or_groups=named_param_groups,
                 optimizer_builder=basic_optimizer_builder,

@@ -316,6 +316,7 @@ class OptimizerArgs:
     clip_grad: Optional[float]
     accumulate_grad_in_fp32: bool
     learning_rate_scheduler: LRSchedulerArgs
+    master_weight_dtype: torch.dtype = torch.float32
 
 
 @dataclass

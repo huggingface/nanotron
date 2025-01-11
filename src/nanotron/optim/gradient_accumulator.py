@@ -62,6 +62,7 @@ class FP32GradientAccumulator(GradientAccumulator):
         self,
         named_parameters: Iterator[Tuple[str, NanotronParameter]],
         grad_buckets_named_params: Optional[Iterator[Tuple[str, NanotronParameter]]] = None,
+        master_dtype: torch.dtype = torch.float32,
     ):
         """Create a gradient accumulator that will accumulate gradients in fp32.
 
@@ -84,14 +85,14 @@ class FP32GradientAccumulator(GradientAccumulator):
         # Assign big buffer for weights + grad in fp32
         segment_index = {}
         length = 0
-        fp32_params = []
+        master_params = []
         for name, param in named_parameters:
             # NOTE: FP8 Parameter by default has requires_grad=False,
             # because we want to do the backward ourself, so here we only skip
             # if the parameter isn't fp8, and doesn't require grad
 
             if self._is_not_required_master_weights(param):
-                fp32_params.append((name, param))
+                master_params.append((name, param))
                 continue
 
             start = length
@@ -100,10 +101,10 @@ class FP32GradientAccumulator(GradientAccumulator):
             segment_index[name] = (start, end_weight, param)
             length = end_weight
 
-        big_flat_buffer = torch.empty(length, dtype=torch.float, device="cuda")
+        big_flat_buffer = torch.empty(length, dtype=master_dtype, device="cuda")
         self.parameters = {
             name: {
-                "fp32": big_flat_buffer[start_weight:end_weight].view_as(param),
+                "master": big_flat_buffer[start_weight:end_weight].view_as(param),
                 "half": param,
             }
             for name, (start_weight, end_weight, param) in segment_index.items()
@@ -111,10 +112,10 @@ class FP32GradientAccumulator(GradientAccumulator):
         self.parameters.update(
             {
                 name: {
-                    "fp32": param,
+                    "master": param,
                     "half": param,
                 }
-                for name, param in fp32_params
+                for name, param in master_params
             }
         )
 
@@ -124,15 +125,15 @@ class FP32GradientAccumulator(GradientAccumulator):
 
         with torch.inference_mode():
             for _, elt in self.parameters.items():
-                fp32_param = elt["fp32"]
+                master_param = elt["master"]
                 half_param = elt["half"]
 
                 # Check that fp32 weights have the same memory representation as half precision weights
-                assert fp32_param.stride() == half_param.stride()
+                assert master_param.stride() == half_param.stride()
 
                 # Copy weights from half precision to full precision
                 if not isinstance(half_param.data, FP8Tensor):
-                    fp32_param.copy_(half_param)
+                    master_param.copy_(half_param)
                 else:
                     from nanotron import constants
 
@@ -147,13 +148,13 @@ class FP32GradientAccumulator(GradientAccumulator):
                     p_data = constants.CPU_WEIGHTS[p_name]
                     assert p_data.dtype == torch.float32, f"Expected {p_name} to be float32, but got {p_data.dtype}"
 
-                    fp32_param.copy_(constants.CPU_WEIGHTS[p_name])
+                    master_param.copy_(constants.CPU_WEIGHTS[p_name])
 
                     del constants.CPU_WEIGHTS[p_name]
                     del p_name
 
                 # Set requires_grad=True
-                fp32_param.requires_grad = True
+                master_param.requires_grad = True
 
         self._is_accumulation_sync_step = False
         # We need the last allreduce handle to make sure it finishes before the optimizer step
@@ -298,7 +299,7 @@ class FP32GradientAccumulator(GradientAccumulator):
 
         # In the case an optimizer decides to set it to None, we need to re-assign previous buffer
         if name in self.parameters:
-            fp32_param = self.parameters[name]["fp32"]
+            master_param = self.parameters[name]["master"]
             if hasattr(self, "param_name_to_offsets"):
                 if name not in self.param_name_to_offsets:
                     # When `name` isn't in `param_name_to_offsets` it means the slice is empty.
@@ -307,8 +308,8 @@ class FP32GradientAccumulator(GradientAccumulator):
                 grad = fp32_grad.view(-1)[start_offset:end_offset]
             else:
                 grad = fp32_grad
-            fp32_param.grad = grad
-            assert is_overflow_underflow_nan(fp32_param.grad) is False
+            master_param.grad = grad
+            assert is_overflow_underflow_nan(master_param.grad) is False
 
     @contextmanager
     def no_sync(self):
@@ -331,15 +332,15 @@ class FP32GradientAccumulator(GradientAccumulator):
         We need to update only the parameters that were updated by the optimizer.
         """
         for name in self.parameters.keys():
-            fp32_param = self.parameters[name]["fp32"]
+            master_param = self.parameters[name]["master"]
             half_param = self.parameters[name]["half"]
 
             # TODO @nouamane: should we use a fused kernel to copy?
             # Copy weights from full precision to half precision
             if half_param.data.__class__ == FP8Tensor:
-                half_param.data.set_data(fp32_param, sync=False)
+                half_param.data.set_data(master_param, sync=False)
             else:
-                half_param.copy_(fp32_param)
+                half_param.copy_(master_param)
 
     def zero_grad(self):
         # Full precision gradients are reset to zero/none after the underlying `optimiser.step`, so no need to reset.
@@ -355,22 +356,22 @@ class FP32GradientAccumulator(GradientAccumulator):
         self._contiguous_fp32_grad_buffer.zero_()
 
     def get_parameter_for_optimizer(self, name: str) -> NanotronParameter:
-        return self.parameters[name]["fp32"]
+        return self.parameters[name]["master"]
 
     def get_grad_buffer(self, name: str) -> torch.Tensor:
         """Returns the gradient of the parameter from the appropriate grad bucket."""
         return self.fp32_grad_buffers[name]["fp32_grad"]
 
     def state_dict(self) -> Dict[str, torch.Tensor]:
-        # We consider `fp32` parameters as a state of the gradient accumulator
-        return {name: elt["fp32"] for name, elt in self.parameters.items()}
+        # We consider master parameters as a state of the gradient accumulator
+        return {name: elt["master"] for name, elt in self.parameters.items()}
 
     def load_state_dict(self, state_dict: Dict[str, torch.Tensor]):
         assert set(state_dict.keys()) == set(self.parameters.keys())
 
         with torch.inference_mode():
             for name, elt in self.parameters.items():
-                elt["fp32"].copy_(state_dict[name])
+                elt["master"].copy_(state_dict[name])
 
 
 @dataclasses.dataclass
@@ -405,6 +406,9 @@ def get_fp32_accum_hook(
     # s = torch.cuda.Stream()
 
     def fp32_accum_hook(state: FP32GradBucketManager, bucket: GradBucket) -> torch.futures.Future[torch.Tensor]:
+        import pydevd
+
+        pydevd.settrace(suspend=True, trace_only_current_thread=True)
         # nonlocal s
         # DDP groups grads in GradBuckets. This hook is called throughout the bwd pass, once each bucket is ready to overlap communication with computation.
         # See https://pytorch.org/docs/stable/ddp_comm_hooks.html#what-does-a-communication-hook-operate-on for more details.

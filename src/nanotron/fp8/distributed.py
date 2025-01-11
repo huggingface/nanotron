@@ -9,6 +9,22 @@ from nanotron.fp8.tensor import FP8Tensor, convert_tensor_from_fp8
 from nanotron.parallel.parameters import NanotronParameter
 
 
+def post_scaling_all_reduce_mean(
+    tensor: torch.Tensor, group: Optional[dist.ProcessGroup] = None, async_op=False
+) -> torch.Tensor:
+    dist.all_reduce(tensor, op=dist.ReduceOp.SUM, group=group, async_op=async_op)
+    tensor.div_(dist.get_world_size())
+    return tensor
+
+
+def post_scaling_all_reduce_coalesced_mean(
+    tensor: torch.Tensor, group: Optional[dist.ProcessGroup] = None, async_op=False
+) -> torch.Tensor:
+    dist.all_reduce_coalesced(tensor, op=dist.ReduceOp.SUM, group=group, async_op=async_op)
+    tensor.div_(dist.get_world_size())
+    return tensor
+
+
 def all_reduce(
     tensor: Union[torch.Tensor, NanotronParameter],
     op: dist.ReduceOp = dist.ReduceOp.SUM,

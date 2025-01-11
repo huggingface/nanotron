@@ -36,7 +36,6 @@ from nanotron.config import (
 )
 from nanotron.constants import MODEL_CONFIG_FILE_NAME
 from nanotron.dataloader import sanity_check_dataloader
-from nanotron.fp8.parallel import DistributedDataParallel as FP8DistributedDataParallel
 from nanotron.fp8.tensor import FP8Tensor
 from nanotron.fp8.utils import convert_model_to_fp8
 from nanotron.helpers import (
@@ -240,9 +239,17 @@ class DistributedTrainer:
         self.optimizer, self.grad_accumulator = init_optimizer_and_grad_accumulator(
             parametrization_method=parametrization_method,
             model=self.model,
+            master_weight_dtype=self.config.optimizer.master_weight_dtype,
             optimizer_args=self.config.optimizer,
             parallel_context=self.parallel_context,
         )
+        # NOTE: quantize optimizer states
+        # add hook to dequantize optimizer states before .step()
+        # add hook step to recompute lr
+        # add post_step hook to quantize optimizer states
+
+        assert 1 == 1
+
         if self.init_checkpoint_path is not None:
             load_optimizer(
                 optimizer=self.optimizer,
@@ -883,16 +890,22 @@ class DistributedTrainer:
             # Check that the model has at least one grad. Necessary for DDP
             check_model_has_grad(model=model, parallel_context=parallel_context)
             # TODO @thomasw21: DDP doesn't support broadcasting complex buffers (and we don't really need that broadcasting anyway)
-            if self.config.model.dtype == torch.int8:
-                raise NotImplementedError
-                model = FP8DistributedDataParallel(model, self.parallel_context)
-            else:
-                model = DistributedDataParallel(
-                    model,
-                    process_group=parallel_context.dp_pg,
-                    broadcast_buffers=False,
-                    bucket_cap_mb=config.model.ddp_bucket_cap_mb,
-                )
+            # if self.config.model.dtype == torch.int8:
+            #     raise NotImplementedError
+            #     model = FP8DistributedDataParallel(model, self.parallel_context)
+            # else:
+            #     model = DistributedDataParallel(
+            #         model,
+            #         process_group=parallel_context.dp_pg,
+            #         broadcast_buffers=False,
+            #         bucket_cap_mb=config.model.ddp_bucket_cap_mb,
+            #     )
+            model = DistributedDataParallel(
+                model,
+                process_group=parallel_context.dp_pg,
+                broadcast_buffers=False,
+                bucket_cap_mb=config.model.ddp_bucket_cap_mb,
+            )
 
         # Sanity check the model, all parameters must be NanotronParameter (either tied or sharded)
         sanity_check(root_module=model)
