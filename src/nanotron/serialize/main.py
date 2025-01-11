@@ -5,7 +5,6 @@ from typing import Optional, cast
 import torch
 from datasets.download.streaming_download_manager import xPath
 from torch import nn
-from torch.nn.parallel import DistributedDataParallel
 from torch.optim.lr_scheduler import LambdaLR
 
 from nanotron import distributed as dist
@@ -21,14 +20,12 @@ from nanotron.sanity_checks import (
     assert_tensor_synced_across_pg,
     check_optim_state_in_sync,
 )
-from nanotron.serialize.metadata import CheckpointMetadata, TrainingMetadata, load_meta, save_meta
+from nanotron.serialize.metadata import TrainingMetadata, save_meta
 from nanotron.serialize.optimizer import (
-    load_lr_scheduler,
-    load_optimizer,
     save_lr_scheduler,
     save_optimizer,
 )
-from nanotron.serialize.weights import load_weights, save_weights
+from nanotron.serialize.weights import save_weights
 
 """
 We're going to use safetensors. The reason is that loading segments is going to be much easier
@@ -108,6 +105,7 @@ def save(
 
             save_lr_scheduler(
                 lr_scheduler=lr_scheduler,
+                is_zero=config.optimizer.zero_stage,
                 parallel_context=parallel_context,
                 root_folder=root_folder,
             )
@@ -152,7 +150,7 @@ def save(
                 tensor=tied_param, pg=group, msg=lambda err: f"Tied {tied_info.name} are not synced {err}"
             )
         if not optimizer.inherit_from(optim.ZeroDistributedOptimizer):
-            check_optim_state_in_sync(optimizer, parallel_context.dp_pg)
+            check_optim_state_in_sync(optimizer.state_dict(), parallel_context.dp_pg)
 
         # SANITY CHECK: tied parameters have their optimizer states synchronized
         # Compute a mapping from id_ to index in the optimizer sense
@@ -204,43 +202,6 @@ def save(
                 )
 
     dist.barrier(parallel_context.world_pg)
-
-
-def load(
-    model: nn.Module,
-    optimizer: optim.BaseOptimizer,
-    lr_scheduler,
-    parallel_context: ParallelContext,
-    root_folder: Path,
-) -> CheckpointMetadata:
-    """
-    Load checkpoint, raise if checkpoint is assumed corrupted. Inplace updates `model` and `optimizer` to have the newest parameters.
-    TODO @thomasw21: Make this topology agnostic
-
-    :param filepath: Path
-    :return:
-    """
-    checkpoint_metadata = load_meta(parallel_context=parallel_context, root_folder=root_folder)
-    load_weights(model=model, parallel_context=parallel_context, root_folder=root_folder)
-
-    # SANITY CHECK: assert that optimizer's named_params still point to model's params (check only the first one)
-    if isinstance(optimizer, optim.ZeroDistributedOptimizer):
-        if (
-            len(optimizer.zero_named_param_groups) > 0
-            and len(optimizer.zero_named_param_groups[0]["named_params"]) > 0
-        ):
-            optim_model_param_name, optim_model_param = optimizer.zero_named_param_groups[0]["named_params"][0]
-            if isinstance(model, DistributedDataParallel):
-                optim_model_param_name = f"module.{optim_model_param_name}"
-            param = next(p for n, p in model.named_parameters() if n == optim_model_param_name)
-            assert param.data_ptr() == optim_model_param.data_ptr()
-
-    load_optimizer(optimizer=optimizer, parallel_context=parallel_context, root_folder=root_folder)
-    load_lr_scheduler(
-        lr_scheduler=lr_scheduler,
-        root_folder=root_folder,
-    )
-    return checkpoint_metadata
 
 
 def parse_ckpt_path(config: Config, parallel_context: ParallelContext) -> Optional[Path]:

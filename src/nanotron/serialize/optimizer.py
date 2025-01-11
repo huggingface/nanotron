@@ -1,6 +1,8 @@
 import json
+import warnings
+from collections import defaultdict
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 import torch
 from torch import nn
@@ -17,7 +19,6 @@ from nanotron.optim.zero import (
 )
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter
-from nanotron.sanity_checks import check_optim_state_in_sync
 from nanotron.serialize.metadata import TensorMetadata
 from nanotron.serialize.utils import ObjectType, merge_and_shard_tp_tensors
 
@@ -30,9 +31,11 @@ def optimizer_filename(parallel_context: ParallelContext, is_zero: bool):
         return f"{ObjectType.OPTIMIZER.value}_pp-{dist.get_rank(parallel_context.pp_pg)}-of-{parallel_context.pp_pg.size()}_tp-{dist.get_rank(parallel_context.tp_pg)}-of-{parallel_context.tp_pg.size()}_exp-{dist.get_rank(parallel_context.expert_pg)}-of-{parallel_context.expert_parallel_size}.pt"
 
 
-def lr_scheduler_filename():
-    """The lr_scheduler is the same for all processes."""
-    return f"{ObjectType.LR_SCHEDULER.value}.pt"
+def lr_scheduler_filename(parallel_context: ParallelContext, is_zero: bool):
+    if is_zero is True:
+        return f"{ObjectType.LR_SCHEDULER.value}_pp-{dist.get_rank(parallel_context.pp_pg)}-of-{parallel_context.pp_pg.size()}_dp-{dist.get_rank(parallel_context.dp_pg)}-of-{parallel_context.dp_pg.size()}_tp-{dist.get_rank(parallel_context.tp_pg)}-of-{parallel_context.tp_pg.size()}_exp-{dist.get_rank(parallel_context.expert_pg)}-of-{parallel_context.expert_parallel_size}.pt"
+    else:
+        return f"{ObjectType.LR_SCHEDULER.value}_pp-{dist.get_rank(parallel_context.pp_pg)}-of-{parallel_context.pp_pg.size()}_tp-{dist.get_rank(parallel_context.tp_pg)}-of-{parallel_context.tp_pg.size()}_exp-{dist.get_rank(parallel_context.expert_pg)}-of-{parallel_context.expert_parallel_size}.pt"
 
 
 def save_optimizer(
@@ -105,12 +108,13 @@ def save_optimizer(
 
 def save_lr_scheduler(
     lr_scheduler,
+    is_zero,
     parallel_context: ParallelContext,
     root_folder: Path,
 ):
     """Saves lr scheduler states"""
-    if dist.get_rank(parallel_context.world_pg) > 0:
-        # Only WORLD-RANK 0 saves the lr scheduler state
+    if not is_zero and dist.get_rank(parallel_context.dp_pg) > 0:
+        # this is Zero-0, so only DP-0 saves the optimizer states
         return
 
     root_folder = root_folder / "lr_scheduler"
@@ -119,8 +123,26 @@ def save_lr_scheduler(
     # We dump the optimizer state using `torch.save`
     torch.save(
         lr_scheduler.state_dict(),
-        root_folder / lr_scheduler_filename(),
+        root_folder / lr_scheduler_filename(parallel_context, is_zero),
     )
+
+
+# Helper functions to move optimizer states
+@torch.no_grad()
+def state_dict_to_device(state_dict: Dict, device: str) -> Dict:
+    assert (
+        state_dict["state"][0]["exp_avg"].device.type == "cpu"
+    ), "Optimizer states should be on CPU to avoid extra memory usage when loading from checkpoint"
+    torch.cuda.empty_cache()
+
+    for _, optim_state in sorted(state_dict["state"].items(), key=lambda x: x[0]):
+        for name, tensor in optim_state.items():
+            optim_state[name] = tensor.to(device)
+
+    assert (
+        state_dict["state"][0]["exp_avg"].device.type == "cuda"
+    ), "Optimizer states should be on GPU because model is on GPU"
+    torch.cuda.empty_cache()
 
 
 @torch.no_grad()
@@ -133,8 +155,6 @@ def load_optimizer(
     model: Optional[nn.Module] = None,
 ):
     root_folder = root_folder / "optimizer"
-    # `load_state_dict` copies the state dict which can be very large in case of Zero-0 so we load to cpu and then move to the right device
-    map_location = "cpu" if not optimizer.inherit_from(optim.ZeroDistributedOptimizer) else map_location
     ckp_optimizer_config_path = root_folder / "optimizer_config.json"
     with open(ckp_optimizer_config_path, "r") as file:
         ckp_optimizer_config = json.load(file)
@@ -147,6 +167,10 @@ def load_optimizer(
     if int(ckp_tp_size) != int(parallel_context.tp_pg.size()) or int(ckp_pp_size) != int(
         parallel_context.pp_pg.size()
     ):
+        if int(ckp_pp_size) != int(parallel_context.pp_pg.size()):
+            warnings.warn(
+                "You are resuming in a different PP size, so optimizer states need to be checked. Feel free to open a PR if you work on this!"
+            )
         assert (
             param_shard_metadata is not None
         ), f"You have to pass how the original parameters are sharded in order to resume in a different tensor parallel size, ckp_tp_size: {ckp_tp_size}, current tp_size: {parallel_context.tp_pg.size()}"
@@ -174,18 +198,24 @@ def load_optimizer(
             # NOTE: if the checkpoint is from a Zero-0 optimizer, then we don't need to merge the shards
             # across data parallel dimension, just directly load the checkpoints
             shard_paths = list(
-                root_folder.glob(f"{ObjectType.OPTIMIZER.value}_pp-*-of-{ckp_pp_size}_tp-*-of-{ckp_tp_size}.pt")
+                root_folder.glob(
+                    f"{ObjectType.OPTIMIZER.value}_pp-*-of-{ckp_pp_size}_tp-*-of-{ckp_tp_size}.pt"
+                )  # WARN: wildcard here after tp can hold `0-of-1_exp-0`
             )
 
             ckp_sharded_optim_states = {}
             for shard_path in shard_paths:
                 pp_rank, tp_rank = extract_parallel_ranks_from_shard_path(shard_path, is_zero1=False)
-                ckp_sharded_optim_states[(pp_rank, tp_rank)] = torch.load(shard_path, map_location=map_location)
+                ckp_sharded_optim_states[(pp_rank, tp_rank)] = torch.load(
+                    shard_path, map_location=map_location
+                )  # load all optim states in mem
 
         model_state_dict = model.state_dict()
         new_optim_state_dict = optimizer.state_dict()
+        new_optim_state_dict["state"] = defaultdict(dict)
         # TODO: this does not handle the edge case of different pipeline parallel optimizer state shards saving different state keys
         OPTIMIZER_STATE_NAMES = sorted(ckp_sharded_optim_states[(0, 0)]["state"][0].keys() - ["step"])
+        OPTIMIZER_STATE_DTYPE = ckp_sharded_optim_states[(0, 0)]["state"][0][OPTIMIZER_STATE_NAMES[0]].dtype
         # NOTE: because we can only resume training with the same optimizer type
         # (0, 0) = (pp_rank, tp_rank)
         # NOTE: also we don't merge "step" because it's just a scalar
@@ -224,14 +254,16 @@ def load_optimizer(
                 # from an unsharded optimizer state's shape
                 new_shard_metadata = param.get_sharded_info()
                 new_unshared_shape = new_shard_metadata.unsharded_shape
-                new_optim_state_dict["state"][param_index] = {}
                 # NOTE: restore each state tensor (e.g. exg_avg) by iterating through
                 # the optimizer state shards saved using the previous topology
                 for state_key in OPTIMIZER_STATE_NAMES:
                     # TODO(xrsrke): free the memory of the shards that isn't
                     # corresponding to the current rank
-                    buffer = torch.zeros_like(param, device="cuda")
-                    unsharded_buffer = torch.empty(new_unshared_shape, device="cuda")
+                    # TODO: maybe better to allocate memory for all states at once
+                    buffer = torch.zeros_like(param, device=map_location, dtype=OPTIMIZER_STATE_DTYPE)
+                    unsharded_buffer = torch.empty(
+                        new_unshared_shape, device=map_location, dtype=OPTIMIZER_STATE_DTYPE
+                    )
 
                     for (pp_rank, tp_rank), ckp_optim_state in ckp_sharded_optim_states.items():
                         old_optim_state_index = find_optim_index_from_param_name(
@@ -266,17 +298,34 @@ def load_optimizer(
                             ],
                             new_shard_metadata,
                         )
+            else:
+                # Handle non-sharded params (e.g. layernorm)
+                for (pp_rank, tp_rank), ckp_optim_state in ckp_sharded_optim_states.items():
+                    old_optim_state_index = find_optim_index_from_param_name(
+                        base_name, ckp_sharded_optim_states, is_zero1=False, pp_rank=pp_rank
+                    )
+                    if old_optim_state_index is None:
+                        continue  # Param not in this PP shard
 
-                        if ckp_optim_type == ZeroDistributedOptimizer.__name__:
-                            # NOTE: flatten the optimizer states
-                            new_optim_state_dict["state"][param_index][state_key] = new_optim_state_dict["state"][
-                                param_index
-                            ][state_key].flatten()
-                        # NOTE: a bit awkward, but while we're already reading this (pp,tp) shard for whatever state_key,
-                        # try to get the step value as well.
-                        step = ckp_optim_state["state"][old_optim_state_index].get("step")
-                        if step is not None:
-                            new_optim_state_dict["state"][param_index]["step"] = step
+                    # For non-sharded params, just copy over the state directly
+                    for state_key in OPTIMIZER_STATE_NAMES:
+                        new_optim_state_dict["state"][param_index][state_key] = ckp_optim_state["state"][
+                            old_optim_state_index
+                        ][state_key]
+
+            if ckp_optim_type == ZeroDistributedOptimizer.__name__:
+                # NOTE: flatten the optimizer states
+                new_optim_state_dict["state"][param_index][state_key] = new_optim_state_dict["state"][param_index][
+                    state_key
+                ].flatten()
+
+            # NOTE: a bit awkward, but while we're already reading this (pp,tp) shard for whatever state_key,
+            # try to get the step value as well.
+            step = ckp_optim_state["state"][old_optim_state_index].get("step")
+            if step is not None:
+                new_optim_state_dict["state"][param_index]["step"] = step
+
+            # NOTE: we throw away ckp_optim_state['gradient_accumulator'] which has fp32 grads
 
         new_optim_state_dict["names"] = new_optim_state_param_names
         state_dict = new_optim_state_dict
@@ -305,17 +354,17 @@ def load_optimizer(
                     )
                     state_dict["state"][param_index][state_name] = sliced_tensor
 
-    optimizer.load_state_dict(state_dict)
-
-    if not optimizer.inherit_from(optim.ZeroDistributedOptimizer):
-        check_optim_state_in_sync(optimizer, parallel_context.dp_pg)
+    optimizer.load_state_dict(state_dict, map_location=map_location)
 
 
 def load_lr_scheduler(
     lr_scheduler,
+    is_zero,
+    parallel_context: ParallelContext,
     root_folder: Path,
 ):
     root_folder = root_folder / "lr_scheduler"
 
-    state_dict = torch.load(root_folder / lr_scheduler_filename())
+    state_dict = torch.load(root_folder / lr_scheduler_filename(parallel_context, is_zero))
     lr_scheduler.load_state_dict(state_dict)
+    lr_scheduler._initial_step()  # NOTE: this is required to set the initial learning rate

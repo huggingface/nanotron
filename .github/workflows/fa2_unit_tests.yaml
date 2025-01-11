@@ -19,7 +19,8 @@ on:
 
 jobs:
   tests:
-    runs-on: [single-gpu, nvidia-gpu, a10, ci]
+    runs-on:
+      group: aws-g5-4xlarge-plus
     container:
       image: runpod/pytorch:2.1.1-py3.10-cuda12.1.1-devel-ubuntu22.04
       ports:

@@ -61,6 +61,7 @@ def before_tbi_sanity_checks(
     parallel_context: ParallelContext,
     unwrapped_model: NanotronModel,
     grad_accumulator: GradientAccumulator,
+    lr_scheduler: torch.optim.lr_scheduler.LRScheduler,
 ) -> None:
 
     # TODO(xrsrke): sanity check that _is_future_fp8 is consistent with the dtype of the parameter
@@ -91,6 +92,17 @@ def before_tbi_sanity_checks(
                 msg=lambda err: f"[Before train] Tied weights {name} are not synchronized. {err}",
             )
 
+        # SANITY CHECK: Check that model grads are zeroed or None
+        for name, param in unwrapped_model.named_parameters():
+            if param.grad is not None:
+                torch.testing.assert_close(
+                    param.grad,
+                    torch.zeros_like(param.grad),
+                    atol=0,
+                    rtol=0,
+                    msg="Model half precision grads must be zeroed or None in first accumulation step.",
+                )
+
         # SANITY CHECK: Check that the grad accumulator buffers are ready for DDP
         if grad_accumulator is not None:
             for _, elt in grad_accumulator.fp32_grad_buffers.items():
@@ -102,6 +114,15 @@ def before_tbi_sanity_checks(
                     rtol=0,
                     msg="Grad accumulator buffers must be zeroed in first accumulation step.",
                 )
+
+            # TODO: add checks for memory contiguousness
+
+        # SANITY CHECK: Check that optimizer's lr is synchronized with lr_scheduler
+        for i, group in enumerate(lr_scheduler.optimizer.param_groups):
+            assert (
+                group["lr"] == lr_scheduler.get_last_lr()[i]
+            ), f"Optimizer and LR scheduler are not in sync. Got {group['lr']} and {lr_scheduler.get_last_lr()[i]}"
+            break
 
         # SANITY CHECK: run model specific sanity checks
         unwrapped_model.before_tbi_sanity_checks()
@@ -151,6 +172,7 @@ def before_optim_step_sanity_checks(
     unwrapped_model: NanotronModel,
     optim: OptimizerFromGradientAccumulator,
     grad_accumulator: GradientAccumulator,
+    optimizer: optim.BaseOptimizer,
 ) -> None:
 
     # NOTE: sanity check that non-fp8 parameters's gradients have
@@ -236,6 +258,9 @@ def before_optim_step_sanity_checks(
                 msg=lambda err: f"[Before optimizer step] Tied weights {name} are not synchronized. {err}",
             )
 
+        # SANITY CHECK: Check that optimizer states are synchronized across DP
+        check_optim_state_in_sync(optimizer.state_dict(), parallel_context.dp_pg)
+
         # SANITY CHECK: run model specific sanity checks
         unwrapped_model.before_optim_step_sanity_checks()
 
@@ -263,12 +288,11 @@ def after_optim_step_sanity_checks(
         unwrapped_model.after_optim_step_sanity_checks()
 
 
-def check_optim_state_in_sync(optimizer: optim.BaseOptimizer, pg: dist.ProcessGroup):
-    for _, optim_state in sorted(optimizer.state_dict()["state"].items(), key=lambda x: x[0]):
+def check_optim_state_in_sync(optim_state_dict: dict, pg: dist.ProcessGroup):
+    for _, optim_state in sorted(optim_state_dict["state"].items(), key=lambda x: x[0]):
         for name, tensor in optim_state.items():
             if name == "step":
-                tensor = tensor.to("cuda")
-
+                continue
             assert_tensor_synced_across_pg(
                 tensor=tensor, pg=pg, msg=lambda err: f"{name} are not synced across DP {err}"
             )
