@@ -9,6 +9,8 @@ from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.meta import FP8Meta
 from nanotron.fp8.tensor import FP8Tensor, update_scaling_factor
 
+# from nanotron.config.fp8_config import FP8Args
+
 
 class FP8Parameter(nn.Parameter):
     """
@@ -25,8 +27,6 @@ class FP8Parameter(nn.Parameter):
         with torch.no_grad():
             from typing import cast
 
-            from nanotron.config.fp8_config import FP8Args
-
             if constants.CONFIG is None:
                 sync_amax_in_weight = False
             else:
@@ -41,8 +41,8 @@ class FP8Parameter(nn.Parameter):
             self._data = FP8Tensor(data, dtype=dtype, interval=interval, sync=sync_amax_in_weight)
             # TODO(xrsrke): don't store fp32 raw data in memory after quantization
 
-            if constants.ITERATION_STEP == 1:
-                self.orig_data = data.data
+            # if constants.ITERATION_STEP == 1:
+            #     self.orig_data = data.data
 
             # TODO(xrsrke): don't fixed these, take it from the FP8 recipe
             fp8e4m3_scale = update_scaling_factor(

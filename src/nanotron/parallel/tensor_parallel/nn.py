@@ -55,7 +55,7 @@ class _BaseTensorParallelColumnLinear:
         dtype: torch.dtype = None,
         async_communication: bool = False,
         contiguous_chunks: Optional[Tuple[int, ...]] = None,
-        name: Optional[str] = None,
+        tp_recompute_allgather: bool = True,
         recipe: Optional[FP8LinearRecipe] = None,
     ):
         self.pg = pg
@@ -65,7 +65,6 @@ class _BaseTensorParallelColumnLinear:
 
         self.in_features = in_features
         self.out_features = out_features // self.world_size
-        self.name = name
 
         init_args = {
             "in_features": self.in_features,
@@ -81,6 +80,7 @@ class _BaseTensorParallelColumnLinear:
 
         self.mode = mode
         self.async_communication = async_communication
+        self.tp_recompute_allgather = tp_recompute_allgather
 
         if contiguous_chunks is not None:
             assert (
@@ -102,6 +102,7 @@ class _BaseTensorParallelColumnLinear:
             group=self.pg,
             tp_mode=self.mode,
             async_communication=self.async_communication,
+            tp_recompute_allgather=self.tp_recompute_allgather,
         )
 
     def extra_repr(self) -> str:

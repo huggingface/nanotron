@@ -10,7 +10,6 @@ from torch.distributed import GradBucket
 import nanotron.distributed as dist
 from nanotron import logging
 from nanotron.fp8.tensor import FP8Tensor
-from nanotron.fp8.utils import is_overflow_underflow_nan
 from nanotron.parallel.parameters import NanotronParameter
 from nanotron.utils import get_untyped_storage, tensor_from_untyped_storage
 
@@ -285,6 +284,8 @@ class FP32GradientAccumulator(GradientAccumulator):
         else:
             grad = half_param.grad
 
+        from nanotron.fp8.utils import is_overflow_underflow_nan
+
         assert is_overflow_underflow_nan(grad) is False, f"Detected overflow/underflow/nan in {name} grad"
 
         fp32_grad = self.get_grad_buffer(name=name)
@@ -309,6 +310,8 @@ class FP32GradientAccumulator(GradientAccumulator):
             else:
                 grad = fp32_grad
             master_param.grad = grad
+            from nanotron.fp8.utils import is_overflow_underflow_nan
+
             assert is_overflow_underflow_nan(master_param.grad) is False
 
     @contextmanager

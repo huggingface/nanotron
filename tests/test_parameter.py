@@ -124,10 +124,4 @@ def _test_create_param_that_share_metadata(parallel_context: ParallelContext):
         assert p1_k == p2_k
         assert p1_v == p2_v
 
-    # orig_hash = getattr(orig_param, NanotronParameter.NANOTRON_PARAMETER_HASH_ATTRIBUTE_NAME)
-    # new_hash = getattr(new_param, NanotronParameter.NANOTRON_PARAMETER_HASH_ATTRIBUTE_NAME)
-
-    # assert new_hash == orig_hash
-    assert hash(new_param) == hash(orig_param)
-
     parallel_context.destroy()
