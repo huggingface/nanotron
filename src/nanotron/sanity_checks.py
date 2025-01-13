@@ -11,7 +11,6 @@ from nanotron.fp8.utils import is_overflow_underflow_nan
 from nanotron.logging import get_logger, log_rank
 from nanotron.models import NanotronModel
 from nanotron.optim.gradient_accumulator import GradientAccumulator
-from nanotron.optim.optimizer_from_gradient_accumulator import OptimizerFromGradientAccumulator
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.tied_parameters import get_tied_id_to_param
 
@@ -170,14 +169,13 @@ def before_optim_step_sanity_checks(
     config: Config,
     parallel_context: ParallelContext,
     unwrapped_model: NanotronModel,
-    optim: OptimizerFromGradientAccumulator,
     grad_accumulator: GradientAccumulator,
     optimizer: optim.BaseOptimizer,
 ) -> None:
 
     # NOTE: sanity check that non-fp8 parameters's gradients have
     # the same datatype of the residual stream's dtype
-    for pg in optim.param_groups:
+    for pg in optimizer.param_groups:
         for p in pg["params"]:
             assert p.grad is not None
             if isinstance(p.data, FP8Tensor):

@@ -603,7 +603,7 @@ class DistributedTrainer:
             )
 
         before_optim_step_sanity_checks(
-            self.config, self.parallel_context, self.unwrapped_model, self.optimizer, self.grad_accumulator
+            self.config, self.parallel_context, self.unwrapped_model, self.grad_accumulator, self.optimizer
         )
 
         # Compute DP average loss and overlap with optimizer step
