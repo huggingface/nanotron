@@ -245,7 +245,7 @@ old_register_buffer = nn.Module.register_buffer
 @contextmanager
 def init_on_device_and_dtype(
     device: torch.device = torch.device("cpu"),
-    dtype: torch.dtype = torch.float,
+    dtype: torch.dtype = torch.float32,
 ):
     """
     A context manager under which models are initialized with all parameters on the specified device.

@@ -47,7 +47,9 @@ def _test_dtype_of_model_initialization(parallel_context: ParallelContext, dtype
     assert all(p.dtype == dtype for p in llama.parameters())
     assert all(p.device == device for p in llama.parameters())
 
-    assert all(b.dtype == dtype for b in llama.buffers())
+    # assert all(b.dtype == dtype for b in llama.buffers())
+    # NOTE: we explicitly cast inv_freq to float32, so skip it
+    assert all(b.dtype == dtype for n, b in llama.named_buffers() if "inv_freq" not in n)
     assert all(b.device == device for b in llama.buffers())
 
 

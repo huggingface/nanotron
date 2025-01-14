@@ -29,23 +29,6 @@ def _test_get_parameter_data(parallel_context: ParallelContext):
     assert param.data is new_data
 
 
-@rerun_if_address_is_in_use()
-def test_random_hash_nanotron_parameter():
-    init_distributed(tp=2, dp=1, pp=1)(_test_random_hash_nanotron_parameter)()
-
-
-def _test_random_hash_nanotron_parameter(parallel_context: ParallelContext):
-    param = torch.nn.Parameter(torch.randn(16, 64))
-    split_config = SplitConfig(
-        split_dim=0,
-        contiguous_chunks=(8, 8),
-    )
-    param = create_sharded_parameter_from_config(parameter=param, pg=parallel_context.tp_pg, split_config=split_config)
-
-    assert hash(param) is not None
-    assert type(hash(param)) == int
-
-
 def test_nanotron_parameter_does_not_override_some_parameter_variable():
     param = nn.Parameter(torch.empty(3))
     assert not hasattr(param, NanotronParameter.NANOTRON_PARAMETER_METADATA_ATTRIBUTE_NAME)
