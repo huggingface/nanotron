@@ -204,7 +204,10 @@ class _ColumnLinearAsyncCommunication(torch.autograd.Function):
                     )
                 else:
                     torch.addmm(
-                        input=bias[None, :],
+                        # NOTE(xrsrke): if keep bias[None, :], then we got
+                        # RuntimeError: Attempted to make a tensor into a differentiable view,
+                        # but the tensor already had autograd metadata associated with it
+                        input=bias.view(1, -1),
                         mat1=tensor.view(first_dims, hidden_size),
                         mat2=weight.t(),
                         out=same_device_shard.view(first_dims, output_size),
@@ -236,7 +239,8 @@ class _ColumnLinearAsyncCommunication(torch.autograd.Function):
                         )
                     else:
                         torch.addmm(
-                            input=bias[None, :],
+                            # input=bias[None, :],
+                            input=bias.view(1, -1),
                             mat1=gathered_tensor[: sharded_batch_size * current_rank].view(first_dims, hidden_size),
                             mat2=weight.t(),
                             out=before_shard.view(first_dims, output_size),
@@ -253,7 +257,8 @@ class _ColumnLinearAsyncCommunication(torch.autograd.Function):
                         )
                     else:
                         torch.addmm(
-                            input=bias[None, :],
+                            # input=bias[None, :],
+                            input=bias.view(1, -1),
                             mat1=gathered_tensor[sharded_batch_size * (current_rank + 1) :].view(
                                 first_dims, hidden_size
                             ),
