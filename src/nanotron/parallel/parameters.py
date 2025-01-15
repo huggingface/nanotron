@@ -1,6 +1,6 @@
 import dataclasses
 from copy import deepcopy
-from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
 
 import torch
 from functorch.dim import tree_map
@@ -266,10 +266,14 @@ class NanotronParameter(nn.Parameter):
         unwrapped_args = tree_map(unwrap, args)
         unwrapped_kwargs = tree_map(unwrap, kwargs)
 
-        OPS_THAT_RETURN_ORIGINAL_TENSOR = [
+        OPS_THAT_RETURN_ORIGINAL_TENSOR: List[Union[Callable, str]] = [
             # NOTE: transpose operation
             torch.ops.aten.t.default,
             torch.ops.aten.view.default,
+            # NOTE: torch.ops.attn.slice.default doesn't exist
+            # so we use str(op) instead
+            "aten.slice.Tensor",
+            # torch.ops.attn.slice.default, # NOTE: param[local_slices]
             torch.ops.aten.detach.default,
             # NOTE: F.embedding()
             torch.ops.aten.embedding.default,
@@ -292,7 +296,9 @@ class NanotronParameter(nn.Parameter):
         else:
             outputs = func(*unwrapped_args, **unwrapped_kwargs)
 
-            if func in OPS_THAT_RETURN_ORIGINAL_TENSOR:
+            if any(func == x for x in OPS_THAT_RETURN_ORIGINAL_TENSOR if not isinstance(x, str)) or any(
+                str(func) == x for x in OPS_THAT_RETURN_ORIGINAL_TENSOR if isinstance(x, str)
+            ):
                 return outputs
             else:
                 return tree_map(wrap, outputs)

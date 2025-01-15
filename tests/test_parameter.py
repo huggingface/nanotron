@@ -108,3 +108,22 @@ def _test_create_param_that_share_metadata(parallel_context: ParallelContext):
         assert p1_v == p2_v
 
     parallel_context.destroy()
+
+
+@rerun_if_address_is_in_use()
+def test_slice_param():
+    init_distributed(tp=2, dp=1, pp=1)(_test_slice_param)()
+
+
+def _test_slice_param(parallel_context: ParallelContext):
+    param = torch.nn.Parameter(torch.randn(16, 64))
+    split_config = SplitConfig(
+        split_dim=0,
+        contiguous_chunks=(8, 8),
+    )
+    param = create_sharded_parameter_from_config(parameter=param, pg=parallel_context.tp_pg, split_config=split_config)
+
+    sliced = param[2:4, 4:6]
+
+    assert isinstance(sliced, torch.Tensor)
+    assert sliced.shape == (2, 2)

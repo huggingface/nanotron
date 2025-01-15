@@ -276,7 +276,10 @@ def _test_zero_optimizer_with_tp(
                 for local_global_slices_pair in sharded_info.local_global_slices_pairs:
                     local_slices = local_global_slices_pair.local_slices
                     global_slices = local_global_slices_pair.global_slices
-                    param[local_slices].copy_(ref_param[global_slices])
+
+                    with torch.no_grad():
+                        # param.data[local_slices].copy_(ref_param.data[global_slices])
+                        param[local_slices].copy_(ref_param[global_slices])
             else:
                 param.copy_(ref_param)
 
