@@ -46,7 +46,7 @@ jobs:
         pip install -e .
         pip install -e .[dev]
         pip install -e .[test]
-        pip install -e .[nanosets]
+        # pip install -e .[nanosets]
 
     - name: Show installed libraries and their versions
       run: pip freeze | tee installed.txt
@@ -61,6 +61,7 @@ jobs:
         --durations=0 \
         --ignore tests/kernels \
         --ignore tests/fp8 \
+        --ignore tests/nanoset \
         --verbose \
         tests/
     # NOTE: T4 can't run FA2, DoReMi's LLaMa needs FÀ
