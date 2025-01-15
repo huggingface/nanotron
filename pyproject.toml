@@ -21,7 +21,7 @@ dependencies = [
     "safetensors",
     "dacite",
     "tqdm",
-    "datasets",
+    "datasets>=3.0.0",
 ]
 
 [tool.setuptools.packages.find]
