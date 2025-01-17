@@ -243,7 +243,6 @@ class NanotronParameter(nn.Parameter):
 
     @property
     def data(self):
-        # from nanotron.fp8.parameter import FP8Parameter
         return self._data
 
     @data.setter

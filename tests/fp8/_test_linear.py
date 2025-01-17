@@ -6,7 +6,6 @@ import torch
 from nanotron.fp8.constants import FP8_DTYPES, QTYPE_TO_DTYPE
 from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.linear import FP8Linear, FP8LinearMeta
-from nanotron.fp8.parameter import FP8Parameter
 from nanotron.fp8.recipe import FP8LinearRecipe
 from nanotron.fp8.tensor import FP8Tensor, convert_tensor_from_fp8
 from nanotron.fp8.utils import convert_linear_to_fp8, convert_to_fp8_module, is_overflow_underflow_nan

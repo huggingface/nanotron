@@ -216,12 +216,6 @@ class DistributedTrainer:
             if hasattr(p, "_is_future_fp8") and p._is_future_fp8 is True:
                 constants.CPU_WEIGHTS[n.replace("module.", "")] = p.data.cpu().clone()
 
-        # NOTE: sanity check all hash are different
-        # param_hash = []
-        # for p in self.model.parameters():
-        #     assert hash(p) not in param_hash
-        #     param_hash.append(hash(p))
-
         # NOTE: if we cast model to FP8 before wrapping it with NanotronParameter,
         # then we can create a NanotronParameter that has dtype=[torch.int8, torch.uint8]
         # which then it allows us to assign [torch.int8, torch.uint8] gradients to the parameter
@@ -231,7 +225,6 @@ class DistributedTrainer:
         # Please ensure that the gradient and the tensor have the same dtype"
         # NOTE: the reason that we cast after initializing the optimizer is that
         # we want to create some master weights for fp8 parameters, before quantizing them
-
         if self.config.model.dtype == torch.int8:
             self.model = convert_model_to_fp8(self.model, config=self.config)
 
