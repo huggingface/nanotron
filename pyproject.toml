@@ -41,7 +41,8 @@ dev = [
 
 test = [
     "pytest",
-    "pytest-xdist"
+    "pytest-xdist",
+    "pytest-timeout"
 ]
 
 fast-modeling = [
