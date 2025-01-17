@@ -63,6 +63,7 @@ jobs:
         --ignore tests/fp8 \
         --ignore tests/nanoset \
         --verbose \
+        --timeout=300 \
         tests/
     # NOTE: T4 can't run FA2, DoReMi's LLaMa needs FÀ
     # - name: Run DoReMi tests
