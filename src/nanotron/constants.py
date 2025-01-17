@@ -16,7 +16,6 @@ MODEL_CONFIG_FILE_NAME = "model_config.json"
 ITERATION_STEP = 1
 # TODO(xrsrke): refactor to training stage,
 # keep it in the same class as iteration_step
-CONFIG = None
 
 is_ready_to_log = False
 

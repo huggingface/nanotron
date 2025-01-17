@@ -1,6 +1,6 @@
 import warnings
 from dataclasses import dataclass
-from typing import Optional, Tuple, Union, cast
+from typing import Optional, Tuple, Union
 
 import torch
 from torch import nn
@@ -103,15 +103,7 @@ class _FP8Matmul(torch.autograd.Function):
         assert not isinstance(input, FP8Tensor)
         assert isinstance(weight, NanotronParameter)
 
-        from nanotron import constants
-        from nanotron.config.fp8_config import FP8Args
-
-        if constants.CONFIG is None:
-            fp8_config = FP8Args()
-        else:
-            fp8_config = cast(FP8Args, constants.CONFIG.fp8)
-
-        sync_amax_in_input = fp8_config.sync_amax_in_input
+        sync_amax_in_input = recipe.sync_amax_in_input
 
         if metadatas.input is None:
             fp8_input = FP8Tensor(
@@ -150,22 +142,16 @@ class _FP8Matmul(torch.autograd.Function):
         """
         from typing import cast
 
-        from nanotron import constants
-        from nanotron.config.fp8_config import FP8Args
         from nanotron.fp8.utils import is_overflow_underflow_nan
 
-        if constants.CONFIG is None:
-            fp8_config = FP8Args()
-        else:
-            fp8_config = cast(FP8Args, constants.CONFIG.fp8)
+        recipe = ctx.recipe
+        recipe = cast(FP8LinearRecipe, recipe)
 
-        sync_amax_in_igrad = fp8_config.sync_amax_in_igrad
-        sync_amax_in_wgrad = fp8_config.sync_amax_in_wgrad
+        sync_amax_in_igrad = recipe.sync_amax_in_igrad
+        sync_amax_in_wgrad = recipe.sync_amax_in_wgrad
 
         fp8_input, fp8_weight_param = ctx.saved_tensors
         fp8_weight = fp8_weight_param.data
-        recipe = ctx.recipe
-        recipe = cast(FP8LinearRecipe, recipe)
 
         fp8_input = cast(FP8Tensor, fp8_input)
         fp8_weight = cast(FP8Tensor, fp8_weight)

@@ -32,11 +32,11 @@ class FP8Args:
     update_clipping: bool = False
     skip_param_update_if_nan: bool = False
 
-    sync_amax_in_input: bool = False
-    sync_amax_in_weight: bool = False
-    sync_amax_in_igrad: bool = False
-    sync_amax_in_wgrad: bool = False
-    sync_amax_func: str = "default"
+    # sync_amax_in_input: bool = False
+    # sync_amax_in_weight: bool = False
+    # sync_amax_in_igrad: bool = False
+    # sync_amax_in_wgrad: bool = False
+    # sync_amax_func: str = "default"
     weight_decay_without_lr_decay: bool = False
 
     triton_rms_norm: bool = False

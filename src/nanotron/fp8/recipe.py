@@ -50,6 +50,12 @@ class FP8LinearRecipe:
     accumulate: FP8Accumulate
     smooth_quant: bool = False
 
+    sync_amax_in_input: bool = False
+    sync_amax_in_weight: bool = False
+    sync_amax_in_igrad: bool = False
+    sync_amax_in_wgrad: bool = False
+    sync_amax_func: str = "default"
+
 
 @dataclass
 class FP8OptimRecipe:

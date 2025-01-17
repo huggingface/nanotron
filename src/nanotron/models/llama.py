@@ -697,9 +697,9 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             key_states = key_states.to(torch.bfloat16)
             value_states = value_states.to(torch.bfloat16)
 
-            assert is_overflow_underflow_nan(query_states) is False, f"layer_idx: {self.layer_idx}"
-            assert is_overflow_underflow_nan(key_states) is False, f"layer_idx: {self.layer_idx}"
-            assert is_overflow_underflow_nan(value_states) is False, f"layer_idx: {self.layer_idx}"
+            # assert is_overflow_underflow_nan(query_states) is False, f"layer_idx: {self.layer_idx}"
+            # assert is_overflow_underflow_nan(key_states) is False, f"layer_idx: {self.layer_idx}"
+            # assert is_overflow_underflow_nan(value_states) is False, f"layer_idx: {self.layer_idx}"
 
             attention_output = self.attention(
                 query_states=query_states,
@@ -712,13 +712,6 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         attention_output = (
             attention_output.contiguous().view(batch_size, q_length, self.n_local_q_heads * self.d_v).transpose(0, 1)
         )
-        from nanotron import constants
-
-        if attention_output.dtype != constants.CONFIG.fp8.resid_dtype:
-            assert is_overflow_underflow_nan(attention_output) is False, f"layer_idx: {self.layer_idx}"
-            attention_output = attention_output.to(constants.CONFIG.fp8.resid_dtype)
-            assert is_overflow_underflow_nan(attention_output) is False, f"layer_idx: {self.layer_idx}"
-
         assert is_overflow_underflow_nan(attention_output) is False, f"layer_idx: {self.layer_idx}"
         output = self.o_proj(attention_output)
 

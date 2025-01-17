@@ -1,11 +1,13 @@
 import warnings
+from functools import partial
 from typing import Dict, List, Optional, Tuple
 
 import torch
 from torch import nn
 
 from nanotron import logging
-from nanotron.config.fp8_config import FP8Args, FP8LayerArgs
+from nanotron.config import Config
+from nanotron.config.fp8_config import FP8LayerArgs
 from nanotron.fp8.constants import FP8_GPU_NAMES
 from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.linear import FP8Linear
@@ -235,13 +237,14 @@ def convert_logs_to_flat_logs(logs, prefix):
     return flat_logs
 
 
-def find_fp8_config_by_module_name(target_module_name: str, config: FP8Args) -> Optional[FP8LayerArgs]:
+def find_fp8_config_by_module_name(target_module_name: str, config: Config) -> Optional[FP8LayerArgs]:
     # NOTE: either model or is_quant_all_except_first_and_last must be specified, not both
     # TODO(xrsrke): remove config.is_quant_all_except_first_and_last
     from nanotron.fp8.constants import FP8LM_LINEAR_RECIPE
 
-    if hasattr(config, "model") and config.model is not None:
-        for layer_args in config.model:
+    fp8_config = config.fp8
+    if hasattr(fp8_config, "model") and fp8_config.model is not None:
+        for layer_args in fp8_config.model:
             if layer_args.module_name == target_module_name.replace("pp_block.", "").replace("module.", ""):
                 return layer_args
     else:
@@ -261,9 +264,7 @@ def find_fp8_config_by_module_name(target_module_name: str, config: FP8Args) -> 
 
             return False
 
-        from nanotron import constants
-
-        num_layers = constants.CONFIG.model.model_config.num_hidden_layers
+        num_layers = config.model.model_config.num_hidden_layers
         assert num_layers > 2, "num_hidden_layers must be greater than 2"
 
         quant_layer_idxs = list(range(1, num_layers - 1))
@@ -276,44 +277,44 @@ def find_fp8_config_by_module_name(target_module_name: str, config: FP8Args) -> 
             return config_temp
 
 
-def get_modules_not_in_fp16():
-    from nanotron import constants
-    from nanotron.fp8.constant_recipe import MODULE_NAMES_THAT_NOT_FP8
+# def get_modules_not_in_fp16():
+#     from nanotron import constants
+#     from nanotron.fp8.constant_recipe import MODULE_NAMES_THAT_NOT_FP8
 
-    if constants.CONFIG is not None and hasattr(constants.CONFIG, "fp8"):
-        if constants.CONFIG.fp8.model is None:
-            # NOTE: convert all modules to fp8 axcept
-            name_of_modules_not_in_fp16 = MODULE_NAMES_THAT_NOT_FP8
-        else:
-            name_of_modules_not_in_fp16 = [x.module_name for x in constants.CONFIG.fp8.model]
-    else:
-        name_of_modules_not_in_fp16 = []
-    return name_of_modules_not_in_fp16
-
-
-def is_convert_to_fp16(module) -> bool:
-    from nanotron import constants
-    from nanotron.fp8.constant_recipe import MODULE_NAMES_THAT_NOT_FP8, MODULES_THAT_IN_FLOAT16
-
-    IS_CONVERT_TO_FLOAT16 = False
-    name_of_modules_not_in_fp16 = get_modules_not_in_fp16()
-
-    if constants.CONFIG is not None and constants.CONFIG.fp8.model is None:
-        if any(isinstance(module, m) for m in MODULES_THAT_IN_FLOAT16):
-            IS_CONVERT_TO_FLOAT16 = True
-        else:
-            if hasattr(module, "name") and any(n in module.name for n in MODULE_NAMES_THAT_NOT_FP8):
-                IS_CONVERT_TO_FLOAT16 = True
-    else:
-        if any(isinstance(module, m) for m in MODULES_THAT_IN_FLOAT16) or (
-            hasattr(module, "name") and module.name not in name_of_modules_not_in_fp16
-        ):
-            IS_CONVERT_TO_FLOAT16 = True
-
-    return IS_CONVERT_TO_FLOAT16
+#     if constants.CONFIG is not None and hasattr(constants.CONFIG, "fp8"):
+#         if constants.CONFIG.fp8.model is None:
+#             # NOTE: convert all modules to fp8 axcept
+#             name_of_modules_not_in_fp16 = MODULE_NAMES_THAT_NOT_FP8
+#         else:
+#             name_of_modules_not_in_fp16 = [x.module_name for x in constants.CONFIG.fp8.model]
+#     else:
+#         name_of_modules_not_in_fp16 = []
+#     return name_of_modules_not_in_fp16
 
 
-def convert_model_to_fp8(model: NanotronModel, config: FP8Args) -> NanotronModel:
+# def is_convert_to_fp16(module) -> bool:
+#     from nanotron import constants
+#     from nanotron.fp8.constant_recipe import MODULE_NAMES_THAT_NOT_FP8, MODULES_THAT_IN_FLOAT16
+
+#     IS_CONVERT_TO_FLOAT16 = False
+#     name_of_modules_not_in_fp16 = get_modules_not_in_fp16()
+
+#     if constants.CONFIG is not None and constants.CONFIG.fp8.model is None:
+#         if any(isinstance(module, m) for m in MODULES_THAT_IN_FLOAT16):
+#             IS_CONVERT_TO_FLOAT16 = True
+#         else:
+#             if hasattr(module, "name") and any(n in module.name for n in MODULE_NAMES_THAT_NOT_FP8):
+#                 IS_CONVERT_TO_FLOAT16 = True
+#     else:
+#         if any(isinstance(module, m) for m in MODULES_THAT_IN_FLOAT16) or (
+#             hasattr(module, "name") and module.name not in name_of_modules_not_in_fp16
+#         ):
+#             IS_CONVERT_TO_FLOAT16 = True
+
+#     return IS_CONVERT_TO_FLOAT16
+
+
+def convert_model_to_fp8(model: NanotronModel, config: Config) -> NanotronModel:
     from nanotron.fp8.utils import find_fp8_config_by_module_name, get_leaf_modules
     from nanotron.parallel.tensor_parallel.nn import (
         FP8TensorParallelColumnLinear,
@@ -338,6 +339,13 @@ def convert_model_to_fp8(model: NanotronModel, config: FP8Args) -> NanotronModel
             # TODO(xrsrke): retrieve custom recipe
             module._set_and_quantize_weights(module.weight.data, recipe=recipe)
         else:
-            assert config.resid_dtype == torch.float32, "not support datatype conversion, because of error 8"
+            assert config.fp8.resid_dtype == torch.float32, "not support datatype conversion, because of error 8"
+
+    def output_dtype_conversion_hook(module, input, output, dtype):
+        return output.to(dtype) if output.dtype != dtype else output
+
+    for name, module in model.named_modules():
+        if "attn.attention" in name:
+            module.register_forward_hook(partial(output_dtype_conversion_hook, dtype=config.fp8.resid_dtype))
 
     return model

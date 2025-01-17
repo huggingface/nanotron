@@ -151,7 +151,6 @@ class DistributedTrainer:
         ), "FP8 training must enable gradient accumulation"
         from nanotron import constants
 
-        constants.CONFIG = self.config
         self.model_config = self.config.model.model_config
         if model_class is not None:
             CONFIG_TO_MODEL_CLASS[self.model_config.__class__.__name__] = model_class
@@ -207,7 +206,7 @@ class DistributedTrainer:
             if any(p.numel() > 0 for p in module.parameters()) is False:
                 continue
 
-            recipe = find_fp8_config_by_module_name(module_name, constants.CONFIG.fp8)
+            recipe = find_fp8_config_by_module_name(module_name, self.config)
             if recipe is not None:
                 module.weight._is_future_fp8 = True
 
@@ -232,7 +231,9 @@ class DistributedTrainer:
         # Please ensure that the gradient and the tensor have the same dtype"
         # NOTE: the reason that we cast after initializing the optimizer is that
         # we want to create some master weights for fp8 parameters, before quantizing them
-        self.model = convert_model_to_fp8(self.model, config=self.config.fp8)
+
+        if self.config.model.dtype == torch.int8:
+            self.model = convert_model_to_fp8(self.model, config=self.config)
 
         # NOTE: convert non-fp8 parameters to the residual stream's dtype
 
