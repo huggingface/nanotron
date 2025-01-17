@@ -38,7 +38,7 @@ class FP8Meta:
     sync_amax: bool = False
 
     @property
-    def te_dtype(self) -> tex.DType:
+    def te_dtype(self) -> "tex.DType":
         from nanotron.fp8.tensor import convert_torch_dtype_to_te_dtype
 
         return convert_torch_dtype_to_te_dtype(self.dtype)

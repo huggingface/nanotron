@@ -197,7 +197,7 @@ class FP16Tensor(LowPrecisionTensor):
         return (tensor * fp8_meta.scale).to(torch.float16)
 
 
-def convert_torch_dtype_to_te_dtype(dtype: torch.dtype) -> tex.DType:
+def convert_torch_dtype_to_te_dtype(dtype: torch.dtype) -> "tex.DType":
     # NOTE: transformer engine maintains it own dtype mapping
     # so we need to manually map torch dtypes to TE dtypes
     TORCH_DTYPE_TE_DTYPE_NAME_MAPPING = {
