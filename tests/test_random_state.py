@@ -1,6 +1,5 @@
 import pytest
 import torch
-from helpers.utils import available_gpus, init_distributed, rerun_if_address_is_in_use
 from nanotron import distributed as dist
 from nanotron.parallel import ParallelContext
 from nanotron.random import (
@@ -9,6 +8,7 @@ from nanotron.random import (
     get_current_random_state,
     get_synced_random_state,
 )
+from nanotron.testing.utils import available_gpus, init_distributed, rerun_if_address_is_in_use
 
 
 @pytest.mark.skipif(available_gpus() < 2, reason="Testing test_random_state_sync requires at least 2 gpus")

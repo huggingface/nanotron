@@ -1,13 +1,13 @@
 import numpy as np
 import pytest
 import torch.distributed as dist
-from helpers.utils import (
+from nanotron.parallel import ParallelContext
+from nanotron.testing.utils import (
     available_gpus,
     get_all_3d_configurations,
     init_distributed,
     rerun_if_address_is_in_use,
 )
-from nanotron.parallel import ParallelContext
 from torch.distributed import ProcessGroup
 
 

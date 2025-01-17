@@ -5,7 +5,6 @@ import torch
 from helpers.distributed_tensor import assert_tensor_equal_over_group
 from helpers.dummy import dummy_infinite_data_loader, init_dummy_model
 from helpers.exception import assert_fail_with
-from helpers.utils import available_gpus, init_distributed, rerun_if_address_is_in_use
 from nanotron import distributed as dist
 from nanotron.optim import NamedOptimizer, ZeroDistributedOptimizer
 from nanotron.optim.zero import SlicedFlatTensor
@@ -18,6 +17,7 @@ from nanotron.parallel.tensor_parallel import nn
 from nanotron.parallel.tensor_parallel.enum import TensorParallelLinearMode
 from nanotron.parallel.tied_parameters import sync_tied_weights_gradients
 from nanotron.random import RandomStates, branch_random_state, get_current_random_state, get_synced_random_state
+from nanotron.testing.utils import available_gpus, init_distributed, rerun_if_address_is_in_use
 from torch import nn as torch_nn
 from torch.nn.parallel import DistributedDataParallel
 
@@ -276,7 +276,10 @@ def _test_zero_optimizer_with_tp(
                 for local_global_slices_pair in sharded_info.local_global_slices_pairs:
                     local_slices = local_global_slices_pair.local_slices
                     global_slices = local_global_slices_pair.global_slices
-                    param[local_slices].copy_(ref_param[global_slices])
+
+                    with torch.no_grad():
+                        # param.data[local_slices].copy_(ref_param.data[global_slices])
+                        param[local_slices].copy_(ref_param[global_slices])
             else:
                 param.copy_(ref_param)
 

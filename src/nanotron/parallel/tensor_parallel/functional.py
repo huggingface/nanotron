@@ -19,6 +19,8 @@ import torch
 from torch.nn import functional as F
 
 import nanotron.distributed as dist
+from nanotron.fp8.linear import FP8LinearMeta
+from nanotron.fp8.recipe import FP8LinearRecipe
 from nanotron.parallel.tensor_parallel.distributed_differentiable_primitives import (
     differentiable_all_reduce_sum,
     differentiable_identity,
@@ -202,7 +204,10 @@ class _ColumnLinearAsyncCommunication(torch.autograd.Function):
                     )
                 else:
                     torch.addmm(
-                        input=bias[None, :],
+                        # NOTE(xrsrke): if keep bias[None, :], then we got
+                        # RuntimeError: Attempted to make a tensor into a differentiable view,
+                        # but the tensor already had autograd metadata associated with it
+                        input=bias.view(1, -1),
                         mat1=tensor.view(first_dims, hidden_size),
                         mat2=weight.t(),
                         out=same_device_shard.view(first_dims, output_size),
@@ -234,7 +239,8 @@ class _ColumnLinearAsyncCommunication(torch.autograd.Function):
                         )
                     else:
                         torch.addmm(
-                            input=bias[None, :],
+                            # input=bias[None, :],
+                            input=bias.view(1, -1),
                             mat1=gathered_tensor[: sharded_batch_size * current_rank].view(first_dims, hidden_size),
                             mat2=weight.t(),
                             out=before_shard.view(first_dims, output_size),
@@ -251,7 +257,8 @@ class _ColumnLinearAsyncCommunication(torch.autograd.Function):
                         )
                     else:
                         torch.addmm(
-                            input=bias[None, :],
+                            # input=bias[None, :],
+                            input=bias.view(1, -1),
                             mat1=gathered_tensor[sharded_batch_size * (current_rank + 1) :].view(
                                 first_dims, hidden_size
                             ),
@@ -436,18 +443,30 @@ def column_linear(
     tp_mode: TensorParallelLinearMode,
     async_communication: bool,
     tp_recompute_allgather: bool = True,
+    metadatas: Optional[FP8LinearMeta] = None,
+    name: Optional[str] = None,
+    recipe: Optional[FP8LinearRecipe] = None,
 ):
     if async_communication:
         return _ColumnLinearAsyncCommunication.apply(input, weight, bias, group, tp_mode, tp_recompute_allgather)
 
     if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
+        import nanotron.fp8.functional as fp8_functional
+        from nanotron.fp8.tensor import FP8Tensor
+
         input = differentiable_identity(input, group=group)
-        return F.linear(input, weight, bias)
-    if tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
+
+        if isinstance(weight.data, FP8Tensor):
+            assert recipe is not None, "recipe must be provided for column_linear"
+            return fp8_functional.linear(input, weight, bias, metadatas=metadatas, recipe=recipe, name=name)
+        else:
+            return F.linear(input, weight, bias)
+    elif tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
         return _ColumnLinearNoAsyncCommunicationReduceScatterMode.apply(
             input, weight, bias, group, tp_recompute_allgather
         )
-    raise ValueError(f"Got unexpected mode: {tp_mode}.")
+    else:
+        raise ValueError(f"Got unexpected mode: {tp_mode}.")
 
 
 class _RowLinearAsyncCommunication(torch.autograd.Function):
@@ -588,11 +607,21 @@ def row_linear(
     group: dist.ProcessGroup,
     tp_mode: TensorParallelLinearMode,
     async_communication: bool,
+    metadatas: Optional[FP8LinearMeta] = None,
+    recipe: Optional[FP8LinearRecipe] = None,
+    name: Optional[str] = None,
 ):
     if async_communication:
         return _RowLinearAsyncCommunication.apply(input, weight, bias, group, tp_mode)
 
-    out = F.linear(input, weight, bias)
+    import nanotron.fp8.functional as fp8_functional
+    from nanotron.fp8.tensor import FP8Tensor
+
+    if isinstance(weight.data, FP8Tensor):
+        assert recipe is not None, "recipe must be provided for row_linear"
+        out = fp8_functional.linear(input, weight, bias, metadatas=metadatas, recipe=recipe, name=name)
+    else:
+        out = F.linear(input, weight, bias)
 
     if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
         out = differentiable_all_reduce_sum(out, group=group)

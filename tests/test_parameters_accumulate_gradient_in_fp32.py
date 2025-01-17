@@ -5,7 +5,6 @@ import pytest
 import torch
 from helpers.dummy import DummyModel, dummy_infinite_data_loader
 from helpers.exception import assert_fail_except_rank_with, timeout_after
-from helpers.utils import available_gpus, init_distributed, rerun_if_address_is_in_use
 from nanotron.models import init_on_device_and_dtype
 from nanotron.optim import ZeroDistributedOptimizer
 from nanotron.optim.gradient_accumulator import FP32GradBucketManager, FP32GradientAccumulator, get_fp32_accum_hook
@@ -29,6 +28,7 @@ from nanotron.parallel.tied_parameters import (
 )
 from nanotron.parallel.utils import initial_sync
 from nanotron.sanity_checks import assert_tensor_synced_across_pg
+from nanotron.testing.utils import available_gpus, init_distributed, rerun_if_address_is_in_use
 from nanotron.utils import ContextManagers
 from torch import nn
 
@@ -55,6 +55,11 @@ def test_gradient_promoting_in_fp32(half_precision: torch.dtype):
     if model.weight.grad is not None:
         # We check that it's zero
         torch.testing.assert_close(model.weight.grad, torch.zeros_like(model.weight.grad), atol=1e-6, rtol=1e-7)
+
+
+# TODO: test gradient accumulator skips creating master weights for fp32 parameters
+# TODO: test gradient accumulator creates master weights for FP8 parameter
+# TODO: test the number of master weights created for an fp8 model
 
 
 @pytest.mark.parametrize("half_precision", [torch.float16, torch.bfloat16])
@@ -257,7 +262,7 @@ def _test_ddp_with_grad_accum_in_fp32(
         accumulator.backward(loss_fp32_accum)
 
         for name, param in model_ddp_fp32_accum.named_parameters():
-            # Check that half grads has been set to None in sync step, to avoid it being uncorrectly used
+            # Check that half grads has been set to None in sync step, to avoid it being incorrectly used
             half_grad = param.grad
             assert half_grad is None, f"{half_grad} != None"
 

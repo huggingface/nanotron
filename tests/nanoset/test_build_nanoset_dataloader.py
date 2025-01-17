@@ -8,7 +8,6 @@ sys.path.append(str(package_path))
 
 import numpy as np
 import pytest
-from helpers.context import TestContext
 from helpers.data import (
     assert_batch_dataloader,
     assert_nanoset_sync_across_all_ranks,
@@ -17,11 +16,17 @@ from helpers.data import (
     create_dummy_json_dataset,
     preprocess_dummy_dataset,
 )
-from helpers.utils import available_gpus, get_all_3d_configurations, init_distributed, rerun_if_address_is_in_use
 from nanotron.data.dataloader_builder import build_nanoset_dataloader
 from nanotron.data.nanoset import Nanoset
 from nanotron.data.utils import count_dataset_indexes, normalize
 from nanotron.parallel import ParallelContext
+from nanotron.testing.utils import (
+    TestContext,
+    available_gpus,
+    get_all_3d_configurations,
+    init_distributed,
+    rerun_if_address_is_in_use,
+)
 from nanotron.utils import main_rank_first
 from transformers import AutoTokenizer
 

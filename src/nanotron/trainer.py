@@ -37,6 +37,8 @@ from nanotron.config import (
 )
 from nanotron.constants import MODEL_CONFIG_FILE_NAME
 from nanotron.dataloader import sanity_check_dataloader
+from nanotron.fp8.tensor import FP8Tensor
+from nanotron.fp8.utils import convert_model_to_fp8
 from nanotron.helpers import (
     _vocab_size_with_padding,
     compute_remain_train_steps_of_a_data_stage_from_ckp,
@@ -113,6 +115,15 @@ except ImportError:
     wandb = None
 
 
+def print_sanity_params(model):
+    for n, p in model.named_parameters():
+        print(
+            n,
+            p.__class__.__name__,
+            f"p.requires_grad: {p.requires_grad}, p.dtype: {p.dtype}, p.data.dtype: {p.data.dtype}",
+        )
+
+
 class DistributedTrainer:
     def __init__(
         self,
@@ -135,6 +146,11 @@ class DistributedTrainer:
         self.config = get_config_from_file(
             config_or_config_file, config_class=config_class, model_config_class=model_config_class
         )
+        assert (
+            self.config.model.dtype == torch.int8 and self.config.optimizer.accumulate_grad_in_fp32 is True
+        ), "FP8 training must enable gradient accumulation"
+        from nanotron import constants
+
         self.model_config = self.config.model.model_config
         if model_class is not None:
             CONFIG_TO_MODEL_CLASS[self.model_config.__class__.__name__] = model_class
@@ -152,6 +168,7 @@ class DistributedTrainer:
         )
 
         self.pre_init()
+        self.init_checkpoint_path = parse_ckpt_path(config=self.config, parallel_context=self.parallel_context)
 
         # Set log levels
         set_ranks_logging_level(parallel_context=self.parallel_context, logging_config=self.config.logging)
@@ -183,6 +200,36 @@ class DistributedTrainer:
             else ParametrizationMethod.STANDARD
         )
 
+        from nanotron.fp8.utils import find_fp8_config_by_module_name, get_leaf_modules
+
+        for module_name, module in get_leaf_modules(self.model):
+            if any(p.numel() > 0 for p in module.parameters()) is False:
+                continue
+
+            recipe = find_fp8_config_by_module_name(module_name, self.config)
+            if recipe is not None:
+                module.weight._is_future_fp8 = True
+
+        # NOTE: make a copy of FP8 parameter on CPU
+        # from nanotron import constants
+        for n, p in self.model.named_parameters():
+            if hasattr(p, "_is_future_fp8") and p._is_future_fp8 is True:
+                constants.CPU_WEIGHTS[n.replace("module.", "")] = p.data.cpu().clone()
+
+        # NOTE: if we cast model to FP8 before wrapping it with NanotronParameter,
+        # then we can create a NanotronParameter that has dtype=[torch.int8, torch.uint8]
+        # which then it allows us to assign [torch.int8, torch.uint8] gradients to the parameter
+        # otherwise, it would raise:
+        # "attempting to assign a gradient with dtype
+        # 'unsigned char' to a tensor with dtype 'float'.
+        # Please ensure that the gradient and the tensor have the same dtype"
+        # NOTE: the reason that we cast after initializing the optimizer is that
+        # we want to create some master weights for fp8 parameters, before quantizing them
+        if self.config.model.dtype == torch.int8:
+            self.model = convert_model_to_fp8(self.model, config=self.config)
+
+        # NOTE: convert non-fp8 parameters to the residual stream's dtype
+
         # Init optimizer
         self.optimizer, self.grad_accumulator = init_optimizer_and_grad_accumulator(
             parametrization_method=parametrization_method,
@@ -190,6 +237,11 @@ class DistributedTrainer:
             optimizer_args=self.config.optimizer,
             parallel_context=self.parallel_context,
         )
+        # NOTE: quantize optimizer states
+        # add hook to dequantize optimizer states before .step()
+        # add hook step to recompute lr
+        # add post_step hook to quantize optimizer states
+
         if self.init_checkpoint_path is not None and self.config.checkpoints.load_optimizer:
             load_optimizer(
                 optimizer=self.optimizer,
@@ -260,7 +312,7 @@ class DistributedTrainer:
         self.post_init()
 
     def pre_init(self):
-        self.init_checkpoint_path = parse_ckpt_path(config=self.config, parallel_context=self.parallel_context)
+        pass
 
     def post_init(self):
         # S3 Mover and save initial state
@@ -528,10 +580,11 @@ class DistributedTrainer:
         # Clip gradients
         if self.config.optimizer.clip_grad is not None:
             # Unwrap DDP
+            # NOTE: FP8 parameter's requires_grad is set to False by default
             named_parameters = [
                 (name, param)
                 for name, param in self.unwrapped_model.get_named_params_with_correct_tied()
-                if param.requires_grad
+                if param.requires_grad or isinstance(param.data, FP8Tensor)
             ]
             self.grad_norm_unclipped = clip_grad_norm(
                 mp_pg=self.parallel_context.mp_pg,
@@ -539,6 +592,10 @@ class DistributedTrainer:
                 grad_accumulator=self.grad_accumulator,
                 max_norm=self.config.optimizer.clip_grad,
             )
+
+        before_optim_step_sanity_checks(
+            self.config, self.parallel_context, self.unwrapped_model, self.grad_accumulator, self.optimizer
+        )
 
         # Compute DP average loss and overlap with optimizer step
         if isinstance(outputs[0]["loss"], torch.Tensor):
@@ -552,6 +609,7 @@ class DistributedTrainer:
             loss_avg = None
             handle = None
 
+        # NOTE: sanity check that parameters has gradient
         # Move optimizer states back to GPU before optimizer step
         if (
             self.init_checkpoint_path is not None
@@ -706,6 +764,7 @@ class DistributedTrainer:
 
         model = self._init_model_instance()
         model = self._load_model_checkpoint(model)
+
         return model
 
     def _init_model_instance(self) -> NanotronModel:
@@ -787,10 +846,11 @@ class DistributedTrainer:
             config.optimizer.accumulate_grad_in_fp32 and config.optimizer.zero_stage > 0
         )
 
+        model_init_dtype = config.fp8.resid_dtype if config.model.dtype == torch.int8 else config.model.dtype
         # Build model and set pp ranks
         model = build_model(
             parallel_context=parallel_context,
-            dtype=config.model.dtype,
+            dtype=model_init_dtype,
             target_pp_ranks=target_pp_ranks,
             model_builder=model_builder,
         )
@@ -844,6 +904,16 @@ class DistributedTrainer:
             # Check that the model has at least one grad. Necessary for DDP
             check_model_has_grad(model=model, parallel_context=parallel_context)
             # TODO @thomasw21: DDP doesn't support broadcasting complex buffers (and we don't really need that broadcasting anyway)
+            # if self.config.model.dtype == torch.int8:
+            #     raise NotImplementedError
+            #     model = FP8DistributedDataParallel(model, self.parallel_context)
+            # else:
+            #     model = DistributedDataParallel(
+            #         model,
+            #         process_group=parallel_context.dp_pg,
+            #         broadcast_buffers=False,
+            #         bucket_cap_mb=config.model.ddp_bucket_cap_mb,
+            #     )
             model = DistributedDataParallel(
                 model,
                 process_group=parallel_context.dp_pg,

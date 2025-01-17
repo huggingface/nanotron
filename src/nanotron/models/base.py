@@ -71,7 +71,7 @@ class NanotronModel(nn.Module, metaclass=ABCMeta):
         Example for GPT2 model: ["model.token_position_embeddings.pp_block.token_embedding.weight", "model.lm_head.pp_block.weight"]
         """
         return []
-    
+
     def get_named_params_without_weight_decay(self) -> List[str]:
         """Return a list of named parameters that should not have weight decay applied to them."""
         return []
@@ -237,11 +237,15 @@ def build_model(
     return model
 
 
+old_register_parameter = nn.Module.register_parameter
+old_register_buffer = nn.Module.register_buffer
+
+
 # TODO @thomasw21: Should this option override user defined options? Maybe not ... right now it does.
 @contextmanager
 def init_on_device_and_dtype(
     device: torch.device = torch.device("cpu"),
-    dtype: torch.dtype = torch.float,
+    dtype: torch.dtype = torch.float32,
 ):
     """
     A context manager under which models are initialized with all parameters on the specified device.

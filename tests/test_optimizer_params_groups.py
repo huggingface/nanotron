@@ -3,13 +3,13 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-from helpers.utils import available_gpus, init_distributed, rerun_if_address_is_in_use
 from nanotron.optim.gradient_accumulator import FP32GradientAccumulator
 from nanotron.optim.named_optimizer import NamedOptimizer
 from nanotron.optim.optimizer_from_gradient_accumulator import OptimizerFromGradientAccumulator
 from nanotron.parallel.context import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter
 from nanotron.random import set_random_seed
+from nanotron.testing.utils import available_gpus, init_distributed, rerun_if_address_is_in_use
 
 
 class DummyModel(nn.Module):

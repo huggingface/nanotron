@@ -1,8 +1,32 @@
 import torch
 from helpers.exception import assert_fail_with
 from nanotron.models.base import DTypeInvariantTensor, init_on_device_and_dtype
+
+# from nanotron.testing.utils import TestContext
+from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter
+from nanotron.parallel.sharded_parameters import SplitConfig, create_sharded_parameter_from_config
+from nanotron.testing.utils import init_distributed, rerun_if_address_is_in_use
 from torch import nn
+
+
+@rerun_if_address_is_in_use()
+def test_get_parameter_data():
+    init_distributed(tp=2, dp=1, pp=1)(_test_get_parameter_data)()
+
+
+def _test_get_parameter_data(parallel_context: ParallelContext):
+    param = torch.nn.Parameter(torch.randn(16, 64))
+    split_config = SplitConfig(
+        split_dim=0,
+        contiguous_chunks=(8, 8),
+    )
+    param = create_sharded_parameter_from_config(parameter=param, pg=parallel_context.tp_pg, split_config=split_config)
+
+    new_data = torch.randn(16, 64)
+    param.data = new_data
+
+    assert param.data is new_data
 
 
 def test_nanotron_parameter_does_not_override_some_parameter_variable():
@@ -58,3 +82,48 @@ def test_register_buffer_does_not_update_uncastable_tensor():
 
         # Test that dtype has not been modified
         assert module.buffer.dtype is old_dtype
+
+
+@rerun_if_address_is_in_use()
+def test_create_param_that_share_metadata():
+    init_distributed(tp=2, dp=1, pp=1)(_test_create_param_that_share_metadata)()
+
+
+def _test_create_param_that_share_metadata(parallel_context: ParallelContext):
+    param = torch.nn.Parameter(torch.randn(16, 64))
+    split_config = SplitConfig(
+        split_dim=0,
+        contiguous_chunks=(8, 8),
+    )
+    orig_param = create_sharded_parameter_from_config(
+        parameter=param, pg=parallel_context.tp_pg, split_config=split_config
+    )
+    new_param = NanotronParameter.create_param_that_share_metadata(torch.randn(16, 64), param=orig_param)
+
+    new_param_metadata = getattr(new_param, NanotronParameter.NANOTRON_PARAMETER_METADATA_ATTRIBUTE_NAME)
+    orig_param_metadata = getattr(orig_param, NanotronParameter.NANOTRON_PARAMETER_METADATA_ATTRIBUTE_NAME)
+
+    for (p1_k, p1_v), (p2_k, p2_v) in zip(new_param_metadata.items(), orig_param_metadata.items()):
+        assert p1_k == p2_k
+        assert p1_v == p2_v
+
+    parallel_context.destroy()
+
+
+@rerun_if_address_is_in_use()
+def test_slice_param():
+    init_distributed(tp=2, dp=1, pp=1)(_test_slice_param)()
+
+
+def _test_slice_param(parallel_context: ParallelContext):
+    param = torch.nn.Parameter(torch.randn(16, 64))
+    split_config = SplitConfig(
+        split_dim=0,
+        contiguous_chunks=(8, 8),
+    )
+    param = create_sharded_parameter_from_config(parameter=param, pg=parallel_context.tp_pg, split_config=split_config)
+
+    sliced = param[2:4, 4:6]
+
+    assert isinstance(sliced, torch.Tensor)
+    assert sliced.shape == (2, 2)

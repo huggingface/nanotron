@@ -1,7 +1,9 @@
 import dataclasses
-from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
+from copy import deepcopy
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
 
 import torch
+from functorch.dim import tree_map
 from torch import nn
 
 from nanotron import distributed as dist
@@ -93,7 +95,7 @@ class ShardedInfo:
 
 
 class NanotronParameter(nn.Parameter):
-    """Base class for all parameters in Nanotronmodels
+    """Base class for all parameters in Nanotron models
 
     A NanotronParameter can have specific properties:
      - sharded: the parameter is considered to be `sharded` across multiple devices
@@ -107,12 +109,37 @@ class NanotronParameter(nn.Parameter):
         - Even if some weights don't need their grads to be reduced, it's still useful for them to be marked as tied. For example, current serialization format requires to mark them correctly.
     """
 
+    # __torch_function__ = torch._C._disabled_torch_function_impl
+
     NANOTRON_PARAMETER_METADATA_ATTRIBUTE_NAME = "__nanotron_metadata__"
     NANOTRON_PARAMETER_METADATA_TIED_KEY = "tied"
     NANOTRON_PARAMETER_METADATA_SHARDED_KEY = "sharded"
 
     def __new__(cls, tensor: torch.Tensor, requires_grad: bool = True):
-        param = nn.Parameter.__new__(cls, data=tensor.data.detach(), requires_grad=requires_grad)
+        assert tensor.data.is_floating_point() or tensor.data.requires_grad is False
+
+        if tensor.data.is_floating_point():
+            if tensor.__class__ == nn.Parameter:
+                data = tensor.data
+                data.requires_grad = requires_grad
+            else:
+                data = tensor
+        else:
+            # NOTE: FP8 tensor has int dtype, you can't .detach() an integer tensor!
+            data = tensor.data
+            requires_grad = False
+
+        # NOTE: this somehow makes the param has the methods of NanotronParameter
+        param = nn.Parameter._make_wrapper_subclass(
+            cls,
+            size=data.size(),
+            strides=data.stride(),
+            storage_offset=data.storage_offset(),
+            dtype=data.dtype,
+            layout=data.layout,
+            device=data.device,
+            requires_grad=requires_grad,
+        )
 
         if isinstance(tensor, NanotronParameter):
             # Check that we don't inherit a weird class
@@ -127,6 +154,13 @@ class NanotronParameter(nn.Parameter):
             setattr(param, cls.NANOTRON_PARAMETER_METADATA_ATTRIBUTE_NAME, {})
 
         return param
+
+    def __init__(self, tensor: Union[torch.Tensor, "FP8Tensor"]):
+        self._data = tensor
+        # NOTE: whether we will quantize this parameter
+        # because we need to know a parameter will be in fp8 or not
+        # so we create master weights of the fp32 parameters before quantizing
+        self._is_future_fp8 = False
 
     def _set_metadata(self, key: str, value: Any):
         metadata = getattr(self, self.NANOTRON_PARAMETER_METADATA_ATTRIBUTE_NAME)
@@ -181,11 +215,92 @@ class NanotronParameter(nn.Parameter):
             self.NANOTRON_PARAMETER_METADATA_SHARDED_KEY
         ]
 
+    @classmethod
+    def create_param_that_share_metadata(cls, tensor: torch.Tensor, param: Union[nn.Parameter, "NanotronParameter"]):
+        """Create a new parameter that shares the metadata and hash of the given parameter"""
+        # TODO(xrsrke): support deepcopy for tied parameter's metadata, because it includes an all-reduce
+        # which if we do deepcopy, it raises an error
+        metadata = deepcopy(getattr(param, NanotronParameter.NANOTRON_PARAMETER_METADATA_ATTRIBUTE_NAME, {}))
+
+        # Copy metadata to the new parameter
+        new_param = NanotronParameter(tensor)
+        setattr(new_param, NanotronParameter.NANOTRON_PARAMETER_METADATA_ATTRIBUTE_NAME, metadata)
+
+        # TODO(xrsrke): sync all the attributes in the param
+        # to the new parameter? in case, user sets some attributes
+        # then the new parameter is kinda lost it
+        return new_param
+
     @property
     def is_sharded(self) -> bool:
         return self.NANOTRON_PARAMETER_METADATA_SHARDED_KEY in getattr(
             self, self.NANOTRON_PARAMETER_METADATA_ATTRIBUTE_NAME
         )
+
+    def __repr__(self):
+        # return f"NanotronParameter({super().__repr__()})"
+        return "NanotronParameter()"
+
+    @property
+    def data(self):
+        return self._data
+
+    @data.setter
+    def data(self, data):
+        self._data = data
+
+    @classmethod
+    def __torch_dispatch__(cls, func, types, args=(), kwargs=None):
+        from nanotron.fp8.tensor import FP8Tensor
+
+        def unwrap(e):
+            return e._data if e.__class__ == NanotronParameter else e
+
+        def wrap(e):
+            if not e.__class__ == NanotronParameter and e.__class__ in [torch.Tensor, FP8Tensor]:
+                return cls(e)
+            else:
+                return e
+
+        unwrapped_args = tree_map(unwrap, args)
+        unwrapped_kwargs = tree_map(unwrap, kwargs)
+
+        OPS_THAT_RETURN_ORIGINAL_TENSOR: List[Union[Callable, str]] = [
+            # NOTE: transpose operation
+            torch.ops.aten.t.default,
+            torch.ops.aten.view.default,
+            # NOTE: torch.ops.attn.slice.default doesn't exist
+            # so we use str(op) instead
+            "aten.slice.Tensor",
+            # torch.ops.attn.slice.default, # NOTE: param[local_slices]
+            torch.ops.aten.detach.default,
+            # NOTE: F.embedding()
+            torch.ops.aten.embedding.default,
+            # NOTE: F.layer_norm()
+            torch.ops.aten.native_layer_norm.default,
+            torch.ops.aten.native_layer_norm_backward.default,
+            torch.ops.aten.native_layer_norm_backward.default,
+            # NOTE: nn.Linear
+            torch.ops.aten.addmm.default,
+            torch.ops.aten.linear.default,
+            # NOTE: x.to(device)
+            torch.ops.aten._to_copy.default,
+        ]
+
+        if func == torch.ops.aten.detach.default and unwrapped_args[0].__class__ == FP8Tensor:
+            # NOTE: this is for parameter.data or parameter.detach()
+            # NOTE: because we already retrieved the data from unwrap, we don't need to do it again
+            data = unwrapped_args[0]
+            return data
+        else:
+            outputs = func(*unwrapped_args, **unwrapped_kwargs)
+
+            if any(func == x for x in OPS_THAT_RETURN_ORIGINAL_TENSOR if not isinstance(x, str)) or any(
+                str(func) == x for x in OPS_THAT_RETURN_ORIGINAL_TENSOR if isinstance(x, str)
+            ):
+                return outputs
+            else:
+                return tree_map(wrap, outputs)
 
 
 def sanity_check(root_module: nn.Module):
