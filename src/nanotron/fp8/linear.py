@@ -1,8 +1,8 @@
+import warnings
 from dataclasses import dataclass
 from typing import Optional, Tuple, Union, cast
 
 import torch
-import transformer_engine as te  # noqa
 from torch import nn
 
 from nanotron.fp8.constants import FP8LM_LINEAR_RECIPE
@@ -11,6 +11,12 @@ from nanotron.fp8.meta import FP8Meta
 from nanotron.fp8.recipe import FP8LinearRecipe
 from nanotron.fp8.tensor import FP8Tensor
 from nanotron.parallel.parameters import NanotronParameter
+
+try:
+    import transformer_engine as te  # noqa
+    import transformer_engine_torch as tex  # noqa
+except ImportError:
+    warnings.warn("Please install Transformer engine for FP8 training!")
 
 
 @dataclass

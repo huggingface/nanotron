@@ -9,7 +9,6 @@ from torch.distributed import GradBucket
 
 import nanotron.distributed as dist
 from nanotron import logging
-from nanotron.fp8.tensor import FP8Tensor
 from nanotron.parallel.parameters import NanotronParameter
 from nanotron.utils import get_untyped_storage, tensor_from_untyped_storage
 
@@ -72,6 +71,8 @@ class FP32GradientAccumulator(GradientAccumulator):
         Note: We use `grad_buckets_named_params` to keep grad buffers for all parameters even when Zero 1 is used. This is because we need to accumulate gradients for all parameters without having to reduce in every accumulation step.
         Note: We make a fp32 copy of parameters during initialization. Therefore parameters need to be initialized or loaded from a checkpoint before constructing this gradient accumulator
         """
+        from nanotron.fp8.tensor import FP8Tensor
+
         if grad_buckets_named_params is None:
             named_parameters = list(named_parameters)
             grad_buckets_named_params = named_parameters
