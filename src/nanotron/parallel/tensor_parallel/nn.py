@@ -52,7 +52,7 @@ class _BaseTensorParallelColumnLinear:
         mode: TensorParallelLinearMode,
         bias: bool = True,
         device: Optional[torch.device] = None,
-        dtype: torch.dtype = None,
+        dtype: torch.dtype = torch.float32,
         async_communication: bool = False,
         contiguous_chunks: Optional[Tuple[int, ...]] = None,
         tp_recompute_allgather: bool = True,
@@ -118,10 +118,9 @@ class _BaseTensorParallelRowLinear:
         mode: TensorParallelLinearMode,
         bias: bool = True,
         device: Optional[torch.device] = None,
-        dtype: torch.dtype = None,
+        dtype: torch.dtype = torch.float32,
         async_communication: bool = False,
         contiguous_chunks: Optional[Tuple[int, ...]] = None,
-        name: Optional[str] = None,
         # TODO(xrsrke): remove this from base class
         recipe: Optional[FP8LinearRecipe] = None,
     ):
@@ -132,7 +131,6 @@ class _BaseTensorParallelRowLinear:
 
         self.in_features = in_features // self.world_size
         self.out_features = out_features
-        self.name = name
 
         # No need to shard the bias term, only rank 0 would have it
         bias = dist.get_rank(self.pg) == 0 and bias
@@ -229,7 +227,6 @@ class FP8TensorParallelColumnLinear(_BaseTensorParallelColumnLinear, FP8Linear):
             tp_mode=self.mode,
             async_communication=self.async_communication,
             metadatas=self.metadatas,
-            name=self.name,
             recipe=self.recipe,
         )
 
@@ -254,7 +251,6 @@ class FP8TensorParallelRowLinear(_BaseTensorParallelRowLinear, FP8Linear):
             tp_mode=self.mode,
             async_communication=self.async_communication,
             metadatas=self.metadatas,
-            name=self.name,
             recipe=self.recipe,
         )
 

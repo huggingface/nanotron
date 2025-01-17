@@ -232,7 +232,7 @@ class DistributedTrainer:
         # Please ensure that the gradient and the tensor have the same dtype"
         # NOTE: the reason that we cast after initializing the optimizer is that
         # we want to create some master weights for fp8 parameters, before quantizing them
-        self.model = convert_model_to_fp8(self.model, config=constants.CONFIG.fp8)
+        self.model = convert_model_to_fp8(self.model, config=self.config.fp8)
 
         # NOTE: convert non-fp8 parameters to the residual stream's dtype
 
@@ -240,7 +240,6 @@ class DistributedTrainer:
         self.optimizer, self.grad_accumulator = init_optimizer_and_grad_accumulator(
             parametrization_method=parametrization_method,
             model=self.model,
-            master_weight_dtype=self.config.optimizer.master_weight_dtype,
             optimizer_args=self.config.optimizer,
             parallel_context=self.parallel_context,
         )
@@ -248,8 +247,6 @@ class DistributedTrainer:
         # add hook to dequantize optimizer states before .step()
         # add hook step to recompute lr
         # add post_step hook to quantize optimizer states
-
-        assert 1 == 1
 
         if self.init_checkpoint_path is not None and self.config.checkpoints.load_optimizer:
             load_optimizer(

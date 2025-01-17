@@ -161,6 +161,8 @@ class FP32GradientAccumulator(GradientAccumulator):
         self.fp32_grads_allreduce_handle: Optional[torch.futures.Future] = None
 
     def _is_not_required_master_weights(self, param: NanotronParameter):
+        from nanotron.fp8.tensor import FP8Tensor
+
         # NOTE: There are two scenarios that we don't create master weights
         # Scenario 1: Scthe first is if a parameter don't require grad
         # Scenario 2: In case of fp8 training, some non-fp8 parameters are in float32
@@ -211,7 +213,6 @@ class FP32GradientAccumulator(GradientAccumulator):
     def _is_accumulate_param(cls, param: NanotronParameter) -> bool:
         from nanotron.fp8.tensor import FP8Tensor
 
-        # return param.requires_grad or param.data.__class__ == FP8Tensor
         return param.requires_grad or isinstance(param.data, FP8Tensor)
 
     @staticmethod
@@ -278,7 +279,7 @@ class FP32GradientAccumulator(GradientAccumulator):
     def _accumulate_grad(self, name: str, half_param: NanotronParameter) -> None:
         """Accumulate grad in fp32 and set the fp32 grad to the fp32 grad buffer, so that optimizer can update fp32 weights afterwards"""
         assert half_param.grad is not None, f"Expected param {name} to have gradient."
-        from nanotron.fp8.tensor import convert_tensor_from_fp8
+        from nanotron.fp8.tensor import FP8Tensor, convert_tensor_from_fp8
 
         if isinstance(half_param.data, FP8Tensor):
             grad = convert_tensor_from_fp8(half_param.grad, half_param.grad.fp8_meta, torch.float32)
@@ -331,6 +332,8 @@ class FP32GradientAccumulator(GradientAccumulator):
 
     @torch.inference_mode()
     def step(self):
+        from nanotron.fp8.tensor import FP8Tensor
+
         """Updates fp32 weights from fp32 grads.
         In case where OptimizerFromGradientAccumulator and gradient_accumulator_builder are using different parameters (e.g ZeRO).
         We need to update only the parameters that were updated by the optimizer.

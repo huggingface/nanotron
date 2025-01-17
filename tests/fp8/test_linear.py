@@ -3,7 +3,7 @@ from functools import partial, reduce
 
 import pytest
 import torch
-from nanotron.fp8.constants import FP8_DTYPES, QTYPE_TO_DTYPE
+from nanotron.fp8.constants import FP8_DTYPES, FP8LM_LINEAR_RECIPE, QTYPE_TO_DTYPE
 from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.linear import FP8Linear, FP8LinearMeta
 from nanotron.fp8.recipe import FP8LinearRecipe
@@ -18,7 +18,10 @@ from torch import nn
 @pytest.mark.parametrize("accum_qtype", [DTypes.KFLOAT32, DTypes.KFLOAT16])
 @pytest.mark.parametrize("bias", [True, False])
 def test_create_an_fp8_linear_parameters(bias, accum_qtype):
-    fp8_linear = FP8Linear(64, 64, bias=bias, device="cuda", accum_qtype=accum_qtype)
+    recipe = deepcopy(FP8LM_LINEAR_RECIPE)
+    recipe.accum_dtype = accum_qtype
+
+    fp8_linear = FP8Linear(64, 64, bias=bias, device="cuda", recipe=recipe)
 
     assert isinstance(fp8_linear.weight, NanotronParameter)
     if bias:
@@ -66,6 +69,8 @@ def test_create_an_fp8_linear_parameters(bias, accum_qtype):
 @pytest.mark.parametrize("accum_qtype", [torch.bfloat16])
 def test_fp8_linear_forward_pass(n_layers, input, is_bias, accum_qtype):
     HIDDEN_SIZE = 64
+    recipe = deepcopy(FP8LM_LINEAR_RECIPE)
+    recipe.accum_dtype = accum_qtype
 
     ref_input = input.detach().clone()
     ref_linear = nn.Sequential(
@@ -76,7 +81,8 @@ def test_fp8_linear_forward_pass(n_layers, input, is_bias, accum_qtype):
         ]
     )
 
-    fp8_linear = convert_to_fp8_module(deepcopy(ref_linear), accum_qtype)
+    # fp8_linear = convert_to_fp8_module(deepcopy(ref_linear), accum_qtype)
+    fp8_linear = convert_to_fp8_module(deepcopy(ref_linear), recipe.accum_dtype)
 
     ref_output = ref_linear(ref_input)
     output = fp8_linear(input)
@@ -115,8 +121,9 @@ def test_fp8_linear_forward_pass(n_layers, input, is_bias, accum_qtype):
 @pytest.mark.parametrize("accum_qtype", [torch.bfloat16])
 def test_fp8_linear_backward_pass(n_layers, input, accum_qtype):
     is_bias = False
-
     HIDDEN_SIZE = 64
+    recipe = deepcopy(FP8LM_LINEAR_RECIPE)
+    recipe.accum_dtype = accum_qtype
 
     ref_input = input.detach().clone().requires_grad_(True)
     # ref_linear = nn.Linear(HIDDEN_SIZE, INTERDIM_SIZE, device="cuda", dtype=torch.float32)
@@ -132,7 +139,8 @@ def test_fp8_linear_backward_pass(n_layers, input, accum_qtype):
     # trunc_normal_(ref_linear.weight, std=math.sqrt(1 / (HIDDEN_SIZE)))
 
     # fp8_linear = convert_linear_to_fp8(deepcopy(ref_linear), accum_qtype)
-    fp8_linear = convert_to_fp8_module(deepcopy(ref_linear), accum_qtype)
+    # fp8_linear = convert_to_fp8_module(deepcopy(ref_linear), accum_qtype)
+    fp8_linear = convert_to_fp8_module(deepcopy(ref_linear), recipe)
 
     ref_linear(ref_input).sum().backward()
     fp8_linear(input).sum().backward()

@@ -294,7 +294,6 @@ def merge_named_param_groups(
 def init_optimizer_and_grad_accumulator(
     parametrization_method: ParametrizationMethod,
     model: nn.Module,
-    master_weight_dtype: torch.dtype,
     optimizer_args: OptimizerArgs,
     parallel_context: ParallelContext,
 ) -> Tuple[BaseOptimizer, GradientAccumulator]:
@@ -394,7 +393,6 @@ def init_optimizer_and_grad_accumulator(
                 gradient_accumulator_builder=lambda named_params: FP32GradientAccumulator(
                     named_parameters=named_params,
                     grad_buckets_named_params=named_parameters,
-                    master_dtype=master_weight_dtype,
                 ),
                 named_params_or_groups=named_param_groups,
                 optimizer_builder=basic_optimizer_builder,

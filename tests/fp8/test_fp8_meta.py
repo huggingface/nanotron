@@ -1,9 +1,15 @@
+import warnings
+
 import pytest
 import torch
-import transformer_engine as te  # noqa
-import transformer_engine_torch as tex
 from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.meta import FP8Meta
+
+try:
+    import transformer_engine as te  # noqa
+    import transformer_engine_torch as tex  # noqa
+except ImportError:
+    warnings.warn("Please install Transformer engine for FP8 training!")
 
 
 @pytest.mark.parametrize("dtype", [DTypes.FP8E4M3, DTypes.FP8E5M2, DTypes.KFLOAT16])

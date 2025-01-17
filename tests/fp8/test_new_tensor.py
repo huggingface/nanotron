@@ -1,3 +1,4 @@
+import warnings
 from copy import deepcopy
 from typing import cast
 
@@ -14,6 +15,12 @@ from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.meta import FP8Meta
 from nanotron.fp8.tensor import FP8Tensor, FP16Tensor, convert_tensor_from_fp8, convert_tensor_from_fp16
 from nanotron.testing.utils import TestContext
+
+try:
+    import transformer_engine as te  # noqa
+    import transformer_engine_torch as tex  # noqa
+except ImportError:
+    warnings.warn("Please install Transformer engine for FP8 training!")
 
 
 @pytest.mark.parametrize(

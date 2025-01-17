@@ -1,17 +1,23 @@
 from __future__ import annotations
 
+import warnings
 from abc import abstractstaticmethod
 from copy import deepcopy
 from typing import Optional, Union, cast
 
 import torch
-import transformer_engine as te  # noqa
-import transformer_engine_torch as tex
 
 from nanotron import logging
 from nanotron.fp8.constants import DTYPE_TO_FP8_MAX, FP8_DTYPES, INITIAL_SCALING_FACTOR
 from nanotron.fp8.dtypes import DTypes
 from nanotron.fp8.meta import FP8Meta
+
+try:
+    import transformer_engine as te  # noqa
+    import transformer_engine_torch as tex  # noqa
+except ImportError:
+    warnings.warn("Please install Transformer engine for FP8 training!")
+
 
 logger = logging.get_logger(__name__)
 

@@ -5,7 +5,7 @@ from typing import Optional, Tuple, Union, cast
 import torch
 from torch import nn
 
-from nanotron.fp8.constants import FP8LM_LINEAR_RECIPE
+from nanotron.fp8.constants import FP8LM_LINEAR_RECIPE, QTYPE_TO_DTYPE
 from nanotron.fp8.kernel import fp8_matmul_kernel
 from nanotron.fp8.meta import FP8Meta
 from nanotron.fp8.recipe import FP8LinearRecipe
@@ -36,6 +36,8 @@ class FP8Linear(nn.Linear):
         out_features: int,
         bias: bool = True,
         device: Optional[torch.device] = None,
+        dtype: torch.dtype = torch.float32,
+        recipe: FP8LinearRecipe = FP8LM_LINEAR_RECIPE,
     ):
         """
         Args:
@@ -45,8 +47,9 @@ class FP8Linear(nn.Linear):
 
         # TODO(xrsrke): take initialization dtype from recipe
         # NOTE: initialize in float32
-        super().__init__(in_features, out_features, bias, device, dtype=torch.float32)
-        self._set_and_quantize_weights(self.weight.data)
+        assert dtype == torch.float32, f"FP8 linear recommends to initialize in float32, but got: {dtype}"
+        super().__init__(in_features, out_features, bias, device, dtype=dtype)
+        self._set_and_quantize_weights(self.weight.data, recipe)
 
     def _set_and_quantize_weights(self, data: torch.Tensor, recipe: FP8LinearRecipe = FP8LM_LINEAR_RECIPE):
         """
@@ -65,6 +68,9 @@ class FP8Linear(nn.Linear):
         # NOTE: assume each time we requantize the weights, we reset the metadata
         self.metadatas = FP8LinearMeta()
         self.recipe = recipe
+
+        if self.bias is not None:
+            self.bias.data = self.bias.data.to(QTYPE_TO_DTYPE[recipe.accum_dtype])
 
     def forward(self, input: Union[FP8Tensor, torch.Tensor]) -> torch.Tensor:
         import nanotron.fp8.functional as F
@@ -199,7 +205,8 @@ class _FP8Matmul(torch.autograd.Function):
         else:
             grad_input = None
 
-        assert is_overflow_underflow_nan(grad_input) is False
+        # pydevd.settrace(suspend=False, trace_only_current_thread=True)
+        assert is_overflow_underflow_nan(grad_input) is False if grad_input is not None else True
 
         # TODO(xrsrke): fuse cast and transpose
         transposed_fp8_grad_output = fp8_grad_output.transpose_fp8()

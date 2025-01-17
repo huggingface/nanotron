@@ -1,12 +1,17 @@
+import warnings
 from dataclasses import dataclass
 from typing import List
 
 import torch
-import transformer_engine as te  # noqa
-import transformer_engine_torch as tex
 
 from nanotron.fp8.constants import DTYPE_TO_FP8_MAX
 from nanotron.fp8.dtypes import DTypes
+
+try:
+    import transformer_engine as te  # noqa
+    import transformer_engine_torch as tex  # noqa
+except ImportError:
+    warnings.warn("Please install Transformer engine for FP8 training!")
 
 
 @dataclass
