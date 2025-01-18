@@ -10,3 +10,4 @@ PY_VERSION = parse(platform.python_version())
 
 CHECKPOINT_FILE_NAME = "checkpoint_metadata.json"
 MODEL_CONFIG_FILE_NAME = "model_config.json"
+OPTIMIZER_CONFIG_FILE_NAME = "optimizer_config.json"
