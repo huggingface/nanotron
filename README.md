@@ -51,6 +51,7 @@ pip install triton "flash-attn>=2.5.0" --no-build-isolation
 > [!TIP]
 > We log to wandb automatically if it's installed. For that you can use `pip install wandb`. If you don't want to use wandb, you can run `wandb disabled`.
 
+
 ## Quick Start
 ### Training a tiny Llama model
 The following command will train a tiny Llama model on a single node with 8 GPUs. The model will be saved in the `checkpoints` directory as specified in the config file.
@@ -63,6 +64,14 @@ CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node=8 run_train.py --config-
 torchrun --nproc_per_node=1 run_generate.py --ckpt-path checkpoints/10/ --tp 1 --pp 1
 # We could set a larger TP for faster generation, and a larger PP in case of very large models.
 ```
+
+### Performance
+|  | 1 node | 4 nodes | 8 nodes | 16 nodes |
+| --- | --- | --- | --- | --- |
+| **8b** |  |  |  |  |
+| nanotron | 45.22% | 43% |  | 36% |
+| **80b** |  |  |  |  |
+| nanotron |  |  | 30.65% | 34.29% |
 
 ### Custom examples
 You can find more examples in the [`/examples`](/examples) directory:
