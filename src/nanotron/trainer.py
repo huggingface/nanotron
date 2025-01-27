@@ -483,8 +483,9 @@ class DistributedTrainer:
             self.config, self.parallel_context, self.unwrapped_model, self.grad_accumulator, self.lr_scheduler
         )
 
-        if self.iteration_step < self.initial_iter_step + 5:
-            log_memory(logger=logger)
+        # if self.iteration_step < self.initial_iter_step + 5:
+        #     log_memory(logger=logger)
+        log_memory(logger=logger)
 
         outputs = self.pipeline_engine.train_batch_iter(
             model=self.model,
@@ -494,8 +495,9 @@ class DistributedTrainer:
             grad_accumulator=self.grad_accumulator,
         )
 
-        if self.iteration_step < self.initial_iter_step + 5:
-            log_memory(logger=logger)
+        # if self.iteration_step < self.initial_iter_step + 5:
+        #     log_memory(logger=logger)
+        log_memory(logger=logger)
 
         after_tbi_sanity_checks(self.config, self.parallel_context, self.unwrapped_model, self.grad_accumulator)
 

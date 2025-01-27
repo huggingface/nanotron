@@ -247,11 +247,32 @@ def human_format(num: float, billions: bool = False, divide_by_1024: bool = Fals
     return "{}{}".format("{:f}".format(num).rstrip("0").rstrip("."), SIZES[magnitude])
 
 
+# def log_memory(logger: logging.Logger):
+#     log_rank(
+#         f" Memory usage: {torch.cuda.memory_allocated() / 1024**2:.2f}MiB."
+#         f" Peak allocated {torch.cuda.max_memory_allocated() / 1024**2:.2f}MiB."
+#         f" Peak reserved: {torch.cuda.max_memory_reserved() / 1024**2:.2f}MiB",
+#         logger=logger,
+#         level=logging.INFO,
+#         rank=0,
+#     )
+#     torch.cuda.reset_peak_memory_stats()
+
+
 def log_memory(logger: logging.Logger):
+    import psutil
+    import os
+
+    def get_memory_usage():
+        process = psutil.Process(os.getpid())
+        return process.memory_info().rss / 1024 / 1024  # in MB
+
+
     log_rank(
         f" Memory usage: {torch.cuda.memory_allocated() / 1024**2:.2f}MiB."
         f" Peak allocated {torch.cuda.max_memory_allocated() / 1024**2:.2f}MiB."
-        f" Peak reserved: {torch.cuda.max_memory_reserved() / 1024**2:.2f}MiB",
+        f" Peak reserved: {torch.cuda.max_memory_reserved() / 1024**2:.2f}MiB."
+        f" CPU rss: {get_memory_usage():.2f}MiB",
         logger=logger,
         level=logging.INFO,
         rank=0,

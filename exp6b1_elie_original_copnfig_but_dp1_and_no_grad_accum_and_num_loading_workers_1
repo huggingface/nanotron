@@ -1,0 +1,290 @@
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]: Config:
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]: Config(general=GeneralArgs(project='issue1_nanosets_hanging',
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                            run='exp6b1_elie_original_copnfig_but_dp1_and_no_grad_accum_and_num_loading_workers_1',
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                            seed=6,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                            step=None,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                            consumed_train_samples=None,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                            benchmark_csv_path=None,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                            ignore_sanity_checks=True),
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:        parallelism=ParallelismArgs(dp=1,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                                    pp=1,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                                    tp=2,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                                    pp_engine=<nanotron.parallel.pipeline_parallel.engine.OneForwardOneBackwardPipelineEngine object at 0x7f0bc6a95960>,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                                    tp_mode=<TensorParallelLinearMode.REDUCE_SCATTER: 2>,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                                    tp_linear_async_communication=True,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                                    recompute_layer=False,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                                    tp_recompute_allgather=True,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                                    expert_parallel_size=1),
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:        model=ModelArgs(model_config=LlamaConfig(bos_token_id=128000,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                                                 eos_token_id=128001,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                                                 hidden_act='silu',
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                                                 hidden_size=3072,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                                                 initializer_range=0.02,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                                                 intermediate_size=8192,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                                                 is_llama_config=True,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                                                 max_position_embeddings=4096,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                                                 num_attention_heads=24,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                                                 num_hidden_layers=28,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                                                 num_key_value_heads=8,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                                                 pad_token_id=None,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                                                 pretraining_tp=2,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                                                 rms_norm_eps=1e-05,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                                                 rope_scaling={'factor': 32.0,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                                                               'high_freq_factor': 4.0,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                                                               'low_freq_factor': 1.0,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                                                               'original_max_position_embeddings': 8192,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                                                               'rope_type': 'llama3'},
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                                                 rope_theta=500000.0,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                                                 rope_interleaved=False,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                                                 tie_word_embeddings=True,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                                                 use_cache=True,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                                                 vocab_size=128256),
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                        init_method=RandomInit(std=0.041666666666666664),
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                        dtype=torch.bfloat16,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                        make_vocab_size_divisible_by=1,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                        ddp_bucket_cap_mb=25),
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:        tokenizer=TokenizerArgs(tokenizer_name_or_path='lvwerra/the-tokenizer-v1',
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                                tokenizer_revision=None,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                                tokenizer_max_length=None),
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:        checkpoints=CheckpointsArgs(checkpoints_path=PosixPath('checkpoints/exp6b0_elie_original_config_but_dp1_and_no_grad_accum'),
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                                    checkpoint_interval=10000,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                                    save_initial_state=False,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                                    save_final_state=True,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                                    resume_checkpoint_path=None,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                                    checkpoints_path_is_shared_file_system=False,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                                    load_lr_scheduler=False,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                                    load_optimizer=False),
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:        logging=LoggingArgs(log_level='info',
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                            log_level_replica='info',
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                            iteration_step_info_interval=1),
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:        tokens=TokensArgs(sequence_length=4096,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                          train_steps=120000,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                          micro_batch_size=4,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                          batch_accumulation_per_replica=1,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                          val_check_interval=-1,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                          limit_val_batches=0,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                          limit_test_batches=0),
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:        optimizer=OptimizerArgs(optimizer_factory=AdamWOptimizerArgs(adam_eps=1e-08,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                                                                     adam_beta1=0.9,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                                                                     adam_beta2=0.95,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                                                                     torch_adam_is_fused=True,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                                                                     name='adamW'),
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                                zero_stage=0,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                                weight_decay=0.01,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                                clip_grad=1.0,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                                accumulate_grad_in_fp32=False,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                                learning_rate_scheduler=LRSchedulerArgs(learning_rate=5e-05,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                                                                        lr_warmup_steps=1000,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                                                                        lr_warmup_style='linear',
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                                                                        lr_decay_style='linear',
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                                                                        lr_decay_steps=10000,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                                                                        lr_decay_starting_step=50000,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                                                                        min_decay_lr=0)),
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:        data_stages=[DatasetStageArgs(name='stable phase',
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                                      start_training_step=1,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                                      data=DataArgs(dataset=NanosetDatasetsArgs(dataset_folder=['/fsx/elie_bakouch/data/fw-edu-dedup'],
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                                                                                dataset_weights=None),
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                                                    seed=8,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                                                    num_loading_workers=1))],
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:        profiler=None,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:        lighteval=None,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:        s3_upload=None)
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]: Model Config:
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]: LlamaConfig(bos_token_id=128000,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:             eos_token_id=128001,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:             hidden_act='silu',
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:             hidden_size=3072,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:             initializer_range=0.02,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:             intermediate_size=8192,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:             is_llama_config=True,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:             max_position_embeddings=4096,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:             num_attention_heads=24,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:             num_hidden_layers=28,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:             num_key_value_heads=8,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:             pad_token_id=None,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:             pretraining_tp=2,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:             rms_norm_eps=1e-05,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:             rope_scaling={'factor': 32.0,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                           'high_freq_factor': 4.0,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                           'low_freq_factor': 1.0,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                           'original_max_position_embeddings': 8192,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:                           'rope_type': 'llama3'},
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:             rope_theta=500000.0,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:             rope_interleaved=False,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:             tie_word_embeddings=True,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:             use_cache=True,
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]:             vocab_size=128256)
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]: Building model..
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]: Initialize RoPE Theta = 500000.0
+01/27/2025 15:49:39 [INFO|DP=0|PP=0|TP=0]: Setting PP block ranks...
+01/27/2025 15:49:50 [INFO|DP=0|PP=0|TP=0]: Total number of parameters: 3.21G (6128.17MiB)
+01/27/2025 15:49:50 [INFO|DP=0|PP=0|TP=1]: Local number of parameters: 1.61G (3064.08MiB)
+01/27/2025 15:49:50 [INFO|DP=0|PP=0|TP=0]: Local number of parameters: 1.61G (3064.08MiB)
+01/27/2025 15:49:50 [INFO|DP=0|PP=0|TP=1]: [After model building] Memory usage: 3092.36MiB. Peak allocated: 3468.36MiB Peak reserved: 3498.00MiB
+01/27/2025 15:49:50 [INFO|DP=0|PP=0|TP=0]: [After model building] Memory usage: 3092.36MiB. Peak allocated: 3468.36MiB Peak reserved: 3498.00MiB
+01/27/2025 15:49:50 [INFO|DP=0|PP=0|TP=0]: No checkpoint path provided.
+01/27/2025 15:49:50 [INFO|DP=0|PP=0|TP=0]: Parametrizing model parameters using StandardParametrizator
+01/27/2025 15:49:50 [INFO|DP=0|PP=0|TP=0]: [Optimizer Building] Using LearningRateForSP as learning rate
+01/27/2025 15:49:50 [INFO|DP=0|PP=0|TP=0]: [Training Plan] Stage stable phase has 119999 remaining training steps and has consumed 0 samples
+01/27/2025 15:50:02 [INFO|DP=0|PP=0|TP=0]: > Total number of samples: 480000
+01/27/2025 15:50:02 [INFO|DP=0|PP=0|TP=0]: > Total number of tokens: 1966080000
+01/27/2025 15:50:02 [INFO|DP=0|PP=0|TP=0]: >   Total number of samples from the /fsx/elie_bakouch/data/fw-edu-dedup dataset: 480000 (1.0)
+01/27/2025 15:50:02 [INFO|DP=0|PP=0|TP=0]: [Training Plan] There are 1 training stages 
+01/27/2025 15:50:02 [INFO|DP=0|PP=0|TP=0]: [Stage stable phase] start from step 1 
+01/27/2025 15:50:02 [INFO|DP=0|PP=0|TP=0]: 
+01/27/2025 15:50:02 [INFO|DP=0|PP=0|TP=0]: [Start training] datetime: 2025-01-27 15:50:02.653631 | mbs: 4 | grad_accum: 1 | global_batch_size: 4 | sequence_length: 4096 | train_steps: 120000 | start_iteration_step: 0 | consumed_train_samples: 0
+01/27/2025 15:50:02 [INFO|DP=0|PP=0|TP=0]: Resuming training from stage stable phase, it has trained for 0 samples and has 119999 remaining train steps
+01/27/2025 15:50:02 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 3092.36MiB. Peak allocated 3468.36MiB. Peak reserved: 3498.00MiB. CPU rss: 2509.43MiB
+01/27/2025 15:50:16 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 6439.72MiB. Peak allocated 34876.28MiB. Peak reserved: 37192.00MiB. CPU rss: 2933.67MiB
+01/27/2025 15:50:16 [INFO|DP=0|PP=0|TP=0]: iteration: 1 / 120000 | consumed_tokens: 16.4K | elapsed_time_per_iteration_ms: 13.8K | tokens_per_sec: 1.18K | tokens_per_sec_per_gpu: 592 | global_batch_size: 4 | lm_loss: 14.5 | lr: 5e-08 | model_tflops_per_gpu: 13.9 | hardware_tflops_per_gpu: 13.9 | grad_norm: 64.7 | cuda_memory_allocated: 9.94G | cuda_max_memory_reserved: 39G | hd_total_memory_tb: 312G | hd_used_memory_tb: 184G | hd_free_memory_tb: 128G
+01/27/2025 15:50:16 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 9476.89MiB. Peak allocated 12567.97MiB. Peak reserved: 37192.00MiB. CPU rss: 3033.70MiB
+01/27/2025 15:50:16 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 12568.97MiB. Peak allocated 41138.03MiB. Peak reserved: 48542.00MiB. CPU rss: 3035.71MiB
+01/27/2025 15:50:17 [INFO|DP=0|PP=0|TP=0]: iteration: 2 / 120000 | consumed_tokens: 32.8K | elapsed_time_per_iteration_ms: 538 | tokens_per_sec: 30.4K | tokens_per_sec_per_gpu: 15.2K | global_batch_size: 4 | lm_loss: 14.4 | lr: 1e-07 | model_tflops_per_gpu: 358 | hardware_tflops_per_gpu: 358 | grad_norm: 65.1 | cuda_memory_allocated: 9.94G | cuda_max_memory_reserved: 50.9G | hd_total_memory_tb: 312G | hd_used_memory_tb: 184G | hd_free_memory_tb: 128G
+01/27/2025 15:50:17 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 9476.89MiB. Peak allocated 12569.06MiB. Peak reserved: 48542.00MiB. CPU rss: 3035.80MiB
+01/27/2025 15:50:17 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 12568.97MiB. Peak allocated 41138.03MiB. Peak reserved: 48542.00MiB. CPU rss: 3036.09MiB
+01/27/2025 15:50:17 [INFO|DP=0|PP=0|TP=0]: iteration: 3 / 120000 | consumed_tokens: 49.2K | elapsed_time_per_iteration_ms: 539 | tokens_per_sec: 30.4K | tokens_per_sec_per_gpu: 15.2K | global_batch_size: 4 | lm_loss: 14.4 | lr: 1.5e-07 | model_tflops_per_gpu: 357 | hardware_tflops_per_gpu: 357 | grad_norm: 66.1 | cuda_memory_allocated: 9.94G | cuda_max_memory_reserved: 50.9G | hd_total_memory_tb: 312G | hd_used_memory_tb: 184G | hd_free_memory_tb: 128G
+01/27/2025 15:50:17 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 9476.89MiB. Peak allocated 12569.06MiB. Peak reserved: 48542.00MiB. CPU rss: 3036.09MiB
+01/27/2025 15:50:18 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 12568.97MiB. Peak allocated 41138.03MiB. Peak reserved: 48542.00MiB. CPU rss: 3036.34MiB
+01/27/2025 15:50:18 [INFO|DP=0|PP=0|TP=0]: iteration: 4 / 120000 | consumed_tokens: 65.5K | elapsed_time_per_iteration_ms: 539 | tokens_per_sec: 30.4K | tokens_per_sec_per_gpu: 15.2K | global_batch_size: 4 | lm_loss: 14.4 | lr: 2e-07 | model_tflops_per_gpu: 357 | hardware_tflops_per_gpu: 357 | grad_norm: 65.5 | cuda_memory_allocated: 9.94G | cuda_max_memory_reserved: 50.9G | hd_total_memory_tb: 312G | hd_used_memory_tb: 184G | hd_free_memory_tb: 128G
+01/27/2025 15:50:18 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 9476.89MiB. Peak allocated 12569.06MiB. Peak reserved: 48542.00MiB. CPU rss: 3036.34MiB
+01/27/2025 15:50:18 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 12567.97MiB. Peak allocated 41138.03MiB. Peak reserved: 48542.00MiB. CPU rss: 3036.34MiB
+01/27/2025 15:50:18 [INFO|DP=0|PP=0|TP=0]: iteration: 5 / 120000 | consumed_tokens: 81.9K | elapsed_time_per_iteration_ms: 540 | tokens_per_sec: 30.3K | tokens_per_sec_per_gpu: 15.2K | global_batch_size: 4 | lm_loss: 14.4 | lr: 2.5e-07 | model_tflops_per_gpu: 357 | hardware_tflops_per_gpu: 357 | grad_norm: 65.3
+01/27/2025 15:50:18 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 9476.89MiB. Peak allocated 12568.06MiB. Peak reserved: 48542.00MiB. CPU rss: 3036.35MiB
+01/27/2025 15:50:19 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 12568.97MiB. Peak allocated 41138.03MiB. Peak reserved: 48542.00MiB. CPU rss: 3036.36MiB
+01/27/2025 15:50:19 [INFO|DP=0|PP=0|TP=0]: iteration: 6 / 120000 | consumed_tokens: 98.3K | elapsed_time_per_iteration_ms: 540 | tokens_per_sec: 30.4K | tokens_per_sec_per_gpu: 15.2K | global_batch_size: 4 | lm_loss: 14.4 | lr: 3e-07 | model_tflops_per_gpu: 357 | hardware_tflops_per_gpu: 357 | grad_norm: 65.1
+01/27/2025 15:50:19 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 9476.89MiB. Peak allocated 12569.06MiB. Peak reserved: 48542.00MiB. CPU rss: 3036.38MiB
+01/27/2025 15:50:19 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 12568.97MiB. Peak allocated 41138.03MiB. Peak reserved: 48542.00MiB. CPU rss: 3036.38MiB
+01/27/2025 15:50:19 [INFO|DP=0|PP=0|TP=0]: iteration: 7 / 120000 | consumed_tokens: 115K | elapsed_time_per_iteration_ms: 539 | tokens_per_sec: 30.4K | tokens_per_sec_per_gpu: 15.2K | global_batch_size: 4 | lm_loss: 14.4 | lr: 3.5e-07 | model_tflops_per_gpu: 357 | hardware_tflops_per_gpu: 357 | grad_norm: 65.2
+01/27/2025 15:50:19 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 9476.89MiB. Peak allocated 12569.06MiB. Peak reserved: 48542.00MiB. CPU rss: 3036.38MiB
+01/27/2025 15:50:20 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 12567.97MiB. Peak allocated 41138.03MiB. Peak reserved: 48542.00MiB. CPU rss: 3036.39MiB
+01/27/2025 15:50:20 [INFO|DP=0|PP=0|TP=0]: iteration: 8 / 120000 | consumed_tokens: 131K | elapsed_time_per_iteration_ms: 540 | tokens_per_sec: 30.3K | tokens_per_sec_per_gpu: 15.2K | global_batch_size: 4 | lm_loss: 14.5 | lr: 4e-07 | model_tflops_per_gpu: 357 | hardware_tflops_per_gpu: 357 | grad_norm: 64.9
+01/27/2025 15:50:20 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 9476.89MiB. Peak allocated 12568.06MiB. Peak reserved: 48542.00MiB. CPU rss: 3036.45MiB
+01/27/2025 15:50:20 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 12568.97MiB. Peak allocated 41137.53MiB. Peak reserved: 48542.00MiB. CPU rss: 3036.48MiB
+01/27/2025 15:50:20 [INFO|DP=0|PP=0|TP=0]: iteration: 9 / 120000 | consumed_tokens: 147K | elapsed_time_per_iteration_ms: 540 | tokens_per_sec: 30.3K | tokens_per_sec_per_gpu: 15.2K | global_batch_size: 4 | lm_loss: 14.4 | lr: 4.5e-07 | model_tflops_per_gpu: 357 | hardware_tflops_per_gpu: 357 | grad_norm: 65.3
+01/27/2025 15:50:20 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 9476.89MiB. Peak allocated 12569.06MiB. Peak reserved: 48542.00MiB. CPU rss: 3036.48MiB
+01/27/2025 15:50:21 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 12568.97MiB. Peak allocated 41138.03MiB. Peak reserved: 48542.00MiB. CPU rss: 3036.48MiB
+01/27/2025 15:50:21 [INFO|DP=0|PP=0|TP=0]: iteration: 10 / 120000 | consumed_tokens: 164K | elapsed_time_per_iteration_ms: 540 | tokens_per_sec: 30.4K | tokens_per_sec_per_gpu: 15.2K | global_batch_size: 4 | lm_loss: 14.5 | lr: 5e-07 | model_tflops_per_gpu: 357 | hardware_tflops_per_gpu: 357 | grad_norm: 65.4
+01/27/2025 15:50:21 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 9476.89MiB. Peak allocated 12569.06MiB. Peak reserved: 48542.00MiB. CPU rss: 3036.52MiB
+01/27/2025 15:50:21 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 12568.97MiB. Peak allocated 41138.03MiB. Peak reserved: 48542.00MiB. CPU rss: 3036.52MiB
+01/27/2025 15:50:22 [INFO|DP=0|PP=0|TP=0]: iteration: 11 / 120000 | consumed_tokens: 180K | elapsed_time_per_iteration_ms: 541 | tokens_per_sec: 30.3K | tokens_per_sec_per_gpu: 15.1K | global_batch_size: 4 | lm_loss: 14.4 | lr: 5.5e-07 | model_tflops_per_gpu: 356 | hardware_tflops_per_gpu: 356 | grad_norm: 65.5
+01/27/2025 15:50:22 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 9476.89MiB. Peak allocated 12569.06MiB. Peak reserved: 48542.00MiB. CPU rss: 3036.59MiB
+01/27/2025 15:50:22 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 12568.97MiB. Peak allocated 41138.03MiB. Peak reserved: 48542.00MiB. CPU rss: 3036.62MiB
+01/27/2025 15:50:22 [INFO|DP=0|PP=0|TP=0]: iteration: 12 / 120000 | consumed_tokens: 197K | elapsed_time_per_iteration_ms: 540 | tokens_per_sec: 30.4K | tokens_per_sec_per_gpu: 15.2K | global_batch_size: 4 | lm_loss: 14.5 | lr: 6e-07 | model_tflops_per_gpu: 357 | hardware_tflops_per_gpu: 357 | grad_norm: 65.3
+01/27/2025 15:50:22 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 9476.89MiB. Peak allocated 12569.06MiB. Peak reserved: 48542.00MiB. CPU rss: 3036.62MiB
+01/27/2025 15:50:22 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 12567.97MiB. Peak allocated 41138.03MiB. Peak reserved: 48542.00MiB. CPU rss: 3036.62MiB
+01/27/2025 15:50:23 [INFO|DP=0|PP=0|TP=0]: iteration: 13 / 120000 | consumed_tokens: 213K | elapsed_time_per_iteration_ms: 539 | tokens_per_sec: 30.4K | tokens_per_sec_per_gpu: 15.2K | global_batch_size: 4 | lm_loss: 14.4 | lr: 6.5e-07 | model_tflops_per_gpu: 358 | hardware_tflops_per_gpu: 358 | grad_norm: 65.5
+01/27/2025 15:50:23 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 9476.89MiB. Peak allocated 12568.06MiB. Peak reserved: 48542.00MiB. CPU rss: 3036.62MiB
+01/27/2025 15:50:23 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 12568.97MiB. Peak allocated 41137.53MiB. Peak reserved: 48542.00MiB. CPU rss: 3036.62MiB
+01/27/2025 15:50:23 [INFO|DP=0|PP=0|TP=0]: iteration: 14 / 120000 | consumed_tokens: 229K | elapsed_time_per_iteration_ms: 540 | tokens_per_sec: 30.3K | tokens_per_sec_per_gpu: 15.2K | global_batch_size: 4 | lm_loss: 14.5 | lr: 7e-07 | model_tflops_per_gpu: 356 | hardware_tflops_per_gpu: 356 | grad_norm: 65.3
+01/27/2025 15:50:23 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 9476.89MiB. Peak allocated 12569.06MiB. Peak reserved: 48542.00MiB. CPU rss: 3036.62MiB
+01/27/2025 15:50:23 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 12568.97MiB. Peak allocated 41137.53MiB. Peak reserved: 48542.00MiB. CPU rss: 3036.71MiB
+01/27/2025 15:50:24 [INFO|DP=0|PP=0|TP=0]: iteration: 15 / 120000 | consumed_tokens: 246K | elapsed_time_per_iteration_ms: 541 | tokens_per_sec: 30.3K | tokens_per_sec_per_gpu: 15.1K | global_batch_size: 4 | lm_loss: 14.4 | lr: 7.5e-07 | model_tflops_per_gpu: 356 | hardware_tflops_per_gpu: 356 | grad_norm: 65.1
+01/27/2025 15:50:24 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 9476.89MiB. Peak allocated 12569.06MiB. Peak reserved: 48542.00MiB. CPU rss: 3036.71MiB
+01/27/2025 15:50:24 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 12568.97MiB. Peak allocated 41137.53MiB. Peak reserved: 48542.00MiB. CPU rss: 3036.71MiB
+01/27/2025 15:50:24 [INFO|DP=0|PP=0|TP=0]: iteration: 16 / 120000 | consumed_tokens: 262K | elapsed_time_per_iteration_ms: 539 | tokens_per_sec: 30.4K | tokens_per_sec_per_gpu: 15.2K | global_batch_size: 4 | lm_loss: 14.4 | lr: 8e-07 | model_tflops_per_gpu: 357 | hardware_tflops_per_gpu: 357 | grad_norm: 65.4
+01/27/2025 15:50:24 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 9476.89MiB. Peak allocated 12569.06MiB. Peak reserved: 48542.00MiB. CPU rss: 3036.77MiB
+01/27/2025 15:50:25 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 12568.97MiB. Peak allocated 41138.03MiB. Peak reserved: 48542.00MiB. CPU rss: 3036.82MiB
+01/27/2025 15:50:25 [INFO|DP=0|PP=0|TP=0]: iteration: 17 / 120000 | consumed_tokens: 279K | elapsed_time_per_iteration_ms: 540 | tokens_per_sec: 30.3K | tokens_per_sec_per_gpu: 15.2K | global_batch_size: 4 | lm_loss: 14.4 | lr: 8.5e-07 | model_tflops_per_gpu: 356 | hardware_tflops_per_gpu: 356 | grad_norm: 65.5
+01/27/2025 15:50:25 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 9476.89MiB. Peak allocated 12569.06MiB. Peak reserved: 48542.00MiB. CPU rss: 3036.85MiB
+01/27/2025 15:50:25 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 12567.97MiB. Peak allocated 41137.53MiB. Peak reserved: 48542.00MiB. CPU rss: 3036.85MiB
+01/27/2025 15:50:25 [INFO|DP=0|PP=0|TP=0]: iteration: 18 / 120000 | consumed_tokens: 295K | elapsed_time_per_iteration_ms: 539 | tokens_per_sec: 30.4K | tokens_per_sec_per_gpu: 15.2K | global_batch_size: 4 | lm_loss: 14.4 | lr: 9e-07 | model_tflops_per_gpu: 357 | hardware_tflops_per_gpu: 357 | grad_norm: 65.4
+01/27/2025 15:50:25 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 9476.89MiB. Peak allocated 12568.06MiB. Peak reserved: 48542.00MiB. CPU rss: 3036.85MiB
+01/27/2025 15:50:26 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 12568.97MiB. Peak allocated 41138.03MiB. Peak reserved: 48542.00MiB. CPU rss: 3036.88MiB
+01/27/2025 15:50:26 [INFO|DP=0|PP=0|TP=0]: iteration: 19 / 120000 | consumed_tokens: 311K | elapsed_time_per_iteration_ms: 540 | tokens_per_sec: 30.3K | tokens_per_sec_per_gpu: 15.2K | global_batch_size: 4 | lm_loss: 14.5 | lr: 9.5e-07 | model_tflops_per_gpu: 356 | hardware_tflops_per_gpu: 356 | grad_norm: 65.2
+01/27/2025 15:50:26 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 9476.89MiB. Peak allocated 12569.06MiB. Peak reserved: 48542.00MiB. CPU rss: 3036.88MiB
+01/27/2025 15:50:26 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 12568.97MiB. Peak allocated 41138.03MiB. Peak reserved: 48542.00MiB. CPU rss: 3036.88MiB
+01/27/2025 15:50:26 [INFO|DP=0|PP=0|TP=0]: iteration: 20 / 120000 | consumed_tokens: 328K | elapsed_time_per_iteration_ms: 540 | tokens_per_sec: 30.3K | tokens_per_sec_per_gpu: 15.2K | global_batch_size: 4 | lm_loss: 14.4 | lr: 1e-06 | model_tflops_per_gpu: 356 | hardware_tflops_per_gpu: 356 | grad_norm: 64.9
+01/27/2025 15:50:26 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 9476.89MiB. Peak allocated 12569.06MiB. Peak reserved: 48542.00MiB. CPU rss: 3036.88MiB
+01/27/2025 15:50:27 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 12568.97MiB. Peak allocated 41137.53MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.07MiB
+01/27/2025 15:50:27 [INFO|DP=0|PP=0|TP=0]: iteration: 21 / 120000 | consumed_tokens: 344K | elapsed_time_per_iteration_ms: 540 | tokens_per_sec: 30.3K | tokens_per_sec_per_gpu: 15.2K | global_batch_size: 4 | lm_loss: 14.4 | lr: 1.05e-06 | model_tflops_per_gpu: 356 | hardware_tflops_per_gpu: 356 | grad_norm: 65.9
+01/27/2025 15:50:27 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 9476.89MiB. Peak allocated 12569.06MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.07MiB
+01/27/2025 15:50:27 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 12568.97MiB. Peak allocated 41138.03MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.07MiB
+01/27/2025 15:50:27 [INFO|DP=0|PP=0|TP=0]: iteration: 22 / 120000 | consumed_tokens: 360K | elapsed_time_per_iteration_ms: 539 | tokens_per_sec: 30.4K | tokens_per_sec_per_gpu: 15.2K | global_batch_size: 4 | lm_loss: 14.4 | lr: 1.1e-06 | model_tflops_per_gpu: 357 | hardware_tflops_per_gpu: 357 | grad_norm: 65.1
+01/27/2025 15:50:27 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 9476.89MiB. Peak allocated 12569.06MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.07MiB
+01/27/2025 15:50:28 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 12568.97MiB. Peak allocated 41137.53MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.07MiB
+01/27/2025 15:50:28 [INFO|DP=0|PP=0|TP=0]: iteration: 23 / 120000 | consumed_tokens: 377K | elapsed_time_per_iteration_ms: 539 | tokens_per_sec: 30.4K | tokens_per_sec_per_gpu: 15.2K | global_batch_size: 4 | lm_loss: 14.4 | lr: 1.15e-06 | model_tflops_per_gpu: 357 | hardware_tflops_per_gpu: 357 | grad_norm: 65
+01/27/2025 15:50:28 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 9476.89MiB. Peak allocated 12569.06MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.07MiB
+01/27/2025 15:50:28 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 12568.97MiB. Peak allocated 41137.53MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.07MiB
+01/27/2025 15:50:29 [INFO|DP=0|PP=0|TP=0]: iteration: 24 / 120000 | consumed_tokens: 393K | elapsed_time_per_iteration_ms: 540 | tokens_per_sec: 30.3K | tokens_per_sec_per_gpu: 15.2K | global_batch_size: 4 | lm_loss: 14.4 | lr: 1.2e-06 | model_tflops_per_gpu: 356 | hardware_tflops_per_gpu: 356 | grad_norm: 65.5
+01/27/2025 15:50:29 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 9476.89MiB. Peak allocated 12569.06MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.07MiB
+01/27/2025 15:50:29 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 12568.97MiB. Peak allocated 41137.53MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.11MiB
+01/27/2025 15:50:29 [INFO|DP=0|PP=0|TP=0]: iteration: 25 / 120000 | consumed_tokens: 410K | elapsed_time_per_iteration_ms: 540 | tokens_per_sec: 30.4K | tokens_per_sec_per_gpu: 15.2K | global_batch_size: 4 | lm_loss: 14.4 | lr: 1.25e-06 | model_tflops_per_gpu: 357 | hardware_tflops_per_gpu: 357 | grad_norm: 64.8
+01/27/2025 15:50:29 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 9476.89MiB. Peak allocated 12569.06MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.11MiB
+01/27/2025 15:50:29 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 12568.97MiB. Peak allocated 41137.53MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.11MiB
+01/27/2025 15:50:30 [INFO|DP=0|PP=0|TP=0]: iteration: 26 / 120000 | consumed_tokens: 426K | elapsed_time_per_iteration_ms: 539 | tokens_per_sec: 30.4K | tokens_per_sec_per_gpu: 15.2K | global_batch_size: 4 | lm_loss: 14.4 | lr: 1.3e-06 | model_tflops_per_gpu: 357 | hardware_tflops_per_gpu: 357 | grad_norm: 64.9
+01/27/2025 15:50:30 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 9476.89MiB. Peak allocated 12569.06MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.12MiB
+01/27/2025 15:50:30 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 12568.97MiB. Peak allocated 41137.53MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.12MiB
+01/27/2025 15:50:30 [INFO|DP=0|PP=0|TP=0]: iteration: 27 / 120000 | consumed_tokens: 442K | elapsed_time_per_iteration_ms: 541 | tokens_per_sec: 30.3K | tokens_per_sec_per_gpu: 15.1K | global_batch_size: 4 | lm_loss: 14.4 | lr: 1.35e-06 | model_tflops_per_gpu: 356 | hardware_tflops_per_gpu: 356 | grad_norm: 65
+01/27/2025 15:50:30 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 9476.89MiB. Peak allocated 12569.06MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.12MiB
+01/27/2025 15:50:30 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 12568.97MiB. Peak allocated 41138.03MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.13MiB
+01/27/2025 15:50:31 [INFO|DP=0|PP=0|TP=0]: iteration: 28 / 120000 | consumed_tokens: 459K | elapsed_time_per_iteration_ms: 539 | tokens_per_sec: 30.4K | tokens_per_sec_per_gpu: 15.2K | global_batch_size: 4 | lm_loss: 14.3 | lr: 1.4e-06 | model_tflops_per_gpu: 357 | hardware_tflops_per_gpu: 357 | grad_norm: 65.6
+01/27/2025 15:50:31 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 9476.89MiB. Peak allocated 12569.06MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.15MiB
+01/27/2025 15:50:31 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 12568.97MiB. Peak allocated 41138.03MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.16MiB
+01/27/2025 15:50:31 [INFO|DP=0|PP=0|TP=0]: iteration: 29 / 120000 | consumed_tokens: 475K | elapsed_time_per_iteration_ms: 541 | tokens_per_sec: 30.3K | tokens_per_sec_per_gpu: 15.2K | global_batch_size: 4 | lm_loss: 14.4 | lr: 1.45e-06 | model_tflops_per_gpu: 356 | hardware_tflops_per_gpu: 356 | grad_norm: 65.3
+01/27/2025 15:50:31 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 9476.89MiB. Peak allocated 12569.06MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.16MiB
+01/27/2025 15:50:32 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 12568.97MiB. Peak allocated 41138.03MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.16MiB
+01/27/2025 15:50:32 [INFO|DP=0|PP=0|TP=0]: iteration: 30 / 120000 | consumed_tokens: 492K | elapsed_time_per_iteration_ms: 538 | tokens_per_sec: 30.4K | tokens_per_sec_per_gpu: 15.2K | global_batch_size: 4 | lm_loss: 14.4 | lr: 1.5e-06 | model_tflops_per_gpu: 358 | hardware_tflops_per_gpu: 358 | grad_norm: 65
+01/27/2025 15:50:32 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 9476.89MiB. Peak allocated 12569.06MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.16MiB
+01/27/2025 15:50:32 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 12568.97MiB. Peak allocated 41137.53MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.18MiB
+01/27/2025 15:50:32 [INFO|DP=0|PP=0|TP=0]: iteration: 31 / 120000 | consumed_tokens: 508K | elapsed_time_per_iteration_ms: 541 | tokens_per_sec: 30.3K | tokens_per_sec_per_gpu: 15.1K | global_batch_size: 4 | lm_loss: 14.3 | lr: 1.55e-06 | model_tflops_per_gpu: 356 | hardware_tflops_per_gpu: 356 | grad_norm: 64.8
+01/27/2025 15:50:32 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 9476.89MiB. Peak allocated 12569.06MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.18MiB
+01/27/2025 15:50:33 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 12568.97MiB. Peak allocated 41138.03MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.18MiB
+01/27/2025 15:50:33 [INFO|DP=0|PP=0|TP=0]: iteration: 32 / 120000 | consumed_tokens: 524K | elapsed_time_per_iteration_ms: 540 | tokens_per_sec: 30.4K | tokens_per_sec_per_gpu: 15.2K | global_batch_size: 4 | lm_loss: 14.4 | lr: 1.6e-06 | model_tflops_per_gpu: 357 | hardware_tflops_per_gpu: 357 | grad_norm: 65.3
+01/27/2025 15:50:33 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 9476.89MiB. Peak allocated 12569.06MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.18MiB
+01/27/2025 15:50:33 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 12568.97MiB. Peak allocated 41137.53MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.18MiB
+01/27/2025 15:50:33 [INFO|DP=0|PP=0|TP=0]: iteration: 33 / 120000 | consumed_tokens: 541K | elapsed_time_per_iteration_ms: 540 | tokens_per_sec: 30.3K | tokens_per_sec_per_gpu: 15.2K | global_batch_size: 4 | lm_loss: 14.3 | lr: 1.65e-06 | model_tflops_per_gpu: 357 | hardware_tflops_per_gpu: 357 | grad_norm: 65.2
+01/27/2025 15:50:33 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 9476.89MiB. Peak allocated 12569.06MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.18MiB
+01/27/2025 15:50:34 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 12567.97MiB. Peak allocated 41137.53MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.21MiB
+01/27/2025 15:50:34 [INFO|DP=0|PP=0|TP=0]: iteration: 34 / 120000 | consumed_tokens: 557K | elapsed_time_per_iteration_ms: 540 | tokens_per_sec: 30.4K | tokens_per_sec_per_gpu: 15.2K | global_batch_size: 4 | lm_loss: 14.3 | lr: 1.7e-06 | model_tflops_per_gpu: 357 | hardware_tflops_per_gpu: 357 | grad_norm: 64.8
+01/27/2025 15:50:34 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 9476.89MiB. Peak allocated 12568.06MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.22MiB
+01/27/2025 15:50:34 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 12567.97MiB. Peak allocated 41138.03MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.22MiB
+01/27/2025 15:50:34 [INFO|DP=0|PP=0|TP=0]: iteration: 35 / 120000 | consumed_tokens: 573K | elapsed_time_per_iteration_ms: 542 | tokens_per_sec: 30.2K | tokens_per_sec_per_gpu: 15.1K | global_batch_size: 4 | lm_loss: 14.3 | lr: 1.75e-06 | model_tflops_per_gpu: 355 | hardware_tflops_per_gpu: 355 | grad_norm: 65.2
+01/27/2025 15:50:34 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 9476.89MiB. Peak allocated 12568.06MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.22MiB
+01/27/2025 15:50:35 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 12568.97MiB. Peak allocated 41137.53MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.22MiB
+01/27/2025 15:50:35 [INFO|DP=0|PP=0|TP=0]: iteration: 36 / 120000 | consumed_tokens: 590K | elapsed_time_per_iteration_ms: 540 | tokens_per_sec: 30.4K | tokens_per_sec_per_gpu: 15.2K | global_batch_size: 4 | lm_loss: 14.3 | lr: 1.8e-06 | model_tflops_per_gpu: 357 | hardware_tflops_per_gpu: 357 | grad_norm: 65.2
+01/27/2025 15:50:35 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 9476.89MiB. Peak allocated 12569.06MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.22MiB
+01/27/2025 15:50:35 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 12568.97MiB. Peak allocated 41138.03MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.23MiB
+01/27/2025 15:50:36 [INFO|DP=0|PP=0|TP=0]: iteration: 37 / 120000 | consumed_tokens: 606K | elapsed_time_per_iteration_ms: 544 | tokens_per_sec: 30.1K | tokens_per_sec_per_gpu: 15.1K | global_batch_size: 4 | lm_loss: 14.2 | lr: 1.85e-06 | model_tflops_per_gpu: 354 | hardware_tflops_per_gpu: 354 | grad_norm: 65.6
+01/27/2025 15:50:36 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 9476.89MiB. Peak allocated 12569.06MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.23MiB
+01/27/2025 15:50:36 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 12568.97MiB. Peak allocated 41137.53MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.23MiB
+01/27/2025 15:50:36 [INFO|DP=0|PP=0|TP=0]: iteration: 38 / 120000 | consumed_tokens: 623K | elapsed_time_per_iteration_ms: 542 | tokens_per_sec: 30.2K | tokens_per_sec_per_gpu: 15.1K | global_batch_size: 4 | lm_loss: 14.3 | lr: 1.9e-06 | model_tflops_per_gpu: 355 | hardware_tflops_per_gpu: 355 | grad_norm: 64.9
+01/27/2025 15:50:36 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 9476.89MiB. Peak allocated 12569.06MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.23MiB
+01/27/2025 15:50:36 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 12568.97MiB. Peak allocated 41137.53MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.23MiB
+01/27/2025 15:50:37 [INFO|DP=0|PP=0|TP=0]: iteration: 39 / 120000 | consumed_tokens: 639K | elapsed_time_per_iteration_ms: 544 | tokens_per_sec: 30.1K | tokens_per_sec_per_gpu: 15.1K | global_batch_size: 4 | lm_loss: 14.2 | lr: 1.95e-06 | model_tflops_per_gpu: 354 | hardware_tflops_per_gpu: 354 | grad_norm: 64.8
+01/27/2025 15:50:37 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 9476.89MiB. Peak allocated 12569.06MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.23MiB
+01/27/2025 15:50:37 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 12567.97MiB. Peak allocated 41137.53MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.30MiB
+01/27/2025 15:50:37 [INFO|DP=0|PP=0|TP=0]: iteration: 40 / 120000 | consumed_tokens: 655K | elapsed_time_per_iteration_ms: 544 | tokens_per_sec: 30.1K | tokens_per_sec_per_gpu: 15.1K | global_batch_size: 4 | lm_loss: 14.2 | lr: 2e-06 | model_tflops_per_gpu: 354 | hardware_tflops_per_gpu: 354 | grad_norm: 65.2
+01/27/2025 15:50:37 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 9476.89MiB. Peak allocated 12568.06MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.30MiB
+01/27/2025 15:50:38 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 12568.97MiB. Peak allocated 41137.53MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.30MiB
+01/27/2025 15:50:38 [INFO|DP=0|PP=0|TP=0]: iteration: 41 / 120000 | consumed_tokens: 672K | elapsed_time_per_iteration_ms: 542 | tokens_per_sec: 30.3K | tokens_per_sec_per_gpu: 15.1K | global_batch_size: 4 | lm_loss: 14.2 | lr: 2.05e-06 | model_tflops_per_gpu: 355 | hardware_tflops_per_gpu: 355 | grad_norm: 66.4
+01/27/2025 15:50:38 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 9476.89MiB. Peak allocated 12569.06MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.31MiB
+01/27/2025 15:50:38 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 12568.97MiB. Peak allocated 41137.53MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.31MiB
+01/27/2025 15:50:38 [INFO|DP=0|PP=0|TP=0]: iteration: 42 / 120000 | consumed_tokens: 688K | elapsed_time_per_iteration_ms: 541 | tokens_per_sec: 30.3K | tokens_per_sec_per_gpu: 15.1K | global_batch_size: 4 | lm_loss: 14.2 | lr: 2.1e-06 | model_tflops_per_gpu: 356 | hardware_tflops_per_gpu: 356 | grad_norm: 65.8
+01/27/2025 15:50:38 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 9476.89MiB. Peak allocated 12569.06MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.31MiB
+01/27/2025 15:50:39 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 12568.97MiB. Peak allocated 41137.53MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.31MiB
+01/27/2025 15:50:39 [INFO|DP=0|PP=0|TP=0]: iteration: 43 / 120000 | consumed_tokens: 705K | elapsed_time_per_iteration_ms: 539 | tokens_per_sec: 30.4K | tokens_per_sec_per_gpu: 15.2K | global_batch_size: 4 | lm_loss: 14.2 | lr: 2.15e-06 | model_tflops_per_gpu: 357 | hardware_tflops_per_gpu: 357 | grad_norm: 65.9
+01/27/2025 15:50:39 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 9476.89MiB. Peak allocated 12569.06MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.31MiB
+01/27/2025 15:50:39 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 12568.97MiB. Peak allocated 41137.53MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.31MiB
+01/27/2025 15:50:39 [INFO|DP=0|PP=0|TP=0]: iteration: 44 / 120000 | consumed_tokens: 721K | elapsed_time_per_iteration_ms: 540 | tokens_per_sec: 30.3K | tokens_per_sec_per_gpu: 15.2K | global_batch_size: 4 | lm_loss: 14.2 | lr: 2.2e-06 | model_tflops_per_gpu: 356 | hardware_tflops_per_gpu: 356 | grad_norm: 65.2
+01/27/2025 15:50:39 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 9476.89MiB. Peak allocated 12569.06MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.31MiB
+01/27/2025 15:50:40 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 12568.97MiB. Peak allocated 41138.03MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.31MiB
+01/27/2025 15:50:40 [INFO|DP=0|PP=0|TP=0]: iteration: 45 / 120000 | consumed_tokens: 737K | elapsed_time_per_iteration_ms: 540 | tokens_per_sec: 30.4K | tokens_per_sec_per_gpu: 15.2K | global_batch_size: 4 | lm_loss: 14.1 | lr: 2.25e-06 | model_tflops_per_gpu: 357 | hardware_tflops_per_gpu: 357 | grad_norm: 65.9
+01/27/2025 15:50:40 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 9476.89MiB. Peak allocated 12569.06MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.31MiB
+01/27/2025 15:50:40 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 12568.97MiB. Peak allocated 41137.53MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.31MiB
+01/27/2025 15:50:40 [INFO|DP=0|PP=0|TP=0]: iteration: 46 / 120000 | consumed_tokens: 754K | elapsed_time_per_iteration_ms: 539 | tokens_per_sec: 30.4K | tokens_per_sec_per_gpu: 15.2K | global_batch_size: 4 | lm_loss: 14.1 | lr: 2.3e-06 | model_tflops_per_gpu: 357 | hardware_tflops_per_gpu: 357 | grad_norm: 64.8
+01/27/2025 15:50:40 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 9476.89MiB. Peak allocated 12569.06MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.31MiB
+01/27/2025 15:50:41 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 12568.97MiB. Peak allocated 41137.53MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.31MiB
+01/27/2025 15:50:41 [INFO|DP=0|PP=0|TP=0]: iteration: 47 / 120000 | consumed_tokens: 770K | elapsed_time_per_iteration_ms: 541 | tokens_per_sec: 30.3K | tokens_per_sec_per_gpu: 15.1K | global_batch_size: 4 | lm_loss: 14 | lr: 2.35e-06 | model_tflops_per_gpu: 356 | hardware_tflops_per_gpu: 356 | grad_norm: 65.4
+01/27/2025 15:50:41 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 9476.89MiB. Peak allocated 12569.06MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.31MiB
+01/27/2025 15:50:41 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 12568.97MiB. Peak allocated 41138.03MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.31MiB
+01/27/2025 15:50:42 [INFO|DP=0|PP=0|TP=0]: iteration: 48 / 120000 | consumed_tokens: 786K | elapsed_time_per_iteration_ms: 539 | tokens_per_sec: 30.4K | tokens_per_sec_per_gpu: 15.2K | global_batch_size: 4 | lm_loss: 14 | lr: 2.4e-06 | model_tflops_per_gpu: 357 | hardware_tflops_per_gpu: 357 | grad_norm: 65.4
+01/27/2025 15:50:42 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 9476.89MiB. Peak allocated 12569.06MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.31MiB
+01/27/2025 15:50:42 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 12568.97MiB. Peak allocated 41137.53MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.31MiB
+01/27/2025 15:50:42 [INFO|DP=0|PP=0|TP=0]: iteration: 49 / 120000 | consumed_tokens: 803K | elapsed_time_per_iteration_ms: 541 | tokens_per_sec: 30.3K | tokens_per_sec_per_gpu: 15.2K | global_batch_size: 4 | lm_loss: 14 | lr: 2.45e-06 | model_tflops_per_gpu: 356 | hardware_tflops_per_gpu: 356 | grad_norm: 65.1
+01/27/2025 15:50:42 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 9476.89MiB. Peak allocated 12569.06MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.31MiB
+01/27/2025 15:50:42 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 12567.97MiB. Peak allocated 41137.53MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.31MiB
+01/27/2025 15:50:43 [INFO|DP=0|PP=0|TP=0]: iteration: 50 / 120000 | consumed_tokens: 819K | elapsed_time_per_iteration_ms: 539 | tokens_per_sec: 30.4K | tokens_per_sec_per_gpu: 15.2K | global_batch_size: 4 | lm_loss: 14 | lr: 2.5e-06 | model_tflops_per_gpu: 357 | hardware_tflops_per_gpu: 357 | grad_norm: 65.3
+01/27/2025 15:50:43 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 9476.89MiB. Peak allocated 12568.06MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.31MiB
+01/27/2025 15:50:43 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 12568.97MiB. Peak allocated 41137.53MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.31MiB
+01/27/2025 15:50:43 [INFO|DP=0|PP=0|TP=0]: iteration: 51 / 120000 | consumed_tokens: 836K | elapsed_time_per_iteration_ms: 541 | tokens_per_sec: 30.3K | tokens_per_sec_per_gpu: 15.1K | global_batch_size: 4 | lm_loss: 13.9 | lr: 2.55e-06 | model_tflops_per_gpu: 356 | hardware_tflops_per_gpu: 356 | grad_norm: 65.5
+01/27/2025 15:50:43 [INFO|DP=0|PP=0|TP=0]:  Memory usage: 9476.89MiB. Peak allocated 12569.06MiB. Peak reserved: 48542.00MiB. CPU rss: 3037.31MiB
