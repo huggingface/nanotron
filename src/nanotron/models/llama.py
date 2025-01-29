@@ -237,13 +237,14 @@ class MLP(nn.Module):
             mode=tp_mode,
             bias=False,
             async_communication=tp_linear_async_communication and tp_mode is TensorParallelLinearMode.REDUCE_SCATTER,
+            async_all_reduce=parallel_config.domino.num_input_batches > 1,
         )
         self.split_silu_mul = GLUActivation(config.hidden_act)
 
     def forward(self, hidden_states):  # [seq_length, batch_size, hidden_dim]
         merged_states = self.gate_up_proj(hidden_states)
-        hidden_states = self.down_proj(self.split_silu_mul(merged_states))
-        return {"hidden_states": hidden_states}
+        hidden_states, work = self.down_proj(self.split_silu_mul(merged_states))
+        return {"hidden_states": hidden_states, "work": work}
 
 
 class CoreAttention(nn.Module):
@@ -335,6 +336,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         parallel_config: Optional[ParallelismArgs],
         tp_pg: dist.ProcessGroup,
         layer_idx: int,
+        async_all_reduce: bool = False,
     ):
         from flash_attn.layers.rotary import RotaryEmbedding as FlashRotaryEmbedding
 
@@ -418,6 +420,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             mode=tp_mode,
             bias=False,
             async_communication=tp_linear_async_communication,
+            async_all_reduce=async_all_reduce,
         )
 
         self.attention = CoreAttention(
@@ -687,9 +690,9 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         attention_output = (
             attention_output.contiguous().view(batch_size, q_length, self.n_local_q_heads * self.d_v).transpose(0, 1)
         )
-        output = self.o_proj(attention_output)
+        output, work = self.o_proj(attention_output)
 
-        return {"hidden_states": output, "sequence_mask": sequence_mask}
+        return {"hidden_states": output, "work": work, "sequence_mask": sequence_mask}
 
 
 class LlamaDecoderLayer(nn.Module):
@@ -702,36 +705,80 @@ class LlamaDecoderLayer(nn.Module):
     ):
         super().__init__()
         self.input_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+
         self.attn = CausalSelfAttention(
             config=config,
             parallel_config=parallel_config,
             tp_pg=tp_pg,
             layer_idx=layer_idx,
+            async_all_reduce=parallel_config.domino.num_input_batches > 1,
         )
 
         self.post_attention_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.mlp = MLP(config=config, parallel_config=parallel_config, tp_pg=tp_pg)
 
         self.recompute_layer = parallel_config.recompute_layer
+        self.parallel_config = parallel_config
 
     def _core_forward(
         self,
         hidden_states: Union[torch.Tensor, TensorPointer],
         sequence_mask: Union[torch.Tensor, TensorPointer],
     ) -> List[Union[torch.Tensor, TensorPointer]]:
-        residual = hidden_states
-        hidden_states = self.input_layernorm(hidden_states)
 
-        output = self.attn(hidden_states=hidden_states, sequence_mask=sequence_mask)
-        hidden_states = output["hidden_states"]
-        hidden_states = hidden_states + residual
+        num_input_batches = self.parallel_config.domino.num_input_batches
+        assert num_input_batches == 2
+        hidden_states = torch.chunk(hidden_states, chunks=num_input_batches, dim=1)
+        orig_sequence_mask = sequence_mask
+        sequence_mask = torch.chunk(sequence_mask, chunks=num_input_batches, dim=0)
 
-        residual = hidden_states
-        hidden_states = self.post_attention_layernorm(hidden_states)
-        hidden_states = self.mlp(hidden_states=hidden_states)["hidden_states"]
-        hidden_states = hidden_states + residual
+        hidden_states0, hidden_states1 = hidden_states
+        sequence_mask0, sequence_mask1 = sequence_mask
 
-        return hidden_states, output["sequence_mask"]
+        # # Combine the chunks into a list of dictionaries
+        # hidden_encoder_states_list = [
+        #     {"hidden_states": hidden_encoder_states["hidden_states"][i], "sequence_mask": hidden_encoder_states["sequence_mask"][i]}
+        #     for i in range(num_input_batches)
+        # ]
+
+        residual0 = hidden_states0
+        residual1 = hidden_states1
+
+        hidden_states0 = self.input_layernorm(hidden_states0)
+        hidden_states1 = self.input_layernorm(hidden_states1)
+
+        attn_output0 = self.attn(hidden_states=hidden_states0, sequence_mask=sequence_mask0)
+        attn_output0_work = attn_output0["work"]
+
+        attn_output1 = self.attn(hidden_states=hidden_states1, sequence_mask=sequence_mask1)
+        attn_output1_work = attn_output1["work"]
+
+        attn_output0_work.wait()
+        hidden_states0 = attn_output0["hidden_states"]
+        hidden_states0 = hidden_states0 + residual0
+        residual0 = hidden_states0
+        hidden_states0 = self.post_attention_layernorm(hidden_states0)
+
+        mlp_output0 = self.mlp(hidden_states=hidden_states0)
+
+        attn_output1_work.wait()
+        hidden_states1 = attn_output1["hidden_states"]
+        hidden_states1 = hidden_states1 + residual1
+        residual1 = hidden_states1
+        hidden_states1 = self.post_attention_layernorm(hidden_states1)
+
+        mlp_output1 = self.mlp(hidden_states=hidden_states1)
+        mlp_output0["work"].wait()
+        mlp_output1["work"].wait()
+
+        hidden_states0 = mlp_output0["hidden_states"]
+        hidden_states1 = mlp_output1["hidden_states"]
+
+        hidden_states0 = hidden_states0 + residual0
+        hidden_states1 = hidden_states1 + residual1
+
+        hidden_states = torch.cat([hidden_states0, hidden_states1], dim=1)
+        return hidden_states, orig_sequence_mask
 
     def _checkpointed_forward(
         self,
@@ -899,8 +946,23 @@ class LlamaModel(nn.Module):
             "hidden_states": output["input_embeds"],
             "sequence_mask": input_mask,
         }
+
+        # assert 1 == 1
+        # num_input_batches = self.parallel_config.domino.num_input_batches
+        # hidden_encoder_states["hidden_states"] = torch.chunk(hidden_encoder_states["hidden_states"], chunks=num_input_batches, dim=1)
+        # hidden_encoder_states["sequence_mask"] = torch.chunk(hidden_encoder_states["sequence_mask"], chunks=num_input_batches, dim=0)
+
+        # # Combine the chunks into a list of dictionaries
+        # hidden_encoder_states_list = [
+        #     {"hidden_states": hidden_encoder_states["hidden_states"][i], "sequence_mask": hidden_encoder_states["sequence_mask"][i]}
+        #     for i in range(num_input_batches)
+        # ]
+
         for encoder_block in self.decoder:
             hidden_encoder_states = encoder_block(**hidden_encoder_states)
+
+            # for hidden_encoder_states in hidden_encoder_states_list:
+            #     hidden_encoder_states = encoder_block(**hidden_encoder_states)
 
         hidden_states = self.final_layer_norm(input=hidden_encoder_states["hidden_states"])["hidden_states"]
 

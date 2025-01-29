@@ -111,6 +111,7 @@ class TensorParallelRowLinear(nn.Linear):
         device=None,
         dtype=None,
         async_communication: bool = False,
+        async_all_reduce: bool = False,
         contiguous_chunks: Optional[Tuple[int, ...]] = None,
     ):
         self.pg = pg
@@ -133,6 +134,7 @@ class TensorParallelRowLinear(nn.Linear):
         )
         self.mode = mode
         self.async_communication = async_communication
+        self.async_all_reduce = async_all_reduce
         if self.mode is TensorParallelLinearMode.ALL_REDUCE and self.async_communication:
             raise ValueError("async_communication is not supported for ALL_REDUCE mode")
 
@@ -166,6 +168,7 @@ class TensorParallelRowLinear(nn.Linear):
             group=self.pg,
             tp_mode=self.mode,
             async_communication=self.async_communication,
+            async_all_reduce=self.async_all_reduce,
         )
 
     def extra_repr(self) -> str:
@@ -290,7 +293,7 @@ class TensorParallelEmbedding(nn.Embedding):
             out = out * (~input_mask[..., None])
 
         if self.mode is TensorParallelLinearMode.ALL_REDUCE:
-            out = differentiable_all_reduce_sum(out, group=self.pg)
+            out, _ = differentiable_all_reduce_sum(out, group=self.pg, async_all_reduce=False)
         elif self.mode is TensorParallelLinearMode.REDUCE_SCATTER:
             out = differentiable_reduce_scatter_sum(out, group=self.pg)
         else:

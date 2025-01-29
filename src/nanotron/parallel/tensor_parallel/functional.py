@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import math
-from typing import Optional
+from typing import Optional, Tuple
 
 import torch
 from torch.nn import functional as F
@@ -587,18 +587,22 @@ def row_linear(
     bias: Optional[torch.Tensor],
     group: dist.ProcessGroup,
     tp_mode: TensorParallelLinearMode,
+    # TODO(xrsrke): use less confusing names for these arguments
     async_communication: bool,
-):
+    async_all_reduce: bool,
+) -> Tuple[torch.Tensor, Optional[torch.Future]]:
     if async_communication:
         return _RowLinearAsyncCommunication.apply(input, weight, bias, group, tp_mode)
 
     out = F.linear(input, weight, bias)
 
     if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
-        out = differentiable_all_reduce_sum(out, group=group)
+        out, work = differentiable_all_reduce_sum(out, group=group, async_all_reduce=async_all_reduce)
     elif tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
+        assert async_all_reduce is False, "Async communication is not supported for REDUCE_SCATTER mode."
         out = differentiable_reduce_scatter_sum(out, group=group)
+        work = None
     else:
         raise ValueError(f"Got unexpected mode: {tp_mode}.")
 
-    return out
+    return out, work

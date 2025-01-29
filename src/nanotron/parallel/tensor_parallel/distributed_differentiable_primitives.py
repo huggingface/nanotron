@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Optional
+from typing import Optional, Tuple
 
 import torch
 from torch import distributed as torch_dist
@@ -32,23 +32,28 @@ class DifferentiableIdentity(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_output):
         group = ctx.group
-        return DifferentiableAllReduceSum.apply(grad_output, group), None
+        return DifferentiableAllReduceSum.apply(grad_output, group, False), None
 
 
 class DifferentiableAllReduceSum(torch.autograd.Function):
     """All-reduce in a differentiable fashion"""
 
     @staticmethod
-    def forward(ctx, tensor, group: Optional[ProcessGroup]):
+    def forward(
+        ctx, tensor, group: Optional[ProcessGroup], async_all_reduce: bool
+    ) -> Tuple[torch.Tensor, Optional["dist.Work"]]:
         if group.size() == 1:
             return tensor
 
-        dist.all_reduce(tensor, op=dist.ReduceOp.SUM, group=group)
-        return tensor
+        handle = dist.all_reduce(tensor, op=dist.ReduceOp.SUM, group=group, async_op=async_all_reduce)
+        if async_all_reduce:
+            return tensor, handle
+        else:
+            return tensor, None
 
     @staticmethod
     def backward(ctx, grad_output):
-        return grad_output, None
+        return grad_output, None, None
 
 
 class DifferentiableAllGather(torch.autograd.Function):
@@ -134,8 +139,8 @@ def differentiable_identity(tensor, group: Optional[ProcessGroup] = None):
     return DifferentiableIdentity.apply(tensor, group)
 
 
-def differentiable_all_reduce_sum(tensor, group: Optional[ProcessGroup] = None):
-    return DifferentiableAllReduceSum.apply(tensor, group)
+def differentiable_all_reduce_sum(tensor, group: Optional[ProcessGroup] = None, async_all_reduce: bool = False):
+    return DifferentiableAllReduceSum.apply(tensor, group, async_all_reduce)
 
 
 def differentiable_all_gather(tensor, group: Optional[ProcessGroup] = None):

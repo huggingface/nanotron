@@ -12,6 +12,22 @@ from nanotron.parallel.tensor_parallel.nn import TensorParallelLinearMode
 
 
 @dataclass
+class DominoArgs:
+    """
+    Domino: Eliminating Communication in LLM Training via Generic Tensor Slicing and Overlapping
+    https://arxiv.org/abs/2409.15241
+    """
+
+    # NOTE: if the number of input batches is 1,
+    # it's equivalent to non-domino mode
+    # so if you want to enable domino mode, set this to > 1
+    num_input_batches: int
+
+    def __post_init__(self):
+        assert self.num_input_batches > 1, "In order to enable domino mode, set num_input_batches > 1"
+
+
+@dataclass
 class ParallelismArgs:
     """Arguments related to TP/PP/DP
 
@@ -37,6 +53,7 @@ class ParallelismArgs:
     tp_recompute_allgather: bool = True
 
     expert_parallel_size: int = 1
+    domino: Optional[DominoArgs] = None
 
     def __post_init__(self):
         # Conservative defaults
