@@ -293,7 +293,7 @@ class TensorParallelEmbedding(nn.Embedding):
             out = out * (~input_mask[..., None])
 
         if self.mode is TensorParallelLinearMode.ALL_REDUCE:
-            out, _ = differentiable_all_reduce_sum(out, group=self.pg, async_all_reduce=False)
+            out = differentiable_all_reduce_sum(out, group=self.pg, async_all_reduce=False)
         elif self.mode is TensorParallelLinearMode.REDUCE_SCATTER:
             out = differentiable_reduce_scatter_sum(out, group=self.pg)
         else:

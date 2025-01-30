@@ -19,6 +19,7 @@ from torch import distributed as torch_dist
 
 from nanotron import distributed as dist
 from nanotron.distributed import ProcessGroup
+from nanotron.parallel.comm import AsyncCommBucket
 
 
 class DifferentiableIdentity(torch.autograd.Function):
@@ -42,14 +43,29 @@ class DifferentiableAllReduceSum(torch.autograd.Function):
     def forward(
         ctx, tensor, group: Optional[ProcessGroup], async_all_reduce: bool
     ) -> Tuple[torch.Tensor, Optional["dist.Work"]]:
+        # ctx.mark_non_differentiable(async_all_reduce)
+        ctx.async_all_reduce = async_all_reduce
+
         if group.size() == 1:
             return tensor
 
+        orig_id = id(tensor)
         handle = dist.all_reduce(tensor, op=dist.ReduceOp.SUM, group=group, async_op=async_all_reduce)
+        # if async_all_reduce:
+        #     handle.wait()
+        new_id = id(tensor)
+        assert 1 == 1
+        assert orig_id == new_id
+        # if async_all_reduce:
+        #     return tensor, handle
+        # else:
+        #     return tensor, None
         if async_all_reduce:
-            return tensor, handle
-        else:
-            return tensor, None
+            # AsyncCommBucket.add(tensor, handle)
+            # AsyncCommBucket.add(id(tensor), handle)
+            AsyncCommBucket.add(orig_id, handle)
+
+        return tensor
 
     @staticmethod
     def backward(ctx, grad_output):

@@ -597,7 +597,15 @@ def row_linear(
     out = F.linear(input, weight, bias)
 
     if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
-        out, work = differentiable_all_reduce_sum(out, group=group, async_all_reduce=async_all_reduce)
+        # out, work = differentiable_all_reduce_sum(out, group=group, async_all_reduce=async_all_reduce)
+        orig_out_id = id(out)
+        # NOTE: why the id(out) doesn't match the id(out) before the all_reduce?
+        out = differentiable_all_reduce_sum(out, group=group, async_all_reduce=async_all_reduce)
+        if async_all_reduce:
+            from nanotron.parallel.comm import AsyncCommBucket
+
+            work = AsyncCommBucket.get(orig_out_id)
+            assert 1 == 1
     elif tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
         assert async_all_reduce is False, "Async communication is not supported for REDUCE_SCATTER mode."
         out = differentiable_reduce_scatter_sum(out, group=group)

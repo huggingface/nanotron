@@ -2,6 +2,9 @@ from abc import ABC, abstractmethod
 from typing import Dict, Iterable, Optional, Union
 
 import torch
+from torch import nn as torch_nn
+from torch.nn.parallel import DistributedDataParallel
+
 from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.distributed import ProcessGroup
@@ -12,8 +15,6 @@ from nanotron.parallel.pipeline_parallel.context_manager import attach_pipeline_
 from nanotron.parallel.pipeline_parallel.state import PipelineTrainBatchState
 from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
 from nanotron.utils import ContextManagers
-from torch import nn as torch_nn
-from torch.nn.parallel import DistributedDataParallel
 
 logger = logging.get_logger(__name__)
 
@@ -83,6 +84,9 @@ class PipelineEngine(ABC):
             if grad_accumulator is None:
                 sum(activations).backward()
             else:
+                # if not isinstance(activations, torch.Tensor):
+                #     raise NotImplementedError("Only support sum of tensors for now")
+
                 grad_accumulator.backward(sum(activations))
 
         # TODO @nouamane: this fixes interleaved afab but makes 1f1b hang
