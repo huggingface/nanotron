@@ -30,6 +30,7 @@ from nanotron.models import NanotronModel
 from nanotron.nn.activations import ACT2FN
 from nanotron.nn.layer_norm import TritonRMSNorm
 from nanotron.parallel import ParallelContext
+from nanotron.parallel.comm import WaitComm
 from nanotron.parallel.parameters import NanotronParameter
 from nanotron.parallel.pipeline_parallel.block import PipelineBlock, TensorPointer
 from nanotron.parallel.pipeline_parallel.p2p import P2P
@@ -45,6 +46,8 @@ from nanotron.scaling.parametrization import SpectralMupParametrizator, Standard
 from nanotron.utils import checkpoint_method
 
 logger = logging.get_logger(__name__)
+
+DOMINO_COMM_STREAM = "domino_comm_stream_{}"
 
 
 class RotaryEmbedding(nn.Module):
@@ -241,8 +244,8 @@ class MLP(nn.Module):
         )
         self.split_silu_mul = GLUActivation(config.hidden_act)
 
-    def forward(self, hidden_states):  # [seq_length, batch_size, hidden_dim]
-        merged_states = self.gate_up_proj(hidden_states)
+    def forward(self, hidden_states, handle_idx=None):  # [seq_length, batch_size, hidden_dim]
+        merged_states = self.gate_up_proj(hidden_states, handle_idx)
         hidden_states, work = self.down_proj(self.split_silu_mul(merged_states))
         return {"hidden_states": hidden_states, "work": work}
 
@@ -437,6 +440,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         self,
         hidden_states,  # [seq_length, batch_size, hidden_size]
         sequence_mask,  # [batch_size, seq_length]
+        handle_idx=None,
     ):
         from flash_attn import bert_padding
         from flash_attn.flash_attn_interface import (
@@ -445,7 +449,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         )
 
         qkv_states = self.qkv_proj(
-            hidden_states
+            hidden_states, handle_idx=handle_idx
         )  # [seq_length, batch_size, n_local_q_heads * d_qk + 2 * n_local_kv_heads * d_qk]
         q_length, batch_size, _ = qkv_states.shape
 
@@ -720,6 +724,18 @@ class LlamaDecoderLayer(nn.Module):
         self.recompute_layer = parallel_config.recompute_layer
         self.parallel_config = parallel_config
 
+        # if parallel_config.domino is not None and parallel_config.domino.num_input_batches > 1:
+        #     from nanotron.parallel.comm import CudaStreamManager
+        #     # NOTE: we use different cuda streams for different gpus, so it can overlaps the communication
+        #     CudaStreamManager.create(DOMINO_COMM_STREAM.format(torch.cuda.current_device()))
+        num_gpus = torch.cuda.device_count()
+        for i in range(num_gpus):
+            from nanotron import constants
+
+            constants.CUDA_STREAMS[i] = torch.cuda.Stream(device=torch.device(f"cuda:{i}"))
+
+        self.layer_idx = layer_idx
+
     def _core_forward(
         self,
         hidden_states: Union[torch.Tensor, TensorPointer],
@@ -747,29 +763,52 @@ class LlamaDecoderLayer(nn.Module):
         hidden_states0 = self.input_layernorm(hidden_states0)
         hidden_states1 = self.input_layernorm(hidden_states1)
 
-        attn_output0 = self.attn(hidden_states=hidden_states0, sequence_mask=sequence_mask0)
+        attn_output0 = self.attn(
+            hidden_states=hidden_states0, sequence_mask=sequence_mask0, handle_idx=f"layer_{self.layer_idx}_batch_0"
+        )
         attn_output0_work = attn_output0["work"]
 
-        attn_output1 = self.attn(hidden_states=hidden_states1, sequence_mask=sequence_mask1)
+        attn_output1 = self.attn(
+            hidden_states=hidden_states1, sequence_mask=sequence_mask1, handle_idx=f"layer_{self.layer_idx}_batch_1"
+        )
         attn_output1_work = attn_output1["work"]
 
-        attn_output0_work.wait()
+        from nanotron import constants
+
+        comm_stream = constants.CUDA_STREAMS[torch.cuda.current_device()]
+        # comm_stream = CudaStreamManager.get(DOMINO_COMM_STREAM.format(torch.cuda.current_device()))
+        with torch.cuda.stream(comm_stream):
+            attn_output0_work.wait()
+        # attn_output0_work.wait()
+
         hidden_states0 = attn_output0["hidden_states"]
         hidden_states0 = hidden_states0 + residual0
         residual0 = hidden_states0
         hidden_states0 = self.post_attention_layernorm(hidden_states0)
+        hidden_states0 = WaitComm.apply(hidden_states0, f"layer_{self.layer_idx}_batch_0")
 
+        # mlp_output0 = self.mlp(hidden_states=hidden_states0, handle_idx=f"layer_{self.layer_idx}_batch_0")
         mlp_output0 = self.mlp(hidden_states=hidden_states0)
 
-        attn_output1_work.wait()
+        with torch.cuda.stream(comm_stream):
+            attn_output1_work.wait()
+        # attn_output1_work.wait()
+
         hidden_states1 = attn_output1["hidden_states"]
         hidden_states1 = hidden_states1 + residual1
         residual1 = hidden_states1
         hidden_states1 = self.post_attention_layernorm(hidden_states1)
+        hidden_states1 = WaitComm.apply(hidden_states1, f"layer_{self.layer_idx}_batch_1")
 
+        # mlp_output1 = self.mlp(hidden_states=hidden_states1, handle_idx=f"layer_{self.layer_idx}_batch_1")
         mlp_output1 = self.mlp(hidden_states=hidden_states1)
-        mlp_output0["work"].wait()
-        mlp_output1["work"].wait()
+
+        with torch.cuda.stream(comm_stream):
+            mlp_output0["work"].wait()
+            mlp_output1["work"].wait()
+
+        # mlp_output0["work"].wait()
+        # mlp_output1["work"].wait()
 
         hidden_states0 = mlp_output0["hidden_states"]
         hidden_states1 = mlp_output1["hidden_states"]

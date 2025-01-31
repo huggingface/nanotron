@@ -52,6 +52,7 @@ class TensorParallelColumnLinear(nn.Linear):
         async_communication: bool = False,
         contiguous_chunks: Optional[Tuple[int, ...]] = None,
         tp_recompute_allgather: bool = True,
+        # handle_idx: Optional[int] = None,
     ):
         self.pg = pg
         self.world_size = pg.size()
@@ -72,6 +73,7 @@ class TensorParallelColumnLinear(nn.Linear):
 
         self.mode = mode
         self.async_communication = async_communication
+        # self.handle_idx = handle_idx
 
         if contiguous_chunks is not None:
             assert (
@@ -85,7 +87,7 @@ class TensorParallelColumnLinear(nn.Linear):
             split_config=split_config,
         )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, handle_idx=None) -> torch.Tensor:
         return column_linear(
             input=x,
             weight=self.weight,
@@ -94,6 +96,7 @@ class TensorParallelColumnLinear(nn.Linear):
             tp_mode=self.mode,
             async_communication=self.async_communication,
             tp_recompute_allgather=self.tp_recompute_allgather,
+            handle_idx=handle_idx,
         )
 
     def extra_repr(self) -> str:

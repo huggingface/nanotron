@@ -26,14 +26,23 @@ class DifferentiableIdentity(torch.autograd.Function):
     """All-reduce gradients in a differentiable fashion"""
 
     @staticmethod
-    def forward(ctx, tensor, group: Optional[ProcessGroup]):
+    def forward(ctx, tensor, group: Optional[ProcessGroup], handle_idx=None):
+        # assert handle_idx is not None
+        ctx.handle_idx = handle_idx
         ctx.group = group
         return tensor
 
     @staticmethod
     def backward(ctx, grad_output):
+        # import pydevd
+        # pydevd.settrace(suspend=False, trace_only_current_thread=True)
+        # NOTE: lm_head is TensorParallelColumnLinear, and it doesn't do async
+        # assert ctx.handle_idx is not None
         group = ctx.group
-        return DifferentiableAllReduceSum.apply(grad_output, group, False), None
+        if ctx.handle_idx is not None:
+            assert 1 == 1
+
+        return DifferentiableAllReduceSum.apply(grad_output, group, True, ctx.handle_idx), None, None
 
 
 class DifferentiableAllReduceSum(torch.autograd.Function):
@@ -41,7 +50,7 @@ class DifferentiableAllReduceSum(torch.autograd.Function):
 
     @staticmethod
     def forward(
-        ctx, tensor, group: Optional[ProcessGroup], async_all_reduce: bool
+        ctx, tensor, group: Optional[ProcessGroup], async_all_reduce: bool, handle_idx: Optional[int] = None
     ) -> Tuple[torch.Tensor, Optional["dist.Work"]]:
         # ctx.mark_non_differentiable(async_all_reduce)
         ctx.async_all_reduce = async_all_reduce
@@ -63,13 +72,17 @@ class DifferentiableAllReduceSum(torch.autograd.Function):
         if async_all_reduce:
             # AsyncCommBucket.add(tensor, handle)
             # AsyncCommBucket.add(id(tensor), handle)
-            AsyncCommBucket.add(orig_id, handle)
+            # try:
+            #     AsyncCommBucket.add(orig_id if handle_idx is None else handle_idx, handle)
+            # except Exception as e:
+            #     assert 1 == 1
+            AsyncCommBucket.add(orig_id if handle_idx is None else handle_idx, handle)
 
         return tensor
 
     @staticmethod
     def backward(ctx, grad_output):
-        return grad_output, None, None
+        return grad_output, None, None, None
 
 
 class DifferentiableAllGather(torch.autograd.Function):
@@ -151,8 +164,8 @@ class DifferentiableReduceScatterSum(torch.autograd.Function):
 # -----------------
 
 
-def differentiable_identity(tensor, group: Optional[ProcessGroup] = None):
-    return DifferentiableIdentity.apply(tensor, group)
+def differentiable_identity(tensor, group: Optional[ProcessGroup] = None, handle_idx=None):
+    return DifferentiableIdentity.apply(tensor, group, handle_idx)
 
 
 def differentiable_all_reduce_sum(tensor, group: Optional[ProcessGroup] = None, async_all_reduce: bool = False):

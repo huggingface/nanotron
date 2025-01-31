@@ -436,12 +436,13 @@ def column_linear(
     tp_mode: TensorParallelLinearMode,
     async_communication: bool,
     tp_recompute_allgather: bool = True,
+    handle_idx: Optional[int] = None,
 ):
     if async_communication:
         return _ColumnLinearAsyncCommunication.apply(input, weight, bias, group, tp_mode, tp_recompute_allgather)
 
     if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
-        input = differentiable_identity(input, group=group)
+        input = differentiable_identity(input, group=group, handle_idx=handle_idx)
         return F.linear(input, weight, bias)
     if tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
         return _ColumnLinearNoAsyncCommunicationReduceScatterMode.apply(
@@ -604,7 +605,8 @@ def row_linear(
         if async_all_reduce:
             from nanotron.parallel.comm import AsyncCommBucket
 
-            work = AsyncCommBucket.get(orig_out_id)
+            # work = AsyncCommBucket.get(orig_out_id)
+            work = AsyncCommBucket.pop(orig_out_id)
             assert 1 == 1
     elif tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
         assert async_all_reduce is False, "Async communication is not supported for REDUCE_SCATTER mode."
