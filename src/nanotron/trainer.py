@@ -578,6 +578,10 @@ class DistributedTrainer:
 
         self.post_train_step()
 
+        from nanotron.parallel.comm import AsyncCommBucket
+
+        AsyncCommBucket.clear_all()
+
         return outputs, loss_avg
 
     def validation_step(self, dataloader: Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]]) -> Iterable[Dict]:

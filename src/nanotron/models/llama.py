@@ -764,12 +764,16 @@ class LlamaDecoderLayer(nn.Module):
         hidden_states1 = self.input_layernorm(hidden_states1)
 
         attn_output0 = self.attn(
-            hidden_states=hidden_states0, sequence_mask=sequence_mask0, handle_idx=f"layer_{self.layer_idx}_batch_0"
+            hidden_states=hidden_states0,
+            sequence_mask=sequence_mask0,
+            handle_idx=f"layer_attn_{self.layer_idx}_batch_0",
         )
         attn_output0_work = attn_output0["work"]
 
         attn_output1 = self.attn(
-            hidden_states=hidden_states1, sequence_mask=sequence_mask1, handle_idx=f"layer_{self.layer_idx}_batch_1"
+            hidden_states=hidden_states1,
+            sequence_mask=sequence_mask1,
+            handle_idx=f"layer_attn_{self.layer_idx}_batch_1",
         )
         attn_output1_work = attn_output1["work"]
 
@@ -785,10 +789,11 @@ class LlamaDecoderLayer(nn.Module):
         hidden_states0 = hidden_states0 + residual0
         residual0 = hidden_states0
         hidden_states0 = self.post_attention_layernorm(hidden_states0)
-        hidden_states0 = WaitComm.apply(hidden_states0, f"layer_{self.layer_idx}_batch_0")
+        hidden_states0 = WaitComm.apply(hidden_states0, f"layer_mlp_{self.layer_idx}_batch_1")
 
-        # mlp_output0 = self.mlp(hidden_states=hidden_states0, handle_idx=f"layer_{self.layer_idx}_batch_0")
-        mlp_output0 = self.mlp(hidden_states=hidden_states0)
+        mlp_output0 = self.mlp(hidden_states=hidden_states0, handle_idx=f"layer_mlp_{self.layer_idx}_batch_0")
+        mlp_output0 = WaitComm.apply(mlp_output0, f"layer_mlp_{self.layer_idx}_batch_1")
+        # mlp_output0 = self.mlp(hidden_states=hidden_states0)
 
         with torch.cuda.stream(comm_stream):
             attn_output1_work.wait()
@@ -798,10 +803,10 @@ class LlamaDecoderLayer(nn.Module):
         hidden_states1 = hidden_states1 + residual1
         residual1 = hidden_states1
         hidden_states1 = self.post_attention_layernorm(hidden_states1)
-        hidden_states1 = WaitComm.apply(hidden_states1, f"layer_{self.layer_idx}_batch_1")
+        # hidden_states1 = WaitComm.apply(hidden_states1, f"layer_{self.layer_idx}_batch_1")
 
-        # mlp_output1 = self.mlp(hidden_states=hidden_states1, handle_idx=f"layer_{self.layer_idx}_batch_1")
-        mlp_output1 = self.mlp(hidden_states=hidden_states1)
+        mlp_output1 = self.mlp(hidden_states=hidden_states1, handle_idx=f"layer_mlp_{self.layer_idx}_batch_1")
+        # mlp_output1 = self.mlp(hidden_states=hidden_states1)
 
         with torch.cuda.stream(comm_stream):
             mlp_output0["work"].wait()

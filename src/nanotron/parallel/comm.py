@@ -54,6 +54,10 @@ class AsyncCommBucket:
         work = AsyncCommBucket._async_op.pop(tensor_id)
         work.wait()
 
+    @staticmethod
+    def clear_all():
+        AsyncCommBucket._async_op.clear()
+
 
 class WaitComm(torch.autograd.Function):
     @staticmethod
@@ -63,10 +67,12 @@ class WaitComm(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_output):
-        import pydevd
+        # import pydevd
 
-        pydevd.settrace(suspend=False, trace_only_current_thread=True)
-        if ctx.wait_handle_idx != "layer_1_batch_1":
+        # pydevd.settrace(suspend=False, trace_only_current_thread=True)
+        # if ctx.wait_handle_idx != "layer_1_batch_1":
+        if ctx.wait_handle_idx != "layer_30_batch_1":
             handle = AsyncCommBucket.pop(ctx.wait_handle_idx)
             handle.wait()
+            # assert 1 == 1
         return grad_output, None
