@@ -436,13 +436,14 @@ def column_linear(
     tp_mode: TensorParallelLinearMode,
     async_communication: bool,
     tp_recompute_allgather: bool = True,
+    async_all_reduce: bool = False,
     handle_idx: Optional[int] = None,
 ):
     if async_communication:
         return _ColumnLinearAsyncCommunication.apply(input, weight, bias, group, tp_mode, tp_recompute_allgather)
 
     if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
-        input = differentiable_identity(input, group=group, handle_idx=handle_idx)
+        input = differentiable_identity(input, group=group, async_all_reduce=async_all_reduce, handle_idx=handle_idx)
         return F.linear(input, weight, bias)
     if tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
         return _ColumnLinearNoAsyncCommunicationReduceScatterMode.apply(
@@ -591,6 +592,7 @@ def row_linear(
     # TODO(xrsrke): use less confusing names for these arguments
     async_communication: bool,
     async_all_reduce: bool,
+    handle_idx=None,
 ) -> Tuple[torch.Tensor, Optional[torch.Future]]:
     if async_communication:
         return _RowLinearAsyncCommunication.apply(input, weight, bias, group, tp_mode)
@@ -599,14 +601,18 @@ def row_linear(
 
     if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
         # out, work = differentiable_all_reduce_sum(out, group=group, async_all_reduce=async_all_reduce)
-        orig_out_id = id(out)
+        id(out)
         # NOTE: why the id(out) doesn't match the id(out) before the all_reduce?
-        out = differentiable_all_reduce_sum(out, group=group, async_all_reduce=async_all_reduce)
+        out = differentiable_all_reduce_sum(out, group=group, async_all_reduce=async_all_reduce, handle_idx=handle_idx)
         if async_all_reduce:
             from nanotron.parallel.comm import AsyncCommBucket
 
             # work = AsyncCommBucket.get(orig_out_id)
-            work = AsyncCommBucket.pop(orig_out_id)
+            # work = AsyncCommBucket.pop(orig_out_id)
+            if handle_idx == "fwd.layer_mlp_1_batch_0":
+                assert 1 == 1
+
+            work = AsyncCommBucket.pop(handle_idx)
             assert 1 == 1
     elif tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
         assert async_all_reduce is False, "Async communication is not supported for REDUCE_SCATTER mode."

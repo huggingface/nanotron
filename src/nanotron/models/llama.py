@@ -49,6 +49,11 @@ logger = logging.get_logger(__name__)
 
 DOMINO_COMM_STREAM = "domino_comm_stream_{}"
 
+FWD_MLP_HANDLE_IDX = "fwd.layer_mlp_{}_batch_{}"
+BWD_MLP_HANDLE_IDX = "bwd.layer_mlp_{}_batch_{}"
+FWD_ATTN_HANDLE_IDX = "fwd.layer_attn_{}_batch_{}"
+BWD_ATTN_HANDLE_IDX = "bwd.layer_attn_{}_batch_{}"
+
 
 class RotaryEmbedding(nn.Module):
     def __init__(self, dim: int, end: int, theta: float = 10000.0):
@@ -245,8 +250,8 @@ class MLP(nn.Module):
         self.split_silu_mul = GLUActivation(config.hidden_act)
 
     def forward(self, hidden_states, handle_idx=None):  # [seq_length, batch_size, hidden_dim]
-        merged_states = self.gate_up_proj(hidden_states, handle_idx)
-        hidden_states, work = self.down_proj(self.split_silu_mul(merged_states))
+        merged_states = self.gate_up_proj(hidden_states, async_all_reduce=True, handle_idx=handle_idx)
+        hidden_states, work = self.down_proj(self.split_silu_mul(merged_states), handle_idx)
         return {"hidden_states": hidden_states, "work": work}
 
 
@@ -449,7 +454,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         )
 
         qkv_states = self.qkv_proj(
-            hidden_states, handle_idx=handle_idx
+            hidden_states, async_all_reduce=True, handle_idx=handle_idx
         )  # [seq_length, batch_size, n_local_q_heads * d_qk + 2 * n_local_kv_heads * d_qk]
         q_length, batch_size, _ = qkv_states.shape
 
@@ -694,7 +699,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         attention_output = (
             attention_output.contiguous().view(batch_size, q_length, self.n_local_q_heads * self.d_v).transpose(0, 1)
         )
-        output, work = self.o_proj(attention_output)
+        output, work = self.o_proj(attention_output, handle_idx=handle_idx)
 
         return {"hidden_states": output, "work": work, "sequence_mask": sequence_mask}
 
@@ -766,14 +771,26 @@ class LlamaDecoderLayer(nn.Module):
         attn_output0 = self.attn(
             hidden_states=hidden_states0,
             sequence_mask=sequence_mask0,
-            handle_idx=f"layer_attn_{self.layer_idx}_batch_0",
+            # handle_idx=f"fwd.layer_attn_{self.layer_idx}_batch_0",
+            handle_idx=FWD_ATTN_HANDLE_IDX.format(self.layer_idx, 0),
+        )
+        attn_output0["hidden_states"] = WaitComm.apply(
+            attn_output0["hidden_states"],
+            # f"bwd.layer_attn_{self.layer_idx}_batch_1"
+            BWD_ATTN_HANDLE_IDX.format(self.layer_idx, 1),
         )
         attn_output0_work = attn_output0["work"]
 
         attn_output1 = self.attn(
             hidden_states=hidden_states1,
             sequence_mask=sequence_mask1,
-            handle_idx=f"layer_attn_{self.layer_idx}_batch_1",
+            # handle_idx=f"fwd.layer_attn_{self.layer_idx}_batch_1",
+            handle_idx=FWD_ATTN_HANDLE_IDX.format(self.layer_idx, 1),
+        )
+        attn_output1["hidden_states"] = WaitComm.apply(
+            attn_output1["hidden_states"],
+            # f"bwd.layer_mlp_{self.layer_idx}_batch_0"
+            BWD_MLP_HANDLE_IDX.format(self.layer_idx, 0),
         )
         attn_output1_work = attn_output1["work"]
 
@@ -789,10 +806,18 @@ class LlamaDecoderLayer(nn.Module):
         hidden_states0 = hidden_states0 + residual0
         residual0 = hidden_states0
         hidden_states0 = self.post_attention_layernorm(hidden_states0)
-        hidden_states0 = WaitComm.apply(hidden_states0, f"layer_mlp_{self.layer_idx}_batch_1")
+        # hidden_states0 = WaitComm.apply(hidden_states0, f"bwd.layer_mlp_{self.layer_idx}_batch_0")
 
-        mlp_output0 = self.mlp(hidden_states=hidden_states0, handle_idx=f"layer_mlp_{self.layer_idx}_batch_0")
-        mlp_output0 = WaitComm.apply(mlp_output0, f"layer_mlp_{self.layer_idx}_batch_1")
+        mlp_output0 = self.mlp(
+            hidden_states=hidden_states0,
+            # handle_idx=f"fwd.layer_mlp_{self.layer_idx}_batch_0"
+            handle_idx=FWD_MLP_HANDLE_IDX.format(self.layer_idx, 0),
+        )
+        mlp_output0["hidden_states"] = WaitComm.apply(
+            mlp_output0["hidden_states"],
+            # f"bwd.layer_mlp_{self.layer_idx}_batch_1"
+            BWD_MLP_HANDLE_IDX.format(self.layer_idx, 1),
+        )
         # mlp_output0 = self.mlp(hidden_states=hidden_states0)
 
         with torch.cuda.stream(comm_stream):
@@ -805,7 +830,11 @@ class LlamaDecoderLayer(nn.Module):
         hidden_states1 = self.post_attention_layernorm(hidden_states1)
         # hidden_states1 = WaitComm.apply(hidden_states1, f"layer_{self.layer_idx}_batch_1")
 
-        mlp_output1 = self.mlp(hidden_states=hidden_states1, handle_idx=f"layer_mlp_{self.layer_idx}_batch_1")
+        mlp_output1 = self.mlp(
+            hidden_states=hidden_states1,
+            # handle_idx=f"fwd.layer_mlp_{self.layer_idx}_batch_1"
+            handle_idx=FWD_MLP_HANDLE_IDX.format(self.layer_idx, 1),
+        )
         # mlp_output1 = self.mlp(hidden_states=hidden_states1)
 
         with torch.cuda.stream(comm_stream):

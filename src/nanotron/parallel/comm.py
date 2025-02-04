@@ -47,6 +47,7 @@ class AsyncCommBucket:
 
     @staticmethod
     def pop(tensor_id: int):
+        assert tensor_id in AsyncCommBucket._async_op, f"tensor_id: {tensor_id}"
         return AsyncCommBucket._async_op.pop(tensor_id)
 
     @staticmethod
@@ -59,6 +60,17 @@ class AsyncCommBucket:
         AsyncCommBucket._async_op.clear()
 
 
+def is_async_comm(x):
+    import re
+
+    NON_ASYNC_HANDLE_IDX = ["bwd.layer_mlp_{}_batch_1", "bwd.layer_attn_{}_batch_0"]
+
+    patterns = [p.replace("{}", r"\d+") for p in NON_ASYNC_HANDLE_IDX]  # Replace {} with regex for numbers
+    regex = re.compile("^(" + "|".join(patterns) + ")$")  # Combine patterns into a single regex
+    not_async = bool(regex.match(x))
+    return not not_async
+
+
 class WaitComm(torch.autograd.Function):
     @staticmethod
     def forward(ctx, input, wait_handle_idx):
@@ -68,11 +80,16 @@ class WaitComm(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_output):
         # import pydevd
-
         # pydevd.settrace(suspend=False, trace_only_current_thread=True)
-        # if ctx.wait_handle_idx != "layer_1_batch_1":
-        if ctx.wait_handle_idx != "layer_30_batch_1":
+
+        if "bwd.layer_mlp_1_batch_0" == ctx.wait_handle_idx:
+            assert 1 == 1
+
+        # if ctx.wait_handle_idx != "bwd.layer_mlp_1_batch_1":
+        # if ctx.wait_handle_idx != "layer_30_batch_1":
+        if is_async_comm(ctx.wait_handle_idx):
             handle = AsyncCommBucket.pop(ctx.wait_handle_idx)
+            assert handle is not None
             handle.wait()
             # assert 1 == 1
         return grad_output, None

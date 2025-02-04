@@ -26,8 +26,9 @@ class DifferentiableIdentity(torch.autograd.Function):
     """All-reduce gradients in a differentiable fashion"""
 
     @staticmethod
-    def forward(ctx, tensor, group: Optional[ProcessGroup], handle_idx=None):
+    def forward(ctx, tensor, group: Optional[ProcessGroup], async_all_reduce: bool, handle_idx=None):
         # assert handle_idx is not None
+        ctx.async_all_reduce = async_all_reduce
         ctx.handle_idx = handle_idx
         ctx.group = group
         return tensor
@@ -39,10 +40,31 @@ class DifferentiableIdentity(torch.autograd.Function):
         # NOTE: lm_head is TensorParallelColumnLinear, and it doesn't do async
         # assert ctx.handle_idx is not None
         group = ctx.group
-        if ctx.handle_idx is not None:
-            assert 1 == 1
 
-        return DifferentiableAllReduceSum.apply(grad_output, group, True, ctx.handle_idx), None, None
+        if ctx.handle_idx is not None and "fwd." in ctx.handle_idx:
+            handle_idx = ctx.handle_idx.replace("fwd.", "bwd.")
+            # if "bwd.layer_mlp_1_batch_1" == handle_idx:
+            #     from nanotron.parallel.comm import is_async_comm
+            #     async_all_reduce = is_async_comm(handle_idx)
+            # else:
+            #     async_all_reduce = ctx.async_all_reduce
+            from nanotron.parallel.comm import is_async_comm
+
+            async_all_reduce = is_async_comm(handle_idx)
+        else:
+            handle_idx = ctx.handle_idx
+            async_all_reduce = ctx.async_all_reduce
+
+        return DifferentiableAllReduceSum.apply(grad_output, group, async_all_reduce, handle_idx), None, None, None
+
+
+def is_last_batch_of_attn(x):
+    import re
+
+    pattern = r"layer_attn_\d+_batch_0"
+    if re.match(pattern, x):
+        return True
+    return False
 
 
 class DifferentiableAllReduceSum(torch.autograd.Function):
@@ -52,31 +74,33 @@ class DifferentiableAllReduceSum(torch.autograd.Function):
     def forward(
         ctx, tensor, group: Optional[ProcessGroup], async_all_reduce: bool, handle_idx: Optional[int] = None
     ) -> Tuple[torch.Tensor, Optional["dist.Work"]]:
-        # ctx.mark_non_differentiable(async_all_reduce)
         ctx.async_all_reduce = async_all_reduce
 
         if group.size() == 1:
             return tensor
 
-        orig_id = id(tensor)
-        handle = dist.all_reduce(tensor, op=dist.ReduceOp.SUM, group=group, async_op=async_all_reduce)
-        # if async_all_reduce:
-        #     handle.wait()
-        new_id = id(tensor)
-        assert 1 == 1
-        assert orig_id == new_id
-        # if async_all_reduce:
-        #     return tensor, handle
-        # else:
-        #     return tensor, None
-        if async_all_reduce:
-            # AsyncCommBucket.add(tensor, handle)
-            # AsyncCommBucket.add(id(tensor), handle)
-            # try:
-            #     AsyncCommBucket.add(orig_id if handle_idx is None else handle_idx, handle)
-            # except Exception as e:
-            #     assert 1 == 1
-            AsyncCommBucket.add(orig_id if handle_idx is None else handle_idx, handle)
+        if handle_idx == "bwd.layer_mlp_1_batch_0":
+            assert 1 == 1
+
+        id(tensor)
+        if async_all_reduce is True:
+            if isinstance(handle_idx, str):
+                do_async = is_last_batch_of_attn(handle_idx) is False
+            else:
+                do_async = async_all_reduce
+
+            handle = dist.all_reduce(tensor, op=dist.ReduceOp.SUM, group=group, async_op=do_async)
+            if do_async:
+                # # NOTE: id(tensor) is for the fwd pass, for the bwd pass, we do handle_idx
+                # if handle_idx is not None and "bwd." in handle_idx:
+                #     AsyncCommBucket.add(orig_id if handle_idx is None else handle_idx, handle)
+                # else:
+                #     AsyncCommBucket.add(orig_id, handle)
+                # NOTE: id(tensor) is for the fwd pass, for the bwd pass, we do handle_idx
+                assert handle_idx is not None
+                AsyncCommBucket.add(handle_idx, handle)
+        else:
+            dist.all_reduce(tensor, op=dist.ReduceOp.SUM, group=group)
 
         return tensor
 
@@ -164,12 +188,16 @@ class DifferentiableReduceScatterSum(torch.autograd.Function):
 # -----------------
 
 
-def differentiable_identity(tensor, group: Optional[ProcessGroup] = None, handle_idx=None):
-    return DifferentiableIdentity.apply(tensor, group, handle_idx)
+def differentiable_identity(
+    tensor, group: Optional[ProcessGroup] = None, async_all_reduce: bool = False, handle_idx=None
+):
+    return DifferentiableIdentity.apply(tensor, group, async_all_reduce, handle_idx)
 
 
-def differentiable_all_reduce_sum(tensor, group: Optional[ProcessGroup] = None, async_all_reduce: bool = False):
-    return DifferentiableAllReduceSum.apply(tensor, group, async_all_reduce)
+def differentiable_all_reduce_sum(
+    tensor, group: Optional[ProcessGroup] = None, async_all_reduce: bool = False, handle_idx=None
+):
+    return DifferentiableAllReduceSum.apply(tensor, group, async_all_reduce, handle_idx)
 
 
 def differentiable_all_gather(tensor, group: Optional[ProcessGroup] = None):
