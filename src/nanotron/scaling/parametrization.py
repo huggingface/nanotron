@@ -38,10 +38,19 @@ class StandardParametrizator(Parametrizator):
             TensorParallelRowLinear: self._parametrize_row_linear,
             TritonRMSNorm: self._parametrize_layer_norm,
             TensorParallelEmbedding: self._parametrize_embedding,
+            nn.Linear: self._parametrize_nn_linear,
         }
 
         self.std = config.init_method.std
         self.num_layers = config.model_config.num_hidden_layers
+
+    def _parametrize_nn_linear(self, param_name: str, module: nn.Module):
+        assert param_name in ["weight", "bias"]
+
+        if param_name == "weight":
+            init.normal_(module.weight, mean=0.0, std=self.std)
+        elif param_name == "bias":
+            module.bias.zero_()
 
     def _parametrize_column_linear(self, param_name: str, module: nn.Module):
         assert param_name in ["weight", "bias"]
@@ -89,6 +98,7 @@ class SpectralMupParametrizator(Parametrizator):
             TensorParallelRowLinear: self._parametrize_mup_weight,
             TritonRMSNorm: self._parametrize_layer_norm,
             TensorParallelEmbedding: self._parametrize_embedding,
+            nn.Linear: self._parametrize_nn_linear,
         }
         self.std = 1.0
 
@@ -101,6 +111,15 @@ class SpectralMupParametrizator(Parametrizator):
         σₗ = Θ(1/√nₗ₋₁ min{1, √(nₗ/nₗ₋₁)})
         """
         return (std / math.sqrt(fan_in)) * min(1, math.sqrt(fan_out / fan_in))
+
+    def _parametrize_nn_linear(self, param_name: str, module: nn.Module):
+        assert param_name in ["weight", "bias"]
+
+        data = module.weight if param_name == "weight" else module.bias
+        fan_in, fan_out = init._calculate_fan_in_and_fan_out(data)
+
+        std = SpectralMupParametrizator._compute_spectral_std(std=self.std, fan_in=fan_in, fan_out=fan_out)
+        init.normal_(data, mean=0.0, std=std)
 
     def _parametrize_mup_weight(self, param_name: str, module: nn.Module):
         assert param_name in ["weight", "bias"]
