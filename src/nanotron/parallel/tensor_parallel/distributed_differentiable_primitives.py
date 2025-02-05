@@ -84,10 +84,13 @@ class DifferentiableAllReduceSum(torch.autograd.Function):
 
         id(tensor)
         if async_all_reduce is True:
-            if isinstance(handle_idx, str):
-                do_async = is_last_batch_of_attn(handle_idx) is False
-            else:
-                do_async = async_all_reduce
+            # if isinstance(handle_idx, str):
+            #     do_async = is_last_batch_of_attn(handle_idx) is False
+            # else:
+            #     do_async = async_all_reduce
+            from nanotron.parallel.comm import is_async_comm
+
+            do_async = is_async_comm(handle_idx)
 
             handle = dist.all_reduce(tensor, op=dist.ReduceOp.SUM, group=group, async_op=do_async)
             if do_async:

@@ -603,13 +603,17 @@ def row_linear(
         # out, work = differentiable_all_reduce_sum(out, group=group, async_all_reduce=async_all_reduce)
         id(out)
         # NOTE: why the id(out) doesn't match the id(out) before the all_reduce?
+        if handle_idx == "fwd.layer_attn_0_batch_0":
+            assert 1 == 1
+
         out = differentiable_all_reduce_sum(out, group=group, async_all_reduce=async_all_reduce, handle_idx=handle_idx)
         if async_all_reduce:
             from nanotron.parallel.comm import AsyncCommBucket
 
             # work = AsyncCommBucket.get(orig_out_id)
             # work = AsyncCommBucket.pop(orig_out_id)
-            if handle_idx == "fwd.layer_mlp_1_batch_0":
+            # if handle_idx == "fwd.layer_mlp_1_batch_0":
+            if handle_idx == "fwd.layer_attn_0_batch_0":
                 assert 1 == 1
 
             work = AsyncCommBucket.pop(handle_idx)
