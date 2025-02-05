@@ -580,7 +580,8 @@ class DistributedTrainer:
 
         from nanotron.parallel.comm import AsyncCommBucket
 
-        AsyncCommBucket.clear_all()
+        assert len(AsyncCommBucket._async_op) == 0, f"AsyncCommBucket._async_op: {AsyncCommBucket._async_op}"
+        # AsyncCommBucket.clear_all()
 
         return outputs, loss_avg
 

@@ -55,6 +55,9 @@ class DifferentiableIdentity(torch.autograd.Function):
             handle_idx = ctx.handle_idx
             async_all_reduce = ctx.async_all_reduce
 
+        if handle_idx is not None and "bwd." in handle_idx and async_all_reduce is True:
+            assert 1 == 1
+
         return DifferentiableAllReduceSum.apply(grad_output, group, async_all_reduce, handle_idx), None, None, None
 
 
@@ -94,6 +97,9 @@ class DifferentiableAllReduceSum(torch.autograd.Function):
 
             handle = dist.all_reduce(tensor, op=dist.ReduceOp.SUM, group=group, async_op=do_async)
             if do_async:
+                if "bwd" in handle_idx:
+                    assert 1 == 1
+
                 # # NOTE: id(tensor) is for the fwd pass, for the bwd pass, we do handle_idx
                 # if handle_idx is not None and "bwd." in handle_idx:
                 #     AsyncCommBucket.add(orig_id if handle_idx is None else handle_idx, handle)

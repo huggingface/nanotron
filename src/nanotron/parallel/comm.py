@@ -91,11 +91,10 @@ class WaitComm(torch.autograd.Function):
         if "bwd.layer_mlp_1_batch_0" == ctx.wait_handle_idx:
             assert 1 == 1
 
-        # if ctx.wait_handle_idx != "bwd.layer_mlp_1_batch_1":
-        # if ctx.wait_handle_idx != "layer_30_batch_1":
         if is_async_comm(ctx.wait_handle_idx):
             handle = AsyncCommBucket.pop(ctx.wait_handle_idx)
             assert handle is not None
             handle.wait()
-            # assert 1 == 1
+            # assert handle.is_completed() is True
+
         return grad_output, None
