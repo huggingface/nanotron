@@ -17,6 +17,7 @@
 from typing import Dict, List, Optional, Union
 
 import torch
+import torch.nn.functional as F
 from torch import nn
 from torch.utils.checkpoint import CheckpointFunction
 
@@ -688,6 +689,164 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             attention_output.contiguous().view(batch_size, q_length, self.n_local_q_heads * self.d_v).transpose(0, 1)
         )
         output = self.o_proj(attention_output)
+
+        return {"hidden_states": output, "sequence_mask": sequence_mask}
+
+
+class MLA(nn.Module):
+    def __init__(
+        self,
+        config: LlamaConfig,
+        parallel_config: Optional[ParallelismArgs],
+        tp_pg: dist.ProcessGroup,
+        layer_idx: int,
+    ):
+        super().__init__()
+
+        self.dim = config.hidden_size
+        self.n_heads = config.num_attention_heads
+        self.n_local_heads = config.num_attention_heads // tp_pg.size()
+        self.q_lora_rank = config.q_lora_rank
+        self.kv_lora_rank = config.kv_lora_rank
+        self.qk_nope_head_dim = config.qk_nope_head_dim
+        self.qk_rope_head_dim = config.qk_rope_head_dim
+        self.qk_head_dim = config.qk_nope_head_dim + config.qk_rope_head_dim
+        self.v_head_dim = config.v_head_dim
+
+        # tp related
+        tp_mode = parallel_config.tp_mode if parallel_config is not None else TensorParallelLinearMode.ALL_REDUCE
+        self.tp_mode = tp_mode
+        tp_linear_async_communication = (
+            parallel_config.tp_linear_async_communication if parallel_config is not None else False
+        )
+        q_up_contiguous_chunks = (
+            self.n_heads * self.qk_nope_head_dim,  # shape of q_nope
+            self.n_heads * self.qk_rope_head_dim,  # shape of q_rope
+        )
+        kv_up_contiguous_chunks = (
+            self.n_heads * self.qk_nope_head_dim,  # shape of k_nope
+            self.n_heads * self.v_head_dim,  # shape of v
+        )
+
+        assert (
+            self.n_heads % tp_pg.size() == 0
+        ), f"Number of attention heads ({self.n_heads}) must be divisible by TP size ({tp_pg.size()})."
+        assert (
+            self.q_lora_rank < self.n_heads * self.qk_head_dim
+        ), f"q_lora_rank ({self.q_lora_rank}) must be less than the product of the number of attention heads ({self.n_heads}) and the number of query/key head dimensions ({self.qk_head_dim})."
+        assert tp_mode == TensorParallelLinearMode.ALL_REDUCE, "MLA only supports all-reduce TP mode for now"
+
+        # Initialize rotary embedding
+        self.rotary_embedding = RotaryEmbedding(
+            dim=self.qk_rope_head_dim, end=config.max_position_embeddings, theta=config.rope_theta
+        )
+
+        # Initialize linear layers
+        self.q_down = nn.Linear(self.dim, self.q_lora_rank, bias=False)
+        self.q_norm = TritonRMSNorm(self.q_lora_rank, eps=config.rms_norm_eps)
+        self.q_up = TensorParallelColumnLinear(
+            self.q_lora_rank,
+            self.n_heads * self.qk_head_dim,
+            pg=tp_pg,
+            mode=tp_mode,
+            bias=False,
+            async_communication=tp_linear_async_communication,
+            contiguous_chunks=q_up_contiguous_chunks,
+            tp_recompute_allgather=parallel_config.tp_recompute_allgather,
+        )
+
+        self.kv_down = nn.Linear(self.dim, self.kv_lora_rank + self.qk_rope_head_dim, bias=False)
+        self.kv_norm = TritonRMSNorm(self.kv_lora_rank, eps=config.rms_norm_eps)
+        self.kv_up = TensorParallelColumnLinear(
+            self.kv_lora_rank,
+            self.n_heads * (self.qk_nope_head_dim + self.v_head_dim),
+            pg=tp_pg,
+            mode=tp_mode,
+            bias=False,
+            async_communication=tp_linear_async_communication,
+            contiguous_chunks=kv_up_contiguous_chunks,
+            tp_recompute_allgather=parallel_config.tp_recompute_allgather,
+        )
+
+        self.attention = CoreAttention(
+            config,
+            parallel_config=parallel_config,
+            layer_idx=layer_idx,
+        )
+
+        self.o_proj = TensorParallelRowLinear(
+            self.n_heads * self.v_head_dim,
+            self.dim,
+            pg=tp_pg,
+            mode=tp_mode,
+            bias=False,
+            async_communication=tp_linear_async_communication,
+        )
+
+    def forward(
+        self,
+        hidden_states,  # [seq_length, batch_size, hidden_size]
+        sequence_mask,  # [batch_size, seq_length]
+    ):
+        seq_len, batch_size, _ = hidden_states.shape
+
+        q = self.q_up(self.q_norm(self.q_down(hidden_states)))
+        q = q.view(seq_len, batch_size, self.n_local_heads, self.qk_head_dim)
+        q_nope, q_pe = torch.split(
+            q, [self.qk_nope_head_dim, self.qk_rope_head_dim], dim=-1
+        )  # [seq_len, batch_size, n_local_heads, qk_nope_head_dim], [seq_len, batch_size, n_local_heads, qk_rope_head_dim]
+        q_pe = (
+            self.rotary_embedding(q_pe.transpose(0, 1), position_ids=None).transpose(0, 1).contiguous()
+        )  # [seq_len, batch_size, n_local_heads, qk_rope_head_dim]
+        q = torch.cat(
+            [q_nope, q_pe.expand(-1, -1, self.n_local_heads, -1)], dim=-1
+        )  # [seq_len, batch_size, n_heads, qk_head_dim]
+
+        kv = self.kv_down(hidden_states)  # [seq_len, batch_size, qk_rope_head_dim + kv_lora_rank]
+        kv, k_pe = torch.split(
+            kv, [self.kv_lora_rank, self.qk_rope_head_dim], dim=-1
+        )  # [seq_len, batch_size, kv_lora_rank], [seq_len, batch_size, qk_rope_head_dim]
+        k_pe = (
+            self.rotary_embedding(k_pe.unsqueeze(2).transpose(0, 1), position_ids=None).transpose(0, 1).contiguous()
+        )  # [seq_len, batch_size, 1, qk_rope_head_dim]
+        kv = self.kv_up(self.kv_norm(kv))  # [seq_len, batch_size, n_local_heads * (qk_nope_head_dim + v_head_dim)]
+        kv = kv.view(seq_len, batch_size, self.n_local_heads, self.qk_nope_head_dim + self.v_head_dim)
+        k_nope, v = torch.split(
+            kv, [self.qk_nope_head_dim, self.v_head_dim], dim=-1
+        )  # [seq_len, batch_size, n_local_heads, qk_nope_head_dim], [seq_len, batch_size, n_local_heads, v_head_dim]
+        k = torch.cat(
+            [k_nope, k_pe.expand(-1, -1, self.n_local_heads, -1)], dim=-1
+        )  # [seq_len, batch_size, n_heads, qk_head_dim]
+
+        # FA API doesn't seem to support different head dimensions for key and value. Use SDPA instead.
+        # TODO: a kernel for this.
+
+        # (seqlen, b, n_heads, d_qk) -> (b, n_heads, seqlen, d_qk)
+        q = q.permute(1, 2, 0, 3).contiguous()
+        k = k.permute(1, 2, 0, 3).contiguous()
+        v = v.permute(1, 2, 0, 3).contiguous()
+
+        # Mask for SDPA: https://pytorch.org/docs/stable/generated/torch.nn.functional.scaled_dot_product_attention.html
+        if sequence_mask is not None:
+            # Step 1: Create a lower triangular mask (allows attending to past and current positions)
+            lower_triangular_mask = torch.tril(torch.ones(seq_len, seq_len))  # lower triangle
+            lower_triangular_mask = lower_triangular_mask.bool()  # Convert to boolean mask
+            # Step 2: Expand the sequence mask to match attention shape [batch_size, seq_len, seq_len]
+            sequence_mask_expanded = sequence_mask[:, None, :].expand(batch_size, seq_len, seq_len)
+            # Step 3: Combine both masks: True means allowed, False means masked
+            final_mask = (lower_triangular_mask) & (sequence_mask_expanded.bool())  # [batch_size, seq_len, seq_len]
+            final_mask = final_mask.unsqueeze(1).expand(
+                -1, self.n_local_heads, -1, -1
+            )  # [batch_size, n_local_heads, seq_len, seq_len]
+        else:
+            final_mask = torch.tril(torch.ones(seq_len, seq_len)).bool()
+
+        output = F.scaled_dot_product_attention(q, k, v, attn_mask=final_mask)
+        output = (
+            output.permute(2, 0, 1, 3).reshape(seq_len, batch_size, -1).contiguous()
+        )  # (b, n_heads, seqlen, d_qk) -> (seqlen, b, n_heads * d_qk)
+
+        output = self.o_proj(output)
 
         return {"hidden_states": output, "sequence_mask": sequence_mask}
 
