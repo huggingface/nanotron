@@ -564,6 +564,9 @@ class DistributedTrainer:
             self.config, self.parallel_context, self.unwrapped_model, self.grad_accumulator, self.optimizer
         )
 
+        if dist.get_rank() == 0:
+            assert 1 == 1
+
         # Apply gradient
         self.optimizer.step()
         self.optimizer.zero_grad()
@@ -580,8 +583,20 @@ class DistributedTrainer:
 
         from nanotron.parallel.comm import AsyncCommBucket
 
+        # import torch.distributed as dist
+
+        not_finished = []
+        for k, v in AsyncCommBucket._copy_async_op.items():
+            # assert v.is_completed(), f"AsyncCommBucket._copy_async_op: {AsyncCommBucket._copy_async_op}"
+            if v.is_completed() is not True:
+                not_finished.append((k, v))
+
+        # if dist.get_rank() == 0 and constants._NOT_BWD_ASYNC_OPS:
+        #     assert 1 == 1
+
+        assert len(not_finished) == 0, f"AsyncCommBucket._copy_async_op: {not_finished}"
         assert len(AsyncCommBucket._async_op) == 0, f"AsyncCommBucket._async_op: {AsyncCommBucket._async_op}"
-        # AsyncCommBucket.clear_all()
+        AsyncCommBucket.clear_all()
 
         return outputs, loss_avg
 

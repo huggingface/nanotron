@@ -33,6 +33,7 @@ class AsyncCommBucket:
     """
 
     _async_op: Dict[int, "dist.Work"] = {}
+    _copy_async_op: Dict[int, "dist.Work"] = {}
 
     @staticmethod
     def add(tensor_id: int, work: "dist.Work"):
@@ -40,6 +41,7 @@ class AsyncCommBucket:
             tensor_id not in AsyncCommBucket._async_op
         ), f"tensor_id: {tensor_id}, keys: {AsyncCommBucket._async_op.keys()}"
         AsyncCommBucket._async_op[tensor_id] = work
+        AsyncCommBucket._copy_async_op[tensor_id] = work
 
     @staticmethod
     def get(tensor_id: int):
@@ -58,6 +60,7 @@ class AsyncCommBucket:
     @staticmethod
     def clear_all():
         AsyncCommBucket._async_op.clear()
+        AsyncCommBucket._copy_async_op.clear()
 
 
 def is_async_comm(x):
@@ -92,9 +95,19 @@ class WaitComm(torch.autograd.Function):
             assert 1 == 1
 
         if is_async_comm(ctx.wait_handle_idx):
+            from nanotron.constants import _AUTOGRAD_RUNS
+
+            _AUTOGRAD_RUNS.append(f"wait_{ctx.wait_handle_idx}")
             handle = AsyncCommBucket.pop(ctx.wait_handle_idx)
             assert handle is not None
             handle.wait()
-            # assert handle.is_completed() is True
+            # assert handle.is_completed() is True, f"ctx.wait_handle_idx: {ctx.wait_handle_idx}"
+        else:
+
+            from nanotron import constants
+
+            # if dist.get_rank() == 0:
+            #     constants._NOT_BWD_ASYNC_OPS.append(ctx.wait_handle_idx)
+            constants._NOT_BWD_ASYNC_OPS.append(ctx.wait_handle_idx)
 
         return grad_output, None

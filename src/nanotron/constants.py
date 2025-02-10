@@ -13,3 +13,7 @@ MODEL_CONFIG_FILE_NAME = "model_config.json"
 
 
 CUDA_STREAMS = {}
+
+CLOCK = 0
+_AUTOGRAD_RUNS = []
+_NOT_BWD_ASYNC_OPS = []

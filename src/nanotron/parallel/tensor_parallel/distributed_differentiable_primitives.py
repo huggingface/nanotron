@@ -58,6 +58,10 @@ class DifferentiableIdentity(torch.autograd.Function):
         if handle_idx is not None and "bwd." in handle_idx and async_all_reduce is True:
             assert 1 == 1
 
+        from nanotron.constants import _AUTOGRAD_RUNS
+
+        _AUTOGRAD_RUNS.append(handle_idx)
+
         return DifferentiableAllReduceSum.apply(grad_output, group, async_all_reduce, handle_idx), None, None, None
 
 

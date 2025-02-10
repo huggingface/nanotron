@@ -115,7 +115,7 @@ class TensorParallelRowLinear(nn.Linear):
         device=None,
         dtype=None,
         async_communication: bool = False,
-        async_all_reduce: bool = False,
+        # async_all_reduce: bool = False,
         contiguous_chunks: Optional[Tuple[int, ...]] = None,
     ):
         self.pg = pg
@@ -138,7 +138,7 @@ class TensorParallelRowLinear(nn.Linear):
         )
         self.mode = mode
         self.async_communication = async_communication
-        self.async_all_reduce = async_all_reduce
+        # self.async_all_reduce = async_all_reduce
         if self.mode is TensorParallelLinearMode.ALL_REDUCE and self.async_communication:
             raise ValueError("async_communication is not supported for ALL_REDUCE mode")
 
@@ -164,7 +164,7 @@ class TensorParallelRowLinear(nn.Linear):
                 )
             setattr(self, name, new_param)
 
-    def forward(self, x: torch.Tensor, handle_idx=None) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, async_all_reduce, handle_idx=None) -> torch.Tensor:
         return row_linear(
             input=x,
             weight=self.weight,
@@ -172,7 +172,7 @@ class TensorParallelRowLinear(nn.Linear):
             group=self.pg,
             tp_mode=self.mode,
             async_communication=self.async_communication,
-            async_all_reduce=self.async_all_reduce,
+            async_all_reduce=async_all_reduce,
             handle_idx=handle_idx,
         )
 

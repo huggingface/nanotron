@@ -245,13 +245,15 @@ class MLP(nn.Module):
             mode=tp_mode,
             bias=False,
             async_communication=tp_linear_async_communication and tp_mode is TensorParallelLinearMode.REDUCE_SCATTER,
-            async_all_reduce=parallel_config.domino.num_input_batches > 1,
+            # async_all_reduce=parallel_config.domino.num_input_batches > 1,
         )
         self.split_silu_mul = GLUActivation(config.hidden_act)
 
     def forward(self, hidden_states, handle_idx=None):  # [seq_length, batch_size, hidden_dim]
         merged_states = self.gate_up_proj(hidden_states, async_all_reduce=True, handle_idx=handle_idx)
-        hidden_states, work = self.down_proj(self.split_silu_mul(merged_states), handle_idx)
+        hidden_states, work = self.down_proj(
+            self.split_silu_mul(merged_states), async_all_reduce=True, handle_idx=handle_idx
+        )
         return {"hidden_states": hidden_states, "work": work}
 
 
@@ -428,7 +430,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             mode=tp_mode,
             bias=False,
             async_communication=tp_linear_async_communication,
-            async_all_reduce=async_all_reduce,
+            # async_all_reduce=async_all_reduce,
         )
 
         self.attention = CoreAttention(
@@ -699,7 +701,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         attention_output = (
             attention_output.contiguous().view(batch_size, q_length, self.n_local_q_heads * self.d_v).transpose(0, 1)
         )
-        output, work = self.o_proj(attention_output, handle_idx=handle_idx)
+        output, work = self.o_proj(attention_output, async_all_reduce=True, handle_idx=handle_idx)
 
         return {"hidden_states": output, "work": work, "sequence_mask": sequence_mask}
 
@@ -876,6 +878,7 @@ class LlamaDecoderLayer(nn.Module):
         comm_stream = constants.CUDA_STREAMS[torch.cuda.current_device()]
         with torch.cuda.stream(comm_stream):
             attn_output0["work"].wait()
+            attn_output0["work"].is_completed()
 
         hidden_states0 = attn_output0["hidden_states"] + residual0
         residual0 = hidden_states0
@@ -890,8 +893,16 @@ class LlamaDecoderLayer(nn.Module):
             handle_idx=FWD_MLP_HANDLE_IDX.format(self.layer_idx, 0),
         )
 
+        # attn_output1["hidden_states"], mlp_output0["hidden_states"] = depend(
+        #     run_after=attn_output1["hidden_states"],
+        #     run_before=mlp_output0["hidden_states"]
+        # )
+
         with torch.cuda.stream(comm_stream):
             attn_output1["work"].wait()
+            attn_output1["work"].is_completed()
+
+        torch.cuda.current_stream().wait_stream(comm_stream)
 
         hidden_states1 = attn_output1["hidden_states"] + residual1
         residual1 = hidden_states1
@@ -906,11 +917,24 @@ class LlamaDecoderLayer(nn.Module):
             mlp_output0["work"].wait()
             mlp_output1["work"].wait()
 
+            mlp_output0["work"].is_completed()
+            mlp_output1["work"].is_completed()
+
+        torch.cuda.current_stream().wait_stream(comm_stream)
+
         hidden_states0 = mlp_output0["hidden_states"] + residual0
         hidden_states1 = mlp_output1["hidden_states"] + residual1
 
+        # hidden_states0, hidden_states1 = depend(run_after=hidden_states0, run_before=hidden_states1)
+
         hidden_states = torch.cat([hidden_states0, hidden_states1], dim=1)
         assert 1 == 1
+
+        # assert attn_output0["work"].is_completed()
+        # assert attn_output1["work"].is_completed()
+        # assert mlp_output0["work"].is_completed()
+        # assert mlp_output1["work"].is_completed()
+
         return hidden_states, orig_sequence_mask
 
     def _checkpointed_forward(
@@ -1080,22 +1104,8 @@ class LlamaModel(nn.Module):
             "sequence_mask": input_mask,
         }
 
-        # assert 1 == 1
-        # num_input_batches = self.parallel_config.domino.num_input_batches
-        # hidden_encoder_states["hidden_states"] = torch.chunk(hidden_encoder_states["hidden_states"], chunks=num_input_batches, dim=1)
-        # hidden_encoder_states["sequence_mask"] = torch.chunk(hidden_encoder_states["sequence_mask"], chunks=num_input_batches, dim=0)
-
-        # # Combine the chunks into a list of dictionaries
-        # hidden_encoder_states_list = [
-        #     {"hidden_states": hidden_encoder_states["hidden_states"][i], "sequence_mask": hidden_encoder_states["sequence_mask"][i]}
-        #     for i in range(num_input_batches)
-        # ]
-
         for encoder_block in self.decoder:
             hidden_encoder_states = encoder_block(**hidden_encoder_states)
-
-            # for hidden_encoder_states in hidden_encoder_states_list:
-            #     hidden_encoder_states = encoder_block(**hidden_encoder_states)
 
         hidden_states = self.final_layer_norm(input=hidden_encoder_states["hidden_states"])["hidden_states"]
 
