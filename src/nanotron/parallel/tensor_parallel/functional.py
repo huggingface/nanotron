@@ -437,13 +437,13 @@ def column_linear(
     async_communication: bool,
     tp_recompute_allgather: bool = True,
     async_all_reduce: bool = False,
-    handle_idx: Optional[int] = None,
+    op_name: Optional[str] = None,
 ):
     if async_communication:
         return _ColumnLinearAsyncCommunication.apply(input, weight, bias, group, tp_mode, tp_recompute_allgather)
 
     if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
-        input = differentiable_identity(input, group=group, async_all_reduce=async_all_reduce, handle_idx=handle_idx)
+        input = differentiable_identity(input, group=group, async_all_reduce=async_all_reduce, op_name=op_name)
         return F.linear(input, weight, bias)
     if tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
         return _ColumnLinearNoAsyncCommunicationReduceScatterMode.apply(
@@ -592,7 +592,7 @@ def row_linear(
     # TODO(xrsrke): use less confusing names for these arguments
     async_communication: bool,
     async_all_reduce: bool,
-    handle_idx=None,
+    op_name: Optional[str] = None,
 ) -> Tuple[torch.Tensor, Optional[torch.Future]]:
     if async_communication:
         return _RowLinearAsyncCommunication.apply(input, weight, bias, group, tp_mode)
@@ -601,23 +601,31 @@ def row_linear(
 
     if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
         # out, work = differentiable_all_reduce_sum(out, group=group, async_all_reduce=async_all_reduce)
-        id(out)
+        # id(out)
         # NOTE: why the id(out) doesn't match the id(out) before the all_reduce?
-        if handle_idx == "fwd.layer_attn_0_batch_0":
+        if op_name == "fwd.layer_attn_0_batch_0":
             assert 1 == 1
 
-        out = differentiable_all_reduce_sum(out, group=group, async_all_reduce=async_all_reduce, handle_idx=handle_idx)
+        if op_name == "fwd.layer_mlp_0_batch_1":
+            assert 1 == 1
+
+        if op_name == "fwd.layer_attn_0_batch_0":
+            assert 1 == 1
+
+        out = differentiable_all_reduce_sum(out, group=group, async_all_reduce=async_all_reduce, op_name=op_name)
         if async_all_reduce:
             from nanotron.parallel.comm import AsyncCommBucket
 
             # work = AsyncCommBucket.get(orig_out_id)
             # work = AsyncCommBucket.pop(orig_out_id)
             # if handle_idx == "fwd.layer_mlp_1_batch_0":
-            if handle_idx == "fwd.layer_attn_0_batch_0":
+            if op_name == "fwd.layer_attn_0_batch_0":
                 assert 1 == 1
 
-            work = AsyncCommBucket.pop(handle_idx)
+            work = AsyncCommBucket.pop(op_name)
             assert 1 == 1
+        else:
+            work = None
     elif tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
         assert async_all_reduce is False, "Async communication is not supported for REDUCE_SCATTER mode."
         out = differentiable_reduce_scatter_sum(out, group=group)

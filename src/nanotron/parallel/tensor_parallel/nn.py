@@ -31,6 +31,7 @@ from nanotron.parallel.tensor_parallel.distributed_differentiable_primitives imp
     differentiable_identity,
     differentiable_reduce_scatter_sum,
 )
+from nanotron.parallel.tensor_parallel.domino import is_async_comm
 from nanotron.parallel.tensor_parallel.enum import TensorParallelLinearMode
 from nanotron.parallel.tensor_parallel.functional import (
     column_linear,
@@ -52,7 +53,6 @@ class TensorParallelColumnLinear(nn.Linear):
         async_communication: bool = False,
         contiguous_chunks: Optional[Tuple[int, ...]] = None,
         tp_recompute_allgather: bool = True,
-        # handle_idx: Optional[int] = None,
     ):
         self.pg = pg
         self.world_size = pg.size()
@@ -73,7 +73,6 @@ class TensorParallelColumnLinear(nn.Linear):
 
         self.mode = mode
         self.async_communication = async_communication
-        # self.handle_idx = handle_idx
 
         if contiguous_chunks is not None:
             assert (
@@ -87,7 +86,7 @@ class TensorParallelColumnLinear(nn.Linear):
             split_config=split_config,
         )
 
-    def forward(self, x: torch.Tensor, async_all_reduce=None, handle_idx=None) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, op_name: str = None) -> torch.Tensor:
         return column_linear(
             input=x,
             weight=self.weight,
@@ -96,8 +95,8 @@ class TensorParallelColumnLinear(nn.Linear):
             tp_mode=self.mode,
             async_communication=self.async_communication,
             tp_recompute_allgather=self.tp_recompute_allgather,
-            async_all_reduce=async_all_reduce,
-            handle_idx=handle_idx,
+            async_all_reduce=False if op_name is None else is_async_comm(op_name),
+            op_name=op_name,
         )
 
     def extra_repr(self) -> str:
@@ -115,7 +114,6 @@ class TensorParallelRowLinear(nn.Linear):
         device=None,
         dtype=None,
         async_communication: bool = False,
-        # async_all_reduce: bool = False,
         contiguous_chunks: Optional[Tuple[int, ...]] = None,
     ):
         self.pg = pg
@@ -138,7 +136,7 @@ class TensorParallelRowLinear(nn.Linear):
         )
         self.mode = mode
         self.async_communication = async_communication
-        # self.async_all_reduce = async_all_reduce
+
         if self.mode is TensorParallelLinearMode.ALL_REDUCE and self.async_communication:
             raise ValueError("async_communication is not supported for ALL_REDUCE mode")
 
@@ -164,7 +162,7 @@ class TensorParallelRowLinear(nn.Linear):
                 )
             setattr(self, name, new_param)
 
-    def forward(self, x: torch.Tensor, async_all_reduce, handle_idx=None) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, op_name: str = None) -> torch.Tensor:
         return row_linear(
             input=x,
             weight=self.weight,
@@ -172,8 +170,8 @@ class TensorParallelRowLinear(nn.Linear):
             group=self.pg,
             tp_mode=self.mode,
             async_communication=self.async_communication,
-            async_all_reduce=async_all_reduce,
-            handle_idx=handle_idx,
+            async_all_reduce=False if op_name is None else is_async_comm(op_name),
+            op_name=op_name,
         )
 
     def extra_repr(self) -> str:

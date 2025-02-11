@@ -30,10 +30,12 @@ from nanotron.models import NanotronModel
 from nanotron.nn.activations import ACT2FN
 from nanotron.nn.layer_norm import TritonRMSNorm
 from nanotron.parallel import ParallelContext
-from nanotron.parallel.comm import WaitComm
+
+# from nanotron.parallel.comm import WaitComm
 from nanotron.parallel.parameters import NanotronParameter
 from nanotron.parallel.pipeline_parallel.block import PipelineBlock, TensorPointer
 from nanotron.parallel.pipeline_parallel.p2p import P2P
+from nanotron.parallel.tensor_parallel.domino import WaitComm
 from nanotron.parallel.tensor_parallel.functional import sharded_cross_entropy
 from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelColumnLinear,
@@ -249,11 +251,9 @@ class MLP(nn.Module):
         )
         self.split_silu_mul = GLUActivation(config.hidden_act)
 
-    def forward(self, hidden_states, handle_idx=None):  # [seq_length, batch_size, hidden_dim]
-        merged_states = self.gate_up_proj(hidden_states, async_all_reduce=True, handle_idx=handle_idx)
-        hidden_states, work = self.down_proj(
-            self.split_silu_mul(merged_states), async_all_reduce=True, handle_idx=handle_idx
-        )
+    def forward(self, hidden_states, op_name):  # [seq_length, batch_size, hidden_dim]
+        merged_states = self.gate_up_proj(hidden_states, op_name=op_name)
+        hidden_states, work = self.down_proj(self.split_silu_mul(merged_states), op_name=op_name)
         return {"hidden_states": hidden_states, "work": work}
 
 
@@ -447,7 +447,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         self,
         hidden_states,  # [seq_length, batch_size, hidden_size]
         sequence_mask,  # [batch_size, seq_length]
-        handle_idx=None,
+        op_name,
     ):
         from flash_attn import bert_padding
         from flash_attn.flash_attn_interface import (
@@ -456,7 +456,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         )
 
         qkv_states = self.qkv_proj(
-            hidden_states, async_all_reduce=True, handle_idx=handle_idx
+            hidden_states, op_name=op_name
         )  # [seq_length, batch_size, n_local_q_heads * d_qk + 2 * n_local_kv_heads * d_qk]
         q_length, batch_size, _ = qkv_states.shape
 
@@ -701,7 +701,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         attention_output = (
             attention_output.contiguous().view(batch_size, q_length, self.n_local_q_heads * self.d_v).transpose(0, 1)
         )
-        output, work = self.o_proj(attention_output, async_all_reduce=True, handle_idx=handle_idx)
+        output, work = self.o_proj(attention_output, op_name=op_name)
 
         return {"hidden_states": output, "work": work, "sequence_mask": sequence_mask}
 
@@ -862,12 +862,12 @@ class LlamaDecoderLayer(nn.Module):
         attn_output0 = self.attn(
             hidden_states=hidden_states0,
             sequence_mask=sequence_mask0,
-            handle_idx=FWD_ATTN_HANDLE_IDX.format(self.layer_idx, 0),
+            op_name=FWD_ATTN_HANDLE_IDX.format(self.layer_idx, 0),
         )
         attn_output1 = self.attn(
             hidden_states=hidden_states1,
             sequence_mask=sequence_mask1,
-            handle_idx=FWD_ATTN_HANDLE_IDX.format(self.layer_idx, 1),
+            op_name=FWD_ATTN_HANDLE_IDX.format(self.layer_idx, 1),
         )
 
         with torch.cuda.stream(comm_stream):
@@ -883,7 +883,7 @@ class LlamaDecoderLayer(nn.Module):
 
         mlp_output0 = self.mlp(
             hidden_states=hidden_states0,
-            handle_idx=FWD_MLP_HANDLE_IDX.format(self.layer_idx, 0),
+            op_name=FWD_MLP_HANDLE_IDX.format(self.layer_idx, 0),
         )
 
         # attn_output1["hidden_states"], mlp_output0["hidden_states"] = depend(
@@ -903,15 +903,15 @@ class LlamaDecoderLayer(nn.Module):
 
         mlp_output1 = self.mlp(
             hidden_states=hidden_states1,
-            handle_idx=FWD_MLP_HANDLE_IDX.format(self.layer_idx, 1),
+            op_name=FWD_MLP_HANDLE_IDX.format(self.layer_idx, 1),
         )
 
         with torch.cuda.stream(comm_stream):
             mlp_output0["work"].wait()
-            mlp_output1["work"].wait()
+            # mlp_output1["work"].wait()
 
             mlp_output0["work"].is_completed()
-            mlp_output1["work"].is_completed()
+            # mlp_output1["work"].is_completed()
 
         torch.cuda.current_stream().wait_stream(comm_stream)
 
