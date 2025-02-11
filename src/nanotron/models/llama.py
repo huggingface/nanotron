@@ -842,6 +842,7 @@ class LlamaDecoderLayer(nn.Module):
 
         num_input_batches = self.parallel_config.domino.num_input_batches
         orig_sequence_mask = sequence_mask
+        comm_stream = constants.CUDA_STREAMS[torch.cuda.current_device()]
 
         assert num_input_batches == 2
         hidden_states = torch.chunk(hidden_states, chunks=num_input_batches, dim=1)
@@ -855,14 +856,8 @@ class LlamaDecoderLayer(nn.Module):
 
         hidden_states0 = self.input_layernorm(hidden_states0)
         hidden_states1 = self.input_layernorm(hidden_states1)
-        hidden_states0 = WaitComm.apply(
-            hidden_states0,
-            BWD_ATTN_HANDLE_IDX.format(self.layer_idx, 1),
-        )
-        hidden_states1 = WaitComm.apply(
-            hidden_states1,
-            BWD_MLP_HANDLE_IDX.format(self.layer_idx, 0),
-        )
+        hidden_states0 = WaitComm.apply(hidden_states0, BWD_ATTN_HANDLE_IDX.format(self.layer_idx, 1), comm_stream)
+        hidden_states1 = WaitComm.apply(hidden_states1, BWD_MLP_HANDLE_IDX.format(self.layer_idx, 0), comm_stream)
 
         attn_output0 = self.attn(
             hidden_states=hidden_states0,
@@ -875,7 +870,6 @@ class LlamaDecoderLayer(nn.Module):
             handle_idx=FWD_ATTN_HANDLE_IDX.format(self.layer_idx, 1),
         )
 
-        comm_stream = constants.CUDA_STREAMS[torch.cuda.current_device()]
         with torch.cuda.stream(comm_stream):
             attn_output0["work"].wait()
             attn_output0["work"].is_completed()
@@ -884,8 +878,7 @@ class LlamaDecoderLayer(nn.Module):
         residual0 = hidden_states0
         hidden_states0 = self.post_attention_layernorm(hidden_states0)
         hidden_states0 = WaitComm.apply(
-            hidden_states0,
-            BWD_MLP_HANDLE_IDX.format(self.layer_idx, 1),
+            hidden_states0, BWD_MLP_HANDLE_IDX.format(self.layer_idx, 1), comm_stream
         )  # new
 
         mlp_output0 = self.mlp(
@@ -928,12 +921,6 @@ class LlamaDecoderLayer(nn.Module):
         # hidden_states0, hidden_states1 = depend(run_after=hidden_states0, run_before=hidden_states1)
 
         hidden_states = torch.cat([hidden_states0, hidden_states1], dim=1)
-        assert 1 == 1
-
-        # assert attn_output0["work"].is_completed()
-        # assert attn_output1["work"].is_completed()
-        # assert mlp_output0["work"].is_completed()
-        # assert mlp_output1["work"].is_completed()
 
         return hidden_states, orig_sequence_mask
 
@@ -1104,8 +1091,9 @@ class LlamaModel(nn.Module):
             "sequence_mask": input_mask,
         }
 
-        for encoder_block in self.decoder:
-            hidden_encoder_states = encoder_block(**hidden_encoder_states)
+        for layer_idx, encoder_block in enumerate(self.decoder):
+            with torch.profiler.record_function(f"layer_{layer_idx}"):
+                hidden_encoder_states = encoder_block(**hidden_encoder_states)
 
         hidden_states = self.final_layer_norm(input=hidden_encoder_states["hidden_states"])["hidden_states"]
 

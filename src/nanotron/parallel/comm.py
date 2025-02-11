@@ -82,8 +82,9 @@ def is_async_comm(x):
 
 class WaitComm(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, input, wait_handle_idx):
+    def forward(ctx, input, wait_handle_idx, comm_stream):
         ctx.wait_handle_idx = wait_handle_idx
+        ctx.comm_stream = comm_stream
         return input
 
     @staticmethod
@@ -101,6 +102,7 @@ class WaitComm(torch.autograd.Function):
             handle = AsyncCommBucket.pop(ctx.wait_handle_idx)
             assert handle is not None
             handle.wait()
+            torch.cuda.default_stream().wait_stream(ctx.comm_stream)
             # assert handle.is_completed() is True, f"ctx.wait_handle_idx: {ctx.wait_handle_idx}"
         else:
 
@@ -110,4 +112,4 @@ class WaitComm(torch.autograd.Function):
             #     constants._NOT_BWD_ASYNC_OPS.append(ctx.wait_handle_idx)
             constants._NOT_BWD_ASYNC_OPS.append(ctx.wait_handle_idx)
 
-        return grad_output, None
+        return grad_output, None, None

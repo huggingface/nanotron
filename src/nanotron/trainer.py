@@ -594,7 +594,7 @@ class DistributedTrainer:
         # if dist.get_rank() == 0 and constants._NOT_BWD_ASYNC_OPS:
         #     assert 1 == 1
 
-        assert len(not_finished) == 0, f"AsyncCommBucket._copy_async_op: {not_finished}"
+        assert len(not_finished) == 0, f"len={len(not_finished)}, AsyncCommBucket._copy_async_op: {not_finished}"
         assert len(AsyncCommBucket._async_op) == 0, f"AsyncCommBucket._async_op: {AsyncCommBucket._async_op}"
         AsyncCommBucket.clear_all()
 
