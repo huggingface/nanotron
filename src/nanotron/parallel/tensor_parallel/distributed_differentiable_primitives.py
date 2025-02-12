@@ -43,17 +43,9 @@ class DifferentiableIdentity(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_output):
-        # import pydevd
-        # pydevd.settrace(suspend=False, trace_only_current_thread=True)
-        from nanotron.constants import _AUTOGRAD_RUNS
-
-        _AUTOGRAD_RUNS.append(ctx.op_name)
-
         group = ctx.group
-
         op_name = ctx.op_name.replace("fwd.", "bwd.") if ctx.op_name is not None else ctx.op_name
         async_all_reduce = is_async_comm(op_name) if ctx.op_name is not None else ctx.async_all_reduce
-
         return (
             DifferentiableAllReduceSum.apply(grad_output, group, async_all_reduce, op_name, ctx.comm_stream),
             None,

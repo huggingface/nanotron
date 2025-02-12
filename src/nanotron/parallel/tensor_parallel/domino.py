@@ -39,29 +39,8 @@ class WaitComm(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_output):
-        # import pydevd
-        # pydevd.settrace(suspend=False, trace_only_current_thread=True)
-
-        if "bwd.layer_mlp_1_batch_0" == ctx.wait_handle_idx:
-            assert 1 == 1
-
-        if "bwd.layer_mlp_0_batch_1" == ctx.wait_handle_idx:
-            assert 1 == 1
-
         if is_async_comm(ctx.wait_handle_idx):
-            from nanotron.constants import _AUTOGRAD_RUNS
-
-            _AUTOGRAD_RUNS.append(f"wait_{ctx.wait_handle_idx}")
-            handle = AsyncCommBucket.pop(ctx.wait_handle_idx)
-            assert handle is not None
-            handle.wait()
+            AsyncCommBucket.wait(ctx.wait_handle_idx)
             torch.cuda.default_stream().wait_stream(ctx.comm_stream)
-        else:
-            from nanotron import constants
-
-            constants._NOT_BWD_ASYNC_OPS.append(ctx.wait_handle_idx)
-
-        # if "bwd.layer_mlp_0_batch_1" == ctx.wait_handle_idx:
-        #     assert AsyncCommBucket._copy_async_op.get(ctx.wait_handle_idx).is_completed() is True
 
         return grad_output, None, None

@@ -19,6 +19,7 @@ import torch
 from torch.nn import functional as F
 
 import nanotron.distributed as dist
+from nanotron.parallel.comm import AsyncCommBucket
 from nanotron.parallel.tensor_parallel.distributed_differentiable_primitives import (
     differentiable_all_reduce_sum,
     differentiable_identity,
@@ -600,30 +601,9 @@ def row_linear(
     out = F.linear(input, weight, bias)
 
     if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
-        # out, work = differentiable_all_reduce_sum(out, group=group, async_all_reduce=async_all_reduce)
-        # id(out)
-        # NOTE: why the id(out) doesn't match the id(out) before the all_reduce?
-        if op_name == "fwd.layer_attn_0_batch_0":
-            assert 1 == 1
-
-        if op_name == "fwd.layer_mlp_0_batch_1":
-            assert 1 == 1
-
-        if op_name == "fwd.layer_attn_0_batch_0":
-            assert 1 == 1
-
         out = differentiable_all_reduce_sum(out, group=group, async_all_reduce=async_all_reduce, op_name=op_name)
         if async_all_reduce:
-            from nanotron.parallel.comm import AsyncCommBucket
-
-            # work = AsyncCommBucket.get(orig_out_id)
-            # work = AsyncCommBucket.pop(orig_out_id)
-            # if handle_idx == "fwd.layer_mlp_1_batch_0":
-            if op_name == "fwd.layer_attn_0_batch_0":
-                assert 1 == 1
-
             work = AsyncCommBucket.pop(op_name)
-            assert 1 == 1
         else:
             work = None
     elif tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:

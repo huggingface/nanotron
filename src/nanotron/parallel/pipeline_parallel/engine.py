@@ -84,9 +84,6 @@ class PipelineEngine(ABC):
             if grad_accumulator is None:
                 sum(activations).backward()
             else:
-                # if not isinstance(activations, torch.Tensor):
-                #     raise NotImplementedError("Only support sum of tensors for now")
-
                 grad_accumulator.backward(sum(activations))
 
         # TODO @nouamane: this fixes interleaved afab but makes 1f1b hang

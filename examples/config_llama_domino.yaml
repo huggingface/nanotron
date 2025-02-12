@@ -20,7 +20,7 @@ data_stages:
 general:
   benchmark_csv_path: null
   consumed_train_samples: null
-  ignore_sanity_checks: true
+  ignore_sanity_checks: false
   project: nanotron_domino
   run: config_llama_domino
   seed: 42

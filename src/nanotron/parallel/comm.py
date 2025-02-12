@@ -58,6 +58,16 @@ class AsyncCommBucket:
         work.wait()
 
     @staticmethod
+    def is_all_completed() -> bool:
+        assert len(AsyncCommBucket._async_op) == 0, "there are still some async ops haven't executed"
+
+        not_finished = []
+        for k, v in AsyncCommBucket._copy_async_op.items():
+            if v.is_completed() is not True:
+                not_finished.append((k, v))
+        return len(not_finished) == 0
+
+    @staticmethod
     def clear_all():
         AsyncCommBucket._async_op.clear()
         AsyncCommBucket._copy_async_op.clear()
