@@ -445,10 +445,6 @@ class DistributedTrainer:
         gc.collect()
         torch.cuda.empty_cache()
 
-        # num_gpus = torch.cuda.device_count()
-        # for i in range(num_gpus):
-        #     CudaStreamManager.create(f"comm_stream_{i}", device=torch.device(f"cuda:{i}"))
-
         with prof:
             for self.iteration_step in range(self.initial_iter_step, self.last_iter_step + 1):
                 if isinstance(prof, torch.profiler.profile):

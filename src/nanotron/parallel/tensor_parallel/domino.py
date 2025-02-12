@@ -4,10 +4,6 @@ import torch
 
 from nanotron.parallel.comm import AsyncCommBucket
 
-# from nanotron.models.llama import _BaseLlamaDecoderLayer
-# from nanotron.parallel.pipeline_parallel.block import TensorPointer
-# from nanotron.parallel.comm import CudaStreamManager
-
 
 FWD_MLP_HANDLE_IDX = "fwd.layer_mlp_{}_batch_{}"
 FWD_ATTN_HANDLE_IDX = "fwd.layer_attn_{}_batch_{}"
