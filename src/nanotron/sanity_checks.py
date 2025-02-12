@@ -10,6 +10,7 @@ from nanotron.logging import get_logger, log_rank
 from nanotron.models import NanotronModel
 from nanotron.optim.gradient_accumulator import GradientAccumulator
 from nanotron.parallel import ParallelContext
+from nanotron.parallel.comm import AsyncCommBucket
 from nanotron.parallel.tied_parameters import get_tied_id_to_param
 
 logger = get_logger(__name__)
@@ -238,6 +239,9 @@ def before_optim_step_sanity_checks(
 
         # SANITY CHECK: run model specific sanity checks
         unwrapped_model.before_optim_step_sanity_checks()
+
+        # SANITY CHECK: for domino
+        assert AsyncCommBucket.is_all_completed(), "There are still some async ops haven't finishing"
 
 
 def after_optim_step_sanity_checks(

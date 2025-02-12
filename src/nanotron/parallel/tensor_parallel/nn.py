@@ -31,6 +31,7 @@ from nanotron.parallel.tensor_parallel.distributed_differentiable_primitives imp
     differentiable_identity,
     differentiable_reduce_scatter_sum,
 )
+from nanotron.parallel.tensor_parallel.domino import is_async_comm
 from nanotron.parallel.tensor_parallel.enum import TensorParallelLinearMode
 from nanotron.parallel.tensor_parallel.functional import (
     column_linear,
@@ -85,7 +86,7 @@ class TensorParallelColumnLinear(nn.Linear):
             split_config=split_config,
         )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, op_name: str = None) -> torch.Tensor:
         return column_linear(
             input=x,
             weight=self.weight,
@@ -94,6 +95,8 @@ class TensorParallelColumnLinear(nn.Linear):
             tp_mode=self.mode,
             async_communication=self.async_communication,
             tp_recompute_allgather=self.tp_recompute_allgather,
+            async_all_reduce=False if op_name is None else is_async_comm(op_name),
+            op_name=op_name,
         )
 
     def extra_repr(self) -> str:
@@ -133,6 +136,7 @@ class TensorParallelRowLinear(nn.Linear):
         )
         self.mode = mode
         self.async_communication = async_communication
+
         if self.mode is TensorParallelLinearMode.ALL_REDUCE and self.async_communication:
             raise ValueError("async_communication is not supported for ALL_REDUCE mode")
 
@@ -158,7 +162,7 @@ class TensorParallelRowLinear(nn.Linear):
                 )
             setattr(self, name, new_param)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, op_name: str = None) -> torch.Tensor:
         return row_linear(
             input=x,
             weight=self.weight,
@@ -166,6 +170,8 @@ class TensorParallelRowLinear(nn.Linear):
             group=self.pg,
             tp_mode=self.mode,
             async_communication=self.async_communication,
+            async_all_reduce=False if op_name is None else is_async_comm(op_name),
+            op_name=op_name,
         )
 
     def extra_repr(self) -> str:
@@ -290,7 +296,7 @@ class TensorParallelEmbedding(nn.Embedding):
             out = out * (~input_mask[..., None])
 
         if self.mode is TensorParallelLinearMode.ALL_REDUCE:
-            out = differentiable_all_reduce_sum(out, group=self.pg)
+            out = differentiable_all_reduce_sum(out, group=self.pg, async_all_reduce=False)
         elif self.mode is TensorParallelLinearMode.REDUCE_SCATTER:
             out = differentiable_reduce_scatter_sum(out, group=self.pg)
         else:

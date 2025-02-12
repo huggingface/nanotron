@@ -61,6 +61,7 @@ from nanotron.models.llama import LlamaForTraining, RotaryEmbedding
 from nanotron.models.starcoder2 import Starcoder2ForTraining
 from nanotron.optim.clip_grads import clip_grad_norm
 from nanotron.parallel import ParallelContext
+from nanotron.parallel.comm import AsyncCommBucket
 from nanotron.parallel.data_parallel.utils import sync_gradients_across_dp
 from nanotron.parallel.parameters import NanotronParameter, sanity_check
 from nanotron.parallel.pipeline_parallel.engine import (
@@ -443,6 +444,7 @@ class DistributedTrainer:
         # free memory
         gc.collect()
         torch.cuda.empty_cache()
+
         with prof:
             for self.iteration_step in range(self.initial_iter_step, self.last_iter_step + 1):
                 if isinstance(prof, torch.profiler.profile):
@@ -563,6 +565,7 @@ class DistributedTrainer:
         before_optim_step_sanity_checks(
             self.config, self.parallel_context, self.unwrapped_model, self.grad_accumulator, self.optimizer
         )
+        AsyncCommBucket.clear_all()
 
         # Apply gradient
         self.optimizer.step()

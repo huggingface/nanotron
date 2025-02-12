@@ -13,12 +13,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import math
-from typing import Optional
+from typing import Optional, Tuple
 
 import torch
 from torch.nn import functional as F
 
 import nanotron.distributed as dist
+from nanotron.parallel.comm import AsyncCommBucket
 from nanotron.parallel.tensor_parallel.distributed_differentiable_primitives import (
     differentiable_all_reduce_sum,
     differentiable_identity,
@@ -436,12 +437,14 @@ def column_linear(
     tp_mode: TensorParallelLinearMode,
     async_communication: bool,
     tp_recompute_allgather: bool = True,
+    async_all_reduce: bool = False,
+    op_name: Optional[str] = None,
 ):
     if async_communication:
         return _ColumnLinearAsyncCommunication.apply(input, weight, bias, group, tp_mode, tp_recompute_allgather)
 
     if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
-        input = differentiable_identity(input, group=group)
+        input = differentiable_identity(input, group=group, async_all_reduce=async_all_reduce, op_name=op_name)
         return F.linear(input, weight, bias)
     if tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
         return _ColumnLinearNoAsyncCommunicationReduceScatterMode.apply(
@@ -587,18 +590,27 @@ def row_linear(
     bias: Optional[torch.Tensor],
     group: dist.ProcessGroup,
     tp_mode: TensorParallelLinearMode,
+    # TODO(xrsrke): use less confusing names for these arguments
     async_communication: bool,
-):
+    async_all_reduce: bool,
+    op_name: Optional[str] = None,
+) -> Tuple[torch.Tensor, Optional[torch.Future]]:
     if async_communication:
         return _RowLinearAsyncCommunication.apply(input, weight, bias, group, tp_mode)
 
     out = F.linear(input, weight, bias)
 
     if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
-        out = differentiable_all_reduce_sum(out, group=group)
+        out = differentiable_all_reduce_sum(out, group=group, async_all_reduce=async_all_reduce, op_name=op_name)
+        if async_all_reduce:
+            work = AsyncCommBucket.pop(op_name)
+        else:
+            work = None
     elif tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
+        assert async_all_reduce is False, "Async communication is not supported for REDUCE_SCATTER mode."
         out = differentiable_reduce_scatter_sum(out, group=group)
+        work = None
     else:
         raise ValueError(f"Got unexpected mode: {tp_mode}.")
 
-    return out
+    return out, work
