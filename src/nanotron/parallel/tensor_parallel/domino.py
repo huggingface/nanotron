@@ -4,6 +4,11 @@ import torch
 
 from nanotron.parallel.comm import AsyncCommBucket
 
+FWD_MLP_HANDLE_IDX = "fwd.layer_mlp_{}_batch_{}"
+FWD_ATTN_HANDLE_IDX = "fwd.layer_attn_{}_batch_{}"
+BWD_ATTN_HANDLE_IDX = "bwd.layer_attn_{}_batch_{}"
+BWD_MLP_HANDLE_IDX = "bwd.layer_mlp_{}_batch_{}"
+
 
 def is_async_comm(op_name: str):
     """
@@ -40,6 +45,9 @@ class WaitComm(torch.autograd.Function):
         if "bwd.layer_mlp_1_batch_0" == ctx.wait_handle_idx:
             assert 1 == 1
 
+        if "bwd.layer_mlp_0_batch_1" == ctx.wait_handle_idx:
+            assert 1 == 1
+
         if is_async_comm(ctx.wait_handle_idx):
             from nanotron.constants import _AUTOGRAD_RUNS
 
@@ -48,13 +56,12 @@ class WaitComm(torch.autograd.Function):
             assert handle is not None
             handle.wait()
             torch.cuda.default_stream().wait_stream(ctx.comm_stream)
-            # assert handle.is_completed() is True, f"ctx.wait_handle_idx: {ctx.wait_handle_idx}"
         else:
-
             from nanotron import constants
 
-            # if dist.get_rank() == 0:
-            #     constants._NOT_BWD_ASYNC_OPS.append(ctx.wait_handle_idx)
             constants._NOT_BWD_ASYNC_OPS.append(ctx.wait_handle_idx)
+
+        # if "bwd.layer_mlp_0_batch_1" == ctx.wait_handle_idx:
+        #     assert AsyncCommBucket._copy_async_op.get(ctx.wait_handle_idx).is_completed() is True
 
         return grad_output, None, None

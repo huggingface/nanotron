@@ -27,58 +27,39 @@ class DifferentiableIdentity(torch.autograd.Function):
     """All-reduce gradients in a differentiable fashion"""
 
     @staticmethod
-    def forward(ctx, tensor, group: Optional[ProcessGroup], async_all_reduce: bool, op_name: str = None):
+    def forward(
+        ctx,
+        tensor,
+        group: Optional[ProcessGroup],
+        async_all_reduce: bool,
+        op_name: str = None,
+        comm_stream: torch.cuda.Stream = None,
+    ):
+        ctx.group = group
         ctx.async_all_reduce = async_all_reduce
         ctx.op_name = op_name
-        ctx.group = group
+        ctx.comm_stream = comm_stream
         return tensor
 
     @staticmethod
     def backward(ctx, grad_output):
         # import pydevd
         # pydevd.settrace(suspend=False, trace_only_current_thread=True)
-        # NOTE: lm_head is TensorParallelColumnLinear, and it doesn't do async
-        # assert ctx.handle_idx is not None
-        group = ctx.group
-
-        # if ctx.handle_idx is not None and "fwd." in ctx.handle_idx:
-        #     handle_idx = ctx.handle_idx.replace("fwd.", "bwd.")
-        #     # if "bwd.layer_mlp_1_batch_1" == handle_idx:
-        #     #     from nanotron.parallel.comm import is_async_comm
-        #     #     async_all_reduce = is_async_comm(handle_idx)
-        #     # else:
-        #     #     async_all_reduce = ctx.async_all_reduce
-        #     # from nanotron.parallel.comm import is_async_comm
-        #     from nanotron.parallel.tensor_parallel.domino import is_async_comm
-
-        #     async_all_reduce = is_async_comm(handle_idx)
-        # else:
-        #     handle_idx = ctx.handle_idx
-        #     async_all_reduce = ctx.async_all_reduce
-
-        # if handle_idx is not None and "bwd." in handle_idx and async_all_reduce is True:
-        #     assert 1 == 1
-
-        op_name = ctx.op_name.replace("fwd.", "bwd.") if ctx.op_name is not None else ctx.op_name
-        async_all_reduce = is_async_comm(op_name) if ctx.op_name is not None else ctx.async_all_reduce
-
-        if op_name is not None and "layer_mlp_27_batch_1" in op_name:
-            assert 1 == 1
-
         from nanotron.constants import _AUTOGRAD_RUNS
 
         _AUTOGRAD_RUNS.append(ctx.op_name)
 
-        return DifferentiableAllReduceSum.apply(grad_output, group, async_all_reduce, op_name), None, None, None
+        group = ctx.group
 
+        op_name = ctx.op_name.replace("fwd.", "bwd.") if ctx.op_name is not None else ctx.op_name
+        async_all_reduce = is_async_comm(op_name) if ctx.op_name is not None else ctx.async_all_reduce
 
-def is_last_batch_of_attn(x):
-    import re
-
-    pattern = r"layer_attn_\d+_batch_0"
-    if re.match(pattern, x):
-        return True
-    return False
+        return (
+            DifferentiableAllReduceSum.apply(grad_output, group, async_all_reduce, op_name, ctx.comm_stream),
+            None,
+            None,
+            None,
+        )
 
 
 class DifferentiableAllReduceSum(torch.autograd.Function):
@@ -86,47 +67,25 @@ class DifferentiableAllReduceSum(torch.autograd.Function):
 
     @staticmethod
     def forward(
-        ctx, tensor, group: Optional[ProcessGroup], async_all_reduce: bool, op_name: str = None
+        ctx,
+        tensor,
+        group: Optional[ProcessGroup],
+        async_all_reduce: bool,
+        op_name: str = None,
+        comm_stream: torch.cuda.Stream = None,
     ) -> Tuple[torch.Tensor, Optional["dist.Work"]]:
         ctx.async_all_reduce = async_all_reduce
+        ctx.comm_stream = comm_stream
 
         if group.size() == 1:
             return tensor
 
-        # if handle_idx == "bwd.layer_mlp_1_batch_0":
-        #     assert 1 == 1
-
-        # id(tensor)
-        # if async_all_reduce is True:
-        #     # if isinstance(handle_idx, str):
-        #     #     do_async = is_last_batch_of_attn(handle_idx) is False
-        #     # else:
-        #     #     do_async = async_all_reduce
-        #     # from nanotron.parallel.comm import is_async_comm
-        #     from nanotron.parallel.tensor_parallel.domino import is_async_comm
-
-        #     do_async = is_async_comm(handle_idx)
-
-        #     handle = dist.all_reduce(tensor, op=dist.ReduceOp.SUM, group=group, async_op=do_async)
-        #     if do_async:
-        #         if "bwd" in handle_idx:
-        #             assert 1 == 1
-
-        #         # # NOTE: id(tensor) is for the fwd pass, for the bwd pass, we do handle_idx
-        #         # if handle_idx is not None and "bwd." in handle_idx:
-        #         #     AsyncCommBucket.add(orig_id if handle_idx is None else handle_idx, handle)
-        #         # else:
-        #         #     AsyncCommBucket.add(orig_id, handle)
-        #         # NOTE: id(tensor) is for the fwd pass, for the bwd pass, we do handle_idx
-        #         assert handle_idx is not None
-        #         AsyncCommBucket.add(handle_idx, handle)
-        # else:
-        #     dist.all_reduce(tensor, op=dist.ReduceOp.SUM, group=group)
-        if async_all_reduce:
-            handle = dist.all_reduce(tensor, op=dist.ReduceOp.SUM, group=group, async_op=True)
-            AsyncCommBucket.add(op_name, handle)
-        else:
-            dist.all_reduce(tensor, op=dist.ReduceOp.SUM, group=group)
+        with torch.cuda.stream(comm_stream):
+            if async_all_reduce:
+                handle = dist.all_reduce(tensor, op=dist.ReduceOp.SUM, group=group, async_op=True)
+                AsyncCommBucket.add(op_name, handle)
+            else:
+                dist.all_reduce(tensor, op=dist.ReduceOp.SUM, group=group)
 
         return tensor
 

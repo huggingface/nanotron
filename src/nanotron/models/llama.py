@@ -35,7 +35,13 @@ from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter
 from nanotron.parallel.pipeline_parallel.block import PipelineBlock, TensorPointer
 from nanotron.parallel.pipeline_parallel.p2p import P2P
-from nanotron.parallel.tensor_parallel.domino import WaitComm
+from nanotron.parallel.tensor_parallel.domino import (
+    BWD_ATTN_HANDLE_IDX,
+    BWD_MLP_HANDLE_IDX,
+    FWD_ATTN_HANDLE_IDX,
+    FWD_MLP_HANDLE_IDX,
+    WaitComm,
+)
 from nanotron.parallel.tensor_parallel.functional import sharded_cross_entropy
 from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelColumnLinear,
@@ -50,11 +56,6 @@ from nanotron.utils import checkpoint_method
 logger = logging.get_logger(__name__)
 
 DOMINO_COMM_STREAM = "domino_comm_stream_{}"
-
-FWD_MLP_HANDLE_IDX = "fwd.layer_mlp_{}_batch_{}"
-FWD_ATTN_HANDLE_IDX = "fwd.layer_attn_{}_batch_{}"
-BWD_ATTN_HANDLE_IDX = "bwd.layer_attn_{}_batch_{}"
-BWD_MLP_HANDLE_IDX = "bwd.layer_mlp_{}_batch_{}"
 
 
 class RotaryEmbedding(nn.Module):
@@ -743,96 +744,6 @@ class LlamaDecoderLayer(nn.Module):
 
         self.layer_idx = layer_idx
 
-    # def _core_forward(
-    #     self,
-    #     hidden_states: Union[torch.Tensor, TensorPointer],
-    #     sequence_mask: Union[torch.Tensor, TensorPointer],
-    # ) -> List[Union[torch.Tensor, TensorPointer]]:
-    #     from nanotron import constants
-
-    #     num_input_batches = self.parallel_config.domino.num_input_batches
-    #     orig_sequence_mask = sequence_mask
-
-    #     assert num_input_batches == 2
-    #     hidden_states = torch.chunk(hidden_states, chunks=num_input_batches, dim=1)
-    #     sequence_mask = torch.chunk(sequence_mask, chunks=num_input_batches, dim=0)
-
-    #     hidden_states0, hidden_states1 = hidden_states
-    #     sequence_mask0, sequence_mask1 = sequence_mask
-
-    #     residual0 = hidden_states0
-    #     residual1 = hidden_states1
-
-    #     hidden_states0 = self.input_layernorm(hidden_states0)
-    #     hidden_states1 = self.input_layernorm(hidden_states1)
-
-    #     attn_output0 = self.attn(
-    #         hidden_states=hidden_states0,
-    #         sequence_mask=sequence_mask0,
-    #         handle_idx=FWD_ATTN_HANDLE_IDX.format(self.layer_idx, 0),
-    #     )
-    #     # attn_output0["hidden_states"] = WaitComm.apply(
-    #     #     attn_output0["hidden_states"],
-    #     #     BWD_ATTN_HANDLE_IDX.format(self.layer_idx, 1),
-    #     # )
-
-    #     attn_output1 = self.attn(
-    #         hidden_states=hidden_states1,
-    #         sequence_mask=sequence_mask1,
-    #         handle_idx=FWD_ATTN_HANDLE_IDX.format(self.layer_idx, 1),
-    #     )
-    #     # attn_output1["hidden_states"] = WaitComm.apply(
-    #     #     attn_output1["hidden_states"],
-    #     #     BWD_MLP_HANDLE_IDX.format(self.layer_idx, 0),
-    #     # )
-
-    #     comm_stream = constants.CUDA_STREAMS[torch.cuda.current_device()]
-    #     with torch.cuda.stream(comm_stream):
-    #         attn_output0["work"].wait()
-
-    #     hidden_states0 = attn_output0["hidden_states"] + residual0
-    #     residual0 = hidden_states0
-    #     hidden_states0 = self.post_attention_layernorm(hidden_states0)
-    #     hidden_states0 = WaitComm.apply(
-    #         hidden_states0,
-    #         BWD_MLP_HANDLE_IDX.format(self.layer_idx, 1),
-    #     ) # new
-
-    #     mlp_output0 = self.mlp(
-    #         hidden_states=hidden_states0,
-    #         handle_idx=FWD_MLP_HANDLE_IDX.format(self.layer_idx, 0),
-    #     )
-    #     # mlp_output0["hidden_states"] = WaitComm.apply(
-    #     #     mlp_output0["hidden_states"],
-    #     #     BWD_MLP_HANDLE_IDX.format(self.layer_idx, 1),
-    #     # )
-
-    #     with torch.cuda.stream(comm_stream):
-    #         attn_output1["work"].wait()
-
-    #     hidden_states1 = attn_output1["hidden_states"] + residual1
-    #     residual1 = hidden_states1
-    #     hidden_states1 = self.post_attention_layernorm(hidden_states1)
-    #     hidden_states1 = WaitComm.apply(
-    #         hidden_states1,
-    #         BWD_MLP_HANDLE_IDX.format(self.layer_idx, 0),
-    #     )
-
-    #     mlp_output1 = self.mlp(
-    #         hidden_states=hidden_states1,
-    #         handle_idx=FWD_MLP_HANDLE_IDX.format(self.layer_idx, 1),
-    #     )
-
-    #     with torch.cuda.stream(comm_stream):
-    #         mlp_output0["work"].wait()
-    #         mlp_output1["work"].wait()
-
-    #     hidden_states0 = mlp_output0["hidden_states"] + residual0
-    #     hidden_states1 = mlp_output1["hidden_states"] + residual1
-
-    #     hidden_states = torch.cat([hidden_states0, hidden_states1], dim=1)
-    #     return hidden_states, orig_sequence_mask
-
     def _core_forward(
         self,
         hidden_states: Union[torch.Tensor, TensorPointer],
@@ -908,12 +819,10 @@ class LlamaDecoderLayer(nn.Module):
 
         with torch.cuda.stream(comm_stream):
             mlp_output0["work"].wait()
-            # mlp_output1["work"].wait()
-
             mlp_output0["work"].is_completed()
-            # mlp_output1["work"].is_completed()
 
         torch.cuda.current_stream().wait_stream(comm_stream)
+        # torch.cuda.synchronize()
 
         hidden_states0 = mlp_output0["hidden_states"] + residual0
         hidden_states1 = mlp_output1["hidden_states"] + residual1
