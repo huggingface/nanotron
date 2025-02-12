@@ -8,12 +8,14 @@ class CudaStreamManager:
     _streams: Dict[str, "torch.cuda.Stream"] = {}
 
     @staticmethod
-    def create(name: str):
+    def create(name: str, device: torch.device = None):
         assert name not in CudaStreamManager._streams
-        CudaStreamManager._streams[name] = torch.cuda.Stream()
+        CudaStreamManager._streams[name] = torch.cuda.Stream(device=device)
 
     @staticmethod
     def get(name: str):
+        if name not in CudaStreamManager._streams:
+            CudaStreamManager.create(name)
         return CudaStreamManager._streams.get(name)
 
     @contextmanager

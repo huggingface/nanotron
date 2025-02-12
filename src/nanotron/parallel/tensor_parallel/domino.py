@@ -4,6 +4,11 @@ import torch
 
 from nanotron.parallel.comm import AsyncCommBucket
 
+# from nanotron.models.llama import _BaseLlamaDecoderLayer
+# from nanotron.parallel.pipeline_parallel.block import TensorPointer
+# from nanotron.parallel.comm import CudaStreamManager
+
+
 FWD_MLP_HANDLE_IDX = "fwd.layer_mlp_{}_batch_{}"
 FWD_ATTN_HANDLE_IDX = "fwd.layer_attn_{}_batch_{}"
 BWD_ATTN_HANDLE_IDX = "bwd.layer_attn_{}_batch_{}"
@@ -17,10 +22,7 @@ def is_async_comm(op_name: str):
     for the backward pass: the first micro-batch of the attention layer
     """
     NON_ASYNC_HANDLE_IDX = [
-        # "fwd.layer_attn_{}_batch_0",
-        # "fwd.layer_mlp_{}_batch_0",
         "fwd.layer_mlp_{}_batch_1",
-        # "bwd.layer_mlp_{}_batch_1",
         "bwd.layer_attn_{}_batch_0",
     ]
 
