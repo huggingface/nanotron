@@ -3,6 +3,8 @@ from typing import Dict
 
 import torch
 
+from nanotron.parallel.tensor_parallel.domino import is_async_comm
+
 
 class CudaStreamManager:
     _streams: Dict[str, "torch.cuda.Stream"] = {}
@@ -38,30 +40,35 @@ class AsyncCommBucket:
     _copy_async_op: Dict[int, "dist.Work"] = {}
 
     @staticmethod
-    def add(tensor_id: int, work: "dist.Work"):
-        assert (
-            tensor_id not in AsyncCommBucket._async_op
-        ), f"tensor_id: {tensor_id}, keys: {AsyncCommBucket._async_op.keys()}"
-        AsyncCommBucket._async_op[tensor_id] = work
-        AsyncCommBucket._copy_async_op[tensor_id] = work
+    def add(op_name: int, work: "dist.Work"):
+        assert op_name not in AsyncCommBucket._async_op, f"Operation with name: {op_name} already exists"
+        AsyncCommBucket._async_op[op_name] = work
+        AsyncCommBucket._copy_async_op[op_name] = work
 
     @staticmethod
-    def get(tensor_id: int):
-        return AsyncCommBucket._async_op.get(tensor_id)
+    def get(op_name: int):
+        if op_name not in AsyncCommBucket._async_op:
+            raise KeyError(f"Operation with name: {op_name} doesn't exist")
+
+        return AsyncCommBucket._async_op.get(op_name)
 
     @staticmethod
-    def pop(tensor_id: int):
-        assert tensor_id in AsyncCommBucket._async_op, f"tensor_id: {tensor_id}"
-        return AsyncCommBucket._async_op.pop(tensor_id)
+    def pop(op_name: int):
+        if op_name not in AsyncCommBucket._async_op:
+            raise KeyError(f"Operation with name: {op_name} doesn't exist")
+
+        return AsyncCommBucket._async_op.pop(op_name)
 
     @staticmethod
-    def wait(tensor_id: int):
-        work = AsyncCommBucket._async_op.pop(tensor_id)
+    def wait(op_name: int):
+        """Wait and remove the operation from the bucket"""
+        work = AsyncCommBucket.pop(op_name)
         work.wait()
 
     @staticmethod
     def is_all_completed() -> bool:
-        assert len(AsyncCommBucket._async_op) == 0, "there are still some async ops haven't executed"
+        if not len(AsyncCommBucket._async_op) == 0:
+            return False
 
         not_finished = []
         for k, v in AsyncCommBucket._copy_async_op.items():
@@ -73,3 +80,19 @@ class AsyncCommBucket:
     def clear_all():
         AsyncCommBucket._async_op.clear()
         AsyncCommBucket._copy_async_op.clear()
+
+
+class WaitComm(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, input: torch.Tensor, wait_handle_idx: str, comm_stream: torch.cuda.Stream):
+        ctx.wait_handle_idx = wait_handle_idx
+        ctx.comm_stream = comm_stream
+        return input
+
+    @staticmethod
+    def backward(ctx, grad_output: torch.Tensor):
+        if is_async_comm(ctx.wait_handle_idx):
+            AsyncCommBucket.wait(ctx.wait_handle_idx)
+            torch.cuda.default_stream().wait_stream(ctx.comm_stream)
+
+        return grad_output, None, None

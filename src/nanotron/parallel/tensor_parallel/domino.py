@@ -1,10 +1,5 @@
 import re
 
-import torch
-
-from nanotron.parallel.comm import AsyncCommBucket
-
-
 FWD_MLP_HANDLE_IDX = "fwd.layer_mlp_{}_batch_{}"
 FWD_ATTN_HANDLE_IDX = "fwd.layer_attn_{}_batch_{}"
 BWD_ATTN_HANDLE_IDX = "bwd.layer_attn_{}_batch_{}"
@@ -26,19 +21,3 @@ def is_async_comm(op_name: str):
     regex = re.compile("^(" + "|".join(patterns) + ")$")  # Combine patterns into a single regex
     not_async = bool(regex.match(op_name))
     return not not_async
-
-
-class WaitComm(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, input, wait_handle_idx, comm_stream):
-        ctx.wait_handle_idx = wait_handle_idx
-        ctx.comm_stream = comm_stream
-        return input
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        if is_async_comm(ctx.wait_handle_idx):
-            AsyncCommBucket.wait(ctx.wait_handle_idx)
-            torch.cuda.default_stream().wait_stream(ctx.comm_stream)
-
-        return grad_output, None, None

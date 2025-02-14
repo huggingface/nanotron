@@ -68,4 +68,4 @@ def _test_domino_model(
     outputs = llama_model(input_ids, input_mask, input_mask, input_mask)
 
     assert isinstance(outputs["loss"], torch.Tensor)
-    assert AsyncCommBucket.is_all_completed()
+    assert AsyncCommBucket.is_all_completed() is True

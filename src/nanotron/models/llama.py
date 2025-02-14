@@ -30,7 +30,7 @@ from nanotron.models import NanotronModel
 from nanotron.nn.activations import ACT2FN
 from nanotron.nn.layer_norm import TritonRMSNorm
 from nanotron.parallel import ParallelContext
-from nanotron.parallel.comm import CudaStreamManager
+from nanotron.parallel.comm import CudaStreamManager, WaitComm
 from nanotron.parallel.parameters import NanotronParameter
 from nanotron.parallel.pipeline_parallel.block import PipelineBlock, TensorPointer
 from nanotron.parallel.pipeline_parallel.p2p import P2P
@@ -39,7 +39,6 @@ from nanotron.parallel.tensor_parallel.domino import (
     BWD_MLP_HANDLE_IDX,
     FWD_ATTN_HANDLE_IDX,
     FWD_MLP_HANDLE_IDX,
-    WaitComm,
 )
 from nanotron.parallel.tensor_parallel.functional import sharded_cross_entropy
 from nanotron.parallel.tensor_parallel.nn import (
