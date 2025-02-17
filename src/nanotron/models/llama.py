@@ -819,8 +819,8 @@ class MLA(nn.Module):
         )  # [seq_len, batch_size, n_heads, qk_head_dim]
 
         # FA API doesn't seem to support different head dimensions for key and value. Use SDPA instead.
-        # TODO: a kernel for this.
-
+        # https://github.com/ggml-org/llama.cpp/issues/7343
+        # TODO: a kernel for this. Or we let k, v be the same shape as q
         # (seqlen, b, n_heads, d_qk) -> (b, n_heads, seqlen, d_qk)
         q = q.permute(1, 2, 0, 3).contiguous()
         k = k.permute(1, 2, 0, 3).contiguous()
@@ -829,7 +829,9 @@ class MLA(nn.Module):
         # Mask for SDPA: https://pytorch.org/docs/stable/generated/torch.nn.functional.scaled_dot_product_attention.html
         if sequence_mask is not None:
             # Step 1: Create a lower triangular mask (allows attending to past and current positions)
-            lower_triangular_mask = torch.tril(torch.ones(seq_len, seq_len))  # lower triangle
+            lower_triangular_mask = torch.tril(
+                torch.ones(seq_len, seq_len, device=sequence_mask.device)
+            )  # lower triangle
             lower_triangular_mask = lower_triangular_mask.bool()  # Convert to boolean mask
             # Step 2: Expand the sequence mask to match attention shape [batch_size, seq_len, seq_len]
             sequence_mask_expanded = sequence_mask[:, None, :].expand(batch_size, seq_len, seq_len)
@@ -860,8 +862,9 @@ class LlamaDecoderLayer(nn.Module):
         layer_idx: int,
     ):
         super().__init__()
+        Attention = MLA if config.kv_lora_rank is not None else CausalSelfAttention
         self.input_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.attn = CausalSelfAttention(
+        self.attn = Attention(
             config=config,
             parallel_config=parallel_config,
             tp_pg=tp_pg,

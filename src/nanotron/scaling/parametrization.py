@@ -11,7 +11,7 @@ from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelRowLinear,
 )
 from torch import nn
-from torch.nn import init
+from torch.nn import Linear, init
 
 
 class ParametrizationMethod(Enum):
@@ -38,10 +38,18 @@ class StandardParametrizator(Parametrizator):
             TensorParallelRowLinear: self._parametrize_row_linear,
             TritonRMSNorm: self._parametrize_layer_norm,
             TensorParallelEmbedding: self._parametrize_embedding,
+            Linear: self._parametrize_linear_layer,
         }
 
         self.std = config.init_method.std
         self.num_layers = config.model_config.num_hidden_layers
+
+    def _parametrize_linear_layer(self, param_name: str, module: nn.Module):
+        assert param_name in ["weight", "bias"]
+        if "weight" == param_name:
+            init.normal_(module.weight, mean=0.0, std=self.std)
+        elif "bias" == param_name:
+            module.bias.zero_()
 
     def _parametrize_column_linear(self, param_name: str, module: nn.Module):
         assert param_name in ["weight", "bias"]
