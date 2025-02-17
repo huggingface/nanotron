@@ -414,7 +414,7 @@ class _ColumnLinearNoAsyncCommunicationReduceScatterMode(torch.autograd.Function
         grad_weight = grad_output.T @ total_input
         grad_input = grad_output @ weight
         if group.size() == 1:
-            sub_grad_input = grad_input
+            sub_grad_input = grad_input.reshape(input_size)  # [s*b, h_in] -> [s, b, h_in]
         else:
             # Seems that `reduce_scatter` need contiguous tensors: https://github.com/pytorch/pytorch/blob/2b267fa7f28e18ca6ea1de4201d2541a40411457/torch/distributed/nn/functional.py#L305
             # We set grad_input to be contiguous in case it isn't already.
