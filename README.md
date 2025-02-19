@@ -48,6 +48,14 @@ pip install triton "flash-attn>=2.5.0" --no-build-isolation
 > [!NOTE]
 > If you get `undefined symbol: ncclCommRegister` error you should install torch 2.1.2 instead: `pip install torch==2.1.2 --index-url https://download.pytorch.org/whl/cu121`
 
+On supercomputers, prefer the usage of Spack to install Nanotron:
+
+```bash
+git clone -c feature.manyFiles=true --depth=2 https://github.com/spack/spack.git
+cd spack/bin
+./spack install py-nanotron
+```
+
 > [!TIP]
 > We log to wandb automatically if it's installed. For that you can use `pip install wandb`. If you don't want to use wandb, you can run `wandb disabled`.
 
