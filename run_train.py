@@ -27,7 +27,7 @@ from nanotron.helpers import (
 from nanotron.logging import log_rank
 from nanotron.parallel.pipeline_parallel.utils import get_input_output_pp_ranks
 from nanotron.trainer import DistributedTrainer
-from nanotron.utils import main_rank_first
+from nanotron.utils import main_rank_first, nccl_timeout_override
 from torch.utils.data import DataLoader
 
 try:
@@ -86,58 +86,58 @@ def get_dataloader_from_data_stage(
 
         # We need to the 1st device to process dataset and cache it, then other devices load from cache
         with main_rank_first(trainer.parallel_context.world_pg):
-            # TODO @nouamanetazi: this may timeout before 1st device finishes processing dataset. Can we have a ctxmanager to modify timeout?
-            # TODO: generalise to include  for validation/test splits
+            with nccl_timeout_override(timeout_ms=3600000):
+                # TODO: generalise to include for validation/test splits
 
-            # We load the raw dataset
-            raw_dataset = get_datasets(
-                hf_dataset_or_datasets=data.dataset.hf_dataset_or_datasets,
-                hf_dataset_config_name=data.dataset.hf_dataset_config_name,
-                splits=data.dataset.hf_dataset_splits,
-            )["train"]
+                # We load the raw dataset
+                raw_dataset = get_datasets(
+                    hf_dataset_or_datasets=data.dataset.hf_dataset_or_datasets,
+                    hf_dataset_config_name=data.dataset.hf_dataset_config_name,
+                    splits=data.dataset.hf_dataset_splits,
+                )["train"]
 
-            tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
-            tokenizer.pad_token = tokenizer.eos_token
-            tokenizer.padding_side = "left"
+                tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
+                tokenizer.pad_token = tokenizer.eos_token
+                tokenizer.padding_side = "left"
 
-            # Check that tokenizer's vocab size is smaller than the model's vocab size
-            assert (
-                tokenizer.vocab_size <= trainer.model_config.vocab_size
-            ), f"Tokenizer's vocab size ({tokenizer.vocab_size}) is larger than the model's vocab size ({trainer.model_config.vocab_size})"
+                # Check that tokenizer's vocab size is smaller than the model's vocab size
+                assert (
+                    tokenizer.vocab_size <= trainer.model_config.vocab_size
+                ), f"Tokenizer's vocab size ({tokenizer.vocab_size}) is larger than the model's vocab size ({trainer.model_config.vocab_size})"
 
-            # We apply the Causal Language Modeling preprocessing
-            train_dataset = clm_process(
-                raw_dataset=raw_dataset,
-                tokenizer=tokenizer,
-                text_column_name=data.dataset.text_column_name,
-                dataset_processing_num_proc_per_process=data.dataset.dataset_processing_num_proc_per_process,
-                dataset_overwrite_cache=data.dataset.dataset_overwrite_cache,
-                sequence_length=trainer.sequence_length,
-            )
+                # We apply the Causal Language Modeling preprocessing
+                train_dataset = clm_process(
+                    raw_dataset=raw_dataset,
+                    tokenizer=tokenizer,
+                    text_column_name=data.dataset.text_column_name,
+                    dataset_processing_num_proc_per_process=data.dataset.dataset_processing_num_proc_per_process,
+                    dataset_overwrite_cache=data.dataset.dataset_overwrite_cache,
+                    sequence_length=trainer.sequence_length,
+                )
 
-            # We load the processed dataset on the ranks requiring it
-            dataloader = get_train_dataloader(
-                train_dataset=train_dataset,
-                sequence_length=trainer.sequence_length,
-                parallel_context=trainer.parallel_context,
-                input_pp_rank=input_pp_rank,
-                output_pp_rank=output_pp_rank,
-                micro_batch_size=trainer.micro_batch_size,
-                consumed_train_samples=consumed_train_samples,
-                dataloader_num_workers=data.num_loading_workers,
-                seed_worker=data.seed,
-                dataloader_drop_last=True,
-            )
+                # We load the processed dataset on the ranks requiring it
+                dataloader = get_train_dataloader(
+                    train_dataset=train_dataset,
+                    sequence_length=trainer.sequence_length,
+                    parallel_context=trainer.parallel_context,
+                    input_pp_rank=input_pp_rank,
+                    output_pp_rank=output_pp_rank,
+                    micro_batch_size=trainer.micro_batch_size,
+                    consumed_train_samples=consumed_train_samples,
+                    dataloader_num_workers=data.num_loading_workers,
+                    seed_worker=data.seed,
+                    dataloader_drop_last=True,
+                )
 
-            # Check if we have enough samples for train_steps
-            total_tokens_dataset = len(dataloader.dataset) * trainer.sequence_length
-            num_tokens_needed_for_training = (
-                num_remaining_train_steps * trainer.global_batch_size * trainer.sequence_length
-            )
-            assert num_tokens_needed_for_training <= total_tokens_dataset, (
-                f"Dataset is too small for steps ({total_tokens_dataset} < {num_tokens_needed_for_training}), "
-                f"Try train_steps<={len(dataloader.dataset) // trainer.global_batch_size + trainer.iteration_step}"
-            )
+                # Check if we have enough samples for train_steps
+                total_tokens_dataset = len(dataloader.dataset) * trainer.sequence_length
+                num_tokens_needed_for_training = (
+                    num_remaining_train_steps * trainer.global_batch_size * trainer.sequence_length
+                )
+                assert num_tokens_needed_for_training <= total_tokens_dataset, (
+                    f"Dataset is too small for steps ({total_tokens_dataset} < {num_tokens_needed_for_training}), "
+                    f"Try train_steps<={len(dataloader.dataset) // trainer.global_batch_size + trainer.iteration_step}"
+                )
 
     # Case 3: Nanosets
     elif isinstance(data.dataset, NanosetDatasetsArgs):
