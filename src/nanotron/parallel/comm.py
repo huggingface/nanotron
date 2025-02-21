@@ -73,6 +73,10 @@ def is_async_comm(x):
         "bwd.layer_mlp_{}_batch_1",
         "bwd.layer_attn_{}_batch_0",
     ]
+    # NON_ASYNC_HANDLE_IDX = [
+    #     "fwd.layer_mlp_{}_batch_1",
+    #     "bwd.layer_attn_{}_batch_0",
+    # ]
 
     patterns = [p.replace("{}", r"\d+") for p in NON_ASYNC_HANDLE_IDX]  # Replace {} with regex for numbers
     regex = re.compile("^(" + "|".join(patterns) + ")$")  # Combine patterns into a single regex

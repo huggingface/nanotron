@@ -27,7 +27,6 @@ class DifferentiableIdentity(torch.autograd.Function):
 
     @staticmethod
     def forward(ctx, tensor, group: Optional[ProcessGroup], async_all_reduce: bool, handle_idx=None):
-        # assert handle_idx is not None
         ctx.async_all_reduce = async_all_reduce
         ctx.handle_idx = handle_idx
         ctx.group = group
@@ -35,43 +34,13 @@ class DifferentiableIdentity(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_output):
-        # import pydevd
-        # pydevd.settrace(suspend=False, trace_only_current_thread=True)
-        # NOTE: lm_head is TensorParallelColumnLinear, and it doesn't do async
-        # assert ctx.handle_idx is not None
         group = ctx.group
 
-        if ctx.handle_idx is not None and "fwd." in ctx.handle_idx:
-            handle_idx = ctx.handle_idx.replace("fwd.", "bwd.")
-            # if "bwd.layer_mlp_1_batch_1" == handle_idx:
-            #     from nanotron.parallel.comm import is_async_comm
-            #     async_all_reduce = is_async_comm(handle_idx)
-            # else:
-            #     async_all_reduce = ctx.async_all_reduce
-            from nanotron.parallel.comm import is_async_comm
+        from nanotron.parallel.comm import is_async_comm
 
-            async_all_reduce = is_async_comm(handle_idx)
-        else:
-            handle_idx = ctx.handle_idx
-            async_all_reduce = ctx.async_all_reduce
-
-        if handle_idx is not None and "bwd." in handle_idx and async_all_reduce is True:
-            assert 1 == 1
-
-        from nanotron.constants import _AUTOGRAD_RUNS
-
-        _AUTOGRAD_RUNS.append(handle_idx)
-
+        handle_idx = ctx.handle_idx.replace("fwd.", "bwd.") if ctx.handle_idx is not None else None
+        async_all_reduce = is_async_comm(handle_idx) if handle_idx is not None else ctx.async_all_reduce
         return DifferentiableAllReduceSum.apply(grad_output, group, async_all_reduce, handle_idx), None, None, None
-
-
-def is_last_batch_of_attn(x):
-    import re
-
-    pattern = r"layer_attn_\d+_batch_0"
-    if re.match(pattern, x):
-        return True
-    return False
 
 
 class DifferentiableAllReduceSum(torch.autograd.Function):
@@ -86,32 +55,9 @@ class DifferentiableAllReduceSum(torch.autograd.Function):
         if group.size() == 1:
             return tensor
 
-        if handle_idx == "bwd.layer_mlp_1_batch_0":
-            assert 1 == 1
-
-        id(tensor)
         if async_all_reduce is True:
-            # if isinstance(handle_idx, str):
-            #     do_async = is_last_batch_of_attn(handle_idx) is False
-            # else:
-            #     do_async = async_all_reduce
-            from nanotron.parallel.comm import is_async_comm
-
-            do_async = is_async_comm(handle_idx)
-
-            handle = dist.all_reduce(tensor, op=dist.ReduceOp.SUM, group=group, async_op=do_async)
-            if do_async:
-                if "bwd" in handle_idx:
-                    assert 1 == 1
-
-                # # NOTE: id(tensor) is for the fwd pass, for the bwd pass, we do handle_idx
-                # if handle_idx is not None and "bwd." in handle_idx:
-                #     AsyncCommBucket.add(orig_id if handle_idx is None else handle_idx, handle)
-                # else:
-                #     AsyncCommBucket.add(orig_id, handle)
-                # NOTE: id(tensor) is for the fwd pass, for the bwd pass, we do handle_idx
-                assert handle_idx is not None
-                AsyncCommBucket.add(handle_idx, handle)
+            handle = dist.all_reduce(tensor, op=dist.ReduceOp.SUM, group=group, async_op=True)
+            AsyncCommBucket.add(handle_idx, handle)
         else:
             dist.all_reduce(tensor, op=dist.ReduceOp.SUM, group=group)
 
