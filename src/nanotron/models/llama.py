@@ -866,6 +866,7 @@ class DominoLlamaDecoderLayer(_BaseLlamaDecoderLayer):
 
         with torch.cuda.stream(comm_stream):
             mlp_output0["work"].wait()
+            assert 1 == 1
             mlp_output0["work"].is_completed()
 
         torch.cuda.current_stream().wait_stream(comm_stream)

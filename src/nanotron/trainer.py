@@ -496,6 +496,10 @@ class DistributedTrainer:
             grad_accumulator=self.grad_accumulator,
         )
 
+        torch.cuda.synchronize()
+        time.sleep(2)
+        torch.cuda.synchronize()
+
         if self.iteration_step < self.initial_iter_step + 5:
             log_memory(logger=logger)
 
@@ -565,6 +569,12 @@ class DistributedTrainer:
         before_optim_step_sanity_checks(
             self.config, self.parallel_context, self.unwrapped_model, self.grad_accumulator, self.optimizer
         )
+
+        # try:
+        #     assert AsyncCommBucket.is_all_completed(), "There are still some async ops haven't finishing"
+        # except:
+        #     assert 1 == 1
+        assert AsyncCommBucket.is_all_completed(), "There are still some async ops haven't finishing"
         AsyncCommBucket.clear_all()
 
         # Apply gradient

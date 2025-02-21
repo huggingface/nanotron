@@ -31,12 +31,10 @@ class DifferentiableIdentity(torch.autograd.Function):
         ctx,
         tensor,
         group: Optional[ProcessGroup],
-        async_all_reduce: bool,
         op_name: str = None,
         comm_stream: torch.cuda.Stream = None,
     ):
         ctx.group = group
-        ctx.async_all_reduce = async_all_reduce
         ctx.op_name = op_name
         ctx.comm_stream = comm_stream
         return tensor
@@ -45,9 +43,8 @@ class DifferentiableIdentity(torch.autograd.Function):
     def backward(ctx, grad_output):
         group = ctx.group
         op_name = ctx.op_name.replace("fwd.", "bwd.") if ctx.op_name is not None else ctx.op_name
-        async_all_reduce = is_async_comm(op_name) if ctx.op_name is not None else ctx.async_all_reduce
         return (
-            DifferentiableAllReduceSum.apply(grad_output, group, async_all_reduce, op_name, ctx.comm_stream),
+            DifferentiableAllReduceSum.apply(grad_output, group, op_name, ctx.comm_stream),
             None,
             None,
             None,
@@ -62,16 +59,16 @@ class DifferentiableAllReduceSum(torch.autograd.Function):
         ctx,
         tensor,
         group: Optional[ProcessGroup],
-        async_all_reduce: bool,
         op_name: str = None,
         comm_stream: torch.cuda.Stream = None,
     ) -> Tuple[torch.Tensor, Optional["dist.Work"]]:
-        ctx.async_all_reduce = async_all_reduce
+        ctx.op_name = op_name
         ctx.comm_stream = comm_stream
 
         if group.size() == 1:
             return tensor
 
+        async_all_reduce = is_async_comm(op_name) if op_name is not None else False
         with torch.cuda.stream(comm_stream):
             if async_all_reduce:
                 handle = dist.all_reduce(tensor, op=dist.ReduceOp.SUM, group=group, async_op=True)
@@ -165,16 +162,12 @@ class DifferentiableReduceScatterSum(torch.autograd.Function):
 # -----------------
 
 
-def differentiable_identity(
-    tensor, group: Optional[ProcessGroup] = None, async_all_reduce: bool = False, op_name: str = None
-):
-    return DifferentiableIdentity.apply(tensor, group, async_all_reduce, op_name)
+def differentiable_identity(tensor, group: Optional[ProcessGroup] = None, op_name: str = None):
+    return DifferentiableIdentity.apply(tensor, group, op_name)
 
 
-def differentiable_all_reduce_sum(
-    tensor, group: Optional[ProcessGroup] = None, async_all_reduce: bool = False, op_name: str = None
-):
-    return DifferentiableAllReduceSum.apply(tensor, group, async_all_reduce, op_name)
+def differentiable_all_reduce_sum(tensor, group: Optional[ProcessGroup] = None, op_name: str = None):
+    return DifferentiableAllReduceSum.apply(tensor, group, op_name)
 
 
 def differentiable_all_gather(tensor, group: Optional[ProcessGroup] = None):

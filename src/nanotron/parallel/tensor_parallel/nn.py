@@ -31,7 +31,6 @@ from nanotron.parallel.tensor_parallel.distributed_differentiable_primitives imp
     differentiable_identity,
     differentiable_reduce_scatter_sum,
 )
-from nanotron.parallel.tensor_parallel.domino import is_async_comm
 from nanotron.parallel.tensor_parallel.enum import TensorParallelLinearMode
 from nanotron.parallel.tensor_parallel.functional import (
     column_linear,
@@ -95,7 +94,6 @@ class TensorParallelColumnLinear(nn.Linear):
             tp_mode=self.mode,
             async_communication=self.async_communication,
             tp_recompute_allgather=self.tp_recompute_allgather,
-            async_all_reduce=False if op_name is None else is_async_comm(op_name),
             op_name=op_name,
         )
 
@@ -170,7 +168,6 @@ class TensorParallelRowLinear(nn.Linear):
             group=self.pg,
             tp_mode=self.mode,
             async_communication=self.async_communication,
-            async_all_reduce=False if op_name is None else is_async_comm(op_name),
             op_name=op_name,
         )
 
@@ -296,7 +293,7 @@ class TensorParallelEmbedding(nn.Embedding):
             out = out * (~input_mask[..., None])
 
         if self.mode is TensorParallelLinearMode.ALL_REDUCE:
-            out = differentiable_all_reduce_sum(out, group=self.pg, async_all_reduce=False)
+            out = differentiable_all_reduce_sum(out, group=self.pg)
         elif self.mode is TensorParallelLinearMode.REDUCE_SCATTER:
             out = differentiable_reduce_scatter_sum(out, group=self.pg)
         else:

@@ -25,6 +25,7 @@ from nanotron.parallel.tensor_parallel.distributed_differentiable_primitives imp
     differentiable_identity,
     differentiable_reduce_scatter_sum,
 )
+from nanotron.parallel.tensor_parallel.domino import is_async_comm
 from nanotron.parallel.tensor_parallel.enum import TensorParallelLinearMode
 from nanotron.parallel.utils import MemoryBuffer, assert_cuda_max_connections_set_to_1
 
@@ -437,14 +438,13 @@ def column_linear(
     tp_mode: TensorParallelLinearMode,
     async_communication: bool,
     tp_recompute_allgather: bool = True,
-    async_all_reduce: bool = False,
     op_name: Optional[str] = None,
 ):
     if async_communication:
         return _ColumnLinearAsyncCommunication.apply(input, weight, bias, group, tp_mode, tp_recompute_allgather)
 
     if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
-        input = differentiable_identity(input, group=group, async_all_reduce=async_all_reduce, op_name=op_name)
+        input = differentiable_identity(input, group=group, op_name=op_name)
         return F.linear(input, weight, bias)
     if tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
         return _ColumnLinearNoAsyncCommunicationReduceScatterMode.apply(
@@ -592,7 +592,6 @@ def row_linear(
     tp_mode: TensorParallelLinearMode,
     # TODO(xrsrke): use less confusing names for these arguments
     async_communication: bool,
-    async_all_reduce: bool,
     op_name: Optional[str] = None,
 ) -> Tuple[torch.Tensor, Optional[torch.Future]]:
     if async_communication:
@@ -601,7 +600,9 @@ def row_linear(
     out = F.linear(input, weight, bias)
 
     if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
-        out = differentiable_all_reduce_sum(out, group=group, async_all_reduce=async_all_reduce, op_name=op_name)
+        out = differentiable_all_reduce_sum(out, group=group, op_name=op_name)
+
+        async_all_reduce = is_async_comm(op_name) if op_name is not None else False
         if async_all_reduce:
             work = AsyncCommBucket.pop(op_name)
         else:
