@@ -52,7 +52,6 @@ class TensorParallelColumnLinear(nn.Linear):
         async_communication: bool = False,
         contiguous_chunks: Optional[Tuple[int, ...]] = None,
         tp_recompute_allgather: bool = True,
-        # handle_idx: Optional[int] = None,
     ):
         self.pg = pg
         self.world_size = pg.size()
@@ -73,7 +72,6 @@ class TensorParallelColumnLinear(nn.Linear):
 
         self.mode = mode
         self.async_communication = async_communication
-        # self.handle_idx = handle_idx
 
         if contiguous_chunks is not None:
             assert (
@@ -115,7 +113,6 @@ class TensorParallelRowLinear(nn.Linear):
         device=None,
         dtype=None,
         async_communication: bool = False,
-        # async_all_reduce: bool = False,
         contiguous_chunks: Optional[Tuple[int, ...]] = None,
     ):
         self.pg = pg
@@ -138,7 +135,6 @@ class TensorParallelRowLinear(nn.Linear):
         )
         self.mode = mode
         self.async_communication = async_communication
-        # self.async_all_reduce = async_all_reduce
         if self.mode is TensorParallelLinearMode.ALL_REDUCE and self.async_communication:
             raise ValueError("async_communication is not supported for ALL_REDUCE mode")
 

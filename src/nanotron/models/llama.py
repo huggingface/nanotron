@@ -30,10 +30,16 @@ from nanotron.models import NanotronModel
 from nanotron.nn.activations import ACT2FN
 from nanotron.nn.layer_norm import TritonRMSNorm
 from nanotron.parallel import ParallelContext
-from nanotron.parallel.comm import WaitComm
+from nanotron.parallel.comm import CudaStreamManager, WaitComm
 from nanotron.parallel.parameters import NanotronParameter
 from nanotron.parallel.pipeline_parallel.block import PipelineBlock, TensorPointer
 from nanotron.parallel.pipeline_parallel.p2p import P2P
+from nanotron.parallel.tensor_parallel.domino import (
+    BWD_ATTN_HANDLE_IDX,
+    BWD_MLP_HANDLE_IDX,
+    FWD_ATTN_HANDLE_IDX,
+    FWD_MLP_HANDLE_IDX,
+)
 from nanotron.parallel.tensor_parallel.functional import sharded_cross_entropy
 from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelColumnLinear,
@@ -48,11 +54,6 @@ from nanotron.utils import checkpoint_method
 logger = logging.get_logger(__name__)
 
 DOMINO_COMM_STREAM = "domino_comm_stream_{}"
-
-FWD_MLP_HANDLE_IDX = "fwd.layer_mlp_{}_batch_{}"
-FWD_ATTN_HANDLE_IDX = "fwd.layer_attn_{}_batch_{}"
-BWD_ATTN_HANDLE_IDX = "bwd.layer_attn_{}_batch_{}"
-BWD_MLP_HANDLE_IDX = "bwd.layer_mlp_{}_batch_{}"
 
 
 class RotaryEmbedding(nn.Module):
@@ -730,17 +731,6 @@ class LlamaDecoderLayer(nn.Module):
 
         self.recompute_layer = parallel_config.recompute_layer
         self.parallel_config = parallel_config
-
-        # if parallel_config.domino is not None and parallel_config.domino.num_input_batches > 1:
-        #     from nanotron.parallel.comm import CudaStreamManager
-        #     # NOTE: we use different cuda streams for different gpus, so it can overlaps the communication
-        #     CudaStreamManager.create(DOMINO_COMM_STREAM.format(torch.cuda.current_device()))
-        num_gpus = torch.cuda.device_count()
-        for i in range(num_gpus):
-            from nanotron import constants
-
-            constants.CUDA_STREAMS[i] = torch.cuda.Stream(device=torch.device(f"cuda:{i}"))
-
         self.layer_idx = layer_idx
 
     def _core_forward(
@@ -748,12 +738,12 @@ class LlamaDecoderLayer(nn.Module):
         hidden_states: Union[torch.Tensor, TensorPointer],
         sequence_mask: Union[torch.Tensor, TensorPointer],
     ) -> List[Union[torch.Tensor, TensorPointer]]:
-        from nanotron import constants
-
         num_input_batches = self.parallel_config.domino.num_input_batches
-        orig_sequence_mask = sequence_mask
-
         assert num_input_batches == 2
+
+        orig_sequence_mask = sequence_mask
+        comm_stream = CudaStreamManager.get(f"comm_stream_{torch.cuda.current_device()}")
+
         hidden_states = torch.chunk(hidden_states, chunks=num_input_batches, dim=1)
         sequence_mask = torch.chunk(sequence_mask, chunks=num_input_batches, dim=0)
 
@@ -785,7 +775,6 @@ class LlamaDecoderLayer(nn.Module):
             handle_idx=FWD_ATTN_HANDLE_IDX.format(self.layer_idx, 1),
         )
 
-        comm_stream = constants.CUDA_STREAMS[torch.cuda.current_device()]
         with torch.cuda.stream(comm_stream):
             attn_output0["work"].wait()
             attn_output0["work"].is_completed()

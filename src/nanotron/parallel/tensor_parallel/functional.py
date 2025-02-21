@@ -19,6 +19,7 @@ import torch
 from torch.nn import functional as F
 
 import nanotron.distributed as dist
+from nanotron.parallel.comm import AsyncCommBucket
 from nanotron.parallel.tensor_parallel.distributed_differentiable_primitives import (
     differentiable_all_reduce_sum,
     differentiable_identity,
@@ -40,7 +41,8 @@ class _ShardedCrossEntropy(torch.autograd.Function):
         logits_max = torch.max(sharded_logits, dim=-1)[0]
         dist.all_reduce(logits_max, op=dist.ReduceOp.MAX, group=group)
         # Subtract the maximum value.
-        sharded_logits = sharded_logits - logits_max.unsqueeze(dim=-1)
+        # sharded_logits = sharded_logits - logits_max.unsqueeze(dim=-1)
+        sharded_logits.sub_(logits_max.unsqueeze(dim=-1))
 
         # Get the shard's indices
         sharded_hidden_size = sharded_logits.shape[-1]
@@ -600,24 +602,11 @@ def row_linear(
     out = F.linear(input, weight, bias)
 
     if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
-        # out, work = differentiable_all_reduce_sum(out, group=group, async_all_reduce=async_all_reduce)
-        id(out)
-        # NOTE: why the id(out) doesn't match the id(out) before the all_reduce?
-        if handle_idx == "fwd.layer_attn_0_batch_0":
-            assert 1 == 1
-
         out = differentiable_all_reduce_sum(out, group=group, async_all_reduce=async_all_reduce, handle_idx=handle_idx)
         if async_all_reduce:
-            from nanotron.parallel.comm import AsyncCommBucket
-
-            # work = AsyncCommBucket.get(orig_out_id)
-            # work = AsyncCommBucket.pop(orig_out_id)
-            # if handle_idx == "fwd.layer_mlp_1_batch_0":
-            if handle_idx == "fwd.layer_attn_0_batch_0":
-                assert 1 == 1
-
             work = AsyncCommBucket.pop(handle_idx)
-            assert 1 == 1
+        else:
+            work = None
     elif tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
         assert async_all_reduce is False, "Async communication is not supported for REDUCE_SCATTER mode."
         out = differentiable_reduce_scatter_sum(out, group=group)

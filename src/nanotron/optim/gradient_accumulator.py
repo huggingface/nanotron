@@ -202,10 +202,6 @@ class FP32GradientAccumulator(GradientAccumulator):
         return fp32_grad_buffers, contiguous_buffer_f32_gradients
 
     def backward(self, loss: torch.Tensor):
-        if not isinstance(loss, torch.Tensor):
-            assert 1 == 1
-            raise NotImplementedError("Not implemented yet")
-
         result = loss.backward()
 
         for name, elt in self.fp32_grad_buffers.items():

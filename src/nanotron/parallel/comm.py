@@ -3,17 +3,21 @@ from typing import Dict
 
 import torch
 
+from nanotron.parallel.tensor_parallel.domino import is_async_comm
+
 
 class CudaStreamManager:
     _streams: Dict[str, "torch.cuda.Stream"] = {}
 
     @staticmethod
-    def create(name: str):
+    def create(name: str, device: torch.device = None):
         assert name not in CudaStreamManager._streams
-        CudaStreamManager._streams[name] = torch.cuda.Stream()
+        CudaStreamManager._streams[name] = torch.cuda.Stream(device=device)
 
     @staticmethod
     def get(name: str):
+        if name not in CudaStreamManager._streams:
+            CudaStreamManager.create(name)
         return CudaStreamManager._streams.get(name)
 
     @contextmanager
@@ -63,27 +67,6 @@ class AsyncCommBucket:
         AsyncCommBucket._copy_async_op.clear()
 
 
-def is_async_comm(x):
-    import re
-
-    NON_ASYNC_HANDLE_IDX = [
-        # "fwd.layer_attn_{}_batch_0",
-        # "fwd.layer_mlp_{}_batch_0",
-        # "fwd.layer_mlp_{}_batch_1",
-        "bwd.layer_mlp_{}_batch_1",
-        "bwd.layer_attn_{}_batch_0",
-    ]
-    # NON_ASYNC_HANDLE_IDX = [
-    #     "fwd.layer_mlp_{}_batch_1",
-    #     "bwd.layer_attn_{}_batch_0",
-    # ]
-
-    patterns = [p.replace("{}", r"\d+") for p in NON_ASYNC_HANDLE_IDX]  # Replace {} with regex for numbers
-    regex = re.compile("^(" + "|".join(patterns) + ")$")  # Combine patterns into a single regex
-    not_async = bool(regex.match(x))
-    return not not_async
-
-
 class WaitComm(torch.autograd.Function):
     @staticmethod
     def forward(ctx, input, wait_handle_idx):
@@ -92,26 +75,9 @@ class WaitComm(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_output):
-        # import pydevd
-        # pydevd.settrace(suspend=False, trace_only_current_thread=True)
-
-        if "bwd.layer_mlp_1_batch_0" == ctx.wait_handle_idx:
-            assert 1 == 1
-
         if is_async_comm(ctx.wait_handle_idx):
-            from nanotron.constants import _AUTOGRAD_RUNS
-
-            _AUTOGRAD_RUNS.append(f"wait_{ctx.wait_handle_idx}")
             handle = AsyncCommBucket.pop(ctx.wait_handle_idx)
             assert handle is not None
             handle.wait()
-            # assert handle.is_completed() is True, f"ctx.wait_handle_idx: {ctx.wait_handle_idx}"
-        else:
-
-            from nanotron import constants
-
-            # if dist.get_rank() == 0:
-            #     constants._NOT_BWD_ASYNC_OPS.append(ctx.wait_handle_idx)
-            constants._NOT_BWD_ASYNC_OPS.append(ctx.wait_handle_idx)
 
         return grad_output, None
