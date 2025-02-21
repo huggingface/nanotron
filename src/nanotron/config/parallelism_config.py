@@ -25,6 +25,7 @@ class DominoArgs:
 
     def __post_init__(self):
         assert self.num_input_batches > 1, "In order to enable domino mode, set num_input_batches > 1"
+        assert self.num_input_batches == 2, "Currently parallelism only supports 2 batches for Domino"
 
 
 @dataclass
@@ -68,3 +69,10 @@ class ParallelismArgs:
             self.pp_engine = cast_str_to_pipeline_engine(self.pp_engine)
         if isinstance(self.tp_mode, str):
             self.tp_mode = TensorParallelLinearMode[self.tp_mode.upper()]
+
+        if self.is_domino_enabled is True:
+            assert self.tp > 1, "Domino requires TP > 1"
+
+    @property
+    def is_domino_enabled(self) -> bool:
+        return True if self.domino else False

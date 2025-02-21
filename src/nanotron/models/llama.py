@@ -246,7 +246,6 @@ class MLP(nn.Module):
             mode=tp_mode,
             bias=False,
             async_communication=tp_linear_async_communication and tp_mode is TensorParallelLinearMode.REDUCE_SCATTER,
-            # async_all_reduce=parallel_config.domino.num_input_batches > 1,
         )
         self.split_silu_mul = GLUActivation(config.hidden_act)
 
@@ -347,7 +346,6 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         parallel_config: Optional[ParallelismArgs],
         tp_pg: dist.ProcessGroup,
         layer_idx: int,
-        async_all_reduce: bool = False,
     ):
         from flash_attn.layers.rotary import RotaryEmbedding as FlashRotaryEmbedding
 
@@ -431,7 +429,6 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             mode=tp_mode,
             bias=False,
             async_communication=tp_linear_async_communication,
-            # async_all_reduce=async_all_reduce,
         )
 
         self.attention = CoreAttention(
@@ -707,7 +704,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         return {"hidden_states": output, "work": work, "sequence_mask": sequence_mask}
 
 
-class LlamaDecoderLayer(nn.Module):
+class _BaseLlamaDecoderLayer(nn.Module):
     def __init__(
         self,
         config: LlamaConfig,
@@ -723,7 +720,6 @@ class LlamaDecoderLayer(nn.Module):
             parallel_config=parallel_config,
             tp_pg=tp_pg,
             layer_idx=layer_idx,
-            async_all_reduce=parallel_config.domino.num_input_batches > 1,
         )
 
         self.post_attention_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
@@ -733,6 +729,31 @@ class LlamaDecoderLayer(nn.Module):
         self.parallel_config = parallel_config
         self.layer_idx = layer_idx
 
+    def _checkpointed_forward(
+        self,
+        hidden_states: torch.Tensor,
+        sequence_mask: torch.Tensor,
+    ) -> List[torch.Tensor]:
+        return CheckpointFunction.apply(self._core_forward, True, hidden_states, sequence_mask)
+
+    def forward(
+        self,
+        hidden_states: Union[torch.Tensor, TensorPointer],
+        sequence_mask: Union[torch.Tensor, TensorPointer],
+    ) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
+
+        if self.recompute_layer and not isinstance(hidden_states, TensorPointer):
+            hidden_states, sequence_mask = self._checkpointed_forward(hidden_states, sequence_mask)
+        else:
+            hidden_states, sequence_mask = self._core_forward(hidden_states, sequence_mask)
+
+        return {
+            "hidden_states": hidden_states,
+            "sequence_mask": sequence_mask,
+        }
+
+
+class DominoLlamaDecoderLayer(_BaseLlamaDecoderLayer):
     def _core_forward(
         self,
         hidden_states: Union[torch.Tensor, TensorPointer],
@@ -785,7 +806,7 @@ class LlamaDecoderLayer(nn.Module):
         hidden_states0 = WaitComm.apply(
             hidden_states0,
             BWD_MLP_HANDLE_IDX.format(self.layer_idx, 1),
-        )  # new
+        )
 
         mlp_output0 = self.mlp(
             hidden_states=hidden_states0,
@@ -821,28 +842,26 @@ class LlamaDecoderLayer(nn.Module):
         hidden_states = torch.cat([hidden_states0, hidden_states1], dim=1)
         return hidden_states, orig_sequence_mask
 
-    def _checkpointed_forward(
-        self,
-        hidden_states: torch.Tensor,
-        sequence_mask: torch.Tensor,
-    ) -> List[torch.Tensor]:
-        return CheckpointFunction.apply(self._core_forward, True, hidden_states, sequence_mask)
 
-    def forward(
+class LlamaDecoderLayer(_BaseLlamaDecoderLayer):
+    def _core_forward(
         self,
         hidden_states: Union[torch.Tensor, TensorPointer],
         sequence_mask: Union[torch.Tensor, TensorPointer],
-    ) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
+    ) -> List[Union[torch.Tensor, TensorPointer]]:
+        residual = hidden_states
+        hidden_states = self.input_layernorm(hidden_states)
 
-        if self.recompute_layer and not isinstance(hidden_states, TensorPointer):
-            hidden_states, sequence_mask = self._checkpointed_forward(hidden_states, sequence_mask)
-        else:
-            hidden_states, sequence_mask = self._core_forward(hidden_states, sequence_mask)
+        output = self.attn(hidden_states=hidden_states, sequence_mask=sequence_mask)
+        hidden_states = output["hidden_states"]
+        hidden_states = hidden_states + residual
 
-        return {
-            "hidden_states": hidden_states,
-            "sequence_mask": sequence_mask,
-        }
+        residual = hidden_states
+        hidden_states = self.post_attention_layernorm(hidden_states)
+        hidden_states = self.mlp(hidden_states=hidden_states)["hidden_states"]
+        hidden_states = hidden_states + residual
+
+        return hidden_states, output["sequence_mask"]
 
 
 class Embedding(nn.Module, AttachableStore):
@@ -919,7 +938,7 @@ class LlamaModel(nn.Module):
             [
                 PipelineBlock(
                     p2p=self.p2p,
-                    module_builder=LlamaDecoderLayer,
+                    module_builder=DominoLlamaDecoderLayer if parallel_config.is_domino_enabled else LlamaDecoderLayer,
                     module_kwargs={
                         "config": config,
                         "parallel_config": parallel_config,
