@@ -17,7 +17,6 @@
 from typing import Dict, List, Optional, Union
 
 import torch
-import torch.nn.functional as F
 from torch import nn
 from torch.utils.checkpoint import CheckpointFunction
 
@@ -735,6 +734,10 @@ class MLA(nn.Module):
             self.q_lora_rank < self.n_heads * self.qk_head_dim
         ), f"q_lora_rank ({self.q_lora_rank}) must be less than the product of the number of attention heads ({self.n_heads}) and the number of query/key head dimensions ({self.qk_head_dim})."
         assert tp_mode == TensorParallelLinearMode.ALL_REDUCE, "MLA only supports all-reduce TP mode for now"
+        # TODO: support different head dimensions for query/key and value
+        assert (
+            self.qk_head_dim == self.v_head_dim
+        ), "MLA only supports equal query/key and value head dimensions for now"
 
         # Initialize rotary embedding
         self.rotary_embedding = RotaryEmbedding(
@@ -818,35 +821,19 @@ class MLA(nn.Module):
             [k_nope, k_pe.expand(-1, -1, self.n_local_heads, -1)], dim=-1
         )  # [seq_len, batch_size, n_heads, qk_head_dim]
 
-        # FA API doesn't seem to support different head dimensions for key and value. Use SDPA instead.
-        # https://github.com/ggml-org/llama.cpp/issues/7343
-        # TODO: a kernel for this. Or we let k, v be the same shape as q
-        # (seqlen, b, n_heads, d_qk) -> (b, n_heads, seqlen, d_qk)
-        q = q.permute(1, 2, 0, 3).contiguous()
-        k = k.permute(1, 2, 0, 3).contiguous()
-        v = v.permute(1, 2, 0, 3).contiguous()
+        q = q.transpose(0, 1).contiguous()  # [batch_size, seq_len, n_heads, qk_head_dim]
+        k = k.transpose(0, 1).contiguous()  # [batch_size, seq_len, n_heads, qk_head_dim]
+        v = v.transpose(0, 1).contiguous()  # [batch_size, seq_len, n_heads, v_head_dim]
 
-        # Mask for SDPA: https://pytorch.org/docs/stable/generated/torch.nn.functional.scaled_dot_product_attention.html
-        if sequence_mask is not None:
-            # Step 1: Create a lower triangular mask (allows attending to past and current positions)
-            lower_triangular_mask = torch.tril(
-                torch.ones(seq_len, seq_len, device=sequence_mask.device)
-            )  # lower triangle
-            lower_triangular_mask = lower_triangular_mask.bool()  # Convert to boolean mask
-            # Step 2: Expand the sequence mask to match attention shape [batch_size, seq_len, seq_len]
-            sequence_mask_expanded = sequence_mask[:, None, :].expand(batch_size, seq_len, seq_len)
-            # Step 3: Combine both masks: True means allowed, False means masked
-            final_mask = (lower_triangular_mask) & (sequence_mask_expanded.bool())  # [batch_size, seq_len, seq_len]
-            final_mask = final_mask.unsqueeze(1).expand(
-                -1, self.n_local_heads, -1, -1
-            )  # [batch_size, n_local_heads, seq_len, seq_len]
-        else:
-            final_mask = torch.tril(torch.ones(seq_len, seq_len)).bool()
+        q = q.view(batch_size * seq_len, self.n_local_heads, self.qk_head_dim)
+        k = k.view(batch_size * seq_len, self.n_local_heads, self.qk_head_dim)
+        v = v.view(batch_size * seq_len, self.n_local_heads, self.v_head_dim)
 
-        output = F.scaled_dot_product_attention(q, k, v, attn_mask=final_mask)
+        output = self.attention(q, k, v, sequence_mask, sequence_mask)
+
         output = (
-            output.permute(2, 0, 1, 3).reshape(seq_len, batch_size, -1).contiguous()
-        )  # (b, n_heads, seqlen, d_qk) -> (seqlen, b, n_heads * d_qk)
+            output.view(batch_size, seq_len, self.n_local_heads * self.v_head_dim).transpose(0, 1).contiguous()
+        )  # [seq_len, batch_size, n_heads, v_head_dim]
 
         output = self.o_proj(output)
 
