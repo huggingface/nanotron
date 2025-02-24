@@ -1,0 +1,107 @@
+checkpoints:
+  checkpoint_interval: 100000
+  checkpoints_path: /fsx/haojun/long_context_weights/test
+  checkpoints_path_is_shared_file_system: false
+  resume_checkpoint_path: null
+  load_lr_scheduler: false
+  load_optimizer: false
+  save_final_state: true
+  save_initial_state: false
+data_stages:
+- data:
+    dataset:
+      dataset_folder:
+      - /fsx/elie_bakouch/data/fw-edu-dedup
+    num_loading_workers: 0
+    seed: 8
+  name: stable phase
+  start_training_step: 1
+general:
+  benchmark_csv_path: null
+  consumed_train_samples: null
+  ignore_sanity_checks: true
+  project: MLA
+  run: long_run
+  seed: 6
+  step: null
+logging:
+  iteration_step_info_interval: 1
+  log_level: info
+  log_level_replica: info
+model:
+  ddp_bucket_cap_mb: 25
+  dtype: bfloat16
+  init_method:
+    std: 0.0006
+  make_vocab_size_divisible_by: 1
+  model_config:
+    bos_token_id: 128000
+    eos_token_id: 128001
+    hidden_act: silu
+    hidden_size: 4096
+    initializer_range: 0.02
+    intermediate_size: 8192
+    is_llama_config: true
+    max_position_embeddings: 2048
+    num_attention_heads: 32
+    num_hidden_layers: 10
+    num_key_value_heads: 8
+    pad_token_id: null
+    pretraining_tp: 2
+    rms_norm_eps: 1.0e-05
+    rope_interleaved: false
+    rope_scaling: null
+    rope_theta: 500000.0
+    tie_word_embeddings: true
+    use_cache: true
+    vocab_size: 128256
+    # # MLA
+    q_lora_rank: 1536
+    kv_lora_rank: 512
+    qk_nope_head_dim: 128
+    qk_rope_head_dim: 64
+    v_head_dim: 192
+optimizer:
+  accumulate_grad_in_fp32: true
+  clip_grad: 1.0
+  learning_rate_scheduler:
+    learning_rate: 0.0005
+    lr_decay_starting_step: 100000
+    lr_decay_steps: 80000
+    lr_decay_style: linear
+    lr_warmup_steps: 20000
+    lr_warmup_style: linear
+    min_decay_lr: 0.00005
+  optimizer_factory:
+    adam_beta1: 0.9
+    adam_beta2: 0.95
+    adam_eps: 1.0e-08
+    name: adamW
+    torch_adam_is_fused: true
+  weight_decay: 0.01
+  zero_stage: 0
+parallelism:
+  dp: 8
+  expert_parallel_size: 1
+  pp: 1
+  pp_engine: 1f1b
+  recompute_layer: false
+  tp: 1
+  tp_linear_async_communication: false
+  tp_mode: ALL_REDUCE
+  tp_recompute_allgather: false
+  # domino:
+  #   num_input_batches: 2
+profiler: null
+tokenizer:
+  tokenizer_max_length: null
+  tokenizer_name_or_path: meta-llama/Llama-3.1-8B
+  tokenizer_revision: null
+tokens:
+  batch_accumulation_per_replica: 2
+  limit_test_batches: 0
+  limit_val_batches: 0
+  micro_batch_size: 4
+  sequence_length: 2048
+  train_steps: 200000
+  val_check_interval: -1
