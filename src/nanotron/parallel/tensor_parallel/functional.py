@@ -597,21 +597,23 @@ def row_linear(
     handle_idx=None,
 ) -> Tuple[torch.Tensor, Optional[torch.Future]]:
     if async_communication:
-        return _RowLinearAsyncCommunication.apply(input, weight, bias, group, tp_mode)
-
-    out = F.linear(input, weight, bias)
-
-    if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
-        out = differentiable_all_reduce_sum(out, group=group, async_all_reduce=async_all_reduce, handle_idx=handle_idx)
-        if async_all_reduce:
-            work = AsyncCommBucket.pop(handle_idx)
-        else:
-            work = None
-    elif tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
-        assert async_all_reduce is False, "Async communication is not supported for REDUCE_SCATTER mode."
-        out = differentiable_reduce_scatter_sum(out, group=group)
         work = None
+        out = _RowLinearAsyncCommunication.apply(input, weight, bias, group, tp_mode)
     else:
-        raise ValueError(f"Got unexpected mode: {tp_mode}.")
+        out = F.linear(input, weight, bias)
+        if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
+            out = differentiable_all_reduce_sum(
+                out, group=group, async_all_reduce=async_all_reduce, handle_idx=handle_idx
+            )
+            if async_all_reduce:
+                work = AsyncCommBucket.pop(handle_idx)
+            else:
+                work = None
+        elif tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
+            assert async_all_reduce is False, "Async communication is not supported for REDUCE_SCATTER mode."
+            out = differentiable_reduce_scatter_sum(out, group=group)
+            work = None
+        else:
+            raise ValueError(f"Got unexpected mode: {tp_mode}.")
 
     return out, work
