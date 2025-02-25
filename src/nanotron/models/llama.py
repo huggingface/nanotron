@@ -805,11 +805,12 @@ class DominoLlamaDecoderLayer(_BaseLlamaDecoderLayer):
             comm_stream=comm_stream,
         )
 
+        comm_stream.wait_stream(torch.cuda.default_stream())
         with torch.cuda.stream(comm_stream):
             attn_output0["work"].wait()
             attn_output0["work"].is_completed()
 
-        torch.cuda.current_stream().wait_stream(comm_stream)
+        torch.cuda.default_stream().wait_stream(comm_stream)
 
         hidden_states0 = attn_output0["hidden_states"] + residual0
         residual0 = hidden_states0
@@ -825,11 +826,12 @@ class DominoLlamaDecoderLayer(_BaseLlamaDecoderLayer):
             handle_idx=FWD_MLP_HANDLE_IDX.format(self.layer_idx, 0),
             comm_stream=comm_stream,
         )
+        comm_stream.wait_stream(torch.cuda.default_stream())
         with torch.cuda.stream(comm_stream):
             attn_output1["work"].wait()
             attn_output1["work"].is_completed()
 
-        torch.cuda.current_stream().wait_stream(comm_stream)
+        torch.cuda.default_stream().wait_stream(comm_stream)
 
         hidden_states1 = attn_output1["hidden_states"] + residual1
         residual1 = hidden_states1
@@ -841,6 +843,7 @@ class DominoLlamaDecoderLayer(_BaseLlamaDecoderLayer):
             comm_stream=comm_stream,
         )
 
+        comm_stream.wait_stream(torch.cuda.default_stream())
         with torch.cuda.stream(comm_stream):
             mlp_output0["work"].wait()
             mlp_output1["work"].wait()
@@ -848,7 +851,7 @@ class DominoLlamaDecoderLayer(_BaseLlamaDecoderLayer):
             mlp_output0["work"].is_completed()
             mlp_output1["work"].is_completed()
 
-        torch.cuda.current_stream().wait_stream(comm_stream)
+        torch.cuda.default_stream().wait_stream(comm_stream)
 
         hidden_states0 = mlp_output0["hidden_states"] + residual0
         hidden_states1 = mlp_output1["hidden_states"] + residual1

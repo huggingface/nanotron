@@ -74,7 +74,7 @@ class DifferentiableAllReduceSum(torch.autograd.Function):
             return tensor
 
         if comm_stream is not None:
-            comm_stream.wait_stream(torch.cuda.current_stream())
+            comm_stream.wait_stream(torch.cuda.default_stream())
             comm_context = torch.cuda.stream(comm_stream)
         else:
             comm_context = nullcontext()
