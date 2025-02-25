@@ -418,6 +418,7 @@ class DistributedTrainer:
         ],
         **kwargs,
     ) -> None:
+        # torch.cuda.set_sync_debug_mode("warn")
         self.pre_training(**kwargs)
 
         if self.config.checkpoints.save_initial_state and self.init_checkpoint_path is None:
@@ -579,19 +580,21 @@ class DistributedTrainer:
         self.post_train_step()
 
         from nanotron.parallel.comm import AsyncCommBucket
+        from nanotron.parallel.tensor_parallel.domino import is_async_comm
 
         # import torch.distributed as dist
 
         not_finished = []
         for k, v in AsyncCommBucket._copy_async_op.items():
             # assert v.is_completed(), f"AsyncCommBucket._copy_async_op: {AsyncCommBucket._copy_async_op}"
+            assert is_async_comm(k) is True, f"k: {k}"
             if v.is_completed() is not True:
                 not_finished.append((k, v))
 
         # if dist.get_rank() == 0 and constants._NOT_BWD_ASYNC_OPS:
         #     assert 1 == 1
 
-        # assert len(not_finished) == 0, f"AsyncCommBucket._copy_async_op: {not_finished}"
+        assert len(not_finished) == 0, f"AsyncCommBucket._copy_async_op: {not_finished}"
         assert len(AsyncCommBucket._async_op) == 0, f"AsyncCommBucket._async_op: {AsyncCommBucket._async_op}"
         AsyncCommBucket.clear_all()
 

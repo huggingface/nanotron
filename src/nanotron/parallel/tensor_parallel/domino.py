@@ -8,11 +8,12 @@ BWD_MLP_HANDLE_IDX = "bwd.layer_mlp_{}_batch_{}"
 
 def is_async_comm(x):
     NON_ASYNC_HANDLE_IDX = [
+        # NOTE: execute all fwd's comm in async
         # "fwd.layer_mlp_{}_batch_1",
         # "bwd.layer_mlp_{}_batch_1",
         "bwd.layer_attn_{}_batch_0",
     ]
-    assert "fwd." not in x
+    # assert "fwd." not in x
 
     patterns = [p.replace("{}", r"\d+") for p in NON_ASYNC_HANDLE_IDX]  # Replace {} with regex for numbers
     regex = re.compile("^(" + "|".join(patterns) + ")$")  # Combine patterns into a single regex
