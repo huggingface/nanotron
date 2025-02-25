@@ -102,6 +102,8 @@ class WaitComm(torch.autograd.Function):
             handle.wait()
             assert 1 == 1
 
+            torch.cuda.synchronize()
+            assert torch.cuda.current_stream() == torch.cuda.default_stream()
             torch.cuda.default_stream().wait_stream(ctx.comm_stream)
 
         return grad_output, None, None
