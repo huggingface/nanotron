@@ -91,6 +91,9 @@ class WaitComm(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_output):
         if is_async_comm(ctx.wait_handle_idx):
+            if "bwd.layer_mlp_27_batch_1" == ctx.wait_handle_idx:
+                assert 1 == 1
+
             handle = AsyncCommBucket.pop(ctx.wait_handle_idx)
             assert handle is not None
             handle.wait()

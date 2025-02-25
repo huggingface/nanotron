@@ -8,7 +8,7 @@ BWD_MLP_HANDLE_IDX = "bwd.layer_mlp_{}_batch_{}"
 
 def is_async_comm(x):
     NON_ASYNC_HANDLE_IDX = [
-        "bwd.layer_mlp_{}_batch_1",
+        # "bwd.layer_mlp_{}_batch_1",
         "bwd.layer_attn_{}_batch_0",
     ]
 

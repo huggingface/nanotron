@@ -19,7 +19,7 @@ from torch import distributed as torch_dist
 
 from nanotron import distributed as dist
 from nanotron.distributed import ProcessGroup
-from nanotron.parallel.comm import AsyncCommBucket
+from nanotron.parallel.comm import AsyncCommBucket, is_async_comm
 
 
 class DifferentiableIdentity(torch.autograd.Function):
@@ -34,12 +34,16 @@ class DifferentiableIdentity(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_output):
+        import pydevd
+
+        pydevd.settrace(suspend=False, trace_only_current_thread=True)
         group = ctx.group
-
-        from nanotron.parallel.comm import is_async_comm
-
         handle_idx = ctx.handle_idx.replace("fwd.", "bwd.") if ctx.handle_idx is not None else None
         async_all_reduce = is_async_comm(handle_idx) if handle_idx is not None else ctx.async_all_reduce
+
+        if handle_idx is not None and "bwd.layer_mlp_" in handle_idx and "batch_1" in handle_idx:
+            assert 1 == 1
+
         return DifferentiableAllReduceSum.apply(grad_output, group, async_all_reduce, handle_idx), None, None, None
 
 
