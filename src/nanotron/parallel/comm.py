@@ -84,12 +84,15 @@ class AsyncCommBucket:
 
 class WaitComm(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, input, wait_handle_idx):
+    def forward(ctx, input, wait_handle_idx, comm_stream):
         ctx.wait_handle_idx = wait_handle_idx
+        ctx.comm_stream = comm_stream
         return input
 
     @staticmethod
     def backward(ctx, grad_output):
+        # import pydevd
+        # pydevd.settrace(suspend=False, trace_only_current_thread=True)
         if is_async_comm(ctx.wait_handle_idx):
             if "bwd.layer_mlp_27_batch_1" == ctx.wait_handle_idx:
                 assert 1 == 1
@@ -97,5 +100,8 @@ class WaitComm(torch.autograd.Function):
             handle = AsyncCommBucket.pop(ctx.wait_handle_idx)
             assert handle is not None
             handle.wait()
+            assert 1 == 1
 
-        return grad_output, None
+            torch.cuda.current_stream().wait_stream(ctx.comm_stream)
+
+        return grad_output, None, None

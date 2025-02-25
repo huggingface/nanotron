@@ -440,12 +440,15 @@ def column_linear(
     tp_recompute_allgather: bool = True,
     async_all_reduce: bool = False,
     handle_idx: Optional[int] = None,
+    comm_stream: Optional[torch.cuda.Stream] = None,
 ):
     if async_communication:
         return _ColumnLinearAsyncCommunication.apply(input, weight, bias, group, tp_mode, tp_recompute_allgather)
 
     if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
-        input = differentiable_identity(input, group=group, async_all_reduce=async_all_reduce, handle_idx=handle_idx)
+        input = differentiable_identity(
+            input, group=group, async_all_reduce=async_all_reduce, handle_idx=handle_idx, comm_stream=comm_stream
+        )
         return F.linear(input, weight, bias)
     if tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
         return _ColumnLinearNoAsyncCommunicationReduceScatterMode.apply(
@@ -595,6 +598,7 @@ def row_linear(
     async_communication: bool,
     async_all_reduce: bool,
     handle_idx=None,
+    comm_stream=None,
 ) -> Tuple[torch.Tensor, Optional[torch.Future]]:
     if async_communication:
         work = None
@@ -603,7 +607,7 @@ def row_linear(
         out = F.linear(input, weight, bias)
         if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
             out = differentiable_all_reduce_sum(
-                out, group=group, async_all_reduce=async_all_reduce, handle_idx=handle_idx
+                out, group=group, async_all_reduce=async_all_reduce, handle_idx=handle_idx, comm_stream=comm_stream
             )
             if async_all_reduce:
                 work = AsyncCommBucket.pop(handle_idx)

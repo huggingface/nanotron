@@ -592,7 +592,7 @@ class DistributedTrainer:
         #     assert 1 == 1
 
         # assert len(not_finished) == 0, f"AsyncCommBucket._copy_async_op: {not_finished}"
-        # assert len(AsyncCommBucket._async_op) == 0, f"AsyncCommBucket._async_op: {AsyncCommBucket._async_op}"
+        assert len(AsyncCommBucket._async_op) == 0, f"AsyncCommBucket._async_op: {AsyncCommBucket._async_op}"
         AsyncCommBucket.clear_all()
 
         return outputs, loss_avg

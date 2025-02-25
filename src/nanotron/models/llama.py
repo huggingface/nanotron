@@ -249,10 +249,12 @@ class MLP(nn.Module):
         )
         self.split_silu_mul = GLUActivation(config.hidden_act)
 
-    def forward(self, hidden_states, handle_idx=None):  # [seq_length, batch_size, hidden_dim]
-        merged_states = self.gate_up_proj(hidden_states, async_all_reduce=True, handle_idx=handle_idx)
+    def forward(self, hidden_states, handle_idx=None, comm_stream=None):  # [seq_length, batch_size, hidden_dim]
+        merged_states = self.gate_up_proj(
+            hidden_states, async_all_reduce=True, handle_idx=handle_idx, comm_stream=comm_stream
+        )
         hidden_states, work = self.down_proj(
-            self.split_silu_mul(merged_states), async_all_reduce=True, handle_idx=handle_idx
+            self.split_silu_mul(merged_states), async_all_reduce=True, handle_idx=handle_idx, comm_stream=comm_stream
         )
         return {"hidden_states": hidden_states, "work": work}
 
@@ -446,6 +448,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         hidden_states,  # [seq_length, batch_size, hidden_size]
         sequence_mask,  # [batch_size, seq_length]
         handle_idx=None,
+        comm_stream=None,
     ):
         from flash_attn import bert_padding
         from flash_attn.flash_attn_interface import (
@@ -454,7 +457,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         )
 
         qkv_states = self.qkv_proj(
-            hidden_states, async_all_reduce=True, handle_idx=handle_idx
+            hidden_states, async_all_reduce=True, handle_idx=handle_idx, comm_stream=comm_stream
         )  # [seq_length, batch_size, n_local_q_heads * d_qk + 2 * n_local_kv_heads * d_qk]
         q_length, batch_size, _ = qkv_states.shape
 
@@ -699,7 +702,9 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         attention_output = (
             attention_output.contiguous().view(batch_size, q_length, self.n_local_q_heads * self.d_v).transpose(0, 1)
         )
-        output, work = self.o_proj(attention_output, async_all_reduce=True, handle_idx=handle_idx)
+        output, work = self.o_proj(
+            attention_output, async_all_reduce=True, handle_idx=handle_idx, comm_stream=comm_stream
+        )
 
         return {"hidden_states": output, "work": work, "sequence_mask": sequence_mask}
 
@@ -779,26 +784,32 @@ class DominoLlamaDecoderLayer(_BaseLlamaDecoderLayer):
         hidden_states0 = WaitComm.apply(
             hidden_states0,
             BWD_ATTN_HANDLE_IDX.format(self.layer_idx, 1),
+            comm_stream,
         )
         hidden_states1 = WaitComm.apply(
             hidden_states1,
             BWD_MLP_HANDLE_IDX.format(self.layer_idx, 0),
+            comm_stream,
         )
 
         attn_output0 = self.attn(
             hidden_states=hidden_states0,
             sequence_mask=sequence_mask0,
             handle_idx=FWD_ATTN_HANDLE_IDX.format(self.layer_idx, 0),
+            comm_stream=comm_stream,
         )
         attn_output1 = self.attn(
             hidden_states=hidden_states1,
             sequence_mask=sequence_mask1,
             handle_idx=FWD_ATTN_HANDLE_IDX.format(self.layer_idx, 1),
+            comm_stream=comm_stream,
         )
 
         with torch.cuda.stream(comm_stream):
             attn_output0["work"].wait()
             attn_output0["work"].is_completed()
+
+        torch.cuda.current_stream().wait_stream(comm_stream)
 
         hidden_states0 = attn_output0["hidden_states"] + residual0
         residual0 = hidden_states0
@@ -806,11 +817,13 @@ class DominoLlamaDecoderLayer(_BaseLlamaDecoderLayer):
         hidden_states0 = WaitComm.apply(
             hidden_states0,
             BWD_MLP_HANDLE_IDX.format(self.layer_idx, 1),
+            comm_stream,
         )
 
         mlp_output0 = self.mlp(
             hidden_states=hidden_states0,
             handle_idx=FWD_MLP_HANDLE_IDX.format(self.layer_idx, 0),
+            comm_stream=comm_stream,
         )
         with torch.cuda.stream(comm_stream):
             attn_output1["work"].wait()
@@ -825,6 +838,7 @@ class DominoLlamaDecoderLayer(_BaseLlamaDecoderLayer):
         mlp_output1 = self.mlp(
             hidden_states=hidden_states1,
             handle_idx=FWD_MLP_HANDLE_IDX.format(self.layer_idx, 1),
+            comm_stream=comm_stream,
         )
 
         with torch.cuda.stream(comm_stream):
