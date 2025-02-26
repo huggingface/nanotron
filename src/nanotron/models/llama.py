@@ -53,8 +53,6 @@ from nanotron.utils import checkpoint_method
 
 logger = logging.get_logger(__name__)
 
-DOMINO_COMM_STREAM = "domino_comm_stream_{}"
-
 
 class RotaryEmbedding(nn.Module):
     def __init__(self, dim: int, end: int, theta: float = 10000.0):

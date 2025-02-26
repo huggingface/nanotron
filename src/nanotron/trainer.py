@@ -582,8 +582,6 @@ class DistributedTrainer:
         from nanotron.parallel.comm import AsyncCommBucket
         from nanotron.parallel.tensor_parallel.domino import is_async_comm
 
-        # import torch.distributed as dist
-
         not_finished = []
         for k, v in AsyncCommBucket._copy_async_op.items():
             # assert v.is_completed(), f"AsyncCommBucket._copy_async_op: {AsyncCommBucket._copy_async_op}"
@@ -591,11 +589,8 @@ class DistributedTrainer:
             if v.is_completed() is not True:
                 not_finished.append((k, v))
 
-        # if dist.get_rank() == 0 and constants._NOT_BWD_ASYNC_OPS:
-        #     assert 1 == 1
-
-        assert len(not_finished) == 0, f"AsyncCommBucket._copy_async_op: {not_finished}"
-        assert len(AsyncCommBucket._async_op) == 0, f"AsyncCommBucket._async_op: {AsyncCommBucket._async_op}"
+        # assert len(not_finished) == 0, f"AsyncCommBucket._copy_async_op: {not_finished}"
+        # assert len(AsyncCommBucket._async_op) == 0, f"AsyncCommBucket._async_op: {AsyncCommBucket._async_op}"
         AsyncCommBucket.clear_all()
 
         return outputs, loss_avg

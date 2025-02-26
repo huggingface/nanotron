@@ -41,7 +41,6 @@ class _ShardedCrossEntropy(torch.autograd.Function):
         logits_max = torch.max(sharded_logits, dim=-1)[0]
         dist.all_reduce(logits_max, op=dist.ReduceOp.MAX, group=group)
         # Subtract the maximum value.
-        # sharded_logits = sharded_logits - logits_max.unsqueeze(dim=-1)
         sharded_logits.sub_(logits_max.unsqueeze(dim=-1))
 
         # Get the shard's indices
