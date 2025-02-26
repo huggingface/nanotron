@@ -91,6 +91,13 @@ class WaitComm(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_output):
+        """
+
+        NOTE: because the communication operation is already being executed
+        so the communication stream don't have to wait for the compute stream here
+        but the compute stream waits for the communication stream
+        before proceeding
+        """
         # import pydevd
         # pydevd.settrace(suspend=False, trace_only_current_thread=True)
         if is_async_comm(ctx.wait_handle_idx):
@@ -102,7 +109,7 @@ class WaitComm(torch.autograd.Function):
             handle.wait()
             assert 1 == 1
 
-            torch.cuda.synchronize()
+            # torch.cuda.synchronize()
             assert torch.cuda.current_stream() == torch.cuda.default_stream()
             torch.cuda.default_stream().wait_stream(ctx.comm_stream)
 
