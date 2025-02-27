@@ -418,7 +418,7 @@ class DistributedTrainer:
         ],
         **kwargs,
     ) -> None:
-        # torch.cuda.set_sync_debug_mode("warn")
+        torch.cuda.set_sync_debug_mode("warn")
         self.pre_training(**kwargs)
 
         if self.config.checkpoints.save_initial_state and self.init_checkpoint_path is None:

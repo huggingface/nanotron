@@ -856,6 +856,8 @@ class DominoLlamaDecoderLayer(_BaseLlamaDecoderLayer):
 
         assert torch.cuda.current_stream() == torch.cuda.default_stream()
         torch.cuda.default_stream().wait_stream(comm_stream)
+        # NOTE: before concat, we need to synchronize the streams
+        # torch.cuda.synchronize()
 
         hidden_states0 = mlp_output0["hidden_states"] + residual0
         hidden_states1 = mlp_output1["hidden_states"] + residual1

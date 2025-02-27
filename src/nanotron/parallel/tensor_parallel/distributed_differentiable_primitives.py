@@ -81,6 +81,7 @@ class DifferentiableAllReduceSum(torch.autograd.Function):
 
         with comm_context:
             if async_all_reduce is True:
+                assert comm_stream is not None
                 handle = dist.all_reduce(tensor, op=dist.ReduceOp.SUM, group=group, async_op=True)
                 AsyncCommBucket.add(handle_idx, handle)
             else:
