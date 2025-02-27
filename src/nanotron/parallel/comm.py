@@ -101,12 +101,13 @@ class WaitComm(torch.autograd.Function):
         # import pydevd
         # pydevd.settrace(suspend=False, trace_only_current_thread=True)
         if is_async_comm(ctx.wait_handle_idx):
-            ctx.comm_stream.wait_stream(torch.cuda.default_stream())
+            # ctx.comm_stream.wait_stream(torch.cuda.default_stream())
             handle = AsyncCommBucket.pop(ctx.wait_handle_idx)
             assert handle is not None
             handle.wait()
 
             # torch.cuda.synchronize()
+            ctx.comm_stream.synchronize()
             assert torch.cuda.current_stream() == torch.cuda.default_stream()
             torch.cuda.default_stream().wait_stream(ctx.comm_stream)
 
