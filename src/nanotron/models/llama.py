@@ -47,6 +47,8 @@ from nanotron.utils import checkpoint_method
 logger = logging.get_logger(__name__)
 
 
+USE_DOMINO = True
+
 class RotaryEmbedding(nn.Module):
     def __init__(self, dim: int, end: int, theta: float = 10000.0):
         super().__init__()
@@ -841,6 +843,12 @@ class LlamaModel(nn.Module):
                     module_input_keys={"hidden_states", "sequence_mask"},
                     module_output_keys={"hidden_states", "sequence_mask"},
                 )
+                # LlamaDecoderLayer(
+                #     config, 
+                #     parallel_config, 
+                #     parallel_context.tp_pg, 
+                #     layer_idx
+                # )
                 for layer_idx in range(config.num_hidden_layers)
             ]
         )
@@ -884,7 +892,53 @@ class LlamaModel(nn.Module):
         input_ids: Union[torch.Tensor, TensorPointer],  # [batch_size, seq_length]
         input_mask: Union[torch.Tensor, TensorPointer],  # [batch_size, seq_length]
     ):
-        return self.forward_with_hidden_states(input_ids=input_ids, input_mask=input_mask)[0]
+        if USE_DOMINO:
+            return self.domino_forward_hidden_states(input_ids=input_ids, input_mask=input_mask)[0]
+        else:
+            return self.forward_with_hidden_states(input_ids=input_ids, input_mask=input_mask)[0]
+    
+    def domino_forward_hidden_states(
+        self,
+        input_ids: Union[torch.Tensor, TensorPointer],  # [batch_size, seq_length]
+        input_mask: Union[torch.Tensor, TensorPointer],  # [batch_size, seq_length]
+    ):
+        output = self.token_position_embeddings(input_ids=input_ids, input_mask=input_mask)
+
+        hidden_encoder_states = {
+            "hidden_states": output["input_embeds"],
+            "sequence_mask": input_mask,
+        }
+        
+        hidden_states = output["input_embeds"]
+
+        # for encoder_block in self.decoder:
+        #     hidden_encoder_states = encoder_block(**hidden_encoder_states)
+
+        for encoder_block in self.decoder:
+            # print(encoder_block.__class__)
+            residual = hidden_states
+            hidden_states = encoder_block.input_layernorm(hidden_states)
+
+            output = encoder_block.attn(hidden_states=hidden_states, sequence_mask=input_mask)
+            hidden_states = output["hidden_states"]
+            hidden_states = hidden_states + residual
+
+            residual = hidden_states
+            hidden_states = encoder_block.post_attention_layernorm(hidden_states)
+            hidden_states = encoder_block.mlp(hidden_states=hidden_states)["hidden_states"]
+            hidden_states = hidden_states + residual
+
+            # return hidden_states, output["sequence_mask"]
+
+        
+
+        hidden_states = self.final_layer_norm(input=hidden_states)["hidden_states"]
+
+        sharded_logits = self.lm_head(x=hidden_states)["logits"]
+
+        fp32_sharded_logits = self.cast_to_fp32(x=sharded_logits)["output"]
+
+        return fp32_sharded_logits, hidden_states
 
     def forward_with_hidden_states(
         self,
