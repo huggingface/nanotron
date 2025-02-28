@@ -1,9 +1,9 @@
 import re
 
-FWD_MLP_HANDLE_IDX = "fwd.layer_mlp_{}_batch_{}"
-FWD_ATTN_HANDLE_IDX = "fwd.layer_attn_{}_batch_{}"
-BWD_ATTN_HANDLE_IDX = "bwd.layer_attn_{}_batch_{}"
-BWD_MLP_HANDLE_IDX = "bwd.layer_mlp_{}_batch_{}"
+FWD_MLP_OP_NAME = "fwd.layer_mlp_{}_batch_{}"
+FWD_ATTN_OP_NAME = "fwd.layer_attn_{}_batch_{}"
+BWD_ATTN_OP_NAME = "bwd.layer_attn_{}_batch_{}"
+BWD_MLP_OP_NAME = "bwd.layer_mlp_{}_batch_{}"
 
 
 def is_async_comm(x: str) -> bool:

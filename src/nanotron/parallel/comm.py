@@ -46,21 +46,21 @@ class AsyncCommBucket:
         AsyncCommBucket._copy_async_op[op_name] = work
 
     @staticmethod
-    def get(op_name: int):
+    def get(op_name: str) -> "dist.Work":
         if op_name not in AsyncCommBucket._async_op:
             raise KeyError(f"Operation with name: {op_name} doesn't exist")
 
         return AsyncCommBucket._async_op.get(op_name)
 
     @staticmethod
-    def pop(op_name: int):
+    def pop(op_name: str) -> "dist.Work":
         if op_name not in AsyncCommBucket._async_op:
             raise KeyError(f"Operation with name: {op_name} doesn't exist")
 
         return AsyncCommBucket._async_op.pop(op_name)
 
     @staticmethod
-    def wait(op_name: int):
+    def wait(op_name: str):
         """Wait and remove the operation from the bucket"""
         work = AsyncCommBucket.pop(op_name)
         work.wait()
@@ -85,8 +85,8 @@ class AsyncCommBucket:
 
 class WaitComm(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, input, wait_handle_idx, comm_stream):
-        ctx.wait_handle_idx = wait_handle_idx
+    def forward(ctx, input, op_name, comm_stream):
+        ctx.op_name = op_name
         ctx.comm_stream = comm_stream
         return input
 
@@ -98,8 +98,8 @@ class WaitComm(torch.autograd.Function):
         but the compute stream waits for the communication stream
         before proceeding
         """
-        if is_async_comm(ctx.wait_handle_idx):
-            handle = AsyncCommBucket.pop(ctx.wait_handle_idx)
+        if is_async_comm(ctx.op_name):
+            handle = AsyncCommBucket.pop(ctx.op_name)
             assert handle is not None
             handle.wait()
 

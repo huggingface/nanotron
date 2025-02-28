@@ -32,11 +32,11 @@ class DifferentiableIdentity(torch.autograd.Function):
         tensor: torch.Tensor,
         group: Optional[ProcessGroup],
         async_all_reduce: bool,
-        handle_idx: Optional[str] = None,
+        op_name: Optional[str] = None,
         comm_stream: Optional[torch.cuda.Stream] = None,
     ):
         ctx.async_all_reduce = async_all_reduce
-        ctx.handle_idx = handle_idx
+        ctx.op_name = op_name
         ctx.group = group
         ctx.comm_stream = comm_stream
         return tensor
@@ -44,11 +44,11 @@ class DifferentiableIdentity(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_output: torch.Tensor):
         group = ctx.group
-        handle_idx = ctx.handle_idx.replace("fwd.", "bwd.") if ctx.handle_idx is not None else None
-        async_all_reduce = is_async_comm(handle_idx) if handle_idx is not None else ctx.async_all_reduce
+        op_name = ctx.op_name.replace("fwd.", "bwd.") if ctx.op_name is not None else None
+        # async_all_reduce = is_async_comm(op_name) if op_name is not None else ctx.async_all_reduce
 
         return (
-            DifferentiableAllReduceSum.apply(grad_output, group, async_all_reduce, handle_idx, ctx.comm_stream),
+            DifferentiableAllReduceSum.apply(grad_output, group, op_name, ctx.comm_stream),
             None,
             None,
             None,
@@ -64,10 +64,10 @@ class DifferentiableAllReduceSum(torch.autograd.Function):
         ctx,
         tensor: torch.Tensor,
         group: Optional[ProcessGroup],
-        async_all_reduce: bool,
-        handle_idx: Optional[int] = None,
+        op_name: Optional[int] = None,
         comm_stream: Optional[torch.cuda.Stream] = None,
     ) -> Tuple[torch.Tensor, Optional["dist.Work"]]:
+        async_all_reduce = is_async_comm(op_name) if op_name is not None else False
         ctx.async_all_reduce = async_all_reduce
 
         if group.size() == 1:
@@ -83,7 +83,7 @@ class DifferentiableAllReduceSum(torch.autograd.Function):
             if async_all_reduce is True:
                 assert comm_stream is not None
                 handle = dist.all_reduce(tensor, op=dist.ReduceOp.SUM, group=group, async_op=True)
-                AsyncCommBucket.add(handle_idx, handle)
+                AsyncCommBucket.add(op_name, handle)
             else:
                 dist.all_reduce(tensor, op=dist.ReduceOp.SUM, group=group)
 
@@ -177,20 +177,19 @@ def differentiable_identity(
     tensor,
     group: Optional[ProcessGroup] = None,
     async_all_reduce: bool = False,
-    handle_idx: Optional[str] = None,
+    op_name: Optional[str] = None,
     comm_stream: Optional[torch.cuda.Stream] = None,
 ):
-    return DifferentiableIdentity.apply(tensor, group, async_all_reduce, handle_idx, comm_stream)
+    return DifferentiableIdentity.apply(tensor, group, async_all_reduce, op_name, comm_stream)
 
 
 def differentiable_all_reduce_sum(
     tensor,
     group: Optional[ProcessGroup] = None,
-    async_all_reduce: bool = False,
-    handle_idx: Optional[str] = None,
+    op_name: Optional[str] = None,
     comm_stream: Optional[torch.cuda.Stream] = None,
 ):
-    return DifferentiableAllReduceSum.apply(tensor, group, async_all_reduce, handle_idx, comm_stream)
+    return DifferentiableAllReduceSum.apply(tensor, group, op_name, comm_stream)
 
 
 def differentiable_all_gather(tensor, group: Optional[ProcessGroup] = None):

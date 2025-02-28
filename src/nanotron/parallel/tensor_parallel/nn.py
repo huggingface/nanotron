@@ -88,8 +88,7 @@ class TensorParallelColumnLinear(nn.Linear):
     def forward(
         self,
         x: torch.Tensor,
-        async_all_reduce=None,
-        handle_idx: Optional[str] = None,
+        op_name: Optional[str] = None,
         comm_stream: Optional[torch.cuda.Stream] = None,
     ) -> torch.Tensor:
         return column_linear(
@@ -100,8 +99,7 @@ class TensorParallelColumnLinear(nn.Linear):
             tp_mode=self.mode,
             async_communication=self.async_communication,
             tp_recompute_allgather=self.tp_recompute_allgather,
-            async_all_reduce=async_all_reduce,
-            handle_idx=handle_idx,
+            op_name=op_name,
             comm_stream=comm_stream,
         )
 
@@ -170,8 +168,7 @@ class TensorParallelRowLinear(nn.Linear):
     def forward(
         self,
         x: torch.Tensor,
-        async_all_reduce,
-        handle_idx: Optional[str] = None,
+        op_name: Optional[str] = None,
         comm_stream: Optional[torch.cuda.Stream] = None,
     ) -> torch.Tensor:
         return row_linear(
@@ -181,8 +178,7 @@ class TensorParallelRowLinear(nn.Linear):
             group=self.pg,
             tp_mode=self.mode,
             async_communication=self.async_communication,
-            async_all_reduce=async_all_reduce,
-            handle_idx=handle_idx,
+            op_name=op_name,
             comm_stream=comm_stream,
         )
 
@@ -308,7 +304,7 @@ class TensorParallelEmbedding(nn.Embedding):
             out = out * (~input_mask[..., None])
 
         if self.mode is TensorParallelLinearMode.ALL_REDUCE:
-            out = differentiable_all_reduce_sum(out, group=self.pg, async_all_reduce=False)
+            out = differentiable_all_reduce_sum(out, group=self.pg)
         elif self.mode is TensorParallelLinearMode.REDUCE_SCATTER:
             out = differentiable_reduce_scatter_sum(out, group=self.pg)
         else:

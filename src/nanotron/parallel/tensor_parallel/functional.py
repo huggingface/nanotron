@@ -25,6 +25,7 @@ from nanotron.parallel.tensor_parallel.distributed_differentiable_primitives imp
     differentiable_identity,
     differentiable_reduce_scatter_sum,
 )
+from nanotron.parallel.tensor_parallel.domino import is_async_comm
 from nanotron.parallel.tensor_parallel.enum import TensorParallelLinearMode
 from nanotron.parallel.utils import MemoryBuffer, assert_cuda_max_connections_set_to_1
 
@@ -437,17 +438,19 @@ def column_linear(
     tp_mode: TensorParallelLinearMode,
     async_communication: bool,
     tp_recompute_allgather: bool = True,
-    async_all_reduce: bool = False,
-    handle_idx: Optional[str] = None,
+    op_name: Optional[str] = None,
     comm_stream: Optional[torch.cuda.Stream] = None,
 ):
+    is_async_all_reduce = is_async_comm(op_name) if op_name is not None else False
+    assert not (
+        is_async_all_reduce and async_communication
+    ), "DoMiNo isn't support weight's async communication for column linear."
+
     if async_communication:
         return _ColumnLinearAsyncCommunication.apply(input, weight, bias, group, tp_mode, tp_recompute_allgather)
 
     if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
-        input = differentiable_identity(
-            input, group=group, async_all_reduce=async_all_reduce, handle_idx=handle_idx, comm_stream=comm_stream
-        )
+        input = differentiable_identity(input, group=group, op_name=op_name, comm_stream=comm_stream)
         return F.linear(input, weight, bias)
     if tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
         return _ColumnLinearNoAsyncCommunicationReduceScatterMode.apply(
@@ -593,27 +596,28 @@ def row_linear(
     bias: Optional[torch.Tensor],
     group: dist.ProcessGroup,
     tp_mode: TensorParallelLinearMode,
-    # TODO(xrsrke): use less confusing names for these arguments
     async_communication: bool,
-    async_all_reduce: bool,
-    handle_idx: Optional[str] = None,
+    op_name: Optional[str] = None,
     comm_stream: Optional[torch.cuda.Stream] = None,
 ) -> Tuple[torch.Tensor, Optional[torch.Future]]:
+    is_async_all_reduce = is_async_comm(op_name) if op_name is not None else False
+    assert not (
+        is_async_all_reduce and async_communication
+    ), "DoMiNo isn't support weight's async communication for row linear."
+
     if async_communication:
         work = None
         out = _RowLinearAsyncCommunication.apply(input, weight, bias, group, tp_mode)
     else:
         out = F.linear(input, weight, bias)
         if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
-            out = differentiable_all_reduce_sum(
-                out, group=group, async_all_reduce=async_all_reduce, handle_idx=handle_idx, comm_stream=comm_stream
-            )
-            if async_all_reduce:
-                work = AsyncCommBucket.pop(handle_idx)
+            out = differentiable_all_reduce_sum(out, group=group, op_name=op_name, comm_stream=comm_stream)
+            if is_async_all_reduce:
+                work = AsyncCommBucket.pop(op_name)
             else:
                 work = None
         elif tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
-            assert async_all_reduce is False, "Async communication is not supported for REDUCE_SCATTER mode."
+            assert is_async_all_reduce is False, "Async communication is not supported for REDUCE_SCATTER mode."
             out = differentiable_reduce_scatter_sum(out, group=group)
             work = None
         else:
