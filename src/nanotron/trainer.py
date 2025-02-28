@@ -61,6 +61,7 @@ from nanotron.models.llama import LlamaForTraining, RotaryEmbedding
 from nanotron.models.starcoder2 import Starcoder2ForTraining
 from nanotron.optim.clip_grads import clip_grad_norm
 from nanotron.parallel import ParallelContext
+from nanotron.parallel.comm import AsyncCommBucket
 from nanotron.parallel.data_parallel.utils import sync_gradients_across_dp
 from nanotron.parallel.parameters import NanotronParameter, sanity_check
 from nanotron.parallel.pipeline_parallel.engine import (
@@ -418,7 +419,6 @@ class DistributedTrainer:
         ],
         **kwargs,
     ) -> None:
-        torch.cuda.set_sync_debug_mode("warn")
         self.pre_training(**kwargs)
 
         if self.config.checkpoints.save_initial_state and self.init_checkpoint_path is None:
@@ -579,18 +579,6 @@ class DistributedTrainer:
 
         self.post_train_step()
 
-        from nanotron.parallel.comm import AsyncCommBucket
-        from nanotron.parallel.tensor_parallel.domino import is_async_comm
-
-        not_finished = []
-        for k, v in AsyncCommBucket._copy_async_op.items():
-            # assert v.is_completed(), f"AsyncCommBucket._copy_async_op: {AsyncCommBucket._copy_async_op}"
-            assert is_async_comm(k) is True, f"k: {k}"
-            if v.is_completed() is not True:
-                not_finished.append((k, v))
-
-        # assert len(not_finished) == 0, f"AsyncCommBucket._copy_async_op: {not_finished}"
-        # assert len(AsyncCommBucket._async_op) == 0, f"AsyncCommBucket._async_op: {AsyncCommBucket._async_op}"
         AsyncCommBucket.clear_all()
 
         return outputs, loss_avg

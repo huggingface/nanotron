@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from contextlib import nullcontext
 from typing import Optional, Tuple
 
 import torch
@@ -26,7 +27,14 @@ class DifferentiableIdentity(torch.autograd.Function):
     """All-reduce gradients in a differentiable fashion"""
 
     @staticmethod
-    def forward(ctx, tensor, group: Optional[ProcessGroup], async_all_reduce: bool, handle_idx=None, comm_stream=None):
+    def forward(
+        ctx,
+        tensor: torch.Tensor,
+        group: Optional[ProcessGroup],
+        async_all_reduce: bool,
+        handle_idx: Optional[str] = None,
+        comm_stream: Optional[torch.cuda.Stream] = None,
+    ):
         ctx.async_all_reduce = async_all_reduce
         ctx.handle_idx = handle_idx
         ctx.group = group
@@ -34,16 +42,10 @@ class DifferentiableIdentity(torch.autograd.Function):
         return tensor
 
     @staticmethod
-    def backward(ctx, grad_output):
-        # import pydevd
-        # pydevd.settrace(suspend=False, trace_only_current_thread=True)
-
+    def backward(ctx, grad_output: torch.Tensor):
         group = ctx.group
         handle_idx = ctx.handle_idx.replace("fwd.", "bwd.") if ctx.handle_idx is not None else None
         async_all_reduce = is_async_comm(handle_idx) if handle_idx is not None else ctx.async_all_reduce
-
-        if handle_idx is not None and "bwd.layer_mlp_" in handle_idx and "batch_1" in handle_idx:
-            assert 1 == 1
 
         return (
             DifferentiableAllReduceSum.apply(grad_output, group, async_all_reduce, handle_idx, ctx.comm_stream),
@@ -60,14 +62,12 @@ class DifferentiableAllReduceSum(torch.autograd.Function):
     @staticmethod
     def forward(
         ctx,
-        tensor,
+        tensor: torch.Tensor,
         group: Optional[ProcessGroup],
         async_all_reduce: bool,
         handle_idx: Optional[int] = None,
-        comm_stream=None,
+        comm_stream: Optional[torch.cuda.Stream] = None,
     ) -> Tuple[torch.Tensor, Optional["dist.Work"]]:
-        from contextlib import nullcontext
-
         ctx.async_all_reduce = async_all_reduce
 
         if group.size() == 1:
@@ -174,13 +174,21 @@ class DifferentiableReduceScatterSum(torch.autograd.Function):
 
 
 def differentiable_identity(
-    tensor, group: Optional[ProcessGroup] = None, async_all_reduce: bool = False, handle_idx=None, comm_stream=None
+    tensor,
+    group: Optional[ProcessGroup] = None,
+    async_all_reduce: bool = False,
+    handle_idx: Optional[str] = None,
+    comm_stream: Optional[torch.cuda.Stream] = None,
 ):
     return DifferentiableIdentity.apply(tensor, group, async_all_reduce, handle_idx, comm_stream)
 
 
 def differentiable_all_reduce_sum(
-    tensor, group: Optional[ProcessGroup] = None, async_all_reduce: bool = False, handle_idx=None, comm_stream=None
+    tensor,
+    group: Optional[ProcessGroup] = None,
+    async_all_reduce: bool = False,
+    handle_idx: Optional[str] = None,
+    comm_stream: Optional[torch.cuda.Stream] = None,
 ):
     return DifferentiableAllReduceSum.apply(tensor, group, async_all_reduce, handle_idx, comm_stream)
 

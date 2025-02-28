@@ -72,6 +72,7 @@ class AsyncCommBucket:
 
         not_finished = []
         for k, v in AsyncCommBucket._copy_async_op.items():
+            assert is_async_comm(k) is True, f"Operation with name {k} wasn't executed asynchronously!"
             if v.is_completed() is not True:
                 not_finished.append((k, v))
         return len(not_finished) == 0
@@ -92,23 +93,17 @@ class WaitComm(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_output):
         """
-
         NOTE: because the communication operation is already being executed
         so the communication stream don't have to wait for the compute stream here
         but the compute stream waits for the communication stream
         before proceeding
         """
-        # import pydevd
-        # pydevd.settrace(suspend=False, trace_only_current_thread=True)
         if is_async_comm(ctx.wait_handle_idx):
-            # ctx.comm_stream.wait_stream(torch.cuda.default_stream())
             handle = AsyncCommBucket.pop(ctx.wait_handle_idx)
             assert handle is not None
             handle.wait()
 
-            # torch.cuda.synchronize()
             ctx.comm_stream.synchronize()
-            assert torch.cuda.current_stream() == torch.cuda.default_stream()
             torch.cuda.default_stream().wait_stream(ctx.comm_stream)
 
         return grad_output, None, None

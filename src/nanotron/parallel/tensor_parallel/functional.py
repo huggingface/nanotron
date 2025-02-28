@@ -438,7 +438,7 @@ def column_linear(
     async_communication: bool,
     tp_recompute_allgather: bool = True,
     async_all_reduce: bool = False,
-    handle_idx: Optional[int] = None,
+    handle_idx: Optional[str] = None,
     comm_stream: Optional[torch.cuda.Stream] = None,
 ):
     if async_communication:
@@ -596,8 +596,8 @@ def row_linear(
     # TODO(xrsrke): use less confusing names for these arguments
     async_communication: bool,
     async_all_reduce: bool,
-    handle_idx=None,
-    comm_stream=None,
+    handle_idx: Optional[str] = None,
+    comm_stream: Optional[torch.cuda.Stream] = None,
 ) -> Tuple[torch.Tensor, Optional[torch.Future]]:
     if async_communication:
         work = None
