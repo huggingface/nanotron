@@ -39,6 +39,7 @@ from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelEmbedding,
     TensorParallelLinearMode,
     TensorParallelRowLinear,
+    RowLinearNoComm,
 )
 from nanotron.random import RandomStates
 from nanotron.scaling.parametrization import SpectralMupParametrizator, StandardParametrizator
@@ -217,6 +218,8 @@ class MLP(nn.Module):
         tp_linear_async_communication = (
             parallel_config.tp_linear_async_communication if parallel_config is not None else False
         )
+        # print(tp_mode)
+        # print(tp_linear_async_communication)
 
         gate_up_contiguous_chunks = (
             config.intermediate_size,  # shape of gate_linear
@@ -232,7 +235,8 @@ class MLP(nn.Module):
             contiguous_chunks=gate_up_contiguous_chunks,
             tp_recompute_allgather=parallel_config.tp_recompute_allgather,
         )
-        self.down_proj = TensorParallelRowLinear(
+        if USE_DOMINO:
+            self.down_proj = RowLinearNoComm(
             config.intermediate_size,
             config.hidden_size,
             pg=tp_pg,
@@ -240,6 +244,15 @@ class MLP(nn.Module):
             bias=False,
             async_communication=tp_linear_async_communication and tp_mode is TensorParallelLinearMode.REDUCE_SCATTER,
         )
+        else:    
+            self.down_proj = TensorParallelRowLinear(
+                config.intermediate_size,
+                config.hidden_size,
+                pg=tp_pg,
+                mode=tp_mode,
+                bias=False,
+                async_communication=tp_linear_async_communication and tp_mode is TensorParallelLinearMode.REDUCE_SCATTER,
+            )
         self.split_silu_mul = GLUActivation(config.hidden_act)
 
     def forward(self, hidden_states):  # [seq_length, batch_size, hidden_dim]
@@ -413,14 +426,25 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             dim=self.d_qk, base=config.rope_theta, interleaved=config.rope_interleaved
         )
 
-        self.o_proj = TensorParallelRowLinear(
-            config.num_attention_heads * self.d_qk,
-            self.d_model,
-            pg=tp_pg,
-            mode=tp_mode,
-            bias=False,
-            async_communication=tp_linear_async_communication,
-        )
+       
+        if USE_DOMINO:
+            self.o_proj = RowLinearNoComm(
+                config.num_attention_heads * self.d_qk,
+                self.d_model,
+                pg=tp_pg,
+                mode=tp_mode,
+                bias=False,
+                async_communication=tp_linear_async_communication,
+            )
+        else:
+            self.o_proj = TensorParallelRowLinear(
+                config.num_attention_heads * self.d_qk,
+                self.d_model,
+                pg=tp_pg,
+                mode=tp_mode,
+                bias=False,
+                async_communication=tp_linear_async_communication,
+            )
 
         self.attention = CoreAttention(
             config,
@@ -904,34 +928,58 @@ class LlamaModel(nn.Module):
     ):
         output = self.token_position_embeddings(input_ids=input_ids, input_mask=input_mask)
 
-        hidden_encoder_states = {
-            "hidden_states": output["input_embeds"],
-            "sequence_mask": input_mask,
-        }
-        
+        # hidden_encoder_states = {
+        #     "hidden_states": output["input_embeds"],
+        #     "sequence_mask": input_mask,
+        # }
         hidden_states = output["input_embeds"]
+
+        assert hidden_states.dim() == 3
+        seq_mask0, seq_mask1 = torch.chunk(input_mask, chunks=2, dim=0)
+        hidden_states0, hidden_states1 = torch.chunk(hidden_states, chunks=2, dim=1)
+        
+        # print(input_mask.shape, seq_mask0.shape, seq_mask1.shape)
+        # print(hidden_states.shape, hidden_states0.shape, hidden_states1.shape)
+
+        # raise ValueError
+        
+        
 
         # for encoder_block in self.decoder:
         #     hidden_encoder_states = encoder_block(**hidden_encoder_states)
 
         for encoder_block in self.decoder:
             # print(encoder_block.__class__)
-            residual = hidden_states
-            hidden_states = encoder_block.input_layernorm(hidden_states)
+            residual0 = hidden_states0
+            hidden_states0 = encoder_block.pp_block.input_layernorm(hidden_states0)
+            output0 = encoder_block.pp_block.attn(hidden_states=hidden_states0, sequence_mask=seq_mask0)
+            hidden_states0 = output0["hidden_states"]
+            torch.distributed.all_reduce(hidden_states0, group=self.parallel_context.tp_pg)
+            hidden_states0 = hidden_states0 + residual0
 
-            output = encoder_block.attn(hidden_states=hidden_states, sequence_mask=input_mask)
-            hidden_states = output["hidden_states"]
-            hidden_states = hidden_states + residual
+            residual1 = hidden_states1
+            hidden_states1 = encoder_block.pp_block.input_layernorm(hidden_states1)
+            output1 = encoder_block.pp_block.attn(hidden_states=hidden_states1, sequence_mask=seq_mask1)
+            hidden_states1 = output1["hidden_states"]
+            torch.distributed.all_reduce(hidden_states1, group=self.parallel_context.tp_pg)
+            hidden_states1 = hidden_states1 + residual1
 
-            residual = hidden_states
-            hidden_states = encoder_block.post_attention_layernorm(hidden_states)
-            hidden_states = encoder_block.mlp(hidden_states=hidden_states)["hidden_states"]
-            hidden_states = hidden_states + residual
+            residual0 = hidden_states0
+            hidden_states0 = encoder_block.pp_block.post_attention_layernorm(hidden_states0)
+            hidden_states0 = encoder_block.pp_block.mlp(hidden_states=hidden_states0)["hidden_states"]
+            torch.distributed.all_reduce(hidden_states0, group=self.parallel_context.tp_pg)
+            hidden_states0 = hidden_states0 + residual0
 
-            # return hidden_states, output["sequence_mask"]
+            residual1 = hidden_states1
+            hidden_states1 = encoder_block.pp_block.post_attention_layernorm(hidden_states1)
+            hidden_states1 = encoder_block.pp_block.mlp(hidden_states=hidden_states1)["hidden_states"]
+            torch.distributed.all_reduce(hidden_states1, group=self.parallel_context.tp_pg)
+            hidden_states1 = hidden_states1 + residual1
 
-        
 
+        hidden_states = torch.cat([hidden_states0, hidden_states1], dim=1)
+
+        # hidden_states = self.final_layer_norm(input=hidden_encoder_states["hidden_states"])["hidden_states"]
         hidden_states = self.final_layer_norm(input=hidden_states)["hidden_states"]
 
         sharded_logits = self.lm_head(x=hidden_states)["logits"]

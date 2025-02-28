@@ -172,6 +172,72 @@ class TensorParallelRowLinear(nn.Linear):
         return f"tp_rank={dist.get_rank(self.pg)}, {super().extra_repr()}, unsharded_in_features={self.in_features * self.world_size}"
 
 
+class RowLinearNoComm(nn.Linear):
+    def __init__(
+        self,
+        in_features,
+        out_features,
+        pg: dist.ProcessGroup,
+        mode: TensorParallelLinearMode,
+        bias=True,
+        device=None,
+        dtype=None,
+        async_communication: bool = False,
+        contiguous_chunks: Optional[Tuple[int, ...]] = None,
+    ):
+        self.pg = pg
+        self.world_size = pg.size()
+
+        assert in_features % self.world_size == 0
+
+        self.in_features = in_features // self.world_size
+        self.out_features = out_features
+
+        # No need to shard the bias term, only rank 0 would have it
+        bias = dist.get_rank(self.pg) == 0 and bias
+
+        super().__init__(
+            in_features=self.in_features,
+            out_features=self.out_features,
+            bias=bias,
+            device=device,
+            dtype=dtype,
+        )
+        self.mode = mode
+        self.async_communication = async_communication
+        if self.mode is TensorParallelLinearMode.ALL_REDUCE and self.async_communication:
+            raise ValueError("async_communication is not supported for ALL_REDUCE mode")
+
+        if contiguous_chunks is not None:
+            assert (
+                sum(contiguous_chunks) == in_features
+            ), f"Sum of contiguous chunks ({sum(contiguous_chunks)}) must equal to in_features ({in_features})"
+
+
+        split_config = SplitConfig(split_dim=1, contiguous_chunks=contiguous_chunks)
+
+        self._mark_all_parameters_in_module_as_sharded(split_config)
+
+    def _mark_all_parameters_in_module_as_sharded(self, split_config: SplitConfig):
+        for name, param in list(self.named_parameters()):
+            if name == "bias":
+                # `bias` only exists in rank 0 because it's not sharded
+                new_param = NanotronParameter(tensor=param)
+            else:
+                new_param = create_sharded_parameter_from_config(
+                    parameter=param,
+                    pg=self.pg,
+                    split_config=split_config,
+                )
+            setattr(self, name, new_param)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return nn.functional.linear(x, self.weight, self.bias)
+        
+
+    def extra_repr(self) -> str:
+        return f"tp_rank={dist.get_rank(self.pg)}, {super().extra_repr()}, unsharded_in_features={self.in_features * self.world_size}"
+
 class TiedLinear(nn.Linear):
     def __init__(
         self,
