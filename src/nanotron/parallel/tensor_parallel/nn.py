@@ -35,6 +35,7 @@ from nanotron.parallel.tensor_parallel.enum import TensorParallelLinearMode
 from nanotron.parallel.tensor_parallel.functional import (
     column_linear,
     row_linear,
+    _DominoColumnLinearAsyncCommunication,
 )
 from nanotron.parallel.tied_parameters import create_tied_parameter
 
@@ -95,6 +96,68 @@ class TensorParallelColumnLinear(nn.Linear):
             async_communication=self.async_communication,
             tp_recompute_allgather=self.tp_recompute_allgather,
         )
+
+    def extra_repr(self) -> str:
+        return f"tp_rank={dist.get_rank(self.pg)}, {super().extra_repr()}, unsharded_out_features={self.out_features * self.world_size}"
+
+class DominoColumnLinear(nn.Linear):
+    def __init__(
+        self,
+        in_features,
+        out_features,
+        pg: dist.ProcessGroup,
+        mode: TensorParallelLinearMode,
+        bias=True,
+        device=None,
+        dtype=None,
+        async_communication: bool = False,
+        contiguous_chunks: Optional[Tuple[int, ...]] = None,
+        tp_recompute_allgather: bool = True,
+    ):
+        self.pg = pg
+        self.world_size = pg.size()
+
+        assert out_features % self.world_size == 0
+
+        self.in_features = in_features
+        self.out_features = out_features // self.world_size
+        self.tp_recompute_allgather = tp_recompute_allgather
+
+        super().__init__(
+            in_features=self.in_features,
+            out_features=self.out_features,
+            bias=bias,
+            device=device,
+            dtype=dtype,
+        )
+
+        self.mode = mode
+        self.async_communication = async_communication
+
+        if contiguous_chunks is not None:
+            assert (
+                sum(contiguous_chunks) == out_features
+            ), f"Sum of contiguous chunks ({sum(contiguous_chunks)}) must equal to out_features ({out_features})"
+        split_config = SplitConfig(split_dim=0, contiguous_chunks=contiguous_chunks)
+
+        mark_all_parameters_in_module_as_sharded(
+            self,
+            pg=self.pg,
+            split_config=split_config,
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+
+        return _DominoColumnLinearAsyncCommunication.apply(x, self.weight, self.bias, self.pg, self.mode)        
+        # return column_linear(
+        #     input=x,
+        #     weight=self.weight,
+        #     bias=self.bias,
+        #     group=self.pg,
+        #     tp_mode=self.mode,
+        #     async_communication=self.async_communication,
+        #     tp_recompute_allgather=self.tp_recompute_allgather,
+        # )
 
     def extra_repr(self) -> str:
         return f"tp_rank={dist.get_rank(self.pg)}, {super().extra_repr()}, unsharded_out_features={self.out_features * self.world_size}"

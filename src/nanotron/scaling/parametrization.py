@@ -10,6 +10,7 @@ from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelEmbedding,
     TensorParallelRowLinear,
     RowLinearNoComm,
+    DominoColumnLinear,
 )
 from torch import nn
 from torch.nn import init
@@ -36,6 +37,7 @@ class StandardParametrizator(Parametrizator):
         super().__init__(config)
         self.MODULE_TO_PARAMETRIZE = {
             TensorParallelColumnLinear: self._parametrize_column_linear,
+            DominoColumnLinear: self._parametrize_column_linear,
             TensorParallelRowLinear: self._parametrize_row_linear,
             RowLinearNoComm: self._parametrize_row_linear,
             TritonRMSNorm: self._parametrize_layer_norm,
