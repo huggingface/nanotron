@@ -354,7 +354,6 @@ class _DominoColumnLinearAsyncCommunication(torch.autograd.Function):
         ctx.use_bias = bias is not None
         ctx.tp_mode = tp_mode
         ctx.group = group
-        # ctx.tp_recompute_allgather = tp_recompute_allgather
         ctx.tensor_shape =inp.size()
         ctx.save_for_backward(inp, weight)
         return F.linear(inp, weight, bias)
@@ -385,12 +384,8 @@ class _DominoColumnLinearAsyncCommunication(torch.autograd.Function):
         grad_output = grad_output.view(math.prod(grad_output_first_dims), grad_output_last_dim)
         total_tensor = total_tensor.view(math.prod(total_tensor_first_dims), total_tensor_last_dim)
 
-
         grad_bias = grad_output.sum(dim=0) if use_bias else None
 
-        
-
-        # TODO @thomasw21: This sounds like we don't have the optimal physical layout
         grad_weight = grad_output.t().matmul(total_tensor)
 
         handle.wait()

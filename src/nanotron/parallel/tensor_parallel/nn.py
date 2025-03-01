@@ -147,17 +147,7 @@ class DominoColumnLinear(nn.Linear):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-
-        return _DominoColumnLinearAsyncCommunication.apply(x, self.weight, self.bias, self.pg, self.mode)        
-        # return column_linear(
-        #     input=x,
-        #     weight=self.weight,
-        #     bias=self.bias,
-        #     group=self.pg,
-        #     tp_mode=self.mode,
-        #     async_communication=self.async_communication,
-        #     tp_recompute_allgather=self.tp_recompute_allgather,
-        # )
+        return _DominoColumnLinearAsyncCommunication.apply(x, self.weight, self.bias, self.pg, self.mode)
 
     def extra_repr(self) -> str:
         return f"tp_rank={dist.get_rank(self.pg)}, {super().extra_repr()}, unsharded_out_features={self.out_features * self.world_size}"

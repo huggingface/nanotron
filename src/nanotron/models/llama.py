@@ -219,8 +219,6 @@ class MLP(nn.Module):
         tp_linear_async_communication = (
             parallel_config.tp_linear_async_communication if parallel_config is not None else False
         )
-        # print(tp_mode)
-        # print(tp_linear_async_communication)
 
         gate_up_contiguous_chunks = (
             config.intermediate_size,  # shape of gate_linear
@@ -864,6 +862,9 @@ class LlamaModel(nn.Module):
             parallel_config.tp_linear_async_communication if parallel_config is not None else False
         )
 
+        if USE_DOMINO:
+            assert self.tp_mode == TensorParallelLinearMode.ALL_REDUCE, "Only support AllReduce mode now!"
+
         self.token_position_embeddings = PipelineBlock(
             p2p=self.p2p,
             module_builder=Embedding,
@@ -897,12 +898,6 @@ class LlamaModel(nn.Module):
                     module_input_keys={"hidden_states", "sequence_mask"},
                     module_output_keys={"hidden_states", "sequence_mask"},
                 )
-                # LlamaDecoderLayer(
-                #     config, 
-                #     parallel_config, 
-                #     parallel_context.tp_pg, 
-                #     layer_idx
-                # )
                 for layer_idx in range(config.num_hidden_layers)
             ]
         )
@@ -958,30 +953,18 @@ class LlamaModel(nn.Module):
     ):
         output = self.token_position_embeddings(input_ids=input_ids, input_mask=input_mask)
 
-        # hidden_encoder_states = {
-        #     "hidden_states": output["input_embeds"],
-        #     "sequence_mask": input_mask,
-        # }
+
         hidden_states = output["input_embeds"]
 
         assert hidden_states.dim() == 3
         seq_mask0, seq_mask1 = torch.chunk(input_mask, chunks=2, dim=0)
         hidden_states0, hidden_states1 = torch.chunk(hidden_states, chunks=2, dim=1)
         
-        # print(input_mask.shape, seq_mask0.shape, seq_mask1.shape)
-        # print(hidden_states.shape, hidden_states0.shape, hidden_states1.shape)
 
-        # raise ValueError
-        
-        torch.cuda.nvtx.range_push("Forward transformer layers")
-
-        # for encoder_block in self.decoder:
-        #     hidden_encoder_states = encoder_block(**hidden_encoder_states)
         fwd_handle0, fwd_handle1 = None, None
         residual0, residual1 = None, None
 
         for index, encoder_block in enumerate(self.decoder):
-            # print(encoder_block.__class__)
             if index > 0:
                 fwd_handle0.wait()
                 hidden_states0 = hidden_states0 + residual0
@@ -1008,7 +991,6 @@ class LlamaModel(nn.Module):
             residual0 = hidden_states0
             hidden_states0 = encoder_block.pp_block.post_attention_layernorm(hidden_states0)
             hidden_states0 = encoder_block.pp_block.mlp(hidden_states=hidden_states0)["hidden_states"]
-            # torch.distributed.all_reduce(hidden_states0, group=self.parallel_context.tp_pg)
             fwd_handle0 = torch.distributed.all_reduce(hidden_states0, group=self.parallel_context.tp_pg, async_op=True)
             
 
@@ -1017,7 +999,6 @@ class LlamaModel(nn.Module):
             residual1 = hidden_states1
             hidden_states1 = encoder_block.pp_block.post_attention_layernorm(hidden_states1)
             hidden_states1 = encoder_block.pp_block.mlp(hidden_states=hidden_states1)["hidden_states"]
-            # torch.distributed.all_reduce(hidden_states1, group=self.parallel_context.tp_pg)
             fwd_handle1 = torch.distributed.all_reduce(hidden_states1, group=self.parallel_context.tp_pg, async_op=True)
 
         fwd_handle0.wait()
@@ -1030,7 +1011,6 @@ class LlamaModel(nn.Module):
 
         hidden_states = torch.cat([hidden_states0, hidden_states1], dim=1)
 
-        # hidden_states = self.final_layer_norm(input=hidden_encoder_states["hidden_states"])["hidden_states"]
         hidden_states = self.final_layer_norm(input=hidden_states)["hidden_states"]
 
         sharded_logits = self.lm_head(x=hidden_states)["logits"]
