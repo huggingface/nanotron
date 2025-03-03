@@ -700,6 +700,12 @@ class MLA(nn.Module):
         tp_pg: dist.ProcessGroup,
         layer_idx: int,
     ):
+        """
+        Implementation of DeepSeek's MLA
+        Section 2.1.1. Multi-Head Latent Attention
+        DeepSeek-V3 Technical Report
+        https://arxiv.org/abs/2412.19437
+        """
         super().__init__()
 
         self.dim = config.hidden_size
@@ -849,9 +855,9 @@ class LlamaDecoderLayer(nn.Module):
         layer_idx: int,
     ):
         super().__init__()
-        Attention = MLA if config.kv_lora_rank is not None else CausalSelfAttention
+        attn_cls = MLA if config.kv_lora_rank is not None else CausalSelfAttention
         self.input_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.attn = Attention(
+        self.attn = attn_cls(
             config=config,
             parallel_config=parallel_config,
             tp_pg=tp_pg,

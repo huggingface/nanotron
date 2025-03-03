@@ -90,8 +90,6 @@ parallelism:
   tp_linear_async_communication: false
   tp_mode: ALL_REDUCE
   tp_recompute_allgather: false
-  # domino:
-  #   num_input_batches: 2
 profiler: null
 tokenizer:
   tokenizer_max_length: null
