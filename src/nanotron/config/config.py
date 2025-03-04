@@ -228,6 +228,10 @@ class ModelArgs:
             self.dtype = cast_str_to_torch_dtype(self.dtype)
 
         self.model_config._is_using_mup = isinstance(self.init_method, SpectralMupInit)
+        if self.model_config.kv_lora_rank is not None:
+            # set num_key_value_heads to None for MLA(as it's same as num_attention_heads in the paper)
+            # to avoid unintended errors
+            self.model_config.num_key_value_heads = None
 
         # if self.model_config.max_position_embeddings is None:
         #     self.model_config.max_position_embeddings = 0

@@ -55,6 +55,14 @@ class LlamaConfig:
     use_cache: bool = True
     vocab_size: int = 32000
 
+    #  MLA
+    # https://huggingface.co/deepseek-ai/DeepSeek-V3-Base/blob/main/config.json
+    q_lora_rank: Optional[int] = None
+    kv_lora_rank: Optional[int] = None
+    qk_nope_head_dim: Optional[int] = None
+    qk_rope_head_dim: Optional[int] = None
+    v_head_dim: Optional[int] = None
+
     def __post_init__(self):
         # NOTE: user don't set self._init_method, ModelArgs will set it
         # then we only pass LlamaConfig around
