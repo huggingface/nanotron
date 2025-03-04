@@ -7,8 +7,11 @@ from nanotron.config import ModelArgs
 from nanotron.nn.layer_norm import TritonRMSNorm
 from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelColumnLinear,
+    TensorParallelColumnLinearBitNet,
     TensorParallelEmbedding,
     TensorParallelRowLinear,
+    TensorParallelRowLinearBitNet
+    
 )
 from torch import nn
 from torch.nn import init
@@ -35,7 +38,9 @@ class StandardParametrizator(Parametrizator):
         super().__init__(config)
         self.MODULE_TO_PARAMETRIZE = {
             TensorParallelColumnLinear: self._parametrize_column_linear,
+            TensorParallelColumnLinearBitNet: self._parametrize_column_linear,
             TensorParallelRowLinear: self._parametrize_row_linear,
+            TensorParallelRowLinearBitNet: self._parametrize_row_linear,
             TritonRMSNorm: self._parametrize_layer_norm,
             TensorParallelEmbedding: self._parametrize_embedding,
         }
@@ -86,7 +91,9 @@ class SpectralMupParametrizator(Parametrizator):
         super().__init__(config)
         self.MODULE_TO_PARAMETRIZE = {
             TensorParallelColumnLinear: self._parametrize_mup_weight,
+            TensorParallelColumnLinearBitNet: self._parametrize_mup_weight,
             TensorParallelRowLinear: self._parametrize_mup_weight,
+            TensorParallelRowLinearBitNet: self._parametrize_mup_weight,
             TritonRMSNorm: self._parametrize_layer_norm,
             TensorParallelEmbedding: self._parametrize_embedding,
         }
@@ -165,7 +172,9 @@ class LearningRateForSpectralMup(LearningRateForParametrizator):
         super().__init__(lr, names_to_modules)
         self.MODULE_TO_PARAMETRIZE = {
             TensorParallelColumnLinear: self._get_mup_lr,
+            TensorParallelColumnLinearBitNet: self._get_mup_lr,
             TensorParallelRowLinear: self._get_mup_lr,
+            TensorParallelRowLinearBitNet: self._get_mup_lr,
             TritonRMSNorm: self._get_global_lr,
             TensorParallelEmbedding: self._get_global_lr,
         }
@@ -200,3 +209,5 @@ class LearningRateForSpectralMup(LearningRateForParametrizator):
         module_name = param_name.rsplit(".", 1)[0]
         module = self.names_to_modules[module_name]
         return self.MODULE_TO_PARAMETRIZE[type(module)](param, module)
+
+

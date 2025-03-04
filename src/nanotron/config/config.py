@@ -226,7 +226,6 @@ class ModelArgs:
             self.dtype = torch.bfloat16
         if isinstance(self.dtype, str):
             self.dtype = cast_str_to_torch_dtype(self.dtype)
-
         self.model_config._is_using_mup = isinstance(self.init_method, SpectralMupInit)
 
         # if self.model_config.max_position_embeddings is None:
