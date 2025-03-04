@@ -17,8 +17,7 @@ Fixes # (issue)
 
 ## Before submitting
 - [ ] This PR fixes a typo or improves the docs (you can dismiss the other checks if that's the case).
-- [ ] Did you read the [contributor guideline](https://github.com/huggingface/nanotron/blob/main/CONTRIBUTING.md#submitting-a-new-issue-or-feature-request),
-      Pull Request section?
+- [ ] Did you read the [contributor guidelines](https://github.com/huggingface/nanotron/blob/main/CONTRIBUTING.md#submitting-a-new-issue-or-feature-request)?
 - [ ] Did you write any new necessary tests?
 - [ ] Did you log the throughput and loss you get to ensure the PR works as expected in actual training?
 - [ ] Did you log the memory usage? you can use [this tool](https://huggingface.co/spaces/nanotron/predict_memory) to understand the memory usage breakdown in nanotron.
