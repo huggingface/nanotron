@@ -1,5 +1,6 @@
 import torch
 from nanotron.config import (
+    AdamWOptimizerArgs,
     AllForwardAllBackwardPipelineEngine,
     CheckpointsArgs,
     Config,
@@ -46,7 +47,19 @@ TINY_LLAMA_CONFIG = LlamaConfig(
 )
 
 
-def get_llama_training_config(model_config: ModelArgs):
+def get_parallel_config(parallel_context: ParallelContext):
+    return ParallelismArgs(
+        dp=parallel_context.data_parallel_size,
+        pp=parallel_context.pipeline_parallel_size,
+        tp=parallel_context.tensor_parallel_size,
+        expert_parallel_size=parallel_context.expert_parallel_size,
+        pp_engine=AllForwardAllBackwardPipelineEngine(),
+        tp_mode=TensorParallelLinearMode.ALL_REDUCE,
+        tp_linear_async_communication=False,
+    )
+
+
+def get_llama_training_config(model_config: ModelArgs, parallel_context):
     return Config(
         model=model_config,
         general=GeneralArgs(project="unittest", run="sanity_llama", seed=42),
@@ -54,25 +67,20 @@ def get_llama_training_config(model_config: ModelArgs):
             checkpoints_path="./checkpoints",
             checkpoint_interval=10,
         ),
-        parallelism=ParallelismArgs(
-            dp=1,
-            pp=1,
-            tp=2,
-            expert_parallel_size=2,
-            pp_engine="1f1b",
-            tp_mode="ALL_REDUCE",
-            tp_linear_async_communication=False,
-        ),
+        parallelism=get_parallel_config(parallel_context),
         tokenizer=TokenizerArgs("gpt2"),
         optimizer=OptimizerArgs(
             zero_stage=0,
             weight_decay=0.01,
             clip_grad=1.0,
             accumulate_grad_in_fp32=False,
-            adam_eps=1e-08,
-            adam_beta1=0.9,
-            adam_beta2=0.95,
-            torch_adam_is_fused=True,
+            optimizer_factory=AdamWOptimizerArgs(
+                adam_eps=1e-08,
+                adam_beta1=0.9,
+                adam_beta2=0.95,
+                torch_adam_is_fused=True,
+                name="adamW",
+            ),
             learning_rate_scheduler=LRSchedulerArgs(
                 learning_rate=3e-4,
                 lr_warmup_steps=100,
@@ -103,7 +111,10 @@ def get_llama_training_config(model_config: ModelArgs):
 
 
 def create_llama_from_config(
-    model_config: LlamaConfig, device: torch.device, parallel_context: ParallelContext
+    model_config: LlamaConfig,
+    parallel_config: ParallelismArgs,
+    device: torch.device,
+    parallel_context: ParallelContext,
 ) -> LlamaForTraining:
 
     """
@@ -114,14 +125,6 @@ def create_llama_from_config(
     the model created will have random weights.
     """
 
-    parallel_config = ParallelismArgs(
-        dp=parallel_context.data_parallel_size,
-        pp=parallel_context.pipeline_parallel_size,
-        tp=parallel_context.tensor_parallel_size,
-        pp_engine=AllForwardAllBackwardPipelineEngine(),
-        tp_mode=TensorParallelLinearMode.ALL_REDUCE,
-        tp_linear_async_communication=False,
-    )
     model = build_model(
         model_builder=lambda: LlamaForTraining(
             config=model_config,

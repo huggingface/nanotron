@@ -13,17 +13,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import math
-from typing import Optional
+from typing import Optional, Tuple
 
 import torch
 from torch.nn import functional as F
 
 import nanotron.distributed as dist
+from nanotron.parallel.comm import AsyncCommBucket
 from nanotron.parallel.tensor_parallel.distributed_differentiable_primitives import (
     differentiable_all_reduce_sum,
     differentiable_identity,
     differentiable_reduce_scatter_sum,
 )
+from nanotron.parallel.tensor_parallel.domino import is_async_comm
 from nanotron.parallel.tensor_parallel.enum import TensorParallelLinearMode
 from nanotron.parallel.utils import MemoryBuffer, assert_cuda_max_connections_set_to_1
 
@@ -40,7 +42,7 @@ class _ShardedCrossEntropy(torch.autograd.Function):
         logits_max = torch.max(sharded_logits, dim=-1)[0]
         dist.all_reduce(logits_max, op=dist.ReduceOp.MAX, group=group)
         # Subtract the maximum value.
-        sharded_logits = sharded_logits - logits_max.unsqueeze(dim=-1)
+        sharded_logits.sub_(logits_max.unsqueeze(dim=-1))
 
         # Get the shard's indices
         sharded_hidden_size = sharded_logits.shape[-1]
@@ -436,12 +438,19 @@ def column_linear(
     tp_mode: TensorParallelLinearMode,
     async_communication: bool,
     tp_recompute_allgather: bool = True,
+    op_name: Optional[str] = None,
+    comm_stream: Optional[torch.cuda.Stream] = None,
 ):
+    is_async_all_reduce = is_async_comm(op_name) if op_name is not None else False
+    assert not (
+        is_async_all_reduce and async_communication
+    ), "DoMiNo isn't support weight's async communication for column linear."
+
     if async_communication:
         return _ColumnLinearAsyncCommunication.apply(input, weight, bias, group, tp_mode, tp_recompute_allgather)
 
     if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
-        input = differentiable_identity(input, group=group)
+        input = differentiable_identity(input, group=group, op_name=op_name, comm_stream=comm_stream)
         return F.linear(input, weight, bias)
     if tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
         return _ColumnLinearNoAsyncCommunicationReduceScatterMode.apply(
@@ -588,17 +597,30 @@ def row_linear(
     group: dist.ProcessGroup,
     tp_mode: TensorParallelLinearMode,
     async_communication: bool,
-):
+    op_name: Optional[str] = None,
+    comm_stream: Optional[torch.cuda.Stream] = None,
+) -> Tuple[torch.Tensor, Optional[torch.Future]]:
+    is_async_all_reduce = is_async_comm(op_name) if op_name is not None else False
+    assert not (
+        is_async_all_reduce and async_communication
+    ), "DoMiNo isn't support weight's async communication for row linear."
+
     if async_communication:
-        return _RowLinearAsyncCommunication.apply(input, weight, bias, group, tp_mode)
-
-    out = F.linear(input, weight, bias)
-
-    if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
-        out = differentiable_all_reduce_sum(out, group=group)
-    elif tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
-        out = differentiable_reduce_scatter_sum(out, group=group)
+        work = None
+        out = _RowLinearAsyncCommunication.apply(input, weight, bias, group, tp_mode)
     else:
-        raise ValueError(f"Got unexpected mode: {tp_mode}.")
+        out = F.linear(input, weight, bias)
+        if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
+            out = differentiable_all_reduce_sum(out, group=group, op_name=op_name, comm_stream=comm_stream)
+            if is_async_all_reduce:
+                work = AsyncCommBucket.pop(op_name)
+            else:
+                work = None
+        elif tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
+            assert is_async_all_reduce is False, "Async communication is not supported for REDUCE_SCATTER mode."
+            out = differentiable_reduce_scatter_sum(out, group=group)
+            work = None
+        else:
+            raise ValueError(f"Got unexpected mode: {tp_mode}.")
 
-    return out
+    return out, work

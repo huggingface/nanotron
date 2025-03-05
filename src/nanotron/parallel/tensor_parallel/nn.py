@@ -85,7 +85,12 @@ class TensorParallelColumnLinear(nn.Linear):
             split_config=split_config,
         )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        x: torch.Tensor,
+        op_name: Optional[str] = None,
+        comm_stream: Optional[torch.cuda.Stream] = None,
+    ) -> torch.Tensor:
         return column_linear(
             input=x,
             weight=self.weight,
@@ -94,6 +99,8 @@ class TensorParallelColumnLinear(nn.Linear):
             tp_mode=self.mode,
             async_communication=self.async_communication,
             tp_recompute_allgather=self.tp_recompute_allgather,
+            op_name=op_name,
+            comm_stream=comm_stream,
         )
 
     def extra_repr(self) -> str:
@@ -158,7 +165,12 @@ class TensorParallelRowLinear(nn.Linear):
                 )
             setattr(self, name, new_param)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        x: torch.Tensor,
+        op_name: Optional[str] = None,
+        comm_stream: Optional[torch.cuda.Stream] = None,
+    ) -> torch.Tensor:
         return row_linear(
             input=x,
             weight=self.weight,
@@ -166,6 +178,8 @@ class TensorParallelRowLinear(nn.Linear):
             group=self.pg,
             tp_mode=self.mode,
             async_communication=self.async_communication,
+            op_name=op_name,
+            comm_stream=comm_stream,
         )
 
     def extra_repr(self) -> str:

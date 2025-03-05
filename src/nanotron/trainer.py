@@ -61,6 +61,7 @@ from nanotron.models.llama import LlamaForTraining, RotaryEmbedding
 from nanotron.models.starcoder2 import Starcoder2ForTraining
 from nanotron.optim.clip_grads import clip_grad_norm
 from nanotron.parallel import ParallelContext
+from nanotron.parallel.comm import AsyncCommBucket
 from nanotron.parallel.data_parallel.utils import sync_gradients_across_dp
 from nanotron.parallel.parameters import NanotronParameter, sanity_check
 from nanotron.parallel.pipeline_parallel.engine import (
@@ -577,6 +578,8 @@ class DistributedTrainer:
             handle.wait()
 
         self.post_train_step()
+
+        AsyncCommBucket.clear_all()
 
         return outputs, loss_avg
 
