@@ -43,7 +43,7 @@ pip install -e .
 
 # Install dependencies if you want to use the example scripts
 pip install datasets transformers
-pip install triton "flash-attn>=2.7.0" --no-build-isolation
+pip install triton "flash-attn>=2.5.0" --no-build-isolation
 ```
 > [!NOTE]
 > If you get `undefined symbol: ncclCommRegister` error you should install torch 2.1.2 instead: `pip install torch==2.1.2 --index-url https://download.pytorch.org/whl/cu121`
