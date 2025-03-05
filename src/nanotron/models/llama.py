@@ -41,10 +41,7 @@ from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelRowLinear,
 )
 from nanotron.random import RandomStates
-from nanotron.scaling.parametrization import (
-    SpectralMupParametrizator,
-    StandardParametrizator,
-)
+from nanotron.scaling.parametrization import SpectralMupParametrizator, StandardParametrizator
 from nanotron.utils import checkpoint_method
 
 logger = logging.get_logger(__name__)
@@ -77,13 +74,7 @@ class RotaryEmbedding(nn.Module):
             self.freqs_cis = self.freqs_cis.to(torch.float)
         assert self.freqs_cis.dtype == torch.float
         freqs = 1.0 / (
-            self.theta
-            ** (
-                torch.arange(0, self.dim, 2, dtype=torch.float, device="cpu")[
-                    : (self.dim // 2)
-                ]
-                / self.dim
-            )
+            self.theta ** (torch.arange(0, self.dim, 2, dtype=torch.float, device="cpu")[: (self.dim // 2)] / self.dim)
         ).to(
             "cuda"
         )  # should be computed on CPU, otherwise different results with Transformers.
@@ -115,24 +106,16 @@ class RotaryEmbedding(nn.Module):
         )  # [batch_size, q_length, num_heads, inner_dim]
         if x.dtype == torch.bfloat16:
             x = x.float()
-        complex_x = torch.view_as_complex(
-            x
-        )  # [batch_size, q_length, num_heads, inner_dim // 2]
+        complex_x = torch.view_as_complex(x)  # [batch_size, q_length, num_heads, inner_dim // 2]
         if position_ids is None:
             freqs_cis = self.freqs_cis[None, :seq_length, None, :]
         else:
             # TODO(kunhao): Should None follow the num_heads dimension?
-            if (
-                position_ids[-1, -1] < 0 or position_ids[-1, -1] >= self.end
-            ):  # Quick test hopefully
-                raise ValueError(
-                    f"Position ids must be in the range [0, {self.end}), but got {position_ids}"
-                )
+            if position_ids[-1, -1] < 0 or position_ids[-1, -1] >= self.end:  # Quick test hopefully
+                raise ValueError(f"Position ids must be in the range [0, {self.end}), but got {position_ids}")
             freqs_cis = self.freqs_cis[position_ids][:, :, None, :]
         complex_freqs = torch.view_as_complex(freqs_cis)
-        x_out = torch.view_as_real(complex_x * complex_freqs).view(
-            batch_size, seq_length, num_heads, inner_dim
-        )
+        x_out = torch.view_as_real(complex_x * complex_freqs).view(batch_size, seq_length, num_heads, inner_dim)
         return x_out.type(dtype)
 
 
@@ -147,15 +130,10 @@ class LlamaRotaryEmbedding(nn.Module):
 
     def init_rotary_embeddings(self):
         inv_freq = 1.0 / (
-            self.theta
-            ** (
-                torch.arange(0, self.dim, 2, dtype=torch.float, device="cpu") / self.dim
-            )
+            self.theta ** (torch.arange(0, self.dim, 2, dtype=torch.float, device="cpu") / self.dim)
         )  # important to compute on CPU
         self.register_buffer(
-            "inv_freq",
-            torch.empty(self.dim // 2, dtype=torch.float, device="cuda"),
-            persistent=False,
+            "inv_freq", torch.empty(self.dim // 2, dtype=torch.float, device="cuda"), persistent=False
         )
         self.inv_freq = self.inv_freq.to(
             torch.float
@@ -169,22 +147,14 @@ class LlamaRotaryEmbedding(nn.Module):
         position_ids: Optional[torch.LongTensor],  # [batch_size, seq_length]
     ):
         # x: [bs, num_attention_heads, seq_len, head_size]
-        inv_freq_expanded = (
-            self.inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1)
-        )
+        inv_freq_expanded = self.inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1)
         position_ids_expanded = position_ids[:, None, :].float()
         # Force float32 since bfloat16 loses precision on long contexts
         # See https://github.com/huggingface/transformers/pull/29285
         device_type = x.device.type
-        device_type = (
-            device_type
-            if isinstance(device_type, str) and device_type != "mps"
-            else "cpu"
-        )
+        device_type = device_type if isinstance(device_type, str) and device_type != "mps" else "cpu"
         with torch.autocast(device_type=device_type, enabled=False):
-            freqs = (
-                inv_freq_expanded.float() @ position_ids_expanded.float()
-            ).transpose(1, 2)
+            freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)
             emb = torch.cat((freqs, freqs), dim=-1)
             cos = emb.cos()
             sin = emb.sin()
@@ -227,9 +197,7 @@ class GLUActivation(nn.Module):
         self.act = ACT2FN[act_fn_name]
 
     def forward(self, merged_states: torch.Tensor):
-        gate_states, up_states = torch.split(
-            merged_states, merged_states.shape[-1] // 2, dim=-1
-        )
+        gate_states, up_states = torch.split(merged_states, merged_states.shape[-1] // 2, dim=-1)
         return self.act(gate_states) * up_states
 
 
@@ -243,15 +211,9 @@ class MLP(nn.Module):
         super().__init__()
 
         # TODO @thomasw21: refactor so that we store that default in a single place.
-        tp_mode = (
-            parallel_config.tp_mode
-            if parallel_config is not None
-            else TensorParallelLinearMode.ALL_REDUCE
-        )
+        tp_mode = parallel_config.tp_mode if parallel_config is not None else TensorParallelLinearMode.ALL_REDUCE
         tp_linear_async_communication = (
-            parallel_config.tp_linear_async_communication
-            if parallel_config is not None
-            else False
+            parallel_config.tp_linear_async_communication if parallel_config is not None else False
         )
 
         gate_up_contiguous_chunks = (
@@ -274,8 +236,7 @@ class MLP(nn.Module):
             pg=tp_pg,
             mode=tp_mode,
             bias=False,
-            async_communication=tp_linear_async_communication
-            and tp_mode is TensorParallelLinearMode.REDUCE_SCATTER,
+            async_communication=tp_linear_async_communication and tp_mode is TensorParallelLinearMode.REDUCE_SCATTER,
         )
         self.split_silu_mul = GLUActivation(config.hidden_act)
 
@@ -286,12 +247,7 @@ class MLP(nn.Module):
 
 
 class CoreAttention(nn.Module):
-    def __init__(
-        self,
-        config: LlamaConfig,
-        parallel_config: Optional[ParallelismArgs],
-        layer_idx: int,
-    ):
+    def __init__(self, config: LlamaConfig, parallel_config: Optional[ParallelismArgs], layer_idx: int):
         super().__init__()
         # TODO @thomasw21: GPT has a weird `d_kv` config which I'm guessing is essentically a `d_qkv`
         assert (
@@ -301,9 +257,7 @@ class CoreAttention(nn.Module):
         self.d_v = config.hidden_size // config.num_attention_heads
         self.is_using_mup = config.is_using_mup
 
-        self.checkpoint_attention = (
-            False  # Because flash_attn already does checkpointing
-        )
+        self.checkpoint_attention = False  # Because flash_attn already does checkpointing
 
     @checkpoint_method(attr_name="checkpoint_attention")
     def forward(
@@ -317,28 +271,10 @@ class CoreAttention(nn.Module):
         from flash_attn.flash_attn_interface import flash_attn_varlen_func
 
         # TODO @thomasw21: Compute once, instead of computing for each layers.
-        cu_seqlens_q = torch.zeros(
-            (q_sequence_mask.shape[0] + 1),
-            dtype=torch.int32,
-            device=query_states.device,
-        )
-        cu_seqlens_k = torch.zeros(
-            (kv_sequence_mask.shape[0] + 1),
-            dtype=torch.int32,
-            device=query_states.device,
-        )
-        torch.cumsum(
-            q_sequence_mask.sum(-1, dtype=torch.int32),
-            dim=0,
-            dtype=torch.int32,
-            out=cu_seqlens_q[1:],
-        )
-        torch.cumsum(
-            kv_sequence_mask.sum(-1, dtype=torch.int32),
-            dim=0,
-            dtype=torch.int32,
-            out=cu_seqlens_k[1:],
-        )
+        cu_seqlens_q = torch.zeros((q_sequence_mask.shape[0] + 1), dtype=torch.int32, device=query_states.device)
+        cu_seqlens_k = torch.zeros((kv_sequence_mask.shape[0] + 1), dtype=torch.int32, device=query_states.device)
+        torch.cumsum(q_sequence_mask.sum(-1, dtype=torch.int32), dim=0, dtype=torch.int32, out=cu_seqlens_q[1:])
+        torch.cumsum(kv_sequence_mask.sum(-1, dtype=torch.int32), dim=0, dtype=torch.int32, out=cu_seqlens_k[1:])
 
         # TODO(kunhao): flash attn's causal means that the query can only attend to the keys before it. This is not
         # what we want if we are using kv cache. This is a hack as we always have q_length == 1 when using kv cache.
@@ -426,24 +362,16 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         self.n_local_q_heads = config.num_attention_heads // tp_pg.size()
         self.n_local_kv_heads = config.num_key_value_heads // tp_pg.size()
         self.n_repeats = config.num_attention_heads // config.num_key_value_heads
-        self.is_gqa = (
-            config.num_attention_heads != config.num_key_value_heads
-        )  # Whether we are using GQA or not
+        self.is_gqa = config.num_attention_heads != config.num_key_value_heads  # Whether we are using GQA or not
         self.d_qk = config.hidden_size // config.num_attention_heads
         self.d_v = config.hidden_size // config.num_attention_heads
         self.d_model = config.hidden_size
         self.is_using_mup = config.is_using_mup
 
         # TODO @thomasw21: refactor so that we store that default in a single place.
-        tp_mode = (
-            parallel_config.tp_mode
-            if parallel_config is not None
-            else TensorParallelLinearMode.ALL_REDUCE
-        )
+        tp_mode = parallel_config.tp_mode if parallel_config is not None else TensorParallelLinearMode.ALL_REDUCE
         tp_linear_async_communication = (
-            parallel_config.tp_linear_async_communication
-            if parallel_config is not None
-            else False
+            parallel_config.tp_linear_async_communication if parallel_config is not None else False
         )
 
         # build the slice config for self.qkv for save/load
@@ -455,8 +383,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         )
         self.qkv_proj = TensorParallelColumnLinear(
             self.d_model,
-            config.num_attention_heads * self.d_qk
-            + 2 * config.num_key_value_heads * self.d_qk,
+            config.num_attention_heads * self.d_qk + 2 * config.num_key_value_heads * self.d_qk,
             pg=tp_pg,
             mode=tp_mode,
             bias=False,
@@ -531,25 +458,17 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             )
 
             query_states = (
-                query_states.transpose(0, 1)
-                .contiguous()
-                .view(batch_size, q_length, self.n_local_q_heads, self.d_qk)
+                query_states.transpose(0, 1).contiguous().view(batch_size, q_length, self.n_local_q_heads, self.d_qk)
             )
             key_states = (
-                key_states.transpose(0, 1)
-                .contiguous()
-                .view(batch_size, q_length, self.n_local_kv_heads, self.d_qk)
+                key_states.transpose(0, 1).contiguous().view(batch_size, q_length, self.n_local_kv_heads, self.d_qk)
             )
             value_states = (
-                value_states.transpose(0, 1)
-                .contiguous()
-                .view(batch_size, q_length, self.n_local_kv_heads, self.d_qk)
+                value_states.transpose(0, 1).contiguous().view(batch_size, q_length, self.n_local_kv_heads, self.d_qk)
             )
         else:
             query_states, key_states, value_states = (
-                qkv_states.view(
-                    q_length, batch_size, 3, self.n_local_q_heads, self.d_qk
-                )
+                qkv_states.view(q_length, batch_size, 3, self.n_local_q_heads, self.d_qk)
                 .permute(2, 1, 0, 3, 4)
                 .contiguous()
             )  # [3, batch_size, seq_length, n_local_q_heads, d_qk]
@@ -563,9 +482,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                 old_position_offsets = store["position_offsets"]
                 position_ids = old_position_offsets[:, None] + sequence_mask
             else:
-                position_ids = (
-                    torch.cumsum(sequence_mask, dim=-1, dtype=torch.int32) - 1
-                )
+                position_ids = torch.cumsum(sequence_mask, dim=-1, dtype=torch.int32) - 1
             position_offsets = position_ids[:, -1]
 
             # Compute rotary embeddings
@@ -573,12 +490,8 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             old_rotary_embed_end = self.rotary_embedding.end
             # interleaved version.
             if self.rope_interleaved:
-                query_states = self.rotary_embedding(
-                    query_states, position_ids=position_ids
-                )
-                key_states = self.rotary_embedding(
-                    key_states, position_ids=position_ids
-                )
+                query_states = self.rotary_embedding(query_states, position_ids=position_ids)
+                key_states = self.rotary_embedding(key_states, position_ids=position_ids)
             # non interleaved version.
             else:
                 cos, sin = self.rotary_embedding(value_states, position_ids)
@@ -592,8 +505,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                 # assert that [ False, False, False, False,  True,  True,  True,  True,  True,  True] is accepted
                 # but [ False, False, False, False,  True,  True,  False,  False,  True,  True] is not (can't mask in the middle of sequence)
                 assert ~(
-                    sequence_mask[:, :-1]
-                    & (~sequence_mask[:, 1:])  # True is never followed by False
+                    sequence_mask[:, :-1] & (~sequence_mask[:, 1:])  # True is never followed by False
                 ).any(), "Can't mask in the middle of sequence, please make sure that pads are at the left of the sequence if existing"
 
                 # preallocate k_cache, v_cache to self.prefill_kv_len
@@ -614,24 +526,18 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                 )
                 # Remove pad tokens from key_states and concatenate samples in key_unpad
                 # cu_seqlens_k is the cumulative sequence lengths of key_states
-                (query_unpad, indices_q, cu_seqlens_q, max_seqlen_q, _) = (
-                    bert_padding.unpad_input(
-                        query_states,
-                        sequence_mask,
-                    )
+                (query_unpad, indices_q, cu_seqlens_q, max_seqlen_q, _) = bert_padding.unpad_input(
+                    query_states,
+                    sequence_mask,
                 )
-                (key_unpad, indices_k, cu_seqlens_k, max_seqlen_k, _) = (
-                    bert_padding.unpad_input(key_states, sequence_mask)
+                (key_unpad, indices_k, cu_seqlens_k, max_seqlen_k, _) = bert_padding.unpad_input(
+                    key_states, sequence_mask
                 )
-                (value_unpad, _, _, _, _) = bert_padding.unpad_input(
-                    value_states, sequence_mask
-                )
+                (value_unpad, _, _, _, _) = bert_padding.unpad_input(value_states, sequence_mask)
 
                 # NOTE: this scale is for µTransfer,
                 # in SP, we use sqrt(1/d_h)
-                softmax_scale = (
-                    1 / query_states.shape[-1] if self.is_using_mup else None
-                )
+                softmax_scale = 1 / query_states.shape[-1] if self.is_using_mup else None
                 output_unpad = flash_attn_varlen_func(
                     q=query_unpad,  # (total_q, n_local_q_heads, d_qk)
                     k=key_unpad,  # (total_kv, n_local_kv_heads, d_qk)
@@ -717,9 +623,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
 
                 # NOTE: this scale is for µTransfer,
                 # in SP, we use sqrt(1/d_h)
-                softmax_scale = (
-                    1 / query_states.shape[-1] if self.is_using_mup else None
-                )
+                softmax_scale = 1 / query_states.shape[-1] if self.is_using_mup else None
                 attention_output = flash_attn_with_kvcache(
                     query_states,
                     k_cache,
@@ -748,14 +652,10 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             # NOTE: The layout is different from models/llama.py which is [batch_size, num_heads, seq_length, d_qk]
             # Here it is, [batch_size, seq_length, num_heads, d_qk]
             # [2, batch_size, seq_length, num_heads, d_qk]
-            key_value_states = torch.cat(
-                [key_states.unsqueeze(0), value_states.unsqueeze(0)], dim=0
-            )
+            key_value_states = torch.cat([key_states.unsqueeze(0), value_states.unsqueeze(0)], dim=0)
             # [batch_size, seq_length, 2, num_heads, d_qk]
             key_value_states = key_value_states.permute(1, 2, 0, 3, 4).contiguous()
-            query_states, key_value_states = self.flash_rotary_embedding(
-                query_states, kv=key_value_states
-            )
+            query_states, key_value_states = self.flash_rotary_embedding(query_states, kv=key_value_states)
             # [batch_size, seq_length, num_heads, d_qk]
             key_states, value_states = torch.split(key_value_states, 1, dim=2)
 
@@ -785,9 +685,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             )
 
         attention_output = (
-            attention_output.contiguous()
-            .view(batch_size, q_length, self.n_local_q_heads * self.d_v)
-            .transpose(0, 1)
+            attention_output.contiguous().view(batch_size, q_length, self.n_local_q_heads * self.d_v).transpose(0, 1)
         )
         output = self.o_proj(attention_output)
 
@@ -803,9 +701,7 @@ class LlamaDecoderLayer(nn.Module):
         layer_idx: int,
     ):
         super().__init__()
-        self.input_layernorm = TritonRMSNorm(
-            config.hidden_size, eps=config.rms_norm_eps
-        )
+        self.input_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.attn = CausalSelfAttention(
             config=config,
             parallel_config=parallel_config,
@@ -813,9 +709,7 @@ class LlamaDecoderLayer(nn.Module):
             layer_idx=layer_idx,
         )
 
-        self.post_attention_layernorm = TritonRMSNorm(
-            config.hidden_size, eps=config.rms_norm_eps
-        )
+        self.post_attention_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.mlp = MLP(config=config, parallel_config=parallel_config, tp_pg=tp_pg)
 
         self.recompute_layer = parallel_config.recompute_layer
@@ -844,9 +738,7 @@ class LlamaDecoderLayer(nn.Module):
         hidden_states: torch.Tensor,
         sequence_mask: torch.Tensor,
     ) -> List[torch.Tensor]:
-        return CheckpointFunction.apply(
-            self._core_forward, True, hidden_states, sequence_mask
-        )
+        return CheckpointFunction.apply(self._core_forward, True, hidden_states, sequence_mask)
 
     def forward(
         self,
@@ -855,13 +747,9 @@ class LlamaDecoderLayer(nn.Module):
     ) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
 
         if self.recompute_layer and not isinstance(hidden_states, TensorPointer):
-            hidden_states, sequence_mask = self._checkpointed_forward(
-                hidden_states, sequence_mask
-            )
+            hidden_states, sequence_mask = self._checkpointed_forward(hidden_states, sequence_mask)
         else:
-            hidden_states, sequence_mask = self._core_forward(
-                hidden_states, sequence_mask
-            )
+            hidden_states, sequence_mask = self._core_forward(hidden_states, sequence_mask)
 
         return {
             "hidden_states": hidden_states,
@@ -870,37 +758,24 @@ class LlamaDecoderLayer(nn.Module):
 
 
 class Embedding(nn.Module, AttachableStore):
-    def __init__(
-        self,
-        tp_pg: dist.ProcessGroup,
-        config: LlamaConfig,
-        parallel_config: Optional[ParallelismArgs],
-    ):
+    def __init__(self, tp_pg: dist.ProcessGroup, config: LlamaConfig, parallel_config: Optional[ParallelismArgs]):
         super().__init__()
         self.token_embedding = TensorParallelEmbedding(
             num_embeddings=config.vocab_size,
             embedding_dim=config.hidden_size,
             padding_idx=config.pad_token_id,
             pg=tp_pg,
-            mode=(
-                parallel_config.tp_mode
-                if parallel_config is not None
-                else TensorParallelLinearMode.ALL_REDUCE
-            ),
+            mode=parallel_config.tp_mode if parallel_config is not None else TensorParallelLinearMode.ALL_REDUCE,
         )
         self.pg = tp_pg
 
-    def forward(
-        self, input_ids: torch.Tensor, input_mask: torch.Tensor
-    ):  # [batch_size, seq_length]
+    def forward(self, input_ids: torch.Tensor, input_mask: torch.Tensor):  # [batch_size, seq_length]
         store = self.get_local_store()
         if store is not None:
             if "past_length" in store:
                 past_length = store["past_length"]
             else:
-                past_length = torch.zeros(
-                    1, dtype=torch.long, device=input_ids.device
-                ).expand(input_ids.shape[0])
+                past_length = torch.zeros(1, dtype=torch.long, device=input_ids.device).expand(input_ids.shape[0])
 
             cumsum_mask = input_mask.cumsum(-1, dtype=torch.long)
             # Store new past_length in store
@@ -928,15 +803,9 @@ class LlamaModel(nn.Module):
         self.config = config
         self.parallel_config = parallel_config
         self.parallel_context = parallel_context
-        self.tp_mode = (
-            parallel_config.tp_mode
-            if parallel_config is not None
-            else TensorParallelLinearMode.ALL_REDUCE
-        )
+        self.tp_mode = parallel_config.tp_mode if parallel_config is not None else TensorParallelLinearMode.ALL_REDUCE
         tp_linear_async_communication = (
-            parallel_config.tp_linear_async_communication
-            if parallel_config is not None
-            else False
+            parallel_config.tp_linear_async_communication if parallel_config is not None else False
         )
 
         self.token_position_embeddings = PipelineBlock(
@@ -950,12 +819,7 @@ class LlamaModel(nn.Module):
             module_input_keys={"input_ids", "input_mask"},
             module_output_keys={"input_embeds"},
         )
-        log_rank(
-            f"Initialize RoPE Theta = {config.rope_theta}",
-            logger=logger,
-            level=logging.INFO,
-            rank=0,
-        )
+        log_rank(f"Initialize RoPE Theta = {config.rope_theta}", logger=logger, level=logging.INFO, rank=0)
         if config.rope_interleaved:
             log_rank(
                 "The RoPE interleaved version differs from the Transformers implementation. It's better to set rope_interleaved=False if you need to convert the weights to Transformers",
@@ -984,10 +848,7 @@ class LlamaModel(nn.Module):
         self.final_layer_norm = PipelineBlock(
             p2p=self.p2p,
             module_builder=TritonRMSNorm,
-            module_kwargs={
-                "hidden_size": config.hidden_size,
-                "eps": config.rms_norm_eps,
-            },
+            module_kwargs={"hidden_size": config.hidden_size, "eps": config.rms_norm_eps},
             module_input_keys={"input"},
             module_output_keys={"hidden_states"},
         )  # TODO
@@ -1023,9 +884,7 @@ class LlamaModel(nn.Module):
         input_ids: Union[torch.Tensor, TensorPointer],  # [batch_size, seq_length]
         input_mask: Union[torch.Tensor, TensorPointer],  # [batch_size, seq_length]
     ):
-        return self.forward_with_hidden_states(
-            input_ids=input_ids, input_mask=input_mask
-        )[0]
+        return self.forward_with_hidden_states(input_ids=input_ids, input_mask=input_mask)[0]
 
     def forward_with_hidden_states(
         self,
@@ -1034,9 +893,7 @@ class LlamaModel(nn.Module):
     ):
         # all tensors are optional as most ranks don't need anything from the dataloader.
 
-        output = self.token_position_embeddings(
-            input_ids=input_ids, input_mask=input_mask
-        )
+        output = self.token_position_embeddings(input_ids=input_ids, input_mask=input_mask)
 
         hidden_encoder_states = {
             "hidden_states": output["input_embeds"],
@@ -1045,9 +902,7 @@ class LlamaModel(nn.Module):
         for encoder_block in self.decoder:
             hidden_encoder_states = encoder_block(**hidden_encoder_states)
 
-        hidden_states = self.final_layer_norm(
-            input=hidden_encoder_states["hidden_states"]
-        )["hidden_states"]
+        hidden_states = self.final_layer_norm(input=hidden_encoder_states["hidden_states"])["hidden_states"]
 
         sharded_logits = self.lm_head(x=hidden_states)["logits"]
 
@@ -1062,20 +917,14 @@ class LlamaModel(nn.Module):
         d_qkv = model_config.hidden_size // model_config.num_attention_heads
         block_compute_costs = {
             # CausalSelfAttention (qkv proj + attn out) + MLP
-            LlamaDecoderLayer: 4
-            * model_config.num_attention_heads
-            * d_qkv
-            * model_config.hidden_size
+            LlamaDecoderLayer: 4 * model_config.num_attention_heads * d_qkv * model_config.hidden_size
             + 3 * d_ff * model_config.hidden_size,
             # This is the last lm_head
-            TensorParallelColumnLinear: model_config.vocab_size
-            * model_config.hidden_size,
+            TensorParallelColumnLinear: model_config.vocab_size * model_config.hidden_size,
         }
         return block_compute_costs
 
-    def get_flops_per_sec(
-        self, iteration_time_in_sec, sequence_length, global_batch_size
-    ):
+    def get_flops_per_sec(self, iteration_time_in_sec, sequence_length, global_batch_size):
         """Get flops per second for a given model"""
         world_size = self.parallel_context.world_pg.size()
         try:
@@ -1095,9 +944,7 @@ class LlamaModel(nn.Module):
         )
 
         model_flops_per_s = model_flops / (iteration_time_in_sec * world_size * 1e12)
-        hardware_flops_per_s = hardware_flops / (
-            iteration_time_in_sec * world_size * 1e12
-        )
+        hardware_flops_per_s = hardware_flops / (iteration_time_in_sec * world_size * 1e12)
         return model_flops_per_s, hardware_flops_per_s
 
 
@@ -1122,10 +969,7 @@ class Loss(nn.Module):
         # https://github.com/NVIDIA/Megatron-LM/blob/f267e6186eae1d6e2055b412b00e2e545a8e896a/megatron/model/gpt_model.py#L38
 
         loss = sharded_cross_entropy(
-            sharded_logits,
-            label_ids.transpose(0, 1).contiguous(),
-            group=self.tp_pg,
-            dtype=torch.float,
+            sharded_logits, label_ids.transpose(0, 1).contiguous(), group=self.tp_pg, dtype=torch.float
         ).transpose(0, 1)
         # TODO @thomasw21: It's unclear what kind of normalization we want to do.
         loss = masked_mean(loss, label_mask, dtype=torch.float)
@@ -1143,11 +987,7 @@ class LlamaForTraining(NanotronModel):
         random_states: Optional[RandomStates] = None,
     ):
         super().__init__()
-        self.model = LlamaModel(
-            config=config,
-            parallel_context=parallel_context,
-            parallel_config=parallel_config,
-        )
+        self.model = LlamaModel(config=config, parallel_context=parallel_context, parallel_config=parallel_config)
         self.loss = PipelineBlock(
             p2p=self.model.p2p,
             module_builder=Loss,
@@ -1207,10 +1047,7 @@ class LlamaForTraining(NanotronModel):
         model = self
         initialized_parameters = set()
         # Handle tensor parallelism
-        module_id_to_prefix = {
-            id(module): f"{module_name}."
-            for module_name, module in model.named_modules()
-        }
+        module_id_to_prefix = {id(module): f"{module_name}." for module_name, module in model.named_modules()}
         # Fix the root_model
         module_id_to_prefix[id(model)] = ""
 
@@ -1238,23 +1075,16 @@ class LlamaForTraining(NanotronModel):
             initialized_parameters.add(full_param_name)
 
         assert initialized_parameters == {
-            (
-                param.get_tied_info().get_full_name_from_module_id_to_prefix(
-                    module_id_to_prefix=module_id_to_prefix
-                )
-                if param.is_tied
-                else name
-            )
+            param.get_tied_info().get_full_name_from_module_id_to_prefix(module_id_to_prefix=module_id_to_prefix)
+            if param.is_tied
+            else name
             for name, param in model.named_parameters()
         }, f"Somehow the initialized set of parameters don't match:\n - Expected: { {name for name, _ in model.named_parameters()} }\n - Got: {initialized_parameters}"
 
     def get_embeddings_lm_head_tied_names(self):
         """Get the names of the tied embeddings and lm_head weights"""
         if self.config.tie_word_embeddings is True:
-            return [
-                "model.token_position_embeddings.pp_block.token_embedding.weight",
-                "model.lm_head.pp_block.weight",
-            ]
+            return ["model.token_position_embeddings.pp_block.token_embedding.weight", "model.lm_head.pp_block.weight"]
         else:
             return []
 
@@ -1262,13 +1092,9 @@ class LlamaForTraining(NanotronModel):
         """Computes the compute cost of each block in the model so that we can do a better job of load balancing."""
         return self.model.get_block_compute_costs()
 
-    def get_flops_per_sec(
-        self, iteration_time_in_sec, sequence_length, global_batch_size
-    ):
+    def get_flops_per_sec(self, iteration_time_in_sec, sequence_length, global_batch_size):
         """Get flops per second for a given model"""
-        return self.model.get_flops_per_sec(
-            iteration_time_in_sec, sequence_length, global_batch_size
-        )
+        return self.model.get_flops_per_sec(iteration_time_in_sec, sequence_length, global_batch_size)
 
 
 def get_flops(
@@ -1303,61 +1129,22 @@ def get_flops(
     # self attention
     ## qkv projection
     decoder_qkv_proj_flops_fwd = (
-        2
-        * num_layers
-        * batch_size
-        * seq_len
-        * (hidden_size)
-        * num_heads
-        * hidden_size_per_head
-        + 2
-        * num_layers
-        * batch_size
-        * seq_len
-        * (hidden_size)
-        * 2
-        * num_key_value_heads
-        * hidden_size_per_head
+        2 * num_layers * batch_size * seq_len * (hidden_size) * num_heads * hidden_size_per_head
+        + 2 * num_layers * batch_size * seq_len * (hidden_size) * 2 * num_key_value_heads * hidden_size_per_head
     )
     ## qk logits
-    decoder_qk_logits_flops_fwd = (
-        2
-        * num_layers
-        * batch_size
-        * num_heads
-        * seq_len
-        * (hidden_size_per_head)
-        * seq_len
-    )
+    decoder_qk_logits_flops_fwd = 2 * num_layers * batch_size * num_heads * seq_len * (hidden_size_per_head) * seq_len
     ## v logits
-    decoder_v_logits_flops_fwd = (
-        2
-        * num_layers
-        * batch_size
-        * num_heads
-        * seq_len
-        * (seq_len)
-        * hidden_size_per_head
-    )
+    decoder_v_logits_flops_fwd = 2 * num_layers * batch_size * num_heads * seq_len * (seq_len) * hidden_size_per_head
     ## attn out
     decoder_attn_out_flops_fwd = (
-        2
-        * num_layers
-        * batch_size
-        * num_heads
-        * seq_len
-        * (hidden_size_per_head)
-        * hidden_size
+        2 * num_layers * batch_size * num_heads * seq_len * (hidden_size_per_head) * hidden_size
     )
     # FF
     ## 1st layer
-    decoder_ffn_1_flops_fwd = (
-        4 * num_layers * batch_size * seq_len * (hidden_size) * ffn_hidden_size
-    )
+    decoder_ffn_1_flops_fwd = 4 * num_layers * batch_size * seq_len * (hidden_size) * ffn_hidden_size
     ## 2nd layer
-    decoder_ffn_2_flops_fwd = (
-        2 * num_layers * batch_size * seq_len * (ffn_hidden_size) * hidden_size
-    )
+    decoder_ffn_2_flops_fwd = 2 * num_layers * batch_size * seq_len * (ffn_hidden_size) * hidden_size
 
     decoder_flops_fwd = (
         decoder_qkv_proj_flops_fwd
