@@ -3,7 +3,6 @@ from typing import Union
 import pytest
 import torch
 from helpers.dummy import DummyModel, dummy_infinite_data_loader
-from helpers.utils import available_gpus, init_distributed, rerun_if_address_is_in_use
 from nanotron import distributed as dist
 from nanotron.models import init_on_device_and_dtype
 from nanotron.parallel import ParallelContext
@@ -15,6 +14,7 @@ from nanotron.parallel.pipeline_parallel.engine import (
 )
 from nanotron.parallel.pipeline_parallel.p2p import P2P
 from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
+from nanotron.testing.utils import available_gpus, init_distributed, rerun_if_address_is_in_use
 from torch import nn
 from torch.nn import functional as F
 

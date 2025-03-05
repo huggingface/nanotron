@@ -2,7 +2,6 @@ import os
 
 import pytest
 import torch
-from helpers.utils import available_gpus, init_distributed, rerun_if_address_is_in_use
 from nanotron import distributed as dist
 from nanotron.distributed import get_global_rank
 from nanotron.parallel import ParallelContext
@@ -12,6 +11,7 @@ from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelEmbedding,
     TensorParallelRowLinear,
 )
+from nanotron.testing.utils import available_gpus, init_distributed, rerun_if_address_is_in_use
 from torch import nn as torch_nn
 
 

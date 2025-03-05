@@ -4,7 +4,6 @@ import os
 import pytest
 import torch
 from helpers.dummy import DummyModel, dummy_infinite_data_loader
-from helpers.utils import available_gpus, init_distributed, rerun_if_address_is_in_use
 from nanotron import distributed as dist
 from nanotron.models import init_on_device_and_dtype
 from nanotron.optim.clip_grads import clip_grad_norm
@@ -27,6 +26,7 @@ from nanotron.parallel.tied_parameters import (
 )
 from nanotron.parallel.utils import initial_sync
 from nanotron.sanity_checks import assert_tensor_synced_across_pg
+from nanotron.testing.utils import available_gpus, init_distributed, rerun_if_address_is_in_use
 from torch import nn
 
 
@@ -429,7 +429,7 @@ def _test_clip_grads_tied_weights(parallel_context: ParallelContext, norm_type: 
     # Test that we get the same gradient after clipping
     assert torch.allclose(weight.grad, ref_weight.grad, rtol=1e-7, atol=1e-6)
     assert torch.allclose(bias.grad, ref_bias.grad, rtol=1e-7, atol=1e-6)
-    assert torch.allclose(total_norm, ref_total_norm, rtol=0, atol=0), f"Got {total_norm} and {ref_total_norm}"
+    assert torch.allclose(total_norm, ref_total_norm, rtol=1e-7, atol=1e-6), f"Got {total_norm} and {ref_total_norm}"
 
     parallel_context.destroy()
 

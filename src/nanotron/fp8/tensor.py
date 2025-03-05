@@ -1,42 +1,203 @@
-import torch
-import transformer_engine as te  # noqa
-import transformer_engine_extensions as tex
+from __future__ import annotations
 
+import warnings
+from abc import abstractstaticmethod
+from copy import deepcopy
+from typing import Optional, Union, cast
+
+import torch
+
+from nanotron import logging
 from nanotron.fp8.constants import DTYPE_TO_FP8_MAX, FP8_DTYPES, INITIAL_SCALING_FACTOR
 from nanotron.fp8.dtypes import DTypes
+from nanotron.fp8.meta import FP8Meta
+
+try:
+    import transformer_engine as te  # noqa
+    import transformer_engine_torch as tex  # noqa
+except ImportError:
+    warnings.warn("Please install Transformer engine for FP8 training!")
 
 
-class FP8Tensor(torch.Tensor):
-    """FP8 Tensor."""
+logger = logging.get_logger(__name__)
 
-    def __new__(cls, tensor: torch.Tensor, dtype: DTypes) -> torch.Tensor:
+
+class LowPrecisionTensor(torch.Tensor):
+    def __new__(
+        cls,
+        tensor: torch.Tensor,
+        dtype: Optional[DTypes] = None,
+        interval: Optional[int] = 1,
+        fp8_meta: Optional[FP8Meta] = None,
+        sync: bool = False,
+    ) -> torch.Tensor:
         assert isinstance(tensor, torch.Tensor), "tensor must be a tensor"
-        assert tensor.dtype not in FP8_DTYPES, "The tensor already quantized to FP8"
-        
-        # TODO(xrsrke): there is a circular import issue
-        # between tensor.py and meta.py fix this
-        from nanotron.fp8.meta import FP8Meta
 
         # TODO(xrsrke): if the tensor is on cpu, then bypass the quantization
         # because the current kernels only support gpu tensor
         assert tensor.device != torch.device("cpu"), "FP8Tensor only supports CUDA device"
-        assert isinstance(dtype, DTypes)
 
-        amax = tensor.abs().max().clone()
-        scale = update_scaling_factor(amax, torch.tensor(INITIAL_SCALING_FACTOR, dtype=torch.float32), dtype)
-        fp8_meta = FP8Meta(amax, scale, dtype)
-        fp8_tensor = convert_tensor_to_fp8(tensor, fp8_meta)
+        if fp8_meta is None:
+            assert dtype in [DTypes.FP8E4M3, DTypes.FP8E5M2, DTypes.KFLOAT16]
+
+            with torch.no_grad():
+                fp8_meta = cls._get_metadata(tensor, dtype, interval, sync=sync)
+
+        backup_fp8_meta = deepcopy(fp8_meta)
+        if tensor.dtype not in FP8_DTYPES:
+            fp8_tensor = cls._quantize(tensor, fp8_meta)
+        else:
+            fp8_tensor = tensor
 
         # TODO(xrsrke): move update inverse scaling to FP8Meta's initialization
         obj = torch.Tensor._make_subclass(cls, fp8_tensor)
-        obj.fp8_meta = fp8_meta
+        # TODO(xrsrke): use a different name, because FP16Tensor also has fp8_meta
+        obj.fp8_meta = backup_fp8_meta
+
         return obj
 
+    def __init__(
+        self,
+        tensor: torch.Tensor,
+        dtype: Optional[DTypes] = None,
+        interval: Optional[int] = 1,
+        fp8_meta: Optional[FP8Meta] = None,
+        sync: bool = False,
+    ) -> None:
+        pass
+
+    @staticmethod
+    # @torch.no_grad()
+    def _get_metadata(tensor: torch.Tensor, dtype: DTypes, interval: int, sync: bool) -> "FP8Meta":
+        # TODO(xrsrke): there is a circular import issue
+        # between tensor.py and meta.py fix this
+        from nanotron.fp8.meta import FP8Meta
+
+        # NOTE: detach from original computational graph
+        amax = tensor.amax().clone()
+
+        scale = update_scaling_factor(amax, torch.tensor(INITIAL_SCALING_FACTOR, dtype=torch.float32), dtype)
+        scale = scale.clone().detach()
+        fp8_meta = FP8Meta(amax, scale, dtype, interval)
+        return fp8_meta
+
+    @abstractstaticmethod
+    def _quantize(tensor: torch.Tensor, fp8_meta: "FP8Meta") -> torch.Tensor:
+        ...
+
+    def mul_(self, other: torch.Tensor):
+
+        assert isinstance(other, torch.Tensor)
+        assert (
+            other.ndim == 0 or other.ndim == 1
+        ), "FP8Tensor don't support directly do matrix multiplication in FP8. You should cast it to a higher precision format."
+
+        other = other.squeeze() if other.ndim == 1 else other
+        self.fp8_meta = cast(FP8Meta, self.fp8_meta)
+        self.fp8_meta.scale = 1 / (self.fp8_meta.inverse_scale * other)
+
+    def div_(self, other: torch.Tensor):
+        assert isinstance(other, torch.Tensor)
+        assert (
+            other.ndim == 0 or other.ndim == 1
+        ), "FP8Tensor don't support directly do matrix division in FP8. You should cast it to a higher precision format."
+        self.mul_(1 / other)
+
+    def __add__(self, other: torch.Tensor):
+        raise ValueError(
+            "You can't directly add a FP8Tensor with another tensor. You should cast it to a higher precision format"
+        )
+
+    def __sub__(self, other: torch.Tensor):
+        raise ValueError(
+            "You can't directly subtract a FP8Tensor with another tensor. You should cast it to a higher precision format"
+        )
+
+    # TODO(xrsrke): need some more work to make it work with torch.equal
+    def __eq__(self, other: LowPrecisionTensor) -> bool:
+        assert isinstance(
+            other, self.__class__
+        ), "Expected other tensor to be an instance of {self.__class__}, got {other.__class__}"
+        return True if self.fp8_meta == other.fp8_meta and torch.equal(self.data, other.data) else False
+
+    # TODO(xrsrke): directly set a tensor data using tensor.data = new_data
+    def set_data(self, data: Union[torch.Tensor, LowPrecisionTensor, None], sync: bool = False):
+        assert isinstance(data, (self.__class__, torch.Tensor)), f"data must be a torch.Tensor or a {self.__class__}"
+        if data.__class__ in [FP8Tensor, FP16Tensor]:
+            assert data.dtype == self.data.dtype, "The data must have the same dtype as the tensor, got {data.dtype}"
+            quantized_data = data
+        else:
+            quantized_data = self.__class__(
+                data, dtype=self.fp8_meta.dtype, interval=self.fp8_meta.interval, sync=sync
+            )
+
+        self.data = quantized_data.data
+        self._orig_data_after_set_data = data
+
+        self.fp8_meta.add_amax(quantized_data.fp8_meta.amax)
+
+    @staticmethod
+    @torch.no_grad()
+    def from_metadata(data: torch.Tensor, metadata: "FP8Meta", sync: bool = False) -> Union[FP8Tensor, FP16Tensor]:
+        assert isinstance(data, (FP8Tensor, torch.Tensor)), "data must be a torch.Tensor or a FP8Tensor"
+        # NOTE: don't do deepcopy, because we reuse the same metadata
+        # for other iterations in fp8linear
+        amax = data.abs().max().clone()
+        metadata.add_amax(amax)
+
+        quantized_data = FP8Tensor(data, metadata.dtype, metadata.interval, fp8_meta=metadata, sync=sync)
+        return quantized_data
+
+    def transpose_fp8(self) -> FP8Tensor:
+        """Transpose the tensor."""
+        transposed_t = tex.fp8_transpose(self, self.fp8_meta.te_dtype)
+        transposed_t.fp8_meta = self.fp8_meta
+        return self.__class__(transposed_t, fp8_meta=self.fp8_meta)
+
     def __repr__(self) -> str:
-        return f"FP8Tensor({self}, fp8_meta={self.fp8_meta})"
+        if hasattr(self, "fp8_meta"):
+            if self.__class__ == FP16Tensor:
+                return f"FP16Tensor({repr(self.data)}, fp8_meta={self.fp8_meta})"
+            elif self.__class__ == FP8Tensor:
+                return f"FP8Tensor({repr(self.data)}, fp8_meta={self.fp8_meta})"
+            else:
+                raise ValueError(f"Unknown tensor class: {self.__class__}")
+
+        return super().__repr__()
+
+    def clone(self) -> FP8Tensor:
+        tensor = super().clone()
+        tensor.fp8_meta = deepcopy(self.fp8_meta)
+        return tensor
 
 
-def convert_torch_dtype_to_te_dtype(dtype: torch.dtype) -> tex.DType:
+class FP8Tensor(LowPrecisionTensor):
+    """FP8 Tensor."""
+
+    @staticmethod
+    def _quantize(tensor: torch.Tensor, fp8_meta: "FP8Meta") -> torch.Tensor:
+        assert isinstance(tensor, torch.Tensor)
+        assert tensor.dtype not in FP8_DTYPES, "The tensor already quantized to FP8"
+
+        tensor = tensor.contiguous()
+        return convert_tensor_to_fp8(tensor, fp8_meta)
+
+
+class FP16Tensor(LowPrecisionTensor):
+
+    # TODO(xrsrke): remove specifying the dtype KFLOAT16
+    # in initialization
+    # TODO(xrsrke): change the name to lp_meta = low_precision_meta
+    @staticmethod
+    def _quantize(tensor: torch.Tensor, fp8_meta: "FP8Meta") -> torch.Tensor:
+        assert isinstance(tensor, torch.Tensor)
+
+        tensor = tensor.contiguous()
+        # TODO(xrsrke): convert it to int8 format
+        return (tensor * fp8_meta.scale).to(torch.float16)
+
+
+def convert_torch_dtype_to_te_dtype(dtype: torch.dtype) -> "tex.DType":
     # NOTE: transformer engine maintains it own dtype mapping
     # so we need to manually map torch dtypes to TE dtypes
     TORCH_DTYPE_TE_DTYPE_NAME_MAPPING = {
@@ -44,10 +205,6 @@ def convert_torch_dtype_to_te_dtype(dtype: torch.dtype) -> tex.DType:
         torch.float32: "kFloat32",
         torch.float16: "kFloat16",
         torch.bfloat16: "kBFloat16",
-        # torch.fp8e5m2: "kFloat8E5M2",
-        # torch.fp8e4m3: "kFloat8E4M3",
-        # torch.int8: "kFloat8E5M2",
-        # torch.uint8: "kFloat8E4M3",
         DTypes.FP8E4M3: "kFloat8E4M3",
         DTypes.FP8E5M2: "kFloat8E5M2",
         DTypes.KFLOAT16: "kFloat16",
@@ -74,6 +231,25 @@ def convert_tensor_from_fp8(tensor: torch.Tensor, meta, dtype: torch.dtype) -> t
     return tex.cast_from_fp8(tensor, meta.inverse_scale, tensor_dtype, output_dtype)
 
 
+def convert_tensor_from_fp16(tensor: FP16Tensor, dtype: torch.dtype) -> torch.Tensor:
+    assert isinstance(dtype, torch.dtype)
+    # TODO(xrsrke): this is a hacky way to turn a fp16 tensor to a non-quantize tensor
+    inverse_scale = tensor.fp8_meta.inverse_scale
+    tensor = tensor.clone()
+    tensor = (tensor * inverse_scale).to(dtype)
+    return torch.tensor(tensor, dtype=dtype).squeeze(dim=0)
+
+
+def _convert_tensor_from_fp16(tensor: FP16Tensor, fp8_meta, dtype: torch.dtype) -> torch.Tensor:
+    assert isinstance(dtype, torch.dtype)
+
+    inverse_scale = fp8_meta.inverse_scale
+    tensor = tensor.clone()
+    tensor = (tensor * inverse_scale).to(dtype)
+    return torch.tensor(tensor, dtype=dtype).squeeze(dim=0)
+
+
+# @torch.jit.script
 def update_scaling_factor(
     amax: torch.Tensor, scaling_factor: torch.Tensor, dtype: DTypes, margin: float = 0
 ) -> torch.Tensor:
@@ -81,16 +257,20 @@ def update_scaling_factor(
     Update the scaling factor to quantize a tensor to FP8.
     Credits: https://github.com/Azure/MS-AMP/blob/d562f0f0bcfc9b712fa0726b73428753ff1300ab/msamp/common/tensor/meta.py#L39
     """
-    assert amax.dtype == torch.float32
+    # TODO(xrsrke): sometimes we store some params in fp16
+    # make this configurable
+    assert amax.dtype in [torch.float32, torch.float16, torch.bfloat16], f"amax.dtype: {amax.dtype}"
     # TODO(xrsrke): can we use lower precision for scaling_factor?
     assert scaling_factor.dtype == torch.float32
 
     # NOTE: Since fp8_max is a fixed number based on two FP8 data types,
     # we prefer not to take fp8_max in the input arguments.
+    # NOTE: create cuda tensor slows down by 7%
     fp8_max = torch.tensor(DTYPE_TO_FP8_MAX[dtype], dtype=torch.float32)
 
     # NOTE: torch.jit only take a concrete value rather than a DTYPE_TO_FP8_MAX[dtype],
     # so we create an inner function to bypass that
+
     @torch.jit.script
     def _inner(amax: torch.Tensor, fp8_max: torch.Tensor, scaling_factor: torch.Tensor, margin: float):
         # NOTE: calculate the number of bits to shift the exponent

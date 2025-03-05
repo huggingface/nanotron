@@ -1,12 +1,56 @@
 import pytest
 import torch
 import torch.distributed as dist
-from helpers.llama import TINY_LLAMA_CONFIG, create_llama_from_config, get_llama_training_config
-from helpers.utils import init_distributed, rerun_if_address_is_in_use
 from nanotron.config import Config, ModelArgs, RandomInit
+from nanotron.models.base import init_on_device_and_dtype
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.pipeline_parallel.block import PipelineBlock
+from nanotron.testing.llama import TINY_LLAMA_CONFIG, create_llama_from_config, get_llama_training_config
+from nanotron.testing.utils import init_distributed, rerun_if_address_is_in_use
 from torch import nn
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+@pytest.mark.parametrize("device", [torch.device("cpu"), torch.device("cuda:0")])
+def test_override_dtype_and_device_in_module_init(dtype, device):
+    class ModuleWithBuffer(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.register_buffer("buffer", torch.randn(2, 2))
+            self.weight = nn.Parameter(torch.randn(2, 2))
+
+    with init_on_device_and_dtype(device=device, dtype=dtype):
+        linear = ModuleWithBuffer()
+
+    assert all(p.dtype == dtype for p in linear.parameters())
+    assert all(p.device == device for p in linear.parameters())
+
+    assert all(b.dtype == dtype for b in linear.buffers())
+    assert all(b.device == device for b in linear.buffers())
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+@pytest.mark.parametrize("device", [torch.device("cpu"), torch.device("cuda:0")])
+@rerun_if_address_is_in_use()
+def test_dtype_of_model_initialization(dtype: torch.dtype, device: torch.device):
+    init_distributed(tp=1, dp=1, pp=1)(_test_dtype_of_model_initialization)(dtype=dtype, device=device)
+
+
+def _test_dtype_of_model_initialization(parallel_context: ParallelContext, dtype: torch.dtype, device: torch.device):
+    model_args = ModelArgs(init_method=RandomInit(std=1.0), model_config=TINY_LLAMA_CONFIG)
+    config = get_llama_training_config(model_args)
+    llama = create_llama_from_config(
+        model_config=TINY_LLAMA_CONFIG, device=device, parallel_context=parallel_context, dtype=dtype
+    )
+    llama.init_model_randomly(config=config)
+
+    assert all(p.dtype == dtype for p in llama.parameters())
+    assert all(p.device == device for p in llama.parameters())
+
+    # assert all(b.dtype == dtype for b in llama.buffers())
+    # NOTE: we explicitly cast inv_freq to float32, so skip it
+    assert all(b.dtype == dtype for n, b in llama.named_buffers() if "inv_freq" not in n)
+    assert all(b.device == device for b in llama.buffers())
 
 
 @pytest.mark.parametrize("tp,dp,pp", [(1, 1, 1), (2, 2, 2)])

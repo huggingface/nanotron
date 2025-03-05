@@ -11,6 +11,7 @@ from dacite import from_dict
 from datasets.download.streaming_download_manager import xPath
 from yaml.loader import SafeLoader
 
+from nanotron.config.fp8_config import FP8Args
 from nanotron.config.lighteval_config import LightEvalConfig
 from nanotron.config.models_config import ExistingCheckpointInit, NanotronConfigs, RandomInit, SpectralMupInit
 from nanotron.config.parallelism_config import ParallelismArgs
@@ -353,6 +354,7 @@ class Config:
     profiler: Optional[ProfilerArgs] = None
     lighteval: Optional[LightEvalConfig] = None
     s3_upload: Optional[S3UploadArgs] = None
+    fp8: Optional[FP8Args] = None
 
     @classmethod
     def create_empty(cls):
@@ -400,6 +402,10 @@ class Config:
         # if self.checkpoints.lighteval is not None:
         #     assert self.tokenizer.tokenizer_name_or_path is not None
 
+        if self.model.dtype == torch.int8:
+            if self.fp8 is None:
+                self.fp8 = FP8Args()
+
     @property
     def global_batch_size(self):
         return self.tokens.micro_batch_size * self.tokens.batch_accumulation_per_replica * self.parallelism.dp
@@ -440,6 +446,9 @@ def get_config_from_dict(
             for k, v in config_dict.items()
             if v is not None
         }
+
+    from nanotron.fp8.dtypes import DTypes
+
     return from_dict(
         data_class=config_class,
         data=config_dict,
@@ -451,6 +460,7 @@ def get_config_from_dict(
                 TensorParallelLinearMode: lambda x: TensorParallelLinearMode[x.upper()],
                 RecomputeGranularity: lambda x: RecomputeGranularity[x.upper()],
                 SamplerType: lambda x: SamplerType[x.upper()],
+                DTypes: lambda x: DTypes[x.upper()],  # Add this line,
             },
             # strict_unions_match=True,
             strict=True,
