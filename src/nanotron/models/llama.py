@@ -526,14 +526,14 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                 )
                 # Remove pad tokens from key_states and concatenate samples in key_unpad
                 # cu_seqlens_k is the cumulative sequence lengths of key_states
-                (query_unpad, indices_q, cu_seqlens_q, max_seqlen_q) = bert_padding.unpad_input(
+                (query_unpad, indices_q, cu_seqlens_q, max_seqlen_q, *_) = bert_padding.unpad_input(
                     query_states,
                     sequence_mask,
                 )
-                (key_unpad, indices_k, cu_seqlens_k, max_seqlen_k) = bert_padding.unpad_input(
+                (key_unpad, indices_k, cu_seqlens_k, max_seqlen_k, *_) = bert_padding.unpad_input(
                     key_states, sequence_mask
                 )
-                (value_unpad, _, _, _) = bert_padding.unpad_input(value_states, sequence_mask)
+                (value_unpad, *_) = bert_padding.unpad_input(value_states, sequence_mask)
 
                 # NOTE: this scale is for µTransfer,
                 # in SP, we use sqrt(1/d_h)
@@ -976,6 +976,39 @@ class Loss(nn.Module):
         # I think indexing causes a sync we don't actually want
         # loss = loss[label_mask].sum()
         return {"loss": loss}
+    
+class DistillationLoss(nn.Module):
+    def __init__(self, tp_pg: dist.ProcessGroup):
+        super().__init__()
+        self.tp_pg = tp_pg
+
+    def forward(
+        self,
+        sharded_logits: torch.Tensor,  # [batch_size, seq_length, vocab_size]
+        teacher_logits: torch.Tensor,  # [batch_size, seq_length, vocab_size]
+    ):
+        # log_rank("Distillation loss", logger=logger, level=logging.CRITICAL, rank=0)
+        # log_rank(f"Sharded logits shape: {sharded_logits.shape}", logger=logger, level=logging.CRITICAL, rank=0)
+        # log_rank(f"Teacher logits shape: {teacher_logits.shape}", logger=logger, level=logging.CRITICAL, rank=0)
+
+        # KL divergence - compare logit distributions
+        # Convert inputs to proper format for KL divergence:
+        # 1. sharded_logits needs to be log probabilities
+        # 2. teacher_logits needs to be probabilities
+        log_sharded_probs = torch.nn.functional.log_softmax(sharded_logits, dim=-1)
+        teacher_probs = torch.nn.functional.softmax(teacher_logits, dim=-1)
+        
+        loss = torch.nn.functional.kl_div(
+            log_sharded_probs, teacher_probs, reduction="batchmean"
+        )
+
+        # random loss
+        # loss = torch.randn(
+        #     sharded_logits.shape[0],
+        #     sharded_logits.shape[1],
+        #     device=sharded_logits.device
+        # ).requires_grad_()
+        return {"loss": loss}
 
 
 class LlamaForTraining(NanotronModel):
@@ -990,12 +1023,14 @@ class LlamaForTraining(NanotronModel):
         self.model = LlamaModel(config=config, parallel_context=parallel_context, parallel_config=parallel_config)
         self.loss = PipelineBlock(
             p2p=self.model.p2p,
-            module_builder=Loss,
+            #module_builder=Loss, 
+            module_builder=DistillationLoss,
             module_kwargs={"tp_pg": parallel_context.tp_pg},
             module_input_keys={
                 "sharded_logits",
-                "label_ids",
-                "label_mask",
+                "teacher_logits",
+                # "label_ids",
+                # "label_mask",
             },
             module_output_keys={"loss"},
         )
@@ -1009,16 +1044,23 @@ class LlamaForTraining(NanotronModel):
         input_mask: Union[torch.Tensor, TensorPointer],
         label_ids: Union[torch.Tensor, TensorPointer],
         label_mask: Union[torch.Tensor, TensorPointer],
+        teacher_logits: Optional[Union[torch.Tensor, TensorPointer]] = None,
     ) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
         sharded_logits = self.model(
             input_ids=input_ids,
             input_mask=input_mask,
         )
-        loss = self.loss(
-            sharded_logits=sharded_logits,
-            label_ids=label_ids,
-            label_mask=label_mask,
-        )["loss"]
+        if teacher_logits is not None:
+            loss = self.loss(
+                sharded_logits=sharded_logits,
+                teacher_logits=teacher_logits.transpose(0, 1).contiguous(),
+            )["loss"]
+        else:
+            loss = self.loss(
+                sharded_logits=sharded_logits,
+                label_ids=label_ids,
+                label_mask=label_mask,
+            )["loss"]
         return {"loss": loss}
 
     @torch.no_grad()

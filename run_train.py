@@ -63,6 +63,8 @@ def get_dataloader_from_data_stage(
     # Case 1: Dummy data generator
     if data.dataset is None:
         log_rank("Using dummy data generator", logger=logger, level=logging.INFO, rank=0)
+        if hasattr(data, "teacher_logits"):
+            log_rank("Using teacher logits", logger=logger, level=logging.INFO, rank=0)
         dataloader = dummy_infinite_data_generator(
             micro_batch_size=trainer.micro_batch_size,
             sequence_length=trainer.sequence_length,
@@ -71,6 +73,7 @@ def get_dataloader_from_data_stage(
             vocab_size=trainer.model_config.vocab_size,
             seed=data.seed,
             parallel_context=trainer.parallel_context,
+            teacher_logits=getattr(data, "teacher_logits", False),
         )()
 
     # Case 2: HuggingFace datasets
@@ -113,6 +116,7 @@ def get_dataloader_from_data_stage(
                 dataset_processing_num_proc_per_process=data.dataset.dataset_processing_num_proc_per_process,
                 dataset_overwrite_cache=data.dataset.dataset_overwrite_cache,
                 sequence_length=trainer.sequence_length,
+                use_json_format=getattr(data.dataset, "use_json_format", False),
             )
 
             # We load the processed dataset on the ranks requiring it
