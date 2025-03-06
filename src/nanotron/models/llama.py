@@ -751,7 +751,7 @@ class MLA(nn.Module):
         )
 
         # Initialize linear layers
-        self.q_down = nn.Linear(self.dim, self.q_lora_rank, bias=False)
+        self.q_down = nn.Linear(self.dim, self.q_lora_rank, bias=False)  # Note: this is duplicated across GPUs
         self.q_norm = TritonRMSNorm(self.q_lora_rank, eps=config.rms_norm_eps)
         self.q_up = TensorParallelColumnLinear(
             self.q_lora_rank,
@@ -764,7 +764,9 @@ class MLA(nn.Module):
             tp_recompute_allgather=parallel_config.tp_recompute_allgather,
         )
 
-        self.kv_down = nn.Linear(self.dim, self.kv_lora_rank + self.qk_rope_head_dim, bias=False)
+        self.kv_down = nn.Linear(
+            self.dim, self.kv_lora_rank + self.qk_rope_head_dim, bias=False
+        )  # Note: this is duplicated across GPUs
         self.kv_norm = TritonRMSNorm(self.kv_lora_rank, eps=config.rms_norm_eps)
         self.kv_up = TensorParallelColumnLinear(
             self.kv_lora_rank,
