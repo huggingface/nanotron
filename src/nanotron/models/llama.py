@@ -987,27 +987,17 @@ class DistillationLoss(nn.Module):
         sharded_logits: torch.Tensor,  # [batch_size, seq_length, vocab_size]
         teacher_logits: torch.Tensor,  # [batch_size, seq_length, vocab_size]
     ):
-        # log_rank("Distillation loss", logger=logger, level=logging.CRITICAL, rank=0)
-        # log_rank(f"Sharded logits shape: {sharded_logits.shape}", logger=logger, level=logging.CRITICAL, rank=0)
-        # log_rank(f"Teacher logits shape: {teacher_logits.shape}", logger=logger, level=logging.CRITICAL, rank=0)
-
-        # KL divergence - compare logit distributions
         # Convert inputs to proper format for KL divergence:
         # 1. sharded_logits needs to be log probabilities
         # 2. teacher_logits needs to be probabilities
         log_sharded_probs = torch.nn.functional.log_softmax(sharded_logits, dim=-1)
-        teacher_probs = torch.nn.functional.softmax(teacher_logits, dim=-1)
+        teacher_probs = torch.nn.functional.softmax(teacher_logits.transpose(0, 1).contiguous(), dim=-1)
         
+        # KL divergence - compare logit distributions
         loss = torch.nn.functional.kl_div(
             log_sharded_probs, teacher_probs, reduction="batchmean"
         )
 
-        # random loss
-        # loss = torch.randn(
-        #     sharded_logits.shape[0],
-        #     sharded_logits.shape[1],
-        #     device=sharded_logits.device
-        # ).requires_grad_()
         return {"loss": loss}
 
 
@@ -1053,7 +1043,7 @@ class LlamaForTraining(NanotronModel):
         if teacher_logits is not None:
             loss = self.loss(
                 sharded_logits=sharded_logits,
-                teacher_logits=teacher_logits.transpose(0, 1).contiguous(),
+                teacher_logits=teacher_logits,
             )["loss"]
         else:
             loss = self.loss(
