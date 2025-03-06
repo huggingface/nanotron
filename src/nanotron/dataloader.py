@@ -190,6 +190,7 @@ def dummy_infinite_data_generator(
     vocab_size: int,
     seed: int,
     parallel_context: ParallelContext,
+    teacher_logits: bool = False,
 ):
     def data_generator() -> Generator[Dict[str, Union[torch.Tensor, TensorPointer]], None, None]:
         # Random generator
@@ -200,7 +201,7 @@ def dummy_infinite_data_generator(
         )
 
         while True:
-            yield {
+            data = {
                 "input_ids": torch.randint(
                     0,
                     vocab_size,
@@ -238,6 +239,15 @@ def dummy_infinite_data_generator(
                 if dist.get_rank(parallel_context.pp_pg) == output_pp_rank
                 else TensorPointer(group_rank=output_pp_rank),
             }
+
+            if teacher_logits:
+                data["teacher_logits"] = torch.randn(
+                    (micro_batch_size, sequence_length, vocab_size // parallel_context.tensor_parallel_size), # you only get the logit from the appropriate TP rank
+                    dtype=torch.float32, # todo: this might need to be something else
+                    device="cuda",
+                ) if dist.get_rank(parallel_context.pp_pg) == output_pp_rank else TensorPointer(group_rank=output_pp_rank)
+            
+            yield data
 
     return data_generator
 
@@ -285,14 +295,74 @@ def clm_process(
     dataset_processing_num_proc_per_process: int,
     dataset_overwrite_cache: bool,
     sequence_length: int,
+    use_json_format: bool = False,
 ):
     """Concatenate all texts from raw_dataset and generate chunks of `sequence_length + 1`, where chunks overlap by a single token."""
     # Adapted from https://github.com/huggingface/transformers/blob/47e1676255e5dd86b9541f734cd4f4bdcbb50f4a/examples/pytorch/language-modeling/run_clm.py#L391-L439
 
+    if use_json_format:
+        # Convert the entire dataset to JSON strings
+        import json
+        
+        def convert_to_json(example):
+            # Convert entire row to a JSON string
+            # First convert LazyRow to dict if needed
+            if hasattr(example, "keys") and callable(example.keys):
+                example_dict = {k: example[k] for k in example.keys()}
+            else:
+                example_dict = dict(example)
+            return {"text": json.dumps(example_dict, ensure_ascii=False)}
+        
+        print("Converting dataset rows to JSON format...")
+        # Create a new dataset with JSON strings in the 'text' column
+        json_dataset = raw_dataset.map(
+            convert_to_json,
+            remove_columns=raw_dataset.column_names,
+            desc="Converting to JSON format",
+        )
+        # Now use this dataset with 'text' as the column name
+        raw_dataset = json_dataset
+        text_column_name = "text"  # Override text_column_name to use our new JSON column
+        print(f"JSON dataset created with {len(raw_dataset)} entries")
+        if len(raw_dataset) > 0:
+            print(f"Sample JSON: {raw_dataset[0][text_column_name][:200]}...")
+    else:
+        # Ensure all items in the text column are strings
+        def ensure_string(example):
+            if text_column_name in example:
+                if example[text_column_name] is None:
+                    example[text_column_name] = ""
+                elif not isinstance(example[text_column_name], str):
+                    example[text_column_name] = str(example[text_column_name])
+            return example
+        
+        # Apply preprocessing before the main processing
+        print("Preprocessing dataset to ensure all text values are strings...")
+        raw_dataset = raw_dataset.map(ensure_string)
+    
     def group_texts(examples: Dict[str, List[np.ndarray]]) -> Dict[str, List[np.ndarray]]:
         # Concatenate all texts.
+        if not examples or len(examples) == 0 or not next(iter(examples.values()), []):
+            print("WARNING: Empty examples provided to group_texts")
+            return {"input_ids": []}
+            
         concatenated_examples = {k: np.concatenate(v) for k, v in examples.items()}
         total_length = len(concatenated_examples[next(iter(examples.keys()))])
+        
+        # If total length is less than sequence_length+1, we can't create any valid chunks
+        if total_length < sequence_length + 1:
+            print(f"WARNING: Total concatenated length {total_length} is less than required {sequence_length + 1}")
+            # Return at least one padded example if possible
+            if total_length > 0:
+                result = {}
+                for k, t in concatenated_examples.items():
+                    # Pad the sequence to the required length
+                    padded = np.zeros(sequence_length + 1, dtype=t.dtype)
+                    padded[:total_length] = t
+                    result[k] = [padded]
+                return result
+            return {"input_ids": []}
+            
         # WARNING: We drop the small remainder, we could add padding if the model supported it instead of this drop, you can
         # customize this part to your needs.
         if total_length >= sequence_length + 1:
@@ -307,7 +377,24 @@ def clm_process(
         return result
 
     def _tokenize_and_group_texts(texts: List[str]) -> Dict[str, List[np.ndarray]]:
-        tokenized_batch = tokenizer.batch_encode_plus(texts, return_attention_mask=False, return_token_type_ids=False)
+        # Filter out None values and convert non-strings to strings
+        valid_texts = []
+        for text in texts:
+            if text is not None:
+                if not isinstance(text, str):
+                    text = str(text)  # Convert non-string to string
+                if text.strip():  # Check if text is not just whitespace
+                    valid_texts.append(text)
+        
+        print(f"Tokenizing {len(valid_texts)} texts from original {len(texts)}")
+        if valid_texts:
+            print(f"First valid text (type {type(valid_texts[0])}): {valid_texts[0][:100]}...")
+        else:
+            print("WARNING: No valid texts found after filtering!")
+            # Return an empty result structure if no valid texts
+            return {"input_ids": []}
+        
+        tokenized_batch = tokenizer.batch_encode_plus(valid_texts, return_attention_mask=False, return_token_type_ids=False)
         tokenized_batch = {k: [np.array(tokenized_texts) for tokenized_texts in v] for k, v in tokenized_batch.items()}
         return group_texts(tokenized_batch)
 

@@ -84,6 +84,7 @@ class PretrainDatasetsArgs:
     dataset_processing_num_proc_per_process: Optional[int] = 1
     dataset_overwrite_cache: Optional[bool] = False
     text_column_name: Optional[str] = None
+    use_json_format: Optional[bool] = False
 
     def __post_init__(self):
         if self.text_column_name is None:
@@ -127,6 +128,7 @@ class DataArgs:
     dataset: Optional[Union[PretrainDatasetsArgs, NanosetDatasetsArgs]]
     seed: Optional[int]
     num_loading_workers: Optional[int] = 1
+    teacher_logits: Optional[bool] = False
 
     def __post_init__(self):
         if self.seed is None:
