@@ -1,9 +1,13 @@
 import re
+import threading
+from typing import Optional
 
 FWD_MLP_OP_NAME = "fwd.layer_mlp_{}_batch_{}"
 FWD_ATTN_OP_NAME = "fwd.layer_attn_{}_batch_{}"
 BWD_ATTN_OP_NAME = "bwd.layer_attn_{}_batch_{}"
 BWD_MLP_OP_NAME = "bwd.layer_mlp_{}_batch_{}"
+
+_operation_context = threading.local()
 
 
 def is_domino_async_comm(x: str) -> bool:
@@ -20,3 +24,30 @@ def is_domino_async_comm(x: str) -> bool:
     regex = re.compile("^(" + "|".join(patterns) + ")$")  # Combine patterns into a single regex
     not_async = bool(regex.match(x))
     return not not_async
+
+
+class OpNameContext:
+    """
+    A context manager to set the name of a module operation
+    """
+
+    def __init__(self, op_name: str):
+        self.op_name = op_name
+        self.previous_op_name = None
+
+    def __enter__(self):
+        if not hasattr(_operation_context, "current_op_name"):
+            _operation_context.current_op_name = None
+        self.previous_op_name = _operation_context.current_op_name
+        _operation_context.current_op_name = self.op_name
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        _operation_context.current_op_name = self.previous_op_name
+
+
+def get_op_name() -> Optional[str]:
+    """
+    Get the name of the current operation.
+    """
+    return getattr(_operation_context, "current_op_name", None)

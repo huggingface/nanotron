@@ -39,6 +39,7 @@ from nanotron.parallel.tensor_parallel.domino import (
     BWD_MLP_OP_NAME,
     FWD_ATTN_OP_NAME,
     FWD_MLP_OP_NAME,
+    OpNameContext,
 )
 from nanotron.parallel.tensor_parallel.functional import sharded_cross_entropy
 from nanotron.parallel.tensor_parallel.nn import (
@@ -250,11 +251,9 @@ class MLP(nn.Module):
         )
         self.split_silu_mul = GLUActivation(config.hidden_act)
 
-    def forward(
-        self, hidden_states: torch.Tensor, op_name: Optional[str] = None
-    ):  # [seq_length, batch_size, hidden_dim]
-        merged_states = self.gate_up_proj(hidden_states, op_name=op_name)
-        hidden_states = self.down_proj(self.split_silu_mul(merged_states), op_name=op_name)
+    def forward(self, hidden_states: torch.Tensor):  # [seq_length, batch_size, hidden_dim]
+        merged_states = self.gate_up_proj(hidden_states)
+        hidden_states = self.down_proj(self.split_silu_mul(merged_states))
         return {"hidden_states": hidden_states}
 
 
@@ -449,9 +448,6 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         self,
         hidden_states,  # [seq_length, batch_size, hidden_size]
         sequence_mask,  # [batch_size, seq_length]
-        # NOTE: because we dynamically determine which input split
-        # of domino at runtime, so we need to pass in the op_name
-        op_name: Optional[str] = None,
     ):
         from flash_attn import bert_padding
         from flash_attn.flash_attn_interface import (
@@ -460,7 +456,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         )
 
         qkv_states = self.qkv_proj(
-            hidden_states, op_name=op_name
+            hidden_states
         )  # [seq_length, batch_size, n_local_q_heads * d_qk + 2 * n_local_kv_heads * d_qk]
         q_length, batch_size, _ = qkv_states.shape
 
@@ -706,7 +702,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             attention_output.contiguous().view(batch_size, q_length, self.n_local_q_heads * self.d_v).transpose(0, 1)
         )
         # output, work = self.o_proj(attention_output, op_name=op_name)
-        output = self.o_proj(attention_output, op_name=op_name)
+        output = self.o_proj(attention_output)
 
         return {"hidden_states": output, "sequence_mask": sequence_mask}
 
@@ -801,16 +797,17 @@ class DominoLlamaDecoderLayer(_BaseLlamaDecoderLayer):
             self.stream_manager,
         )
 
-        attn_output0 = self.attn(
-            hidden_states=hidden_states0,
-            sequence_mask=sequence_mask0,
-            op_name=FWD_ATTN_OP_NAME.format(self.layer_idx, 0),
-        )
-        attn_output1 = self.attn(
-            hidden_states=hidden_states1,
-            sequence_mask=sequence_mask1,
-            op_name=FWD_ATTN_OP_NAME.format(self.layer_idx, 1),
-        )
+        with OpNameContext(FWD_ATTN_OP_NAME.format(self.layer_idx, 0)):
+            attn_output0 = self.attn(
+                hidden_states=hidden_states0,
+                sequence_mask=sequence_mask0,
+            )
+
+        with OpNameContext(FWD_ATTN_OP_NAME.format(self.layer_idx, 1)):
+            attn_output1 = self.attn(
+                hidden_states=hidden_states1,
+                sequence_mask=sequence_mask1,
+            )
 
         comm_stream.wait_stream(torch.cuda.default_stream())
         with torch.cuda.stream(comm_stream):
@@ -827,10 +824,8 @@ class DominoLlamaDecoderLayer(_BaseLlamaDecoderLayer):
             self.stream_manager,
         )
 
-        mlp_output0 = self.mlp(
-            hidden_states=hidden_states0,
-            op_name=FWD_MLP_OP_NAME.format(self.layer_idx, 0),
-        )
+        with OpNameContext(FWD_MLP_OP_NAME.format(self.layer_idx, 0)):
+            mlp_output0 = self.mlp(hidden_states=hidden_states0)
 
         comm_stream.wait_stream(torch.cuda.default_stream())
         with torch.cuda.stream(comm_stream):
@@ -842,10 +837,8 @@ class DominoLlamaDecoderLayer(_BaseLlamaDecoderLayer):
         residual1 = hidden_states1
         hidden_states1 = self.post_attention_layernorm(hidden_states1)
 
-        mlp_output1 = self.mlp(
-            hidden_states=hidden_states1,
-            op_name=FWD_MLP_OP_NAME.format(self.layer_idx, 1),
-        )
+        with OpNameContext(FWD_MLP_OP_NAME.format(self.layer_idx, 1)):
+            mlp_output1 = self.mlp(hidden_states=hidden_states1)
 
         comm_stream.wait_stream(torch.cuda.default_stream())
         with torch.cuda.stream(comm_stream):
