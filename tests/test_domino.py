@@ -9,7 +9,7 @@ from nanotron.config.parallelism_config import DominoArgs
 from nanotron.models.llama import DominoLlamaDecoderLayer
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.comm import AsyncCommBucket
-from nanotron.parallel.tensor_parallel.domino import is_async_comm
+from nanotron.parallel.tensor_parallel.domino import is_domino_async_comm
 
 
 @pytest.mark.parametrize(
@@ -25,8 +25,8 @@ from nanotron.parallel.tensor_parallel.domino import is_async_comm
         ("bwd.layer_attn_1_batch_0", False),
     ],
 )
-def test_is_async_comm(op_name, expected):
-    assert is_async_comm(op_name) == expected
+def test_is_domino_async_comm(op_name, expected):
+    assert is_domino_async_comm(op_name) == expected
 
 
 @pytest.mark.parametrize("tp,dp,pp", [(2, 2, 1)])

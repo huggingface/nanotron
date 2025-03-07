@@ -6,7 +6,11 @@ BWD_ATTN_OP_NAME = "bwd.layer_attn_{}_batch_{}"
 BWD_MLP_OP_NAME = "bwd.layer_mlp_{}_batch_{}"
 
 
-def is_async_comm(x: str) -> bool:
+def is_domino_async_comm(x: str) -> bool:
+    """
+    Determine whether a module (e.g., mlp, attention)
+    performs all-reduce asynchronously in tensor parallelism
+    """
     NON_ASYNC_HANDLE_IDX = [
         # "fwd.layer_mlp_{}_batch_1",
         "bwd.layer_attn_{}_batch_0",

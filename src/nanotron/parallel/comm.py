@@ -3,7 +3,7 @@ from typing import Dict
 
 import torch
 
-from nanotron.parallel.tensor_parallel.domino import is_async_comm
+from nanotron.parallel.tensor_parallel.domino import is_domino_async_comm
 
 
 class CudaStreamManager:
@@ -64,7 +64,7 @@ class AsyncCommBucket:
 
         not_finished = []
         for k, v in AsyncCommBucket._copy_async_op.items():
-            assert is_async_comm(k) is True, f"Operation with name {k} wasn't executed asynchronously!"
+            assert is_domino_async_comm(k) is True, f"Operation with name {k} wasn't executed asynchronously!"
             if v.is_completed() is not True:
                 not_finished.append((k, v))
         return len(not_finished) == 0
@@ -78,7 +78,7 @@ class AsyncCommBucket:
 class WaitComm(torch.autograd.Function):
     """
     Enforce a tensor to wait for the communication operation to finish
-    in torch's autograd graph
+    in torch's autograd graph.
     """
 
     @staticmethod
@@ -95,7 +95,7 @@ class WaitComm(torch.autograd.Function):
         but the compute stream waits for the communication stream
         before proceeding
         """
-        if is_async_comm(ctx.op_name):
+        if is_domino_async_comm(ctx.op_name):
             handle = AsyncCommBucket.pop(ctx.op_name)
             handle.wait()
 

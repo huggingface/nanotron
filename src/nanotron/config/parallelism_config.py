@@ -72,6 +72,14 @@ class ParallelismArgs:
 
         if self.is_domino_enabled is True:
             assert self.tp > 1, "Domino requires TP > 1"
+            # NOTE: For DoMiNo since we overlapping the communication
+            # so it doesnt matter whether it's all_reduce or reduce_scatter
+            # so we just support and tested with all_reduce up to now
+            # but in principle, it should work with reduce_scatter as well
+            assert (
+                self.tp_linear_async_communication is False
+            ), "Domino requires TP linear async communication to be False"
+            assert self.tp_mode == TensorParallelLinearMode.ALL_REDUCE, "Domino requires TP mode to be ALL_REDUCE"
 
     @property
     def is_domino_enabled(self) -> bool:

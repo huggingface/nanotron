@@ -20,7 +20,7 @@ from torch import distributed as torch_dist
 
 from nanotron import distributed as dist
 from nanotron.distributed import ProcessGroup
-from nanotron.parallel.comm import AsyncCommBucket, is_async_comm
+from nanotron.parallel.comm import AsyncCommBucket, is_domino_async_comm
 
 
 class DifferentiableIdentity(torch.autograd.Function):
@@ -64,7 +64,7 @@ class DifferentiableAllReduceSum(torch.autograd.Function):
         op_name: Optional[int] = None,
         comm_stream: Optional[torch.cuda.Stream] = None,
     ) -> Tuple[torch.Tensor, Optional["dist.Work"]]:
-        async_all_reduce = is_async_comm(op_name) if op_name is not None else False
+        async_all_reduce = is_domino_async_comm(op_name) if op_name is not None else False
         ctx.async_all_reduce = async_all_reduce
 
         if group.size() == 1:
