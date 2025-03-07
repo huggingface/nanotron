@@ -31,11 +31,9 @@ class DifferentiableIdentity(torch.autograd.Function):
         ctx,
         tensor: torch.Tensor,
         group: Optional[ProcessGroup],
-        async_all_reduce: bool,
         op_name: Optional[str] = None,
         comm_stream: Optional[torch.cuda.Stream] = None,
     ):
-        ctx.async_all_reduce = async_all_reduce
         ctx.op_name = op_name
         ctx.group = group
         ctx.comm_stream = comm_stream
@@ -45,7 +43,6 @@ class DifferentiableIdentity(torch.autograd.Function):
     def backward(ctx, grad_output: torch.Tensor):
         group = ctx.group
         op_name = ctx.op_name.replace("fwd.", "bwd.") if ctx.op_name is not None else None
-        # async_all_reduce = is_async_comm(op_name) if op_name is not None else ctx.async_all_reduce
 
         return (
             DifferentiableAllReduceSum.apply(grad_output, group, op_name, ctx.comm_stream),
@@ -176,11 +173,10 @@ class DifferentiableReduceScatterSum(torch.autograd.Function):
 def differentiable_identity(
     tensor,
     group: Optional[ProcessGroup] = None,
-    async_all_reduce: bool = False,
     op_name: Optional[str] = None,
     comm_stream: Optional[torch.cuda.Stream] = None,
 ):
-    return DifferentiableIdentity.apply(tensor, group, async_all_reduce, op_name, comm_stream)
+    return DifferentiableIdentity.apply(tensor, group, op_name, comm_stream)
 
 
 def differentiable_all_reduce_sum(

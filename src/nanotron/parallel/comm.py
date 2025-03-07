@@ -7,41 +7,33 @@ from nanotron.parallel.tensor_parallel.domino import is_async_comm
 
 
 class CudaStreamManager:
-    _streams: Dict[str, "torch.cuda.Stream"] = {}
+    def __init__(self):
+        self._streams: Dict[str, "torch.cuda.Stream"] = {}
 
-    @staticmethod
-    def create(name: str, device: torch.device = None):
-        assert name not in CudaStreamManager._streams
-        CudaStreamManager._streams[name] = torch.cuda.Stream(device=device)
+    def create(self, name: str, device: torch.device):
+        assert name not in self._streams
+        self._streams[name] = torch.cuda.Stream(device=device)
 
-    @staticmethod
-    def get(name: str):
-        if name not in CudaStreamManager._streams:
-            CudaStreamManager.create(name)
-        return CudaStreamManager._streams.get(name)
+    def get(self, name: str):
+        if name not in self._streams:
+            self.create(name)
+        return self._streams.get(name)
 
     @contextmanager
-    def run_on_stream(name: str):
-        stream = CudaStreamManager.get(name)
+    def run_on_stream(self, name: str):
+        stream = self.get(name)
         with torch.cuda.stream(stream):
             yield stream
 
 
 class AsyncCommBucket:
-    """
-
-    Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
-    RuntimeError: expected Variable or None (got tuple)
-        Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
-    RuntimeError: expected Variable or None (got tuple)
-    """
-
     _async_op: Dict[int, "dist.Work"] = {}
     _copy_async_op: Dict[int, "dist.Work"] = {}
 
     @staticmethod
     def add(op_name: int, work: "dist.Work"):
         assert op_name not in AsyncCommBucket._async_op, f"Operation with name: {op_name} already exists"
+        assert work is not None
         AsyncCommBucket._async_op[op_name] = work
         AsyncCommBucket._copy_async_op[op_name] = work
 
@@ -84,14 +76,19 @@ class AsyncCommBucket:
 
 
 class WaitComm(torch.autograd.Function):
+    """
+    Enforce a tensor to wait for the communication operation to finish
+    in torch's autograd graph
+    """
+
     @staticmethod
-    def forward(ctx, input, op_name, comm_stream):
+    def forward(ctx, input: torch.Tensor, op_name: str, comm_stream: torch.cuda.Stream):
         ctx.op_name = op_name
         ctx.comm_stream = comm_stream
         return input
 
     @staticmethod
-    def backward(ctx, grad_output):
+    def backward(ctx, grad_output: torch.Tensor):
         """
         NOTE: because the communication operation is already being executed
         so the communication stream don't have to wait for the compute stream here
@@ -100,7 +97,6 @@ class WaitComm(torch.autograd.Function):
         """
         if is_async_comm(ctx.op_name):
             handle = AsyncCommBucket.pop(ctx.op_name)
-            assert handle is not None
             handle.wait()
 
             ctx.comm_stream.synchronize()

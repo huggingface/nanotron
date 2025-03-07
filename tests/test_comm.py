@@ -6,7 +6,7 @@ from helpers.utils import (
     rerun_if_address_is_in_use,
 )
 from nanotron.parallel import ParallelContext
-from nanotron.parallel.comm import AsyncCommBucket, WaitComm
+from nanotron.parallel.comm import AsyncCommBucket, CudaStreamManager, WaitComm
 
 
 class MockWork:
@@ -20,6 +20,14 @@ class MockWork:
 
     def is_completed(self):
         return self.completed
+
+
+def test_cuda_stream_manager():
+    manager = CudaStreamManager()
+    manager.create("test", torch.device("cuda"))
+
+    stream = manager.get("test")
+    assert isinstance(stream, torch.cuda.Stream)
 
 
 @rerun_if_address_is_in_use()

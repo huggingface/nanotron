@@ -52,6 +52,7 @@ class TensorParallelColumnLinear(nn.Linear):
         async_communication: bool = False,
         contiguous_chunks: Optional[Tuple[int, ...]] = None,
         tp_recompute_allgather: bool = True,
+        comm_stream: Optional[torch.cuda.Stream] = None,
     ):
         self.pg = pg
         self.world_size = pg.size()
@@ -72,6 +73,7 @@ class TensorParallelColumnLinear(nn.Linear):
 
         self.mode = mode
         self.async_communication = async_communication
+        self.comm_stream = comm_stream
 
         if contiguous_chunks is not None:
             assert (
@@ -89,7 +91,6 @@ class TensorParallelColumnLinear(nn.Linear):
         self,
         x: torch.Tensor,
         op_name: Optional[str] = None,
-        comm_stream: Optional[torch.cuda.Stream] = None,
     ) -> torch.Tensor:
         return column_linear(
             input=x,
@@ -100,7 +101,7 @@ class TensorParallelColumnLinear(nn.Linear):
             async_communication=self.async_communication,
             tp_recompute_allgather=self.tp_recompute_allgather,
             op_name=op_name,
-            comm_stream=comm_stream,
+            comm_stream=self.comm_stream,
         )
 
     def extra_repr(self) -> str:
@@ -119,6 +120,7 @@ class TensorParallelRowLinear(nn.Linear):
         dtype=None,
         async_communication: bool = False,
         contiguous_chunks: Optional[Tuple[int, ...]] = None,
+        comm_stream: Optional[torch.cuda.Stream] = None,
     ):
         self.pg = pg
         self.world_size = pg.size()
@@ -127,6 +129,7 @@ class TensorParallelRowLinear(nn.Linear):
 
         self.in_features = in_features // self.world_size
         self.out_features = out_features
+        self.comm_stream = comm_stream
 
         # No need to shard the bias term, only rank 0 would have it
         bias = dist.get_rank(self.pg) == 0 and bias
@@ -165,12 +168,7 @@ class TensorParallelRowLinear(nn.Linear):
                 )
             setattr(self, name, new_param)
 
-    def forward(
-        self,
-        x: torch.Tensor,
-        op_name: Optional[str] = None,
-        comm_stream: Optional[torch.cuda.Stream] = None,
-    ) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, op_name: Optional[str] = None) -> torch.Tensor:
         return row_linear(
             input=x,
             weight=self.weight,
@@ -179,7 +177,7 @@ class TensorParallelRowLinear(nn.Linear):
             tp_mode=self.mode,
             async_communication=self.async_communication,
             op_name=op_name,
-            comm_stream=comm_stream,
+            comm_stream=self.comm_stream,
         )
 
     def extra_repr(self) -> str:

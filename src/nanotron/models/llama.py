@@ -214,6 +214,7 @@ class MLP(nn.Module):
         config: LlamaConfig,
         parallel_config: Optional[ParallelismArgs],
         tp_pg: dist.ProcessGroup,
+        stream_manager: Optional[CudaStreamManager] = None,
     ):
         super().__init__()
 
@@ -227,6 +228,7 @@ class MLP(nn.Module):
             config.intermediate_size,  # shape of gate_linear
             config.intermediate_size,  # shape of up_linear
         )
+        comm_stream = stream_manager.get(f"comm_stream_{torch.cuda.current_device()}")
         self.gate_up_proj = TensorParallelColumnLinear(
             config.hidden_size,
             2 * config.intermediate_size,
@@ -236,6 +238,7 @@ class MLP(nn.Module):
             async_communication=tp_linear_async_communication,
             contiguous_chunks=gate_up_contiguous_chunks,
             tp_recompute_allgather=parallel_config.tp_recompute_allgather,
+            comm_stream=comm_stream,
         )
         self.down_proj = TensorParallelRowLinear(
             config.intermediate_size,
@@ -244,16 +247,15 @@ class MLP(nn.Module):
             mode=tp_mode,
             bias=False,
             async_communication=tp_linear_async_communication and tp_mode is TensorParallelLinearMode.REDUCE_SCATTER,
+            comm_stream=comm_stream,
         )
         self.split_silu_mul = GLUActivation(config.hidden_act)
 
     def forward(
-        self, hidden_states, op_name: Optional[str] = None, comm_stream: Optional[torch.cuda.Stream] = None
+        self, hidden_states: torch.Tensor, op_name: Optional[str] = None
     ):  # [seq_length, batch_size, hidden_dim]
-        merged_states = self.gate_up_proj(hidden_states, op_name=op_name, comm_stream=comm_stream)
-        hidden_states, work = self.down_proj(
-            self.split_silu_mul(merged_states), op_name=op_name, comm_stream=comm_stream
-        )
+        merged_states = self.gate_up_proj(hidden_states, op_name=op_name)
+        hidden_states, work = self.down_proj(self.split_silu_mul(merged_states), op_name=op_name)
         return {"hidden_states": hidden_states, "work": work}
 
 
@@ -346,6 +348,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         parallel_config: Optional[ParallelismArgs],
         tp_pg: dist.ProcessGroup,
         layer_idx: int,
+        stream_manager: Optional[CudaStreamManager] = None,
     ):
         from flash_attn.layers.rotary import RotaryEmbedding as FlashRotaryEmbedding
 
@@ -392,6 +395,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             config.num_key_value_heads * self.d_qk,  # shape of k
             config.num_key_value_heads * self.d_qk,  # shape of v
         )
+        comm_stream = stream_manager.get(f"comm_stream_{torch.cuda.current_device()}")
         self.qkv_proj = TensorParallelColumnLinear(
             self.d_model,
             config.num_attention_heads * self.d_qk + 2 * config.num_key_value_heads * self.d_qk,
@@ -401,6 +405,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             async_communication=tp_linear_async_communication,
             contiguous_chunks=qkv_contiguous_chunks,
             tp_recompute_allgather=parallel_config.tp_recompute_allgather,
+            comm_stream=comm_stream,
         )
         # TODO(kunhao): We want to have only one version per device and not one version per layer.
         if config.rope_interleaved:
@@ -429,6 +434,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             mode=tp_mode,
             bias=False,
             async_communication=tp_linear_async_communication,
+            comm_stream=comm_stream,
         )
 
         self.attention = CoreAttention(
@@ -445,8 +451,9 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         self,
         hidden_states,  # [seq_length, batch_size, hidden_size]
         sequence_mask,  # [batch_size, seq_length]
+        # NOTE: because we dynamically determine which input split
+        # of domino at runtime, so we need to pass in the op_name
         op_name: Optional[str] = None,
-        comm_stream: Optional[torch.cuda.Stream] = None,
     ):
         from flash_attn import bert_padding
         from flash_attn.flash_attn_interface import (
@@ -455,7 +462,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         )
 
         qkv_states = self.qkv_proj(
-            hidden_states, op_name=op_name, comm_stream=comm_stream
+            hidden_states, op_name=op_name
         )  # [seq_length, batch_size, n_local_q_heads * d_qk + 2 * n_local_kv_heads * d_qk]
         q_length, batch_size, _ = qkv_states.shape
 
@@ -700,7 +707,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         attention_output = (
             attention_output.contiguous().view(batch_size, q_length, self.n_local_q_heads * self.d_v).transpose(0, 1)
         )
-        output, work = self.o_proj(attention_output, op_name=op_name, comm_stream=comm_stream)
+        output, work = self.o_proj(attention_output, op_name=op_name)
 
         return {"hidden_states": output, "work": work, "sequence_mask": sequence_mask}
 
@@ -712,6 +719,7 @@ class _BaseLlamaDecoderLayer(nn.Module):
         parallel_config: Optional[ParallelismArgs],
         tp_pg: dist.ProcessGroup,
         layer_idx: int,
+        stream_manager: Optional[CudaStreamManager] = None,
     ):
         super().__init__()
         self.input_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
@@ -721,14 +729,16 @@ class _BaseLlamaDecoderLayer(nn.Module):
             parallel_config=parallel_config,
             tp_pg=tp_pg,
             layer_idx=layer_idx,
+            stream_manager=stream_manager,
         )
 
         self.post_attention_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.mlp = MLP(config=config, parallel_config=parallel_config, tp_pg=tp_pg)
+        self.mlp = MLP(config=config, parallel_config=parallel_config, tp_pg=tp_pg, stream_manager=stream_manager)
 
         self.recompute_layer = parallel_config.recompute_layer
         self.parallel_config = parallel_config
         self.layer_idx = layer_idx
+        self.stream_manager = stream_manager
 
     def _checkpointed_forward(
         self,
@@ -761,10 +771,9 @@ class DominoLlamaDecoderLayer(_BaseLlamaDecoderLayer):
         sequence_mask: Union[torch.Tensor, TensorPointer],
     ) -> List[Union[torch.Tensor, TensorPointer]]:
         num_input_batches = self.parallel_config.domino.num_input_batches
-        assert num_input_batches == 2
 
         orig_sequence_mask = sequence_mask
-        comm_stream = CudaStreamManager.get(f"comm_stream_{torch.cuda.current_device()}")
+        comm_stream = self.stream_manager.get(f"comm_stream_{torch.cuda.current_device()}")
 
         hidden_states = torch.chunk(hidden_states, chunks=num_input_batches, dim=1)
         sequence_mask = torch.chunk(sequence_mask, chunks=num_input_batches, dim=0)
@@ -792,19 +801,17 @@ class DominoLlamaDecoderLayer(_BaseLlamaDecoderLayer):
             hidden_states=hidden_states0,
             sequence_mask=sequence_mask0,
             op_name=FWD_ATTN_OP_NAME.format(self.layer_idx, 0),
-            comm_stream=comm_stream,
         )
         attn_output1 = self.attn(
             hidden_states=hidden_states1,
             sequence_mask=sequence_mask1,
             op_name=FWD_ATTN_OP_NAME.format(self.layer_idx, 1),
-            comm_stream=comm_stream,
         )
 
         comm_stream.wait_stream(torch.cuda.default_stream())
         with torch.cuda.stream(comm_stream):
             attn_output0["work"].wait()
-            attn_output0["work"].is_completed()
+            # assert attn_output0["work"].is_completed()
         torch.cuda.default_stream().wait_stream(comm_stream)
 
         hidden_states0 = attn_output0["hidden_states"] + residual0
@@ -819,13 +826,12 @@ class DominoLlamaDecoderLayer(_BaseLlamaDecoderLayer):
         mlp_output0 = self.mlp(
             hidden_states=hidden_states0,
             op_name=FWD_MLP_OP_NAME.format(self.layer_idx, 0),
-            comm_stream=comm_stream,
         )
 
         comm_stream.wait_stream(torch.cuda.default_stream())
         with torch.cuda.stream(comm_stream):
             attn_output1["work"].wait()
-            attn_output1["work"].is_completed()
+            # assert attn_output1["work"].is_completed()
         torch.cuda.default_stream().wait_stream(comm_stream)
 
         hidden_states1 = attn_output1["hidden_states"] + residual1
@@ -835,7 +841,6 @@ class DominoLlamaDecoderLayer(_BaseLlamaDecoderLayer):
         mlp_output1 = self.mlp(
             hidden_states=hidden_states1,
             op_name=FWD_MLP_OP_NAME.format(self.layer_idx, 1),
-            comm_stream=comm_stream,
         )
 
         comm_stream.wait_stream(torch.cuda.default_stream())
@@ -843,8 +848,8 @@ class DominoLlamaDecoderLayer(_BaseLlamaDecoderLayer):
             mlp_output0["work"].wait()
             mlp_output1["work"].wait()
 
-            mlp_output0["work"].is_completed()
-            mlp_output1["work"].is_completed()
+            # assert mlp_output0["work"].is_completed()
+            # assert mlp_output1["work"].is_completed()
         torch.cuda.default_stream().wait_stream(comm_stream)
 
         hidden_states0 = mlp_output0["hidden_states"] + residual0
@@ -926,6 +931,7 @@ class LlamaModel(nn.Module):
             parallel_config.tp_linear_async_communication if parallel_config is not None else False
         )
 
+        self._init_cuda_stream_for_comm()
         self.token_position_embeddings = PipelineBlock(
             p2p=self.p2p,
             module_builder=Embedding,
@@ -955,6 +961,7 @@ class LlamaModel(nn.Module):
                         "parallel_config": parallel_config,
                         "tp_pg": parallel_context.tp_pg,
                         "layer_idx": layer_idx,
+                        "stream_manager": self.stream_manager,
                     },
                     module_input_keys={"hidden_states", "sequence_mask"},
                     module_output_keys={"hidden_states", "sequence_mask"},
@@ -996,6 +1003,10 @@ class LlamaModel(nn.Module):
             module_input_keys={"x"},
             module_output_keys={"output"},
         )
+
+    def _init_cuda_stream_for_comm(self):
+        self.stream_manager = CudaStreamManager()
+        self.stream_manager.create(f"comm_stream_{torch.cuda.current_device()}", device=torch.cuda.current_device())
 
     def forward(
         self,
