@@ -6,7 +6,7 @@ from helpers.utils import (
     rerun_if_address_is_in_use,
 )
 from nanotron.parallel import ParallelContext
-from nanotron.parallel.comm import AsyncCommBucket, CudaStreamManager, WaitComm
+from nanotron.parallel.comm import AsyncCommBucket, CudaStreamManager, insert_backward_sync_to_tensor
 
 
 class MockWork:
@@ -40,9 +40,10 @@ def _test_add_async_op_to_bucket(parallel_context: ParallelContext):
     tensor = torch.randn(1, device="cuda")
     work = dist.all_reduce(tensor, async_op=True)
 
-    AsyncCommBucket.add(OP_NAME, work)
+    comm_bucket = AsyncCommBucket()
+    comm_bucket.add(OP_NAME, work)
 
-    assert AsyncCommBucket.get(OP_NAME) is work
+    assert comm_bucket.get(OP_NAME) is work
 
 
 @rerun_if_address_is_in_use()
@@ -53,14 +54,15 @@ def test_wait_async_op_to_bucket():
 def _test_wait_async_op_to_bucket(parallel_context: ParallelContext):
     OP_NAME = "test"
     work = MockWork()
+    comm_bucket = AsyncCommBucket()
 
-    AsyncCommBucket.add(OP_NAME, work)
+    comm_bucket.add(OP_NAME, work)
     assert work.is_completed() is False
 
-    AsyncCommBucket.wait(OP_NAME)
+    comm_bucket.wait(OP_NAME)
     assert work.is_completed()
     with pytest.raises(KeyError):
-        AsyncCommBucket.get(OP_NAME)
+        comm_bucket.get(OP_NAME)
 
 
 @rerun_if_address_is_in_use()
@@ -71,12 +73,13 @@ def test_is_all_completed_in_async_bucket():
 def _test_wait_async_op_to_bucket(parallel_context: ParallelContext):
     OP_NAME = "test"
     work = MockWork()
+    comm_bucket = AsyncCommBucket()
 
-    AsyncCommBucket.add(OP_NAME, work)
-    assert AsyncCommBucket.is_all_completed() is False
+    comm_bucket.add(OP_NAME, work)
+    assert comm_bucket.is_all_completed() is False
 
-    AsyncCommBucket.wait(OP_NAME)
-    assert AsyncCommBucket.is_all_completed() is True
+    comm_bucket.wait(OP_NAME)
+    assert comm_bucket.is_all_completed() is True
 
 
 @rerun_if_address_is_in_use()
@@ -85,16 +88,18 @@ def test_clear_ops_in_async_bucket():
 
 
 def _test_clear_ops_in_async_bucket(parallel_context: ParallelContext):
-    AsyncCommBucket.add("test1", MockWork())
-    AsyncCommBucket.add("test2", MockWork())
-    AsyncCommBucket.add("test3", MockWork())
+    comm_bucket = AsyncCommBucket()
 
-    assert AsyncCommBucket.is_all_completed() is False
+    comm_bucket.add("test1", MockWork())
+    comm_bucket.add("test2", MockWork())
+    comm_bucket.add("test3", MockWork())
 
-    AsyncCommBucket.clear_all()
-    assert AsyncCommBucket.is_all_completed() is True
+    assert comm_bucket.is_all_completed() is False
+
+    comm_bucket.clear_all()
+    assert comm_bucket.is_all_completed() is True
     with pytest.raises(KeyError):
-        AsyncCommBucket.get("test1")
+        comm_bucket.get("test1")
 
 
 @rerun_if_address_is_in_use()
@@ -103,16 +108,17 @@ def test_wait_comm():
 
 
 def _test_wait_comm(parallel_context: ParallelContext):
-    tensor = torch.randn(1, device="cuda", requires_grad=True)
     OP_NAME = "test"
+    tensor = torch.randn(1, device="cuda", requires_grad=True)
+    stream_manager = CudaStreamManager()
 
     comm_stream = torch.cuda.Stream()
 
     with torch.cuda.stream(comm_stream):
         work = MockWork()
-        AsyncCommBucket.add(OP_NAME, work)
+        stream_manager.comm_bucket.add(OP_NAME, work)
 
-    output = WaitComm.apply(tensor, OP_NAME)
+    output = insert_backward_sync_to_tensor(tensor, OP_NAME, stream_manager)
     assert work.is_completed() is False
 
     # NOTE: we test that it waits for the async op to complete

@@ -35,7 +35,7 @@ from nanotron.config import (
     SpectralMupInit,
     get_config_from_file,
 )
-from nanotron.constants import MODEL_CONFIG_FILE_NAME
+from nanotron.constants import CUDA_STREAM_COMM_NAME, MODEL_CONFIG_FILE_NAME
 from nanotron.dataloader import sanity_check_dataloader
 from nanotron.helpers import (
     _vocab_size_with_padding,
@@ -61,7 +61,7 @@ from nanotron.models.llama import LlamaForTraining, RotaryEmbedding
 from nanotron.models.starcoder2 import Starcoder2ForTraining
 from nanotron.optim.clip_grads import clip_grad_norm
 from nanotron.parallel import ParallelContext
-from nanotron.parallel.comm import AsyncCommBucket
+from nanotron.parallel.comm import CudaStreamManager
 from nanotron.parallel.data_parallel.utils import sync_gradients_across_dp
 from nanotron.parallel.parameters import NanotronParameter, sanity_check
 from nanotron.parallel.pipeline_parallel.engine import (
@@ -579,7 +579,7 @@ class DistributedTrainer:
 
         self.post_train_step()
 
-        AsyncCommBucket.clear_all()
+        self.stream_manager.comm_bucket.clear_all()
 
         return outputs, loss_avg
 
@@ -717,12 +717,18 @@ class DistributedTrainer:
             model_config_cls in CONFIG_TO_MODEL_CLASS
         ), f"Unsupported model config {model_config_cls}. Only {CONFIG_TO_MODEL_CLASS.keys()} are supported"
 
+        self.stream_manager = CudaStreamManager()
+        self.stream_manager.create(
+            CUDA_STREAM_COMM_NAME.format(torch.cuda.current_device()), device=torch.cuda.current_device()
+        )
+
         model = self._init_model(
             model_builder=lambda: CONFIG_TO_MODEL_CLASS[model_config_cls](
                 config=self.model_config,
                 parallel_context=self.parallel_context,
                 parallel_config=self.config.parallelism,
                 random_states=self.random_states,
+                stream_manager=self.stream_manager,
             ),
         )
         return model

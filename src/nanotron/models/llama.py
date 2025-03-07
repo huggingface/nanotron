@@ -30,7 +30,7 @@ from nanotron.models import NanotronModel
 from nanotron.nn.activations import ACT2FN
 from nanotron.nn.layer_norm import TritonRMSNorm
 from nanotron.parallel import ParallelContext
-from nanotron.parallel.comm import CudaStreamManager, WaitComm
+from nanotron.parallel.comm import CudaStreamManager, insert_backward_sync_to_tensor
 from nanotron.parallel.parameters import NanotronParameter
 from nanotron.parallel.pipeline_parallel.block import PipelineBlock, TensorPointer
 from nanotron.parallel.pipeline_parallel.p2p import P2P
@@ -228,7 +228,7 @@ class MLP(nn.Module):
             config.intermediate_size,  # shape of gate_linear
             config.intermediate_size,  # shape of up_linear
         )
-        comm_stream = stream_manager.get(f"comm_stream_{torch.cuda.current_device()}")
+        stream_manager.get_default_comm_stream()
         self.gate_up_proj = TensorParallelColumnLinear(
             config.hidden_size,
             2 * config.intermediate_size,
@@ -238,7 +238,7 @@ class MLP(nn.Module):
             async_communication=tp_linear_async_communication,
             contiguous_chunks=gate_up_contiguous_chunks,
             tp_recompute_allgather=parallel_config.tp_recompute_allgather,
-            comm_stream=comm_stream,
+            stream_manager=stream_manager,
         )
         self.down_proj = TensorParallelRowLinear(
             config.intermediate_size,
@@ -247,7 +247,7 @@ class MLP(nn.Module):
             mode=tp_mode,
             bias=False,
             async_communication=tp_linear_async_communication and tp_mode is TensorParallelLinearMode.REDUCE_SCATTER,
-            comm_stream=comm_stream,
+            stream_manager=stream_manager,
         )
         self.split_silu_mul = GLUActivation(config.hidden_act)
 
@@ -255,8 +255,8 @@ class MLP(nn.Module):
         self, hidden_states: torch.Tensor, op_name: Optional[str] = None
     ):  # [seq_length, batch_size, hidden_dim]
         merged_states = self.gate_up_proj(hidden_states, op_name=op_name)
-        hidden_states, work = self.down_proj(self.split_silu_mul(merged_states), op_name=op_name)
-        return {"hidden_states": hidden_states, "work": work}
+        hidden_states = self.down_proj(self.split_silu_mul(merged_states), op_name=op_name)
+        return {"hidden_states": hidden_states}
 
 
 class CoreAttention(nn.Module):
@@ -395,7 +395,6 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             config.num_key_value_heads * self.d_qk,  # shape of k
             config.num_key_value_heads * self.d_qk,  # shape of v
         )
-        comm_stream = stream_manager.get(f"comm_stream_{torch.cuda.current_device()}")
         self.qkv_proj = TensorParallelColumnLinear(
             self.d_model,
             config.num_attention_heads * self.d_qk + 2 * config.num_key_value_heads * self.d_qk,
@@ -405,7 +404,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             async_communication=tp_linear_async_communication,
             contiguous_chunks=qkv_contiguous_chunks,
             tp_recompute_allgather=parallel_config.tp_recompute_allgather,
-            comm_stream=comm_stream,
+            stream_manager=stream_manager,
         )
         # TODO(kunhao): We want to have only one version per device and not one version per layer.
         if config.rope_interleaved:
@@ -434,7 +433,7 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             mode=tp_mode,
             bias=False,
             async_communication=tp_linear_async_communication,
-            comm_stream=comm_stream,
+            stream_manager=stream_manager,
         )
 
         self.attention = CoreAttention(
@@ -707,9 +706,10 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         attention_output = (
             attention_output.contiguous().view(batch_size, q_length, self.n_local_q_heads * self.d_v).transpose(0, 1)
         )
-        output, work = self.o_proj(attention_output, op_name=op_name)
+        # output, work = self.o_proj(attention_output, op_name=op_name)
+        output = self.o_proj(attention_output, op_name=op_name)
 
-        return {"hidden_states": output, "work": work, "sequence_mask": sequence_mask}
+        return {"hidden_states": output, "sequence_mask": sequence_mask}
 
 
 class _BaseLlamaDecoderLayer(nn.Module):
@@ -773,7 +773,8 @@ class DominoLlamaDecoderLayer(_BaseLlamaDecoderLayer):
         num_input_batches = self.parallel_config.domino.num_input_batches
 
         orig_sequence_mask = sequence_mask
-        comm_stream = self.stream_manager.get(f"comm_stream_{torch.cuda.current_device()}")
+        comm_stream = self.stream_manager.get_default_comm_stream()
+        comm_bucket = self.stream_manager.comm_bucket
 
         hidden_states = torch.chunk(hidden_states, chunks=num_input_batches, dim=1)
         sequence_mask = torch.chunk(sequence_mask, chunks=num_input_batches, dim=0)
@@ -786,15 +787,15 @@ class DominoLlamaDecoderLayer(_BaseLlamaDecoderLayer):
 
         hidden_states0 = self.input_layernorm(hidden_states0)
         hidden_states1 = self.input_layernorm(hidden_states1)
-        hidden_states0 = WaitComm.apply(
+        hidden_states0 = insert_backward_sync_to_tensor(
             hidden_states0,
             BWD_ATTN_OP_NAME.format(self.layer_idx, 1),
-            comm_stream,
+            self.stream_manager,
         )
-        hidden_states1 = WaitComm.apply(
+        hidden_states1 = insert_backward_sync_to_tensor(
             hidden_states1,
             BWD_MLP_OP_NAME.format(self.layer_idx, 0),
-            comm_stream,
+            self.stream_manager,
         )
 
         attn_output0 = self.attn(
@@ -810,17 +811,18 @@ class DominoLlamaDecoderLayer(_BaseLlamaDecoderLayer):
 
         comm_stream.wait_stream(torch.cuda.default_stream())
         with torch.cuda.stream(comm_stream):
-            attn_output0["work"].wait()
+            comm_bucket.wait(FWD_ATTN_OP_NAME.format(self.layer_idx, 0))
             # assert attn_output0["work"].is_completed()
+
         torch.cuda.default_stream().wait_stream(comm_stream)
 
         hidden_states0 = attn_output0["hidden_states"] + residual0
         residual0 = hidden_states0
         hidden_states0 = self.post_attention_layernorm(hidden_states0)
-        hidden_states0 = WaitComm.apply(
+        hidden_states0 = insert_backward_sync_to_tensor(
             hidden_states0,
             BWD_MLP_OP_NAME.format(self.layer_idx, 1),
-            comm_stream,
+            self.stream_manager,
         )
 
         mlp_output0 = self.mlp(
@@ -830,8 +832,11 @@ class DominoLlamaDecoderLayer(_BaseLlamaDecoderLayer):
 
         comm_stream.wait_stream(torch.cuda.default_stream())
         with torch.cuda.stream(comm_stream):
-            attn_output1["work"].wait()
+            # assert 1 == 1
+            # attn_output1["work"].wait()
+            comm_bucket.wait(FWD_ATTN_OP_NAME.format(self.layer_idx, 1))
             # assert attn_output1["work"].is_completed()
+
         torch.cuda.default_stream().wait_stream(comm_stream)
 
         hidden_states1 = attn_output1["hidden_states"] + residual1
@@ -845,11 +850,14 @@ class DominoLlamaDecoderLayer(_BaseLlamaDecoderLayer):
 
         comm_stream.wait_stream(torch.cuda.default_stream())
         with torch.cuda.stream(comm_stream):
-            mlp_output0["work"].wait()
-            mlp_output1["work"].wait()
+            # mlp_output0["work"].wait()
+            # mlp_output1["work"].wait()
 
-            # assert mlp_output0["work"].is_completed()
-            # assert mlp_output1["work"].is_completed()
+            # # assert mlp_output0["work"].is_completed()
+            # # assert mlp_output1["work"].is_completed()
+            comm_bucket.wait(FWD_MLP_OP_NAME.format(self.layer_idx, 0))
+            comm_bucket.wait(FWD_MLP_OP_NAME.format(self.layer_idx, 1))
+
         torch.cuda.default_stream().wait_stream(comm_stream)
 
         hidden_states0 = mlp_output0["hidden_states"] + residual0
@@ -918,6 +926,7 @@ class LlamaModel(nn.Module):
         config: LlamaConfig,
         parallel_context: ParallelContext,
         parallel_config: Optional[ParallelismArgs],
+        stream_manager: Optional[CudaStreamManager] = None,
     ):
         super().__init__()
 
@@ -931,7 +940,6 @@ class LlamaModel(nn.Module):
             parallel_config.tp_linear_async_communication if parallel_config is not None else False
         )
 
-        self._init_cuda_stream_for_comm()
         self.token_position_embeddings = PipelineBlock(
             p2p=self.p2p,
             module_builder=Embedding,
@@ -961,7 +969,7 @@ class LlamaModel(nn.Module):
                         "parallel_config": parallel_config,
                         "tp_pg": parallel_context.tp_pg,
                         "layer_idx": layer_idx,
-                        "stream_manager": self.stream_manager,
+                        "stream_manager": stream_manager,
                     },
                     module_input_keys={"hidden_states", "sequence_mask"},
                     module_output_keys={"hidden_states", "sequence_mask"},
@@ -1003,10 +1011,6 @@ class LlamaModel(nn.Module):
             module_input_keys={"x"},
             module_output_keys={"output"},
         )
-
-    def _init_cuda_stream_for_comm(self):
-        self.stream_manager = CudaStreamManager()
-        self.stream_manager.create(f"comm_stream_{torch.cuda.current_device()}", device=torch.cuda.current_device())
 
     def forward(
         self,
@@ -1115,9 +1119,15 @@ class LlamaForTraining(NanotronModel):
         parallel_context: ParallelContext,
         parallel_config: Optional[ParallelismArgs],
         random_states: Optional[RandomStates] = None,
+        stream_manager: Optional[CudaStreamManager] = None,
     ):
         super().__init__()
-        self.model = LlamaModel(config=config, parallel_context=parallel_context, parallel_config=parallel_config)
+        self.model = LlamaModel(
+            config=config,
+            parallel_context=parallel_context,
+            parallel_config=parallel_config,
+            stream_manager=stream_manager,
+        )
         self.loss = PipelineBlock(
             p2p=self.model.p2p,
             module_builder=Loss,
@@ -1132,6 +1142,7 @@ class LlamaForTraining(NanotronModel):
         self.parallel_context = parallel_context
         self.config = config
         self.parallel_config = parallel_config
+        self.stream_manager = stream_manager
 
     def forward(
         self,
