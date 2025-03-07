@@ -60,6 +60,12 @@ class CudaStreamManager:
         self._streams: Dict[str, "torch.cuda.Stream"] = {}
         self.comm_bucket = AsyncCommBucket()
 
+    def init_default_comm_stream(self):
+        """
+        Initialize the default communication stream for the current cuda device.
+        """
+        self.create(CUDA_STREAM_COMM_NAME.format(torch.cuda.current_device()), torch.cuda.current_device())
+
     def create(self, name: str, device: torch.device):
         assert name not in self._streams
         self._streams[name] = torch.cuda.Stream(device=device)

@@ -228,7 +228,6 @@ class MLP(nn.Module):
             config.intermediate_size,  # shape of gate_linear
             config.intermediate_size,  # shape of up_linear
         )
-        stream_manager.get_default_comm_stream()
         self.gate_up_proj = TensorParallelColumnLinear(
             config.hidden_size,
             2 * config.intermediate_size,
@@ -765,6 +764,10 @@ class _BaseLlamaDecoderLayer(nn.Module):
 
 
 class DominoLlamaDecoderLayer(_BaseLlamaDecoderLayer):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        assert self.stream_manager is not None, "DominoLlamaDecoderLayer requires a stream_manager"
+
     def _core_forward(
         self,
         hidden_states: Union[torch.Tensor, TensorPointer],

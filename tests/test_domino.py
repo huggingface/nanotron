@@ -8,7 +8,7 @@ from nanotron.config import ModelArgs, RandomInit
 from nanotron.config.parallelism_config import DominoArgs
 from nanotron.models.llama import DominoLlamaDecoderLayer
 from nanotron.parallel import ParallelContext
-from nanotron.parallel.comm import AsyncCommBucket
+from nanotron.parallel.comm import CudaStreamManager
 from nanotron.parallel.tensor_parallel.domino import is_domino_async_comm
 
 
@@ -51,12 +51,15 @@ def _test_domino_model(
 ):
     config = get_llama_training_config(model_args, parallel_context)
     config.parallelism.domino = DominoArgs(num_input_batches=2)
+    stream_manager = CudaStreamManager()
+    stream_manager.init_default_comm_stream()
 
     llama_model = create_llama_from_config(
         model_config=config.model.model_config,
         parallel_config=config.parallelism,
         device=torch.device("cuda"),
         parallel_context=parallel_context,
+        stream_manager=stream_manager,
     )
     llama_model.init_model_randomly(config=config)
 
@@ -68,4 +71,4 @@ def _test_domino_model(
     outputs = llama_model(input_ids, input_mask, input_mask, input_mask)
 
     assert isinstance(outputs["loss"], torch.Tensor)
-    assert AsyncCommBucket.is_all_completed() is True
+    assert stream_manager.comm_bucket.is_all_completed() is True

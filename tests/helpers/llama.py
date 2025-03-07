@@ -1,3 +1,5 @@
+from typing import Optional
+
 import torch
 from nanotron.config import (
     AdamWOptimizerArgs,
@@ -20,6 +22,7 @@ from nanotron.config import (
 from nanotron.config.config import PretrainDatasetsArgs
 from nanotron.models import build_model
 from nanotron.models.llama import LlamaForTraining
+from nanotron.parallel.comm import CudaStreamManager
 from nanotron.parallel.context import ParallelContext
 from nanotron.trainer import mark_tied_parameters
 
@@ -115,6 +118,7 @@ def create_llama_from_config(
     parallel_config: ParallelismArgs,
     device: torch.device,
     parallel_context: ParallelContext,
+    stream_manager: Optional[CudaStreamManager] = None,
 ) -> LlamaForTraining:
 
     """
@@ -131,6 +135,7 @@ def create_llama_from_config(
             parallel_context=parallel_context,
             parallel_config=parallel_config,
             random_states=None,
+            stream_manager=stream_manager,
         ),
         parallel_context=parallel_context,
         dtype=torch.bfloat16,

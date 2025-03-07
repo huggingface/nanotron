@@ -35,7 +35,7 @@ from nanotron.config import (
     SpectralMupInit,
     get_config_from_file,
 )
-from nanotron.constants import CUDA_STREAM_COMM_NAME, MODEL_CONFIG_FILE_NAME
+from nanotron.constants import MODEL_CONFIG_FILE_NAME
 from nanotron.dataloader import sanity_check_dataloader
 from nanotron.helpers import (
     _vocab_size_with_padding,
@@ -718,9 +718,7 @@ class DistributedTrainer:
         ), f"Unsupported model config {model_config_cls}. Only {CONFIG_TO_MODEL_CLASS.keys()} are supported"
 
         self.stream_manager = CudaStreamManager()
-        self.stream_manager.create(
-            CUDA_STREAM_COMM_NAME.format(torch.cuda.current_device()), device=torch.cuda.current_device()
-        )
+        self.stream_manager.init_default_comm_stream()
 
         model = self._init_model(
             model_builder=lambda: CONFIG_TO_MODEL_CLASS[model_config_cls](
