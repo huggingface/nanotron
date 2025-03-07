@@ -812,7 +812,6 @@ class DominoLlamaDecoderLayer(_BaseLlamaDecoderLayer):
         comm_stream.wait_stream(torch.cuda.default_stream())
         with torch.cuda.stream(comm_stream):
             comm_bucket.wait(FWD_ATTN_OP_NAME.format(self.layer_idx, 0))
-            # assert attn_output0["work"].is_completed()
 
         torch.cuda.default_stream().wait_stream(comm_stream)
 
@@ -832,10 +831,7 @@ class DominoLlamaDecoderLayer(_BaseLlamaDecoderLayer):
 
         comm_stream.wait_stream(torch.cuda.default_stream())
         with torch.cuda.stream(comm_stream):
-            # assert 1 == 1
-            # attn_output1["work"].wait()
             comm_bucket.wait(FWD_ATTN_OP_NAME.format(self.layer_idx, 1))
-            # assert attn_output1["work"].is_completed()
 
         torch.cuda.default_stream().wait_stream(comm_stream)
 
@@ -850,11 +846,6 @@ class DominoLlamaDecoderLayer(_BaseLlamaDecoderLayer):
 
         comm_stream.wait_stream(torch.cuda.default_stream())
         with torch.cuda.stream(comm_stream):
-            # mlp_output0["work"].wait()
-            # mlp_output1["work"].wait()
-
-            # # assert mlp_output0["work"].is_completed()
-            # # assert mlp_output1["work"].is_completed()
             comm_bucket.wait(FWD_MLP_OP_NAME.format(self.layer_idx, 0))
             comm_bucket.wait(FWD_MLP_OP_NAME.format(self.layer_idx, 1))
 

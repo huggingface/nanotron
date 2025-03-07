@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import math
-from typing import Optional, Tuple
+from typing import Optional
 
 import torch
 from torch.nn import functional as F
@@ -593,23 +593,17 @@ def row_linear(
     async_communication: bool,
     op_name: Optional[str] = None,
     stream_manager: Optional[CudaStreamManager] = None,
-) -> Tuple[torch.Tensor, Optional[torch.Future]]:
+):
     if async_communication:
-        out = _RowLinearAsyncCommunication.apply(input, weight, bias, group, tp_mode)
-    else:
-        out = F.linear(input, weight, bias)
-        if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
-            out = differentiable_all_reduce_sum(out, group=group, op_name=op_name, stream_manager=stream_manager)
-            # is_domino_async_all_reduce = is_domino_async_comm(op_name) if op_name is not None else False
-            # if is_domino_async_all_reduce:
-            #     work = AsyncCommBucket.pop(op_name)
-            # else:
-            #     work = None
-        elif tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
-            out = differentiable_reduce_scatter_sum(out, group=group)
-            # work = None
-        else:
-            raise ValueError(f"Got unexpected mode: {tp_mode}.")
+        return _RowLinearAsyncCommunication.apply(input, weight, bias, group, tp_mode)
 
-    # return out, work
+    out = F.linear(input, weight, bias)
+
+    if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
+        out = differentiable_all_reduce_sum(out, group=group, op_name=op_name, stream_manager=stream_manager)
+    elif tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
+        out = differentiable_reduce_scatter_sum(out, group=group)
+    else:
+        raise ValueError(f"Got unexpected mode: {tp_mode}.")
+
     return out
