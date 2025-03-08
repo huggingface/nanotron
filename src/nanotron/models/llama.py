@@ -796,6 +796,8 @@ class DominoLlamaDecoderLayer(_BaseLlamaDecoderLayer):
                 sequence_mask=sequence_mask0,
             )
 
+        # TODO: maybe try to bucket all the communication as in DPP,
+        # do it at at once
         with set_operation_context(FWD_ATTN_OP_NAME.format(self.layer_idx, 1), self.stream_manager):
             attn_output1 = self.attn(
                 hidden_states=hidden_states1,
@@ -843,6 +845,8 @@ class DominoLlamaDecoderLayer(_BaseLlamaDecoderLayer):
         hidden_states0 = mlp_output0["hidden_states"] + residual0
         hidden_states1 = mlp_output1["hidden_states"] + residual1
 
+        # TODO: make sure no memory overhead,
+        # and try a fixed memory buffer as in section 4.2 in the paper
         hidden_states = torch.cat([hidden_states0, hidden_states1], dim=1)
         return hidden_states, orig_sequence_mask
 
