@@ -482,7 +482,9 @@ def get_profiler(config: Config):
             on_trace_ready=on_trace_ready,
             # record_shapes=True,
             # profile_memory=True,
+            with_flops=True,
             with_stack=True,
+            with_modules=True,
         )
     else:
         prof = contextlib.nullcontext()

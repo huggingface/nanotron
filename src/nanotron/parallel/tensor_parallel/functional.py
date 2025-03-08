@@ -24,6 +24,7 @@ from nanotron.parallel.tensor_parallel.distributed_differentiable_primitives imp
     differentiable_identity,
     differentiable_reduce_scatter_sum,
 )
+from nanotron.parallel.tensor_parallel.domino import get_op_name, get_stream_manager
 from nanotron.parallel.tensor_parallel.enum import TensorParallelLinearMode
 from nanotron.parallel.utils import MemoryBuffer, assert_cuda_max_connections_set_to_1
 
@@ -40,7 +41,7 @@ class _ShardedCrossEntropy(torch.autograd.Function):
         logits_max = torch.max(sharded_logits, dim=-1)[0]
         dist.all_reduce(logits_max, op=dist.ReduceOp.MAX, group=group)
         # Subtract the maximum value.
-        sharded_logits = sharded_logits - logits_max.unsqueeze(dim=-1)
+        sharded_logits.sub_(logits_max.unsqueeze(dim=-1))
 
         # Get the shard's indices
         sharded_hidden_size = sharded_logits.shape[-1]
@@ -441,7 +442,9 @@ def column_linear(
         return _ColumnLinearAsyncCommunication.apply(input, weight, bias, group, tp_mode, tp_recompute_allgather)
 
     if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
-        input = differentiable_identity(input, group=group)
+        op_name = get_op_name()
+        stream_manager = get_stream_manager()
+        input = differentiable_identity(input, group=group, op_name=op_name, stream_manager=stream_manager)
         return F.linear(input, weight, bias)
     if tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
         return _ColumnLinearNoAsyncCommunicationReduceScatterMode.apply(
@@ -595,7 +598,9 @@ def row_linear(
     out = F.linear(input, weight, bias)
 
     if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
-        out = differentiable_all_reduce_sum(out, group=group)
+        op_name = get_op_name()
+        stream_manager = get_stream_manager()
+        out = differentiable_all_reduce_sum(out, group=group, op_name=op_name, stream_manager=stream_manager)
     elif tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
         out = differentiable_reduce_scatter_sum(out, group=group)
     else:

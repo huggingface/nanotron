@@ -2,6 +2,9 @@ from abc import ABC, abstractmethod
 from typing import Dict, Iterable, Optional, Union
 
 import torch
+from torch import nn
+from torch.nn.parallel import DistributedDataParallel
+
 from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.distributed import ProcessGroup
@@ -12,8 +15,6 @@ from nanotron.parallel.pipeline_parallel.context_manager import attach_pipeline_
 from nanotron.parallel.pipeline_parallel.state import PipelineTrainBatchState
 from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
 from nanotron.utils import ContextManagers
-from torch import nn as torch_nn
-from torch.nn.parallel import DistributedDataParallel
 
 logger = logging.get_logger(__name__)
 
@@ -28,7 +29,7 @@ class PipelineEngine(ABC):
         context: ContextManagers,
         state: PipelineTrainBatchState,
         micro_batch: Dict[str, Union[torch.Tensor, TensorPointer]],
-        model: torch_nn.Module,
+        model: nn.Module,
     ) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
         # Increment the number of backwards
         state.nb_forwards += 1
@@ -58,7 +59,7 @@ class PipelineEngine(ABC):
         return output
 
     @staticmethod
-    def _get_fwd_context(model: torch_nn.Module):
+    def _get_fwd_context(model: nn.Module):
         is_ddp = isinstance(model, DistributedDataParallel)
         # We never to trigger a DDP sync in the next backward pass
         context = ContextManagers([model.no_sync()] if is_ddp else [])
@@ -96,7 +97,7 @@ class PipelineEngine(ABC):
 
     def _get_bwd_context(
         self,
-        model: torch_nn.Module,
+        model: nn.Module,
         nb_backwards: int,
         grad_accumulator: Optional[GradientAccumulator],
     ):
@@ -117,7 +118,7 @@ class PipelineEngine(ABC):
     @abstractmethod
     def train_batch_iter(
         self,
-        model: torch_nn.Module,
+        model: nn.Module,
         pg: ProcessGroup,
         batch: Iterable[Dict[str, Union[torch.Tensor, TensorPointer]]],
         nb_microbatches: int,
@@ -129,7 +130,7 @@ class PipelineEngine(ABC):
     @torch.inference_mode()
     def validate_batch_iter(
         self,
-        model: torch_nn.Module,
+        model: nn.Module,
         batch: Iterable[Dict[str, Union[torch.Tensor, TensorPointer]]],
         nb_microbatches: int,
     ) -> Iterable[Dict[str, Union[torch.Tensor, TensorPointer]]]:
@@ -168,7 +169,7 @@ class AllForwardAllBackwardPipelineEngine(PipelineEngine):
 
     def train_batch_iter(
         self,
-        model: torch_nn.Module,
+        model: nn.Module,
         pg: ProcessGroup,
         batch: Iterable[Dict[str, Union[torch.Tensor, TensorPointer]]],
         nb_microbatches: int,
@@ -225,7 +226,7 @@ class OneForwardOneBackwardPipelineEngine(PipelineEngine):
 
     def train_batch_iter(
         self,
-        model: torch_nn.Module,
+        model: nn.Module,
         pg: ProcessGroup,
         batch: Iterable[Dict[str, Union[torch.Tensor, TensorPointer]]],
         nb_microbatches: int,
