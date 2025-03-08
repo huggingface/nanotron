@@ -9,7 +9,7 @@ from nanotron.config.parallelism_config import DominoArgs
 from nanotron.models.llama import DominoLlamaDecoderLayer
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.comm import CudaStreamManager
-from nanotron.parallel.tensor_parallel.domino import OpNameContext, get_op_name, is_domino_async_comm
+from nanotron.parallel.tensor_parallel.domino import OperationContext, get_op_name, is_domino_async_comm
 
 
 @pytest.mark.parametrize(
@@ -74,12 +74,12 @@ def _test_domino_model(
     assert stream_manager.comm_bucket.is_all_completed() is True
 
 
-### OpNameContext tests ###
+### OperationContext tests ###
 
 
 def test_op_name_context_reentry():
     assert get_op_name() is None
-    context = OpNameContext("reusable_op")
+    context = OperationContext("reusable_op")
 
     with context:
         assert get_op_name() == "reusable_op"
@@ -93,10 +93,10 @@ def test_op_name_context_reentry():
 
 
 def test_deeply_nested_contexts():
-    with OpNameContext("level1"):
+    with OperationContext("level1"):
         assert get_op_name() == "level1"
 
-        with OpNameContext("level2"):
+        with OperationContext("level2"):
             assert get_op_name() == "level2"
 
         assert get_op_name() == "level1"
@@ -105,10 +105,10 @@ def test_deeply_nested_contexts():
 def test_multiple_sequential_contexts():
     assert get_op_name() is None
 
-    with OpNameContext("first_op"):
+    with OperationContext("first_op"):
         assert get_op_name() == "first_op"
 
-    with OpNameContext("second_op"):
+    with OperationContext("second_op"):
         assert get_op_name() == "second_op"
 
     assert get_op_name() is None

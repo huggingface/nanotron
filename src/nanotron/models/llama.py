@@ -39,7 +39,7 @@ from nanotron.parallel.tensor_parallel.domino import (
     BWD_MLP_OP_NAME,
     FWD_ATTN_OP_NAME,
     FWD_MLP_OP_NAME,
-    OpNameContext,
+    set_operation_context,
 )
 from nanotron.parallel.tensor_parallel.functional import sharded_cross_entropy
 from nanotron.parallel.tensor_parallel.nn import (
@@ -215,7 +215,6 @@ class MLP(nn.Module):
         config: LlamaConfig,
         parallel_config: Optional[ParallelismArgs],
         tp_pg: dist.ProcessGroup,
-        stream_manager: Optional[CudaStreamManager] = None,
     ):
         super().__init__()
 
@@ -238,7 +237,6 @@ class MLP(nn.Module):
             async_communication=tp_linear_async_communication,
             contiguous_chunks=gate_up_contiguous_chunks,
             tp_recompute_allgather=parallel_config.tp_recompute_allgather,
-            stream_manager=stream_manager,
         )
         self.down_proj = TensorParallelRowLinear(
             config.intermediate_size,
@@ -247,7 +245,6 @@ class MLP(nn.Module):
             mode=tp_mode,
             bias=False,
             async_communication=tp_linear_async_communication and tp_mode is TensorParallelLinearMode.REDUCE_SCATTER,
-            stream_manager=stream_manager,
         )
         self.split_silu_mul = GLUActivation(config.hidden_act)
 
@@ -346,7 +343,6 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         parallel_config: Optional[ParallelismArgs],
         tp_pg: dist.ProcessGroup,
         layer_idx: int,
-        stream_manager: Optional[CudaStreamManager] = None,
     ):
         from flash_attn.layers.rotary import RotaryEmbedding as FlashRotaryEmbedding
 
@@ -402,7 +398,6 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             async_communication=tp_linear_async_communication,
             contiguous_chunks=qkv_contiguous_chunks,
             tp_recompute_allgather=parallel_config.tp_recompute_allgather,
-            stream_manager=stream_manager,
         )
         # TODO(kunhao): We want to have only one version per device and not one version per layer.
         if config.rope_interleaved:
@@ -431,7 +426,6 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             mode=tp_mode,
             bias=False,
             async_communication=tp_linear_async_communication,
-            stream_manager=stream_manager,
         )
 
         self.attention = CoreAttention(
@@ -724,11 +718,10 @@ class _BaseLlamaDecoderLayer(nn.Module):
             parallel_config=parallel_config,
             tp_pg=tp_pg,
             layer_idx=layer_idx,
-            stream_manager=stream_manager,
         )
 
         self.post_attention_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.mlp = MLP(config=config, parallel_config=parallel_config, tp_pg=tp_pg, stream_manager=stream_manager)
+        self.mlp = MLP(config=config, parallel_config=parallel_config, tp_pg=tp_pg)
 
         self.recompute_layer = parallel_config.recompute_layer
         self.parallel_config = parallel_config
@@ -797,13 +790,13 @@ class DominoLlamaDecoderLayer(_BaseLlamaDecoderLayer):
             self.stream_manager,
         )
 
-        with OpNameContext(FWD_ATTN_OP_NAME.format(self.layer_idx, 0)):
+        with set_operation_context(FWD_ATTN_OP_NAME.format(self.layer_idx, 0), self.stream_manager):
             attn_output0 = self.attn(
                 hidden_states=hidden_states0,
                 sequence_mask=sequence_mask0,
             )
 
-        with OpNameContext(FWD_ATTN_OP_NAME.format(self.layer_idx, 1)):
+        with set_operation_context(FWD_ATTN_OP_NAME.format(self.layer_idx, 1), self.stream_manager):
             attn_output1 = self.attn(
                 hidden_states=hidden_states1,
                 sequence_mask=sequence_mask1,
@@ -824,7 +817,7 @@ class DominoLlamaDecoderLayer(_BaseLlamaDecoderLayer):
             self.stream_manager,
         )
 
-        with OpNameContext(FWD_MLP_OP_NAME.format(self.layer_idx, 0)):
+        with set_operation_context(FWD_MLP_OP_NAME.format(self.layer_idx, 0), self.stream_manager):
             mlp_output0 = self.mlp(hidden_states=hidden_states0)
 
         comm_stream.wait_stream(torch.cuda.default_stream())
@@ -837,7 +830,7 @@ class DominoLlamaDecoderLayer(_BaseLlamaDecoderLayer):
         residual1 = hidden_states1
         hidden_states1 = self.post_attention_layernorm(hidden_states1)
 
-        with OpNameContext(FWD_MLP_OP_NAME.format(self.layer_idx, 1)):
+        with set_operation_context(FWD_MLP_OP_NAME.format(self.layer_idx, 1), self.stream_manager):
             mlp_output1 = self.mlp(hidden_states=hidden_states1)
 
         comm_stream.wait_stream(torch.cuda.default_stream())

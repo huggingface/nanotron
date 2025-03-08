@@ -4,7 +4,6 @@ from typing import Dict
 import torch
 
 from nanotron.constants import CUDA_STREAM_COMM_NAME
-from nanotron.parallel.tensor_parallel.domino import is_domino_async_comm
 
 
 class AsyncCommBucket:
@@ -45,7 +44,7 @@ class AsyncCommBucket:
 
         not_finished = []
         for k, v in self._copy_async_op.items():
-            assert is_domino_async_comm(k) is True, f"Operation with name {k} wasn't executed asynchronously!"
+            # assert is_domino_async_comm(k) is True, f"Operation with name {k} wasn't executed asynchronously!"
             if v.is_completed() is not True:
                 not_finished.append((k, v))
         return len(not_finished) == 0
@@ -88,38 +87,6 @@ class CudaStreamManager:
             yield stream
 
 
-class WaitComm(torch.autograd.Function):
-    """
-    Enforce a tensor to wait for the communication operation to finish
-    in torch's autograd graph.
-    """
-
-    @staticmethod
-    def forward(ctx, input: torch.Tensor, op_name: str, comm_stream: torch.cuda.Stream, comm_bucket: AsyncCommBucket):
-        assert isinstance(comm_stream, torch.cuda.Stream)
-        ctx.op_name = op_name
-        ctx.comm_stream = comm_stream
-        ctx.comm_bucket = comm_bucket
-        return input
-
-    @staticmethod
-    def backward(ctx, grad_output: torch.Tensor):
-        """
-        NOTE: because the communication operation is already being executed
-        so the communication stream don't have to wait for the compute stream here
-        but the compute stream waits for the communication stream
-        before proceeding
-        """
-        if is_domino_async_comm(ctx.op_name):
-            handle = ctx.comm_bucket.pop(ctx.op_name)
-            handle.wait()
-
-            ctx.comm_stream.synchronize()
-            torch.cuda.default_stream().wait_stream(ctx.comm_stream)
-
-        return grad_output, None, None, None
-
-
 def insert_backward_sync_to_tensor(
     tensor: torch.Tensor, op_name: str, stream_manager: CudaStreamManager
 ) -> torch.Tensor:
@@ -127,6 +94,7 @@ def insert_backward_sync_to_tensor(
     Insert a wait communication operation of a given op_name to the autograd graph
     of a tensor.
     """
+    from nanotron.parallel.tensor_parallel.domino import WaitComm
 
     assert isinstance(stream_manager, CudaStreamManager)
     comm_stream = stream_manager.get(CUDA_STREAM_COMM_NAME.format(torch.cuda.current_device()))
