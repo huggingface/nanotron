@@ -309,10 +309,10 @@ class AdamWOptimizerArgs:
 
 @dataclass
 class MuonOptimizerArgs:
-    name: str = "muon"
     momentum: float
     nesterov: bool
     ns_steps: int
+    name: str = "muon"
 
 
 @dataclass

@@ -141,7 +141,7 @@ if __name__ == "__main__":
     parser = ArgumentParser(description="Convert Nanotron weights to HF format")
     parser.add_argument("--checkpoint_path", type=Path, default="llama-7b", help="Path to the checkpoint")
     parser.add_argument("--save_path", type=Path, default="llama-7b-hf", help="Path to save the HF model")
-    parser.add_argument("--tokenizer_name", type=str, default="HuggingFaceTB/cosmo2-tokenizer")
+    parser.add_argument("--tokenizer_name", type=str, default="meta-llama/Llama-2-7b-chat-hf")
     args = parser.parse_args()
 
     # Convert Nanotron model to HF format.
