@@ -811,6 +811,8 @@ class DominoLlamaDecoderLayer(_BaseLlamaDecoderLayer):
                 sequence_mask=sequence_mask1,
             )
 
+        # TODO(xrsrke): double check if we need this explicit synchronization
+        # otherwise, remove it
         comm_stream.wait_stream(torch.cuda.default_stream())
         with torch.cuda.stream(comm_stream):
             comm_bucket.wait(FWD_ATTN_OP_NAME.format(self.layer_idx, 0))

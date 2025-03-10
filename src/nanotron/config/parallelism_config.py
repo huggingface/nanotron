@@ -79,6 +79,7 @@ class ParallelismArgs:
             assert (
                 self.tp_linear_async_communication is False
             ), "Domino requires TP linear async communication to be False"
+            # TODO: support REDUCE_SCATTER mode for Domino
             assert self.tp_mode == TensorParallelLinearMode.ALL_REDUCE, "Domino requires TP mode to be ALL_REDUCE"
 
     @property
