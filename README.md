@@ -14,6 +14,7 @@
         <a href="#installation">Installation</a> •
         <a href="#quick-start">Quick Start</a> •
         <a href="#features">Features</a> •
+        <a href="#benchmarks">Benchmarks</a> •
         <a href="CONTRIBUTING.md">Contributing</a>
     <p>
 </h4>
@@ -25,11 +26,12 @@
 <p>Pretraining models made easy
 </h3>
 
-
 Nanotron is a library for pretraining transformer models. It provides a simple and flexible API to pretrain models on custom datasets. Nanotron is designed to be easy to use, fast, and scalable. It is built with the following principles in mind:
 
 - **Simplicity**: Nanotron is designed to be easy to use. It provides a simple and flexible API to pretrain models on custom datasets.
 - **Performance**: Optimized for speed and scalability, Nanotron uses the latest techniques to train models faster and more efficiently.
+
+📚 **Check out our [Ultrascale Playbook](https://huggingface.co/spaces/nanotron/ultrascale-playbook)** - A comprehensive guide to efficiently scale LLM training with Nanotron!
 
 ## Installation
 
@@ -79,6 +81,15 @@ You can find more examples in the [`/examples`](/examples) directory:
 
 We're working on adding more examples soon! Feel free to add a PR to add your own example. 🚀
 
+## Benchmarks
+
+We've conducted extensive benchmarking of Nanotron across various model sizes and configurations. The complete benchmark data, configurations, and logs are available in our [ultrascale-playbook-data](https://huggingface.co/datasets/nanotron/ultrascale-playbook-data/tree/main) repository.
+
+![Model Efficiency Benchmarks](docs/benchmark_summary.svg)
+
+The diagram above showcases the best configurations we discovered for each model size and node count in nanotron v0.5, highlighting optimal MFU (Model FLOPS Utilization) and memory usage. These represent the most efficient training setups identified through our comprehensive benchmarking process. Stay tuned for even more optimizations coming soon! 🚀
+
+For detailed analysis and best practices derived from these benchmarks, see our [Ultrascale Playbook](https://huggingface.co/spaces/nanotron/ultrascale-playbook).
 
 ## Features
 We currently support the following features:
