@@ -32,6 +32,7 @@ class OpNameContext:
     """
 
     def __init__(self, op_name: str):
+        # TODO: support passing stream_manager as a part of an operation context
         self.op_name = op_name
         self.previous_op_name = None
 
