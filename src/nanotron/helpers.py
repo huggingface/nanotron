@@ -33,6 +33,7 @@ from nanotron.optim.named_optimizer import NamedOptimizer
 from nanotron.optim.optimizer_from_gradient_accumulator import (
     OptimizerFromGradientAccumulator,
 )
+from nanotron.optim.optimizers import Muon
 from nanotron.optim.zero import ZeroDistributedOptimizer
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.tensor_parallel.nn import TensorParallelLinearMode
@@ -335,6 +336,18 @@ def init_optimizer_and_grad_accumulator(
                     eps=optimizer_args.optimizer_factory.adam_eps,
                     betas=(optimizer_args.optimizer_factory.adam_beta1, optimizer_args.optimizer_factory.adam_beta2),
                     fused=optimizer_args.optimizer_factory.torch_adam_is_fused,
+                )
+
+        # TODO @eliebak: add diff optimizers per layer ? (for now just stick to muon for everything)
+        elif optimizer_args.optimizer_factory.name == "muon":
+
+            def optimizer(param_groups):
+                return Muon(
+                    named_params_or_groups=param_groups,
+                    lr=optimizer_args.learning_rate_scheduler.learning_rate,
+                    momentum=optimizer_args.optimizer_factory.momentum,
+                    nesterov=optimizer_args.optimizer_factory.nesterov,
+                    ns_steps=optimizer_args.optimizer_factory.ns_steps,
                 )
 
         elif optimizer_args.optimizer_factory.name == "sgd":
