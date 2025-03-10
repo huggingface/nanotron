@@ -20,7 +20,7 @@ from torch import distributed as torch_dist
 
 from nanotron import distributed as dist
 from nanotron.distributed import ProcessGroup
-from nanotron.parallel.tensor_parallel.domino import is_domino_async_comm
+from nanotron.parallel.comm import CudaStreamManager, is_domino_async_comm
 
 
 class DifferentiableIdentity(torch.autograd.Function):
@@ -32,10 +32,10 @@ class DifferentiableIdentity(torch.autograd.Function):
         tensor: torch.Tensor,
         group: Optional[ProcessGroup],
         op_name: Optional[str] = None,
-        stream_manager: Optional["CudaStreamManager"] = None,
+        stream_manager: Optional[CudaStreamManager] = None,
     ):
-        ctx.group = group
         ctx.op_name = op_name
+        ctx.group = group
         ctx.stream_manager = stream_manager
         return tensor
 
@@ -46,6 +46,7 @@ class DifferentiableIdentity(torch.autograd.Function):
 
         return (
             DifferentiableAllReduceSum.apply(grad_output, group, op_name, ctx.stream_manager),
+            None,
             None,
             None,
             None,
@@ -61,7 +62,7 @@ class DifferentiableAllReduceSum(torch.autograd.Function):
         tensor: torch.Tensor,
         group: Optional[ProcessGroup],
         op_name: Optional[int] = None,
-        stream_manager: Optional["CudaStreamManager"] = None,
+        stream_manager: Optional[CudaStreamManager] = None,
     ) -> Tuple[torch.Tensor, Optional["dist.Work"]]:
         async_all_reduce = is_domino_async_comm(op_name) if op_name is not None else False
         ctx.async_all_reduce = async_all_reduce
@@ -69,8 +70,7 @@ class DifferentiableAllReduceSum(torch.autograd.Function):
         if group.size() == 1:
             return tensor
 
-        if async_all_reduce is True:
-            assert stream_manager is not None, f"op_name: {op_name}"
+        if stream_manager is not None:
             comm_stream = stream_manager.get_default_comm_stream()
             comm_stream.wait_stream(torch.cuda.default_stream())
             comm_context = torch.cuda.stream(comm_stream)
@@ -89,7 +89,7 @@ class DifferentiableAllReduceSum(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_output):
-        return grad_output, None, None, None
+        return grad_output, None, None, None, None
 
 
 class DifferentiableAllGather(torch.autograd.Function):
@@ -175,7 +175,7 @@ def differentiable_identity(
     tensor,
     group: Optional[ProcessGroup] = None,
     op_name: Optional[str] = None,
-    stream_manager: Optional["CudaStreamManager"] = None,
+    stream_manager: Optional[CudaStreamManager] = None,
 ):
     return DifferentiableIdentity.apply(tensor, group, op_name, stream_manager)
 
@@ -184,7 +184,7 @@ def differentiable_all_reduce_sum(
     tensor,
     group: Optional[ProcessGroup] = None,
     op_name: Optional[str] = None,
-    stream_manager: Optional["CudaStreamManager"] = None,
+    stream_manager: Optional[CudaStreamManager] = None,
 ):
     return DifferentiableAllReduceSum.apply(tensor, group, op_name, stream_manager)
 
