@@ -951,7 +951,9 @@ class LlamaModel(nn.Module):
 @torch.jit.script
 def masked_mean(loss, label_mask, dtype):
     # type: (Tensor, Tensor, torch.dtype) -> Tensor
-    return (loss * label_mask).sum(dtype=dtype) / label_mask.sum()
+    mask_sum = label_mask.sum()
+    assert mask_sum > 0, "Label mask cannot be all zeros - no tokens to compute loss on"
+    return (loss * label_mask).sum(dtype=dtype) / mask_sum
 
 
 class Loss(nn.Module):
