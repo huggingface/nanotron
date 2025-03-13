@@ -35,7 +35,7 @@ TINY_LLAMA_CONFIG = LlamaConfig(
         "max_position_embeddings": 128,
         "num_attention_heads": 8,
         "num_hidden_layers": 4,
-        "num_key_value_heads": 4,
+        "num_key_value_heads": 2,
         "pad_token_id": None,
         "pretraining_tp": 1,
         "rms_norm_eps": 1e-06,
