@@ -701,7 +701,6 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         attention_output = (
             attention_output.contiguous().view(batch_size, q_length, self.n_local_q_heads * self.d_v).transpose(0, 1)
         )
-        # output, work = self.o_proj(attention_output, op_name=op_name)
         output = self.o_proj(attention_output)
 
         return {"hidden_states": output, "sequence_mask": sequence_mask}
@@ -784,6 +783,8 @@ class DominoLlamaDecoderLayer(_BaseLlamaDecoderLayer):
         residual0 = hidden_states0
         residual1 = hidden_states1
 
+        # TODO: overlap the 'layernorm > attn' of the second batch
+        # with the comm of the first batch in both forward and backward
         hidden_states0 = self.input_layernorm(hidden_states0)
         hidden_states1 = self.input_layernorm(hidden_states1)
         hidden_states0 = insert_backward_sync_to_tensor(

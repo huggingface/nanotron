@@ -1,3 +1,10 @@
+"""
+Implementation of communication overlapping
+in the paper "Domino: Eliminating Communication in LLM Training via
+Generic Tensor Slicing and Overlapping"
+https://arxiv.org/abs/2409.15241
+"""
+
 import re
 import threading
 from typing import Optional
@@ -13,10 +20,21 @@ _operation_context = threading.local()
 def is_domino_async_comm(x: str) -> bool:
     """
     Determine whether a module (e.g., mlp, attention)
-    performs all-reduce asynchronously in tensor parallelism
+    runs all-reduce asynchronously in tensor parallelism
+    based on its module name.
+
+    Currently support intra-layer communication overlapping
+    as described in domino's input splitting approach.
+
+    How do we determine it?
+    + In the forward pass: We run all the forward pass's communication asynchronously
+    diagram: https://imgur.com/a/g5Ou2iZ
+
+    + In the backward pass: We run all backward pass's communication asynchronously
+    except for the first batch's attention module.
+    https://imgur.com/a/MrZb57a
     """
     NON_ASYNC_HANDLE_IDX = [
-        # "fwd.layer_mlp_{}_batch_1",
         "bwd.layer_attn_{}_batch_0",
     ]
 
