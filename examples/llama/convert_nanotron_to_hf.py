@@ -88,6 +88,7 @@ def convert_nt_to_hf(nanotron_model: LlamaForTraining, hf_model: LlamaForCausalL
                 param = _handle_gate_up_proj(param, gate)
 
             with torch.no_grad():
+                # print(f"Copying parameter {module_name_hf} ({param_hf.shape}) from {nanotron_key} ({param.shape})")
                 param_hf.copy_(param)
 
 
