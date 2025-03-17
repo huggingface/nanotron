@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import math
+import os
 from typing import Optional
 
 import torch
@@ -35,6 +36,7 @@ class _ShardedCrossEntropy(torch.autograd.Function):
         sharded_logits,  # (batch_size, length, sharded_hidden_size)
         target,  # (batch_size, length)
         group: dist.ProcessGroup,
+        z_loss_coef: float = 0.0,  # Coefficient for z-loss regularization
     ):
         # Maximum value along last dimension across all GPUs.
         logits_max = torch.max(sharded_logits, dim=-1)[0]
@@ -78,21 +80,34 @@ class _ShardedCrossEntropy(torch.autograd.Function):
         # Loss = log(sum(exp(logits))) - predicted-logit.
         loss = torch.log(sum_exp_logits) - predicted_logits
 
+        # Store the log(Z) for backward pass
+        log_z = torch.log(sum_exp_logits)
+
+        # Apply z-loss regularization if coefficient is non-zero
+        if z_loss_coef > 0.0:
+            # Z is the partition function (sum_exp_logits)
+            # z_loss = z_loss_coef * log²(Z)
+            # Use clamp to prevent extreme values
+            z_loss = z_loss_coef * torch.square(log_z.clamp(min=-20.0, max=20.0))
+            loss = loss + z_loss
+
         # Normalize and optionally smooth logits
         exp_logits.div_(sum_exp_logits.unsqueeze(dim=-1))
 
-        # Store softmax, target-mask and masked-target for backward pass.
-        ctx.save_for_backward(exp_logits, target_mask, masked_target_1d)
+        # Store softmax, target-mask, masked-target and z_loss_coef for backward pass.
+        ctx.save_for_backward(exp_logits, target_mask, masked_target_1d, log_z)
+        ctx.z_loss_coef = z_loss_coef
 
         return loss.view_as(target)
 
     @staticmethod
     def backward(ctx, grad_output):
         # Retrieve tensors from the forward path.
-        softmax, target_mask, masked_target_1d = ctx.saved_tensors
+        softmax, target_mask, masked_target_1d, log_z = ctx.saved_tensors
+        z_loss_coef = ctx.z_loss_coef
 
         # All the inputs have softmax as their gradient.
-        grad_input = softmax
+        grad_input = softmax.clone()
         # For simplicity, work with the 2D gradient.
         sharded_hidden_size = softmax.size()[-1]
         grad_2d = grad_input.view(-1, sharded_hidden_size)
@@ -101,18 +116,44 @@ class _ShardedCrossEntropy(torch.autograd.Function):
         arange_1d = torch.arange(start=0, end=grad_2d.size()[0], device=grad_2d.device)
         grad_2d[arange_1d, masked_target_1d] -= 1.0 - target_mask.view(-1).float()
 
+        # If z-loss is applied, we need to add its gradient contribution
+        if z_loss_coef > 0.0:
+            # The gradient of z_loss with respect to logits is:
+            # 2 * z_loss_coef * log(Z) * (1/Z) * exp(logits)
+            # But exp(logits)/Z is just the softmax, which we already have
+
+            # Apply the gradient scaling with clamping for stability
+            # clamped_log_z = log_z.clamp(min=-20.0, max=20.0) useless i think?
+            z_loss_grad_scale = 2.0 * z_loss_coef * log_z
+
+            # Add the z-loss gradient contribution
+            # We need to reshape z_loss_grad_scale to match grad_input's dimensions
+            z_loss_grad = softmax * z_loss_grad_scale.unsqueeze(-1)
+            grad_input = grad_input + z_loss_grad
+
         # Finally elementwise multiplication with the output gradients.
         grad_input.mul_(grad_output.unsqueeze(dim=-1))
 
-        return grad_input, None, None
+        return grad_input, None, None, None
 
 
-def sharded_cross_entropy(sharded_logits, target, group: dist.ProcessGroup, dtype: torch.dtype = None):
+def sharded_cross_entropy(
+    sharded_logits,
+    target,
+    group: dist.ProcessGroup,
+    dtype: torch.dtype = None,
+    z_loss_coef: float = 0.0,
+):
     """Helper function for the cross entropy."""
+    # Check if z-loss should be applied based on environment variable
+    # to implement correctly
+    if z_loss_coef == 0.0 and os.environ.get("Z_LOSS", "0") == "1":
+        z_loss_coef = os.environ.get("Z_LOSS_COEF", 1e-5)  # Default coefficient from the paper (10^-5)
+
     if dtype is not None:
         # Cast input to specific dtype.
         sharded_logits = sharded_logits.to(dtype=dtype)
-    return _ShardedCrossEntropy.apply(sharded_logits, target, group)
+    return _ShardedCrossEntropy.apply(sharded_logits, target, group, z_loss_coef)
 
 
 class _ColumnLinearAsyncCommunication(torch.autograd.Function):
