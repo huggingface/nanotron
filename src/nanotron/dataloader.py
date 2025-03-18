@@ -190,6 +190,7 @@ def dummy_infinite_data_generator(
     vocab_size: int,
     seed: int,
     parallel_context: ParallelContext,
+    use_packed_seqs: bool = False,
 ):
     def data_generator() -> Generator[Dict[str, Union[torch.Tensor, TensorPointer]], None, None]:
         # Random generator
@@ -199,9 +200,50 @@ def dummy_infinite_data_generator(
             seed * (1 + dist.get_rank(parallel_context.dp_pg)) * (1 + dist.get_rank(parallel_context.pp_pg))
         )
 
-        while True:
-            yield {
-                "input_ids": torch.randint(
+        if use_packed_seqs:
+            document_lengths = [[4, 6, 12], [sequence_length]]
+            position_ids = torch.full((micro_batch_size, sequence_length), fill_value=-1, dtype=torch.long, device="cuda")
+            for i in range(micro_batch_size):
+                prev_idx = 0
+                for doc_idx, doc_len in enumerate(document_lengths[i]):
+                    position_ids[prev_idx:prev_idx + doc_len] = torch.arange(doc_idx, doc_idx + doc_len, dtype=torch.long, device="cuda")
+                    prev_idx += doc_len
+            while True:
+                yield {
+                    "input_ids": torch.randint(
+                        0,
+                        vocab_size,
+                        (micro_batch_size * sequence_length,),
+                        dtype=torch.long,
+                        device="cuda",
+                        generator=generator,
+                    )
+                    if dist.get_rank(parallel_context.pp_pg) == input_pp_rank
+                    else TensorPointer(group_rank=input_pp_rank),
+                    "position_ids": position_ids if dist.get_rank(parallel_context.pp_pg) == input_pp_rank else TensorPointer(group_rank=input_pp_rank),
+                    "label_ids": torch.randint(
+                        0,
+                        vocab_size,
+                        (micro_batch_size, sequence_length),
+                        dtype=torch.long,
+                        device="cuda",
+                        generator=generator,
+                    )
+                    if dist.get_rank(parallel_context.pp_pg) == output_pp_rank
+                    else TensorPointer(group_rank=output_pp_rank),
+                    "label_mask": torch.ones(
+                        micro_batch_size,
+                        sequence_length,
+                        dtype=torch.bool,
+                        device="cuda",
+                    )
+                    if dist.get_rank(parallel_context.pp_pg) == output_pp_rank
+                    else TensorPointer(group_rank=output_pp_rank),
+                }
+        else:
+            while True:
+                yield {
+                    "input_ids": torch.randint(
                     0,
                     vocab_size,
                     (micro_batch_size, sequence_length),
