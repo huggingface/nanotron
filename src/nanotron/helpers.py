@@ -470,20 +470,37 @@ def test_equal_dict(first: Dict, second: Dict, sub_paths: Optional[List[str]] = 
 
 def get_profiler(config: Config):
     if config.profiler is not None:
+        export_path = None
         if config.profiler.profiler_export_path is not None:
-            on_trace_ready = tensorboard_trace_handler(
-                config.profiler.profiler_export_path / datetime.now().strftime("%Y%m%d-%H%M%S")
-            )
+            timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            export_path = config.profiler.profiler_export_path / timestamp
+
+            # Create directory if it doesn't exist
+            if not os.path.exists(export_path):
+                os.makedirs(export_path, exist_ok=True)
+
+            on_trace_ready = tensorboard_trace_handler(export_path)
         else:
             on_trace_ready = None
+
         prof = profile(
             activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
-            schedule=torch.profiler.schedule(wait=1, warmup=1, active=1, repeat=1, skip_first=3),
+            schedule=torch.profiler.schedule(
+                wait=config.profiler.wait,
+                warmup=config.profiler.warmup,
+                active=config.profiler.active,
+                repeat=config.profiler.repeat,
+                skip_first=config.profiler.skip_first,
+            ),
             on_trace_ready=on_trace_ready,
-            # record_shapes=True,
-            # profile_memory=True,
-            with_stack=True,
+            record_shapes=config.profiler.record_shapes,
+            profile_memory=config.profiler.profile_memory,
+            with_stack=config.profiler.with_stack,
         )
+
+        # Store the export path for Chrome trace export
+        if config.profiler.export_chrome_trace and export_path is not None:
+            prof._chrome_trace_path = export_path / "chrome_trace.json"
     else:
         prof = contextlib.nullcontext()
     return prof

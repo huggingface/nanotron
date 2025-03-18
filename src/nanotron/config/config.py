@@ -209,6 +209,15 @@ class ProfilerArgs:
     """Arguments related to profiling"""
 
     profiler_export_path: Optional[Path]
+    wait: int = 1
+    warmup: int = 1
+    active: int = 1
+    repeat: int = 1
+    skip_first: int = 3
+    record_shapes: bool = False
+    profile_memory: bool = False
+    with_stack: bool = True
+    export_chrome_trace: bool = False
 
 
 @dataclass
@@ -366,7 +375,12 @@ class Config:
 
         # Some final sanity checks across separate arguments sections:
         if self.profiler is not None and self.profiler.profiler_export_path is not None:
-            assert self.tokens.train_steps < 10
+            total_profiling_steps = self.profiler.skip_first + self.profiler.repeat * (
+                self.profiler.wait + self.profiler.warmup + self.profiler.active
+            )
+            assert (
+                self.tokens.train_steps >= total_profiling_steps
+            ), f"Profiling steps ({total_profiling_steps}) must be less than or equal to train steps ({self.tokens.train_steps})"
 
         if self.optimizer is not None and self.optimizer.learning_rate_scheduler.lr_decay_steps is None:
             self.optimizer.learning_rate_scheduler.lr_decay_steps = (
