@@ -150,7 +150,7 @@ def sharded_cross_entropy(
     # Check if z-loss should be applied based on environment variable
     # to implement correctly
     if z_loss_coef == 0.0 and os.environ.get("Z_LOSS", "0") == "1":
-        z_loss_coef = os.environ.get("Z_LOSS_COEF", 1e-5)  # Default coefficient from the paper (10^-5)
+        z_loss_coef = float(os.environ.get("Z_LOSS_COEF", 1e-5))  # Default coefficient from the paper (10^-5)
 
     if dtype is not None:
         # Cast input to specific dtype.
