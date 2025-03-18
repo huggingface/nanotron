@@ -552,7 +552,7 @@ class DistributedTrainer:
                 ).sum()  # already divided by n_micro_batches_per_batch
             else:
                 z_loss_avg = None
-            # sync loss across DP
+            # sync loss across DP (we should do the same for z_loss but it's only for logging so let's not sync it rn)
             handle = dist.all_reduce(loss_avg, group=self.parallel_context.dp_pg, async_op=True, op=dist.ReduceOp.AVG)
         else:
             z_loss_avg = None
