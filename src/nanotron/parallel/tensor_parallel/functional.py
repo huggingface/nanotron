@@ -90,6 +90,8 @@ class _ShardedCrossEntropy(torch.autograd.Function):
             # Use clamp to prevent extreme values
             z_loss = z_loss_coef * torch.square(log_z.clamp(min=-20.0, max=20.0))
             loss = loss + z_loss
+        else:
+            z_loss = torch.zeros_like(loss)
 
         # Normalize and optionally smooth logits
         exp_logits.div_(sum_exp_logits.unsqueeze(dim=-1))
@@ -98,10 +100,10 @@ class _ShardedCrossEntropy(torch.autograd.Function):
         ctx.save_for_backward(exp_logits, target_mask, masked_target_1d, log_z)
         ctx.z_loss_coef = z_loss_coef
 
-        return loss.view_as(target)
+        return loss.view_as(target), z_loss.view_as(target)
 
     @staticmethod
-    def backward(ctx, grad_output):
+    def backward(ctx, grad_output, grad_z_loss=None):
         # Retrieve tensors from the forward path.
         softmax, target_mask, masked_target_1d, log_z = ctx.saved_tensors
         z_loss_coef = ctx.z_loss_coef

@@ -968,14 +968,15 @@ class Loss(nn.Module):
         # Megatron by defaults cast everything in fp32. `--f16-lm-cross-entropy` is an option you can use to keep current precision.
         # https://github.com/NVIDIA/Megatron-LM/blob/f267e6186eae1d6e2055b412b00e2e545a8e896a/megatron/model/gpt_model.py#L38
 
-        loss = sharded_cross_entropy(
+        loss, z_loss = sharded_cross_entropy(
             sharded_logits, label_ids.transpose(0, 1).contiguous(), group=self.tp_pg, dtype=torch.float
-        ).transpose(0, 1)
+        )
         # TODO @thomasw21: It's unclear what kind of normalization we want to do.
-        loss = masked_mean(loss, label_mask, dtype=torch.float)
+        loss = masked_mean(loss.transpose(0, 1), label_mask, dtype=torch.float)
+        z_loss = masked_mean(z_loss.detach().transpose(0, 1), label_mask, dtype=torch.float)
         # I think indexing causes a sync we don't actually want
         # loss = loss[label_mask].sum()
-        return {"loss": loss}
+        return {"loss": loss, "z_loss": z_loss}
 
 
 class LlamaForTraining(NanotronModel):
@@ -997,7 +998,7 @@ class LlamaForTraining(NanotronModel):
                 "label_ids",
                 "label_mask",
             },
-            module_output_keys={"loss"},
+            module_output_keys={"loss", "z_loss"},
         )
         self.parallel_context = parallel_context
         self.config = config
@@ -1018,8 +1019,8 @@ class LlamaForTraining(NanotronModel):
             sharded_logits=sharded_logits,
             label_ids=label_ids,
             label_mask=label_mask,
-        )["loss"]
-        return {"loss": loss}
+        )
+        return {"loss": loss["loss"], "z_loss": loss["z_loss"]}
 
     @torch.no_grad()
     def init_model_randomly(self, config: Config):
