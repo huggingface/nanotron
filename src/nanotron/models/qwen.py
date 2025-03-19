@@ -1,18 +1,19 @@
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 import torch
 from torch import nn
 from torch.utils.checkpoint import CheckpointFunction
+from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
 
 from nanotron import distributed as dist
 from nanotron import logging
-from nanotron.config import Config, LlamaConfig, ParallelismArgs
-from nanotron.config.models_config import RandomInit, SpectralMupInit
-from nanotron.generation.generate_store import AttachableStore
+from nanotron.config import Config, ParallelismArgs
+from nanotron.config.models_config import Qwen2Config, RandomInit, SpectralMupInit
 from nanotron.logging import log_rank
 from nanotron.models import NanotronModel
 from nanotron.nn.activations import ACT2FN
-from nanotron.nn.layer_norm import TritonRMSNorm
+from nanotron.nn.layer_norm import TritonRMSNorm as RMSNorm
+from nanotron.nn.rotary import RotaryEmbedding
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter
 from nanotron.parallel.pipeline_parallel.block import PipelineBlock, TensorPointer
@@ -24,26 +25,11 @@ from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelLinearMode,
     TensorParallelRowLinear,
 )
-from flash_attn import bert_padding
-from flash_attn.flash_attn_interface import (
-    flash_attn_varlen_func,
-    flash_attn_with_kvcache,
-)
-
 from nanotron.random import RandomStates
 from nanotron.scaling.parametrization import SpectralMupParametrizator, StandardParametrizator
-from nanotron.utils import checkpoint_method
-from nanotron.config.models_config import Qwen2Config
-from nanotron.nn.layer_norm import TritonRMSNorm as RMSNorm
-
-from typing import Iterable, Optional, Set, Tuple, Union, Dict
-
-import torch
-from torch import nn
-from nanotron.nn.rotary import RotaryEmbedding
-from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
 
 logger = logging.get_logger(__name__)
+
 
 class CoreAttention(nn.Module):
     """Core attention module that can use different attention implementations"""
@@ -60,9 +46,11 @@ class CoreAttention(nn.Module):
         self.head_dim = config.hidden_size // config.num_attention_heads
         self.num_heads = config.num_attention_heads
         self.num_kv_heads = config.num_key_value_heads
-        self.num_key_value_groups = config.num_attention_heads // config.num_key_value_heads # Important for transformers's `sdpa_attention_forward`
+        self.num_key_value_groups = (
+            config.num_attention_heads // config.num_key_value_heads
+        )  # Important for transformers's `sdpa_attention_forward`
         self.is_causal = getattr(config, "is_causal", True)
-        
+
         # Choose default attention implementation
         self._attn_implementation = getattr(config, "_attn_implementation", "flash_attention_2")
         if self._attn_implementation not in ALL_ATTENTION_FUNCTIONS:
@@ -73,18 +61,18 @@ class CoreAttention(nn.Module):
 
     def forward(
         self,
-        query_states: torch.Tensor, # [b*s, num_heads, head_dim]
-        key_states: torch.Tensor, # [b*s, num_kv_heads, head_dim]
-        value_states: torch.Tensor, # [b*s, num_kv_heads, head_dim]
-        attention_mask: Optional[torch.Tensor] = None, # [seq_length, seq_length]
+        query_states: torch.Tensor,  # [b*s, num_heads, head_dim]
+        key_states: torch.Tensor,  # [b*s, num_kv_heads, head_dim]
+        value_states: torch.Tensor,  # [b*s, num_kv_heads, head_dim]
+        attention_mask: Optional[torch.Tensor] = None,  # [seq_length, seq_length]
         dropout: float = 0.0,
         sliding_window: Optional[int] = None,
-        **kwargs
+        **kwargs,
     ):
         """Forward pass applying the chosen attention implementation"""
         # Get the appropriate attention function
         attention_func = ALL_ATTENTION_FUNCTIONS[self._attn_implementation]
-        
+
         # Check if sliding window should be applied based on config
         if (
             getattr(self.config, "use_sliding_window", False)
@@ -95,12 +83,12 @@ class CoreAttention(nn.Module):
 
         # need to put sequence after num_heads
         seq_length = attention_mask.shape[0]
-        query_states = query_states.reshape(-1, self.num_heads, seq_length, self.head_dim)
-        key_states = key_states.reshape(-1, self.num_kv_heads, seq_length, self.head_dim)
-        value_states = value_states.reshape(-1, self.num_kv_heads, seq_length, self.head_dim)
+        query_states = query_states.view(-1, seq_length, self.num_heads, self.head_dim).transpose(1, 2)
+        key_states = key_states.view(-1, seq_length, self.num_kv_heads, self.head_dim).transpose(1, 2)
+        value_states = value_states.view(-1, seq_length, self.num_kv_heads, self.head_dim).transpose(1, 2)
 
-        attention_mask = attention_mask.unsqueeze(0).unsqueeze(0) # [1, 1, seq_length, seq_length]
-        
+        attention_mask = attention_mask.unsqueeze(0).unsqueeze(0)  # [1, 1, seq_length, seq_length]
+
         # Call the attention implementation
         # [1, b*s, num_heads, head_dim]
         attn_output = attention_func(
@@ -110,11 +98,11 @@ class CoreAttention(nn.Module):
             value_states,
             attention_mask=attention_mask,
             dropout=dropout,
-            scaling=self.head_dim ** -0.5,
+            scaling=self.head_dim**-0.5,
             sliding_window=sliding_window,
-            **kwargs
+            **kwargs,
         )[0]
-        return attn_output.view(-1, self.hidden_size) # [b*s, num_heads*head_dim]
+        return attn_output.view(-1, self.hidden_size)  # [b*s, num_heads*head_dim]
 
 
 class Qwen2Attention(nn.Module):
@@ -128,12 +116,12 @@ class Qwen2Attention(nn.Module):
         super().__init__()
         self.hidden_size = config.hidden_size
         self.tp_pg_size = tp_pg.size()
-        
+
         # Head configuration
         self.total_num_heads = config.num_attention_heads
         assert self.total_num_heads % self.tp_pg_size == 0
         self.num_heads = self.total_num_heads // self.tp_pg_size
-        
+
         # KV head configuration
         self.total_num_kv_heads = getattr(config, "num_key_value_heads", config.num_attention_heads)
         self.num_kv_heads = max(1, self.total_num_kv_heads // self.tp_pg_size)
@@ -157,13 +145,12 @@ class Qwen2Attention(nn.Module):
         assert (
             config.num_attention_heads % config.num_key_value_heads == 0
         ), f"Number of attention heads ({config.num_attention_heads}) must be divisible by number of key/value heads ({config.num_key_value_heads})."
-        
-        
+
         # Dimensions
         self.head_dim = config.hidden_size // self.total_num_heads
         self.q_size = self.num_heads * self.head_dim
         self.kv_size = self.num_kv_heads * self.head_dim
-        
+
         # TP mode configuration
         tp_mode = parallel_config.tp_mode if parallel_config is not None else TensorParallelLinearMode.ALL_REDUCE
         tp_linear_async_communication = (
@@ -172,8 +159,8 @@ class Qwen2Attention(nn.Module):
 
         qkv_contiguous_chunks = (
             self.q_size,  # Q chunk size
-            self.kv_size, # K chunk size
-            self.kv_size  # V chunk size
+            self.kv_size,  # K chunk size
+            self.kv_size,  # V chunk size
         )
         self.qkv_proj = TensorParallelColumnLinear(
             self.hidden_size,
@@ -202,7 +189,6 @@ class Qwen2Attention(nn.Module):
         )
         self.attention = CoreAttention(config, layer_idx)
 
-
     def forward(
         self,
         hidden_states: torch.Tensor,  # [batch_size*seq_length, hidden_size]
@@ -213,34 +199,41 @@ class Qwen2Attention(nn.Module):
         # [0, 1, 2, 3, 4, 5, 6, 7, 8, -1, -1] # 1 document with 10 tokens then padding
         # Replace -1 with 0 in position_ids to mark every padding token as a separate sequence. Ideally we want to get rid of padding tokens from qkv
         position_ids = position_ids.masked_fill(position_ids == -1, 0)
-        position_ids = position_ids.view(-1) # [batch_size*seq_length]
+        position_ids = position_ids.view(-1)  # [batch_size*seq_length]
 
         qkv = self.qkv_proj(hidden_states)
-        q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1) # [batch_size, seq_length, q_size], [batch_size, seq_length, kv_size]
+        q, k, v = qkv.split(
+            [self.q_size, self.kv_size, self.kv_size], dim=-1
+        )  # [batch_size, seq_length, q_size], [batch_size, seq_length, kv_size]
 
-        rotary_pos_emb = self.rotary_emb(position_ids=position_ids) # [b*s, dim] or [seq_length, dim]
-        rotary_pos_emb = rotary_pos_emb.unsqueeze(1) # [b*s, 1, dim] or [seq_length, 1, dim]
+        rotary_pos_emb = self.rotary_emb(position_ids=position_ids)  # [b*s, dim] or [seq_length, dim]
+        rotary_pos_emb = rotary_pos_emb.unsqueeze(1)  # [b*s, 1, dim] or [seq_length, 1, dim]
 
-        q = q.view(-1, self.num_heads, self.head_dim) # [b*s, num_heads, head_dim]
-        k = k.view(-1, self.num_kv_heads, self.head_dim) # [b*s, num_kv_heads, head_dim]
-        v = v.view(-1, self.num_kv_heads, self.head_dim) # [b*s, num_kv_heads, head_dim]
-        q = self.rotary_emb.apply_rotary_pos_emb(q, rotary_pos_emb) # [b*s, num_heads, head_dim]
-        k = self.rotary_emb.apply_rotary_pos_emb(k, rotary_pos_emb) # [b*s, num_kv_heads, head_dim]
-        
+        q = q.view(-1, self.num_heads, self.head_dim)  # [b*s, num_heads, head_dim]
+        k = k.view(-1, self.num_kv_heads, self.head_dim)  # [b*s, num_kv_heads, head_dim]
+        v = v.view(-1, self.num_kv_heads, self.head_dim)  # [b*s, num_kv_heads, head_dim]
+        q = self.rotary_emb.apply_rotary_pos_emb(q, rotary_pos_emb)  # [b*s, num_heads, head_dim]
+        k = self.rotary_emb.apply_rotary_pos_emb(k, rotary_pos_emb)  # [b*s, num_kv_heads, head_dim]
+
         # TODO @nouamane: optimize this, and make sure it works with flashattn and flexattn
         def get_attention_mask(position_ids, seq_length):
             # position_ids is [b*s]
             attention_mask = torch.zeros(seq_length, seq_length, device=position_ids.device)
             start_indices = torch.where(position_ids == 0)[0]
-            cu_seqlens = torch.cat([start_indices, torch.tensor([seq_length], dtype=start_indices.dtype, device=start_indices.device)])
+            cu_seqlens = torch.cat(
+                [start_indices, torch.tensor([seq_length], dtype=start_indices.dtype, device=start_indices.device)]
+            )
             # make trius for each document
             for i in range(len(cu_seqlens) - 1):
-                attention_mask[cu_seqlens[i]:cu_seqlens[i+1], cu_seqlens[i]:cu_seqlens[i+1]] = torch.tril(torch.ones(cu_seqlens[i+1] - cu_seqlens[i], cu_seqlens[i+1] - cu_seqlens[i]))
-            return attention_mask.to(torch.bool) # [seq_length, seq_length]
-        
+                attention_mask[cu_seqlens[i] : cu_seqlens[i + 1], cu_seqlens[i] : cu_seqlens[i + 1]] = torch.tril(
+                    torch.ones(cu_seqlens[i + 1] - cu_seqlens[i], cu_seqlens[i + 1] - cu_seqlens[i])
+                )
+            return attention_mask.to(torch.bool)  # [seq_length, seq_length]
+
         attn_output = self.attention(q, k, v, attention_mask=get_attention_mask(position_ids, q.shape[0]))
         output = self.o_proj(attn_output)
         return {"hidden_states": output, "position_ids": position_ids}
+
 
 class Qwen2MLP(nn.Module):
     def __init__(
@@ -272,7 +265,7 @@ class Qwen2MLP(nn.Module):
             contiguous_chunks=gate_up_contiguous_chunks,
             tp_recompute_allgather=parallel_config.tp_recompute_allgather,
         )
-        
+
         # Define down projection
         self.down_proj = TensorParallelRowLinear(
             config.intermediate_size,
@@ -282,23 +275,24 @@ class Qwen2MLP(nn.Module):
             bias=False,  # Qwen2 doesn't use bias for down_proj
             async_communication=tp_linear_async_communication,
         )
-        
+
         # Define activation function (silu followed by multiplication)
         self.act = ACT2FN[config.hidden_act]
 
     def forward(self, hidden_states):
         # Apply gate_up_proj to get gate and up projections
         merged_states = self.gate_up_proj(hidden_states)
-        
+
         # Apply activation function (SiLU and Mul)
         gate_states, up_states = torch.split(merged_states, merged_states.shape[-1] // 2, dim=-1)
         hidden_states = self.act(gate_states) * up_states
-        
+
         # Apply down projection
         hidden_states = self.down_proj(hidden_states)
-        
+
         return {"hidden_states": hidden_states}
-    
+
+
 class Qwen2DecoderLayer(nn.Module):
     def __init__(
         self,
@@ -309,7 +303,7 @@ class Qwen2DecoderLayer(nn.Module):
     ) -> None:
         super().__init__()
         self.hidden_size = config.hidden_size
-        
+
         self.input_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.self_attn = Qwen2Attention(
             config=config,
@@ -323,7 +317,7 @@ class Qwen2DecoderLayer(nn.Module):
             tp_pg=tp_pg,
         )
         self.post_attention_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        
+
         self.recompute_layer = parallel_config.recompute_layer
 
     def _core_forward(
@@ -358,18 +352,15 @@ class Qwen2DecoderLayer(nn.Module):
         position_ids: Union[torch.Tensor, TensorPointer],
     ) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
         if self.recompute_layer and not isinstance(hidden_states, TensorPointer):
-            hidden_states, position_ids = self._checkpointed_forward(
-                hidden_states, position_ids
-            )
+            hidden_states, position_ids = self._checkpointed_forward(hidden_states, position_ids)
         else:
-            hidden_states, position_ids = self._core_forward(
-                hidden_states, position_ids
-            )
+            hidden_states, position_ids = self._core_forward(hidden_states, position_ids)
 
         return {
             "hidden_states": hidden_states,
             "position_ids": position_ids,
         }
+
 
 class Embedding(nn.Module):
     def __init__(self, tp_pg: dist.ProcessGroup, config: Qwen2Config, parallel_config: Optional[ParallelismArgs]):
@@ -386,6 +377,7 @@ class Embedding(nn.Module):
     def forward(self, input_ids: torch.Tensor, position_ids: torch.Tensor):  # [batch_size, seq_length]
         input_embeds = self.embed_tokens(input_ids)
         return {"input_embeds": input_embeds, "position_ids": position_ids}
+
 
 class Qwen2Model(nn.Module):
     """Build pipeline graph for Qwen2 model"""
@@ -421,7 +413,7 @@ class Qwen2Model(nn.Module):
         )
 
         log_rank(f"Initialize RoPE Theta = {config.rope_theta}", logger=logger, level=logging.INFO, rank=0)
-        
+
         # Create decoder layers
         self.decoder = nn.ModuleList(
             [
@@ -476,14 +468,14 @@ class Qwen2Model(nn.Module):
             "hidden_states": output["input_embeds"],
             "position_ids": output["position_ids"],
         }
-        
+
         for decoder_layer in self.decoder:
             decoder_states = decoder_layer(**decoder_states)
-        
+
         hidden_states = self.final_layer_norm(input=decoder_states["hidden_states"])["hidden_states"]
-        
+
         sharded_logits = self.lm_head(x=hidden_states)["logits"]
-        
+
         return sharded_logits
 
     def get_block_compute_costs(self):
@@ -503,7 +495,7 @@ class Qwen2Model(nn.Module):
     def get_flops_per_sec(self, iteration_time_in_sec, sequence_length, global_batch_size):
         """Get flops per second for the model"""
         world_size = self.parallel_context.world_pg.size()
-        
+
         # Get number of KV heads, accounting for potential absence in config
         try:
             num_key_value_heads = self.config.num_key_value_heads
@@ -544,9 +536,7 @@ class Loss(nn.Module):
         label_mask: torch.Tensor,  # [batch_size, seq_length]
     ) -> Dict[str, torch.Tensor]:
         sharded_logits = sharded_logits.view(label_ids.shape[0], label_ids.shape[1], -1)
-        loss = sharded_cross_entropy(
-            sharded_logits, label_ids.contiguous(), group=self.tp_pg, dtype=torch.float
-        )
+        loss = sharded_cross_entropy(sharded_logits, label_ids.contiguous(), group=self.tp_pg, dtype=torch.float)
         loss = masked_mean(loss, label_mask, dtype=torch.float)
         return {"loss": loss}
 
@@ -666,7 +656,6 @@ class Qwen2ForTraining(NanotronModel):
     def get_flops_per_sec(self, iteration_time_in_sec, sequence_length, global_batch_size):
         """Get flops per second for a given model"""
         return self.model.get_flops_per_sec(iteration_time_in_sec, sequence_length, global_batch_size)
-
 
 
 def get_flops(
