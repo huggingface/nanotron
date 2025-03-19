@@ -37,6 +37,7 @@ class CoreAttention(nn.Module):
     def __init__(
         self,
         config: Qwen2Config,
+        tp_pg: dist.ProcessGroup,
         layer_idx: int = 0,
     ):
         super().__init__()
@@ -46,18 +47,12 @@ class CoreAttention(nn.Module):
         self.head_dim = config.hidden_size // config.num_attention_heads
         self.num_heads = config.num_attention_heads
         self.num_kv_heads = config.num_key_value_heads
+        self.local_num_heads = self.num_heads // tp_pg.size()
+        self.local_num_kv_heads = self.num_kv_heads // tp_pg.size()
         self.num_key_value_groups = (
             config.num_attention_heads // config.num_key_value_heads
         )  # Important for transformers's `sdpa_attention_forward`
-        self.is_causal = getattr(config, "is_causal", True)
-
-        # Choose default attention implementation
-        self._attn_implementation = getattr(config, "_attn_implementation", "flash_attention_2")
-        if self._attn_implementation not in ALL_ATTENTION_FUNCTIONS:
-            logger.warning(
-                f"Attention implementation {self._attn_implementation} not found. Falling back to eager implementation."
-            )
-            self._attn_implementation = "eager"
+        self._attn_implementation = config._attn_implementation
 
     def forward(
         self,
@@ -83,14 +78,15 @@ class CoreAttention(nn.Module):
 
         # need to put sequence after num_heads
         seq_length = attention_mask.shape[0]
-        query_states = query_states.view(-1, seq_length, self.num_heads, self.head_dim).transpose(1, 2)
-        key_states = key_states.view(-1, seq_length, self.num_kv_heads, self.head_dim).transpose(1, 2)
-        value_states = value_states.view(-1, seq_length, self.num_kv_heads, self.head_dim).transpose(1, 2)
+        query_states = query_states.view(-1, seq_length, self.local_num_heads, self.head_dim).transpose(
+            1, 2
+        )  # [b, num_heads, seq_length, head_dim]
+        key_states = key_states.view(-1, seq_length, self.local_num_kv_heads, self.head_dim).transpose(1, 2)
+        value_states = value_states.view(-1, seq_length, self.local_num_kv_heads, self.head_dim).transpose(1, 2)
 
         attention_mask = attention_mask.unsqueeze(0).unsqueeze(0)  # [1, 1, seq_length, seq_length]
 
         # Call the attention implementation
-        # [1, b*s, num_heads, head_dim]
         attn_output = attention_func(
             self,
             query_states,
@@ -101,8 +97,13 @@ class CoreAttention(nn.Module):
             scaling=self.head_dim**-0.5,
             sliding_window=sliding_window,
             **kwargs,
-        )[0]
-        return attn_output.view(-1, self.hidden_size)  # [b*s, num_heads*head_dim]
+        )[
+            0
+        ]  # [1, b*s, num_heads, head_dim] TODO: assert we always have this shape
+        # attn_output = attn_output.view(-1, seq_length, self.local_num_heads, self.head_dim).transpose(1, 2) # [b, num_heads, seq_length, head_dim]
+        return attn_output.view(
+            -1, self.local_num_heads * self.head_dim
+        )  # [b*s, num_heads, head_dim] -> [b*s, num_heads*head_dim]
 
 
 class Qwen2Attention(nn.Module):
@@ -116,15 +117,6 @@ class Qwen2Attention(nn.Module):
         super().__init__()
         self.hidden_size = config.hidden_size
         self.tp_pg_size = tp_pg.size()
-
-        # Head configuration
-        self.total_num_heads = config.num_attention_heads
-        assert self.total_num_heads % self.tp_pg_size == 0
-        self.num_heads = self.total_num_heads // self.tp_pg_size
-
-        # KV head configuration
-        self.total_num_kv_heads = getattr(config, "num_key_value_heads", config.num_attention_heads)
-        self.num_kv_heads = max(1, self.total_num_kv_heads // self.tp_pg_size)
 
         assert (
             config.num_attention_heads % tp_pg.size() == 0
@@ -146,10 +138,20 @@ class Qwen2Attention(nn.Module):
             config.num_attention_heads % config.num_key_value_heads == 0
         ), f"Number of attention heads ({config.num_attention_heads}) must be divisible by number of key/value heads ({config.num_key_value_heads})."
 
+        # Head configuration
+        self.num_heads = config.num_attention_heads
+        self.local_num_heads = self.num_heads // self.tp_pg_size
+
+        # KV head configuration
+        self.num_kv_heads = config.num_key_value_heads
+        self.local_num_kv_heads = self.num_kv_heads // self.tp_pg_size
+
         # Dimensions
-        self.head_dim = config.hidden_size // self.total_num_heads
+        self.head_dim = config.hidden_size // self.num_heads
         self.q_size = self.num_heads * self.head_dim
         self.kv_size = self.num_kv_heads * self.head_dim
+        self.local_q_size = self.local_num_heads * self.head_dim
+        self.local_kv_size = self.local_num_kv_heads * self.head_dim
 
         # TP mode configuration
         tp_mode = parallel_config.tp_mode if parallel_config is not None else TensorParallelLinearMode.ALL_REDUCE
@@ -173,7 +175,7 @@ class Qwen2Attention(nn.Module):
             tp_recompute_allgather=parallel_config.tp_recompute_allgather,
         )
         self.o_proj = TensorParallelRowLinear(
-            self.total_num_heads * self.head_dim,
+            self.num_heads * self.head_dim,
             self.hidden_size,
             pg=tp_pg,
             mode=tp_mode,
@@ -187,7 +189,7 @@ class Qwen2Attention(nn.Module):
             interleaved=True,
             seq_len_scaling_factor=None,
         )
-        self.attention = CoreAttention(config, layer_idx)
+        self.attention = CoreAttention(config, tp_pg, layer_idx)
 
     def forward(
         self,
@@ -203,15 +205,15 @@ class Qwen2Attention(nn.Module):
 
         qkv = self.qkv_proj(hidden_states)
         q, k, v = qkv.split(
-            [self.q_size, self.kv_size, self.kv_size], dim=-1
+            [self.local_q_size, self.local_kv_size, self.local_kv_size], dim=-1
         )  # [batch_size, seq_length, q_size], [batch_size, seq_length, kv_size]
 
         rotary_pos_emb = self.rotary_emb(position_ids=position_ids)  # [b*s, dim] or [seq_length, dim]
         rotary_pos_emb = rotary_pos_emb.unsqueeze(1)  # [b*s, 1, dim] or [seq_length, 1, dim]
 
-        q = q.view(-1, self.num_heads, self.head_dim)  # [b*s, num_heads, head_dim]
-        k = k.view(-1, self.num_kv_heads, self.head_dim)  # [b*s, num_kv_heads, head_dim]
-        v = v.view(-1, self.num_kv_heads, self.head_dim)  # [b*s, num_kv_heads, head_dim]
+        q = q.view(-1, self.local_num_heads, self.head_dim)  # [b*s, num_heads, head_dim]
+        k = k.view(-1, self.local_num_kv_heads, self.head_dim)  # [b*s, num_kv_heads, head_dim]
+        v = v.view(-1, self.local_num_kv_heads, self.head_dim)  # [b*s, num_kv_heads, head_dim]
         q = self.rotary_emb.apply_rotary_pos_emb(q, rotary_pos_emb)  # [b*s, num_heads, head_dim]
         k = self.rotary_emb.apply_rotary_pos_emb(k, rotary_pos_emb)  # [b*s, num_kv_heads, head_dim]
 
