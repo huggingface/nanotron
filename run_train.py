@@ -71,6 +71,7 @@ def get_dataloader_from_data_stage(
             vocab_size=trainer.model_config.vocab_size,
             seed=data.seed,
             parallel_context=trainer.parallel_context,
+            use_packed_seqs=True,  # Simulate packed sequences to test SFT or inference
         )()
 
     # Case 2: HuggingFace datasets
