@@ -7,7 +7,6 @@ from nanotron.config import (
     DataArgs,
     DatasetStageArgs,
     GeneralArgs,
-    LlamaConfig,
     LoggingArgs,
     LRSchedulerArgs,
     ModelArgs,
@@ -19,11 +18,11 @@ from nanotron.config import (
 )
 from nanotron.config.config import PretrainDatasetsArgs
 from nanotron.models import build_model
-from nanotron.models.llama import LlamaForTraining
+from nanotron.models.qwen import Qwen2Config, Qwen2ForTraining
 from nanotron.parallel.context import ParallelContext
 from nanotron.trainer import mark_tied_parameters
 
-TINY_LLAMA_CONFIG = LlamaConfig(
+TINY_QWEN_CONFIG = Qwen2Config(
     **{
         "bos_token_id": 1,
         "eos_token_id": 2,
@@ -31,26 +30,25 @@ TINY_LLAMA_CONFIG = LlamaConfig(
         "hidden_size": 128,
         "initializer_range": 0.02,
         "intermediate_size": 128 * 4,
-        "is_llama_config": True,
         "max_position_embeddings": 128,
         "num_attention_heads": 4,
         "num_hidden_layers": 4,
         "num_key_value_heads": 2,
         "pad_token_id": None,
-        "pretraining_tp": 1,
         "rms_norm_eps": 1e-06,
-        "rope_scaling": None,
+        "rope_theta": 10000.0,
         "tie_word_embeddings": False,
         "use_cache": True,
         "vocab_size": 4096,
+        "_attn_implementation": "flash_attention_2",
     }
 )
 
 
-def get_llama_training_config(model_config: ModelArgs):
+def get_qwen_training_config(model_config: ModelArgs):
     return Config(
         model=model_config,
-        general=GeneralArgs(project="unittest", run="sanity_llama", seed=42),
+        general=GeneralArgs(project="unittest", run="sanity_qwen", seed=42),
         checkpoints=CheckpointsArgs(
             checkpoints_path="./checkpoints",
             checkpoint_interval=10,
@@ -105,9 +103,9 @@ def get_llama_training_config(model_config: ModelArgs):
     )
 
 
-def create_llama_from_config(
-    model_config: LlamaConfig, device: torch.device, parallel_context: ParallelContext
-) -> LlamaForTraining:
+def create_qwen_from_config(
+    model_config: Qwen2Config, device: torch.device, parallel_context: ParallelContext
+) -> Qwen2ForTraining:
 
     """
     Creates and returns a nanotron model.
@@ -126,7 +124,7 @@ def create_llama_from_config(
         tp_linear_async_communication=False,
     )
     model = build_model(
-        model_builder=lambda: LlamaForTraining(
+        model_builder=lambda: Qwen2ForTraining(
             config=model_config,
             parallel_context=parallel_context,
             parallel_config=parallel_config,
