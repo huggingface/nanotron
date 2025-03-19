@@ -93,6 +93,20 @@ class PretrainDatasetsArgs:
 
 
 @dataclass
+class SFTDatasetsArgs:
+    hf_dataset_or_datasets: Union[str, list, dict]
+    hf_dataset_splits: Optional[Union[str, list]] = None
+    hf_dataset_config_name: Optional[str] = None
+    dataset_processing_num_proc_per_process: Optional[int] = 1
+    dataset_overwrite_cache: Optional[bool] = False
+    sft_dataloader: Optional[bool] = True
+
+    def __post_init__(self):
+        if self.hf_dataset_splits is None:
+            self.hf_dataset_splits = "train"
+
+
+@dataclass
 class S3UploadArgs:
     """Arguments related to uploading checkpoints on s3"""
 
@@ -124,7 +138,9 @@ class NanosetDatasetsArgs:
 class DataArgs:
     """Arguments related to the data and data files processing"""
 
-    dataset: Optional[Union[PretrainDatasetsArgs, NanosetDatasetsArgs]] # If None we use dummy_infinite_data_generator
+    dataset: Optional[
+        Union[PretrainDatasetsArgs, NanosetDatasetsArgs, SFTDatasetsArgs]
+    ]  # If None we use dummy_infinite_data_generator
     seed: Optional[int]
     num_loading_workers: Optional[int] = 1
 
