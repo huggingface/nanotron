@@ -69,6 +69,52 @@ class LlamaConfig:
     def is_using_mup(self) -> bool:
         return self._is_using_mup
 
+@dataclass
+class Qwen2Config:
+    """Configuration for a QWEN2 model
+
+    Be careful on having a coherent typing as we use it to reconstruct the model from yaml
+    """
+
+    bos_token_id: int = 1
+    eos_token_id: int = 2
+    hidden_act: str = "silu"
+    hidden_size: int = 4096
+    initializer_range: float = 0.02
+    intermediate_size: int = 11008
+    is_qwen2_config: bool = True  # We use this help differentiate models in yaml/python conversion
+    max_position_embeddings: int = 2048
+    num_attention_heads: int = 32
+    num_hidden_layers: int = 32
+    num_key_value_heads: Optional[int] = None
+    pad_token_id: Optional[int] = None
+    pretraining_tp: int = 1
+    rms_norm_eps: float = 1e-6
+    rope_scaling: Optional[dict] = None
+    rope_theta: float = 10000.0
+    rope_interleaved: bool = (
+        False  # The default value has been True, but for loading Llama3 checkpoints you have to set it to False
+    )
+    tie_word_embeddings: bool = False
+    use_cache: bool = True
+    vocab_size: int = 32000
+
+    def __post_init__(self):
+        self._attn_implementation: Optional[str] = "sdpa"
+
+        # NOTE: user don't set self._init_method, ModelArgs will set it
+        # then we only pass LlamaConfig around
+        self._is_using_mup: bool = False
+        # self._init_method: Optional[Union[RandomInit, SpectralMupInit, ExistingCheckpointInit]] = None
+
+        # for backward compatibility
+        if self.num_key_value_heads is None:
+            self.num_key_value_heads = self.num_attention_heads
+
+    @property
+    def is_using_mup(self) -> bool:
+        return self._is_using_mup
+
 
 @dataclass
 class Starcoder2Config:
@@ -136,4 +182,4 @@ class Starcoder2Config:
         return self.intermediate_size
 
 
-NanotronConfigs = Union[LlamaConfig, Starcoder2Config, Any]
+NanotronConfigs = Union[LlamaConfig, Starcoder2Config, Qwen2Config, Any]
