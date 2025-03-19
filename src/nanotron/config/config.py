@@ -307,6 +307,17 @@ class AdamWOptimizerArgs:
     name: str = "adamW"
 
 
+class AdEMAMixOptimizerArgs:
+    beta1: float
+    beta2: float
+    beta3: float
+    alpha: float
+    eps: float
+    beta3_warmup: Optional[float] = None
+    alpha_warmup: Optional[float] = None
+    name: str = "ademaix"
+
+
 @dataclass
 class OptimizerArgs:
     """Arguments related to the optimizer and learning rate"""
