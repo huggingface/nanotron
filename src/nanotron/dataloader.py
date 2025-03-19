@@ -209,7 +209,7 @@ def dummy_infinite_data_generator(
                 prev_idx = 0
                 for doc_idx, doc_len in enumerate(document_lengths[i]):
                     position_ids[i, prev_idx : prev_idx + doc_len] = torch.arange(
-                        doc_idx, doc_idx + doc_len, dtype=torch.long, device="cuda"
+                        0, doc_len, dtype=torch.long, device="cuda"
                     )
                     prev_idx += doc_len
             while True:
