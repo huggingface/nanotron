@@ -85,7 +85,7 @@ For detailed instructions, refer to `examples/custom-dataloader/README.md`.
 
 ## Multi-node Training
 
-Coming soon.
+Check out the [Multi-node Training](multi-node-training.md) guide for more information.
 
 ## Troubleshooting
 
