@@ -289,7 +289,7 @@ class LoggerWriter:
 def set_logger_verbosity_format(logging_level: str, parallel_context: ParallelContext):
     node_name = os.environ.get("SLURMD_NODENAME")
     expert_parallel_log = (
-        f"|EXP={dist.get_rank(parallel_context.expert_pg)}" if parallel_context.expert_parallel_size > 1 else ""
+        f"|EXP={dist.get_rank(parallel_context.ep_pg)}" if parallel_context.expert_parallel_size > 1 else ""
     )
     formatter = Formatter(
         fmt=f"%(asctime)s [%(levelname)s|DP={dist.get_rank(parallel_context.dp_pg)}|PP={dist.get_rank(parallel_context.pp_pg)}|"

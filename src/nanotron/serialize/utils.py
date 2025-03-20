@@ -21,7 +21,7 @@ def get_exp_tp_pp_rank_and_size_from(
 ) -> Tuple[Tuple[int, int], Tuple[int, int]]:
     result = parallel_context.get_local_ranks(world_rank=world_rank)
     return (
-        (result[0], parallel_context.expert_pg.size()),
+        (result[0], parallel_context.ep_pg.size()),
         (result[3], parallel_context.tp_pg.size()),
         (result[1], parallel_context.pp_pg.size()),
     )
