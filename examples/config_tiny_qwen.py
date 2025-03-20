@@ -11,6 +11,7 @@ from nanotron.config import (
     LoggingArgs,
     LRSchedulerArgs,
     ModelArgs,
+    MoEConfig,
     OptimizerArgs,
     ParallelismArgs,
     Qwen2Config,
@@ -21,8 +22,9 @@ from nanotron.config import (
 )
 from nanotron.logging import human_format
 
+# Create a MoE-enabled Qwen2 model with 4 experts
 model_config = Qwen2Config(
-    # Config for a tiny model model with 1.62M parameters
+    # Config for a tiny model model with MoE layers
     bos_token_id=1,
     eos_token_id=2,
     hidden_act="silu",
@@ -41,18 +43,61 @@ model_config = Qwen2Config(
     vocab_size=256,
     is_qwen2_config=True,
     pad_token_id=None,
+    # MoE configuration using the new dataclass
+    moe_config=MoEConfig(
+        num_experts=4,  # Total number of experts
+        top_k=2,  # Number of experts to route each token to
+        layers=[1],  # The second layer (index 1) will be a MoE layer
+        enable_shared_expert=True,  # Use a shared expert alongside specialized experts
+        token_dispatcher_type="alltoall",  # Communication pattern for distributed experts
+    ),
 )
 
-num_params = human_format(
-    model_config.vocab_size * model_config.hidden_size * 2
-    + model_config.num_hidden_layers
-    * (
-        3 * model_config.hidden_size * model_config.intermediate_size
-        + 4 * model_config.hidden_size * model_config.hidden_size
+# Calculate rough parameter count - now with MoE consideration
+moe_layer_count = len(model_config.moe_config.layers) if model_config.moe_config else 0
+dense_layer_count = model_config.num_hidden_layers - moe_layer_count
+
+# Base parameters (embeddings)
+base_params = model_config.vocab_size * model_config.hidden_size * 2
+
+# Dense FFN parameters
+dense_ffn_params = dense_layer_count * (3 * model_config.hidden_size * model_config.intermediate_size)
+
+# MoE FFN parameters (experts × parameters per expert)
+moe_ffn_params = 0
+shared_expert_params = 0
+router_params = 0
+
+if model_config.moe_config:
+    # MoE FFN parameters (experts × parameters per expert)
+    moe_ffn_params = (
+        moe_layer_count
+        * model_config.moe_config.num_experts
+        * (3 * model_config.hidden_size * model_config.intermediate_size)
     )
-).replace(".", "p")
+
+    # Shared expert parameters if enabled
+    shared_expert_params = (
+        moe_layer_count * (3 * model_config.hidden_size * model_config.intermediate_size)
+        if model_config.moe_config.enable_shared_expert
+        else 0
+    )
+
+    # Router parameters
+    router_params = moe_layer_count * (model_config.hidden_size * model_config.moe_config.num_experts)
+
+# Attention parameters (same for both dense and MoE layers)
+attn_params = model_config.num_hidden_layers * (4 * model_config.hidden_size * model_config.hidden_size)
+
+# Total parameters
+total_params = base_params + dense_ffn_params + moe_ffn_params + shared_expert_params + router_params + attn_params
+
+num_params = human_format(total_params).replace(".", "p")
 
 print(f"Model has {num_params} parameters")
+if model_config.moe_config:
+    print(f"MoE layers: {model_config.moe_config.layers}")
+    print(f"Number of experts: {model_config.moe_config.num_experts}")
 
 seed = 42
 
@@ -83,6 +128,7 @@ parallelism = ParallelismArgs(
     pp_engine="1f1b",
     tp_mode="REDUCE_SCATTER",
     tp_linear_async_communication=True,
+    moe_layer_recompute=True,  # Add recompute option for MoE layers
 )
 
 tokens = TokensArgs(sequence_length=256, train_steps=15, micro_batch_size=2, batch_accumulation_per_replica=1)
@@ -112,8 +158,11 @@ data_stages = [
 checkpoints_path = "./checkpoints"
 os.makedirs(checkpoints_path, exist_ok=True)
 
+# Determine run name based on whether MoE is enabled
+run_name = "tiny_qwen_moe_%date_%jobid" if model_config.is_moe_model else "tiny_qwen_%date_%jobid"
+
 config = Config(
-    general=GeneralArgs(project="debug", run="tiny_qwen_%date_%jobid", seed=seed, ignore_sanity_checks=False),
+    general=GeneralArgs(project="debug", run=run_name, seed=seed, ignore_sanity_checks=False),
     checkpoints=CheckpointsArgs(checkpoints_path=checkpoints_path, checkpoint_interval=10),
     parallelism=parallelism,
     model=ModelArgs(init_method=RandomInit(std=0.025), model_config=model_config),
@@ -128,7 +177,8 @@ config = Config(
 if __name__ == "__main__":
     dir = os.path.dirname(__file__)
 
-    # Save config as YAML file
-    config.save_as_yaml(f"{dir}/config_tiny_qwen.yaml")
+    # Save config as YAML file - name depends on whether MoE is enabled
+    config_filename = "config_tiny_qwen_moe.yaml" if model_config.is_moe_model else "config_tiny_qwen.yaml"
+    config.save_as_yaml(f"{dir}/{config_filename}")
 
     # You can now train a model with this config using `/run_train.py`

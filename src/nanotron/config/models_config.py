@@ -26,6 +26,27 @@ class ExistingCheckpointInit:
 
 
 @dataclass
+class MoEConfig:
+    """Configuration for Mixture of Experts layers"""
+
+    num_experts: int = 8  # Total number of experts
+    top_k: int = 2  # Number of experts to route each token to
+    layers: List[int] = field(default_factory=list)  # Indices of layers that use MoE
+    enable_shared_expert: bool = False  # Whether to use a shared expert alongside specialized experts
+    token_dispatcher_type: str = "alltoall"  # Communication pattern for MoE ("alltoall" or "allgather")
+
+    def __post_init__(self):
+        # Validate the configuration
+        if self.top_k > self.num_experts:
+            raise ValueError(f"top_k ({self.top_k}) cannot be greater than num_experts ({self.num_experts})")
+
+        if self.token_dispatcher_type not in ["alltoall", "allgather"]:
+            raise ValueError(
+                f"token_dispatcher_type must be one of ['alltoall', 'allgather'], got {self.token_dispatcher_type}"
+            )
+
+
+@dataclass
 class LlamaConfig:
     """Configuration for a LLAMA model
 
@@ -101,6 +122,9 @@ class Qwen2Config:
     vocab_size: int = 32000
     _attn_implementation: Optional[str] = "ring"
 
+    # MoE configuration
+    moe_config: Optional[MoEConfig] = None
+
     def __post_init__(self):
         # NOTE: user don't set self._init_method, ModelArgs will set it
         # then we only pass LlamaConfig around
@@ -114,6 +138,11 @@ class Qwen2Config:
     @property
     def is_using_mup(self) -> bool:
         return self._is_using_mup
+
+    @property
+    def is_moe_model(self) -> bool:
+        """Returns True if the model uses MoE layers"""
+        return self.moe_config is not None and len(self.moe_config.layers) > 0
 
 
 @dataclass

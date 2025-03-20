@@ -33,6 +33,7 @@ class ParallelismArgs:
     tp_mode: Optional[TensorParallelLinearMode] = None
     tp_linear_async_communication: Optional[bool] = None
     recompute_layer: bool = False
+    moe_layer_recompute: bool = False
 
     tp_recompute_allgather: bool = True
 
