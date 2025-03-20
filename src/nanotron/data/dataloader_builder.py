@@ -1,13 +1,16 @@
+from torch.utils.data import DataLoader
+
 import nanotron.distributed as dist
 from nanotron import logging
 from nanotron.data.collator import NanosetDataCollatorForCLM
-from nanotron.dataloader import (
-    EmptyInfiniteDataset,
+from nanotron.data.dataloader import (
     get_dataloader_worker_init,
+)
+from nanotron.data.samplers import (
+    EmptyInfiniteDataset,
     get_sampler,
 )
 from nanotron.parallel import ParallelContext
-from torch.utils.data import DataLoader
 
 logger = logging.get_logger(__name__)
 

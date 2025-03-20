@@ -36,7 +36,7 @@ from nanotron.config import (
     get_config_from_file,
 )
 from nanotron.constants import MODEL_CONFIG_FILE_NAME
-from nanotron.dataloader import sanity_check_dataloader
+from nanotron.data.dataloader import sanity_check_dataloader
 from nanotron.helpers import (
     _vocab_size_with_padding,
     compute_remain_train_steps_of_a_data_stage_from_ckp,

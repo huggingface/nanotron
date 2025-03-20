@@ -12,14 +12,17 @@ from typing import Dict, cast
 
 import numpy as np
 from nanotron import logging
-from nanotron.config import DataArgs, DatasetStageArgs, NanosetDatasetsArgs, PretrainDatasetsArgs
-from nanotron.data.dataloader_builder import build_nanoset_dataloader
-from nanotron.dataloader import (
-    clm_process,
+from nanotron.config import DataArgs, DatasetStageArgs, NanosetDatasetsArgs, PretrainDatasetsArgs, SFTDatasetsArgs
+from nanotron.data.dataloader import (
     dummy_infinite_data_generator,
-    get_datasets,
     get_train_dataloader,
 )
+from nanotron.data.dataloader_builder import build_nanoset_dataloader
+from nanotron.data.processing import (
+    clm_process,
+    get_datasets,
+)
+from nanotron.data.sft_processing import prepare_sft_dataset
 from nanotron.helpers import (
     compute_remain_train_steps_of_a_data_stage_from_ckp,
     get_consumed_train_samples_of_a_data_stage_from_ckp,
@@ -39,6 +42,10 @@ except ImportError:
     tf_version = None
 
 logger = logging.get_logger(__name__)
+
+# import lovely_tensors as lt
+
+# lt.monkey_patch()
 
 
 def get_dataloader_from_data_stage(
@@ -71,11 +78,11 @@ def get_dataloader_from_data_stage(
             vocab_size=trainer.model_config.vocab_size,
             seed=data.seed,
             parallel_context=trainer.parallel_context,
-            use_packed_seqs=True,  # Simulate packed sequences to test SFT or inference
+            use_position_ids=True,  # Simulate packed sequences to test SFT or inference
         )()
 
     # Case 2: HuggingFace datasets
-    elif isinstance(data.dataset, PretrainDatasetsArgs):
+    elif isinstance(data.dataset, PretrainDatasetsArgs) or isinstance(data.dataset, SFTDatasetsArgs):
         log_rank("Using `datasets` library", logger=logger, level=logging.INFO, rank=0)
         tokenizer_path = trainer.config.tokenizer.tokenizer_name_or_path
         log_rank(
@@ -106,15 +113,30 @@ def get_dataloader_from_data_stage(
                 tokenizer.vocab_size <= trainer.model_config.vocab_size
             ), f"Tokenizer's vocab size ({tokenizer.vocab_size}) is larger than the model's vocab size ({trainer.model_config.vocab_size})"
 
-            # We apply the Causal Language Modeling preprocessing
-            train_dataset = clm_process(
-                raw_dataset=raw_dataset,
-                tokenizer=tokenizer,
-                text_column_name=data.dataset.text_column_name,
-                dataset_processing_num_proc_per_process=data.dataset.dataset_processing_num_proc_per_process,
-                dataset_overwrite_cache=data.dataset.dataset_overwrite_cache,
-                sequence_length=trainer.sequence_length,
-            )
+            # Different processing for SFT vs pretraining
+            if isinstance(data.dataset, SFTDatasetsArgs):
+                # For SFT, use the dedicated prepare_sft_dataset function
+                # Get optional debug parameter to limit dataset size (for faster development)
+                debug_max_samples = getattr(data.dataset, "debug_max_samples", None)
+
+                # Process the dataset using our dedicated SFT processing module
+                train_dataset = prepare_sft_dataset(
+                    raw_dataset=raw_dataset,
+                    tokenizer=tokenizer,
+                    trainer_sequence_length=trainer.sequence_length,
+                    debug_max_samples=debug_max_samples,
+                    num_proc=data.dataset.dataset_processing_num_proc_per_process,
+                )
+            else:
+                # For pretraining, use existing CLM processing
+                train_dataset = clm_process(
+                    raw_dataset=raw_dataset,
+                    tokenizer=tokenizer,
+                    text_column_name=data.dataset.text_column_name,
+                    dataset_processing_num_proc_per_process=data.dataset.dataset_processing_num_proc_per_process,
+                    dataset_overwrite_cache=data.dataset.dataset_overwrite_cache,
+                    sequence_length=trainer.sequence_length,
+                )
 
             # We load the processed dataset on the ranks requiring it
             dataloader = get_train_dataloader(
@@ -128,6 +150,7 @@ def get_dataloader_from_data_stage(
                 dataloader_num_workers=data.num_loading_workers,
                 seed_worker=data.seed,
                 dataloader_drop_last=True,
+                use_position_ids=isinstance(data.dataset, SFTDatasetsArgs),
             )
 
             # Check if we have enough samples for train_steps
@@ -220,6 +243,22 @@ def get_dataloader(trainer: DistributedTrainer) -> Dict[str, DataLoader]:
     return dataloaders
 
 
+def log_libraries_versions():
+    import datasets
+    import flash_attn
+    import nanotron
+    import torch
+    import transformers
+
+    log_rank("\nLibraries versions:", logger=logger, level=logging.INFO, rank=0)
+    log_rank(f"nanotron version: {nanotron.__version__}", logger=logger, level=logging.INFO, rank=0)
+    log_rank(f"torch version: {torch.__version__}", logger=logger, level=logging.INFO, rank=0)
+    log_rank(f"transformers version: {transformers.__version__}", logger=logger, level=logging.INFO, rank=0)
+    log_rank(f"datasets version: {datasets.__version__}", logger=logger, level=logging.INFO, rank=0)
+    log_rank(f"flash-attn version: {flash_attn.__version__}", logger=logger, level=logging.INFO, rank=0)
+    log_rank("\n", logger=logger, level=logging.INFO, rank=0)
+
+
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config-file", type=str, required=True, help="Path to the YAML or python config file")
@@ -233,6 +272,9 @@ if __name__ == "__main__":
     # Load trainer and data
     trainer = DistributedTrainer(config_file)
     dataloader = get_dataloader(trainer)
+
+    # Log some libraries versions
+    log_libraries_versions()
 
     # Train
     trainer.train(dataloader)
