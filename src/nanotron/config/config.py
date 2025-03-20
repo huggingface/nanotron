@@ -416,6 +416,20 @@ class Config:
         # if self.checkpoints.lighteval is not None:
         #     assert self.tokenizer.tokenizer_name_or_path is not None
 
+        # Model verifications
+        assert (
+            self.model.model_config.num_attention_heads % self.parallelism.tp == 0
+        ), "num_attention_heads must be divisible by tp"
+        assert (
+            self.model.model_config.num_attention_heads >= self.model.model_config.num_key_value_heads
+        ), "num_attention_heads must be >= num_key_value_heads"
+        assert (
+            self.model.model_config.num_key_value_heads >= self.parallelism.tp
+        ), "num_key_value_heads must be >= tp"  # TODO: remove this once we ensure KV heads get duplicated correctly
+        assert (
+            self.model.model_config.num_attention_heads % self.model.model_config.num_key_value_heads == 0
+        ), "num_attention_heads must be divisible by num_key_value_heads"
+
     @property
     def global_batch_size(self):
         return self.tokens.micro_batch_size * self.tokens.batch_accumulation_per_replica * self.parallelism.dp
