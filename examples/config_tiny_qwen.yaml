@@ -24,7 +24,7 @@ data_stages:
 general:
   benchmark_csv_path: null
   consumed_train_samples: null
-  ignore_sanity_checks: true
+  ignore_sanity_checks: false
   project: debug
   run: tiny_qwen_%date_%jobid
   seed: 42
@@ -41,6 +41,7 @@ model:
     std: 0.025
   make_vocab_size_divisible_by: 1
   model_config:
+    _attn_implementation: ring
     bos_token_id: 1
     eos_token_id: 2
     hidden_act: silu
@@ -81,6 +82,7 @@ optimizer:
   weight_decay: 0.01
   zero_stage: 0
 parallelism:
+  context_parallel_size: 1
   dp: 2
   expert_parallel_size: 1
   pp: 1

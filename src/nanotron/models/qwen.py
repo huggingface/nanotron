@@ -62,6 +62,7 @@ class CoreAttention(nn.Module):
         key_states: torch.Tensor,  # [b*s, num_kv_heads, head_dim]
         value_states: torch.Tensor,  # [b*s, num_kv_heads, head_dim]
         attention_mask: Optional[torch.Tensor] = None,  # [seq_length, seq_length]
+        cu_seqlens: Optional[torch.Tensor] = None,
         dropout: float = 0.0,
         sliding_window: Optional[int] = None,
     ):
@@ -79,16 +80,21 @@ class CoreAttention(nn.Module):
 
         # need to put sequence after num_heads
         seq_length = attention_mask.shape[0]
-        if self._attn_implementation != "ring":
+        if self._attn_implementation == "ring_flash_triton":
+            query_states = query_states.view(-1, seq_length, self.local_num_heads, self.head_dim)
+            key_states = key_states.view(-1, seq_length, self.local_num_kv_heads, self.head_dim)
+            value_states = value_states.view(-1, seq_length, self.local_num_kv_heads, self.head_dim)
+        elif self._attn_implementation == "ring":
+            # Warning: Since this uses _flash_attn_varlen_forward make sure we count padding tokens in cu_seqlens
+            query_states = query_states.view(-1, self.local_num_heads, self.head_dim)
+            key_states = key_states.view(-1, self.local_num_kv_heads, self.head_dim)
+            value_states = value_states.view(-1, self.local_num_kv_heads, self.head_dim)
+        else:
             query_states = query_states.view(-1, seq_length, self.local_num_heads, self.head_dim).transpose(
                 1, 2
             )  # [b, num_heads, seq_length, head_dim]
             key_states = key_states.view(-1, seq_length, self.local_num_kv_heads, self.head_dim).transpose(1, 2)
             value_states = value_states.view(-1, seq_length, self.local_num_kv_heads, self.head_dim).transpose(1, 2)
-        else:
-            query_states = query_states.view(-1, seq_length, self.local_num_heads, self.head_dim)
-            key_states = key_states.view(-1, seq_length, self.local_num_kv_heads, self.head_dim)
-            value_states = value_states.view(-1, seq_length, self.local_num_kv_heads, self.head_dim)
 
         attention_mask = attention_mask.unsqueeze(0).unsqueeze(0)  # [1, 1, seq_length, seq_length]
 
@@ -103,6 +109,8 @@ class CoreAttention(nn.Module):
             scaling=self.head_dim**-0.5,
             sliding_window=sliding_window,
             ring_pg=self.cp_pg,
+            cu_seqlens=cu_seqlens,
+            max_seqlen=seq_length,
         )[
             0
         ]  # [1, b*s, num_heads, head_dim] TODO: assert we always have this shape
@@ -206,20 +214,20 @@ class Qwen2Attention(nn.Module):
 
         # TODO @nouamane: optimize this, and make sure it works with flashattn and flexattn
         def get_attention_mask(position_ids, seq_length):
-            # position_ids is [b*s]
             attention_mask = torch.zeros(seq_length, seq_length, device=position_ids.device)
             start_indices = torch.where(position_ids == 0)[0]
             cu_seqlens = torch.cat(
-                [start_indices, torch.tensor([seq_length], dtype=start_indices.dtype, device=start_indices.device)]
-            )
+                [start_indices, torch.tensor([seq_length], dtype=torch.int32, device=start_indices.device)]
+            ).to(torch.int32)
             # make trius for each document
             for i in range(len(cu_seqlens) - 1):
                 attention_mask[cu_seqlens[i] : cu_seqlens[i + 1], cu_seqlens[i] : cu_seqlens[i + 1]] = torch.tril(
                     torch.ones(cu_seqlens[i + 1] - cu_seqlens[i], cu_seqlens[i + 1] - cu_seqlens[i])
                 )
-            return attention_mask.to(torch.bool)  # [seq_length, seq_length]
+            return attention_mask.to(torch.bool), cu_seqlens  # [seq_length, seq_length]
 
-        attn_output = self.attention(q, k, v, attention_mask=get_attention_mask(position_ids, q.shape[0]))
+        attention_mask, cu_seqlens = get_attention_mask(position_ids, q.shape[0])
+        attn_output = self.attention(q, k, v, attention_mask=attention_mask, cu_seqlens=cu_seqlens)
         output = self.o_proj(attn_output)
         return {"hidden_states": output, "position_ids": position_ids}
 

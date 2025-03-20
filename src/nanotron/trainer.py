@@ -151,6 +151,7 @@ class DistributedTrainer:
             pipeline_parallel_size=self.config.parallelism.pp,
             data_parallel_size=self.config.parallelism.dp,
             expert_parallel_size=self.config.parallelism.expert_parallel_size,
+            context_parallel_size=self.config.parallelism.context_parallel_size,
         )
 
         self.pre_init()
@@ -253,7 +254,9 @@ class DistributedTrainer:
         self.global_batch_size = (
             self.micro_batch_size * self.n_micro_batches_per_batch * self.parallel_context.dp_pg.size()
         )
-        self.sequence_length = self.config.tokens.sequence_length
+        self.sequence_length = (
+            self.config.tokens.sequence_length
+        )  # Global sequence length not divided by context parallel size
         self.iteration_step = self.metadata.last_train_step
         self.limit_val_batches = self.config.tokens.limit_val_batches
         # NOTE: the dataloader currently in use for the current training stage

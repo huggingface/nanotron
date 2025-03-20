@@ -78,6 +78,8 @@ parallelism = ParallelismArgs(
     dp=2,
     pp=1,
     tp=1,
+    context_parallel_size=1,
+    expert_parallel_size=1,
     pp_engine="1f1b",
     tp_mode="REDUCE_SCATTER",
     tp_linear_async_communication=True,
@@ -111,7 +113,7 @@ checkpoints_path = "./checkpoints"
 os.makedirs(checkpoints_path, exist_ok=True)
 
 config = Config(
-    general=GeneralArgs(project="debug", run="tiny_qwen_%date_%jobid", seed=seed, ignore_sanity_checks=True),
+    general=GeneralArgs(project="debug", run="tiny_qwen_%date_%jobid", seed=seed, ignore_sanity_checks=False),
     checkpoints=CheckpointsArgs(checkpoints_path=checkpoints_path, checkpoint_interval=10),
     parallelism=parallelism,
     model=ModelArgs(init_method=RandomInit(std=0.025), model_config=model_config),

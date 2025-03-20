@@ -37,6 +37,7 @@ class ParallelismArgs:
     tp_recompute_allgather: bool = True
 
     expert_parallel_size: int = 1
+    context_parallel_size: int = 1
 
     def __post_init__(self):
         # Conservative defaults
