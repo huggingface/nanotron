@@ -87,7 +87,7 @@ def ring_flash_attn_varlen_forward(
 
 def ring_flash_attn_varlen_backward(
     process_group,
-    doubt,
+    dout,
     q,
     k,
     v,
@@ -122,7 +122,7 @@ def ring_flash_attn_varlen_backward(
             params = get_default_args(_flash_attn_varlen_backward).copy()
             params.update(
                 {
-                    "doubt": doubt,
+                    "dout": dout,
                     "q": q,
                     "k": k,
                     "v": v,
@@ -228,11 +228,11 @@ class RingFlashAttnVarlenFunc(torch.autograd.Function):
         return out if not return_softmax else (out, softmax_lse, None)
 
     @staticmethod
-    def backward(ctx, doubt, *args):
+    def backward(ctx, dout, *args):
         q, k, v, out, softmax_lse, cu_seqlens = ctx.saved_tensors
         dq, dk, dv = ring_flash_attn_varlen_backward(
             ctx.group,
-            doubt,
+            dout,
             q,
             k,
             v,
