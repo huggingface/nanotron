@@ -31,7 +31,9 @@ class MoEConfig:
 
     num_experts: int = 8  # Total number of experts
     top_k: int = 2  # Number of experts to route each token to
-    layers: List[int] = field(default_factory=list)  # Indices of layers that use MoE
+    layers: List[int] = field(
+        default_factory=lambda: [-1]
+    )  # Indices of layers that use MoE. -1 means all layers. Default is all layers
     enable_shared_expert: bool = False  # Whether to use a shared expert alongside specialized experts
     token_dispatcher_type: str = "alltoall"  # Communication pattern for MoE ("alltoall" or "allgather")
 
@@ -134,6 +136,10 @@ class Qwen2Config:
         # for backward compatibility
         if self.num_key_value_heads is None:
             self.num_key_value_heads = self.num_attention_heads
+
+        # By default i want all layers to be MoE layers
+        if self.moe_config and self.moe_config.layers == [-1]:
+            self.moe_config.layers = list(range(self.num_hidden_layers))
 
     @property
     def is_using_mup(self) -> bool:

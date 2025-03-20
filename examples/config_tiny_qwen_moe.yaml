@@ -52,8 +52,6 @@ model:
     max_position_embeddings: 256
     moe_config:
       enable_shared_expert: true
-      layers:
-      - 1
       num_experts: 4
       token_dispatcher_type: alltoall
       top_k: 2
