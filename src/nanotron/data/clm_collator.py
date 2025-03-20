@@ -62,20 +62,41 @@ class DataCollatorForCLM:
             result["input_ids"] = input_ids[:, :-1]
             result["input_mask"] = np.ones((batch_size, self.sequence_length), dtype=np.bool_)
 
+            # Context Parallelism: Each CP rank gets a slice of the input_ids and input_mask
+            cp_rank, cp_size = dist.get_rank(self.parallel_context.cp_pg), self.parallel_context.context_parallel_size
+            local_slice = slice(
+                cp_rank * self.sequence_length // cp_size, (cp_rank + 1) * self.sequence_length // cp_size
+            )
+            result["input_ids"] = result["input_ids"][:, local_slice]  # (b, s/cp_size)
+            result["input_mask"] = result["input_mask"][:, local_slice]  # (b, s/cp_size)
+
         # Process labels: shift them to the left
         if current_pp_rank == self.output_pp_rank:
             result["label_ids"] = input_ids[:, 1:]
             result["label_mask"] = np.ones((batch_size, self.sequence_length), dtype=np.bool_)
 
-        if isinstance(result["input_ids"], torch.Tensor) and result["input_ids"].shape[-1] != self.sequence_length:
+            # Context Parallelism: Each CP rank gets a slice of the label_ids and label_mask
+            local_slice = slice(
+                cp_rank * self.sequence_length // cp_size, (cp_rank + 1) * self.sequence_length // cp_size
+            )
+            result["label_ids"] = result["label_ids"][:, local_slice]  # (b, s/cp_size)
+            result["label_mask"] = result["label_mask"][:, local_slice]  # (b, s/cp_size)
+
+        if (
+            isinstance(result["input_ids"], torch.Tensor)
+            and result["input_ids"].shape[-1] != self.sequence_length // cp_size
+        ):
             raise ValueError(
                 f"`labels` are incorrectly preprocessed. `labels` length is {result['input_ids'].shape[-1]}, but should be"
-                f" {self.sequence_length}."
+                f" {self.sequence_length // cp_size}."
             )
-        if isinstance(result["label_ids"], torch.Tensor) and result["label_ids"].shape[-1] != self.sequence_length:
+        if (
+            isinstance(result["label_ids"], torch.Tensor)
+            and result["label_ids"].shape[-1] != self.sequence_length // cp_size
+        ):
             raise ValueError(
                 f"`labels` are incorrectly preprocessed. `labels` length is {result['label_ids'].shape[-1]}, but should be"
-                f" {self.sequence_length}."
+                f" {self.sequence_length // cp_size}."
             )
 
         # Cast np.array to torch.Tensor
@@ -139,6 +160,14 @@ class DataCollatorForCLMWithPositionIds:
                 # Default: sequential position ids
                 result["position_ids"] = np.arange(self.sequence_length)[None, :].repeat(batch_size, axis=0)
 
+            # Context Parallelism: Each CP rank gets a slice of the input_ids and position_ids
+            cp_rank, cp_size = dist.get_rank(self.parallel_context.cp_pg), self.parallel_context.context_parallel_size
+            local_slice = slice(
+                cp_rank * self.sequence_length // cp_size, (cp_rank + 1) * self.sequence_length // cp_size
+            )
+            result["input_ids"] = result["input_ids"][:, local_slice]  # (b, s/cp_size)
+            result["position_ids"] = result["position_ids"][:, local_slice]  # (b, s/cp_size)
+
         # Process labels
         if current_pp_rank == self.output_pp_rank:
             result["label_ids"] = input_ids[:, 1:]
@@ -151,16 +180,29 @@ class DataCollatorForCLMWithPositionIds:
                 # Default: all tokens are used for loss
                 result["label_mask"] = np.ones((batch_size, self.sequence_length), dtype=np.bool_)
 
+            # Context Parallelism: Each CP rank gets a slice of the label_ids and label_mask
+            local_slice = slice(
+                cp_rank * self.sequence_length // cp_size, (cp_rank + 1) * self.sequence_length // cp_size
+            )
+            result["label_ids"] = result["label_ids"][:, local_slice]  # (b, s/cp_size)
+            result["label_mask"] = result["label_mask"][:, local_slice]  # (b, s/cp_size)
+
         # Validate shapes
-        if isinstance(result["input_ids"], torch.Tensor) and result["input_ids"].shape[-1] != self.sequence_length:
+        if (
+            isinstance(result["input_ids"], torch.Tensor)
+            and result["input_ids"].shape[-1] != self.sequence_length // cp_size
+        ):
             raise ValueError(
                 f"`input_ids` are incorrectly preprocessed. Length is {result['input_ids'].shape[-1]}, but should be"
-                f" {self.sequence_length}."
+                f" {self.sequence_length // cp_size}."
             )
-        if isinstance(result["label_ids"], torch.Tensor) and result["label_ids"].shape[-1] != self.sequence_length:
+        if (
+            isinstance(result["label_ids"], torch.Tensor)
+            and result["label_ids"].shape[-1] != result["input_ids"].shape[-1]
+        ):
             raise ValueError(
                 f"`label_ids` are incorrectly preprocessed. Length is {result['label_ids'].shape[-1]}, but should be"
-                f" {self.sequence_length}."
+                f" {result['input_ids'].shape[-1]}."
             )
 
         # Cast np.array to torch.Tensor
