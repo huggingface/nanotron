@@ -4,12 +4,12 @@ This guide explains how to train models with Nanotron across multiple compute no
 
 ## Using the Slurm Launcher
 
-Nanotron provides a convenient script (`scripts/slurm_launcher.py`) to simplify launching multi-node training jobs on Slurm clusters. This script handles configuration generation, resource allocation, and job submission in one step.
+Nanotron provides a convenient script (`slurm_launcher.py`) to simplify launching multi-node training jobs on Slurm clusters. This script handles configuration generation, resource allocation, and job submission in one step.
 
 ### Basic Usage
 
 ```bash
-python scripts/slurm_launcher.py --run_name my_experiment --nodes 4 --model_size base
+python slurm_launcher.py --run_name my_experiment --nodes 4 --model_size base
 ```
 
 This will:
@@ -86,7 +86,7 @@ The launcher supports many parameters, organized into logical groups:
 #### Training a Small Model for Testing
 
 ```bash
-python scripts/slurm_launcher.py \
+python slurm_launcher.py \
   --run_name quick_test \
   --nodes 2 \
   --model_size tiny \
@@ -97,7 +97,7 @@ python scripts/slurm_launcher.py \
 #### Training a Large Model for Production
 
 ```bash
-python scripts/slurm_launcher.py \
+python slurm_launcher.py \
   --run_name production_run \
   --nodes 8 \
   --model_size large \
@@ -118,7 +118,7 @@ python scripts/slurm_launcher.py \
 #### Custom Model Architecture
 
 ```bash
-python scripts/slurm_launcher.py \
+python slurm_launcher.py \
   --run_name custom_arch \
   --nodes 4 \
   --hidden_size 1536 \
@@ -131,7 +131,7 @@ python scripts/slurm_launcher.py \
 #### Dry Run (Generate Config Without Submitting)
 
 ```bash
-python scripts/slurm_launcher.py \
+python slurm_launcher.py \
   --run_name test_config \
   --model_size base \
   --dry_run
@@ -140,7 +140,7 @@ python scripts/slurm_launcher.py \
 #### Using a Custom Training Script
 
 ```bash
-python scripts/slurm_launcher.py \
+python slurm_launcher.py \
   --run_name custom_script \
   --nodes 2 \
   --model_size base \
@@ -151,7 +151,7 @@ python scripts/slurm_launcher.py \
 #### Monitoring Training Output in Real-time
 
 ```bash
-python scripts/slurm_launcher.py \
+python slurm_launcher.py \
   --run_name monitored_run \
   --nodes 2 \
   --model_size base \
