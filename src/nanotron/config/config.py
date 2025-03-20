@@ -94,12 +94,14 @@ class PretrainDatasetsArgs:
 
 @dataclass
 class SFTDatasetsArgs:
+    # TODO @nouamane: which config do we want for SFT?
     hf_dataset_or_datasets: Union[str, list, dict]
     hf_dataset_splits: Optional[Union[str, list]] = None
     hf_dataset_config_name: Optional[str] = None
     dataset_processing_num_proc_per_process: Optional[int] = 1
     dataset_overwrite_cache: Optional[bool] = False
     sft_dataloader: Optional[bool] = True
+    debug_max_samples: Optional[int] = None
 
     def __post_init__(self):
         if self.hf_dataset_splits is None:
@@ -381,9 +383,6 @@ class Config:
             self.s3_upload.__post_init__()
 
         # Some final sanity checks across separate arguments sections:
-        if self.profiler is not None and self.profiler.profiler_export_path is not None:
-            assert self.tokens.train_steps < 10
-
         if self.optimizer is not None and self.optimizer.learning_rate_scheduler.lr_decay_steps is None:
             self.optimizer.learning_rate_scheduler.lr_decay_steps = (
                 self.tokens.train_steps - self.optimizer.learning_rate_scheduler.lr_warmup_steps
