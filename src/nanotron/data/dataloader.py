@@ -1,4 +1,4 @@
-from typing import Dict, Iterator, Union
+from typing import Dict, Iterator, Optional, Union
 
 import datasets
 import torch
@@ -84,6 +84,7 @@ def dummy_infinite_data_generator(
     seed: int,
     parallel_context: ParallelContext,
     use_position_ids: bool = False,
+    cp_pg: Optional[dist.ProcessGroup] = None,
 ):
     """
     Generate dummy data for testing or benchmark purposes.
@@ -101,6 +102,10 @@ def dummy_infinite_data_generator(
     Returns:
         Generator function that yields infinite random data batches
     """
+    cp_rank = dist.get_rank(cp_pg)
+    cp_size = cp_pg.size()
+    assert sequence_length % cp_size == 0, f"sequence_length {sequence_length} must be divisible by cp_size {cp_size}"
+    local_slice = slice(cp_rank * sequence_length // cp_size, (cp_rank + 1) * sequence_length // cp_size)
 
     def data_generator() -> Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]]:
         # Random generator
@@ -127,14 +132,14 @@ def dummy_infinite_data_generator(
                     "input_ids": torch.randint(
                         0,
                         vocab_size,
-                        (micro_batch_size * sequence_length,),
+                        (micro_batch_size, sequence_length),
                         dtype=torch.long,
                         device="cuda",
                         generator=generator,
-                    )
+                    )[:, local_slice]
                     if dist.get_rank(parallel_context.pp_pg) == input_pp_rank
                     else TensorPointer(group_rank=input_pp_rank),
-                    "position_ids": position_ids
+                    "position_ids": position_ids[:, local_slice]
                     if dist.get_rank(parallel_context.pp_pg) == input_pp_rank
                     else TensorPointer(group_rank=input_pp_rank),
                     "label_ids": torch.randint(
@@ -144,7 +149,7 @@ def dummy_infinite_data_generator(
                         dtype=torch.long,
                         device="cuda",
                         generator=generator,
-                    )
+                    )[:, local_slice]
                     if dist.get_rank(parallel_context.pp_pg) == output_pp_rank
                     else TensorPointer(group_rank=output_pp_rank),
                     "label_mask": torch.ones(
@@ -152,7 +157,7 @@ def dummy_infinite_data_generator(
                         sequence_length,
                         dtype=torch.bool,
                         device="cuda",
-                    )
+                    )[:, local_slice]
                     if dist.get_rank(parallel_context.pp_pg) == output_pp_rank
                     else TensorPointer(group_rank=output_pp_rank),
                 }
@@ -166,7 +171,7 @@ def dummy_infinite_data_generator(
                         dtype=torch.long,
                         device="cuda",
                         generator=generator,
-                    )
+                    )[:, local_slice]
                     if dist.get_rank(parallel_context.pp_pg) == input_pp_rank
                     else TensorPointer(group_rank=input_pp_rank),
                     "input_mask": torch.ones(
@@ -174,7 +179,7 @@ def dummy_infinite_data_generator(
                         sequence_length,
                         dtype=torch.bool,
                         device="cuda",
-                    )
+                    )[:, local_slice]
                     if dist.get_rank(parallel_context.pp_pg) == input_pp_rank
                     else TensorPointer(group_rank=input_pp_rank),
                     "label_ids": torch.randint(
@@ -184,7 +189,7 @@ def dummy_infinite_data_generator(
                         dtype=torch.long,
                         device="cuda",
                         generator=generator,
-                    )
+                    )[:, local_slice]
                     if dist.get_rank(parallel_context.pp_pg) == output_pp_rank
                     else TensorPointer(group_rank=output_pp_rank),
                     "label_mask": torch.ones(
@@ -192,7 +197,7 @@ def dummy_infinite_data_generator(
                         sequence_length,
                         dtype=torch.bool,
                         device="cuda",
-                    )
+                    )[:, local_slice]
                     if dist.get_rank(parallel_context.pp_pg) == output_pp_rank
                     else TensorPointer(group_rank=output_pp_rank),
                 }
