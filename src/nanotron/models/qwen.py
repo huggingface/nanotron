@@ -3,7 +3,6 @@ from typing import Dict, List, Optional, Tuple, Union
 import torch
 from torch import nn
 from torch.utils.checkpoint import CheckpointFunction
-from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
 
 from nanotron import distributed as dist
 from nanotron import logging
@@ -12,6 +11,7 @@ from nanotron.config.models_config import Qwen2Config, RandomInit, SpectralMupIn
 from nanotron.logging import log_rank
 from nanotron.models import NanotronModel
 from nanotron.nn.activations import ACT2FN
+from nanotron.nn.attention import ALL_ATTENTION_FUNCTIONS
 from nanotron.nn.layer_norm import TritonRMSNorm as RMSNorm
 from nanotron.nn.rotary import RotaryEmbedding
 from nanotron.parallel import ParallelContext
@@ -38,6 +38,7 @@ class CoreAttention(nn.Module):
         self,
         config: Qwen2Config,
         tp_pg: dist.ProcessGroup,
+        cp_pg: dist.ProcessGroup,
         layer_idx: int = 0,
     ):
         super().__init__()
@@ -53,6 +54,7 @@ class CoreAttention(nn.Module):
             config.num_attention_heads // config.num_key_value_heads
         )  # Important for transformers's `sdpa_attention_forward`
         self._attn_implementation = config._attn_implementation
+        self.cp_pg = cp_pg
 
     def forward(
         self,
@@ -62,7 +64,6 @@ class CoreAttention(nn.Module):
         attention_mask: Optional[torch.Tensor] = None,  # [seq_length, seq_length]
         dropout: float = 0.0,
         sliding_window: Optional[int] = None,
-        **kwargs,
     ):
         """Forward pass applying the chosen attention implementation"""
         # Get the appropriate attention function
@@ -78,11 +79,16 @@ class CoreAttention(nn.Module):
 
         # need to put sequence after num_heads
         seq_length = attention_mask.shape[0]
-        query_states = query_states.view(-1, seq_length, self.local_num_heads, self.head_dim).transpose(
-            1, 2
-        )  # [b, num_heads, seq_length, head_dim]
-        key_states = key_states.view(-1, seq_length, self.local_num_kv_heads, self.head_dim).transpose(1, 2)
-        value_states = value_states.view(-1, seq_length, self.local_num_kv_heads, self.head_dim).transpose(1, 2)
+        if self._attn_implementation != "ring":
+            query_states = query_states.view(-1, seq_length, self.local_num_heads, self.head_dim).transpose(
+                1, 2
+            )  # [b, num_heads, seq_length, head_dim]
+            key_states = key_states.view(-1, seq_length, self.local_num_kv_heads, self.head_dim).transpose(1, 2)
+            value_states = value_states.view(-1, seq_length, self.local_num_kv_heads, self.head_dim).transpose(1, 2)
+        else:
+            query_states = query_states.view(-1, seq_length, self.local_num_heads, self.head_dim)
+            key_states = key_states.view(-1, seq_length, self.local_num_kv_heads, self.head_dim)
+            value_states = value_states.view(-1, seq_length, self.local_num_kv_heads, self.head_dim)
 
         attention_mask = attention_mask.unsqueeze(0).unsqueeze(0)  # [1, 1, seq_length, seq_length]
 
@@ -96,7 +102,7 @@ class CoreAttention(nn.Module):
             dropout=dropout,
             scaling=self.head_dim**-0.5,
             sliding_window=sliding_window,
-            **kwargs,
+            ring_pg=self.cp_pg,
         )[
             0
         ]  # [1, b*s, num_heads, head_dim] TODO: assert we always have this shape
@@ -112,6 +118,7 @@ class Qwen2Attention(nn.Module):
         config: Qwen2Config,
         parallel_config: Optional[ParallelismArgs],
         tp_pg: dist.ProcessGroup,
+        cp_pg: dist.ProcessGroup,
         layer_idx: int,
     ):
         super().__init__()
@@ -169,7 +176,7 @@ class Qwen2Attention(nn.Module):
             interleaved=True,
             seq_len_scaling_factor=None,
         )
-        self.attention = CoreAttention(config, tp_pg, layer_idx)
+        self.attention = CoreAttention(config, tp_pg, cp_pg, layer_idx)
 
     def forward(
         self,
@@ -281,6 +288,7 @@ class Qwen2DecoderLayer(nn.Module):
         config: Qwen2Config,
         parallel_config: Optional[ParallelismArgs],
         tp_pg: dist.ProcessGroup,
+        cp_pg: dist.ProcessGroup,
         layer_idx: int,
     ) -> None:
         super().__init__()
@@ -291,6 +299,7 @@ class Qwen2DecoderLayer(nn.Module):
             config=config,
             parallel_config=parallel_config,
             tp_pg=tp_pg,
+            cp_pg=cp_pg,
             layer_idx=layer_idx,
         )
         self.mlp = Qwen2MLP(
@@ -395,8 +404,6 @@ class Qwen2Model(nn.Module):
             module_output_keys={"input_embeds", "position_ids"},
         )
 
-        log_rank(f"Initialize RoPE Theta = {config.rope_theta}", logger=logger, level=logging.INFO, rank=0)
-
         # Create decoder layers
         self.decoder = nn.ModuleList(
             [
@@ -407,6 +414,7 @@ class Qwen2Model(nn.Module):
                         "config": config,
                         "parallel_config": parallel_config,
                         "tp_pg": parallel_context.tp_pg,
+                        "cp_pg": parallel_context.cp_pg,
                         "layer_idx": layer_idx,
                     },
                     module_input_keys={"hidden_states", "position_ids"},
