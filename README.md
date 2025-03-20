@@ -61,6 +61,8 @@ CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node=8 run_train.py --config-
 
 For detailed instructions on training your first model, check out our [Your First Training guide](docs/your-first-training.md).
 
+For multi-node training with Slurm, see our [Multi-Node Training guide](docs/multi-node-training.md).
+
 ### Run generation from your checkpoint
 ```bash
 torchrun --nproc_per_node=1 run_generate.py --ckpt-path checkpoints/10/ --tp 1 --pp 1
