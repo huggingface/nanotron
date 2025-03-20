@@ -2,13 +2,17 @@ checkpoints:
   checkpoint_interval: 10
   checkpoints_path: checkpoints
   checkpoints_path_is_shared_file_system: false
+  load_lr_scheduler: true
+  load_optimizer: true
   resume_checkpoint_path: null
+  save_final_state: false
   save_initial_state: false
 data_stages:
 - data:
     dataset:
       dataset_overwrite_cache: false
       dataset_processing_num_proc_per_process: 1
+      debug_max_samples: 1000
       hf_dataset_config_name: null
       hf_dataset_or_datasets: trl-lib/tldr
       hf_dataset_splits: train
@@ -51,7 +55,9 @@ model:
     pad_token_id: null
     pretraining_tp: 1
     rms_norm_eps: 1.0e-05
+    rope_interleaved: false
     rope_scaling: null
+    rope_theta: 10000.0
     tie_word_embeddings: true
     use_cache: true
     vocab_size: 256
@@ -79,10 +85,13 @@ parallelism:
   expert_parallel_size: 1
   pp: 1
   pp_engine: 1f1b
+  recompute_layer: false
   tp: 1
   tp_linear_async_communication: true
   tp_mode: REDUCE_SCATTER
+  tp_recompute_allgather: true
 profiler: null
+s3_upload: null
 tokenizer:
   tokenizer_max_length: null
   tokenizer_name_or_path: robot-test/dummy-tokenizer-wordlevel
