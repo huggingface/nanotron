@@ -69,6 +69,7 @@ class LlamaConfig:
     def is_using_mup(self) -> bool:
         return self._is_using_mup
 
+
 @dataclass
 class Qwen2Config:
     """Configuration for a QWEN2 model
@@ -98,10 +99,9 @@ class Qwen2Config:
     tie_word_embeddings: bool = False
     use_cache: bool = True
     vocab_size: int = 32000
+    _attn_implementation: Optional[str] = "ring"
 
     def __post_init__(self):
-        self._attn_implementation: Optional[str] = "sdpa"
-
         # NOTE: user don't set self._init_method, ModelArgs will set it
         # then we only pass LlamaConfig around
         self._is_using_mup: bool = False
