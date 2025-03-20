@@ -959,7 +959,7 @@ def mark_tied_parameters(
                 target,
                 (
                     parallel_context.get_global_rank(
-                        ep_rank=dist.get_rank(parallel_context.expert_pg),
+                        ep_rank=dist.get_rank(parallel_context.ep_pg),
                         pp_rank=get_pp_rank_of(target, module=model),
                         dp_rank=dist.get_rank(parallel_context.dp_pg),
                         tp_rank=dist.get_rank(parallel_context.tp_pg),
@@ -1045,7 +1045,7 @@ def mark_unsharded_params_as_tied_across_expert(
                 (
                     name,
                     # sync across expert group
-                    tuple(sorted(dist.get_process_group_ranks(parallel_context.expert_pg))),
+                    tuple(sorted(dist.get_process_group_ranks(parallel_context.ep_pg))),
                 )
             ]
 
