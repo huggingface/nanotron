@@ -326,7 +326,7 @@ def init_optimizer_and_grad_accumulator(
     def basic_optimizer_builder(named_param_groups):
         optimizer = None
 
-        if optimizer_args.optimizer_factory.name == "adamW":
+        if optimizer_args.optimizer_factory.name.lower() == "adamw":
 
             def optimizer(param_groups):
                 return torch.optim.AdamW(
@@ -342,8 +342,9 @@ def init_optimizer_and_grad_accumulator(
         elif optimizer_args.optimizer_factory.name == "muon":
 
             def optimizer(param_groups):
+                # TODO @eliebak: find a way to pass the named of the params here, but keep it clean
                 return Muon(
-                    named_params_or_groups=param_groups,
+                    param_groups,
                     lr=optimizer_args.learning_rate_scheduler.learning_rate,
                     momentum=optimizer_args.optimizer_factory.momentum,
                     nesterov=optimizer_args.optimizer_factory.nesterov,

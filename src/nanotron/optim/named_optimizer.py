@@ -15,6 +15,7 @@ class NamedOptimizer(InheritFromOtherOptimizer):
         self,
         named_params_or_groups: Iterable[Union[Tuple[str, torch.Tensor], Dict[str, Any]]],
         optimizer_builder: Callable[[Iterable[Dict[str, Any]]], torch.optim.Optimizer],
+        muon: bool = False,
     ):
         named_param_groups = list(named_params_or_groups)
         if len(named_param_groups) == 0 or not isinstance(named_param_groups[0], dict):
@@ -39,12 +40,26 @@ class NamedOptimizer(InheritFromOtherOptimizer):
         name_to_id = {v: k for k, v in id_to_name.items()}
         assert len(id_to_name) == len(name_to_id)
 
+        if muon:
+            pass
+            # muon_params = []
+            # adamw_params = []
+            # for i, named_param_group in enumerate(named_param_groups):
+            #     for name, param in named_param_group["named_params"]:
+            #         if param.ndim == 1 or name.endswith("embed_token") or name.endswith("lm_head"):
+            #             pass
+            #         else:
+            #             muon_params.append(param)
+
+            # params = [{"muon_params": muon_params}, {"adamw_params": adamw_params}]
+
         # Sanity check
         for param_group in params:
             _params = param_group["params"]
             for param in _params:
                 # https://github.com/pytorch/pytorch/issues/100701
                 assert param.numel() > 0
+
         super().__init__(optimizer=optimizer_builder(params), id_to_name=id_to_name)
 
     def state_dict(self) -> dict:

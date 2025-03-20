@@ -74,13 +74,12 @@ class Muon(torch.optim.Optimizer):
 
     def __init__(
         self,
+        params,
         lr=1e-3,
         wd=0.1,
-        muon_params=None,
         momentum=0.95,
         nesterov=True,
         ns_steps=5,
-        adamw_params=None,
         adamw_betas=(0.9, 0.95),
         adamw_eps=1e-8,
         rms_update_normalization=True,
@@ -95,9 +94,17 @@ class Muon(torch.optim.Optimizer):
             "adamw_betas": adamw_betas,
             "adamw_eps": adamw_eps,
         }
+        self.rms_update_normalization = rms_update_normalization
 
-        params = list(muon_params)
-        adamw_params = list(adamw_params) if adamw_params is not None else []
+        ## custom nanotron logic
+        # what we want here:
+        # - muon_params should be everything except 1D parameters (layer norms) and 2D parameters like embeddings and lm_heads
+        # - we can handle a more precise granuarility after but i think we don't have the .name of the param groups here (that should be added, for now just have something hardcoded will do the job)
+        params = list(params)
+
+        muon_params = []
+        adamw_params = []
+
         params.extend(adamw_params)
         super().__init__(params, defaults)
         # Sort parameters into those for which we will use Muon, and those for which we will not
