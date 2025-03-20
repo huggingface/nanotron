@@ -1,6 +1,7 @@
 """Ring attention implementation adapted from https://github.com/lucidrains/ring-attention-pytorch/blob/main/ring_attention_pytorch/ring_flash_attention_cuda.py"""
 from __future__ import annotations
 
+import math
 from math import ceil
 
 import torch
@@ -36,7 +37,7 @@ class RingFlashAttentionCUDAFunction(Function):
     @torch.no_grad()
     def forward(
         ctx,
-        q: Tensor,
+        q: Tensor,  # [b, num_heads, seq_length, head_dim]
         k: Tensor,
         v: Tensor,
         mask: Tensor | None,
@@ -45,9 +46,9 @@ class RingFlashAttentionCUDAFunction(Function):
         ring_reduce_col: bool,
         striped_ring_attn: bool,
         max_lookback_seq_len: int | None,
-        ring_size: int | None,
         softclamp_qk_sim: bool,
         softclamp_value: float,
+        ring_pg: dist.ProcessGroup | None,
     ):
 
         assert k.shape[-2:] == v.shape[-2:]
@@ -70,7 +71,7 @@ class RingFlashAttentionCUDAFunction(Function):
         if v.dtype == torch.float32:
             v = v.half()
 
-        ring_size = default(ring_size, get_world_size())
+        ring_size = ring_pg.size() if ring_pg else get_world_size()
 
         cross_attn = q.shape[-3] != k.shape[-3]
         ring_reduce_col &= not cross_attn
@@ -128,7 +129,12 @@ class RingFlashAttentionCUDAFunction(Function):
         can_fuse_final_output_normalization = not causal or (causal and striped_ring_attn)
 
         for (ring_rank, (is_first, is_last)), ((kv, mask), (receive_kv, receive_mask)) in ring_pass_fn(
-            kv, mask, receive_buffers=(receive_kv, receive_mask), max_iters=max_ring_passes, ring_size=ring_size
+            kv,
+            mask,
+            receive_buffers=(receive_kv, receive_mask),
+            max_iters=max_ring_passes,
+            ring_size=ring_size,
+            ring_pg=ring_pg,
         ):
             k, v = kv
 
@@ -153,15 +159,15 @@ class RingFlashAttentionCUDAFunction(Function):
             if causal:
                 if striped_ring_attn:
                     block_causal = True
-                    causal_mask_diagonal = get_rank() < ring_rank
+                    causal_mask_diagonal = get_rank() if ring_pg is None else dist.get_rank(ring_pg) < ring_rank
                 else:
-                    block_causal = get_rank() == ring_rank
+                    block_causal = get_rank() if ring_pg is None else dist.get_rank(ring_pg) == ring_rank
 
-                    if get_rank() < ring_rank:
+                    if (get_rank() if ring_pg is None else dist.get_rank(ring_pg)) < ring_rank:
                         continue
 
             o, m, lse = flash_attn_forward(
-                q,
+                q,  # [b, s, nh, d]
                 k,
                 v,
                 causal=block_causal,
@@ -192,11 +198,11 @@ class RingFlashAttentionCUDAFunction(Function):
             max_ring_passes,
             num_lookback_buckets,
             striped_ring_attn,
-            ring_size,
             q_head_groups,
             softclamp_qk_sim,
             softclamp_value,
             dtype,
+            ring_pg,
         )
 
         ctx.save_for_backward(q, orig_k, orig_v, o, lse)
@@ -219,14 +225,15 @@ class RingFlashAttentionCUDAFunction(Function):
             max_ring_passes,
             num_lookback_buckets,
             striped_ring_attn,
-            ring_size,
             q_head_groups,
             softclamp_qk_sim,
             softclamp_value,
             dtype,
+            ring_pg,
         ) = ctx.args
 
         q, k, v, o, lse = ctx.saved_tensors
+        ring_size = ring_pg.size() if ring_pg else get_world_size()
 
         do = do.type(o.dtype)
 
@@ -269,6 +276,7 @@ class RingFlashAttentionCUDAFunction(Function):
             receive_buffers=(receive_kv_and_dkv, receive_mask),
             max_iters=max_ring_passes,
             ring_size=ring_size,
+            ring_pg=ring_pg,
         ):
 
             k, v, dk, dv = kv_and_dkv
@@ -283,7 +291,7 @@ class RingFlashAttentionCUDAFunction(Function):
 
             if exists(mask):
                 bias = torch.where(mask, 0.0, float("-inf"))
-                bias = rearrange(bias, "b j -> b 1 1 j")
+                # bias = rearrange(bias, "b j -> b 1 1 j")
 
             # determine whether to do causal mask or not
             # depends on whether it is striped attention, as well as current machine rank vs ring rank
@@ -291,10 +299,10 @@ class RingFlashAttentionCUDAFunction(Function):
             if causal and striped_ring_attn:
                 need_accum = True
                 block_causal = True
-                causal_mask_diagonal = get_rank() < ring_rank
+                causal_mask_diagonal = (get_rank() if ring_pg is None else dist.get_rank(ring_pg)) < ring_rank
             elif causal:
-                need_accum = get_rank() >= ring_rank
-                block_causal = get_rank() == ring_rank
+                need_accum = (get_rank() if ring_pg is None else dist.get_rank(ring_pg)) >= ring_rank
+                block_causal = (get_rank() if ring_pg is None else dist.get_rank(ring_pg)) == ring_rank
                 causal_mask_diagonal = False
             else:
                 need_accum = True
@@ -343,7 +351,7 @@ class RingFlashAttentionCUDAFunction(Function):
             dkv = kv_and_dkv[2:]
 
             max_ring_passes = default(max_ring_passes, ring_size)
-            dkv = ring_pass(ring_size - max_ring_passes + 1, dkv)
+            dkv = ring_pass(ring_size - max_ring_passes + 1, dkv, ring_pg=ring_pg)
 
             dk, dv = dkv
 
@@ -367,12 +375,12 @@ def ring_flash_attn_cuda(
     ring_reduce_col: bool = False,
     striped_ring_attn: bool = False,
     max_lookback_seq_len: int | None = None,
-    ring_size: int | None = None,
     softclamp_qk_sim: bool = False,
     softclamp_value: float = 50.0,
+    ring_pg: dist.ProcessGroup | None = None,
     **kwargs,
 ):
-    return ring_flash_attn_cuda_(
+    return (ring_flash_attn_cuda_(
         q,
         k,
         v,
@@ -382,10 +390,10 @@ def ring_flash_attn_cuda(
         ring_reduce_col,
         striped_ring_attn,
         max_lookback_seq_len,
-        ring_size,
         softclamp_qk_sim,
         softclamp_value,
-    )
+        ring_pg,
+    ),)
 
 
 # ring.py
@@ -427,17 +435,17 @@ def circular_index_right(pos, ring_size, num=1):
 # distributed ring
 
 
-def circular_rank_left(rank=None, ring_size=None, num=1):
-    rank = default(rank, get_rank())
-    ring_size = default(ring_size, get_world_size())
+def circular_rank_left(rank=None, ring_size=None, num=1, pg=None):
+    rank = default(rank, get_rank() if pg is None else dist.get_rank(pg))
+    ring_size = default(ring_size, get_world_size() if pg is None else dist.get_world_size(pg))
     ring_set_num = rank // ring_size
     offset = ring_set_num * ring_size
     return circular_index_left(rank, ring_size, num) + offset
 
 
-def circular_rank_right(rank=None, ring_size=None, num=1):
-    rank = default(rank, get_rank())
-    ring_size = default(ring_size, get_world_size())
+def circular_rank_right(rank=None, ring_size=None, num=1, pg=None):
+    rank = default(rank, get_rank() if pg is None else dist.get_rank(pg))
+    ring_size = default(ring_size, get_world_size() if pg is None else dist.get_world_size(pg))
     ring_set_num = rank // ring_size
     offset = ring_set_num * ring_size
     return circular_index_right(rank, ring_size, num) + offset
@@ -446,19 +454,28 @@ def circular_rank_right(rank=None, ring_size=None, num=1):
 # one ring pass
 
 
-def send_and_receive_(x, receive_buffer, send_to_rank, receive_from_rank):
-    send_op = dist.P2POp(dist.isend, x, send_to_rank)
-    recv_op = dist.P2POp(dist.irecv, receive_buffer, receive_from_rank)
+def send_and_receive_(x, receive_buffer, send_to_rank, receive_from_rank, ring_pg=None):
+    send_op = dist.P2POp(dist.isend, x, send_to_rank, ring_pg)
+    recv_op = dist.P2POp(dist.irecv, receive_buffer, receive_from_rank, ring_pg)
 
     reqs = dist.batch_isend_irecv([send_op, recv_op])
 
     for req in reqs:
         req.wait()
 
-    dist.barrier()
+    if ring_pg is not None:
+        dist.barrier(ring_pg)
+    else:
+        dist.barrier()
 
 
-def ring_pass(num_ring_passes: int, x: Tensor, receive_buffer: Tensor | None = None, ring_size: int | None = None):
+def ring_pass(
+    num_ring_passes: int,
+    x: Tensor,
+    receive_buffer: Tensor | None = None,
+    ring_size: int | None = None,
+    ring_pg: dist.ProcessGroup | None = None,
+):
     ring_size = default(ring_size, get_world_size())
     x = x.contiguous()
 
@@ -468,7 +485,11 @@ def ring_pass(num_ring_passes: int, x: Tensor, receive_buffer: Tensor | None = N
         receive_buffer = receive_buffer.contiguous()
 
     send_and_receive_(
-        x, receive_buffer, circular_rank_right(ring_size=ring_size), circular_rank_left(ring_size=ring_size)
+        x,
+        receive_buffer,
+        circular_rank_right(ring_size=ring_size, pg=ring_pg),
+        circular_rank_left(ring_size=ring_size, pg=ring_pg),
+        ring_pg=ring_pg,
     )
     return receive_buffer, x
 
@@ -480,21 +501,20 @@ one_ring_pass = partial(ring_pass, 1)
 RingInfo = namedtuple("RingInfo", ["ring_rank", "iter_info"])
 
 
-def null_ring_pass(*tensors, max_iters=None, receive_buffers=None, ring_size=None):
+def null_ring_pass(*tensors, max_iters=None, receive_buffers=None, ring_size=None, ring_pg=None):
     yield RingInfo(0, (True, True)), (tensors, receive_buffers)
 
 
-def all_ring_pass(*tensors, max_iters=None, receive_buffers=None, ring_size=None):
+def all_ring_pass(*tensors, max_iters=None, receive_buffers=None, ring_size=None, ring_pg=None):
     ring_size = default(ring_size, get_world_size())
     max_iters = default(max_iters, ring_size)
 
     receive_buffers = cast_tuple(receive_buffers, len(tensors))
 
     # make sure iteration is between 1 and world size
-
     total_iters = max(1, min(ring_size, max_iters))
 
-    curr_ring_pos = get_rank()
+    curr_ring_pos = get_rank() if ring_pg is None else dist.get_rank(ring_pg)
 
     for ind in range(total_iters):
         is_first = ind == 0
@@ -512,7 +532,9 @@ def all_ring_pass(*tensors, max_iters=None, receive_buffers=None, ring_size=None
 
         for tensor, receive_buffer in zip(tensors, receive_buffers):
             if exists(tensor):
-                new_tensor, new_receive_buffer = one_ring_pass(tensor, receive_buffer, ring_size)
+                new_tensor, new_receive_buffer = ring_pass(
+                    1, tensor, receive_buffer, ring_size=ring_size, ring_pg=ring_pg
+                )
             else:
                 new_tensor, new_receive_buffer = None, None
 
@@ -959,7 +981,7 @@ def _fwd_kernel(
 
 
 def flash_attn_forward(
-    q,
+    q,  # [b, s, nh, d]
     k,
     v,
     bias=None,
@@ -1032,51 +1054,53 @@ def flash_attn_forward(
     BLOCK_HEADDIM = max(triton.next_power_of_2(d), 16)
     BLOCK = 128
     num_warps = 4 if d <= 64 else 8
+
     def grid(META):
         return triton.cdiv(seqlen_q, META["BLOCK_M"]), batch * nheads
 
-    _fwd_kernel[grid](
-        q,
-        k,
-        v,
-        bias,
-        o,
-        m,
-        lse,
-        softmax_scale,
-        q.stride(0),
-        q.stride(2),
-        q.stride(1),
-        k.stride(0),
-        k.stride(2),
-        k.stride(1),
-        v.stride(0),
-        v.stride(2),
-        v.stride(1),
-        *bias_strides,
-        o.stride(0),
-        o.stride(2),
-        o.stride(1),
-        nheads,
-        seqlen_q,
-        seqlen_k,
-        seqlen_q_rounded,
-        d,
-        seqlen_q // 32,
-        seqlen_k // 32,
-        has_bias,
-        causal,
-        causal_mask_diagonal,
-        load_accumulated,
-        return_normalized_output,
-        softclamp_qk_sim,
-        softclamp_value,
-        BLOCK_HEADDIM,
-        BLOCK_M=BLOCK,
-        BLOCK_N=BLOCK,
-        num_warps=num_warps,
-        num_stages=1,
-    )
+    # TODO @nouamane: what's up with triton?
+    # _fwd_kernel[grid](
+    #     q,
+    #     k,
+    #     v,
+    #     bias,
+    #     o,
+    #     m,
+    #     lse,
+    #     softmax_scale,
+    #     q.stride(0),
+    #     q.stride(2),
+    #     q.stride(1),
+    #     k.stride(0),
+    #     k.stride(2),
+    #     k.stride(1),
+    #     v.stride(0),
+    #     v.stride(2),
+    #     v.stride(1),
+    #     *bias_strides,
+    #     o.stride(0),
+    #     o.stride(2),
+    #     o.stride(1),
+    #     nheads,
+    #     seqlen_q,
+    #     seqlen_k,
+    #     seqlen_q_rounded,
+    #     d,
+    #     seqlen_q // 32,
+    #     seqlen_k // 32,
+    #     has_bias,
+    #     causal,
+    #     causal_mask_diagonal,
+    #     load_accumulated,
+    #     return_normalized_output,
+    #     softclamp_qk_sim,
+    #     softclamp_value,
+    #     BLOCK_HEADDIM,
+    #     BLOCK_M=BLOCK,
+    #     BLOCK_N=BLOCK,
+    #     num_warps=num_warps,
+    #     num_stages=1,
+    # )
 
     if head_first_dim:
         o = rearrange(o, "b n h d -> b h n d")
@@ -1675,8 +1699,10 @@ def flash_attn_backward(
 
     if not exists(delta):
         delta = torch.empty_like(lse)
+
         def grid(META):
             return triton.cdiv(seqlen_q, META["BLOCK_M"]), batch * nheads
+
         _bwd_preprocess_do_o_dot[grid](
             o,
             do,
@@ -1716,6 +1742,7 @@ def flash_attn_backward(
     # num_warps = 4
     def grid(META):
         return triton.cdiv(seqlen_k, META["BLOCK_N"]) if META["SEQUENCE_PARALLEL"] else 1, batch * nheads
+
     _bwd_kernel[grid](
         q,
         k,
