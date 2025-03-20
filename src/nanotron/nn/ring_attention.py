@@ -380,20 +380,22 @@ def ring_flash_attn_cuda(
     ring_pg: dist.ProcessGroup | None = None,
     **kwargs,
 ):
-    return (ring_flash_attn_cuda_(
-        q,
-        k,
-        v,
-        attention_mask,
-        is_causal,
-        bucket_size,
-        ring_reduce_col,
-        striped_ring_attn,
-        max_lookback_seq_len,
-        softclamp_qk_sim,
-        softclamp_value,
-        ring_pg,
-    ),)
+    return (
+        ring_flash_attn_cuda_(
+            q,
+            k,
+            v,
+            attention_mask,
+            is_causal,
+            bucket_size,
+            ring_reduce_col,
+            striped_ring_attn,
+            max_lookback_seq_len,
+            softclamp_qk_sim,
+            softclamp_value,
+            ring_pg,
+        ),
+    )
 
 
 # ring.py
@@ -1033,7 +1035,7 @@ def flash_attn_forward(
         assert bias.shape[-2:] == (seqlen_q, seqlen_k)
         bias = bias.expand(batch, nheads, seqlen_q, seqlen_k)
 
-    bias_strides = (bias.stride(0), bias.stride(1), bias.stride(2)) if has_bias else (0, 0, 0)
+    (bias.stride(0), bias.stride(1), bias.stride(2)) if has_bias else (0, 0, 0)
 
     seqlen_q_rounded = ceil(seqlen_q / 128) * 128
 
@@ -1051,9 +1053,7 @@ def flash_attn_forward(
         init_fn = torch.zeros_like if load_accumulated else torch.empty_like
         o = init_fn(q)
 
-    BLOCK_HEADDIM = max(triton.next_power_of_2(d), 16)
-    BLOCK = 128
-    num_warps = 4 if d <= 64 else 8
+    max(triton.next_power_of_2(d), 16)
 
     def grid(META):
         return triton.cdiv(seqlen_q, META["BLOCK_M"]), batch * nheads
