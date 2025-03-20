@@ -186,7 +186,7 @@ class Qwen2Attention(nn.Module):
         qkv = self.qkv_proj(hidden_states)
         q, k, v = qkv.split(
             [self.local_q_size, self.local_kv_size, self.local_kv_size], dim=-1
-        )  # [batch_size, seq_length, q_size], [batch_size, seq_length, kv_size]
+        )  # [batch_size*seq_length, q_size], [batch_size*seq_length, kv_size]
 
         rotary_pos_emb = self.rotary_emb(position_ids=position_ids)  # [b*s, dim] or [seq_length, dim]
         rotary_pos_emb = rotary_pos_emb.unsqueeze(1)  # [b*s, 1, dim] or [seq_length, 1, dim]
@@ -304,8 +304,8 @@ class Qwen2DecoderLayer(nn.Module):
 
     def _core_forward(
         self,
-        hidden_states: Union[torch.Tensor, TensorPointer],
-        position_ids: Union[torch.Tensor, TensorPointer],
+        hidden_states: Union[torch.Tensor, TensorPointer],  # [batch_size*seq_length, hidden_size]
+        position_ids: Union[torch.Tensor, TensorPointer],  # [batch_size, seq_length] where -1 is padding
     ) -> List[Union[torch.Tensor, TensorPointer]]:
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
@@ -358,6 +358,7 @@ class Embedding(nn.Module):
 
     def forward(self, input_ids: torch.Tensor, position_ids: torch.Tensor):  # [batch_size, seq_length]
         input_embeds = self.embed_tokens(input_ids)
+        input_embeds = input_embeds.view(-1, input_embeds.shape[-1])  # [batch_size*seq_length, hidden_size]
         return {"input_embeds": input_embeds, "position_ids": position_ids}
 
 
