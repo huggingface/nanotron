@@ -291,9 +291,12 @@ def set_logger_verbosity_format(logging_level: str, parallel_context: ParallelCo
     expert_parallel_log = (
         f"|EXP={dist.get_rank(parallel_context.ep_pg)}" if parallel_context.expert_parallel_size > 1 else ""
     )
+    context_parallel_log = (
+        f"|CP={dist.get_rank(parallel_context.cp_pg)}" if parallel_context.context_parallel_size > 1 else ""
+    )
     formatter = Formatter(
         fmt=f"%(asctime)s [%(levelname)s|DP={dist.get_rank(parallel_context.dp_pg)}|PP={dist.get_rank(parallel_context.pp_pg)}|"
-        f"TP={dist.get_rank(parallel_context.tp_pg)}{expert_parallel_log}{'|' + node_name if node_name else ''}]: %(message)s",
+        f"TP={dist.get_rank(parallel_context.tp_pg)}{context_parallel_log}{expert_parallel_log}{'|' + node_name if node_name else ''}]: %(message)s",
         datefmt="%m/%d/%Y %H:%M:%S",
     )
     log_level = log_levels[logging_level]
