@@ -38,13 +38,14 @@ model:
     std: 0.025
   make_vocab_size_divisible_by: 1
   model_config:
-    _attn_implementation: ring
+    _attn_implementation: sdpa
     attention_bias: false
     bos_token_id: 0
     eos_token_id: 0
     hidden_act: silu
     hidden_size: 576
     initializer_range: 0.041666666666666664
+    interleaved_rotary: false
     intermediate_size: 1536
     is_qwen2_config: true
     max_position_embeddings: 8192

@@ -148,5 +148,6 @@ if __name__ == "__main__":
 
     config_filename = "config_resume_training.yaml"
     config.save_as_yaml(f"{dir}/{config_filename}")
+    print(f"Config saved to {dir}/{config_filename}")
 
     # You can now train a model with this config using `/run_train.py`
