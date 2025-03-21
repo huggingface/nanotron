@@ -117,7 +117,7 @@ def forward(
 
 ## Pipeline Rank-Specific Data Access
 
-In pipeline parallelism, different tensors are only available on specific pipeline ranks (see `src/nanotron/dataloader.py`):
+In pipeline parallelism, different tensors are only available on specific pipeline ranks (see `src/nanotron/data/dataloader.py`):
 
 - **First PP rank (input rank)**: Has direct access to `input_ids` and `position_ids`
 - **Last PP rank (output rank)**: Has direct access to `label_ids` and `label_mask`
