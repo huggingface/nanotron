@@ -164,3 +164,4 @@ cython_debug/
 checkpoints/
 wandb/
 logs/
+.test_cache/
