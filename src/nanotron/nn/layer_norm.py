@@ -54,6 +54,7 @@ class TritonRMSNorm(nn.Module):
             return_dropout_mask=return_dropout_mask,
         )
 
+
 class LlamaRMSNorm(nn.Module):
     def __init__(self, hidden_size, eps=1e-6):
         """
@@ -64,7 +65,6 @@ class LlamaRMSNorm(nn.Module):
         self.eps = eps
 
     def forward(self, input):
-        print(f"LlamaRMSNorm input shape: {input.shape}")
         input_dtype = input.dtype
         input = input.to(torch.float32)
         variance = input.pow(2).mean(-1, keepdim=True)

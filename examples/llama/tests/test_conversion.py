@@ -29,9 +29,10 @@ from examples.llama.convert_nanotron_to_hf import convert_checkpoint_and_save as
 from examples.llama.convert_nanotron_to_hf import convert_nt_to_hf, get_hf_config
 from examples.llama.convert_weights import load_nanotron_model, make_parallel_config
 from tests.helpers.context import TestContext
-from tests.helpers.utils import init_distributed
+from tests.helpers.utils import init_distributed, rerun_if_address_is_in_use
 
 lt.monkey_patch()
+lt.set_config(precision=6)
 
 from nanotron.random import set_random_seed
 
@@ -202,6 +203,7 @@ def _test_hf_to_nt(parallel_context: ParallelContext, input_ids: torch.Tensor, m
     torch.testing.assert_allclose(logits_hf.to(logits_nt.dtype), logits_nt, atol=ATOL, rtol=ATOL)
 
 
+@rerun_if_address_is_in_use()
 @pytest.mark.parametrize("model_name", [None, "HuggingFaceTB/SmolLM2-135M"])
 def test_hf_to_nt(input_ids: torch.Tensor, model_name: Optional[str] = None):
     init_distributed(tp=1, dp=1, pp=1)(_test_hf_to_nt)(input_ids=input_ids, model_name=model_name)
@@ -321,10 +323,13 @@ def test_tensor_parallel_conversion(input_ids: torch.Tensor):
 if __name__ == "__main__":
     # run all tests
     # test_nt_to_hf(input_ids=torch.randint(0, CONFIG.vocab_size, size=(BATCH_SIZE, SEQUENCE_LENGTH), device="cuda"))
-    test_hf_to_nt(input_ids=torch.randint(0, CONFIG.vocab_size, size=(BATCH_SIZE, SEQUENCE_LENGTH), device="cuda"))
+    # test_hf_to_nt(input_ids=torch.randint(0, CONFIG.vocab_size, size=(BATCH_SIZE, SEQUENCE_LENGTH), device="cuda"))
     # test_tensor_parallel_conversion(
     #     input_ids=torch.randint(0, CONFIG.vocab_size, size=(BATCH_SIZE, SEQUENCE_LENGTH), device="cuda")
     # )
 
     # Test SmolLM2-135M
-    # test_hf_to_nt(input_ids=torch.randint(0, CONFIG.vocab_size, size=(BATCH_SIZE, SEQUENCE_LENGTH), device="cuda"), model_name="HuggingFaceTB/SmolLM2-135M")
+    test_hf_to_nt(
+        input_ids=torch.randint(0, CONFIG.vocab_size, size=(BATCH_SIZE, SEQUENCE_LENGTH), device="cuda"),
+        model_name="HuggingFaceTB/SmolLM2-135M",
+    )
