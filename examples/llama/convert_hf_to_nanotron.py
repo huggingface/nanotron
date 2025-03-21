@@ -1,7 +1,7 @@
 """
 Converts a HF model to nanotron format
 Command:
-    torchrun --nproc_per_node=1 convert_hf_to_nanotron.py --checkpoint_path=hf_weights --save_path=nanotron_weights
+    torchrun --nproc_per_node=1 examples/llama/convert_hf_to_nanotron.py --checkpoint_path=hf_weights --save_path=nanotron_weights
 """
 
 import dataclasses
