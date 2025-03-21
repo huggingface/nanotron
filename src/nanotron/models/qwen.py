@@ -56,6 +56,7 @@ class CoreAttention(nn.Module):
         )  # Important for transformers's `sdpa_attention_forward`
         self._attn_implementation = config._attn_implementation
         self.cp_pg = cp_pg
+        self.sliding_window = getattr(config, "sliding_window", None)
 
     def forward(
         self,
@@ -66,22 +67,18 @@ class CoreAttention(nn.Module):
         cu_seqlens: Optional[torch.Tensor] = None,
         dropout: float = 0.0,
         sliding_window: Optional[int] = None,
+        seq_length: Optional[int] = None,
         **kwargs,
     ):
         """Forward pass applying the chosen attention implementation"""
         # Get the appropriate attention function
         attention_func = ALL_ATTENTION_FUNCTIONS[self._attn_implementation]
 
-        # Check if sliding window should be applied based on config
-        if (
-            getattr(self.config, "use_sliding_window", False)
-            and getattr(self.config, "sliding_window", None) is not None
-            and self.layer_idx >= getattr(self.config, "max_window_layers", 0)
-        ):
-            getattr(self.config, "sliding_window", None)
-
         # need to put sequence after num_heads
-        seq_length = attention_mask.shape[0]
+        if attention_mask is not None:
+            seq_length = attention_mask.shape[0]
+            attention_mask = attention_mask.unsqueeze(0).unsqueeze(0)  # [1, 1, seq_length, seq_length]
+
         if self._attn_implementation == "ring_flash_triton":
             query_states = query_states.view(-1, seq_length, self.local_num_heads, self.head_dim)
             key_states = key_states.view(-1, seq_length, self.local_num_kv_heads, self.head_dim)
@@ -98,21 +95,19 @@ class CoreAttention(nn.Module):
             key_states = key_states.view(-1, seq_length, self.local_num_kv_heads, self.head_dim).transpose(1, 2)
             value_states = value_states.view(-1, seq_length, self.local_num_kv_heads, self.head_dim).transpose(1, 2)
 
-        attention_mask = attention_mask.unsqueeze(0).unsqueeze(0)  # [1, 1, seq_length, seq_length]
-
         # Call the attention implementation
         attn_output = attention_func(
             self,
-            query_states.transpose(1, 2).view(3, -1, self.local_num_heads, self.head_dim).transpose(1, 2),
-            key_states.transpose(1, 2).view(3, -1, self.local_num_kv_heads, self.head_dim).transpose(1, 2),
-            value_states.transpose(1, 2).view(3, -1, self.local_num_kv_heads, self.head_dim).transpose(1, 2),
-            attention_mask=None,
+            query_states,
+            key_states,
+            value_states,
+            attention_mask,
             dropout=dropout,
             scaling=self.head_dim**-0.5,
-            # sliding_window=sliding_window,
-            # ring_pg=self.cp_pg,
-            # cu_seqlens=cu_seqlens,
-            # max_seqlen=seq_length,
+            sliding_window=sliding_window,
+            ring_pg=self.cp_pg,
+            cu_seqlens=cu_seqlens,
+            max_seqlen=seq_length,
             **kwargs,
         )[
             0
@@ -131,6 +126,7 @@ class Qwen2Attention(nn.Module):
         tp_pg: dist.ProcessGroup,
         cp_pg: dist.ProcessGroup,
         layer_idx: int,
+        simple_causal_mask: bool = True,  # TODO: need to set to False for SFT / inference
     ):
         super().__init__()
         self.hidden_size = config.hidden_size
@@ -188,6 +184,9 @@ class Qwen2Attention(nn.Module):
             seq_len_scaling_factor=None,
         )
         self.attention = CoreAttention(config, tp_pg, cp_pg, layer_idx)
+        self.simple_causal_mask = (
+            simple_causal_mask  # Use simple causal mask instead of computing custom attention mask
+        )
 
     def forward(
         self,
@@ -199,6 +198,7 @@ class Qwen2Attention(nn.Module):
         # [0, 1, 2, 3, 4, 5, 6, 7, 8, -1, -1] # 1 document with 10 tokens then padding
         # Replace -1 with 0 in position_ids to mark every padding token as a separate sequence. Ideally we want to get rid of padding tokens from qkv
         position_ids = position_ids.masked_fill(position_ids == -1, 0)
+        seq_length = position_ids.shape[1]
         position_ids = position_ids.view(-1)  # [batch_size*seq_length]
 
         qkv = self.qkv_proj(hidden_states)
@@ -229,10 +229,17 @@ class Qwen2Attention(nn.Module):
                 )
             return attention_mask.to(torch.bool), cu_seqlens  # [seq_length, seq_length]
 
-        attention_mask, cu_seqlens = get_attention_mask(position_ids, q.shape[0])
-        attn_output = self.attention(q, k, v, attention_mask=attention_mask, cu_seqlens=cu_seqlens)
+        if self.simple_causal_mask:
+            attention_mask, cu_seqlens = None, None
+            # TODO @nouamane: tested only with sdpa attention. check if other attentions need is_causal or smthg
+        else:
+            attention_mask, cu_seqlens = get_attention_mask(position_ids, q.shape[0])
+
+        attn_output = self.attention(
+            q, k, v, attention_mask=attention_mask, cu_seqlens=cu_seqlens, seq_length=seq_length
+        )
         output = self.o_proj(attn_output)
-        return {"hidden_states": output, "position_ids": position_ids}
+        return {"hidden_states": output, "position_ids": position_ids.view(-1, seq_length)}
 
 
 class Qwen2MLP(nn.Module):
