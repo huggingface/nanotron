@@ -10,18 +10,24 @@ from pathlib import Path
 from typing import Literal, Optional
 
 import torch
-from .convert_weights import get_config_mapping, get_weight_mapping, load_nanotron_model
 from nanotron.config import LlamaConfig as NanotronLlamaConfig
 from nanotron.models import init_on_device_and_dtype
 from nanotron.models.llama import LlamaForTraining
 from transformers import AutoTokenizer, LlamaForCausalLM
 from transformers import LlamaConfig as HFLlamaConfig
 
+from .convert_weights import get_config_mapping, get_weight_mapping, load_nanotron_model
+
 TEST_PROMPT = "What is the meaning of the word chutzpah?\nThe word chutzpah means"
 
 
 def _handle_attention_block(
-    qkv: torch.Tensor, part: Literal["q", "k", "v"], n_q_heads: int, n_kv_heads: int, d_qk: int
+    qkv: torch.Tensor,
+    part: Literal["q", "k", "v"],
+    n_q_heads: int,
+    n_kv_heads: int,
+    d_qk: int,
+    interleave: bool = False,
 ) -> torch.Tensor:
     # Huggingface Llama separates the q, k, v weights (as opposed to nanotron).
     # Furthermore, in the rotary embeddings in nanotron expects interleaved pairs of even
@@ -31,7 +37,7 @@ def _handle_attention_block(
     # This function selects the proper chunk of the bundled qkv tensor and permutation
     # to ensure correct transformation to huggingface.
 
-    def interleave(w: torch.Tensor):
+    def interleave_weight(w: torch.Tensor):
         w_new = []
         for head_w in w.split(d_qk):
             head_w = head_w.view(d_qk // 2, 2, -1).transpose(0, 1).reshape(d_qk, -1)
@@ -43,10 +49,11 @@ def _handle_attention_block(
     index_end_q = n_q_heads * d_qk
     index_end_k = index_end_q + n_kv_heads * d_qk
     if part == "q":
-        return interleave(qkv[:index_end_q])
-    if part == "k":
-        return interleave(qkv[index_end_q:index_end_k])
-    return qkv[index_end_k:]
+        return interleave_weight(qkv[:index_end_q]) if interleave else qkv[:index_end_q]
+    elif part == "k":
+        return interleave_weight(qkv[index_end_q:index_end_k]) if interleave else qkv[index_end_q:index_end_k]
+    elif part == "v":
+        return qkv[index_end_k:]
 
 
 def _handle_gate_up_proj(gate_up_proj: torch.Tensor, gate: bool) -> torch.Tensor:

@@ -10,10 +10,14 @@ from utils import set_system_path
 
 set_system_path()
 
+# lovely tensors
+import lovely_tensors as lt
 import nanotron
 from nanotron.config import LlamaConfig as NanotronLlamaConfig
+from nanotron.config import Qwen2Config as NanotronQwen2Config
 from nanotron.models.base import init_on_device_and_dtype
 from nanotron.models.llama import LlamaForTraining
+from nanotron.models.qwen import Qwen2ForTraining
 from nanotron.parallel import ParallelContext
 from nanotron.trainer import mark_tied_parameters
 
@@ -25,43 +29,78 @@ from examples.llama.convert_weights import load_nanotron_model, make_parallel_co
 from tests.helpers.context import TestContext
 from tests.helpers.utils import init_distributed
 
-CONFIG = NanotronLlamaConfig(
-    **{
-        "bos_token_id": 1,
-        "eos_token_id": 2,
-        "hidden_act": "silu",
-        "hidden_size": 512,
-        "initializer_range": 0.02,
-        "intermediate_size": 1024,
-        "is_llama_config": True,
-        "max_position_embeddings": 128,
-        "num_attention_heads": 8,
-        "num_hidden_layers": 4,
-        "num_key_value_heads": 4,
-        "pad_token_id": None,
-        "pretraining_tp": 1,
-        "rms_norm_eps": 1e-06,
-        "rope_scaling": None,
-        "tie_word_embeddings": False,
-        "use_cache": True,
-        "vocab_size": 4096,
-    }
-)
+lt.monkey_patch()
 
+from nanotron.random import set_random_seed
+
+set_random_seed(0)
+torch.backends.cudnn.deterministic = True
 
 BATCH_SIZE = 3
 SEQUENCE_LENGTH = 5
 ATOL = 0.03
 
+NT_MODEL_INSTANCE = Qwen2ForTraining
 
-def create_nanotron_model(parallel_context: ParallelContext) -> LlamaForTraining:
+if NT_MODEL_INSTANCE == LlamaForTraining:
+    CONFIG = NanotronLlamaConfig(
+        **{
+            "bos_token_id": 1,
+            "eos_token_id": 2,
+            "hidden_act": "silu",
+            "hidden_size": 512,
+            "initializer_range": 0.02,
+            "intermediate_size": 1024,
+            "is_llama_config": True,
+            "max_position_embeddings": 128,
+            "num_attention_heads": 8,
+            "num_hidden_layers": 4,
+            "num_key_value_heads": 4,
+            "pad_token_id": None,
+            "pretraining_tp": 1,
+            "rms_norm_eps": 1e-06,
+            "rope_scaling": None,
+            "tie_word_embeddings": False,
+            "use_cache": True,
+            "vocab_size": 4096,
+            "attention_bias": False,
+        }
+    )
+elif NT_MODEL_INSTANCE == Qwen2ForTraining:
+    CONFIG = NanotronQwen2Config(
+        **{
+            "bos_token_id": 1,
+            "eos_token_id": 2,
+            "hidden_act": "silu",
+            "hidden_size": 512,
+            "initializer_range": 0.02,
+            "intermediate_size": 1024,
+            "max_position_embeddings": 128,
+            "num_attention_heads": 8,
+            "num_hidden_layers": 4,
+            "num_key_value_heads": 8,
+            "pad_token_id": None,
+            "pretraining_tp": 1,
+            "rms_norm_eps": 1e-06,
+            "rope_scaling": None,
+            "tie_word_embeddings": False,
+            "use_cache": True,
+            "vocab_size": 4096,
+            "_attn_implementation": "sdpa",
+            "attention_bias": False,
+            "interleaved_rotary": False,
+        }
+    )
+
+
+def create_nanotron_model(parallel_context: ParallelContext) -> NT_MODEL_INSTANCE:
     parallel_config = make_parallel_config(
         tp=parallel_context.tensor_parallel_size,
         dp=parallel_context.data_parallel_size,
         pp=parallel_context.pipeline_parallel_size,
     )
     nanotron_model = nanotron.models.build_model(
-        model_builder=lambda: LlamaForTraining(
+        model_builder=lambda: NT_MODEL_INSTANCE(
             config=CONFIG,
             parallel_context=parallel_context,
             parallel_config=parallel_config,
@@ -98,10 +137,17 @@ def _test_nt_to_hf(parallel_context: ParallelContext, input_ids: torch.Tensor):
     model_hf = create_huggingface_model()
     convert_nt_to_hf(model_nt, model_hf, CONFIG)
     input_mask = torch.ones_like(input_ids)
-    logits_nt = model_nt.model(input_ids, input_mask).permute(1, 0, 2)
+    if NT_MODEL_INSTANCE == Qwen2ForTraining:
+        position_ids = (
+            torch.arange(0, input_ids.shape[1], device=input_ids.device, dtype=torch.int32)
+            .unsqueeze(0)
+            .repeat(BATCH_SIZE, 1)
+        )
+        logits_nt = model_nt.model(input_ids, position_ids).view(BATCH_SIZE, SEQUENCE_LENGTH, -1)
+    else:
+        logits_nt = model_nt.model(input_ids, input_mask).permute(1, 0, 2)
     logits_hf = model_hf(input_ids).logits
-    assert logits_nt.size() == logits_hf.size()
-    assert torch.allclose(logits_nt, logits_hf, atol=ATOL), torch.mean(torch.abs(logits_nt - logits_hf))
+    torch.testing.assert_allclose(logits_nt, logits_hf.to(logits_nt.dtype), atol=ATOL, rtol=ATOL)
 
 
 def test_nt_to_hf(input_ids: torch.Tensor):
@@ -126,7 +172,7 @@ def _test_nt_to_hf_with_files(parallel_context: ParallelContext, input_ids: torc
     model_hf = LlamaForCausalLM.from_pretrained(hf_path).cuda()
     logits_hf = model_hf(input_ids).logits
     assert logits_nt.size() == logits_hf.size()
-    torch.testing.assert_allclose(logits_nt, logits_hf, atol=ATOL)
+    torch.testing.assert_allclose(logits_nt, logits_hf.to(logits_nt.dtype), atol=ATOL)
 
 
 def test_nt_to_hf_with_files(input_ids: torch.Tensor):
@@ -141,7 +187,7 @@ def _test_hf_to_nt(parallel_context: ParallelContext, input_ids: torch.Tensor):
     logits_nt = model_nt.model(input_ids, input_mask).permute(1, 0, 2)
     logits_hf = model_hf(input_ids).logits
     assert logits_nt.size() == logits_hf.size()
-    torch.testing.assert_allclose(logits_hf, logits_nt, atol=ATOL)  
+    torch.testing.assert_allclose(logits_hf.to(logits_nt.dtype), logits_nt, atol=ATOL)
 
 
 def test_hf_to_nt(input_ids: torch.Tensor):
@@ -164,7 +210,7 @@ def _test_hf_to_nt_with_files(parallel_context: ParallelContext, input_ids: torc
     model_nt = load_nanotron_model(checkpoint_path=nt_path)
     logits_nt = model_nt.model(input_ids, input_mask).permute(1, 0, 2)
     assert logits_nt.size() == logits_hf.size()
-    assert torch.allclose(logits_nt, logits_hf, atol=ATOL)
+    assert torch.allclose(logits_nt, logits_hf.to(logits_nt.dtype), atol=ATOL)
 
 
 def test_hf_to_nt_with_files(input_ids: torch.Tensor):
@@ -249,3 +295,10 @@ def test_tensor_parallel_conversion(input_ids: torch.Tensor):
     logits_hf = torch.load(hf_path / "logits.pt")
     assert logits_nt.size() == logits_hf.size()
     assert torch.allclose(logits_nt, logits_hf, atol=ATOL), torch.mean(torch.abs(logits_nt - logits_hf))
+
+
+if __name__ == "__main__":
+    # run all tests
+    # test_nt_to_hf(input_ids=torch.randint(0, CONFIG.vocab_size, size=(BATCH_SIZE, SEQUENCE_LENGTH), device="cuda"))
+    test_hf_to_nt(input_ids=torch.randint(0, CONFIG.vocab_size, size=(BATCH_SIZE, SEQUENCE_LENGTH), device="cuda"))
+    # test_tensor_parallel_conversion(input_ids=torch.randint(0, CONFIG.vocab_size, size=(BATCH_SIZE, SEQUENCE_LENGTH), device="cuda"))

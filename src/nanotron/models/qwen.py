@@ -182,7 +182,7 @@ class Qwen2Attention(nn.Module):
             dim=self.head_dim,
             max_seq_len=config.max_position_embeddings,
             base=config.rope_theta,
-            interleaved=True,
+            interleaved=config.interleaved_rotary,
             seq_len_scaling_factor=None,
         )
         self.attention = CoreAttention(config, tp_pg, cp_pg, layer_idx)

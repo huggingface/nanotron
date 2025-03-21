@@ -123,8 +123,9 @@ class Qwen2Config:
     tie_word_embeddings: bool = False
     use_cache: bool = True
     vocab_size: int = 32000
-    _attn_implementation: Optional[str] = "ring"
+    _attn_implementation: Optional[str] = "sdpa"
     attention_bias: bool = True
+    interleaved_rotary: bool = False
 
     # MoE configuration
     moe_config: Optional[MoEConfig] = None
