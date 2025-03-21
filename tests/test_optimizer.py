@@ -2,12 +2,13 @@ from typing import Union
 
 import pytest
 import torch
-from helpers.llama import TINY_LLAMA_CONFIG, create_llama_from_config, get_llama_training_config
 from helpers.utils import init_distributed, rerun_if_address_is_in_use
 from nanotron.config import ModelArgs, RandomInit, SpectralMupInit
 from nanotron.helpers import get_custom_lr_for_named_parameters
 from nanotron.parallel import ParallelContext
 from nanotron.scaling.parametrization import ParametrizationMethod
+
+from tests.helpers.llama_helper import TINY_LLAMA_CONFIG, create_llama_from_config, get_llama_training_config
 
 
 @pytest.mark.parametrize("tp,dp,pp", [(1, 1, 1), (2, 1, 1), (1, 1, 2), (2, 1, 2)])
