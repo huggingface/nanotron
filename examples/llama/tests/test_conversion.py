@@ -184,10 +184,17 @@ def _test_hf_to_nt(parallel_context: ParallelContext, input_ids: torch.Tensor):
     model_hf = create_huggingface_model()
     convert_hf_to_nt(model_hf, model_nt, CONFIG)
     input_mask = torch.ones_like(input_ids)
-    logits_nt = model_nt.model(input_ids, input_mask).permute(1, 0, 2)
+    if NT_MODEL_INSTANCE == Qwen2ForTraining:
+        position_ids = (
+            torch.arange(0, input_ids.shape[1], device=input_ids.device, dtype=torch.int32)
+            .unsqueeze(0)
+            .repeat(BATCH_SIZE, 1)
+        )
+        logits_nt = model_nt.model(input_ids, position_ids).view(BATCH_SIZE, SEQUENCE_LENGTH, -1)
+    else:
+        logits_nt = model_nt.model(input_ids, input_mask).permute(1, 0, 2)
     logits_hf = model_hf(input_ids).logits
-    assert logits_nt.size() == logits_hf.size()
-    torch.testing.assert_allclose(logits_hf.to(logits_nt.dtype), logits_nt, atol=ATOL)
+    torch.testing.assert_allclose(logits_hf.to(logits_nt.dtype), logits_nt, atol=ATOL, rtol=ATOL)
 
 
 def test_hf_to_nt(input_ids: torch.Tensor):
@@ -255,7 +262,15 @@ def _save_parallel_nanotron(parallel_context: ParallelContext, input_ids: torch.
     # Get parallel predictions.
     input_ids = input_ids.cuda()  # Move them to the current device index.
     input_mask = torch.ones_like(input_ids)
-    logits_nt = model_nt.model(input_ids, input_mask).permute(1, 0, 2)
+    if NT_MODEL_INSTANCE == Qwen2ForTraining:
+        position_ids = (
+            torch.arange(0, input_ids.shape[1], device=input_ids.device, dtype=torch.int32)
+            .unsqueeze(0)
+            .repeat(BATCH_SIZE, 1)
+        )
+        logits_nt = model_nt.model(input_ids, position_ids).view(BATCH_SIZE, SEQUENCE_LENGTH, -1)
+    else:
+        logits_nt = model_nt.model(input_ids, input_mask).permute(1, 0, 2)
     if torch.distributed.get_rank() == 0:
         torch.save(logits_nt.detach().cpu(), nt_path / "logits.pt")
 
@@ -294,11 +309,13 @@ def test_tensor_parallel_conversion(input_ids: torch.Tensor):
     logits_nt = torch.load(nt_path / "logits.pt")
     logits_hf = torch.load(hf_path / "logits.pt")
     assert logits_nt.size() == logits_hf.size()
-    assert torch.allclose(logits_nt, logits_hf, atol=ATOL), torch.mean(torch.abs(logits_nt - logits_hf))
+    torch.testing.assert_allclose(logits_nt, logits_hf, atol=ATOL, rtol=ATOL)
 
 
 if __name__ == "__main__":
     # run all tests
     # test_nt_to_hf(input_ids=torch.randint(0, CONFIG.vocab_size, size=(BATCH_SIZE, SEQUENCE_LENGTH), device="cuda"))
-    test_hf_to_nt(input_ids=torch.randint(0, CONFIG.vocab_size, size=(BATCH_SIZE, SEQUENCE_LENGTH), device="cuda"))
-    # test_tensor_parallel_conversion(input_ids=torch.randint(0, CONFIG.vocab_size, size=(BATCH_SIZE, SEQUENCE_LENGTH), device="cuda"))
+    # test_hf_to_nt(input_ids=torch.randint(0, CONFIG.vocab_size, size=(BATCH_SIZE, SEQUENCE_LENGTH), device="cuda"))
+    test_tensor_parallel_conversion(
+        input_ids=torch.randint(0, CONFIG.vocab_size, size=(BATCH_SIZE, SEQUENCE_LENGTH), device="cuda")
+    )

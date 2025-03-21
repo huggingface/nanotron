@@ -19,7 +19,13 @@ from transformers import LlamaForCausalLM
 
 
 def _handle_attention_block(
-    q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, n_q_heads: int, n_kv_heads: int, d_qk: int
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    n_q_heads: int,
+    n_kv_heads: int,
+    d_qk: int,
+    interleave: bool = False,
 ) -> torch.Tensor:
     # Huggingface Llama separates the q, k, v weights (as opposed to nanotron).
     # Furthermore, in the rotary embeddings in nanotron expects interleaved pairs of even
@@ -29,15 +35,15 @@ def _handle_attention_block(
     # This function handles the concatenation of the q, k, v weights and proper permutation
     # to ensure correct transformation.
 
-    def interleave(w: torch.Tensor):
+    def interleave_weight(w: torch.Tensor):
         w_new = []
         for head_w in w.split(d_qk):
             head_w = head_w.view(2, d_qk // 2, -1).transpose(0, 1).reshape(d_qk, -1)
             w_new.append(head_w)
         return torch.cat(w_new)
 
-    q = interleave(q)
-    k = interleave(k)
+    q = interleave_weight(q) if interleave else q
+    k = interleave_weight(k) if interleave else k
     return torch.cat([q, k, v])
 
 
