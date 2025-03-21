@@ -1,14 +1,8 @@
 from typing import Optional, Type, Union
 
 from config import ExistingCheckpointInit, MambaConfig, MambaInit
-from torch.nn.parallel import DistributedDataParallel
-
-from nanotron import logging
-from nanotron.trainer import DistributedTrainer
-
-logger = logging.get_logger(__name__)
-
 from nanotron import distributed as dist
+from nanotron import logging
 from nanotron.config import ParallelismArgs
 from nanotron.logging import log_rank
 from nanotron.models import NanotronModel
@@ -25,6 +19,10 @@ from nanotron.parallel.tied_parameters import (
     tie_parameters,
 )
 from nanotron.serialize import load_weights, parse_ckpt_path
+from nanotron.trainer import DistributedTrainer
+from torch.nn.parallel import DistributedDataParallel
+
+logger = logging.get_logger(__name__)
 
 
 class MambaTrainer(DistributedTrainer):
@@ -52,7 +50,7 @@ class MambaTrainer(DistributedTrainer):
                     target,
                     (
                         parallel_context.world_rank_matrix[
-                            dist.get_rank(parallel_context.expert_pg),
+                            dist.get_rank(parallel_context.ep_pg),
                             get_pp_rank_of(target, module=model),
                             dist.get_rank(parallel_context.dp_pg),
                             dist.get_rank(parallel_context.tp_pg),

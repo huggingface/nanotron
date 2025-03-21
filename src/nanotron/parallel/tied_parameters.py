@@ -50,7 +50,7 @@ def tie_parameters(
     dp_ranks = tuple(
         sorted(
             {
-                parallel_context.get_local_ranks(world_rank=global_rank)[2]
+                parallel_context.get_local_ranks(world_rank=global_rank)["dp"]
                 for _, global_ranks in ties
                 for global_rank in global_ranks
             }

@@ -2,67 +2,103 @@
 import dataclasses
 import json
 from pathlib import Path
+from typing import Optional
 
 import pytest
 import torch
-from transformers import LlamaForCausalLM
+from transformers import AutoModelForCausalLM, LlamaForCausalLM
 from utils import set_system_path
 
 set_system_path()
 
 import nanotron
 from nanotron.config import LlamaConfig as NanotronLlamaConfig
+from nanotron.config import NanotronConfigs
+from nanotron.config import Qwen2Config as NanotronQwen2Config
 from nanotron.models.base import init_on_device_and_dtype
 from nanotron.models.llama import LlamaForTraining
+from nanotron.models.qwen import Qwen2ForTraining
 from nanotron.parallel import ParallelContext
+from nanotron.random import set_random_seed
 from nanotron.trainer import mark_tied_parameters
 
 from examples.llama.convert_hf_to_nanotron import convert_checkpoint_and_save as convert_hf_to_nt_and_save
-from examples.llama.convert_hf_to_nanotron import convert_hf_to_nt
+from examples.llama.convert_hf_to_nanotron import convert_hf_to_nt, get_nanotron_config
 from examples.llama.convert_nanotron_to_hf import convert_checkpoint_and_save as convert_nt_to_hf_and_save
 from examples.llama.convert_nanotron_to_hf import convert_nt_to_hf, get_hf_config
 from examples.llama.convert_weights import load_nanotron_model, make_parallel_config
 from tests.helpers.context import TestContext
 from tests.helpers.utils import init_distributed
 
-CONFIG = NanotronLlamaConfig(
-    **{
-        "bos_token_id": 1,
-        "eos_token_id": 2,
-        "hidden_act": "silu",
-        "hidden_size": 512,
-        "initializer_range": 0.02,
-        "intermediate_size": 1024,
-        "is_llama_config": True,
-        "max_position_embeddings": 128,
-        "num_attention_heads": 8,
-        "num_hidden_layers": 4,
-        "num_key_value_heads": 4,
-        "pad_token_id": None,
-        "pretraining_tp": 1,
-        "rms_norm_eps": 1e-06,
-        "rope_scaling": None,
-        "tie_word_embeddings": False,
-        "use_cache": True,
-        "vocab_size": 4096,
-    }
-)
-
+set_random_seed(0)
+torch.backends.cudnn.deterministic = True
 
 BATCH_SIZE = 3
 SEQUENCE_LENGTH = 5
 ATOL = 0.03
 
+NT_MODEL_INSTANCE = Qwen2ForTraining
 
-def create_nanotron_model(parallel_context: ParallelContext) -> LlamaForTraining:
+if NT_MODEL_INSTANCE == LlamaForTraining:
+    CONFIG = NanotronLlamaConfig(
+        **{
+            "bos_token_id": 1,
+            "eos_token_id": 2,
+            "hidden_act": "silu",
+            "hidden_size": 512,
+            "initializer_range": 0.02,
+            "intermediate_size": 1024,
+            "is_llama_config": True,
+            "max_position_embeddings": 128,
+            "num_attention_heads": 8,
+            "num_hidden_layers": 4,
+            "num_key_value_heads": 4,
+            "pad_token_id": None,
+            "pretraining_tp": 1,
+            "rms_norm_eps": 1e-06,
+            "rope_scaling": None,
+            "tie_word_embeddings": False,
+            "use_cache": True,
+            "vocab_size": 4096,
+            "attention_bias": False,
+        }
+    )
+elif NT_MODEL_INSTANCE == Qwen2ForTraining:
+    CONFIG = NanotronQwen2Config(
+        **{
+            "bos_token_id": 1,
+            "eos_token_id": 2,
+            "hidden_act": "silu",
+            "hidden_size": 512,
+            "initializer_range": 0.02,
+            "intermediate_size": 1024,
+            "max_position_embeddings": 128,
+            "num_attention_heads": 8,
+            "num_hidden_layers": 4,
+            "num_key_value_heads": 8,
+            "pad_token_id": None,
+            "pretraining_tp": 1,
+            "rms_norm_eps": 1e-06,
+            "rope_scaling": None,
+            "tie_word_embeddings": False,
+            "use_cache": True,
+            "vocab_size": 4096,
+            "_attn_implementation": "sdpa",
+            "attention_bias": False,
+            "interleaved_rotary": False,
+        }
+    )
+
+
+def create_nanotron_model(parallel_context: ParallelContext, config: NanotronConfigs = CONFIG) -> NT_MODEL_INSTANCE:
     parallel_config = make_parallel_config(
         tp=parallel_context.tensor_parallel_size,
         dp=parallel_context.data_parallel_size,
         pp=parallel_context.pipeline_parallel_size,
     )
     nanotron_model = nanotron.models.build_model(
-        model_builder=lambda: LlamaForTraining(
-            config=CONFIG,
+        model_builder=lambda: NT_MODEL_INSTANCE(
+            config=config,
             parallel_context=parallel_context,
             parallel_config=parallel_config,
             random_states=None,
@@ -75,10 +111,13 @@ def create_nanotron_model(parallel_context: ParallelContext) -> LlamaForTraining
     return nanotron_model
 
 
-def create_huggingface_model() -> LlamaForCausalLM:
-    config_hf = get_hf_config(CONFIG)
-    with init_on_device_and_dtype(torch.device("cuda"), torch.bfloat16):
-        model_hf = LlamaForCausalLM._from_config(config_hf)
+def create_huggingface_model(model_name: Optional[str] = None) -> LlamaForCausalLM:
+    if model_name is None:
+        with init_on_device_and_dtype(torch.device("cuda"), torch.bfloat16):
+            model_hf = LlamaForCausalLM._from_config(get_hf_config(CONFIG))
+    else:
+        with init_on_device_and_dtype(torch.device("cuda"), torch.bfloat16):
+            model_hf = AutoModelForCausalLM.from_pretrained(model_name)
     return model_hf
 
 
@@ -98,10 +137,17 @@ def _test_nt_to_hf(parallel_context: ParallelContext, input_ids: torch.Tensor):
     model_hf = create_huggingface_model()
     convert_nt_to_hf(model_nt, model_hf, CONFIG)
     input_mask = torch.ones_like(input_ids)
-    logits_nt = model_nt.model(input_ids, input_mask).permute(1, 0, 2)
+    if NT_MODEL_INSTANCE == Qwen2ForTraining:
+        position_ids = (
+            torch.arange(0, input_ids.shape[1], device=input_ids.device, dtype=torch.int32)
+            .unsqueeze(0)
+            .repeat(BATCH_SIZE, 1)
+        )
+        logits_nt = model_nt.model(input_ids, position_ids).view(BATCH_SIZE, SEQUENCE_LENGTH, -1)
+    else:
+        logits_nt = model_nt.model(input_ids, input_mask).permute(1, 0, 2)
     logits_hf = model_hf(input_ids).logits
-    assert logits_nt.size() == logits_hf.size()
-    assert torch.allclose(logits_nt, logits_hf, atol=ATOL), torch.mean(torch.abs(logits_nt - logits_hf))
+    torch.testing.assert_allclose(logits_nt, logits_hf.to(logits_nt.dtype), atol=ATOL, rtol=ATOL)
 
 
 def test_nt_to_hf(input_ids: torch.Tensor):
@@ -118,34 +164,49 @@ def _test_nt_to_hf_with_files(parallel_context: ParallelContext, input_ids: torc
     with open(nt_path / "model_config.json", "w+") as f:
         json.dump(dataclasses.asdict(CONFIG), f)
     input_mask = torch.ones_like(input_ids)
-    logits_nt = model_nt.model(input_ids, input_mask).permute(1, 0, 2)
+    if NT_MODEL_INSTANCE == Qwen2ForTraining:
+        position_ids = (
+            torch.arange(0, input_ids.shape[1], device=input_ids.device, dtype=torch.int32)
+            .unsqueeze(0)
+            .repeat(BATCH_SIZE, 1)
+        )
+        logits_nt = model_nt.model(input_ids, position_ids).view(BATCH_SIZE, SEQUENCE_LENGTH, -1)
+    else:
+        logits_nt = model_nt.model(input_ids, input_mask).permute(1, 0, 2)
     del model_nt
     # Perform conversion.
-    convert_nt_to_hf_and_save(nt_path, hf_path)
+    convert_nt_to_hf_and_save(nt_path, hf_path, config_cls=NanotronQwen2Config)
     # Load huggingface and get logits.
     model_hf = LlamaForCausalLM.from_pretrained(hf_path).cuda()
     logits_hf = model_hf(input_ids).logits
-    assert logits_nt.size() == logits_hf.size()
-    torch.testing.assert_allclose(logits_nt, logits_hf, atol=ATOL)
+    torch.testing.assert_allclose(logits_nt, logits_hf.to(logits_nt.dtype), atol=ATOL, rtol=ATOL)
 
 
 def test_nt_to_hf_with_files(input_ids: torch.Tensor):
     init_distributed(tp=1, dp=1, pp=1)(_test_nt_to_hf_with_files)(input_ids=input_ids, test_context=TestContext())
 
 
-def _test_hf_to_nt(parallel_context: ParallelContext, input_ids: torch.Tensor):
-    model_nt = create_nanotron_model(parallel_context)
-    model_hf = create_huggingface_model()
-    convert_hf_to_nt(model_hf, model_nt, CONFIG)
+def _test_hf_to_nt(parallel_context: ParallelContext, input_ids: torch.Tensor, model_name: Optional[str]):
+    model_hf = create_huggingface_model(model_name)
+    model_nt = create_nanotron_model(parallel_context, get_nanotron_config(model_hf.config))
+    convert_hf_to_nt(model_hf, model_nt, model_hf.config)
     input_mask = torch.ones_like(input_ids)
-    logits_nt = model_nt.model(input_ids, input_mask).permute(1, 0, 2)
+    if NT_MODEL_INSTANCE == Qwen2ForTraining:
+        position_ids = (
+            torch.arange(0, input_ids.shape[1], device=input_ids.device, dtype=torch.int32)
+            .unsqueeze(0)
+            .repeat(BATCH_SIZE, 1)
+        )
+        logits_nt = model_nt.model(input_ids, position_ids).view(BATCH_SIZE, SEQUENCE_LENGTH, -1)
+    else:
+        logits_nt = model_nt.model(input_ids, input_mask).permute(1, 0, 2)
     logits_hf = model_hf(input_ids).logits
-    assert logits_nt.size() == logits_hf.size()
-    torch.testing.assert_allclose(logits_hf, logits_nt, atol=ATOL)  
+    torch.testing.assert_allclose(logits_hf.to(logits_nt.dtype), logits_nt, atol=ATOL, rtol=ATOL)
 
 
-def test_hf_to_nt(input_ids: torch.Tensor):
-    init_distributed(tp=1, dp=1, pp=1)(_test_hf_to_nt)(input_ids=input_ids)
+@pytest.mark.parametrize("model_name", [None, "HuggingFaceTB/SmolLM2-135M"])
+def test_hf_to_nt(input_ids: torch.Tensor, model_name: Optional[str]):
+    init_distributed(tp=1, dp=1, pp=1)(_test_hf_to_nt)(input_ids=input_ids, model_name=model_name)
 
 
 def _test_hf_to_nt_with_files(parallel_context: ParallelContext, input_ids: torch.Tensor, test_context: TestContext):
@@ -161,10 +222,17 @@ def _test_hf_to_nt_with_files(parallel_context: ParallelContext, input_ids: torc
     convert_hf_to_nt_and_save(hf_path, nt_path)
     # Load nanotron and get logits.
     input_mask = torch.ones_like(input_ids)
-    model_nt = load_nanotron_model(checkpoint_path=nt_path)
-    logits_nt = model_nt.model(input_ids, input_mask).permute(1, 0, 2)
-    assert logits_nt.size() == logits_hf.size()
-    assert torch.allclose(logits_nt, logits_hf, atol=ATOL)
+    model_nt = load_nanotron_model(checkpoint_path=nt_path, config_cls=NanotronQwen2Config)
+    if NT_MODEL_INSTANCE == Qwen2ForTraining:
+        position_ids = (
+            torch.arange(0, input_ids.shape[1], device=input_ids.device, dtype=torch.int32)
+            .unsqueeze(0)
+            .repeat(BATCH_SIZE, 1)
+        )
+        logits_nt = model_nt.model(input_ids, position_ids).view(BATCH_SIZE, SEQUENCE_LENGTH, -1)
+    else:
+        logits_nt = model_nt.model(input_ids, input_mask).permute(1, 0, 2)
+    torch.testing.assert_allclose(logits_nt, logits_hf.to(logits_nt.dtype), atol=ATOL, rtol=ATOL)
 
 
 def test_hf_to_nt_with_files(input_ids: torch.Tensor):
@@ -209,7 +277,15 @@ def _save_parallel_nanotron(parallel_context: ParallelContext, input_ids: torch.
     # Get parallel predictions.
     input_ids = input_ids.cuda()  # Move them to the current device index.
     input_mask = torch.ones_like(input_ids)
-    logits_nt = model_nt.model(input_ids, input_mask).permute(1, 0, 2)
+    if NT_MODEL_INSTANCE == Qwen2ForTraining:
+        position_ids = (
+            torch.arange(0, input_ids.shape[1], device=input_ids.device, dtype=torch.int32)
+            .unsqueeze(0)
+            .repeat(BATCH_SIZE, 1)
+        )
+        logits_nt = model_nt.model(input_ids, position_ids).view(BATCH_SIZE, SEQUENCE_LENGTH, -1)
+    else:
+        logits_nt = model_nt.model(input_ids, input_mask).permute(1, 0, 2)
     if torch.distributed.get_rank() == 0:
         torch.save(logits_nt.detach().cpu(), nt_path / "logits.pt")
 
@@ -225,7 +301,7 @@ def _save_parallel_nanotron(parallel_context: ParallelContext, input_ids: torch.
 
 def _convert_from_parallel(parallel_context: ParallelContext, input_ids: torch.Tensor, nt_path: Path, hf_path: Path):
     # Convert parallel nanotron to hf, get and save huggingface predictions.
-    convert_nt_to_hf_and_save(nt_path, hf_path)
+    convert_nt_to_hf_and_save(nt_path, hf_path, config_cls=NanotronQwen2Config)
     model_hf = LlamaForCausalLM.from_pretrained(hf_path).cuda()
     logits_hf = model_hf(input_ids).logits
     torch.save(logits_hf.detach().cpu(), hf_path / "logits.pt")
@@ -248,4 +324,19 @@ def test_tensor_parallel_conversion(input_ids: torch.Tensor):
     logits_nt = torch.load(nt_path / "logits.pt")
     logits_hf = torch.load(hf_path / "logits.pt")
     assert logits_nt.size() == logits_hf.size()
-    assert torch.allclose(logits_nt, logits_hf, atol=ATOL), torch.mean(torch.abs(logits_nt - logits_hf))
+    torch.testing.assert_allclose(logits_nt, logits_hf, atol=ATOL, rtol=ATOL)
+
+
+if __name__ == "__main__":
+    # run all tests
+    # test_nt_to_hf(input_ids=torch.randint(0, CONFIG.vocab_size, size=(BATCH_SIZE, SEQUENCE_LENGTH), device="cuda"))
+    # test_hf_to_nt(input_ids=torch.randint(0, CONFIG.vocab_size, size=(BATCH_SIZE, SEQUENCE_LENGTH), device="cuda"))
+    # test_tensor_parallel_conversion(
+    #     input_ids=torch.randint(0, CONFIG.vocab_size, size=(BATCH_SIZE, SEQUENCE_LENGTH), device="cuda")
+    # )
+
+    # Test SmolLM2-135M
+    test_hf_to_nt(
+        input_ids=torch.randint(0, CONFIG.vocab_size, size=(BATCH_SIZE, SEQUENCE_LENGTH), device="cuda"),
+        model_name="HuggingFaceTB/SmolLM2-135M",
+    )

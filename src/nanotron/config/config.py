@@ -93,6 +93,22 @@ class PretrainDatasetsArgs:
 
 
 @dataclass
+class SFTDatasetsArgs:
+    # TODO @nouamane: which config do we want for SFT?
+    hf_dataset_or_datasets: Union[str, list, dict]
+    hf_dataset_splits: Optional[Union[str, list]] = None
+    hf_dataset_config_name: Optional[str] = None
+    dataset_processing_num_proc_per_process: Optional[int] = 1
+    dataset_overwrite_cache: Optional[bool] = False
+    sft_dataloader: Optional[bool] = True
+    debug_max_samples: Optional[int] = None
+
+    def __post_init__(self):
+        if self.hf_dataset_splits is None:
+            self.hf_dataset_splits = "train"
+
+
+@dataclass
 class S3UploadArgs:
     """Arguments related to uploading checkpoints on s3"""
 
@@ -124,7 +140,9 @@ class NanosetDatasetsArgs:
 class DataArgs:
     """Arguments related to the data and data files processing"""
 
-    dataset: Optional[Union[PretrainDatasetsArgs, NanosetDatasetsArgs]]
+    dataset: Optional[
+        Union[PretrainDatasetsArgs, NanosetDatasetsArgs, SFTDatasetsArgs]
+    ]  # If None we use dummy_infinite_data_generator
     seed: Optional[int]
     num_loading_workers: Optional[int] = 1
 
@@ -365,9 +383,6 @@ class Config:
             self.s3_upload.__post_init__()
 
         # Some final sanity checks across separate arguments sections:
-        if self.profiler is not None and self.profiler.profiler_export_path is not None:
-            assert self.tokens.train_steps < 10
-
         if self.optimizer is not None and self.optimizer.learning_rate_scheduler.lr_decay_steps is None:
             self.optimizer.learning_rate_scheduler.lr_decay_steps = (
                 self.tokens.train_steps - self.optimizer.learning_rate_scheduler.lr_warmup_steps
@@ -399,6 +414,20 @@ class Config:
         # # if lighteval, we need tokenizer to be defined
         # if self.checkpoints.lighteval is not None:
         #     assert self.tokenizer.tokenizer_name_or_path is not None
+
+        # Model verifications
+        assert (
+            self.model.model_config.num_attention_heads % self.parallelism.tp == 0
+        ), "num_attention_heads must be divisible by tp"
+        assert (
+            self.model.model_config.num_attention_heads >= self.model.model_config.num_key_value_heads
+        ), "num_attention_heads must be >= num_key_value_heads"
+        assert (
+            self.model.model_config.num_key_value_heads >= self.parallelism.tp
+        ), "num_key_value_heads must be >= tp"  # TODO: remove this once we ensure KV heads get duplicated correctly
+        assert (
+            self.model.model_config.num_attention_heads % self.model.model_config.num_key_value_heads == 0
+        ), "num_attention_heads must be divisible by num_key_value_heads"
 
     @property
     def global_batch_size(self):

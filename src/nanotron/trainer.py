@@ -36,7 +36,7 @@ from nanotron.config import (
     get_config_from_file,
 )
 from nanotron.constants import MODEL_CONFIG_FILE_NAME
-from nanotron.dataloader import sanity_check_dataloader
+from nanotron.data.dataloader import sanity_check_dataloader
 from nanotron.helpers import (
     _vocab_size_with_padding,
     compute_remain_train_steps_of_a_data_stage_from_ckp,
@@ -58,6 +58,7 @@ from nanotron.logging import (
 from nanotron.models import NanotronModel, build_model
 from nanotron.models.base import check_model_has_grad
 from nanotron.models.llama import LlamaForTraining, RotaryEmbedding
+from nanotron.models.qwen import Qwen2ForTraining
 from nanotron.models.starcoder2 import Starcoder2ForTraining
 from nanotron.optim.clip_grads import clip_grad_norm
 from nanotron.parallel import ParallelContext
@@ -105,6 +106,7 @@ dist_logger.setLevel(logging.WARNING)
 CONFIG_TO_MODEL_CLASS = {
     "LlamaConfig": LlamaForTraining,
     "Starcoder2Config": Starcoder2ForTraining,
+    "Qwen2Config": Qwen2ForTraining,
 }
 
 try:
@@ -149,6 +151,7 @@ class DistributedTrainer:
             pipeline_parallel_size=self.config.parallelism.pp,
             data_parallel_size=self.config.parallelism.dp,
             expert_parallel_size=self.config.parallelism.expert_parallel_size,
+            context_parallel_size=self.config.parallelism.context_parallel_size,
         )
 
         self.pre_init()
@@ -239,7 +242,7 @@ class DistributedTrainer:
 
         # Setup tensorboard write and log writers on output rank
         self.logger_ranks = self.parallel_context.get_global_rank(
-            ep_rank=0, pp_rank=self.unwrapped_model.output_pp_rank, dp_rank=0, tp_rank=0
+            ep_rank=0, pp_rank=self.unwrapped_model.output_pp_rank, dp_rank=0, tp_rank=0, cp_rank=0
         ).flatten()
         self.loggerwriter = self.setup_log_writers()
 
@@ -251,7 +254,9 @@ class DistributedTrainer:
         self.global_batch_size = (
             self.micro_batch_size * self.n_micro_batches_per_batch * self.parallel_context.dp_pg.size()
         )
-        self.sequence_length = self.config.tokens.sequence_length
+        self.sequence_length = (
+            self.config.tokens.sequence_length
+        )  # Global sequence length not divided by context parallel size
         self.iteration_step = self.metadata.last_train_step
         self.limit_val_batches = self.config.tokens.limit_val_batches
         # NOTE: the dataloader currently in use for the current training stage
@@ -697,9 +702,12 @@ class DistributedTrainer:
                     rank=0,
                 )
             else:
-                assert (
-                    self.config.tokens.sequence_length == self.model_config.max_position_embeddings
-                ), "The tokenizer's sequence length does not match the model's maximum position embeddings."
+                log_rank(
+                    f"the model's max_position_embeddings {self.model_config.max_position_embeddings} is ignored because the sequence length we're training on is {self.config.tokens.sequence_length}.",  # noqa
+                    logger=logger,
+                    level=logging.WARNING,
+                    rank=0,
+                )
 
         log_rank("Config:\n" + pformat(self.config), logger=logger, level=logging.INFO, rank=0)
         log_rank("Model Config:\n" + pformat(self.model_config), logger=logger, level=logging.INFO, rank=0)
@@ -957,9 +965,10 @@ def mark_tied_parameters(
                 target,
                 (
                     parallel_context.get_global_rank(
-                        ep_rank=dist.get_rank(parallel_context.expert_pg),
+                        ep_rank=dist.get_rank(parallel_context.ep_pg),
                         pp_rank=get_pp_rank_of(target, module=model),
                         dp_rank=dist.get_rank(parallel_context.dp_pg),
+                        cp_rank=dist.get_rank(parallel_context.cp_pg),
                         tp_rank=dist.get_rank(parallel_context.tp_pg),
                     ),
                 ),
@@ -1043,7 +1052,7 @@ def mark_unsharded_params_as_tied_across_expert(
                 (
                     name,
                     # sync across expert group
-                    tuple(sorted(dist.get_process_group_ranks(parallel_context.expert_pg))),
+                    tuple(sorted(dist.get_process_group_ranks(parallel_context.ep_pg))),
                 )
             ]
 

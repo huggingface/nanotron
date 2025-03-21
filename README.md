@@ -56,13 +56,44 @@ pip install triton "flash-attn>=2.5.0" --no-build-isolation
 The following command will train a tiny Llama model on a single node with 8 GPUs. The model will be saved in the `checkpoints` directory as specified in the config file.
 ```bash
 CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node=8 run_train.py --config-file examples/config_tiny_llama.yaml
+# or use examples/config_tiny_llama.py to generate your own config
 ```
+
+For detailed instructions on training your first model, check out our [Your First Training guide](docs/your-first-training.md).
+
+For multi-node training with Slurm, see our [Multi-Node Training guide](docs/multi-node-training.md).
 
 ### Run generation from your checkpoint
 ```bash
 torchrun --nproc_per_node=1 run_generate.py --ckpt-path checkpoints/10/ --tp 1 --pp 1
 # We could set a larger TP for faster generation, and a larger PP in case of very large models.
 ```
+
+### Debugging with VSCode
+To debug with VSCode, add the following configuration to your `launch.json` file:
+
+```json
+{
+    "name": "run_train.py",
+    "type": "python",
+    "request": "launch",
+    "program": "torchrun", // or full path to torchrun by running `which torchrun`
+    "console": "integratedTerminal",
+    "justMyCode": false,
+    "args": [
+        "--nproc_per_node=2",
+        "run_train.py",
+        "--config-file=examples/config_tiny_llama.yaml", // or use examples/config_tiny_llama.py to generate your own config
+    ],
+    "env": {
+        // "NANOTRON_BENCHMARK": "1", // enable to benchmark your training for a couple of steps
+        "CUDA_DEVICE_MAX_CONNECTIONS": "1",
+        "WANDB_MODE": "disabled",
+    }
+},
+```
+> [!NOTE]
+> For more info check [Debugging Nanotron example (on multiple GPUs)](/examples/contributor-guide/README.md#debugging-nanotron-example-on-multiple-gpus)
 
 ### Custom examples
 You can find more examples in the [`/examples`](/examples) directory:
