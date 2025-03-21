@@ -7,10 +7,11 @@ Command:
 import json
 from argparse import ArgumentParser
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Literal, Optional, Type
 
 import torch
 from nanotron.config import LlamaConfig as NanotronLlamaConfig
+from nanotron.config import NanotronConfigs
 from nanotron.models import init_on_device_and_dtype
 from nanotron.models.llama import LlamaForTraining
 from transformers import AutoTokenizer, LlamaForCausalLM
@@ -105,7 +106,12 @@ def get_hf_config(config: NanotronLlamaConfig) -> HFLlamaConfig:
     return HFLlamaConfig(**attrs)
 
 
-def convert_checkpoint_and_save(checkpoint_path: Path, save_path: Path, tokenizer_name: Optional[str] = None):
+def convert_checkpoint_and_save(
+    checkpoint_path: Path,
+    save_path: Path,
+    tokenizer_name: Optional[str] = None,
+    config_cls: Type[NanotronConfigs] = NanotronLlamaConfig,
+):
     """Loads the nanotron checkpoint in `checkpoint_path`, creates
     a new huggingface instance, copies the weights from the nanotron checkpoint
     and saves the transformed huggingface to `save_path`."""
@@ -113,7 +119,7 @@ def convert_checkpoint_and_save(checkpoint_path: Path, save_path: Path, tokenize
     # Init nanotron model.
     with open(checkpoint_path / "model_config.json", "r") as f:
         attrs = json.load(f)
-        model_config = NanotronLlamaConfig(**attrs)
+        model_config = config_cls(**attrs)
     nanotron_model = load_nanotron_model(
         model_config=model_config,
         checkpoint_path=checkpoint_path,

@@ -211,7 +211,7 @@ def _test_hf_to_nt_with_files(parallel_context: ParallelContext, input_ids: torc
     logits_hf = model_hf(input_ids).logits
     del model_hf
     # Perform conversion.
-    convert_hf_to_nt_and_save(hf_path, nt_path)
+    convert_hf_to_nt_and_save(hf_path, nt_path, config_cls=NanotronQwen2Config)
     # Load nanotron and get logits.
     input_mask = torch.ones_like(input_ids)
     model_nt = load_nanotron_model(checkpoint_path=nt_path)
@@ -286,7 +286,7 @@ def _save_parallel_nanotron(parallel_context: ParallelContext, input_ids: torch.
 
 def _convert_from_parallel(parallel_context: ParallelContext, input_ids: torch.Tensor, nt_path: Path, hf_path: Path):
     # Convert parallel nanotron to hf, get and save huggingface predictions.
-    convert_nt_to_hf_and_save(nt_path, hf_path)
+    convert_nt_to_hf_and_save(nt_path, hf_path, config_cls=NanotronQwen2Config)
     model_hf = LlamaForCausalLM.from_pretrained(hf_path).cuda()
     logits_hf = model_hf(input_ids).logits
     torch.save(logits_hf.detach().cpu(), hf_path / "logits.pt")

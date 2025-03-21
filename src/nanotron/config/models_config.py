@@ -124,7 +124,7 @@ class Qwen2Config:
     use_cache: bool = True
     vocab_size: int = 32000
     _attn_implementation: Optional[str] = "sdpa"
-    attention_bias: bool = True
+    attention_bias: bool = False
     interleaved_rotary: bool = False
 
     # MoE configuration

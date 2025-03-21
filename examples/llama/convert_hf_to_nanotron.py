@@ -13,6 +13,7 @@ import nanotron
 import torch
 from convert_weights import get_config_mapping, get_weight_mapping, load_nanotron_model
 from nanotron.config import LlamaConfig as NanotronLlamaConfig
+from nanotron.config import Qwen2Config as NanotronQwen2Config
 from nanotron.models.llama import LlamaForTraining
 from transformers import LlamaConfig as HFLlamaConfig
 from transformers import LlamaForCausalLM
@@ -86,10 +87,10 @@ def convert_hf_to_nt(model_hf: LlamaForCausalLM, model_nt: LlamaForTraining, con
                 param_nt.copy_(param)
 
 
-def get_nanotron_config(config: HFLlamaConfig) -> NanotronLlamaConfig:
+def get_nanotron_config(config: HFLlamaConfig) -> NanotronQwen2Config:
     """Converts a huggingface configuration to nanotron configuration."""
     attrs = {key: getattr(config, value) for key, value in get_config_mapping(nt_to_hf=True).items()}
-    return NanotronLlamaConfig(**attrs)
+    return NanotronQwen2Config(**attrs)
 
 
 def convert_checkpoint_and_save(checkpoint_path: Path, save_path: Path):
