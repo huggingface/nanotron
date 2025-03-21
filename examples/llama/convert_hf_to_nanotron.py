@@ -11,12 +11,13 @@ from pathlib import Path
 
 import nanotron
 import torch
-from convert_weights import get_config_mapping, get_weight_mapping, load_nanotron_model
 from nanotron.config import LlamaConfig as NanotronLlamaConfig
 from nanotron.config import Qwen2Config as NanotronQwen2Config
 from nanotron.models.llama import LlamaForTraining
 from transformers import LlamaConfig as HFLlamaConfig
 from transformers import LlamaForCausalLM
+
+from .convert_weights import get_config_mapping, get_weight_mapping, load_nanotron_model
 
 
 def _handle_attention_block(

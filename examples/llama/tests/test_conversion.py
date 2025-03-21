@@ -11,8 +11,6 @@ from utils import set_system_path
 
 set_system_path()
 
-# lovely tensors
-import lovely_tensors as lt
 import nanotron
 from nanotron.config import LlamaConfig as NanotronLlamaConfig
 from nanotron.config import NanotronConfigs
@@ -21,6 +19,7 @@ from nanotron.models.base import init_on_device_and_dtype
 from nanotron.models.llama import LlamaForTraining
 from nanotron.models.qwen import Qwen2ForTraining
 from nanotron.parallel import ParallelContext
+from nanotron.random import set_random_seed
 from nanotron.trainer import mark_tied_parameters
 
 from examples.llama.convert_hf_to_nanotron import convert_checkpoint_and_save as convert_hf_to_nt_and_save
@@ -29,12 +28,7 @@ from examples.llama.convert_nanotron_to_hf import convert_checkpoint_and_save as
 from examples.llama.convert_nanotron_to_hf import convert_nt_to_hf, get_hf_config
 from examples.llama.convert_weights import load_nanotron_model, make_parallel_config
 from tests.helpers.context import TestContext
-from tests.helpers.utils import init_distributed, rerun_if_address_is_in_use
-
-lt.monkey_patch()
-lt.set_config(precision=6)
-
-from nanotron.random import set_random_seed
+from tests.helpers.utils import init_distributed
 
 set_random_seed(0)
 torch.backends.cudnn.deterministic = True
@@ -170,15 +164,22 @@ def _test_nt_to_hf_with_files(parallel_context: ParallelContext, input_ids: torc
     with open(nt_path / "model_config.json", "w+") as f:
         json.dump(dataclasses.asdict(CONFIG), f)
     input_mask = torch.ones_like(input_ids)
-    logits_nt = model_nt.model(input_ids, input_mask).permute(1, 0, 2)
+    if NT_MODEL_INSTANCE == Qwen2ForTraining:
+        position_ids = (
+            torch.arange(0, input_ids.shape[1], device=input_ids.device, dtype=torch.int32)
+            .unsqueeze(0)
+            .repeat(BATCH_SIZE, 1)
+        )
+        logits_nt = model_nt.model(input_ids, position_ids).view(BATCH_SIZE, SEQUENCE_LENGTH, -1)
+    else:
+        logits_nt = model_nt.model(input_ids, input_mask).permute(1, 0, 2)
     del model_nt
     # Perform conversion.
-    convert_nt_to_hf_and_save(nt_path, hf_path)
+    convert_nt_to_hf_and_save(nt_path, hf_path, config_cls=NanotronQwen2Config)
     # Load huggingface and get logits.
     model_hf = LlamaForCausalLM.from_pretrained(hf_path).cuda()
     logits_hf = model_hf(input_ids).logits
-    assert logits_nt.size() == logits_hf.size()
-    torch.testing.assert_allclose(logits_nt, logits_hf.to(logits_nt.dtype), atol=ATOL)
+    torch.testing.assert_allclose(logits_nt, logits_hf.to(logits_nt.dtype), atol=ATOL, rtol=ATOL)
 
 
 def test_nt_to_hf_with_files(input_ids: torch.Tensor):
@@ -203,9 +204,8 @@ def _test_hf_to_nt(parallel_context: ParallelContext, input_ids: torch.Tensor, m
     torch.testing.assert_allclose(logits_hf.to(logits_nt.dtype), logits_nt, atol=ATOL, rtol=ATOL)
 
 
-@rerun_if_address_is_in_use()
 @pytest.mark.parametrize("model_name", [None, "HuggingFaceTB/SmolLM2-135M"])
-def test_hf_to_nt(input_ids: torch.Tensor, model_name: Optional[str] = None):
+def test_hf_to_nt(input_ids: torch.Tensor, model_name: Optional[str]):
     init_distributed(tp=1, dp=1, pp=1)(_test_hf_to_nt)(input_ids=input_ids, model_name=model_name)
 
 
@@ -219,13 +219,20 @@ def _test_hf_to_nt_with_files(parallel_context: ParallelContext, input_ids: torc
     logits_hf = model_hf(input_ids).logits
     del model_hf
     # Perform conversion.
-    convert_hf_to_nt_and_save(hf_path, nt_path, config_cls=NanotronQwen2Config)
+    convert_hf_to_nt_and_save(hf_path, nt_path)
     # Load nanotron and get logits.
     input_mask = torch.ones_like(input_ids)
-    model_nt = load_nanotron_model(checkpoint_path=nt_path)
-    logits_nt = model_nt.model(input_ids, input_mask).permute(1, 0, 2)
-    assert logits_nt.size() == logits_hf.size()
-    assert torch.allclose(logits_nt, logits_hf.to(logits_nt.dtype), atol=ATOL)
+    model_nt = load_nanotron_model(checkpoint_path=nt_path, config_cls=NanotronQwen2Config)
+    if NT_MODEL_INSTANCE == Qwen2ForTraining:
+        position_ids = (
+            torch.arange(0, input_ids.shape[1], device=input_ids.device, dtype=torch.int32)
+            .unsqueeze(0)
+            .repeat(BATCH_SIZE, 1)
+        )
+        logits_nt = model_nt.model(input_ids, position_ids).view(BATCH_SIZE, SEQUENCE_LENGTH, -1)
+    else:
+        logits_nt = model_nt.model(input_ids, input_mask).permute(1, 0, 2)
+    torch.testing.assert_allclose(logits_nt, logits_hf.to(logits_nt.dtype), atol=ATOL, rtol=ATOL)
 
 
 def test_hf_to_nt_with_files(input_ids: torch.Tensor):
