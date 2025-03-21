@@ -77,6 +77,7 @@ class LlamaConfig:
     tie_word_embeddings: bool = False
     use_cache: bool = True
     vocab_size: int = 32000
+    attention_bias: bool = False
 
     def __post_init__(self):
         # NOTE: user don't set self._init_method, ModelArgs will set it
@@ -123,6 +124,7 @@ class Qwen2Config:
     use_cache: bool = True
     vocab_size: int = 32000
     _attn_implementation: Optional[str] = "ring"
+    attention_bias: bool = True
 
     # MoE configuration
     moe_config: Optional[MoEConfig] = None
