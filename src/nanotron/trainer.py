@@ -702,9 +702,12 @@ class DistributedTrainer:
                     rank=0,
                 )
             else:
-                assert (
-                    self.config.tokens.sequence_length == self.model_config.max_position_embeddings
-                ), "The tokenizer's sequence length does not match the model's maximum position embeddings."
+                log_rank(
+                    f"the model's max_position_embeddings {self.model_config.max_position_embeddings} is ignored because the sequence length we're training on is {self.config.tokens.sequence_length}.",  # noqa
+                    logger=logger,
+                    level=logging.WARNING,
+                    rank=0,
+                )
 
         log_rank("Config:\n" + pformat(self.config), logger=logger, level=logging.INFO, rank=0)
         log_rank("Model Config:\n" + pformat(self.model_config), logger=logger, level=logging.INFO, rank=0)

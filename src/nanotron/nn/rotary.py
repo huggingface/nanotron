@@ -13,7 +13,7 @@ class RotaryEmbedding(nn.Module):
     ):
         super().__init__()
         self.dim = dim
-        self.max_seq_len = max_seq_len
+        self.max_seq_len = max_seq_len  # we set it as max_position_embeddings in init. but we ignore it of we provide `seq_length` in forward
         self.interleaved = interleaved
         self.seq_len_scaling_factor = seq_len_scaling_factor
 
@@ -45,11 +45,13 @@ class RotaryEmbedding(nn.Module):
             assert position_offset == 0, "position_offset must be 0 if position_ids is provided"
             # TODO @nouamane: Using position_ids means we compute redundant embeddings for same positions
             positions = position_ids.to(device=self.freqs_cis.device, dtype=self.freqs_cis.dtype)  # [b*s]
+            self.max_seq_len = positions.max() + 1
         else:
             seq_length = seq_length or self.max_seq_len
             positions = (
                 torch.arange(seq_length, device=self.freqs_cis.device, dtype=self.freqs_cis.dtype) + position_offset
             )  # [seq_length]
+            self.max_seq_len = seq_length
 
         # Apply sequence length scaling if specified
         if self.seq_len_scaling_factor is not None:
