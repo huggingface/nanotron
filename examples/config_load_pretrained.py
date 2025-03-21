@@ -16,9 +16,9 @@ from nanotron.config import (
     LoggingArgs,
     LRSchedulerArgs,
     ModelArgs,
+    NanosetDatasetsArgs,
     OptimizerArgs,
     ParallelismArgs,
-    PretrainDatasetsArgs,
     Qwen2Config,
     RandomInit,
     TokenizerArgs,
@@ -91,10 +91,23 @@ data_stages = [
         start_training_step=1,
         data=DataArgs(
             # For pretraining:
-            dataset=PretrainDatasetsArgs(
-                hf_dataset_or_datasets="trl-lib/tldr",
-                text_column_name="text",
+            # dataset=PretrainDatasetsArgs(
+            #     hf_dataset_or_datasets="trl-lib/tldr",
+            #     text_column_name="text",
+            # ),
+            # dataset=PretrainDatasetsArgs(
+            #     hf_dataset_or_datasets="HuggingFaceTB/SmolLM2-135M",
+            #     text_column_name="text",
+            # ),
+            dataset=NanosetDatasetsArgs(
+                dataset_folder="/fsx/loubna/tokenized_for_exps/mcf-dataset",  # 1.4T tokens
             ),
+            # TokenizedBytesDatasetFolderArgs(
+            #     folder="/fsx/loubna/tokenized_for_exps/fineweb-edu-400B", # 1.4T tokens
+            #     filename_pattern=r".*\.ds$",
+            #     shuffle=True,
+            #     seed=SEED,
+            # ),
             # For SFT (uncomment to use):
             # dataset=SFTDatasetsArgs(
             #     hf_dataset_or_datasets="trl-lib/tldr",
@@ -114,7 +127,11 @@ run_name = "load_pretrained_%date_%jobid"
 config = Config(
     general=GeneralArgs(project="load_pretrained", run=run_name, seed=seed, ignore_sanity_checks=False),
     checkpoints=CheckpointsArgs(
-        checkpoints_path=checkpoints_path, checkpoint_interval=10, resume_checkpoint_path=CHECKPOINT_PATH
+        checkpoints_path=checkpoints_path,
+        checkpoint_interval=10,
+        resume_checkpoint_path=CHECKPOINT_PATH,
+        load_lr_scheduler=False,
+        load_optimizer=False,
     ),
     parallelism=parallelism,
     model=ModelArgs(init_method=RandomInit(std=0.025), model_config=model_config),

@@ -147,7 +147,6 @@ data_stages = [
             dataset=SFTDatasetsArgs(
                 hf_dataset_or_datasets="trl-lib/tldr",
                 hf_dataset_splits="train",
-                sft_dataloader=True,
                 debug_max_samples=1000,
             ),
             seed=seed,
