@@ -1,7 +1,7 @@
 """ Example python script to generate a YAML config file which can be used to run a training with nanotron. Refer to "examples" section in the `/README.md` for more information.
 
 Usage:
-python examples/config_load_pretrained.py
+python examples/config_resume_training.py
 """
 import json
 import os
@@ -122,10 +122,10 @@ data_stages = [
 checkpoints_path = "./checkpoints"
 os.makedirs(checkpoints_path, exist_ok=True)
 
-run_name = "load_pretrained_%date_%jobid"
+run_name = "resume_training_%date_%jobid"
 
 config = Config(
-    general=GeneralArgs(project="load_pretrained", run=run_name, seed=seed, ignore_sanity_checks=False),
+    general=GeneralArgs(project="resume_training", run=run_name, seed=seed, ignore_sanity_checks=False),
     checkpoints=CheckpointsArgs(
         checkpoints_path=checkpoints_path,
         checkpoint_interval=10,
@@ -146,7 +146,7 @@ config = Config(
 if __name__ == "__main__":
     dir = os.path.dirname(__file__)
 
-    config_filename = "config_load_pretrained.yaml"
+    config_filename = "config_resume_training.yaml"
     config.save_as_yaml(f"{dir}/{config_filename}")
 
     # You can now train a model with this config using `/run_train.py`
