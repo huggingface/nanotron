@@ -75,6 +75,7 @@ def get_config_mapping(nt_to_hf: bool = True) -> dict[str, str]:
         "tie_word_embeddings": "tie_word_embeddings",
         "use_cache": "use_cache",
         "vocab_size": "vocab_size",
+        "attention_bias": "attention_bias",
     }
     if nt_to_hf:
         return {nt: hf for hf, nt in hf_to_nt_map.items()}

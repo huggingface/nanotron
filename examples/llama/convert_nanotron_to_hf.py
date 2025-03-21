@@ -28,7 +28,7 @@ def _handle_attention_block(
     n_q_heads: int,
     n_kv_heads: int,
     d_qk: int,
-    interleave: bool = False,
+    interleave,
 ) -> torch.Tensor:
     # Huggingface Llama separates the q, k, v weights (as opposed to nanotron).
     # Furthermore, in the rotary embeddings in nanotron expects interleaved pairs of even
@@ -68,7 +68,12 @@ def _handle_gate_up_proj(gate_up_proj: torch.Tensor, gate: bool) -> torch.Tensor
         return gate_up_proj[weight_size:]
 
 
-def convert_nt_to_hf(nanotron_model: LlamaForTraining, hf_model: LlamaForCausalLM, model_config: NanotronLlamaConfig):
+def convert_nt_to_hf(
+    nanotron_model: LlamaForTraining,
+    hf_model: LlamaForCausalLM,
+    model_config: NanotronLlamaConfig,
+    interleave_qkv: bool = False,
+):
     """Converts the weights from the nanotron_model to hf_model, making modifications
     in-place."""
 
@@ -89,6 +94,7 @@ def convert_nt_to_hf(nanotron_model: LlamaForTraining, hf_model: LlamaForCausalL
                     model_config.num_attention_heads,
                     model_config.num_key_value_heads,
                     model_config.hidden_size // model_config.num_attention_heads,
+                    interleave_qkv,
                 )
 
             elif "gate_up_proj" in nanotron_key:

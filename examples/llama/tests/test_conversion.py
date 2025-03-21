@@ -2,10 +2,11 @@
 import dataclasses
 import json
 from pathlib import Path
+from typing import Optional
 
 import pytest
 import torch
-from transformers import LlamaForCausalLM
+from transformers import AutoModelForCausalLM, LlamaForCausalLM
 from utils import set_system_path
 
 set_system_path()
@@ -14,6 +15,7 @@ set_system_path()
 import lovely_tensors as lt
 import nanotron
 from nanotron.config import LlamaConfig as NanotronLlamaConfig
+from nanotron.config import NanotronConfigs
 from nanotron.config import Qwen2Config as NanotronQwen2Config
 from nanotron.models.base import init_on_device_and_dtype
 from nanotron.models.llama import LlamaForTraining
@@ -22,7 +24,7 @@ from nanotron.parallel import ParallelContext
 from nanotron.trainer import mark_tied_parameters
 
 from examples.llama.convert_hf_to_nanotron import convert_checkpoint_and_save as convert_hf_to_nt_and_save
-from examples.llama.convert_hf_to_nanotron import convert_hf_to_nt
+from examples.llama.convert_hf_to_nanotron import convert_hf_to_nt, get_nanotron_config
 from examples.llama.convert_nanotron_to_hf import convert_checkpoint_and_save as convert_nt_to_hf_and_save
 from examples.llama.convert_nanotron_to_hf import convert_nt_to_hf, get_hf_config
 from examples.llama.convert_weights import load_nanotron_model, make_parallel_config
@@ -93,7 +95,7 @@ elif NT_MODEL_INSTANCE == Qwen2ForTraining:
     )
 
 
-def create_nanotron_model(parallel_context: ParallelContext) -> NT_MODEL_INSTANCE:
+def create_nanotron_model(parallel_context: ParallelContext, config: NanotronConfigs = CONFIG) -> NT_MODEL_INSTANCE:
     parallel_config = make_parallel_config(
         tp=parallel_context.tensor_parallel_size,
         dp=parallel_context.data_parallel_size,
@@ -101,7 +103,7 @@ def create_nanotron_model(parallel_context: ParallelContext) -> NT_MODEL_INSTANC
     )
     nanotron_model = nanotron.models.build_model(
         model_builder=lambda: NT_MODEL_INSTANCE(
-            config=CONFIG,
+            config=config,
             parallel_context=parallel_context,
             parallel_config=parallel_config,
             random_states=None,
@@ -114,10 +116,13 @@ def create_nanotron_model(parallel_context: ParallelContext) -> NT_MODEL_INSTANC
     return nanotron_model
 
 
-def create_huggingface_model() -> LlamaForCausalLM:
-    config_hf = get_hf_config(CONFIG)
-    with init_on_device_and_dtype(torch.device("cuda"), torch.bfloat16):
-        model_hf = LlamaForCausalLM._from_config(config_hf)
+def create_huggingface_model(model_name: Optional[str] = None) -> LlamaForCausalLM:
+    if model_name is None:
+        with init_on_device_and_dtype(torch.device("cuda"), torch.bfloat16):
+            model_hf = LlamaForCausalLM._from_config(get_hf_config(CONFIG))
+    else:
+        with init_on_device_and_dtype(torch.device("cuda"), torch.bfloat16):
+            model_hf = AutoModelForCausalLM.from_pretrained(model_name)
     return model_hf
 
 
@@ -179,10 +184,10 @@ def test_nt_to_hf_with_files(input_ids: torch.Tensor):
     init_distributed(tp=1, dp=1, pp=1)(_test_nt_to_hf_with_files)(input_ids=input_ids, test_context=TestContext())
 
 
-def _test_hf_to_nt(parallel_context: ParallelContext, input_ids: torch.Tensor):
-    model_nt = create_nanotron_model(parallel_context)
-    model_hf = create_huggingface_model()
-    convert_hf_to_nt(model_hf, model_nt, CONFIG)
+def _test_hf_to_nt(parallel_context: ParallelContext, input_ids: torch.Tensor, model_name: Optional[str]):
+    model_hf = create_huggingface_model(model_name)
+    model_nt = create_nanotron_model(parallel_context, get_nanotron_config(model_hf.config))
+    convert_hf_to_nt(model_hf, model_nt, model_hf.config)
     input_mask = torch.ones_like(input_ids)
     if NT_MODEL_INSTANCE == Qwen2ForTraining:
         position_ids = (
@@ -197,8 +202,9 @@ def _test_hf_to_nt(parallel_context: ParallelContext, input_ids: torch.Tensor):
     torch.testing.assert_allclose(logits_hf.to(logits_nt.dtype), logits_nt, atol=ATOL, rtol=ATOL)
 
 
-def test_hf_to_nt(input_ids: torch.Tensor):
-    init_distributed(tp=1, dp=1, pp=1)(_test_hf_to_nt)(input_ids=input_ids)
+@pytest.mark.parametrize("model_name", [None, "HuggingFaceTB/SmolLM2-135M"])
+def test_hf_to_nt(input_ids: torch.Tensor, model_name: Optional[str] = None):
+    init_distributed(tp=1, dp=1, pp=1)(_test_hf_to_nt)(input_ids=input_ids, model_name=model_name)
 
 
 def _test_hf_to_nt_with_files(parallel_context: ParallelContext, input_ids: torch.Tensor, test_context: TestContext):
@@ -315,7 +321,10 @@ def test_tensor_parallel_conversion(input_ids: torch.Tensor):
 if __name__ == "__main__":
     # run all tests
     # test_nt_to_hf(input_ids=torch.randint(0, CONFIG.vocab_size, size=(BATCH_SIZE, SEQUENCE_LENGTH), device="cuda"))
-    # test_hf_to_nt(input_ids=torch.randint(0, CONFIG.vocab_size, size=(BATCH_SIZE, SEQUENCE_LENGTH), device="cuda"))
-    test_tensor_parallel_conversion(
-        input_ids=torch.randint(0, CONFIG.vocab_size, size=(BATCH_SIZE, SEQUENCE_LENGTH), device="cuda")
-    )
+    test_hf_to_nt(input_ids=torch.randint(0, CONFIG.vocab_size, size=(BATCH_SIZE, SEQUENCE_LENGTH), device="cuda"))
+    # test_tensor_parallel_conversion(
+    #     input_ids=torch.randint(0, CONFIG.vocab_size, size=(BATCH_SIZE, SEQUENCE_LENGTH), device="cuda")
+    # )
+
+    # Test SmolLM2-135M
+    # test_hf_to_nt(input_ids=torch.randint(0, CONFIG.vocab_size, size=(BATCH_SIZE, SEQUENCE_LENGTH), device="cuda"), model_name="HuggingFaceTB/SmolLM2-135M")
