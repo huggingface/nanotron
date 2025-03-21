@@ -28,6 +28,7 @@ from nanotron.logging import human_format
 
 # Path to the converted SmolLM2-135M checkpoint. See `examples/llama/convert_hf_to_nanotron.py` for more information.
 CHECKPOINT_PATH = "./checkpoints/smollm2-135m-nanotron"
+TOKENIZER_PATH = "HuggingFaceTB/SmolLM2-135M"
 
 # load from CHECKPOINT_PATH/model_config.json
 model_config_dict = json.load(open(f"{CHECKPOINT_PATH}/model_config.json"))
@@ -135,7 +136,7 @@ config = Config(
     ),
     parallelism=parallelism,
     model=ModelArgs(init_method=RandomInit(std=0.025), model_config=model_config),
-    tokenizer=TokenizerArgs("robot-test/dummy-tokenizer-wordlevel"),
+    tokenizer=TokenizerArgs(tokenizer_name_or_path=TOKENIZER_PATH),
     optimizer=optimizer,
     logging=LoggingArgs(),
     tokens=tokens,
