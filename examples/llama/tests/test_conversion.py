@@ -12,6 +12,7 @@ from utils import set_system_path
 set_system_path()
 
 import nanotron
+from nanotron import distributed as dist
 from nanotron.config import LlamaConfig as NanotronLlamaConfig
 from nanotron.config import NanotronConfigs
 from nanotron.config import Qwen2Config as NanotronQwen2Config
@@ -286,17 +287,22 @@ def _save_parallel_nanotron(parallel_context: ParallelContext, input_ids: torch.
         logits_nt = model_nt.model(input_ids, position_ids).view(BATCH_SIZE, SEQUENCE_LENGTH, -1)
     else:
         logits_nt = model_nt.model(input_ids, input_mask).permute(1, 0, 2)
-    if torch.distributed.get_rank() == 0:
-        torch.save(logits_nt.detach().cpu(), nt_path / "logits.pt")
 
-    # Convert nanotron to hf, load it and compare logits.
-    # hf_path = root/"hf"
-    # convert_nt_to_hf_and_save(nt_path, hf_path)
-    # model_hf = LlamaForCausalLM.from_pretrained(hf_path).cuda()
-    # logits_hf = model_hf(input_ids).logits
-
-    # assert logits_nt.size() == logits_hf.size()
-    # assert torch.allclose(logits_nt, logits_hf, atol=ATOL), torch.mean(torch.abs(logits_nt - logits_hf))
+    tp_pg = parallel_context.tp_pg
+    tp_rank = dist.get_rank(tp_pg)
+    sharded_vocab_size = CONFIG.vocab_size // tp_pg.size()
+    logits_nt = logits_nt.view(BATCH_SIZE, SEQUENCE_LENGTH, -1).contiguous()
+    assert logits_nt.shape[-1] == sharded_vocab_size
+    logits_nt_full = torch.empty(
+        tp_pg.size(), BATCH_SIZE, SEQUENCE_LENGTH, sharded_vocab_size, device="cuda", dtype=logits_nt.dtype
+    )
+    dist.all_gather_into_tensor(logits_nt_full, logits_nt, group=tp_pg)
+    logits_nt_full = logits_nt_full.permute(1, 2, 0, 3).reshape(BATCH_SIZE, SEQUENCE_LENGTH, -1)
+    torch.testing.assert_close(
+        logits_nt, logits_nt_full[:, :, tp_rank * sharded_vocab_size : (tp_rank + 1) * sharded_vocab_size]
+    )
+    if tp_rank == 0:
+        torch.save(logits_nt_full.detach().cpu(), nt_path / "logits_nt.pt")
 
 
 def _convert_from_parallel(parallel_context: ParallelContext, input_ids: torch.Tensor, nt_path: Path, hf_path: Path):
@@ -304,7 +310,7 @@ def _convert_from_parallel(parallel_context: ParallelContext, input_ids: torch.T
     convert_nt_to_hf_and_save(nt_path, hf_path, config_cls=NanotronQwen2Config)
     model_hf = LlamaForCausalLM.from_pretrained(hf_path).cuda()
     logits_hf = model_hf(input_ids).logits
-    torch.save(logits_hf.detach().cpu(), hf_path / "logits.pt")
+    torch.save(logits_hf.detach().cpu(), hf_path / "logits_hf.pt")
 
 
 def test_tensor_parallel_conversion(input_ids: torch.Tensor):
@@ -316,14 +322,13 @@ def test_tensor_parallel_conversion(input_ids: torch.Tensor):
 
     # Launch both parts.
     init_distributed(tp=2, dp=1, pp=1)(_save_parallel_nanotron)(input_ids=input_ids, nt_path=nt_path)
-    assert (nt_path / "logits.pt").exists()
+    assert (nt_path / "logits_nt.pt").exists()
     init_distributed(tp=1, dp=1, pp=1)(_convert_from_parallel)(input_ids=input_ids, nt_path=nt_path, hf_path=hf_path)
-    assert (hf_path / "logits.pt").exists()
+    assert (hf_path / "logits_hf.pt").exists()
 
     # Load logits and verify they match.
-    logits_nt = torch.load(nt_path / "logits.pt")
-    logits_hf = torch.load(hf_path / "logits.pt")
-    assert logits_nt.size() == logits_hf.size()
+    logits_nt = torch.load(nt_path / "logits_nt.pt")
+    logits_hf = torch.load(hf_path / "logits_hf.pt")
     torch.testing.assert_allclose(logits_nt, logits_hf, atol=ATOL, rtol=ATOL)
 
 
@@ -331,12 +336,13 @@ if __name__ == "__main__":
     # run all tests
     # test_nt_to_hf(input_ids=torch.randint(0, CONFIG.vocab_size, size=(BATCH_SIZE, SEQUENCE_LENGTH), device="cuda"))
     # test_hf_to_nt(input_ids=torch.randint(0, CONFIG.vocab_size, size=(BATCH_SIZE, SEQUENCE_LENGTH), device="cuda"))
-    # test_tensor_parallel_conversion(
-    #     input_ids=torch.randint(0, CONFIG.vocab_size, size=(BATCH_SIZE, SEQUENCE_LENGTH), device="cuda")
-    # )
-
-    # Test SmolLM2-135M
-    test_hf_to_nt(
-        input_ids=torch.randint(0, CONFIG.vocab_size, size=(BATCH_SIZE, SEQUENCE_LENGTH), device="cuda"),
-        model_name="HuggingFaceTB/SmolLM2-135M",
+    test_tensor_parallel_conversion(
+        input_ids=torch.randint(0, CONFIG.vocab_size, size=(BATCH_SIZE, SEQUENCE_LENGTH), device="cuda")
     )
+
+    # Warning: Converting from HF to Nanotron is a better test because we don't initialize weights in standard way. (e.g. Layernorms)
+    # Test SmolLM2-135M
+    # test_hf_to_nt(
+    #     input_ids=torch.randint(0, CONFIG.vocab_size, size=(BATCH_SIZE, SEQUENCE_LENGTH), device="cuda"),
+    #     model_name="HuggingFaceTB/SmolLM2-135M",
+    # )
