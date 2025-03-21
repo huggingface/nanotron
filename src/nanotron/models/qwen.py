@@ -13,7 +13,7 @@ from nanotron.logging import log_rank
 from nanotron.models import NanotronModel
 from nanotron.nn.activations import ACT2FN
 from nanotron.nn.attention import ALL_ATTENTION_FUNCTIONS
-from nanotron.nn.layer_norm import TritonRMSNorm as RMSNorm
+from nanotron.nn.layer_norm import LlamaRMSNorm as RMSNorm
 from nanotron.nn.rotary import RotaryEmbedding
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter
@@ -62,10 +62,11 @@ class CoreAttention(nn.Module):
         query_states: torch.Tensor,  # [b*s, num_heads, head_dim]
         key_states: torch.Tensor,  # [b*s, num_kv_heads, head_dim]
         value_states: torch.Tensor,  # [b*s, num_kv_heads, head_dim]
-        attention_mask: Optional[torch.Tensor] = None,  # [seq_length, seq_length]
+        attention_mask: Optional[torch.Tensor] = None,  # [b*s, b*s]
         cu_seqlens: Optional[torch.Tensor] = None,
         dropout: float = 0.0,
         sliding_window: Optional[int] = None,
+        **kwargs,
     ):
         """Forward pass applying the chosen attention implementation"""
         # Get the appropriate attention function
@@ -77,7 +78,7 @@ class CoreAttention(nn.Module):
             and getattr(self.config, "sliding_window", None) is not None
             and self.layer_idx >= getattr(self.config, "max_window_layers", 0)
         ):
-            sliding_window = getattr(self.config, "sliding_window", None)
+            getattr(self.config, "sliding_window", None)
 
         # need to put sequence after num_heads
         seq_length = attention_mask.shape[0]
@@ -102,16 +103,17 @@ class CoreAttention(nn.Module):
         # Call the attention implementation
         attn_output = attention_func(
             self,
-            query_states,
-            key_states,
-            value_states,
-            attention_mask=attention_mask,
+            query_states.transpose(1, 2).view(3, -1, self.local_num_heads, self.head_dim).transpose(1, 2),
+            key_states.transpose(1, 2).view(3, -1, self.local_num_kv_heads, self.head_dim).transpose(1, 2),
+            value_states.transpose(1, 2).view(3, -1, self.local_num_kv_heads, self.head_dim).transpose(1, 2),
+            attention_mask=None,
             dropout=dropout,
             scaling=self.head_dim**-0.5,
-            sliding_window=sliding_window,
-            ring_pg=self.cp_pg,
-            cu_seqlens=cu_seqlens,
-            max_seqlen=seq_length,
+            # sliding_window=sliding_window,
+            # ring_pg=self.cp_pg,
+            # cu_seqlens=cu_seqlens,
+            # max_seqlen=seq_length,
+            **kwargs,
         )[
             0
         ]  # [1, b*s, num_heads, head_dim] TODO: assert we always have this shape
