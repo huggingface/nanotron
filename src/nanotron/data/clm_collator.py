@@ -23,8 +23,15 @@ class DataCollatorForCLM:
     input_pp_rank: int
     output_pp_rank: int
     parallel_context: ParallelContext
+    # torch vs numpy
+    use_numpy: bool = False
 
     def __call__(self, examples: List[Dict[str, List[np.ndarray]]]) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
+
+        vstack = np.vstack if self.use_numpy else torch.vstack
+        ones = np.ones if self.use_numpy else torch.ones
+        bool_dtype = np.bool_ if self.use_numpy else torch.bool
+
         # Process the case when current rank doesn't require data. We return `TensorPointer` that points to ranks having the data.
         current_pp_rank = dist.get_rank(self.parallel_context.pp_pg)
         if current_pp_rank not in [
@@ -43,10 +50,10 @@ class DataCollatorForCLM:
         assert all(list(example.keys()) == ["input_ids"] for example in examples)
 
         # TODO @nouamanetazi: Is it better to have examples as np.array or torch.Tensor?
-        input_ids = np.vstack([examples[i]["input_ids"] for i in range(len(examples))])  # (b, s)
+        input_ids = vstack([examples[i]["input_ids"] for i in range(len(examples))])  # (b, s)
         batch_size, expanded_input_length = input_ids.shape
 
-        result: Dict[str, Union[np.ndarray, TensorPointer]] = {}
+        result: Dict[str, Union[np.ndarray, torch.LongTensor, TensorPointer]] = {}
 
         result["input_ids"] = TensorPointer(group_rank=self.input_pp_rank)
         result["input_mask"] = TensorPointer(group_rank=self.input_pp_rank)
@@ -60,7 +67,7 @@ class DataCollatorForCLM:
         # Process inputs: last token is the label
         if current_pp_rank == self.input_pp_rank:
             result["input_ids"] = input_ids[:, :-1]
-            result["input_mask"] = np.ones((batch_size, self.sequence_length), dtype=np.bool_)
+            result["input_mask"] = ones((batch_size, self.sequence_length), dtype=bool_dtype)
 
             # Context Parallelism: Each CP rank gets a slice of the input_ids and input_mask
             cp_rank, cp_size = dist.get_rank(self.parallel_context.cp_pg), self.parallel_context.context_parallel_size
@@ -73,7 +80,7 @@ class DataCollatorForCLM:
         # Process labels: shift them to the left
         if current_pp_rank == self.output_pp_rank:
             result["label_ids"] = input_ids[:, 1:]
-            result["label_mask"] = np.ones((batch_size, self.sequence_length), dtype=np.bool_)
+            result["label_mask"] = ones((batch_size, self.sequence_length), dtype=bool_dtype)
 
             # Context Parallelism: Each CP rank gets a slice of the label_ids and label_mask
             local_slice = slice(
@@ -83,7 +90,7 @@ class DataCollatorForCLM:
             result["label_mask"] = result["label_mask"][:, local_slice]  # (b, s/cp_size)
 
         if (
-            isinstance(result["input_ids"], torch.Tensor)
+            not isinstance(result["input_ids"], TensorPointer)
             and result["input_ids"].shape[-1] != self.sequence_length // cp_size
         ):
             raise ValueError(
@@ -91,7 +98,7 @@ class DataCollatorForCLM:
                 f" {self.sequence_length // cp_size}."
             )
         if (
-            isinstance(result["label_ids"], torch.Tensor)
+            not isinstance(result["label_ids"], TensorPointer)
             and result["label_ids"].shape[-1] != self.sequence_length // cp_size
         ):
             raise ValueError(
@@ -99,8 +106,11 @@ class DataCollatorForCLM:
                 f" {self.sequence_length // cp_size}."
             )
 
-        # Cast np.array to torch.Tensor
-        result = {k: v if isinstance(v, TensorPointer) else torch.from_numpy(v) for k, v in result.items()}
+        # Maybe cast np.array to torch.Tensor
+        result = {
+            k: v if isinstance(v, TensorPointer) else (torch.from_numpy(v) if self.use_numpy else v)
+            for k, v in result.items()
+        }
         return result
 
 

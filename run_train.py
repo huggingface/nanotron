@@ -12,7 +12,14 @@ from typing import Dict, cast
 
 import numpy as np
 from nanotron import logging
-from nanotron.config import DataArgs, DatasetStageArgs, NanosetDatasetsArgs, PretrainDatasetsArgs, SFTDatasetsArgs
+from nanotron.config import (
+    DataArgs,
+    DatasetStageArgs,
+    NanosetDatasetsArgs,
+    PretrainDatasetsArgs,
+    Qwen2Config,
+    SFTDatasetsArgs,
+)
 from nanotron.data.dataloader import (
     dummy_infinite_data_generator,
     get_train_dataloader,
@@ -151,7 +158,7 @@ def get_dataloader_from_data_stage(
                 dataloader_num_workers=data.num_loading_workers,
                 seed_worker=data.seed,
                 dataloader_drop_last=True,
-                use_position_ids=isinstance(data.dataset, SFTDatasetsArgs),
+                use_position_ids=isinstance(trainer.model_config, Qwen2Config),
             )
 
             # Check if we have enough samples for train_steps
@@ -194,6 +201,7 @@ def get_dataloader_from_data_stage(
             consumed_train_samples=consumed_train_samples,
             dataloader_num_workers=data.num_loading_workers,
             dataloader_drop_last=True,
+            use_position_ids=isinstance(trainer.model_config, Qwen2Config),
         )
 
         return train_dataloader

@@ -48,7 +48,7 @@ def sanity_check_dataloader(
                 if isinstance(value, TensorPointer):
                     continue
 
-                if "mask" in key:
+                if "mask" in key or "position_ids" in key:
                     # It's fine if mask is the same across DP
                     continue
 
@@ -257,7 +257,7 @@ def get_train_dataloader(
     dataloader_drop_last: bool = True,
     dataloader_pin_memory: bool = True,
     use_loop_to_round_batch_size: bool = False,
-    use_position_ids: bool = False,
+    use_position_ids: bool = True,
 ) -> DataLoader:
     """
     Get a PyTorch DataLoader for training.
