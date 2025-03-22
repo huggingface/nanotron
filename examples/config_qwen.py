@@ -69,11 +69,9 @@ def get_args():
 
     # tokens
     tokens_group = parser.add_argument_group("tokens")
-    tokens_group.add_argument("--sequence_length", type=int, default=256, help="Sequence length")
-    tokens_group.add_argument("--micro_batch_size", type=int, default=2, help="Micro batch size")
-    tokens_group.add_argument(
-        "--batch_accumulation_per_replica", type=int, default=1, help="Batch accumulation per replica"
-    )
+    tokens_group.add_argument("--seq", type=int, default=8192, help="Sequence length")
+    tokens_group.add_argument("--mbs", type=int, default=2, help="Micro batch size")
+    tokens_group.add_argument("--acc", type=int, default=1, help="Batch accumulation per replica")
 
     args = parser.parse_args()
     return args
@@ -162,10 +160,10 @@ def create_config(model_config: Qwen2Config, args: argparse.Namespace) -> Config
         recompute_layer=False,
     )
     tokens = TokensArgs(
-        sequence_length=args.sequence_length,
+        sequence_length=args.seq,
         train_steps=args.train_steps,
-        micro_batch_size=args.micro_batch_size,
-        batch_accumulation_per_replica=args.batch_accumulation_per_replica,
+        micro_batch_size=args.mbs,
+        batch_accumulation_per_replica=args.acc,
     )
     optimizer = OptimizerArgs(
         zero_stage=args.zero_stage,

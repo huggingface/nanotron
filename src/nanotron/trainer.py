@@ -256,12 +256,13 @@ class DistributedTrainer:
         self.current_dataloader: Optional[DataLoader] = None  # used for the current training stage
 
         log_libraries_versions(logger=logger)
+        log_rank("Config:", logger=logger, level=logging.INFO, rank=0, is_separator=True)
         log_rank(
             f"Parsing config: {os.path.abspath(config_or_config_file)}", logger=logger, level=logging.INFO, rank=0
-        )
-        log_rank("Config:\n" + pformat(self.config), logger=logger, level=logging.INFO, rank=0)
-        log_rank("Model Config:\n" + pformat(self.model_config), logger=logger, level=logging.INFO, rank=0)
-
+        )  # noqa
+        log_rank(pformat(self.config), logger=logger, level=logging.INFO, rank=0)
+        log_rank("Model Config:", logger=logger, level=logging.INFO, rank=0, is_separator=True)
+        log_rank(pformat(self.model_config), logger=logger, level=logging.INFO, rank=0)
         # Log benchmark info
         if os.environ.get("NANOTRON_BENCHMARK", "0") == "1":
             log_throughput(self.config, self.parallel_context)
@@ -288,7 +289,6 @@ class DistributedTrainer:
             self.s3_mover = None
 
     def pre_training(self, *args, **kwargs):
-        self._print_training_plan()
         if not self.config.general.ignore_sanity_checks:
             log_rank(
                 "Sanity checks are enabled, this will slow down the training. To disable them, set `config.general.ignore_sanity_checks` to `True`",
@@ -299,8 +299,9 @@ class DistributedTrainer:
 
         metadata: TrainingMetadata = self.metadata
 
+        log_rank("Start training", logger=logger, level=logging.INFO, rank=0, is_separator=True)
         log_rank(
-            f"[Start training] mbs: {self.micro_batch_size} | grad_accum: {self.n_micro_batches_per_batch} | sequence_length: {self.sequence_length} | global_batch_size: {self.global_batch_size} | train_steps: {self.config.tokens.train_steps} | start_iteration_step: {metadata.last_train_step} | consumed_train_samples: {metadata.consumed_train_samples}",  # noqa
+            f"mbs: {self.micro_batch_size} | grad_accum: {self.n_micro_batches_per_batch} | sequence_length: {self.sequence_length} | global_batch_size: {self.global_batch_size} | train_steps: {self.config.tokens.train_steps} | start_iteration_step: {metadata.last_train_step} | consumed_train_samples: {metadata.consumed_train_samples}",  # noqa
             logger=logger,
             level=logging.INFO,
             rank=0,
@@ -323,17 +324,6 @@ class DistributedTrainer:
     def post_training(self):
         if self.s3_mover is not None:
             self.s3_mover.distributed_wait_for_completion(group=self.parallel_context.world_pg)
-
-    def _print_training_plan(self):
-        if hasattr(self.config, "data_stages") and self.config.data_stages is not None:
-            stages_info = "".join(
-                f"[Stage {stage.name}] start from step {stage.start_training_step} \n"
-                for stage in self.config.data_stages
-            )
-            full_log_message = (
-                f"[Training Plan] There are {len(self.config.data_stages)} training stages \n{stages_info}"
-            )
-            log_rank(full_log_message, logger=logger, level=logging.INFO, rank=0)
 
     def _update_dataloader_based_on_training_stages(self, dataloaders: Union[List[DataLoader], DataLoader]):
         from collections.abc import Generator

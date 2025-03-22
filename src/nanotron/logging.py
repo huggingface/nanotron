@@ -227,6 +227,8 @@ def log_rank(
     level: int,
     group: Optional[dist.ProcessGroup] = None,
     rank: Optional[int] = None,
+    category: Optional[str] = None,
+    is_separator: bool = False,
     **kwargs,
 ):
     """Log only if the current process is the rank specified."""
@@ -234,31 +236,23 @@ def log_rank(
     if group is None:
         group = torch_dist.distributed_c10d._get_default_group()
 
-    # rank is None means everyone logs
-    if rank is None or dist.get_rank(group) == rank:
-        logger.log(level, msg, **kwargs)
-
-
-def log_with_category(
-    msg: str,
-    logger: Logger,
-    level: int,
-    category: str,
-    group: Optional[dist.ProcessGroup] = None,
-    rank: Optional[int] = None,
-    **kwargs,
-):
-    """Log with a category, only if the current process is the rank specified."""
-    # Use default group is group is not provided
-    if group is None:
-        group = torch_dist.distributed_c10d._get_default_group()
-
-    # rank is None means everyone logs
-    if rank is None or dist.get_rank(group) == rank:
-        # Add category to the extra kwargs
+    # Add category to the extra kwargs
+    if category is not None:
         kwargs["extra"] = kwargs.get("extra", {})
         kwargs["extra"]["category"] = category
+
+    # Add separator to the extra kwargs
+    if is_separator:
+        kwargs["extra"] = kwargs.get("extra", {})
+        kwargs["extra"]["separator"] = True
+
+    # rank is None means everyone logs
+    if rank is None or dist.get_rank(group) == rank:
+        if is_separator:
+            logger.log(level, "=" * 50, **kwargs)
         logger.log(level, msg, **kwargs)
+        if is_separator:
+            logger.log(level, "=" * 50, **kwargs)
 
 
 @lru_cache(maxsize=None)
@@ -348,36 +342,41 @@ def set_logger_verbosity_format(logging_level: str, parallel_context: ParallelCo
     # Use a custom formatter class that handles missing fields
     class SafeFormatter(Formatter):
         def format(self, record):
-            # Ensure 'category' exists in the record
+            # Ensure required attributes exist before formatting
             if not hasattr(record, "category"):
                 record.category = ""
             elif record.category and not record.category.startswith("|"):
                 record.category = f"|{record.category}"
 
+            # Store original message for restoration later
+            original_msg = record.msg
+
+            # Apply styling based on record properties
+            is_separator = getattr(record, "separator", False)
+            if is_separator:
+                record.msg = f"\033[1m{record.msg}\033[0m"  # Bold for separators
+
+            # Choose color prefix/suffix based on log level
             if record.levelno == logging.WARNING:
-                # Bold yellow for warnings: \033[1;33m
-                prefix = "\033[1;33m"
-                suffix = "\033[0m"
+                prefix = "\033[1;33m"  # Bold yellow for warnings
             elif record.levelno >= logging.ERROR:
-                # Bold red for errors and critical: \033[1;31m
-                prefix = "\033[1;31m"
-                suffix = "\033[0m"
+                prefix = "\033[1;31m"  # Bold red for errors and critical
             else:
-                # Dim and italic for other levels
-                prefix = "\033[2;3m"
-                suffix = "\033[0m"
+                prefix = "\033[2;3m"  # Dim and italic for other levels
+            suffix = "\033[0m"
 
             # Save the original format
             original_fmt = self._style._fmt
 
-            # Apply appropriate color to the prefix part
+            # Use a more consistent format with prefix/suffix applied only to the metadata portion
             self._style._fmt = f"{prefix}%(asctime)s [%(levelname)s%(category)s{ranks_display}]{suffix}: %(message)s"
 
             # Format the record
             result = super().format(record)
 
-            # Restore the original format
+            # Restore the original values
             self._style._fmt = original_fmt
+            record.msg = original_msg
 
             return result
 
@@ -418,13 +417,12 @@ def log_libraries_versions(logger: logging.Logger):
 
     import nanotron
 
-    log_rank("\nLibraries versions:", logger=logger, level=logging.INFO, rank=0)
+    log_rank("Libraries versions:", logger=logger, level=logging.INFO, rank=0, is_separator=True)
     log_rank(f"nanotron version: {nanotron.__version__}", logger=logger, level=logging.INFO, rank=0)
     log_rank(f"torch version: {torch.__version__}", logger=logger, level=logging.INFO, rank=0)
     log_rank(f"transformers version: {transformers.__version__}", logger=logger, level=logging.INFO, rank=0)
     log_rank(f"datasets version: {datasets.__version__}", logger=logger, level=logging.INFO, rank=0)
     log_rank(f"flash-attn version: {flash_attn.__version__}", logger=logger, level=logging.INFO, rank=0)
-    log_rank("\n", logger=logger, level=logging.INFO, rank=0)
 
 
 _configure_library_root_logger()

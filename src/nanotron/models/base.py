@@ -196,7 +196,9 @@ def build_model(
 ) -> NanotronModel:
     """Build the model and set the pp ranks for each pipeline block."""
     # TODO: classes dont take same args
-    log_rank("Building model..", logger=logger, level=logging.INFO, rank=0, group=parallel_context.world_pg)
+    log_rank(
+        "Building model", logger=logger, level=logging.INFO, rank=0, group=parallel_context.world_pg, is_separator=True
+    )
     model: NanotronModel = model_builder()
 
     # If no target pp ranks are specified, we assume that we want to use all pp ranks

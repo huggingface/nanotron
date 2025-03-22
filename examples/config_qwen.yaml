@@ -23,7 +23,7 @@ general:
   consumed_train_samples: null
   ignore_sanity_checks: false
   project: debug
-  run: qwen_20250322_083124_15232886
+  run: qwen_20250322_083446_15232886
   seed: 42
   step: null
 lighteval: null
@@ -104,6 +104,6 @@ tokens:
   limit_test_batches: 0
   limit_val_batches: 0
   micro_batch_size: 2
-  sequence_length: 256
+  sequence_length: 8192
   train_steps: 15
   val_check_interval: -1
