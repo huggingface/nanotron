@@ -13,11 +13,13 @@ from nanotron.config import (
     LoggingArgs,
     LRSchedulerArgs,
     ModelArgs,
+    NanosetDatasetsArgs,  # noqa
     OptimizerArgs,
     ParallelismArgs,
+    PretrainDatasetsArgs,  # noqa
     Qwen2Config,
     RandomInit,
-    SFTDatasetsArgs,
+    SFTDatasetsArgs,  # noqa
     TokenizerArgs,
     TokensArgs,
 )
@@ -38,6 +40,42 @@ MODEL_SIZES: Dict[str, Tuple[int, int, int, int, int]] = {
     "70b": (80, 8192, 64, 8, 28672),  # ~70B params (MQA)
     "custom": (12, 192, 4, 4, 768),
 }
+
+
+def get_args():
+    parser = argparse.ArgumentParser(description="Generate Qwen model configuration YAML file")
+    parser.add_argument(
+        "--model",
+        choices=MODEL_SIZES.keys(),
+        default="custom",
+        help="Model size to generate config for (e.g., 7b, 13b)",
+    )
+    parser.add_argument(
+        "--output_dir", type=str, default=os.path.dirname(__file__), help="Output directory for the config file"
+    )
+    parser.add_argument("--run_name", type=str, default="qwen_%date_%jobid", help="Run name for the config file")
+    parser.add_argument("--train_steps", type=int, default=15, help="Number of training steps")
+    parser.add_argument("--ignore_sanity_checks", action="store_true", help="Ignore sanity checks")
+
+    # parallelism group
+    parallel_group = parser.add_argument_group("parallelism")
+    parallel_group.add_argument("--dp", type=int, default=2, help="Data parallel size")
+    parallel_group.add_argument("--tp", type=int, default=1, help="Tensor parallel size")
+    parallel_group.add_argument("--pp", type=int, default=1, help="Pipeline parallel size")
+    parallel_group.add_argument("--cp", type=int, default=1, help="Context parallel size")
+    parallel_group.add_argument("--ep", type=int, default=1, help="Expert parallel size")
+    parallel_group.add_argument("--zero_stage", type=int, default=0, help="Zero stage", choices=[0, 1])
+
+    # tokens
+    tokens_group = parser.add_argument_group("tokens")
+    tokens_group.add_argument("--sequence_length", type=int, default=8192, help="Sequence length")
+    tokens_group.add_argument("--micro_batch_size", type=int, default=2, help="Micro batch size")
+    tokens_group.add_argument(
+        "--batch_accumulation_per_replica", type=int, default=1, help="Batch accumulation per replica"
+    )
+
+    args = parser.parse_args()
+    return args
 
 
 def get_model_config(model_size: str) -> Qwen2Config:
@@ -81,69 +119,73 @@ def calculate_parameters(model_config: Qwen2Config) -> str:
 
 seed = 42
 
-learning_rate = LRSchedulerArgs(
-    learning_rate=3e-4, lr_warmup_steps=2, lr_warmup_style="linear", lr_decay_style="cosine", min_decay_lr=1e-5
-)
-
-optimizer = OptimizerArgs(
-    zero_stage=0,
-    weight_decay=0.01,
-    clip_grad=1.0,
-    accumulate_grad_in_fp32=True,
-    learning_rate_scheduler=learning_rate,
-    optimizer_factory=AdamWOptimizerArgs(
-        adam_eps=1e-08,
-        adam_beta1=0.9,
-        adam_beta2=0.95,
-        torch_adam_is_fused=True,
-    ),
-)
-
-parallelism = ParallelismArgs(
-    dp=2,
-    pp=1,
-    tp=1,
-    context_parallel_size=1,
-    expert_parallel_size=1,
-    pp_engine="1f1b",
-    tp_mode="REDUCE_SCATTER",
-    tp_linear_async_communication=True,
-    moe_layer_recompute=True,  # Add recompute option for MoE layers
-)
-
-tokens = TokensArgs(sequence_length=256, train_steps=15, micro_batch_size=2, batch_accumulation_per_replica=1)
-
 data_stages = [
     DatasetStageArgs(
         name="Stable Training Stage",
         start_training_step=1,
         data=DataArgs(
             # For pretraining:
-            # dataset=PretrainDatasetsArgs(
-            #     hf_dataset_or_datasets="trl-lib/tldr",
-            #     text_column_name="text",
+            dataset=PretrainDatasetsArgs(
+                hf_dataset_or_datasets="trl-lib/tldr",
+                text_column_name="text",
+            ),
+            # dataset=NanosetDatasetsArgs(
+            #     dataset_folder="/fsx/loubna/tokenized_for_exps/mcf-dataset",  # 1.4T tokens
             # ),
             # For SFT (uncomment to use):
-            dataset=SFTDatasetsArgs(
-                hf_dataset_or_datasets="trl-lib/tldr",
-                hf_dataset_splits="train",
-                debug_max_samples=1000,
-            ),
+            # dataset=SFTDatasetsArgs(
+            #     hf_dataset_or_datasets="trl-lib/tldr",
+            #     hf_dataset_splits="train",
+            #     debug_max_samples=1000,
+            # ),
             seed=seed,
         ),
     ),
 ]
 
-checkpoints_path = "./checkpoints"
-os.makedirs(checkpoints_path, exist_ok=True)
 
+def create_config(model_config: Qwen2Config, args: argparse.Namespace) -> Config:
+    learning_rate = LRSchedulerArgs(
+        learning_rate=3e-4, lr_warmup_steps=2, lr_warmup_style="linear", lr_decay_style="cosine", min_decay_lr=1e-5
+    )
+    parallelism = ParallelismArgs(
+        dp=args.dp,
+        pp=args.pp,
+        tp=args.tp,
+        context_parallel_size=args.cp,
+        expert_parallel_size=args.ep,
+        pp_engine="1f1b",
+        tp_mode="REDUCE_SCATTER",
+        tp_linear_async_communication=True,
+        recompute_layer=True,
+    )
+    tokens = TokensArgs(
+        sequence_length=args.sequence_length,
+        train_steps=args.train_steps,
+        micro_batch_size=args.micro_batch_size,
+        batch_accumulation_per_replica=args.batch_accumulation_per_replica,
+    )
+    optimizer = OptimizerArgs(
+        zero_stage=args.zero_stage,
+        weight_decay=0.01,
+        clip_grad=1.0,
+        accumulate_grad_in_fp32=True,
+        learning_rate_scheduler=learning_rate,
+        optimizer_factory=AdamWOptimizerArgs(
+            adam_eps=1e-08,
+            adam_beta1=0.9,
+            adam_beta2=0.95,
+            torch_adam_is_fused=True,
+        ),
+    )
 
-def create_config(model_config: Qwen2Config, output_dir: str) -> Config:
-    # Determine run name based on whether MoE is enabled
-    run_name = "tiny_qwen_moe_%date_%jobid" if model_config.is_moe_model else "tiny_qwen_%date_%jobid"
+    checkpoints_path = "./checkpoints"
+    os.makedirs(checkpoints_path, exist_ok=True)
 
     return Config(
-        general=GeneralArgs(project="debug", run=run_name, seed=seed, ignore_sanity_checks=False),
+        general=GeneralArgs(
+            project="debug", run=args.run_name, seed=seed, ignore_sanity_checks=args.ignore_sanity_checks
+        ),
         checkpoints=CheckpointsArgs(checkpoints_path=checkpoints_path, checkpoint_interval=10),
         parallelism=parallelism,
         model=ModelArgs(init_method=RandomInit(std=0.025), model_config=model_config),
@@ -157,28 +199,11 @@ def create_config(model_config: Qwen2Config, output_dir: str) -> Config:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Generate Qwen model configuration YAML file")
-    parser.add_argument(
-        "--model_size",
-        choices=MODEL_SIZES.keys(),
-        default="custom",
-        help="Model size to generate config for (e.g., 7b, 13b)",
-    )
-    parser.add_argument(
-        "--output_dir", type=str, default=os.path.dirname(__file__), help="Output directory for the config file"
-    )
-    parser.add_argument("--run_name", type=str, default="qwen_%date_%jobid", help="Run name for the config file")
-    parser.add_argument("--dp", type=int, default=2, help="Data parallel size")
-    parser.add_argument("--tp", type=int, default=1, help="Tensor parallel size")
-    parser.add_argument("--pp", type=int, default=1, help="Pipeline parallel size")
-    parser.add_argument("--cp", type=int, default=1, help="Context parallel size")
-    parser.add_argument("--ep", type=int, default=1, help="Expert parallel size")
-    args = parser.parse_args()
-
-    model_config = get_model_config(args.model_size)
+    args = get_args()
+    model_config = get_model_config(args.model)
     num_params = calculate_parameters(model_config)
-    print(f"Model has {num_params} parameters using --model_size {args.model_size}")
-    config = create_config(model_config, args.output_dir)
+    print(f"Model has {num_params} parameters using --model {args.model}")
+    config = create_config(model_config, args)
 
     # Save config as YAML file - name depends on whether MoE is enabled
     config_path = f"{args.output_dir}/config_qwen.yaml"
