@@ -165,7 +165,7 @@ def lr_scheduler_builder(optimizer: Optimizer, lr_scheduler_args: LRSchedulerArg
     # NOTE: get learning rate scheduler for each param group
     lr_lambdas = []
     for param_group in optimizer.get_base_optimizer().param_groups:
-        lr_lambdas.append(get_lr_lambda_for_param_group(lr=param_group["lr"]))
+        lr_lambdas.append(get_lr_lambda_for_param_group(lr=lr_scheduler_args.learning_rate))
 
     assert len(lr_lambdas) == len(
         optimizer.get_base_optimizer().param_groups
