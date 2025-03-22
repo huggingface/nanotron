@@ -100,21 +100,40 @@ class Muon(torch.optim.Optimizer):
         # what we want here:
         # - muon_params should be everything except 1D parameters (layer norms) and 2D parameters like embeddings and lm_heads
         # - we can handle a more precise granuarility after but i think we don't have the .name of the param groups here (that should be added, for now just have something hardcoded will do the job)
-        params = list(params)
-
+        id_to_name = params["id_to_name"]
+        params = params["params"]
         muon_params = []
         adamw_params = []
+        for param_group in params:
+            muon_param_group = {
+                **{k: v for k, v in param_group.items() if k != "params"},
+                "params": [],
+            }
+            adamw_param_group = {
+                **{k: v for k, v in param_group.items() if k != "params"},
+                "params": [],
+            }
+            for param in param_group["params"]:
+                if any(keyword in id_to_name[id(param)] for keyword in ["embed", "lm_head", "norm"]):
+                    adamw_param_group["params"].append(param)
+                else:
+                    muon_param_group["params"].append(param)
+            if len(muon_param_group["params"]) > 0:
+                muon_params.append(muon_param_group)
+            if len(adamw_param_group["params"]) > 0:
+                adamw_params.append(adamw_param_group)
 
-        params.extend(adamw_params)
         super().__init__(params, defaults)
         # Sort parameters into those for which we will use Muon, and those for which we will not
-        for p in muon_params:
-            # Use Muon for every parameter in muon_params which is >= 2D and doesn't look like an embedding or head layer
-            assert p.ndim == 2, p.ndim
-            self.state[p]["use_muon"] = True
-        for p in adamw_params:
-            # Do not use Muon for parameters in adamw_params
-            self.state[p]["use_muon"] = False
+        for p_group in muon_params:
+            for p in p_group["params"]:
+                # Use Muon for every parameter in muon_params which is >= 2D and doesn't look like an embedding or head layer
+                assert p.ndim == 2, p.ndim
+                self.state[p]["use_muon"] = True
+        for p_group in adamw_params:
+            for p in p_group["params"]:
+                # Do not use Muon for parameters in adamw_params
+                self.state[p]["use_muon"] = False
 
     def adjust_lr_for_muon(self, lr, param_shape):
         A, B = param_shape[:2]

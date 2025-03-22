@@ -346,9 +346,16 @@ def init_optimizer_and_grad_accumulator(
                 return Muon(
                     param_groups,
                     lr=optimizer_args.learning_rate_scheduler.learning_rate,
+                    wd=optimizer_args.weight_decay,
                     momentum=optimizer_args.optimizer_factory.momentum,
                     nesterov=optimizer_args.optimizer_factory.nesterov,
                     ns_steps=optimizer_args.optimizer_factory.ns_steps,
+                    adamw_betas=(
+                        optimizer_args.optimizer_factory.adamw_beta1,
+                        optimizer_args.optimizer_factory.adamw_beta2,
+                    ),
+                    adamw_eps=optimizer_args.optimizer_factory.adamw_eps,
+                    rms_update_normalization=optimizer_args.optimizer_factory.rms_update_normalization,
                 )
 
         elif optimizer_args.optimizer_factory.name == "sgd":
@@ -363,10 +370,17 @@ def init_optimizer_and_grad_accumulator(
         else:
             raise ValueError(f"Optimizer {optimizer_args.optimizer_factory.name} is not supported")
 
-        return NamedOptimizer(
-            named_params_or_groups=named_param_groups,
-            optimizer_builder=optimizer,
-        )
+        if optimizer_args.optimizer_factory.name == "muon":
+            return NamedOptimizer(
+                named_params_or_groups=named_param_groups,
+                optimizer_builder=optimizer,
+                muon=True,
+            )
+        else:
+            return NamedOptimizer(
+                named_params_or_groups=named_param_groups,
+                optimizer_builder=optimizer,
+            )
 
     optimizer_builder = basic_optimizer_builder
 

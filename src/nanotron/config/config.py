@@ -312,6 +312,10 @@ class MuonOptimizerArgs:
     momentum: float
     nesterov: bool
     ns_steps: int
+    adamw_beta1: float
+    adamw_beta2: float
+    adamw_eps: float
+    rms_update_normalization: bool
     name: str = "muon"
 
 
