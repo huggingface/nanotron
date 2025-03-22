@@ -235,7 +235,8 @@ def build_model(
         model.input_pp_rank = target_pp_ranks[0]
         model.output_pp_rank = target_pp_ranks[target_pp_rank_idx]
 
-    model.log_modules(level=logging.INFO, group=parallel_context.world_pg, rank=0)
+    if pp_size > 1:
+        model.log_modules(level=logging.INFO, group=parallel_context.world_pg, rank=0)
     return model
 
 
