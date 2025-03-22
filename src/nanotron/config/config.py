@@ -218,8 +218,8 @@ class GeneralArgs:
 
         if self.run is None:
             self.run = "%date_%jobid"
-        self.run.replace("%date", datetime.datetime.now().strftime("%Y%m%d_%H%M%S"))
-        self.run.replace("%jobid", os.environ.get("SLURM_JOB_ID", "local"))
+        self.run = self.run.replace("%date", datetime.datetime.now().strftime("%Y%m%d_%H%M%S"))
+        self.run = self.run.replace("%jobid", os.environ.get("SLURM_JOB_ID", "local"))
 
 
 @dataclass
