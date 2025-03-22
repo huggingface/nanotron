@@ -298,6 +298,13 @@ def init_optimizer_and_grad_accumulator(
     optimizer_args: OptimizerArgs,
     parallel_context: ParallelContext,
 ) -> Tuple[BaseOptimizer, GradientAccumulator]:
+    log_rank(
+        "Building Optimizer and Gradient Accumulator and Learning Rate Scheduler",
+        logger=logger,
+        level=logging.INFO,
+        rank=0,
+        is_separator=True,
+    )  # noqa
     # Unwrap DDP
     unwrapped_model: NanotronModel = model.module if isinstance(model, DistributedDataParallel) else model
 
