@@ -38,6 +38,7 @@ MODEL_SIZES: Dict[str, Tuple[int, int, int, int, int]] = {
     # Large models
     "30b": (60, 6656, 52, 52, 17920),  # ~30B params
     "70b": (80, 8192, 64, 8, 28672),  # ~70B params (MQA)
+    # Custom model
     "custom": (12, 192, 4, 4, 768),
 }
 
@@ -68,7 +69,7 @@ def get_args():
 
     # tokens
     tokens_group = parser.add_argument_group("tokens")
-    tokens_group.add_argument("--sequence_length", type=int, default=8192, help="Sequence length")
+    tokens_group.add_argument("--sequence_length", type=int, default=256, help="Sequence length")
     tokens_group.add_argument("--micro_batch_size", type=int, default=2, help="Micro batch size")
     tokens_group.add_argument(
         "--batch_accumulation_per_replica", type=int, default=1, help="Batch accumulation per replica"
@@ -102,7 +103,7 @@ def get_model_config(model_size: str) -> Qwen2Config:
         rope_scaling=None,
         tie_word_embeddings=True,
         use_cache=True,
-        vocab_size=32000,  # Standard Llama tokenizer vocab size
+        vocab_size=65536,  # Standard Llama tokenizer vocab size
         is_qwen2_config=True,
         pad_token_id=None,
     )
@@ -125,13 +126,14 @@ data_stages = [
         start_training_step=1,
         data=DataArgs(
             # For pretraining:
-            dataset=PretrainDatasetsArgs(
-                hf_dataset_or_datasets="trl-lib/tldr",
-                text_column_name="text",
-            ),
-            # dataset=NanosetDatasetsArgs(
-            #     dataset_folder="/fsx/loubna/tokenized_for_exps/mcf-dataset",  # 1.4T tokens
+            # dataset=PretrainDatasetsArgs(
+            #     hf_dataset_or_datasets="trl-lib/tldr",
+            #     text_column_name="text",
             # ),
+            # When using a Nanoset, we need to specify the vocab size of the tokenizer used to tokenize the dataset or larger
+            dataset=NanosetDatasetsArgs(
+                dataset_folder="/fsx/loubna/tokenized_for_exps/mcf-dataset",  # 1.4T tokens
+            ),
             # For SFT (uncomment to use):
             # dataset=SFTDatasetsArgs(
             #     hf_dataset_or_datasets="trl-lib/tldr",
@@ -157,7 +159,7 @@ def create_config(model_config: Qwen2Config, args: argparse.Namespace) -> Config
         pp_engine="1f1b",
         tp_mode="REDUCE_SCATTER",
         tp_linear_async_communication=True,
-        recompute_layer=True,
+        recompute_layer=False,
     )
     tokens = TokensArgs(
         sequence_length=args.sequence_length,
