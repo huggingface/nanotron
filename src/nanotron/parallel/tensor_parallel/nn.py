@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 from typing import Optional, Tuple
 
 import torch
@@ -19,6 +20,7 @@ from torch import nn
 
 from nanotron import distributed as dist
 from nanotron.distributed import get_global_rank
+from nanotron.logging import get_logger
 from nanotron.parallel.parameters import NanotronParameter
 from nanotron.parallel.sharded_parameters import (
     SplitConfig,
@@ -37,6 +39,8 @@ from nanotron.parallel.tensor_parallel.functional import (
     row_linear,
 )
 from nanotron.parallel.tied_parameters import create_tied_parameter
+
+logger = get_logger(__name__)
 
 
 class TensorParallelColumnLinear(nn.Linear):
@@ -72,6 +76,11 @@ class TensorParallelColumnLinear(nn.Linear):
 
         self.mode = mode
         self.async_communication = async_communication
+
+        if self.world_size > 1:
+            assert (
+                os.environ.get("CUDA_DEVICE_MAX_CONNECTIONS", None) == "1"
+            ), "Env variable CUDA_DEVICE_MAX_CONNECTIONS should be set to 1 when using TP>1"
 
         if contiguous_chunks is not None:
             assert (

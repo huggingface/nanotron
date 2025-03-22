@@ -64,6 +64,19 @@ class NewLineStreamHandler(logging.StreamHandler):
             super().emit(record)
 
 
+class CategoryFilter(logging.Filter):
+    """Filter to add category field to log records."""
+
+    def filter(self, record):
+        # Add category attribute if not present
+        if not hasattr(record, "category"):
+            record.category = ""
+        elif record.category:
+            # Format the category if it exists
+            record.category = f"|{record.category}"
+        return True
+
+
 DEFAULT_HANDLER = NewLineStreamHandler()
 DEFAULT_LOG_LEVEL = logging.WARNING
 LIBRARY_NAME = __name__.split(".")[0]
@@ -226,6 +239,28 @@ def log_rank(
         logger.log(level, msg, **kwargs)
 
 
+def log_with_category(
+    msg: str,
+    logger: Logger,
+    level: int,
+    category: str,
+    group: Optional[dist.ProcessGroup] = None,
+    rank: Optional[int] = None,
+    **kwargs,
+):
+    """Log with a category, only if the current process is the rank specified."""
+    # Use default group is group is not provided
+    if group is None:
+        group = torch_dist.distributed_c10d._get_default_group()
+
+    # rank is None means everyone logs
+    if rank is None or dist.get_rank(group) == rank:
+        # Add category to the extra kwargs
+        kwargs["extra"] = kwargs.get("extra", {})
+        kwargs["extra"]["category"] = category
+        logger.log(level, msg, **kwargs)
+
+
 @lru_cache(maxsize=None)
 def warn_once(
     msg: str, logger: Logger, group: Optional[dist.ProcessGroup] = None, rank: Optional[int] = None, **kwargs
@@ -288,15 +323,68 @@ class LoggerWriter:
 
 
 def set_logger_verbosity_format(logging_level: str, parallel_context: ParallelContext):
+    # 1. Conditional rank display - only show ranks if their size is > 1
     node_name = os.environ.get("SLURMD_NODENAME")
-    ep_log = f"|EP={dist.get_rank(parallel_context.ep_pg)}" if parallel_context.expert_parallel_size > 1 else ""
-    cp_log = f"|CP={dist.get_rank(parallel_context.cp_pg)}" if parallel_context.context_parallel_size > 1 else ""
-    dp_log = f"|DP={dist.get_rank(parallel_context.dp_pg)}" if parallel_context.dp_pg.size() > 1 else ""
-    pp_log = f"|PP={dist.get_rank(parallel_context.pp_pg)}" if parallel_context.pp_pg.size() > 1 else ""
-    tp_log = f"|TP={dist.get_rank(parallel_context.tp_pg)}" if parallel_context.tp_pg.size() > 1 else ""
-    formatter = Formatter(
-        fmt=f"%(asctime)s [%(levelname)s|{dp_log}{pp_log}{tp_log}{cp_log}{ep_log}{'|' + node_name if node_name else ''}]: %(message)s",
-        datefmt="%m/%d/%Y %H:%M:%S",
+    ranks = []
+
+    if parallel_context.expert_parallel_size > 1:
+        ranks.append(f"EP={dist.get_rank(parallel_context.ep_pg)}")
+    if parallel_context.context_parallel_size > 1:
+        ranks.append(f"CP={dist.get_rank(parallel_context.cp_pg)}")
+    if parallel_context.data_parallel_size > 1:
+        ranks.append(f"DP={dist.get_rank(parallel_context.dp_pg)}")
+    if parallel_context.pipeline_parallel_size > 1:
+        ranks.append(f"PP={dist.get_rank(parallel_context.pp_pg)}")
+    if parallel_context.tensor_parallel_size > 1:
+        ranks.append(f"TP={dist.get_rank(parallel_context.tp_pg)}")
+
+    if node_name:
+        ranks.append(node_name)
+
+    # Join all ranks with separator
+    ranks_str = "|".join(ranks)
+    ranks_display = f"|{ranks_str}" if ranks_str else ""
+
+    # Use a custom formatter class that handles missing fields
+    class SafeFormatter(Formatter):
+        def format(self, record):
+            # Ensure 'category' exists in the record
+            if not hasattr(record, "category"):
+                record.category = ""
+            elif record.category and not record.category.startswith("|"):
+                record.category = f"|{record.category}"
+
+            if record.levelno == logging.WARNING:
+                # Bold yellow for warnings: \033[1;33m
+                prefix = "\033[1;33m"
+                suffix = "\033[0m"
+            elif record.levelno >= logging.ERROR:
+                # Bold red for errors and critical: \033[1;31m
+                prefix = "\033[1;31m"
+                suffix = "\033[0m"
+            else:
+                # Dim and italic for other levels
+                prefix = "\033[2;3m"
+                suffix = "\033[0m"
+
+            # Save the original format
+            original_fmt = self._style._fmt
+
+            # Apply appropriate color to the prefix part
+            self._style._fmt = f"{prefix}%(asctime)s [%(levelname)s%(category)s{ranks_display}]{suffix}: %(message)s"
+
+            # Format the record
+            result = super().format(record)
+
+            # Restore the original format
+            self._style._fmt = original_fmt
+
+            return result
+
+    # Create formatter with the safe handling
+    formatter = SafeFormatter(
+        fmt=f"\033[2;3m%(asctime)s [%(levelname)s%(category)s{ranks_display}]\033[0m: %(message)s",
+        datefmt="%m/%d %H:%M:%S",
     )
     log_level = log_levels[logging_level]
 
@@ -320,6 +408,23 @@ def set_ranks_logging_level(parallel_context: ParallelContext, logging_config: "
     else:
         if logging_config.log_level_replica is not None:
             set_logger_verbosity_format(logging_config.log_level_replica, parallel_context=parallel_context)
+
+
+def log_libraries_versions(logger: logging.Logger):
+    import datasets
+    import flash_attn
+    import torch
+    import transformers
+
+    import nanotron
+
+    log_rank("\nLibraries versions:", logger=logger, level=logging.INFO, rank=0)
+    log_rank(f"nanotron version: {nanotron.__version__}", logger=logger, level=logging.INFO, rank=0)
+    log_rank(f"torch version: {torch.__version__}", logger=logger, level=logging.INFO, rank=0)
+    log_rank(f"transformers version: {transformers.__version__}", logger=logger, level=logging.INFO, rank=0)
+    log_rank(f"datasets version: {datasets.__version__}", logger=logger, level=logging.INFO, rank=0)
+    log_rank(f"flash-attn version: {flash_attn.__version__}", logger=logger, level=logging.INFO, rank=0)
+    log_rank("\n", logger=logger, level=logging.INFO, rank=0)
 
 
 _configure_library_root_logger()
