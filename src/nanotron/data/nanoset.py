@@ -5,10 +5,11 @@ from typing import Dict, List, Tuple, Union
 import numpy as np
 import torch
 from datatrove.utils.dataset import DatatroveFolderDataset
+from numba import jit
+
 from nanotron import logging
 from nanotron.data.utils import count_dataset_indexes, normalize
 from nanotron.logging import log_rank
-from numba import jit
 
 logger = logging.get_logger(__name__)
 
@@ -21,7 +22,7 @@ class Nanoset(torch.utils.data.Dataset):
         dataset_folders (List[str]): List of folders with tokenized datasets
         dataset_weights (Union[List[float], None]): List with the weights for weighted datasets. If None, consume all samples from all datasets without weighting. Weights are normalized in __init__
         sequence_length (int): Sequence length of the built samples
-        token_size (int): Number of bytes for the tokens stored in the processed dataset files. 2 for vocab sizes < 65535, 4 otherwise
+        vocab_size (int): Vocab size of the tokenizer used to tokenize the dataset
         train_split_num_samples (int): Number of samples the dataset needs. It's the training steps * global batch size
     """
 
@@ -29,7 +30,7 @@ class Nanoset(torch.utils.data.Dataset):
         self,
         dataset_folders: List[str],
         sequence_length: int,
-        token_size: int,
+        vocab_size: int,
         train_split_num_samples: int,
         dataset_weights: Union[List[float], None] = None,
         random_seed: int = 1234,
@@ -43,7 +44,8 @@ class Nanoset(torch.utils.data.Dataset):
         # Init
         self.dataset_folders = dataset_folders
         self.sequence_length = sequence_length
-        self.token_size = token_size
+        # Number of bytes for the tokens stored in the processed dataset files. 2 for vocab sizes < 65535, 4 otherwise
+        self.token_size = 4 if vocab_size > np.iinfo(np.uint16).max + 1 else 2
         self.train_split_num_samples = train_split_num_samples
         self.random_seed = random_seed
         self.datatrove_datasets = []
@@ -54,7 +56,7 @@ class Nanoset(torch.utils.data.Dataset):
                     filename_pattern=os.path.join(dataset_folder, "*.ds"),
                     seq_len=sequence_length,
                     recursive=False,
-                    token_size=token_size,
+                    token_size=self.token_size,
                     shuffle=True,
                 )
             )

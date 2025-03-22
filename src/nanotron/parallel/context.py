@@ -21,6 +21,8 @@ class ParallelContext:
     ):
         """Initialize parallel context."""
         world_size = int(os.environ["WORLD_SIZE"])
+        local_world_size = int(os.environ.get("LOCAL_WORLD_SIZE", "8")) if world_size > 8 else world_size
+
         assert (
             tensor_parallel_size * pipeline_parallel_size * context_parallel_size * data_parallel_size
         ) == world_size, f"TP*CP*DP*PP={tensor_parallel_size}*{pipeline_parallel_size}*{context_parallel_size}*{data_parallel_size}={tensor_parallel_size * pipeline_parallel_size * context_parallel_size * data_parallel_size} != WORLD_SIZE={world_size}"
@@ -33,6 +35,8 @@ class ParallelContext:
         self.data_parallel_size = data_parallel_size
         self.context_parallel_size = context_parallel_size
         self.expert_parallel_size = expert_parallel_size
+        self.world_size = world_size
+        self.local_world_size = local_world_size
 
         self._groups = {}
 
@@ -43,8 +47,7 @@ class ParallelContext:
         if not dist.is_initialized():
             dist.initialize_torch_distributed()
 
-        world_size = int(os.getenv("WORLD_SIZE", "1"))
-        ranks = list(range(world_size))
+        ranks = list(range(self.world_size))
         process_group = dist.new_group(
             ranks=ranks,
             backend=dist.get_backend(),
@@ -56,8 +59,7 @@ class ParallelContext:
     def _init_parallel_groups(self):
         """Initialize 3D parallelism's all process groups."""
         dist.barrier()
-        world_size = int(os.environ["WORLD_SIZE"])
-        ranks = np.arange(0, world_size).reshape(
+        ranks = np.arange(0, self.world_size).reshape(
             (
                 self.expert_parallel_size,
                 self.pipeline_parallel_size,
@@ -67,6 +69,8 @@ class ParallelContext:
             )
         )
         self.world_ranks_to_pg = {}
+        self.local_pg = self.create_new_group(ranks.reshape((-1, self.local_world_size)))
+        assert int(os.environ.get("LOCAL_RANK")) == dist.get_rank(self.local_pg), "Local rank mismatch"
 
         # Relevant process groups containing the current rank
         self.tp_pg = self.create_new_group(ranks.transpose((0, 1, 2, 3, 4)).reshape((-1, self.tensor_parallel_size)))
