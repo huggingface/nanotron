@@ -361,8 +361,11 @@ def set_logger_verbosity_format(logging_level: str, parallel_context: ParallelCo
                 prefix = "\033[1;33m"  # Bold yellow for warnings
             elif record.levelno >= logging.ERROR:
                 prefix = "\033[1;31m"  # Bold red for errors and critical
+            elif record.levelno == logging.DEBUG:
+                prefix = "\033[2;3;32m"  # Dim and italic green for debug
             else:
                 prefix = "\033[2;3m"  # Dim and italic for other levels
+
             suffix = "\033[0m"
 
             # Save the original format
