@@ -52,11 +52,14 @@ def get_args():
         help="Model size to generate config for (e.g., 7b, 13b)",
     )
     parser.add_argument(
-        "--output_dir", type=str, default=os.path.dirname(__file__), help="Output directory for the config file"
+        "--out",
+        type=str,
+        default=__file__.replace(".py", ".yaml"),
+        help="Output file for the config file. e.g. configs/config_qwen.yaml",
     )
-    parser.add_argument("--run_name", type=str, default="qwen_%date_%jobid", help="Run name for the config file")
-    parser.add_argument("--train_steps", type=int, default=15, help="Number of training steps")
-    parser.add_argument("--ignore_sanity_checks", action="store_true", help="Ignore sanity checks")
+    parser.add_argument("--run", type=str, default="qwen_%date_%jobid", help="Run name for the config file")
+    parser.add_argument("--steps", type=int, default=15, help="Number of training steps")
+    parser.add_argument("--no-sanity", action="store_true", help="Ignore sanity checks")
 
     # parallelism group
     parallel_group = parser.add_argument_group("parallelism")
@@ -65,7 +68,7 @@ def get_args():
     parallel_group.add_argument("--pp", type=int, default=1, help="Pipeline parallel size")
     parallel_group.add_argument("--cp", type=int, default=1, help="Context parallel size")
     parallel_group.add_argument("--ep", type=int, default=1, help="Expert parallel size")
-    parallel_group.add_argument("--zero_stage", type=int, default=0, help="Zero stage", choices=[0, 1])
+    parallel_group.add_argument("--zero", type=int, default=0, help="Zero stage", choices=[0, 1])
 
     # tokens
     tokens_group = parser.add_argument_group("tokens")
@@ -161,12 +164,12 @@ def create_config(model_config: Qwen2Config, args: argparse.Namespace) -> Config
     )
     tokens = TokensArgs(
         sequence_length=args.seq,
-        train_steps=args.train_steps,
+        train_steps=args.steps,
         micro_batch_size=args.mbs,
         batch_accumulation_per_replica=args.acc,
     )
     optimizer = OptimizerArgs(
-        zero_stage=args.zero_stage,
+        zero_stage=args.zero,
         weight_decay=0.01,
         clip_grad=1.0,
         accumulate_grad_in_fp32=True,
@@ -183,9 +186,7 @@ def create_config(model_config: Qwen2Config, args: argparse.Namespace) -> Config
     os.makedirs(checkpoints_path, exist_ok=True)
 
     return Config(
-        general=GeneralArgs(
-            project="debug", run=args.run_name, seed=seed, ignore_sanity_checks=args.ignore_sanity_checks
-        ),
+        general=GeneralArgs(project="debug", run=args.run, seed=seed, ignore_sanity_checks=args.no_sanity),
         checkpoints=CheckpointsArgs(checkpoints_path=checkpoints_path, checkpoint_interval=10),
         parallelism=parallelism,
         model=ModelArgs(init_method=RandomInit(std=0.025), model_config=model_config),
@@ -202,19 +203,18 @@ if __name__ == "__main__":
     args = get_args()
     model_config = get_model_config(args.model)
     num_params = calculate_parameters(model_config)
-    print(f"Model has {num_params} parameters using --model {args.model}")
+    print(f"Created config for model {args.model} with {num_params} parameters")
     config = create_config(model_config, args)
 
     # Save config as YAML file - name depends on whether MoE is enabled
-    config_path = f"{args.output_dir}/config_qwen.yaml"
-    config.save_as_yaml(config_path)
+    config.save_as_yaml(args.out)
 
     # You can now train a model with this config using
     print("You can now train a model with this config using:")
     world_size = args.dp * args.tp * args.pp * args.cp
     if world_size <= 8:
         print(
-            f"CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node={world_size} run_train.py --config-file {config_path}"
+            f"CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node={world_size} run_train.py --config-file {args.out}"
         )
     else:
         print("Checkout slurm_launcher.py to launch a multi-node job")
