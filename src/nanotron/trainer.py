@@ -296,6 +296,9 @@ class DistributedTrainer:
                 level=logging.WARNING,
                 rank=0,
             )
+            assert (
+                os.environ.get("NANOTRON_BENCHMARK", "0") != "1"
+            ), "Sanity checks are enabled while you're running a benchmark. Make sure to disable them by setting `config.general.ignore_sanity_checks` to `True`"
 
         metadata: TrainingMetadata = self.metadata
 
