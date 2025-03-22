@@ -60,6 +60,7 @@ def get_args():
     parser.add_argument("--run", type=str, default="qwen_%date_%jobid", help="Run name for the config file")
     parser.add_argument("--steps", type=int, default=15, help="Number of training steps")
     parser.add_argument("--no-sanity", action="store_true", help="Ignore sanity checks")
+    parser.add_argument("--log-lvl", type=str, default="info", help="Log level")
 
     # parallelism group
     parallel_group = parser.add_argument_group("parallelism")
@@ -192,7 +193,7 @@ def create_config(model_config: Qwen2Config, args: argparse.Namespace) -> Config
         model=ModelArgs(init_method=RandomInit(std=0.025), model_config=model_config),
         tokenizer=TokenizerArgs("robot-test/dummy-tokenizer-wordlevel"),
         optimizer=optimizer,
-        logging=LoggingArgs(),
+        logging=LoggingArgs(log_level=args.log_lvl, log_level_replica=args.log_lvl),
         tokens=tokens,
         data_stages=data_stages,
         # profiler=ProfilerArgs(profiler_export_path="./tb_logs"),

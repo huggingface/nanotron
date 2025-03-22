@@ -23,14 +23,14 @@ general:
   consumed_train_samples: null
   ignore_sanity_checks: true
   project: debug
-  run: qwen_20250322_085639_15449624
+  run: qwen_20250322_090617_15449624
   seed: 42
   step: null
 lighteval: null
 logging:
   iteration_step_info_interval: 1
-  log_level: info
-  log_level_replica: info
+  log_level: debug
+  log_level_replica: debug
 model:
   ddp_bucket_cap_mb: 25
   dtype: bfloat16
