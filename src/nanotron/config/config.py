@@ -315,7 +315,9 @@ class MuonOptimizerArgs:
     adamw_beta1: float
     adamw_beta2: float
     adamw_eps: float
-    rms_update_normalization: bool
+    sign_muon: bool
+    spectral_mup_scaling: bool
+    moonlight_scaling: bool
     name: str = "muon"
 
 

@@ -82,7 +82,9 @@ class Muon(torch.optim.Optimizer):
         ns_steps=5,
         adamw_betas=(0.9, 0.95),
         adamw_eps=1e-8,
-        rms_update_normalization=True,
+        spectral_mup_scaling=False,
+        moonlight_scaling=True,
+        sign_muon=False,
     ):
 
         defaults = {
@@ -94,7 +96,11 @@ class Muon(torch.optim.Optimizer):
             "adamw_betas": adamw_betas,
             "adamw_eps": adamw_eps,
         }
-        self.rms_update_normalization = rms_update_normalization
+        self.sign_muon = sign_muon
+        self.moonlight_scaling = moonlight_scaling
+        self.spectral_mup_scaling = spectral_mup_scaling
+
+        assert not (moonlight_scaling and spectral_mup_scaling), "Cannot have both moonlight and spectral mup scaling"
 
         ## custom nanotron logic
         # what we want here:
@@ -136,11 +142,18 @@ class Muon(torch.optim.Optimizer):
                 self.state[p]["use_muon"] = False
 
     def adjust_lr_for_muon(self, lr, param_shape):
-        A, B = param_shape[:2]
-        # We adjust the learning rate and weight decay based on the size of the parameter matrix
-        # as describted in the paper
-        adjusted_ratio = 0.2 * math.sqrt(max(A, B))
-        adjusted_lr = lr * adjusted_ratio
+        if self.moonlight_scaling:
+            A, B = param_shape[:2]
+            # We adjust the learning rate and weight decay based on the size of the parameter matrix
+            # as describted in the paper
+            adjusted_ratio = 0.2 * math.sqrt(max(A, B))
+            adjusted_lr = lr * adjusted_ratio
+        elif self.spectral_mup_scaling:
+            # Adjust learning rate based on fan-out/fan-in ratio
+            fan_out, fan_in = param_shape[:2]
+            adjusted_lr = lr * math.sqrt(max(1, fan_out / fan_in))
+        else:
+            adjusted_lr = lr
         return adjusted_lr
 
     def step(self, closure=None):
@@ -187,13 +200,12 @@ class Muon(torch.optim.Optimizer):
                     g = g.add(buf, alpha=momentum)
                 else:
                     g = buf
+                if self.sign_muon:
+                    g = torch.sign(g)
                 u = zeropower_via_newtonschulz5(g, steps=group["ns_steps"])
 
                 # scale update
-                if self.rms_update_normalization:
-                    adjusted_lr = self.adjust_lr_for_muon(lr, p.shape)
-                else:
-                    adjusted_lr = lr
+                adjusted_lr = self.adjust_lr_for_muon(lr, p.shape)
 
                 # apply weight decay
                 p.data.mul_(1 - lr * wd)

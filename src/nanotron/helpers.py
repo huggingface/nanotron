@@ -355,7 +355,9 @@ def init_optimizer_and_grad_accumulator(
                         optimizer_args.optimizer_factory.adamw_beta2,
                     ),
                     adamw_eps=optimizer_args.optimizer_factory.adamw_eps,
-                    rms_update_normalization=optimizer_args.optimizer_factory.rms_update_normalization,
+                    spectral_mup_scaling=optimizer_args.optimizer_factory.spectral_mup_scaling,
+                    moonlight_scaling=optimizer_args.optimizer_factory.moonlight_scaling,
+                    sign_muon=optimizer_args.optimizer_factory.sign_muon,
                 )
 
         elif optimizer_args.optimizer_factory.name == "sgd":
