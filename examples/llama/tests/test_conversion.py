@@ -34,7 +34,7 @@ from tests.helpers.utils import init_distributed
 set_random_seed(0)
 torch.backends.cudnn.deterministic = True
 
-BATCH_SIZE = 3
+BATCH_SIZE = 6
 SEQUENCE_LENGTH = 5
 ATOL = 0.03
 
