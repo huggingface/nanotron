@@ -219,9 +219,6 @@ def get_dataloader(trainer: DistributedTrainer) -> Dict[str, DataLoader]:
         # then we lazy initialize the dataloader for the other stages
         stage = cast(DatasetStageArgs, stage)
         consumed_train_samples = get_consumed_train_samples_of_a_data_stage_from_ckp(stage, trainer.metadata)
-        assert (
-            consumed_train_samples is not None
-        ), f"Cannot find consumed_train_samples for stage {stage.start_training_step} in the checkpoint"
 
         num_remaining_train_steps = compute_remain_train_steps_of_a_data_stage_from_ckp(
             stage, trainer.config, trainer.metadata
