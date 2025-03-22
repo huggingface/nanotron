@@ -289,11 +289,18 @@ class DistributedTrainer:
 
     def pre_training(self, *args, **kwargs):
         self._print_training_plan()
+        if not self.config.general.ignore_sanity_checks:
+            log_rank(
+                "Sanity checks are enabled, this will slow down the training. To disable them, set `config.general.ignore_sanity_checks` to `True`",
+                logger=logger,
+                level=logging.WARNING,
+                rank=0,
+            )
 
         metadata: TrainingMetadata = self.metadata
 
         log_rank(
-            f"[Start training] datetime: {datetime.datetime.now()} | mbs: {self.micro_batch_size} | grad_accum: {self.n_micro_batches_per_batch} | global_batch_size: {self.global_batch_size} | sequence_length: {self.sequence_length} | train_steps: {self.config.tokens.train_steps} | start_iteration_step: {metadata.last_train_step} | consumed_train_samples: {metadata.consumed_train_samples}",  # noqa
+            f"[Start training] mbs: {self.micro_batch_size} | grad_accum: {self.n_micro_batches_per_batch} | sequence_length: {self.sequence_length} | global_batch_size: {self.global_batch_size} | train_steps: {self.config.tokens.train_steps} | start_iteration_step: {metadata.last_train_step} | consumed_train_samples: {metadata.consumed_train_samples}",  # noqa
             logger=logger,
             level=logging.INFO,
             rank=0,
