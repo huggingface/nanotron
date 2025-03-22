@@ -249,22 +249,6 @@ def get_dataloader(trainer: DistributedTrainer) -> Dict[str, DataLoader]:
     return dataloaders
 
 
-def log_libraries_versions():
-    import datasets
-    import flash_attn
-    import nanotron
-    import torch
-    import transformers
-
-    log_rank("\nLibraries versions:", logger=logger, level=logging.INFO, rank=0)
-    log_rank(f"nanotron version: {nanotron.__version__}", logger=logger, level=logging.INFO, rank=0)
-    log_rank(f"torch version: {torch.__version__}", logger=logger, level=logging.INFO, rank=0)
-    log_rank(f"transformers version: {transformers.__version__}", logger=logger, level=logging.INFO, rank=0)
-    log_rank(f"datasets version: {datasets.__version__}", logger=logger, level=logging.INFO, rank=0)
-    log_rank(f"flash-attn version: {flash_attn.__version__}", logger=logger, level=logging.INFO, rank=0)
-    log_rank("\n", logger=logger, level=logging.INFO, rank=0)
-
-
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config-file", type=str, required=True, help="Path to the YAML or python config file")
@@ -278,9 +262,6 @@ if __name__ == "__main__":
     # Load trainer and data
     trainer = DistributedTrainer(config_file)
     dataloader = get_dataloader(trainer)
-
-    # Log some libraries versions
-    log_libraries_versions()
 
     # Train
     trainer.train(dataloader)
