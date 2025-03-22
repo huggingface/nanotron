@@ -292,11 +292,13 @@ class TensorParallelEmbedding(nn.Embedding):
         if self.mode is TensorParallelLinearMode.ALL_REDUCE:
             out = differentiable_all_reduce_sum(out, group=self.pg)
         elif self.mode is TensorParallelLinearMode.REDUCE_SCATTER:
-            out = differentiable_reduce_scatter_sum(out, group=self.pg)
+            out = differentiable_reduce_scatter_sum(
+                out, group=self.pg
+            )  # this should scatter s / b*s (first dimension)
         else:
             raise ValueError(f"Got unexpected mode: {self.mode}.")
 
-        return out
+        return out  # [*input_ids.shape, embedding_dim]
 
     def extra_repr(self) -> str:
         return f"tp_rank={dist.get_rank(self.pg)}, {super().extra_repr()}, unsharded_num_embeddings={self.original_num_embeddings}"

@@ -247,8 +247,9 @@ def human_format(num: float, billions: bool = False, divide_by_1024: bool = Fals
     return "{}{}".format("{:f}".format(num).rstrip("0").rstrip("."), SIZES[magnitude])
 
 
-def log_memory(logger: logging.Logger):
+def log_memory(logger: logging.Logger, msg: str = ""):
     log_rank(
+        f"{msg}\n"
         f" Memory usage: {torch.cuda.memory_allocated() / 1024**2:.2f}MiB."
         f" Peak allocated {torch.cuda.max_memory_allocated() / 1024**2:.2f}MiB."
         f" Peak reserved: {torch.cuda.max_memory_reserved() / 1024**2:.2f}MiB",
