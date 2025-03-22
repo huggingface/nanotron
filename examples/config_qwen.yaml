@@ -26,7 +26,7 @@ general:
   consumed_train_samples: null
   ignore_sanity_checks: false
   project: debug
-  run: tiny_qwen_%date_%jobid
+  run: tiny_qwen_20250322_061335_15232886
   seed: 42
   step: null
 lighteval: null
