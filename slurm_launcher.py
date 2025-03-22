@@ -81,7 +81,9 @@ MODEL_SIZES = {
 
 def parse_args():
     """Parse command line arguments for the Slurm launcher."""
-    parser = argparse.ArgumentParser(description="Nanotron Slurm Launcher")
+    parser = argparse.ArgumentParser(
+        description="Nanotron Slurm Launcher", formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
 
     # Required arguments
     parser.add_argument("--run", type=str, default="nanotron", help="Name for this experiment run")
@@ -111,7 +113,7 @@ def parse_args():
     model_group.add_argument("--num-layers", type=int, default=None, help="Number of layers (overrides model)")
     model_group.add_argument("--num-heads", type=int, default=None, help="Number of attention heads (overrides model)")
     model_group.add_argument("--num-kv-heads", type=int, default=None, help="Number of KV heads (overrides model)")
-    model_group.add_argument("--vocab-size", type=int, default=None, help="Vocabulary size (overrides model)")
+    model_group.add_argument("--vocab-size", type=int, default=65536, help="Vocabulary size (overrides model)")
     model_group.add_argument("--seq", type=int, default=4096, help="Maximum sequence length")
 
     # Training configuration
@@ -177,7 +179,7 @@ def parse_args():
 
     # Logging configuration
     logging_group = parser.add_argument_group("Logging Configuration")
-    logging_group.add_argument("--wandb_disabled", action="store_true", help="Disable logging to Weights & Biases")
+    logging_group.add_argument("--enable-wandb", action="store_true", help="Enable logging to Weights & Biases")
     logging_group.add_argument(
         "--profiler_export_path",
         type=str,
@@ -500,7 +502,7 @@ export TORCH_DISTRIBUTED_DEBUG=DETAIL
 
 # Nanotron specific
 # export NANOTRON_BENCHMARK=1
-{"" if args.wandb_disabled else "# "}export WANDB_MODE=disabled
+{"# " if args.enable_wandb else ""}export WANDB_MODE=disabled
 
 
 CMD="{run_train_script} --config-file {config_path}"
