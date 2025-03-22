@@ -51,6 +51,7 @@ from nanotron.logging import (
     LoggerWriter,
     LogItem,
     human_format,
+    log_libraries_versions,
     log_memory,
     log_rank,
     set_ranks_logging_level,
@@ -159,10 +160,6 @@ class DistributedTrainer:
         # Set log levels
         set_ranks_logging_level(parallel_context=self.parallel_context, logging_config=self.config.logging)
 
-        # Log benchmark info
-        if os.environ.get("NANOTRON_BENCHMARK", "0") == "1":
-            log_throughput(self.config, self.parallel_context)
-
         ########################################
         ## Setting up our model, optimizers, schedulers, etc.
         ########################################
@@ -258,6 +255,16 @@ class DistributedTrainer:
         self.limit_val_batches = self.config.tokens.limit_val_batches
         self.current_dataloader: Optional[DataLoader] = None  # used for the current training stage
 
+        log_libraries_versions(logger=logger)
+        log_rank(
+            f"Parsing config: {os.path.abspath(config_or_config_file)}", logger=logger, level=logging.INFO, rank=0
+        )
+        log_rank("Config:\n" + pformat(self.config), logger=logger, level=logging.INFO, rank=0)
+        log_rank("Model Config:\n" + pformat(self.model_config), logger=logger, level=logging.INFO, rank=0)
+
+        # Log benchmark info
+        if os.environ.get("NANOTRON_BENCHMARK", "0") == "1":
+            log_throughput(self.config, self.parallel_context)
         self.post_init()
 
     def pre_init(self):
@@ -705,10 +712,6 @@ class DistributedTrainer:
                     level=logging.WARNING,
                     rank=0,
                 )
-
-        log_rank("Config:\n" + pformat(self.config), logger=logger, level=logging.INFO, rank=0)
-        log_rank("Model Config:\n" + pformat(self.model_config), logger=logger, level=logging.INFO, rank=0)
-
         model = self._init_model_instance()
         model = self._load_model_checkpoint(model)
         return model
