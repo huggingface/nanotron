@@ -23,14 +23,14 @@ general:
   consumed_train_samples: null
   ignore_sanity_checks: true
   project: debug
-  run: qwen_20250322_090617_15449624
+  run: qwen_20250323_063545_15449624
   seed: 42
   step: null
 lighteval: null
 logging:
   iteration_step_info_interval: 1
-  log_level: debug
-  log_level_replica: debug
+  log_level: info
+  log_level_replica: info
 model:
   ddp_bucket_cap_mb: 25
   dtype: bfloat16
@@ -38,21 +38,21 @@ model:
     std: 0.025
   make_vocab_size_divisible_by: 1
   model_config:
-    _attn_implementation: sdpa
+    _attn_implementation: flex_attention
     attention_bias: false
     bos_token_id: 1
     eos_token_id: 2
     hidden_act: silu
-    hidden_size: 3072
+    hidden_size: 192
     initializer_range: 0.02
     interleaved_rotary: false
-    intermediate_size: 8192
+    intermediate_size: 768
     is_qwen2_config: true
     max_position_embeddings: 256
     moe_config: null
-    num_attention_heads: 32
-    num_hidden_layers: 28
-    num_key_value_heads: 32
+    num_attention_heads: 4
+    num_hidden_layers: 12
+    num_key_value_heads: 4
     pad_token_id: null
     pretraining_tp: 1
     rms_norm_eps: 1.0e-05
@@ -80,10 +80,10 @@ optimizer:
     name: adamW
     torch_adam_is_fused: true
   weight_decay: 0.01
-  zero_stage: 1
+  zero_stage: 0
 parallelism:
   context_parallel_size: 1
-  dp: 8
+  dp: 2
   expert_parallel_size: 1
   moe_layer_recompute: false
   pp: 1
@@ -104,6 +104,6 @@ tokens:
   limit_test_batches: 0
   limit_val_batches: 0
   micro_batch_size: 2
-  sequence_length: 4096
+  sequence_length: 256
   train_steps: 15
   val_check_interval: -1

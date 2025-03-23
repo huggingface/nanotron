@@ -108,6 +108,7 @@ def get_model_config(model_size: str) -> Qwen2Config:
         vocab_size=65536,  # Standard Llama tokenizer vocab size
         is_qwen2_config=True,
         pad_token_id=None,
+        _attn_implementation="flex_attention",
     )
 
 
