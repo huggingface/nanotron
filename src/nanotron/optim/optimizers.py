@@ -1,7 +1,6 @@
 import math
 
 import torch
-from torch import Tensor
 
 ############################
 #            Muon          #
@@ -10,8 +9,24 @@ from torch import Tensor
 # code mainly from https://github.com/KellerJordan/modded-nanogpt and https://github.com/MoonshotAI/Moonlight/blob/master/examples/toy_train.py
 
 
-@torch.compile
-def zeropower_via_newtonschulz5(G: Tensor, steps: int) -> Tensor:
+@torch.compile(fullgraph=True)
+def nsloop_torch(X: torch.Tensor, steps: int, *, a=3.4445, b=-4.7750, c=2.0315):
+    """
+    When compiled down, inductor produces the following steps:
+    1. A = matmul X with reinterpret_tensor(X)
+    2. (triton) read A -> write b*A and c*A
+    3. B = addmm(b*A, c*A, A)
+    4. (triton) read X -> write a*X (this is stupid)
+    5. X = addmm(a*X, B, X)
+    """
+    for _ in range(steps):
+        A = X @ X.mT
+        B = b * A + c * A @ A
+        X = a * X + B @ X
+    return X
+
+
+def zeropower_via_newtonschulz5(G, steps, f_iter=nsloop_torch):
     """
     Newton-Schulz iteration to compute the zeroth power / orthogonalization of G. We opt to use a
     quintic iteration whose coefficients are selected to maximize the slope at zero. For the purpose
@@ -21,26 +36,17 @@ def zeropower_via_newtonschulz5(G: Tensor, steps: int) -> Tensor:
     where S' is diagonal with S_{ii}' ~ Uniform(0.5, 1.5), which turns out not to hurt model
     performance at all relative to UV^T, where USV^T = G is the SVD.
     """
-    assert (
-        G.ndim >= 2
-    )  # batched Muon implementation by @scottjmaddox, and put into practice in the record by @YouJiacheng
-    a, b, c = (3.4445, -4.7750, 2.0315)  # TODO @eliebak: do some more ablation on this
-    X = G.bfloat16()
-    if G.size(-2) > G.size(-1):
-        X = X.mT
-
+    assert len(G.shape) == 2, f"Shape of G is {G.shape}"
+    X = G.to(dtype=torch.bfloat16)
+    if G.size(0) > G.size(1):
+        X = X.T
     # Ensure spectral norm is at most 1
-    X = X / (X.norm(dim=(-2, -1), keepdim=True) + 1e-7)
+    X = X / (X.norm() + 1e-7)
     # Perform the NS iterations
-    for _ in range(steps):
-        A = X @ X.mT
-        B = (
-            b * A + c * A @ A
-        )  # quintic computation strategy adapted from suggestion by @jxbz, @leloykun, and @YouJiacheng
-        X = a * X + B @ X
+    X = f_iter(X, steps)
 
-    if G.size(-2) > G.size(-1):
-        X = X.mT
+    if G.size(0) > G.size(1):
+        X = X.T
     return X
 
 

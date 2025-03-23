@@ -268,6 +268,8 @@ def check_optim_state_in_sync(optim_state_dict: dict, pg: dist.ProcessGroup):
         for name, tensor in optim_state.items():
             if name == "step":
                 continue
+            if name == "use_muon":
+                continue
             assert_tensor_synced_across_pg(
                 tensor=tensor, pg=pg, msg=lambda err: f"{name} are not synced across DP {err}"
             )
