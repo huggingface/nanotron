@@ -122,10 +122,12 @@ class CoreAttention(nn.Module):
             ring_pg=self.cp_pg,
             cu_seqlens=cu_seqlens,
             max_seqlen=seq_length,
+            position_ids=position_ids if self._attn_implementation == "flex_attention" else None,
+            document_ids=kwargs.get("document_ids", None) if self._attn_implementation == "flex_attention" else None,
             **kwargs,
         )[
             0
-        ]  # [1, b*s, num_heads, head_dim] TODO: assert we always have this shape
+        ]  # Return only the first element (attention output)
         # attn_output = attn_output.view(-1, seq_length, self.local_num_heads, self.head_dim).transpose(1, 2) # [b, num_heads, seq_length, head_dim]
         return attn_output.view(
             -1, self.local_num_heads * self.head_dim
