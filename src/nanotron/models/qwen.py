@@ -12,7 +12,7 @@ from nanotron.config.models_config import Qwen2Config, RandomInit, SpectralMupIn
 from nanotron.logging import log_rank
 from nanotron.models import NanotronModel
 from nanotron.nn.activations import ACT2FN
-from nanotron.nn.attention import ALL_ATTENTION_FUNCTIONS
+from nanotron.nn.attention import ALL_ATTENTION_FUNCTIONS, get_attention_mask
 from nanotron.nn.layer_norm import LlamaRMSNorm as RMSNorm
 from nanotron.nn.rotary import RotaryEmbedding
 from nanotron.parallel import ParallelContext
@@ -28,7 +28,7 @@ from nanotron.parallel.tensor_parallel.nn import (
 )
 from nanotron.random import RandomStates
 from nanotron.scaling.parametrization import SpectralMupParametrizator, StandardParametrizator
-from nanotron.nn.attention import get_attention_mask
+
 logger = logging.get_logger(__name__)
 
 
@@ -64,6 +64,7 @@ class CoreAttention(nn.Module):
         key_states: torch.Tensor,  # [b*s, num_kv_heads, head_dim]
         value_states: torch.Tensor,  # [b*s, num_kv_heads, head_dim]
         position_ids: torch.Tensor,  # [b*s]
+        attention_mask: Optional[torch.Tensor] = None,
         dropout: float = 0.0,
         seq_length: Optional[int] = None,
         **kwargs,
@@ -72,11 +73,10 @@ class CoreAttention(nn.Module):
         # Get the appropriate attention function
         attention_func = ALL_ATTENTION_FUNCTIONS[self._attn_implementation]
 
-        # need to put sequence after num_heads
-        if attention_mask is not None:
-            seq_length = attention_mask.shape[0]
-            attention_mask = attention_mask.unsqueeze(0).unsqueeze(0)  # [1, 1, seq_length, seq_length]
+        # Initialize variables for attention parameters
+        cu_seqlens = None
 
+        # Shape tensors according to attention implementation
         if self._attn_implementation == "ring_flash_triton":
             query_states = query_states.view(-1, seq_length, self.local_num_heads, self.head_dim)
             key_states = key_states.view(-1, seq_length, self.local_num_kv_heads, self.head_dim)
@@ -87,18 +87,27 @@ class CoreAttention(nn.Module):
             key_states = key_states.view(-1, self.local_num_kv_heads, self.head_dim)
             value_states = value_states.view(-1, self.local_num_kv_heads, self.head_dim)
         else:
+            # Reshape for standard attention implementations (SDPA or FlexAttention)
             query_states = query_states.view(-1, seq_length, self.local_num_heads, self.head_dim).transpose(
                 1, 2
-            )  # [b, num_heads, seq_length, head_dim] # noqa
+            )  # [b, num_heads, seq_length, head_dim]
             key_states = key_states.view(-1, seq_length, self.local_num_kv_heads, self.head_dim).transpose(1, 2)
             value_states = value_states.view(-1, seq_length, self.local_num_kv_heads, self.head_dim).transpose(1, 2)
 
-            if self.sliding_window_size is not None:
-                # For sliding window attention, we'll let the FlexAttention implementation handle it
-                attention_mask, cu_seqlens = None, None
-            else:
-                attention_mask, cu_seqlens = None, None
-                # attention_mask, cu_seqlens = get_attention_mask(position_ids, seq_length=seq_length)
+            # Process attention mask based on implementation
+            if attention_mask is None and position_ids is not None:
+                # Determine if we need to create an attention mask from position_ids
+                if self._attn_implementation == "flex_attention" and self.sliding_window_size is not None:
+                    # For FlexAttention with sliding window, we don't need an explicit mask
+                    # The mask_mod function will handle it
+                    pass
+                else:
+                    # For other implementations, generate the attention mask if needed
+                    attention_mask, cu_seqlens = get_attention_mask(position_ids, seq_length=seq_length)
+
+                    if attention_mask is not None:
+                        # Add batch and head dimensions for proper broadcasting
+                        attention_mask = attention_mask.unsqueeze(0).unsqueeze(0)  # [1, 1, seq_length, seq_length]
 
         # Call the attention implementation
         attn_output = attention_func(
@@ -218,9 +227,7 @@ class Qwen2Attention(nn.Module):
         q = self.rotary_emb.apply_rotary_pos_emb(q, rotary_pos_emb)  # [b*s, num_heads, head_dim]
         k = self.rotary_emb.apply_rotary_pos_emb(k, rotary_pos_emb)  # [b*s, num_kv_heads, head_dim]
 
-        attn_output = self.attention(
-            q, k, v, position_ids=position_ids, seq_length=seq_length
-        )
+        attn_output = self.attention(q, k, v, position_ids=position_ids, seq_length=seq_length)
         output = self.o_proj(attn_output)
         return {"hidden_states": output, "position_ids": position_ids.view(-1, seq_length)}
 

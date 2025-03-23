@@ -23,10 +23,9 @@ def is_torch_flex_attn_available():
 
 
 if is_torch_flex_attn_available():
-    from torch.nn.attention.flex_attention import flex_attention
+    from torch.nn.attention.flex_attention import create_block_mask, flex_attention
 
 
-    
 # adapted from transformers.integrations.flex_attention.flex_attention_forward
 def flex_attention_forward(
     module: torch.nn.Module,
@@ -39,41 +38,72 @@ def flex_attention_forward(
     softcap: Optional[float] = None,
     **kwargs,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    if softcap is not None:
+    """
+    Implementation of attention using PyTorch's FlexAttention.
+
+    Args:
+        module: The module calling this function
+        query: Query states tensor [batch_size, num_heads, seq_len, head_dim]
+        key: Key states tensor [batch_size, num_kv_heads, seq_len, head_dim]
+        value: Value states tensor [batch_size, num_kv_heads, seq_len, head_dim]
+        attention_mask: Optional attention mask tensor
+        sliding_window: Optional sliding window size for efficient attention
+        scaling: Optional scaling factor for attention scores
+        softcap: Optional softcap for softmax stability
+
+    Returns:
+        Tuple of (attention_output, attention_weights)
+    """
+    # Initialize parameters for FlexAttention
+    score_mod = None
+    block_mask = None
+
+    # Handle causal mask with softcapping
+    if softcap is not None and attention_mask is not None:
         causal_mask = attention_mask
         if causal_mask is not None:
             causal_mask = causal_mask[:, :, :, : key.shape[-2]]
-        def causal_mod(score, b, h, q_idx, kv_idx):
+
+        def causal_score_mod(score, b, h, q_idx, kv_idx):
+            # Apply softcap if specified
             if softcap is not None:
                 score = softcap * torch.tanh(score / softcap)
+            # Apply attention mask if provided
             if causal_mask is not None:
                 score = score + causal_mask[b][0][q_idx][kv_idx]
             return score
-        kwargs["score_mod"] = causal_mod
-        
 
+        score_mod = causal_score_mod
+
+    # Handle sliding window attention using block_mask (more efficient)
     if sliding_window is not None:
+        # Define sliding window causal mask function
         def sliding_window_causal(b, h, q_idx, kv_idx):
             causal_mask = q_idx >= kv_idx
-            window_mask = q_idx - kv_idx <= sliding_window 
+            window_mask = q_idx - kv_idx <= sliding_window
             return causal_mask & window_mask
-        kwargs["mask_mod"] = sliding_window_causal
 
-    
+        # Create a block mask for more efficient processing
+        # Setting B and H to None allows broadcasting across batches and heads
+        seq_len = query.size(2)
+        block_mask = create_block_mask(sliding_window_causal, B=None, H=None, Q_LEN=seq_len, KV_LEN=seq_len)
+
+    # Call PyTorch's flex_attention with the appropriate parameters
     attn_output, attention_weights = flex_attention(
         query,
         key,
         value,
-        enable_gqa=True,
-        score_mod = kwargs.get("score_mod", None),
-        mask_mod = kwargs.get("mask_mod", None),
+        enable_gqa=True,  # Enable grouped query attention
+        score_mod=score_mod,
+        block_mask=block_mask,  # More efficient for sliding window
         scale=scaling,
-        # Last time checked on PyTorch == 2.5.1: Flex Attention always computes the lse regardless.
-        # For simplification, we thus always return it as no additional computations are introduced.
-        return_lse=True,
+        return_lse=True,  # FlexAttention always computes log-sum-exp anyway
     )
-    # lse is returned in float32
+
+    # FlexAttention returns weights in float32, convert to match value dtype
     attention_weights = attention_weights.to(value.dtype)
+
+    # Transpose output to match expected format [batch_size, seq_len, num_heads, head_dim]
     attn_output = attn_output.transpose(1, 2).contiguous()
 
     return attn_output, attention_weights
