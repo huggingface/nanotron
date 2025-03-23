@@ -138,6 +138,7 @@ class Qwen2Config:
     _attn_implementation: Optional[AttentionImplementation] = DEFAULT_ATTENTION_IMPLEMENTATION
     attention_bias: bool = False
     interleaved_rotary: bool = False
+    sliding_window_size: Optional[int] = None
 
     # MoE configuration
     moe_config: Optional[MoEConfig] = None
@@ -161,6 +162,12 @@ class Qwen2Config:
             assert (
                 self._attn_implementation in ALL_ATTENTION_FUNCTIONS
             ), f"Invalid attention implementation: {self._attn_implementation}. Available options are: {ALL_ATTENTION_FUNCTIONS.keys()}"
+
+        if self.sliding_window_size is not None:
+            assert self._attn_implementation in [
+                "flex_attention",
+                "flash_attention_2",
+            ], "Sliding window is only supported for Flex Attention and Flash Attention 2"
 
     @property
     def is_using_mup(self) -> bool:
