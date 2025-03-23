@@ -23,7 +23,7 @@ general:
   consumed_train_samples: null
   ignore_sanity_checks: true
   project: debug
-  run: qwen_20250323_072810_15449624
+  run: qwen_20250323_083137_15449624
   seed: 42
   step: null
 lighteval: null
@@ -59,6 +59,7 @@ model:
     rope_interleaved: false
     rope_scaling: null
     rope_theta: 10000.0
+    sliding_window_size: 20
     tie_word_embeddings: true
     use_cache: true
     vocab_size: 65536
