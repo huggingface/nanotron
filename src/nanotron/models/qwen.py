@@ -91,7 +91,7 @@ class CoreAttention(nn.Module):
         else:
             query_states = query_states.view(-1, seq_length, self.local_num_heads, self.head_dim).transpose(
                 1, 2
-            )  # [b, num_heads, seq_length, head_dim]
+            )  # [b, num_heads, seq_length, head_dim] # noqa
             key_states = key_states.view(-1, seq_length, self.local_num_kv_heads, self.head_dim).transpose(1, 2)
             value_states = value_states.view(-1, seq_length, self.local_num_kv_heads, self.head_dim).transpose(1, 2)
 
@@ -185,7 +185,7 @@ class Qwen2Attention(nn.Module):
         )
         self.attention = CoreAttention(config, tp_pg, cp_pg, layer_idx)
         self.simple_causal_mask = (
-            simple_causal_mask  # Use simple causal mask instead of computing custom attention mask
+            simple_causal_mask  # Use simple causal mask instead of computing custom attention mask # noqa
         )
 
     def forward(
