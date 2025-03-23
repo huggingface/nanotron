@@ -28,7 +28,7 @@ from nanotron.parallel.tensor_parallel.nn import (
 )
 from nanotron.random import RandomStates
 from nanotron.scaling.parametrization import SpectralMupParametrizator, StandardParametrizator
-
+from nanotron.nn.attention import get_attention_mask
 logger = logging.get_logger(__name__)
 
 
@@ -56,17 +56,15 @@ class CoreAttention(nn.Module):
         )  # Important for transformers's `sdpa_attention_forward`
         self._attn_implementation = config._attn_implementation
         self.cp_pg = cp_pg
-        self.sliding_window = getattr(config, "sliding_window", None)
+        self.sliding_window_size = config.sliding_window_size
 
     def forward(
         self,
         query_states: torch.Tensor,  # [b*s, num_heads, head_dim]
         key_states: torch.Tensor,  # [b*s, num_kv_heads, head_dim]
         value_states: torch.Tensor,  # [b*s, num_kv_heads, head_dim]
-        attention_mask: Optional[torch.Tensor] = None,  # [b*s, b*s]
-        cu_seqlens: Optional[torch.Tensor] = None,
+        position_ids: torch.Tensor,  # [b*s]
         dropout: float = 0.0,
-        sliding_window: Optional[int] = None,
         seq_length: Optional[int] = None,
         **kwargs,
     ):
@@ -95,6 +93,13 @@ class CoreAttention(nn.Module):
             key_states = key_states.view(-1, seq_length, self.local_num_kv_heads, self.head_dim).transpose(1, 2)
             value_states = value_states.view(-1, seq_length, self.local_num_kv_heads, self.head_dim).transpose(1, 2)
 
+            if self.sliding_window_size is not None:
+                # For sliding window attention, we'll let the FlexAttention implementation handle it
+                attention_mask, cu_seqlens = None, None
+            else:
+                attention_mask, cu_seqlens = None, None
+                # attention_mask, cu_seqlens = get_attention_mask(position_ids, seq_length=seq_length)
+
         # Call the attention implementation
         attn_output = attention_func(
             self,
@@ -104,7 +109,7 @@ class CoreAttention(nn.Module):
             attention_mask,
             dropout=dropout,
             scaling=self.head_dim**-0.5,
-            sliding_window=sliding_window,
+            sliding_window=self.sliding_window_size,
             ring_pg=self.cp_pg,
             cu_seqlens=cu_seqlens,
             max_seqlen=seq_length,
@@ -126,7 +131,6 @@ class Qwen2Attention(nn.Module):
         tp_pg: dist.ProcessGroup,
         cp_pg: dist.ProcessGroup,
         layer_idx: int,
-        simple_causal_mask: bool = True,  # TODO: need to set to False for SFT / inference
     ):
         super().__init__()
         self.hidden_size = config.hidden_size
@@ -184,9 +188,8 @@ class Qwen2Attention(nn.Module):
             seq_len_scaling_factor=None,
         )
         self.attention = CoreAttention(config, tp_pg, cp_pg, layer_idx)
-        self.simple_causal_mask = (
-            simple_causal_mask  # Use simple causal mask instead of computing custom attention mask # noqa
-        )
+
+        # TODO: support doc masking / SWA / SFT / inference
 
     def forward(
         self,
@@ -215,28 +218,8 @@ class Qwen2Attention(nn.Module):
         q = self.rotary_emb.apply_rotary_pos_emb(q, rotary_pos_emb)  # [b*s, num_heads, head_dim]
         k = self.rotary_emb.apply_rotary_pos_emb(k, rotary_pos_emb)  # [b*s, num_kv_heads, head_dim]
 
-        # TODO @nouamane: optimize this, and make sure it works with flashattn and flexattn
-        def get_attention_mask(position_ids, seq_length):
-            attention_mask = torch.zeros(seq_length, seq_length, device=position_ids.device)
-            start_indices = torch.where(position_ids == 0)[0]
-            cu_seqlens = torch.cat(
-                [start_indices, torch.tensor([seq_length], dtype=torch.int32, device=start_indices.device)]
-            ).to(torch.int32)
-            # make trius for each document
-            for i in range(len(cu_seqlens) - 1):
-                attention_mask[cu_seqlens[i] : cu_seqlens[i + 1], cu_seqlens[i] : cu_seqlens[i + 1]] = torch.tril(
-                    torch.ones(cu_seqlens[i + 1] - cu_seqlens[i], cu_seqlens[i + 1] - cu_seqlens[i])
-                )
-            return attention_mask.to(torch.bool), cu_seqlens  # [seq_length, seq_length]
-
-        if self.simple_causal_mask:
-            attention_mask, cu_seqlens = None, None
-            # TODO @nouamane: tested only with sdpa attention. check if other attentions need is_causal or smthg
-        else:
-            attention_mask, cu_seqlens = get_attention_mask(position_ids, q.shape[0])
-
         attn_output = self.attention(
-            q, k, v, attention_mask=attention_mask, cu_seqlens=cu_seqlens, seq_length=seq_length
+            q, k, v, position_ids=position_ids, seq_length=seq_length
         )
         output = self.o_proj(attn_output)
         return {"hidden_states": output, "position_ids": position_ids.view(-1, seq_length)}
