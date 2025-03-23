@@ -39,7 +39,7 @@ MODEL_SIZES: Dict[str, Tuple[int, int, int, int, int]] = {
     "30b": (60, 6656, 52, 52, 17920),  # ~30B params
     "70b": (80, 8192, 64, 8, 28672),  # ~70B params (MQA)
     # Custom model
-    "custom": (12, 192, 4, 4, 768),
+    "custom": (12, 256, 4, 4, 768),
 }
 
 
