@@ -20,7 +20,7 @@ from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.config import Config, DatasetStageArgs, LRSchedulerArgs, OptimizerArgs, ParallelismArgs
 from nanotron.distributed import ProcessGroup
-from nanotron.logging import LogItem, log_rank
+from nanotron.logging import LogItem, human_format, log_rank
 from nanotron.models.base import NanotronModel
 from nanotron.optim.base import BaseOptimizer, Optimizer
 from nanotron.optim.gradient_accumulator import (
@@ -42,6 +42,7 @@ from nanotron.random import (
     get_synced_random_state,
 )
 from nanotron.scaling.parametrization import LearningRateForSP, LearningRateForSpectralMup, ParametrizationMethod
+from nanotron.serialize import DataStageMetadata
 from nanotron.serialize.metadata import TrainingMetadata
 
 logger = logging.get_logger(__name__)
@@ -297,6 +298,13 @@ def init_optimizer_and_grad_accumulator(
     optimizer_args: OptimizerArgs,
     parallel_context: ParallelContext,
 ) -> Tuple[BaseOptimizer, GradientAccumulator]:
+    log_rank(
+        "Building Optimizer and Gradient Accumulator and Learning Rate Scheduler",
+        logger=logger,
+        level=logging.INFO,
+        rank=0,
+        is_separator=True,
+    )  # noqa
     # Unwrap DDP
     unwrapped_model: NanotronModel = model.module if isinstance(model, DistributedDataParallel) else model
 
@@ -359,7 +367,7 @@ def init_optimizer_and_grad_accumulator(
     # Gradient accumulator builder
     grad_accumulator: Optional[GradientAccumulator] = None
     if optimizer_args.accumulate_grad_in_fp32:
-        # TODO @thomasw21: Make an optimizer builder system, instead of doing everything in functional manner
+
         def grad_optimizer_builder(named_param_groups):
             result = OptimizerFromGradientAccumulator(
                 gradient_accumulator_builder=lambda named_params: FP32GradientAccumulator(
@@ -370,7 +378,6 @@ def init_optimizer_and_grad_accumulator(
                 optimizer_builder=basic_optimizer_builder,
             )
 
-            # TODO @thomasw21: get better API to get the grad_accumulator
             nonlocal grad_accumulator
             grad_accumulator = result.gradient_accumulator
 
@@ -382,7 +389,6 @@ def init_optimizer_and_grad_accumulator(
         # Build optimizer
         optimizer = ZeroDistributedOptimizer(
             named_params_or_groups=named_param_groups,
-            # TODO @thomasw21: We need a better API for gradient accumulation/zero etc ...
             optimizer_builder=optimizer_builder,
             dp_pg=parallel_context.dp_pg,
         )
@@ -472,7 +478,7 @@ def get_profiler(config: Config):
     if config.profiler is not None:
         if config.profiler.profiler_export_path is not None:
             on_trace_ready = tensorboard_trace_handler(
-                config.profiler.profiler_export_path / datetime.now().strftime("%Y%m%d-%H%M%S")
+                config.profiler.profiler_export_path / datetime.now().strftime("%Y%m%d-%H%M%S-" + config.general.run)
             )
         else:
             on_trace_ready = None
@@ -592,6 +598,7 @@ def create_table_log(
     hardware_tflops,
     tokens_per_sec,
     bandwidth,
+    num_params,
     slurm_job_id,
 ):
     return [
@@ -605,10 +612,40 @@ def create_table_log(
         LogItem("mTFLOPs", model_tflops, ".2f"),
         LogItem("hTFLOPs", hardware_tflops, ".2f"),
         LogItem("tok/s/gpu", tokens_per_sec / parallel_context.world_pg.size(), ".2f"),
-        LogItem("Bandwidth (GB/s)", bandwidth, ".2f"),
         LogItem("Mem Alloc (GB)", torch.cuda.max_memory_allocated() / 1024**3, ".2f"),
         LogItem("Mem Res (GB)", torch.cuda.max_memory_reserved() / 1024**3, ".2f"),
+        # Important config columns
+        LogItem("dp", config.parallelism.dp, "d"),
+        LogItem("pp", config.parallelism.pp, "d"),
+        LogItem("tp", config.parallelism.tp, "d"),
+        LogItem("cp", config.parallelism.context_parallel_size, "d"),
+        LogItem("ep", config.parallelism.expert_parallel_size, "d"),
+        LogItem("pp_engine", str(config.parallelism.pp_engine), "s"),
+        LogItem("tp_mode", config.parallelism.tp_mode, "s"),
+        LogItem("tp_async_comm", str(config.parallelism.tp_linear_async_communication), "s"),
+        LogItem("recompute_layer", str(config.parallelism.recompute_layer), "s"),
+        LogItem("hidden_size", config.model.model_config.hidden_size, "d"),
+        LogItem("hidden_act", config.model.model_config.hidden_act, "s"),
+        LogItem("num_layers", config.model.model_config.num_hidden_layers, "d"),
+        LogItem("num_heads", config.model.model_config.num_attention_heads, "d"),
+        LogItem("num_kv_heads", config.model.model_config.num_key_value_heads, "d"),
+        LogItem("max_pos", config.model.model_config.max_position_embeddings, "d"),
+        LogItem("vocab_size", config.model.model_config.vocab_size, "d"),
+        LogItem("tie_word_embeddings", str(config.model.model_config.tie_word_embeddings), "s"),
+        LogItem("dtype", str(config.model.dtype), "s"),
+        LogItem("zero_stage", config.optimizer.zero_stage, "d"),
+        LogItem("ddp_bucket_cap_mb", config.model.ddp_bucket_cap_mb, "d"),
+        LogItem("accumulate_grad_in_fp32", str(config.optimizer.accumulate_grad_in_fp32), "s"),
+        # Params
+        LogItem("Total Params", num_params["total"], "human_format"),
+        LogItem("Local Params", num_params["local"], "human_format"),
     ]
+
+
+def get_formatted_value(item):
+    if item.log_format == "human_format":
+        return human_format(item.scalar_value)
+    return f"{item.scalar_value:{item.log_format}}"
 
 
 def create_table_output(table_log, column_widths):
@@ -616,36 +653,88 @@ def create_table_output(table_log, column_widths):
     separator_row = "| " + " | ".join(["-" * width for width in column_widths]) + " |"
     data_row = (
         "| "
-        + " | ".join(
-            [f"{item.scalar_value:{item.log_format}}".ljust(width) for item, width in zip(table_log, column_widths)]
-        )
+        + " | ".join([get_formatted_value(item).ljust(width) for item, width in zip(table_log, column_widths)])
         + " |"
     )
     return f"{header_row}\n{separator_row}\n{data_row}"
 
 
 def write_to_csv(csv_filename, table_log, model_tflops, slurm_job_id):
-    if not os.path.exists(csv_filename):
-        os.makedirs(os.path.dirname(csv_filename), exist_ok=True)
-        with open(csv_filename, mode="w") as fo:
-            writer = csv.writer(fo)
-            writer.writerow([item.tag for item in table_log])
-            writer.writerow([f"{item.scalar_value:{item.log_format}}" for item in table_log])
-    # elif model_tflops > 0:
-    #     # replace line with same job_id
-    #     with open(csv_filename, mode="r") as fi:
-    #         lines = fi.readlines()
-    #     with open(csv_filename, mode="w") as fo:
-    #         writer = csv.writer(fo)
-    #         for line in lines:
-    #             if line.startswith(slurm_job_id):
-    #                 writer.writerow([f"{item.scalar_value:{item.log_format}}" for item in table_log])
-    #             else:
-    #                 fo.write(line)
-    else:
-        with open(csv_filename, mode="a") as fo:
-            writer = csv.writer(fo)
-            writer.writerow([f"{item.scalar_value:{item.log_format}}" for item in table_log])
+    """Write benchmark results to a CSV file with file locking using fcntl."""
+    import fcntl
+
+    try:
+        # Check if csv_filename is valid
+        if not csv_filename:
+            logger.warning("No benchmark CSV path specified - skipping CSV output")
+            return
+
+        # Create output directory if needed
+        csv_dir = os.path.dirname(csv_filename)
+        if csv_dir:  # Only try to create directory if path has a directory component
+            os.makedirs(csv_dir, exist_ok=True)
+
+        # Format row data
+        header = [item.tag for item in table_log]
+        row = [get_formatted_value(item) for item in table_log]
+
+        # Use fcntl for file locking
+        max_attempts = 10
+        attempt = 0
+        log_rank(
+            f"Attempting to write benchmark results to CSV file: {csv_filename}",
+            logger=logger,
+            level=logging.INFO,
+        )
+        while attempt < max_attempts:
+            try:
+                with open(csv_filename, mode="a+", newline="") as f:
+                    # Get exclusive lock
+                    fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    log_rank(
+                        f"Acquired lock for CSV file: {csv_filename}",
+                        logger=logger,
+                        level=logging.INFO,
+                    )
+                    try:
+                        # Check if file is empty/new
+                        f.seek(0)
+                        first_char = f.read(1)
+                        if not first_char:  # Empty file
+                            writer = csv.writer(f)
+                            writer.writerow(header)
+
+                        # Go to end of file for append
+                        f.seek(0, os.SEEK_END)
+                        writer = csv.writer(f)
+                        writer.writerow(row)
+                        f.flush()
+                        os.fsync(f.fileno())
+                        break
+                    finally:
+                        # Release lock
+                        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                        log_rank(
+                            f"Successfully wrote to CSV file: {csv_filename}. Releasing lock...",
+                            logger=logger,
+                            level=logging.INFO,
+                        )
+            except BlockingIOError:
+                # Another process has the lock, wait and retry
+                log_rank(
+                    f"Another process has the lock for CSV file: {csv_filename}, waiting and retrying attempt {attempt + 1} of {max_attempts}...",
+                    logger=logger,
+                    level=logging.INFO,
+                )
+                attempt += 1
+                time.sleep(0.1)  # Wait 100ms before retrying
+
+        if attempt == max_attempts:
+            logger.error(f"Failed to acquire lock for {csv_filename} after {max_attempts} attempts")
+
+    except Exception as e:
+        logger.error(f"Unexpected error writing to {csv_filename}: {str(e)}")
+        return
 
 
 def log_throughput(
@@ -655,13 +744,14 @@ def log_throughput(
     hardware_tflops=0,
     tokens_per_sec=0,
     bandwidth=0,
+    num_params={"total": 0, "local": 0},
 ):
     slurm_job_id = os.environ.get("SLURM_JOB_ID", "N/A")
 
     table_log = create_table_log(
-        config, parallel_context, model_tflops, hardware_tflops, tokens_per_sec, bandwidth, slurm_job_id
+        config, parallel_context, model_tflops, hardware_tflops, tokens_per_sec, bandwidth, num_params, slurm_job_id
     )
-    column_widths = [max(len(item.tag), len(f"{item.scalar_value:{item.log_format}}")) for item in table_log]
+    column_widths = [max(len(item.tag), len(get_formatted_value(item))) for item in table_log]
     table_output = create_table_output(table_log, column_widths)
 
     log_rank(
@@ -673,6 +763,7 @@ def log_throughput(
 
     if dist.get_rank(parallel_context.world_pg) == 0:
         write_to_csv(config.general.benchmark_csv_path, table_log, model_tflops, slurm_job_id)
+    dist.barrier(group=parallel_context.world_pg)
 
 
 def compute_remain_train_steps_of_a_data_stage_from_ckp(
@@ -705,7 +796,27 @@ def get_consumed_train_samples_of_a_data_stage_from_ckp(
     stage: DatasetStageArgs, metadata: TrainingMetadata
 ) -> Optional[int]:
     start_training_step = stage.start_training_step
-    return next(
+
+    consumed_train_samples = next(
         (s.consumed_train_samples for s in metadata.data_stages if s.start_training_step == start_training_step),
         None,
     )
+    if consumed_train_samples is None:
+        # If stage not found in metadata, ensure we haven't passed this stage's start step
+        assert (
+            metadata.last_train_step < stage.start_training_step
+        ), f"Stage {stage.name} starting at step {stage.start_training_step} not found in checkpoint metadata, but last_train_step ({metadata.last_train_step}) >= start_training_step"
+        consumed_train_samples = 0
+
+        # Add new stage to metadata
+        if metadata.data_stages is None:
+            metadata.data_stages = []
+        metadata.data_stages.append(
+            DataStageMetadata(
+                name=stage.name,
+                start_training_step=stage.start_training_step,
+                consumed_train_samples=consumed_train_samples,
+            )
+        )
+
+    return consumed_train_samples

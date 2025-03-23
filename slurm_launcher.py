@@ -21,7 +21,6 @@ import os
 import subprocess
 import tempfile
 import time
-import uuid
 from datetime import datetime
 from typing import Optional
 
@@ -37,9 +36,10 @@ from nanotron.config import (
     LoggingArgs,
     LRSchedulerArgs,
     ModelArgs,
+    NanosetDatasetsArgs,  # noqa
     OptimizerArgs,
     ParallelismArgs,
-    PretrainDatasetsArgs,
+    PretrainDatasetsArgs,  # noqa
     ProfilerArgs,
     RandomInit,
     TokenizerArgs,
@@ -61,44 +61,142 @@ DEFAULT_CHECKPOINTS_PATH = "checkpoints"
 DEFAULT_RUN_TRAIN_SCRIPT = "run_train.py"
 
 # Default model sizes - predefined configurations for common model sizes
-MODEL_CONFIGS = {
-    "tiny": {
-        "hidden_size": 16,
-        "intermediate_size": 64,
-        "num_hidden_layers": 2,
-        "num_attention_heads": 4,
-        "num_key_value_heads": 4,
-        "vocab_size": 256,
-    },
-    "small": {
-        "hidden_size": 768,
-        "intermediate_size": 3072,
-        "num_hidden_layers": 12,
-        "num_attention_heads": 12,
-        "num_key_value_heads": 12,
-        "vocab_size": 32000,
-    },
-    "base": {
-        "hidden_size": 2048,
-        "intermediate_size": 8192,
-        "num_hidden_layers": 24,
-        "num_attention_heads": 16,
-        "num_key_value_heads": 16,
-        "vocab_size": 32000,
-    },
-    "large": {
-        "hidden_size": 4096,
-        "intermediate_size": 11008,
-        "num_hidden_layers": 32,
-        "num_attention_heads": 32,
-        "num_key_value_heads": 32,
-        "vocab_size": 32000,
-    },
+MODEL_SIZES = {
+    # (layers, hidden, heads, kv_heads, ffn_size)
+    "160m": (12, 768, 12, 12, 3072),  # ~160M params
+    "410m": (24, 1024, 16, 16, 4096),  # ~410M params
+    # Small to medium models
+    "1b": (16, 2048, 16, 16, 5632),  # ~1B params
+    "3b": (28, 3072, 32, 32, 8192),  # ~3B params
+    # Standard sizes
+    "7b": (32, 4096, 32, 32, 11008),  # ~7B params
+    "13b": (40, 5120, 40, 40, 13824),  # ~13B params
+    # Large models
+    "30b": (60, 6656, 52, 52, 17920),  # ~30B params
+    "70b": (80, 8192, 64, 8, 28672),  # ~70B params (MQA)
+    # Custom model
+    "custom": (12, 192, 4, 4, 768),
 }
 
 
+def parse_args():
+    """Parse command line arguments for the Slurm launcher."""
+    parser = argparse.ArgumentParser(
+        description="Nanotron Slurm Launcher", formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
+
+    # Required arguments
+    parser.add_argument("--run", type=str, default="nanotron", help="Name for this experiment run")
+
+    # Slurm job configuration
+    slurm_group = parser.add_argument_group("Slurm Configuration")
+    slurm_group.add_argument("--gpus_per_node", type=int, default=8, help="Number of GPUs per node")
+    slurm_group.add_argument("--partition", type=str, default="hopper-prod", help="Slurm partition to use")
+    slurm_group.add_argument("--qos", type=str, default="normal", help="Slurm QOS to use")
+    slurm_group.add_argument("--time_limit", type=str, default="1:00:00", help="Time limit for the job (HH:MM:SS)")
+    slurm_group.add_argument("--email", type=str, default=None, help="Email for job notifications")
+    slurm_group.add_argument("--tmp_dir", type=str, default="/tmp", help="Temporary directory on compute nodes")
+    slurm_group.add_argument("--pre_launch_commands", type=str, default="", help="Commands to run before job launch")
+    slurm_group.add_argument("--extra_env", type=str, default="", help="Additional environment variables")
+
+    # Model configuration
+    model_group = parser.add_argument_group("Model Configuration")
+    model_group.add_argument(
+        "--model",
+        type=str,
+        default="custom",
+        choices=MODEL_SIZES.keys(),
+        help="Predefined model size",
+    )
+    model_group.add_argument("--hidden-size", type=int, default=None, help="Hidden size (overrides model)")
+    model_group.add_argument("--intermediate-size", type=int, default=None, help="Intermediate size (overrides model)")
+    model_group.add_argument("--num-layers", type=int, default=None, help="Number of layers (overrides model)")
+    model_group.add_argument("--num-heads", type=int, default=None, help="Number of attention heads (overrides model)")
+    model_group.add_argument("--num-kv-heads", type=int, default=None, help="Number of KV heads (overrides model)")
+    model_group.add_argument("--vocab-size", type=int, default=65536, help="Vocabulary size (overrides model)")
+    model_group.add_argument("--seq", type=int, default=4096, help="Maximum sequence length")
+
+    # Training configuration
+    training_group = parser.add_argument_group("Training Configuration")
+    training_group.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
+    training_group.add_argument("--steps", type=int, default=10000, help="Number of training steps")
+    training_group.add_argument("--mbs", type=int, default=2, help="Micro batch size")
+    training_group.add_argument("--acc", type=int, default=8, help="Gradient accumulation steps")
+    training_group.add_argument("--learning-rate", type=float, default=3e-4, help="Peak learning rate")
+    training_group.add_argument("--min-lr", type=float, default=3e-5, help="Minimum learning rate for decay")
+    training_group.add_argument("--weight-decay", type=float, default=0.01, help="Weight decay")
+    training_group.add_argument("--grad-clip", type=float, default=1.0, help="Gradient clipping")
+    training_group.add_argument("--warmup-steps", type=int, default=1000, help="Learning rate warmup steps")
+
+    # Parallelism strategy
+    parallel_group = parser.add_argument_group("Parallelism Configuration")
+    parallel_group.add_argument("--dp", type=int, default=8, help="Data parallelism (DP) degree")
+    parallel_group.add_argument("--pp", type=int, default=1, help="Pipeline parallelism (PP) degree")
+    parallel_group.add_argument("--tp", type=int, default=2, help="Tensor parallelism (TP) degree")
+    parallel_group.add_argument("--cp", type=int, default=1, help="Context parallelism degree")
+    parallel_group.add_argument("--ep", type=int, default=1, help="Expert parallelism degree")
+    parallel_group.add_argument("--zero", type=int, default=0, choices=[0, 1], help="ZeRO stage")
+
+    # Dataset configuration
+    data_group = parser.add_argument_group("Dataset Configuration")
+    data_group.add_argument("--dataset", type=str, default=None, help="Hugging Face dataset name or path")
+    data_group.add_argument("--text-column", type=str, default="text", help="Column name for text in the dataset")
+    data_group.add_argument(
+        "--tokenizer", type=str, default="robot-test/dummy-tokenizer-wordlevel", help="Tokenizer name or path"
+    )
+
+    # File paths
+    paths_group = parser.add_argument_group("File Paths")
+    paths_group.add_argument("--project", type=str, default="nanotron", help="Project name for logging")
+    paths_group.add_argument(
+        "--configs-path", type=str, default=DEFAULT_CONFIGS_PATH, help="Directory to save configuration files"
+    )
+    paths_group.add_argument(
+        "--slurm-logs-path", type=str, default=DEFAULT_SLURM_LOGS_PATH, help="Directory for Slurm output logs"
+    )
+    paths_group.add_argument(
+        "--checkpoints-path",
+        type=str,
+        default=DEFAULT_CHECKPOINTS_PATH,
+        help="Base directory for saving model checkpoints",
+    )
+    slurm_group.add_argument(
+        "--run-train-script",
+        type=str,
+        default=DEFAULT_RUN_TRAIN_SCRIPT,
+        help="Path to the training script (default: run_train.py)",
+    )
+    slurm_group.add_argument(
+        "--slurm-scripts-dir",
+        type=str,
+        default=DEFAULT_SLURM_SCRIPTS_DIR,
+        help="Directory to save generated Slurm scripts (set to None to disable)",
+    )
+    paths_group.add_argument(
+        "--save-interval", type=int, default=1000, help="Interval for saving checkpoints (in steps)"
+    )
+    paths_group.add_argument("--save-initial-state", action="store_true", help="Save initial state")
+
+    # Logging configuration
+    logging_group = parser.add_argument_group("Logging Configuration")
+    logging_group.add_argument("--enable-wandb", action="store_true", help="Enable logging to Weights & Biases")
+    logging_group.add_argument(
+        "--profiler_export_path",
+        type=str,
+        default=None,
+        help="Path to export the profiler tensorboard data. Use `tensorboard --logdir <path>` to view.",
+    )
+    logging_group.add_argument("--log-lvl", type=str, default="info", help="Log level")
+    logging_group.add_argument("--no-sanity", action="store_true", help="Ignore sanity checks")
+
+    # Execution control
+    parser.add_argument("--dry-run", action="store_true", help="Generate configs but don't submit job")
+    parser.add_argument("--show-logs", action="store_true", help="Show output of the job as it runs")
+    return parser.parse_args()
+
+
 def generate_model_config(
-    model_size: str = "tiny",
+    model_size: str = "custom",
     hidden_size: Optional[int] = None,
     intermediate_size: Optional[int] = None,
     num_hidden_layers: Optional[int] = None,
@@ -124,7 +222,14 @@ def generate_model_config(
         LlamaConfig object with the specified parameters
     """
     # Start with the base configuration for the requested size
-    config_params = MODEL_CONFIGS.get(model_size, MODEL_CONFIGS["tiny"]).copy()
+    config_params = MODEL_SIZES.get(model_size, MODEL_SIZES["custom"])
+    config_params = {
+        "num_hidden_layers": config_params[0],
+        "hidden_size": config_params[1],
+        "num_attention_heads": config_params[2],
+        "num_key_value_heads": config_params[3],
+        "intermediate_size": config_params[4],
+    }
 
     # Override with any explicitly specified parameters
     if hidden_size is not None:
@@ -187,14 +292,14 @@ def create_nanotron_config(args) -> Config:
     """
     # Generate model configuration
     model_config = generate_model_config(
-        model_size=args.model_size,
+        model_size=args.model,
         hidden_size=args.hidden_size,
         intermediate_size=args.intermediate_size,
         num_hidden_layers=args.num_layers,
         num_attention_heads=args.num_heads,
         num_key_value_heads=args.num_kv_heads,
         vocab_size=args.vocab_size,
-        max_position_embeddings=args.max_seq_len,
+        max_position_embeddings=args.seq,
     )
 
     # Calculate number of parameters for logging
@@ -209,50 +314,38 @@ def create_nanotron_config(args) -> Config:
 
     print(f"Model has {num_params} parameters")
 
-    # Generate a unique run ID
-    job_id = str(uuid.uuid4())[:8]
-    run_name = args.run_name.replace(" ", "_")
-    run_id = f"{args.project}-{num_params}-{run_name}-seed-{args.seed}-{job_id}"
-
     # Use user-provided parallelism directly
     parallelism = ParallelismArgs(
         dp=args.dp,
         pp=args.pp,
         tp=args.tp,
+        context_parallel_size=args.cp,
+        expert_parallel_size=args.ep,
         pp_engine="1f1b",
         tp_mode="REDUCE_SCATTER",
         tp_linear_async_communication=True,
+        recompute_layer=False,
     )
 
     # Define tokens configuration
     tokens = TokensArgs(
-        sequence_length=args.max_seq_len,
-        train_steps=args.train_steps,
-        micro_batch_size=args.micro_batch_size,
-        batch_accumulation_per_replica=args.grad_accum_steps,
+        sequence_length=args.seq,
+        train_steps=args.steps,
+        micro_batch_size=args.mbs,
+        batch_accumulation_per_replica=args.acc,
     )
 
     # Calculate global batch size for logging
-    gbs = parallelism.dp * tokens.batch_accumulation_per_replica * tokens.micro_batch_size * tokens.sequence_length
-    total_tokens = gbs * args.train_steps
+    gbs = (
+        parallelism.dp
+        * tokens.batch_accumulation_per_replica
+        * tokens.micro_batch_size
+        * tokens.sequence_length
+        * parallelism.context_parallel_size
+        * parallelism.expert_parallel_size
+    )
+    total_tokens = gbs * args.steps
     print(f"GBS: {(gbs)/1e6:.2f}M, total training tokens: {(total_tokens)/1e9:.2f}B")
-
-    # Verify parallelism setting relative to available resources
-    total_gpus = args.nodes * args.gpus_per_node
-    required_gpus = parallelism.dp * parallelism.pp * parallelism.tp
-
-    if required_gpus > total_gpus:
-        logger.warning(
-            f"Requested parallelism (DP={parallelism.dp}, PP={parallelism.pp}, TP={parallelism.tp}) "
-            f"requires {required_gpus} GPUs, but only {total_gpus} are available. "
-            "This may cause the job to fail."
-        )
-    elif required_gpus < total_gpus:
-        logger.warning(
-            f"Requested parallelism (DP={parallelism.dp}, PP={parallelism.pp}, TP={parallelism.tp}) "
-            f"uses only {required_gpus} of {total_gpus} available GPUs. "
-            "Consider adjusting parallelism for better resource utilization."
-        )
 
     # Configure learning rate schedule
     lr_scheduler = LRSchedulerArgs(
@@ -265,7 +358,7 @@ def create_nanotron_config(args) -> Config:
 
     # Configure optimizer
     optimizer = OptimizerArgs(
-        zero_stage=0,
+        zero_stage=args.zero,
         weight_decay=args.weight_decay,
         clip_grad=args.grad_clip,
         accumulate_grad_in_fp32=True,
@@ -284,32 +377,42 @@ def create_nanotron_config(args) -> Config:
             name="Stable Training Stage",
             start_training_step=1,
             data=DataArgs(
-                dataset=PretrainDatasetsArgs(
-                    hf_dataset_or_datasets=args.dataset,
-                    text_column_name=args.text_column,
+                # For pretraining:
+                # dataset=PretrainDatasetsArgs(
+                #     hf_dataset_or_datasets=args.dataset,
+                #     text_column_name=args.text_column,
+                # ),
+                # When using a Nanoset, we need to specify the vocab size of the tokenizer used to tokenize the dataset or larger
+                dataset=NanosetDatasetsArgs(
+                    dataset_folder="/fsx/loubna/tokenized_for_exps/mcf-dataset",  # 1.4T tokens
                 ),
+                # For SFT (uncomment to use):
+                # dataset=SFTDatasetsArgs(
+                #     hf_dataset_or_datasets=args.dataset,
+                #     hf_dataset_splits="train",
+                #     debug_max_samples=1000,
+                # ),
                 seed=args.seed,
             ),
         ),
     ]
-
     # Configure checkpointing
     os.makedirs(args.checkpoints_path, exist_ok=True)
     checkpoints = CheckpointsArgs(
-        checkpoints_path=os.path.join(args.checkpoints_path, run_id),
+        checkpoints_path=os.path.join(args.checkpoints_path, args.run),
         checkpoint_interval=args.save_interval,
         save_initial_state=args.save_initial_state,
     )
 
     # Create the final config
     config = Config(
-        general=GeneralArgs(project=args.project, run=run_id, seed=args.seed),
+        general=GeneralArgs(project=args.project, run=args.run, seed=args.seed, ignore_sanity_checks=args.no_sanity),
         checkpoints=checkpoints,
         parallelism=parallelism,
         model=ModelArgs(init_method=RandomInit(std=0.025), model_config=model_config),
         tokenizer=TokenizerArgs(args.tokenizer),
         optimizer=optimizer,
-        logging=LoggingArgs(log_level="info", iteration_step_info_interval=1),
+        logging=LoggingArgs(log_level=args.log_lvl, log_level_replica=args.log_lvl, iteration_step_info_interval=1),
         tokens=tokens,
         data_stages=data_stages,
         profiler=ProfilerArgs(profiler_export_path=args.profiler_export_path)
@@ -317,12 +420,11 @@ def create_nanotron_config(args) -> Config:
         else None,
     )
 
-    return config, run_id
+    return config
 
 
 def create_slurm_script(
     config_path: str,
-    run_id: str,
     args,
     run_train_script: str = "run_train.py",
 ) -> str:
@@ -331,23 +433,26 @@ def create_slurm_script(
 
     Args:
         config_path: Path to the Nanotron config YAML file
-        run_id: Unique identifier for this run
         args: Command line arguments
 
     Returns:
         Contents of the Slurm script as a string
     """
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    logs_path = os.path.join(args.slurm_logs_path, args.run_name.replace(" ", "_"))
+    logs_path = os.path.join(args.slurm_logs_path, args.run.replace(" ", "_"))
     os.makedirs(logs_path, exist_ok=True)
 
+    gpus_per_node = min(args.gpus_per_node, args.dp * args.pp * args.tp * args.cp * args.ep)
+    assert args.dp * args.pp * args.tp * args.cp * args.ep % gpus_per_node == 0
+    nodes = args.dp * args.pp * args.tp * args.cp * args.ep // gpus_per_node
+
     script = f"""#!/bin/bash
-#SBATCH --job-name={args.run_name}
-#SBATCH --nodes={args.nodes}
+#SBATCH --job-name={args.run}
+#SBATCH --nodes={nodes}
 #SBATCH --ntasks-per-node=1          # crucial - only 1 task per dist per node!
 #SBATCH --cpus-per-task=60         # CPU cores per task
 #SBATCH --exclusive               # Exclusive use of nodes
-#SBATCH --gpus-per-node={args.gpus_per_node}
+#SBATCH --gpus-per-node={gpus_per_node}
 #SBATCH --partition={args.partition}
 #SBATCH --output={logs_path}/{timestamp}-%x-%j.out
 #SBATCH --time={args.time_limit}
@@ -384,7 +489,7 @@ echo "Running on $COUNT_NODE nodes: $HOSTNAMES"
 
 # Calculate total number of processes
 export NNODES=$SLURM_NNODES
-export GPUS_PER_NODE={args.gpus_per_node}
+export GPUS_PER_NODE={gpus_per_node}
 export WORLD_SIZE=$(($NNODES * $GPUS_PER_NODE))
 
 # Set some environment variables for better distributed training
@@ -397,13 +502,13 @@ export TORCH_DISTRIBUTED_DEBUG=DETAIL
 
 # Nanotron specific
 # export NANOTRON_BENCHMARK=1
-{"" if args.wandb_disabled else "# "}export WANDB_MODE=disabled
+{"# " if args.enable_wandb else ""}export WANDB_MODE=disabled
 
 
 CMD="{run_train_script} --config-file {config_path}"
 
 LAUNCHER="torchrun \\
-    --nproc_per_node {args.gpus_per_node} \\
+    --nproc_per_node {gpus_per_node} \\
     --nnodes $COUNT_NODE \\
     --rdzv_backend c10d \\
     --rdzv_endpoint $MASTER_ADDR:$MASTER_PORT \\
@@ -424,124 +529,6 @@ echo "Total training time: $(secs_to_human $elapsed)"
     return script
 
 
-def parse_args():
-    """Parse command line arguments for the Slurm launcher."""
-    parser = argparse.ArgumentParser(description="Nanotron Slurm Launcher")
-
-    # Required arguments
-    parser.add_argument("--run_name", type=str, required=True, help="Name for this experiment run")
-
-    # Slurm job configuration
-    slurm_group = parser.add_argument_group("Slurm Configuration")
-    slurm_group.add_argument("--nodes", type=int, default=2, help="Number of nodes to use")
-    slurm_group.add_argument("--gpus_per_node", type=int, default=8, help="Number of GPUs per node")
-    slurm_group.add_argument("--partition", type=str, default="hopper-prod", help="Slurm partition to use")
-    slurm_group.add_argument("--qos", type=str, default="normal", help="Slurm QOS to use")
-    slurm_group.add_argument("--time_limit", type=str, default="1:00:00", help="Time limit for the job (HH:MM:SS)")
-    slurm_group.add_argument("--email", type=str, default=None, help="Email for job notifications")
-    slurm_group.add_argument("--tmp_dir", type=str, default="/tmp", help="Temporary directory on compute nodes")
-    slurm_group.add_argument("--pre_launch_commands", type=str, default="", help="Commands to run before job launch")
-    slurm_group.add_argument("--extra_env", type=str, default="", help="Additional environment variables")
-
-    # Model configuration
-    model_group = parser.add_argument_group("Model Configuration")
-    model_group.add_argument(
-        "--model_size",
-        type=str,
-        default="tiny",
-        choices=["tiny", "small", "base", "large"],
-        help="Predefined model size",
-    )
-    model_group.add_argument("--hidden_size", type=int, default=None, help="Hidden size (overrides model_size)")
-    model_group.add_argument(
-        "--intermediate_size", type=int, default=None, help="Intermediate size (overrides model_size)"
-    )
-    model_group.add_argument("--num_layers", type=int, default=None, help="Number of layers (overrides model_size)")
-    model_group.add_argument(
-        "--num_heads", type=int, default=None, help="Number of attention heads (overrides model_size)"
-    )
-    model_group.add_argument(
-        "--num_kv_heads", type=int, default=None, help="Number of KV heads (overrides model_size)"
-    )
-    model_group.add_argument("--vocab_size", type=int, default=None, help="Vocabulary size (overrides model_size)")
-    model_group.add_argument("--max_seq_len", type=int, default=4096, help="Maximum sequence length")
-
-    # Training configuration
-    training_group = parser.add_argument_group("Training Configuration")
-    training_group.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
-    training_group.add_argument("--train_steps", type=int, default=10000, help="Number of training steps")
-    training_group.add_argument("--micro_batch_size", type=int, default=2, help="Micro batch size")
-    training_group.add_argument("--grad_accum_steps", type=int, default=8, help="Gradient accumulation steps")
-    training_group.add_argument("--learning_rate", type=float, default=3e-4, help="Peak learning rate")
-    training_group.add_argument("--min_lr", type=float, default=3e-5, help="Minimum learning rate for decay")
-    training_group.add_argument("--weight_decay", type=float, default=0.01, help="Weight decay")
-    training_group.add_argument("--grad_clip", type=float, default=1.0, help="Gradient clipping")
-    training_group.add_argument("--warmup_steps", type=int, default=1000, help="Learning rate warmup steps")
-
-    # Parallelism strategy
-    parallel_group = parser.add_argument_group("Parallelism Configuration")
-    parallel_group.add_argument("--dp", type=int, default=8, help="Data parallelism (DP) degree")
-    parallel_group.add_argument("--pp", type=int, default=1, help="Pipeline parallelism (PP) degree")
-    parallel_group.add_argument("--tp", type=int, default=2, help="Tensor parallelism (TP) degree")
-
-    # Dataset configuration
-    data_group = parser.add_argument_group("Dataset Configuration")
-    data_group.add_argument(
-        "--dataset", type=str, default="stas/openwebtext-10k", help="Hugging Face dataset name or path"
-    )
-    data_group.add_argument("--text_column", type=str, default="text", help="Column name for text in the dataset")
-    data_group.add_argument(
-        "--tokenizer", type=str, default="robot-test/dummy-tokenizer-wordlevel", help="Tokenizer name or path"
-    )
-
-    # File paths
-    paths_group = parser.add_argument_group("File Paths")
-    paths_group.add_argument("--project", type=str, default="nanotron", help="Project name for logging")
-    paths_group.add_argument(
-        "--configs_path", type=str, default=DEFAULT_CONFIGS_PATH, help="Directory to save configuration files"
-    )
-    paths_group.add_argument(
-        "--slurm_logs_path", type=str, default=DEFAULT_SLURM_LOGS_PATH, help="Directory for Slurm output logs"
-    )
-    paths_group.add_argument(
-        "--checkpoints_path",
-        type=str,
-        default=DEFAULT_CHECKPOINTS_PATH,
-        help="Base directory for saving model checkpoints",
-    )
-    slurm_group.add_argument(
-        "--run_train_script",
-        type=str,
-        default=DEFAULT_RUN_TRAIN_SCRIPT,
-        help="Path to the training script (default: run_train.py)",
-    )
-    slurm_group.add_argument(
-        "--slurm_scripts_dir",
-        type=str,
-        default=DEFAULT_SLURM_SCRIPTS_DIR,
-        help="Directory to save generated Slurm scripts (set to None to disable)",
-    )
-    paths_group.add_argument(
-        "--save_interval", type=int, default=1000, help="Interval for saving checkpoints (in steps)"
-    )
-    paths_group.add_argument("--save_initial_state", action="store_true", help="Save initial state")
-
-    # Logging configuration
-    logging_group = parser.add_argument_group("Logging Configuration")
-    logging_group.add_argument("--wandb_disabled", action="store_true", help="Disable logging to Weights & Biases")
-    logging_group.add_argument(
-        "--profiler_export_path",
-        type=str,
-        default=None,
-        help="Path to export the profiler tensorboard data. Use `tensorboard --logdir <path>` to view.",
-    )
-
-    # Execution control
-    parser.add_argument("--dry_run", action="store_true", help="Generate configs but don't submit job")
-    parser.add_argument("--show_logs", action="store_true", help="Show output of the job as it runs")
-    return parser.parse_args()
-
-
 def tail_output_file(output_file: str):
     """Tail the output file when available."""
     while not os.path.exists(output_file):
@@ -559,11 +546,11 @@ def main():
     os.makedirs(args.slurm_logs_path, exist_ok=True)
 
     # Create Nanotron config
-    config, run_id = create_nanotron_config(args)
+    config = create_nanotron_config(args)
 
     # Save config to YAML file
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    run_name = args.run_name.replace(" ", "_")
+    run_name = args.run.replace(" ", "_")
     config_dir = os.path.join(args.configs_path, run_name)
     os.makedirs(config_dir, exist_ok=True)
     config_path = os.path.join(config_dir, f"{timestamp}-{run_name}.yaml")
@@ -571,7 +558,7 @@ def main():
     print(f"Config saved to {config_path}")
 
     # Create Slurm script
-    slurm_script = create_slurm_script(config_path, run_id, args, args.run_train_script)
+    slurm_script = create_slurm_script(config_path, args, args.run_train_script)
 
     # Save Slurm script if requested
     if args.slurm_scripts_dir is not None:

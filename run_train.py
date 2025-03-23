@@ -10,7 +10,6 @@ torchrun --nproc_per_node=8 run_train.py --config-file examples/config_tiny_llam
 import argparse
 from typing import Dict, cast
 
-import numpy as np
 from nanotron import logging
 from nanotron.config import (
     DataArgs,
@@ -34,7 +33,7 @@ from nanotron.helpers import (
     compute_remain_train_steps_of_a_data_stage_from_ckp,
     get_consumed_train_samples_of_a_data_stage_from_ckp,
 )
-from nanotron.logging import log_rank
+from nanotron.logging import log_rank, warn_once
 from nanotron.parallel.pipeline_parallel.utils import get_input_output_pp_ranks
 from nanotron.trainer import DistributedTrainer
 from nanotron.utils import main_rank_first
@@ -174,9 +173,11 @@ def get_dataloader_from_data_stage(
     # Case 3: Nanosets
     elif isinstance(data.dataset, NanosetDatasetsArgs):
         # Get tokenizer cardinality
-        tokenizer = AutoTokenizer.from_pretrained(trainer.config.tokenizer.tokenizer_name_or_path)
-        token_size = 4 if len(tokenizer) > np.iinfo(np.uint16).max + 1 else 2
-        del tokenizer
+        warn_once(
+            f"You passed a tokenized Nanoset dataset '{data.dataset.dataset_folder}', Make sure it was tokenized with a vocab size={trainer.model_config.vocab_size}",
+            logger=logger,
+            rank=0,
+        )
         # Create Nanoset
         from nanotron.data.nanoset import Nanoset
 
@@ -185,7 +186,7 @@ def get_dataloader_from_data_stage(
                 dataset_folders=data.dataset.dataset_folder,
                 dataset_weights=data.dataset.dataset_weights,
                 sequence_length=trainer.sequence_length,
-                token_size=token_size,
+                vocab_size=trainer.model_config.vocab_size,
                 train_split_num_samples=trainer.config.tokens.train_steps * trainer.global_batch_size,
                 random_seed=data.seed,
             )
@@ -214,20 +215,25 @@ def get_dataloader_from_data_stage(
 def get_dataloader(trainer: DistributedTrainer) -> Dict[str, DataLoader]:
     dataloaders = {}
 
+    # Print training plan
+    log_rank("Training plan", logger=logger, level=logging.INFO, rank=0, is_separator=True)
+    stages_info = "".join(
+        f"[Stage {stage.name}] start from step {stage.start_training_step} \n" for stage in trainer.config.data_stages
+    )
+    full_log_message = f"There are {len(trainer.config.data_stages)} training stages \n{stages_info}"
+    log_rank(full_log_message, logger=logger, level=logging.INFO, rank=0)
+
     for stage_idx, stage in enumerate(trainer.config.data_stages):
         # NOTE: we only create the dataloader for the first stage,
         # then we lazy initialize the dataloader for the other stages
         stage = cast(DatasetStageArgs, stage)
         consumed_train_samples = get_consumed_train_samples_of_a_data_stage_from_ckp(stage, trainer.metadata)
-        assert (
-            consumed_train_samples is not None
-        ), f"Cannot find consumed_train_samples for stage {stage.start_training_step} in the checkpoint"
 
         num_remaining_train_steps = compute_remain_train_steps_of_a_data_stage_from_ckp(
             stage, trainer.config, trainer.metadata
         )
         log_rank(
-            f"[Training Plan] Stage {stage.name} has {num_remaining_train_steps} remaining training steps and has consumed {consumed_train_samples} samples",
+            f"Stage {stage.name} has {num_remaining_train_steps} remaining training steps and has consumed {consumed_train_samples} samples",
             logger=logger,
             level=logging.INFO,
             rank=0,
@@ -252,22 +258,6 @@ def get_dataloader(trainer: DistributedTrainer) -> Dict[str, DataLoader]:
     return dataloaders
 
 
-def log_libraries_versions():
-    import datasets
-    import flash_attn
-    import nanotron
-    import torch
-    import transformers
-
-    log_rank("\nLibraries versions:", logger=logger, level=logging.INFO, rank=0)
-    log_rank(f"nanotron version: {nanotron.__version__}", logger=logger, level=logging.INFO, rank=0)
-    log_rank(f"torch version: {torch.__version__}", logger=logger, level=logging.INFO, rank=0)
-    log_rank(f"transformers version: {transformers.__version__}", logger=logger, level=logging.INFO, rank=0)
-    log_rank(f"datasets version: {datasets.__version__}", logger=logger, level=logging.INFO, rank=0)
-    log_rank(f"flash-attn version: {flash_attn.__version__}", logger=logger, level=logging.INFO, rank=0)
-    log_rank("\n", logger=logger, level=logging.INFO, rank=0)
-
-
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config-file", type=str, required=True, help="Path to the YAML or python config file")
@@ -281,9 +271,6 @@ if __name__ == "__main__":
     # Load trainer and data
     trainer = DistributedTrainer(config_file)
     dataloader = get_dataloader(trainer)
-
-    # Log some libraries versions
-    log_libraries_versions()
 
     # Train
     trainer.train(dataloader)

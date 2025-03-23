@@ -5,7 +5,13 @@ from typing import Optional
 import nanotron
 import torch
 from nanotron.config import LlamaConfig as NanotronLlamaConfig
-from nanotron.config import NanotronConfigs
+from nanotron.config import (
+    NanotronConfigs,
+    OneForwardOneBackwardPipelineEngine,
+    ParallelismArgs,
+    PipelineEngine,
+    TensorParallelLinearMode,
+)
 from nanotron.models.llama import LlamaForTraining
 from nanotron.models.qwen import Qwen2ForTraining
 from nanotron.trainer import mark_tied_parameters
@@ -88,14 +94,17 @@ def make_parallel_config(
     dp: int = 1,
     pp: int = 1,
     tp: int = 1,
+    pp_engine: PipelineEngine = OneForwardOneBackwardPipelineEngine(),
+    tp_mode: TensorParallelLinearMode = TensorParallelLinearMode.REDUCE_SCATTER,
+    tp_linear_async_communication: bool = True,
 ):
-    parallel_config = nanotron.config.ParallelismArgs(
+    parallel_config = ParallelismArgs(
         dp=dp,
         pp=pp,
         tp=tp,
-        pp_engine=nanotron.config.AllForwardAllBackwardPipelineEngine(),
-        tp_mode=nanotron.config.TensorParallelLinearMode.ALL_REDUCE,
-        tp_linear_async_communication=False,
+        pp_engine=pp_engine,
+        tp_mode=tp_mode,
+        tp_linear_async_communication=tp_linear_async_communication,
     )
     return parallel_config
 
