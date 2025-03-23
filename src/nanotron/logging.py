@@ -415,6 +415,7 @@ def set_ranks_logging_level(parallel_context: ParallelContext, logging_config: "
 def log_libraries_versions(logger: logging.Logger):
     import datasets
     import flash_attn
+    import numpy
     import torch
     import transformers
 
@@ -426,6 +427,8 @@ def log_libraries_versions(logger: logging.Logger):
     log_rank(f"transformers version: {transformers.__version__}", logger=logger, level=logging.INFO, rank=0)
     log_rank(f"datasets version: {datasets.__version__}", logger=logger, level=logging.INFO, rank=0)
     log_rank(f"flash-attn version: {flash_attn.__version__}", logger=logger, level=logging.INFO, rank=0)
+    log_rank(f"numpy version: {numpy.__version__}", logger=logger, level=logging.INFO, rank=0)
+    log_rank(f"\ntorch.utils.collect_env: {torch.utils.collect_env.main()}", logger=logger, level=logging.INFO, rank=0)
 
 
 _configure_library_root_logger()
