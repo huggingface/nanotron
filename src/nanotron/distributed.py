@@ -112,7 +112,7 @@ def reduce_scatter_coalesced(
             assert device == input_tensor.device
             assert dtype == input_tensor.dtype
 
-    output_tensor_buffer = torch._utils._flatten_dense_tensors(output_tensor_list)
+    output_tensor_buffer = torch._utils._flatten_dense_tensors(output_tensor_list)  # creates 9GB
     input_tensor_buffer_list = [
         torch._utils._flatten_dense_tensors(
             [input_tensor_list[group_rank] for input_tensor_list in input_tensor_lists]

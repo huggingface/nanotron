@@ -27,36 +27,38 @@ class ZeroDistributedOptimizer(InheritFromOtherOptimizer):
 
     def __init__(
         self,
-        named_params_or_groups: Iterable[Union[Tuple[str, NanotronParameter], Dict[str, Any]]],
+        named_params_or_groups_f16: Iterable[Union[Tuple[str, NanotronParameter], Dict[str, Any]]],
         optimizer_builder: Callable[[Iterable[Dict[str, Any]]], BaseOptimizer],
         dp_pg: ProcessGroup,
     ):
-        named_params_or_groups = list(named_params_or_groups)
-        if len(named_params_or_groups) == 0 or isinstance(named_params_or_groups[0], dict):
-            # case where named_params_or_groups is Iterable[Dict[str, Any]]
-            for d in named_params_or_groups:
+        named_params_or_groups_f16 = list(named_params_or_groups_f16)
+        if len(named_params_or_groups_f16) == 0 or isinstance(named_params_or_groups_f16[0], dict):
+            # case where named_params_or_groups_f16 is Iterable[Dict[str, Any]]
+            for d in named_params_or_groups_f16:
                 assert (
                     "named_params" in d
                 ), f"param_groups must contain a 'named_params' key, got a dict with keys {d.keys()}"
 
-            # keep only named_params_or_groups that require grads
-            named_params_or_groups = [
+            # keep only named_params_or_groups_f16 that require grads
+            named_params_or_groups_f16 = [
                 {
                     "named_params": [
                         (name, param) for name, param in named_param_group["named_params"] if param.requires_grad
                     ],
                     **{k: v for k, v in named_param_group.items() if k != "named_params"},
                 }
-                for named_param_group in named_params_or_groups
+                for named_param_group in named_params_or_groups_f16
             ]
 
-            self.zero_named_param_groups = named_params_or_groups
+            self.named_param_groups_f16 = named_params_or_groups_f16
         else:
-            # case where named_params_or_groups is Iterable[Tuple[str, NanotronParameter]]
-            # keep only named_params_or_groups that require grads
-            named_params_or_groups = [(name, param) for name, param in named_params_or_groups if param.requires_grad]
-            self.zero_named_param_groups = [
-                {"named_params": named_params_or_groups}
+            # case where named_params_or_groups_f16 is Iterable[Tuple[str, NanotronParameter]]
+            # keep only named_params_or_groups_f16 that require grads
+            named_params_or_groups_f16 = [
+                (name, param) for name, param in named_params_or_groups_f16 if param.requires_grad
+            ]
+            self.named_param_groups_f16 = [
+                {"named_params": named_params_or_groups_f16}
             ]  # we point to the model's model_named_param_groups (unsharded in zero1 zero2)
 
         self.dp_pg = dp_pg  # DP process group
@@ -67,7 +69,7 @@ class ZeroDistributedOptimizer(InheritFromOtherOptimizer):
         self.param_name_to_dp_rank_offsets = self._partition_parameters()
 
         current_dp_rank = dist.get_rank(self.dp_pg)
-        # param_groups_in_rank is a shard of self.zero_named_param_groups that is going to be updated by the current DP rank
+        # param_groups_in_rank is a shard of self.named_param_groups_f16 that is going to be updated by the current DP rank
         param_groups_in_rank = [
             {
                 "named_params": [
@@ -84,7 +86,7 @@ class ZeroDistributedOptimizer(InheritFromOtherOptimizer):
                 ],
                 **{k: v for k, v in param_group.items() if k != "named_params"},
             }
-            for param_group in self.zero_named_param_groups
+            for param_group in self.named_param_groups_f16
         ]
 
         # initialize rank's optimizer which is responsible for updating the rank's parameters
@@ -96,13 +98,13 @@ class ZeroDistributedOptimizer(InheritFromOtherOptimizer):
         """Performs a single optimization step (parameter update)."""
         # TODO: @nouamanetazi: handle syncing param groups attrs (e.g. if we update lr)
         # self.optimizer.param_groups[0]['params'][0].shape is sharded
-        # self.zero_named_param_groups[0]["named_params"][0][1] is not sharded (it points to model's params)
+        # self.named_param_groups_f16[0]["named_params"][0][1] is not sharded (it points to model's params)
         loss = super().step(closure=closure)
 
         # calculate param_size (model) + param_size (grads) + 2*param_size/DP_if_zero1 (optim_states)
         expected_allocated = sum(
             param.numel() * param.element_size() * 2 + param.numel() * param.element_size() * 2 / self.dp_pg.size()
-            for named_param_group in self.zero_named_param_groups
+            for named_param_group in self.named_param_groups_f16
             for _, param in named_param_group["named_params"]
         )
 
@@ -139,7 +141,7 @@ class ZeroDistributedOptimizer(InheritFromOtherOptimizer):
         # with torch.autograd.profiler.record_function(self.optimizer._zero_grad_profile_name):
 
         # zero out the gradients of all model params (not just the params in the current rank)
-        for named_param_group in self.zero_named_param_groups:
+        for named_param_group in self.named_param_groups_f16:
             for _, p in named_param_group["named_params"]:
                 if p.grad is not None:
                     p.grad = None
@@ -151,7 +153,7 @@ class ZeroDistributedOptimizer(InheritFromOtherOptimizer):
     def _partition_parameters(self) -> Dict[str, Dict[int, Tuple[int, int]]]:
         named_params = [
             (name, param)
-            for named_param_group in self.zero_named_param_groups
+            for named_param_group in self.named_param_groups_f16
             for name, param in named_param_group["named_params"]
             if param.requires_grad
         ]
@@ -219,7 +221,7 @@ class ZeroDistributedOptimizer(InheritFromOtherOptimizer):
         """All gather updated params"""
         all_named_tensors_to_gather = [
             (name, param.view(-1))
-            for named_param_groups in self.zero_named_param_groups
+            for named_param_groups in self.named_param_groups_f16
             for name, param in named_param_groups["named_params"]
         ]
 

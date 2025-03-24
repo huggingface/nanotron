@@ -531,7 +531,7 @@ class DistributedTrainer:
                 (name, param)
                 for name, param in self.unwrapped_model.get_named_params_with_correct_tied()
                 if param.requires_grad
-            ]
+            ]  # TODO: when zero1 fp32_grads are sharded so i can't compute full norm
             self.grad_norm_unclipped = clip_grad_norm(
                 mp_pg=self.parallel_context.mp_pg,
                 named_parameters=named_parameters,

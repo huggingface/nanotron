@@ -119,6 +119,8 @@ class FP32GradientAccumulator(GradientAccumulator):
         self._is_accumulation_sync_step = False
         # We need the last allreduce handle to make sure it finishes before the optimizer step
         self.fp32_grads_allreduce_handle: Optional[torch.futures.Future] = None
+        # Reduce scatter buffer because `_contiguous_fp32_grad_buffer` tries to keep fp32_grads contiguous in memory, while we need [grad0_dp0, grad1_dp0, .., grad0_dp1, grad1_dp1, ..]
+        # self.reduce_scatter_buffer: Optional[torch.Tensor] = None
 
     def assign_param_offsets(self, param_name_to_offsets: Dict[str, Dict[int, Tuple[int, int]]], dp_rank: int):
         """To use only when you use with ZeRODistributedOptimizer"""
@@ -136,6 +138,12 @@ class FP32GradientAccumulator(GradientAccumulator):
             # However when the optimizer state are sharded, you really just need to scatter to ranks that are going to run the optimizer state.
             # Effectively you replace a `all_reduce` with a `reduce_scatter` which should save an `all_gather` when using RING algorithm.
             assert hasattr(self, "param_name_to_offsets")
+            # if self.reduce_scatter_buffer is None:
+            #     # need to make [grad0_dp0, grad1_dp0, .., grad0_dp1, grad1_dp1, ..]
+            #     self.reduce_scatter_buffer = torch.empty(self._contiguous_fp32_grad_buffer.numel(), dtype=torch.float, device=self._contiguous_fp32_grad_buffer.device)
+            #     # TODO: nested tensors?
+            # dist.reduce_scatter(self.reduce_scatter_buffer, input_tensor_list, group=dp_pg)
+
             named_offsets = sorted(self.param_name_to_offsets.items(), key=lambda x: x[0])
             flat_grad_buffers = [self.fp32_grad_buffers[name]["fp32_grad"].view(-1) for name, _ in named_offsets]
             dist.reduce_scatter_coalesced(
@@ -153,7 +161,9 @@ class FP32GradientAccumulator(GradientAccumulator):
                 group=dp_pg,
             )
         else:
-            dist.all_reduce(self._contiguous_fp32_grad_buffer, op=reduce_op, group=dp_pg)
+            dist.all_reduce(
+                self._contiguous_fp32_grad_buffer, op=reduce_op, group=dp_pg
+            )  # ideally i want self._contiguous_fp32_grad_buffer[dp_rank]
 
     @staticmethod
     def build_grad_buffers(
