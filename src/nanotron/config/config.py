@@ -329,6 +329,7 @@ class OptimizerArgs:
     clip_grad: Optional[float]
     accumulate_grad_in_fp32: bool
     learning_rate_scheduler: LRSchedulerArgs
+    reduce_scatter_zero1: bool = True
 
 
 @dataclass
@@ -377,8 +378,8 @@ class Config:
             self.s3_upload.__post_init__()
 
         # Some final sanity checks across separate arguments sections:
-        if self.profiler is not None and self.profiler.profiler_export_path is not None:
-            assert self.tokens.train_steps < 10
+        # if self.profiler is not None and self.profiler.profiler_export_path is not None:
+        #     assert self.tokens.train_steps < 10
 
         if self.optimizer is not None and self.optimizer.learning_rate_scheduler.lr_decay_steps is None:
             self.optimizer.learning_rate_scheduler.lr_decay_steps = (

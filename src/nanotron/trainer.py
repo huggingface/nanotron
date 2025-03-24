@@ -513,8 +513,7 @@ class DistributedTrainer:
                 module=self.model,
                 dp_pg=self.parallel_context.dp_pg,
                 reduce_op=dist.ReduceOp.AVG,
-                # TODO @thomasw21: This is too memory hungry, instead we run all_reduce
-                reduce_scatter=False,  # optimizer.inherit_from(ZeroDistributedOptimizer),
+                reduce_scatter=self.config.optimizer.reduce_scatter_zero1,
                 grad_accumulator=self.grad_accumulator,
             )
 
@@ -526,7 +525,7 @@ class DistributedTrainer:
         )
 
         # Clip gradients
-        if self.config.optimizer.clip_grad is not None:
+        if self.config.optimizer.clip_grad is not None:  # TODO: only clip grads of params that'll be updated in zero1
             # Unwrap DDP
             named_parameters = [
                 (name, param)
@@ -628,7 +627,7 @@ class DistributedTrainer:
                 LogItem("lr", lr, "human_format"),  # , ".3E"),
                 LogItem("model_tflops_per_gpu", model_tflops, "human_format"),  # , ".2f"),
                 LogItem("hardware_tflops_per_gpu", hardware_tflops, "human_format"),  # , ".2f"),
-                LogItem("eta", str(datetime.timedelta(seconds=eta_seconds)), "human_format"),  # Add ETA to logs
+                LogItem("eta", str(datetime.timedelta(seconds=eta_seconds))),  # Add ETA to logs
             ]
 
             if self.config.optimizer.clip_grad is not None:
