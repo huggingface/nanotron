@@ -608,9 +608,9 @@ class DistributedTrainer:
 
         if dist.get_rank(self.parallel_context.world_pg) in self.logger_ranks:
             assert self.loggerwriter is not None, "loggerwriter should be defined on logger ranks"
-
             lr = self.lr_scheduler.get_last_lr()[0]
-
+            remaining_steps = self.config.tokens.train_steps - self.iteration_step
+            eta_seconds = int(remaining_steps * (elapsed_time_per_iteration_ms / 1000))
             log_entries = [
                 # LogItem("consumed_samples", self.consumed_train_samples, "human_format"),  # , "12d"),
                 LogItem(
@@ -628,6 +628,7 @@ class DistributedTrainer:
                 LogItem("lr", lr, "human_format"),  # , ".3E"),
                 LogItem("model_tflops_per_gpu", model_tflops, "human_format"),  # , ".2f"),
                 LogItem("hardware_tflops_per_gpu", hardware_tflops, "human_format"),  # , ".2f"),
+                LogItem("eta", str(datetime.timedelta(seconds=eta_seconds)), "human_format"),  # Add ETA to logs
             ]
 
             if self.config.optimizer.clip_grad is not None:
