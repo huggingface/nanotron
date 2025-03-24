@@ -48,6 +48,7 @@ class OptimizerFromGradientAccumulator(InheritFromOtherOptimizer):
         super().__init__(optimizer=optimizer, id_to_name=optimizer.id_to_name)
 
     def step(self, closure: Optional[Callable[[], float]] = None) -> Optional[float]:
+        # self.param_groups[0]['params'][0] == self.optimizer.param_groups[0]['params'][0] is sharded
         loss = super().step(closure)
         self.gradient_accumulator.step()
         return loss

@@ -234,7 +234,8 @@ def before_optim_step_sanity_checks(
             )
 
         # SANITY CHECK: Check that optimizer states are synchronized across DP
-        check_optim_state_in_sync(optimizer.state_dict(), parallel_context.dp_pg)
+        if config.optimizer.zero_stage == 0:
+            check_optim_state_in_sync(optimizer.state_dict(), parallel_context.dp_pg)
 
         # SANITY CHECK: run model specific sanity checks
         unwrapped_model.before_optim_step_sanity_checks()

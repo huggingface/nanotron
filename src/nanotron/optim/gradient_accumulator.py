@@ -93,12 +93,13 @@ class FP32GradientAccumulator(GradientAccumulator):
             length = end_weight
 
         big_flat_buffer = torch.empty(length, dtype=torch.float, device="cuda")
+        # fp32 and half are sharded in case of Zero
         self.parameters = {
             name: {
-                "fp32": big_flat_buffer[start_weight:end_weight].view_as(param),
-                "half": param,
+                "fp32": big_flat_buffer[start_weight:end_weight].view_as(local_param),
+                "half": local_param,
             }
-            for name, (start_weight, end_weight, param) in segment_index.items()
+            for name, (start_weight, end_weight, local_param) in segment_index.items()
         }
 
         with torch.inference_mode():
@@ -256,6 +257,7 @@ class FP32GradientAccumulator(GradientAccumulator):
         We need to update only the parameters that were updated by the optimizer.
         """
         for name in self.parameters.keys():
+            # Update the local shard
             fp32_param = self.parameters[name]["fp32"]
             half_param = self.parameters[name]["half"]
             # TODO @nouamane: should we use a fused kernel to copy?

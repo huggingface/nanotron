@@ -73,6 +73,7 @@ class AdEMAMix(torch.optim.Optimizer):
     @torch.no_grad()
     def step(self, closure=None):
         """Performs a single optimization step."""
+        # self.param_groups[0]['params'][0] is sharded in case of Zero1
         loss = None
         if closure is not None:
             with torch.enable_grad():
@@ -103,7 +104,9 @@ class AdEMAMix(torch.optim.Optimizer):
                     # state["step"] = torch.zeros((1,), dtype=torch.float32, device=p.device)
                     if beta1 != 0.0:  # save memory in case beta1 is 0.0
                         state["exp_avg_fast"] = torch.zeros_like(p, memory_format=torch.preserve_format)
-                    state["exp_avg_slow"] = torch.zeros_like(p, memory_format=torch.preserve_format)
+                    state["exp_avg_slow"] = torch.zeros_like(
+                        p, memory_format=torch.preserve_format
+                    )  # TODO: should westatically allocate these in init?
                     state["exp_avg_sq"] = torch.zeros_like(p, memory_format=torch.preserve_format)
 
                 if beta1 != 0.0:

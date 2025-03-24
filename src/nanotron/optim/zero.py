@@ -55,7 +55,9 @@ class ZeroDistributedOptimizer(InheritFromOtherOptimizer):
             # case where named_params_or_groups is Iterable[Tuple[str, NanotronParameter]]
             # keep only named_params_or_groups that require grads
             named_params_or_groups = [(name, param) for name, param in named_params_or_groups if param.requires_grad]
-            self.zero_named_param_groups = [{"named_params": named_params_or_groups}]
+            self.zero_named_param_groups = [
+                {"named_params": named_params_or_groups}
+            ]  # we point to the model's model_named_param_groups (unsharded in zero1 zero2)
 
         self.dp_pg = dp_pg  # DP process group
 
@@ -65,6 +67,7 @@ class ZeroDistributedOptimizer(InheritFromOtherOptimizer):
         self.param_name_to_dp_rank_offsets = self._partition_parameters()
 
         current_dp_rank = dist.get_rank(self.dp_pg)
+        # param_groups_in_rank is a shard of self.zero_named_param_groups that is going to be updated by the current DP rank
         param_groups_in_rank = [
             {
                 "named_params": [
@@ -85,9 +88,6 @@ class ZeroDistributedOptimizer(InheritFromOtherOptimizer):
         ]
 
         # initialize rank's optimizer which is responsible for updating the rank's parameters
-        # NOTE: In case of ZeRO, `self.id_to_name` stores only names of parameters that are going to be updated by this DP rank's optimizer.
-        # NOTE: In case of ZeRO, `self.optimizer` will only get the parameters that are going to be updated by this DP's optimizer. Which
-        # means that `self.optimizer.param_groups` is only a subset of `self.param_groups`.
         optimizer = optimizer_builder(param_groups_in_rank)
         super().__init__(optimizer=optimizer, id_to_name=optimizer.id_to_name)
 
@@ -95,7 +95,8 @@ class ZeroDistributedOptimizer(InheritFromOtherOptimizer):
     def step(self, closure: Optional[Callable[[], float]] = None) -> Optional[float]:
         """Performs a single optimization step (parameter update)."""
         # TODO: @nouamanetazi: handle syncing param groups attrs (e.g. if we update lr)
-
+        # self.optimizer.param_groups[0]['params'][0].shape is sharded
+        # self.zero_named_param_groups[0]["named_params"][0][1] is not sharded (it points to model's params)
         loss = super().step(closure=closure)
 
         # calculate param_size (model) + param_size (grads) + 2*param_size/DP_if_zero1 (optim_states)
