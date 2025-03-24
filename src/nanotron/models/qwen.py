@@ -57,6 +57,7 @@ class CoreAttention(nn.Module):
         self._attn_implementation = config._attn_implementation
         self.cp_pg = cp_pg
         self.sliding_window = getattr(config, "sliding_window", None)
+        self.is_causal = True
 
     def forward(
         self,
