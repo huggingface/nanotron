@@ -99,6 +99,14 @@ def parse_args():
     slurm_group.add_argument("--pre_launch_commands", type=str, default="", help="Commands to run before job launch")
     slurm_group.add_argument("--extra_env", type=str, default="", help="Additional environment variables")
 
+    # Config file
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help="Path to the Nanotron config file. If not provided, a config will be created automatically.",
+    )
+
     # Model configuration
     model_group = parser.add_argument_group("Model Configuration")
     model_group.add_argument(
@@ -545,8 +553,12 @@ def main():
     os.makedirs(args.configs_path, exist_ok=True)
     os.makedirs(args.slurm_logs_path, exist_ok=True)
 
-    # Create Nanotron config
-    config = create_nanotron_config(args)
+    # Create Nanotron config if not provided
+    if args.config is None:
+        config = create_nanotron_config(args)
+    else:
+        print(f"Loading config from {args.config}")
+        config = Config.load_from_yaml(args.config)
 
     # Save config to YAML file
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
