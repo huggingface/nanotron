@@ -130,7 +130,7 @@ def test_optimizer_can_step_gradient_in_fp32(half_precision: torch.dtype):
     assert model.weight.grad is None
 
     # Check that gradients have been set to zero
-    fp32_grad = accumulator.get_grad_buffer(name="weight")
+    fp32_grad = accumulator.get_local_grad_buffer(name="weight")
     torch.testing.assert_close(fp32_grad, torch.zeros_like(fp32_grad), atol=1e-6, rtol=1e-7)
 
     # weights has been updates
@@ -218,7 +218,7 @@ def _test_ddp_with_grad_accum_in_fp32(
             for name, param in model_ddp.named_parameters():
                 grad = param.grad
                 grad_fp32_accum = accumulator.parameters[name]["fp32"].grad
-                fp32_grad_bucket = accumulator.get_grad_buffer(name=name)
+                fp32_grad_bucket = accumulator.get_local_grad_buffer(name=name)
 
                 # Check that FP32GradAccum+DDP+hook gives close gradients to DDP
                 model_ddp_accum_ref[name] = (
@@ -257,13 +257,13 @@ def _test_ddp_with_grad_accum_in_fp32(
         accumulator.backward(loss_fp32_accum)
 
         for name, param in model_ddp_fp32_accum.named_parameters():
-            # Check that half grads has been set to None in sync step, to avoid it being uncorrectly used
+            # Check that half grads has been set to None in sync step, to avoid it being incorrectly used
             half_grad = param.grad
             assert half_grad is None, f"{half_grad} != None"
 
             grad = model_ddp_accum_ref[name]
             grad_fp32_accum = accumulator.parameters[name]["fp32"].grad
-            fp32_grad_bucket = accumulator.get_grad_buffer(name=name)
+            fp32_grad_bucket = accumulator.get_local_grad_buffer(name=name)
 
             # Check that FP32GradAccum+DDP+hook gives close gradients to DDP
             dist.barrier()
@@ -287,12 +287,12 @@ def _test_ddp_with_grad_accum_in_fp32(
         # Check that fp32 grad buckets are zeroed out and `param.grad` is set to None
         for name, param in model_ddp_fp32_accum.named_parameters():
             assert param.grad is None
-            fp32_grad_bucket = accumulator.get_grad_buffer(name=name)
+            fp32_grad_bucket = accumulator.get_local_grad_buffer(name=name)
             dist.barrier()
             torch.testing.assert_close(fp32_grad_bucket, torch.zeros_like(fp32_grad_bucket), atol=1e-6, rtol=1e-7)
 
         # Check that all fp32 grad buckets are zeroed out
-        for _, elt in accumulator.fp32_grad_buffers.items():
+        for _, elt in accumulator.global_fp32_grad_buffers.items():
             fp32_grad = elt["fp32_grad"]
             # This is important as we assume grad buckets to be zeroed out at the first accumulation step
             dist.barrier()
@@ -494,7 +494,7 @@ def _test_tied_weights_sync_with_grad_accum_in_fp32(
             name in accumulator.parameters
         ), f"`accumulator.parameters` must have all params {name} not in `accumulator.parameters`. Existing keys are: {accumulator.parameters}"
 
-        fp32_grad = accumulator.get_grad_buffer(name=name)
+        fp32_grad = accumulator.get_local_grad_buffer(name=name)
 
         if not reduce_scatter:
             # Check that the gradients are synchronized across DP
@@ -526,7 +526,7 @@ def _test_tied_weights_sync_with_grad_accum_in_fp32(
             continue
 
         group = parallel_context.world_ranks_to_pg[group_ranks]
-        fp32_grad = accumulator.get_grad_buffer(name=name)
+        fp32_grad = accumulator.get_local_grad_buffer(name=name)
 
         with assert_fail_except_rank_with(AssertionError, rank_exception=0, pg=group):
             assert_tensor_synced_across_pg(
@@ -557,7 +557,7 @@ def _test_tied_weights_sync_with_grad_accum_in_fp32(
         # Make sure we don't get None for reduce_op
         assert reduce_op == dist.ReduceOp.SUM
 
-        fp32_grad_buffer = accumulator.get_grad_buffer(name=name)
+        fp32_grad_buffer = accumulator.get_local_grad_buffer(name=name)
 
         # Grad buffers are only attached to param.grad on ranks that are sharded depending on `param_to_dprank`
         fp32_grad = accumulator.parameters[name]["fp32"].grad
@@ -589,7 +589,7 @@ def _test_tied_weights_sync_with_grad_accum_in_fp32(
         dist.all_reduce(reference_model_accum_ref[name], group=group, op=reduce_op)
 
     # Check that accumulated grads are correct
-    for name, elt in accumulator.fp32_grad_buffers.items():
+    for name, elt in accumulator.global_fp32_grad_buffers.items():
         fp32_grad = elt["fp32_grad"]
 
         dist.barrier()

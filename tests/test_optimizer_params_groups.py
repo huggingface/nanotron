@@ -266,10 +266,10 @@ def test_optimizer_grad_accumulation_lr_one_group(half_precision: torch.dtype, a
 
             # Manual update weights for ref
             with torch.no_grad():
-                fc1_grad = accumulator.get_grad_buffer(name="fc1.weight").to(dtype)
+                fc1_grad = accumulator.get_local_grad_buffer(name="fc1.weight").to(dtype)
                 expected_fc1_weight = model.fc1.weight - lr1 * fc1_grad
 
-                fc2_grad = accumulator.get_grad_buffer(name="fc2.weight").to(dtype)
+                fc2_grad = accumulator.get_local_grad_buffer(name="fc2.weight").to(dtype)
                 expected_fc2_weight = model.fc2.weight - lr1 * fc2_grad
 
             optimizer.step()
@@ -331,10 +331,10 @@ def test_optimizer_grad_accumulation_lr_multiple_group(half_precision: torch.dty
 
             # Manual update weights for ref
             with torch.no_grad():
-                fc1_grad = accumulator.get_grad_buffer(name="fc1.weight").to(dtype)
+                fc1_grad = accumulator.get_local_grad_buffer(name="fc1.weight").to(dtype)
                 expected_fc1_weight = model.fc1.weight - lr1 * fc1_grad
 
-                fc2_grad = accumulator.get_grad_buffer(name="fc2.weight").to(dtype)
+                fc2_grad = accumulator.get_local_grad_buffer(name="fc2.weight").to(dtype)
                 expected_fc2_weight = model.fc2.weight - lr2 * fc2_grad
 
             optimizer.step()
@@ -398,10 +398,10 @@ def test_optimizer_grad_accumulation_lr_weight_decay_one_group(half_precision: t
 
             # Manual update weights for ref
             with torch.no_grad():
-                fc1_grad = accumulator.get_grad_buffer(name="fc1.weight").to(dtype)
+                fc1_grad = accumulator.get_local_grad_buffer(name="fc1.weight").to(dtype)
                 expected_fc1_weight = (1 - lr1 * weight_decay) * model.fc1.weight - lr1 * fc1_grad
 
-                fc2_grad = accumulator.get_grad_buffer(name="fc2.weight").to(dtype)
+                fc2_grad = accumulator.get_local_grad_buffer(name="fc2.weight").to(dtype)
                 expected_fc2_weight = (1 - lr1 * weight_decay) * model.fc2.weight - lr1 * fc2_grad
 
             optimizer.step()
@@ -474,10 +474,10 @@ def test_optimizer_grad_accumulation_lr_weight_decay_multiple_group(
 
             # Manual update weights for ref
             with torch.no_grad():
-                fc1_grad = accumulator.get_grad_buffer(name="fc1.weight").to(dtype)
+                fc1_grad = accumulator.get_local_grad_buffer(name="fc1.weight").to(dtype)
                 expected_fc1_weight = (1 - lr1 * weight_decay1) * model.fc1.weight - lr1 * fc1_grad
 
-                fc2_grad = accumulator.get_grad_buffer(name="fc2.weight").to(dtype)
+                fc2_grad = accumulator.get_local_grad_buffer(name="fc2.weight").to(dtype)
                 expected_fc2_weight = (1 - lr2 * weight_decay2) * model.fc2.weight - lr2 * fc2_grad
 
             optimizer.step()
@@ -566,10 +566,10 @@ def _test_ddp_optimizer_grad_accumulation_lr_weight_decay_multiple_group(
 
             # Manual update weights for ref
             with torch.no_grad():
-                fc1_grad = accumulator.get_grad_buffer(name="module.fc1.weight").to(dtype)
+                fc1_grad = accumulator.get_local_grad_buffer(name="module.fc1.weight").to(dtype)
                 expected_fc1_weight = (1 - lr1 * weight_decay1) * model.fc1.weight - lr1 * fc1_grad
 
-                fc2_grad = accumulator.get_grad_buffer(name="module.fc2.weight").to(dtype)
+                fc2_grad = accumulator.get_local_grad_buffer(name="module.fc2.weight").to(dtype)
                 expected_fc2_weight = (1 - lr2 * weight_decay2) * model.fc2.weight - lr2 * fc2_grad
 
             optimizer.step()

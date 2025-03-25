@@ -531,8 +531,10 @@ def _test_clip_grads_fp32_accumulator(
             prefix_name = f"mlp.{pp_rank}.linear.pp_block"
             if pp_rank == current_pp_rank:
                 # We already have the gradients locally
-                reference_non_linear.weight.grad = grad_accumulator.get_grad_buffer(f"{prefix_name}.weight").clone()
-                reference_non_linear.bias.grad = grad_accumulator.get_grad_buffer(f"{prefix_name}.bias").clone()
+                reference_non_linear.weight.grad = grad_accumulator.get_local_grad_buffer(
+                    f"{prefix_name}.weight"
+                ).clone()
+                reference_non_linear.bias.grad = grad_accumulator.get_local_grad_buffer(f"{prefix_name}.bias").clone()
                 continue
 
             weight_grad, bias_grad = p2p.recv_tensors(num_tensors=2, from_rank=pp_rank)
@@ -541,14 +543,14 @@ def _test_clip_grads_fp32_accumulator(
     else:
         p2p.send_tensors(
             [
-                grad_accumulator.get_grad_buffer(f"mlp.{current_pp_rank}.linear.pp_block.weight"),
-                grad_accumulator.get_grad_buffer(f"mlp.{current_pp_rank}.linear.pp_block.bias"),
+                grad_accumulator.get_local_grad_buffer(f"mlp.{current_pp_rank}.linear.pp_block.weight"),
+                grad_accumulator.get_local_grad_buffer(f"mlp.{current_pp_rank}.linear.pp_block.bias"),
             ],
             to_rank=reference_rank,
         )
 
     old_fp32_grads = {
-        name: grad_accumulator.get_grad_buffer(name=name).clone() for name, _ in model.named_parameters()
+        name: grad_accumulator.get_local_grad_buffer(name=name).clone() for name, _ in model.named_parameters()
     }
 
     # Clip grads
@@ -566,7 +568,7 @@ def _test_clip_grads_fp32_accumulator(
 
     # Check that the gradients have changed
     for name, _ in model.named_parameters():
-        new_fp32_grad = grad_accumulator.get_grad_buffer(name=name)
+        new_fp32_grad = grad_accumulator.get_local_grad_buffer(name=name)
         assert not torch.allclose(old_fp32_grads[name], new_fp32_grad), "Gradients should have changed after clipping"
 
     # We check that we get the same gradient accumulation. In theory we do get more precision by promoting gradients to fp32.
@@ -585,13 +587,13 @@ def _test_clip_grads_fp32_accumulator(
                 # We already have the gradients locally
                 torch.testing.assert_close(
                     reference_non_linear.weight.grad,
-                    grad_accumulator.get_grad_buffer(f"{prefix_name}.weight"),
+                    grad_accumulator.get_local_grad_buffer(f"{prefix_name}.weight"),
                     atol=1e-6,
                     rtol=1e-7,
                 )
                 torch.testing.assert_close(
                     reference_non_linear.bias.grad,
-                    grad_accumulator.get_grad_buffer(f"{prefix_name}.bias"),
+                    grad_accumulator.get_local_grad_buffer(f"{prefix_name}.bias"),
                     atol=1e-6,
                     rtol=1e-7,
                 )
@@ -613,8 +615,8 @@ def _test_clip_grads_fp32_accumulator(
     else:
         p2p.send_tensors(
             [
-                grad_accumulator.get_grad_buffer(f"mlp.{current_pp_rank}.linear.pp_block.weight"),
-                grad_accumulator.get_grad_buffer(f"mlp.{current_pp_rank}.linear.pp_block.bias"),
+                grad_accumulator.get_local_grad_buffer(f"mlp.{current_pp_rank}.linear.pp_block.weight"),
+                grad_accumulator.get_local_grad_buffer(f"mlp.{current_pp_rank}.linear.pp_block.bias"),
             ],
             to_rank=reference_rank,
         )
