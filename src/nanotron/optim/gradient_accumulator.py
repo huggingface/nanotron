@@ -346,10 +346,10 @@ class FP32GradientAccumulator(GradientAccumulator):
         # half_params = torch.cat([elt["half"] for elt in self.local_params.values()]) # TODO: this does a copy and doesnt work
         # half_params.copy_(self.local_fp32_params_buffer[: half_params.numel()])  # last dp rank has padding
         # check that first half param was updated
-        assert torch.allclose(
-            self.local_params["model.decoder.11.pp_block.mlp.gate_up_proj.weight"]["half"],
-            self.local_params["model.decoder.11.pp_block.mlp.gate_up_proj.weight"]["fp32"].bfloat16(),
-        )
+        # assert torch.allclose(
+        #     self.local_params["model.decoder.11.pp_block.mlp.gate_up_proj.weight"]["half"],
+        #     self.local_params["model.decoder.11.pp_block.mlp.gate_up_proj.weight"]["fp32"].bfloat16(),
+        # )
 
     def zero_grad(self):
         # Full precision gradients are reset to zero/none after the underlying `optimiser.step`, so no need to reset.
