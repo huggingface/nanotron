@@ -43,10 +43,15 @@ def clip_grad_norm(
         ]
     else:
         # In case of FP32 Grad Accum, We need to clip all fp32 grads
+        [name for name, p in named_parameters if p.is_tied]
+        ignored_tied_params = [
+            name for name, p in named_parameters if p.is_tied and world_rank != p.get_tied_info().global_ranks[0]
+        ]
+        # TODO: check why ignored_tied_params is always empty
         grads = [
-            grad_accumulator.get_grad_buffer(name)
-            for name, p in named_parameters
-            if not p.is_tied or world_rank == p.get_tied_info().global_ranks[0]
+            grad_accumulator.get_local_grad_buffer(name)
+            for name, p in grad_accumulator.local_params.items()
+            if name not in ignored_tied_params
         ]
 
     # Calculate gradient norm
@@ -57,7 +62,7 @@ def clip_grad_norm(
             )
         else:
             total_norm = torch.zeros([], dtype=torch.float, device=torch.device("cuda"))
-        dist.all_reduce(total_norm, group=mp_pg, op=dist.ReduceOp.MAX)
+        dist.all_reduce(total_norm, group=mp_pg, op=dist.ReduceOp.MAX)  # TODO @nouamane: maybe only apply to TP?
 
     else:
         if len(grads) > 0:
@@ -79,18 +84,18 @@ def clip_grad_norm(
     # when the gradients do not reside in CPU memory.
     clip_coef_clamped = torch.clamp(clip_coef, max=1.0)
 
-    devices = {
-        param.grad.device if grad_accumulator is None else grad_accumulator.get_grad_buffer(name).device
-        for name, param in named_parameters
-    }
-    device_to_clip_coef_clamped = {device: clip_coef_clamped.to(device) for device in devices}
+    # devices = {
+    #     param.grad.device if grad_accumulator is None else grad_accumulator.get_local_grad_buffer(name).device
+    #     for name, param in named_parameters
+    # }
+    # device_to_clip_coef_clamped = {device: clip_coef_clamped.to(device) for device in devices}
 
     for name, param in named_parameters:
         if grad_accumulator is None:
-            param.grad.detach().mul_(device_to_clip_coef_clamped[param.grad.device])
+            param.grad.detach().mul_(clip_coef_clamped)
         else:
-            grad_accumulator.get_grad_buffer(name).detach().mul_(
-                device_to_clip_coef_clamped[grad_accumulator.get_grad_buffer(name).device]
-            )
+            grad = grad_accumulator.get_local_grad_buffer(name)
+            if grad is not None:
+                grad.detach().mul_(clip_coef_clamped)  # TODO: check this works
 
     return total_norm

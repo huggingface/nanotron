@@ -13,15 +13,15 @@ class OptimizerFromGradientAccumulator(InheritFromOtherOptimizer):
     def __init__(
         self,
         gradient_accumulator_builder: Callable[[Iterable[Tuple[str, NanotronParameter]]], GradientAccumulator],
-        named_params_or_groups: Iterable[Union[Tuple[str, torch.Tensor], Dict[str, Any]]],
+        local_param_groups_f16: Iterable[Union[Tuple[str, torch.Tensor], Dict[str, Any]]],
         optimizer_builder: Callable[[Iterable[Dict[str, Any]]], BaseOptimizer],
     ):
-        named_param_groups = list(named_params_or_groups)
-        if len(named_param_groups) == 0 or not isinstance(named_param_groups[0], dict):
-            named_param_groups = [{"named_params": named_param_groups}]
+        local_param_groups_f16 = list(local_param_groups_f16)
+        if len(local_param_groups_f16) == 0 or not isinstance(local_param_groups_f16[0], dict):
+            local_param_groups_f16 = [{"named_params": local_param_groups_f16}]
 
         name_to_param = {}
-        for named_param_group in named_param_groups:
+        for named_param_group in local_param_groups_f16:
             for name, param in named_param_group["named_params"]:
                 if name in name_to_param:
                     raise ValueError(f"Duplicate key. {name} is already in `name_to_param`")
@@ -41,7 +41,7 @@ class OptimizerFromGradientAccumulator(InheritFromOtherOptimizer):
                     for name, _ in named_param_group["named_params"]
                 ],
             }
-            for named_param_group in named_param_groups
+            for named_param_group in local_param_groups_f16
         ]
         optimizer = optimizer_builder(converted_named_param_group)
 

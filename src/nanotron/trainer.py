@@ -513,7 +513,7 @@ class DistributedTrainer:
                 module=self.model,
                 dp_pg=self.parallel_context.dp_pg,
                 reduce_op=dist.ReduceOp.AVG,
-                reduce_scatter=self.config.optimizer.reduce_scatter_zero1,
+                reduce_scatter=self.config.optimizer.reduce_scatter_zero1 and self.config.optimizer.zero_stage > 0,
                 grad_accumulator=self.grad_accumulator,
             )
 
@@ -532,8 +532,11 @@ class DistributedTrainer:
                 for name, param in self.unwrapped_model.get_named_params_with_correct_tied()
                 if param.requires_grad
             ]  # TODO: when zero1 fp32_grads are sharded so i can't compute full norm
+            # In case of Zero1 with reduce_scatter,
             self.grad_norm_unclipped = clip_grad_norm(
-                mp_pg=self.parallel_context.mp_pg,
+                mp_pg=self.parallel_context.mp_pg
+                if self.config.optimizer.zero_stage == 0
+                else self.parallel_context.world_pg,  # TODO: define mp_dp_pg
                 named_parameters=named_parameters,
                 grad_accumulator=self.grad_accumulator,
                 max_norm=self.config.optimizer.clip_grad,

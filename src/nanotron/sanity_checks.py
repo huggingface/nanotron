@@ -98,7 +98,7 @@ def before_tbi_sanity_checks(
 
         # SANITY CHECK: Check that the grad accumulator buffers are ready for DDP
         if grad_accumulator is not None:
-            for _, elt in grad_accumulator.fp32_grad_buffers.items():
+            for _, elt in grad_accumulator.global_fp32_grad_buffers.items():
                 fp32_grad_buffer = elt["fp32_grad"]
                 torch.testing.assert_close(
                     fp32_grad_buffer,
@@ -142,7 +142,7 @@ def after_tbi_sanity_checks(
                 )
 
             if grad_accumulator is not None:
-                grad = grad_accumulator.get_grad_buffer(name=name)
+                grad = grad_accumulator.get_local_grad_buffer(name=name)
             else:
                 grad = param.grad
 
@@ -176,7 +176,7 @@ def before_optim_step_sanity_checks(
                 continue
 
             if grad_accumulator is not None:
-                grad = grad_accumulator.get_grad_buffer(name=name)
+                grad = grad_accumulator.get_local_grad_buffer(name=name)
             else:
                 grad = param.grad
 
@@ -200,7 +200,7 @@ def before_optim_step_sanity_checks(
                 )
 
             if grad_accumulator is not None:
-                grad = grad_accumulator.get_grad_buffer(name=name)
+                grad = grad_accumulator.get_local_grad_buffer(name=name)
             else:
                 grad = param.grad
 

@@ -4,7 +4,6 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
 
-import numpy as np
 import torch.optim
 from functorch.dim import tree_map
 from torch import nn
@@ -90,7 +89,9 @@ class ZeroDistributedOptimizer(InheritFromOtherOptimizer):
         ]
 
         # initialize rank's optimizer which is responsible for updating the rank's parameters
-        optimizer = optimizer_builder(param_groups_in_rank)
+        optimizer = optimizer_builder(
+            param_groups_in_rank, param_name_to_dp_rank_offsets=self.param_name_to_dp_rank_offsets, dp_pg=self.dp_pg
+        )
         super().__init__(optimizer=optimizer, id_to_name=optimizer.id_to_name)
 
     @torch.no_grad()
@@ -102,21 +103,21 @@ class ZeroDistributedOptimizer(InheritFromOtherOptimizer):
         loss = super().step(closure=closure)
 
         # calculate param_size (model) + param_size (grads) + 2*param_size/DP_if_zero1 (optim_states)
-        expected_allocated = sum(
-            param.numel() * param.element_size() * 2 + param.numel() * param.element_size() * 2 / self.dp_pg.size()
-            for named_param_group in self.named_param_groups_f16
-            for _, param in named_param_group["named_params"]
-        )
+        # expected_allocated = sum(
+        #     param.numel() * param.element_size() * 2 + param.numel() * param.element_size() * 2 / self.dp_pg.size()
+        #     for named_param_group in self.named_param_groups_f16
+        #     for _, param in named_param_group["named_params"]
+        # )
 
-        log_rank(
-            f"[After optim states allocation] Memory usage: {torch.cuda.memory_allocated() / 1024**2:.2f}MB "
-            f"(Expected 2*param_size + 2*param_size/DP_if_zero1={expected_allocated / 1024**2:.2f}MB). "
-            f"Peak reserved memory: {torch.cuda.max_memory_reserved() / 1024**2:.2f}MB",
-            logger=logger,
-            level=logging.DEBUG,
-            group=self.dp_pg,
-            rank=0,
-        )
+        # log_rank(
+        #     f"[After optim states allocation] Memory usage: {torch.cuda.memory_allocated() / 1024**2:.2f}MB "
+        #     f"(Expected 2*param_size + 2*param_size/DP_if_zero1={expected_allocated / 1024**2:.2f}MB). "
+        #     f"Peak reserved memory: {torch.cuda.max_memory_reserved() / 1024**2:.2f}MB",
+        #     logger=logger,
+        #     level=logging.DEBUG,
+        #     group=self.dp_pg,
+        #     rank=0,
+        # )
 
         # All gather updated params
         self._all_gather_params()
@@ -151,6 +152,7 @@ class ZeroDistributedOptimizer(InheritFromOtherOptimizer):
                     torch._foreach_zero_(grads)
 
     def _partition_parameters(self) -> Dict[str, Dict[int, Tuple[int, int]]]:
+        # Get all named parameters that require gradients
         named_params = [
             (name, param)
             for named_param_group in self.named_param_groups_f16
@@ -158,50 +160,64 @@ class ZeroDistributedOptimizer(InheritFromOtherOptimizer):
             if param.requires_grad
         ]
 
-        # maps each model's param to the optimizer's dp rank that is responsible for updating it
-
-        # We assume that parameters can be sharded across DP, ie we can "split" a parameter in different DP. This does break some optimizers, like Adafactor and such.
-        # `param_name_to_dp_rank_offsets[name]` is a `Dict[int, Tuple[int, int]]` keys are dp_rank, and `Tuple[int, int]` are the offsets of the param belonging to this DP
-        param_name_to_dp_rank_offsets = {}
-
-        # NOTE: save the original shapes before flattening the params
-        # so that later on, we can reshape the params to their original shapes
-        # for topology-agnostic optimizer states loading
+        # Save original shapes for later use
         self._orig_param_shapes = {}
         for name, param in named_params:
             self._orig_param_shapes[name] = param.shape
-
-        for name, param in named_params:
-            # We assume parameter to be contiguous in order to have an easy way of sharding it.
             assert param.is_contiguous(), f"Parameter {name} is not contiguous"
 
-            numel = param.numel()
-            padded_numel_per_dp = (numel - 1) // self.dp_pg.size() + 1
-            sizes = np.full(shape=(self.dp_pg.size()), fill_value=padded_numel_per_dp)
-            remainder = padded_numel_per_dp * self.dp_pg.size() - numel
-            # Last `remainder` indices has one less element
-            if remainder > 0:
-                # It's weird that `size[-0:]` returns the entire list instead of nothing
-                sizes[-remainder:] -= 1
-            end_offsets = np.cumsum(sizes)
-            assert len(end_offsets) == self.dp_pg.size()
-            assert end_offsets[-1] == numel, f"Somehow {end_offsets[-1]} != {numel}"
-            # We want start indices,
-            start_offsets = np.concatenate([[0], end_offsets[:-1]])
+        # Calculate total elements and size per dp rank
+        total_numel = sum(param.numel() for _, param in named_params)
+        base_numel_per_dp = total_numel // self.dp_pg.size()  # Last dp rank gets the remainder
 
-            param_name_to_dp_rank_offsets[name] = {
-                dp_rank: (start_offsets[dp_rank], end_offsets[dp_rank])
-                for dp_rank in range(self.dp_pg.size())
-                if start_offsets[dp_rank] < end_offsets[dp_rank]  # Only if the slice is not empty.
-            }
+        # Initialize the mapping dictionary
+        param_name_to_dp_rank_offsets = {}
 
+        current_dp_rank = 0
+        current_offset = 0
+        dp_rank_numel = base_numel_per_dp
+
+        # Assign parameters to dp ranks
+        for name, param in named_params:
+            param_numel = param.numel()
+            param_start_offset = 0
+
+            while param_start_offset < param_numel:
+                # How much space left in current dp_rank
+                space_in_current_dp = dp_rank_numel - (current_offset % dp_rank_numel)
+
+                # How much of the parameter to assign to current dp_rank
+                elements_to_assign = min(param_numel - param_start_offset, space_in_current_dp)
+
+                # Initialize the dictionary for this parameter if needed
+                if name not in param_name_to_dp_rank_offsets:
+                    param_name_to_dp_rank_offsets[name] = {}
+
+                # Assign the slice to current dp_rank
+                param_name_to_dp_rank_offsets[name][current_dp_rank] = (
+                    param_start_offset,
+                    param_start_offset + elements_to_assign,
+                )
+
+                # Update offsets
+                param_start_offset += elements_to_assign
+                current_offset += elements_to_assign
+
+                # Check if we need to move to next dp_rank
+                if current_offset >= dp_rank_numel:
+                    current_dp_rank += 1
+                    if current_dp_rank < self.dp_pg.size():
+                        dp_rank_numel = base_numel_per_dp
+                        current_offset = 0
+
+        # Log sharding information
         log_rank("[ZeRO sharding] Size of optimizer params per rank:", logger=logger, level=logging.INFO, rank=0)
         all_numel = sum(
             param_name_to_dp_rank_offsets[name][dp_rank][1] - param_name_to_dp_rank_offsets[name][dp_rank][0]
             for name, param in named_params
-            for dp_rank in range(self.dp_pg.size())
-            if dp_rank in param_name_to_dp_rank_offsets[name]
+            for dp_rank in param_name_to_dp_rank_offsets[name].keys()
         )
+
         for dp_rank in range(self.dp_pg.size()):
             acc_numel = sum(
                 value[dp_rank][1] - value[dp_rank][0]
@@ -209,7 +225,8 @@ class ZeroDistributedOptimizer(InheritFromOtherOptimizer):
                 if dp_rank in value
             )
             log_rank(
-                f"[ZeRO sharding] DP Rank {dp_rank} has {human_format(acc_numel)} out of {human_format(all_numel)} ({0 if all_numel == 0 else acc_numel / all_numel * 100:.2f}%) params' optimizer states",
+                f"[ZeRO sharding] DP Rank {dp_rank} has {human_format(acc_numel)} out of {human_format(all_numel)} "
+                f"({0 if all_numel == 0 else acc_numel / all_numel * 100:.2f}%) params' optimizer states",
                 logger=logger,
                 level=logging.INFO,
                 rank=0,

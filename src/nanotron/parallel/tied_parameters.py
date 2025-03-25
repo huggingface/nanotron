@@ -145,7 +145,7 @@ def sync_tied_weights_gradients(
             continue
 
         if grad_accumulator is not None:
-            tied_grad = grad_accumulator.get_grad_buffer(name=name)
+            tied_grad = grad_accumulator.get_local_grad_buffer(name=name)
         else:
             tied_grad = tied_param.grad
         log_rank(

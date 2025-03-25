@@ -43,7 +43,11 @@ class GradientAccumulator(ABC):
         ...
 
     @abstractmethod
-    def get_grad_buffer(self, name: str) -> torch.Tensor:
+    def get_global_grad_buffer(self, name: str) -> torch.Tensor:
+        ...
+
+    @abstractmethod
+    def get_local_grad_buffer(self, name: str) -> torch.Tensor:
         ...
 
     @abstractmethod
@@ -58,62 +62,85 @@ class GradientAccumulator(ABC):
 class FP32GradientAccumulator(GradientAccumulator):
     def __init__(
         self,
-        named_parameters: Iterator[Tuple[str, NanotronParameter]],
-        grad_buckets_named_params: Optional[Iterator[Tuple[str, NanotronParameter]]] = None,
+        local_named_params_f16: Iterator[Tuple[str, NanotronParameter]],
+        global_named_params_f16: Optional[Iterator[Tuple[str, NanotronParameter]]] = None,
+        param_name_to_dp_rank_offsets: Optional[Dict[str, Dict[int, Tuple[int, int]]]] = None,
+        dp_pg: Optional[dist.ProcessGroup] = None,
     ):
         """Create a gradient accumulator that will accumulate gradients in fp32.
 
         Args:
-            named_parameters: The parameters that will be updated by the optimizer. In case of Zero 1, this is the parameters that will be updated in this DP rank.
-            grad_buckets_named_params: The parameters to accumulate gradients for. If None it defaults to `named_parameters`. In case of Zero 1, this should be all the parameters in the model.
+            local_named_params_f16: The parameters that will be updated by the optimizer. In case of Zero 1, this is the parameters that will be updated in this DP rank.
+            global_named_params_f16: (Global in DP sense) The parameters to accumulate gradients for. If None it defaults to `local_named_params_f16`. In case of Zero 1, this should be all the parameters in the model.
+            param_name_to_dp_rank_offsets: Mapping from parameter name to the DP rank offsets. Only used when using ZeRO-1 or higher.
+            dp_pg: Data parallel process group. Required when using ZeRO-1 or higher for proper gradient buffer padding.
 
-        Note: We use `grad_buckets_named_params` to keep grad buffers for all parameters even when Zero 1 is used. This is because we need to accumulate gradients for all parameters without having to reduce in every accumulation step.
+        Note: We use `global_named_params_f16` to keep grad buffers for all parameters even when Zero 1 is used. This is because we need to accumulate gradients for all parameters without having to reduce in every accumulation step.
         Note: We make a fp32 copy of parameters during initialization. Therefore parameters need to be initialized or loaded from a checkpoint before constructing this gradient accumulator
         """
-        if grad_buckets_named_params is None:
-            named_parameters = list(named_parameters)
-            grad_buckets_named_params = named_parameters
+        if global_named_params_f16 is None:
+            local_named_params_f16 = list(local_named_params_f16)
+            global_named_params_f16 = local_named_params_f16
 
-        # Initialize grad bucket
-        self.fp32_grad_buffers, self._contiguous_fp32_grad_buffer = self.build_grad_buffers(
-            named_parameters=grad_buckets_named_params
+        # Keep only parameters that require grad
+        global_named_params_f16 = [(name, param) for name, param in global_named_params_f16 if param.requires_grad]
+        local_named_params_f16 = [(name, param) for name, param in local_named_params_f16 if param.requires_grad]
+
+        if dp_pg is not None:
+            dp_size, dp_rank = dp_pg.size(), dist.get_rank(dp_pg)
+        else:
+            dp_size, dp_rank = 1, 0
+
+        # Initialize grad bucket with proper dp padding if using ZeRO (numel = total_global_numel + dp_padding)
+        self.global_fp32_grad_buffers, self._contiguous_fp32_grad_buffer = self.build_grad_buffers(
+            global_named_params_f16=global_named_params_f16,
+            dp_size=dp_size,
         )
 
-        # Assign big buffer for weights + grad in fp32
-        segment_index = {}
-        length = 0
-        for name, param in named_parameters:
-            if not param.requires_grad:
-                continue
+        # Calculate total size needed for local parameters
+        total_local_numel = sum(param.numel() for _, param in local_named_params_f16)
 
-            start = length
-            end_weight = start + param.numel()
-            assert name not in segment_index
-            segment_index[name] = (start, end_weight, param)
-            length = end_weight
+        # Create single contiguous buffer for all local fp32 parameters (numel = total_local_numel)
+        self.local_fp32_params_buffer = torch.empty(total_local_numel, dtype=torch.float, device="cuda")
 
-        big_flat_buffer = torch.empty(length, dtype=torch.float, device="cuda")
-        # fp32 and half are sharded in case of Zero
-        self.parameters = {
-            name: {
-                "fp32": big_flat_buffer[start_weight:end_weight].view_as(local_param),
-                "half": local_param,
+        # Create views into the buffer for each parameter
+        self.local_params = {}
+        offset = 0
+        for name, param in local_named_params_f16:
+            param_numel = param.numel()
+            # SANITY CHECK: Get the DP rank offsets for this parameter
+            if param_name_to_dp_rank_offsets is not None:
+                start_offset, end_offset = param_name_to_dp_rank_offsets[name][dp_rank]
+            else:
+                start_offset, end_offset = 0, param.numel()
+            assert (
+                param_numel == end_offset - start_offset
+            ), f"Expected param {name} to have {param_numel} elements on this DP rank, but got {end_offset - start_offset}"
+
+            next_offset = offset + param_numel
+
+            # Create view into the contiguous buffer
+            assert next_offset <= self.local_fp32_params_buffer.numel()
+            fp32_param = self.local_fp32_params_buffer[offset:next_offset].view_as(param)
+
+            self.local_params[name] = {
+                "fp32": fp32_param,  # View into contiguous fp32 buffer
+                "half": param,  # Original half precision parameter
             }
-            for name, (start_weight, end_weight, local_param) in segment_index.items()
-        }
+            offset = next_offset
 
+        # Initialize fp32 parameters from half parameters
         with torch.inference_mode():
-            for _, elt in self.parameters.items():
+            # copy stack of half params into fp32 params buffer
+            half_params = torch.cat([elt["half"] for elt in self.local_params.values()])
+            self.local_fp32_params_buffer[: half_params.numel()].copy_(half_params)  # last dp rank has padding
+
+            for name, elt in self.local_params.items():
                 fp32_param = elt["fp32"]
                 half_param = elt["half"]
-
                 # Check that fp32 weights have the same memory representation as half precision weights
                 assert fp32_param.stride() == half_param.stride()
-
-                # Copy weights from half precision to full precision
-                fp32_param.copy_(half_param)
-
-                # Set requires_grad=True
+                torch.testing.assert_close(fp32_param, half_param.float())
                 fp32_param.requires_grad = True
 
         self._is_accumulation_sync_step = False
@@ -122,11 +149,44 @@ class FP32GradientAccumulator(GradientAccumulator):
         # Reduce scatter buffer because `_contiguous_fp32_grad_buffer` tries to keep fp32_grads contiguous in memory, while we need [grad0_dp0, grad1_dp0, .., grad0_dp1, grad1_dp1, ..]
         # self.reduce_scatter_buffer: Optional[torch.Tensor] = None
 
+        # Zero>=1 attributes
+        self.param_name_to_dp_rank_offsets = param_name_to_dp_rank_offsets
+        self.dp_rank = dp_rank
+        self.dp_size = dp_size
+
+        # SANITY CHECK: set other ranks' portions to nan or infinity
+        # Get current rank's slice of the contiguous buffer
+        current_rank = self.dp_rank
+        assert (
+            len(self._contiguous_fp32_grad_buffer) % self.dp_size == 0
+        ), "Contiguous buffer must be divisible by dp_size"
+        chunk_size = len(self._contiguous_fp32_grad_buffer) // self.dp_size
+        start_idx = current_rank * chunk_size
+
+        # SANITY CHECK: set other ranks' portions to nan or infinity
+        if start_idx > 0:  # TODO: use config for this
+            self._contiguous_fp32_grad_buffer[:start_idx].fill_(float("nan"))
+        if start_idx + chunk_size < len(self._contiguous_fp32_grad_buffer):
+            self._contiguous_fp32_grad_buffer[start_idx + chunk_size :].fill_(float("nan"))
+
+        # name ="model.decoder.11.pp_block.mlp.gate_up_proj.weight" # problematic param
+        # # assert local grads have no nans
+        # assert not self.get_local_grad_buffer(name).isnan().any()
+
+        # # assert (list(grad_accumulator.global_fp32_grad_buffers.items()))[71] == global ranks have nans (because it's mixed)
+        # assert self.get_global_grad_buffer(name).isnan().any()
+
+        # loop over local params and check that grads are not nan
+        for name, elt in self.local_params.items():
+            assert not self.get_local_grad_buffer(name).isnan().any(), f"Local grad for {name} is nan"
+
+        self._contiguous_fp32_grad_buffer.zero_()
+
     def assign_param_offsets(self, param_name_to_offsets: Dict[str, Dict[int, Tuple[int, int]]], dp_rank: int):
         """To use only when you use with ZeRODistributedOptimizer"""
-        self.param_name_to_offsets = {
-            name: elt[dp_rank] for name, elt in param_name_to_offsets.items() if dp_rank in elt
-        }
+        # self.param_name_to_offsets = {
+        #     name: elt[dp_rank] for name, elt in param_name_to_offsets.items() if dp_rank in elt
+        # }
 
     def sync_gradients_across_dp(self, dp_pg: dist.ProcessGroup, reduce_op: dist.ReduceOp, reduce_scatter: bool):
         if dp_pg.size() == 1:
@@ -137,85 +197,99 @@ class FP32GradientAccumulator(GradientAccumulator):
             # Usually you need to run `all_reduce` in order for all gradients to be synced.
             # However when the optimizer state are sharded, you really just need to scatter to ranks that are going to run the optimizer state.
             # Effectively you replace a `all_reduce` with a `reduce_scatter` which should save an `all_gather` when using RING algorithm.
-            assert hasattr(self, "param_name_to_offsets")
-            # if self.reduce_scatter_buffer is None:
-            #     # need to make [grad0_dp0, grad1_dp0, .., grad0_dp1, grad1_dp1, ..]
-            #     self.reduce_scatter_buffer = torch.empty(self._contiguous_fp32_grad_buffer.numel(), dtype=torch.float, device=self._contiguous_fp32_grad_buffer.device)
-            #     # TODO: nested tensors?
-            # dist.reduce_scatter(self.reduce_scatter_buffer, input_tensor_list, group=dp_pg)
+            assert (
+                self.param_name_to_dp_rank_offsets is not None
+            ), "Need param_name_to_dp_rank_offsets for reduce_scatter"
 
-            named_offsets = sorted(self.param_name_to_offsets.items(), key=lambda x: x[0])
-            flat_grad_buffers = [self.fp32_grad_buffers[name]["fp32_grad"].view(-1) for name, _ in named_offsets]
-            dist.reduce_scatter_coalesced(
-                output_tensor_list=[
-                    flat_grad_buffer[start_offset:end_offset]
-                    for (_, (start_offset, end_offset)), flat_grad_buffer in zip(named_offsets, flat_grad_buffers)
-                ],
-                input_tensor_lists=[
-                    torch.split(
-                        flat_grad_buffer,
-                        split_size_or_sections=len(self.fp32_grad_buffers[name]["fp32_grad"].view(-1)) // dp_pg.size(),
-                    )
-                    for (name, _), flat_grad_buffer in zip(named_offsets, flat_grad_buffers)
-                ],
+            # Get current rank's slice of the contiguous buffer
+            current_rank = self.dp_rank
+            assert (
+                len(self._contiguous_fp32_grad_buffer) % self.dp_size == 0
+            ), "Contiguous buffer must be divisible by dp_size"
+            chunk_size = len(self._contiguous_fp32_grad_buffer) // self.dp_size
+            start_idx = current_rank * chunk_size
+
+            # Single reduce_scatter operation on the contiguous buffer
+            dist.reduce_scatter_tensor(
+                output=self._contiguous_fp32_grad_buffer[
+                    start_idx : start_idx + chunk_size
+                ],  # This rank's slice of the buffer
+                input=self._contiguous_fp32_grad_buffer,  # Already in [dp0_grads, dp1_grads, ...] layout
+                op=reduce_op,
                 group=dp_pg,
             )
+
+            # SANITY CHECK: set other ranks' portions to nan or infinity
+            # if start_idx > 0: #TODO: use config for this
+            #     self._contiguous_fp32_grad_buffer[:start_idx].fill_(float('nan'))
+            # if start_idx + chunk_size < len(self._contiguous_fp32_grad_buffer):
+            #     self._contiguous_fp32_grad_buffer[start_idx + chunk_size:].fill_(float('nan'))
+
         else:
+            # If not using reduce_scatter, perform regular all_reduce
             dist.all_reduce(
-                self._contiguous_fp32_grad_buffer, op=reduce_op, group=dp_pg
-            )  # ideally i want self._contiguous_fp32_grad_buffer[dp_rank]
+                self._contiguous_fp32_grad_buffer,
+                op=reduce_op,
+                group=dp_pg,
+            )
 
     @staticmethod
     def build_grad_buffers(
-        named_parameters: Iterator[Tuple[str, NanotronParameter]],
+        global_named_params_f16: Iterator[Tuple[str, NanotronParameter]],
+        dp_size: int,
     ) -> Tuple[Dict[str, Dict], torch.Tensor]:
-        """Builds grad buffers for all model's parameters, independently of ZeRO sharding
+        """Builds grad buffers for all model's parameters, independently of ZeRO sharding.
+        Creates a contiguous buffer padded to be multiple of dp_size.
 
         Args:
-            named_parameters: Parameters to build buckets for. In case of Zero1, this should be all parameters.
+            global_named_params_f16: Parameters to build buckets for. In case of Zero1, this should be all parameters.
 
-        Note:
-            In ZeRO-1, we need to accumulate grads for all parameters, because we need to allreduce all parameters' grads across DP at each sync step.
+        Returns:
+            Tuple of:
+            - Dictionary mapping param names to their half and fp32 gradient buffers
+            - The contiguous fp32 buffer containing all gradients
         """
-        named_parameters = [(name, param) for name, param in named_parameters if param.requires_grad]
+        # Calculate total size needed and padding
+        total_numel = sum(param.numel() for _, param in global_named_params_f16)
 
-        needed_buffer_size = sum(param.numel() for _, param in named_parameters)
-        # important to have grads zeroed initially (see `self._accumulate_grad`)
-        contiguous_buffer_f32_gradients = torch.zeros(needed_buffer_size, dtype=torch.float, device="cuda")
+        # Calculate padding to make total_numel a multiple of dp_size
+        padded_numel = (total_numel + dp_size - 1) // dp_size * dp_size
+
+        # Create contiguous buffer (padded to be multiple of dp_size, so that we can reduce scatter across DP). We still need grads for all dp ranks to accumulate f16 grads.
+        # [grad0_dp0, grad1_dp0, ..., grad5_dp0, grad5_dp1, grad6_dp1, ...] where last DP rank gets the remainder
+        contiguous_buffer_f32_gradients = torch.zeros(padded_numel, dtype=torch.float, device="cuda")
         untyped_storage = get_untyped_storage(contiguous_buffer_f32_gradients)
         element_size = contiguous_buffer_f32_gradients.element_size()
 
-        # NOTE: Although `bias` can only exist on TP=0. It shouldn't be a problem here, because we only sync across DP
-        fp32_grad_buffers = OrderedDict()  # keeps order of insertion
+        # Create gradient buffers dictionary
+        global_fp32_grad_buffers = OrderedDict()  # keeps order of insertion
         offset = 0
-        for name, param in named_parameters:
-            if not param.requires_grad:
-                continue
 
+        for name, param in global_named_params_f16:
             assert param.dtype != torch.float, f"Expected {name} not to be float"
             assert param.is_contiguous(), f"Expected {name} to be contiguous"
 
-            next_offset = offset + param.numel() * element_size
+            param_numel = param.numel()
+            next_offset = offset + param_numel * element_size
 
+            # Create view into the contiguous buffer for this parameter
             fp32_grad_buffer = tensor_from_untyped_storage(
                 untyped_storage=untyped_storage[offset:next_offset], dtype=torch.float
             )
 
-            fp32_grad_buffers[name] = {
-                "half": param,
-                # We create sliced tensors by also slicing storage.
-                # We need to specify "cuda" in order to share the same data storage, otherwise it build the tensor in "cpu" and copies over the data
-                "fp32_grad": fp32_grad_buffer.view_as(param),
+            global_fp32_grad_buffers[name] = {
+                "half": param,  # Original half precision parameter
+                "fp32_grad": fp32_grad_buffer.view_as(param),  # View into contiguous_buffer_f32_gradients
             }
 
             offset = next_offset
 
-        return fp32_grad_buffers, contiguous_buffer_f32_gradients
+        return global_fp32_grad_buffers, contiguous_buffer_f32_gradients
 
     def backward(self, loss: torch.Tensor):
         result = loss.backward()
 
-        for name, elt in self.fp32_grad_buffers.items():
+        for name, elt in self.global_fp32_grad_buffers.items():
             self._accumulate_grad(name=name, half_param=elt["half"])
 
         return result
@@ -223,28 +297,24 @@ class FP32GradientAccumulator(GradientAccumulator):
     def _accumulate_grad(self, name: str, half_param: NanotronParameter) -> None:
         """Accumulate grad in fp32 and set the fp32 grad to the fp32 grad buffer, so that optimizer can update fp32 weights afterwards"""
         assert half_param.grad is not None, f"Expected param {name} to have gradient."
-        fp32_grad = self.get_grad_buffer(name=name)
+        global_fp32_grad = self.get_global_grad_buffer(name=name)
 
         if self._is_accumulation_sync_step is False:
             # WARNING: We assume fp32_grad_bucket is already zeroed
-            fp32_grad.add_(half_param.grad)
+            global_fp32_grad.add_(half_param.grad)
             # In case _is_accumulation_sync_step = True: no need to add half gradients, because it's done in the allreduce hook
 
         # TODO @thomasw21: Is it better to set to zero instead?
         half_param.grad = None
 
         # In the case an optimizer decides to set it to None, we need to re-assign previous buffer
-        if name in self.parameters:
-            fp32_param = self.parameters[name]["fp32"]
-            if hasattr(self, "param_name_to_offsets"):
-                if name not in self.param_name_to_offsets:
-                    # When `name` isn't in `param_name_to_offsets` it means the slice is empty.
-                    return
-                start_offset, end_offset = self.param_name_to_offsets[name]
-                grad = fp32_grad.view(-1)[start_offset:end_offset]
-            else:
-                grad = fp32_grad
-            fp32_param.grad = grad
+        if name in self.local_params:
+            fp32_param = self.local_params[name]["fp32"]
+            grad = self.get_local_grad_buffer(name)
+            assert (
+                fp32_param.shape == grad.shape
+            ), f"Expected grad of {name} to have shape {fp32_param.shape} but got {grad.shape}"
+            fp32_param.grad = grad  # TODO: is this needed?
 
     @contextmanager
     def no_sync(self):
@@ -266,43 +336,52 @@ class FP32GradientAccumulator(GradientAccumulator):
         In case where OptimizerFromGradientAccumulator and gradient_accumulator_builder are using different parameters (e.g ZeRO).
         We need to update only the parameters that were updated by the optimizer.
         """
-        for name in self.parameters.keys():
-            # Update the local shard
-            fp32_param = self.parameters[name]["fp32"]
-            half_param = self.parameters[name]["half"]
-            # TODO @nouamane: should we use a fused kernel to copy?
-            # Copy weights from full precision to half precision
-            half_param.copy_(fp32_param)
+        # for name in self.local_params.keys():
+        #     # Update the local shard
+        #     fp32_param = self.local_params[name]["fp32"]
+        #     half_param = self.local_params[name]["half"]
+        #     # Copy weights from full precision to half precision
+        #     half_param.copy_(fp32_param)
+        half_params = torch.cat([elt["half"] for elt in self.local_params.values()])
+        self.local_fp32_params_buffer[: half_params.numel()].copy_(half_params)  # last dp rank has padding
 
     def zero_grad(self):
         # Full precision gradients are reset to zero/none after the underlying `optimiser.step`, so no need to reset.
-        for elt in self.fp32_grad_buffers.values():
+        for elt in self.global_fp32_grad_buffers.values():
             half_param = elt["half"]
-
-            if half_param.grad is None:
-                continue
-
             half_param.grad = None
 
-        # in case where self.parameters and self.fp32_grad_buffers are not the same (e.g we want to accumulate all DPs grads, and only sync at sync step)
+        # in case where self.local_params and self.global_fp32_grad_buffers are not the same (e.g we want to accumulate all DPs grads, and only sync at sync step)
         self._contiguous_fp32_grad_buffer.zero_()
 
     def get_parameter_for_optimizer(self, name: str) -> NanotronParameter:
-        return self.parameters[name]["fp32"]
+        return self.local_params[name]["fp32"]
 
-    def get_grad_buffer(self, name: str) -> torch.Tensor:
+    def get_global_grad_buffer(self, name: str) -> torch.Tensor:
         """Returns the gradient of the parameter from the appropriate grad bucket."""
-        return self.fp32_grad_buffers[name]["fp32_grad"]
+        return self.global_fp32_grad_buffers[name]["fp32_grad"]
+
+    def get_local_grad_buffer(self, name: str) -> torch.Tensor:
+        """Returns the gradient of the parameter from the appropriate grad bucket."""
+        if self.param_name_to_dp_rank_offsets is None:
+            # zero0 case
+            return self.global_fp32_grad_buffers[name]["fp32_grad"]
+        else:
+            # zero1 case
+            if name not in self.local_params:
+                return None
+            start_offset, end_offset = self.param_name_to_dp_rank_offsets[name][self.dp_rank]
+            return self.global_fp32_grad_buffers[name]["fp32_grad"].view(-1)[start_offset:end_offset]
 
     def state_dict(self) -> Dict[str, torch.Tensor]:
         # We consider `fp32` parameters as a state of the gradient accumulator
-        return {name: elt["fp32"] for name, elt in self.parameters.items()}
+        return {name: elt["fp32"] for name, elt in self.local_params.items()}
 
     def load_state_dict(self, state_dict: Dict[str, torch.Tensor]):
-        assert set(state_dict.keys()) == set(self.parameters.keys())
+        assert set(state_dict.keys()) == set(self.local_params.keys())
 
         with torch.inference_mode():
-            for name, elt in self.parameters.items():
+            for name, elt in self.local_params.items():
                 elt["fp32"].copy_(state_dict[name])
 
 
@@ -349,7 +428,7 @@ def get_fp32_accum_hook(
         # with torch.cuda.stream(s):
         for param, grad in zip(bucket.parameters(), bucket.gradients()):
             name = param_id_to_name[id(param)]
-            fp32_grad_buffer = accumulator.get_grad_buffer(name)
+            fp32_grad_buffer = accumulator.get_local_grad_buffer(name)
             fp32_grad_buffer.add_(grad.view_as(fp32_grad_buffer))
 
         # sync across dp
@@ -359,15 +438,18 @@ def get_fp32_accum_hook(
             return fut
 
         if reduce_scatter:
-            assert hasattr(accumulator, "param_name_to_offsets")
+            assert accumulator.param_name_to_dp_rank_offsets is not None
             grad_buffer_tensor_list = [
-                accumulator.get_grad_buffer(param_id_to_name[id(param)]).view(-1) for param in bucket.parameters()
+                accumulator.get_local_grad_buffer(param_id_to_name[id(param)]).view(-1)
+                for param in bucket.parameters()
             ]
             device = grad_buffer_tensor_list[0].device
             dtype = grad_buffer_tensor_list[0].dtype
             output_tensor_list = [
-                grad_buffer[slice(*accumulator.param_name_to_offsets[param_id_to_name[id(param)]])]
-                if param_id_to_name[id(param)] in accumulator.param_name_to_offsets
+                grad_buffer[
+                    slice(*accumulator.param_name_to_dp_rank_offsets[param_id_to_name[id(param)]][accumulator.dp_rank])
+                ]
+                if param_id_to_name[id(param)] in accumulator.param_name_to_dp_rank_offsets
                 else torch.empty(0, dtype=dtype, device=device)
                 for grad_buffer, param in zip(grad_buffer_tensor_list, bucket.parameters())
             ]
@@ -384,7 +466,8 @@ def get_fp32_accum_hook(
             )
         else:
             grad_buffer_tensor_list = [
-                accumulator.get_grad_buffer(param_id_to_name[id(param)]).view(-1) for param in bucket.parameters()
+                accumulator.get_local_grad_buffer(param_id_to_name[id(param)]).view(-1)
+                for param in bucket.parameters()
             ]
             accumulator.fp32_grads_allreduce_handle = dist.all_reduce_coalesced(
                 grad_buffer_tensor_list, group=dp_pg, async_op=True, op=reduce_op

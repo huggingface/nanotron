@@ -382,13 +382,15 @@ def init_optimizer_and_grad_accumulator(
     grad_accumulator: Optional[GradientAccumulator] = None
     if optimizer_args.accumulate_grad_in_fp32:
         # TODO @thomasw21: Make an optimizer builder system, instead of doing everything in functional manner
-        def grad_optimizer_builder(named_param_groups):
+        def grad_optimizer_builder(local_param_groups_f16, param_name_to_dp_rank_offsets=None, dp_pg=None):
             result = OptimizerFromGradientAccumulator(
-                gradient_accumulator_builder=lambda named_params: FP32GradientAccumulator(
-                    named_parameters=named_params,
-                    grad_buckets_named_params=named_parameters,
+                gradient_accumulator_builder=lambda local_named_params_f16: FP32GradientAccumulator(
+                    local_named_params_f16=local_named_params_f16,
+                    global_named_params_f16=named_parameters,  # TODO: in case of zero0, local_named_params_f16 and named_parameters are the same.
+                    dp_pg=dp_pg,
+                    param_name_to_dp_rank_offsets=param_name_to_dp_rank_offsets,
                 ),
-                named_params_or_groups=named_param_groups,
+                local_param_groups_f16=local_param_groups_f16,
                 optimizer_builder=basic_optimizer_builder,
             )
 
@@ -403,18 +405,14 @@ def init_optimizer_and_grad_accumulator(
     if optimizer_args.zero_stage > 0:
         # Build optimizer
         optimizer = ZeroDistributedOptimizer(
-            named_params_or_groups=named_param_groups,
-            # TODO @thomasw21: We need a better API for gradient accumulation/zero etc ...
+            named_params_or_groups_f16=named_param_groups,
             optimizer_builder=optimizer_builder,
             dp_pg=parallel_context.dp_pg,
         )
 
         # SANITY CHECK: assert that optimizer's named_params point to model's params (check only the first one)
-        if (
-            len(optimizer.zero_named_param_groups) > 0
-            and len(optimizer.zero_named_param_groups[0]["named_params"]) > 0
-        ):
-            optim_model_param_name, optim_model_param = optimizer.zero_named_param_groups[0]["named_params"][0]
+        if len(optimizer.named_param_groups_f16) > 0 and len(optimizer.named_param_groups_f16[0]["named_params"]) > 0:
+            optim_model_param_name, optim_model_param = optimizer.named_param_groups_f16[0]["named_params"][0]
             if isinstance(model, DistributedDataParallel):
                 optim_model_param_name = f"module.{optim_model_param_name}"
             param = model.get_parameter(optim_model_param_name)
@@ -423,17 +421,38 @@ def init_optimizer_and_grad_accumulator(
         # Build optimizer
         optimizer = optimizer_builder(named_param_groups)
 
-    if grad_accumulator is not None and optimizer_args.zero_stage > 0:
-        # There's a way to only require to reduce_scatter the gradients instead of all_reducing
-        # In order to do so I need to pass which segments of each parameter should be reduced on which dp rank.
-        assert isinstance(optimizer, ZeroDistributedOptimizer)
-        param_name_to_dp_rank_offsets = optimizer.param_name_to_dp_rank_offsets
+    # if grad_accumulator is not None and optimizer_args.zero_stage > 0:
+    #     # There's a way to only require to reduce_scatter the gradients instead of all_reducing
+    #     # In order to do so I need to pass which segments of each parameter should be reduced on which dp rank.
+    #     assert isinstance(optimizer, ZeroDistributedOptimizer)
+    #     param_name_to_dp_rank_offsets = optimizer.param_name_to_dp_rank_offsets
 
-        assert isinstance(grad_accumulator, FP32GradientAccumulator)
-        grad_accumulator.assign_param_offsets(
-            dp_rank=dist.get_rank(parallel_context.dp_pg),
-            param_name_to_offsets=param_name_to_dp_rank_offsets,
-        )
+    #     assert isinstance(grad_accumulator, FP32GradientAccumulator)
+    #     grad_accumulator.assign_param_offsets(
+    #         dp_rank=dist.get_rank(parallel_context.dp_pg),
+    #         param_name_to_offsets=param_name_to_dp_rank_offsets,
+    #     ) # TODO: move to grad_accumulator init
+
+    #     # SANITY CHECK optimizer
+    #     # Get current rank's slice of the contiguous buffer
+    #     dp_pg = parallel_context.dp_pg
+    #     current_rank = dist.get_rank(dp_pg)
+    #     assert len(grad_accumulator._contiguous_fp32_grad_buffer) % dp_pg.size() == 0, "Contiguous buffer must be divisible by dp_size"
+    #     chunk_size = len(grad_accumulator._contiguous_fp32_grad_buffer) // dp_pg.size()
+    #     start_idx = current_rank * chunk_size
+
+    #     # SANITY CHECK: set other ranks' portions to nan or infinity
+    #     if start_idx > 0: #TODO: use config for this
+    #         grad_accumulator._contiguous_fp32_grad_buffer[:start_idx].fill_(float('nan'))
+    #     if start_idx + chunk_size < len(grad_accumulator._contiguous_fp32_grad_buffer):
+    #         grad_accumulator._contiguous_fp32_grad_buffer[start_idx + chunk_size:].fill_(float('nan'))
+
+    #     if current_rank == 0:
+    #         # assert (list(grad_accumulator.global_fp32_grad_buffers.items()))[71] has no nan
+    #         assert not (list(grad_accumulator.global_fp32_grad_buffers.items()))[71][1]["fp32_grad"].isnan().any()
+
+    #         # assert (list(grad_accumulator.global_fp32_grad_buffers.items()))[72] is all na
+    #         assert (list(grad_accumulator.global_fp32_grad_buffers.items()))[72][1]["fp32_grad"].isnan().all()
 
     # Register DDP hook to make fp32 grad accumulation work
     if isinstance(model, DistributedDataParallel) and grad_accumulator is not None:
