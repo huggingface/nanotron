@@ -186,32 +186,32 @@ def get_custom_weight_decay_for_named_parameters(
     model: NanotronModel,
     module_id_to_prefix: Dict[int, str],
     weight_decay: float,
+    exclude_named_params: List[str],
 ) -> List[Dict[str, Any]]:
     """
-    Apply weight decay to all parameters except the ones that are in the named_param_without_weight_decay list.
+    Apply weight decay to all parameters except the ones that are in the exclude_named_params list.
     """
-
     named_param_groups_with_custom_weight_decay = []
 
-    exclude_named_params = model.get_named_params_without_weight_decay()
-
     for name, param in named_parameters:
+        # Handle tied parameters
         if param.is_tied:
             param.get_tied_info().get_full_name_from_module_id_to_prefix(module_id_to_prefix=module_id_to_prefix)
-        else:
-            pass
 
-        if any(name.endswith(substring) for substring in exclude_named_params):
-            named_param_groups_with_custom_weight_decay.append({"named_params": [(name, param)], "weight_decay": 0.0})
-        else:
-            named_param_groups_with_custom_weight_decay.append(
-                {"named_params": [(name, param)], "weight_decay": weight_decay}
-            )
+        # Determine weight decay value
+        should_exclude = exclude_named_params is not None and name in exclude_named_params
+        current_weight_decay = 0.0 if should_exclude else weight_decay
+
+        # Create parameter group
+        named_param_groups_with_custom_weight_decay.append(
+            {"named_params": [(name, param)], "weight_decay": current_weight_decay}
+        )
 
     log_rank(
         f"[Optimizer Building] Creating {len(named_param_groups_with_custom_weight_decay)} param groups with custom weight decay",
         logger=logger,
         level=logging.DEBUG,
+        rank=0,
     )
     return named_param_groups_with_custom_weight_decay
 
@@ -317,6 +317,7 @@ def init_optimizer_and_grad_accumulator(
         model=unwrapped_model,
         module_id_to_prefix=module_id_to_prefix,
         weight_decay=optimizer_args.weight_decay,
+        exclude_named_params=optimizer_args.weight_decay_exclude_named_params,
     )
 
     named_param_groups = merge_named_param_groups(named_param_groups_with_lr, named_param_groups_with_weight_decay)

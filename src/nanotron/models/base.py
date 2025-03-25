@@ -71,10 +71,6 @@ class NanotronModel(nn.Module, metaclass=ABCMeta):
         Example for GPT2 model: ["model.token_position_embeddings.pp_block.token_embedding.weight", "model.lm_head.pp_block.weight"]
         """
         return []
-    
-    def get_named_params_without_weight_decay(self) -> List[str]:
-        """Return a list of named parameters that should not have weight decay applied to them."""
-        return []
 
     def before_tbi_sanity_checks(self) -> None:
         pass

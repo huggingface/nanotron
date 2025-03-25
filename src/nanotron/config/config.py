@@ -317,6 +317,7 @@ class OptimizerArgs:
     clip_grad: Optional[float]
     accumulate_grad_in_fp32: bool
     learning_rate_scheduler: LRSchedulerArgs
+    weight_decay_exclude_named_params: Optional[List[str]] = None
 
 
 @dataclass
