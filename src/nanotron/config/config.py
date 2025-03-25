@@ -211,11 +211,6 @@ class GeneralArgs:
     def __post_init__(self):
         if self.seed is None:
             self.seed = DEFAULT_SEED
-        if self.benchmark_csv_path is not None:
-            assert (
-                os.environ.get("NANOTRON_BENCHMARK", None) is not None
-            ), f"Please set NANOTRON_BENCHMARK to 1 when using benchmark_csv_path. Got {os.environ.get('NANOTRON_BENCHMARK', None)}"
-
         if self.run is None:
             self.run = "%date_%jobid"
         self.run = self.run.replace("%date", datetime.datetime.now().strftime("%Y%m%d_%H%M%S"))
