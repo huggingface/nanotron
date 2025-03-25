@@ -55,7 +55,11 @@ from nanotron.logging import (
     log_rank,
     set_ranks_logging_level,
 )
-from nanotron.metrics_logging import get_metrics_log_level, log_model_metrics
+from nanotron.metrics_logging import (
+    collect_accuracy_metrics,
+    collect_all_metrics,
+    should_log_detailed_metrics,
+)
 from nanotron.models import NanotronModel, build_model
 from nanotron.models.base import check_model_has_grad
 from nanotron.models.llama import LlamaForTraining, RotaryEmbedding
@@ -612,7 +616,8 @@ class DistributedTrainer:
 
             lr = self.lr_scheduler.get_last_lr()[0]
 
-            log_entries = [
+            # Basic metrics for both console log and wandb
+            basic_log_entries = [
                 # LogItem("consumed_samples", self.consumed_train_samples, "human_format"),  # , "12d"),
                 LogItem(
                     "consumed_tokens",
@@ -632,57 +637,85 @@ class DistributedTrainer:
             ]
 
             if self.config.optimizer.clip_grad is not None:
-                log_entries.append(LogItem("grad_norm", self.grad_norm_unclipped.item(), "human_format"))  # , ".3f"))
+                basic_log_entries.append(
+                    LogItem("grad_norm", self.grad_norm_unclipped.item(), "human_format")
+                )  # , ".3f"))
 
-            # Toggle metrics logging based on environment variable
-            log_level = get_metrics_log_level()
-            if log_level != "minimal":  # Log extra metrics if FULL_LOGS is set
+            # Console logging will only use basic metrics
+            self.loggerwriter.add_scalars_from_list(basic_log_entries, self.iteration_step)
 
-                def log_metric(name, value):
-                    if isinstance(value, torch.Tensor):
-                        value = value.item()
-                    log_entries.append(LogItem(name, value, "human_format"))
-
-                # Log model metrics with appropriate detail level
-                log_model_metrics(
-                    self.unwrapped_model,
-                    log_metric,
-                    include_embeddings=True,
-                    include_param_stats=(log_level == "full"),
-                    include_attention=True,
-                    include_projections=True,
-                    include_layernorms=True,
-                    log_level=log_level,
-                )
-
-            # Log not too often the memory
-            if self.iteration_step < 5 or (self.iteration_step - 1) % self.config.checkpoints.checkpoint_interval == 0:
-                total, used, free = shutil.disk_usage("/")
-                log_entries.extend(
-                    [
-                        LogItem(
-                            "cuda_memory_allocated", torch.cuda.memory_allocated(), "human_format"
-                        ),  #  / 1024**2, ".2f"),
-                        LogItem(
-                            "cuda_max_memory_reserved", torch.cuda.max_memory_reserved(), "human_format"
-                        ),  #  / 1024**2, ".2f"),
-                        LogItem("hd_total_memory_tb", total, "human_format"),  #  / (2**40), ".2f"),
-                        LogItem("hd_used_memory_tb", used, "human_format"),  #  / (2**40), ".2f"),
-                        LogItem("hd_free_memory_tb", free, "human_format"),  #  / (2**40), ".2f"),
-                    ]
-                )
-
-            # NOTE: only one rank writes to wandb
+            # Begin wandb logging with all metrics (basic + detailed)
             if dist.get_rank(self.parallel_context.world_pg) == self.logger_ranks[0] and wandb is not None:
+                # Start with basic metrics
+                all_log_entries = list(basic_log_entries)
+
+                # Extract logits and targets from first output if available for accuracy calculation
+                logits = None
+                targets = None
+                if len(outputs) > 0 and "logits" in outputs[0] and "labels" in outputs[0]:
+                    logits = outputs[0]["logits"]
+                    targets = outputs[0]["labels"]
+
+                # Check if we should log detailed metrics
+                should_log_details = should_log_detailed_metrics(self.iteration_step)
+
+                # Always add accuracy metrics to wandb if available
+                if logits is not None and targets is not None:
+                    accuracy_metrics = collect_accuracy_metrics(logits, targets)
+                    for name, value in accuracy_metrics.items():
+                        if isinstance(value, torch.Tensor):
+                            value = value.item()
+                        all_log_entries.append(LogItem(name, value, "human_format"))
+
+                # Add detailed metrics to wandb only if needed
+                if should_log_details:
+                    # Collect all metrics based on the log level
+                    debug_mode = self.iteration_step < 5  # More verbose debugging for initial iterations
+                    detailed_metrics = collect_all_metrics(
+                        model=self.unwrapped_model,
+                        logits=logits,
+                        targets=targets,
+                        loss=loss_avg,
+                        step_time=elapsed_time_per_iteration_ms / 1000,
+                        batch_size=self.global_batch_size,
+                        seq_length=self.sequence_length,
+                        debug=debug_mode,
+                    )
+
+                    # Add all detailed metrics to wandb
+                    for name, value in detailed_metrics.items():
+                        if isinstance(value, torch.Tensor):
+                            value = value.item()
+                        all_log_entries.append(LogItem(name, value, "human_format"))
+
+                # Log memory usage data
+                if (
+                    self.iteration_step < 5
+                    or (self.iteration_step - 1) % self.config.checkpoints.checkpoint_interval == 0
+                ):
+                    total, used, free = shutil.disk_usage("/")
+                    all_log_entries.extend(
+                        [
+                            LogItem(
+                                "cuda_memory_allocated", torch.cuda.memory_allocated(), "human_format"
+                            ),  #  / 1024**2, ".2f"),
+                            LogItem(
+                                "cuda_max_memory_reserved", torch.cuda.max_memory_reserved(), "human_format"
+                            ),  #  / 1024**2, ".2f"),
+                            LogItem("hd_total_memory_tb", total, "human_format"),  #  / (2**40), ".2f"),
+                            LogItem("hd_used_memory_tb", used, "human_format"),  #  / (2**40), ".2f"),
+                            LogItem("hd_free_memory_tb", free, "human_format"),  #  / (2**40), ".2f"),
+                        ]
+                    )
+
+                # Log all metrics to wandb
                 wandb.log(
                     {
-                        **{log_item.tag: log_item.scalar_value for log_item in log_entries},
+                        **{log_item.tag: log_item.scalar_value for log_item in all_log_entries},
                         "iteration_step": self.iteration_step,
                     },
                     step=self.iteration_step,
                 )
-
-            self.loggerwriter.add_scalars_from_list(log_entries, self.iteration_step)
 
         # Nanotron Benchmark mode: we log the throughput and exit
         if os.environ.get("NANOTRON_BENCHMARK", "0") == "1" and self.iteration_step == 3:
