@@ -55,6 +55,7 @@ from nanotron.logging import (
     log_rank,
     set_ranks_logging_level,
 )
+from nanotron.metrics_logging import get_metrics_log_level, log_model_metrics
 from nanotron.models import NanotronModel, build_model
 from nanotron.models.base import check_model_has_grad
 from nanotron.models.llama import LlamaForTraining, RotaryEmbedding
@@ -633,6 +634,27 @@ class DistributedTrainer:
             if self.config.optimizer.clip_grad is not None:
                 log_entries.append(LogItem("grad_norm", self.grad_norm_unclipped.item(), "human_format"))  # , ".3f"))
 
+            # Toggle metrics logging based on environment variable
+            log_level = get_metrics_log_level()
+            if log_level != "minimal":  # Log extra metrics if FULL_LOGS is set
+
+                def log_metric(name, value):
+                    if isinstance(value, torch.Tensor):
+                        value = value.item()
+                    log_entries.append(LogItem(name, value, "human_format"))
+
+                # Log model metrics with appropriate detail level
+                log_model_metrics(
+                    self.unwrapped_model,
+                    log_metric,
+                    include_embeddings=True,
+                    include_param_stats=(log_level == "full"),
+                    include_attention=True,
+                    include_projections=True,
+                    include_layernorms=True,
+                    log_level=log_level,
+                )
+
             # Log not too often the memory
             if self.iteration_step < 5 or (self.iteration_step - 1) % self.config.checkpoints.checkpoint_interval == 0:
                 total, used, free = shutil.disk_usage("/")
@@ -656,7 +678,8 @@ class DistributedTrainer:
                     {
                         **{log_item.tag: log_item.scalar_value for log_item in log_entries},
                         "iteration_step": self.iteration_step,
-                    }
+                    },
+                    step=self.iteration_step,
                 )
 
             self.loggerwriter.add_scalars_from_list(log_entries, self.iteration_step)
