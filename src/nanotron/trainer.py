@@ -495,13 +495,14 @@ class DistributedTrainer:
         if self.iteration_step < self.initial_iter_step + 5:
             log_memory(logger=logger, msg="Before train_batch_iter")
 
-        outputs = self.pipeline_engine.train_batch_iter(
-            model=self.model,
-            pg=self.parallel_context.pp_pg,
-            batch=(next(dataloader) for _ in range(self.n_micro_batches_per_batch)),
-            nb_microbatches=self.n_micro_batches_per_batch,
-            grad_accumulator=self.grad_accumulator,
-        )
+        with torch.profiler.record_function("train_batch_iter"):
+            outputs = self.pipeline_engine.train_batch_iter(
+                model=self.model,
+                pg=self.parallel_context.pp_pg,
+                batch=(next(dataloader) for _ in range(self.n_micro_batches_per_batch)),
+                nb_microbatches=self.n_micro_batches_per_batch,
+                grad_accumulator=self.grad_accumulator,
+            )
 
         if self.iteration_step < self.initial_iter_step + 5:
             log_memory(logger=logger, msg="After train_batch_iter")

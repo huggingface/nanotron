@@ -125,6 +125,7 @@ class FP32GradientAccumulator(GradientAccumulator):
             name: elt[dp_rank] for name, elt in param_name_to_offsets.items() if dp_rank in elt
         }
 
+    @torch.profiler.record_function("FP32GradientAccumulator.sync_gradients_across_dp")
     def sync_gradients_across_dp(self, dp_pg: dist.ProcessGroup, reduce_op: dist.ReduceOp, reduce_scatter: bool):
         if dp_pg.size() == 1:
             # They are already synced
@@ -209,6 +210,7 @@ class FP32GradientAccumulator(GradientAccumulator):
 
         return result
 
+    @torch.profiler.record_function("FP32GradientAccumulator._accumulate_grad")
     def _accumulate_grad(self, name: str, half_param: NanotronParameter) -> None:
         """Accumulate grad in fp32 and set the fp32 grad to the fp32 grad buffer, so that optimizer can update fp32 weights afterwards"""
         assert half_param.grad is not None, f"Expected param {name} to have gradient."
@@ -249,6 +251,7 @@ class FP32GradientAccumulator(GradientAccumulator):
         finally:
             self._is_accumulation_sync_step = old_is_accumulation_sync_step
 
+    @torch.profiler.record_function("FP32GradientAccumulator.step")
     @torch.inference_mode()
     def step(self):
         """Updates fp32 weights from fp32 grads.
@@ -262,6 +265,7 @@ class FP32GradientAccumulator(GradientAccumulator):
             # Copy weights from full precision to half precision
             half_param.copy_(fp32_param)
 
+    @torch.profiler.record_function("FP32GradientAccumulator.zero_grad")
     def zero_grad(self):
         # Full precision gradients are reset to zero/none after the underlying `optimiser.step`, so no need to reset.
         for elt in self.fp32_grad_buffers.values():

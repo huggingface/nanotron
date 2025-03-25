@@ -115,6 +115,7 @@ class PipelineEngine(ABC):
         context = ContextManagers(context_list)
         return context
 
+    @torch.profiler.record_function("train_batch_iter")
     @abstractmethod
     def train_batch_iter(
         self,
