@@ -642,7 +642,8 @@ class DistributedTrainer:
             assert self.loggerwriter is not None, "loggerwriter should be defined on logger ranks"
 
             lr = self.lr_scheduler.get_last_lr()[0]
-
+            remaining_steps = self.config.tokens.train_steps - self.iteration_step
+            eta_seconds = int(remaining_steps * (elapsed_time_per_iteration_ms / 1000))
             log_entries = [
                 # LogItem("consumed_samples", self.consumed_train_samples, "human_format"),  # , "12d"),
                 LogItem(
@@ -650,16 +651,17 @@ class DistributedTrainer:
                     self.metadata.consumed_train_samples * self.config.tokens.sequence_length,
                     "human_format",
                 ),  # , "12d"),
-                LogItem("elapsed_time_per_iteration_ms", elapsed_time_per_iteration_ms, "human_format"),  # , ".1f"),
+                LogItem("time_per_iteration_ms", elapsed_time_per_iteration_ms, "human_format"),  # , ".1f"),
                 LogItem("tokens_per_sec", tokens_per_sec, "human_format"),  # , "1.6E"),
                 LogItem(
                     "tokens_per_sec_per_gpu", tokens_per_sec / self.parallel_context.world_pg.size(), "human_format"
                 ),  # , "1.6E"),
-                LogItem("global_batch_size", self.global_batch_size, "human_format"),  # , "5d"),
+                LogItem("global_batch_size", self.config.global_batch_size_in_tokens, "human_format"),  # , "5d"),
                 LogItem("lm_loss", loss_avg.item(), "human_format"),  # , "1.6E"),
                 LogItem("lr", lr, "human_format"),  # , ".3E"),
                 LogItem("model_tflops_per_gpu", model_tflops, "human_format"),  # , ".2f"),
-                LogItem("hardware_tflops_per_gpu", hardware_tflops, "human_format"),  # , ".2f"),
+                # LogItem("hardware_tflops_per_gpu", hardware_tflops, "human_format"),  # , ".2f"),
+                LogItem("eta", str(datetime.timedelta(seconds=eta_seconds)), "human_format"),
             ]
             if z_loss_avg is not None:
                 log_entries.insert(6, LogItem("z_loss", z_loss_avg.item(), "human_format"))  # , "1.6E"),
