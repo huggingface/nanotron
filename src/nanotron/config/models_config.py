@@ -70,6 +70,7 @@ class LlamaConfig:
     max_position_embeddings: int = 2048
     num_attention_heads: int = 32
     num_hidden_layers: int = 32
+    attention_bias: bool = False
     num_key_value_heads: Optional[int] = None
     pad_token_id: Optional[int] = None
     pretraining_tp: int = 1
@@ -83,7 +84,8 @@ class LlamaConfig:
     use_cache: bool = True
     vocab_size: int = 32000
     _attn_implementation: Optional[AttentionImplementation] = DEFAULT_ATTENTION_IMPLEMENTATION
-    attention_bias: bool = False
+    z_loss_enabled: bool = False  # Z-loss regularization https://www.jmlr.org/papers/volume24/22-1144/22-1144.pdf
+    z_loss_coefficient: float = 0.0001  # Default from the paper (10^-4)
 
     def __post_init__(self):
         # NOTE: user don't set self._init_method, ModelArgs will set it
@@ -139,6 +141,8 @@ class Qwen2Config:
     attention_bias: bool = False
     interleaved_rotary: bool = False
     sliding_window_size: Optional[int] = None
+    z_loss_enabled: bool = True  # Z-loss regularization https://www.jmlr.org/papers/volume24/22-1144/22-1144.pdf
+    z_loss_coefficient: float = 0.0001  # Default from the paper (10^-4)
 
     # MoE configuration
     moe_config: Optional[MoEConfig] = None

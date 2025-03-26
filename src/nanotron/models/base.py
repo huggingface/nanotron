@@ -72,10 +72,6 @@ class NanotronModel(nn.Module, metaclass=ABCMeta):
         """
         return []
 
-    def get_named_params_without_weight_decay(self) -> List[str]:
-        """Return a list of named parameters that should not have weight decay applied to them."""
-        return []
-
     def before_tbi_sanity_checks(self) -> None:
         pass
 

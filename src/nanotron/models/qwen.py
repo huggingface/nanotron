@@ -729,6 +729,26 @@ class Loss(nn.Module):
         return {"loss": loss}
 
 
+class LossWithZLoss(Loss):
+    def __init__(self, tp_pg: dist.ProcessGroup, z_loss_coefficient: float):
+        super().__init__(tp_pg)
+        self.z_loss_coef = z_loss_coefficient
+
+    def forward(
+        self,
+        sharded_logits: torch.Tensor,  # [batch_size*seq_length, logits]
+        label_ids: torch.Tensor,  # [batch_size, seq_length]
+        label_mask: torch.Tensor,  # [batch_size, seq_length]
+    ) -> Dict[str, torch.Tensor]:
+        sharded_logits = sharded_logits.view(label_ids.shape[0], label_ids.shape[1], -1)
+        loss, z_loss = sharded_cross_entropy(
+            sharded_logits, label_ids.contiguous(), group=self.tp_pg, dtype=torch.float, z_loss_coef=self.z_loss_coef
+        )
+        loss = masked_mean(loss, label_mask, dtype=torch.float)
+        z_loss = masked_mean(z_loss.detach(), label_mask, dtype=torch.float)
+        return {"loss": loss, "z_loss": z_loss}
+
+
 class Qwen2ForTraining(NanotronModel):
     def __init__(
         self,
@@ -739,16 +759,24 @@ class Qwen2ForTraining(NanotronModel):
     ):
         super().__init__()
         self.model = Qwen2Model(config=config, parallel_context=parallel_context, parallel_config=parallel_config)
+
+        # Choose the appropriate loss class based on config
+        loss_kwargs = {
+            "tp_pg": parallel_context.tp_pg,
+        }
+        if config.z_loss_enabled:
+            loss_kwargs["z_loss_coefficient"] = config.z_loss_coefficient
+
         self.loss = PipelineBlock(
             p2p=self.model.p2p,
-            module_builder=Loss,
-            module_kwargs={"tp_pg": parallel_context.tp_pg},
+            module_builder=LossWithZLoss if config.z_loss_enabled else Loss,
+            module_kwargs=loss_kwargs,
             module_input_keys={
                 "sharded_logits",
                 "label_ids",
                 "label_mask",
             },
-            module_output_keys={"loss"},
+            module_output_keys={"loss", "z_loss"} if config.z_loss_enabled else {"loss"},
         )
         self.parallel_context = parallel_context
         self.config = config
@@ -769,8 +797,11 @@ class Qwen2ForTraining(NanotronModel):
             sharded_logits=sharded_logits,
             label_ids=label_ids,
             label_mask=label_mask,
-        )["loss"]
-        return {"loss": loss}
+        )
+        if self.config.z_loss_enabled:
+            return {"loss": loss["loss"], "z_loss": loss["z_loss"]}
+        else:
+            return {"loss": loss["loss"]}
 
     @torch.no_grad()
     def init_model_randomly(self, config: Config):

@@ -221,7 +221,16 @@ class GeneralArgs:
 class ProfilerArgs:
     """Arguments related to profiling"""
 
-    profiler_export_path: Optional[Path]
+    profiler_export_path: Optional[Path]  # e.g. ./tb_logs
+    wait: int = 1
+    warmup: int = 1
+    active: int = 1
+    repeat: int = 1
+    skip_first: int = 3
+    record_shapes: bool = False
+    profile_memory: bool = False
+    with_stack: bool = True
+    export_chrome_trace: bool = False
 
 
 @dataclass
@@ -330,6 +339,13 @@ class OptimizerArgs:
     clip_grad: Optional[float]
     accumulate_grad_in_fp32: bool
     learning_rate_scheduler: LRSchedulerArgs
+    weight_decay_exclude_named_params: Optional[
+        List[str]
+    ] = None  # List of regex patterns to exclude parameters from weight decay
+
+    def __post_init__(self):
+        if self.weight_decay_exclude_named_params is None:
+            self.weight_decay_exclude_named_params: List[str] = []
 
 
 @dataclass
@@ -378,6 +394,14 @@ class Config:
             self.s3_upload.__post_init__()
 
         # Some final sanity checks across separate arguments sections:
+        if self.profiler is not None and self.profiler.profiler_export_path is not None:
+            total_profiling_steps = self.profiler.skip_first + self.profiler.repeat * (
+                self.profiler.wait + self.profiler.warmup + self.profiler.active
+            )
+            assert (
+                self.tokens.train_steps >= total_profiling_steps
+            ), f"Profiling steps ({total_profiling_steps}) must be less than or equal to train steps ({self.tokens.train_steps})"
+
         if self.optimizer is not None and self.optimizer.learning_rate_scheduler.lr_decay_steps is None:
             self.optimizer.learning_rate_scheduler.lr_decay_steps = (
                 self.tokens.train_steps - self.optimizer.learning_rate_scheduler.lr_warmup_steps

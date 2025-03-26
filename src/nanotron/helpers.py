@@ -3,6 +3,7 @@ import csv
 import gc
 import math
 import os
+import re
 import time
 from datetime import datetime
 from functools import partial
@@ -187,32 +188,52 @@ def get_custom_weight_decay_for_named_parameters(
     model: NanotronModel,
     module_id_to_prefix: Dict[int, str],
     weight_decay: float,
+    exclude_named_params: List[str],
 ) -> List[Dict[str, Any]]:
     """
-    Apply weight decay to all parameters except the ones that are in the named_param_without_weight_decay list.
+    Apply weight decay to all parameters except those whose names match regex patterns in exclude_named_params.
+
+    Args:
+        named_parameters: Iterable of (name, parameter) tuples
+        model: The model instance
+        module_id_to_prefix: Mapping from module id to name prefix
+        weight_decay: The default weight decay value to apply
+        exclude_named_params: List of regex patterns to exclude parameters from weight decay
+
+    Returns:
+        List of parameter groups with appropriate weight decay values
     """
-
     named_param_groups_with_custom_weight_decay = []
-
-    exclude_named_params = model.get_named_params_without_weight_decay()
-
+    counter_excluded_params = 0
     for name, param in named_parameters:
+        # Handle tied parameters: we exclude all tied parameters if one of them is in the exclude list
         if param.is_tied:
-            param.get_tied_info().get_full_name_from_module_id_to_prefix(module_id_to_prefix=module_id_to_prefix)
-        else:
-            pass
-
-        if any(name.endswith(substring) for substring in exclude_named_params):
-            named_param_groups_with_custom_weight_decay.append({"named_params": [(name, param)], "weight_decay": 0.0})
-        else:
-            named_param_groups_with_custom_weight_decay.append(
-                {"named_params": [(name, param)], "weight_decay": weight_decay}
+            tied_name = param.get_tied_info().get_full_name_from_module_id_to_prefix(
+                module_id_to_prefix=module_id_to_prefix
             )
 
+        # Determine weight decay value
+        should_exclude = False
+        if exclude_named_params is not None:
+            should_exclude = any(
+                re.match(pattern, name) or re.match(pattern, tied_name) for pattern in exclude_named_params
+            )
+            if should_exclude:
+                counter_excluded_params += 1
+                log_rank(f"Excluding parameter {name} from weight decay", logger=logger, level=logging.DEBUG, rank=0)
+
+        current_weight_decay = 0.0 if should_exclude else weight_decay
+
+        # Create parameter group
+        named_param_groups_with_custom_weight_decay.append(
+            {"named_params": [(name, param)], "weight_decay": current_weight_decay}
+        )
+
     log_rank(
-        f"[Optimizer Building] Creating {len(named_param_groups_with_custom_weight_decay)} param groups with custom weight decay",
+        f"[Optimizer Building] {counter_excluded_params} params excluded from weight decay",
         logger=logger,
-        level=logging.DEBUG,
+        level=logging.WARNING,
+        rank=0,
     )
     return named_param_groups_with_custom_weight_decay
 
@@ -325,6 +346,7 @@ def init_optimizer_and_grad_accumulator(
         model=unwrapped_model,
         module_id_to_prefix=module_id_to_prefix,
         weight_decay=optimizer_args.weight_decay,
+        exclude_named_params=optimizer_args.weight_decay_exclude_named_params,
     )
 
     named_param_groups = merge_named_param_groups(named_param_groups_with_lr, named_param_groups_with_weight_decay)
@@ -482,13 +504,20 @@ def get_profiler(config: Config):
             )
         else:
             on_trace_ready = None
+
         prof = profile(
             activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
-            schedule=torch.profiler.schedule(wait=1, warmup=1, active=1, repeat=1, skip_first=3),
+            schedule=torch.profiler.schedule(
+                wait=config.profiler.wait,
+                warmup=config.profiler.warmup,
+                active=config.profiler.active,
+                repeat=config.profiler.repeat,
+                skip_first=config.profiler.skip_first,
+            ),
             on_trace_ready=on_trace_ready,
-            # record_shapes=True,
-            # profile_memory=True,
-            with_stack=True,
+            record_shapes=config.profiler.record_shapes,
+            profile_memory=config.profiler.profile_memory,
+            with_stack=config.profiler.with_stack,
         )
     else:
         prof = contextlib.nullcontext()
