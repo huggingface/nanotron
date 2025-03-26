@@ -64,6 +64,19 @@ class NewLineStreamHandler(logging.StreamHandler):
             super().emit(record)
 
 
+class CategoryFilter(logging.Filter):
+    """Filter to add category field to log records."""
+
+    def filter(self, record):
+        # Add category attribute if not present
+        if not hasattr(record, "category"):
+            record.category = ""
+        elif record.category:
+            # Format the category if it exists
+            record.category = f"|{record.category}"
+        return True
+
+
 DEFAULT_HANDLER = NewLineStreamHandler()
 DEFAULT_LOG_LEVEL = logging.WARNING
 LIBRARY_NAME = __name__.split(".")[0]
@@ -214,6 +227,8 @@ def log_rank(
     level: int,
     group: Optional[dist.ProcessGroup] = None,
     rank: Optional[int] = None,
+    category: Optional[str] = None,
+    is_separator: bool = False,
     **kwargs,
 ):
     """Log only if the current process is the rank specified."""
@@ -221,9 +236,23 @@ def log_rank(
     if group is None:
         group = torch_dist.distributed_c10d._get_default_group()
 
+    # Add category to the extra kwargs
+    if category is not None:
+        kwargs["extra"] = kwargs.get("extra", {})
+        kwargs["extra"]["category"] = category
+
+    # Add separator to the extra kwargs
+    if is_separator:
+        kwargs["extra"] = kwargs.get("extra", {})
+        kwargs["extra"]["separator"] = True
+
     # rank is None means everyone logs
     if rank is None or dist.get_rank(group) == rank:
+        if is_separator:
+            logger.log(level, "=" * 50, **kwargs)
         logger.log(level, msg, **kwargs)
+        if is_separator:
+            logger.log(level, "=" * 50, **kwargs)
 
 
 @lru_cache(maxsize=None)
@@ -247,8 +276,9 @@ def human_format(num: float, billions: bool = False, divide_by_1024: bool = Fals
     return "{}{}".format("{:f}".format(num).rstrip("0").rstrip("."), SIZES[magnitude])
 
 
-def log_memory(logger: logging.Logger):
+def log_memory(logger: logging.Logger, msg: str = ""):
     log_rank(
+        f"{msg}\n"
         f" Memory usage: {torch.cuda.memory_allocated() / 1024**2:.2f}MiB."
         f" Peak allocated {torch.cuda.max_memory_allocated() / 1024**2:.2f}MiB."
         f" Peak reserved: {torch.cuda.max_memory_reserved() / 1024**2:.2f}MiB",
@@ -287,14 +317,76 @@ class LoggerWriter:
 
 
 def set_logger_verbosity_format(logging_level: str, parallel_context: ParallelContext):
+    # 1. Conditional rank display - only show ranks if their size is > 1
     node_name = os.environ.get("SLURMD_NODENAME")
-    expert_parallel_log = (
-        f"|EXP={dist.get_rank(parallel_context.expert_pg)}" if parallel_context.expert_parallel_size > 1 else ""
-    )
-    formatter = Formatter(
-        fmt=f"%(asctime)s [%(levelname)s|DP={dist.get_rank(parallel_context.dp_pg)}|PP={dist.get_rank(parallel_context.pp_pg)}|"
-        f"TP={dist.get_rank(parallel_context.tp_pg)}{expert_parallel_log}{'|' + node_name if node_name else ''}]: %(message)s",
-        datefmt="%m/%d/%Y %H:%M:%S",
+    ranks = []
+
+    if parallel_context.expert_parallel_size > 1:
+        ranks.append(f"EP={dist.get_rank(parallel_context.ep_pg)}")
+    if parallel_context.context_parallel_size > 1:
+        ranks.append(f"CP={dist.get_rank(parallel_context.cp_pg)}")
+    if parallel_context.data_parallel_size > 1:
+        ranks.append(f"DP={dist.get_rank(parallel_context.dp_pg)}")
+    if parallel_context.pipeline_parallel_size > 1:
+        ranks.append(f"PP={dist.get_rank(parallel_context.pp_pg)}")
+    if parallel_context.tensor_parallel_size > 1:
+        ranks.append(f"TP={dist.get_rank(parallel_context.tp_pg)}")
+
+    if node_name:
+        ranks.append(node_name)
+
+    # Join all ranks with separator
+    ranks_str = "|".join(ranks)
+    ranks_display = f"|{ranks_str}" if ranks_str else ""
+
+    # Use a custom formatter class that handles missing fields
+    class SafeFormatter(Formatter):
+        def format(self, record):
+            # Ensure required attributes exist before formatting
+            if not hasattr(record, "category"):
+                record.category = ""
+            elif record.category and not record.category.startswith("|"):
+                record.category = f"|{record.category}"
+
+            # Store original message for restoration later
+            original_msg = record.msg
+
+            # Apply styling based on record properties
+            is_separator = getattr(record, "separator", False)
+            if is_separator:
+                record.msg = f"\033[1m{record.msg}\033[0m"  # Bold for separators
+
+            # Choose color prefix/suffix based on log level
+            if record.levelno == logging.WARNING:
+                prefix = "\033[1;33m"  # Bold yellow for warnings
+            elif record.levelno >= logging.ERROR:
+                prefix = "\033[1;31m"  # Bold red for errors and critical
+            elif record.levelno == logging.DEBUG:
+                prefix = "\033[2;3;32m"  # Dim and italic green for debug
+            else:
+                prefix = "\033[2;3m"  # Dim and italic for other levels
+
+            suffix = "\033[0m"
+
+            # Save the original format
+            original_fmt = self._style._fmt
+
+            # Use a more consistent format with prefix/suffix applied only to the metadata portion
+            self._style._fmt = f"{prefix}%(asctime)s [%(levelname)s%(category)s{ranks_display}]{suffix}: %(message)s"
+
+            # Format the record
+            result = super().format(record)
+
+            # Restore the original values
+            self._style._fmt = original_fmt
+            record.msg = original_msg
+
+            return result
+
+    # Create formatter with the safe handling
+    formatter = SafeFormatter(
+        fmt=f"\033[2;3m%(asctime)s [%(levelname)s%(category)s{ranks_display}]\033[0m: %(message)s",
+        datefmt="%m/%d %H:%M:%S",
     )
     log_level = log_levels[logging_level]
 
@@ -318,6 +410,22 @@ def set_ranks_logging_level(parallel_context: ParallelContext, logging_config: "
     else:
         if logging_config.log_level_replica is not None:
             set_logger_verbosity_format(logging_config.log_level_replica, parallel_context=parallel_context)
+
+
+def log_libraries_versions(logger: logging.Logger):
+    import datasets
+    import flash_attn
+    import torch
+    import transformers
+
+    import nanotron
+
+    log_rank("Libraries versions:", logger=logger, level=logging.INFO, rank=0, is_separator=True)
+    log_rank(f"nanotron version: {nanotron.__version__}", logger=logger, level=logging.INFO, rank=0)
+    log_rank(f"torch version: {torch.__version__}", logger=logger, level=logging.INFO, rank=0)
+    log_rank(f"transformers version: {transformers.__version__}", logger=logger, level=logging.INFO, rank=0)
+    log_rank(f"datasets version: {datasets.__version__}", logger=logger, level=logging.INFO, rank=0)
+    log_rank(f"flash-attn version: {flash_attn.__version__}", logger=logger, level=logging.INFO, rank=0)
 
 
 _configure_library_root_logger()

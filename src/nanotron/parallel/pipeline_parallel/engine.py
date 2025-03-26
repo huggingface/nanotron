@@ -2,6 +2,9 @@ from abc import ABC, abstractmethod
 from typing import Dict, Iterable, Optional, Union
 
 import torch
+from torch import nn as torch_nn
+from torch.nn.parallel import DistributedDataParallel
+
 from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.distributed import ProcessGroup
@@ -12,8 +15,6 @@ from nanotron.parallel.pipeline_parallel.context_manager import attach_pipeline_
 from nanotron.parallel.pipeline_parallel.state import PipelineTrainBatchState
 from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
 from nanotron.utils import ContextManagers
-from torch import nn as torch_nn
-from torch.nn.parallel import DistributedDataParallel
 
 logger = logging.get_logger(__name__)
 
@@ -114,6 +115,7 @@ class PipelineEngine(ABC):
         context = ContextManagers(context_list)
         return context
 
+    @torch.profiler.record_function("train_batch_iter")
     @abstractmethod
     def train_batch_iter(
         self,
@@ -161,10 +163,19 @@ class PipelineEngine(ABC):
 
         return outputs
 
+    def __str__(self):
+        return self.__class__.__name__
+
+    def __format__(self, format_spec):
+        return str(self)
+
 
 class AllForwardAllBackwardPipelineEngine(PipelineEngine):
     def __init__(self):
         super().__init__()
+
+    def __str__(self):
+        return "afab"
 
     def train_batch_iter(
         self,
@@ -222,6 +233,9 @@ class AllForwardAllBackwardPipelineEngine(PipelineEngine):
 class OneForwardOneBackwardPipelineEngine(PipelineEngine):
     def __init__(self):
         super().__init__()
+
+    def __str__(self):
+        return "1f1b"
 
     def train_batch_iter(
         self,

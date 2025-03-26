@@ -26,6 +26,29 @@ class ExistingCheckpointInit:
 
 
 @dataclass
+class MoEConfig:
+    """Configuration for Mixture of Experts layers"""
+
+    num_experts: int = 8  # Total number of experts
+    top_k: int = 2  # Number of experts to route each token to
+    layers: List[int] = field(
+        default_factory=lambda: [-1]
+    )  # Indices of layers that use MoE. -1 means all layers. Default is all layers
+    enable_shared_expert: bool = False  # Whether to use a shared expert alongside specialized experts
+    token_dispatcher_type: str = "alltoall"  # Communication pattern for MoE ("alltoall" or "allgather")
+
+    def __post_init__(self):
+        # Validate the configuration
+        if self.top_k > self.num_experts:
+            raise ValueError(f"top_k ({self.top_k}) cannot be greater than num_experts ({self.num_experts})")
+
+        if self.token_dispatcher_type not in ["alltoall", "allgather"]:
+            raise ValueError(
+                f"token_dispatcher_type must be one of ['alltoall', 'allgather'], got {self.token_dispatcher_type}"
+            )
+
+
+@dataclass
 class LlamaConfig:
     """Configuration for a LLAMA model
 
@@ -42,6 +65,7 @@ class LlamaConfig:
     max_position_embeddings: int = 2048
     num_attention_heads: int = 32
     num_hidden_layers: int = 32
+    attention_bias: bool = False
     num_key_value_heads: Optional[int] = None
     pad_token_id: Optional[int] = None
     pretraining_tp: int = 1
@@ -70,6 +94,66 @@ class LlamaConfig:
     @property
     def is_using_mup(self) -> bool:
         return self._is_using_mup
+
+
+@dataclass
+class Qwen2Config:
+    """Configuration for a QWEN2 model
+
+    Be careful on having a coherent typing as we use it to reconstruct the model from yaml
+    """
+
+    bos_token_id: int = 1
+    eos_token_id: int = 2
+    hidden_act: str = "silu"
+    hidden_size: int = 4096
+    initializer_range: float = 0.02
+    intermediate_size: int = 11008
+    is_qwen2_config: bool = True  # We use this help differentiate models in yaml/python conversion
+    max_position_embeddings: int = 2048
+    num_attention_heads: int = 32
+    num_hidden_layers: int = 32
+    num_key_value_heads: Optional[int] = None
+    pad_token_id: Optional[int] = None
+    pretraining_tp: int = 1
+    rms_norm_eps: float = 1e-6
+    rope_scaling: Optional[dict] = None
+    rope_theta: float = 10000.0
+    rope_interleaved: bool = (
+        False  # The default value has been True, but for loading Llama3 checkpoints you have to set it to False
+    )
+    tie_word_embeddings: bool = False
+    use_cache: bool = True
+    vocab_size: int = 32000
+    _attn_implementation: Optional[str] = "sdpa"
+    attention_bias: bool = False
+    interleaved_rotary: bool = False
+
+    # MoE configuration
+    moe_config: Optional[MoEConfig] = None
+
+    def __post_init__(self):
+        # NOTE: user don't set self._init_method, ModelArgs will set it
+        # then we only pass LlamaConfig around
+        self._is_using_mup: bool = False
+        # self._init_method: Optional[Union[RandomInit, SpectralMupInit, ExistingCheckpointInit]] = None
+
+        # for backward compatibility
+        if self.num_key_value_heads is None:
+            self.num_key_value_heads = self.num_attention_heads
+
+        # By default i want all layers to be MoE layers
+        if self.moe_config and self.moe_config.layers == [-1]:
+            self.moe_config.layers = list(range(self.num_hidden_layers))
+
+    @property
+    def is_using_mup(self) -> bool:
+        return self._is_using_mup
+
+    @property
+    def is_moe_model(self) -> bool:
+        """Returns True if the model uses MoE layers"""
+        return self.moe_config is not None and len(self.moe_config.layers) > 0
 
 
 @dataclass
@@ -138,4 +222,4 @@ class Starcoder2Config:
         return self.intermediate_size
 
 
-NanotronConfigs = Union[LlamaConfig, Starcoder2Config, Any]
+NanotronConfigs = Union[LlamaConfig, Starcoder2Config, Qwen2Config, Any]

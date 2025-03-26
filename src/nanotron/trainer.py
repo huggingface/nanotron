@@ -36,7 +36,7 @@ from nanotron.config import (
     get_config_from_file,
 )
 from nanotron.constants import MODEL_CONFIG_FILE_NAME
-from nanotron.dataloader import sanity_check_dataloader
+from nanotron.data.dataloader import sanity_check_dataloader
 from nanotron.helpers import (
     _vocab_size_with_padding,
     compute_remain_train_steps_of_a_data_stage_from_ckp,
@@ -51,6 +51,7 @@ from nanotron.logging import (
     LoggerWriter,
     LogItem,
     human_format,
+    log_libraries_versions,
     log_memory,
     log_rank,
     set_ranks_logging_level,
@@ -58,6 +59,7 @@ from nanotron.logging import (
 from nanotron.models import NanotronModel, build_model
 from nanotron.models.base import check_model_has_grad
 from nanotron.models.llama import LlamaForTraining, RotaryEmbedding
+from nanotron.models.qwen import Qwen2ForTraining
 from nanotron.models.starcoder2 import Starcoder2ForTraining
 from nanotron.optim.clip_grads import clip_grad_norm
 from nanotron.parallel import ParallelContext
@@ -105,6 +107,7 @@ dist_logger.setLevel(logging.WARNING)
 CONFIG_TO_MODEL_CLASS = {
     "LlamaConfig": LlamaForTraining,
     "Starcoder2Config": Starcoder2ForTraining,
+    "Qwen2Config": Qwen2ForTraining,
 }
 
 try:
@@ -162,16 +165,13 @@ class DistributedTrainer:
             pipeline_parallel_size=self.config.parallelism.pp,
             data_parallel_size=self.config.parallelism.dp,
             expert_parallel_size=self.config.parallelism.expert_parallel_size,
+            context_parallel_size=self.config.parallelism.context_parallel_size,
         )
 
         self.pre_init()
 
         # Set log levels
         set_ranks_logging_level(parallel_context=self.parallel_context, logging_config=self.config.logging)
-
-        # Log benchmark info
-        if os.environ.get("NANOTRON_BENCHMARK", "0") == "1":
-            log_throughput(self.config, self.parallel_context)
 
         ########################################
         ## Setting up our model, optimizers, schedulers, etc.
@@ -252,24 +252,33 @@ class DistributedTrainer:
 
         # Setup tensorboard write and log writers on output rank
         self.logger_ranks = self.parallel_context.get_global_rank(
-            ep_rank=0, pp_rank=self.unwrapped_model.output_pp_rank, dp_rank=0, tp_rank=0
+            ep_rank=0, pp_rank=self.unwrapped_model.output_pp_rank, dp_rank=0, tp_rank=0, cp_rank=0
         ).flatten()
         self.loggerwriter = self.setup_log_writers()
-
-        # Log where each module is instantiated
-        self.unwrapped_model.log_modules(level=logging.DEBUG, group=self.parallel_context.world_pg, rank=0)
 
         self.micro_batch_size = self.config.tokens.micro_batch_size
         self.n_micro_batches_per_batch = self.config.tokens.batch_accumulation_per_replica
         self.global_batch_size = (
             self.micro_batch_size * self.n_micro_batches_per_batch * self.parallel_context.dp_pg.size()
         )
-        self.sequence_length = self.config.tokens.sequence_length
+        self.sequence_length = (
+            self.config.tokens.sequence_length
+        )  # Global sequence length not divided by context parallel size
         self.iteration_step = self.metadata.last_train_step
         self.limit_val_batches = self.config.tokens.limit_val_batches
-        # NOTE: the dataloader currently in use for the current training stage
-        self.current_dataloader: Optional[DataLoader] = None
+        self.current_dataloader: Optional[DataLoader] = None  # used for the current training stage
 
+        log_libraries_versions(logger=logger)
+        log_rank("Config:", logger=logger, level=logging.INFO, rank=0, is_separator=True)
+        log_rank(
+            f"Parsing config: {os.path.abspath(config_or_config_file)}", logger=logger, level=logging.INFO, rank=0
+        )  # noqa
+        log_rank(pformat(self.config), logger=logger, level=logging.INFO, rank=0)
+        log_rank("Model Config:", logger=logger, level=logging.INFO, rank=0, is_separator=True)
+        log_rank(pformat(self.model_config), logger=logger, level=logging.INFO, rank=0)
+        # Log benchmark info
+        if os.environ.get("NANOTRON_BENCHMARK", "0") == "1":
+            log_throughput(self.config, self.parallel_context)
         self.post_init()
 
     def pre_init(self):
@@ -293,12 +302,22 @@ class DistributedTrainer:
             self.s3_mover = None
 
     def pre_training(self, *args, **kwargs):
-        self._print_training_plan()
+        if not self.config.general.ignore_sanity_checks:
+            log_rank(
+                "Sanity checks are enabled, this will slow down the training. To disable them, set `config.general.ignore_sanity_checks` to `True`",
+                logger=logger,
+                level=logging.WARNING,
+                rank=0,
+            )
+            assert (
+                os.environ.get("NANOTRON_BENCHMARK", "0") != "1"
+            ), "Sanity checks are enabled while you're running a benchmark. Make sure to disable them by setting `config.general.ignore_sanity_checks` to `True`"
 
         metadata: TrainingMetadata = self.metadata
 
+        log_rank("Start training", logger=logger, level=logging.INFO, rank=0, is_separator=True)
         log_rank(
-            f"[Start training] datetime: {datetime.datetime.now()} | mbs: {self.micro_batch_size} | grad_accum: {self.n_micro_batches_per_batch} | global_batch_size: {self.global_batch_size} | sequence_length: {self.sequence_length} | train_steps: {self.config.tokens.train_steps} | start_iteration_step: {metadata.last_train_step} | consumed_train_samples: {metadata.consumed_train_samples}",  # noqa
+            f"mbs: {self.micro_batch_size} | grad_accum: {self.n_micro_batches_per_batch} | sequence_length: {self.sequence_length} | global_batch_size: {self.global_batch_size} | train_steps: {self.config.tokens.train_steps} | start_iteration_step: {metadata.last_train_step} | consumed_train_samples: {metadata.consumed_train_samples}",  # noqa
             logger=logger,
             level=logging.INFO,
             rank=0,
@@ -321,17 +340,6 @@ class DistributedTrainer:
     def post_training(self):
         if self.s3_mover is not None:
             self.s3_mover.distributed_wait_for_completion(group=self.parallel_context.world_pg)
-
-    def _print_training_plan(self):
-        if hasattr(self.config, "data_stages") and self.config.data_stages is not None:
-            stages_info = "".join(
-                f"[Stage {stage.name}] start from step {stage.start_training_step} \n"
-                for stage in self.config.data_stages
-            )
-            full_log_message = (
-                f"[Training Plan] There are {len(self.config.data_stages)} training stages \n{stages_info}"
-            )
-            log_rank(full_log_message, logger=logger, level=logging.INFO, rank=0)
 
     def _update_dataloader_based_on_training_stages(self, dataloaders: Union[List[DataLoader], DataLoader]):
         from collections.abc import Generator
@@ -459,6 +467,7 @@ class DistributedTrainer:
         with prof:
             for self.iteration_step in range(self.initial_iter_step, self.last_iter_step + 1):
                 if isinstance(prof, torch.profiler.profile):
+                    logger.info(f"Profiler on for step {self.iteration_step}")
                     prof.step()
 
                 self.iteration_start_time = time.time()
@@ -497,18 +506,19 @@ class DistributedTrainer:
         )
 
         if self.iteration_step < self.initial_iter_step + 5:
-            log_memory(logger=logger)
+            log_memory(logger=logger, msg="Before train_batch_iter")
 
-        outputs = self.pipeline_engine.train_batch_iter(
-            model=self.model,
-            pg=self.parallel_context.pp_pg,
-            batch=(next(dataloader) for _ in range(self.n_micro_batches_per_batch)),
-            nb_microbatches=self.n_micro_batches_per_batch,
-            grad_accumulator=self.grad_accumulator,
-        )
+        with torch.profiler.record_function("train_batch_iter"):
+            outputs = self.pipeline_engine.train_batch_iter(
+                model=self.model,
+                pg=self.parallel_context.pp_pg,
+                batch=(next(dataloader) for _ in range(self.n_micro_batches_per_batch)),
+                nb_microbatches=self.n_micro_batches_per_batch,
+                grad_accumulator=self.grad_accumulator,
+            )
 
         if self.iteration_step < self.initial_iter_step + 5:
-            log_memory(logger=logger)
+            log_memory(logger=logger, msg="After train_batch_iter")
 
         after_tbi_sanity_checks(self.config, self.parallel_context, self.unwrapped_model, self.grad_accumulator)
 
@@ -682,19 +692,19 @@ class DistributedTrainer:
             self.loggerwriter.add_scalars_from_list(log_entries, self.iteration_step)
 
         # Nanotron Benchmark mode: we log the throughput and exit
-        if os.environ.get("NANOTRON_BENCHMARK", "0") == "1" and self.iteration_step == 3:
+        if os.environ.get("NANOTRON_BENCHMARK", "0") == "1" and self.iteration_step == 4:
             log_throughput(
                 self.config,
                 self.parallel_context,
                 model_tflops,
                 hardware_tflops,
                 tokens_per_sec,
+                num_params=self.num_params,
             )
-            log_rank("Throughput logging complete", logger=logger, level=logging.INFO)
-            if "SLURM_JOB_ID" in os.environ:
-                os.system("scancel " + os.environ["SLURM_JOB_ID"])
-            else:
+            log_rank("Throughput logging complete", logger=logger, level=logging.INFO, rank=0)
+            if not self.config.profiler:
                 exit(0)
+                # raise Exception("success")  # exit with non-zero exit code to trigger fast termination --kill-on-bad-exit=1
 
     def init_model(self) -> Union[NanotronModel, DistributedDataParallel]:
         """Initialize the model and load weights from checkpoint if needed."""
@@ -717,13 +727,12 @@ class DistributedTrainer:
                     rank=0,
                 )
             else:
-                assert (
-                    self.config.tokens.sequence_length == self.model_config.max_position_embeddings
-                ), "The tokenizer's sequence length does not match the model's maximum position embeddings."
-
-        log_rank("Config:\n" + pformat(self.config), logger=logger, level=logging.INFO, rank=0)
-        log_rank("Model Config:\n" + pformat(self.model_config), logger=logger, level=logging.INFO, rank=0)
-
+                log_rank(
+                    f"the model's max_position_embeddings {self.model_config.max_position_embeddings} is ignored because the sequence length we're training on is {self.config.tokens.sequence_length}.",  # noqa
+                    logger=logger,
+                    level=logging.WARNING,
+                    rank=0,
+                )
         model = self._init_model_instance()
         model = self._load_model_checkpoint(model)
         return model
@@ -833,10 +842,12 @@ class DistributedTrainer:
         dist.all_reduce(total_params, group=parallel_context.pp_pg, async_op=False, op=dist.ReduceOp.SUM)  # PP
         dist.all_reduce(total_size, group=parallel_context.tp_pg, async_op=False, op=dist.ReduceOp.SUM)
         dist.all_reduce(total_size, group=parallel_context.pp_pg, async_op=False, op=dist.ReduceOp.SUM)
+        total_params = total_params.item()
+        self.num_params = {"total": total_params, "local": num_params}
 
         # TODO @nouamanetazi: better memory logs
         log_rank(
-            f"Total number of parameters: {human_format(total_params.item())} ({total_size.item() / 1024**2:.2f}MiB)",
+            f"Total number of parameters: {human_format(total_params)} ({total_size.item() / 1024**2:.2f}MiB)",
             logger=logger,
             level=logging.INFO,
             group=parallel_context.world_pg,
@@ -977,9 +988,10 @@ def mark_tied_parameters(
                 target,
                 (
                     parallel_context.get_global_rank(
-                        ep_rank=dist.get_rank(parallel_context.expert_pg),
+                        ep_rank=dist.get_rank(parallel_context.ep_pg),
                         pp_rank=get_pp_rank_of(target, module=model),
                         dp_rank=dist.get_rank(parallel_context.dp_pg),
+                        cp_rank=dist.get_rank(parallel_context.cp_pg),
                         tp_rank=dist.get_rank(parallel_context.tp_pg),
                     ),
                 ),
@@ -1063,7 +1075,7 @@ def mark_unsharded_params_as_tied_across_expert(
                 (
                     name,
                     # sync across expert group
-                    tuple(sorted(dist.get_process_group_ranks(parallel_context.expert_pg))),
+                    tuple(sorted(dist.get_process_group_ranks(parallel_context.ep_pg))),
                 )
             ]
 

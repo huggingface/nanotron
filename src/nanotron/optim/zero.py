@@ -99,21 +99,21 @@ class ZeroDistributedOptimizer(InheritFromOtherOptimizer):
         loss = super().step(closure=closure)
 
         # calculate param_size (model) + param_size (grads) + 2*param_size/DP_if_zero1 (optim_states)
-        expected_allocated = sum(
-            param.numel() * param.element_size() * 2 + param.numel() * param.element_size() * 2 / self.dp_pg.size()
-            for named_param_group in self.zero_named_param_groups
-            for _, param in named_param_group["named_params"]
-        )
+        # expected_allocated = sum(
+        #     param.numel() * param.element_size() * 2 + param.numel() * param.element_size() * 2 / self.dp_pg.size()
+        #     for named_param_group in self.zero_named_param_groups
+        #     for _, param in named_param_group["named_params"]
+        # )
 
-        log_rank(
-            f"[After optim states allocation] Memory usage: {torch.cuda.memory_allocated() / 1024**2:.2f}MB "
-            f"(Expected 2*param_size + 2*param_size/DP_if_zero1={expected_allocated / 1024**2:.2f}MB). "
-            f"Peak reserved memory: {torch.cuda.max_memory_reserved() / 1024**2:.2f}MB",
-            logger=logger,
-            level=logging.DEBUG,
-            group=self.dp_pg,
-            rank=0,
-        )
+        # log_rank(
+        #     f"[After optim states allocation] Memory usage: {torch.cuda.memory_allocated() / 1024**2:.2f}MB "
+        #     f"(Expected 2*param_size + 2*param_size/DP_if_zero1={expected_allocated / 1024**2:.2f}MB). "
+        #     f"Peak reserved memory: {torch.cuda.max_memory_reserved() / 1024**2:.2f}MB",
+        #     logger=logger,
+        #     level=logging.DEBUG,
+        #     group=self.dp_pg,
+        #     rank=0,
+        # )
 
         # All gather updated params
         self._all_gather_params()
@@ -214,6 +214,7 @@ class ZeroDistributedOptimizer(InheritFromOtherOptimizer):
 
         return param_name_to_dp_rank_offsets
 
+    @torch.profiler.record_function("all_gather_params")
     def _all_gather_params(self):
         """All gather updated params"""
         all_named_tensors_to_gather = [

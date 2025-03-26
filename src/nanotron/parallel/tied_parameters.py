@@ -1,6 +1,7 @@
 from collections import OrderedDict
 from typing import Dict, List, Optional, Tuple
 
+import torch
 from torch import nn
 
 from nanotron import distributed as dist
@@ -50,7 +51,7 @@ def tie_parameters(
     dp_ranks = tuple(
         sorted(
             {
-                parallel_context.get_local_ranks(world_rank=global_rank)[2]
+                parallel_context.get_local_ranks(world_rank=global_rank)["dp"]
                 for _, global_ranks in ties
                 for global_rank in global_ranks
             }
@@ -116,6 +117,7 @@ def get_tied_id_to_param(
     }
 
 
+@torch.profiler.record_function("sync_tied_weights_gradients")
 def sync_tied_weights_gradients(
     module: nn.Module,  # TODO: NanotronModel
     parallel_context: ParallelContext,

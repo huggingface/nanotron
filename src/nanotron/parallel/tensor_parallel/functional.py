@@ -25,7 +25,7 @@ from nanotron.parallel.tensor_parallel.distributed_differentiable_primitives imp
     differentiable_reduce_scatter_sum,
 )
 from nanotron.parallel.tensor_parallel.enum import TensorParallelLinearMode
-from nanotron.parallel.utils import MemoryBuffer, assert_cuda_max_connections_set_to_1
+from nanotron.parallel.utils import MemoryBuffer
 
 
 class _ShardedCrossEntropy(torch.autograd.Function):
@@ -156,7 +156,6 @@ class _ColumnLinearAsyncCommunication(torch.autograd.Function):
     """Adapted from https://github.com/NVIDIA/Megatron-LM/blob/e6d7e09845590d0a36bc7f29eb28db974fb8da4e/megatron/core/tensor_parallel/layers.py#L215"""
 
     @staticmethod
-    @assert_cuda_max_connections_set_to_1
     def forward(ctx, tensor, weight, bias, group, tp_mode, tp_recompute_allgather):
         ctx.use_bias = bias is not None
         ctx.tp_mode = tp_mode
@@ -301,7 +300,6 @@ class _ColumnLinearAsyncCommunication(torch.autograd.Function):
             raise ValueError(f"Got unexpected mode: {tp_mode}.")
 
     @staticmethod
-    @assert_cuda_max_connections_set_to_1
     def backward(ctx, grad_output):
         tensor, weight = ctx.saved_tensors
         group = ctx.group
@@ -310,7 +308,6 @@ class _ColumnLinearAsyncCommunication(torch.autograd.Function):
 
         handle1: Optional[dist.Work] = None
         if tp_mode is TensorParallelLinearMode.REDUCE_SCATTER and ctx.tp_recompute_allgather:
-            # TODO @thomasw21: gather along another dimension
             sharded_batch_size, *rest_size = tensor.shape
             if group is None:
                 group = dist.distributed_c10d._get_default_group()
@@ -509,7 +506,6 @@ class _RowLinearAsyncCommunication(torch.autograd.Function):
         return out
 
     @staticmethod
-    @assert_cuda_max_connections_set_to_1
     def backward(ctx, grad_output):
         tensor, weight = ctx.saved_tensors
         group = ctx.group
@@ -517,7 +513,6 @@ class _RowLinearAsyncCommunication(torch.autograd.Function):
 
         handle: Optional[dist.Work] = None
 
-        # TODO @thomasw21: gather along another dimension
         sharded_batch_size, *rest_size = grad_output.shape
 
         if group.size() == 1:
