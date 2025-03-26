@@ -661,7 +661,7 @@ class DistributedTrainer:
                 LogItem("lr", lr, "human_format"),  # , ".3E"),
                 LogItem("model_tflops_per_gpu", model_tflops, "human_format"),  # , ".2f"),
                 # LogItem("hardware_tflops_per_gpu", hardware_tflops, "human_format"),  # , ".2f"),
-                LogItem("eta", str(datetime.timedelta(seconds=eta_seconds)), "human_format"),
+                LogItem("eta", str(datetime.timedelta(seconds=eta_seconds))),
             ]
             if z_loss_avg is not None:
                 log_entries.insert(6, LogItem("z_loss", z_loss_avg.item(), "human_format"))  # , "1.6E"),
