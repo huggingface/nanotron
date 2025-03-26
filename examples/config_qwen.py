@@ -20,7 +20,6 @@ from nanotron.config import (
     Qwen2Config,
     RandomInit,
     SFTDatasetsArgs,  # noqa
-    TokenizerArgs,
     TokensArgs,
 )
 from nanotron.logging import human_format
@@ -39,7 +38,7 @@ MODEL_SIZES: Dict[str, Tuple[int, int, int, int, int]] = {
     "30b": (60, 6656, 52, 52, 17920),  # ~30B params
     "70b": (80, 8192, 64, 8, 28672),  # ~70B params (MQA)
     # Custom model
-    "custom": (12, 192, 4, 4, 768),
+    "custom": (12, 256, 4, 4, 768),
 }
 
 
@@ -105,9 +104,11 @@ def get_model_config(model_size: str) -> Qwen2Config:
         rope_scaling=None,
         tie_word_embeddings=True,
         use_cache=True,
-        vocab_size=65536,  # Standard Llama tokenizer vocab size
+        vocab_size=49152,
         is_qwen2_config=True,
         pad_token_id=None,
+        _attn_implementation="flex_attention",
+        sliding_window_size=20,
     )
 
 
@@ -134,7 +135,10 @@ data_stages = [
             # ),
             # When using a Nanoset, we need to specify the vocab size of the tokenizer used to tokenize the dataset or larger
             dataset=NanosetDatasetsArgs(
-                dataset_folder="/fsx/loubna/tokenized_for_exps/mcf-dataset",  # 1.4T tokens
+                dataset_folder=[
+                    "/fsx/loubna/tokenized_for_exps/mcf-dataset",  # 2 token_size
+                    # "/fsx/loubna/datasets/llama_tokenized/fineweb-edu/merged", # meta-llama/Llama-3.2-1B|4
+                ],
             ),
             # For SFT (uncomment to use):
             # dataset=SFTDatasetsArgs(
@@ -191,7 +195,7 @@ def create_config(model_config: Qwen2Config, args: argparse.Namespace) -> Config
         checkpoints=CheckpointsArgs(checkpoints_path=checkpoints_path, checkpoint_interval=10),
         parallelism=parallelism,
         model=ModelArgs(init_method=RandomInit(std=0.025), model_config=model_config),
-        tokenizer=TokenizerArgs("robot-test/dummy-tokenizer-wordlevel"),
+        # tokenizer=TokenizerArgs("HuggingFaceTB/cosmo2-tokenizer"),
         optimizer=optimizer,
         logging=LoggingArgs(log_level=args.log_lvl, log_level_replica=args.log_lvl),
         tokens=tokens,

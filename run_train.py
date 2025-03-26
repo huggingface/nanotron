@@ -33,7 +33,7 @@ from nanotron.helpers import (
     compute_remain_train_steps_of_a_data_stage_from_ckp,
     get_consumed_train_samples_of_a_data_stage_from_ckp,
 )
-from nanotron.logging import log_rank, warn_once
+from nanotron.logging import log_rank
 from nanotron.parallel.pipeline_parallel.utils import get_input_output_pp_ranks
 from nanotron.trainer import DistributedTrainer
 from nanotron.utils import main_rank_first
@@ -112,8 +112,12 @@ def get_dataloader_from_data_stage(
             )["train"]
 
             tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
-            tokenizer.pad_token = tokenizer.eos_token
             tokenizer.padding_side = "left"
+            sequence_sep_tokens = [tokenizer.bos_token, tokenizer.eos_token, tokenizer.pad_token, tokenizer.unk_token]
+            # assert bos or eos are present
+            assert (
+                tokenizer.bos_token is not None or tokenizer.eos_token is not None
+            ), f"Tokenizer must have either bos or eos token, but found none for {tokenizer_path}"
 
             # Check that tokenizer's vocab size is smaller than the model's vocab size
             assert (
@@ -158,6 +162,7 @@ def get_dataloader_from_data_stage(
                 seed_worker=data.seed,
                 dataloader_drop_last=True,
                 use_position_ids=isinstance(trainer.model_config, Qwen2Config),
+                sequence_sep_tokens=sequence_sep_tokens,  # Used to generate position ids
             )
 
             # Check if we have enough samples for train_steps
@@ -172,22 +177,16 @@ def get_dataloader_from_data_stage(
 
     # Case 3: Nanosets
     elif isinstance(data.dataset, NanosetDatasetsArgs):
-        # Get tokenizer cardinality
-        warn_once(
-            f"You passed a tokenized Nanoset dataset '{data.dataset.dataset_folder}', Make sure it was tokenized with a vocab size={trainer.model_config.vocab_size}",
-            logger=logger,
-            rank=0,
-        )
         # Create Nanoset
         from nanotron.data.nanoset import Nanoset
 
         with main_rank_first(trainer.parallel_context.world_pg):
             train_dataset = Nanoset(
                 dataset_folders=data.dataset.dataset_folder,
-                dataset_weights=data.dataset.dataset_weights,
                 sequence_length=trainer.sequence_length,
-                vocab_size=trainer.model_config.vocab_size,
+                token_size=data.dataset.token_size_in_bytes,
                 train_split_num_samples=trainer.config.tokens.train_steps * trainer.global_batch_size,
+                dataset_weights=data.dataset.dataset_weights,
                 random_seed=data.seed,
             )
 

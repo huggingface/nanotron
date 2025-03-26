@@ -2,6 +2,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, List, Optional, Union
 
+from nanotron.nn.attention import ALL_ATTENTION_FUNCTIONS, AttentionImplementation
+
+# The default attention implementation to use
+DEFAULT_ATTENTION_IMPLEMENTATION = "sdpa"
+
 
 @dataclass
 class RandomInit:
@@ -78,6 +83,7 @@ class LlamaConfig:
     tie_word_embeddings: bool = False
     use_cache: bool = True
     vocab_size: int = 32000
+    _attn_implementation: Optional[AttentionImplementation] = DEFAULT_ATTENTION_IMPLEMENTATION
     z_loss_enabled: bool = False  # Z-loss regularization https://www.jmlr.org/papers/volume24/22-1144/22-1144.pdf
     z_loss_coefficient: float = 0.0001  # Default from the paper (10^-4)
 
@@ -90,6 +96,12 @@ class LlamaConfig:
         # for backward compatibility
         if self.num_key_value_heads is None:
             self.num_key_value_heads = self.num_attention_heads
+
+        # Validate that the attention implementation is valid
+        if self._attn_implementation is not None:
+            assert (
+                self._attn_implementation in ALL_ATTENTION_FUNCTIONS
+            ), f"Invalid attention implementation: {self._attn_implementation}. Available options are: {ALL_ATTENTION_FUNCTIONS.keys()}"
 
     @property
     def is_using_mup(self) -> bool:
@@ -125,10 +137,11 @@ class Qwen2Config:
     tie_word_embeddings: bool = False
     use_cache: bool = True
     vocab_size: int = 32000
-    _attn_implementation: Optional[str] = "sdpa"
+    _attn_implementation: Optional[AttentionImplementation] = DEFAULT_ATTENTION_IMPLEMENTATION
     attention_bias: bool = False
     interleaved_rotary: bool = False
-    z_loss_enabled: bool = True  # Z-loss regularization https://www.jmlr.org/papers/volume24/22-1144/22-1144.pdf
+    sliding_window_size: Optional[int] = None
+    z_loss_enabled: bool = False  # Z-loss regularization https://www.jmlr.org/papers/volume24/22-1144/22-1144.pdf
     z_loss_coefficient: float = 0.0001  # Default from the paper (10^-4)
 
     # MoE configuration
@@ -147,6 +160,18 @@ class Qwen2Config:
         # By default i want all layers to be MoE layers
         if self.moe_config and self.moe_config.layers == [-1]:
             self.moe_config.layers = list(range(self.num_hidden_layers))
+
+        # Validate that the attention implementation is valid
+        if self._attn_implementation is not None:
+            assert (
+                self._attn_implementation in ALL_ATTENTION_FUNCTIONS
+            ), f"Invalid attention implementation: {self._attn_implementation}. Available options are: {ALL_ATTENTION_FUNCTIONS.keys()}"
+
+        if self.sliding_window_size is not None:
+            assert self._attn_implementation in [
+                "flex_attention",
+                "flash_attention_2",
+            ], "Sliding window is only supported for Flex Attention and Flash Attention 2"
 
     @property
     def is_using_mup(self) -> bool:
@@ -191,6 +216,7 @@ class Starcoder2Config:
     use_position_embeddings: bool = False  # TODO @nouamane this is not used
     use_rotary_embeddings: bool = True
     vocab_size: int = 49280
+    _attn_implementation: Optional[AttentionImplementation] = DEFAULT_ATTENTION_IMPLEMENTATION
 
     def __post_init__(self):
         if self.global_attn_layers is None:
@@ -202,6 +228,12 @@ class Starcoder2Config:
 
         if not self.multi_query and not self.grouped_query:
             self.multi_query = True
+
+        # Validate that the attention implementation is valid
+        if self._attn_implementation is not None:
+            assert (
+                self._attn_implementation in ALL_ATTENTION_FUNCTIONS
+            ), f"Invalid attention implementation: {self._attn_implementation}. Available options are: {ALL_ATTENTION_FUNCTIONS.keys()}"
 
     @property
     def n_embed(self):

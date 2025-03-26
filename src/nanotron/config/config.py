@@ -1,4 +1,5 @@
 import datetime
+import glob
 import os
 from dataclasses import dataclass, fields
 from pathlib import Path
@@ -9,6 +10,7 @@ import torch
 import yaml
 from dacite import from_dict
 from datasets.download.streaming_download_manager import xPath
+from transformers import AutoTokenizer
 from yaml.loader import SafeLoader
 
 from nanotron.config.lighteval_config import LightEvalConfig
@@ -129,11 +131,43 @@ class S3UploadArgs:
 class NanosetDatasetsArgs:
     dataset_folder: Union[str, List[str]]
     dataset_weights: Optional[List[float]] = None
+    # Tokenizer config, assuming all datasets use the same tokenizer
+    tokenizer_name: Optional[str] = None
+    vocab_size: Optional[int] = None
+    token_size_in_bytes: Optional[int] = None
 
     def __post_init__(self):
         if isinstance(self.dataset_folder, str):  # Case 1: 1 Dataset folder
             self.dataset_folder = [self.dataset_folder]
             self.dataset_weights = [1]
+
+        # Check if dataset_weights is provided and matches the number of dataset folders
+        if self.dataset_weights is not None and len(self.dataset_weights) != len(self.dataset_folder):
+            raise ValueError(
+                f"Number of dataset weights ({len(self.dataset_weights)}) does not match number of dataset folders ({len(self.dataset_folder)})"
+            )
+
+        # Read the first metadata file in the dataset folder to extract tokenizer name and token size.
+        for folder in self.dataset_folder:
+            # Find all metadata files in the folder
+            metadata_files = glob.glob(os.path.join(folder, "*.metadata"))
+            if metadata_files:
+                # Read the first line of the first metadata file
+                with open(metadata_files[0], "r") as f:
+                    first_line = f.readline().strip()
+                    if "|" in first_line:
+                        tokenizer_name, token_size_in_bytes = first_line.split("|")
+                        if self.tokenizer_name is None:
+                            self.tokenizer_name = tokenizer_name
+                            self.token_size_in_bytes = int(token_size_in_bytes)
+                            self.vocab_size = AutoTokenizer.from_pretrained(tokenizer_name).vocab_size
+                        else:
+                            assert (
+                                self.tokenizer_name == tokenizer_name
+                            ), f"Tokenizer name mismatch while reading datasets metadata file, found both {self.tokenizer_name} and {tokenizer_name}"
+                            assert self.token_size_in_bytes == int(
+                                token_size_in_bytes
+                            ), f"Token size mismatch while reading datasets metadata file, found both {self.token_size_in_bytes} and {token_size_in_bytes}"
 
 
 @dataclass
@@ -373,7 +407,7 @@ class Config:
     general: GeneralArgs
     parallelism: ParallelismArgs
     model: ModelArgs
-    tokenizer: TokenizerArgs
+    tokenizer: Optional[TokenizerArgs] = None
     checkpoints: Optional[CheckpointsArgs] = None
     logging: Optional[LoggingArgs] = None
     tokens: Optional[TokensArgs] = None
@@ -423,6 +457,24 @@ class Config:
                     raise ValueError(
                         f"Each stage should have unique starting training step, please change the starting training step for stage {stage.name}"
                     )
+
+                if isinstance(stage.data.dataset, NanosetDatasetsArgs):
+                    if self.model.model_config.vocab_size == -1:
+                        self.model.model_config.vocab_size = stage.data.dataset.vocab_size
+                        logger.warning(
+                            f"Setting model's vocab_size to {self.model.model_config.vocab_size} from dataset's vocab_size ({stage.data.dataset.vocab_size})"
+                        )
+                    assert (
+                        self.model.model_config.vocab_size == stage.data.dataset.vocab_size
+                    ), f"Model's vocab_size ({self.model.model_config.vocab_size}) does not match dataset's ({stage.data.dataset.dataset_folder}) vocab_size ({stage.data.dataset.vocab_size})"
+                    if self.tokenizer is None:
+                        self.tokenizer = TokenizerArgs(tokenizer_name_or_path=stage.data.dataset.tokenizer_name)
+                        logger.warning(
+                            f"Setting tokenizer to {self.tokenizer.tokenizer_name_or_path} from dataset's tokenizer ({stage.data.dataset.tokenizer_name})"
+                        )
+                    assert (
+                        self.tokenizer.tokenizer_name_or_path == stage.data.dataset.tokenizer_name
+                    ), f"Tokenizer passed in config ({self.tokenizer.tokenizer_name_or_path}) does not match dataset's ({stage.data.dataset.dataset_folder}) tokenizer ({stage.data.dataset.tokenizer_name})"
 
             # NOTE: must order the stages by start_training_step from lowest to highest
             assert all(

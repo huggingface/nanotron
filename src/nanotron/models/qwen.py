@@ -12,7 +12,7 @@ from nanotron.config.models_config import Qwen2Config, RandomInit, SpectralMupIn
 from nanotron.logging import log_rank
 from nanotron.models import NanotronModel
 from nanotron.nn.activations import ACT2FN
-from nanotron.nn.attention import ALL_ATTENTION_FUNCTIONS
+from nanotron.nn.attention import ALL_ATTENTION_FUNCTIONS, get_attention_mask
 from nanotron.nn.layer_norm import LlamaRMSNorm as RMSNorm
 from nanotron.nn.rotary import RotaryEmbedding
 from nanotron.parallel import ParallelContext
@@ -56,18 +56,16 @@ class CoreAttention(nn.Module):
         )  # Important for transformers's `sdpa_attention_forward`
         self._attn_implementation = config._attn_implementation
         self.cp_pg = cp_pg
-        self.sliding_window = getattr(config, "sliding_window", None)
-        self.is_causal = True
+        self.sliding_window_size = config.sliding_window_size
 
     def forward(
         self,
         query_states: torch.Tensor,  # [b*s, num_heads, head_dim]
         key_states: torch.Tensor,  # [b*s, num_kv_heads, head_dim]
         value_states: torch.Tensor,  # [b*s, num_kv_heads, head_dim]
-        attention_mask: Optional[torch.Tensor] = None,  # [b*s, b*s]
-        cu_seqlens: Optional[torch.Tensor] = None,
+        position_ids: torch.Tensor,  # [b*s]
+        attention_mask: Optional[torch.Tensor] = None,
         dropout: float = 0.0,
-        sliding_window: Optional[int] = None,
         seq_length: Optional[int] = None,
         **kwargs,
     ):
@@ -75,11 +73,10 @@ class CoreAttention(nn.Module):
         # Get the appropriate attention function
         attention_func = ALL_ATTENTION_FUNCTIONS[self._attn_implementation]
 
-        # need to put sequence after num_heads
-        if attention_mask is not None:
-            seq_length = attention_mask.shape[0]
-            attention_mask = attention_mask.unsqueeze(0).unsqueeze(0)  # [1, 1, seq_length, seq_length]
+        # Initialize variables for attention parameters
+        cu_seqlens = None
 
+        # Shape tensors according to attention implementation
         if self._attn_implementation == "ring_flash_triton":
             query_states = query_states.view(-1, seq_length, self.local_num_heads, self.head_dim)
             key_states = key_states.view(-1, seq_length, self.local_num_kv_heads, self.head_dim)
@@ -90,11 +87,27 @@ class CoreAttention(nn.Module):
             key_states = key_states.view(-1, self.local_num_kv_heads, self.head_dim)
             value_states = value_states.view(-1, self.local_num_kv_heads, self.head_dim)
         else:
+            # Reshape for standard attention implementations (SDPA or FlexAttention)
             query_states = query_states.view(-1, seq_length, self.local_num_heads, self.head_dim).transpose(
                 1, 2
             )  # [b, num_heads, seq_length, head_dim]
             key_states = key_states.view(-1, seq_length, self.local_num_kv_heads, self.head_dim).transpose(1, 2)
             value_states = value_states.view(-1, seq_length, self.local_num_kv_heads, self.head_dim).transpose(1, 2)
+
+            # Process attention mask based on implementation
+            if attention_mask is None and position_ids is not None:
+                # Determine if we need to create an attention mask from position_ids
+                if self._attn_implementation == "flex_attention" and self.sliding_window_size is not None:
+                    # For FlexAttention with sliding window, we don't need an explicit mask
+                    # The mask_mod function will handle it
+                    pass
+                else:
+                    # For other implementations, generate the attention mask if needed
+                    attention_mask, cu_seqlens = get_attention_mask(position_ids, seq_length=seq_length)
+
+                    if attention_mask is not None:
+                        # Add batch and head dimensions for proper broadcasting
+                        attention_mask = attention_mask.unsqueeze(0).unsqueeze(0)  # [1, 1, seq_length, seq_length]
 
         # Call the attention implementation
         attn_output = attention_func(
@@ -105,14 +118,16 @@ class CoreAttention(nn.Module):
             attention_mask,
             dropout=dropout,
             scaling=self.head_dim**-0.5,
-            sliding_window=sliding_window,
+            sliding_window=self.sliding_window_size,
             ring_pg=self.cp_pg,
             cu_seqlens=cu_seqlens,
             max_seqlen=seq_length,
+            position_ids=position_ids if self._attn_implementation == "flex_attention" else None,
+            document_ids=kwargs.get("document_ids", None) if self._attn_implementation == "flex_attention" else None,
             **kwargs,
         )[
             0
-        ]  # [1, b*s, num_heads, head_dim] TODO: assert we always have this shape
+        ]  # Return only the first element (attention output)
         # attn_output = attn_output.view(-1, seq_length, self.local_num_heads, self.head_dim).transpose(1, 2) # [b, num_heads, seq_length, head_dim]
         return attn_output.view(
             -1, self.local_num_heads * self.head_dim
@@ -127,7 +142,6 @@ class Qwen2Attention(nn.Module):
         tp_pg: dist.ProcessGroup,
         cp_pg: dist.ProcessGroup,
         layer_idx: int,
-        simple_causal_mask: bool = True,  # TODO: need to set to False for SFT / inference
     ):
         super().__init__()
         self.hidden_size = config.hidden_size
@@ -185,9 +199,8 @@ class Qwen2Attention(nn.Module):
             seq_len_scaling_factor=None,
         )
         self.attention = CoreAttention(config, tp_pg, cp_pg, layer_idx)
-        self.simple_causal_mask = (
-            simple_causal_mask  # Use simple causal mask instead of computing custom attention mask
-        )
+
+        # TODO: support doc masking / SWA / SFT / inference
 
     def forward(
         self,
@@ -216,29 +229,7 @@ class Qwen2Attention(nn.Module):
         q = self.rotary_emb.apply_rotary_pos_emb(q, rotary_pos_emb)  # [b*s, num_heads, head_dim]
         k = self.rotary_emb.apply_rotary_pos_emb(k, rotary_pos_emb)  # [b*s, num_kv_heads, head_dim]
 
-        # TODO @nouamane: optimize this, and make sure it works with flashattn and flexattn
-        def get_attention_mask(position_ids, seq_length):
-            attention_mask = torch.zeros(seq_length, seq_length, device=position_ids.device)
-            start_indices = torch.where(position_ids == 0)[0]
-            cu_seqlens = torch.cat(
-                [start_indices, torch.tensor([seq_length], dtype=torch.int32, device=start_indices.device)]
-            ).to(torch.int32)
-            # make trius for each document
-            for i in range(len(cu_seqlens) - 1):
-                attention_mask[cu_seqlens[i] : cu_seqlens[i + 1], cu_seqlens[i] : cu_seqlens[i + 1]] = torch.tril(
-                    torch.ones(cu_seqlens[i + 1] - cu_seqlens[i], cu_seqlens[i + 1] - cu_seqlens[i])
-                )
-            return attention_mask.to(torch.bool), cu_seqlens  # [seq_length, seq_length]
-
-        if self.simple_causal_mask:
-            attention_mask, cu_seqlens = None, None
-            # TODO @nouamane: tested only with sdpa attention. check if other attentions need is_causal or smthg
-        else:
-            attention_mask, cu_seqlens = get_attention_mask(position_ids, q.shape[0])
-
-        attn_output = self.attention(
-            q, k, v, attention_mask=attention_mask, cu_seqlens=cu_seqlens, seq_length=seq_length
-        )
+        attn_output = self.attention(q, k, v, position_ids=position_ids, seq_length=seq_length)
         output = self.o_proj(attn_output)
         return {"hidden_states": output, "position_ids": position_ids.view(-1, seq_length)}
 
@@ -572,8 +563,8 @@ class Embedding(nn.Module):
         self.pg = tp_pg
 
     def forward(self, input_ids: torch.Tensor, position_ids: torch.Tensor):  # [batch_size, seq_length]
-        input_embeds = self.token_embedding(input_ids)
-        input_embeds = input_embeds.view(-1, input_embeds.shape[-1])  # [batch_size*seq_length, hidden_size]
+        input_ids = input_ids.view(-1)  # [batch_size*seq_length]
+        input_embeds = self.token_embedding(input_ids)  # [batch_size*seq_length, hidden_size]
         return {"input_embeds": input_embeds, "position_ids": position_ids}
 
 

@@ -1,4 +1,4 @@
-from typing import Dict, Iterator, Optional, Union
+from typing import Dict, Iterator, List, Optional, Union
 
 import datasets
 import torch
@@ -36,12 +36,13 @@ def sanity_check_dataloader(
     Yields:
         The same batches after performing sanity checks
     """
+    # WARNING: This is called in the middle of the training loop, so make sure it's optimized
     for batch in dataloader:
         # non_blocking=True seems to be fine? https://discuss.pytorch.org/t/should-we-set-non-blocking-to-true/38234/4
         micro_batch = {
             k: v
             if isinstance(v, TensorPointer)
-            else v.to("cuda", memory_format=torch.contiguous_format, non_blocking=False)
+            else torch.from_numpy(v).to("cuda", memory_format=torch.contiguous_format, non_blocking=True)
             for k, v in batch.items()
         }
 
@@ -260,6 +261,7 @@ def get_train_dataloader(
     dataloader_drop_last: bool = True,
     dataloader_pin_memory: bool = True,
     use_loop_to_round_batch_size: bool = False,
+    sequence_sep_tokens: List[int] = None,
     use_position_ids: bool = True,
 ) -> DataLoader:
     """
@@ -278,6 +280,7 @@ def get_train_dataloader(
         dataloader_drop_last: Whether to drop the last incomplete batch
         dataloader_pin_memory: Whether to use pinned memory for faster data transfer
         use_loop_to_round_batch_size: Whether to loop at the end of dataset to ensure batch size multiple
+        sequence_sep_tokens: List of integers representing the sequence separator tokens, used to generate position ids e.g. [tokenizer.bos_token, tokenizer.eos_token, tokenizer.pad_token, tokenizer.unk_token]
         use_position_ids: Whether to use position IDs in the collator
 
     Returns:
@@ -311,11 +314,13 @@ def get_train_dataloader(
         dataloader_num_workers = 0
 
     if use_position_ids:
+        # assert sequence_sep_tokens is not None, "sequence_sep_tokens must be provided if use_position_ids is True"
         data_collator = DataCollatorForCLMWithPositionIds(
             sequence_length=sequence_length,
             input_pp_rank=input_pp_rank,
             output_pp_rank=output_pp_rank,
             parallel_context=parallel_context,
+            sequence_sep_tokens=sequence_sep_tokens,
         )
     else:
         data_collator = DataCollatorForCLM(
