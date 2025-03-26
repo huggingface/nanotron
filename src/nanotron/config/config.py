@@ -467,9 +467,6 @@ class Config:
                     assert (
                         self.model.model_config.vocab_size == stage.data.dataset.vocab_size
                     ), f"Model's vocab_size ({self.model.model_config.vocab_size}) does not match dataset's ({stage.data.dataset.dataset_folder}) vocab_size ({stage.data.dataset.vocab_size})"
-                    logger.warning(
-                        f"Model's vocab_size ({self.model.model_config.vocab_size}) does not match dataset's ({stage.data.dataset.dataset_folder}) vocab_size ({stage.data.dataset.vocab_size})"
-                    )
                     if self.tokenizer is None:
                         self.tokenizer = TokenizerArgs(tokenizer_name_or_path=stage.data.dataset.tokenizer_name)
                         logger.warning(

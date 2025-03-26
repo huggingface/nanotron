@@ -563,8 +563,8 @@ class Embedding(nn.Module):
         self.pg = tp_pg
 
     def forward(self, input_ids: torch.Tensor, position_ids: torch.Tensor):  # [batch_size, seq_length]
-        input_embeds = self.token_embedding(input_ids)
-        input_embeds = input_embeds.view(-1, input_embeds.shape[-1])  # [batch_size*seq_length, hidden_size]
+        input_ids = input_ids.view(-1)  # [batch_size*seq_length]
+        input_embeds = self.token_embedding(input_ids)  # [batch_size*seq_length, hidden_size]
         return {"input_embeds": input_embeds, "position_ids": position_ids}
 
 

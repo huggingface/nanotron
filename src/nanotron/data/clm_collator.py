@@ -134,6 +134,10 @@ class DataCollatorForCLMWithPositionIds:
     input_pp_rank: int
     output_pp_rank: int
     parallel_context: ParallelContext
+    sequence_sep_tokens: List[
+        int
+    ]  # [tokenizer.bos_token, tokenizer.eos_token, tokenizer.pad_token, tokenizer.unk_token]
+    # cumul_doc_lens: List[int] # Cumulative length of each datatrove_dataset in the Nanoset
 
     def __call__(self, examples: List[Dict[str, List[np.ndarray]]]) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
         # Process the case when current rank doesn't require data

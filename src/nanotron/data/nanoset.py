@@ -30,7 +30,7 @@ class Nanoset(torch.utils.data.Dataset):
         self,
         dataset_folders: List[str],
         sequence_length: int,
-        vocab_size: int,
+        token_size: int,
         train_split_num_samples: int,
         dataset_weights: Union[List[float], None] = None,
         random_seed: int = 1234,
@@ -45,7 +45,7 @@ class Nanoset(torch.utils.data.Dataset):
         self.dataset_folders = dataset_folders
         self.sequence_length = sequence_length
         # Number of bytes for the tokens stored in the processed dataset files. 2 for vocab sizes < 65535, 4 otherwise
-        self.token_size = 4 if vocab_size > np.iinfo(np.uint16).max + 1 else 2
+        self.token_size = token_size
         self.train_split_num_samples = train_split_num_samples
         self.random_seed = random_seed
         self.datatrove_datasets = []
