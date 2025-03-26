@@ -160,7 +160,7 @@ class NanosetDatasetsArgs:
                         if self.tokenizer_name is None:
                             self.tokenizer_name = tokenizer_name
                             self.token_size_in_bytes = int(token_size_in_bytes)
-                            self.vocab_size = AutoTokenizer.from_pretrained(tokenizer_name).get_vocab()
+                            self.vocab_size = len(AutoTokenizer.from_pretrained(tokenizer_name).get_vocab())
                         else:
                             assert (
                                 self.tokenizer_name == tokenizer_name
