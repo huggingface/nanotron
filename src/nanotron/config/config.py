@@ -208,7 +208,7 @@ class GeneralArgs:
 class ProfilerArgs:
     """Arguments related to profiling"""
 
-    profiler_export_path: Optional[Path]
+    profiler_export_path: Optional[Path]  # e.g. ./tb_logs
     wait: int = 1
     warmup: int = 1
     active: int = 1
@@ -249,20 +249,6 @@ class TokenizerArgs:
     tokenizer_name_or_path: Optional[str] = None
     tokenizer_revision: Optional[str] = None
     tokenizer_max_length: Optional[int] = None
-
-
-@dataclass
-class ZLossArgs:
-    """Arguments related to the Z-loss regularization
-
-    Z-loss is a regularization technique that prevents logits from drifting too far from zero
-    by penalizing the square of the log of the partition function.
-
-    Reference: https://www.jmlr.org/papers/volume24/22-1144/22-1144.pdf
-    """
-
-    enabled: bool = False
-    coefficient: float = 0.0001  # Default from the paper (10^-4)
 
 
 @dataclass
@@ -376,7 +362,6 @@ class Config:
     profiler: Optional[ProfilerArgs] = None
     lighteval: Optional[LightEvalConfig] = None
     s3_upload: Optional[S3UploadArgs] = None
-    z_loss: Optional[ZLossArgs] = None
 
     @classmethod
     def create_empty(cls):
