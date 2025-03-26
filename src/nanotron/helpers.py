@@ -482,13 +482,20 @@ def get_profiler(config: Config):
             )
         else:
             on_trace_ready = None
+
         prof = profile(
             activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
-            schedule=torch.profiler.schedule(wait=1, warmup=1, active=1, repeat=1, skip_first=3),
+            schedule=torch.profiler.schedule(
+                wait=config.profiler.wait,
+                warmup=config.profiler.warmup,
+                active=config.profiler.active,
+                repeat=config.profiler.repeat,
+                skip_first=config.profiler.skip_first,
+            ),
             on_trace_ready=on_trace_ready,
-            # record_shapes=True,
-            # profile_memory=True,
-            with_stack=True,
+            record_shapes=config.profiler.record_shapes,
+            profile_memory=config.profiler.profile_memory,
+            with_stack=config.profiler.with_stack,
         )
     else:
         prof = contextlib.nullcontext()
