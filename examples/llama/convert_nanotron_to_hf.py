@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Literal, Optional, Type
 
 import torch
-from nanotron.config import LlamaConfig as NanotronLlamaConfig
+from nanotron.config import LlamaConfig as NanotronLlamaConfig, Qwen2Config as NanotronQwen2Config
 from nanotron.config import NanotronConfigs
 from nanotron.models import init_on_device_and_dtype
 from nanotron.models.llama import LlamaForTraining
@@ -162,11 +162,19 @@ if __name__ == "__main__":
     parser.add_argument("--checkpoint_path", type=Path, default="llama-7b", help="Path to the checkpoint")
     parser.add_argument("--save_path", type=Path, default="llama-7b-hf", help="Path to save the HF model")
     parser.add_argument("--tokenizer_name", type=str, default="meta-llama/Llama-2-7b-chat-hf")
+    parser.add_argument("--config_cls", type=str, default="LlamaConfig", help="Config class to use for conversion (Either LlamaConfig or Qwen2Config)")
     args = parser.parse_args()
+
+    if args.config_cls == "LlamaConfig":
+        config_cls = NanotronLlamaConfig
+    elif args.config_cls == "Qwen2Config":
+        config_cls = NanotronQwen2Config
+    else:
+        raise ValueError(f"Invalid config class: {args.config_cls}. Should be one of [NanotronLlamaConfig, NanotronQwen2Config]")
 
     # Convert Nanotron model to HF format.
     convert_checkpoint_and_save(
-        checkpoint_path=args.checkpoint_path, save_path=args.save_path, tokenizer_name=args.tokenizer_name
+        checkpoint_path=args.checkpoint_path, save_path=args.save_path, tokenizer_name=args.tokenizer_name, config_cls=config_cls
     )
 
     # Check if the conversion was successful by generating some text.
