@@ -22,7 +22,7 @@ from torch.utils.checkpoint import CheckpointFunction
 
 from nanotron import distributed as dist
 from nanotron import logging
-from nanotron.config import Config, LlamaConfig, ParallelismArgs
+from nanotron.config import Config, LlamaConfig, ParallelismArgs, get_config
 from nanotron.config.models_config import RandomInit, SpectralMupInit
 from nanotron.generation.generate_store import AttachableStore
 from nanotron.logging import log_rank
@@ -965,15 +965,23 @@ class Loss(nn.Module):
         label_ids: torch.Tensor,  # [batch_size, seq_length]
         label_mask: torch.Tensor,  # [batch_size, seq_length]
     ) -> Dict[str, torch.Tensor]:
-        # Megatron by defaults cast everything in fp32. `--f16-lm-cross-entropy` is an option you can use to keep current precision.
-        # https://github.com/NVIDIA/Megatron-LM/blob/f267e6186eae1d6e2055b412b00e2e545a8e896a/megatron/model/gpt_model.py#L38
+        # Get z_loss coefficient from config if available
+        z_loss_coef = 0.0
+        config = get_config()
+        if config is not None and config.z_loss is not None and config.z_loss.enabled:
+            z_loss_coef = config.z_loss.coefficient
 
         loss, z_loss = sharded_cross_entropy(
-            sharded_logits, label_ids.transpose(0, 1).contiguous(), group=self.tp_pg, dtype=torch.float
+            sharded_logits,
+            label_ids.transpose(0, 1).contiguous(),
+            group=self.tp_pg,
+            dtype=torch.float,
+            z_loss_coef=z_loss_coef,
         )
         # TODO @thomasw21: It's unclear what kind of normalization we want to do.
         loss = masked_mean(loss.transpose(0, 1), label_mask, dtype=torch.float)
         z_loss = masked_mean(z_loss.detach().transpose(0, 1), label_mask, dtype=torch.float)
+
         # I think indexing causes a sync we don't actually want
         # loss = loss[label_mask].sum()
         return {"loss": loss, "z_loss": z_loss}

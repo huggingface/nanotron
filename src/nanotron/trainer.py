@@ -132,9 +132,22 @@ class DistributedTrainer:
         """
 
         super().__init__()
-        self.config = get_config_from_file(
-            config_or_config_file, config_class=config_class, model_config_class=model_config_class
-        )
+        # Get config
+        if isinstance(config_or_config_file, str):
+            # Get the yaml config file
+            self.config = get_config_from_file(
+                config_path=config_or_config_file,
+                config_class=config_class,
+                model_config_class=model_config_class,
+            )
+        else:
+            self.config = config_or_config_file
+
+        # Set config in module for global access
+        from nanotron.config import set_config
+
+        set_config(self.config)
+
         self.model_config = self.config.model.model_config
         if model_class is not None:
             CONFIG_TO_MODEL_CLASS[self.model_config.__class__.__name__] = model_class
@@ -661,14 +674,10 @@ class DistributedTrainer:
                     ]
                 )
 
-            # NOTE: only one rank writes to wandb
-            if dist.get_rank(self.parallel_context.world_pg) == self.logger_ranks[0] and wandb is not None:
-                wandb.log(
-                    {
-                        **{log_item.tag: log_item.scalar_value for log_item in log_entries},
-                        "iteration_step": self.iteration_step,
-                    }
-                )
+            # Log to wandb
+            from nanotron.logging import log_to_wandb
+
+            log_to_wandb({log_item.tag: log_item.scalar_value for log_item in log_entries}, commit=True)
 
             self.loggerwriter.add_scalars_from_list(log_entries, self.iteration_step)
 

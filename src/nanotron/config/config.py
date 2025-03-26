@@ -252,6 +252,20 @@ class TokenizerArgs:
 
 
 @dataclass
+class ZLossArgs:
+    """Arguments related to the Z-loss regularization
+
+    Z-loss is a regularization technique that prevents logits from drifting too far from zero
+    by penalizing the square of the log of the partition function.
+
+    Reference: https://www.jmlr.org/papers/volume24/22-1144/22-1144.pdf
+    """
+
+    enabled: bool = False
+    coefficient: float = 0.0001  # Default from the paper (10^-4)
+
+
+@dataclass
 class TokensArgs:
     """Arguments related to the tokens, sequence, batch and steps of the training"""
 
@@ -362,6 +376,7 @@ class Config:
     profiler: Optional[ProfilerArgs] = None
     lighteval: Optional[LightEvalConfig] = None
     s3_upload: Optional[S3UploadArgs] = None
+    z_loss: Optional[ZLossArgs] = None
 
     @classmethod
     def create_empty(cls):

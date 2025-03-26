@@ -13,7 +13,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import math
-import os
 from typing import Optional
 
 import torch
@@ -147,11 +146,6 @@ def sharded_cross_entropy(
     z_loss_coef: float = 0.0,
 ):
     """Helper function for the cross entropy."""
-    # Check if z-loss should be applied based on environment variable
-    # to implement correctly
-    if z_loss_coef == 0.0 and os.environ.get("Z_LOSS", "0") == "1":
-        z_loss_coef = float(os.environ.get("Z_LOSS_COEF", 0.0001))  # Default coefficient from the paper (10^-5)
-
     if dtype is not None:
         # Cast input to specific dtype.
         sharded_logits = sharded_logits.to(dtype=dtype)
