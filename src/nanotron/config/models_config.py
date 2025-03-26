@@ -141,7 +141,7 @@ class Qwen2Config:
     attention_bias: bool = False
     interleaved_rotary: bool = False
     sliding_window_size: Optional[int] = None
-    z_loss_enabled: bool = True  # Z-loss regularization https://www.jmlr.org/papers/volume24/22-1144/22-1144.pdf
+    z_loss_enabled: bool = False  # Z-loss regularization https://www.jmlr.org/papers/volume24/22-1144/22-1144.pdf
     z_loss_coefficient: float = 0.0001  # Default from the paper (10^-4)
 
     # MoE configuration
