@@ -4,6 +4,7 @@ from itertools import chain, islice
 from typing import TYPE_CHECKING, Generator, Iterable, List, Optional, Tuple, Union
 
 import torch
+from tqdm import tqdm
 
 from nanotron import distributed as dist
 from nanotron import logging
@@ -238,7 +239,7 @@ def decode_text(
             if is_bench:
                 start_time, elapsed_time_first_iteration = time.perf_counter(), 0
 
-            for generation_iter in range(max_new_tokens):
+            for generation_iter in tqdm(range(max_new_tokens), desc="Generating"):
 
                 if is_bench and generation_iter == 0:
                     torch.cuda.synchronize()
@@ -254,9 +255,16 @@ def decode_text(
                     if generation_config.use_cache:
                         with attach_store(model=model, store=state.store):
                             # transpose: [sequence_length, batch_size, vocab_size] -> [batch_size, sequence_length, vocab_size]
+                            position_ids = (
+                                torch.arange(
+                                    state.new_input_ids.shape[1], device=state.new_input_ids.device, dtype=torch.int32
+                                )
+                                .unsqueeze(0)
+                                .repeat(state.new_input_ids.shape[0], 1)
+                            )
                             sharded_logits = model(
                                 input_ids=state.new_input_ids,
-                                input_mask=state.new_input_mask,
+                                position_ids=position_ids,  # [batch_size, seq_len]
                             )
                     else:
                         if isinstance(state.new_input_ids, torch.Tensor):
@@ -265,15 +273,23 @@ def decode_text(
                         else:
                             batch_generated_ids = state.new_input_ids
                             batch_generated_mask = state.new_input_mask
+                        # TODO @nouamane
+                        position_ids = (
+                            torch.arange(
+                                batch_generated_ids.shape[1], device=batch_generated_ids.device, dtype=torch.int32
+                            )
+                            .unsqueeze(0)
+                            .repeat(batch_generated_ids.shape[0], 1)
+                        )
                         sharded_logits = model(
                             input_ids=batch_generated_ids,
-                            input_mask=batch_generated_mask,
-                        )
+                            position_ids=position_ids,  # [batch_size, seq_len]
+                        )  # [batch_size*seq_len, vocab_size]
 
-                    if isinstance(sharded_logits, torch.Tensor) and logits_are_batch_first:
+                    sharded_logits = sharded_logits.view(*position_ids.shape, -1)  # [batch_size, seq_len, vocab_size]
+                    if isinstance(sharded_logits, torch.Tensor) and not logits_are_batch_first:
                         sharded_logits = sharded_logits.transpose(0, 1)
                     # Communicate
-                    # TODO @thomasw21: Make a diagram to show how this works
                     nb_send: int = 0
                     if is_decoder_input_rank:
                         if is_max_nb_microbatches:

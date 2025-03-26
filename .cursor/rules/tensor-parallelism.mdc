@@ -1,0 +1,78 @@
+---
+description:
+globs: **/models/**/*.py, **/nn/**/*.py
+alwaysApply: false
+---
+# Tensor-Parallel Component Patterns
+Description: Reference implementations for tensor-parallel components. Apply when implementing or modifying attention mechanisms, MLPs, or other tensor-parallel modules.
+File Pattern: **/models/**/*.py, **/nn/**/*.py
+
+## Attention Module
+
+```python
+class Attention(nn.Module):
+    def __init__(self, config, tp_pg):
+        super().__init__()
+        self.num_heads = config.num_heads
+        self.hidden_size = config.hidden_size
+        self.head_dim = config.hidden_size // config.num_heads
+
+        # Use local dimensions for TP
+        self.local_num_heads = self.num_heads // tp_pg.size()
+
+        # TensorParallelRowLinear gets full dimensions, handles sharding internally
+        self.c_proj = TensorParallelRowLinear(
+            self.num_heads * self.head_dim,  # full dimension
+            self.hidden_size,  # full dimension
+            pg=tp_pg,
+            bias=False
+        )
+
+    def forward(self, x):
+        # x: [batch_size, seq_length, hidden_size]
+        batch_size, seq_length = x.shape[:2]
+
+        # [batch_size, seq_length, local_num_heads, head_dim]
+        x = x.view(batch_size, seq_length, self.local_num_heads, self.head_dim)
+
+        # [batch_size, local_num_heads, seq_length, head_dim]
+        x = x.transpose(1, 2)
+
+        # Processing happens here...
+
+        # [batch_size, seq_length, local_num_heads*head_dim]
+        x = x.transpose(1, 2).contiguous().view(batch_size, seq_length, -1)
+
+        return self.c_proj(x)  # [batch_size, seq_length, hidden_size]
+```
+
+## MLP Module
+
+```python
+class MLP(nn.Module):
+    def __init__(self, config, tp_pg):
+        super().__init__()
+        self.hidden_size = config.hidden_size
+        self.intermediate_size = config.intermediate_size
+
+        self.c_fc = TensorParallelColumnLinear(
+            self.hidden_size,  # full dimension
+            self.intermediate_size,  # full dimension
+            pg=tp_pg,
+            bias=False
+        )
+
+        self.c_proj = TensorParallelRowLinear(
+            self.intermediate_size,  # full dimension
+            self.hidden_size,  # full dimension
+            pg=tp_pg,
+            bias=False
+        )
+
+    def forward(self, x):
+        # x: [batch_size, seq_length, hidden_size]
+        h = self.c_fc(x)  # [batch_size, seq_length, intermediate_size//tp_size]
+        h = F.gelu(h)
+        h = self.c_proj(h)  # [batch_size, seq_length//tp_size, hidden_size]
+        return h
+```
