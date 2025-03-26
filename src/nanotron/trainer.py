@@ -54,6 +54,7 @@ from nanotron.logging import (
     log_libraries_versions,
     log_memory,
     log_rank,
+    log_to_wandb,
     set_ranks_logging_level,
 )
 from nanotron.models import NanotronModel, build_model
@@ -656,13 +657,12 @@ class DistributedTrainer:
                 ),  # , "1.6E"),
                 LogItem("global_batch_size", self.global_batch_size, "human_format"),  # , "5d"),
                 LogItem("lm_loss", loss_avg.item(), "human_format"),  # , "1.6E"),
-                LogItem(
-                    "z_loss", z_loss_avg.item(), "human_format"
-                ),  # , "1.6E"), #todo don't log it if z_loss_avg is None..
                 LogItem("lr", lr, "human_format"),  # , ".3E"),
                 LogItem("model_tflops_per_gpu", model_tflops, "human_format"),  # , ".2f"),
                 LogItem("hardware_tflops_per_gpu", hardware_tflops, "human_format"),  # , ".2f"),
             ]
+            if z_loss_avg is not None:
+                log_entries.insert(6, LogItem("z_loss", z_loss_avg.item(), "human_format"))  # , "1.6E"),
 
             if self.config.optimizer.clip_grad is not None:
                 log_entries.append(LogItem("grad_norm", self.grad_norm_unclipped.item(), "human_format"))  # , ".3f"))
@@ -683,9 +683,6 @@ class DistributedTrainer:
                         LogItem("hd_free_memory_tb", free, "human_format"),  #  / (2**40), ".2f"),
                     ]
                 )
-
-            # Log to wandb
-            from nanotron.logging import log_to_wandb
 
             log_to_wandb({log_item.tag: log_item.scalar_value for log_item in log_entries}, commit=True)
 
