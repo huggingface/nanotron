@@ -3,6 +3,7 @@ import csv
 import gc
 import math
 import os
+import re
 import time
 from datetime import datetime
 from functools import partial
@@ -189,29 +190,36 @@ def get_custom_weight_decay_for_named_parameters(
     exclude_named_params: List[str],
 ) -> List[Dict[str, Any]]:
     """
-    Apply weight decay to all parameters except those whose names match patterns in exclude_named_params.
+    Apply weight decay to all parameters except those whose names match regex patterns in exclude_named_params.
 
     Args:
         named_parameters: Iterable of (name, parameter) tuples
         model: The model instance
         module_id_to_prefix: Mapping from module id to name prefix
         weight_decay: The default weight decay value to apply
-        exclude_named_params: List of parameter name patterns to exclude from weight decay
+        exclude_named_params: List of regex patterns to exclude parameters from weight decay
 
     Returns:
         List of parameter groups with appropriate weight decay values
     """
     named_param_groups_with_custom_weight_decay = []
-
+    counter_excluded_params = 0
     for name, param in named_parameters:
-        # Handle tied parameters
+        # Handle tied parameters: we exclude all tied parameters if one of them is in the exclude list
         if param.is_tied:
-            param.get_tied_info().get_full_name_from_module_id_to_prefix(module_id_to_prefix=module_id_to_prefix)
+            tied_name = param.get_tied_info().get_full_name_from_module_id_to_prefix(
+                module_id_to_prefix=module_id_to_prefix
+            )
 
         # Determine weight decay value
         should_exclude = False
         if exclude_named_params is not None:
-            should_exclude = any(pattern in name for pattern in exclude_named_params)
+            should_exclude = any(
+                re.match(pattern, name) or re.match(pattern, tied_name) for pattern in exclude_named_params
+            )
+            if should_exclude:
+                counter_excluded_params += 1
+                log_rank(f"Excluding parameter {name} from weight decay", logger=logger, level=logging.DEBUG, rank=0)
 
         current_weight_decay = 0.0 if should_exclude else weight_decay
 
@@ -221,9 +229,9 @@ def get_custom_weight_decay_for_named_parameters(
         )
 
     log_rank(
-        f"[Optimizer Building] Creating {len(named_param_groups_with_custom_weight_decay)} param groups with custom weight decay",
+        f"[Optimizer Building] {counter_excluded_params} params excluded from weight decay",
         logger=logger,
-        level=logging.DEBUG,
+        level=logging.WARNING,
         rank=0,
     )
     return named_param_groups_with_custom_weight_decay

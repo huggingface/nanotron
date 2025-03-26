@@ -317,7 +317,13 @@ class OptimizerArgs:
     clip_grad: Optional[float]
     accumulate_grad_in_fp32: bool
     learning_rate_scheduler: LRSchedulerArgs
-    weight_decay_exclude_named_params: Optional[List[str]] = None
+    weight_decay_exclude_named_params: Optional[
+        List[str]
+    ] = None  # List of regex patterns to exclude parameters from weight decay
+
+    def __post_init__(self):
+        if self.weight_decay_exclude_named_params is None:
+            self.weight_decay_exclude_named_params: List[str] = []
 
 
 @dataclass
