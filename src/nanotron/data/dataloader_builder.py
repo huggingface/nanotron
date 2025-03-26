@@ -74,4 +74,7 @@ def build_nanoset_dataloader(
         num_workers=dataloader_num_workers,
         pin_memory=dataloader_pin_memory,
         worker_init_fn=get_dataloader_worker_init(dp_rank=dp_rank),
+        pin_memory_device="cuda",
+        persistent_workers=True if dataloader_num_workers > 0 else False,
+        prefetch_factor=dataloader_num_workers if dataloader_num_workers > 0 else None,
     )

@@ -25,6 +25,7 @@ def ddp_trigger_sync_in_bwd(model_ddp):
         model_ddp.require_forward_param_sync = old_require_forward_param_sync
 
 
+@torch.profiler.record_function("sync_gradients_across_dp")
 def sync_gradients_across_dp(
     module: nn.Module,
     dp_pg: dist.ProcessGroup,

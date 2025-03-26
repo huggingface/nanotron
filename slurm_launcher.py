@@ -99,6 +99,14 @@ def parse_args():
     slurm_group.add_argument("--pre_launch_commands", type=str, default="", help="Commands to run before job launch")
     slurm_group.add_argument("--extra_env", type=str, default="", help="Additional environment variables")
 
+    # Config file
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help="Path to the Nanotron config file. If not provided, a config will be created automatically.",
+    )
+
     # Model configuration
     model_group = parser.add_argument_group("Model Configuration")
     model_group.add_argument(
@@ -426,6 +434,11 @@ def create_nanotron_config(args) -> Config:
 def create_slurm_script(
     config_path: str,
     args,
+    dp: int,
+    pp: int,
+    tp: int,
+    cp: int,
+    ep: int,
     run_train_script: str = "run_train.py",
 ) -> str:
     """
@@ -442,9 +455,9 @@ def create_slurm_script(
     logs_path = os.path.join(args.slurm_logs_path, args.run.replace(" ", "_"))
     os.makedirs(logs_path, exist_ok=True)
 
-    gpus_per_node = min(args.gpus_per_node, args.dp * args.pp * args.tp * args.cp * args.ep)
-    assert args.dp * args.pp * args.tp * args.cp * args.ep % gpus_per_node == 0
-    nodes = args.dp * args.pp * args.tp * args.cp * args.ep // gpus_per_node
+    gpus_per_node = min(args.gpus_per_node, dp * pp * tp * cp * ep)
+    assert dp * pp * tp * cp * ep % gpus_per_node == 0
+    nodes = dp * pp * tp * cp * ep // gpus_per_node
 
     script = f"""#!/bin/bash
 #SBATCH --job-name={args.run}
@@ -545,8 +558,18 @@ def main():
     os.makedirs(args.configs_path, exist_ok=True)
     os.makedirs(args.slurm_logs_path, exist_ok=True)
 
-    # Create Nanotron config
-    config = create_nanotron_config(args)
+    # Create Nanotron config if not provided
+    if args.config is None:
+        config = create_nanotron_config(args)
+        dp, pp, tp, cp, ep = (args.dp, args.pp, args.tp, args.cp, args.ep)
+    else:
+        print(f"🔍 Loading config from {args.config}")
+        config = Config.load_from_yaml(args.config)
+        dp = config.parallelism.dp
+        pp = config.parallelism.pp
+        tp = config.parallelism.tp
+        cp = config.parallelism.context_parallel_size
+        ep = config.parallelism.expert_parallel_size
 
     # Save config to YAML file
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -555,10 +578,11 @@ def main():
     os.makedirs(config_dir, exist_ok=True)
     config_path = os.path.join(config_dir, f"{timestamp}-{run_name}.yaml")
     config.save_as_yaml(config_path)
-    print(f"Config saved to {config_path}")
+    print(f"💾 Config saved to {config_path}")
+    config.print_config_details()
 
     # Create Slurm script
-    slurm_script = create_slurm_script(config_path, args, args.run_train_script)
+    slurm_script = create_slurm_script(config_path, args, dp, pp, tp, cp, ep, args.run_train_script)
 
     # Save Slurm script if requested
     if args.slurm_scripts_dir is not None:
@@ -566,18 +590,18 @@ def main():
         slurm_script_path = os.path.join(args.slurm_scripts_dir, f"{timestamp}-{run_name}.sh")
         with open(slurm_script_path, "w") as f:
             f.write(slurm_script)
-        print(f"Slurm script saved to {slurm_script_path}")
+        print(f"💾 Slurm script saved to {slurm_script_path}")
 
     # Either submit the job or just print the script (dry run)
     if args.dry_run:
         print("DRY RUN - Job script:")
         print(slurm_script)
-        print(f"Would submit job with config from {config_path}")
+        print(f"🔍 Would submit job with config from {config_path}")
     else:
         job_id = launch_slurm_job(slurm_script)
-        print(f"Slurm job submitted with JOBID: {job_id}")
+        print(f"🚀 Slurm job submitted with JOBID: {job_id}")
         print(
-            f"Logs will be available at: {os.path.join(args.slurm_logs_path, run_name, f'{timestamp}-{run_name}-{job_id}.out')}"
+            f"🔍 Logs will be available at: {os.path.join(args.slurm_logs_path, run_name, f'{timestamp}-{run_name}-{job_id}.out')}"
         )
 
         # Tail output file when available
