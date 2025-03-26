@@ -189,7 +189,17 @@ def get_custom_weight_decay_for_named_parameters(
     exclude_named_params: List[str],
 ) -> List[Dict[str, Any]]:
     """
-    Apply weight decay to all parameters except the ones that are in the exclude_named_params list.
+    Apply weight decay to all parameters except those whose names match patterns in exclude_named_params.
+
+    Args:
+        named_parameters: Iterable of (name, parameter) tuples
+        model: The model instance
+        module_id_to_prefix: Mapping from module id to name prefix
+        weight_decay: The default weight decay value to apply
+        exclude_named_params: List of parameter name patterns to exclude from weight decay
+
+    Returns:
+        List of parameter groups with appropriate weight decay values
     """
     named_param_groups_with_custom_weight_decay = []
 
@@ -199,7 +209,10 @@ def get_custom_weight_decay_for_named_parameters(
             param.get_tied_info().get_full_name_from_module_id_to_prefix(module_id_to_prefix=module_id_to_prefix)
 
         # Determine weight decay value
-        should_exclude = exclude_named_params is not None and name in exclude_named_params
+        should_exclude = False
+        if exclude_named_params is not None:
+            should_exclude = any(pattern in name for pattern in exclude_named_params)
+
         current_weight_decay = 0.0 if should_exclude else weight_decay
 
         # Create parameter group
