@@ -21,7 +21,7 @@ from nanotron.config.utils_config import (
     serialize,
 )
 from nanotron.generation.sampler import SamplerType
-from nanotron.logging import get_logger
+from nanotron.logging import get_logger, human_format
 from nanotron.parallel.pipeline_parallel.engine import PipelineEngine
 from nanotron.parallel.tensor_parallel.nn import TensorParallelLinearMode
 
@@ -211,11 +211,6 @@ class GeneralArgs:
     def __post_init__(self):
         if self.seed is None:
             self.seed = DEFAULT_SEED
-        if self.benchmark_csv_path is not None:
-            assert (
-                os.environ.get("NANOTRON_BENCHMARK", None) is not None
-            ), f"Please set NANOTRON_BENCHMARK to 1 when using benchmark_csv_path. Got {os.environ.get('NANOTRON_BENCHMARK', None)}"
-
         if self.run is None:
             self.run = "%date_%jobid"
         self.run = self.run.replace("%date", datetime.datetime.now().strftime("%Y%m%d_%H%M%S"))
@@ -433,6 +428,10 @@ class Config:
     def global_batch_size(self):
         return self.tokens.micro_batch_size * self.tokens.batch_accumulation_per_replica * self.parallelism.dp
 
+    @property
+    def global_batch_size_in_tokens(self):
+        return self.global_batch_size * self.tokens.sequence_length
+
     def save_as_yaml(self, file_path: str):
         config_dict = serialize(self)
         file_path = str(file_path)
@@ -442,8 +441,36 @@ class Config:
         # Sanity test config can be reloaded
         _ = get_config_from_file(file_path, config_class=self.__class__)
 
+    @classmethod
+    def load_from_yaml(cls, file_path: str):
+        config_dict = yaml.load(open(file_path), Loader=SafeLoader)
+        return get_config_from_dict(config_dict, config_class=cls)
+
     def as_dict(self) -> dict:
         return serialize(self)
+
+    def print_config_details(self):
+        print("\n=== Model Architecture ===")
+        print(f"hidden_size: {self.model.model_config.hidden_size}")
+        print(f"num_layers: {self.model.model_config.num_hidden_layers}")
+        print(f"intermediate_size: {self.model.model_config.intermediate_size}")
+        print(f"num_attention_heads: {self.model.model_config.num_attention_heads}")
+        print(f"num_key_value_heads: {self.model.model_config.num_key_value_heads}")
+        print(f"tie_word_embeddings: {self.model.model_config.tie_word_embeddings}")
+        print(f"vocab_size: {self.model.model_config.vocab_size}")
+        print(f"num_params: {_calculate_model_params(self)}")
+
+        print("\n=== Training Configuration ===")
+        print(
+            f"seq_len: {self.model.model_config.max_position_embeddings} | mbs: {self.tokens.micro_batch_size} | batch_accum: {self.tokens.batch_accumulation_per_replica} | gbs: {human_format(self.global_batch_size_in_tokens)} | train_steps: {self.tokens.train_steps} | total_tokens: {human_format(self.tokens.train_steps * self.global_batch_size_in_tokens)}"
+        )
+
+        print("\n=== Parallelism ===")
+        print(
+            f"tp: {self.parallelism.tp} | pp: {self.parallelism.pp} | dp: {self.parallelism.dp} | cp: {self.parallelism.context_parallel_size} | ep: {self.parallelism.expert_parallel_size}"
+        )
+        print(f"zero_stage: {self.optimizer.zero_stage} | full_checkpointing: {self.parallelism.recompute_layer}")
+        print("=" * 20 + "\n")
 
 
 def get_config_from_dict(
@@ -521,3 +548,20 @@ def get_config_from_file(
             )
         config.model.model_config = model_config_class(**config.model.model_config)
     return config
+
+
+def _calculate_model_params(config: Config):
+    """Calculate and format the number of parameters in the model.
+    N = vocab * h * 2 + num_layers * (3 * h * inter + 4 * h * h)
+    """
+    num_params = human_format(
+        config.model.model_config.vocab_size
+        * config.model.model_config.hidden_size
+        * (2 if config.model.model_config.tie_word_embeddings else 1)
+        + config.model.model_config.num_hidden_layers
+        * (
+            3 * config.model.model_config.hidden_size * config.model.model_config.intermediate_size
+            + 4 * config.model.model_config.hidden_size * config.model.model_config.hidden_size
+        )
+    )
+    return num_params

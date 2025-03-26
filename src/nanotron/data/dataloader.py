@@ -37,8 +37,11 @@ def sanity_check_dataloader(
         The same batches after performing sanity checks
     """
     for batch in dataloader:
+        # non_blocking=True seems to be fine? https://discuss.pytorch.org/t/should-we-set-non-blocking-to-true/38234/4
         micro_batch = {
-            k: v if isinstance(v, TensorPointer) else v.to("cuda", memory_format=torch.contiguous_format)
+            k: v
+            if isinstance(v, TensorPointer)
+            else v.to("cuda", memory_format=torch.contiguous_format, non_blocking=False)
             for k, v in batch.items()
         }
 
@@ -346,4 +349,5 @@ def get_train_dataloader(
         num_workers=dataloader_num_workers,
         pin_memory=dataloader_pin_memory,
         worker_init_fn=get_dataloader_worker_init(dp_rank=dp_rank),
+        persistent_workers=True if dataloader_num_workers > 0 else False,
     )
