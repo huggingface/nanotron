@@ -36,6 +36,7 @@ def sanity_check_dataloader(
     Yields:
         The same batches after performing sanity checks
     """
+    # WARNING: This is called in the middle of the training loop, so make sure it's optimized
     for batch in dataloader:
         # non_blocking=True seems to be fine? https://discuss.pytorch.org/t/should-we-set-non-blocking-to-true/38234/4
         micro_batch = {
@@ -313,7 +314,7 @@ def get_train_dataloader(
         dataloader_num_workers = 0
 
     if use_position_ids:
-        assert sequence_sep_tokens is not None, "sequence_sep_tokens must be provided if use_position_ids is True"
+        # assert sequence_sep_tokens is not None, "sequence_sep_tokens must be provided if use_position_ids is True"
         data_collator = DataCollatorForCLMWithPositionIds(
             sequence_length=sequence_length,
             input_pp_rank=input_pp_rank,
