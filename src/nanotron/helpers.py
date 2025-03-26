@@ -497,12 +497,6 @@ def get_profiler(config: Config):
             profile_memory=config.profiler.profile_memory,
             with_stack=config.profiler.with_stack,
         )
-
-        # Store the export path for Chrome trace export
-        if config.profiler.export_chrome_trace is True:
-            prof._chrome_trace_path = config.profiler.profiler_export_path / datetime.now().strftime(
-                "%Y%m%d-%H%M%S-" + config.general.run + "-chrome_trace.json"
-            )
     else:
         prof = contextlib.nullcontext()
     return prof

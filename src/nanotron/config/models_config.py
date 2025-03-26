@@ -128,6 +128,8 @@ class Qwen2Config:
     _attn_implementation: Optional[str] = "sdpa"
     attention_bias: bool = False
     interleaved_rotary: bool = False
+    z_loss_enabled: bool = True  # Z-loss regularization https://www.jmlr.org/papers/volume24/22-1144/22-1144.pdf
+    z_loss_coefficient: float = 0.0001  # Default from the paper (10^-4)
 
     # MoE configuration
     moe_config: Optional[MoEConfig] = None
