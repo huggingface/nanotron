@@ -107,16 +107,16 @@ class DataCollatorForCLM:
                 f" {self.sequence_length // cp_size}."
             )
 
-        # Maybe cast np.array to torch.Tensor
-        result = {
-            k: v if isinstance(v, TensorPointer) else (torch.from_numpy(v).contiguous() if self.use_numpy else v)
-            for k, v in result.items()
-        }  # TODO: @nouamane in case of memory issues, try keeping numpy here.
-        # assert contiguous
-        for k, v in result.items():
-            if not isinstance(v, TensorPointer):
-                assert v.is_contiguous(), f"{k} is not contiguous"
-                assert not v.is_cuda, f"{k} is in cuda. Bad for pinning memory"
+        # # Maybe cast np.array to torch.Tensor
+        # result = {
+        #     k: v if isinstance(v, TensorPointer) else (torch.from_numpy(v).contiguous() if self.use_numpy else v)
+        #     for k, v in result.items()
+        # }  # TODO: @nouamane in case of memory issues, try keeping numpy here.
+        # # assert contiguous
+        # for k, v in result.items():
+        #     if not isinstance(v, TensorPointer):
+        #         assert v.is_contiguous(), f"{k} is not contiguous"
+        #         assert not v.is_cuda, f"{k} is in cuda. Bad for pinning memory"
         return result
 
 
@@ -221,14 +221,14 @@ class DataCollatorForCLMWithPositionIds:
                 f" {result['input_ids'].shape[-1]}."
             )
 
-        # Cast np.array to torch.Tensor
-        result = {
-            k: v if isinstance(v, TensorPointer) else torch.from_numpy(v).contiguous() for k, v in result.items()
-        }
+        # # Cast np.array to torch.Tensor
+        # result = {
+        #     k: v if isinstance(v, TensorPointer) else torch.from_numpy(v).contiguous() for k, v in result.items()
+        # }
 
-        # assert contiguous
-        for k, v in result.items():
-            if not isinstance(v, TensorPointer):
-                assert v.is_contiguous(), f"{k} is not contiguous"
-                assert not v.is_cuda, f"{k} is in cuda. Bad for pinning memory"
+        # # assert contiguous
+        # for k, v in result.items():
+        #     if not isinstance(v, TensorPointer):
+        #         assert v.is_contiguous(), f"{k} is not contiguous"
+        #         assert not v.is_cuda, f"{k} is in cuda. Bad for pinning memory"
         return result

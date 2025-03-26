@@ -41,7 +41,7 @@ def sanity_check_dataloader(
         micro_batch = {
             k: v
             if isinstance(v, TensorPointer)
-            else v.to("cuda", memory_format=torch.contiguous_format, non_blocking=False)
+            else torch.from_numpy(v).to("cuda", memory_format=torch.contiguous_format, non_blocking=True)
             for k, v in batch.items()
         }
 
