@@ -65,9 +65,9 @@ class CoreAttention(nn.Module):
         key_states: torch.Tensor,  # [b*s, num_kv_heads, head_dim]
         value_states: torch.Tensor,  # [b*s, num_kv_heads, head_dim]
         position_ids: torch.Tensor,  # [b*s]
+        seq_length: Optional[int],
         attention_mask: Optional[torch.Tensor] = None,
         dropout: float = 0.0,
-        seq_length: Optional[int] = None,
         **kwargs,
     ):
         """Forward pass applying the chosen attention implementation"""
@@ -88,13 +88,6 @@ class CoreAttention(nn.Module):
             key_states = key_states.view(-1, self.local_num_kv_heads, self.head_dim)
             value_states = value_states.view(-1, self.local_num_kv_heads, self.head_dim)
         else:
-            # Reshape for standard attention implementations (SDPA or FlexAttention)
-            query_states = query_states.view(-1, seq_length, self.local_num_heads, self.head_dim).transpose(
-                1, 2
-            )  # [b, num_heads, seq_length, head_dim]
-            key_states = key_states.view(-1, seq_length, self.local_num_kv_heads, self.head_dim).transpose(1, 2)
-            value_states = value_states.view(-1, seq_length, self.local_num_kv_heads, self.head_dim).transpose(1, 2)
-
             # Process attention mask based on implementation
             if self.simple_causal_mask:
                 assert attention_mask is None, "Simple causal mask is not supported with custom attention mask"
@@ -113,25 +106,23 @@ class CoreAttention(nn.Module):
                         # Add batch and head dimensions for proper broadcasting
                         attention_mask = attention_mask.unsqueeze(0).unsqueeze(0)  # [1, 1, seq_length, seq_length]
 
-        # Call the attention implementation
         attn_output = attention_func(
             self,
-            query_states,
-            key_states,
-            value_states,
-            attention_mask,
+            query_states,  # [b, num_heads, seq_len, head_dim]
+            key_states,  # [b, num_kv_heads, seq_len, head_dim]
+            value_states,  # [b, num_kv_heads, seq_len, head_dim]
+            attention_mask,  # [b, num_heads, seq_len, seq_len]
+            max_seqlen=seq_length,
             dropout=dropout,
-            scaling=self.head_dim**-0.5,
+            scaling=None,  # by default, scaling is head_dim**-0.5
             sliding_window=self.sliding_window_size,
             ring_pg=self.cp_pg,
             cu_seqlens=cu_seqlens,
-            max_seqlen=seq_length,
             position_ids=position_ids if self._attn_implementation == "flex_attention" else None,
             document_ids=kwargs.get("document_ids", None) if self._attn_implementation == "flex_attention" else None,
             **kwargs,
-        )[
-            0
-        ]  # Return only the first element (attention output)
+        )[0]
+
         return attn_output.view(
             -1, self.local_num_heads * self.head_dim
         )  # [b*s, num_heads, head_dim] -> [b*s, num_heads*head_dim]
