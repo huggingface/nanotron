@@ -489,16 +489,16 @@ class Config:
         # Model verifications
         assert (
             self.model.model_config.num_attention_heads % self.parallelism.tp == 0
-        ), "num_attention_heads must be divisible by tp"
+        ), f"num_attention_heads ({self.model.model_config.num_attention_heads}) must be divisible by tp ({self.parallelism.tp})"
         assert (
             self.model.model_config.num_attention_heads >= self.model.model_config.num_key_value_heads
-        ), "num_attention_heads must be >= num_key_value_heads"
+        ), f"num_attention_heads ({self.model.model_config.num_attention_heads}) must be >= num_key_value_heads ({self.model.model_config.num_key_value_heads})"
         assert (
             self.model.model_config.num_key_value_heads >= self.parallelism.tp
-        ), "num_key_value_heads must be >= tp"  # TODO: remove this once we ensure KV heads get duplicated correctly
+        ), f"num_key_value_heads ({self.model.model_config.num_key_value_heads}) must be >= tp ({self.parallelism.tp})"  # TODO: remove this once we ensure KV heads get duplicated correctly
         assert (
             self.model.model_config.num_attention_heads % self.model.model_config.num_key_value_heads == 0
-        ), "num_attention_heads must be divisible by num_key_value_heads"
+        ), f"num_attention_heads ({self.model.model_config.num_attention_heads}) must be divisible by num_key_value_heads ({self.model.model_config.num_key_value_heads})"
 
     @property
     def global_batch_size(self):

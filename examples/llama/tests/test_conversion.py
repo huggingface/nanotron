@@ -86,7 +86,7 @@ elif NT_MODEL_INSTANCE == Qwen2ForTraining:
             "vocab_size": 4096,
             "_attn_implementation": "sdpa",
             "attention_bias": False,
-            "interleaved_rotary": False,
+            "rope_interleaved": False,
         }
     )
 

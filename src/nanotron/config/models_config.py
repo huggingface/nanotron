@@ -131,15 +131,11 @@ class Qwen2Config:
     rms_norm_eps: float = 1e-6
     rope_scaling: Optional[dict] = None
     rope_theta: float = 10000.0
-    rope_interleaved: bool = (
-        False  # The default value has been True, but for loading Llama3 checkpoints you have to set it to False
-    )
     tie_word_embeddings: bool = False
     use_cache: bool = True
     vocab_size: int = 32000
     _attn_implementation: Optional[AttentionImplementation] = DEFAULT_ATTENTION_IMPLEMENTATION
     attention_bias: bool = False
-    interleaved_rotary: bool = False
     sliding_window_size: Optional[int] = None
     z_loss_enabled: bool = False  # Z-loss regularization https://www.jmlr.org/papers/volume24/22-1144/22-1144.pdf
     z_loss_coefficient: float = 0.0001  # Default from the paper (10^-4)

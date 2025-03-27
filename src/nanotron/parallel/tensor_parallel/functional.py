@@ -32,8 +32,8 @@ class _ShardedCrossEntropy(torch.autograd.Function):
     @staticmethod
     def forward(
         ctx,
-        sharded_logits,  # (batch_size, length, sharded_hidden_size)
-        target,  # (batch_size, length)
+        sharded_logits,  # (*, sharded_hidden_size)
+        target,  # (*)
         group: dist.ProcessGroup,
     ):
         # Maximum value along last dimension across all GPUs.

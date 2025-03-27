@@ -1,6 +1,8 @@
 import torch
 from torch import nn
 
+# from flash_attn.layers.rotary import RotaryEmbedding as FlashRotaryEmbedding
+
 
 class RotaryEmbedding(nn.Module):
     def __init__(
@@ -8,7 +10,7 @@ class RotaryEmbedding(nn.Module):
         dim: int,
         max_seq_len: int,
         base: float = 10000.0,
-        interleaved: bool = True,
+        interleaved: bool = False,
         seq_len_scaling_factor: float = None,
     ):
         super().__init__()
