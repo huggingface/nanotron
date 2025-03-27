@@ -37,8 +37,7 @@ def is_flash_attn_greater_or_equal_2_10():
 
 
 if is_flash_attn_greater_or_equal_2_10():
-    from transformers.integrations.flash_attention import _flash_attention_forward
-
+    from flash_attn.flash_attn_interface import flash_attn_func
 # adapted from transformers.integrations.flex_attention.flex_attention_forward
 def flex_attention_forward(
     module: torch.nn.Module,
@@ -207,36 +206,41 @@ def flex_attention_forward(
 
 def flash_attention_forward(
     module: torch.nn.Module,
-    query: torch.Tensor,
-    key: torch.Tensor,
-    value: torch.Tensor,
-    attention_mask: Optional[torch.Tensor],
+    query: torch.Tensor,  # [b, num_heads, seq_len, head_dim]
+    key: torch.Tensor,  # [b, num_kv_heads, seq_len, head_dim]
+    value: torch.Tensor,  # [b, num_kv_heads, seq_len, head_dim]
+    attention_mask: Optional[torch.Tensor],  # [b, num_heads, seq_len, seq_len]
+    max_seqlen: Optional[int],
     dropout: float = 0.0,
     scaling: Optional[float] = None,
     sliding_window: Optional[int] = None,
-    softcap: Optional[float] = None,
-    max_seqlen: Optional[int] = None,
     **kwargs,
 ) -> Tuple[torch.Tensor, None]:
+    query = query.view(-1, max_seqlen, module.local_num_heads, module.head_dim)
+    key = key.view(-1, max_seqlen, module.local_num_kv_heads, module.head_dim)
+    value = value.view(-1, max_seqlen, module.local_num_kv_heads, module.head_dim)
+
     if attention_mask is None:
         is_causal = True
     else:
         is_causal = False
-    attn_output = _flash_attention_forward(
-        query,
-        key,
-        value,
-        attention_mask,
-        query_length=max_seqlen,
-        is_causal=is_causal,
-        dropout=dropout,
+
+    if sliding_window is not None:
+        window_size = (sliding_window, sliding_window)
+    else:
+        window_size = (-1, -1)
+
+    attn_output = flash_attn_func(
+        q=query,
+        k=key,
+        v=value,
+        dropout_p=dropout,
         softmax_scale=scaling,
-        sliding_window=sliding_window,
-        softcap=softcap,
-        **kwargs,
+        causal=is_causal,
+        window_size=window_size,
+        return_attn_probs=False,
     )
-    # Transpose output to match expected format [batch_size, seq_len, num_heads, head_dim]
-    attn_output = attn_output.transpose(1, 2).contiguous()
+    attn_output = attn_output.contiguous()
     return attn_output, None
 
 
@@ -246,6 +250,7 @@ def sdpa_attention_forward(
     key: torch.Tensor,  # [b, num_kv_heads, seq_len, head_dim]
     value: torch.Tensor,  # [b, num_kv_heads, seq_len, head_dim]
     attention_mask: Optional[torch.Tensor],  # [b, num_heads, seq_len, seq_len]
+    max_seqlen: int,
     dropout: float = 0.0,
     scaling: Optional[float] = None,
     **kwargs,
@@ -254,6 +259,11 @@ def sdpa_attention_forward(
         is_causal = True
     else:
         is_causal = False
+    query = query.view(-1, max_seqlen, module.local_num_heads, module.head_dim).transpose(
+        1, 2
+    )  # [b, num_heads, seq_length, head_dim]
+    key = key.view(-1, max_seqlen, module.local_num_kv_heads, module.head_dim).transpose(1, 2)
+    value = value.view(-1, max_seqlen, module.local_num_kv_heads, module.head_dim).transpose(1, 2)
     attn_output = torch.nn.functional.scaled_dot_product_attention(
         query,
         key,
@@ -265,7 +275,6 @@ def sdpa_attention_forward(
         enable_gqa=query.shape[1] != key.shape[1],
     )
     attn_output = attn_output.transpose(1, 2).contiguous()  # [batch_size, seq_len, num_heads, head_dim]
-
     return attn_output, None
 
 
