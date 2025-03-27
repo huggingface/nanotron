@@ -131,6 +131,7 @@ class Qwen2Config:
     rms_norm_eps: float = 1e-6
     rope_scaling: Optional[dict] = None
     rope_theta: float = 10000.0
+    rope_interleaved: bool = False
     tie_word_embeddings: bool = False
     use_cache: bool = True
     vocab_size: int = 32000

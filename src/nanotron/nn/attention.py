@@ -204,7 +204,6 @@ AttentionImplementation = Literal[tuple(ALL_ATTENTION_FUNCTIONS.keys())]
 
 
 # TODO @nouamane: optimize this, and make sure it works with flashattn and flexattn
-@torch.jit.script
 def get_attention_mask(position_ids, seq_length):
     attention_mask = torch.zeros(seq_length, seq_length, device=position_ids.device)
     start_indices = torch.where(position_ids == 0)[0]
