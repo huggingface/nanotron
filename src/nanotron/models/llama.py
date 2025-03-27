@@ -743,7 +743,7 @@ class MLA(nn.Module):
         # TODO: support different head dimensions for query/key and value
         assert (
             self.qk_head_dim == self.v_head_dim
-        ), "MLA only supports equal query/key and value head dimensions for now"
+        ), f"MLA only supports equal query/key and value head dimensions for now, we have qk_head_dim = {self.qk_head_dim} and v_head_dim = {self.v_head_dim}"
 
         # Initialize rotary embedding
         self.rotary_embedding = RotaryEmbedding(
@@ -751,7 +751,8 @@ class MLA(nn.Module):
         )
 
         # Initialize linear layers
-        self.q_down = nn.Linear(self.dim, self.q_lora_rank, bias=False)  # Note: this is duplicated across GPUs
+        # Warning: this is duplicated across GPUs
+        self.q_down = nn.Linear(self.dim, self.q_lora_rank, bias=False)
         self.q_norm = TritonRMSNorm(self.q_lora_rank, eps=config.rms_norm_eps)
         self.q_up = TensorParallelColumnLinear(
             self.q_lora_rank,
@@ -800,38 +801,33 @@ class MLA(nn.Module):
         sequence_mask,  # [batch_size, seq_length]
     ):
         seq_len, batch_size, _ = hidden_states.shape
+        hidden_states = hidden_states.transpose(0, 1).contiguous()  # [batch_size, seq_len, hidden_size]
 
         q = self.q_up(self.q_norm(self.q_down(hidden_states)))
-        q = q.view(seq_len, batch_size, self.n_local_heads, self.qk_head_dim)
+        q = q.view(batch_size, seq_len, self.n_local_heads, self.qk_head_dim)
         q_nope, q_pe = torch.split(
             q, [self.qk_nope_head_dim, self.qk_rope_head_dim], dim=-1
-        )  # [seq_len, batch_size, n_local_heads, qk_nope_head_dim], [seq_len, batch_size, n_local_heads, qk_rope_head_dim]
-        q_pe = (
-            self.rotary_embedding(q_pe.transpose(0, 1), position_ids=None).transpose(0, 1).contiguous()
-        )  # [seq_len, batch_size, n_local_heads, qk_rope_head_dim]
+        )  # [batch_size, seq_len, n_local_heads, qk_nope_head_dim], [batch_size, seq_len, n_local_heads, qk_rope_head_dim]
+        q_pe = self.rotary_embedding(q_pe, position_ids=None)  # [batch_size, seq_len, n_local_heads, qk_rope_head_dim]
         q = torch.cat(
             [q_nope, q_pe.expand(-1, -1, self.n_local_heads, -1)], dim=-1
-        )  # [seq_len, batch_size, n_heads, qk_head_dim]
+        )  # [batch_size, seq_len, n_heads, qk_head_dim]
 
-        kv = self.kv_down(hidden_states)  # [seq_len, batch_size, qk_rope_head_dim + kv_lora_rank]
+        kv = self.kv_down(hidden_states)  # [batch_size, seq_len, qk_rope_head_dim + kv_lora_rank]
         kv, k_pe = torch.split(
             kv, [self.kv_lora_rank, self.qk_rope_head_dim], dim=-1
-        )  # [seq_len, batch_size, kv_lora_rank], [seq_len, batch_size, qk_rope_head_dim]
-        k_pe = (
-            self.rotary_embedding(k_pe.unsqueeze(2).transpose(0, 1), position_ids=None).transpose(0, 1).contiguous()
-        )  # [seq_len, batch_size, 1, qk_rope_head_dim]
-        kv = self.kv_up(self.kv_norm(kv))  # [seq_len, batch_size, n_local_heads * (qk_nope_head_dim + v_head_dim)]
-        kv = kv.view(seq_len, batch_size, self.n_local_heads, self.qk_nope_head_dim + self.v_head_dim)
+        )  # [batch_size, seq_len, kv_lora_rank], [batch_size, seq_len, qk_rope_head_dim]
+        k_pe = self.rotary_embedding(
+            k_pe.unsqueeze(2), position_ids=None
+        ).contiguous()  # [batch_size, seq_len, 1, qk_rope_head_dim]
+        kv = self.kv_up(self.kv_norm(kv))  # [batch_size, seq_len, n_local_heads * (qk_nope_head_dim + v_head_dim)]
+        kv = kv.view(batch_size, seq_len, self.n_local_heads, self.qk_nope_head_dim + self.v_head_dim)
         k_nope, v = torch.split(
             kv, [self.qk_nope_head_dim, self.v_head_dim], dim=-1
-        )  # [seq_len, batch_size, n_local_heads, qk_nope_head_dim], [seq_len, batch_size, n_local_heads, v_head_dim]
+        )  # [batch_size, seq_len, n_local_heads, qk_nope_head_dim], [batch_size, seq_len, n_local_heads, v_head_dim]
         k = torch.cat(
             [k_nope, k_pe.expand(-1, -1, self.n_local_heads, -1)], dim=-1
-        )  # [seq_len, batch_size, n_heads, qk_head_dim]
-
-        q = q.transpose(0, 1).contiguous()  # [batch_size, seq_len, n_heads, qk_head_dim]
-        k = k.transpose(0, 1).contiguous()  # [batch_size, seq_len, n_heads, qk_head_dim]
-        v = v.transpose(0, 1).contiguous()  # [batch_size, seq_len, n_heads, v_head_dim]
+        )  # [batch_size, seq_len, n_heads, qk_head_dim]
 
         q = q.view(batch_size * seq_len, self.n_local_heads, self.qk_head_dim)
         k = k.view(batch_size * seq_len, self.n_local_heads, self.qk_head_dim)
@@ -857,7 +853,7 @@ class LlamaDecoderLayer(nn.Module):
         layer_idx: int,
     ):
         super().__init__()
-        attn_cls = MLA if config.kv_lora_rank is not None else CausalSelfAttention
+        attn_cls = MLA if config.use_mla else CausalSelfAttention
         self.input_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.attn = attn_cls(
             config=config,

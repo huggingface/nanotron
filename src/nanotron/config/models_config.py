@@ -1,3 +1,4 @@
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, List, Optional, Union
@@ -57,6 +58,7 @@ class LlamaConfig:
 
     #  MLA
     # https://huggingface.co/deepseek-ai/DeepSeek-V3-Base/blob/main/config.json
+    use_mla: bool = False
     q_lora_rank: Optional[int] = None
     kv_lora_rank: Optional[int] = None
     qk_nope_head_dim: Optional[int] = None
@@ -72,6 +74,17 @@ class LlamaConfig:
         # for backward compatibility
         if self.num_key_value_heads is None:
             self.num_key_value_heads = self.num_attention_heads
+
+        # to avoid unintended errors
+        if self.kv_lora_rank is not None:
+            assert self.use_mla, "kv_lora_rank is only used with MLA, please set use_mla to True"
+
+            # set num_key_value_heads to None for MLA(as it's same as num_attention_heads in the paper) to avoid unintended errors
+            logger = logging.getLogger(__name__)
+            logger.warning(
+                "Setting num_key_value_heads to None since MLA is enabled. MLA uses same number of heads for queries and keys."
+            )
+            self.num_key_value_heads = None
 
     @property
     def is_using_mup(self) -> bool:
