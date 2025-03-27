@@ -17,6 +17,10 @@
 from typing import Dict, List, Optional, Union
 
 import torch
+from flash_attn import bert_padding
+from flash_attn.flash_attn_interface import (
+    flash_attn_varlen_func,
+)
 from torch import nn
 from torch.utils.checkpoint import CheckpointFunction
 
@@ -435,17 +439,12 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         hidden_states,  # [seq_length, batch_size, hidden_size]
         sequence_mask,  # [batch_size, seq_length]
     ):
-        from flash_attn import bert_padding
-        from flash_attn.flash_attn_interface import (
-            flash_attn_varlen_func,
-            flash_attn_with_kvcache,
-        )
-
         qkv_states = self.qkv_proj(
             hidden_states
         )  # [seq_length, batch_size, n_local_q_heads * d_qk + 2 * n_local_kv_heads * d_qk]
         q_length, batch_size, _ = qkv_states.shape
 
+        # Split QKV states
         if self.is_gqa:
             query_states, key_states, value_states = torch.split(
                 qkv_states,
@@ -475,15 +474,34 @@ class CausalSelfAttention(nn.Module, AttachableStore):
 
         store = self.get_local_store()
         if store is not None:  # Inference case
-            # Double check that we use store only at inference time
-            assert key_states.requires_grad is False
-            assert value_states.requires_grad is False
-            if "position_offsets" in store:
-                old_position_offsets = store["position_offsets"]
-                position_ids = old_position_offsets[:, None] + sequence_mask
-            else:
-                position_ids = torch.cumsum(sequence_mask, dim=-1, dtype=torch.int32) - 1
-            position_offsets = position_ids[:, -1]
+            return self._forward_inference(
+                query_states, key_states, value_states, sequence_mask, batch_size, q_length, store
+            )
+        else:  # Training case
+            return self._forward_training(query_states, key_states, value_states, sequence_mask, batch_size, q_length)
+
+    def _forward_inference(self, query_states, key_states, value_states, sequence_mask, batch_size, q_length, store):
+        from flash_attn.flash_attn_interface import flash_attn_with_kvcache
+
+        assert key_states.requires_grad is False
+        assert value_states.requires_grad is False
+
+        if "position_offsets" in store:
+            old_position_offsets = store["position_offsets"]
+            position_ids = old_position_offsets[:, None] + sequence_mask
+        else:
+            position_ids = torch.cumsum(sequence_mask, dim=-1, dtype=torch.int32) - 1
+        position_offsets = position_ids[:, -1]
+
+        # Compute rotary embeddings
+        # Note: keep track of old rotary embedding end to check if we need to enlarge k_cache and v_cache
+        old_rotary_embed_end = self.rotary_embedding.end
+        if self.rope_interleaved:
+            query_states = self.rotary_embedding(query_states, position_ids=position_ids)
+            key_states = self.rotary_embedding(key_states, position_ids=position_ids)
+        else:
+            cos, sin = self.rotary_embedding(value_states, position_ids)
+            query_states, key_states = self.rotary_embedding.apply_rotary_pos_emb(query_states, key_states, cos, sin)
 
             # Compute rotary embeddings
             # Note: keep track of old rotary embedding end to check if we need to enlarge k_cache and v_cache
@@ -647,42 +665,49 @@ class CausalSelfAttention(nn.Module, AttachableStore):
                 }
             )
 
-        else:  # Training case
-            # Apply rotary embeddings to query/key states
-            # NOTE: The layout is different from models/llama.py which is [batch_size, num_heads, seq_length, d_qk]
-            # Here it is, [batch_size, seq_length, num_heads, d_qk]
-            # [2, batch_size, seq_length, num_heads, d_qk]
-            key_value_states = torch.cat([key_states.unsqueeze(0), value_states.unsqueeze(0)], dim=0)
-            # [batch_size, seq_length, 2, num_heads, d_qk]
-            key_value_states = key_value_states.permute(1, 2, 0, 3, 4).contiguous()
-            query_states, key_value_states = self.flash_rotary_embedding(query_states, kv=key_value_states)
-            # [batch_size, seq_length, num_heads, d_qk]
-            key_states, value_states = torch.split(key_value_states, 1, dim=2)
+        attention_output = (
+            attention_output.contiguous().view(batch_size, q_length, self.n_local_q_heads * self.d_v).transpose(0, 1)
+        )
+        output = self.o_proj(attention_output)
 
-            q_sequence_mask = sequence_mask
-            kv_sequence_mask = sequence_mask
+        return {"hidden_states": output, "sequence_mask": sequence_mask}
 
-            kv_length = key_states.shape[1]
-            # [batch_size, seq_length, num_heads, d_qk]
-            # Shaping for use in `flash-attn` version of flash-attn: `flash_attn_unpadded_func`
-            query_states = query_states.view(
-                batch_size * q_length, self.n_local_q_heads, self.d_qk
-            )  # [batch_size * q_length, self.n_heads, d_qk]
+    def _forward_training(self, query_states, key_states, value_states, sequence_mask, batch_size, q_length):
+        # Apply rotary embeddings to query/key states
+        # NOTE: The layout is different from models/llama.py which is [batch_size, num_heads, seq_length, d_qk]
+        # Here it is, [batch_size, seq_length, num_heads, d_qk]
+        # [2, batch_size, seq_length, num_heads, d_qk]
+        key_value_states = torch.cat([key_states.unsqueeze(0), value_states.unsqueeze(0)], dim=0)
+        # [batch_size, seq_length, 2, num_heads, d_qk]
+        key_value_states = key_value_states.permute(1, 2, 0, 3, 4).contiguous()
+        query_states, key_value_states = self.flash_rotary_embedding(query_states, kv=key_value_states)
+        # [batch_size, seq_length, num_heads, d_qk]
+        key_states, value_states = torch.split(key_value_states, 1, dim=2)
 
-            key_states = key_states.view(
-                batch_size * kv_length, self.n_local_kv_heads, self.d_qk
-            )  # [batch_size * kv_length, self.n_heads, d_qk]
-            value_states = value_states.view(
-                batch_size * kv_length, self.n_local_kv_heads, self.d_v
-            )  # [batch_size * kv_length, self.n_heads, d_v]
+        q_sequence_mask = sequence_mask
+        kv_sequence_mask = sequence_mask
 
-            attention_output = self.attention(
-                query_states=query_states,
-                key_states=key_states,
-                value_states=value_states,
-                q_sequence_mask=q_sequence_mask,
-                kv_sequence_mask=kv_sequence_mask,
-            )
+        kv_length = key_states.shape[1]
+        # [batch_size, seq_length, num_heads, d_qk]
+        # Shaping for use in `flash-attn` version of flash-attn: `flash_attn_unpadded_func`
+        query_states = query_states.view(
+            batch_size * q_length, self.n_local_q_heads, self.d_qk
+        )  # [batch_size * q_length, self.n_heads, d_qk]
+
+        key_states = key_states.view(
+            batch_size * kv_length, self.n_local_kv_heads, self.d_qk
+        )  # [batch_size * kv_length, self.n_heads, d_qk]
+        value_states = value_states.view(
+            batch_size * kv_length, self.n_local_kv_heads, self.d_v
+        )  # [batch_size * kv_length, self.n_heads, d_v]
+
+        attention_output = self.attention(
+            query_states=query_states,
+            key_states=key_states,
+            value_states=value_states,
+            q_sequence_mask=q_sequence_mask,
+            kv_sequence_mask=kv_sequence_mask,
+        )
 
         attention_output = (
             attention_output.contiguous().view(batch_size, q_length, self.n_local_q_heads * self.d_v).transpose(0, 1)
@@ -1118,17 +1143,37 @@ class Loss(nn.Module):
         label_ids: torch.Tensor,  # [batch_size, seq_length]
         label_mask: torch.Tensor,  # [batch_size, seq_length]
     ) -> Dict[str, torch.Tensor]:
-        # Megatron by defaults cast everything in fp32. `--f16-lm-cross-entropy` is an option you can use to keep current precision.
-        # https://github.com/NVIDIA/Megatron-LM/blob/f267e6186eae1d6e2055b412b00e2e545a8e896a/megatron/model/gpt_model.py#L38
-
         loss = sharded_cross_entropy(
-            sharded_logits, label_ids.transpose(0, 1).contiguous(), group=self.tp_pg, dtype=torch.float
+            sharded_logits,
+            label_ids.transpose(0, 1).contiguous(),
+            group=self.tp_pg,
+            dtype=torch.float,
         ).transpose(0, 1)
-        # TODO @thomasw21: It's unclear what kind of normalization we want to do.
         loss = masked_mean(loss, label_mask, dtype=torch.float)
-        # I think indexing causes a sync we don't actually want
-        # loss = loss[label_mask].sum()
         return {"loss": loss}
+
+
+class LossWithZLoss(Loss):
+    def __init__(self, tp_pg: dist.ProcessGroup, z_loss_coefficient: float):
+        super().__init__(tp_pg)
+        self.z_loss_coef = z_loss_coefficient
+
+    def forward(
+        self,
+        sharded_logits: torch.Tensor,  # [seq_length, batch_size, logits]
+        label_ids: torch.Tensor,  # [batch_size, seq_length]
+        label_mask: torch.Tensor,  # [batch_size, seq_length]
+    ) -> Dict[str, torch.Tensor]:
+        loss, z_loss = sharded_cross_entropy(
+            sharded_logits,
+            label_ids.transpose(0, 1).contiguous(),
+            group=self.tp_pg,
+            dtype=torch.float,
+            z_loss_coef=self.z_loss_coef,
+        )
+        loss = masked_mean(loss.transpose(0, 1), label_mask, dtype=torch.float)
+        z_loss = masked_mean(z_loss.detach().transpose(0, 1), label_mask, dtype=torch.float)
+        return {"loss": loss, "z_loss": z_loss}
 
 
 class LlamaForTraining(NanotronModel):
@@ -1141,17 +1186,26 @@ class LlamaForTraining(NanotronModel):
     ):
         super().__init__()
         self.model = LlamaModel(config=config, parallel_context=parallel_context, parallel_config=parallel_config)
+
+        # Choose the appropriate loss class based on config
+        loss_kwargs = {
+            "tp_pg": parallel_context.tp_pg,
+        }
+        if config.z_loss_enabled:
+            loss_kwargs["z_loss_coefficient"] = config.z_loss_coefficient
+
         self.loss = PipelineBlock(
             p2p=self.model.p2p,
-            module_builder=Loss,
-            module_kwargs={"tp_pg": parallel_context.tp_pg},
+            module_builder=LossWithZLoss if config.z_loss_enabled else Loss,
+            module_kwargs=loss_kwargs,
             module_input_keys={
                 "sharded_logits",
                 "label_ids",
                 "label_mask",
             },
-            module_output_keys={"loss"},
+            module_output_keys={"loss", "z_loss"} if config.z_loss_enabled else {"loss"},
         )
+
         self.parallel_context = parallel_context
         self.config = config
         self.parallel_config = parallel_config
@@ -1171,8 +1225,11 @@ class LlamaForTraining(NanotronModel):
             sharded_logits=sharded_logits,
             label_ids=label_ids,
             label_mask=label_mask,
-        )["loss"]
-        return {"loss": loss}
+        )
+        if self.config.z_loss_enabled:
+            return {"loss": loss["loss"], "z_loss": loss["z_loss"]}
+        else:
+            return {"loss": loss["loss"]}
 
     @torch.no_grad()
     def init_model_randomly(self, config: Config):

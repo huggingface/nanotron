@@ -1,0 +1,133 @@
+---
+description:
+globs: **/models/**/*.py, **/pipeline/**/*.py, **/p2p/**/*.py
+alwaysApply: false
+---
+# Pipeline Parallelism Guidelines
+Description: Best practices for implementing and optimizing pipeline parallelism in Nanotron. Apply when working with PipelineBlock, P2P communication, or designing model partitioning across devices.
+File Pattern: **/models/**/*.py, **/pipeline/**/*.py, **/p2p/**/*.py
+
+## PipelineBlock Usage
+
+A `PipelineBlock` wraps modules for efficient pipeline-parallel execution. Each block operates on a specific device and communicates with other pipeline stages through P2P.
+
+### Key Principles
+
+1. **Minimize Communication Overhead**:
+   - Keep input/output keys minimal
+   - Only pass tensors that are needed by the next stage
+   - Avoid redundant data transfers
+
+2. **Clear Interface Definition**:
+   - Explicitly define `module_input_keys` and `module_output_keys`
+   - Be consistent with key naming across pipeline stages
+   - Document expected tensor shapes
+
+## Example Implementation
+
+```python
+# Good PipelineBlock definition
+self.embed_tokens = PipelineBlock(
+    p2p=self.p2p,
+    module_builder=Embedding,
+    module_kwargs={
+        "config": config,
+        "parallel_config": parallel_config,
+        "tp_pg": parallel_context.tp_pg,
+    },
+    module_input_keys={"input_ids", "position_ids"},
+    module_output_keys={"input_embeds", "position_ids"},
+)
+```
+
+## Data Flow Management
+
+When passing data between pipeline stages:
+
+```python
+# Effective data flow between PipelineBlocks
+output = self.embed_tokens(input_ids=input_ids, position_ids=position_ids)
+decoder_states = {
+    "hidden_states": output["input_embeds"],
+    "position_ids": output["position_ids"],
+}
+
+for decoder_layer in self.decoder:
+    decoder_states = decoder_layer(**decoder_states)
+```
+
+## Module Interface Design
+
+Design modules with clean interfaces for pipeline parallelism:
+
+```python
+class Embedding(nn.Module):
+    def __init__(self, tp_pg: dist.ProcessGroup, config, parallel_config):
+        super().__init__()
+        self.embed_tokens = TensorParallelEmbedding(
+            num_embeddings=config.vocab_size,
+            embedding_dim=config.hidden_size,
+            padding_idx=config.pad_token_id,
+            pg=tp_pg,
+            mode=parallel_config.tp_mode if parallel_config is not None else TensorParallelLinearMode.ALL_REDUCE,
+        )
+
+    def forward(self, input_ids: torch.Tensor, position_ids: torch.Tensor):
+        # Clear, focused interface with precise input/output contract
+        input_embeds = self.embed_tokens(input_ids)
+        return {"input_embeds": input_embeds, "position_ids": position_ids}
+```
+
+## Communication Optimization
+
+- **Poor communication pattern:**
+```python
+# Avoid: Sending multiple small tensors
+return {
+    "hidden_states": hidden_output,
+    "attention_probs": attention_probs,
+    "past_key_values": past_kv,
+    "position_ids": position_ids
+}
+```
+
+- **Better communication pattern:**
+```python
+# Better: Send only what's needed
+return {
+    "hidden_states": hidden_output,
+    "position_ids": position_ids
+}
+```
+
+## TensorPointer Usage
+
+Use `TensorPointer` to reference tensors across pipeline stages without copying:
+
+```python
+def forward(
+    self,
+    input_ids: Union[torch.Tensor, TensorPointer],  # [batch_size, seq_length]
+    position_ids: Union[torch.Tensor, TensorPointer],  # [batch_size, seq_length]
+):
+    # Handle input that could be direct tensors or pointers to tensors on other devices
+    output = self.embed_tokens(input_ids=input_ids, position_ids=position_ids)
+    # ...
+```
+
+## Pipeline Rank-Specific Data Access
+
+In pipeline parallelism, different tensors are only available on specific pipeline ranks (see `src/nanotron/data/dataloader.py`):
+
+- **First PP rank (input rank)**: Has direct access to `input_ids` and `position_ids`
+- **Last PP rank (output rank)**: Has direct access to `label_ids` and `label_mask`
+- **Intermediate ranks**: Use `TensorPointer` to reference tensors from other ranks
+
+Always check the rank when handling tensors that might be specific to certain pipeline stages.
+
+## Pipeline Scheduling
+
+- **Avoid excessive synchronization points**
+- **Balance computation across pipeline stages**
+- **Maximize compute-communication overlap**
+- **Consider activation recomputation for memory efficiency**

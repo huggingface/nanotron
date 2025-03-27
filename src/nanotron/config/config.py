@@ -1,4 +1,5 @@
 import datetime
+import glob
 import os
 from dataclasses import dataclass, fields
 from pathlib import Path
@@ -9,6 +10,7 @@ import torch
 import yaml
 from dacite import from_dict
 from datasets.download.streaming_download_manager import xPath
+from transformers import AutoTokenizer
 from yaml.loader import SafeLoader
 
 from nanotron.config.lighteval_config import LightEvalConfig
@@ -21,7 +23,7 @@ from nanotron.config.utils_config import (
     serialize,
 )
 from nanotron.generation.sampler import SamplerType
-from nanotron.logging import get_logger
+from nanotron.logging import get_logger, human_format
 from nanotron.parallel.pipeline_parallel.engine import PipelineEngine
 from nanotron.parallel.tensor_parallel.nn import TensorParallelLinearMode
 
@@ -93,6 +95,22 @@ class PretrainDatasetsArgs:
 
 
 @dataclass
+class SFTDatasetsArgs:
+    # TODO @nouamane: which config do we want for SFT?
+    hf_dataset_or_datasets: Union[str, list, dict]
+    hf_dataset_splits: Optional[Union[str, list]] = None
+    hf_dataset_config_name: Optional[str] = None
+    dataset_processing_num_proc_per_process: Optional[int] = 1
+    dataset_overwrite_cache: Optional[bool] = False
+    sft_dataloader: Optional[bool] = True
+    debug_max_samples: Optional[int] = None
+
+    def __post_init__(self):
+        if self.hf_dataset_splits is None:
+            self.hf_dataset_splits = "train"
+
+
+@dataclass
 class S3UploadArgs:
     """Arguments related to uploading checkpoints on s3"""
 
@@ -113,18 +131,52 @@ class S3UploadArgs:
 class NanosetDatasetsArgs:
     dataset_folder: Union[str, List[str]]
     dataset_weights: Optional[List[float]] = None
+    # Tokenizer config, assuming all datasets use the same tokenizer
+    tokenizer_name: Optional[str] = None
+    vocab_size: Optional[int] = None
+    token_size_in_bytes: Optional[int] = None
 
     def __post_init__(self):
         if isinstance(self.dataset_folder, str):  # Case 1: 1 Dataset folder
             self.dataset_folder = [self.dataset_folder]
             self.dataset_weights = [1]
 
+        # Check if dataset_weights is provided and matches the number of dataset folders
+        if self.dataset_weights is not None and len(self.dataset_weights) != len(self.dataset_folder):
+            raise ValueError(
+                f"Number of dataset weights ({len(self.dataset_weights)}) does not match number of dataset folders ({len(self.dataset_folder)})"
+            )
+
+        # Read the first metadata file in the dataset folder to extract tokenizer name and token size.
+        for folder in self.dataset_folder:
+            # Find all metadata files in the folder
+            metadata_files = glob.glob(os.path.join(folder, "*.metadata"))
+            if metadata_files:
+                # Read the first line of the first metadata file
+                with open(metadata_files[0], "r") as f:
+                    first_line = f.readline().strip()
+                    if "|" in first_line:
+                        tokenizer_name, token_size_in_bytes = first_line.split("|")
+                        if self.tokenizer_name is None:
+                            self.tokenizer_name = tokenizer_name
+                            self.token_size_in_bytes = int(token_size_in_bytes)
+                            self.vocab_size = len(AutoTokenizer.from_pretrained(tokenizer_name).get_vocab())
+                        else:
+                            assert (
+                                self.tokenizer_name == tokenizer_name
+                            ), f"Tokenizer name mismatch while reading datasets metadata file, found both {self.tokenizer_name} and {tokenizer_name}"
+                            assert self.token_size_in_bytes == int(
+                                token_size_in_bytes
+                            ), f"Token size mismatch while reading datasets metadata file, found both {self.token_size_in_bytes} and {token_size_in_bytes}"
+
 
 @dataclass
 class DataArgs:
     """Arguments related to the data and data files processing"""
 
-    dataset: Optional[Union[PretrainDatasetsArgs, NanosetDatasetsArgs]]
+    dataset: Optional[
+        Union[PretrainDatasetsArgs, NanosetDatasetsArgs, SFTDatasetsArgs]
+    ]  # If None we use dummy_infinite_data_generator
     seed: Optional[int]
     num_loading_workers: Optional[int] = 1
 
@@ -193,22 +245,26 @@ class GeneralArgs:
     def __post_init__(self):
         if self.seed is None:
             self.seed = DEFAULT_SEED
-        if self.benchmark_csv_path is not None:
-            assert (
-                os.environ.get("NANOTRON_BENCHMARK", None) is not None
-            ), f"Please set NANOTRON_BENCHMARK to 1 when using benchmark_csv_path. Got {os.environ.get('NANOTRON_BENCHMARK', None)}"
-
         if self.run is None:
             self.run = "%date_%jobid"
-        self.run.replace("%date", datetime.datetime.now().strftime("%Y%m%d_%H%M%S"))
-        self.run.replace("%jobid", os.environ.get("SLURM_JOB_ID", "local"))
+        self.run = self.run.replace("%date", datetime.datetime.now().strftime("%Y%m%d_%H%M%S"))
+        self.run = self.run.replace("%jobid", os.environ.get("SLURM_JOB_ID", "local"))
 
 
 @dataclass
 class ProfilerArgs:
     """Arguments related to profiling"""
 
-    profiler_export_path: Optional[Path]
+    profiler_export_path: Optional[Path]  # e.g. ./tb_logs
+    wait: int = 1
+    warmup: int = 1
+    active: int = 1
+    repeat: int = 1
+    skip_first: int = 3
+    record_shapes: bool = False
+    profile_memory: bool = False
+    with_stack: bool = True
+    export_chrome_trace: bool = False
 
 
 @dataclass
@@ -317,6 +373,13 @@ class OptimizerArgs:
     clip_grad: Optional[float]
     accumulate_grad_in_fp32: bool
     learning_rate_scheduler: LRSchedulerArgs
+    weight_decay_exclude_named_params: Optional[
+        List[str]
+    ] = None  # List of regex patterns to exclude parameters from weight decay
+
+    def __post_init__(self):
+        if self.weight_decay_exclude_named_params is None:
+            self.weight_decay_exclude_named_params: List[str] = []
 
 
 @dataclass
@@ -344,7 +407,7 @@ class Config:
     general: GeneralArgs
     parallelism: ParallelismArgs
     model: ModelArgs
-    tokenizer: TokenizerArgs
+    tokenizer: Optional[TokenizerArgs] = None
     checkpoints: Optional[CheckpointsArgs] = None
     logging: Optional[LoggingArgs] = None
     tokens: Optional[TokensArgs] = None
@@ -366,7 +429,12 @@ class Config:
 
         # Some final sanity checks across separate arguments sections:
         if self.profiler is not None and self.profiler.profiler_export_path is not None:
-            assert self.tokens.train_steps < 10
+            total_profiling_steps = self.profiler.skip_first + self.profiler.repeat * (
+                self.profiler.wait + self.profiler.warmup + self.profiler.active
+            )
+            assert (
+                self.tokens.train_steps >= total_profiling_steps
+            ), f"Profiling steps ({total_profiling_steps}) must be less than or equal to train steps ({self.tokens.train_steps})"
 
         if self.optimizer is not None and self.optimizer.learning_rate_scheduler.lr_decay_steps is None:
             self.optimizer.learning_rate_scheduler.lr_decay_steps = (
@@ -390,6 +458,24 @@ class Config:
                         f"Each stage should have unique starting training step, please change the starting training step for stage {stage.name}"
                     )
 
+                if isinstance(stage.data.dataset, NanosetDatasetsArgs):
+                    if self.model.model_config.vocab_size == -1:
+                        self.model.model_config.vocab_size = stage.data.dataset.vocab_size
+                        logger.warning(
+                            f"Setting model's vocab_size to {self.model.model_config.vocab_size} from dataset's vocab_size ({stage.data.dataset.vocab_size})"
+                        )
+                    assert (
+                        self.model.model_config.vocab_size == stage.data.dataset.vocab_size
+                    ), f"Model's vocab_size ({self.model.model_config.vocab_size}) does not match dataset's ({stage.data.dataset.dataset_folder}) vocab_size ({stage.data.dataset.vocab_size})"
+                    if self.tokenizer is None:
+                        self.tokenizer = TokenizerArgs(tokenizer_name_or_path=stage.data.dataset.tokenizer_name)
+                        logger.warning(
+                            f"Setting tokenizer to {self.tokenizer.tokenizer_name_or_path} from dataset's tokenizer ({stage.data.dataset.tokenizer_name})"
+                        )
+                    assert (
+                        self.tokenizer.tokenizer_name_or_path == stage.data.dataset.tokenizer_name
+                    ), f"Tokenizer passed in config ({self.tokenizer.tokenizer_name_or_path}) does not match dataset's ({stage.data.dataset.dataset_folder}) tokenizer ({stage.data.dataset.tokenizer_name})"
+
             # NOTE: must order the stages by start_training_step from lowest to highest
             assert all(
                 self.data_stages[i].start_training_step < self.data_stages[i + 1].start_training_step
@@ -400,9 +486,27 @@ class Config:
         # if self.checkpoints.lighteval is not None:
         #     assert self.tokenizer.tokenizer_name_or_path is not None
 
+        # Model verifications
+        assert (
+            self.model.model_config.num_attention_heads % self.parallelism.tp == 0
+        ), f"num_attention_heads ({self.model.model_config.num_attention_heads}) must be divisible by tp ({self.parallelism.tp})"
+        assert (
+            self.model.model_config.num_attention_heads >= self.model.model_config.num_key_value_heads
+        ), f"num_attention_heads ({self.model.model_config.num_attention_heads}) must be >= num_key_value_heads ({self.model.model_config.num_key_value_heads})"
+        assert (
+            self.model.model_config.num_key_value_heads >= self.parallelism.tp
+        ), f"num_key_value_heads ({self.model.model_config.num_key_value_heads}) must be >= tp ({self.parallelism.tp})"  # TODO: remove this once we ensure KV heads get duplicated correctly
+        assert (
+            self.model.model_config.num_attention_heads % self.model.model_config.num_key_value_heads == 0
+        ), f"num_attention_heads ({self.model.model_config.num_attention_heads}) must be divisible by num_key_value_heads ({self.model.model_config.num_key_value_heads})"
+
     @property
     def global_batch_size(self):
         return self.tokens.micro_batch_size * self.tokens.batch_accumulation_per_replica * self.parallelism.dp
+
+    @property
+    def global_batch_size_in_tokens(self):
+        return self.global_batch_size * self.tokens.sequence_length
 
     def save_as_yaml(self, file_path: str):
         config_dict = serialize(self)
@@ -413,8 +517,36 @@ class Config:
         # Sanity test config can be reloaded
         _ = get_config_from_file(file_path, config_class=self.__class__)
 
+    @classmethod
+    def load_from_yaml(cls, file_path: str):
+        config_dict = yaml.load(open(file_path), Loader=SafeLoader)
+        return get_config_from_dict(config_dict, config_class=cls)
+
     def as_dict(self) -> dict:
         return serialize(self)
+
+    def print_config_details(self):
+        print("\n=== Model Architecture ===")
+        print(f"hidden_size: {self.model.model_config.hidden_size}")
+        print(f"num_layers: {self.model.model_config.num_hidden_layers}")
+        print(f"intermediate_size: {self.model.model_config.intermediate_size}")
+        print(f"num_attention_heads: {self.model.model_config.num_attention_heads}")
+        print(f"num_key_value_heads: {self.model.model_config.num_key_value_heads}")
+        print(f"tie_word_embeddings: {self.model.model_config.tie_word_embeddings}")
+        print(f"vocab_size: {self.model.model_config.vocab_size}")
+        print(f"num_params: {_calculate_model_params(self)}")
+
+        print("\n=== Training Configuration ===")
+        print(
+            f"seq_len: {self.model.model_config.max_position_embeddings} | mbs: {self.tokens.micro_batch_size} | batch_accum: {self.tokens.batch_accumulation_per_replica} | gbs: {human_format(self.global_batch_size_in_tokens)} | train_steps: {self.tokens.train_steps} | total_tokens: {human_format(self.tokens.train_steps * self.global_batch_size_in_tokens)}"
+        )
+
+        print("\n=== Parallelism ===")
+        print(
+            f"tp: {self.parallelism.tp} | pp: {self.parallelism.pp} | dp: {self.parallelism.dp} | cp: {self.parallelism.context_parallel_size} | ep: {self.parallelism.expert_parallel_size}"
+        )
+        print(f"zero_stage: {self.optimizer.zero_stage} | full_checkpointing: {self.parallelism.recompute_layer}")
+        print("=" * 20 + "\n")
 
 
 def get_config_from_dict(
@@ -492,3 +624,20 @@ def get_config_from_file(
             )
         config.model.model_config = model_config_class(**config.model.model_config)
     return config
+
+
+def _calculate_model_params(config: Config):
+    """Calculate and format the number of parameters in the model.
+    N = vocab * h * 2 + num_layers * (3 * h * inter + 4 * h * h)
+    """
+    num_params = human_format(
+        config.model.model_config.vocab_size
+        * config.model.model_config.hidden_size
+        * (2 if config.model.model_config.tie_word_embeddings else 1)
+        + config.model.model_config.num_hidden_layers
+        * (
+            3 * config.model.model_config.hidden_size * config.model.model_config.intermediate_size
+            + 4 * config.model.model_config.hidden_size * config.model.model_config.hidden_size
+        )
+    )
+    return num_params

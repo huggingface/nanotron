@@ -1,0 +1,37 @@
+---
+description:
+globs: **/models/**/*.py, **/nn/**/*.py
+alwaysApply: false
+---
+# Performance Optimization Guidelines
+Description: Guidelines for optimizing performance in distributed training. Apply when working on performance-critical components or optimizing existing code.
+File Pattern: **/models/**/*.py, **/nn/**/*.py
+
+## 1. Tensor Shape Management
+
+- **Always comment tensor shapes**, especially for:
+  - Model inputs/outputs: `# [batch_size, seq_length, hidden_size]`
+  - Attention computations: `# [batch_size, num_heads, seq_length, head_dim]`
+
+Example:
+```python
+def forward(
+    self,
+    query_states: torch.Tensor, # [batch_size*seq_length, local_num_heads, head_dim]
+    key_states: torch.Tensor, # [batch_size*seq_length, local_num_kv_heads, head_dim]
+    # ...other params...
+):
+```
+
+## 2. Minimize Data Movement
+
+- Reduce `view()`, `transpose()`, `permute()`, and `reshape()`
+- Keep tensors contiguous when possible
+- Reuse storage where possible
+
+Better pattern:
+```python
+# Minimal reshaping with consistent patterns
+x = x.view(b, s, h, d).transpose(1, 2)  # [b, h, s, d]
+y = y.view(b, s, h, d).transpose(1, 2)  # [b, h, s, d]
+```

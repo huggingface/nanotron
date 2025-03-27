@@ -1,0 +1,40 @@
+---
+description: Core development principles and workflow for the Nanotron project. Apply when discussing project architecture, planning new features, or reviewing code structure.
+globs:
+alwaysApply: false
+---
+# Development Philosophy
+Description: Core development principles and workflow for the Nanotron project. Apply when discussing project architecture, planning new features, or reviewing code structure.
+
+When developing for Nanotron:
+
+1. **Prioritize Correctness**: Distributed training bugs can be subtle
+2. **Then Scalability**: Solutions must work efficiently across many GPUs/nodes
+3. **Finally Usability**: APIs should be intuitive despite complexity
+
+## Development Workflow
+
+1. **Understand Requirements**:
+   - Model architecture specifics
+   - Data processing requirements
+   - Parallelization strategy
+
+2. **Configuration Development**:
+   - Model configs define architecture parameters
+   - Training configs manage data, optimization, and distribution
+   - Validate parameters match hardware capabilities
+
+3. **Model Implementation**:
+   - Handle tensor dimensions across parallelism boundaries
+   - Consider all parallelism dimensions (TP, PP, DP)
+   - Implement proper initialization strategies
+
+4. **Data Pipeline Development**:
+   - Efficient parallel loading/processing
+   - Handle text formatting, tokenization, batching
+   - Manage padding, truncation, sequence packing
+
+5. **Testing and Validation**:
+   - Throughput testing: Check FLOPS logs
+   - Memory profiling: Monitor usage patterns
+   - Scaling tests: Validate across parallelism configurations

@@ -163,3 +163,9 @@ cython_debug/
 
 checkpoints/
 wandb/
+logs/
+.test_cache/
+lighteval/
+datatrove/
+eval_results/
+tb_logs/

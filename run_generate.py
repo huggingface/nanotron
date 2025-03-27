@@ -4,7 +4,7 @@ Nanotron Inference Script
 Usage:
 ```
 export CUDA_DEVICE_MAX_CONNECTIONS=1 # important for some distributed operations
-torchrun --nproc_per_node=4 run_generate.py ---ckpt-path checkpoints/test/4
+torchrun --nproc_per_node=1 run_generate.py --ckpt-path checkpoints/10
 ```
 """
 
@@ -50,6 +50,10 @@ try:
 except ImportError:
     AutoTokenizer = None
 
+# import lovely_tensors as lt
+
+# lt.monkey_patch()
+
 logger = logging.get_logger(__name__)
 
 
@@ -60,6 +64,7 @@ def get_args():
     parser.add_argument("--pp", type=int, default=0)
     parser.add_argument("--tp", type=int, default=0)
     parser.add_argument("--max-new-tokens", type=int, default=128, help="Maximum number of new tokens to generate")
+    parser.add_argument("--use-cache", action="store_true", help="Use KV cache to speed up generation")
     return parser.parse_args()
 
 
@@ -175,12 +180,11 @@ def main():
         outputs = decode_text(
             input_iter=(GenerationInput(text=text) for text in dummy_inputs),
             tokenizer=tokenizer,
-            # TODO @thomasw21: From ModelWithLoss extract the model.
             model=model.model,
             parallel_context=parallel_context,
             max_new_tokens=args.max_new_tokens,
             max_micro_batch_size=2,
-            generation_config=GenerationArgs(sampler="greedy", use_cache=True),
+            generation_config=GenerationArgs(sampler="greedy", use_cache=args.use_cache),
             tokenizer_config=TokenizerConfig(max_input_length=None),
             is_bench=os.environ.get("USE_BENCH", "0") == "1",
         )

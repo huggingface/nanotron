@@ -10,6 +10,7 @@ from nanotron.parallel.parameters import NanotronParameter
 logger = logging.get_logger(__name__)
 
 
+@torch.profiler.record_function("clip_grad_norm")
 def clip_grad_norm(
     mp_pg: dist.ProcessGroup,
     named_parameters: Iterable[Tuple[str, NanotronParameter]],

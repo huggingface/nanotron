@@ -4,7 +4,7 @@ from enum import Enum, auto
 from typing import Dict
 
 from nanotron.config import ModelArgs
-from nanotron.nn.layer_norm import TritonRMSNorm
+from nanotron.nn.layer_norm import LlamaRMSNorm, TritonRMSNorm
 from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelColumnLinear,
     TensorParallelEmbedding,
@@ -25,7 +25,7 @@ class Parametrizator:
 
     def parametrize(self, param_name: str, module: nn.Module):
         if not isinstance(module, tuple(self.MODULE_TO_PARAMETRIZE.keys())):
-            raise Exception(f"Parameter {param_name} was not initialized")
+            raise Exception(f"Module {type(module)} with parameter {param_name} is not supported for initialization")
 
         return self.MODULE_TO_PARAMETRIZE[type(module)](param_name, module)
 
@@ -37,6 +37,7 @@ class StandardParametrizator(Parametrizator):
             TensorParallelColumnLinear: self._parametrize_column_linear,
             TensorParallelRowLinear: self._parametrize_row_linear,
             TritonRMSNorm: self._parametrize_layer_norm,
+            LlamaRMSNorm: self._parametrize_layer_norm,
             TensorParallelEmbedding: self._parametrize_embedding,
             Linear: self._parametrize_linear_layer,
         }

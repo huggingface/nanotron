@@ -1,19 +1,26 @@
+from typing import List
+
+from torch.utils.data import DataLoader
+
 import nanotron.distributed as dist
 from nanotron import logging
-from nanotron.data.collator import NanosetDataCollatorForCLM
-from nanotron.dataloader import (
-    EmptyInfiniteDataset,
+from nanotron.data.dataloader import (
+    DataCollatorForCLM,
+    DataCollatorForCLMWithPositionIds,
     get_dataloader_worker_init,
+)
+from nanotron.data.nanoset import Nanoset
+from nanotron.data.samplers import (
+    EmptyInfiniteDataset,
     get_sampler,
 )
 from nanotron.parallel import ParallelContext
-from torch.utils.data import DataLoader
 
 logger = logging.get_logger(__name__)
 
 
 def build_nanoset_dataloader(
-    dataset,
+    dataset: Nanoset,
     sequence_length: int,
     parallel_context: ParallelContext,
     input_pp_rank: int,
@@ -23,6 +30,8 @@ def build_nanoset_dataloader(
     consumed_train_samples: int = 0,
     dataloader_drop_last: bool = True,
     dataloader_pin_memory: bool = True,
+    use_position_ids: bool = True,
+    sequence_sep_tokens: List[int] = None,
 ) -> DataLoader:
 
     # Case of ranks not requiring data. We give them a dummy dataset, then the collator will do his job
@@ -32,12 +41,22 @@ def build_nanoset_dataloader(
         # No need to spawn a lot of workers, we can just use main
         dataloader_num_workers = 0
 
-    data_collator = NanosetDataCollatorForCLM(
-        sequence_length=sequence_length,
-        input_pp_rank=input_pp_rank,
-        output_pp_rank=output_pp_rank,
-        parallel_context=parallel_context,
-    )
+    if use_position_ids:
+        data_collator = DataCollatorForCLMWithPositionIds(
+            sequence_length=sequence_length,
+            input_pp_rank=input_pp_rank,
+            output_pp_rank=output_pp_rank,
+            parallel_context=parallel_context,
+            sequence_sep_tokens=sequence_sep_tokens,
+            # cumul_doc_lens=dataset.cumul_doc_lens,
+        )
+    else:
+        data_collator = DataCollatorForCLM(
+            sequence_length=sequence_length,
+            input_pp_rank=input_pp_rank,
+            output_pp_rank=output_pp_rank,
+            parallel_context=parallel_context,
+        )
 
     # Compute size and rank of dataloader workers
     dp_ranks_size = parallel_context.dp_pg.size()
@@ -61,4 +80,7 @@ def build_nanoset_dataloader(
         num_workers=dataloader_num_workers,
         pin_memory=dataloader_pin_memory,
         worker_init_fn=get_dataloader_worker_init(dp_rank=dp_rank),
+        pin_memory_device="cuda",
+        persistent_workers=True if dataloader_num_workers > 0 else False,
+        prefetch_factor=dataloader_num_workers if dataloader_num_workers > 0 else None,
     )

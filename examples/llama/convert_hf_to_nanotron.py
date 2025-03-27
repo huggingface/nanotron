@@ -1,7 +1,7 @@
 """
 Converts a HF model to nanotron format
 Command:
-    torchrun --nproc_per_node=1 convert_hf_to_nanotron.py --checkpoint_path=hf_weights --save_path=nanotron_weights
+    torchrun --nproc_per_node=1 examples/llama/convert_hf_to_nanotron.py --checkpoint_path=hf_weights --save_path=nanotron_weights
 """
 
 import dataclasses
@@ -11,15 +11,23 @@ from pathlib import Path
 
 import nanotron
 import torch
-from convert_weights import get_config_mapping, get_weight_mapping, load_nanotron_model
 from nanotron.config import LlamaConfig as NanotronLlamaConfig
+from nanotron.config import Qwen2Config as NanotronQwen2Config
 from nanotron.models.llama import LlamaForTraining
 from transformers import LlamaConfig as HFLlamaConfig
 from transformers import LlamaForCausalLM
 
+from .convert_weights import get_config_mapping, get_weight_mapping, load_nanotron_model
+
 
 def _handle_attention_block(
-    q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, n_q_heads: int, n_kv_heads: int, d_qk: int
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    n_q_heads: int,
+    n_kv_heads: int,
+    d_qk: int,
+    interleave: bool,
 ) -> torch.Tensor:
     # Huggingface Llama separates the q, k, v weights (as opposed to nanotron).
     # Furthermore, in the rotary embeddings in nanotron expects interleaved pairs of even
@@ -29,19 +37,21 @@ def _handle_attention_block(
     # This function handles the concatenation of the q, k, v weights and proper permutation
     # to ensure correct transformation.
 
-    def interleave(w: torch.Tensor):
+    def interleave_weight(w: torch.Tensor):
         w_new = []
         for head_w in w.split(d_qk):
             head_w = head_w.view(2, d_qk // 2, -1).transpose(0, 1).reshape(d_qk, -1)
             w_new.append(head_w)
         return torch.cat(w_new)
 
-    q = interleave(q)
-    k = interleave(k)
+    q = interleave_weight(q) if interleave else q
+    k = interleave_weight(k) if interleave else k
     return torch.cat([q, k, v])
 
 
-def convert_hf_to_nt(model_hf: LlamaForCausalLM, model_nt: LlamaForTraining, config: NanotronLlamaConfig):
+def convert_hf_to_nt(
+    model_hf: LlamaForCausalLM, model_nt: LlamaForTraining, config: NanotronLlamaConfig, interleave_qkv: bool = False
+):
     """Converts the weights from the model_hf to model_nt, making modifications
     in-place."""
 
@@ -64,6 +74,7 @@ def convert_hf_to_nt(model_hf: LlamaForCausalLM, model_nt: LlamaForTraining, con
                     config.num_attention_heads,
                     config.num_key_value_heads,
                     config.hidden_size // config.num_attention_heads,
+                    interleave_qkv,
                 )
             # The case of gate_up_proj, nt_to_hf_map has two keys.
             elif "gate_up_proj" in module_name_nt:
@@ -80,10 +91,10 @@ def convert_hf_to_nt(model_hf: LlamaForCausalLM, model_nt: LlamaForTraining, con
                 param_nt.copy_(param)
 
 
-def get_nanotron_config(config: HFLlamaConfig) -> NanotronLlamaConfig:
+def get_nanotron_config(config: HFLlamaConfig) -> NanotronQwen2Config:
     """Converts a huggingface configuration to nanotron configuration."""
     attrs = {key: getattr(config, value) for key, value in get_config_mapping(nt_to_hf=True).items()}
-    return NanotronLlamaConfig(**attrs)
+    return NanotronQwen2Config(**attrs)
 
 
 def convert_checkpoint_and_save(checkpoint_path: Path, save_path: Path):

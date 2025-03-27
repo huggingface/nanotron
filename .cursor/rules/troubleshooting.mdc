@@ -1,0 +1,40 @@
+---
+description: Common issues and solutions for Nanotron development. Apply when debugging performance, memory, or training problems.
+globs:
+alwaysApply: false
+---
+# Troubleshooting Guide
+Description: Common issues and solutions for Nanotron development. Apply when debugging performance, memory, or training problems.
+
+## Memory Issues
+
+- Check tensor dimensions and data types
+- Review gradient accumulation settings
+- Validate activation checkpointing settings
+- Monitor CUDA memory fragmentation
+
+## Performance Problems
+
+- Examine communication patterns between processes
+- Check for CPU bottlenecks in data loading
+- Review batch size and gradient accumulation settings
+- Analyze profiler traces for unexpected synchronizations or idle time
+
+## Training Instability
+
+- Check learning rate and warmup settings
+- Validate weight initialization approaches
+- Review normalization layers and activation functions
+
+## Profiling
+
+Enable profiler in config:
+```python
+profiler=ProfilerArgs(profiler_export_path="./tb_logs")
+```
+
+Or in YAML:
+```yaml
+profiler:
+  profiler_export_path: "./tb_logs"
+```

@@ -14,7 +14,6 @@ class Store(collections.defaultdict):
         super().__init__(dict)
 
     def flush(self):
-        # TODO @thomasw21: There's probably a simpler way than doing this.
         for key in list(self.keys()):
             del self[key]
 

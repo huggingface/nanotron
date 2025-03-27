@@ -10,16 +10,25 @@ torchrun --nproc_per_node=8 run_train.py --config-file examples/config_tiny_llam
 import argparse
 from typing import Dict, cast
 
-import numpy as np
 from nanotron import logging
-from nanotron.config import DataArgs, DatasetStageArgs, NanosetDatasetsArgs, PretrainDatasetsArgs
-from nanotron.data.dataloader_builder import build_nanoset_dataloader
-from nanotron.dataloader import (
-    clm_process,
+from nanotron.config import (
+    DataArgs,
+    DatasetStageArgs,
+    NanosetDatasetsArgs,
+    PretrainDatasetsArgs,
+    Qwen2Config,
+    SFTDatasetsArgs,
+)
+from nanotron.data.dataloader import (
     dummy_infinite_data_generator,
-    get_datasets,
     get_train_dataloader,
 )
+from nanotron.data.dataloader_builder import build_nanoset_dataloader
+from nanotron.data.processing import (
+    clm_process,
+    get_datasets,
+)
+from nanotron.data.sft_processing import prepare_sft_dataset
 from nanotron.helpers import (
     compute_remain_train_steps_of_a_data_stage_from_ckp,
     get_consumed_train_samples_of_a_data_stage_from_ckp,
@@ -39,6 +48,10 @@ except ImportError:
     tf_version = None
 
 logger = logging.get_logger(__name__)
+
+# import lovely_tensors as lt
+
+# lt.monkey_patch()
 
 
 def get_dataloader_from_data_stage(
@@ -71,10 +84,12 @@ def get_dataloader_from_data_stage(
             vocab_size=trainer.model_config.vocab_size,
             seed=data.seed,
             parallel_context=trainer.parallel_context,
+            use_position_ids=True,  # Simulate packed sequences to test SFT or inference
+            cp_pg=trainer.parallel_context.cp_pg,
         )()
 
     # Case 2: HuggingFace datasets
-    elif isinstance(data.dataset, PretrainDatasetsArgs):
+    elif isinstance(data.dataset, PretrainDatasetsArgs) or isinstance(data.dataset, SFTDatasetsArgs):
         log_rank("Using `datasets` library", logger=logger, level=logging.INFO, rank=0)
         tokenizer_path = trainer.config.tokenizer.tokenizer_name_or_path
         log_rank(
@@ -97,23 +112,42 @@ def get_dataloader_from_data_stage(
             )["train"]
 
             tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
-            tokenizer.pad_token = tokenizer.eos_token
             tokenizer.padding_side = "left"
+            sequence_sep_tokens = [tokenizer.bos_token, tokenizer.eos_token, tokenizer.pad_token, tokenizer.unk_token]
+            # assert bos or eos are present
+            assert (
+                tokenizer.bos_token is not None or tokenizer.eos_token is not None
+            ), f"Tokenizer must have either bos or eos token, but found none for {tokenizer_path}"
 
             # Check that tokenizer's vocab size is smaller than the model's vocab size
             assert (
                 tokenizer.vocab_size <= trainer.model_config.vocab_size
             ), f"Tokenizer's vocab size ({tokenizer.vocab_size}) is larger than the model's vocab size ({trainer.model_config.vocab_size})"
 
-            # We apply the Causal Language Modeling preprocessing
-            train_dataset = clm_process(
-                raw_dataset=raw_dataset,
-                tokenizer=tokenizer,
-                text_column_name=data.dataset.text_column_name,
-                dataset_processing_num_proc_per_process=data.dataset.dataset_processing_num_proc_per_process,
-                dataset_overwrite_cache=data.dataset.dataset_overwrite_cache,
-                sequence_length=trainer.sequence_length,
-            )
+            # Different processing for SFT vs pretraining
+            if isinstance(data.dataset, SFTDatasetsArgs):
+                # For SFT, use the dedicated prepare_sft_dataset function
+                # Get optional debug parameter to limit dataset size (for faster development)
+                debug_max_samples = getattr(data.dataset, "debug_max_samples", None)
+
+                # Process the dataset using our dedicated SFT processing module
+                train_dataset = prepare_sft_dataset(
+                    raw_dataset=raw_dataset,
+                    tokenizer=tokenizer,
+                    trainer_sequence_length=trainer.sequence_length,
+                    debug_max_samples=debug_max_samples,
+                    num_proc=data.dataset.dataset_processing_num_proc_per_process,
+                )
+            else:
+                # For pretraining, use existing CLM processing
+                train_dataset = clm_process(
+                    raw_dataset=raw_dataset,
+                    tokenizer=tokenizer,
+                    text_column_name=data.dataset.text_column_name,
+                    dataset_processing_num_proc_per_process=data.dataset.dataset_processing_num_proc_per_process,
+                    dataset_overwrite_cache=data.dataset.dataset_overwrite_cache,
+                    sequence_length=trainer.sequence_length,
+                )
 
             # We load the processed dataset on the ranks requiring it
             dataloader = get_train_dataloader(
@@ -127,6 +161,8 @@ def get_dataloader_from_data_stage(
                 dataloader_num_workers=data.num_loading_workers,
                 seed_worker=data.seed,
                 dataloader_drop_last=True,
+                use_position_ids=isinstance(trainer.model_config, Qwen2Config),
+                sequence_sep_tokens=sequence_sep_tokens,  # Used to generate position ids
             )
 
             # Check if we have enough samples for train_steps
@@ -141,20 +177,16 @@ def get_dataloader_from_data_stage(
 
     # Case 3: Nanosets
     elif isinstance(data.dataset, NanosetDatasetsArgs):
-        # Get tokenizer cardinality
-        tokenizer = AutoTokenizer.from_pretrained(trainer.config.tokenizer.tokenizer_name_or_path)
-        token_size = 4 if len(tokenizer) > np.iinfo(np.uint16).max + 1 else 2
-        del tokenizer
         # Create Nanoset
         from nanotron.data.nanoset import Nanoset
 
         with main_rank_first(trainer.parallel_context.world_pg):
             train_dataset = Nanoset(
                 dataset_folders=data.dataset.dataset_folder,
-                dataset_weights=data.dataset.dataset_weights,
                 sequence_length=trainer.sequence_length,
-                token_size=token_size,
+                token_size=data.dataset.token_size_in_bytes,
                 train_split_num_samples=trainer.config.tokens.train_steps * trainer.global_batch_size,
+                dataset_weights=data.dataset.dataset_weights,
                 random_seed=data.seed,
             )
 
@@ -169,6 +201,7 @@ def get_dataloader_from_data_stage(
             consumed_train_samples=consumed_train_samples,
             dataloader_num_workers=data.num_loading_workers,
             dataloader_drop_last=True,
+            use_position_ids=isinstance(trainer.model_config, Qwen2Config),
         )
 
         return train_dataloader
@@ -181,20 +214,25 @@ def get_dataloader_from_data_stage(
 def get_dataloader(trainer: DistributedTrainer) -> Dict[str, DataLoader]:
     dataloaders = {}
 
+    # Print training plan
+    log_rank("Training plan", logger=logger, level=logging.INFO, rank=0, is_separator=True)
+    stages_info = "".join(
+        f"[Stage {stage.name}] start from step {stage.start_training_step} \n" for stage in trainer.config.data_stages
+    )
+    full_log_message = f"There are {len(trainer.config.data_stages)} training stages \n{stages_info}"
+    log_rank(full_log_message, logger=logger, level=logging.INFO, rank=0)
+
     for stage_idx, stage in enumerate(trainer.config.data_stages):
         # NOTE: we only create the dataloader for the first stage,
         # then we lazy initialize the dataloader for the other stages
         stage = cast(DatasetStageArgs, stage)
         consumed_train_samples = get_consumed_train_samples_of_a_data_stage_from_ckp(stage, trainer.metadata)
-        assert (
-            consumed_train_samples is not None
-        ), f"Cannot find consumed_train_samples for stage {stage.start_training_step} in the checkpoint"
 
         num_remaining_train_steps = compute_remain_train_steps_of_a_data_stage_from_ckp(
             stage, trainer.config, trainer.metadata
         )
         log_rank(
-            f"[Training Plan] Stage {stage.name} has {num_remaining_train_steps} remaining training steps and has consumed {consumed_train_samples} samples",
+            f"Stage {stage.name} has {num_remaining_train_steps} remaining training steps and has consumed {consumed_train_samples} samples",
             logger=logger,
             level=logging.INFO,
             rank=0,
