@@ -321,7 +321,7 @@ class LRSchedulerArgs:
     lr_decay_style: linear, cosine or 1-sqrt
     min_decay_lr: minimum learning rate after decay
     lr_decay_steps: optional number of steps to decay the learning rate otherwise will default to train_steps - lr_warmup_steps
-    lr_decay_starting_step: optional number of steps to decay the learning rate otherwise will default to train_steps - lr_warmup_steps
+    lr_decay_starting_step: optional number of steps to decay the learning rate otherwise will default to lr_warmup_steps
     """
 
     learning_rate: float
