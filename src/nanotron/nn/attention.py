@@ -1,8 +1,8 @@
+from functools import lru_cache
 from typing import Literal, Optional, Tuple
 
 import torch
 from packaging import version
-from transformers.integrations.flash_attention import flash_attention_forward
 from transformers.integrations.sdpa_attention import sdpa_attention_forward
 
 from nanotron.nn.ring_attention import ring_flash_attn_varlen_func
@@ -16,6 +16,7 @@ def get_ring_flash_attn_cuda():
     return ring_flash_attn_cuda
 
 
+@lru_cache()
 def is_torch_flex_attn_available():
     # TODO check if some bugs cause push backs on the exact version
     # NOTE: We require torch>=2.5.0 as it is the first release
@@ -25,6 +26,19 @@ def is_torch_flex_attn_available():
 if is_torch_flex_attn_available():
     from torch.nn.attention.flex_attention import create_block_mask, flex_attention
 
+
+@lru_cache()
+def is_flash_attn_greater_or_equal_2_10():
+    try:
+        import flash_attn
+
+        return version.parse(flash_attn.__version__) >= version.parse("2.1.0")
+    except ImportError:
+        return False
+
+
+if is_flash_attn_greater_or_equal_2_10():
+    from transformers.integrations.flash_attention import _flash_attention_forward
 
 # adapted from transformers.integrations.flex_attention.flex_attention_forward
 def flex_attention_forward(
@@ -190,6 +204,37 @@ def flex_attention_forward(
     attn_output = attn_output.transpose(1, 2).contiguous()
 
     return attn_output, attention_weights
+
+
+def flash_attention_forward(
+    module: torch.nn.Module,
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    attention_mask: Optional[torch.Tensor],
+    dropout: float = 0.0,
+    scaling: Optional[float] = None,
+    sliding_window: Optional[int] = None,
+    softcap: Optional[float] = None,
+    max_seqlen: Optional[int] = None,
+    **kwargs,
+) -> Tuple[torch.Tensor, None]:
+    if attention_mask is None:
+        is_causal = True
+    attn_output = _flash_attention_forward(
+        query,
+        key,
+        value,
+        attention_mask,
+        query_length=max_seqlen,
+        is_causal=is_causal,
+        dropout=dropout,
+        softmax_scale=scaling,
+        sliding_window=sliding_window,
+        softcap=softcap,
+        **kwargs,
+    )
+    return attn_output, None
 
 
 ALL_ATTENTION_FUNCTIONS = {
