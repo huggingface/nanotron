@@ -234,6 +234,8 @@ def flash_attention_forward(
         softcap=softcap,
         **kwargs,
     )
+    # Transpose output to match expected format [batch_size, seq_len, num_heads, head_dim]
+    attn_output = attn_output.transpose(1, 2).contiguous()
     return attn_output, None
 
 

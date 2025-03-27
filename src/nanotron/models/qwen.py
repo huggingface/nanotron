@@ -132,7 +132,6 @@ class CoreAttention(nn.Module):
         )[
             0
         ]  # Return only the first element (attention output)
-        # attn_output = attn_output.view(-1, seq_length, self.local_num_heads, self.head_dim).transpose(1, 2) # [b, num_heads, seq_length, head_dim]
         return attn_output.view(
             -1, self.local_num_heads * self.head_dim
         )  # [b*s, num_heads, head_dim] -> [b*s, num_heads*head_dim]
