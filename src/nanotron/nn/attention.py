@@ -3,7 +3,6 @@ from typing import Literal, Optional, Tuple
 
 import torch
 from packaging import version
-from transformers.integrations.sdpa_attention import sdpa_attention_forward
 
 from nanotron.nn.ring_attention import ring_flash_attn_varlen_func
 
@@ -221,6 +220,8 @@ def flash_attention_forward(
 ) -> Tuple[torch.Tensor, None]:
     if attention_mask is None:
         is_causal = True
+    else:
+        is_causal = False
     attn_output = _flash_attention_forward(
         query,
         key,
@@ -236,6 +237,35 @@ def flash_attention_forward(
     )
     # Transpose output to match expected format [batch_size, seq_len, num_heads, head_dim]
     attn_output = attn_output.transpose(1, 2).contiguous()
+    return attn_output, None
+
+
+def sdpa_attention_forward(
+    module: torch.nn.Module,
+    query: torch.Tensor,  # [b, num_heads, seq_len, head_dim]
+    key: torch.Tensor,  # [b, num_kv_heads, seq_len, head_dim]
+    value: torch.Tensor,  # [b, num_kv_heads, seq_len, head_dim]
+    attention_mask: Optional[torch.Tensor],  # [b, num_heads, seq_len, seq_len]
+    dropout: float = 0.0,
+    scaling: Optional[float] = None,
+    **kwargs,
+) -> Tuple[torch.Tensor, None]:
+    if attention_mask is None:
+        is_causal = True
+    else:
+        is_causal = False
+    attn_output = torch.nn.functional.scaled_dot_product_attention(
+        query,
+        key,
+        value,
+        attn_mask=attention_mask,
+        dropout_p=dropout,
+        scale=scaling,
+        is_causal=is_causal,
+        enable_gqa=query.shape[1] != key.shape[1],
+    )
+    attn_output = attn_output.transpose(1, 2).contiguous()  # [batch_size, seq_len, num_heads, head_dim]
+
     return attn_output, None
 
 
