@@ -25,8 +25,9 @@ class RotaryEmbedding(nn.Module):
             1.0 / (base ** (torch.arange(0, dim, 2, device="cuda", dtype=torch.float) / dim)),
             persistent=False,
         )
-        self.cos_values = None  # cos cache
-        self.sin_values = None  # sin cache
+        # These are caches that are recomputed during inference
+        self.register_buffer("cos_values", None, persistent=False)
+        self.register_buffer("sin_values", None, persistent=False)
 
         assert self.freqs_cis.device.type == "cuda"
 
