@@ -1,7 +1,6 @@
 import torch
+from flash_attn.layers.rotary import apply_rotary_emb as flash_apply_rotary_emb
 from torch import nn
-
-# from flash_attn.layers.rotary import RotaryEmbedding as FlashRotaryEmbedding
 
 
 class RotaryEmbedding(nn.Module):
@@ -12,19 +11,23 @@ class RotaryEmbedding(nn.Module):
         base: float = 10000.0,
         interleaved: bool = False,
         seq_len_scaling_factor: float = None,
+        fused: bool = False,
     ):
         super().__init__()
         self.dim = dim
         self.max_seq_len = max_seq_len  # we set it as max_position_embeddings in init. but we ignore it of we provide `seq_length` in forward
         self.interleaved = interleaved
         self.seq_len_scaling_factor = seq_len_scaling_factor
-
+        self.fused = fused
         # Generate inverse frequency buffer directly in the constructor
         self.register_buffer(
             "freqs_cis",
             1.0 / (base ** (torch.arange(0, dim, 2, device="cuda", dtype=torch.float) / dim)),
             persistent=False,
         )
+        # These are caches that are recomputed during inference
+        self.register_buffer("cos_values", None, persistent=False)
+        self.register_buffer("sin_values", None, persistent=False)
 
         assert self.freqs_cis.device.type == "cuda"
 
@@ -64,15 +67,18 @@ class RotaryEmbedding(nn.Module):
         position_freqs = torch.outer(positions, self.freqs_cis)  # [seq_length, dim/2]
 
         # Organize embeddings based on interleaving strategy
-        if not self.interleaved:
-            embeddings = torch.cat((position_freqs, position_freqs), dim=-1)  # [b*s, dim] or [seq_length, dim]
+        if self.fused:
+            embeddings = position_freqs  # [b*s, dim/2] or [seq_length, dim/2]
         else:
-            embeddings = torch.stack(
-                (position_freqs.view(-1, 1), position_freqs.view(-1, 1)), dim=-1
-            )  # [b*s*dim, 2] or [seq_length*dim, 2]
-            embeddings = embeddings.view(position_freqs.shape[0], -1)  # [b*s, dim] or [seq_length, dim]
+            if not self.interleaved:
+                embeddings = torch.cat((position_freqs, position_freqs), dim=-1)  # [b*s, dim] or [seq_length, dim]
+            else:
+                embeddings = torch.stack(
+                    (position_freqs.view(-1, 1), position_freqs.view(-1, 1)), dim=-1
+                )  # [b*s*dim, 2] or [seq_length*dim, 2]
+                embeddings = embeddings.view(position_freqs.shape[0], -1)  # [b*s, dim] or [seq_length, dim]
 
-        return embeddings  # [b*s, dim] or [seq_length, dim]
+        return embeddings  # [b*s, dim] or [seq_length, dim] or [b*s, dim/2] or [seq_length, dim/2]
 
     def rotate_half(self, x):
         """Rotates half the hidden dimensions of the input tensor."""
@@ -85,11 +91,11 @@ class RotaryEmbedding(nn.Module):
             second_half = x[..., x.shape[-1] // 2 :]
             return torch.cat((-second_half, first_half), dim=-1)
 
-    def apply_rotary_pos_emb(self, tensor, freqs, multi_latent_attention=False, mscale=1.0):
+    def apply_rotary_pos_emb(self, tensor, freqs, multi_latent_attention=False, mscale=1.0, seq_length=None):
         """Apply rotary positional embedding to input tensor.
 
         Args:
-            tensor (Tensor): Input tensor of shape [..., dim]
+            tensor (Tensor): Input tensor of shape [..., dim] if not fused, [batch_size*seq_length, nheads, dim] if fused
             freqs (Tensor, optional): Pre-computed position embeddings [..., dim] same or broadcastable to tensor
             multi_latent_attention (bool): Whether to use multi-latent attention
             mscale (float): Scaling factor for rotary embeddings
@@ -100,7 +106,10 @@ class RotaryEmbedding(nn.Module):
         rotary_dim = freqs.shape[-1]
 
         # Split the tensor for rotary embedding application
-        rotary_part, pass_through_part = tensor[..., :rotary_dim], tensor[..., rotary_dim:]
+        if freqs.shape[-1] != rotary_dim:
+            rotary_part, pass_through_part = tensor[..., :rotary_dim], tensor[..., rotary_dim:]
+        else:
+            rotary_part, pass_through_part = tensor, None
 
         # Handle multi-latent attention
         if multi_latent_attention:
@@ -109,13 +118,25 @@ class RotaryEmbedding(nn.Module):
             rotary_part = torch.cat((x1, x2), dim=-1)
 
         # Get cosine and sine components with scaling
-        cos_values = (torch.cos(freqs) * mscale).to(tensor.dtype)
-        sin_values = (torch.sin(freqs) * mscale).to(tensor.dtype)
+        if self.cos_values is None:
+            self.cos_values = (torch.cos(freqs) * mscale).to(tensor.dtype)
+            self.sin_values = (torch.sin(freqs) * mscale).to(tensor.dtype)
 
         # Apply rotary embedding
-        rotated_tensor = (rotary_part * cos_values) + (self.rotate_half(rotary_part) * sin_values)
+        if self.fused:
+            rotary_part = rotary_part.view(
+                -1, seq_length, rotary_part.shape[1], rotary_part.shape[2]
+            )  # [b, s, nheads, dim/2]
+            rotated_tensor = flash_apply_rotary_emb(
+                rotary_part, self.cos_values, self.sin_values, interleaved=self.interleaved, inplace=True
+            )
+            # TODO @nouamane: support cu_seqlens from position_ids
+        else:
+            rotated_tensor = (rotary_part * self.cos_values.unsqueeze(1)) + (
+                self.rotate_half(rotary_part) * self.sin_values.unsqueeze(1)
+            )
 
         # Concatenate with the pass-through part (if any)
-        if pass_through_part.shape[-1] > 0:
+        if pass_through_part is not None and pass_through_part.shape[-1] > 0:
             return torch.cat((rotated_tensor, pass_through_part), dim=-1)
         return rotated_tensor

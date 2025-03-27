@@ -1,5 +1,5 @@
 checkpoints:
-  checkpoint_interval: 10
+  checkpoint_interval: 100000
   checkpoints_path: checkpoints
   checkpoints_path_is_shared_file_system: false
   load_lr_scheduler: true
@@ -40,7 +40,7 @@ model:
     std: 0.025
   make_vocab_size_divisible_by: 1
   model_config:
-    _attn_implementation: flash_attention_2
+    _attn_implementation: sdpa
     attention_bias: false
     bos_token_id: 1
     eos_token_id: 2
@@ -66,6 +66,8 @@ model:
     vocab_size: 49152
     z_loss_coefficient: 0.0001
     z_loss_enabled: false
+    _fused_rotary_emb: true
+    _fused_rms_norm: true
 optimizer:
   accumulate_grad_in_fp32: true
   clip_grad: 1.0
