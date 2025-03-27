@@ -58,6 +58,7 @@ class Nanoset(torch.utils.data.Dataset):
                     recursive=False,
                     token_size=self.token_size,
                     shuffle=True,
+                    return_positions=True,
                 )
             )
 

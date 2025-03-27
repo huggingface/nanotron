@@ -151,6 +151,14 @@ class DataCollatorForCLMWithPositionIds:
                 "label_mask": TensorPointer(group_rank=self.output_pp_rank),
             }
 
+        # debug
+        assert (
+            examples[0]["input_ids"].shape[0] == self.sequence_length + 1
+        ), f"Input ids should be of length {self.sequence_length + 1}, but got {examples[0]['input_ids'].shape}"
+        assert (
+            examples[0]["positions"].shape[0] == self.sequence_length + 1
+        ), f"Positions should be of length {self.sequence_length + 1}, but got {examples[0]['positions'].shape}"
+
         # Stack input_ids
         input_ids = np.vstack([examples[i]["input_ids"] for i in range(len(examples))])  # (b, s)
         batch_size, expanded_input_length = input_ids.shape

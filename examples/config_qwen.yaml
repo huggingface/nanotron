@@ -58,7 +58,6 @@ model:
     pad_token_id: null
     pretraining_tp: 1
     rms_norm_eps: 1.0e-05
-    rope_interleaved: false
     rope_scaling: null
     rope_theta: 10000.0
     sliding_window_size: 20
