@@ -191,8 +191,10 @@ class Qwen2Attention(nn.Module):
             base=config.rope_theta,
             interleaved=config.rope_interleaved,
             seq_len_scaling_factor=None,
+            fused=config._fused_rotary_emb,
         )
         self.attention = CoreAttention(config, tp_pg, cp_pg, layer_idx)
+        self.simple_causal_mask = True
 
         # TODO: support doc masking / SWA / SFT / inference
 
@@ -214,14 +216,19 @@ class Qwen2Attention(nn.Module):
             [self.local_q_size, self.local_kv_size, self.local_kv_size], dim=-1
         )  # [batch_size*seq_length, q_size], [batch_size*seq_length, kv_size]
 
-        rotary_pos_emb = self.rotary_emb(position_ids=position_ids)  # [b*s, dim] or [seq_length, dim]
-        rotary_pos_emb = rotary_pos_emb.unsqueeze(1)  # [b*s, 1, dim] or [seq_length, 1, dim]
+        rotary_pos_emb = self.rotary_emb(
+            position_ids=position_ids if not self.simple_causal_mask else None, seq_length=seq_length
+        )  # [b*s, dim] or [seq_length, dim]
 
         q = q.view(-1, self.local_num_heads, self.head_dim)  # [b*s, num_heads, head_dim]
         k = k.view(-1, self.local_num_kv_heads, self.head_dim)  # [b*s, num_kv_heads, head_dim]
         v = v.view(-1, self.local_num_kv_heads, self.head_dim)  # [b*s, num_kv_heads, head_dim]
-        q = self.rotary_emb.apply_rotary_pos_emb(q, rotary_pos_emb)  # [b*s, num_heads, head_dim]
-        k = self.rotary_emb.apply_rotary_pos_emb(k, rotary_pos_emb)  # [b*s, num_kv_heads, head_dim]
+        q = self.rotary_emb.apply_rotary_pos_emb(
+            q, rotary_pos_emb, seq_length=seq_length
+        )  # [b*s, num_heads, head_dim]
+        k = self.rotary_emb.apply_rotary_pos_emb(
+            k, rotary_pos_emb, seq_length=seq_length
+        )  # [b*s, num_kv_heads, head_dim]
 
         attn_output = self.attention(q, k, v, position_ids=position_ids, seq_length=seq_length)
         output = self.o_proj(attn_output)

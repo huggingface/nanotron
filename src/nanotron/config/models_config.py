@@ -5,7 +5,7 @@ from typing import Any, List, Optional, Union
 from nanotron.nn.attention import ALL_ATTENTION_FUNCTIONS, AttentionImplementation
 
 # The default attention implementation to use
-DEFAULT_ATTENTION_IMPLEMENTATION = "sdpa"
+DEFAULT_ATTENTION_IMPLEMENTATION = "flash_attention_2"
 
 
 @dataclass
@@ -140,6 +140,7 @@ class Qwen2Config:
     sliding_window_size: Optional[int] = None
     z_loss_enabled: bool = False  # Z-loss regularization https://www.jmlr.org/papers/volume24/22-1144/22-1144.pdf
     z_loss_coefficient: float = 0.0001  # Default from the paper (10^-4)
+    _fused_rotary_emb: bool = True
 
     # MoE configuration
     moe_config: Optional[MoEConfig] = None
