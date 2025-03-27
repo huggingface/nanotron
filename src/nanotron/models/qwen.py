@@ -57,6 +57,7 @@ class CoreAttention(nn.Module):
         self._attn_implementation = config._attn_implementation
         self.cp_pg = cp_pg
         self.sliding_window_size = config.sliding_window_size
+        self.simple_causal_mask = True  # Use simple causal mask instead of computing custom attention mask if not document masking / sliding window
 
     def forward(
         self,
@@ -95,7 +96,10 @@ class CoreAttention(nn.Module):
             value_states = value_states.view(-1, seq_length, self.local_num_kv_heads, self.head_dim).transpose(1, 2)
 
             # Process attention mask based on implementation
-            if attention_mask is None and position_ids is not None:
+            if self.simple_causal_mask:
+                assert attention_mask is None, "Simple causal mask is not supported with custom attention mask"
+                assert self.sliding_window_size is None, "Simple causal mask is not supported with sliding window"
+            elif attention_mask is None and position_ids is not None:
                 # Determine if we need to create an attention mask from position_ids
                 if self._attn_implementation == "flex_attention" and self.sliding_window_size is not None:
                     # For FlexAttention with sliding window, we don't need an explicit mask
