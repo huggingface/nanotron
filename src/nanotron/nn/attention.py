@@ -79,6 +79,15 @@ def flex_attention_forward(
         create_attention_mask,
         get_attention_mod_from_type,
         get_block_mask_from_type,
+        validate_attention_args,
+    )
+
+    # Validate arguments if a flex_attention_mask is specified
+    validate_attention_args(
+        flex_attention_mask=flex_attention_mask,
+        sliding_window=sliding_window,
+        position_ids=position_ids,
+        document_ids=document_ids,
     )
 
     # We're setting score_mod to None as requested
