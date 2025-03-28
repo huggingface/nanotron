@@ -5,6 +5,7 @@ from typing import Callable, Optional, Tuple
 
 import torch
 from torch.nn.attention.flex_attention import create_block_mask
+import functools
 
 
 def create_softcapped_causal_score_mod(
@@ -132,11 +133,97 @@ def create_attention_mask(
     )
 
 
+@functools.lru_cache(maxsize=32)
+def create_block_mask_cached(mask_func, B, H, Q_LEN, KV_LEN, device="cuda"):
+    """Cached version of create_block_mask for better performance."""
+    block_mask = create_block_mask(mask_func, B, H, Q_LEN, KV_LEN, device=device)
+    return block_mask
+
+
+def _offsets_to_doc_ids_tensor(offsets):
+    """Converts offsets to document IDs tensor.
+    
+    Args:
+        offsets: Tensor of shape [num_docs + 1] containing cumulative token counts
+        
+    Returns:
+        Tensor of document IDs for each token position
+    """
+    device = offsets.device
+    counts = offsets[1:] - offsets[:-1]
+    return torch.repeat_interleave(
+        torch.arange(len(counts), device=device, dtype=torch.int32), counts
+    )
+
+
+def lengths_to_offsets(lengths, device):
+    """Converts a list of document lengths to offsets.
+    
+    Args:
+        lengths: List or tensor of document lengths
+        device: Device for the resulting tensor
+        
+    Returns:
+        Tensor of cumulative offsets
+    """
+    if not isinstance(lengths, torch.Tensor):
+        offsets = [0]
+        offsets.extend(lengths)
+        offsets = torch.tensor(offsets, device=device, dtype=torch.int32)
+    else:
+        offsets = torch.cat([torch.zeros(1, device=device, dtype=torch.int32), lengths])
+    
+    offsets = torch.cumsum(offsets, dim=-1)
+    return offsets
+
+
+def generate_doc_mask_mod(inner_mask_func, offsets):
+    """Generates a document-aware mask function.
+    
+    Args:
+        inner_mask_func: Base mask function to apply within each document
+        offsets: Tensor of shape [num_docs + 1] containing cumulative token counts
+        
+    Returns:
+        Document-aware mask function
+    """
+    document_ids = _offsets_to_doc_ids_tensor(offsets)
+    
+    def doc_mask_mod(b, h, q_idx, kv_idx):
+        # Only attend within the same document
+        same_doc = document_ids[q_idx] == document_ids[kv_idx]
+        
+        # Convert to document-local indices
+        q_local_idx = q_idx - offsets[document_ids[q_idx]]
+        kv_local_idx = kv_idx - offsets[document_ids[kv_idx]]
+        
+        # Apply the inner mask function using document-local indices
+        inner_mask = inner_mask_func(b, h, q_local_idx, kv_local_idx)
+        
+        return same_doc & inner_mask
+    
+    return doc_mask_mod
+
+
+def causal_mask_func(b, h, q_idx, kv_idx):
+    """Simple causal masking function."""
+    return q_idx >= kv_idx
+
+
+def sliding_window_causal_mask_func(window_size, b, h, q_idx, kv_idx):
+    """Sliding window causal masking function."""
+    causal = q_idx >= kv_idx
+    window = q_idx - kv_idx <= window_size
+    return causal & window
+
+
 def get_block_mask_from_type(
     flex_attention_mask: Optional[str],
     query: torch.Tensor,
     key: torch.Tensor,
     sliding_window: Optional[int] = None,
+    position_ids: Optional[torch.Tensor] = None,
+    document_ids: Optional[torch.Tensor] = None,
 ) -> Optional[torch.Tensor]:
     """Get a specific block mask based on mask type.
     
@@ -145,6 +232,8 @@ def get_block_mask_from_type(
         query: Query states tensor [batch_size, num_heads, seq_len, head_dim]
         key: Key states tensor [batch_size, num_kv_heads, seq_len, head_dim]
         sliding_window: Optional sliding window size
+        position_ids: Optional tensor of position IDs for document masking
+        document_ids: Optional explicit document IDs tensor
         
     Returns:
         Block mask tensor or None
@@ -153,48 +242,78 @@ def get_block_mask_from_type(
         return None
         
     seq_len = query.size(2)
+    device = query.device
     
     if flex_attention_mask == "causal":
-        # Simple causal mask
-        def causal_mask_func(b: int, h: int, q_idx: int, kv_idx: int) -> bool:
-            return q_idx >= kv_idx
+        # Simple causal mask - flex_attention handles this efficiently by default
+        return None
+        
+    elif flex_attention_mask == "sliding_window":
+        if sliding_window is None:
+            return None
             
-        return create_block_mask(
-            causal_mask_func,
+        # Use partial to bind the window size parameter
+        mask_func = functools.partial(sliding_window_causal_mask_func, sliding_window)
+        
+        return create_block_mask_cached(
+            mask_func,
             B=None,
             H=None,
             Q_LEN=seq_len,
             KV_LEN=seq_len,
+            device=device,
         )
         
-    elif flex_attention_mask == "sliding_window_causal" and sliding_window is not None:
-        # Sliding window causal mask
-        def sliding_window_mask_func(b: int, h: int, q_idx: int, kv_idx: int) -> bool:
-            causal = q_idx >= kv_idx
-            window = q_idx - kv_idx <= sliding_window
-            return causal and window
+    elif flex_attention_mask == "document":
+        # Handle document masking
+        if document_ids is not None:
+            # If explicit document_ids are provided, convert to offsets format
+            unique_docs = torch.unique(document_ids, sorted=True)
+            offsets = []
+            current_offset = 0
             
-        return create_block_mask(
-            sliding_window_mask_func,
-            B=None,
+            offsets.append(current_offset)
+            for doc_id in unique_docs:
+                doc_length = (document_ids == doc_id).sum().item()
+                current_offset += doc_length
+                offsets.append(current_offset)
+                
+            offsets = torch.tensor(offsets, device=device, dtype=torch.int32)
+            
+        elif position_ids is not None:
+            # If position_ids are provided (where 0s indicate document starts)
+            if position_ids.dim() == 2:
+                position_ids = position_ids.view(-1)
+                
+            # Find document boundaries (positions where position_id is 0)
+            doc_starts = torch.where(position_ids == 0)[0]
+            
+            # Add the total sequence length as the final boundary
+            doc_ends = torch.cat([doc_starts[1:], torch.tensor([len(position_ids)], device=device)])
+            
+            # Calculate document lengths
+            doc_lengths = doc_ends - doc_starts
+            
+            # Convert to offsets
+            offsets = lengths_to_offsets(doc_lengths, device)
+            
+            # Adjust offsets to account for actual starting positions
+            if doc_starts[0] != 0:
+                offsets = offsets + doc_starts[0]
+        else:
+            # No document information provided
+            return None
+            
+        # Generate document-aware causal mask
+        doc_mask_mod = generate_doc_mask_mod(causal_mask_func, offsets)
+        
+        return create_block_mask_cached(
+            doc_mask_mod,
+            B=None,  # Not needed since we handle batching in the mask function
             H=None,
             Q_LEN=seq_len,
             KV_LEN=seq_len,
-        )
-        
-    elif flex_attention_mask == "local_attention":
-        # Local attention with equal window on both sides (non-causal)
-        window_size = sliding_window if sliding_window is not None else 128
-        
-        def local_attention_mask_func(b: int, h: int, q_idx: int, kv_idx: int) -> bool:
-            return abs(q_idx - kv_idx) <= window_size
-            
-        return create_block_mask(
-            local_attention_mask_func,
-            B=None,
-            H=None,
-            Q_LEN=seq_len,
-            KV_LEN=seq_len,
+            device=device,
         )
     
     return None

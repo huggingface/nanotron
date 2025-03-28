@@ -92,6 +92,8 @@ def flex_attention_forward(
             query=query,
             key=key,
             sliding_window=sliding_window,
+            position_ids=position_ids,
+            document_ids=document_ids,
         )
     else:
         # Use the existing document/sliding window masking logic
