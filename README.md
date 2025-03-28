@@ -47,6 +47,9 @@ pip install -e .
 pip install datasets transformers datatrove[io,processing] numba # wandb
 # Fused kernels
 pip install ninja triton "flash-attn>=2.5.0" --no-build-isolation
+
+# If you want to use pre-commit
+pip install pre-commit
 ```
 > [!NOTE]
 > If you get `undefined symbol: ncclCommRegister` error you should install torch 2.1.2 instead: `pip install torch==2.1.2 --index-url https://download.pytorch.org/whl/cu121`

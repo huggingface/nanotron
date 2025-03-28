@@ -717,6 +717,158 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         return {"hidden_states": output, "sequence_mask": sequence_mask}
 
 
+class MLA(nn.Module):
+    def __init__(
+        self,
+        config: LlamaConfig,
+        parallel_config: Optional[ParallelismArgs],
+        tp_pg: dist.ProcessGroup,
+        layer_idx: int,
+    ):
+        """
+        Implementation of DeepSeek's MLA
+        Section 2.1.1. Multi-Head Latent Attention
+        DeepSeek-V3 Technical Report
+        https://arxiv.org/abs/2412.19437
+        """
+        super().__init__()
+
+        self.dim = config.hidden_size
+        self.n_heads = config.num_attention_heads
+        self.n_local_heads = config.num_attention_heads // tp_pg.size()
+        self.q_lora_rank = config.q_lora_rank
+        self.kv_lora_rank = config.kv_lora_rank
+        self.qk_nope_head_dim = config.qk_nope_head_dim
+        self.qk_rope_head_dim = config.qk_rope_head_dim
+        self.qk_head_dim = config.qk_nope_head_dim + config.qk_rope_head_dim
+        self.v_head_dim = config.v_head_dim
+
+        # tp related
+        tp_mode = parallel_config.tp_mode if parallel_config is not None else TensorParallelLinearMode.ALL_REDUCE
+        self.tp_mode = tp_mode
+        tp_linear_async_communication = (
+            parallel_config.tp_linear_async_communication if parallel_config is not None else False
+        )
+        q_up_contiguous_chunks = (
+            self.n_heads * self.qk_nope_head_dim,  # shape of q_nope
+            self.n_heads * self.qk_rope_head_dim,  # shape of q_rope
+        )
+        kv_up_contiguous_chunks = (
+            self.n_heads * self.qk_nope_head_dim,  # shape of k_nope
+            self.n_heads * self.v_head_dim,  # shape of v
+        )
+
+        assert (
+            self.n_heads % tp_pg.size() == 0
+        ), f"Number of attention heads ({self.n_heads}) must be divisible by TP size ({tp_pg.size()})."
+        assert (
+            self.q_lora_rank < self.n_heads * self.qk_head_dim
+        ), f"q_lora_rank ({self.q_lora_rank}) must be less than the product of the number of attention heads ({self.n_heads}) and the number of query/key head dimensions ({self.qk_head_dim})."
+        assert tp_mode == TensorParallelLinearMode.ALL_REDUCE, "MLA only supports all-reduce TP mode for now"
+        # TODO: support different head dimensions for query/key and value
+        assert (
+            self.qk_head_dim == self.v_head_dim
+        ), f"MLA only supports equal query/key and value head dimensions for now, we have qk_head_dim = {self.qk_head_dim} and v_head_dim = {self.v_head_dim}"
+
+        # Initialize rotary embedding
+        self.rotary_embedding = RotaryEmbedding(
+            dim=self.qk_rope_head_dim, end=config.max_position_embeddings, theta=config.rope_theta
+        )
+
+        # Initialize linear layers
+        # Warning: this is duplicated across GPUs
+        self.q_down = nn.Linear(self.dim, self.q_lora_rank, bias=False)
+        self.q_norm = TritonRMSNorm(self.q_lora_rank, eps=config.rms_norm_eps)
+        self.q_up = TensorParallelColumnLinear(
+            self.q_lora_rank,
+            self.n_heads * self.qk_head_dim,
+            pg=tp_pg,
+            mode=tp_mode,
+            bias=False,
+            async_communication=tp_linear_async_communication,
+            contiguous_chunks=q_up_contiguous_chunks,
+            tp_recompute_allgather=parallel_config.tp_recompute_allgather,
+        )
+
+        self.kv_down = nn.Linear(
+            self.dim, self.kv_lora_rank + self.qk_rope_head_dim, bias=False
+        )  # Note: this is duplicated across GPUs
+        self.kv_norm = TritonRMSNorm(self.kv_lora_rank, eps=config.rms_norm_eps)
+        self.kv_up = TensorParallelColumnLinear(
+            self.kv_lora_rank,
+            self.n_heads * (self.qk_nope_head_dim + self.v_head_dim),
+            pg=tp_pg,
+            mode=tp_mode,
+            bias=False,
+            async_communication=tp_linear_async_communication,
+            contiguous_chunks=kv_up_contiguous_chunks,
+            tp_recompute_allgather=parallel_config.tp_recompute_allgather,
+        )
+
+        self.attention = CoreAttention(
+            config,
+            parallel_config=parallel_config,
+            layer_idx=layer_idx,
+        )
+
+        self.o_proj = TensorParallelRowLinear(
+            self.n_heads * self.v_head_dim,
+            self.dim,
+            pg=tp_pg,
+            mode=tp_mode,
+            bias=False,
+            async_communication=tp_linear_async_communication,
+        )
+
+    def forward(
+        self,
+        hidden_states,  # [seq_length, batch_size, hidden_size]
+        sequence_mask,  # [batch_size, seq_length]
+    ):
+        seq_len, batch_size, _ = hidden_states.shape
+        hidden_states = hidden_states.transpose(0, 1).contiguous()  # [batch_size, seq_len, hidden_size]
+
+        q = self.q_up(self.q_norm(self.q_down(hidden_states)))
+        q = q.view(batch_size, seq_len, self.n_local_heads, self.qk_head_dim)
+        q_nope, q_pe = torch.split(
+            q, [self.qk_nope_head_dim, self.qk_rope_head_dim], dim=-1
+        )  # [batch_size, seq_len, n_local_heads, qk_nope_head_dim], [batch_size, seq_len, n_local_heads, qk_rope_head_dim]
+        q_pe = self.rotary_embedding(q_pe, position_ids=None)  # [batch_size, seq_len, n_local_heads, qk_rope_head_dim]
+        q = torch.cat(
+            [q_nope, q_pe.expand(-1, -1, self.n_local_heads, -1)], dim=-1
+        )  # [batch_size, seq_len, n_heads, qk_head_dim]
+
+        kv = self.kv_down(hidden_states)  # [batch_size, seq_len, qk_rope_head_dim + kv_lora_rank]
+        kv, k_pe = torch.split(
+            kv, [self.kv_lora_rank, self.qk_rope_head_dim], dim=-1
+        )  # [batch_size, seq_len, kv_lora_rank], [batch_size, seq_len, qk_rope_head_dim]
+        k_pe = self.rotary_embedding(
+            k_pe.unsqueeze(2), position_ids=None
+        ).contiguous()  # [batch_size, seq_len, 1, qk_rope_head_dim]
+        kv = self.kv_up(self.kv_norm(kv))  # [batch_size, seq_len, n_local_heads * (qk_nope_head_dim + v_head_dim)]
+        kv = kv.view(batch_size, seq_len, self.n_local_heads, self.qk_nope_head_dim + self.v_head_dim)
+        k_nope, v = torch.split(
+            kv, [self.qk_nope_head_dim, self.v_head_dim], dim=-1
+        )  # [batch_size, seq_len, n_local_heads, qk_nope_head_dim], [batch_size, seq_len, n_local_heads, v_head_dim]
+        k = torch.cat(
+            [k_nope, k_pe.expand(-1, -1, self.n_local_heads, -1)], dim=-1
+        )  # [batch_size, seq_len, n_heads, qk_head_dim]
+
+        q = q.view(batch_size * seq_len, self.n_local_heads, self.qk_head_dim)
+        k = k.view(batch_size * seq_len, self.n_local_heads, self.qk_head_dim)
+        v = v.view(batch_size * seq_len, self.n_local_heads, self.v_head_dim)
+
+        output = self.attention(q, k, v, sequence_mask, sequence_mask)
+
+        output = (
+            output.view(batch_size, seq_len, self.n_local_heads * self.v_head_dim).transpose(0, 1).contiguous()
+        )  # [seq_len, batch_size, n_heads, v_head_dim]
+
+        output = self.o_proj(output)
+
+        return {"hidden_states": output, "sequence_mask": sequence_mask}
+
+
 class LlamaDecoderLayer(nn.Module):
     def __init__(
         self,
@@ -726,8 +878,9 @@ class LlamaDecoderLayer(nn.Module):
         layer_idx: int,
     ):
         super().__init__()
+        attn_cls = MLA if config.use_mla else CausalSelfAttention
         self.input_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.attn = CausalSelfAttention(
+        self.attn = attn_cls(
             config=config,
             parallel_config=parallel_config,
             tp_pg=tp_pg,
