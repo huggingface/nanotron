@@ -209,7 +209,7 @@ class CheckpointsArgs:
     checkpoints_path: Path
     checkpoint_interval: int
     save_initial_state: Optional[bool] = False
-    save_final_state: Optional[bool] = False
+    save_final_state: Optional[bool] = True
     resume_checkpoint_path: Optional[xPath] = None
     load_lr_scheduler: Optional[bool] = True
     load_optimizer: Optional[bool] = True
