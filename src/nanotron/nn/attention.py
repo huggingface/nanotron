@@ -50,6 +50,7 @@ def flex_attention_forward(
     softcap: Optional[float] = None,
     position_ids: Optional[torch.Tensor] = None,
     document_ids: Optional[torch.Tensor] = None,
+    flex_attention_mask: Optional[str] = None,
     **kwargs,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
@@ -67,7 +68,8 @@ def flex_attention_forward(
         position_ids: Optional tensor of position IDs used for document masking
         document_ids: Optional tensor explicitly marking document boundaries [seq_len]
                      (e.g., [0,0,0,1,1,2,2,2,2,2,2] for seqs of length 3,2,6)
-
+        flex_attention_mask: Optional string specifying a custom mask type
+        
     Returns:
         Tuple of (attention_output, attention_weights)
     """
@@ -75,19 +77,33 @@ def flex_attention_forward(
         create_softcapped_causal_score_mod,
         create_document_mask_func,
         create_attention_mask,
+        get_attention_mod_from_type,
+        get_block_mask_from_type,
     )
 
-    # Handle causal mask with softcapping
-    causal_mask = attention_mask
-    if causal_mask is not None:
-        causal_mask = causal_mask[:, :, :, : key.shape[-2]]
-    score_mod = create_softcapped_causal_score_mod(softcap, causal_mask)
+    # We're setting score_mod to None as requested
+    score_mod = None
 
-    # Create document masking function if needed
-    doc_mask_func = create_document_mask_func(query, document_ids, position_ids)
+    # Determine which block mask to use
+    if flex_attention_mask is not None:
+        # Use the mask type specified by flex_attention_mask
+        block_mask = get_block_mask_from_type(
+            flex_attention_mask=flex_attention_mask,
+            query=query,
+            key=key,
+            sliding_window=sliding_window,
+        )
+    else:
+        # Use the existing document/sliding window masking logic
+        causal_mask = attention_mask
+        if causal_mask is not None:
+            causal_mask = causal_mask[:, :, :, : key.shape[-2]]
+            
+        # Create document masking function if needed
+        doc_mask_func = create_document_mask_func(query, document_ids, position_ids)
 
-    # Create combined attention mask
-    block_mask = create_attention_mask(query, sliding_window, doc_mask_func)
+        # Create combined attention mask
+        block_mask = create_attention_mask(query, sliding_window, doc_mask_func)
 
     # Call PyTorch's flex_attention with the appropriate parameters
     attn_output, attention_weights = flex_attention(
@@ -96,7 +112,7 @@ def flex_attention_forward(
         value,
         enable_gqa=True,  # Enable grouped query attention
         score_mod=score_mod,
-        block_mask=block_mask,  # Efficient for both sliding window and document masking
+        block_mask=block_mask,  # Efficient mask based on type
         scale=scaling,
         return_lse=True,  # FlexAttention always computes log-sum-exp anyway
     )
