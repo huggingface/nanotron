@@ -137,6 +137,7 @@ class Qwen2Config:
     vocab_size: int = 32000
     _attn_implementation: Optional[AttentionImplementation] = DEFAULT_ATTENTION_IMPLEMENTATION
     flex_attention_mask: Optional[str] = None
+    intra_doc_attention: bool = False
     attention_bias: bool = False
     sliding_window_size: Optional[int] = None
     z_loss_enabled: bool = False  # Z-loss regularization https://www.jmlr.org/papers/volume24/22-1144/22-1144.pdf
@@ -179,6 +180,8 @@ class Qwen2Config:
                 "document",
                 "sliding_window_document"
                 ], "Flex attention mask must be one of ['sliding_window', 'document', 'sliding_window_document']"
+        if self.intra_doc_attention:
+            assert self._attn_implementation == "flash_attention_2", "Intra document attention is only supported for flash attention 2"
     @property
     def is_using_mup(self) -> bool:
         return self._is_using_mup

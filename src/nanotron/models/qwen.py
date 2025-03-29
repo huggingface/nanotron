@@ -12,7 +12,7 @@ from nanotron.config.models_config import Qwen2Config, RandomInit, SpectralMupIn
 from nanotron.logging import log_rank
 from nanotron.models import NanotronModel
 from nanotron.nn.activations import ACT2FN
-from nanotron.nn.attention import ALL_ATTENTION_FUNCTIONS, get_attention_mask
+from nanotron.nn.attention import ALL_ATTENTION_FUNCTIONS, get_attention_mask, get_intra_doc_attention_mask
 from nanotron.nn.layer_norm import LlamaRMSNorm as RMSNorm
 from nanotron.nn.layer_norm import TritonRMSNorm
 from nanotron.nn.rotary import RotaryEmbedding
@@ -91,22 +91,27 @@ class CoreAttention(nn.Module):
             value_states = value_states.view(-1, self.local_num_kv_heads, self.head_dim)
         else:
             # Process attention mask based on implementation
-            if self.simple_causal_mask:
+            if self.simple_causal_mask and self.config.intra_doc_attention is False:
                 assert attention_mask is None, "Simple causal mask is not supported with custom attention mask"
                 assert self.sliding_window_size is None, "Simple causal mask is not supported with sliding window"
-            elif attention_mask is None and position_ids is not None:
-                # Determine if we need to create an attention mask from position_ids
-                if self._attn_implementation == "flex_attention" and self.sliding_window_size is not None:
-                    # For FlexAttention with sliding window, we don't need an explicit mask
-                    # The mask_mod function will handle it
-                    pass
-                else:
-                    # For other implementations, generate the attention mask if needed
-                    attention_mask, cu_seqlens = get_attention_mask(position_ids, seq_length=seq_length)
+                max_seq_len = seq_length
+                
+            elif self.config.intra_doc_attention:
+                max_seq_len, cu_seqlens = get_intra_doc_attention_mask(position_ids, seq_length=seq_length)
+            
+            # elif attention_mask is None and position_ids is not None:
+            #     # Determine if we need to create an attention mask from position_ids
+            #     if self._attn_implementation == "flex_attention" and self.sliding_window_size is not None:
+            #         # For FlexAttention with sliding window, we don't need an explicit mask
+            #         # The mask_mod function will handle it
+            #         pass
+            #     else:
+            #         # For other implementations, generate the attention mask if needed
+            #         attention_mask, cu_seqlens = get_attention_mask(position_ids, seq_length=seq_length)
 
-                    if attention_mask is not None:
-                        # Add batch and head dimensions for proper broadcasting
-                        attention_mask = attention_mask.unsqueeze(0).unsqueeze(0)  # [1, 1, seq_length, seq_length]
+            #         if attention_mask is not None:
+            #             # Add batch and head dimensions for proper broadcasting
+            #             attention_mask = attention_mask.unsqueeze(0).unsqueeze(0)  # [1, 1, seq_length, seq_length]
 
         attn_output = attention_func(
             self,
@@ -114,12 +119,12 @@ class CoreAttention(nn.Module):
             key_states,  # [b, num_kv_heads, seq_len, head_dim]
             value_states,  # [b, num_kv_heads, seq_len, head_dim]
             attention_mask,  # [b, num_heads, seq_len, seq_len]
-            max_seqlen=seq_length,
             dropout=dropout,
             scaling=None,  # by default, scaling is head_dim**-0.5
             sliding_window=self.sliding_window_size,
             ring_pg=self.cp_pg,
             cu_seqlens=cu_seqlens,
+            max_seqlen=max_seq_len,
             position_ids=position_ids if self._attn_implementation == "flex_attention" else None,
             document_ids=kwargs.get("document_ids", None) if self._attn_implementation == "flex_attention" else None,
             flex_attention_mask=self.flex_attention_mask if self._attn_implementation == "flex_attention" else None,

@@ -37,7 +37,7 @@ def is_flash_attn_greater_or_equal_2_10():
 
 
 if is_flash_attn_greater_or_equal_2_10():
-    from flash_attn.flash_attn_interface import flash_attn_func
+    from flash_attn.flash_attn_interface import flash_attn_func, flash_attn_varlen_func
 # adapted from transformers.integrations.flex_attention.flex_attention_forward
 def flex_attention_forward(
     module: torch.nn.Module,
@@ -144,14 +144,16 @@ def flash_attention_forward(
     value: torch.Tensor,  # [b, num_kv_heads, seq_len, head_dim]
     attention_mask: Optional[torch.Tensor],  # [b, num_heads, seq_len, seq_len]
     max_seqlen: Optional[int],
+    cu_seqlens: Optional[torch.Tensor] = None,
     dropout: float = 0.0,
     scaling: Optional[float] = None,
     sliding_window: Optional[int] = None,
     **kwargs,
 ) -> Tuple[torch.Tensor, None]:
-    query = query.view(-1, max_seqlen, module.local_num_heads, module.head_dim)
-    key = key.view(-1, max_seqlen, module.local_num_kv_heads, module.head_dim)
-    value = value.view(-1, max_seqlen, module.local_num_kv_heads, module.head_dim)
+    seq_length = 4096
+    query = query.view(-1, module.local_num_heads, module.head_dim)
+    key = key.view(-1, module.local_num_kv_heads, module.head_dim)
+    value = value.view(-1, module.local_num_kv_heads, module.head_dim)
 
     if attention_mask is None:
         is_causal = True
@@ -162,17 +164,32 @@ def flash_attention_forward(
         window_size = (sliding_window, sliding_window)
     else:
         window_size = (-1, -1)
-
-    attn_output = flash_attn_func(
-        q=query,
-        k=key,
-        v=value,
-        dropout_p=dropout,
-        softmax_scale=scaling,
-        causal=is_causal,
-        window_size=window_size,
-        return_attn_probs=False,
-    )
+    if cu_seqlens is not None: 
+        attn_output = flash_attn_varlen_func(
+            q=query,
+            k=key,
+            v=value,
+            cu_seqlens_k=cu_seqlens,
+            cu_seqlens_q=cu_seqlens,
+            max_seqlen_k=max_seqlen,
+            max_seqlen_q=max_seqlen,
+            dropout_p=dropout,
+            softmax_scale=scaling,
+            causal=is_causal,
+            window_size=window_size,
+            return_attn_probs=False,
+        )
+    else:
+        attn_output = flash_attn_func(
+            q=query,
+            k=key,
+            v=value,
+            dropout_p=dropout,
+            softmax_scale=scaling,
+            causal=is_causal,
+            window_size=window_size,
+            return_attn_probs=False,
+        )
     attn_output = attn_output.contiguous()
     return attn_output, None
 
@@ -235,3 +252,12 @@ def get_attention_mask(position_ids, seq_length):
             torch.ones(cu_seqlens[i + 1] - cu_seqlens[i], cu_seqlens[i + 1] - cu_seqlens[i])
         )
     return attention_mask.to(torch.bool), cu_seqlens  # [seq_length, seq_length]
+
+def get_intra_doc_attention_mask(position_ids, seq_length):
+    len_position_ids = len(position_ids)
+    max_seq_len = torch.max(position_ids).to(torch.int32) + 1
+    start_indices = torch.where(position_ids == 0)[0]
+    cu_seqlens = torch.cat(
+        [start_indices, torch.tensor([len_position_ids], dtype=torch.int32, device=start_indices.device)]
+    ).to(torch.int32)
+    return max_seq_len, cu_seqlens  # [seq_length, seq_length]
