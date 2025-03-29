@@ -93,7 +93,7 @@ def parse_args():
     slurm_group.add_argument("--gpus_per_node", type=int, default=8, help="Number of GPUs per node")
     slurm_group.add_argument("--partition", type=str, default="hopper-prod", help="Slurm partition to use")
     slurm_group.add_argument("--qos", type=str, default="normal", help="Slurm QOS to use")
-    slurm_group.add_argument("--time_limit", type=str, default="1:00:00", help="Time limit for the job (HH:MM:SS)")
+    slurm_group.add_argument("--time_limit", type=str, default=None, help="Time limit for the job (HH:MM:SS)")
     slurm_group.add_argument("--email", type=str, default=None, help="Email for job notifications")
     slurm_group.add_argument("--tmp_dir", type=str, default="/tmp", help="Temporary directory on compute nodes")
     slurm_group.add_argument("--pre_launch_commands", type=str, default="", help="Commands to run before job launch")
@@ -468,9 +468,9 @@ def create_slurm_script(
 #SBATCH --gpus-per-node={gpus_per_node}
 #SBATCH --partition={args.partition}
 #SBATCH --output={logs_path}/{timestamp}-%x-%j.out
-#SBATCH --time={args.time_limit}
 #SBATCH --qos={args.qos}
 #SBATCH --wait-all-nodes=1        # fail if any node is not ready
+{f"#SBATCH --time={args.time_limit}" if args.time_limit else ""}
 """
 
     if args.email:
