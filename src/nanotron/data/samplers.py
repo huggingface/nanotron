@@ -48,7 +48,7 @@ def get_sampler(
     use_loop_to_round_batch_size: bool = False,
     micro_batch_size: Optional[int] = None,
     drop_last: Optional[bool] = True,
-    shuffle: bool = True,
+    shuffle: bool = False,
 ) -> Optional[torch.utils.data.Sampler]:
     """
     Returns sampler that restricts data loading to a subset of the dataset proper to the DP rank.

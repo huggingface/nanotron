@@ -59,6 +59,7 @@ class CoreAttention(nn.Module):
         self.cp_pg = cp_pg
         self.sliding_window_size = config.sliding_window_size
         self.simple_causal_mask = True  # Use simple causal mask instead of computing custom attention mask if not document masking / sliding window
+        self.flex_attention_mask = config.flex_attention_mask if hasattr(config, "flex_attention_mask") else None
 
     def forward(
         self,
@@ -121,6 +122,7 @@ class CoreAttention(nn.Module):
             cu_seqlens=cu_seqlens,
             position_ids=position_ids if self._attn_implementation == "flex_attention" else None,
             document_ids=kwargs.get("document_ids", None) if self._attn_implementation == "flex_attention" else None,
+            flex_attention_mask=self.flex_attention_mask if self._attn_implementation == "flex_attention" else None,
             **kwargs,
         )[0]
 

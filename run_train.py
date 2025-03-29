@@ -8,8 +8,10 @@ torchrun --nproc_per_node=8 run_train.py --config-file examples/config_tiny_llam
 ```
 """
 import argparse
+import time
 from typing import Dict, cast
 
+import nanotron.distributed as dist
 from nanotron import logging
 from nanotron.config import (
     DataArgs,
@@ -181,6 +183,10 @@ def get_dataloader_from_data_stage(
         from nanotron.data.nanoset import Nanoset
 
         with main_rank_first(trainer.parallel_context.world_pg):
+            logger.info(
+                f"[Nanoset] Creating Nanoset with {len(data.dataset.dataset_folder)} dataset folders and {trainer.config.tokens.train_steps * trainer.global_batch_size} train samples"
+            )
+            start_time = time.time()
             train_dataset = Nanoset(
                 dataset_folders=data.dataset.dataset_folder,
                 sequence_length=trainer.sequence_length,
@@ -189,7 +195,10 @@ def get_dataloader_from_data_stage(
                 dataset_weights=data.dataset.dataset_weights,
                 random_seed=data.seed,
             )
-
+            end_time = time.time()
+            logger.info(
+                f"[Nanoset] Time taken to create Nanoset: {time.strftime('%M:%S', time.gmtime(end_time - start_time))} (MM:SS)"
+            )
         # Prepare dataloader
         train_dataloader = build_nanoset_dataloader(
             train_dataset,
@@ -203,6 +212,7 @@ def get_dataloader_from_data_stage(
             dataloader_drop_last=True,
             use_position_ids=isinstance(trainer.model_config, Qwen2Config),
         )
+        dist.barrier()
 
         return train_dataloader
     else:

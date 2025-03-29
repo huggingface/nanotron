@@ -136,6 +136,7 @@ class Qwen2Config:
     use_cache: bool = True
     vocab_size: int = 32000
     _attn_implementation: Optional[AttentionImplementation] = DEFAULT_ATTENTION_IMPLEMENTATION
+    flex_attention_mask: Optional[str] = None
     attention_bias: bool = False
     sliding_window_size: Optional[int] = None
     z_loss_enabled: bool = False  # Z-loss regularization https://www.jmlr.org/papers/volume24/22-1144/22-1144.pdf
@@ -171,7 +172,13 @@ class Qwen2Config:
                 "flex_attention",
                 "flash_attention_2",
             ], "Sliding window is only supported for Flex Attention and Flash Attention 2"
-
+        if self.flex_attention_mask is not None:
+            assert self._attn_implementation == "flex_attention", "Flex attention mask is only supported for flex attention"
+            assert self.flex_attention_mask in [
+                "sliding_window", 
+                "document",
+                "sliding_window_document"
+                ], "Flex attention mask must be one of ['sliding_window', 'document', 'sliding_window_document']"
     @property
     def is_using_mup(self) -> bool:
         return self._is_using_mup
