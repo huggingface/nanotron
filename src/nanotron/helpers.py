@@ -497,7 +497,7 @@ def test_equal_dict(first: Dict, second: Dict, sub_paths: Optional[List[str]] = 
 
 
 def get_profiler(config: Config):
-    if config.profiler is not None:
+    if config.profiler is not None and dist.get_rank() == 0:
         if config.profiler.profiler_export_path is not None:
             on_trace_ready = tensorboard_trace_handler(
                 config.profiler.profiler_export_path / datetime.now().strftime("%Y%m%d-%H%M%S-" + config.general.run)

@@ -470,6 +470,7 @@ def create_slurm_script(
 #SBATCH --output={logs_path}/{timestamp}-%x-%j.out
 #SBATCH --qos={args.qos}
 #SBATCH --wait-all-nodes=1        # fail if any node is not ready
+#SBATCH --reservation=smollm_loubna
 {f"#SBATCH --time={args.time_limit}" if args.time_limit else ""}
 """
 
