@@ -86,7 +86,9 @@ def get_dataloader_from_data_stage(
             vocab_size=trainer.model_config.vocab_size,
             seed=data.seed,
             parallel_context=trainer.parallel_context,
-            use_position_ids=True,  # Simulate packed sequences to test SFT or inference
+            use_position_ids=isinstance(
+                trainer.model_config, Qwen2Config
+            ),  # Simulate packed sequences to test SFT or inference
             cp_pg=trainer.parallel_context.cp_pg,
         )()
 

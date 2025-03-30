@@ -1,6 +1,7 @@
 from typing import Dict, Iterator, List, Optional, Union
 
 import datasets
+import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
@@ -38,11 +39,14 @@ def sanity_check_dataloader(
     """
     # WARNING: This is called in the middle of the training loop, so make sure it's optimized
     for batch in dataloader:
+        # maybe numpy to torch
+        batch = {k: torch.from_numpy(v) if isinstance(v, np.ndarray) else v for k, v in batch.items()}
+
         # non_blocking=True seems to be fine? https://discuss.pytorch.org/t/should-we-set-non-blocking-to-true/38234/4
         micro_batch = {
             k: v
             if isinstance(v, TensorPointer)
-            else torch.from_numpy(v).to("cuda", memory_format=torch.contiguous_format, non_blocking=True)
+            else v.to("cuda", memory_format=torch.contiguous_format, non_blocking=True)
             for k, v in batch.items()
         }
 
