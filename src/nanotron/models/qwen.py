@@ -210,7 +210,7 @@ class Qwen2Attention(nn.Module):
         # [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10] # 1 document with 11 tokens
         # [0, 1, 2, 3, 4, 5, 6, 7, 8, -1, -1] # 1 document with 10 tokens then padding
         # Replace -1 with 0 in position_ids to mark every padding token as a separate sequence. Ideally we want to get rid of padding tokens from qkv
-        position_ids = position_ids.masked_fill(position_ids == -1, 0)
+        # position_ids = position_ids.masked_fill(position_ids == -1, 0)
         seq_length = position_ids.shape[1]
         position_ids = position_ids.view(-1)  # [batch_size*seq_length]
 
