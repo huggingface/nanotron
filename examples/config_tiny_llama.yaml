@@ -12,7 +12,7 @@ data_stages:
   name: Stable Training Stage
   start_training_step: 1
 general:
-  benchmark_csv_path: null
+  benchmark_csv_path: benchmark_llama.csv
   consumed_train_samples: null
   ignore_sanity_checks: true
   project: debug
@@ -69,7 +69,7 @@ optimizer:
   weight_decay: 0.01
   zero_stage: 0
 parallelism:
-  dp: 1
+  dp: 16
   expert_parallel_size: 1
   pp: 1
   pp_engine: 1f1b

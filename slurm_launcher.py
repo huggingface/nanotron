@@ -98,6 +98,7 @@ def parse_args():
     slurm_group.add_argument("--tmp_dir", type=str, default="/tmp", help="Temporary directory on compute nodes")
     slurm_group.add_argument("--pre_launch_commands", type=str, default="", help="Commands to run before job launch")
     slurm_group.add_argument("--extra_env", type=str, default="", help="Additional environment variables")
+    slurm_group.add_argument("--bench", type=str, default="", help="Benchmark csv path")
 
     # Config file
     parser.add_argument(
@@ -414,7 +415,13 @@ def create_nanotron_config(args) -> Config:
 
     # Create the final config
     config = Config(
-        general=GeneralArgs(project=args.project, run=args.run, seed=args.seed, ignore_sanity_checks=args.no_sanity),
+        general=GeneralArgs(
+            project=args.project,
+            run=args.run,
+            seed=args.seed,
+            ignore_sanity_checks=args.no_sanity,
+            benchmark_csv_path=args.bench,
+        ),
         checkpoints=checkpoints,
         parallelism=parallelism,
         model=ModelArgs(init_method=RandomInit(std=0.025), model_config=model_config),
@@ -515,7 +522,7 @@ export TORCH_NCCL_ASYNC_ERROR_HANDLING=1
 export TORCH_DISTRIBUTED_DEBUG=DETAIL
 
 # Nanotron specific
-# export NANOTRON_BENCHMARK=1
+{"export NANOTRON_BENCHMARK=1" if args.bench else ""}
 {"# " if args.enable_wandb else ""}export WANDB_MODE=disabled
 
 
