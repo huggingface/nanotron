@@ -146,6 +146,7 @@ class Qwen2Attention(nn.Module):
         layer_idx: int,
     ):
         super().__init__()
+        self.config = config
         self.hidden_size = config.hidden_size
         self.tp_pg_size = tp_pg.size()
 
@@ -218,24 +219,24 @@ class Qwen2Attention(nn.Module):
         position_ids = position_ids.masked_fill(position_ids == -1, 0)
         seq_length = position_ids.shape[1]
         position_ids = position_ids.view(-1)  # [batch_size*seq_length]
-
+        max_seq_len, cu_seqlens = get_intra_doc_attention_mask(position_ids, seq_length=seq_length)
         qkv = self.qkv_proj(hidden_states)
         q, k, v = qkv.split(
             [self.local_q_size, self.local_kv_size, self.local_kv_size], dim=-1
         )  # [batch_size*seq_length, q_size], [batch_size*seq_length, kv_size]
 
         rotary_pos_emb = self.rotary_emb(
-            position_ids=position_ids if not self.simple_causal_mask else None, seq_length=seq_length
+            position_ids=position_ids if self.config.intra_doc_attention else None, seq_length=seq_length if not self.config.intra_doc_attention else None
         )  # [b*s, dim] or [seq_length, dim]
 
         q = q.view(-1, self.local_num_heads, self.head_dim)  # [b*s, num_heads, head_dim]
         k = k.view(-1, self.local_num_kv_heads, self.head_dim)  # [b*s, num_kv_heads, head_dim]
         v = v.view(-1, self.local_num_kv_heads, self.head_dim)  # [b*s, num_kv_heads, head_dim]
         q = self.rotary_emb.apply_rotary_pos_emb(
-            q, rotary_pos_emb, seq_length=seq_length
+            q, rotary_pos_emb, seq_length=seq_length, cu_seqlens=cu_seqlens, max_seqlen=max_seq_len
         )  # [b*s, num_heads, head_dim]
         k = self.rotary_emb.apply_rotary_pos_emb(
-            k, rotary_pos_emb, seq_length=seq_length
+            k, rotary_pos_emb, seq_length=seq_length, cu_seqlens=cu_seqlens, max_seqlen=max_seq_len
         )  # [b*s, num_kv_heads, head_dim]
 
         attn_output = self.attention(q, k, v, position_ids=position_ids, seq_length=seq_length)

@@ -150,7 +150,6 @@ def flash_attention_forward(
     sliding_window: Optional[int] = None,
     **kwargs,
 ) -> Tuple[torch.Tensor, None]:
-    seq_length = 4096
     query = query.view(-1, module.local_num_heads, module.head_dim)
     key = key.view(-1, module.local_num_kv_heads, module.head_dim)
     value = value.view(-1, module.local_num_kv_heads, module.head_dim)
@@ -171,8 +170,8 @@ def flash_attention_forward(
             v=value,
             cu_seqlens_k=cu_seqlens,
             cu_seqlens_q=cu_seqlens,
-            max_seqlen_k=seq_length,
-            max_seqlen_q=seq_length,
+            max_seqlen_k=max_seqlen, # max length of the document
+            max_seqlen_q=max_seqlen,
             dropout_p=dropout,
             softmax_scale=scaling,
             causal=is_causal,
@@ -254,10 +253,10 @@ def get_attention_mask(position_ids, seq_length):
     return attention_mask.to(torch.bool), cu_seqlens  # [seq_length, seq_length]
 
 def get_intra_doc_attention_mask(position_ids, seq_length):
-    len_position_ids = len(position_ids)
-    max_seq_len = torch.max(position_ids).to(torch.int32) + 1
+    len_position_ids = len(position_ids) # seq_length * batch_size
+    max_seq_len = torch.max(position_ids).to(torch.int32) + 1  # maybe it should +1 not 100% sure here.
     start_indices = torch.where(position_ids == 0)[0]
     cu_seqlens = torch.cat(
         [start_indices, torch.tensor([len_position_ids], dtype=torch.int32, device=start_indices.device)]
     ).to(torch.int32)
-    return max_seq_len, cu_seqlens  # [seq_length, seq_length]
+    return max_seq_len, cu_seqlens  

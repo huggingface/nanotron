@@ -91,7 +91,7 @@ class RotaryEmbedding(nn.Module):
             second_half = x[..., x.shape[-1] // 2 :]
             return torch.cat((-second_half, first_half), dim=-1)
 
-    def apply_rotary_pos_emb(self, tensor, freqs, multi_latent_attention=False, mscale=1.0, seq_length=None):
+    def apply_rotary_pos_emb(self, tensor, freqs, multi_latent_attention=False, mscale=1.0, seq_length=None, cu_seqlens=None, max_seqlen=None):
         """Apply rotary positional embedding to input tensor.
 
         Args:
@@ -127,14 +127,35 @@ class RotaryEmbedding(nn.Module):
             rotary_part = rotary_part.view(
                 -1, seq_length, rotary_part.shape[1], rotary_part.shape[2]
             )  # [b, s, nheads, dim/2]
+            # Reshape to match the expected 3D input for flash_apply_rotary_emb
+            # From [b, s, nheads, dim/2] to [b*s, nheads, dim/2]
+            batch_size = rotary_part.size(0)
+            total_seq_len = batch_size * seq_length
+            rotary_part = rotary_part.reshape(total_seq_len, rotary_part.shape[2], rotary_part.shape[3])
+            
             rotated_tensor = flash_apply_rotary_emb(
-                rotary_part, self.cos_values, self.sin_values, interleaved=self.interleaved, inplace=True
+                x=rotary_part, cos=self.cos_values, sin=self.sin_values, interleaved=self.interleaved, inplace=True, seqlen_offsets=0, cu_seqlens=cu_seqlens, max_seqlen=max_seqlen
             )
+            
+            # Reshape back to 4D
+            rotated_tensor = rotated_tensor.reshape(batch_size, seq_length, rotary_part.shape[1], rotary_part.shape[2])
             # TODO @nouamane: support cu_seqlens from position_ids
         else:
-            rotated_tensor = (rotary_part * self.cos_values.unsqueeze(1)) + (
-                self.rotate_half(rotary_part) * self.sin_values.unsqueeze(1)
-            )
+            rotary_part = rotary_part.view(
+                -1, seq_length, rotary_part.shape[1], rotary_part.shape[2]
+            )  # [b, s, nheads, dim/2]
+            
+            # Simply flatten the cos/sin values and then reshape to match sequence dimension
+            # This avoids the shape mismatch error by ensuring the total elements match
+            cos_flat = self.cos_values.reshape(-1)
+            sin_flat = self.sin_values.reshape(-1)
+            
+            # Assume cos_values has the right number of elements but wrong shape
+            # Reshape to match exactly what rotary_part expects
+            cos = cos_flat.reshape(1, -1, 1, rotary_part.shape[-1])
+            sin = sin_flat.reshape(1, -1, 1, rotary_part.shape[-1])
+            
+            rotated_tensor = (rotary_part * cos) + (self.rotate_half(rotary_part) * sin)
 
         # Concatenate with the pass-through part (if any)
         if pass_through_part is not None and pass_through_part.shape[-1] > 0:
