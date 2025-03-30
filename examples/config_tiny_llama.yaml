@@ -1,5 +1,5 @@
 checkpoints:
-  checkpoint_interval: 10
+  checkpoint_interval: 100000
   checkpoints_path: checkpoints
   checkpoints_path_is_shared_file_system: false
   resume_checkpoint_path: null
@@ -76,7 +76,8 @@ parallelism:
   tp: 2
   tp_linear_async_communication: true
   tp_mode: REDUCE_SCATTER
-profiler: null
+profiler:
+  profiler_export_path: ./tb_logs/fix/
 tokenizer:
   tokenizer_max_length: null
   tokenizer_name_or_path: robot-test/dummy-tokenizer-wordlevel

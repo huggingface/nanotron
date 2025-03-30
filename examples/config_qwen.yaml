@@ -70,9 +70,9 @@ data_stages:
 general:
   benchmark_csv_path: null
   consumed_train_samples: null
-  ignore_sanity_checks: false
+  ignore_sanity_checks: true
   project: debug
-  run: qwen_20250329_222516_15670786
+  run: qwen_data
   seed: 42
   step: null
 lighteval: null

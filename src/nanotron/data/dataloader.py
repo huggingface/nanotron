@@ -124,7 +124,7 @@ def dummy_infinite_data_generator(
         )
 
         if use_position_ids:
-            document_lengths = [[4, 6, 12], [sequence_length]]
+            document_lengths = [[4, 6, sequence_length - 10]] + [[sequence_length]] * (micro_batch_size - 1)
             position_ids = torch.full(
                 (micro_batch_size, sequence_length), fill_value=-1, dtype=torch.long, device="cuda"
             )
