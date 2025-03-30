@@ -16,6 +16,7 @@ from nanotron.nn.activations import ACT2FN
 from nanotron.nn.attention import ALL_ATTENTION_FUNCTIONS, get_attention_mask
 from nanotron.nn.layer_norm import LlamaRMSNorm as RMSNorm
 from nanotron.nn.layer_norm import TritonRMSNorm
+from nanotron.nn.rotary import RotaryEmbedding
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter
 from nanotron.parallel.pipeline_parallel.block import PipelineBlock, TensorPointer
@@ -189,9 +190,9 @@ class Qwen2Attention(nn.Module):
             async_communication=tp_linear_async_communication,
         )
         if config._use_qkv_packed:
-            from flash_attn.layers.rotary import RotaryEmbedding
+            from flash_attn.layers.rotary import RotaryEmbedding as FlashRotaryEmbedding
 
-            self.rotary_emb = RotaryEmbedding(
+            self.rotary_emb = FlashRotaryEmbedding(
                 dim=self.head_dim,
                 base=config.rope_theta,
                 interleaved=config.rope_interleaved,
