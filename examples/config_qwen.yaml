@@ -91,21 +91,21 @@ model:
     _fused_rms_norm: true
     _fused_rotary_emb: true
     attention_bias: false
-    bos_token_id: 1
-    eos_token_id: 2
+    bos_token_id: 128000
+    eos_token_id: 128001
     flex_attention_mask: null
     hidden_act: silu
     hidden_size: 2048
     initializer_range: 0.02
     intermediate_size: 11008
     is_qwen2_config: true
-    max_position_embeddings: 128256
+    max_position_embeddings: 4096
     moe_config: null
     num_attention_heads: 16
-    num_hidden_layers: 28
+    num_hidden_layers: 36
     num_key_value_heads: 2
     pad_token_id: null
-    pretraining_tp: 1
+    pretraining_tp: 2
     rms_norm_eps: 1.0e-06
     rope_interleaved: false
     rope_scaling: null
