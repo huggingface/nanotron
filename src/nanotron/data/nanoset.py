@@ -65,6 +65,7 @@ class Nanoset(torch.utils.data.Dataset):
                     token_size=self.token_size,
                     shuffle=True,
                     return_positions=True,
+                    # max_tokens=sequence_length*3*10, # debug
                 )
             )
 
@@ -119,6 +120,8 @@ class Nanoset(torch.utils.data.Dataset):
             "dataset_weights": self.dataset_weights.tolist(),
             "train_split_num_samples": self.train_split_num_samples,
             "random_seed": self.random_seed,
+            "token_size": self.token_size,
+            "sequence_length": self.sequence_length,
         }
 
         # Create a deterministic cache key

@@ -143,6 +143,7 @@ class Qwen2Config:
     z_loss_coefficient: float = 0.0001  # Default from the paper (10^-4)
     _fused_rotary_emb: bool = True
     _fused_rms_norm: bool = True
+    _use_qkv_packed: bool = True
 
     # MoE configuration
     moe_config: Optional[MoEConfig] = None
@@ -173,12 +174,15 @@ class Qwen2Config:
                 "flash_attention_2",
             ], "Sliding window is only supported for Flex Attention and Flash Attention 2"
         if self.flex_attention_mask is not None:
-            assert self._attn_implementation == "flex_attention", "Flex attention mask is only supported for flex attention"
+            assert (
+                self._attn_implementation == "flex_attention"
+            ), "Flex attention mask is only supported for flex attention"
             assert self.flex_attention_mask in [
-                "sliding_window", 
+                "sliding_window",
                 "document",
-                "sliding_window_document"
-                ], "Flex attention mask must be one of ['sliding_window', 'document', 'sliding_window_document']"
+                "sliding_window_document",
+            ], "Flex attention mask must be one of ['sliding_window', 'document', 'sliding_window_document']"
+
     @property
     def is_using_mup(self) -> bool:
         return self._is_using_mup

@@ -98,6 +98,7 @@ def parse_args():
     slurm_group.add_argument("--tmp_dir", type=str, default="/tmp", help="Temporary directory on compute nodes")
     slurm_group.add_argument("--pre_launch_commands", type=str, default="", help="Commands to run before job launch")
     slurm_group.add_argument("--extra_env", type=str, default="", help="Additional environment variables")
+    slurm_group.add_argument("--bench", type=str, default="", help="Benchmark csv path")
 
     # Config file
     parser.add_argument(
@@ -414,7 +415,13 @@ def create_nanotron_config(args) -> Config:
 
     # Create the final config
     config = Config(
-        general=GeneralArgs(project=args.project, run=args.run, seed=args.seed, ignore_sanity_checks=args.no_sanity),
+        general=GeneralArgs(
+            project=args.project,
+            run=args.run,
+            seed=args.seed,
+            ignore_sanity_checks=args.no_sanity,
+            benchmark_csv_path=args.bench,
+        ),
         checkpoints=checkpoints,
         parallelism=parallelism,
         model=ModelArgs(init_method=RandomInit(std=0.025), model_config=model_config),
@@ -506,19 +513,37 @@ export GPUS_PER_NODE={gpus_per_node}
 export WORLD_SIZE=$(($NNODES * $GPUS_PER_NODE))
 
 # Set some environment variables for better distributed training
-export CUDA_DEVICE_MAX_CONNECTIONS=1
-export NCCL_DEBUG=WARN # INFO, WARN
+# export NCCL_DEBUG=WARN # INFO, WARN
 # export NCCL_DEBUG_SUBSYS=ALL
 # export CUDA_LAUNCH_BLOCKING=1
-export TORCH_NCCL_ASYNC_ERROR_HANDLING=1
-export TORCH_DISTRIBUTED_DEBUG=DETAIL
+# export TORCH_NCCL_ASYNC_ERROR_HANDLING=1
+# export TORCH_DISTRIBUTED_DEBUG=DETAIL
 
 # Nanotron specific
-# export NANOTRON_BENCHMARK=1
+{"export NANOTRON_BENCHMARK=1" if args.bench else ""}
 {"# " if args.enable_wandb else ""}export WANDB_MODE=disabled
 
 
 CMD="{run_train_script} --config-file {config_path}"
+
+# echo nvcc version and assert we use cuda 12.4
+echo "NVCC version: $(nvcc --version)"
+if ! nvcc --version | grep -q "12.4"; then
+    echo "ERROR: CUDA 12.4 is required to avoid dataloader issues"
+    exit 1
+fi
+
+# Log system information
+echo "PyTorch version: $(python -c 'import torch; print(torch.__version__)')"
+echo "Is debug build: $(python -c 'import torch; print(torch.version.debug)')"
+echo "CUDA used to build PyTorch: $(python -c 'import torch; print(torch.version.cuda)')"
+echo "ROCM used to build PyTorch: $(python -c 'import torch; print(torch.version.hip)')"
+
+echo "PATH: $PATH"
+
+# Log GPU information
+nvidia-smi
+
 
 LAUNCHER="torchrun \\
     --nproc_per_node {gpus_per_node} \\
@@ -570,6 +595,9 @@ def main():
         tp = config.parallelism.tp
         cp = config.parallelism.context_parallel_size
         ep = config.parallelism.expert_parallel_size
+        # bench
+        if args.bench:
+            config.general.benchmark_csv_path = args.bench
 
     # Save config to YAML file
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
