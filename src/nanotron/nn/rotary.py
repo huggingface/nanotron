@@ -123,10 +123,10 @@ class RotaryEmbedding(nn.Module):
             self.sin_values = (torch.sin(freqs) * mscale).to(tensor.dtype)
 
         # Apply rotary embedding
+        rotary_part = rotary_part.view(
+            -1, seq_length, rotary_part.shape[1], rotary_part.shape[2]
+        )  # [b, s, nheads, dim/2]
         if self.fused:
-            rotary_part = rotary_part.view(
-                -1, seq_length, rotary_part.shape[1], rotary_part.shape[2]
-            )  # [b, s, nheads, dim/2]
             rotated_tensor = flash_apply_rotary_emb(
                 rotary_part, self.cos_values, self.sin_values, interleaved=self.interleaved, inplace=True
             )
