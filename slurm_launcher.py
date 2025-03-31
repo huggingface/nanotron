@@ -477,7 +477,6 @@ def create_slurm_script(
 #SBATCH --output={logs_path}/{timestamp}-%x-%j.out
 #SBATCH --qos={args.qos}
 #SBATCH --wait-all-nodes=1        # fail if any node is not ready
-#SBATCH --reservation=smollm_loubna
 {f"#SBATCH --time={args.time_limit}" if args.time_limit else ""}
 """
 
@@ -527,6 +526,24 @@ export TORCH_DISTRIBUTED_DEBUG=DETAIL
 
 
 CMD="{run_train_script} --config-file {config_path}"
+
+# echo nvcc version and assert we use cuda 12.4
+echo "NVCC version: $(nvcc --version)"
+if ! nvcc --version | grep -q "12.4"; then
+    echo "ERROR: CUDA 12.4 is required to avoid dataloader issues"
+    exit 1
+fi
+
+# Log system information
+echo "PyTorch version: $(python -c 'import torch; print(torch.__version__)')"
+echo "Is debug build: $(python -c 'import torch; print(torch.version.debug)')"
+echo "CUDA used to build PyTorch: $(python -c 'import torch; print(torch.version.cuda)')"
+echo "ROCM used to build PyTorch: $(python -c 'import torch; print(torch.version.hip)')"
+echo ""
+
+# Log GPU information
+nvidia-smi
+
 
 LAUNCHER="torchrun \\
     --nproc_per_node {gpus_per_node} \\
