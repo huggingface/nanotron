@@ -219,19 +219,20 @@ class Qwen2Attention(nn.Module):
             [self.local_q_size, self.local_kv_size, self.local_kv_size], dim=-1
         )  # [batch_size*seq_length, q_size], [batch_size*seq_length, kv_size]
 
-        rotary_pos_emb = self.rotary_emb(
-            position_ids=position_ids if not self.simple_causal_mask else None, seq_length=seq_length
-        )  # [b*s, dim] or [seq_length, dim]
-
         q = q.view(-1, self.local_num_heads, self.head_dim)  # [b*s, num_heads, head_dim]
         k = k.view(-1, self.local_num_kv_heads, self.head_dim)  # [b*s, num_kv_heads, head_dim]
         v = v.view(-1, self.local_num_kv_heads, self.head_dim)  # [b*s, num_kv_heads, head_dim]
-        q = self.rotary_emb.apply_rotary_pos_emb(
-            q, rotary_pos_emb, seq_length=seq_length
-        )  # [b*s, num_heads, head_dim]
-        k = self.rotary_emb.apply_rotary_pos_emb(
-            k, rotary_pos_emb, seq_length=seq_length
-        )  # [b*s, num_kv_heads, head_dim]
+        if self.config.no_rope_layer is None or self.layer_idx % self.config.no_rope_layer != 0:
+            rotary_pos_emb = self.rotary_emb(
+                position_ids=position_ids if not self.simple_causal_mask else None, seq_length=seq_length
+            )  # [b*s, dim] or [seq_length, dim]
+
+            q = self.rotary_emb.apply_rotary_pos_emb(
+                q, rotary_pos_emb, seq_length=seq_length
+            )  # [b*s, num_heads, head_dim]
+            k = self.rotary_emb.apply_rotary_pos_emb(
+                k, rotary_pos_emb, seq_length=seq_length
+            )  # [b*s, num_kv_heads, head_dim]
 
         attn_output = self.attention(q, k, v, position_ids=position_ids, seq_length=seq_length)
         output = self.o_proj(attn_output)

@@ -143,6 +143,7 @@ class Qwen2Config:
     z_loss_coefficient: float = 0.0001  # Default from the paper (10^-4)
     _fused_rotary_emb: bool = True
     _fused_rms_norm: bool = True
+    no_rope_layer: Optional[int] = None
 
     # MoE configuration
     moe_config: Optional[MoEConfig] = None
@@ -179,6 +180,8 @@ class Qwen2Config:
                 "document",
                 "sliding_window_document"
                 ], "Flex attention mask must be one of ['sliding_window', 'document', 'sliding_window_document']"
+        if self.no_rope_layer is not None:
+            assert self.no_rope_layer % self.num_hidden_layers == 0, "no_rope_layer must be a multiple of num_hidden_layers"
     @property
     def is_using_mup(self) -> bool:
         return self._is_using_mup
