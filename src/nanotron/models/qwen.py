@@ -1,6 +1,7 @@
 from typing import Dict, List, Optional, Tuple, Union
 
 import torch
+from flash_attn.modules.mha import flash_attn_varlen_kvpacked_func
 from torch import nn
 from torch.nn import functional as F
 from torch.utils.checkpoint import CheckpointFunction
@@ -188,16 +189,26 @@ class Qwen2Attention(nn.Module):
             bias=False,
             async_communication=tp_linear_async_communication,
         )
-        self.rotary_emb = RotaryEmbedding(
-            dim=self.head_dim,
-            max_seq_len=config.max_position_embeddings,
-            base=config.rope_theta,
-            interleaved=config.rope_interleaved,
-            seq_len_scaling_factor=None,
-            fused=config._fused_rotary_emb,
-        )
+        if config._use_qkv_packed:
+            from flash_attn.layers.rotary import RotaryEmbedding as FlashRotaryEmbedding
+
+            self.rotary_emb = FlashRotaryEmbedding(
+                dim=self.head_dim,
+                base=config.rope_theta,
+                interleaved=config.rope_interleaved,
+            )
+        else:
+            self.rotary_emb = RotaryEmbedding(
+                dim=self.head_dim,
+                max_seq_len=config.max_position_embeddings,
+                base=config.rope_theta,
+                interleaved=config.rope_interleaved,
+                seq_len_scaling_factor=None,
+                fused=config._fused_rotary_emb,
+            )
         self.attention = CoreAttention(config, tp_pg, cp_pg, layer_idx)
         self.simple_causal_mask = True
+        self._use_qkv_packed = config._use_qkv_packed
 
         # TODO: support doc masking / SWA / SFT / inference
 
@@ -215,27 +226,69 @@ class Qwen2Attention(nn.Module):
         position_ids = position_ids.view(-1)  # [batch_size*seq_length]
 
         qkv = self.qkv_proj(hidden_states)
-        q, k, v = qkv.split(
-            [self.local_q_size, self.local_kv_size, self.local_kv_size], dim=-1
-        )  # [batch_size*seq_length, q_size], [batch_size*seq_length, kv_size]
+        if self._use_qkv_packed:
+            attn_output = self._forward_packed(qkv, seq_length, position_ids)
+        else:
+            q, k, v = qkv.split(
+                [self.local_q_size, self.local_kv_size, self.local_kv_size], dim=-1
+            )  # [batch_size*seq_length, q_size], [batch_size*seq_length, kv_size]
 
-        rotary_pos_emb = self.rotary_emb(
-            position_ids=position_ids if not self.simple_causal_mask else None, seq_length=seq_length
-        )  # [b*s, dim] or [seq_length, dim]
+            rotary_pos_emb = self.rotary_emb(
+                position_ids=position_ids if not self.simple_causal_mask else None, seq_length=seq_length
+            )  # [b*s, dim] or [seq_length, dim]
 
-        q = q.view(-1, self.local_num_heads, self.head_dim)  # [b*s, num_heads, head_dim]
-        k = k.view(-1, self.local_num_kv_heads, self.head_dim)  # [b*s, num_kv_heads, head_dim]
-        v = v.view(-1, self.local_num_kv_heads, self.head_dim)  # [b*s, num_kv_heads, head_dim]
-        q = self.rotary_emb.apply_rotary_pos_emb(
-            q, rotary_pos_emb, seq_length=seq_length
-        )  # [b*s, num_heads, head_dim]
-        k = self.rotary_emb.apply_rotary_pos_emb(
-            k, rotary_pos_emb, seq_length=seq_length
-        )  # [b*s, num_kv_heads, head_dim]
+            q = q.view(-1, self.local_num_heads, self.head_dim)  # [b*s, num_heads, head_dim]
+            k = k.view(-1, self.local_num_kv_heads, self.head_dim)  # [b*s, num_kv_heads, head_dim]
+            v = v.view(-1, self.local_num_kv_heads, self.head_dim)  # [b*s, num_kv_heads, head_dim]
+            q = self.rotary_emb.apply_rotary_pos_emb(
+                q, rotary_pos_emb, seq_length=seq_length
+            )  # [b*s, num_heads, head_dim]
+            k = self.rotary_emb.apply_rotary_pos_emb(
+                k, rotary_pos_emb, seq_length=seq_length
+            )  # [b*s, num_kv_heads, head_dim]
 
-        attn_output = self.attention(q, k, v, position_ids=position_ids, seq_length=seq_length)
+            attn_output = self.attention(q, k, v, position_ids=position_ids, seq_length=seq_length)
         output = self.o_proj(attn_output)
         return {"hidden_states": output, "position_ids": position_ids.view(-1, seq_length)}
+
+    def _forward_packed(self, qkv, seq_length, position_ids):
+        q = qkv[..., : self.local_num_heads * self.head_dim]  # Not contiguous, similar to flash_attn
+        kv = qkv[..., self.local_num_heads * self.head_dim :]  # Not contiguous, similar to flash_attn
+        q = q.view(-1, seq_length, self.local_num_heads, self.head_dim)
+        kv = kv.view(-1, seq_length, 2, self.local_num_kv_heads, self.head_dim)
+        q, kv = self.rotary_emb(
+            q, kv, seqlen_offset=0, max_seqlen=None
+        )  # TODO: should we use position_ids here? flash_attn doesn't
+        q = q.view(-1, self.local_num_heads, self.head_dim)
+        kv = kv.view(-1, 2, self.local_num_kv_heads, self.head_dim)
+
+        # Compute cu_seqlens
+        start_indices = torch.where(position_ids == 0)[0]
+        cu_seqlens = torch.cat(
+            [start_indices, torch.tensor([position_ids.numel()], dtype=torch.int32, device=start_indices.device)]
+        ).to(torch.int32)
+
+        max_seqlen = seq_length  # TODO: should this be max position_ids?
+
+        assert cu_seqlens.dtype == torch.int32
+        assert max_seqlen is not None
+        assert isinstance(max_seqlen, int)
+        attn_output = flash_attn_varlen_kvpacked_func(
+            q,
+            kv,
+            cu_seqlens,
+            cu_seqlens,
+            max_seqlen,
+            max_seqlen,
+            0.0,
+            softmax_scale=None,
+            causal=True,  # TODO: double check
+            alibi_slopes=None,
+            window_size=(-1, -1),  # TODO: fix
+            deterministic=False,
+        )  # Not contiguous, similar to flash_attn
+        # flash_attn use rearrange instead of reshape https://github.com/Dao-AILab/flash-attention/blob/1a58058a6da83bd7baaf4c512e8a1abe0240bb77/flash_attn/modules/mha.py#L730
+        return attn_output.reshape(-1, self.local_num_heads * self.head_dim)  # [b*s, num_heads*head_dim]
 
 
 class Qwen2MLP(nn.Module):

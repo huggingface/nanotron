@@ -147,7 +147,7 @@ def after_tbi_sanity_checks(
                 grad = param.grad
 
             if torch.isnan(grad).any() or torch.isinf(grad).any():
-                raise ValueError("Gradient is nan or inf")
+                raise ValueError(f"Gradient is nan or inf for {name}")
             if grad is None:
                 log_rank(
                     f"Process rank { dist.get_rank(parallel_context.world_pg)}/{parallel_context.world_pg.size()}: {name} is missing gradient",

@@ -5,10 +5,11 @@ checkpoints:
   load_lr_scheduler: true
   load_optimizer: true
   resume_checkpoint_path: null
-  save_final_state: true
+  save_final_state: false
   save_initial_state: false
 data_stages:
 - data:
+    # dataset: null
     dataset:
       dataset_folder:
       - /fsx/loubna/datasets/llama_tokenized/fineweb-edu/merged
@@ -63,17 +64,17 @@ data_stages:
       token_size_in_bytes: 4
       tokenizer_name: meta-llama/Llama-3.2-1B
       vocab_size: 128256
-    num_loading_workers: 1
+    num_loading_workers: 8
     seed: 42
-  name: Stable Training Stage
+  name: Training Stage
   start_training_step: 1
 general:
-  benchmark_csv_path: benchmark.csv
+  # benchmark_csv_path: benchmark.csv
   consumed_train_samples: null
   ignore_sanity_checks: true
-  project: debug
-  run: qwen_data
-  seed: 42
+  project: smollm3-benchmarks
+  run: qwen-3B-nn8-mbs3-tp2-not-fused
+  seed: 6
   step: null
 lighteval: null
 logging:
@@ -84,12 +85,13 @@ model:
   ddp_bucket_cap_mb: 25
   dtype: bfloat16
   init_method:
-    std: 0.025
+    std: 0.02
   make_vocab_size_divisible_by: 1
   model_config:
     _attn_implementation: flash_attention_2
     _fused_rms_norm: true
     _fused_rotary_emb: true
+    _use_qkv_packed: true
     attention_bias: false
     bos_token_id: 128000
     eos_token_id: 128001
@@ -120,13 +122,13 @@ optimizer:
   accumulate_grad_in_fp32: true
   clip_grad: 1.0
   learning_rate_scheduler:
-    learning_rate: 0.0003
-    lr_decay_starting_step: null
-    lr_decay_steps: 31998
-    lr_decay_style: cosine
-    lr_warmup_steps: 2
+    learning_rate: 0.0002
+    lr_decay_starting_step: 26000
+    lr_decay_steps: 6000
+    lr_decay_style: linear
+    lr_warmup_steps: 2000
     lr_warmup_style: linear
-    min_decay_lr: 1.0e-05
+    min_decay_lr: 0
   optimizer_factory:
     adam_beta1: 0.9
     adam_beta2: 0.95
@@ -138,7 +140,7 @@ optimizer:
   zero_stage: 0
 parallelism:
   context_parallel_size: 1
-  dp: 16
+  dp: 4
   expert_parallel_size: 1
   moe_layer_recompute: false
   pp: 1
@@ -148,15 +150,24 @@ parallelism:
   tp_linear_async_communication: true
   tp_mode: REDUCE_SCATTER
   tp_recompute_allgather: true
-profiler:
-  profiler_export_path: ./tb_logs/fix/
+# profiler:
+#   active: 1
+#   export_chrome_trace: false
+#   profile_memory: false
+#   profiler_export_path: tb_logs
+#   record_shapes: false
+#   repeat: 1
+#   skip_first: 3
+#   wait: 1
+#   warmup: 1
+#   with_stack: true
 s3_upload: null
 tokenizer:
   tokenizer_max_length: null
   tokenizer_name_or_path: meta-llama/Llama-3.2-1B
   tokenizer_revision: null
 tokens:
-  batch_accumulation_per_replica: 1
+  batch_accumulation_per_replica: 8
   limit_test_batches: 0
   limit_val_batches: 0
   micro_batch_size: 3
