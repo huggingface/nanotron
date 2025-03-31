@@ -513,12 +513,11 @@ export GPUS_PER_NODE={gpus_per_node}
 export WORLD_SIZE=$(($NNODES * $GPUS_PER_NODE))
 
 # Set some environment variables for better distributed training
-export CUDA_DEVICE_MAX_CONNECTIONS=1
-export NCCL_DEBUG=WARN # INFO, WARN
+# export NCCL_DEBUG=WARN # INFO, WARN
 # export NCCL_DEBUG_SUBSYS=ALL
 # export CUDA_LAUNCH_BLOCKING=1
-export TORCH_NCCL_ASYNC_ERROR_HANDLING=1
-export TORCH_DISTRIBUTED_DEBUG=DETAIL
+# export TORCH_NCCL_ASYNC_ERROR_HANDLING=1
+# export TORCH_DISTRIBUTED_DEBUG=DETAIL
 
 # Nanotron specific
 {"export NANOTRON_BENCHMARK=1" if args.bench else ""}

@@ -12,55 +12,55 @@ data_stages:
     # dataset: null
     dataset:
       dataset_folder:
-      - /fsx/loubna/datasets/llama_tokenized/fineweb-edu/merged
-      - /fsx/loubna/datasets/llama_tokenized/other_sources/dclm/
-      - /fsx/loubna/datasets/llama_tokenized/pes2o/standard
+      # - /fsx/loubna/datasets/llama_tokenized/fineweb-edu/merged
+      # - /fsx/loubna/datasets/llama_tokenized/other_sources/dclm/
+      # - /fsx/loubna/datasets/llama_tokenized/pes2o/standard
       - /fsx/loubna/datasets/llama_tokenized/other_sources/wiki
-      - /fsx/loubna/datasets/llama_tokenized/other_sources/fw2-hq-fra_Latn/
-      - /fsx/loubna/datasets/llama_tokenized/other_sources/fw2-hq-spa_Latn/
-      - /fsx/loubna/datasets/llama_tokenized/other_sources/fw2-hq-deu_Latn/
-      - /fsx/loubna/datasets/llama_tokenized/fw2-hq-ita_Latn/standard
-      - /fsx/loubna/datasets/llama_tokenized/other_sources/fw2-hq-por_Latn/
-      - /fsx/loubna/datasets/llama_tokenized/fw2-hq-cmn_Hani/standard
-      - /fsx/loubna/datasets/llama_tokenized/fw2-hq-rus_Cyrl/standard
-      - /fsx/loubna/datasets/llama_tokenized/other_sources/fw2-hq-fas_Arab/
-      - /fsx/loubna/datasets/llama_tokenized/other_sources/fw2-hq-jpn_Jpan/
-      - /fsx/loubna/datasets/llama_tokenized/fw2-kor_Hang/standard
-      - /fsx/loubna/datasets/llama_tokenized/other_sources/fw2-hin_Deva/
-      - /fsx/loubna/datasets/llama_tokenized/other_sources/fw2-tha_Thai/
-      - /fsx/loubna/datasets/llama_tokenized/other_sources/fw2-hq-vie_Latn/
-      - /fsx/loubna/datasets/llama_tokenized/other_sources/fw2-hq-ell_Grek/
-      - /fsx/loubna/datasets/llama_tokenized/other_sources/infiwebmath-3plus/
-      - /fsx/loubna/datasets/llama_tokenized/other_sources/finemath-3plus/
-      - /fsx/loubna/datasets/llama_tokenized/other_sources/stack-edu-Python/
-      - /fsx/loubna/datasets/llama_tokenized/other_sources/stack-edu-Java/
-      - /fsx/loubna/datasets/llama_tokenized/other_sources/stack-edu-JavaScript/
-      - /fsx/loubna/datasets/llama_tokenized/kaggle/standard
-      dataset_weights:
-      - 0.307
-      - 0.307
-      - 0.024
-      - 0.002
-      - 0.018
-      - 0.018
-      - 0.018
-      - 0.012
-      - 0.012
-      - 0.013
-      - 0.012
-      - 0.003
-      - 0.0026
-      - 0.0026
-      - 0.0026
-      - 0.0026
-      - 0.0026
-      - 0.0026
-      - 0.02
-      - 0.02
-      - 0.069
-      - 0.069
-      - 0.059
-      - 0.003
+      # - /fsx/loubna/datasets/llama_tokenized/other_sources/fw2-hq-fra_Latn/
+      # - /fsx/loubna/datasets/llama_tokenized/other_sources/fw2-hq-spa_Latn/
+      # - /fsx/loubna/datasets/llama_tokenized/other_sources/fw2-hq-deu_Latn/
+      # - /fsx/loubna/datasets/llama_tokenized/fw2-hq-ita_Latn/standard
+      # - /fsx/loubna/datasets/llama_tokenized/other_sources/fw2-hq-por_Latn/
+      # - /fsx/loubna/datasets/llama_tokenized/fw2-hq-cmn_Hani/standard
+      # - /fsx/loubna/datasets/llama_tokenized/fw2-hq-rus_Cyrl/standard
+      # - /fsx/loubna/datasets/llama_tokenized/other_sources/fw2-hq-fas_Arab/
+      # - /fsx/loubna/datasets/llama_tokenized/other_sources/fw2-hq-jpn_Jpan/
+      # - /fsx/loubna/datasets/llama_tokenized/fw2-kor_Hang/standard
+      # - /fsx/loubna/datasets/llama_tokenized/other_sources/fw2-hin_Deva/
+      # - /fsx/loubna/datasets/llama_tokenized/other_sources/fw2-tha_Thai/
+      # - /fsx/loubna/datasets/llama_tokenized/other_sources/fw2-hq-vie_Latn/
+      # - /fsx/loubna/datasets/llama_tokenized/other_sources/fw2-hq-ell_Grek/
+      # - /fsx/loubna/datasets/llama_tokenized/other_sources/infiwebmath-3plus/
+      # - /fsx/loubna/datasets/llama_tokenized/other_sources/finemath-3plus/
+      # - /fsx/loubna/datasets/llama_tokenized/other_sources/stack-edu-Python/
+      # - /fsx/loubna/datasets/llama_tokenized/other_sources/stack-edu-Java/
+      # - /fsx/loubna/datasets/llama_tokenized/other_sources/stack-edu-JavaScript/
+      # - /fsx/loubna/datasets/llama_tokenized/kaggle/standard
+      # dataset_weights:
+      # - 0.307
+      # - 0.307
+      # - 0.024
+      # - 0.002
+      # - 0.018
+      # - 0.018
+      # - 0.018
+      # - 0.012
+      # - 0.012
+      # - 0.013
+      # - 0.012
+      # - 0.003
+      # - 0.0026
+      # - 0.0026
+      # - 0.0026
+      # - 0.0026
+      # - 0.0026
+      # - 0.0026
+      # - 0.02
+      # - 0.02
+      # - 0.069
+      # - 0.069
+      # - 0.059
+      # - 0.003
       token_size_in_bytes: 4
       tokenizer_name: meta-llama/Llama-3.2-1B
       vocab_size: 128256
