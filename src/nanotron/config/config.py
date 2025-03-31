@@ -79,6 +79,23 @@ class LoggingArgs:
 
 
 @dataclass
+class MetricsLoggingArgs:
+    """Arguments related to metrics logging and tracking"""
+    
+    # Whether to log detailed metrics (0: basic only, 1: full)
+    level: int = 0  
+    
+    # How often to log detailed metrics (every N steps)
+    interval: int = 10
+    
+    def __post_init__(self):
+        if self.level not in [0, 1]:
+            raise ValueError(f"metrics_level should be either 0 (basic) or 1 (full) and not {self.level}")
+        if self.interval <= 0:
+            raise ValueError(f"metrics_interval should be a positive integer and not {self.interval}")
+
+
+@dataclass
 class PretrainDatasetsArgs:
     hf_dataset_or_datasets: Union[str, list, dict]
     hf_dataset_splits: Optional[Union[str, list]] = None
@@ -410,6 +427,7 @@ class Config:
     tokenizer: Optional[TokenizerArgs] = None
     checkpoints: Optional[CheckpointsArgs] = None
     logging: Optional[LoggingArgs] = None
+    metrics_logging: Optional[MetricsLoggingArgs] = None
     tokens: Optional[TokensArgs] = None
     optimizer: Optional[OptimizerArgs] = None
     data_stages: Optional[List[DatasetStageArgs]] = None

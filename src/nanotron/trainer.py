@@ -57,11 +57,7 @@ from nanotron.logging import (
     log_to_wandb,
     set_ranks_logging_level,
 )
-from nanotron.metrics_logging import (
-    collect_accuracy_metrics,
-    collect_all_metrics,
-    should_log_detailed_metrics,
-)
+from nanotron.metrics_logging import ExperimentLogger
 from nanotron.models import NanotronModel, build_model
 from nanotron.models.base import check_model_has_grad
 from nanotron.models.llama import LlamaForTraining, RotaryEmbedding
@@ -286,6 +282,9 @@ class DistributedTrainer:
         if os.environ.get("NANOTRON_BENCHMARK", "0") == "1":
             log_throughput(self.config, self.parallel_context)
         self.post_init()
+
+        # Initialize metrics logger
+        self.experiment_logger = ExperimentLogger(self.config)
 
     def pre_init(self):
         self.init_checkpoint_path = parse_ckpt_path(config=self.config, parallel_context=self.parallel_context)
@@ -670,7 +669,7 @@ class DistributedTrainer:
                 LogItem("eta", str(datetime.timedelta(seconds=eta_seconds))),
             ]
             if z_loss_avg is not None:
-                log_entries.insert(6, LogItem("z_loss", z_loss_avg.item(), "human_format"))  # , "1.6E"),
+                basic_log_entries.insert(6, LogItem("z_loss", z_loss_avg.item(), "human_format"))  # , "1.6E"),
 
             if self.config.optimizer.clip_grad is not None:
                 basic_log_entries.append(
@@ -693,11 +692,11 @@ class DistributedTrainer:
                     targets = outputs[0]["labels"]
 
                 # Check if we should log detailed metrics
-                should_log_details = should_log_detailed_metrics(self.iteration_step)
+                should_log_details = self.experiment_logger.should_log_detailed_metrics(self.iteration_step)
 
                 # Always add accuracy metrics to wandb if available
                 if logits is not None and targets is not None:
-                    accuracy_metrics = collect_accuracy_metrics(logits, targets)
+                    accuracy_metrics = self.experiment_logger.collect_accuracy_metrics(logits, targets)
                     for name, value in accuracy_metrics.items():
                         if isinstance(value, torch.Tensor):
                             value = value.item()
@@ -707,7 +706,7 @@ class DistributedTrainer:
                 if should_log_details:
                     # Collect all metrics based on the log level
                     debug_mode = self.iteration_step < 5  # More verbose debugging for initial iterations
-                    detailed_metrics = collect_all_metrics(
+                    detailed_metrics = self.experiment_logger.collect_all_metrics(
                         model=self.unwrapped_model,
                         logits=logits,
                         targets=targets,
@@ -715,6 +714,7 @@ class DistributedTrainer:
                         step_time=elapsed_time_per_iteration_ms / 1000,
                         batch_size=self.global_batch_size,
                         seq_length=self.sequence_length,
+                        iteration=self.iteration_step,
                         debug=debug_mode,
                     )
 
