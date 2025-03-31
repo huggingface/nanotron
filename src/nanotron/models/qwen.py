@@ -141,6 +141,7 @@ class Qwen2Attention(nn.Module):
         layer_idx: int,
     ):
         super().__init__()
+        self.config = config
         self.hidden_size = config.hidden_size
         self.tp_pg_size = tp_pg.size()
 
