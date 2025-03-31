@@ -595,6 +595,9 @@ def main():
         tp = config.parallelism.tp
         cp = config.parallelism.context_parallel_size
         ep = config.parallelism.expert_parallel_size
+        # bench
+        if args.bench:
+            config.general.benchmark_csv_path = args.bench
 
     # Save config to YAML file
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
