@@ -224,7 +224,7 @@ class Qwen2Attention(nn.Module):
         q = q.view(-1, self.local_num_heads, self.head_dim)  # [b*s, num_heads, head_dim]
         k = k.view(-1, self.local_num_kv_heads, self.head_dim)  # [b*s, num_kv_heads, head_dim]
         v = v.view(-1, self.local_num_kv_heads, self.head_dim)  # [b*s, num_kv_heads, head_dim]
-        if self.config.no_rope_layer is None or self.layer_idx % self.config.no_rope_layer != 0:
+        if self.config.no_rope_layer is None or (self.layer_idx + 1) % self.config.no_rope_layer != 0:
             rotary_pos_emb = self.rotary_emb(
                 position_ids=position_ids if not self.simple_causal_mask else None, seq_length=seq_length
             )  # [b*s, dim] or [seq_length, dim]
