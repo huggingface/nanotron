@@ -539,7 +539,8 @@ echo "PyTorch version: $(python -c 'import torch; print(torch.__version__)')"
 echo "Is debug build: $(python -c 'import torch; print(torch.version.debug)')"
 echo "CUDA used to build PyTorch: $(python -c 'import torch; print(torch.version.cuda)')"
 echo "ROCM used to build PyTorch: $(python -c 'import torch; print(torch.version.hip)')"
-echo ""
+
+echo "PATH: $PATH"
 
 # Log GPU information
 nvidia-smi
