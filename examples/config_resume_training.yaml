@@ -1,0 +1,109 @@
+checkpoints:
+  checkpoint_interval: 10
+  checkpoints_path: checkpoints
+  checkpoints_path_is_shared_file_system: false
+  load_lr_scheduler: false
+  load_optimizer: false
+  resume_checkpoint_path: checkpoints/smollm2-135m-nanotron
+  save_final_state: false
+  save_initial_state: false
+data_stages:
+- data:
+    dataset:
+      dataset_folder:
+      - /fsx/loubna/tokenized_for_exps/mcf-dataset
+      dataset_weights:
+      - 1
+    num_loading_workers: 1
+    seed: 42
+  name: Stable Training Stage
+  start_training_step: 1
+general:
+  benchmark_csv_path: null
+  consumed_train_samples: null
+  ignore_sanity_checks: false
+  project: resume_training
+  run: resume_training_%date_%jobid
+  seed: 42
+  step: null
+lighteval: null
+logging:
+  iteration_step_info_interval: 1
+  log_level: info
+  log_level_replica: info
+model:
+  ddp_bucket_cap_mb: 25
+  dtype: bfloat16
+  init_method:
+    std: 0.025
+  make_vocab_size_divisible_by: 1
+  model_config:
+    _attn_implementation: sdpa
+    attention_bias: false
+    bos_token_id: 0
+    eos_token_id: 0
+    hidden_act: silu
+    hidden_size: 576
+    initializer_range: 0.041666666666666664
+    interleaved_rotary: false
+    intermediate_size: 1536
+    is_qwen2_config: true
+    max_position_embeddings: 8192
+    moe_config: null
+    num_attention_heads: 9
+    num_hidden_layers: 30
+    num_key_value_heads: 3
+    pad_token_id: null
+    pretraining_tp: 1
+    rms_norm_eps: 1.0e-05
+    rope_interleaved: false
+    rope_scaling: null
+    rope_theta: 100000
+    tie_word_embeddings: true
+    use_cache: true
+    vocab_size: 49152
+optimizer:
+  accumulate_grad_in_fp32: true
+  clip_grad: 1.0
+  learning_rate_scheduler:
+    learning_rate: 0.0003
+    lr_decay_starting_step: null
+    lr_decay_steps: 13
+    lr_decay_style: cosine
+    lr_warmup_steps: 2
+    lr_warmup_style: linear
+    min_decay_lr: 1.0e-05
+  optimizer_factory:
+    adam_beta1: 0.9
+    adam_beta2: 0.95
+    adam_eps: 1.0e-08
+    name: adamW
+    torch_adam_is_fused: true
+  weight_decay: 0.01
+  zero_stage: 0
+parallelism:
+  context_parallel_size: 1
+  dp: 2
+  expert_parallel_size: 1
+  moe_layer_recompute: false
+  pp: 1
+  pp_engine: 1f1b
+  recompute_layer: false
+  tp: 1
+  tp_linear_async_communication: true
+  tp_mode: REDUCE_SCATTER
+  tp_recompute_allgather: true
+profiler: null
+s3_upload: null
+tokenizer:
+  tokenizer_max_length: null
+  tokenizer_name_or_path: HuggingFaceTB/SmolLM2-135M
+  tokenizer_revision: null
+tokens:
+  batch_accumulation_per_replica: 1
+  limit_test_batches: 0
+  limit_val_batches: 0
+  micro_batch_size: 2
+  sequence_length: 256
+  train_steps: 15
+  val_check_interval: -1

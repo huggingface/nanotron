@@ -1,0 +1,25 @@
+---
+description: Overview of Nanotron project structure and key components, useful for onboarding and orientation. Apply when discussing project architecture or organization.
+globs:
+alwaysApply: false
+---
+# Nanotron Project Structure
+Description: Overview of Nanotron project structure and key components, useful for onboarding and orientation. Apply when discussing project architecture or organization.
+
+Nanotron is a distributed training framework for LLMs with key components:
+
+| Component             | Description                                                       |
+|:----------------------|:------------------------------------------------------------------|
+| Training Pipeline     | End-to-end training loop and model lifecycle                      |
+| Distributed Execution | Tensor, pipeline, and data parallelism across devices/nodes       |
+| Model Architectures   | Transformer implementations (Qwen, etc.)                          |
+| Data Management       | Dataset loading, preprocessing, and batching                      |
+| Checkpointing         | Model saving/loading in distributed environments                  |
+
+## Key Files
+
+- **run_train.py**: Main entry point for training
+- **trainer.py**: Core training loop and distributed coordination
+- **dataloader.py**: Dataset/dataloader creation and processing
+- **models/**: Model implementations with distributed support
+- **config_*.py/.yaml**: Model and training configuration files

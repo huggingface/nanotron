@@ -257,7 +257,7 @@ def _test_ddp_with_grad_accum_in_fp32(
         accumulator.backward(loss_fp32_accum)
 
         for name, param in model_ddp_fp32_accum.named_parameters():
-            # Check that half grads has been set to None in sync step, to avoid it being uncorrectly used
+            # Check that half grads has been set to None in sync step, to avoid it being incorrectly used
             half_grad = param.grad
             assert half_grad is None, f"{half_grad} != None"
 
@@ -344,7 +344,7 @@ def _test_tied_weights_sync_with_grad_accum_in_fp32(
                     target,
                     (
                         parallel_context.get_global_rank(
-                            ep_rank=dist.get_rank(parallel_context.expert_pg),
+                            ep_rank=dist.get_rank(parallel_context.ep_pg),
                             pp_rank=get_pp_rank_of(target, module=mdl),
                             dp_rank=dist.get_rank(parallel_context.dp_pg),
                             tp_rank=dist.get_rank(parallel_context.tp_pg),
