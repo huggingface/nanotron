@@ -1,5 +1,5 @@
 checkpoints:
-  checkpoint_interval: 100000
+  checkpoint_interval: 1000
   checkpoints_path: checkpoints
   checkpoints_path_is_shared_file_system: false
   resume_checkpoint_path: null
@@ -88,5 +88,5 @@ tokens:
   limit_val_batches: 0
   micro_batch_size: 3
   sequence_length: 4096
-  train_steps: 32000
+  train_steps: 2000
   val_check_interval: -1

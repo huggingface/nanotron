@@ -89,7 +89,7 @@ sudo apt-get install git-lfs
 
 ### Training a tiny Llama model
 
-The following command will train a tiny Llama model on a single node with 8 GPUs:
+The following command will train a tiny Llama model on a single node of 8 x H100s in about 10 minutes:
 
 ```shell
 CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node=8 run_train.py --config-file examples/config_tiny_llama.yaml
