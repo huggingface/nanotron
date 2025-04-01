@@ -18,12 +18,14 @@ from nanotron.config import (
     DatasetStageArgs,
     PretrainDatasetsArgs,
 )
-from nanotron.dataloader import (
-    DataCollatorForCLM,
-    clm_process,
+from nanotron.data.clm_collator import DataCollatorForCLM
+from nanotron.data.dataloader import (
     get_dataloader_worker_init,
-    get_datasets,
     get_train_dataloader,
+)
+from nanotron.data.processing import (
+    clm_process,
+    get_datasets,
 )
 from nanotron.helpers import (
     compute_remain_train_steps_of_a_data_stage_from_ckp,

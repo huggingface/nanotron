@@ -4,6 +4,7 @@ from itertools import chain, islice
 from typing import TYPE_CHECKING, Generator, Iterable, List, Optional, Tuple, Union
 
 import torch
+from tqdm import tqdm
 
 from nanotron import distributed as dist
 from nanotron import logging
@@ -156,6 +157,44 @@ def micro_splitter(
 
 
 @torch.inference_mode()
+def get_position_ids(input_ids, tokenizer):
+    # Find where padding ends for each sequence
+    batch_size, seq_length = input_ids.shape
+    padding_token_id = tokenizer.eos_token_id
+
+    # Create a mask of padding tokens
+    padding_mask = input_ids == padding_token_id
+
+    # Find indices where non-padding tokens start
+    # For sequences with no padding, this will be 0
+    # For sequences with padding, this will be the first non-padding position
+    non_padding_indices = torch.zeros(batch_size, dtype=torch.long, device=input_ids.device)
+
+    # Only compute for rows that have padding
+    rows_with_padding = padding_mask.any(dim=1).nonzero().squeeze(-1)
+    if rows_with_padding.numel() > 0:
+        for idx in rows_with_padding:
+            # Find the last padding token position
+            last_padding_pos = padding_mask[idx].nonzero()[-1].item()
+            non_padding_indices[idx] = last_padding_pos + 1
+
+    # Create position_ids tensor initialized with zeros
+    position_ids = torch.zeros((batch_size, seq_length), dtype=torch.int32, device=input_ids.device)
+
+    # Set up a range tensor we'll use for all sequences
+    range_tensor = torch.arange(seq_length, device=input_ids.device)
+
+    # Vectorized assignment of position IDs
+    for i in range(batch_size):
+        start_idx = non_padding_indices[i].item()
+        # For positions after padding, use range starting from 0
+        # For positions before or at padding end, keep as 0
+        if start_idx < seq_length:
+            position_ids[i, start_idx:] = range_tensor[: seq_length - start_idx]
+    return position_ids
+
+
+@torch.inference_mode()
 def decode_text(
     input_iter: Iterable[GenerationInput],
     tokenizer: "PreTrainedTokenizer",
@@ -238,7 +277,7 @@ def decode_text(
             if is_bench:
                 start_time, elapsed_time_first_iteration = time.perf_counter(), 0
 
-            for generation_iter in range(max_new_tokens):
+            for generation_iter in tqdm(range(max_new_tokens), desc="Generating"):
 
                 if is_bench and generation_iter == 0:
                     torch.cuda.synchronize()
@@ -252,11 +291,12 @@ def decode_text(
                     new_decoder_states.append(state)
                     # Get the new logits
                     if generation_config.use_cache:
+                        raise NotImplementedError("Use-cache is not supported for now")
                         with attach_store(model=model, store=state.store):
-                            # transpose: [sequence_length, batch_size, vocab_size] -> [batch_size, sequence_length, vocab_size]
+                            position_ids = get_position_ids(state.new_input_ids, tokenizer)
                             sharded_logits = model(
                                 input_ids=state.new_input_ids,
-                                input_mask=state.new_input_mask,
+                                position_ids=position_ids,  # [batch_size, seq_len]
                             )
                     else:
                         if isinstance(state.new_input_ids, torch.Tensor):
@@ -265,15 +305,16 @@ def decode_text(
                         else:
                             batch_generated_ids = state.new_input_ids
                             batch_generated_mask = state.new_input_mask
+                        position_ids = get_position_ids(batch_generated_ids, tokenizer)
                         sharded_logits = model(
                             input_ids=batch_generated_ids,
-                            input_mask=batch_generated_mask,
-                        )
+                            position_ids=position_ids,  # [batch_size, seq_len]
+                        )  # [batch_size*seq_len, vocab_size]
 
-                    if isinstance(sharded_logits, torch.Tensor) and logits_are_batch_first:
+                    sharded_logits = sharded_logits.view(*position_ids.shape, -1)  # [batch_size, seq_len, vocab_size]
+                    if isinstance(sharded_logits, torch.Tensor) and not logits_are_batch_first:
                         sharded_logits = sharded_logits.transpose(0, 1)
                     # Communicate
-                    # TODO @thomasw21: Make a diagram to show how this works
                     nb_send: int = 0
                     if is_decoder_input_rank:
                         if is_max_nb_microbatches:
@@ -500,6 +541,7 @@ def decode_tokenized(
     generation_config: GenerationArgs,
     max_micro_batch_size: int,
     max_new_tokens: int,
+    tokenizer: "PreTrainedTokenizer",
     returns_logits: Optional[bool] = False,
 ) -> Generator[GenerationOutput, None, None]:
     """We assume the following:
@@ -573,10 +615,10 @@ def decode_tokenized(
                     new_decoder_states.append(state)
                     # Get the new logits
                     with attach_store(model=model, store=state.store):
-                        # transpose: [sequence_length, batch_size, vocab_size] -> [batch_size, sequence_length, vocab_size]
+                        position_ids = get_position_ids(state.new_input_ids, tokenizer)
                         sharded_logits = model(
                             input_ids=state.new_input_ids,
-                            input_mask=state.new_input_mask,
+                            position_ids=position_ids,  # [batch_size, seq_len]
                         )
                         if isinstance(sharded_logits, torch.Tensor):
                             sharded_logits = sharded_logits.transpose(0, 1)

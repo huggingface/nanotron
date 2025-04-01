@@ -1,0 +1,176 @@
+checkpoints:
+  checkpoint_interval: 100000
+  checkpoints_path: checkpoints
+  checkpoints_path_is_shared_file_system: false
+  load_lr_scheduler: true
+  load_optimizer: true
+  resume_checkpoint_path: null
+  save_final_state: false
+  save_initial_state: false
+data_stages:
+- data:
+    # dataset: null
+    dataset:
+      dataset_folder:
+      # - /fsx/loubna/datasets/llama_tokenized/fineweb-edu/merged
+      # - /fsx/loubna/datasets/llama_tokenized/other_sources/dclm/
+      # - /fsx/loubna/datasets/llama_tokenized/pes2o/standard
+      - /fsx/loubna/datasets/llama_tokenized/other_sources/wiki
+      # - /fsx/loubna/datasets/llama_tokenized/other_sources/fw2-hq-fra_Latn/
+      # - /fsx/loubna/datasets/llama_tokenized/other_sources/fw2-hq-spa_Latn/
+      # - /fsx/loubna/datasets/llama_tokenized/other_sources/fw2-hq-deu_Latn/
+      # - /fsx/loubna/datasets/llama_tokenized/fw2-hq-ita_Latn/standard
+      # - /fsx/loubna/datasets/llama_tokenized/other_sources/fw2-hq-por_Latn/
+      # - /fsx/loubna/datasets/llama_tokenized/fw2-hq-cmn_Hani/standard
+      # - /fsx/loubna/datasets/llama_tokenized/fw2-hq-rus_Cyrl/standard
+      # - /fsx/loubna/datasets/llama_tokenized/other_sources/fw2-hq-fas_Arab/
+      # - /fsx/loubna/datasets/llama_tokenized/other_sources/fw2-hq-jpn_Jpan/
+      # - /fsx/loubna/datasets/llama_tokenized/fw2-kor_Hang/standard
+      # - /fsx/loubna/datasets/llama_tokenized/other_sources/fw2-hin_Deva/
+      # - /fsx/loubna/datasets/llama_tokenized/other_sources/fw2-tha_Thai/
+      # - /fsx/loubna/datasets/llama_tokenized/other_sources/fw2-hq-vie_Latn/
+      # - /fsx/loubna/datasets/llama_tokenized/other_sources/fw2-hq-ell_Grek/
+      # - /fsx/loubna/datasets/llama_tokenized/other_sources/infiwebmath-3plus/
+      # - /fsx/loubna/datasets/llama_tokenized/other_sources/finemath-3plus/
+      # - /fsx/loubna/datasets/llama_tokenized/other_sources/stack-edu-Python/
+      # - /fsx/loubna/datasets/llama_tokenized/other_sources/stack-edu-Java/
+      # - /fsx/loubna/datasets/llama_tokenized/other_sources/stack-edu-JavaScript/
+      # - /fsx/loubna/datasets/llama_tokenized/kaggle/standard
+      # dataset_weights:
+      # - 0.307
+      # - 0.307
+      # - 0.024
+      # - 0.002
+      # - 0.018
+      # - 0.018
+      # - 0.018
+      # - 0.012
+      # - 0.012
+      # - 0.013
+      # - 0.012
+      # - 0.003
+      # - 0.0026
+      # - 0.0026
+      # - 0.0026
+      # - 0.0026
+      # - 0.0026
+      # - 0.0026
+      # - 0.02
+      # - 0.02
+      # - 0.069
+      # - 0.069
+      # - 0.059
+      # - 0.003
+      token_size_in_bytes: 4
+      tokenizer_name: meta-llama/Llama-3.2-1B
+      vocab_size: 128256
+    num_loading_workers: 8
+    seed: 42
+  name: Training Stage
+  start_training_step: 1
+general:
+  # benchmark_csv_path: benchmark.csv
+  consumed_train_samples: null
+  ignore_sanity_checks: true
+  project: smollm3-benchmarks
+  run: qwen-3B-nn8-mbs3-tp2-not-fused
+  seed: 6
+  step: null
+lighteval: null
+logging:
+  iteration_step_info_interval: 1
+  log_level: info
+  log_level_replica: info
+model:
+  ddp_bucket_cap_mb: 25
+  dtype: bfloat16
+  init_method:
+    std: 0.02
+  make_vocab_size_divisible_by: 1
+  model_config:
+    _attn_implementation: flash_attention_2
+    _fused_rms_norm: true
+    _fused_rotary_emb: true
+    _use_qkv_packed: true
+    attention_bias: false
+    bos_token_id: 128000
+    eos_token_id: 128001
+    flex_attention_mask: null
+    hidden_act: silu
+    hidden_size: 2048
+    initializer_range: 0.02
+    intermediate_size: 11008
+    is_qwen2_config: true
+    max_position_embeddings: 4096
+    moe_config: null
+    num_attention_heads: 16
+    num_hidden_layers: 36
+    num_key_value_heads: 2
+    pad_token_id: null
+    pretraining_tp: 2
+    rms_norm_eps: 1.0e-06
+    rope_interleaved: false
+    rope_scaling: null
+    rope_theta: 10000.0
+    sliding_window_size: null
+    tie_word_embeddings: true
+    use_cache: true
+    vocab_size: 128256
+    z_loss_coefficient: 0.0001
+    z_loss_enabled: false
+optimizer:
+  accumulate_grad_in_fp32: true
+  clip_grad: 1.0
+  learning_rate_scheduler:
+    learning_rate: 0.0002
+    lr_decay_starting_step: 26000
+    lr_decay_steps: 6000
+    lr_decay_style: linear
+    lr_warmup_steps: 2000
+    lr_warmup_style: linear
+    min_decay_lr: 0
+  optimizer_factory:
+    adam_beta1: 0.9
+    adam_beta2: 0.95
+    adam_eps: 1.0e-08
+    name: adamW
+    torch_adam_is_fused: true
+  weight_decay: 0.01
+  weight_decay_exclude_named_params: []
+  zero_stage: 0
+parallelism:
+  context_parallel_size: 1
+  dp: 4
+  expert_parallel_size: 1
+  moe_layer_recompute: false
+  pp: 1
+  pp_engine: 1f1b
+  recompute_layer: false
+  tp: 2
+  tp_linear_async_communication: true
+  tp_mode: REDUCE_SCATTER
+  tp_recompute_allgather: true
+# profiler:
+#   active: 1
+#   export_chrome_trace: false
+#   profile_memory: false
+#   profiler_export_path: tb_logs
+#   record_shapes: false
+#   repeat: 1
+#   skip_first: 3
+#   wait: 1
+#   warmup: 1
+#   with_stack: true
+s3_upload: null
+tokenizer:
+  tokenizer_max_length: null
+  tokenizer_name_or_path: meta-llama/Llama-3.2-1B
+  tokenizer_revision: null
+tokens:
+  batch_accumulation_per_replica: 8
+  limit_test_batches: 0
+  limit_val_batches: 0
+  micro_batch_size: 3
+  sequence_length: 4096
+  train_steps: 32000
+  val_check_interval: -1

@@ -109,11 +109,11 @@ class ParallelDroplessMLP(torch.nn.Module):
         self.config = config
         self.use_bias = use_bias
 
-        self.expert_pg_size = parallel_context.expert_pg.size()
-        self.expert_parallel_group = parallel_context.expert_pg
+        self.ep_pg_size = parallel_context.ep_pg.size()
+        self.expert_parallel_group = parallel_context.ep_pg
 
-        self.hidden_sharding_degree = self.expert_pg_size // min(self.expert_pg_size, self.config.moe_num_experts)
-        self.experts_per_rank = self.config.moe_num_experts // min(self.expert_pg_size, self.config.moe_num_experts)
+        self.hidden_sharding_degree = self.ep_pg_size // min(self.ep_pg_size, self.config.moe_num_experts)
+        self.experts_per_rank = self.config.moe_num_experts // min(self.ep_pg_size, self.config.moe_num_experts)
 
         self.num_experts = config.moe_num_experts
         self.num_experts_per_tok = self.config.num_experts_per_tok
@@ -126,7 +126,7 @@ class ParallelDroplessMLP(torch.nn.Module):
             self.bias = torch.nn.Parameter(torch.empty(config.hidden_size))  # TODO: init
 
         # Select the forward function for the operating mode.
-        self.forward_fn = self.parallel_forward_once if self.expert_pg_size > 1 else self.forward_once
+        self.forward_fn = self.parallel_forward_once if self.ep_pg_size > 1 else self.forward_once
 
         self.blocking = 128
 
@@ -218,9 +218,9 @@ class ParallelDroplessMLP(torch.nn.Module):
         with torch.no_grad():
             tpe_handle.wait()
 
-            # Reshape to [expert_pg_size, num_experts_per_rank].
-            repeated_tokens_per_expert = repeated_tokens_per_expert.view(self.expert_pg_size, self.experts_per_rank)
-            parallel_tokens_per_expert = parallel_tokens_per_expert.view(self.expert_pg_size, self.experts_per_rank)
+            # Reshape to [ep_pg_size, num_experts_per_rank].
+            repeated_tokens_per_expert = repeated_tokens_per_expert.view(self.ep_pg_size, self.experts_per_rank)
+            parallel_tokens_per_expert = parallel_tokens_per_expert.view(self.ep_pg_size, self.experts_per_rank)
 
             send_counts = repeated_tokens_per_expert.cpu().sum(dim=-1)
             parallel_tokens_per_expert_cpu = parallel_tokens_per_expert.cpu()
@@ -418,26 +418,26 @@ class SparseMLP(nn.Module):
     ):
         super().__init__()
 
-        self.expert_pg_size = parallel_config.expert_parallel_size if parallel_config is not None else 1
-        self.experts_per_rank = config.moe_num_experts // min(self.expert_pg_size, config.moe_num_experts)
+        self.ep_pg_size = parallel_config.expert_parallel_size if parallel_config is not None else 1
+        self.experts_per_rank = config.moe_num_experts // min(self.ep_pg_size, config.moe_num_experts)
         self.tp_pg = parallel_context.tp_pg
 
         self.w1 = ExpertParallel(
             nn.Linear(
                 config.hidden_size, config.intermediate_size * self.experts_per_rank // self.tp_pg.size(), bias=False
             ),
-            expert_parallel_size=self.expert_pg_size,
+            expert_parallel_size=self.ep_pg_size,
         )
         self.w2 = ExpertParallel(
             nn.Linear(
                 config.hidden_size, config.intermediate_size * self.experts_per_rank // self.tp_pg.size(), bias=False
             ),
-            expert_parallel_size=self.expert_pg_size,
+            expert_parallel_size=self.ep_pg_size,
         )
 
         mark_all_parameters_in_module_as_sharded(
             self,
-            pg=parallel_context.tp_and_expert_pg,
+            pg=parallel_context.tp_and_ep_pg,
             split_config=SplitConfig(split_dim=0),
         )
 
@@ -470,8 +470,8 @@ class MLP(nn.Module):
             parallel_config.tp_linear_async_communication if parallel_config is not None else False
         )
 
-        self.expert_pg_size = parallel_config.expert_parallel_size
-        self.experts_per_rank = config.moe_num_experts // min(self.expert_pg_size, config.moe_num_experts)
+        self.ep_pg_size = parallel_config.expert_parallel_size
+        self.experts_per_rank = config.moe_num_experts // min(self.ep_pg_size, config.moe_num_experts)
 
         assert self.experts_per_rank == 1, "moe.MLP only supports 1 expert per rank, otherwise use moe.SparseMLP"
 
@@ -484,7 +484,7 @@ class MLP(nn.Module):
                 bias=False,
                 async_communication=tp_linear_async_communication,
             ),
-            expert_parallel_size=self.expert_pg_size,
+            expert_parallel_size=self.ep_pg_size,
         )
 
         self.w2 = ExpertParallel(
@@ -497,7 +497,7 @@ class MLP(nn.Module):
                 async_communication=tp_linear_async_communication
                 and tp_mode is TensorParallelLinearMode.REDUCE_SCATTER,
             ),
-            expert_parallel_size=self.expert_pg_size,
+            expert_parallel_size=self.ep_pg_size,
         )
         # TODO @nouamane: jit
         self.act = partial(F.gelu, approximate="tanh")

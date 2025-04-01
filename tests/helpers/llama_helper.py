@@ -1,5 +1,3 @@
-from typing import Optional
-
 import torch
 from nanotron.config import (
     AdamWOptimizerArgs,
@@ -22,7 +20,6 @@ from nanotron.config import (
 from nanotron.config.config import PretrainDatasetsArgs
 from nanotron.models import build_model
 from nanotron.models.llama import LlamaForTraining
-from nanotron.parallel.comm import CudaStreamManager
 from nanotron.parallel.context import ParallelContext
 from nanotron.trainer import mark_tied_parameters
 
@@ -31,14 +28,14 @@ TINY_LLAMA_CONFIG = LlamaConfig(
         "bos_token_id": 1,
         "eos_token_id": 2,
         "hidden_act": "silu",
-        "hidden_size": 16,
+        "hidden_size": 128,
         "initializer_range": 0.02,
-        "intermediate_size": 32,
+        "intermediate_size": 128 * 4,
         "is_llama_config": True,
         "max_position_embeddings": 128,
-        "num_attention_heads": 8,
+        "num_attention_heads": 4,
         "num_hidden_layers": 4,
-        "num_key_value_heads": 4,
+        "num_key_value_heads": 2,
         "pad_token_id": None,
         "pretraining_tp": 1,
         "rms_norm_eps": 1e-06,
@@ -50,19 +47,7 @@ TINY_LLAMA_CONFIG = LlamaConfig(
 )
 
 
-def get_parallel_config(parallel_context: ParallelContext):
-    return ParallelismArgs(
-        dp=parallel_context.data_parallel_size,
-        pp=parallel_context.pipeline_parallel_size,
-        tp=parallel_context.tensor_parallel_size,
-        expert_parallel_size=parallel_context.expert_parallel_size,
-        pp_engine=AllForwardAllBackwardPipelineEngine(),
-        tp_mode=TensorParallelLinearMode.ALL_REDUCE,
-        tp_linear_async_communication=False,
-    )
-
-
-def get_llama_training_config(model_config: ModelArgs, parallel_context):
+def get_llama_training_config(model_config: ModelArgs):
     return Config(
         model=model_config,
         general=GeneralArgs(project="unittest", run="sanity_llama", seed=42),
@@ -70,20 +55,27 @@ def get_llama_training_config(model_config: ModelArgs, parallel_context):
             checkpoints_path="./checkpoints",
             checkpoint_interval=10,
         ),
-        parallelism=get_parallel_config(parallel_context),
+        parallelism=ParallelismArgs(
+            dp=1,
+            pp=1,
+            tp=2,
+            expert_parallel_size=2,
+            pp_engine="1f1b",
+            tp_mode="ALL_REDUCE",
+            tp_linear_async_communication=False,
+        ),
         tokenizer=TokenizerArgs("gpt2"),
         optimizer=OptimizerArgs(
-            zero_stage=0,
-            weight_decay=0.01,
-            clip_grad=1.0,
-            accumulate_grad_in_fp32=False,
             optimizer_factory=AdamWOptimizerArgs(
                 adam_eps=1e-08,
                 adam_beta1=0.9,
                 adam_beta2=0.95,
                 torch_adam_is_fused=True,
-                name="adamW",
             ),
+            zero_stage=0,
+            weight_decay=0.01,
+            clip_grad=1.0,
+            accumulate_grad_in_fp32=False,
             learning_rate_scheduler=LRSchedulerArgs(
                 learning_rate=3e-4,
                 lr_warmup_steps=100,
@@ -114,11 +106,7 @@ def get_llama_training_config(model_config: ModelArgs, parallel_context):
 
 
 def create_llama_from_config(
-    model_config: LlamaConfig,
-    parallel_config: ParallelismArgs,
-    device: torch.device,
-    parallel_context: ParallelContext,
-    stream_manager: Optional[CudaStreamManager] = None,
+    model_config: LlamaConfig, device: torch.device, parallel_context: ParallelContext
 ) -> LlamaForTraining:
 
     """
@@ -129,13 +117,20 @@ def create_llama_from_config(
     the model created will have random weights.
     """
 
+    parallel_config = ParallelismArgs(
+        dp=parallel_context.data_parallel_size,
+        pp=parallel_context.pipeline_parallel_size,
+        tp=parallel_context.tensor_parallel_size,
+        pp_engine=AllForwardAllBackwardPipelineEngine(),
+        tp_mode=TensorParallelLinearMode.ALL_REDUCE,
+        tp_linear_async_communication=False,
+    )
     model = build_model(
         model_builder=lambda: LlamaForTraining(
             config=model_config,
             parallel_context=parallel_context,
             parallel_config=parallel_config,
             random_states=None,
-            stream_manager=stream_manager,
         ),
         parallel_context=parallel_context,
         dtype=torch.bfloat16,

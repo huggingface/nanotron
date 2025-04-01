@@ -49,6 +49,7 @@ class InheritFromOtherOptimizer(BaseOptimizer):
     def load_state_dict(self, state_dict: dict, map_location: Optional[Union[str, torch.device]] = None) -> None:
         return self.optimizer.load_state_dict(state_dict, map_location=map_location)
 
+    @torch.profiler.record_function("InheritFromOtherOptimizer.step")
     def step(self, closure: Optional[Callable[[], float]] = None) -> Optional[float]:
         return self.optimizer.step(closure=closure)
 

@@ -115,6 +115,7 @@ class PipelineEngine(ABC):
         context = ContextManagers(context_list)
         return context
 
+    @torch.profiler.record_function("train_batch_iter")
     @abstractmethod
     def train_batch_iter(
         self,
@@ -162,10 +163,19 @@ class PipelineEngine(ABC):
 
         return outputs
 
+    def __str__(self):
+        return self.__class__.__name__
+
+    def __format__(self, format_spec):
+        return str(self)
+
 
 class AllForwardAllBackwardPipelineEngine(PipelineEngine):
     def __init__(self):
         super().__init__()
+
+    def __str__(self):
+        return "afab"
 
     def train_batch_iter(
         self,
@@ -223,6 +233,9 @@ class AllForwardAllBackwardPipelineEngine(PipelineEngine):
 class OneForwardOneBackwardPipelineEngine(PipelineEngine):
     def __init__(self):
         super().__init__()
+
+    def __str__(self):
+        return "1f1b"
 
     def train_batch_iter(
         self,
