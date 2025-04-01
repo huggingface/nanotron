@@ -35,42 +35,80 @@ Nanotron is a library for pretraining transformer models. It provides a simple a
 
 ## Installation
 
-```bash
-# Requirements: Python>=3.10,<3.12
-git clone https://github.com/huggingface/nanotron
-cd nanotron
-pip install --upgrade pip
-pip install torch --index-url https://download.pytorch.org/whl/cu124
-pip install -e .
+To run the code in this project, first create a Python virtual environment using e.g. `uv`:
 
-# Install dependencies if you want to use the example scripts
-pip install datasets transformers datatrove[io,processing] numba # wandb
-# Fused kernels
-pip install ninja triton "flash-attn>=2.5.0" --no-build-isolation
+
+```shell
+uv venv nanotron --python 3.11 && source nanotron/bin/activate && uv pip install --upgrade pip
 ```
-> [!NOTE]
-> If you get `undefined symbol: ncclCommRegister` error you should install torch 2.1.2 instead: `pip install torch==2.1.2 --index-url https://download.pytorch.org/whl/cu121`
 
 > [!TIP]
-> We log to wandb automatically if it's installed. For that you can use `pip install wandb`. If you don't want to use wandb, you can run `wandb disabled`.
+> For Hugging Face cluster users, add `export UV_LINK_MODE=copy` to your `.bashrc` to suppress cache warnings from `uv`
+
+Next, install Pytorch:
+
+```shell
+uv pip install torch --index-url https://download.pytorch.org/whl/cu124
+```
+
+Then install the core dependencies with:
+
+```shell
+uv pip install -e .
+```
+
+To run the example scripts, install the remaining dependencies as follows:
+
+```shell
+uv pip install datasets transformers datatrove[io] numba wandb
+# Fused kernels
+uv pip install ninja triton "flash-attn>=2.5.0" --no-build-isolation
+```
+
+Next, log into your Hugging Face and Weights and Biases accounts as follows:
+
+```shell
+huggingface-cli login
+wandb login
+```
+
+Finally, check whether your system has Git LFS installed so that you can load and push models/datasets to the Hugging Face Hub:
+
+```shell
+git-lfs --version
+```
+
+If it isn't installed, run:
+
+```shell
+sudo apt-get install git-lfs
+```
+
 
 ## Quick Start
+
 ### Training a tiny Llama model
-The following command will train a tiny Llama model on a single node with 8 GPUs. The model will be saved in the `checkpoints` directory as specified in the config file.
-```bash
+
+The following command will train a tiny Llama model on a single node with 8 GPUs:
+
+```shell
 CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node=8 run_train.py --config-file examples/config_tiny_llama.yaml
-# or use examples/config_tiny_llama.py to generate your own config
 ```
 
-For detailed instructions on training your first model, check out our [Your First Training guide](docs/your-first-training.md).
+The model will be saved in the `checkpoints` directory as specified in the config file.
 
-For multi-node training with Slurm, see our [Multi-Node Training guide](docs/multi-node-training.md).
+> [!NOTE]
+> You can use `examples/config_tiny_llama.py` to generate your own training config 
+
+For detailed instructions on training your first model, check out our [Your First Training guide](docs/your-first-training.md). For multi-node training with Slurm, see our [Multi-Node Training guide](docs/multi-node-training.md).
 
 ### Run generation from your checkpoint
-```bash
-torchrun --nproc_per_node=1 run_generate.py --ckpt-path checkpoints/10/ --tp 1 --pp 1
-# We could set a larger TP for faster generation, and a larger PP in case of very large models.
+
+```shell
+torchrun --nproc_per_node=1 run_generate.py --ckpt-path checkpoints/{checkpoint_number}/ --tp 1 --pp 1
 ```
+
+Increase the value of `--tp` (tensor paralle) to accelerate generation with multiple GPUs and use a larger value of `--pp` (pipeline parallel) for very large models.
 
 ### Debugging with VSCode
 To debug with VSCode, add the following configuration to your `launch.json` file:
