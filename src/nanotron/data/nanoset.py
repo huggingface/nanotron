@@ -86,6 +86,7 @@ class Nanoset(torch.utils.data.Dataset):
         self.dataset_index, self.dataset_sample_index = self.new_build_nanoset_index()
 
         self.print_nanoset_info()
+        self.analyze_batch_diversity()
 
     def __len__(self) -> int:
         """
@@ -128,13 +129,13 @@ class Nanoset(torch.utils.data.Dataset):
         # Try to load from cache
         if os.path.exists(cache_file):
             try:
-                logger.info(f"[Nanoset] Loading index from cache: {cache_file}")
+                log_rank(f"[Nanoset] Loading index from cache: {cache_file}", logger=logger, level=logging.INFO, rank=0)
                 cached_data = np.load(cache_file)
                 return cached_data["dataset_index"], cached_data["dataset_sample_index"]
             except Exception as e:
-                logger.warning(f"[Nanoset] Failed to load cache, rebuilding index: {e}")
+                log_rank(f"[Nanoset] Failed to load cache, rebuilding index: {e}", logger=logger, level=logging.WARNING, rank=0)
 
-        logger.info(f"[Nanoset] Building sequential Nanoset index for {len(self.dataset_folders)} datasets")
+        log_rank(f"[Nanoset] Building sequential Nanoset index for {len(self.dataset_folders)} datasets", logger=logger, level=logging.INFO, rank=0)
 
         # Original index building logic
         total_weighted_samples = np.array(self.dataset_weights) * self.train_split_num_samples
@@ -165,9 +166,9 @@ class Nanoset(torch.utils.data.Dataset):
         try:
             os.makedirs(self.cache_dir, exist_ok=True)
             np.savez(cache_file, dataset_index=dataset_index, dataset_sample_index=dataset_sample_index)
-            logger.info(f"[Nanoset] Saved index to cache: {cache_file}")
+            log_rank(f"[Nanoset] Saved index to cache: {cache_file}", logger=logger, level=logging.INFO, rank=0)
         except Exception as e:
-            logger.warning(f"[Nanoset] Failed to save cache: {e}")
+            log_rank(f"[Nanoset] Failed to save cache: {e}", logger=logger, level=logging.WARNING, rank=0)
 
         return dataset_index, dataset_sample_index
 
@@ -211,6 +212,162 @@ class Nanoset(torch.utils.data.Dataset):
                 level=logging.INFO,
                 rank=0,
             )
+
+    def analyze_batch_diversity(self, num_random_batches=64, batch_size=8, num_detailed_batches=5):
+        """
+        Analyzes dataset distribution within random batches, providing global stats and detailed examples.
+
+        Args:
+            num_random_batches (int): The number of random batches to sample for global statistics.
+            batch_size (int): The batch size to use for analysis.
+            num_detailed_batches (int): The number of sampled batches for which to print detailed distribution.
+        """
+        if not hasattr(self, 'dataset_index') or len(self.dataset_index) == 0:
+            log_rank("Dataset index not available or empty. Skipping diversity analysis.", logger=logger, level=logging.INFO, rank=0)
+            return
+
+        if batch_size <= 0:
+            log_rank("Batch size must be positive. Skipping diversity analysis.", logger=logger, level=logging.WARNING, rank=0)
+            return
+
+        # Calculate total number of possible full batches
+        total_possible_batches = len(self.dataset_index) // batch_size
+
+        if total_possible_batches == 0:
+            log_rank(f"Not enough samples ({len(self.dataset_index)}) for a single batch of size {batch_size}. Skipping diversity analysis.", logger=logger, level=logging.INFO, rank=0)
+            return
+
+        if num_random_batches <= 0:
+            log_rank("Number of random batches must be positive. Skipping diversity analysis.", logger=logger, level=logging.WARNING, rank=0)
+            return
+            
+        num_detailed_batches = max(0, num_detailed_batches) # Ensure non-negative
+
+        # Adjust num_random_batches if it exceeds the total possible batches
+        actual_num_batches_to_analyze = min(num_random_batches, total_possible_batches)
+        if actual_num_batches_to_analyze < num_random_batches:
+            log_rank(f"Requested {num_random_batches} random batches, but only {total_possible_batches} possible batches exist. Analyzing {actual_num_batches_to_analyze} batches.", logger=logger, level=logging.INFO, rank=0)
+            
+        # Adjust num_detailed_batches if it exceeds the number we actually analyze
+        actual_num_detailed_batches = min(num_detailed_batches, actual_num_batches_to_analyze)
+
+        # Select unique random batch indices
+        rng = np.random.RandomState(self.random_seed) # Use the instance seed for reproducibility
+        random_batch_indices = rng.choice(total_possible_batches, size=actual_num_batches_to_analyze, replace=False)
+
+        # --- Data Collection Phase ---
+        batch_diversities = []
+        all_batch_dataset_counts = np.zeros((actual_num_batches_to_analyze, len(self.dataset_folders)), dtype=int)
+
+        for i, batch_idx in enumerate(random_batch_indices):
+            batch_indices = self.dataset_index[batch_idx * batch_size : (batch_idx + 1) * batch_size]
+            unique_datasets_in_batch = set()
+            current_batch_counts = np.zeros(len(self.dataset_folders), dtype=int)
+
+            for dataset_id in batch_indices:
+                current_batch_counts[dataset_id] += 1
+                unique_datasets_in_batch.add(dataset_id)
+            
+            batch_diversities.append(len(unique_datasets_in_batch))
+            all_batch_dataset_counts[i, :] = current_batch_counts
+            
+        # --- Global Statistics Calculation ---
+        avg_diversity = np.mean(batch_diversities)
+        median_diversity = np.median(batch_diversities)
+        min_diversity = np.min(batch_diversities)
+        max_diversity = np.max(batch_diversities)
+
+        # Calculate per-batch percentages for the sampled batches
+        sampled_batch_percentages = all_batch_dataset_counts / batch_size * 100
+        avg_sampled_batch_percentages = np.mean(sampled_batch_percentages, axis=0)
+        std_sampled_percentages = np.std(sampled_batch_percentages, axis=0)
+
+        # --- Global Statistics Reporting ---
+        log_rank("=" * 80, logger=logger, level=logging.INFO, rank=0)
+        log_rank(f"RANDOM BATCH DIVERSITY ANALYSIS (Sampled {actual_num_batches_to_analyze} random batches of size {batch_size})", 
+                 logger=logger, level=logging.INFO, rank=0)
+        log_rank(f"Avg. datasets/batch in sample: {avg_diversity:.2f} (Median: {int(median_diversity)}, Min: {min_diversity}, Max: {max_diversity})", 
+                 logger=logger, level=logging.INFO, rank=0)
+        log_rank("-" * 80, logger=logger, level=logging.INFO, rank=0)
+        log_rank(f"{'Dataset Path':<45} | {'Avg Batch %':<12} | {'Expected %':<10} | {'Std Dev (%)':<12}", 
+                 logger=logger, level=logging.INFO, rank=0)
+        log_rank(f"{'-'*45}-+-{'-'*12}-+-{'-'*10}-+-{'-'*12}", 
+                 logger=logger, level=logging.INFO, rank=0)
+
+        for dataset_idx, folder in enumerate(self.dataset_folders):
+            avg_pct = avg_sampled_batch_percentages[dataset_idx]
+            expected_pct = self.dataset_weights[dataset_idx] * 100
+            std_pct = std_sampled_percentages[dataset_idx]
+            
+            # Format path
+            if len(folder) > 45:
+                parts = folder.split('/')
+                if len(parts) > 3:
+                    dataset_path = f"{parts[0]}/.../{'/'.join(parts[-2:])}"
+                    if len(dataset_path) > 45:
+                        dataset_path = "..." + dataset_path[-42:]
+                else:
+                    dataset_path = "..." + folder[-(45-3):]
+            else:
+                dataset_path = folder
+            
+            log_rank(f"{dataset_path:<45} | {avg_pct:12.2f} | {expected_pct:10.2f} | {std_pct:12.2f}", 
+                     logger=logger, level=logging.INFO, rank=0)
+
+        # --- Detailed Batch Reporting --- 
+        if actual_num_detailed_batches > 0:
+            log_rank("=" * 80, logger=logger, level=logging.INFO, rank=0)
+            log_rank(f"Detailed Distribution for {actual_num_detailed_batches} Sampled Batches:", logger=logger, level=logging.INFO, rank=0)
+            log_rank("=" * 80, logger=logger, level=logging.INFO, rank=0)
+            
+            # Select which batches to detail (e.g., the first few sampled)
+            detailed_batch_indices_in_sample = range(actual_num_detailed_batches) # Indices within our sample (0 to N-1)
+
+            for i, sample_idx in enumerate(detailed_batch_indices_in_sample):
+                original_batch_idx = random_batch_indices[sample_idx]
+                dataset_counts = all_batch_dataset_counts[sample_idx, :]
+                diversity = batch_diversities[sample_idx]
+                
+                log_rank(f"--- Detailed Batch {i+1}/{actual_num_detailed_batches} (Original Index: {original_batch_idx}) ---", 
+                         logger=logger, level=logging.INFO, rank=0)
+                log_rank(f"  Diversity: {diversity}/{len(self.dataset_folders)} datasets present", logger=logger, level=logging.INFO, rank=0)
+                log_rank(f"  {'Dataset Path':<45} | {'Count':<7} | {'Actual %':<10} | {'Expected %':<10} | {'Diff %':<8}", 
+                         logger=logger, level=logging.INFO, rank=0)
+                log_rank(f"  {'-'*45}-+-{'-'*7}-+-{'-'*10}-+-{'-'*10}-+-{'-'*8}", 
+                         logger=logger, level=logging.INFO, rank=0)
+
+                # Find which datasets are actually present in this batch
+                present_dataset_indices = np.where(dataset_counts > 0)[0]
+
+                for dataset_idx in present_dataset_indices:
+                    folder = self.dataset_folders[dataset_idx]
+                    count = int(dataset_counts[dataset_idx])
+                    actual_pct = count / batch_size * 100
+                    expected_pct = self.dataset_weights[dataset_idx] * 100
+                    diff_pct = actual_pct - expected_pct
+
+                    # Format path
+                    if len(folder) > 45:
+                        parts = folder.split('/')
+                        if len(parts) > 3:
+                            dataset_path = f"{parts[0]}/.../{'/'.join(parts[-2:])}"
+                            if len(dataset_path) > 45:
+                                dataset_path = "..." + dataset_path[-42:]
+                        else:
+                            dataset_path = "..." + folder[-(45-3):]
+                    else:
+                        dataset_path = folder
+                    
+                    log_rank(f"  {dataset_path:<45} | {count:<7} | {actual_pct:10.2f} | {expected_pct:10.2f} | {diff_pct:+8.2f}", 
+                             logger=logger, level=logging.INFO, rank=0)
+                
+                # Add a small separator between detailed batches
+                if i < actual_num_detailed_batches - 1:
+                     log_rank("-" * 80, logger=logger, level=logging.INFO, rank=0)
+
+        log_rank("=" * 80, logger=logger, level=logging.INFO, rank=0)
+        log_rank("End of Random Batch Diversity Analysis", logger=logger, level=logging.INFO, rank=0)
+        log_rank("=" * 80, logger=logger, level=logging.INFO, rank=0)
 
 
 @jit(nopython=True, cache=True)
