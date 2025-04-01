@@ -29,7 +29,7 @@ from nanotron.parallel.tensor_parallel.nn import (
 )
 from nanotron.random import RandomStates
 from nanotron.scaling.parametrization import SpectralMupParametrizator, StandardParametrizator
-
+from nanotron.helpers import log_outlier_batch
 logger = logging.get_logger(__name__)
 
 
@@ -759,35 +759,39 @@ class LossWithZLoss(Loss):
 class Qwen2ForTraining(NanotronModel):
     def __init__(
         self,
-        config: Qwen2Config,
+        model_config: Qwen2Config,
         parallel_context: ParallelContext,
         parallel_config: Optional[ParallelismArgs],
+        main_config: Config,
         random_states: Optional[RandomStates] = None,
     ):
         super().__init__()
-        self.model = Qwen2Model(config=config, parallel_context=parallel_context, parallel_config=parallel_config)
+        self.model = Qwen2Model(config=model_config, parallel_context=parallel_context, parallel_config=parallel_config)
+        self.model_config = model_config
+        self.main_config = main_config
 
         # Choose the appropriate loss class based on config
         loss_kwargs = {
             "tp_pg": parallel_context.tp_pg,
         }
-        if config.z_loss_enabled:
-            loss_kwargs["z_loss_coefficient"] = config.z_loss_coefficient
+        if self.model_config.z_loss_enabled:
+            loss_kwargs["z_loss_coefficient"] = self.model_config.z_loss_coefficient
 
         self.loss = PipelineBlock(
             p2p=self.model.p2p,
-            module_builder=LossWithZLoss if config.z_loss_enabled else Loss,
+            module_builder=LossWithZLoss if self.model_config.z_loss_enabled else Loss,
             module_kwargs=loss_kwargs,
             module_input_keys={
                 "sharded_logits",
                 "label_ids",
                 "label_mask",
             },
-            module_output_keys={"loss", "z_loss"} if config.z_loss_enabled else {"loss"},
+            module_output_keys={"loss", "z_loss"} if self.model_config.z_loss_enabled else {"loss"},
         )
         self.parallel_context = parallel_context
-        self.config = config
         self.parallel_config = parallel_config
+        self.register_buffer("ema_loss_buffer", torch.zeros(()))
+        self.ema_beta = 0.95
 
     def forward(
         self,
@@ -805,6 +809,34 @@ class Qwen2ForTraining(NanotronModel):
             label_ids=label_ids,
             label_mask=label_mask,
         )
+        current_loss = loss["loss"].detach()
+
+        # Check for loss spike only if outlier logging is configured
+        if self.config.outlier_logging is not None:
+            threshold = self.config.outlier_logging.loss_spike_threshold
+            # Use numel() > 0 check cautiously, might trigger on first step if EMA starts at 0
+            if abs(self.ema_loss_buffer - current_loss) > threshold and self.ema_loss_buffer.numel() > 0:
+                log_outlier_batch(
+                    loss=current_loss,
+                    ema_loss=self.ema_loss_buffer,
+                    input_ids=input_ids,
+                    position_ids=position_ids,
+                    label_ids=label_ids,
+                    label_mask=label_mask,
+                    config=self.config,
+                    parallel_context=self.parallel_context
+                )
+            else:
+                # Update EMA only if not logging an outlier for this step
+                self.ema_loss_buffer.copy_(
+                    self.ema_beta * self.ema_loss_buffer + (1.0 - self.ema_beta) * current_loss
+                )
+        else:
+             # Always update EMA if outlier logging is disabled
+             self.ema_loss_buffer.copy_(
+                 self.ema_beta * self.ema_loss_buffer + (1.0 - self.ema_beta) * current_loss
+             )
+
         if self.config.z_loss_enabled:
             return {"loss": loss["loss"], "z_loss": loss["z_loss"]}
         else:
