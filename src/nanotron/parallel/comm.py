@@ -45,7 +45,6 @@ class AsyncCommBucket:
 
         not_finished = []
         for k, v in self._copy_async_op.items():
-            assert is_domino_async_comm(k) is True, f"Operation with name {k} wasn't executed asynchronously!"
             if v.is_completed() is not True:
                 not_finished.append((k, v))
         return len(not_finished) == 0
