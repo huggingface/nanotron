@@ -81,11 +81,7 @@ class LoggingArgs:
 @dataclass
 class MetricsLoggingArgs:
     """Arguments related to metrics logging and tracking"""
-    
-    # Whether to log detailed metrics (0: basic only, 1: full)
     level: int = 0  
-    
-    # How often to log detailed metrics (every N steps)
     interval: int = 10
     
     def __post_init__(self):

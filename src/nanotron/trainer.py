@@ -710,10 +710,6 @@ class DistributedTrainer:
                         model=self.unwrapped_model,
                         logits=logits,
                         targets=targets,
-                        loss=loss_avg,
-                        step_time=elapsed_time_per_iteration_ms / 1000,
-                        batch_size=self.global_batch_size,
-                        seq_length=self.sequence_length,
                         iteration=self.iteration_step,
                         debug=debug_mode,
                     )

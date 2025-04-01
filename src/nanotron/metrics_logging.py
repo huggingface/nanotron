@@ -3,7 +3,7 @@ Utility functions for computing and logging various model metrics.
 """
 
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 import torch.nn.functional as F
@@ -42,22 +42,23 @@ def get_attribute_by_path(obj: Any, path: str, debug: bool = False) -> Optional[
 ########################
 
 
-
 def compute_kurtosis(tensor: torch.Tensor) -> torch.Tensor:
     """
     Compute kurtosis which measures "tailedness" of distribution.
     High kurtosis indicates outliers, low kurtosis indicates uniform-like distribution.
     """
-    tensor = tensor.flatten().float()
-    mean = tensor.mean()
-    std = tensor.std()
+    # Use float() directly on tensor operations rather than making a copy
+    mean = tensor.float().mean()
+    std = tensor.float().std()
     # Avoid division by zero
     if std == 0:
         return torch.tensor(0.0, device=tensor.device)
 
     # Compute kurtosis: E[((x-μ)/σ)^4]
-    normalized = (tensor - mean) / std
-    return torch.mean(normalized**4) - 3  # Excess kurtosis (normal distribution has kurtosis=3)
+    # Operate on the tensor directly without flattening
+    normalized = ((tensor.float() - mean) / std)
+    # Using .pow(4) is more efficient than **4
+    return torch.mean(normalized.pow(4)) - 3  # Excess kurtosis (normal distribution has kurtosis=3)
 
 
 def compute_zero_fraction(tensor: torch.Tensor, threshold: float = 1e-10) -> torch.Tensor:
@@ -68,37 +69,33 @@ def compute_zero_fraction(tensor: torch.Tensor, threshold: float = 1e-10) -> tor
 def compute_activation_stats(tensor: torch.Tensor) -> Dict[str, torch.Tensor]:
     """Compute comprehensive statistics for a tensor."""
     if tensor.numel() == 0:
+        # Create empty stats with consistent device
+        device = tensor.device
         return {
-            "mean": torch.tensor(0.0, device=tensor.device),
-            "std": torch.tensor(0.0, device=tensor.device),
-            "min": torch.tensor(0.0, device=tensor.device),
-            "max": torch.tensor(0.0, device=tensor.device),
-            "norm_l1": torch.tensor(0.0, device=tensor.device),
-            "norm_l2": torch.tensor(0.0, device=tensor.device),
-            "zero_frac": torch.tensor(1.0, device=tensor.device),
-            "kurtosis": torch.tensor(0.0, device=tensor.device),
+            "mean": torch.tensor(0.0, device=device),
+            "std": torch.tensor(0.0, device=device),
+            "min": torch.tensor(0.0, device=device),
+            "max": torch.tensor(0.0, device=device),
+            "norm_l1": torch.tensor(0.0, device=device),
+            "norm_l2": torch.tensor(0.0, device=device),
+            "zero_frac": torch.tensor(1.0, device=device),
+            "kurtosis": torch.tensor(0.0, device=device),
         }
 
-    tensor = tensor.float()
-    mean = tensor.mean()
-    var = tensor.var()
-    std = torch.sqrt(var)
-    min_val = tensor.min()
-    max_val = tensor.max()
-    norm_l1 = compute_tensor_norm(tensor, p=1)
-    norm_l2 = compute_tensor_norm(tensor, p=2)
-    zero_frac = compute_zero_fraction(tensor)
-    kurtosis = compute_kurtosis(tensor)
-
+    # Convert to float once and reuse
+    tensor_f = tensor.float()
+    mean = tensor_f.mean()
+    std = torch.sqrt(tensor_f.var())
+    
     return {
         "mean": mean,
         "std": std,
-        "min": min_val,
-        "max": max_val,
-        "norm_l1": norm_l1,
-        "norm_l2": norm_l2,
-        "zero_frac": zero_frac,
-        "kurtosis": kurtosis,
+        "min": tensor_f.min(),
+        "max": tensor_f.max(),
+        "norm_l1": compute_tensor_norm(tensor_f, p=1),
+        "norm_l2": compute_tensor_norm(tensor_f, p=2),
+        "zero_frac": compute_zero_fraction(tensor_f),
+        "kurtosis": compute_kurtosis(tensor_f),
     }
 
 
@@ -111,19 +108,37 @@ class ExperimentLogger:
     - Full (level=1): Logs all metrics including detailed model statistics
     """
     
-    def __init__(self, config=None):
+    # Standard component patterns used by multiple methods
+    MODEL_COMPONENTS = {
+        "attention": {
+            "qkv_proj": "model.decoder.{}.pp_block.attn.qkv_proj.weight",
+            "o_proj": "model.decoder.{}.pp_block.attn.o_proj.weight",
+        },
+        "mlp": {
+            "gate_up_proj": "model.decoder.{}.pp_block.mlp.gate_up_proj.weight",
+            "down_proj": "model.decoder.{}.pp_block.mlp.down_proj.weight",
+        },
+        "norm": {
+            "input_layernorm": "model.decoder.{}.pp_block.input_layernorm.weight",
+            "post_attention_layernorm": "model.decoder.{}.pp_block.post_attention_layernorm.weight",
+        },
+    }
+    
+    EMBEDDING_PATHS = [
+        "model.token_position_embeddings.pp_block.token_embedding.weight",
+        "model.lm_head.pp_block.weight",
+    ]
+    
+    def __init__(self, config):
         """
         Initialize the logger with configuration.
         
         Args:
-            config: Optional configuration object with metrics_logging attribute
+            config: Configuration object with metrics_logging attribute
         """
-        self.log_level = 0  # Default: basic logging
-        self.log_interval = 50  # Default: log every 50 steps
-        
-        if config is not None and hasattr(config, 'metrics_logging') and config.metrics_logging is not None:
-            self.log_level = config.metrics_logging.level
-            self.log_interval = config.metrics_logging.interval
+        self.config = config
+        self.log_level = config.metrics_logging.level
+        self.log_interval = config.metrics_logging.interval
     
     def should_log_detailed_metrics(self, iteration: int) -> bool:
         """
@@ -145,16 +160,31 @@ class ExperimentLogger:
             
         return False
     
+    def _format_paths(self, components: Dict, max_layers: int) -> Dict:
+        """
+        Pre-format component paths with layer indices to avoid repeated formatting.
+        
+        Args:
+            components: Dict of component patterns
+            max_layers: Number of layers to format
+            
+        Returns:
+            Dict of pre-formatted paths
+        """
+        formatted = {}
+        for comp_type, subcomponents in components.items():
+            formatted[comp_type] = {}
+            for subcomp_name, pattern in subcomponents.items():
+                formatted[comp_type][subcomp_name] = [
+                    pattern.format(i) for i in range(max_layers)
+                ]
+        return formatted
+    
     def collect_embeddings_metrics(self, model: torch.nn.Module, debug: bool = False) -> Dict[str, torch.Tensor]:
         """Collect metrics for model embeddings."""
         metrics = {}
 
-        embedding_paths = [
-            "model.token_position_embeddings.pp_block.token_embedding.weight",
-            "model.lm_head.pp_block.weight",
-        ]
-
-        for path in embedding_paths:
+        for path in self.EMBEDDING_PATHS:
             embeddings = get_attribute_by_path(model, path, debug=debug)
             if embeddings is not None:
                 name = path.split(".")[-2]
@@ -173,131 +203,86 @@ class ExperimentLogger:
         Aggregates weights from all decoder layers to provide model-wide statistics.
         """
         metrics = {}
-        all_layer_weights = []
         
-        # Find number of layers
-        max_layers = 0
-        for i in range(100):  # Safety limit
-            if get_attribute_by_path(model, f"model.decoder.{i}.pp_block") is not None:
-                max_layers = i + 1
-            else:
-                break
+        # Get number of layers directly from config
+        max_layers = self.config.model.model_config.num_hidden_layers
         
         if max_layers == 0:
             return metrics
         
-        # Components to collect
-        components = {
-            "attention": {
-                "qkv_proj": "model.decoder.{}.pp_block.attn.qkv_proj.weight",
-                "o_proj": "model.decoder.{}.pp_block.attn.o_proj.weight",
-            },
-            "mlp": {
-                "gate_up_proj": "model.decoder.{}.pp_block.mlp.gate_up_proj.weight",
-                "down_proj": "model.decoder.{}.pp_block.mlp.down_proj.weight",
-            },
-            "norm": {
-                "input_layernorm": "model.decoder.{}.pp_block.input_layernorm.weight",
-                "post_attention_layernorm": "model.decoder.{}.pp_block.post_attention_layernorm.weight",
-            },
-        }
+        # Pre-format the paths to avoid repeated formatting in loops
+        formatted_paths = self._format_paths(self.MODEL_COMPONENTS, max_layers)
         
         # Group weights by component type
-        component_weights = {comp_type: [] for comp_type in components}
+        component_weights = {comp_type: [] for comp_type in self.MODEL_COMPONENTS}
+        all_layer_weights = []
         
         # Collect all weights from hidden layers
         for layer_idx in range(max_layers):
-            for component_type, subcomponents in components.items():
-                for subcomp_name, pattern in subcomponents.items():
-                    param = get_attribute_by_path(model, pattern.format(layer_idx))
+            for comp_type, subcomponents in self.MODEL_COMPONENTS.items():
+                for subcomp_name in subcomponents:
+                    path = formatted_paths[comp_type][subcomp_name][layer_idx]
+                    param = get_attribute_by_path(model, path)
                     if param is not None:
                         param_tensor = param.detach().float()
                         all_layer_weights.append(param_tensor)
-                        component_weights[component_type].append(param_tensor)
+                        component_weights[comp_type].append(param_tensor)
         
         if not all_layer_weights:
             return metrics
         
         # Compute statistics for each component type
-        for component_type, weights in component_weights.items():
-            if weights:
-                all_comp_weights = torch.cat([w.flatten() for w in weights])
-                prefix = f"global_{component_type}"
+        for comp_type, weights in component_weights.items():
+            if not weights:
+                continue
                 
-                metrics[f"{prefix}/mean"] = all_comp_weights.mean()
-                metrics[f"{prefix}/std"] = all_comp_weights.std()
-                metrics[f"{prefix}/min"] = all_comp_weights.min()
-                metrics[f"{prefix}/max"] = all_comp_weights.max()
-                metrics[f"{prefix}/norm_l1"] = compute_tensor_norm(all_comp_weights, p=1)
-                metrics[f"{prefix}/norm_l2"] = compute_tensor_norm(all_comp_weights, p=2)
-                metrics[f"{prefix}/zero_frac"] = compute_zero_fraction(all_comp_weights)
-                metrics[f"{prefix}/kurtosis"] = compute_kurtosis(all_comp_weights)
+            flat_tensors = [w.reshape(-1) for w in weights]
+            all_comp_weights = torch.cat(flat_tensors)
+            prefix = f"global_{comp_type}"
+            
+            comp_stats = compute_activation_stats(all_comp_weights)
+            for stat_name, value in comp_stats.items():
+                metrics[f"{prefix}/{stat_name}"] = value
         
         # Compute global stats across all hidden layers
-        all_weights = torch.cat([w.flatten() for w in all_layer_weights])
+        flat_all_tensors = [w.reshape(-1) for w in all_layer_weights]
+        all_weights = torch.cat(flat_all_tensors)
         
         # Add full global metrics
-        metrics["global_global/mean"] = all_weights.mean()
-        metrics["global_global/std"] = all_weights.std()
-        metrics["global_global/min"] = all_weights.min()
-        metrics["global_global/max"] = all_weights.max()
-        metrics["global_global/norm_l1"] = compute_tensor_norm(all_weights, p=1)
-        metrics["global_global/norm_l2"] = compute_tensor_norm(all_weights, p=2)
-        metrics["global_global/zero_frac"] = compute_zero_fraction(all_weights)
-        metrics["global_global/kurtosis"] = compute_kurtosis(all_weights)
+        global_stats = compute_activation_stats(all_weights)
+        for stat_name, value in global_stats.items():
+            metrics[f"global_global/{stat_name}"] = value
         
         return metrics
     
     def collect_parameter_metrics(self, model: torch.nn.Module, debug: bool = False) -> Dict[str, torch.Tensor]:
         """Collect metrics for model parameters."""
         metrics = {}
+        max_layers = self.config.model.model_config.num_hidden_layers
 
-        # Define layer component patterns
-        components = {
-            "attention": {
-                "qkv_proj": "model.decoder.{}.pp_block.attn.qkv_proj.weight",
-                "o_proj": "model.decoder.{}.pp_block.attn.o_proj.weight",
-            },
-            "mlp": {
-                "gate_up_proj": "model.decoder.{}.pp_block.mlp.gate_up_proj.weight",
-                "down_proj": "model.decoder.{}.pp_block.mlp.down_proj.weight",
-            },
-            "norm": {
-                "input_layernorm": "model.decoder.{}.pp_block.input_layernorm.weight",
-                "post_attention_layernorm": "model.decoder.{}.pp_block.post_attention_layernorm.weight",
-            },
-        }
-
-        # Find number of layers
-        max_layers = 0
-        for i in range(100):  # Safety limit
-            if any(get_attribute_by_path(model, pattern.format(i)) is not None 
-                for comp in components.values() for pattern in comp.values()):
-                max_layers = i + 1
-            else:
-                break
+        # Pre-format patterns for efficiency
+        formatted_paths = self._format_paths(self.MODEL_COMPONENTS, max_layers)
 
         # Collect metrics for each layer
         for layer_idx in range(max_layers):
             layer_name = f"layer_{layer_idx}"
             
-            for component_type, subcomponents in components.items():
-                for subcomp_name, pattern in subcomponents.items():
-                    param = get_attribute_by_path(model, pattern.format(layer_idx))
+            for comp_type, subcomponents in self.MODEL_COMPONENTS.items():
+                for subcomp_name in subcomponents:
+                    path = formatted_paths[comp_type][subcomp_name][layer_idx]
+                    param = get_attribute_by_path(model, path)
                     
                     if param is not None:
+                        # Add parameter metrics
                         stats = compute_activation_stats(param)
-                        
                         for stat_name, value in stats.items():
-                            metrics[f"{layer_name}/{component_type}/{subcomp_name}/{stat_name}"] = value
+                            metrics[f"{layer_name}/{comp_type}/{subcomp_name}/{stat_name}"] = value
                         
                         # Add gradient stats if available
                         if hasattr(param, "grad") and param.grad is not None:
-                            grad = param.grad.detach()
-                            grad_stats = compute_activation_stats(grad)
-                            
+                            grad_stats = compute_activation_stats(param.grad.detach())
                             for stat_name, value in grad_stats.items():
-                                metrics[f"{layer_name}/{component_type}/{subcomp_name}/grad/{stat_name}"] = value
+                                metrics[f"{layer_name}/{comp_type}/{subcomp_name}/grad/{stat_name}"] = value
 
         # Get final layer norm
         final_ln = get_attribute_by_path(model, "model.final_layer_norm.pp_block.weight")
@@ -350,69 +335,18 @@ class ExperimentLogger:
 
         return metrics
     
-    def collect_loss_metrics(self, loss: torch.Tensor) -> Dict[str, torch.Tensor]:
-        """Collect metrics related to the loss."""
-        metrics = {}
-
-        if loss is None:
-            return metrics
-
-        # Ensure detached tensor
-        loss = loss.detach() if hasattr(loss, "detach") else loss
-        metrics["loss/value"] = loss
-
-        return metrics
-    
-    def collect_performance_metrics(self, step_time: float, batch_size: int, seq_length: int) -> Dict[str, torch.Tensor]:
-        """Collect performance metrics like throughput."""
-        metrics = {}
-        device = "cpu"  # Performance metrics can be on CPU
-
-        metrics["performance/step_time"] = torch.tensor(step_time, device=device)
-        
-        tokens_per_batch = batch_size * seq_length
-        tokens_per_second = tokens_per_batch / step_time if step_time > 0 else 0
-        metrics["performance/tokens_per_second"] = torch.tensor(tokens_per_second, device=device)
-        
-        return metrics
-    
     def collect_all_metrics(
         self,
         model: torch.nn.Module,
         logits: Optional[torch.Tensor] = None,
         targets: Optional[torch.Tensor] = None,
-        loss: Optional[torch.Tensor] = None,
-        step_time: Optional[float] = None,
-        batch_size: Optional[int] = None,
-        seq_length: Optional[int] = None,
         iteration: Optional[int] = None,
         debug: bool = False,
     ) -> Dict[str, torch.Tensor]:
         """
         Collect all metrics based on the specified log level and iteration.
-        
-        Args:
-            model: The model to collect metrics from
-            logits: Model output logits
-            targets: Target tokens
-            loss: Loss value
-            step_time: Training step time in seconds
-            batch_size: Batch size
-            seq_length: Sequence length
-            iteration: Current training iteration/step
-            debug: Whether to print debug information
-            
-        Returns:
-            Dict of metrics
         """
         metrics = {}
-
-        # Always collect basic metrics
-        if loss is not None:
-            metrics.update(self.collect_loss_metrics(loss))
-
-        if step_time is not None and batch_size is not None and seq_length is not None:
-            metrics.update(self.collect_performance_metrics(step_time, batch_size, seq_length))
 
         # Collect accuracy metrics if logits and targets are available
         if logits is not None and targets is not None:
@@ -420,30 +354,42 @@ class ExperimentLogger:
 
         # Check if we should log detailed metrics
         if iteration is not None and self.should_log_detailed_metrics(iteration):
+            try_collect = lambda fn, err_msg: (
+                metrics.update(fn(model, debug=debug)) 
+                if not debug else 
+                try_with_debug(fn, model, debug, err_msg, metrics)
+            )
+            
             # Add global hidden layer metrics
-            try:
-                metrics.update(self.compute_global_hidden_layer_metrics(model, debug=debug))
-            except Exception as e:
-                if debug:
-                    print(f"Error collecting global hidden layer metrics: {e}")
-                    
+            try_collect(
+                self.compute_global_hidden_layer_metrics,
+                "Error collecting global hidden layer metrics"
+            )
+                
             # Add embedding metrics
-            try:
-                metrics.update(self.collect_embeddings_metrics(model, debug=debug))
-            except Exception as e:
-                if debug:
-                    print(f"Error collecting embedding metrics: {e}")
+            try_collect(
+                self.collect_embeddings_metrics,
+                "Error collecting embedding metrics"
+            )
 
             # If in full details mode (level=1)
             if self.log_level >= 1:
                 # Add parameter metrics
-                try:
-                    metrics.update(self.collect_parameter_metrics(model, debug=debug))
-                except Exception as e:
-                    if debug:
-                        print(f"Error collecting parameter metrics: {e}")
+                try_collect(
+                    self.collect_parameter_metrics,
+                    "Error collecting parameter metrics"
+                )
 
         return metrics
+
+
+def try_with_debug(fn, model, debug, err_msg, metrics):
+    """Helper function to try collecting metrics with debug support"""
+    try:
+        metrics.update(fn(model, debug=debug))
+    except Exception as e:
+        print(f"{err_msg}: {e}")
+    return metrics
 
 
 if __name__ == "__main__":
