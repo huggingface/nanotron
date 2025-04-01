@@ -329,12 +329,50 @@ class DistributedTrainer:
         )
 
         current_time = datetime.datetime.now().strftime("%d/%m/%Y_%H:%M:%S")
-        if dist.get_rank(self.parallel_context.world_pg) == self.logger_ranks[0] and wandb is not None:
-            wandb.init(
-                project=self.config.general.project,
-                name=f"{current_time}_{self.config.general.run}",
-                config={"nanotron_config": self.config.as_dict()},
+        
+        # Initialize wandb for each TP group if TP > 1, but only for dp=0 ranks
+        if wandb is not None:
+            tp_size = self.parallel_context.tp_pg.size()
+            dp_rank = dist.get_rank(self.parallel_context.dp_pg)
+            tp_rank = dist.get_rank(self.parallel_context.tp_pg)
+            world_rank = dist.get_rank(self.parallel_context.world_pg)
+            
+            # Log all rank info for debugging purposes
+            log_rank(
+                f"Rank info - world_rank: {world_rank}, dp_rank: {dp_rank}, tp_rank: {tp_rank}, tp_size: {tp_size}, logger_ranks: {self.logger_ranks}",
+                logger=logger,
+                level=logging.DEBUG,
+                rank=world_rank,
             )
+            
+            if tp_size > 1:
+                # Create one wandb logger per TP group for DP=0 ranks
+                if dp_rank == 0:
+                    # Create a run name that includes the TP group
+                    run_name = f"{current_time}_{self.config.general.run}_tp_group_{tp_rank}"
+                    # Make sure we're not reusing a W&B run in the same process
+                    if wandb.run is not None:
+                        wandb.finish()
+                    
+                    wandb.init(
+                        project=self.config.general.project,
+                        name=run_name,
+                        config={"nanotron_config": self.config.as_dict()},
+                    )
+                    log_rank(
+                        f"Initialized wandb run '{run_name}' for TP rank {tp_rank}",
+                        logger=logger,
+                        level=logging.DEBUG,
+                        rank=world_rank,
+                    )
+            else:
+                # Original behavior for TP=1
+                if world_rank == self.logger_ranks[0]:
+                    wandb.init(
+                        project=self.config.general.project,
+                        name=f"{current_time}_{self.config.general.run}",
+                        config={"nanotron_config": self.config.as_dict()},
+                    )
 
     def post_train_step(self):
 
@@ -641,112 +679,172 @@ class DistributedTrainer:
             sequence_length=self.sequence_length,
             global_batch_size=self.global_batch_size,
         )
+        
+        # Get rank information (used by both console and wandb logging)
+        tp_size = self.parallel_context.tp_pg.size()
+        dp_rank = dist.get_rank(self.parallel_context.dp_pg)
+        tp_rank = dist.get_rank(self.parallel_context.tp_pg)
+        world_rank = dist.get_rank(self.parallel_context.world_pg)
+        
+        # Prepare basic metrics (needed for both console logging and wandb)
+        lr = self.lr_scheduler.get_last_lr()[0]
+        remaining_steps = self.config.tokens.train_steps - self.iteration_step
+        eta_seconds = int(remaining_steps * (elapsed_time_per_iteration_ms / 1000))
+        basic_log_entries = [
+            # LogItem("consumed_samples", self.consumed_train_samples, "human_format"),  # , "12d"),
+            LogItem(
+                "consumed_tokens",
+                self.metadata.consumed_train_samples * self.config.tokens.sequence_length,
+                "human_format",
+            ),  # , "12d"),
+            LogItem("time_per_iteration_ms", elapsed_time_per_iteration_ms, "human_format"),  # , ".1f"),
+            LogItem("tokens_per_sec", tokens_per_sec, "human_format"),  # , "1.6E"),
+            LogItem(
+                "tokens_per_sec_per_gpu", tokens_per_sec / self.parallel_context.world_pg.size(), "human_format"
+            ),  # , "1.6E"),
+            LogItem("global_batch_size", self.config.global_batch_size_in_tokens, "human_format"),  # , "5d"),
+            LogItem("lm_loss", loss_avg.item(), "human_format"),  # , "1.6E"),
+            LogItem("lr", lr, "human_format"),  # , ".3E"),
+            LogItem("model_tflops_per_gpu", model_tflops, "human_format"),  # , ".2f"),
+            # LogItem("hardware_tflops_per_gpu", hardware_tflops, "human_format"),  # , ".2f"),
+            LogItem("eta", str(datetime.timedelta(seconds=eta_seconds))),
+        ]
+        if z_loss_avg is not None:
+            basic_log_entries.insert(6, LogItem("z_loss", z_loss_avg.item(), "human_format"))  # , "1.6E"),
 
+        if self.config.optimizer.clip_grad is not None:
+            basic_log_entries.append(
+                LogItem("grad_norm", self.grad_norm_unclipped.item(), "human_format")
+            )  # , ".3f"))
+
+        # Console logging only on logger ranks
         if dist.get_rank(self.parallel_context.world_pg) in self.logger_ranks:
             assert self.loggerwriter is not None, "loggerwriter should be defined on logger ranks"
-
-            lr = self.lr_scheduler.get_last_lr()[0]
-
-            remaining_steps = self.config.tokens.train_steps - self.iteration_step
-            eta_seconds = int(remaining_steps * (elapsed_time_per_iteration_ms / 1000))
-            basic_log_entries = [
-                # LogItem("consumed_samples", self.consumed_train_samples, "human_format"),  # , "12d"),
-                LogItem(
-                    "consumed_tokens",
-                    self.metadata.consumed_train_samples * self.config.tokens.sequence_length,
-                    "human_format",
-                ),  # , "12d"),
-                LogItem("time_per_iteration_ms", elapsed_time_per_iteration_ms, "human_format"),  # , ".1f"),
-                LogItem("tokens_per_sec", tokens_per_sec, "human_format"),  # , "1.6E"),
-                LogItem(
-                    "tokens_per_sec_per_gpu", tokens_per_sec / self.parallel_context.world_pg.size(), "human_format"
-                ),  # , "1.6E"),
-                LogItem("global_batch_size", self.config.global_batch_size_in_tokens, "human_format"),  # , "5d"),
-                LogItem("lm_loss", loss_avg.item(), "human_format"),  # , "1.6E"),
-                LogItem("lr", lr, "human_format"),  # , ".3E"),
-                LogItem("model_tflops_per_gpu", model_tflops, "human_format"),  # , ".2f"),
-                # LogItem("hardware_tflops_per_gpu", hardware_tflops, "human_format"),  # , ".2f"),
-                LogItem("eta", str(datetime.timedelta(seconds=eta_seconds))),
-            ]
-            if z_loss_avg is not None:
-                basic_log_entries.insert(6, LogItem("z_loss", z_loss_avg.item(), "human_format"))  # , "1.6E"),
-
-            if self.config.optimizer.clip_grad is not None:
-                basic_log_entries.append(
-                    LogItem("grad_norm", self.grad_norm_unclipped.item(), "human_format")
-                )  # , ".3f"))
-
-            # Console logging will only use basic metrics
             self.loggerwriter.add_scalars_from_list(basic_log_entries, self.iteration_step)
+        
+        # WandB logging - determine if this rank should log to wandb
+        should_log_to_wandb = (
+            wandb is not None and 
+            ((tp_size > 1 and dp_rank == 0) or  # For TP>1, log from each TP group's dp=0 rank
+             (tp_size == 1 and world_rank == self.logger_ranks[0]))  # For TP=1, use original condition
+        )
+        
+        # Debug logging to understand which ranks are attempting to log
+        if tp_size > 1 and dp_rank == 0:
+            log_rank(
+                f"WandB logging decision - tp_rank: {tp_rank}, dp_rank: {dp_rank}, should_log_to_wandb: {should_log_to_wandb}, has_wandb_run: {wandb.run is not None}",
+                logger=logger,
+                level=logging.DEBUG,
+                rank=world_rank,
+            )
+        
+        if should_log_to_wandb:
+            # Make sure wandb is initialized for this process
+            if wandb.run is None and tp_size > 1 and dp_rank == 0:
+                # If wandb wasn't properly initialized earlier, initialize it now
+                run_name = f"{datetime.datetime.now().strftime('%d/%m/%Y_%H:%M:%S')}_{self.config.general.run}_tp_group_{tp_rank}_late_init"
+                wandb.init(
+                    project=self.config.general.project,
+                    name=run_name,
+                    config={"nanotron_config": self.config.as_dict()},
+                )
+                log_rank(
+                    f"Late initialization of wandb run '{run_name}' for TP rank {tp_rank}",
+                    logger=logger,
+                    level=logging.DEBUG,
+                    rank=world_rank,
+                )
+            
+            # Start with basic metrics
+            all_log_entries = list(basic_log_entries)
 
-            # Begin wandb logging with all metrics (basic + detailed)
-            if dist.get_rank(self.parallel_context.world_pg) == self.logger_ranks[0] and wandb is not None:
-                # Start with basic metrics
-                all_log_entries = list(basic_log_entries)
+            # Extract logits and targets from first output if available for accuracy calculation
+            logits = None
+            targets = None
+            if len(outputs) > 0 and "logits" in outputs[0] and "labels" in outputs[0]:
+                logits = outputs[0]["logits"]
+                targets = outputs[0]["labels"]
 
-                # Extract logits and targets from first output if available for accuracy calculation
-                logits = None
-                targets = None
-                if len(outputs) > 0 and "logits" in outputs[0] and "labels" in outputs[0]:
-                    logits = outputs[0]["logits"]
-                    targets = outputs[0]["labels"]
+            # Check if we should log detailed metrics
+            should_log_details = self.experiment_logger.should_log_detailed_metrics(self.iteration_step)
 
-                # Check if we should log detailed metrics
-                should_log_details = self.experiment_logger.should_log_detailed_metrics(self.iteration_step)
+            # Always add accuracy metrics to wandb if available
+            if logits is not None and targets is not None:
+                accuracy_metrics = self.experiment_logger.collect_accuracy_metrics(logits, targets)
+                for name, value in accuracy_metrics.items():
+                    if isinstance(value, torch.Tensor):
+                        value = value.item()
+                    all_log_entries.append(LogItem(name, value, "human_format"))
 
-                # Always add accuracy metrics to wandb if available
-                if logits is not None and targets is not None:
-                    accuracy_metrics = self.experiment_logger.collect_accuracy_metrics(logits, targets)
-                    for name, value in accuracy_metrics.items():
-                        if isinstance(value, torch.Tensor):
-                            value = value.item()
-                        all_log_entries.append(LogItem(name, value, "human_format"))
+            # Add detailed metrics to wandb only if needed
+            if should_log_details:
+                # Collect all metrics based on the log level
+                debug_mode = self.iteration_step < 5  # More verbose debugging for initial iterations
+                detailed_metrics = self.experiment_logger.collect_all_metrics(
+                    model=self.unwrapped_model,
+                    logits=logits,
+                    targets=targets,
+                    iteration=self.iteration_step,
+                    debug=debug_mode,
+                )
 
-                # Add detailed metrics to wandb only if needed
-                if should_log_details:
-                    # Collect all metrics based on the log level
-                    debug_mode = self.iteration_step < 5  # More verbose debugging for initial iterations
-                    detailed_metrics = self.experiment_logger.collect_all_metrics(
-                        model=self.unwrapped_model,
-                        logits=logits,
-                        targets=targets,
-                        iteration=self.iteration_step,
-                        debug=debug_mode,
-                    )
+                # Add all detailed metrics to wandb
+                for name, value in detailed_metrics.items():
+                    if isinstance(value, torch.Tensor):
+                        value = value.item()
+                    all_log_entries.append(LogItem(name, value, "human_format"))
 
-                    # Add all detailed metrics to wandb
-                    for name, value in detailed_metrics.items():
-                        if isinstance(value, torch.Tensor):
-                            value = value.item()
-                        all_log_entries.append(LogItem(name, value, "human_format"))
+            # Log memory usage data
+            if (
+                self.iteration_step < 5
+                or (self.iteration_step - 1) % self.config.checkpoints.checkpoint_interval == 0
+            ):
+                total, used, free = shutil.disk_usage("/")
+                all_log_entries.extend(
+                    [
+                        LogItem(
+                            "cuda_memory_allocated", torch.cuda.memory_allocated(), "human_format"
+                        ),  #  / 1024**2, ".2f"),
+                        LogItem(
+                            "cuda_max_memory_reserved", torch.cuda.max_memory_reserved(), "human_format"
+                        ),  #  / 1024**2, ".2f"),
+                        LogItem("hd_total_memory_tb", total, "human_format"),  #  / (2**40), ".2f"),
+                        LogItem("hd_used_memory_tb", used, "human_format"),  #  / (2**40), ".2f"),
+                        LogItem("hd_free_memory_tb", free, "human_format"),  #  / (2**40), ".2f"),
+                    ]
+                )
+            
+            # Add TP rank to metrics when TP > 1
+            if tp_size > 1:
+                tp_group_info = {"tp_rank": tp_rank, "tp_group_size": tp_size}
+            else:
+                tp_group_info = {}
 
-                # Log memory usage data
-                if (
-                    self.iteration_step < 5
-                    or (self.iteration_step - 1) % self.config.checkpoints.checkpoint_interval == 0
-                ):
-                    total, used, free = shutil.disk_usage("/")
-                    all_log_entries.extend(
-                        [
-                            LogItem(
-                                "cuda_memory_allocated", torch.cuda.memory_allocated(), "human_format"
-                            ),  #  / 1024**2, ".2f"),
-                            LogItem(
-                                "cuda_max_memory_reserved", torch.cuda.max_memory_reserved(), "human_format"
-                            ),  #  / 1024**2, ".2f"),
-                            LogItem("hd_total_memory_tb", total, "human_format"),  #  / (2**40), ".2f"),
-                            LogItem("hd_used_memory_tb", used, "human_format"),  #  / (2**40), ".2f"),
-                            LogItem("hd_free_memory_tb", free, "human_format"),  #  / (2**40), ".2f"),
-                        ]
-                    )
-
-                # Log all metrics to wandb
+            try:
+                # Log all metrics to wandb with exception handling
                 wandb.log(
                     {
                         **{log_item.tag: log_item.scalar_value for log_item in all_log_entries},
+                        **tp_group_info,
                         "iteration_step": self.iteration_step,
                     },
                     step=self.iteration_step,
+                )
+                
+                # Log success for debugging
+                log_rank(
+                    f"Successfully logged {len(all_log_entries)} metrics to WandB for tp_rank={tp_rank}",
+                    logger=logger,
+                    level=logging.DEBUG,
+                    rank=world_rank,
+                )
+            except Exception as e:
+                # Log any errors during wandb logging
+                log_rank(
+                    f"Error logging to WandB for tp_rank={tp_rank}: {str(e)}",
+                    logger=logger,
+                    level=logging.ERROR,
+                    rank=world_rank,
                 )
 
         # Nanotron Benchmark mode: we log the throughput and exit
@@ -762,7 +860,6 @@ class DistributedTrainer:
             log_rank("Throughput logging complete", logger=logger, level=logging.INFO, rank=0)
             if not self.config.profiler:
                 exit(0)
-                # raise Exception("success")  # exit with non-zero exit code to trigger fast termination --kill-on-bad-exit=1
 
     def init_model(self) -> Union[NanotronModel, DistributedDataParallel]:
         """Initialize the model and load weights from checkpoint if needed."""
