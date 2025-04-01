@@ -15,8 +15,7 @@ import torch.nn.functional as F
 
 def compute_tensor_norm(tensor: torch.Tensor, p: int = 2) -> torch.Tensor:
     """Compute the Lp norm of a tensor."""
-    flattened = tensor.reshape(-1)
-    return torch.norm(flattened, p=p)
+    return torch.linalg.vector_norm(tensor, ord=p)
 
 
 def get_attribute_by_path(obj: Any, path: str, debug: bool = False) -> Optional[Any]:
@@ -42,20 +41,6 @@ def get_attribute_by_path(obj: Any, path: str, debug: bool = False) -> Optional[
 # Statistical functions
 ########################
 
-
-def compute_entropy(tensor: torch.Tensor) -> torch.Tensor:
-    """Compute Shannon entropy of a tensor."""
-    if tensor.min() < 0 or tensor.sum() != 1.0:
-        if tensor.min() < 0:
-            probs = F.softmax(tensor.float(), dim=-1)
-        else:
-            probs = tensor.float() / tensor.sum()
-    else:
-        probs = tensor.float()
-    # Compute entropy: -sum(p * log(p))
-    # Add epsilon to avoid log(0)
-    entropy = -torch.sum(probs * torch.log2(probs + 1e-10))
-    return entropy
 
 
 def compute_kurtosis(tensor: torch.Tensor) -> torch.Tensor:
@@ -263,48 +248,6 @@ class ExperimentLogger:
         
         return metrics
     
-    def collect_attention_metrics(self, model: torch.nn.Module, debug: bool = False) -> Dict[str, torch.Tensor]:
-        """Collect metrics for attention weights and patterns."""
-        metrics = {}
-
-        # Find attention weights and patterns in model
-        weights_pattern = "model.decoder.{}.pp_block.attn.attention.weights"
-        scores_pattern = "model.decoder.{}.pp_block.attn.attention.scores"
-        qkv_pattern = "model.decoder.{}.pp_block.attn.qkv_proj.weight"
-        o_pattern = "model.decoder.{}.pp_block.attn.o_proj.weight"
-
-        # Find number of layers
-        max_layers = 0
-        for i in range(100):  # Safety limit
-            if any(get_attribute_by_path(model, pattern.format(i)) is not None 
-                    for pattern in [weights_pattern, scores_pattern, qkv_pattern, o_pattern]):
-                max_layers = i + 1
-            else:
-                break
-
-        # Check weights at each layer
-        for layer_idx in range(max_layers):
-            layer_name = f"layer_{layer_idx}"
-            
-            for name, pattern in [
-                ("weights", weights_pattern), 
-                ("scores", scores_pattern),
-                ("qkv_weights", qkv_pattern),
-                ("o_weights", o_pattern)
-            ]:
-                tensor = get_attribute_by_path(model, pattern.format(layer_idx))
-                if tensor is not None:
-                    stats = compute_activation_stats(tensor)
-                    for stat_name, value in stats.items():
-                        metrics[f"{layer_name}/attention/{name}/{stat_name}"] = value
-                    
-                    # Calculate entropy for attention distributions
-                    if name == "weights" and tensor.dim() >= 2:
-                        entropy = compute_entropy(tensor)
-                        metrics[f"{layer_name}/attention/{name}/entropy"] = entropy
-
-        return metrics
-    
     def collect_parameter_metrics(self, model: torch.nn.Module, debug: bool = False) -> Dict[str, torch.Tensor]:
         """Collect metrics for model parameters."""
         metrics = {}
@@ -493,13 +436,6 @@ class ExperimentLogger:
 
             # If in full details mode (level=1)
             if self.log_level >= 1:
-                # Add attention metrics
-                try:
-                    metrics.update(self.collect_attention_metrics(model, debug=debug))
-                except Exception as e:
-                    if debug:
-                        print(f"Error collecting attention metrics: {e}")
-
                 # Add parameter metrics
                 try:
                     metrics.update(self.collect_parameter_metrics(model, debug=debug))
