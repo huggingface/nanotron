@@ -85,7 +85,7 @@ class Nanoset(torch.utils.data.Dataset):
         # self.dataset_index, self.dataset_sample_index = self.build_nanoset_index()
         self.dataset_index, self.dataset_sample_index = self.new_build_nanoset_index()
 
-        # self.print_nanoset_info()
+        self.print_nanoset_info()
         self.analyze_batch_diversity()
 
     def __len__(self) -> int:
