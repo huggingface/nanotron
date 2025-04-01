@@ -45,28 +45,29 @@ def is_domino_async_comm(x: str) -> bool:
 
 
 class OpNameContext:
-    """
-    A context manager to set the name of a module operation
-    """
+    """Track both forward and backward operation names"""
 
-    def __init__(self, op_name: str):
-        # TODO: support passing stream_manager as a part of an operation context
-        self.op_name = op_name
-        self.previous_op_name = None
+    def __init__(self, fwd_op_name: str, bwd_op_name: str):
+        self.fwd_op_name = fwd_op_name
+        self.bwd_op_name = bwd_op_name
+        self.prev_fwd = None
+        self.prev_bwd = None
 
     def __enter__(self):
-        if not hasattr(_operation_context, "current_op_name"):
-            _operation_context.current_op_name = None
-        self.previous_op_name = _operation_context.current_op_name
-        _operation_context.current_op_name = self.op_name
+        self.prev_fwd = getattr(_operation_context, "current_fwd_op_name", None)
+        self.prev_bwd = getattr(_operation_context, "current_bwd_op_name", None)
+        _operation_context.current_fwd_op_name = self.fwd_op_name
+        _operation_context.current_bwd_op_name = self.bwd_op_name
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        _operation_context.current_op_name = self.previous_op_name
+        _operation_context.current_fwd_op_name = self.prev_fwd
+        _operation_context.current_bwd_op_name = self.prev_bwd
 
 
-def get_op_name() -> Optional[str]:
-    """
-    Get the name of the current operation.
-    """
-    return getattr(_operation_context, "current_op_name", None)
+def get_current_fwd_op_name() -> Optional[str]:
+    return getattr(_operation_context, "current_fwd_op_name", None)
+
+
+def get_current_bwd_op_name() -> Optional[str]:
+    return getattr(_operation_context, "current_bwd_op_name", None)

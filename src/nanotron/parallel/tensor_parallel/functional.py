@@ -25,7 +25,7 @@ from nanotron.parallel.tensor_parallel.distributed_differentiable_primitives imp
     differentiable_identity,
     differentiable_reduce_scatter_sum,
 )
-from nanotron.parallel.tensor_parallel.domino import get_op_name
+from nanotron.parallel.tensor_parallel.domino import get_current_fwd_op_name
 from nanotron.parallel.tensor_parallel.enum import TensorParallelLinearMode
 from nanotron.parallel.utils import MemoryBuffer
 
@@ -560,7 +560,7 @@ def column_linear(
         return _ColumnLinearAsyncCommunication.apply(input, weight, bias, group, tp_mode, tp_recompute_allgather)
 
     if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
-        op_name = get_op_name()
+        op_name = get_current_fwd_op_name()
         input = differentiable_identity(input, group=group, op_name=op_name, stream_manager=stream_manager)
         return F.linear(input, weight, bias)
     if tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
@@ -714,7 +714,7 @@ def row_linear(
     out = F.linear(input, weight, bias)
 
     if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
-        op_name = get_op_name()
+        op_name = get_current_fwd_op_name()
         out = differentiable_all_reduce_sum(out, group=group, op_name=op_name, stream_manager=stream_manager)
     elif tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
         out = differentiable_reduce_scatter_sum(out, group=group)

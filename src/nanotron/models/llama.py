@@ -825,13 +825,19 @@ class DominoLlamaDecoderLayer(_BaseLlamaDecoderLayer):
 
         # TODO: maybe try to bucket all the communication as in DPP,
         # do it at at once
-        with OpNameContext(FWD_ATTN_OP_NAME.format(self.layer_idx, 0)):
+        with OpNameContext(
+            fwd_op_name=FWD_ATTN_OP_NAME.format(self.layer_idx, 0),
+            bwd_op_name=BWD_ATTN_OP_NAME.format(self.layer_idx, 0),
+        ):
             attn_output0 = self.attn(
                 hidden_states=hidden_states0,
                 sequence_mask=sequence_mask0,
             )
 
-        with OpNameContext(FWD_ATTN_OP_NAME.format(self.layer_idx, 1)):
+        with OpNameContext(
+            fwd_op_name=FWD_ATTN_OP_NAME.format(self.layer_idx, 1),
+            bwd_op_name=BWD_ATTN_OP_NAME.format(self.layer_idx, 1),
+        ):
             attn_output1 = self.attn(
                 hidden_states=hidden_states1,
                 sequence_mask=sequence_mask1,
@@ -854,7 +860,10 @@ class DominoLlamaDecoderLayer(_BaseLlamaDecoderLayer):
             self.stream_manager,
         )
 
-        with OpNameContext(FWD_MLP_OP_NAME.format(self.layer_idx, 0)):
+        with OpNameContext(
+            fwd_op_name=FWD_MLP_OP_NAME.format(self.layer_idx, 0),
+            bwd_op_name=BWD_MLP_OP_NAME.format(self.layer_idx, 0),
+        ):
             mlp_output0 = self.mlp(hidden_states=hidden_states0)
 
         comm_stream.wait_stream(torch.cuda.default_stream())
@@ -867,7 +876,10 @@ class DominoLlamaDecoderLayer(_BaseLlamaDecoderLayer):
         residual1 = hidden_states1
         hidden_states1 = self.post_attention_layernorm(hidden_states1)
 
-        with OpNameContext(FWD_MLP_OP_NAME.format(self.layer_idx, 1)):
+        with OpNameContext(
+            fwd_op_name=FWD_MLP_OP_NAME.format(self.layer_idx, 1),
+            bwd_op_name=BWD_MLP_OP_NAME.format(self.layer_idx, 1),
+        ):
             mlp_output1 = self.mlp(hidden_states=hidden_states1)
 
         comm_stream.wait_stream(torch.cuda.default_stream())

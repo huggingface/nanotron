@@ -21,6 +21,7 @@ from torch import distributed as torch_dist
 from nanotron import distributed as dist
 from nanotron.distributed import ProcessGroup
 from nanotron.parallel.comm import CudaStreamManager, is_domino_async_comm
+from nanotron.parallel.tensor_parallel.domino import get_current_bwd_op_name
 
 
 class DifferentiableIdentity(torch.autograd.Function):
@@ -34,7 +35,7 @@ class DifferentiableIdentity(torch.autograd.Function):
         op_name: Optional[str] = None,
         stream_manager: Optional[CudaStreamManager] = None,
     ):
-        ctx.op_name = op_name
+        ctx.bwd_op_name = get_current_bwd_op_name()
         ctx.group = group
         ctx.stream_manager = stream_manager
         return tensor
@@ -42,10 +43,9 @@ class DifferentiableIdentity(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_output: torch.Tensor):
         group = ctx.group
-        op_name = ctx.op_name.replace("fwd.", "bwd.") if ctx.op_name is not None else None
 
         return (
-            DifferentiableAllReduceSum.apply(grad_output, group, op_name, ctx.stream_manager),
+            DifferentiableAllReduceSum.apply(grad_output, group, ctx.bwd_op_name, ctx.stream_manager),
             None,
             None,
             None,

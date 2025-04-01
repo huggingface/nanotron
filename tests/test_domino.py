@@ -1,15 +1,21 @@
+import os
 from copy import deepcopy
 
 import pytest
 import torch
-from helpers.llama import TINY_LLAMA_CONFIG, create_llama_from_config, get_llama_training_config
+from helpers.llama_helper import TINY_LLAMA_CONFIG, create_llama_from_config, get_llama_training_config
 from helpers.utils import init_distributed, rerun_if_address_is_in_use
 from nanotron.config import ModelArgs, RandomInit
 from nanotron.config.parallelism_config import DominoArgs
 from nanotron.models.llama import DominoLlamaDecoderLayer
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.comm import CudaStreamManager
-from nanotron.parallel.tensor_parallel.domino import OpNameContext, get_op_name, is_domino_async_comm
+from nanotron.parallel.tensor_parallel.domino import (
+    OpNameContext,
+    get_current_bwd_op_name,
+    get_current_fwd_op_name,
+    is_domino_async_comm,
+)
 
 
 @pytest.mark.parametrize(
@@ -18,7 +24,7 @@ from nanotron.parallel.tensor_parallel.domino import OpNameContext, get_op_name,
         ("fwd.layer_attn_1_batch_0", True),
         ("fwd.layer_attn_1_batch_1", True),
         ("fwd.layer_mlp_1_batch_0", True),
-        ("fwd.layer_mlp_1_batch_1", False),
+        ("fwd.layer_mlp_1_batch_1", True),
         ("bwd.layer_mlp_1_batch_1", True),
         ("bwd.layer_mlp_1_batch_0", True),
         ("bwd.layer_attn_1_batch_1", True),
@@ -32,6 +38,7 @@ def test_is_domino_async_comm(op_name, expected):
 @pytest.mark.parametrize("tp,dp,pp", [(2, 2, 1)])
 @rerun_if_address_is_in_use()
 def test_domino_model(tp: int, dp: int, pp: int):
+    os.environ["CUDA_DEVICE_MAX_CONNECTIONS"] = "1"
     BATCH_SIZE, SEQ_LEN = 10, 128
 
     model_config = deepcopy(TINY_LLAMA_CONFIG)
@@ -78,37 +85,42 @@ def _test_domino_model(
 
 
 def test_op_name_context_reentry():
-    assert get_op_name() is None
-    context = OpNameContext("reusable_op")
+    assert get_current_fwd_op_name() is None
+    assert get_current_bwd_op_name() is None
+    context = OpNameContext(fwd_op_name="fwd.reusable_op", bwd_op_name="bwd.reusable_op")
 
     with context:
-        assert get_op_name() == "reusable_op"
+        assert get_current_fwd_op_name() == "fwd.reusable_op"
+        assert get_current_bwd_op_name() == "bwd.reusable_op"
 
-    assert get_op_name() is None
+    assert get_current_fwd_op_name() is None
+    assert get_current_bwd_op_name() is None
 
     with context:
-        assert get_op_name() == "reusable_op"
+        assert get_current_fwd_op_name() == "fwd.reusable_op"
+        assert get_current_bwd_op_name() == "bwd.reusable_op"
 
-    assert get_op_name() is None
+    assert get_current_fwd_op_name() is None
+    assert get_current_bwd_op_name() is None
 
 
 def test_deeply_nested_contexts():
-    with OpNameContext("level1"):
-        assert get_op_name() == "level1"
+    with OpNameContext(fwd_op_name="fwd.level1", bwd_op_name="fwd.level1"):
+        assert get_current_fwd_op_name() == "fwd.level1"
 
-        with OpNameContext("level2"):
-            assert get_op_name() == "level2"
+        with OpNameContext(fwd_op_name="fwd.level2", bwd_op_name="fwd.level2"):
+            assert get_current_fwd_op_name() == "fwd.level2"
 
-        assert get_op_name() == "level1"
+        assert get_current_fwd_op_name() == "fwd.level1"
 
 
 def test_multiple_sequential_contexts():
-    assert get_op_name() is None
+    assert get_current_fwd_op_name() is None
 
-    with OpNameContext("first_op"):
-        assert get_op_name() == "first_op"
+    with OpNameContext(fwd_op_name="fwd.first_op", bwd_op_name="bwd.first_op"):
+        assert get_current_fwd_op_name() == "fwd.first_op"
 
-    with OpNameContext("second_op"):
-        assert get_op_name() == "second_op"
+    with OpNameContext(fwd_op_name="fwd.second_op", bwd_op_name="bwd.second_op"):
+        assert get_current_fwd_op_name() == "fwd.second_op"
 
-    assert get_op_name() is None
+    assert get_current_fwd_op_name() is None
