@@ -188,7 +188,7 @@ def get_dataloader_from_data_stage(
             tokenizer_path = trainer.config.tokenizer.tokenizer_name_or_path
             tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
             eos_token_id = tokenizer.eos_token_id
-            assert eos_token_id is not None and data.dataset.return_positions is True, "Tokenizer must have a eos token if return_positions is True"
+            assert eos_token_id is not None and data.dataset.return_positions is True, "Tokenizer must have an eos token if return_positions is True"
             log_rank(
                 f"[Nanoset] Creating Nanoset with {len(data.dataset.dataset_folder)} dataset folders and {trainer.config.tokens.train_steps * trainer.global_batch_size} train samples",
                 logger=logger,
