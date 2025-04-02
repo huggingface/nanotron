@@ -38,6 +38,8 @@ class Nanoset(torch.utils.data.Dataset):
         dataset_weights: Union[List[float], None] = None,
         random_seed: int = 1234,
         use_cache: bool = True,
+        eos_token_id: int = None,
+        return_positions: bool = True,
     ) -> None:
 
         # Checks
@@ -48,6 +50,9 @@ class Nanoset(torch.utils.data.Dataset):
         # Init
         self.dataset_folders = dataset_folders
         self.sequence_length = sequence_length
+        self.eos_token_id = eos_token_id
+        self.return_positions = return_positions
+        assert self.return_positions or self.eos_token_id is not None, "If return_positions is True, eos_token_id must be defined"
         # Number of bytes for the tokens stored in the processed dataset files. 2 for vocab sizes < 65535, 4 otherwise
         self.token_size = token_size
         self.train_split_num_samples = train_split_num_samples
@@ -64,8 +69,8 @@ class Nanoset(torch.utils.data.Dataset):
                     recursive=False,
                     token_size=self.token_size,
                     shuffle=True,
-                    return_positions=True,
-                    # max_tokens=sequence_length*3*10, # debug
+                    return_positions=self.return_positions,
+                    eos_token_id=self.eos_token_id,
                 )
             )
 
@@ -83,8 +88,8 @@ class Nanoset(torch.utils.data.Dataset):
             self.dataset_weights
         ), f"Specified {len(self.dataset_weights)} weights but {len(dataset_folders)} datasets were provided."
         ## Build dataset index and dataset sample index
-        # self.dataset_index, self.dataset_sample_index = self.build_nanoset_index()
-        self.dataset_index, self.dataset_sample_index = self.new_build_nanoset_index()
+        self.dataset_index, self.dataset_sample_index = self.build_nanoset_index()
+        # self.dataset_index, self.dataset_sample_index = self.new_build_nanoset_index() # TODO: Fix this
 
         self.print_nanoset_info()
 

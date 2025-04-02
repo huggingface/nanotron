@@ -185,7 +185,7 @@ def get_dataloader_from_data_stage(
         from nanotron.data.nanoset import Nanoset
 
         with main_rank_first(trainer.parallel_context.world_pg):
-            logger.info(
+            log_rank(
                 f"[Nanoset] Creating Nanoset with {len(data.dataset.dataset_folder)} dataset folders and {trainer.config.tokens.train_steps * trainer.global_batch_size} train samples"
             )
             start_time = time.time()
@@ -196,10 +196,15 @@ def get_dataloader_from_data_stage(
                 train_split_num_samples=trainer.config.tokens.train_steps * trainer.global_batch_size,
                 dataset_weights=data.dataset.dataset_weights,
                 random_seed=data.seed,
+                return_positions=data.dataset.return_positions,
+                eos_token_id=trainer.model_config.eos_token_id,
             )
             end_time = time.time()
-            logger.info(
-                f"[Nanoset] Time taken to create Nanoset: {time.strftime('%M:%S', time.gmtime(end_time - start_time))} (MM:SS)"
+            log_rank(
+                f"[Nanoset] Time taken to create Nanoset: {time.strftime('%M:%S', time.gmtime(end_time - start_time))} (MM:SS)",
+                logger=logger,
+                level=logging.INFO,
+                rank=0,
             )
         # Prepare dataloader
         train_dataloader = build_nanoset_dataloader(

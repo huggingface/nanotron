@@ -135,6 +135,7 @@ class NanosetDatasetsArgs:
     tokenizer_name: Optional[str] = None
     vocab_size: Optional[int] = None
     token_size_in_bytes: Optional[int] = None
+    return_positions: Optional[bool] = False
 
     def __post_init__(self):
         if isinstance(self.dataset_folder, str):  # Case 1: 1 Dataset folder
@@ -426,7 +427,7 @@ class Config:
 
         if self.s3_upload is not None:
             self.s3_upload.__post_init__()
-
+        
         # Some final sanity checks across separate arguments sections:
         if self.profiler is not None and self.profiler.profiler_export_path is not None:
             total_profiling_steps = self.profiler.skip_first + self.profiler.repeat * (
