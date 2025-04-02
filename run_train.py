@@ -185,6 +185,10 @@ def get_dataloader_from_data_stage(
         from nanotron.data.nanoset import Nanoset
 
         with main_rank_first(trainer.parallel_context.world_pg):
+            tokenizer_path = trainer.config.tokenizer.tokenizer_name_or_path
+            tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
+            eos_token_id = tokenizer.eos_token_id
+            assert eos_token_id is not None and data.dataset.return_positions is True, "Tokenizer must have a eos token if return_positions is True"
             log_rank(
                 f"[Nanoset] Creating Nanoset with {len(data.dataset.dataset_folder)} dataset folders and {trainer.config.tokens.train_steps * trainer.global_batch_size} train samples",
                 logger=logger,
@@ -200,7 +204,7 @@ def get_dataloader_from_data_stage(
                 dataset_weights=data.dataset.dataset_weights,
                 random_seed=data.seed,
                 return_positions=data.dataset.return_positions,
-                eos_token_id=trainer.model_config.eos_token_id,
+                eos_token_id=eos_token_id,
             )
             end_time = time.time()
             log_rank(
