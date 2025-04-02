@@ -1,5 +1,6 @@
 import dataclasses
 import json
+import re
 from pathlib import Path
 from typing import Any, Callable, ClassVar, Dict, List, Optional, Tuple, Type, Union
 
@@ -81,7 +82,10 @@ class TensorMetadata:
         cast=[Version],
         type_hooks={
             Tuple[SlicesPair, ...]: SlicesPair.tuple_from_str,
-            Tuple[int, ...]: lambda x: torch.Size(int(size) for size in x.strip("()").split(",") if size),
+            Tuple[int, ...]: lambda x: torch.Size(
+                int(re.search(r'\((\d+)\)', size).group(1)) if 'np.int' in size else int(size)
+                for size in x.strip("()").split(",") if size
+            ),
         },
         strict=True,
     )

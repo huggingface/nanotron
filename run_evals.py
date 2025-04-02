@@ -26,7 +26,7 @@ def create_lighteval_config(
     top_k: int = 0,
     top_p: float = 1.0,
     seed: int = 42,
-    use_cache: bool = True,
+    use_cache: bool = False,
     save_details: bool = True,
     push_to_hub: bool = False,
     results_org: Optional[str] = None,
@@ -190,23 +190,52 @@ if __name__ == "__main__":
     if args.lighteval_override is None:
         lighteval_config_path = "configs/examples/lighteval-config.yaml"
 
+        tasks_str = "custom|arc|0|1,custom|commonsense_qa|0|1,custom|hellaswag|0|1,custom|mmlu_cf|0|1,custom|openbook_qa|0|1,custom|piqa|0|1,custom|winogrande|0|1"
+
+        # Arabic
+        tasks_str += ",lighteval|xcsqa_ara_cf|0|1,lighteval|belebele_arb_Arab_cf|0|1,lighteval|mmlu_ara_cf|0|1,lighteval|alghafa_arc_ara_cf:easy|0|1,lighteval|soqal_ara_cf|0|1,lighteval|alghafa_piqa_ara_cf|0|1,lighteval|alghafa_race_ara_cf|0|1,lighteval|alghafa_sciqa_ara_cf|0|1,lighteval|xcodah_ara_cf|0|1,lighteval|xstory_cloze_ara_cf|0|1"
+
+        # Chinese
+        tasks_str += ",lighteval|xcsqa_zho_cf|0|1,lighteval|belebele_zho_Hans_cf|0|1,lighteval|c3_zho_cf|0|1,lighteval|cmmlu_zho_cf|0|1,lighteval|agieval_zho_cf|0|1,lighteval|ceval_zho_cf|0|1,lighteval|mlmm_hellaswag_zho_cf|0|1,lighteval|m3exams_zho_cf|0|1,lighteval|xcodah_zho_cf|0|1,lighteval|xcopa_zho_cf|0|1,lighteval|xstory_cloze_zho_cf|0|1,lighteval|xwinograd_zho_cf|0|1"
+
+        # French
+        tasks_str += ",lighteval|meta_mmlu_fra_cf|0|1,lighteval|xcsqa_fra_cf|0|1,lighteval|belebele_fra_Latn_cf|0|1,lighteval|mlmm_hellaswag_fra_cf|0|1,lighteval|xcodah_fra_cf|0|1"
+
+        # Hindi
+        tasks_str += ",lighteval|meta_mmlu_hin_cf|0|1,lighteval|xcsqa_hin_cf|0|1,lighteval|belebele_hin_Deva_cf|0|1,lighteval|mlmm_hellaswag_hin_cf|0|1,lighteval|community_arc_hin_cf|0|1,lighteval|xcodah_hin_cf|0|1,lighteval|xstory_cloze_hin_cf|0|1"
+
+        # Russian
+        tasks_str += ",lighteval|mlmm_arc_rus_cf:challenge|0|1,lighteval|rummlu_rus_cf|0|1,lighteval|xcsqa_rus_cf|0|1,lighteval|belebele_rus_Cyrl_cf|0|1,lighteval|mlmm_hellaswag_rus_cf|0|1,lighteval|parus_rus_cf|0|1,lighteval|mera_openbookqa_rus_cf|0|1,lighteval|xcodah_rus_cf|0|1,lighteval|xstory_cloze_rus_cf|0|1,lighteval|xwinograd_rus_cf|0|1"
+
+        # German
+        tasks_str += ",lighteval|meta_mmlu_deu_cf|0|1,lighteval|mlmm_arc_deu_cf:challenge|0|1,lighteval|xcsqa_deu_cf|0|1,lighteval|belebele_deu_Latn_cf|0|1,lighteval|mlmm_hellaswag_deu_cf|0|1,lighteval|xcodah_deu_cf|0|1"
+
+        # Italian
+        tasks_str += ",lighteval|meta_mmlu_ita_cf|0|1,lighteval|mlmm_arc_ita_cf:challenge|0|1,lighteval|xcsqa_ita_cf|0|1,lighteval|belebele_ita_Latn_cf|0|1,lighteval|mlmm_hellaswag_ita_cf|0|1,lighteval|m3exams_ita_cf|0|1,lighteval|xcodah_ita_cf|0|1,lighteval|xcopa_ita_cf|0|1"
+
+        # Japanese (missing lighteval|jmmlu_jpn_cf|0|1, CommonSenseQA (Kurihara et al., 2022))
+        tasks_str += ",lighteval|xcsqa_jpn_cf|0|1,lighteval|belebele_jpn_Jpan_cf|0|1,lighteval|xcodah_jpn_cf|0|1,lighteval|xwinograd_jpn_cf|0|1"
+
+        # Vietnamese
+        tasks_str += ",lighteval|mlmm_arc_vie_cf:challenge|0|1,lighteval|mlmm_mmlu_vie_cf|0|1,lighteval|xcopa_vie_cf|0|1,lighteval|belebele_vie_Latn_cf|0|1,lighteval|mlmm_hellaswag_vie_cf|0|1,lighteval|m3exams_vie_cf|0|1,lighteval|xcodah_vie_cf|0|1,lighteval|xcsqa_vie_cf|0|1"
+
         # Create a custom config
         custom_config = create_lighteval_config(
             output_dir="./eval_results/custom",
-            tasks="custom|hellaswag|0|1,custom|winogrande|0|1,custom|piqa|0|1,custom|siqa|0|1,custom|openbookqa|0|1,custom|arc:easy|0|1,custom|arc:challenge|0|1,custom|commonsense_qa|0|1,custom|mmlu:abstract_algebra|0|1,custom|mmlu:anatomy|0|1,custom|mmlu:astronomy|0|1,custom|mmlu:business_ethics|0|1,custom|mmlu:clinical_knowledge|0|1,custom|mmlu:college_biology|0|1,custom|mmlu:college_chemistry|0|1,custom|mmlu:college_computer_science|0|1,custom|mmlu:college_mathematics|0|1,custom|mmlu:college_medicine|0|1,custom|mmlu:college_physics|0|1,custom|mmlu:computer_security|0|1,custom|mmlu:conceptual_physics|0|1,custom|mmlu:econometrics|0|1,custom|mmlu:electrical_engineering|0|1,custom|mmlu:elementary_mathematics|0|1,custom|mmlu:formal_logic|0|1,custom|mmlu:global_facts|0|1,custom|mmlu:high_school_biology|0|1,custom|mmlu:high_school_chemistry|0|1,custom|mmlu:high_school_computer_science|0|1,custom|mmlu:high_school_european_history|0|1,custom|mmlu:high_school_geography|0|1,custom|mmlu:high_school_government_and_politics|0|1,custom|mmlu:high_school_macroeconomics|0|1,custom|mmlu:high_school_mathematics|0|1,custom|mmlu:high_school_microeconomics|0|1,custom|mmlu:high_school_physics|0|1,custom|mmlu:high_school_psychology|0|1,custom|mmlu:high_school_statistics|0|1,custom|mmlu:high_school_us_history|0|1,custom|mmlu:high_school_world_history|0|1,custom|mmlu:human_aging|0|1,custom|mmlu:human_sexuality|0|1,custom|mmlu:international_law|0|1,custom|mmlu:jurisprudence|0|1,custom|mmlu:logical_fallacies|0|1,custom|mmlu:machine_learning|0|1,custom|mmlu:management|0|1,custom|mmlu:marketing|0|1,custom|mmlu:medical_genetics|0|1,custom|mmlu:miscellaneous|0|1,custom|mmlu:moral_disputes|0|1,custom|mmlu:moral_scenarios|0|1,custom|mmlu:nutrition|0|1,custom|mmlu:philosophy|0|1,custom|mmlu:prehistory|0|1,custom|mmlu:professional_accounting|0|1,custom|mmlu:professional_law|0|1,custom|mmlu:professional_medicine|0|1,custom|mmlu:professional_psychology|0|1,custom|mmlu:public_relations|0|1,custom|mmlu:security_studies|0|1,custom|mmlu:sociology|0|1,custom|mmlu:us_foreign_policy|0|1,custom|mmlu:virology|0|1,custom|mmlu:world_religions|0|1",
-            custom_tasks="/fsx/jason/interleaved/custom_tasks.py",
+            tasks=tasks_str,
+            custom_tasks="/fsx/anton/repos/smollm/text/evaluation/tasks.py",
             batch_size=8,
-            dp=1,
+            dp=8,
             pp=1,
             tp=1,
-            max_samples=50,  # Use a small number for testing
+            max_samples=1000,  # Use a small number for testing
             temperature=0.0,
         )
+
+        # Save it to a YAML file
+        save_lighteval_config_as_yaml(custom_config, lighteval_config_path)
     else:
         lighteval_config_path = args.lighteval_override
-
-    # Save it to a YAML file
-    save_lighteval_config_as_yaml(custom_config, lighteval_config_path)
 
     nanotron(
         checkpoint_config_path=args.checkpoint_config_path,
