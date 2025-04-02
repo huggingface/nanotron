@@ -186,7 +186,10 @@ def get_dataloader_from_data_stage(
 
         with main_rank_first(trainer.parallel_context.world_pg):
             log_rank(
-                f"[Nanoset] Creating Nanoset with {len(data.dataset.dataset_folder)} dataset folders and {trainer.config.tokens.train_steps * trainer.global_batch_size} train samples"
+                f"[Nanoset] Creating Nanoset with {len(data.dataset.dataset_folder)} dataset folders and {trainer.config.tokens.train_steps * trainer.global_batch_size} train samples",
+                logger=logger,
+                level=logging.INFO,
+                rank=0,
             )
             start_time = time.time()
             train_dataset = Nanoset(
