@@ -44,21 +44,21 @@ def get_attribute_by_path(obj: Any, path: str, debug: bool = False) -> Optional[
 
 def compute_kurtosis(tensor: torch.Tensor) -> torch.Tensor:
     """
-    Compute kurtosis which measures "tailedness" of distribution.
+    Compute excess kurtosis which measures "tailedness" of distribution.
     High kurtosis indicates outliers, low kurtosis indicates uniform-like distribution.
     """
-    # Use float() directly on tensor operations rather than making a copy
-    mean = tensor.float().mean()
-    std = tensor.float().std()
+    device = tensor.device
+    tensor = tensor.float()
+    
+    mean = tensor.mean()
+    std = tensor.std()
     # Avoid division by zero
     if std == 0:
-        return torch.tensor(0.0, device=tensor.device)
+        return torch.tensor(0.0, device=device)
 
-    # Compute kurtosis: E[((x-μ)/σ)^4]
-    # Operate on the tensor directly without flattening
-    normalized = ((tensor.float() - mean) / std)
-    # Using .pow(4) is more efficient than **4
-    return torch.mean(normalized.pow(4)) - 3  # Excess kurtosis (normal distribution has kurtosis=3)
+    # Compute excess kurtosis: E[((x-μ)/σ)^4] - 3
+    normalized = (tensor - mean) / std
+    return torch.mean(normalized.pow(4)) - 3
 
 
 def compute_zero_fraction(tensor: torch.Tensor, threshold: float = 1e-10) -> torch.Tensor:
@@ -66,7 +66,7 @@ def compute_zero_fraction(tensor: torch.Tensor, threshold: float = 1e-10) -> tor
     return (tensor.abs() < threshold).float().mean()
 
 
-def compute_activation_stats(tensor: torch.Tensor) -> Dict[str, torch.Tensor]:
+def compute_tensor_stats(tensor: torch.Tensor) -> Dict[str, torch.Tensor]:
     """Compute comprehensive statistics for a tensor."""
     if tensor.numel() == 0:
         # Create empty stats with consistent device
@@ -108,7 +108,7 @@ class ExperimentLogger:
     - Full (level=1): Logs all metrics including detailed model statistics
     """
     
-    # Standard component patterns used by multiple methods
+    # Standard component paths used by multiple methods
     MODEL_COMPONENTS = {
         "attention": {
             "qkv_proj": "model.decoder.{}.pp_block.attn.qkv_proj.weight",
@@ -130,47 +130,22 @@ class ExperimentLogger:
     ]
     
     def __init__(self, config):
-        """
-        Initialize the logger with configuration.
-        
-        Args:
-            config: Configuration object with metrics_logging attribute
-        """
+        """Initialize the logger with configuration."""
         self.config = config
         self.log_level = config.metrics_logging.level
         self.log_interval = config.metrics_logging.interval
     
     def should_log_detailed_metrics(self, iteration: int) -> bool:
-        """
-        Determine if detailed metrics should be logged for the current iteration.
-        
-        Args:
-            iteration: Current training iteration/step
-            
-        Returns:
-            bool: Whether to log detailed metrics
-        """
+        """Determine if detailed metrics should be logged for the current iteration."""
         # Always log first few iterations for debugging
         if iteration < 5:
             return True
             
         # Log according to interval if log_level is set to full (1)
-        if self.log_level > 0 and iteration % self.log_interval == 0:
-            return True
-            
-        return False
+        return self.log_level > 0 and iteration % self.log_interval == 0
     
     def _format_paths(self, components: Dict, max_layers: int) -> Dict:
-        """
-        Pre-format component paths with layer indices to avoid repeated formatting.
-        
-        Args:
-            components: Dict of component patterns
-            max_layers: Number of layers to format
-            
-        Returns:
-            Dict of pre-formatted paths
-        """
+        """Pre-format component paths with layer indices for efficiency."""
         formatted = {}
         for comp_type, subcomponents in components.items():
             formatted[comp_type] = {}
@@ -188,7 +163,7 @@ class ExperimentLogger:
             embeddings = get_attribute_by_path(model, path, debug=debug)
             if embeddings is not None:
                 name = path.split(".")[-2]
-                stats = compute_activation_stats(embeddings)
+                stats = compute_tensor_stats(embeddings)
                 
                 for stat_name, value in stats.items():
                     metrics[f"{name}/{stat_name}"] = value
@@ -203,14 +178,11 @@ class ExperimentLogger:
         Aggregates weights from all decoder layers to provide model-wide statistics.
         """
         metrics = {}
-        
-        # Get number of layers directly from config
         max_layers = self.config.model.model_config.num_hidden_layers
         
         if max_layers == 0:
             return metrics
-        
-        # Pre-format the paths to avoid repeated formatting in loops
+
         formatted_paths = self._format_paths(self.MODEL_COMPONENTS, max_layers)
         
         # Group weights by component type
@@ -240,7 +212,7 @@ class ExperimentLogger:
             all_comp_weights = torch.cat(flat_tensors)
             prefix = f"global_{comp_type}"
             
-            comp_stats = compute_activation_stats(all_comp_weights)
+            comp_stats = compute_tensor_stats(all_comp_weights)
             for stat_name, value in comp_stats.items():
                 metrics[f"{prefix}/{stat_name}"] = value
         
@@ -249,14 +221,14 @@ class ExperimentLogger:
         all_weights = torch.cat(flat_all_tensors)
         
         # Add full global metrics
-        global_stats = compute_activation_stats(all_weights)
+        global_stats = compute_tensor_stats(all_weights)
         for stat_name, value in global_stats.items():
             metrics[f"global_global/{stat_name}"] = value
         
         return metrics
     
     def collect_parameter_metrics(self, model: torch.nn.Module, debug: bool = False) -> Dict[str, torch.Tensor]:
-        """Collect metrics for model parameters."""
+        """Collect detailed metrics for model parameters by layer and component."""
         metrics = {}
         max_layers = self.config.model.model_config.num_hidden_layers
 
@@ -274,20 +246,20 @@ class ExperimentLogger:
                     
                     if param is not None:
                         # Add parameter metrics
-                        stats = compute_activation_stats(param)
+                        stats = compute_tensor_stats(param)
                         for stat_name, value in stats.items():
                             metrics[f"{layer_name}/{comp_type}/{subcomp_name}/{stat_name}"] = value
                         
                         # Add gradient stats if available
                         if hasattr(param, "grad") and param.grad is not None:
-                            grad_stats = compute_activation_stats(param.grad.detach())
+                            grad_stats = compute_tensor_stats(param.grad.detach())
                             for stat_name, value in grad_stats.items():
                                 metrics[f"{layer_name}/{comp_type}/{subcomp_name}/grad/{stat_name}"] = value
 
         # Get final layer norm
         final_ln = get_attribute_by_path(model, "model.final_layer_norm.pp_block.weight")
         if final_ln is not None:
-            stats = compute_activation_stats(final_ln)
+            stats = compute_tensor_stats(final_ln)
             for stat_name, value in stats.items():
                 metrics[f"final_layernorm/{stat_name}"] = value
 
@@ -323,7 +295,7 @@ class ExperimentLogger:
         accuracy = correct.mean()
         metrics["accuracy/overall"] = accuracy
 
-        # Calculate next token accuracy
+        # Calculate next token and position-specific accuracy
         if targets.dim() > 1 and targets.size(1) > 1:
             next_token_accuracy = correct[:, -1].mean()
             metrics["accuracy/next_token"] = next_token_accuracy
@@ -343,9 +315,7 @@ class ExperimentLogger:
         iteration: Optional[int] = None,
         debug: bool = False,
     ) -> Dict[str, torch.Tensor]:
-        """
-        Collect all metrics based on the specified log level and iteration.
-        """
+        """Collect all metrics based on the specified log level and iteration."""
         metrics = {}
 
         # Collect accuracy metrics if logits and targets are available
@@ -354,6 +324,7 @@ class ExperimentLogger:
 
         # Check if we should log detailed metrics
         if iteration is not None and self.should_log_detailed_metrics(iteration):
+            # Helper function to handle metric collection with error handling
             try_collect = lambda fn, err_msg: (
                 metrics.update(fn(model, debug=debug)) 
                 if not debug else 
