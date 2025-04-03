@@ -150,8 +150,8 @@ if __name__ == "__main__":
     """
 
     # First warm up the datasets
-    print("Starting dataset warm-up...")
-    warmup_datasets(yaml_input)
+    # print("Starting dataset warm-up...")
+    # warmup_datasets(yaml_input)
 
     # Then check warm-up status
     print("\nChecking warm-up status...")
