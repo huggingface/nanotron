@@ -16,7 +16,7 @@ def compute_tensor_norm(tensor: torch.Tensor, p: int = 2) -> torch.Tensor:
     return torch.linalg.vector_norm(tensor, ord=p)
 
 
-def get_attribute_by_path(obj: Any, path: str, debug: bool = False) -> Optional[Any]:
+def get_attribute_by_path(obj: Any, path: str) -> Optional[Any]:
     """Get an attribute from an object by a dot-separated path."""
     path_parts = path.split(".")
     current = obj
@@ -25,8 +25,6 @@ def get_attribute_by_path(obj: Any, path: str, debug: bool = False) -> Optional[
         if hasattr(current, attr):
             current = getattr(current, attr)
         else:
-            if debug:
-                print(f"Could not find attribute '{attr}' in path '{path}' at position {i}")
             return None
 
     if isinstance(current, torch.Tensor) and hasattr(current, "detach"):
@@ -129,14 +127,6 @@ class ExperimentLogger:
         self.log_level = config.metrics_logging.level
         self.log_interval = config.metrics_logging.interval
 
-    def should_log_detailed_metrics(self, iteration: int) -> bool:
-        """Determine if detailed metrics should be logged for the current iteration."""
-        # Always log first few iterations for debugging
-        if iteration < 5:
-            return True
-
-        return self.log_level > 0 and iteration % self.log_interval == 0
-
     def _format_paths(self, components: Dict, max_layers: int) -> Dict:
         """Pre-format component paths with layer indices for efficiency."""
         formatted = {}
@@ -146,12 +136,12 @@ class ExperimentLogger:
                 formatted[comp_type][subcomp_name] = [pattern.format(i) for i in range(max_layers)]
         return formatted
 
-    def collect_embeddings_metrics(self, model: torch.nn.Module, debug: bool = False) -> Dict[str, torch.Tensor]:
+    def collect_embeddings_metrics(self, model: torch.nn.Module) -> Dict[str, torch.Tensor]:
         """Collect metrics for model embeddings."""
         metrics = {}
 
         for path in self.EMBEDDING_PATHS:
-            embeddings = get_attribute_by_path(model, path, debug=debug)
+            embeddings = get_attribute_by_path(model, path)
             if embeddings is not None:
                 name = path.split(".")[-2]
                 stats = compute_tensor_stats(embeddings)
@@ -163,9 +153,7 @@ class ExperimentLogger:
 
         return metrics
 
-    def compute_global_hidden_layer_metrics(
-        self, model: torch.nn.Module, debug: bool = False
-    ) -> Dict[str, torch.Tensor]:
+    def compute_global_hidden_layer_metrics(self, model: torch.nn.Module) -> Dict[str, torch.Tensor]:
         """
         Compute global metrics across all hidden layers, excluding embeddings, final layernorm, and lm_head.
         Aggregates weights from all decoder layers to provide model-wide statistics.
@@ -220,7 +208,7 @@ class ExperimentLogger:
 
         return metrics
 
-    def collect_parameter_metrics(self, model: torch.nn.Module, debug: bool = False) -> Dict[str, torch.Tensor]:
+    def collect_parameter_metrics(self, model: torch.nn.Module) -> Dict[str, torch.Tensor]:
         """Collect detailed metrics for model parameters by layer and component."""
         metrics = {}
         max_layers = self.config.model.model_config.num_hidden_layers
@@ -257,81 +245,15 @@ class ExperimentLogger:
 
         return metrics
 
-    def collect_accuracy_metrics(self, logits: torch.Tensor, targets: torch.Tensor) -> Dict[str, torch.Tensor]:
-        """Calculate token prediction accuracy metrics."""
-        metrics = {}
-
-        if logits is None or targets is None:
-            return metrics
-
-        logits = logits.detach() if hasattr(logits, "detach") else logits
-        targets = targets.detach() if hasattr(targets, "detach") else targets
-
-        if logits.dim() < 2 or targets.dim() < 1:
-            return metrics
-
-        predictions = logits.argmax(dim=-1)
-
-        # Match shapes if needed
-        if predictions.shape != targets.shape:
-            if predictions.dim() > targets.dim():
-                predictions = predictions[..., -targets.shape[-1] :]
-            elif targets.dim() > predictions.dim():
-                targets = targets[..., -predictions.shape[-1] :]
-
-        # Calculate overall accuracy
-        correct = (predictions == targets).float()
-        accuracy = correct.mean()
-        metrics["accuracy/overall"] = accuracy
-
-        # Calculate next token and position-specific accuracy
-        if targets.dim() > 1 and targets.size(1) > 1:
-            next_token_accuracy = correct[:, -1].mean()
-            metrics["accuracy/next_token"] = next_token_accuracy
-
-            # Position-specific accuracy
-            for pos in range(min(5, targets.size(1))):
-                pos_accuracy = correct[:, pos].mean()
-                metrics[f"accuracy/position_{pos}"] = pos_accuracy
-
-        return metrics
-
     def collect_all_metrics(
         self,
         model: torch.nn.Module,
-        logits: Optional[torch.Tensor] = None,
-        targets: Optional[torch.Tensor] = None,
-        iteration: Optional[int] = None,
-        debug: bool = False,
     ) -> Dict[str, torch.Tensor]:
         """Collect all metrics based on the specified log level and iteration."""
         metrics = {}
-
-        # Collect accuracy metrics if logits and targets are available
-        if logits is not None and targets is not None:
-            metrics.update(self.collect_accuracy_metrics(logits, targets))
-
-        # Check if we should log detailed metrics
-        if iteration is not None and self.should_log_detailed_metrics(iteration):
-            # Collect metrics with simple error handling
-            for fn, err_msg in [
-                (self.compute_global_hidden_layer_metrics, "Error collecting global hidden layer metrics"),
-                (self.collect_embeddings_metrics, "Error collecting embedding metrics"),
-            ]:
-                try:
-                    metrics.update(fn(model, debug=debug))
-                except Exception as e:
-                    if debug:
-                        print(f"{err_msg}: {e}")
-
-            # If in full details mode (level=1)
-            if self.log_level >= 1:
-                try:
-                    metrics.update(self.collect_parameter_metrics(model, debug=debug))
-                except Exception as e:
-                    if debug:
-                        print(f"Error collecting parameter metrics: {e}")
-
+        metrics.update(self.compute_global_hidden_layer_metrics(model))
+        metrics.update(self.collect_embeddings_metrics(model))
+        metrics.update(self.collect_parameter_metrics(model))
         return metrics
 
 

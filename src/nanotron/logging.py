@@ -432,31 +432,3 @@ def log_libraries_versions(logger: logging.Logger):
 
 
 _configure_library_root_logger()
-
-_has_wandb = None
-
-
-def has_wandb():
-    """Check if wandb is available and initialized"""
-    global _has_wandb
-    if _has_wandb is None:
-        try:
-            import wandb
-
-            _has_wandb = wandb.run is not None
-        except ImportError:
-            _has_wandb = False
-    return _has_wandb
-
-
-def log_to_wandb(metrics, commit=False):
-    """Log metrics to wandb if available
-
-    Args:
-        metrics: Dictionary of metrics to log
-        commit: Whether to commit the metrics
-    """
-    if has_wandb():
-        import wandb
-
-        wandb.log(metrics, commit=commit)
