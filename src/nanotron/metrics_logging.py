@@ -2,11 +2,9 @@
 Utility functions for computing and logging various model metrics.
 """
 
-import os
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional
 
 import torch
-import torch.nn.functional as F
 
 ########################
 # Basic utility functions
@@ -22,7 +20,7 @@ def get_attribute_by_path(obj: Any, path: str, debug: bool = False) -> Optional[
     """Get an attribute from an object by a dot-separated path."""
     path_parts = path.split(".")
     current = obj
-    
+
     for i, attr in enumerate(path_parts):
         if hasattr(current, attr):
             current = getattr(current, attr)
@@ -49,16 +47,14 @@ def compute_kurtosis(tensor: torch.Tensor) -> torch.Tensor:
     """
     device = tensor.device
     tensor = tensor.float()
-    
+
     mean = tensor.mean()
     std = tensor.std()
-    # Avoid division by zero
     if std == 0:
         return torch.tensor(0.0, device=device)
 
-    # Compute excess kurtosis: E[((x-μ)/σ)^4] - 3
     normalized = (tensor - mean) / std
-    return torch.mean(normalized.pow(4)) - 3
+    return torch.mean(normalized.pow(4)) - 3  # Excess kurtosis (normal distribution has kurtosis=3)
 
 
 def compute_zero_fraction(tensor: torch.Tensor, threshold: float = 1e-10) -> torch.Tensor:
@@ -69,7 +65,6 @@ def compute_zero_fraction(tensor: torch.Tensor, threshold: float = 1e-10) -> tor
 def compute_tensor_stats(tensor: torch.Tensor) -> Dict[str, torch.Tensor]:
     """Compute comprehensive statistics for a tensor."""
     if tensor.numel() == 0:
-        # Create empty stats with consistent device
         device = tensor.device
         return {
             "mean": torch.tensor(0.0, device=device),
@@ -82,11 +77,10 @@ def compute_tensor_stats(tensor: torch.Tensor) -> Dict[str, torch.Tensor]:
             "kurtosis": torch.tensor(0.0, device=device),
         }
 
-    # Convert to float once and reuse
     tensor_f = tensor.float()
     mean = tensor_f.mean()
     std = torch.sqrt(tensor_f.var())
-    
+
     return {
         "mean": mean,
         "std": std,
@@ -102,13 +96,13 @@ def compute_tensor_stats(tensor: torch.Tensor) -> Dict[str, torch.Tensor]:
 class ExperimentLogger:
     """
     Class for logging experiment metrics with configurable detail levels.
-    
+
     Supports two modes:
     - Basic (level=0): Only logs essential metrics (loss, accuracy, performance)
     - Full (level=1): Logs all metrics including detailed model statistics
     """
-    
-    # Standard component paths used by multiple methods
+
+    # Standard component paths for finding model weights
     MODEL_COMPONENTS = {
         "attention": {
             "qkv_proj": "model.decoder.{}.pp_block.attn.qkv_proj.weight",
@@ -123,38 +117,35 @@ class ExperimentLogger:
             "post_attention_layernorm": "model.decoder.{}.pp_block.post_attention_layernorm.weight",
         },
     }
-    
+
     EMBEDDING_PATHS = [
         "model.token_position_embeddings.pp_block.token_embedding.weight",
         "model.lm_head.pp_block.weight",
     ]
-    
+
     def __init__(self, config):
         """Initialize the logger with configuration."""
         self.config = config
         self.log_level = config.metrics_logging.level
         self.log_interval = config.metrics_logging.interval
-    
+
     def should_log_detailed_metrics(self, iteration: int) -> bool:
         """Determine if detailed metrics should be logged for the current iteration."""
         # Always log first few iterations for debugging
         if iteration < 5:
             return True
-            
-        # Log according to interval if log_level is set to full (1)
+
         return self.log_level > 0 and iteration % self.log_interval == 0
-    
+
     def _format_paths(self, components: Dict, max_layers: int) -> Dict:
         """Pre-format component paths with layer indices for efficiency."""
         formatted = {}
         for comp_type, subcomponents in components.items():
             formatted[comp_type] = {}
             for subcomp_name, pattern in subcomponents.items():
-                formatted[comp_type][subcomp_name] = [
-                    pattern.format(i) for i in range(max_layers)
-                ]
+                formatted[comp_type][subcomp_name] = [pattern.format(i) for i in range(max_layers)]
         return formatted
-    
+
     def collect_embeddings_metrics(self, model: torch.nn.Module, debug: bool = False) -> Dict[str, torch.Tensor]:
         """Collect metrics for model embeddings."""
         metrics = {}
@@ -164,31 +155,33 @@ class ExperimentLogger:
             if embeddings is not None:
                 name = path.split(".")[-2]
                 stats = compute_tensor_stats(embeddings)
-                
+
                 for stat_name, value in stats.items():
                     metrics[f"{name}/{stat_name}"] = value
-                
+
                 metrics[f"{name}/size"] = torch.tensor(embeddings.numel(), device=embeddings.device)
 
         return metrics
-    
-    def compute_global_hidden_layer_metrics(self, model: torch.nn.Module, debug: bool = False) -> Dict[str, torch.Tensor]:
+
+    def compute_global_hidden_layer_metrics(
+        self, model: torch.nn.Module, debug: bool = False
+    ) -> Dict[str, torch.Tensor]:
         """
         Compute global metrics across all hidden layers, excluding embeddings, final layernorm, and lm_head.
         Aggregates weights from all decoder layers to provide model-wide statistics.
         """
         metrics = {}
         max_layers = self.config.model.model_config.num_hidden_layers
-        
+
         if max_layers == 0:
             return metrics
 
         formatted_paths = self._format_paths(self.MODEL_COMPONENTS, max_layers)
-        
+
         # Group weights by component type
         component_weights = {comp_type: [] for comp_type in self.MODEL_COMPONENTS}
         all_layer_weights = []
-        
+
         # Collect all weights from hidden layers
         for layer_idx in range(max_layers):
             for comp_type, subcomponents in self.MODEL_COMPONENTS.items():
@@ -199,57 +192,56 @@ class ExperimentLogger:
                         param_tensor = param.detach().float()
                         all_layer_weights.append(param_tensor)
                         component_weights[comp_type].append(param_tensor)
-        
+
         if not all_layer_weights:
             return metrics
-        
+
         # Compute statistics for each component type
         for comp_type, weights in component_weights.items():
             if not weights:
                 continue
-                
+
+            # Flatten tensors for global statistics calculation
             flat_tensors = [w.reshape(-1) for w in weights]
             all_comp_weights = torch.cat(flat_tensors)
             prefix = f"global_{comp_type}"
-            
+
             comp_stats = compute_tensor_stats(all_comp_weights)
             for stat_name, value in comp_stats.items():
                 metrics[f"{prefix}/{stat_name}"] = value
-        
+
         # Compute global stats across all hidden layers
         flat_all_tensors = [w.reshape(-1) for w in all_layer_weights]
         all_weights = torch.cat(flat_all_tensors)
-        
-        # Add full global metrics
+
         global_stats = compute_tensor_stats(all_weights)
         for stat_name, value in global_stats.items():
             metrics[f"global_global/{stat_name}"] = value
-        
+
         return metrics
-    
+
     def collect_parameter_metrics(self, model: torch.nn.Module, debug: bool = False) -> Dict[str, torch.Tensor]:
         """Collect detailed metrics for model parameters by layer and component."""
         metrics = {}
         max_layers = self.config.model.model_config.num_hidden_layers
 
-        # Pre-format patterns for efficiency
         formatted_paths = self._format_paths(self.MODEL_COMPONENTS, max_layers)
 
         # Collect metrics for each layer
         for layer_idx in range(max_layers):
             layer_name = f"layer_{layer_idx}"
-            
+
             for comp_type, subcomponents in self.MODEL_COMPONENTS.items():
                 for subcomp_name in subcomponents:
                     path = formatted_paths[comp_type][subcomp_name][layer_idx]
                     param = get_attribute_by_path(model, path)
-                    
+
                     if param is not None:
                         # Add parameter metrics
                         stats = compute_tensor_stats(param)
                         for stat_name, value in stats.items():
                             metrics[f"{layer_name}/{comp_type}/{subcomp_name}/{stat_name}"] = value
-                        
+
                         # Add gradient stats if available
                         if hasattr(param, "grad") and param.grad is not None:
                             grad_stats = compute_tensor_stats(param.grad.detach())
@@ -264,7 +256,7 @@ class ExperimentLogger:
                 metrics[f"final_layernorm/{stat_name}"] = value
 
         return metrics
-    
+
     def collect_accuracy_metrics(self, logits: torch.Tensor, targets: torch.Tensor) -> Dict[str, torch.Tensor]:
         """Calculate token prediction accuracy metrics."""
         metrics = {}
@@ -272,23 +264,20 @@ class ExperimentLogger:
         if logits is None or targets is None:
             return metrics
 
-        # Ensure we're working with detached tensors
         logits = logits.detach() if hasattr(logits, "detach") else logits
         targets = targets.detach() if hasattr(targets, "detach") else targets
 
-        # Check shapes
         if logits.dim() < 2 or targets.dim() < 1:
             return metrics
 
-        # Get predictions
         predictions = logits.argmax(dim=-1)
 
         # Match shapes if needed
         if predictions.shape != targets.shape:
             if predictions.dim() > targets.dim():
-                predictions = predictions[..., -targets.shape[-1]:]
+                predictions = predictions[..., -targets.shape[-1] :]
             elif targets.dim() > predictions.dim():
-                targets = targets[..., -predictions.shape[-1]:]
+                targets = targets[..., -predictions.shape[-1] :]
 
         # Calculate overall accuracy
         correct = (predictions == targets).float()
@@ -306,7 +295,7 @@ class ExperimentLogger:
                 metrics[f"accuracy/position_{pos}"] = pos_accuracy
 
         return metrics
-    
+
     def collect_all_metrics(
         self,
         model: torch.nn.Module,
@@ -324,32 +313,21 @@ class ExperimentLogger:
 
         # Check if we should log detailed metrics
         if iteration is not None and self.should_log_detailed_metrics(iteration):
-            # Helper function to handle metric collection with error handling
-            try_collect = lambda fn, err_msg: (
-                metrics.update(fn(model, debug=debug)) 
-                if not debug else 
-                try_with_debug(fn, model, debug, err_msg, metrics)
-            )
-            
-            # Add global hidden layer metrics
-            try_collect(
-                self.compute_global_hidden_layer_metrics,
-                "Error collecting global hidden layer metrics"
-            )
-                
-            # Add embedding metrics
-            try_collect(
-                self.collect_embeddings_metrics,
-                "Error collecting embedding metrics"
-            )
+            # Lambda for handling metric collection with error catching
+            def try_collect(fn, err_msg):
+                return (
+                    metrics.update(fn(model, debug=debug))
+                    if not debug
+                    else try_with_debug(fn, model, debug, err_msg, metrics)
+                )
+
+            try_collect(self.compute_global_hidden_layer_metrics, "Error collecting global hidden layer metrics")
+
+            try_collect(self.collect_embeddings_metrics, "Error collecting embedding metrics")
 
             # If in full details mode (level=1)
             if self.log_level >= 1:
-                # Add parameter metrics
-                try_collect(
-                    self.collect_parameter_metrics,
-                    "Error collecting parameter metrics"
-                )
+                try_collect(self.collect_parameter_metrics, "Error collecting parameter metrics")
 
         return metrics
 
