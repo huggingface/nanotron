@@ -313,32 +313,26 @@ class ExperimentLogger:
 
         # Check if we should log detailed metrics
         if iteration is not None and self.should_log_detailed_metrics(iteration):
-            # Lambda for handling metric collection with error catching
-            def try_collect(fn, err_msg):
-                return (
+            # Collect metrics with simple error handling
+            for fn, err_msg in [
+                (self.compute_global_hidden_layer_metrics, "Error collecting global hidden layer metrics"),
+                (self.collect_embeddings_metrics, "Error collecting embedding metrics"),
+            ]:
+                try:
                     metrics.update(fn(model, debug=debug))
-                    if not debug
-                    else try_with_debug(fn, model, debug, err_msg, metrics)
-                )
-
-            try_collect(self.compute_global_hidden_layer_metrics, "Error collecting global hidden layer metrics")
-
-            try_collect(self.collect_embeddings_metrics, "Error collecting embedding metrics")
+                except Exception as e:
+                    if debug:
+                        print(f"{err_msg}: {e}")
 
             # If in full details mode (level=1)
             if self.log_level >= 1:
-                try_collect(self.collect_parameter_metrics, "Error collecting parameter metrics")
+                try:
+                    metrics.update(self.collect_parameter_metrics(model, debug=debug))
+                except Exception as e:
+                    if debug:
+                        print(f"Error collecting parameter metrics: {e}")
 
         return metrics
-
-
-def try_with_debug(fn, model, debug, err_msg, metrics):
-    """Helper function to try collecting metrics with debug support"""
-    try:
-        metrics.update(fn(model, debug=debug))
-    except Exception as e:
-        print(f"{err_msg}: {e}")
-    return metrics
 
 
 if __name__ == "__main__":
