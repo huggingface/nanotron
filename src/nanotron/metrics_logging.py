@@ -91,7 +91,7 @@ def compute_tensor_stats(tensor: torch.Tensor) -> Dict[str, torch.Tensor]:
     }
 
 
-class ExperimentLogger:
+class MetricsLogger:
     """
     Class for logging experiment metrics with configurable detail levels.
 
@@ -124,8 +124,12 @@ class ExperimentLogger:
     def __init__(self, config):
         """Initialize the logger with configuration."""
         self.config = config
-        self.log_level = config.metrics_logging.level
-        self.log_interval = config.metrics_logging.interval
+        if self.config.metrics_logging is not None:
+            self.log_level = config.metrics_logging.log_level
+            self.log_detail_interval = config.metrics_logging.log_detail_interval
+        else:
+            self.log_level = 0
+            self.log_detail_interval = 1
 
     def _format_paths(self, components: Dict, max_layers: int) -> Dict:
         """Pre-format component paths with layer indices for efficiency."""

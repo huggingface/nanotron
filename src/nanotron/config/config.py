@@ -81,13 +81,14 @@ class LoggingArgs:
 @dataclass
 class MetricsLoggingArgs:
     """Arguments related to metrics logging and tracking"""
-    level: int = 0  
-    interval: int = 10
-    
+
+    log_level: int = 0
+    log_detail_interval: int = 10
+
     def __post_init__(self):
-        if self.level not in [0, 1]:
+        if self.log_level not in [0, 1]:
             raise ValueError(f"metrics_level should be either 0 (basic) or 1 (full) and not {self.level}")
-        if self.interval <= 0:
+        if self.log_detail_interval <= 0:
             raise ValueError(f"metrics_interval should be a positive integer and not {self.interval}")
 
 

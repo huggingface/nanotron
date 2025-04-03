@@ -56,7 +56,7 @@ from nanotron.logging import (
     log_rank,
     set_ranks_logging_level,
 )
-from nanotron.metrics_logging import ExperimentLogger
+from nanotron.metrics_logging import MetricsLogger
 from nanotron.models import NanotronModel, build_model
 from nanotron.models.base import check_model_has_grad
 from nanotron.models.llama import LlamaForTraining, RotaryEmbedding
@@ -146,11 +146,6 @@ class DistributedTrainer:
             )
         else:
             self.config = config_or_config_file
-
-        # Set config in module for global access
-        from nanotron.config import set_config
-
-        set_config(self.config)
 
         self.model_config = self.config.model.model_config
         if model_class is not None:
@@ -283,7 +278,7 @@ class DistributedTrainer:
         self.post_init()
 
         # Initialize metrics logger
-        self.experiment_logger = ExperimentLogger(self.config)
+        self.metrics_logging = MetricsLogger(self.config)
 
     def pre_init(self):
         self.init_checkpoint_path = parse_ckpt_path(config=self.config, parallel_context=self.parallel_context)
@@ -340,18 +335,15 @@ class DistributedTrainer:
             log_rank(
                 f"Rank info - world_rank: {world_rank}, dp_rank: {dp_rank}, tp_rank: {tp_rank}, tp_size: {tp_size}, logger_ranks: {self.logger_ranks}",
                 logger=logger,
-                level=logging.DEBUG,
+                level=logging.INFO,
                 rank=world_rank,
             )
 
-            if tp_size > 1 and self.experiment_logger.log_level > 0:
+            if tp_size > 1 and self.metrics_logging.log_level > 0:
                 # Create one wandb logger per TP group for DP=0 ranks
                 if dp_rank == 0:
                     # Create a run name that includes the TP group
                     run_name = f"{current_time}_{self.config.general.run}_tp_group_{tp_rank}"
-                    # Make sure we're not reusing a W&B run in the same process
-                    if wandb.run is not None:
-                        wandb.finish()
 
                     wandb.init(
                         project=self.config.general.project,
@@ -361,16 +353,22 @@ class DistributedTrainer:
                     log_rank(
                         f"Initialized wandb run '{run_name}' for TP rank {tp_rank}",
                         logger=logger,
-                        level=logging.DEBUG,
+                        level=logging.INFO,
                         rank=world_rank,
                     )
             else:
-                # Original behavior for TP=1
                 if world_rank == self.logger_ranks[0]:
+                    run_name = f"{current_time}_{self.config.general.run}"
                     wandb.init(
                         project=self.config.general.project,
-                        name=f"{current_time}_{self.config.general.run}",
+                        name=run_name,
                         config={"nanotron_config": self.config.as_dict()},
+                    )
+                    log_rank(
+                        f"Initialized wandb run '{run_name}' for TP rank {tp_rank}",
+                        logger=logger,
+                        level=logging.INFO,
+                        rank=world_rank,
                     )
 
     def post_train_step(self):
@@ -723,46 +721,24 @@ class DistributedTrainer:
 
         # WandB logging - determine if this rank should log to wandb
         should_log_to_wandb = wandb is not None and (
-            (tp_size > 1 and dp_rank == 0)
+            (tp_size > 1 and dp_rank == 0 and self.metrics_logging.log_level > 0)
+            or (tp_size > 1 and world_rank == self.logger_ranks[0] and self.metrics_logging.log_level == 0)
             or (tp_size == 1 and world_rank == self.logger_ranks[0])  # For TP>1, log from each TP group's dp=0 rank
         )
         should_log_detailed_metrics_to_wandb = (
             should_log_to_wandb
-            and self.experiment_logger.log_level > 0
-            and self.iteration_step % self.experiment_logger.log_interval == 0
+            and self.metrics_logging.log_level > 0
+            and self.iteration_step % self.metrics_logging.log_detail_interval == 0
         )
 
-        # Debug logging to understand which ranks are attempting to log
-        if tp_size > 1 and dp_rank == 0:
-            log_rank(
-                f"WandB logging decision - tp_rank: {tp_rank}, dp_rank: {dp_rank}, should_log_to_wandb: {should_log_to_wandb}, has_wandb_run: {wandb.run is not None}",
-                logger=logger,
-                level=logging.DEBUG,
-                rank=world_rank,
-            )
-        if should_log_to_wandb:
-            wandb.log(
-                {
-                    **{log_item.tag: log_item.scalar_value for log_item in basic_log_entries},
-                    "iteration_step": self.iteration_step,
-                },
-                step=self.iteration_step,
-            )
-            log_rank(
-                f"Successfully logged {len(basic_log_entries)} metrics to WandB for tp_rank={tp_rank}",
-                logger=logger,
-                level=logging.DEBUG,
-                rank=world_rank,
-            )
-
-        elif should_log_detailed_metrics_to_wandb:
+        if should_log_detailed_metrics_to_wandb:
             assert not (
                 wandb.run is None and tp_size > 1 and dp_rank == 0
             ), f"WandB is not initialized for TP rank {tp_rank}, but logging was requested. Make sure that wandb is initialize before training."
             all_log_entries = list(basic_log_entries)
 
             # Collect all metrics based on the log level
-            detailed_metrics = self.experiment_logger.collect_all_metrics(
+            detailed_metrics = self.metrics_logging.collect_all_metrics(
                 model=self.unwrapped_model,
             )
 
@@ -786,7 +762,7 @@ class DistributedTrainer:
                     LogItem("hd_free_memory_tb", free, "human_format"),  #  / (2**40), ".2f"),
                 ]
             )
-            if tp_size > 1 and self.experiment_logger.log_level > 0:
+            if tp_size > 1 and self.metrics_logging.log_level > 0:
                 tp_group_info = {"tp_rank": tp_rank, "tp_group_size": tp_size}
             else:
                 tp_group_info = {}
@@ -805,6 +781,20 @@ class DistributedTrainer:
                 level=logging.DEBUG,
                 rank=world_rank,
             )
+        elif should_log_to_wandb:
+            wandb.log(
+                {
+                    **{log_item.tag: log_item.scalar_value for log_item in basic_log_entries},
+                    "iteration_step": self.iteration_step,
+                },
+                step=self.iteration_step,
+            )
+        log_rank(
+            f"Successfully logged {len(basic_log_entries)} metrics to WandB for tp_rank={tp_rank}",
+            logger=logger,
+            level=logging.DEBUG,
+            rank=world_rank,
+        )
 
         # Nanotron Benchmark mode: we log the throughput and exit
         if os.environ.get("NANOTRON_BENCHMARK", "0") == "1" and self.iteration_step == 4:
