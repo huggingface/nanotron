@@ -494,6 +494,57 @@ class Llama4VisionEncoder(nn.Module):
         return fp32_sharded_logits, hidden_states
 
 
+class Llama4VisionPixelShuffleMLP(nn.Module):
+    def __init__(
+        self,
+        config: Llama4Config,
+        parallel_config: Optional[ParallelismArgs],
+        tp_pg: dist.ProcessGroup,
+    ) -> None:
+        super().__init__()
+
+        # Get TP mode and communication settings
+        tp_mode = parallel_config.tp_mode if parallel_config is not None else TensorParallelLinearMode.ALL_REDUCE
+        tp_linear_async_communication = (
+            parallel_config.tp_linear_async_communication if parallel_config is not None else False
+        )
+
+        # Define gate_up_proj as a merged layer for gate and up projections
+        # gate_up_contiguous_chunks = (
+        #     config.intermediate_size,  # shape of gate_linear
+        #     config.intermediate_size,  # shape of up_linear
+        # )
+        self.gate_up_proj = TensorParallelColumnLinear(
+            config.vision_config.intermediate_size,
+            config.vision_config.projector_input_dim,
+            pg=tp_pg,
+            mode=tp_mode,
+            bias=False,  # Qwen2 doesn't use bias for gate_up_proj
+            async_communication=tp_linear_async_communication,
+            # contiguous_chunks=gate_up_contiguous_chunks,
+            tp_recompute_allgather=parallel_config.tp_recompute_allgather,
+        )
+
+        self.down_proj = TensorParallelRowLinear(
+            config.vision_config.projector_output_dim,
+            config.vision_config.projector_output_dim,
+            pg=tp_pg,
+            mode=tp_mode,
+            bias=False,  # Qwen2 doesn't use bias for down_proj
+            async_communication=tp_linear_async_communication,
+        )
+
+        # TODO: use ACT2FN[config.hidden_act]?
+        self.act = nn.GELU()
+        self.dropout_prob = config.vision_config.projector_dropout
+
+    def forward(self, hidden_states):
+        hidden_states = self.act(self.gate_up_proj(hidden_states))
+        hidden_states = F.dropout(hidden_states, p=self.dropout_prob, training=self.training)
+        hidden_states = self.act(self.down_proj(hidden_states))
+        return {"hidden_states": hidden_states}
+
+
 class Llama4ForCausalLM(nn.Module):
     """Build pipeline graph"""
 
@@ -978,3 +1029,154 @@ def get_flops(
     hardware_flops = model_flops  # TODO: This is a placeholder for now
 
     return model_flops, hardware_flops
+
+
+class Llama4VisionModel(nn.Module):
+    """Llama4 Vision Model for processing images"""
+
+    def __init__(
+        self,
+        config: Llama4Config,
+        parallel_context: ParallelContext,
+        parallel_config: Optional[ParallelismArgs],
+    ):
+        super().__init__()
+        vision_config = config.vision_config
+        self.config = config
+        self.image_size = vision_config.image_size
+        self.patch_size = vision_config.patch_size
+        self.hidden_size = vision_config.hidden_size
+        self.num_channels = vision_config.num_channels
+
+        self.parallel_context = parallel_context
+        self.p2p = P2P(parallel_context.pp_pg, device=torch.device("cuda"))
+
+        self.num_patches = (self.image_size // self.patch_size) ** 2 + 1
+        self.scale = vision_config.hidden_size**-0.5
+
+        # Create patch embedding
+        self.patch_embedding = Llama4UnfoldConvolution(
+            config=vision_config, parallel_context=parallel_context, parallel_config=parallel_config
+        )
+
+        # Create class and positional embeddings
+        self.class_embedding = nn.Parameter(self.scale * torch.randn(self.hidden_size))
+        self.positional_embedding_vlm = nn.Parameter(self.scale * torch.randn(self.num_patches, self.hidden_size))
+        self.rotary_embedding = Llama4VisionRotaryEmbedding(vision_config)
+
+        # Layer normalizations
+        self.layernorm_pre = TritonRMSNorm(self.hidden_size, eps=vision_config.norm_eps)
+        self.layernorm_post = TritonRMSNorm(self.hidden_size, eps=vision_config.norm_eps)
+
+        # Vision encoder
+        self.model = Llama4VisionEncoder(
+            config=config,
+            parallel_context=parallel_context,
+            parallel_config=parallel_config,
+        )
+
+        # Vision adapter with pixel shuffle
+        self.vision_adapter = Llama4VisionPixelShuffleMLP(config)
+
+        # Initialize parameters
+        self._init_weights()
+
+    def _init_weights(self):
+        """Initialize the weights"""
+        # Standard initialization for embeddings and classifier
+        init_std = self.config.vision_config.initializer_range
+
+        # Initialize the embeddings with normal distribution
+        nn.init.normal_(self.class_embedding, std=init_std)
+        nn.init.normal_(self.positional_embedding_vlm, std=init_std)
+
+    def get_input_embeddings(self):
+        """Returns the patch embedding to enable input gradients"""
+        return self.patch_embedding
+
+    def forward(
+        self,
+        pixel_values: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+    ):
+        """
+        Process image pixel values through the vision model
+
+        Args:
+            pixel_values: Input images tensor of shape [batch_size, num_channels, height, width]
+            attention_mask: Optional attention mask
+            output_attentions: Whether to return attention weights
+            output_hidden_states: Whether to return all hidden states
+
+        Returns:
+            processed_embeddings: Processed vision embeddings
+            hidden_states: All hidden states if requested
+            attentions: Attention weights if requested
+        """
+        # Extract tensor dimensions
+        batch_size_times_num_tiles, num_channels, height, width = pixel_values.shape
+        num_concurrent_media = 1
+        num_chunks = 1
+
+        # Create patch embeddings
+        hidden_state = self.patch_embedding(pixel_values)
+        _, num_patches, hidden_dim = hidden_state.shape
+
+        # Add class token
+        hidden_state = hidden_state.reshape(
+            batch_size_times_num_tiles * num_concurrent_media * num_chunks, num_patches, hidden_dim
+        )
+        class_embedding = self.class_embedding.expand(hidden_state.shape[0], 1, hidden_state.shape[-1])
+        hidden_state = torch.cat([hidden_state, class_embedding], dim=1)
+        num_patches += 1
+
+        # Add position embeddings
+        hidden_state = hidden_state.reshape(
+            batch_size_times_num_tiles * num_concurrent_media, num_chunks, num_patches, hidden_dim
+        )
+        positional_embedding = self.positional_embedding_vlm.to(dtype=hidden_state.dtype, device=hidden_state.device)
+        hidden_state = hidden_state + positional_embedding
+
+        # Apply pre-normalization
+        hidden_state = self.layernorm_pre(hidden_state)
+
+        # Reshape for model input
+        hidden_state = hidden_state.view(batch_size_times_num_tiles, -1, hidden_dim)
+
+        # Get rotary embeddings
+        self.rotary_embedding(hidden_state)
+
+        # Process through vision encoder
+        hidden_states_tuple = []
+        attentions_tuple = []
+
+        # Forward through the encoder
+        encoded_states = self.model(
+            hidden_states=hidden_state, position_ids=torch.arange(hidden_state.size(1), device=hidden_state.device)
+        )
+
+        hidden_state = encoded_states["hidden_states"]
+
+        # Apply post-normalization
+        hidden_state = self.layernorm_post(hidden_state)
+
+        # Remove class token for adapter processing
+        hidden_state = hidden_state[:, :-1, :]
+
+        # Apply vision adapter for projection
+        processed_embeddings = self.vision_adapter(hidden_state)
+
+        # Return appropriate outputs
+        output = {
+            "last_hidden_state": processed_embeddings,
+        }
+
+        if output_hidden_states:
+            output["hidden_states"] = hidden_states_tuple
+
+        if output_attentions:
+            output["attentions"] = attentions_tuple
+
+        return output
