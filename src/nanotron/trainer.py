@@ -60,6 +60,7 @@ from nanotron.logging import (
 from nanotron.models import NanotronModel, build_model
 from nanotron.models.base import check_model_has_grad
 from nanotron.models.llama import LlamaForTraining, RotaryEmbedding
+from nanotron.models.llama4 import Llama4ForTraining
 from nanotron.models.qwen import Qwen2ForTraining
 from nanotron.models.starcoder2 import Starcoder2ForTraining
 from nanotron.optim.clip_grads import clip_grad_norm
@@ -107,6 +108,7 @@ dist_logger.setLevel(logging.WARNING)
 
 CONFIG_TO_MODEL_CLASS = {
     "LlamaConfig": LlamaForTraining,
+    "Llama4Config": Llama4ForTraining,
     "Starcoder2Config": Starcoder2ForTraining,
     "Qwen2Config": Qwen2ForTraining,
 }
@@ -440,6 +442,8 @@ class DistributedTrainer:
         ],
         **kwargs,
     ) -> None:
+        assert 1 == 1
+
         self.pre_training(**kwargs)
 
         if self.config.checkpoints.save_initial_state and self.init_checkpoint_path is None:
@@ -738,6 +742,8 @@ class DistributedTrainer:
 
     def _init_model_instance(self) -> NanotronModel:
         model_config_cls = self.model_config.__class__.__name__
+
+        # TODO: fix, somehow model_config_cls is a dict here
         assert (
             model_config_cls in CONFIG_TO_MODEL_CLASS
         ), f"Unsupported model config {model_config_cls}. Only {CONFIG_TO_MODEL_CLASS.keys()} are supported"

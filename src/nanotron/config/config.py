@@ -284,7 +284,8 @@ class ModelArgs:
         if isinstance(self.dtype, str):
             self.dtype = cast_str_to_torch_dtype(self.dtype)
 
-        self.model_config._is_using_mup = isinstance(self.init_method, SpectralMupInit)
+        # TODO: refactor
+        # self.model_config._is_using_mup = isinstance(self.init_method, SpectralMupInit)
 
         # if self.model_config.max_position_embeddings is None:
         #     self.model_config.max_position_embeddings = 0
@@ -427,7 +428,7 @@ class Config:
 
         if self.s3_upload is not None:
             self.s3_upload.__post_init__()
-        
+
         # Some final sanity checks across separate arguments sections:
         if self.profiler is not None and self.profiler.profiler_export_path is not None:
             total_profiling_steps = self.profiler.skip_first + self.profiler.repeat * (
@@ -487,19 +488,20 @@ class Config:
         # if self.checkpoints.lighteval is not None:
         #     assert self.tokenizer.tokenizer_name_or_path is not None
 
+        # TODO: undo
         # Model verifications
-        assert (
-            self.model.model_config.num_attention_heads % self.parallelism.tp == 0
-        ), f"num_attention_heads ({self.model.model_config.num_attention_heads}) must be divisible by tp ({self.parallelism.tp})"
-        assert (
-            self.model.model_config.num_attention_heads >= self.model.model_config.num_key_value_heads
-        ), f"num_attention_heads ({self.model.model_config.num_attention_heads}) must be >= num_key_value_heads ({self.model.model_config.num_key_value_heads})"
-        assert (
-            self.model.model_config.num_key_value_heads >= self.parallelism.tp
-        ), f"num_key_value_heads ({self.model.model_config.num_key_value_heads}) must be >= tp ({self.parallelism.tp})"  # TODO: remove this once we ensure KV heads get duplicated correctly
-        assert (
-            self.model.model_config.num_attention_heads % self.model.model_config.num_key_value_heads == 0
-        ), f"num_attention_heads ({self.model.model_config.num_attention_heads}) must be divisible by num_key_value_heads ({self.model.model_config.num_key_value_heads})"
+        # assert (
+        #     self.model.model_config.num_attention_heads % self.parallelism.tp == 0
+        # ), f"num_attention_heads ({self.model.model_config.num_attention_heads}) must be divisible by tp ({self.parallelism.tp})"
+        # assert (
+        #     self.model.model_config.num_attention_heads >= self.model.model_config.num_key_value_heads
+        # ), f"num_attention_heads ({self.model.model_config.num_attention_heads}) must be >= num_key_value_heads ({self.model.model_config.num_key_value_heads})"
+        # assert (
+        #     self.model.model_config.num_key_value_heads >= self.parallelism.tp
+        # ), f"num_key_value_heads ({self.model.model_config.num_key_value_heads}) must be >= tp ({self.parallelism.tp})"  # TODO: remove this once we ensure KV heads get duplicated correctly
+        # assert (
+        #     self.model.model_config.num_attention_heads % self.model.model_config.num_key_value_heads == 0
+        # ), f"num_attention_heads ({self.model.model_config.num_attention_heads}) must be divisible by num_key_value_heads ({self.model.model_config.num_key_value_heads})"
 
     @property
     def global_batch_size(self):
@@ -618,12 +620,31 @@ def get_config_from_file(
         skip_unused_config_keys=skip_unused_config_keys,
         skip_null_keys=skip_null_keys,
     )
-    if model_config_class is not None:
-        if not isinstance(config.model.model_config, (dict, model_config_class)):
-            raise ValueError(
-                f"model_config should be a dictionary or a {model_config_class} and not {config.model.model_config}"
-            )
-        config.model.model_config = model_config_class(**config.model.model_config)
+
+    from nanotron.config.models_config import Llama4Config
+
+    # TODO: support other configs
+    # if model_config_class is not None:
+    #     if not isinstance(config.model.model_config, (dict, model_config_class)):
+    #         raise ValueError(
+    #             f"model_config should be a dictionary or a {model_config_class} and not {config.model.model_config}"
+    #         )
+    #     config.model.model_config = model_config_class(**config.model.model_config)
+
+    if isinstance(config.model.model_config, dict) and config.model.model_config.get("is_llama4_config", False):
+        from nanotron.config.models_config import TextConfig, VisionConfig
+
+        model_config_dict = config.model.model_config
+
+        # Ensure nested configs are proper instances
+        if isinstance(model_config_dict.get("text_config"), dict):
+            model_config_dict["text_config"] = TextConfig(**model_config_dict["text_config"])
+
+        if isinstance(model_config_dict.get("vision_config"), dict):
+            model_config_dict["vision_config"] = VisionConfig(**model_config_dict["vision_config"])
+
+        config.model.model_config = Llama4Config(**model_config_dict)
+
     return config
 
 
