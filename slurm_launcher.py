@@ -6,7 +6,9 @@ This script simplifies launching multi-node Nanotron training jobs on Slurm clus
 It handles configuration generation, resource allocation, and job submission.
 
 Usage:
-    python slurm_launcher.py --run_name my_experiment --nodes 4 [other options]
+    python slurm_launcher.py --run my_experiment --nodes 4 [other options]
+    python slurm_launcher.py --config /fsx/elie_bakouch/smollm3_training/0304-begin-nanotron/smollm3/0304-0B/launcher/configs-dump/isolate-s3.yaml --enable-wandb --run 32k-newindex
+    python slurm_launcher.py --config /fsx/elie_bakouch/smollm3_training/0304-begin-nanotron/smollm3/0304-0B/launcher/configs-dump/_isolate-fw-edu/fw-edu-3200k.yaml --enable-wandb --run fw-edu-3200k
 
 The script will:
 1. Generate a Nanotron config based on your parameters
@@ -476,6 +478,8 @@ def create_slurm_script(
 #SBATCH --partition={args.partition}
 #SBATCH --output={logs_path}/{timestamp}-%x-%j.out
 #SBATCH --qos={args.qos}
+#SBATCH --reservation=smollm
+#SBATCH --exclude=ip-26-0-160-[225,242],ip-26-0-161-138,ip-26-0-162-233,ip-26-0-163-[134,147],ip-26-0-164-18,ip-26-0-165-213,ip-26-0-166-[36,68],ip-26-0-167-[51,177,217,245],ip-26-0-168-[95,238],ip-26-0-169-[86,132,207,239,247],ip-26-0-170-[31,132,143,160],ip-26-0-171-[62,88,102,168,230],ip-26-0-172-[73,116,252],ip-26-0-173-7,ip-26-0-174-240,ip-26-0-175-[19,132,165,170,241]
 #SBATCH --wait-all-nodes=1        # fail if any node is not ready
 {f"#SBATCH --time={args.time_limit}" if args.time_limit else ""}
 """

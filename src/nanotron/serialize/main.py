@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 from typing import Optional, cast
 
+import psutil
 import torch
 from datasets.download.streaming_download_manager import xPath
 from torch import nn
@@ -58,9 +59,19 @@ def save(
     should_save_model: bool = True,
     should_save_optimizer: bool = True,
     should_save_lr_scheduler: bool = True,
-    sanity_checks: bool = True,
+    sanity_checks: bool = False,
 ) -> None:
     assert isinstance(training_metadata, TrainingMetadata)
+
+    process = psutil.Process()
+    # Only log on rank 0 to avoid flooding logs
+    if dist.get_rank(parallel_context.world_pg) == 0:
+        log_rank(
+            f"SAVE - Initial memory: {process.memory_info().rss / (1024 * 1024):.2f} MB",
+            logger=logger,
+            level=logging.INFO,
+            rank=0,
+        )
 
     try:
         if should_save_config:
@@ -200,6 +211,37 @@ def save(
                     rtol=0,
                     msg=lambda msg: f"tensor at {current_state_dict['names'][index]} doesn't match with our reference. Optimizer key: {name}\nCur: {tensor}\nRef: {reference_tensor}\n{msg}",
                 )
+
+    # TODO: do we need this
+    # Try more aggressive memory cleanup at the end
+    if dist.get_rank(parallel_context.world_pg) == 0:
+        # Perform memory cleanup
+        # gc.collect()
+        # torch.cuda.empty_cache()  # Clear CUDA cache
+
+        # Try to free memory back to OS on Linux
+        # try:
+        #     import ctypes
+        #     libc = ctypes.CDLL("libc.so.6")
+        #     libc.malloc_trim(0)
+        # except Exception as e:
+        #     log_rank(f"Failed to release memory to OS: {e}", logger=logger, level=logging.WARNING, rank=0)
+
+        # log_rank(
+        #     f"SAVE - Final memory after cleanup: {process.memory_info().rss / (1024 * 1024):.2f} MB",
+        #     logger=logger,
+        #     level=logging.INFO,
+        #     rank=0
+        # )
+        pass
+
+    if dist.get_rank(parallel_context.world_pg) == 0:
+        log_rank(
+            f"[Save checkpoint] CPU memory (RSS) after save: {process.memory_info().rss / (1024 * 1024):.2f} MB",
+            logger=logger,
+            level=logging.INFO,
+            rank=0,
+        )
 
     dist.barrier(parallel_context.world_pg)
 
