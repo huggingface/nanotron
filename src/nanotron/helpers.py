@@ -518,6 +518,7 @@ def get_profiler(config: Config):
             record_shapes=config.profiler.record_shapes,
             profile_memory=config.profiler.profile_memory,
             with_stack=config.profiler.with_stack,
+            with_modules=True,
         )
     else:
         prof = contextlib.nullcontext()
