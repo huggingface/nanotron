@@ -15,8 +15,6 @@ from nanotron import logging
 from nanotron.data.utils import count_dataset_indexes, normalize
 from nanotron.logging import log_rank
 
-numba.config.NUMBA_DEBUG_CACHE = 1
-
 logger = logging.get_logger(__name__)
 
 
@@ -93,8 +91,8 @@ class Nanoset(torch.utils.data.Dataset):
             self.dataset_weights
         ), f"Specified {len(self.dataset_weights)} weights but {len(dataset_folders)} datasets were provided."
         ## Build dataset index and dataset sample index
-        self.dataset_index, self.dataset_sample_index = self.build_nanoset_index()
-        # self.dataset_index, self.dataset_sample_index = self.new_build_nanoset_index() # TODO: Fix this
+        # self.dataset_index, self.dataset_sample_index = self.build_nanoset_index()
+        self.dataset_index, self.dataset_sample_index = self.new_build_nanoset_index()  # TODO: Fix this
 
         self.print_nanoset_info()
 

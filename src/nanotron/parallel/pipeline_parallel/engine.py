@@ -9,6 +9,7 @@ from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.distributed import ProcessGroup
 from nanotron.logging import log_rank
+from nanotron.logging.timers import nanotron_timer
 from nanotron.optim.gradient_accumulator import GradientAccumulator
 from nanotron.parallel.data_parallel.utils import ddp_trigger_sync_in_bwd
 from nanotron.parallel.pipeline_parallel.context_manager import attach_pipeline_state_to_model
@@ -289,7 +290,9 @@ class OneForwardOneBackwardPipelineEngine(PipelineEngine):
 
             for micro_batch in batch:
                 context = self._get_fwd_context(model=model)
+                nanotron_timer("forward", timer_type="cuda").start()
                 output = self.forward(context=context, state=state, micro_batch=micro_batch, model=model)
+                nanotron_timer("forward", timer_type="cuda").end()
 
                 # We make `output` a dict
                 if not isinstance(output, dict):
@@ -306,7 +309,9 @@ class OneForwardOneBackwardPipelineEngine(PipelineEngine):
                     nb_backwards=state.nb_backwards,
                     grad_accumulator=grad_accumulator,
                 )
+                nanotron_timer("backward", timer_type="cuda").start()
                 self.backward(context=context, state=state, grad_accumulator=grad_accumulator)
+                nanotron_timer("backward", timer_type="cuda").end()
 
             # Check figure in paper: The remain blocks are all backward and there is only `pg.size() - current_pp_rank - 1` blocks left
             assert len(state.microbatches_activations_requiring_backward) == pg.size() - current_pp_rank - 1
