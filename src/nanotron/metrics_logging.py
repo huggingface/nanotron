@@ -129,7 +129,7 @@ class MetricsLogger:
             self.log_detail_interval = config.metrics_logging.log_detail_interval
         else:
             self.log_level = 0
-            self.log_detail_interval = 1
+            self.log_detail_interval = 10000000000000000000
 
     def _format_paths(self, components: Dict, max_layers: int) -> Dict:
         """Pre-format component paths with layer indices for efficiency."""

@@ -335,7 +335,7 @@ class DistributedTrainer:
             log_rank(
                 f"Rank info - world_rank: {world_rank}, dp_rank: {dp_rank}, tp_rank: {tp_rank}, tp_size: {tp_size}, logger_ranks: {self.logger_ranks}",
                 logger=logger,
-                level=logging.INFO,
+                level=logging.DEBUG,
                 rank=world_rank,
             )
 
@@ -1055,6 +1055,7 @@ class DistributedTrainer:
             root_folder=checkpoint_path,
             training_metadata=self.metadata,
             config=self.config,
+            sanity_checks=not self.config.general.ignore_sanity_checks,
         )
         save_random_states(
             random_states=self.random_states, parallel_context=self.parallel_context, root_folder=checkpoint_path

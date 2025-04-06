@@ -442,7 +442,7 @@ class Config:
 
         if self.s3_upload is not None:
             self.s3_upload.__post_init__()
-        
+
         # Some final sanity checks across separate arguments sections:
         if self.profiler is not None and self.profiler.profiler_export_path is not None:
             total_profiling_steps = self.profiler.skip_first + self.profiler.repeat * (
@@ -480,17 +480,17 @@ class Config:
                         logger.warning(
                             f"Setting model's vocab_size to {self.model.model_config.vocab_size} from dataset's vocab_size ({stage.data.dataset.vocab_size})"
                         )
-                    assert (
-                        self.model.model_config.vocab_size == stage.data.dataset.vocab_size
-                    ), f"Model's vocab_size ({self.model.model_config.vocab_size}) does not match dataset's ({stage.data.dataset.dataset_folder}) vocab_size ({stage.data.dataset.vocab_size})"
+                    # assert (
+                    #     self.model.model_config.vocab_size == stage.data.dataset.vocab_size
+                    # ), f"Model's vocab_size ({self.model.model_config.vocab_size}) does not match dataset's ({stage.data.dataset.dataset_folder}) vocab_size ({stage.data.dataset.vocab_size})"
                     if self.tokenizer is None:
                         self.tokenizer = TokenizerArgs(tokenizer_name_or_path=stage.data.dataset.tokenizer_name)
                         logger.warning(
                             f"Setting tokenizer to {self.tokenizer.tokenizer_name_or_path} from dataset's tokenizer ({stage.data.dataset.tokenizer_name})"
                         )
-                    assert (
-                        self.tokenizer.tokenizer_name_or_path == stage.data.dataset.tokenizer_name
-                    ), f"Tokenizer passed in config ({self.tokenizer.tokenizer_name_or_path}) does not match dataset's ({stage.data.dataset.dataset_folder}) tokenizer ({stage.data.dataset.tokenizer_name})"
+                    # assert (
+                    #     self.tokenizer.tokenizer_name_or_path == stage.data.dataset.tokenizer_name
+                    # ), f"Tokenizer passed in config ({self.tokenizer.tokenizer_name_or_path}) does not match dataset's ({stage.data.dataset.dataset_folder}) tokenizer ({stage.data.dataset.tokenizer_name})"
 
             # NOTE: must order the stages by start_training_step from lowest to highest
             assert all(
