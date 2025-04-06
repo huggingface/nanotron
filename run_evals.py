@@ -202,11 +202,11 @@ if __name__ == "__main__":
             max_samples=50,  # Use a small number for testing
             temperature=0.0,
         )
+
+        # Save it to a YAML file
+        save_lighteval_config_as_yaml(custom_config, lighteval_config_path)
     else:
         lighteval_config_path = args.lighteval_override
-
-    # Save it to a YAML file
-    save_lighteval_config_as_yaml(custom_config, lighteval_config_path)
 
     nanotron(
         checkpoint_config_path=args.checkpoint_config_path,

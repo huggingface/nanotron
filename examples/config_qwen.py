@@ -30,7 +30,7 @@ MODEL_SIZES: Dict[str, Tuple[int, int, int, int, int]] = {
     "410m": (24, 1024, 16, 16, 4096),  # ~410M params
     # Small to medium models
     "1b": (16, 2048, 16, 16, 5632),  # ~1B params
-    "3b": (28, 3072, 32, 32, 8192),  # ~3B params
+    "3b": (28, 2048, 16, 2, 11008),  # ~3B params
     # Standard sizes
     "7b": (32, 4096, 32, 32, 11008),  # ~7B params
     "13b": (40, 5120, 40, 40, 13824),  # ~13B params
@@ -57,7 +57,7 @@ def get_args():
         help="Output file for the config file. e.g. configs/config_qwen.yaml",
     )
     parser.add_argument("--run", type=str, default="qwen_%date_%jobid", help="Run name for the config file")
-    parser.add_argument("--steps", type=int, default=15, help="Number of training steps")
+    parser.add_argument("--steps", type=int, default=32000, help="Number of training steps")
     parser.add_argument("--no-sanity", action="store_true", help="Ignore sanity checks")
     parser.add_argument("--log-lvl", type=str, default="info", help="Log level")
 
@@ -72,8 +72,8 @@ def get_args():
 
     # tokens
     tokens_group = parser.add_argument_group("tokens")
-    tokens_group.add_argument("--seq", type=int, default=8192, help="Sequence length")
-    tokens_group.add_argument("--mbs", type=int, default=2, help="Micro batch size")
+    tokens_group.add_argument("--seq", type=int, default=4096, help="Sequence length")
+    tokens_group.add_argument("--mbs", type=int, default=3, help="Micro batch size")
     tokens_group.add_argument("--acc", type=int, default=1, help="Batch accumulation per replica")
 
     args = parser.parse_args()
@@ -95,19 +95,19 @@ def get_model_config(model_size: str) -> Qwen2Config:
         hidden_size=hidden,
         initializer_range=0.02,
         intermediate_size=intermediate,
-        max_position_embeddings=256,
+        max_position_embeddings=4096,
         num_attention_heads=heads,
         num_hidden_layers=layers,
         num_key_value_heads=kv_heads,
         pretraining_tp=1,
-        rms_norm_eps=1e-05,
+        rms_norm_eps=1e-06,
         rope_scaling=None,
         tie_word_embeddings=True,
         use_cache=True,
-        vocab_size=49152,
+        vocab_size=128256,
         is_qwen2_config=True,
         pad_token_id=None,
-        _attn_implementation="flex_attention",
+        _attn_implementation="flash_attention_2",
         sliding_window_size=20,
     )
 
@@ -136,8 +136,8 @@ data_stages = [
             # When using a Nanoset, we need to specify the vocab size of the tokenizer used to tokenize the dataset or larger
             dataset=NanosetDatasetsArgs(
                 dataset_folder=[
-                    "/fsx/loubna/tokenized_for_exps/mcf-dataset",  # 2 token_size
-                    # "/fsx/loubna/datasets/llama_tokenized/fineweb-edu/merged", # meta-llama/Llama-3.2-1B|4
+                    # "/fsx/loubna/tokenized_for_exps/mcf-dataset",  # 2 token_size
+                    "/fsx/loubna/datasets/llama_tokenized/fineweb-edu/merged",  # meta-llama/Llama-3.2-1B|4
                 ],
             ),
             # For SFT (uncomment to use):

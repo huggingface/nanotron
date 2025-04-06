@@ -79,6 +79,20 @@ class LoggingArgs:
 
 
 @dataclass
+class MetricsLoggingArgs:
+    """Arguments related to metrics logging and tracking"""
+
+    log_level: int = 0
+    log_detail_interval: int = 10
+
+    def __post_init__(self):
+        if self.log_level not in [0, 1]:
+            raise ValueError(f"metrics_level should be either 0 (basic) or 1 (full) and not {self.level}")
+        if self.log_detail_interval <= 0:
+            raise ValueError(f"metrics_interval should be a positive integer and not {self.interval}")
+
+
+@dataclass
 class PretrainDatasetsArgs:
     hf_dataset_or_datasets: Union[str, list, dict]
     hf_dataset_splits: Optional[Union[str, list]] = None
@@ -135,6 +149,7 @@ class NanosetDatasetsArgs:
     tokenizer_name: Optional[str] = None
     vocab_size: Optional[int] = None
     token_size_in_bytes: Optional[int] = None
+    return_positions: Optional[bool] = False
 
     def __post_init__(self):
         if isinstance(self.dataset_folder, str):  # Case 1: 1 Dataset folder
@@ -410,6 +425,7 @@ class Config:
     tokenizer: Optional[TokenizerArgs] = None
     checkpoints: Optional[CheckpointsArgs] = None
     logging: Optional[LoggingArgs] = None
+    metrics_logging: Optional[MetricsLoggingArgs] = None
     tokens: Optional[TokensArgs] = None
     optimizer: Optional[OptimizerArgs] = None
     data_stages: Optional[List[DatasetStageArgs]] = None
@@ -426,7 +442,7 @@ class Config:
 
         if self.s3_upload is not None:
             self.s3_upload.__post_init__()
-
+        
         # Some final sanity checks across separate arguments sections:
         if self.profiler is not None and self.profiler.profiler_export_path is not None:
             total_profiling_steps = self.profiler.skip_first + self.profiler.repeat * (
