@@ -56,6 +56,7 @@ from nanotron.logging import (
     log_rank,
     set_ranks_logging_level,
 )
+from nanotron.logging.timers import nanotron_timer
 from nanotron.metrics_logging import MetricsLogger
 from nanotron.models import NanotronModel, build_model
 from nanotron.models.base import check_model_has_grad
@@ -548,6 +549,7 @@ class DistributedTrainer:
         if self.iteration_step < self.initial_iter_step + 5:
             log_memory(logger=logger, msg="Before train_batch_iter")
 
+        nanotron_timer("train_batch_iter").start()
         with torch.profiler.record_function("train_batch_iter"):
             outputs = self.pipeline_engine.train_batch_iter(
                 model=self.model,
@@ -556,6 +558,7 @@ class DistributedTrainer:
                 nb_microbatches=self.n_micro_batches_per_batch,
                 grad_accumulator=self.grad_accumulator,
             )
+        nanotron_timer("train_batch_iter").end()
 
         if self.iteration_step < self.initial_iter_step + 5:
             log_memory(logger=logger, msg="After train_batch_iter")
@@ -569,6 +572,7 @@ class DistributedTrainer:
             ), "No fp32_grads_allreduce_handle maybe you're using only a single training process"
             self.grad_accumulator.fp32_grads_allreduce_handle.wait()
 
+        nanotron_timer("sync_gradients").start()
         # Sync tied weights
         if not isinstance(self.model, DistributedDataParallel):
             # Manually sync across DP if it's not handled by DDP
@@ -587,8 +591,10 @@ class DistributedTrainer:
             parallel_context=self.parallel_context,
             grad_accumulator=self.grad_accumulator,
         )
+        nanotron_timer("sync_gradients").end()
 
         # Clip gradients
+        nanotron_timer("clip_gradients").start()
         if self.config.optimizer.clip_grad is not None:
             # Unwrap DDP
             named_parameters = [
@@ -602,6 +608,7 @@ class DistributedTrainer:
                 grad_accumulator=self.grad_accumulator,
                 max_norm=self.config.optimizer.clip_grad,
             )
+        nanotron_timer("clip_gradients").end()
 
         # Compute DP average loss and overlap with optimizer step
         if isinstance(outputs[0]["loss"], torch.Tensor):
@@ -635,8 +642,10 @@ class DistributedTrainer:
         )
 
         # Apply gradient
+        nanotron_timer("optimizer_step").start()
         self.optimizer.step()
         self.optimizer.zero_grad()
+        nanotron_timer("optimizer_step").end()
 
         # Update the learning rate
         self.lr_scheduler.step()
@@ -668,6 +677,8 @@ class DistributedTrainer:
         dist.barrier()
         torch.cuda.synchronize()
         elapsed_time_per_iteration_ms = (time.time() - self.iteration_start_time) * 1000
+        # if elapsed_time_per_iteration_ms > 600 and self.iteration_step >10:
+        # print(f"elapsed_time_per_iteration_ms: {elapsed_time_per_iteration_ms}")
         tokens_per_sec = (
             self.global_batch_size * self.sequence_length / (elapsed_time_per_iteration_ms / 1000)
         )  # tokens_per_sec is calculated using sequence_length
@@ -705,13 +716,20 @@ class DistributedTrainer:
             LogItem("model_tflops_per_gpu", model_tflops, "human_format"),  # , ".2f"),
             # LogItem("hardware_tflops_per_gpu", hardware_tflops, "human_format"),  # , ".2f"),
             LogItem("eta", str(datetime.timedelta(seconds=eta_seconds))),
+            LogItem("timers/tbi", nanotron_timer("train_batch_iter").elapsed, ".2f"),
+            LogItem("timers/forward", nanotron_timer("forward").elapsed, ".2f"),
+            LogItem("timers/backward", nanotron_timer("backward").elapsed, ".2f"),
+            LogItem("timers/sync_gradients", nanotron_timer("sync_gradients").elapsed, ".2f"),
+            LogItem("timers/clip_gradients", nanotron_timer("clip_gradients").elapsed, ".2f"),
+            LogItem("timers/optimizer_step", nanotron_timer("optimizer_step").elapsed, ".2f"),
+            LogItem("timers/dataloader_fetch", nanotron_timer("dataloader_fetch").elapsed, ".2f"),
         ]
         if z_loss_avg is not None:
             basic_log_entries.insert(6, LogItem("z_loss", z_loss_avg.item(), "human_format"))  # , "1.6E"),
 
         if self.config.optimizer.clip_grad is not None:
-            basic_log_entries.append(
-                LogItem("grad_norm", self.grad_norm_unclipped.item(), "human_format")
+            basic_log_entries.insert(
+                5, LogItem("grad_norm", self.grad_norm_unclipped.item(), "human_format")
             )  # , ".3f"))
 
         # Console logging only on logger ranks
