@@ -1,7 +1,7 @@
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, Optional, Union
+from typing import Dict, List, Optional, Union
 
 import torch
 
@@ -26,12 +26,13 @@ class TimerRecord:
     end_time: float = 0.0
     running: bool = False
     call_count: int = 0
-    total_time: float = 0.0
+
+    # For CPU timers we still track total_time
+    _cpu_total_time: float = 0.0
 
     # CUDA specific fields
-    _start_event: Optional[torch.cuda.Event] = None
-    _end_event: Optional[torch.cuda.Event] = None
-    _last_elapsed_time: float = 0.0
+    _cuda_events: List[tuple[torch.cuda.Event, torch.cuda.Event]] = field(default_factory=list)
+    _current_start_event: Optional[torch.cuda.Event] = None
 
     def start(self) -> "TimerRecord":
         """Start the timer."""
@@ -40,12 +41,9 @@ class TimerRecord:
 
         if self.timer_type == TimerType.CUDA:
             if torch.cuda.is_available():
-                # Create CUDA events with timing enabled
-                self._start_event = torch.cuda.Event(enable_timing=True)
-                self._end_event = torch.cuda.Event(enable_timing=True)
-
-                # Record the start event
-                self._start_event.record()
+                # Create a new start event - we'll create the end event when end() is called
+                self._current_start_event = torch.cuda.Event(enable_timing=True)
+                self._current_start_event.record()
             else:
                 logger.warning("CUDA timer requested but CUDA is not available. Falling back to CPU timer.")
                 self.timer_type = TimerType.CPU
@@ -56,37 +54,32 @@ class TimerRecord:
         self.running = True
         return self
 
-    def end(self) -> float:
-        """End the timer and return elapsed time in seconds."""
+    def end(self) -> None:
+        """End the timer, but don't compute elapsed time yet."""
         if not self.running:
             logger.warning(f"Timer '{self.name}' was not running. Ignoring end call.")
-            return 0.0
+            return
 
-        elapsed = 0.0
         if self.timer_type == TimerType.CUDA:
-            if torch.cuda.is_available() and self._start_event is not None and self._end_event is not None:
-                # Record the end event
-                self._end_event.record()
+            if torch.cuda.is_available() and self._current_start_event is not None:
+                # Create and record an end event
+                end_event = torch.cuda.Event(enable_timing=True)
+                end_event.record()
 
-                # Waits for all preceding CUDA operations to complete
-                self._end_event.synchronize()
-
-                # Get the elapsed time in milliseconds and convert to seconds
-                elapsed = self._start_event.elapsed_time(self._end_event) / 1000.0
-                self._last_elapsed_time = elapsed
+                # Store the start/end event pair for later querying
+                self._cuda_events.append((self._current_start_event, end_event))
+                self._current_start_event = None
             else:
                 logger.warning("CUDA timer end called but CUDA events are not available.")
                 self.timer_type = TimerType.CPU
                 self.end_time = time.time()
-                elapsed = self.end_time - self.start_time
+                self._cpu_total_time += self.end_time - self.start_time
         else:
             self.end_time = time.time()
-            elapsed = self.end_time - self.start_time
+            self._cpu_total_time += self.end_time - self.start_time
 
-        self.total_time += elapsed
         self.call_count += 1
         self.running = False
-        return elapsed
 
     def reset(self) -> None:
         """Reset the timer."""
@@ -94,36 +87,61 @@ class TimerRecord:
         self.end_time = 0.0
         self.running = False
         self.call_count = 0
-        self.total_time = 0.0
-        self._start_event = None
-        self._end_event = None
-        self._last_elapsed_time = 0.0
+        self._cpu_total_time = 0.0
+        self._cuda_events = []
+        self._current_start_event = None
 
     @property
     def elapsed(self) -> float:
-        """Get elapsed time in seconds."""
+        """Get elapsed time in seconds for the current timer."""
         if not self.running:
-            if self.timer_type == TimerType.CUDA:
-                return self._last_elapsed_time
-            return self.end_time - self.start_time
+            if self.timer_type == TimerType.CPU:
+                return self.end_time - self.start_time
+
+            # For CUDA timers, we need to synchronize to get the last elapsed time
+            if not self._cuda_events:
+                return 0.0
+
+            # Get the last event pair
+            start_event, end_event = self._cuda_events[-1]
+            end_event.synchronize()  # Make sure the event is complete
+            return start_event.elapsed_time(end_event) / 1000.0  # Convert ms to sec
 
         # Timer is still running
         if self.timer_type == TimerType.CUDA:
-            if torch.cuda.is_available() and self._start_event is not None:
-                # Create a temporary end event
+            if torch.cuda.is_available() and self._current_start_event is not None:
+                # Create a temporary end event to measure elapsed time so far
                 tmp_end_event = torch.cuda.Event(enable_timing=True)
                 tmp_end_event.record()
                 tmp_end_event.synchronize()
-                return self._start_event.elapsed_time(tmp_end_event) / 1000.0
+                return self._current_start_event.elapsed_time(tmp_end_event) / 1000.0
             else:
-                logger.warning("CUDA timer elapsed called but CUDA events are not available.")
                 return time.time() - self.start_time
         else:
             return time.time() - self.start_time
 
     @property
+    def total_time(self) -> float:
+        """
+        Get total time in seconds across all calls.
+        Warning: For CUDA timers, this will synchronize all events!
+        """
+        if self.timer_type == TimerType.CPU:
+            return self._cpu_total_time
+
+        # For CUDA timers, we need to sum up all the event pairs
+        total = 0.0
+        for start_event, end_event in self._cuda_events:
+            end_event.synchronize()  # Make sure the event is complete
+            total += start_event.elapsed_time(end_event) / 1000.0  # Convert ms to sec
+        return total
+
+    @property
     def average_time(self) -> float:
-        """Get average time per call in seconds."""
+        """
+        Get average time per call in seconds.
+        Warning: For CUDA timers, this will synchronize all events!
+        """
         if self.call_count == 0:
             return 0.0
         return self.total_time / self.call_count
@@ -153,11 +171,6 @@ class Timers:
 
         if name not in self._timers:
             self._timers[name] = TimerRecord(name=name, timer_type=timer_type)
-        elif self._timers[name].timer_type != timer_type:
-            logger.warning(
-                f"Timer '{name}' already exists with type {self._timers[name].timer_type}. "
-                f"Requested type {timer_type} will be ignored."
-            )
         return self._timers[name]
 
     def reset_all(self) -> None:
@@ -184,6 +197,7 @@ class Timers:
 
         timer = self._timers[name]
         if timer.call_count > 0:
+            # This will trigger synchronization for CUDA timers
             avg_time = timer.average_time * 1000  # Convert to ms
             total_time = timer.total_time * 1000  # Convert to ms
             logger.info(
@@ -207,6 +221,7 @@ class Timers:
             logger.info("---- Timing Information ----")
             for name, timer in sorted_timers:
                 if timer.call_count > 0:
+                    # This will trigger synchronization for CUDA timers
                     avg_time = timer.average_time * 1000  # Convert to ms
                     total_time = timer.total_time * 1000  # Convert to ms
                     logger.info(
