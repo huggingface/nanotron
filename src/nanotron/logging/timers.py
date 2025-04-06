@@ -34,6 +34,16 @@ class TimerRecord:
     _cuda_events: List[tuple[torch.cuda.Event, torch.cuda.Event]] = field(default_factory=list)
     _current_start_event: Optional[torch.cuda.Event] = None
 
+    def __enter__(self):
+        """Context manager support: Start the timer when entering a context."""
+        self.start()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager support: End the timer when exiting a context."""
+        self.end()
+        return False  # Don't suppress exceptions
+
     def start(self) -> "TimerRecord":
         """Start the timer."""
         if self.running:
@@ -161,6 +171,11 @@ class Timers:
     def __call__(self, name: str, timer_type: Union[TimerType, str] = TimerType.CPU) -> TimerRecord:
         """Get or create a timer with the given name.
 
+        Can be used as a decorator, context manager, or directly:
+        - @nanotron_timer("name")  # As decorator
+        - with nanotron_timer("name"): ...  # As context manager
+        - nanotron_timer("name").start(); ...; nanotron_timer("name").end()  # Direct use
+
         Args:
             name: Name of the timer
             timer_type: Type of timer, either TimerType.CPU or TimerType.CUDA
@@ -169,9 +184,38 @@ class Timers:
         if isinstance(timer_type, str):
             timer_type = TimerType(timer_type)
 
+        if callable(name) and timer_type == TimerType.CPU:
+            # Being used as a decorator with default settings
+            func = name
+            timer_name = func.__name__
+            return self._create_timer_decorator(timer_name, TimerType.CPU)(func)
+
         if name not in self._timers:
             self._timers[name] = TimerRecord(name=name, timer_type=timer_type)
-        return self._timers[name]
+
+        # Check if we're being called as a decorator
+        if not callable(name):
+            timer_record = self._timers[name]
+            # Return the timer which can be used directly or as a context manager
+            return timer_record
+
+        # If we get here, we're being called as @nanotron_timer("name", timer_type)
+        return self._create_timer_decorator(name, timer_type)
+
+    def _create_timer_decorator(self, name, timer_type):
+        """Create a decorator that times the execution of a function."""
+
+        def decorator(func):
+            import functools
+
+            @functools.wraps(func)
+            def wrapper(*args, **kwargs):
+                with self(name, timer_type):
+                    return func(*args, **kwargs)
+
+            return wrapper
+
+        return decorator
 
     def reset_all(self) -> None:
         """Reset all timers."""
@@ -229,6 +273,9 @@ class Timers:
                         f"{avg_time:.2f}ms avg, {timer.call_count} calls"
                     )
             logger.info("----------------------------")
+
+    def items(self):
+        return self._timers.items()
 
 
 # Create a singleton instance

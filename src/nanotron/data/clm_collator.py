@@ -282,4 +282,8 @@ class DataCollatorForCLMWithPositionIds:
         #         assert v.is_contiguous(), f"{k} is not contiguous"
         #         assert not v.is_cuda, f"{k} is in cuda. Bad for pinning memory"
 
+        # debug: import tokenizer and print tokenizer.decode(result["input_ids"][0])
+        # from transformers import AutoTokenizer
+        # tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-1B")
+        # print(tokenizer.decode(result["input_ids"][0]))
         return result
