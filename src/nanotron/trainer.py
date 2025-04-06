@@ -350,6 +350,7 @@ class DistributedTrainer:
                         project=self.config.general.project,
                         name=run_name,
                         config={"nanotron_config": self.config.as_dict()},
+                        x_disable_meta=True,
                     )
                     log_rank(
                         f"Initialized wandb run '{run_name}' for TP rank {tp_rank}",
@@ -364,6 +365,13 @@ class DistributedTrainer:
                         project=self.config.general.project,
                         name=run_name,
                         config={"nanotron_config": self.config.as_dict()},
+                        settings=wandb.Settings(
+                            x_stats_sampling_interval=1.0,  # TODO: put back to default 15.0
+                            x_stats_disk_paths=("/scratch", "/fsx/nouamane/"),
+                            x_stats_open_metrics_endpoints={"dcgm": "http://localhost:9104/metrics"},
+                            x_stats_open_metrics_filters=["DCGM_FI_"],
+                            x_file_stream_transmit_interval=1.0,
+                        ),
                     )
                     log_rank(
                         f"Initialized wandb run '{run_name}' for TP rank {tp_rank}",
@@ -716,13 +724,6 @@ class DistributedTrainer:
             LogItem("model_tflops_per_gpu", model_tflops, "human_format"),  # , ".2f"),
             # LogItem("hardware_tflops_per_gpu", hardware_tflops, "human_format"),  # , ".2f"),
             LogItem("eta", str(datetime.timedelta(seconds=eta_seconds))),
-            LogItem("timers/tbi", nanotron_timer("train_batch_iter").elapsed, ".2f"),
-            LogItem("timers/forward", nanotron_timer("forward").elapsed, ".2f"),
-            LogItem("timers/backward", nanotron_timer("backward").elapsed, ".2f"),
-            LogItem("timers/sync_gradients", nanotron_timer("sync_gradients").elapsed, ".2f"),
-            LogItem("timers/clip_gradients", nanotron_timer("clip_gradients").elapsed, ".2f"),
-            LogItem("timers/optimizer_step", nanotron_timer("optimizer_step").elapsed, ".2f"),
-            LogItem("timers/dataloader_fetch", nanotron_timer("dataloader_fetch").elapsed, ".2f"),
         ]
         if z_loss_avg is not None:
             basic_log_entries.insert(6, LogItem("z_loss", z_loss_avg.item(), "human_format"))  # , "1.6E"),
@@ -736,6 +737,9 @@ class DistributedTrainer:
         if dist.get_rank(self.parallel_context.world_pg) in self.logger_ranks:
             assert self.loggerwriter is not None, "loggerwriter should be defined on logger ranks"
             self.loggerwriter.add_scalars_from_list(basic_log_entries, self.iteration_step)
+
+        for timer_name, timer in nanotron_timer.items():
+            basic_log_entries.append(LogItem(f"timers/{timer_name}", timer.elapsed, ".2f"))
 
         # WandB logging - determine if this rank should log to wandb
         should_log_to_wandb = wandb is not None and (
