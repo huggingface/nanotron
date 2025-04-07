@@ -100,6 +100,7 @@ class DataCollatorForCLM:
                 result["label_mask"] = np.ones((batch_size, self.sequence_length), dtype=np.bool_)
 
             # Context Parallelism: Each CP rank gets a slice of the label_ids and label_mask
+            cp_rank, cp_size = dist.get_rank(self.parallel_context.cp_pg), self.parallel_context.context_parallel_size
             local_slice = slice(
                 cp_rank * self.sequence_length // cp_size, (cp_rank + 1) * self.sequence_length // cp_size
             )
