@@ -380,14 +380,14 @@ def get_fp32_accum_hook(
                     )
         else:
             grad_buffer_tensor_list = [
-                accumulator.get_grad_buffer(param_id_to_name[id(param)]).view(-1) for param in bucket.parameters()
+                accumulator.get_grad_buffer(param_id_to_name[id(param)]) for param in bucket.parameters()
             ]
             with dist._coalescing_manager(group=dp_pg, async_ops=True) as cm:
                 for tensor in grad_buffer_tensor_list:
                     dist.all_reduce(tensor, op=reduce_op, group=dp_pg)
 
             # Store the last work handle which will complete after all previous ones
-            accumulator.fp32_grads_allreduce_handle = cm.works[-1] if cm.works else None
+            accumulator.fp32_grads_allreduce_handle = cm.works
 
             # we shouldn't wait for this future for the rest of the backward
 
