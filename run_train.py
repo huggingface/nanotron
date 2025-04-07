@@ -220,6 +220,8 @@ def get_dataloader_from_data_stage(
             input_pp_rank=input_pp_rank,
             output_pp_rank=output_pp_rank,
             dataloader_drop_last=True,
+            use_position_ids=isinstance(trainer.model_config, Qwen2Config),
+            use_doc_masking=False,
         )
         log_rank(
             f"[TokenizedBytes] Time taken to create TokenizedBytes: {time.strftime('%M:%S', time.gmtime(time.time() - start_time))} (MM:SS)",

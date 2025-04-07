@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader, Dataset
 from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.config import NanosetDatasetsArgs
-from nanotron.data import DataCollatorForCLM, EmptyInfiniteDataset
+from nanotron.data import DataCollatorForCLM, DataCollatorForCLMWithPositionIds, EmptyInfiniteDataset
 from nanotron.data.dataloader import get_dataloader_worker_init
 from nanotron.data.nemo_dataset import BlendableDataset
 from nanotron.data.nemo_dataset.dataset_utils import compile_helper
@@ -406,6 +406,8 @@ def get_tb_dataloader(
     output_pp_rank: int,
     dataloader_drop_last: bool = True,
     dataloader_pin_memory: bool = True,
+    use_position_ids: bool = False,
+    use_doc_masking: bool = False,
 ) -> DataLoader:
     # Only some rank require to run the dataloader.
     if dist.get_rank(parallel_context.pp_pg) not in [
@@ -430,12 +432,21 @@ def get_tb_dataloader(
     )
 
     # We use the data collator to put the tensors on the right pipeline parallelism rank
-    data_collator = DataCollatorForCLM(
-        sequence_length=sequence_length,
-        input_pp_rank=input_pp_rank,
-        output_pp_rank=output_pp_rank,
-        parallel_context=parallel_context,
-    )
+    if use_position_ids:
+        data_collator = DataCollatorForCLMWithPositionIds(
+            sequence_length=sequence_length,
+            input_pp_rank=input_pp_rank,
+            output_pp_rank=output_pp_rank,
+            parallel_context=parallel_context,
+            use_doc_masking=use_doc_masking,
+        )
+    else:
+        data_collator = DataCollatorForCLM(
+            sequence_length=sequence_length,
+            input_pp_rank=input_pp_rank,
+            output_pp_rank=output_pp_rank,
+            parallel_context=parallel_context,
+        )
 
     return DataLoader(
         dataset,
