@@ -222,7 +222,7 @@ def get_dataloader_from_data_stage(
             dataloader_drop_last=True,
             dataloader_pin_memory=True,
             use_position_ids=isinstance(trainer.model_config, Qwen2Config),
-            use_doc_masking=False,
+            use_doc_masking=getattr(trainer.model_config, "_use_doc_masking", None),
         )
         log_rank(
             f"[TokenizedBytes] Time taken to create TokenizedBytes: {time.strftime('%M:%S', time.gmtime(time.time() - start_time))} (MM:SS)",
