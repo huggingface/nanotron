@@ -135,6 +135,7 @@ class Qwen2Config:
     tie_word_embeddings: bool = False
     use_cache: bool = True
     vocab_size: int = 32000
+    no_rope_layer: Optional[int] = None
     _attn_implementation: Optional[AttentionImplementation] = DEFAULT_ATTENTION_IMPLEMENTATION
     flex_attention_mask: Optional[str] = None
     attention_bias: bool = False
@@ -182,6 +183,10 @@ class Qwen2Config:
                 "document",
                 "sliding_window_document",
             ], "Flex attention mask must be one of ['sliding_window', 'document', 'sliding_window_document']"
+        if self.no_rope_layer is not None:
+            assert (
+                self.num_hidden_layers % self.no_rope_layer == 0
+            ), "no_rope_layer must be a multiple of num_hidden_layers"
 
     @property
     def is_using_mup(self) -> bool:

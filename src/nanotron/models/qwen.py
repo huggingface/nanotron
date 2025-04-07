@@ -142,6 +142,8 @@ class Qwen2Attention(nn.Module):
         layer_idx: int,
     ):
         super().__init__()
+        self.config = config
+        self.layer_idx = layer_idx
         self.hidden_size = config.hidden_size
         self.tp_pg_size = tp_pg.size()
 
@@ -256,9 +258,10 @@ class Qwen2Attention(nn.Module):
         kv = qkv[..., self.local_num_heads * self.head_dim :]  # Not contiguous, similar to flash_attn
         q = q.view(-1, seq_length, self.local_num_heads, self.head_dim)
         kv = kv.view(-1, seq_length, 2, self.local_num_kv_heads, self.head_dim)
-        q, kv = self.rotary_emb(
-            q, kv, seqlen_offset=0, max_seqlen=None
-        )  # TODO: should we use position_ids here? flash_attn doesn't
+        if self.config.no_rope_layer is None or (self.layer_idx + 1) % self.config.no_rope_layer != 0:
+            q, kv = self.rotary_emb(
+                q, kv, seqlen_offset=0, max_seqlen=None
+            )  # TODO: should we use position_ids here? flash_attn doesn't
         q = q.view(-1, self.local_num_heads, self.head_dim)
         kv = kv.view(-1, 2, self.local_num_kv_heads, self.head_dim)
 
@@ -268,7 +271,7 @@ class Qwen2Attention(nn.Module):
             [start_indices, torch.tensor([position_ids.numel()], dtype=torch.int32, device=start_indices.device)]
         ).to(torch.int32)
 
-        max_seqlen = seq_length  # TODO: should this be max position_ids?
+        max_seqlen = int(torch.max(position_ids) + 1)  # TODO: should this be max position_ids?
 
         assert cu_seqlens.dtype == torch.int32
         assert max_seqlen is not None
