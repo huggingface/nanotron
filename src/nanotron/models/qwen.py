@@ -271,7 +271,7 @@ class Qwen2Attention(nn.Module):
             [start_indices, torch.tensor([position_ids.numel()], dtype=torch.int32, device=start_indices.device)]
         ).to(torch.int32)
 
-        max_seqlen = int(torch.max(position_ids) + 1)  # TODO: should this be max position_ids?
+        max_seqlen = seq_length  # TODO: should this be max position_ids?
 
         assert cu_seqlens.dtype == torch.int32
         assert max_seqlen is not None
