@@ -138,20 +138,23 @@ class FP32GradientAccumulator(GradientAccumulator):
             assert hasattr(self, "param_name_to_offsets")
             named_offsets = sorted(self.param_name_to_offsets.items(), key=lambda x: x[0])
             flat_grad_buffers = [self.fp32_grad_buffers[name]["fp32_grad"].view(-1) for name, _ in named_offsets]
-            dist.reduce_scatter_coalesced(
-                output_tensor_list=[
-                    flat_grad_buffer[start_offset:end_offset]
-                    for (_, (start_offset, end_offset)), flat_grad_buffer in zip(named_offsets, flat_grad_buffers)
-                ],
-                input_tensor_lists=[
-                    torch.split(
-                        flat_grad_buffer,
-                        split_size_or_sections=len(self.fp32_grad_buffers[name]["fp32_grad"].view(-1)) // dp_pg.size(),
+            with dist._coalescing_manager(group=dp_pg, async_ops=True):
+                for output_tensor, input_tensor_list in zip(
+                    flat_grad_buffers,
+                    [
+                        torch.split(
+                            flat_grad_buffer,
+                            split_size_or_sections=len(flat_grad_buffer) // dp_pg.size(),
+                        )
+                        for flat_grad_buffer in flat_grad_buffers
+                    ],
+                ):
+                    dist.reduce_scatter_tensor(
+                        output=output_tensor,
+                        input=torch.cat(input_tensor_list),  # Stack the split tensors back
+                        op=reduce_op,
+                        group=dp_pg,
                     )
-                    for (name, _), flat_grad_buffer in zip(named_offsets, flat_grad_buffers)
-                ],
-                group=dp_pg,
-            )
         else:
             dist.all_reduce(self._contiguous_fp32_grad_buffer, op=reduce_op, group=dp_pg)
 
@@ -367,20 +370,25 @@ def get_fp32_accum_hook(
                 torch.split(grad_buffer, split_size_or_sections=len(grad_buffer) // dp_pg.size())
                 for grad_buffer in grad_buffer_tensor_list
             ]
-            dist.reduce_scatter_coalesced(
-                output_tensor_list=output_tensor_list,
-                input_tensor_lists=input_tensor_lists,
-                op=reduce_op,
-                group=dp_pg,
-                async_op=True,
-            )
+            with dist._coalescing_manager(group=dp_pg, async_ops=True):
+                for output_tensor, input_tensor_list in zip(output_tensor_list, input_tensor_lists):
+                    dist.reduce_scatter_tensor(
+                        output=output_tensor,
+                        input=torch.cat(input_tensor_list),  # Stack the split tensors back
+                        op=reduce_op,
+                        group=dp_pg,
+                    )
         else:
             grad_buffer_tensor_list = [
                 accumulator.get_grad_buffer(param_id_to_name[id(param)]).view(-1) for param in bucket.parameters()
             ]
-            accumulator.fp32_grads_allreduce_handle = dist.all_reduce_coalesced(
-                grad_buffer_tensor_list, group=dp_pg, async_op=True, op=reduce_op
-            )
+            with dist._coalescing_manager(group=dp_pg, async_ops=True) as cm:
+                for tensor in grad_buffer_tensor_list:
+                    dist.all_reduce(tensor, op=reduce_op, group=dp_pg)
+
+            # Store the last work handle which will complete after all previous ones
+            accumulator.fp32_grads_allreduce_handle = cm.works[-1] if cm.works else None
+
             # we shouldn't wait for this future for the rest of the backward
 
         # with torch.cuda.stream(s):
