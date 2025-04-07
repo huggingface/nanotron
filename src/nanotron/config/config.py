@@ -149,7 +149,7 @@ class NanosetDatasetsArgs:
     tokenizer_name: Optional[str] = None
     vocab_size: Optional[int] = None
     token_size_in_bytes: Optional[int] = None
-    return_positions: Optional[bool] = False
+    return_positions: Optional[bool] = True
 
     # Tokenized bytes dataset config
     skip_in_stream: Optional[bool] = True

@@ -8,6 +8,7 @@ from typing import Optional, Tuple, Union
 
 import numpy as np
 import torch
+from datatrove.utils.dataset import DatatroveFolderDataset
 from torch.utils.data import DataLoader, Dataset
 
 from nanotron import distributed as dist
@@ -176,7 +177,7 @@ class TokenizedBytesFileDataset(Dataset):
         return self._len
 
 
-class TokenizedBytesFolderDataset(Dataset):
+class OldTokenizedBytesFolderDataset(Dataset):
     def __init__(
         self,
         folder_path: str,
@@ -218,6 +219,7 @@ class TokenizedBytesFolderDataset(Dataset):
                 for file in files
                 if filename_pattern.match(os.path.join(root, file))
             ]
+        matched_file_paths = sorted(matched_file_paths)
         if not matched_file_paths:
             raise FileNotFoundError(f'No files matching "{filename_pattern}" found in {folder_path}')
 
@@ -291,17 +293,65 @@ class TokenizedBytesFolderDataset(Dataset):
         return self.lens[-1] if self.lens else 0
 
 
+class TokenizedBytesFolderDataset(DatatroveFolderDataset):
+    def __init__(
+        self,
+        folder_path: str,
+        seq_len: int,
+        filename_pattern: str = None,
+        recursive: bool = True,
+        token_size: int = 2,
+        max_tokens: int | None = None,
+        shuffle: bool = False,
+        seed: int = 42,
+        return_positions: bool = False,
+        eos_token_id: int | None = None,
+        skip_in_stream: bool = True,
+        num_samples: Optional[int] = None,
+    ):
+        super().__init__(
+            folder_path=folder_path,
+            seq_len=seq_len,
+            filename_pattern=filename_pattern,
+            recursive=recursive,
+            token_size=token_size,
+            max_tokens=max_tokens,
+            shuffle=shuffle,
+            seed=seed,
+            return_positions=return_positions,
+            eos_token_id=eos_token_id,
+        )
+        self.subset_log = TBFolderDatasetLog(
+            dataset_type=self.__class__.__name__,
+            folder_path=folder_path,
+            filename_pattern=str(filename_pattern),
+            recursive=recursive,
+            seq_len=seq_len,
+            dtype=np.dtype(np.uint16 if token_size == 2 else np.uint32 if token_size == 4 else np.uint64).name,
+            skip_in_stream=skip_in_stream,
+            num_samples=self.lens[-1] if self.lens else 0,
+            num_tokens=self.lens[-1] * (seq_len + 1),
+            human_format_num_tokens=human_format(self.lens[-1] * (seq_len + 1)),
+            shuffle=shuffle,
+            seed=seed,
+            num_epochs=num_samples // self.lens[-1] if num_samples and self.lens else 0,
+            files_order=[str(f.file_path) for f in self.files],
+        )
+
+
 def build_dataset(
     dataset_folder: str,
     seq_length: int,
+    token_size: int,
+    return_positions: bool = False,
+    eos_token_id: Optional[int] = None,
     skip_in_stream: bool = True,
     num_samples: Optional[int] = None,
     max_tokens: Optional[int] = None,
-    filename_pattern: Optional[str] = ".*\\.ds$",
     skip_tokens: Optional[int] = None,
     shuffle: Optional[bool] = False,
     seed: Optional[int] = 6,
-) -> "TokenizedBytesFolderDataset":
+) -> "DatatroveFolderDataset":
     """Build one TokenizedBytes dataset from a file or a folder on S3 or locally
 
     Args:
@@ -309,16 +359,32 @@ def build_dataset(
         seq_length ([type]): sequence length
         skip_in_stream (bool, optional): skip ahead in stream. Defaults to True.
     """
+    #    return OldTokenizedBytesFolderDataset(
+    #         dataset_folder,
+    #         seq_length,
+    #         filename_pattern=".*\\.ds$",
+    #         skip_in_stream=skip_in_stream,
+    #         max_tokens=max_tokens,
+    #         num_samples=num_samples,
+    #         skip_tokens=skip_tokens,  # # Optional number of tokens to skip at the beginning (We'll only train on the rest)
+    #         shuffle=shuffle,
+    #         seed=seed,
+    #         dtype=np.uint16 if token_size == 2 else np.uint32,
+    #     )
+
     return TokenizedBytesFolderDataset(
-        dataset_folder,
-        seq_length,
-        filename_pattern,
-        skip_in_stream=skip_in_stream,
+        folder_path=dataset_folder,
+        filename_pattern=os.path.join(dataset_folder, "*.ds"),
+        seq_len=seq_length,
+        recursive=False,
+        token_size=token_size,
         max_tokens=max_tokens,
-        num_samples=num_samples,
-        skip_tokens=skip_tokens,  # # Optional number of tokens to skip at the beginning (We'll only train on the rest)
         shuffle=shuffle,
+        return_positions=return_positions,  # if set to True, the position ids are directly read from datatrove
+        eos_token_id=eos_token_id,
         seed=seed,
+        skip_in_stream=skip_in_stream,
+        num_samples=num_samples,
     )
 
 
@@ -328,6 +394,7 @@ def get_tb_datasets(
     global_batch_size: int,
     train_steps: int,
     parallel_context: ParallelContext,
+    eos_token_id: Optional[int] = None,
     shuffle: bool = False,
     seed: int = 6,
 ) -> Tuple[DataLoader, TrainDataLog]:
@@ -350,7 +417,10 @@ def get_tb_datasets(
         build_dataset(
             dataset_folder,
             sequence_length,
-            config.skip_in_stream,
+            token_size=config.token_size_in_bytes,
+            return_positions=config.return_positions,
+            eos_token_id=eos_token_id,
+            skip_in_stream=config.skip_in_stream,
             max_tokens=max_tokens,
             num_samples=train_num_samples,
             shuffle=shuffle,
@@ -393,7 +463,7 @@ def get_tb_datasets(
 
 
 def get_tb_dataloader(
-    dataset: Union[TokenizedBytesFolderDataset, TokenizedBytesFileDataset, BlendableDataset, Dataset],
+    dataset: Union[DatatroveFolderDataset, BlendableDataset, Dataset],
     sequence_length: int,
     micro_batch_size: int,
     global_batch_size: int,
