@@ -346,10 +346,6 @@ if __name__ == "__main__":
     args = get_args()
     config_file = args.config_file
 
-    import torch
-
-    print("Using allocator:", torch.cuda.get_allocator_backend())
-
     # Load trainer and data
     trainer = DistributedTrainer(config_file)
     dataloader = get_dataloader(trainer)
