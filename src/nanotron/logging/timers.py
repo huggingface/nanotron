@@ -1,3 +1,4 @@
+import os
 import time
 from dataclasses import dataclass
 from enum import Enum
@@ -133,6 +134,7 @@ class Timers:
     """A collection of timers for tracking execution time in Nanotron."""
 
     _instance = None
+    _enabled = os.environ.get("ENABLE_TIMERS", "1") == "1"  # Add global enable/disable flag
 
     def __new__(cls):
         if cls._instance is None:
@@ -140,7 +142,24 @@ class Timers:
             cls._instance._timers: Dict[str, TimerRecord] = {}
         return cls._instance
 
-    def __call__(self, name: str, timer_type: Union[TimerType, str] = TimerType.CPU) -> TimerRecord:
+    @classmethod
+    def enable(cls) -> None:
+        """Enable all timing operations."""
+        cls._enabled = True
+
+    @classmethod
+    def disable(cls) -> None:
+        """Disable all timing operations."""
+        cls._enabled = False
+
+    @classmethod
+    def is_enabled(cls) -> bool:
+        """Check if timers are enabled."""
+        return cls._enabled
+
+    def __call__(
+        self, name: str, timer_type: Union[TimerType, str] = TimerType.CPU, cuda_sync: bool = True
+    ) -> TimerRecord:
         """Get or create a timer with the given name.
 
         Args:
@@ -148,6 +167,10 @@ class Timers:
             timer_type: Type of timer, either TimerType.CPU or TimerType.CUDA
                         (or 'cpu'/'cuda' strings)
         """
+        if not self._enabled:
+            # Return a dummy timer that does nothing when timing is disabled
+            return TimerRecord(name="dummy", timer_type=TimerType.CPU)
+
         if isinstance(timer_type, str):
             timer_type = TimerType(timer_type)
 

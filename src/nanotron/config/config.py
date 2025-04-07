@@ -442,7 +442,7 @@ class Config:
 
         if self.s3_upload is not None:
             self.s3_upload.__post_init__()
-        
+
         # Some final sanity checks across separate arguments sections:
         if self.profiler is not None and self.profiler.profiler_export_path is not None:
             total_profiling_steps = self.profiler.skip_first + self.profiler.repeat * (
@@ -532,6 +532,10 @@ class Config:
 
         # Sanity test config can be reloaded
         _ = get_config_from_file(file_path, config_class=self.__class__)
+
+    def get_yaml(self):
+        config_dict = serialize(self)
+        return yaml.dump(config_dict)
 
     @classmethod
     def load_from_yaml(cls, file_path: str):
