@@ -153,8 +153,7 @@ class NanosetDatasetsArgs:
 
     # Tokenized bytes dataset config
     skip_in_stream: Optional[bool] = True
-    pad_samples_to_global_batch_size: Optional[bool] = True
-    dataloader_type: Optional[str] = "single"  # single or cyclic
+    pad_samples_to_global_batch_size: Optional[bool] = False
     dataset_max_tokens: Optional[List[int]] = None
 
     def __post_init__(self):
@@ -538,6 +537,10 @@ class Config:
 
         # Sanity test config can be reloaded
         _ = get_config_from_file(file_path, config_class=self.__class__)
+
+    def get_yaml(self):
+        config_dict = serialize(self)
+        return yaml.dump(config_dict)
 
     @classmethod
     def load_from_yaml(cls, file_path: str):

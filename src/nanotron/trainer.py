@@ -3,6 +3,7 @@ import gc
 import json
 import os
 import shutil
+import tempfile
 import time
 from dataclasses import asdict
 from pathlib import Path
@@ -20,6 +21,7 @@ from typing import (
     cast,
 )
 
+import psutil
 import torch
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
@@ -116,6 +118,14 @@ try:
     import wandb
 except ImportError:
     wandb = None
+
+
+def get_size(bytes):
+    """Convert bytes to human readable format"""
+    for unit in ["", "K", "M", "G", "T", "P"]:
+        if bytes < 1024:
+            return f"{bytes:.2f}{unit}B"
+        bytes /= 1024
 
 
 class DistributedTrainer:
@@ -358,27 +368,30 @@ class DistributedTrainer:
                         level=logging.INFO,
                         rank=world_rank,
                     )
-            else:
-                if world_rank == self.logger_ranks[0]:
-                    run_name = f"{current_time}_{self.config.general.run}"
-                    wandb.init(
-                        project=self.config.general.project,
-                        name=run_name,
-                        config={"nanotron_config": self.config.as_dict()},
-                        settings=wandb.Settings(
-                            x_stats_sampling_interval=1.0,  # TODO: put back to default 15.0
-                            x_stats_disk_paths=("/scratch", "/fsx/nouamane/"),
-                            x_stats_open_metrics_endpoints={"dcgm": "http://localhost:9104/metrics"},
-                            x_stats_open_metrics_filters=["DCGM_FI_"],
-                            x_file_stream_transmit_interval=1.0,
-                        ),
-                    )
-                    log_rank(
-                        f"Initialized wandb run '{run_name}' for TP rank {tp_rank}",
-                        logger=logger,
-                        level=logging.INFO,
-                        rank=world_rank,
-                    )
+            elif world_rank == self.logger_ranks[0]:
+                run_name = f"{current_time}_{self.config.general.run}"
+                wandb.init(
+                    project=self.config.general.project,
+                    name=run_name,
+                    config={"nanotron_config": self.config.as_dict()},
+                    settings=wandb.Settings(
+                        x_stats_sampling_interval=1.0,  # TODO: put back to default 15.0
+                        x_stats_disk_paths=("/scratch", "/fsx/nouamane/"),
+                        x_stats_open_metrics_endpoints={"dcgm": "http://localhost:9104/metrics"},
+                        x_stats_open_metrics_filters=["DCGM_FI_"],
+                        x_file_stream_transmit_interval=1.0,
+                    ),
+                )
+                # save config file
+                temp_config_path = tempfile.mktemp(suffix=".yaml", prefix="config")
+                self.config.save_as_yaml(temp_config_path)
+                wandb.save(temp_config_path, base_path=os.path.dirname(temp_config_path), policy="now")
+                log_rank(
+                    f"Initialized wandb run '{run_name}' for TP rank {tp_rank}",
+                    logger=logger,
+                    level=logging.INFO,
+                    rank=world_rank,
+                )
 
     def post_train_step(self):
 
@@ -557,6 +570,9 @@ class DistributedTrainer:
         if self.iteration_step < self.initial_iter_step + 5:
             log_memory(logger=logger, msg="Before train_batch_iter")
 
+        # DEBUG: sleep for 29800ms
+        # time.sleep(29800 / 1000)
+
         nanotron_timer("train_batch_iter").start()
         with torch.profiler.record_function("train_batch_iter"):
             outputs = self.pipeline_engine.train_batch_iter(
@@ -578,7 +594,11 @@ class DistributedTrainer:
             assert (
                 self.grad_accumulator.fp32_grads_allreduce_handle is not None
             ), "No fp32_grads_allreduce_handle maybe you're using only a single training process"
-            self.grad_accumulator.fp32_grads_allreduce_handle.wait()
+            if isinstance(self.grad_accumulator.fp32_grads_allreduce_handle, list):
+                for handle in self.grad_accumulator.fp32_grads_allreduce_handle:
+                    handle.wait()
+            else:
+                self.grad_accumulator.fp32_grads_allreduce_handle.wait()
 
         nanotron_timer("sync_gradients").start()
         # Sync tied weights
@@ -725,6 +745,67 @@ class DistributedTrainer:
             # LogItem("hardware_tflops_per_gpu", hardware_tflops, "human_format"),  # , ".2f"),
             LogItem("eta", str(datetime.timedelta(seconds=eta_seconds))),
         ]
+
+        def get_cpu_logitems():
+            # Add CPU memory usage metrics
+            memory = psutil.virtual_memory()
+            cpu_memory_log_entries = [
+                LogItem("cpu_memory/total", memory.total, "human_format"),
+                LogItem("cpu_memory/available_bytes", memory.available, "human_format"),
+                LogItem("cpu_memory/used_bytes", memory.used, "human_format"),
+                LogItem("cpu_memory/percent", memory.percent, "human_format"),
+            ]
+
+            # Add swap memory usage metrics
+            swap = psutil.swap_memory()
+            swap_memory_log_entries = [
+                LogItem("swap_memory/total", swap.total, "human_format"),
+                LogItem("swap_memory/free", swap.free, "human_format"),
+                LogItem("swap_memory/used", swap.used, "human_format"),
+                LogItem("swap_memory/percent", swap.percent, "human_format"),
+            ]
+
+            # Add detailed process memory info for main process and workers
+            process = psutil.Process()
+            worker_processes = []
+            # Get all child processes
+            try:
+                worker_processes = process.children(recursive=True)
+            except psutil.NoSuchProcess:
+                pass
+
+            # Log main process memory
+            mem_info = process.memory_info()
+            process_memory_log_entries = [
+                LogItem("process_memory/rss", mem_info.rss, "human_format"),
+                LogItem("process_memory/shared", mem_info.shared, "human_format"),
+                LogItem("process_memory/vms", mem_info.vms, "human_format"),
+                LogItem("process_memory/text", mem_info.text, "human_format"),
+                LogItem("process_memory/data", mem_info.data, "human_format"),
+                LogItem("process_memory/lib", mem_info.lib, "human_format"),
+                LogItem("process_memory/dirty", mem_info.dirty, "human_format"),
+            ]
+
+            # Log worker process memory
+            for idx, worker in enumerate(worker_processes):
+                try:
+                    worker_mem = worker.memory_info()
+                    process_memory_log_entries.extend(
+                        [
+                            LogItem(f"worker_{idx}_memory/rss", worker_mem.rss, "human_format"),
+                            LogItem(f"worker_{idx}_memory/shared", worker_mem.shared, "human_format"),
+                            LogItem(f"worker_{idx}_memory/vms", worker_mem.vms, "human_format"),
+                            LogItem(f"worker_{idx}_memory/text", worker_mem.text, "human_format"),
+                            LogItem(f"worker_{idx}_memory/data", worker_mem.data, "human_format"),
+                            LogItem(f"worker_{idx}_memory/lib", worker_mem.lib, "human_format"),
+                            LogItem(f"worker_{idx}_memory/dirty", worker_mem.dirty, "human_format"),
+                        ]
+                    )
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+
+            return cpu_memory_log_entries + swap_memory_log_entries + process_memory_log_entries
+
         if z_loss_avg is not None:
             basic_log_entries.insert(6, LogItem("z_loss", z_loss_avg.item(), "human_format"))  # , "1.6E"),
 
@@ -738,6 +819,7 @@ class DistributedTrainer:
             assert self.loggerwriter is not None, "loggerwriter should be defined on logger ranks"
             self.loggerwriter.add_scalars_from_list(basic_log_entries, self.iteration_step)
 
+        basic_log_entries.extend(get_cpu_logitems())
         for timer_name, timer in nanotron_timer.items():
             basic_log_entries.append(LogItem(f"timers/{timer_name}", timer.elapsed, ".2f"))
 

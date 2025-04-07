@@ -1,3 +1,4 @@
+import os
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -170,12 +171,28 @@ class Timers:
     """A collection of timers for tracking execution time in Nanotron."""
 
     _instance = None
+    _enabled = os.environ.get("ENABLE_TIMERS", "1") == "1"  # Add global enable/disable flag
 
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super(Timers, cls).__new__(cls)
             cls._instance._timers: Dict[str, TimerRecord] = {}
         return cls._instance
+
+    @classmethod
+    def enable(cls) -> None:
+        """Enable all timing operations."""
+        cls._enabled = True
+
+    @classmethod
+    def disable(cls) -> None:
+        """Disable all timing operations."""
+        cls._enabled = False
+
+    @classmethod
+    def is_enabled(cls) -> bool:
+        """Check if timers are enabled."""
+        return cls._enabled
 
     def __call__(
         self, name: str, timer_type: Union[TimerType, str] = TimerType.CPU, cuda_sync: bool = True
@@ -193,6 +210,10 @@ class Timers:
                         (or 'cpu'/'cuda' strings)
             cuda_sync: Whether to perform torch.cuda.synchronize() for more accurate CUDA timing
         """
+        if not self._enabled:
+            # Return a dummy timer that does nothing when timing is disabled
+            return TimerRecord(name="dummy", timer_type=TimerType.CPU)
+
         if isinstance(timer_type, str):
             timer_type = TimerType(timer_type)
 
