@@ -17,6 +17,11 @@ Work = dist.Work if torch_version_above_1_13 else dist._Work
 # Note: When debugging communication hangs, try decreasing this timeout.
 default_pg_timeout = datetime.timedelta(minutes=20)
 
+try:
+    from torch.distributed.distributed_c10d import _coalescing_manager
+except ImportError:
+    _coalescing_manager = None
+
 
 def new_group(  # pylint: disable=function-redefined
     ranks=None, timeout=default_pg_timeout, backend=None, pg_options=None

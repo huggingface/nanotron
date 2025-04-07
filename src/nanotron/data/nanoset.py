@@ -4,6 +4,7 @@ import os
 import warnings
 from typing import Dict, List, Tuple, Union
 
+import numba
 import numpy as np
 import torch
 from datatrove.utils.dataset import DatatroveFolderDataset
@@ -52,7 +53,9 @@ class Nanoset(torch.utils.data.Dataset):
         self.sequence_length = sequence_length
         self.eos_token_id = eos_token_id
         self.return_positions = return_positions
-        assert self.return_positions or self.eos_token_id is not None, "If return_positions is True, eos_token_id must be defined"
+        assert (
+            self.return_positions or self.eos_token_id is not None
+        ), "If return_positions is True, eos_token_id must be defined"
         # Number of bytes for the tokens stored in the processed dataset files. 2 for vocab sizes < 65535, 4 otherwise
         self.token_size = token_size
         self.train_split_num_samples = train_split_num_samples
@@ -69,7 +72,7 @@ class Nanoset(torch.utils.data.Dataset):
                     recursive=False,
                     token_size=self.token_size,
                     shuffle=True,
-                    return_positions=self.return_positions, # if set to True, the position ids are directly build datatrove
+                    return_positions=self.return_positions,  # if set to True, the position ids are directly build datatrove
                     eos_token_id=self.eos_token_id,
                 )
             )
@@ -88,8 +91,8 @@ class Nanoset(torch.utils.data.Dataset):
             self.dataset_weights
         ), f"Specified {len(self.dataset_weights)} weights but {len(dataset_folders)} datasets were provided."
         ## Build dataset index and dataset sample index
-        self.dataset_index, self.dataset_sample_index = self.build_nanoset_index()
-        # self.dataset_index, self.dataset_sample_index = self.new_build_nanoset_index() # TODO: Fix this
+        # self.dataset_index, self.dataset_sample_index = self.build_nanoset_index()
+        self.dataset_index, self.dataset_sample_index = self.new_build_nanoset_index()  # TODO: Fix this
 
         self.print_nanoset_info()
 
@@ -186,6 +189,18 @@ class Nanoset(torch.utils.data.Dataset):
         # Compute samples per epoch and number of epochs
         samples_per_epoch = sum(self.dataset_lengths)
         num_epochs = int(self.train_split_num_samples / samples_per_epoch) + 1
+
+        # Debug Numba cache
+        logger.info(
+            f"[Nanoset] Building random access index with {samples_per_epoch} samples per epoch and `dataset_weights` and `dataset_lengths` in config"
+        )
+        if not numba.config.CACHE_DIR:
+            logger.warning("[Nanoset] Numba cache is disabled")
+        elif os.path.exists(numba.config.CACHE_DIR):
+            logger.info(
+                f"[Nanoset] Cache dir is set to: {numba.config.CACHE_DIR} | Numba cache files: {os.listdir(numba.config.CACHE_DIR)}"
+            )
+
         # Build the dataset indexes for 1 epoch
         dataset_index, dataset_sample_index = build_nanoset_index_helper(
             n_samples=samples_per_epoch, weights=self.dataset_weights, dataset_sizes=self.dataset_lengths
@@ -235,6 +250,10 @@ def build_nanoset_index_helper(
 
     # Initialize buffer for number of samples used for each dataset
     current_samples = np.zeros((len(weights),), dtype="long")
+
+    # TODO: Add 0.5% (the 1.005 factor) so in case the bleding dataset does
+    # not uniformly distribute the number of samples, we still have
+    # samples left to feed to the network
 
     # Iterate over all samples
     for sample_idx in range(n_samples):

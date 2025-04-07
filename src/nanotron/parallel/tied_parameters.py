@@ -164,4 +164,6 @@ def sync_tied_weights_gradients(
             group_ranks_and_reduce_op_to_tensors_to_reduce[(group_ranks, tied_info.reduce_op)] = [tied_grad]
 
     for (group_ranks, reduce_op), tensors in group_ranks_and_reduce_op_to_tensors_to_reduce.items():
-        dist.all_reduce_coalesced(tensors=tensors, op=reduce_op, group=parallel_context.world_ranks_to_pg[group_ranks])
+        with dist._coalescing_manager(group=parallel_context.world_ranks_to_pg[group_ranks], async_ops=False):
+            for tensor in tensors:
+                dist.all_reduce(tensor, op=reduce_op, group=parallel_context.world_ranks_to_pg[group_ranks])

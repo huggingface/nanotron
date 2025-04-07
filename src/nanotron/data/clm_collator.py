@@ -47,9 +47,6 @@ class DataCollatorForCLM:
                 "label_mask": TensorPointer(group_rank=self.output_pp_rank),
             }
 
-        # Make sure we load only what's necessary, ie we only load a `input_ids` column.
-        assert all(list(example.keys()) == ["input_ids"] for example in examples)
-
         # TODO @nouamanetazi: Is it better to have examples as np.array or torch.Tensor?
         input_ids = vstack([examples[i]["input_ids"] for i in range(len(examples))])  # (b, s)
         batch_size, expanded_input_length = input_ids.shape
@@ -150,10 +147,7 @@ class DataCollatorForCLMWithPositionIds:
     input_pp_rank: int
     output_pp_rank: int
     parallel_context: ParallelContext
-    sequence_sep_tokens: List[
-        int
-    ]  # [tokenizer.bos_token, tokenizer.eos_token, tokenizer.pad_token, tokenizer.unk_token]
-    # cumul_doc_lens: List[int] # Cumulative length of each datatrove_dataset in the Nanoset
+    use_doc_masking: bool = True
 
     def __call__(self, examples: List[Dict[str, List[np.ndarray]]]) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
         # Process the case when current rank doesn't require data
@@ -207,7 +201,7 @@ class DataCollatorForCLMWithPositionIds:
         if current_pp_rank == self.input_pp_rank:
             result["input_ids"] = input_ids[:, :-1]
 
-            if "positions" in examples[0]:
+            if "positions" in examples[0] and self.use_doc_masking:
                 # Use provided position_ids if available
                 position_ids = np.vstack([examples[i]["positions"] for i in range(len(examples))])
                 # Simply drop the last position ID for each example
@@ -230,7 +224,7 @@ class DataCollatorForCLMWithPositionIds:
             result["label_ids"] = input_ids[:, 1:]
 
             # Create label mask based on position_ids
-            if "positions" in examples[0]:
+            if "positions" in examples[0] and self.use_doc_masking:
                 # Get position_ids for the labels (shifted right by 1 to align with label_ids)
                 position_ids = np.vstack([examples[i]["positions"] for i in range(len(examples))])
                 position_ids = position_ids[:, 1:]  # Shift right to align with labels
@@ -282,4 +276,8 @@ class DataCollatorForCLMWithPositionIds:
         #         assert v.is_contiguous(), f"{k} is not contiguous"
         #         assert not v.is_cuda, f"{k} is in cuda. Bad for pinning memory"
 
+        # debug: import tokenizer and print tokenizer.decode(result["input_ids"][0])
+        # from transformers import AutoTokenizer
+        # tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-1B")
+        # print(tokenizer.decode(result["input_ids"][0]))
         return result

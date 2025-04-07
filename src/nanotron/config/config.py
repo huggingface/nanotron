@@ -151,6 +151,11 @@ class NanosetDatasetsArgs:
     token_size_in_bytes: Optional[int] = None
     return_positions: Optional[bool] = False
 
+    # Tokenized bytes dataset config
+    skip_in_stream: Optional[bool] = True
+    pad_samples_to_global_batch_size: Optional[bool] = False
+    dataset_max_tokens: Optional[List[int]] = None
+
     def __post_init__(self):
         if isinstance(self.dataset_folder, str):  # Case 1: 1 Dataset folder
             self.dataset_folder = [self.dataset_folder]
@@ -442,7 +447,7 @@ class Config:
 
         if self.s3_upload is not None:
             self.s3_upload.__post_init__()
-        
+
         # Some final sanity checks across separate arguments sections:
         if self.profiler is not None and self.profiler.profiler_export_path is not None:
             total_profiling_steps = self.profiler.skip_first + self.profiler.repeat * (
@@ -532,6 +537,10 @@ class Config:
 
         # Sanity test config can be reloaded
         _ = get_config_from_file(file_path, config_class=self.__class__)
+
+    def get_yaml(self):
+        config_dict = serialize(self)
+        return yaml.dump(config_dict)
 
     @classmethod
     def load_from_yaml(cls, file_path: str):

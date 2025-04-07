@@ -10,7 +10,7 @@ from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.config import Config, ParallelismArgs
 from nanotron.config.models_config import Qwen2Config, RandomInit, SpectralMupInit
-from nanotron.logging import log_rank
+from nanotron.logging import log_rank, nanotron_timer
 from nanotron.models import NanotronModel
 from nanotron.nn.activations import ACT2FN
 from nanotron.nn.attention import ALL_ATTENTION_FUNCTIONS, get_attention_mask
@@ -209,13 +209,15 @@ class Qwen2Attention(nn.Module):
         self.attention = CoreAttention(config, tp_pg, cp_pg, layer_idx)
         self.simple_causal_mask = True
         self._use_qkv_packed = config._use_qkv_packed
-
+        self.layer_idx = layer_idx
         # TODO: support doc masking / SWA / SFT / inference
 
     def forward(
         self,
         hidden_states: torch.Tensor,  # [batch_size*seq_length, hidden_size]
         position_ids: torch.Tensor,  # [batch_size, seq_length] where -1 is padding
+        cu_seqlens: Optional[torch.Tensor] = None,
+        max_seqlen: Optional[int] = None,
     ):
         # [0, 1, 2, 3, 4, 0, 1, 2, -1, -1, -1] # 2 documents with 5 and 3 tokens then padding
         # [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10] # 1 document with 11 tokens
@@ -225,9 +227,10 @@ class Qwen2Attention(nn.Module):
         seq_length = position_ids.shape[1]
         position_ids = position_ids.view(-1)  # [batch_size*seq_length]
 
-        qkv = self.qkv_proj(hidden_states)
+        with nanotron_timer(f"qkv_proj_{self.layer_idx}", "cuda"):
+            qkv = self.qkv_proj(hidden_states)
         if self._use_qkv_packed:
-            attn_output = self._forward_packed(qkv, seq_length, position_ids)
+            attn_output = self._forward_packed(qkv, seq_length, position_ids, cu_seqlens, max_seqlen)
         else:
             q, k, v = qkv.split(
                 [self.local_q_size, self.local_kv_size, self.local_kv_size], dim=-1
@@ -248,31 +251,29 @@ class Qwen2Attention(nn.Module):
             )  # [b*s, num_kv_heads, head_dim]
 
             attn_output = self.attention(q, k, v, position_ids=position_ids, seq_length=seq_length)
-        output = self.o_proj(attn_output)
-        return {"hidden_states": output, "position_ids": position_ids.view(-1, seq_length)}
 
-    def _forward_packed(self, qkv, seq_length, position_ids):
-        q = qkv[..., : self.local_num_heads * self.head_dim]  # Not contiguous, similar to flash_attn
-        kv = qkv[..., self.local_num_heads * self.head_dim :]  # Not contiguous, similar to flash_attn
-        q = q.view(-1, seq_length, self.local_num_heads, self.head_dim)
-        kv = kv.view(-1, seq_length, 2, self.local_num_kv_heads, self.head_dim)
-        q, kv = self.rotary_emb(
-            q, kv, seqlen_offset=0, max_seqlen=None
-        )  # TODO: should we use position_ids here? flash_attn doesn't
-        q = q.view(-1, self.local_num_heads, self.head_dim)
-        kv = kv.view(-1, 2, self.local_num_kv_heads, self.head_dim)
+        with nanotron_timer(f"o_proj_{self.layer_idx}", "cuda"):
+            output = self.o_proj(attn_output)
+        return {"hidden_states": output}
 
-        # Compute cu_seqlens
-        start_indices = torch.where(position_ids == 0)[0]
-        cu_seqlens = torch.cat(
-            [start_indices, torch.tensor([position_ids.numel()], dtype=torch.int32, device=start_indices.device)]
-        ).to(torch.int32)
+    def _forward_packed(self, qkv, seq_length, position_ids, cu_seqlens, max_seqlen):
+        with nanotron_timer(f"rotary_{self.layer_idx}", "cuda"):
+            q = qkv[..., : self.local_num_heads * self.head_dim]  # Not contiguous, similar to flash_attn
+            kv = qkv[..., self.local_num_heads * self.head_dim :]  # Not contiguous, similar to flash_attn
+            q = q.view(-1, seq_length, self.local_num_heads, self.head_dim)
+            kv = kv.view(-1, seq_length, 2, self.local_num_kv_heads, self.head_dim)
+            q, kv = self.rotary_emb(
+                q, kv, seqlen_offset=0, max_seqlen=None
+            )  # TODO: should we use position_ids here? flash_attn doesn't
+            q = q.view(-1, self.local_num_heads, self.head_dim)
+            kv = kv.view(-1, 2, self.local_num_kv_heads, self.head_dim)
 
-        max_seqlen = seq_length  # TODO: should this be max position_ids?
+        # max_seqlen = seq_length  # TODO: should this be max position_ids?
 
         assert cu_seqlens.dtype == torch.int32
         assert max_seqlen is not None
         assert isinstance(max_seqlen, int)
+        nanotron_timer(f"flash_attn_{self.layer_idx}", "cuda").start()
         attn_output = flash_attn_varlen_kvpacked_func(
             q,
             kv,
@@ -287,8 +288,12 @@ class Qwen2Attention(nn.Module):
             window_size=(-1, -1),  # TODO: fix
             deterministic=False,
         )  # Not contiguous, similar to flash_attn
+        nanotron_timer(f"flash_attn_{self.layer_idx}", "cuda").end()
         # flash_attn use rearrange instead of reshape https://github.com/Dao-AILab/flash-attention/blob/1a58058a6da83bd7baaf4c512e8a1abe0240bb77/flash_attn/modules/mha.py#L730
-        return attn_output.reshape(-1, self.local_num_heads * self.head_dim)  # [b*s, num_heads*head_dim]
+        nanotron_timer(f"reshape_{self.layer_idx}", "cuda").start()
+        attn_output = attn_output.reshape(-1, self.local_num_heads * self.head_dim)  # [b*s, num_heads*head_dim]
+        nanotron_timer(f"reshape_{self.layer_idx}", "cuda").end()
+        return attn_output  # [b*s, num_heads*head_dim]
 
 
 class Qwen2MLP(nn.Module):
@@ -567,46 +572,65 @@ class Qwen2DecoderLayer(nn.Module):
             )
 
         self.recompute_layer = parallel_config.recompute_layer
+        self.layer_idx = layer_idx
 
     def _core_forward(
         self,
         hidden_states: Union[torch.Tensor, TensorPointer],  # [batch_size*seq_length, hidden_size]
         position_ids: Union[torch.Tensor, TensorPointer],  # [batch_size, seq_length] where -1 is padding
+        cu_seqlens: Optional[torch.Tensor] = None,
+        max_seqlen: Optional[int] = None,
     ) -> List[Union[torch.Tensor, TensorPointer]]:
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
 
-        output = self.attn(hidden_states=hidden_states, position_ids=position_ids)
+        nanotron_timer(f"attn_{self.layer_idx}", "cuda").start()
+        output = self.attn(
+            hidden_states=hidden_states, position_ids=position_ids, cu_seqlens=cu_seqlens, max_seqlen=max_seqlen
+        )
+        nanotron_timer(f"attn_{self.layer_idx}", "cuda").end()
         hidden_states = output["hidden_states"]
         hidden_states = hidden_states + residual
 
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
+        nanotron_timer(f"mlp_{self.layer_idx}", "cuda").start()
         hidden_states = self.mlp(hidden_states=hidden_states)["hidden_states"]
+        nanotron_timer(f"mlp_{self.layer_idx}", "cuda").end()
         hidden_states = hidden_states + residual
 
-        return hidden_states, output["position_ids"]
+        return hidden_states, position_ids, cu_seqlens, max_seqlen
 
     def _checkpointed_forward(
         self,
         hidden_states: torch.Tensor,
         position_ids: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        return CheckpointFunction.apply(self._core_forward, True, hidden_states, position_ids)
+        cu_seqlens: Optional[torch.Tensor] = None,
+        max_seqlen: Optional[int] = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        return CheckpointFunction.apply(self._core_forward, True, hidden_states, position_ids, cu_seqlens, max_seqlen)
 
     def forward(
         self,
         hidden_states: Union[torch.Tensor, TensorPointer],
         position_ids: Union[torch.Tensor, TensorPointer],
+        cu_seqlens: Optional[torch.Tensor] = None,
+        max_seqlen: Optional[int] = None,
     ) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
         if self.recompute_layer and not isinstance(hidden_states, TensorPointer):
-            hidden_states, position_ids = self._checkpointed_forward(hidden_states, position_ids)
+            hidden_states, position_ids, cu_seqlens, max_seqlen = self._checkpointed_forward(
+                hidden_states, position_ids, cu_seqlens, max_seqlen
+            )
         else:
-            hidden_states, position_ids = self._core_forward(hidden_states, position_ids)
+            hidden_states, position_ids, cu_seqlens, max_seqlen = self._core_forward(
+                hidden_states, position_ids, cu_seqlens, max_seqlen
+            )
 
         return {
             "hidden_states": hidden_states,
             "position_ids": position_ids,
+            "cu_seqlens": cu_seqlens,
+            "max_seqlen": max_seqlen,
         }
 
 
@@ -674,8 +698,8 @@ class Qwen2Model(nn.Module):
                         "cp_pg": parallel_context.cp_pg,
                         "layer_idx": layer_idx,
                     },
-                    module_input_keys={"hidden_states", "position_ids"},
-                    module_output_keys={"hidden_states", "position_ids"},
+                    module_input_keys={"hidden_states", "position_ids", "cu_seqlens", "max_seqlen"},
+                    module_output_keys={"hidden_states", "position_ids", "cu_seqlens", "max_seqlen"},
                 )
                 for layer_idx in range(config.num_hidden_layers)
             ]
@@ -711,18 +735,38 @@ class Qwen2Model(nn.Module):
         input_ids: Union[torch.Tensor, TensorPointer],  # [batch_size, seq_length]
         position_ids: Union[torch.Tensor, TensorPointer],  # [batch_size, seq_length] where -1 is padding
     ):
+        nanotron_timer("token_position_embeddings", "cuda").start()
         output = self.token_position_embeddings(input_ids=input_ids, position_ids=position_ids)
+        nanotron_timer("token_position_embeddings", "cuda").end()
+
+        # Compute cu_seqlens
+        start_indices = (position_ids.view(-1) == 0).nonzero(as_tuple=True)[
+            0
+        ]  # equivalent to torch.where(position_ids == 0)[0]
+        cu_seqlens = torch.cat(
+            [start_indices, torch.tensor([position_ids.numel()], dtype=torch.int32, device=start_indices.device)],
+            dim=0,
+        ).to(torch.int32)
         decoder_states = {
             "hidden_states": output["input_embeds"],
             "position_ids": output["position_ids"],
+            "cu_seqlens": cu_seqlens,
+            # "max_seqlen": position_ids.max().item() + 1,
+            "max_seqlen": int(
+                position_ids.shape[1]
+            ),  # TODO @nouamane: check which one flash_attn uses. I found no tput difference
         }
 
-        for decoder_layer in self.decoder:
+        for i, decoder_layer in enumerate(self.decoder):
+            nanotron_timer(f"decoder_{i}", "cuda").start()
             decoder_states = decoder_layer(**decoder_states)
+            nanotron_timer(f"decoder_{i}", "cuda").end()
 
         hidden_states = self.final_layer_norm(input=decoder_states["hidden_states"])["hidden_states"]
 
+        nanotron_timer("lm_head", "cuda").start()
         sharded_logits = self.lm_head(x=hidden_states)["logits"]
+        nanotron_timer("lm_head", "cuda").end()
 
         return sharded_logits
 
@@ -849,15 +893,19 @@ class Qwen2ForTraining(NanotronModel):
         label_ids: Union[torch.Tensor, TensorPointer],
         label_mask: Union[torch.Tensor, TensorPointer],
     ) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
+        nanotron_timer("model", "cuda").start()
         sharded_logits = self.model(
             input_ids=input_ids,
             position_ids=position_ids,
         )
+        nanotron_timer("model", "cuda").end()
+        nanotron_timer("loss", "cuda").start()
         loss = self.loss(
             sharded_logits=sharded_logits,
             label_ids=label_ids,
             label_mask=label_mask,
         )
+        nanotron_timer("loss", "cuda").end()
         if self.config.z_loss_enabled:
             return {"loss": loss["loss"], "z_loss": loss["z_loss"]}
         else:
