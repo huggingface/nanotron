@@ -26,6 +26,7 @@ class TimerRecord:
     end_time: float = 0.0
     running: bool = False
     call_count: int = 0
+    cuda_sync: bool = False  # Option to add CUDA synchronization for more accurate timings
 
     # For CPU timers we still track total_time
     _cpu_total_time: float = 0.0
@@ -51,6 +52,9 @@ class TimerRecord:
 
         if self.timer_type == TimerType.CUDA:
             if torch.cuda.is_available():
+                # Synchronize before starting timing if requested
+                if self.cuda_sync:
+                    torch.cuda.synchronize()
                 # Create a new start event - we'll create the end event when end() is called
                 self._current_start_event = torch.cuda.Event(enable_timing=True)
                 self._current_start_event.record()
@@ -72,6 +76,9 @@ class TimerRecord:
 
         if self.timer_type == TimerType.CUDA:
             if torch.cuda.is_available() and self._current_start_event is not None:
+                # Synchronize before ending timing if requested
+                if self.cuda_sync:
+                    torch.cuda.synchronize()
                 # Create and record an end event
                 end_event = torch.cuda.Event(enable_timing=True)
                 end_event.record()
@@ -121,6 +128,8 @@ class TimerRecord:
         if self.timer_type == TimerType.CUDA:
             if torch.cuda.is_available() and self._current_start_event is not None:
                 # Create a temporary end event to measure elapsed time so far
+                if self.cuda_sync:
+                    torch.cuda.synchronize()
                 tmp_end_event = torch.cuda.Event(enable_timing=True)
                 tmp_end_event.record()
                 tmp_end_event.synchronize()
@@ -168,7 +177,9 @@ class Timers:
             cls._instance._timers: Dict[str, TimerRecord] = {}
         return cls._instance
 
-    def __call__(self, name: str, timer_type: Union[TimerType, str] = TimerType.CPU) -> TimerRecord:
+    def __call__(
+        self, name: str, timer_type: Union[TimerType, str] = TimerType.CPU, cuda_sync: bool = True
+    ) -> TimerRecord:
         """Get or create a timer with the given name.
 
         Can be used as a decorator, context manager, or directly:
@@ -180,6 +191,7 @@ class Timers:
             name: Name of the timer
             timer_type: Type of timer, either TimerType.CPU or TimerType.CUDA
                         (or 'cpu'/'cuda' strings)
+            cuda_sync: Whether to perform torch.cuda.synchronize() for more accurate CUDA timing
         """
         if isinstance(timer_type, str):
             timer_type = TimerType(timer_type)
@@ -188,10 +200,13 @@ class Timers:
             # Being used as a decorator with default settings
             func = name
             timer_name = func.__name__
-            return self._create_timer_decorator(timer_name, TimerType.CPU)(func)
+            return self._create_timer_decorator(timer_name, TimerType.CPU, cuda_sync)(func)
 
         if name not in self._timers:
-            self._timers[name] = TimerRecord(name=name, timer_type=timer_type)
+            self._timers[name] = TimerRecord(name=name, timer_type=timer_type, cuda_sync=cuda_sync)
+        else:
+            # Update the cuda_sync option if the timer already exists
+            self._timers[name].cuda_sync = cuda_sync
 
         # Check if we're being called as a decorator
         if not callable(name):
@@ -200,9 +215,9 @@ class Timers:
             return timer_record
 
         # If we get here, we're being called as @nanotron_timer("name", timer_type)
-        return self._create_timer_decorator(name, timer_type)
+        return self._create_timer_decorator(name, timer_type, cuda_sync)
 
-    def _create_timer_decorator(self, name, timer_type):
+    def _create_timer_decorator(self, name, timer_type, cuda_sync=False):
         """Create a decorator that times the execution of a function."""
 
         def decorator(func):
@@ -210,7 +225,7 @@ class Timers:
 
             @functools.wraps(func)
             def wrapper(*args, **kwargs):
-                with self(name, timer_type):
+                with self(name, timer_type, cuda_sync):
                     return func(*args, **kwargs)
 
             return wrapper

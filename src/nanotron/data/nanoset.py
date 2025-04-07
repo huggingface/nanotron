@@ -251,6 +251,10 @@ def build_nanoset_index_helper(
     # Initialize buffer for number of samples used for each dataset
     current_samples = np.zeros((len(weights),), dtype="long")
 
+    # TODO: Add 0.5% (the 1.005 factor) so in case the bleding dataset does
+    # not uniformly distribute the number of samples, we still have
+    # samples left to feed to the network
+
     # Iterate over all samples
     for sample_idx in range(n_samples):
         # Convert sample index to float for comparison against weights
