@@ -19,7 +19,7 @@ from nanotron.data.dataloader import get_dataloader_worker_init
 from nanotron.data.nemo_dataset import BlendableDataset
 from nanotron.data.nemo_dataset.dataset_utils import compile_helper
 from nanotron.data.s3_utils import BOTO3_AVAILABLE, _get_s3_file_list, _get_s3_object, _stream_file
-from nanotron.data.samplers import MegatronPretrainingSampler
+from nanotron.data.samplers import MegatronPretrainingRandomSampler
 from nanotron.logging import human_format, log_rank
 from nanotron.parallel import ParallelContext
 
@@ -444,7 +444,9 @@ def get_tb_datasets(
         if not weights:
             weights = [1] * len(datasets)
 
-        outputs_dataset = BlendableDataset(datasets, weights, train_num_samples, parallel_context=parallel_context)
+        outputs_dataset = BlendableDataset(
+            datasets, weights, train_num_samples, parallel_context=parallel_context, seed=seed
+        )
 
     log_rank("Streamable datasets ready.", logger=logger, level=logging.INFO, rank=0)
     train_data_log = TrainDataLog(
@@ -490,7 +492,8 @@ def get_tb_dataloader(
         f"Building dataloader with consumed samples: {consumed_samples}", logger=logger, level=logging.INFO, rank=0
     )
     # Megatron sampler
-    batch_sampler = MegatronPretrainingSampler(
+    # batch_sampler = MegatronPretrainingSampler(
+    batch_sampler = MegatronPretrainingRandomSampler(
         total_samples=num_samples,
         consumed_samples=consumed_samples,
         micro_batch_size=micro_batch_size,

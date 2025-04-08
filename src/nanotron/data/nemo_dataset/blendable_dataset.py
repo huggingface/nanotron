@@ -41,7 +41,12 @@ class BlendedSubsetSplitLog:
 
 class BlendableDataset(torch.utils.data.Dataset):
     def __init__(
-        self, datasets: List["GPTDataset"], weights: List[float], size: int, parallel_context: ParallelContext
+        self,
+        datasets: List["GPTDataset"],
+        weights: List[float],
+        size: int,
+        parallel_context: ParallelContext,
+        seed: int,
     ):
         self.datasets = datasets
         num_datasets = len(datasets)
@@ -62,6 +67,7 @@ class BlendableDataset(torch.utils.data.Dataset):
         self.dataset_index = np.zeros(self.size, dtype=np.int16)
         self.dataset_sample_index = np.zeros(self.size, dtype=np.int64)
         self.dataset_num_samples = np.zeros(num_datasets, dtype=np.int64)
+        self.random_seed = seed
 
         with main_rank_first(parallel_context.world_pg):
             try:
@@ -99,6 +105,11 @@ class BlendableDataset(torch.utils.data.Dataset):
             blended_per_subset_samples=self.dataset_num_samples.tolist(),
             blended_subset=[d.subset_log for d in self.datasets],
         )
+
+        # numpy_random_state = np.random.RandomState(self.random_seed)
+        # numpy_random_state.shuffle(self.dataset_index)
+        # numpy_random_state = np.random.RandomState(self.random_seed)
+        # numpy_random_state.shuffle(self.dataset_sample_index)
 
     def __len__(self):
         return self.size
