@@ -309,6 +309,7 @@ class TokenizedBytesFolderDataset(DatatroveFolderDataset):
         skip_in_stream: bool = True,
         num_samples: Optional[int] = None,
     ):
+        log_rank("Using DatatroveFolderDataset", logger=logger, level=logging.INFO, rank=0)
         super().__init__(
             folder_path=folder_path,
             seq_len=seq_len,
@@ -338,6 +339,23 @@ class TokenizedBytesFolderDataset(DatatroveFolderDataset):
             files_order=[str(f.file_path) for f in self.files],
         )
 
+    def __getitem__(self, item):
+        epoch_item = item % len(self)
+        # if item >= len(self):
+        #     raise IndexError(
+        #         f"Index {item} requested for dataset {self.folder_path} (pattern: {self.filename_pattern}) "
+        #         f"but it only has size {len(self)}"
+        #     )
+        # check if we are in the same file as before
+        if not (self.lens[self.current_file] <= epoch_item < self.lens[self.current_file + 1]):
+            # figure out current file
+            self.current_file = bisect(self.lens, epoch_item) - 1
+        # subtract file starting offset
+        return self.files[self.current_file][epoch_item - self.lens[self.current_file]]
+
+    def __len__(self):
+        return self.lens[-1] if self.lens else 0
+
 
 def build_dataset(
     dataset_folder: str,
@@ -359,18 +377,25 @@ def build_dataset(
         seq_length ([type]): sequence length
         skip_in_stream (bool, optional): skip ahead in stream. Defaults to True.
     """
-    #    return OldTokenizedBytesFolderDataset(
-    #         dataset_folder,
-    #         seq_length,
-    #         filename_pattern=".*\\.ds$",
-    #         skip_in_stream=skip_in_stream,
-    #         max_tokens=max_tokens,
-    #         num_samples=num_samples,
-    #         skip_tokens=skip_tokens,  # # Optional number of tokens to skip at the beginning (We'll only train on the rest)
-    #         shuffle=shuffle,
-    #         seed=seed,
-    #         dtype=np.uint16 if token_size == 2 else np.uint32,
-    #     )
+    if not skip_in_stream:
+        log_rank(
+            "Using old tokenized bytes folder dataset because skip_in_stream is False",
+            logger=logger,
+            level=logging.INFO,
+            rank=0,
+        )
+        return OldTokenizedBytesFolderDataset(
+            dataset_folder,
+            seq_length,
+            filename_pattern=".*\\.ds$",
+            skip_in_stream=skip_in_stream,
+            max_tokens=max_tokens,
+            num_samples=num_samples,
+            skip_tokens=skip_tokens,  # # Optional number of tokens to skip at the beginning (We'll only train on the rest)
+            shuffle=shuffle,
+            seed=seed,
+            dtype=np.uint16 if token_size == 2 else np.uint32,
+        )
 
     return TokenizedBytesFolderDataset(
         folder_path=dataset_folder,
