@@ -538,6 +538,10 @@ class Config:
         # Sanity test config can be reloaded
         _ = get_config_from_file(file_path, config_class=self.__class__)
 
+    def get_yaml(self):
+        config_dict = serialize(self)
+        return yaml.dump(config_dict)
+
     @classmethod
     def load_from_yaml(cls, file_path: str):
         config_dict = yaml.load(open(file_path), Loader=SafeLoader)
