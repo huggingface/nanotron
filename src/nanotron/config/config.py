@@ -149,12 +149,11 @@ class NanosetDatasetsArgs:
     tokenizer_name: Optional[str] = None
     vocab_size: Optional[int] = None
     token_size_in_bytes: Optional[int] = None
-    return_positions: Optional[bool] = True
+    return_positions: Optional[bool] = True  # read positions stored in disk by datatrove
 
     # Tokenized bytes dataset config
     skip_in_stream: Optional[bool] = True
     pad_samples_to_global_batch_size: Optional[bool] = True
-    dataloader_type: Optional[str] = "single"  # single or cyclic
     dataset_max_tokens: Optional[List[int]] = None
 
     def __post_init__(self):

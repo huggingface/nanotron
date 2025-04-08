@@ -9,7 +9,7 @@ torchrun --nproc_per_node=8 run_train.py --config-file examples/config_tiny_llam
 """
 import argparse
 import time
-from typing import Dict, cast
+from typing import Dict, Optional, cast
 
 import nanotron.distributed as dist
 from nanotron import logging
@@ -36,6 +36,7 @@ from nanotron.helpers import (
 )
 from nanotron.logging import log_rank
 from nanotron.parallel.pipeline_parallel.utils import get_input_output_pp_ranks
+from nanotron.sanity_checks import sanity_check_dataloader
 from nanotron.trainer import DistributedTrainer
 from nanotron.utils import main_rank_first
 from torch.utils.data import DataLoader
@@ -60,6 +61,7 @@ def get_dataloader_from_data_stage(
     data: DataArgs,
     consumed_train_samples: int,
     num_remaining_train_steps: int,
+    sanity_check_dataloader_interval: Optional[int] = None,
 ):
     """
     Returns a dataloader for a given data stage.
@@ -207,7 +209,7 @@ def get_dataloader_from_data_stage(
             shuffle=True,
             seed=data.seed,
         )
-        train_dataloader = get_tb_dataloader(
+        dataloader = get_tb_dataloader(
             dataset=train_dataset,
             sequence_length=trainer.sequence_length,
             micro_batch_size=trainer.micro_batch_size,
@@ -283,14 +285,22 @@ def get_dataloader_from_data_stage(
         # )
         # dist.barrier()
 
-        return train_dataloader
     else:
         raise ValueError(f"Unhandled case of `self.config.data.dataset`. Got: {data.dataset}")
+
+    if sanity_check_dataloader_interval is not None:
+        sanity_check_dataloader(
+            dataloader,
+            tokenizer_path=trainer.config.tokenizer.tokenizer_name_or_path,
+            sanity_check_dataloader_interval=sanity_check_dataloader_interval,
+        )
 
     return dataloader
 
 
-def get_dataloader(trainer: DistributedTrainer) -> Dict[str, DataLoader]:
+def get_dataloader(
+    trainer: DistributedTrainer, sanity_check_dataloader_interval: Optional[int] = None
+) -> Dict[str, DataLoader]:
     dataloaders = {}
 
     # Print training plan
@@ -323,6 +333,7 @@ def get_dataloader(trainer: DistributedTrainer) -> Dict[str, DataLoader]:
                 stage.data,
                 consumed_train_samples=consumed_train_samples,
                 num_remaining_train_steps=num_remaining_train_steps,
+                sanity_check_dataloader_interval=sanity_check_dataloader_interval,
             )
             if stage_idx == 0
             else lambda stage=stage: get_dataloader_from_data_stage(
@@ -330,6 +341,7 @@ def get_dataloader(trainer: DistributedTrainer) -> Dict[str, DataLoader]:
                 stage.data,
                 consumed_train_samples=consumed_train_samples,
                 num_remaining_train_steps=num_remaining_train_steps,
+                sanity_check_dataloader_interval=sanity_check_dataloader_interval,
             )
         )
         dataloaders[stage.name] = dataloader
@@ -339,6 +351,12 @@ def get_dataloader(trainer: DistributedTrainer) -> Dict[str, DataLoader]:
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config-file", type=str, required=True, help="Path to the YAML or python config file")
+    parser.add_argument(
+        "--sanity-check-dataloader-interval",
+        type=int,
+        default=None,
+        help="Optional interval to print dataloader samples",
+    )
     return parser.parse_args()
 
 
@@ -348,7 +366,7 @@ if __name__ == "__main__":
 
     # Load trainer and data
     trainer = DistributedTrainer(config_file)
-    dataloader = get_dataloader(trainer)
+    dataloader = get_dataloader(trainer, args.sanity_check_dataloader_interval)
 
     # Train
     trainer.train(dataloader)
