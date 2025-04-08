@@ -374,7 +374,7 @@ class DistributedTrainer:
                     name=run_name,
                     config={"nanotron_config": self.config.as_dict()},
                     settings=wandb.Settings(
-                        # x_stats_sampling_interval=1.0,  # TODO: put back to default 15.0
+                        # x_stats_sampling_interval=1.0,  # default 15.0
                         # x_stats_disk_paths=("/scratch", "/fsx/nouamane/"),
                         x_stats_open_metrics_endpoints={"dcgm": "http://localhost:9104/metrics"},
                         x_stats_open_metrics_filters=["DCGM_FI_"],
@@ -771,13 +771,13 @@ class DistributedTrainer:
             # Log main process memory
             mem_info = process.memory_info()
             process_memory_log_entries = [
-                LogItem("process_memory/rss", mem_info.rss, "human_format"),
-                LogItem("process_memory/shared", mem_info.shared, "human_format"),
-                LogItem("process_memory/vms", mem_info.vms, "human_format"),
-                LogItem("process_memory/text", mem_info.text, "human_format"),
-                LogItem("process_memory/data", mem_info.data, "human_format"),
-                LogItem("process_memory/lib", mem_info.lib, "human_format"),
-                LogItem("process_memory/dirty", mem_info.dirty, "human_format"),
+                LogItem("process_memory/main/rss", mem_info.rss, "human_format"),
+                LogItem("process_memory/main/shared", mem_info.shared, "human_format"),
+                LogItem("process_memory/main/vms", mem_info.vms, "human_format"),
+                LogItem("process_memory/main/text", mem_info.text, "human_format"),
+                LogItem("process_memory/main/data", mem_info.data, "human_format"),
+                LogItem("process_memory/main/lib", mem_info.lib, "human_format"),
+                LogItem("process_memory/main/dirty", mem_info.dirty, "human_format"),
             ]
 
             # Log worker process memory
@@ -786,13 +786,13 @@ class DistributedTrainer:
                     worker_mem = worker.memory_info()
                     process_memory_log_entries.extend(
                         [
-                            LogItem(f"worker_{idx}_memory/rss", worker_mem.rss, "human_format"),
-                            LogItem(f"worker_{idx}_memory/shared", worker_mem.shared, "human_format"),
-                            LogItem(f"worker_{idx}_memory/vms", worker_mem.vms, "human_format"),
-                            LogItem(f"worker_{idx}_memory/text", worker_mem.text, "human_format"),
-                            LogItem(f"worker_{idx}_memory/data", worker_mem.data, "human_format"),
-                            LogItem(f"worker_{idx}_memory/lib", worker_mem.lib, "human_format"),
-                            LogItem(f"worker_{idx}_memory/dirty", worker_mem.dirty, "human_format"),
+                            LogItem(f"process_memory/worker_{idx}/rss", worker_mem.rss, "human_format"),
+                            LogItem(f"process_memory/worker_{idx}/shared", worker_mem.shared, "human_format"),
+                            LogItem(f"process_memory/worker_{idx}/vms", worker_mem.vms, "human_format"),
+                            LogItem(f"process_memory/worker_{idx}/text", worker_mem.text, "human_format"),
+                            LogItem(f"process_memory/worker_{idx}/data", worker_mem.data, "human_format"),
+                            LogItem(f"process_memory/worker_{idx}/lib", worker_mem.lib, "human_format"),
+                            LogItem(f"process_memory/worker_{idx}/dirty", worker_mem.dirty, "human_format"),
                         ]
                     )
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
@@ -813,10 +813,10 @@ class DistributedTrainer:
             assert self.loggerwriter is not None, "loggerwriter should be defined on logger ranks"
             self.loggerwriter.add_scalars_from_list(basic_log_entries, self.iteration_step)
 
-        if os.environ.get("DEBUG_CPU", "1") == "1":
+        if os.environ.get("DEBUG_CPU", "0") == "1":
             basic_log_entries.extend(get_cpu_logitems())
 
-        if os.environ.get("ENABLE_TIMERS", "1") == "1":
+        if os.environ.get("ENABLE_TIMERS", "0") == "1":
             for timer_name, timer in nanotron_timer.items():
                 basic_log_entries.append(LogItem(f"timers/{timer_name}", timer.elapsed, ".2f"))
 
