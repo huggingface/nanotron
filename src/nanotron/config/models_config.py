@@ -349,6 +349,7 @@ class TextConfig:
     router_aux_loss_coef: float = 0.001
     router_jitter_noise: float = 0.0
 
+    # TODO: can we deduplicate this?
     z_loss_enabled: bool = False
     z_loss_coefficient: float = 0.0001
 

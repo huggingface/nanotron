@@ -35,6 +35,7 @@ class StandardParametrizator(Parametrizator):
         super().__init__(config)
         self.MODULE_TO_PARAMETRIZE = {
             TensorParallelColumnLinear: self._parametrize_column_linear,
+            nn.Linear: self._parametrize_column_linear,
             TensorParallelRowLinear: self._parametrize_row_linear,
             TritonRMSNorm: self._parametrize_layer_norm,
             LlamaRMSNorm: self._parametrize_layer_norm,

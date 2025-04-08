@@ -259,7 +259,9 @@ class CoreAttention(nn.Module):
         ), f"Hidden size {config.hidden_size} must be divisible by number of attention heads {config.num_attention_heads}."
         self.d_qk = config.hidden_size // config.num_attention_heads
         self.d_v = config.hidden_size // config.num_attention_heads
-        self.is_using_mup = config.is_using_mup
+        # TODO: not hardcore, refactor this part
+        # self.is_using_mup = config.is_using_mup
+        self.is_using_mup = False
 
         self.checkpoint_attention = False  # Because flash_attn already does checkpointing
 
@@ -370,7 +372,9 @@ class CausalSelfAttention(nn.Module, AttachableStore):
         self.d_qk = config.hidden_size // config.num_attention_heads
         self.d_v = config.hidden_size // config.num_attention_heads
         self.d_model = config.hidden_size
-        self.is_using_mup = config.is_using_mup
+        # self.is_using_mup = config.is_using_mup
+        # TODO: not hardcore, refactor this part
+        self.is_using_mup = False
 
         # TODO @thomasw21: refactor so that we store that default in a single place.
         tp_mode = parallel_config.tp_mode if parallel_config is not None else TensorParallelLinearMode.ALL_REDUCE
