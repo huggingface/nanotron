@@ -374,11 +374,11 @@ class DistributedTrainer:
                     name=run_name,
                     config={"nanotron_config": self.config.as_dict()},
                     settings=wandb.Settings(
-                        x_stats_sampling_interval=1.0,  # TODO: put back to default 15.0
-                        x_stats_disk_paths=("/scratch", "/fsx/nouamane/"),
+                        # x_stats_sampling_interval=1.0,  # TODO: put back to default 15.0
+                        # x_stats_disk_paths=("/scratch", "/fsx/nouamane/"),
                         x_stats_open_metrics_endpoints={"dcgm": "http://localhost:9104/metrics"},
                         x_stats_open_metrics_filters=["DCGM_FI_"],
-                        x_file_stream_transmit_interval=1.0,
+                        # x_file_stream_transmit_interval=1.0,
                     ),
                 )
                 # save config file
@@ -569,10 +569,7 @@ class DistributedTrainer:
         if self.iteration_step < self.initial_iter_step + 5:
             log_memory(logger=logger, msg="Before train_batch_iter")
 
-        # DEBUG: sleep for 29800ms
-        # time.sleep(29800 / 1000)
-
-        nanotron_timer("train_batch_iter").start()
+        nanotron_timer("train_batch_iter", "cuda").start()
         with torch.profiler.record_function("train_batch_iter"):
             outputs = self.pipeline_engine.train_batch_iter(
                 model=self.model,
@@ -581,7 +578,7 @@ class DistributedTrainer:
                 nb_microbatches=self.n_micro_batches_per_batch,
                 grad_accumulator=self.grad_accumulator,
             )
-        nanotron_timer("train_batch_iter").end()
+        nanotron_timer("train_batch_iter", "cuda").end()
 
         if self.iteration_step < self.initial_iter_step + 5:
             log_memory(logger=logger, msg="After train_batch_iter")
@@ -599,7 +596,7 @@ class DistributedTrainer:
             else:
                 self.grad_accumulator.fp32_grads_allreduce_handle.wait()
 
-        nanotron_timer("sync_gradients").start()
+        nanotron_timer("sync_gradients", "cuda").start()
         # Sync tied weights
         if not isinstance(self.model, DistributedDataParallel):
             # Manually sync across DP if it's not handled by DDP
@@ -618,10 +615,10 @@ class DistributedTrainer:
             parallel_context=self.parallel_context,
             grad_accumulator=self.grad_accumulator,
         )
-        nanotron_timer("sync_gradients").end()
+        nanotron_timer("sync_gradients", "cuda").end()
 
         # Clip gradients
-        nanotron_timer("clip_gradients").start()
+        nanotron_timer("clip_gradients", "cuda").start()
         if self.config.optimizer.clip_grad is not None:
             # Unwrap DDP
             named_parameters = [
@@ -635,7 +632,7 @@ class DistributedTrainer:
                 grad_accumulator=self.grad_accumulator,
                 max_norm=self.config.optimizer.clip_grad,
             )
-        nanotron_timer("clip_gradients").end()
+        nanotron_timer("clip_gradients", "cuda").end()
 
         # Compute DP average loss and overlap with optimizer step
         if isinstance(outputs[0]["loss"], torch.Tensor):
@@ -669,10 +666,10 @@ class DistributedTrainer:
         )
 
         # Apply gradient
-        nanotron_timer("optimizer_step").start()
+        nanotron_timer("optimizer_step", "cuda").start()
         self.optimizer.step()
         self.optimizer.zero_grad()
-        nanotron_timer("optimizer_step").end()
+        nanotron_timer("optimizer_step", "cuda").end()
 
         # Update the learning rate
         self.lr_scheduler.step()
@@ -704,8 +701,6 @@ class DistributedTrainer:
         dist.barrier()
         torch.cuda.synchronize()
         elapsed_time_per_iteration_ms = (time.time() - self.iteration_start_time) * 1000
-        # if elapsed_time_per_iteration_ms > 600 and self.iteration_step >10:
-        # print(f"elapsed_time_per_iteration_ms: {elapsed_time_per_iteration_ms}")
         tokens_per_sec = (
             self.global_batch_size * self.sequence_length / (elapsed_time_per_iteration_ms / 1000)
         )  # tokens_per_sec is calculated using sequence_length
@@ -743,13 +738,6 @@ class DistributedTrainer:
             LogItem("model_tflops_per_gpu", model_tflops, "human_format"),  # , ".2f"),
             # LogItem("hardware_tflops_per_gpu", hardware_tflops, "human_format"),  # , ".2f"),
             LogItem("eta", str(datetime.timedelta(seconds=eta_seconds))),
-            LogItem("timers/tbi", nanotron_timer("train_batch_iter").elapsed, ".2f"),
-            LogItem("timers/forward", nanotron_timer("forward").elapsed, ".2f"),
-            LogItem("timers/backward", nanotron_timer("backward").elapsed, ".2f"),
-            LogItem("timers/sync_gradients", nanotron_timer("sync_gradients").elapsed, ".2f"),
-            LogItem("timers/clip_gradients", nanotron_timer("clip_gradients").elapsed, ".2f"),
-            LogItem("timers/optimizer_step", nanotron_timer("optimizer_step").elapsed, ".2f"),
-            LogItem("timers/dataloader_fetch", nanotron_timer("dataloader_fetch").elapsed, ".2f"),
         ]
 
         def get_cpu_logitems():
@@ -825,9 +813,12 @@ class DistributedTrainer:
             assert self.loggerwriter is not None, "loggerwriter should be defined on logger ranks"
             self.loggerwriter.add_scalars_from_list(basic_log_entries, self.iteration_step)
 
-        basic_log_entries.extend(get_cpu_logitems())
-        for timer_name, timer in nanotron_timer.items():
-            basic_log_entries.append(LogItem(f"timers/{timer_name}", timer.elapsed, ".2f"))
+        if os.environ.get("DEBUG_CPU", "1") == "1":
+            basic_log_entries.extend(get_cpu_logitems())
+
+        if os.environ.get("ENABLE_TIMERS", "1") == "1":
+            for timer_name, timer in nanotron_timer.items():
+                basic_log_entries.append(LogItem(f"timers/{timer_name}", timer.elapsed, ".2f"))
 
         # WandB logging - determine if this rank should log to wandb
         should_log_to_wandb = wandb is not None and (
