@@ -19,7 +19,7 @@ from nanotron.data.dataloader import get_dataloader_worker_init
 from nanotron.data.nemo_dataset import BlendableDataset
 from nanotron.data.nemo_dataset.dataset_utils import compile_helper
 from nanotron.data.s3_utils import BOTO3_AVAILABLE, _get_s3_file_list, _get_s3_object, _stream_file
-from nanotron.data.samplers import MegatronPretrainingRandomSampler
+from nanotron.data.samplers import MegatronPretrainingSampler
 from nanotron.logging import human_format, log_rank
 from nanotron.parallel import ParallelContext
 
@@ -363,6 +363,7 @@ def build_dataset(
     token_size: int,
     return_positions: bool = False,
     eos_token_id: Optional[int] = None,
+    use_old_brrr_dataloader: bool = False,
     skip_in_stream: bool = True,
     num_samples: Optional[int] = None,
     max_tokens: Optional[int] = None,
@@ -377,7 +378,7 @@ def build_dataset(
         seq_length ([type]): sequence length
         skip_in_stream (bool, optional): skip ahead in stream. Defaults to True.
     """
-    if not skip_in_stream:
+    if use_old_brrr_dataloader:
         log_rank(
             "Using old tokenized bytes folder dataset because skip_in_stream is False",
             logger=logger,
@@ -445,6 +446,7 @@ def get_tb_datasets(
             token_size=config.token_size_in_bytes,
             return_positions=config.return_positions,
             eos_token_id=eos_token_id,
+            use_old_brrr_dataloader=config.use_old_brrr_dataloader,
             skip_in_stream=config.skip_in_stream,
             max_tokens=max_tokens,
             num_samples=train_num_samples,
@@ -517,8 +519,8 @@ def get_tb_dataloader(
         f"Building dataloader with consumed samples: {consumed_samples}", logger=logger, level=logging.INFO, rank=0
     )
     # Megatron sampler
-    # batch_sampler = MegatronPretrainingSampler(
-    batch_sampler = MegatronPretrainingRandomSampler(
+    # batch_sampler = MegatronPretrainingRandomSampler(
+    batch_sampler = MegatronPretrainingSampler(
         total_samples=num_samples,
         consumed_samples=consumed_samples,
         micro_batch_size=micro_batch_size,

@@ -152,9 +152,11 @@ class NanosetDatasetsArgs:
     return_positions: Optional[bool] = True  # read positions stored in disk by datatrove
 
     # Tokenized bytes dataset config
-    skip_in_stream: Optional[bool] = True
+    skip_in_stream: Optional[bool] = False
     pad_samples_to_global_batch_size: Optional[bool] = True
     dataset_max_tokens: Optional[List[int]] = None
+    shuffle_files: Optional[bool] = False
+    use_old_brrr_dataloader: Optional[bool] = False
 
     def __post_init__(self):
         if isinstance(self.dataset_folder, str):  # Case 1: 1 Dataset folder

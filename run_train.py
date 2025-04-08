@@ -206,7 +206,8 @@ def get_dataloader_from_data_stage(
             sequence_length=trainer.sequence_length,
             train_steps=trainer.config.tokens.train_steps,
             parallel_context=trainer.parallel_context,
-            shuffle=True,
+            shuffle=data.dataset.shuffle_files,
+            eos_token_id=tokenizer.eos_token_id,
             seed=data.seed,
         )
         dataloader = get_tb_dataloader(
