@@ -347,23 +347,6 @@ class TokenizedBytesFolderDataset(DatatroveFolderDataset):
             files_order=[str(f.file_path) for f in self.files],
         )
 
-    def __getitem__(self, item):
-        epoch_item = item % len(self)
-        # if item >= len(self):
-        #     raise IndexError(
-        #         f"Index {item} requested for dataset {self.folder_path} (pattern: {self.filename_pattern}) "
-        #         f"but it only has size {len(self)}"
-        #     )
-        # check if we are in the same file as before
-        if not (self.lens[self.current_file] <= epoch_item < self.lens[self.current_file + 1]):
-            # figure out current file
-            self.current_file = bisect(self.lens, epoch_item) - 1
-        # subtract file starting offset
-        return self.files[self.current_file][epoch_item - self.lens[self.current_file]]
-
-    def __len__(self):
-        return self.lens[-1] if self.lens else 0
-
 
 def build_dataset(
     dataset_folder: str,
