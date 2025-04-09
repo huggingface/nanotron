@@ -153,7 +153,7 @@ class NanosetDatasetsArgs:
 
     # Tokenized bytes dataset config
     skip_in_stream: Optional[bool] = False
-    pad_samples_to_global_batch_size: Optional[bool] = True
+    pad_samples_to_global_batch_size: Optional[bool] = False
     dataset_max_tokens: Optional[List[int]] = None
     shuffle_files: Optional[bool] = False
     use_old_brrr_dataloader: Optional[bool] = False
