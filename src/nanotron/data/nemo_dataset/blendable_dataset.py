@@ -107,13 +107,11 @@ class BlendableDataset(torch.utils.data.Dataset):
             blended_subset=[d.subset_log for d in self.datasets],
         )
 
-        # numpy_random_state = np.random.RandomState(self.random_seed)
-        # numpy_random_state.shuffle(self.dataset_index)
-        # numpy_random_state = np.random.RandomState(self.random_seed)
-        # numpy_random_state.shuffle(self.dataset_sample_index)
-        self.last_dataset_idx = None
-        self.last_dataset_sample_idx = None
-        self.last_item_idx = None
+        # Track last 16 items
+        # self.history_size = 16
+        # self.last_dataset_idx = np.full(self.history_size, -1, dtype=np.int16)  # -1 indicates no data
+        # self.last_dataset_sample_idx = np.full(self.history_size, -1, dtype=np.int64)
+        # self.last_item_idx = np.full(self.history_size, -1, dtype=np.int64)
 
         # Initialize consumption tracking
         self.consumed_tokens = {idx: 0 for idx in range(len(datasets))}
@@ -129,25 +127,32 @@ class BlendableDataset(torch.utils.data.Dataset):
     def __len__(self):
         return self.size
 
-    def __getitem__(self, idx):  # 0 <= idx <= train_steps*gbs
+    def __getitem__(self, idx):
         dataset_idx = self.dataset_index[idx]
         sample_idx = self.dataset_sample_index[idx]
-        self.last_item_idx = idx
-        self.last_dataset_idx = dataset_idx
-        self.last_dataset_sample_idx = sample_idx
+
+        # Shift history arrays and add new values at the end
+        # self.last_item_idx = np.roll(self.last_item_idx, -1)
+        # self.last_dataset_idx = np.roll(self.last_dataset_idx, -1)
+        # self.last_dataset_sample_idx = np.roll(self.last_dataset_sample_idx, -1)
+
+        # self.last_item_idx[-1] = idx
+        # self.last_dataset_idx[-1] = dataset_idx
+        # self.last_dataset_sample_idx[-1] = sample_idx
+
         return self.datasets[dataset_idx][sample_idx]
 
-    @property
-    def last_file_idx(self):
-        return self.datasets[self.last_dataset_idx].current_file
+    # @property
+    # def last_file_idx(self):
+    #     return None if self.last_dataset_idx[-1] == -1 else self.datasets[self.last_dataset_idx[-1]].current_file
 
-    @property
-    def last_file_path(self):
-        return self.datasets[self.last_dataset_idx].current_file_path
+    # @property
+    # def last_file_path(self):
+    #     return None if self.last_dataset_idx[-1] == -1 else self.datasets[self.last_dataset_idx[-1]].current_file_path
 
-    @property
-    def last_dataset_path(self):
-        return self.datasets[self.last_dataset_idx].folder_path
+    # @property
+    # def last_dataset_path(self):
+    #     return None if self.last_dataset_idx[-1] == -1 else self.datasets[self.last_dataset_idx[-1]].folder_path
 
     def update_consumption_metrics(self, start_idx: int, end_idx: int, sequence_length: int):
         """Update consumed samples/tokens for the current batch.

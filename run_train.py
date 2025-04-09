@@ -9,6 +9,7 @@ torchrun --nproc_per_node=8 run_train.py --config-file examples/config_tiny_llam
 """
 import argparse
 import time
+from pprint import pformat
 from typing import Dict, Optional, cast
 
 import nanotron.distributed as dist
@@ -60,6 +61,7 @@ def get_dataloader_from_data_stage(
     trainer: DistributedTrainer,
     data: DataArgs,
     consumed_train_samples: int,
+    consumed_tokens_per_dataset_folder: Dict[str, int],
     num_remaining_train_steps: int,
     sanity_check_dataloader_interval: Optional[int] = None,
 ):
@@ -209,6 +211,7 @@ def get_dataloader_from_data_stage(
             shuffle=data.dataset.shuffle_files,
             eos_token_id=tokenizer.eos_token_id,
             seed=data.seed,
+            consumed_tokens_per_dataset_folder=consumed_tokens_per_dataset_folder,
         )
         dataloader = get_tb_dataloader(
             dataset=train_dataset,
@@ -316,13 +319,17 @@ def get_dataloader(
         # NOTE: we only create the dataloader for the first stage,
         # then we lazy initialize the dataloader for the other stages
         stage = cast(DatasetStageArgs, stage)
-        consumed_train_samples = get_consumed_train_samples_of_a_data_stage_from_ckp(stage, trainer.metadata)
+        (
+            consumed_train_samples,
+            consumed_tokens_per_dataset_folder,
+        ) = get_consumed_train_samples_of_a_data_stage_from_ckp(stage, trainer.metadata)
 
         num_remaining_train_steps = compute_remain_train_steps_of_a_data_stage_from_ckp(
             stage, trainer.config, trainer.metadata
         )
         log_rank(
-            f"Stage {stage.name} has {num_remaining_train_steps} remaining training steps and has consumed {consumed_train_samples} samples",
+            f"Stage {stage.name} has {num_remaining_train_steps} remaining training steps and has consumed {consumed_train_samples} samples"
+            f"Consumed tokens per dataset folder: {pformat(consumed_tokens_per_dataset_folder)}",
             logger=logger,
             level=logging.INFO,
             rank=0,
@@ -333,6 +340,7 @@ def get_dataloader(
                 trainer,
                 stage.data,
                 consumed_train_samples=consumed_train_samples,
+                consumed_tokens_per_dataset_folder=consumed_tokens_per_dataset_folder,
                 num_remaining_train_steps=num_remaining_train_steps,
                 sanity_check_dataloader_interval=sanity_check_dataloader_interval,
             )
@@ -341,6 +349,7 @@ def get_dataloader(
                 trainer,
                 stage.data,
                 consumed_train_samples=consumed_train_samples,
+                consumed_tokens_per_dataset_folder=consumed_tokens_per_dataset_folder,
                 num_remaining_train_steps=num_remaining_train_steps,
                 sanity_check_dataloader_interval=sanity_check_dataloader_interval,
             )

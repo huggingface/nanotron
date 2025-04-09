@@ -511,7 +511,7 @@ class DistributedTrainer:
                     ) = get_consumed_train_samples_of_a_data_stage_from_ckp(stage, self.metadata)
                     log_rank(
                         f"Resuming training from stage {stage.name}, it has trained for {consumed_train_steps} samples and has {remaining_train_steps} remaining train steps"
-                        f"Consumed tokens per dataset folder: {pformat(consumed_tokens_per_dataset_folder)}",
+                        f"\nConsumed tokens per dataset folder: {pformat(consumed_tokens_per_dataset_folder)}",
                         logger=logger,
                         level=logging.INFO,
                         rank=0,
@@ -873,24 +873,6 @@ class DistributedTrainer:
 
         if os.environ.get("DEBUG_DL", "0") == "1":
             assert self.current_base_dl is not None, "current_base_dl should be defined"
-
-            # Add basic dataloader metrics
-            basic_log_entries.extend(
-                [
-                    LogItem(
-                        "dataloader/dp0_dataset_idx",
-                        int(self.current_base_dl.dataset.last_dataset_idx),
-                        "human_format",
-                    ),
-                    LogItem(
-                        "dataloader/dp0_sample_idx",
-                        int(self.current_base_dl.dataset.last_dataset_sample_idx),
-                        "human_format",
-                    ),
-                    LogItem("dataloader/dp0_file_idx", self.current_base_dl.dataset.last_file_idx, "human_format"),
-                    LogItem("dataloader/dp0_file_path", str(self.current_base_dl.dataset.last_file_path), None),
-                ]
-            )
 
             # Log consumption statistics
             for dataset_name, stats in self.current_base_dl.dataset.get_consumption_stats().items():
