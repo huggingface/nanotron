@@ -310,6 +310,14 @@ class TokenizedBytesFolderDataset(DatatroveFolderDataset):
         num_samples: Optional[int] = None,
     ):
         log_rank("Using DatatroveFolderDataset", logger=logger, level=logging.INFO, rank=0)
+        if return_positions and not eos_token_id:
+            log_rank(
+                "Using DatatroveFolderDataset with return_positions=True but no eos_token_id provided. It can be slow...",
+                logger=logger,
+                level=logging.WARNING,
+                rank=0,
+            )
+
         super().__init__(
             folder_path=folder_path,
             seq_len=seq_len,
