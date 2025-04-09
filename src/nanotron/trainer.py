@@ -871,7 +871,7 @@ class DistributedTrainer:
             for timer_name, timer in nanotron_timer.items():
                 basic_log_entries.append(LogItem(f"timers/{timer_name}", timer.elapsed, ".2f"))
 
-        if os.environ.get("DEBUG_DL", "0") == "1":
+        if os.environ.get("DEBUG_DL", "1") == "1":
             assert self.current_base_dl is not None, "current_base_dl should be defined"
 
             # Log consumption statistics
