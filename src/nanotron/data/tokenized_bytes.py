@@ -4,7 +4,7 @@ import time
 from bisect import bisect
 from dataclasses import dataclass
 from re import Pattern
-from typing import Optional, Tuple, Union
+from typing import Dict, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -414,6 +414,7 @@ def get_tb_datasets(
     eos_token_id: Optional[int] = None,
     shuffle: bool = False,
     seed: int = 6,
+    consumed_tokens_per_dataset_folder: Optional[Dict[str, int]] = None,
 ) -> Tuple[DataLoader, TrainDataLog]:
     """Build TokenizedBytes datasets
 
@@ -463,7 +464,12 @@ def get_tb_datasets(
             weights = [1] * len(datasets)
 
         outputs_dataset = BlendableDataset(
-            datasets, weights, train_num_samples, parallel_context=parallel_context, seed=seed
+            datasets,
+            weights,
+            train_num_samples,
+            parallel_context=parallel_context,
+            seed=seed,
+            consumed_tokens_per_dataset_folder=consumed_tokens_per_dataset_folder,
         )
 
     log_rank("Streamable datasets ready.", logger=logger, level=logging.INFO, rank=0)

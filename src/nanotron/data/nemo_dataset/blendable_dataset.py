@@ -14,10 +14,9 @@
 
 """Blendable dataset."""
 
-import os
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, List
+from typing import TYPE_CHECKING, Dict, List, Optional
 
 import numpy as np
 import torch
@@ -48,6 +47,7 @@ class BlendableDataset(torch.utils.data.Dataset):
         size: int,
         parallel_context: ParallelContext,
         seed: int,
+        consumed_tokens_per_dataset_folder: Optional[Dict[str, int]] = None,
     ):
         self.datasets = datasets
         num_datasets = len(datasets)
@@ -117,6 +117,13 @@ class BlendableDataset(torch.utils.data.Dataset):
 
         # Initialize consumption tracking
         self.consumed_tokens = {idx: 0 for idx in range(len(datasets))}
+        if consumed_tokens_per_dataset_folder is not None:
+            # find idx of dataset that matches the folder path
+            for idx, dataset in enumerate(datasets):
+                for folder_path, consumed_tokens in consumed_tokens_per_dataset_folder.items():
+                    if dataset.folder_path == folder_path:
+                        self.consumed_tokens[idx] = consumed_tokens
+                        break
         self.sequence_length = None  # Will be set when first batch is processed
 
     def __len__(self):
@@ -169,9 +176,7 @@ class BlendableDataset(torch.utils.data.Dataset):
         """
         stats = {}
         for dataset_idx, dataset in enumerate(self.datasets):
-            dataset_path = dataset.folder_path if hasattr(dataset, "folder_path") else str(dataset_idx)
-            dataset_name = os.path.basename(dataset_path)
-            stats[dataset_name] = {"tokens": self.consumed_tokens[dataset_idx]}
+            stats[dataset.folder_path] = {"tokens": self.consumed_tokens[dataset_idx]}
         return stats
 
 

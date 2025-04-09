@@ -505,9 +505,13 @@ class DistributedTrainer:
                     remaining_train_steps = compute_remain_train_steps_of_a_data_stage_from_ckp(
                         stage, self.config, self.metadata
                     )
-                    consumed_train_steps = get_consumed_train_samples_of_a_data_stage_from_ckp(stage, self.metadata)
+                    (
+                        consumed_train_steps,
+                        consumed_tokens_per_dataset_folder,
+                    ) = get_consumed_train_samples_of_a_data_stage_from_ckp(stage, self.metadata)
                     log_rank(
-                        f"Resuming training from stage {stage.name}, it has trained for {consumed_train_steps} samples and has {remaining_train_steps} remaining train steps",
+                        f"Resuming training from stage {stage.name}, it has trained for {consumed_train_steps} samples and has {remaining_train_steps} remaining train steps"
+                        f"Consumed tokens per dataset folder: {pformat(consumed_tokens_per_dataset_folder)}",
                         logger=logger,
                         level=logging.INFO,
                         rank=0,
@@ -568,8 +572,24 @@ class DistributedTrainer:
                 # Training step
                 outputs, loss_avg, z_loss_avg = self.training_step(dataloader=self.current_dataloader)
 
+                # Update consumption tracking for current batch
+                self.current_base_dl.dataset.update_consumption_metrics(
+                    start_idx=(self.iteration_step - 1)
+                    * self.global_batch_size,  # assumes we start from iteration_step=1
+                    end_idx=self.iteration_step * self.global_batch_size,
+                    sequence_length=self.sequence_length,
+                )
+
                 # Training Logs
-                # TODO(xrsrke): refactor using callbacks would be better
+                # Track consumed tokens for all dataset folders in current stage
+                consumption_stats = self.current_base_dl.dataset.get_consumption_stats()
+                current_stage = self.metadata.data_stages[self.metadata.last_stage_idx]
+
+                # Update consumed tokens for all folders in the consumption stats
+                for folder_path, stats in consumption_stats.items():
+                    current_stage.consumed_tokens_per_dataset_folder[folder_path] = stats["tokens"]
+
+                # Original consumption tracking
                 self.metadata.consumed_train_samples += self.global_batch_size
                 self.metadata.last_train_step = self.iteration_step
                 self.metadata.data_stages[
@@ -870,13 +890,6 @@ class DistributedTrainer:
                     LogItem("dataloader/dp0_file_idx", self.current_base_dl.dataset.last_file_idx, "human_format"),
                     LogItem("dataloader/dp0_file_path", str(self.current_base_dl.dataset.last_file_path), None),
                 ]
-            )
-
-            # Update consumption tracking for current batch
-            self.current_base_dl.dataset.update_consumption_metrics(
-                start_idx=(self.iteration_step - 1) * self.global_batch_size,  # assumes we start from iteration_step=1
-                end_idx=self.iteration_step * self.global_batch_size,
-                sequence_length=self.sequence_length,
             )
 
             # Log consumption statistics
