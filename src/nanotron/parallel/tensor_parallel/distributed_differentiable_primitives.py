@@ -55,7 +55,7 @@ class DifferentiableAllGather(torch.autograd.Function):
     """All gather in a differentiable fashion"""
 
     @staticmethod
-    def forward(ctx, tensor, group: Optional[ProcessGroup]):
+    def forward(ctx, tensor, dim: int, group: Optional[ProcessGroup]):
         ctx.group = group
 
         if group.size() == 1:
@@ -65,22 +65,32 @@ class DifferentiableAllGather(torch.autograd.Function):
         sharded_batch_size, *rest_size = tensor.shape
         if group is None:
             group = torch_dist.distributed_c10d._get_default_group()
-        unsharded_batch_size = sharded_batch_size * group.size()
+        # unsharded_batch_size = sharded_batch_size * group.size()
 
-        unsharded_tensor = torch.empty(
-            unsharded_batch_size,
-            *rest_size,
-            device=tensor.device,
-            dtype=tensor.dtype,
-            requires_grad=tensor.requires_grad,
-        )
+        # unsharded_tensor = torch.empty(
+        #     unsharded_batch_size,
+        #     *rest_size,
+        #     device=tensor.device,
+        #     dtype=tensor.dtype,
+        #     requires_grad=tensor.requires_grad,
+        # )
 
-        # `tensor` can sometimes not be contiguous
-        # https://cs.github.com/pytorch/pytorch/blob/2b267fa7f28e18ca6ea1de4201d2541a40411457/torch/distributed/nn/functional.py#L317
-        tensor = tensor.contiguous()
+        # # `tensor` can sometimes not be contiguous
+        # # https://cs.github.com/pytorch/pytorch/blob/2b267fa7f28e18ca6ea1de4201d2541a40411457/torch/distributed/nn/functional.py#L317
+        # tensor = tensor.contiguous()
 
-        dist.all_gather_into_tensor(unsharded_tensor, tensor, group=group)
-        return unsharded_tensor
+        # dist.all_gather_into_tensor(unsharded_tensor, tensor, group=group)
+
+        world_size = group.size()
+        tensor_list = [torch.empty_like(tensor) for _ in range(world_size)]
+        dist.all_gather(tensor_list=tensor_list, tensor=tensor, group=group)
+
+        # if tensor.dim() == 0:
+        #     tensor_list = [tensor.unsqueeze(dim=0) for tensor in tensor_list]
+
+        tensor_list = torch.cat(tensor_list, dim=dim)
+
+        return tensor_list
 
     @staticmethod
     def backward(ctx, grad_output):
@@ -122,7 +132,7 @@ class DifferentiableReduceScatterSum(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_output):
         group = ctx.group
-        return DifferentiableAllGather.apply(grad_output, group), None
+        return DifferentiableAllGather.apply(grad_output, dim=0, group=group), None
 
 
 # -----------------
@@ -138,8 +148,8 @@ def differentiable_all_reduce_sum(tensor, group: Optional[ProcessGroup] = None):
     return DifferentiableAllReduceSum.apply(tensor, group)
 
 
-def differentiable_all_gather(tensor, group: Optional[ProcessGroup] = None):
-    return DifferentiableAllGather.apply(tensor, group)
+def differentiable_all_gather(tensor, dim: int, group: Optional[ProcessGroup] = None):
+    return DifferentiableAllGather.apply(tensor, dim, group)
 
 
 def differentiable_reduce_scatter_sum(tensor, group: Optional[ProcessGroup] = None):

@@ -632,16 +632,16 @@ def get_config_from_file(
     #     config.model.model_config = model_config_class(**config.model.model_config)
 
     if isinstance(config.model.model_config, dict) and config.model.model_config.get("is_llama4_config", False):
-        from nanotron.config.models_config import TextConfig, VisionConfig
+        from nanotron.config.models_config import Llama4TextConfig, Llama4VisionConfig
 
         model_config_dict = config.model.model_config
 
         # Ensure nested configs are proper instances
         if isinstance(model_config_dict.get("text_config"), dict):
-            model_config_dict["text_config"] = TextConfig(**model_config_dict["text_config"])
+            model_config_dict["text_config"] = Llama4TextConfig(**model_config_dict["text_config"])
 
         if isinstance(model_config_dict.get("vision_config"), dict):
-            model_config_dict["vision_config"] = VisionConfig(**model_config_dict["vision_config"])
+            model_config_dict["vision_config"] = Llama4VisionConfig(**model_config_dict["vision_config"])
 
         config.model.model_config = Llama4Config(**model_config_dict)
 

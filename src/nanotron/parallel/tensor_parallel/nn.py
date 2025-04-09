@@ -222,7 +222,7 @@ class TiedLinear(nn.Linear):
         if self.mode is TensorParallelLinearMode.ALL_REDUCE:
             y = differentiable_identity(y, group=self.pg)
         elif self.mode is TensorParallelLinearMode.REDUCE_SCATTER:
-            y = differentiable_all_gather(y, group=self.pg)
+            y = differentiable_all_gather(y, dim=0, group=self.pg)
         else:
             raise ValueError(f"Got unexpected mode: {self.mode}.")
 

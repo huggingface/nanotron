@@ -126,8 +126,10 @@ parallelism:
   pp: 1
   pp_engine: 1f1b
   tp: 2
-  tp_linear_async_communication: true
-  tp_mode: REDUCE_SCATTER
+  # tp_linear_async_communication: true
+  # tp_mode: REDUCE_SCATTER
+  tp_linear_async_communication: false
+  tp_mode: ALL_REDUCE
 # profiler:
 #   profiler_export_path: ./tb_logs/fix/
 tokenizer:

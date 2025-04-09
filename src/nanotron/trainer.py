@@ -793,6 +793,11 @@ class DistributedTrainer:
                 for _, param in sorted(model.named_parameters(), key=lambda x: x[0]):
                     dist.all_reduce(param, op=dist.ReduceOp.AVG, group=self.parallel_context.dp_pg)
 
+                # NOTE: synchronize router weights
+                for n, p in model.named_parameters():
+                    if "router" in n:
+                        dist.all_reduce(p, op=dist.ReduceOp.AVG, group=self.parallel_context.dp_pg)
+
                 # sync tied params across tied groups
                 for (_, group_ranks), param in sorted(
                     get_tied_id_to_param(

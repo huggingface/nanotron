@@ -273,7 +273,7 @@ class Starcoder2Config:
 
 
 @dataclass
-class VisionConfig:
+class Llama4VisionConfig:
     """Configuration for the Llama4 Vision Model component"""
 
     attention_dropout: float = 0.0
@@ -300,7 +300,7 @@ class VisionConfig:
 
 
 @dataclass
-class TextConfig:
+class Llama4TextConfig:
     """Configuration for the Llama4 Text Model component"""
 
     attention_bias: bool = False
@@ -362,8 +362,8 @@ class Llama4Config:
     """
 
     # Configuration components
-    text_config: TextConfig
-    vision_config: VisionConfig
+    text_config: Llama4TextConfig
+    vision_config: Llama4VisionConfig
 
     is_llama4_config: bool  # We use this help differentiate models in yaml/python conversion
     model_type: str = "llama4"
@@ -372,6 +372,9 @@ class Llama4Config:
     boi_token_index: int = 200080  # Beginning of image token
     eoi_token_index: int = 200081  # End of image token
     image_token_index: int = 200092
+
+    # TODO: do a base model config
+    # z_loss_enabled: bool = False  # Z-loss regularization https://www.jmlr.org/papers/volume24/22-1144/22-1144.pdf
 
     # MoE configuration
     # moe_config: Optional[MoEConfig] = None
@@ -436,6 +439,15 @@ class Llama4Config:
     @vocab_size.setter
     def vocab_size(self, value: int):
         self.text_config.vocab_size = value
+
+    # TODO: refactor, and do a base model config
+    @property
+    def z_loss_enabled(self) -> bool:
+        return self.text_config.z_loss_enabled
+
+    @z_loss_enabled.setter
+    def z_loss_enabled(self, value: bool):
+        self.text_config.z_loss_enabled = value
 
 
 NanotronConfigs = Union[LlamaConfig, Starcoder2Config, Qwen2Config, Llama4Config, Any]
