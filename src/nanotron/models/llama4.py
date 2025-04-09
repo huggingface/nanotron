@@ -440,20 +440,20 @@ class Llama4TextMoELayer(nn.Module):
 
         # Enable shared experts if configured
         # self.enable_shared_expert = getattr(config.moe_config, "enable_shared_expert", False)
-        # if self.enable_shared_expert:
-        #     self.shared_expert = MLP(
-        #         config=config,
-        #         parallel_config=parallel_config,
-        #         tp_pg=tp_pg,
-        #     )
-        #     self.shared_expert_gate = TensorParallelColumnLinear(
-        #         self.hidden_size,
-        #         1,
-        #         pg=tp_pg,
-        #         mode=tp_mode,
-        #         bias=False,
-        #         async_communication=tp_linear_async_communication,
-        #     )
+        # TODO: configurable
+        self.shared_expert = MLP(
+            config=config,
+            parallel_config=parallel_config,
+            tp_pg=tp_pg,
+        )
+        # self.shared_expert_gate = TensorParallelColumnLinear(
+        #     self.hidden_size,
+        #     1,
+        #     pg=tp_pg,
+        #     mode=tp_mode,
+        #     bias=False,
+        #     async_communication=tp_linear_async_communication,
+        # )
 
         # Create the expert MLPs
         self.experts = nn.ModuleList(
@@ -530,6 +530,8 @@ class Llama4TextMoELayer(nn.Module):
             # expert_weights = routing_weights[token_positions, k_positions].unsqueeze(-1)
             # Scale inputs by routing weights
             # scaled_inputs = tokens_for_expert * expert_weights
+
+            # NOET: select the weight of dispatched input
 
             # NOTE: no scaling
             # dispatched_inputs.append(scaled_inputs)
@@ -610,11 +612,11 @@ class Llama4TextMoELayer(nn.Module):
         # Combine expert outputs
         output = self._combine_expert_outputs(expert_outputs, routing_indices, hidden_states.shape)
 
+        # TODO: configurable
         # Add shared expert contribution if enabled
-        # if self.enable_shared_expert:
-        #     shared_expert_output = self.shared_expert(hidden_states=hidden_states)["hidden_states"]
-        #     shared_gate = torch.sigmoid(self.shared_expert_gate(hidden_states))
-        #     output = output + shared_gate * shared_expert_output
+
+        shared_expert_output = self.shared_expert(hidden_states=hidden_states)["hidden_states"]
+        output = output + shared_expert_output
 
         return output
 
