@@ -978,6 +978,34 @@ def masked_mean(loss, label_mask, dtype):
     # type: (Tensor, Tensor, torch.dtype) -> Tensor
     return (loss * label_mask).sum(dtype=dtype) / label_mask.sum()
 
+@torch.jit.script
+def masked_mean_per_row(loss, label_mask, dtype):
+    # type: (Tensor, Tensor, torch.dtype) -> Tensor
+    return (loss * label_mask).sum(dim=1, dtype=dtype) / label_mask.sum(dim=1)
+
+# @torch.jit.script
+# def masked_mean_per_domain(loss, label_mask, input_domains, dtype: torch.dtype):
+#     # type: (Tensor, Tensor, torch.dtype) -> Tensor
+#     input_domains_flat = input_domains.squeeze(1)  # shape: [batch_size]
+#     unique_domains = torch.unique(input_domains_flat)
+#     domain_means = torch.empty((unique_domains.size(0),), dtype=dtype)
+
+#     for i in range(unique_domains.size(0)):
+#         domain = unique_domains[i]
+#         domain_mask = (input_domains_flat == domain).unsqueeze(1)  # shape: [batch_size, 1]
+#         combined_mask = label_mask * domain_mask  # shape: [batch_size, num_items]
+#         masked_loss = loss * combined_mask
+
+#         total_loss = masked_loss.sum(dtype=dtype)
+#         total_count = combined_mask.sum(dtype=dtype)
+
+#         # Avoid division by zero
+#         if total_count > 0:
+#             domain_means[i] = total_loss / total_count
+#         else:
+#             domain_means[i] = torch.tensor(0.0, dtype=dtype)
+
+#     return domain_means
 
 class Loss(nn.Module):
     def __init__(self, tp_pg: dist.ProcessGroup):
@@ -997,8 +1025,8 @@ class Loss(nn.Module):
             dtype=torch.float,
         ).transpose(0, 1)
         loss = masked_mean(loss, label_mask, dtype=torch.float)
-        return {"loss": loss}
-
+        per_sample_loss = masked_mean_per_row(loss, label_mask, dtype=torch.float)
+        return {"loss": loss, "per_sample_loss": per_sample_loss}
 
 class LossWithZLoss(Loss):
     def __init__(self, tp_pg: dist.ProcessGroup, z_loss_coefficient: float):
@@ -1020,7 +1048,9 @@ class LossWithZLoss(Loss):
         )
         loss = masked_mean(loss.transpose(0, 1), label_mask, dtype=torch.float)
         z_loss = masked_mean(z_loss.detach().transpose(0, 1), label_mask, dtype=torch.float)
-        return {"loss": loss, "z_loss": z_loss}
+        per_sample_loss = masked_mean_per_row(loss, label_mask, dtype=torch.float)
+        per_sample_z_loss = masked_mean_per_row(z_loss, label_mask, dtype=torch.float)
+        return {"loss": loss, "z_loss": z_loss, "per_sample_loss": per_sample_loss, "per_sample_z_loss": per_sample_z_loss}
 
 
 class LlamaForTraining(NanotronModel):
@@ -1050,7 +1080,7 @@ class LlamaForTraining(NanotronModel):
                 "label_ids",
                 "label_mask",
             },
-            module_output_keys={"loss", "z_loss"} if config.z_loss_enabled else {"loss"},
+            module_output_keys={"loss", "z_loss", "per_sample_loss", "per_sample_z_loss"} if config.z_loss_enabled else {"loss", "per_sample_loss"},
         )
 
         self.parallel_context = parallel_context
@@ -1061,6 +1091,7 @@ class LlamaForTraining(NanotronModel):
         self,
         input_ids: Union[torch.Tensor, TensorPointer],
         input_mask: Union[torch.Tensor, TensorPointer],
+        input_domain: Optional[Union[torch.Tensor, TensorPointer]],
         label_ids: Union[torch.Tensor, TensorPointer],
         label_mask: Union[torch.Tensor, TensorPointer],
     ) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
@@ -1074,9 +1105,9 @@ class LlamaForTraining(NanotronModel):
             label_mask=label_mask,
         )
         if self.config.z_loss_enabled:
-            return {"loss": loss["loss"], "z_loss": loss["z_loss"]}
+            return {"loss": loss["loss"], "z_loss": loss["z_loss"], "per_sample_loss": loss["per_sample_loss"], "per_sample_z_loss": loss["per_sample_z_loss"]}
         else:
-            return {"loss": loss["loss"]}
+            return {"loss": loss["loss"], "per_sample_loss": loss["per_sample_loss"]}
 
     @torch.no_grad()
     def init_model_randomly(self, config: Config):

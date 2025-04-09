@@ -43,21 +43,24 @@ class DataCollatorForCLM:
             return {
                 "input_ids": TensorPointer(group_rank=self.input_pp_rank),
                 "input_mask": TensorPointer(group_rank=self.input_pp_rank),
+                "input_domain": TensorPointer(group_rank=self.input_pp_rank),
                 "label_ids": TensorPointer(group_rank=self.output_pp_rank),
                 "label_mask": TensorPointer(group_rank=self.output_pp_rank),
             }
 
-        # Make sure we load only what's necessary, ie we only load a `input_ids` column.
-        assert all(list(example.keys()) == ["input_ids"] for example in examples)
+        # Make sure we load only what's necessary, ie we only load a `input_ids` and `domain_idx` column.
+        assert all(list(example.keys()) == ["input_ids", "domain_idx"] for example in examples)
 
         # TODO @nouamanetazi: Is it better to have examples as np.array or torch.Tensor?
         input_ids = vstack([examples[i]["input_ids"] for i in range(len(examples))])  # (b, s)
+        input_domain = torch.vstack([examples[i]["domain_idx"] for i in range(len(examples))])  # (b, 1)
         batch_size, expanded_input_length = input_ids.shape
 
         result: Dict[str, Union[np.ndarray, torch.LongTensor, TensorPointer]] = {}
 
         result["input_ids"] = TensorPointer(group_rank=self.input_pp_rank)
         result["input_mask"] = TensorPointer(group_rank=self.input_pp_rank)
+        result["input_domain"] = TensorPointer(group_rank=self.input_pp_rank)
         result["label_ids"] = TensorPointer(group_rank=self.output_pp_rank)
         result["label_mask"] = TensorPointer(group_rank=self.output_pp_rank)
 
@@ -69,6 +72,7 @@ class DataCollatorForCLM:
         if current_pp_rank == self.input_pp_rank:
             result["input_ids"] = input_ids[:, :-1]
             result["input_mask"] = ones((batch_size, self.sequence_length), dtype=bool_dtype)
+            result["input_domain"] = input_domain
 
             # Context Parallelism: Each CP rank gets a slice of the input_ids and input_mask
             cp_rank, cp_size = dist.get_rank(self.parallel_context.cp_pg), self.parallel_context.context_parallel_size
@@ -162,6 +166,7 @@ class DataCollatorForCLMWithPositionIds:
             assert all(len(example) == 0 for example in examples)
             return {
                 "input_ids": TensorPointer(group_rank=self.input_pp_rank),
+                "input_domain": TensorPointer(group_rank=self.input_pp_rank),
                 "positions": TensorPointer(group_rank=self.input_pp_rank),
                 "label_ids": TensorPointer(group_rank=self.output_pp_rank),
                 "label_mask": TensorPointer(group_rank=self.output_pp_rank),
@@ -189,12 +194,14 @@ class DataCollatorForCLMWithPositionIds:
 
         # Stack input_ids
         input_ids = np.vstack([examples[i]["input_ids"] for i in range(len(examples))])  # (b, s)
+        input_domain = torch.vstack([examples[i]["domain_idx"] for i in range(len(examples))])  # (b, 1)
         batch_size, expanded_input_length = input_ids.shape
 
         result: Dict[str, Union[np.ndarray, TensorPointer]] = {}
 
         # Initialize all fields as TensorPointers
         result["input_ids"] = TensorPointer(group_rank=self.input_pp_rank)
+        result["input_domain"] = TensorPointer(group_rank=self.input_pp_rank)
         result["position_ids"] = TensorPointer(group_rank=self.input_pp_rank)
         result["label_ids"] = TensorPointer(group_rank=self.output_pp_rank)
         result["label_mask"] = TensorPointer(group_rank=self.output_pp_rank)
@@ -206,6 +213,7 @@ class DataCollatorForCLMWithPositionIds:
         # Process inputs
         if current_pp_rank == self.input_pp_rank:
             result["input_ids"] = input_ids[:, :-1]
+            result["input_domain"] = input_domain
 
             if "positions" in examples[0]:
                 # Use provided position_ids if available

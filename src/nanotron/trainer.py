@@ -275,7 +275,7 @@ class DistributedTrainer:
         self.limit_val_batches = self.config.tokens.limit_val_batches
         self.current_dataloader: Optional[DataLoader] = None  # used for the current training stage
 
-        log_libraries_versions(logger=logger)
+        # log_libraries_versions(logger=logger)
         log_rank("Config:", logger=logger, level=logging.INFO, rank=0, is_separator=True)
         log_rank(
             f"Parsing config: {os.path.abspath(config_or_config_file)}", logger=logger, level=logging.INFO, rank=0
@@ -535,7 +535,7 @@ class DistributedTrainer:
                 self._update_dataloader_based_on_training_stages(dataloader_or_dls)
 
                 # Training step
-                outputs, loss_avg, z_loss_avg = self.training_step(dataloader=self.current_dataloader)
+                outputs, tr_metrics = self.training_step(dataloader=self.current_dataloader)
 
                 # Training Logs
                 # TODO(xrsrke): refactor using callbacks would be better
@@ -546,7 +546,7 @@ class DistributedTrainer:
                 ].consumed_train_samples += self.global_batch_size
 
                 if (self.iteration_step - 1) % self.config.logging.iteration_step_info_interval == 0:
-                    self.train_step_logs(outputs=outputs, loss_avg=loss_avg, z_loss_avg=z_loss_avg)
+                    self.train_step_logs(outputs=outputs, **tr_metrics)
 
                 # Checkpoint
                 if self.iteration_step % self.config.checkpoints.checkpoint_interval == 0:
@@ -634,23 +634,41 @@ class DistributedTrainer:
             )
         nanotron_timer("clip_gradients", "cuda").end()
 
+        stage_domains = self.config.data_stages[self.metadata.last_stage_idx].data.dataset.dataset_domains
+
         # Compute DP average loss and overlap with optimizer step
         if isinstance(outputs[0]["loss"], torch.Tensor):
             # This is an average on only one data rank.
             loss_avg = torch.stack(
                 [output["loss"] for output in outputs]
             ).sum()  # already divided by n_micro_batches_per_batch
+            per_sample_loss = torch.stack(
+                [output["per_sample_loss"] for output in outputs]
+            )
+            per_domain_loss = torch.zeros(len(stage_domains), device=self.parallel_context.dp_pg.local_rank())
+            for i in range(len(stage_domains)):
+                per_domain_loss[i] = torch.mean(per_sample_loss[samples_domains == i])
+            samples_domains = torch.stack(
+                [output["input_domain"].squeeze(1) for output in outputs]
+            )
+            num_samples_per_domain = torch.bincount(samples_domains, minlength=len(stage_domains))
             if "z_loss" in outputs[0]:
                 z_loss_avg = torch.stack(
                     [output["z_loss"] for output in outputs]
                 ).sum()  # already divided by n_micro_batches_per_batch
+                per_sample_z_loss = torch.stack(
+                    [output["per_sample_z_loss"] for output in outputs]
+                )
             else:
                 z_loss_avg = None
+                per_sample_z_loss = None
             # sync loss across DP (we should do the same for z_loss but it's only for logging so let's not sync it rn)
             handle = dist.all_reduce(loss_avg, group=self.parallel_context.dp_pg, async_op=True, op=dist.ReduceOp.AVG)
         else:
             z_loss_avg = None
             loss_avg = None
+            per_sample_loss = None
+            per_sample_z_loss = None
             handle = None
 
         # Move optimizer states back to GPU before optimizer step
@@ -681,7 +699,15 @@ class DistributedTrainer:
 
         self.post_train_step()
 
-        return outputs, loss_avg, z_loss_avg
+        tr_metrics = {
+            "loss": loss_avg,
+            "z_loss": z_loss_avg,
+            "per_domain_loss": per_sample_loss,
+            "per_domain_z_loss": per_sample_z_loss,
+            "num_samples_per_domain": num_samples_per_domain,
+        }
+
+        return outputs, tr_metrics
 
     def validation_step(self, dataloader: Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]]) -> Iterable[Dict]:
         outputs = self.pipeline_engine.validate_batch_iter(
@@ -696,10 +722,20 @@ class DistributedTrainer:
         outputs: Iterable[Dict[str, Union[torch.Tensor, TensorPointer]]],
         loss_avg: Optional[torch.Tensor],
         z_loss_avg: Optional[torch.Tensor],
+        per_domain_loss: Optional[torch.Tensor],
+        per_domain_z_loss: Optional[torch.Tensor],
+        num_samples_per_domain: Optional[torch.Tensor],
     ) -> None:
         # TODO @nouamanetazi: Megatron-LM seems to be using a barrier to report their interval time. Check if this is necessary. https://github.com/NouamaneTazi/Megatron-LM/blob/e241a96c3085b18e36c6cee1d68a8155de77b5a6/megatron/training.py#L607
         dist.barrier()
         torch.cuda.synchronize()
+
+        # loss_avg = tr_metrics["loss_avg"]
+        # z_loss_avg = tr_metrics["z_loss_avg"]
+        # per_domain_loss = tr_metrics["per_domain_loss"]
+        # per_domain_z_loss = tr_metrics["per_domain_z_loss"]
+        # num_samples_per_domain = tr_metrics["num_samples_per_domain"]
+
         elapsed_time_per_iteration_ms = (time.time() - self.iteration_start_time) * 1000
         tokens_per_sec = (
             self.global_batch_size * self.sequence_length / (elapsed_time_per_iteration_ms / 1000)
@@ -799,10 +835,31 @@ class DistributedTrainer:
                     continue
 
             return cpu_memory_log_entries + swap_memory_log_entries + process_memory_log_entries
-
+        
+        per_domain_loss_entries = [
+            LogItem(f"{domain}_loss", per_domain_loss[i].item(), "human_format")
+            for i, domain in enumerate(curr_domains)
+        ]
         if z_loss_avg is not None:
             basic_log_entries.insert(6, LogItem("z_loss", z_loss_avg.item(), "human_format"))  # , "1.6E"),
+        if per_domain_z_loss is not None:
+            per_domain_z_loss_entries = [
+                LogItem(f"{domain}_z_loss", per_domain_z_loss[i].item(), "human_format")
+                for i, domain in enumerate(curr_domains)
+            ]
+            basic_log_entries.extend(per_domain_z_loss_entries)
 
+        curr_domains = self.config.data_stages[self.metadata.last_stage_idx].data.dataset.dataset_domains
+        num_samples_entries = [
+                LogItem(
+                    f"{domain}_samples", num_samples_per_domain[i].item(), "human_format"
+                )
+                for i, domain in enumerate(curr_domains)
+            ]
+        
+        basic_log_entries.extend(num_samples_entries)
+        basic_log_entries.extend(per_domain_loss_entries)
+        
         if self.config.optimizer.clip_grad is not None:
             basic_log_entries.insert(
                 5, LogItem("grad_norm", self.grad_norm_unclipped.item(), "human_format")

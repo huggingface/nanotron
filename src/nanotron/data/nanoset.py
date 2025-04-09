@@ -69,8 +69,8 @@ class Nanoset(torch.utils.data.Dataset):
                     recursive=False,
                     token_size=self.token_size,
                     shuffle=True,
-                    return_positions=self.return_positions, # if set to True, the position ids are directly build datatrove
-                    eos_token_id=self.eos_token_id,
+                    # return_positions=self.return_positions, # if set to True, the position ids are directly build datatrove
+                    # eos_token_id=self.eos_token_id,
                 )
             )
 
@@ -111,7 +111,10 @@ class Nanoset(torch.utils.data.Dataset):
         # Get actual sample index by wrapping around dataset length
         actual_sample = sample_idx % self.dataset_lengths[dataset]
 
-        return self.datatrove_datasets[dataset][actual_sample]
+        sample = self.datatrove_datasets[dataset][actual_sample]
+        sample['domain_idx'] = torch.tensor(dataset, dtype=torch.long)          # Add the dataset index to the item_dict as the domain index
+
+        return sample
 
     def new_build_nanoset_index(self) -> Tuple[np.ndarray, np.ndarray]:
         """

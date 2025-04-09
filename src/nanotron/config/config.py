@@ -3,7 +3,7 @@ import glob
 import os
 from dataclasses import dataclass, fields
 from pathlib import Path
-from typing import List, Optional, Type, Union
+from typing import List, Dict, Optional, Type, Union
 
 import dacite
 import torch
@@ -143,8 +143,9 @@ class S3UploadArgs:
 
 @dataclass
 class NanosetDatasetsArgs:
-    dataset_folder: Union[str, List[str]]
+    dataset_folder: Union[str, List[str], Dict[str, float]]
     dataset_weights: Optional[List[float]] = None
+    dataset_domains: Optional[List[str]] = None
     # Tokenizer config, assuming all datasets use the same tokenizer
     tokenizer_name: Optional[str] = None
     vocab_size: Optional[int] = None
@@ -155,6 +156,14 @@ class NanosetDatasetsArgs:
         if isinstance(self.dataset_folder, str):  # Case 1: 1 Dataset folder
             self.dataset_folder = [self.dataset_folder]
             self.dataset_weights = [1]
+        elif isinstance(self.dataset_folder, dict):  # Case 2: dict with > 1 dataset_folder and weights
+            tmp_dataset_folder = self.dataset_folder.copy()
+            self.dataset_folder = list(tmp_dataset_folder.keys())
+            self.dataset_weights = list(tmp_dataset_folder.values())
+
+        if self.dataset_domains is None:
+            # By default take the dataset folder as the domain
+            self.dataset_domains = self.dataset_folder
 
         # Check if dataset_weights is provided and matches the number of dataset folders
         if self.dataset_weights is not None and len(self.dataset_weights) != len(self.dataset_folder):
