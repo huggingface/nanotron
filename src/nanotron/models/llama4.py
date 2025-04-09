@@ -21,6 +21,7 @@ import torch.distributed as dist
 import torch.nn.functional as F
 from torch import nn
 from torch.utils.checkpoint import CheckpointFunction
+from torchtyping import TensorType
 
 from nanotron import logging
 from nanotron.config import Config, Llama4Config, Llama4TextConfig, ParallelismArgs
@@ -489,15 +490,23 @@ class Llama4TextMoELayer(nn.Module):
         assert router_logits.shape == (seq_len, bs, self.num_local_experts)
         # Get the top-k experts per token
         routing_weights, routing_indices = torch.topk(router_logits, k=self.num_experts_per_token, dim=-1)
+        routing_weights = rearrange(routing_weights, "seq_len bs 1 -> seq_len bs", seq_len=seq_len)
         routing_indices = rearrange(routing_indices, "seq_len bs 1 -> seq_len bs", seq_len=seq_len)
 
         # Apply softmax on the top-k values
         # routing_weights = F.softmax(routing_weights, dim=-1)
         routing_weights = F.sigmoid(routing_weights)
 
+        # # router loss
+        # def routing_confidence_loss(routing_weights, routing_indices):
+        #     # TODO: implement routing confidence loss
+        #     return 0.0
+
         return routing_weights, routing_indices
 
-    def _dispatch_tokens(self, hidden_states, routing_weights, routing_indices):
+    def _dispatch_tokens(
+        self, hidden_states, routing_weights: TensorType["seq_len", "bs"], routing_indices: TensorType["seq_len", "bs"]
+    ):
         """
         Dispatches tokens to their selected experts.
         In a full implementation, this would handle the actual token routing logic
@@ -506,26 +515,25 @@ class Llama4TextMoELayer(nn.Module):
         # Simplified implementation - in a complete version this would handle
         # all-to-all or all-gather communications for distributed experts
 
-        hidden_states.shape[0]
         dispatched_inputs = []
         expert_counts = []
 
         # For each expert, gather the tokens assigned to it
         for expert_idx in range(self.num_local_experts):
             # Find tokens that have this expert in their top-k
-            expert_mask = (routing_indices == expert_idx).any(dim=-1)
+            expert_mask = (routing_indices == expert_idx).any(dim=-1)  # [num_tokens]
             tokens_for_expert = hidden_states[expert_mask]
 
             # Get the routing weights for this expert
-            expert_positions = (routing_indices == expert_idx).nonzero(as_tuple=True)
-            token_positions, k_positions = expert_positions
-            expert_weights = routing_weights[token_positions, k_positions].unsqueeze(-1)
-
+            # expert_positions = (routing_indices == expert_idx).nonzero(as_tuple=True)
+            # token_positions, k_positions = expert_positions
+            # expert_weights = routing_weights[token_positions, k_positions].unsqueeze(-1)
             # Scale inputs by routing weights
-            scaled_inputs = tokens_for_expert * expert_weights
+            # scaled_inputs = tokens_for_expert * expert_weights
 
             # NOTE: no scaling
-            dispatched_inputs.append(scaled_inputs)
+            # dispatched_inputs.append(scaled_inputs)
+            dispatched_inputs.append(tokens_for_expert)
             expert_counts.append(len(tokens_for_expert))
 
         return dispatched_inputs, expert_counts
@@ -558,15 +566,15 @@ class Llama4TextMoELayer(nn.Module):
         # Dispatch tokens to experts
         dispatched_inputs, expert_counts = self._dispatch_tokens(hidden_states, routing_weights, routing_indices)
 
-        dist.barrier()
-        # NOTE: check if routing_indices is the same across all ranks
-        log_rank(
-            f"routing_indices: {routing_indices}",
-            logger=logger,
-            level=logging.INFO,
-        )
-        dist.barrier()
-        assert 1 == 1
+        # dist.barrier()
+        # # NOTE: check if routing_indices is the same across all ranks
+        # log_rank(
+        #     f"routing_indices: {routing_indices}",
+        #     logger=logger,
+        #     level=logging.INFO,
+        # )
+        # dist.barrier()
+        # assert 1 == 1
         # Process tokens with their assigned experts
         expert_outputs = []
         for expert_idx, (inputs, count) in enumerate(zip(dispatched_inputs, expert_counts)):
@@ -574,31 +582,31 @@ class Llama4TextMoELayer(nn.Module):
                 expert_outputs.append(torch.tensor([], device=hidden_states.device))
                 continue
 
-            dist.barrier()
-            assert 1 == 1
-            log_rank(
-                f"[expert_idx={expert_idx}] before self.experts[expert_idx](hidden_states=inputs)",
-                logger=logger,
-                level=logging.INFO,
-            )
+            # dist.barrier()
+            # assert 1 == 1
+            # log_rank(
+            #     f"[expert_idx={expert_idx}] before self.experts[expert_idx](hidden_states=inputs)",
+            #     logger=logger,
+            #     level=logging.INFO,
+            # )
             # Forward through the expert
             output = self.experts[expert_idx](hidden_states=inputs)["hidden_states"]
-            dist.barrier()
-            assert 1 == 1
-            log_rank(
-                f"[expert_idx={expert_idx}] after self.experts[expert_idx](hidden_states=inputs)",
-                logger=logger,
-                level=logging.INFO,
-            )
+            # dist.barrier()
+            # assert 1 == 1
+            # log_rank(
+            #     f"[expert_idx={expert_idx}] after self.experts[expert_idx](hidden_states=inputs)",
+            #     logger=logger,
+            #     level=logging.INFO,
+            # )
             expert_outputs.append(output)
 
-        dist.barrier()
-        log_rank(
-            "after expert_outputs.append(output)",
-            logger=logger,
-            level=logging.INFO,
-        )
-        assert 1 == 1
+        # dist.barrier()
+        # log_rank(
+        #     "after expert_outputs.append(output)",
+        #     logger=logger,
+        #     level=logging.INFO,
+        # )
+        # assert 1 == 1
         # Combine expert outputs
         output = self._combine_expert_outputs(expert_outputs, routing_indices, hidden_states.shape)
 
