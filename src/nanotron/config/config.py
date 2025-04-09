@@ -145,6 +145,9 @@ class S3UploadArgs:
 class NanosetDatasetsArgs:
     dataset_folder: Union[str, List[str]]
     dataset_weights: Optional[List[float]] = None
+    dataset_read_path: Optional[
+        Union[str, List[str]]
+    ] = None  # Path to local file/copy to read from. If it exists, we read from this folder instead of from dataset_folder. Useful when we offload some data to remote and only keep the needed files on disk.
     # Tokenizer config, assuming all datasets use the same tokenizer
     tokenizer_name: Optional[str] = None
     vocab_size: Optional[int] = None
@@ -190,6 +193,12 @@ class NanosetDatasetsArgs:
                             assert self.token_size_in_bytes == int(
                                 token_size_in_bytes
                             ), f"Token size mismatch while reading datasets metadata file, found both {self.token_size_in_bytes} and {token_size_in_bytes}"
+
+        # Check if dataset_read_path is provided and matches the number of dataset folders
+        if self.dataset_read_path is not None and len(self.dataset_read_path) != len(self.dataset_folder):
+            raise ValueError(
+                f"Number of dataset read paths ({len(self.dataset_read_path)}) does not match number of dataset folders ({len(self.dataset_folder)})"
+            )
 
 
 @dataclass

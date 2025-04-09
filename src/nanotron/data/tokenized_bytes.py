@@ -308,6 +308,7 @@ class TokenizedBytesFolderDataset(DatatroveFolderDataset):
         eos_token_id: int | None = None,
         skip_in_stream: bool = True,
         num_samples: Optional[int] = None,
+        folder_read_path: Optional[str] = None,
     ):
         log_rank("Using DatatroveFolderDataset", logger=logger, level=logging.INFO, rank=0)
         if return_positions and not eos_token_id:
@@ -329,6 +330,7 @@ class TokenizedBytesFolderDataset(DatatroveFolderDataset):
             seed=seed,
             return_positions=return_positions,
             eos_token_id=eos_token_id,
+            read_path=folder_read_path,
         )
         self.subset_log = TBFolderDatasetLog(
             dataset_type=self.__class__.__name__,
@@ -361,6 +363,7 @@ def build_dataset(
     skip_tokens: Optional[int] = None,
     shuffle: Optional[bool] = False,
     seed: Optional[int] = 6,
+    folder_read_path: Optional[str] = None,
 ) -> "DatatroveFolderDataset":
     """Build one TokenizedBytes dataset from a file or a folder on S3 or locally
 
@@ -376,6 +379,13 @@ def build_dataset(
             level=logging.INFO,
             rank=0,
         )
+        if folder_read_path:
+            log_rank(
+                f"Ignoring folder_read_path={folder_read_path} because use_old_brrr_dataloader is True",
+                logger=logger,
+                level=logging.WARNING,
+                rank=0,
+            )
         return OldTokenizedBytesFolderDataset(
             dataset_folder,
             seq_length,
@@ -391,7 +401,7 @@ def build_dataset(
 
     return TokenizedBytesFolderDataset(
         folder_path=dataset_folder,
-        filename_pattern=os.path.join(dataset_folder, "*.ds"),
+        filename_pattern="*.ds",
         seq_len=seq_length,
         recursive=False,
         token_size=token_size,
@@ -402,6 +412,7 @@ def build_dataset(
         seed=seed,
         skip_in_stream=skip_in_stream,
         num_samples=num_samples,
+        folder_read_path=folder_read_path,
     )
 
 
@@ -444,11 +455,12 @@ def get_tb_datasets(
             num_samples=train_num_samples,
             shuffle=shuffle,
             seed=seed,
+            folder_read_path=config.dataset_read_path[i] if config.dataset_read_path else None,
         )
-        for dataset_folder, max_tokens in zip(config.dataset_folder, dataset_max_tokens)
+        for i, (dataset_folder, max_tokens) in enumerate(zip(config.dataset_folder, dataset_max_tokens))
     ]
 
-    if len(datasets) == 1:
+    if len(datasets) == 1 and False:
         outputs_dataset = datasets[0]
     else:
         if dist.get_rank(parallel_context.world_pg) == 0:
