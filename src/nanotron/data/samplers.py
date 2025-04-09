@@ -213,10 +213,12 @@ class MegatronPretrainingSampler(BaseMegatronSampler):
             if len(batch) == self.micro_batch_times_data_parallel_size:
                 start_idx, end_idx = self.get_start_end_idx()
                 log_rank(
-                    f"DLrank {self.data_parallel_rank} batch {batch_idx} {batch[start_idx:end_idx]} self.consumed_samples {self.consumed_samples}",
+                    f"DP {self.data_parallel_rank} batch {batch_idx} {batch[start_idx:end_idx]} self.consumed_samples {self.consumed_samples}",
                     logger=logger,
                     level=logging.DEBUG,
                 )
+                # self.last_consumed_sample_all_ranks = batch[-1] # = self.consumed_samples?
+                self.consumed_samples += self.micro_batch_times_data_parallel_size
                 yield batch[start_idx:end_idx]
                 batch = []
                 batch_idx += 1

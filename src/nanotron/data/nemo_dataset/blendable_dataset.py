@@ -14,6 +14,7 @@
 
 """Blendable dataset."""
 
+import os
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, List
@@ -85,7 +86,7 @@ class BlendableDataset(torch.utils.data.Dataset):
 
         helpers.build_blending_indices(
             self.dataset_index,
-            self.dataset_sample_index,
+            self.dataset_sample_index,  # sequential for each dataset_source
             self.dataset_num_samples,
             weights,
             num_datasets,
@@ -110,14 +111,68 @@ class BlendableDataset(torch.utils.data.Dataset):
         # numpy_random_state.shuffle(self.dataset_index)
         # numpy_random_state = np.random.RandomState(self.random_seed)
         # numpy_random_state.shuffle(self.dataset_sample_index)
+        self.last_dataset_idx = None
+        self.last_dataset_sample_idx = None
+        self.last_item_idx = None
+
+        # Initialize consumption tracking
+        self.consumed_tokens = {idx: 0 for idx in range(len(datasets))}
+        self.sequence_length = None  # Will be set when first batch is processed
 
     def __len__(self):
         return self.size
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx):  # 0 <= idx <= train_steps*gbs
         dataset_idx = self.dataset_index[idx]
         sample_idx = self.dataset_sample_index[idx]
+        self.last_item_idx = idx
+        self.last_dataset_idx = dataset_idx
+        self.last_dataset_sample_idx = sample_idx
         return self.datasets[dataset_idx][sample_idx]
+
+    @property
+    def last_file_idx(self):
+        return self.datasets[self.last_dataset_idx].current_file
+
+    @property
+    def last_file_path(self):
+        return self.datasets[self.last_dataset_idx].current_file_path
+
+    @property
+    def last_dataset_path(self):
+        return self.datasets[self.last_dataset_idx].folder_path
+
+    def update_consumption_metrics(self, start_idx: int, end_idx: int, sequence_length: int):
+        """Update consumed samples/tokens for the current batch.
+
+        Args:
+            start_idx: Starting index of current batch for all dp ranks
+            end_idx: Ending index of current batch for all dp ranks
+            sequence_length: Sequence length for token calculation
+        """
+        if self.sequence_length is None:
+            self.sequence_length = sequence_length
+
+        # Get dataset indices for current batch
+        batch_indices = self.dataset_index[start_idx:end_idx]
+        unique_indices, counts = np.unique(batch_indices, return_counts=True)
+
+        # Update consumption dictionaries
+        for dataset_idx, count in zip(unique_indices, counts):
+            self.consumed_tokens[dataset_idx] += int(count * sequence_length)
+
+    def get_consumption_stats(self):
+        """Get current consumption statistics for all datasets.
+
+        Returns:
+            dict: Dictionary containing samples and tokens consumed per dataset
+        """
+        stats = {}
+        for dataset_idx, dataset in enumerate(self.datasets):
+            dataset_path = dataset.folder_path if hasattr(dataset, "folder_path") else str(dataset_idx)
+            dataset_name = os.path.basename(dataset_path)
+            stats[dataset_name] = {"tokens": self.consumed_tokens[dataset_idx]}
+        return stats
 
 
 class MemoryEfficientBlendableDataset(torch.utils.data.Dataset):

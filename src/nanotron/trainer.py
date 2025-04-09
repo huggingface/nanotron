@@ -274,6 +274,7 @@ class DistributedTrainer:
         self.iteration_step = self.metadata.last_train_step
         self.limit_val_batches = self.config.tokens.limit_val_batches
         self.current_dataloader: Optional[DataLoader] = None  # used for the current training stage
+        self.current_base_dl: Optional[DataLoader] = None  # used for the current training stage
 
         log_libraries_versions(logger=logger)
         log_rank("Config:", logger=logger, level=logging.INFO, rank=0, is_separator=True)
@@ -360,6 +361,23 @@ class DistributedTrainer:
                         project=self.config.general.project,
                         name=run_name,
                         config={"nanotron_config": self.config.as_dict()},
+                        settings=wandb.Settings(
+                            x_stats_sampling_interval=15.0,
+                            x_stats_open_metrics_endpoints={
+                                "dcgm": "http://localhost:9104/metrics",
+                                "node": "http://localhost:9100/metrics",
+                                "lustre": "http://localhost:9106/metrics",
+                                "gpu": "http://26.0.168.238:9103/metrics",
+                                "efa": "http://localhost:9101/metrics",
+                            },
+                            x_stats_open_metrics_filters=[
+                                "DCGM_FI_",
+                                "node_",
+                                "lustre_",
+                                "nvidia_gpu_",
+                                "efa_",
+                            ],
+                        ),
                     )
                     log_rank(
                         f"Initialized wandb run '{run_name}' for TP rank {tp_rank}",
@@ -374,11 +392,21 @@ class DistributedTrainer:
                     name=run_name,
                     config={"nanotron_config": self.config.as_dict()},
                     settings=wandb.Settings(
-                        # x_stats_sampling_interval=1.0,  # default 15.0
-                        # x_stats_disk_paths=("/scratch", "/fsx/nouamane/"),
-                        x_stats_open_metrics_endpoints={"dcgm": "http://localhost:9104/metrics"},
-                        x_stats_open_metrics_filters=["DCGM_FI_"],
-                        # x_file_stream_transmit_interval=1.0,
+                        x_stats_sampling_interval=1.0,
+                        x_stats_open_metrics_endpoints={
+                            "dcgm": "http://localhost:9104/metrics",
+                            "node": "http://localhost:9100/metrics",
+                            "lustre": "http://localhost:9106/metrics",
+                            "gpu": "http://26.0.168.238:9103/metrics",
+                            "efa": "http://localhost:9101/metrics",
+                        },
+                        x_stats_open_metrics_filters=[
+                            "DCGM_FI_",
+                            "node_",
+                            "lustre_",
+                            "nvidia_gpu_",
+                            "efa_",
+                        ],
                     ),
                 )
                 # save config file
@@ -414,6 +442,7 @@ class DistributedTrainer:
                 self.current_dataloader = sanity_check_dataloader(
                     dataloader=dataloader, parallel_context=self.parallel_context, config=self.config
                 )
+                self.current_base_dl = dataloader
             return
         elif isinstance(dataloaders, Generator):
             # TODO(xrsrke): this is a hacky way to handle DoReMi's dataloader
@@ -434,6 +463,7 @@ class DistributedTrainer:
                 logger=logger,
                 level=logging.INFO,
             )
+            self.current_base_dl = None
 
             # NOTE: Clear dataloader from memory
             del dataloader.dataset
@@ -492,6 +522,7 @@ class DistributedTrainer:
             self.current_dataloader = sanity_check_dataloader(
                 dataloader=dataloader, parallel_context=self.parallel_context, config=self.config
             )
+            self.current_base_dl = dataloader
 
     def train(
         self,
@@ -723,7 +754,7 @@ class DistributedTrainer:
         basic_log_entries = [
             # LogItem("consumed_samples", self.consumed_train_samples, "human_format"),  # , "12d"),
             LogItem(
-                "consumed_tokens",
+                "dataloader/consumed_tokens",
                 self.metadata.consumed_train_samples * self.config.tokens.sequence_length,
                 "human_format",
             ),  # , "12d"),
@@ -819,6 +850,42 @@ class DistributedTrainer:
         if os.environ.get("ENABLE_TIMERS", "0") == "1":
             for timer_name, timer in nanotron_timer.items():
                 basic_log_entries.append(LogItem(f"timers/{timer_name}", timer.elapsed, ".2f"))
+
+        if os.environ.get("DEBUG_DL", "0") == "1":
+            assert self.current_base_dl is not None, "current_base_dl should be defined"
+
+            # Add basic dataloader metrics
+            basic_log_entries.extend(
+                [
+                    LogItem(
+                        "dataloader/dp0_dataset_idx",
+                        int(self.current_base_dl.dataset.last_dataset_idx),
+                        "human_format",
+                    ),
+                    LogItem(
+                        "dataloader/dp0_sample_idx",
+                        int(self.current_base_dl.dataset.last_dataset_sample_idx),
+                        "human_format",
+                    ),
+                    LogItem("dataloader/dp0_file_idx", self.current_base_dl.dataset.last_file_idx, "human_format"),
+                    LogItem("dataloader/dp0_file_path", str(self.current_base_dl.dataset.last_file_path), None),
+                ]
+            )
+
+            # Update consumption tracking for current batch
+            self.current_base_dl.dataset.update_consumption_metrics(
+                start_idx=(self.iteration_step - 1) * self.global_batch_size,  # assumes we start from iteration_step=1
+                end_idx=self.iteration_step * self.global_batch_size,
+                sequence_length=self.sequence_length,
+            )
+
+            # Log consumption statistics
+            for dataset_name, stats in self.current_base_dl.dataset.get_consumption_stats().items():
+                basic_log_entries.extend(
+                    [
+                        LogItem(f"dataloader/consumed_tokens/{dataset_name}", stats["tokens"], "human_format"),
+                    ]
+                )
 
         # WandB logging - determine if this rank should log to wandb
         should_log_to_wandb = wandb is not None and (
