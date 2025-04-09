@@ -17,6 +17,7 @@
 from typing import Dict, List, Optional, Union
 
 import torch
+import torch.distributed as dist
 import torch.nn.functional as F
 from torch import nn
 from torch.utils.checkpoint import CheckpointFunction
@@ -31,6 +32,7 @@ from nanotron.models.llama import (
     MLP,
     CausalSelfAttention,
     Embedding,
+    GLUActivation,
     LlamaDecoderLayer,
     Loss,
     LossWithZLoss,
@@ -49,6 +51,31 @@ from nanotron.random import RandomStates
 from nanotron.scaling.parametrization import SpectralMupParametrizator, StandardParametrizator
 
 logger = logging.get_logger(__name__)
+
+
+class SequentialMLP(nn.Module):
+    def __init__(
+        self,
+        config: Llama4Config,
+    ):
+        super().__init__()
+
+        self.gate_up_proj = nn.Linear(
+            config.hidden_size,
+            2 * config.intermediate_size,
+            bias=False,
+        )
+        self.down_proj = nn.Linear(
+            config.intermediate_size,
+            config.hidden_size,
+            bias=False,
+        )
+        self.split_silu_mul = GLUActivation(config.hidden_act)
+
+    def forward(self, hidden_states):  # [seq_length, batch_size, hidden_dim]
+        merged_states = self.gate_up_proj(hidden_states)
+        hidden_states = self.down_proj(self.split_silu_mul(merged_states))
+        return {"hidden_states": hidden_states}
 
 
 # TODO: do one MoE backend with different configurations for
@@ -104,16 +131,8 @@ class Llama4TextMoELayer(nn.Module):
         # )
 
         # Create the expert MLPs
-        self.experts = nn.ModuleList(
-            [
-                MLP(
-                    config=config,
-                    parallel_config=parallel_config,
-                    tp_pg=tp_pg,
-                )
-                for _ in range(self.num_local_experts)
-            ]
-        )
+        # TODO: do grouped gemm
+        self.experts = nn.ModuleList([SequentialMLP(config=config) for _ in range(self.num_local_experts)])
 
         # Whether to recompute MoE layer during backward pass for memory efficiency
         self.recompute_layer = getattr(parallel_config, "recompute_layer", False)
@@ -179,22 +198,32 @@ class Llama4TextMoELayer(nn.Module):
 
     #     return dispatched_inputs, expert_counts
 
+    # NOTE: hanging right here
     def _combine_expert_outputs(self, expert_outputs, routing_indices, original_shape):
         """
         Combines outputs from different experts back to the original tensor layout.
         """
         # Initialize output tensor with zeros
-        combined_output = torch.zeros(original_shape, device=expert_outputs[0].device)
+        combined_output = torch.zeros(original_shape, device=expert_outputs[0]["hidden_states"].device)
         expert_rank = self.parallel_context.ep_pg.rank()
         for local_expert_idx, expert_output in enumerate(expert_outputs):
             global_expert_idx = local_expert_idx * self.expert_parallel_size + expert_rank
-            if expert_output.shape[0] == 0:  # Skip if no tokens were routed to this expert
+            if expert_output["hidden_states"].shape[0] == 0:  # Skip if no tokens were routed to this expert
                 continue
 
             # Find positions where this expert was in the top-k
-            expert_mask = routing_indices == global_expert_idx
-            combined_output[expert_mask] += expert_output
+            dist.barrier()
+            assert 1 == 1
 
+            expert_mask = routing_indices == global_expert_idx
+            dist.barrier()
+            assert 1 == 1
+            combined_output[expert_mask] += expert_output
+            dist.barrier()
+            assert 1 == 1
+
+        dist.barrier()
+        assert 1 == 1
         return combined_output
 
     def _core_forward(self, hidden_states: TensorType["seq_len", "bs", "d_model"]):
@@ -208,17 +237,45 @@ class Llama4TextMoELayer(nn.Module):
         # Process tokens with their assigned experts
         expert_outputs = []
         for expert_idx, inputs in enumerate(dispatched_inputs):
+            dist.barrier()
+            assert 1 == 1
+            log_rank(
+                f"before self.experts[expert_idx](hidden_states=inputs) \n" f"inputs.device={inputs.device}",
+                logger=logger,
+                level=logging.INFO,
+            )
             # if count == 0:  # Skip computation if no tokens assigned
             #     expert_outputs.append(torch.tensor([], device=hidden_states.device))
             #     continue
 
             # Forward through the expert
-            output = self.experts[expert_idx](hidden_states=inputs)["hidden_states"]
+            # TODO: do batch matrix multiplication here
+            output = self.experts[expert_idx](hidden_states=inputs)
+            dist.barrier()
+            assert 1 == 1
+            log_rank(
+                "after self.experts[expert_idx](hidden_states=inputs)",
+                logger=logger,
+                level=logging.INFO,
+            )
             expert_outputs.append(output)
+
+            dist.barrier()
+            assert 1 == 1
+            log_rank(
+                "after expert_outputs.append(output)",
+                logger=logger,
+                level=logging.INFO,
+            )
+
+        dist.barrier()
+        assert 1 == 1
 
         # Combine expert outputs
         output = self._combine_expert_outputs(expert_outputs, routing_indices, hidden_states.shape)
 
+        dist.barrier()
+        assert 1 == 1
         # Add shared expert contribution if enabled
         # if self.enable_shared_expert:
         #     shared_expert_output = self.shared_expert(hidden_states=hidden_states)["hidden_states"]
