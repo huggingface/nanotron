@@ -142,6 +142,8 @@ class Qwen2Attention(nn.Module):
         layer_idx: int,
     ):
         super().__init__()
+        self.config = config
+        self.layer_idx = layer_idx
         self.hidden_size = config.hidden_size
         self.tp_pg_size = tp_pg.size()
 
@@ -225,49 +227,55 @@ class Qwen2Attention(nn.Module):
         seq_length = position_ids.shape[1]
         position_ids = position_ids.view(-1)  # [batch_size*seq_length]
 
+        # Compute cu_seqlens
+        if position_ids.numel() > 0:
+            start_indices = torch.where(position_ids == 0)[0]
+            cu_seqlens = torch.cat(
+                [start_indices, torch.tensor([position_ids.numel()], dtype=torch.int32, device=start_indices.device)]
+            ).to(torch.int32)
+        else:
+            cu_seqlens = None
+
         qkv = self.qkv_proj(hidden_states)
+
         if self._use_qkv_packed:
-            attn_output = self._forward_packed(qkv, seq_length, position_ids)
+            attn_output = self._forward_packed(qkv, seq_length, position_ids, cu_seqlens)
         else:
             q, k, v = qkv.split(
                 [self.local_q_size, self.local_kv_size, self.local_kv_size], dim=-1
             )  # [batch_size*seq_length, q_size], [batch_size*seq_length, kv_size]
-
-            rotary_pos_emb = self.rotary_emb(
-                position_ids=position_ids if not self.simple_causal_mask else None, seq_length=seq_length
-            )  # [b*s, dim] or [seq_length, dim]
-
             q = q.view(-1, self.local_num_heads, self.head_dim)  # [b*s, num_heads, head_dim]
             k = k.view(-1, self.local_num_kv_heads, self.head_dim)  # [b*s, num_kv_heads, head_dim]
             v = v.view(-1, self.local_num_kv_heads, self.head_dim)  # [b*s, num_kv_heads, head_dim]
-            q = self.rotary_emb.apply_rotary_pos_emb(
-                q, rotary_pos_emb, seq_length=seq_length
-            )  # [b*s, num_heads, head_dim]
-            k = self.rotary_emb.apply_rotary_pos_emb(
-                k, rotary_pos_emb, seq_length=seq_length
-            )  # [b*s, num_kv_heads, head_dim]
-
+            if self.config.no_rope_layer is None or (self.layer_idx + 1) % self.config.no_rope_layer != 0:
+                rotary_pos_emb = self.rotary_emb(
+                    position_ids=position_ids if not self.simple_causal_mask else None, seq_length=seq_length
+                )  # [b*s, dim] or [seq_length, dim]
+                q = self.rotary_emb.apply_rotary_pos_emb(
+                    q, rotary_pos_emb, seq_length=seq_length
+                )  # [b*s, num_heads, head_dim]
+                k = self.rotary_emb.apply_rotary_pos_emb(
+                    k, rotary_pos_emb, seq_length=seq_length
+                )  # [b*s, num_kv_heads, head_dim]
+            else:
+                log_rank(f"skipping rotary for layer {self.layer_idx + 1}", logger=logger, level=logging.DEBUG, rank=0)
             attn_output = self.attention(q, k, v, position_ids=position_ids, seq_length=seq_length)
         output = self.o_proj(attn_output)
         return {"hidden_states": output, "position_ids": position_ids.view(-1, seq_length)}
 
-    def _forward_packed(self, qkv, seq_length, position_ids):
+    def _forward_packed(self, qkv, seq_length, position_ids, cu_seqlens):
         q = qkv[..., : self.local_num_heads * self.head_dim]  # Not contiguous, similar to flash_attn
         kv = qkv[..., self.local_num_heads * self.head_dim :]  # Not contiguous, similar to flash_attn
         q = q.view(-1, seq_length, self.local_num_heads, self.head_dim)
         kv = kv.view(-1, seq_length, 2, self.local_num_kv_heads, self.head_dim)
-        q, kv = self.rotary_emb(
-            q, kv, seqlen_offset=0, max_seqlen=None
-        )  # TODO: should we use position_ids here? flash_attn doesn't
+        if self.config.no_rope_layer is None or (self.layer_idx + 1) % self.config.no_rope_layer != 0:
+            q, kv = self.rotary_emb(
+                q, kv, seqlen_offset=0, max_seqlen=None
+            )  # TODO: should we use position_ids here? flash_attn doesn't
+        else:
+            log_rank(f"skipping rotary for layer {self.layer_idx + 1}", logger=logger, level=logging.DEBUG, rank=0)
         q = q.view(-1, self.local_num_heads, self.head_dim)
         kv = kv.view(-1, 2, self.local_num_kv_heads, self.head_dim)
-
-        # Compute cu_seqlens
-        start_indices = torch.where(position_ids == 0)[0]
-        cu_seqlens = torch.cat(
-            [start_indices, torch.tensor([position_ids.numel()], dtype=torch.int32, device=start_indices.device)]
-        ).to(torch.int32)
-
         max_seqlen = seq_length  # TODO: should this be max position_ids?
 
         assert cu_seqlens.dtype == torch.int32
