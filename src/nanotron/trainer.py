@@ -275,6 +275,7 @@ class DistributedTrainer:
         self.limit_val_batches = self.config.tokens.limit_val_batches
         self.current_dataloader: Optional[DataLoader] = None  # used for the current training stage
         self.current_base_dl: Optional[DataLoader] = None  # used for the current training stage
+        self.iteration_timer = None  # Will be initialized during training
 
         log_libraries_versions(logger=logger)
         log_rank("Config:", logger=logger, level=logging.INFO, rank=0, is_separator=True)
@@ -554,7 +555,9 @@ class DistributedTrainer:
                     logger.info(f"Profiler on for step {self.iteration_step}")
                     prof.step()
 
-                self.iteration_start_time = time.time()
+                # Use CUDA event-based timing for more accurate GPU-side elapsed time measurement
+                self.iteration_timer = nanotron_timer("iteration_time", "cuda", cuda_sync=False)
+                self.iteration_timer.start()
                 self._update_dataloader_based_on_training_stages(dataloader_or_dls)
 
                 # Training step
@@ -738,8 +741,9 @@ class DistributedTrainer:
     ) -> None:
         # TODO @nouamanetazi: Megatron-LM seems to be using a barrier to report their interval time. Check if this is necessary. https://github.com/NouamaneTazi/Megatron-LM/blob/e241a96c3085b18e36c6cee1d68a8155de77b5a6/megatron/training.py#L607
         dist.barrier()
-        torch.cuda.synchronize()
-        elapsed_time_per_iteration_ms = (time.time() - self.iteration_start_time) * 1000
+        # End the iteration timer and get elapsed time in milliseconds
+        self.iteration_timer.end()
+        elapsed_time_per_iteration_ms = self.iteration_timer.elapsed * 1000
         tokens_per_sec = (
             self.global_batch_size * self.sequence_length / (elapsed_time_per_iteration_ms / 1000)
         )  # tokens_per_sec is calculated using sequence_length
