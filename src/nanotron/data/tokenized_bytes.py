@@ -310,7 +310,7 @@ class TokenizedBytesFolderDataset(DatatroveFolderDataset):
         skip_in_stream: bool = True,
         num_samples: Optional[int] = None,
         folder_read_path: Optional[str] = None,
-        force_update_cache: bool = os.environ.get("FORCE_UPDATE_CACHE_S3", False),
+        force_update_cache: bool = os.environ.get("FORCE_UPDATE_CACHE_S3", 0) == "1",
     ):
         log_rank("Using DatatroveFolderDataset", logger=logger, level=logging.INFO, rank=0)
         if return_positions and not eos_token_id:
