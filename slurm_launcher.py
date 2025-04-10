@@ -86,7 +86,7 @@ def parse_args():
     )
 
     # Required arguments
-    parser.add_argument("--run", type=str, default="", help="Name for this experiment run")
+    parser.add_argument("--run", type=str, default="nanotron", help="Name for this experiment run")
 
     # Slurm job configuration
     slurm_group = parser.add_argument_group("Slurm Configuration")
@@ -466,6 +466,10 @@ def create_slurm_script(
     assert dp * pp * tp * cp * ep % gpus_per_node == 0
     nodes = dp * pp * tp * cp * ep // gpus_per_node
 
+    # Ensure config_path is a full path
+    if not os.path.isabs(config_path):
+        config_path = os.path.abspath(config_path)
+
     script = f"""#!/bin/bash
 #SBATCH --job-name={args.run}
 #SBATCH --nodes={nodes}
@@ -476,7 +480,6 @@ def create_slurm_script(
 #SBATCH --partition={args.partition}
 #SBATCH --output={logs_path}/{timestamp}-%x-%j.out
 #SBATCH --qos={args.qos}
-#SBATCH --reservation=smollm
 #SBATCH --wait-all-nodes=1        # fail if any node is not ready
 {f"#SBATCH --time={args.time_limit}" if args.time_limit else ""}
 """
@@ -495,6 +498,9 @@ secs_to_human() {{
 }}
 start=$(date +%s)
 echo "$(date -d @${{start}} "+%Y-%m-%d %H:%M:%S"): ${{SLURM_JOB_NAME}} start id=${{SLURM_JOB_ID}}\\n"
+
+# Get the actual slurm script path from the environment
+echo "Slurm script path: $(scontrol show job $SLURM_JOB_ID | grep -oP 'Command=\\K[^ ]+')"
 
 # SLURM setup
 export HOSTNAMES=`scontrol show hostnames "$SLURM_JOB_NODELIST"`
@@ -523,16 +529,18 @@ export WORLD_SIZE=$(($NNODES * $GPUS_PER_NODE))
 # Nanotron specific
 {"export NANOTRON_BENCHMARK=1" if args.bench else ""}
 {"# " if args.enable_wandb else ""}export WANDB_MODE=disabled
+# export ENABLE_TIMERS=1
+# export DEBUG_CPU=1
 
 
 CMD="{run_train_script} --config-file {config_path}"
 
 # echo nvcc version and assert we use cuda 12.4
 echo "NVCC version: $(nvcc --version)"
-# if ! nvcc --version | grep -q "12.4"; then
-#     echo "ERROR: CUDA 12.4 is required to avoid dataloader issues"
-#     exit 1
-# fi
+if ! nvcc --version | grep -q "12.4"; then
+    echo "ERROR: CUDA 12.4 is required to avoid dataloader issues"
+    exit 1
+fi
 
 # Log system information
 echo "PyTorch version: $(python -c 'import torch; print(torch.__version__)')"
@@ -541,6 +549,20 @@ echo "CUDA used to build PyTorch: $(python -c 'import torch; print(torch.version
 echo "ROCM used to build PyTorch: $(python -c 'import torch; print(torch.version.hip)')"
 
 echo "PATH: $PATH"
+# Log environment variables
+echo "Environment variables:"
+printenv | sort
+
+# Log python path
+echo "Python path: $(which python)"
+
+# Log torchrun path
+echo "Torchrun path: $(which torchrun)"
+
+# Log installed Python packages
+echo "Installed Python packages:"
+python -m pip freeze
+
 
 # Log GPU information
 nvidia-smi
@@ -599,12 +621,10 @@ def main():
         # bench
         if args.bench:
             config.general.benchmark_csv_path = args.bench
-        if args.run:
-            config.general.run = args.run
 
     # Save config to YAML file
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    run_name = config.general.run if config.general.run else "nanotron"
+    run_name = args.run.replace(" ", "_")
     config_dir = os.path.join(args.configs_path, run_name)
     os.makedirs(config_dir, exist_ok=True)
     config_path = os.path.join(config_dir, f"{timestamp}-{run_name}.yaml")
@@ -630,7 +650,6 @@ def main():
         print(f"🔍 Would submit job with config from {config_path}")
     else:
         job_id = launch_slurm_job(slurm_script)
-        run_name = args.run.replace("-%jobid", "")
         print(f"🚀 Slurm job submitted with JOBID: {job_id}")
         print(
             f"🔍 Logs will be available at: {os.path.join(args.slurm_logs_path, run_name, f'{timestamp}-{run_name}-{job_id}.out')}"
