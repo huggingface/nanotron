@@ -889,9 +889,15 @@ class DistributedTrainer:
             all_log_entries = list(basic_log_entries)
 
             # Collect all metrics based on the log level
-            detailed_metrics = self.metrics_logging.collect_all_metrics(
-                model=self.unwrapped_model,
-            )
+            # detailed_metrics = self.metrics_logging.collect_all_metrics(
+            #     model=self.unwrapped_model,
+            # )
+            detailed_metrics = {}
+
+            # Collect model-specific internal metrics (like attention statistics)
+            if hasattr(self.unwrapped_model, "get_metrics"):
+                model_metrics = self.unwrapped_model.get_metrics(clear=True)
+                detailed_metrics.update(model_metrics)
 
             # Add all detailed metrics to wandb
             for name, value in detailed_metrics.items():
