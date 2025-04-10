@@ -1,3 +1,5 @@
+import threading
+from collections import defaultdict
 from typing import Dict, List, Optional, Tuple, Union
 
 import torch
@@ -32,6 +34,75 @@ from nanotron.random import RandomStates
 from nanotron.scaling.parametrization import SpectralMupParametrizator, StandardParametrizator
 
 logger = logging.get_logger(__name__)
+
+# Global registry for tracking various metrics during model execution
+_METRICS_REGISTRY = defaultdict(lambda: defaultdict(list))
+_registry_lock = threading.Lock()
+
+
+def register_metric(category, name, value, detach=True):
+    """
+    Register a metric value for later analysis and logging.
+
+    Args:
+        category (str): The category of the metric (e.g., 'attention', 'mlp')
+        name (str): The name or identifier of the metric (e.g., 'layer_0_softmax_lse')
+        value (torch.Tensor): The tensor value to register
+        detach (bool): Whether to detach the tensor from computation graph
+    """
+    if value is not None:
+        with _registry_lock:
+            if detach and isinstance(value, torch.Tensor):
+                _METRICS_REGISTRY[category][name].append(value.detach())
+            else:
+                _METRICS_REGISTRY[category][name].append(value)
+
+
+def get_metrics_stats(clear=True):
+    """
+    Get statistics of registered metrics.
+
+    Args:
+        clear (bool): Whether to clear the registry after retrieving stats
+
+    Returns:
+        dict: Dictionary containing metric statistics
+    """
+    with _registry_lock:
+        stats = {}
+
+        for category, metrics in _METRICS_REGISTRY.items():
+            for name, values in metrics.items():
+                if not values:
+                    continue
+
+                # Handle tensor values
+                if all(isinstance(v, torch.Tensor) for v in values):
+                    try:
+                        # Try to concatenate tensors if shapes allow
+                        concatenated = torch.cat([v.view(-1) for v in values], dim=0)
+                        stats[f"{category}/{name}/mean"] = concatenated.mean().item()
+                        stats[f"{category}/{name}/max"] = concatenated.max().item()
+                        stats[f"{category}/{name}/min"] = concatenated.min().item()
+                        stats[f"{category}/{name}/std"] = concatenated.std().item() if len(concatenated) > 1 else 0.0
+                    except (RuntimeError, ValueError):
+                        # Fall back to processing individual tensors if concatenation fails
+                        means = [v.mean().item() for v in values]
+                        stats[f"{category}/{name}/mean"] = sum(means) / len(means)
+                        stats[f"{category}/{name}/max"] = max(v.max().item() for v in values)
+                        stats[f"{category}/{name}/min"] = min(v.min().item() for v in values)
+
+                # Handle scalar values
+                elif all(isinstance(v, (int, float)) for v in values):
+                    stats[f"{category}/{name}/mean"] = sum(values) / len(values)
+                    stats[f"{category}/{name}/max"] = max(values)
+                    stats[f"{category}/{name}/min"] = min(values)
+
+        # Clear the registry if requested
+        if clear:
+            _METRICS_REGISTRY.clear()
+
+        return stats
 
 
 class CoreAttention(nn.Module):
@@ -212,6 +283,7 @@ class Qwen2Attention(nn.Module):
         self.attention = CoreAttention(config, tp_pg, cp_pg, layer_idx)
         self.simple_causal_mask = True
         self._use_qkv_packed = config._use_qkv_packed
+        self.return_attn_probs = config._return_attn_probs
 
         # TODO: support doc masking / SWA / SFT / inference
 
@@ -233,7 +305,9 @@ class Qwen2Attention(nn.Module):
         qkv = self.qkv_proj(hidden_states)
 
         if self._use_qkv_packed:
-            attn_output = self._forward_packed(qkv, seq_length, position_ids, cu_seqlens)
+            attn_output, softmax_lse = self._forward_packed(qkv, seq_length, position_ids, cu_seqlens)
+            if self.return_attn_probs:
+                register_metric("attention", f"layer_{self.layer_idx}_softmax_lse", softmax_lse)
         else:
             q, k, v = qkv.split(
                 [self.local_q_size, self.local_kv_size, self.local_kv_size], dim=-1
@@ -279,7 +353,7 @@ class Qwen2Attention(nn.Module):
         assert cu_seqlens.dtype == torch.int32
         assert max_seqlen is not None
         assert isinstance(max_seqlen, int)
-        attn_output = flash_attn_varlen_kvpacked_func(
+        attn_outputs = flash_attn_varlen_kvpacked_func(
             q,
             kv,
             cu_seqlens,
@@ -292,9 +366,14 @@ class Qwen2Attention(nn.Module):
             alibi_slopes=None,
             window_size=(-1, -1),  # TODO: fix
             deterministic=False,
+            return_attn_probs=self.return_attn_probs,
         )  # Not contiguous, similar to flash_attn
+        if self.return_attn_probs:
+            attn_output, softmax_lse, _ = attn_outputs
+        else:
+            attn_output, softmax_lse = attn_outputs, None
         # flash_attn use rearrange instead of reshape https://github.com/Dao-AILab/flash-attention/blob/1a58058a6da83bd7baaf4c512e8a1abe0240bb77/flash_attn/modules/mha.py#L730
-        return attn_output.reshape(-1, self.local_num_heads * self.head_dim)  # [b*s, num_heads*head_dim]
+        return attn_output.reshape(-1, self.local_num_heads * self.head_dim), softmax_lse  # [b*s, num_heads*head_dim]
 
 
 class Qwen2MLP(nn.Module):
@@ -957,6 +1036,18 @@ class Qwen2ForTraining(NanotronModel):
     def get_flops_per_sec(self, iteration_time_in_sec, sequence_length, global_batch_size):
         """Get flops per second for a given model"""
         return self.model.get_flops_per_sec(iteration_time_in_sec, sequence_length, global_batch_size)
+
+    def get_metrics_stats(self, clear=True):
+        """
+        Helper method to get all registered metrics statistics for logging
+
+        Args:
+            clear (bool): Whether to clear the registry after getting stats
+
+        Returns:
+            dict: Dictionary of metrics statistics
+        """
+        return get_metrics_stats(clear=clear)
 
 
 def get_flops(
