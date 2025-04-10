@@ -895,8 +895,8 @@ class DistributedTrainer:
             detailed_metrics = {}
 
             # Collect model-specific internal metrics (like attention statistics)
-            if hasattr(self.unwrapped_model, "get_metrics"):
-                model_metrics = self.unwrapped_model.get_metrics(clear=True)
+            if hasattr(self.unwrapped_model, "get_metrics_stats"):
+                model_metrics = self.unwrapped_model.get_metrics_stats(clear=True)
                 detailed_metrics.update(model_metrics)
 
             # Add all detailed metrics to wandb
