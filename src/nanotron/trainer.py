@@ -370,26 +370,33 @@ class DistributedTrainer:
                     )
             elif world_rank == self.logger_ranks[0]:
                 run_name = f"{current_time}_{self.config.general.run}"
+                x_stats_sampling_interval = os.environ.get("STATS_SAMPLING_INTERVAL_IN_SEC", None)
                 wandb.init(
                     project=self.config.general.project,
                     name=run_name,
                     config={"nanotron_config": self.config.as_dict()},
                     settings=wandb.Settings(
-                        x_stats_sampling_interval=float(os.environ.get("STATS_SAMPLING_INTERVAL", 1.0)),
+                        x_stats_sampling_interval=float(x_stats_sampling_interval)
+                        if x_stats_sampling_interval is not None
+                        else None,
                         x_stats_open_metrics_endpoints={
                             "dcgm": "http://localhost:9104/metrics",
                             "node": "http://localhost:9100/metrics",
                             "lustre": "http://localhost:9106/metrics",
                             "gpu": "http://26.0.168.238:9103/metrics",
                             "efa": "http://localhost:9101/metrics",
-                        },
+                        }
+                        if x_stats_sampling_interval is not None
+                        else None,
                         x_stats_open_metrics_filters=[
                             "DCGM_FI_",
                             "node_",
                             "lustre_",
                             "nvidia_gpu_",
                             "efa_",
-                        ],
+                        ]
+                        if x_stats_sampling_interval is not None
+                        else None,
                     ),
                 )
                 # save config file
