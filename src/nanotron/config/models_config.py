@@ -340,14 +340,14 @@ class Llama4TextConfig:
     head_dim: int = 128
     sliding_window_size: Optional[int] = None
 
+    # interleave_moe_layer_step: int = 1
     # MoE specific parameters
-    for_llm_compressor: bool = False
-    num_local_experts: int = 16
-    num_experts_per_tok: int = 1
-    interleave_moe_layer_step: int = 1
-    output_router_logits: bool = False
-    router_aux_loss_coef: float = 0.001
-    router_jitter_noise: float = 0.0
+    # for_llm_compressor: bool = False
+    # num_local_experts: int = 16
+    # num_experts_per_tok: int = 1
+    # output_router_logits: bool = False
+    # router_aux_loss_coef: float = 0.001
+    # router_jitter_noise: float = 0.0
 
     # TODO: can we deduplicate this?
     z_loss_enabled: bool = False
@@ -356,54 +356,77 @@ class Llama4TextConfig:
 
 @dataclass
 class Llama4Config:
-    """Configuration for a LLAMA4 model with multimodal support
+    """Configuration for a LLAMA4 model (text-only version)"""
 
-    Be careful on having a coherent typing as we use it to reconstruct the model from yaml
-    """
+    # Core LLAMA parameters (aligned with LlamaConfig)
+    bos_token_id: int = 200000
+    eos_token_id: List[int] = field(default_factory=lambda: [200001, 200002, 200003, 200007, 200008])
+    hidden_act: str = "silu"
+    hidden_size: int = 5120
+    initializer_range: float = 0.02
+    intermediate_size: int = 8192
+    attention_dropout: float = 0.0
+    max_position_embeddings: int = 131072
+    num_attention_heads: int = 40
+    num_hidden_layers: int = 48
+    num_key_value_heads: int = 8
+    pad_token_id: int = 200008
+    rms_norm_eps: float = 1e-5
+    rope_theta: float = 500000.0
+    rope_interleaved: bool = False
+    tie_word_embeddings: bool = False
+    use_cache: bool = True
+    vocab_size: int = 202048
+    _attn_implementation: Optional[AttentionImplementation] = DEFAULT_ATTENTION_IMPLEMENTATION
+    z_loss_enabled: bool = False
+    z_loss_coefficient: float = 0.0001
+    attention_bias: bool = False
 
-    # Configuration components
-    text_config: Llama4TextConfig
-    vision_config: Llama4VisionConfig
+    # Llama4-specific extensions
+    is_llama4_config: bool = True
+    # model_type: str = "llama4"
+    rope_scaling: Optional[dict] = field(
+        default_factory=lambda: {
+            "factor": 8.0,
+            "high_freq_factor": 4.0,
+            "low_freq_factor": 1.0,
+            "original_max_position_embeddings": 8192,
+            "rope_type": "llama3",
+        }
+    )
+    attention_chunk_size: int = 8192
+    intermediate_size_mlp: int = 16384
+    use_qk_norm: bool = True
+    no_rope_layers: List[int] = field(default_factory=list)
+    head_dim: int = 128
+    sliding_window_size: Optional[int] = None
 
-    is_llama4_config: bool  # We use this help differentiate models in yaml/python conversion
-    model_type: str = "llama4"
-
-    # Multimodal tokens
-    boi_token_index: int = 200080  # Beginning of image token
-    eoi_token_index: int = 200081  # End of image token
-    image_token_index: int = 200092
-
-    # TODO: do a base model config
-    # z_loss_enabled: bool = False  # Z-loss regularization https://www.jmlr.org/papers/volume24/22-1144/22-1144.pdf
-
-    # MoE configuration
-    # moe_config: Optional[MoEConfig] = None
+    # MoE configuration (updated to match Qwen2Config pattern)
+    moe_config: Optional[MoEConfig] = None
 
     def __post_init__(self):
         self._is_using_mup: bool = False
 
-        # Setup MoE configuration if not provided
-        # if self.moe_config is None and self.text_config.num_local_experts > 1:
-        #     self.moe_config = MoEConfig(
-        #         num_experts=self.text_config.num_local_experts,
-        #         top_k=self.text_config.num_experts_per_tok,
-        #         layers=list(range(0, self.text_config.num_hidden_layers, self.text_config.interleave_moe_layer_step)),
-        #         output_router_logits=self.text_config.output_router_logits,
-        #         router_aux_loss_coef=self.text_config.router_aux_loss_coef,
-        #         router_jitter_noise=self.text_config.router_jitter_noise,
-        #     )
+        # Validate attention implementation
+        if self._attn_implementation is not None:
+            assert self._attn_implementation in ALL_ATTENTION_FUNCTIONS, (
+                f"Invalid attention implementation: {self._attn_implementation}. "
+                f"Available: {list(ALL_ATTENTION_FUNCTIONS.keys())}"
+            )
 
-        # Validate that the attention implementation is valid
-        if self.text_config._attn_implementation is not None:
-            assert (
-                self.text_config._attn_implementation in ALL_ATTENTION_FUNCTIONS
-            ), f"Invalid attention implementation: {self.text_config._attn_implementation}. Available options are: {ALL_ATTENTION_FUNCTIONS.keys()}"
-
-        if self.text_config.sliding_window_size is not None:
-            assert self.text_config._attn_implementation in [
+        # Validate sliding window compatibility
+        if self.sliding_window_size is not None:
+            assert self._attn_implementation in [
                 "flex_attention",
                 "flash_attention_2",
-            ], "Sliding window is only supported for Flex Attention and Flash Attention 2"
+            ], "Sliding window requires flex_attention or flash_attention_2"
+
+        # Handle MoE configuration
+        if self.moe_config is not None:
+            self.moe_config = MoEConfig(**self.moe_config)
+
+        if self.moe_config and self.moe_config.layers == [-1]:
+            self.moe_config.layers = list(range(self.num_hidden_layers))
 
     @property
     def is_using_mup(self) -> bool:
@@ -413,41 +436,6 @@ class Llama4Config:
     def is_moe_model(self) -> bool:
         """Returns True if the model uses MoE layers"""
         return self.moe_config is not None and len(self.moe_config.layers) > 0
-
-    # Convenience properties to access text config parameters directly
-    @property
-    def hidden_size(self) -> int:
-        return self.text_config.hidden_size
-
-    @property
-    def num_hidden_layers(self) -> int:
-        return self.text_config.num_hidden_layers
-
-    @property
-    def num_attention_heads(self) -> int:
-        return self.text_config.num_attention_heads
-
-    @property
-    def num_key_value_heads(self) -> int:
-        # TODO: assert num_key_value_heads from text encoder and vision encoder are the same?
-        return self.text_config.num_key_value_heads
-
-    @property
-    def vocab_size(self) -> int:
-        return self.text_config.vocab_size
-
-    @vocab_size.setter
-    def vocab_size(self, value: int):
-        self.text_config.vocab_size = value
-
-    # TODO: refactor, and do a base model config
-    @property
-    def z_loss_enabled(self) -> bool:
-        return self.text_config.z_loss_enabled
-
-    @z_loss_enabled.setter
-    def z_loss_enabled(self, value: bool):
-        self.text_config.z_loss_enabled = value
 
 
 NanotronConfigs = Union[LlamaConfig, Starcoder2Config, Qwen2Config, Llama4Config, Any]

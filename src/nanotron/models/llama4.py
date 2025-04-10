@@ -24,7 +24,7 @@ from torch.utils.checkpoint import CheckpointFunction
 from torchtyping import TensorType
 
 from nanotron import logging
-from nanotron.config import Config, Llama4Config, Llama4TextConfig, ParallelismArgs
+from nanotron.config import Config, Llama4Config, ParallelismArgs
 from nanotron.config.models_config import RandomInit, SpectralMupInit
 from nanotron.logging import log_rank
 from nanotron.models import NanotronModel
@@ -88,7 +88,7 @@ class Llama4TextMoELayer(nn.Module):
 
     def __init__(
         self,
-        config: Llama4TextConfig,
+        config: Llama4Config,
         parallel_config: Optional[ParallelismArgs],
         tp_pg: dist.ProcessGroup,
         layer_idx: int = 0,
@@ -98,8 +98,8 @@ class Llama4TextMoELayer(nn.Module):
         self.intermediate_size = config.intermediate_size
 
         # MoE specific configurations
-        self.num_experts = config.num_local_experts  # Total number of experts
-        self.num_experts_per_token = config.num_experts_per_tok  # Number of experts used per token (top-k)
+        self.num_experts = config.moe_config.num_experts  # Total number of experts
+        self.num_experts_per_token = config.moe_config.top_k  # Number of experts used per token (top-k)
         self.expert_parallel_size = getattr(parallel_config, "expert_parallel_size", 1)
         self.num_local_experts = self.num_experts // self.expert_parallel_size  # Experts per device
 
@@ -410,14 +410,14 @@ class Llama4Model(nn.Module):
             module_builder=Embedding,
             module_kwargs={
                 "tp_pg": parallel_context.tp_pg,
-                "config": config.text_config,
+                "config": config,
                 "parallel_config": parallel_config,
             },
             module_input_keys={"input_ids", "input_mask"},
             module_output_keys={"input_embeds"},
         )
-        log_rank(f"Initialize RoPE Theta = {config.text_config.rope_theta}", logger=logger, level=logging.INFO, rank=0)
-        if config.text_config.rope_interleaved:
+        log_rank(f"Initialize RoPE Theta = {config.rope_theta}", logger=logger, level=logging.INFO, rank=0)
+        if config.rope_interleaved:
             log_rank(
                 "The RoPE interleaved version differs from the Transformers implementation. It's better to set rope_interleaved=False if you need to convert the weights to Transformers",
                 logger=logger,
@@ -430,7 +430,7 @@ class Llama4Model(nn.Module):
                     p2p=self.p2p,
                     module_builder=Llama4DecoderLayer,
                     module_kwargs={
-                        "config": config.text_config,
+                        "config": config,
                         "parallel_config": parallel_config,
                         "parallel_context": parallel_context,
                         "layer_idx": layer_idx,
@@ -445,7 +445,7 @@ class Llama4Model(nn.Module):
         self.final_layer_norm = PipelineBlock(
             p2p=self.p2p,
             module_builder=TritonRMSNorm,
-            module_kwargs={"hidden_size": config.text_config.hidden_size, "eps": config.text_config.rms_norm_eps},
+            module_kwargs={"hidden_size": config.hidden_size, "eps": config.rms_norm_eps},
             module_input_keys={"input"},
             module_output_keys={"hidden_states"},
         )  # TODO
@@ -455,8 +455,8 @@ class Llama4Model(nn.Module):
             # Understand that this means that we return sharded logits that are going to need to be gathered
             module_builder=TensorParallelColumnLinear,
             module_kwargs={
-                "in_features": config.text_config.hidden_size,
-                "out_features": config.text_config.vocab_size,
+                "in_features": config.hidden_size,
+                "out_features": config.vocab_size,
                 "pg": parallel_context.tp_pg,
                 "bias": False,
                 # TODO @thomasw21: refactor so that we store that default in a single place.
@@ -509,7 +509,7 @@ class Llama4Model(nn.Module):
 
     def get_block_compute_costs(self):
         """Computes the compute cost of each block in the model so that we can do a better job of load balancing."""
-        model_config = self.config.text_config
+        model_config = self.config
         d_ff = model_config.intermediate_size
         d_qkv = model_config.hidden_size // model_config.num_attention_heads
         block_compute_costs = {
@@ -524,7 +524,7 @@ class Llama4Model(nn.Module):
     def get_flops_per_sec(self, iteration_time_in_sec, sequence_length, global_batch_size):
         """Get flops per second for a given model"""
         world_size = self.parallel_context.world_pg.size()
-        model_config = self.config.text_config
+        model_config = self.config
 
         try:
             num_key_values_heads = model_config.num_key_value_heads
@@ -562,19 +562,19 @@ class Llama4ForTraining(NanotronModel):
         loss_kwargs = {
             "tp_pg": parallel_context.tp_pg,
         }
-        if config.text_config.z_loss_enabled:
-            loss_kwargs["z_loss_coefficient"] = config.text_config.z_loss_coefficient
+        if config.z_loss_enabled:
+            loss_kwargs["z_loss_coefficient"] = config.z_loss_coefficient
 
         self.loss = PipelineBlock(
             p2p=self.model.p2p,
-            module_builder=LossWithZLoss if config.text_config.z_loss_enabled else Loss,
+            module_builder=LossWithZLoss if config.z_loss_enabled else Loss,
             module_kwargs=loss_kwargs,
             module_input_keys={
                 "sharded_logits",
                 "label_ids",
                 "label_mask",
             },
-            module_output_keys={"loss", "z_loss"} if config.text_config.z_loss_enabled else {"loss"},
+            module_output_keys={"loss", "z_loss"} if config.z_loss_enabled else {"loss"},
         )
 
         self.parallel_context = parallel_context
@@ -664,7 +664,7 @@ class Llama4ForTraining(NanotronModel):
 
     def get_embeddings_lm_head_tied_names(self):
         """Get the names of the tied embeddings and lm_head weights"""
-        if self.config.text_config.tie_word_embeddings is True:
+        if self.config.tie_word_embeddings is True:
             return ["model.token_position_embeddings.pp_block.token_embedding.weight", "model.lm_head.pp_block.weight"]
         else:
             return []

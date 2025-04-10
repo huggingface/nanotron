@@ -279,10 +279,25 @@ class ModelArgs:
     ddp_bucket_cap_mb: int = 25
 
     def __post_init__(self):
+        from nanotron.config.models_config import Llama4Config, LlamaConfig, Qwen2Config
+
         if self.dtype is None:
             self.dtype = torch.bfloat16
         if isinstance(self.dtype, str):
             self.dtype = cast_str_to_torch_dtype(self.dtype)
+
+        assert 1 == 1
+        model_config_to_model_config_class = {
+            "is_llama_config": LlamaConfig,
+            "is_llama4_config": Llama4Config,
+            "is_qwen2_config": Qwen2Config,
+        }
+        model_config_class = [
+            model_config_to_model_config_class[key]
+            for key in model_config_to_model_config_class
+            if self.model_config.get(key, False)
+        ][0]
+        self.model_config = model_config_class(**self.model_config)
 
         # TODO: refactor
         # self.model_config._is_using_mup = isinstance(self.init_method, SpectralMupInit)
@@ -621,29 +636,28 @@ def get_config_from_file(
         skip_null_keys=skip_null_keys,
     )
 
-    from nanotron.config.models_config import Llama4Config
 
     # TODO: support other configs
-    # if model_config_class is not None:
-    #     if not isinstance(config.model.model_config, (dict, model_config_class)):
-    #         raise ValueError(
-    #             f"model_config should be a dictionary or a {model_config_class} and not {config.model.model_config}"
-    #         )
-    #     config.model.model_config = model_config_class(**config.model.model_config)
+    if model_config_class is not None:
+        if not isinstance(config.model.model_config, (dict, model_config_class)):
+            raise ValueError(
+                f"model_config should be a dictionary or a {model_config_class} and not {config.model.model_config}"
+            )
+        config.model.model_config = model_config_class(**config.model.model_config)
 
-    if isinstance(config.model.model_config, dict) and config.model.model_config.get("is_llama4_config", False):
-        from nanotron.config.models_config import Llama4TextConfig, Llama4VisionConfig
+    # if isinstance(config.model.model_config, dict) and config.model.model_config.get("is_llama4_config", False):
+    #     from nanotron.config.models_config import Llama4TextConfig, Llama4VisionConfig
 
-        model_config_dict = config.model.model_config
+    #     model_config_dict = config.model.model_config
 
-        # Ensure nested configs are proper instances
-        if isinstance(model_config_dict.get("text_config"), dict):
-            model_config_dict["text_config"] = Llama4TextConfig(**model_config_dict["text_config"])
+    #     # Ensure nested configs are proper instances
+    #     if isinstance(model_config_dict.get("text_config"), dict):
+    #         model_config_dict["text_config"] = Llama4TextConfig(**model_config_dict["text_config"])
 
-        if isinstance(model_config_dict.get("vision_config"), dict):
-            model_config_dict["vision_config"] = Llama4VisionConfig(**model_config_dict["vision_config"])
+    #     if isinstance(model_config_dict.get("vision_config"), dict):
+    #         model_config_dict["vision_config"] = Llama4VisionConfig(**model_config_dict["vision_config"])
 
-        config.model.model_config = Llama4Config(**model_config_dict)
+    #     config.model.model_config = Llama4Config(**model_config_dict)
 
     return config
 
