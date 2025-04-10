@@ -540,6 +540,9 @@ class DistributedTrainer:
         self.last_iter_step = self.config.tokens.train_steps
 
         prof = get_profiler(config=self.config)
+        # free memory
+        gc.collect()
+        torch.cuda.empty_cache()
         with prof:
             for self.iteration_step in range(self.initial_iter_step, self.last_iter_step + 1):
                 if isinstance(prof, torch.profiler.profile):
