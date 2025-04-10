@@ -122,11 +122,10 @@ class CoreAttention(nn.Module):
             scaling=None,  # by default, scaling is head_dim**-0.5
             sliding_window=self.sliding_window_size,
             ring_pg=self.cp_pg,
-            cu_seqlens=cu_seqlens,
             position_ids=position_ids if self._attn_implementation == "flex_attention" else None,
             document_ids=kwargs.get("document_ids", None) if self._attn_implementation == "flex_attention" else None,
             flex_attention_mask=self.flex_attention_mask if self._attn_implementation == "flex_attention" else None,
-            **kwargs,  # Pass remaining kwargs, potentially including original cu_seqlens if needed by specific func
+            **kwargs,  # Pass remaining kwargs
         )[0]
 
         return attn_output.view(
