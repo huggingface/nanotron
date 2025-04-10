@@ -444,6 +444,9 @@ class DistributedTrainer:
     ) -> None:
         assert 1 == 1
 
+
+        # assert_tensor_equal_across_processes(self.model.model.token_position_embeddings.pp_block.token_embedding.weight, self.parallel_context.tp_pg)
+
         self.pre_training(**kwargs)
 
         if self.config.checkpoints.save_initial_state and self.init_checkpoint_path is None:
@@ -788,15 +791,16 @@ class DistributedTrainer:
             elif isinstance(self.config.model.init_method, (RandomInit, SpectralMupInit)):
                 unwrapped_model.init_model_randomly(config=self.config)
 
+                # NOTE: synchronize router weights
+                for n, p in model.named_parameters():
+                    if "router" in n:
+                        if dist.get_rank(self.parallel_context.tp_pg) == 1:
+                            p.data = torch.randn_like(p.data)
+
                 # Synchronize parameters so that the model is consistent
                 # sync all params across dp
                 for _, param in sorted(model.named_parameters(), key=lambda x: x[0]):
                     dist.all_reduce(param, op=dist.ReduceOp.AVG, group=self.parallel_context.dp_pg)
-
-                # NOTE: synchronize router weights
-                for n, p in model.named_parameters():
-                    if "router" in n:
-                        dist.all_reduce(p, op=dist.ReduceOp.AVG, group=self.parallel_context.dp_pg)
 
                 # sync tied params across tied groups
                 for (_, group_ranks), param in sorted(

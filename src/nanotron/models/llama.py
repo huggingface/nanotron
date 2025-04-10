@@ -1001,7 +1001,12 @@ class Loss(nn.Module):
             dtype=torch.float,
         ).transpose(0, 1)
         loss = masked_mean(loss, label_mask, dtype=torch.float)
-        return {"loss": loss}
+        from nanotron.moe.expert_context import ExpertContext
+
+        moe_aux_loss = sum(ExpertContext.get_instance().pop_all_aux_loss())
+        total_loss = loss + moe_aux_loss
+        # TODO: add logging separate losses
+        return {"loss": total_loss}
 
 
 class LossWithZLoss(Loss):

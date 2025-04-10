@@ -160,3 +160,57 @@ def find_free_port(min_port: int = 2000, max_port: int = 65000) -> int:
                 return port
         except OSError:
             continue
+
+
+def assert_tensor_equal_across_processes(tensor, process_group=None, rtol=1e-5, atol=1e-8):
+    """
+    Assert that a tensor has the same values across all processes in a distributed process group.
+
+    Args:
+        tensor (torch.Tensor): The tensor to check for equality across processes
+        process_group: The process group to work on. If None, the default process group is used
+        rtol (float): Relative tolerance for floating point comparison
+        atol (float): Absolute tolerance for floating point comparison
+
+    Raises:
+        AssertionError: If tensors are not equal across processes
+    """
+    # if not dist.is_initialized():
+    #     return
+
+    # Get rank and world size
+    rank = dist.get_rank(process_group)
+    world_size = dist.get_world_size(process_group)
+
+    # Skip the check if we only have one process
+    # if world_size == 1:
+    #     return
+
+    # # Move tensor to CPU for consistent behavior
+    # tensor = tensor.cpu()
+
+    # Gather all tensors to rank 0
+    tensor_list = [torch.zeros_like(tensor) for _ in range(world_size)]
+    dist.all_gather(tensor_list, tensor, group=process_group)
+
+    # Each process compares its tensor with all others
+    for i in range(world_size):
+        is_close = torch.allclose(tensor, tensor_list[i], rtol=rtol, atol=atol)
+        if not is_close:
+            # Find the first element that's different
+            mismatch_mask = ~torch.isclose(tensor, tensor_list[i], rtol=rtol, atol=atol)
+            first_mismatch_idx = torch.nonzero(mismatch_mask, as_tuple=True)
+            if len(first_mismatch_idx[0]) > 0:
+                idx = tuple(dim[0].item() for dim in first_mismatch_idx)
+                raise AssertionError(
+                    f"Tensor not equal across processes. Process {rank} has tensor value "
+                    f"{tensor[idx].item()} at index {idx}, while process {i} has value "
+                    f"{tensor_list[i][idx].item()} at the same index."
+                )
+            else:
+                # This case shouldn't typically happen since is_close was False
+                raise AssertionError(f"Tensor not equal between processes {rank} and {i}")
+
+    # Synchronize all processes after check
+    dist.barrier(group=process_group)
+    assert 1 == 1
