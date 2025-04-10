@@ -636,7 +636,6 @@ def get_config_from_file(
         skip_null_keys=skip_null_keys,
     )
 
-
     # TODO: support other configs
     if model_config_class is not None:
         if not isinstance(config.model.model_config, (dict, model_config_class)):
