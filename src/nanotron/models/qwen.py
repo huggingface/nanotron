@@ -78,7 +78,7 @@ class CoreAttention(nn.Module):
         attention_func = ALL_ATTENTION_FUNCTIONS[self._attn_implementation]
 
         # Initialize variables for attention parameters
-        cu_seqlens = None
+        cu_seqlens = kwargs.get("cu_seqlens", None)
 
         # Shape tensors according to attention implementation
         if self._attn_implementation == "ring_flash_triton":
@@ -103,7 +103,9 @@ class CoreAttention(nn.Module):
                     pass
                 else:
                     # For other implementations, generate the attention mask if needed
-                    attention_mask, cu_seqlens = get_attention_mask(position_ids, seq_length=seq_length)
+                    # Only calculate if cu_seqlens wasn't passed
+                    if cu_seqlens is None:
+                        attention_mask, cu_seqlens = get_attention_mask(position_ids, seq_length=seq_length)
 
                     if attention_mask is not None:
                         # Add batch and head dimensions for proper broadcasting
@@ -120,11 +122,10 @@ class CoreAttention(nn.Module):
             scaling=None,  # by default, scaling is head_dim**-0.5
             sliding_window=self.sliding_window_size,
             ring_pg=self.cp_pg,
-            cu_seqlens=cu_seqlens,
             position_ids=position_ids if self._attn_implementation == "flex_attention" else None,
             document_ids=kwargs.get("document_ids", None) if self._attn_implementation == "flex_attention" else None,
             flex_attention_mask=self.flex_attention_mask if self._attn_implementation == "flex_attention" else None,
-            **kwargs,
+            **kwargs,  # Pass remaining kwargs
         )[0]
 
         return attn_output.view(
@@ -218,6 +219,7 @@ class Qwen2Attention(nn.Module):
         self,
         hidden_states: torch.Tensor,  # [batch_size*seq_length, hidden_size]
         position_ids: torch.Tensor,  # [batch_size, seq_length] where -1 is padding
+        cu_seqlens: Optional[torch.Tensor] = None,  # Added cu_seqlens argument
     ):
         # [0, 1, 2, 3, 4, 0, 1, 2, -1, -1, -1] # 2 documents with 5 and 3 tokens then padding
         # [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10] # 1 document with 11 tokens
@@ -225,16 +227,8 @@ class Qwen2Attention(nn.Module):
         # Replace -1 with 0 in position_ids to mark every padding token as a separate sequence. Ideally we want to get rid of padding tokens from qkv
         # position_ids = position_ids.masked_fill(position_ids == -1, 0)
         seq_length = position_ids.shape[1]
+        # Keep original position_ids shape for return, flatten for internal use
         position_ids = position_ids.view(-1)  # [batch_size*seq_length]
-
-        # Compute cu_seqlens
-        if position_ids.numel() > 0:
-            start_indices = torch.where(position_ids == 0)[0]
-            cu_seqlens = torch.cat(
-                [start_indices, torch.tensor([position_ids.numel()], dtype=torch.int32, device=start_indices.device)]
-            ).to(torch.int32)
-        else:
-            cu_seqlens = None
 
         qkv = self.qkv_proj(hidden_states)
 
@@ -259,11 +253,15 @@ class Qwen2Attention(nn.Module):
                 )  # [b*s, num_kv_heads, head_dim]
             else:
                 log_rank(f"skipping rotary for layer {self.layer_idx + 1}", logger=logger, level=logging.DEBUG, rank=0)
-            attn_output = self.attention(q, k, v, position_ids=position_ids, seq_length=seq_length)
+            attn_output = self.attention(
+                q, k, v, position_ids=position_ids, seq_length=seq_length, cu_seqlens=cu_seqlens
+            )
         output = self.o_proj(attn_output)
+        # Return original position_ids shape
         return {"hidden_states": output, "position_ids": position_ids.view(-1, seq_length)}
 
     def _forward_packed(self, qkv, seq_length, position_ids, cu_seqlens):
+        assert cu_seqlens is not None, "cu_seqlens must be provided for packed attention"
         q = qkv[..., : self.local_num_heads * self.head_dim]  # Not contiguous, similar to flash_attn
         kv = qkv[..., self.local_num_heads * self.head_dim :]  # Not contiguous, similar to flash_attn
         q = q.view(-1, seq_length, self.local_num_heads, self.head_dim)
@@ -580,11 +578,12 @@ class Qwen2DecoderLayer(nn.Module):
         self,
         hidden_states: Union[torch.Tensor, TensorPointer],  # [batch_size*seq_length, hidden_size]
         position_ids: Union[torch.Tensor, TensorPointer],  # [batch_size, seq_length] where -1 is padding
+        cu_seqlens: Union[torch.Tensor, TensorPointer],
     ) -> List[Union[torch.Tensor, TensorPointer]]:
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
 
-        output = self.attn(hidden_states=hidden_states, position_ids=position_ids)
+        output = self.attn(hidden_states=hidden_states, position_ids=position_ids, cu_seqlens=cu_seqlens)
         hidden_states = output["hidden_states"]
         hidden_states = hidden_states + residual
 
@@ -593,28 +592,33 @@ class Qwen2DecoderLayer(nn.Module):
         hidden_states = self.mlp(hidden_states=hidden_states)["hidden_states"]
         hidden_states = hidden_states + residual
 
-        return hidden_states, output["position_ids"]
+        return hidden_states, position_ids, cu_seqlens
 
     def _checkpointed_forward(
         self,
         hidden_states: torch.Tensor,
         position_ids: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        return CheckpointFunction.apply(self._core_forward, True, hidden_states, position_ids)
+        cu_seqlens: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        return CheckpointFunction.apply(self._core_forward, True, hidden_states, position_ids, cu_seqlens)
 
     def forward(
         self,
         hidden_states: Union[torch.Tensor, TensorPointer],
         position_ids: Union[torch.Tensor, TensorPointer],
+        cu_seqlens: Union[torch.Tensor, TensorPointer],
     ) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
         if self.recompute_layer and not isinstance(hidden_states, TensorPointer):
-            hidden_states, position_ids = self._checkpointed_forward(hidden_states, position_ids)
+            hidden_states, position_ids, cu_seqlens = self._checkpointed_forward(
+                hidden_states, position_ids, cu_seqlens
+            )
         else:
-            hidden_states, position_ids = self._core_forward(hidden_states, position_ids)
+            hidden_states, position_ids, cu_seqlens = self._core_forward(hidden_states, position_ids, cu_seqlens)
 
         return {
             "hidden_states": hidden_states,
             "position_ids": position_ids,
+            "cu_seqlens": cu_seqlens,
         }
 
 
@@ -682,8 +686,8 @@ class Qwen2Model(nn.Module):
                         "cp_pg": parallel_context.cp_pg,
                         "layer_idx": layer_idx,
                     },
-                    module_input_keys={"hidden_states", "position_ids"},
-                    module_output_keys={"hidden_states", "position_ids"},
+                    module_input_keys={"hidden_states", "position_ids", "cu_seqlens"},
+                    module_output_keys={"hidden_states", "position_ids", "cu_seqlens"},
                 )
                 for layer_idx in range(config.num_hidden_layers)
             ]
@@ -720,9 +724,19 @@ class Qwen2Model(nn.Module):
         position_ids: Union[torch.Tensor, TensorPointer],  # [batch_size, seq_length] where -1 is padding
     ):
         output = self.token_position_embeddings(input_ids=input_ids, position_ids=position_ids)
+        # Compute cu_seqlens
+        if position_ids.numel() > 0:
+            start_indices = torch.where(position_ids == 0)[0]
+            cu_seqlens = torch.cat(
+                [start_indices, torch.tensor([position_ids.numel()], dtype=torch.int32, device=start_indices.device)]
+            ).to(torch.int32)
+        else:
+            cu_seqlens = None
+
         decoder_states = {
             "hidden_states": output["input_embeds"],
             "position_ids": output["position_ids"],
+            "cu_seqlens": cu_seqlens,
         }
 
         for decoder_layer in self.decoder:
