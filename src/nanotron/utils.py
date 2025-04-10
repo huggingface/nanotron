@@ -55,7 +55,7 @@ class ContextManagers:
 
 
 @contextmanager
-def main_rank_first(group: dist.ProcessGroup):
+def main_rank_first(group: Optional[dist.ProcessGroup] = None):
     """Context manager that executes the code in the context with the rank zero of the group going first."""
     is_main = dist.get_rank(group) == 0
     if is_main:

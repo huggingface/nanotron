@@ -16,6 +16,8 @@ from nanotron.parallel.pipeline_parallel.state import PipelineTrainBatchState
 from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
 from nanotron.utils import ContextManagers
 
+# from nanotron.logging.timers import nanotron_timer
+
 logger = logging.get_logger(__name__)
 
 
@@ -289,6 +291,7 @@ class OneForwardOneBackwardPipelineEngine(PipelineEngine):
 
             for micro_batch in batch:
                 context = self._get_fwd_context(model=model)
+                # with nanotron_timer("forward", timer_type="cuda"):
                 output = self.forward(context=context, state=state, micro_batch=micro_batch, model=model)
 
                 # We make `output` a dict
@@ -306,6 +309,7 @@ class OneForwardOneBackwardPipelineEngine(PipelineEngine):
                     nb_backwards=state.nb_backwards,
                     grad_accumulator=grad_accumulator,
                 )
+                # with nanotron_timer("backward", timer_type="cuda"):
                 self.backward(context=context, state=state, grad_accumulator=grad_accumulator)
 
             # Check figure in paper: The remain blocks are all backward and there is only `pg.size() - current_pp_rank - 1` blocks left

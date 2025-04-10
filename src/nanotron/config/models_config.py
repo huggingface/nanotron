@@ -147,9 +147,13 @@ class Qwen2Config:
     sliding_window_size: Optional[int] = None
     z_loss_enabled: bool = False  # Z-loss regularization https://www.jmlr.org/papers/volume24/22-1144/22-1144.pdf
     z_loss_coefficient: float = 0.0001  # Default from the paper (10^-4)
+    no_rope_layer: Optional[
+        int
+    ] = None  # Skip rope every no_rope_layer layers (see https://arxiv.org/abs/2501.18795 https://arxiv.org/abs/2305.19466 and Llama4)
     _fused_rotary_emb: bool = True
     _fused_rms_norm: bool = True
     _use_qkv_packed: bool = True
+    _use_doc_masking: bool = True
 
     # MoE configuration
     moe_config: Optional[MoEConfig] = None
@@ -188,6 +192,10 @@ class Qwen2Config:
                 "document",
                 "sliding_window_document",
             ], "Flex attention mask must be one of ['sliding_window', 'document', 'sliding_window_document']"
+        if self.no_rope_layer is not None:
+            assert (
+                self.num_hidden_layers % self.no_rope_layer == 0
+            ), "no_rope_layer must be a multiple of num_hidden_layers"
 
     @property
     def is_using_mup(self) -> bool:

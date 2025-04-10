@@ -79,6 +79,20 @@ class LoggingArgs:
 
 
 @dataclass
+class MetricsLoggingArgs:
+    """Arguments related to metrics logging and tracking"""
+
+    log_level: int = 0
+    log_detail_interval: int = 10
+
+    def __post_init__(self):
+        if self.log_level not in [0, 1]:
+            raise ValueError(f"metrics_level should be either 0 (basic) or 1 (full) and not {self.level}")
+        if self.log_detail_interval <= 0:
+            raise ValueError(f"metrics_interval should be a positive integer and not {self.interval}")
+
+
+@dataclass
 class PretrainDatasetsArgs:
     hf_dataset_or_datasets: Union[str, list, dict]
     hf_dataset_splits: Optional[Union[str, list]] = None
@@ -131,11 +145,23 @@ class S3UploadArgs:
 class NanosetDatasetsArgs:
     dataset_folder: Union[str, List[str]]
     dataset_weights: Optional[List[float]] = None
+    dataset_read_path: Optional[
+        Union[str, List[str]]
+    ] = None  # Path to local file/copy to read from. If it exists, we read from this folder instead of from dataset_folder. Useful when we offload some data to remote and only keep the needed files on disk.
     # Tokenizer config, assuming all datasets use the same tokenizer
     tokenizer_name: Optional[str] = None
     vocab_size: Optional[int] = None
     token_size_in_bytes: Optional[int] = None
-    return_positions: Optional[bool] = False
+    return_positions: Optional[
+        bool
+    ] = True  # read positions stored in disk by datatrove if eos_token_id is None, else computed on the fly
+
+    # Tokenized bytes dataset config
+    skip_in_stream: Optional[bool] = False
+    pad_samples_to_global_batch_size: Optional[bool] = False
+    dataset_max_tokens: Optional[List[int]] = None
+    shuffle_files: Optional[bool] = False
+    use_old_brrr_dataloader: Optional[bool] = False
 
     def __post_init__(self):
         if isinstance(self.dataset_folder, str):  # Case 1: 1 Dataset folder
@@ -169,6 +195,12 @@ class NanosetDatasetsArgs:
                             assert self.token_size_in_bytes == int(
                                 token_size_in_bytes
                             ), f"Token size mismatch while reading datasets metadata file, found both {self.token_size_in_bytes} and {token_size_in_bytes}"
+
+        # Check if dataset_read_path is provided and matches the number of dataset folders
+        if self.dataset_read_path is not None and len(self.dataset_read_path) != len(self.dataset_folder):
+            raise ValueError(
+                f"Number of dataset read paths ({len(self.dataset_read_path)}) does not match number of dataset folders ({len(self.dataset_folder)})"
+            )
 
 
 @dataclass
@@ -427,6 +459,7 @@ class Config:
     tokenizer: Optional[TokenizerArgs] = None
     checkpoints: Optional[CheckpointsArgs] = None
     logging: Optional[LoggingArgs] = None
+    metrics_logging: Optional[MetricsLoggingArgs] = None
     tokens: Optional[TokensArgs] = None
     optimizer: Optional[OptimizerArgs] = None
     data_stages: Optional[List[DatasetStageArgs]] = None
@@ -534,6 +567,10 @@ class Config:
 
         # Sanity test config can be reloaded
         _ = get_config_from_file(file_path, config_class=self.__class__)
+
+    def get_yaml(self):
+        config_dict = serialize(self)
+        return yaml.dump(config_dict)
 
     @classmethod
     def load_from_yaml(cls, file_path: str):
