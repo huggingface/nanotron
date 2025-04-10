@@ -444,7 +444,6 @@ class DistributedTrainer:
     ) -> None:
         assert 1 == 1
 
-
         # assert_tensor_equal_across_processes(self.model.model.token_position_embeddings.pp_block.token_embedding.weight, self.parallel_context.tp_pg)
 
         self.pre_training(**kwargs)

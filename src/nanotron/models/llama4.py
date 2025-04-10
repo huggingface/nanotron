@@ -182,13 +182,13 @@ class Llama4TextMoELayer(nn.Module):
 
         assert router_logits.shape == (seq_len, bs, self.num_local_experts)
         # Get the top-k experts per token
-        routing_weights, routing_indices = torch.topk(router_logits, k=self.num_experts_per_token, dim=-1)
-        routing_weights = rearrange(routing_weights, "seq_len bs 1 -> seq_len bs", seq_len=seq_len)
+        rotuing_router_logits, routing_indices = torch.topk(router_logits, k=self.num_experts_per_token, dim=-1)
+        rotuing_router_logits = rearrange(rotuing_router_logits, "seq_len bs 1 -> seq_len bs", seq_len=seq_len)
         routing_indices = rearrange(routing_indices, "seq_len bs 1 -> seq_len bs", seq_len=seq_len)
 
-        routing_weights = F.sigmoid(routing_weights)
+        routing_scores = F.sigmoid(rotuing_router_logits)
 
-        return routing_weights, routing_indices
+        return routing_scores, routing_indices
 
     def _dispatch_tokens(
         self, hidden_states, routing_weights: TensorType["seq_len", "bs"], routing_indices: TensorType["seq_len", "bs"]
@@ -197,16 +197,14 @@ class Llama4TextMoELayer(nn.Module):
         Dispatches tokens to their selected experts.
         In a full implementation, this would handle the actual token routing logic
         including communication between devices.
+
+        routing_weights: where a value specifies the weight of the expert
+        routing_indices: where a value specifies the index of the expert
         """
         from einops import einsum, rearrange
 
         dispatched_inputs = []
         expert_counts = []
-
-        # routing_indices: [seq_len, bs]
-        # where a value specifies the index of the expert
-        # routing_weights: [seq_len, bs]
-        # where a value specifies the weight of the expert
 
         total_tokens = routing_weights.numel()
         router_loss = torch.tensor(0.0, device=routing_weights.device, dtype=routing_weights.dtype)
@@ -231,18 +229,11 @@ class Llama4TextMoELayer(nn.Module):
             dispatched_inputs.append(scaled_inputs)
             expert_counts.append(len(tokens_for_expert))
 
-            assert 1 == 1
             frac_of_tokens_routed_to_expert = idx_of_tokens_for_expert.numel() / total_tokens
             frac_of_router_prob_routed_to_expert = routing_weights_for_expert.sum() / total_tokens
             expert_router_loss = frac_of_tokens_routed_to_expert * frac_of_router_prob_routed_to_expert
             router_loss += expert_router_loss
             frac_of_tokens_routed_to_expert_list.append(frac_of_tokens_routed_to_expert)
-            log_rank(
-                f"Fraction of tokens routed to expert {expert_idx}: {frac_of_tokens_routed_to_expert}, fraction of router prob routed to expert {expert_idx}: {frac_of_router_prob_routed_to_expert}, expert router loss: {expert_router_loss}",
-                logger=logger,
-                level=logging.INFO,
-                rank=0,
-            )
 
         router_aux_loss_coef = 0.001
         router_loss = router_loss * router_aux_loss_coef * self.num_experts
