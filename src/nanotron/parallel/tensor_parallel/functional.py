@@ -582,7 +582,7 @@ class _RowLinearAsyncCommunication(torch.autograd.Function):
         out = F.linear(tensor, weight, bias)
 
         if group.size() > 1:
-            out = differentiable_reduce_scatter_sum(out, group=group)
+            out = differentiable_reduce_scatter_sum(out, dim=0, group=group)
 
         ctx.save_for_backward(tensor, weight)
         return out
@@ -711,7 +711,7 @@ def row_linear(
     if tp_mode is TensorParallelLinearMode.ALL_REDUCE:
         out = differentiable_all_reduce_sum(out, group=group)
     elif tp_mode is TensorParallelLinearMode.REDUCE_SCATTER:
-        out = differentiable_reduce_scatter_sum(out, group=group)
+        out = differentiable_reduce_scatter_sum(out, dim=0, group=group)
     else:
         raise ValueError(f"Got unexpected mode: {tp_mode}.")
 

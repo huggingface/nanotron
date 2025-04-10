@@ -504,6 +504,52 @@ class Llama4TextMoELayer(nn.Module):
 
         return routing_weights, routing_indices
 
+    # def _dispatch_tokens(
+    #     self, hidden_states, routing_weights: TensorType["seq_len", "bs"], routing_indices: TensorType["seq_len", "bs"]
+    # ):
+    #     """
+    #     Dispatches tokens to their selected experts.
+    #     In a full implementation, this would handle the actual token routing logic
+    #     including communication between devices.
+    #     """
+    #     from einops import rearrange
+    #     # Simplified implementation - in a complete version this would handle
+    #     # all-to-all or all-gather communications for distributed experts
+
+    #     dispatched_inputs = []
+    #     expert_counts = []
+
+    #     # routing_indices: [seq_len, bs]
+    #     # where a value specifies the index of the expert
+    #     # routing_weights: [seq_len, bs]
+    #     # where a value specifies the weight of the expert
+
+    #     for expert_idx in range(self.num_local_experts):
+    #         # Find tokens that have this expert in their top-k
+    #         expert_mask = (routing_indices == expert_idx).any(dim=-1)  # [num_tokens]
+    #         tokens_for_expert = hidden_states[expert_mask]
+
+    #         # Get the routing weights for this expert
+    #         # expert_positions = (routing_indices == expert_idx).nonzero(as_tuple=True)
+    #         # token_positions, k_positions = expert_positions
+    #         # expert_weights = routing_weights[token_positions, k_positions].unsqueeze(-1)
+    #         # Scale inputs by routing weights
+    #         # scaled_inputs = tokens_for_expert * expert_weights
+    #         # expert_mask is the
+    #         # # scaled_inputs = tokens_for_expert * routing_weights[expert_mask]
+    #         idx_of_tokens_for_expert = torch.nonzero(expert_mask).squeeze()
+    #         routing_weights = rearrange(routing_weights, "seq_len bs -> (seq_len bs)")
+    #         routing_weights_for_expert = routing_weights[idx_of_tokens_for_expert]
+
+    #         # NOET: select the weight of dispatched input
+
+    #         # NOTE: no scaling
+    #         scaled_inputs = tokens_for_expert * routing_weights_for_expert
+    #         dispatched_inputs.append(scaled_inputs)
+    #         expert_counts.append(len(tokens_for_expert))
+
+    #     return dispatched_inputs, expert_counts
+
     def _dispatch_tokens(
         self, hidden_states, routing_weights: TensorType["seq_len", "bs"], routing_indices: TensorType["seq_len", "bs"]
     ):
@@ -512,30 +558,35 @@ class Llama4TextMoELayer(nn.Module):
         In a full implementation, this would handle the actual token routing logic
         including communication between devices.
         """
-        # Simplified implementation - in a complete version this would handle
-        # all-to-all or all-gather communications for distributed experts
+        from einops import einsum, rearrange
 
         dispatched_inputs = []
         expert_counts = []
 
-        # For each expert, gather the tokens assigned to it
+        # routing_indices: [seq_len, bs]
+        # where a value specifies the index of the expert
+        # routing_weights: [seq_len, bs]
+        # where a value specifies the weight of the expert
+
+        routing_weights = rearrange(routing_weights, "seq_len bs -> (seq_len bs)")
         for expert_idx in range(self.num_local_experts):
             # Find tokens that have this expert in their top-k
-            expert_mask = (routing_indices == expert_idx).any(dim=-1)  # [num_tokens]
+            # expert_mask = (routing_indices == expert_idx).any(dim=-1)  # [num_tokens]
+            # expert_mask.shape = [seq_len, bs]
+            # true for all tokens that have this expert in their top-k
+            expert_mask = routing_indices == expert_idx
             tokens_for_expert = hidden_states[expert_mask]
 
             # Get the routing weights for this expert
-            # expert_positions = (routing_indices == expert_idx).nonzero(as_tuple=True)
-            # token_positions, k_positions = expert_positions
-            # expert_weights = routing_weights[token_positions, k_positions].unsqueeze(-1)
-            # Scale inputs by routing weights
-            # scaled_inputs = tokens_for_expert * expert_weights
-
-            # NOET: select the weight of dispatched input
+            idx_of_tokens_for_expert = torch.nonzero(expert_mask.view(-1)).squeeze()
+            routing_weights_for_expert = routing_weights[idx_of_tokens_for_expert]
 
             # NOTE: no scaling
-            # dispatched_inputs.append(scaled_inputs)
-            dispatched_inputs.append(tokens_for_expert)
+            scaled_inputs = einsum(
+                tokens_for_expert, routing_weights_for_expert, "n_tokens d_model, n_tokens -> n_tokens d_model"
+            )
+            # scaled_inputs = tokens_for_expert * routing_weights_for_expert
+            dispatched_inputs.append(scaled_inputs)
             expert_counts.append(len(tokens_for_expert))
 
         return dispatched_inputs, expert_counts
@@ -552,7 +603,7 @@ class Llama4TextMoELayer(nn.Module):
                 continue
 
             # Find positions where this expert was in the top-k
-            expert_mask = (routing_indices == expert_idx).any(dim=-1)
+            expert_mask = routing_indices == expert_idx
             combined_output[expert_mask] += expert_output
 
         return combined_output

@@ -302,7 +302,7 @@ class TensorParallelEmbedding(nn.Embedding):
             out = differentiable_all_reduce_sum(out, group=self.pg)
         elif self.mode is TensorParallelLinearMode.REDUCE_SCATTER:
             out = differentiable_reduce_scatter_sum(
-                out, group=self.pg
+                out, dim=0, group=self.pg
             )  # this should scatter s / b*s (first dimension)
         else:
             raise ValueError(f"Got unexpected mode: {self.mode}.")

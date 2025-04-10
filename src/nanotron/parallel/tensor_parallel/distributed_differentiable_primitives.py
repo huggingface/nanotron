@@ -57,6 +57,7 @@ class DifferentiableAllGather(torch.autograd.Function):
     @staticmethod
     def forward(ctx, tensor, dim: int, group: Optional[ProcessGroup]):
         ctx.group = group
+        ctx.dim = dim
 
         if group.size() == 1:
             return tensor
@@ -95,44 +96,45 @@ class DifferentiableAllGather(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_output):
         group = ctx.group
-        out = DifferentiableReduceScatterSum.apply(grad_output, group)
-        return out, None
+        out = DifferentiableReduceScatterSum.apply(grad_output, ctx.dim, group)
+        return out, None, None
 
 
 class DifferentiableReduceScatterSum(torch.autograd.Function):
     """Reduce scatter in a differentiable fashion"""
 
     @staticmethod
-    def forward(ctx, tensor, group: Optional[ProcessGroup]):
+    def forward(ctx, tensor, dim: int, group: Optional[ProcessGroup]):
         ctx.group = group
+        ctx.dim = dim
 
         if group.size() == 1:
             return tensor
 
-        # TODO @thomasw21: shard along another dimension
-        unsharded_batch_size, *rest_size = tensor.shape
-        if group is None:
-            group = torch_dist.distributed_c10d._get_default_group()
-        assert unsharded_batch_size % group.size() == 0
+        # Get size along target dimension
+        unsharded_size = tensor.shape[dim]
+        assert (
+            unsharded_size % group.size() == 0
+        ), f"Dimension {dim} size {unsharded_size} must be divisible by group size {group.size()}"
 
-        # TODO @thomasw21: Collectives seem to require tensors to be contiguous
-        # https://cs.github.com/pytorch/pytorch/blob/2b267fa7f28e18ca6ea1de4201d2541a40411457/torch/distributed/nn/functional.py#L305
-        tensor = tensor.contiguous()
-
+        # Create output shape with reduced dimension
+        sharded_shape = list(tensor.shape)
+        sharded_shape[dim] = unsharded_size // group.size()
         sharded_tensor = torch.empty(
-            unsharded_batch_size // group.size(),
-            *rest_size,
+            sharded_shape,
             device=tensor.device,
             dtype=tensor.dtype,
             requires_grad=False,
         )
+
+        tensor = tensor.contiguous()
         dist.reduce_scatter_tensor(sharded_tensor, tensor, group=group, op=dist.ReduceOp.SUM)
         return sharded_tensor
 
     @staticmethod
     def backward(ctx, grad_output):
         group = ctx.group
-        return DifferentiableAllGather.apply(grad_output, dim=0, group=group), None
+        return DifferentiableAllGather.apply(grad_output, ctx.dim, group), None, None
 
 
 # -----------------
@@ -152,5 +154,5 @@ def differentiable_all_gather(tensor, dim: int, group: Optional[ProcessGroup] = 
     return DifferentiableAllGather.apply(tensor, dim, group)
 
 
-def differentiable_reduce_scatter_sum(tensor, group: Optional[ProcessGroup] = None):
-    return DifferentiableReduceScatterSum.apply(tensor, group)
+def differentiable_reduce_scatter_sum(tensor, dim: int, group: Optional[ProcessGroup] = None):
+    return DifferentiableReduceScatterSum.apply(tensor, dim, group)
