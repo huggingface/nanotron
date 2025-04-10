@@ -13,8 +13,9 @@ data_stages:
       dataset_folder:
       - /fsx/loubna/datasets/llama_tokenized/fineweb-edu/merged
       dataset_max_tokens: null
+      dataset_read_path: null
       dataset_weights: null
-      pad_samples_to_global_batch_size: true
+      pad_samples_to_global_batch_size: false
       return_positions: true
       shuffle_files: false
       skip_in_stream: false
@@ -31,7 +32,7 @@ general:
   consumed_train_samples: null
   ignore_sanity_checks: false
   project: debug
-  run: qwen_20250409_124748_16029502
+  run: qwen_20250410_014907_16027793
   seed: 42
   step: null
 lighteval: null
@@ -63,6 +64,7 @@ model:
     is_qwen2_config: true
     max_position_embeddings: 4096
     moe_config: null
+    no_rope_layer: null
     num_attention_heads: 4
     num_hidden_layers: 12
     num_key_value_heads: 4
