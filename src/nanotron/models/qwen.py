@@ -78,8 +78,7 @@ class CoreAttention(nn.Module):
         attention_func = ALL_ATTENTION_FUNCTIONS[self._attn_implementation]
 
         # Initialize variables for attention parameters
-        cu_seqlens_passed = kwargs.get("cu_seqlens", None)
-        cu_seqlens_to_use = cu_seqlens_passed
+        cu_seqlens = kwargs.get("cu_seqlens", None)
 
         # Shape tensors according to attention implementation
         if self._attn_implementation == "ring_flash_triton":
@@ -105,10 +104,8 @@ class CoreAttention(nn.Module):
                 else:
                     # For other implementations, generate the attention mask if needed
                     # Only calculate if cu_seqlens wasn't passed
-                    if cu_seqlens_to_use is None:
-                        attention_mask, cu_seqlens_calculated = get_attention_mask(position_ids, seq_length=seq_length)
-                        if cu_seqlens_calculated is not None:
-                            cu_seqlens_to_use = cu_seqlens_calculated  # Use calculated if not passed
+                    if cu_seqlens is None:
+                        attention_mask, cu_seqlens = get_attention_mask(position_ids, seq_length=seq_length)
 
                     if attention_mask is not None:
                         # Add batch and head dimensions for proper broadcasting
@@ -125,7 +122,7 @@ class CoreAttention(nn.Module):
             scaling=None,  # by default, scaling is head_dim**-0.5
             sliding_window=self.sliding_window_size,
             ring_pg=self.cp_pg,
-            cu_seqlens=cu_seqlens_to_use,  # Use the determined cu_seqlens
+            cu_seqlens=cu_seqlens,
             position_ids=position_ids if self._attn_implementation == "flex_attention" else None,
             document_ids=kwargs.get("document_ids", None) if self._attn_implementation == "flex_attention" else None,
             flex_attention_mask=self.flex_attention_mask if self._attn_implementation == "flex_attention" else None,
@@ -262,7 +259,7 @@ class Qwen2Attention(nn.Module):
             )
         output = self.o_proj(attn_output)
         # Return original position_ids shape
-        return {"hidden_states": output, "position_ids": position_ids}
+        return {"hidden_states": output, "position_ids": position_ids.view(-1, seq_length)}
 
     def _forward_packed(self, qkv, seq_length, position_ids, cu_seqlens):
         assert cu_seqlens is not None, "cu_seqlens must be provided for packed attention"
@@ -596,7 +593,7 @@ class Qwen2DecoderLayer(nn.Module):
         hidden_states = self.mlp(hidden_states=hidden_states)["hidden_states"]
         hidden_states = hidden_states + residual
 
-        return hidden_states, output["position_ids"], cu_seqlens
+        return hidden_states, position_ids, cu_seqlens
 
     def _checkpointed_forward(
         self,
@@ -726,9 +723,17 @@ class Qwen2Model(nn.Module):
         self,
         input_ids: Union[torch.Tensor, TensorPointer],  # [batch_size, seq_length]
         position_ids: Union[torch.Tensor, TensorPointer],  # [batch_size, seq_length] where -1 is padding
-        cu_seqlens: Union[torch.Tensor, TensorPointer] = None,  # Added cu_seqlens input
     ):
         output = self.token_position_embeddings(input_ids=input_ids, position_ids=position_ids)
+        # Compute cu_seqlens
+        if position_ids.numel() > 0:
+            start_indices = torch.where(position_ids == 0)[0]
+            cu_seqlens = torch.cat(
+                [start_indices, torch.tensor([position_ids.numel()], dtype=torch.int32, device=start_indices.device)]
+            ).to(torch.int32)
+        else:
+            cu_seqlens = None
+
         decoder_states = {
             "hidden_states": output["input_embeds"],
             "position_ids": output["position_ids"],
@@ -870,7 +875,6 @@ class Qwen2ForTraining(NanotronModel):
         sharded_logits = self.model(
             input_ids=input_ids,
             position_ids=position_ids,
-            cu_seqlens=None,
         )
         loss = self.loss(
             sharded_logits=sharded_logits,
