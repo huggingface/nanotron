@@ -540,9 +540,6 @@ class DistributedTrainer:
         self.last_iter_step = self.config.tokens.train_steps
 
         prof = get_profiler(config=self.config)
-        # free memory
-        gc.collect()
-        torch.cuda.empty_cache()
         with prof:
             for self.iteration_step in range(self.initial_iter_step, self.last_iter_step + 1):
                 if isinstance(prof, torch.profiler.profile):
@@ -1165,6 +1162,10 @@ class DistributedTrainer:
         # Upload to S3
         if self.s3_mover is not None:
             self.s3_mover.start_uploading()
+
+        # free memory TODO: do we need this?
+        gc.collect()
+        torch.cuda.empty_cache()
 
     def save_checkpoint(self) -> Path:
         self.pre_save_checkpoint()
