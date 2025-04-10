@@ -361,23 +361,6 @@ class DistributedTrainer:
                         project=self.config.general.project,
                         name=run_name,
                         config={"nanotron_config": self.config.as_dict()},
-                        settings=wandb.Settings(
-                            x_stats_sampling_interval=15.0,
-                            x_stats_open_metrics_endpoints={
-                                "dcgm": "http://localhost:9104/metrics",
-                                "node": "http://localhost:9100/metrics",
-                                "lustre": "http://localhost:9106/metrics",
-                                "gpu": "http://26.0.168.238:9103/metrics",
-                                "efa": "http://localhost:9101/metrics",
-                            },
-                            x_stats_open_metrics_filters=[
-                                "DCGM_FI_",
-                                "node_",
-                                "lustre_",
-                                "nvidia_gpu_",
-                                "efa_",
-                            ],
-                        ),
                     )
                     log_rank(
                         f"Initialized wandb run '{run_name}' for TP rank {tp_rank}",
@@ -392,7 +375,7 @@ class DistributedTrainer:
                     name=run_name,
                     config={"nanotron_config": self.config.as_dict()},
                     settings=wandb.Settings(
-                        x_stats_sampling_interval=1.0,
+                        x_stats_sampling_interval=float(os.environ.get("STATS_SAMPLING_INTERVAL", 1.0)),
                         x_stats_open_metrics_endpoints={
                             "dcgm": "http://localhost:9104/metrics",
                             "node": "http://localhost:9100/metrics",
@@ -774,7 +757,7 @@ class DistributedTrainer:
         basic_log_entries = [
             # LogItem("consumed_samples", self.consumed_train_samples, "human_format"),  # , "12d"),
             LogItem(
-                "dataloader/consumed_tokens",
+                "consumed_tokens",
                 self.metadata.consumed_train_samples * self.config.tokens.sequence_length,
                 "human_format",
             ),  # , "12d"),

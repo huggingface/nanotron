@@ -152,7 +152,9 @@ class NanosetDatasetsArgs:
     tokenizer_name: Optional[str] = None
     vocab_size: Optional[int] = None
     token_size_in_bytes: Optional[int] = None
-    return_positions: Optional[bool] = True  # read positions stored in disk by datatrove
+    return_positions: Optional[
+        bool
+    ] = True  # read positions stored in disk by datatrove if eos_token_id is None, else computed on the fly
 
     # Tokenized bytes dataset config
     skip_in_stream: Optional[bool] = False
