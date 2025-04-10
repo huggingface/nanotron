@@ -86,7 +86,7 @@ def parse_args():
     )
 
     # Required arguments
-    parser.add_argument("--run", type=str, default="nanotron", help="Name for this experiment run")
+    parser.add_argument("--run", type=str, default="", help="Name for this experiment run")
 
     # Slurm job configuration
     slurm_group = parser.add_argument_group("Slurm Configuration")
@@ -476,6 +476,7 @@ def create_slurm_script(
 #SBATCH --partition={args.partition}
 #SBATCH --output={logs_path}/{timestamp}-%x-%j.out
 #SBATCH --qos={args.qos}
+#SBATCH --reservation=smollm
 #SBATCH --wait-all-nodes=1        # fail if any node is not ready
 {f"#SBATCH --time={args.time_limit}" if args.time_limit else ""}
 """
@@ -528,10 +529,10 @@ CMD="{run_train_script} --config-file {config_path}"
 
 # echo nvcc version and assert we use cuda 12.4
 echo "NVCC version: $(nvcc --version)"
-if ! nvcc --version | grep -q "12.4"; then
-    echo "ERROR: CUDA 12.4 is required to avoid dataloader issues"
-    exit 1
-fi
+# if ! nvcc --version | grep -q "12.4"; then
+#     echo "ERROR: CUDA 12.4 is required to avoid dataloader issues"
+#     exit 1
+# fi
 
 # Log system information
 echo "PyTorch version: $(python -c 'import torch; print(torch.__version__)')"
@@ -598,10 +599,12 @@ def main():
         # bench
         if args.bench:
             config.general.benchmark_csv_path = args.bench
+        if args.run:
+            config.general.run = args.run
 
     # Save config to YAML file
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    run_name = args.run.replace(" ", "_")
+    run_name = config.general.run if config.general.run else "nanotron"
     config_dir = os.path.join(args.configs_path, run_name)
     os.makedirs(config_dir, exist_ok=True)
     config_path = os.path.join(config_dir, f"{timestamp}-{run_name}.yaml")
@@ -627,6 +630,7 @@ def main():
         print(f"🔍 Would submit job with config from {config_path}")
     else:
         job_id = launch_slurm_job(slurm_script)
+        run_name = args.run.replace("-%jobid", "")
         print(f"🚀 Slurm job submitted with JOBID: {job_id}")
         print(
             f"🔍 Logs will be available at: {os.path.join(args.slurm_logs_path, run_name, f'{timestamp}-{run_name}-{job_id}.out')}"

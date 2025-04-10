@@ -145,6 +145,7 @@ class Qwen2Config:
     _fused_rotary_emb: bool = True
     _fused_rms_norm: bool = True
     _use_qkv_packed: bool = True
+    _use_doc_masking: bool = True
 
     # MoE configuration
     moe_config: Optional[MoEConfig] = None

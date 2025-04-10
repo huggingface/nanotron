@@ -274,6 +274,7 @@ class DistributedTrainer:
         self.iteration_step = self.metadata.last_train_step
         self.limit_val_batches = self.config.tokens.limit_val_batches
         self.current_dataloader: Optional[DataLoader] = None  # used for the current training stage
+        self.current_base_dl: Optional[DataLoader] = None  # used for the current training stage
 
         log_libraries_versions(logger=logger)
         log_rank("Config:", logger=logger, level=logging.INFO, rank=0, is_separator=True)
@@ -369,16 +370,33 @@ class DistributedTrainer:
                     )
             elif world_rank == self.logger_ranks[0]:
                 run_name = f"{current_time}_{self.config.general.run}"
+                x_stats_sampling_interval = os.environ.get("STATS_SAMPLING_INTERVAL_IN_SEC", None)
                 wandb.init(
                     project=self.config.general.project,
                     name=run_name,
                     config={"nanotron_config": self.config.as_dict()},
                     settings=wandb.Settings(
-                        # x_stats_sampling_interval=1.0,  # default 15.0
-                        # x_stats_disk_paths=("/scratch", "/fsx/nouamane/"),
-                        x_stats_open_metrics_endpoints={"dcgm": "http://localhost:9104/metrics"},
-                        x_stats_open_metrics_filters=["DCGM_FI_"],
-                        # x_file_stream_transmit_interval=1.0,
+                        x_stats_sampling_interval=float(x_stats_sampling_interval)
+                        if x_stats_sampling_interval is not None
+                        else None,
+                        x_stats_open_metrics_endpoints={
+                            "dcgm": "http://localhost:9104/metrics",
+                            "node": "http://localhost:9100/metrics",
+                            "lustre": "http://localhost:9106/metrics",
+                            "gpu": "http://26.0.168.238:9103/metrics",
+                            "efa": "http://localhost:9101/metrics",
+                        }
+                        if x_stats_sampling_interval is not None
+                        else None,
+                        x_stats_open_metrics_filters=[
+                            "DCGM_FI_",
+                            "node_",
+                            "lustre_",
+                            "nvidia_gpu_",
+                            "efa_",
+                        ]
+                        if x_stats_sampling_interval is not None
+                        else None,
                     ),
                 )
                 # save config file
@@ -414,6 +432,7 @@ class DistributedTrainer:
                 self.current_dataloader = sanity_check_dataloader(
                     dataloader=dataloader, parallel_context=self.parallel_context, config=self.config
                 )
+                self.current_base_dl = dataloader
             return
         elif isinstance(dataloaders, Generator):
             # TODO(xrsrke): this is a hacky way to handle DoReMi's dataloader
@@ -434,6 +453,7 @@ class DistributedTrainer:
                 logger=logger,
                 level=logging.INFO,
             )
+            self.current_base_dl = None
 
             # NOTE: Clear dataloader from memory
             del dataloader.dataset
@@ -475,9 +495,13 @@ class DistributedTrainer:
                     remaining_train_steps = compute_remain_train_steps_of_a_data_stage_from_ckp(
                         stage, self.config, self.metadata
                     )
-                    consumed_train_steps = get_consumed_train_samples_of_a_data_stage_from_ckp(stage, self.metadata)
+                    (
+                        consumed_train_steps,
+                        consumed_tokens_per_dataset_folder,
+                    ) = get_consumed_train_samples_of_a_data_stage_from_ckp(stage, self.metadata)
                     log_rank(
-                        f"Resuming training from stage {stage.name}, it has trained for {consumed_train_steps} samples and has {remaining_train_steps} remaining train steps",
+                        f"Resuming training from stage {stage.name}, it has trained for {consumed_train_steps} samples and has {remaining_train_steps} remaining train steps"
+                        f"\nConsumed tokens per dataset folder: {pformat(consumed_tokens_per_dataset_folder)}",
                         logger=logger,
                         level=logging.INFO,
                         rank=0,
@@ -492,6 +516,7 @@ class DistributedTrainer:
             self.current_dataloader = sanity_check_dataloader(
                 dataloader=dataloader, parallel_context=self.parallel_context, config=self.config
             )
+            self.current_base_dl = dataloader
 
     def train(
         self,
@@ -537,8 +562,24 @@ class DistributedTrainer:
                 # Training step
                 outputs, loss_avg, z_loss_avg = self.training_step(dataloader=self.current_dataloader)
 
+                # Update consumption tracking for current batch
+                self.current_base_dl.dataset.update_consumption_metrics(
+                    start_idx=(self.iteration_step - 1)
+                    * self.global_batch_size,  # assumes we start from iteration_step=1
+                    end_idx=self.iteration_step * self.global_batch_size,
+                    sequence_length=self.sequence_length,
+                )
+
                 # Training Logs
-                # TODO(xrsrke): refactor using callbacks would be better
+                # Track consumed tokens for all dataset folders in current stage
+                consumption_stats = self.current_base_dl.dataset.get_consumption_stats()
+                current_stage = self.metadata.data_stages[self.metadata.last_stage_idx]
+
+                # Update consumed tokens for all folders in the consumption stats
+                for folder_path, stats in consumption_stats.items():
+                    current_stage.consumed_tokens_per_dataset_folder[folder_path] = stats["tokens"]
+
+                # Original consumption tracking
                 self.metadata.consumed_train_samples += self.global_batch_size
                 self.metadata.last_train_step = self.iteration_step
                 self.metadata.data_stages[
@@ -819,6 +860,17 @@ class DistributedTrainer:
         if os.environ.get("ENABLE_TIMERS", "0") == "1":
             for timer_name, timer in nanotron_timer.items():
                 basic_log_entries.append(LogItem(f"timers/{timer_name}", timer.elapsed, ".2f"))
+
+        if os.environ.get("DEBUG_DL", "1") == "1":
+            assert self.current_base_dl is not None, "current_base_dl should be defined"
+
+            # Log consumption statistics
+            for dataset_name, stats in self.current_base_dl.dataset.get_consumption_stats().items():
+                basic_log_entries.extend(
+                    [
+                        LogItem(f"dataloader/consumed_tokens/{dataset_name}", stats["tokens"], "human_format"),
+                    ]
+                )
 
         # WandB logging - determine if this rank should log to wandb
         should_log_to_wandb = wandb is not None and (
@@ -1120,6 +1172,10 @@ class DistributedTrainer:
         # Upload to S3
         if self.s3_mover is not None:
             self.s3_mover.start_uploading()
+
+        # free memory TODO: do we need this?
+        gc.collect()
+        torch.cuda.empty_cache()
 
     def save_checkpoint(self) -> Path:
         self.pre_save_checkpoint()

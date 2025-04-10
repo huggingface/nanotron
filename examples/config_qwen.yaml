@@ -12,10 +12,16 @@ data_stages:
     dataset:
       dataset_folder:
       - /fsx/loubna/datasets/llama_tokenized/fineweb-edu/merged
+      dataset_max_tokens: null
+      dataset_read_path: null
       dataset_weights: null
-      return_positions: false
+      pad_samples_to_global_batch_size: false
+      return_positions: true
+      shuffle_files: false
+      skip_in_stream: false
       token_size_in_bytes: 4
       tokenizer_name: meta-llama/Llama-3.2-1B
+      use_old_brrr_dataloader: false
       vocab_size: 128256
     num_loading_workers: 1
     seed: 42
@@ -26,7 +32,7 @@ general:
   consumed_train_samples: null
   ignore_sanity_checks: false
   project: debug
-  run: qwen_20250410_002941_16027793
+  run: qwen_20250410_014907_16027793
   seed: 42
   step: null
 lighteval: null
@@ -45,6 +51,7 @@ model:
     _attn_implementation: flash_attention_2
     _fused_rms_norm: true
     _fused_rotary_emb: true
+    _use_doc_masking: true
     _use_qkv_packed: true
     attention_bias: false
     bos_token_id: 1
