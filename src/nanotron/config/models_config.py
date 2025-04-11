@@ -403,7 +403,7 @@ class Llama4Config:
         }
     )
     attention_chunk_size: int = 8192
-    intermediate_size_mlp: int = 16384
+    # intermediate_size_mlp: int = 16384
     use_qk_norm: bool = True
     no_rope_layers: List[int] = field(default_factory=list)
     head_dim: int = 128

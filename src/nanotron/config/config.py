@@ -318,12 +318,20 @@ class ModelArgs:
             self.dtype = cast_str_to_torch_dtype(self.dtype)
 
         assert 1 == 1
-        # model_config_class = [
-        #     model_config_to_model_config_class[key]
-        #     for key in model_config_to_model_config_class
-        #     if self.model_config.get(key, False)
-        # ][0]
-        # self.model_config = model_config_class(**self.model_config)
+        if isinstance(self.model_config, dict):
+            from nanotron.config.models_config import Llama4Config, LlamaConfig, Qwen2Config
+
+            model_config_to_model_config_class = {
+                "is_llama_config": LlamaConfig,
+                "is_llama4_config": Llama4Config,
+                "is_qwen2_config": Qwen2Config,
+            }
+            model_config_class = [
+                model_config_to_model_config_class[key]
+                for key in model_config_to_model_config_class
+                if self.model_config.get(key, False)
+            ][0]
+            self.model_config = model_config_class(**self.model_config)
 
         # TODO: refactor
         # self.model_config._is_using_mup = isinstance(self.init_method, SpectralMupInit)

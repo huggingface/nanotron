@@ -222,6 +222,9 @@ class Llama4TextMoELayer(nn.Module):
             idx_of_tokens_for_expert = torch.nonzero(expert_mask.view(-1)).squeeze()
             routing_weights_for_expert = routing_weights[idx_of_tokens_for_expert]
 
+            if routing_weights_for_expert.numel() == 1:
+                routing_weights_for_expert = routing_weights_for_expert.unsqueeze(0)
+
             # NOTE: no scaling
             scaled_inputs = einsum(
                 tokens_for_expert, routing_weights_for_expert, "n_tokens d_model, n_tokens -> n_tokens d_model"
@@ -234,6 +237,8 @@ class Llama4TextMoELayer(nn.Module):
             expert_router_loss = frac_of_tokens_routed_to_expert * frac_of_router_prob_routed_to_expert
             router_loss += expert_router_loss
             frac_of_tokens_routed_to_expert_list.append(frac_of_tokens_routed_to_expert)
+
+            # log_rank(f"Expert {expert_idx} has {len(tokens_for_expert)} tokens", logger=logger, level=logging.INFO, rank=0)
 
         router_aux_loss_coef = 0.001
         router_loss = router_loss * router_aux_loss_coef * self.num_experts
@@ -267,7 +272,7 @@ class Llama4TextMoELayer(nn.Module):
         expert_outputs = []
         for expert_idx, (inputs, count) in enumerate(zip(dispatched_inputs, expert_counts)):
             if count == 0:  # Skip computation if no tokens assigned
-                expert_outputs.append(torch.tensor([], device=hidden_states.device))
+                expert_outputs.append(torch.tensor([], device=hidden_states.device, dtype=hidden_states.dtype))
                 continue
 
             # Forward through the expert
