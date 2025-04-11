@@ -169,7 +169,7 @@ parallelism:
   pp: 1
   pp_engine: 1f1b
   recompute_layer: false
-  tp: 1
+  tp: 4
   tp_linear_async_communication: true
   tp_mode: REDUCE_SCATTER
   tp_recompute_allgather: true

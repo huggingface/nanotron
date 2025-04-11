@@ -324,12 +324,12 @@ class ModelArgs:
             "is_llama4_config": Llama4Config,
             "is_qwen2_config": Qwen2Config,
         }
-        model_config_class = [
-            model_config_to_model_config_class[key]
-            for key in model_config_to_model_config_class
-            if self.model_config.get(key, False)
-        ][0]
-        self.model_config = model_config_class(**self.model_config)
+        # model_config_class = [
+        #     model_config_to_model_config_class[key]
+        #     for key in model_config_to_model_config_class
+        #     if self.model_config.get(key, False)
+        # ][0]
+        # self.model_config = model_config_class(**self.model_config)
 
         # TODO: refactor
         # self.model_config._is_using_mup = isinstance(self.init_method, SpectralMupInit)
