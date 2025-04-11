@@ -21,6 +21,7 @@ from torch import nn
 from nanotron import distributed as dist
 from nanotron.distributed import get_global_rank
 from nanotron.logging import get_logger
+from nanotron.parallel.comm import CudaStreamManager
 from nanotron.parallel.parameters import NanotronParameter
 from nanotron.parallel.sharded_parameters import (
     SplitConfig,
@@ -56,6 +57,7 @@ class TensorParallelColumnLinear(nn.Linear):
         async_communication: bool = False,
         contiguous_chunks: Optional[Tuple[int, ...]] = None,
         tp_recompute_allgather: bool = True,
+        stream_manager: Optional[CudaStreamManager] = None,
     ):
         self.pg = pg
         self.world_size = pg.size()
@@ -76,6 +78,7 @@ class TensorParallelColumnLinear(nn.Linear):
 
         self.mode = mode
         self.async_communication = async_communication
+        self.stream_manager = stream_manager
 
         if self.world_size > 1:
             assert (
@@ -94,7 +97,10 @@ class TensorParallelColumnLinear(nn.Linear):
             split_config=split_config,
         )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        x: torch.Tensor,
+    ) -> torch.Tensor:
         return column_linear(
             input=x,
             weight=self.weight,
@@ -103,6 +109,7 @@ class TensorParallelColumnLinear(nn.Linear):
             tp_mode=self.mode,
             async_communication=self.async_communication,
             tp_recompute_allgather=self.tp_recompute_allgather,
+            stream_manager=self.stream_manager,
         )
 
     def extra_repr(self) -> str:
@@ -121,6 +128,7 @@ class TensorParallelRowLinear(nn.Linear):
         dtype=None,
         async_communication: bool = False,
         contiguous_chunks: Optional[Tuple[int, ...]] = None,
+        stream_manager: Optional[CudaStreamManager] = None,
     ):
         self.pg = pg
         self.world_size = pg.size()
@@ -129,6 +137,7 @@ class TensorParallelRowLinear(nn.Linear):
 
         self.in_features = in_features // self.world_size
         self.out_features = out_features
+        self.stream_manager = stream_manager
 
         # No need to shard the bias term, only rank 0 would have it
         bias = dist.get_rank(self.pg) == 0 and bias
@@ -175,6 +184,7 @@ class TensorParallelRowLinear(nn.Linear):
             group=self.pg,
             tp_mode=self.mode,
             async_communication=self.async_communication,
+            stream_manager=self.stream_manager,
         )
 
     def extra_repr(self) -> str:
