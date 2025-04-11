@@ -153,10 +153,6 @@ class Llama4TextMoELayer(nn.Module):
         self.recompute_layer = getattr(parallel_config, "recompute_layer", False)
         self.tp_pg = tp_pg
 
-        # Token dispatcher type - determines communication pattern
-        # self.token_dispatcher_type = getattr(config.moe_config, "token_dispatcher_type", "alltoall")
-        # For more sophisticated implementations, we would add token dispatcher logic here
-
     def _compute_router_probabilities(self, hidden_states):
         """Compute routing probabilities for each token to each expert."""
         from einops import rearrange
@@ -169,19 +165,9 @@ class Llama4TextMoELayer(nn.Module):
         # assert_tensor_equal_across_processes(hidden_states, self.tp_pg)
 
         parallel_router_logits = self.router(hidden_states)  # [batch_size*seq_length, num_experts]
-        # # NOTE: add noise to the router logits
-        # parallel_router_logits += torch.randn_like(parallel_router_logits) * 0.01
-        # TODO: check the tp_mode of the router
-
-        # NOTE: router weight shouldn't be the same across tp ranks
-        # assert_tensor_equal_across_processes(self.router.weight.data, self.tp_pg)
-
-        # NOTE: it shouldn't be equal across processes
-        # assert_tensor_equal_across_processes(parallel_router_logits, self.tp_pg)
         router_logits = differentiable_all_gather(parallel_router_logits, dim=-1, group=self.tp_pg)
 
         assert router_logits.shape == (seq_len, bs, self.num_local_experts)
-        # Get the top-k experts per token
         rotuing_router_logits, routing_indices = torch.topk(router_logits, k=self.num_experts_per_token, dim=-1)
         rotuing_router_logits = rearrange(rotuing_router_logits, "seq_len bs 1 -> seq_len bs", seq_len=seq_len)
         routing_indices = rearrange(routing_indices, "seq_len bs 1 -> seq_len bs", seq_len=seq_len)
@@ -212,7 +198,7 @@ class Llama4TextMoELayer(nn.Module):
 
         routing_weights = rearrange(routing_weights, "seq_len bs -> (seq_len bs)")
         for expert_idx in range(self.num_local_experts):
-            # Find tokens that have this expert in their top-k
+            # NOTE: Find tokens that have this expert in their top-k
             # expert_mask.shape = [seq_len, bs]
             # true for all tokens that have this expert in their top-k
             expert_mask = routing_indices == expert_idx

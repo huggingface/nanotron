@@ -55,7 +55,6 @@ model:
     hidden_size: 2048
     initializer_range: 0.02
     intermediate_size: 11008
-    intermediate_size_mlp: 11008 # orig: 16384
     max_position_embeddings: 1024
     num_attention_heads: 16
     # num_hidden_layers: 48 # this is the default from llama4
