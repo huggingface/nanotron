@@ -1307,6 +1307,9 @@ def mark_unsharded_params_as_tied_across_tp(
                 # bias for TensorParallelRowLinear only exists on TP=0 so we don't need to tie it
                 continue
 
+            # TODO; should we skip router
+            # sanity check if router is tied
+
             shared_weights = [
                 (
                     name,

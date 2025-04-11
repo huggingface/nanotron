@@ -46,11 +46,191 @@ from nanotron.parallel.pipeline_parallel.p2p import P2P
 from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelColumnLinear,
     TensorParallelLinearMode,
+    TensorParallelRowLinear,
 )
 from nanotron.random import RandomStates
 from nanotron.scaling.parametrization import SpectralMupParametrizator, StandardParametrizator
 
 logger = logging.get_logger(__name__)
+
+# copied from: https://github.com/huggingface/transformers/blob/6a75528cbc0c3985a5ba0a436cf8974b1dac8c01/src/transformers/models/llama4/modeling_llama4.py#L113C7-L125
+class Llama4TextL2Norm(nn.Module):
+    def __init__(self, dim: int = None, eps: float = 1e-6):
+        super().__init__()
+        self.eps = eps
+
+    def _norm(self, x):
+        return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+
+    def forward(self, x):
+        return self._norm(x.float()).type_as(x)
+
+    def extra_repr(self):
+        return f"eps={self.eps}"
+
+
+class Llama4TextAttention(nn.Module):
+    def __init__(
+        self,
+        config: Llama4Config,
+        parallel_config: Optional[ParallelismArgs],
+        tp_pg: dist.ProcessGroup,
+        cp_pg: dist.ProcessGroup,
+        layer_idx: int,
+    ):
+        super().__init__()
+        self.config = config
+        self.layer_idx = layer_idx
+        self.hidden_size = config.hidden_size
+        self.tp_pg_size = tp_pg.size()
+
+        # Head configuration
+        self.num_heads = config.num_attention_heads
+        self.local_num_heads = self.num_heads // self.tp_pg_size
+
+        # KV head configuration
+        self.num_kv_heads = config.num_key_value_heads
+        self.local_num_kv_heads = self.num_kv_heads // self.tp_pg_size
+
+        # Dimensions
+        self.head_dim = config.hidden_size // self.num_heads
+        self.q_size = self.num_heads * self.head_dim
+        self.kv_size = self.num_kv_heads * self.head_dim
+        self.local_q_size = self.local_num_heads * self.head_dim
+        self.local_kv_size = self.local_num_kv_heads * self.head_dim
+
+        # TP mode configuration
+        tp_mode = parallel_config.tp_mode if parallel_config is not None else TensorParallelLinearMode.ALL_REDUCE
+        tp_linear_async_communication = (
+            parallel_config.tp_linear_async_communication if parallel_config is not None else False
+        )
+
+        qkv_contiguous_chunks = (
+            self.q_size,  # Q chunk size
+            self.kv_size,  # K chunk size
+            self.kv_size,  # V chunk size
+        )
+        self.qkv_proj = TensorParallelColumnLinear(
+            self.hidden_size,
+            self.q_size + 2 * self.kv_size,
+            pg=tp_pg,
+            mode=tp_mode,
+            bias=config.attention_bias,  # Qwen2 uses bias for QKV, Llama doesn't
+            async_communication=tp_linear_async_communication,
+            contiguous_chunks=qkv_contiguous_chunks,
+            tp_recompute_allgather=parallel_config.tp_recompute_allgather,
+        )
+        self.o_proj = TensorParallelRowLinear(
+            self.num_heads * self.head_dim,
+            self.hidden_size,
+            pg=tp_pg,
+            mode=tp_mode,
+            bias=False,
+            async_communication=tp_linear_async_communication,
+        )
+        if config._use_qkv_packed:
+            from flash_attn.layers.rotary import RotaryEmbedding as FlashRotaryEmbedding
+
+            self.rotary_emb = FlashRotaryEmbedding(
+                dim=self.head_dim,
+                base=config.rope_theta,
+                interleaved=config.rope_interleaved,
+            )
+        else:
+            self.rotary_emb = RotaryEmbedding(
+                dim=self.head_dim,
+                max_seq_len=config.max_position_embeddings,
+                base=config.rope_theta,
+                interleaved=config.rope_interleaved,
+                seq_len_scaling_factor=None,
+                fused=config._fused_rotary_emb,
+            )
+        self.attention = CoreAttention(config, tp_pg, cp_pg, layer_idx)
+        self.simple_causal_mask = True
+        self._use_qkv_packed = config._use_qkv_packed
+
+        # TODO: support doc masking / SWA / SFT / inference
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,  # [batch_size*seq_length, hidden_size]
+        position_ids: torch.Tensor,  # [batch_size, seq_length] where -1 is padding
+        cu_seqlens: Optional[torch.Tensor] = None,  # Added cu_seqlens argument
+    ):
+        # [0, 1, 2, 3, 4, 0, 1, 2, -1, -1, -1] # 2 documents with 5 and 3 tokens then padding
+        # [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10] # 1 document with 11 tokens
+        # [0, 1, 2, 3, 4, 5, 6, 7, 8, -1, -1] # 1 document with 10 tokens then padding
+        # Replace -1 with 0 in position_ids to mark every padding token as a separate sequence. Ideally we want to get rid of padding tokens from qkv
+        # position_ids = position_ids.masked_fill(position_ids == -1, 0)
+        seq_length = position_ids.shape[1]
+        # Keep original position_ids shape for return, flatten for internal use
+        position_ids = position_ids.view(-1)  # [batch_size*seq_length]
+
+        qkv = self.qkv_proj(hidden_states)
+
+        if self._use_qkv_packed:
+            attn_output = self._forward_packed(qkv, seq_length, position_ids, cu_seqlens)
+        else:
+            q, k, v = qkv.split(
+                [self.local_q_size, self.local_kv_size, self.local_kv_size], dim=-1
+            )  # [batch_size*seq_length, q_size], [batch_size*seq_length, kv_size]
+            q = q.view(-1, self.local_num_heads, self.head_dim)  # [b*s, num_heads, head_dim]
+            k = k.view(-1, self.local_num_kv_heads, self.head_dim)  # [b*s, num_kv_heads, head_dim]
+            v = v.view(-1, self.local_num_kv_heads, self.head_dim)  # [b*s, num_kv_heads, head_dim]
+            if self.config.no_rope_layer is None or (self.layer_idx + 1) % self.config.no_rope_layer != 0:
+                rotary_pos_emb = self.rotary_emb(
+                    position_ids=position_ids if not self.simple_causal_mask else None, seq_length=seq_length
+                )  # [b*s, dim] or [seq_length, dim]
+                q = self.rotary_emb.apply_rotary_pos_emb(
+                    q, rotary_pos_emb, seq_length=seq_length
+                )  # [b*s, num_heads, head_dim]
+                k = self.rotary_emb.apply_rotary_pos_emb(
+                    k, rotary_pos_emb, seq_length=seq_length
+                )  # [b*s, num_kv_heads, head_dim]
+            else:
+                log_rank(f"skipping rotary for layer {self.layer_idx + 1}", logger=logger, level=logging.DEBUG, rank=0)
+            attn_output = self.attention(
+                q, k, v, position_ids=position_ids, seq_length=seq_length, cu_seqlens=cu_seqlens
+            )
+        output = self.o_proj(attn_output)
+        # Return original position_ids shape
+        return {"hidden_states": output, "position_ids": position_ids.view(-1, seq_length)}
+
+    def _forward_packed(self, qkv, seq_length, position_ids, cu_seqlens):
+        assert cu_seqlens is not None, "cu_seqlens must be provided for packed attention"
+        q = qkv[..., : self.local_num_heads * self.head_dim]  # Not contiguous, similar to flash_attn
+        kv = qkv[..., self.local_num_heads * self.head_dim :]  # Not contiguous, similar to flash_attn
+        q = q.view(-1, seq_length, self.local_num_heads, self.head_dim)
+        kv = kv.view(-1, seq_length, 2, self.local_num_kv_heads, self.head_dim)
+        if self.config.no_rope_layer is None or (self.layer_idx + 1) % self.config.no_rope_layer != 0:
+            q, kv = self.rotary_emb(
+                q, kv, seqlen_offset=0, max_seqlen=None
+            )  # TODO: should we use position_ids here? flash_attn doesn't
+        else:
+            log_rank(f"skipping rotary for layer {self.layer_idx + 1}", logger=logger, level=logging.DEBUG, rank=0)
+        q = q.view(-1, self.local_num_heads, self.head_dim)
+        kv = kv.view(-1, 2, self.local_num_kv_heads, self.head_dim)
+        max_seqlen = seq_length  # TODO: should this be max position_ids?
+
+        assert cu_seqlens.dtype == torch.int32
+        assert max_seqlen is not None
+        assert isinstance(max_seqlen, int)
+        attn_output = flash_attn_varlen_kvpacked_func(
+            q,
+            kv,
+            cu_seqlens,
+            cu_seqlens,
+            max_seqlen,
+            max_seqlen,
+            0.0,
+            softmax_scale=None,
+            causal=True,  # TODO: double check
+            alibi_slopes=None,
+            window_size=(-1, -1),  # TODO: fix
+            deterministic=False,
+        )  # Not contiguous, similar to flash_attn
+        # flash_attn use rearrange instead of reshape https://github.com/Dao-AILab/flash-attention/blob/1a58058a6da83bd7baaf4c512e8a1abe0240bb77/flash_attn/modules/mha.py#L730
+        return attn_output.reshape(-1, self.local_num_heads * self.head_dim)  # [b*s, num_heads*head_dim]
 
 
 class Llama4TextMoELayer(nn.Module):
@@ -133,7 +313,6 @@ class Llama4TextMoELayer(nn.Module):
         """Compute routing probabilities for each token to each expert."""
         from einops import rearrange
 
-        from nanotron.parallel.tensor_parallel.distributed_differentiable_primitives import differentiable_all_gather
 
         # todo: .shape[0] is bs
         seq_len = hidden_states.shape[0]
@@ -141,12 +320,10 @@ class Llama4TextMoELayer(nn.Module):
 
         # assert_tensor_equal_across_processes(hidden_states, self.tp_pg)
 
-        parallel_router_logits = self.router(hidden_states)  # [batch_size*seq_length/2, num_experts/2]
-        router_logits = differentiable_all_gather(
-            parallel_router_logits, dim=-1, group=self.tp_pg
-        )  # [batch_size*seq_length/2, num_experts]
+        # parallel_router_logits = self.column_router(hidden_states)  # [batch_size*seq_length/2, num_experts/2]
+        # router_logits = differentiable_all_gather(parallel_router_logits, dim=-1, group=self.tp_pg) # [batch_size*seq_length/2, num_experts]
 
-        # router_logits = self.router(hidden_states)  # [batch_size*seq_length/2, num_experts]
+        router_logits = self.router(hidden_states)  # [batch_size*seq_length/2, num_experts]
 
         assert router_logits.shape == (seq_len, bs, self.num_local_experts)
         rotuing_router_logits, routing_indices = torch.topk(router_logits, k=self.num_experts_per_token, dim=-1)
