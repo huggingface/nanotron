@@ -311,7 +311,6 @@ class ModelArgs:
     ddp_bucket_cap_mb: int = 25
 
     def __post_init__(self):
-        from nanotron.config.models_config import Llama4Config, LlamaConfig, Qwen2Config
 
         if self.dtype is None:
             self.dtype = torch.bfloat16
@@ -319,11 +318,6 @@ class ModelArgs:
             self.dtype = cast_str_to_torch_dtype(self.dtype)
 
         assert 1 == 1
-        model_config_to_model_config_class = {
-            "is_llama_config": LlamaConfig,
-            "is_llama4_config": Llama4Config,
-            "is_qwen2_config": Qwen2Config,
-        }
         # model_config_class = [
         #     model_config_to_model_config_class[key]
         #     for key in model_config_to_model_config_class
