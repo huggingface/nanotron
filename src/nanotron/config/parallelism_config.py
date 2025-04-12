@@ -24,6 +24,7 @@ class ParallelismArgs:
         tp_mode: TP mode to use between "all_reduce" and "reduce_scatter": all_reduce is normal, reduce_scatter activate sequence parallelism
         tp_linear_async_communication: Whether to use async communication in TP linear layers
         recompute_layer: Whether to recompute each Transformer layer to save memory.
+        moe_layer_recompute: Whether to recompute MoE layer during backward pass for memory efficiency
     """
 
     dp: int
@@ -53,3 +54,5 @@ class ParallelismArgs:
             self.pp_engine = cast_str_to_pipeline_engine(self.pp_engine)
         if isinstance(self.tp_mode, str):
             self.tp_mode = TensorParallelLinearMode[self.tp_mode.upper()]
+
+        assert self.expert_parallel_size == 1, "Don't support expert parallelism for now"

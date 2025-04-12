@@ -34,14 +34,15 @@ class ExistingCheckpointInit:
 class MoEConfig:
     """Configuration for Mixture of Experts layers"""
 
-    num_experts: int = 8  # Total number of experts
-    top_k: int = 2  # Number of experts to route each token to
+    num_experts: int  # Total number of experts
+    top_k: int = 1  # Number of experts to route each token to
     layers: List[int] = field(
         default_factory=lambda: [-1]
     )  # Indices of layers that use MoE. -1 means all layers. Default is all layers
-    enable_shared_expert: bool = False  # Whether to use a shared expert alongside specialized experts
-    token_dispatcher_type: str = "alltoall"  # Communication pattern for MoE ("alltoall" or "allgather")
-    router_aux_loss_coef: float = 0.001
+    enable_shared_expert: bool = True  # Whether to use a shared expert alongside specialized experts
+    enable_router_for_shared_expert: bool = False  # Whether to use a router for the shared expert
+    token_dispatcher_type: str = "allgather"  # Communication pattern for MoE ("alltoall" or "allgather")
+    router_aux_loss_coef: float = 0.001  # Auxiliary loss coefficient for the router
     router_jitter_noise: float = 0.0
     output_router_logits: bool = False
 

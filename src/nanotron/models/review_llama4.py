@@ -313,7 +313,6 @@ class Llama4TextMoELayer(nn.Module):
         """Compute routing probabilities for each token to each expert."""
         from einops import rearrange
 
-
         # todo: .shape[0] is bs
         seq_len = hidden_states.shape[0]
         bs = hidden_states.shape[1]

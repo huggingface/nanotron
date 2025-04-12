@@ -18,10 +18,8 @@ from typing import Dict, List, Optional, Union
 
 import torch
 import torch.distributed as dist
-import torch.nn.functional as F
 from torch import nn
 from torch.utils.checkpoint import CheckpointFunction
-from torchtyping import TensorType
 
 from nanotron import logging
 from nanotron.config import Config, Llama4Config, ParallelismArgs
@@ -29,7 +27,6 @@ from nanotron.config.models_config import RandomInit, SpectralMupInit
 from nanotron.logging import log_rank
 from nanotron.models import NanotronModel
 from nanotron.models.llama import (
-    MLP,
     CausalSelfAttention,
     Embedding,
     LlamaDecoderLayer,
@@ -37,8 +34,8 @@ from nanotron.models.llama import (
     LossWithZLoss,
     get_flops,
 )
-from nanotron.moe.expert_context import ExpertContext
 from nanotron.nn.layer_norm import TritonRMSNorm
+from nanotron.nn.moe import MLPMoE
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter
 from nanotron.parallel.pipeline_parallel.block import PipelineBlock, TensorPointer
@@ -51,237 +48,6 @@ from nanotron.random import RandomStates
 from nanotron.scaling.parametrization import SpectralMupParametrizator, StandardParametrizator
 
 logger = logging.get_logger(__name__)
-
-
-class Llama4TextMoELayer(nn.Module):
-    """Mixture of experts Layer for Qwen2 models."""
-
-    def __init__(
-        self,
-        config: Llama4Config,
-        parallel_config: Optional[ParallelismArgs],
-        tp_pg: dist.ProcessGroup,
-        layer_idx: int = 0,
-    ) -> None:
-        super().__init__()
-        self.hidden_size = config.hidden_size
-        self.intermediate_size = config.intermediate_size
-
-        # MoE specific configurations
-        self.num_experts = config.moe_config.num_experts  # Total number of experts
-        self.num_experts_per_token = config.moe_config.top_k  # Number of experts used per token (top-k)
-        self.expert_parallel_size = getattr(parallel_config, "expert_parallel_size", 1)
-        self.num_local_experts = self.num_experts // self.expert_parallel_size  # Experts per device
-        assert (
-            parallel_config.tp_mode == TensorParallelLinearMode.ALL_REDUCE
-        ), "MoE layer must be ALL_REDUCE because otherwise we need to all2all the tokens twice to route them"
-
-        # Get TP mode configuration
-
-        # Router for selecting experts
-        # do tied linear for duplicated router
-        self.router = TensorParallelColumnLinear(
-            self.hidden_size,
-            self.num_experts,
-            pg=tp_pg,
-            mode=TensorParallelLinearMode.ALL_REDUCE,
-            bias=False,
-            async_communication=False,
-        )
-        # self.router = nn.Linear(
-        #     self.hidden_size,
-        #     self.num_experts,
-        #     bias=False,
-        # )
-
-        # Enable shared experts if configured
-        # self.enable_shared_expert = getattr(config.moe_config, "enable_shared_expert", False)
-        # TODO: configurable
-        self.shared_expert = MLP(
-            config=config,
-            parallel_config=parallel_config,
-            tp_pg=tp_pg,
-        )
-        # self.shared_expert_gate = TensorParallelColumnLinear(
-        #     self.hidden_size,
-        #     1,
-        #     pg=tp_pg,
-        #     mode=tp_mode,
-        #     bias=False,
-        #     async_communication=tp_linear_async_communication,
-        # )
-
-        # Create the expert MLPs
-        # TODO: double check if all-to-all needed for
-        # the first mlp of moe
-        self.experts = nn.ModuleList(
-            [
-                MLP(
-                    config=config,
-                    parallel_config=parallel_config,
-                    tp_pg=tp_pg,
-                )
-                for _ in range(self.num_local_experts)
-            ]
-        )
-
-        # Whether to recompute MoE layer during backward pass for memory efficiency
-        self.recompute_layer = getattr(parallel_config, "recompute_layer", False)
-        self.tp_pg = tp_pg
-
-    def _compute_router_probabilities(self, hidden_states):
-        """Compute routing probabilities for each token to each expert."""
-        from einops import rearrange
-
-        from nanotron.parallel.tensor_parallel.distributed_differentiable_primitives import differentiable_all_gather
-
-        # todo: .shape[0] is bs
-        seq_len = hidden_states.shape[0]
-        bs = hidden_states.shape[1]
-
-        # assert_tensor_equal_across_processes(hidden_states, self.tp_pg)
-
-        parallel_router_logits = self.router(hidden_states)  # [batch_size*seq_length/2, num_experts/2]
-        router_logits = differentiable_all_gather(
-            parallel_router_logits, dim=-1, group=self.tp_pg
-        )  # [batch_size*seq_length/2, num_experts]
-
-        # router_logits = self.router(hidden_states)  # [batch_size*seq_length/2, num_experts]
-
-        assert router_logits.shape == (seq_len, bs, self.num_local_experts)
-        rotuing_router_logits, routing_indices = torch.topk(router_logits, k=self.num_experts_per_token, dim=-1)
-        rotuing_router_logits = rearrange(rotuing_router_logits, "seq_len bs 1 -> seq_len bs", seq_len=seq_len)
-        routing_indices = rearrange(routing_indices, "seq_len bs 1 -> seq_len bs", seq_len=seq_len)
-
-        routing_scores = F.sigmoid(rotuing_router_logits)
-
-        return routing_scores, routing_indices  # b, s/2
-
-    def _dispatch_tokens(
-        self, hidden_states, routing_weights: TensorType["seq_len", "bs"], routing_indices: TensorType["seq_len", "bs"]
-    ):
-        """
-        Dispatches tokens to their selected experts.
-        In a full implementation, this would handle the actual token routing logic
-        including communication between devices.
-
-        routing_weights: where a value specifies the weight of the expert
-        routing_indices: where a value specifies the index of the expert
-        """
-        from einops import einsum, rearrange
-
-        # hidden_states: b, s/2, h | b, s, h
-        # routing_weights: b, s/2 | b, s
-
-        dispatched_inputs = []
-        num_tokens_for_experts = []
-
-        # NOTE: recheck if seq_len is sharded
-        total_tokens = routing_weights.numel()
-        # total_tokens = routing_weights.numel() * self.tp_pg.size()
-        router_loss = torch.tensor(0.0, device=routing_weights.device, dtype=routing_weights.dtype)
-        frac_of_tokens_routed_to_expert_list = []
-
-        routing_weights = rearrange(routing_weights, "seq_len bs -> (seq_len bs)")
-        for expert_idx in range(self.num_local_experts):
-            # NOTE: Find tokens that have this expert in their top-k
-            # expert_mask.shape = [seq_len, bs]
-            # true for all tokens that have this expert in their top-k
-            expert_mask = routing_indices == expert_idx  # b, s
-            num_tokens_for_expert = expert_mask.sum()
-            # INFO: in case hidden_states was sharded here, wed need to reroute the tokens to the correct device
-            # in case of EP, all-to-all
-            tokens_for_expert = hidden_states[expert_mask]  # b, s, h
-
-            # Get the routing weights for this expert
-            idx_of_tokens_for_expert = torch.nonzero(expert_mask.view(-1)).squeeze()  # todo
-            routing_weights_for_expert = routing_weights[idx_of_tokens_for_expert]
-
-            if num_tokens_for_expert == 1:
-                routing_weights_for_expert = routing_weights_for_expert.unsqueeze(0)
-
-            # NOTE: no scaling
-            scaled_inputs = einsum(
-                tokens_for_expert, routing_weights_for_expert, "n_tokens d_model, n_tokens -> n_tokens d_model"
-            )  # n_tokens_local, d_model
-            dispatched_inputs.append(scaled_inputs)
-            num_tokens_for_experts.append(num_tokens_for_expert)
-
-            # todo: make sure it is correct for reduce_scatter
-            frac_of_tokens_routed_to_expert = num_tokens_for_expert / total_tokens
-            frac_of_router_prob_routed_to_expert = routing_weights_for_expert.sum() / total_tokens
-            expert_router_loss = frac_of_tokens_routed_to_expert * frac_of_router_prob_routed_to_expert
-            router_loss += expert_router_loss
-            frac_of_tokens_routed_to_expert_list.append(frac_of_tokens_routed_to_expert)
-
-            # log_rank(f"Expert {expert_idx} has {len(tokens_for_expert)} tokens", logger=logger, level=logging.INFO, rank=0)
-
-        router_aux_loss_coef = 0.001
-        router_loss = router_loss * router_aux_loss_coef * self.num_experts
-        ExpertContext.get_instance().push_aux_loss(router_loss)
-        return dispatched_inputs, num_tokens_for_experts
-
-    def _combine_expert_outputs(self, expert_outputs, routing_indices, original_shape):
-        """
-        Combines outputs from different experts back to the original tensor layout.
-        """
-        # todo add shapes
-        # Initialize output tensor with zeros
-        combined_output = torch.empty(original_shape, device=expert_outputs[0].device, dtype=expert_outputs[0].dtype)
-
-        for expert_idx, expert_output in enumerate(expert_outputs):
-            if expert_output.shape[0] == 0:  # Skip if no tokens were routed to this expert
-                continue
-
-            # Find positions where this expert was in the top-k
-            expert_mask = routing_indices == expert_idx
-            combined_output[expert_mask] = expert_output
-
-        return combined_output  # b,s,h
-
-    def _core_forward(self, hidden_states):
-        """Core forward logic for MoE layer."""
-        # b, s/2, h
-        routing_weights, routing_indices = self._compute_router_probabilities(hidden_states)
-        # b, s
-
-        # Dispatch tokens to experts
-        dispatched_inputs, num_tokens_for_experts = self._dispatch_tokens(
-            hidden_states, routing_weights, routing_indices
-        )
-
-        expert_outputs = []
-        for expert_idx, (inputs, num_tokens_for_expert) in enumerate(zip(dispatched_inputs, num_tokens_for_experts)):
-            if num_tokens_for_expert == 0:  # Skip computation if no tokens assigned
-                expert_outputs.append(torch.tensor([], device=hidden_states.device, dtype=hidden_states.dtype))
-                # todo: just use None instead of tensor([], device=hidden_states.device, dtype=hidden_states.dtype)
-                continue
-
-            # Forward through the expert
-            expert_output = self.experts[expert_idx](hidden_states=inputs)["hidden_states"]
-            expert_outputs.append(expert_output)
-
-        output = self._combine_expert_outputs(expert_outputs, routing_indices, hidden_states.shape)
-
-        # TODO: configurable
-        # Add shared expert contribution if enabled
-        shared_expert_output = self.shared_expert(hidden_states=hidden_states)["hidden_states"]
-        output = output + shared_expert_output
-
-        return output
-
-    def _checkpointed_forward(self, hidden_states):
-        """Apply gradient checkpointing to save memory during training."""
-        return CheckpointFunction.apply(self._core_forward, True, hidden_states)
-
-    def forward(self, hidden_states):
-        """Forward pass for the MoE layer."""
-        if self.recompute_layer and self.training:
-            hidden_states = self._checkpointed_forward(hidden_states)
-        else:
-            hidden_states = self._core_forward(hidden_states)
-
-        return {"hidden_states": hidden_states}
 
 
 class Llama4DecoderLayer(nn.Module):
@@ -313,7 +79,7 @@ class Llama4DecoderLayer(nn.Module):
         )
 
         self.post_attention_layernorm = TritonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.mlp = Llama4TextMoELayer(config=config, parallel_config=parallel_config, tp_pg=tp_pg)
+        self.mlp = MLPMoE(config=config, parallel_config=parallel_config, tp_pg=tp_pg)
 
         self.recompute_layer = parallel_config.recompute_layer
 
@@ -339,10 +105,10 @@ class Llama4DecoderLayer(nn.Module):
         dist.barrier()
         # assert_tensor_equal_across_processes(hidden_states, self.parallel_context.tp_pg)
         # NOTE: we already the compute output of attention, so we can just pass it to the MLP
-        hidden_states = self.mlp(hidden_states=hidden_states)["hidden_states"]
-        hidden_states = hidden_states + residual
+        output = self.mlp(hidden_states=hidden_states)
+        hidden_states = output["hidden_states"] + residual
 
-        return hidden_states, output["sequence_mask"]
+        return hidden_states, output["sequence_mask"], output["router_loss"]
 
     def _checkpointed_forward(
         self,
@@ -355,16 +121,18 @@ class Llama4DecoderLayer(nn.Module):
         self,
         hidden_states: Union[torch.Tensor, TensorPointer],
         sequence_mask: Union[torch.Tensor, TensorPointer],
+        router_loss: Optional[torch.Tensor],
     ) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
 
         if self.recompute_layer and not isinstance(hidden_states, TensorPointer):
-            hidden_states, sequence_mask = self._checkpointed_forward(hidden_states, sequence_mask)
+            hidden_states, sequence_mask, router_loss = self._checkpointed_forward(hidden_states, sequence_mask)
         else:
-            hidden_states, sequence_mask = self._core_forward(hidden_states, sequence_mask)
+            hidden_states, sequence_mask, router_loss = self._core_forward(hidden_states, sequence_mask)
 
         return {
             "hidden_states": hidden_states,
             "sequence_mask": sequence_mask,
+            "router_loss": router_loss,
         }
 
 

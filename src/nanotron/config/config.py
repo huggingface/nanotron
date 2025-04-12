@@ -538,6 +538,12 @@ class Config:
         # if self.checkpoints.lighteval is not None:
         #     assert self.tokenizer.tokenizer_name_or_path is not None
 
+        # MoE specific checks
+        if self.model.model_config.is_moe_model:
+            assert (
+                self.model.model_config.moe_config.num_experts % self.parallelism.tp == 0
+            ), f"num_experts ({self.model.model_config.moe_config.num_experts}) must be divisible by tp ({self.parallelism.tp})"
+
         # TODO: undo
         # Model verifications
         # assert (

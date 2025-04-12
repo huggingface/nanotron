@@ -566,22 +566,24 @@ class DistributedTrainer:
                 # Training step
                 outputs, loss_avg, z_loss_avg = self.training_step(dataloader=self.current_dataloader)
 
-                # Update consumption tracking for current batch
-                self.current_base_dl.dataset.update_consumption_metrics(
-                    start_idx=(self.iteration_step - 1)
-                    * self.global_batch_size,  # assumes we start from iteration_step=1
-                    end_idx=self.iteration_step * self.global_batch_size,
-                    sequence_length=self.sequence_length,
-                )
+                # Skip for dummy infinite data generator
+                if hasattr(self.current_base_dl, "dataset"):
+                    # Update consumption tracking for current batch
+                    self.current_base_dl.dataset.update_consumption_metrics(
+                        start_idx=(self.iteration_step - 1)
+                        * self.global_batch_size,  # assumes we start from iteration_step=1
+                        end_idx=self.iteration_step * self.global_batch_size,
+                        sequence_length=self.sequence_length,
+                    )
 
                 # Training Logs
                 # Track consumed tokens for all dataset folders in current stage
-                consumption_stats = self.current_base_dl.dataset.get_consumption_stats()
-                current_stage = self.metadata.data_stages[self.metadata.last_stage_idx]
+                # consumption_stats = self.current_base_dl.dataset.get_consumption_stats()
+                self.metadata.data_stages[self.metadata.last_stage_idx]
 
                 # Update consumed tokens for all folders in the consumption stats
-                for folder_path, stats in consumption_stats.items():
-                    current_stage.consumed_tokens_per_dataset_folder[folder_path] = stats["tokens"]
+                # for folder_path, stats in consumption_stats.items():
+                #     current_stage.consumed_tokens_per_dataset_folder[folder_path] = stats["tokens"]
 
                 # Original consumption tracking
                 self.metadata.consumed_train_samples += self.global_batch_size
@@ -741,6 +743,7 @@ class DistributedTrainer:
         outputs: Iterable[Dict[str, Union[torch.Tensor, TensorPointer]]],
         loss_avg: Optional[torch.Tensor],
         z_loss_avg: Optional[torch.Tensor],
+        expert_losses: Optional[torch.Tensor] = None,
     ) -> None:
         # TODO @nouamanetazi: Megatron-LM seems to be using a barrier to report their interval time. Check if this is necessary. https://github.com/NouamaneTazi/Megatron-LM/blob/e241a96c3085b18e36c6cee1d68a8155de77b5a6/megatron/training.py#L607
         dist.barrier()
