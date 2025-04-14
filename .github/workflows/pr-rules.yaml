@@ -1,0 +1,15 @@
+name: Check PR Source Branch
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  check-branch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check PR source branch
+        if: github.base_ref == 'main' && github.head_ref != 'dev'
+        run: |
+          echo "ERROR: PRs to main must come from dev branch"
+          exit 1
