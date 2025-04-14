@@ -40,6 +40,24 @@ with nanotron_timer("my_operation", timer_type="cuda"):
 with nanotron_timer("cpu_operation", timer_type="cpu"):
     # Your CPU operation here
     ...
+
+# As a decorator with default CUDA timing
+@nanotron_timer
+def my_function():
+    # Your GPU operation here
+    ...
+
+# As a decorator with custom name
+@nanotron_timer("custom_name")
+def my_function():
+    # Your GPU operation here
+    ...
+
+# As a decorator with CPU timing
+@nanotron_timer(timer_type=TimerType.CPU)
+def my_cpu_function():
+    # Your CPU operation here
+    ...
 ```
 
 ### Advanced Usage
