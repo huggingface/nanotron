@@ -145,11 +145,23 @@ class S3UploadArgs:
 class NanosetDatasetsArgs:
     dataset_folder: Union[str, List[str]]
     dataset_weights: Optional[List[float]] = None
+    dataset_read_path: Optional[
+        Union[str, List[str]]
+    ] = None  # Path to local file/copy to read from. If it exists, we read from this folder instead of from dataset_folder. Useful when we offload some data to remote and only keep the needed files on disk.
     # Tokenizer config, assuming all datasets use the same tokenizer
     tokenizer_name: Optional[str] = None
     vocab_size: Optional[int] = None
     token_size_in_bytes: Optional[int] = None
-    return_positions: Optional[bool] = False
+    return_positions: Optional[
+        bool
+    ] = True  # read positions stored in disk by datatrove if eos_token_id is None, else computed on the fly
+
+    # Tokenized bytes dataset config
+    skip_in_stream: Optional[bool] = False
+    pad_samples_to_global_batch_size: Optional[bool] = False
+    dataset_max_tokens: Optional[List[int]] = None
+    shuffle_files: Optional[bool] = False
+    use_old_brrr_dataloader: Optional[bool] = False
 
     def __post_init__(self):
         if isinstance(self.dataset_folder, str):  # Case 1: 1 Dataset folder
@@ -183,6 +195,12 @@ class NanosetDatasetsArgs:
                             assert self.token_size_in_bytes == int(
                                 token_size_in_bytes
                             ), f"Token size mismatch while reading datasets metadata file, found both {self.token_size_in_bytes} and {token_size_in_bytes}"
+
+        # Check if dataset_read_path is provided and matches the number of dataset folders
+        if self.dataset_read_path is not None and len(self.dataset_read_path) != len(self.dataset_folder):
+            raise ValueError(
+                f"Number of dataset read paths ({len(self.dataset_read_path)}) does not match number of dataset folders ({len(self.dataset_folder)})"
+            )
 
 
 @dataclass
@@ -442,7 +460,7 @@ class Config:
 
         if self.s3_upload is not None:
             self.s3_upload.__post_init__()
-        
+
         # Some final sanity checks across separate arguments sections:
         if self.profiler is not None and self.profiler.profiler_export_path is not None:
             total_profiling_steps = self.profiler.skip_first + self.profiler.repeat * (
@@ -532,6 +550,10 @@ class Config:
 
         # Sanity test config can be reloaded
         _ = get_config_from_file(file_path, config_class=self.__class__)
+
+    def get_yaml(self):
+        config_dict = serialize(self)
+        return yaml.dump(config_dict)
 
     @classmethod
     def load_from_yaml(cls, file_path: str):

@@ -466,6 +466,10 @@ def create_slurm_script(
     assert dp * pp * tp * cp * ep % gpus_per_node == 0
     nodes = dp * pp * tp * cp * ep // gpus_per_node
 
+    # Ensure config_path is a full path
+    if not os.path.isabs(config_path):
+        config_path = os.path.abspath(config_path)
+
     script = f"""#!/bin/bash
 #SBATCH --job-name={args.run}
 #SBATCH --nodes={nodes}
@@ -495,6 +499,9 @@ secs_to_human() {{
 start=$(date +%s)
 echo "$(date -d @${{start}} "+%Y-%m-%d %H:%M:%S"): ${{SLURM_JOB_NAME}} start id=${{SLURM_JOB_ID}}\\n"
 
+# Get the actual slurm script path from the environment
+echo "Slurm script path: $(scontrol show job $SLURM_JOB_ID | grep -oP 'Command=\\K[^ ]+')"
+
 # SLURM setup
 export HOSTNAMES=`scontrol show hostnames "$SLURM_JOB_NODELIST"`
 export MASTER_ADDR=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)
@@ -522,6 +529,8 @@ export WORLD_SIZE=$(($NNODES * $GPUS_PER_NODE))
 # Nanotron specific
 {"export NANOTRON_BENCHMARK=1" if args.bench else ""}
 {"# " if args.enable_wandb else ""}export WANDB_MODE=disabled
+# export ENABLE_TIMERS=1
+# export DEBUG_CPU=1
 
 
 CMD="{run_train_script} --config-file {config_path}"
@@ -540,6 +549,20 @@ echo "CUDA used to build PyTorch: $(python -c 'import torch; print(torch.version
 echo "ROCM used to build PyTorch: $(python -c 'import torch; print(torch.version.hip)')"
 
 echo "PATH: $PATH"
+# Log environment variables
+echo "Environment variables:"
+printenv | sort
+
+# Log python path
+echo "Python path: $(which python)"
+
+# Log torchrun path
+echo "Torchrun path: $(which torchrun)"
+
+# Log installed Python packages
+echo "Installed Python packages:"
+python -m pip freeze
+
 
 # Log GPU information
 nvidia-smi

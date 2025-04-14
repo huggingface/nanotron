@@ -10,6 +10,7 @@ from nanotron import logging
 from nanotron.config import Config
 from nanotron.data.clm_collator import DataCollatorForCLM, DataCollatorForCLMWithPositionIds
 from nanotron.data.samplers import EmptyInfiniteDataset, get_sampler
+from nanotron.logging.timers import nanotron_timer
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
 from nanotron.random import set_random_seed
@@ -38,49 +39,62 @@ def sanity_check_dataloader(
         The same batches after performing sanity checks
     """
     # WARNING: This is called in the middle of the training loop, so make sure it's optimized
-    for batch in dataloader:
-        # maybe numpy to torch
-        batch = {k: torch.from_numpy(v) if isinstance(v, np.ndarray) else v for k, v in batch.items()}
+    dataloader_iter = iter(dataloader)
+    while True:
+        try:
+            # Measure just the time to fetch the next batch
+            nanotron_timer("dataloader_fetch").start()
+            batch = next(dataloader_iter)
+            nanotron_timer("dataloader_fetch").end()
 
-        # non_blocking=True seems to be fine? https://discuss.pytorch.org/t/should-we-set-non-blocking-to-true/38234/4
-        micro_batch = {
-            k: v
-            if isinstance(v, TensorPointer)
-            else v.to("cuda", memory_format=torch.contiguous_format, non_blocking=True)
-            for k, v in batch.items()
-        }
+            # Process the batch (this part is not timed as part of the dataloader fetch)
+            # maybe numpy to torch
+            batch = {k: torch.from_numpy(v) if isinstance(v, np.ndarray) else v for k, v in batch.items()}
 
-        if not config.general.ignore_sanity_checks:
-            # SANITY CHECK: Check input are not the same across DP
-            for key, value in sorted(micro_batch.items(), key=lambda x: x[0]):
-                if isinstance(value, TensorPointer):
-                    continue
+            # non_blocking=True seems to be fine? https://discuss.pytorch.org/t/should-we-set-non-blocking-to-true/38234/4
+            micro_batch = {
+                k: v
+                if isinstance(v, TensorPointer)
+                else v.to("cuda", memory_format=torch.contiguous_format, non_blocking=True)
+                for k, v in batch.items()
+            }
 
-                if "mask" in key or "position_ids" in key:
-                    # It's fine if mask is the same across DP
-                    continue
+            if not config.general.ignore_sanity_checks:
+                # SANITY CHECK: Check input are not the same across DP
+                for key, value in sorted(micro_batch.items(), key=lambda x: x[0]):
+                    if isinstance(value, TensorPointer):
+                        continue
 
-                with assert_fail_except_rank_with(AssertionError, rank_exception=0, pg=parallel_context.dp_pg):
+                    if "mask" in key or "position_ids" in key:
+                        # It's fine if mask is the same across DP
+                        continue
+
+                    with assert_fail_except_rank_with(AssertionError, rank_exception=0, pg=parallel_context.dp_pg):
+                        assert_tensor_synced_across_pg(
+                            tensor=value, pg=parallel_context.dp_pg, msg=lambda err: f"{key} {err}"
+                        )
+
+                # SANITY CHECK: Check input are synchronized throughout TP
+                for key, value in sorted(micro_batch.items(), key=lambda x: x[0]):
+                    if isinstance(value, TensorPointer):
+                        continue
                     assert_tensor_synced_across_pg(
-                        tensor=value, pg=parallel_context.dp_pg, msg=lambda err: f"{key} {err}"
+                        tensor=value,
+                        pg=parallel_context.tp_pg,
+                        msg=lambda err: f"{key} are not synchronized throughout TP {err}",
                     )
 
-            # SANITY CHECK: Check input are synchronized throughout TP
-            for key, value in sorted(micro_batch.items(), key=lambda x: x[0]):
-                if isinstance(value, TensorPointer):
-                    continue
-                assert_tensor_synced_across_pg(
-                    tensor=value,
-                    pg=parallel_context.tp_pg,
-                    msg=lambda err: f"{key} are not synchronized throughout TP {err}",
-                )
+                # SANITY CHECK: Check that input are synchronized throughout PP
+                # TODO @thomasw21: That's really hard to test as input gets sharded across the PP, let's assume it works for now.
 
-            # SANITY CHECK: Check that input are synchronized throughout PP
-            # TODO @thomasw21: That's really hard to test as input gets sharded across the PP, let's assume it works for now.
+                # SANITY CHECK: Check that an input only exists on the PP rank responsible for it
+                # TODO @nouamanetazi: add this test
 
-            # SANITY CHECK: Check that an input only exists on the PP rank responsible for it
-            # TODO @nouamanetazi: add this test
-        yield micro_batch
+            yield micro_batch
+
+        except StopIteration:
+            # End of dataloader
+            raise StopIteration
 
 
 def dummy_infinite_data_generator(

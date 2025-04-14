@@ -1,5 +1,3 @@
-from typing import List
-
 from torch.utils.data import DataLoader
 
 import nanotron.distributed as dist
@@ -31,7 +29,7 @@ def build_nanoset_dataloader(
     dataloader_drop_last: bool = True,
     dataloader_pin_memory: bool = True,
     use_position_ids: bool = True,
-    sequence_sep_tokens: List[int] = None,
+    use_doc_masking: bool = True,
 ) -> DataLoader:
 
     # Case of ranks not requiring data. We give them a dummy dataset, then the collator will do his job
@@ -47,8 +45,7 @@ def build_nanoset_dataloader(
             input_pp_rank=input_pp_rank,
             output_pp_rank=output_pp_rank,
             parallel_context=parallel_context,
-            sequence_sep_tokens=sequence_sep_tokens,
-            # cumul_doc_lens=dataset.cumul_doc_lens,
+            use_doc_masking=use_doc_masking,
         )
     else:
         data_collator = DataCollatorForCLM(
@@ -80,7 +77,6 @@ def build_nanoset_dataloader(
         num_workers=dataloader_num_workers,
         pin_memory=dataloader_pin_memory,
         worker_init_fn=get_dataloader_worker_init(dp_rank=dp_rank),
-        pin_memory_device="cuda",
+        # pin_memory_device="cuda",
         persistent_workers=True if dataloader_num_workers > 0 else False,
-        prefetch_factor=dataloader_num_workers if dataloader_num_workers > 0 else None,
     )

@@ -2,6 +2,7 @@ from contextlib import contextmanager
 from typing import Callable, Optional
 
 import torch
+from transformers import AutoTokenizer
 
 from nanotron import distributed as dist
 from nanotron import logging, optim
@@ -271,3 +272,51 @@ def check_optim_state_in_sync(optim_state_dict: dict, pg: dist.ProcessGroup):
             assert_tensor_synced_across_pg(
                 tensor=tensor, pg=pg, msg=lambda err: f"{name} are not synced across DP {err}"
             )
+
+
+def sanity_check_dataloader(dataloader, tokenizer_path, sanity_check_dataloader_interval=None):
+    """
+    Debug function to check dataloader samples.
+    Args:
+        dataloader: The dataloader to check
+        tokenizer_path: Path to the tokenizer
+        sanity_check_dataloader_interval: Interval at which to check samples
+    """
+    if sanity_check_dataloader_interval is None:
+        return
+
+    NUM_BATCHES = 10
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
+
+    if dist.get_rank() == 0:
+        check_step = -1
+
+        with open("sanity_check.txt", "w") as f:
+            f.write("")
+
+        for i, batch in enumerate(dataloader):
+            check_step += 1
+            if i % sanity_check_dataloader_interval == 0:
+                with open("sanity_check.txt", "a") as f:
+                    f.write("\n\n")
+                    f.write("*" * 40)
+                    f.write(f"Sanity check {check_step}")
+                    f.write("*" * 40)
+                print(batch)
+
+                texts = tokenizer.batch_decode(
+                    batch["input_ids"], skip_special_tokens=False, clean_up_tokenization_spaces=False
+                )
+
+                for j, text in enumerate(texts):
+                    print(f"\n\n>>Batch {i} || Sample {j}<<\n")
+                    print(text[:400])
+                    with open("sanity_check.txt", "a") as f:
+                        f.write(f"\n\n>>Batch {i} || Sample {j}<<\n")
+                        f.write(text)
+
+                if i // sanity_check_dataloader_interval == NUM_BATCHES - 1:
+                    break
+        raise AssertionError("Sanity check complete - stopping training")
+
+    dist.barrier()

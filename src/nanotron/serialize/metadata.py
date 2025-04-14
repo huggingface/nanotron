@@ -1,5 +1,6 @@
 import dataclasses
 import json
+import re
 from pathlib import Path
 from typing import Any, Callable, ClassVar, Dict, List, Optional, Tuple, Type, Union
 
@@ -7,7 +8,6 @@ import dacite
 import torch
 from dacite import from_dict
 from packaging.version import Version
-import re
 
 from nanotron import distributed as dist
 from nanotron.constants import CHECKPOINT_FILE_NAME, CHECKPOINT_VERSION
@@ -28,6 +28,7 @@ class DataStageMetadata:
     name: str
     start_training_step: int
     consumed_train_samples: int
+    consumed_tokens_per_dataset_folder: Dict[str, int] = dataclasses.field(default_factory=dict)
 
 
 @dataclasses.dataclass
@@ -83,8 +84,9 @@ class TensorMetadata:
         type_hooks={
             Tuple[SlicesPair, ...]: SlicesPair.tuple_from_str,
             Tuple[int, ...]: lambda x: torch.Size(
-                int(re.search(r'\((\d+)\)', size).group(1)) if 'np.int' in size else int(size) 
-                for size in x.strip("()").split(",") if size
+                int(re.search(r"\((\d+)\)", size).group(1)) if "np.int" in size else int(size)
+                for size in x.strip("()").split(",")
+                if size
             ),
         },
         strict=True,

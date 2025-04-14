@@ -826,11 +826,11 @@ def get_consumed_train_samples_of_a_data_stage_from_ckp(
 ) -> Optional[int]:
     start_training_step = stage.start_training_step
 
-    consumed_train_samples = next(
-        (s.consumed_train_samples for s in metadata.data_stages if s.start_training_step == start_training_step),
+    actual_stage = next(
+        (s for s in metadata.data_stages if s.start_training_step == start_training_step),
         None,
     )
-    if consumed_train_samples is None:
+    if actual_stage is None:
         # If stage not found in metadata, ensure we haven't passed this stage's start step
         assert (
             metadata.last_train_step < stage.start_training_step
@@ -840,12 +840,12 @@ def get_consumed_train_samples_of_a_data_stage_from_ckp(
         # Add new stage to metadata
         if metadata.data_stages is None:
             metadata.data_stages = []
-        metadata.data_stages.append(
-            DataStageMetadata(
-                name=stage.name,
-                start_training_step=stage.start_training_step,
-                consumed_train_samples=consumed_train_samples,
-            )
-        )
 
-    return consumed_train_samples
+        actual_stage = DataStageMetadata(
+            name=stage.name,
+            start_training_step=stage.start_training_step,
+            consumed_train_samples=consumed_train_samples,
+        )
+        metadata.data_stages.append(actual_stage)
+
+    return actual_stage.consumed_train_samples, actual_stage.consumed_tokens_per_dataset_folder
