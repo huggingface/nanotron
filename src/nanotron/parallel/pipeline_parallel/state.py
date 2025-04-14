@@ -203,6 +203,9 @@ class PipelineEvalBatchState(PipelineBatchState):
     microbatches_activations_to_recv = collections.deque()
     activations_buffer = collections.deque()
 
+    # Reinitialise counter
+    nb_forwards = 0
+
     def register_activation_requiring_backward(self, activation: torch.Tensor):
         pass
 

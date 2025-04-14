@@ -1018,14 +1018,14 @@ class Loss(nn.Module):
         label_ids: torch.Tensor,  # [batch_size, seq_length]
         label_mask: torch.Tensor,  # [batch_size, seq_length]
     ) -> Dict[str, torch.Tensor]:
-        loss = sharded_cross_entropy(
+        sharded_loss = sharded_cross_entropy(
             sharded_logits,
             label_ids.transpose(0, 1).contiguous(),
             group=self.tp_pg,
             dtype=torch.float,
         ).transpose(0, 1)
-        loss = masked_mean(loss, label_mask, dtype=torch.float)
-        per_sample_loss = masked_mean_per_row(loss, label_mask, dtype=torch.float)
+        loss = masked_mean(sharded_loss, label_mask, dtype=torch.float)
+        per_sample_loss = masked_mean_per_row(sharded_loss, label_mask, dtype=torch.float)
         return {"loss": loss, "per_sample_loss": per_sample_loss}
 
 class LossWithZLoss(Loss):
@@ -1039,17 +1039,17 @@ class LossWithZLoss(Loss):
         label_ids: torch.Tensor,  # [batch_size, seq_length]
         label_mask: torch.Tensor,  # [batch_size, seq_length]
     ) -> Dict[str, torch.Tensor]:
-        loss, z_loss = sharded_cross_entropy(
+        sharded_loss, sharded_z_loss = sharded_cross_entropy(
             sharded_logits,
             label_ids.transpose(0, 1).contiguous(),
             group=self.tp_pg,
             dtype=torch.float,
             z_loss_coef=self.z_loss_coef,
         )
-        loss = masked_mean(loss.transpose(0, 1), label_mask, dtype=torch.float)
-        z_loss = masked_mean(z_loss.detach().transpose(0, 1), label_mask, dtype=torch.float)
-        per_sample_loss = masked_mean_per_row(loss, label_mask, dtype=torch.float)
-        per_sample_z_loss = masked_mean_per_row(z_loss, label_mask, dtype=torch.float)
+        loss = masked_mean(sharded_loss.transpose(0, 1), label_mask, dtype=torch.float)
+        z_loss = masked_mean(sharded_z_loss.detach().transpose(0, 1), label_mask, dtype=torch.float)
+        per_sample_loss = masked_mean_per_row(sharded_loss, label_mask, dtype=torch.float)
+        per_sample_z_loss = masked_mean_per_row(sharded_z_loss, label_mask, dtype=torch.float)
         return {"loss": loss, "z_loss": z_loss, "per_sample_loss": per_sample_loss, "per_sample_z_loss": per_sample_z_loss}
 
 

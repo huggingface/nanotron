@@ -274,6 +274,7 @@ class DistributedTrainer:
         self.iteration_step = self.metadata.last_train_step
         self.limit_val_batches = self.config.tokens.limit_val_batches
         self.current_dataloader: Optional[DataLoader] = None  # used for the current training stage
+        self.current_validation_dataloader: Optional[DataLoader] = None #the dataloader currently in use for the current validation stage
 
         # log_libraries_versions(logger=logger)
         log_rank("Config:", logger=logger, level=logging.INFO, rank=0, is_separator=True)
@@ -493,11 +494,115 @@ class DistributedTrainer:
                 dataloader=dataloader, parallel_context=self.parallel_context, config=self.config
             )
 
+    def _prepare_dataloader_for_validation_stage(self, dataloaders: Union[List[DataLoader], DataLoader]):
+        # NOTE(tj.solergibert) Similar to _update_dataloader_based_on_training_stages BUT:
+        #   1. We call this function EVERY TIME we run the validation loop
+        #   2. Every time it returns a NEW validation iterator DataLoader. If you don't do this you'll consume the whole validation dataset
+        #       in the first iteration and subsequent validations will fail
+        # `dataloaders` are either torch DataLoaders (the very first stage) OR functions that we call later that provide torch DataLoaders (subsequent stages)
+        # From this torch DataLoaders objects we then call `sanity_check_dataloader` that will return a iterator.
+        # In short, `sanity_check_dataloader` just places the input tensors in the GPU when necessary (TensorPointers stay in the CPU)
+        #
+        # TBH, the for loop below it's just for deleting the DataLoaders of previous stages, which is not so problematic. The important part is returning the
+        # DataLoader iterator every time we call this function from the current training stage, which is tracked during training
+        #
+        # Also, keep in mind that if val_check_interval = 5 & data.start_training_step = 10 we will already perform the evaluation with the SECOND data stage
+        # after just training for the current iteration, so it might not be a good idea to set evals during the stage in which we change of data stage
+        #
+        # NOTE(tj.solergibert) Further investigation should be done, but there is a extrange behaiviour when deleting the DataLoaders////lambda functs. As they
+        # are converted into Iterators with `sanity_check_dataloader` we can't access anymore the DataLoader object to del the dataset (After first stage,
+        # in this function we locally create the DataLoder from the lambda func --> Return Iterator)
+        #
+        # Also when the gc deletes the first stage dataloader, all the `DatatroveFileDataset._f` are already None AND the `del` thing are deleting a copy of the
+        # object, not the object itself
+        #
+        # FINAL NOTE(tj.solergibert) I will open a Issue in nanotron to check with them if they are aware of this useless deletitions
+        #
+        # TODO(tj.solergibert) Check the tuple case below
+        from collections.abc import Generator
+
+        if not hasattr(self.config, "data_stages") or self.config.data_stages is None:
+
+            if isinstance(dataloaders, tuple):  # TODO(tj.solergibert) Check this tuple case
+                dataloader = dataloaders[0]
+            else:
+                dataloader = dataloaders
+
+            self.current_validation_dataloader = sanity_check_dataloader(
+                dataloader=dataloader, parallel_context=self.parallel_context, config=self.config
+            )
+
+            self.current_validation_dataloader_length = len(dataloader)
+
+            return
+        elif isinstance(dataloaders, Generator):
+            # TODO(xrsrke): this is a hacky way to handle DoReMi's dataloader
+            # remove this in the next PR
+            self.current_validation_dataloader = dataloaders
+            return
+
+        assert len(dataloaders) > 0, "No dataloaders provided"
+        assert len(dataloaders) == len(
+            self.config.data_stages
+        ), "Number of dataloaders should match the number of dataset stages"
+
+        def clear_dataloader_from_memory(dataloader: DataLoader, stage_name: str, prev_stage_name: str):
+            import gc
+
+            log_rank(
+                f"[Validation Stage: {stage_name}] Clearing the previous validation stage's ({prev_stage_name}) dataloader and dataset from memory",
+                logger=logger,
+                level=logging.INFO,
+            )
+
+            # NOTE: Clear dataloader from memory
+            del dataloader.dataset
+            del dataloader.sampler
+            del dataloader.batch_sampler
+
+            gc.collect()
+
+        for stage_idx, stage in enumerate(self.config.data_stages):
+            if stage_idx < self.metadata.last_stage_idx:
+                continue
+            # NOTE(tj.solergibert) From this point stage_idx = self.metadata.last_stage_idx. We update self.metadata.last_stage_idx (which keeps track of the training stage)
+            #   in each and every training step.
+
+            if (
+                stage_idx is not self.metadata.last_stage_idx
+            ): 
+                self.metadata.last_stage_idx = stage_idx  # Update validation stage index
+                # Delete previous stage DataLoader
+                prev_stage_name = self.config.data_stages[stage_idx - 1].name
+                prev_dataloader = dataloaders[prev_stage_name]
+
+                if isinstance(prev_dataloader, DataLoader):
+                    # NOTE: we don't need to clear dummy data generator from memory
+                    clear_dataloader_from_memory(
+                        prev_dataloader, stage_name=stage.name, prev_stage_name=prev_stage_name
+                    )
+
+                self.metadata.last_stage_idx = stage_idx  # Update validation stage index
+
+            # NOTE(tj.solergibert) Create AGAIN the DataLoader
+            dataloader = dataloaders[stage.name]
+            # NOTE: if a dataloader is lazy initialized, we need to call it to initialize it
+            dataloader = dataloader() if callable(dataloader) else dataloader
+            break
+
+        self.current_validation_dataloader_length = len(dataloader)
+        self.current_validation_dataloader = sanity_check_dataloader(
+            dataloader=dataloader, parallel_context=self.parallel_context, config=self.config
+        )  # NOTE(tj.solergibert) Create a Iterator from the DataLoader
+
     def train(
         self,
-        dataloader_or_dls: Dict[
+        train_dataloader_or_dls: Dict[
             str, Union[Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]], Tuple[Iterator, ...]]
         ],
+        valid_dataloader_or_dls: Dict[
+            str, Union[Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]], Tuple[Iterator, ...]]
+        ] = None,
         **kwargs,
     ) -> None:
         self.pre_training(**kwargs)
@@ -532,7 +637,7 @@ class DistributedTrainer:
                     prof.step()
 
                 self.iteration_start_time = time.time()
-                self._update_dataloader_based_on_training_stages(dataloader_or_dls)
+                self._update_dataloader_based_on_training_stages(train_dataloader_or_dls)
 
                 # Training step
                 outputs, tr_metrics = self.training_step(dataloader=self.current_dataloader)
@@ -548,6 +653,15 @@ class DistributedTrainer:
                 if (self.iteration_step - 1) % self.config.logging.iteration_step_info_interval == 0:
                     self.train_step_logs(outputs=outputs, **tr_metrics)
 
+                # Validation step
+                is_validation_step = (self.iteration_step % self.config.tokens.val_check_interval == 0)
+                if valid_dataloader_or_dls is not None and is_validation_step:
+                    self._prepare_dataloader_for_validation_stage(valid_dataloader_or_dls)
+                    val_global_loss, val_domain_losses = self.validation_step(dataloader=self.current_validation_dataloader)
+
+                    # NOTE(@paultltc): We log the validation step each time we compute it to avoid having to wait for the next logging step
+                    self.val_step_logs(global_loss=val_global_loss, domain_losses=val_domain_losses)
+
                 # Checkpoint
                 if self.iteration_step % self.config.checkpoints.checkpoint_interval == 0:
                     self.save_checkpoint()
@@ -558,6 +672,33 @@ class DistributedTrainer:
             self.save_checkpoint()
 
         self.post_training()
+
+    def _compute_per_domain_metrics(
+        self, per_sample_loss: torch.Tensor, per_sample_domains: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        # Compute per domain loss
+        stage_domains = self.config.data_stages[self.metadata.last_stage_idx].data.dataset.dataset_domains
+
+        per_domain_loss = torch.zeros(len(stage_domains), device="cuda")
+        for i in range(len(stage_domains)):
+            domain_samples = per_sample_domains == i
+            if domain_samples.sum() == 0:
+                per_domain_loss[i] = torch.tensor(-1, dtype=torch.float32, device="cuda")
+            else:
+                # Compute the mean loss for the domain
+                per_domain_loss[i] = torch.mean(per_sample_loss[domain_samples])
+        
+        per_domain_loss = per_domain_loss.unsqueeze(1)  # (1, LANGS)
+
+        dist.all_reduce(per_domain_loss, group=self.parallel_context.dp_pg, op=dist.ReduceOp.AVG)
+
+        mask = per_domain_loss != -1
+        masked_per_domain_loss = (per_domain_loss * mask).sum(dim=1) / mask.sum(dim=1)  # (1, LANGS)
+
+        per_domain_samples = torch.bincount(torch.flatten(per_sample_domains), minlength=len(stage_domains))
+
+        return per_domain_loss, per_domain_samples
+    
 
     def training_step(
         self, dataloader: Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]]
@@ -634,24 +775,23 @@ class DistributedTrainer:
             )
         nanotron_timer("clip_gradients", "cuda").end()
 
-        stage_domains = self.config.data_stages[self.metadata.last_stage_idx].data.dataset.dataset_domains
-
         # Compute DP average loss and overlap with optimizer step
         if isinstance(outputs[0]["loss"], torch.Tensor):
             # This is an average on only one data rank.
-            loss_avg = torch.stack(
-                [output["loss"] for output in outputs]
-            ).sum()  # already divided by n_micro_batches_per_batch
+            per_samples_domain = torch.stack(
+                [output["input_domain"].squeeze(1) for output in outputs]
+            )
             per_sample_loss = torch.stack(
                 [output["per_sample_loss"] for output in outputs]
             )
-            per_domain_loss = torch.zeros(len(stage_domains), device=self.parallel_context.dp_pg.local_rank())
-            for i in range(len(stage_domains)):
-                per_domain_loss[i] = torch.mean(per_sample_loss[samples_domains == i])
-            samples_domains = torch.stack(
-                [output["input_domain"].squeeze(1) for output in outputs]
+            loss_avg = torch.stack(
+                [output["loss"] for output in outputs]
+            ).sum()  # already divided by n_micro_batches_per_batch
+
+            per_domain_loss, per_domain_samples = self._compute_per_domain_metrics(
+                per_sample_loss=per_sample_loss, 
+                per_sample_domains=per_samples_domain, 
             )
-            num_samples_per_domain = torch.bincount(samples_domains, minlength=len(stage_domains))
             if "z_loss" in outputs[0]:
                 z_loss_avg = torch.stack(
                     [output["z_loss"] for output in outputs]
@@ -659,16 +799,21 @@ class DistributedTrainer:
                 per_sample_z_loss = torch.stack(
                     [output["per_sample_z_loss"] for output in outputs]
                 )
+                per_domain_z_loss, _ = self._compute_per_domain_metrics(
+                    per_sample_loss=per_sample_z_loss,
+                    per_sample_domains=per_samples_domain,
+                )
+
             else:
                 z_loss_avg = None
-                per_sample_z_loss = None
+                per_domain_z_loss = None
             # sync loss across DP (we should do the same for z_loss but it's only for logging so let's not sync it rn)
             handle = dist.all_reduce(loss_avg, group=self.parallel_context.dp_pg, async_op=True, op=dist.ReduceOp.AVG)
         else:
             z_loss_avg = None
             loss_avg = None
-            per_sample_loss = None
-            per_sample_z_loss = None
+            per_domain_loss = None
+            per_domain_z_loss = None
             handle = None
 
         # Move optimizer states back to GPU before optimizer step
@@ -700,22 +845,81 @@ class DistributedTrainer:
         self.post_train_step()
 
         tr_metrics = {
-            "loss": loss_avg,
-            "z_loss": z_loss_avg,
-            "per_domain_loss": per_sample_loss,
-            "per_domain_z_loss": per_sample_z_loss,
-            "num_samples_per_domain": num_samples_per_domain,
+            "loss_avg": loss_avg,
+            "z_loss_avg": z_loss_avg,
+            "per_domain_loss": per_domain_loss,
+            "per_domain_z_loss": per_domain_z_loss,
+            "per_domain_samples": per_domain_samples,
         }
 
         return outputs, tr_metrics
 
     def validation_step(self, dataloader: Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]]) -> Iterable[Dict]:
+        self.validation_step_start_time = time.time()
+
+        batch = (next(dataloader) for _ in range(self.current_validation_dataloader_length))
         outputs = self.pipeline_engine.validate_batch_iter(
             model=self.model,
-            batch=(next(dataloader) for _ in range(self.limit_val_batches)),
+            batch=batch,
             nb_microbatches=self.limit_val_batches,
         )
-        return outputs
+
+        # Compute DP average loss and overlap with optimizer step
+        if isinstance(outputs[0]["loss"], torch.Tensor):
+            # This is an average on only one data rank.
+            per_samples_domain = torch.stack(
+                [output["input_domain"].squeeze(1) for output in outputs]
+            )
+            per_sample_loss = torch.stack(
+                [output["per_sample_loss"] for output in outputs]
+            )
+            loss_avg = torch.stack(
+                [output["loss"] for output in outputs]
+            ).sum()  # already divided by n_micro_batches_per_batch
+
+            per_domain_loss, per_domain_samples = self._compute_per_domain_metrics(
+                per_sample_loss=per_sample_loss, 
+                per_sample_domains=per_samples_domain, 
+            )
+
+            # sync loss across DP
+            dist.all_reduce(loss_avg, group=self.parallel_context.dp_pg, async_op=True, op=dist.ReduceOp.AVG)
+
+            if "z_loss" in outputs[0]:
+                z_loss_avg = torch.stack(
+                    [output["z_loss"] for output in outputs]
+                ).sum()  # already divided by n_micro_batches_per_batch
+                per_sample_z_loss = torch.stack(
+                    [output["per_sample_z_loss"] for output in outputs]
+                )
+                per_domain_z_loss, _ = self._compute_per_domain_metrics(
+                    per_sample_loss=per_sample_z_loss,
+                    per_sample_domains=per_samples_domain,
+                )
+
+                # sync loss across DP
+                dist.all_reduce(z_loss_avg, group=self.parallel_context.dp_pg, async_op=True, op=dist.ReduceOp.AVG)
+            else:
+                z_loss_avg = None
+                per_domain_z_loss = None
+
+        else:
+            z_loss_avg = None
+            loss_avg = None
+            per_sample_loss = None
+            per_sample_z_loss = None
+
+        val_metrics = {
+            "loss_avg": loss_avg,
+            "z_loss_avg": z_loss_avg,
+            "per_domain_loss": per_domain_loss,
+            "per_domain_z_loss": per_domain_z_loss,
+            "per_domain_samples": per_domain_samples,
+        }
+
+        self.validation_step_end_time = time.time()
+
+        return val_metrics
 
     def train_step_logs(
         self,
@@ -724,17 +928,11 @@ class DistributedTrainer:
         z_loss_avg: Optional[torch.Tensor],
         per_domain_loss: Optional[torch.Tensor],
         per_domain_z_loss: Optional[torch.Tensor],
-        num_samples_per_domain: Optional[torch.Tensor],
+        per_domain_samples: Optional[torch.Tensor],
     ) -> None:
         # TODO @nouamanetazi: Megatron-LM seems to be using a barrier to report their interval time. Check if this is necessary. https://github.com/NouamaneTazi/Megatron-LM/blob/e241a96c3085b18e36c6cee1d68a8155de77b5a6/megatron/training.py#L607
         dist.barrier()
         torch.cuda.synchronize()
-
-        # loss_avg = tr_metrics["loss_avg"]
-        # z_loss_avg = tr_metrics["z_loss_avg"]
-        # per_domain_loss = tr_metrics["per_domain_loss"]
-        # per_domain_z_loss = tr_metrics["per_domain_z_loss"]
-        # num_samples_per_domain = tr_metrics["num_samples_per_domain"]
 
         elapsed_time_per_iteration_ms = (time.time() - self.iteration_start_time) * 1000
         tokens_per_sec = (
@@ -836,6 +1034,8 @@ class DistributedTrainer:
 
             return cpu_memory_log_entries + swap_memory_log_entries + process_memory_log_entries
         
+        curr_domains = self.config.data_stages[self.metadata.last_stage_idx].data.dataset.dataset_domains
+        
         per_domain_loss_entries = [
             LogItem(f"{domain}_loss", per_domain_loss[i].item(), "human_format")
             for i, domain in enumerate(curr_domains)
@@ -849,10 +1049,9 @@ class DistributedTrainer:
             ]
             basic_log_entries.extend(per_domain_z_loss_entries)
 
-        curr_domains = self.config.data_stages[self.metadata.last_stage_idx].data.dataset.dataset_domains
         num_samples_entries = [
                 LogItem(
-                    f"{domain}_samples", num_samples_per_domain[i].item(), "human_format"
+                    f"{domain}_samples", per_domain_samples[i].item(), "human_format"
                 )
                 for i, domain in enumerate(curr_domains)
             ]
@@ -967,6 +1166,168 @@ class DistributedTrainer:
             log_rank("Throughput logging complete", logger=logger, level=logging.INFO, rank=0)
             if not self.config.profiler:
                 exit(0)
+
+    def val_step_logs(
+        self,
+        loss_avg: Optional[torch.Tensor],
+        z_loss_avg: Optional[torch.Tensor],
+        per_domain_loss: Optional[torch.Tensor],
+        per_domain_z_loss: Optional[torch.Tensor],
+        per_domain_samples: Optional[torch.Tensor],
+    ):
+        dist.barrier()
+        torch.cuda.synchronize()
+        
+        # General metrics
+        validation_total_samples = self.limit_val_batches * self.micro_batch_size
+        validation_elapsed_time_per_iteration_ms = (self.validation_step_end_time - self.validation_step_start_time) * 1000
+        validation_tokens_per_sec = (
+            validation_total_samples * self.sequence_length / (validation_elapsed_time_per_iteration_ms / 1000)
+        )
+        validation_model_tflops, validation_hardware_tflops = self.unwrapped_model.get_flops_per_sec(
+            iteration_time_in_sec=validation_elapsed_time_per_iteration_ms / 1000,
+            sequence_length=self.sequence_length,
+            global_batch_size=validation_total_samples,
+        )
+
+        # Get rank information (used by both console and wandb logging)
+        tp_size = self.parallel_context.tp_pg.size()
+        dp_rank = dist.get_rank(self.parallel_context.dp_pg)
+        tp_rank = dist.get_rank(self.parallel_context.tp_pg)
+        world_rank = dist.get_rank(self.parallel_context.world_pg)
+
+
+        stage_domains = self.config.data_stages[self.metadata.last_stage_idx].data.dataset.dataset_domains
+
+        # Validation metrics
+        basic_log_entries = [
+            LogItem(
+                "validation/consumed_tokens",
+                validation_total_samples * self.sequence_length,
+                "human_format",
+            ),  # , "12d"),
+            LogItem(
+                "validation/elapsed_time_per_iteration_ms",
+                validation_elapsed_time_per_iteration_ms,
+                "human_format",
+            ),  # , ".1f"),
+            LogItem("validation/tokens_per_sec", validation_tokens_per_sec, "human_format"),  # , "1.6E"),
+            LogItem(
+                "validation/tokens_per_sec_per_gpu",
+                validation_tokens_per_sec / self.parallel_context.world_pg.size(),
+                "human_format",
+            ),  # , "1.6E"),
+            LogItem("validation/loss", loss_avg.item(), "human_format"),  # , "1.6E"),
+            LogItem(
+                "validation/model_tflops_per_gpu", validation_model_tflops / 3, "human_format"
+            ),  # , ".2f"), # NOTE(tj.solergibert) Check llama.py --> def get_flops() --> model_flops for explanation of the / 3 factor
+            LogItem(
+                "validation/hardware_tflops_per_gpu", validation_hardware_tflops / 3, "human_format"
+            ),  # , ".2f"), # NOTE(tj.solergibert) Check llama.py --> def get_flops() --> model_flops for explanation of the / 3 factor
+            *[
+                LogItem(f"validation/{dom}_loss", loss.item(), "human_format")
+                for dom, loss in zip(stage_domains, per_domain_loss)
+            ],
+            *[
+                LogItem(f"validation/{dom}_samples", per_domain_samples[i].item(), "human_format")
+                for i, dom in enumerate(stage_domains)
+            ],
+        ]
+
+        if z_loss_avg is not None:
+            basic_log_entries.insert(6, LogItem("validation/z_loss", z_loss_avg.item(), "human_format"))
+        if per_domain_z_loss is not None:
+            per_domain_z_loss_entries = [
+                LogItem(f"validation/{domain}_z_loss", per_domain_z_loss[i].item(), "human_format")
+                for i, domain in enumerate(stage_domains)
+            ]
+            basic_log_entries.extend(per_domain_z_loss_entries)
+
+        # Console logging only on logger ranks
+        if dist.get_rank(self.parallel_context.world_pg) in self.logger_ranks:
+            assert self.loggerwriter is not None, "loggerwriter should be defined on logger ranks"
+            self.loggerwriter.add_scalars_from_list(basic_log_entries, self.iteration_step)
+
+        if os.environ.get("ENABLE_TIMERS", "0") == "1":
+            for timer_name, timer in nanotron_timer.items():
+                basic_log_entries.append(LogItem(f"timers/{timer_name}", timer.elapsed, ".2f"))
+
+        # WandB logging - determine if this rank should log to wandb
+        should_log_to_wandb = wandb is not None and (
+            (tp_size > 1 and dp_rank == 0 and self.metrics_logging.log_level > 0)
+            or (tp_size > 1 and world_rank == self.logger_ranks[0] and self.metrics_logging.log_level == 0)
+            or (tp_size == 1 and world_rank == self.logger_ranks[0])  # For TP>1, log from each TP group's dp=0 rank
+        )
+        should_log_detailed_metrics_to_wandb = (
+            should_log_to_wandb
+            and self.metrics_logging.log_level > 0
+            and self.iteration_step % self.metrics_logging.log_detail_interval == 0
+        )
+
+        if should_log_detailed_metrics_to_wandb:
+            assert not (
+                wandb.run is None and tp_size > 1 and dp_rank == 0
+            ), f"WandB is not initialized for TP rank {tp_rank}, but logging was requested. Make sure that wandb is initialize before training."
+            all_log_entries = list(basic_log_entries)
+
+            # Collect all metrics based on the log level
+            detailed_metrics = self.metrics_logging.collect_all_metrics(
+                model=self.unwrapped_model,
+            )
+
+            # Add all detailed metrics to wandb
+            for name, value in detailed_metrics.items():
+                if isinstance(value, torch.Tensor):
+                    value = value.item()
+                all_log_entries.append(LogItem(name, value, "human_format"))
+
+            total, used, free = shutil.disk_usage("/")
+            all_log_entries.extend(
+                [
+                    LogItem(
+                        "cuda_memory_allocated", torch.cuda.memory_allocated(), "human_format"
+                    ),  #  / 1024**2, ".2f"),
+                    LogItem(
+                        "cuda_max_memory_reserved", torch.cuda.max_memory_reserved(), "human_format"
+                    ),  #  / 1024**2, ".2f"),
+                    LogItem("hd_total_memory_tb", total, "human_format"),  #  / (2**40), ".2f"),
+                    LogItem("hd_used_memory_tb", used, "human_format"),  #  / (2**40), ".2f"),
+                    LogItem("hd_free_memory_tb", free, "human_format"),  #  / (2**40), ".2f"),
+                ]
+            )
+            if tp_size > 1 and self.metrics_logging.log_level > 0:
+                tp_group_info = {"tp_rank": tp_rank, "tp_group_size": tp_size}
+            else:
+                tp_group_info = {}
+
+            wandb.log(
+                {
+                    **{log_item.tag: log_item.scalar_value for log_item in all_log_entries},
+                    **tp_group_info,
+                    "iteration_step": self.iteration_step,
+                },
+                step=self.iteration_step,
+            )
+            log_rank(
+                f"Successfully logged {len(all_log_entries)} metrics to WandB for tp_rank={tp_rank}",
+                logger=logger,
+                level=logging.DEBUG,
+                rank=world_rank,
+            )
+        elif should_log_to_wandb:
+            wandb.log(
+                {
+                    **{log_item.tag: log_item.scalar_value for log_item in basic_log_entries},
+                    "iteration_step": self.iteration_step,
+                },
+                step=self.iteration_step,
+            )
+        log_rank(
+            f"Successfully logged {len(basic_log_entries)} metrics to WandB for tp_rank={tp_rank}",
+            logger=logger,
+            level=logging.DEBUG,
+            rank=world_rank,
+        )
 
     def init_model(self) -> Union[NanotronModel, DistributedDataParallel]:
         """Initialize the model and load weights from checkpoint if needed."""
