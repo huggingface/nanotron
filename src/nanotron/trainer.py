@@ -1176,8 +1176,8 @@ class DistributedTrainer:
             self.s3_mover.start_uploading()
 
         # free memory TODO: do we need this?
-        gc.collect()
-        torch.cuda.empty_cache()
+        # gc.collect()
+        # torch.cuda.empty_cache()
 
     def save_checkpoint(self) -> Path:
         self.pre_save_checkpoint()
