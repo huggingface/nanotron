@@ -1,19 +1,12 @@
 from dataclasses import dataclass, field
-from enum import Enum
 from pathlib import Path
 from typing import Any, List, Optional, Union
 
+from nanotron.config.utils_config import InitScalingMethod
 from nanotron.nn.attention import ALL_ATTENTION_FUNCTIONS, AttentionImplementation
 
 # The default attention implementation to use
 DEFAULT_ATTENTION_IMPLEMENTATION = "flash_attention_2"
-
-
-class InitScalingMethod(Enum):
-    NONE = "none"  # No scaling applied (factor = 1.0)
-    NUM_LAYERS = "num_layers"  # Scale by sqrt(2 * total_layers)
-    LAYER_INDEX = "layer_index"  # Scale by sqrt(2 * current_layer)
-    MODEL_SCALE = "model_scale"  # Scale by hidden_dim/base_dim
 
 
 @dataclass

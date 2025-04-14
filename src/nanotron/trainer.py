@@ -185,7 +185,9 @@ class DistributedTrainer:
         ########################################
 
         # Set random states
-        set_random_seed(self.config.general.seed)
+        # Set different random seed for each TP rank to ensure diversity (especially at weight init)
+        tp_rank = dist.get_rank(self.parallel_context.tp_pg)
+        set_random_seed(self.config.general.seed + tp_rank)
 
         # Init model and build on pp ranks
         self.random_states = init_random_states(

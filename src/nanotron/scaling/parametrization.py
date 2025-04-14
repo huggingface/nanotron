@@ -52,6 +52,7 @@ class StandardParametrizator(Parametrizator):
         assert param_name in ["weight", "bias"]
 
         if "weight" == param_name:
+            # TODO @nouamane: should we use trunc_normal_
             init.normal_(module.weight, mean=0.0, std=self.std)
         elif "bias" == param_name:
             module.bias.zero_()
@@ -75,6 +76,7 @@ class StandardParametrizator(Parametrizator):
         if "weight" == param_name:
             scaling = self._compute_scaling_factor()
             adjusted_std = self.std / scaling
+            # TODO @nouamane: should we use trunc_normal_
             init.normal_(module.weight, mean=0.0, std=adjusted_std)
         elif "bias" == param_name:
             module.bias.zero_()
