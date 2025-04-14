@@ -1,3 +1,8 @@
+<!--
+IMPORTANT: If this PR targets the `main` branch, it must come from the `dev` branch.
+PRs to main from other branches will be rejected.
+-->
+
 # What does this PR do?
 
 <!--
