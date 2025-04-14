@@ -5,6 +5,8 @@ from pathlib import Path
 
 
 class TestContext:
+    __test__ = False
+
     def __init__(self):
         self._random_string = str(uuid.uuid1())
         self._root_dir = Path(__file__).parent.parent / ".test_cache"
