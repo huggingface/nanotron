@@ -3,7 +3,8 @@ from abc import abstractmethod
 from enum import Enum, auto
 from typing import Dict
 
-from nanotron.config import ModelArgs
+from nanotron.config import Config, ModelArgs
+from nanotron.config.models_config import InitScalingMethod
 from nanotron.nn.layer_norm import LlamaRMSNorm, TritonRMSNorm
 from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelColumnLinear,
@@ -31,7 +32,7 @@ class Parametrizator:
 
 
 class StandardParametrizator(Parametrizator):
-    def __init__(self, config: ModelArgs):
+    def __init__(self, config: Config):
         super().__init__(config)
         self.MODULE_TO_PARAMETRIZE = {
             TensorParallelColumnLinear: self._parametrize_column_linear,
@@ -41,8 +42,11 @@ class StandardParametrizator(Parametrizator):
             TensorParallelEmbedding: self._parametrize_embedding,
         }
 
-        self.std = config.init_method.std
-        self.num_layers = config.model_config.num_hidden_layers
+        self.std = config.model.init_method.std
+        self.num_layers = config.model.model_config.num_hidden_layers
+        self.tp = config.parallelism.tp
+        self.scaling_method = config.model.init_method.scaling_method
+        self.hidden_size = config.model.model_config.hidden_size
 
     def _parametrize_column_linear(self, param_name: str, module: nn.Module):
         assert param_name in ["weight", "bias"]
@@ -52,12 +56,26 @@ class StandardParametrizator(Parametrizator):
         elif "bias" == param_name:
             module.bias.zero_()
 
+    def _compute_scaling_factor(self) -> float:
+        """Compute initialization scaling based on selected method"""
+        if self.scaling_method == InitScalingMethod.NONE:
+            return 1.0
+        elif self.scaling_method == InitScalingMethod.NUM_LAYERS:
+            # Scale based on total network depth
+            return math.sqrt(2 * self.num_layers)
+        elif self.scaling_method == InitScalingMethod.LAYER_INDEX:
+            # Scale based on layer position
+            raise NotImplementedError("Layer position scaling not yet implemented")
+        else:
+            raise ValueError(f"Invalid scaling method: {self.scaling_method}")
+
     def _parametrize_row_linear(self, param_name: str, module: nn.Module):
         assert param_name in ["weight", "bias"]
 
         if "weight" == param_name:
-            std = self.std / math.sqrt(2 * self.num_layers)
-            init.normal_(module.weight, mean=0.0, std=std)
+            scaling = self._compute_scaling_factor()
+            adjusted_std = self.std / scaling
+            init.normal_(module.weight, mean=0.0, std=adjusted_std)
         elif "bias" == param_name:
             module.bias.zero_()
 
@@ -65,7 +83,6 @@ class StandardParametrizator(Parametrizator):
         assert param_name in ["weight", "bias"]
 
         if "weight" == param_name:
-            # TODO @thomasw21: Sometimes we actually want 0
             module.weight.fill_(1)
         elif "bias" == param_name:
             module.bias.zero_()
