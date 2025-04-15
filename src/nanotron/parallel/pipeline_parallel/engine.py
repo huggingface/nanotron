@@ -139,7 +139,7 @@ class PipelineEngine(ABC):
         nb_microbatches: int,
     ) -> Iterable[Dict[str, Union[torch.Tensor, TensorPointer]]]:
         # Assign a new state for the current batch
-        state = PipelineTrainBatchState()  # TODO: do i need state?
+        state = PipelineEvalBatchState()  # TODO: do i need state?
         self.nb_microbatches = nb_microbatches
 
         outputs = []
@@ -162,7 +162,7 @@ class PipelineEngine(ABC):
                 # Store the loss for each microbatch
                 if not isinstance(output["loss"], TensorPointer):
                     output = {k: v.detach() for k, v in output.items()}
-                output['input_domain'] = micro_batch['input_domain'].flatten().tolist()
+                output['input_domain'] = micro_batch['input_domain']
                 outputs.append(output)
 
         return outputs

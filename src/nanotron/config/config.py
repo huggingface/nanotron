@@ -145,7 +145,6 @@ class S3UploadArgs:
 class NanosetDatasetsArgs:
     training_folder: Union[str, List[str], Dict[str, float]] = None
     validation_folder: Union[str, List[str]] = None
-    dataset_folder: Union[str, List[str], Dict[str, float]] = None  # NOTE(@paultltc): For back-compatibility
     dataset_weights: Optional[List[float]] = None
     dataset_domains: Optional[List[str]] = None
     # Tokenizer config, assuming all datasets use the same tokenizer
@@ -153,23 +152,30 @@ class NanosetDatasetsArgs:
     vocab_size: Optional[int] = None
     token_size_in_bytes: Optional[int] = None
     return_positions: Optional[bool] = False
+    # NOTE(@paultltc): For back-compatibility
+    # dataset_folder: Union[str, List[str], Dict[str, float]] = None  
 
     def __post_init__(self):
-        if self.dataset_folder is not None:
-            if isinstance(self.dataset_folder, str):  # Case 1: 1 Dataset folder
-                self.training_folder = os.path.join(self.dataset_folder, "train")
-                self.validation_folder = os.path.join(self.dataset_folder, "test")
-            elif isinstance(self.training_folder, dict):  # Case 2: dict with > 1 training_folder and weights
-                self.training_folder = {os.path.join(k, "train"): v for k,v in self.dataset_folder.items()}
-                self.validation_folder = [os.path.join(k, "test") for k in self.dataset_folder.keys()]
+        # if self.dataset_folder is not None:
+        #     if isinstance(self.dataset_folder, str):  # Case 1: 1 Dataset folder
+        #         self.training_folder = os.path.join(self.dataset_folder, "train")
+        #         self.validation_folder = os.path.join(self.dataset_folder, "test")
+        #     elif isinstance(self.training_folder, dict):  # Case 2: dict with > 1 training_folder and weights
+        #         self.training_folder = {os.path.join(k, "train"): v for k,v in self.dataset_folder.items()}
+        #         self.validation_folder = [os.path.join(k, "test") for k in self.dataset_folder.keys()]
 
         if isinstance(self.training_folder, str):  # Case 1: 1 Dataset folder
             self.training_folder = [self.training_folder]
             self.dataset_weights = [1]
+        elif isinstance(self.training_folder, list):
+            self.dataset_weights = [1] * len(self.training_folder)
         elif isinstance(self.training_folder, dict):  # Case 2: dict with > 1 training_folder and weights
             tmp_training_folder = self.training_folder.copy()
             self.training_folder = list(tmp_training_folder.keys())
             self.dataset_weights = list(tmp_training_folder.values())
+
+        if isinstance(self.validation_folder, str):  # Case 1: 1 Dataset folder
+            self.validation_folder = [self.validation_folder]
 
         if self.dataset_domains is None:
             # By default take the training folder as the domain
@@ -180,7 +186,6 @@ class NanosetDatasetsArgs:
             raise ValueError(
                 f"Number of dataset weights ({len(self.dataset_weights)}) does not match number of dataset folders ({len(self.training_folder)})"
             )
-
         # Read the first metadata file in the dataset folder to extract tokenizer name and token size.
         for folder in self.training_folder:
             # Find all metadata files in the folder

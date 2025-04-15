@@ -657,10 +657,10 @@ class DistributedTrainer:
                 is_validation_step = (self.iteration_step % self.config.tokens.val_check_interval == 0)
                 if valid_dataloader_or_dls is not None and is_validation_step:
                     self._prepare_dataloader_for_validation_stage(valid_dataloader_or_dls)
-                    val_global_loss, val_domain_losses = self.validation_step(dataloader=self.current_validation_dataloader)
+                    outputs, val_metrics = self.validation_step(dataloader=self.current_validation_dataloader)
 
                     # NOTE(@paultltc): We log the validation step each time we compute it to avoid having to wait for the next logging step
-                    self.val_step_logs(global_loss=val_global_loss, domain_losses=val_domain_losses)
+                    self.val_step_logs(outputs=outputs, **val_metrics)
 
                 # Checkpoint
                 if self.iteration_step % self.config.checkpoints.checkpoint_interval == 0:
@@ -919,7 +919,7 @@ class DistributedTrainer:
 
         self.validation_step_end_time = time.time()
 
-        return val_metrics
+        return outputs, val_metrics
 
     def train_step_logs(
         self,
@@ -1169,6 +1169,7 @@ class DistributedTrainer:
 
     def val_step_logs(
         self,
+        outputs: Iterable[Dict[str, Union[torch.Tensor, TensorPointer]]],
         loss_avg: Optional[torch.Tensor],
         z_loss_avg: Optional[torch.Tensor],
         per_domain_loss: Optional[torch.Tensor],

@@ -192,17 +192,17 @@ def get_dataloader_from_data_stage(
                 eos_token_id is not None or data.dataset.return_positions is False
             ), "Tokenizer must have an eos token if return_positions is True"
             log_rank(
-                f"[Nanoset] Creating Nanoset with {len(data.dataset.dataset_folder)} dataset folders and {trainer.config.tokens.train_steps * trainer.global_batch_size} train samples",
+                f"[Nanoset] Creating Nanoset with {len(data.dataset.training_folder)} dataset folders and {trainer.config.tokens.train_steps * trainer.global_batch_size} train samples",
                 logger=logger,
                 level=logging.INFO,
                 rank=0,
             )
             start_time = time.time()
             train_dataset = Nanoset(
-                dataset_folders=data.dataset.dataset_folder,
+                dataset_folders=data.dataset.training_folder,
                 sequence_length=trainer.sequence_length,
                 token_size=data.dataset.token_size_in_bytes,
-                train_split_num_samples=trainer.config.tokens.train_steps * trainer.global_batch_size,
+                num_samples=trainer.config.tokens.train_steps * trainer.global_batch_size,
                 dataset_weights=data.dataset.dataset_weights,
                 random_seed=data.seed,
                 return_positions=data.dataset.return_positions,
@@ -235,6 +235,73 @@ def get_dataloader_from_data_stage(
         raise ValueError(f"Unhandled case of `self.config.data.dataset`. Got: {data.dataset}")
 
     return dataloader
+
+
+def get_valid_dataloader_from_data_stage(
+    trainer: DistributedTrainer,
+    data: DataArgs,
+    # consumed_train_samples: int, We will never use this because in each valid iteration we consume all the samples
+):
+
+    # First, we need to know which ranks to feed the dataloader to
+    input_pp_rank, output_pp_rank = get_input_output_pp_ranks(model=trainer.model)
+
+    # Only support Validation with Nanoset
+    if isinstance(data.dataset, NanosetDatasetsArgs):
+        # Create Nanoset
+        from nanotron.data.nanoset import Nanoset
+
+        with main_rank_first(trainer.parallel_context.world_pg):
+            tokenizer_path = trainer.config.tokenizer.tokenizer_name_or_path
+            tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
+            eos_token_id = tokenizer.eos_token_id
+            assert (
+                eos_token_id is not None or data.dataset.return_positions is False
+            ), "Tokenizer must have an eos token if return_positions is True"
+            log_rank(
+                f"[Nanoset] Creating Nanoset with {len(data.dataset.validation_folder)} dataset folders and {trainer.config.tokens.limit_val_batches * trainer.global_batch_size if trainer.config.tokens.limit_val_batches else None} validation samples",
+                logger=logger,
+                level=logging.INFO,
+                rank=0,
+            )
+            start_time = time.time()
+            valid_dataset = Nanoset(
+                dataset_folders=data.dataset.validation_folder, 
+                dataset_weights=None,   # TODO(@paultltc): Should we weight the valid dataset?
+                sequence_length=trainer.sequence_length,
+                token_size=data.dataset.token_size_in_bytes,
+                num_samples=trainer.config.tokens.limit_val_batches * trainer.global_batch_size if trainer.config.tokens.limit_val_batches else None,
+                random_seed=data.seed,
+                return_positions=data.dataset.return_positions,
+                eos_token_id=eos_token_id,
+            )
+            end_time = time.time()
+            log_rank(
+                f"[Nanoset] Time taken to create Nanoset: {time.strftime('%M:%S', time.gmtime(end_time - start_time))} (MM:SS)",
+                logger=logger,
+                level=logging.INFO,
+                rank=0,
+            )
+
+        # Prepare dataloader
+        valid_dataloader = build_nanoset_dataloader(
+            valid_dataset,
+            trainer.sequence_length,
+            parallel_context=trainer.parallel_context,
+            input_pp_rank=input_pp_rank,
+            output_pp_rank=output_pp_rank,
+            micro_batch_size=trainer.micro_batch_size,
+            dataloader_num_workers=data.num_loading_workers,
+            dataloader_drop_last=True,
+            use_position_ids=isinstance(trainer.model_config, Qwen2Config),
+        )
+
+        return valid_dataloader
+    else:
+        raise ValueError(
+            f"Unhandled case of `self.config.data.dataset`. Got: {data.dataset}. Validation is currently just supported for MultilingualNanoset"
+        )
+
 
 
 def get_dataloader(trainer: DistributedTrainer) -> Dict[str, DataLoader]:
@@ -282,6 +349,41 @@ def get_dataloader(trainer: DistributedTrainer) -> Dict[str, DataLoader]:
         dataloaders[stage.name] = dataloader
     return dataloaders
 
+def get_valid_dataloader(trainer: DistributedTrainer) -> Dict[str, DataLoader]:
+    dataloaders = {}
+
+    for stage_idx, stage in enumerate(trainer.config.data_stages):
+        # NOTE: we only create the dataloader for the first stage,
+        # then we lazy initialize the dataloader for the other stages
+        stage = cast(DatasetStageArgs, stage)
+
+        if stage.data.dataset.validation_folder is not None:
+            log_rank(
+                f"[Validation Plan] Stage {stage.name} has {len(stage.data.dataset.validation_folder)} folders with samples for the validation set",
+                logger=logger,
+                level=logging.INFO,
+                rank=0,
+            )
+
+            dataloader = (
+                get_valid_dataloader_from_data_stage(trainer, stage.data)
+                if stage_idx == 0
+                else lambda stage=stage: get_valid_dataloader_from_data_stage(trainer, stage.data)
+            )
+            # TODO(tj.solergibert) As we are creating again the valid dataloader in every validation stage, we print multiple times
+            # the validation MultilingualNanoset info (Number of samples, etc.) [UPDATE: ]. In order to solve that, we could get rid of this lambda
+            # funcs and directly create all dataloaders.
+            #
+            # This lambda functs (Used in training too) are for creating the DataLoaders lazyly FOR 1. Start training faster instead
+            # of creating multiple DataLoaders 2. Consume less memory as the lambda func is lighter that the DataLoader object with
+            # the Dataset, collator, etc.
+            # BUT 1. The Nanoset creation process is very fast and 2. Nanosets doesn't consume any memory at all till we start sampling
+            # from the Nanoset. Also they later transform the DataLoader into a Iterator object so it's impossible to retrieve
+            # the DataLoader object again to delete it (More comments in trainer.py)
+            dataloaders[stage.name] = dataloader
+        else:
+            dataloaders[stage.name] = None
+    return dataloaders
 
 def get_args():
     parser = argparse.ArgumentParser()
@@ -295,7 +397,8 @@ if __name__ == "__main__":
 
     # Load trainer and data
     trainer = DistributedTrainer(config_file)
-    dataloader = get_dataloader(trainer)
+    train_dataloader = get_dataloader(trainer)
+    valid_dataloader = get_valid_dataloader(trainer)
 
     # Train
-    trainer.train(dataloader)
+    trainer.train(train_dataloader, valid_dataloader)
