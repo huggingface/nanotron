@@ -143,7 +143,9 @@ class S3UploadArgs:
 
 @dataclass
 class NanosetDatasetsArgs:
-    dataset_folder: Union[str, List[str], Dict[str, float]]
+    training_folder: Union[str, List[str], Dict[str, float]] = None
+    validation_folder: Union[str, List[str]] = None
+    dataset_folder: Union[str, List[str], Dict[str, float]] = None  # NOTE(@paultltc): For back-compatibility
     dataset_weights: Optional[List[float]] = None
     dataset_domains: Optional[List[str]] = None
     # Tokenizer config, assuming all datasets use the same tokenizer
@@ -153,26 +155,34 @@ class NanosetDatasetsArgs:
     return_positions: Optional[bool] = False
 
     def __post_init__(self):
-        if isinstance(self.dataset_folder, str):  # Case 1: 1 Dataset folder
-            self.dataset_folder = [self.dataset_folder]
+        if self.dataset_folder is not None:
+            if isinstance(self.dataset_folder, str):  # Case 1: 1 Dataset folder
+                self.training_folder = os.path.join(self.dataset_folder, "train")
+                self.validation_folder = os.path.join(self.dataset_folder, "test")
+            elif isinstance(self.training_folder, dict):  # Case 2: dict with > 1 training_folder and weights
+                self.training_folder = {os.path.join(k, "train"): v for k,v in self.dataset_folder.items()}
+                self.validation_folder = [os.path.join(k, "test") for k in self.dataset_folder.keys()]
+
+        if isinstance(self.training_folder, str):  # Case 1: 1 Dataset folder
+            self.training_folder = [self.training_folder]
             self.dataset_weights = [1]
-        elif isinstance(self.dataset_folder, dict):  # Case 2: dict with > 1 dataset_folder and weights
-            tmp_dataset_folder = self.dataset_folder.copy()
-            self.dataset_folder = list(tmp_dataset_folder.keys())
-            self.dataset_weights = list(tmp_dataset_folder.values())
+        elif isinstance(self.training_folder, dict):  # Case 2: dict with > 1 training_folder and weights
+            tmp_training_folder = self.training_folder.copy()
+            self.training_folder = list(tmp_training_folder.keys())
+            self.dataset_weights = list(tmp_training_folder.values())
 
         if self.dataset_domains is None:
-            # By default take the dataset folder as the domain
-            self.dataset_domains = self.dataset_folder
+            # By default take the training folder as the domain
+            self.dataset_domains = self.training_folder
 
         # Check if dataset_weights is provided and matches the number of dataset folders
-        if self.dataset_weights is not None and len(self.dataset_weights) != len(self.dataset_folder):
+        if self.dataset_weights is not None and len(self.dataset_weights) != len(self.training_folder):
             raise ValueError(
-                f"Number of dataset weights ({len(self.dataset_weights)}) does not match number of dataset folders ({len(self.dataset_folder)})"
+                f"Number of dataset weights ({len(self.dataset_weights)}) does not match number of dataset folders ({len(self.training_folder)})"
             )
 
         # Read the first metadata file in the dataset folder to extract tokenizer name and token size.
-        for folder in self.dataset_folder:
+        for folder in self.training_folder:
             # Find all metadata files in the folder
             metadata_files = glob.glob(os.path.join(folder, "*.metadata"))
             if metadata_files:
@@ -491,7 +501,7 @@ class Config:
                         )
                     assert (
                         self.model.model_config.vocab_size == stage.data.dataset.vocab_size
-                    ), f"Model's vocab_size ({self.model.model_config.vocab_size}) does not match dataset's ({stage.data.dataset.dataset_folder}) vocab_size ({stage.data.dataset.vocab_size})"
+                    ), f"Model's vocab_size ({self.model.model_config.vocab_size}) does not match dataset's ({stage.data.dataset.training_folder}) vocab_size ({stage.data.dataset.vocab_size})"
                     if self.tokenizer is None:
                         self.tokenizer = TokenizerArgs(tokenizer_name_or_path=stage.data.dataset.tokenizer_name)
                         logger.warning(
@@ -499,7 +509,7 @@ class Config:
                         )
                     assert (
                         self.tokenizer.tokenizer_name_or_path == stage.data.dataset.tokenizer_name
-                    ), f"Tokenizer passed in config ({self.tokenizer.tokenizer_name_or_path}) does not match dataset's ({stage.data.dataset.dataset_folder}) tokenizer ({stage.data.dataset.tokenizer_name})"
+                    ), f"Tokenizer passed in config ({self.tokenizer.tokenizer_name_or_path}) does not match dataset's ({stage.data.dataset.training_folder}) tokenizer ({stage.data.dataset.tokenizer_name})"
 
             # NOTE: must order the stages by start_training_step from lowest to highest
             assert all(

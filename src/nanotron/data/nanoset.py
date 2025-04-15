@@ -26,7 +26,7 @@ class Nanoset(torch.utils.data.Dataset):
         dataset_weights (Union[List[float], None]): List with the weights for weighted datasets. If None, consume all samples from all datasets without weighting. Weights are normalized in __init__
         sequence_length (int): Sequence length of the built samples
         vocab_size (int): Vocab size of the tokenizer used to tokenize the dataset
-        train_split_num_samples (int): Number of samples the dataset needs. It's the training steps * global batch size
+        num_samples (int): Number of samples the dataset needs. It's the training steps * global batch size
     """
 
     def __init__(
@@ -34,7 +34,7 @@ class Nanoset(torch.utils.data.Dataset):
         dataset_folders: List[str],
         sequence_length: int,
         token_size: int,
-        train_split_num_samples: int,
+        num_samples: int = None,
         dataset_weights: Union[List[float], None] = None,
         random_seed: int = 1234,
         use_cache: bool = True,
@@ -55,7 +55,7 @@ class Nanoset(torch.utils.data.Dataset):
         assert self.return_positions or self.eos_token_id is not None, "If return_positions is True, eos_token_id must be defined"
         # Number of bytes for the tokens stored in the processed dataset files. 2 for vocab sizes < 65535, 4 otherwise
         self.token_size = token_size
-        self.train_split_num_samples = train_split_num_samples
+        self.num_samples = num_samples
         self.random_seed = random_seed
         self.use_cache = use_cache
         self.cache_dir = "./.nanoset_cache"
@@ -69,8 +69,8 @@ class Nanoset(torch.utils.data.Dataset):
                     recursive=False,
                     token_size=self.token_size,
                     shuffle=True,
-                    # return_positions=self.return_positions, # if set to True, the position ids are directly build datatrove
-                    # eos_token_id=self.eos_token_id,
+                    return_positions=self.return_positions, # if set to True, the position ids are directly build datatrove
+                    eos_token_id=self.eos_token_id,
                 )
             )
 
@@ -90,6 +90,9 @@ class Nanoset(torch.utils.data.Dataset):
         ## Build dataset index and dataset sample index
         self.dataset_index, self.dataset_sample_index = self.build_nanoset_index()
         # self.dataset_index, self.dataset_sample_index = self.new_build_nanoset_index() # TODO: Fix this
+
+        # If num samples is not specified, we take the whole data
+        self.num_samples = self.num_samples or sum(self.dataset_lengths)
 
         self.print_nanoset_info()
 
@@ -126,7 +129,7 @@ class Nanoset(torch.utils.data.Dataset):
             "dataset_folders": self.dataset_folders,
             "dataset_lengths": self.dataset_lengths,
             "dataset_weights": self.dataset_weights.tolist(),
-            "train_split_num_samples": self.train_split_num_samples,
+            "num_samples": self.num_samples,
             "random_seed": self.random_seed,
             "token_size": self.token_size,
             "sequence_length": self.sequence_length,
@@ -148,18 +151,18 @@ class Nanoset(torch.utils.data.Dataset):
         logger.info(f"[Nanoset] Building sequential Nanoset index for {len(self.dataset_folders)} datasets")
 
         # Original index building logic
-        total_weighted_samples = np.array(self.dataset_weights) * self.train_split_num_samples
+        total_weighted_samples = np.array(self.dataset_weights) * self.num_samples
         samples_per_dataset = np.floor(total_weighted_samples).astype(np.int64)
 
-        remaining = self.train_split_num_samples - samples_per_dataset.sum()
+        remaining = self.num_samples - samples_per_dataset.sum()
         if remaining > 0:
             fractional_parts = total_weighted_samples - samples_per_dataset
             indices = np.argsort(fractional_parts)[-remaining:]
             samples_per_dataset[indices] += 1
 
         dataset_positions = np.zeros(len(self.dataset_folders), dtype=np.int64)
-        dataset_index = np.zeros(self.train_split_num_samples, dtype=np.int64)
-        dataset_sample_index = np.zeros(self.train_split_num_samples, dtype=np.int64)
+        dataset_index = np.zeros(self.num_samples, dtype=np.int64)
+        dataset_sample_index = np.zeros(self.num_samples, dtype=np.int64)
 
         dataset_order = np.repeat(np.arange(len(self.dataset_folders)), samples_per_dataset)
         rng = np.random.RandomState(self.random_seed)
@@ -188,7 +191,7 @@ class Nanoset(torch.utils.data.Dataset):
         """
         # Compute samples per epoch and number of epochs
         samples_per_epoch = sum(self.dataset_lengths)
-        num_epochs = int(self.train_split_num_samples / samples_per_epoch) + 1
+        num_epochs = int(self.num_samples / samples_per_epoch) + 1
         # Build the dataset indexes for 1 epoch
         dataset_index, dataset_sample_index = build_nanoset_index_helper(
             n_samples=samples_per_epoch, weights=self.dataset_weights, dataset_sizes=self.dataset_lengths
@@ -202,8 +205,8 @@ class Nanoset(torch.utils.data.Dataset):
         dataset_index = np.concatenate([dataset_index for _ in range(num_epochs)])
         dataset_sample_index = np.concatenate([dataset_sample_index for _ in range(num_epochs)])
         # Just keep the necessary samples
-        dataset_index = dataset_index[: self.train_split_num_samples]
-        dataset_sample_index = dataset_sample_index[: self.train_split_num_samples]
+        dataset_index = dataset_index[: self.num_samples]
+        dataset_sample_index = dataset_sample_index[: self.num_samples]
         return dataset_index, dataset_sample_index
 
     def print_nanoset_info(self):

@@ -590,10 +590,10 @@ class DistributedTrainer:
             dataloader = dataloader() if callable(dataloader) else dataloader
             break
 
-        self.current_validation_dataloader_length = len(dataloader)
+        self.current_validation_dataloader_length = len(dataloader) if dataloader is not None else None
         self.current_validation_dataloader = sanity_check_dataloader(
             dataloader=dataloader, parallel_context=self.parallel_context, config=self.config
-        )  # NOTE(tj.solergibert) Create a Iterator from the DataLoader
+        )  if dataloader is not None else None # NOTE(tj.solergibert) Create a Iterator from the DataLoader
 
     def train(
         self,
@@ -697,7 +697,7 @@ class DistributedTrainer:
 
         per_domain_samples = torch.bincount(torch.flatten(per_sample_domains), minlength=len(stage_domains))
 
-        return per_domain_loss, per_domain_samples
+        return masked_per_domain_loss, per_domain_samples
     
 
     def training_step(
