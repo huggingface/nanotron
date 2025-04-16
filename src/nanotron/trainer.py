@@ -39,6 +39,7 @@ from nanotron.config import (
 )
 from nanotron.constants import MODEL_CONFIG_FILE_NAME
 from nanotron.data.dataloader import sanity_check_dataloader
+from nanotron.eval import LightEvalRunner
 from nanotron.helpers import (
     _vocab_size_with_padding,
     compute_remain_train_steps_of_a_data_stage_from_ckp,
@@ -122,7 +123,7 @@ except ImportError:
 
 def get_size(bytes):
     """Convert bytes to human readable format"""
-    for unit in ["", "K", "M", "G", "T", "P"]:
+    for unit in ["", "K", "M", "B", "T", "P"]:
         if bytes < 1024:
             return f"{bytes:.2f}{unit}B"
         bytes /= 1024
@@ -314,6 +315,21 @@ class DistributedTrainer:
         else:
             self.s3_mover = None
 
+        # Initialize LightEval runner on rank 0
+        if dist.get_rank(self.parallel_context.world_pg) == 0:
+            if self.config.lighteval is not None:
+                self.lighteval_runner = LightEvalRunner(config=self.config, parallel_context=self.parallel_context)
+                if self.s3_mover is not None:
+                    # If we have S3 upload enabled, use the eval_single_checkpoint as post-upload callback
+                    self.s3_mover.post_upload_callback = self.lighteval_runner.eval_single_checkpoint
+                else:
+                    # If no S3 upload, use the no_s3 version directly after checkpoint save
+                    self.post_checkpoint_callback = self.lighteval_runner.eval_single_checkpoint_no_s3
+            else:
+                self.post_checkpoint_callback = None
+        else:
+            self.post_checkpoint_callback = None
+
     def pre_training(self, *args, **kwargs):
         if not self.config.general.ignore_sanity_checks:
             log_rank(
@@ -364,6 +380,14 @@ class DistributedTrainer:
                         name=run_name,
                         config={"nanotron_config": self.config.as_dict()},
                     )
+                    # Define tokens metric as x-axis for all metrics
+                    wandb.define_metric("Tokens")
+                    wandb.define_metric("*", step_metric="Tokens")
+
+                    # Handle resuming from a previous run
+                    initial_tokens = self.initial_iter_step * self.global_batch_size
+                    # Log initial tokens to set the starting point
+                    wandb.log({"Tokens": initial_tokens})
                     log_rank(
                         f"Initialized wandb run '{run_name}' for TP rank {tp_rank}",
                         logger=logger,
@@ -525,7 +549,6 @@ class DistributedTrainer:
         ],
         **kwargs,
     ) -> None:
-        self.pre_training(**kwargs)
 
         if self.config.checkpoints.save_initial_state and self.init_checkpoint_path is None:
             self.save_checkpoint()
@@ -545,6 +568,7 @@ class DistributedTrainer:
 
         self.initial_iter_step = self.metadata.last_train_step + 1
         self.last_iter_step = self.config.tokens.train_steps
+        self.pre_training(**kwargs)
 
         prof = get_profiler(config=self.config)
         # free memory
@@ -925,6 +949,8 @@ class DistributedTrainer:
                     **{log_item.tag: log_item.scalar_value for log_item in all_log_entries},
                     **tp_group_info,
                     "iteration_step": self.iteration_step,
+                    "Tokens": self.metadata.consumed_train_samples
+                    * self.config.tokens.sequence_length,  # TODO: this is not true if we change seqlen
                 },
                 step=self.iteration_step,
             )
@@ -939,6 +965,8 @@ class DistributedTrainer:
                 {
                     **{log_item.tag: log_item.scalar_value for log_item in basic_log_entries},
                     "iteration_step": self.iteration_step,
+                    "Tokens": self.metadata.consumed_train_samples
+                    * self.config.tokens.sequence_length,  # TODO: this is not true if we change seqlen
                 },
                 step=self.iteration_step,
             )
@@ -1166,22 +1194,28 @@ class DistributedTrainer:
             self.s3_mover.distributed_wait_for_completion(self.parallel_context.world_pg)
             if self.s3_mover.post_upload_callback_outputs is not None:
                 slurm_job_id, slurm_log = self.s3_mover.post_upload_callback_outputs
-                self.log_object({"job_id": slurm_job_id, "log": slurm_log}, "slurm_eval")
+                log_rank(
+                    f"launching eval job: job_id={slurm_job_id} log at {slurm_log} slurm_eval",
+                    logger=logger,
+                    level=logging.INFO,
+                    rank=0,
+                )
 
     def post_save_checkpoint(self):
         # Upload to S3
         if self.s3_mover is not None:
             self.s3_mover.start_uploading()
 
-        # free memory TODO: do we need this?
-        # gc.collect()
-        # torch.cuda.empty_cache()
+        elif self.post_checkpoint_callback is not None:
+            # If we're not using S3, but we have a post-checkpoint callback for evals
+            checkpoint_path = Path(self.config.checkpoints.checkpoints_path) / f"{self.config.general.step}"
+            self.post_checkpoint_callback(checkpoint_path)
 
     def save_checkpoint(self) -> Path:
         self.pre_save_checkpoint()
 
         checkpoints_path = self.config.checkpoints.checkpoints_path
-        checkpoint_path = checkpoints_path / f"{self.iteration_step}"
+        checkpoint_path = Path(checkpoints_path) / f"{self.iteration_step}"
         if self.config.checkpoints.checkpoints_path_is_shared_file_system:
             should_mkdir = dist.get_rank(self.parallel_context.world_pg) == 0
         else:
@@ -1226,6 +1260,17 @@ class DistributedTrainer:
                 fo.write(json.dumps(asdict(self.model_config)))
 
         self.post_save_checkpoint()
+
+        # Handle post-checkpoint evaluation if configured
+        if self.post_checkpoint_callback is not None:
+            job_id, log_path = self.post_checkpoint_callback(str(checkpoint_path))
+            if job_id is not None and log_path is not None:
+                log_rank(
+                    f"launching eval job: job_id={job_id} log at {log_path} slurm_eval",
+                    logger=logger,
+                    level=logging.INFO,
+                    rank=0,
+                )
 
         return checkpoint_path
 
