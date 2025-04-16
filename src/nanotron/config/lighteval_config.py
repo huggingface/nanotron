@@ -91,3 +91,7 @@ class LightEvalConfig:
     tasks: Optional[LightEvalTasksArgs] = None
     logging: Optional[LightEvalLoggingArgs] = None
     wandb: Optional[LightEvalWandbLoggerConfig] = None
+
+    def __post_init__(self):
+        if self.parallelism is None:
+            self.parallelism = ParallelismArgs(dp=1, pp=1, tp=1, tp_linear_async_communication=True)
