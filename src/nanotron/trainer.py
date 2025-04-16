@@ -386,6 +386,9 @@ class DistributedTrainer:
                         level=logging.INFO,
                         rank=world_rank,
                     )
+                    # Define tokens metric as x-axis for all metrics
+                    wandb.define_metric("consumed_tokens")
+                    wandb.define_metric("*", step_metric="consumed_tokens")
             elif world_rank == self.logger_ranks[0]:
                 run_name = f"{current_time}_{self.config.general.run}"
                 x_stats_sampling_interval = os.environ.get("STATS_SAMPLING_INTERVAL_IN_SEC", None)
@@ -425,9 +428,9 @@ class DistributedTrainer:
                     level=logging.INFO,
                     rank=world_rank,
                 )
-            # Define tokens metric as x-axis for all metrics
-            wandb.define_metric("consumed_tokens")
-            wandb.define_metric("*", step_metric="consumed_tokens")
+                # Define tokens metric as x-axis for all metrics
+                wandb.define_metric("consumed_tokens")
+                wandb.define_metric("*", step_metric="consumed_tokens")
 
     def post_train_step(self):
 
