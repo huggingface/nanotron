@@ -380,14 +380,6 @@ class DistributedTrainer:
                         name=run_name,
                         config={"nanotron_config": self.config.as_dict()},
                     )
-                    # Define tokens metric as x-axis for all metrics
-                    wandb.define_metric("Tokens")
-                    wandb.define_metric("*", step_metric="Tokens")
-
-                    # Handle resuming from a previous run
-                    initial_tokens = self.initial_iter_step * self.global_batch_size
-                    # Log initial tokens to set the starting point
-                    wandb.log({"Tokens": initial_tokens})
                     log_rank(
                         f"Initialized wandb run '{run_name}' for TP rank {tp_rank}",
                         logger=logger,
@@ -433,6 +425,9 @@ class DistributedTrainer:
                     level=logging.INFO,
                     rank=world_rank,
                 )
+            # Define tokens metric as x-axis for all metrics
+            wandb.define_metric("consumed_tokens")
+            wandb.define_metric("*", step_metric="consumed_tokens")
 
     def post_train_step(self):
 
@@ -789,7 +784,8 @@ class DistributedTrainer:
             # LogItem("consumed_samples", self.consumed_train_samples, "human_format"),  # , "12d"),
             LogItem(
                 "consumed_tokens",
-                self.metadata.consumed_train_samples * self.config.tokens.sequence_length,
+                self.metadata.consumed_train_samples
+                * self.config.tokens.sequence_length,  # TODO: not true if we change seqlen
                 "human_format",
             ),  # , "12d"),
             LogItem("time_per_iteration_ms", elapsed_time_per_iteration_ms, "human_format"),  # , ".1f"),
@@ -948,9 +944,6 @@ class DistributedTrainer:
                 {
                     **{log_item.tag: log_item.scalar_value for log_item in all_log_entries},
                     **tp_group_info,
-                    "iteration_step": self.iteration_step,
-                    "Tokens": self.metadata.consumed_train_samples
-                    * self.config.tokens.sequence_length,  # TODO: this is not true if we change seqlen
                 },
                 step=self.iteration_step,
             )
@@ -965,8 +958,6 @@ class DistributedTrainer:
                 {
                     **{log_item.tag: log_item.scalar_value for log_item in basic_log_entries},
                     "iteration_step": self.iteration_step,
-                    "Tokens": self.metadata.consumed_train_samples
-                    * self.config.tokens.sequence_length,  # TODO: this is not true if we change seqlen
                 },
                 step=self.iteration_step,
             )
