@@ -122,7 +122,7 @@ def run_slurm_one_job(
 #SBATCH --exclusive
 #SBATCH --qos={slurm_config.qos}
 #SBATCH --time={slurm_config.time}
-#SBATCH --output={eval_logs_path}/%j.out"""
+#SBATCH --output={eval_logs_path}/%j-{timestamp}.out"""
 
     if slurm_config.reservation:
         slurm_script += f"\n#SBATCH --reservation={slurm_config.reservation}"
@@ -182,9 +182,8 @@ if [[ "{model_checkpoint_path}" == s3://* ]]; then
     fi
 
     # Try sync command and check its exit status
-    s5cmd sync \\
+    s5cmd cp \\
         --concurrency=50 \\
-        --size-only \\
         --exclude "optimizer/*" \\
         --exclude "random/*" \\
         --exclude "lr_scheduler/*" \\
