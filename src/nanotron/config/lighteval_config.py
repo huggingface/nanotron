@@ -81,7 +81,7 @@ class LightEvalSlurm:
     partition: str = "hopper-prod"
     hf_cache: str = "~/.cache/huggingface"
     cpus_per_task: int = 88
-    qos: str = "high"
+    qos: str = "low"
     time: str = "24:00:00"
     reservation: Optional[str] = "smollm"
 
