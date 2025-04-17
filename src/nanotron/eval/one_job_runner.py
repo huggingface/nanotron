@@ -26,6 +26,14 @@ class LightEvalRunner:
 
     def eval_single_checkpoint(self, uploaded_files: List[dict]) -> Tuple[str, str]:
         """Run light evaluation on uploaded files."""
+        if (
+            self.config.lighteval.eval_interval is not None
+            and self.config.general.step % self.config.lighteval.eval_interval != 0
+        ):
+            logger.debug(
+                f"Skipping evaluation at step {self.config.general.step} because eval_interval is {self.config.lighteval.eval_interval}"
+            )
+            return
         config_files = [
             f for f in uploaded_files if "config.py" in f["destination"] or "config.yaml" in f["destination"]
         ]
