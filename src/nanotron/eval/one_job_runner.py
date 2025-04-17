@@ -21,9 +21,6 @@ class LightEvalRunner:
         self.lighteval_config = config.lighteval
         self.parallel_context = parallel_context
 
-    def eval_single_checkpoint_no_s3(self, checkpoint_path: str) -> Tuple[str, str]:
-        raise NotImplementedError("Not implemented")
-
     def eval_single_checkpoint(self, uploaded_files: List[dict]) -> Tuple[str, str]:
         """Run light evaluation on uploaded files."""
         logger.warning(f"Lighteval Runner got {len(uploaded_files)} files. Checking configs.")
