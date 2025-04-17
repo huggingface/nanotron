@@ -6,8 +6,11 @@ import os
 import subprocess
 from typing import List, Optional, Tuple
 
+from datasets.download.streaming_download_manager import xPath
+
 from nanotron import logging
 from nanotron.config import Config, LightEvalConfig
+from nanotron.data.s3_utils import _get_s3_path_components
 from nanotron.logging import log_rank
 from nanotron.parallel import ParallelContext
 
@@ -60,6 +63,15 @@ class LightEvalRunner:
         return slurm_job_id, slurm_log
 
 
+def normalize_s3_path(path: str) -> str:
+    """Normalize S3 path using existing s3_utils"""
+    # Use existing utility to normalize path components
+    path = xPath(path)
+    bucket, prefix = _get_s3_path_components(path)
+    # Reconstruct normalized path
+    return f"s3://{bucket}/{prefix}".rstrip("/")
+
+
 def run_slurm_one_job(
     config: Config,
     lighteval_config: LightEvalConfig,
@@ -67,6 +79,11 @@ def run_slurm_one_job(
     current_step: int,
 ):
     """Launch a single job on Slurm with the given mapping"""
+    # Normalize S3 path if needed
+    if model_checkpoint_path.startswith(("s3:/", "s3://")):
+        model_checkpoint_path = normalize_s3_path(model_checkpoint_path)
+        logger.info(f"Normalized S3 path: {model_checkpoint_path}")
+
     # Use config values instead of hardcoded defaults
     slurm_config = lighteval_config.slurm
 
@@ -98,6 +115,9 @@ def run_slurm_one_job(
     logs_path = os.path.join(eval_logs_path, run_name)
     os.makedirs(logs_path, exist_ok=True)
 
+    # Use configured local path instead of hardcoded /tmp
+    local_path = os.path.join(lighteval_config.local_checkpoint_dir, f"eval_{config.general.run}", str(current_step))
+
     # Create the SLURM script content
     slurm_script = f"""#!/bin/bash
 #SBATCH --job-name={run_name}
@@ -115,8 +135,6 @@ def run_slurm_one_job(
         slurm_script += f"\n#SBATCH --reservation={slurm_config.reservation}"
 
     # Add the rest of the script content
-    local_path = os.path.join("/tmp", f"eval_{config.general.run}", str(current_step))
-
     slurm_script += f"""
 
 set -x -e
@@ -163,21 +181,55 @@ mkdir -p $LOCAL_DOWNLOAD_CHECKPOINT_FOLDER
 # Handle S3 paths
 if [[ "{model_checkpoint_path}" == s3://* ]]; then
     echo "Downloading checkpoint from S3: {model_checkpoint_path}"
-    s5cmd sync \
-        --concurrency=50 \
-        --size-only \
-        --exclude "optimizer/*" \
-        --exclude "random/*" \
-        --exclude "lr_scheduler/*" \
-        --part-size 100 \
+
+    # First check if the S3 path exists
+    if ! s5cmd ls "{model_checkpoint_path}" &>/dev/null; then
+        echo "Error: S3 path {model_checkpoint_path} does not exist"
+        exit 1
+    fi
+
+    # Try sync command and check its exit status
+    s5cmd sync \\
+        --concurrency=50 \\
+        --size-only \\
+        --exclude "optimizer/*" \\
+        --exclude "random/*" \\
+        --exclude "lr_scheduler/*" \\
+        --part-size 100 \\
         "{model_checkpoint_path}/*" "$LOCAL_DOWNLOAD_CHECKPOINT_FOLDER/"
+
+    if [ $? -ne 0 ]; then
+        echo "Error: Failed to sync files from S3"
+        exit 1
+    fi
+
+    # Verify that config.yaml was downloaded
+    if [ ! -f "$LOCAL_DOWNLOAD_CHECKPOINT_FOLDER/config.yaml" ]; then
+        echo "Error: config.yaml not found in downloaded checkpoint"
+        echo "Contents of $LOCAL_DOWNLOAD_CHECKPOINT_FOLDER:"
+        ls -la $LOCAL_DOWNLOAD_CHECKPOINT_FOLDER/
+        exit 1
+    fi
 else
     echo "Copying checkpoint files from {model_checkpoint_path} to $LOCAL_DOWNLOAD_CHECKPOINT_FOLDER"
-    rsync -av --progress --inplace --no-whole-file \
-        --exclude 'optimizer/' \
-        --exclude 'random/' \
-        --exclude 'lr_scheduler/' \
+    rsync -av --progress --inplace --no-whole-file \\
+        --exclude 'optimizer/' \\
+        --exclude 'random/' \\
+        --exclude 'lr_scheduler/' \\
         {model_checkpoint_path} $LOCAL_DOWNLOAD_CHECKPOINT_FOLDER/
+
+    if [ $? -ne 0 ]; then
+        echo "Error: Failed to copy files using rsync"
+        exit 1
+    fi
+
+    # Verify that config.yaml was copied
+    if [ ! -f "$LOCAL_DOWNLOAD_CHECKPOINT_FOLDER/config.yaml" ]; then
+        echo "Error: config.yaml not found in copied checkpoint"
+        echo "Contents of $LOCAL_DOWNLOAD_CHECKPOINT_FOLDER:"
+        ls -la $LOCAL_DOWNLOAD_CHECKPOINT_FOLDER/
+        exit 1
+    fi
 fi
 
 echo "Contents of checkpoint directory:"

@@ -99,6 +99,7 @@ class LightEvalConfig:
 
     slurm_script_dir: Optional[str] = None
     checkpoints_path: Optional[str] = None
+    local_checkpoint_dir: str = "/scratch"  # Base directory for temporary checkpoint storage, will store under {local_checkpoint_dir}/{run_name}/{step}
     parallelism: Optional[ParallelismArgs] = None
     batch_size: Optional[int] = None
     generation: Optional[Union[GenerationArgs, Dict[str, GenerationArgs]]] = None
@@ -113,3 +114,4 @@ class LightEvalConfig:
             self.parallelism = ParallelismArgs(dp=1, pp=1, tp=1, tp_linear_async_communication=True)
         if self.slurm is None:
             self.slurm = LightEvalSlurm()
+        self.local_checkpoint_dir = str(Path(self.local_checkpoint_dir).expanduser())
