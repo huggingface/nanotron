@@ -461,6 +461,13 @@ class Config:
 
         if self.s3_upload is not None:
             self.s3_upload.__post_init__()
+            if self.lighteval is not None:
+                if self.lighteval.eval_interval is None:
+                    self.lighteval.eval_interval = self.checkpoints.checkpoint_interval
+                else:
+                    assert (
+                        self.lighteval.eval_interval % self.checkpoints.checkpoint_interval == 0
+                    ), f"eval_interval={self.lighteval.eval_interval} must be a multiple of checkpoint_interval={self.checkpoints.checkpoint_interval}"
 
         # Some final sanity checks across separate arguments sections:
         if self.profiler is not None and self.profiler.profiler_export_path is not None:
@@ -543,14 +550,15 @@ class Config:
     def global_batch_size_in_tokens(self):
         return self.global_batch_size * self.tokens.sequence_length
 
-    def save_as_yaml(self, file_path: str):
+    def save_as_yaml(self, file_path: str, sanity_checks: bool = True):
         config_dict = serialize(self)
         file_path = str(file_path)
         with open(file_path, "w") as f:
             yaml.dump(config_dict, f)
 
         # Sanity test config can be reloaded
-        _ = get_config_from_file(file_path, config_class=self.__class__)
+        if sanity_checks:
+            _ = get_config_from_file(file_path, config_class=self.__class__)
 
     def get_yaml(self):
         config_dict = serialize(self)
