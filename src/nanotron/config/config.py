@@ -550,14 +550,15 @@ class Config:
     def global_batch_size_in_tokens(self):
         return self.global_batch_size * self.tokens.sequence_length
 
-    def save_as_yaml(self, file_path: str):
+    def save_as_yaml(self, file_path: str, sanity_checks: bool = True):
         config_dict = serialize(self)
         file_path = str(file_path)
         with open(file_path, "w") as f:
             yaml.dump(config_dict, f)
 
         # Sanity test config can be reloaded
-        _ = get_config_from_file(file_path, config_class=self.__class__)
+        if sanity_checks:
+            _ = get_config_from_file(file_path, config_class=self.__class__)
 
     def get_yaml(self):
         config_dict = serialize(self)
