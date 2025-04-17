@@ -97,8 +97,8 @@ class LightEvalConfig:
     the saved config when running LightEval after training.
     """
 
-    slurm_script_dir: Optional[str] = None
-    checkpoints_path: Optional[str] = None
+    slurm_script_dir: Optional[str] = "eval_results/launch-config"
+    logs_path: Optional[str] = "eval_results/logs"
     local_checkpoint_dir: str = "/scratch"  # Base directory for temporary checkpoint storage, will store under {local_checkpoint_dir}/{run_name}/{step}
     parallelism: Optional[ParallelismArgs] = None
     batch_size: Optional[int] = None

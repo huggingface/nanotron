@@ -95,23 +95,18 @@ def run_slurm_one_job(
 
     # Get timestamp for log files
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    run_name = f"{timestamp}-eval_{config.general.run}".replace(" ", "_")
+    general_run_name = config.general.run
+    run_name = f"{timestamp}-eval_{general_run_name}".replace(" ", "_")
 
     # Use lighteval config paths if available, otherwise use defaults
-    eval_launch_script_path = (
-        lighteval_config.slurm_script_dir if lighteval_config.slurm_script_dir else "eval_results/launch-config"
-    )
-    eval_logs_path = lighteval_config.checkpoints_path if lighteval_config.checkpoints_path else "eval_results/logs"
-    eval_launch_script_path = os.path.join(eval_launch_script_path, run_name)
-    eval_logs_path = os.path.join(eval_logs_path, run_name)
+    eval_launch_script_path = lighteval_config.slurm_script_dir
+    eval_logs_path = lighteval_config.logs_path
+    eval_launch_script_path = os.path.join(eval_launch_script_path, general_run_name, f"step-{current_step}")
+    eval_logs_path = os.path.join(eval_logs_path, general_run_name, f"step-{current_step}")
 
     # Create directories
     os.makedirs(eval_launch_script_path, exist_ok=True)
     os.makedirs(eval_logs_path, exist_ok=True)
-
-    # Create log directory with run name subdirectory
-    logs_path = os.path.join(eval_logs_path, run_name)
-    os.makedirs(logs_path, exist_ok=True)
 
     # Use configured local path instead of hardcoded /tmp
     local_path = os.path.join(lighteval_config.local_checkpoint_dir, run_name, str(current_step))
@@ -127,7 +122,7 @@ def run_slurm_one_job(
 #SBATCH --exclusive
 #SBATCH --qos={slurm_config.qos}
 #SBATCH --time={slurm_config.time}
-#SBATCH --output={logs_path}/{timestamp}-%x-%j.out"""
+#SBATCH --output={eval_logs_path}/%j.out"""
 
     if slurm_config.reservation:
         slurm_script += f"\n#SBATCH --reservation={slurm_config.reservation}"
@@ -257,7 +252,7 @@ echo "END TIME: $(date)"
 
     # Write the script to file
     current_time = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    launch_script_path = os.path.join(eval_launch_script_path, f"launch_script-{current_time}-.slurm")
+    launch_script_path = os.path.join(eval_launch_script_path, f"launch_script-{current_time}.slurm")
     os.makedirs(os.path.dirname(launch_script_path), exist_ok=True)
 
     with open(launch_script_path, "w") as f:
@@ -276,7 +271,7 @@ echo "END TIME: $(date)"
         output = result.stdout
         job_ids = output.split()[-1]
 
-        output_log = os.path.join(logs_path, f"{timestamp}-{run_name}-{job_ids}.out")
+        output_log = os.path.join(eval_logs_path, f"{timestamp}-{run_name}-{job_ids}.out")
 
         logger.warning(
             f"""🚀 Slurm job launched successfully:
