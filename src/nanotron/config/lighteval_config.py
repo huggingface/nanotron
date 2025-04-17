@@ -107,8 +107,10 @@ class LightEvalConfig:
     logging: Optional[LightEvalLoggingArgs] = None
     wandb: Optional[LightEvalWandbLoggerConfig] = None
     slurm: Optional[LightEvalSlurm] = None
+    s3_save_path: Optional[str] = None # should not be dependent of the run_name
+    output_dir: Optional[str] = None # we should sanity check that it's the same as the one in the eval_config_override
     nanotron_path: Optional[str] = "./"
-    eval_config_override: str = "smollm3_eval.yaml"  # Previously hardcoded in run_slurm_one_job
+    eval_config_override: str = None
 
     def __post_init__(self):
         if self.parallelism is None:

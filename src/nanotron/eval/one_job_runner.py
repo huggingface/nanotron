@@ -240,8 +240,9 @@ CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun \\
     --checkpoint-config-path $LOCAL_DOWNLOAD_CHECKPOINT_FOLDER/config.yaml \\
     --lighteval-override {lighteval_config.eval_config_override}
     --cache-dir {slurm_config.hf_cache}"""
-    slurm_script += """
+    slurm_script += f"""
 
+s5cmd cp --if-size-differ "{lighteval_config.output_dir}*" {lighteval_config.s3_save_path}
 echo "Cleaning up downloaded checkpoints..."
 rm -rf "$LOCAL_DOWNLOAD_CHECKPOINT_FOLDER"
 echo "Cleanup completed"
