@@ -23,7 +23,6 @@ class LightEvalRunner:
 
     def eval_single_checkpoint(self, uploaded_files: List[dict]) -> Tuple[str, str]:
         """Run light evaluation on uploaded files."""
-        logger.warning(f"Lighteval Runner got {len(uploaded_files)} files. Checking configs.")
         config_files = [
             f for f in uploaded_files if "config.py" in f["destination"] or "config.yaml" in f["destination"]
         ]
@@ -47,6 +46,9 @@ class LightEvalRunner:
             )
             return
         checkpoint_path = config_files[0]["destination"].replace("config.yaml", "")
+        logger.warning(
+            f"Lighteval Runner got {len(uploaded_files)} files. Using {checkpoint_path} as checkpoint path."
+        )
 
         slurm_job_id, slurm_log = run_slurm_one_job(
             config=self.config,
@@ -65,28 +67,16 @@ def run_slurm_one_job(
     current_step: int,
 ):
     """Launch a single job on Slurm with the given mapping"""
-    # Default evaluation config
-    default_slurm_config = {
-        "gpus_per_node": 8,
-        "partition": "hopper-prod",
-        "hf_cache": "/fsx/nouamane/.cache/huggingface",
-        "cpus_per_task": 88,
-        "qos": "high",
-        "time": "24:00:00",
-        "reservation": "smollm",
-    }
+    # Use config values instead of hardcoded defaults
+    slurm_config = lighteval_config.slurm
 
     # Use lighteval config paths if available, otherwise use defaults
     eval_launch_script_path = os.path.join(
-        lighteval_config.slurm_script_dir
-        if lighteval_config.slurm_script_dir
-        else "/fsx/nouamane/projects/nanotron/eval_results/launch-config",
+        lighteval_config.slurm_script_dir if lighteval_config.slurm_script_dir else "eval_results/launch-config",
         str(current_step),
     )
     eval_logs_path = os.path.join(
-        lighteval_config.checkpoints_path
-        if lighteval_config.checkpoints_path
-        else "/fsx/nouamane/projects/nanotron/eval_results/logs",
+        lighteval_config.checkpoints_path if lighteval_config.checkpoints_path else "eval_results/logs",
         str(current_step),
     )
 
@@ -98,8 +88,7 @@ def run_slurm_one_job(
     total_gpus_needed = (
         lighteval_config.parallelism.dp * lighteval_config.parallelism.pp * lighteval_config.parallelism.tp
     )
-    gpus_per_node = default_slurm_config["gpus_per_node"]
-    nodes = math.ceil(total_gpus_needed / gpus_per_node)
+    nodes = math.ceil(total_gpus_needed / slurm_config.gpus_per_node)
 
     # Get timestamp for log files
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -112,18 +101,18 @@ def run_slurm_one_job(
     # Create the SLURM script content
     slurm_script = f"""#!/bin/bash
 #SBATCH --job-name={run_name}
-#SBATCH --partition={default_slurm_config["partition"]}
+#SBATCH --partition={slurm_config.partition}
 #SBATCH --nodes={nodes}
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task={default_slurm_config["cpus_per_task"]}
-#SBATCH --gpus={gpus_per_node}
+#SBATCH --cpus-per-task={slurm_config.cpus_per_task}
+#SBATCH --gpus={slurm_config.gpus_per_node}
 #SBATCH --exclusive
-#SBATCH --qos={default_slurm_config["qos"]}
-#SBATCH --time={default_slurm_config["time"]}
+#SBATCH --qos={slurm_config.qos}
+#SBATCH --time={slurm_config.time}
 #SBATCH --output={logs_path}/{timestamp}-%x-%j.out"""
 
-    if default_slurm_config.get("reservation"):
-        slurm_script += f"\n#SBATCH --reservation={default_slurm_config['reservation']}"
+    if slurm_config.reservation:
+        slurm_script += f"\n#SBATCH --reservation={slurm_config.reservation}"
 
     # Add the rest of the script content
     local_path = os.path.join("/tmp", f"eval_{config.general.run}", str(current_step))
@@ -161,10 +150,10 @@ export CUDA_DEVICE_MAX_CONNECTIONS=1
 # export CUBLAS_WORKSPACE_CONFIG=":4096:8"
 
 # Set HuggingFace cache locations
-export HUGGINGFACE_HUB_CACHE={default_slurm_config["hf_cache"]}
-export HF_DATASETS_CACHE={default_slurm_config["hf_cache"]}
-export HF_MODULES_CACHE={default_slurm_config["hf_cache"]}
-export HF_HOME={default_slurm_config["hf_cache"]}
+export HUGGINGFACE_HUB_CACHE={slurm_config.hf_cache}
+export HF_DATASETS_CACHE={slurm_config.hf_cache}
+export HF_MODULES_CACHE={slurm_config.hf_cache}
+export HF_HOME={slurm_config.hf_cache}
 
 echo "Running on $COUNT_NODE nodes: $HOSTNAMES"
 
@@ -198,30 +187,14 @@ ls -la $LOCAL_DOWNLOAD_CHECKPOINT_FOLDER/
 # sleep $(( RANDOM % 300 ))
 
 CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun \\
-    --nproc_per_node {gpus_per_node} \\
+    --nproc_per_node {slurm_config.gpus_per_node} \\
     --nnodes $COUNT_NODE \\
     --node_rank $SLURM_PROCID \\
     --master_addr $MASTER_ADDR \\
     --master_port $MASTER_PORT \\
     run_evals.py \\
     --checkpoint-config-path $LOCAL_DOWNLOAD_CHECKPOINT_FOLDER/config.yaml \\
-    --lighteval-override smollm3_eval.yaml"""
-
-    #     if lighteval_config.batch_size:
-    #         slurm_script += f" \\\n    --batch-size {lighteval_config.batch_size}"
-
-    #     if lighteval_config.tasks:
-    #         slurm_script += """
-    # if [ -n "${TASKS}" ]; then
-    #     CMD="$CMD --tasks ${TASKS}"
-    # fi
-    # if [ -n "${CUSTOM_TASKS}" ]; then
-    #     CMD="$CMD --custom-tasks ${CUSTOM_TASKS}"
-    # fi
-    # if [ -n "${MAX_SAMPLES}" ]; then
-    #     CMD="$CMD --max-samples ${MAX_SAMPLES}"
-    # fi"""
-
+    --lighteval-override {lighteval_config.eval_config_override}"""
     slurm_script += """
 
 echo "END TIME: $(date)"
@@ -272,10 +245,10 @@ if __name__ == "__main__":
     from nanotron.config.config import Config
 
     # Load existing config from checkpoint
-    # checkpoint_path = "/fsx/nouamane/projects/nanotron/checkpoints/smollm3-training-test-tps-48nn-seed-6-/10"
+    # checkpoint_path = "checkpoints/smollm3-training-test-tps-48nn-seed-6-/10"
     # config_path = os.path.join(checkpoint_path, "config.yaml")
     checkpoint_path = "s3://smollm3/smollm3-3B-final/3B-final-GQA-noTP-2k-seq/20000/"
-    config_path = "/fsx/nouamane/projects/nanotron/checkpoints/smollm3-training-test-tps-48nn-seed-6-/10/config.yaml"
+    config_path = "checkpoints/smollm3-training-test-tps-48nn-seed-6-/10/config.yaml"
     try:
         # Load the existing config
         print(f"\nLoading config from: {config_path}")
