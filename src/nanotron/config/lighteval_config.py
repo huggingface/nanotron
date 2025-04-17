@@ -97,9 +97,11 @@ class LightEvalConfig:
     the saved config when running LightEval after training.
     """
 
-    slurm_script_dir: Optional[str] = "eval_results/launch-config"
-    logs_path: Optional[str] = "eval_results/logs"
-    local_checkpoint_dir: str = "/scratch"  # Base directory for temporary checkpoint storage, will store under {local_checkpoint_dir}/{run_name}/{step}
+    slurm_script_dir: Optional[Path] = Path("eval_results/launch-config")
+    logs_path: Optional[Path] = Path("eval_results/logs")
+    local_checkpoint_dir: Path = Path(
+        "/scratch"
+    )  # Base directory for temporary checkpoint storage, will store under {local_checkpoint_dir}/{run_name}/{step}
     parallelism: Optional[ParallelismArgs] = None
     batch_size: Optional[int] = None
     generation: Optional[Union[GenerationArgs, Dict[str, GenerationArgs]]] = None
@@ -107,8 +109,14 @@ class LightEvalConfig:
     logging: Optional[LightEvalLoggingArgs] = None
     wandb: Optional[LightEvalWandbLoggerConfig] = None
     slurm: Optional[LightEvalSlurm] = None
-    nanotron_path: Optional[str] = "./"
-    eval_config_override: str = "smollm3_eval.yaml"  # Previously hardcoded in run_slurm_one_job
+    nanotron_path: Optional[Path] = "./"
+    eval_config_override: Path = Path("smollm3_eval.yaml")  # Previously hardcoded in run_slurm_one_job
+    eval_interval: Optional[
+        int
+    ] = None  # Must be multiple of checkpoint_interval. If None, eval will be done after each checkpoint upload to s3
+    eval_interval_file: Optional[
+        Path
+    ] = None  # If specified, eval_interval will be read from this file upon the next evaluation.
 
     def __post_init__(self):
         if self.parallelism is None:
@@ -116,3 +124,7 @@ class LightEvalConfig:
         if self.slurm is None:
             self.slurm = LightEvalSlurm()
         self.local_checkpoint_dir = str(Path(self.local_checkpoint_dir).expanduser())
+        if self.eval_interval_file is not None and Path(self.eval_interval_file).exists():
+            logger.warning(
+                f"Eval interval file {self.eval_interval_file} exists. `eval_interval` will be replaced by the value in the file upon the next evaluation. You should probably delete this file if that's not what you want."
+            )

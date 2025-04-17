@@ -461,6 +461,13 @@ class Config:
 
         if self.s3_upload is not None:
             self.s3_upload.__post_init__()
+            if self.lighteval is not None:
+                if self.lighteval.eval_interval is None:
+                    self.lighteval.eval_interval = self.checkpoints.checkpoint_interval
+                else:
+                    assert (
+                        self.lighteval.eval_interval % self.checkpoints.checkpoint_interval == 0
+                    ), f"eval_interval={self.lighteval.eval_interval} must be a multiple of checkpoint_interval={self.checkpoints.checkpoint_interval}"
 
         # Some final sanity checks across separate arguments sections:
         if self.profiler is not None and self.profiler.profiler_export_path is not None:
