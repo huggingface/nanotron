@@ -322,13 +322,6 @@ class DistributedTrainer:
                 if self.s3_mover is not None:
                     # If we have S3 upload enabled, use the eval_single_checkpoint as post-upload callback
                     self.s3_mover.post_upload_callback = self.lighteval_runner.eval_single_checkpoint
-                else:
-                    # If no S3 upload, use the no_s3 version directly after checkpoint save
-                    self.post_checkpoint_callback = self.lighteval_runner.eval_single_checkpoint_no_s3
-            else:
-                self.post_checkpoint_callback = None
-        else:
-            self.post_checkpoint_callback = None
 
     def pre_training(self, *args, **kwargs):
         if not self.config.general.ignore_sanity_checks:
@@ -386,9 +379,6 @@ class DistributedTrainer:
                         level=logging.INFO,
                         rank=world_rank,
                     )
-                    # Define tokens metric as x-axis for all metrics
-                    wandb.define_metric("consumed_tokens")
-                    wandb.define_metric("*", step_metric="consumed_tokens")
             elif world_rank == self.logger_ranks[0]:
                 run_name = f"{current_time}_{self.config.general.run}"
                 x_stats_sampling_interval = os.environ.get("STATS_SAMPLING_INTERVAL_IN_SEC", None)
@@ -428,9 +418,6 @@ class DistributedTrainer:
                     level=logging.INFO,
                     rank=world_rank,
                 )
-                # Define tokens metric as x-axis for all metrics
-                wandb.define_metric("consumed_tokens")
-                wandb.define_metric("*", step_metric="consumed_tokens")
 
     def post_train_step(self):
 
@@ -547,7 +534,6 @@ class DistributedTrainer:
         ],
         **kwargs,
     ) -> None:
-
         if self.config.checkpoints.save_initial_state and self.init_checkpoint_path is None:
             self.save_checkpoint()
 
@@ -947,6 +933,7 @@ class DistributedTrainer:
                 {
                     **{log_item.tag: log_item.scalar_value for log_item in all_log_entries},
                     **tp_group_info,
+                    "iteration_step": self.iteration_step,
                 },
                 step=self.iteration_step,
             )
@@ -1191,7 +1178,7 @@ class DistributedTrainer:
                 log_rank(
                     f"launching eval job: job_id={slurm_job_id} log at {slurm_log} slurm_eval",
                     logger=logger,
-                    level=logging.INFO,
+                    level=logging.WARNING,
                     rank=0,
                 )
 
@@ -1200,10 +1187,10 @@ class DistributedTrainer:
         if self.s3_mover is not None:
             self.s3_mover.start_uploading()
 
-        elif self.post_checkpoint_callback is not None:
-            # If we're not using S3, but we have a post-checkpoint callback for evals
-            checkpoint_path = Path(self.config.checkpoints.checkpoints_path) / f"{self.config.general.step}"
-            self.post_checkpoint_callback(checkpoint_path)
+        if dist.get_rank(self.parallel_context.world_pg) == 0:
+            if self.config.lighteval is not None and self.s3_mover is None:
+                checkpoint_path = Path(self.config.checkpoints.checkpoints_path) / f"{self.config.general.step}"
+                self.lighteval_runner.eval_single_checkpoint(checkpoint_path)
 
     def save_checkpoint(self) -> Path:
         self.pre_save_checkpoint()
@@ -1254,17 +1241,6 @@ class DistributedTrainer:
                 fo.write(json.dumps(asdict(self.model_config)))
 
         self.post_save_checkpoint()
-
-        # Handle post-checkpoint evaluation if configured
-        if self.post_checkpoint_callback is not None:
-            job_id, log_path = self.post_checkpoint_callback(str(checkpoint_path))
-            if job_id is not None and log_path is not None:
-                log_rank(
-                    f"launching eval job: job_id={job_id} log at {log_path} slurm_eval",
-                    logger=logger,
-                    level=logging.INFO,
-                    rank=0,
-                )
 
         return checkpoint_path
 
