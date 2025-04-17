@@ -122,7 +122,8 @@ def run_slurm_one_job(
 #SBATCH --exclusive
 #SBATCH --qos={slurm_config.qos}
 #SBATCH --time={slurm_config.time}
-#SBATCH --output={eval_logs_path}/%j-{timestamp}.out"""
+#SBATCH --output={eval_logs_path}/%j-{timestamp}.out
+#SBATCH --requeue"""
 
     if slurm_config.reservation:
         slurm_script += f"\n#SBATCH --reservation={slurm_config.reservation}"
