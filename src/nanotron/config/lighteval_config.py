@@ -109,8 +109,11 @@ class LightEvalConfig:
     logging: Optional[LightEvalLoggingArgs] = None
     wandb: Optional[LightEvalWandbLoggerConfig] = None
     slurm: Optional[LightEvalSlurm] = None
-    nanotron_path: Optional[Path] = "./"
-    eval_config_override: Path = Path("smollm3_eval.yaml")  # Previously hardcoded in run_slurm_one_job
+    s3_save_path: Optional[str] = None # should not be dependent of the run_name
+    output_dir: Optional[str] = None # we should sanity check that it's the same as the one in the eval_config_override
+    nanotron_path: Optional[str] = "./"
+    eval_config_override: str = None
+    eval_config_override: Path = None  # Previously hardcoded in run_slurm_one_job
     eval_interval: Optional[
         int
     ] = None  # Must be multiple of checkpoint_interval. If None, eval will be done after each checkpoint upload to s3
