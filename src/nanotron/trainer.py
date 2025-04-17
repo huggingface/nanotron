@@ -571,12 +571,13 @@ class DistributedTrainer:
                 outputs, loss_avg, z_loss_avg = self.training_step(dataloader=self.current_dataloader)
 
                 # Update consumption tracking for current batch
-                self.current_base_dl.dataset.update_consumption_metrics(
-                    start_idx=(self.iteration_step - 1)
-                    * self.global_batch_size,  # assumes we start from iteration_step=1
-                    end_idx=self.iteration_step * self.global_batch_size,
-                    sequence_length=self.sequence_length,
-                )
+                if hasattr(self.current_base_dl, "dataset"):
+                    self.current_base_dl.dataset.update_consumption_metrics(
+                        start_idx=(self.iteration_step - 1)
+                        * self.global_batch_size,  # assumes we start from iteration_step=1
+                        end_idx=self.iteration_step * self.global_batch_size,
+                        sequence_length=self.sequence_length,
+                    )
 
                 # Training Logs
                 # Track consumed tokens for all dataset folders in current stage
