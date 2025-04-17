@@ -41,7 +41,7 @@ class LightEvalRunner:
             return
         if len(config_files) > 1:
             log_rank(
-                "Found multiple config files in uploaded checkpoints.",
+                f"Found multiple config files in uploaded checkpoints: {config_files}",
                 logger=logger,
                 level=logging.ERROR,
                 group=self.parallel_context.dp_pg if self.parallel_context is not None else None,
@@ -87,20 +87,6 @@ def run_slurm_one_job(
     # Use config values instead of hardcoded defaults
     slurm_config = lighteval_config.slurm
 
-    # Use lighteval config paths if available, otherwise use defaults
-    eval_launch_script_path = os.path.join(
-        lighteval_config.slurm_script_dir if lighteval_config.slurm_script_dir else "eval_results/launch-config",
-        str(current_step),
-    )
-    eval_logs_path = os.path.join(
-        lighteval_config.checkpoints_path if lighteval_config.checkpoints_path else "eval_results/logs",
-        str(current_step),
-    )
-
-    # Create directories
-    os.makedirs(eval_launch_script_path, exist_ok=True)
-    os.makedirs(eval_logs_path, exist_ok=True)
-
     # Calculate the number of nodes based on parallelism config
     total_gpus_needed = (
         lighteval_config.parallelism.dp * lighteval_config.parallelism.pp * lighteval_config.parallelism.tp
@@ -109,18 +95,30 @@ def run_slurm_one_job(
 
     # Get timestamp for log files
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    run_name = f"eval_{current_step}".replace(" ", "_")
+    run_name = f"{timestamp}-eval_{config.general.run}".replace(" ", "_")
+
+    # Use lighteval config paths if available, otherwise use defaults
+    eval_launch_script_path = (
+        lighteval_config.slurm_script_dir if lighteval_config.slurm_script_dir else "eval_results/launch-config"
+    )
+    eval_logs_path = lighteval_config.checkpoints_path if lighteval_config.checkpoints_path else "eval_results/logs"
+    eval_launch_script_path = os.path.join(eval_launch_script_path, run_name)
+    eval_logs_path = os.path.join(eval_logs_path, run_name)
+
+    # Create directories
+    os.makedirs(eval_launch_script_path, exist_ok=True)
+    os.makedirs(eval_logs_path, exist_ok=True)
 
     # Create log directory with run name subdirectory
     logs_path = os.path.join(eval_logs_path, run_name)
     os.makedirs(logs_path, exist_ok=True)
 
     # Use configured local path instead of hardcoded /tmp
-    local_path = os.path.join(lighteval_config.local_checkpoint_dir, f"eval_{config.general.run}", str(current_step))
+    local_path = os.path.join(lighteval_config.local_checkpoint_dir, run_name, str(current_step))
 
     # Create the SLURM script content
     slurm_script = f"""#!/bin/bash
-#SBATCH --job-name={run_name}
+#SBATCH --job-name=eval_{current_step}_{run_name}
 #SBATCH --partition={slurm_config.partition}
 #SBATCH --nodes={nodes}
 #SBATCH --ntasks-per-node=1
@@ -134,10 +132,10 @@ def run_slurm_one_job(
     if slurm_config.reservation:
         slurm_script += f"\n#SBATCH --reservation={slurm_config.reservation}"
 
-    # Add the rest of the script content
+    # Rest of the script content
     slurm_script += f"""
 
-set -x -e
+set -x
 
 LOCAL_DOWNLOAD_CHECKPOINT_FOLDER={local_path}
 
@@ -246,15 +244,20 @@ CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun \\
     --master_port $MASTER_PORT \\
     run_evals.py \\
     --checkpoint-config-path $LOCAL_DOWNLOAD_CHECKPOINT_FOLDER/config.yaml \\
-    --lighteval-override {lighteval_config.eval_config_override}"""
+    --lighteval-override {lighteval_config.eval_config_override}
+    --cache-dir {slurm_config.hf_cache}"""
     slurm_script += """
+
+echo "Cleaning up downloaded checkpoints..."
+rm -rf "$LOCAL_DOWNLOAD_CHECKPOINT_FOLDER"
+echo "Cleanup completed"
 
 echo "END TIME: $(date)"
 """
 
     # Write the script to file
     current_time = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    launch_script_path = os.path.join(eval_launch_script_path, f"launch_script-{current_time}.slurm")
+    launch_script_path = os.path.join(eval_launch_script_path, f"launch_script-{current_time}-.slurm")
     os.makedirs(os.path.dirname(launch_script_path), exist_ok=True)
 
     with open(launch_script_path, "w") as f:
