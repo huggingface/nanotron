@@ -107,6 +107,7 @@ class LightEvalConfig:
     logging: Optional[LightEvalLoggingArgs] = None
     wandb: Optional[LightEvalWandbLoggerConfig] = None
     slurm: Optional[LightEvalSlurm] = None
+    nanotron_path: Optional[str] = "./"
     eval_config_override: str = "smollm3_eval.yaml"  # Previously hardcoded in run_slurm_one_job
 
     def __post_init__(self):

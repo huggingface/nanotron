@@ -115,7 +115,7 @@ def run_slurm_one_job(
 
     # Use configured local path instead of hardcoded /tmp
     local_path = os.path.join(lighteval_config.local_checkpoint_dir, run_name, str(current_step))
-
+    nanotron_path = lighteval_config.nanotron_path
     # Create the SLURM script content
     slurm_script = f"""#!/bin/bash
 #SBATCH --job-name=eval_{current_step}_{run_name}
@@ -242,7 +242,7 @@ CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun \\
     --node_rank $SLURM_PROCID \\
     --master_addr $MASTER_ADDR \\
     --master_port $MASTER_PORT \\
-    run_evals.py \\
+    {nanotron_path}/run_evals.py \\
     --checkpoint-config-path $LOCAL_DOWNLOAD_CHECKPOINT_FOLDER/config.yaml \\
     --lighteval-override {lighteval_config.eval_config_override}
     --cache-dir {slurm_config.hf_cache}"""
