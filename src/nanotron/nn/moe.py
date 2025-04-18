@@ -72,7 +72,7 @@ class Qwen2MLP(nn.Module):
         # Define activation function (silu followed by multiplication)
         self.act = ACT2FN[config.hidden_act]
 
-    def forward(self, permuted_hidden_states, num_tokens_per_expert):
+    def forward(self, hidden_states):
         # Apply gate_up_proj to get gate and up projections
         merged_states = self.gate_up_proj(hidden_states)
 
@@ -101,17 +101,20 @@ class GroupedMLP(nn.Module):
 
     def forward(
         self,
-        permuted_hidden_states: TensorType["num_tokens", "hidden_size"],
+        hidden_states: TensorType["num_tokens", "hidden_size"],
         num_tokens_per_expert: TensorType["num_tokens"],
     ):
         """
+        assume hidden_states is permuted
+
         grouped_gemm's notes:
         ops.gemm expect the inputs to have the following criteria:
         + expect a, b are in bfloat16
         + expect num_tokens_per_expert is a on cpu
         """
-
-        merged_states = ops.gmm(permuted_hidden_states, self.merged_gate_up_proj, num_tokens_per_expert, trans_b=False)
+        # NOTE: ops.gemm requires "batch_sizes" (aka: num_tokens_per_expert here) to be on cpu
+        num_tokens_per_expert = num_tokens_per_expert.to("cpu")
+        merged_states = ops.gmm(hidden_states, self.merged_gate_up_proj, num_tokens_per_expert, trans_b=False)
         gate_states, up_states = torch.split(merged_states, merged_states.shape[-1] // 2, dim=-1)
         hidden_states = self.act(gate_states) * up_states
         hidden_states = ops.gmm(hidden_states, self.merged_down_proj, num_tokens_per_expert, trans_b=False)
@@ -193,54 +196,28 @@ class Qwen2MoELayer(nn.Module):
 
         return routing_weights, routing_indices
 
-    def _dispatch_tokens(self, hidden_states, routing_weights, routing_indices):
+    def _dispatch_tokens(
+        self,
+        hidden_states: TensorType["num_tokens", "hidden_size"],
+        routing_weights: TensorType["num_tokens", "num_experts_per_token"],
+        routing_indices: TensorType["num_tokens", "num_experts_per_token"],
+    ):
         """
         Dispatches tokens to their selected experts.
         In a full implementation, this would handle the actual token routing logic
         including communication between devices.
         """
-        # Simplified implementation - in a complete version this would handle
-        # all-to-all or all-gather communications for distributed experts
+        # NOTE: start from expert 0 to expert n
+        num_tokens_per_expert = torch.bincount(routing_indices.flatten())  # [num_local_experts]
+        dispatched_inputs, inverse_permute_mapping = ops.permute(hidden_states, routing_indices)
+        return dispatched_inputs, inverse_permute_mapping, num_tokens_per_expert
 
-        hidden_states.shape[0]
-        dispatched_inputs = []
-        expert_counts = []
-
-        # For each expert, gather the tokens assigned to it
-        for expert_idx in range(self.num_local_experts):
-            # Find tokens that have this expert in their top-k
-            expert_mask = (routing_indices == expert_idx).any(dim=-1)
-            tokens_for_expert = hidden_states[expert_mask]
-
-            # Get the routing weights for this expert
-            expert_positions = (routing_indices == expert_idx).nonzero(as_tuple=True)
-            token_positions, k_positions = expert_positions
-            expert_weights = routing_weights[token_positions, k_positions].unsqueeze(-1)
-
-            # Scale inputs by routing weights
-            scaled_inputs = tokens_for_expert * expert_weights
-
-            dispatched_inputs.append(scaled_inputs)
-            expert_counts.append(len(tokens_for_expert))
-
-        return dispatched_inputs, expert_counts
-
-    def _combine_expert_outputs(self, expert_outputs, routing_indices, original_shape):
+    def _combine_expert_outputs(self, expert_outputs, inverse_mapping, routing_weights):
         """
         Combines outputs from different experts back to the original tensor layout.
         """
-        # Initialize output tensor with zeros
-        combined_output = torch.zeros(original_shape, device=expert_outputs[0].device)
-
-        for expert_idx, expert_output in enumerate(expert_outputs):
-            if expert_output.shape[0] == 0:  # Skip if no tokens were routed to this expert
-                continue
-
-            # Find positions where this expert was in the top-k
-            expert_mask = (routing_indices == expert_idx).any(dim=-1)
-            combined_output[expert_mask] += expert_output
-
-        return combined_output
+        hidden_states = ops.unpermute(expert_outputs, inverse_mapping, routing_weights)
+        return hidden_states
 
     def _core_forward(self, hidden_states):
         """Core forward logic for MoE layer."""
@@ -248,21 +225,15 @@ class Qwen2MoELayer(nn.Module):
         routing_weights, routing_indices = self._compute_router_probabilities(hidden_states)
 
         # Dispatch tokens to experts
-        dispatched_inputs, expert_counts = self._dispatch_tokens(hidden_states, routing_weights, routing_indices)
+        dispatched_inputs, inverse_permute_mapping, num_tokens_per_expert = self._dispatch_tokens(
+            hidden_states, routing_weights, routing_indices
+        )
 
-        # Process tokens with their assigned experts
-        expert_outputs = []
-        for expert_idx, (inputs, count) in enumerate(zip(dispatched_inputs, expert_counts)):
-            if count == 0:  # Skip computation if no tokens assigned
-                expert_outputs.append(torch.tensor([], device=hidden_states.device))
-                continue
+        expert_outputs = self.experts(dispatched_inputs, num_tokens_per_expert)
 
-            # Forward through the expert
-            output = self.experts[expert_idx](hidden_states=inputs)["hidden_states"]
-            expert_outputs.append(output)
-
-        # Combine expert outputs
-        output = self._combine_expert_outputs(expert_outputs, routing_indices, hidden_states.shape)
+        output = self._combine_expert_outputs(
+            expert_outputs["hidden_states"], inverse_permute_mapping, routing_weights
+        )
 
         # Add shared expert contribution if enabled
         if self.enable_shared_expert:

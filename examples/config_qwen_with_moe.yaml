@@ -107,13 +107,13 @@ optimizer:
   zero_stage: 0
 parallelism:
   context_parallel_size: 1
-  dp: 2
+  dp: 1
   expert_parallel_size: 1
   moe_layer_recompute: false
   pp: 1
   pp_engine: 1f1b
   recompute_layer: false
-  tp: 2
+  tp: 1
   tp_linear_async_communication: true
   tp_mode: REDUCE_SCATTER
   tp_recompute_allgather: true

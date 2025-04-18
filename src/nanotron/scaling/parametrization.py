@@ -5,6 +5,7 @@ from typing import Dict
 
 from nanotron.config import ModelArgs
 from nanotron.nn.layer_norm import LlamaRMSNorm, TritonRMSNorm
+from nanotron.nn.moe import GroupedMLP
 from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelColumnLinear,
     TensorParallelEmbedding,
@@ -27,6 +28,9 @@ class Parametrizator:
         if not isinstance(module, tuple(self.MODULE_TO_PARAMETRIZE.keys())):
             raise Exception(f"Module {type(module)} with parameter {param_name} is not supported for initialization")
 
+        if isinstance(module, GroupedMLP):
+            assert 1 == 1
+
         return self.MODULE_TO_PARAMETRIZE[type(module)](param_name, module)
 
 
@@ -35,6 +39,8 @@ class StandardParametrizator(Parametrizator):
         super().__init__(config)
         self.MODULE_TO_PARAMETRIZE = {
             TensorParallelColumnLinear: self._parametrize_column_linear,
+            # TODO: double check if correct initialization for grouped MLP
+            GroupedMLP: self._parametrize_grouped_mlp,
             TensorParallelRowLinear: self._parametrize_row_linear,
             TritonRMSNorm: self._parametrize_layer_norm,
             LlamaRMSNorm: self._parametrize_layer_norm,
@@ -51,6 +57,11 @@ class StandardParametrizator(Parametrizator):
             init.normal_(module.weight, mean=0.0, std=self.std)
         elif "bias" == param_name:
             module.bias.zero_()
+
+    def _parametrize_grouped_mlp(self, param_name: str, module: nn.Module):
+
+        for p in module.parameters():
+            init.normal_(p, mean=0.0, std=self.std)
 
     def _parametrize_row_linear(self, param_name: str, module: nn.Module):
         assert param_name in ["weight", "bias"]
