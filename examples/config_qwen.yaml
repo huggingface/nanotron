@@ -10,19 +10,13 @@ checkpoints:
 data_stages:
 - data:
     dataset:
-      dataset_folder:
-      - /fsx/loubna/datasets/llama_tokenized/fineweb-edu/merged
-      dataset_max_tokens: null
-      dataset_read_path: null
-      dataset_weights: null
-      pad_samples_to_global_batch_size: false
-      return_positions: true
-      shuffle_files: false
-      skip_in_stream: false
-      token_size_in_bytes: 4
-      tokenizer_name: meta-llama/Llama-3.2-1B
-      use_old_brrr_dataloader: false
-      vocab_size: 128256
+      dataset_overwrite_cache: false
+      dataset_processing_num_proc_per_process: 1
+      debug_max_samples: 1000
+      hf_dataset_config_name: null
+      hf_dataset_or_datasets: trl-lib/tldr
+      hf_dataset_splits: train
+      sft_dataloader: true
     num_loading_workers: 1
     seed: 42
   name: Stable Training Stage
@@ -32,7 +26,7 @@ general:
   consumed_train_samples: null
   ignore_sanity_checks: false
   project: debug
-  run: qwen_20250410_014907_16027793
+  run: qwen_20250418_174843_16140293
   seed: 42
   step: null
 lighteval: null
@@ -45,14 +39,15 @@ model:
   ddp_bucket_cap_mb: 25
   dtype: bfloat16
   init_method:
+    scaling_method: NUM_LAYERS
     std: 0.025
   make_vocab_size_divisible_by: 1
   model_config:
     _attn_implementation: flash_attention_2
-    _fused_rms_norm: true
-    _fused_rotary_emb: true
-    _use_doc_masking: true
-    _use_qkv_packed: true
+    _fused_rms_norm: false
+    _fused_rotary_emb: false
+    _use_doc_masking: false
+    _use_qkv_packed: false
     attention_bias: false
     bos_token_id: 1
     eos_token_id: 2
@@ -74,7 +69,7 @@ model:
     rope_interleaved: false
     rope_scaling: null
     rope_theta: 10000.0
-    sliding_window_size: 20
+    sliding_window_size: null
     tie_word_embeddings: true
     use_cache: true
     vocab_size: 128256
@@ -114,10 +109,7 @@ parallelism:
   tp_recompute_allgather: true
 profiler: null
 s3_upload: null
-tokenizer:
-  tokenizer_max_length: null
-  tokenizer_name_or_path: meta-llama/Llama-3.2-1B
-  tokenizer_revision: null
+tokenizer: null
 tokens:
   batch_accumulation_per_replica: 1
   limit_test_batches: 0

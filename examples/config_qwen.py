@@ -88,7 +88,6 @@ def get_model_config(model_size: str) -> Qwen2Config:
     layers, hidden, heads, kv_heads, intermediate = MODEL_SIZES[model_size]
 
     return Qwen2Config(
-        # Config for a tiny model model with MoE layers
         bos_token_id=1,
         eos_token_id=2,
         hidden_act="silu",
@@ -108,7 +107,6 @@ def get_model_config(model_size: str) -> Qwen2Config:
         is_qwen2_config=True,
         pad_token_id=None,
         _attn_implementation="flash_attention_2",
-        sliding_window_size=20,
     )
 
 
@@ -134,18 +132,18 @@ data_stages = [
             #     text_column_name="text",
             # ),
             # When using a Nanoset, we need to specify the vocab size of the tokenizer used to tokenize the dataset or larger
-            dataset=NanosetDatasetsArgs(
-                dataset_folder=[
-                    # "/fsx/loubna/tokenized_for_exps/mcf-dataset",  # 2 token_size
-                    "/fsx/loubna/datasets/llama_tokenized/fineweb-edu/merged",  # meta-llama/Llama-3.2-1B|4
-                ],
-            ),
-            # For SFT (uncomment to use):
-            # dataset=SFTDatasetsArgs(
-            #     hf_dataset_or_datasets="trl-lib/tldr",
-            #     hf_dataset_splits="train",
-            #     debug_max_samples=1000,
+            # dataset=NanosetDatasetsArgs(
+            #     dataset_folder=[
+            #         # "/fsx/loubna/tokenized_for_exps/mcf-dataset",  # 2 token_size
+            #         "/fsx/loubna/datasets/llama_tokenized/fineweb-edu/merged",  # meta-llama/Llama-3.2-1B|4
+            #     ],
             # ),
+            # For SFT (uncomment to use):
+            dataset=SFTDatasetsArgs(
+                hf_dataset_or_datasets="trl-lib/tldr",
+                hf_dataset_splits="train",
+                debug_max_samples=1000,
+            ),
             seed=seed,
         ),
     ),
