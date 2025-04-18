@@ -4,7 +4,6 @@ import json
 import os
 import shutil
 import tempfile
-import time
 from dataclasses import asdict
 from pathlib import Path
 from pprint import pformat
@@ -566,7 +565,7 @@ class DistributedTrainer:
                     prof.step()
 
                 # Use CUDA event-based timing for more accurate GPU-side elapsed time measurement
-                self.iteration_timer = nanotron_timer("iteration_time", "cuda", cuda_sync=False)
+                self.iteration_timer = nanotron_timer("iteration_time", "cuda", cuda_sync=False, enabled=True)
                 self.iteration_timer.start()
                 self._update_dataloader_based_on_training_stages(dataloader_or_dls)
 
