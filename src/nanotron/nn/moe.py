@@ -4,6 +4,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 from torch.utils.checkpoint import CheckpointFunction
+from torchtyping import TensorType
 
 from nanotron import distributed as dist
 from nanotron import logging
@@ -17,6 +18,14 @@ from nanotron.parallel.tensor_parallel.nn import (
 )
 
 logger = logging.get_logger(__name__)
+
+
+try:
+    import grouped_gemm.ops as ops
+except ImportError:
+    raise RuntimeError(
+        "Grouped GEMM is not available. Please run `pip install git+https://github.com/fanshiqing/grouped_gemm@main`."
+    )
 
 
 class Qwen2MLP(nn.Module):
@@ -63,7 +72,7 @@ class Qwen2MLP(nn.Module):
         # Define activation function (silu followed by multiplication)
         self.act = ACT2FN[config.hidden_act]
 
-    def forward(self, hidden_states):
+    def forward(self, permuted_hidden_states, num_tokens_per_expert):
         # Apply gate_up_proj to get gate and up projections
         merged_states = self.gate_up_proj(hidden_states)
 
@@ -73,6 +82,39 @@ class Qwen2MLP(nn.Module):
 
         # Apply down projection
         hidden_states = self.down_proj(hidden_states)
+
+        return {"hidden_states": hidden_states}
+
+
+class GroupedMLP(nn.Module):
+    def __init__(self, config: Qwen2Config, parallel_config: Optional[ParallelismArgs]):
+        super().__init__()
+
+        num_local_experts = config.moe_config.num_experts // parallel_config.expert_parallel_size
+        self.merged_gate_up_proj = nn.Parameter(
+            torch.randn(num_local_experts, config.hidden_size, 2 * config.intermediate_size)
+        )
+        self.merged_down_proj = nn.Parameter(
+            torch.randn(num_local_experts, config.intermediate_size, config.hidden_size)
+        )
+        self.act = ACT2FN[config.hidden_act]
+
+    def forward(
+        self,
+        permuted_hidden_states: TensorType["num_tokens", "hidden_size"],
+        num_tokens_per_expert: TensorType["num_tokens"],
+    ):
+        """
+        grouped_gemm's notes:
+        ops.gemm expect the inputs to have the following criteria:
+        + expect a, b are in bfloat16
+        + expect num_tokens_per_expert is a on cpu
+        """
+
+        merged_states = ops.gmm(permuted_hidden_states, self.merged_gate_up_proj, num_tokens_per_expert, trans_b=False)
+        gate_states, up_states = torch.split(merged_states, merged_states.shape[-1] // 2, dim=-1)
+        hidden_states = self.act(gate_states) * up_states
+        hidden_states = ops.gmm(hidden_states, self.merged_down_proj, num_tokens_per_expert, trans_b=False)
 
         return {"hidden_states": hidden_states}
 
@@ -93,8 +135,11 @@ class Qwen2MoELayer(nn.Module):
 
         # MoE specific configurations
         self.num_experts = config.moe_config.num_experts  # Total number of experts
+        self.num_local_experts = (
+            config.moe_config.num_experts // parallel_config.expert_parallel_size
+        )  # Experts per device
         self.num_experts_per_token = config.moe_config.top_k  # Number of experts used per token (top-k)
-        self.expert_parallel_size = getattr(parallel_config, "expert_parallel_size", 1)
+        self.expert_parallel_size = parallel_config.expert_parallel_size
         self.num_local_experts = self.num_experts // self.expert_parallel_size  # Experts per device
 
         # Get TP mode configuration
@@ -121,6 +166,7 @@ class Qwen2MoELayer(nn.Module):
                 parallel_config=parallel_config,
                 tp_pg=tp_pg,
             )
+            # TODO: duplicte the shared expert gate
             self.shared_expert_gate = TensorParallelColumnLinear(
                 self.hidden_size,
                 1,
@@ -131,23 +177,9 @@ class Qwen2MoELayer(nn.Module):
             )
 
         # Create the expert MLPs
-        self.experts = nn.ModuleList(
-            [
-                Qwen2MLP(
-                    config=config,
-                    parallel_config=parallel_config,
-                    tp_pg=tp_pg,
-                )
-                for _ in range(self.num_local_experts)
-            ]
-        )
-
+        self.experts = GroupedMLP(config, parallel_config)
         # Whether to recompute MoE layer during backward pass for memory efficiency
-        self.recompute_layer = getattr(parallel_config, "recompute_layer", False)
-
-        # Token dispatcher type - determines communication pattern
-        self.token_dispatcher_type = getattr(config.moe_config, "token_dispatcher_type", "alltoall")
-        # For more sophisticated implementations, we would add token dispatcher logic here
+        self.recompute_layer = parallel_config.moe_layer_recompute
 
     def _compute_router_probabilities(self, hidden_states):
         """Compute routing probabilities for each token to each expert."""
