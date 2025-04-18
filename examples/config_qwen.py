@@ -20,6 +20,7 @@ from nanotron.config import (
     Qwen2Config,
     RandomInit,
     SFTDatasetsArgs,  # noqa
+    TokenizerArgs,
     TokensArgs,
 )
 from nanotron.logging import human_format
@@ -193,7 +194,7 @@ def create_config(model_config: Qwen2Config, args: argparse.Namespace) -> Config
         checkpoints=CheckpointsArgs(checkpoints_path=checkpoints_path, checkpoint_interval=10),
         parallelism=parallelism,
         model=ModelArgs(init_method=RandomInit(std=0.025), model_config=model_config),
-        # tokenizer=TokenizerArgs("HuggingFaceTB/cosmo2-tokenizer"),
+        tokenizer=TokenizerArgs("HuggingFaceTB/cosmo2-tokenizer"),
         optimizer=optimizer,
         logging=LoggingArgs(log_level=args.log_lvl, log_level_replica=args.log_lvl),
         tokens=tokens,
