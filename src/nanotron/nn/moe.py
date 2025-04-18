@@ -28,6 +28,38 @@ except ImportError:
     )
 
 
+class Router(nn.Module):
+    def __init__(
+        self, config: Qwen2Config, parallel_config: Optional[ParallelismArgs], tp_pg: dist.ProcessGroup, layer_idx: int
+    ):
+        super().__init__()
+        self.config = config
+        self.parallel_config = parallel_config
+        self.tp_pg = tp_pg
+        self.layer_idx = layer_idx
+
+        self.num_experts = config.moe_config.num_experts
+        self.num_experts_per_token = config.moe_config.top_k
+
+        # float32 routing weights
+        self.weight = nn.Parameter(torch.randn(self.num_experts, config.hidden_size, dtype=torch.float32))
+
+    def gating(self, x: torch.Tensor) -> torch.Tensor:
+        """Compute logits for all experts (no softmax)."""
+        return F.linear(x.to(torch.float32), self.weight.to(torch.float32), bias=None)
+
+    def routing(self, logits: torch.Tensor):
+        """Top-k softmax-normalized routing weights and indices."""
+        input_dtype = logits.dtype
+        routing_weights = F.softmax(logits, dim=-1, dtype=torch.float32)
+        routing_weights, routing_indices = torch.topk(routing_weights, k=self.num_experts_per_token, dim=-1)
+        return routing_weights.to(input_dtype), routing_indices
+
+    def forward(self, x: torch.Tensor):
+        logits = self.gating(x)
+        return self.routing(logits)
+
+
 class Qwen2MLP(nn.Module):
     def __init__(
         self,
@@ -45,12 +77,12 @@ class Qwen2MLP(nn.Module):
 
         # Define gate_up_proj as a merged layer for gate and up projections
         gate_up_contiguous_chunks = (
-            config.intermediate_size,  # shape of gate_linear
-            config.intermediate_size,  # shape of up_linear
+            config.moe_config.shared_expert_intermediate_size,  # shape of gate_linear
+            config.moe_config.shared_expert_intermediate_size,  # shape of up_linear
         )
         self.gate_up_proj = TensorParallelColumnLinear(
             config.hidden_size,
-            2 * config.intermediate_size,
+            2 * config.moe_config.shared_expert_intermediate_size,
             pg=tp_pg,
             mode=tp_mode,
             bias=False,  # Qwen2 doesn't use bias for gate_up_proj
@@ -61,7 +93,7 @@ class Qwen2MLP(nn.Module):
 
         # Define down projection
         self.down_proj = TensorParallelRowLinear(
-            config.intermediate_size,
+            config.moe_config.shared_expert_intermediate_size,
             config.hidden_size,
             pg=tp_pg,
             mode=tp_mode,
@@ -92,10 +124,10 @@ class GroupedMLP(nn.Module):
 
         num_local_experts = config.moe_config.num_experts // parallel_config.expert_parallel_size
         self.merged_gate_up_proj = nn.Parameter(
-            torch.randn(num_local_experts, config.hidden_size, 2 * config.intermediate_size)
+            torch.randn(num_local_experts, config.hidden_size, 2 * config.moe_config.moe_intermediate_size)
         )
         self.merged_down_proj = nn.Parameter(
-            torch.randn(num_local_experts, config.intermediate_size, config.hidden_size)
+            torch.randn(num_local_experts, config.moe_config.moe_intermediate_size, config.hidden_size)
         )
         self.act = ACT2FN[config.hidden_act]
 
@@ -152,14 +184,7 @@ class Qwen2MoELayer(nn.Module):
         )
 
         # Router for selecting experts
-        self.router = TensorParallelColumnLinear(
-            self.hidden_size,
-            self.num_experts,
-            pg=tp_pg,
-            mode=tp_mode,
-            bias=False,
-            async_communication=tp_linear_async_communication,
-        )
+        self.router = Router(config, parallel_config, tp_pg, layer_idx)
 
         # Enable shared experts if configured
         self.enable_shared_expert = getattr(config.moe_config, "enable_shared_expert", False)
@@ -183,18 +208,6 @@ class Qwen2MoELayer(nn.Module):
         self.experts = GroupedMLP(config, parallel_config)
         # Whether to recompute MoE layer during backward pass for memory efficiency
         self.recompute_layer = parallel_config.moe_layer_recompute
-
-    def _compute_router_probabilities(self, hidden_states):
-        """Compute routing probabilities for each token to each expert."""
-        router_logits = self.router(hidden_states)  # [batch_size*seq_length, num_experts]
-
-        # Get the top-k experts per token
-        routing_weights, routing_indices = torch.topk(router_logits, k=self.num_experts_per_token, dim=-1)
-
-        # Apply softmax on the top-k values
-        routing_weights = F.softmax(routing_weights, dim=-1)
-
-        return routing_weights, routing_indices
 
     def _dispatch_tokens(
         self,
@@ -222,8 +235,8 @@ class Qwen2MoELayer(nn.Module):
 
     def _core_forward(self, hidden_states):
         """Core forward logic for MoE layer."""
-        # Get router probabilities
-        routing_weights, routing_indices = self._compute_router_probabilities(hidden_states)
+        # Get top-k routing weights and indices
+        routing_weights, routing_indices = self.router(hidden_states)  # [num_tokens, num_experts_per_token]
 
         # Dispatch tokens to experts
         dispatched_inputs, inverse_permute_mapping, num_tokens_per_expert = self._dispatch_tokens(

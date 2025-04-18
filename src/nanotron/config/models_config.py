@@ -36,6 +36,9 @@ class MoEConfig:
 
     num_experts: int = 8  # Total number of experts
     top_k: int = 2  # Number of experts to route each token to
+    moe_intermediate_size: int = 1408  # Intermediate size of the MoE layer
+    shared_expert_intermediate_size: int = 5632  # Intermediate size of the shared expert
+    router_aux_loss_coef: float = 0.01  # Coefficient for the router auxiliary loss
     layers: List[int] = field(
         default_factory=lambda: [-1]
     )  # Indices of layers that use MoE. -1 means all layers. Default is all layers
@@ -141,7 +144,9 @@ class Qwen2Config:
     sliding_window_size: Optional[int] = None
     z_loss_enabled: bool = False  # Z-loss regularization https://www.jmlr.org/papers/volume24/22-1144/22-1144.pdf
     z_loss_coefficient: float = 0.0001  # Default from the paper (10^-4)
-    no_rope_layer: Optional[int] = None  # Skip rope every no_rope_layer layers (see https://arxiv.org/abs/2501.18795 https://arxiv.org/abs/2305.19466 and Llama4)
+    no_rope_layer: Optional[
+        int
+    ] = None  # Skip rope every no_rope_layer layers (see https://arxiv.org/abs/2501.18795 https://arxiv.org/abs/2305.19466 and Llama4)
     _fused_rotary_emb: bool = True
     _fused_rms_norm: bool = True
     _use_qkv_packed: bool = True
