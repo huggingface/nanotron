@@ -35,6 +35,7 @@ class TimerRecord:
     running: bool = False
     call_count: int = 0
     cuda_sync: bool = False  # Option to add CUDA synchronization for more accurate timings
+    enabled: bool = True  # Allow individual timer to be enabled/disabled
 
     # For CPU timers we still track total_time
     _cpu_total_time: float = 0.0
@@ -55,7 +56,7 @@ class TimerRecord:
 
     def start(self) -> "TimerRecord":
         """Start the timer."""
-        if self.name == "dummy":  # disabled
+        if self.name == "dummy" or not self.enabled:  # disabled
             return self
 
         if self.running:
@@ -82,7 +83,7 @@ class TimerRecord:
     def end(self) -> None:
         """End the timer, but don't compute elapsed time yet."""
 
-        if self.name == "dummy":  # disabled
+        if self.name == "dummy" or not self.enabled:  # disabled
             return
 
         if not self.running:
@@ -219,7 +220,11 @@ class Timers:
         return cls._enabled
 
     def __call__(
-        self, name: str, timer_type: Union[TimerType, str] = TimerType.CUDA, cuda_sync: bool = False
+        self,
+        name: str,
+        timer_type: Union[TimerType, str] = TimerType.CUDA,
+        cuda_sync: bool = False,
+        enabled: bool = bool(int(os.environ.get("ENABLE_TIMERS", "0"))),
     ) -> TimerRecord:
         """Get or create a timer with the given name.
 
@@ -236,11 +241,11 @@ class Timers:
                         (or 'cuda'/'cpu' strings)
             cuda_sync: Whether to perform torch.cuda.synchronize() for more accurate CUDA timing.
                        Default is False to avoid unnecessary synchronization overhead.
-        """
-        if not self._enabled:
-            # Return a dummy timer that does nothing when timing is disabled
-            return TimerRecord(name="dummy", timer_type=TimerType.CPU)
+            enabled: Override default enabled setting from environment variable
 
+        Raises:
+            ValueError: If a timer with the same name already exists with different settings
+        """
         if isinstance(timer_type, str):
             timer_type = TimerType(timer_type)
 
@@ -248,13 +253,23 @@ class Timers:
             # Being used as a decorator with specified or default settings
             func = name
             timer_name = func.__name__
-            return self._create_timer_decorator(timer_name, timer_type, cuda_sync)(func)
+            return self._create_timer_decorator(timer_name, timer_type, cuda_sync, enabled)(func)
 
-        if name not in self._timers:
-            self._timers[name] = TimerRecord(name=name, timer_type=timer_type, cuda_sync=cuda_sync)
-        else:
-            # Update the cuda_sync option if the timer already exists
-            self._timers[name].cuda_sync = cuda_sync
+        if name in self._timers:
+            existing_timer = self._timers[name]
+            if (
+                existing_timer.timer_type != timer_type
+                or existing_timer.cuda_sync != cuda_sync
+                or existing_timer.enabled != enabled
+            ):
+                raise ValueError(
+                    f"Timer '{name}' already exists with different settings.\n"
+                    f"Existing: type={existing_timer.timer_type}, cuda_sync={existing_timer.cuda_sync}, enabled={existing_timer.enabled}\n"
+                    f"New: type={timer_type}, cuda_sync={cuda_sync}, enabled={enabled}"
+                )
+            return existing_timer
+
+        self._timers[name] = TimerRecord(name=name, timer_type=timer_type, cuda_sync=cuda_sync, enabled=enabled)
 
         # Check if we're being called as a decorator
         if not callable(name):
@@ -263,21 +278,17 @@ class Timers:
             return timer_record
 
         # If we get here, we're being called as @nanotron_timer("name", timer_type)
-        return self._create_timer_decorator(name, timer_type, cuda_sync)
+        return self._create_timer_decorator(name, timer_type, cuda_sync, enabled)
 
-    def _create_timer_decorator(self, name, timer_type=TimerType.CUDA, cuda_sync=False):
-        """Create a decorator that times the execution of a function.
-
-        This method supports both CUDA and CPU timer types, allowing for flexible timing
-        of functions based on the specific needs (GPU operations vs CPU operations).
-        """
+    def _create_timer_decorator(self, name, timer_type=TimerType.CUDA, cuda_sync=False, enabled=None):
+        """Create a decorator that times the execution of a function."""
 
         def decorator(func):
             import functools
 
             @functools.wraps(func)
             def wrapper(*args, **kwargs):
-                with self(name, timer_type, cuda_sync):
+                with self(name, timer_type, cuda_sync, enabled):
                     return func(*args, **kwargs)
 
             return wrapper
