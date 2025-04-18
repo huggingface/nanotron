@@ -500,7 +500,13 @@ class Config:
                         f"Each stage should have unique starting training step, please change the starting training step for stage {stage.name}"
                     )
 
-                if isinstance(stage.data.dataset, NanosetDatasetsArgs):
+                if isinstance(stage.data.dataset, PretrainDatasetsArgs) or isinstance(
+                    stage.data.dataset, SFTDatasetsArgs
+                ):
+                    assert (
+                        self.tokenizer is not None and self.tokenizer.tokenizer_name_or_path is not None
+                    ), f"Tokenizer should be defined for P/SFT datasets, got {self.tokenizer}"
+                elif isinstance(stage.data.dataset, NanosetDatasetsArgs):
                     if self.model.model_config.vocab_size == -1:
                         self.model.model_config.vocab_size = stage.data.dataset.vocab_size
                         logger.warning(
