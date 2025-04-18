@@ -64,7 +64,7 @@ def save(
 
     try:
         if should_save_config:
-            config.save_as_yaml(root_folder / "config.yaml")
+            config.save_as_yaml(root_folder / "config.yaml", sanity_checks=sanity_checks)
     except Exception as e:
         # TODO @nouamane: catch full disk error
         log_rank(
