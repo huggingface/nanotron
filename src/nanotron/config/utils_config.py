@@ -18,6 +18,13 @@ class RecomputeGranularity(Enum):
     FULL = auto()
 
 
+class InitScalingMethod(Enum):
+    NONE = auto()
+    NUM_LAYERS = auto()
+    LAYER_INDEX = auto()
+    MODEL_SCALE = auto()
+
+
 def serialize(data) -> dict:
     """Recursively serialize a nested dataclass to a dict - do some type conversions along the way"""
     if data is None:
@@ -38,6 +45,8 @@ def serialize(data) -> dict:
         elif isinstance(value, TensorParallelLinearMode):
             result[field.name] = value.name
         elif isinstance(value, RecomputeGranularity):
+            result[field.name] = value.name
+        elif isinstance(value, InitScalingMethod):
             result[field.name] = value.name
         elif isinstance(value, SamplerType):
             result[field.name] = value.name
