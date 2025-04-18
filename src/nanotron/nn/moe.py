@@ -199,7 +199,6 @@ class Qwen2MoELayer(nn.Module):
     def _dispatch_tokens(
         self,
         hidden_states: TensorType["num_tokens", "hidden_size"],
-        routing_weights: TensorType["num_tokens", "num_experts_per_token"],
         routing_indices: TensorType["num_tokens", "num_experts_per_token"],
     ):
         """
@@ -208,7 +207,9 @@ class Qwen2MoELayer(nn.Module):
         including communication between devices.
         """
         # NOTE: start from expert 0 to expert n
-        num_tokens_per_expert = torch.bincount(routing_indices.flatten())  # [num_local_experts]
+        num_tokens_per_expert = torch.bincount(
+            routing_indices.flatten(), minlength=self.num_local_experts
+        )  # [num_local_experts]
         dispatched_inputs, inverse_permute_mapping = ops.permute(hidden_states, routing_indices)
         return dispatched_inputs, inverse_permute_mapping, num_tokens_per_expert
 
@@ -226,7 +227,7 @@ class Qwen2MoELayer(nn.Module):
 
         # Dispatch tokens to experts
         dispatched_inputs, inverse_permute_mapping, num_tokens_per_expert = self._dispatch_tokens(
-            hidden_states, routing_weights, routing_indices
+            hidden_states, routing_indices
         )
 
         expert_outputs = self.experts(dispatched_inputs, num_tokens_per_expert)

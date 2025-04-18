@@ -1,6 +1,6 @@
 checkpoints:
-  checkpoint_interval: 10
-  checkpoints_path: checkpoints
+  checkpoint_interval: 1000
+  checkpoints_path: /fsx/phuc/new_workspace/experiments/qwen2_moe_test
   checkpoints_path_is_shared_file_system: false
   load_lr_scheduler: true
   load_optimizer: true
@@ -31,7 +31,7 @@ general:
   benchmark_csv_path: null
   consumed_train_samples: null
   ignore_sanity_checks: false
-  project: debug
+  project: qwen_moe
   run: qwen_20250410_014907_16027793
   seed: 42
   step: null
