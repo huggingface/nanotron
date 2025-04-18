@@ -19,10 +19,17 @@ class TimerType(Enum):
 
 @dataclass
 class TimerRecord:
-    """Records timing information for a single timer."""
+    """
+    Records timing information for a single timer.
+
+    By default, uses CUDA events for timing GPU operations, which provides more accurate
+    measurements of GPU execution time without forcing CPU-GPU synchronization.
+
+    For CPU-only operations, you can use CPU-based timing by specifying timer_type=TimerType.CPU.
+    """
 
     name: str
-    timer_type: TimerType = TimerType.CPU
+    timer_type: TimerType = TimerType.CUDA
     start_time: float = 0.0
     end_time: float = 0.0
     running: bool = False
@@ -175,7 +182,17 @@ class TimerRecord:
 
 
 class Timers:
-    """A collection of timers for tracking execution time in Nanotron."""
+    """
+    A collection of timers for tracking execution time in Nanotron.
+
+    By default, timers use CUDA events for timing GPU operations, which provides several benefits:
+    1. More accurate measurement of GPU execution time
+    2. Reduced need for explicit CUDA synchronization
+    3. Lower overhead compared to CPU-based timing with synchronization
+    4. Better performance monitoring for distributed training
+
+    For CPU-only operations, you can still use CPU-based timing by specifying timer_type=TimerType.CPU.
+    """
 
     _instance = None
     _enabled = os.environ.get("ENABLE_TIMERS", "0") == "1"  # Add global enable/disable flag
@@ -202,20 +219,23 @@ class Timers:
         return cls._enabled
 
     def __call__(
-        self, name: str, timer_type: Union[TimerType, str] = TimerType.CPU, cuda_sync: bool = True
+        self, name: str, timer_type: Union[TimerType, str] = TimerType.CUDA, cuda_sync: bool = False
     ) -> TimerRecord:
         """Get or create a timer with the given name.
 
         Can be used as a decorator, context manager, or directly:
-        - @nanotron_timer("name")  # As decorator
+        - @nanotron_timer  # As decorator with default CUDA timing
+        - @nanotron_timer("my_function")  # As decorator with custom name
+        - @nanotron_timer(timer_type=TimerType.CPU)  # As decorator with CPU timing
         - with nanotron_timer("name"): ...  # As context manager
         - nanotron_timer("name").start(); ...; nanotron_timer("name").end()  # Direct use
 
         Args:
             name: Name of the timer
-            timer_type: Type of timer, either TimerType.CPU or TimerType.CUDA
-                        (or 'cpu'/'cuda' strings)
-            cuda_sync: Whether to perform torch.cuda.synchronize() for more accurate CUDA timing
+            timer_type: Type of timer, either TimerType.CUDA (default) or TimerType.CPU
+                        (or 'cuda'/'cpu' strings)
+            cuda_sync: Whether to perform torch.cuda.synchronize() for more accurate CUDA timing.
+                       Default is False to avoid unnecessary synchronization overhead.
         """
         if not self._enabled:
             # Return a dummy timer that does nothing when timing is disabled
@@ -224,11 +244,11 @@ class Timers:
         if isinstance(timer_type, str):
             timer_type = TimerType(timer_type)
 
-        if callable(name) and timer_type == TimerType.CPU:
-            # Being used as a decorator with default settings
+        if callable(name):
+            # Being used as a decorator with specified or default settings
             func = name
             timer_name = func.__name__
-            return self._create_timer_decorator(timer_name, TimerType.CPU, cuda_sync)(func)
+            return self._create_timer_decorator(timer_name, timer_type, cuda_sync)(func)
 
         if name not in self._timers:
             self._timers[name] = TimerRecord(name=name, timer_type=timer_type, cuda_sync=cuda_sync)
@@ -245,8 +265,12 @@ class Timers:
         # If we get here, we're being called as @nanotron_timer("name", timer_type)
         return self._create_timer_decorator(name, timer_type, cuda_sync)
 
-    def _create_timer_decorator(self, name, timer_type, cuda_sync=False):
-        """Create a decorator that times the execution of a function."""
+    def _create_timer_decorator(self, name, timer_type=TimerType.CUDA, cuda_sync=False):
+        """Create a decorator that times the execution of a function.
+
+        This method supports both CUDA and CPU timer types, allowing for flexible timing
+        of functions based on the specific needs (GPU operations vs CPU operations).
+        """
 
         def decorator(func):
             import functools
