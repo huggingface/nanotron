@@ -75,7 +75,7 @@ def main(args):
     ).to(DEVICE)
     hf_config = hf_model.config
 
-    # Set Nanotron LlamaConfig
+    # Set Nanotron Qwen2Config
     nanotron_config = Qwen2Config(
         bos_token_id=hf_config.bos_token_id,
         eos_token_id=hf_config.eos_token_id,
@@ -89,7 +89,7 @@ def main(args):
         num_hidden_layers=hf_config.num_hidden_layers,
         num_key_value_heads=hf_config.num_key_value_heads,
         pad_token_id=None,
-        attention_bias=True,
+        attention_bias=True,  # qwen-moe uses attention bias
         rms_norm_eps=hf_config.rms_norm_eps,
         rope_scaling=hf_config.rope_scaling,
         rope_theta=hf_config.rope_theta,
@@ -107,7 +107,7 @@ def main(args):
         ),
     )
 
-    # Init Llama3-8B Nanotron model
+    # Init Nanotron Qwen-MoE model
     log_rank("Init empty Nanotron Qwen Moe Model", logger=logger, level=logging.INFO, rank=0)
     nanotron_model = build_model(
         model_builder=lambda: Qwen2ForTraining(
