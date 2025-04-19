@@ -42,10 +42,14 @@ class Router(nn.Module):
         self.num_experts_per_token = config.moe_config.top_k
 
         # float32 routing weights
+        # NOTE: qwen keep the routing weights in float32
+        # https://github.com/huggingface/transformers/blob/27a25bee4fcb865e8799ba026f1ea4455f2cca98/src/transformers/models/qwen2_moe/modeling_qwen2_moe.py#L608
         self.weight = nn.Parameter(torch.randn(self.num_experts, config.hidden_size, dtype=torch.float32))
 
     def gating(self, x: torch.Tensor) -> torch.Tensor:
         """Compute logits for all experts (no softmax)."""
+        # NOTE: qwen keep the routing logits in float32
+        # https://github.com/huggingface/transformers/blob/27a25bee4fcb865e8799ba026f1ea4455f2cca98/src/transformers/models/qwen2_moe/modeling_qwen2_moe.py#L613
         return F.linear(x.to(torch.float32), self.weight.to(torch.float32), bias=None)
 
     def routing(self, logits: torch.Tensor):
