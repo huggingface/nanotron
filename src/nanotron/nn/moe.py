@@ -76,13 +76,19 @@ class Qwen2MLP(nn.Module):
         )
 
         # Define gate_up_proj as a merged layer for gate and up projections
+        if config.moe_config is not None:
+            interdimate_size = config.moe_config.shared_expert_intermediate_size
+        else:
+            interdimate_size = config.intermediate_size
+
         gate_up_contiguous_chunks = (
-            config.moe_config.shared_expert_intermediate_size,  # shape of gate_linear
-            config.moe_config.shared_expert_intermediate_size,  # shape of up_linear
+            interdimate_size,  # shape of gate_linear
+            interdimate_size,  # shape of up_linear
         )
+
         self.gate_up_proj = TensorParallelColumnLinear(
             config.hidden_size,
-            2 * config.moe_config.shared_expert_intermediate_size,
+            2 * interdimate_size,
             pg=tp_pg,
             mode=tp_mode,
             bias=False,  # Qwen2 doesn't use bias for gate_up_proj
@@ -93,7 +99,7 @@ class Qwen2MLP(nn.Module):
 
         # Define down projection
         self.down_proj = TensorParallelRowLinear(
-            config.moe_config.shared_expert_intermediate_size,
+            interdimate_size,
             config.hidden_size,
             pg=tp_pg,
             mode=tp_mode,
@@ -187,7 +193,7 @@ class Qwen2MoELayer(nn.Module):
         self.router = Router(config, parallel_config, tp_pg, layer_idx)
 
         # Enable shared experts if configured
-        self.enable_shared_expert = getattr(config.moe_config, "enable_shared_expert", False)
+        self.enable_shared_expert = config.moe_config.enable_shared_expert
         if self.enable_shared_expert:
             self.shared_expert = Qwen2MLP(
                 config=config,

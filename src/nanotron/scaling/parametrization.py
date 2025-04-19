@@ -5,7 +5,7 @@ from typing import Dict
 
 from nanotron.config import ModelArgs
 from nanotron.nn.layer_norm import LlamaRMSNorm, TritonRMSNorm
-from nanotron.nn.moe import GroupedMLP
+from nanotron.nn.moe import GroupedMLP, Router
 from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelColumnLinear,
     TensorParallelEmbedding,
@@ -40,11 +40,13 @@ class StandardParametrizator(Parametrizator):
         self.MODULE_TO_PARAMETRIZE = {
             TensorParallelColumnLinear: self._parametrize_column_linear,
             # TODO: double check if correct initialization for grouped MLP
-            GroupedMLP: self._parametrize_grouped_mlp,
             TensorParallelRowLinear: self._parametrize_row_linear,
             TritonRMSNorm: self._parametrize_layer_norm,
             LlamaRMSNorm: self._parametrize_layer_norm,
             TensorParallelEmbedding: self._parametrize_embedding,
+            # NOTE: MoE's specific initialization
+            GroupedMLP: self._parametrize_grouped_mlp,
+            Router: self._parametrize_router,
         }
 
         self.std = config.init_method.std
@@ -62,6 +64,12 @@ class StandardParametrizator(Parametrizator):
 
         for p in module.parameters():
             init.normal_(p, mean=0.0, std=self.std)
+
+    def _parametrize_router(self, param_name: str, module: nn.Module):
+        if "weight" == param_name:
+            init.normal_(module.weight, mean=0.0, std=self.std)
+        elif "bias" == param_name:
+            module.bias.zero_()
 
     def _parametrize_row_linear(self, param_name: str, module: nn.Module):
         assert param_name in ["weight", "bias"]
