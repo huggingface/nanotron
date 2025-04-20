@@ -263,7 +263,7 @@ python {nanotron_path}/src/nanotron/eval/upload_to_wandb.py \\
     --wandb_project {lighteval_config.wandb_project} \\
     --wandb_entity {lighteval_config.wandb_entity} \\
     --model_name {general_run_name} \\
-    --results_path {lighteval_config.s3_save_path}/results/results/{general_run_name}/{current_step}/ \\ 
+    --results_path {lighteval_config.s3_save_path}/results/results/{general_run_name}/{current_step}/ \\
     --train_step {current_step} \\
     --consumed_tokens {current_step*gbs_tok}
 """
