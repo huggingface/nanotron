@@ -74,6 +74,22 @@ class LightEvalWandbLoggerConfig:
 
 
 @dataclass
+class LightEvalSlurm:
+    """Arguments related to SLURM configuration for LightEval"""
+
+    gpus_per_node: int = 8
+    partition: str = "hopper-prod"
+    hf_cache: str = "~/.cache/huggingface"
+    cpus_per_task: int = 88
+    qos: str = "low"
+    time: str = "24:00:00"
+    reservation: Optional[str] = "smollm"
+
+    def __post_init__(self):
+        self.hf_cache = str(Path(self.hf_cache).expanduser())
+
+
+@dataclass
 class LightEvalConfig:
     """Arguments related to running LightEval on checkpoints.
 
@@ -81,13 +97,37 @@ class LightEvalConfig:
     the saved config when running LightEval after training.
     """
 
-    slurm_template: Optional[str] = None
-    slurm_script_dir: Optional[str] = None
-
-    checkpoints_path: Optional[str] = None
+    slurm_script_dir: Optional[Path] = Path("eval_results/launch-config")
+    logs_path: Optional[Path] = Path("eval_results/logs")
+    local_checkpoint_dir: Path = Path(
+        "/scratch"
+    )  # Base directory for temporary checkpoint storage, will store under {local_checkpoint_dir}/{run_name}/{step}
     parallelism: Optional[ParallelismArgs] = None
     batch_size: Optional[int] = None
     generation: Optional[Union[GenerationArgs, Dict[str, GenerationArgs]]] = None
     tasks: Optional[LightEvalTasksArgs] = None
     logging: Optional[LightEvalLoggingArgs] = None
     wandb: Optional[LightEvalWandbLoggerConfig] = None
+    slurm: Optional[LightEvalSlurm] = None
+    s3_save_path: Optional[str] = None # should not be dependent of the run_name
+    output_dir: Optional[str] = None # we should sanity check that it's the same as the one in the eval_config_override
+    nanotron_path: Optional[str] = "./"
+    eval_config_override: str = None
+    eval_config_override: Path = None  # Previously hardcoded in run_slurm_one_job
+    eval_interval: Optional[
+        int
+    ] = None  # Must be multiple of checkpoint_interval. If None, eval will be done after each checkpoint upload to s3
+    eval_interval_file: Optional[
+        Path
+    ] = None  # If specified, eval_interval will be read from this file upon the next evaluation.
+
+    def __post_init__(self):
+        if self.parallelism is None:
+            self.parallelism = ParallelismArgs(dp=1, pp=1, tp=1, tp_linear_async_communication=True)
+        if self.slurm is None:
+            self.slurm = LightEvalSlurm()
+        self.local_checkpoint_dir = str(Path(self.local_checkpoint_dir).expanduser())
+        if self.eval_interval_file is not None and Path(self.eval_interval_file).exists():
+            logger.warning(
+                f"Eval interval file {self.eval_interval_file} exists. `eval_interval` will be replaced by the value in the file upon the next evaluation. You should probably delete this file if that's not what you want."
+            )

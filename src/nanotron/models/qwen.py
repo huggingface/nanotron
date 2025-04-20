@@ -660,7 +660,7 @@ class Qwen2ForTraining(NanotronModel):
         else:
             raise ValueError(f"Unknown init method {init_method}")
 
-        parametrizator = parametrizator_cls(config=config.model)
+        parametrizator = parametrizator_cls(config=config)
 
         log_rank(
             f"Parametrizing model parameters using {parametrizator.__class__.__name__}",

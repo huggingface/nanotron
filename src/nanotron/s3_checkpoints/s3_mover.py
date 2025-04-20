@@ -225,7 +225,7 @@ class S3Mover:
             dist.all_gather(test_tensor_list, test_tensor, group=group, async_op=False)
             dist.barrier()
             all_saved = sum(bool(tensor.item()) for tensor in test_tensor_list)
-            time.sleep(1)
+            time.sleep(1)  # TODO @nouamane: make this configurable
 
     def is_previous_save_finished(self) -> bool:
         """Return True if a potential previous checkpoint has been fully uploaded to S3

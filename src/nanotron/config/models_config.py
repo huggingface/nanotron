@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, List, Optional, Union
 
+from nanotron.config.utils_config import InitScalingMethod
 from nanotron.nn.attention import ALL_ATTENTION_FUNCTIONS, AttentionImplementation
 
 # The default attention implementation to use
@@ -11,6 +12,7 @@ DEFAULT_ATTENTION_IMPLEMENTATION = "flash_attention_2"
 @dataclass
 class RandomInit:
     std: float
+    scaling_method: InitScalingMethod = InitScalingMethod.NUM_LAYERS
 
 
 @dataclass
@@ -147,10 +149,10 @@ class Qwen2Config:
     no_rope_layer: Optional[
         int
     ] = None  # Skip rope every no_rope_layer layers (see https://arxiv.org/abs/2501.18795 https://arxiv.org/abs/2305.19466 and Llama4)
-    _fused_rotary_emb: bool = True
-    _fused_rms_norm: bool = True
-    _use_qkv_packed: bool = True
-    _use_doc_masking: bool = True
+    _fused_rotary_emb: bool = False
+    _fused_rms_norm: bool = False
+    _use_qkv_packed: bool = False
+    _use_doc_masking: bool = False
 
     # MoE configuration
     moe_config: Optional[MoEConfig] = None
