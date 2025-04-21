@@ -29,9 +29,6 @@ class Parametrizator:
         if not isinstance(module, tuple(self.MODULE_TO_PARAMETRIZE.keys())):
             raise Exception(f"Module {type(module)} with parameter {param_name} is not supported for initialization")
 
-        if isinstance(module, GroupedMLP):
-            assert 1 == 1
-
         return self.MODULE_TO_PARAMETRIZE[type(module)](param_name, module)
 
 
@@ -67,7 +64,6 @@ class StandardParametrizator(Parametrizator):
             module.bias.zero_()
 
     def _parametrize_grouped_mlp(self, param_name: str, module: nn.Module):
-
         for p in module.parameters():
             init.normal_(p, mean=0.0, std=self.std)
 
