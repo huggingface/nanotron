@@ -76,7 +76,7 @@ class StandardParametrizator(Parametrizator):
         elif "bias" == param_name:
             module.bias.zero_()
 
-            def _compute_scaling_factor(self) -> float:
+    def _compute_scaling_factor(self) -> float:
         """Compute initialization scaling based on selected method"""
         if self.scaling_method == InitScalingMethod.NONE:
             return 1.0
