@@ -107,9 +107,8 @@ optimizer:
   zero_stage: 0
 parallelism:
   context_parallel_size: 1
-  dp: 1
+  dp: 2
   expert_parallel_size: 1
-  moe_layer_recompute: false
   pp: 1
   pp_engine: 1f1b
   recompute_layer: false

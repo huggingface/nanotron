@@ -20,7 +20,7 @@ from nanotron.serialize import TrainingMetadata, save_meta, save_weights
 from nanotron.serialize.metadata import DataStageMetadata
 from nanotron.trainer import mark_tied_parameters
 from tqdm import tqdm
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer, Qwen2MoeConfig
 
 logger = logging.get_logger(__name__)
 
@@ -73,7 +73,7 @@ def main(args):
     hf_model = AutoModelForCausalLM.from_pretrained(
         args.pretrained_model_name_or_path, torch_dtype=TORCH_DTYPE, attn_implementation="flash_attention_2"
     ).to(DEVICE)
-    hf_config = hf_model.config
+    hf_config: Qwen2MoeConfig = hf_model.config
 
     # Set Nanotron Qwen2Config
     nanotron_config = Qwen2Config(

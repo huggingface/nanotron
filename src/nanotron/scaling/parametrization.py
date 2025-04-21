@@ -48,6 +48,7 @@ class StandardParametrizator(Parametrizator):
             # NOTE: MoE's specific initialization
             GroupedMLP: self._parametrize_grouped_mlp,
             Router: self._parametrize_router,
+            nn.Linear: self._parametrize_column_linear,
         }
 
         self.std = config.model.init_method.std

@@ -4,18 +4,13 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 from torch.utils.checkpoint import CheckpointFunction
-from torchtyping import TensorType
 
 from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.config import ParallelismArgs
 from nanotron.config.models_config import Qwen2Config
+from nanotron.models.base import ignore_init_on_device_and_dtype
 from nanotron.nn.activations import ACT2FN
-from nanotron.parallel.tensor_parallel.nn import (
-    TensorParallelColumnLinear,
-    TensorParallelLinearMode,
-    TensorParallelRowLinear,
-)
 
 logger = logging.get_logger(__name__)
 
@@ -24,7 +19,7 @@ try:
     import grouped_gemm.ops as ops
 except ImportError:
     raise RuntimeError(
-        "Grouped GEMM is not available. Please run `pip install git+https://github.com/fanshiqing/grouped_gemm@main`."
+        "Grouped GEMM is not available. Please run `pip install --no-build-isolation git+https://github.com/fanshiqing/grouped_gemm@main` (takes less than 5 minutes)"
     )
 
 
@@ -44,88 +39,28 @@ class Router(nn.Module):
         # float32 routing weights
         # NOTE: qwen keep the routing weights in float32
         # https://github.com/huggingface/transformers/blob/27a25bee4fcb865e8799ba026f1ea4455f2cca98/src/transformers/models/qwen2_moe/modeling_qwen2_moe.py#L608
-        self.weight = nn.Parameter(torch.randn(self.num_experts, config.hidden_size, dtype=torch.float32))
+        with ignore_init_on_device_and_dtype():
+            self.weight = nn.Parameter(
+                torch.randn(self.num_experts, config.hidden_size, dtype=torch.float32, device="cuda")
+            )
+        assert self.weight.dtype == torch.float32
 
     def gating(self, x: torch.Tensor) -> torch.Tensor:
         """Compute logits for all experts (no softmax)."""
         # NOTE: qwen keep the routing logits in float32
         # https://github.com/huggingface/transformers/blob/27a25bee4fcb865e8799ba026f1ea4455f2cca98/src/transformers/models/qwen2_moe/modeling_qwen2_moe.py#L613
-        return F.linear(x.to(torch.float32), self.weight.to(torch.float32), bias=None)
+        return F.linear(x.to(torch.float32), self.weight, bias=None)
 
     def routing(self, logits: torch.Tensor):
         """Top-k softmax-normalized routing weights and indices."""
-        input_dtype = logits.dtype
         routing_weights = F.softmax(logits, dim=-1, dtype=torch.float32)
         routing_weights, routing_indices = torch.topk(routing_weights, k=self.num_experts_per_token, dim=-1)
-        return routing_weights.to(input_dtype), routing_indices
+        routing_indices = routing_indices.to(torch.int32)  # NOTE: ops.permute requires indices to be int32
+        return routing_weights, routing_indices
 
     def forward(self, x: torch.Tensor):
         logits = self.gating(x)
         return self.routing(logits)
-
-
-class Qwen2MLP(nn.Module):
-    def __init__(
-        self,
-        config: Qwen2Config,
-        parallel_config: Optional[ParallelismArgs],
-        tp_pg: dist.ProcessGroup,
-    ) -> None:
-        super().__init__()
-
-        # Get TP mode and communication settings
-        tp_mode = parallel_config.tp_mode if parallel_config is not None else TensorParallelLinearMode.ALL_REDUCE
-        tp_linear_async_communication = (
-            parallel_config.tp_linear_async_communication if parallel_config is not None else False
-        )
-
-        # Define gate_up_proj as a merged layer for gate and up projections
-        if config.moe_config is not None:
-            interdimate_size = config.moe_config.shared_expert_intermediate_size
-        else:
-            interdimate_size = config.intermediate_size
-
-        gate_up_contiguous_chunks = (
-            interdimate_size,  # shape of gate_linear
-            interdimate_size,  # shape of up_linear
-        )
-
-        self.gate_up_proj = TensorParallelColumnLinear(
-            config.hidden_size,
-            2 * interdimate_size,
-            pg=tp_pg,
-            mode=tp_mode,
-            bias=False,  # Qwen2 doesn't use bias for gate_up_proj
-            async_communication=tp_linear_async_communication,
-            contiguous_chunks=gate_up_contiguous_chunks,
-            tp_recompute_allgather=parallel_config.tp_recompute_allgather,
-        )
-
-        # Define down projection
-        self.down_proj = TensorParallelRowLinear(
-            interdimate_size,
-            config.hidden_size,
-            pg=tp_pg,
-            mode=tp_mode,
-            bias=False,  # Qwen2 doesn't use bias for down_proj
-            async_communication=tp_linear_async_communication,
-        )
-
-        # Define activation function (silu followed by multiplication)
-        self.act = ACT2FN[config.hidden_act]
-
-    def forward(self, hidden_states):
-        # Apply gate_up_proj to get gate and up projections
-        merged_states = self.gate_up_proj(hidden_states)
-
-        # Apply activation function (SiLU and Mul)
-        gate_states, up_states = torch.split(merged_states, merged_states.shape[-1] // 2, dim=-1)
-        hidden_states = self.act(gate_states) * up_states
-
-        # Apply down projection
-        hidden_states = self.down_proj(hidden_states)
-
-        return {"hidden_states": hidden_states}
 
 
 class GroupedMLP(nn.Module):
@@ -143,8 +78,8 @@ class GroupedMLP(nn.Module):
 
     def forward(
         self,
-        hidden_states: TensorType["num_tokens", "hidden_size"],
-        num_tokens_per_expert: TensorType["num_tokens"],
+        hidden_states: torch.Tensor,
+        num_tokens_per_expert: torch.Tensor,
     ):
         """
         assume hidden_states is permuted
@@ -188,10 +123,6 @@ class Qwen2MoELayer(nn.Module):
         self.num_local_experts = self.num_experts // self.expert_parallel_size  # Experts per device
 
         # Get TP mode configuration
-        tp_mode = parallel_config.tp_mode if parallel_config is not None else TensorParallelLinearMode.ALL_REDUCE
-        tp_linear_async_communication = (
-            parallel_config.tp_linear_async_communication if parallel_config is not None else False
-        )
 
         # Router for selecting experts
         self.router = Router(config, parallel_config, tp_pg, layer_idx)
@@ -199,30 +130,30 @@ class Qwen2MoELayer(nn.Module):
         # Enable shared experts if configured
         self.enable_shared_expert = config.moe_config.enable_shared_expert
         if self.enable_shared_expert:
+            from nanotron.models.qwen import Qwen2MLP
+
             self.shared_expert = Qwen2MLP(
                 config=config,
                 parallel_config=parallel_config,
                 tp_pg=tp_pg,
+                intermediate_size=config.moe_config.shared_expert_intermediate_size,
             )
             # TODO: duplicte the shared expert gate
-            self.shared_expert_gate = TensorParallelColumnLinear(
+            self.shared_expert_gate = nn.Linear(
                 self.hidden_size,
                 1,
-                pg=tp_pg,
-                mode=tp_mode,
                 bias=False,
-                async_communication=tp_linear_async_communication,
-            )
+            )  # TODO: ensure shared_expert_gate is tied across TP
 
         # Create the expert MLPs
         self.experts = GroupedMLP(config, parallel_config)
         # Whether to recompute MoE layer during backward pass for memory efficiency
-        self.recompute_layer = parallel_config.moe_layer_recompute
+        self.recompute_layer = parallel_config.recompute_layer
 
     def _dispatch_tokens(
         self,
-        hidden_states: TensorType["num_tokens", "hidden_size"],
-        routing_indices: TensorType["num_tokens", "num_experts_per_token"],
+        hidden_states: torch.Tensor,
+        routing_indices: torch.Tensor,
     ):
         """
         Dispatches tokens to their selected experts.

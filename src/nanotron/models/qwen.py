@@ -11,10 +11,10 @@ from nanotron.config import Config, ParallelismArgs
 from nanotron.config.models_config import Qwen2Config, RandomInit, SpectralMupInit
 from nanotron.logging import log_rank
 from nanotron.models import NanotronModel
+from nanotron.nn.activations import ACT2FN
 from nanotron.nn.attention import ALL_ATTENTION_FUNCTIONS, get_attention_mask
 from nanotron.nn.layer_norm import LlamaRMSNorm as RMSNorm
 from nanotron.nn.layer_norm import TritonRMSNorm
-from nanotron.nn.moe import Qwen2MLP, Qwen2MoELayer
 from nanotron.nn.rotary import RotaryEmbedding
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter
@@ -296,6 +296,65 @@ class Qwen2Attention(nn.Module):
         return attn_output.reshape(-1, self.local_num_heads * self.head_dim)  # [b*s, num_heads*head_dim]
 
 
+class Qwen2MLP(nn.Module):
+    def __init__(
+        self,
+        config: Qwen2Config,
+        parallel_config: Optional[ParallelismArgs],
+        tp_pg: dist.ProcessGroup,
+        intermediate_size: int,
+    ) -> None:
+        super().__init__()
+
+        # Get TP mode and communication settings
+        tp_mode = parallel_config.tp_mode if parallel_config is not None else TensorParallelLinearMode.ALL_REDUCE
+        tp_linear_async_communication = (
+            parallel_config.tp_linear_async_communication if parallel_config is not None else False
+        )
+
+        gate_up_contiguous_chunks = (
+            intermediate_size,  # shape of gate_linear
+            intermediate_size,  # shape of up_linear
+        )
+
+        self.gate_up_proj = TensorParallelColumnLinear(
+            config.hidden_size,
+            2 * intermediate_size,
+            pg=tp_pg,
+            mode=tp_mode,
+            bias=False,  # Qwen2 doesn't use bias for gate_up_proj
+            async_communication=tp_linear_async_communication,
+            contiguous_chunks=gate_up_contiguous_chunks,
+            tp_recompute_allgather=parallel_config.tp_recompute_allgather,
+        )
+
+        # Define down projection
+        self.down_proj = TensorParallelRowLinear(
+            intermediate_size,
+            config.hidden_size,
+            pg=tp_pg,
+            mode=tp_mode,
+            bias=False,  # Qwen2 doesn't use bias for down_proj
+            async_communication=tp_linear_async_communication,
+        )
+
+        # Define activation function (silu followed by multiplication)
+        self.act = ACT2FN[config.hidden_act]
+
+    def forward(self, hidden_states):
+        # Apply gate_up_proj to get gate and up projections
+        merged_states = self.gate_up_proj(hidden_states)
+
+        # Apply activation function (SiLU and Mul)
+        gate_states, up_states = torch.split(merged_states, merged_states.shape[-1] // 2, dim=-1)
+        hidden_states = self.act(gate_states) * up_states
+
+        # Apply down projection
+        hidden_states = self.down_proj(hidden_states)
+
+        return {"hidden_states": hidden_states}
+
+
 class Qwen2DecoderLayer(nn.Module):
     def __init__(
         self,
@@ -323,6 +382,8 @@ class Qwen2DecoderLayer(nn.Module):
 
         # Use MoE layer if this layer is in the MoE layers list
         if config.moe_config and layer_idx in config.moe_config.layers:
+            from nanotron.nn.moe import Qwen2MoELayer
+
             self.mlp = Qwen2MoELayer(
                 config=config,
                 parallel_config=parallel_config,
@@ -334,6 +395,7 @@ class Qwen2DecoderLayer(nn.Module):
                 config=config,
                 parallel_config=parallel_config,
                 tp_pg=tp_pg,
+                intermediate_size=config.intermediate_size,
             )
 
         self.recompute_layer = parallel_config.recompute_layer

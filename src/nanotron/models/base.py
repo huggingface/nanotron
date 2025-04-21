@@ -1,3 +1,4 @@
+import threading
 from abc import ABCMeta, abstractmethod
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Callable, Dict, Iterator, List, Optional, Tuple
@@ -183,6 +184,112 @@ class DTypeInvariantTensor(torch.Tensor):
         raise RuntimeError("Cannot convert the type of an DTypeInvariantTensor to bfloat16")
 
 
+@contextmanager
+def ignore_init_on_device_and_dtype():
+    """
+    A context manager that temporarily disables dtype enforcement from init_on_device_and_dtype.
+
+    Example:
+    ```python
+    with init_on_device_and_dtype(device=torch.device("cuda"), dtype=torch.float32):
+        with ignore_init_on_device_and_dtype():
+            # This parameter will keep its specified dtype (float32)
+            self.weight = nn.Parameter(torch.randn(..., dtype=torch.float32))
+    ```
+    """
+    # Create a thread-local storage for the ignore flag
+    if not hasattr(ignore_init_on_device_and_dtype, "_ignore_flag"):
+        ignore_init_on_device_and_dtype._ignore_flag = threading.local()
+
+    # Set the ignore flag
+    old_value = getattr(ignore_init_on_device_and_dtype._ignore_flag, "value", False)
+    ignore_init_on_device_and_dtype._ignore_flag.value = True
+
+    try:
+        yield
+    finally:
+        # Restore the previous value
+        ignore_init_on_device_and_dtype._ignore_flag.value = old_value
+
+
+@contextmanager
+def init_on_device_and_dtype(
+    device: torch.device = torch.device("cpu"),
+    dtype: torch.dtype = torch.float,
+):
+    """
+    A context manager under which models are initialized with all parameters on the specified device.
+    Args:
+        device (`torch.device` defaults to `cpu`):
+            Device to initialize all parameters on.
+        dtype (`torch.dtype` defaults to `torch.float`):
+            Dtype to initialize all parameters on. If specified, will override any dtype
+            set in parameter initialization with a warning, unless within an ignore_init_on_device_and_dtype context.
+    """
+    old_register_parameter = nn.Module.register_parameter
+    old_register_buffer = nn.Module.register_buffer
+
+    def should_ignore_dtype():
+        if not hasattr(ignore_init_on_device_and_dtype, "_ignore_flag"):
+            return False
+        return getattr(ignore_init_on_device_and_dtype._ignore_flag, "value", False)
+
+    def register_empty_parameter(module, name, param):
+        old_register_parameter(module, name, param)
+        if param is not None:
+            if isinstance(param, DTypeInvariantTensor) or should_ignore_dtype():
+                # Only move to device, preserve dtype
+                param.data = param.data.to(device)
+            else:
+                param.data = param.data.to(device, dtype)
+
+    def register_empty_buffer(module, name, buffer, persistent=True):
+        old_register_buffer(module, name, buffer, persistent=persistent)
+        if buffer is not None:
+            if isinstance(buffer, DTypeInvariantTensor) or should_ignore_dtype():
+                # Only move to device, preserve dtype
+                buffer.data = buffer.data.to(device)
+            else:
+                module._buffers[name] = module._buffers[name].to(device, dtype)
+
+    # Patch tensor creation
+    tensor_constructors_to_patch = {
+        torch_function_name: getattr(torch, torch_function_name)
+        for torch_function_name in ["empty", "zeros", "ones", "full"]
+    }
+
+    def patch_tensor_constructor(fn):
+        def wrapper(*args, **kwargs):
+            kwargs["device"] = device
+            kwargs["dtype"] = dtype
+            return fn(*args, **kwargs)
+
+        return wrapper
+
+    try:
+        nn.Module.register_parameter = register_empty_parameter
+        nn.Module.register_buffer = register_empty_buffer
+        for torch_function_name in tensor_constructors_to_patch.keys():
+            setattr(torch, torch_function_name, patch_tensor_constructor(getattr(torch, torch_function_name)))
+        yield
+    finally:
+        nn.Module.register_parameter = old_register_parameter
+        nn.Module.register_buffer = old_register_buffer
+        for torch_function_name, old_torch_function in tensor_constructors_to_patch.items():
+            setattr(torch, torch_function_name, old_torch_function)
+
+
+def check_model_has_grad(model: NanotronModel, parallel_context: "ParallelContext"):
+    """Check that there's at least a parameter in current PP rank that has a gradient."""
+    for param in model.parameters():
+        if param.requires_grad:
+            return True
+    raise ValueError(
+        f"Can't use DDP because model in PP={dist.get_rank(parallel_context.pp_pg)} has no gradient. Consider increasing the number of layers of your model, or put a smaller PP size.\n"
+        f"Model: {model}"
+    )
+
+
 def build_model(
     model_builder: Callable[[], NanotronModel],
     parallel_context: ParallelContext,
@@ -236,85 +343,3 @@ def build_model(
     if pp_size > 1:
         model.log_modules(level=logging.INFO, group=parallel_context.world_pg, rank=0)
     return model
-
-
-# TODO @thomasw21: Should this option override user defined options? Maybe not ... right now it does.
-@contextmanager
-def init_on_device_and_dtype(
-    device: torch.device = torch.device("cpu"),
-    dtype: torch.dtype = torch.float,
-):
-    """
-    A context manager under which models are initialized with all parameters on the specified device.
-    Args:
-        device (`torch.device` defaults to `cpu`):
-            Device to initialize all parameters on.
-        dtype (`torch.dtype` defaults to `torch.float`):
-            Dtype to initialize all parameters on.
-        include_buffers (`bool`, defaults to `False`):
-            Whether or not to also default all buffers constructors given previous arguments.
-    Example:
-    ```python
-    import torch.nn as nn
-    from accelerate import init_on_device
-    with init_on_device_and_dtype(device=torch.device("cuda")):
-        tst = nn.Liner(100, 100)  # on `cuda` device
-    ```
-    """
-    old_register_parameter = nn.Module.register_parameter
-    old_register_buffer = nn.Module.register_buffer
-
-    def register_empty_parameter(module, name, param):
-        old_register_parameter(module, name, param)
-        if param is not None:
-            if isinstance(param, DTypeInvariantTensor):
-                # if param is DTypeInvariantTensor we should avoid updating it
-                param.data = param.data.to(device)
-            else:
-                param.data = param.data.to(device, dtype)
-
-    def register_empty_buffer(module, name, buffer, persistent=True):
-        old_register_buffer(module, name, buffer, persistent=persistent)
-        if buffer is not None:
-            if isinstance(buffer, DTypeInvariantTensor):
-                # if buffer is DTypeInvariantTensor we should avoid updating it
-                buffer.data = buffer.data.to(device)
-            else:
-                module._buffers[name] = module._buffers[name].to(device, dtype)
-
-    # Patch tensor creation
-    tensor_constructors_to_patch = {
-        torch_function_name: getattr(torch, torch_function_name)
-        for torch_function_name in ["empty", "zeros", "ones", "full"]
-    }
-
-    def patch_tensor_constructor(fn):
-        def wrapper(*args, **kwargs):
-            kwargs["device"] = device
-            kwargs["dtype"] = dtype
-            return fn(*args, **kwargs)
-
-        return wrapper
-
-    try:
-        nn.Module.register_parameter = register_empty_parameter
-        nn.Module.register_buffer = register_empty_buffer
-        for torch_function_name in tensor_constructors_to_patch.keys():
-            setattr(torch, torch_function_name, patch_tensor_constructor(getattr(torch, torch_function_name)))
-        yield
-    finally:
-        nn.Module.register_parameter = old_register_parameter
-        nn.Module.register_buffer = old_register_buffer
-        for torch_function_name, old_torch_function in tensor_constructors_to_patch.items():
-            setattr(torch, torch_function_name, old_torch_function)
-
-
-def check_model_has_grad(model: NanotronModel, parallel_context: "ParallelContext"):
-    """Check that there's at least a parameter in current PP rank that has a gradient."""
-    for param in model.parameters():
-        if param.requires_grad:
-            return True
-    raise ValueError(
-        f"Can't use DDP because model in PP={dist.get_rank(parallel_context.pp_pg)} has no gradient. Consider increasing the number of layers of your model, or put a smaller PP size.\n"
-        f"Model: {model}"
-    )
