@@ -242,10 +242,6 @@ class DistributedTrainer:
             assert isinstance(checkpoint_metadata.metas, TrainingMetadata)
             log_rank(str(checkpoint_metadata), logger=logger, level=logging.INFO, rank=0)
             self.metadata: TrainingMetadata = checkpoint_metadata.metas
-            # NOTE: we should not change data stages
-            assert (
-                self.config.tokens.train_steps > self.metadata.last_train_step
-            ), f"Loaded checkpoint has already trained {self.metadata.last_train_step} batches, you need to specify a higher `config.tokens.train_steps`"
         else:
             data_stages = [
                 DataStageMetadata(
@@ -607,6 +603,11 @@ class DistributedTrainer:
     ) -> None:
         self.pre_training(**kwargs)
 
+        # NOTE: we should not change data stages
+        assert (
+            self.config.tokens.train_steps > self.metadata.last_train_step
+        ), f"Loaded checkpoint has already trained {self.metadata.last_train_step} batches, you need to specify a higher `config.tokens.train_steps`"
+
         if self.config.checkpoints.save_initial_state and self.init_checkpoint_path is None:
             self.save_checkpoint()
 
@@ -672,6 +673,45 @@ class DistributedTrainer:
             self.save_checkpoint()
 
         self.post_training()
+
+    def evaluate(
+        self,
+        valid_dataloader_or_dls: Dict[
+            str, Union[Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]], Tuple[Iterator, ...]]
+        ],
+        **kwargs,
+    ) -> None:
+        self.pre_training(**kwargs)
+
+        if self.config.checkpoints.save_initial_state and self.init_checkpoint_path is None:
+            self.save_checkpoint()
+
+        self.pipeline_engine: PipelineEngine = self.config.parallelism.pp_engine
+
+        self.pipeline_engine.nb_microbatches = self.n_micro_batches_per_batch
+
+        # TODO @nouamanetazi: refactor this
+        # Useful mapping
+        self.unwrapped_model = self.model.module if isinstance(self.model, DistributedDataParallel) else self.model
+        self.unwrapped_model.module_id_to_prefix = {
+            id(module): f"{module_name}." for module_name, module in self.unwrapped_model.named_modules()
+        }
+        # Fix the root_model
+        self.unwrapped_model.module_id_to_prefix[id(self.unwrapped_model)] = ""
+
+        self.initial_iter_step = self.metadata.last_train_step + 1
+        self.last_iter_step = self.config.tokens.train_steps
+
+        prof = get_profiler(config=self.config)
+        # free memory
+        gc.collect()
+        torch.cuda.empty_cache()
+        with prof:
+            self._prepare_dataloader_for_validation_stage(valid_dataloader_or_dls)
+            outputs, val_metrics = self.validation_step(dataloader=self.current_validation_dataloader)
+            self.val_step_logs(outputs=outputs, **val_metrics)
+
+        dist.barrier()  # let's wait for everyone before leaving
 
     def _compute_per_domain_metrics(
         self, per_sample_loss: torch.Tensor, per_sample_domains: torch.Tensor
