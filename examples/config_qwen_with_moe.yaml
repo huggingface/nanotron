@@ -1,6 +1,6 @@
 checkpoints:
-  checkpoint_interval: 10
-  checkpoints_path: checkpoints
+  checkpoint_interval: 1000
+  checkpoints_path: /fsx/phuc/new_workspace/experiments/qwen2_moe_test
   checkpoints_path_is_shared_file_system: false
   load_lr_scheduler: true
   load_optimizer: true
@@ -31,8 +31,8 @@ general:
   benchmark_csv_path: null
   consumed_train_samples: null
   ignore_sanity_checks: false
-  project: debug
-  run: qwen_20250423_201000_16423158
+  project: qwen_moe
+  run: qwen_20250410_014907_16027793
   seed: 42
   step: null
 lighteval: null
@@ -45,15 +45,14 @@ model:
   ddp_bucket_cap_mb: 25
   dtype: bfloat16
   init_method:
-    scaling_method: NUM_LAYERS
     std: 0.025
   make_vocab_size_divisible_by: 1
   model_config:
     _attn_implementation: flash_attention_2
-    _fused_rms_norm: false
-    _fused_rotary_emb: false
-    _use_doc_masking: false
-    _use_qkv_packed: false
+    _fused_rms_norm: true
+    _fused_rotary_emb: true
+    _use_doc_masking: true
+    _use_qkv_packed: true
     attention_bias: false
     bos_token_id: 1
     eos_token_id: 2
@@ -75,12 +74,17 @@ model:
     rope_interleaved: false
     rope_scaling: null
     rope_theta: 10000.0
-    sliding_window_size: null
+    sliding_window_size: 20
     tie_word_embeddings: true
     use_cache: true
     vocab_size: 128256
     z_loss_coefficient: 0.0001
     z_loss_enabled: false
+    moe_config:
+      num_experts: 8
+      top_k: 1
+      enable_shared_expert: true
+      token_dispatcher_type: alltoall
 optimizer:
   accumulate_grad_in_fp32: true
   clip_grad: 1.0
