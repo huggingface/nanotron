@@ -32,7 +32,7 @@ general:
   consumed_train_samples: null
   ignore_sanity_checks: false
   project: debug
-  run: qwen_20250410_014907_16027793
+  run: qwen_20250423_194452_16423158
   seed: 42
   step: null
 lighteval: null
@@ -45,14 +45,15 @@ model:
   ddp_bucket_cap_mb: 25
   dtype: bfloat16
   init_method:
+    scaling_method: NUM_LAYERS
     std: 0.025
   make_vocab_size_divisible_by: 1
   model_config:
     _attn_implementation: flash_attention_2
-    _fused_rms_norm: true
-    _fused_rotary_emb: true
-    _use_doc_masking: true
-    _use_qkv_packed: true
+    _fused_rms_norm: false
+    _fused_rotary_emb: false
+    _use_doc_masking: false
+    _use_qkv_packed: false
     attention_bias: false
     bos_token_id: 1
     eos_token_id: 2
@@ -104,7 +105,6 @@ parallelism:
   context_parallel_size: 1
   dp: 2
   expert_parallel_size: 1
-  moe_layer_recompute: false
   pp: 1
   pp_engine: 1f1b
   recompute_layer: false

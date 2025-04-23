@@ -570,7 +570,7 @@ class DistributedTrainer:
                 self._update_dataloader_based_on_training_stages(dataloader_or_dls)
 
                 # Training step
-                outputs, loss_avg, z_loss_avg, model_grads = self.training_step(dataloader=self.current_dataloader)
+                outputs, loss_avg, z_loss_avg = self.training_step(dataloader=self.current_dataloader)
 
                 # Update consumption tracking for current batch
                 if hasattr(self.current_base_dl, "dataset"):
@@ -599,9 +599,7 @@ class DistributedTrainer:
                 ].consumed_train_samples += self.global_batch_size
 
                 if (self.iteration_step - 1) % self.config.logging.iteration_step_info_interval == 0:
-                    self.train_step_logs(
-                        outputs=outputs, loss_avg=loss_avg, z_loss_avg=z_loss_avg, model_grads=model_grads
-                    )
+                    self.train_step_logs(outputs=outputs, loss_avg=loss_avg, z_loss_avg=z_loss_avg)
 
                 # Checkpoint
                 if self.iteration_step % self.config.checkpoints.checkpoint_interval == 0:
@@ -672,14 +670,6 @@ class DistributedTrainer:
         )
         nanotron_timer("sync_gradients", "cuda").end()
 
-        # NOTE: this is the gradient before the clip_grad
-        if os.environ.get("DEBUG_MODEL", "0") == "1":
-            model_grads = [
-                (n, torch.norm(p["fp32"].grad, p=2)) for n, p in self.optimizer.gradient_accumulator.parameters.items()
-            ]
-        else:
-            model_grads = None
-
         # Clip gradients
         nanotron_timer("clip_gradients", "cuda").start()
         if self.config.optimizer.clip_grad is not None:
@@ -744,7 +734,7 @@ class DistributedTrainer:
 
         self.post_train_step()
 
-        return outputs, loss_avg, z_loss_avg, model_grads
+        return outputs, loss_avg, z_loss_avg
 
     def validation_step(self, dataloader: Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]]) -> Iterable[Dict]:
         outputs = self.pipeline_engine.validate_batch_iter(
@@ -759,7 +749,6 @@ class DistributedTrainer:
         outputs: Iterable[Dict[str, Union[torch.Tensor, TensorPointer]]],
         loss_avg: Optional[torch.Tensor],
         z_loss_avg: Optional[torch.Tensor],
-        model_grads: Optional[List[Tuple[str, torch.Tensor]]],
     ) -> None:
         # TODO @nouamanetazi: Megatron-LM seems to be using a barrier to report their interval time. Check if this is necessary. https://github.com/NouamaneTazi/Megatron-LM/blob/e241a96c3085b18e36c6cee1d68a8155de77b5a6/megatron/training.py#L607
         dist.barrier()
@@ -897,10 +886,6 @@ class DistributedTrainer:
                             LogItem(f"dataloader/consumed_tokens/{dataset_name}", stats["tokens"], "human_format"),
                         ]
                     )
-
-        # NOTE: log all model states
-        if os.environ.get("DEBUG_MODEL", "0") == "1":
-            basic_log_entries.extend([LogItem(f"model_grads/{n}", g, "human_format") for n, g in model_grads])
 
         # WandB logging - determine if this rank should log to wandb
         should_log_to_wandb = wandb is not None and (
