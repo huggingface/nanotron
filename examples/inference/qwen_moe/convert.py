@@ -24,7 +24,9 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, Qwen2MoeConfig
 
 logger = logging.get_logger(__name__)
 
-DEVICE = torch.device("cpu")
+# NOTE: We need to initialize the model on gpu, because RotaryEmbedding
+# requires its buffer to be on gpu
+DEVICE = torch.device("cuda")
 TORCH_DTYPE = torch.bfloat16
 
 
