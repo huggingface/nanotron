@@ -108,7 +108,7 @@ def get_model_config(model_size: str) -> Qwen2Config:
         is_qwen2_config=True,
         pad_token_id=None,
         _attn_implementation="flash_attention_2",
-        sliding_window_size=20,
+        # sliding_window_size=20,
     )
 
 
