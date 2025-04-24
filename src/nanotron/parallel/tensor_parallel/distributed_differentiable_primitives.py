@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Optional
+from typing import List, Optional
 
 import torch
 from torch import distributed as torch_dist
@@ -125,6 +125,39 @@ class DifferentiableReduceScatterSum(torch.autograd.Function):
         return DifferentiableAllGather.apply(grad_output, group), None
 
 
+class DifferentiableAllToAll(torch.autograd.Function):
+    """All to all in a differentiable fashion"""
+
+    @staticmethod
+    def forward(ctx, input, output_split_sizes, input_split_sizes, group: Optional[ProcessGroup] = None):
+        ctx.group = group
+        ctx.output_split_sizes = output_split_sizes
+        ctx.input_split_sizes = input_split_sizes
+        if group.size() == 1:
+            return input
+
+        if output_split_sizes is None:
+            output = torch.empty_like(input)
+        else:
+            # NOTE: we all-to-all the first dimension,
+            # so the data has shape (sum(output_split_sizes), *input.shape[1:])
+            output = torch.empty(sum(output_split_sizes), *input.shape[1:], device=input.device, dtype=input.dtype)
+
+        dist.all_to_all_single(
+            output, input, output_split_sizes=output_split_sizes, input_split_sizes=input_split_sizes, group=group
+        )
+        return output
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        return (
+            DifferentiableAllToAll.apply(grad_output, ctx.input_split_sizes, ctx.output_split_sizes, ctx.group),
+            None,
+            None,
+            None,
+        )
+
+
 # -----------------
 # Helper functions.
 # -----------------
@@ -144,3 +177,12 @@ def differentiable_all_gather(tensor, group: Optional[ProcessGroup] = None):
 
 def differentiable_reduce_scatter_sum(tensor, group: Optional[ProcessGroup] = None):
     return DifferentiableReduceScatterSum.apply(tensor, group)
+
+
+def all_to_all(
+    input: torch.Tensor,
+    output_split_sizes: Optional[List[int]] = None,
+    input_split_sizes: Optional[List[int]] = None,
+    group: Optional[ProcessGroup] = None,
+):
+    return DifferentiableAllToAll.apply(input, output_split_sizes, input_split_sizes, group)

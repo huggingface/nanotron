@@ -94,7 +94,7 @@ class ParallelContext:
     def _init_process_group_without_moe(self):
         ranks = np.arange(0, self.world_size).reshape(
             (
-                self.expert_data_parallel_size,  # NOTE: remove this line and refactor the below lines
+                self.expert_parallel_size,  # NOTE: remove this line and refactor the below lines
                 self.pipeline_parallel_size,
                 self.data_parallel_size,
                 self.context_parallel_size,
