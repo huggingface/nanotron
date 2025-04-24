@@ -369,12 +369,13 @@ class TokenizedBytesFolderDataset(DatatroveFolderDataset):
                         )
                         from datatrove.utils.dataset import url_to_fs
 
-                        fs_folder, folder_path = url_to_fs(folder_path)
+                        fs_folder, stripped_folder_path = url_to_fs(folder_path)
                         matched_files = (
-                            fs_folder.find(folder_path, detail=False, maxdepth=1 if not recursive else None)
+                            fs_folder.find(stripped_folder_path, detail=False, maxdepth=1 if not recursive else None)
                             if not filename_pattern
                             else fs_folder.glob(
-                                os.path.join(folder_path, filename_pattern), maxdepth=1 if not recursive else None
+                                os.path.join(stripped_folder_path, filename_pattern),
+                                maxdepth=1 if not recursive else None,
                             )
                         )
                         matched_files = sorted(matched_files)

@@ -1,5 +1,5 @@
 checkpoints:
-  checkpoint_interval: 10
+  checkpoint_interval: 100000
   checkpoints_path: checkpoints
   checkpoints_path_is_shared_file_system: false
   load_lr_scheduler: true
@@ -30,9 +30,9 @@ data_stages:
 general:
   benchmark_csv_path: null
   consumed_train_samples: null
-  ignore_sanity_checks: false
+  ignore_sanity_checks: true
   project: debug
-  run: qwen_20250423_201000_16423158
+  run: qwen_20250424_120835_16423158
   seed: 42
   step: null
 lighteval: null
@@ -50,24 +50,24 @@ model:
   make_vocab_size_divisible_by: 1
   model_config:
     _attn_implementation: flash_attention_2
-    _fused_rms_norm: false
-    _fused_rotary_emb: false
-    _use_doc_masking: false
-    _use_qkv_packed: false
+    _fused_rms_norm: true
+    _fused_rotary_emb: true
+    _use_doc_masking: true
+    _use_qkv_packed: true
     attention_bias: false
     bos_token_id: 1
     eos_token_id: 2
     flex_attention_mask: null
     hidden_act: silu
-    hidden_size: 256
+    hidden_size: 2048
     initializer_range: 0.02
-    intermediate_size: 768
+    intermediate_size: 11008
     is_qwen2_config: true
     max_position_embeddings: 4096
     moe_config: null
     no_rope_layer: null
-    num_attention_heads: 4
-    num_hidden_layers: 12
+    num_attention_heads: 16
+    num_hidden_layers: 36
     num_key_value_heads: 4
     pad_token_id: null
     pretraining_tp: 1
@@ -108,7 +108,7 @@ parallelism:
   pp: 1
   pp_engine: 1f1b
   recompute_layer: false
-  tp: 1
+  tp: 2
   tp_linear_async_communication: true
   tp_mode: REDUCE_SCATTER
   tp_recompute_allgather: true
