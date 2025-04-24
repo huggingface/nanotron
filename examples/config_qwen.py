@@ -223,7 +223,11 @@ if __name__ == "__main__":
     world_size = args.dp * args.tp * args.pp * args.cp
     if world_size <= 8:
         print(
-            f"CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node={world_size} run_train.py --config-file {args.out}"
+            f"ENABLE_TIMERS=1 DEBUG_CPU=1 STATS_SAMPLING_INTERVAL_IN_SEC=1 CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node={world_size} run_train.py --config-file {args.out}"
         )
+        print("You can also use environment variables for more debugging:")
+        print("  - ENABLE_TIMERS=1: Enable detailed timing information")
+        print("  - DEBUG_CPU=1: Log CPU and memory usage statistics")
+        print("  - STATS_SAMPLING_INTERVAL_IN_SEC=1: Set sampling interval for metrics collection")
     else:
         print("Checkout slurm_launcher.py to launch a multi-node job")
