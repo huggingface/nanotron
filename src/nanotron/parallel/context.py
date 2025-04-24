@@ -1,4 +1,5 @@
 import os
+from enum import Enum
 from typing import Dict, Literal
 
 import numpy as np
@@ -8,6 +9,18 @@ from einops import rearrange
 import nanotron.distributed as dist
 
 DistributedBackend = Literal["gloo", "mpi", "nccl"]
+
+
+class ParallelMode(Enum):
+    TP = "tp"
+    CP = "cp"
+    DP = "dp"
+    PP = "pp"
+
+    EP = "ep"
+    EP_TP = "ep_tp"
+    EP_DP = "ep_dp"
+    EP_PP = "ep_pp"
 
 
 class ParallelContext:
@@ -89,12 +102,13 @@ class ParallelContext:
             self._init_process_group_with_moe()
 
         # TODO: refactor this with expert parallelism
-        self.parallel_order = ["ep", "pp", "dp", "cp", "tp"]
+        # self.parallel_order = ["ep", "pp", "dp", "cp", "tp"]
+        self.parallel_order = ["pp", "dp", "cp", "tp"]
 
     def _init_process_group_without_moe(self):
         ranks = np.arange(0, self.world_size).reshape(
             (
-                self.expert_parallel_size,  # NOTE: remove this line and refactor the below lines
+                # self.expert_parallel_size,  # NOTE: remove this line and refactor the below lines
                 self.pipeline_parallel_size,
                 self.data_parallel_size,
                 self.context_parallel_size,
@@ -105,15 +119,43 @@ class ParallelContext:
         assert int(os.environ.get("LOCAL_RANK")) == dist.get_rank(self.local_pg), "Local rank mismatch"
 
         # Relevant process groups containing the current rank
-        self.tp_pg = self.create_new_group(ranks.transpose((0, 1, 2, 3, 4)).reshape((-1, self.tensor_parallel_size)))
-        self.cp_pg = self.create_new_group(ranks.transpose((4, 0, 1, 2, 3)).reshape((-1, self.context_parallel_size)))
-        self.dp_pg = self.create_new_group(ranks.transpose((3, 4, 0, 1, 2)).reshape((-1, self.data_parallel_size)))
-        self.pp_pg = self.create_new_group(ranks.transpose((2, 3, 4, 0, 1)).reshape((-1, self.pipeline_parallel_size)))
+        # NOTE: this contains all the tp ranks of all tp process groups
+        # tp_ranks = ranks.transpose((0, 1, 2, 3, 4)).reshape((-1, self.tensor_parallel_size))
+        # cp_ranks = ranks.transpose((4, 0, 1, 2, 3)).reshape((-1, self.context_parallel_size))
+        # dp_ranks = ranks.transpose((3, 4, 0, 1, 2)).reshape((-1, self.data_parallel_size))
+        # pp_ranks = ranks.transpose((2, 3, 4, 0, 1)).reshape((-1, self.pipeline_parallel_size))
+        tp_ranks = ranks.transpose((0, 1, 2, 3)).reshape((-1, self.tensor_parallel_size))
+        cp_ranks = ranks.transpose((3, 0, 1, 2)).reshape((-1, self.context_parallel_size))
+        dp_ranks = ranks.transpose((2, 3, 0, 1)).reshape((-1, self.data_parallel_size))
+        pp_ranks = ranks.transpose((1, 2, 3, 0)).reshape((-1, self.pipeline_parallel_size))
+        # ep_ranks = ranks.transpose((1, 2, 3, 4, 0)).reshape((-1, self.expert_parallel_size))
+
+        self.tp_pg = self.create_new_group(tp_ranks)
+        self.cp_pg = self.create_new_group(cp_ranks)
+        self.dp_pg = self.create_new_group(dp_ranks)
+        self.pp_pg = self.create_new_group(pp_ranks)
+        # self.ep_pg = self.create_new_group(ep_ranks)  # TODO: ep should be a subset of dp
 
         # model parallel group = combination of tp and pp and exp for a given dp rank
+        # self.mp_pg = self.create_new_group(
+        #     [
+        #         ranks[:, :, dp_rank, cp_rank, :].reshape(-1)
+        #         for cp_rank in range(self.context_parallel_size)
+        #         for dp_rank in range(self.data_parallel_size)
+        #     ]
+        # )
+
+        # self.tp_and_cp_pg = self.create_new_group(
+        #     [
+        #         ranks[ep_rank, pp_rank, dp_rank, :, :].reshape(-1)
+        #         for ep_rank in range(self.expert_parallel_size)
+        #         for pp_rank in range(self.pipeline_parallel_size)
+        #         for dp_rank in range(self.data_parallel_size)
+        #     ]
+        # )
         self.mp_pg = self.create_new_group(
             [
-                ranks[:, :, dp_rank, cp_rank, :].reshape(-1)
+                ranks[:, dp_rank, cp_rank, :].reshape(-1)
                 for cp_rank in range(self.context_parallel_size)
                 for dp_rank in range(self.data_parallel_size)
             ]
@@ -121,13 +163,20 @@ class ParallelContext:
 
         self.tp_and_cp_pg = self.create_new_group(
             [
-                ranks[ep_rank, pp_rank, dp_rank, :, :].reshape(-1)
-                for ep_rank in range(self.expert_parallel_size)
+                ranks[pp_rank, dp_rank, :, :].reshape(-1)
                 for pp_rank in range(self.pipeline_parallel_size)
                 for dp_rank in range(self.data_parallel_size)
             ]
         )
         self.world_rank_matrix: np.ndarray = ranks
+        # TODO: refactor without code duplication
+        self._group_to_ranks = {
+            ParallelMode.TP: tp_ranks,
+            ParallelMode.CP: cp_ranks,
+            ParallelMode.DP: dp_ranks,
+            ParallelMode.PP: pp_ranks,
+            # ParallelMode.EP: ep_ranks,
+        }
 
     def _init_process_group_with_moe(self):
         """
@@ -228,15 +277,15 @@ class ParallelContext:
         self.ep_dp_pg = self.create_new_group(ep_dp_ranks)
         self._group_to_ranks = {
             # NOTE: attention parallelism
-            "tp_ranks": tp_ranks,
-            "cp_ranks": cp_ranks,
-            "pp_ranks": pp_ranks,
-            "dp_ranks": dp_ranks,
+            ParallelMode.TP: tp_ranks,
+            ParallelMode.CP: cp_ranks,
+            ParallelMode.PP: pp_ranks,
+            ParallelMode.DP: dp_ranks,
             # NOTE: expert parallelism
-            "ep_ranks": ep_ranks,
-            "ep_tp_ranks": ep_tp_ranks,
-            "ep_pp_ranks": ep_pp_ranks,
-            "ep_dp_ranks": ep_dp_ranks,
+            ParallelMode.EP: ep_ranks,
+            ParallelMode.EP_TP: ep_tp_ranks,
+            ParallelMode.EP_PP: ep_pp_ranks,
+            ParallelMode.EP_DP: ep_dp_ranks,
         }
 
     def create_new_group(self, all_groups_ranks: np.ndarray) -> dist.ProcessGroup:
@@ -281,7 +330,7 @@ class ParallelContext:
 
     def get_global_rank(
         self,
-        ep_rank: int,
+        # ep_rank: int,
         pp_rank: int,
         dp_rank: int,
         cp_rank: int,
@@ -298,4 +347,5 @@ class ParallelContext:
 
         :return: numpy.int64, The global rank.
         """
-        return self.world_rank_matrix[ep_rank, pp_rank, dp_rank, cp_rank, tp_rank]
+        # return self.world_rank_matrix[ep_rank, pp_rank, dp_rank, cp_rank, tp_rank]
+        return self.world_rank_matrix[pp_rank, dp_rank, cp_rank, tp_rank]

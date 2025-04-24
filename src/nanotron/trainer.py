@@ -171,8 +171,11 @@ class DistributedTrainer:
             tensor_parallel_size=self.config.parallelism.tp,
             pipeline_parallel_size=self.config.parallelism.pp,
             data_parallel_size=self.config.parallelism.dp,
-            expert_parallel_size=self.config.parallelism.expert_parallel_size,
             context_parallel_size=self.config.parallelism.context_parallel_size,
+            expert_parallel_size=self.config.parallelism.expert_parallel_size,
+            expert_tensor_parallel_size=self.config.parallelism.expert_tensor_parallel_size,
+            expert_data_parallel_size=self.config.parallelism.expert_data_parallel_size,
+            enabled_moe=self.config.parallelism.enabled_moe,
         )
 
         self.pre_init()
@@ -260,8 +263,11 @@ class DistributedTrainer:
             )
 
         # Setup tensorboard write and log writers on output rank
+        # self.logger_ranks = self.parallel_context.get_global_rank(
+        #     ep_rank=0, pp_rank=self.unwrapped_model.output_pp_rank, dp_rank=0, tp_rank=0, cp_rank=0
+        # ).flatten()
         self.logger_ranks = self.parallel_context.get_global_rank(
-            ep_rank=0, pp_rank=self.unwrapped_model.output_pp_rank, dp_rank=0, tp_rank=0, cp_rank=0
+            pp_rank=self.unwrapped_model.output_pp_rank, dp_rank=0, tp_rank=0, cp_rank=0
         ).flatten()
         self.loggerwriter = self.setup_log_writers()
 
@@ -1323,7 +1329,7 @@ def mark_tied_parameters(
                 target,
                 (
                     parallel_context.get_global_rank(
-                        ep_rank=dist.get_rank(parallel_context.ep_pg),
+                        # ep_rank=dist.get_rank(parallel_context.ep_pg),
                         pp_rank=get_pp_rank_of(target, module=model),
                         dp_rank=dist.get_rank(parallel_context.dp_pg),
                         cp_rank=dist.get_rank(parallel_context.cp_pg),
@@ -1343,7 +1349,7 @@ def mark_tied_parameters(
     # Sync all parameters that have the same name and that are not sharded across TP and EXP
     assert not isinstance(model, DistributedDataParallel), "model shouldn't be DDP at this point"
     mark_unsharded_params_as_tied_across_tp(model, parallel_context, parallel_config)
-    mark_unsharded_params_as_tied_across_expert(model, parallel_context, parallel_config)
+    # mark_unsharded_params_as_tied_across_expert(model, parallel_context, parallel_config)
 
     create_pg_for_tied_weights(root_module=model, parallel_context=parallel_context)
 
@@ -1403,6 +1409,8 @@ def mark_unsharded_params_as_tied_across_expert(
 
                 if param.is_sharded:
                     sharded_info = param.get_sharded_info()
+
+                    # TODO: double check and remove if necessary
                     if sharded_info.is_expert_sharded(parallel_context):
                         continue
 
