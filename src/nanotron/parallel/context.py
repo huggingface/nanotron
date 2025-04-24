@@ -3,6 +3,7 @@ from typing import Dict, Literal
 
 import numpy as np
 import torch
+from einops import rearrange
 
 import nanotron.distributed as dist
 
@@ -17,15 +18,31 @@ class ParallelContext:
         data_parallel_size: int,
         context_parallel_size: int = 1,
         expert_parallel_size: int = 1,
+        expert_tensor_parallel_size: int = 1,
+        expert_data_parallel_size: int = 1,
+        enabled_moe: bool = False,
         backend: DistributedBackend = "nccl",
     ):
+        """
+        expert_parallel_size = 1 doesnt mean we dont have moe, it just means we dont have expert parallelism
+        """
         """Initialize parallel context."""
         world_size = int(os.environ["WORLD_SIZE"])
         local_world_size = int(os.environ.get("LOCAL_WORLD_SIZE", "8")) if world_size > 8 else world_size
 
-        assert (
-            tensor_parallel_size * pipeline_parallel_size * context_parallel_size * data_parallel_size
-        ) == world_size, f"TP*CP*DP*PP={tensor_parallel_size}*{pipeline_parallel_size}*{context_parallel_size}*{data_parallel_size}={tensor_parallel_size * pipeline_parallel_size * context_parallel_size * data_parallel_size} != WORLD_SIZE={world_size}"
+        if enabled_moe is False:
+            assert (
+                tensor_parallel_size * pipeline_parallel_size * context_parallel_size * data_parallel_size
+            ) == world_size, f"TP*CP*DP*PP={tensor_parallel_size}*{pipeline_parallel_size}*{context_parallel_size}*{data_parallel_size}={tensor_parallel_size * pipeline_parallel_size * context_parallel_size * data_parallel_size} != WORLD_SIZE={world_size}"
+        else:
+            assert (
+                data_parallel_size * tensor_parallel_size * context_parallel_size * pipeline_parallel_size
+                == world_size
+            ), f"DP*TP*CP*PP={data_parallel_size}*{tensor_parallel_size}*{context_parallel_size}*{pipeline_parallel_size}={data_parallel_size * tensor_parallel_size * context_parallel_size * pipeline_parallel_size} != WORLD_SIZE={world_size}"
+            assert (
+                expert_data_parallel_size * expert_tensor_parallel_size * expert_parallel_size * pipeline_parallel_size
+                == world_size
+            ), f"EP_DP*EP_TP*EP*PP={expert_data_parallel_size}*{expert_tensor_parallel_size}*{expert_parallel_size}*{pipeline_parallel_size}={expert_data_parallel_size * expert_tensor_parallel_size * expert_parallel_size * pipeline_parallel_size} != WORLD_SIZE={world_size}"
 
         if not dist.is_available():
             raise ValueError("torch.distributed is not available as a package, please install it.")
@@ -35,6 +52,9 @@ class ParallelContext:
         self.data_parallel_size = data_parallel_size
         self.context_parallel_size = context_parallel_size
         self.expert_parallel_size = expert_parallel_size
+        self.expert_tensor_parallel_size = expert_tensor_parallel_size
+        self.expert_data_parallel_size = expert_data_parallel_size
+        self.enabled_moe = enabled_moe
         self.world_size = world_size
         self.local_world_size = local_world_size
 
@@ -59,16 +79,28 @@ class ParallelContext:
     def _init_parallel_groups(self):
         """Initialize 3D parallelism's all process groups."""
         dist.barrier()
+
+        self.world_ranks_to_pg = {}
+        self._group_to_ranks = {}
+
+        if self.enabled_moe is False:
+            self._init_process_group_without_moe()
+        else:
+            self._init_process_group_with_moe()
+
+        # TODO: refactor this with expert parallelism
+        self.parallel_order = ["ep", "pp", "dp", "cp", "tp"]
+
+    def _init_process_group_without_moe(self):
         ranks = np.arange(0, self.world_size).reshape(
             (
-                self.expert_parallel_size,
+                self.expert_data_parallel_size,  # NOTE: remove this line and refactor the below lines
                 self.pipeline_parallel_size,
                 self.data_parallel_size,
                 self.context_parallel_size,
                 self.tensor_parallel_size,
             )
         )
-        self.world_ranks_to_pg = {}
         self.local_pg = self.create_new_group(ranks.reshape((-1, self.local_world_size)))
         assert int(os.environ.get("LOCAL_RANK")) == dist.get_rank(self.local_pg), "Local rank mismatch"
 
@@ -77,9 +109,6 @@ class ParallelContext:
         self.cp_pg = self.create_new_group(ranks.transpose((4, 0, 1, 2, 3)).reshape((-1, self.context_parallel_size)))
         self.dp_pg = self.create_new_group(ranks.transpose((3, 4, 0, 1, 2)).reshape((-1, self.data_parallel_size)))
         self.pp_pg = self.create_new_group(ranks.transpose((2, 3, 4, 0, 1)).reshape((-1, self.pipeline_parallel_size)))
-        self.ep_pg = self.create_new_group(
-            ranks.transpose((1, 2, 3, 4, 0)).reshape((-1, self.expert_parallel_size))
-        )  # TODO: ep should be a subset of dp
 
         # model parallel group = combination of tp and pp and exp for a given dp rank
         self.mp_pg = self.create_new_group(
@@ -90,26 +119,125 @@ class ParallelContext:
             ]
         )
 
-        self.tp_and_ep_pg = self.create_new_group(
+        self.tp_and_cp_pg = self.create_new_group(
             [
-                ranks[:, pp_rank, dp_rank, cp_rank, :].reshape(-1)
-                for cp_rank in range(self.context_parallel_size)
+                ranks[ep_rank, pp_rank, dp_rank, :, :].reshape(-1)
+                for ep_rank in range(self.expert_parallel_size)
                 for pp_rank in range(self.pipeline_parallel_size)
                 for dp_rank in range(self.data_parallel_size)
             ]
         )
-
-        # self.tp_and_cp_pg = self.create_new_group(
-        #     [
-        #         ranks[ep_rank, pp_rank, dp_rank, :, :].reshape(-1)
-        #         for ep_rank in range(self.expert_parallel_size)
-        #         for pp_rank in range(self.pipeline_parallel_size)
-        #         for dp_rank in range(self.data_parallel_size)
-        #     ]
-        # )
-
         self.world_rank_matrix: np.ndarray = ranks
-        self.parallel_order = ["ep", "pp", "dp", "cp", "tp"]
+
+    def _init_process_group_with_moe(self):
+        """
+        Decoupled 5D parallelism
+        based on the paper:
+
+        MoE Parallel Folding: Heterogeneous Parallelism
+        Mappings for Efficient Large-Scale MoE Model
+        Training with Megatron Core
+
+        https://www.arxiv.org/abs/2504.14960
+        """
+        ranks = np.arange(0, self.world_size)
+
+        # NOTE: attention parallelism
+        attn_ranks = ranks.reshape(
+            self.data_parallel_size, self.pipeline_parallel_size, self.context_parallel_size, self.tensor_parallel_size
+        )
+        tp_ranks = rearrange(
+            attn_ranks,
+            "attn_dp pp cp tp -> (attn_dp pp cp) tp",
+            tp=self.tensor_parallel_size,
+            cp=self.context_parallel_size,
+            pp=self.pipeline_parallel_size,
+            attn_dp=self.data_parallel_size,
+        ).tolist()
+        cp_ranks = rearrange(
+            attn_ranks,
+            "attn_dp pp cp tp -> (attn_dp pp tp) cp",
+            tp=self.tensor_parallel_size,
+            cp=self.context_parallel_size,
+            pp=self.pipeline_parallel_size,
+            attn_dp=self.data_parallel_size,
+        ).tolist()
+        pp_ranks = rearrange(
+            attn_ranks,
+            "attn_dp pp cp tp -> (attn_dp cp tp) pp",
+            tp=self.tensor_parallel_size,
+            cp=self.context_parallel_size,
+            pp=self.pipeline_parallel_size,
+            attn_dp=self.data_parallel_size,
+        ).tolist()
+        dp_ranks = rearrange(
+            attn_ranks,
+            "attn_dp pp cp tp -> (pp cp tp) attn_dp",
+            tp=self.tensor_parallel_size,
+            cp=self.context_parallel_size,
+            pp=self.pipeline_parallel_size,
+            attn_dp=self.data_parallel_size,
+        ).tolist()
+        self.tp_pg = self.create_new_group(tp_ranks)
+        self.cp_pg = self.create_new_group(cp_ranks)
+        self.pp_pg = self.create_new_group(pp_ranks)
+        self.dp_pg = self.create_new_group(dp_ranks)
+
+        # NOTE: expert parallelism
+        moe_ranks = ranks.reshape(
+            self.expert_data_parallel_size,
+            self.pipeline_parallel_size,
+            self.expert_parallel_size,
+            self.expert_tensor_parallel_size,
+        )
+        ep_ranks = rearrange(
+            moe_ranks,
+            "moe_dp pp ep tp -> (moe_dp pp tp) ep",
+            tp=self.expert_tensor_parallel_size,
+            ep=self.expert_parallel_size,
+            pp=self.pipeline_parallel_size,
+            moe_dp=self.expert_data_parallel_size,
+        )
+        ep_tp_ranks = rearrange(
+            moe_ranks,
+            "moe_dp pp ep tp -> (moe_dp pp ep) tp",
+            tp=self.expert_tensor_parallel_size,
+            ep=self.expert_parallel_size,
+            pp=self.pipeline_parallel_size,
+            moe_dp=self.expert_data_parallel_size,
+        )
+        ep_pp_ranks = rearrange(
+            moe_ranks,
+            "moe_dp pp ep tp -> (moe_dp ep tp) pp",
+            tp=self.expert_tensor_parallel_size,
+            ep=self.expert_parallel_size,
+            pp=self.pipeline_parallel_size,
+            moe_dp=self.expert_data_parallel_size,
+        )
+        ep_dp_ranks = rearrange(
+            moe_ranks,
+            "moe_dp pp ep tp -> (pp ep tp) moe_dp",
+            tp=self.expert_tensor_parallel_size,
+            ep=self.expert_parallel_size,
+            pp=self.pipeline_parallel_size,
+            moe_dp=self.expert_data_parallel_size,
+        )
+        self.ep_pg = self.create_new_group(ep_ranks)
+        self.ep_tp_pg = self.create_new_group(ep_tp_ranks)
+        self.ep_pp_pg = self.create_new_group(ep_pp_ranks)
+        self.ep_dp_pg = self.create_new_group(ep_dp_ranks)
+        self._group_to_ranks = {
+            # NOTE: attention parallelism
+            "tp_ranks": tp_ranks,
+            "cp_ranks": cp_ranks,
+            "pp_ranks": pp_ranks,
+            "dp_ranks": dp_ranks,
+            # NOTE: expert parallelism
+            "ep_ranks": ep_ranks,
+            "ep_tp_ranks": ep_tp_ranks,
+            "ep_pp_ranks": ep_pp_ranks,
+            "ep_dp_ranks": ep_dp_ranks,
+        }
 
     def create_new_group(self, all_groups_ranks: np.ndarray) -> dist.ProcessGroup:
         dist.barrier()

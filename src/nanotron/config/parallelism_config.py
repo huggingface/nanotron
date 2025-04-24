@@ -19,7 +19,11 @@ class ParallelismArgs:
         dp: Number of DP replicas
         pp: Number of PP stages
         tp: Number of TP replicas
+
         expert_parallel_size: Number of expert parallel replicas (used only for MoEs)
+        expert_tensor_parallel_size: The degree that we shard the experts across GPUs
+        expert_data_parallel_size: The number of expert replicas in data parallel
+
         pp_engine: Pipeline engine to use between "1f1b" and "afab"
         tp_mode: TP mode to use between "all_reduce" and "reduce_scatter": all_reduce is normal, reduce_scatter activate sequence parallelism
         tp_linear_async_communication: Whether to use async communication in TP linear layers
@@ -35,7 +39,11 @@ class ParallelismArgs:
     recompute_layer: bool = False
     tp_recompute_allgather: bool = True
 
+    # NOTE: moe-specific parallelism
     expert_parallel_size: int = 1
+    expert_tensor_parallel_size: int = 1
+    expert_data_parallel_size: int = 1
+
     context_parallel_size: int = 1
 
     def __post_init__(self):
