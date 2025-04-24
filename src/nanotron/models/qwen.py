@@ -362,6 +362,7 @@ class Qwen2DecoderLayer(nn.Module):
         parallel_config: Optional[ParallelismArgs],
         tp_pg: dist.ProcessGroup,
         cp_pg: dist.ProcessGroup,
+        parallel_context: ParallelContext,
         layer_idx: int,
     ) -> None:
         super().__init__()
@@ -387,7 +388,7 @@ class Qwen2DecoderLayer(nn.Module):
             self.mlp = Qwen2MoELayer(
                 config=config,
                 parallel_config=parallel_config,
-                tp_pg=tp_pg,
+                parallel_context=parallel_context,
                 layer_idx=layer_idx,
             )
         else:
@@ -510,6 +511,8 @@ class Qwen2Model(nn.Module):
                         "parallel_config": parallel_config,
                         "tp_pg": parallel_context.tp_pg,
                         "cp_pg": parallel_context.cp_pg,
+                        # TODO: directly pass the ep_pg process group instead of the parallel_context
+                        "parallel_context": parallel_context,
                         "layer_idx": layer_idx,
                     },
                     module_input_keys={"hidden_states", "position_ids", "cu_seqlens"},

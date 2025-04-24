@@ -11,6 +11,8 @@ from nanotron.config import ParallelismArgs
 from nanotron.config.models_config import Qwen2Config
 from nanotron.models.base import ignore_init_on_device_and_dtype
 from nanotron.nn.activations import ACT2FN
+from nanotron.parallel.context import ParallelContext
+from nanotron.parallel.tensor_parallel.distributed_differentiable_primitives import all_to_all
 
 logger = logging.get_logger(__name__)
 
@@ -64,10 +66,13 @@ class Router(nn.Module):
 
 
 class GroupedMLP(nn.Module):
-    def __init__(self, config: Qwen2Config, parallel_config: Optional[ParallelismArgs]):
+    def __init__(self, config: Qwen2Config, parallel_config: Optional[ParallelismArgs], ep_pg: dist.ProcessGroup):
         super().__init__()
 
         num_local_experts = config.moe_config.num_experts // parallel_config.expert_parallel_size
+        self.expert_parallel_size = parallel_config.expert_parallel_size
+        self.num_local_experts = num_local_experts
+        self.ep_pg = ep_pg
         self.merged_gate_up_proj = nn.Parameter(
             torch.randn(num_local_experts, config.hidden_size, 2 * config.moe_config.moe_intermediate_size)
         )
@@ -91,10 +96,15 @@ class GroupedMLP(nn.Module):
         """
         # NOTE: ops.gemm requires "batch_sizes" (aka: num_tokens_per_expert here) to be on cpu
         num_tokens_per_expert = num_tokens_per_expert.to("cpu")
-        merged_states = ops.gmm(hidden_states, self.merged_gate_up_proj, num_tokens_per_expert, trans_b=False)
+
+        ep_rank = dist.get_rank(self.ep_pg)
+        num_local_tokens_per_expert = num_tokens_per_expert.view(self.expert_parallel_size, self.num_local_experts)[
+            ep_rank
+        ]
+        merged_states = ops.gmm(hidden_states, self.merged_gate_up_proj, num_local_tokens_per_expert, trans_b=False)
         gate_states, up_states = torch.split(merged_states, merged_states.shape[-1] // 2, dim=-1)
         hidden_states = self.act(gate_states) * up_states
-        hidden_states = ops.gmm(hidden_states, self.merged_down_proj, num_tokens_per_expert, trans_b=False)
+        hidden_states = ops.gmm(hidden_states, self.merged_down_proj, num_local_tokens_per_expert, trans_b=False)
 
         return {"hidden_states": hidden_states}
 
@@ -106,7 +116,7 @@ class Qwen2MoELayer(nn.Module):
         self,
         config: Qwen2Config,
         parallel_config: Optional[ParallelismArgs],
-        tp_pg: dist.ProcessGroup,
+        parallel_context: ParallelContext,
         layer_idx: int = 0,
     ) -> None:
         super().__init__()
@@ -125,7 +135,7 @@ class Qwen2MoELayer(nn.Module):
         # Get TP mode configuration
 
         # Router for selecting experts
-        self.router = Router(config, parallel_config, tp_pg, layer_idx)
+        self.router = Router(config, parallel_config, parallel_context.tp_pg, layer_idx)
 
         # Enable shared experts if configured
         self.enable_shared_expert = config.moe_config.enable_shared_expert
@@ -135,7 +145,7 @@ class Qwen2MoELayer(nn.Module):
             self.shared_expert = Qwen2MLP(
                 config=config,
                 parallel_config=parallel_config,
-                tp_pg=tp_pg,
+                tp_pg=parallel_context.tp_pg,
                 intermediate_size=config.moe_config.shared_expert_intermediate_size,
             )
             # TODO: duplicte the shared expert gate
@@ -146,9 +156,10 @@ class Qwen2MoELayer(nn.Module):
             )  # TODO: ensure shared_expert_gate is tied across TP
 
         # Create the expert MLPs
-        self.experts = GroupedMLP(config, parallel_config)
+        self.experts = GroupedMLP(config, parallel_config, ep_pg=parallel_context.ep_pg)
         # Whether to recompute MoE layer during backward pass for memory efficiency
         self.recompute_layer = parallel_config.recompute_layer
+        self.ep_pg = parallel_context.ep_pg
 
     def _dispatch_tokens(
         self,
@@ -164,13 +175,52 @@ class Qwen2MoELayer(nn.Module):
         num_tokens_per_expert = torch.bincount(
             routing_indices.flatten(), minlength=self.num_local_experts
         )  # [num_local_experts]
-        dispatched_inputs, inverse_permute_mapping = ops.permute(hidden_states, routing_indices)
-        return dispatched_inputs, inverse_permute_mapping, num_tokens_per_expert
+
+        hidden_states, inverse_permute_mapping = ops.permute(hidden_states, routing_indices)
+
+        # NOTE: this part is all-to-all token dispatching
+        if self.expert_parallel_size > 1:
+            assert 1 == 1
+            # NOTE: input_size_splits has a shape = [expert_parallel_size]
+            # where each value represent the number of tokens that we send from this device
+            # to [i]th device in the input_size_splits
+            # NOTE: Reshape num_local_tokens_per_expert to [ep_size, num_local_experts]
+            # TODO: .view or .reshape? check which one is faster
+            assert sum(num_tokens_per_expert) == hidden_states.shape[0]
+            num_tokens_per_expert_device = num_tokens_per_expert.view(
+                self.expert_parallel_size, self.num_local_experts
+            )
+            # NOTE: we can compute how many tokens this divide to send to [i]th device locally
+            # TODO: double check cpu-gpu sync
+            input_split_sizes = num_tokens_per_expert_device.sum(dim=1)
+
+            # list_num_tokens_per_expert_device = [torch.empty_like(num_tokens_per_expert_device) for _ in range(self.expert_parallel_size)]
+            # dist.all_gather(list_num_tokens_per_expert_device, num_tokens_per_expert_device, group=self.ep_pg)
+
+            list_input_split_sizes = [torch.empty_like(input_split_sizes) for _ in range(self.expert_parallel_size)]
+            dist.all_gather(list_input_split_sizes, input_split_sizes, group=self.ep_pg)
+
+            # NOTE: we can compute how many tokens this divide to receive from [i]th device globally
+            # NOTE: create a tensor corresponding to dist.get_rank(self.ep_pg)
+            # TODO: double check cpu-gpu sync
+            output_split_sizes = [xs[dist.get_rank(self.ep_pg)].item() for xs in list_input_split_sizes]
+            input_split_sizes = input_split_sizes.tolist()
+        else:
+            input_split_sizes, output_split_sizes = None, None
+
+        global_hidden_states = all_to_all(
+            hidden_states, output_split_sizes=output_split_sizes, input_split_sizes=input_split_sizes, group=self.ep_pg
+        )
+
+        # NOTE: this part is reordering for the grouped_gemm
+        # dispatched_inputs, inverse_permute_mapping = ops.permute(global_hidden_states, routing_indices)
+        return global_hidden_states, inverse_permute_mapping, num_tokens_per_expert
 
     def _combine_expert_outputs(self, expert_outputs, inverse_mapping, routing_weights):
         """
         Combines outputs from different experts back to the original tensor layout.
         """
+        # NOTE: this part is un-reordering for the grouped_gemm
         hidden_states = ops.unpermute(expert_outputs, inverse_mapping, routing_weights)
         return hidden_states
 

@@ -129,7 +129,7 @@ class DifferentiableAllToAll(torch.autograd.Function):
     """All to all in a differentiable fashion"""
 
     @staticmethod
-    def forward(ctx, input, output_split_sizes, input_split_sizes, group: Optional[ProcessGroup] = None):
+    def forward(ctx, input, output_split_sizes, input_split_sizes, group: Optional[ProcessGroup]):
         ctx.group = group
         ctx.output_split_sizes = output_split_sizes
         ctx.input_split_sizes = input_split_sizes

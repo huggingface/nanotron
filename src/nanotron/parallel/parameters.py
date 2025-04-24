@@ -85,8 +85,8 @@ class ShardedInfo:
     def is_tp_sharded(self, parallel_context) -> bool:
         return set(dist.get_global_ranks(parallel_context.tp_pg)).issubset(set(self.global_ranks))
 
-    # def is_expert_sharded(self, parallel_context) -> bool:
-    #     return set(dist.get_global_ranks(parallel_context.ep_pg)).issubset(set(self.global_ranks))
+    def is_expert_sharded(self, parallel_context) -> bool:
+        return set(dist.get_global_ranks(parallel_context.ep_pg)).issubset(set(self.global_ranks))
 
     def is_dp_sharded(self, parallel_context):
         return set(dist.get_global_ranks(parallel_context.dp_pg)).issubset(set(self.global_ranks))

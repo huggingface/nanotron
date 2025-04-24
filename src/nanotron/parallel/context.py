@@ -287,6 +287,7 @@ class ParallelContext:
             ParallelMode.EP_PP: ep_pp_ranks,
             ParallelMode.EP_DP: ep_dp_ranks,
         }
+        self.world_rank_matrix = attn_ranks
 
     def create_new_group(self, all_groups_ranks: np.ndarray) -> dist.ProcessGroup:
         dist.barrier()
