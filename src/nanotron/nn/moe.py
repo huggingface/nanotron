@@ -214,14 +214,30 @@ class Qwen2MoELayer(nn.Module):
 
         # NOTE: this part is reordering for the grouped_gemm
         # dispatched_inputs, inverse_permute_mapping = ops.permute(global_hidden_states, routing_indices)
-        return global_hidden_states, inverse_permute_mapping, num_tokens_per_expert
+        return (
+            global_hidden_states,
+            inverse_permute_mapping,
+            num_tokens_per_expert,
+            input_split_sizes,
+            output_split_sizes,
+        )
 
-    def _combine_expert_outputs(self, expert_outputs, inverse_mapping, routing_weights):
+    def _combine_expert_outputs(
+        self, expert_outputs, inverse_mapping, routing_weights, input_split_sizes, output_split_sizes
+    ):
         """
         Combines outputs from different experts back to the original tensor layout.
         """
+        expert_outputs = all_to_all(
+            expert_outputs,
+            output_split_sizes=input_split_sizes,
+            input_split_sizes=output_split_sizes,
+            group=self.ep_pg,
+        )
+
         # NOTE: this part is un-reordering for the grouped_gemm
         hidden_states = ops.unpermute(expert_outputs, inverse_mapping, routing_weights)
+
         return hidden_states
 
     def _core_forward(self, hidden_states):
@@ -230,14 +246,22 @@ class Qwen2MoELayer(nn.Module):
         routing_weights, routing_indices = self.router(hidden_states)  # [num_tokens, num_experts_per_token]
 
         # Dispatch tokens to experts
-        dispatched_inputs, inverse_permute_mapping, num_tokens_per_expert = self._dispatch_tokens(
-            hidden_states, routing_indices
-        )
+        (
+            dispatched_inputs,
+            inverse_permute_mapping,
+            num_tokens_per_expert,
+            input_split_sizes,
+            output_split_sizes,
+        ) = self._dispatch_tokens(hidden_states, routing_indices)
 
         expert_outputs = self.experts(dispatched_inputs, num_tokens_per_expert)
 
         output = self._combine_expert_outputs(
-            expert_outputs["hidden_states"], inverse_permute_mapping, routing_weights
+            expert_outputs["hidden_states"],
+            inverse_permute_mapping,
+            routing_weights,
+            input_split_sizes=input_split_sizes,
+            output_split_sizes=output_split_sizes,
         )
 
         # Add shared expert contribution if enabled
