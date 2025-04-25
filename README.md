@@ -32,7 +32,7 @@ Nanotron is a library for pretraining transformer models. It provides a simple a
 - **Performance**: Optimized for speed and scalability, Nanotron uses the latest techniques to train models faster and more efficiently.
 
 📚 **Check out our [Ultrascale Playbook](https://huggingface.co/spaces/nanotron/ultrascale-playbook)** - A comprehensive guide to efficiently scale LLM training with Nanotron!
-📝 **AI generated docs thanks to [DeepWiki](https://deepwiki.com/huggingface/nanotron/7.2-s3-integration)**
+📝 **AI generated docs thanks to [DeepWiki](https://deepwiki.com/huggingface/nanotron)**
 
 ## Installation
 
