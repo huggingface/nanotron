@@ -134,6 +134,7 @@ class ParallelContext:
         self.cp_pg = self.create_new_group(cp_ranks)
         self.dp_pg = self.create_new_group(dp_ranks)
         self.pp_pg = self.create_new_group(pp_ranks)
+        self.ep_pg = self.tp_pg
         # self.ep_pg = self.create_new_group(ep_ranks)  # TODO: ep should be a subset of dp
 
         # model parallel group = combination of tp and pp and exp for a given dp rank

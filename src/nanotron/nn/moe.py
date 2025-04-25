@@ -160,6 +160,13 @@ class Qwen2MoELayer(nn.Module):
             )  # TODO: ensure shared_expert_gate is tied across TP
 
         # Create the expert MLPs
+        # TODO: merge the ep process group to non-ep in parallel_context initialization
+        # this is hacky
+        # if not hasattr(parallel_context, "ep_pg"):
+        #     ep_pg = parallel_context.tp_pg
+        # else:
+        #     ep_pg = parallel_context.ep_pg
+
         self.experts = GroupedMLP(config, parallel_config, ep_pg=parallel_context.ep_pg)
         # Whether to recompute MoE layer during backward pass for memory efficiency
         self.recompute_layer = parallel_config.recompute_layer
