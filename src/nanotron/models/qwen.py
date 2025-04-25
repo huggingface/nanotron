@@ -380,6 +380,7 @@ class Qwen2DecoderLayer(nn.Module):
             layer_idx=layer_idx,
         )
         self.post_attention_layernorm = norm_class(config.hidden_size, eps=config.rms_norm_eps)
+        self.layer_idx = layer_idx
 
         # Use MoE layer if this layer is in the MoE layers list
         if config.moe_config and layer_idx in config.moe_config.layers:
@@ -416,7 +417,10 @@ class Qwen2DecoderLayer(nn.Module):
 
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
+        # dist.barrier()
         hidden_states = self.mlp(hidden_states=hidden_states)["hidden_states"]
+        # dist.barrier()
+        # log_rank(f"[qwen2_decoder_layer.{self.layer_idx}.mlp.shape={hidden_states.shape}]", logger=logger, level=logging.INFO)
         hidden_states = hidden_states + residual
 
         return hidden_states, position_ids, cu_seqlens

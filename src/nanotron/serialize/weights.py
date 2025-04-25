@@ -261,7 +261,22 @@ def load_weights(
             if path.exists():
                 with safe_open(path, framework="pt", device=str(param.device)) as fi:
                     # TODO @thomasw21: Choose only a slice if we switch the TP topology
-                    param_or_buffer[:] = fi.get_tensor("data")
+
+                    # NOTE: support expert sharding
+                    if any(x for x in ["experts.merged_gate_up_proj", "experts.merged_down_proj"] if x in name):
+                        ep_rank = dist.get_rank(parallel_context.ep_pg)
+                        _data = fi.get_tensor("data")
+                        _num_experts = _data.shape[0]
+                        _num_local_experts = _num_experts // parallel_context.ep_pg.size()
+                        _start_idx = ep_rank * _num_local_experts
+                        _end_idx = _start_idx + _num_local_experts
+                        param_or_buffer[:] = _data[_start_idx:_end_idx, :, :]
+                    else:
+                        # try:
+                        #     param_or_buffer[:] = fi.get_tensor("data")
+                        # except:
+                        #     assert 1 == 1
+                        param_or_buffer[:] = fi.get_tensor("data")
 
             elif not path.parent.exists():
                 raise ValueError(

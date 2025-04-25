@@ -101,6 +101,10 @@ class GroupedMLP(nn.Module):
         num_local_tokens_per_expert = num_tokens_per_expert.view(self.expert_parallel_size, self.num_local_experts)[
             ep_rank
         ]
+        if torch.count_nonzero(num_local_tokens_per_expert) == 0:
+            # NOTE: this divide don't receive any tokens
+            return {"hidden_states": hidden_states}
+
         merged_states = ops.gmm(hidden_states, self.merged_gate_up_proj, num_local_tokens_per_expert, trans_b=False)
         gate_states, up_states = torch.split(merged_states, merged_states.shape[-1] // 2, dim=-1)
         hidden_states = self.act(gate_states) * up_states
@@ -173,11 +177,12 @@ class Qwen2MoELayer(nn.Module):
         """
         # NOTE: start from expert 0 to expert n
         num_tokens_per_expert = torch.bincount(
-            routing_indices.flatten(), minlength=self.num_local_experts
+            routing_indices.flatten(), minlength=self.num_experts
         )  # [num_local_experts]
 
         hidden_states, inverse_permute_mapping = ops.permute(hidden_states, routing_indices)
 
+        # log_rank(f"[Qwen2MoELayer.forward.ep_pg.before_all_gather]", logger=logger, level=logging.INFO)
         # NOTE: this part is all-to-all token dispatching
         if self.expert_parallel_size > 1:
             assert 1 == 1
@@ -187,12 +192,16 @@ class Qwen2MoELayer(nn.Module):
             # NOTE: Reshape num_local_tokens_per_expert to [ep_size, num_local_experts]
             # TODO: .view or .reshape? check which one is faster
             assert sum(num_tokens_per_expert) == hidden_states.shape[0]
+            if num_tokens_per_expert.numel() != self.expert_parallel_size * self.num_local_experts:
+                assert 1 == 1
+
             num_tokens_per_expert_device = num_tokens_per_expert.view(
                 self.expert_parallel_size, self.num_local_experts
             )
             # NOTE: we can compute how many tokens this divide to send to [i]th device locally
             # TODO: double check cpu-gpu sync
             input_split_sizes = num_tokens_per_expert_device.sum(dim=1)
+            # log_rank(f"[Qwen2MoELayer.forward.ep_pg.before_all_gather.input_split_sizes={input_split_sizes}]", logger=logger, level=logging.INFO)
 
             # list_num_tokens_per_expert_device = [torch.empty_like(num_tokens_per_expert_device) for _ in range(self.expert_parallel_size)]
             # dist.all_gather(list_num_tokens_per_expert_device, num_tokens_per_expert_device, group=self.ep_pg)
@@ -207,10 +216,13 @@ class Qwen2MoELayer(nn.Module):
             input_split_sizes = input_split_sizes.tolist()
         else:
             input_split_sizes, output_split_sizes = None, None
+        # log_rank(f"[Qwen2MoELayer.forward.ep_pg.after_all_gather]", logger=logger, level=logging.INFO)
 
+        # log_rank(f"[Qwen2MoELayer.forward.before_all_to_all]", logger=logger, level=logging.INFO)
         global_hidden_states = all_to_all(
             hidden_states, output_split_sizes=output_split_sizes, input_split_sizes=input_split_sizes, group=self.ep_pg
         )
+        # log_rank(f"[Qwen2MoELayer.forward.after_all_to_all]", logger=logger, level=logging.INFO)
 
         # NOTE: this part is reordering for the grouped_gemm
         # dispatched_inputs, inverse_permute_mapping = ops.permute(global_hidden_states, routing_indices)
@@ -254,8 +266,11 @@ class Qwen2MoELayer(nn.Module):
             output_split_sizes,
         ) = self._dispatch_tokens(hidden_states, routing_indices)
 
+        # log_rank(f"[Qwen2MoELayer.forward.before_experts]", logger=logger, level=logging.INFO)
         expert_outputs = self.experts(dispatched_inputs, num_tokens_per_expert)
+        # log_rank(f"[Qwen2MoELayer.forward.after_experts]", logger=logger, level=logging.INFO)
 
+        # log_rank(f"[Qwen2MoELayer.forward.before_combine_expert_outputs]", logger=logger, level=logging.INFO)
         output = self._combine_expert_outputs(
             expert_outputs["hidden_states"],
             inverse_permute_mapping,
@@ -263,7 +278,7 @@ class Qwen2MoELayer(nn.Module):
             input_split_sizes=input_split_sizes,
             output_split_sizes=output_split_sizes,
         )
-
+        # log_rank(f"[Qwen2MoELayer.forward.after_combine_expert_outputs]", logger=logger, level=logging.INFO)
         # Add shared expert contribution if enabled
         if self.enable_shared_expert:
             shared_expert_output = self.shared_expert(hidden_states=hidden_states)["hidden_states"]
