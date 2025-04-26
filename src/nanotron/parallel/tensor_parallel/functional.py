@@ -461,6 +461,63 @@ class _ColumnLinearAsyncCommunication(torch.autograd.Function):
             raise ValueError(f"Got unexpected mode: {tp_mode}.")
 
 
+class _DominoColumnLinearAsyncCommunication(torch.autograd.Function):
+    """Adapted from https://github.com/NVIDIA/Megatron-LM/blob/e6d7e09845590d0a36bc7f29eb28db974fb8da4e/megatron/core/tensor_parallel/layers.py#L215"""
+
+    @staticmethod
+    @assert_cuda_max_connections_set_to_1
+    def forward(ctx, inp, weight, bias, group, tp_mode):
+        ctx.use_bias = bias is not None
+        ctx.tp_mode = tp_mode
+        ctx.group = group
+        ctx.tensor_shape =inp.size()
+        ctx.save_for_backward(inp, weight)
+        return F.linear(inp, weight, bias)
+
+                
+
+    @staticmethod
+    @assert_cuda_max_connections_set_to_1
+    def backward(ctx, grad_output):
+        total_tensor, weight = ctx.saved_tensors
+        group = ctx.group
+        use_bias = ctx.use_bias
+        tp_mode = ctx.tp_mode
+
+
+        grad_tensor = grad_output.matmul(weight)
+
+        handle = torch.distributed.all_reduce(grad_tensor, group=group, async_op=True)
+
+        # Doing gather + slicing during the NeMo forward pass can make this tensor
+        # not be contiguous. PyTorch only checks if the tensor is contiguous, and only
+        # clones it if it's not contiguous:
+        # https://github.com/pytorch/pytorch/blob/c47cf9bc7f9e02f649ab4ed53fe4d35732c92ab6/torch/_refs/__init__.py#L2761
+        grad_output = grad_output.contiguous()
+        # Convert the tensor shapes to 2D for execution compatibility
+        grad_output_first_dims, grad_output_last_dim = grad_output.shape[:-1], grad_output.shape[-1]
+        total_tensor_first_dims, total_tensor_last_dim = total_tensor.shape[:-1], total_tensor.shape[-1]
+        grad_output = grad_output.view(math.prod(grad_output_first_dims), grad_output_last_dim)
+        total_tensor = total_tensor.view(math.prod(total_tensor_first_dims), total_tensor_last_dim)
+
+        grad_bias = grad_output.sum(dim=0) if use_bias else None
+
+        grad_weight = grad_output.t().matmul(total_tensor)
+
+        handle.wait()
+
+        return grad_tensor, grad_weight, grad_bias, None, None, None
+
+
+
+
+
+
+
+
+
+
+
 class _ColumnLinearNoAsyncCommunicationReduceScatterMode(torch.autograd.Function):
     """
     Column linear with memory_buffer for the allgather, context parallel

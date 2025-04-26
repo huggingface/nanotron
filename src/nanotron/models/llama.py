@@ -43,6 +43,8 @@ from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelEmbedding,
     TensorParallelLinearMode,
     TensorParallelRowLinear,
+    RowLinearNoComm,
+    DominoColumnLinear,
 )
 from nanotron.random import RandomStates
 from nanotron.scaling.parametrization import SpectralMupParametrizator, StandardParametrizator
@@ -50,6 +52,8 @@ from nanotron.utils import checkpoint_method
 
 logger = logging.get_logger(__name__)
 
+
+USE_DOMINO = True
 
 class RotaryEmbedding(nn.Module):
     def __init__(self, dim: int, end: int, theta: float = 10000.0):
@@ -224,17 +228,33 @@ class MLP(nn.Module):
             config.intermediate_size,  # shape of gate_linear
             config.intermediate_size,  # shape of up_linear
         )
-        self.gate_up_proj = TensorParallelColumnLinear(
-            config.hidden_size,
-            2 * config.intermediate_size,
-            pg=tp_pg,
-            mode=tp_mode,
-            bias=False,
-            async_communication=tp_linear_async_communication,
-            contiguous_chunks=gate_up_contiguous_chunks,
-            tp_recompute_allgather=parallel_config.tp_recompute_allgather,
-        )
-        self.down_proj = TensorParallelRowLinear(
+
+        if USE_DOMINO:
+            self.gate_up_proj = DominoColumnLinear(
+                config.hidden_size,
+                2 * config.intermediate_size,
+                pg=tp_pg,
+                mode=tp_mode,
+                bias=False,
+                async_communication=tp_linear_async_communication,
+                contiguous_chunks=gate_up_contiguous_chunks,
+                tp_recompute_allgather=parallel_config.tp_recompute_allgather,
+            )
+        else:
+            self.gate_up_proj = TensorParallelColumnLinear(
+                config.hidden_size,
+                2 * config.intermediate_size,
+                pg=tp_pg,
+                mode=tp_mode,
+                bias=False,
+                async_communication=tp_linear_async_communication,
+                contiguous_chunks=gate_up_contiguous_chunks,
+                tp_recompute_allgather=parallel_config.tp_recompute_allgather,
+            )
+
+        
+        if USE_DOMINO:
+            self.down_proj = RowLinearNoComm(
             config.intermediate_size,
             config.hidden_size,
             pg=tp_pg,
@@ -242,6 +262,15 @@ class MLP(nn.Module):
             bias=False,
             async_communication=tp_linear_async_communication and tp_mode is TensorParallelLinearMode.REDUCE_SCATTER,
         )
+        else:    
+            self.down_proj = TensorParallelRowLinear(
+                config.intermediate_size,
+                config.hidden_size,
+                pg=tp_pg,
+                mode=tp_mode,
+                bias=False,
+                async_communication=tp_linear_async_communication and tp_mode is TensorParallelLinearMode.REDUCE_SCATTER,
+            )
         self.split_silu_mul = GLUActivation(config.hidden_act)
 
     def forward(self, hidden_states):  # [seq_length, batch_size, hidden_dim]
@@ -385,16 +414,30 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             config.num_key_value_heads * self.d_qk,  # shape of k
             config.num_key_value_heads * self.d_qk,  # shape of v
         )
-        self.qkv_proj = TensorParallelColumnLinear(
-            self.d_model,
-            config.num_attention_heads * self.d_qk + 2 * config.num_key_value_heads * self.d_qk,
-            pg=tp_pg,
-            mode=tp_mode,
-            bias=False,
-            async_communication=tp_linear_async_communication,
-            contiguous_chunks=qkv_contiguous_chunks,
-            tp_recompute_allgather=parallel_config.tp_recompute_allgather,
-        )
+
+        if USE_DOMINO:
+            self.qkv_proj = DominoColumnLinear(
+                self.d_model,
+                config.num_attention_heads * self.d_qk + 2 * config.num_key_value_heads * self.d_qk,
+                pg=tp_pg,
+                mode=tp_mode,
+                bias=False,
+                async_communication=tp_linear_async_communication,
+                contiguous_chunks=qkv_contiguous_chunks,
+                tp_recompute_allgather=parallel_config.tp_recompute_allgather,
+            )
+        else:
+            self.qkv_proj = TensorParallelColumnLinear(
+                self.d_model,
+                config.num_attention_heads * self.d_qk + 2 * config.num_key_value_heads * self.d_qk,
+                pg=tp_pg,
+                mode=tp_mode,
+                bias=False,
+                async_communication=tp_linear_async_communication,
+                contiguous_chunks=qkv_contiguous_chunks,
+                tp_recompute_allgather=parallel_config.tp_recompute_allgather,
+            )
+
         # TODO(kunhao): We want to have only one version per device and not one version per layer.
         if config.rope_interleaved:
             self.rotary_embedding = RotaryEmbedding(
@@ -415,14 +458,25 @@ class CausalSelfAttention(nn.Module, AttachableStore):
             dim=self.d_qk, base=config.rope_theta, interleaved=config.rope_interleaved
         )
 
-        self.o_proj = TensorParallelRowLinear(
-            config.num_attention_heads * self.d_qk,
-            self.d_model,
-            pg=tp_pg,
-            mode=tp_mode,
-            bias=False,
-            async_communication=tp_linear_async_communication,
-        )
+       
+        if USE_DOMINO:
+            self.o_proj = RowLinearNoComm(
+                config.num_attention_heads * self.d_qk,
+                self.d_model,
+                pg=tp_pg,
+                mode=tp_mode,
+                bias=False,
+                async_communication=tp_linear_async_communication,
+            )
+        else:
+            self.o_proj = TensorParallelRowLinear(
+                config.num_attention_heads * self.d_qk,
+                self.d_model,
+                pg=tp_pg,
+                mode=tp_mode,
+                bias=False,
+                async_communication=tp_linear_async_communication,
+            )
 
         self.attention = CoreAttention(
             config,
@@ -833,6 +887,9 @@ class LlamaModel(nn.Module):
             parallel_config.tp_linear_async_communication if parallel_config is not None else False
         )
 
+        if USE_DOMINO:
+            assert self.tp_mode == TensorParallelLinearMode.ALL_REDUCE, "Only support AllReduce mode now!"
+
         self.token_position_embeddings = PipelineBlock(
             p2p=self.p2p,
             module_builder=Embedding,
@@ -909,7 +966,83 @@ class LlamaModel(nn.Module):
         input_ids: Union[torch.Tensor, TensorPointer],  # [batch_size, seq_length]
         input_mask: Union[torch.Tensor, TensorPointer],  # [batch_size, seq_length]
     ):
-        return self.forward_with_hidden_states(input_ids=input_ids, input_mask=input_mask)[0]
+        if USE_DOMINO:
+            return self.domino_forward_hidden_states(input_ids=input_ids, input_mask=input_mask)[0]
+        else:
+            return self.forward_with_hidden_states(input_ids=input_ids, input_mask=input_mask)[0]
+    
+    def domino_forward_hidden_states(
+        self,
+        input_ids: Union[torch.Tensor, TensorPointer],  # [batch_size, seq_length]
+        input_mask: Union[torch.Tensor, TensorPointer],  # [batch_size, seq_length]
+    ):
+        output = self.token_position_embeddings(input_ids=input_ids, input_mask=input_mask)
+
+
+        hidden_states = output["input_embeds"]
+
+        assert hidden_states.dim() == 3
+        seq_mask0, seq_mask1 = torch.chunk(input_mask, chunks=2, dim=0)
+        hidden_states0, hidden_states1 = torch.chunk(hidden_states, chunks=2, dim=1)
+        
+
+        fwd_handle0, fwd_handle1 = None, None
+        residual0, residual1 = None, None
+
+        for index, encoder_block in enumerate(self.decoder):
+            if index > 0:
+                fwd_handle0.wait()
+                hidden_states0 = hidden_states0 + residual0
+
+            residual0 = hidden_states0
+            hidden_states0 = encoder_block.pp_block.input_layernorm(hidden_states0)
+            output0 = encoder_block.pp_block.attn(hidden_states=hidden_states0, sequence_mask=seq_mask0)
+            hidden_states0 = output0["hidden_states"]
+            fwd_handle0 = torch.distributed.all_reduce(hidden_states0, group=self.parallel_context.tp_pg, async_op=True)
+            
+            if index > 0:
+                fwd_handle1.wait()
+                hidden_states1 = hidden_states1 + residual1
+
+            residual1 = hidden_states1
+            hidden_states1 = encoder_block.pp_block.input_layernorm(hidden_states1)
+            output1 = encoder_block.pp_block.attn(hidden_states=hidden_states1, sequence_mask=seq_mask1)
+            hidden_states1 = output1["hidden_states"]
+            fwd_handle1 = torch.distributed.all_reduce(hidden_states1, group=self.parallel_context.tp_pg, async_op=True)
+            
+
+            fwd_handle0.wait()
+            hidden_states0 = hidden_states0 + residual0
+            residual0 = hidden_states0
+            hidden_states0 = encoder_block.pp_block.post_attention_layernorm(hidden_states0)
+            hidden_states0 = encoder_block.pp_block.mlp(hidden_states=hidden_states0)["hidden_states"]
+            fwd_handle0 = torch.distributed.all_reduce(hidden_states0, group=self.parallel_context.tp_pg, async_op=True)
+            
+
+            fwd_handle1.wait()
+            hidden_states1 = hidden_states1 + residual1
+            residual1 = hidden_states1
+            hidden_states1 = encoder_block.pp_block.post_attention_layernorm(hidden_states1)
+            hidden_states1 = encoder_block.pp_block.mlp(hidden_states=hidden_states1)["hidden_states"]
+            fwd_handle1 = torch.distributed.all_reduce(hidden_states1, group=self.parallel_context.tp_pg, async_op=True)
+
+        fwd_handle0.wait()
+        hidden_states0 = hidden_states0 + residual0
+        
+        fwd_handle1.wait()
+        hidden_states1 = hidden_states1 + residual1
+
+        torch.cuda.nvtx.range_pop()
+
+        hidden_states = torch.cat([hidden_states0, hidden_states1], dim=1)
+
+        hidden_states = self.final_layer_norm(input=hidden_states)["hidden_states"]
+
+        sharded_logits = self.lm_head(x=hidden_states)["logits"]
+
+        fp32_sharded_logits = self.cast_to_fp32(x=sharded_logits)["output"]
+
+        return fp32_sharded_logits, hidden_states
 
     def forward_with_hidden_states(
         self,
