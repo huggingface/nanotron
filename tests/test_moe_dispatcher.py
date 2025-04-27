@@ -60,10 +60,16 @@ def test_all_to_all_dispatcher():
 
     inputs = torch.arange(BS * SEQ_LEN, dtype=torch.bfloat16).unsqueeze(-1).expand(-1, HIDDEN_SIZE)
     routing_indices = torch.tensor([[2], [3], [1], [3], [1], [0], [2], [3]], dtype=torch.int32)
+
+    # expected_outputs = [
+    #     torch.tensor([2, 5, 4], dtype=torch.bfloat16).unsqueeze(-1).expand(-1, HIDDEN_SIZE),
+    #     torch.tensor([0, 1, 3, 6, 7], dtype=torch.bfloat16).unsqueeze(-1).expand(-1, HIDDEN_SIZE),
+    # ] # all-to-all but without permutation
+
     expected_outputs = [
-        torch.tensor([2, 5, 4], dtype=torch.bfloat16).unsqueeze(-1).expand(-1, HIDDEN_SIZE),
-        torch.tensor([0, 1, 3, 6, 7], dtype=torch.bfloat16).unsqueeze(-1).expand(-1, HIDDEN_SIZE),
-    ]
+        torch.tensor([5, 2, 4], dtype=torch.bfloat16).unsqueeze(-1).expand(-1, HIDDEN_SIZE),
+        torch.tensor([0, 6, 1, 3, 7], dtype=torch.bfloat16).unsqueeze(-1).expand(-1, HIDDEN_SIZE),
+    ]  # all-to-all but without permutation
 
     mp.spawn(
         _test_all_to_all_dispatcher,

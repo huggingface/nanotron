@@ -12,7 +12,10 @@ from nanotron.config.models_config import Qwen2Config
 from nanotron.models.base import ignore_init_on_device_and_dtype
 from nanotron.nn.activations import ACT2FN
 from nanotron.parallel.context import ParallelContext
-from nanotron.parallel.tensor_parallel.distributed_differentiable_primitives import all_to_all
+from nanotron.parallel.tensor_parallel.distributed_differentiable_primitives import (
+    all_to_all,
+    differentiable_all_gather,
+)
 
 logger = logging.get_logger(__name__)
 
@@ -46,10 +49,6 @@ class AllToAllDispatcher(nn.Module):
         In a full implementation, this would handle the actual token routing logic
         including communication between devices.
         """
-        # NOTE: start from expert 0 to expert n
-        num_tokens_per_expert = torch.bincount(
-            routing_indices.flatten(), minlength=self.num_experts
-        ).cuda()  # [num_local_experts]
 
         def calculate_output_split_sizes_for_rank(all_input_split_sizes, rank):
             """
@@ -72,6 +71,63 @@ class AllToAllDispatcher(nn.Module):
                 output_split_sizes.append(size.item())
 
             return output_split_sizes
+
+        def get_dispatched_routing_indices(global_routing_indices, num_ranks, num_experts_per_rank):
+            """
+            Compute the routing indices corresponding to the dispatched hidden states on each rank.
+
+            Args:
+                global_routing_indices (torch.Tensor): The global expert indices for each token, shape [num_tokens, 1].
+                num_ranks (int): Number of devices (ranks).
+                num_experts_per_rank (int): Number of experts per rank.
+
+            Returns:
+                list of torch.Tensor: A list where each element is the routing indices for the dispatched tokens on that rank.
+            """
+            num_tokens = global_routing_indices.size(0)
+            tokens_per_rank = num_tokens // num_ranks
+
+            dispatched_routing = []
+
+            for rank in range(num_ranks):
+                # Determine the experts managed by this rank
+                expert_start = rank * num_experts_per_rank
+                expert_end = expert_start + num_experts_per_rank
+                experts = set(range(expert_start, expert_end))
+
+                rank_tokens = []
+                # Iterate over each sending rank
+                for sending_rank in range(num_ranks):
+                    # Get the tokens belonging to the sending_rank's local data
+                    sending_start = sending_rank * tokens_per_rank
+                    sending_end = sending_start + tokens_per_rank
+                    sending_tokens = list(range(sending_start, sending_end))
+
+                    # Filter tokens that are routed to current rank's experts
+                    filtered = []
+                    for token_idx in sending_tokens:
+                        expert_idx = global_routing_indices[token_idx].item()
+                        if expert_idx in experts:
+                            filtered.append(token_idx)
+
+                    # Sort the filtered tokens by their expert index
+                    filtered.sort(key=lambda x: global_routing_indices[x].item())
+
+                    # Collect these tokens' global routing indices
+                    rank_tokens.extend(filtered)
+
+                # Get the routing indices for these tokens
+                routing_indices = [global_routing_indices[token_idx].item() for token_idx in rank_tokens]
+                dispatched_routing.append(torch.tensor(routing_indices, device=global_routing_indices.device))
+
+            return dispatched_routing
+
+        # NOTE: start from expert 0 to expert n
+        num_tokens_per_expert = torch.bincount(
+            routing_indices.flatten(), minlength=self.num_experts
+        ).cuda()  # [num_local_experts]
+
+        global_routing_indices = differentiable_all_gather(routing_indices, group=self.ep_pg)
 
         # log_rank(f"[Qwen2MoELayer.forward.ep_pg.before_all_gather]", logger=logger, level=logging.INFO)
         # NOTE: this part is all-to-all token dispatching
@@ -129,15 +185,15 @@ class AllToAllDispatcher(nn.Module):
 
         assert 1 == 1
         # NOTE: sort the hidden_states according to the expert index for all-to-all communication
-        # sorted_hidden_states = hidden_states[torch.argsort(routing_indices.squeeze(-1), stable=True)]
-        permuted_hidden_states, inverse_permute_mapping = ops.permute(hidden_states.to(torch.float32), routing_indices)
-        permuted_hidden_states = permuted_hidden_states.to(hidden_states.dtype)
+        sorted_hidden_states = hidden_states[torch.argsort(routing_indices.squeeze(-1), stable=True)]
+        # permuted_hidden_states, inverse_permute_mapping = ops.permute(hidden_states.to(torch.float32), routing_indices)
+        # permuted_hidden_states = permuted_hidden_states.to(hidden_states.dtype)
 
         # list_hidden_states = [torch.empty_like(sorted_hidden_states) for _ in range(self.expert_parallel_size)]
         # dist.all_gather(list_hidden_states, sorted_hidden_states, group=self.ep_pg)
 
         global_hidden_states = all_to_all(
-            permuted_hidden_states,
+            sorted_hidden_states,
             output_split_sizes=output_split_sizes,
             input_split_sizes=input_split_sizes,
             group=self.ep_pg,
@@ -146,10 +202,34 @@ class AllToAllDispatcher(nn.Module):
         self.output_split_sizes = output_split_sizes
         # log_rank(f"[Qwen2MoELayer.forward.after_all_to_all]", logger=logger, level=logging.INFO)
 
+        # a list of rotuing indices corresponding to the dispatched inputs
+        ep_rank = dist.get_rank(self.ep_pg)
+
+        # local_routing_indices_sorted_by_expert_index = torch.argsort([global_routing_indices].squeeze(-1), stable=True)
+        # # NOTE: only retrieve the routing indices for the local experts
+        # # sum(output_split_sizes)
+        # # local_routing_indices = torch.split(local_routing_indices_sorted_by_expert_index, [sum(x) for x in list_output_split_sizes])[ep_rank]
+        # local_routing_indices = torch.split(global_routing_indices[local_routing_indices_sorted_by_expert_index], [sum(x) for x in list_output_split_sizes])[ep_rank]
+
+        # we shouldn't sort the indices before permutation,
+        # but we keep the same expert value for each dispatched token,
+        # then the permutation function will handle the sorting and replicating for topk
+
+        # assert local_routing_indices.shape[1] == routing_indices.shape[1] # have the same number of experts per token
         assert 1 == 1
 
         # NOTE: this part is reordering for the grouped_gemm
         # dispatched_inputs, inverse_permute_mapping = ops.permute(global_hidden_states, routing_indices)
+        # the local_routing_indices shouldn't be sportee
+        local_routing_indices = get_dispatched_routing_indices(
+            global_routing_indices, self.expert_parallel_size, self.num_local_experts
+        )
+        local_routing_indices = local_routing_indices[ep_rank]
+        dispatched_global_inputs, inverse_permute_mapping = ops.permute(
+            global_hidden_states.to(torch.float32), local_routing_indices
+        )
+        dispatched_global_inputs = dispatched_global_inputs.to(global_hidden_states.dtype)
+
         # return (
         #     global_hidden_states,
         #     inverse_permute_mapping,
@@ -157,7 +237,8 @@ class AllToAllDispatcher(nn.Module):
         #     # input_split_sizes,
         #     # output_split_sizes,
         # )
-        return global_hidden_states
+        # return global_hidden_states, inverse_permute_mapping
+        return dispatched_global_inputs
 
     def unpermute(self, expert_outputs, inverse_mapping, routing_weights):
         """
