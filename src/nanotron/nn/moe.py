@@ -126,9 +126,16 @@ class AllToAllDispatcher(nn.Module):
 
         assert 1 == 1
         # NOTE: sort the hidden_states according to the expert index for all-to-all communication
-        hidden_states = hidden_states[torch.argsort(routing_indices.squeeze(-1))]
+        sorted_hidden_states = hidden_states[torch.argsort(routing_indices.squeeze(-1), stable=True)]
+
+        list_hidden_states = [torch.empty_like(sorted_hidden_states) for _ in range(self.expert_parallel_size)]
+        dist.all_gather(list_hidden_states, sorted_hidden_states, group=self.ep_pg)
+
         global_hidden_states = all_to_all(
-            hidden_states, output_split_sizes=output_split_sizes, input_split_sizes=input_split_sizes, group=self.ep_pg
+            sorted_hidden_states,
+            output_split_sizes=output_split_sizes,
+            input_split_sizes=input_split_sizes,
+            group=self.ep_pg,
         )
         self.input_split_sizes = input_split_sizes
         self.output_split_sizes = output_split_sizes

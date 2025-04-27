@@ -139,7 +139,10 @@ def _test_all_to_all_dispatcher(rank, world_size, port, inputs, routing_indices)
     # (dispatched_inputs,
     #  inverse_permute_mapping,
     # #  num_tokens_per_expert) = dispatcher.permute(inputs, routing_indices)
-    dispatcher.permute(inputs, routing_indices)
+    dispatched_inputs = dispatcher.permute(inputs, routing_indices)
+
+    list_dispatched_inputs = [torch.empty_like(dispatched_inputs) for _ in range(world_size)]
+    dist.all_gather(list_dispatched_inputs, dispatched_inputs, group=ep_pg)
 
     assert 1 == 1
 
