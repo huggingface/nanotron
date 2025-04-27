@@ -73,8 +73,6 @@ class AllToAllDispatcher(nn.Module):
 
             return output_split_sizes
 
-        # hidden_states, inverse_permute_mapping = ops.permute(hidden_states, routing_indices)
-
         # log_rank(f"[Qwen2MoELayer.forward.ep_pg.before_all_gather]", logger=logger, level=logging.INFO)
         # NOTE: this part is all-to-all token dispatching
         if self.expert_parallel_size > 1:
@@ -91,11 +89,16 @@ class AllToAllDispatcher(nn.Module):
             # if num_tokens_per_expert.numel() != self.expert_parallel_size * self.num_local_experts:
             #     assert 1 == 1
 
-            num_tokens_per_expert_device = num_tokens_per_expert.view(
+            # NOTE:
+            num_tokens_per_expert_device = num_tokens_per_expert.reshape(
                 self.expert_parallel_size, self.num_local_experts
             )
             # NOTE: we can compute how many tokens this divide to send to [i]th device locally
             # TODO: double check cpu-gpu sync
+            # try:
+            #     input_split_sizes = num_tokens_per_expert_device.sum(dim=1)
+            # except Exception as e:
+            #     assert 1 == 1
             input_split_sizes = num_tokens_per_expert_device.sum(dim=1)
             # log_rank(f"[Qwen2MoELayer.forward.ep_pg.before_all_gather.input_split_sizes={input_split_sizes}]", logger=logger, level=logging.INFO)
 
@@ -126,13 +129,15 @@ class AllToAllDispatcher(nn.Module):
 
         assert 1 == 1
         # NOTE: sort the hidden_states according to the expert index for all-to-all communication
-        sorted_hidden_states = hidden_states[torch.argsort(routing_indices.squeeze(-1), stable=True)]
+        # sorted_hidden_states = hidden_states[torch.argsort(routing_indices.squeeze(-1), stable=True)]
+        permuted_hidden_states, inverse_permute_mapping = ops.permute(hidden_states.to(torch.float32), routing_indices)
+        permuted_hidden_states = permuted_hidden_states.to(hidden_states.dtype)
 
-        list_hidden_states = [torch.empty_like(sorted_hidden_states) for _ in range(self.expert_parallel_size)]
-        dist.all_gather(list_hidden_states, sorted_hidden_states, group=self.ep_pg)
+        # list_hidden_states = [torch.empty_like(sorted_hidden_states) for _ in range(self.expert_parallel_size)]
+        # dist.all_gather(list_hidden_states, sorted_hidden_states, group=self.ep_pg)
 
         global_hidden_states = all_to_all(
-            sorted_hidden_states,
+            permuted_hidden_states,
             output_split_sizes=output_split_sizes,
             input_split_sizes=input_split_sizes,
             group=self.ep_pg,
