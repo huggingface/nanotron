@@ -278,11 +278,16 @@ class Qwen2Attention(nn.Module):
                 )  # TODO: should we use position_ids here? flash_attn doesn't
             else:
                 # TODO: support seqlen_offsets in case of use_cache
-                qkv = qkv.view(-1, self.local_num_heads + 2 * self.local_num_kv_heads, self.head_dim)
-                self.rotary_emb.varlen_forward(qkv, seqlen_offsets=0, cu_seqlens=cu_seqlens, max_seqlen=seq_length)
-                qkv = qkv.view(-1, (self.local_num_heads + 2 * self.local_num_kv_heads) * self.head_dim)
-                q = qkv[..., : self.local_num_heads * self.head_dim]
-                kv = qkv[..., self.local_num_heads * self.head_dim :]
+                # qkv = qkv.view(-1, self.local_num_heads + 2 * self.local_num_kv_heads, self.head_dim)
+                # self.rotary_emb.varlen_forward(qkv, seqlen_offsets=0, cu_seqlens=cu_seqlens, max_seqlen=seq_length)
+                # qkv = qkv.view(-1, (self.local_num_heads + 2 * self.local_num_kv_heads) * self.head_dim)
+                # q = qkv[..., : self.local_num_heads * self.head_dim]
+                # kv = qkv[..., self.local_num_heads * self.head_dim :]
+                q = q.view(-1, self.local_num_heads, self.head_dim)
+                kv = kv.view(-1, 2, self.local_num_kv_heads, self.head_dim)
+                k = kv[:, 0]
+                self.rotary_emb.varlen_forward(q, seqlen_offsets=0, cu_seqlens=cu_seqlens, max_seqlen=seq_length)
+                self.rotary_emb.varlen_forward(k, seqlen_offsets=0, cu_seqlens=cu_seqlens, max_seqlen=seq_length)
         else:
             log_rank(f"skipping rotary for layer {self.layer_idx + 1}", logger=logger, level=logging.DEBUG, rank=0)
         q = q.view(-1, self.local_num_heads, self.head_dim)
