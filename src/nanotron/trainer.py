@@ -95,6 +95,7 @@ from nanotron.scaling.parametrization import ParametrizationMethod
 from nanotron.serialize import (
     load_lr_scheduler,
     load_meta,
+    load_random_states,
     load_weights,
     parse_ckpt_path,
     save,
@@ -194,6 +195,11 @@ class DistributedTrainer:
         self.random_states = init_random_states(
             parallel_config=self.config.parallelism, tp_pg=self.parallel_context.tp_pg
         )
+        if self.init_checkpoint_path is not None:
+            self.random_states = load_random_states(
+                parallel_context=self.parallel_context,
+                root_folder=self.init_checkpoint_path,
+            )
         self.model = self.init_model()  # Defines self.model
         self.unwrapped_model: NanotronModel = (
             self.model.module if isinstance(self.model, DistributedDataParallel) else self.model
