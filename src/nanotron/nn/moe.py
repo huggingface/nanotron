@@ -185,7 +185,8 @@ class AllToAllDispatcher(nn.Module):
 
         assert 1 == 1
         # NOTE: sort the hidden_states according to the expert index for all-to-all communication
-        sorted_hidden_states = hidden_states[torch.argsort(routing_indices.squeeze(-1), stable=True)]
+        sort_indices = torch.argsort(routing_indices.squeeze(-1), stable=True)
+        sorted_hidden_states = hidden_states[sort_indices]
         # permuted_hidden_states, inverse_permute_mapping = ops.permute(hidden_states.to(torch.float32), routing_indices)
         # permuted_hidden_states = permuted_hidden_states.to(hidden_states.dtype)
 
@@ -238,23 +239,29 @@ class AllToAllDispatcher(nn.Module):
         #     # output_split_sizes,
         # )
         # return global_hidden_states, inverse_permute_mapping
-        return dispatched_global_inputs
+        return dispatched_global_inputs, inverse_permute_mapping, sort_indices
 
-    def unpermute(self, expert_outputs, inverse_mapping, routing_weights):
+    def unpermute(self, expert_outputs, inverse_mapping, routing_weights, sort_indices):
         """
         Combines outputs from different experts back to the original tensor layout.
         """
-        expert_outputs = all_to_all(
-            expert_outputs,
+        # expert_outputs = ops.unpermute(expert_outputs, inverse_mapping, routing_weights)
+        permuted_expert_outputs = ops.unpermute(
+            expert_outputs.to(torch.float32), inverse_mapping, torch.ones_like(inverse_mapping).unsqueeze(-1)
+        )
+        permuted_expert_outputs = permuted_expert_outputs.to(expert_outputs.dtype)
+        dispatched_outputs = all_to_all(
+            permuted_expert_outputs,
             output_split_sizes=self.input_split_sizes,
             input_split_sizes=self.output_split_sizes,
             group=self.ep_pg,
         )
 
         # NOTE: this part is un-reordering for the grouped_gemm
-        hidden_states = ops.unpermute(expert_outputs, inverse_mapping, routing_weights)
-
-        return hidden_states
+        # hidden_states = ops.unpermute(expert_outputs, inverse_mapping, routing_weights)
+        # NOTE: undo the expert index sorting for all-to-all back to the original order
+        inverse_indices = torch.argsort(sort_indices, stable=True)
+        return dispatched_outputs.index_select(0, inverse_indices)
 
 
 class Router(nn.Module):

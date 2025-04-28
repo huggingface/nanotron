@@ -42,9 +42,20 @@ def _test_all_to_all_dispatcher(rank, world_size, port, inputs, routing_indices,
     # (dispatched_inputs,
     #  inverse_permute_mapping,
     # #  num_tokens_per_expert) = dispatcher.permute(inputs, routing_indices)
-    dispatched_input = dispatcher.permute(input, routing_indices)
+    dispatched_input, inverse_permute_mapping, sort_indices = dispatcher.permute(input, routing_indices)
 
     assert torch.allclose(dispatched_input, expected_output)
+
+    # NOTE: assume topk=1
+    # routing_weights = torch.ones_like(inverse_permute_mapping)
+    routing_weights = torch.ones_like(routing_indices)
+    undispatched_input = dispatcher.unpermute(dispatched_input, inverse_permute_mapping, routing_weights, sort_indices)
+
+    assert 1 == 1
+    list_undispatched_inputs = [torch.empty_like(undispatched_input) for _ in range(world_size)]
+    dist.all_gather(list_undispatched_inputs, undispatched_input)
+
+    assert torch.allclose(undispatched_input, input)
 
     dist.destroy_process_group()
 
