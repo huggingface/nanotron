@@ -61,7 +61,6 @@ def _test_all_to_all_dispatcher(
     routing_weights = torch.ones_like(inverse_permute_mapping).unsqueeze(-1)
     undispatched_input = dispatcher.unpermute(dispatched_input, inverse_permute_mapping, routing_weights, sort_indices)
 
-    assert 1 == 1
     list_undispatched_inputs = [torch.empty_like(undispatched_input) for _ in range(world_size)]
     dist.all_gather(list_undispatched_inputs, undispatched_input)
 
