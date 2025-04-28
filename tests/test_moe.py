@@ -354,11 +354,13 @@ def _test_expert_parallelism_exclude_router(
         .contiguous()
         .cuda()
     )
+    list_input_batches = list_input_batches.contiguous().cuda()
     routing_indices = (
         torch.chunk(list_routing_indices, chunks=parallel_context.expert_parallel_size, dim=0)[ep_rank]
         .contiguous()
         .cuda()
     )
+    list_routing_indices = list_routing_indices.contiguous().cuda()
     # routing_weights = torch.chunk(list_routing_weights, chunks=parallel_context.expert_parallel_size, dim=0)[ep_rank].contiguous().cuda()
 
     ref_parallel_context = copy(parallel_context)
@@ -376,31 +378,33 @@ def _test_expert_parallelism_exclude_router(
         moe_layer = Qwen2MoELayer(
             config=TINY_MOE_QWEN_CONFIG, parallel_context=parallel_context, parallel_config=parallel_config
         )
-        # ref_moe_layer = Qwen2MoELayer(
-        #     config=TINY_MOE_QWEN_CONFIG, parallel_context=ref_parallel_context, parallel_config=ref_parallel_config
-        # )
+        ref_moe_layer = Qwen2MoELayer(
+            config=TINY_MOE_QWEN_CONFIG, parallel_context=ref_parallel_context, parallel_config=ref_parallel_config
+        )
         # # NOTE: make the parameters of all ranks in the ref_moe_layer the same
-        # for p in ref_moe_layer.parameters():
-        #     dist.all_reduce(p, op=dist.ReduceOp.AVG)
+        for p in ref_moe_layer.parameters():
+            dist.all_reduce(p, op=dist.ReduceOp.AVG)
 
     # ep_rank = dist.get_rank(parallel_context.ep_pg)
     # # NOTE: copy the parameter from ref moe to parallelized moe
-    # def is_expert_param(name):
-    #     return any(x for x in ["experts.merged_gate_up_proj", "experts.merged_down_proj"] if x in name)
+    def is_expert_param(name):
+        return any(x for x in ["experts.merged_gate_up_proj", "experts.merged_down_proj"] if x in name)
 
-    # for (n, p), (ref_n, ref_p) in zip(moe_layer.named_parameters(), ref_moe_layer.named_parameters()):
-    #     assert n == ref_n
-    #     if is_expert_param(n):
-    #         # NOTE: expert parallel sharding
-    #         num_local_experts = moe_layer.num_local_experts
-    #         start_idx = ep_rank * num_local_experts
-    #         end_idx = start_idx + num_local_experts
-    #         p.data = ref_p.data[start_idx:end_idx, :, :]
-    #     # elif any(x for x in ["shared_expert.down_proj.weight", "shared_expert_gate.weight"] if x in n):
-    #     #     # NOTE: tensor parallel sharding
-    #     #     pass
-    #     else:
-    #         p.data = ref_p.data
+    for (n, p), (ref_n, ref_p) in zip(moe_layer.named_parameters(), ref_moe_layer.named_parameters()):
+        assert n == ref_n
+        if is_expert_param(n):
+            # NOTE: expert parallel sharding
+            num_local_experts = moe_layer.num_local_experts
+            start_idx = ep_rank * num_local_experts
+            end_idx = start_idx + num_local_experts
+            # p.data = ref_p.data[start_idx:end_idx, :, :]
+            p.data.copy_(ref_p.data[start_idx:end_idx, :, :])
+        # elif any(x for x in ["shared_expert.down_proj.weight", "shared_expert_gate.weight"] if x in n):
+        #     # NOTE: tensor parallel sharding
+        #     pass
+        else:
+            # p.data = ref_p.data
+            p.data.copy_(ref_p.data)
 
     # for (name, param), (ref_name, ref_param) in zip(moe_layer.named_parameters(), ref_moe_layer.named_parameters()):
     #     if is_expert_param(name):
@@ -419,9 +423,15 @@ def _test_expert_parallelism_exclude_router(
     outputs = moe_layer._compute_expert_outputs(
         input_batches, torch.ones_like(routing_indices, dtype=torch.float32), routing_indices, {}
     )
-    # ref_outputs = ref_moe_layer._compute_expert_outputs(input_batches, torch.ones_like(routing_indices, dtype=torch.float32), routing_indices, {})
+    assert 1 == 1
+    ref_outputs = ref_moe_layer._compute_expert_outputs(
+        list_input_batches, torch.ones_like(list_routing_indices, dtype=torch.float32), list_routing_indices, {}
+    )
 
     assert 1 == 1
+    assert torch.allclose(
+        outputs, torch.chunk(ref_outputs, chunks=parallel_context.expert_parallel_size, dim=0)[ep_rank]
+    )
     # # NOTE
     # assert torch.allclose(ref_outputs["logs"]["input"], outputs["logs"]["input"])
     # assert torch.allclose(ref_outputs["logs"]["routing_weights"], outputs["logs"]["routing_weights"])
@@ -434,22 +444,6 @@ def _test_expert_parallelism_exclude_router(
     # assert torch.allclose(
     #     ref_outputs["logs"]["shared_gate_after_sigmoid"], outputs["logs"]["shared_gate_after_sigmoid"]
     # )
-
-    assert isinstance(outputs["hidden_states"], torch.Tensor)
-    assert outputs["hidden_states"].shape == input_batches.shape
-    rank_fails = []
-    try:
-        assert torch.allclose(outputs["hidden_states"], ref_outputs["hidden_states"])
-    except:
-        rank_fails.append(
-            {
-                "rank": dist.get_rank(),
-                "ep_rank": dist.get_rank(parallel_context.ep_pg),
-                "dp_rank": dist.get_rank(parallel_context.dp_pg),
-            }
-        )
-
-    assert 1 == 1
 
 
 @rerun_if_address_is_in_use()

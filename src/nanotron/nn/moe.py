@@ -124,7 +124,7 @@ class AllToAllDispatcher(nn.Module):
 
         # NOTE: start from expert 0 to expert n
         num_tokens_per_expert = torch.bincount(
-            routing_indices.flatten(), minlength=self.num_experts
+            routing_indices.flatten(), minlength=self.num_local_experts
         ).cuda()  # [num_local_experts]
 
         global_routing_indices = differentiable_all_gather(routing_indices, group=self.ep_pg)
@@ -132,36 +132,25 @@ class AllToAllDispatcher(nn.Module):
         # log_rank(f"[Qwen2MoELayer.forward.ep_pg.before_all_gather]", logger=logger, level=logging.INFO)
         # NOTE: this part is all-to-all token dispatching
         if self.expert_parallel_size > 1:
-            assert 1 == 1
             # NOTE: input_size_splits has a shape = [expert_parallel_size]
             # where each value represent the number of tokens that we send from this device
             # to [i]th device in the input_size_splits
             # NOTE: Reshape num_local_tokens_per_expert to [ep_size, num_local_experts]
             # TODO: .view or .reshape? check which one is faster
 
-            # NOTE: uncomment because num_tokens_per_expert is global
-            # and hidden_state is local to expert rank
-            # assert sum(num_tokens_per_expert) == hidden_states.shape[0]
-            # if num_tokens_per_expert.numel() != self.expert_parallel_size * self.num_local_experts:
-            #     assert 1 == 1
-
-            # NOTE:
+            # NOTE: this is incorrect in the case of imbalance
             num_tokens_per_expert_device = num_tokens_per_expert.reshape(
                 self.expert_parallel_size, self.num_local_experts
             )
             # NOTE: we can compute how many tokens this divide to send to [i]th device locally
             # TODO: double check cpu-gpu sync
-            # try:
-            #     input_split_sizes = num_tokens_per_expert_device.sum(dim=1)
-            # except Exception as e:
-            #     assert 1 == 1
             input_split_sizes = num_tokens_per_expert_device.sum(dim=1)
             # log_rank(f"[Qwen2MoELayer.forward.ep_pg.before_all_gather.input_split_sizes={input_split_sizes}]", logger=logger, level=logging.INFO)
 
             # list_num_tokens_per_expert_device = [torch.empty_like(num_tokens_per_expert_device) for _ in range(self.expert_parallel_size)]
             # dist.all_gather(list_num_tokens_per_expert_device, num_tokens_per_expert_device, group=self.ep_pg)
 
-            list_input_split_sizes = [torch.empty_like(input_split_sizes) for _ in range(self.expert_parallel_size)]
+            list_input_split_sizes = [torch.zeros_like(input_split_sizes) for _ in range(self.expert_parallel_size)]
             dist.all_gather(list_input_split_sizes, input_split_sizes, group=self.ep_pg)
 
             # NOTE: we can compute how many tokens this divide to receive from [i]th device globally
@@ -178,10 +167,12 @@ class AllToAllDispatcher(nn.Module):
 
         # log_rank(f"[Qwen2MoELayer.forward.before_all_to_all]", logger=logger, level=logging.INFO)
 
-        list_output_split_sizes = [
-            torch.empty_like(torch.tensor(output_split_sizes, device="cuda")) for _ in range(self.expert_parallel_size)
-        ]
-        dist.all_gather(list_output_split_sizes, torch.tensor(output_split_sizes, device="cuda"), group=self.ep_pg)
+        if self.expert_parallel_size > 1:
+            list_output_split_sizes = [
+                torch.empty_like(torch.tensor(output_split_sizes, device="cuda"))
+                for _ in range(self.expert_parallel_size)
+            ]
+            dist.all_gather(list_output_split_sizes, torch.tensor(output_split_sizes, device="cuda"), group=self.ep_pg)
 
         sort_indices = torch.argsort(routing_indices.squeeze(-1), stable=True)
         sorted_hidden_states = hidden_states[sort_indices]
@@ -224,7 +215,7 @@ class AllToAllDispatcher(nn.Module):
         num_local_dispatched_tokens_per_expert = torch.bincount(
             local_routing_indices - ep_rank * self.num_local_experts, minlength=self.num_local_experts
         )
-        num_local_dispatched_tokens_per_expert = num_local_dispatched_tokens_per_expert.to(hidden_states.dtype)
+        num_local_dispatched_tokens_per_expert = num_local_dispatched_tokens_per_expert
         return dispatched_global_inputs, inverse_permute_mapping, sort_indices, num_local_dispatched_tokens_per_expert
 
     def unpermute(self, expert_outputs, inverse_mapping, routing_weights, sort_indices):
@@ -232,8 +223,28 @@ class AllToAllDispatcher(nn.Module):
         Combines outputs from different experts back to the original tensor layout.
         """
         # expert_outputs = ops.unpermute(expert_outputs, inverse_mapping, routing_weights)
+        # NOTE: recompute the routing weights of the dispatched inputs
+        routing_weights = torch.ones_like(inverse_mapping).unsqueeze(-1)
         permuted_expert_outputs = ops.unpermute(expert_outputs.to(torch.float32), inverse_mapping, routing_weights)
         permuted_expert_outputs = permuted_expert_outputs.to(expert_outputs.dtype)
+
+        if self.expert_parallel_size > 1:
+            list_input_split_sizes = [
+                torch.zeros_like(torch.tensor(self.input_split_sizes, device="cuda"))
+                for _ in range(self.expert_parallel_size)
+            ]
+            dist.all_gather(
+                list_input_split_sizes, torch.tensor(self.input_split_sizes, device="cuda"), group=self.ep_pg
+            )
+
+            list_output_split_sizes = [
+                torch.zeros_like(torch.tensor(self.output_split_sizes, device="cuda"))
+                for _ in range(self.expert_parallel_size)
+            ]
+            dist.all_gather(
+                list_output_split_sizes, torch.tensor(self.output_split_sizes, device="cuda"), group=self.ep_pg
+            )
+
         dispatched_outputs = all_to_all(
             permuted_expert_outputs,
             output_split_sizes=self.input_split_sizes,
@@ -241,6 +252,8 @@ class AllToAllDispatcher(nn.Module):
             group=self.ep_pg,
         )
 
+        dist.barrier(group=self.ep_pg)
+        assert 1 == 1
         # NOTE: this part is un-reordering for the grouped_gemm
         # hidden_states = ops.unpermute(expert_outputs, inverse_mapping, routing_weights)
         # NOTE: undo the expert index sorting for all-to-all back to the original order
@@ -318,9 +331,14 @@ class GroupedMLP(nn.Module):
         num_tokens_per_expert = num_tokens_per_expert.to("cpu")
 
         ep_rank = dist.get_rank(self.ep_pg)
-        num_local_tokens_per_expert = num_tokens_per_expert.view(self.expert_parallel_size, self.num_local_experts)[
-            ep_rank
-        ]
+        # NOTE: refactor, should be the same line
+        if self.expert_parallel_size == 1:
+            num_local_tokens_per_expert = num_tokens_per_expert.view(
+                self.expert_parallel_size, self.num_local_experts
+            )[ep_rank]
+        else:
+            num_local_tokens_per_expert = num_tokens_per_expert
+
         if torch.count_nonzero(num_local_tokens_per_expert) == 0:
             # NOTE: this divide don't receive any tokens
             return {"hidden_states": hidden_states}
@@ -391,18 +409,12 @@ class Qwen2MoELayer(nn.Module):
         self.recompute_layer = parallel_config.recompute_layer
         self.ep_pg = parallel_context.ep_pg
 
-    def _core_forward(self, hidden_states):
-        """Core forward logic for MoE layer."""
-        # Get top-k routing weights and indices
-        logs = {}
-        routing_weights, routing_indices = self.router(hidden_states)  # [num_tokens, num_experts_per_token]
-        logs["input"] = hidden_states
-        logs["routing_weights"] = routing_weights
-        logs["routing_indices"] = routing_indices
-
+    def _compute_expert_outputs(self, hidden_states, routing_weights, routing_indices, logs):
+        assert 1 == 1
         (
             dispatched_inputs,
             inverse_permute_mapping,
+            sort_indices,
             num_tokens_per_expert,
         ) = self.token_dispatcher.permute(hidden_states, routing_indices)
 
@@ -419,10 +431,22 @@ class Qwen2MoELayer(nn.Module):
         logs["expert_outputs"] = expert_outputs
         # log_rank(f"[Qwen2MoELayer.forward.before_combine_expert_outputs]", logger=logger, level=logging.INFO)
         output = self.token_dispatcher.unpermute(
-            expert_outputs["hidden_states"], inverse_permute_mapping, routing_weights
+            expert_outputs["hidden_states"], inverse_permute_mapping, routing_weights, sort_indices
         )
 
         logs["output_after_combine_expert_outputs"] = output
+        return output
+
+    def _core_forward(self, hidden_states):
+        """Core forward logic for MoE layer."""
+        # Get top-k routing weights and indices
+        logs = {}
+        routing_weights, routing_indices = self.router(hidden_states)  # [num_tokens, num_experts_per_token]
+        logs["input"] = hidden_states
+        logs["routing_weights"] = routing_weights
+        logs["routing_indices"] = routing_indices
+
+        output = self._compute_expert_outputs(hidden_states, routing_weights, routing_indices, logs)
 
         # log_rank(f"[Qwen2MoELayer.forward.after_combine_expert_outputs]", logger=logger, level=logging.INFO)
         # Add shared expert contribution if enabled

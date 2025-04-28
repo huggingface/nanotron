@@ -78,8 +78,13 @@ def test_all_to_all_dispatcher():
     HIDDEN_SIZE = 4
     NUM_EXPERTS = 4
 
+    # NOTE: input.shape = [bs*seq_len, hidden_size]
+    # routing_indices.shape = [bs*seq_len]
+    # routing_weights.shape = [bs*seq_len, 1]
+
     inputs = torch.arange(BS * SEQ_LEN, dtype=torch.bfloat16).unsqueeze(-1).expand(-1, HIDDEN_SIZE)
-    routing_indices = torch.tensor([[2], [3], [1], [3], [1], [0], [2], [3]], dtype=torch.int32)
+    # NOTE: support top-k routing
+    routing_indices = torch.tensor([2, 3, 1, 3, 1, 0, 2, 3], dtype=torch.int32)
     expected_num_local_dispatched_tokens_per_expert = torch.tensor([[1, 2], [2, 3]], dtype=torch.bfloat16)
 
     expected_outputs = [
