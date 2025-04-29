@@ -43,6 +43,7 @@ class AllToAllDispatcher(nn.Module):
         self,
         hidden_states: torch.Tensor,
         routing_indices: torch.Tensor,
+        logs,
     ):
         """
         Dispatches tokens to their selected experts.
@@ -123,8 +124,18 @@ class AllToAllDispatcher(nn.Module):
             return dispatched_routing
 
         # NOTE: start from expert 0 to expert n
+        # NOTE: because the routing indices is global,
+        # but each expert device has a set of local experts
+        # so we need to align the routing indices to the local experts index
+        ep_rank = dist.get_rank(self.ep_pg)
+        # num_tokens_per_expert = torch.bincount(
+        #     routing_indices.flatten() - ep_rank * self.num_local_experts, minlength=self.num_local_experts
+        # ).cuda()  # [num_local_experts]
+        # num_tokens_per_expert = torch.bincount(
+        #     routing_indices.flatten() - ep_rank * self.num_local_experts, minlength=self.num_experts
+        # ).cuda()  # [num_local_experts]
         num_tokens_per_expert = torch.bincount(
-            routing_indices.flatten(), minlength=self.num_local_experts
+            routing_indices.flatten(), minlength=self.num_experts
         ).cuda()  # [num_local_experts]
 
         global_routing_indices = differentiable_all_gather(routing_indices, group=self.ep_pg)
@@ -212,8 +223,11 @@ class AllToAllDispatcher(nn.Module):
         # because we will use this for local grouped_gemm
         # NOTE: the local_routing_indices has a global expert index,
         # so we need to subtract the number of local experts to get the local expert index
+
+        local_routing_indices_int = local_routing_indices.to(torch.int32)
+
         num_local_dispatched_tokens_per_expert = torch.bincount(
-            local_routing_indices - ep_rank * self.num_local_experts, minlength=self.num_local_experts
+            local_routing_indices_int - ep_rank * self.num_local_experts, minlength=self.num_local_experts
         )
         num_local_dispatched_tokens_per_expert = num_local_dispatched_tokens_per_expert
         return dispatched_global_inputs, inverse_permute_mapping, sort_indices, num_local_dispatched_tokens_per_expert
@@ -416,7 +430,7 @@ class Qwen2MoELayer(nn.Module):
             inverse_permute_mapping,
             sort_indices,
             num_tokens_per_expert,
-        ) = self.token_dispatcher.permute(hidden_states, routing_indices)
+        ) = self.token_dispatcher.permute(hidden_states, routing_indices, logs)
 
         logs["dispatched_inputs"] = dispatched_inputs
         logs["inverse_permute_mapping"] = inverse_permute_mapping

@@ -544,5 +544,5 @@ if __name__ == "__main__":
 
     # (1, 1, 1, 2, 1, 1) the test that fails
     # test_init_moe_process_groups(tp=1, dp=1, pp=1, expert_parallel_size=2, expert_tensor_parallel_size=1, expert_data_parallel_size=1)
-    # test_expert_parallelism()
-    test_expert_parallelism_exclude_router()
+    test_expert_parallelism()
+    # test_expert_parallelism_exclude_router()
