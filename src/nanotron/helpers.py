@@ -34,6 +34,7 @@ from nanotron.optim.named_optimizer import NamedOptimizer
 from nanotron.optim.optimizer_from_gradient_accumulator import (
     OptimizerFromGradientAccumulator,
 )
+from nanotron.optim.optimizers import AdEMAMix
 from nanotron.optim.zero import ZeroDistributedOptimizer
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.tensor_parallel.nn import TensorParallelLinearMode
@@ -355,7 +356,9 @@ def init_optimizer_and_grad_accumulator(
     def basic_optimizer_builder(named_param_groups):
         optimizer = None
 
-        if optimizer_args.optimizer_factory.name == "adamW":
+        if optimizer_args.optimizer_factory.name.lower() == "adamw":
+            # if os.getenv("OPTIMIZER") == "adamw":
+            log_rank("Using AdamW optimizer", logger=logger, level=logging.INFO, rank=0)
 
             def optimizer(param_groups):
                 return torch.optim.AdamW(
@@ -376,9 +379,28 @@ def init_optimizer_and_grad_accumulator(
                     weight_decay=optimizer_args.weight_decay,
                 )
 
+        elif optimizer_args.optimizer_factory.name.lower() == "ademamix":
+            # elif os.getenv("OPTIMIZER") == "ademamix":
+            log_rank("Using 🍱 AdEMAMix optimizer", logger=logger, level=logging.INFO, rank=0)
+
+            def optimizer(param_groups):
+                return AdEMAMix(
+                    param_groups,
+                    lr=optimizer_args.learning_rate_scheduler.learning_rate,
+                    betas=(
+                        optimizer_args.optimizer_factory.beta1,
+                        optimizer_args.optimizer_factory.beta2,
+                        optimizer_args.optimizer_factory.beta3,
+                    ),
+                    alpha=optimizer_args.optimizer_factory.alpha,
+                    beta3_warmup=optimizer_args.optimizer_factory.beta3_warmup,
+                    alpha_warmup=optimizer_args.optimizer_factory.alpha_warmup,
+                    eps=optimizer_args.optimizer_factory.eps,
+                    weight_decay=optimizer_args.weight_decay,
+                )
+
         else:
             raise ValueError(f"Optimizer {optimizer_args.optimizer_factory.name} is not supported")
-
         return NamedOptimizer(
             named_params_or_groups=named_param_groups,
             optimizer_builder=optimizer,

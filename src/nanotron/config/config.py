@@ -398,10 +398,22 @@ class AdamWOptimizerArgs:
 
 
 @dataclass
+class AdEMAMixOptimizerArgs:
+    beta1: float
+    beta2: float
+    beta3: float
+    alpha: float
+    eps: float
+    beta3_warmup: Optional[float] = None
+    alpha_warmup: Optional[float] = None
+    name: str = "ademamix"
+
+
+@dataclass
 class OptimizerArgs:
     """Arguments related to the optimizer and learning rate"""
 
-    optimizer_factory: Union[SGDOptimizerArgs, AdamWOptimizerArgs]
+    optimizer_factory: Union[SGDOptimizerArgs, AdamWOptimizerArgs, AdEMAMixOptimizerArgs]
     zero_stage: int
     weight_decay: float
     clip_grad: Optional[float]
