@@ -44,6 +44,14 @@ To run the code in this project, first create a Python virtual environment using
 uv venv nanotron --python 3.11 && source nanotron/bin/activate && uv pip install --upgrade pip
 ```
 
+On supercomputers, prefer the usage of Spack to install Nanotron:
+
+```bash
+git clone -c feature.manyFiles=true --depth=2 https://github.com/spack/spack.git
+cd spack/bin
+./spack install py-nanotron
+```
+
 > [!TIP]
 > For Hugging Face cluster users, add `export UV_LINK_MODE=copy` to your `.bashrc` to suppress cache warnings from `uv`
 
