@@ -66,8 +66,6 @@ def _test_all_to_all_dispatcher(
     assert torch.allclose(dispatched_input, expected_output)
     assert torch.equal(expected_num_local_dispatched_tokens_per_expert, num_local_dispatched_tokens_per_expert)
 
-    # NOTE: assume topk=1
-    # routing_weights = torch.ones_like(inverse_permute_mapping).unsqueeze(-1)
     undispatched_and_comebined_input = dispatcher.unpermute(
         dispatched_input, inverse_permute_mapping, routing_weights, inverse_expert_sorting_index
     )
@@ -83,7 +81,6 @@ def _test_all_to_all_dispatcher(
 @pytest.mark.parametrize(
     "routing_indices, routing_weights, expected_permuted_outputs, expected_num_local_dispatched_tokens_per_expert, expected_combined_outputs",
     [
-        # torch.tensor([2, 3, 1, 3, 1, 0, 2, 3], dtype=torch.int32), # top-k=1
         [
             torch.tensor([[2], [3], [1], [3], [1], [0], [2], [3]], dtype=torch.int32),
             torch.tensor(
@@ -127,21 +124,10 @@ def test_all_to_all_dispatcher(
 ):
     port = find_free_port()
     WORLD_SIZE = 2
-    # HIDDEN_SIZE = 4
     NUM_EXPERTS = 4
 
     # NOTE: input.shape = [bs*seq_len, hidden_size]
-    # routing_indices.shape = [bs*seq_len]
-    # routing_weights.shape = [bs*seq_len, 1]
     inputs = torch.arange(BS * SEQ_LEN, dtype=torch.bfloat16).unsqueeze(-1).expand(-1, HIDDEN_SIZE)
-    # NOTE: support top-k routing
-    # routing_indices = torch.tensor([2, 3, 1, 3, 1, 0, 2, 3], dtype=torch.int32)
-    # expected_num_local_dispatched_tokens_per_expert = torch.tensor([[1, 2], [2, 3]], dtype=torch.bfloat16)
-
-    # expected_permuted_outputs = [
-    #     torch.tensor([5, 2, 4], dtype=torch.bfloat16).unsqueeze(-1).expand(-1, HIDDEN_SIZE),
-    #     torch.tensor([0, 6, 1, 3, 7], dtype=torch.bfloat16).unsqueeze(-1).expand(-1, HIDDEN_SIZE),
-    # ]  # all-to-all but without permutation
 
     mp.spawn(
         _test_all_to_all_dispatcher,

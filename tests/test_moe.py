@@ -86,26 +86,27 @@ PARALLEL_CONFIGS_TO_PARALLEL_RANKS = {
     },
 }
 
+HIDDEN_SIZE = 16
+
 
 @pytest.mark.parametrize(
     "routing_indices, expected_output, routing_weights",
     [
-        # NOTE: 16 here is the hidden size
         (
             torch.tensor([[2], [3], [1], [3]], dtype=torch.int32, device="cuda"),
-            torch.tensor([2, 0, 1, 3], dtype=torch.bfloat16, device="cuda").unsqueeze(-1).expand(-1, 16),
+            torch.tensor([2, 0, 1, 3], dtype=torch.bfloat16, device="cuda").unsqueeze(-1).expand(-1, HIDDEN_SIZE),
             torch.tensor([[1], [1], [1], [1]], dtype=torch.bfloat16, device="cuda"),
         ),
         (
             torch.tensor([[2, 1], [3, 0], [1, 2], [3, 1]], dtype=torch.int32, device="cuda"),
-            torch.tensor([1, 0, 2, 3, 0, 2, 1, 3], dtype=torch.bfloat16, device="cuda").unsqueeze(-1).expand(-1, 16),
+            torch.tensor([1, 0, 2, 3, 0, 2, 1, 3], dtype=torch.bfloat16, device="cuda")
+            .unsqueeze(-1)
+            .expand(-1, HIDDEN_SIZE),
             torch.tensor([[1, 1], [1, 1], [1, 1], [1, 1]], dtype=torch.bfloat16, device="cuda"),
         ),
     ],
 )
 def test_permute_and_unpermute(routing_indices, expected_output, routing_weights):
-    # x = torch.tensor([0, 1, 2, 3], dtype=torch.bfloat16, device="cuda").expand(-1, 16)
-    HIDDEN_SIZE = 16
     x = torch.tensor([0, 1, 2, 3], dtype=torch.bfloat16, device="cuda").unsqueeze(-1).expand(-1, HIDDEN_SIZE)
     y, inverse_mapping = permute(x, routing_indices)
 
@@ -218,8 +219,15 @@ def test_init_moe_process_groups(
     )(_test_init_moe_process_groups)()
 
 
+@pytest.mark.parametrize(
+    "list_routing_indicies",
+    [
+        torch.tensor([[2], [3], [1], [3], [1], [0], [2], [3]], dtype=torch.int32),  # top-k=1
+        torch.tensor([[2, 1], [3, 0], [1, 2], [3, 1], [1, 2], [0, 1], [2, 1], [3, 2]], dtype=torch.int32),  # top-k=2
+    ],
+)
 @rerun_if_address_is_in_use()
-def test_expert_parallelism():
+def test_expert_parallelism(list_routing_indicies):
     DP_SIZE = 2
     EP_SIZE = 2
     BS = 1
@@ -235,8 +243,6 @@ def test_expert_parallelism():
         enabled_moe=True,
     )
     inputs = torch.arange(BS * SEQ_LEN, dtype=torch.bfloat16).unsqueeze(-1).expand(-1, HIDDEN_SIZE)
-    # NOTE: support top-k routing
-    routing_indices = torch.tensor([2, 3, 1, 3, 1, 0, 2, 3], dtype=torch.int32)
 
     init_distributed(
         tp=1,
@@ -247,7 +253,7 @@ def test_expert_parallelism():
         expert_data_parallel_size=1,
         enabled_moe=True,
     )(_test_expert_parallelism)(
-        list_input_batches=inputs, list_routing_indices=routing_indices, parallel_config=parallel_config
+        list_input_batches=inputs, list_routing_indices=list_routing_indicies, parallel_config=parallel_config
     )
 
 
@@ -327,7 +333,6 @@ def _test_expert_parallelism(
     )
 
 
-@rerun_if_address_is_in_use()
 @pytest.mark.parametrize(
     "list_routing_indicies",
     [
@@ -336,6 +341,7 @@ def _test_expert_parallelism(
         torch.tensor([[2, 1], [3, 0], [1, 2], [3, 1], [1, 2], [0, 1], [2, 1], [3, 2]], dtype=torch.int32),  # top-k=2
     ],
 )
+@rerun_if_address_is_in_use()
 def test_expert_parallelism_exclude_router(list_routing_indicies):
     DP_SIZE = 2
     EP_SIZE = 2
@@ -455,16 +461,19 @@ if __name__ == "__main__":
 
     # (1, 1, 1, 2, 1, 1) the test that fails
     # test_init_moe_process_groups(tp=1, dp=1, pp=1, expert_parallel_size=2, expert_tensor_parallel_size=1, expert_data_parallel_size=1)
-    # test_expert_parallelism()
+    test_expert_parallelism(
+        list_routing_indicies=torch.tensor([[2], [3], [1], [3], [1], [0], [2], [3]], dtype=torch.int32)
+    )
     # test_expert_parallelism_exclude_router(
-    #     torch.tensor([[2], [3], [1], [3], [1], [0], [2], [3]], dtype=torch.int32)
+    #     # torch.tensor([[2], [3], [1], [3], [1], [0], [2], [3]], dtype=torch.int32)
+    #     torch.tensor([[2, 1], [3, 0], [1, 2], [3, 1], [1, 2], [0, 1], [2, 1], [3, 2]], dtype=torch.int32)
     # )
 
     # test_permute(
     #     routing_indices=torch.tensor([[2], [3], [1], [3]], dtype=torch.int32, device="cuda"),
     #     expected_output=torch.tensor([2, 0, 1, 3], dtype=torch.bfloat16, device="cuda").unsqueeze(-1).expand(-1, 16)
     # )
-    test_permute_and_unpermute(
-        torch.tensor([[2, 1], [3, 0], [1, 2], [3, 1]], dtype=torch.int32, device="cuda"),
-        torch.tensor([1, 0, 2, 3, 0, 2, 1, 3], dtype=torch.bfloat16, device="cuda").unsqueeze(-1).expand(-1, 16),
-    )
+    # test_permute_and_unpermute(
+    #     torch.tensor([[2, 1], [3, 0], [1, 2], [3, 1]], dtype=torch.int32, device="cuda"),
+    #     torch.tensor([1, 0, 2, 3, 0, 2, 1, 3], dtype=torch.bfloat16, device="cuda").unsqueeze(-1).expand(-1, 16),
+    # )
