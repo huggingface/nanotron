@@ -12,43 +12,84 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Optional
+from contextlib import nullcontext
+from typing import Optional, Tuple
 
 import torch
 from torch import distributed as torch_dist
 
 from nanotron import distributed as dist
 from nanotron.distributed import ProcessGroup
+from nanotron.parallel.comm import CudaStreamManager, is_domino_async_comm
+from nanotron.parallel.tensor_parallel.domino import get_current_bwd_op_name
 
 
 class DifferentiableIdentity(torch.autograd.Function):
     """All-reduce gradients in a differentiable fashion"""
 
     @staticmethod
-    def forward(ctx, tensor, group: Optional[ProcessGroup]):
+    def forward(
+        ctx,
+        tensor: torch.Tensor,
+        group: Optional[ProcessGroup],
+        op_name: Optional[str] = None,
+        stream_manager: Optional[CudaStreamManager] = None,
+    ):
+        ctx.bwd_op_name = get_current_bwd_op_name()
         ctx.group = group
+        ctx.stream_manager = stream_manager
         return tensor
 
     @staticmethod
-    def backward(ctx, grad_output):
+    def backward(ctx, grad_output: torch.Tensor):
         group = ctx.group
-        return DifferentiableAllReduceSum.apply(grad_output, group), None
+
+        return (
+            DifferentiableAllReduceSum.apply(grad_output, group, ctx.bwd_op_name, ctx.stream_manager),
+            None,
+            None,
+            None,
+            None,
+        )
 
 
 class DifferentiableAllReduceSum(torch.autograd.Function):
     """All-reduce in a differentiable fashion"""
 
     @staticmethod
-    def forward(ctx, tensor, group: Optional[ProcessGroup]):
+    def forward(
+        ctx,
+        tensor: torch.Tensor,
+        group: Optional[ProcessGroup],
+        op_name: Optional[int] = None,
+        stream_manager: Optional[CudaStreamManager] = None,
+    ) -> Tuple[torch.Tensor, Optional["dist.Work"]]:
+        async_all_reduce = is_domino_async_comm(op_name) if op_name is not None else False
+        ctx.async_all_reduce = async_all_reduce
+
         if group.size() == 1:
             return tensor
 
-        dist.all_reduce(tensor, op=dist.ReduceOp.SUM, group=group)
+        if stream_manager is not None:
+            comm_stream = stream_manager.get_default_comm_stream()
+            comm_stream.wait_stream(torch.cuda.default_stream())
+            comm_context = torch.cuda.stream(comm_stream)
+        else:
+            comm_context = nullcontext()
+
+        with comm_context:
+            if async_all_reduce is True:
+                assert comm_stream is not None
+                handle = dist.all_reduce(tensor, op=dist.ReduceOp.SUM, group=group, async_op=True)
+                stream_manager.comm_bucket.add(op_name, handle)
+            else:
+                dist.all_reduce(tensor, op=dist.ReduceOp.SUM, group=group)
+
         return tensor
 
     @staticmethod
     def backward(ctx, grad_output):
-        return grad_output, None
+        return grad_output, None, None, None, None
 
 
 class DifferentiableAllGather(torch.autograd.Function):
@@ -130,12 +171,22 @@ class DifferentiableReduceScatterSum(torch.autograd.Function):
 # -----------------
 
 
-def differentiable_identity(tensor, group: Optional[ProcessGroup] = None):
-    return DifferentiableIdentity.apply(tensor, group)
+def differentiable_identity(
+    tensor,
+    group: Optional[ProcessGroup] = None,
+    op_name: Optional[str] = None,
+    stream_manager: Optional[CudaStreamManager] = None,
+):
+    return DifferentiableIdentity.apply(tensor, group, op_name, stream_manager)
 
 
-def differentiable_all_reduce_sum(tensor, group: Optional[ProcessGroup] = None):
-    return DifferentiableAllReduceSum.apply(tensor, group)
+def differentiable_all_reduce_sum(
+    tensor,
+    group: Optional[ProcessGroup] = None,
+    op_name: Optional[str] = None,
+    stream_manager: Optional[CudaStreamManager] = None,
+):
+    return DifferentiableAllReduceSum.apply(tensor, group, op_name, stream_manager)
 
 
 def differentiable_all_gather(tensor, group: Optional[ProcessGroup] = None):

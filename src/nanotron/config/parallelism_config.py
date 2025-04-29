@@ -12,6 +12,23 @@ from nanotron.parallel.tensor_parallel.nn import TensorParallelLinearMode
 
 
 @dataclass
+class DominoArgs:
+    """
+    Domino: Eliminating Communication in LLM Training via Generic Tensor Slicing and Overlapping
+    https://arxiv.org/abs/2409.15241
+    """
+
+    # NOTE: if the number of input batches is 1,
+    # it's equivalent to non-domino mode
+    # so if you want to enable domino mode, set this to > 1
+    num_input_batches: int
+
+    def __post_init__(self):
+        assert self.num_input_batches > 1, "In order to enable domino mode, set num_input_batches > 1"
+        assert self.num_input_batches == 2, "Currently parallelism only supports 2 batches for Domino"
+
+
+@dataclass
 class ParallelismArgs:
     """Arguments related to TP/PP/DP
 
@@ -39,6 +56,7 @@ class ParallelismArgs:
 
     expert_parallel_size: int = 1
     context_parallel_size: int = 1
+    domino: Optional[DominoArgs] = None
 
     def __post_init__(self):
         # Conservative defaults
@@ -53,3 +71,19 @@ class ParallelismArgs:
             self.pp_engine = cast_str_to_pipeline_engine(self.pp_engine)
         if isinstance(self.tp_mode, str):
             self.tp_mode = TensorParallelLinearMode[self.tp_mode.upper()]
+
+        if self.is_domino_enabled is True:
+            assert self.tp > 1, "Domino requires TP > 1"
+            # NOTE: For DoMiNo since we overlapping the communication
+            # so it doesnt matter whether it's all_reduce or reduce_scatter
+            # so we just support and tested with all_reduce up to now
+            # but in principle, it should work with reduce_scatter as well
+            assert (
+                self.tp_linear_async_communication is False
+            ), "Domino requires TP linear async communication to be False"
+            # TODO: support REDUCE_SCATTER mode for Domino
+            assert self.tp_mode == TensorParallelLinearMode.ALL_REDUCE, "Domino requires TP mode to be ALL_REDUCE"
+
+    @property
+    def is_domino_enabled(self) -> bool:
+        return True if self.domino else False
