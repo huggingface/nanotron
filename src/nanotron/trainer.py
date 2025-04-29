@@ -1339,6 +1339,7 @@ def mark_tied_parameters(
             )
             for target in embeddings_lm_head_tied_names
         ]
+
         tie_parameters(
             root_module=model, ties=shared_embeddings, parallel_context=parallel_context, reduce_op=dist.ReduceOp.SUM
         )

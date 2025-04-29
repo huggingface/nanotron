@@ -138,13 +138,13 @@ class ParallelContext:
         # self.ep_pg = self.create_new_group(ep_ranks)  # TODO: ep should be a subset of dp
 
         # model parallel group = combination of tp and pp and exp for a given dp rank
-        # self.mp_pg = self.create_new_group(
-        #     [
-        #         ranks[:, :, dp_rank, cp_rank, :].reshape(-1)
-        #         for cp_rank in range(self.context_parallel_size)
-        #         for dp_rank in range(self.data_parallel_size)
-        #     ]
-        # )
+        self.mp_pg = self.create_new_group(
+            [
+                ranks[:, dp_rank, cp_rank, :].reshape(-1)
+                for cp_rank in range(self.context_parallel_size)
+                for dp_rank in range(self.data_parallel_size)
+            ]
+        )
 
         # self.tp_and_cp_pg = self.create_new_group(
         #     [
@@ -232,6 +232,20 @@ class ParallelContext:
         self.cp_pg = self.create_new_group(cp_ranks)
         self.pp_pg = self.create_new_group(pp_ranks)
         self.dp_pg = self.create_new_group(dp_ranks)
+        # self.mp_pg = self.create_new_group(
+        #     [
+        #         ranks[:, :, dp_rank, cp_rank, :].reshape(-1)
+        #         for cp_rank in range(self.context_parallel_size)
+        #         for dp_rank in range(self.data_parallel_size)
+        #     ]
+        # )
+        self.mp_pg = self.create_new_group(
+            [
+                attn_ranks[dp_rank, :, cp_rank, :].reshape(-1)
+                for cp_rank in range(self.context_parallel_size)
+                for dp_rank in range(self.data_parallel_size)
+            ]
+        )
 
         # NOTE: expert parallelism
         moe_ranks = ranks.reshape(
@@ -349,5 +363,8 @@ class ParallelContext:
 
         :return: numpy.int64, The global rank.
         """
-        # return self.world_rank_matrix[ep_rank, pp_rank, dp_rank, cp_rank, tp_rank]
-        return self.world_rank_matrix[pp_rank, dp_rank, cp_rank, tp_rank]
+        if self.enabled_moe is False:
+            # return self.world_rank_matrix[ep_rank, pp_rank, dp_rank, cp_rank, tp_rank]
+            return self.world_rank_matrix[pp_rank, dp_rank, cp_rank, tp_rank]
+        else:
+            return self.world_rank_matrix[dp_rank, pp_rank, cp_rank, tp_rank]
