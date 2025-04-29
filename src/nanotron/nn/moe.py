@@ -330,9 +330,9 @@ class GroupedMLP(nn.Module):
         # NOTE: ops.gemm requires "batch_sizes" (aka: num_tokens_per_expert here) to be on cpu
         num_tokens_per_expert = num_tokens_per_expert.to("cpu")
 
-        ep_rank = dist.get_rank(self.ep_pg)
         # NOTE: refactor, should be the same line
         if self.expert_parallel_size == 1:
+            ep_rank = dist.get_rank(self.ep_pg)
             num_local_tokens_per_expert = num_tokens_per_expert.view(
                 self.expert_parallel_size, self.num_local_experts
             )[ep_rank]
