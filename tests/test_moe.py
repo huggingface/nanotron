@@ -13,7 +13,7 @@ from helpers.utils import (
 )
 from nanotron.config.parallelism_config import ParallelismArgs
 from nanotron.models.base import init_on_device_and_dtype
-from nanotron.nn.moe import GroupedMLP, Qwen2MoELayer
+from nanotron.nn.moe import GroupedMLP, Qwen2MoELayer, permute, unpermute
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.context import ParallelMode
 from torch.distributed import ProcessGroup
@@ -85,6 +85,35 @@ PARALLEL_CONFIGS_TO_PARALLEL_RANKS = {
         },
     },
 }
+
+
+@pytest.mark.parametrize(
+    "routing_indices, expected_output, routing_weights",
+    [
+        # NOTE: 16 here is the hidden size
+        (
+            torch.tensor([[2], [3], [1], [3]], dtype=torch.int32, device="cuda"),
+            torch.tensor([2, 0, 1, 3], dtype=torch.bfloat16, device="cuda").unsqueeze(-1).expand(-1, 16),
+            torch.tensor([[1], [1], [1], [1]], dtype=torch.bfloat16, device="cuda"),
+        ),
+        (
+            torch.tensor([[2, 1], [3, 0], [1, 2], [3, 1]], dtype=torch.int32, device="cuda"),
+            torch.tensor([1, 0, 2, 3, 0, 2, 1, 3], dtype=torch.bfloat16, device="cuda").unsqueeze(-1).expand(-1, 16),
+            torch.tensor([[1, 1], [1, 1], [1, 1], [1, 1]], dtype=torch.bfloat16, device="cuda"),
+        ),
+    ],
+)
+def test_permute_and_unpermute(routing_indices, expected_output, routing_weights):
+    # x = torch.tensor([0, 1, 2, 3], dtype=torch.bfloat16, device="cuda").expand(-1, 16)
+    HIDDEN_SIZE = 16
+    x = torch.tensor([0, 1, 2, 3], dtype=torch.bfloat16, device="cuda").unsqueeze(-1).expand(-1, HIDDEN_SIZE)
+    y, inverse_mapping = permute(x, routing_indices)
+
+    assert torch.equal(y, expected_output)
+
+    y_combined = unpermute(y, inverse_mapping, routing_weights)
+
+    assert y_combined.shape == x.shape
 
 
 def test_grouped_mlp():
@@ -299,7 +328,15 @@ def _test_expert_parallelism(
 
 
 @rerun_if_address_is_in_use()
-def test_expert_parallelism_exclude_router():
+@pytest.mark.parametrize(
+    "list_routing_indicies",
+    [
+        # torch.tensor([2, 3, 1, 3, 1, 0, 2, 3], dtype=torch.int32), # top-k=1
+        torch.tensor([[2], [3], [1], [3], [1], [0], [2], [3]], dtype=torch.int32),  # top-k=1
+        torch.tensor([[2, 1], [3, 0], [1, 2], [3, 1], [1, 2], [0, 1], [2, 1], [3, 2]], dtype=torch.int32),  # top-k=2
+    ],
+)
+def test_expert_parallelism_exclude_router(list_routing_indicies):
     DP_SIZE = 2
     EP_SIZE = 2
     BS = 1
@@ -316,7 +353,6 @@ def test_expert_parallelism_exclude_router():
     )
     inputs = torch.arange(BS * SEQ_LEN, dtype=torch.bfloat16).unsqueeze(-1).expand(-1, HIDDEN_SIZE)
     # NOTE: support top-k routing
-    routing_indices = torch.tensor([2, 3, 1, 3, 1, 0, 2, 3], dtype=torch.int32)
 
     init_distributed(
         tp=1,
@@ -327,7 +363,7 @@ def test_expert_parallelism_exclude_router():
         expert_data_parallel_size=1,
         enabled_moe=True,
     )(_test_expert_parallelism_exclude_router)(
-        list_input_batches=inputs, list_routing_indices=routing_indices, parallel_config=parallel_config
+        list_input_batches=inputs, list_routing_indices=list_routing_indicies, parallel_config=parallel_config
     )
 
 
@@ -400,6 +436,7 @@ def _test_expert_parallelism_exclude_router(
         assert name == ref_name
         assert torch.allclose(param, ref_param)
 
+    # NOTE: move the routing_weights to random weights
     outputs = moe_layer._compute_expert_outputs(
         input_batches, torch.ones_like(routing_indices, dtype=torch.float32), routing_indices, {}
     )
@@ -418,5 +455,16 @@ if __name__ == "__main__":
 
     # (1, 1, 1, 2, 1, 1) the test that fails
     # test_init_moe_process_groups(tp=1, dp=1, pp=1, expert_parallel_size=2, expert_tensor_parallel_size=1, expert_data_parallel_size=1)
-    test_expert_parallelism()
-    # test_expert_parallelism_exclude_router()
+    # test_expert_parallelism()
+    # test_expert_parallelism_exclude_router(
+    #     torch.tensor([[2], [3], [1], [3], [1], [0], [2], [3]], dtype=torch.int32)
+    # )
+
+    # test_permute(
+    #     routing_indices=torch.tensor([[2], [3], [1], [3]], dtype=torch.int32, device="cuda"),
+    #     expected_output=torch.tensor([2, 0, 1, 3], dtype=torch.bfloat16, device="cuda").unsqueeze(-1).expand(-1, 16)
+    # )
+    test_permute_and_unpermute(
+        torch.tensor([[2, 1], [3, 0], [1, 2], [3, 1]], dtype=torch.int32, device="cuda"),
+        torch.tensor([1, 0, 2, 3, 0, 2, 1, 3], dtype=torch.bfloat16, device="cuda").unsqueeze(-1).expand(-1, 16),
+    )

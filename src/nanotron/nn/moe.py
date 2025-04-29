@@ -28,6 +28,16 @@ except ImportError:
     )
 
 
+def permute(x: torch.Tensor, routing_indices: torch.Tensor):
+    permuted_x, inverse_permute_mapping = ops.permute(x.to(torch.float32), routing_indices)
+    permuted_x = permuted_x.to(x.dtype)
+    return permuted_x, inverse_permute_mapping
+
+
+def unpermute(x: torch.Tensor, inverse_mapping: torch.Tensor, routing_weights: torch.Tensor):
+    return ops.unpermute(x, inverse_mapping, routing_weights)
+
+
 class AllToAllDispatcher(nn.Module):
     def __init__(self, num_local_experts: int, num_experts: int, ep_pg: dist.ProcessGroup):
         super().__init__()
@@ -239,6 +249,7 @@ class AllToAllDispatcher(nn.Module):
         # expert_outputs = ops.unpermute(expert_outputs, inverse_mapping, routing_weights)
         # NOTE: recompute the routing weights of the dispatched inputs
         routing_weights = torch.ones_like(inverse_mapping).unsqueeze(-1)
+        # NOTE: we do a combination of the expert outputs, and rearrange them back for all-to-all's comm pattern as well
         permuted_expert_outputs = ops.unpermute(expert_outputs.to(torch.float32), inverse_mapping, routing_weights)
         permuted_expert_outputs = permuted_expert_outputs.to(expert_outputs.dtype)
 
