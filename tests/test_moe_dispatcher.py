@@ -1,5 +1,6 @@
 import os
 
+import pytest
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
@@ -9,6 +10,8 @@ from helpers.utils import (
 from nanotron.distributed import initialize_torch_distributed
 from nanotron.nn.moe import AllToAllDispatcher
 from nanotron.utils import find_free_port
+
+HIDDEN_SIZE = 4
 
 
 def setup_dist_env(rank, world_size, port):
@@ -28,7 +31,7 @@ def _test_all_to_all_dispatcher(
     port,
     inputs,
     routing_indices,
-    expected_outputs,
+    expected_permuted_outputs,
     expected_num_local_dispatched_tokens_per_expert,
     num_experts,
 ):
@@ -41,7 +44,7 @@ def _test_all_to_all_dispatcher(
 
     # NOTE: each ep rank holds a chunk of the inputs
     input = torch.chunk(inputs, world_size, dim=0)[ep_rank].contiguous().cuda()
-    expected_output = expected_outputs[ep_rank].contiguous().cuda()
+    expected_output = expected_permuted_outputs[ep_rank].contiguous().cuda()
     routing_indices = torch.chunk(routing_indices, world_size, dim=0)[ep_rank].contiguous().cuda()
     num_local_experts = num_experts // world_size
 
@@ -50,16 +53,18 @@ def _test_all_to_all_dispatcher(
     (
         dispatched_input,
         inverse_permute_mapping,
-        sort_indices,
+        inverse_expert_sorting_index,
         num_local_dispatched_tokens_per_expert,
-    ) = dispatcher.permute(input, routing_indices)
+    ) = dispatcher.permute(input, routing_indices, {})
 
     assert torch.allclose(dispatched_input, expected_output)
     assert torch.equal(expected_num_local_dispatched_tokens_per_expert, num_local_dispatched_tokens_per_expert)
 
     # NOTE: assume topk=1
     routing_weights = torch.ones_like(inverse_permute_mapping).unsqueeze(-1)
-    undispatched_input = dispatcher.unpermute(dispatched_input, inverse_permute_mapping, routing_weights, sort_indices)
+    undispatched_input = dispatcher.unpermute(
+        dispatched_input, inverse_permute_mapping, routing_weights, inverse_expert_sorting_index
+    )
 
     list_undispatched_inputs = [torch.empty_like(undispatched_input) for _ in range(world_size)]
     dist.all_gather(list_undispatched_inputs, undispatched_input)
@@ -70,12 +75,39 @@ def _test_all_to_all_dispatcher(
 
 
 @rerun_if_address_is_in_use()
-def test_all_to_all_dispatcher():
+@pytest.mark.parametrize(
+    "routing_indices, expected_permuted_outputs, expected_num_local_dispatched_tokens_per_expert",
+    [
+        # torch.tensor([2, 3, 1, 3, 1, 0, 2, 3], dtype=torch.int32), # top-k=1
+        [
+            torch.tensor([[2], [3], [1], [3], [1], [0], [2], [3]], dtype=torch.int32),
+            [
+                torch.tensor([5, 2, 4], dtype=torch.bfloat16).unsqueeze(-1).expand(-1, HIDDEN_SIZE),
+                torch.tensor([0, 6, 1, 3, 7], dtype=torch.bfloat16).unsqueeze(-1).expand(-1, HIDDEN_SIZE),
+            ],
+            torch.tensor([[1, 2], [2, 3]], dtype=torch.bfloat16),
+        ],  # top-k=1
+        [
+            torch.tensor([[2, 1], [3, 0], [1, 2], [3, 1], [1, 2], [0, 1], [2, 1], [1, 2]], dtype=torch.int32),
+            [
+                # NOTE: this isn't include expert sorting index
+                # torch.tensor([1, 0, 2, 3, 5, 4, 5, 6, 7], dtype=torch.bfloat16).unsqueeze(-1).expand(-1, HIDDEN_SIZE),
+                # torch.tensor([0, 2, 1, 3, 4, 6, 7], dtype=torch.bfloat16).unsqueeze(-1).expand(-1, HIDDEN_SIZE),
+                torch.tensor([1, 5, 0, 2, 3, 4, 5, 6, 7], dtype=torch.bfloat16).unsqueeze(-1).expand(-1, HIDDEN_SIZE),
+                torch.tensor([0, 2, 4, 6, 7, 1, 3], dtype=torch.bfloat16).unsqueeze(-1).expand(-1, HIDDEN_SIZE),
+            ],  # top-k=2
+            torch.tensor([[2, 7], [5, 2]], dtype=torch.bfloat16),
+        ],
+    ],
+)
+def test_all_to_all_dispatcher(
+    routing_indices, expected_permuted_outputs, expected_num_local_dispatched_tokens_per_expert
+):
     port = find_free_port()
     WORLD_SIZE = 2
     BS = 1
     SEQ_LEN = 8
-    HIDDEN_SIZE = 4
+    # HIDDEN_SIZE = 4
     NUM_EXPERTS = 4
 
     # NOTE: input.shape = [bs*seq_len, hidden_size]
@@ -83,13 +115,13 @@ def test_all_to_all_dispatcher():
     # routing_weights.shape = [bs*seq_len, 1]
     inputs = torch.arange(BS * SEQ_LEN, dtype=torch.bfloat16).unsqueeze(-1).expand(-1, HIDDEN_SIZE)
     # NOTE: support top-k routing
-    routing_indices = torch.tensor([2, 3, 1, 3, 1, 0, 2, 3], dtype=torch.int32)
-    expected_num_local_dispatched_tokens_per_expert = torch.tensor([[1, 2], [2, 3]], dtype=torch.bfloat16)
+    # routing_indices = torch.tensor([2, 3, 1, 3, 1, 0, 2, 3], dtype=torch.int32)
+    # expected_num_local_dispatched_tokens_per_expert = torch.tensor([[1, 2], [2, 3]], dtype=torch.bfloat16)
 
-    expected_outputs = [
-        torch.tensor([5, 2, 4], dtype=torch.bfloat16).unsqueeze(-1).expand(-1, HIDDEN_SIZE),
-        torch.tensor([0, 6, 1, 3, 7], dtype=torch.bfloat16).unsqueeze(-1).expand(-1, HIDDEN_SIZE),
-    ]  # all-to-all but without permutation
+    # expected_permuted_outputs = [
+    #     torch.tensor([5, 2, 4], dtype=torch.bfloat16).unsqueeze(-1).expand(-1, HIDDEN_SIZE),
+    #     torch.tensor([0, 6, 1, 3, 7], dtype=torch.bfloat16).unsqueeze(-1).expand(-1, HIDDEN_SIZE),
+    # ]  # all-to-all but without permutation
 
     mp.spawn(
         _test_all_to_all_dispatcher,
@@ -98,7 +130,7 @@ def test_all_to_all_dispatcher():
             port,
             inputs,
             routing_indices,
-            expected_outputs,
+            expected_permuted_outputs,
             expected_num_local_dispatched_tokens_per_expert,
             NUM_EXPERTS,
         ),
@@ -107,4 +139,15 @@ def test_all_to_all_dispatcher():
 
 
 if __name__ == "__main__":
-    test_all_to_all_dispatcher()
+
+    test_all_to_all_dispatcher(
+        # routing_indices=torch.tensor([[2], [3], [1], [3], [1], [0], [2], [3]], dtype=torch.int32)
+        routing_indices=torch.tensor(
+            [[2, 1], [3, 0], [1, 2], [3, 1], [1, 2], [0, 1], [2, 1], [1, 2]], dtype=torch.int32
+        ),
+        expected_permuted_outputs=[
+            torch.tensor([1, 5, 0, 2, 3, 4, 5, 6, 7], dtype=torch.bfloat16).unsqueeze(-1).expand(-1, HIDDEN_SIZE),
+            torch.tensor([0, 2, 4, 6, 7, 1, 3], dtype=torch.bfloat16).unsqueeze(-1).expand(-1, HIDDEN_SIZE),
+        ],
+        expected_num_local_dispatched_tokens_per_expert=torch.tensor([[2, 7], [5, 2]], dtype=torch.bfloat16),
+    )
