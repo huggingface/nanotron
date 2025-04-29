@@ -1,3 +1,4 @@
+import os
 from copy import copy
 from dataclasses import dataclass
 
@@ -204,40 +205,9 @@ def test_expert_parallelism():
         expert_data_parallel_size=1,
         enabled_moe=True,
     )
-    # input_batches = torch.randn(DP_SIZE, BS, SEQ_LEN, TINY_MOE_QWEN_CONFIG.hidden_size, dtype=torch.bfloat16)
-    # NOTE: merge the batch and sequence length dimensions together
-    # as in modeling code
-    # input_batches = torch.arange(0, BS * SEQ_LEN, dtype=torch.bfloat16).unsqueeze(-1).expand(2, -1, HIDDEN_SIZE)
-    # input_batches = torch.arange(DP_SIZE * BS * SEQ_LEN, dtype=torch.bfloat16).unsqueeze(-1).expand(2, -1, HIDDEN_SIZE)
-    # list_input_batches = (
-    #     torch.arange(BS * SEQ_LEN, dtype=torch.bfloat16)
-    #     .unsqueeze(-1)
-    #     .expand(-1, HIDDEN_SIZE)
-    #     .contiguous()
-    #     .view(2, -1, HIDDEN_SIZE)
-    # )
-    # list_input_batches = torch.arange(BS * SEQ_LEN, dtype=torch.bfloat16).unsqueeze(-1).expand(-1, HIDDEN_SIZE).view(2, -1, HIDDEN_SIZE).contiguous()
-    # # list_routing_indices = torch.tensor([[2], [3], [1], [3], [1], [0], [2], [3]], dtype=torch.int32)
-    # list_routing_indices = torch.tensor([2, 3, 1, 3, 1, 0, 2, 3], dtype=torch.int32)
-    # list_routing_weights = torch.ones_like(list_routing_indices, dtype=torch.float32)
-
-    # list_input_batches = torch.chunk(list_input_batches, chunks=EP_SIZE, dim=0)
-    # list_routing_indices = torch.chunk(list_routing_indices, chunks=EP_SIZE, dim=0)
-    # list_routing_weights = torch.chunk(list_routing_weights, chunks=EP_SIZE, dim=0)
-
     inputs = torch.arange(BS * SEQ_LEN, dtype=torch.bfloat16).unsqueeze(-1).expand(-1, HIDDEN_SIZE)
     # NOTE: support top-k routing
     routing_indices = torch.tensor([2, 3, 1, 3, 1, 0, 2, 3], dtype=torch.int32)
-
-    # init_distributed(
-    #     tp=1,
-    #     dp=DP_SIZE,
-    #     pp=1,
-    #     expert_parallel_size=EP_SIZE,
-    #     expert_tensor_parallel_size=1,
-    #     expert_data_parallel_size=1,
-    #     enabled_moe=True,
-    # )(_test_expert_parallelism_exclude_router)(list_input_batches=list_input_batches, list_routing_indices=list_routing_indices, list_routing_weights=list_routing_weights, parallel_config=parallel_config)
 
     init_distributed(
         tp=1,
@@ -258,15 +228,10 @@ def _test_expert_parallelism(
     list_routing_indices: torch.Tensor,
     parallel_config: ParallelismArgs,
 ):
-    import os
-
     os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
     os.environ["TORCH_USE_CUDA_DSA"] = "1"
 
     ep_rank = dist.get_rank(parallel_context.ep_pg)
-    # input_batches = list_input_batches[ep_rank].to(device="cuda").contiguous()
-    # routing_indices = list_routing_indices[ep_rank].to(device="cuda").contiguous()
-    # routing_weights = list_routing_weights[ep_rank].to(device="cuda").contiguous()
     input_batches = (
         torch.chunk(list_input_batches, chunks=parallel_context.expert_parallel_size, dim=0)[ep_rank]
         .contiguous()
@@ -279,7 +244,6 @@ def _test_expert_parallelism(
         .cuda()
     )
     list_routing_indices = list_routing_indices.contiguous().cuda()
-    # routing_weights = torch.chunk(list_routing_weights, chunks=parallel_context.expert_parallel_size, dim=0)[ep_rank].contiguous().cuda()
 
     ref_parallel_context = copy(parallel_context)
     ref_parallel_context.expert_parallel_size = 1
@@ -299,12 +263,11 @@ def _test_expert_parallelism(
         ref_moe_layer = Qwen2MoELayer(
             config=TINY_MOE_QWEN_CONFIG, parallel_context=ref_parallel_context, parallel_config=ref_parallel_config
         )
-        # # NOTE: make the parameters of all ranks in the ref_moe_layer the same
+        # NOTE: make the parameters of all ranks in the ref_moe_layer the same
         for p in ref_moe_layer.parameters():
             dist.all_reduce(p, op=dist.ReduceOp.AVG)
 
-    # ep_rank = dist.get_rank(parallel_context.ep_pg)
-    # # NOTE: copy the parameter from ref moe to parallelized moe
+    # NOTE: copy the parameter from ref moe to parallelized moe
     def is_expert_param(name):
         return any(x for x in ["experts.merged_gate_up_proj", "experts.merged_down_proj"] if x in name)
 
@@ -315,13 +278,8 @@ def _test_expert_parallelism(
             num_local_experts = moe_layer.num_local_experts
             start_idx = ep_rank * num_local_experts
             end_idx = start_idx + num_local_experts
-            # p.data = ref_p.data[start_idx:end_idx, :, :]
             p.data.copy_(ref_p.data[start_idx:end_idx, :, :])
-        # elif any(x for x in ["shared_expert.down_proj.weight", "shared_expert_gate.weight"] if x in n):
-        #     # NOTE: tensor parallel sharding
-        #     pass
         else:
-            # p.data = ref_p.data
             p.data.copy_(ref_p.data)
 
     for (name, param), (ref_name, ref_param) in zip(moe_layer.named_parameters(), ref_moe_layer.named_parameters()):
@@ -329,36 +287,15 @@ def _test_expert_parallelism(
             continue
 
         assert name == ref_name
-        # try:
-        #     assert torch.allclose(param, ref_param), f"name: {name}, param: {param.shape}, ref_name: {ref_name}, ref_param: {ref_param.shape}"
-        # except:
-        #     assert 1 == 1
-        assert torch.allclose(
-            param, ref_param
-        ), f"name: {name}, param: {param.shape}, ref_name: {ref_name}, ref_param: {ref_param.shape}"
+        assert torch.allclose(param, ref_param)
 
-    # input_batches = input_batches.view(-1, input_batches.shape[-1])
     outputs = moe_layer(input_batches)
-    assert 1 == 1
     ref_outputs = ref_moe_layer(list_input_batches)
 
-    assert 1 == 1
     assert torch.allclose(
         outputs["hidden_states"],
         torch.chunk(ref_outputs["hidden_states"], chunks=parallel_context.expert_parallel_size, dim=0)[ep_rank],
     )
-    # # NOTE
-    # assert torch.allclose(ref_outputs["logs"]["input"], outputs["logs"]["input"])
-    # assert torch.allclose(ref_outputs["logs"]["routing_weights"], outputs["logs"]["routing_weights"])
-    # assert torch.allclose(ref_outputs["logs"]["routing_indices"], outputs["logs"]["routing_indices"])
-
-    # assert torch.allclose(ref_outputs["logs"]["num_tokens_per_expert"], outputs["logs"]["num_tokens_per_expert"])
-    # assert torch.allclose(ref_outputs["logs"]["inverse_permute_mapping"], outputs["logs"]["inverse_permute_mapping"])
-
-    # assert torch.allclose(ref_outputs["logs"]["shared_expert_output"], outputs["logs"]["shared_expert_output"])
-    # assert torch.allclose(
-    #     ref_outputs["logs"]["shared_gate_after_sigmoid"], outputs["logs"]["shared_gate_after_sigmoid"]
-    # )
 
 
 @rerun_if_address_is_in_use()
@@ -377,40 +314,9 @@ def test_expert_parallelism_exclude_router():
         expert_data_parallel_size=1,
         enabled_moe=True,
     )
-    # input_batches = torch.randn(DP_SIZE, BS, SEQ_LEN, TINY_MOE_QWEN_CONFIG.hidden_size, dtype=torch.bfloat16)
-    # NOTE: merge the batch and sequence length dimensions together
-    # as in modeling code
-    # input_batches = torch.arange(0, BS * SEQ_LEN, dtype=torch.bfloat16).unsqueeze(-1).expand(2, -1, HIDDEN_SIZE)
-    # input_batches = torch.arange(DP_SIZE * BS * SEQ_LEN, dtype=torch.bfloat16).unsqueeze(-1).expand(2, -1, HIDDEN_SIZE)
-    # list_input_batches = (
-    #     torch.arange(BS * SEQ_LEN, dtype=torch.bfloat16)
-    #     .unsqueeze(-1)
-    #     .expand(-1, HIDDEN_SIZE)
-    #     .contiguous()
-    #     .view(2, -1, HIDDEN_SIZE)
-    # )
-    # list_input_batches = torch.arange(BS * SEQ_LEN, dtype=torch.bfloat16).unsqueeze(-1).expand(-1, HIDDEN_SIZE).view(2, -1, HIDDEN_SIZE).contiguous()
-    # # list_routing_indices = torch.tensor([[2], [3], [1], [3], [1], [0], [2], [3]], dtype=torch.int32)
-    # list_routing_indices = torch.tensor([2, 3, 1, 3, 1, 0, 2, 3], dtype=torch.int32)
-    # list_routing_weights = torch.ones_like(list_routing_indices, dtype=torch.float32)
-
-    # list_input_batches = torch.chunk(list_input_batches, chunks=EP_SIZE, dim=0)
-    # list_routing_indices = torch.chunk(list_routing_indices, chunks=EP_SIZE, dim=0)
-    # list_routing_weights = torch.chunk(list_routing_weights, chunks=EP_SIZE, dim=0)
-
     inputs = torch.arange(BS * SEQ_LEN, dtype=torch.bfloat16).unsqueeze(-1).expand(-1, HIDDEN_SIZE)
     # NOTE: support top-k routing
     routing_indices = torch.tensor([2, 3, 1, 3, 1, 0, 2, 3], dtype=torch.int32)
-
-    # init_distributed(
-    #     tp=1,
-    #     dp=DP_SIZE,
-    #     pp=1,
-    #     expert_parallel_size=EP_SIZE,
-    #     expert_tensor_parallel_size=1,
-    #     expert_data_parallel_size=1,
-    #     enabled_moe=True,
-    # )(_test_expert_parallelism_exclude_router)(list_input_batches=list_input_batches, list_routing_indices=list_routing_indices, list_routing_weights=list_routing_weights, parallel_config=parallel_config)
 
     init_distributed(
         tp=1,
@@ -437,9 +343,6 @@ def _test_expert_parallelism_exclude_router(
     os.environ["TORCH_USE_CUDA_DSA"] = "1"
 
     ep_rank = dist.get_rank(parallel_context.ep_pg)
-    # input_batches = list_input_batches[ep_rank].to(device="cuda").contiguous()
-    # routing_indices = list_routing_indices[ep_rank].to(device="cuda").contiguous()
-    # routing_weights = list_routing_weights[ep_rank].to(device="cuda").contiguous()
     input_batches = (
         torch.chunk(list_input_batches, chunks=parallel_context.expert_parallel_size, dim=0)[ep_rank]
         .contiguous()
@@ -452,7 +355,6 @@ def _test_expert_parallelism_exclude_router(
         .cuda()
     )
     list_routing_indices = list_routing_indices.contiguous().cuda()
-    # routing_weights = torch.chunk(list_routing_weights, chunks=parallel_context.expert_parallel_size, dim=0)[ep_rank].contiguous().cuda()
 
     ref_parallel_context = copy(parallel_context)
     ref_parallel_context.expert_parallel_size = 1
@@ -476,8 +378,7 @@ def _test_expert_parallelism_exclude_router(
         for p in ref_moe_layer.parameters():
             dist.all_reduce(p, op=dist.ReduceOp.AVG)
 
-    # ep_rank = dist.get_rank(parallel_context.ep_pg)
-    # # NOTE: copy the parameter from ref moe to parallelized moe
+    # NOTE: copy the parameter from ref moe to parallelized moe
     def is_expert_param(name):
         return any(x for x in ["experts.merged_gate_up_proj", "experts.merged_down_proj"] if x in name)
 
@@ -488,13 +389,8 @@ def _test_expert_parallelism_exclude_router(
             num_local_experts = moe_layer.num_local_experts
             start_idx = ep_rank * num_local_experts
             end_idx = start_idx + num_local_experts
-            # p.data = ref_p.data[start_idx:end_idx, :, :]
             p.data.copy_(ref_p.data[start_idx:end_idx, :, :])
-        # elif any(x for x in ["shared_expert.down_proj.weight", "shared_expert_gate.weight"] if x in n):
-        #     # NOTE: tensor parallel sharding
-        #     pass
         else:
-            # p.data = ref_p.data
             p.data.copy_(ref_p.data)
 
     for (name, param), (ref_name, ref_param) in zip(moe_layer.named_parameters(), ref_moe_layer.named_parameters()):
@@ -502,39 +398,17 @@ def _test_expert_parallelism_exclude_router(
             continue
 
         assert name == ref_name
-        # try:
-        #     assert torch.allclose(param, ref_param), f"name: {name}, param: {param.shape}, ref_name: {ref_name}, ref_param: {ref_param.shape}"
-        # except:
-        #     assert 1 == 1
-        assert torch.allclose(
-            param, ref_param
-        ), f"name: {name}, param: {param.shape}, ref_name: {ref_name}, ref_param: {ref_param.shape}"
+        assert torch.allclose(param, ref_param)
 
-    # input_batches = input_batches.view(-1, input_batches.shape[-1])
     outputs = moe_layer._compute_expert_outputs(
         input_batches, torch.ones_like(routing_indices, dtype=torch.float32), routing_indices, {}
     )
-    assert 1 == 1
     ref_outputs = ref_moe_layer._compute_expert_outputs(
         list_input_batches, torch.ones_like(list_routing_indices, dtype=torch.float32), list_routing_indices, {}
     )
-
-    assert 1 == 1
     assert torch.allclose(
         outputs, torch.chunk(ref_outputs, chunks=parallel_context.expert_parallel_size, dim=0)[ep_rank]
     )
-    # # NOTE
-    # assert torch.allclose(ref_outputs["logs"]["input"], outputs["logs"]["input"])
-    # assert torch.allclose(ref_outputs["logs"]["routing_weights"], outputs["logs"]["routing_weights"])
-    # assert torch.allclose(ref_outputs["logs"]["routing_indices"], outputs["logs"]["routing_indices"])
-
-    # assert torch.allclose(ref_outputs["logs"]["num_tokens_per_expert"], outputs["logs"]["num_tokens_per_expert"])
-    # assert torch.allclose(ref_outputs["logs"]["inverse_permute_mapping"], outputs["logs"]["inverse_permute_mapping"])
-
-    # assert torch.allclose(ref_outputs["logs"]["shared_expert_output"], outputs["logs"]["shared_expert_output"])
-    # assert torch.allclose(
-    #     ref_outputs["logs"]["shared_gate_after_sigmoid"], outputs["logs"]["shared_gate_after_sigmoid"]
-    # )
 
 
 if __name__ == "__main__":

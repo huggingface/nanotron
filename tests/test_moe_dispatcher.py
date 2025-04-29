@@ -81,7 +81,6 @@ def test_all_to_all_dispatcher():
     # NOTE: input.shape = [bs*seq_len, hidden_size]
     # routing_indices.shape = [bs*seq_len]
     # routing_weights.shape = [bs*seq_len, 1]
-
     inputs = torch.arange(BS * SEQ_LEN, dtype=torch.bfloat16).unsqueeze(-1).expand(-1, HIDDEN_SIZE)
     # NOTE: support top-k routing
     routing_indices = torch.tensor([2, 3, 1, 3, 1, 0, 2, 3], dtype=torch.int32)
