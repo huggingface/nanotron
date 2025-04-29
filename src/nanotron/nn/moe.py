@@ -35,7 +35,8 @@ def permute(x: torch.Tensor, routing_indices: torch.Tensor):
 
 
 def unpermute(x: torch.Tensor, inverse_mapping: torch.Tensor, routing_weights: torch.Tensor):
-    return ops.unpermute(x, inverse_mapping, routing_weights)
+    comebined_x = ops.unpermute(x.to(torch.float32), inverse_mapping, routing_weights)
+    return comebined_x.to(x.dtype)
 
 
 class AllToAllDispatcher(nn.Module):
@@ -354,7 +355,7 @@ class AllToAllDispatcher(nn.Module):
                 list_output_split_sizes, torch.tensor(self.output_split_sizes, device="cuda"), group=self.ep_pg
             )
 
-        all_to_all(
+        undispatched_expert_outputs = all_to_all(
             expert_outputs,
             output_split_sizes=self.input_split_sizes,
             input_split_sizes=self.output_split_sizes,
@@ -362,12 +363,19 @@ class AllToAllDispatcher(nn.Module):
         )
 
         dist.barrier(group=self.ep_pg)
+
+        # NOTE: now each token weights the expert_output * expert_weight
+
         assert 1 == 1
         # NOTE: this part is un-reordering for the grouped_gemm
         # hidden_states = ops.unpermute(expert_outputs, inverse_mapping, routing_weights)
         # NOTE: undo the expert index sorting for all-to-all back to the original order
         # inverse_indices = torch.argsort(sort_indices, stable=True)
         # return dispatched_outputs.index_select(0, inverse_indices)
+
+        # NOTE: merging the expert output combination and un-permuting them back into a single operation
+        comebined_expert_outputs = unpermute(undispatched_expert_outputs, inverse_permute_mapping, routing_weights)
+        return comebined_expert_outputs
 
 
 class Router(nn.Module):
