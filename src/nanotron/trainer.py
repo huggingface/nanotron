@@ -263,9 +263,6 @@ class DistributedTrainer:
             )
 
         # Setup tensorboard write and log writers on output rank
-        # self.logger_ranks = self.parallel_context.get_global_rank(
-        #     ep_rank=0, pp_rank=self.unwrapped_model.output_pp_rank, dp_rank=0, tp_rank=0, cp_rank=0
-        # ).flatten()
         self.logger_ranks = self.parallel_context.get_global_rank(
             pp_rank=self.unwrapped_model.output_pp_rank, dp_rank=0, tp_rank=0, cp_rank=0
         ).flatten()
