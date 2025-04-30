@@ -96,91 +96,8 @@ class ParallelContext:
         self.world_ranks_to_pg = {}
         self._group_to_ranks = {}
 
-        # if self.enabled_moe is False:
-        #     self._init_process_group_without_moe()
-        # else:
-        #     self._init_process_group_with_moe()
-
         self._init_process_group()
-
-        # TODO: refactor this with expert parallelism
-        # self.parallel_order = ["ep", "pp", "dp", "cp", "tp"]
-        # self.parallel_order = ["pp", "dp", "cp", "tp"]
         self.parallel_order = ["dp", "pp", "cp", "tp"]
-
-    # def _init_process_group_without_moe(self):
-    #     ranks = np.arange(0, self.world_size).reshape(
-    #         (
-    #             # self.expert_parallel_size,  # NOTE: remove this line and refactor the below lines
-    #             self.pipeline_parallel_size,
-    #             self.data_parallel_size,
-    #             self.context_parallel_size,
-    #             self.tensor_parallel_size,
-    #         )
-    #     )
-    #     self.local_pg = self.create_new_group(ranks.reshape((-1, self.local_world_size)))
-    #     assert int(os.environ.get("LOCAL_RANK")) == dist.get_rank(self.local_pg), "Local rank mismatch"
-
-    #     # Relevant process groups containing the current rank
-    #     # NOTE: this contains all the tp ranks of all tp process groups
-    #     # tp_ranks = ranks.transpose((0, 1, 2, 3, 4)).reshape((-1, self.tensor_parallel_size))
-    #     # cp_ranks = ranks.transpose((4, 0, 1, 2, 3)).reshape((-1, self.context_parallel_size))
-    #     # dp_ranks = ranks.transpose((3, 4, 0, 1, 2)).reshape((-1, self.data_parallel_size))
-    #     # pp_ranks = ranks.transpose((2, 3, 4, 0, 1)).reshape((-1, self.pipeline_parallel_size))
-    #     tp_ranks = ranks.transpose((0, 1, 2, 3)).reshape((-1, self.tensor_parallel_size))
-    #     cp_ranks = ranks.transpose((3, 0, 1, 2)).reshape((-1, self.context_parallel_size))
-    #     dp_ranks = ranks.transpose((2, 3, 0, 1)).reshape((-1, self.data_parallel_size))
-    #     pp_ranks = ranks.transpose((1, 2, 3, 0)).reshape((-1, self.pipeline_parallel_size))
-    #     # ep_ranks = ranks.transpose((1, 2, 3, 4, 0)).reshape((-1, self.expert_parallel_size))
-
-    #     self.tp_pg = self.create_new_group(tp_ranks)
-    #     self.cp_pg = self.create_new_group(cp_ranks)
-    #     self.dp_pg = self.create_new_group(dp_ranks)
-    #     self.pp_pg = self.create_new_group(pp_ranks)
-    #     self.ep_pg = self.tp_pg
-    #     # self.ep_pg = self.create_new_group(ep_ranks)  # TODO: ep should be a subset of dp
-
-    #     # model parallel group = combination of tp and pp and exp for a given dp rank
-    #     self.mp_pg = self.create_new_group(
-    #         [
-    #             ranks[:, dp_rank, cp_rank, :].reshape(-1)
-    #             for cp_rank in range(self.context_parallel_size)
-    #             for dp_rank in range(self.data_parallel_size)
-    #         ]
-    #     )
-
-    #     # self.tp_and_cp_pg = self.create_new_group(
-    #     #     [
-    #     #         ranks[ep_rank, pp_rank, dp_rank, :, :].reshape(-1)
-    #     #         for ep_rank in range(self.expert_parallel_size)
-    #     #         for pp_rank in range(self.pipeline_parallel_size)
-    #     #         for dp_rank in range(self.data_parallel_size)
-    #     #     ]
-    #     # )
-    #     self.mp_pg = self.create_new_group(
-    #         [
-    #             ranks[:, dp_rank, cp_rank, :].reshape(-1)
-    #             for cp_rank in range(self.context_parallel_size)
-    #             for dp_rank in range(self.data_parallel_size)
-    #         ]
-    #     )
-
-    #     self.tp_and_cp_pg = self.create_new_group(
-    #         [
-    #             ranks[pp_rank, dp_rank, :, :].reshape(-1)
-    #             for pp_rank in range(self.pipeline_parallel_size)
-    #             for dp_rank in range(self.data_parallel_size)
-    #         ]
-    #     )
-    #     self.world_rank_matrix: np.ndarray = ranks
-    #     # TODO: refactor without code duplication
-    #     self._group_to_ranks = {
-    #         ParallelMode.TP: tp_ranks,
-    #         ParallelMode.CP: cp_ranks,
-    #         ParallelMode.DP: dp_ranks,
-    #         ParallelMode.PP: pp_ranks,
-    #         # ParallelMode.EP: ep_ranks,
-    #     }
 
     def _init_process_group(self):
         """
@@ -190,6 +107,8 @@ class ParallelContext:
         MoE Parallel Folding: Heterogeneous Parallelism
         Mappings for Efficient Large-Scale MoE Model
         Training with Megatron Core
+
+        Following the process group initialization in page 17
 
         https://www.arxiv.org/abs/2504.14960
         """
@@ -354,7 +273,6 @@ class ParallelContext:
 
     def get_global_rank(
         self,
-        # ep_rank: int,
         pp_rank: int,
         dp_rank: int,
         cp_rank: int,
@@ -371,9 +289,4 @@ class ParallelContext:
 
         :return: numpy.int64, The global rank.
         """
-        # if self.enabled_moe is False:
-        #     # return self.world_rank_matrix[ep_rank, pp_rank, dp_rank, cp_rank, tp_rank]
-        #     return self.world_rank_matrix[pp_rank, dp_rank, cp_rank, tp_rank]
-        # else:
-        #     return self.world_rank_matrix[dp_rank, pp_rank, cp_rank, tp_rank]
         return self.world_rank_matrix[dp_rank, pp_rank, cp_rank, tp_rank]
