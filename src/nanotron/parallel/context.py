@@ -96,90 +96,93 @@ class ParallelContext:
         self.world_ranks_to_pg = {}
         self._group_to_ranks = {}
 
-        if self.enabled_moe is False:
-            self._init_process_group_without_moe()
-        else:
-            self._init_process_group_with_moe()
+        # if self.enabled_moe is False:
+        #     self._init_process_group_without_moe()
+        # else:
+        #     self._init_process_group_with_moe()
+
+        self._init_process_group()
 
         # TODO: refactor this with expert parallelism
         # self.parallel_order = ["ep", "pp", "dp", "cp", "tp"]
-        self.parallel_order = ["pp", "dp", "cp", "tp"]
+        # self.parallel_order = ["pp", "dp", "cp", "tp"]
+        self.parallel_order = ["dp", "pp", "cp", "tp"]
 
-    def _init_process_group_without_moe(self):
-        ranks = np.arange(0, self.world_size).reshape(
-            (
-                # self.expert_parallel_size,  # NOTE: remove this line and refactor the below lines
-                self.pipeline_parallel_size,
-                self.data_parallel_size,
-                self.context_parallel_size,
-                self.tensor_parallel_size,
-            )
-        )
-        self.local_pg = self.create_new_group(ranks.reshape((-1, self.local_world_size)))
-        assert int(os.environ.get("LOCAL_RANK")) == dist.get_rank(self.local_pg), "Local rank mismatch"
+    # def _init_process_group_without_moe(self):
+    #     ranks = np.arange(0, self.world_size).reshape(
+    #         (
+    #             # self.expert_parallel_size,  # NOTE: remove this line and refactor the below lines
+    #             self.pipeline_parallel_size,
+    #             self.data_parallel_size,
+    #             self.context_parallel_size,
+    #             self.tensor_parallel_size,
+    #         )
+    #     )
+    #     self.local_pg = self.create_new_group(ranks.reshape((-1, self.local_world_size)))
+    #     assert int(os.environ.get("LOCAL_RANK")) == dist.get_rank(self.local_pg), "Local rank mismatch"
 
-        # Relevant process groups containing the current rank
-        # NOTE: this contains all the tp ranks of all tp process groups
-        # tp_ranks = ranks.transpose((0, 1, 2, 3, 4)).reshape((-1, self.tensor_parallel_size))
-        # cp_ranks = ranks.transpose((4, 0, 1, 2, 3)).reshape((-1, self.context_parallel_size))
-        # dp_ranks = ranks.transpose((3, 4, 0, 1, 2)).reshape((-1, self.data_parallel_size))
-        # pp_ranks = ranks.transpose((2, 3, 4, 0, 1)).reshape((-1, self.pipeline_parallel_size))
-        tp_ranks = ranks.transpose((0, 1, 2, 3)).reshape((-1, self.tensor_parallel_size))
-        cp_ranks = ranks.transpose((3, 0, 1, 2)).reshape((-1, self.context_parallel_size))
-        dp_ranks = ranks.transpose((2, 3, 0, 1)).reshape((-1, self.data_parallel_size))
-        pp_ranks = ranks.transpose((1, 2, 3, 0)).reshape((-1, self.pipeline_parallel_size))
-        # ep_ranks = ranks.transpose((1, 2, 3, 4, 0)).reshape((-1, self.expert_parallel_size))
+    #     # Relevant process groups containing the current rank
+    #     # NOTE: this contains all the tp ranks of all tp process groups
+    #     # tp_ranks = ranks.transpose((0, 1, 2, 3, 4)).reshape((-1, self.tensor_parallel_size))
+    #     # cp_ranks = ranks.transpose((4, 0, 1, 2, 3)).reshape((-1, self.context_parallel_size))
+    #     # dp_ranks = ranks.transpose((3, 4, 0, 1, 2)).reshape((-1, self.data_parallel_size))
+    #     # pp_ranks = ranks.transpose((2, 3, 4, 0, 1)).reshape((-1, self.pipeline_parallel_size))
+    #     tp_ranks = ranks.transpose((0, 1, 2, 3)).reshape((-1, self.tensor_parallel_size))
+    #     cp_ranks = ranks.transpose((3, 0, 1, 2)).reshape((-1, self.context_parallel_size))
+    #     dp_ranks = ranks.transpose((2, 3, 0, 1)).reshape((-1, self.data_parallel_size))
+    #     pp_ranks = ranks.transpose((1, 2, 3, 0)).reshape((-1, self.pipeline_parallel_size))
+    #     # ep_ranks = ranks.transpose((1, 2, 3, 4, 0)).reshape((-1, self.expert_parallel_size))
 
-        self.tp_pg = self.create_new_group(tp_ranks)
-        self.cp_pg = self.create_new_group(cp_ranks)
-        self.dp_pg = self.create_new_group(dp_ranks)
-        self.pp_pg = self.create_new_group(pp_ranks)
-        self.ep_pg = self.tp_pg
-        # self.ep_pg = self.create_new_group(ep_ranks)  # TODO: ep should be a subset of dp
+    #     self.tp_pg = self.create_new_group(tp_ranks)
+    #     self.cp_pg = self.create_new_group(cp_ranks)
+    #     self.dp_pg = self.create_new_group(dp_ranks)
+    #     self.pp_pg = self.create_new_group(pp_ranks)
+    #     self.ep_pg = self.tp_pg
+    #     # self.ep_pg = self.create_new_group(ep_ranks)  # TODO: ep should be a subset of dp
 
-        # model parallel group = combination of tp and pp and exp for a given dp rank
-        self.mp_pg = self.create_new_group(
-            [
-                ranks[:, dp_rank, cp_rank, :].reshape(-1)
-                for cp_rank in range(self.context_parallel_size)
-                for dp_rank in range(self.data_parallel_size)
-            ]
-        )
+    #     # model parallel group = combination of tp and pp and exp for a given dp rank
+    #     self.mp_pg = self.create_new_group(
+    #         [
+    #             ranks[:, dp_rank, cp_rank, :].reshape(-1)
+    #             for cp_rank in range(self.context_parallel_size)
+    #             for dp_rank in range(self.data_parallel_size)
+    #         ]
+    #     )
 
-        # self.tp_and_cp_pg = self.create_new_group(
-        #     [
-        #         ranks[ep_rank, pp_rank, dp_rank, :, :].reshape(-1)
-        #         for ep_rank in range(self.expert_parallel_size)
-        #         for pp_rank in range(self.pipeline_parallel_size)
-        #         for dp_rank in range(self.data_parallel_size)
-        #     ]
-        # )
-        self.mp_pg = self.create_new_group(
-            [
-                ranks[:, dp_rank, cp_rank, :].reshape(-1)
-                for cp_rank in range(self.context_parallel_size)
-                for dp_rank in range(self.data_parallel_size)
-            ]
-        )
+    #     # self.tp_and_cp_pg = self.create_new_group(
+    #     #     [
+    #     #         ranks[ep_rank, pp_rank, dp_rank, :, :].reshape(-1)
+    #     #         for ep_rank in range(self.expert_parallel_size)
+    #     #         for pp_rank in range(self.pipeline_parallel_size)
+    #     #         for dp_rank in range(self.data_parallel_size)
+    #     #     ]
+    #     # )
+    #     self.mp_pg = self.create_new_group(
+    #         [
+    #             ranks[:, dp_rank, cp_rank, :].reshape(-1)
+    #             for cp_rank in range(self.context_parallel_size)
+    #             for dp_rank in range(self.data_parallel_size)
+    #         ]
+    #     )
 
-        self.tp_and_cp_pg = self.create_new_group(
-            [
-                ranks[pp_rank, dp_rank, :, :].reshape(-1)
-                for pp_rank in range(self.pipeline_parallel_size)
-                for dp_rank in range(self.data_parallel_size)
-            ]
-        )
-        self.world_rank_matrix: np.ndarray = ranks
-        # TODO: refactor without code duplication
-        self._group_to_ranks = {
-            ParallelMode.TP: tp_ranks,
-            ParallelMode.CP: cp_ranks,
-            ParallelMode.DP: dp_ranks,
-            ParallelMode.PP: pp_ranks,
-            # ParallelMode.EP: ep_ranks,
-        }
+    #     self.tp_and_cp_pg = self.create_new_group(
+    #         [
+    #             ranks[pp_rank, dp_rank, :, :].reshape(-1)
+    #             for pp_rank in range(self.pipeline_parallel_size)
+    #             for dp_rank in range(self.data_parallel_size)
+    #         ]
+    #     )
+    #     self.world_rank_matrix: np.ndarray = ranks
+    #     # TODO: refactor without code duplication
+    #     self._group_to_ranks = {
+    #         ParallelMode.TP: tp_ranks,
+    #         ParallelMode.CP: cp_ranks,
+    #         ParallelMode.DP: dp_ranks,
+    #         ParallelMode.PP: pp_ranks,
+    #         # ParallelMode.EP: ep_ranks,
+    #     }
 
-    def _init_process_group_with_moe(self):
+    def _init_process_group(self):
         """
         Decoupled 5D parallelism
         based on the paper:
@@ -232,13 +235,6 @@ class ParallelContext:
         self.cp_pg = self.create_new_group(cp_ranks)
         self.pp_pg = self.create_new_group(pp_ranks)
         self.dp_pg = self.create_new_group(dp_ranks)
-        # self.mp_pg = self.create_new_group(
-        #     [
-        #         ranks[:, :, dp_rank, cp_rank, :].reshape(-1)
-        #         for cp_rank in range(self.context_parallel_size)
-        #         for dp_rank in range(self.data_parallel_size)
-        #     ]
-        # )
         self.mp_pg = self.create_new_group(
             [
                 attn_ranks[dp_rank, :, cp_rank, :].reshape(-1)
@@ -246,62 +242,74 @@ class ParallelContext:
                 for dp_rank in range(self.data_parallel_size)
             ]
         )
+        self.tp_and_cp_pg = self.create_new_group(
+            [
+                attn_ranks[dp_rank, pp_rank, :, :].reshape(-1)
+                for pp_rank in range(self.pipeline_parallel_size)
+                for dp_rank in range(self.data_parallel_size)
+            ]
+        )
 
-        # NOTE: expert parallelism
-        moe_ranks = ranks.reshape(
-            self.expert_data_parallel_size,
-            self.pipeline_parallel_size,
-            self.expert_parallel_size,
-            self.expert_tensor_parallel_size,
-        )
-        ep_ranks = rearrange(
-            moe_ranks,
-            "moe_dp pp ep tp -> (moe_dp pp tp) ep",
-            tp=self.expert_tensor_parallel_size,
-            ep=self.expert_parallel_size,
-            pp=self.pipeline_parallel_size,
-            moe_dp=self.expert_data_parallel_size,
-        )
-        ep_tp_ranks = rearrange(
-            moe_ranks,
-            "moe_dp pp ep tp -> (moe_dp pp ep) tp",
-            tp=self.expert_tensor_parallel_size,
-            ep=self.expert_parallel_size,
-            pp=self.pipeline_parallel_size,
-            moe_dp=self.expert_data_parallel_size,
-        )
-        ep_pp_ranks = rearrange(
-            moe_ranks,
-            "moe_dp pp ep tp -> (moe_dp ep tp) pp",
-            tp=self.expert_tensor_parallel_size,
-            ep=self.expert_parallel_size,
-            pp=self.pipeline_parallel_size,
-            moe_dp=self.expert_data_parallel_size,
-        )
-        ep_dp_ranks = rearrange(
-            moe_ranks,
-            "moe_dp pp ep tp -> (pp ep tp) moe_dp",
-            tp=self.expert_tensor_parallel_size,
-            ep=self.expert_parallel_size,
-            pp=self.pipeline_parallel_size,
-            moe_dp=self.expert_data_parallel_size,
-        )
-        self.ep_pg = self.create_new_group(ep_ranks)
-        self.ep_tp_pg = self.create_new_group(ep_tp_ranks)
-        self.ep_pp_pg = self.create_new_group(ep_pp_ranks)
-        self.ep_dp_pg = self.create_new_group(ep_dp_ranks)
-        self._group_to_ranks = {
+        _group_to_ranks = {
             # NOTE: attention parallelism
             ParallelMode.TP: tp_ranks,
             ParallelMode.CP: cp_ranks,
             ParallelMode.PP: pp_ranks,
             ParallelMode.DP: dp_ranks,
-            # NOTE: expert parallelism
-            ParallelMode.EP: ep_ranks,
-            ParallelMode.EP_TP: ep_tp_ranks,
-            ParallelMode.EP_PP: ep_pp_ranks,
-            ParallelMode.EP_DP: ep_dp_ranks,
         }
+
+        if self.enabled_moe is True:
+
+            # NOTE: expert parallelism
+            moe_ranks = ranks.reshape(
+                self.expert_data_parallel_size,
+                self.pipeline_parallel_size,
+                self.expert_parallel_size,
+                self.expert_tensor_parallel_size,
+            )
+            ep_ranks = rearrange(
+                moe_ranks,
+                "moe_dp pp ep tp -> (moe_dp pp tp) ep",
+                tp=self.expert_tensor_parallel_size,
+                ep=self.expert_parallel_size,
+                pp=self.pipeline_parallel_size,
+                moe_dp=self.expert_data_parallel_size,
+            )
+            ep_tp_ranks = rearrange(
+                moe_ranks,
+                "moe_dp pp ep tp -> (moe_dp pp ep) tp",
+                tp=self.expert_tensor_parallel_size,
+                ep=self.expert_parallel_size,
+                pp=self.pipeline_parallel_size,
+                moe_dp=self.expert_data_parallel_size,
+            )
+            ep_pp_ranks = rearrange(
+                moe_ranks,
+                "moe_dp pp ep tp -> (moe_dp ep tp) pp",
+                tp=self.expert_tensor_parallel_size,
+                ep=self.expert_parallel_size,
+                pp=self.pipeline_parallel_size,
+                moe_dp=self.expert_data_parallel_size,
+            )
+            ep_dp_ranks = rearrange(
+                moe_ranks,
+                "moe_dp pp ep tp -> (pp ep tp) moe_dp",
+                tp=self.expert_tensor_parallel_size,
+                ep=self.expert_parallel_size,
+                pp=self.pipeline_parallel_size,
+                moe_dp=self.expert_data_parallel_size,
+            )
+            self.ep_pg = self.create_new_group(ep_ranks)
+            self.ep_tp_pg = self.create_new_group(ep_tp_ranks)
+            self.ep_pp_pg = self.create_new_group(ep_pp_ranks)
+            self.ep_dp_pg = self.create_new_group(ep_dp_ranks)
+
+            _group_to_ranks[ParallelMode.EP] = ep_ranks
+            _group_to_ranks[ParallelMode.EP_TP] = ep_tp_ranks
+            _group_to_ranks[ParallelMode.EP_PP] = ep_pp_ranks
+            _group_to_ranks[ParallelMode.EP_DP] = ep_dp_ranks
+
+        self._group_to_ranks = _group_to_ranks
         self.world_rank_matrix = attn_ranks
 
     def create_new_group(self, all_groups_ranks: np.ndarray) -> dist.ProcessGroup:
@@ -363,8 +371,9 @@ class ParallelContext:
 
         :return: numpy.int64, The global rank.
         """
-        if self.enabled_moe is False:
-            # return self.world_rank_matrix[ep_rank, pp_rank, dp_rank, cp_rank, tp_rank]
-            return self.world_rank_matrix[pp_rank, dp_rank, cp_rank, tp_rank]
-        else:
-            return self.world_rank_matrix[dp_rank, pp_rank, cp_rank, tp_rank]
+        # if self.enabled_moe is False:
+        #     # return self.world_rank_matrix[ep_rank, pp_rank, dp_rank, cp_rank, tp_rank]
+        #     return self.world_rank_matrix[pp_rank, dp_rank, cp_rank, tp_rank]
+        # else:
+        #     return self.world_rank_matrix[dp_rank, pp_rank, cp_rank, tp_rank]
+        return self.world_rank_matrix[dp_rank, pp_rank, cp_rank, tp_rank]
