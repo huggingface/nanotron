@@ -146,19 +146,23 @@ def test_all_to_all_dispatcher(
     )
 
 
-# if __name__ == "__main__":
-
-#     test_all_to_all_dispatcher(
-#         # routing_indices=torch.tensor([[2], [3], [1], [3], [1], [0], [2], [3]], dtype=torch.int32)
-#         routing_indices=torch.tensor(
-#             [[2, 1], [3, 0], [1, 2], [3, 1], [1, 2], [0, 1], [2, 1], [1, 2]], dtype=torch.int32
-#         ),
-#         routing_weights=torch.tensor(
-#             [[1., 1.], [1., 1.], [1., 1.], [1., 1.], [1., 1.], [1., 1.], [1., 1.], [1., 1.]], dtype=torch.bfloat16, device="cuda"
-#         ),
-#         expected_permuted_outputs=[
-#             torch.tensor([1, 5, 0, 2, 3, 4, 5, 6, 7], dtype=torch.bfloat16).unsqueeze(-1).expand(-1, HIDDEN_SIZE),
-#             torch.tensor([0, 2, 4, 6, 7, 1, 3], dtype=torch.bfloat16).unsqueeze(-1).expand(-1, HIDDEN_SIZE),
-#         ],
-#         expected_num_local_dispatched_tokens_per_expert=torch.tensor([[2, 7], [5, 2]], dtype=torch.bfloat16),
-#     )
+if __name__ == "__main__":
+    test_all_to_all_dispatcher(
+        # routing_indices=torch.tensor([[2], [3], [1], [3], [1], [0], [2], [3]], dtype=torch.int32)
+        routing_indices=torch.tensor(
+            [[2, 1], [3, 0], [1, 2], [3, 1], [1, 2], [0, 1], [2, 1], [1, 2]], dtype=torch.int32
+        ),
+        routing_weights=torch.tensor(
+            [[1.0, 1.0], [1.0, 1.0], [1.0, 1.0], [1.0, 1.0], [1.0, 1.0], [1.0, 1.0], [1.0, 1.0], [1.0, 1.0]],
+            dtype=torch.bfloat16,
+            device="cuda",
+        ),
+        expected_permuted_outputs=[
+            torch.tensor([1, 5, 0, 2, 3, 4, 5, 6, 7], dtype=torch.bfloat16).unsqueeze(-1).expand(-1, HIDDEN_SIZE),
+            torch.tensor([0, 2, 4, 6, 7, 1, 3], dtype=torch.bfloat16).unsqueeze(-1).expand(-1, HIDDEN_SIZE),
+        ],
+        expected_num_local_dispatched_tokens_per_expert=torch.tensor([[2, 7], [5, 2]], dtype=torch.bfloat16),
+        expected_combined_outputs=torch.tensor([0, 2, 4, 6, 8, 10, 12, 14], dtype=torch.bfloat16)
+        .unsqueeze(-1)
+        .expand(-1, HIDDEN_SIZE),
+    )

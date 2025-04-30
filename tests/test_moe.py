@@ -13,7 +13,13 @@ from helpers.utils import (
 )
 from nanotron.config.parallelism_config import ParallelismArgs
 from nanotron.models.base import init_on_device_and_dtype
-from nanotron.nn.moe import GroupedMLP, Qwen2MoELayer, permute, unpermute
+from nanotron.nn.moe import (
+    GroupedMLP,
+    Qwen2MoELayer,
+    permute,
+    unpermute,
+    ver3_get_dispatched_routing_indices,
+)
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.context import ParallelMode
 from torch.distributed import ProcessGroup
@@ -454,6 +460,30 @@ def _test_expert_parallelism_exclude_router(
     )
 
 
+@pytest.mark.parametrize(
+    "global_routing_indices, expert_parallel_size, num_experts, expected_result",
+    [
+        (torch.tensor([[0], [2], [1], [3]], dtype=torch.long), 2, 4, [torch.tensor([0, 1]), torch.tensor([2, 3])]),
+        # (torch.tensor([[0, 2], [1, 3], [0, 3], [1, 2]], dtype=torch.long), 2, 2, [torch.tensor([0, 1]), torch.tensor([2, 3])]),
+        (
+            torch.tensor([[2, 1], [3, 0], [1, 2], [3, 1], [1, 2], [0, 1], [2, 1], [3, 2]], dtype=torch.long),
+            2,
+            4,
+            [torch.tensor([0, 1, 1, 1, 0, 1, 1, 1, 1]), torch.tensor([2, 2, 3, 3, 2, 2, 2])],
+        ),
+    ],
+)
+def test_get_dispatched_routing_indices(global_routing_indices, expert_parallel_size, num_experts, expected_result):
+    """Test basic functionality with simple routing indices."""
+    result = ver3_get_dispatched_routing_indices(global_routing_indices, expert_parallel_size, num_experts)
+
+    assert isinstance(result, list)
+    assert len(result) == expert_parallel_size
+
+    assert torch.equal(result[0], expected_result[0])
+    assert torch.equal(result[1], expected_result[1])
+
+
 if __name__ == "__main__":
     # test_grouped_mlp()
     # test_init_moe_process_groups(tp=1, dp=4, pp=1, expert_parallel_size=2, expert_tensor_parallel_size=1, expert_data_parallel_size=2, enabled_moe=True)
@@ -461,9 +491,9 @@ if __name__ == "__main__":
 
     # (1, 1, 1, 2, 1, 1) the test that fails
     # test_init_moe_process_groups(tp=1, dp=1, pp=1, expert_parallel_size=2, expert_tensor_parallel_size=1, expert_data_parallel_size=1)
-    test_expert_parallelism(
-        list_routing_indicies=torch.tensor([[2], [3], [1], [3], [1], [0], [2], [3]], dtype=torch.int32)
-    )
+    # test_expert_parallelism(
+    #     list_routing_indicies=torch.tensor([[2], [3], [1], [3], [1], [0], [2], [3]], dtype=torch.int32)
+    # )
     # test_expert_parallelism_exclude_router(
     #     # torch.tensor([[2], [3], [1], [3], [1], [0], [2], [3]], dtype=torch.int32)
     #     torch.tensor([[2, 1], [3, 0], [1, 2], [3, 1], [1, 2], [0, 1], [2, 1], [3, 2]], dtype=torch.int32)
@@ -477,3 +507,11 @@ if __name__ == "__main__":
     #     torch.tensor([[2, 1], [3, 0], [1, 2], [3, 1]], dtype=torch.int32, device="cuda"),
     #     torch.tensor([1, 0, 2, 3, 0, 2, 1, 3], dtype=torch.bfloat16, device="cuda").unsqueeze(-1).expand(-1, 16),
     # )
+
+    test_get_dispatched_routing_indices(
+        # torch.tensor([[0, 2], [1, 3], [0, 3], [1, 2]], dtype=torch.long), 2, 2, [torch.tensor([0, 1]), torch.tensor([2, 3])]
+        torch.tensor([[2, 1], [3, 0], [1, 2], [3, 1], [1, 2], [0, 1], [2, 1], [3, 2]], dtype=torch.long),
+        2,
+        4,
+        [torch.tensor([0, 1, 1, 1, 0, 1, 1, 1, 1]), torch.tensor([2, 2, 3, 3, 2, 2, 2])],
+    )
