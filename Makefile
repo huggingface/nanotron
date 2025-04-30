@@ -20,3 +20,8 @@ test:
         --color=yes \
         --verbose \
         examples/llama/tests/
+install-moe:
+	pip install --no-build-isolation git+https://github.com/fanshiqing/grouped_gemm@main
+test-moe:
+	pytest --color=yes --verbose tests/test_moe_dispatcher.py
+	pytest --color=yes --verbose tests/test_moe.py

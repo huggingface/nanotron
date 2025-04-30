@@ -61,7 +61,7 @@ def _test_all_to_all_dispatcher(
         inverse_permute_mapping,
         inverse_expert_sorting_index,
         num_local_dispatched_tokens_per_expert,
-    ) = dispatcher.permute(input, routing_indices, {})
+    ) = dispatcher.permute(input, routing_indices)
 
     assert torch.allclose(dispatched_input, expected_output)
     assert torch.equal(expected_num_local_dispatched_tokens_per_expert, num_local_dispatched_tokens_per_expert)
@@ -69,9 +69,6 @@ def _test_all_to_all_dispatcher(
     undispatched_and_comebined_input = dispatcher.unpermute(
         dispatched_input, inverse_permute_mapping, routing_weights, inverse_expert_sorting_index
     )
-
-    list_undispatched_inputs = [torch.empty_like(undispatched_and_comebined_input) for _ in range(world_size)]
-    dist.all_gather(list_undispatched_inputs, undispatched_and_comebined_input)
 
     assert torch.allclose(undispatched_and_comebined_input, expected_combined_outputs)
 
@@ -104,8 +101,6 @@ def _test_all_to_all_dispatcher(
             ),
             [
                 # NOTE: this isn't include expert sorting index
-                # torch.tensor([1, 0, 2, 3, 5, 4, 5, 6, 7], dtype=torch.bfloat16).unsqueeze(-1).expand(-1, HIDDEN_SIZE),
-                # torch.tensor([0, 2, 1, 3, 4, 6, 7], dtype=torch.bfloat16).unsqueeze(-1).expand(-1, HIDDEN_SIZE),
                 torch.tensor([1, 5, 0, 2, 3, 4, 5, 6, 7], dtype=torch.bfloat16).unsqueeze(-1).expand(-1, HIDDEN_SIZE),
                 torch.tensor([0, 2, 4, 6, 7, 1, 3], dtype=torch.bfloat16).unsqueeze(-1).expand(-1, HIDDEN_SIZE),
             ],
