@@ -23,6 +23,9 @@ except ImportError:
         "Grouped GEMM is not available. Please run `pip install --no-build-isolation git+https://github.com/fanshiqing/grouped_gemm@main` (takes less than 5 minutes)"
     )
 
+# Try to debug the topk version
+topk_version = True
+
 
 class Router(nn.Module):
     def __init__(
@@ -93,7 +96,8 @@ class Router(nn.Module):
         )  # [num_tokens, num_experts_per_token]
 
         # fail to converge
-        # return routing_weights, routing_indices
+        if topk_version:
+            return routing_weights, routing_indices
 
         # converge
         topk_masked_gates = torch.zeros_like(logits).scatter(
@@ -214,29 +218,29 @@ class Qwen2MoELayer(nn.Module):
         # Whether to recompute MoE layer during backward pass for memory efficiency
         self.recompute_layer = parallel_config.recompute_layer
 
-    # def _dispatch_tokens(
-    #     self,
-    #     hidden_states: torch.Tensor,
-    #     routing_indices: torch.Tensor,
-    # ):
-    #     """
-    #     Dispatches tokens to their selected experts.
-    #     In a full implementation, this would handle the actual token routing logic
-    #     including communication between devices.
-    #     """
-    #     # NOTE: start from expert 0 to expert n
-    #     num_tokens_per_expert = torch.bincount(
-    #         routing_indices.flatten(), minlength=self.num_local_experts
-    #     )  # [num_local_experts]
-    #     dispatched_inputs, inverse_permute_mapping = ops.permute(hidden_states, routing_indices)
-    #     return dispatched_inputs, inverse_permute_mapping, num_tokens_per_expert
+    def _dispatch_tokens(
+        self,
+        hidden_states: torch.Tensor,
+        routing_indices: torch.Tensor,
+    ):
+        """
+        Dispatches tokens to their selected experts.
+        In a full implementation, this would handle the actual token routing logic
+        including communication between devices.
+        """
+        # NOTE: start from expert 0 to expert n
+        num_tokens_per_expert = torch.bincount(
+            routing_indices.flatten(), minlength=self.num_local_experts
+        )  # [num_local_experts]
+        dispatched_inputs, inverse_permute_mapping = ops.permute(hidden_states, routing_indices)
+        return dispatched_inputs, inverse_permute_mapping, num_tokens_per_expert
 
-    # def _combine_expert_outputs(self, expert_outputs, inverse_mapping, routing_weights):
-    #     """
-    #     Combines outputs from different experts back to the original tensor layout.
-    #     """
-    #     hidden_states = ops.unpermute(expert_outputs, inverse_mapping, routing_weights)
-    #     return hidden_states
+    def _combine_expert_outputs(self, expert_outputs, inverse_mapping, routing_weights):
+        """
+        Combines outputs from different experts back to the original tensor layout.
+        """
+        hidden_states = ops.unpermute(expert_outputs, inverse_mapping, routing_weights)
+        return hidden_states
 
     def permute(self, hidden_states, probs, routing_map):
         num_tokens, _ = hidden_states.shape
@@ -267,25 +271,29 @@ class Qwen2MoELayer(nn.Module):
         routing_weights, routing_indices = self.router(hidden_states)  # [num_tokens, num_experts_per_token]
 
         # Dispatch tokens to experts
-        # dispatched_inputs, inverse_permute_mapping, num_tokens_per_expert = self._dispatch_tokens(
-        #     hidden_states, routing_indices
-        # )
+        if topk_version:
+            dispatched_inputs, inverse_permute_mapping, num_tokens_per_expert = self._dispatch_tokens(
+                hidden_states, routing_indices
+            )
 
-        num_tokens_per_expert = routing_indices.sum(dim=0).long()  # [num_local_experts]
-        # permute
-        permuted_hidden_states, permuted_probs, sorted_indices = self.permute(
-            hidden_states, routing_weights, routing_indices
-        )
+            expert_outputs = self.experts(dispatched_inputs, num_tokens_per_expert)
 
-        # Matrix multiplication
-        output = self.experts(permuted_hidden_states, num_tokens_per_expert)
+            output = self._combine_expert_outputs(
+                expert_outputs["hidden_states"], inverse_permute_mapping, routing_weights
+            )
 
-        # unpermute
-        output = self.unpermute(output["hidden_states"], permuted_probs, sorted_indices, hidden_states.shape)
+        else:
+            num_tokens_per_expert = routing_indices.sum(dim=0).long()  # [num_local_experts]
+            # permute
+            permuted_hidden_states, permuted_probs, sorted_indices = self.permute(
+                hidden_states, routing_weights, routing_indices
+            )
 
-        # output = self._combine_expert_outputs(
-        #     expert_outputs["hidden_states"], inverse_permute_mapping, routing_weights
-        # )
+            # Matrix multiplication
+            output = self.experts(permuted_hidden_states, num_tokens_per_expert)
+
+            # unpermute
+            output = self.unpermute(output["hidden_states"], permuted_probs, sorted_indices, hidden_states.shape)
 
         # Add shared expert contribution if enabled
         if self.enable_shared_expert:
