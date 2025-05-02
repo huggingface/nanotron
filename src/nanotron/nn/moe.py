@@ -39,6 +39,7 @@ def unpermute(x: torch.Tensor, inverse_mapping: torch.Tensor, routing_weights: t
     return comebined_x.to(x.dtype)
 
 
+@torch.no_grad()
 def _get_dispatched_routing_indices(global_routing_indices, expert_parallel_size, num_experts):
     from einops import rearrange
 
@@ -96,6 +97,7 @@ class AllToAllDispatcher(nn.Module):
         + inverse_expert_sorting_index: is the inverse of the expert sorting index
         """
 
+        @torch.no_grad()
         def calculate_output_split_sizes_for_rank(all_input_split_sizes, rank):
             """
             Calculate output_split_sizes for a specific rank based on input_split_sizes from all ranks.
@@ -118,78 +120,95 @@ class AllToAllDispatcher(nn.Module):
 
             return output_split_sizes
 
-        # NOTE: start from expert 0 to expert n
-        # NOTE: because the routing indices is global,
-        # but each expert device has a set of local experts
-        # so we need to align the routing indices to the local experts index
-        ep_rank = dist.get_rank(self.ep_pg)
-        num_tokens_per_expert = torch.bincount(
-            routing_indices.flatten(), minlength=self.num_experts
-        ).cuda()  # [num_local_experts]
-        global_routing_indices = differentiable_all_gather(routing_indices, group=self.ep_pg)
+        with torch.autograd.profiler.record_function("AllToAllDispatcher.permute.all_to_all.pre"):
+            # NOTE: start from expert 0 to expert n
+            # NOTE: because the routing indices is global,
+            # but each expert device has a set of local experts
+            # so we need to align the routing indices to the local experts index
+            ep_rank = dist.get_rank(self.ep_pg)
+            num_tokens_per_expert = torch.bincount(
+                routing_indices.flatten(), minlength=self.num_experts
+            )  # [num_local_experts]
+            global_routing_indices = differentiable_all_gather(routing_indices, group=self.ep_pg)
+            # global_routing_indices = global_routing_indices
 
-        hidden_states, inverse_permute_mapping = permute(hidden_states, routing_indices)
+            hidden_states, inverse_permute_mapping = permute(hidden_states, routing_indices)
 
-        # NOTE: this part is all-to-all token dispatching
-        if self.expert_parallel_size > 1:
-            # NOTE: Reshape num_local_tokens_per_expert to [ep_size, num_local_experts]
-            # TODO: .view or .reshape? check which one is faster
-            # NOTE: this is incorrect in the case of imbalance
-            num_tokens_per_expert_device = num_tokens_per_expert.reshape(
-                self.expert_parallel_size, self.num_local_experts
+            # NOTE: this part is all-to-all token dispatching
+            if self.expert_parallel_size > 1:
+                # NOTE: Reshape num_local_tokens_per_expert to [ep_size, num_local_experts]
+                # TODO: .view or .reshape? check which one is faster
+                # NOTE: this is incorrect in the case of imbalance
+                num_tokens_per_expert_device = num_tokens_per_expert.reshape(
+                    self.expert_parallel_size, self.num_local_experts
+                )
+                # NOTE: input_size_splits has a shape = [expert_parallel_size]
+                # where each value represent the number of tokens that we send from this device
+                # to [i]th device in the input_size_splits
+                # TODO: double check cpu-gpu sync
+                input_split_sizes = num_tokens_per_expert_device.sum(dim=1)
+                list_input_split_sizes = [
+                    torch.empty_like(input_split_sizes) for _ in range(self.expert_parallel_size)
+                ]
+                dist.all_gather(list_input_split_sizes, input_split_sizes, group=self.ep_pg)
+
+                # NOTE: we can compute how many tokens this divide to receive from [i]th device globally
+                # NOTE: create a tensor corresponding to dist.get_rank(self.ep_pg)
+                # TODO: double check cpu-gpu sync
+                input_split_sizes = input_split_sizes.tolist()
+                output_split_sizes = calculate_output_split_sizes_for_rank(
+                    list_input_split_sizes, dist.get_rank(self.ep_pg)
+                )
+            else:
+                input_split_sizes, output_split_sizes = None, None
+
+        with torch.autograd.profiler.record_function("AllToAllDispatcher.permute.all_to_all"):
+            dispatched_hidden_states = all_to_all(
+                hidden_states,
+                output_split_sizes=output_split_sizes,
+                input_split_sizes=input_split_sizes,
+                group=self.ep_pg,
             )
-            # NOTE: input_size_splits has a shape = [expert_parallel_size]
-            # where each value represent the number of tokens that we send from this device
-            # to [i]th device in the input_size_splits
-            # TODO: double check cpu-gpu sync
-            input_split_sizes = num_tokens_per_expert_device.sum(dim=1)
-            list_input_split_sizes = [torch.empty_like(input_split_sizes) for _ in range(self.expert_parallel_size)]
-            dist.all_gather(list_input_split_sizes, input_split_sizes, group=self.ep_pg)
 
-            # NOTE: we can compute how many tokens this divide to receive from [i]th device globally
-            # NOTE: create a tensor corresponding to dist.get_rank(self.ep_pg)
-            # TODO: double check cpu-gpu sync
-            input_split_sizes = input_split_sizes.tolist()
-            output_split_sizes = calculate_output_split_sizes_for_rank(
-                list_input_split_sizes, dist.get_rank(self.ep_pg)
+            self.input_split_sizes = input_split_sizes
+            self.output_split_sizes = output_split_sizes
+
+        with torch.autograd.profiler.record_function("AllToAllDispatcher.permute.expert_index_sorting"):
+            # NOTE: a list of rotuing indices corresponding to the dispatched inputs
+            # we shouldn't sort the indices before permutation,
+            # but we keep the same expert value for each dispatched token,
+            # then the permutation function will handle the sorting and replicating for topk
+            dispatched_routing_indices = _get_dispatched_routing_indices(
+                global_routing_indices, self.expert_parallel_size, num_experts=self.num_experts
+            )[ep_rank]
+            dispatched_routing_indices_cpu = dispatched_routing_indices.cpu()
+
+            # NOTE: it should be the number of dispatched tokens per expert
+            # because we will use this for local grouped_gemm
+            # NOTE: the local_routing_indices has a global expert index,
+            # so we need to subtract the number of local experts to get the local expert index
+            # dispatched_routing_indices = dispatched_routing_indices.cpu()
+            num_local_dispatched_tokens_per_expert = torch.bincount(
+                dispatched_routing_indices_cpu - ep_rank * self.num_local_experts, minlength=self.num_local_experts
             )
-        else:
-            input_split_sizes, output_split_sizes = None, None
 
-        dispatched_hidden_states = all_to_all(
-            hidden_states,
-            output_split_sizes=output_split_sizes,
-            input_split_sizes=input_split_sizes,
-            group=self.ep_pg,
-        )
+            # NOTE: torch.bincount requires the indices to be int32
+            # otherwise it raises: "RuntimeError: "bincount_cuda" not implemented for 'BFloat16'"
+            # NOTE: if dispatched_routing_indices only has a single value,
+            # then the shape of expert_sort_indices is a single scalar, but we want it to be a 1d tensor
+            # for the sorted_and_dispatched_hidden_states to has shape [num_tokens, d_model]
+            # expert_sort_indices = torch.argsort(dispatched_routing_indices.squeeze(-1), stable=True).view(-1)
 
-        self.input_split_sizes = input_split_sizes
-        self.output_split_sizes = output_split_sizes
+            _for_sort_dispatched_routing_indices = dispatched_routing_indices.squeeze(-1)
+            expert_sort_indices = torch.argsort(_for_sort_dispatched_routing_indices, stable=True)
+            expert_sort_indices = expert_sort_indices.view(-1)
 
-        # NOTE: a list of rotuing indices corresponding to the dispatched inputs
-        # we shouldn't sort the indices before permutation,
-        # but we keep the same expert value for each dispatched token,
-        # then the permutation function will handle the sorting and replicating for topk
-        dispatched_routing_indices = _get_dispatched_routing_indices(
-            global_routing_indices, self.expert_parallel_size, num_experts=self.num_experts
-        )[ep_rank]
+            sorted_and_dispatched_hidden_states = dispatched_hidden_states[expert_sort_indices]
 
-        # NOTE: torch.bincount requires the indices to be int32
-        # otherwise it raises: "RuntimeError: "bincount_cuda" not implemented for 'BFloat16'"
-        # NOTE: if dispatched_routing_indices only has a single value,
-        # then the shape of expert_sort_indices is a single scalar, but we want it to be a 1d tensor
-        # for the sorted_and_dispatched_hidden_states to has shape [num_tokens, d_model]
-        expert_sort_indices = torch.argsort(dispatched_routing_indices.squeeze(-1), stable=True).view(-1)
-        sorted_and_dispatched_hidden_states = dispatched_hidden_states[expert_sort_indices]
+            # num_local_dispatched_tokens_per_expert = num_local_dispatched_tokens_per_expert
 
-        # NOTE: it should be the number of dispatched tokens per expert
-        # because we will use this for local grouped_gemm
-        # NOTE: the local_routing_indices has a global expert index,
-        # so we need to subtract the number of local experts to get the local expert index
-        num_local_dispatched_tokens_per_expert = torch.bincount(
-            dispatched_routing_indices - ep_rank * self.num_local_experts, minlength=self.num_local_experts
-        )
-        num_local_dispatched_tokens_per_expert = num_local_dispatched_tokens_per_expert
+            # NOTE: we prefer to keep num_local_dispatched_tokens_per_expert on cpu,
+            # so we don't have to move it again for grouped_gemm
 
         return (
             sorted_and_dispatched_hidden_states,
@@ -204,8 +223,9 @@ class AllToAllDispatcher(nn.Module):
         """
 
         # NOTE: the expert_outputs here is sorted by the expert index
-        # so we need to unsort it back to the original order
+        # so we need to unsort it back to the dispatching order
         inverse_expert_sort_indices = torch.argsort(expert_sort_indices, stable=True)
+        # NOTE: expert_outputs is on cuda, inverse_expert_sort_indices is on cpu, how to remove a cuda sync point here?
         expert_outputs = expert_outputs.index_select(0, inverse_expert_sort_indices)
 
         undispatched_expert_outputs = all_to_all(
@@ -263,7 +283,7 @@ class GroupedMLP(nn.Module):
 
         num_local_experts = config.moe_config.num_experts // parallel_config.expert_parallel_size
         self.expert_parallel_size = parallel_config.expert_parallel_size
-        self.num_local_experts = num_local_experts
+        self.num_local_experts = torch.tensor(num_local_experts, dtype=torch.int32, device="cuda")
         self.ep_pg = ep_pg
         self.merged_gate_up_proj = nn.Parameter(
             torch.randn(num_local_experts, config.hidden_size, 2 * config.moe_config.moe_intermediate_size)
@@ -287,7 +307,7 @@ class GroupedMLP(nn.Module):
         + expect num_tokens_per_expert is a on cpu
         """
         # NOTE: ops.gemm requires "batch_sizes" (aka: num_tokens_per_expert here) to be on cpu
-        num_tokens_per_expert = num_tokens_per_expert.to("cpu")
+        # num_tokens_per_expert = num_tokens_per_expert.to("cpu")
 
         # NOTE: refactor, should be the same line
         # if self.expert_parallel_size == 1:
@@ -374,13 +394,13 @@ class Qwen2MoELayer(nn.Module):
         (
             dispatched_inputs,
             inverse_permute_mapping,
-            sort_indices,
+            expert_sort_indices,
             num_tokens_per_expert,
         ) = self.token_dispatcher.permute(hidden_states, routing_indices)
 
         expert_outputs = self.experts(dispatched_inputs, num_tokens_per_expert)
         output = self.token_dispatcher.unpermute(
-            expert_outputs["hidden_states"], inverse_permute_mapping, routing_weights, sort_indices
+            expert_outputs["hidden_states"], inverse_permute_mapping, routing_weights, expert_sort_indices
         )
         return output
 
