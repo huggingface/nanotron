@@ -39,6 +39,9 @@ def unpermute(x: torch.Tensor, inverse_mapping: torch.Tensor, routing_weights: t
     return comebined_x.to(x.dtype)
 
 
+USE_HAOJUN_PERMUTE = True
+
+
 @torch.no_grad()
 def _get_dispatched_routing_indices(global_routing_indices, expert_parallel_size, num_experts):
     from einops import rearrange
@@ -117,6 +120,69 @@ class AllToAllDispatcher(nn.Module):
         self.input_split_sizes = None
         self.output_split_sizes = None
 
+        self._use_haojun_permute = True
+
+    def _haojun_permute_topk(self, hidden_states, routing_indices):
+        """
+        hidden_states: [num_tokens, hidden_dim]
+        routing_indices: [num_tokens, topk]
+        num_experts: total number of experts
+        Returns:
+            permuted: [num_tokens * topk, hidden_dim]
+            expert_counts: [num_experts], number of tokens assigned to each expert
+            permute_metadata: metadata for unpermute
+        """
+        num_tokens, hidden_dim = hidden_states.shape
+        topk = routing_indices.shape[-1]
+
+        # Expand hidden_states to match topk, shape: [num_tokens, topk, hidden_dim]
+        expanded_states = hidden_states.unsqueeze(1).expand(-1, topk, -1)
+
+        # Flatten the batch: [num_tokens * topk, hidden_dim]
+        flat_states = expanded_states.reshape(-1, hidden_dim)
+        flat_indices = routing_indices.reshape(-1)  # [num_tokens * topk]
+
+        # Sort by expert (so tokens are grouped by expert index)
+        sorted_expert_indices, sort_order = flat_indices.sort()
+        permuted = flat_states[sort_order]  # [num_tokens * topk, hidden_dim]
+
+        # Count tokens per expert
+        num_tokens_per_expert = torch.bincount(sorted_expert_indices, minlength=self.num_experts)
+
+        return permuted, (sort_order, flat_indices.shape[0]), num_tokens_per_expert
+
+    def _haojun_unpermute_topk(self, permuted, sort_order, total_elements, routing_weights):
+        """
+        permuted: [num_tokens * topk, hidden_dim], output from experts
+        sort_order: indices used to sort the tokens in permute
+        total_elements: num_tokens * topk
+        routing_weights: [num_tokens, topk], used to scale expert outputs before aggregation
+        Returns:
+            output: [num_tokens, hidden_dim], weighted sum over topk expert outputs
+        """
+        device = permuted.device
+        hidden_dim = permuted.size(-1)
+        num_tokens, topk = routing_weights.shape
+
+        # Restore original order
+        unsort_order = torch.empty_like(sort_order)
+        unsort_order[sort_order] = torch.arange(total_elements, device=device)
+
+        # Restore the original [num_tokens * topk, hidden_dim] order
+        unpermuted = permuted[unsort_order]
+
+        # Reshape to [num_tokens, topk, hidden_dim]
+        unpermuted = unpermuted.view(num_tokens, topk, hidden_dim)
+
+        # Apply routing weights
+        routing_weights = routing_weights.to(permuted.dtype).unsqueeze(-1)  # [num_tokens, topk, 1]
+        weighted_output = unpermuted * routing_weights
+
+        # Aggregate over topk experts: sum over topk axis
+        output = weighted_output.sum(dim=1)  # [num_tokens, hidden_dim]
+
+        return output
+
     def permute(
         self,
         hidden_states: torch.Tensor,
@@ -171,7 +237,10 @@ class AllToAllDispatcher(nn.Module):
             )  # [num_local_experts]
             global_routing_indices = differentiable_all_gather(routing_indices, group=self.ep_pg)
 
-            hidden_states, inverse_permute_mapping = permute(hidden_states, routing_indices)
+            if self._use_haojun_permute:
+                hidden_states, inverse_permute_mapping, _ = self._haojun_permute_topk(hidden_states, routing_indices)
+            else:
+                hidden_states, inverse_permute_mapping = permute(hidden_states, routing_indices)
 
             # NOTE: this part is all-to-all token dispatching
             if self.expert_parallel_size > 1:
@@ -269,7 +338,12 @@ class AllToAllDispatcher(nn.Module):
         )
 
         # NOTE: merging the expert output combination and un-permuting them back into a single operation
-        comebined_expert_outputs = unpermute(undispatched_expert_outputs, inverse_permute_mapping, routing_weights)
+        if self._use_haojun_permute:
+            comebined_expert_outputs = self._haojun_unpermute_topk(
+                undispatched_expert_outputs, *inverse_permute_mapping, routing_weights
+            )
+        else:
+            comebined_expert_outputs = unpermute(undispatched_expert_outputs, inverse_permute_mapping, routing_weights)
         return comebined_expert_outputs
 
 
@@ -391,6 +465,7 @@ class Qwen2MoELayer(nn.Module):
         # Router for selecting experts
         self.router = Router(config, parallel_config, layer_idx)
         self.token_dispatcher = AllToAllDispatcher(num_local_experts, num_experts, parallel_context.ep_pg)
+        self.token_dispatcher._use_haojun_permute = config.moe_config.use_haojun_permute
 
         # Enable shared experts if configured
         self.enable_shared_expert = config.moe_config.enable_shared_expert
