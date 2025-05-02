@@ -542,6 +542,11 @@ class Config:
             self.model.model_config.num_attention_heads % self.model.model_config.num_key_value_heads == 0
         ), f"num_attention_heads ({self.model.model_config.num_attention_heads}) must be divisible by num_key_value_heads ({self.model.model_config.num_key_value_heads})"
 
+        if self.model.model_config.moe_config is not None:
+            assert (
+                self.model.model_config.moe_config.num_experts % self.parallelism.expert_parallel_size == 0
+            ), f"num_experts ({self.model.model_config.moe_config.num_experts}) must be divisible by expert_parallel_size ({self.parallelism.expert_parallel_size})"
+
     @property
     def global_batch_size(self):
         return self.tokens.micro_batch_size * self.tokens.batch_accumulation_per_replica * self.parallelism.dp

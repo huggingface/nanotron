@@ -64,7 +64,7 @@ def _test_all_to_all_dispatcher(
     ) = dispatcher.permute(input, routing_indices)
 
     assert torch.allclose(dispatched_input, expected_output)
-    assert torch.equal(expected_num_local_dispatched_tokens_per_expert, num_local_dispatched_tokens_per_expert)
+    assert torch.equal(expected_num_local_dispatched_tokens_per_expert.cpu(), num_local_dispatched_tokens_per_expert)
 
     undispatched_and_comebined_input = dispatcher.unpermute(
         dispatched_input, inverse_permute_mapping, routing_weights, inverse_expert_sorting_index
