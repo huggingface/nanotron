@@ -11,6 +11,7 @@ from nanotron.config import ParallelismArgs
 from nanotron.config.models_config import Qwen2Config
 from nanotron.models.base import ignore_init_on_device_and_dtype
 from nanotron.nn.activations import ACT2FN
+from nanotron.nn.load_balancing_loss import MoEAuxLossAutoScaler, switch_aux_loss
 
 logger = logging.get_logger(__name__)
 
@@ -36,6 +37,10 @@ class Router(nn.Module):
         self.num_experts = config.moe_config.num_experts
         self.num_experts_per_token = config.moe_config.top_k
 
+        self.aux_loss_coeff = 1e2  # TODO: add to config
+        self.load_balancing_type = None  # 'aux_loss' #TODO: add to config
+        self.sequence_partition_group = None  # TODO: tp_cp group
+
         # float32 routing weights
         # NOTE: qwen keep the routing weights in float32
         # https://github.com/huggingface/transformers/blob/27a25bee4fcb865e8799ba026f1ea4455f2cca98/src/transformers/models/qwen2_moe/modeling_qwen2_moe.py#L608
@@ -53,14 +58,73 @@ class Router(nn.Module):
 
     def routing(self, logits: torch.Tensor):
         """Top-k softmax-normalized routing weights and indices."""
-        routing_weights = F.softmax(logits, dim=-1, dtype=torch.float32)
-        routing_weights, routing_indices = torch.topk(routing_weights, k=self.num_experts_per_token, dim=-1)
-        routing_indices = routing_indices.to(torch.int32)  # NOTE: ops.permute requires indices to be int32
+        if self.load_balancing_type is None:
+            routing_weights, routing_indices = self.top_k_softmax(logits)
+        elif self.load_balancing_type == "aux_loss":
+            routing_weights, routing_indices = self.apply_aux_loss(logits)
+        else:
+            raise ValueError(f"Invalid load balancing type: {self.load_balancing_type}")
         return routing_weights, routing_indices
+
+    def make_print_param_grad_hook(self, param_name):
+        def hook(grad):
+            print(f"[Layer {self.layer_idx}] Gradient for parameter '{param_name}':")
+            print(f"Mean: {grad.mean().item():.6f}, Std: {grad.std().item():.6f}")
+            print(f"Min/Max: {grad.min().item():.6f} / {grad.max().item():.6f}\n")
+
+        return hook
 
     def forward(self, x: torch.Tensor):
         logits = self.gating(x)
-        return self.routing(logits)
+
+        routing_weights, routing_indices = self.routing(logits)
+
+        # # debug
+        # x.register_hook(self.make_print_param_grad_hook("hidden_states"))
+        # logits.register_hook(self.make_print_param_grad_hook("logits"))
+        # routing_weights.register_hook(self.make_print_param_grad_hook("routing_weights"))
+
+        return routing_weights, routing_indices
+
+    def top_k_softmax(self, logits: torch.Tensor):
+        probs = F.softmax(logits, dim=-1, dtype=torch.float32)
+        routing_weights, routing_indices = torch.topk(
+            probs, k=self.num_experts_per_token, dim=-1
+        )  # [num_tokens, num_experts_per_token]
+
+        # fail to converge
+        # return routing_weights, routing_indices
+
+        # converge
+        topk_masked_gates = torch.zeros_like(logits).scatter(
+            1, routing_indices, routing_weights
+        )  # [num_tokens, num_experts]
+        topk_map = torch.zeros_like(logits).int().scatter(1, routing_indices, 1)  # [num_tokens, num_experts]
+        return topk_masked_gates, topk_map
+
+        # routing_indices = routing_indices.to(torch.int32)  # NOTE: ops.permute requires indices to be int32
+
+    def apply_aux_loss(self, logits: torch.Tensor):
+        # doesn't converge
+        # probs = F.softmax(logits, dim=-1, dtype=torch.float32)
+        # routing_weights, routing_indices = torch.topk(probs, k=self.num_experts_per_token, dim=-1)
+        # tokens_per_expert = torch.bincount(routing_indices.flatten(), minlength=self.num_experts)
+        # aux_loss = switch_aux_loss(probs, tokens_per_expert, self.aux_loss_coeff, self.num_experts_per_token, self.sequence_partition_group)
+        # probs = MoEAuxLossAutoScaler.apply(probs, aux_loss)
+        # return routing_weights, routing_indices
+
+        # converge
+        probs, routing_map = self.top_k_softmax(logits)
+        tokens_per_expert = routing_map.sum(dim=0)
+        aux_loss = switch_aux_loss(
+            probs, tokens_per_expert, self.aux_loss_coeff, self.num_experts_per_token, self.sequence_partition_group
+        )
+        probs = MoEAuxLossAutoScaler.apply(probs, aux_loss)
+
+        # # debug print
+        # if self.layer_idx == 0:
+        #     print(f"Aux loss value: {aux_loss.item()}")  # See the actual value
+        return probs, routing_map
 
 
 class GroupedMLP(nn.Module):
@@ -150,29 +214,52 @@ class Qwen2MoELayer(nn.Module):
         # Whether to recompute MoE layer during backward pass for memory efficiency
         self.recompute_layer = parallel_config.recompute_layer
 
-    def _dispatch_tokens(
-        self,
-        hidden_states: torch.Tensor,
-        routing_indices: torch.Tensor,
-    ):
-        """
-        Dispatches tokens to their selected experts.
-        In a full implementation, this would handle the actual token routing logic
-        including communication between devices.
-        """
-        # NOTE: start from expert 0 to expert n
-        num_tokens_per_expert = torch.bincount(
-            routing_indices.flatten(), minlength=self.num_local_experts
-        )  # [num_local_experts]
-        dispatched_inputs, inverse_permute_mapping = ops.permute(hidden_states, routing_indices)
-        return dispatched_inputs, inverse_permute_mapping, num_tokens_per_expert
+    # def _dispatch_tokens(
+    #     self,
+    #     hidden_states: torch.Tensor,
+    #     routing_indices: torch.Tensor,
+    # ):
+    #     """
+    #     Dispatches tokens to their selected experts.
+    #     In a full implementation, this would handle the actual token routing logic
+    #     including communication between devices.
+    #     """
+    #     # NOTE: start from expert 0 to expert n
+    #     num_tokens_per_expert = torch.bincount(
+    #         routing_indices.flatten(), minlength=self.num_local_experts
+    #     )  # [num_local_experts]
+    #     dispatched_inputs, inverse_permute_mapping = ops.permute(hidden_states, routing_indices)
+    #     return dispatched_inputs, inverse_permute_mapping, num_tokens_per_expert
 
-    def _combine_expert_outputs(self, expert_outputs, inverse_mapping, routing_weights):
-        """
-        Combines outputs from different experts back to the original tensor layout.
-        """
-        hidden_states = ops.unpermute(expert_outputs, inverse_mapping, routing_weights)
-        return hidden_states
+    # def _combine_expert_outputs(self, expert_outputs, inverse_mapping, routing_weights):
+    #     """
+    #     Combines outputs from different experts back to the original tensor layout.
+    #     """
+    #     hidden_states = ops.unpermute(expert_outputs, inverse_mapping, routing_weights)
+    #     return hidden_states
+
+    def permute(self, hidden_states, probs, routing_map):
+        num_tokens, _ = hidden_states.shape
+        num_experts = routing_map.shape[1]
+        routing_map = routing_map.bool().T.contiguous()  # [num_experts, num_tokens]
+        token_indices = (
+            torch.arange(num_tokens, device=routing_map.device).unsqueeze(0).expand(num_experts, -1)
+        )  # [num_experts, num_tokens]
+        sorted_indices = token_indices.masked_select(routing_map)  # [num_tokens*top_k]
+        permuted_hidden_states = hidden_states.index_select(0, sorted_indices)  # [num_tokens*top_k, hidden_size]
+        permuted_probs = probs.T.masked_select(routing_map)  # [num_tokens*top_k, num_experts]
+        return permuted_hidden_states, permuted_probs, sorted_indices
+
+    def unpermute(self, permuted_hidden_states, permuted_probs, sorted_indices, hidden_state_shape):
+        input_dtype = permuted_hidden_states.dtype
+        permuted_hidden_states = permuted_hidden_states * permuted_probs.unsqueeze(-1)
+        unpermuted_hidden_states = torch.zeros(
+            hidden_state_shape, dtype=permuted_hidden_states.dtype, device=permuted_hidden_states.device
+        )
+        unpermuted_hidden_states.scatter_add_(
+            0, sorted_indices.unsqueeze(1).expand(-1, unpermuted_hidden_states.shape[1]), permuted_hidden_states
+        )
+        return unpermuted_hidden_states.to(input_dtype)
 
     def _core_forward(self, hidden_states):
         """Core forward logic for MoE layer."""
@@ -180,15 +267,25 @@ class Qwen2MoELayer(nn.Module):
         routing_weights, routing_indices = self.router(hidden_states)  # [num_tokens, num_experts_per_token]
 
         # Dispatch tokens to experts
-        dispatched_inputs, inverse_permute_mapping, num_tokens_per_expert = self._dispatch_tokens(
-            hidden_states, routing_indices
+        # dispatched_inputs, inverse_permute_mapping, num_tokens_per_expert = self._dispatch_tokens(
+        #     hidden_states, routing_indices
+        # )
+
+        num_tokens_per_expert = routing_indices.sum(dim=0).long()  # [num_local_experts]
+        # permute
+        permuted_hidden_states, permuted_probs, sorted_indices = self.permute(
+            hidden_states, routing_weights, routing_indices
         )
 
-        expert_outputs = self.experts(dispatched_inputs, num_tokens_per_expert)
+        # Matrix multiplication
+        output = self.experts(permuted_hidden_states, num_tokens_per_expert)
 
-        output = self._combine_expert_outputs(
-            expert_outputs["hidden_states"], inverse_permute_mapping, routing_weights
-        )
+        # unpermute
+        output = self.unpermute(output["hidden_states"], permuted_probs, sorted_indices, hidden_states.shape)
+
+        # output = self._combine_expert_outputs(
+        #     expert_outputs["hidden_states"], inverse_permute_mapping, routing_weights
+        # )
 
         # Add shared expert contribution if enabled
         if self.enable_shared_expert:
